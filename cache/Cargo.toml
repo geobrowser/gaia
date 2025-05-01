@@ -1,6 +1,13 @@
 [package]
 name = "cache"
 version = "0.1.0"
-edition = "2024"
+edition = "2021"
 
 [dependencies]
+chrono = "0.4.41"
+dotenv = "0.15.0"
+stream = { version = "0.1.0", path = "../stream" }
+tokio = { version = "1.44.2", features = ["macros", "rt-multi-thread"] }
+grc20 = { version = "0.1.0", path = "../grc20" }
+prost = "0.13.3"
+prost-types = "0.13.3"
