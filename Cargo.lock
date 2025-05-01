@@ -919,6 +919,9 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "dotenv",
+ "grc20",
+ "prost",
+ "prost-types",
  "stream",
  "tokio",
 ]

@@ -2,11 +2,14 @@ use std::{env, io::Error};
 
 use chrono::{DateTime, Utc};
 use dotenv::dotenv;
+use prost::Message;
 use stream::Sink;
 
 const PKG_FILE: &str = "geo_substream.spkg";
 const MODULE_NAME: &str = "geo_out";
 const START_BLOCK: i64 = 881;
+
+use grc20::pb::chain::GeoOutput;
 
 type KgIndexerError = Error;
 
@@ -57,13 +60,7 @@ impl Sink<KgData> for KgIndexer {
         // to any arbitrary handler. This gives us testing and prototyping by mocking the
         // events coming via the stream.
 
-        // You can decode the actual Any type received using this code:
-        //
-        //     let value = GeneratedStructName::decode(output.value.as_slice())?;
-        //
-        // Where GeneratedStructName is the Rust code generated for the Protobuf representing
-        // your type, so you will need generate it using `substreams protogen` and import it from the
-        // `src/pb` folder.
+        let geo = GeoOutput::decode(output.value.as_slice())?;
 
         let clock = block_data.clock.as_ref().unwrap();
         let timestamp = clock.timestamp.as_ref().unwrap();
@@ -71,13 +68,14 @@ impl Sink<KgData> for KgIndexer {
             .expect("received timestamp should always be valid");
 
         println!(
-            "Block #{} - Payload {} ({} bytes) - Drift {}s",
+            "Block #{} - Payload {} ({} bytes) - Drift {}s – Edits Published {}",
             clock.number,
             output.type_url.replace("type.googleapis.com/", ""),
             output.value.len(),
             date.signed_duration_since(chrono::offset::Utc::now())
                 .num_seconds()
-                * -1
+                * -1,
+            geo.edits_published.len()
         );
 
         Ok(())
