@@ -84,6 +84,7 @@ fn stream_blocks(
                 production_mode: true,
                 debug_initial_store_snapshot_for_modules: vec![],
                 noop_mode: false,
+
             }).await;
 
             match result {

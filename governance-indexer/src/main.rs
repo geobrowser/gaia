@@ -8,7 +8,7 @@ const PKG_FILE: &str = "geo_substream.spkg";
 const MODULE_NAME: &str = "geo_out";
 const START_BLOCK: i64 = 881;
 
-type KgIndexerError = Error;
+type GovernanceIndexerError = Error;
 
 struct BlockMetadata {
     pub cursor: String,
@@ -17,20 +17,20 @@ struct BlockMetadata {
     pub request_id: String,
 }
 
-struct KgData {
+struct GovernanceData {
     pub block: BlockMetadata,
 }
 
-struct KgIndexer {}
+struct GovernanceIndexer {}
 
-impl KgIndexer {
+impl GovernanceIndexer {
     pub fn new() -> Self {
         KgIndexer {}
     }
 }
 
-impl Sink<KgData> for KgIndexer {
-    type Error = KgIndexerError;
+impl Sink<GovernanceData> for GovernanceIndexer {
+    type Error = GovernanceIndexerError;
 
     async fn load_persisted_cursor(&self) -> Result<Option<String>, Self::Error> {
         Ok(Some("".to_string()))
