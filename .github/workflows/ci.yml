@@ -17,9 +17,6 @@ jobs:
       matrix:
         os: [ubuntu-latest]
         rust: [stable]
-        include:
-          - os: ubuntu-latest
-            rust: nightly
     runs-on: ${{ matrix.os }}
 
     steps:
