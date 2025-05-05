@@ -43,7 +43,7 @@ impl CacheIndexer {
         CacheIndexer {
             cache: Arc::new(Mutex::new(cache)),
             ipfs: Arc::new(ipfs),
-            semaphore: Arc::new(Semaphore::new(10)),
+            semaphore: Arc::new(Semaphore::new(20)),
         }
     }
 }
@@ -115,7 +115,6 @@ async fn process_edit_event(
     ipfs: &Arc<IpfsClient>,
 ) {
     let data = ipfs.get(&edit.content_uri).await;
-    println!("IPFS data: {:?}", data);
 
     return match data {
         Ok(data) => {
