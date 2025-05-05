@@ -1,6 +1,7 @@
 use std::sync::Arc;
 use std::{env, io::Error};
 use stream::utils::BlockMetadata;
+use thiserror::Error;
 use tokio::task;
 
 use dotenv::dotenv;
@@ -15,7 +16,7 @@ const START_BLOCK: i64 = 881;
 use grc20::pb::chain::{EditPublished, GeoOutput};
 
 mod cache;
-use cache::Cache;
+use cache::{Cache, CacheItem};
 use ipfs::IpfsClient;
 
 type CacheIndexerError = Error;
@@ -39,6 +40,12 @@ impl CacheIndexer {
             semaphore: Arc::new(Semaphore::new(20)),
         }
     }
+}
+
+#[derive(Error, Debug)]
+enum IndexerError {
+    #[error("Cache indexer error: {0}")]
+    Error(#[from] cache::CacheError),
 }
 
 impl Sink<EventData> for CacheIndexer {
@@ -71,9 +78,6 @@ impl Sink<EventData> for CacheIndexer {
         // distinguish between KG messages and governance messages.
         let geo = GeoOutput::decode(output.value.as_slice())?;
 
-        // @TODO: We should write a module to decode the clock, timestamp, and date from
-        // the block_data so other sink implementers don't have to write it themselves.
-
         let block_metadata = stream::utils::block_metadata(block_data);
 
         println!(
@@ -94,9 +98,12 @@ impl Sink<EventData> for CacheIndexer {
             let cache = self.cache.clone();
             let ipfs = self.ipfs.clone();
 
+            let block_metadata = stream::utils::block_metadata(block_data);
+
             task::spawn(async move {
-                process_edit_event(edit, &cache, &ipfs).await;
+                process_edit_event(edit, &cache, &ipfs, &block_metadata).await?;
                 drop(permit);
+                Ok::<(), IndexerError>(())
             });
         }
 
@@ -108,19 +115,32 @@ async fn process_edit_event(
     edit: EditPublished,
     cache: &Arc<Mutex<Cache>>,
     ipfs: &Arc<IpfsClient>,
-) {
+    block: &BlockMetadata,
+) -> Result<(), IndexerError> {
     let data = ipfs.get(&edit.content_uri).await;
 
-    return match data {
-        Ok(data) => {
-            // @TODO: Tasks to fetch from IPFS for each hash
+    match data {
+        Ok(result) => {
             let mut cache_instance = cache.lock().await;
-            cache_instance.put(&edit.content_uri, &edit.dao_address);
+            let item = CacheItem {
+                uri: edit.content_uri,
+                block: block
+                    .timestamp
+                    .signed_duration_since(chrono::offset::Utc::now())
+                    .num_seconds()
+                    .to_string(),
+                json: result,
+                space: String::from(""),
+            };
+
+            cache_instance.put(&item).await?;
         }
-        Err(err) => {
-            // Handle the error
+        Err(error) => {
+            println!("Error writing decoded edit event {}", error);
         }
-    };
+    }
+
+    Ok(())
 }
 
 #[tokio::main]
@@ -128,14 +148,24 @@ async fn main() -> Result<(), Error> {
     dotenv().ok();
 
     let ipfs = IpfsClient::new("https://gateway.lighthouse.storage/ipfs/");
-    let kv = cache::Cache::new(cache::Storage::new());
-    let indexer = CacheIndexer::new(kv, ipfs);
+    let storage = cache::Storage::new().await;
 
-    let endpoint_url = env::var("SUBSTREAMS_ENDPOINT").expect("SUBSTREAMS_ENDPOINT not set");
+    match storage {
+        Ok(result) => {
+            let kv = cache::Cache::new(result);
+            let indexer = CacheIndexer::new(kv, ipfs);
 
-    let _result = indexer
-        .run(&endpoint_url, PKG_FILE, MODULE_NAME, START_BLOCK, 0)
-        .await;
+            let endpoint_url =
+                env::var("SUBSTREAMS_ENDPOINT").expect("SUBSTREAMS_ENDPOINT not set");
+
+            let _result = indexer
+                .run(&endpoint_url, PKG_FILE, MODULE_NAME, START_BLOCK, 0)
+                .await;
+        }
+        Err(err) => {
+            println!("Error initializing stream {}", err);
+        }
+    }
 
     Ok(())
 }

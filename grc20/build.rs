@@ -15,6 +15,7 @@ fn main() -> Result<()> {
 
     // Generate one file per proto
     config
+        .type_attribute(".", "#[derive(serde::Serialize, serde::Deserialize)]")
         .compile_protos(&protos, proto_include)
         .expect("Failed to compile protos");
 
