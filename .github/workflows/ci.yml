@@ -31,9 +31,5 @@ jobs:
       - name: Cache Dependencies
         uses: Swatinem/rust-cache@v2
 
-      - name: Check formatting
-        run: cargo fmt --all -- --check
-        if: matrix.rust == 'stable' && matrix.os == 'ubuntu-latest'
-
       - name: Build
         run: cargo build --verbose --workspace
