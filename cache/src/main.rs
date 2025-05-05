@@ -1,8 +1,8 @@
 use std::sync::Arc;
 use std::{env, io::Error};
+use stream::utils::BlockMetadata;
 use tokio::task;
 
-use chrono::{DateTime, Utc};
 use dotenv::dotenv;
 use prost::Message;
 use stream::Sink;
@@ -19,13 +19,6 @@ use cache::Cache;
 use ipfs::IpfsClient;
 
 type CacheIndexerError = Error;
-
-struct BlockMetadata {
-    pub cursor: String,
-    pub block_number: u64,
-    pub timestamp: DateTime<Utc>,
-    pub request_id: String,
-}
 
 pub struct EventData {
     pub block: BlockMetadata,
@@ -63,32 +56,34 @@ impl Sink<EventData> for CacheIndexer {
         &self,
         block_data: &stream::pb::sf::substreams::rpc::v2::BlockScopedData,
     ) -> Result<(), Self::Error> {
-        let output = block_data
-            .output
-            .as_ref()
-            .unwrap()
-            .map_output
-            .as_ref()
-            .unwrap();
+        let output = stream::utils::output(block_data);
 
         // @TODO: Parsing and decoding of event data should happen in a separate module.
         // This makes it so we can generate test data using these decoders and pass them
         // to any arbitrary handler. This gives us testing and prototyping by mocking the
         // events coming via the stream.
 
+        // We should take the code to get the output and decode it into
+        // a "GeoOutput" into it's own module that any Sink trait impl
+        // can consume to get the decoded data from the substream.
+
+        // We want to enable extensible governance actions. This means we should probably
+        // distinguish between KG messages and governance messages.
         let geo = GeoOutput::decode(output.value.as_slice())?;
 
-        let clock = block_data.clock.as_ref().unwrap();
-        let timestamp = clock.timestamp.as_ref().unwrap();
-        let date = DateTime::from_timestamp(timestamp.seconds, timestamp.nanos as u32)
-            .expect("received timestamp should always be valid");
+        // @TODO: We should write a module to decode the clock, timestamp, and date from
+        // the block_data so other sink implementers don't have to write it themselves.
+
+        let block_metadata = stream::utils::block_metadata(block_data);
 
         println!(
             "Block #{} - Payload {} ({} bytes) - Drift {}s – Edits Published {}",
-            clock.number,
+            block_metadata.block_number,
             output.type_url.replace("type.googleapis.com/", ""),
             output.value.len(),
-            date.signed_duration_since(chrono::offset::Utc::now())
+            block_metadata
+                .timestamp
+                .signed_duration_since(chrono::offset::Utc::now())
                 .num_seconds()
                 * -1,
             geo.edits_published.len()
