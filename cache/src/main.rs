@@ -6,7 +6,7 @@ use chrono::{DateTime, Utc};
 use dotenv::dotenv;
 use prost::Message;
 use stream::Sink;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, Semaphore};
 
 const PKG_FILE: &str = "geo_substream.spkg";
 const MODULE_NAME: &str = "geo_out";
@@ -16,6 +16,7 @@ use grc20::pb::chain::{EditPublished, GeoOutput};
 
 mod cache;
 use cache::Cache;
+use ipfs::IpfsClient;
 
 type CacheIndexerError = Error;
 
@@ -32,13 +33,17 @@ pub struct EventData {
 }
 
 struct CacheIndexer {
+    semaphore: Arc<Semaphore>,
     cache: Arc<Mutex<Cache>>,
+    ipfs: Arc<IpfsClient>,
 }
 
 impl CacheIndexer {
-    pub fn new(cache: Cache) -> Self {
+    pub fn new(cache: Cache, ipfs: IpfsClient) -> Self {
         CacheIndexer {
             cache: Arc::new(Mutex::new(cache)),
+            ipfs: Arc::new(ipfs),
+            semaphore: Arc::new(Semaphore::new(10)),
         }
     }
 }
@@ -89,32 +94,48 @@ impl Sink<EventData> for CacheIndexer {
             geo.edits_published.len()
         );
 
-        let cache = self.cache.clone();
+        for edit in geo.edits_published {
+            let permit = self.semaphore.clone().acquire_owned().await.unwrap();
+            let cache = self.cache.clone();
+            let ipfs = self.ipfs.clone();
 
-        task::spawn(async move {
-            process_edit_event(geo.edits_published, &cache).await;
-        });
+            task::spawn(async move {
+                process_edit_event(edit, &cache, &ipfs).await;
+                drop(permit);
+            });
+        }
 
         Ok(())
     }
 }
 
-async fn process_edit_event(event: Vec<EditPublished>, cache: &Arc<Mutex<Cache>>) {
-    for edit in event {
-        let mut cache_instance = cache.lock().await;
-        cache_instance.put(&edit.content_uri, &edit.dao_address);
+async fn process_edit_event(
+    edit: EditPublished,
+    cache: &Arc<Mutex<Cache>>,
+    ipfs: &Arc<IpfsClient>,
+) {
+    let data = ipfs.get(&edit.content_uri).await;
+    println!("IPFS data: {:?}", data);
 
-        let test = cache_instance.get(&edit.content_uri);
-        println!("{:?}", test);
-    }
+    return match data {
+        Ok(data) => {
+            // @TODO: Tasks to fetch from IPFS for each hash
+            let mut cache_instance = cache.lock().await;
+            cache_instance.put(&edit.content_uri, &edit.dao_address);
+        }
+        Err(err) => {
+            // Handle the error
+        }
+    };
 }
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
     dotenv().ok();
 
+    let ipfs = IpfsClient::new("https://gateway.lighthouse.storage/ipfs/");
     let kv = cache::Cache::new(cache::Storage::new());
-    let indexer = CacheIndexer::new(kv);
+    let indexer = CacheIndexer::new(kv, ipfs);
 
     let endpoint_url = env::var("SUBSTREAMS_ENDPOINT").expect("SUBSTREAMS_ENDPOINT not set");
 
