@@ -1,10 +1,7 @@
 use std::env;
 
 use grc20::pb::ipfs::Edit;
-use sqlx::{
-    postgres::{PgPoolOptions, PgQueryResult},
-    Executor, FromRow, Postgres,
-};
+use sqlx::{postgres::PgPoolOptions, Executor, Postgres};
 
 use thiserror::Error;
 
@@ -21,6 +18,8 @@ pub struct Storage {
     connection: sqlx::Pool<Postgres>,
 }
 
+// @TODO: How do we abstract to handle arbitrary storage mechanisms for the cache?
+// e.g. we may want in-memory or a different db
 impl Storage {
     pub async fn new() -> Result<Self, CacheError> {
         let database_url = env::var("DATABASE_URL").expect("DATABASE_URL not set");
@@ -28,14 +27,14 @@ impl Storage {
         let database_url_static = database_url.as_str();
 
         let connection = PgPoolOptions::new()
-            .max_connections(5)
+            .max_connections(20)
             .connect(database_url_static)
             .await?;
 
         return Ok(Storage { connection });
     }
 
-    pub async fn insert(&self, item: &CacheItem) -> Result<PgQueryResult, CacheError> {
+    pub async fn insert(&self, item: &CacheItem) -> Result<(), CacheError> {
         let json_string = serde_json::to_value(&item.json)?;
 
         let query = sqlx::query!(
@@ -50,7 +49,18 @@ impl Storage {
 
         println!("Result of insert {:?}", result.rows_affected());
 
-        Ok(result)
+        Ok(())
+    }
+
+    pub async fn has(&self, uri: &String) -> Result<bool, CacheError> {
+        let maybe_exists = sqlx::query!(
+            "SELECT EXISTS(SELECT 1 FROM ipfs_cache WHERE uri = $1)",
+            uri
+        )
+        .fetch_one(&self.connection)
+        .await?;
+
+        Ok(maybe_exists.exists.unwrap_or(false))
     }
 }
 
@@ -74,5 +84,10 @@ impl Cache {
         self.storage.insert(item).await?;
 
         Ok(())
+    }
+
+    pub async fn has(&mut self, uri: &String) -> Result<bool, CacheError> {
+        let result = self.storage.has(uri).await?;
+        Ok(result)
     }
 }

@@ -117,6 +117,12 @@ async fn process_edit_event(
     ipfs: &Arc<IpfsClient>,
     block: &BlockMetadata,
 ) -> Result<(), IndexerError> {
+    let mut cache_instance = cache.lock().await;
+
+    if cache_instance.has(&edit.content_uri).await? {
+        return Ok(());
+    }
+
     let data = ipfs.get(&edit.content_uri).await;
 
     match data {
