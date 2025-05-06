@@ -88,7 +88,15 @@ impl Sink<KgData> for KgIndexer {
                 // @TODO: How do we know if we're waiting or if it's just errored?
                 let edit = cache.get(&edit.content_uri).await?;
                 let entities = storage.map_edit_to_entity_items(edit, &block_metadata);
-                storage.insert(&entities).await?;
+                let result = storage.insert(&entities).await;
+
+                match result {
+                    Ok(value) => {}
+                    Err(error) => {
+                        println!("Error writing {}", error);
+                    }
+                }
+
                 Ok::<(), IndexingError>(())
             });
 
