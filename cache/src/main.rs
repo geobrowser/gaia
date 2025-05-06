@@ -85,11 +85,7 @@ impl Sink<EventData> for CacheIndexer {
             block_metadata.block_number,
             output.type_url.replace("type.googleapis.com/", ""),
             output.value.len(),
-            block_metadata
-                .timestamp
-                .signed_duration_since(chrono::offset::Utc::now())
-                .num_seconds()
-                * -1,
+            block_metadata.timestamp,
             geo.edits_published.len()
         );
 
@@ -132,11 +128,7 @@ async fn process_edit_event(
             let mut cache_instance = cache.lock().await;
             let item = CacheItem {
                 uri: edit.content_uri,
-                block: block
-                    .timestamp
-                    .signed_duration_since(chrono::offset::Utc::now())
-                    .num_seconds()
-                    .to_string(),
+                block: block.timestamp.clone(),
                 json: result,
                 space: String::from(""),
             };

@@ -1165,10 +1165,15 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "dotenv",
+ "futures 0.3.31",
  "grc20",
  "prost",
  "prost-types",
+ "serde",
+ "serde_json",
+ "sqlx",
  "stream",
+ "thiserror 2.0.12",
  "tokio",
 ]
 

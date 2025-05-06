@@ -1,9 +1,10 @@
-use std::{env, io::Error};
+use futures::future::join_all;
+use std::{env, sync::Arc};
+use thiserror::Error;
 
-use chrono::{DateTime, Utc};
 use dotenv::dotenv;
-use prost::Message;
-use stream::Sink;
+use prost::{DecodeError, Message};
+use stream::{utils::BlockMetadata, Sink};
 
 const PKG_FILE: &str = "geo_substream.spkg";
 const MODULE_NAME: &str = "geo_out";
@@ -11,29 +12,44 @@ const START_BLOCK: i64 = 881;
 
 use grc20::pb::chain::GeoOutput;
 
-type KgIndexerError = Error;
+mod storage;
+use storage::{EntityStorage, EntityStorageError, Storage};
+mod cache;
+use cache::{Cache, CacheError};
+use tokio::task;
 
-struct BlockMetadata {
-    pub cursor: String,
-    pub block_number: u64,
-    pub timestamp: DateTime<Utc>,
-    pub request_id: String,
+#[derive(Error, Debug)]
+pub enum IndexingError {
+    #[error("Indexing error: {0}")]
+    EntityStorageError(#[from] EntityStorageError),
+
+    #[error("Indexing error: {0}")]
+    CacheError(#[from] CacheError),
+
+    #[error("Indexing error: {0}")]
+    DecodeError(#[from] DecodeError),
 }
 
 struct KgData {
     pub block: BlockMetadata,
 }
 
-struct KgIndexer {}
+struct KgIndexer {
+    entity_storage: Arc<EntityStorage>,
+    cache: Arc<Cache>,
+}
 
 impl KgIndexer {
-    pub fn new() -> Self {
-        KgIndexer {}
+    pub fn new(entity_storage: EntityStorage, cache: Cache) -> Self {
+        KgIndexer {
+            entity_storage: Arc::new(entity_storage),
+            cache: Arc::new(cache),
+        }
     }
 }
 
 impl Sink<KgData> for KgIndexer {
-    type Error = KgIndexerError;
+    type Error = IndexingError;
 
     async fn load_persisted_cursor(&self) -> Result<Option<String>, Self::Error> {
         Ok(Some("".to_string()))
@@ -47,52 +63,69 @@ impl Sink<KgData> for KgIndexer {
         &self,
         block_data: &stream::pb::sf::substreams::rpc::v2::BlockScopedData,
     ) -> Result<(), Self::Error> {
-        let output = block_data
-            .output
-            .as_ref()
-            .unwrap()
-            .map_output
-            .as_ref()
-            .unwrap();
-
-        // @TODO: Parsing and decoding of event data should happen in a separate module.
-        // This makes it so we can generate test data using these decoders and pass them
-        // to any arbitrary handler. This gives us testing and prototyping by mocking the
-        // events coming via the stream.
-
+        let output = stream::utils::output(block_data);
         let geo = GeoOutput::decode(output.value.as_slice())?;
-
-        let clock = block_data.clock.as_ref().unwrap();
-        let timestamp = clock.timestamp.as_ref().unwrap();
-        let date = DateTime::from_timestamp(timestamp.seconds, timestamp.nanos as u32)
-            .expect("received timestamp should always be valid");
+        let block_metadata = stream::utils::block_metadata(block_data);
 
         println!(
             "Block #{} - Payload {} ({} bytes) - Drift {}s – Edits Published {}",
-            clock.number,
+            block_metadata.block_number,
             output.type_url.replace("type.googleapis.com/", ""),
             output.value.len(),
-            date.signed_duration_since(chrono::offset::Utc::now())
-                .num_seconds()
-                * -1,
+            block_metadata.timestamp,
             geo.edits_published.len()
         );
+
+        let mut handles = Vec::new();
+
+        for edit in geo.edits_published {
+            let storage = self.entity_storage.clone();
+            let cache = self.cache.clone();
+            let block_metadata = stream::utils::block_metadata(block_data);
+
+            let handle = task::spawn(async move {
+                // @TODO: Retry get in case of waiting for cache to populate.
+                // @TODO: How do we know if we're waiting or if it's just errored?
+                let edit = cache.get(&edit.content_uri).await?;
+                let entities = storage.map_edit_to_entity_items(edit, &block_metadata);
+                storage.insert(&entities).await?;
+                Ok::<(), IndexingError>(())
+            });
+
+            handles.push(handle);
+        }
+
+        // Wait for all processing in the current block to finish before continuing
+        // to the next block
+        let done = join_all(handles).await;
 
         Ok(())
     }
 }
 
 #[tokio::main]
-async fn main() -> Result<(), Error> {
+async fn main() -> Result<(), IndexingError> {
     dotenv().ok();
 
-    let indexer = KgIndexer::new();
+    let storage = Storage::new().await;
 
-    let endpoint_url = env::var("SUBSTREAMS_ENDPOINT").expect("SUBSTREAMS_ENDPOINT not set");
+    match storage {
+        Ok(result) => {
+            let entity_storage = EntityStorage::new(result);
+            let cache = Cache::new().await?;
+            let indexer = KgIndexer::new(entity_storage, cache);
 
-    let _result = indexer
-        .run(&endpoint_url, PKG_FILE, MODULE_NAME, START_BLOCK, 0)
-        .await;
+            let endpoint_url =
+                env::var("SUBSTREAMS_ENDPOINT").expect("SUBSTREAMS_ENDPOINT not set");
+
+            let _result = indexer
+                .run(&endpoint_url, PKG_FILE, MODULE_NAME, START_BLOCK, 0)
+                .await;
+        }
+        Err(error) => {
+            println!("Error initializing stream {}", error);
+        }
+    }
 
     Ok(())
 }
