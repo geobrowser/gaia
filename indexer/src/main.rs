@@ -102,13 +102,16 @@ impl Sink<KgData> for KgIndexer {
 
                 match edit {
                     Ok(value) => {
-                        let entities = storage.map_edit_to_entity_items(value, &block_metadata);
-                        let result = storage.insert(&entities).await;
+                        if !value.is_errored {
+                            let entities = storage
+                                .map_edit_to_entity_items(value.edit.unwrap(), &block_metadata);
+                            let result = storage.insert(&entities).await;
 
-                        match result {
-                            Ok(value) => {}
-                            Err(error) => {
-                                println!("Error writing {}", error);
+                            match result {
+                                Ok(value) => {}
+                                Err(error) => {
+                                    println!("Error writing {}", error);
+                                }
                             }
                         }
                     }

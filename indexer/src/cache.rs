@@ -16,6 +16,11 @@ pub struct Cache {
     connection: sqlx::Pool<Postgres>,
 }
 
+pub struct ReadCacheItem {
+    pub edit: Option<Edit>,
+    pub is_errored: bool,
+}
+
 impl Cache {
     pub async fn new() -> Result<Self, CacheError> {
         let database_url = env::var("DATABASE_URL").expect("DATABASE_URL not set");
@@ -30,14 +35,27 @@ impl Cache {
         return Ok(Cache { connection });
     }
 
-    pub async fn get(&self, uri: &String) -> Result<Edit, CacheError> {
-        let query = sqlx::query!("SELECT json FROM ipfs_cache WHERE uri = $1", uri)
-            .fetch_one(&self.connection)
-            .await?;
+    pub async fn get(&self, uri: &String) -> Result<ReadCacheItem, CacheError> {
+        let query = sqlx::query!(
+            "SELECT json, is_errored FROM ipfs_cache WHERE uri = $1",
+            uri
+        )
+        .fetch_one(&self.connection)
+        .await?;
+
+        if query.is_errored {
+            return Ok(ReadCacheItem {
+                edit: None,
+                is_errored: true,
+            });
+        }
 
         let json = query.json.unwrap();
         let edit = serde_json::from_value::<Edit>(json)?;
 
-        Ok(edit)
+        Ok(ReadCacheItem {
+            edit: Some(edit),
+            is_errored: false,
+        })
     }
 }
