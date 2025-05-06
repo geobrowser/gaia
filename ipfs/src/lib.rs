@@ -3,7 +3,7 @@ use prost::Message;
 use reqwest::Client as ReqwestClient;
 
 #[derive(Debug, thiserror::Error)]
-pub enum Error {
+pub enum IpfsError {
     #[error("reqwest error: {0}")]
     Reqwest(#[from] reqwest::Error),
     #[error("io error: {0}")]
@@ -14,7 +14,7 @@ pub enum Error {
     CidError(String),
 }
 
-type Result<T> = std::result::Result<T, Error>;
+type Result<T> = std::result::Result<T, IpfsError>;
 
 pub fn deserialize(buf: &[u8]) -> std::result::Result<Edit, prost::DecodeError> {
     Edit::decode(buf)

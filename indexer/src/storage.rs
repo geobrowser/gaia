@@ -210,8 +210,6 @@ impl EntityStorage {
         .execute(&self.storage.connection)
         .await?;
 
-        println!("Successfully wrote entities {}", result.rows_affected());
-
         Ok(())
     }
 }

@@ -31,7 +31,6 @@ impl Cache {
     }
 
     pub async fn get(&self, uri: &String) -> Result<Edit, CacheError> {
-        // @TODO: Serialize into an Edit via serde_json
         let query = sqlx::query!("SELECT json FROM ipfs_cache WHERE uri = $1", uri)
             .fetch_one(&self.connection)
             .await?;

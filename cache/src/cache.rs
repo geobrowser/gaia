@@ -38,16 +38,15 @@ impl Storage {
         let json_string = serde_json::to_value(&item.json)?;
 
         let query = sqlx::query!(
-            "INSERT INTO ipfs_cache (uri, json, block, space) VALUES ($1, $2, $3, $4)",
+            "INSERT INTO ipfs_cache (uri, json, block, space, is_errored) VALUES ($1, $2, $3, $4, $5)",
             item.uri,
             json_string,
             item.block,
-            item.space
+            item.space,
+            item.is_errored
         );
 
         let result = self.connection.execute(query).await?;
-
-        println!("Result of insert {:?}", result.rows_affected());
 
         Ok(())
     }
@@ -70,9 +69,10 @@ pub struct Cache {
 
 pub struct CacheItem {
     pub uri: String,
-    pub json: Edit,
+    pub json: Option<Edit>,
     pub block: String,
     pub space: String,
+    pub is_errored: bool,
 }
 
 impl Cache {

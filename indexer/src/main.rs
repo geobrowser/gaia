@@ -1,6 +1,10 @@
 use futures::future::join_all;
 use std::{env, sync::Arc};
 use thiserror::Error;
+use tokio_retry::{
+    strategy::{jitter, ExponentialBackoff},
+    Retry,
+};
 
 use dotenv::dotenv;
 use prost::{DecodeError, Message};
@@ -83,17 +87,33 @@ impl Sink<KgData> for KgIndexer {
             let cache = self.cache.clone();
             let block_metadata = stream::utils::block_metadata(block_data);
 
-            let handle = task::spawn(async move {
-                // @TODO: Retry get in case of waiting for cache to populate.
-                // @TODO: How do we know if we're waiting or if it's just errored?
-                let edit = cache.get(&edit.content_uri).await?;
-                let entities = storage.map_edit_to_entity_items(edit, &block_metadata);
-                let result = storage.insert(&entities).await;
+            // 18m 52s cache processor
+            // ~31m    edits
 
-                match result {
-                    Ok(value) => {}
+            let handle = task::spawn(async move {
+                // We retry requests to the cache in the case that the cache is
+                // still populating. For now we assume writing to + reading from
+                // the cache can't fail
+                let retry = ExponentialBackoff::from_millis(10)
+                    .factor(2)
+                    .max_delay(std::time::Duration::from_secs(5))
+                    .map(jitter);
+                let edit = Retry::spawn(retry, async || cache.get(&edit.content_uri).await).await;
+
+                match edit {
+                    Ok(value) => {
+                        let entities = storage.map_edit_to_entity_items(value, &block_metadata);
+                        let result = storage.insert(&entities).await;
+
+                        match result {
+                            Ok(value) => {}
+                            Err(error) => {
+                                println!("Error writing {}", error);
+                            }
+                        }
+                    }
                     Err(error) => {
-                        println!("Error writing {}", error);
+                        //
                     }
                 }
 

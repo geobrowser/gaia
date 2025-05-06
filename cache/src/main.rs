@@ -125,18 +125,35 @@ async fn process_edit_event(
 
     match data {
         Ok(result) => {
-            let mut cache_instance = cache.lock().await;
             let item = CacheItem {
                 uri: edit.content_uri,
                 block: block.timestamp.clone(),
-                json: result,
+                json: Some(result),
                 space: String::from(""),
+                is_errored: false,
             };
 
+            let mut cache_instance = cache.lock().await;
             cache_instance.put(&item).await?;
         }
         Err(error) => {
-            println!("Error writing decoded edit event {}", error);
+            println!("Error writing decoded edit event to cache {}", error);
+
+            // We may receive events where the format of the ipfs contents is
+            // invalid. We still write a cache item with an is_errored status
+            // so that cache consumers can always read the cache to get either
+            // the decoded state, or be notified that the event exists, but the
+            // contents are invalid.
+            let item = CacheItem {
+                uri: edit.content_uri,
+                block: block.timestamp.clone(),
+                json: None,
+                space: String::from(""),
+                is_errored: true,
+            };
+
+            let mut cache_instance = cache.lock().await;
+            cache_instance.put(&item).await?;
         }
     }
 
