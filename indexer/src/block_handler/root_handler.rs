@@ -2,7 +2,7 @@ use std::sync::Arc;
 
 use futures::future::join_all;
 use grc20::pb::chain::GeoOutput;
-use prost::Message;
+use stream::utils::BlockMetadata;
 use tokio::task;
 use tokio_retry::{
     strategy::{jitter, ExponentialBackoff},
@@ -14,33 +14,27 @@ use crate::storage::StorageBackend;
 use crate::{cache::Cache, error::IndexingError};
 
 pub async fn run<T>(
-    // @TODO: What the minimum data we need from the block?
-    block_data: &stream::pb::sf::substreams::rpc::v2::BlockScopedData,
+    output: &GeoOutput,
+    block_metadata: &BlockMetadata,
     storage: &Arc<T>,
     cache: &Arc<Cache>,
 ) -> Result<(), IndexingError>
 where
     T: StorageBackend + 'static,
 {
-    let output = stream::utils::output(block_data);
-    let geo = GeoOutput::decode(output.value.as_slice())?;
-    let block_metadata = stream::utils::block_metadata(block_data);
-
     println!(
-        "Block #{} - Payload {} ({} bytes) - Drift {}s – Edits Published {}",
+        "Block #{} – Drift {}s – Edits Published {}",
         block_metadata.block_number,
-        output.type_url.replace("type.googleapis.com/", ""),
-        output.value.len(),
         block_metadata.timestamp,
-        geo.edits_published.len()
+        output.edits_published.len()
     );
 
     let mut handles = Vec::new();
 
-    for edit in geo.edits_published {
+    for edit in output.edits_published.clone() {
         let storage = storage.clone();
         let cache = cache.clone();
-        let block_metadata = stream::utils::block_metadata(block_data);
+        let block = block_metadata.clone();
 
         let handle = task::spawn(async move {
             // We retry requests to the cache in the case that the cache is
@@ -55,10 +49,8 @@ where
             match edit {
                 Ok(value) => {
                     if !value.is_errored {
-                        let entities = EntitiesModel::map_edit_to_entities(
-                            &value.edit.unwrap(),
-                            &block_metadata,
-                        );
+                        let entities =
+                            EntitiesModel::map_edit_to_entities(&value.edit.unwrap(), &block);
 
                         let result = storage.insert_entities(&entities).await;
 

@@ -1,13 +1,13 @@
+use grc20::pb::chain::GeoOutput;
 use indexer::{
-    block_handler::root_handler,
-    cache::Cache,
-    error::IndexingError,
-    storage::{postgres::PostgresStorage, StorageBackend},
+    block_handler::root_handler, cache::Cache, error::IndexingError,
+    storage::postgres::PostgresStorage,
 };
+use prost::Message;
 use std::{env, sync::Arc};
 
 use dotenv::dotenv;
-use stream::{utils::BlockMetadata, Sink};
+use stream::{pb::sf::substreams::rpc::v2::BlockScopedData, utils::BlockMetadata, Sink};
 
 const PKG_FILE: &str = "geo_substream.spkg";
 const MODULE_NAME: &str = "geo_out";
@@ -44,11 +44,21 @@ impl Sink<KgData> for KgIndexer {
 
     async fn process_block_scoped_data(
         &self,
-        block_data: &stream::pb::sf::substreams::rpc::v2::BlockScopedData,
+        block_data: &BlockScopedData,
     ) -> Result<(), Self::Error> {
+        let output = stream::utils::output(block_data);
+        let block_metadata = stream::utils::block_metadata(block_data);
+        let geo = GeoOutput::decode(output.value.as_slice())?;
+
         // @TODO: Need to figure out to abstract the different types of streams so
         // people can write their own sinks over specific events however they want.
-        root_handler::run(block_data, &self.storage, &self.cache).await?;
+        //
+        // One idea is implementing the decoding at the stream level, so anybody
+        // consuming the stream just gets the block data + the already-decoded contents
+        // of each event.
+        //
+        // async fn process_block(&self, block_data: &DecodedBlockData, _raw_block_data: &BlockScopedData);
+        root_handler::run(&geo, &block_metadata, &self.storage, &self.cache).await?;
 
         Ok(())
     }
