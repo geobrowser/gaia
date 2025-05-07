@@ -71,6 +71,13 @@ impl Sink<KgData> for KgIndexer {
         let geo = GeoOutput::decode(output.value.as_slice())?;
         let block_metadata = stream::utils::block_metadata(block_data);
 
+        // @TODO: Need to figure out how to abstract the below into a unique function
+        // so we can write testable mechanisms for the stream handling itself. i.e.,
+        // how do we mock the stream?
+        //
+        // @TODO: Need to figure out to abstract the different types of streams so
+        // people can write their own sinks over specific events however they want.
+
         println!(
             "Block #{} - Payload {} ({} bytes) - Drift {}s – Edits Published {}",
             block_metadata.block_number,
@@ -103,8 +110,8 @@ impl Sink<KgData> for KgIndexer {
                 match edit {
                     Ok(value) => {
                         if !value.is_errored {
-                            let entities = storage
-                                .map_edit_to_entity_items(value.edit.unwrap(), &block_metadata);
+                            let entities =
+                                storage.map_edit_to_entities(&value.edit.unwrap(), &block_metadata);
                             let result = storage.insert(&entities).await;
 
                             match result {
