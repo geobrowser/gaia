@@ -18,7 +18,8 @@ const START_BLOCK: i64 = 881;
 use grc20::pb::chain::GeoOutput;
 
 mod storage;
-use storage::{EntitiesModel, Entity, PostgresStorage, StorageBackend, StorageError};
+use storage::{EntitiesModel, PostgresStorage, StorageBackend, StorageError};
+
 mod cache;
 use cache::{Cache, CacheError};
 
@@ -110,8 +111,10 @@ impl Sink<KgData> for KgIndexer {
                 match edit {
                     Ok(value) => {
                         if !value.is_errored {
-                            let entities = EntitiesModel::new()
-                                .map_edit_to_entities(&value.edit.unwrap(), &block_metadata);
+                            let entities = EntitiesModel::map_edit_to_entities(
+                                &value.edit.unwrap(),
+                                &block_metadata,
+                            );
                             let result = storage.insert_entities(&entities).await;
 
                             match result {

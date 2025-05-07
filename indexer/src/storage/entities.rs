@@ -1,92 +1,19 @@
-use std::{collections::HashSet, env};
+use std::collections::HashSet;
 
 use grc20::pb::ipfs::Edit;
-use sqlx::{postgres::PgPoolOptions, Postgres};
-
 use stream::utils::BlockMetadata;
-use thiserror::Error;
-
-#[derive(Error, Debug)]
-pub enum StorageError {
-    #[error("Storage error: {0}")]
-    Database(#[from] sqlx::Error),
-}
-
-#[async_trait::async_trait]
-pub trait StorageBackend: Send + Sync {
-    async fn insert_entities(&self, entities: &Vec<EntityItem>) -> Result<(), StorageError>;
-}
-
-pub struct PostgresStorage {
-    pool: sqlx::Pool<Postgres>,
-}
-
-impl PostgresStorage {
-    pub async fn new() -> Result<Self, StorageError> {
-        let database_url = env::var("DATABASE_URL").expect("DATABASE_URL not set");
-
-        let database_url_static = database_url.as_str();
-
-        let connection = PgPoolOptions::new()
-            .max_connections(20)
-            .connect(database_url_static)
-            .await?;
-
-        return Ok(PostgresStorage { pool });
-    }
-}
-
-#[async_trait::async_trait]
-impl StorageBackend for PostgresStorage {
-    async fn insert_entities(&self, entities: &Vec<EntityItem>) -> Result<(), StorageError> {
-        let ids: Vec<String> = entities.iter().map(|x| x.id.clone()).collect();
-        let created_ats: Vec<String> = entities.iter().map(|x| x.created_at.clone()).collect();
-        let created_at_blocks: Vec<String> = entities
-            .iter()
-            .map(|x| x.created_at_block.clone())
-            .collect();
-        let updated_ats: Vec<String> = entities.iter().map(|x| x.updated_at.clone()).collect();
-        let updated_at_blocks: Vec<String> = entities
-            .iter()
-            .map(|x| x.updated_at_block.clone())
-            .collect();
-
-        // @TODO: How do we abstract sqlx?
-        let result = sqlx::query!(
-            r#"
-            INSERT INTO entities (id, created_at, created_at_block, updated_at, updated_at_block)
-            SELECT * FROM UNNEST($1::text[], $2::text[], $3::text[], $4::text[], $5::text[])
-            ON CONFLICT (id)
-            DO UPDATE SET updated_at = EXCLUDED.updated_at, updated_at_block = EXCLUDED.updated_at_block
-            "#,
-            &ids,
-            &created_ats,
-            &created_at_blocks,
-            &updated_ats,
-            &updated_at_blocks
-        )
-        .execute(&self.pool)
-        .await?;
-
-        Ok(())
-    }
-}
 
 pub struct EntityItem {
-    id: String,
-    created_at: String,
-    created_at_block: String,
-    updated_at: String,
-    updated_at_block: String,
+    pub id: String,
+    pub created_at: String,
+    pub created_at_block: String,
+    pub updated_at: String,
+    pub updated_at_block: String,
 }
 
 pub struct EntitiesModel;
 
 impl EntitiesModel {
-    pub fn new() -> Self {
-        Entity {}
-    }
-
     pub fn map_edit_to_entities(edit: &Edit, block: &BlockMetadata) -> Vec<EntityItem> {
         let mut entities: Vec<EntityItem> = Vec::new();
         let mut seen: HashSet<String> = HashSet::new();
@@ -214,23 +141,3 @@ impl EntitiesModel {
         return entities;
     }
 }
-
-/**
-use std::sync::Mutex;
-use std::collections::HashMap;
-
-pub struct InMemoryStorage {
-    users: Mutex<HashMap<i32, User>>,
-}
-
-#[async_trait::async_trait]
-impl StorageBackend for InMemoryStorage {
-    async fn get_user(&self, user_id: i32) -> Option<User> {
-        self.users.lock().unwrap().get(&user_id).cloned()
-    }
-
-    async fn insert_user(&self, user: User) -> anyhow::Result<()> {
-        self.users.lock().unwrap().insert(user.id, user);
-        Ok(())
-    }
-}*/
