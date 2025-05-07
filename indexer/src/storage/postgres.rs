@@ -1,5 +1,4 @@
 use async_trait::async_trait;
-use std::env;
 
 use sqlx::{postgres::PgPoolOptions, Postgres};
 
@@ -10,9 +9,7 @@ pub struct PostgresStorage {
 }
 
 impl PostgresStorage {
-    pub async fn new() -> Result<Self, StorageError> {
-        let database_url = env::var("DATABASE_URL").expect("DATABASE_URL not set");
-
+    pub async fn new(database_url: &String) -> Result<Self, StorageError> {
         let database_url_static = database_url.as_str();
 
         let pool = PgPoolOptions::new()
@@ -39,8 +36,7 @@ impl StorageBackend for PostgresStorage {
             .map(|x| x.updated_at_block.clone())
             .collect();
 
-        // @TODO: How do we abstract sqlx?
-        let result = sqlx::query!(
+        sqlx::query!(
             r#"
             INSERT INTO entities (id, created_at, created_at_block, updated_at, updated_at_block)
             SELECT * FROM UNNEST($1::text[], $2::text[], $3::text[], $4::text[], $5::text[])

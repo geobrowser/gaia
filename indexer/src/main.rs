@@ -1,6 +1,8 @@
 use indexer::{
-    block_handler::root_handler, cache::Cache, error::IndexingError,
-    storage::postgres::PostgresStorage,
+    block_handler::root_handler,
+    cache::Cache,
+    error::IndexingError,
+    storage::{postgres::PostgresStorage, StorageBackend},
 };
 use std::{env, sync::Arc};
 
@@ -60,7 +62,8 @@ impl Sink<KgData> for KgIndexer {
 async fn main() -> Result<(), IndexingError> {
     dotenv().ok();
 
-    let storage = PostgresStorage::new().await;
+    let database_url = env::var("DATABASE_URL").expect("DATABASE_URL not set");
+    let storage = PostgresStorage::new(&database_url).await;
 
     match storage {
         Ok(result) => {

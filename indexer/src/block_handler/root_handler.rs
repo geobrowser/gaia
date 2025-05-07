@@ -10,16 +10,18 @@ use tokio_retry::{
 };
 
 use crate::storage::entities::EntitiesModel;
-use crate::storage::postgres::PostgresStorage;
 use crate::storage::StorageBackend;
 use crate::{cache::Cache, error::IndexingError};
 
-pub async fn run(
+pub async fn run<T>(
     // @TODO: What the minimum data we need from the block?
     block_data: &stream::pb::sf::substreams::rpc::v2::BlockScopedData,
-    storage: &Arc<PostgresStorage>,
+    storage: &Arc<T>,
     cache: &Arc<Cache>,
-) -> Result<(), IndexingError> {
+) -> Result<(), IndexingError>
+where
+    T: StorageBackend + 'static,
+{
     let output = stream::utils::output(block_data);
     let geo = GeoOutput::decode(output.value.as_slice())?;
     let block_metadata = stream::utils::block_metadata(block_data);
