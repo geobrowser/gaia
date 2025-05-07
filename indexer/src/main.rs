@@ -46,10 +46,6 @@ impl Sink<KgData> for KgIndexer {
         &self,
         block_data: &stream::pb::sf::substreams::rpc::v2::BlockScopedData,
     ) -> Result<(), Self::Error> {
-        // @TODO: Need to figure out how to abstract the below into a unique function
-        // so we can write testable mechanisms for the stream handling itself. i.e.,
-        // how do we mock the stream?
-        //
         // @TODO: Need to figure out to abstract the different types of streams so
         // people can write their own sinks over specific events however they want.
         root_handler::run(block_data, &self.storage, &self.cache).await?;
