@@ -1,6 +1,6 @@
 use grc20::pb::chain::GeoOutput;
 use indexer::{
-    block_handler::root_handler, cache::Cache, error::IndexingError,
+    block_handler::root_handler, cache::postgres::PostgresCache, error::IndexingError,
     storage::postgres::PostgresStorage,
 };
 use prost::Message;
@@ -19,11 +19,11 @@ struct KgData {
 
 struct KgIndexer {
     storage: Arc<PostgresStorage>,
-    cache: Arc<Cache>,
+    cache: Arc<PostgresCache>,
 }
 
 impl KgIndexer {
-    pub fn new(storage: PostgresStorage, cache: Cache) -> Self {
+    pub fn new(storage: PostgresStorage, cache: PostgresCache) -> Self {
         KgIndexer {
             storage: Arc::new(storage),
             cache: Arc::new(cache),
@@ -73,7 +73,7 @@ async fn main() -> Result<(), IndexingError> {
 
     match storage {
         Ok(result) => {
-            let cache = Cache::new().await?;
+            let cache = PostgresCache::new().await?;
             let indexer = KgIndexer::new(result, cache);
 
             let endpoint_url =

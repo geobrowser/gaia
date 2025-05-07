@@ -3,6 +3,7 @@ use std::collections::HashSet;
 use grc20::pb::ipfs::Edit;
 use stream::utils::BlockMetadata;
 
+#[derive(Clone)]
 pub struct EntityItem {
     pub id: String,
     pub created_at: String,

@@ -19,6 +19,20 @@ impl PostgresStorage {
 
         return Ok(PostgresStorage { pool });
     }
+
+    async fn get_entity(&self, entity_id: &String) -> Result<EntityItem, StorageError> {
+        let query = sqlx::query!("SELECT * FROM entities WHERE id = $1", entity_id)
+            .fetch_one(&self.pool)
+            .await?;
+
+        Ok(EntityItem {
+            id: query.id,
+            created_at: query.created_at,
+            created_at_block: query.created_at_block,
+            updated_at: query.updated_at,
+            updated_at_block: query.updated_at_block,
+        })
+    }
 }
 
 #[async_trait]

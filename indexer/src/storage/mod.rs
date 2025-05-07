@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 
 pub mod entities;
+pub mod kv;
 pub mod postgres;
 
 use entities::EntityItem;

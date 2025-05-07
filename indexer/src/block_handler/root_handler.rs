@@ -9,18 +9,19 @@ use tokio_retry::{
     Retry,
 };
 
-use crate::storage::entities::EntitiesModel;
+use crate::error::IndexingError;
 use crate::storage::StorageBackend;
-use crate::{cache::Cache, error::IndexingError};
+use crate::{cache::CacheBackend, storage::entities::EntitiesModel};
 
-pub async fn run<T>(
+pub async fn run<S, C>(
     output: &GeoOutput,
     block_metadata: &BlockMetadata,
-    storage: &Arc<T>,
-    cache: &Arc<Cache>,
+    storage: &Arc<S>,
+    cache: &Arc<C>,
 ) -> Result<(), IndexingError>
 where
-    T: StorageBackend + 'static,
+    S: StorageBackend + 'static,
+    C: CacheBackend + 'static,
 {
     println!(
         "Block #{} – Drift {}s – Edits Published {}",
@@ -54,12 +55,12 @@ where
 
                         let result = storage.insert_entities(&entities).await;
 
-                        // match result {
-                        //     Ok(value) => {}
-                        //     Err(error) => {
-                        //         println!("Error writing {}", error);
-                        //     }
-                        // }
+                        match result {
+                            Ok(value) => {}
+                            Err(error) => {
+                                println!("Error writing {}", error);
+                            }
+                        }
                     }
                 }
                 Err(error) => {
