@@ -2,7 +2,7 @@ use std::env;
 
 use sqlx::{postgres::PgPoolOptions, Postgres};
 
-use super::{EntityItem, StorageBackend, StorageError};
+use super::{entities::EntityItem, storage::StorageBackend, storage::StorageError};
 
 pub struct PostgresStorage {
     pool: sqlx::Pool<Postgres>,

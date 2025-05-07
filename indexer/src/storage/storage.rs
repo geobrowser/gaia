@@ -1,6 +1,6 @@
 use thiserror::Error;
 
-use super::EntityItem;
+use super::entities::EntityItem;
 
 #[derive(Error, Debug)]
 pub enum StorageError {
