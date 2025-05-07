@@ -1,8 +1,9 @@
+use async_trait::async_trait;
 use std::env;
 
 use sqlx::{postgres::PgPoolOptions, Postgres};
 
-use super::{entities::EntityItem, storage::StorageBackend, storage::StorageError};
+use super::{entities::EntityItem, StorageBackend, StorageError};
 
 pub struct PostgresStorage {
     pool: sqlx::Pool<Postgres>,
@@ -23,7 +24,7 @@ impl PostgresStorage {
     }
 }
 
-#[async_trait::async_trait]
+#[async_trait]
 impl StorageBackend for PostgresStorage {
     async fn insert_entities(&self, entities: &Vec<EntityItem>) -> Result<(), StorageError> {
         let ids: Vec<String> = entities.iter().map(|x| x.id.clone()).collect();
