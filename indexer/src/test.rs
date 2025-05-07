@@ -9,7 +9,6 @@ use tokio_retry::{
 use dotenv::dotenv;
 use prost::{DecodeError, Message};
 use stream::{utils::BlockMetadata, Sink};
-use tokio::task;
 
 const PKG_FILE: &str = "geo_substream.spkg";
 const MODULE_NAME: &str = "geo_out";
@@ -18,14 +17,15 @@ const START_BLOCK: i64 = 881;
 use grc20::pb::chain::GeoOutput;
 
 mod storage;
-use storage::{EntitiesModel, Entity, PostgresStorage, StorageBackend, StorageError};
+use storage::{EntityStorage, EntityStorageError, Storage};
 mod cache;
 use cache::{Cache, CacheError};
+use tokio::task;
 
 #[derive(Error, Debug)]
 pub enum IndexingError {
     #[error("Indexing error: {0}")]
-    StorageError(#[from] StorageError),
+    EntityStorageError(#[from] EntityStorageError),
 
     #[error("Indexing error: {0}")]
     CacheError(#[from] CacheError),
@@ -39,14 +39,14 @@ struct KgData {
 }
 
 struct KgIndexer {
-    storage: Arc<PostgresStorage>,
+    entity_storage: Arc<EntityStorage>,
     cache: Arc<Cache>,
 }
 
 impl KgIndexer {
-    pub fn new(storage: PostgresStorage, cache: Cache) -> Self {
+    pub fn new(entity_storage: EntityStorage, cache: Cache) -> Self {
         KgIndexer {
-            storage: Arc::new(storage),
+            entity_storage: Arc::new(entity_storage),
             cache: Arc::new(cache),
         }
     }
@@ -90,7 +90,7 @@ impl Sink<KgData> for KgIndexer {
         let mut handles = Vec::new();
 
         for edit in geo.edits_published {
-            let storage = self.storage.clone();
+            let storage = self.entity_storage.clone();
             let cache = self.cache.clone();
             let block_metadata = stream::utils::block_metadata(block_data);
 
@@ -110,9 +110,9 @@ impl Sink<KgData> for KgIndexer {
                 match edit {
                     Ok(value) => {
                         if !value.is_errored {
-                            let entities = EntitiesModel::new()
-                                .map_edit_to_entities(&value.edit.unwrap(), &block_metadata);
-                            let result = storage.insert_entities(&entities).await;
+                            let entities =
+                                storage.map_edit_to_entities(&value.edit.unwrap(), &block_metadata);
+                            let result = storage.insert(&entities).await;
 
                             match result {
                                 Ok(value) => {}
@@ -145,51 +145,13 @@ impl Sink<KgData> for KgIndexer {
 async fn main() -> Result<(), IndexingError> {
     dotenv().ok();
 
-    let storage = PostgresStorage::new().await;
+    let storage = Storage::new().await;
 
     match storage {
         Ok(result) => {
+            let entity_storage = EntityStorage::new(result);
             let cache = Cache::new().await?;
-            let indexer = KgIndexer::new(result, cache);
-
-            let endpoint_url =
-                env::var("SUBSTREAMS_ENDPOINT").expect("SUBSTREAMS_ENDPOINT not set");
-
-            let _result = indexer
-                .run(&endpoint_url, PKG_FILE, MODULE_NAME, START_BLOCK, 0)
-                .await;
-        }
-        Err(error) => {
-            println!("Error initializing stream {}", error);
-        }
-    }
-
-    Ok(())
-}
-
-struct TestIndexer {
-    storage: Arc<PostgresStorage>, // @TODO: Can use in-memory?
-    cache: Arc<Cache>,             // @TODO: Can use in-memory
-}
-
-impl TestIndexer {
-    pub fn new(storage: PostgresStorage, cache: Cache) -> Self {
-        TestIndexer {
-            storage: Arc::new(storage),
-            cache: Arc::new(cache),
-        }
-    }
-}
-
-async fn test() -> Result<(), IndexingError> {
-    dotenv().ok();
-
-    let storage = PostgresStorage::new().await;
-
-    match storage {
-        Ok(result) => {
-            let cache = Cache::new().await?;
-            let indexer = KgIndexer::new(result, cache);
+            let indexer = KgIndexer::new(entity_storage, cache);
 
             let endpoint_url =
                 env::var("SUBSTREAMS_ENDPOINT").expect("SUBSTREAMS_ENDPOINT not set");
