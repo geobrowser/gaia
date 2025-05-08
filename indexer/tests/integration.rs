@@ -17,8 +17,8 @@ use indexer::{
 };
 
 struct TestIndexer {
-    storage: Arc<KvStorage>, // @TODO: Can use in-memory?
-    cache: Arc<KvCache>,     // @TODO: Can use in-memory
+    storage: Arc<KvStorage>,
+    cache: Arc<KvCache>,
 }
 
 impl TestIndexer {
@@ -86,30 +86,16 @@ async fn main() -> Result<(), IndexingError> {
         KvCache::new(vec![WriteCacheItem {
             uri: String::from("5"),
             item: CacheItem {
-                edit: Some(Edit {
-                    id: String::from("1"),
-                    name: String::from("test"),
-                    version: String::from("0.0.1"),
-                    ops: vec![Op {
-                        r#type: 1,
-                        entity: None,
-                        triples: vec![],
-                        metadata: None,
-                        relation: None,
-                        url: None,
-                        triple: Some(Triple {
-                            attribute: "attribute".to_string(),
-                            entity: "entity".to_string(),
-                            value: Some(Value {
-                                options: None,
-                                r#type: 1,
-                                value: "value".to_string(),
-                            }),
-                        }),
-                    }],
-                    r#type: 1,
-                    authors: vec![String::from("Byron")],
-                }),
+                edit: Some(make_edit(
+                    "5",
+                    "Name",
+                    "Author",
+                    vec![
+                        make_triple_op(OpType::SET, "entity-id-1", "attribute-id", "value 1", 1),
+                        make_triple_op(OpType::SET, "entity-id-2", "attribute-id", "value 2", 1),
+                        make_triple_op(OpType::DELETE, "entity-id-2", "attribute-id", "value 2", 1),
+                    ],
+                )),
                 is_errored: false,
             },
         }])
@@ -119,8 +105,93 @@ async fn main() -> Result<(), IndexingError> {
     let indexer = TestIndexer::new(storage.clone(), cache);
     indexer.run(&vec![test_output_1]).await?;
 
-    let result = storage.clone().get(&"entity".to_string()).await.unwrap();
-    println!("result {}", result.created_at);
+    {
+        let entity = storage
+            .clone()
+            .get(&"entity-id-1".to_string())
+            .await
+            .unwrap();
+        assert_eq!(entity.id, "entity-id-1");
+    }
+
+    {
+        let entity = storage
+            .clone()
+            .get(&"entity-id-2".to_string())
+            .await
+            .unwrap();
+        assert_eq!(entity.id, "entity-id-2");
+    }
+
+    {
+        let attribute = storage
+            .clone()
+            .get(&"attribute-id".to_string())
+            .await
+            .unwrap();
+        assert_eq!(attribute.id, "attribute-id");
+    }
 
     Ok(())
+}
+
+fn make_edit(id: &str, name: &str, author: &str, ops: Vec<Op>) -> Edit {
+    Edit {
+        id: String::from(id),
+        name: String::from(name),
+        version: String::from("0.0.1"),
+        ops,
+        r#type: 1,
+        authors: vec![String::from(author)],
+    }
+}
+
+enum OpType {
+    SET,
+    DELETE,
+}
+
+fn make_triple_op(
+    op_type: OpType,
+    entity: &str,
+    attribute: &str,
+    value: &str,
+    value_type: i32,
+) -> Op {
+    match op_type {
+        OpType::SET => Op {
+            r#type: 1,
+            entity: None,
+            triples: vec![],
+            metadata: None,
+            relation: None,
+            url: None,
+            triple: Some(Triple {
+                attribute: attribute.to_string(),
+                entity: entity.to_string(),
+                value: Some(Value {
+                    options: None,
+                    r#type: value_type,
+                    value: value.to_string(),
+                }),
+            }),
+        },
+        OpType::DELETE => Op {
+            r#type: 1,
+            entity: None,
+            triples: vec![],
+            metadata: None,
+            relation: None,
+            url: None,
+            triple: Some(Triple {
+                attribute: attribute.to_string(),
+                entity: entity.to_string(),
+                value: Some(Value {
+                    options: None,
+                    r#type: value_type,
+                    value: value.to_string(),
+                }),
+            }),
+        },
+    }
 }

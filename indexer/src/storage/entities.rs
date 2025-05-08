@@ -24,7 +24,9 @@ impl EntitiesModel {
                 // SET_TRIPLE
                 1 => {
                     if op.triple.is_some() {
-                        let entity_id = op.triple.clone().unwrap().entity;
+                        let triple = op.triple.clone().unwrap();
+                        let entity_id = triple.entity.clone();
+                        let attribute_id = triple.attribute.clone();
 
                         if !seen.contains(&entity_id) {
                             entities.push(EntityItem {
@@ -37,12 +39,26 @@ impl EntitiesModel {
 
                             seen.insert(entity_id);
                         }
+
+                        if !seen.contains(&attribute_id) {
+                            entities.push(EntityItem {
+                                id: attribute_id.clone(),
+                                created_at: block.timestamp.clone(),
+                                created_at_block: block.block_number.to_string(),
+                                updated_at: block.timestamp.clone(),
+                                updated_at_block: block.block_number.to_string(),
+                            });
+
+                            seen.insert(attribute_id);
+                        }
                     }
                 }
                 // DELETE_TRIPLE
                 2 => {
                     if op.triple.is_some() {
-                        let entity_id = op.triple.clone().unwrap().entity;
+                        let triple = op.triple.clone().unwrap();
+                        let entity_id = triple.entity.clone();
+                        let attribute_id = triple.attribute.clone();
 
                         if !seen.contains(&entity_id) {
                             entities.push(EntityItem {
@@ -54,6 +70,18 @@ impl EntitiesModel {
                             });
 
                             seen.insert(entity_id);
+                        }
+
+                        if !seen.contains(&attribute_id) {
+                            entities.push(EntityItem {
+                                id: attribute_id.clone(),
+                                created_at: block.timestamp.clone(),
+                                created_at_block: block.block_number.to_string(),
+                                updated_at: block.timestamp.clone(),
+                                updated_at_block: block.block_number.to_string(),
+                            });
+
+                            seen.insert(attribute_id);
                         }
                     }
                 }
