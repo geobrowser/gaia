@@ -9,9 +9,12 @@ use tokio_retry::{
     Retry,
 };
 
+use crate::error::IndexingError;
 use crate::storage::StorageBackend;
-use crate::{cache::CacheBackend, storage::entities::EntitiesModel};
-use crate::{error::IndexingError, storage::triples::TriplesModel};
+use crate::{
+    cache::CacheBackend,
+    models::{entities::EntitiesModel, triples::TriplesModel},
+};
 
 pub async fn run<S, C>(
     output: &GeoOutput,

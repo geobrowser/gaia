@@ -1,12 +1,10 @@
 use async_trait::async_trait;
 
-pub mod entities;
 pub mod postgres;
-pub mod triples;
 
-use entities::EntityItem;
 use thiserror::Error;
-use triples::TripleOp;
+
+use crate::models::{entities::EntityItem, triples::TripleOp};
 
 #[derive(Error, Debug)]
 pub enum StorageError {

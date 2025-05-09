@@ -3,11 +3,12 @@ use async_trait::async_trait;
 use grc20::pb::ipfs::ValueType;
 use sqlx::{postgres::PgPoolOptions, Postgres, QueryBuilder};
 
-use super::{
+use crate::models::{
     entities::EntityItem,
     triples::{TripleOp, TripleType},
-    StorageBackend, StorageError,
 };
+
+use super::{StorageBackend, StorageError};
 
 pub struct PostgresStorage {
     pool: sqlx::Pool<Postgres>,
