@@ -18,7 +18,7 @@ pub enum CacheError {
 }
 
 #[derive(Clone)]
-pub struct CacheItem {
+pub struct PreprocessedEdit {
     pub edit: Option<Edit>,
     pub is_errored: bool,
     pub space_id: String,
@@ -26,5 +26,5 @@ pub struct CacheItem {
 
 #[async_trait]
 pub trait CacheBackend: Send + Sync {
-    async fn get(&self, uri: &String) -> Result<CacheItem, CacheError>;
+    async fn get(&self, uri: &String) -> Result<PreprocessedEdit, CacheError>;
 }

@@ -1,62 +1,41 @@
 use std::sync::Arc;
 
 use futures::future::join_all;
-use grc20::pb::chain::GeoOutput;
 use stream::utils::BlockMetadata;
 use tokio::task;
-use tokio_retry::{
-    strategy::{jitter, ExponentialBackoff},
-    Retry,
-};
 
-use crate::error::IndexingError;
+use crate::models::{entities::EntitiesModel, triples::TriplesModel};
 use crate::storage::StorageBackend;
-use crate::{
-    cache::CacheBackend,
-    models::{entities::EntitiesModel, triples::TriplesModel},
-};
+use crate::{cache::PreprocessedEdit, error::IndexingError};
 
-pub async fn run<S, C>(
-    output: &GeoOutput,
+pub async fn run<S>(
+    output: Vec<PreprocessedEdit>,
     block_metadata: &BlockMetadata,
     storage: &Arc<S>,
-    cache: &Arc<C>,
 ) -> Result<(), IndexingError>
 where
     S: StorageBackend + 'static,
-    C: CacheBackend + 'static,
 {
     println!(
         "Block #{} – Drift {}s – Edits Published {}",
         block_metadata.block_number,
         block_metadata.timestamp,
-        output.edits_published.len()
+        output.len()
     );
 
     let mut handles = Vec::new();
 
-    for chain_edit in output.edits_published.clone() {
+    for preprocessed_edit in output {
         let storage = storage.clone();
-        let cache = cache.clone();
         let block = block_metadata.clone();
 
         let handle = task::spawn(async move {
-            // We retry requests to the cache in the case that the cache is
-            // still populating. For now we assume writing to + reading from
-            // the cache can't fail
-            let retry = ExponentialBackoff::from_millis(10)
-                .factor(2)
-                .max_delay(std::time::Duration::from_secs(5))
-                .map(jitter);
-            let cached_edit_entry =
-                Retry::spawn(retry, async || cache.get(&chain_edit.content_uri).await).await?;
-
             // The Edit might be malformed. The Cache still stores it with an
             // is_errored flag to denote that the entry exists but can't be
             // decoded.
-            if !cached_edit_entry.is_errored {
-                let edit = cached_edit_entry.edit.unwrap();
-                let space_id = cached_edit_entry.space_id;
+            if !preprocessed_edit.is_errored {
+                let edit = preprocessed_edit.edit.unwrap();
+                let space_id = preprocessed_edit.space_id;
 
                 // @TODO: transaction with non-blocking writes
                 let entities = EntitiesModel::map_edit_to_entities(&edit, &block);

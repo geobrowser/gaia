@@ -21,6 +21,24 @@ pub fn checksum_address(address: impl Into<String>) -> String {
     format!("0x{}", address_chars.iter().collect::<String>())
 }
 
+pub struct SpacesBlocklist<'a> {
+    pub space_ids: Vec<&'a str>,
+    pub dao_addresses: Vec<&'a str>,
+    pub space_plugin_addresses: Vec<&'a str>,
+    pub main_voting_plugin_addresses: Vec<&'a str>,
+    pub member_access_plugin_address: Vec<&'a str>,
+}
+
+pub fn get_blocklist() -> SpacesBlocklist<'static> {
+    SpacesBlocklist {
+        space_ids: vec!["Q5YFEacgaHtXE9Kub9AEkA"],
+        dao_addresses: vec!["0x22238cd64d914583f06223adfe9cddf9b45d1971"],
+        main_voting_plugin_addresses: vec!["0x8Cb274d585393acd5277EC2B29ab56F2B604E4f0"],
+        member_access_plugin_address: vec!["0x27e73AD87612098F9F7c2F456E9f4803DAcd899B"],
+        space_plugin_addresses: vec!["0x07801e72a8a722969663440385b906e1b073c948"],
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

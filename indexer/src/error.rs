@@ -1,5 +1,6 @@
 use prost::DecodeError;
 use thiserror::Error;
+use tokio::task::JoinError;
 
 use crate::{cache::CacheError, storage::StorageError};
 
@@ -13,4 +14,7 @@ pub enum IndexingError {
 
     #[error("Indexing error: {0}")]
     DecodeError(#[from] DecodeError),
+
+    #[error("Indexing error: {0}")]
+    TaskError(#[from] JoinError),
 }

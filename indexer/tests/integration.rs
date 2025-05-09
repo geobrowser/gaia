@@ -10,7 +10,7 @@ use indexer::{
     block_handler::root_handler,
     cache::{
         kv::{KvCache, WriteCacheItem},
-        CacheItem,
+        PreprocessedEdit,
     },
     error::IndexingError,
     storage::postgres::PostgresStorage,
@@ -86,7 +86,7 @@ async fn main() -> Result<(), IndexingError> {
     let cache = Arc::new(
         KvCache::new(vec![WriteCacheItem {
             uri: String::from("5"),
-            item: CacheItem {
+            item: PreprocessedEdit {
                 space_id: String::from("5"),
                 edit: Some(make_edit(
                     "5",

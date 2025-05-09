@@ -3,7 +3,7 @@ use std::env;
 use grc20::pb::ipfs::Edit;
 use sqlx::{postgres::PgPoolOptions, Postgres};
 
-use super::{CacheBackend, CacheError, CacheItem};
+use super::{CacheBackend, CacheError, PreprocessedEdit};
 
 pub struct PostgresCache {
     pool: sqlx::Pool<Postgres>,
@@ -26,7 +26,7 @@ impl PostgresCache {
 
 #[async_trait::async_trait]
 impl CacheBackend for PostgresCache {
-    async fn get(&self, uri: &String) -> Result<CacheItem, CacheError> {
+    async fn get(&self, uri: &String) -> Result<PreprocessedEdit, CacheError> {
         let query = sqlx::query!(
             "SELECT json, is_errored, space FROM ipfs_cache WHERE uri = $1",
             uri
@@ -35,7 +35,7 @@ impl CacheBackend for PostgresCache {
         .await?;
 
         if query.is_errored {
-            return Ok(CacheItem {
+            return Ok(PreprocessedEdit {
                 edit: None,
                 is_errored: true,
                 space_id: query.space,
@@ -45,7 +45,7 @@ impl CacheBackend for PostgresCache {
         let json = query.json.unwrap();
         let edit = serde_json::from_value::<Edit>(json)?;
 
-        Ok(CacheItem {
+        Ok(PreprocessedEdit {
             edit: Some(edit),
             is_errored: false,
             space_id: query.space,

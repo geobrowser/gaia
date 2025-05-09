@@ -2,15 +2,15 @@ use std::{collections::HashMap, sync::Arc};
 
 use tokio::sync::RwLock;
 
-use super::{CacheBackend, CacheError, CacheItem};
+use super::{CacheBackend, CacheError, PreprocessedEdit};
 
 pub struct KvCache {
-    store: Arc<RwLock<HashMap<String, CacheItem>>>,
+    store: Arc<RwLock<HashMap<String, PreprocessedEdit>>>,
 }
 
 pub struct WriteCacheItem {
     pub uri: String,
-    pub item: CacheItem,
+    pub item: PreprocessedEdit,
 }
 
 impl KvCache {
@@ -28,7 +28,7 @@ impl KvCache {
 
 #[async_trait::async_trait]
 impl CacheBackend for KvCache {
-    async fn get(&self, uri: &String) -> Result<CacheItem, CacheError> {
+    async fn get(&self, uri: &String) -> Result<PreprocessedEdit, CacheError> {
         let store = self.store.read().await;
         store.get(uri).cloned().ok_or(CacheError::NotFound)
     }

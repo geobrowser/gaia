@@ -1,3 +1,4 @@
+use indexer_utils::get_blocklist;
 use std::sync::Arc;
 use std::{env, io::Error};
 use stream::utils::BlockMetadata;
@@ -90,6 +91,13 @@ impl Sink<EventData> for CacheIndexer {
         );
 
         for edit in geo.edits_published {
+            if get_blocklist()
+                .dao_addresses
+                .contains(&edit.dao_address.as_str())
+            {
+                continue;
+            }
+
             let permit = self.semaphore.clone().acquire_owned().await.unwrap();
             let cache = self.cache.clone();
             let ipfs = self.ipfs.clone();

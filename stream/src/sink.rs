@@ -16,6 +16,116 @@ use crate::{
     substreams_stream::{BlockResponse, SubstreamsStream},
 };
 
+pub trait PreprocessedSink<P: Send>: Send + Sync {
+    type Error: std::error::Error + Send + Sync + 'static;
+
+    fn preprocess_block_scoped_data(
+        &self,
+        block_data: &BlockScopedData,
+    ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send;
+
+    fn process_block_scoped_data(
+        &self,
+        block_data: &BlockScopedData,
+        decoded_data: P,
+    ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send;
+
+    fn process_block_undo_signal(&self, _undo_signal: &BlockUndoSignal) -> Result<(), Self::Error> {
+        // `BlockUndoSignal` must be treated as "delete every data that has been recorded after
+        // block height specified by block in BlockUndoSignal". In the example above, this means
+        // you must delete changes done by `Block #7b` and `Block #6b`. The exact details depends
+        // on your own logic. If for example all your added record contain a block number, a
+        // simple way is to do `delete all records where block_num > 5` which is the block num
+        // received in the `BlockUndoSignal` (this is true for append only records, so when only `INSERT` are allowed).
+        unimplemented!(
+            "you must implement some kind of block undo handling, or request only final blocks (tweak substreams_stream.rs)"
+        )
+    }
+
+    fn persist_cursor(
+        &self,
+        _cursor: String,
+    ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send {
+        // FIXME: Handling of the cursor is missing here. It should be saved each time
+        // a full block has been correctly processed/persisted. The saving location
+        // is your responsibility.
+        //
+        // By making it persistent, we ensure that if we crash, on startup we are
+        // going to read it back from database and start back our SubstreamsStream
+        // with it ensuring we are continuously streaming without ever losing a single
+        // element.
+        async { Ok(()) }
+    }
+
+    fn load_persisted_cursor(
+        &self,
+    ) -> impl std::future::Future<Output = Result<Option<String>, Self::Error>> + Send {
+        // FIXME: Handling of the cursor is missing here. It should be loaded from
+        // somewhere (local file, database, cloud storage) and then `SubstreamStream` will
+        // be able correctly resume from the right block.
+        async { Ok(None) }
+    }
+
+    fn run(
+        &self,
+        endpoint_url: &str,
+        spkg_file: &str,
+        module_name: &str,
+        start_block: i64,
+        end_block: u64,
+    ) -> impl std::future::Future<Output = Result<(), anyhow::Error>> + Send {
+        async move {
+            let token_env = env::var("SUBSTREAMS_API_TOKEN").unwrap_or("".to_string());
+            let mut token: Option<String> = None;
+            if !token_env.is_empty() {
+                token = Some(token_env);
+            }
+
+            let cursor: Option<String> = self.load_persisted_cursor().await?;
+
+            println!("Processing block {}", spkg_file);
+
+            let package = read_package(spkg_file).await.unwrap();
+
+            let endpoint = Arc::new(SubstreamsEndpoint::new(&endpoint_url, token).await?);
+
+            let mut stream = SubstreamsStream::new(
+                endpoint.clone(),
+                cursor,
+                package.modules.clone(),
+                module_name.to_string(),
+                start_block,
+                end_block,
+            );
+
+            loop {
+                match stream.next().await {
+                    None => {
+                        println!("Stream consumed");
+                        break;
+                    }
+                    Some(Ok(BlockResponse::New(data))) => {
+                        self.preprocess_block_scoped_data(&data).await?;
+                        self.persist_cursor(data.cursor).await?;
+                    }
+                    Some(Ok(BlockResponse::Undo(undo_signal))) => {
+                        self.process_block_undo_signal(&undo_signal)?;
+                        self.persist_cursor(undo_signal.last_valid_cursor).await?;
+                    }
+                    Some(Err(err)) => {
+                        println!();
+                        println!("Stream terminated with error");
+                        println!("{:?}", err);
+                        exit(1);
+                    }
+                }
+            }
+
+            Ok(())
+        }
+    }
+}
+
 pub trait Sink<T: Send>: Send + Sync {
     type Error: std::error::Error + Send + Sync + 'static;
 
