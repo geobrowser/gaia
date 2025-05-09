@@ -9,9 +9,9 @@ use tokio_retry::{
     Retry,
 };
 
-use crate::error::IndexingError;
 use crate::storage::StorageBackend;
 use crate::{cache::CacheBackend, storage::entities::EntitiesModel};
+use crate::{error::IndexingError, storage::entities::TriplesModel};
 
 pub async fn run<S, C>(
     output: &GeoOutput,
@@ -32,7 +32,7 @@ where
 
     let mut handles = Vec::new();
 
-    for edit in output.edits_published.clone() {
+    for chain_edit in output.edits_published.clone() {
         let storage = storage.clone();
         let cache = cache.clone();
         let block = block_metadata.clone();
@@ -45,26 +45,35 @@ where
                 .factor(2)
                 .max_delay(std::time::Duration::from_secs(5))
                 .map(jitter);
-            let edit = Retry::spawn(retry, async || cache.get(&edit.content_uri).await).await;
+            let cached_edit_entry =
+                Retry::spawn(retry, async || cache.get(&chain_edit.content_uri).await).await?;
 
-            match edit {
-                Ok(value) => {
-                    if !value.is_errored {
-                        let entities =
-                            EntitiesModel::map_edit_to_entities(&value.edit.unwrap(), &block);
+            // The Edit might be malformed. The Cache still stores it with an
+            // is_errored flag to denote that the entry exists but can't be
+            // decoded.
+            if !cached_edit_entry.is_errored {
+                let edit = cached_edit_entry.edit.unwrap();
+                let space_id = cached_edit_entry.space_id;
 
-                        let result = storage.insert_entities(&entities).await;
+                // @TODO: transaction with non-blocking writes
+                let entities = EntitiesModel::map_edit_to_entities(&edit, &block);
+                let result = storage.insert_entities(&entities).await;
 
-                        match result {
-                            Ok(value) => {}
-                            Err(error) => {
-                                println!("Error writing {}", error);
-                            }
-                        }
-                    }
+                if let Err(error) = result {
+                    println!("Error writing entities {}", error);
                 }
-                Err(error) => {
-                    //
+
+                let triples = TriplesModel::map_edit_to_triples(&edit, &space_id);
+                let write_result = storage.insert_triples(&triples.0).await;
+
+                if let Err(write_error) = write_result {
+                    println!("Error writing triples {}", write_error);
+                }
+
+                let delete_result = storage.delete_triples(&triples.1).await;
+
+                if let Err(delete_error) = delete_result {
+                    println!("Error deleting triples {}", delete_error);
                 }
             }
 

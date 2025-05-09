@@ -28,7 +28,7 @@ impl PostgresCache {
 impl CacheBackend for PostgresCache {
     async fn get(&self, uri: &String) -> Result<CacheItem, CacheError> {
         let query = sqlx::query!(
-            "SELECT json, is_errored FROM ipfs_cache WHERE uri = $1",
+            "SELECT json, is_errored, space FROM ipfs_cache WHERE uri = $1",
             uri
         )
         .fetch_one(&self.pool)
@@ -38,6 +38,7 @@ impl CacheBackend for PostgresCache {
             return Ok(CacheItem {
                 edit: None,
                 is_errored: true,
+                space_id: query.space,
             });
         }
 
@@ -47,6 +48,7 @@ impl CacheBackend for PostgresCache {
         Ok(CacheItem {
             edit: Some(edit),
             is_errored: false,
+            space_id: query.space,
         })
     }
 }

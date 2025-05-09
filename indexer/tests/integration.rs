@@ -2,7 +2,7 @@ use grc20::pb::{
     chain::{EditPublished, GeoOutput},
     ipfs::{Edit, Op, Triple, Value},
 };
-use std::sync::Arc;
+use std::{env, sync::Arc};
 use stream::utils::BlockMetadata;
 
 use dotenv::dotenv;
@@ -13,16 +13,16 @@ use indexer::{
         CacheItem,
     },
     error::IndexingError,
-    storage::kv::KvStorage,
+    storage::postgres::PostgresStorage,
 };
 
 struct TestIndexer {
-    storage: Arc<KvStorage>,
+    storage: Arc<PostgresStorage>,
     cache: Arc<KvCache>,
 }
 
 impl TestIndexer {
-    pub fn new(storage: Arc<KvStorage>, cache: Arc<KvCache>) -> Self {
+    pub fn new(storage: Arc<PostgresStorage>, cache: Arc<KvCache>) -> Self {
         TestIndexer { storage, cache }
     }
 
@@ -43,7 +43,8 @@ struct TestBlock {
 #[tokio::test]
 async fn main() -> Result<(), IndexingError> {
     dotenv().ok();
-    let storage = Arc::new(KvStorage::new());
+    let database_url = env::var("DATABASE_URL").expect("DATABASE_URL not set");
+    let storage = Arc::new(PostgresStorage::new(&database_url).await?);
 
     let test_output_1 = TestBlock {
         output: GeoOutput {
@@ -86,6 +87,7 @@ async fn main() -> Result<(), IndexingError> {
         KvCache::new(vec![WriteCacheItem {
             uri: String::from("5"),
             item: CacheItem {
+                space_id: String::from("5"),
                 edit: Some(make_edit(
                     "5",
                     "Name",
@@ -107,8 +109,7 @@ async fn main() -> Result<(), IndexingError> {
 
     {
         let entity = storage
-            .clone()
-            .get(&"entity-id-1".to_string())
+            .get_entity(&"entity-id-1".to_string())
             .await
             .unwrap();
         assert_eq!(entity.id, "entity-id-1");
@@ -116,8 +117,7 @@ async fn main() -> Result<(), IndexingError> {
 
     {
         let entity = storage
-            .clone()
-            .get(&"entity-id-2".to_string())
+            .get_entity(&"entity-id-2".to_string())
             .await
             .unwrap();
         assert_eq!(entity.id, "entity-id-2");
@@ -125,11 +125,28 @@ async fn main() -> Result<(), IndexingError> {
 
     {
         let attribute = storage
-            .clone()
-            .get(&"attribute-id".to_string())
+            .get_entity(&"attribute-id".to_string())
             .await
             .unwrap();
         assert_eq!(attribute.id, "attribute-id");
+    }
+
+    {
+        let triple = storage
+            .get_triple(&"entity-id-1:attribute-id:5".to_string())
+            .await
+            .unwrap();
+        assert_eq!(triple.id, "entity-id-1:attribute-id:5");
+    }
+
+    {
+        let triple = storage
+            .get_triple(&"entity-id-2:attribute-id:5".to_string())
+            .await
+            .unwrap();
+
+        // @TODO: SHould not exist
+        assert_eq!(triple.id, "entity-id-2:attribute-id:5");
     }
 
     Ok(())
@@ -177,7 +194,7 @@ fn make_triple_op(
             }),
         },
         OpType::DELETE => Op {
-            r#type: 1,
+            r#type: 2,
             entity: None,
             triples: vec![],
             metadata: None,

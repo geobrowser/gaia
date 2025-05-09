@@ -21,6 +21,7 @@ pub enum CacheError {
 pub struct CacheItem {
     pub edit: Option<Edit>,
     pub is_errored: bool,
+    pub space_id: String,
 }
 
 #[async_trait]
