@@ -11,7 +11,7 @@ use tokio_retry::{
 
 use crate::storage::StorageBackend;
 use crate::{cache::CacheBackend, storage::entities::EntitiesModel};
-use crate::{error::IndexingError, storage::entities::TriplesModel};
+use crate::{error::IndexingError, storage::triples::TriplesModel};
 
 pub async fn run<S, C>(
     output: &GeoOutput,

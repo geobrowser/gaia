@@ -4,7 +4,8 @@ use grc20::pb::ipfs::ValueType;
 use sqlx::{postgres::PgPoolOptions, Postgres, QueryBuilder};
 
 use super::{
-    entities::{EntityItem, TripleOp, TripleType},
+    entities::EntityItem,
+    triples::{TripleOp, TripleType},
     StorageBackend, StorageError,
 };
 
