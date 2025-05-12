@@ -5,7 +5,7 @@ use sqlx::{postgres::PgPoolOptions, Postgres, QueryBuilder};
 
 use crate::models::{
     entities::EntityItem,
-    properties::{PropertyOp, TripleType},
+    properties::{PropertyChangeType, PropertyOp},
 };
 
 use super::{StorageBackend, StorageError};
@@ -57,7 +57,7 @@ impl PostgresStorage {
             format_option: query.format_option,
             language_option: query.language_option,
             unit_option: query.unit_option,
-            change_type: TripleType::SET,
+            change_type: PropertyChangeType::SET,
         })
     }
 }

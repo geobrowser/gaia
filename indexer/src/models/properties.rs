@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use grc20::pb::ipfs::{Edit, Op, OpType, Options, Value, ValueType as PbValueType};
 
 #[derive(Clone)]
-pub enum TripleType {
+pub enum PropertyChangeType {
     SET,
     DELETE,
 }
@@ -11,7 +11,7 @@ pub enum TripleType {
 #[derive(Clone)]
 pub struct PropertyOp {
     pub id: String,
-    pub change_type: TripleType,
+    pub change_type: PropertyChangeType,
     pub entity_id: String,
     pub attribute_id: String,
     pub space_id: String,
@@ -43,7 +43,7 @@ impl PropertiesModel {
         let validated = validate_properties(&squashed);
         let (created, deleted): (Vec<PropertyOp>, Vec<PropertyOp>) = validated
             .into_iter()
-            .partition(|op| matches!(op.change_type, TripleType::SET));
+            .partition(|op| matches!(op.change_type, PropertyChangeType::SET));
 
         return (created, deleted.iter().map(|op| op.id.clone()).collect());
     }
@@ -65,12 +65,12 @@ fn validate_properties(triple_ops: &Vec<PropertyOp>) -> Vec<PropertyOp> {
     let validated = triple_ops
         .iter()
         .filter(|op| match op.change_type {
-            TripleType::DELETE => true,
+            PropertyChangeType::DELETE => true,
             // Verify that for each value type we have set the correct property
             // on the triple.
             //
             // Currently everything uses text_value except checkboxes
-            TripleType::SET => match op.value_type {
+            PropertyChangeType::SET => match op.value_type {
                 PbValueType::Checkbox => return op.boolean_value.is_some(),
                 _ => return op.text_value.is_some(),
             },
@@ -102,7 +102,7 @@ fn property_op_from_op(op: &Op, space_id: &String) -> Option<PropertyOp> {
 
                         return Some(PropertyOp {
                             id: derive_property_id(&triple.entity, &triple.attribute, space_id),
-                            change_type: TripleType::SET,
+                            change_type: PropertyChangeType::SET,
                             attribute_id: triple.attribute,
                             entity_id: triple.entity,
                             space_id: space_id.clone(),
@@ -123,7 +123,7 @@ fn property_op_from_op(op: &Op, space_id: &String) -> Option<PropertyOp> {
                 if let Some(triple) = op.triple.clone() {
                     return Some(PropertyOp {
                         id: derive_property_id(&triple.entity, &triple.attribute, space_id),
-                        change_type: TripleType::DELETE,
+                        change_type: PropertyChangeType::DELETE,
                         attribute_id: triple.attribute,
                         entity_id: triple.entity,
                         space_id: space_id.clone(),
@@ -276,11 +276,11 @@ impl std::fmt::Display for PropertyOp {
     }
 }
 
-impl std::fmt::Display for TripleType {
+impl std::fmt::Display for PropertyChangeType {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            TripleType::SET => write!(f, "SET"),
-            TripleType::DELETE => write!(f, "DELETE"),
+            PropertyChangeType::SET => write!(f, "SET"),
+            PropertyChangeType::DELETE => write!(f, "DELETE"),
         }
     }
 }
