@@ -1,5 +1,6 @@
 type Entity {
   id: ID!
+  name: String
   createdAt: String!
   createdAtBlock: String!
   updatedAt: String!
