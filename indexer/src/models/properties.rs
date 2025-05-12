@@ -9,7 +9,7 @@ pub enum TripleType {
 }
 
 #[derive(Clone)]
-pub struct TripleOp {
+pub struct PropertyOp {
     pub id: String,
     pub change_type: TripleType,
     pub entity_id: String,
@@ -24,21 +24,24 @@ pub struct TripleOp {
     pub unit_option: Option<String>,
 }
 
-pub struct TriplesModel;
+pub struct PropertiesModel;
 
-impl TriplesModel {
-    pub fn map_edit_to_triples(edit: &Edit, space_id: &String) -> (Vec<TripleOp>, Vec<String>) {
-        let mut triple_ops: Vec<TripleOp> = Vec::new();
+impl PropertiesModel {
+    pub fn map_edit_to_properties(
+        edit: &Edit,
+        space_id: &String,
+    ) -> (Vec<PropertyOp>, Vec<String>) {
+        let mut triple_ops: Vec<PropertyOp> = Vec::new();
 
         for op in &edit.ops {
-            if let Some(triple_op) = triple_op_from_op(op, space_id) {
+            if let Some(triple_op) = property_op_from_op(op, space_id) {
                 triple_ops.push(triple_op);
             }
         }
 
-        let squashed = squash_triples(&triple_ops);
-        let validated = validate_triples(&squashed);
-        let (created, deleted): (Vec<TripleOp>, Vec<TripleOp>) = validated
+        let squashed = squash_properties(&triple_ops);
+        let validated = validate_properties(&squashed);
+        let (created, deleted): (Vec<PropertyOp>, Vec<PropertyOp>) = validated
             .into_iter()
             .partition(|op| matches!(op.change_type, TripleType::SET));
 
@@ -46,7 +49,7 @@ impl TriplesModel {
     }
 }
 
-fn squash_triples(triple_ops: &Vec<TripleOp>) -> Vec<TripleOp> {
+fn squash_properties(triple_ops: &Vec<PropertyOp>) -> Vec<PropertyOp> {
     let mut hash = HashMap::new();
 
     for op in triple_ops {
@@ -58,7 +61,7 @@ fn squash_triples(triple_ops: &Vec<TripleOp>) -> Vec<TripleOp> {
     return result;
 }
 
-fn validate_triples(triple_ops: &Vec<TripleOp>) -> Vec<TripleOp> {
+fn validate_properties(triple_ops: &Vec<PropertyOp>) -> Vec<PropertyOp> {
     let validated = triple_ops
         .iter()
         .filter(|op| match op.change_type {
@@ -78,11 +81,11 @@ fn validate_triples(triple_ops: &Vec<TripleOp>) -> Vec<TripleOp> {
     return validated;
 }
 
-fn derive_triple_id(entity_id: &String, attribute_id: &String, space_id: &String) -> String {
+fn derive_property_id(entity_id: &String, attribute_id: &String, space_id: &String) -> String {
     format!("{}:{}:{}", entity_id, attribute_id, space_id)
 }
 
-fn triple_op_from_op(op: &Op, space_id: &String) -> Option<TripleOp> {
+fn property_op_from_op(op: &Op, space_id: &String) -> Option<PropertyOp> {
     if let Ok(op_type) = OpType::try_from(op.r#type) {
         return match op_type {
             // SET_TRIPLE
@@ -90,15 +93,15 @@ fn triple_op_from_op(op: &Op, space_id: &String) -> Option<TripleOp> {
                 if let Some(triple) = op.triple.clone() {
                     // @TODO: How do we map the value to the right place based on value_type?
                     if let Some(value) = triple.value {
-                        let triple_values = map_triple_value(&value).unwrap();
+                        let triple_values = map_property_value(&value).unwrap();
                         let triple_value_options = &value.options.unwrap_or(Options {
                             format: None,
                             language: None,
                             unit: None,
                         });
 
-                        return Some(TripleOp {
-                            id: derive_triple_id(&triple.entity, &triple.attribute, space_id),
+                        return Some(PropertyOp {
+                            id: derive_property_id(&triple.entity, &triple.attribute, space_id),
                             change_type: TripleType::SET,
                             attribute_id: triple.attribute,
                             entity_id: triple.entity,
@@ -118,8 +121,8 @@ fn triple_op_from_op(op: &Op, space_id: &String) -> Option<TripleOp> {
             }
             OpType::DeleteTriple => {
                 if let Some(triple) = op.triple.clone() {
-                    return Some(TripleOp {
-                        id: derive_triple_id(&triple.entity, &triple.attribute, space_id),
+                    return Some(PropertyOp {
+                        id: derive_property_id(&triple.entity, &triple.attribute, space_id),
                         change_type: TripleType::DELETE,
                         attribute_id: triple.attribute,
                         entity_id: triple.entity,
@@ -152,7 +155,7 @@ struct TripleValues {
     boolean_value: Option<bool>,
 }
 
-fn map_triple_value(value: &Value) -> Option<TripleValues> {
+fn map_property_value(value: &Value) -> Option<TripleValues> {
     if let Ok(value_type) = PbValueType::try_from(value.r#type) {
         let value = value.value.clone();
 
@@ -208,7 +211,7 @@ fn map_triple_value(value: &Value) -> Option<TripleValues> {
     None
 }
 
-impl std::fmt::Display for TripleOp {
+impl std::fmt::Display for PropertyOp {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         // Format id, change_type, and the triple identifiers
         write!(

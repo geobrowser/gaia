@@ -1,4 +1,6 @@
 use indexer_utils::get_blocklist;
+use indexer_utils::id::derive_space_id;
+use indexer_utils::network_ids::GEO;
 use std::sync::Arc;
 use std::{env, io::Error};
 use stream::utils::BlockMetadata;
@@ -137,7 +139,7 @@ async fn process_edit_event(
                 uri: edit.content_uri,
                 block: block.timestamp.clone(),
                 json: Some(result),
-                space: String::from(""),
+                space: derive_space_id(GEO, &edit.dao_address),
                 is_errored: false,
             };
 

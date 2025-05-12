@@ -9,7 +9,6 @@ const schemaFile = await file("./schema.graphql").text()
 const resolvers: Resolvers = {
 	Query: {
 		entities: async (_, args) => {
-			console.log("args", args)
 			return await entities(args)
 		},
 	},

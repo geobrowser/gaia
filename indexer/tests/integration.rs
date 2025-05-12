@@ -90,7 +90,7 @@ async fn main() -> Result<(), IndexingError> {
 
     {
         let triple = storage
-            .get_triple(&"entity-id-1:attribute-id:5".to_string())
+            .get_property(&"entity-id-1:attribute-id:5".to_string())
             .await
             .unwrap();
         assert_eq!(triple.id, "entity-id-1:attribute-id:5");
@@ -98,7 +98,7 @@ async fn main() -> Result<(), IndexingError> {
 
     {
         let triple = storage
-            .get_triple(&"entity-id-2:attribute-id:5".to_string())
+            .get_property(&"entity-id-2:attribute-id:5".to_string())
             .await
             .unwrap();
 

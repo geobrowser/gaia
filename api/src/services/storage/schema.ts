@@ -1,4 +1,4 @@
-import type {InferSelectModel} from "drizzle-orm"
+import {type InferSelectModel, relations} from "drizzle-orm"
 import {boolean, jsonb, pgTable, serial, text} from "drizzle-orm/pg-core"
 
 export const ipfsCache = pgTable("ipfs_cache", {
@@ -28,7 +28,7 @@ export const entities = pgTable("entities", {
 
 export type DbEntity = InferSelectModel<typeof entities>
 
-export const properties = pgTable("triples", {
+export const properties = pgTable("properties", {
 	id: text().primaryKey(),
 	attributeId: text().notNull(),
 	entityId: text().notNull(),
@@ -41,5 +41,16 @@ export const properties = pgTable("triples", {
 	unitOption: text(),
 	valueType: text().notNull(),
 })
+
+export const entityProperties = relations(entities, ({many}) => ({
+	properties: many(properties),
+}))
+
+export const propertiesEntity = relations(properties, ({one}) => ({
+	properties: one(entities, {
+		fields: [properties.entityId],
+		references: [entities.id],
+	}),
+}))
 
 export type DbProperty = InferSelectModel<typeof properties>

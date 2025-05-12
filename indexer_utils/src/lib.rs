@@ -1,3 +1,6 @@
+pub mod id;
+pub mod network_ids;
+
 use sha3::{Digest, Keccak256};
 
 pub fn checksum_address(address: impl Into<String>) -> String {

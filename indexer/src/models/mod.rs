@@ -1,2 +1,2 @@
 pub mod entities;
-pub mod triples;
+pub mod properties;

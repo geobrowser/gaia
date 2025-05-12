@@ -15,6 +15,13 @@
       "when": 1746821002053,
       "tag": "0001_fancy_red_wolf",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1747084656350,
+      "tag": "0002_odd_stephen_strange",
+      "breakpoints": true
     }
   ]
 }

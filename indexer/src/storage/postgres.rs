@@ -5,7 +5,7 @@ use sqlx::{postgres::PgPoolOptions, Postgres, QueryBuilder};
 
 use crate::models::{
     entities::EntityItem,
-    triples::{TripleOp, TripleType},
+    properties::{PropertyOp, TripleType},
 };
 
 use super::{StorageBackend, StorageError};
@@ -40,12 +40,12 @@ impl PostgresStorage {
         })
     }
 
-    pub async fn get_triple(&self, triple_id: &String) -> Result<TripleOp, StorageError> {
-        let query = sqlx::query!("SELECT * FROM triples WHERE id = $1", triple_id)
+    pub async fn get_property(&self, triple_id: &String) -> Result<PropertyOp, StorageError> {
+        let query = sqlx::query!("SELECT * FROM properties WHERE id = $1", triple_id)
             .fetch_one(&self.pool)
             .await?;
 
-        Ok(TripleOp {
+        Ok(PropertyOp {
             id: query.id,
             attribute_id: query.attribute_id,
             entity_id: query.entity_id,
@@ -96,32 +96,32 @@ impl StorageBackend for PostgresStorage {
         Ok(())
     }
 
-    async fn insert_triples(&self, triples: &Vec<TripleOp>) -> Result<(), StorageError> {
-        if triples.is_empty() {
+    async fn insert_properties(&self, properties: &Vec<PropertyOp>) -> Result<(), StorageError> {
+        if properties.is_empty() {
             return Ok(());
         }
 
         // Create a query builder for PostgreSQL
         let mut query_builder: QueryBuilder<Postgres> = QueryBuilder::new(
-                    "INSERT INTO triples (id, entity_id, attribute_id, space_id, value_type, text_value, boolean_value, number_value, language_option, format_option, unit_option) "
+                    "INSERT INTO properties (id, entity_id, attribute_id, space_id, value_type, text_value, boolean_value, number_value, language_option, format_option, unit_option) "
                 );
 
         // Start the VALUES section
-        query_builder.push_values(triples, |mut b, triple| {
+        query_builder.push_values(properties, |mut b, property| {
             b.push_bind(format!(
                 "{}:{}:{}",
-                triple.entity_id, triple.attribute_id, triple.space_id
+                property.entity_id, property.attribute_id, property.space_id
             ));
-            b.push_bind(&triple.entity_id);
-            b.push_bind(&triple.attribute_id);
-            b.push_bind(&triple.space_id);
-            b.push_bind(triple.value_type as i32); // Assuming PbValueType can be cast to i32
-            b.push_bind(&triple.text_value);
-            b.push_bind(triple.boolean_value);
-            b.push_bind(&triple.number_value);
-            b.push_bind(&triple.language_option);
-            b.push_bind(&triple.format_option);
-            b.push_bind(&triple.unit_option);
+            b.push_bind(&property.entity_id);
+            b.push_bind(&property.attribute_id);
+            b.push_bind(&property.space_id);
+            b.push_bind(property.value_type as i32); // Assuming PbValueType can be cast to i32
+            b.push_bind(&property.text_value);
+            b.push_bind(property.boolean_value);
+            b.push_bind(&property.number_value);
+            b.push_bind(&property.language_option);
+            b.push_bind(&property.format_option);
+            b.push_bind(&property.unit_option);
         });
 
         query_builder.push(
@@ -138,21 +138,21 @@ impl StorageBackend for PostgresStorage {
         let result = query_builder.build().execute(&self.pool).await;
 
         if let Err(error) = result {
-            println!("Error writing triples {}", error);
+            println!("Error writing properties {}", error);
         }
 
         Ok(())
     }
 
-    async fn delete_triples(&self, triple_ids: &Vec<String>) -> Result<(), StorageError> {
-        if triple_ids.is_empty() {
+    async fn delete_properties(&self, property_ids: &Vec<String>) -> Result<(), StorageError> {
+        if property_ids.is_empty() {
             return Ok(());
         }
 
-        let ids: Vec<&str> = triple_ids.iter().map(|id| id.as_str()).collect();
+        let ids: Vec<&str> = property_ids.iter().map(|id| id.as_str()).collect();
 
         let result = sqlx::query(
-            "DELETE FROM triples
+            "DELETE FROM properties
                      WHERE id IN
                      (SELECT * FROM UNNEST($1::text[]))",
         )
@@ -161,7 +161,7 @@ impl StorageBackend for PostgresStorage {
         .await;
 
         if let Err(error) = result {
-            println!("Error deleting triples {}", error);
+            println!("Error deleting properties {}", error);
         }
 
         Ok(())
