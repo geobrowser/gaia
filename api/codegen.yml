@@ -1,0 +1,13 @@
+schema: "./schema.graphql"
+generates:
+  ./src/generated/graphql.ts:
+    plugins:
+      - "typescript"
+      - "typescript-resolvers"
+    config:
+      useIndexSignature: true
+      mappers:
+        Entity: "../services/storage/schema#DbEntity"
+        Property: "../services/storage/schema#DbProperty"
+      scalars:
+        ID: string
