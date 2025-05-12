@@ -1,0 +1,30 @@
+type Entity {
+  id: ID!
+  createdAt: String!
+  createdAtBlock: String!
+  updatedAt: String!
+  updatedAtBlock: String!
+  properties: [Property!]
+}
+
+type Property {
+  id: ID!
+  attributeId: String!
+  entityId: String!
+  spaceId: String!
+  valueType: String!
+  textValue: String
+  numberValue: String
+  booleanValue: Boolean
+
+  languageOption: String
+  formatOption: String
+  unitOption: String
+
+  entity: Entity
+  attribute: Entity
+}
+
+type Query {
+  entities: [Entity]!
+}

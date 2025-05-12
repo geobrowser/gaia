@@ -146,7 +146,6 @@ impl StorageBackend for PostgresStorage {
 
     async fn delete_triples(&self, triple_ids: &Vec<String>) -> Result<(), StorageError> {
         if triple_ids.is_empty() {
-            println!("Empty triple_ids");
             return Ok(());
         }
 
