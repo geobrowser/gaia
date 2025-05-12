@@ -46,7 +46,7 @@ impl Storage {
             item.is_errored
         );
 
-        let result = self.connection.execute(query).await?;
+        self.connection.execute(query).await?;
 
         Ok(())
     }

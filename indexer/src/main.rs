@@ -2,32 +2,26 @@ use futures::future::join_all;
 use grc20::pb::chain::GeoOutput;
 use indexer::{
     block_handler::root_handler,
-    cache::{CacheBackend, PreprocessedEdit, postgres::PostgresCache},
+    cache::{postgres::PostgresCache, CacheBackend, PreprocessedEdit},
     error::IndexingError,
     storage::postgres::PostgresStorage,
+    KgData,
 };
 use indexer_utils::get_blocklist;
 use prost::Message;
 use std::{env, sync::Arc};
 use tokio::{sync::Mutex, task};
 use tokio_retry::{
+    strategy::{jitter, ExponentialBackoff},
     Retry,
-    strategy::{ExponentialBackoff, jitter},
 };
 
 use dotenv::dotenv;
-use stream::{
-    PreprocessedSink, pb::sf::substreams::rpc::v2::BlockScopedData, utils::BlockMetadata,
-};
+use stream::{pb::sf::substreams::rpc::v2::BlockScopedData, PreprocessedSink};
 
 const PKG_FILE: &str = "geo_substream.spkg";
 const MODULE_NAME: &str = "geo_out";
 const START_BLOCK: i64 = 881;
-
-struct KgData {
-    pub block: BlockMetadata,
-    pub edits: Vec<PreprocessedEdit>,
-}
 
 struct KgIndexer {
     storage: Arc<PostgresStorage>,
