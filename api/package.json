@@ -3,7 +3,8 @@
   "version": "1.0.0",
   "main": "main.ts",
   "scripts": {
-    "start": "bun run main.ts"
+    "start": "bun run main.ts",
+    "generate": "graphql-codegen --config codegen.yml"
   },
   "author": "Byron Guina",
   "license": "ISC",
@@ -19,6 +20,9 @@
   },
   "devDependencies": {
     "@biomejs/biome": "1.4.1",
+    "@graphql-codegen/cli": "^5.0.6",
+    "@graphql-codegen/typescript": "^4.1.6",
+    "@graphql-codegen/typescript-resolvers": "^4.5.1",
     "@types/bun": "^1.2.13",
     "@types/node": "^22.15.17",
     "drizzle-kit": "^0.31.0"

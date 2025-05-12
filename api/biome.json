@@ -5,10 +5,12 @@
     "rules": {
       "recommended": true,
       "suspicious": {
-        "noArrayIndexKey": "off"
+        "noArrayIndexKey": "off",
+        "noExplicitAny": "warn"
       },
       "complexity": {
-        "noStaticOnlyClass": "off"
+        "noStaticOnlyClass": "off",
+        "noBannedTypes": "warn"
       },
       "style": {
         "useTemplate": "off"

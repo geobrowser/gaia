@@ -1,16 +1,20 @@
 import {makeExecutableSchema} from "@graphql-tools/schema"
 import {file} from "bun"
 import {createYoga} from "graphql-yoga"
+import type {Resolvers} from "./src/generated/graphql"
 import {entities} from "./src/resolvers/root"
 
 const schemaFile = await file("./schema.graphql").text()
 
-const resolvers = {
+const resolvers: Resolvers = {
 	Query: {
-		entities,
+		entities: async (_, args) => {
+			console.log("args", args)
+			return await entities(args)
+		},
 	},
 }
-// Create executable schema
+
 const schema = makeExecutableSchema({
 	typeDefs: schemaFile,
 	resolvers,
