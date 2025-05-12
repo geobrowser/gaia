@@ -1,15 +1,18 @@
 import {makeExecutableSchema} from "@graphql-tools/schema"
 import {file} from "bun"
 import {createYoga} from "graphql-yoga"
-import type {Resolvers} from "./src/generated/graphql"
-import {entities} from "./src/resolvers/root"
+import type {Resolvers as GeneratedResolvers} from "./src/generated/graphql"
+import * as Resolvers from "./src/resolvers/root"
 
 const schemaFile = await file("./schema.graphql").text()
 
-const resolvers: Resolvers = {
+const resolvers: GeneratedResolvers = {
 	Query: {
 		entities: async (_, args) => {
-			return await entities(args)
+			return await Resolvers.entities(args)
+		},
+		entity: async (_, args) => {
+			return await Resolvers.entity(args)
 		},
 	},
 }

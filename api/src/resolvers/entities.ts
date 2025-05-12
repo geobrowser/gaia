@@ -1,4 +1,5 @@
 import {Effect} from "effect"
+import {entities} from "../services/storage/schema"
 import {Storage} from "../services/storage/storage"
 
 export function getEntities(limit = 100, offset = 0) {
@@ -25,6 +26,35 @@ export function getEntities(limit = 100, offset = 0) {
 					}),
 				}
 			})
+		})
+	})
+}
+
+export function getEntity(id: string) {
+	return Effect.gen(function* () {
+		const db = yield* Storage
+
+		return yield* db.use(async (client) => {
+			const result = await client.query.entities.findFirst({
+				where: (entities, {eq}) => eq(entities.id, id),
+				with: {
+					properties: true,
+				},
+			})
+
+			if (!result) {
+				return null
+			}
+
+			return {
+				...result,
+				properties: result.properties.map((p) => {
+					return {
+						...p,
+						valueType: mapValueType(p.valueType),
+					}
+				}),
+			}
 		})
 	})
 }

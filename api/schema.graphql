@@ -27,4 +27,5 @@ type Property {
 
 type Query {
   entities(limit: Int = 100, offset: Int = 0): [Entity]!
+  entity(id: String!): Entity
 }
