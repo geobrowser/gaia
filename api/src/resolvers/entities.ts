@@ -50,6 +50,60 @@ export function getEntity(id: string) {
 	})
 }
 
+export function getEntityName(id: string) {
+	return Effect.gen(function* () {
+		const db = yield* Storage
+
+		const nameProperty = yield* db.use(async (client) => {
+			const result = await client.query.properties.findFirst({
+				where: (properties, {eq}) =>
+					eq(properties.attributeId, SystemIds.NAME_PROPERTY) && eq(properties.entityId, id),
+			})
+
+			return result
+		})
+
+		return nameProperty?.textValue || null
+	})
+}
+
+export function getProperties(id: string) {
+	return Effect.gen(function* () {
+		const db = yield* Storage
+
+		return yield* db.use(async (client) => {
+			const result = await client.query.properties.findMany({
+				where: (properties, {eq}) => eq(properties.entityId, id),
+			})
+
+			return result.map((p) => ({
+				...p,
+				valueType: mapValueType(p.valueType),
+			}))
+		})
+	})
+}
+
+export function getRelations(id: string) {
+	return Effect.gen(function* () {
+		const db = yield* Storage
+
+		return yield* db.use(async (client) => {
+			const result = await client.query.relations.findMany({
+				where: (relations, {eq}) => eq(relations.fromEntityId, id),
+			})
+
+			return result.map((relation) => ({
+				id: relation.id,
+				typeId: relation.typeId,
+				fromId: relation.fromEntityId,
+				toId: relation.toEntityId,
+				index: relation.index,
+			}))
+		})
+	})
+}
+
 type ValueType = "TEXT" | "NUMBER" | "CHECKBOX" | "URL" | "TIME" | "POINT"
 
 function mapValueType(valueType: string): ValueType {

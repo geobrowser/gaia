@@ -16,8 +16,36 @@ const resolvers: GeneratedResolvers = {
 		},
 	},
 	Entity: {
-		// @TODO: Properties
-		// @TODO: Relations
+		name: async (parent: {id: string}) => {
+			return Resolvers.entityName({id: parent.id})
+		},
+		properties: async (parent: {id: string}) => {
+			return Resolvers.properties({id: parent.id})
+		},
+		relations: async (parent: {id: string}) => {
+			return Resolvers.relations({id: parent.id})
+		},
+	},
+	Property: {
+		entity: async (parent: {entityId: string}) => {
+			return Resolvers.entity({id: parent.entityId})
+		},
+
+		attribute: async (parent: {attributeId: string}) => {
+			return Resolvers.entity({id: parent.attributeId})
+		},
+	},
+
+	Relation: {
+		from: async (parent: {fromEntityId: string}) => {
+			return Resolvers.entity({id: parent.fromEntityId})
+		},
+		to: async (parent: {toEntityId: string}) => {
+			return Resolvers.entity({id: parent.toEntityId})
+		},
+		type: async (parent: {typeId: string}) => {
+			return Resolvers.entity({id: parent.typeId})
+		},
 	},
 }
 

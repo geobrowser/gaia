@@ -84,4 +84,4 @@ export const relationsEntityRelations = drizzleRelations(relations, ({one}) => (
 export type IpfsCacheItem = InferSelectModel<typeof ipfsCache>
 export type DbEntity = InferSelectModel<typeof entities>
 export type DbProperty = InferSelectModel<typeof properties>
-// export type DbRelations = InferSelectModel<typeof relations>
+export type DbRelations = InferSelectModel<typeof relations>
