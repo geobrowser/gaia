@@ -2,7 +2,15 @@ import {drizzle} from "drizzle-orm/node-postgres"
 import {Context, Data, Effect, Redacted} from "effect"
 
 import {Environment} from "../environment"
-import {entities, entityProperties, ipfsCache, properties, propertiesEntity} from "./schema"
+import {
+	entities,
+	entityForeignProperties,
+	ipfsCache,
+	properties,
+	propertiesEntityRelations,
+	relations,
+	relationsEntityRelations,
+} from "./schema"
 
 export class StorageError extends Data.TaggedError("StorageError")<{
 	cause?: unknown
@@ -19,8 +27,11 @@ export const createDb = (connectionString: string) =>
 			ipfsCache,
 			entities,
 			properties,
-			propertiesEntity,
-			entityProperties,
+			relations,
+
+			entityForeignProperties,
+			propertiesEntityRelations,
+			relationsEntityRelations,
 		},
 	})
 

@@ -15,6 +15,10 @@ const resolvers: GeneratedResolvers = {
 			return await Resolvers.entity(args)
 		},
 	},
+	Entity: {
+		// @TODO: Properties
+		// @TODO: Relations
+	},
 }
 
 const schema = makeExecutableSchema({

@@ -4,6 +4,7 @@ use futures::future::join_all;
 use stream::utils::BlockMetadata;
 use tokio::task;
 
+use crate::models::relations::RelationsModel;
 use crate::models::{entities::EntitiesModel, properties::PropertiesModel};
 use crate::storage::StorageBackend;
 use crate::{cache::PreprocessedEdit, error::IndexingError};
@@ -45,17 +46,36 @@ where
                     println!("Error writing entities {}", error);
                 }
 
-                let properties = PropertiesModel::map_edit_to_properties(&edit, &space_id);
-                let write_result = storage.insert_properties(&properties.0).await;
+                let (created_properties, deleted_property_ids) =
+                    PropertiesModel::map_edit_to_properties(&edit, &space_id);
+                let write_properties_result = storage.insert_properties(&created_properties).await;
 
-                if let Err(write_error) = write_result {
-                    println!("Error writing triples {}", write_error);
+                if let Err(write_error) = write_properties_result {
+                    println!("Error writing properties {}", write_error);
                 }
 
-                let delete_result = storage.delete_properties(&properties.1).await;
+                let delete_properties_result =
+                    storage.delete_properties(&deleted_property_ids).await;
 
-                if let Err(delete_error) = delete_result {
-                    println!("Error deleting triples {}", delete_error);
+                if let Err(delete_error) = delete_properties_result {
+                    println!("Error deleting properties {}", delete_error);
+                }
+
+                let (created_relations, deleted_relation_ids) =
+                    RelationsModel::map_edit_to_relations(&edit, &space_id);
+
+                println!("Writing {} relations", created_relations.len());
+                let write_relations_result = storage.insert_relations(&created_relations).await;
+
+                if let Err(write_error) = write_relations_result {
+                    println!("Error writing relations {}", write_error);
+                }
+
+                println!("Deleting {} relations", deleted_relation_ids.len());
+                let delete_relations_result = storage.delete_relations(&deleted_relation_ids).await;
+
+                if let Err(write_error) = delete_relations_result {
+                    println!("Error deleting relations {}", write_error);
                 }
             }
 

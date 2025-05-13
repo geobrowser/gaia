@@ -1,6 +1,6 @@
 import {SystemIds} from "@graphprotocol/grc-20"
 import {Effect} from "effect"
-import {entities} from "../services/storage/schema"
+import type {Entity} from "../generated/graphql"
 import {Storage} from "../services/storage/storage"
 
 export function getEntities(limit = 100, offset = 0) {
@@ -20,12 +20,6 @@ export function getEntities(limit = 100, offset = 0) {
 				return {
 					...r,
 					name: r.properties.find((p) => p.attributeId === SystemIds.NAME_PROPERTY)?.textValue,
-					properties: r.properties.map((p) => {
-						return {
-							...p,
-							valueType: mapValueType(p.valueType),
-						}
-					}),
 				}
 			})
 		})
@@ -51,12 +45,6 @@ export function getEntity(id: string) {
 			return {
 				...result,
 				name: result.properties.find((p) => p.attributeId === SystemIds.NAME_PROPERTY)?.textValue,
-				properties: result.properties.map((p) => {
-					return {
-						...p,
-						valueType: mapValueType(p.valueType),
-					}
-				}),
 			}
 		})
 	})

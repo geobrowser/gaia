@@ -1,3 +1,4 @@
+pub mod graph_uri;
 pub mod id;
 pub mod network_ids;
 

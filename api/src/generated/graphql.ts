@@ -7,6 +7,7 @@ export type MakeOptional<T, K extends keyof T> = Omit<T, K> & { [SubKey in K]?: 
 export type MakeMaybe<T, K extends keyof T> = Omit<T, K> & { [SubKey in K]: Maybe<T[SubKey]> };
 export type MakeEmpty<T extends { [key: string]: unknown }, K extends keyof T> = { [_ in K]?: never };
 export type Incremental<T> = T | { [P in keyof T]?: P extends ' $fragmentName' | '__typename' ? T[P] : never };
+export type Omit<T, K extends keyof T> = Pick<T, Exclude<keyof T, K>>;
 export type RequireFields<T, K extends keyof T> = Omit<T, K> & { [P in K]-?: NonNullable<T[P]> };
 /** All built-in and custom scalars, mapped to their actual values */
 export type Scalars = {
@@ -23,7 +24,8 @@ export type Entity = {
   createdAtBlock: Scalars['String']['output'];
   id: Scalars['ID']['output'];
   name?: Maybe<Scalars['String']['output']>;
-  properties?: Maybe<Array<Property>>;
+  properties: Array<Maybe<Property>>;
+  relations: Array<Maybe<Relation>>;
   updatedAt: Scalars['String']['output'];
   updatedAtBlock: Scalars['String']['output'];
 };
@@ -60,6 +62,18 @@ export type QueryEntitiesArgs = {
 
 export type QueryEntityArgs = {
   id: Scalars['String']['input'];
+};
+
+export type Relation = {
+  __typename?: 'Relation';
+  from?: Maybe<Entity>;
+  fromId: Scalars['String']['output'];
+  id: Scalars['ID']['output'];
+  index?: Maybe<Scalars['String']['output']>;
+  to?: Maybe<Entity>;
+  toId: Scalars['String']['output'];
+  type?: Maybe<Entity>;
+  typeId: Scalars['String']['output'];
 };
 
 export type WithIndex<TObject> = TObject & Record<string, any>;
@@ -140,6 +154,7 @@ export type ResolversTypes = ResolversObject<{
   Int: ResolverTypeWrapper<Scalars['Int']['output']>;
   Property: ResolverTypeWrapper<DbProperty>;
   Query: ResolverTypeWrapper<{}>;
+  Relation: ResolverTypeWrapper<Omit<Relation, 'from' | 'to' | 'type'> & { from?: Maybe<ResolversTypes['Entity']>, to?: Maybe<ResolversTypes['Entity']>, type?: Maybe<ResolversTypes['Entity']> }>;
   String: ResolverTypeWrapper<Scalars['String']['output']>;
 }>;
 
@@ -151,6 +166,7 @@ export type ResolversParentTypes = ResolversObject<{
   Int: Scalars['Int']['output'];
   Property: DbProperty;
   Query: {};
+  Relation: Omit<Relation, 'from' | 'to' | 'type'> & { from?: Maybe<ResolversParentTypes['Entity']>, to?: Maybe<ResolversParentTypes['Entity']>, type?: Maybe<ResolversParentTypes['Entity']> };
   String: Scalars['String']['output'];
 }>;
 
@@ -159,7 +175,8 @@ export type EntityResolvers<ContextType = any, ParentType extends ResolversParen
   createdAtBlock?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
   id?: Resolver<ResolversTypes['ID'], ParentType, ContextType>;
   name?: Resolver<Maybe<ResolversTypes['String']>, ParentType, ContextType>;
-  properties?: Resolver<Maybe<Array<ResolversTypes['Property']>>, ParentType, ContextType>;
+  properties?: Resolver<Array<Maybe<ResolversTypes['Property']>>, ParentType, ContextType>;
+  relations?: Resolver<Array<Maybe<ResolversTypes['Relation']>>, ParentType, ContextType>;
   updatedAt?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
   updatedAtBlock?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
   __isTypeOf?: IsTypeOfResolverFn<ParentType, ContextType>;
@@ -187,9 +204,22 @@ export type QueryResolvers<ContextType = any, ParentType extends ResolversParent
   entity?: Resolver<Maybe<ResolversTypes['Entity']>, ParentType, ContextType, RequireFields<QueryEntityArgs, 'id'>>;
 }>;
 
+export type RelationResolvers<ContextType = any, ParentType extends ResolversParentTypes['Relation'] = ResolversParentTypes['Relation']> = ResolversObject<{
+  from?: Resolver<Maybe<ResolversTypes['Entity']>, ParentType, ContextType>;
+  fromId?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
+  id?: Resolver<ResolversTypes['ID'], ParentType, ContextType>;
+  index?: Resolver<Maybe<ResolversTypes['String']>, ParentType, ContextType>;
+  to?: Resolver<Maybe<ResolversTypes['Entity']>, ParentType, ContextType>;
+  toId?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
+  type?: Resolver<Maybe<ResolversTypes['Entity']>, ParentType, ContextType>;
+  typeId?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
+  __isTypeOf?: IsTypeOfResolverFn<ParentType, ContextType>;
+}>;
+
 export type Resolvers<ContextType = any> = ResolversObject<{
   Entity?: EntityResolvers<ContextType>;
   Property?: PropertyResolvers<ContextType>;
   Query?: QueryResolvers<ContextType>;
+  Relation?: RelationResolvers<ContextType>;
 }>;
 

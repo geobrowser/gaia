@@ -1,4 +1,4 @@
-import {type InferSelectModel, relations} from "drizzle-orm"
+import {type InferSelectModel, relations as drizzleRelations} from "drizzle-orm"
 import {boolean, jsonb, pgTable, serial, text} from "drizzle-orm/pg-core"
 
 export const ipfsCache = pgTable("ipfs_cache", {
@@ -16,8 +16,6 @@ export const ipfsCache = pgTable("ipfs_cache", {
 	space: text().notNull(),
 })
 
-export type IpfsCacheItem = InferSelectModel<typeof ipfsCache>
-
 export const entities = pgTable("entities", {
 	id: text().primaryKey(),
 	createdAt: text().notNull(),
@@ -25,8 +23,6 @@ export const entities = pgTable("entities", {
 	updatedAt: text().notNull(),
 	updatedAtBlock: text().notNull(),
 })
-
-export type DbEntity = InferSelectModel<typeof entities>
 
 export const properties = pgTable("properties", {
 	id: text().primaryKey(),
@@ -42,15 +38,50 @@ export const properties = pgTable("properties", {
 	valueType: text().notNull(),
 })
 
-export const entityProperties = relations(entities, ({many}) => ({
+export const relations = pgTable("relations", {
+	id: text().primaryKey(),
+	typeId: text().notNull(),
+	fromEntityId: text().notNull(),
+	toEntityId: text().notNull(),
+	toSpaceId: text(),
+	index: text(),
+})
+
+export const entityForeignProperties = drizzleRelations(entities, ({many}) => ({
 	properties: many(properties),
+	relationsOut: many(relations),
 }))
 
-export const propertiesEntity = relations(properties, ({one}) => ({
-	properties: one(entities, {
+export const propertiesEntityRelations = drizzleRelations(properties, ({one}) => ({
+	entity: one(entities, {
 		fields: [properties.entityId],
 		references: [entities.id],
 	}),
 }))
 
+// export const propertiesAttributeRelations = drizzleRelations(properties, ({one}) => ({
+// 	attribute: one(entities, {
+// 		fields: [properties.attributeId],
+// 		references: [entities.id],
+// 	}),
+// }))
+
+export const relationsEntityRelations = drizzleRelations(relations, ({one}) => ({
+	fromEntity: one(entities, {
+		fields: [relations.fromEntityId],
+		references: [entities.id],
+	}),
+	toEntity: one(entities, {
+		fields: [relations.toEntityId],
+		references: [entities.id],
+	}),
+	typeEntity: one(entities, {
+		fields: [relations.typeId],
+		references: [entities.id],
+	}),
+}))
+
+export type IpfsCacheItem = InferSelectModel<typeof ipfsCache>
+export type DbEntity = InferSelectModel<typeof entities>
 export type DbProperty = InferSelectModel<typeof properties>
+// export type DbRelations = InferSelectModel<typeof relations>
