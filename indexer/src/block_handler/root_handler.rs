@@ -64,14 +64,12 @@ where
                 let (created_relations, deleted_relation_ids) =
                     RelationsModel::map_edit_to_relations(&edit, &space_id);
 
-                println!("Writing {} relations", created_relations.len());
                 let write_relations_result = storage.insert_relations(&created_relations).await;
 
                 if let Err(write_error) = write_relations_result {
                     println!("Error writing relations {}", write_error);
                 }
 
-                println!("Deleting {} relations", deleted_relation_ids.len());
                 let delete_relations_result = storage.delete_relations(&deleted_relation_ids).await;
 
                 if let Err(write_error) = delete_relations_result {
