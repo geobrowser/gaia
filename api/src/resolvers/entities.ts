@@ -1,6 +1,5 @@
 import {SystemIds} from "@graphprotocol/grc-20"
 import {Effect} from "effect"
-import type {Entity} from "../generated/graphql"
 import {Storage} from "../services/storage/storage"
 
 export function getEntities(limit = 100, offset = 0) {
