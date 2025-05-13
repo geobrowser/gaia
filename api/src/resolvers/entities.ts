@@ -16,10 +16,14 @@ export function getEntities(limit = 100, offset = 0) {
 				},
 			})
 
-			return result.map((r) => {
+			return result.map((result) => {
 				return {
-					...r,
-					name: r.properties.find((p) => p.attributeId === SystemIds.NAME_PROPERTY)?.textValue,
+					id: result.id,
+					createdAt: result.createdAt,
+					createdAtBlock: result.createdAtBlock,
+					updatedAt: result.updatedAt,
+					updatedAtBlock: result.updatedAtBlock,
+					name: result.properties.find((p) => p.attributeId === SystemIds.NAME_PROPERTY)?.textValue,
 				}
 			})
 		})
@@ -43,7 +47,11 @@ export function getEntity(id: string) {
 			}
 
 			return {
-				...result,
+				id: result.id,
+				createdAt: result.createdAt,
+				createdAtBlock: result.createdAtBlock,
+				updatedAt: result.updatedAt,
+				updatedAtBlock: result.updatedAtBlock,
 				name: result.properties.find((p) => p.attributeId === SystemIds.NAME_PROPERTY)?.textValue,
 			}
 		})

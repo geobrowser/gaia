@@ -35,13 +35,12 @@ const resolvers: GeneratedResolvers = {
 			return Resolvers.entity({id: parent.attributeId})
 		},
 	},
-
 	Relation: {
-		from: async (parent: {fromEntityId: string}) => {
-			return Resolvers.entity({id: parent.fromEntityId})
+		from: async (parent: {fromId: string}) => {
+			return Resolvers.entity({id: parent.fromId})
 		},
-		to: async (parent: {toEntityId: string}) => {
-			return Resolvers.entity({id: parent.toEntityId})
+		to: async (parent: {toId: string}) => {
+			return Resolvers.entity({id: parent.toId})
 		},
 		type: async (parent: {typeId: string}) => {
 			return Resolvers.entity({id: parent.typeId})
