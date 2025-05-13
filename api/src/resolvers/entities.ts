@@ -62,16 +62,20 @@ export function getEntityName(id: string) {
 	return Effect.gen(function* () {
 		const db = yield* Storage
 
+		console.log("entity id", id)
+
 		const nameProperty = yield* db.use(async (client) => {
 			const result = await client.query.properties.findFirst({
-				where: (properties, {eq}) =>
-					eq(properties.attributeId, SystemIds.NAME_PROPERTY) && eq(properties.entityId, id),
+				where: (properties, {eq, and}) =>
+					and(eq(properties.attributeId, SystemIds.NAME_PROPERTY), eq(properties.entityId, id)),
 			})
+
+			console.log("name property", result)
 
 			return result
 		})
 
-		return nameProperty?.textValue || null
+		return nameProperty?.textValue ?? null
 	})
 }
 
