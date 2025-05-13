@@ -175,12 +175,13 @@ impl StorageBackend for PostgresStorage {
 
         // Create a query builder for PostgreSQL
         let mut query_builder: QueryBuilder<Postgres> = QueryBuilder::new(
-            "INSERT INTO relations (id, from_entity_id, to_entity_id, to_space_id, type_id, index) ",
+            "INSERT INTO relations (id, space_id, from_entity_id, to_entity_id, to_space_id, type_id, index) ",
         );
 
         // Start the VALUES section
         query_builder.push_values(relations, |mut b, relation| {
             b.push_bind(&relation.id);
+            b.push_bind(&relation.space_id);
             b.push_bind(&relation.from_id);
             b.push_bind(&relation.to_id);
             b.push_bind(&relation.to_space_id);

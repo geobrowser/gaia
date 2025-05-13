@@ -23,6 +23,14 @@ export const entityName = async (args: QueryEntityArgs) => {
 	return await Effect.runPromise(EntityResolvers.getEntityName(args.id).pipe(provideDeps))
 }
 
+export const types = async (args: QueryEntityArgs) => {
+	return await Effect.runPromise(EntityResolvers.getTypes(args.id).pipe(provideDeps))
+}
+
+export const spaces = async (args: QueryEntityArgs) => {
+	return await Effect.runPromise(EntityResolvers.getSpaces(args.id).pipe(provideDeps))
+}
+
 export const properties = async (args: QueryEntityArgs) => {
 	return await Effect.runPromise(EntityResolvers.getProperties(args.id).pipe(provideDeps))
 }

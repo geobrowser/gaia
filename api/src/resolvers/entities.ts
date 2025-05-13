@@ -108,6 +108,58 @@ export function getRelations(id: string) {
 	})
 }
 
+export function getTypes(id: string) {
+	return Effect.gen(function* () {
+		const db = yield* Storage
+
+		return yield* db.use(async (client) => {
+			const result = await client.query.relations.findMany({
+				where: (relations, {eq, and}) =>
+					and(eq(relations.fromEntityId, id), eq(relations.typeId, SystemIds.TYPES_PROPERTY)),
+				with: {
+					toEntity: true,
+				},
+			})
+
+			return result.map((relation) => ({
+				id: relation.toEntity.id,
+				createdAt: relation.toEntity.createdAt,
+				createdAtBlock: relation.toEntity.createdAtBlock,
+				updatedAt: relation.toEntity.updatedAt,
+				updatedAtBlock: relation.toEntity.updatedAtBlock,
+			}))
+		})
+	})
+}
+
+export function getSpaces(id: string) {
+	return Effect.gen(function* () {
+		const db = yield* Storage
+
+		return yield* db.use(async (client) => {
+			const [properties, relations] = await Promise.all([
+				client.query.properties.findMany({
+					where: (properties, {eq}) => eq(properties.entityId, id),
+					columns: {
+						spaceId: true,
+					},
+				}),
+				client.query.relations.findMany({
+					where: (relations, {eq}) => eq(relations.fromEntityId, id),
+					columns: {
+						spaceId: true,
+					},
+				}),
+			])
+
+			const propertySpaces = properties.map((p) => p.spaceId)
+			const relationSpaces = relations.map((r) => r.spaceId)
+
+			return Array.from(new Set([...propertySpaces, ...relationSpaces]))
+		})
+	})
+}
+
 type ValueType = "TEXT" | "NUMBER" | "CHECKBOX" | "URL" | "TIME" | "POINT"
 
 function mapValueType(valueType: string): ValueType {
