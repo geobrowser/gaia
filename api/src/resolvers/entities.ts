@@ -137,6 +137,12 @@ export function getSpaces(id: string) {
 		const db = yield* Storage
 
 		return yield* db.use(async (client) => {
+			// There's currently some kind of circular dependency or disambiguation
+			// issue with drizzle if we try and query properties and relations at
+			// the same time using query.entities.findFirst({ with: { properties: true, relations: true } })
+			//
+			// For now we just query them separately. This avoids joins so might be
+			// faster anyway (needs validation).
 			const [properties, relations] = await Promise.all([
 				client.query.properties.findMany({
 					where: (properties, {eq}) => eq(properties.entityId, id),
