@@ -45,6 +45,7 @@ export const relations = pgTable("relations", {
 	toEntityId: text().notNull(),
 	toSpaceId: text(),
 	index: text(),
+	spaceId: text().notNull(),
 })
 
 export const entityForeignProperties = drizzleRelations(entities, ({many}) => ({
@@ -58,13 +59,6 @@ export const propertiesEntityRelations = drizzleRelations(properties, ({one}) =>
 		references: [entities.id],
 	}),
 }))
-
-// export const propertiesAttributeRelations = drizzleRelations(properties, ({one}) => ({
-// 	attribute: one(entities, {
-// 		fields: [properties.attributeId],
-// 		references: [entities.id],
-// 	}),
-// }))
 
 export const relationsEntityRelations = drizzleRelations(relations, ({one}) => ({
 	fromEntity: one(entities, {

@@ -26,6 +26,8 @@ export type Entity = {
   name?: Maybe<Scalars['String']['output']>;
   properties: Array<Maybe<Property>>;
   relations: Array<Maybe<Relation>>;
+  spaces: Array<Maybe<Scalars['String']['output']>>;
+  types: Array<Maybe<Entity>>;
   updatedAt: Scalars['String']['output'];
   updatedAtBlock: Scalars['String']['output'];
 };
@@ -177,6 +179,8 @@ export type EntityResolvers<ContextType = any, ParentType extends ResolversParen
   name?: Resolver<Maybe<ResolversTypes['String']>, ParentType, ContextType>;
   properties?: Resolver<Array<Maybe<ResolversTypes['Property']>>, ParentType, ContextType>;
   relations?: Resolver<Array<Maybe<ResolversTypes['Relation']>>, ParentType, ContextType>;
+  spaces?: Resolver<Array<Maybe<ResolversTypes['String']>>, ParentType, ContextType>;
+  types?: Resolver<Array<Maybe<ResolversTypes['Entity']>>, ParentType, ContextType>;
   updatedAt?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
   updatedAtBlock?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
   __isTypeOf?: IsTypeOfResolverFn<ParentType, ContextType>;

@@ -5,8 +5,12 @@ type Entity {
   createdAtBlock: String!
   updatedAt: String!
   updatedAtBlock: String!
+
   properties: [Property]!
   relations: [Relation]!
+
+  types: [Entity]!
+  spaces: [String]!
 }
 
 type Property {

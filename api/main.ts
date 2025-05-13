@@ -19,6 +19,12 @@ const resolvers: GeneratedResolvers = {
 		name: async (parent: {id: string}) => {
 			return Resolvers.entityName({id: parent.id})
 		},
+		types: async (parent: {id: string}) => {
+			return Resolvers.types({id: parent.id})
+		},
+		spaces: async (parent: {id: string}) => {
+			return Resolvers.spaces({id: parent.id})
+		},
 		properties: async (parent: {id: string}) => {
 			return Resolvers.properties({id: parent.id})
 		},
