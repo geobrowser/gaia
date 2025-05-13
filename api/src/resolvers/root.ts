@@ -10,15 +10,23 @@ const layers = Layer.mergeAll(EnvironmentLayer, StorageLayer)
 const provideDeps = Effect.provide(layers)
 
 export const entities = async (args: QueryEntitiesArgs) => {
-	const result = await Effect.runPromise(
+	return await Effect.runPromise(
 		EntityResolvers.getEntities(Number(args.limit), Number(args.offset)).pipe(provideDeps),
 	)
-
-	return result
 }
 
 export const entity = async (args: QueryEntityArgs) => {
-	const result = await Effect.runPromise(EntityResolvers.getEntity(args.id).pipe(provideDeps))
+	return await Effect.runPromise(EntityResolvers.getEntity(args.id).pipe(provideDeps))
+}
 
-	return result
+export const entityName = async (args: QueryEntityArgs) => {
+	return await Effect.runPromise(EntityResolvers.getEntityName(args.id).pipe(provideDeps))
+}
+
+export const properties = async (args: QueryEntityArgs) => {
+	return await Effect.runPromise(EntityResolvers.getProperties(args.id).pipe(provideDeps))
+}
+
+export const relations = async (args: QueryEntityArgs) => {
+	return await Effect.runPromise(EntityResolvers.getRelations(args.id).pipe(provideDeps))
 }

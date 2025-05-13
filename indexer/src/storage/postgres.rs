@@ -5,7 +5,8 @@ use sqlx::{postgres::PgPoolOptions, Postgres, QueryBuilder};
 
 use crate::models::{
     entities::EntityItem,
-    properties::{PropertyOp, TripleType},
+    properties::{PropertyChangeType, PropertyOp},
+    relations::RelationItem,
 };
 
 use super::{StorageBackend, StorageError};
@@ -57,7 +58,7 @@ impl PostgresStorage {
             format_option: query.format_option,
             language_option: query.language_option,
             unit_option: query.unit_option,
-            change_type: TripleType::SET,
+            change_type: PropertyChangeType::SET,
         })
     }
 }
@@ -162,6 +163,65 @@ impl StorageBackend for PostgresStorage {
 
         if let Err(error) = result {
             println!("Error deleting properties {}", error);
+        }
+
+        Ok(())
+    }
+
+    async fn insert_relations(&self, relations: &Vec<RelationItem>) -> Result<(), StorageError> {
+        if relations.is_empty() {
+            return Ok(());
+        }
+
+        // Create a query builder for PostgreSQL
+        let mut query_builder: QueryBuilder<Postgres> = QueryBuilder::new(
+            "INSERT INTO relations (id, from_entity_id, to_entity_id, to_space_id, type_id, index) ",
+        );
+
+        // Start the VALUES section
+        query_builder.push_values(relations, |mut b, relation| {
+            b.push_bind(&relation.id);
+            b.push_bind(&relation.from_id);
+            b.push_bind(&relation.to_id);
+            b.push_bind(&relation.to_space_id);
+            b.push_bind(&relation.type_id);
+            b.push_bind(&relation.index);
+        });
+
+        query_builder.push(
+            " ON CONFLICT (id) DO UPDATE SET
+                        to_space_id = EXCLUDED.to_space_id,
+                        index = EXCLUDED.index",
+        );
+
+        // Execute the query
+        let result = query_builder.build().execute(&self.pool).await;
+
+        if let Err(error) = result {
+            println!("Error writing relations {}", error);
+        }
+
+        Ok(())
+    }
+
+    async fn delete_relations(&self, relation_ids: &Vec<String>) -> Result<(), StorageError> {
+        if relation_ids.is_empty() {
+            return Ok(());
+        }
+
+        let ids: Vec<&str> = relation_ids.iter().map(|id| id.as_str()).collect();
+
+        let result = sqlx::query(
+            "DELETE FROM relations
+                     WHERE id IN
+                     (SELECT * FROM UNNEST($1::text[]))",
+        )
+        .bind(&ids)
+        .execute(&self.pool)
+        .await;
+
+        if let Err(error) = result {
+            println!("Error deleting relations {}", error);
         }
 
         Ok(())

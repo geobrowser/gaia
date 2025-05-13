@@ -1,10 +1,12 @@
 type Entity {
   id: ID!
+  name: String
   createdAt: String!
   createdAtBlock: String!
   updatedAt: String!
   updatedAtBlock: String!
-  properties: [Property!]
+  properties: [Property]!
+  relations: [Relation]!
 }
 
 type Property {
@@ -23,6 +25,18 @@ type Property {
 
   entity: Entity
   attribute: Entity
+}
+
+type Relation {
+  id: ID!
+  typeId: String!
+  fromId: String!
+  toId: String!
+  index: String
+
+  type: Entity
+  from: Entity
+  to: Entity
 }
 
 type Query {

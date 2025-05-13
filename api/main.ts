@@ -15,6 +15,37 @@ const resolvers: GeneratedResolvers = {
 			return await Resolvers.entity(args)
 		},
 	},
+	Entity: {
+		name: async (parent: {id: string}) => {
+			return Resolvers.entityName({id: parent.id})
+		},
+		properties: async (parent: {id: string}) => {
+			return Resolvers.properties({id: parent.id})
+		},
+		relations: async (parent: {id: string}) => {
+			return Resolvers.relations({id: parent.id})
+		},
+	},
+	Property: {
+		entity: async (parent: {entityId: string}) => {
+			return Resolvers.entity({id: parent.entityId})
+		},
+
+		attribute: async (parent: {attributeId: string}) => {
+			return Resolvers.entity({id: parent.attributeId})
+		},
+	},
+	Relation: {
+		from: async (parent: {fromId: string}) => {
+			return Resolvers.entity({id: parent.fromId})
+		},
+		to: async (parent: {toId: string}) => {
+			return Resolvers.entity({id: parent.toId})
+		},
+		type: async (parent: {typeId: string}) => {
+			return Resolvers.entity({id: parent.typeId})
+		},
+	},
 }
 
 const schema = makeExecutableSchema({

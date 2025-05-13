@@ -41,7 +41,9 @@ impl IpfsClient {
             ""
         };
 
+        // @TODO: Should retry this fetch
         let bytes = self.get_bytes(cid).await?;
+
         let data = deserialize(&bytes)?;
         return Ok(data);
     }

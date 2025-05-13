@@ -1,5 +1,6 @@
+import {SystemIds} from "@graphprotocol/grc-20"
 import {Effect} from "effect"
-import {entities} from "../services/storage/schema"
+import type {Entity} from "../generated/graphql"
 import {Storage} from "../services/storage/storage"
 
 export function getEntities(limit = 100, offset = 0) {
@@ -15,15 +16,14 @@ export function getEntities(limit = 100, offset = 0) {
 				},
 			})
 
-			return result.map((r) => {
+			return result.map((result) => {
 				return {
-					...r,
-					properties: r.properties.map((p) => {
-						return {
-							...p,
-							valueType: mapValueType(p.valueType),
-						}
-					}),
+					id: result.id,
+					createdAt: result.createdAt,
+					createdAtBlock: result.createdAtBlock,
+					updatedAt: result.updatedAt,
+					updatedAtBlock: result.updatedAtBlock,
+					name: result.properties.find((p) => p.attributeId === SystemIds.NAME_PROPERTY)?.textValue,
 				}
 			})
 		})
@@ -47,14 +47,67 @@ export function getEntity(id: string) {
 			}
 
 			return {
-				...result,
-				properties: result.properties.map((p) => {
-					return {
-						...p,
-						valueType: mapValueType(p.valueType),
-					}
-				}),
+				id: result.id,
+				createdAt: result.createdAt,
+				createdAtBlock: result.createdAtBlock,
+				updatedAt: result.updatedAt,
+				updatedAtBlock: result.updatedAtBlock,
+				name: result.properties.find((p) => p.attributeId === SystemIds.NAME_PROPERTY)?.textValue,
 			}
+		})
+	})
+}
+
+export function getEntityName(id: string) {
+	return Effect.gen(function* () {
+		const db = yield* Storage
+
+		const nameProperty = yield* db.use(async (client) => {
+			const result = await client.query.properties.findFirst({
+				where: (properties, {eq}) =>
+					eq(properties.attributeId, SystemIds.NAME_PROPERTY) && eq(properties.entityId, id),
+			})
+
+			return result
+		})
+
+		return nameProperty?.textValue || null
+	})
+}
+
+export function getProperties(id: string) {
+	return Effect.gen(function* () {
+		const db = yield* Storage
+
+		return yield* db.use(async (client) => {
+			const result = await client.query.properties.findMany({
+				where: (properties, {eq}) => eq(properties.entityId, id),
+			})
+
+			return result.map((p) => ({
+				...p,
+				valueType: mapValueType(p.valueType),
+			}))
+		})
+	})
+}
+
+export function getRelations(id: string) {
+	return Effect.gen(function* () {
+		const db = yield* Storage
+
+		return yield* db.use(async (client) => {
+			const result = await client.query.relations.findMany({
+				where: (relations, {eq}) => eq(relations.fromEntityId, id),
+			})
+
+			return result.map((relation) => ({
+				id: relation.id,
+				typeId: relation.typeId,
+				fromId: relation.fromEntityId,
+				toId: relation.toEntityId,
+				index: relation.index,
+			}))
 		})
 	})
 }
