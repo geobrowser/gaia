@@ -37,9 +37,6 @@ export function getEntity(id: string) {
 		return yield* db.use(async (client) => {
 			const result = await client.query.entities.findFirst({
 				where: (entities, {eq}) => eq(entities.id, id),
-				with: {
-					properties: true,
-				},
 			})
 
 			if (!result) {
@@ -52,7 +49,6 @@ export function getEntity(id: string) {
 				createdAtBlock: result.createdAtBlock,
 				updatedAt: result.updatedAt,
 				updatedAtBlock: result.updatedAtBlock,
-				name: result.properties.find((p) => p.attributeId === SystemIds.NAME_PROPERTY)?.textValue,
 			}
 		})
 	})
@@ -62,15 +58,11 @@ export function getEntityName(id: string) {
 	return Effect.gen(function* () {
 		const db = yield* Storage
 
-		console.log("entity id", id)
-
 		const nameProperty = yield* db.use(async (client) => {
 			const result = await client.query.properties.findFirst({
 				where: (properties, {eq, and}) =>
 					and(eq(properties.attributeId, SystemIds.NAME_PROPERTY), eq(properties.entityId, id)),
 			})
-
-			console.log("name property", result)
 
 			return result
 		})
