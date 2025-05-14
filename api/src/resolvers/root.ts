@@ -32,7 +32,7 @@ export const spaces = async (args: QueryEntityArgs) => {
 }
 
 export const properties = async (args: QueryEntityArgs) => {
-	return await Effect.runPromise(EntityResolvers.getProperties(args.id).pipe(provideDeps))
+	return await Effect.runPromise(EntityResolvers.getValues(args.id).pipe(provideDeps))
 }
 
 export const relations = async (args: QueryEntityArgs) => {

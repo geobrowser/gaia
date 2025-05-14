@@ -6,22 +6,19 @@ type Entity {
   updatedAt: String!
   updatedAtBlock: String!
 
-  properties: [Property]!
+  values: [Value]!
   relations: [Relation]!
 
   types: [Entity]!
   spaces: [String]!
 }
 
-type Property {
+type Value {
   id: ID!
   attributeId: String!
   entityId: String!
   spaceId: String!
-  valueType: String!
-  textValue: String
-  numberValue: String
-  booleanValue: Boolean
+  value: String
 
   languageOption: String
   formatOption: String
@@ -33,6 +30,7 @@ type Property {
 
 type Relation {
   id: ID!
+  spaceId: String!
   typeId: String!
   fromId: String!
   toId: String!

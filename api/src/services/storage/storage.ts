@@ -4,12 +4,12 @@ import {Context, Data, Effect, Redacted} from "effect"
 import {Environment} from "../environment"
 import {
 	entities,
-	entityForeignProperties,
+	entityForeignValues,
 	ipfsCache,
-	properties,
 	propertiesEntityRelations,
 	relations,
 	relationsEntityRelations,
+	values,
 } from "./schema"
 
 export class StorageError extends Data.TaggedError("StorageError")<{
@@ -26,10 +26,10 @@ export const createDb = (connectionString: string) =>
 		schema: {
 			ipfsCache,
 			entities,
-			properties,
+			properties: values,
 			relations,
 
-			entityForeignProperties,
+			entityForeignProperties: entityForeignValues,
 			propertiesEntityRelations,
 			relationsEntityRelations,
 		},

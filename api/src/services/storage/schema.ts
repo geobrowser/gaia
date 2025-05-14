@@ -24,18 +24,14 @@ export const entities = pgTable("entities", {
 	updatedAtBlock: text().notNull(),
 })
 
-export const properties = pgTable("properties", {
+export const values = pgTable("values", {
 	id: text().primaryKey(),
-	attributeId: text().notNull(),
+	propertyId: text().notNull(),
 	entityId: text().notNull(),
 	spaceId: text().notNull(),
-	textValue: text(),
-	numberValue: text(),
-	booleanValue: boolean(),
-	languageOption: text(),
+	value: text().notNull(),
 	formatOption: text(),
 	unitOption: text(),
-	valueType: text().notNull(),
 })
 
 export const relations = pgTable("relations", {
@@ -48,14 +44,14 @@ export const relations = pgTable("relations", {
 	spaceId: text().notNull(),
 })
 
-export const entityForeignProperties = drizzleRelations(entities, ({many}) => ({
-	properties: many(properties),
-	relationsOut: many(relations),
+export const entityForeignValues = drizzleRelations(entities, ({many}) => ({
+	values: many(values),
+	relations: many(relations),
 }))
 
-export const propertiesEntityRelations = drizzleRelations(properties, ({one}) => ({
+export const propertiesEntityRelations = drizzleRelations(values, ({one}) => ({
 	entity: one(entities, {
-		fields: [properties.entityId],
+		fields: [values.entityId],
 		references: [entities.id],
 	}),
 }))
@@ -77,5 +73,5 @@ export const relationsEntityRelations = drizzleRelations(relations, ({one}) => (
 
 export type IpfsCacheItem = InferSelectModel<typeof ipfsCache>
 export type DbEntity = InferSelectModel<typeof entities>
-export type DbProperty = InferSelectModel<typeof properties>
+export type DbProperty = InferSelectModel<typeof values>
 export type DbRelations = InferSelectModel<typeof relations>

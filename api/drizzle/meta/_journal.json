@@ -43,6 +43,13 @@
       "when": 1747166437104,
       "tag": "0005_daffy_human_robot",
       "breakpoints": true
+    },
+    {
+      "idx": 6,
+      "version": "7",
+      "when": 1747250919195,
+      "tag": "0006_light_monster_badoon",
+      "breakpoints": true
     }
   ]
 }

@@ -11,7 +11,7 @@ export function getEntities(limit = 100, offset = 0) {
 				limit,
 				offset,
 				with: {
-					properties: true,
+					values: true,
 				},
 			})
 
@@ -22,7 +22,7 @@ export function getEntities(limit = 100, offset = 0) {
 					createdAtBlock: result.createdAtBlock,
 					updatedAt: result.updatedAt,
 					updatedAtBlock: result.updatedAtBlock,
-					name: result.properties.find((p) => p.attributeId === SystemIds.NAME_PROPERTY)?.textValue,
+					name: result.values.find((p) => p.propertyId === SystemIds.NAME_PROPERTY)?.value,
 				}
 			})
 		})
@@ -60,17 +60,17 @@ export function getEntityName(id: string) {
 		const nameProperty = yield* db.use(async (client) => {
 			const result = await client.query.properties.findFirst({
 				where: (properties, {eq, and}) =>
-					and(eq(properties.attributeId, SystemIds.NAME_PROPERTY), eq(properties.entityId, id)),
+					and(eq(properties.propertyId, SystemIds.NAME_PROPERTY), eq(properties.entityId, id)),
 			})
 
 			return result
 		})
 
-		return nameProperty?.textValue ?? null
+		return nameProperty?.value ?? null
 	})
 }
 
-export function getProperties(id: string) {
+export function getValues(id: string) {
 	return Effect.gen(function* () {
 		const db = yield* Storage
 
@@ -79,10 +79,8 @@ export function getProperties(id: string) {
 				where: (properties, {eq}) => eq(properties.entityId, id),
 			})
 
-			return result.map((p) => ({
-				...p,
-				valueType: mapValueType(p.valueType),
-			}))
+			// @TODO: Get property value type
+			return result
 		})
 	})
 }
@@ -102,6 +100,7 @@ export function getRelations(id: string) {
 				fromId: relation.fromEntityId,
 				toId: relation.toEntityId,
 				index: relation.index,
+				spaceId: relation.spaceId,
 			}))
 		})
 	})
