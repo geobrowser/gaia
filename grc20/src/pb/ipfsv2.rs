@@ -42,11 +42,11 @@ pub struct Op {
     #[prost(message, optional, tag = "3")]
     pub relation: ::core::option::Option<Relation>,
     #[prost(message, optional, tag = "4")]
-    pub property: ::core::option::Option<PropertyDefinition>,
+    pub property: ::core::option::Option<Property>,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct PropertyDefinition {
+pub struct Property {
     #[prost(bytes = "vec", tag = "1")]
     pub id: ::prost::alloc::vec::Vec<u8>,
     #[prost(bytes = "vec", tag = "2")]
@@ -80,24 +80,18 @@ pub struct Entity {
     #[prost(bytes = "vec", tag = "1")]
     pub id: ::prost::alloc::vec::Vec<u8>,
     #[prost(message, repeated, tag = "2")]
-    pub properties: ::prost::alloc::vec::Vec<PropertyValue>,
-}
-#[derive(serde::Serialize, serde::Deserialize)]
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct PropertyValue {
-    #[prost(bytes = "vec", tag = "1")]
-    pub id: ::prost::alloc::vec::Vec<u8>,
-    /// If we are in an UNSET_PROPERTIES op we don't
-    /// need to pass the value
-    #[prost(message, optional, tag = "2")]
-    pub value: ::core::option::Option<Value>,
+    pub values: ::prost::alloc::vec::Vec<Value>,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Value {
     #[prost(bytes = "vec", tag = "1")]
-    pub value: ::prost::alloc::vec::Vec<u8>,
-    #[prost(message, optional, tag = "2")]
+    pub property_id: ::prost::alloc::vec::Vec<u8>,
+    /// If we are in an UNSET_PROPERTIES op we don't
+    /// need to pass the value
+    #[prost(bytes = "vec", optional, tag = "2")]
+    pub value: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
+    #[prost(message, optional, tag = "3")]
     pub options: ::core::option::Option<Options>,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
@@ -157,9 +151,6 @@ pub enum OpType {
     ArchiveProperty = 9,
     MoveEntity = 10,
     MergeEntities = 11,
-    /// @TODO impl enables us to map an entity with it. What happens
-    /// if there's more than one CREATE_SPACE for the same address? ignore?
-    /// Should this be an Op instead of an action?
     /// SET_SPACE_ENTITY = 4;
     BranchEntity = 12,
 }

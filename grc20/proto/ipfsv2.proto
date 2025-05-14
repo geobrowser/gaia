@@ -41,9 +41,6 @@ enum OpType {
   MOVE_ENTITY = 10;
   MERGE_ENTITIES = 11;
   BRANCH_ENTITY = 12;
-  // @TODO impl enables us to map an entity with it. What happens
-  // if there's more than one CREATE_SPACE for the same address? ignore?
-  // Should this be an Op instead of an action?
   // SET_SPACE_ENTITY = 4;
 }
 
@@ -61,7 +58,7 @@ message Op {
    */
   optional Relation relation = 3;
 
-  optional PropertyDefinition property = 4;
+  optional Property property = 4;
 
   /**
    * Used when importing a csv file
@@ -70,7 +67,7 @@ message Op {
   // optional ImportCsvMetadata metadata = 5;
 }
 
-message PropertyDefinition {
+message Property {
   bytes id = 1;
   bytes type = 2;
   bytes name = 3;
@@ -89,19 +86,15 @@ message Relation {
 
 message Entity {
     bytes id = 1;
-    repeated PropertyValue properties = 2;
-}
-
-message PropertyValue {
-    bytes id = 1;
-    // If we are in an UNSET_PROPERTIES op we don't
-    // need to pass the value
-    optional Value value = 2;
+    repeated Value values = 2;
 }
 
 message Value {
-    bytes value = 1;
-    optional Options options = 2;
+    bytes property_id = 1;
+    // If we are in an UNSET_PROPERTIES op we don't
+    // need to pass the value
+    optional bytes value = 2;
+    optional Options options = 3;
 }
 
 message Options {
