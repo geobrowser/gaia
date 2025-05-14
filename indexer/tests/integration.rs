@@ -1,4 +1,4 @@
-use grc20::pb::ipfs::{Edit, Op, Triple, Value};
+use grc20::pb::ipfsv2::{Edit, Entity, Op, Value};
 use std::{env, sync::Arc};
 use stream::utils::BlockMetadata;
 
@@ -40,10 +40,36 @@ async fn main() -> Result<(), IndexingError> {
             "5",
             "Name",
             "Author",
+            // vec![
+            //     make_entity_op(OpType::SET, "entity-id-1", "attribute-id", "value 1", 1),
+            //     make_entity_op(OpType::SET, "entity-id-2", "attribute-id", "value 2", 1),
+            //     make_entity_op(OpType::DELETE, "entity-id-2", "attribute-id", "value 2", 1),
+            // ],
             vec![
-                make_triple_op(OpType::SET, "entity-id-1", "attribute-id", "value 1", 1),
-                make_triple_op(OpType::SET, "entity-id-2", "attribute-id", "value 2", 1),
-                make_triple_op(OpType::DELETE, "entity-id-2", "attribute-id", "value 2", 1),
+                make_entity_op(
+                    OpType::SET,
+                    "entity-id-1",
+                    vec![TestValue {
+                        property_id: "attribute-id".to_string(),
+                        value: Some("value 1".to_string()),
+                    }],
+                ),
+                make_entity_op(
+                    OpType::SET,
+                    "entity-id-2",
+                    vec![TestValue {
+                        property_id: "attribute-id".to_string(),
+                        value: Some("value 1".to_string()),
+                    }],
+                ),
+                make_entity_op(
+                    OpType::DELETE,
+                    "entity-id-2",
+                    vec![TestValue {
+                        property_id: "attribute-id".to_string(),
+                        value: None,
+                    }],
+                ),
             ],
         )),
         is_errored: false,
@@ -125,47 +151,34 @@ enum OpType {
     DELETE,
 }
 
-fn make_triple_op(
-    op_type: OpType,
-    entity: &str,
-    attribute: &str,
-    value: &str,
-    value_type: i32,
-) -> Op {
+struct TestValue {
+    pub property_id: String,
+    pub value: Option<String>,
+}
+
+fn make_entity_op(op_type: OpType, entity: &str, values: Vec<TestValue>) -> Op {
     match op_type {
         OpType::SET => Op {
-            r#type: 1,
-            entity: None,
-            triples: vec![],
-            metadata: None,
-            relation: None,
-            url: None,
-            triple: Some(Triple {
-                attribute: attribute.to_string(),
-                entity: entity.to_string(),
-                value: Some(Value {
-                    options: None,
-                    r#type: value_type,
-                    value: value.to_string(),
-                }),
+            r#type: 2, // Update entity
+            entity: Some(Entity {
+                id: entity.to_string().into_bytes(),
+                values: values
+                    .iter()
+                    .map(|v| Value {
+                        options: None,
+                        property_id: v.property_id.clone().into_bytes(),
+                        value: Some(v.value.clone().unwrap().into_bytes()),
+                    })
+                    .collect(),
             }),
+            relation: None,
+            property: None,
         },
         OpType::DELETE => Op {
-            r#type: 2,
+            r#type: 3,
             entity: None,
-            triples: vec![],
-            metadata: None,
             relation: None,
-            url: None,
-            triple: Some(Triple {
-                attribute: attribute.to_string(),
-                entity: entity.to_string(),
-                value: Some(Value {
-                    options: None,
-                    r#type: value_type,
-                    value: value.to_string(),
-                }),
-            }),
+            property: None,
         },
     }
 }

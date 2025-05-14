@@ -63,24 +63,20 @@ fn derive_property_id(entity_id: &String, attribute_id: &String, space_id: &Stri
 fn property_op_from_op(op: &Op, space_id: &String) -> Option<PropertyOp> {
     if let Ok(op_type) = OpType::try_from(op.r#type) {
         return match op_type {
-            // SET_TRIPLE
             OpType::UpdateEntity | OpType::CreateEntity => {
                 if let Some(entity) = op.entity.clone() {
-                    let entity_id = String::from_utf8(entity.id);
-
-                    if let Ok(entity_id) = entity_id {
+                    if let Ok(entity_id) = String::from_utf8(entity.id) {
                         for value in &entity.values {
                             let property_id = String::from_utf8(value.property_id.clone());
 
                             if let Ok(property_id) = property_id {
-                                let triple_values = map_property_value(&value.value);
                                 let triple_value_options =
                                     &value.options.clone().unwrap_or(Options {
                                         format: vec![],
                                         unit: vec![],
                                     });
 
-                                if let Some(triple_values) = triple_values {
+                                if let Some(triple_values) = map_property_value(&value.value) {
                                     return Some(PropertyOp {
                                         id: derive_property_id(&entity_id, &property_id, space_id),
                                         change_type: PropertyChangeType::SET,
@@ -107,13 +103,9 @@ fn property_op_from_op(op: &Op, space_id: &String) -> Option<PropertyOp> {
             }
             OpType::UnsetProperties => {
                 if let Some(entity) = op.entity.clone() {
-                    let entity_id = String::from_utf8(entity.id);
-
-                    if let Ok(entity_id) = entity_id {
+                    if let Ok(entity_id) = String::from_utf8(entity.id) {
                         for value in &entity.values {
-                            let property_id = String::from_utf8(value.property_id.clone());
-
-                            if let Ok(property_id) = property_id {
+                            if let Ok(property_id) = String::from_utf8(value.property_id.clone()) {
                                 return Some(PropertyOp {
                                     id: derive_property_id(&entity_id, &property_id, space_id),
                                     change_type: PropertyChangeType::DELETE,
