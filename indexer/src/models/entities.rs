@@ -41,7 +41,7 @@ impl EntitiesModel {
                             }
 
                             for value in &entity.values {
-                                let property_id = String::from_utf8(value.property_id);
+                                let property_id = String::from_utf8(value.property_id.clone());
 
                                 if let Ok(id) = property_id {
                                     if !seen.contains(&id) {
