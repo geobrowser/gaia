@@ -1,5 +1,4 @@
-use grc20::pb::ipfs::{Edit, OpType};
-use indexer_utils::graph_uri;
+use grc20::pb::ipfsv2::{Edit, OpType};
 
 #[derive(Clone)]
 pub enum RelationChangeType {
@@ -9,13 +8,15 @@ pub enum RelationChangeType {
 
 #[derive(Clone)]
 pub struct RelationItem {
-    pub id: String,
     pub change_type: RelationChangeType,
+    pub id: String,
+    pub entity_id: String,
     pub type_id: String,
     pub from_id: String,
+    pub from_property_id: Option<String>,
     pub to_id: String,
     pub to_space_id: Option<String>,
-    pub index: String,
+    pub index: Option<String>,
     pub space_id: String,
 }
 
@@ -34,41 +35,62 @@ impl RelationsModel {
                     OpType::CreateRelation => {
                         if op.relation.is_some() {
                             let relation = op.relation.clone().unwrap();
-                            let type_id = graph_uri::to_entity_id(relation.r#type.as_str());
-                            let from_id = graph_uri::to_entity_id(relation.from_entity.as_str());
-                            let to_id = graph_uri::to_entity_id(relation.to_entity.as_str());
-                            let to_space_id = graph_uri::to_space_id(relation.to_entity.as_str());
 
-                            if from_id.is_some() && to_id.is_some() && type_id.is_some() {
+                            let relation_id = String::from_utf8(relation.id);
+                            let entity_id = String::from_utf8(relation.entity);
+                            let type_id = String::from_utf8(relation.r#type);
+                            let from_id = String::from_utf8(relation.from_entity);
+                            let to_id = String::from_utf8(relation.to_entity);
+
+                            // @TODO: What do we do with the optional fields?
+                            let to_space =
+                                relation.to_space.and_then(|s| String::from_utf8(s).ok());
+                            let from_property = relation
+                                .from_property
+                                .and_then(|s| String::from_utf8(s).ok());
+                            let index = relation.index.and_then(|s| String::from_utf8(s).ok());
+
+                            if relation_id.is_ok()
+                                && entity_id.is_ok()
+                                && from_id.is_ok()
+                                && to_id.is_ok()
+                                && type_id.is_ok()
+                            {
                                 relations.push(RelationItem {
                                     change_type: RelationChangeType::SET,
-                                    id: relation.id,
+                                    id: relation_id.unwrap(),
+                                    entity_id: entity_id.unwrap(),
                                     space_id: space_id.clone(),
-                                    index: relation.index,
+                                    index,
                                     type_id: type_id.unwrap().to_string(),
                                     from_id: from_id.unwrap().to_string(),
+                                    from_property_id: from_property,
                                     to_id: to_id.unwrap().to_string(),
-                                    to_space_id: to_space_id.map(|s| s.to_string()),
+                                    to_space_id: to_space,
                                 });
                             }
                         }
                     }
                     OpType::DeleteRelation => {
                         if op.relation.is_some() {
-                            let relation = op.relation.clone().unwrap();
+                            if let Some(relation) = op.relation.clone() {
+                                if let Ok(relation_id) = String::from_utf8(relation.id) {
+                                    relations.push(RelationItem {
+                                        change_type: RelationChangeType::DELETE,
+                                        id: relation_id,
+                                        space_id: space_id.clone(),
 
-                            relations.push(RelationItem {
-                                change_type: RelationChangeType::DELETE,
-                                id: relation.id,
-                                space_id: space_id.clone(),
-
-                                // These fields don't matter for a delete
-                                index: String::from(""),
-                                type_id: String::from(""),
-                                from_id: String::from(""),
-                                to_id: String::from(""),
-                                to_space_id: None,
-                            });
+                                        // These fields don't matter for a delete
+                                        entity_id: String::from(""),
+                                        index: None,
+                                        type_id: String::from(""),
+                                        from_id: String::from(""),
+                                        to_id: String::from(""),
+                                        to_space_id: None,
+                                        from_property_id: None,
+                                    });
+                                }
+                            }
                         }
                     }
                     _ => {}

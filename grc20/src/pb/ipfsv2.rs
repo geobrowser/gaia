@@ -63,16 +63,16 @@ pub struct Relation {
     pub r#type: ::prost::alloc::vec::Vec<u8>,
     #[prost(bytes = "vec", tag = "3")]
     pub from_entity: ::prost::alloc::vec::Vec<u8>,
-    #[prost(bytes = "vec", tag = "4")]
-    pub from_property: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "vec", optional, tag = "4")]
+    pub from_property: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
     #[prost(bytes = "vec", tag = "5")]
     pub to_entity: ::prost::alloc::vec::Vec<u8>,
-    #[prost(bytes = "vec", tag = "6")]
-    pub to_space: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "vec", optional, tag = "6")]
+    pub to_space: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
     #[prost(bytes = "vec", tag = "7")]
     pub entity: ::prost::alloc::vec::Vec<u8>,
-    #[prost(bytes = "vec", tag = "8")]
-    pub index: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "vec", optional, tag = "8")]
+    pub index: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]

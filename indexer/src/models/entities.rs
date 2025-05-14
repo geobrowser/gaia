@@ -22,7 +22,7 @@ impl EntitiesModel {
         for op in &edit.ops {
             if let Ok(op_type) = OpType::try_from(op.r#type) {
                 match op_type {
-                    OpType::UpdateEntity | OpType::UnsetProperties => {
+                    OpType::UpdateEntity | OpType::UnsetProperties | OpType::CreateEntity => {
                         if op.entity.is_some() {
                             let entity = op.entity.clone().unwrap();
                             let entity_id = String::from_utf8(entity.id);

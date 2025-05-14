@@ -1,6 +1,5 @@
 use async_trait::async_trait;
 
-use grc20::pb::ipfs::ValueType;
 use sqlx::{postgres::PgPoolOptions, Postgres, QueryBuilder};
 
 use crate::models::{
@@ -50,13 +49,9 @@ impl PostgresStorage {
             id: query.id,
             attribute_id: query.attribute_id,
             entity_id: query.entity_id,
-            value_type: ValueType::Text, // @TODO real value type
             space_id: query.space_id,
             text_value: query.text_value,
-            number_value: query.number_value,
-            boolean_value: query.boolean_value,
             format_option: query.format_option,
-            language_option: query.language_option,
             unit_option: query.unit_option,
             change_type: PropertyChangeType::SET,
         })
@@ -104,7 +99,7 @@ impl StorageBackend for PostgresStorage {
 
         // Create a query builder for PostgreSQL
         let mut query_builder: QueryBuilder<Postgres> = QueryBuilder::new(
-                    "INSERT INTO properties (id, entity_id, attribute_id, space_id, value_type, text_value, boolean_value, number_value, language_option, format_option, unit_option) "
+                    "INSERT INTO properties (id, entity_id, attribute_id, space_id, text_value, format_option, unit_option) "
                 );
 
         // Start the VALUES section
@@ -116,11 +111,7 @@ impl StorageBackend for PostgresStorage {
             b.push_bind(&property.entity_id);
             b.push_bind(&property.attribute_id);
             b.push_bind(&property.space_id);
-            b.push_bind(property.value_type as i32); // Assuming PbValueType can be cast to i32
             b.push_bind(&property.text_value);
-            b.push_bind(property.boolean_value);
-            b.push_bind(&property.number_value);
-            b.push_bind(&property.language_option);
             b.push_bind(&property.format_option);
             b.push_bind(&property.unit_option);
         });
