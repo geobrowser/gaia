@@ -51,8 +51,8 @@ pub struct Property {
     pub id: ::prost::alloc::vec::Vec<u8>,
     #[prost(bytes = "vec", tag = "2")]
     pub r#type: ::prost::alloc::vec::Vec<u8>,
-    #[prost(bytes = "vec", tag = "3")]
-    pub name: ::prost::alloc::vec::Vec<u8>,
+    #[prost(string, tag = "3")]
+    pub name: ::prost::alloc::string::String,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -71,8 +71,8 @@ pub struct Relation {
     pub to_space: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
     #[prost(bytes = "vec", tag = "7")]
     pub entity: ::prost::alloc::vec::Vec<u8>,
-    #[prost(bytes = "vec", optional, tag = "8")]
-    pub index: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
+    #[prost(string, optional, tag = "8")]
+    pub index: ::core::option::Option<::prost::alloc::string::String>,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -89,18 +89,18 @@ pub struct Value {
     pub property_id: ::prost::alloc::vec::Vec<u8>,
     /// If we are in an UNSET_PROPERTIES op we don't
     /// need to pass the value
-    #[prost(bytes = "vec", optional, tag = "2")]
-    pub value: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
+    #[prost(string, optional, tag = "2")]
+    pub value: ::core::option::Option<::prost::alloc::string::String>,
     #[prost(message, optional, tag = "3")]
     pub options: ::core::option::Option<Options>,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Options {
-    #[prost(bytes = "vec", tag = "1")]
-    pub unit: ::prost::alloc::vec::Vec<u8>,
-    #[prost(bytes = "vec", tag = "2")]
-    pub format: ::prost::alloc::vec::Vec<u8>,
+    #[prost(string, tag = "1")]
+    pub unit: ::prost::alloc::string::String,
+    #[prost(string, tag = "2")]
+    pub format: ::prost::alloc::string::String,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
@@ -147,12 +147,9 @@ pub enum OpType {
     DeleteRelation = 5,
     ReorderRelation = 6,
     UnsetProperties = 7,
-    CreateProperty = 8,
-    ArchiveProperty = 9,
-    MoveEntity = 10,
-    MergeEntities = 11,
-    /// SET_SPACE_ENTITY = 4;
-    BranchEntity = 12,
+    MoveEntity = 8,
+    MergeEntities = 9,
+    BranchEntity = 10,
 }
 impl OpType {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -169,8 +166,6 @@ impl OpType {
             Self::DeleteRelation => "DELETE_RELATION",
             Self::ReorderRelation => "REORDER_RELATION",
             Self::UnsetProperties => "UNSET_PROPERTIES",
-            Self::CreateProperty => "CREATE_PROPERTY",
-            Self::ArchiveProperty => "ARCHIVE_PROPERTY",
             Self::MoveEntity => "MOVE_ENTITY",
             Self::MergeEntities => "MERGE_ENTITIES",
             Self::BranchEntity => "BRANCH_ENTITY",
@@ -187,8 +182,6 @@ impl OpType {
             "DELETE_RELATION" => Some(Self::DeleteRelation),
             "REORDER_RELATION" => Some(Self::ReorderRelation),
             "UNSET_PROPERTIES" => Some(Self::UnsetProperties),
-            "CREATE_PROPERTY" => Some(Self::CreateProperty),
-            "ARCHIVE_PROPERTY" => Some(Self::ArchiveProperty),
             "MOVE_ENTITY" => Some(Self::MoveEntity),
             "MERGE_ENTITIES" => Some(Self::MergeEntities),
             "BRANCH_ENTITY" => Some(Self::BranchEntity),

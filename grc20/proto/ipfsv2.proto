@@ -36,12 +36,9 @@ enum OpType {
   DELETE_RELATION = 5;
   REORDER_RELATION = 6;
   UNSET_PROPERTIES = 7;
-  CREATE_PROPERTY = 8;
-  ARCHIVE_PROPERTY = 9;
-  MOVE_ENTITY = 10;
-  MERGE_ENTITIES = 11;
-  BRANCH_ENTITY = 12;
-  // SET_SPACE_ENTITY = 4;
+  MOVE_ENTITY = 8;
+  MERGE_ENTITIES = 9;
+  BRANCH_ENTITY = 10;
 }
 
 // @TODO: Use oneof instead of these weird optional state machines
@@ -70,7 +67,7 @@ message Op {
 message Property {
   bytes id = 1;
   bytes type = 2;
-  bytes name = 3;
+  string name = 3;
 }
 
 message Relation {
@@ -81,7 +78,7 @@ message Relation {
   bytes to_entity = 5;
   optional bytes to_space = 6;
   bytes entity = 7;
-  optional bytes index = 8;
+  optional string index = 8;
 }
 
 message Entity {
@@ -93,11 +90,11 @@ message Value {
     bytes property_id = 1;
     // If we are in an UNSET_PROPERTIES op we don't
     // need to pass the value
-    optional bytes value = 2;
+    optional string value = 2;
     optional Options options = 3;
 }
 
 message Options {
-    bytes unit = 1;
-    bytes format = 2;
+    string unit = 1;
+    string format = 2;
 }
