@@ -1,4 +1,4 @@
-use grc20::pb::ipfsv2::{Edit, Entity, Op, Value};
+use grc20::pb::ipfsv2::{Edit, Entity, Op, OpType, Value};
 use std::{env, sync::Arc};
 use stream::utils::BlockMetadata;
 
@@ -42,7 +42,7 @@ async fn main() -> Result<(), IndexingError> {
             "Author",
             vec![
                 make_entity_op(
-                    OpType::SET,
+                    OpType::UpdateEntity,
                     "entity-id-1",
                     vec![TestValue {
                         property_id: "attribute-id".to_string(),
@@ -50,7 +50,7 @@ async fn main() -> Result<(), IndexingError> {
                     }],
                 ),
                 make_entity_op(
-                    OpType::SET,
+                    OpType::CreateEntity,
                     "entity-id-2",
                     vec![TestValue {
                         property_id: "attribute-id".to_string(),
@@ -58,7 +58,7 @@ async fn main() -> Result<(), IndexingError> {
                     }],
                 ),
                 make_entity_op(
-                    OpType::DELETE,
+                    OpType::UnsetProperties,
                     "entity-id-2",
                     vec![TestValue {
                         property_id: "attribute-id".to_string(),
@@ -141,19 +141,15 @@ fn make_edit(id: &str, name: &str, author: &str, ops: Vec<Op>) -> Edit {
     }
 }
 
-enum OpType {
-    SET,
-    DELETE,
-}
-
 struct TestValue {
     pub property_id: String,
     pub value: Option<String>,
 }
 
+// @TODO: Should use optype from pb instead of this manual one
 fn make_entity_op(op_type: OpType, entity: &str, values: Vec<TestValue>) -> Op {
     match op_type {
-        OpType::SET => Op {
+        OpType::UpdateEntity | OpType::CreateEntity => Op {
             r#type: 2, // Update entity
             entity: Some(Entity {
                 id: entity.to_string().into_bytes(),
@@ -169,7 +165,7 @@ fn make_entity_op(op_type: OpType, entity: &str, values: Vec<TestValue>) -> Op {
             relation: None,
             property: None,
         },
-        OpType::DELETE => Op {
+        OpType::UnsetProperties => Op {
             r#type: 7, // Unset properties
             entity: Some(Entity {
                 id: entity.to_string().into_bytes(),
@@ -185,5 +181,6 @@ fn make_entity_op(op_type: OpType, entity: &str, values: Vec<TestValue>) -> Op {
             relation: None,
             property: None,
         },
+        _ => panic!("Invalid op type for test"),
     }
 }
