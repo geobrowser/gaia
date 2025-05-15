@@ -97,10 +97,10 @@ pub struct Value {
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Options {
-    #[prost(string, tag = "1")]
-    pub unit: ::prost::alloc::string::String,
-    #[prost(string, tag = "2")]
-    pub format: ::prost::alloc::string::String,
+    #[prost(string, optional, tag = "1")]
+    pub unit: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(string, optional, tag = "2")]
+    pub format: ::core::option::Option<::prost::alloc::string::String>,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]

@@ -167,7 +167,7 @@ fn make_entity_op(op_type: OpType, entity: &str, values: Vec<TestValue>) -> Op {
                     .map(|v| Value {
                         options: None,
                         property_id: v.property_id.clone().into_bytes(),
-                        value: Some(v.value.clone().unwrap().into_bytes()),
+                        value: Some(v.value.clone().unwrap()),
                     })
                     .collect(),
             }),

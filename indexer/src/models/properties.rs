@@ -13,7 +13,7 @@ pub struct PropertyOp {
     pub id: String,
     pub change_type: PropertyChangeType,
     pub entity_id: String,
-    pub attribute_id: String,
+    pub property_id: String,
     pub space_id: String,
     pub text_value: Option<String>,
     pub format_option: Option<String>,
@@ -72,28 +72,20 @@ fn property_op_from_op(op: &Op, space_id: &String) -> Option<PropertyOp> {
                             if let Ok(property_id) = property_id {
                                 let triple_value_options =
                                     &value.options.clone().unwrap_or(Options {
-                                        format: vec![],
-                                        unit: vec![],
+                                        format: None,
+                                        unit: None,
                                     });
 
-                                if let Some(triple_values) = map_property_value(&value.value) {
-                                    return Some(PropertyOp {
-                                        id: derive_property_id(&entity_id, &property_id, space_id),
-                                        change_type: PropertyChangeType::SET,
-                                        attribute_id: property_id,
-                                        entity_id,
-                                        space_id: space_id.clone(),
-                                        text_value: Some(triple_values.text_value),
-                                        unit_option: String::from_utf8(
-                                            triple_value_options.unit.clone(),
-                                        )
-                                        .ok(),
-                                        format_option: String::from_utf8(
-                                            triple_value_options.format.clone(),
-                                        )
-                                        .ok(),
-                                    });
-                                }
+                                return Some(PropertyOp {
+                                    id: derive_property_id(&entity_id, &property_id, space_id),
+                                    change_type: PropertyChangeType::SET,
+                                    property_id,
+                                    entity_id,
+                                    space_id: space_id.clone(),
+                                    text_value: value.value.clone(),
+                                    unit_option: triple_value_options.unit.clone(),
+                                    format_option: triple_value_options.format.clone(),
+                                });
                             }
                         }
                     }
@@ -109,7 +101,7 @@ fn property_op_from_op(op: &Op, space_id: &String) -> Option<PropertyOp> {
                                 return Some(PropertyOp {
                                     id: derive_property_id(&entity_id, &property_id, space_id),
                                     change_type: PropertyChangeType::DELETE,
-                                    attribute_id: property_id,
+                                    property_id,
                                     entity_id,
                                     space_id: space_id.clone(),
                                     text_value: None,
@@ -128,25 +120,4 @@ fn property_op_from_op(op: &Op, space_id: &String) -> Option<PropertyOp> {
     };
 
     None
-}
-
-struct TripleValues {
-    text_value: String,
-}
-
-fn map_property_value(value: &Option<Vec<u8>>) -> Option<TripleValues> {
-    // value type isn't a thing now so we only have text values
-    // for everything now?
-
-    match value {
-        Some(value) => {
-            let value = String::from_utf8(value.clone());
-
-            match value {
-                Ok(value) => Some(TripleValues { text_value: value }),
-                Err(_) => None,
-            }
-        }
-        None => None,
-    }
 }

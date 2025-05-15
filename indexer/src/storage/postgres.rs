@@ -41,16 +41,16 @@ impl PostgresStorage {
     }
 
     pub async fn get_property(&self, triple_id: &String) -> Result<PropertyOp, StorageError> {
-        let query = sqlx::query!("SELECT * FROM properties WHERE id = $1", triple_id)
+        let query = sqlx::query!("SELECT * FROM values WHERE id = $1", triple_id)
             .fetch_one(&self.pool)
             .await?;
 
         Ok(PropertyOp {
             id: query.id,
-            attribute_id: query.attribute_id,
+            property_id: query.property_id,
             entity_id: query.entity_id,
             space_id: query.space_id,
-            text_value: query.text_value,
+            text_value: query.value,
             format_option: query.format_option,
             unit_option: query.unit_option,
             change_type: PropertyChangeType::SET,
@@ -99,17 +99,17 @@ impl StorageBackend for PostgresStorage {
 
         // Create a query builder for PostgreSQL
         let mut query_builder: QueryBuilder<Postgres> = QueryBuilder::new(
-                    "INSERT INTO properties (id, entity_id, attribute_id, space_id, text_value, format_option, unit_option) "
+                    "INSERT INTO properties (id, entity_id, property_id, space_id, text_value, format_option, unit_option) "
                 );
 
         // Start the VALUES section
         query_builder.push_values(properties, |mut b, property| {
             b.push_bind(format!(
                 "{}:{}:{}",
-                property.entity_id, property.attribute_id, property.space_id
+                property.entity_id, property.property_id, property.space_id
             ));
             b.push_bind(&property.entity_id);
-            b.push_bind(&property.attribute_id);
+            b.push_bind(&property.property_id);
             b.push_bind(&property.space_id);
             b.push_bind(&property.text_value);
             b.push_bind(&property.format_option);

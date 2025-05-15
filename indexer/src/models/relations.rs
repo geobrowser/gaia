@@ -48,7 +48,6 @@ impl RelationsModel {
                             let from_property = relation
                                 .from_property
                                 .and_then(|s| String::from_utf8(s).ok());
-                            let index = relation.index.and_then(|s| String::from_utf8(s).ok());
 
                             if relation_id.is_ok()
                                 && entity_id.is_ok()
@@ -61,7 +60,7 @@ impl RelationsModel {
                                     id: relation_id.unwrap(),
                                     entity_id: entity_id.unwrap(),
                                     space_id: space_id.clone(),
-                                    index,
+                                    index: relation.index,
                                     type_id: type_id.unwrap().to_string(),
                                     from_id: from_id.unwrap().to_string(),
                                     from_property_id: from_property,
