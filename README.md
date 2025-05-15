@@ -21,8 +21,6 @@ DATABASE_URL=""
 Then run the following commands from within the `/api` directory:
 
 ```sh
-# from the root of this project
-cd api
 bun install
 bun drizzle-kit migrate
 ```
