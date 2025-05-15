@@ -79,7 +79,6 @@ export function getValues(id: string) {
 				where: (properties, {eq}) => eq(properties.entityId, id),
 			})
 
-			// @TODO: Get property value type
 			return result
 		})
 	})
@@ -182,5 +181,7 @@ function mapValueType(valueType: string): ValueType {
 			return "POINT"
 		default:
 			return "TEXT"
+
+		// Q: Do we list the other supported value types here? Image, Relation, Place, etc?
 	}
 }

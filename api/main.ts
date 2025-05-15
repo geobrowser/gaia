@@ -25,20 +25,19 @@ const resolvers: GeneratedResolvers = {
 		spaces: async (parent: {id: string}) => {
 			return Resolvers.spaces({id: parent.id})
 		},
-		properties: async (parent: {id: string}) => {
+		values: async (parent: {id: string}) => {
 			return Resolvers.properties({id: parent.id})
 		},
 		relations: async (parent: {id: string}) => {
 			return Resolvers.relations({id: parent.id})
 		},
 	},
-	Property: {
+	Value: {
 		entity: async (parent: {entityId: string}) => {
 			return Resolvers.entity({id: parent.entityId})
 		},
-
-		attribute: async (parent: {attributeId: string}) => {
-			return Resolvers.entity({id: parent.attributeId})
+		property: async (parent: {propertyId: string}) => {
+			return Resolvers.entity({id: parent.propertyId})
 		},
 	},
 	Relation: {

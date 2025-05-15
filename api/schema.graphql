@@ -1,6 +1,8 @@
 type Entity {
   id: ID!
   name: String
+  # cover: How do we want to represent cover?
+  blocks: [Entity]!
   createdAt: String!
   createdAtBlock: String!
   updatedAt: String!
@@ -13,19 +15,26 @@ type Entity {
   spaces: [String]!
 }
 
+type Property {
+  id: ID!
+  entityId: String!
+  valueType: String! # TODO enum/union
+
+  entity: Entity
+}
+
 type Value {
   id: ID!
-  attributeId: String!
+  propertyId: String!
   entityId: String!
   spaceId: String!
   value: String
 
-  languageOption: String
   formatOption: String
   unitOption: String
 
   entity: Entity
-  attribute: Entity
+  property: Property
 }
 
 type Relation {
@@ -34,11 +43,16 @@ type Relation {
   typeId: String!
   fromId: String!
   toId: String!
+  toSpaceId: String
   index: String
+  # these should be called `fromValue` and `toValue` instead?
+  # fromPropertyId: String
+  # toPropertyId: String
 
   type: Entity
   from: Entity
   to: Entity
+  # toSpace: Space
 }
 
 type Query {
