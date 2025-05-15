@@ -40,6 +40,10 @@ impl PropertiesModel {
             .into_iter()
             .partition(|op| matches!(op.change_type, PropertyChangeType::SET));
 
+        println!("ops len {}", triple_ops.len());
+        println!("created len {}", created.len());
+        println!("deleted len {}", deleted.len());
+
         return (created, deleted.iter().map(|op| op.id.clone()).collect());
     }
 }
@@ -56,8 +60,8 @@ fn squash_properties(triple_ops: &Vec<PropertyOp>) -> Vec<PropertyOp> {
     return result;
 }
 
-fn derive_property_id(entity_id: &String, attribute_id: &String, space_id: &String) -> String {
-    format!("{}:{}:{}", entity_id, attribute_id, space_id)
+fn derive_property_id(entity_id: &String, property_id: &String, space_id: &String) -> String {
+    format!("{}:{}:{}", entity_id, property_id, space_id)
 }
 
 fn property_op_from_op(op: &Op, space_id: &String) -> Option<PropertyOp> {

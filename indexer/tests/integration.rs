@@ -40,11 +40,6 @@ async fn main() -> Result<(), IndexingError> {
             "5",
             "Name",
             "Author",
-            // vec![
-            //     make_entity_op(OpType::SET, "entity-id-1", "attribute-id", "value 1", 1),
-            //     make_entity_op(OpType::SET, "entity-id-2", "attribute-id", "value 2", 1),
-            //     make_entity_op(OpType::DELETE, "entity-id-2", "attribute-id", "value 2", 1),
-            // ],
             vec![
                 make_entity_op(
                     OpType::SET,
@@ -59,7 +54,7 @@ async fn main() -> Result<(), IndexingError> {
                     "entity-id-2",
                     vec![TestValue {
                         property_id: "attribute-id".to_string(),
-                        value: Some("value 1".to_string()),
+                        value: Some("value 2".to_string()),
                     }],
                 ),
                 make_entity_op(
@@ -175,8 +170,18 @@ fn make_entity_op(op_type: OpType, entity: &str, values: Vec<TestValue>) -> Op {
             property: None,
         },
         OpType::DELETE => Op {
-            r#type: 3,
-            entity: None,
+            r#type: 7, // Unset properties
+            entity: Some(Entity {
+                id: entity.to_string().into_bytes(),
+                values: values
+                    .iter()
+                    .map(|v| Value {
+                        options: None,
+                        property_id: v.property_id.clone().into_bytes(),
+                        value: None,
+                    })
+                    .collect(),
+            }),
             relation: None,
             property: None,
         },

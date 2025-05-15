@@ -99,7 +99,7 @@ impl StorageBackend for PostgresStorage {
 
         // Create a query builder for PostgreSQL
         let mut query_builder: QueryBuilder<Postgres> = QueryBuilder::new(
-                    "INSERT INTO properties (id, entity_id, property_id, space_id, text_value, format_option, unit_option) "
+                    "INSERT INTO values (id, entity_id, property_id, space_id, value, format_option, unit_option) "
                 );
 
         // Start the VALUES section
@@ -118,10 +118,7 @@ impl StorageBackend for PostgresStorage {
 
         query_builder.push(
             " ON CONFLICT (id) DO UPDATE SET
-                        text_value = EXCLUDED.text_value,
-                        boolean_value = EXCLUDED.boolean_value,
-                        number_value = EXCLUDED.number_value,
-                        language_option = EXCLUDED.language_option,
+                        value = EXCLUDED.value,
                         format_option = EXCLUDED.format_option,
                         unit_option = EXCLUDED.unit_option",
         );
@@ -144,7 +141,7 @@ impl StorageBackend for PostgresStorage {
         let ids: Vec<&str> = property_ids.iter().map(|id| id.as_str()).collect();
 
         let result = sqlx::query(
-            "DELETE FROM properties
+            "DELETE FROM values
                      WHERE id IN
                      (SELECT * FROM UNNEST($1::text[]))",
         )
