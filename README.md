@@ -29,7 +29,7 @@ If done correctly you should see logs signaling a successful migration.
 
 ### Running the IPFS cache
 
-The indexers depend on the IPFS cache and don't ever read from IPFS itself. To run the cache populate the `.env` file in the root of this directory.
+The indexers depend on the IPFS cache to handle preprocessing of IPFS contents. To run the cache populate the `.env` file in the root of this directory.
 
 ```sh
 SUBSTREAMS_API_TOKEN=""
