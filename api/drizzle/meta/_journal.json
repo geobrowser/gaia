@@ -50,6 +50,13 @@
       "when": 1747250919195,
       "tag": "0006_light_monster_badoon",
       "breakpoints": true
+    },
+    {
+      "idx": 7,
+      "version": "7",
+      "when": 1747695066667,
+      "tag": "0007_last_randall_flagg",
+      "breakpoints": true
     }
   ]
 }

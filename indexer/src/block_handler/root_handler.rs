@@ -5,7 +5,7 @@ use stream::utils::BlockMetadata;
 use tokio::task;
 
 use crate::models::relations::RelationsModel;
-use crate::models::{entities::EntitiesModel, properties::PropertiesModel};
+use crate::models::{entities::EntitiesModel, properties::ValuesModel};
 use crate::storage::StorageBackend;
 use crate::{cache::PreprocessedEdit, error::IndexingError};
 
@@ -47,15 +47,14 @@ where
                 }
 
                 let (created_properties, deleted_property_ids) =
-                    PropertiesModel::map_edit_to_properties(&edit, &space_id);
-                let write_properties_result = storage.insert_properties(&created_properties).await;
+                    ValuesModel::map_edit_to_values(&edit, &space_id);
+                let write_properties_result = storage.insert_values(&created_properties).await;
 
                 if let Err(write_error) = write_properties_result {
                     println!("Error writing properties {}", write_error);
                 }
 
-                let delete_properties_result =
-                    storage.delete_properties(&deleted_property_ids).await;
+                let delete_properties_result = storage.delete_values(&deleted_property_ids).await;
 
                 if let Err(delete_error) = delete_properties_result {
                     println!("Error deleting properties {}", delete_error);

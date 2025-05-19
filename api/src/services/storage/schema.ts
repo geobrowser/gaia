@@ -30,8 +30,7 @@ export const values = pgTable("values", {
 	entityId: text().notNull(),
 	spaceId: text().notNull(),
 	value: text().notNull(),
-	formatOption: text(),
-	unitOption: text(),
+	languageOption: text(),
 })
 
 export const relations = pgTable("relations", {

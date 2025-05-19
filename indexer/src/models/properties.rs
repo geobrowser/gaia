@@ -1,44 +1,40 @@
 use std::collections::HashMap;
 
-use grc20::pb::ipfsv2::{Edit, Op, OpType, Options};
+use grc20::pb::ipfsv2::{op::Payload, Edit, Op};
 
 #[derive(Clone)]
-pub enum PropertyChangeType {
+pub enum ValueChangeType {
     SET,
     DELETE,
 }
 
 #[derive(Clone)]
-pub struct PropertyOp {
+pub struct ValueOp {
     pub id: String,
-    pub change_type: PropertyChangeType,
+    pub change_type: ValueChangeType,
     pub entity_id: String,
     pub property_id: String,
     pub space_id: String,
-    pub text_value: Option<String>,
-    pub format_option: Option<String>,
-    pub unit_option: Option<String>,
+    pub value: Option<String>,
+    pub language_option: Option<String>,
 }
 
-pub struct PropertiesModel;
+pub struct ValuesModel;
 
-impl PropertiesModel {
-    pub fn map_edit_to_properties(
-        edit: &Edit,
-        space_id: &String,
-    ) -> (Vec<PropertyOp>, Vec<String>) {
-        let mut triple_ops: Vec<PropertyOp> = Vec::new();
+impl ValuesModel {
+    pub fn map_edit_to_values(edit: &Edit, space_id: &String) -> (Vec<ValueOp>, Vec<String>) {
+        let mut triple_ops: Vec<ValueOp> = Vec::new();
 
         for op in &edit.ops {
-            if let Some(triple_op) = property_op_from_op(op, space_id) {
+            if let Some(triple_op) = value_op_from_op(op, space_id) {
                 triple_ops.push(triple_op);
             }
         }
 
-        let squashed = squash_properties(&triple_ops);
-        let (created, deleted): (Vec<PropertyOp>, Vec<PropertyOp>) = squashed
+        let squashed = squash_values(&triple_ops);
+        let (created, deleted): (Vec<ValueOp>, Vec<ValueOp>) = squashed
             .into_iter()
-            .partition(|op| matches!(op.change_type, PropertyChangeType::SET));
+            .partition(|op| matches!(op.change_type, ValueChangeType::SET));
 
         println!("ops len {}", triple_ops.len());
         println!("created len {}", created.len());
@@ -48,7 +44,7 @@ impl PropertiesModel {
     }
 }
 
-fn squash_properties(triple_ops: &Vec<PropertyOp>) -> Vec<PropertyOp> {
+fn squash_values(triple_ops: &Vec<ValueOp>) -> Vec<ValueOp> {
     let mut hash = HashMap::new();
 
     for op in triple_ops {
@@ -60,59 +56,47 @@ fn squash_properties(triple_ops: &Vec<PropertyOp>) -> Vec<PropertyOp> {
     return result;
 }
 
-fn derive_property_id(entity_id: &String, property_id: &String, space_id: &String) -> String {
+fn derive_value_id(entity_id: &String, property_id: &String, space_id: &String) -> String {
     format!("{}:{}:{}", entity_id, property_id, space_id)
 }
 
-fn property_op_from_op(op: &Op, space_id: &String) -> Option<PropertyOp> {
-    if let Ok(op_type) = OpType::try_from(op.r#type) {
-        return match op_type {
-            OpType::UpdateEntity | OpType::CreateEntity => {
-                if let Some(entity) = op.entity.clone() {
-                    if let Ok(entity_id) = String::from_utf8(entity.id) {
-                        for value in &entity.values {
-                            let property_id = String::from_utf8(value.property_id.clone());
+fn value_op_from_op(op: &Op, space_id: &String) -> Option<ValueOp> {
+    if let Some(payload) = &op.payload {
+        return match payload {
+            Payload::CreateEntity(entity) | Payload::UpdateEntity(entity) => {
+                if let Ok(entity_id) = String::from_utf8(entity.id.clone()) {
+                    for value in &entity.values {
+                        let property_id = String::from_utf8(value.property_id.clone());
 
-                            if let Ok(property_id) = property_id {
-                                let triple_value_options =
-                                    &value.options.clone().unwrap_or(Options {
-                                        format: None,
-                                        unit: None,
-                                    });
-
-                                return Some(PropertyOp {
-                                    id: derive_property_id(&entity_id, &property_id, space_id),
-                                    change_type: PropertyChangeType::SET,
-                                    property_id,
-                                    entity_id,
-                                    space_id: space_id.clone(),
-                                    text_value: value.value.clone(),
-                                    unit_option: triple_value_options.unit.clone(),
-                                    format_option: triple_value_options.format.clone(),
-                                });
-                            }
+                        if let Ok(property_id) = property_id {
+                            return Some(ValueOp {
+                                id: derive_value_id(&entity_id, &property_id, space_id),
+                                change_type: ValueChangeType::SET,
+                                property_id,
+                                entity_id,
+                                space_id: space_id.clone(),
+                                value: Some(value.value.clone()),
+                                language_option: None,
+                            });
                         }
                     }
                 }
 
                 return None;
             }
-            OpType::UnsetProperties => {
-                if let Some(entity) = op.entity.clone() {
-                    if let Ok(entity_id) = String::from_utf8(entity.id) {
-                        for value in &entity.values {
-                            if let Ok(property_id) = String::from_utf8(value.property_id.clone()) {
-                                return Some(PropertyOp {
-                                    id: derive_property_id(&entity_id, &property_id, space_id),
-                                    change_type: PropertyChangeType::DELETE,
-                                    property_id,
-                                    entity_id,
-                                    space_id: space_id.clone(),
-                                    text_value: None,
-                                    unit_option: None,
-                                    format_option: None,
-                                });
-                            }
+            Payload::UnsetProperties(entity) => {
+                if let Ok(entity_id) = String::from_utf8(entity.id.clone()) {
+                    for property in &entity.properties {
+                        if let Ok(property_id) = String::from_utf8(property.clone()) {
+                            return Some(ValueOp {
+                                id: derive_value_id(&entity_id, &property_id, space_id),
+                                change_type: ValueChangeType::DELETE,
+                                property_id,
+                                entity_id,
+                                space_id: space_id.clone(),
+                                value: None,
+                                language_option: None,
+                            });
                         }
                     }
                 }
@@ -121,7 +105,7 @@ fn property_op_from_op(op: &Op, space_id: &String) -> Option<PropertyOp> {
             }
             _ => None,
         };
-    };
+    }
 
     None
 }

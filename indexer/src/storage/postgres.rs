@@ -4,7 +4,7 @@ use sqlx::{postgres::PgPoolOptions, Postgres, QueryBuilder};
 
 use crate::models::{
     entities::EntityItem,
-    properties::{PropertyChangeType, PropertyOp},
+    properties::{ValueChangeType, ValueOp},
     relations::RelationItem,
 };
 
@@ -40,20 +40,19 @@ impl PostgresStorage {
         })
     }
 
-    pub async fn get_property(&self, triple_id: &String) -> Result<PropertyOp, StorageError> {
+    pub async fn get_value(&self, triple_id: &String) -> Result<ValueOp, StorageError> {
         let query = sqlx::query!("SELECT * FROM values WHERE id = $1", triple_id)
             .fetch_one(&self.pool)
             .await?;
 
-        Ok(PropertyOp {
+        Ok(ValueOp {
             id: query.id,
             property_id: query.property_id,
             entity_id: query.entity_id,
             space_id: query.space_id,
-            text_value: query.value,
-            format_option: query.format_option,
-            unit_option: query.unit_option,
-            change_type: PropertyChangeType::SET,
+            value: query.value,
+            language_option: query.language_option,
+            change_type: ValueChangeType::SET,
         })
     }
 }
@@ -92,15 +91,15 @@ impl StorageBackend for PostgresStorage {
         Ok(())
     }
 
-    async fn insert_properties(&self, properties: &Vec<PropertyOp>) -> Result<(), StorageError> {
+    async fn insert_values(&self, properties: &Vec<ValueOp>) -> Result<(), StorageError> {
         if properties.is_empty() {
             return Ok(());
         }
 
         // Create a query builder for PostgreSQL
         let mut query_builder: QueryBuilder<Postgres> = QueryBuilder::new(
-                    "INSERT INTO values (id, entity_id, property_id, space_id, value, format_option, unit_option) "
-                );
+            "INSERT INTO values (id, entity_id, property_id, space_id, value, language_option) ",
+        );
 
         // Start the VALUES section
         query_builder.push_values(properties, |mut b, property| {
@@ -111,9 +110,8 @@ impl StorageBackend for PostgresStorage {
             b.push_bind(&property.entity_id);
             b.push_bind(&property.property_id);
             b.push_bind(&property.space_id);
-            b.push_bind(&property.text_value);
-            b.push_bind(&property.format_option);
-            b.push_bind(&property.unit_option);
+            b.push_bind(&property.value);
+            b.push_bind(&property.language_option);
         });
 
         query_builder.push(
@@ -133,7 +131,7 @@ impl StorageBackend for PostgresStorage {
         Ok(())
     }
 
-    async fn delete_properties(&self, property_ids: &Vec<String>) -> Result<(), StorageError> {
+    async fn delete_values(&self, property_ids: &Vec<String>) -> Result<(), StorageError> {
         if property_ids.is_empty() {
             return Ok(());
         }
@@ -174,7 +172,7 @@ impl StorageBackend for PostgresStorage {
             b.push_bind(&relation.to_id);
             b.push_bind(&relation.to_space_id);
             b.push_bind(&relation.type_id);
-            b.push_bind(&relation.index);
+            b.push_bind(&relation.position);
         });
 
         query_builder.push(
