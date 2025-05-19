@@ -19,7 +19,6 @@ type Property {
   id: ID!
   entityId: String!
   valueType: String! # TODO enum/union
-
   entity: Entity
 }
 
@@ -29,7 +28,6 @@ type Value {
   entityId: String!
   spaceId: String!
   value: String
-
   formatOption: String
   unitOption: String
 
@@ -58,4 +56,19 @@ type Relation {
 type Query {
   entities(limit: Int = 100, offset: Int = 0): [Entity]!
   entity(id: String!): Entity
+  # fuzzy search
+  # relation
+  # relations
+  # property
+  # properties
+  # type
+  # types
+  # space
+  # spaces
+  # proposal
+  # proposals
+  # edit
+  # edits
+  # version?
+  # versions?
 }
