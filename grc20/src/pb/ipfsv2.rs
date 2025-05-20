@@ -83,7 +83,7 @@ pub mod op {
         #[prost(message, tag = "4")]
         CreateRelation(super::Relation),
         #[prost(message, tag = "5")]
-        UpdateRelation(super::Relation),
+        UpdateRelation(super::RelationUpdate),
         #[prost(bytes, tag = "6")]
         DeleteRelation(::prost::alloc::vec::Vec<u8>),
         #[prost(message, tag = "7")]
@@ -126,6 +126,28 @@ pub struct Relation {
     #[prost(string, optional, tag = "12")]
     pub position: ::core::option::Option<::prost::alloc::string::String>,
     #[prost(bool, optional, tag = "13")]
+    pub verified: ::core::option::Option<bool>,
+}
+#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RelationUpdate {
+    #[prost(bytes = "vec", tag = "1")]
+    pub relation_id: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "vec", optional, tag = "2")]
+    pub from_space: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
+    #[prost(bytes = "vec", optional, tag = "3")]
+    pub from_property: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
+    #[prost(bytes = "vec", optional, tag = "4")]
+    pub from_version: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
+    #[prost(bytes = "vec", optional, tag = "5")]
+    pub to_space: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
+    #[prost(bytes = "vec", optional, tag = "6")]
+    pub to_property: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
+    #[prost(bytes = "vec", optional, tag = "7")]
+    pub to_version: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
+    #[prost(string, optional, tag = "8")]
+    pub position: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(bool, optional, tag = "9")]
     pub verified: ::core::option::Option<bool>,
 }
 #[derive(serde::Serialize, serde::Deserialize)]

@@ -43,7 +43,7 @@ message Op {
     Entity             update_entity   = 2;
     bytes              delete_entity = 3;
     Relation           create_relation = 4;
-    Relation           update_relation = 5;
+    RelationUpdate     update_relation = 5;
     bytes              delete_relation = 6;
     UnsetProperties    unset_properties = 7;
   }
@@ -68,6 +68,18 @@ message Relation {
   bytes entity = 11;
   optional string position = 12;
   optional bool verified = 13;
+}
+
+message RelationUpdate {
+  bytes relation_id = 1;
+  optional bytes from_space = 2;
+  optional bytes from_property = 3;
+  optional bytes from_version = 4;
+  optional bytes to_space = 5;
+  optional bytes to_property = 6;
+  optional bytes to_version = 7;
+  optional string position = 8;
+  optional bool verified = 9;
 }
 
 message Entity {

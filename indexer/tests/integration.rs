@@ -1,4 +1,4 @@
-use grc20::pb::ipfsv2::{Edit, Entity, Op, OpType, Value};
+use grc20::pb::ipfsv2::{op::Payload, Edit, Entity, Op, UnsetProperties, Value};
 use std::{env, sync::Arc};
 use stream::utils::BlockMetadata;
 
@@ -42,7 +42,7 @@ async fn main() -> Result<(), IndexingError> {
             "Author",
             vec![
                 make_entity_op(
-                    OpType::UpdateEntity,
+                    TestOpType::CREATE,
                     "entity-id-1",
                     vec![TestValue {
                         property_id: "attribute-id".to_string(),
@@ -50,7 +50,7 @@ async fn main() -> Result<(), IndexingError> {
                     }],
                 ),
                 make_entity_op(
-                    OpType::CreateEntity,
+                    TestOpType::UPDATE,
                     "entity-id-2",
                     vec![TestValue {
                         property_id: "attribute-id".to_string(),
@@ -58,7 +58,7 @@ async fn main() -> Result<(), IndexingError> {
                     }],
                 ),
                 make_entity_op(
-                    OpType::UnsetProperties,
+                    TestOpType::UNSET,
                     "entity-id-2",
                     vec![TestValue {
                         property_id: "attribute-id".to_string(),
@@ -132,12 +132,11 @@ async fn main() -> Result<(), IndexingError> {
 
 fn make_edit(id: &str, name: &str, author: &str, ops: Vec<Op>) -> Edit {
     Edit {
-        id: String::from(id),
+        id: String::from(id).into_bytes(),
         name: String::from(name),
-        version: String::from("0.0.1"),
         ops,
-        r#type: 1,
-        authors: vec![String::from(author)],
+        authors: vec![String::from(author).into_bytes()],
+        language: None,
     }
 }
 
@@ -146,40 +145,34 @@ struct TestValue {
     pub value: Option<String>,
 }
 
-// @TODO: Should use optype from pb instead of this manual one
-fn make_entity_op(op_type: OpType, entity: &str, values: Vec<TestValue>) -> Op {
+enum TestOpType {
+    CREATE,
+    UPDATE,
+    UNSET,
+}
+
+fn make_entity_op(op_type: TestOpType, entity: &str, values: Vec<TestValue>) -> Op {
     match op_type {
-        OpType::UpdateEntity | OpType::CreateEntity => Op {
-            r#type: 2, // Update entity
-            entity: Some(Entity {
+        TestOpType::CREATE | TestOpType::UPDATE => Op {
+            payload: Some(Payload::UpdateEntity(Entity {
                 id: entity.to_string().into_bytes(),
                 values: values
                     .iter()
                     .map(|v| Value {
-                        options: None,
                         property_id: v.property_id.clone().into_bytes(),
-                        value: Some(v.value.clone().unwrap()),
+                        value: v.value.clone().unwrap(),
                     })
                     .collect(),
-            }),
-            relation: None,
-            property: None,
+            })),
         },
-        OpType::UnsetProperties => Op {
-            r#type: 7, // Unset properties
-            entity: Some(Entity {
+        TestOpType::UNSET => Op {
+            payload: Some(Payload::UnsetProperties(UnsetProperties {
                 id: entity.to_string().into_bytes(),
-                values: values
+                properties: values
                     .iter()
-                    .map(|v| Value {
-                        options: None,
-                        property_id: v.property_id.clone().into_bytes(),
-                        value: None,
-                    })
+                    .map(|v| v.property_id.clone().into_bytes())
                     .collect(),
-            }),
-            relation: None,
-            property: None,
+            })),
         },
         _ => panic!("Invalid op type for test"),
     }
