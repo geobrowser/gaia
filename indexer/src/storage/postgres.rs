@@ -5,7 +5,7 @@ use sqlx::{postgres::PgPoolOptions, Postgres, QueryBuilder};
 use crate::models::{
     entities::EntityItem,
     properties::{ValueChangeType, ValueOp},
-    relations::RelationItem,
+    relations::{RelationChangeType, RelationItem},
 };
 
 use super::{StorageBackend, StorageError};
@@ -53,6 +53,28 @@ impl PostgresStorage {
             value: query.value,
             language_option: query.language_option,
             change_type: ValueChangeType::SET,
+        })
+    }
+
+    pub async fn get_relation(&self, relation_id: &String) -> Result<RelationItem, StorageError> {
+        let query = sqlx::query!("SELECT * FROM relations WHERE id = $1", relation_id)
+            .fetch_one(&self.pool)
+            .await?;
+
+        Ok(RelationItem {
+            change_type: RelationChangeType::SET,
+            id: query.id,
+            type_id: query.type_id,
+            entity_id: query.entity_id,
+            space_id: query.space_id,
+            from_id: query.from_entity_id,
+            from_space_id: None,
+            from_version_id: None,
+            to_id: query.to_entity_id,
+            to_space_id: query.to_space_id,
+            to_version_id: query.to_version_id,
+            verified: query.verified,
+            position: None,
         })
     }
 }

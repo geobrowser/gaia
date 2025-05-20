@@ -35,12 +35,17 @@ export const values = pgTable("values", {
 
 export const relations = pgTable("relations", {
 	id: text().primaryKey(),
+	entityId: text().notNull(),
 	typeId: text().notNull(),
 	fromEntityId: text().notNull(),
+	fromSpaceId: text(),
+	fromVersionId: text(),
 	toEntityId: text().notNull(),
 	toSpaceId: text(),
-	index: text(),
+	toVersionId: text(),
+	position: text(),
 	spaceId: text().notNull(),
+	verified: boolean(),
 })
 
 export const entityForeignValues = drizzleRelations(entities, ({many}) => ({
@@ -66,6 +71,10 @@ export const relationsEntityRelations = drizzleRelations(relations, ({one}) => (
 	}),
 	typeEntity: one(entities, {
 		fields: [relations.typeId],
+		references: [entities.id],
+	}),
+	entity: one(entities, {
+		fields: [relations.entityId],
 		references: [entities.id],
 	}),
 }))

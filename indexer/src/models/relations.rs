@@ -13,11 +13,14 @@ pub struct RelationItem {
     pub entity_id: String,
     pub type_id: String,
     pub from_id: String,
-    pub from_property_id: Option<String>,
+    pub from_space_id: Option<String>,
+    pub from_version_id: Option<String>,
     pub to_id: String,
     pub to_space_id: Option<String>,
+    pub to_version_id: Option<String>,
     pub position: Option<String>,
     pub space_id: String,
+    pub verified: Option<bool>,
 }
 
 pub struct RelationsModel;
@@ -44,10 +47,6 @@ impl RelationsModel {
                             .to_space
                             .clone()
                             .and_then(|s| String::from_utf8(s).ok());
-                        let from_property = relation
-                            .from_property
-                            .clone()
-                            .and_then(|s| String::from_utf8(s).ok());
 
                         if relation_id.is_ok()
                             && entity_id.is_ok()
@@ -63,9 +62,12 @@ impl RelationsModel {
                                 position: relation.position.clone(),
                                 type_id: type_id.unwrap().to_string(),
                                 from_id: from_id.unwrap().to_string(),
-                                from_property_id: from_property,
+                                from_space_id: None,
+                                from_version_id: None,
                                 to_id: to_id.unwrap().to_string(),
                                 to_space_id: to_space,
+                                to_version_id: None,
+                                verified: None,
                             });
                         }
                     }
@@ -83,7 +85,10 @@ impl RelationsModel {
                                 from_id: String::from(""),
                                 to_id: String::from(""),
                                 to_space_id: None,
-                                from_property_id: None,
+                                from_space_id: None,
+                                from_version_id: None,
+                                to_version_id: None,
+                                verified: None,
                             });
                         }
                     }
