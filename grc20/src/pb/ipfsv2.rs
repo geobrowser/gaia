@@ -10,8 +10,8 @@ pub struct Edit {
     pub ops: ::prost::alloc::vec::Vec<Op>,
     #[prost(bytes = "vec", repeated, tag = "4")]
     pub authors: ::prost::alloc::vec::Vec<::prost::alloc::vec::Vec<u8>>,
-    #[prost(bytes = "vec", tag = "5")]
-    pub language: ::prost::alloc::vec::Vec<u8>,
+    #[prost(bytes = "vec", optional, tag = "5")]
+    pub language: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]

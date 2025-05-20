@@ -7,7 +7,7 @@ message Edit {
   string name = 2;
   repeated Op ops = 3;
   repeated bytes authors = 4;
-  bytes language = 5;
+  optional bytes language = 5;
 }
 
 message ImportEdit {
