@@ -182,24 +182,27 @@ impl StorageBackend for PostgresStorage {
 
         // Create a query builder for PostgreSQL
         let mut query_builder: QueryBuilder<Postgres> = QueryBuilder::new(
-            "INSERT INTO relations (id, space_id, from_entity_id, to_entity_id, to_space_id, type_id, index) ",
+            "INSERT INTO relations (id, space_id, entity_id, from_entity_id, to_entity_id, to_space_id, type_id, position, verified) ",
         );
 
         // Start the VALUES section
         query_builder.push_values(relations, |mut b, relation| {
             b.push_bind(&relation.id);
             b.push_bind(&relation.space_id);
+            b.push_bind(&relation.entity_id);
             b.push_bind(&relation.from_id);
             b.push_bind(&relation.to_id);
             b.push_bind(&relation.to_space_id);
             b.push_bind(&relation.type_id);
             b.push_bind(&relation.position);
+            b.push_bind(&relation.verified);
         });
 
         query_builder.push(
             " ON CONFLICT (id) DO UPDATE SET
                         to_space_id = EXCLUDED.to_space_id,
-                        index = EXCLUDED.index",
+                        position = EXCLUDED.position,
+                        verified = EXCLUDED.verified",
         );
 
         // Execute the query

@@ -1,4 +1,4 @@
-use grc20::pb::ipfsv2::{op::Payload, Edit, Entity, Op, UnsetProperties, Value};
+use grc20::pb::ipfsv2::{op::Payload, Edit, Entity, Op, Relation, UnsetProperties, Value};
 use std::{env, sync::Arc};
 use stream::utils::BlockMetadata;
 
@@ -42,7 +42,7 @@ async fn main() -> Result<(), IndexingError> {
             "Author",
             vec![
                 make_entity_op(
-                    TestOpType::CREATE,
+                    TestEntityOpType::CREATE,
                     "entity-id-1",
                     vec![TestValue {
                         property_id: "attribute-id".to_string(),
@@ -50,7 +50,7 @@ async fn main() -> Result<(), IndexingError> {
                     }],
                 ),
                 make_entity_op(
-                    TestOpType::UPDATE,
+                    TestEntityOpType::UPDATE,
                     "entity-id-2",
                     vec![TestValue {
                         property_id: "attribute-id".to_string(),
@@ -58,12 +58,20 @@ async fn main() -> Result<(), IndexingError> {
                     }],
                 ),
                 make_entity_op(
-                    TestOpType::UNSET,
+                    TestEntityOpType::UNSET,
                     "entity-id-2",
                     vec![TestValue {
                         property_id: "attribute-id".to_string(),
                         value: None,
                     }],
+                ),
+                make_relation_op(
+                    TestRelationOpType::CREATE,
+                    "relation-id-1",
+                    "entity-id-1",
+                    "type-id-1",
+                    "from-entity-1",
+                    "to-entity-1",
                 ),
             ],
         )),
@@ -144,15 +152,15 @@ struct TestValue {
     pub value: Option<String>,
 }
 
-enum TestOpType {
+enum TestEntityOpType {
     CREATE,
     UPDATE,
     UNSET,
 }
 
-fn make_entity_op(op_type: TestOpType, entity: &str, values: Vec<TestValue>) -> Op {
+fn make_entity_op(op_type: TestEntityOpType, entity: &str, values: Vec<TestValue>) -> Op {
     match op_type {
-        TestOpType::CREATE | TestOpType::UPDATE => Op {
+        TestEntityOpType::CREATE | TestEntityOpType::UPDATE => Op {
             payload: Some(Payload::UpdateEntity(Entity {
                 id: entity.to_string().into_bytes(),
                 values: values
@@ -164,7 +172,7 @@ fn make_entity_op(op_type: TestOpType, entity: &str, values: Vec<TestValue>) -> 
                     .collect(),
             })),
         },
-        TestOpType::UNSET => Op {
+        TestEntityOpType::UNSET => Op {
             payload: Some(Payload::UnsetProperties(UnsetProperties {
                 id: entity.to_string().into_bytes(),
                 properties: values
@@ -172,6 +180,55 @@ fn make_entity_op(op_type: TestOpType, entity: &str, values: Vec<TestValue>) -> 
                     .map(|v| v.property_id.clone().into_bytes())
                     .collect(),
             })),
+        },
+    }
+}
+
+enum TestRelationOpType {
+    CREATE,
+    UPDATE,
+    DELETE,
+}
+
+fn make_relation_op(
+    op_type: TestRelationOpType,
+    relation_id: &str,
+    entity_id: &str,
+    type_id: &str,
+    from_entity: &str,
+    to_entity: &str,
+) -> Op {
+    match op_type {
+        TestRelationOpType::CREATE => Op {
+            payload: Some(Payload::CreateRelation(Relation {
+                id: relation_id.to_string().into_bytes(),
+                r#type: type_id.to_string().into_bytes(),
+                entity: entity_id.to_string().into_bytes(),
+                from_entity: from_entity.to_string().into_bytes(),
+                from_space: None,
+                from_version: None,
+                to_entity: to_entity.to_string().into_bytes(),
+                to_space: None,
+                to_version: None,
+                position: None,
+                verified: Some(true),
+            })),
+        },
+        TestRelationOpType::UPDATE => Op {
+            payload: Some(Payload::UpdateRelation(grc20::pb::ipfsv2::RelationUpdate {
+                relation_id: relation_id.to_string().into_bytes(),
+                from_space: None,
+                from_version: None,
+                to_space: None,
+                to_version: None,
+                position: None,
+                verified: Some(true),
+            })),
+        },
+        TestRelationOpType::DELETE => Op {
+            payload: Some(Payload::DeleteRelation(
+                relation_id.to_string().into_bytes(),
+            )),
         },
     }
 }

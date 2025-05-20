@@ -67,7 +67,7 @@ impl RelationsModel {
                                 to_id: to_id.unwrap().to_string(),
                                 to_space_id: to_space,
                                 to_version_id: None,
-                                verified: None,
+                                verified: relation.verified,
                             });
                         }
                     }
