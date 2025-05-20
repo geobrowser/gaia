@@ -39,6 +39,7 @@ where
                 let space_id = preprocessed_edit.space_id;
 
                 // @TODO: transaction with non-blocking writes
+                // @TODO: spawn tasks and join for each mapping
                 let entities = EntitiesModel::map_edit_to_entities(&edit, &block);
                 let result = storage.insert_entities(&entities).await;
 
@@ -60,7 +61,7 @@ where
                     println!("Error deleting properties {}", delete_error);
                 }
 
-                let (created_relations, deleted_relation_ids) =
+                let (created_relations, updated_relations, deleted_relation_ids) =
                     RelationsModel::map_edit_to_relations(&edit, &space_id);
 
                 let write_relations_result = storage.insert_relations(&created_relations).await;
@@ -74,6 +75,8 @@ where
                 if let Err(write_error) = delete_relations_result {
                     println!("Error deleting relations {}", write_error);
                 }
+
+                // @TODO: Delete entities
             }
 
             Ok::<(), IndexingError>(())

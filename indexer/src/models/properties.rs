@@ -31,7 +31,14 @@ impl ValuesModel {
             }
         }
 
+        // A single edit may have multiple CREATE, UPDATE, and UNSET value ops applied
+        // to the same entity + property id. We need to squash them down into a single
+        // op so we can write to the db atomically using the final state of the ops.
+        //
+        // Ordering of these to-be-squashed ops matters. We use what the order is in
+        // the edit.
         let squashed = squash_values(&triple_ops);
+
         let (created, deleted): (Vec<ValueOp>, Vec<ValueOp>) = squashed
             .into_iter()
             .partition(|op| matches!(op.change_type, ValueChangeType::SET));

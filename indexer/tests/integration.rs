@@ -73,6 +73,30 @@ async fn main() -> Result<(), IndexingError> {
                     "from-entity-1",
                     "to-entity-1",
                 ),
+                make_relation_op(
+                    TestRelationOpType::UPDATE,
+                    "relation-id-1",
+                    "entity-id-1",
+                    "type-id-1",
+                    "from-entity-1",
+                    "to-entity-1",
+                ),
+                make_relation_op(
+                    TestRelationOpType::CREATE,
+                    "relation-id-2",
+                    "entity-id-1",
+                    "type-id-1",
+                    "from-entity-1",
+                    "to-entity-1",
+                ),
+                make_relation_op(
+                    TestRelationOpType::DELETE,
+                    "relation-id-2",
+                    "entity-id-1",
+                    "type-id-1",
+                    "from-entity-1",
+                    "to-entity-1",
+                ),
             ],
         )),
         is_errored: false,
@@ -140,13 +164,20 @@ async fn main() -> Result<(), IndexingError> {
             .await
             .unwrap();
 
-        // Should not return the value since it was deleted
         assert_eq!(value.id, "relation-id-1");
         assert_eq!(value.entity_id, "entity-id-1");
         assert_eq!(value.from_id, "from-entity-1");
         assert_eq!(value.to_id, "to-entity-1");
         assert_eq!(value.space_id, "5");
+
+        // Update in edit sets verified to Some(true)
         assert_eq!(value.verified, Some(true));
+    }
+
+    {
+        // Should not return the value since it was deleted
+        let value = storage.get_relation(&"relation-id-2".to_string()).await;
+        assert_eq!(value.is_err(), true);
     }
 
     Ok(())
@@ -226,7 +257,7 @@ fn make_relation_op(
                 to_space: None,
                 to_version: None,
                 position: None,
-                verified: Some(true),
+                verified: None,
             })),
         },
         TestRelationOpType::UPDATE => Op {
