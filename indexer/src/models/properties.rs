@@ -36,10 +36,6 @@ impl ValuesModel {
             .into_iter()
             .partition(|op| matches!(op.change_type, ValueChangeType::SET));
 
-        println!("ops len {}", triple_ops.len());
-        println!("created len {}", created.len());
-        println!("deleted len {}", deleted.len());
-
         return (created, deleted.iter().map(|op| op.id.clone()).collect());
     }
 }

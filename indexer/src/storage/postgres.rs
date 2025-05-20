@@ -117,8 +117,7 @@ impl StorageBackend for PostgresStorage {
         query_builder.push(
             " ON CONFLICT (id) DO UPDATE SET
                         value = EXCLUDED.value,
-                        format_option = EXCLUDED.format_option,
-                        unit_option = EXCLUDED.unit_option",
+                        language_option = EXCLUDED.language_option",
         );
 
         // Execute the query

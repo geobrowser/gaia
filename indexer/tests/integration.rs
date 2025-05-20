@@ -110,21 +110,20 @@ async fn main() -> Result<(), IndexingError> {
     }
 
     {
-        let triple = storage
+        let value = storage
             .get_value(&"entity-id-1:attribute-id:5".to_string())
             .await
             .unwrap();
-        assert_eq!(triple.id, "entity-id-1:attribute-id:5");
+        assert_eq!(value.id, "entity-id-1:attribute-id:5");
     }
 
     {
-        let triple = storage
+        let value = storage
             .get_value(&"entity-id-2:attribute-id:5".to_string())
-            .await
-            .unwrap();
+            .await;
 
-        // @TODO: SHould not exist
-        assert_eq!(triple.id, "entity-id-2:attribute-id:5");
+        // Should not return the value since it was deleted
+        assert_eq!(value.is_err(), true);
     }
 
     Ok(())
@@ -174,6 +173,5 @@ fn make_entity_op(op_type: TestOpType, entity: &str, values: Vec<TestValue>) -> 
                     .collect(),
             })),
         },
-        _ => panic!("Invalid op type for test"),
     }
 }
