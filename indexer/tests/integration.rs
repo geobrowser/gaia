@@ -142,6 +142,11 @@ async fn main() -> Result<(), IndexingError> {
 
         // Should not return the value since it was deleted
         assert_eq!(value.id, "relation-id-1");
+        assert_eq!(value.entity_id, "entity-id-1");
+        assert_eq!(value.from_id, "from-entity-1");
+        assert_eq!(value.to_id, "to-entity-1");
+        assert_eq!(value.space_id, "5");
+        assert_eq!(value.verified, Some(true));
     }
 
     Ok(())
