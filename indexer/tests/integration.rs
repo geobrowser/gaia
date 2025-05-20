@@ -134,6 +134,16 @@ async fn main() -> Result<(), IndexingError> {
         assert_eq!(value.is_err(), true);
     }
 
+    {
+        let value = storage
+            .get_relation(&"relation-id-1".to_string())
+            .await
+            .unwrap();
+
+        // Should not return the value since it was deleted
+        assert_eq!(value.id, "relation-id-1");
+    }
+
     Ok(())
 }
 
