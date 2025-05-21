@@ -3,27 +3,56 @@ use std::collections::HashMap;
 use grc20::pb::ipfsv2::{op::Payload, Edit};
 
 #[derive(Clone)]
-pub enum RelationChangeType {
-    SET,
-    UPDATE,
-    DELETE,
+pub enum RelationItem {
+    Set {
+        id: String,
+        entity_id: String,
+        type_id: String,
+        from_id: String,
+        from_space_id: Option<String>,
+        from_version_id: Option<String>,
+        to_id: String,
+        to_space_id: Option<String>,
+        to_version_id: Option<String>,
+        position: Option<String>,
+        space_id: String,
+        verified: Option<bool>,
+    },
+    Update {
+        id: String,
+        from_space_id: Option<String>,
+        from_version_id: Option<String>,
+        to_space_id: Option<String>,
+        to_version_id: Option<String>,
+        position: Option<String>,
+        space_id: String,
+        verified: Option<bool>,
+    },
+    Unset {
+        id: String,
+        from_space_id: Option<bool>,
+        from_version_id: Option<bool>,
+        to_space_id: Option<bool>,
+        to_version_id: Option<bool>,
+        position: Option<bool>,
+        space_id: String,
+        verified: Option<bool>,
+    },
+    Delete {
+        id: String,
+        space_id: String,
+    },
 }
 
-#[derive(Clone)]
-pub struct RelationItem {
-    pub change_type: RelationChangeType,
-    pub id: String,
-    pub entity_id: String,
-    pub type_id: String,
-    pub from_id: String,
-    pub from_space_id: Option<String>,
-    pub from_version_id: Option<String>,
-    pub to_id: String,
-    pub to_space_id: Option<String>,
-    pub to_version_id: Option<String>,
-    pub position: Option<String>,
-    pub space_id: String,
-    pub verified: Option<bool>,
+impl RelationItem {
+    pub fn id(&self) -> String {
+        match self {
+            RelationItem::Set { id, .. } => id.to_string(),
+            RelationItem::Update { id, .. } => id.to_string(),
+            RelationItem::Unset { id, .. } => id.to_string(),
+            RelationItem::Delete { id, .. } => id.to_string(),
+        }
+    }
 }
 
 pub struct RelationsModel;
@@ -57,8 +86,7 @@ impl RelationsModel {
                             && to_id.is_ok()
                             && type_id.is_ok()
                         {
-                            relations.push(RelationItem {
-                                change_type: RelationChangeType::SET,
+                            relations.push(RelationItem::Set {
                                 id: relation_id.unwrap(),
                                 entity_id: entity_id.unwrap(),
                                 space_id: space_id.clone(),
@@ -76,22 +104,9 @@ impl RelationsModel {
                     }
                     Payload::DeleteRelation(relation_id) => {
                         if let Ok(relation_id) = String::from_utf8(relation_id.clone()) {
-                            relations.push(RelationItem {
-                                change_type: RelationChangeType::DELETE,
+                            relations.push(RelationItem::Delete {
                                 id: relation_id,
                                 space_id: space_id.clone(),
-
-                                // These fields don't matter for a delete
-                                entity_id: String::from(""),
-                                position: None,
-                                type_id: String::from(""),
-                                from_id: String::from(""),
-                                to_id: String::from(""),
-                                to_space_id: None,
-                                from_space_id: None,
-                                from_version_id: None,
-                                to_version_id: None,
-                                verified: None,
                             });
                         }
                     }
@@ -108,8 +123,7 @@ impl RelationsModel {
                             .and_then(|s| String::from_utf8(s).ok());
 
                         if let Ok(relation_id) = String::from_utf8(updated_relation.id.clone()) {
-                            relations.push(RelationItem {
-                                change_type: RelationChangeType::UPDATE,
+                            relations.push(RelationItem::Update {
                                 id: relation_id,
                                 space_id: space_id.clone(),
                                 position: updated_relation.position.clone(),
@@ -118,12 +132,6 @@ impl RelationsModel {
                                 from_space_id: from_space,
                                 from_version_id: None,
                                 to_version_id: None,
-
-                                // These fields don't matter for a delete
-                                entity_id: String::from(""),
-                                type_id: String::from(""),
-                                from_id: String::from(""),
-                                to_id: String::from(""),
                             });
                         }
                     }
@@ -145,10 +153,11 @@ impl RelationsModel {
         let mut delete_relations = Vec::new();
 
         for relation in &squashed {
-            match relation.change_type {
-                RelationChangeType::SET => set_relations.push(relation.clone()),
-                RelationChangeType::UPDATE => update_relations.push(relation.clone()),
-                RelationChangeType::DELETE => delete_relations.push(relation.id.clone()),
+            match relation {
+                RelationItem::Set { .. } => set_relations.push(relation.clone()),
+                RelationItem::Update { .. } => update_relations.push(relation.clone()),
+                RelationItem::Delete { id, .. } => delete_relations.push(id.clone()),
+                RelationItem::Unset { .. } => {}
             }
         }
 
