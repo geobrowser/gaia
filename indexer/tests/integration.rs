@@ -44,10 +44,16 @@ async fn main() -> Result<(), IndexingError> {
                 make_entity_op(
                     TestEntityOpType::CREATE,
                     "entity-id-1",
-                    vec![TestValue {
-                        property_id: "attribute-id".to_string(),
-                        value: Some("value 1".to_string()),
-                    }],
+                    vec![
+                        TestValue {
+                            property_id: "LuBWqZAu6pz54eiJS5mLv8".to_string(),
+                            value: Some("Test entity".to_string()),
+                        },
+                        TestValue {
+                            property_id: "attribute-id".to_string(),
+                            value: Some("value 1".to_string()),
+                        },
+                    ],
                 ),
                 make_entity_op(
                     TestEntityOpType::UPDATE,
@@ -206,7 +212,19 @@ enum TestEntityOpType {
 
 fn make_entity_op(op_type: TestEntityOpType, entity: &str, values: Vec<TestValue>) -> Op {
     match op_type {
-        TestEntityOpType::CREATE | TestEntityOpType::UPDATE => Op {
+        TestEntityOpType::CREATE => Op {
+            payload: Some(Payload::CreateEntity(Entity {
+                id: entity.to_string().into_bytes(),
+                values: values
+                    .iter()
+                    .map(|v| Value {
+                        property_id: v.property_id.clone().into_bytes(),
+                        value: v.value.clone().unwrap(),
+                    })
+                    .collect(),
+            })),
+        },
+        TestEntityOpType::UPDATE => Op {
             payload: Some(Payload::UpdateEntity(Entity {
                 id: entity.to_string().into_bytes(),
                 values: values

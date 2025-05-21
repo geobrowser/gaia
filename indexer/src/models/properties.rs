@@ -26,8 +26,8 @@ impl ValuesModel {
         let mut triple_ops: Vec<ValueOp> = Vec::new();
 
         for op in &edit.ops {
-            if let Some(triple_op) = value_op_from_op(op, space_id) {
-                triple_ops.push(triple_op);
+            for op in value_op_from_op(op, space_id) {
+                triple_ops.push(op);
             }
         }
 
@@ -63,20 +63,22 @@ fn derive_value_id(entity_id: &String, property_id: &String, space_id: &String) 
     format!("{}:{}:{}", entity_id, property_id, space_id)
 }
 
-fn value_op_from_op(op: &Op, space_id: &String) -> Option<ValueOp> {
+fn value_op_from_op(op: &Op, space_id: &String) -> Vec<ValueOp> {
+    let mut values = Vec::new();
+
     if let Some(payload) = &op.payload {
-        return match payload {
+        match payload {
             Payload::CreateEntity(entity) | Payload::UpdateEntity(entity) => {
                 if let Ok(entity_id) = String::from_utf8(entity.id.clone()) {
                     for value in &entity.values {
                         let property_id = String::from_utf8(value.property_id.clone());
 
                         if let Ok(property_id) = property_id {
-                            return Some(ValueOp {
+                            values.push(ValueOp {
                                 id: derive_value_id(&entity_id, &property_id, space_id),
                                 change_type: ValueChangeType::SET,
                                 property_id,
-                                entity_id,
+                                entity_id: entity_id.clone(),
                                 space_id: space_id.clone(),
                                 value: Some(value.value.clone()),
                                 language_option: None,
@@ -84,18 +86,16 @@ fn value_op_from_op(op: &Op, space_id: &String) -> Option<ValueOp> {
                         }
                     }
                 }
-
-                return None;
             }
             Payload::UnsetProperties(entity) => {
                 if let Ok(entity_id) = String::from_utf8(entity.id.clone()) {
                     for property in &entity.properties {
                         if let Ok(property_id) = String::from_utf8(property.clone()) {
-                            return Some(ValueOp {
+                            values.push(ValueOp {
                                 id: derive_value_id(&entity_id, &property_id, space_id),
                                 change_type: ValueChangeType::DELETE,
                                 property_id,
-                                entity_id,
+                                entity_id: entity_id.clone(),
                                 space_id: space_id.clone(),
                                 value: None,
                                 language_option: None,
@@ -103,12 +103,10 @@ fn value_op_from_op(op: &Op, space_id: &String) -> Option<ValueOp> {
                         }
                     }
                 }
-
-                return None;
             }
-            _ => None,
+            _ => {}
         };
     }
 
-    None
+    return values;
 }
