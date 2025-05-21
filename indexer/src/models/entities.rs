@@ -22,7 +22,7 @@ impl EntitiesModel {
         for op in &edit.ops {
             if let Some(payload) = &op.payload {
                 match payload {
-                    Payload::CreateEntity(entity) | Payload::UpdateEntity(entity) => {
+                    Payload::UpdateEntity(entity) => {
                         let entity_id = String::from_utf8(entity.id.clone());
 
                         if let Ok(id) = entity_id {
@@ -56,7 +56,7 @@ impl EntitiesModel {
                             }
                         }
                     }
-                    Payload::UnsetProperties(entity) => {
+                    Payload::UnsetEntityValues(entity) => {
                         let entity_id = String::from_utf8(entity.id.clone());
 
                         if let Ok(id) = entity_id {

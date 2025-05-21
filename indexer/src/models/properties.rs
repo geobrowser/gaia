@@ -68,7 +68,7 @@ fn value_op_from_op(op: &Op, space_id: &String) -> Vec<ValueOp> {
 
     if let Some(payload) = &op.payload {
         match payload {
-            Payload::CreateEntity(entity) | Payload::UpdateEntity(entity) => {
+            Payload::UpdateEntity(entity) => {
                 if let Ok(entity_id) = String::from_utf8(entity.id.clone()) {
                     for value in &entity.values {
                         let property_id = String::from_utf8(value.property_id.clone());
@@ -87,7 +87,7 @@ fn value_op_from_op(op: &Op, space_id: &String) -> Vec<ValueOp> {
                     }
                 }
             }
-            Payload::UnsetProperties(entity) => {
+            Payload::UnsetEntityValues(entity) => {
                 if let Ok(entity_id) = String::from_utf8(entity.id.clone()) {
                     for property in &entity.properties {
                         if let Ok(property_id) = String::from_utf8(property.clone()) {

@@ -1,4 +1,4 @@
-use grc20::pb::ipfsv2::{op::Payload, Edit, Entity, Op, Relation, UnsetProperties, Value};
+use grc20::pb::ipfsv2::{op::Payload, Edit, Entity, Op, Relation, UnsetEntityValues, Value};
 use std::{env, sync::Arc};
 use stream::utils::BlockMetadata;
 
@@ -42,7 +42,7 @@ async fn main() -> Result<(), IndexingError> {
             "Author",
             vec![
                 make_entity_op(
-                    TestEntityOpType::CREATE,
+                    TestEntityOpType::UPDATE,
                     "entity-id-1",
                     vec![
                         TestValue {
@@ -205,25 +205,12 @@ struct TestValue {
 }
 
 enum TestEntityOpType {
-    CREATE,
     UPDATE,
     UNSET,
 }
 
 fn make_entity_op(op_type: TestEntityOpType, entity: &str, values: Vec<TestValue>) -> Op {
     match op_type {
-        TestEntityOpType::CREATE => Op {
-            payload: Some(Payload::CreateEntity(Entity {
-                id: entity.to_string().into_bytes(),
-                values: values
-                    .iter()
-                    .map(|v| Value {
-                        property_id: v.property_id.clone().into_bytes(),
-                        value: v.value.clone().unwrap(),
-                    })
-                    .collect(),
-            })),
-        },
         TestEntityOpType::UPDATE => Op {
             payload: Some(Payload::UpdateEntity(Entity {
                 id: entity.to_string().into_bytes(),
@@ -237,7 +224,7 @@ fn make_entity_op(op_type: TestEntityOpType, entity: &str, values: Vec<TestValue
             })),
         },
         TestEntityOpType::UNSET => Op {
-            payload: Some(Payload::UnsetProperties(UnsetProperties {
+            payload: Some(Payload::UnsetEntityValues(UnsetEntityValues {
                 id: entity.to_string().into_bytes(),
                 properties: values
                     .iter()
@@ -280,7 +267,7 @@ fn make_relation_op(
         },
         TestRelationOpType::UPDATE => Op {
             payload: Some(Payload::UpdateRelation(grc20::pb::ipfsv2::RelationUpdate {
-                relation_id: relation_id.to_string().into_bytes(),
+                id: relation_id.to_string().into_bytes(),
                 from_space: None,
                 from_version: None,
                 to_space: None,

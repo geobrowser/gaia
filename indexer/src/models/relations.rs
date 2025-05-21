@@ -107,9 +107,7 @@ impl RelationsModel {
                             .clone()
                             .and_then(|s| String::from_utf8(s).ok());
 
-                        if let Ok(relation_id) =
-                            String::from_utf8(updated_relation.relation_id.clone())
-                        {
+                        if let Ok(relation_id) = String::from_utf8(updated_relation.id.clone()) {
                             relations.push(RelationItem {
                                 change_type: RelationChangeType::UPDATE,
                                 id: relation_id,
