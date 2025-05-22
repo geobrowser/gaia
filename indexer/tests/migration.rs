@@ -26,8 +26,6 @@ impl TestIndexer {
     }
 }
 
-// @TODO: Different test for the cache preprocessing
-
 #[tokio::test]
 async fn main() -> Result<(), IndexingError> {
     dotenv().ok();
