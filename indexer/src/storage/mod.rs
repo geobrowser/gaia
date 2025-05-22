@@ -18,5 +18,6 @@ pub trait StorageBackend: Send + Sync {
     async fn insert_values(&self, properties: &Vec<ValueOp>) -> Result<(), StorageError>;
     async fn delete_values(&self, property_ids: &Vec<String>) -> Result<(), StorageError>;
     async fn insert_relations(&self, relations: &Vec<RelationItem>) -> Result<(), StorageError>;
+    async fn update_relations(&self, relations: &Vec<RelationItem>) -> Result<(), StorageError>;
     async fn delete_relations(&self, relation_ids: &Vec<String>) -> Result<(), StorageError>;
 }

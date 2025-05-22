@@ -45,12 +45,102 @@ pub enum RelationItem {
 }
 
 impl RelationItem {
-    pub fn id(&self) -> String {
+    pub fn id(&self) -> &str {
         match self {
-            RelationItem::Set { id, .. } => id.to_string(),
-            RelationItem::Update { id, .. } => id.to_string(),
-            RelationItem::Unset { id, .. } => id.to_string(),
-            RelationItem::Delete { id, .. } => id.to_string(),
+            RelationItem::Set { id, .. } => id,
+            RelationItem::Update { id, .. } => id,
+            RelationItem::Unset { id, .. } => id,
+            RelationItem::Delete { id, .. } => id,
+        }
+    }
+
+    pub fn entity_id(&self) -> Option<&str> {
+        match self {
+            RelationItem::Set { entity_id, .. } => Some(entity_id),
+            _ => None,
+        }
+    }
+
+    pub fn type_id(&self) -> Option<&str> {
+        match self {
+            RelationItem::Set { type_id, .. } => Some(type_id),
+            _ => None,
+        }
+    }
+
+    pub fn from_id(&self) -> Option<&str> {
+        match self {
+            RelationItem::Set { from_id, .. } => Some(from_id),
+            _ => None,
+        }
+    }
+
+    pub fn from_space_id(&self) -> Option<&str> {
+        match self {
+            RelationItem::Set { from_space_id, .. } => from_space_id.as_deref(),
+            RelationItem::Update { from_space_id, .. } => from_space_id.as_deref(),
+            _ => None,
+        }
+    }
+
+    pub fn from_version_id(&self) -> Option<&str> {
+        match self {
+            RelationItem::Set {
+                from_version_id, ..
+            } => from_version_id.as_deref(),
+            RelationItem::Update {
+                from_version_id, ..
+            } => from_version_id.as_deref(),
+            _ => None,
+        }
+    }
+
+    pub fn to_id(&self) -> Option<&str> {
+        match self {
+            RelationItem::Set { to_id, .. } => Some(to_id),
+            _ => None,
+        }
+    }
+
+    pub fn to_space_id(&self) -> Option<&str> {
+        match self {
+            RelationItem::Set { to_space_id, .. } => to_space_id.as_deref(),
+            RelationItem::Update { to_space_id, .. } => to_space_id.as_deref(),
+            _ => None,
+        }
+    }
+
+    pub fn to_version_id(&self) -> Option<&str> {
+        match self {
+            RelationItem::Set { to_version_id, .. } => to_version_id.as_deref(),
+            RelationItem::Update { to_version_id, .. } => to_version_id.as_deref(),
+            _ => None,
+        }
+    }
+
+    pub fn position(&self) -> Option<&str> {
+        match self {
+            RelationItem::Set { position, .. } => position.as_deref(),
+            RelationItem::Update { position, .. } => position.as_deref(),
+            _ => None,
+        }
+    }
+
+    pub fn space_id(&self) -> &str {
+        match self {
+            RelationItem::Set { space_id, .. } => space_id,
+            RelationItem::Update { space_id, .. } => space_id,
+            RelationItem::Unset { space_id, .. } => space_id,
+            RelationItem::Delete { space_id, .. } => space_id,
+        }
+    }
+
+    pub fn verified(&self) -> Option<bool> {
+        match self {
+            RelationItem::Set { verified, .. } => *verified,
+            RelationItem::Update { verified, .. } => *verified,
+            RelationItem::Unset { verified, .. } => *verified,
+            _ => None,
         }
     }
 }
@@ -169,68 +259,238 @@ fn squash_relations(relation_ops: &Vec<RelationItem>) -> Vec<RelationItem> {
     let mut hash: HashMap<String, RelationItem> = HashMap::new();
 
     for op in relation_ops {
-        let seen = hash.get(&op.id);
-
+        let seen = hash.get(op.id());
         if let Some(existing) = seen {
-            match (existing.change_type.clone(), op.change_type.clone()) {
-                // create -> create: Overwrite with 2nd create
-                (RelationChangeType::SET, RelationChangeType::SET) => {
-                    hash.insert(op.id.clone(), op.clone());
-                }
-                // create -> update: Attempt to merge
-                (RelationChangeType::SET, RelationChangeType::UPDATE) => {
-                    let mut merged = existing.clone();
-                    merged.from_space_id = op.from_space_id.clone();
-                    merged.from_version_id = op.from_version_id.clone();
-                    merged.to_space_id = op.to_space_id.clone();
-                    merged.to_version_id = op.to_version_id.clone();
-                    merged.position = op.position.clone();
-                    merged.verified = op.verified;
-                    hash.insert(op.id.clone(), merged);
-                }
-                // create -> delete: Overwrite with delete
-                (RelationChangeType::SET, RelationChangeType::DELETE) => {
-                    hash.insert(op.id.clone(), op.clone());
-                }
-                // update -> create: Overwrite with create
-                (RelationChangeType::UPDATE, RelationChangeType::SET) => {
-                    hash.insert(op.id.clone(), op.clone());
-                }
-                // update -> delete: Overwrite with delete
-                (RelationChangeType::UPDATE, RelationChangeType::DELETE) => {
-                    hash.insert(op.id.clone(), op.clone());
-                }
-                (RelationChangeType::UPDATE, RelationChangeType::UPDATE) => {
-                    let mut merged = existing.clone();
-                    merged.from_space_id = op.from_space_id.clone();
-                    merged.from_version_id = op.from_version_id.clone();
-                    merged.to_space_id = op.to_space_id.clone();
-                    merged.to_version_id = op.to_version_id.clone();
-                    merged.position = op.position.clone();
-                    merged.verified = op.verified;
-                    hash.insert(op.id.clone(), merged);
-                }
-                // delete -> create: Overwrite with create
-                (RelationChangeType::DELETE, RelationChangeType::SET) => {
-                    hash.insert(op.id.clone(), op.clone());
-                }
+            let merged = match (existing.clone(), op.clone()) {
+                // create -> create: Overwrite with 2nd create enum
+                (RelationItem::Set { .. }, RelationItem::Set { .. }) => op.clone(),
 
-                // delete -> update: Overwrite with update
-                (RelationChangeType::DELETE, RelationChangeType::UPDATE) => {
-                    // This is technically an error case as we can't update a deleted item
-                    // But the requirement says to overwrite with update
-                    hash.insert(op.id.clone(), op.clone());
-                }
+                // create -> update: Attempt to merge optional fields into a create enum
+                (
+                    RelationItem::Set {
+                        id,
+                        entity_id,
+                        type_id,
+                        from_id,
+                        to_id,
+                        from_space_id: e_from_space_id,
+                        from_version_id: e_from_version_id,
+                        to_space_id: e_to_space_id,
+                        to_version_id: e_to_version_id,
+                        position: e_position,
+                        verified: e_verified,
+                        ..
+                    },
+                    RelationItem::Update {
+                        from_space_id: u_from_space_id,
+                        from_version_id: u_from_version_id,
+                        to_space_id: u_to_space_id,
+                        to_version_id: u_to_version_id,
+                        position: u_position,
+                        space_id: u_space_id,
+                        verified: u_verified,
+                        ..
+                    },
+                ) => RelationItem::Set {
+                    id,
+                    entity_id,
+                    type_id,
+                    from_id,
+                    to_id,
+                    from_space_id: u_from_space_id.or(e_from_space_id),
+                    from_version_id: u_from_version_id.or(e_from_version_id),
+                    to_space_id: u_to_space_id.or(e_to_space_id),
+                    to_version_id: u_to_version_id.or(e_to_version_id),
+                    position: u_position.or(e_position),
+                    space_id: u_space_id,
+                    verified: u_verified.or(e_verified),
+                },
 
-                // delete -> delete: Skip (to not write to memory again)
-                (RelationChangeType::DELETE, RelationChangeType::DELETE) => {
-                    // Do nothing - keep the existing delete
-                }
-            }
+                // create -> delete: Overwrite with delete enum
+                (RelationItem::Set { .. }, RelationItem::Delete { .. }) => op.clone(),
+
+                // create -> unset: Attempt to merge optional fields into create enum
+                (
+                    RelationItem::Set {
+                        id,
+                        entity_id,
+                        type_id,
+                        from_id,
+                        to_id,
+                        from_space_id: e_from_space_id,
+                        from_version_id: e_from_version_id,
+                        to_space_id: e_to_space_id,
+                        to_version_id: e_to_version_id,
+                        position: e_position,
+                        verified: e_verified,
+                        ..
+                    },
+                    RelationItem::Unset {
+                        from_space_id: u_from_space_id,
+                        from_version_id: u_from_version_id,
+                        to_space_id: u_to_space_id,
+                        to_version_id: u_to_version_id,
+                        position: u_position,
+                        space_id: u_space_id,
+                        verified: u_verified,
+                        ..
+                    },
+                ) => RelationItem::Set {
+                    id,
+                    entity_id,
+                    type_id,
+                    from_id,
+                    to_id,
+                    from_space_id: if u_from_space_id == Some(true) {
+                        None
+                    } else {
+                        e_from_space_id
+                    },
+                    from_version_id: if u_from_version_id == Some(true) {
+                        None
+                    } else {
+                        e_from_version_id
+                    },
+                    to_space_id: if u_to_space_id == Some(true) {
+                        None
+                    } else {
+                        e_to_space_id
+                    },
+                    to_version_id: if u_to_version_id == Some(true) {
+                        None
+                    } else {
+                        e_to_version_id
+                    },
+                    position: if u_position == Some(true) {
+                        None
+                    } else {
+                        e_position
+                    },
+                    space_id: u_space_id,
+                    verified: if u_verified == Some(true) {
+                        None
+                    } else {
+                        e_verified
+                    },
+                },
+
+                // update -> create: Overwrite with create enum
+                (RelationItem::Update { .. }, RelationItem::Set { .. }) => op.clone(),
+
+                // update -> update: Attempt to merge optional fields into update enum
+                (
+                    RelationItem::Update {
+                        id,
+                        from_space_id: e_from_space_id,
+                        from_version_id: e_from_version_id,
+                        to_space_id: e_to_space_id,
+                        to_version_id: e_to_version_id,
+                        position: e_position,
+                        verified: e_verified,
+                        ..
+                    },
+                    RelationItem::Update {
+                        from_space_id: u_from_space_id,
+                        from_version_id: u_from_version_id,
+                        to_space_id: u_to_space_id,
+                        to_version_id: u_to_version_id,
+                        position: u_position,
+                        space_id: u_space_id,
+                        verified: u_verified,
+                        ..
+                    },
+                ) => RelationItem::Update {
+                    id,
+                    from_space_id: u_from_space_id.or(e_from_space_id),
+                    from_version_id: u_from_version_id.or(e_from_version_id),
+                    to_space_id: u_to_space_id.or(e_to_space_id),
+                    to_version_id: u_to_version_id.or(e_to_version_id),
+                    position: u_position.or(e_position),
+                    space_id: u_space_id,
+                    verified: u_verified.or(e_verified),
+                },
+
+                // update -> delete: Overwrite with delete enum
+                (RelationItem::Update { .. }, RelationItem::Delete { .. }) => op.clone(),
+
+                // update -> unset: Attempt to merge optional fields into update enum
+                (
+                    RelationItem::Update {
+                        id,
+                        from_space_id: e_from_space_id,
+                        from_version_id: e_from_version_id,
+                        to_space_id: e_to_space_id,
+                        to_version_id: e_to_version_id,
+                        position: e_position,
+                        verified: e_verified,
+                        ..
+                    },
+                    RelationItem::Unset {
+                        from_space_id: u_from_space_id,
+                        from_version_id: u_from_version_id,
+                        to_space_id: u_to_space_id,
+                        to_version_id: u_to_version_id,
+                        position: u_position,
+                        space_id: u_space_id,
+                        verified: u_verified,
+                        ..
+                    },
+                ) => RelationItem::Update {
+                    id,
+                    from_space_id: if u_from_space_id == Some(true) {
+                        None
+                    } else {
+                        e_from_space_id
+                    },
+                    from_version_id: if u_from_version_id == Some(true) {
+                        None
+                    } else {
+                        e_from_version_id
+                    },
+                    to_space_id: if u_to_space_id == Some(true) {
+                        None
+                    } else {
+                        e_to_space_id
+                    },
+                    to_version_id: if u_to_version_id == Some(true) {
+                        None
+                    } else {
+                        e_to_version_id
+                    },
+                    position: if u_position == Some(true) {
+                        None
+                    } else {
+                        e_position
+                    },
+                    space_id: u_space_id,
+                    verified: if u_verified == Some(true) {
+                        None
+                    } else {
+                        e_verified
+                    },
+                },
+
+                // delete -> create: Overwrite with create enum
+                (RelationItem::Delete { .. }, RelationItem::Set { .. }) => op.clone(),
+
+                // delete -> update: Overwrite with update enum
+                (RelationItem::Delete { .. }, RelationItem::Update { .. }) => op.clone(),
+
+                // delete -> unset: Keep delete enum (unset on deleted item is no-op)
+                (RelationItem::Delete { .. }, RelationItem::Unset { .. }) => existing.clone(),
+
+                // delete -> delete: Skip (keep existing delete)
+                (RelationItem::Delete { .. }, RelationItem::Delete { .. }) => existing.clone(),
+
+                // Handle any remaining combinations (shouldn't occur with proper enum design)
+                _ => op.clone(),
+            };
+
+            hash.insert(op.id().to_string(), merged);
         } else {
-            hash.insert(op.id.clone(), op.clone());
+            hash.insert(op.id().to_string(), op.clone());
         }
     }
 
-    return hash.into_values().collect();
+    hash.into_values().collect()
 }

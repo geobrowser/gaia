@@ -5,7 +5,7 @@ use sqlx::{postgres::PgPoolOptions, Postgres, QueryBuilder};
 use crate::models::{
     entities::EntityItem,
     properties::{ValueChangeType, ValueOp},
-    relations::{RelationChangeType, RelationItem},
+    relations::RelationItem,
 };
 
 use super::{StorageBackend, StorageError};
@@ -61,8 +61,7 @@ impl PostgresStorage {
             .fetch_one(&self.pool)
             .await?;
 
-        Ok(RelationItem {
-            change_type: RelationChangeType::SET,
+        Ok(RelationItem::Set {
             id: query.id,
             type_id: query.type_id,
             entity_id: query.entity_id,
@@ -187,15 +186,59 @@ impl StorageBackend for PostgresStorage {
 
         // Start the VALUES section
         query_builder.push_values(relations, |mut b, relation| {
-            b.push_bind(&relation.id);
-            b.push_bind(&relation.space_id);
-            b.push_bind(&relation.entity_id);
-            b.push_bind(&relation.from_id);
-            b.push_bind(&relation.to_id);
-            b.push_bind(&relation.to_space_id);
-            b.push_bind(&relation.type_id);
-            b.push_bind(&relation.position);
-            b.push_bind(&relation.verified);
+            b.push_bind(relation.id());
+            b.push_bind(relation.space_id());
+            b.push_bind(relation.entity_id().unwrap());
+            b.push_bind(relation.from_id().unwrap());
+            b.push_bind(relation.to_id().unwrap());
+            b.push_bind(relation.to_space_id());
+            b.push_bind(relation.type_id().unwrap());
+            b.push_bind(relation.position());
+            b.push_bind(relation.verified());
+        });
+
+        query_builder.push(
+            " ON CONFLICT (id) DO UPDATE SET
+                        to_space_id = EXCLUDED.to_space_id,
+                        position = EXCLUDED.position,
+                        verified = EXCLUDED.verified",
+        );
+
+        // Execute the query
+        let result = query_builder.build().execute(&self.pool).await;
+
+        if let Err(error) = result {
+            println!("Error writing relations {}", error);
+        }
+
+        Ok(())
+    }
+
+    async fn update_relations(&self, relations: &Vec<RelationItem>) -> Result<(), StorageError> {
+        if relations.is_empty() {
+            return Ok(());
+        }
+
+        // @TODO:
+        // This is tricky since we only want to update if the values are actually set,
+        // not if they're None
+
+        // Create a query builder for PostgreSQL
+        let mut query_builder: QueryBuilder<Postgres> = QueryBuilder::new(
+            "INSERT INTO relations (id, space_id, entity_id, from_entity_id, to_entity_id, to_space_id, type_id, position, verified) ",
+        );
+
+        // Start the VALUES section
+        query_builder.push_values(relations, |mut b, relation| {
+            b.push_bind(relation.id());
+            b.push_bind(relation.space_id());
+            b.push_bind(relation.entity_id());
+            b.push_bind(relation.from_id());
+            b.push_bind(relation.to_id());
+            b.push_bind(relation.to_space_id());
+            b.push_bind(relation.type_id());
+            b.push_bind(relation.position());
+            b.push_bind(relation.verified());
         });
 
         query_builder.push(
