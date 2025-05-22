@@ -5,7 +5,7 @@ use sqlx::{postgres::PgPoolOptions, Postgres, QueryBuilder};
 use crate::models::{
     entities::EntityItem,
     properties::{ValueChangeType, ValueOp},
-    relations::RelationItem,
+    relations::{RelationItem, SetRelationItem, UpdateRelationItem},
 };
 
 use super::{StorageBackend, StorageError};
@@ -56,12 +56,15 @@ impl PostgresStorage {
         })
     }
 
-    pub async fn get_relation(&self, relation_id: &String) -> Result<RelationItem, StorageError> {
+    pub async fn get_relation(
+        &self,
+        relation_id: &String,
+    ) -> Result<SetRelationItem, StorageError> {
         let query = sqlx::query!("SELECT * FROM relations WHERE id = $1", relation_id)
             .fetch_one(&self.pool)
             .await?;
 
-        Ok(RelationItem::Set {
+        Ok(SetRelationItem {
             id: query.id,
             type_id: query.type_id,
             entity_id: query.entity_id,
@@ -151,7 +154,11 @@ impl StorageBackend for PostgresStorage {
         Ok(())
     }
 
-    async fn delete_values(&self, property_ids: &Vec<String>) -> Result<(), StorageError> {
+    async fn delete_values(
+        &self,
+        property_ids: &Vec<String>,
+        space_id: &String,
+    ) -> Result<(), StorageError> {
         if property_ids.is_empty() {
             return Ok(());
         }
@@ -160,9 +167,10 @@ impl StorageBackend for PostgresStorage {
 
         let result = sqlx::query(
             "DELETE FROM values
-                     WHERE id IN
-                     (SELECT * FROM UNNEST($1::text[]))",
+                     WHERE space_id = $1 AND id IN
+                     (SELECT * FROM UNNEST($2::text[]))",
         )
+        .bind(space_id)
         .bind(&ids)
         .execute(&self.pool)
         .await;
@@ -174,7 +182,7 @@ impl StorageBackend for PostgresStorage {
         Ok(())
     }
 
-    async fn insert_relations(&self, relations: &Vec<RelationItem>) -> Result<(), StorageError> {
+    async fn insert_relations(&self, relations: &Vec<SetRelationItem>) -> Result<(), StorageError> {
         if relations.is_empty() {
             return Ok(());
         }
@@ -186,15 +194,15 @@ impl StorageBackend for PostgresStorage {
 
         // Start the VALUES section
         query_builder.push_values(relations, |mut b, relation| {
-            b.push_bind(relation.id());
-            b.push_bind(relation.space_id());
-            b.push_bind(relation.entity_id().unwrap());
-            b.push_bind(relation.from_id().unwrap());
-            b.push_bind(relation.to_id().unwrap());
-            b.push_bind(relation.to_space_id());
-            b.push_bind(relation.type_id().unwrap());
-            b.push_bind(relation.position());
-            b.push_bind(relation.verified());
+            b.push_bind(&relation.id);
+            b.push_bind(&relation.space_id);
+            b.push_bind(&relation.entity_id);
+            b.push_bind(&relation.from_id);
+            b.push_bind(&relation.to_id);
+            b.push_bind(&relation.to_space_id);
+            b.push_bind(&relation.type_id);
+            b.push_bind(&relation.position);
+            b.push_bind(&relation.verified);
         });
 
         query_builder.push(
@@ -214,7 +222,10 @@ impl StorageBackend for PostgresStorage {
         Ok(())
     }
 
-    async fn update_relations(&self, relations: &Vec<RelationItem>) -> Result<(), StorageError> {
+    async fn update_relations(
+        &self,
+        relations: &Vec<UpdateRelationItem>,
+    ) -> Result<(), StorageError> {
         if relations.is_empty() {
             return Ok(());
         }
@@ -225,28 +236,17 @@ impl StorageBackend for PostgresStorage {
 
         // Create a query builder for PostgreSQL
         let mut query_builder: QueryBuilder<Postgres> = QueryBuilder::new(
-            "INSERT INTO relations (id, space_id, entity_id, from_entity_id, to_entity_id, to_space_id, type_id, position, verified) ",
+            "UPDATE relations (id, from_space_id, to_space_id, position, verified) ",
         );
 
         // Start the VALUES section
         query_builder.push_values(relations, |mut b, relation| {
-            b.push_bind(relation.id());
-            b.push_bind(relation.space_id());
-            b.push_bind(relation.entity_id());
-            b.push_bind(relation.from_id());
-            b.push_bind(relation.to_id());
-            b.push_bind(relation.to_space_id());
-            b.push_bind(relation.type_id());
-            b.push_bind(relation.position());
-            b.push_bind(relation.verified());
+            b.push_bind(&relation.id);
+            b.push_bind(&relation.from_space_id);
+            b.push_bind(&relation.to_space_id);
+            b.push_bind(&relation.position);
+            b.push_bind(&relation.verified);
         });
-
-        query_builder.push(
-            " ON CONFLICT (id) DO UPDATE SET
-                        to_space_id = EXCLUDED.to_space_id,
-                        position = EXCLUDED.position,
-                        verified = EXCLUDED.verified",
-        );
 
         // Execute the query
         let result = query_builder.build().execute(&self.pool).await;
@@ -258,7 +258,11 @@ impl StorageBackend for PostgresStorage {
         Ok(())
     }
 
-    async fn delete_relations(&self, relation_ids: &Vec<String>) -> Result<(), StorageError> {
+    async fn delete_relations(
+        &self,
+        relation_ids: &Vec<String>,
+        space_id: &String,
+    ) -> Result<(), StorageError> {
         if relation_ids.is_empty() {
             return Ok(());
         }
@@ -267,9 +271,10 @@ impl StorageBackend for PostgresStorage {
 
         let result = sqlx::query(
             "DELETE FROM relations
-                     WHERE id IN
-                     (SELECT * FROM UNNEST($1::text[]))",
+                     WHERE space_id = $1 AND id IN
+                     (SELECT * FROM UNNEST($2::text[]))",
         )
+        .bind(space_id)
         .bind(&ids)
         .execute(&self.pool)
         .await;

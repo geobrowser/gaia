@@ -4,7 +4,11 @@ pub mod postgres;
 
 use thiserror::Error;
 
-use crate::models::{entities::EntityItem, properties::ValueOp, relations::RelationItem};
+use crate::models::{
+    entities::EntityItem,
+    properties::ValueOp,
+    relations::{RelationItem, SetRelationItem, UpdateRelationItem},
+};
 
 #[derive(Error, Debug)]
 pub enum StorageError {
@@ -16,8 +20,19 @@ pub enum StorageError {
 pub trait StorageBackend: Send + Sync {
     async fn insert_entities(&self, entities: &Vec<EntityItem>) -> Result<(), StorageError>;
     async fn insert_values(&self, properties: &Vec<ValueOp>) -> Result<(), StorageError>;
-    async fn delete_values(&self, property_ids: &Vec<String>) -> Result<(), StorageError>;
-    async fn insert_relations(&self, relations: &Vec<RelationItem>) -> Result<(), StorageError>;
-    async fn update_relations(&self, relations: &Vec<RelationItem>) -> Result<(), StorageError>;
-    async fn delete_relations(&self, relation_ids: &Vec<String>) -> Result<(), StorageError>;
+    async fn delete_values(
+        &self,
+        property_ids: &Vec<String>,
+        space_id: &String,
+    ) -> Result<(), StorageError>;
+    async fn insert_relations(&self, relations: &Vec<SetRelationItem>) -> Result<(), StorageError>;
+    async fn update_relations(
+        &self,
+        relations: &Vec<UpdateRelationItem>,
+    ) -> Result<(), StorageError>;
+    async fn delete_relations(
+        &self,
+        relation_ids: &Vec<String>,
+        space_id: &String,
+    ) -> Result<(), StorageError>;
 }

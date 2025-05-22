@@ -55,13 +55,14 @@ where
                     println!("Error writing properties {}", write_error);
                 }
 
-                let delete_properties_result = storage.delete_values(&deleted_values).await;
+                let delete_properties_result =
+                    storage.delete_values(&deleted_values, &space_id).await;
 
                 if let Err(delete_error) = delete_properties_result {
                     println!("Error deleting properties {}", delete_error);
                 }
 
-                let (created_relations, updated_relations, deleted_relation_ids) =
+                let (created_relations, updated_relations, unset_relations, deleted_relation_ids) =
                     RelationsModel::map_edit_to_relations(&edit, &space_id);
 
                 let write_relations_result = storage.insert_relations(&created_relations).await;
@@ -70,14 +71,13 @@ where
                     println!("Error writing relations {}", write_error);
                 }
 
-                let delete_relations_result = storage.delete_relations(&deleted_relation_ids).await;
+                let delete_relations_result = storage
+                    .delete_relations(&deleted_relation_ids, &space_id)
+                    .await;
 
                 if let Err(write_error) = delete_relations_result {
                     println!("Error deleting relations {}", write_error);
                 }
-
-                // @TODO: Delete entities
-                // We can filter out any writes for entities that are also deleted in the same edit
             }
 
             Ok::<(), IndexingError>(())
