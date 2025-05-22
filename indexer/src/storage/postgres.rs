@@ -5,7 +5,7 @@ use sqlx::{postgres::PgPoolOptions, Postgres, QueryBuilder};
 use crate::models::{
     entities::EntityItem,
     properties::{ValueChangeType, ValueOp},
-    relations::{SetRelationItem, UpdateRelationItem},
+    relations::{SetRelationItem, UnsetRelationItem, UpdateRelationItem},
 };
 
 use super::{StorageBackend, StorageError};
@@ -144,12 +144,7 @@ impl StorageBackend for PostgresStorage {
                         language_option = EXCLUDED.language_option",
         );
 
-        // Execute the query
-        let result = query_builder.build().execute(&self.pool).await;
-
-        if let Err(error) = result {
-            println!("Error writing properties {}", error);
-        }
+        query_builder.build().execute(&self.pool).await?;
 
         Ok(())
     }
@@ -165,7 +160,7 @@ impl StorageBackend for PostgresStorage {
 
         let ids: Vec<&str> = property_ids.iter().map(|id| id.as_str()).collect();
 
-        let result = sqlx::query(
+        sqlx::query(
             "DELETE FROM values
                      WHERE space_id = $1 AND id IN
                      (SELECT * FROM UNNEST($2::text[]))",
@@ -173,11 +168,7 @@ impl StorageBackend for PostgresStorage {
         .bind(space_id)
         .bind(&ids)
         .execute(&self.pool)
-        .await;
-
-        if let Err(error) = result {
-            println!("Error deleting properties {}", error);
-        }
+        .await?;
 
         Ok(())
     }
@@ -213,11 +204,7 @@ impl StorageBackend for PostgresStorage {
         );
 
         // Execute the query
-        let result = query_builder.build().execute(&self.pool).await;
-
-        if let Err(error) = result {
-            println!("Error writing relations {}", error);
-        }
+        query_builder.build().execute(&self.pool).await?;
 
         Ok(())
     }
@@ -258,6 +245,54 @@ impl StorageBackend for PostgresStorage {
         Ok(())
     }
 
+    async fn unset_relation_fields(
+        &self,
+        relations: &Vec<UnsetRelationItem>,
+    ) -> Result<(), StorageError> {
+        if relations.is_empty() {
+            return Ok(());
+        }
+
+        let mut query_builder: QueryBuilder<Postgres> = QueryBuilder::new(
+             "UPDATE relations SET
+              from_space_id = CASE WHEN v.unset_from_space_id THEN NULL ELSE from_space_id END,
+              from_version_id = CASE WHEN v.unset_from_version_id THEN NULL ELSE from_version_id END,
+              to_space_id = CASE WHEN v.unset_to_space_id THEN NULL ELSE to_space_id END,
+              to_version_id = CASE WHEN v.unset_to_version_id THEN NULL ELSE to_version_id END,
+              position = CASE WHEN v.unset_position THEN NULL ELSE position END,
+              verified = CASE WHEN v.unset_verified THEN NULL ELSE verified END
+              FROM (VALUES "
+         );
+
+        query_builder.push_values(relations, |mut b, relation| {
+            b.push("(");
+            b.push_bind(&relation.id);
+            b.push(", ");
+            b.push_bind(relation.from_space_id.unwrap_or(false));
+            b.push(", ");
+            b.push_bind(relation.from_version_id.unwrap_or(false));
+            b.push(", ");
+            b.push_bind(relation.to_space_id.unwrap_or(false));
+            b.push(", ");
+            b.push_bind(relation.to_version_id.unwrap_or(false));
+            b.push(", ");
+            b.push_bind(relation.position.unwrap_or(false));
+            b.push(", ");
+            b.push_bind(relation.verified.unwrap_or(false));
+            b.push(")");
+        });
+
+        query_builder.push(
+            ") AS v(id, unset_from_space_id, unset_from_version_id, unset_to_space_id,
+                    unset_to_version_id, unset_position, unset_verified)
+              WHERE relations.id = v.id",
+        );
+
+        query_builder.build().execute(&self.pool).await?;
+
+        Ok(())
+    }
+
     async fn delete_relations(
         &self,
         relation_ids: &Vec<String>,
@@ -269,7 +304,7 @@ impl StorageBackend for PostgresStorage {
 
         let ids: Vec<&str> = relation_ids.iter().map(|id| id.as_str()).collect();
 
-        let result = sqlx::query(
+        sqlx::query(
             "DELETE FROM relations
                      WHERE space_id = $1 AND id IN
                      (SELECT * FROM UNNEST($2::text[]))",
@@ -277,11 +312,7 @@ impl StorageBackend for PostgresStorage {
         .bind(space_id)
         .bind(&ids)
         .execute(&self.pool)
-        .await;
-
-        if let Err(error) = result {
-            println!("Error deleting relations {}", error);
-        }
+        .await?;
 
         Ok(())
     }

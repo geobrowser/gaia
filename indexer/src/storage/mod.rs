@@ -7,7 +7,7 @@ use thiserror::Error;
 use crate::models::{
     entities::EntityItem,
     properties::ValueOp,
-    relations::{SetRelationItem, UpdateRelationItem},
+    relations::{SetRelationItem, UnsetRelationItem, UpdateRelationItem},
 };
 
 #[derive(Error, Debug)]
@@ -29,6 +29,10 @@ pub trait StorageBackend: Send + Sync {
     async fn update_relations(
         &self,
         relations: &Vec<UpdateRelationItem>,
+    ) -> Result<(), StorageError>;
+    async fn unset_relation_fields(
+        &self,
+        relations: &Vec<UnsetRelationItem>,
     ) -> Result<(), StorageError>;
     async fn delete_relations(
         &self,

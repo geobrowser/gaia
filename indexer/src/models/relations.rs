@@ -211,7 +211,6 @@ impl RelationsModel {
                         let from_id = String::from_utf8(relation.from_entity.clone());
                         let to_id = String::from_utf8(relation.to_entity.clone());
 
-                        // @TODO: What do we do with the optional fields?
                         let to_space = relation
                             .to_space
                             .clone()
@@ -248,7 +247,6 @@ impl RelationsModel {
                         }
                     }
                     Payload::UpdateRelation(updated_relation) => {
-                        // @TODO: What do we do with the optional fields?
                         let to_space = updated_relation
                             .to_space
                             .clone()
