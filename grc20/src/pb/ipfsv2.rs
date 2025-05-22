@@ -109,19 +109,19 @@ pub struct Relation {
     pub from_entity: ::prost::alloc::vec::Vec<u8>,
     #[prost(bytes = "vec", optional, tag = "4")]
     pub from_space: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
-    #[prost(bytes = "vec", optional, tag = "6")]
+    #[prost(bytes = "vec", optional, tag = "5")]
     pub from_version: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
-    #[prost(bytes = "vec", tag = "7")]
+    #[prost(bytes = "vec", tag = "6")]
     pub to_entity: ::prost::alloc::vec::Vec<u8>,
-    #[prost(bytes = "vec", optional, tag = "8")]
+    #[prost(bytes = "vec", optional, tag = "7")]
     pub to_space: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
-    #[prost(bytes = "vec", optional, tag = "10")]
+    #[prost(bytes = "vec", optional, tag = "8")]
     pub to_version: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
-    #[prost(bytes = "vec", tag = "11")]
+    #[prost(bytes = "vec", tag = "9")]
     pub entity: ::prost::alloc::vec::Vec<u8>,
-    #[prost(string, optional, tag = "12")]
+    #[prost(string, optional, tag = "10")]
     pub position: ::core::option::Option<::prost::alloc::string::String>,
-    #[prost(bool, optional, tag = "13")]
+    #[prost(bool, optional, tag = "11")]
     pub verified: ::core::option::Option<bool>,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
