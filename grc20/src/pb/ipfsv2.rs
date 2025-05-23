@@ -66,7 +66,7 @@ pub mod ipfs_file {
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Op {
-    #[prost(oneof = "op::Payload", tags = "1, 2, 3, 4, 5, 6, 7")]
+    #[prost(oneof = "op::Payload", tags = "1, 2, 3, 4, 5, 6")]
     pub payload: ::core::option::Option<op::Payload>,
 }
 /// Nested message and enum types in `Op`.
@@ -76,18 +76,16 @@ pub mod op {
     pub enum Payload {
         #[prost(message, tag = "1")]
         UpdateEntity(super::Entity),
-        #[prost(bytes, tag = "2")]
-        DeleteEntity(::prost::alloc::vec::Vec<u8>),
+        #[prost(message, tag = "2")]
+        UnsetEntityValues(super::UnsetEntityValues),
         #[prost(message, tag = "3")]
         CreateRelation(super::Relation),
         #[prost(message, tag = "4")]
         UpdateRelation(super::RelationUpdate),
-        #[prost(bytes, tag = "5")]
-        DeleteRelation(::prost::alloc::vec::Vec<u8>),
-        #[prost(message, tag = "6")]
-        UnsetEntityValues(super::UnsetEntityValues),
-        #[prost(message, tag = "7")]
+        #[prost(message, tag = "5")]
         UnsetRelationFields(super::UnsetRelationFields),
+        #[prost(bytes, tag = "6")]
+        DeleteRelation(::prost::alloc::vec::Vec<u8>),
     }
 }
 #[derive(serde::Serialize, serde::Deserialize)]

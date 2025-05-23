@@ -20,12 +20,10 @@ mod tests {
         // Create an update entity operation
         let entity = Entity {
             id: b"entity1".to_vec(),
-            values: vec![
-                Value {
-                    property_id: b"prop1".to_vec(),
-                    value: "value1".to_string(),
-                },
-            ],
+            values: vec![Value {
+                property_id: b"prop1".to_vec(),
+                value: "value1".to_string(),
+            }],
         };
 
         let op = Op {
@@ -115,22 +113,18 @@ mod tests {
         // Create operations for multiple entities
         let entity1 = Entity {
             id: b"entity1".to_vec(),
-            values: vec![
-                Value {
-                    property_id: b"prop1".to_vec(),
-                    value: "value1".to_string(),
-                },
-            ],
+            values: vec![Value {
+                property_id: b"prop1".to_vec(),
+                value: "value1".to_string(),
+            }],
         };
 
         let entity2 = Entity {
             id: b"entity2".to_vec(),
-            values: vec![
-                Value {
-                    property_id: b"prop1".to_vec(),
-                    value: "value2".to_string(),
-                },
-            ],
+            values: vec![Value {
+                property_id: b"prop1".to_vec(),
+                value: "value2".to_string(),
+            }],
         };
 
         let op1 = Op {
@@ -168,23 +162,19 @@ mod tests {
         // First create a SET operation
         let entity_set = Entity {
             id: b"entity1".to_vec(),
-            values: vec![
-                Value {
-                    property_id: b"prop1".to_vec(),
-                    value: "initial_value".to_string(),
-                },
-            ],
+            values: vec![Value {
+                property_id: b"prop1".to_vec(),
+                value: "initial_value".to_string(),
+            }],
         };
 
         // Then create another SET operation that updates the same property
         let entity_update = Entity {
             id: b"entity1".to_vec(),
-            values: vec![
-                Value {
-                    property_id: b"prop1".to_vec(),
-                    value: "updated_value".to_string(),
-                },
-            ],
+            values: vec![Value {
+                property_id: b"prop1".to_vec(),
+                value: "updated_value".to_string(),
+            }],
         };
 
         let op1 = Op {
@@ -215,12 +205,10 @@ mod tests {
         // Test a SET followed by a DELETE for the same entity/property
         let entity = Entity {
             id: b"entity1".to_vec(),
-            values: vec![
-                Value {
-                    property_id: b"prop1".to_vec(),
-                    value: "value1".to_string(),
-                },
-            ],
+            values: vec![Value {
+                property_id: b"prop1".to_vec(),
+                value: "value1".to_string(),
+            }],
         };
 
         let unset = UnsetEntityValues {
@@ -257,12 +245,10 @@ mod tests {
 
         let entity = Entity {
             id: b"entity1".to_vec(),
-            values: vec![
-                Value {
-                    property_id: b"prop1".to_vec(),
-                    value: "value1".to_string(),
-                },
-            ],
+            values: vec![Value {
+                property_id: b"prop1".to_vec(),
+                value: "value1".to_string(),
+            }],
         };
 
         let op1 = Op {
@@ -281,7 +267,7 @@ mod tests {
         // After squashing, we should only have the SET operation
         assert_eq!(created.len(), 1);
         assert_eq!(deleted.len(), 0);
-        
+
         assert_eq!(created[0].entity_id, "entity1");
         assert_eq!(created[0].property_id, "prop1");
         assert_eq!(created[0].value, Some("value1".to_string()));
@@ -311,12 +297,10 @@ mod tests {
 
         let entity2 = Entity {
             id: b"entity2".to_vec(),
-            values: vec![
-                Value {
-                    property_id: b"prop3".to_vec(),
-                    value: "value3".to_string(),
-                },
-            ],
+            values: vec![Value {
+                property_id: b"prop3".to_vec(),
+                value: "value3".to_string(),
+            }],
         };
 
         let op1 = Op {
@@ -362,40 +346,5 @@ mod tests {
         assert_eq!(created[1].value, Some("value3".to_string()));
 
         assert_eq!(deleted[0], "entity1:prop1:space1");
-    }
-
-    #[test]
-    fn test_map_edit_to_values_ignores_other_op_types() {
-        // Test that other op types are ignored
-        let entity = Entity {
-            id: b"entity1".to_vec(),
-            values: vec![
-                Value {
-                    property_id: b"prop1".to_vec(),
-                    value: "value1".to_string(),
-                },
-            ],
-        };
-
-        let op1 = Op {
-            payload: Some(Payload::UpdateEntity(entity)),
-        };
-
-        // A delete entity operation should be ignored
-        let op2 = Op {
-            payload: Some(Payload::DeleteEntity(b"entity2".to_vec())),
-        };
-
-        let edit = create_test_edit(vec![op1, op2]);
-        let space_id = "space1".to_string();
-
-        let (created, deleted) = ValuesModel::map_edit_to_values(&edit, &space_id);
-
-        // Only the update entity op should be processed
-        assert_eq!(created.len(), 1);
-        assert_eq!(deleted.len(), 0);
-
-        assert_eq!(created[0].entity_id, "entity1");
-        assert_eq!(created[0].property_id, "prop1");
     }
 }

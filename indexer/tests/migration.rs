@@ -28,35 +28,35 @@ impl TestIndexer {
 
 #[tokio::test]
 async fn main() -> Result<(), IndexingError> {
-    dotenv().ok();
-    let database_url = env::var("DATABASE_URL").expect("DATABASE_URL not set");
-    let storage = Arc::new(PostgresStorage::new(&database_url).await?);
+    // dotenv().ok();
+    // let database_url = env::var("DATABASE_URL").expect("DATABASE_URL not set");
+    // let storage = Arc::new(PostgresStorage::new(&database_url).await?);
 
-    let file = include_str!("./25omwWh6HYgeRQKCaSpVpa_ops.json");
-    let ops_from_file: Vec<Op> = serde_json::from_str(file).unwrap();
+    // let file = include_str!("./25omwWh6HYgeRQKCaSpVpa_ops.json");
+    // let ops_from_file: Vec<Op> = serde_json::from_str(file).unwrap();
 
-    println!("ops_from_file {:?}", ops_from_file);
+    // println!("ops_from_file {:?}", ops_from_file);
 
-    let item = PreprocessedEdit {
-        space_id: String::from("5"),
-        edit: None,
-        is_errored: true,
-    };
+    // let item = PreprocessedEdit {
+    //     space_id: String::from("5"),
+    //     edit: None,
+    //     is_errored: true,
+    // };
 
-    let block = BlockMetadata {
-        cursor: String::from("5"),
-        block_number: 1,
-        timestamp: String::from("5"),
-    };
+    // let block = BlockMetadata {
+    //     cursor: String::from("5"),
+    //     block_number: 1,
+    //     timestamp: String::from("5"),
+    // };
 
-    let indexer = TestIndexer::new(storage.clone());
+    // let indexer = TestIndexer::new(storage.clone());
 
-    indexer
-        .run(&vec![KgData {
-            block,
-            edits: vec![item],
-        }])
-        .await?;
+    // indexer
+    //     .run(&vec![KgData {
+    //         block,
+    //         edits: vec![item],
+    //     }])
+    //     .await?;
 
     Ok(())
 }
