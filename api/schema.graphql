@@ -100,7 +100,7 @@ input PointFilter {
   exists: Boolean
 }
 
-input PropertyFilter {
+input ValueFilter {
   propertyId: String!
   text: TextFilter
   number: NumberFilter
@@ -111,5 +111,5 @@ input PropertyFilter {
 input EntityFilter {
   OR: [EntityFilter!]
   NOT: EntityFilter
-  property: PropertyFilter
+  value: ValueFilter
 }

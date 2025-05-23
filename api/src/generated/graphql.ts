@@ -41,7 +41,7 @@ export type Entity = {
 export type EntityFilter = {
   NOT?: InputMaybe<EntityFilter>;
   OR?: InputMaybe<Array<EntityFilter>>;
-  property?: InputMaybe<PropertyFilter>;
+  value?: InputMaybe<ValueFilter>;
 };
 
 export type NumberFilter = {
@@ -65,14 +65,6 @@ export type Property = {
   entityId: Scalars['String']['output'];
   id: Scalars['ID']['output'];
   valueType: Scalars['String']['output'];
-};
-
-export type PropertyFilter = {
-  checkbox?: InputMaybe<CheckboxFilter>;
-  number?: InputMaybe<NumberFilter>;
-  point?: InputMaybe<PointFilter>;
-  propertyId: Scalars['String']['input'];
-  text?: InputMaybe<TextFilter>;
 };
 
 export type Query = {
@@ -125,6 +117,14 @@ export type Value = {
   propertyId: Scalars['String']['output'];
   spaceId: Scalars['String']['output'];
   value?: Maybe<Scalars['String']['output']>;
+};
+
+export type ValueFilter = {
+  checkbox?: InputMaybe<CheckboxFilter>;
+  number?: InputMaybe<NumberFilter>;
+  point?: InputMaybe<PointFilter>;
+  propertyId: Scalars['String']['input'];
+  text?: InputMaybe<TextFilter>;
 };
 
 export type WithIndex<TObject> = TObject & Record<string, any>;
@@ -209,12 +209,12 @@ export type ResolversTypes = ResolversObject<{
   NumberFilter: NumberFilter;
   PointFilter: PointFilter;
   Property: ResolverTypeWrapper<DbProperty>;
-  PropertyFilter: PropertyFilter;
   Query: ResolverTypeWrapper<{}>;
   Relation: ResolverTypeWrapper<Omit<Relation, 'from' | 'to' | 'type'> & { from?: Maybe<ResolversTypes['Entity']>, to?: Maybe<ResolversTypes['Entity']>, type?: Maybe<ResolversTypes['Entity']> }>;
   String: ResolverTypeWrapper<Scalars['String']['output']>;
   TextFilter: TextFilter;
   Value: ResolverTypeWrapper<Omit<Value, 'entity' | 'property'> & { entity?: Maybe<ResolversTypes['Entity']>, property?: Maybe<ResolversTypes['Property']> }>;
+  ValueFilter: ValueFilter;
 }>;
 
 /** Mapping between all available schema types and the resolvers parents */
@@ -229,12 +229,12 @@ export type ResolversParentTypes = ResolversObject<{
   NumberFilter: NumberFilter;
   PointFilter: PointFilter;
   Property: DbProperty;
-  PropertyFilter: PropertyFilter;
   Query: {};
   Relation: Omit<Relation, 'from' | 'to' | 'type'> & { from?: Maybe<ResolversParentTypes['Entity']>, to?: Maybe<ResolversParentTypes['Entity']>, type?: Maybe<ResolversParentTypes['Entity']> };
   String: Scalars['String']['output'];
   TextFilter: TextFilter;
   Value: Omit<Value, 'entity' | 'property'> & { entity?: Maybe<ResolversParentTypes['Entity']>, property?: Maybe<ResolversParentTypes['Property']> };
+  ValueFilter: ValueFilter;
 }>;
 
 export type EntityResolvers<ContextType = any, ParentType extends ResolversParentTypes['Entity'] = ResolversParentTypes['Entity']> = ResolversObject<{

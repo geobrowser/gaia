@@ -42,7 +42,7 @@ export type EntityFilter = {
 	AND?: EntityFilter[]
 	OR?: EntityFilter[]
 	NOT?: EntityFilter
-	property?: PropertyFilter
+	value?: PropertyFilter
 }
 
 function buildValueWhere(filter: PropertyFilter): any {
@@ -64,15 +64,29 @@ function buildValueWhere(filter: PropertyFilter): any {
 
 	if (filter.number) {
 		const f = filter.number
-		const casted = sql`${values.value}::numeric`
-		if (f.is !== undefined) conditions.push(sql`${casted} = ${f.is}`)
-		if (f.lessThan !== undefined) conditions.push(sql`${casted} < ${f.lessThan}`)
-		if (f.lessThanOrEqual !== undefined) conditions.push(sql`${casted} <= ${f.lessThanOrEqual}`)
-		if (f.greaterThan !== undefined) conditions.push(sql`${casted} > ${f.greaterThan}`)
-		if (f.greaterThanOrEqual !== undefined) conditions.push(sql`${casted} >= ${f.greaterThanOrEqual}`)
+		// Use CASE to safely cast, returning NULL for non-numeric values
+		const safeCasted = sql`CASE 
+        WHEN ${values.value} ~ '^-?([0-9]+\.?[0-9]*|\.[0-9]+)([eE][-+]?[0-9]+)?$'
+ 
+        THEN ${values.value}::numeric 
+        ELSE NULL 
+    END`
+
+		if (f.is !== undefined) conditions.push(sql`${safeCasted} = ${f.is}`)
+		if (f.lessThan !== undefined) conditions.push(sql`${safeCasted} < ${f.lessThan}`)
+		if (f.lessThanOrEqual !== undefined) conditions.push(sql`${safeCasted} <= ${f.lessThanOrEqual}`)
+		if (f.greaterThan !== undefined) conditions.push(sql`${safeCasted} > ${f.greaterThan}`)
+		if (f.greaterThanOrEqual !== undefined) conditions.push(sql`${safeCasted} >= ${f.greaterThanOrEqual}`)
+
 		if (f.exists !== undefined) {
-			conditions.push(f.exists ? not(isNull(values.value)) : isNull(values.value))
+			// For exists, check if the value exists AND is numeric
+			const isNumeric = sql`${values.value} ~ '^-?([0-9]+\.?[0-9]*|\.[0-9]+)([eE][-+]?[0-9]+)?$'`
+
+			conditions.push(
+				f.exists ? and(not(isNull(values.value)), isNumeric) : or(isNull(values.value), not(isNumeric)),
+			)
 		}
+
 		if (f.NOT) {
 			conditions.push(not(buildValueWhere({propertyId: filter.propertyId, number: f.NOT})))
 		}
@@ -111,13 +125,13 @@ export function buildEntityWhere(filter: EntityFilter | null): any | undefined {
 	if (filter.NOT) {
 		clauses.push(not(buildEntityWhere(filter.NOT)))
 	}
-	if (filter.property) {
+	if (filter.value) {
 		// This checks: exists a value with this filter for the entity
 		clauses.push(
 			sql`EXISTS (
         SELECT 1 FROM ${values} 
         WHERE ${values.entityId} = ${entities.id}
-        AND ${buildValueWhere(filter.property)}
+        AND ${buildValueWhere(filter.value)}
       )`,
 		)
 	}
