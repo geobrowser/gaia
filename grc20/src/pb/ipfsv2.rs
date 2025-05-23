@@ -77,15 +77,15 @@ pub mod op {
         #[prost(message, tag = "1")]
         UpdateEntity(super::Entity),
         #[prost(message, tag = "2")]
-        CreateRelation(super::Relation),
-        #[prost(message, tag = "3")]
-        UpdateRelation(super::RelationUpdate),
-        #[prost(bytes, tag = "4")]
-        DeleteRelation(::prost::alloc::vec::Vec<u8>),
-        #[prost(message, tag = "5")]
         UnsetEntityValues(super::UnsetEntityValues),
-        #[prost(message, tag = "6")]
+        #[prost(message, tag = "3")]
+        CreateRelation(super::Relation),
+        #[prost(message, tag = "4")]
+        UpdateRelation(super::RelationUpdate),
+        #[prost(message, tag = "5")]
         UnsetRelationFields(super::UnsetRelationFields),
+        #[prost(bytes, tag = "6")]
+        DeleteRelation(::prost::alloc::vec::Vec<u8>),
     }
 }
 #[derive(serde::Serialize, serde::Deserialize)]

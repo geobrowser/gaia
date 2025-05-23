@@ -40,11 +40,11 @@ message IpfsFile {
 message Op {
   oneof payload {
     Entity                  update_entity = 1;
-    Relation                create_relation = 2;
-    RelationUpdate          update_relation = 3;
-    bytes                   delete_relation = 4;
-    UnsetEntityValues       unset_entity_values = 5;
-    UnsetRelationFields     unset_relation_fields = 6;
+    UnsetEntityValues       unset_entity_values = 2;
+    Relation                create_relation = 3;
+    RelationUpdate          update_relation = 4;
+    UnsetRelationFields     unset_relation_fields = 5;
+    bytes                   delete_relation = 6;
   }
 }
 
