@@ -28,8 +28,6 @@ type Value {
   entityId: String!
   spaceId: String!
   value: String
-  formatOption: String
-  unitOption: String
 
   entity: Entity
   property: Property
@@ -42,7 +40,7 @@ type Relation {
   fromId: String!
   toId: String!
   toSpaceId: String
-  index: String
+  position: String
   # these should be called `fromValue` and `toValue` instead?
   # fromPropertyId: String
   # toPropertyId: String
@@ -54,7 +52,7 @@ type Relation {
 }
 
 type Query {
-  entities(limit: Int = 100, offset: Int = 0): [Entity]!
+  entities(filter: EntityFilter, limit: Int = 100, offset: Int = 0): [Entity]!
   entity(id: String!): Entity
   # fuzzy search
   # relation
@@ -71,4 +69,47 @@ type Query {
   # edits
   # version?
   # versions?
+}
+
+input TextFilter {
+  is: String
+  contains: String
+  startsWith: String
+  endsWith: String
+  exists: Boolean
+  NOT: TextFilter
+}
+
+input NumberFilter {
+  is: Float
+  lessThan: Float
+  lessThanOrEqual: Float
+  greaterThan: Float
+  greaterThanOrEqual: Float
+  exists: Boolean
+  NOT: NumberFilter
+}
+
+input CheckboxFilter {
+  is: Boolean
+  exists: Boolean
+}
+
+input PointFilter {
+  is: [Float]
+  exists: Boolean
+}
+
+input PropertyFilter {
+  propertyId: String!
+  text: TextFilter
+  number: NumberFilter
+  checkbox: CheckboxFilter
+  point: PointFilter
+}
+
+input EntityFilter {
+  OR: [EntityFilter!]
+  NOT: EntityFilter
+  property: PropertyFilter
 }
