@@ -215,6 +215,21 @@ impl RelationsModel {
                             .to_space
                             .clone()
                             .and_then(|s| String::from_utf8(s).ok());
+                            
+                        let from_space = relation
+                            .from_space
+                            .clone()
+                            .and_then(|s| String::from_utf8(s).ok());
+                            
+                        let from_version = relation
+                            .from_version
+                            .clone()
+                            .and_then(|s| String::from_utf8(s).ok());
+                            
+                        let to_version = relation
+                            .to_version
+                            .clone()
+                            .and_then(|s| String::from_utf8(s).ok());
 
                         if relation_id.is_ok()
                             && entity_id.is_ok()
@@ -229,11 +244,11 @@ impl RelationsModel {
                                 position: relation.position.clone(),
                                 type_id: type_id.unwrap().to_string(),
                                 from_id: from_id.unwrap().to_string(),
-                                from_space_id: None,
-                                from_version_id: None,
+                                from_space_id: from_space,
+                                from_version_id: from_version,
                                 to_id: to_id.unwrap().to_string(),
                                 to_space_id: to_space,
-                                to_version_id: None,
+                                to_version_id: to_version,
                                 verified: relation.verified,
                             }));
                         }
@@ -251,9 +266,19 @@ impl RelationsModel {
                             .to_space
                             .clone()
                             .and_then(|s| String::from_utf8(s).ok());
-
+        
                         let from_space = updated_relation
                             .from_space
+                            .clone()
+                            .and_then(|s| String::from_utf8(s).ok());
+        
+                        let from_version = updated_relation
+                            .from_version
+                            .clone()
+                            .and_then(|s| String::from_utf8(s).ok());
+        
+                        let to_version = updated_relation
+                            .to_version
                             .clone()
                             .and_then(|s| String::from_utf8(s).ok());
 
@@ -265,8 +290,22 @@ impl RelationsModel {
                                 verified: updated_relation.verified.clone(),
                                 to_space_id: to_space,
                                 from_space_id: from_space,
-                                from_version_id: None,
-                                to_version_id: None,
+                                from_version_id: from_version,
+                                to_version_id: to_version,
+                            }));
+                        }
+                    }
+                    Payload::UnsetRelationFields(unset_fields) => {
+                        if let Ok(relation_id) = String::from_utf8(unset_fields.id.clone()) {
+                            relations.push(RelationItem::Unset(UnsetRelationItem {
+                                id: relation_id,
+                                space_id: space_id.clone(),
+                                from_space_id: unset_fields.from_space,
+                                from_version_id: unset_fields.from_version,
+                                to_space_id: unset_fields.to_space,
+                                to_version_id: unset_fields.to_version,
+                                position: unset_fields.position,
+                                verified: unset_fields.verified,
                             }));
                         }
                     }

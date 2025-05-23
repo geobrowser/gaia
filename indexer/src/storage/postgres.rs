@@ -16,11 +16,9 @@ pub struct PostgresStorage {
 
 impl PostgresStorage {
     pub async fn new(database_url: &String) -> Result<Self, StorageError> {
-        let database_url_static = database_url.as_str();
-
         let pool = PgPoolOptions::new()
             .max_connections(20)
-            .connect(database_url_static)
+            .connect(database_url.as_str())
             .await?;
 
         return Ok(PostgresStorage { pool });
