@@ -113,36 +113,54 @@ impl StorageBackend for PostgresStorage {
         Ok(())
     }
 
-    async fn insert_values(&self, properties: &Vec<ValueOp>) -> Result<(), StorageError> {
-        if properties.is_empty() {
+    async fn insert_values(&self, values: &Vec<ValueOp>) -> Result<(), StorageError> {
+        if values.is_empty() {
             return Ok(());
         }
 
-        // Create a query builder for PostgreSQL
-        let mut query_builder: QueryBuilder<Postgres> = QueryBuilder::new(
-            "INSERT INTO values (id, entity_id, property_id, space_id, value, language_option) ",
-        );
+        // Prepare column-wise vectors
+        let mut ids = Vec::with_capacity(values.len());
+        let mut entity_ids = Vec::with_capacity(values.len());
+        let mut property_ids = Vec::with_capacity(values.len());
+        let mut space_ids = Vec::with_capacity(values.len());
+        let mut value_values = Vec::with_capacity(values.len());
+        let mut language_options = Vec::with_capacity(values.len());
 
-        // Start the VALUES section
-        query_builder.push_values(properties, |mut b, property| {
-            b.push_bind(format!(
-                "{}:{}:{}",
-                property.entity_id, property.property_id, property.space_id
-            ));
-            b.push_bind(&property.entity_id);
-            b.push_bind(&property.property_id);
-            b.push_bind(&property.space_id);
-            b.push_bind(&property.value);
-            b.push_bind(&property.language_option);
-        });
+        for prop in values {
+            ids.push(&prop.id);
+            entity_ids.push(&prop.entity_id);
+            property_ids.push(&prop.property_id);
+            space_ids.push(&prop.space_id);
+            value_values.push(&prop.value);
+            language_options.push(&prop.language_option);
+        }
 
-        query_builder.push(
-            " ON CONFLICT (id) DO UPDATE SET
-                        value = EXCLUDED.value,
-                        language_option = EXCLUDED.language_option",
-        );
+        let query = r#"
+                INSERT INTO values (
+                    id, entity_id, property_id, space_id, value, language_option
+                )
+                SELECT * FROM UNNEST(
+                    $1::text[],
+                    $2::text[],
+                    $3::text[],
+                    $4::text[],
+                    $5::text[],
+                    $6::text[]
+                )
+                ON CONFLICT (id) DO UPDATE SET
+                    value = EXCLUDED.value,
+                    language_option = EXCLUDED.language_option
+            "#;
 
-        query_builder.build().execute(&self.pool).await?;
+        sqlx::query(query)
+            .bind(&ids)
+            .bind(&entity_ids)
+            .bind(&property_ids)
+            .bind(&space_ids)
+            .bind(&value_values)
+            .bind(&language_options)
+            .execute(&self.pool)
+            .await?;
 
         Ok(())
     }
@@ -176,33 +194,60 @@ impl StorageBackend for PostgresStorage {
             return Ok(());
         }
 
-        // Create a query builder for PostgreSQL
-        let mut query_builder: QueryBuilder<Postgres> = QueryBuilder::new(
-            "INSERT INTO relations (id, space_id, entity_id, from_entity_id, to_entity_id, to_space_id, type_id, position, verified) ",
-        );
+        // Build column vectors
+        let mut ids = Vec::with_capacity(relations.len());
+        let mut space_ids = Vec::with_capacity(relations.len());
+        let mut entity_ids = Vec::with_capacity(relations.len());
+        let mut from_ids = Vec::with_capacity(relations.len());
+        let mut from_space_ids = Vec::with_capacity(relations.len());
+        let mut to_ids = Vec::with_capacity(relations.len());
+        let mut to_space_ids = Vec::with_capacity(relations.len());
+        let mut type_ids = Vec::with_capacity(relations.len());
+        let mut positions = Vec::with_capacity(relations.len());
+        let mut verified = Vec::with_capacity(relations.len());
 
-        // Start the VALUES section
-        query_builder.push_values(relations, |mut b, relation| {
-            b.push_bind(&relation.id);
-            b.push_bind(&relation.space_id);
-            b.push_bind(&relation.entity_id);
-            b.push_bind(&relation.from_id);
-            b.push_bind(&relation.to_id);
-            b.push_bind(&relation.to_space_id);
-            b.push_bind(&relation.type_id);
-            b.push_bind(&relation.position);
-            b.push_bind(&relation.verified);
-        });
+        for rel in relations {
+            ids.push(&rel.id);
+            space_ids.push(&rel.space_id);
+            entity_ids.push(&rel.entity_id);
+            from_ids.push(&rel.from_id);
+            from_space_ids.push(&rel.from_space_id);
+            to_ids.push(&rel.to_id);
+            to_space_ids.push(&rel.to_space_id);
+            type_ids.push(&rel.type_id);
+            positions.push(&rel.position);
+            verified.push(&rel.verified);
+        }
 
-        query_builder.push(
-            " ON CONFLICT (id) DO UPDATE SET
-                        to_space_id = EXCLUDED.to_space_id,
-                        position = EXCLUDED.position,
-                        verified = EXCLUDED.verified",
-        );
+        let query = r#"
+                INSERT INTO relations (
+                    id, space_id, entity_id, from_entity_id, from_space_id,
+                    to_entity_id, to_space_id, type_id, position, verified
+                )
+                SELECT * FROM UNNEST(
+                    $1::text[], $2::text[], $3::text[], $4::text[], $5::text[],
+                    $6::text[], $7::text[], $8::text[], $9::text[], $10::boolean[]
+                )
+                ON CONFLICT (id) DO UPDATE SET
+                    to_space_id = EXCLUDED.to_space_id,
+                    from_space_id = EXCLUDED.from_space_id,
+                    position = EXCLUDED.position,
+                    verified = EXCLUDED.verified
+            "#;
 
-        // Execute the query
-        query_builder.build().execute(&self.pool).await?;
+        sqlx::query(query)
+            .bind(&ids)
+            .bind(&space_ids)
+            .bind(&entity_ids)
+            .bind(&from_ids)
+            .bind(&from_space_ids)
+            .bind(&to_ids)
+            .bind(&to_space_ids)
+            .bind(&type_ids)
+            .bind(&positions)
+            .bind(&verified)
+            .execute(&self.pool)
+            .await?;
 
         Ok(())
     }
