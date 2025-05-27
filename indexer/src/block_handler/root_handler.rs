@@ -100,7 +100,7 @@ where
 
     // Wait for all processing in the current block to finish before continuing
     // to the next block
-    let done = join_all(handles).await;
+    join_all(handles).await;
 
     Ok(())
 }
