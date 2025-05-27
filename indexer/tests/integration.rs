@@ -1,4 +1,4 @@
-use grc20::pb::ipfsv2::{op::Payload, Edit, Entity, Op, Relation, UnsetEntityValues, Value};
+use grc20::pb::ipfs::{op::Payload, Edit, Entity, Op, Relation, UnsetEntityValues, Value};
 use std::{env, sync::Arc};
 use stream::utils::BlockMetadata;
 
