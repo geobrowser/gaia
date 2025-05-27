@@ -1,7 +1,9 @@
 use std::collections::HashSet;
 
 use grc20::pb::ipfs::{op::Payload, Edit};
+use indexer_utils::id;
 use stream::utils::BlockMetadata;
+use uuid::Uuid;
 
 #[derive(Clone)]
 pub struct EntityItem {
@@ -23,177 +25,260 @@ impl EntitiesModel {
             if let Some(payload) = &op.payload {
                 match payload {
                     Payload::UpdateEntity(entity) => {
-                        let entity_id = String::from_utf8(entity.id.clone());
+                        let entity_id_bytes = id::transform_id_bytes(entity.id.clone());
 
-                        if let Ok(id) = entity_id {
-                            if !seen.contains(&id) {
-                                seen.insert(id.clone());
+                        if let Err(_) = entity_id_bytes {
+                            tracing::error!(
+                                "[Entities][UpdateEntity] Could not transform Vec<u8> for entity.id {:?}",
+                                &entity.id
+                            );
+                            continue;
+                        }
+
+                        let entity_id = Uuid::from_bytes(entity_id_bytes.unwrap()).to_string();
+
+                        if !seen.contains(&entity_id) {
+                            entities.push(EntityItem {
+                                id: entity_id.clone(),
+                                created_at: block.timestamp.clone(),
+                                created_at_block: block.block_number.to_string(),
+                                updated_at: block.timestamp.clone(),
+                                updated_at_block: block.block_number.to_string(),
+                            });
+
+                            seen.insert(entity_id.clone());
+                        }
+
+                        for value in &entity.values {
+                            let property_id_bytes =
+                                id::transform_id_bytes(value.property_id.clone());
+
+                            if let Err(_) = property_id_bytes {
+                                tracing::error!(
+                                    "[Entities][UpdateEntity] Could not transform Vec<u8> for property.id {:?}",
+                                    &entity.id
+                                );
+                                continue;
+                            }
+
+                            let property_id =
+                                Uuid::from_bytes(property_id_bytes.unwrap()).to_string();
+
+                            if !seen.contains(&property_id) {
                                 entities.push(EntityItem {
-                                    id: id.clone(),
+                                    id: property_id.clone(),
                                     created_at: block.timestamp.clone(),
                                     created_at_block: block.block_number.to_string(),
                                     updated_at: block.timestamp.clone(),
                                     updated_at_block: block.block_number.to_string(),
                                 });
-                            }
-                        }
 
-                        for value in &entity.values {
-                            let property_id = String::from_utf8(value.property_id.clone());
-
-                            if let Ok(id) = property_id {
-                                if !seen.contains(&id) {
-                                    entities.push(EntityItem {
-                                        id: id.clone(),
-                                        created_at: block.timestamp.clone(),
-                                        created_at_block: block.block_number.to_string(),
-                                        updated_at: block.timestamp.clone(),
-                                        updated_at_block: block.block_number.to_string(),
-                                    });
-
-                                    seen.insert(id.clone());
-                                }
+                                seen.insert(property_id.clone());
                             }
                         }
                     }
                     Payload::UnsetEntityValues(entity) => {
-                        let entity_id = String::from_utf8(entity.id.clone());
+                        let entity_id_bytes = id::transform_id_bytes(entity.id.clone());
 
-                        if let Ok(id) = entity_id {
-                            if !seen.contains(&id) {
-                                seen.insert(id.clone());
+                        if let Err(_) = entity_id_bytes {
+                            tracing::error!(
+                                "[Entities][UnsetEntityValues] Could not transform Vec<u8> for entity.id {:?}",
+                                &entity.id
+                            );
+                            continue;
+                        }
+
+                        let entity_id = Uuid::from_bytes(entity_id_bytes.unwrap()).to_string();
+
+                        if !seen.contains(&entity_id) {
+                            entities.push(EntityItem {
+                                id: entity_id.clone(),
+                                created_at: block.timestamp.clone(),
+                                created_at_block: block.block_number.to_string(),
+                                updated_at: block.timestamp.clone(),
+                                updated_at_block: block.block_number.to_string(),
+                            });
+
+                            seen.insert(entity_id.clone());
+                        }
+
+                        for property in &entity.properties {
+                            let property_id_bytes = id::transform_id_bytes(property.clone());
+
+                            if let Err(_) = property_id_bytes {
+                                tracing::error!(
+                                    "[Entities][UnsetEntityValues] Could not transform Vec<u8> for property id {:?}",
+                                    &property_id_bytes
+                                );
+                                continue;
+                            }
+
+                            let property_id =
+                                Uuid::from_bytes(property_id_bytes.unwrap()).to_string();
+
+                            if !seen.contains(&property_id) {
                                 entities.push(EntityItem {
-                                    id: id.clone(),
+                                    id: property_id.clone(),
                                     created_at: block.timestamp.clone(),
                                     created_at_block: block.block_number.to_string(),
                                     updated_at: block.timestamp.clone(),
                                     updated_at_block: block.block_number.to_string(),
                                 });
-                            }
-                        }
 
-                        for property in &entity.properties {
-                            let property_id = String::from_utf8(property.clone());
-
-                            if let Ok(id) = property_id {
-                                if !seen.contains(&id) {
-                                    entities.push(EntityItem {
-                                        id: id.clone(),
-                                        created_at: block.timestamp.clone(),
-                                        created_at_block: block.block_number.to_string(),
-                                        updated_at: block.timestamp.clone(),
-                                        updated_at_block: block.block_number.to_string(),
-                                    });
-
-                                    seen.insert(id.clone());
-                                }
+                                seen.insert(property_id.clone());
                             }
                         }
                     }
                     Payload::CreateRelation(relation) => {
-                        let relation_id = String::from_utf8(relation.id.clone());
-                        let relation_entity_id = String::from_utf8(relation.entity.clone());
-                        let from_id = String::from_utf8(relation.from_entity.clone());
-                        let to_id = String::from_utf8(relation.to_entity.clone());
-                        let type_id = String::from_utf8(relation.r#type.clone());
+                        let relation_id_bytes = id::transform_id_bytes(relation.id.clone());
 
-                        if !relation_id.is_ok()
-                            && !relation_entity_id.is_ok()
-                            && !from_id.is_ok()
-                            && !to_id.is_ok()
-                            && !type_id.is_ok()
-                        {
+                        if let Err(_) = relation_id_bytes {
+                            tracing::error!(
+                                "[Entities][CreateRelation] Could not transform Vec<u8> for relation.id {:?}",
+                                &relation.id
+                            );
                             continue;
                         }
 
-                        if let Ok(id) = relation_id {
-                            if !seen.contains(&id) {
-                                entities.push(EntityItem {
-                                    id: id.clone(),
-                                    created_at: block.timestamp.clone(),
-                                    created_at_block: block.block_number.to_string(),
-                                    updated_at: block.timestamp.clone(),
-                                    updated_at_block: block.block_number.to_string(),
-                                });
+                        let relation_id = Uuid::from_bytes(relation_id_bytes.unwrap()).to_string();
 
-                                seen.insert(id);
-                            }
+                        if !seen.contains(&relation_id) {
+                            entities.push(EntityItem {
+                                id: relation_id.clone(),
+                                created_at: block.timestamp.clone(),
+                                created_at_block: block.block_number.to_string(),
+                                updated_at: block.timestamp.clone(),
+                                updated_at_block: block.block_number.to_string(),
+                            });
+
+                            seen.insert(relation_id);
                         }
 
-                        if let Ok(id) = relation_entity_id {
-                            if !seen.contains(&id) {
-                                entities.push(EntityItem {
-                                    id: id.clone(),
-                                    created_at: block.timestamp.clone(),
-                                    created_at_block: block.block_number.to_string(),
-                                    updated_at: block.timestamp.clone(),
-                                    updated_at_block: block.block_number.to_string(),
-                                });
+                        let relation_entity_id_bytes =
+                            id::transform_id_bytes(relation.entity.clone());
 
-                                seen.insert(id);
-                            }
+                        if let Err(_) = relation_entity_id_bytes {
+                            tracing::error!(
+                                "[Entities][CreateRelation] Could not transform Vec<u8> for relation.entity {:?}",
+                                &relation.entity
+                            );
+                            continue;
                         }
 
-                        if let Ok(id) = from_id {
-                            if !seen.contains(&id) {
-                                entities.push(EntityItem {
-                                    id: id.clone(),
-                                    created_at: block.timestamp.clone(),
-                                    created_at_block: block.block_number.to_string(),
-                                    updated_at: block.timestamp.clone(),
-                                    updated_at_block: block.block_number.to_string(),
-                                });
+                        let relation_entity_id =
+                            Uuid::from_bytes(relation_entity_id_bytes.unwrap()).to_string();
 
-                                seen.insert(id);
-                            }
+                        if !seen.contains(&relation_entity_id) {
+                            entities.push(EntityItem {
+                                id: relation_entity_id.clone(),
+                                created_at: block.timestamp.clone(),
+                                created_at_block: block.block_number.to_string(),
+                                updated_at: block.timestamp.clone(),
+                                updated_at_block: block.block_number.to_string(),
+                            });
+
+                            seen.insert(relation_entity_id);
                         }
 
-                        if let Ok(id) = to_id {
-                            if !seen.contains(&id) {
-                                entities.push(EntityItem {
-                                    id: id.clone(),
-                                    created_at: block.timestamp.clone(),
-                                    created_at_block: block.block_number.to_string(),
-                                    updated_at: block.timestamp.clone(),
-                                    updated_at_block: block.block_number.to_string(),
-                                });
+                        let type_id_bytes = id::transform_id_bytes(relation.r#type.clone());
 
-                                seen.insert(id);
-                            }
+                        if let Err(_) = type_id_bytes {
+                            tracing::error!(
+                                "[Entities][CreateRelation] Could not transform Vec<u8> for relation.type {:?}",
+                                &relation.r#type
+                            );
+                            continue;
                         }
 
-                        if let Ok(id) = type_id {
-                            if !seen.contains(&id) {
-                                entities.push(EntityItem {
-                                    id: id.clone(),
-                                    created_at: block.timestamp.clone(),
-                                    created_at_block: block.block_number.to_string(),
-                                    updated_at: block.timestamp.clone(),
-                                    updated_at_block: block.block_number.to_string(),
-                                });
+                        let type_id = Uuid::from_bytes(type_id_bytes.unwrap()).to_string();
 
-                                seen.insert(id);
-                            }
+                        if !seen.contains(&type_id) {
+                            entities.push(EntityItem {
+                                id: type_id.clone(),
+                                created_at: block.timestamp.clone(),
+                                created_at_block: block.block_number.to_string(),
+                                updated_at: block.timestamp.clone(),
+                                updated_at_block: block.block_number.to_string(),
+                            });
+
+                            seen.insert(type_id);
+                        }
+
+                        let from_id_bytes = id::transform_id_bytes(relation.from_entity.clone());
+
+                        if let Err(_) = from_id_bytes {
+                            tracing::error!(
+                                "[Entities][CreateRelation] Could not transform Vec<u8> for relation.from_entity {:?}",
+                                &relation.from_entity
+                            );
+                            continue;
+                        }
+
+                        let from_id = Uuid::from_bytes(from_id_bytes.unwrap()).to_string();
+
+                        if !seen.contains(&from_id) {
+                            entities.push(EntityItem {
+                                id: from_id.clone(),
+                                created_at: block.timestamp.clone(),
+                                created_at_block: block.block_number.to_string(),
+                                updated_at: block.timestamp.clone(),
+                                updated_at_block: block.block_number.to_string(),
+                            });
+
+                            seen.insert(from_id);
+                        }
+
+                        let to_id_bytes = id::transform_id_bytes(relation.to_entity.clone());
+
+                        if let Err(_) = to_id_bytes {
+                            tracing::error!(
+                                "[Entities][CreateRelation] Could not transform Vec<u8> for relation.to_entity {:?}",
+                                &relation.to_entity
+                            );
+                            continue;
+                        }
+
+                        let to_id = Uuid::from_bytes(to_id_bytes.unwrap()).to_string();
+
+                        if !seen.contains(&to_id) {
+                            entities.push(EntityItem {
+                                id: to_id.clone(),
+                                created_at: block.timestamp.clone(),
+                                created_at_block: block.block_number.to_string(),
+                                updated_at: block.timestamp.clone(),
+                                updated_at_block: block.block_number.to_string(),
+                            });
+
+                            seen.insert(to_id);
                         }
                     }
                     Payload::DeleteRelation(relation_id) => {
-                        let relation_id = String::from_utf8(relation_id.clone());
+                        let relation_id_bytes = id::transform_id_bytes(relation_id.clone());
 
-                        if let Ok(id) = relation_id {
-                            if !seen.contains(&id) {
-                                entities.push(EntityItem {
-                                    id: id.clone(),
-                                    created_at: block.timestamp.clone(),
-                                    created_at_block: block.block_number.to_string(),
-                                    updated_at: block.timestamp.clone(),
-                                    updated_at_block: block.block_number.to_string(),
-                                });
+                        if let Err(_) = relation_id_bytes {
+                            tracing::error!(
+                                "[Entities][DeleteRelation] Could not transform Vec<u8> for relation.id {:?}",
+                                &relation_id_bytes
+                            );
+                            continue;
+                        }
 
-                                seen.insert(id);
-                            }
+                        let relation_id = Uuid::from_bytes(relation_id_bytes.unwrap()).to_string();
+
+                        if !seen.contains(&relation_id) {
+                            entities.push(EntityItem {
+                                id: relation_id.clone(),
+                                created_at: block.timestamp.clone(),
+                                created_at_block: block.block_number.to_string(),
+                                updated_at: block.timestamp.clone(),
+                                updated_at_block: block.block_number.to_string(),
+                            });
+
+                            seen.insert(relation_id);
                         }
                     }
                     // @TODO: Payload::UpdateRelation(relation)
+                    // @TODO: Payload::UnsetRelationFields(relation)
                     _ => {
                         //
                     }

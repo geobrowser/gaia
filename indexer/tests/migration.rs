@@ -37,7 +37,10 @@ async fn main() -> Result<(), IndexingError> {
 
     let edit = Edit::decode(Bytes::from(bytes.unwrap()));
 
-    println!("Edit {:?}", edit.clone().unwrap().name);
+    println!(
+        "Running migration tests for edit {:?}",
+        edit.clone().unwrap().name
+    );
 
     let item = PreprocessedEdit {
         space_id: String::from("5"),

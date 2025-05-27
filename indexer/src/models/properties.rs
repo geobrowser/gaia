@@ -1,4 +1,6 @@
+use indexer_utils::id;
 use std::collections::HashMap;
+use uuid::Uuid;
 
 use grc20::pb::ipfs::{op::Payload, Edit, Op};
 
@@ -39,8 +41,6 @@ impl ValuesModel {
         // the edit.
         let squashed = squash_values(&triple_ops);
 
-        println!("squashed values len {}", squashed.len());
-
         let (created, deleted): (Vec<ValueOp>, Vec<ValueOp>) = squashed
             .into_iter()
             .partition(|op| matches!(op.change_type, ValueChangeType::SET));
@@ -71,11 +71,27 @@ fn value_op_from_op(op: &Op, space_id: &String) -> Vec<ValueOp> {
     if let Some(payload) = &op.payload {
         match payload {
             Payload::UpdateEntity(entity) => {
-                if let Ok(entity_id) = String::from_utf8(entity.id.clone()) {
-                    for value in &entity.values {
-                        let property_id = String::from_utf8(value.property_id.clone());
+                let entity_id_bytes = id::transform_id_bytes(entity.id.clone());
 
-                        if let Ok(property_id) = property_id {
+                match entity_id_bytes {
+                    Ok(entity_id_bytes) => {
+                        let entity_id = Uuid::from_bytes(entity_id_bytes).to_string();
+
+                        for value in &entity.values {
+                            let property_id_bytes =
+                                id::transform_id_bytes(value.property_id.clone());
+
+                            if let Err(_) = property_id_bytes {
+                                tracing::error!(
+                                    "[Values][UpdateEntity] Could not transform Vec<u8> for property.id {:?}",
+                                    &entity.id
+                                );
+                                continue;
+                            }
+
+                            let property_id =
+                                Uuid::from_bytes(property_id_bytes.unwrap()).to_string();
+
                             values.push(ValueOp {
                                 id: derive_value_id(&entity_id, &property_id, space_id),
                                 change_type: ValueChangeType::SET,
@@ -85,18 +101,36 @@ fn value_op_from_op(op: &Op, space_id: &String) -> Vec<ValueOp> {
                                 value: Some(value.value.clone()),
                                 language_option: None,
                             });
-                        } else {
-                            println!("Couldn't decode property id {:?}", property_id.clone());
                         }
                     }
-                } else {
-                    println!("Couldn't decode entity id {:?}", entity.id.clone());
+                    Err(_) => tracing::error!(
+                        "[Values][UpdateEntity] Could not transform Vec<u8> for entity.id {:?}",
+                        &entity.id
+                    ),
                 }
             }
             Payload::UnsetEntityValues(entity) => {
-                if let Ok(entity_id) = String::from_utf8(entity.id.clone()) {
-                    for property in &entity.properties {
-                        if let Ok(property_id) = String::from_utf8(property.clone()) {
+                let entity_id_bytes = id::transform_id_bytes(entity.id.clone());
+
+                match entity_id_bytes {
+                    Ok(entity_id_bytes) => {
+                        let entity_id = Uuid::from_bytes(entity_id_bytes).to_string();
+
+                        for property in &entity.properties {
+                            let property_id_bytes =
+                                id::transform_id_bytes(property.clone());
+
+                            if let Err(_) = property_id_bytes {
+                                tracing::error!(
+                                    "[Values][UnsetEntityValues] Could not transform Vec<u8> for property id {:?}",
+                                    &property
+                                );
+                                continue;
+                            }
+
+                            let property_id =
+                                Uuid::from_bytes(property_id_bytes.unwrap()).to_string();
+
                             values.push(ValueOp {
                                 id: derive_value_id(&entity_id, &property_id, space_id),
                                 change_type: ValueChangeType::DELETE,
@@ -107,7 +141,11 @@ fn value_op_from_op(op: &Op, space_id: &String) -> Vec<ValueOp> {
                                 language_option: None,
                             });
                         }
-                    }
+                    },
+                    Err(_) => tracing::error!(
+                        "[Values][UnsetEntityValues] Could not transform Vec<u8> for entity.id {:?}",
+                        &entity.id
+                    )
                 }
             }
             _ => {}
