@@ -1,21 +1,42 @@
 import {SystemIds} from "@graphprotocol/grc-20"
+import {and, eq} from "drizzle-orm"
 import {Effect} from "effect"
+import type {QueryEntitiesArgs} from "../generated/graphql"
+import {entities, values} from "../services/storage/schema"
 import {Storage} from "../services/storage/storage"
+import {type EntityFilter, buildEntityWhere} from "./filters"
 
-export function getEntities(limit = 100, offset = 0) {
+export function getEntities(args: QueryEntitiesArgs) {
+	const {filter, limit = 100, offset = 0} = args
+
 	return Effect.gen(function* () {
 		const db = yield* Storage
 
+		const whereClauses = filter ? buildEntityWhere(filter as EntityFilter) : undefined
+
 		return yield* db.use(async (client) => {
-			const result = await client.query.entities.findMany({
-				limit,
-				offset,
+			const entitiesWithMatchingValue = await client.query.entities.findMany({
+				limit: Number(limit),
+				offset: Number(offset),
 				with: {
-					values: true,
+					values: {
+						where: and(whereClauses),
+						columns: {
+							propertyId: true,
+							value: true,
+						},
+					},
 				},
+				where: (entities, {exists}) =>
+					exists(
+						client
+							.select()
+							.from(values)
+							.where(and(eq(values.entityId, entities.id), whereClauses)),
+					),
 			})
 
-			return result.map((result) => {
+			return entitiesWithMatchingValue.map((result) => {
 				return {
 					id: result.id,
 					createdAt: result.createdAt,
@@ -98,7 +119,7 @@ export function getRelations(id: string) {
 				typeId: relation.typeId,
 				fromId: relation.fromEntityId,
 				toId: relation.toEntityId,
-				index: relation.index,
+				position: relation.position,
 				spaceId: relation.spaceId,
 			}))
 		})

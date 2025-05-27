@@ -33,19 +33,22 @@ async fn main() -> Result<(), IndexingError> {
     dotenv().ok();
     let database_url = env::var("DATABASE_URL").expect("DATABASE_URL not set");
     let storage = Arc::new(PostgresStorage::new(&database_url).await?);
-    let bytes = fs::read("./tests/25omwWh6HYgeRQKCaSpVpa_ops"); // Root
-                                                                // let bytes = fs::read("./tests/SgjATMbm41LX6naizMqBVd_ops"); // Crypto
 
-    let edit = Edit::decode(Bytes::from(bytes.unwrap()));
+    let root_space_bytes = fs::read("./tests/25omwWh6HYgeRQKCaSpVpa_ops");
+    let crypto_space_bytes = fs::read("./tests/SgjATMbm41LX6naizMqBVd_ops");
 
-    println!(
-        "Running migration tests for edit {:?}",
-        edit.clone().unwrap().name
-    );
+    let root_space_edit = Edit::decode(Bytes::from(root_space_bytes.unwrap()));
+    let crypto_space_edit = Edit::decode(Bytes::from(crypto_space_bytes.unwrap()));
 
-    let item = PreprocessedEdit {
-        space_id: String::from("5"),
-        edit: Some(edit.clone().unwrap()),
+    let root_space_preprocessed_edit = PreprocessedEdit {
+        space_id: String::from("25omwWh6HYgeRQKCaSpVpa"),
+        edit: Some(root_space_edit.clone().unwrap()),
+        is_errored: false,
+    };
+
+    let crypto_space_preprocessed_edit = PreprocessedEdit {
+        space_id: String::from("SgjATMbm41LX6naizMqBVd_ops"),
+        edit: Some(crypto_space_edit.clone().unwrap()),
         is_errored: false,
     };
 
@@ -60,7 +63,7 @@ async fn main() -> Result<(), IndexingError> {
     indexer
         .run(&vec![KgData {
             block,
-            edits: vec![item],
+            edits: vec![root_space_preprocessed_edit, crypto_space_preprocessed_edit],
         }])
         .await?;
 

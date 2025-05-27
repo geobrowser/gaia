@@ -18,6 +18,11 @@ export type Scalars = {
   Float: { input: number; output: number; }
 };
 
+export type CheckboxFilter = {
+  exists?: InputMaybe<Scalars['Boolean']['input']>;
+  is?: InputMaybe<Scalars['Boolean']['input']>;
+};
+
 export type Entity = {
   __typename?: 'Entity';
   blocks: Array<Maybe<Entity>>;
@@ -31,6 +36,27 @@ export type Entity = {
   updatedAt: Scalars['String']['output'];
   updatedAtBlock: Scalars['String']['output'];
   values: Array<Maybe<Value>>;
+};
+
+export type EntityFilter = {
+  NOT?: InputMaybe<EntityFilter>;
+  OR?: InputMaybe<Array<EntityFilter>>;
+  value?: InputMaybe<ValueFilter>;
+};
+
+export type NumberFilter = {
+  NOT?: InputMaybe<NumberFilter>;
+  exists?: InputMaybe<Scalars['Boolean']['input']>;
+  greaterThan?: InputMaybe<Scalars['Float']['input']>;
+  greaterThanOrEqual?: InputMaybe<Scalars['Float']['input']>;
+  is?: InputMaybe<Scalars['Float']['input']>;
+  lessThan?: InputMaybe<Scalars['Float']['input']>;
+  lessThanOrEqual?: InputMaybe<Scalars['Float']['input']>;
+};
+
+export type PointFilter = {
+  exists?: InputMaybe<Scalars['Boolean']['input']>;
+  is?: InputMaybe<Array<InputMaybe<Scalars['Float']['input']>>>;
 };
 
 export type Property = {
@@ -49,6 +75,7 @@ export type Query = {
 
 
 export type QueryEntitiesArgs = {
+  filter?: InputMaybe<EntityFilter>;
   limit?: InputMaybe<Scalars['Int']['input']>;
   offset?: InputMaybe<Scalars['Int']['input']>;
 };
@@ -63,7 +90,7 @@ export type Relation = {
   from?: Maybe<Entity>;
   fromId: Scalars['String']['output'];
   id: Scalars['ID']['output'];
-  index?: Maybe<Scalars['String']['output']>;
+  position?: Maybe<Scalars['String']['output']>;
   spaceId: Scalars['String']['output'];
   to?: Maybe<Entity>;
   toId: Scalars['String']['output'];
@@ -72,17 +99,32 @@ export type Relation = {
   typeId: Scalars['String']['output'];
 };
 
+export type TextFilter = {
+  NOT?: InputMaybe<TextFilter>;
+  contains?: InputMaybe<Scalars['String']['input']>;
+  endsWith?: InputMaybe<Scalars['String']['input']>;
+  exists?: InputMaybe<Scalars['Boolean']['input']>;
+  is?: InputMaybe<Scalars['String']['input']>;
+  startsWith?: InputMaybe<Scalars['String']['input']>;
+};
+
 export type Value = {
   __typename?: 'Value';
   entity?: Maybe<Entity>;
   entityId: Scalars['String']['output'];
-  formatOption?: Maybe<Scalars['String']['output']>;
   id: Scalars['ID']['output'];
-  property?: Maybe<Entity>;
+  property?: Maybe<Property>;
   propertyId: Scalars['String']['output'];
   spaceId: Scalars['String']['output'];
-  unitOption?: Maybe<Scalars['String']['output']>;
   value?: Maybe<Scalars['String']['output']>;
+};
+
+export type ValueFilter = {
+  checkbox?: InputMaybe<CheckboxFilter>;
+  number?: InputMaybe<NumberFilter>;
+  point?: InputMaybe<PointFilter>;
+  propertyId: Scalars['String']['input'];
+  text?: InputMaybe<TextFilter>;
 };
 
 export type WithIndex<TObject> = TObject & Record<string, any>;
@@ -158,27 +200,41 @@ export type DirectiveResolverFn<TResult = {}, TParent = {}, TContext = {}, TArgs
 /** Mapping between all available schema types and the resolvers types */
 export type ResolversTypes = ResolversObject<{
   Boolean: ResolverTypeWrapper<Scalars['Boolean']['output']>;
+  CheckboxFilter: CheckboxFilter;
   Entity: ResolverTypeWrapper<DbEntity>;
+  EntityFilter: EntityFilter;
+  Float: ResolverTypeWrapper<Scalars['Float']['output']>;
   ID: ResolverTypeWrapper<Scalars['ID']['output']>;
   Int: ResolverTypeWrapper<Scalars['Int']['output']>;
+  NumberFilter: NumberFilter;
+  PointFilter: PointFilter;
   Property: ResolverTypeWrapper<DbProperty>;
   Query: ResolverTypeWrapper<{}>;
   Relation: ResolverTypeWrapper<Omit<Relation, 'from' | 'to' | 'type'> & { from?: Maybe<ResolversTypes['Entity']>, to?: Maybe<ResolversTypes['Entity']>, type?: Maybe<ResolversTypes['Entity']> }>;
   String: ResolverTypeWrapper<Scalars['String']['output']>;
-  Value: ResolverTypeWrapper<Omit<Value, 'entity' | 'property'> & { entity?: Maybe<ResolversTypes['Entity']>, property?: Maybe<ResolversTypes['Entity']> }>;
+  TextFilter: TextFilter;
+  Value: ResolverTypeWrapper<Omit<Value, 'entity' | 'property'> & { entity?: Maybe<ResolversTypes['Entity']>, property?: Maybe<ResolversTypes['Property']> }>;
+  ValueFilter: ValueFilter;
 }>;
 
 /** Mapping between all available schema types and the resolvers parents */
 export type ResolversParentTypes = ResolversObject<{
   Boolean: Scalars['Boolean']['output'];
+  CheckboxFilter: CheckboxFilter;
   Entity: DbEntity;
+  EntityFilter: EntityFilter;
+  Float: Scalars['Float']['output'];
   ID: Scalars['ID']['output'];
   Int: Scalars['Int']['output'];
+  NumberFilter: NumberFilter;
+  PointFilter: PointFilter;
   Property: DbProperty;
   Query: {};
   Relation: Omit<Relation, 'from' | 'to' | 'type'> & { from?: Maybe<ResolversParentTypes['Entity']>, to?: Maybe<ResolversParentTypes['Entity']>, type?: Maybe<ResolversParentTypes['Entity']> };
   String: Scalars['String']['output'];
-  Value: Omit<Value, 'entity' | 'property'> & { entity?: Maybe<ResolversParentTypes['Entity']>, property?: Maybe<ResolversParentTypes['Entity']> };
+  TextFilter: TextFilter;
+  Value: Omit<Value, 'entity' | 'property'> & { entity?: Maybe<ResolversParentTypes['Entity']>, property?: Maybe<ResolversParentTypes['Property']> };
+  ValueFilter: ValueFilter;
 }>;
 
 export type EntityResolvers<ContextType = any, ParentType extends ResolversParentTypes['Entity'] = ResolversParentTypes['Entity']> = ResolversObject<{
@@ -213,7 +269,7 @@ export type RelationResolvers<ContextType = any, ParentType extends ResolversPar
   from?: Resolver<Maybe<ResolversTypes['Entity']>, ParentType, ContextType>;
   fromId?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
   id?: Resolver<ResolversTypes['ID'], ParentType, ContextType>;
-  index?: Resolver<Maybe<ResolversTypes['String']>, ParentType, ContextType>;
+  position?: Resolver<Maybe<ResolversTypes['String']>, ParentType, ContextType>;
   spaceId?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
   to?: Resolver<Maybe<ResolversTypes['Entity']>, ParentType, ContextType>;
   toId?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
@@ -226,12 +282,10 @@ export type RelationResolvers<ContextType = any, ParentType extends ResolversPar
 export type ValueResolvers<ContextType = any, ParentType extends ResolversParentTypes['Value'] = ResolversParentTypes['Value']> = ResolversObject<{
   entity?: Resolver<Maybe<ResolversTypes['Entity']>, ParentType, ContextType>;
   entityId?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
-  formatOption?: Resolver<Maybe<ResolversTypes['String']>, ParentType, ContextType>;
   id?: Resolver<ResolversTypes['ID'], ParentType, ContextType>;
-  property?: Resolver<Maybe<ResolversTypes['Entity']>, ParentType, ContextType>;
+  property?: Resolver<Maybe<ResolversTypes['Property']>, ParentType, ContextType>;
   propertyId?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
   spaceId?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
-  unitOption?: Resolver<Maybe<ResolversTypes['String']>, ParentType, ContextType>;
   value?: Resolver<Maybe<ResolversTypes['String']>, ParentType, ContextType>;
   __isTypeOf?: IsTypeOfResolverFn<ParentType, ContextType>;
 }>;
