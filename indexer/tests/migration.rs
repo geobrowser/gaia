@@ -33,7 +33,8 @@ async fn main() -> Result<(), IndexingError> {
     dotenv().ok();
     let database_url = env::var("DATABASE_URL").expect("DATABASE_URL not set");
     let storage = Arc::new(PostgresStorage::new(&database_url).await?);
-    let bytes = fs::read("./tests/25omwWh6HYgeRQKCaSpVpa_ops");
+    let bytes = fs::read("./tests/25omwWh6HYgeRQKCaSpVpa_ops"); // Root
+                                                                // let bytes = fs::read("./tests/SgjATMbm41LX6naizMqBVd_ops"); // Crypto
 
     let edit = Edit::decode(Bytes::from(bytes.unwrap()));
 
