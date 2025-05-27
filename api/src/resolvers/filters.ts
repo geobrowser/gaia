@@ -31,7 +31,7 @@ type PointFilter = {
 }
 
 type PropertyFilter = {
-	propertyId: string
+	property: string
 	text?: TextFilter
 	number?: NumberFilter
 	checkbox?: CheckboxFilter
@@ -46,7 +46,7 @@ export type EntityFilter = {
 }
 
 function buildValueWhere(filter: PropertyFilter): any {
-	const conditions: any[] = [eq(values.propertyId, filter.propertyId)]
+	const conditions: any[] = [eq(values.propertyId, filter.property)]
 
 	if (filter.text) {
 		const f = filter.text
@@ -58,7 +58,7 @@ function buildValueWhere(filter: PropertyFilter): any {
 			conditions.push(f.exists ? not(isNull(values.value)) : isNull(values.value))
 		}
 		if (f.NOT) {
-			conditions.push(not(buildValueWhere({propertyId: filter.propertyId, text: f.NOT})))
+			conditions.push(not(buildValueWhere({property: filter.property, text: f.NOT})))
 		}
 	}
 
@@ -88,7 +88,7 @@ function buildValueWhere(filter: PropertyFilter): any {
 		}
 
 		if (f.NOT) {
-			conditions.push(not(buildValueWhere({propertyId: filter.propertyId, number: f.NOT})))
+			conditions.push(not(buildValueWhere({property: filter.property, number: f.NOT})))
 		}
 	}
 

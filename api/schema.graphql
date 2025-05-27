@@ -101,7 +101,7 @@ input PointFilter {
 }
 
 input ValueFilter {
-  propertyId: String!
+  property: String!
   text: TextFilter
   number: NumberFilter
   checkbox: CheckboxFilter
