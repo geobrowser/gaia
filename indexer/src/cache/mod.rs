@@ -2,7 +2,7 @@ use async_trait::async_trait;
 pub mod kv;
 pub mod postgres;
 
-use grc20::pb::ipfsv2::Edit as EditV2;
+use grc20::pb::ipfs::Edit;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -19,7 +19,7 @@ pub enum CacheError {
 
 #[derive(Clone)]
 pub struct PreprocessedEdit {
-    pub edit: Option<EditV2>,
+    pub edit: Option<Edit>,
     pub is_errored: bool,
     pub space_id: String,
 }

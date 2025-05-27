@@ -1,6 +1,8 @@
 use std::collections::HashMap;
 
-use grc20::pb::ipfsv2::{op::Payload, Edit};
+use grc20::pb::ipfs::{op::Payload, Edit};
+use indexer_utils::id;
+use uuid::Uuid;
 
 #[derive(Clone)]
 pub struct SetRelationItem {
@@ -205,53 +207,100 @@ impl RelationsModel {
             if let Some(op_type) = &op.payload {
                 match op_type {
                     Payload::CreateRelation(relation) => {
-                        let relation_id = String::from_utf8(relation.id.clone());
-                        let entity_id = String::from_utf8(relation.entity.clone());
-                        let type_id = String::from_utf8(relation.r#type.clone());
-                        let from_id = String::from_utf8(relation.from_entity.clone());
-                        let to_id = String::from_utf8(relation.to_entity.clone());
+                        let relation_id_bytes = id::transform_id_bytes(relation.id.clone());
+
+                        if let Err(_) = relation_id_bytes {
+                            tracing::error!(
+                                "Could not transform Vec<u8> for relation.id {:?}",
+                                &relation.id
+                            );
+                            continue;
+                        }
+
+                        let entity_id_bytes = id::transform_id_bytes(relation.entity.clone());
+
+                        if let Err(_) = entity_id_bytes {
+                            tracing::error!(
+                                "Could not transform Vec<u8> for relation.entity {:?}",
+                                &relation.entity
+                            );
+                            continue;
+                        }
+
+                        let type_id_bytes = id::transform_id_bytes(relation.r#type.clone());
+
+                        if let Err(_) = type_id_bytes {
+                            tracing::error!(
+                                "Could not transform Vec<u8> for relation.type {:?}",
+                                &relation.r#type
+                            );
+                            continue;
+                        }
+
+                        let from_id_bytes = id::transform_id_bytes(relation.from_entity.clone());
+
+                        if let Err(_) = from_id_bytes {
+                            tracing::error!(
+                                "Could not transform Vec<u8> for relation.from_entity {:?}",
+                                &relation.from_entity
+                            );
+                            continue;
+                        }
+
+                        let to_id_bytes = id::transform_id_bytes(relation.to_entity.clone());
+
+                        if let Err(_) = to_id_bytes {
+                            tracing::error!(
+                                "Could not transform Vec<u8> for relation.to_entity {:?}",
+                                &relation.to_entity
+                            );
+                            continue;
+                        }
+
+                        let relation_id = Uuid::from_bytes(relation_id_bytes.unwrap()).to_string();
+                        let entity_id = Uuid::from_bytes(entity_id_bytes.unwrap()).to_string();
+                        let type_id = Uuid::from_bytes(type_id_bytes.unwrap()).to_string();
+                        let from_id = Uuid::from_bytes(from_id_bytes.unwrap()).to_string();
+                        let to_id = Uuid::from_bytes(to_id_bytes.unwrap()).to_string();
 
                         let to_space = relation
                             .to_space
                             .clone()
-                            .and_then(|s| String::from_utf8(s).ok());
-                            
+                            .and_then(|s| id::transform_id_bytes(s).ok())
+                            .map(|s| Uuid::from_bytes(s).to_string());
+
                         let from_space = relation
                             .from_space
                             .clone()
-                            .and_then(|s| String::from_utf8(s).ok());
-                            
+                            .and_then(|s| id::transform_id_bytes(s).ok())
+                            .map(|s| Uuid::from_bytes(s).to_string());
+
                         let from_version = relation
                             .from_version
                             .clone()
-                            .and_then(|s| String::from_utf8(s).ok());
-                            
+                            .and_then(|s| id::transform_id_bytes(s).ok())
+                            .map(|s| Uuid::from_bytes(s).to_string());
+
                         let to_version = relation
                             .to_version
                             .clone()
-                            .and_then(|s| String::from_utf8(s).ok());
+                            .and_then(|s| id::transform_id_bytes(s).ok())
+                            .map(|s| Uuid::from_bytes(s).to_string());
 
-                        if relation_id.is_ok()
-                            && entity_id.is_ok()
-                            && from_id.is_ok()
-                            && to_id.is_ok()
-                            && type_id.is_ok()
-                        {
-                            relations.push(RelationItem::Create(SetRelationItem {
-                                id: relation_id.unwrap(),
-                                entity_id: entity_id.unwrap(),
-                                space_id: space_id.clone(),
-                                position: relation.position.clone(),
-                                type_id: type_id.unwrap().to_string(),
-                                from_id: from_id.unwrap().to_string(),
-                                from_space_id: from_space,
-                                from_version_id: from_version,
-                                to_id: to_id.unwrap().to_string(),
-                                to_space_id: to_space,
-                                to_version_id: to_version,
-                                verified: relation.verified,
-                            }));
-                        }
+                        relations.push(RelationItem::Create(SetRelationItem {
+                            id: relation_id,
+                            entity_id: entity_id,
+                            space_id: space_id.clone(),
+                            position: relation.position.clone(),
+                            type_id: type_id,
+                            from_id: from_id,
+                            from_space_id: from_space,
+                            from_version_id: from_version,
+                            to_id: to_id,
+                            to_space_id: to_space,
+                            to_version_id: to_version,
+                            verified: relation.verified,
+                        }));
                     }
                     Payload::DeleteRelation(relation_id) => {
                         if let Ok(relation_id) = String::from_utf8(relation_id.clone()) {
@@ -266,17 +315,17 @@ impl RelationsModel {
                             .to_space
                             .clone()
                             .and_then(|s| String::from_utf8(s).ok());
-        
+
                         let from_space = updated_relation
                             .from_space
                             .clone()
                             .and_then(|s| String::from_utf8(s).ok());
-        
+
                         let from_version = updated_relation
                             .from_version
                             .clone()
                             .and_then(|s| String::from_utf8(s).ok());
-        
+
                         let to_version = updated_relation
                             .to_version
                             .clone()

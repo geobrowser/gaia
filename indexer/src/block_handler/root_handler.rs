@@ -71,6 +71,18 @@ where
                     println!("Error writing relations {}", write_error);
                 }
 
+                let update_relations_result = storage.update_relations(&updated_relations).await;
+
+                if let Err(write_error) = update_relations_result {
+                    println!("Error updating relations {}", write_error);
+                }
+
+                let unset_relations_result = storage.unset_relation_fields(&unset_relations).await;
+
+                if let Err(write_error) = unset_relations_result {
+                    println!("Error unsetting relation fields {}", write_error);
+                }
+
                 let delete_relations_result = storage
                     .delete_relations(&deleted_relation_ids, &space_id)
                     .await;

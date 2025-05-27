@@ -1,6 +1,6 @@
 use std::collections::HashMap;
 
-use grc20::pb::ipfsv2::{op::Payload, Edit, Op};
+use grc20::pb::ipfs::{op::Payload, Edit, Op};
 
 #[derive(Clone)]
 pub enum ValueChangeType {
@@ -38,6 +38,8 @@ impl ValuesModel {
         // Ordering of these to-be-squashed ops matters. We use what the order is in
         // the edit.
         let squashed = squash_values(&triple_ops);
+
+        println!("squashed values len {}", squashed.len());
 
         let (created, deleted): (Vec<ValueOp>, Vec<ValueOp>) = squashed
             .into_iter()
@@ -83,8 +85,12 @@ fn value_op_from_op(op: &Op, space_id: &String) -> Vec<ValueOp> {
                                 value: Some(value.value.clone()),
                                 language_option: None,
                             });
+                        } else {
+                            println!("Couldn't decode property id {:?}", property_id.clone());
                         }
                     }
+                } else {
+                    println!("Couldn't decode entity id {:?}", entity.id.clone());
                 }
             }
             Payload::UnsetEntityValues(entity) => {

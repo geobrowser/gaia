@@ -266,7 +266,7 @@ fn make_relation_op(
             })),
         },
         TestRelationOpType::UPDATE => Op {
-            payload: Some(Payload::UpdateRelation(grc20::pb::ipfsv2::RelationUpdate {
+            payload: Some(Payload::UpdateRelation(grc20::pb::ipfs::RelationUpdate {
                 id: relation_id.to_string().into_bytes(),
                 from_space: None,
                 from_version: None,

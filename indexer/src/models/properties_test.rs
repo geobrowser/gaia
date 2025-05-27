@@ -1,5 +1,5 @@
 use crate::models::properties::{ValueChangeType, ValuesModel};
-use grc20::pb::ipfsv2::{op::Payload, Edit, Entity, Op, UnsetEntityValues, Value};
+use grc20::pb::ipfs::{op::Payload, Edit, Entity, Op, UnsetEntityValues, Value};
 
 #[cfg(test)]
 mod tests {

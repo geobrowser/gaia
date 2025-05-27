@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use grc20::pb::ipfsv2::{op::Payload, Edit};
+use grc20::pb::ipfs::{op::Payload, Edit};
 use stream::utils::BlockMetadata;
 
 #[derive(Clone)]
