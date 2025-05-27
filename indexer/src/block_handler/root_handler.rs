@@ -52,14 +52,14 @@ where
                 let write_properties_result = storage.insert_values(&created_values).await;
 
                 if let Err(write_error) = write_properties_result {
-                    println!("Error writing properties {}", write_error);
+                    println!("Error writing values {}", write_error);
                 }
 
                 let delete_properties_result =
                     storage.delete_values(&deleted_values, &space_id).await;
 
                 if let Err(delete_error) = delete_properties_result {
-                    println!("Error deleting properties {}", delete_error);
+                    println!("Error deleting values {}", delete_error);
                 }
 
                 let (created_relations, updated_relations, unset_relations, deleted_relation_ids) =
@@ -100,7 +100,7 @@ where
 
     // Wait for all processing in the current block to finish before continuing
     // to the next block
-    let done = join_all(handles).await;
+    join_all(handles).await;
 
     Ok(())
 }
