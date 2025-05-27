@@ -7,11 +7,7 @@ fn main() -> Result<()> {
     // fs::create_dir_all(&out_dir).expect("Failed to create output directory");
 
     // // List all .proto files explicitly
-    // let protos = vec![
-    //     "proto/ipfs.proto",
-    //     "proto/chain.proto",
-    //     "proto/ipfsv2.proto",
-    // ];
+    // let protos = vec!["proto/chain.proto", "proto/ipfs.proto"];
     // let proto_include = &["proto"];
 
     // let mut config = Config::new();

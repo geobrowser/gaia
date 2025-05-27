@@ -1,6 +1,6 @@
 use std::env;
 
-use grc20::pb::ipfsv2::Edit;
+use grc20::pb::ipfs::Edit;
 use sqlx::{postgres::PgPoolOptions, Postgres};
 
 use super::{CacheBackend, CacheError, PreprocessedEdit};

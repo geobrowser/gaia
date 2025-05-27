@@ -63,6 +63,18 @@ pub fn decode_base58_to_uuid(encoded: &str) -> Result<String, &'static str> {
     ))
 }
 
+#[derive(Clone, Debug)]
+pub enum IdError {
+    DecodeError,
+}
+
+pub fn transform_id_bytes(bytes: Vec<u8>) -> Result<[u8; 16], IdError> {
+    match bytes.try_into() {
+        Ok(value) => Ok(value),
+        Err(_) => Err(IdError::DecodeError),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
