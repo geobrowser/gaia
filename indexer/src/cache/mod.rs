@@ -17,7 +17,7 @@ pub enum CacheError {
     DeserializeError(#[from] serde_json::Error),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PreprocessedEdit {
     pub edit: Option<Edit>,
     pub is_errored: bool,
