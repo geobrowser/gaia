@@ -1,6 +1,7 @@
 import {SystemIds} from "@graphprotocol/grc-20"
 import {and, eq} from "drizzle-orm"
 import {Effect} from "effect"
+import type {QueryTypesArgs} from "../generated/graphql"
 import {relations} from "../services/storage/schema"
 import {Storage} from "../services/storage/storage"
 
@@ -29,13 +30,23 @@ export function property(propertyId: string) {
 	})
 }
 
-export function properties(typeId: string) {
+export function properties(typeId: string, args: QueryTypesArgs) {
 	return Effect.gen(function* () {
 		const db = yield* Storage
 
+		const where = [eq(relations.fromEntityId, typeId), eq(relations.typeId, SystemIds.PROPERTIES)]
+
+		if (args.filter) {
+			const space = args.filter.spaceId
+
+			if (space) {
+				where.push(eq(relations.spaceId, space))
+			}
+		}
+
 		const propertyRelations = yield* db.use(async (client) => {
 			return await client.query.relations.findMany({
-				where: and(eq(relations.fromEntityId, typeId), eq(relations.typeId, SystemIds.PROPERTIES)),
+				where: and(...where),
 				with: {
 					toEntity: {
 						with: {

@@ -1,7 +1,7 @@
 import {makeExecutableSchema} from "@graphql-tools/schema"
 import {file} from "bun"
 import {createYoga} from "graphql-yoga"
-import type {Resolvers as GeneratedResolvers} from "./src/generated/graphql"
+import type {QueryTypesArgs, Resolvers as GeneratedResolvers} from "./src/generated/graphql"
 import * as Resolvers from "./src/resolvers/root"
 
 const schemaFile = await file("./schema.graphql").text()
@@ -15,7 +15,11 @@ const resolvers: GeneratedResolvers = {
 			return await Resolvers.entity(args)
 		},
 		types: async (_, args) => {
-			return await Resolvers.types(args)
+			const result = await Resolvers.types(args)
+			return result.map((type) => ({
+				...type,
+				__filter: args.filter,
+			}))
 		},
 	},
 	Entity: {
@@ -49,7 +53,9 @@ const resolvers: GeneratedResolvers = {
 			return Resolvers.entity({id: parent.id})
 		},
 		properties: async (parent: {id: string}) => {
-			return Resolvers.properties({id: parent.id})
+			// @ts-expect-error type jankiness. Overwriting for now
+			const filter = (parent.__filter as QueryTypesArgs["filter"]) ?? {}
+			return Resolvers.properties(parent.id, {filter})
 		},
 	},
 	Value: {

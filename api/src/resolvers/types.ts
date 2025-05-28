@@ -6,7 +6,21 @@ import {entities, relations} from "../services/storage/schema"
 import {Storage} from "../services/storage/storage"
 
 export function getTypes(args: QueryTypesArgs) {
-	const {filter, limit, offset} = args
+	const {limit, offset, filter} = args
+
+	const where = [
+		eq(relations.fromEntityId, entities.id),
+		eq(relations.typeId, SystemIds.TYPES_PROPERTY),
+		eq(relations.toEntityId, SystemIds.SCHEMA_TYPE),
+	]
+
+	if (filter) {
+		const space = filter.spaceId
+
+		if (space) {
+			where.push(eq(relations.spaceId, space))
+		}
+	}
 
 	return Effect.gen(function* () {
 		const db = yield* Storage
@@ -19,13 +33,7 @@ export function getTypes(args: QueryTypesArgs) {
 					client
 						.select({id: relations.id})
 						.from(relations)
-						.where(
-							and(
-								eq(relations.fromEntityId, entities.id),
-								eq(relations.typeId, SystemIds.TYPES_PROPERTY),
-								eq(relations.toEntityId, SystemIds.SCHEMA_TYPE),
-							),
-						),
+						.where(and(...where)),
 				),
 				with: {
 					values: {
