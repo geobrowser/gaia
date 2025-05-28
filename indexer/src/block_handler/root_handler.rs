@@ -1,5 +1,6 @@
 use std::sync::Arc;
 
+use futures::future::join_all;
 use stream::utils::BlockMetadata;
 
 use crate::models::relations::RelationsModel;
@@ -48,6 +49,7 @@ where
 
                         handles.push(tokio::spawn(async move {
                             let entities = EntitiesModel::map_edit_to_entities(&edit, &block);
+
                             if let Err(error) = storage.insert_entities(&entities).await {
                                 eprintln!("Error writing entities: {}", error);
                             }
@@ -143,6 +145,8 @@ where
                         }));
                     }
                 }
+
+                join_all(handles).await;
             }
         })
         .await;

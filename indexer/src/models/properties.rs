@@ -2,7 +2,7 @@ use indexer_utils::id;
 use std::collections::HashMap;
 use uuid::Uuid;
 
-use grc20::pb::ipfs::{op::Payload, Edit, Op};
+use grc20::pb::ipfs::{op::Payload, options, Edit, Op};
 
 #[derive(Clone)]
 pub enum ValueChangeType {
@@ -18,7 +18,12 @@ pub struct ValueOp {
     pub property_id: String,
     pub space_id: String,
     pub value: Option<String>,
-    pub language_option: Option<String>,
+    pub language: Option<String>,
+    pub format: Option<String>,
+    pub unit: Option<String>,
+    pub timezone: Option<String>,
+    pub has_date: Option<bool>,
+    pub has_time: Option<bool>,
 }
 
 pub struct ValuesModel;
@@ -91,6 +96,9 @@ fn value_op_from_op(op: &Op, space_id: &String) -> Vec<ValueOp> {
                             let property_id =
                                 Uuid::from_bytes(property_id_bytes.unwrap()).to_string();
 
+                            let (language, format, unit, timezone, has_date, has_time) =
+                                extract_options(&value.options);
+
                             values.push(ValueOp {
                                 id: derive_value_id(&entity_id, &property_id, space_id),
                                 change_type: ValueChangeType::SET,
@@ -98,7 +106,12 @@ fn value_op_from_op(op: &Op, space_id: &String) -> Vec<ValueOp> {
                                 entity_id: entity_id.clone(),
                                 space_id: space_id.clone(),
                                 value: Some(value.value.clone()),
-                                language_option: None,
+                                language,
+                                format,
+                                unit,
+                                timezone,
+                                has_date,
+                                has_time,
                             });
                         }
                     }
@@ -137,7 +150,12 @@ fn value_op_from_op(op: &Op, space_id: &String) -> Vec<ValueOp> {
                                 entity_id: entity_id.clone(),
                                 space_id: space_id.clone(),
                                 value: None,
-                                language_option: None,
+                                language: None,
+                                format: None,
+                                unit: None,
+                                timezone: None,
+                                has_date: None,
+                                has_time: None,
                             });
                         }
                     },
@@ -152,4 +170,54 @@ fn value_op_from_op(op: &Op, space_id: &String) -> Vec<ValueOp> {
     }
 
     return values;
+}
+
+fn extract_options(
+    options: &Option<grc20::pb::ipfs::Options>,
+) -> (
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<bool>,
+    Option<bool>,
+) {
+    if let Some(opts) = options {
+        if let Some(value) = &opts.value {
+            match value {
+                options::Value::Text(text_opts) => {
+                    let language = text_opts
+                        .language
+                        .as_ref()
+                        .and_then(|lang| String::from_utf8(lang.clone()).ok());
+                    (language, None, None, None, None, None)
+                }
+                options::Value::Number(number_opts) => {
+                    let unit = number_opts
+                        .unit
+                        .as_ref()
+                        .and_then(|u| String::from_utf8(u.clone()).ok());
+                    (None, number_opts.format.clone(), unit, None, None, None)
+                }
+                options::Value::Time(time_opts) => {
+                    let timezone = time_opts
+                        .timezone
+                        .as_ref()
+                        .and_then(|tz| String::from_utf8(tz.clone()).ok());
+                    (
+                        None,
+                        time_opts.format.clone(),
+                        None,
+                        timezone,
+                        time_opts.has_date,
+                        time_opts.has_time,
+                    )
+                }
+            }
+        } else {
+            (None, None, None, None, None, None)
+        }
+    } else {
+        (None, None, None, None, None, None)
+    }
 }

@@ -64,6 +64,20 @@
       "when": 1747758631649,
       "tag": "0008_smooth_black_tom",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1748459428896,
+      "tag": "0009_magical_nova",
+      "breakpoints": true
+    },
+    {
+      "idx": 10,
+      "version": "7",
+      "when": 1748459535683,
+      "tag": "0010_awesome_the_hand",
+      "breakpoints": true
     }
   ]
 }

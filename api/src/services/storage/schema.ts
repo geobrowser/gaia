@@ -30,7 +30,12 @@ export const values = pgTable("values", {
 	entityId: text().notNull(),
 	spaceId: text().notNull(),
 	value: text().notNull(),
-	languageOption: text(),
+	language: text(),
+	format: text(),
+	unit: text(),
+	timezone: text(),
+	hasDate: boolean(),
+	hasTime: boolean(),
 })
 
 export const relations = pgTable("relations", {

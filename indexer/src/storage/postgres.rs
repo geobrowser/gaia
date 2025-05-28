@@ -49,7 +49,12 @@ impl PostgresStorage {
             entity_id: query.entity_id,
             space_id: query.space_id,
             value: query.value,
-            language_option: query.language_option,
+            language: query.language,
+            format: query.format,
+            unit: query.unit,
+            timezone: query.timezone,
+            has_date: query.has_date,
+            has_time: query.has_time,
             change_type: ValueChangeType::SET,
         })
     }
@@ -94,7 +99,7 @@ impl StorageBackend for PostgresStorage {
             .map(|x| x.updated_at_block.clone())
             .collect();
 
-        sqlx::query!(
+        let result = sqlx::query!(
             r#"
             INSERT INTO entities (id, created_at, created_at_block, updated_at, updated_at_block)
             SELECT * FROM UNNEST($1::text[], $2::text[], $3::text[], $4::text[], $5::text[])
@@ -124,7 +129,12 @@ impl StorageBackend for PostgresStorage {
         let mut property_ids = Vec::with_capacity(values.len());
         let mut space_ids = Vec::with_capacity(values.len());
         let mut value_values = Vec::with_capacity(values.len());
-        let mut language_options = Vec::with_capacity(values.len());
+        let mut languages = Vec::with_capacity(values.len());
+        let mut formats = Vec::with_capacity(values.len());
+        let mut units = Vec::with_capacity(values.len());
+        let mut timezones = Vec::with_capacity(values.len());
+        let mut has_dates = Vec::with_capacity(values.len());
+        let mut has_times = Vec::with_capacity(values.len());
 
         for prop in values {
             ids.push(&prop.id);
@@ -132,12 +142,18 @@ impl StorageBackend for PostgresStorage {
             property_ids.push(&prop.property_id);
             space_ids.push(&prop.space_id);
             value_values.push(&prop.value);
-            language_options.push(&prop.language_option);
+            languages.push(&prop.language);
+            formats.push(&prop.format);
+            units.push(&prop.unit);
+            timezones.push(&prop.timezone);
+            has_dates.push(&prop.has_date);
+            has_times.push(&prop.has_time);
         }
 
         let query = r#"
                 INSERT INTO values (
-                    id, entity_id, property_id, space_id, value, language_option
+                    id, entity_id, property_id, space_id, value, language,
+                    format, unit, timezone, has_date, has_time
                 )
                 SELECT * FROM UNNEST(
                     $1::text[],
@@ -145,11 +161,21 @@ impl StorageBackend for PostgresStorage {
                     $3::text[],
                     $4::text[],
                     $5::text[],
-                    $6::text[]
+                    $6::text[],
+                    $7::text[],
+                    $8::text[],
+                    $9::text[],
+                    $10::boolean[],
+                    $11::boolean[]
                 )
                 ON CONFLICT (id) DO UPDATE SET
                     value = EXCLUDED.value,
-                    language_option = EXCLUDED.language_option
+                    language = EXCLUDED.language,
+                    format = EXCLUDED.format,
+                    unit = EXCLUDED.unit,
+                    timezone = EXCLUDED.timezone,
+                    has_date = EXCLUDED.has_date,
+                    has_time = EXCLUDED.has_time
             "#;
 
         sqlx::query(query)
@@ -158,7 +184,12 @@ impl StorageBackend for PostgresStorage {
             .bind(&property_ids)
             .bind(&space_ids)
             .bind(&value_values)
-            .bind(&language_options)
+            .bind(&languages)
+            .bind(&formats)
+            .bind(&units)
+            .bind(&timezones)
+            .bind(&has_dates)
+            .bind(&has_times)
             .execute(&self.pool)
             .await?;
 
