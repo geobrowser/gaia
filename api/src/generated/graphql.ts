@@ -79,18 +79,20 @@ export type QueryEntitiesArgs = {
   filter?: InputMaybe<EntityFilter>;
   limit?: InputMaybe<Scalars['Int']['input']>;
   offset?: InputMaybe<Scalars['Int']['input']>;
+  spaceId?: InputMaybe<Scalars['String']['input']>;
 };
 
 
 export type QueryEntityArgs = {
   id: Scalars['String']['input'];
+  spaceId?: InputMaybe<Scalars['String']['input']>;
 };
 
 
 export type QueryTypesArgs = {
-  filter?: InputMaybe<TypeFilter>;
   limit?: InputMaybe<Scalars['Int']['input']>;
   offset?: InputMaybe<Scalars['Int']['input']>;
+  spaceId?: InputMaybe<Scalars['String']['input']>;
 };
 
 export type Relation = {
@@ -123,10 +125,6 @@ export type Type = {
   id: Scalars['ID']['output'];
   name?: Maybe<Scalars['String']['output']>;
   properties?: Maybe<Array<Maybe<Property>>>;
-};
-
-export type TypeFilter = {
-  spaceId?: InputMaybe<Scalars['String']['input']>;
 };
 
 export type Value = {
@@ -241,7 +239,6 @@ export type ResolversTypes = ResolversObject<{
   String: ResolverTypeWrapper<Scalars['String']['output']>;
   TextFilter: TextFilter;
   Type: ResolverTypeWrapper<Omit<Type, 'entity' | 'properties'> & { entity?: Maybe<ResolversTypes['Entity']>, properties?: Maybe<Array<Maybe<ResolversTypes['Property']>>> }>;
-  TypeFilter: TypeFilter;
   Value: ResolverTypeWrapper<Omit<Value, 'entity' | 'property'> & { entity?: Maybe<ResolversTypes['Entity']>, property?: Maybe<ResolversTypes['Property']> }>;
   ValueFilter: ValueFilter;
 }>;
@@ -263,7 +260,6 @@ export type ResolversParentTypes = ResolversObject<{
   String: Scalars['String']['output'];
   TextFilter: TextFilter;
   Type: Omit<Type, 'entity' | 'properties'> & { entity?: Maybe<ResolversParentTypes['Entity']>, properties?: Maybe<Array<Maybe<ResolversParentTypes['Property']>>> };
-  TypeFilter: TypeFilter;
   Value: Omit<Value, 'entity' | 'property'> & { entity?: Maybe<ResolversParentTypes['Entity']>, property?: Maybe<ResolversParentTypes['Property']> };
   ValueFilter: ValueFilter;
 }>;

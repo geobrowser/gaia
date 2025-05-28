@@ -18,7 +18,7 @@ const resolvers: GeneratedResolvers = {
 			const result = await Resolvers.types(args)
 			return result.map((type) => ({
 				...type,
-				__filter: args.filter,
+				__spaceId: args.spaceId,
 			}))
 		},
 	},
@@ -54,8 +54,8 @@ const resolvers: GeneratedResolvers = {
 		},
 		properties: async (parent: {id: string}) => {
 			// @ts-expect-error type jankiness. Overwriting for now
-			const filter = (parent.__filter as QueryTypesArgs["filter"]) ?? {}
-			return Resolvers.properties(parent.id, {filter})
+			const spaceId = (parent.__spaceId as QueryTypesArgs["spaceId"]) ?? null
+			return Resolvers.properties(parent.id, {spaceId: spaceId})
 		},
 	},
 	Value: {

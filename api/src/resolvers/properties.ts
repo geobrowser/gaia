@@ -36,12 +36,8 @@ export function properties(typeId: string, args: QueryTypesArgs) {
 
 		const where = [eq(relations.fromEntityId, typeId), eq(relations.typeId, SystemIds.PROPERTIES)]
 
-		if (args.filter) {
-			const space = args.filter.spaceId
-
-			if (space) {
-				where.push(eq(relations.spaceId, space))
-			}
+		if (args.spaceId) {
+			where.push(eq(relations.spaceId, args.spaceId))
 		}
 
 		const propertyRelations = yield* db.use(async (client) => {

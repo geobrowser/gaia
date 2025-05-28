@@ -64,21 +64,16 @@ type Type {
   entity: Entity
 }
 
-input TypeFilter {
-  spaceId: String
-}
-
 type Query {
-  entities(filter: EntityFilter, limit: Int = 100, offset: Int = 0): [Entity]!
-  entity(id: String!): Entity
-  types(filter: TypeFilter, limit: Int = 100, offset: Int = 0): [Type]!
+  entities(filter: EntityFilter, limit: Int = 100, offset: Int = 0, spaceId: String): [Entity]!
+  entity(id: String!, spaceId: String): Entity
+  types(spaceId: String, limit: Int = 100, offset: Int = 0): [Type]!
   # fuzzy search
   # relation
   # relations
   # property
   # properties
   # type
-  # types
   # space
   # spaces
   # proposal
