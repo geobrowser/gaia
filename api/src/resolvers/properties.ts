@@ -79,6 +79,10 @@ function getValueTypeAsText(valueTypeId: string | undefined): string {
 			return "URL"
 		case SystemIds.POINT:
 			return "POINT"
+		case SystemIds.IMAGE:
+			return "IMAGE"
+		case SystemIds.RELATION:
+			return "RELATION"
 		default:
 			return "TEXT"
 	}
