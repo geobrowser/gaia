@@ -27,7 +27,7 @@ message Import {
   repeated string edits = 1;
 }
 
-message IpfsFile {
+message File {
   string version = 1;
 
   oneof payload {
@@ -93,29 +93,32 @@ message Entity {
   repeated Value values = 2;
 }
 
-message Value {
-  bytes property = 1;
-  string value = 2;
-
-  oneof options {
-      TextOptions options = 3;
-      NumberOptions options = 4;
-      TimeOptions options = 5;
+message Options {
+  oneof value {
+    TextOptions   text   = 1;
+    NumberOptions number = 2;
+    TimeOptions   time   = 3;
   }
 }
 
+message Value {
+  bytes property = 1;
+  string value = 2;
+  optional Options options = 3;
+}
+
 message TextOptions {
-    optional string language = 1;
+  optional bytes language = 1;
 }
 
 message NumberOptions {
-    optional string format = 1;
-    optional string unit = 2;
+  optional string format = 1;
+  optional bytes unit = 2;
 }
 
 message TimeOptions {
-    optional string format = 1;
-    optional string timezone = 2;
-    optional string has_date = 3;
-    optional string has_time = 4;
+  optional string format = 1;
+  optional bytes timezone = 2;
+  optional bool has_date = 3;
+  optional bool has_time = 4;
 }

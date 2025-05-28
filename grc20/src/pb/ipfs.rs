@@ -44,14 +44,14 @@ pub struct Import {
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct IpfsFile {
+pub struct File {
     #[prost(string, tag = "1")]
     pub version: ::prost::alloc::string::String,
-    #[prost(oneof = "ipfs_file::Payload", tags = "2, 3, 4")]
-    pub payload: ::core::option::Option<ipfs_file::Payload>,
+    #[prost(oneof = "file::Payload", tags = "2, 3, 4")]
+    pub payload: ::core::option::Option<file::Payload>,
 }
-/// Nested message and enum types in `IpfsFile`.
-pub mod ipfs_file {
+/// Nested message and enum types in `File`.
+pub mod file {
     #[derive(serde::Serialize, serde::Deserialize)]
     #[derive(Clone, PartialEq, ::prost::Oneof)]
     pub enum Payload {
@@ -170,9 +170,56 @@ pub struct Entity {
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct Options {
+    #[prost(oneof = "options::Value", tags = "1, 2, 3")]
+    pub value: ::core::option::Option<options::Value>,
+}
+/// Nested message and enum types in `Options`.
+pub mod options {
+    #[derive(serde::Serialize, serde::Deserialize)]
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum Value {
+        #[prost(message, tag = "1")]
+        Text(super::TextOptions),
+        #[prost(message, tag = "2")]
+        Number(super::NumberOptions),
+        #[prost(message, tag = "3")]
+        Time(super::TimeOptions),
+    }
+}
+#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Value {
     #[prost(bytes = "vec", tag = "1")]
-    pub property_id: ::prost::alloc::vec::Vec<u8>,
+    pub property: ::prost::alloc::vec::Vec<u8>,
     #[prost(string, tag = "2")]
     pub value: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "3")]
+    pub options: ::core::option::Option<Options>,
+}
+#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct TextOptions {
+    #[prost(bytes = "vec", optional, tag = "1")]
+    pub language: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
+}
+#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct NumberOptions {
+    #[prost(string, optional, tag = "1")]
+    pub format: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(bytes = "vec", optional, tag = "2")]
+    pub unit: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
+}
+#[derive(serde::Serialize, serde::Deserialize)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct TimeOptions {
+    #[prost(string, optional, tag = "1")]
+    pub format: ::core::option::Option<::prost::alloc::string::String>,
+    #[prost(bytes = "vec", optional, tag = "2")]
+    pub timezone: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
+    #[prost(bool, optional, tag = "3")]
+    pub has_date: ::core::option::Option<bool>,
+    #[prost(bool, optional, tag = "4")]
+    pub has_time: ::core::option::Option<bool>,
 }

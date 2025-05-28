@@ -78,8 +78,7 @@ fn value_op_from_op(op: &Op, space_id: &String) -> Vec<ValueOp> {
                         let entity_id = Uuid::from_bytes(entity_id_bytes).to_string();
 
                         for value in &entity.values {
-                            let property_id_bytes =
-                                id::transform_id_bytes(value.property_id.clone());
+                            let property_id_bytes = id::transform_id_bytes(value.property.clone());
 
                             if let Err(_) = property_id_bytes {
                                 tracing::error!(

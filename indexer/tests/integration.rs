@@ -217,8 +217,9 @@ fn make_entity_op(op_type: TestEntityOpType, entity: &str, values: Vec<TestValue
                 values: values
                     .iter()
                     .map(|v| Value {
-                        property_id: v.property_id.clone().into_bytes(),
+                        property: v.property_id.clone().into_bytes(),
                         value: v.value.clone().unwrap(),
+                        options: None,
                     })
                     .collect(),
             })),

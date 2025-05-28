@@ -51,7 +51,7 @@ impl EntitiesModel {
 
                         for value in &entity.values {
                             let property_id_bytes =
-                                id::transform_id_bytes(value.property_id.clone());
+                                id::transform_id_bytes(value.property.clone());
 
                             if let Err(_) = property_id_bytes {
                                 tracing::error!(
