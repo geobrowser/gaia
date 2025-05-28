@@ -875,4 +875,112 @@ mod tests {
         // Verify the delete for rel2
         assert_eq!(deleted_relations[0], "87654321-1234-4abc-8def-123456789abc");
     }
+
+    #[test]
+    fn test_multiple_create_relations_different_entities() {
+        // Test creating multiple relations with different entity IDs in a single edit
+        let mut edit = Edit {
+            id: bytes("78901234-1234-4abc-8def-123456789abc"),
+            name: "test edit".to_string(),
+            ops: vec![],
+            authors: vec![bytes("89012345-1234-4abc-8def-123456789abc")],
+            language: Some(bytes("90123456-1234-4abc-8def-123456789abc")),
+        };
+
+        // Create relation 1
+        let create_op1 = Op {
+            payload: Some(Payload::CreateRelation(Relation {
+                id: bytes("11111111-1111-4abc-8def-123456789abc"),
+                entity: bytes("entity01-1234-4abc-8def-123456789abc"),
+                r#type: bytes("type0001-1234-4abc-8def-123456789abc"),
+                from_entity: bytes("from0001-1234-4abc-8def-123456789abc"),
+                to_entity: bytes("to000001-1234-4abc-8def-123456789abc"),
+                position: Some("position1".to_string()),
+                verified: Some(true),
+                from_space: None,
+                to_space: Some(bytes("space001-1234-4abc-8def-123456789abc")),
+                from_version: None,
+                to_version: None,
+            })),
+        };
+
+        // Create relation 2
+        let create_op2 = Op {
+            payload: Some(Payload::CreateRelation(Relation {
+                id: bytes("22222222-2222-4abc-8def-123456789abc"),
+                entity: bytes("entity02-1234-4abc-8def-123456789abc"),
+                r#type: bytes("type0002-1234-4abc-8def-123456789abc"),
+                from_entity: bytes("from0002-1234-4abc-8def-123456789abc"),
+                to_entity: bytes("to000002-1234-4abc-8def-123456789abc"),
+                position: Some("position2".to_string()),
+                verified: Some(false),
+                from_space: Some(bytes("space002-1234-4abc-8def-123456789abc")),
+                to_space: None,
+                from_version: None,
+                to_version: None,
+            })),
+        };
+
+        // Create relation 3
+        let create_op3 = Op {
+            payload: Some(Payload::CreateRelation(Relation {
+                id: bytes("33333333-3333-4abc-8def-123456789abc"),
+                entity: bytes("entity03-1234-4abc-8def-123456789abc"),
+                r#type: bytes("type0003-1234-4abc-8def-123456789abc"),
+                from_entity: bytes("from0003-1234-4abc-8def-123456789abc"),
+                to_entity: bytes("to000003-1234-4abc-8def-123456789abc"),
+                position: None,
+                verified: None,
+                from_space: None,
+                to_space: None,
+                from_version: None,
+                to_version: None,
+            })),
+        };
+
+        edit.ops = vec![create_op1, create_op2, create_op3];
+
+        let space_id = "space123".to_string();
+        let (set_relations, update_relations, unset_relations, deleted_relations) =
+            RelationsModel::map_edit_to_relations(&edit, &space_id);
+
+        // Should have three creates and nothing else
+        assert_eq!(set_relations.len(), 3);
+        assert_eq!(update_relations.len(), 0);
+        assert_eq!(unset_relations.len(), 0);
+        assert_eq!(deleted_relations.len(), 0);
+
+        // Verify relation 1
+        let rel1 = &set_relations[0];
+        assert_eq!(rel1.id, "11111111-1111-4abc-8def-123456789abc");
+        assert_eq!(rel1.entity_id, "entity01-1234-4abc-8def-123456789abc");
+        assert_eq!(rel1.type_id, "type0001-1234-4abc-8def-123456789abc");
+        assert_eq!(rel1.from_id, "from0001-1234-4abc-8def-123456789abc");
+        assert_eq!(rel1.to_id, "to000001-1234-4abc-8def-123456789abc");
+        assert_eq!(rel1.position, Some("position1".to_string()));
+        assert_eq!(rel1.verified, Some(true));
+        assert_eq!(rel1.space_id, "space123");
+
+        // Verify relation 2
+        let rel2 = &set_relations[1];
+        assert_eq!(rel2.id, "22222222-2222-4abc-8def-123456789abc");
+        assert_eq!(rel2.entity_id, "entity02-1234-4abc-8def-123456789abc");
+        assert_eq!(rel2.type_id, "type0002-1234-4abc-8def-123456789abc");
+        assert_eq!(rel2.from_id, "from0002-1234-4abc-8def-123456789abc");
+        assert_eq!(rel2.to_id, "to000002-1234-4abc-8def-123456789abc");
+        assert_eq!(rel2.position, Some("position2".to_string()));
+        assert_eq!(rel2.verified, Some(false));
+        assert_eq!(rel2.space_id, "space123");
+
+        // Verify relation 3
+        let rel3 = &set_relations[2];
+        assert_eq!(rel3.id, "33333333-3333-4abc-8def-123456789abc");
+        assert_eq!(rel3.entity_id, "entity03-1234-4abc-8def-123456789abc");
+        assert_eq!(rel3.type_id, "type0003-1234-4abc-8def-123456789abc");
+        assert_eq!(rel3.from_id, "from0003-1234-4abc-8def-123456789abc");
+        assert_eq!(rel3.to_id, "to000003-1234-4abc-8def-123456789abc");
+        assert_eq!(rel3.position, None);
+        assert_eq!(rel3.verified, None);
+        assert_eq!(rel3.space_id, "space123");
+    }
 }
