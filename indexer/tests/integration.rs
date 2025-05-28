@@ -1,6 +1,7 @@
 use grc20::pb::ipfs::{op::Payload, Edit, Entity, Op, Relation, UnsetEntityValues, Value};
 use std::{env, sync::Arc};
 use stream::utils::BlockMetadata;
+use uuid::Uuid;
 
 use dotenv::dotenv;
 use indexer::{
@@ -37,71 +38,71 @@ async fn main() -> Result<(), IndexingError> {
     let item = PreprocessedEdit {
         space_id: String::from("5"),
         edit: Some(make_edit(
-            "5",
+            "f47ac10b-58cc-4372-a567-0e02b2c3d479",
             "Name",
-            "Author",
+            "f47ac10b-58cc-4372-a567-0e02b2c3d480",
             vec![
                 make_entity_op(
                     TestEntityOpType::UPDATE,
-                    "entity-id-1",
+                    "550e8400-e29b-41d4-a716-446655440001",
                     vec![
                         TestValue {
-                            property_id: "LuBWqZAu6pz54eiJS5mLv8".to_string(),
+                            property_id: "6ba7b810-9dad-11d1-80b4-00c04fd430c1".to_string(),
                             value: Some("Test entity".to_string()),
                         },
                         TestValue {
-                            property_id: "attribute-id".to_string(),
+                            property_id: "6ba7b810-9dad-11d1-80b4-00c04fd430c2".to_string(),
                             value: Some("value 1".to_string()),
                         },
                     ],
                 ),
                 make_entity_op(
                     TestEntityOpType::UPDATE,
-                    "entity-id-2",
+                    "550e8400-e29b-41d4-a716-446655440002",
                     vec![TestValue {
-                        property_id: "attribute-id".to_string(),
+                        property_id: "6ba7b810-9dad-11d1-80b4-00c04fd430c2".to_string(),
                         value: Some("value 2".to_string()),
                     }],
                 ),
                 make_entity_op(
                     TestEntityOpType::UNSET,
-                    "entity-id-2",
+                    "550e8400-e29b-41d4-a716-446655440002",
                     vec![TestValue {
-                        property_id: "attribute-id".to_string(),
+                        property_id: "6ba7b810-9dad-11d1-80b4-00c04fd430c2".to_string(),
                         value: None,
                     }],
                 ),
                 make_relation_op(
                     TestRelationOpType::CREATE,
-                    "relation-id-1",
-                    "entity-id-1",
-                    "type-id-1",
-                    "from-entity-1",
-                    "to-entity-1",
+                    "7ba7b810-9dad-11d1-80b4-00c04fd430c1",
+                    "550e8400-e29b-41d4-a716-446655440001",
+                    "8ba7b810-9dad-11d1-80b4-00c04fd430c1",
+                    "550e8400-e29b-41d4-a716-446655440003",
+                    "550e8400-e29b-41d4-a716-446655440004",
                 ),
                 make_relation_op(
                     TestRelationOpType::UPDATE,
-                    "relation-id-1",
-                    "entity-id-1",
-                    "type-id-1",
-                    "from-entity-1",
-                    "to-entity-1",
+                    "7ba7b810-9dad-11d1-80b4-00c04fd430c1",
+                    "550e8400-e29b-41d4-a716-446655440001",
+                    "8ba7b810-9dad-11d1-80b4-00c04fd430c1",
+                    "550e8400-e29b-41d4-a716-446655440003",
+                    "550e8400-e29b-41d4-a716-446655440004",
                 ),
                 make_relation_op(
                     TestRelationOpType::CREATE,
-                    "relation-id-2",
-                    "entity-id-1",
-                    "type-id-1",
-                    "from-entity-1",
-                    "to-entity-1",
+                    "7ba7b810-9dad-11d1-80b4-00c04fd430c2",
+                    "550e8400-e29b-41d4-a716-446655440001",
+                    "8ba7b810-9dad-11d1-80b4-00c04fd430c1",
+                    "550e8400-e29b-41d4-a716-446655440003",
+                    "550e8400-e29b-41d4-a716-446655440004",
                 ),
                 make_relation_op(
                     TestRelationOpType::DELETE,
-                    "relation-id-2",
-                    "entity-id-1",
-                    "type-id-1",
-                    "from-entity-1",
-                    "to-entity-1",
+                    "7ba7b810-9dad-11d1-80b4-00c04fd430c2",
+                    "550e8400-e29b-41d4-a716-446655440001",
+                    "8ba7b810-9dad-11d1-80b4-00c04fd430c1",
+                    "550e8400-e29b-41d4-a716-446655440003",
+                    "550e8400-e29b-41d4-a716-446655440004",
                 ),
             ],
         )),
@@ -125,39 +126,39 @@ async fn main() -> Result<(), IndexingError> {
 
     {
         let entity = storage
-            .get_entity(&"entity-id-1".to_string())
+            .get_entity(&"550e8400-e29b-41d4-a716-446655440001".to_string())
             .await
             .unwrap();
-        assert_eq!(entity.id, "entity-id-1");
+        assert_eq!(entity.id, "550e8400-e29b-41d4-a716-446655440001");
     }
 
     {
         let entity = storage
-            .get_entity(&"entity-id-2".to_string())
+            .get_entity(&"550e8400-e29b-41d4-a716-446655440002".to_string())
             .await
             .unwrap();
-        assert_eq!(entity.id, "entity-id-2");
+        assert_eq!(entity.id, "550e8400-e29b-41d4-a716-446655440002");
     }
 
     {
         let attribute = storage
-            .get_entity(&"attribute-id".to_string())
+            .get_entity(&"6ba7b810-9dad-11d1-80b4-00c04fd430c2".to_string())
             .await
             .unwrap();
-        assert_eq!(attribute.id, "attribute-id");
+        assert_eq!(attribute.id, "6ba7b810-9dad-11d1-80b4-00c04fd430c2");
     }
 
     {
         let value = storage
-            .get_value(&"entity-id-1:attribute-id:5".to_string())
+            .get_value(&"550e8400-e29b-41d4-a716-446655440001:6ba7b810-9dad-11d1-80b4-00c04fd430c2:5".to_string())
             .await
             .unwrap();
-        assert_eq!(value.id, "entity-id-1:attribute-id:5");
+        assert_eq!(value.id, "550e8400-e29b-41d4-a716-446655440001:6ba7b810-9dad-11d1-80b4-00c04fd430c2:5");
     }
 
     {
         let value = storage
-            .get_value(&"entity-id-2:attribute-id:5".to_string())
+            .get_value(&"550e8400-e29b-41d4-a716-446655440002:6ba7b810-9dad-11d1-80b4-00c04fd430c2:5".to_string())
             .await;
 
         // Should not return the value since it was deleted
@@ -166,15 +167,15 @@ async fn main() -> Result<(), IndexingError> {
 
     {
         let value = storage
-            .get_relation(&"relation-id-1".to_string())
+            .get_relation(&"7ba7b810-9dad-11d1-80b4-00c04fd430c1".to_string())
             .await
             .unwrap();
 
-        assert_eq!(value.id, "relation-id-1");
+        assert_eq!(value.id, "7ba7b810-9dad-11d1-80b4-00c04fd430c1");
         assert_eq!(value.space_id, "5".to_string());
-        assert_eq!(value.entity_id, "entity-id-1");
-        assert_eq!(value.from_id, "from-entity-1");
-        assert_eq!(value.to_id, "to-entity-1");
+        assert_eq!(value.entity_id, "550e8400-e29b-41d4-a716-446655440001");
+        assert_eq!(value.from_id, "550e8400-e29b-41d4-a716-446655440003");
+        assert_eq!(value.to_id, "550e8400-e29b-41d4-a716-446655440004");
 
         // Update in edit sets verified to Some(true)
         assert_eq!(value.verified, Some(true));
@@ -182,7 +183,7 @@ async fn main() -> Result<(), IndexingError> {
 
     {
         // Should not return the value since it was deleted
-        let value = storage.get_relation(&"relation-id-2".to_string()).await;
+        let value = storage.get_relation(&"7ba7b810-9dad-11d1-80b4-00c04fd430c2".to_string()).await;
         assert_eq!(value.is_err(), true);
     }
 
@@ -191,10 +192,10 @@ async fn main() -> Result<(), IndexingError> {
 
 fn make_edit(id: &str, name: &str, author: &str, ops: Vec<Op>) -> Edit {
     Edit {
-        id: String::from(id).into_bytes(),
+        id: Uuid::parse_str(id).unwrap().as_bytes().to_vec(),
         name: String::from(name),
         ops,
-        authors: vec![String::from(author).into_bytes()],
+        authors: vec![Uuid::parse_str(author).unwrap().as_bytes().to_vec()],
         language: None,
     }
 }
@@ -213,11 +214,11 @@ fn make_entity_op(op_type: TestEntityOpType, entity: &str, values: Vec<TestValue
     match op_type {
         TestEntityOpType::UPDATE => Op {
             payload: Some(Payload::UpdateEntity(Entity {
-                id: entity.to_string().into_bytes(),
+                id: Uuid::parse_str(entity).unwrap().as_bytes().to_vec(),
                 values: values
                     .iter()
                     .map(|v| Value {
-                        property: v.property_id.clone().into_bytes(),
+                        property: Uuid::parse_str(&v.property_id).unwrap().as_bytes().to_vec(),
                         value: v.value.clone().unwrap(),
                         options: None,
                     })
@@ -226,10 +227,10 @@ fn make_entity_op(op_type: TestEntityOpType, entity: &str, values: Vec<TestValue
         },
         TestEntityOpType::UNSET => Op {
             payload: Some(Payload::UnsetEntityValues(UnsetEntityValues {
-                id: entity.to_string().into_bytes(),
+                id: Uuid::parse_str(entity).unwrap().as_bytes().to_vec(),
                 properties: values
                     .iter()
-                    .map(|v| v.property_id.clone().into_bytes())
+                    .map(|v| Uuid::parse_str(&v.property_id).unwrap().as_bytes().to_vec())
                     .collect(),
             })),
         },
@@ -253,13 +254,13 @@ fn make_relation_op(
     match op_type {
         TestRelationOpType::CREATE => Op {
             payload: Some(Payload::CreateRelation(Relation {
-                id: relation_id.to_string().into_bytes(),
-                r#type: type_id.to_string().into_bytes(),
-                entity: entity_id.to_string().into_bytes(),
-                from_entity: from_entity.to_string().into_bytes(),
+                id: Uuid::parse_str(relation_id).unwrap().as_bytes().to_vec(),
+                r#type: Uuid::parse_str(type_id).unwrap().as_bytes().to_vec(),
+                entity: Uuid::parse_str(entity_id).unwrap().as_bytes().to_vec(),
+                from_entity: Uuid::parse_str(from_entity).unwrap().as_bytes().to_vec(),
                 from_space: None,
                 from_version: None,
-                to_entity: to_entity.to_string().into_bytes(),
+                to_entity: Uuid::parse_str(to_entity).unwrap().as_bytes().to_vec(),
                 to_space: None,
                 to_version: None,
                 position: None,
@@ -268,7 +269,7 @@ fn make_relation_op(
         },
         TestRelationOpType::UPDATE => Op {
             payload: Some(Payload::UpdateRelation(grc20::pb::ipfs::RelationUpdate {
-                id: relation_id.to_string().into_bytes(),
+                id: Uuid::parse_str(relation_id).unwrap().as_bytes().to_vec(),
                 from_space: None,
                 from_version: None,
                 to_space: None,
@@ -279,7 +280,7 @@ fn make_relation_op(
         },
         TestRelationOpType::DELETE => Op {
             payload: Some(Payload::DeleteRelation(
-                relation_id.to_string().into_bytes(),
+                Uuid::parse_str(relation_id).unwrap().as_bytes().to_vec(),
             )),
         },
     }
