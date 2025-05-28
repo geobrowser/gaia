@@ -13,7 +13,10 @@ export function property(propertyId: string) {
 			})
 
 			if (!result) {
-				return null
+				return {
+					id: propertyId,
+					valueType: "TEXT",
+				}
 			}
 
 			return {
@@ -24,9 +27,9 @@ export function property(propertyId: string) {
 	})
 }
 
-function getValueTypeAsText(valueTypeId: string | undefined): string | null {
+function getValueTypeAsText(valueTypeId: string | undefined): string {
 	if (!valueTypeId) {
-		return null
+		return "TEXT"
 	}
 
 	switch (valueTypeId) {
