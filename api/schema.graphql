@@ -17,7 +17,6 @@ type Entity {
 
 type Property {
   id: ID!
-  entityId: String!
   valueType: String! # TODO enum/union
   entity: Entity
 }
@@ -31,6 +30,13 @@ type Value {
 
   entity: Entity
   property: Property
+
+  language: String
+  format: String
+  unit: String
+  timezone: String
+  hasTime: Boolean
+  hasDate: Boolean
 }
 
 type Relation {
@@ -41,9 +47,6 @@ type Relation {
   toId: String!
   toSpaceId: String
   position: String
-  # these should be called `fromValue` and `toValue` instead?
-  # fromPropertyId: String
-  # toPropertyId: String
 
   type: Entity
   from: Entity

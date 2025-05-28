@@ -3,6 +3,7 @@ import type {QueryEntitiesArgs, QueryEntityArgs} from "../generated/graphql"
 import {Environment, make as makeEnvironment} from "../services/environment"
 import {Storage, make as makeStorage} from "../services/storage/storage"
 import * as EntityResolvers from "./entities"
+import * as PropertyResolvers from "./properties"
 
 const EnvironmentLayer = Layer.effect(Environment, makeEnvironment)
 const StorageLayer = Layer.effect(Storage, makeStorage).pipe(Layer.provide(EnvironmentLayer))
@@ -35,4 +36,8 @@ export const properties = async (args: QueryEntityArgs) => {
 
 export const relations = async (args: QueryEntityArgs) => {
 	return await Effect.runPromise(EntityResolvers.getRelations(args.id).pipe(provideDeps))
+}
+
+export const property = async (args: QueryEntityArgs) => {
+	return await Effect.runPromise(PropertyResolvers.property(args.id).pipe(provideDeps))
 }

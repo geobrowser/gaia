@@ -37,7 +37,12 @@ const resolvers: GeneratedResolvers = {
 			return Resolvers.entity({id: parent.entityId})
 		},
 		property: async (parent: {propertyId: string}) => {
-			return Resolvers.entity({id: parent.propertyId})
+			return Resolvers.property({id: parent.propertyId})
+		},
+	},
+	Property: {
+		entity: async (parent: {id: string}) => {
+			return Resolvers.entity({id: parent.id})
 		},
 	},
 	Relation: {

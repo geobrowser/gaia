@@ -1,5 +1,6 @@
 import {drizzle} from "drizzle-orm/node-postgres"
 import {Context, Data, Effect, Redacted} from "effect"
+import {Pool} from "pg"
 
 import {Environment} from "../environment"
 import {
@@ -17,12 +18,19 @@ export class StorageError extends Data.TaggedError("StorageError")<{
 	message?: string
 }> {}
 
-export const createDb = (connectionString: string) =>
-	drizzle({
+let _pool: Pool | null = null
+
+export const createDb = (connectionString: string) => {
+	if (!_pool) {
+		_pool = new Pool({
+			connectionString,
+			max: 80,
+		})
+	}
+
+	return drizzle({
 		casing: "snake_case",
-		connection: {
-			connectionString: connectionString,
-		},
+		client: _pool,
 		schema: {
 			ipfsCache,
 			entities,
@@ -34,6 +42,7 @@ export const createDb = (connectionString: string) =>
 			relationsEntityRelations,
 		},
 	})
+}
 
 interface StorageShape {
 	use: <T>(fn: (client: ReturnType<typeof createDb>) => T) => Effect.Effect<Awaited<T>, StorageError, never>
