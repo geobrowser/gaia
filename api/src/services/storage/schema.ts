@@ -55,7 +55,21 @@ export const relations = pgTable("relations", {
 
 export const entityForeignValues = drizzleRelations(entities, ({many}) => ({
 	values: many(values),
-	relations: many(relations),
+	fromRelations: many(relations, {
+		relationName: "fromEntity",
+	}),
+	// If an entity is the object (i.e. toEntity)
+	toRelations: many(relations, {
+		relationName: "toEntity",
+	}),
+	// If an entity is the type of relation
+	typeRelations: many(relations, {
+		relationName: "typeEntity",
+	}),
+	// If an entity is directly linked (e.g. as owning the relation row)
+	relationEntityRelations: many(relations, {
+		relationName: "entity",
+	}),
 }))
 
 export const propertiesEntityRelations = drizzleRelations(values, ({one}) => ({
@@ -69,18 +83,22 @@ export const relationsEntityRelations = drizzleRelations(relations, ({one}) => (
 	fromEntity: one(entities, {
 		fields: [relations.fromEntityId],
 		references: [entities.id],
+		relationName: "fromEntity",
 	}),
 	toEntity: one(entities, {
 		fields: [relations.toEntityId],
 		references: [entities.id],
+		relationName: "toEntity",
 	}),
 	typeEntity: one(entities, {
 		fields: [relations.typeId],
 		references: [entities.id],
+		relationName: "typeEntity",
 	}),
 	entity: one(entities, {
 		fields: [relations.entityId],
 		references: [entities.id],
+		relationName: "entity",
 	}),
 }))
 

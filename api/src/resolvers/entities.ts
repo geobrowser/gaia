@@ -2,7 +2,7 @@ import {SystemIds} from "@graphprotocol/grc-20"
 import {and, eq} from "drizzle-orm"
 import {Effect} from "effect"
 import type {QueryEntitiesArgs} from "../generated/graphql"
-import {entities, values} from "../services/storage/schema"
+import {values} from "../services/storage/schema"
 import {Storage} from "../services/storage/storage"
 import {type EntityFilter, buildEntityWhere} from "./filters"
 
@@ -91,6 +91,23 @@ export function getEntityName(id: string) {
 	})
 }
 
+export function getEntityDescription(id: string) {
+	return Effect.gen(function* () {
+		const db = yield* Storage
+
+		const nameProperty = yield* db.use(async (client) => {
+			const result = await client.query.properties.findFirst({
+				where: (properties, {eq, and}) =>
+					and(eq(properties.propertyId, SystemIds.DESCRIPTION_PROPERTY), eq(properties.entityId, id)),
+			})
+
+			return result
+		})
+
+		return nameProperty?.value ?? null
+	})
+}
+
 export function getValues(id: string) {
 	return Effect.gen(function* () {
 		const db = yield* Storage
@@ -126,7 +143,7 @@ export function getRelations(id: string) {
 	})
 }
 
-export function getTypes(id: string) {
+export function getEntityTypes(id: string) {
 	return Effect.gen(function* () {
 		const db = yield* Storage
 

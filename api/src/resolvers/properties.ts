@@ -1,5 +1,7 @@
 import {SystemIds} from "@graphprotocol/grc-20"
+import {and, eq} from "drizzle-orm"
 import {Effect} from "effect"
+import {relations} from "../services/storage/schema"
 import {Storage} from "../services/storage/storage"
 
 export function property(propertyId: string) {
@@ -22,6 +24,38 @@ export function property(propertyId: string) {
 			return {
 				id: propertyId,
 				valueType: getValueTypeAsText(result.toEntityId),
+			}
+		})
+	})
+}
+
+export function properties(typeId: string) {
+	return Effect.gen(function* () {
+		const db = yield* Storage
+
+		const propertyRelations = yield* db.use(async (client) => {
+			return await client.query.relations.findMany({
+				where: and(eq(relations.fromEntityId, typeId), eq(relations.typeId, SystemIds.PROPERTIES)),
+				with: {
+					toEntity: {
+						with: {
+							fromRelations: {
+								where: eq(relations.typeId, SystemIds.VALUE_TYPE_PROPERTY),
+							},
+						},
+					},
+				},
+			})
+		})
+
+		return propertyRelations.map((r) => {
+			const maybeValueType = r.toEntity.fromRelations.find(
+				(relation) => relation.typeId === SystemIds.VALUE_TYPE_PROPERTY,
+			)?.toEntityId
+
+			return {
+				id: r.toEntity.id,
+				valueType: getValueTypeAsText(maybeValueType),
 			}
 		})
 	})

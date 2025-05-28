@@ -10,7 +10,9 @@
       },
       "complexity": {
         "noStaticOnlyClass": "off",
-        "noBannedTypes": "warn"
+        "noBannedTypes": "warn",
+        "noForEach": "off"
+
       },
       "style": {
         "useTemplate": "off"

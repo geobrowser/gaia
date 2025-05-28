@@ -35,7 +35,7 @@ export const createDb = (connectionString: string) => {
 			ipfsCache,
 			entities,
 			properties: values,
-			relations,
+			relations: relations,
 
 			entityForeignProperties: entityForeignValues,
 			propertiesEntityRelations,

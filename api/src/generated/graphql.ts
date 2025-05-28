@@ -28,6 +28,7 @@ export type Entity = {
   blocks: Array<Maybe<Entity>>;
   createdAt: Scalars['String']['output'];
   createdAtBlock: Scalars['String']['output'];
+  description?: Maybe<Scalars['String']['output']>;
   id: Scalars['ID']['output'];
   name?: Maybe<Scalars['String']['output']>;
   relations: Array<Maybe<Relation>>;
@@ -70,6 +71,7 @@ export type Query = {
   __typename?: 'Query';
   entities: Array<Maybe<Entity>>;
   entity?: Maybe<Entity>;
+  types: Array<Maybe<Type>>;
 };
 
 
@@ -82,6 +84,13 @@ export type QueryEntitiesArgs = {
 
 export type QueryEntityArgs = {
   id: Scalars['String']['input'];
+};
+
+
+export type QueryTypesArgs = {
+  filter?: InputMaybe<TypeFilter>;
+  limit?: InputMaybe<Scalars['Int']['input']>;
+  offset?: InputMaybe<Scalars['Int']['input']>;
 };
 
 export type Relation = {
@@ -105,6 +114,19 @@ export type TextFilter = {
   exists?: InputMaybe<Scalars['Boolean']['input']>;
   is?: InputMaybe<Scalars['String']['input']>;
   startsWith?: InputMaybe<Scalars['String']['input']>;
+};
+
+export type Type = {
+  __typename?: 'Type';
+  description?: Maybe<Scalars['String']['output']>;
+  entity?: Maybe<Entity>;
+  id: Scalars['ID']['output'];
+  name?: Maybe<Scalars['String']['output']>;
+  properties?: Maybe<Array<Maybe<Property>>>;
+};
+
+export type TypeFilter = {
+  spaceId?: InputMaybe<Scalars['String']['input']>;
 };
 
 export type Value = {
@@ -218,6 +240,8 @@ export type ResolversTypes = ResolversObject<{
   Relation: ResolverTypeWrapper<Omit<Relation, 'from' | 'to' | 'type'> & { from?: Maybe<ResolversTypes['Entity']>, to?: Maybe<ResolversTypes['Entity']>, type?: Maybe<ResolversTypes['Entity']> }>;
   String: ResolverTypeWrapper<Scalars['String']['output']>;
   TextFilter: TextFilter;
+  Type: ResolverTypeWrapper<Omit<Type, 'entity' | 'properties'> & { entity?: Maybe<ResolversTypes['Entity']>, properties?: Maybe<Array<Maybe<ResolversTypes['Property']>>> }>;
+  TypeFilter: TypeFilter;
   Value: ResolverTypeWrapper<Omit<Value, 'entity' | 'property'> & { entity?: Maybe<ResolversTypes['Entity']>, property?: Maybe<ResolversTypes['Property']> }>;
   ValueFilter: ValueFilter;
 }>;
@@ -238,6 +262,8 @@ export type ResolversParentTypes = ResolversObject<{
   Relation: Omit<Relation, 'from' | 'to' | 'type'> & { from?: Maybe<ResolversParentTypes['Entity']>, to?: Maybe<ResolversParentTypes['Entity']>, type?: Maybe<ResolversParentTypes['Entity']> };
   String: Scalars['String']['output'];
   TextFilter: TextFilter;
+  Type: Omit<Type, 'entity' | 'properties'> & { entity?: Maybe<ResolversParentTypes['Entity']>, properties?: Maybe<Array<Maybe<ResolversParentTypes['Property']>>> };
+  TypeFilter: TypeFilter;
   Value: Omit<Value, 'entity' | 'property'> & { entity?: Maybe<ResolversParentTypes['Entity']>, property?: Maybe<ResolversParentTypes['Property']> };
   ValueFilter: ValueFilter;
 }>;
@@ -246,6 +272,7 @@ export type EntityResolvers<ContextType = any, ParentType extends ResolversParen
   blocks?: Resolver<Array<Maybe<ResolversTypes['Entity']>>, ParentType, ContextType>;
   createdAt?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
   createdAtBlock?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
+  description?: Resolver<Maybe<ResolversTypes['String']>, ParentType, ContextType>;
   id?: Resolver<ResolversTypes['ID'], ParentType, ContextType>;
   name?: Resolver<Maybe<ResolversTypes['String']>, ParentType, ContextType>;
   relations?: Resolver<Array<Maybe<ResolversTypes['Relation']>>, ParentType, ContextType>;
@@ -267,6 +294,7 @@ export type PropertyResolvers<ContextType = any, ParentType extends ResolversPar
 export type QueryResolvers<ContextType = any, ParentType extends ResolversParentTypes['Query'] = ResolversParentTypes['Query']> = ResolversObject<{
   entities?: Resolver<Array<Maybe<ResolversTypes['Entity']>>, ParentType, ContextType, RequireFields<QueryEntitiesArgs, 'limit' | 'offset'>>;
   entity?: Resolver<Maybe<ResolversTypes['Entity']>, ParentType, ContextType, RequireFields<QueryEntityArgs, 'id'>>;
+  types?: Resolver<Array<Maybe<ResolversTypes['Type']>>, ParentType, ContextType, RequireFields<QueryTypesArgs, 'limit' | 'offset'>>;
 }>;
 
 export type RelationResolvers<ContextType = any, ParentType extends ResolversParentTypes['Relation'] = ResolversParentTypes['Relation']> = ResolversObject<{
@@ -280,6 +308,15 @@ export type RelationResolvers<ContextType = any, ParentType extends ResolversPar
   toSpaceId?: Resolver<Maybe<ResolversTypes['String']>, ParentType, ContextType>;
   type?: Resolver<Maybe<ResolversTypes['Entity']>, ParentType, ContextType>;
   typeId?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
+  __isTypeOf?: IsTypeOfResolverFn<ParentType, ContextType>;
+}>;
+
+export type TypeResolvers<ContextType = any, ParentType extends ResolversParentTypes['Type'] = ResolversParentTypes['Type']> = ResolversObject<{
+  description?: Resolver<Maybe<ResolversTypes['String']>, ParentType, ContextType>;
+  entity?: Resolver<Maybe<ResolversTypes['Entity']>, ParentType, ContextType>;
+  id?: Resolver<ResolversTypes['ID'], ParentType, ContextType>;
+  name?: Resolver<Maybe<ResolversTypes['String']>, ParentType, ContextType>;
+  properties?: Resolver<Maybe<Array<Maybe<ResolversTypes['Property']>>>, ParentType, ContextType>;
   __isTypeOf?: IsTypeOfResolverFn<ParentType, ContextType>;
 }>;
 
@@ -305,6 +342,7 @@ export type Resolvers<ContextType = any> = ResolversObject<{
   Property?: PropertyResolvers<ContextType>;
   Query?: QueryResolvers<ContextType>;
   Relation?: RelationResolvers<ContextType>;
+  Type?: TypeResolvers<ContextType>;
   Value?: ValueResolvers<ContextType>;
 }>;
 

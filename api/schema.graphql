@@ -1,6 +1,7 @@
 type Entity {
   id: ID!
   name: String
+  description: String
   # cover: How do we want to represent cover?
   blocks: [Entity]!
   createdAt: String!
@@ -54,9 +55,23 @@ type Relation {
   # toSpace: Space
 }
 
+type Type {
+  id: ID!
+  name: String
+  description: String
+
+  properties: [Property]
+  entity: Entity
+}
+
+input TypeFilter {
+  spaceId: String
+}
+
 type Query {
   entities(filter: EntityFilter, limit: Int = 100, offset: Int = 0): [Entity]!
   entity(id: String!): Entity
+  types(filter: TypeFilter, limit: Int = 100, offset: Int = 0): [Type]!
   # fuzzy search
   # relation
   # relations

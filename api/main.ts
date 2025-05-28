@@ -14,22 +14,42 @@ const resolvers: GeneratedResolvers = {
 		entity: async (_, args) => {
 			return await Resolvers.entity(args)
 		},
+		types: async (_, args) => {
+			return await Resolvers.types(args)
+		},
 	},
 	Entity: {
 		name: async (parent: {id: string}) => {
 			return Resolvers.entityName({id: parent.id})
 		},
+		description: async (parent: {id: string}) => {
+			return Resolvers.entityDescription({id: parent.id})
+		},
 		types: async (parent: {id: string}) => {
-			return Resolvers.types({id: parent.id})
+			return Resolvers.entityTypes({id: parent.id})
 		},
 		spaces: async (parent: {id: string}) => {
 			return Resolvers.spaces({id: parent.id})
 		},
 		values: async (parent: {id: string}) => {
-			return Resolvers.properties({id: parent.id})
+			return Resolvers.values({id: parent.id})
 		},
 		relations: async (parent: {id: string}) => {
 			return Resolvers.relations({id: parent.id})
+		},
+	},
+	Type: {
+		name: async (parent: {id: string}) => {
+			return Resolvers.entityName({id: parent.id})
+		},
+		description: async (parent: {id: string}) => {
+			return Resolvers.entityDescription({id: parent.id})
+		},
+		entity: async (parent: {id: string}) => {
+			return Resolvers.entity({id: parent.id})
+		},
+		properties: async (parent: {id: string}) => {
+			return Resolvers.properties({id: parent.id})
 		},
 	},
 	Value: {
