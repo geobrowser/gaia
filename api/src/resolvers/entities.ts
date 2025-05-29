@@ -1,8 +1,6 @@
 import {SystemIds} from "@graphprotocol/grc-20"
-import {and, eq} from "drizzle-orm"
 import {Effect} from "effect"
 import {BlockType, DataSourceType, type QueryEntitiesArgs} from "../generated/graphql"
-import {values} from "../services/storage/schema"
 import {Storage} from "../services/storage/storage"
 import {type EntityFilter, buildEntityWhere} from "./filters"
 
@@ -237,7 +235,7 @@ export function getBlocks(entityId: string) {
 					type = BlockType.Data
 					value = block.values.find((v) => v.propertyId === SystemIds.FILTER)?.value ?? null
 					const maybeDataSourceType =
-						block.fromRelations.find((r) => r.typeId === SystemIds.DATA_SOURCE_PROPERTY)?.toEntity?.id ??
+						block.fromRelations.find((r) => r.typeId === SystemIds.DATA_SOURCE_TYPE_RELATION_TYPE)?.toEntity?.id ??
 						null
 
 					dataSourceType = getDataSourceType(maybeDataSourceType)
