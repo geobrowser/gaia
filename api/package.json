@@ -4,7 +4,10 @@
   "main": "main.ts",
   "scripts": {
     "start": "bun run main.ts",
-    "generate": "graphql-codegen --config codegen.yml"
+    "generate": "graphql-codegen --config codegen.yml",
+    "test": "vitest",
+    "test:ui": "vitest --ui",
+    "test:run": "vitest run"
   },
   "author": "Byron Guina",
   "license": "ISC",
@@ -27,6 +30,8 @@
     "@types/bun": "^1.2.13",
     "@types/node": "^22.15.17",
     "@types/pg": "^8.15.2",
-    "drizzle-kit": "^0.31.0"
+    "@vitest/ui": "^2.0.0",
+    "drizzle-kit": "^0.31.0",
+    "vitest": "^2.0.0"
   }
 }
