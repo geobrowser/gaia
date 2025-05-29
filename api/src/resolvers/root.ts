@@ -54,3 +54,7 @@ export const properties = async (typeId: string, args: QueryTypesArgs) => {
 export const types = async (args: QueryTypesArgs) => {
 	return await Effect.runPromise(TypeResolvers.getTypes(args).pipe(provideDeps))
 }
+
+export const blocks = async (args: QueryEntityArgs) => {
+	return await Effect.runPromise(EntityResolvers.getBlocks(args.id).pipe(provideDeps))
+}

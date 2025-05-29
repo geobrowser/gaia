@@ -3,7 +3,7 @@ type Entity {
   name: String
   description: String
   # cover: How do we want to represent cover?
-  blocks: [Entity]!
+  blocks: [Block]!
   createdAt: String!
   createdAtBlock: String!
   updatedAt: String!
@@ -14,6 +14,14 @@ type Entity {
 
   types: [Entity]!
   spaces: [String]!
+}
+
+type Block {
+  id: ID!
+  type: String!
+  value: String # depends on the block type, e.g., text, image, video, etc.
+  entity: Entity
+  dataSourceType: String
 }
 
 type Property {
@@ -65,7 +73,12 @@ type Type {
 }
 
 type Query {
-  entities(filter: EntityFilter, limit: Int = 100, offset: Int = 0, spaceId: String): [Entity]!
+  entities(
+    filter: EntityFilter
+    limit: Int = 100
+    offset: Int = 0
+    spaceId: String
+  ): [Entity]!
   entity(id: String!, spaceId: String): Entity
   types(spaceId: String, limit: Int = 100, offset: Int = 0): [Type]!
   # fuzzy search
@@ -121,6 +134,7 @@ input ValueFilter {
   point: PointFilter
 }
 
+# @TODO: Filter for to relations
 input EntityFilter {
   OR: [EntityFilter!]
   NOT: EntityFilter

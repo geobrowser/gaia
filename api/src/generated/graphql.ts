@@ -18,6 +18,15 @@ export type Scalars = {
   Float: { input: number; output: number; }
 };
 
+export type Block = {
+  __typename?: 'Block';
+  dataSourceType?: Maybe<Scalars['String']['output']>;
+  entity?: Maybe<Entity>;
+  id: Scalars['ID']['output'];
+  type: Scalars['String']['output'];
+  value?: Maybe<Scalars['String']['output']>;
+};
+
 export type CheckboxFilter = {
   exists?: InputMaybe<Scalars['Boolean']['input']>;
   is?: InputMaybe<Scalars['Boolean']['input']>;
@@ -25,7 +34,7 @@ export type CheckboxFilter = {
 
 export type Entity = {
   __typename?: 'Entity';
-  blocks: Array<Maybe<Entity>>;
+  blocks: Array<Maybe<Block>>;
   createdAt: Scalars['String']['output'];
   createdAtBlock: Scalars['String']['output'];
   description?: Maybe<Scalars['String']['output']>;
@@ -224,6 +233,7 @@ export type DirectiveResolverFn<TResult = {}, TParent = {}, TContext = {}, TArgs
 
 /** Mapping between all available schema types and the resolvers types */
 export type ResolversTypes = ResolversObject<{
+  Block: ResolverTypeWrapper<Omit<Block, 'entity'> & { entity?: Maybe<ResolversTypes['Entity']> }>;
   Boolean: ResolverTypeWrapper<Scalars['Boolean']['output']>;
   CheckboxFilter: CheckboxFilter;
   Entity: ResolverTypeWrapper<DbEntity>;
@@ -245,6 +255,7 @@ export type ResolversTypes = ResolversObject<{
 
 /** Mapping between all available schema types and the resolvers parents */
 export type ResolversParentTypes = ResolversObject<{
+  Block: Omit<Block, 'entity'> & { entity?: Maybe<ResolversParentTypes['Entity']> };
   Boolean: Scalars['Boolean']['output'];
   CheckboxFilter: CheckboxFilter;
   Entity: DbEntity;
@@ -264,8 +275,17 @@ export type ResolversParentTypes = ResolversObject<{
   ValueFilter: ValueFilter;
 }>;
 
+export type BlockResolvers<ContextType = any, ParentType extends ResolversParentTypes['Block'] = ResolversParentTypes['Block']> = ResolversObject<{
+  dataSourceType?: Resolver<Maybe<ResolversTypes['String']>, ParentType, ContextType>;
+  entity?: Resolver<Maybe<ResolversTypes['Entity']>, ParentType, ContextType>;
+  id?: Resolver<ResolversTypes['ID'], ParentType, ContextType>;
+  type?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
+  value?: Resolver<Maybe<ResolversTypes['String']>, ParentType, ContextType>;
+  __isTypeOf?: IsTypeOfResolverFn<ParentType, ContextType>;
+}>;
+
 export type EntityResolvers<ContextType = any, ParentType extends ResolversParentTypes['Entity'] = ResolversParentTypes['Entity']> = ResolversObject<{
-  blocks?: Resolver<Array<Maybe<ResolversTypes['Entity']>>, ParentType, ContextType>;
+  blocks?: Resolver<Array<Maybe<ResolversTypes['Block']>>, ParentType, ContextType>;
   createdAt?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
   createdAtBlock?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
   description?: Resolver<Maybe<ResolversTypes['String']>, ParentType, ContextType>;
@@ -334,6 +354,7 @@ export type ValueResolvers<ContextType = any, ParentType extends ResolversParent
 }>;
 
 export type Resolvers<ContextType = any> = ResolversObject<{
+  Block?: BlockResolvers<ContextType>;
   Entity?: EntityResolvers<ContextType>;
   Property?: PropertyResolvers<ContextType>;
   Query?: QueryResolvers<ContextType>;

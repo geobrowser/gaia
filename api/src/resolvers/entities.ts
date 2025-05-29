@@ -201,25 +201,89 @@ export function getSpaces(id: string) {
 	})
 }
 
-type ValueType = "TEXT" | "NUMBER" | "CHECKBOX" | "URL" | "TIME" | "POINT"
+type BlockTypes = "TEXT" | "IMAGE" | "DATA"
+type DataSourceTypes = "QUERY" | "GEO" | "COLLECTION"
 
-function mapValueType(valueType: string): ValueType {
-	switch (valueType) {
-		case "1":
-			return "TEXT"
-		case "2":
-			return "NUMBER"
-		case "3":
-			return "CHECKBOX"
-		case "4":
-			return "URL"
-		case "5":
-			return "TIME"
-		case "6":
-			return "POINT"
+export function getBlocks(entityId: string) {
+	return Effect.gen(function* () {
+		const db = yield* Storage
+
+		return yield* db.use(async (client) => {
+			// Get all block relations for the entity
+			const blockRelations = await client.query.relations.findMany({
+				where: (relations, {eq, and}) =>
+					and(eq(relations.fromEntityId, entityId), eq(relations.typeId, SystemIds.BLOCKS)),
+				with: {
+					toEntity: {
+						with: {
+							fromRelations: {
+								with: {
+									toEntity: true,
+								},
+							},
+							values: true,
+						},
+					},
+				},
+				orderBy: (relations, {asc}) => asc(relations.position),
+			})
+
+			return blockRelations.map((relation) => {
+				const block = relation.toEntity
+				const blockTypeId = block.fromRelations.find((r) => r.typeId === SystemIds.TYPES_PROPERTY)?.toEntity?.id ?? null
+
+				// Determine the appropriate value based on block type
+				let value: string | null = null
+				let type: BlockTypes = "TEXT"
+				let dataSourceType: DataSourceTypes | null = null
+
+				if (blockTypeId === SystemIds.TEXT_BLOCK) {
+					type = "TEXT"
+					value = block.values.find((v) => v.propertyId === SystemIds.MARKDOWN_CONTENT)?.value ?? null
+				} else if (blockTypeId === SystemIds.IMAGE_TYPE) {
+					type = "IMAGE"
+					value = block.values.find((v) => v.propertyId === SystemIds.IMAGE_URL_PROPERTY)?.value ?? null
+				} else if (blockTypeId === SystemIds.DATA_BLOCK) {
+					type = "DATA"
+					value = block.values.find((v) => v.propertyId === SystemIds.FILTER)?.value ?? null
+					const maybeDataSourceType =
+						block.fromRelations.find((r) => r.typeId === SystemIds.DATA_SOURCE_PROPERTY)?.toEntity?.id ??
+						null
+
+          console.log('maybe data type', block.fromRelations)
+
+					dataSourceType = getDataSourceType(maybeDataSourceType)
+				}
+
+				return {
+					id: block.id,
+					type: type,
+					value: value,
+					dataSourceType,
+					entity: {
+						id: block.id,
+						createdAt: block.createdAt,
+						createdAtBlock: block.createdAtBlock,
+						updatedAt: block.updatedAt,
+						updatedAtBlock: block.updatedAtBlock,
+					},
+				}
+			})
+		})
+	})
+}
+
+function getDataSourceType(dataSourceId: string | null): DataSourceTypes | null {
+	if (!dataSourceId) return null
+
+	switch (dataSourceId) {
+		case SystemIds.QUERY_DATA_SOURCE:
+			return "QUERY"
+		case SystemIds.ALL_OF_GEO_DATA_SOURCE:
+			return "GEO"
+		case SystemIds.COLLECTION_DATA_SOURCE:
+			return "COLLECTION"
 		default:
-			return "TEXT"
-
-		// Q: Do we list the other supported value types here? Image, Relation, Place, etc?
+			return null
 	}
 }

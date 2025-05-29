@@ -29,6 +29,9 @@ const resolvers: GeneratedResolvers = {
 		description: async (parent: {id: string}) => {
 			return Resolvers.entityDescription({id: parent.id})
 		},
+		blocks: async (parent: {id: string}) => {
+			return Resolvers.blocks({id: parent.id})
+		},
 		types: async (parent: {id: string}) => {
 			return Resolvers.entityTypes({id: parent.id})
 		},
