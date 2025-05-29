@@ -85,7 +85,7 @@ export type Property = {
   __typename?: 'Property';
   entity?: Maybe<Entity>;
   id: Scalars['ID']['output'];
-  valueType: Scalars['String']['output'];
+  valueType: ValueType;
 };
 
 export type Query = {
@@ -172,6 +172,17 @@ export type ValueFilter = {
   property: Scalars['String']['input'];
   text?: InputMaybe<TextFilter>;
 };
+
+export enum ValueType {
+  Checkbox = 'CHECKBOX',
+  Image = 'IMAGE',
+  Number = 'NUMBER',
+  Point = 'POINT',
+  Relation = 'RELATION',
+  Text = 'TEXT',
+  Time = 'TIME',
+  Url = 'URL'
+}
 
 export type WithIndex<TObject> = TObject & Record<string, any>;
 export type ResolversObject<TObject> = WithIndex<TObject>;
@@ -265,6 +276,7 @@ export type ResolversTypes = ResolversObject<{
   Type: ResolverTypeWrapper<Omit<Type, 'entity' | 'properties'> & { entity?: Maybe<ResolversTypes['Entity']>, properties?: Maybe<Array<Maybe<ResolversTypes['Property']>>> }>;
   Value: ResolverTypeWrapper<Omit<Value, 'entity' | 'property'> & { entity?: Maybe<ResolversTypes['Entity']>, property?: Maybe<ResolversTypes['Property']> }>;
   ValueFilter: ValueFilter;
+  ValueType: ValueType;
 }>;
 
 /** Mapping between all available schema types and the resolvers parents */
@@ -317,7 +329,7 @@ export type EntityResolvers<ContextType = any, ParentType extends ResolversParen
 export type PropertyResolvers<ContextType = any, ParentType extends ResolversParentTypes['Property'] = ResolversParentTypes['Property']> = ResolversObject<{
   entity?: Resolver<Maybe<ResolversTypes['Entity']>, ParentType, ContextType>;
   id?: Resolver<ResolversTypes['ID'], ParentType, ContextType>;
-  valueType?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
+  valueType?: Resolver<ResolversTypes['ValueType'], ParentType, ContextType>;
   __isTypeOf?: IsTypeOfResolverFn<ParentType, ContextType>;
 }>;
 

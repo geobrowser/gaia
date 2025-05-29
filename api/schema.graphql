@@ -36,9 +36,20 @@ type Block {
   dataSourceType: DataSourceType
 }
 
+enum ValueType {
+  TEXT
+  NUMBER
+  CHECKBOX
+  URL
+  TIME
+  POINT
+  RELATION
+  IMAGE
+}
+
 type Property {
   id: ID!
-  valueType: String! # TODO enum/union
+  valueType: ValueType!
   entity: Entity
 }
 
