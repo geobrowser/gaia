@@ -20,20 +20,13 @@ export function getEntities(args: QueryEntitiesArgs) {
 				offset: Number(offset),
 				with: {
 					values: {
-						where: and(whereClauses),
 						columns: {
 							propertyId: true,
 							value: true,
 						},
 					},
 				},
-				where: (entities, {exists}) =>
-					exists(
-						client
-							.select()
-							.from(values)
-							.where(and(eq(values.entityId, entities.id), whereClauses)),
-					),
+				where: whereClauses,
 			})
 
 			return entitiesWithMatchingValue.map((result) => {

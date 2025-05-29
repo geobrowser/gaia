@@ -1,5 +1,5 @@
-import {and, eq, isNull, like, not, or, sql} from "drizzle-orm"
-import {entities, values} from "../services/storage/schema"
+import {and, eq, isNull, like, not, or, sql, type SQL} from "drizzle-orm"
+import {entities, relations, values} from "../services/storage/schema"
 
 type TextFilter = {
 	is?: string
@@ -38,15 +38,24 @@ type PropertyFilter = {
 	point?: PointFilter
 }
 
+type RelationFilter = {
+	typeId?: string
+	fromEntityId?: string
+	toEntityId?: string
+	spaceId?: string
+}
+
 export type EntityFilter = {
 	AND?: EntityFilter[]
 	OR?: EntityFilter[]
 	NOT?: EntityFilter
 	value?: PropertyFilter
+	fromRelation?: RelationFilter
+	toRelation?: RelationFilter
 }
 
-function buildValueWhere(filter: PropertyFilter): any {
-	const conditions: any[] = [eq(values.propertyId, filter.property)]
+function buildValueWhere(filter: PropertyFilter) {
+	const conditions = [eq(values.propertyId, filter.property)]
 
 	if (filter.text) {
 		const f = filter.text
@@ -58,7 +67,10 @@ function buildValueWhere(filter: PropertyFilter): any {
 			conditions.push(f.exists ? not(isNull(values.value)) : isNull(values.value))
 		}
 		if (f.NOT) {
-			conditions.push(not(buildValueWhere({property: filter.property, text: f.NOT})))
+			const notCondition = buildValueWhere({property: filter.property, text: f.NOT})
+			if (notCondition) {
+				conditions.push(not(notCondition))
+			}
 		}
 	}
 
@@ -82,13 +94,20 @@ function buildValueWhere(filter: PropertyFilter): any {
 			// For exists, check if the value exists AND is numeric
 			const isNumeric = sql`${values.value} ~ '^-?([0-9]+\.?[0-9]*|\.[0-9]+)([eE][-+]?[0-9]+)?$'`
 
-			conditions.push(
-				f.exists ? and(not(isNull(values.value)), isNumeric) : or(isNull(values.value), not(isNumeric)),
-			)
+			if (f.exists) {
+				const existsCondition = and(not(isNull(values.value)), isNumeric)
+				if (existsCondition) conditions.push(existsCondition)
+			} else {
+				const notExistsCondition = or(isNull(values.value), not(isNumeric))
+				if (notExistsCondition) conditions.push(notExistsCondition)
+			}
 		}
 
 		if (f.NOT) {
-			conditions.push(not(buildValueWhere({property: filter.property, number: f.NOT})))
+			const notCondition = buildValueWhere({property: filter.property, number: f.NOT})
+			if (notCondition) {
+				conditions.push(not(notCondition))
+			}
 		}
 	}
 
@@ -111,10 +130,29 @@ function buildValueWhere(filter: PropertyFilter): any {
 	return and(...conditions)
 }
 
-export function buildEntityWhere(filter: EntityFilter | null): any | undefined {
+function buildRelationConditions(filter: RelationFilter) {
+	const conditions = []
+
+	if (filter.typeId !== undefined) {
+		conditions.push(sql`type_id = ${filter.typeId}`)
+	}
+	if (filter.fromEntityId !== undefined) {
+		conditions.push(sql`from_entity_id = ${filter.fromEntityId}`)
+	}
+	if (filter.toEntityId !== undefined) {
+		conditions.push(sql`to_entity_id = ${filter.toEntityId}`)
+	}
+	if (filter.spaceId !== undefined) {
+		conditions.push(sql`space_id = ${filter.spaceId}`)
+	}
+
+	return conditions.length > 0 ? sql.join(conditions, sql` AND `) : undefined
+}
+
+export function buildEntityWhere(filter: EntityFilter | null): SQL | undefined {
 	if (!filter) return undefined
 
-	const clauses: any[] = []
+	const clauses = []
 
 	if (filter.AND) {
 		clauses.push(and(...filter.AND.map(buildEntityWhere)))
@@ -123,7 +161,10 @@ export function buildEntityWhere(filter: EntityFilter | null): any | undefined {
 		clauses.push(or(...filter.OR.map(buildEntityWhere)))
 	}
 	if (filter.NOT) {
-		clauses.push(not(buildEntityWhere(filter.NOT)))
+		const notCondition = buildEntityWhere(filter.NOT)
+		if (notCondition) {
+			clauses.push(not(notCondition))
+		}
 	}
 	if (filter.value) {
 		// This checks: exists a value with this filter for the entity
@@ -134,6 +175,44 @@ export function buildEntityWhere(filter: EntityFilter | null): any | undefined {
         AND ${buildValueWhere(filter.value)}
       )`,
 		)
+	}
+	if (filter.fromRelation) {
+		// This checks: exists a relation where this entity is the fromEntity
+		const relationConditions = buildRelationConditions(filter.fromRelation)
+		if (relationConditions) {
+			clauses.push(
+				sql`EXISTS (
+          SELECT 1 FROM relations 
+          WHERE from_entity_id = ${entities.id} AND ${relationConditions}
+        )`,
+			)
+		} else {
+			clauses.push(
+				sql`EXISTS (
+          SELECT 1 FROM relations 
+          WHERE from_entity_id = ${entities.id}
+        )`,
+			)
+		}
+	}
+	if (filter.toRelation) {
+		// This checks: exists a relation where this entity is the toEntity
+		const relationConditions = buildRelationConditions(filter.toRelation)
+		if (relationConditions) {
+			clauses.push(
+				sql`EXISTS (
+          SELECT 1 FROM relations 
+          WHERE to_entity_id = ${entities.id} AND ${relationConditions}
+        )`,
+			)
+		} else {
+			clauses.push(
+				sql`EXISTS (
+          SELECT 1 FROM relations 
+          WHERE to_entity_id = ${entities.id}
+        )`,
+			)
+		}
 	}
 
 	return and(...clauses)

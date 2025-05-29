@@ -63,6 +63,8 @@ export type Entity = {
 export type EntityFilter = {
   NOT?: InputMaybe<EntityFilter>;
   OR?: InputMaybe<Array<EntityFilter>>;
+  fromRelation?: InputMaybe<RelationFilter>;
+  toRelation?: InputMaybe<RelationFilter>;
   value?: InputMaybe<ValueFilter>;
 };
 
@@ -128,6 +130,13 @@ export type Relation = {
   toSpaceId?: Maybe<Scalars['String']['output']>;
   type?: Maybe<Entity>;
   typeId: Scalars['String']['output'];
+};
+
+export type RelationFilter = {
+  fromEntityId?: InputMaybe<Scalars['String']['input']>;
+  spaceId?: InputMaybe<Scalars['String']['input']>;
+  toEntityId?: InputMaybe<Scalars['String']['input']>;
+  typeId?: InputMaybe<Scalars['String']['input']>;
 };
 
 export type TextFilter = {
@@ -271,6 +280,7 @@ export type ResolversTypes = ResolversObject<{
   Property: ResolverTypeWrapper<Omit<Property, 'entity'> & { entity?: Maybe<ResolversTypes['Entity']> }>;
   Query: ResolverTypeWrapper<{}>;
   Relation: ResolverTypeWrapper<Omit<Relation, 'from' | 'to' | 'type'> & { from?: Maybe<ResolversTypes['Entity']>, to?: Maybe<ResolversTypes['Entity']>, type?: Maybe<ResolversTypes['Entity']> }>;
+  RelationFilter: RelationFilter;
   String: ResolverTypeWrapper<Scalars['String']['output']>;
   TextFilter: TextFilter;
   Type: ResolverTypeWrapper<Omit<Type, 'entity' | 'properties'> & { entity?: Maybe<ResolversTypes['Entity']>, properties?: Maybe<Array<Maybe<ResolversTypes['Property']>>> }>;
@@ -294,6 +304,7 @@ export type ResolversParentTypes = ResolversObject<{
   Property: Omit<Property, 'entity'> & { entity?: Maybe<ResolversParentTypes['Entity']> };
   Query: {};
   Relation: Omit<Relation, 'from' | 'to' | 'type'> & { from?: Maybe<ResolversParentTypes['Entity']>, to?: Maybe<ResolversParentTypes['Entity']>, type?: Maybe<ResolversParentTypes['Entity']> };
+  RelationFilter: RelationFilter;
   String: Scalars['String']['output'];
   TextFilter: TextFilter;
   Type: Omit<Type, 'entity' | 'properties'> & { entity?: Maybe<ResolversParentTypes['Entity']>, properties?: Maybe<Array<Maybe<ResolversParentTypes['Property']>>> };

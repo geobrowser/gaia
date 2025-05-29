@@ -157,9 +157,17 @@ input ValueFilter {
   point: PointFilter
 }
 
-# @TODO: Filter for to relations
+input RelationFilter {
+  typeId: String
+  fromEntityId: String
+  toEntityId: String
+  spaceId: String
+}
+
 input EntityFilter {
   OR: [EntityFilter!]
   NOT: EntityFilter
   value: ValueFilter
+  fromRelation: RelationFilter
+  toRelation: RelationFilter
 }
