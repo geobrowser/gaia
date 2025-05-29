@@ -250,8 +250,6 @@ export function getBlocks(entityId: string) {
 						block.fromRelations.find((r) => r.typeId === SystemIds.DATA_SOURCE_PROPERTY)?.toEntity?.id ??
 						null
 
-          console.log('maybe data type', block.fromRelations)
-
 					dataSourceType = getDataSourceType(maybeDataSourceType)
 				}
 

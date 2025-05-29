@@ -16,12 +16,24 @@ type Entity {
   spaces: [String]!
 }
 
+enum DataSourceType {
+  QUERY
+  GEO
+  COLLECTION
+}
+
+enum BlockType {
+  TEXT
+  IMAGE
+  DATA
+}
+
 type Block {
   id: ID!
-  type: String!
+  type: BlockType!
   value: String # depends on the block type, e.g., text, image, video, etc.
   entity: Entity
-  dataSourceType: String
+  dataSourceType: DataSourceType
 }
 
 type Property {

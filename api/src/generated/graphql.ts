@@ -20,17 +20,29 @@ export type Scalars = {
 
 export type Block = {
   __typename?: 'Block';
-  dataSourceType?: Maybe<Scalars['String']['output']>;
+  dataSourceType?: Maybe<DataSourceType>;
   entity?: Maybe<Entity>;
   id: Scalars['ID']['output'];
-  type: Scalars['String']['output'];
+  type: BlockType;
   value?: Maybe<Scalars['String']['output']>;
 };
+
+export enum BlockType {
+  Data = 'DATA',
+  Image = 'IMAGE',
+  Text = 'TEXT'
+}
 
 export type CheckboxFilter = {
   exists?: InputMaybe<Scalars['Boolean']['input']>;
   is?: InputMaybe<Scalars['Boolean']['input']>;
 };
+
+export enum DataSourceType {
+  Collection = 'COLLECTION',
+  Geo = 'GEO',
+  Query = 'QUERY'
+}
 
 export type Entity = {
   __typename?: 'Entity';
@@ -234,8 +246,10 @@ export type DirectiveResolverFn<TResult = {}, TParent = {}, TContext = {}, TArgs
 /** Mapping between all available schema types and the resolvers types */
 export type ResolversTypes = ResolversObject<{
   Block: ResolverTypeWrapper<Omit<Block, 'entity'> & { entity?: Maybe<ResolversTypes['Entity']> }>;
+  BlockType: BlockType;
   Boolean: ResolverTypeWrapper<Scalars['Boolean']['output']>;
   CheckboxFilter: CheckboxFilter;
+  DataSourceType: DataSourceType;
   Entity: ResolverTypeWrapper<DbEntity>;
   EntityFilter: EntityFilter;
   Float: ResolverTypeWrapper<Scalars['Float']['output']>;
@@ -276,10 +290,10 @@ export type ResolversParentTypes = ResolversObject<{
 }>;
 
 export type BlockResolvers<ContextType = any, ParentType extends ResolversParentTypes['Block'] = ResolversParentTypes['Block']> = ResolversObject<{
-  dataSourceType?: Resolver<Maybe<ResolversTypes['String']>, ParentType, ContextType>;
+  dataSourceType?: Resolver<Maybe<ResolversTypes['DataSourceType']>, ParentType, ContextType>;
   entity?: Resolver<Maybe<ResolversTypes['Entity']>, ParentType, ContextType>;
   id?: Resolver<ResolversTypes['ID'], ParentType, ContextType>;
-  type?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
+  type?: Resolver<ResolversTypes['BlockType'], ParentType, ContextType>;
   value?: Resolver<Maybe<ResolversTypes['String']>, ParentType, ContextType>;
   __isTypeOf?: IsTypeOfResolverFn<ParentType, ContextType>;
 }>;
