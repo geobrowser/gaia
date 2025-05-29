@@ -1,7 +1,7 @@
 import {SystemIds} from "@graphprotocol/grc-20"
 import {and, eq} from "drizzle-orm"
 import {Effect} from "effect"
-import type {QueryEntitiesArgs} from "../generated/graphql"
+import {BlockType, DataSourceType, type QueryEntitiesArgs} from "../generated/graphql"
 import {values} from "../services/storage/schema"
 import {Storage} from "../services/storage/storage"
 import {type EntityFilter, buildEntityWhere} from "./filters"
@@ -194,9 +194,6 @@ export function getSpaces(id: string) {
 	})
 }
 
-type BlockTypes = "TEXT" | "IMAGE" | "DATA"
-type DataSourceTypes = "QUERY" | "GEO" | "COLLECTION"
-
 export function getBlocks(entityId: string) {
 	return Effect.gen(function* () {
 		const db = yield* Storage
@@ -227,17 +224,17 @@ export function getBlocks(entityId: string) {
 
 				// Determine the appropriate value based on block type
 				let value: string | null = null
-				let type: BlockTypes = "TEXT"
-				let dataSourceType: DataSourceTypes | null = null
+				let type: BlockType = BlockType.Text
+				let dataSourceType: DataSourceType | null = null
 
 				if (blockTypeId === SystemIds.TEXT_BLOCK) {
-					type = "TEXT"
+					type = BlockType.Text
 					value = block.values.find((v) => v.propertyId === SystemIds.MARKDOWN_CONTENT)?.value ?? null
 				} else if (blockTypeId === SystemIds.IMAGE_TYPE) {
-					type = "IMAGE"
+					type = BlockType.Image
 					value = block.values.find((v) => v.propertyId === SystemIds.IMAGE_URL_PROPERTY)?.value ?? null
 				} else if (blockTypeId === SystemIds.DATA_BLOCK) {
-					type = "DATA"
+					type = BlockType.Data
 					value = block.values.find((v) => v.propertyId === SystemIds.FILTER)?.value ?? null
 					const maybeDataSourceType =
 						block.fromRelations.find((r) => r.typeId === SystemIds.DATA_SOURCE_PROPERTY)?.toEntity?.id ??
@@ -264,16 +261,16 @@ export function getBlocks(entityId: string) {
 	})
 }
 
-function getDataSourceType(dataSourceId: string | null): DataSourceTypes | null {
+function getDataSourceType(dataSourceId: string | null): DataSourceType | null {
 	if (!dataSourceId) return null
 
 	switch (dataSourceId) {
 		case SystemIds.QUERY_DATA_SOURCE:
-			return "QUERY"
+			return DataSourceType.Query
 		case SystemIds.ALL_OF_GEO_DATA_SOURCE:
-			return "GEO"
+			return DataSourceType.Geo
 		case SystemIds.COLLECTION_DATA_SOURCE:
-			return "COLLECTION"
+			return DataSourceType.Collection
 		default:
 			return null
 	}

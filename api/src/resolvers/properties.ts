@@ -1,7 +1,7 @@
 import {SystemIds} from "@graphprotocol/grc-20"
 import {and, eq} from "drizzle-orm"
 import {Effect} from "effect"
-import type {QueryTypesArgs} from "../generated/graphql"
+import  {type QueryTypesArgs, ValueType} from "../generated/graphql"
 import {relations} from "../services/storage/schema"
 import {Storage} from "../services/storage/storage"
 
@@ -18,7 +18,7 @@ export function property(propertyId: string) {
 			if (!result) {
 				return {
 					id: propertyId,
-					valueType: "TEXT",
+					valueType: ValueType.Text,
 				}
 			}
 
@@ -68,29 +68,29 @@ export function properties(typeId: string, args: QueryTypesArgs) {
 	})
 }
 
-function getValueTypeAsText(valueTypeId: string | undefined): string {
+function getValueTypeAsText(valueTypeId: string | undefined): ValueType {
 	if (!valueTypeId) {
-		return "TEXT"
+		return ValueType.Text
 	}
 
 	switch (valueTypeId) {
 		case SystemIds.TEXT:
-			return "TEXT"
+			return ValueType.Text
 		case SystemIds.NUMBER:
-			return "NUMBER"
+			return ValueType.Number
 		case SystemIds.CHECKBOX:
-			return "CHECKBOX"
+			return ValueType.Checkbox
 		case SystemIds.TIME:
-			return "TIME"
+			return ValueType.Time
 		case SystemIds.URL:
-			return "URL"
+			return ValueType.Url
 		case SystemIds.POINT:
-			return "POINT"
+			return ValueType.Point
 		case SystemIds.IMAGE:
-			return "IMAGE"
+			return ValueType.Image
 		case SystemIds.RELATION:
-			return "RELATION"
+			return ValueType.Relation
 		default:
-			return "TEXT"
+			return ValueType.Text
 	}
 }
