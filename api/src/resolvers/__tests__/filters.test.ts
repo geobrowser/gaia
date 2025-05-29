@@ -568,11 +568,11 @@ describe("Entity Filter Tests", () => {
 
 			const result = buildEntityWhere(filter)
 			expect(result).toBeDefined()
-			expect(result.queryChunks).toBeDefined()
-			expect(Array.isArray(result.queryChunks)).toBe(true)
+			expect(result?.queryChunks).toBeDefined()
+			expect(Array.isArray(result?.queryChunks)).toBe(true)
 		})
 
-		it("should have decoder property", () => {
+		it("should return a valid SQL object", () => {
 			const filter: EntityFilter = {
 				value: {
 					property: "name",
@@ -582,10 +582,10 @@ describe("Entity Filter Tests", () => {
 
 			const result = buildEntityWhere(filter)
 			expect(result).toBeDefined()
-			expect(result?.decoder).toBeDefined()
+			expect(result?.constructor.name).toBe("SQL")
 		})
 
-		it("should have shouldInlineParams property", () => {
+		it("should generate proper SQL structure", () => {
 			const filter: EntityFilter = {
 				value: {
 					property: "name",
@@ -595,7 +595,8 @@ describe("Entity Filter Tests", () => {
 
 			const result = buildEntityWhere(filter)
 			expect(result).toBeDefined()
-			expect(typeof result?.shouldInlineParams).toBe("boolean")
+			expect(typeof result).toBe("object")
+			expect(result?.constructor.name).toBe("SQL")
 		})
 	})
 

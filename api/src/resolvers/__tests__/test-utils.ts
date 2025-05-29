@@ -69,7 +69,7 @@ export const extractSQLString = (sqlObj: SQL): string => {
 // Helper to extract parameters from Drizzle SQL object
 export const extractSQLParams = (sqlObj: SQL): unknown[] => {
 	if (!sqlObj) return []
-	return sqlObj?.params || []
+	return (sqlObj as SQL & { params?: unknown[] })?.params || []
 }
 
 // Test data factories
@@ -80,7 +80,7 @@ export const createTextFilter = (
 		startsWith: string
 		endsWith: string
 		exists: boolean
-		NOT: any
+		NOT: unknown
 	}> = {},
 ) => ({
 	...options,
@@ -94,7 +94,7 @@ export const createNumberFilter = (
 		greaterThan: number
 		greaterThanOrEqual: number
 		exists: boolean
-		NOT: any
+		NOT: unknown
 	}> = {},
 ) => ({
 	...options,
@@ -132,10 +132,10 @@ export const createRelationFilter = (
 export const createValueFilter = (
 	property: string,
 	options: Partial<{
-		text: any
-		number: any
-		checkbox: any
-		point: any
+		text: unknown
+		number: unknown
+		checkbox: unknown
+		point: unknown
 	}> = {},
 ) => ({
 	property,
@@ -144,12 +144,12 @@ export const createValueFilter = (
 
 export const createEntityFilter = (
 	options: Partial<{
-		AND: any[]
-		OR: any[]
-		NOT: any
-		value: any
-		fromRelation: any
-		toRelation: any
+		AND: unknown[]
+		OR: unknown[]
+		NOT: unknown
+		value: unknown
+		fromRelation: unknown
+		toRelation: unknown
 	}> = {},
 ) => ({
 	...options,
