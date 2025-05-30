@@ -4,7 +4,7 @@ use grc20::pb::grc20::{op::Payload, Edit};
 use indexer_utils::id;
 use uuid::Uuid;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct SetRelationItem {
     pub id: String,
     pub entity_id: String,
@@ -20,7 +20,7 @@ pub struct SetRelationItem {
     pub verified: Option<bool>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct UpdateRelationItem {
     pub id: String,
     pub from_space_id: Option<String>,
@@ -32,7 +32,7 @@ pub struct UpdateRelationItem {
     pub verified: Option<bool>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct UnsetRelationItem {
     pub id: String,
     pub from_space_id: Option<bool>,
@@ -44,13 +44,13 @@ pub struct UnsetRelationItem {
     pub verified: Option<bool>,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct DeleteRelationItem {
     pub id: String,
     pub space_id: String,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum RelationItem {
     Create(SetRelationItem),
     Update(UpdateRelationItem),
