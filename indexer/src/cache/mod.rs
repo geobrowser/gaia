@@ -1,6 +1,6 @@
 use async_trait::async_trait;
-pub mod kv;
 pub mod postgres;
+pub mod properties_cache;
 
 use grc20::pb::grc20::Edit;
 use thiserror::Error;

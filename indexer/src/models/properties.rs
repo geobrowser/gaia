@@ -61,7 +61,7 @@ impl AsRef<str> for DataType {
 
 impl std::convert::TryFrom<&str> for DataType {
     type Error = String;
-    
+
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         match value {
             DATA_TYPE_TEXT => Ok(DataType::Text),
@@ -108,6 +108,17 @@ impl DataType {
     /// Validates if a string is a valid DataType enum value
     pub fn is_valid_string(value: &str) -> bool {
         VALID_DATA_TYPE_VALUES.contains(&value)
+    }
+
+    pub fn to_int(&self) -> u8 {
+        match self {
+            DataType::Text => 0,
+            DataType::Number => 1,
+            DataType::Checkbox => 2,
+            DataType::Time => 3,
+            DataType::Point => 4,
+            DataType::Relation => 5,
+        }
     }
 }
 
