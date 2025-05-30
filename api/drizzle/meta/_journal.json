@@ -78,6 +78,13 @@
       "when": 1748459535683,
       "tag": "0010_awesome_the_hand",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "7",
+      "when": 1748623460875,
+      "tag": "0011_wise_avengers",
+      "breakpoints": true
     }
   ]
 }

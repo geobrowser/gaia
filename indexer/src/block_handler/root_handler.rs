@@ -4,7 +4,7 @@ use futures::future::join_all;
 use stream::utils::BlockMetadata;
 
 use crate::models::relations::RelationsModel;
-use crate::models::{entities::EntitiesModel, properties::ValuesModel};
+use crate::models::{entities::EntitiesModel, values::ValuesModel};
 use crate::storage::StorageBackend;
 use crate::{cache::PreprocessedEdit, error::IndexingError};
 

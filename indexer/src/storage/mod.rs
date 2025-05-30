@@ -6,8 +6,8 @@ use thiserror::Error;
 
 use crate::models::{
     entities::EntityItem,
-    properties::ValueOp,
     relations::{SetRelationItem, UnsetRelationItem, UpdateRelationItem},
+    values::ValueOp,
 };
 
 #[derive(Error, Debug)]

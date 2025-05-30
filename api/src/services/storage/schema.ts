@@ -24,6 +24,12 @@ export const entities = pgTable("entities", {
 	updatedAtBlock: text().notNull(),
 })
 
+export const properties = pgTable("properties", {
+	id: text().primaryKey(),
+	name: text().notNull(),
+	type: text().notNull(),
+})
+
 export const values = pgTable("values", {
 	id: text().primaryKey(),
 	propertyId: text().notNull(),

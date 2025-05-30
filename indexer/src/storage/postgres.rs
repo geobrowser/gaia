@@ -4,8 +4,8 @@ use sqlx::{postgres::PgPoolOptions, Postgres, QueryBuilder};
 
 use crate::models::{
     entities::EntityItem,
-    properties::{ValueChangeType, ValueOp},
     relations::{SetRelationItem, UnsetRelationItem, UpdateRelationItem},
+    values::{ValueChangeType, ValueOp},
 };
 
 use super::{StorageBackend, StorageError};
