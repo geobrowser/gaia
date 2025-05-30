@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 #[derive(Clone)]
 pub struct EntityItem {
-    pub id: String,
+    pub id: Uuid,
     pub created_at: String,
     pub created_at_block: String,
     pub updated_at: String,
@@ -19,7 +19,7 @@ pub struct EntitiesModel;
 impl EntitiesModel {
     pub fn map_edit_to_entities(edit: &Edit, block: &BlockMetadata) -> Vec<EntityItem> {
         let mut entities: Vec<EntityItem> = Vec::new();
-        let mut seen: HashSet<String> = HashSet::new();
+        let mut seen: HashSet<Uuid> = HashSet::new();
 
         for op in &edit.ops {
             if let Some(payload) = &op.payload {
@@ -35,18 +35,18 @@ impl EntitiesModel {
                             continue;
                         }
 
-                        let entity_id = Uuid::from_bytes(entity_id_bytes.unwrap()).to_string();
+                        let entity_id = Uuid::from_bytes(entity_id_bytes.unwrap());
 
                         if !seen.contains(&entity_id) {
                             entities.push(EntityItem {
-                                id: entity_id.clone(),
+                                id: entity_id,
                                 created_at: block.timestamp.clone(),
                                 created_at_block: block.block_number.to_string(),
                                 updated_at: block.timestamp.clone(),
                                 updated_at_block: block.block_number.to_string(),
                             });
 
-                            seen.insert(entity_id.clone());
+                            seen.insert(entity_id);
                         }
 
                         for value in &entity.values {
@@ -61,18 +61,18 @@ impl EntitiesModel {
                             }
 
                             let property_id =
-                                Uuid::from_bytes(property_id_bytes.unwrap()).to_string();
+                                Uuid::from_bytes(property_id_bytes.unwrap());
 
                             if !seen.contains(&property_id) {
                                 entities.push(EntityItem {
-                                    id: property_id.clone(),
+                                    id: property_id,
                                     created_at: block.timestamp.clone(),
                                     created_at_block: block.block_number.to_string(),
                                     updated_at: block.timestamp.clone(),
                                     updated_at_block: block.block_number.to_string(),
                                 });
 
-                                seen.insert(property_id.clone());
+                                seen.insert(property_id);
                             }
                         }
                     }
@@ -87,18 +87,18 @@ impl EntitiesModel {
                             continue;
                         }
 
-                        let entity_id = Uuid::from_bytes(entity_id_bytes.unwrap()).to_string();
+                        let entity_id = Uuid::from_bytes(entity_id_bytes.unwrap());
 
                         if !seen.contains(&entity_id) {
                             entities.push(EntityItem {
-                                id: entity_id.clone(),
+                                id: entity_id,
                                 created_at: block.timestamp.clone(),
                                 created_at_block: block.block_number.to_string(),
                                 updated_at: block.timestamp.clone(),
                                 updated_at_block: block.block_number.to_string(),
                             });
 
-                            seen.insert(entity_id.clone());
+                            seen.insert(entity_id);
                         }
 
                         for property in &entity.properties {
@@ -113,18 +113,18 @@ impl EntitiesModel {
                             }
 
                             let property_id =
-                                Uuid::from_bytes(property_id_bytes.unwrap()).to_string();
+                                Uuid::from_bytes(property_id_bytes.unwrap());
 
                             if !seen.contains(&property_id) {
                                 entities.push(EntityItem {
-                                    id: property_id.clone(),
+                                    id: property_id,
                                     created_at: block.timestamp.clone(),
                                     created_at_block: block.block_number.to_string(),
                                     updated_at: block.timestamp.clone(),
                                     updated_at_block: block.block_number.to_string(),
                                 });
 
-                                seen.insert(property_id.clone());
+                                seen.insert(property_id);
                             }
                         }
                     }
@@ -139,11 +139,11 @@ impl EntitiesModel {
                             continue;
                         }
 
-                        let relation_id = Uuid::from_bytes(relation_id_bytes.unwrap()).to_string();
+                        let relation_id = Uuid::from_bytes(relation_id_bytes.unwrap());
 
                         if !seen.contains(&relation_id) {
                             entities.push(EntityItem {
-                                id: relation_id.clone(),
+                                id: relation_id,
                                 created_at: block.timestamp.clone(),
                                 created_at_block: block.block_number.to_string(),
                                 updated_at: block.timestamp.clone(),
@@ -165,11 +165,11 @@ impl EntitiesModel {
                         }
 
                         let relation_entity_id =
-                            Uuid::from_bytes(relation_entity_id_bytes.unwrap()).to_string();
+                            Uuid::from_bytes(relation_entity_id_bytes.unwrap());
 
                         if !seen.contains(&relation_entity_id) {
                             entities.push(EntityItem {
-                                id: relation_entity_id.clone(),
+                                id: relation_entity_id,
                                 created_at: block.timestamp.clone(),
                                 created_at_block: block.block_number.to_string(),
                                 updated_at: block.timestamp.clone(),
@@ -189,11 +189,11 @@ impl EntitiesModel {
                             continue;
                         }
 
-                        let type_id = Uuid::from_bytes(type_id_bytes.unwrap()).to_string();
+                        let type_id = Uuid::from_bytes(type_id_bytes.unwrap());
 
                         if !seen.contains(&type_id) {
                             entities.push(EntityItem {
-                                id: type_id.clone(),
+                                id: type_id,
                                 created_at: block.timestamp.clone(),
                                 created_at_block: block.block_number.to_string(),
                                 updated_at: block.timestamp.clone(),
@@ -213,11 +213,11 @@ impl EntitiesModel {
                             continue;
                         }
 
-                        let from_id = Uuid::from_bytes(from_id_bytes.unwrap()).to_string();
+                        let from_id = Uuid::from_bytes(from_id_bytes.unwrap());
 
                         if !seen.contains(&from_id) {
                             entities.push(EntityItem {
-                                id: from_id.clone(),
+                                id: from_id,
                                 created_at: block.timestamp.clone(),
                                 created_at_block: block.block_number.to_string(),
                                 updated_at: block.timestamp.clone(),
@@ -237,11 +237,11 @@ impl EntitiesModel {
                             continue;
                         }
 
-                        let to_id = Uuid::from_bytes(to_id_bytes.unwrap()).to_string();
+                        let to_id = Uuid::from_bytes(to_id_bytes.unwrap());
 
                         if !seen.contains(&to_id) {
                             entities.push(EntityItem {
-                                id: to_id.clone(),
+                                id: to_id,
                                 created_at: block.timestamp.clone(),
                                 created_at_block: block.block_number.to_string(),
                                 updated_at: block.timestamp.clone(),
@@ -262,11 +262,11 @@ impl EntitiesModel {
                             continue;
                         }
 
-                        let relation_id = Uuid::from_bytes(relation_id_bytes.unwrap()).to_string();
+                        let relation_id = Uuid::from_bytes(relation_id_bytes.unwrap());
 
                         if !seen.contains(&relation_id) {
                             entities.push(EntityItem {
-                                id: relation_id.clone(),
+                                id: relation_id,
                                 created_at: block.timestamp.clone(),
                                 created_at_block: block.block_number.to_string(),
                                 updated_at: block.timestamp.clone(),
