@@ -1,6 +1,9 @@
-use grc20::pb::ipfs::{Edit, Op, Triple, Value};
+use grc20::pb::grc20::{
+    op::Payload, Edit, Entity, NativeTypes, Op, Property, Relation, UnsetEntityValues, Value,
+};
 use std::{env, sync::Arc};
 use stream::utils::BlockMetadata;
+use uuid::Uuid;
 
 use dotenv::dotenv;
 use indexer::{
@@ -37,13 +40,74 @@ async fn main() -> Result<(), IndexingError> {
     let item = PreprocessedEdit {
         space_id: String::from("5"),
         edit: Some(make_edit(
-            "5",
+            "f47ac10b-58cc-4372-a567-0e02b2c3d479",
             "Name",
-            "Author",
+            "f47ac10b-58cc-4372-a567-0e02b2c3d480",
             vec![
-                make_triple_op(OpType::SET, "entity-id-1", "attribute-id", "value 1", 1),
-                make_triple_op(OpType::SET, "entity-id-2", "attribute-id", "value 2", 1),
-                make_triple_op(OpType::DELETE, "entity-id-2", "attribute-id", "value 2", 1),
+                make_entity_op(
+                    TestEntityOpType::UPDATE,
+                    "550e8400-e29b-41d4-a716-446655440001",
+                    vec![
+                        TestValue {
+                            property_id: "6ba7b810-9dad-11d1-80b4-00c04fd430c1".to_string(),
+                            value: Some("Test entity".to_string()),
+                        },
+                        TestValue {
+                            property_id: "6ba7b810-9dad-11d1-80b4-00c04fd430c2".to_string(),
+                            value: Some("value 1".to_string()),
+                        },
+                    ],
+                ),
+                make_entity_op(
+                    TestEntityOpType::UPDATE,
+                    "550e8400-e29b-41d4-a716-446655440002",
+                    vec![TestValue {
+                        property_id: "6ba7b810-9dad-11d1-80b4-00c04fd430c2".to_string(),
+                        value: Some("value 2".to_string()),
+                    }],
+                ),
+                make_entity_op(
+                    TestEntityOpType::UNSET,
+                    "550e8400-e29b-41d4-a716-446655440002",
+                    vec![TestValue {
+                        property_id: "6ba7b810-9dad-11d1-80b4-00c04fd430c2".to_string(),
+                        value: None,
+                    }],
+                ),
+                make_relation_op(
+                    TestRelationOpType::CREATE,
+                    "7ba7b810-9dad-11d1-80b4-00c04fd430c1",
+                    "550e8400-e29b-41d4-a716-446655440001",
+                    "8ba7b810-9dad-11d1-80b4-00c04fd430c1",
+                    "550e8400-e29b-41d4-a716-446655440003",
+                    "550e8400-e29b-41d4-a716-446655440004",
+                ),
+                make_relation_op(
+                    TestRelationOpType::UPDATE,
+                    "7ba7b810-9dad-11d1-80b4-00c04fd430c1",
+                    "550e8400-e29b-41d4-a716-446655440001",
+                    "8ba7b810-9dad-11d1-80b4-00c04fd430c1",
+                    "550e8400-e29b-41d4-a716-446655440003",
+                    "550e8400-e29b-41d4-a716-446655440004",
+                ),
+                make_relation_op(
+                    TestRelationOpType::CREATE,
+                    "7ba7b810-9dad-11d1-80b4-00c04fd430c2",
+                    "550e8400-e29b-41d4-a716-446655440001",
+                    "8ba7b810-9dad-11d1-80b4-00c04fd430c1",
+                    "550e8400-e29b-41d4-a716-446655440003",
+                    "550e8400-e29b-41d4-a716-446655440004",
+                ),
+                make_relation_op(
+                    TestRelationOpType::DELETE,
+                    "7ba7b810-9dad-11d1-80b4-00c04fd430c2",
+                    "550e8400-e29b-41d4-a716-446655440001",
+                    "8ba7b810-9dad-11d1-80b4-00c04fd430c1",
+                    "550e8400-e29b-41d4-a716-446655440003",
+                    "550e8400-e29b-41d4-a716-446655440004",
+                ),
+                make_property_op("9ba7b810-9dad-11d1-80b4-00c04fd430c1", NativeTypes::Text),
+                make_property_op("9ba7b810-9dad-11d1-80b4-00c04fd430c2", NativeTypes::Number),
             ],
         )),
         is_errored: false,
@@ -66,44 +130,247 @@ async fn main() -> Result<(), IndexingError> {
 
     {
         let entity = storage
-            .get_entity(&"entity-id-1".to_string())
+            .get_entity(&"550e8400-e29b-41d4-a716-446655440001".to_string())
             .await
             .unwrap();
-        assert_eq!(entity.id, "entity-id-1");
+        assert_eq!(entity.id, "550e8400-e29b-41d4-a716-446655440001");
     }
 
     {
         let entity = storage
-            .get_entity(&"entity-id-2".to_string())
+            .get_entity(&"550e8400-e29b-41d4-a716-446655440002".to_string())
             .await
             .unwrap();
-        assert_eq!(entity.id, "entity-id-2");
+        assert_eq!(entity.id, "550e8400-e29b-41d4-a716-446655440002");
     }
 
     {
         let attribute = storage
-            .get_entity(&"attribute-id".to_string())
+            .get_entity(&"6ba7b810-9dad-11d1-80b4-00c04fd430c2".to_string())
             .await
             .unwrap();
-        assert_eq!(attribute.id, "attribute-id");
+        assert_eq!(attribute.id, "6ba7b810-9dad-11d1-80b4-00c04fd430c2");
     }
 
     {
-        let triple = storage
-            .get_property(&"entity-id-1:attribute-id:5".to_string())
+        let value = storage
+            .get_value(
+                &"550e8400-e29b-41d4-a716-446655440001:6ba7b810-9dad-11d1-80b4-00c04fd430c2:5"
+                    .to_string(),
+            )
             .await
             .unwrap();
-        assert_eq!(triple.id, "entity-id-1:attribute-id:5");
+        assert_eq!(
+            value.id,
+            "550e8400-e29b-41d4-a716-446655440001:6ba7b810-9dad-11d1-80b4-00c04fd430c2:5"
+        );
     }
 
     {
-        let triple = storage
-            .get_property(&"entity-id-2:attribute-id:5".to_string())
+        let value = storage
+            .get_value(
+                &"550e8400-e29b-41d4-a716-446655440002:6ba7b810-9dad-11d1-80b4-00c04fd430c2:5"
+                    .to_string(),
+            )
+            .await;
+
+        // Should not return the value since it was deleted
+        assert_eq!(value.is_err(), true);
+    }
+
+    {
+        let value = storage
+            .get_relation(&"7ba7b810-9dad-11d1-80b4-00c04fd430c1".to_string())
             .await
             .unwrap();
 
-        // @TODO: SHould not exist
-        assert_eq!(triple.id, "entity-id-2:attribute-id:5");
+        assert_eq!(value.id, "7ba7b810-9dad-11d1-80b4-00c04fd430c1");
+        assert_eq!(value.space_id, "5".to_string());
+        assert_eq!(value.entity_id, "550e8400-e29b-41d4-a716-446655440001");
+        assert_eq!(value.from_id, "550e8400-e29b-41d4-a716-446655440003");
+        assert_eq!(value.to_id, "550e8400-e29b-41d4-a716-446655440004");
+
+        // Update in edit sets verified to Some(true)
+        assert_eq!(value.verified, Some(true));
+    }
+
+    {
+        // Should not return the value since it was deleted
+        let value = storage
+            .get_relation(&"7ba7b810-9dad-11d1-80b4-00c04fd430c2".to_string())
+            .await;
+        assert_eq!(value.is_err(), true);
+    }
+
+    // Test property creation
+    {
+        let property = storage
+            .get_property(&"9ba7b810-9dad-11d1-80b4-00c04fd430c1".to_string())
+            .await
+            .unwrap();
+        assert_eq!(property.id, "9ba7b810-9dad-11d1-80b4-00c04fd430c1");
+        assert_eq!(property.value, "Text");
+    }
+
+    {
+        let property = storage
+            .get_property(&"9ba7b810-9dad-11d1-80b4-00c04fd430c2".to_string())
+            .await
+            .unwrap();
+        assert_eq!(property.id, "9ba7b810-9dad-11d1-80b4-00c04fd430c2");
+        assert_eq!(property.value, "Number");
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_property_no_overwrite() -> Result<(), IndexingError> {
+    dotenv().ok();
+    let database_url = env::var("DATABASE_URL").expect("DATABASE_URL not set");
+    let storage = Arc::new(PostgresStorage::new(&database_url).await?);
+
+    // First edit - create property with Text type
+    let first_edit = PreprocessedEdit {
+        space_id: String::from("6"),
+        edit: Some(make_edit(
+            "f47ac10b-58cc-4372-a567-0e02b2c3d481",
+            "First Edit",
+            "f47ac10b-58cc-4372-a567-0e02b2c3d480",
+            vec![make_property_op(
+                "aba7b810-9dad-11d1-80b4-00c04fd430c1",
+                NativeTypes::Text,
+            )],
+        )),
+        is_errored: false,
+    };
+
+    // Second edit - attempt to create same property with Number type
+    let second_edit = PreprocessedEdit {
+        space_id: String::from("6"),
+        edit: Some(make_edit(
+            "f47ac10b-58cc-4372-a567-0e02b2c3d482",
+            "Second Edit",
+            "f47ac10b-58cc-4372-a567-0e02b2c3d480",
+            vec![make_property_op(
+                "aba7b810-9dad-11d1-80b4-00c04fd430c1",
+                NativeTypes::Number,
+            )],
+        )),
+        is_errored: false,
+    };
+
+    let block = BlockMetadata {
+        cursor: String::from("6"),
+        block_number: 2,
+        timestamp: String::from("6"),
+    };
+
+    let indexer = TestIndexer::new(storage.clone());
+
+    // Process first edit
+    indexer
+        .run(&vec![KgData {
+            block: block.clone(),
+            edits: vec![first_edit],
+        }])
+        .await?;
+
+    // Verify property was created with Text type
+    {
+        let property = storage
+            .get_property(&"aba7b810-9dad-11d1-80b4-00c04fd430c1".to_string())
+            .await
+            .unwrap();
+        assert_eq!(property.id, "aba7b810-9dad-11d1-80b4-00c04fd430c1");
+        assert_eq!(property.value, "Text");
+    }
+
+    // Process second edit (should not overwrite)
+    indexer
+        .run(&vec![KgData {
+            block,
+            edits: vec![second_edit],
+        }])
+        .await?;
+
+    // Verify property still has Text type (not overwritten)
+    {
+        let property = storage
+            .get_property(&"aba7b810-9dad-11d1-80b4-00c04fd430c1".to_string())
+            .await
+            .unwrap();
+        assert_eq!(property.id, "aba7b810-9dad-11d1-80b4-00c04fd430c1");
+        assert_eq!(property.value, "Text"); // Should still be Text, not Number
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_property_squashing() -> Result<(), IndexingError> {
+    dotenv().ok();
+    let database_url = env::var("DATABASE_URL").expect("DATABASE_URL not set");
+    let storage = Arc::new(PostgresStorage::new(&database_url).await?);
+
+    // Single edit with multiple CreateProperty ops for the same property ID
+    let edit_with_duplicate_properties = PreprocessedEdit {
+        space_id: String::from("7"),
+        edit: Some(make_edit(
+            "f47ac10b-58cc-4372-a567-0e02b2c3d483",
+            "Squash Test Edit",
+            "f47ac10b-58cc-4372-a567-0e02b2c3d480",
+            vec![
+                // First: create property with Text type
+                make_property_op("bba7b810-9dad-11d1-80b4-00c04fd430c1", NativeTypes::Text),
+                // Second: create same property with Number type
+                make_property_op("bba7b810-9dad-11d1-80b4-00c04fd430c1", NativeTypes::Number),
+                // Third: create same property with Checkbox type (this should be the final one)
+                make_property_op(
+                    "bba7b810-9dad-11d1-80b4-00c04fd430c1",
+                    NativeTypes::Checkbox,
+                ),
+                // Different property to ensure squashing only affects same IDs
+                make_property_op("bba7b810-9dad-11d1-80b4-00c04fd430c2", NativeTypes::Time),
+            ],
+        )),
+        is_errored: false,
+    };
+
+    let block = BlockMetadata {
+        cursor: String::from("7"),
+        block_number: 3,
+        timestamp: String::from("7"),
+    };
+
+    let indexer = TestIndexer::new(storage.clone());
+
+    // Process the edit
+    indexer
+        .run(&vec![KgData {
+            block,
+            edits: vec![edit_with_duplicate_properties],
+        }])
+        .await?;
+
+    // Verify that only the final type (Checkbox) was stored for the squashed property
+    {
+        let property = storage
+            .get_property(&"bba7b810-9dad-11d1-80b4-00c04fd430c1".to_string())
+            .await
+            .unwrap();
+        assert_eq!(property.id, "bba7b810-9dad-11d1-80b4-00c04fd430c1");
+        assert_eq!(property.value, "Checkbox"); // Should be Checkbox, not Text or Number
+    }
+
+    // Verify that the different property was not affected by squashing
+    {
+        let property = storage
+            .get_property(&"bba7b810-9dad-11d1-80b4-00c04fd430c2".to_string())
+            .await
+            .unwrap();
+        assert_eq!(property.id, "bba7b810-9dad-11d1-80b4-00c04fd430c2");
+        assert_eq!(property.value, "Time");
     }
 
     Ok(())
@@ -111,61 +378,105 @@ async fn main() -> Result<(), IndexingError> {
 
 fn make_edit(id: &str, name: &str, author: &str, ops: Vec<Op>) -> Edit {
     Edit {
-        id: String::from(id),
+        id: Uuid::parse_str(id).unwrap().as_bytes().to_vec(),
         name: String::from(name),
-        version: String::from("0.0.1"),
         ops,
-        r#type: 1,
-        authors: vec![String::from(author)],
+        authors: vec![Uuid::parse_str(author).unwrap().as_bytes().to_vec()],
+        language: None,
     }
 }
 
-enum OpType {
-    SET,
+struct TestValue {
+    pub property_id: String,
+    pub value: Option<String>,
+}
+
+enum TestEntityOpType {
+    UPDATE,
+    UNSET,
+}
+
+fn make_entity_op(op_type: TestEntityOpType, entity: &str, values: Vec<TestValue>) -> Op {
+    match op_type {
+        TestEntityOpType::UPDATE => Op {
+            payload: Some(Payload::UpdateEntity(Entity {
+                id: Uuid::parse_str(entity).unwrap().as_bytes().to_vec(),
+                values: values
+                    .iter()
+                    .map(|v| Value {
+                        property: Uuid::parse_str(&v.property_id).unwrap().as_bytes().to_vec(),
+                        value: v.value.clone().unwrap(),
+                        options: None,
+                    })
+                    .collect(),
+            })),
+        },
+        TestEntityOpType::UNSET => Op {
+            payload: Some(Payload::UnsetEntityValues(UnsetEntityValues {
+                id: Uuid::parse_str(entity).unwrap().as_bytes().to_vec(),
+                properties: values
+                    .iter()
+                    .map(|v| Uuid::parse_str(&v.property_id).unwrap().as_bytes().to_vec())
+                    .collect(),
+            })),
+        },
+    }
+}
+
+fn make_property_op(property_id: &str, property_type: NativeTypes) -> Op {
+    Op {
+        payload: Some(Payload::CreateProperty(Property {
+            id: Uuid::parse_str(property_id).unwrap().as_bytes().to_vec(),
+            r#type: property_type as i32,
+        })),
+    }
+}
+
+enum TestRelationOpType {
+    CREATE,
+    UPDATE,
     DELETE,
 }
 
-fn make_triple_op(
-    op_type: OpType,
-    entity: &str,
-    attribute: &str,
-    value: &str,
-    value_type: i32,
+fn make_relation_op(
+    op_type: TestRelationOpType,
+    relation_id: &str,
+    entity_id: &str,
+    type_id: &str,
+    from_entity: &str,
+    to_entity: &str,
 ) -> Op {
     match op_type {
-        OpType::SET => Op {
-            r#type: 1,
-            entity: None,
-            triples: vec![],
-            metadata: None,
-            relation: None,
-            url: None,
-            triple: Some(Triple {
-                attribute: attribute.to_string(),
-                entity: entity.to_string(),
-                value: Some(Value {
-                    options: None,
-                    r#type: value_type,
-                    value: value.to_string(),
-                }),
-            }),
+        TestRelationOpType::CREATE => Op {
+            payload: Some(Payload::CreateRelation(Relation {
+                id: Uuid::parse_str(relation_id).unwrap().as_bytes().to_vec(),
+                r#type: Uuid::parse_str(type_id).unwrap().as_bytes().to_vec(),
+                entity: Uuid::parse_str(entity_id).unwrap().as_bytes().to_vec(),
+                from_entity: Uuid::parse_str(from_entity).unwrap().as_bytes().to_vec(),
+                from_space: None,
+                from_version: None,
+                to_entity: Uuid::parse_str(to_entity).unwrap().as_bytes().to_vec(),
+                to_space: None,
+                to_version: None,
+                position: None,
+                verified: None,
+            })),
         },
-        OpType::DELETE => Op {
-            r#type: 2,
-            entity: None,
-            triples: vec![],
-            metadata: None,
-            relation: None,
-            url: None,
-            triple: Some(Triple {
-                attribute: attribute.to_string(),
-                entity: entity.to_string(),
-                value: Some(Value {
-                    options: None,
-                    r#type: value_type,
-                    value: value.to_string(),
-                }),
-            }),
+        TestRelationOpType::UPDATE => Op {
+            payload: Some(Payload::UpdateRelation(grc20::pb::grc20::RelationUpdate {
+                id: Uuid::parse_str(relation_id).unwrap().as_bytes().to_vec(),
+                from_space: None,
+                from_version: None,
+                to_space: None,
+                to_version: None,
+                position: None,
+                verified: Some(true),
+            })),
+        },
+        TestRelationOpType::DELETE => Op {
+            payload: Some(Payload::DeleteRelation(
+                Uuid::parse_str(relation_id).unwrap().as_bytes().to_vec(),
+            )),
         },
     }
 }

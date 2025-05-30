@@ -1,29 +1,40 @@
 import {SystemIds} from "@graphprotocol/grc-20"
 import {Effect} from "effect"
-import type {Entity} from "../generated/graphql"
+import {BlockType, DataSourceType, type QueryEntitiesArgs} from "../generated/graphql"
 import {Storage} from "../services/storage/storage"
+import {type EntityFilter, buildEntityWhere} from "./filters"
 
-export function getEntities(limit = 100, offset = 0) {
+export function getEntities(args: QueryEntitiesArgs) {
+	const {filter, limit = 100, offset = 0} = args
+
 	return Effect.gen(function* () {
 		const db = yield* Storage
 
+		const whereClauses = filter ? buildEntityWhere(filter as EntityFilter) : undefined
+
 		return yield* db.use(async (client) => {
-			const result = await client.query.entities.findMany({
-				limit,
-				offset,
+			const entitiesWithMatchingValue = await client.query.entities.findMany({
+				limit: Number(limit),
+				offset: Number(offset),
 				with: {
-					properties: true,
+					values: {
+						columns: {
+							propertyId: true,
+							value: true,
+						},
+					},
 				},
+				where: whereClauses,
 			})
 
-			return result.map((result) => {
+			return entitiesWithMatchingValue.map((result) => {
 				return {
 					id: result.id,
 					createdAt: result.createdAt,
 					createdAtBlock: result.createdAtBlock,
 					updatedAt: result.updatedAt,
 					updatedAtBlock: result.updatedAtBlock,
-					name: result.properties.find((p) => p.attributeId === SystemIds.NAME_PROPERTY)?.textValue,
+					name: result.values.find((p) => p.propertyId === SystemIds.NAME_PROPERTY)?.value,
 				}
 			})
 		})
@@ -61,17 +72,34 @@ export function getEntityName(id: string) {
 		const nameProperty = yield* db.use(async (client) => {
 			const result = await client.query.properties.findFirst({
 				where: (properties, {eq, and}) =>
-					and(eq(properties.attributeId, SystemIds.NAME_PROPERTY), eq(properties.entityId, id)),
+					and(eq(properties.propertyId, SystemIds.NAME_PROPERTY), eq(properties.entityId, id)),
 			})
 
 			return result
 		})
 
-		return nameProperty?.textValue ?? null
+		return nameProperty?.value ?? null
 	})
 }
 
-export function getProperties(id: string) {
+export function getEntityDescription(id: string) {
+	return Effect.gen(function* () {
+		const db = yield* Storage
+
+		const nameProperty = yield* db.use(async (client) => {
+			const result = await client.query.properties.findFirst({
+				where: (properties, {eq, and}) =>
+					and(eq(properties.propertyId, SystemIds.DESCRIPTION_PROPERTY), eq(properties.entityId, id)),
+			})
+
+			return result
+		})
+
+		return nameProperty?.value ?? null
+	})
+}
+
+export function getValues(id: string) {
 	return Effect.gen(function* () {
 		const db = yield* Storage
 
@@ -80,10 +108,7 @@ export function getProperties(id: string) {
 				where: (properties, {eq}) => eq(properties.entityId, id),
 			})
 
-			return result.map((p) => ({
-				...p,
-				valueType: mapValueType(p.valueType),
-			}))
+			return result
 		})
 	})
 }
@@ -102,13 +127,14 @@ export function getRelations(id: string) {
 				typeId: relation.typeId,
 				fromId: relation.fromEntityId,
 				toId: relation.toEntityId,
-				index: relation.index,
+				position: relation.position,
+				spaceId: relation.spaceId,
 			}))
 		})
 	})
 }
 
-export function getTypes(id: string) {
+export function getEntityTypes(id: string) {
 	return Effect.gen(function* () {
 		const db = yield* Storage
 
@@ -166,23 +192,84 @@ export function getSpaces(id: string) {
 	})
 }
 
-type ValueType = "TEXT" | "NUMBER" | "CHECKBOX" | "URL" | "TIME" | "POINT"
+export function getBlocks(entityId: string) {
+	return Effect.gen(function* () {
+		const db = yield* Storage
 
-function mapValueType(valueType: string): ValueType {
-	switch (valueType) {
-		case "1":
-			return "TEXT"
-		case "2":
-			return "NUMBER"
-		case "3":
-			return "CHECKBOX"
-		case "4":
-			return "URL"
-		case "5":
-			return "TIME"
-		case "6":
-			return "POINT"
+		return yield* db.use(async (client) => {
+			// Get all block relations for the entity
+			const blockRelations = await client.query.relations.findMany({
+				where: (relations, {eq, and}) =>
+					and(eq(relations.fromEntityId, entityId), eq(relations.typeId, SystemIds.BLOCKS)),
+				with: {
+					toEntity: {
+						with: {
+							fromRelations: {
+								with: {
+									toEntity: true,
+								},
+							},
+							values: true,
+						},
+					},
+				},
+				orderBy: (relations, {asc}) => asc(relations.position),
+			})
+
+			return blockRelations.map((relation) => {
+				const block = relation.toEntity
+				const blockTypeId = block.fromRelations.find((r) => r.typeId === SystemIds.TYPES_PROPERTY)?.toEntity?.id ?? null
+
+				// Determine the appropriate value based on block type
+				let value: string | null = null
+				let type: BlockType = BlockType.Text
+				let dataSourceType: DataSourceType | null = null
+
+				if (blockTypeId === SystemIds.TEXT_BLOCK) {
+					type = BlockType.Text
+					value = block.values.find((v) => v.propertyId === SystemIds.MARKDOWN_CONTENT)?.value ?? null
+				} else if (blockTypeId === SystemIds.IMAGE_TYPE) {
+					type = BlockType.Image
+					value = block.values.find((v) => v.propertyId === SystemIds.IMAGE_URL_PROPERTY)?.value ?? null
+				} else if (blockTypeId === SystemIds.DATA_BLOCK) {
+					type = BlockType.Data
+					value = block.values.find((v) => v.propertyId === SystemIds.FILTER)?.value ?? null
+					const maybeDataSourceType =
+						block.fromRelations.find((r) => r.typeId === SystemIds.DATA_SOURCE_TYPE_RELATION_TYPE)?.toEntity?.id ??
+						null
+
+					dataSourceType = getDataSourceType(maybeDataSourceType)
+				}
+
+				return {
+					id: block.id,
+					type: type,
+					value: value,
+					dataSourceType,
+					entity: {
+						id: block.id,
+						createdAt: block.createdAt,
+						createdAtBlock: block.createdAtBlock,
+						updatedAt: block.updatedAt,
+						updatedAtBlock: block.updatedAtBlock,
+					},
+				}
+			})
+		})
+	})
+}
+
+function getDataSourceType(dataSourceId: string | null): DataSourceType | null {
+	if (!dataSourceId) return null
+
+	switch (dataSourceId) {
+		case SystemIds.QUERY_DATA_SOURCE:
+			return DataSourceType.Query
+		case SystemIds.ALL_OF_GEO_DATA_SOURCE:
+			return DataSourceType.Geo
+		case SystemIds.COLLECTION_DATA_SOURCE:
+			return DataSourceType.Collection
 		default:
-			return "TEXT"
+			return null
 	}
 }

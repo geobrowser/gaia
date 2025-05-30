@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT json, is_errored, space FROM ipfs_cache WHERE uri = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "json",
+        "type_info": "Jsonb"
+      },
+      {
+        "ordinal": 1,
+        "name": "is_errored",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 2,
+        "name": "space",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      true,
+      false,
+      false
+    ]
+  },
+  "hash": "d5074d6b2d7278c1727b5f4ed3bc6812dc54fbc8f5ca6fc372faf7a80a4ccb81"
+}

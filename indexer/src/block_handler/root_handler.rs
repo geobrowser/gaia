@@ -2,10 +2,10 @@ use std::sync::Arc;
 
 use futures::future::join_all;
 use stream::utils::BlockMetadata;
-use tokio::task;
 
+use crate::models::properties::PropertiesModel;
 use crate::models::relations::RelationsModel;
-use crate::models::{entities::EntitiesModel, properties::PropertiesModel};
+use crate::models::{entities::EntitiesModel, values::ValuesModel};
 use crate::storage::StorageBackend;
 use crate::{cache::PreprocessedEdit, error::IndexingError};
 
@@ -24,68 +24,154 @@ where
         output.len()
     );
 
-    let mut handles = Vec::new();
-
     for preprocessed_edit in output {
         let storage = storage.clone();
         let block = block_metadata.clone();
 
-        let handle = task::spawn(async move {
-            // The Edit might be malformed. The Cache still stores it with an
-            // is_errored flag to denote that the entry exists but can't be
-            // decoded.
-            if !preprocessed_edit.is_errored {
-                let edit = preprocessed_edit.edit.unwrap();
-                let space_id = preprocessed_edit.space_id;
+        let handle = tokio::spawn({
+            let preprocessed_edit = preprocessed_edit.clone();
+            let storage = storage.clone();
+            let block = block.clone();
 
-                // @TODO: transaction with non-blocking writes
-                let entities = EntitiesModel::map_edit_to_entities(&edit, &block);
-                let result = storage.insert_entities(&entities).await;
+            let mut handles = Vec::new();
 
-                if let Err(error) = result {
-                    println!("Error writing entities {}", error);
+            async move {
+                // The Edit might be malformed. The Cache still stores it with an
+                // is_errored flag to denote that the entry exists but can't be
+                // decoded.
+                if !preprocessed_edit.is_errored {
+                    let edit = preprocessed_edit.edit.unwrap();
+                    let space_id = preprocessed_edit.space_id;
+
+                    // We write properties first to update the cache with any properties
+                    // created within the edit. This makes it simpler to do validation
+                    // later in the edit handler as the properties cache will already
+                    // be up-to-date.
+                    let properties = PropertiesModel::map_edit_to_properties(&edit);
+
+                    if let Err(error) = storage.insert_properties(&properties).await {
+                        eprintln!("Error writing properties: {}", error);
+                    }
+
+                    {
+                        let edit = edit.clone();
+                        let block = block.clone();
+                        let storage = storage.clone();
+
+                        handles.push(tokio::spawn(async move {
+                            let entities = EntitiesModel::map_edit_to_entities(&edit, &block);
+
+                            if let Err(error) = storage.insert_entities(&entities).await {
+                                eprintln!("Error writing entities: {}", error);
+                            }
+                        }));
+                    }
+
+                    let (created_values, deleted_values) =
+                        ValuesModel::map_edit_to_values(&edit, &space_id);
+
+                    {
+                        let storage = storage.clone();
+
+                        handles.push(tokio::spawn(async move {
+                            let write_values_result = storage.insert_values(&created_values).await;
+
+                            if let Err(error) = write_values_result {
+                                println!("Error writing set values {}", error);
+                            }
+                        }));
+                    }
+
+                    {
+                        let storage = storage.clone();
+                        let space_id = space_id.clone();
+
+                        handles.push(tokio::spawn(async move {
+                            let write_values_result =
+                                storage.delete_values(&deleted_values, &space_id).await;
+
+                            if let Err(error) = write_values_result {
+                                println!("Error writing set values {}", error);
+                            }
+                        }));
+                    }
+
+                    let (
+                        created_relations,
+                        updated_relations,
+                        unset_relations,
+                        deleted_relation_ids,
+                    ) = RelationsModel::map_edit_to_relations(&edit, &space_id);
+
+                    {
+                        let storage = storage.clone();
+
+                        handles.push(tokio::spawn(async move {
+                            let write_relations_result =
+                                storage.insert_relations(&created_relations).await;
+
+                            if let Err(write_error) = write_relations_result {
+                                println!("Error writing relations {}", write_error);
+                            }
+                        }));
+                    }
+
+                    {
+                        let storage = storage.clone();
+
+                        handles.push(tokio::spawn(async move {
+                            let update_relations_result =
+                                storage.update_relations(&updated_relations).await;
+
+                            if let Err(write_error) = update_relations_result {
+                                println!("Error updating relations {}", write_error);
+                            }
+                        }));
+                    }
+
+                    {
+                        let storage = storage.clone();
+
+                        handles.push(tokio::spawn(async move {
+                            let unset_relations_result =
+                                storage.unset_relation_fields(&unset_relations).await;
+
+                            if let Err(write_error) = unset_relations_result {
+                                println!("Error unsetting relation fields {}", write_error);
+                            }
+                        }));
+                    }
+
+                    {
+                        let storage = storage.clone();
+
+                        handles.push(tokio::spawn(async move {
+                            let delete_relations_result = storage
+                                .delete_relations(&deleted_relation_ids, &space_id)
+                                .await;
+
+                            if let Err(write_error) = delete_relations_result {
+                                println!("Error deleting relations {}", write_error);
+                            }
+                        }));
+                    }
                 }
 
-                let (created_properties, deleted_property_ids) =
-                    PropertiesModel::map_edit_to_properties(&edit, &space_id);
-                let write_properties_result = storage.insert_properties(&created_properties).await;
-
-                if let Err(write_error) = write_properties_result {
-                    println!("Error writing properties {}", write_error);
-                }
-
-                let delete_properties_result =
-                    storage.delete_properties(&deleted_property_ids).await;
-
-                if let Err(delete_error) = delete_properties_result {
-                    println!("Error deleting properties {}", delete_error);
-                }
-
-                let (created_relations, deleted_relation_ids) =
-                    RelationsModel::map_edit_to_relations(&edit, &space_id);
-
-                let write_relations_result = storage.insert_relations(&created_relations).await;
-
-                if let Err(write_error) = write_relations_result {
-                    println!("Error writing relations {}", write_error);
-                }
-
-                let delete_relations_result = storage.delete_relations(&deleted_relation_ids).await;
-
-                if let Err(write_error) = delete_relations_result {
-                    println!("Error deleting relations {}", write_error);
-                }
+                join_all(handles).await;
             }
+        })
+        .await;
 
-            Ok::<(), IndexingError>(())
-        });
-
-        handles.push(handle);
+        match handle {
+            Ok(_) => {
+                //
+            }
+            Err(error) => println!(
+                "[Root handler] Error executing task {} for edit {:?}",
+                error, preprocessed_edit
+            ),
+        }
     }
-
-    // Wait for all processing in the current block to finish before continuing
-    // to the next block
-    let done = join_all(handles).await;
 
     Ok(())
 }

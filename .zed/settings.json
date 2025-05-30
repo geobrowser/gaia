@@ -1,0 +1,24 @@
+{
+  // Different projects may use different language servers,
+  // so we include biome for this project so the language
+  // formatter settings can find the extension/language server.
+  "language_servers": ["biome", "..."],
+  // Need language-specific formatters so we don't
+  // override the Rust formatter
+  "languages": {
+    "JavaScript": {
+      "formatter": {
+        "language_server": {
+          "name": "biome"
+        }
+      }
+    },
+    "TypeScript": {
+      "formatter": {
+        "language_server": {
+          "name": "biome"
+        }
+      }
+    }
+  }
+}

@@ -100,7 +100,7 @@ impl PreprocessedSink<KgData> for KgIndexer {
             handles.push(handle);
         }
 
-        let done = join_all(handles).await;
+        join_all(handles).await;
 
         // Extract the edits from the Arc<Mutex<>> for further processing
         let final_edits = {

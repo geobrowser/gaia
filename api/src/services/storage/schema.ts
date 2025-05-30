@@ -1,5 +1,5 @@
 import {type InferSelectModel, relations as drizzleRelations} from "drizzle-orm"
-import {boolean, jsonb, pgTable, serial, text} from "drizzle-orm/pg-core"
+import {boolean, jsonb, pgEnum, pgTable, serial, text} from "drizzle-orm/pg-core"
 
 export const ipfsCache = pgTable("ipfs_cache", {
 	id: serial(),
@@ -24,38 +24,60 @@ export const entities = pgTable("entities", {
 	updatedAtBlock: text().notNull(),
 })
 
+export const dataTypesEnum = pgEnum("dataTypes", ["Text", "Number", "Checkbox", "Time", "Point", "Relation"])
+
 export const properties = pgTable("properties", {
 	id: text().primaryKey(),
-	attributeId: text().notNull(),
+	type: dataTypesEnum().notNull(),
+})
+
+export const values = pgTable("values", {
+	id: text().primaryKey(),
+	propertyId: text().notNull(),
 	entityId: text().notNull(),
 	spaceId: text().notNull(),
-	textValue: text(),
-	numberValue: text(),
-	booleanValue: boolean(),
-	languageOption: text(),
-	formatOption: text(),
-	unitOption: text(),
-	valueType: text().notNull(),
+	value: text().notNull(),
+	language: text(),
+	unit: text(),
 })
 
 export const relations = pgTable("relations", {
 	id: text().primaryKey(),
+	entityId: text().notNull(),
 	typeId: text().notNull(),
 	fromEntityId: text().notNull(),
+	fromSpaceId: text(),
+	fromVersionId: text(),
 	toEntityId: text().notNull(),
 	toSpaceId: text(),
-	index: text(),
+	toVersionId: text(),
+	position: text(),
 	spaceId: text().notNull(),
+	verified: boolean(),
 })
 
-export const entityForeignProperties = drizzleRelations(entities, ({many}) => ({
-	properties: many(properties),
-	relationsOut: many(relations),
+export const entityForeignValues = drizzleRelations(entities, ({many}) => ({
+	values: many(values),
+	fromRelations: many(relations, {
+		relationName: "fromEntity",
+	}),
+	// If an entity is the object (i.e. toEntity)
+	toRelations: many(relations, {
+		relationName: "toEntity",
+	}),
+	// If an entity is the type of relation
+	typeRelations: many(relations, {
+		relationName: "typeEntity",
+	}),
+	// If an entity is directly linked (e.g. as owning the relation row)
+	relationEntityRelations: many(relations, {
+		relationName: "entity",
+	}),
 }))
 
-export const propertiesEntityRelations = drizzleRelations(properties, ({one}) => ({
+export const propertiesEntityRelations = drizzleRelations(values, ({one}) => ({
 	entity: one(entities, {
-		fields: [properties.entityId],
+		fields: [values.entityId],
 		references: [entities.id],
 	}),
 }))
@@ -64,18 +86,26 @@ export const relationsEntityRelations = drizzleRelations(relations, ({one}) => (
 	fromEntity: one(entities, {
 		fields: [relations.fromEntityId],
 		references: [entities.id],
+		relationName: "fromEntity",
 	}),
 	toEntity: one(entities, {
 		fields: [relations.toEntityId],
 		references: [entities.id],
+		relationName: "toEntity",
 	}),
 	typeEntity: one(entities, {
 		fields: [relations.typeId],
 		references: [entities.id],
+		relationName: "typeEntity",
+	}),
+	entity: one(entities, {
+		fields: [relations.entityId],
+		references: [entities.id],
+		relationName: "entity",
 	}),
 }))
 
 export type IpfsCacheItem = InferSelectModel<typeof ipfsCache>
 export type DbEntity = InferSelectModel<typeof entities>
-export type DbProperty = InferSelectModel<typeof properties>
+export type DbProperty = InferSelectModel<typeof values>
 export type DbRelations = InferSelectModel<typeof relations>

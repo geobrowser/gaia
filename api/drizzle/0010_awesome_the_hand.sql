@@ -1,0 +1,1 @@
+ALTER TABLE "values" RENAME COLUMN "language_option" TO "language";

@@ -1,7 +1,7 @@
 import {makeExecutableSchema} from "@graphql-tools/schema"
 import {file} from "bun"
 import {createYoga} from "graphql-yoga"
-import type {Resolvers as GeneratedResolvers} from "./src/generated/graphql"
+import type {QueryTypesArgs, Resolvers as GeneratedResolvers} from "./src/generated/graphql"
 import * as Resolvers from "./src/resolvers/root"
 
 const schemaFile = await file("./schema.graphql").text()
@@ -14,31 +14,64 @@ const resolvers: GeneratedResolvers = {
 		entity: async (_, args) => {
 			return await Resolvers.entity(args)
 		},
+		types: async (_, args) => {
+			const result = await Resolvers.types(args)
+			return result.map((type) => ({
+				...type,
+				__spaceId: args.spaceId,
+			}))
+		},
 	},
 	Entity: {
 		name: async (parent: {id: string}) => {
 			return Resolvers.entityName({id: parent.id})
 		},
+		description: async (parent: {id: string}) => {
+			return Resolvers.entityDescription({id: parent.id})
+		},
+		blocks: async (parent: {id: string}) => {
+			return Resolvers.blocks({id: parent.id})
+		},
 		types: async (parent: {id: string}) => {
-			return Resolvers.types({id: parent.id})
+			return Resolvers.entityTypes({id: parent.id})
 		},
 		spaces: async (parent: {id: string}) => {
 			return Resolvers.spaces({id: parent.id})
 		},
-		properties: async (parent: {id: string}) => {
-			return Resolvers.properties({id: parent.id})
+		values: async (parent: {id: string}) => {
+			return Resolvers.values({id: parent.id})
 		},
 		relations: async (parent: {id: string}) => {
 			return Resolvers.relations({id: parent.id})
 		},
 	},
-	Property: {
+	Type: {
+		name: async (parent: {id: string}) => {
+			return Resolvers.entityName({id: parent.id})
+		},
+		description: async (parent: {id: string}) => {
+			return Resolvers.entityDescription({id: parent.id})
+		},
+		entity: async (parent: {id: string}) => {
+			return Resolvers.entity({id: parent.id})
+		},
+		properties: async (parent: {id: string}) => {
+			// @ts-expect-error type jankiness. Overwriting for now
+			const spaceId = (parent.__spaceId as QueryTypesArgs["spaceId"]) ?? null
+			return Resolvers.properties(parent.id, {spaceId: spaceId})
+		},
+	},
+	Value: {
 		entity: async (parent: {entityId: string}) => {
 			return Resolvers.entity({id: parent.entityId})
 		},
-
-		attribute: async (parent: {attributeId: string}) => {
-			return Resolvers.entity({id: parent.attributeId})
+		property: async (parent: {propertyId: string}) => {
+			return Resolvers.property({id: parent.propertyId})
+		},
+	},
+	Property: {
+		entity: async (parent: {id: string}) => {
+			return Resolvers.entity({id: parent.id})
 		},
 	},
 	Relation: {

@@ -1,6 +1,6 @@
 use std::{fmt::Display, sync::Arc, time::Duration};
 
-use http::{uri::Scheme, Uri};
+use http::{Uri, uri::Scheme};
 use tonic::{
     codec::CompressionEncoding,
     codegen::http,
@@ -8,7 +8,7 @@ use tonic::{
     transport::{Channel, ClientTlsConfig},
 };
 
-use crate::pb::sf::substreams::rpc::v2::{stream_client::StreamClient, Request, Response};
+use crate::pb::sf::substreams::rpc::v2::{Request, Response, stream_client::StreamClient};
 
 #[derive(Clone, Debug)]
 pub struct SubstreamsEndpoint {

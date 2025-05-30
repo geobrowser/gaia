@@ -1,0 +1,88 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT * FROM relations WHERE id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "type_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 2,
+        "name": "from_entity_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 3,
+        "name": "to_entity_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 4,
+        "name": "to_space_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "position",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "space_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "entity_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "from_space_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 9,
+        "name": "from_version_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 10,
+        "name": "to_version_id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 11,
+        "name": "verified",
+        "type_info": "Bool"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false,
+      false,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "ee58d48d1e27045b3b291f8cd1f4a2b102db72cc932620a62856a20da7217e8c"
+}

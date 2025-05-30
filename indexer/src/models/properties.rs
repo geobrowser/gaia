@@ -1,59 +1,169 @@
+use grc20::pb::grc20::{op::Payload, Edit, NativeTypes};
+use indexer_utils::id;
 use std::collections::HashMap;
+use std::fmt;
+use uuid::Uuid;
 
-use grc20::pb::ipfs::{Edit, Op, OpType, Options, Value, ValueType as PbValueType};
+// Constants for PostgreSQL enum values - must match schema.ts dataTypesEnum
+pub const DATA_TYPE_TEXT: &str = "Text";
+pub const DATA_TYPE_NUMBER: &str = "Number";
+pub const DATA_TYPE_CHECKBOX: &str = "Checkbox";
+pub const DATA_TYPE_TIME: &str = "Time";
+pub const DATA_TYPE_POINT: &str = "Point";
+pub const DATA_TYPE_RELATION: &str = "Relation";
 
-#[derive(Clone)]
-pub enum PropertyChangeType {
-    SET,
-    DELETE,
+// All valid data type enum values
+pub const VALID_DATA_TYPE_VALUES: &[&str] = &[
+    DATA_TYPE_TEXT,
+    DATA_TYPE_NUMBER,
+    DATA_TYPE_CHECKBOX,
+    DATA_TYPE_TIME,
+    DATA_TYPE_POINT,
+    DATA_TYPE_RELATION,
+];
+
+/// Type-safe representation of data types
+#[derive(Clone, Debug, PartialEq)]
+pub enum DataType {
+    Text,
+    Number,
+    Checkbox,
+    Time,
+    Point,
+    Relation,
 }
 
-#[derive(Clone)]
-pub struct PropertyOp {
+impl fmt::Display for DataType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            DataType::Text => write!(f, "{}", DATA_TYPE_TEXT),
+            DataType::Number => write!(f, "{}", DATA_TYPE_NUMBER),
+            DataType::Checkbox => write!(f, "{}", DATA_TYPE_CHECKBOX),
+            DataType::Time => write!(f, "{}", DATA_TYPE_TIME),
+            DataType::Point => write!(f, "{}", DATA_TYPE_POINT),
+            DataType::Relation => write!(f, "{}", DATA_TYPE_RELATION),
+        }
+    }
+}
+
+impl AsRef<str> for DataType {
+    fn as_ref(&self) -> &str {
+        match self {
+            DataType::Text => DATA_TYPE_TEXT,
+            DataType::Number => DATA_TYPE_NUMBER,
+            DataType::Checkbox => DATA_TYPE_CHECKBOX,
+            DataType::Time => DATA_TYPE_TIME,
+            DataType::Point => DATA_TYPE_POINT,
+            DataType::Relation => DATA_TYPE_RELATION,
+        }
+    }
+}
+
+impl std::convert::TryFrom<&str> for DataType {
+    type Error = String;
+    
+    fn try_from(value: &str) -> Result<Self, Self::Error> {
+        match value {
+            DATA_TYPE_TEXT => Ok(DataType::Text),
+            DATA_TYPE_NUMBER => Ok(DataType::Number),
+            DATA_TYPE_CHECKBOX => Ok(DataType::Checkbox),
+            DATA_TYPE_TIME => Ok(DataType::Time),
+            DATA_TYPE_POINT => Ok(DataType::Point),
+            DATA_TYPE_RELATION => Ok(DataType::Relation),
+            _ => Err(format!("Unknown data type: {}", value)),
+        }
+    }
+}
+
+impl PartialEq<str> for DataType {
+    fn eq(&self, other: &str) -> bool {
+        self.as_ref() == other
+    }
+}
+
+impl PartialEq<&str> for DataType {
+    fn eq(&self, other: &&str) -> bool {
+        self.as_ref() == *other
+    }
+}
+
+impl DataType {
+    /// Returns all valid DataType enum variants
+    pub fn all_variants() -> Vec<DataType> {
+        vec![
+            DataType::Text,
+            DataType::Number,
+            DataType::Checkbox,
+            DataType::Time,
+            DataType::Point,
+            DataType::Relation,
+        ]
+    }
+
+    /// Returns all valid string representations of DataType enum variants
+    pub fn all_string_values() -> &'static [&'static str] {
+        VALID_DATA_TYPE_VALUES
+    }
+
+    /// Validates if a string is a valid DataType enum value
+    pub fn is_valid_string(value: &str) -> bool {
+        VALID_DATA_TYPE_VALUES.contains(&value)
+    }
+}
+
+/// Represents a property with its ID and type information
+#[derive(Clone, Debug)]
+pub struct PropertyItem {
     pub id: String,
-    pub change_type: PropertyChangeType,
-    pub entity_id: String,
-    pub attribute_id: String,
-    pub space_id: String,
-    pub value_type: PbValueType, // @TODO: This gets moved to property eventually
-    pub text_value: Option<String>,
-    pub boolean_value: Option<bool>,
-    pub number_value: Option<String>, // This just gets stored as text?
-    pub language_option: Option<String>,
-    pub format_option: Option<String>,
-    pub unit_option: Option<String>,
+    pub value: DataType,
 }
 
 pub struct PropertiesModel;
 
 impl PropertiesModel {
-    pub fn map_edit_to_properties(
-        edit: &Edit,
-        space_id: &String,
-    ) -> (Vec<PropertyOp>, Vec<String>) {
-        let mut triple_ops: Vec<PropertyOp> = Vec::new();
+    pub fn map_edit_to_properties(edit: &Edit) -> Vec<PropertyItem> {
+        let mut properties: Vec<PropertyItem> = Vec::new();
 
         for op in &edit.ops {
-            if let Some(triple_op) = property_op_from_op(op, space_id) {
-                triple_ops.push(triple_op);
+            if let Some(payload) = &op.payload {
+                if let Payload::CreateProperty(property) = payload {
+                    let property_id_bytes = id::transform_id_bytes(property.id.clone());
+
+                    match property_id_bytes {
+                        Ok(property_id_bytes) => {
+                            let property_id = Uuid::from_bytes(property_id_bytes).to_string();
+
+                            if let Some(property_type) = native_type_to_data_type(property.r#type) {
+                                properties.push(PropertyItem {
+                                    id: property_id,
+                                    value: property_type,
+                                });
+                            }
+                        }
+                        Err(_) => tracing::error!(
+                            "[Properties][CreateProperty] Could not transform Vec<u8> for property.id {:?}",
+                            &property.id
+                        ),
+                    }
+                }
             }
         }
 
-        let squashed = squash_properties(&triple_ops);
-        let validated = validate_properties(&squashed);
-        let (created, deleted): (Vec<PropertyOp>, Vec<PropertyOp>) = validated
-            .into_iter()
-            .partition(|op| matches!(op.change_type, PropertyChangeType::SET));
-
-        return (created, deleted.iter().map(|op| op.id.clone()).collect());
+        // A single edit may have multiple CREATE property ops applied
+        // to the same property id. We need to squash them down into a single
+        // op so we can write to the db atomically using the final state of the ops.
+        //
+        // Ordering of these to-be-squashed ops matters. We use what the order is in
+        // the edit.
+        squash_properties(&properties)
     }
 }
 
-fn squash_properties(triple_ops: &Vec<PropertyOp>) -> Vec<PropertyOp> {
+fn squash_properties(properties: &Vec<PropertyItem>) -> Vec<PropertyItem> {
     let mut hash = HashMap::new();
 
-    for op in triple_ops {
-        hash.insert(op.id.clone(), op.clone());
+    for property in properties {
+        hash.insert(property.id.clone(), property.clone());
     }
 
     let result: Vec<_> = hash.into_values().collect();
@@ -61,226 +171,17 @@ fn squash_properties(triple_ops: &Vec<PropertyOp>) -> Vec<PropertyOp> {
     return result;
 }
 
-fn validate_properties(triple_ops: &Vec<PropertyOp>) -> Vec<PropertyOp> {
-    let validated = triple_ops
-        .iter()
-        .filter(|op| match op.change_type {
-            PropertyChangeType::DELETE => true,
-            // Verify that for each value type we have set the correct property
-            // on the triple.
-            //
-            // Currently everything uses text_value except checkboxes
-            PropertyChangeType::SET => match op.value_type {
-                PbValueType::Checkbox => return op.boolean_value.is_some(),
-                _ => return op.text_value.is_some(),
-            },
-        })
-        .cloned()
-        .collect();
-
-    return validated;
-}
-
-fn derive_property_id(entity_id: &String, attribute_id: &String, space_id: &String) -> String {
-    format!("{}:{}:{}", entity_id, attribute_id, space_id)
-}
-
-fn property_op_from_op(op: &Op, space_id: &String) -> Option<PropertyOp> {
-    if let Ok(op_type) = OpType::try_from(op.r#type) {
-        return match op_type {
-            // SET_TRIPLE
-            OpType::SetTriple => {
-                if let Some(triple) = op.triple.clone() {
-                    // @TODO: How do we map the value to the right place based on value_type?
-                    if let Some(value) = triple.value {
-                        let triple_values = map_property_value(&value).unwrap();
-                        let triple_value_options = &value.options.unwrap_or(Options {
-                            format: None,
-                            language: None,
-                            unit: None,
-                        });
-
-                        return Some(PropertyOp {
-                            id: derive_property_id(&triple.entity, &triple.attribute, space_id),
-                            change_type: PropertyChangeType::SET,
-                            attribute_id: triple.attribute,
-                            entity_id: triple.entity,
-                            space_id: space_id.clone(),
-                            value_type: triple_values.value_type,
-                            text_value: triple_values.text_value,
-                            number_value: triple_values.number_value,
-                            boolean_value: triple_values.boolean_value,
-                            unit_option: triple_value_options.unit.clone(),
-                            format_option: triple_value_options.format.clone(),
-                            language_option: triple_value_options.language.clone(),
-                        });
-                    }
-                }
-
-                return None;
-            }
-            OpType::DeleteTriple => {
-                if let Some(triple) = op.triple.clone() {
-                    return Some(PropertyOp {
-                        id: derive_property_id(&triple.entity, &triple.attribute, space_id),
-                        change_type: PropertyChangeType::DELETE,
-                        attribute_id: triple.attribute,
-                        entity_id: triple.entity,
-                        space_id: space_id.clone(),
-                        text_value: None,
-                        number_value: None,
-                        unit_option: None,
-                        boolean_value: None,
-                        format_option: None,
-                        language_option: None,
-
-                        // It doesn't matter what value type we use here since it's being deleted
-                        value_type: PbValueType::Text,
-                    });
-                }
-
-                return None;
-            }
-            _ => None,
-        };
-    };
-
-    None
-}
-
-struct TripleValues {
-    value_type: PbValueType,
-    text_value: Option<String>,
-    number_value: Option<String>,
-    boolean_value: Option<bool>,
-}
-
-fn map_property_value(value: &Value) -> Option<TripleValues> {
-    if let Ok(value_type) = PbValueType::try_from(value.r#type) {
-        let value = value.value.clone();
-
-        return match value_type {
-            PbValueType::Text => Some(TripleValues {
-                value_type,
-                boolean_value: None,
-                number_value: None,
-                text_value: Some(value),
-            }),
-            PbValueType::Checkbox => {
-                let maybe_bool_value = match value.as_str() {
-                    "0" => Some(false),
-                    "1" => Some(true),
-                    _ => None,
-                };
-
-                Some(TripleValues {
-                    value_type,
-                    boolean_value: maybe_bool_value,
-                    number_value: None,
-                    text_value: None,
-                })
-            }
-            PbValueType::Number => Some(TripleValues {
-                value_type,
-                boolean_value: None,
-                number_value: None,
-                text_value: Some(value),
-            }),
-            PbValueType::Point => Some(TripleValues {
-                value_type,
-                boolean_value: None,
-                number_value: None,
-                text_value: Some(value),
-            }),
-            PbValueType::Time => Some(TripleValues {
-                value_type,
-                boolean_value: None,
-                number_value: None,
-                text_value: Some(value),
-            }),
-            PbValueType::Url => Some(TripleValues {
-                value_type,
-                boolean_value: None,
-                number_value: None,
-                text_value: Some(value),
-            }),
-            PbValueType::Unknown => None,
-        };
-    }
-
-    None
-}
-
-impl std::fmt::Display for PropertyOp {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        // Format id, change_type, and the triple identifiers
-        write!(
-            f,
-            "Triple[{}] {{ {}, {}, {}, {} }}",
-            self.id, self.entity_id, self.attribute_id, self.space_id, self.change_type
-        )?;
-
-        // Output the correct value based on value_type
-        match self.value_type {
-            PbValueType::Text => {
-                if let Some(text) = &self.text_value {
-                    write!(f, "\"{}\"", text)?;
-                } else {
-                    write!(f, "null")?;
-                }
-            }
-            PbValueType::Checkbox => {
-                if let Some(boolean) = self.boolean_value {
-                    write!(f, "{}", boolean)?;
-                } else {
-                    write!(f, "null")?;
-                }
-            }
-            PbValueType::Number => {
-                if let Some(number) = &self.number_value {
-                    write!(f, "{}", number)?;
-                } else {
-                    write!(f, "null")?;
-                }
-            }
-            _ => write!(f, "unknown")?,
-        }
-
-        // Format optional metadata as key-value pairs if they exist
-        let mut options = Vec::new();
-
-        if let Some(lang) = &self.language_option {
-            if !lang.is_empty() {
-                options.push(format!("lang={}", lang));
-            }
-        }
-
-        if let Some(format) = &self.format_option {
-            if !format.is_empty() {
-                options.push(format!("format={}", format));
-            }
-        }
-
-        if let Some(unit) = &self.unit_option {
-            if !unit.is_empty() {
-                options.push(format!("unit={}", unit));
-            }
-        }
-
-        // Add options if there are any
-        if !options.is_empty() {
-            write!(f, " ({})", options.join(", "))?;
-        }
-
-        Ok(())
-    }
-}
-
-impl std::fmt::Display for PropertyChangeType {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            PropertyChangeType::SET => write!(f, "SET"),
-            PropertyChangeType::DELETE => write!(f, "DELETE"),
+fn native_type_to_data_type(native_type: i32) -> Option<DataType> {
+    match NativeTypes::try_from(native_type) {
+        Ok(NativeTypes::Text) => Some(DataType::Text),
+        Ok(NativeTypes::Number) => Some(DataType::Number),
+        Ok(NativeTypes::Checkbox) => Some(DataType::Checkbox),
+        Ok(NativeTypes::Time) => Some(DataType::Time),
+        Ok(NativeTypes::Point) => Some(DataType::Point),
+        Ok(NativeTypes::Relation) => Some(DataType::Relation),
+        Err(_) => {
+            tracing::error!("[Properties] Unknown native type: {}", native_type);
+            None
         }
     }
 }

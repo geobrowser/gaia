@@ -2,7 +2,7 @@ use async_trait::async_trait;
 pub mod kv;
 pub mod postgres;
 
-use grc20::pb::ipfs::Edit;
+use grc20::pb::grc20::Edit;
 use thiserror::Error;
 
 #[derive(Error, Debug)]
@@ -17,7 +17,7 @@ pub enum CacheError {
     DeserializeError(#[from] serde_json::Error),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PreprocessedEdit {
     pub edit: Option<Edit>,
     pub is_errored: bool,
