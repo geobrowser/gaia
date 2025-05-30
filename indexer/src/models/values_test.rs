@@ -1,5 +1,5 @@
 use crate::models::values::{ValueChangeType, ValuesModel};
-use grc20::pb::ipfs::{op::Payload, Edit, Entity, Op, UnsetEntityValues, Value};
+use grc20::pb::grc20::{op::Payload, Edit, Entity, Op, UnsetEntityValues, Value};
 use uuid::Uuid;
 
 #[cfg(test)]

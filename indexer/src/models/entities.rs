@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use grc20::pb::ipfs::{op::Payload, Edit};
+use grc20::pb::grc20::{op::Payload, Edit};
 use indexer_utils::id;
 use stream::utils::BlockMetadata;
 use uuid::Uuid;
@@ -50,8 +50,7 @@ impl EntitiesModel {
                         }
 
                         for value in &entity.values {
-                            let property_id_bytes =
-                                id::transform_id_bytes(value.property.clone());
+                            let property_id_bytes = id::transform_id_bytes(value.property.clone());
 
                             if let Err(_) = property_id_bytes {
                                 tracing::error!(

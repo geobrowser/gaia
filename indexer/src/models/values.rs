@@ -2,7 +2,7 @@ use indexer_utils::id;
 use std::collections::HashMap;
 use uuid::Uuid;
 
-use grc20::pb::ipfs::{op::Payload, options, Edit, Op};
+use grc20::pb::grc20::{op::Payload, options, Edit, Op};
 
 #[derive(Clone)]
 pub enum ValueChangeType {

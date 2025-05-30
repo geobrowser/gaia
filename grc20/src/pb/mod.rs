@@ -1,2 +1,2 @@
 pub mod chain;
-pub mod ipfs;
+pub mod grc20;

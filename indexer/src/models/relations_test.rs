@@ -1,8 +1,8 @@
 use std::vec;
 use uuid::Uuid;
 
-use grc20::pb::ipfs::op::Payload;
-use grc20::pb::ipfs::{Edit, Op, Relation, RelationUpdate, UnsetRelationFields};
+use grc20::pb::grc20::op::Payload;
+use grc20::pb::grc20::{Edit, Op, Relation, RelationUpdate, UnsetRelationFields};
 
 use super::relations::{RelationsModel, SetRelationItem, UpdateRelationItem};
 
@@ -47,7 +47,9 @@ mod tests {
     // Helper function to create an Edit with a single DeleteRelation operation
     fn create_edit_with_delete_relation() -> Edit {
         let op = Op {
-            payload: Some(Payload::DeleteRelation(bytes("12345678-1234-4abc-8def-123456789abc"))),
+            payload: Some(Payload::DeleteRelation(bytes(
+                "12345678-1234-4abc-8def-123456789abc",
+            ))),
         };
 
         Edit {
@@ -116,7 +118,10 @@ mod tests {
         assert_eq!(item.type_id, "34567890-1234-4abc-8def-123456789abc");
         assert_eq!(item.from_id, "45678901-1234-4abc-8def-123456789abc");
         assert_eq!(item.to_id, "56789012-1234-4abc-8def-123456789abc");
-        assert_eq!(item.to_space_id, Some("67890123-1234-4abc-8def-123456789abc".to_string()));
+        assert_eq!(
+            item.to_space_id,
+            Some("67890123-1234-4abc-8def-123456789abc".to_string())
+        );
         assert_eq!(item.position, Some("pos1".to_string()));
         assert_eq!(item.verified, Some(true));
         assert_eq!(item.space_id, space_id);
@@ -125,8 +130,14 @@ mod tests {
     // Helper function to verify an UpdateRelationItem
     fn verify_update_relation(item: &UpdateRelationItem, space_id: &str) {
         assert_eq!(item.id, "12345678-1234-4abc-8def-123456789abc");
-        assert_eq!(item.from_space_id, Some("01234567-1234-4abc-8def-123456789abc".to_string()));
-        assert_eq!(item.to_space_id, Some("12345670-1234-4abc-8def-123456789abc".to_string()));
+        assert_eq!(
+            item.from_space_id,
+            Some("01234567-1234-4abc-8def-123456789abc".to_string())
+        );
+        assert_eq!(
+            item.to_space_id,
+            Some("12345670-1234-4abc-8def-123456789abc".to_string())
+        );
         assert_eq!(item.position, Some("new_pos".to_string()));
         assert_eq!(item.verified, Some(false));
         assert_eq!(item.space_id, space_id);
@@ -193,7 +204,10 @@ mod tests {
         assert_eq!(deleted_relations.len(), 0);
 
         // Verify the unset relation
-        assert_eq!(unset_relations[0].id, "12345678-1234-4abc-8def-123456789abc");
+        assert_eq!(
+            unset_relations[0].id,
+            "12345678-1234-4abc-8def-123456789abc"
+        );
         assert_eq!(unset_relations[0].from_space_id, Some(true));
         assert_eq!(unset_relations[0].to_space_id, Some(true));
         assert_eq!(unset_relations[0].position, Some(true));
@@ -248,11 +262,26 @@ mod tests {
 
         // Verify the second create operation overwrote the first
         assert_eq!(set_relations[0].id, "12345678-1234-4abc-8def-123456789abc");
-        assert_eq!(set_relations[0].entity_id, "a1234567-1234-4abc-8def-123456789abc");
-        assert_eq!(set_relations[0].type_id, "b1234567-1234-4abc-8def-123456789abc");
-        assert_eq!(set_relations[0].from_id, "c1234567-1234-4abc-8def-123456789abc");
-        assert_eq!(set_relations[0].to_id, "d1234567-1234-4abc-8def-123456789abc");
-        assert_eq!(set_relations[0].to_space_id, Some("e1234567-1234-4abc-8def-123456789abc".to_string()));
+        assert_eq!(
+            set_relations[0].entity_id,
+            "a1234567-1234-4abc-8def-123456789abc"
+        );
+        assert_eq!(
+            set_relations[0].type_id,
+            "b1234567-1234-4abc-8def-123456789abc"
+        );
+        assert_eq!(
+            set_relations[0].from_id,
+            "c1234567-1234-4abc-8def-123456789abc"
+        );
+        assert_eq!(
+            set_relations[0].to_id,
+            "d1234567-1234-4abc-8def-123456789abc"
+        );
+        assert_eq!(
+            set_relations[0].to_space_id,
+            Some("e1234567-1234-4abc-8def-123456789abc".to_string())
+        );
         assert_eq!(set_relations[0].position, Some("pos2".to_string()));
         assert_eq!(set_relations[0].verified, Some(false));
     }
@@ -301,15 +330,30 @@ mod tests {
 
         // Verify original values preserved but updated values overrode originals
         assert_eq!(set_relations[0].id, "12345678-1234-4abc-8def-123456789abc");
-        assert_eq!(set_relations[0].entity_id, "23456789-1234-4abc-8def-123456789abc");
-        assert_eq!(set_relations[0].type_id, "34567890-1234-4abc-8def-123456789abc");
-        assert_eq!(set_relations[0].from_id, "45678901-1234-4abc-8def-123456789abc");
-        assert_eq!(set_relations[0].to_id, "56789012-1234-4abc-8def-123456789abc");
+        assert_eq!(
+            set_relations[0].entity_id,
+            "23456789-1234-4abc-8def-123456789abc"
+        );
+        assert_eq!(
+            set_relations[0].type_id,
+            "34567890-1234-4abc-8def-123456789abc"
+        );
+        assert_eq!(
+            set_relations[0].from_id,
+            "45678901-1234-4abc-8def-123456789abc"
+        );
+        assert_eq!(
+            set_relations[0].to_id,
+            "56789012-1234-4abc-8def-123456789abc"
+        );
         assert_eq!(
             set_relations[0].from_space_id,
             Some("f1234567-1234-4abc-8def-123456789abc".to_string())
         );
-        assert_eq!(set_relations[0].to_space_id, Some("f2345678-1234-4abc-8def-123456789abc".to_string())); // Updated
+        assert_eq!(
+            set_relations[0].to_space_id,
+            Some("f2345678-1234-4abc-8def-123456789abc".to_string())
+        ); // Updated
         assert_eq!(set_relations[0].position, Some("updated_pos".to_string()));
         assert_eq!(set_relations[0].verified, Some(false)); // Updated
     }
@@ -323,13 +367,20 @@ mod tests {
             .clone();
 
         let delete_op = Op {
-            payload: Some(Payload::DeleteRelation(bytes("12345678-1234-4abc-8def-123456789abc"))),
+            payload: Some(Payload::DeleteRelation(bytes(
+                "12345678-1234-4abc-8def-123456789abc",
+            ))),
         };
 
         let edit = Edit {
             id: bytes("78901234-1234-4abc-8def-123456789abc"),
             name: "test edit".to_string(),
-            ops: vec![Op { payload: Some(create_relation) }, delete_op],
+            ops: vec![
+                Op {
+                    payload: Some(create_relation),
+                },
+                delete_op,
+            ],
             authors: vec![bytes("89012345-1234-4abc-8def-123456789abc")],
             language: Some(bytes("90123456-1234-4abc-8def-123456789abc")),
         };
@@ -369,7 +420,12 @@ mod tests {
         let edit = Edit {
             id: bytes("78901234-1234-4abc-8def-123456789abc"),
             name: "test edit".to_string(),
-            ops: vec![Op { payload: Some(create_relation) }, unset_op],
+            ops: vec![
+                Op {
+                    payload: Some(create_relation),
+                },
+                unset_op,
+            ],
             authors: vec![bytes("89012345-1234-4abc-8def-123456789abc")],
             language: Some(bytes("90123456-1234-4abc-8def-123456789abc")),
         };
@@ -385,10 +441,22 @@ mod tests {
 
         // Verify the create relation has the fields unset
         assert_eq!(set_relations[0].id, "12345678-1234-4abc-8def-123456789abc");
-        assert_eq!(set_relations[0].entity_id, "23456789-1234-4abc-8def-123456789abc");
-        assert_eq!(set_relations[0].type_id, "34567890-1234-4abc-8def-123456789abc");
-        assert_eq!(set_relations[0].from_id, "45678901-1234-4abc-8def-123456789abc");
-        assert_eq!(set_relations[0].to_id, "56789012-1234-4abc-8def-123456789abc");
+        assert_eq!(
+            set_relations[0].entity_id,
+            "23456789-1234-4abc-8def-123456789abc"
+        );
+        assert_eq!(
+            set_relations[0].type_id,
+            "34567890-1234-4abc-8def-123456789abc"
+        );
+        assert_eq!(
+            set_relations[0].from_id,
+            "45678901-1234-4abc-8def-123456789abc"
+        );
+        assert_eq!(
+            set_relations[0].to_id,
+            "56789012-1234-4abc-8def-123456789abc"
+        );
         assert_eq!(set_relations[0].to_space_id, None); // Unset
         assert_eq!(set_relations[0].position, None); // Unset
         assert_eq!(set_relations[0].verified, None); // Unset
@@ -437,7 +505,10 @@ mod tests {
         assert_eq!(deleted_relations.len(), 0);
 
         // Verify the update values
-        assert_eq!(update_relations[0].id, "12345678-1234-4abc-8def-123456789abc");
+        assert_eq!(
+            update_relations[0].id,
+            "12345678-1234-4abc-8def-123456789abc"
+        );
         assert_eq!(
             update_relations[0].from_space_id,
             Some("01234567-1234-4abc-8def-123456789abc".to_string())
@@ -463,13 +534,20 @@ mod tests {
             .clone();
 
         let delete_op = Op {
-            payload: Some(Payload::DeleteRelation(bytes("12345678-1234-4abc-8def-123456789abc"))),
+            payload: Some(Payload::DeleteRelation(bytes(
+                "12345678-1234-4abc-8def-123456789abc",
+            ))),
         };
 
         let edit = Edit {
             id: bytes("78901234-1234-4abc-8def-123456789abc"),
             name: "test edit".to_string(),
-            ops: vec![Op { payload: Some(update_relation) }, delete_op],
+            ops: vec![
+                Op {
+                    payload: Some(update_relation),
+                },
+                delete_op,
+            ],
             authors: vec![bytes("89012345-1234-4abc-8def-123456789abc")],
             language: Some(bytes("90123456-1234-4abc-8def-123456789abc")),
         };
@@ -509,7 +587,12 @@ mod tests {
         let edit = Edit {
             id: bytes("78901234-1234-4abc-8def-123456789abc"),
             name: "test edit".to_string(),
-            ops: vec![Op { payload: Some(update_relation) }, unset_op],
+            ops: vec![
+                Op {
+                    payload: Some(update_relation),
+                },
+                unset_op,
+            ],
             authors: vec![bytes("89012345-1234-4abc-8def-123456789abc")],
             language: Some(bytes("90123456-1234-4abc-8def-123456789abc")),
         };
@@ -524,7 +607,10 @@ mod tests {
         assert_eq!(deleted_relations.len(), 0);
 
         // Verify the update relation has the fields unset
-        assert_eq!(update_relations[0].id, "12345678-1234-4abc-8def-123456789abc");
+        assert_eq!(
+            update_relations[0].id,
+            "12345678-1234-4abc-8def-123456789abc"
+        );
         assert_eq!(update_relations[0].from_space_id, None); // Unset
         assert_eq!(update_relations[0].position, None); // Unset
         assert_eq!(
@@ -537,7 +623,9 @@ mod tests {
     #[test]
     fn test_squash_delete_then_create() {
         let delete_op = Op {
-            payload: Some(Payload::DeleteRelation(bytes("12345678-1234-4abc-8def-123456789abc"))),
+            payload: Some(Payload::DeleteRelation(bytes(
+                "12345678-1234-4abc-8def-123456789abc",
+            ))),
         };
 
         let create_op = Op {
@@ -575,8 +663,14 @@ mod tests {
 
         // Verify the create values
         assert_eq!(set_relations[0].id, "12345678-1234-4abc-8def-123456789abc");
-        assert_eq!(set_relations[0].entity_id, "a1234567-1234-4abc-8def-123456789abc");
-        assert_eq!(set_relations[0].type_id, "b1234567-1234-4abc-8def-123456789abc");
+        assert_eq!(
+            set_relations[0].entity_id,
+            "a1234567-1234-4abc-8def-123456789abc"
+        );
+        assert_eq!(
+            set_relations[0].type_id,
+            "b1234567-1234-4abc-8def-123456789abc"
+        );
     }
 
     #[test]
@@ -602,7 +696,12 @@ mod tests {
         let edit = Edit {
             id: bytes("78901234-1234-4abc-8def-123456789abc"),
             name: "test edit".to_string(),
-            ops: vec![Op { payload: Some(unset_op) }, update_op],
+            ops: vec![
+                Op {
+                    payload: Some(unset_op),
+                },
+                update_op,
+            ],
             authors: vec![bytes("89012345-1234-4abc-8def-123456789abc")],
             language: Some(bytes("90123456-1234-4abc-8def-123456789abc")),
         };
@@ -617,7 +716,10 @@ mod tests {
         assert_eq!(deleted_relations.len(), 0);
 
         // Verify the update has values from the unset operation and the update operation
-        assert_eq!(update_relations[0].id, "12345678-1234-4abc-8def-123456789abc");
+        assert_eq!(
+            update_relations[0].id,
+            "12345678-1234-4abc-8def-123456789abc"
+        );
         assert_eq!(update_relations[0].from_space_id, None); // Unset by previous operation
         assert_eq!(update_relations[0].to_space_id, None); // Unset by previous operation
         assert_eq!(update_relations[0].position, Some("new_pos".to_string())); // Set by update
@@ -633,13 +735,20 @@ mod tests {
             .clone();
 
         let delete_op = Op {
-            payload: Some(Payload::DeleteRelation(bytes("12345678-1234-4abc-8def-123456789abc"))),
+            payload: Some(Payload::DeleteRelation(bytes(
+                "12345678-1234-4abc-8def-123456789abc",
+            ))),
         };
 
         let edit = Edit {
             id: bytes("78901234-1234-4abc-8def-123456789abc"),
             name: "test edit".to_string(),
-            ops: vec![Op { payload: Some(unset_op) }, delete_op],
+            ops: vec![
+                Op {
+                    payload: Some(unset_op),
+                },
+                delete_op,
+            ],
             authors: vec![bytes("89012345-1234-4abc-8def-123456789abc")],
             language: Some(bytes("90123456-1234-4abc-8def-123456789abc")),
         };
@@ -683,7 +792,12 @@ mod tests {
         let edit = Edit {
             id: bytes("78901234-1234-4abc-8def-123456789abc"),
             name: "test edit".to_string(),
-            ops: vec![Op { payload: Some(unset_op) }, create_op],
+            ops: vec![
+                Op {
+                    payload: Some(unset_op),
+                },
+                create_op,
+            ],
             authors: vec![bytes("89012345-1234-4abc-8def-123456789abc")],
             language: Some(bytes("90123456-1234-4abc-8def-123456789abc")),
         };
@@ -700,8 +814,14 @@ mod tests {
 
         // Verify the create values
         assert_eq!(set_relations[0].id, "12345678-1234-4abc-8def-123456789abc");
-        assert_eq!(set_relations[0].entity_id, "a1234567-1234-4abc-8def-123456789abc");
-        assert_eq!(set_relations[0].type_id, "b1234567-1234-4abc-8def-123456789abc");
+        assert_eq!(
+            set_relations[0].entity_id,
+            "a1234567-1234-4abc-8def-123456789abc"
+        );
+        assert_eq!(
+            set_relations[0].type_id,
+            "b1234567-1234-4abc-8def-123456789abc"
+        );
         assert_eq!(set_relations[0].position, Some("new_pos".to_string()));
         assert_eq!(set_relations[0].verified, Some(true));
     }
@@ -749,7 +869,9 @@ mod tests {
 
         // 3. Delete
         let delete_op = Op {
-            payload: Some(Payload::DeleteRelation(bytes("12345678-1234-4abc-8def-123456789abc"))),
+            payload: Some(Payload::DeleteRelation(bytes(
+                "12345678-1234-4abc-8def-123456789abc",
+            ))),
         };
 
         // 4. Create again
@@ -783,10 +905,22 @@ mod tests {
 
         // Verify the final state matches the last create
         assert_eq!(set_relations[0].id, "12345678-1234-4abc-8def-123456789abc");
-        assert_eq!(set_relations[0].entity_id, "a1234567-1234-4abc-8def-123456789abc");
-        assert_eq!(set_relations[0].type_id, "b1234567-1234-4abc-8def-123456789abc");
-        assert_eq!(set_relations[0].from_id, "c1234567-1234-4abc-8def-123456789abc");
-        assert_eq!(set_relations[0].to_id, "d1234567-1234-4abc-8def-123456789abc");
+        assert_eq!(
+            set_relations[0].entity_id,
+            "a1234567-1234-4abc-8def-123456789abc"
+        );
+        assert_eq!(
+            set_relations[0].type_id,
+            "b1234567-1234-4abc-8def-123456789abc"
+        );
+        assert_eq!(
+            set_relations[0].from_id,
+            "c1234567-1234-4abc-8def-123456789abc"
+        );
+        assert_eq!(
+            set_relations[0].to_id,
+            "d1234567-1234-4abc-8def-123456789abc"
+        );
         assert_eq!(set_relations[0].position, Some("pos3".to_string()));
         assert_eq!(set_relations[0].verified, Some(true));
     }
@@ -851,7 +985,9 @@ mod tests {
 
         // Delete relation 2
         let delete_op = Op {
-            payload: Some(Payload::DeleteRelation(bytes("87654321-1234-4abc-8def-123456789abc"))),
+            payload: Some(Payload::DeleteRelation(bytes(
+                "87654321-1234-4abc-8def-123456789abc",
+            ))),
         };
 
         edit.ops = vec![create_op1, create_op2, update_op, delete_op];
@@ -868,7 +1004,10 @@ mod tests {
 
         // Verify the create for rel1 with updated position
         assert_eq!(set_relations[0].id, "12345678-1234-4abc-8def-123456789abc");
-        assert_eq!(set_relations[0].entity_id, "23456789-1234-4abc-8def-123456789abc");
+        assert_eq!(
+            set_relations[0].entity_id,
+            "23456789-1234-4abc-8def-123456789abc"
+        );
         assert_eq!(set_relations[0].position, Some("updated_pos".to_string()));
         assert_eq!(set_relations[0].verified, Some(true)); // Unchanged
 
