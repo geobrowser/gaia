@@ -223,7 +223,7 @@ async fn main() -> Result<(), IndexingError> {
             .await
             .unwrap();
         assert_eq!(property.id, "9ba7b810-9dad-11d1-80b4-00c04fd430c1");
-        assert_eq!(property.value, "Text");
+        assert_eq!(property.data_type, "Text");
     }
 
     {
@@ -232,7 +232,7 @@ async fn main() -> Result<(), IndexingError> {
             .await
             .unwrap();
         assert_eq!(property.id, "9ba7b810-9dad-11d1-80b4-00c04fd430c2");
-        assert_eq!(property.value, "Number");
+        assert_eq!(property.data_type, "Number");
     }
 
     Ok(())
@@ -298,7 +298,7 @@ async fn test_property_no_overwrite() -> Result<(), IndexingError> {
             .await
             .unwrap();
         assert_eq!(property.id, "aba7b810-9dad-11d1-80b4-00c04fd430c1");
-        assert_eq!(property.value, "Text");
+        assert_eq!(property.data_type, "Text");
     }
 
     // Process second edit (should not overwrite)
@@ -316,7 +316,7 @@ async fn test_property_no_overwrite() -> Result<(), IndexingError> {
             .await
             .unwrap();
         assert_eq!(property.id, "aba7b810-9dad-11d1-80b4-00c04fd430c1");
-        assert_eq!(property.value, "Text"); // Should still be Text, not Number
+        assert_eq!(property.data_type, "Text"); // Should still be Text, not Number
     }
 
     Ok(())
@@ -376,7 +376,7 @@ async fn test_property_squashing() -> Result<(), IndexingError> {
             .await
             .unwrap();
         assert_eq!(property.id, "bba7b810-9dad-11d1-80b4-00c04fd430c1");
-        assert_eq!(property.value, "Checkbox"); // Should be Checkbox, not Text or Number
+        assert_eq!(property.data_type, "Checkbox"); // Should be Checkbox, not Text or Number
     }
 
     // Verify that the different property was not affected by squashing
@@ -386,7 +386,7 @@ async fn test_property_squashing() -> Result<(), IndexingError> {
             .await
             .unwrap();
         assert_eq!(property.id, "bba7b810-9dad-11d1-80b4-00c04fd430c2");
-        assert_eq!(property.value, "Time");
+        assert_eq!(property.data_type, "Time");
     }
 
     Ok(())

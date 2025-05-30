@@ -65,7 +65,7 @@ where
                     // to in-memory for _all_ data stores with a disk-based commit log, but
                     // for now we'll write properties twice.
                     for property in &properties {
-                        cache.insert(&property.id, property.value.clone()).await;
+                        cache.insert(&property.id, property.data_type.clone()).await;
                     }
 
                     if let Err(error) = storage.insert_properties(&properties).await {

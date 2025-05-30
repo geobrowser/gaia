@@ -100,7 +100,7 @@ impl PostgresStorage {
 
         Ok(PropertyItem {
             id,
-            value: property_type,
+            data_type: property_type,
         })
     }
 }
@@ -413,7 +413,7 @@ impl StorageBackend for PostgresStorage {
 
         for property in properties {
             ids.push(&property.id);
-            types.push(property.value.as_ref());
+            types.push(property.data_type.as_ref());
         }
 
         // We don't allow changing an already-created property's value type.

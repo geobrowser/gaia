@@ -126,7 +126,7 @@ impl DataType {
 #[derive(Clone, Debug)]
 pub struct PropertyItem {
     pub id: String,
-    pub value: DataType,
+    pub data_type: DataType,
 }
 
 pub struct PropertiesModel;
@@ -147,7 +147,7 @@ impl PropertiesModel {
                             if let Some(property_type) = native_type_to_data_type(property.r#type) {
                                 properties.push(PropertyItem {
                                     id: property_id,
-                                    value: property_type,
+                                    data_type: property_type,
                                 });
                             }
                         }
