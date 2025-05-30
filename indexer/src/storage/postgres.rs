@@ -4,7 +4,10 @@ use sqlx::{postgres::PgPoolOptions, Postgres, QueryBuilder, Row};
 
 use crate::models::{
     entities::EntityItem,
-    properties::{PropertyItem, DataType, DATA_TYPE_TEXT, DATA_TYPE_NUMBER, DATA_TYPE_CHECKBOX, DATA_TYPE_TIME, DATA_TYPE_POINT, DATA_TYPE_RELATION},
+    properties::{
+        DataType, PropertyItem, DATA_TYPE_CHECKBOX, DATA_TYPE_NUMBER, DATA_TYPE_POINT,
+        DATA_TYPE_RELATION, DATA_TYPE_TEXT, DATA_TYPE_TIME,
+    },
     relations::{SetRelationItem, UnsetRelationItem, UpdateRelationItem},
     values::{ValueChangeType, ValueOp},
 };
@@ -89,16 +92,17 @@ impl PostgresStorage {
         let id: String = row.get("id");
         let type_value: String = row.get("type");
 
-        let property_type = string_to_data_type(&type_value)
-            .ok_or_else(|| sqlx::Error::Decode(format!("Invalid enum value '{}' for dataTypes enum", type_value).into()))?;
+        let property_type = string_to_data_type(&type_value).ok_or_else(|| {
+            sqlx::Error::Decode(
+                format!("Invalid enum value '{}' for dataTypes enum", type_value).into(),
+            )
+        })?;
 
         Ok(PropertyItem {
             id,
             value: property_type,
         })
     }
-
-
 }
 
 #[async_trait]
@@ -387,6 +391,17 @@ impl StorageBackend for PostgresStorage {
         Ok(())
     }
 
+    /// Properties are a special, knowledge-graph wide concept. A property
+    /// is a semantic representation of values. e.g., a value might be
+    /// "Byron", but without any further context we don't know what "Byron"
+    /// represents. Properties are entities which provide semantic meaning,
+    /// so there might be a Property called "Name". This Property has a
+    /// Data Type of "Text". By associating the value "Byron" with the Property
+    /// "Name", we provide semantic meaning to the pair.
+    ///
+    /// The knowledge graph engine validates that all values associated with
+    /// a property correctly conform to the property's Data Type. Additionally,
+    /// changing the Property's Data Type is not allowed.
     async fn insert_properties(&self, properties: &Vec<PropertyItem>) -> Result<(), StorageError> {
         if properties.is_empty() {
             return Ok(());
@@ -401,6 +416,9 @@ impl StorageBackend for PostgresStorage {
             types.push(property.value.as_ref());
         }
 
+        // We don't allow changing an already-created property's value type.
+        // Rather than filtering already-created properties ahead of time we
+        // let the database engine handle it.
         let query = r#"
                 INSERT INTO properties (
                     id, type
@@ -431,5 +449,3 @@ fn string_to_data_type(s: &str) -> Option<DataType> {
         _ => None,
     }
 }
-
-
