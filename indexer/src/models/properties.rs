@@ -23,7 +23,7 @@ pub const VALID_DATA_TYPE_VALUES: &[&str] = &[
 ];
 
 /// Type-safe representation of data types
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Copy)]
 pub enum DataType {
     Text,
     Number,
@@ -109,23 +109,12 @@ impl DataType {
     pub fn is_valid_string(value: &str) -> bool {
         VALID_DATA_TYPE_VALUES.contains(&value)
     }
-
-    pub fn to_int(&self) -> u8 {
-        match self {
-            DataType::Text => 0,
-            DataType::Number => 1,
-            DataType::Checkbox => 2,
-            DataType::Time => 3,
-            DataType::Point => 4,
-            DataType::Relation => 5,
-        }
-    }
 }
 
 /// Represents a property with its ID and type information
 #[derive(Clone, Debug)]
 pub struct PropertyItem {
-    pub id: String,
+    pub id: Uuid,
     pub data_type: DataType,
 }
 
@@ -142,7 +131,7 @@ impl PropertiesModel {
 
                     match property_id_bytes {
                         Ok(property_id_bytes) => {
-                            let property_id = Uuid::from_bytes(property_id_bytes).to_string();
+                            let property_id = Uuid::from_bytes(property_id_bytes);
 
                             if let Some(property_type) = native_type_to_data_type(property.r#type) {
                                 properties.push(PropertyItem {

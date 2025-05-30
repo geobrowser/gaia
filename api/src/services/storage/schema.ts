@@ -1,5 +1,5 @@
 import {type InferSelectModel, relations as drizzleRelations} from "drizzle-orm"
-import {boolean, jsonb, pgEnum, pgTable, serial, text} from "drizzle-orm/pg-core"
+import {boolean, jsonb, pgEnum, pgTable, serial, text, uuid} from "drizzle-orm/pg-core"
 
 export const ipfsCache = pgTable("ipfs_cache", {
 	id: serial(),
@@ -17,7 +17,7 @@ export const ipfsCache = pgTable("ipfs_cache", {
 })
 
 export const entities = pgTable("entities", {
-	id: text().primaryKey(),
+	id: uuid().primaryKey(),
 	createdAt: text().notNull(),
 	createdAtBlock: text().notNull(),
 	updatedAt: text().notNull(),
@@ -27,14 +27,14 @@ export const entities = pgTable("entities", {
 export const dataTypesEnum = pgEnum("dataTypes", ["Text", "Number", "Checkbox", "Time", "Point", "Relation"])
 
 export const properties = pgTable("properties", {
-	id: text().primaryKey(),
+	id: uuid().primaryKey(),
 	type: dataTypesEnum().notNull(),
 })
 
 export const values = pgTable("values", {
 	id: text().primaryKey(),
-	propertyId: text().notNull(),
-	entityId: text().notNull(),
+	propertyId: uuid().notNull(),
+	entityId: uuid().notNull(),
 	spaceId: text().notNull(),
 	value: text().notNull(),
 	language: text(),
@@ -42,17 +42,17 @@ export const values = pgTable("values", {
 })
 
 export const relations = pgTable("relations", {
-	id: text().primaryKey(),
-	entityId: text().notNull(),
-	typeId: text().notNull(),
-	fromEntityId: text().notNull(),
-	fromSpaceId: text(),
-	fromVersionId: text(),
-	toEntityId: text().notNull(),
-	toSpaceId: text(),
-	toVersionId: text(),
+	id: uuid().primaryKey(),
+	entityId: uuid().notNull(),
+	typeId: uuid().notNull(),
+	fromEntityId: uuid().notNull(),
+	fromSpaceId: uuid(),
+	fromVersionId: uuid(),
+	toEntityId: uuid().notNull(),
+	toSpaceId: uuid(),
+	toVersionId: uuid(),
 	position: text(),
-	spaceId: text().notNull(),
+	spaceId: uuid().notNull(),
 	verified: boolean(),
 })
 
