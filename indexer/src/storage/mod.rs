@@ -6,6 +6,7 @@ use thiserror::Error;
 
 use crate::models::{
     entities::EntityItem,
+    properties::PropertyItem,
     relations::{SetRelationItem, UnsetRelationItem, UpdateRelationItem},
     values::ValueOp,
 };
@@ -39,4 +40,5 @@ pub trait StorageBackend: Send + Sync {
         relation_ids: &Vec<String>,
         space_id: &String,
     ) -> Result<(), StorageError>;
+    async fn insert_properties(&self, properties: &Vec<PropertyItem>) -> Result<(), StorageError>;
 }

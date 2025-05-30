@@ -1,4 +1,6 @@
-use grc20::pb::grc20::{op::Payload, Edit, Entity, Op, Relation, UnsetEntityValues, Value};
+use grc20::pb::grc20::{
+    op::Payload, Edit, Entity, NativeTypes, Op, Property, Relation, UnsetEntityValues, Value,
+};
 use std::{env, sync::Arc};
 use stream::utils::BlockMetadata;
 use uuid::Uuid;
@@ -104,6 +106,8 @@ async fn main() -> Result<(), IndexingError> {
                     "550e8400-e29b-41d4-a716-446655440003",
                     "550e8400-e29b-41d4-a716-446655440004",
                 ),
+                make_property_op("9ba7b810-9dad-11d1-80b4-00c04fd430c1", NativeTypes::Text),
+                make_property_op("9ba7b810-9dad-11d1-80b4-00c04fd430c2", NativeTypes::Number),
             ],
         )),
         is_errored: false,
@@ -198,6 +202,177 @@ async fn main() -> Result<(), IndexingError> {
         assert_eq!(value.is_err(), true);
     }
 
+    // Test property creation
+    {
+        let property = storage
+            .get_property(&"9ba7b810-9dad-11d1-80b4-00c04fd430c1".to_string())
+            .await
+            .unwrap();
+        assert_eq!(property.id, "9ba7b810-9dad-11d1-80b4-00c04fd430c1");
+        assert_eq!(property.value, "Text");
+    }
+
+    {
+        let property = storage
+            .get_property(&"9ba7b810-9dad-11d1-80b4-00c04fd430c2".to_string())
+            .await
+            .unwrap();
+        assert_eq!(property.id, "9ba7b810-9dad-11d1-80b4-00c04fd430c2");
+        assert_eq!(property.value, "Number");
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_property_no_overwrite() -> Result<(), IndexingError> {
+    dotenv().ok();
+    let database_url = env::var("DATABASE_URL").expect("DATABASE_URL not set");
+    let storage = Arc::new(PostgresStorage::new(&database_url).await?);
+
+    // First edit - create property with Text type
+    let first_edit = PreprocessedEdit {
+        space_id: String::from("6"),
+        edit: Some(make_edit(
+            "f47ac10b-58cc-4372-a567-0e02b2c3d481",
+            "First Edit",
+            "f47ac10b-58cc-4372-a567-0e02b2c3d480",
+            vec![make_property_op(
+                "aba7b810-9dad-11d1-80b4-00c04fd430c1",
+                NativeTypes::Text,
+            )],
+        )),
+        is_errored: false,
+    };
+
+    // Second edit - attempt to create same property with Number type
+    let second_edit = PreprocessedEdit {
+        space_id: String::from("6"),
+        edit: Some(make_edit(
+            "f47ac10b-58cc-4372-a567-0e02b2c3d482",
+            "Second Edit",
+            "f47ac10b-58cc-4372-a567-0e02b2c3d480",
+            vec![make_property_op(
+                "aba7b810-9dad-11d1-80b4-00c04fd430c1",
+                NativeTypes::Number,
+            )],
+        )),
+        is_errored: false,
+    };
+
+    let block = BlockMetadata {
+        cursor: String::from("6"),
+        block_number: 2,
+        timestamp: String::from("6"),
+    };
+
+    let indexer = TestIndexer::new(storage.clone());
+
+    // Process first edit
+    indexer
+        .run(&vec![KgData {
+            block: block.clone(),
+            edits: vec![first_edit],
+        }])
+        .await?;
+
+    // Verify property was created with Text type
+    {
+        let property = storage
+            .get_property(&"aba7b810-9dad-11d1-80b4-00c04fd430c1".to_string())
+            .await
+            .unwrap();
+        assert_eq!(property.id, "aba7b810-9dad-11d1-80b4-00c04fd430c1");
+        assert_eq!(property.value, "Text");
+    }
+
+    // Process second edit (should not overwrite)
+    indexer
+        .run(&vec![KgData {
+            block,
+            edits: vec![second_edit],
+        }])
+        .await?;
+
+    // Verify property still has Text type (not overwritten)
+    {
+        let property = storage
+            .get_property(&"aba7b810-9dad-11d1-80b4-00c04fd430c1".to_string())
+            .await
+            .unwrap();
+        assert_eq!(property.id, "aba7b810-9dad-11d1-80b4-00c04fd430c1");
+        assert_eq!(property.value, "Text"); // Should still be Text, not Number
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_property_squashing() -> Result<(), IndexingError> {
+    dotenv().ok();
+    let database_url = env::var("DATABASE_URL").expect("DATABASE_URL not set");
+    let storage = Arc::new(PostgresStorage::new(&database_url).await?);
+
+    // Single edit with multiple CreateProperty ops for the same property ID
+    let edit_with_duplicate_properties = PreprocessedEdit {
+        space_id: String::from("7"),
+        edit: Some(make_edit(
+            "f47ac10b-58cc-4372-a567-0e02b2c3d483",
+            "Squash Test Edit",
+            "f47ac10b-58cc-4372-a567-0e02b2c3d480",
+            vec![
+                // First: create property with Text type
+                make_property_op("bba7b810-9dad-11d1-80b4-00c04fd430c1", NativeTypes::Text),
+                // Second: create same property with Number type
+                make_property_op("bba7b810-9dad-11d1-80b4-00c04fd430c1", NativeTypes::Number),
+                // Third: create same property with Checkbox type (this should be the final one)
+                make_property_op(
+                    "bba7b810-9dad-11d1-80b4-00c04fd430c1",
+                    NativeTypes::Checkbox,
+                ),
+                // Different property to ensure squashing only affects same IDs
+                make_property_op("bba7b810-9dad-11d1-80b4-00c04fd430c2", NativeTypes::Time),
+            ],
+        )),
+        is_errored: false,
+    };
+
+    let block = BlockMetadata {
+        cursor: String::from("7"),
+        block_number: 3,
+        timestamp: String::from("7"),
+    };
+
+    let indexer = TestIndexer::new(storage.clone());
+
+    // Process the edit
+    indexer
+        .run(&vec![KgData {
+            block,
+            edits: vec![edit_with_duplicate_properties],
+        }])
+        .await?;
+
+    // Verify that only the final type (Checkbox) was stored for the squashed property
+    {
+        let property = storage
+            .get_property(&"bba7b810-9dad-11d1-80b4-00c04fd430c1".to_string())
+            .await
+            .unwrap();
+        assert_eq!(property.id, "bba7b810-9dad-11d1-80b4-00c04fd430c1");
+        assert_eq!(property.value, "Checkbox"); // Should be Checkbox, not Text or Number
+    }
+
+    // Verify that the different property was not affected by squashing
+    {
+        let property = storage
+            .get_property(&"bba7b810-9dad-11d1-80b4-00c04fd430c2".to_string())
+            .await
+            .unwrap();
+        assert_eq!(property.id, "bba7b810-9dad-11d1-80b4-00c04fd430c2");
+        assert_eq!(property.value, "Time");
+    }
+
     Ok(())
 }
 
@@ -245,6 +420,15 @@ fn make_entity_op(op_type: TestEntityOpType, entity: &str, values: Vec<TestValue
                     .collect(),
             })),
         },
+    }
+}
+
+fn make_property_op(property_id: &str, property_type: NativeTypes) -> Op {
+    Op {
+        payload: Some(Payload::CreateProperty(Property {
+            id: Uuid::parse_str(property_id).unwrap().as_bytes().to_vec(),
+            r#type: property_type as i32,
+        })),
     }
 }
 

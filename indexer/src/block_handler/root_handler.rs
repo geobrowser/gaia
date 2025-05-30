@@ -3,6 +3,7 @@ use std::sync::Arc;
 use futures::future::join_all;
 use stream::utils::BlockMetadata;
 
+use crate::models::properties::PropertiesModel;
 use crate::models::relations::RelationsModel;
 use crate::models::{entities::EntitiesModel, values::ValuesModel};
 use crate::storage::StorageBackend;
@@ -41,6 +42,16 @@ where
                 if !preprocessed_edit.is_errored {
                     let edit = preprocessed_edit.edit.unwrap();
                     let space_id = preprocessed_edit.space_id;
+
+                    // We write properties first to update the cache with any properties
+                    // created within the edit. This makes it simpler to do validation
+                    // later in the edit handler as the properties cache will already
+                    // be up-to-date.
+                    let properties = PropertiesModel::map_edit_to_properties(&edit);
+
+                    if let Err(error) = storage.insert_properties(&properties).await {
+                        eprintln!("Error writing properties: {}", error);
+                    }
 
                     {
                         let edit = edit.clone();

@@ -1,9 +1,10 @@
 use async_trait::async_trait;
 
-use sqlx::{postgres::PgPoolOptions, Postgres, QueryBuilder};
+use sqlx::{postgres::PgPoolOptions, Postgres, QueryBuilder, Row};
 
 use crate::models::{
     entities::EntityItem,
+    properties::{PropertyItem, DataType, DATA_TYPE_TEXT, DATA_TYPE_NUMBER, DATA_TYPE_CHECKBOX, DATA_TYPE_TIME, DATA_TYPE_POINT, DATA_TYPE_RELATION},
     relations::{SetRelationItem, UnsetRelationItem, UpdateRelationItem},
     values::{ValueChangeType, ValueOp},
 };
@@ -78,6 +79,26 @@ impl PostgresStorage {
             position: None,
         })
     }
+
+    pub async fn get_property(&self, property_id: &String) -> Result<PropertyItem, StorageError> {
+        let row = sqlx::query("SELECT id, type::text as type FROM properties WHERE id = $1")
+            .bind(property_id)
+            .fetch_one(&self.pool)
+            .await?;
+
+        let id: String = row.get("id");
+        let type_value: String = row.get("type");
+
+        let property_type = string_to_data_type(&type_value)
+            .ok_or_else(|| sqlx::Error::Decode(format!("Invalid enum value '{}' for dataTypes enum", type_value).into()))?;
+
+        Ok(PropertyItem {
+            id,
+            value: property_type,
+        })
+    }
+
+
 }
 
 #[async_trait]
@@ -365,4 +386,50 @@ impl StorageBackend for PostgresStorage {
 
         Ok(())
     }
+
+    async fn insert_properties(&self, properties: &Vec<PropertyItem>) -> Result<(), StorageError> {
+        if properties.is_empty() {
+            return Ok(());
+        }
+
+        // Prepare column-wise vectors
+        let mut ids = Vec::with_capacity(properties.len());
+        let mut types = Vec::with_capacity(properties.len());
+
+        for property in properties {
+            ids.push(&property.id);
+            types.push(property.value.as_ref());
+        }
+
+        let query = r#"
+                INSERT INTO properties (
+                    id, type
+                )
+                SELECT id, type::"dataTypes"
+                FROM UNNEST($1::text[], $2::text[]) AS t(id, type)
+                ON CONFLICT (id) DO NOTHING
+            "#;
+
+        sqlx::query(query)
+            .bind(&ids)
+            .bind(&types)
+            .execute(&self.pool)
+            .await?;
+
+        Ok(())
+    }
 }
+
+fn string_to_data_type(s: &str) -> Option<DataType> {
+    match s {
+        DATA_TYPE_TEXT => Some(DataType::Text),
+        DATA_TYPE_NUMBER => Some(DataType::Number),
+        DATA_TYPE_CHECKBOX => Some(DataType::Checkbox),
+        DATA_TYPE_TIME => Some(DataType::Time),
+        DATA_TYPE_POINT => Some(DataType::Point),
+        DATA_TYPE_RELATION => Some(DataType::Relation),
+        _ => None,
+    }
+}
+
+

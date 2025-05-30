@@ -1,5 +1,5 @@
 import {type InferSelectModel, relations as drizzleRelations} from "drizzle-orm"
-import {boolean, jsonb, pgTable, serial, text} from "drizzle-orm/pg-core"
+import {boolean, jsonb, pgEnum, pgTable, serial, text} from "drizzle-orm/pg-core"
 
 export const ipfsCache = pgTable("ipfs_cache", {
 	id: serial(),
@@ -24,10 +24,11 @@ export const entities = pgTable("entities", {
 	updatedAtBlock: text().notNull(),
 })
 
+export const dataTypesEnum = pgEnum("dataTypes", ["Text", "Number", "Checkbox", "Time", "Point", "Relation"])
+
 export const properties = pgTable("properties", {
 	id: text().primaryKey(),
-	name: text().notNull(),
-	type: text().notNull(),
+	type: dataTypesEnum().notNull(),
 })
 
 export const values = pgTable("values", {

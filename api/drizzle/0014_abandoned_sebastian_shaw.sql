@@ -1,0 +1,2 @@
+CREATE TYPE "public"."dataTypes" AS ENUM('Text', 'Number', 'Checkbox', 'Time', 'Point', 'Relation');--> statement-breakpoint
+ALTER TABLE "properties" ALTER COLUMN "type" SET DATA TYPE "public"."dataTypes" USING "type"::"public"."dataTypes";
