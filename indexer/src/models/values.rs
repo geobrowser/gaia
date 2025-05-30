@@ -19,11 +19,7 @@ pub struct ValueOp {
     pub space_id: String,
     pub value: Option<String>,
     pub language: Option<String>,
-    pub format: Option<String>,
     pub unit: Option<String>,
-    pub timezone: Option<String>,
-    pub has_date: Option<bool>,
-    pub has_time: Option<bool>,
 }
 
 pub struct ValuesModel;
@@ -96,8 +92,7 @@ fn value_op_from_op(op: &Op, space_id: &String) -> Vec<ValueOp> {
                             let property_id =
                                 Uuid::from_bytes(property_id_bytes.unwrap()).to_string();
 
-                            let (language, format, unit, timezone, has_date, has_time) =
-                                extract_options(&value.options);
+                            let (language, unit) = extract_options(&value.options);
 
                             values.push(ValueOp {
                                 id: derive_value_id(&entity_id, &property_id, space_id),
@@ -107,11 +102,7 @@ fn value_op_from_op(op: &Op, space_id: &String) -> Vec<ValueOp> {
                                 space_id: space_id.clone(),
                                 value: Some(value.value.clone()),
                                 language,
-                                format,
                                 unit,
-                                timezone,
-                                has_date,
-                                has_time,
                             });
                         }
                     }
@@ -151,11 +142,7 @@ fn value_op_from_op(op: &Op, space_id: &String) -> Vec<ValueOp> {
                                 space_id: space_id.clone(),
                                 value: None,
                                 language: None,
-                                format: None,
                                 unit: None,
-                                timezone: None,
-                                has_date: None,
-                                has_time: None,
                             });
                         }
                     },
@@ -173,15 +160,8 @@ fn value_op_from_op(op: &Op, space_id: &String) -> Vec<ValueOp> {
 }
 
 fn extract_options(
-    options: &Option<grc20::pb::ipfs::Options>,
-) -> (
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    Option<String>,
-    Option<bool>,
-    Option<bool>,
-) {
+    options: &Option<grc20::pb::grc20::Options>,
+) -> (Option<String>, Option<String>) {
     if let Some(opts) = options {
         if let Some(value) = &opts.value {
             match value {
@@ -190,34 +170,20 @@ fn extract_options(
                         .language
                         .as_ref()
                         .and_then(|lang| String::from_utf8(lang.clone()).ok());
-                    (language, None, None, None, None, None)
+                    (language, None)
                 }
                 options::Value::Number(number_opts) => {
                     let unit = number_opts
                         .unit
                         .as_ref()
                         .and_then(|u| String::from_utf8(u.clone()).ok());
-                    (None, number_opts.format.clone(), unit, None, None, None)
-                }
-                options::Value::Time(time_opts) => {
-                    let timezone = time_opts
-                        .timezone
-                        .as_ref()
-                        .and_then(|tz| String::from_utf8(tz.clone()).ok());
-                    (
-                        None,
-                        time_opts.format.clone(),
-                        None,
-                        timezone,
-                        time_opts.has_date,
-                        time_opts.has_time,
-                    )
+                    (None, unit)
                 }
             }
         } else {
-            (None, None, None, None, None, None)
+            (None, None)
         }
     } else {
-        (None, None, None, None, None, None)
+        (None, None)
     }
 }

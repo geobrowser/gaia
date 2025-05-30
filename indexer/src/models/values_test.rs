@@ -1,5 +1,5 @@
 use crate::models::values::{ValueChangeType, ValuesModel};
-use grc20::pb::grc20::{op::Payload, Edit, Entity, Op, UnsetEntityValues, Value};
+use grc20::pb::grc20::{op::Payload, Edit, Entity, Op, UnsetEntityValues, Value, Options, TextOptions, NumberOptions, options};
 use uuid::Uuid;
 
 #[cfg(test)]
@@ -494,5 +494,277 @@ mod tests {
             deleted[0],
             "550e8400-e29b-41d4-a716-446655440001:6ba7b810-9dad-11d1-80b4-00c04fd430c1:space1"
         );
+    }
+
+    #[test]
+    fn test_map_edit_to_values_with_text_options() {
+        // Create an update entity operation with text options
+        let entity = Entity {
+            id: Uuid::parse_str("550e8400-e29b-41d4-a716-446655440001")
+                .unwrap()
+                .as_bytes()
+                .to_vec(),
+            values: vec![Value {
+                property: Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c1")
+                    .unwrap()
+                    .as_bytes()
+                    .to_vec(),
+                value: "Hello World".to_string(),
+                options: Some(Options {
+                    value: Some(options::Value::Text(TextOptions {
+                        language: Some("en".as_bytes().to_vec()),
+                    })),
+                }),
+            }],
+        };
+
+        let op = Op {
+            payload: Some(Payload::UpdateEntity(entity)),
+        };
+
+        let edit = create_test_edit(vec![op]);
+        let space_id = "space1".to_string();
+
+        let (created, deleted) = ValuesModel::map_edit_to_values(&edit, &space_id);
+
+        assert_eq!(created.len(), 1);
+        assert_eq!(deleted.len(), 0);
+
+        let created_op = &created[0];
+        assert_eq!(created_op.entity_id, "550e8400-e29b-41d4-a716-446655440001");
+        assert_eq!(
+            created_op.property_id,
+            "6ba7b810-9dad-11d1-80b4-00c04fd430c1"
+        );
+        assert_eq!(created_op.space_id, "space1");
+        assert_eq!(created_op.value, Some("Hello World".to_string()));
+        assert_eq!(created_op.language, Some("en".to_string()));
+        assert_eq!(created_op.unit, None);
+        assert!(matches!(created_op.change_type, ValueChangeType::SET));
+    }
+
+    #[test]
+    fn test_map_edit_to_values_with_number_options() {
+        // Create an update entity operation with number options
+        let entity = Entity {
+            id: Uuid::parse_str("550e8400-e29b-41d4-a716-446655440001")
+                .unwrap()
+                .as_bytes()
+                .to_vec(),
+            values: vec![Value {
+                property: Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c1")
+                    .unwrap()
+                    .as_bytes()
+                    .to_vec(),
+                value: "42.5".to_string(),
+                options: Some(Options {
+                    value: Some(options::Value::Number(NumberOptions {
+                        unit: Some("kg".as_bytes().to_vec()),
+                    })),
+                }),
+            }],
+        };
+
+        let op = Op {
+            payload: Some(Payload::UpdateEntity(entity)),
+        };
+
+        let edit = create_test_edit(vec![op]);
+        let space_id = "space1".to_string();
+
+        let (created, deleted) = ValuesModel::map_edit_to_values(&edit, &space_id);
+
+        assert_eq!(created.len(), 1);
+        assert_eq!(deleted.len(), 0);
+
+        let created_op = &created[0];
+        assert_eq!(created_op.entity_id, "550e8400-e29b-41d4-a716-446655440001");
+        assert_eq!(
+            created_op.property_id,
+            "6ba7b810-9dad-11d1-80b4-00c04fd430c1"
+        );
+        assert_eq!(created_op.space_id, "space1");
+        assert_eq!(created_op.value, Some("42.5".to_string()));
+        assert_eq!(created_op.language, None);
+        assert_eq!(created_op.unit, Some("kg".to_string()));
+        assert!(matches!(created_op.change_type, ValueChangeType::SET));
+    }
+
+    #[test]
+    fn test_map_edit_to_values_with_empty_options() {
+        // Create an update entity operation with empty options
+        let entity = Entity {
+            id: Uuid::parse_str("550e8400-e29b-41d4-a716-446655440001")
+                .unwrap()
+                .as_bytes()
+                .to_vec(),
+            values: vec![Value {
+                property: Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c1")
+                    .unwrap()
+                    .as_bytes()
+                    .to_vec(),
+                value: "test value".to_string(),
+                options: Some(Options { value: None }),
+            }],
+        };
+
+        let op = Op {
+            payload: Some(Payload::UpdateEntity(entity)),
+        };
+
+        let edit = create_test_edit(vec![op]);
+        let space_id = "space1".to_string();
+
+        let (created, deleted) = ValuesModel::map_edit_to_values(&edit, &space_id);
+
+        assert_eq!(created.len(), 1);
+        assert_eq!(deleted.len(), 0);
+
+        let created_op = &created[0];
+        assert_eq!(created_op.entity_id, "550e8400-e29b-41d4-a716-446655440001");
+        assert_eq!(
+            created_op.property_id,
+            "6ba7b810-9dad-11d1-80b4-00c04fd430c1"
+        );
+        assert_eq!(created_op.space_id, "space1");
+        assert_eq!(created_op.value, Some("test value".to_string()));
+        assert_eq!(created_op.language, None);
+        assert_eq!(created_op.unit, None);
+        assert!(matches!(created_op.change_type, ValueChangeType::SET));
+    }
+
+    #[test]
+    fn test_map_edit_to_values_with_invalid_utf8_options() {
+        // Create an update entity operation with invalid UTF-8 in options (should be ignored)
+        let entity = Entity {
+            id: Uuid::parse_str("550e8400-e29b-41d4-a716-446655440001")
+                .unwrap()
+                .as_bytes()
+                .to_vec(),
+            values: vec![
+                Value {
+                    property: Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c1")
+                        .unwrap()
+                        .as_bytes()
+                        .to_vec(),
+                    value: "text value".to_string(),
+                    options: Some(Options {
+                        value: Some(options::Value::Text(TextOptions {
+                            language: Some(vec![0xff, 0xfe, 0xfd]), // Invalid UTF-8
+                        })),
+                    }),
+                },
+                Value {
+                    property: Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c2")
+                        .unwrap()
+                        .as_bytes()
+                        .to_vec(),
+                    value: "number value".to_string(),
+                    options: Some(Options {
+                        value: Some(options::Value::Number(NumberOptions {
+                            unit: Some(vec![0xff, 0xfe, 0xfd]), // Invalid UTF-8
+                        })),
+                    }),
+                },
+            ],
+        };
+
+        let op = Op {
+            payload: Some(Payload::UpdateEntity(entity)),
+        };
+
+        let edit = create_test_edit(vec![op]);
+        let space_id = "space1".to_string();
+
+        let (created, deleted) = ValuesModel::map_edit_to_values(&edit, &space_id);
+
+        assert_eq!(created.len(), 2);
+        assert_eq!(deleted.len(), 0);
+
+        // Both values should have None for language/unit due to invalid UTF-8
+        for created_op in &created {
+            assert_eq!(created_op.language, None);
+            assert_eq!(created_op.unit, None);
+            assert!(matches!(created_op.change_type, ValueChangeType::SET));
+        }
+    }
+
+    #[test]
+    fn test_map_edit_to_values_mixed_options() {
+        // Create an update entity operation with mixed option types
+        let entity = Entity {
+            id: Uuid::parse_str("550e8400-e29b-41d4-a716-446655440001")
+                .unwrap()
+                .as_bytes()
+                .to_vec(),
+            values: vec![
+                Value {
+                    property: Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c1")
+                        .unwrap()
+                        .as_bytes()
+                        .to_vec(),
+                    value: "Hello".to_string(),
+                    options: Some(Options {
+                        value: Some(options::Value::Text(TextOptions {
+                            language: Some("fr".as_bytes().to_vec()),
+                        })),
+                    }),
+                },
+                Value {
+                    property: Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c2")
+                        .unwrap()
+                        .as_bytes()
+                        .to_vec(),
+                    value: "100".to_string(),
+                    options: Some(Options {
+                        value: Some(options::Value::Number(NumberOptions {
+                            unit: Some("m".as_bytes().to_vec()),
+                        })),
+                    }),
+                },
+                Value {
+                    property: Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c3")
+                        .unwrap()
+                        .as_bytes()
+                        .to_vec(),
+                    value: "plain".to_string(),
+                    options: None,
+                },
+            ],
+        };
+
+        let op = Op {
+            payload: Some(Payload::UpdateEntity(entity)),
+        };
+
+        let edit = create_test_edit(vec![op]);
+        let space_id = "space1".to_string();
+
+        let (created, deleted) = ValuesModel::map_edit_to_values(&edit, &space_id);
+
+        assert_eq!(created.len(), 3);
+        assert_eq!(deleted.len(), 0);
+
+        // Find each value by property_id and check its options
+        let text_value = created
+            .iter()
+            .find(|op| op.property_id == "6ba7b810-9dad-11d1-80b4-00c04fd430c1")
+            .unwrap();
+        assert_eq!(text_value.language, Some("fr".to_string()));
+        assert_eq!(text_value.unit, None);
+
+        let number_value = created
+            .iter()
+            .find(|op| op.property_id == "6ba7b810-9dad-11d1-80b4-00c04fd430c2")
+            .unwrap();
+        assert_eq!(number_value.language, None);
+        assert_eq!(number_value.unit, Some("m".to_string()));
+
+        let plain_value = created
+            .iter()
+            .find(|op| op.property_id == "6ba7b810-9dad-11d1-80b4-00c04fd430c3")
+            .unwrap();
+        assert_eq!(plain_value.language, None);
+        assert_eq!(plain_value.unit, None);
     }
 }

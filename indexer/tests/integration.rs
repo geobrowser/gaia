@@ -1,4 +1,4 @@
-use grc20::pb::ipfs::{op::Payload, Edit, Entity, Op, Relation, UnsetEntityValues, Value};
+use grc20::pb::grc20::{op::Payload, Edit, Entity, Op, Relation, UnsetEntityValues, Value};
 use std::{env, sync::Arc};
 use stream::utils::BlockMetadata;
 use uuid::Uuid;
@@ -150,15 +150,24 @@ async fn main() -> Result<(), IndexingError> {
 
     {
         let value = storage
-            .get_value(&"550e8400-e29b-41d4-a716-446655440001:6ba7b810-9dad-11d1-80b4-00c04fd430c2:5".to_string())
+            .get_value(
+                &"550e8400-e29b-41d4-a716-446655440001:6ba7b810-9dad-11d1-80b4-00c04fd430c2:5"
+                    .to_string(),
+            )
             .await
             .unwrap();
-        assert_eq!(value.id, "550e8400-e29b-41d4-a716-446655440001:6ba7b810-9dad-11d1-80b4-00c04fd430c2:5");
+        assert_eq!(
+            value.id,
+            "550e8400-e29b-41d4-a716-446655440001:6ba7b810-9dad-11d1-80b4-00c04fd430c2:5"
+        );
     }
 
     {
         let value = storage
-            .get_value(&"550e8400-e29b-41d4-a716-446655440002:6ba7b810-9dad-11d1-80b4-00c04fd430c2:5".to_string())
+            .get_value(
+                &"550e8400-e29b-41d4-a716-446655440002:6ba7b810-9dad-11d1-80b4-00c04fd430c2:5"
+                    .to_string(),
+            )
             .await;
 
         // Should not return the value since it was deleted
@@ -183,7 +192,9 @@ async fn main() -> Result<(), IndexingError> {
 
     {
         // Should not return the value since it was deleted
-        let value = storage.get_relation(&"7ba7b810-9dad-11d1-80b4-00c04fd430c2".to_string()).await;
+        let value = storage
+            .get_relation(&"7ba7b810-9dad-11d1-80b4-00c04fd430c2".to_string())
+            .await;
         assert_eq!(value.is_err(), true);
     }
 
@@ -268,7 +279,7 @@ fn make_relation_op(
             })),
         },
         TestRelationOpType::UPDATE => Op {
-            payload: Some(Payload::UpdateRelation(grc20::pb::ipfs::RelationUpdate {
+            payload: Some(Payload::UpdateRelation(grc20::pb::grc20::RelationUpdate {
                 id: Uuid::parse_str(relation_id).unwrap().as_bytes().to_vec(),
                 from_space: None,
                 from_version: None,
