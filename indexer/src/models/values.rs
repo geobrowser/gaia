@@ -1,8 +1,9 @@
-use indexer_utils::id;
-use std::collections::HashMap;
-use uuid::Uuid;
-
 use grc20::pb::grc20::{op::Payload, options, Edit, Op};
+use indexer_utils::id;
+use std::collections::hash_map::DefaultHasher;
+use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
+use uuid::Uuid;
 
 #[derive(Clone)]
 pub enum ValueChangeType {
@@ -12,10 +13,10 @@ pub enum ValueChangeType {
 
 #[derive(Clone)]
 pub struct ValueOp {
-    pub id: String,
+    pub id: Uuid,
     pub change_type: ValueChangeType,
-    pub entity_id: String,
-    pub property_id: String,
+    pub entity_id: Uuid,
+    pub property_id: Uuid,
     pub space_id: String,
     pub value: Option<String>,
     pub language: Option<String>,
@@ -25,7 +26,7 @@ pub struct ValueOp {
 pub struct ValuesModel;
 
 impl ValuesModel {
-    pub fn map_edit_to_values(edit: &Edit, space_id: &String) -> (Vec<ValueOp>, Vec<String>) {
+    pub fn map_edit_to_values(edit: &Edit, space_id: &String) -> (Vec<ValueOp>, Vec<Uuid>) {
         let mut triple_ops: Vec<ValueOp> = Vec::new();
 
         for op in &edit.ops {
@@ -46,7 +47,7 @@ impl ValuesModel {
             .into_iter()
             .partition(|op| matches!(op.change_type, ValueChangeType::SET));
 
-        return (created, deleted.iter().map(|op| op.id.clone()).collect());
+        return (created, deleted.iter().map(|op| op.id).collect());
     }
 }
 
@@ -54,7 +55,7 @@ fn squash_values(triple_ops: &Vec<ValueOp>) -> Vec<ValueOp> {
     let mut hash = HashMap::new();
 
     for op in triple_ops {
-        hash.insert(op.id.clone(), op.clone());
+        hash.insert(op.id, op.clone());
     }
 
     let result: Vec<_> = hash.into_values().collect();
@@ -62,8 +63,19 @@ fn squash_values(triple_ops: &Vec<ValueOp>) -> Vec<ValueOp> {
     return result;
 }
 
-fn derive_value_id(entity_id: &String, property_id: &String, space_id: &String) -> String {
-    format!("{}:{}:{}", entity_id, property_id, space_id)
+fn derive_value_id(entity_id: &Uuid, property_id: &Uuid, space_id: &String) -> Uuid {
+    let mut hasher = DefaultHasher::new();
+    entity_id.hash(&mut hasher);
+    property_id.hash(&mut hasher);
+    space_id.hash(&mut hasher);
+    let hash_value = hasher.finish();
+
+    // Create a deterministic UUID from the hash
+    let mut bytes = [0u8; 16];
+    bytes[0..8].copy_from_slice(&hash_value.to_be_bytes());
+    bytes[8..16].copy_from_slice(&hash_value.to_be_bytes());
+
+    Uuid::from_bytes(bytes)
 }
 
 fn value_op_from_op(op: &Op, space_id: &String) -> Vec<ValueOp> {
@@ -76,7 +88,7 @@ fn value_op_from_op(op: &Op, space_id: &String) -> Vec<ValueOp> {
 
                 match entity_id_bytes {
                     Ok(entity_id_bytes) => {
-                        let entity_id = Uuid::from_bytes(entity_id_bytes).to_string();
+                        let entity_id = Uuid::from_bytes(entity_id_bytes);
 
                         for value in &entity.values {
                             let property_id_bytes = id::transform_id_bytes(value.property.clone());
@@ -89,8 +101,7 @@ fn value_op_from_op(op: &Op, space_id: &String) -> Vec<ValueOp> {
                                 continue;
                             }
 
-                            let property_id =
-                                Uuid::from_bytes(property_id_bytes.unwrap()).to_string();
+                            let property_id = Uuid::from_bytes(property_id_bytes.unwrap());
 
                             let (language, unit) = extract_options(&value.options);
 
@@ -98,7 +109,7 @@ fn value_op_from_op(op: &Op, space_id: &String) -> Vec<ValueOp> {
                                 id: derive_value_id(&entity_id, &property_id, space_id),
                                 change_type: ValueChangeType::SET,
                                 property_id,
-                                entity_id: entity_id.clone(),
+                                entity_id,
                                 space_id: space_id.clone(),
                                 value: Some(value.value.clone()),
                                 language,
@@ -117,7 +128,7 @@ fn value_op_from_op(op: &Op, space_id: &String) -> Vec<ValueOp> {
 
                 match entity_id_bytes {
                     Ok(entity_id_bytes) => {
-                        let entity_id = Uuid::from_bytes(entity_id_bytes).to_string();
+                        let entity_id = Uuid::from_bytes(entity_id_bytes);
 
                         for property in &entity.properties {
                             let property_id_bytes =
@@ -132,13 +143,13 @@ fn value_op_from_op(op: &Op, space_id: &String) -> Vec<ValueOp> {
                             }
 
                             let property_id =
-                                Uuid::from_bytes(property_id_bytes.unwrap()).to_string();
+                                Uuid::from_bytes(property_id_bytes.unwrap());
 
                             values.push(ValueOp {
                                 id: derive_value_id(&entity_id, &property_id, space_id),
                                 change_type: ValueChangeType::DELETE,
                                 property_id,
-                                entity_id: entity_id.clone(),
+                                entity_id,
                                 space_id: space_id.clone(),
                                 value: None,
                                 language: None,
