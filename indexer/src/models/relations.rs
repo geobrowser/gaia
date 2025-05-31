@@ -6,13 +6,13 @@ use uuid::Uuid;
 
 #[derive(Clone, Debug)]
 pub struct SetRelationItem {
-    pub id: String,
-    pub entity_id: String,
-    pub type_id: String,
-    pub from_id: String,
+    pub id: Uuid,
+    pub entity_id: Uuid,
+    pub type_id: Uuid,
+    pub from_id: Uuid,
     pub from_space_id: Option<String>,
     pub from_version_id: Option<String>,
-    pub to_id: String,
+    pub to_id: Uuid,
     pub to_space_id: Option<String>,
     pub to_version_id: Option<String>,
     pub position: Option<String>,
@@ -22,7 +22,7 @@ pub struct SetRelationItem {
 
 #[derive(Clone, Debug)]
 pub struct UpdateRelationItem {
-    pub id: String,
+    pub id: Uuid,
     pub from_space_id: Option<String>,
     pub from_version_id: Option<String>,
     pub to_space_id: Option<String>,
@@ -34,7 +34,7 @@ pub struct UpdateRelationItem {
 
 #[derive(Clone, Debug)]
 pub struct UnsetRelationItem {
-    pub id: String,
+    pub id: Uuid,
     pub from_space_id: Option<bool>,
     pub from_version_id: Option<bool>,
     pub to_space_id: Option<bool>,
@@ -46,7 +46,7 @@ pub struct UnsetRelationItem {
 
 #[derive(Clone, Debug)]
 pub struct DeleteRelationItem {
-    pub id: String,
+    pub id: Uuid,
     pub space_id: String,
 }
 
@@ -62,7 +62,7 @@ pub enum RelationItem {
 // Only getters for the main RelationItem enum
 impl RelationItem {
     /// Get the id field, present in all variants
-    pub fn id(&self) -> &str {
+    pub fn id(&self) -> &Uuid {
         match self {
             RelationItem::Create(item) => &item.id,
             RelationItem::Update(item) => &item.id,
@@ -82,7 +82,7 @@ impl RelationItem {
     }
 
     /// Get entity_id (only available in Set variant)
-    pub fn entity_id(&self) -> Option<&str> {
+    pub fn entity_id(&self) -> Option<&Uuid> {
         match self {
             RelationItem::Create(item) => Some(&item.entity_id),
             _ => None,
@@ -90,7 +90,7 @@ impl RelationItem {
     }
 
     /// Get type_id (only available in Set variant)
-    pub fn type_id(&self) -> Option<&str> {
+    pub fn type_id(&self) -> Option<&Uuid> {
         match self {
             RelationItem::Create(item) => Some(&item.type_id),
             _ => None,
@@ -98,7 +98,7 @@ impl RelationItem {
     }
 
     /// Get from_id (only available in Set variant)
-    pub fn from_id(&self) -> Option<&str> {
+    pub fn from_id(&self) -> Option<&Uuid> {
         match self {
             RelationItem::Create(item) => Some(&item.from_id),
             _ => None,
@@ -106,7 +106,7 @@ impl RelationItem {
     }
 
     /// Get to_id (only available in Set variant)
-    pub fn to_id(&self) -> Option<&str> {
+    pub fn to_id(&self) -> Option<&Uuid> {
         match self {
             RelationItem::Create(item) => Some(&item.to_id),
             _ => None,
@@ -199,7 +199,7 @@ impl RelationsModel {
         Vec<SetRelationItem>,
         Vec<UpdateRelationItem>,
         Vec<UnsetRelationItem>,
-        Vec<String>,
+        Vec<Uuid>,
     ) {
         let mut relations = Vec::new();
 
@@ -257,11 +257,11 @@ impl RelationsModel {
                             continue;
                         }
 
-                        let relation_id = Uuid::from_bytes(relation_id_bytes.unwrap()).to_string();
-                        let entity_id = Uuid::from_bytes(entity_id_bytes.unwrap()).to_string();
-                        let type_id = Uuid::from_bytes(type_id_bytes.unwrap()).to_string();
-                        let from_id = Uuid::from_bytes(from_id_bytes.unwrap()).to_string();
-                        let to_id = Uuid::from_bytes(to_id_bytes.unwrap()).to_string();
+                        let relation_id = Uuid::from_bytes(relation_id_bytes.unwrap());
+                        let entity_id = Uuid::from_bytes(entity_id_bytes.unwrap());
+                        let type_id = Uuid::from_bytes(type_id_bytes.unwrap());
+                        let from_id = Uuid::from_bytes(from_id_bytes.unwrap());
+                        let to_id = Uuid::from_bytes(to_id_bytes.unwrap());
 
                         let to_space = relation
                             .to_space
@@ -289,14 +289,14 @@ impl RelationsModel {
 
                         relations.push(RelationItem::Create(SetRelationItem {
                             id: relation_id,
-                            entity_id: entity_id,
+                            entity_id,
                             space_id: space_id.clone(),
                             position: relation.position.clone(),
-                            type_id: type_id,
-                            from_id: from_id,
+                            type_id,
+                            from_id,
                             from_space_id: from_space,
                             from_version_id: from_version,
-                            to_id: to_id,
+                            to_id,
                             to_space_id: to_space,
                             to_version_id: to_version,
                             verified: relation.verified,
@@ -313,7 +313,7 @@ impl RelationsModel {
                             continue;
                         }
 
-                        let relation_id = Uuid::from_bytes(relation_id_bytes.unwrap()).to_string();
+                        let relation_id = Uuid::from_bytes(relation_id_bytes.unwrap());
 
                         relations.push(RelationItem::Delete(DeleteRelationItem {
                             id: relation_id,
@@ -331,7 +331,7 @@ impl RelationsModel {
                             continue;
                         }
 
-                        let relation_id = Uuid::from_bytes(relation_id_bytes.unwrap()).to_string();
+                        let relation_id = Uuid::from_bytes(relation_id_bytes.unwrap());
 
                         let to_space = updated_relation
                             .to_space
@@ -379,7 +379,7 @@ impl RelationsModel {
                             continue;
                         }
 
-                        let relation_id = Uuid::from_bytes(relation_id_bytes.unwrap()).to_string();
+                        let relation_id = Uuid::from_bytes(relation_id_bytes.unwrap());
 
                         relations.push(RelationItem::Unset(UnsetRelationItem {
                             id: relation_id,
@@ -407,14 +407,14 @@ impl RelationsModel {
 
         let mut set_relations: Vec<SetRelationItem> = Vec::new();
         let mut update_relations: Vec<UpdateRelationItem> = Vec::new();
-        let mut delete_relations: Vec<String> = Vec::new();
+        let mut delete_relations: Vec<Uuid> = Vec::new();
         let mut unset_relations: Vec<UnsetRelationItem> = Vec::new();
 
         for relation in &squashed {
             match relation {
                 RelationItem::Create(relation) => set_relations.push(relation.clone()),
                 RelationItem::Update(relation) => update_relations.push(relation.clone()),
-                RelationItem::Delete(relation) => delete_relations.push(relation.id.clone()),
+                RelationItem::Delete(relation) => delete_relations.push(relation.id),
                 RelationItem::Unset(relation) => unset_relations.push(relation.clone()),
             }
         }
@@ -429,7 +429,7 @@ impl RelationsModel {
 }
 
 fn squash_relations(relation_ops: &Vec<RelationItem>) -> Vec<RelationItem> {
-    let mut hash: HashMap<String, RelationItem> = HashMap::new();
+    let mut hash: HashMap<Uuid, RelationItem> = HashMap::new();
 
     for op in relation_ops {
         let seen = hash.get(op.id());
@@ -659,9 +659,9 @@ fn squash_relations(relation_ops: &Vec<RelationItem>) -> Vec<RelationItem> {
                 _ => op.clone(),
             };
 
-            hash.insert(op.id().to_string(), merged);
+            hash.insert(*op.id(), merged);
         } else {
-            hash.insert(op.id().to_string(), op.clone());
+            hash.insert(*op.id(), op.clone());
         }
     }
 
