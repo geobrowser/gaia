@@ -158,7 +158,7 @@ async fn process_edit_event(
                 uri: edit.content_uri,
                 block: block.timestamp.clone(),
                 json: None,
-                space: String::from(""),
+                space: derive_space_id(GEO, &edit.dao_address),
                 is_errored: true,
             };
 
