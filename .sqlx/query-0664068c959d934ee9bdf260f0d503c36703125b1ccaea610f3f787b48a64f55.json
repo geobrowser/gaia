@@ -1,0 +1,88 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id, type_id, entity_id, space_id, from_entity_id, from_space_id, from_version_id, to_entity_id, to_space_id, to_version_id, verified, position FROM relations WHERE id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "type_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "entity_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 3,
+        "name": "space_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 4,
+        "name": "from_entity_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 5,
+        "name": "from_space_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 6,
+        "name": "from_version_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 7,
+        "name": "to_entity_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 8,
+        "name": "to_space_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 9,
+        "name": "to_version_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 10,
+        "name": "verified",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 11,
+        "name": "position",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      false,
+      true,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "0664068c959d934ee9bdf260f0d503c36703125b1ccaea610f3f787b48a64f55"
+}

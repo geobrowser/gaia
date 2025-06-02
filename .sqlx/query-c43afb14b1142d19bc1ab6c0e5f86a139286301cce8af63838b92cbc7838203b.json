@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT * FROM values WHERE id = $1",
+  "query": "SELECT id, property_id, entity_id, space_id, value, language, unit FROM values WHERE id = $1",
   "describe": {
     "columns": [
       {
@@ -11,12 +11,12 @@
       {
         "ordinal": 1,
         "name": "property_id",
-        "type_info": "Text"
+        "type_info": "Uuid"
       },
       {
         "ordinal": 2,
         "name": "entity_id",
-        "type_info": "Text"
+        "type_info": "Uuid"
       },
       {
         "ordinal": 3,
@@ -54,5 +54,5 @@
       true
     ]
   },
-  "hash": "29105cf770980f8179ec4346a90ba74dd1c2ef74930e4659b80ff34a72e9a77a"
+  "hash": "c43afb14b1142d19bc1ab6c0e5f86a139286301cce8af63838b92cbc7838203b"
 }
