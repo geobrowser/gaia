@@ -1,4 +1,4 @@
-use grc20::pb::grc20::{op::Payload, Edit, NativeTypes};
+use grc20::pb::grc20::{op::Payload, DataType as PbDataType, Edit};
 use indexer_utils::id;
 use std::collections::HashMap;
 use std::fmt;
@@ -133,7 +133,7 @@ impl PropertiesModel {
                         Ok(property_id_bytes) => {
                             let property_id = Uuid::from_bytes(property_id_bytes);
 
-                            if let Some(property_type) = native_type_to_data_type(property.r#type) {
+                            if let Some(property_type) = native_type_to_data_type(property.data_type) {
                                 properties.push(PropertyItem {
                                     id: property_id,
                                     data_type: property_type,
@@ -172,13 +172,13 @@ fn squash_properties(properties: &Vec<PropertyItem>) -> Vec<PropertyItem> {
 }
 
 fn native_type_to_data_type(native_type: i32) -> Option<DataType> {
-    match NativeTypes::try_from(native_type) {
-        Ok(NativeTypes::Text) => Some(DataType::Text),
-        Ok(NativeTypes::Number) => Some(DataType::Number),
-        Ok(NativeTypes::Checkbox) => Some(DataType::Checkbox),
-        Ok(NativeTypes::Time) => Some(DataType::Time),
-        Ok(NativeTypes::Point) => Some(DataType::Point),
-        Ok(NativeTypes::Relation) => Some(DataType::Relation),
+    match PbDataType::try_from(native_type) {
+        Ok(PbDataType::Text) => Some(DataType::Text),
+        Ok(PbDataType::Number) => Some(DataType::Number),
+        Ok(PbDataType::Checkbox) => Some(DataType::Checkbox),
+        Ok(PbDataType::Time) => Some(DataType::Time),
+        Ok(PbDataType::Point) => Some(DataType::Point),
+        Ok(PbDataType::Relation) => Some(DataType::Relation),
         Err(_) => {
             tracing::error!("[Properties] Unknown native type: {}", native_type);
             None

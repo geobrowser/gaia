@@ -97,8 +97,8 @@ pub mod op {
 pub struct Property {
     #[prost(bytes = "vec", tag = "1")]
     pub id: ::prost::alloc::vec::Vec<u8>,
-    #[prost(enumeration = "NativeTypes", tag = "2")]
-    pub r#type: i32,
+    #[prost(enumeration = "DataType", tag = "2")]
+    pub data_type: i32,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -220,7 +220,7 @@ pub struct NumberOptions {
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
-pub enum NativeTypes {
+pub enum DataType {
     Text = 0,
     Number = 1,
     Checkbox = 2,
@@ -228,7 +228,7 @@ pub enum NativeTypes {
     Point = 4,
     Relation = 5,
 }
-impl NativeTypes {
+impl DataType {
     /// String value of the enum field names used in the ProtoBuf definition.
     ///
     /// The values are not transformed in any way and thus are considered stable
