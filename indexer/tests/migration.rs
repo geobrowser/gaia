@@ -3,6 +3,7 @@ use grc20::pb::grc20::Edit;
 use prost::Message;
 use std::{env, fs, sync::Arc};
 use stream::utils::BlockMetadata;
+use uuid::Uuid;
 
 use dotenv::dotenv;
 use indexer::{
@@ -55,13 +56,15 @@ async fn main() -> Result<(), IndexingError> {
     let crypto_space_edit = Edit::decode(Bytes::from(crypto_space_bytes.unwrap()));
 
     let root_space_preprocessed_edit = PreprocessedEdit {
-        space_id: String::from("25omwWh6HYgeRQKCaSpVpa"),
+        // For now we use a random UUID instead of the correct UUID for the root space
+        space_id: Uuid::parse_str("37fd5794-82cb-4b7e-9617-c0a14e8c6ff0").unwrap(),
         edit: Some(root_space_edit.clone().unwrap()),
         is_errored: false,
     };
 
     let crypto_space_preprocessed_edit = PreprocessedEdit {
-        space_id: String::from("SgjATMbm41LX6naizMqBVd_ops"),
+        // For now we use a random UUID instead of the correct UUID for the crypto space
+        space_id: Uuid::parse_str("73f5366c-95fe-48e9-b1bb-07b470714577").unwrap(),
         edit: Some(crypto_space_edit.clone().unwrap()),
         is_errored: false,
     };
