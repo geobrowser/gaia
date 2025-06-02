@@ -25,11 +25,6 @@ use crate::{cache::PreprocessedEdit, error::IndexingError};
 /// This validation ensures data integrity by rejecting values that don't
 /// match their property's expected format (e.g., non-numeric strings for
 /// Number properties, invalid checkbox values, malformed coordinates, etc.).
-///
-/// Edge cases handled:
-/// - Properties not found in cache: values are included (cache may be out of sync)
-/// - None values: passed through without validation (used for DELETE operations)
-/// - Validation failures: logged and skipped rather than failing the entire edit
 async fn validate_created_values<C>(created_values: Vec<ValueOp>, cache: &Arc<C>) -> Vec<ValueOp>
 where
     C: ImmutableCache + Send + Sync + 'static,
