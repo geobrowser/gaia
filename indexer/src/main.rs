@@ -2,7 +2,9 @@ use futures::future::join_all;
 use grc20::pb::chain::GeoOutput;
 use indexer::{
     block_handler::root_handler,
-    cache::{postgres::PostgresCache, CacheBackend, PreprocessedEdit},
+    cache::{
+        postgres::PostgresCache, properties_cache::PropertiesCache, CacheBackend, PreprocessedEdit,
+    },
     error::IndexingError,
     storage::postgres::PostgresStorage,
     KgData,
@@ -25,14 +27,20 @@ const START_BLOCK: i64 = 881;
 
 struct KgIndexer {
     storage: Arc<PostgresStorage>,
-    cache: Arc<PostgresCache>,
+    ipfs_cache: Arc<PostgresCache>,
+    properties_cache: Arc<PropertiesCache>,
 }
 
 impl KgIndexer {
-    pub fn new(storage: PostgresStorage, cache: PostgresCache) -> Self {
+    pub fn new(
+        storage: PostgresStorage,
+        ipfs_cache: PostgresCache,
+        properties_cache: PropertiesCache,
+    ) -> Self {
         KgIndexer {
             storage: Arc::new(storage),
-            cache: Arc::new(cache),
+            ipfs_cache: Arc::new(ipfs_cache),
+            properties_cache: Arc::new(properties_cache),
         }
     }
 }
@@ -61,7 +69,7 @@ impl PreprocessedSink<KgData> for KgIndexer {
         let output = stream::utils::output(block_data);
         let block_metadata = stream::utils::block_metadata(block_data);
         let geo = GeoOutput::decode(output.value.as_slice())?;
-        let cache = &self.cache;
+        let cache = &self.ipfs_cache;
         let edits = Arc::new(Mutex::new(Vec::<PreprocessedEdit>::new()));
 
         let mut handles = Vec::new();
@@ -135,7 +143,13 @@ impl PreprocessedSink<KgData> for KgIndexer {
         // of each event.
         //
         // async fn process_block(&self, block_data: &DecodedBlockData, _raw_block_data: &BlockScopedData);
-        root_handler::run(decoded_data.edits, &block_metadata, &self.storage).await?;
+        root_handler::run(
+            decoded_data.edits,
+            &block_metadata,
+            &self.storage,
+            &self.properties_cache,
+        )
+        .await?;
 
         Ok(())
     }
@@ -151,7 +165,8 @@ async fn main() -> Result<(), IndexingError> {
     match storage {
         Ok(result) => {
             let cache = PostgresCache::new().await?;
-            let indexer = KgIndexer::new(result, cache);
+            let properties_cache = PropertiesCache::new();
+            let indexer = KgIndexer::new(result, cache, properties_cache);
 
             let endpoint_url =
                 env::var("SUBSTREAMS_ENDPOINT").expect("SUBSTREAMS_ENDPOINT not set");

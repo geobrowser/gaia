@@ -23,7 +23,7 @@ pub const VALID_DATA_TYPE_VALUES: &[&str] = &[
 ];
 
 /// Type-safe representation of data types
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Copy)]
 pub enum DataType {
     Text,
     Number,
@@ -61,7 +61,7 @@ impl AsRef<str> for DataType {
 
 impl std::convert::TryFrom<&str> for DataType {
     type Error = String;
-    
+
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         match value {
             DATA_TYPE_TEXT => Ok(DataType::Text),
@@ -114,8 +114,8 @@ impl DataType {
 /// Represents a property with its ID and type information
 #[derive(Clone, Debug)]
 pub struct PropertyItem {
-    pub id: String,
-    pub value: DataType,
+    pub id: Uuid,
+    pub data_type: DataType,
 }
 
 pub struct PropertiesModel;
@@ -131,12 +131,12 @@ impl PropertiesModel {
 
                     match property_id_bytes {
                         Ok(property_id_bytes) => {
-                            let property_id = Uuid::from_bytes(property_id_bytes).to_string();
+                            let property_id = Uuid::from_bytes(property_id_bytes);
 
                             if let Some(property_type) = native_type_to_data_type(property.r#type) {
                                 properties.push(PropertyItem {
                                     id: property_id,
-                                    value: property_type,
+                                    data_type: property_type,
                                 });
                             }
                         }

@@ -1,5 +1,5 @@
 use md5::{Digest, Md5};
-use uuid::Builder;
+use uuid::{Builder, Uuid};
 
 use crate::checksum_address;
 
@@ -12,8 +12,12 @@ pub fn create_id_from_unique_string(text: impl Into<String>) -> String {
     encode_uuid_to_base58(&uuid.to_string())
 }
 
-pub fn derive_space_id(network: &str, dao_address: &str) -> String {
-    return create_id_from_unique_string(format!("{}:{}", network, checksum_address(dao_address)));
+pub fn derive_space_id(network: &str, dao_address: &str) -> Uuid {
+    let mut hasher = Md5::new();
+    hasher.update(format!("{}:{}", network, checksum_address(dao_address)));
+    let hashed: [u8; 16] = hasher.finalize().into();
+
+    Builder::from_random_bytes(hashed).into_uuid()
 }
 
 const BASE58_ALLOWED_CHARS: &[u8] = b"123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz";

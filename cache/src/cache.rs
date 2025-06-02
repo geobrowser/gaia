@@ -1,7 +1,8 @@
 use std::env;
 
 use grc20::pb::grc20::Edit;
-use sqlx::{postgres::PgPoolOptions, Executor, Postgres};
+use sqlx::{postgres::PgPoolOptions, Postgres};
+use uuid::Uuid;
 
 use thiserror::Error;
 
@@ -37,16 +38,16 @@ impl Storage {
     pub async fn insert(&self, item: &CacheItem) -> Result<(), CacheError> {
         let json_string = serde_json::to_value(&item.json)?;
 
-        let query = sqlx::query!(
-            "INSERT INTO ipfs_cache (uri, json, block, space, is_errored) VALUES ($1, $2, $3, $4, $5)",
-            item.uri,
-            json_string,
-            item.block,
-            item.space,
-            item.is_errored
-        );
-
-        self.connection.execute(query).await?;
+        sqlx::query(
+            "INSERT INTO ipfs_cache (uri, json, block, space, is_errored) VALUES ($1, $2, $3, $4, $5)"
+        )
+        .bind(&item.uri)
+        .bind(&json_string)
+        .bind(&item.block)
+        .bind(&item.space)
+        .bind(&item.is_errored)
+        .execute(&self.connection)
+        .await?;
 
         Ok(())
     }
@@ -71,7 +72,7 @@ pub struct CacheItem {
     pub uri: String,
     pub json: Option<Edit>,
     pub block: String,
-    pub space: String,
+    pub space: Uuid,
     pub is_errored: bool,
 }
 

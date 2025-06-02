@@ -1,9 +1,11 @@
 use std::env;
 
 use grc20::pb::grc20::Edit;
-use sqlx::{postgres::PgPoolOptions, Postgres};
+use sqlx::{postgres::PgPoolOptions, Postgres, Row};
+use uuid::Uuid;
 
 use super::{CacheBackend, CacheError, PreprocessedEdit};
+
 
 pub struct PostgresCache {
     pool: sqlx::Pool<Postgres>,
@@ -27,28 +29,30 @@ impl PostgresCache {
 #[async_trait::async_trait]
 impl CacheBackend for PostgresCache {
     async fn get(&self, uri: &String) -> Result<PreprocessedEdit, CacheError> {
-        let query = sqlx::query!(
-            "SELECT json, is_errored, space FROM ipfs_cache WHERE uri = $1",
-            uri
-        )
-        .fetch_one(&self.pool)
-        .await?;
+        let row = sqlx::query("SELECT json, is_errored, space FROM ipfs_cache WHERE uri = $1")
+            .bind(uri)
+            .fetch_one(&self.pool)
+            .await?;
 
-        if query.is_errored {
+        let is_errored: bool = row.get("is_errored");
+        let space: Uuid = row.get("space");
+
+        if is_errored {
             return Ok(PreprocessedEdit {
                 edit: None,
                 is_errored: true,
-                space_id: query.space,
+                space_id: space,
             });
         }
 
-        let json = query.json.unwrap();
+        let json: Option<serde_json::Value> = row.get("json");
+        let json = json.unwrap();
         let edit = serde_json::from_value::<Edit>(json)?;
 
         Ok(PreprocessedEdit {
             edit: Some(edit),
             is_errored: false,
-            space_id: query.space,
+            space_id: space,
         })
     }
 }

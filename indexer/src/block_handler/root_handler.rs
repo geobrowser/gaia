@@ -3,19 +3,22 @@ use std::sync::Arc;
 use futures::future::join_all;
 use stream::utils::BlockMetadata;
 
+use crate::cache::properties_cache::ImmutableCache;
 use crate::models::properties::PropertiesModel;
 use crate::models::relations::RelationsModel;
 use crate::models::{entities::EntitiesModel, values::ValuesModel};
 use crate::storage::StorageBackend;
 use crate::{cache::PreprocessedEdit, error::IndexingError};
 
-pub async fn run<S>(
+pub async fn run<S, C>(
     output: Vec<PreprocessedEdit>,
     block_metadata: &BlockMetadata,
     storage: &Arc<S>,
+    properties_cache: &Arc<C>,
 ) -> Result<(), IndexingError>
 where
-    S: StorageBackend + 'static,
+    S: StorageBackend + Send + Sync + 'static,
+    C: ImmutableCache + Send + Sync + 'static,
 {
     println!(
         "Block #{} – Drift {}s – Edits Published {}",
@@ -31,6 +34,7 @@ where
         let handle = tokio::spawn({
             let preprocessed_edit = preprocessed_edit.clone();
             let storage = storage.clone();
+            let cache = properties_cache.clone();
             let block = block.clone();
 
             let mut handles = Vec::new();
@@ -49,8 +53,23 @@ where
                     // be up-to-date.
                     let properties = PropertiesModel::map_edit_to_properties(&edit);
 
+                    // For now we write properties to an in-memory cache that we reference
+                    // when validating values in the edit. There's a weird mismatch between
+                    // where properties data lives. We store properties on disk in order
+                    // to be able to query properties. We need to do this in "real-time" as
+                    // our external API depends on being able to query for properties when
+                    // querying for values.
+                    //
+                    // This does mean we write properties in two places, one for the cache,
+                    // and one for the queryable store. Eventually I think we want to move
+                    // to in-memory for _all_ data stores with a disk-based commit log, but
+                    // for now we'll write properties twice.
+                    for property in &properties {
+                        cache.insert(&property.id, property.data_type.clone()).await;
+                    }
+
                     if let Err(error) = storage.insert_properties(&properties).await {
-                        eprintln!("Error writing properties: {}", error);
+                        println!("Error writing properties: {}", error);
                     }
 
                     {

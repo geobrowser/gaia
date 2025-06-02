@@ -6,22 +6,35 @@ use stream::utils::BlockMetadata;
 
 use dotenv::dotenv;
 use indexer::{
-    block_handler::root_handler, cache::PreprocessedEdit, error::IndexingError,
-    storage::postgres::PostgresStorage, KgData,
+    block_handler::root_handler,
+    cache::{properties_cache::PropertiesCache, PreprocessedEdit},
+    error::IndexingError,
+    storage::postgres::PostgresStorage,
+    KgData,
 };
 
 struct TestIndexer {
     storage: Arc<PostgresStorage>,
+    properties_cache: Arc<PropertiesCache>,
 }
 
 impl TestIndexer {
-    pub fn new(storage: Arc<PostgresStorage>) -> Self {
-        TestIndexer { storage }
+    pub fn new(storage: Arc<PostgresStorage>, properties_cache: Arc<PropertiesCache>) -> Self {
+        TestIndexer {
+            storage,
+            properties_cache,
+        }
     }
 
     pub async fn run(&self, blocks: &Vec<KgData>) -> Result<(), IndexingError> {
         for block in blocks {
-            root_handler::run(block.edits.clone(), &block.block, &self.storage).await?;
+            root_handler::run(
+                block.edits.clone(),
+                &block.block,
+                &self.storage,
+                &self.properties_cache,
+            )
+            .await?;
         }
 
         Ok(())
@@ -33,6 +46,7 @@ async fn main() -> Result<(), IndexingError> {
     dotenv().ok();
     let database_url = env::var("DATABASE_URL").expect("DATABASE_URL not set");
     let storage = Arc::new(PostgresStorage::new(&database_url).await?);
+    let properties_cache = Arc::new(PropertiesCache::new());
 
     let root_space_bytes = fs::read("./tests/25omwWh6HYgeRQKCaSpVpa_ops");
     let crypto_space_bytes = fs::read("./tests/SgjATMbm41LX6naizMqBVd_ops");
@@ -58,7 +72,7 @@ async fn main() -> Result<(), IndexingError> {
         timestamp: String::from("5"),
     };
 
-    let indexer = TestIndexer::new(storage.clone());
+    let indexer = TestIndexer::new(storage.clone(), properties_cache.clone());
 
     indexer
         .run(&vec![KgData {
