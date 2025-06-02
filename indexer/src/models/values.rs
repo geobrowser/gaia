@@ -17,7 +17,7 @@ pub struct ValueOp {
     pub change_type: ValueChangeType,
     pub entity_id: Uuid,
     pub property_id: Uuid,
-    pub space_id: String,
+    pub space_id: Uuid,
     pub value: Option<String>,
     pub language: Option<String>,
     pub unit: Option<String>,
@@ -26,7 +26,7 @@ pub struct ValueOp {
 pub struct ValuesModel;
 
 impl ValuesModel {
-    pub fn map_edit_to_values(edit: &Edit, space_id: &String) -> (Vec<ValueOp>, Vec<Uuid>) {
+    pub fn map_edit_to_values(edit: &Edit, space_id: &Uuid) -> (Vec<ValueOp>, Vec<Uuid>) {
         let mut triple_ops: Vec<ValueOp> = Vec::new();
 
         for op in &edit.ops {
@@ -63,7 +63,7 @@ fn squash_values(triple_ops: &Vec<ValueOp>) -> Vec<ValueOp> {
     return result;
 }
 
-fn derive_value_id(entity_id: &Uuid, property_id: &Uuid, space_id: &String) -> Uuid {
+fn derive_value_id(entity_id: &Uuid, property_id: &Uuid, space_id: &Uuid) -> Uuid {
     let mut hasher = DefaultHasher::new();
     entity_id.hash(&mut hasher);
     property_id.hash(&mut hasher);
@@ -78,7 +78,7 @@ fn derive_value_id(entity_id: &Uuid, property_id: &Uuid, space_id: &String) -> U
     Uuid::from_bytes(bytes)
 }
 
-fn value_op_from_op(op: &Op, space_id: &String) -> Vec<ValueOp> {
+fn value_op_from_op(op: &Op, space_id: &Uuid) -> Vec<ValueOp> {
     let mut values = Vec::new();
 
     if let Some(payload) = &op.payload {

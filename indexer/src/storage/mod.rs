@@ -1,4 +1,5 @@
 use async_trait::async_trait;
+use uuid::Uuid;
 
 pub mod postgres;
 
@@ -23,8 +24,8 @@ pub trait StorageBackend: Send + Sync {
     async fn insert_values(&self, properties: &Vec<ValueOp>) -> Result<(), StorageError>;
     async fn delete_values(
         &self,
-        property_ids: &Vec<String>,
-        space_id: &String,
+        property_ids: &Vec<Uuid>,
+        space_id: &Uuid,
     ) -> Result<(), StorageError>;
     async fn insert_relations(&self, relations: &Vec<SetRelationItem>) -> Result<(), StorageError>;
     async fn update_relations(
@@ -37,8 +38,8 @@ pub trait StorageBackend: Send + Sync {
     ) -> Result<(), StorageError>;
     async fn delete_relations(
         &self,
-        relation_ids: &Vec<String>,
-        space_id: &String,
+        relation_ids: &Vec<Uuid>,
+        space_id: &Uuid,
     ) -> Result<(), StorageError>;
     async fn insert_properties(&self, properties: &Vec<PropertyItem>) -> Result<(), StorageError>;
 }

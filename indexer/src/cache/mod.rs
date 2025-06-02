@@ -4,6 +4,7 @@ pub mod properties_cache;
 
 use grc20::pb::grc20::Edit;
 use thiserror::Error;
+use uuid::Uuid;
 
 #[derive(Error, Debug)]
 pub enum CacheError {
@@ -21,7 +22,7 @@ pub enum CacheError {
 pub struct PreprocessedEdit {
     pub edit: Option<Edit>,
     pub is_errored: bool,
-    pub space_id: String,
+    pub space_id: Uuid,
 }
 
 #[async_trait]

@@ -16,7 +16,7 @@ pub struct SetRelationItem {
     pub to_space_id: Option<String>,
     pub to_version_id: Option<String>,
     pub position: Option<String>,
-    pub space_id: String,
+    pub space_id: Uuid,
     pub verified: Option<bool>,
 }
 
@@ -28,7 +28,7 @@ pub struct UpdateRelationItem {
     pub to_space_id: Option<String>,
     pub to_version_id: Option<String>,
     pub position: Option<String>,
-    pub space_id: String,
+    pub space_id: Uuid,
     pub verified: Option<bool>,
 }
 
@@ -40,14 +40,14 @@ pub struct UnsetRelationItem {
     pub to_space_id: Option<bool>,
     pub to_version_id: Option<bool>,
     pub position: Option<bool>,
-    pub space_id: String,
+    pub space_id: Uuid,
     pub verified: Option<bool>,
 }
 
 #[derive(Clone, Debug)]
 pub struct DeleteRelationItem {
     pub id: Uuid,
-    pub space_id: String,
+    pub space_id: Uuid,
 }
 
 #[derive(Clone, Debug)]
@@ -72,7 +72,7 @@ impl RelationItem {
     }
 
     /// Get the space_id field, present in all variants
-    pub fn space_id(&self) -> &str {
+    pub fn space_id(&self) -> &Uuid {
         match self {
             RelationItem::Create(item) => &item.space_id,
             RelationItem::Update(item) => &item.space_id,
@@ -194,7 +194,7 @@ pub struct RelationsModel;
 impl RelationsModel {
     pub fn map_edit_to_relations(
         edit: &Edit,
-        space_id: &String,
+        space_id: &Uuid,
     ) -> (
         Vec<SetRelationItem>,
         Vec<UpdateRelationItem>,
