@@ -6,7 +6,7 @@
     "start": "bun run main.ts",
     "generate": "graphql-codegen --config codegen.yml",
     "test": "vitest",
-    "test:ci": "vitest run --reporter=verbose --coverage",
+    "test:ci": "vitest run --reporter=verbose",
     "db:setup": "bun run scripts/setup-test-db.ts"
   },
   "author": "Byron Guina",
