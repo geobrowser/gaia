@@ -112,7 +112,7 @@ mod tests {
     }
 
     // Helper function to verify a SetRelationItem
-    fn verify_set_relation(item: &SetRelationItem, space_id: &str) {
+    fn verify_set_relation(item: &SetRelationItem, space_id: &Uuid) {
         assert_eq!(item.id, Uuid::parse_str("12345678-1234-4abc-8def-123456789abc").unwrap());
         assert_eq!(item.entity_id, Uuid::parse_str("23456789-1234-4abc-8def-123456789abc").unwrap());
         assert_eq!(item.type_id, Uuid::parse_str("34567890-1234-4abc-8def-123456789abc").unwrap());
@@ -124,11 +124,11 @@ mod tests {
         );
         assert_eq!(item.position, Some("pos1".to_string()));
         assert_eq!(item.verified, Some(true));
-        assert_eq!(item.space_id, space_id);
+        assert_eq!(item.space_id, *space_id);
     }
 
     // Helper function to verify an UpdateRelationItem
-    fn verify_update_relation(item: &UpdateRelationItem, space_id: &str) {
+    fn verify_update_relation(item: &UpdateRelationItem, space_id: &Uuid) {
         assert_eq!(item.id, Uuid::parse_str("12345678-1234-4abc-8def-123456789abc").unwrap());
         assert_eq!(
             item.from_space_id,
@@ -140,14 +140,13 @@ mod tests {
         );
         assert_eq!(item.position, Some("new_pos".to_string()));
         assert_eq!(item.verified, Some(false));
-        assert_eq!(item.space_id, space_id);
+        assert_eq!(item.space_id, *space_id);
     }
 
     #[test]
     fn test_map_edit_to_relations_create() {
         let edit = create_edit_with_create_relation();
-        let space_id = "space123".to_string();
-
+        let space_id = Uuid::parse_str("87654321-4321-4321-4321-876543210987").unwrap();
         let (set_relations, update_relations, unset_relations, deleted_relations) =
             RelationsModel::map_edit_to_relations(&edit, &space_id);
 
@@ -162,7 +161,7 @@ mod tests {
     #[test]
     fn test_map_edit_to_relations_update() {
         let edit = create_edit_with_update_relation();
-        let space_id = "space123".to_string();
+        let space_id = Uuid::parse_str("87654321-4321-4321-4321-876543210987").unwrap();
 
         let (set_relations, update_relations, unset_relations, deleted_relations) =
             RelationsModel::map_edit_to_relations(&edit, &space_id);
@@ -178,7 +177,7 @@ mod tests {
     #[test]
     fn test_map_edit_to_relations_delete() {
         let edit = create_edit_with_delete_relation();
-        let space_id = "space123".to_string();
+        let space_id = Uuid::parse_str("87654321-4321-4321-4321-876543210987").unwrap();
 
         let (set_relations, update_relations, unset_relations, deleted_relations) =
             RelationsModel::map_edit_to_relations(&edit, &space_id);
@@ -193,7 +192,7 @@ mod tests {
     #[test]
     fn test_map_edit_to_relations_unset() {
         let edit = create_edit_with_unset_relation();
-        let space_id = "space123".to_string();
+        let space_id = Uuid::parse_str("87654321-4321-4321-4321-876543210987").unwrap();
 
         let (set_relations, update_relations, unset_relations, deleted_relations) =
             RelationsModel::map_edit_to_relations(&edit, &space_id);
@@ -251,7 +250,7 @@ mod tests {
             language: Some(bytes("90123456-1234-4abc-8def-123456789abc")),
         };
 
-        let space_id = "space123".to_string();
+        let space_id = Uuid::parse_str("87654321-4321-4321-4321-876543210987").unwrap();
         let (set_relations, update_relations, unset_relations, deleted_relations) =
             RelationsModel::map_edit_to_relations(&edit, &space_id);
 
@@ -319,7 +318,7 @@ mod tests {
             language: Some(bytes("90123456-1234-4abc-8def-123456789abc")),
         };
 
-        let space_id = "space123".to_string();
+        let space_id = Uuid::parse_str("87654321-4321-4321-4321-876543210987").unwrap();
         let (set_relations, update_relations, unset_relations, deleted_relations) =
             RelationsModel::map_edit_to_relations(&edit, &space_id);
 
@@ -385,7 +384,7 @@ mod tests {
             language: Some(bytes("90123456-1234-4abc-8def-123456789abc")),
         };
 
-        let space_id = "space123".to_string();
+        let space_id = Uuid::parse_str("87654321-4321-4321-4321-876543210987").unwrap();
         let (set_relations, update_relations, unset_relations, deleted_relations) =
             RelationsModel::map_edit_to_relations(&edit, &space_id);
 
@@ -430,7 +429,7 @@ mod tests {
             language: Some(bytes("90123456-1234-4abc-8def-123456789abc")),
         };
 
-        let space_id = "space123".to_string();
+        let space_id = Uuid::parse_str("87654321-4321-4321-4321-876543210987").unwrap();
         let (set_relations, update_relations, unset_relations, deleted_relations) =
             RelationsModel::map_edit_to_relations(&edit, &space_id);
 
@@ -495,7 +494,7 @@ mod tests {
             language: Some(bytes("90123456-1234-4abc-8def-123456789abc")),
         };
 
-        let space_id = "space123".to_string();
+        let space_id = Uuid::parse_str("87654321-4321-4321-4321-876543210987").unwrap();
         let (set_relations, update_relations, unset_relations, deleted_relations) =
             RelationsModel::map_edit_to_relations(&edit, &space_id);
 
@@ -552,7 +551,7 @@ mod tests {
             language: Some(bytes("90123456-1234-4abc-8def-123456789abc")),
         };
 
-        let space_id = "space123".to_string();
+        let space_id = Uuid::parse_str("87654321-4321-4321-4321-876543210987").unwrap();
         let (set_relations, update_relations, unset_relations, deleted_relations) =
             RelationsModel::map_edit_to_relations(&edit, &space_id);
 
@@ -597,7 +596,7 @@ mod tests {
             language: Some(bytes("90123456-1234-4abc-8def-123456789abc")),
         };
 
-        let space_id = "space123".to_string();
+        let space_id = Uuid::parse_str("87654321-4321-4321-4321-876543210987").unwrap();
         let (set_relations, update_relations, unset_relations, deleted_relations) =
             RelationsModel::map_edit_to_relations(&edit, &space_id);
 
@@ -652,7 +651,7 @@ mod tests {
             language: Some(bytes("90123456-1234-4abc-8def-123456789abc")),
         };
 
-        let space_id = "space123".to_string();
+        let space_id = Uuid::parse_str("87654321-4321-4321-4321-876543210987").unwrap();
         let (set_relations, update_relations, unset_relations, deleted_relations) =
             RelationsModel::map_edit_to_relations(&edit, &space_id);
 
@@ -706,7 +705,7 @@ mod tests {
             language: Some(bytes("90123456-1234-4abc-8def-123456789abc")),
         };
 
-        let space_id = "space123".to_string();
+        let space_id = Uuid::parse_str("87654321-4321-4321-4321-876543210987").unwrap();
         let (set_relations, update_relations, unset_relations, deleted_relations) =
             RelationsModel::map_edit_to_relations(&edit, &space_id);
 
@@ -753,7 +752,7 @@ mod tests {
             language: Some(bytes("90123456-1234-4abc-8def-123456789abc")),
         };
 
-        let space_id = "space123".to_string();
+        let space_id = Uuid::parse_str("87654321-4321-4321-4321-876543210987").unwrap();
         let (set_relations, update_relations, unset_relations, deleted_relations) =
             RelationsModel::map_edit_to_relations(&edit, &space_id);
 
@@ -802,7 +801,7 @@ mod tests {
             language: Some(bytes("90123456-1234-4abc-8def-123456789abc")),
         };
 
-        let space_id = "space123".to_string();
+        let space_id = Uuid::parse_str("87654321-4321-4321-4321-876543210987").unwrap();
         let (set_relations, update_relations, unset_relations, deleted_relations) =
             RelationsModel::map_edit_to_relations(&edit, &space_id);
 
@@ -893,7 +892,7 @@ mod tests {
 
         edit.ops = vec![create_op, update_op, delete_op, create_again_op];
 
-        let space_id = "space123".to_string();
+        let space_id = Uuid::parse_str("87654321-4321-4321-4321-876543210987").unwrap();
         let (set_relations, update_relations, unset_relations, deleted_relations) =
             RelationsModel::map_edit_to_relations(&edit, &space_id);
 
@@ -992,7 +991,7 @@ mod tests {
 
         edit.ops = vec![create_op1, create_op2, update_op, delete_op];
 
-        let space_id = "space123".to_string();
+        let space_id = Uuid::parse_str("87654321-4321-4321-4321-876543210987").unwrap();
         let (set_relations, update_relations, unset_relations, deleted_relations) =
             RelationsModel::map_edit_to_relations(&edit, &space_id);
 
@@ -1079,7 +1078,7 @@ mod tests {
 
         edit.ops = vec![create_op1, create_op2, create_op3];
 
-        let space_id = "space123".to_string();
+        let space_id = Uuid::parse_str("87654321-4321-4321-4321-876543210987").unwrap();
         let (set_relations, update_relations, unset_relations, deleted_relations) =
             RelationsModel::map_edit_to_relations(&edit, &space_id);
 
@@ -1098,7 +1097,7 @@ mod tests {
         assert_eq!(rel1.to_id, Uuid::parse_str("to000001-1234-4abc-8def-123456789abc").unwrap());
         assert_eq!(rel1.position, Some("position1".to_string()));
         assert_eq!(rel1.verified, Some(true));
-        assert_eq!(rel1.space_id, "space123");
+        assert_eq!(rel1.space_id, space_id);
 
         // Verify relation 2
         let rel2 = &set_relations[1];
@@ -1109,7 +1108,7 @@ mod tests {
         assert_eq!(rel2.to_id, Uuid::parse_str("to000002-1234-4abc-8def-123456789abc").unwrap());
         assert_eq!(rel2.position, Some("position2".to_string()));
         assert_eq!(rel2.verified, Some(false));
-        assert_eq!(rel2.space_id, "space123");
+        assert_eq!(rel2.space_id, space_id);
 
         // Verify relation 3
         let rel3 = &set_relations[2];
@@ -1120,6 +1119,6 @@ mod tests {
         assert_eq!(rel3.to_id, Uuid::parse_str("to000003-1234-4abc-8def-123456789abc").unwrap());
         assert_eq!(rel3.position, None);
         assert_eq!(rel3.verified, None);
-        assert_eq!(rel3.space_id, "space123");
+        assert_eq!(rel3.space_id, space_id);
     }
 }
