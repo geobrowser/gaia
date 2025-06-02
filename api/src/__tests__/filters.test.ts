@@ -732,10 +732,7 @@ describe("Entity Filters Integration Tests", () => {
 			const positiveResult = await Effect.runPromise(getEntities({filter: positiveFilter}).pipe(provideDeps))
 
 			const positiveTestResults = filterToTestEntities(positiveResult)
-			console.log(
-				"Entities that contain 'Hello':",
-				positiveTestResults.map((r) => ({id: r.id, name: r.name})),
-			)
+
 			expect(positiveTestResults).toHaveLength(2) // Should be entities 1 and 2
 
 			// Now test the complex NOT filter
@@ -752,13 +749,7 @@ describe("Entity Filters Integration Tests", () => {
 
 			const notResult = await Effect.runPromise(getEntities({filter: notFilter}).pipe(provideDeps))
 
-			console.log("Total entities returned by NOT filter:", notResult.length)
-
 			const notTestResults = filterToTestEntities(notResult)
-			console.log(
-				"Test entities in NOT result:",
-				notTestResults.map((r) => ({id: r.id, name: r.name})),
-			)
 
 			// The NOT filter should return entities that do NOT have a value containing "Hello"
 			// This should include Entity 3, and exclude entities 1 and 2
@@ -781,10 +772,6 @@ describe("Entity Filters Integration Tests", () => {
 			)
 
 			const specificNotTestResults = filterToTestEntities(specificNotResult)
-			console.log(
-				"Test entities with property-level NOT:",
-				specificNotTestResults.map((r) => ({id: r.id, name: r.name})),
-			)
 
 			// This test is just for debugging, so let's just ensure we get some insights
 			expect(positiveTestResults).toHaveLength(2)
