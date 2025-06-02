@@ -54,6 +54,67 @@ export type EntityFilter = {
 	toRelation?: RelationFilter
 }
 
+function buildValueConditions(filter: PropertyFilter) {
+	const conditions = []
+
+	if (filter.text) {
+		const f = filter.text
+		if (f.is !== undefined) conditions.push(sql`values.value = ${f.is}`)
+		if (f.contains !== undefined) conditions.push(sql`values.value LIKE ${`%${f.contains}%`}`)
+		if (f.startsWith !== undefined) conditions.push(sql`values.value LIKE ${`${f.startsWith}%`}`)
+		if (f.endsWith !== undefined) conditions.push(sql`values.value LIKE ${`%${f.endsWith}`}`)
+		if (f.exists !== undefined) {
+			conditions.push(f.exists ? sql`values.value IS NOT NULL` : sql`values.value IS NULL`)
+		}
+	}
+
+	if (filter.number) {
+		const f = filter.number
+		// Use CASE to safely cast, returning NULL for non-numeric values
+		const safeCasted = sql`CASE
+        WHEN values.value ~ '^-?([0-9]+\.?[0-9]*|\.[0-9]+)([eE][-+]?[0-9]+)?$'
+
+        THEN values.value::numeric
+        ELSE NULL
+    END`
+
+		if (f.is !== undefined) conditions.push(sql`${safeCasted} = ${f.is}`)
+		if (f.lessThan !== undefined) conditions.push(sql`${safeCasted} < ${f.lessThan}`)
+		if (f.lessThanOrEqual !== undefined) conditions.push(sql`${safeCasted} <= ${f.lessThanOrEqual}`)
+		if (f.greaterThan !== undefined) conditions.push(sql`${safeCasted} > ${f.greaterThan}`)
+		if (f.greaterThanOrEqual !== undefined) conditions.push(sql`${safeCasted} >= ${f.greaterThanOrEqual}`)
+
+		if (f.exists !== undefined) {
+			// For exists, check if the value exists AND is numeric
+			const isNumeric = sql`values.value ~ '^-?([0-9]+\.?[0-9]*|\.[0-9]+)([eE][-+]?[0-9]+)?$'`
+
+			if (f.exists) {
+				conditions.push(sql`(values.value IS NOT NULL AND ${isNumeric})`)
+			} else {
+				conditions.push(sql`(values.value IS NULL OR NOT ${isNumeric})`)
+			}
+		}
+	}
+
+	if (filter.checkbox) {
+		const f = filter.checkbox
+		if (f.is !== undefined) conditions.push(sql`values.value = ${f.is.toString()}`)
+		if (f.exists !== undefined) {
+			conditions.push(f.exists ? sql`values.value IS NOT NULL` : sql`values.value IS NULL`)
+		}
+	}
+
+	if (filter.point) {
+		const f = filter.point
+		if (f.is !== undefined) conditions.push(sql`values.value = ${JSON.stringify(f.is)}`)
+		if (f.exists !== undefined) {
+			conditions.push(f.exists ? sql`values.value IS NOT NULL` : sql`values.value IS NULL`)
+		}
+	}
+
+	return conditions
+}
+
 function buildValueWhere(filter: PropertyFilter) {
 	const conditions = [sql`values.property_id = ${filter.property}`]
 
@@ -67,9 +128,9 @@ function buildValueWhere(filter: PropertyFilter) {
 			conditions.push(f.exists ? sql`values.value IS NOT NULL` : sql`values.value IS NULL`)
 		}
 		if (f.NOT) {
-			const notCondition = buildValueWhere({property: filter.property, text: f.NOT})
-			if (notCondition) {
-				conditions.push(not(notCondition))
+			const notConditions = buildValueConditions({property: filter.property, text: f.NOT})
+			if (notConditions.length > 0) {
+				conditions.push(not(sql.join(notConditions, sql` AND `)))
 			}
 		}
 	}
@@ -102,9 +163,9 @@ function buildValueWhere(filter: PropertyFilter) {
 		}
 
 		if (f.NOT) {
-			const notCondition = buildValueWhere({property: filter.property, number: f.NOT})
-			if (notCondition) {
-				conditions.push(not(notCondition))
+			const notConditions = buildValueConditions({property: filter.property, number: f.NOT})
+			if (notConditions.length > 0) {
+				conditions.push(not(sql.join(notConditions, sql` AND `)))
 			}
 		}
 	}

@@ -7,11 +7,13 @@
         "@graphprotocol/grc-20": "^0.15.0",
         "@graphql-tools/schema": "^10.0.23",
         "@pothos/core": "^4.6.2",
+        "@types/uuid": "^10.0.0",
         "drizzle-orm": "^0.42.0",
         "effect": "^3.15.0",
         "graphql": "^16.11.0",
         "graphql-yoga": "^5.13.4",
         "pg": "^8.16.0",
+        "uuid": "^11.1.0",
       },
       "devDependencies": {
         "@biomejs/biome": "1.4.1",
@@ -419,6 +421,8 @@
     "@types/pg": ["@types/pg@8.15.2", "", { "dependencies": { "@types/node": "*", "pg-protocol": "*", "pg-types": "^4.0.1" } }, "sha512-+BKxo5mM6+/A1soSHBI7ufUglqYXntChLDyTbvcAn1Lawi9J7J9Ok3jt6w7I0+T/UDJ4CyhHk66+GZbwmkYxSg=="],
 
     "@types/seedrandom": ["@types/seedrandom@2.4.34", "", {}, "sha512-ytDiArvrn/3Xk6/vtylys5tlY6eo7Ane0hvcx++TKo6RxQXuVfW0AF/oeWqAj9dN29SyhtawuXstgmPlwNcv/A=="],
+
+    "@types/uuid": ["@types/uuid@10.0.0", "", {}, "sha512-7gqG38EyHgyP1S+7+xomFtL+ZNHcKv6DwNaCZmJmo1vgMugyF3TCnXVg4t1uk89mLNwnLtnY3TpOpCOyp1/xHQ=="],
 
     "@types/ws": ["@types/ws@8.18.1", "", { "dependencies": { "@types/node": "*" } }, "sha512-ThVF6DCVhA8kUGy+aazFQ4kXQ7E1Ty7A3ypFOe0IcJV8O/M511G99AW24irKrW56Wt44yG9+ij8FaqoBGkuBXg=="],
 
