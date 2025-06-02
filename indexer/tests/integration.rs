@@ -1,7 +1,7 @@
 use grc20::pb::grc20::{
     op::Payload, Edit, Entity, NativeTypes, Op, Property, Relation, UnsetEntityValues, Value,
 };
-use std::{env, sync::Arc};
+use std::{collections::hash_map::DefaultHasher, env, hash::{Hash, Hasher}, sync::Arc};
 use stream::utils::BlockMetadata;
 use uuid::Uuid;
 
@@ -10,6 +10,7 @@ use indexer::{
     block_handler::root_handler,
     cache::{properties_cache::PropertiesCache, PreprocessedEdit},
     error::IndexingError,
+    models::properties::DataType,
     storage::postgres::PostgresStorage,
     KgData,
 };
@@ -51,7 +52,7 @@ async fn main() -> Result<(), IndexingError> {
     let storage = Arc::new(PostgresStorage::new(&database_url).await?);
 
     let item = PreprocessedEdit {
-        space_id: String::from("5"),
+        space_id: Uuid::parse_str("550e8400-e29b-41d4-a716-446655440007").unwrap(),
         edit: Some(make_edit(
             "f47ac10b-58cc-4372-a567-0e02b2c3d479",
             "Name",
@@ -119,8 +120,8 @@ async fn main() -> Result<(), IndexingError> {
                     "550e8400-e29b-41d4-a716-446655440003",
                     "550e8400-e29b-41d4-a716-446655440004",
                 ),
-                make_property_op("9ba7b810-9dad-11d1-80b4-00c04fd430c1", NativeTypes::Text),
-                make_property_op("9ba7b810-9dad-11d1-80b4-00c04fd430c2", NativeTypes::Number),
+                make_property_op("6ba7b810-9dad-11d1-80b4-00c04fd430c1", NativeTypes::Text),
+                make_property_op("6ba7b810-9dad-11d1-80b4-00c04fd430c2", NativeTypes::Number),
             ],
         )),
         is_errored: false,
@@ -147,7 +148,7 @@ async fn main() -> Result<(), IndexingError> {
             .get_entity(&"550e8400-e29b-41d4-a716-446655440001".to_string())
             .await
             .unwrap();
-        assert_eq!(entity.id, "550e8400-e29b-41d4-a716-446655440001");
+        assert_eq!(entity.id, Uuid::parse_str("550e8400-e29b-41d4-a716-446655440001").unwrap());
     }
 
     {
@@ -155,37 +156,32 @@ async fn main() -> Result<(), IndexingError> {
             .get_entity(&"550e8400-e29b-41d4-a716-446655440002".to_string())
             .await
             .unwrap();
-        assert_eq!(entity.id, "550e8400-e29b-41d4-a716-446655440002");
+        assert_eq!(entity.id, Uuid::parse_str("550e8400-e29b-41d4-a716-446655440002").unwrap());
     }
 
+
+
     {
-        let attribute = storage
-            .get_entity(&"6ba7b810-9dad-11d1-80b4-00c04fd430c2".to_string())
+        let entity_id = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440001").unwrap();
+        let property_id = Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c2").unwrap();
+        let space_id = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440007").unwrap();
+        let expected_value_id = derive_value_id(&entity_id, &property_id, &space_id);
+        
+        let value = storage
+            .get_value(&expected_value_id.to_string())
             .await
             .unwrap();
-        assert_eq!(attribute.id, "6ba7b810-9dad-11d1-80b4-00c04fd430c2");
+        assert_eq!(value.id, expected_value_id);
     }
 
     {
+        let entity_id = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440002").unwrap();
+        let property_id = Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c2").unwrap();
+        let space_id = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440007").unwrap();
+        let expected_value_id = derive_value_id(&entity_id, &property_id, &space_id);
+        
         let value = storage
-            .get_value(
-                &"550e8400-e29b-41d4-a716-446655440001:6ba7b810-9dad-11d1-80b4-00c04fd430c2:5"
-                    .to_string(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(
-            value.id,
-            "550e8400-e29b-41d4-a716-446655440001:6ba7b810-9dad-11d1-80b4-00c04fd430c2:5"
-        );
-    }
-
-    {
-        let value = storage
-            .get_value(
-                &"550e8400-e29b-41d4-a716-446655440002:6ba7b810-9dad-11d1-80b4-00c04fd430c2:5"
-                    .to_string(),
-            )
+            .get_value(&expected_value_id.to_string())
             .await;
 
         // Should not return the value since it was deleted
@@ -193,19 +189,19 @@ async fn main() -> Result<(), IndexingError> {
     }
 
     {
-        let value = storage
+        let relation = storage
             .get_relation(&"7ba7b810-9dad-11d1-80b4-00c04fd430c1".to_string())
             .await
             .unwrap();
 
-        assert_eq!(value.id, "7ba7b810-9dad-11d1-80b4-00c04fd430c1");
-        assert_eq!(value.space_id, "5".to_string());
-        assert_eq!(value.entity_id, "550e8400-e29b-41d4-a716-446655440001");
-        assert_eq!(value.from_id, "550e8400-e29b-41d4-a716-446655440003");
-        assert_eq!(value.to_id, "550e8400-e29b-41d4-a716-446655440004");
+        assert_eq!(relation.id, Uuid::parse_str("7ba7b810-9dad-11d1-80b4-00c04fd430c1").unwrap());
+        assert_eq!(relation.space_id, Uuid::parse_str("550e8400-e29b-41d4-a716-446655440007").unwrap());
+        assert_eq!(relation.entity_id, Uuid::parse_str("550e8400-e29b-41d4-a716-446655440001").unwrap());
+        assert_eq!(relation.from_id, Uuid::parse_str("550e8400-e29b-41d4-a716-446655440003").unwrap());
+        assert_eq!(relation.to_id, Uuid::parse_str("550e8400-e29b-41d4-a716-446655440004").unwrap());
 
         // Update in edit sets verified to Some(true)
-        assert_eq!(value.verified, Some(true));
+        assert_eq!(relation.verified, Some(true));
     }
 
     {
@@ -219,23 +215,38 @@ async fn main() -> Result<(), IndexingError> {
     // Test property creation
     {
         let property = storage
-            .get_property(&"9ba7b810-9dad-11d1-80b4-00c04fd430c1".to_string())
+            .get_property(&"6ba7b810-9dad-11d1-80b4-00c04fd430c1".to_string())
             .await
             .unwrap();
-        assert_eq!(property.id, "9ba7b810-9dad-11d1-80b4-00c04fd430c1");
-        assert_eq!(property.data_type, "Text");
+        assert_eq!(property.id, Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c1").unwrap());
+        assert_eq!(property.data_type, DataType::Text);
     }
 
     {
         let property = storage
-            .get_property(&"9ba7b810-9dad-11d1-80b4-00c04fd430c2".to_string())
+            .get_property(&"6ba7b810-9dad-11d1-80b4-00c04fd430c2".to_string())
             .await
             .unwrap();
-        assert_eq!(property.id, "9ba7b810-9dad-11d1-80b4-00c04fd430c2");
-        assert_eq!(property.data_type, "Number");
+        assert_eq!(property.id, Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c2").unwrap());
+        assert_eq!(property.data_type, DataType::Number);
     }
 
     Ok(())
+}
+
+fn derive_value_id(entity_id: &Uuid, property_id: &Uuid, space_id: &Uuid) -> Uuid {
+    let mut hasher = DefaultHasher::new();
+    entity_id.hash(&mut hasher);
+    property_id.hash(&mut hasher);
+    space_id.hash(&mut hasher);
+    let hash_value = hasher.finish();
+
+    // Create a deterministic UUID from the hash
+    let mut bytes = [0u8; 16];
+    bytes[0..8].copy_from_slice(&hash_value.to_be_bytes());
+    bytes[8..16].copy_from_slice(&hash_value.to_be_bytes());
+
+    Uuid::from_bytes(bytes)
 }
 
 #[tokio::test]
@@ -245,8 +256,8 @@ async fn test_property_no_overwrite() -> Result<(), IndexingError> {
     let storage = Arc::new(PostgresStorage::new(&database_url).await?);
 
     // First edit - create property with Text type
-    let first_edit = PreprocessedEdit {
-        space_id: String::from("6"),
+    let item = PreprocessedEdit {
+        space_id: Uuid::parse_str("550e8400-e29b-41d4-a716-446655440005").unwrap(),
         edit: Some(make_edit(
             "f47ac10b-58cc-4372-a567-0e02b2c3d481",
             "First Edit",
@@ -261,7 +272,7 @@ async fn test_property_no_overwrite() -> Result<(), IndexingError> {
 
     // Second edit - attempt to create same property with Number type
     let second_edit = PreprocessedEdit {
-        space_id: String::from("6"),
+        space_id: Uuid::parse_str("550e8400-e29b-41d4-a716-446655440006").unwrap(),
         edit: Some(make_edit(
             "f47ac10b-58cc-4372-a567-0e02b2c3d482",
             "Second Edit",
@@ -287,7 +298,7 @@ async fn test_property_no_overwrite() -> Result<(), IndexingError> {
     indexer
         .run(&vec![KgData {
             block: block.clone(),
-            edits: vec![first_edit],
+            edits: vec![item],
         }])
         .await?;
 
@@ -297,8 +308,8 @@ async fn test_property_no_overwrite() -> Result<(), IndexingError> {
             .get_property(&"aba7b810-9dad-11d1-80b4-00c04fd430c1".to_string())
             .await
             .unwrap();
-        assert_eq!(property.id, "aba7b810-9dad-11d1-80b4-00c04fd430c1");
-        assert_eq!(property.data_type, "Text");
+        assert_eq!(property.id, Uuid::parse_str("aba7b810-9dad-11d1-80b4-00c04fd430c1").unwrap());
+        assert_eq!(property.data_type, DataType::Text);
     }
 
     // Process second edit (should not overwrite)
@@ -315,8 +326,8 @@ async fn test_property_no_overwrite() -> Result<(), IndexingError> {
             .get_property(&"aba7b810-9dad-11d1-80b4-00c04fd430c1".to_string())
             .await
             .unwrap();
-        assert_eq!(property.id, "aba7b810-9dad-11d1-80b4-00c04fd430c1");
-        assert_eq!(property.data_type, "Text"); // Should still be Text, not Number
+        assert_eq!(property.id, Uuid::parse_str("aba7b810-9dad-11d1-80b4-00c04fd430c1").unwrap());
+        assert_eq!(property.data_type, DataType::Text); // Should still be Text, not Number
     }
 
     Ok(())
@@ -330,7 +341,7 @@ async fn test_property_squashing() -> Result<(), IndexingError> {
 
     // Single edit with multiple CreateProperty ops for the same property ID
     let edit_with_duplicate_properties = PreprocessedEdit {
-        space_id: String::from("7"),
+        space_id: Uuid::parse_str("550e8400-e29b-41d4-a716-446655440008").unwrap(),
         edit: Some(make_edit(
             "f47ac10b-58cc-4372-a567-0e02b2c3d483",
             "Squash Test Edit",
@@ -375,8 +386,8 @@ async fn test_property_squashing() -> Result<(), IndexingError> {
             .get_property(&"bba7b810-9dad-11d1-80b4-00c04fd430c1".to_string())
             .await
             .unwrap();
-        assert_eq!(property.id, "bba7b810-9dad-11d1-80b4-00c04fd430c1");
-        assert_eq!(property.data_type, "Checkbox"); // Should be Checkbox, not Text or Number
+        assert_eq!(property.id, Uuid::parse_str("bba7b810-9dad-11d1-80b4-00c04fd430c1").unwrap());
+        assert_eq!(property.data_type, DataType::Checkbox); // Should be Checkbox, not Text or Number
     }
 
     // Verify that the different property was not affected by squashing
@@ -385,8 +396,8 @@ async fn test_property_squashing() -> Result<(), IndexingError> {
             .get_property(&"bba7b810-9dad-11d1-80b4-00c04fd430c2".to_string())
             .await
             .unwrap();
-        assert_eq!(property.id, "bba7b810-9dad-11d1-80b4-00c04fd430c2");
-        assert_eq!(property.data_type, "Time");
+        assert_eq!(property.id, Uuid::parse_str("bba7b810-9dad-11d1-80b4-00c04fd430c2").unwrap());
+        assert_eq!(property.data_type, DataType::Time);
     }
 
     Ok(())

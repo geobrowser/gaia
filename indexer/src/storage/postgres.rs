@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 
 use sqlx::{postgres::PgPoolOptions, Postgres, QueryBuilder, Row};
+use uuid::Uuid;
 
 use crate::models::{
     entities::EntityItem,
@@ -13,6 +14,42 @@ use crate::models::{
 };
 
 use super::{StorageBackend, StorageError};
+
+#[derive(sqlx::FromRow)]
+struct EntityRow {
+    id: Uuid,
+    created_at: String,
+    created_at_block: String,
+    updated_at: String,
+    updated_at_block: String,
+}
+
+#[derive(sqlx::FromRow)]
+struct ValueRow {
+    id: String,
+    property_id: Uuid,
+    entity_id: Uuid,
+    space_id: String,
+    value: Option<String>,
+    language: Option<String>,
+    unit: Option<String>,
+}
+
+#[derive(sqlx::FromRow)]
+struct RelationRow {
+    id: Uuid,
+    type_id: Uuid,
+    entity_id: Uuid,
+    space_id: Uuid,
+    from_entity_id: Uuid,
+    from_space_id: Option<Uuid>,
+    from_version_id: Option<Uuid>,
+    to_entity_id: Uuid,
+    to_space_id: Option<Uuid>,
+    to_version_id: Option<Uuid>,
+    verified: Option<bool>,
+    position: Option<String>,
+}
 
 pub struct PostgresStorage {
     pool: sqlx::Pool<Postgres>,
@@ -29,9 +66,16 @@ impl PostgresStorage {
     }
 
     pub async fn get_entity(&self, entity_id: &String) -> Result<EntityItem, StorageError> {
-        let query = sqlx::query!("SELECT * FROM entities WHERE id = $1", entity_id)
-            .fetch_one(&self.pool)
-            .await?;
+        let entity_uuid = Uuid::parse_str(entity_id)
+            .map_err(|e| sqlx::Error::Decode(format!("Invalid UUID format: {}", e).into()))?;
+
+        let query = sqlx::query_as!(
+            EntityRow,
+            "SELECT id, created_at, created_at_block, updated_at, updated_at_block FROM entities WHERE id = $1",
+            entity_uuid
+        )
+        .fetch_one(&self.pool)
+        .await?;
 
         Ok(EntityItem {
             id: query.id,
@@ -43,15 +87,27 @@ impl PostgresStorage {
     }
 
     pub async fn get_value(&self, triple_id: &String) -> Result<ValueOp, StorageError> {
-        let query = sqlx::query!("SELECT * FROM values WHERE id = $1", triple_id)
-            .fetch_one(&self.pool)
-            .await?;
+        let query = sqlx::query_as!(
+            ValueRow,
+            "SELECT id, property_id, entity_id, space_id, value, language, unit FROM values WHERE id = $1",
+            triple_id
+        )
+        .fetch_one(&self.pool)
+        .await?;
+
+        let id = Uuid::parse_str(&query.id).map_err(|e| {
+            sqlx::Error::Decode(format!("Invalid UUID format for id: {}", e).into())
+        })?;
+
+        let space_id = Uuid::parse_str(&query.space_id).map_err(|e| {
+            sqlx::Error::Decode(format!("Invalid UUID format for space_id: {}", e).into())
+        })?;
 
         Ok(ValueOp {
-            id: query.id,
+            id,
             property_id: query.property_id,
             entity_id: query.entity_id,
-            space_id: query.space_id,
+            space_id,
             value: query.value,
             language: query.language,
             unit: query.unit,
@@ -63,9 +119,16 @@ impl PostgresStorage {
         &self,
         relation_id: &String,
     ) -> Result<SetRelationItem, StorageError> {
-        let query = sqlx::query!("SELECT * FROM relations WHERE id = $1", relation_id)
-            .fetch_one(&self.pool)
-            .await?;
+        let relation_uuid = Uuid::parse_str(relation_id)
+            .map_err(|e| sqlx::Error::Decode(format!("Invalid UUID format: {}", e).into()))?;
+
+        let query = sqlx::query_as!(
+            RelationRow,
+            "SELECT id, type_id, entity_id, space_id, from_entity_id, from_space_id, from_version_id, to_entity_id, to_space_id, to_version_id, verified, position FROM relations WHERE id = $1",
+            relation_uuid
+        )
+        .fetch_one(&self.pool)
+        .await?;
 
         Ok(SetRelationItem {
             id: query.id,
@@ -73,23 +136,27 @@ impl PostgresStorage {
             entity_id: query.entity_id,
             space_id: query.space_id,
             from_id: query.from_entity_id,
-            from_space_id: None,
-            from_version_id: None,
+            from_space_id: query.from_space_id.map(|id| id.to_string()),
+            from_version_id: query.from_version_id.map(|id| id.to_string()),
             to_id: query.to_entity_id,
-            to_space_id: query.to_space_id,
-            to_version_id: query.to_version_id,
+            to_space_id: query.to_space_id.map(|id| id.to_string()),
+            to_version_id: query.to_version_id.map(|id| id.to_string()),
             verified: query.verified,
-            position: None,
+            position: query.position,
         })
     }
 
     pub async fn get_property(&self, property_id: &String) -> Result<PropertyItem, StorageError> {
+        let property_uuid = Uuid::parse_str(property_id).map_err(|e| {
+            sqlx::Error::Decode(format!("Invalid UUID format: {}", e).into())
+        })?;
+
         let row = sqlx::query("SELECT id, type::text as type FROM properties WHERE id = $1")
-            .bind(property_id)
+            .bind(property_uuid)
             .fetch_one(&self.pool)
             .await?;
 
-        let id: String = row.get("id");
+        let id: Uuid = row.get("id");
         let type_value: String = row.get("type");
 
         let property_type = string_to_data_type(&type_value).ok_or_else(|| {
@@ -108,7 +175,7 @@ impl PostgresStorage {
 #[async_trait]
 impl StorageBackend for PostgresStorage {
     async fn insert_entities(&self, entities: &Vec<EntityItem>) -> Result<(), StorageError> {
-        let ids: Vec<String> = entities.iter().map(|x| x.id.clone()).collect();
+        let ids: Vec<Uuid> = entities.iter().map(|x| x.id).collect();
         let created_ats: Vec<String> = entities.iter().map(|x| x.created_at.clone()).collect();
         let created_at_blocks: Vec<String> = entities
             .iter()
@@ -123,7 +190,7 @@ impl StorageBackend for PostgresStorage {
         sqlx::query!(
             r#"
             INSERT INTO entities (id, created_at, created_at_block, updated_at, updated_at_block)
-            SELECT * FROM UNNEST($1::text[], $2::text[], $3::text[], $4::text[], $5::text[])
+            SELECT * FROM UNNEST($1::uuid[], $2::text[], $3::text[], $4::text[], $5::text[])
             ON CONFLICT (id)
             DO UPDATE SET updated_at = EXCLUDED.updated_at, updated_at_block = EXCLUDED.updated_at_block
             "#,
@@ -154,11 +221,11 @@ impl StorageBackend for PostgresStorage {
         let mut units = Vec::with_capacity(values.len());
 
         for prop in values {
-            ids.push(&prop.id);
+            ids.push(prop.id.to_string());
             entity_ids.push(&prop.entity_id);
             property_ids.push(&prop.property_id);
-            space_ids.push(&prop.space_id);
-            value_values.push(&prop.value);
+            space_ids.push(prop.space_id.to_string());
+            value_values.push(prop.value.as_deref().unwrap_or(""));
             languages.push(&prop.language);
             units.push(&prop.unit);
         }
@@ -169,8 +236,8 @@ impl StorageBackend for PostgresStorage {
                 )
                 SELECT * FROM UNNEST(
                     $1::text[],
-                    $2::text[],
-                    $3::text[],
+                    $2::uuid[],
+                    $3::uuid[],
                     $4::text[],
                     $5::text[],
                     $6::text[],
@@ -198,21 +265,22 @@ impl StorageBackend for PostgresStorage {
 
     async fn delete_values(
         &self,
-        property_ids: &Vec<String>,
-        space_id: &String,
+        property_ids: &Vec<Uuid>,
+        space_id: &Uuid,
     ) -> Result<(), StorageError> {
         if property_ids.is_empty() {
             return Ok(());
         }
 
-        let ids: Vec<&str> = property_ids.iter().map(|id| id.as_str()).collect();
+        let ids: Vec<String> = property_ids.iter().map(|id| id.to_string()).collect();
+        let space_id_str = space_id.to_string();
 
         sqlx::query(
             "DELETE FROM values
                      WHERE space_id = $1 AND id IN
                      (SELECT * FROM UNNEST($2::text[]))",
         )
-        .bind(space_id)
+        .bind(&space_id_str)
         .bind(&ids)
         .execute(&self.pool)
         .await?;
@@ -256,8 +324,8 @@ impl StorageBackend for PostgresStorage {
                     to_entity_id, to_space_id, type_id, position, verified
                 )
                 SELECT * FROM UNNEST(
-                    $1::text[], $2::text[], $3::text[], $4::text[], $5::text[],
-                    $6::text[], $7::text[], $8::text[], $9::text[], $10::boolean[]
+                    $1::uuid[], $2::uuid[], $3::uuid[], $4::uuid[], $5::uuid[],
+                    $6::uuid[], $7::uuid[], $8::uuid[], $9::text[], $10::boolean[]
                 )
                 ON CONFLICT (id) DO UPDATE SET
                     to_space_id = EXCLUDED.to_space_id,
@@ -369,22 +437,20 @@ impl StorageBackend for PostgresStorage {
 
     async fn delete_relations(
         &self,
-        relation_ids: &Vec<String>,
-        space_id: &String,
+        relation_ids: &Vec<Uuid>,
+        space_id: &Uuid,
     ) -> Result<(), StorageError> {
         if relation_ids.is_empty() {
             return Ok(());
         }
 
-        let ids: Vec<&str> = relation_ids.iter().map(|id| id.as_str()).collect();
-
         sqlx::query(
             "DELETE FROM relations
                      WHERE space_id = $1 AND id IN
-                     (SELECT * FROM UNNEST($2::text[]))",
+                     (SELECT * FROM UNNEST($2::uuid[]))",
         )
         .bind(space_id)
-        .bind(&ids)
+        .bind(relation_ids)
         .execute(&self.pool)
         .await?;
 
@@ -424,7 +490,7 @@ impl StorageBackend for PostgresStorage {
                     id, type
                 )
                 SELECT id, type::"dataTypes"
-                FROM UNNEST($1::text[], $2::text[]) AS t(id, type)
+                FROM UNNEST($1::uuid[], $2::text[]) AS t(id, type)
                 ON CONFLICT (id) DO NOTHING
             "#;
 

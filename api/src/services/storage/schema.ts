@@ -13,7 +13,7 @@ export const ipfsCache = pgTable("ipfs_cache", {
 	 */
 	isErrored: boolean().notNull().default(false),
 	block: text().notNull(),
-	space: text().notNull(),
+	space: uuid().notNull(),
 })
 
 export const entities = pgTable("entities", {
