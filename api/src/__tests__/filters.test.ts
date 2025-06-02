@@ -1,13 +1,13 @@
 import {SystemIds} from "@graphprotocol/grc-20"
-import {Effect, Layer} from "effect"
-import {afterEach, beforeEach, describe, expect, it} from "vitest"
-import {v4 as uuid} from "uuid"
 import {eq, inArray} from "drizzle-orm"
+import {Effect, Layer} from "effect"
+import {v4 as uuid} from "uuid"
+import {afterEach, beforeEach, describe, expect, it} from "vitest"
 import {getEntities} from "../resolvers/entities"
 import type {EntityFilter} from "../resolvers/filters"
-import {Storage, make as makeStorage} from "../services/storage/storage"
 import {Environment, make as makeEnvironment} from "../services/environment"
 import {entities, relations, values} from "../services/storage/schema"
+import {Storage, make as makeStorage} from "../services/storage/storage"
 
 // Set up Effect layers like in the main application
 const EnvironmentLayer = Layer.effect(Environment, makeEnvironment)
@@ -183,7 +183,7 @@ describe("Entity Filters Integration Tests", () => {
 						},
 					])
 				})
-			}).pipe(provideDeps)
+			}).pipe(provideDeps),
 		)
 	})
 
@@ -197,17 +197,17 @@ describe("Entity Filters Integration Tests", () => {
 					// Clean up in the correct order due to foreign key constraints
 					await client.delete(relations).where(eq(relations.spaceId, TEST_SPACE_ID))
 					await client.delete(values).where(eq(values.spaceId, TEST_SPACE_ID))
-					await client.delete(entities).where(
-						inArray(entities.id, [TEST_ENTITY_1_ID, TEST_ENTITY_2_ID, TEST_ENTITY_3_ID])
-					)
+					await client
+						.delete(entities)
+						.where(inArray(entities.id, [TEST_ENTITY_1_ID, TEST_ENTITY_2_ID, TEST_ENTITY_3_ID]))
 				})
-			}).pipe(provideDeps)
+			}).pipe(provideDeps),
 		)
 	})
 
 	// Helper function to filter results to only our test entities
 	const filterToTestEntities = (results: any[]) => {
-		return results.filter(r => [TEST_ENTITY_1_ID, TEST_ENTITY_2_ID, TEST_ENTITY_3_ID].includes(r.id))
+		return results.filter((r) => [TEST_ENTITY_1_ID, TEST_ENTITY_2_ID, TEST_ENTITY_3_ID].includes(r.id))
 	}
 
 	describe("Text Filters", () => {
@@ -221,9 +221,7 @@ describe("Entity Filters Integration Tests", () => {
 				},
 			}
 
-			const result = await Effect.runPromise(
-				getEntities({filter}).pipe(provideDeps)
-			)
+			const result = await Effect.runPromise(getEntities({filter}).pipe(provideDeps))
 
 			const testResults = filterToTestEntities(result)
 			expect(testResults).toHaveLength(1)
@@ -241,13 +239,11 @@ describe("Entity Filters Integration Tests", () => {
 				},
 			}
 
-			const result = await Effect.runPromise(
-				getEntities({filter}).pipe(provideDeps)
-			)
+			const result = await Effect.runPromise(getEntities({filter}).pipe(provideDeps))
 
 			const testResults = filterToTestEntities(result)
 			expect(testResults).toHaveLength(2)
-			expect(testResults.map(r => r.id).sort()).toEqual([TEST_ENTITY_1_ID, TEST_ENTITY_2_ID].sort())
+			expect(testResults.map((r) => r.id).sort()).toEqual([TEST_ENTITY_1_ID, TEST_ENTITY_2_ID].sort())
 		})
 
 		it("should filter by text starts with", async () => {
@@ -260,13 +256,11 @@ describe("Entity Filters Integration Tests", () => {
 				},
 			}
 
-			const result = await Effect.runPromise(
-				getEntities({filter}).pipe(provideDeps)
-			)
+			const result = await Effect.runPromise(getEntities({filter}).pipe(provideDeps))
 
 			const testResults = filterToTestEntities(result)
 			expect(testResults).toHaveLength(2)
-			expect(testResults.map(r => r.id).sort()).toEqual([TEST_ENTITY_1_ID, TEST_ENTITY_2_ID].sort())
+			expect(testResults.map((r) => r.id).sort()).toEqual([TEST_ENTITY_1_ID, TEST_ENTITY_2_ID].sort())
 		})
 
 		it("should filter by text ends with", async () => {
@@ -279,13 +273,11 @@ describe("Entity Filters Integration Tests", () => {
 				},
 			}
 
-			const result = await Effect.runPromise(
-				getEntities({filter}).pipe(provideDeps)
-			)
+			const result = await Effect.runPromise(getEntities({filter}).pipe(provideDeps))
 
 			const testResults = filterToTestEntities(result)
 			expect(testResults).toHaveLength(2)
-			expect(testResults.map(r => r.id).sort()).toEqual([TEST_ENTITY_1_ID, TEST_ENTITY_3_ID].sort())
+			expect(testResults.map((r) => r.id).sort()).toEqual([TEST_ENTITY_1_ID, TEST_ENTITY_3_ID].sort())
 		})
 
 		it("should filter by text exists", async () => {
@@ -298,9 +290,7 @@ describe("Entity Filters Integration Tests", () => {
 				},
 			}
 
-			const result = await Effect.runPromise(
-				getEntities({filter}).pipe(provideDeps)
-			)
+			const result = await Effect.runPromise(getEntities({filter}).pipe(provideDeps))
 
 			const testResults = filterToTestEntities(result)
 			expect(testResults).toHaveLength(3)
@@ -318,9 +308,7 @@ describe("Entity Filters Integration Tests", () => {
 				},
 			}
 
-			const result = await Effect.runPromise(
-				getEntities({filter}).pipe(provideDeps)
-			)
+			const result = await Effect.runPromise(getEntities({filter}).pipe(provideDeps))
 
 			const testResults = filterToTestEntities(result)
 			// Entity 3 has "Goodbye World" which doesn't contain "Hello"
@@ -341,9 +329,7 @@ describe("Entity Filters Integration Tests", () => {
 				},
 			}
 
-			const result = await Effect.runPromise(
-				getEntities({filter}).pipe(provideDeps)
-			)
+			const result = await Effect.runPromise(getEntities({filter}).pipe(provideDeps))
 
 			const testResults = filterToTestEntities(result)
 			expect(testResults).toHaveLength(1)
@@ -360,9 +346,7 @@ describe("Entity Filters Integration Tests", () => {
 				},
 			}
 
-			const result = await Effect.runPromise(
-				getEntities({filter}).pipe(provideDeps)
-			)
+			const result = await Effect.runPromise(getEntities({filter}).pipe(provideDeps))
 
 			const testResults = filterToTestEntities(result)
 			expect(testResults).toHaveLength(1)
@@ -379,9 +363,7 @@ describe("Entity Filters Integration Tests", () => {
 				},
 			}
 
-			const result = await Effect.runPromise(
-				getEntities({filter}).pipe(provideDeps)
-			)
+			const result = await Effect.runPromise(getEntities({filter}).pipe(provideDeps))
 
 			const testResults = filterToTestEntities(result)
 			expect(testResults).toHaveLength(1)
@@ -398,14 +380,12 @@ describe("Entity Filters Integration Tests", () => {
 				},
 			}
 
-			const result = await Effect.runPromise(
-				getEntities({filter}).pipe(provideDeps)
-			)
+			const result = await Effect.runPromise(getEntities({filter}).pipe(provideDeps))
 
 			const testResults = filterToTestEntities(result)
 			// Should only return entities with numeric values (not "not-a-number")
 			expect(testResults).toHaveLength(2)
-			expect(testResults.map(r => r.id).sort()).toEqual([TEST_ENTITY_1_ID, TEST_ENTITY_2_ID].sort())
+			expect(testResults.map((r) => r.id).sort()).toEqual([TEST_ENTITY_1_ID, TEST_ENTITY_2_ID].sort())
 		})
 	})
 
@@ -420,9 +400,7 @@ describe("Entity Filters Integration Tests", () => {
 				},
 			}
 
-			const result = await Effect.runPromise(
-				getEntities({filter}).pipe(provideDeps)
-			)
+			const result = await Effect.runPromise(getEntities({filter}).pipe(provideDeps))
 
 			const testResults = filterToTestEntities(result)
 			expect(testResults).toHaveLength(1)
@@ -439,9 +417,7 @@ describe("Entity Filters Integration Tests", () => {
 				},
 			}
 
-			const result = await Effect.runPromise(
-				getEntities({filter}).pipe(provideDeps)
-			)
+			const result = await Effect.runPromise(getEntities({filter}).pipe(provideDeps))
 
 			const testResults = filterToTestEntities(result)
 			expect(testResults).toHaveLength(1)
@@ -458,13 +434,11 @@ describe("Entity Filters Integration Tests", () => {
 				},
 			}
 
-			const result = await Effect.runPromise(
-				getEntities({filter}).pipe(provideDeps)
-			)
+			const result = await Effect.runPromise(getEntities({filter}).pipe(provideDeps))
 
 			const testResults = filterToTestEntities(result)
 			expect(testResults).toHaveLength(2)
-			expect(testResults.map(r => r.id).sort()).toEqual([TEST_ENTITY_1_ID, TEST_ENTITY_2_ID].sort())
+			expect(testResults.map((r) => r.id).sort()).toEqual([TEST_ENTITY_1_ID, TEST_ENTITY_2_ID].sort())
 		})
 	})
 
@@ -479,9 +453,7 @@ describe("Entity Filters Integration Tests", () => {
 				},
 			}
 
-			const result = await Effect.runPromise(
-				getEntities({filter}).pipe(provideDeps)
-			)
+			const result = await Effect.runPromise(getEntities({filter}).pipe(provideDeps))
 
 			const testResults = filterToTestEntities(result)
 			expect(testResults).toHaveLength(1)
@@ -498,9 +470,7 @@ describe("Entity Filters Integration Tests", () => {
 				},
 			}
 
-			const result = await Effect.runPromise(
-				getEntities({filter}).pipe(provideDeps)
-			)
+			const result = await Effect.runPromise(getEntities({filter}).pipe(provideDeps))
 
 			const testResults = filterToTestEntities(result)
 			expect(testResults).toHaveLength(1)
@@ -517,9 +487,7 @@ describe("Entity Filters Integration Tests", () => {
 				},
 			}
 
-			const result = await Effect.runPromise(
-				getEntities({filter}).pipe(provideDeps)
-			)
+			const result = await Effect.runPromise(getEntities({filter}).pipe(provideDeps))
 
 			const testResults = filterToTestEntities(result)
 			expect(testResults).toHaveLength(1)
@@ -534,9 +502,7 @@ describe("Entity Filters Integration Tests", () => {
 				},
 			}
 
-			const result = await Effect.runPromise(
-				getEntities({filter}).pipe(provideDeps)
-			)
+			const result = await Effect.runPromise(getEntities({filter}).pipe(provideDeps))
 
 			const testResults = filterToTestEntities(result)
 			expect(testResults).toHaveLength(1)
@@ -567,9 +533,7 @@ describe("Entity Filters Integration Tests", () => {
 				],
 			}
 
-			const result = await Effect.runPromise(
-				getEntities({filter}).pipe(provideDeps)
-			)
+			const result = await Effect.runPromise(getEntities({filter}).pipe(provideDeps))
 
 			const testResults = filterToTestEntities(result)
 			expect(testResults).toHaveLength(1)
@@ -598,17 +562,15 @@ describe("Entity Filters Integration Tests", () => {
 				],
 			}
 
-			const result = await Effect.runPromise(
-				getEntities({filter}).pipe(provideDeps)
-			)
+			const result = await Effect.runPromise(getEntities({filter}).pipe(provideDeps))
 
 			const testResults = filterToTestEntities(result)
 			expect(testResults).toHaveLength(2)
-			expect(testResults.map(r => r.id).sort()).toEqual([TEST_ENTITY_1_ID, TEST_ENTITY_2_ID].sort())
+			expect(testResults.map((r) => r.id).sort()).toEqual([TEST_ENTITY_1_ID, TEST_ENTITY_2_ID].sort())
 		})
 
 		it("should handle NOT filters", async () => {
-			// Complex NOT filter should return entities that do NOT have any value 
+			// Complex NOT filter should return entities that do NOT have any value
 			// matching the condition for the specified property
 			const filter: EntityFilter = {
 				NOT: {
@@ -621,30 +583,28 @@ describe("Entity Filters Integration Tests", () => {
 				},
 			}
 
-			const result = await Effect.runPromise(
-				getEntities({filter}).pipe(provideDeps)
-			)
+			const result = await Effect.runPromise(getEntities({filter}).pipe(provideDeps))
 
 			const testResults = filterToTestEntities(result)
-			
+
 			// The complex NOT filter has different semantics than property-level NOT:
 			// - Property-level NOT: entities that have the property but value doesn't match
 			// - Complex NOT: entities that don't have ANY value matching the condition
-			// 
+			//
 			// Since Entity 3 has the property but with a non-matching value,
 			// it should be included in the complex NOT results.
 			// However, current implementation seems to have an issue.
-			
+
 			// For now, let's verify the behavior and adjust expectations
 			// Entity 3 should be returned since it doesn't have a value containing "Hello"
-			const hasEntity3 = testResults.some(r => r.id === TEST_ENTITY_3_ID)
-			const hasEntity1 = testResults.some(r => r.id === TEST_ENTITY_1_ID)
-			const hasEntity2 = testResults.some(r => r.id === TEST_ENTITY_2_ID)
-			
+			const hasEntity3 = testResults.some((r) => r.id === TEST_ENTITY_3_ID)
+			const hasEntity1 = testResults.some((r) => r.id === TEST_ENTITY_1_ID)
+			const hasEntity2 = testResults.some((r) => r.id === TEST_ENTITY_2_ID)
+
 			// Entities 1 and 2 should definitely not be returned
 			expect(hasEntity1).toBe(false)
 			expect(hasEntity2).toBe(false)
-			
+
 			// Entity 3 should be returned (this might fail due to implementation issue)
 			if (hasEntity3) {
 				expect(testResults).toHaveLength(1)
@@ -692,13 +652,11 @@ describe("Entity Filters Integration Tests", () => {
 				],
 			}
 
-			const result = await Effect.runPromise(
-				getEntities({filter}).pipe(provideDeps)
-			)
+			const result = await Effect.runPromise(getEntities({filter}).pipe(provideDeps))
 
 			const testResults = filterToTestEntities(result)
 			expect(testResults).toHaveLength(2)
-			expect(testResults.map(r => r.id).sort()).toEqual([TEST_ENTITY_1_ID, TEST_ENTITY_3_ID].sort())
+			expect(testResults.map((r) => r.id).sort()).toEqual([TEST_ENTITY_1_ID, TEST_ENTITY_3_ID].sort())
 		})
 	})
 
@@ -713,9 +671,7 @@ describe("Entity Filters Integration Tests", () => {
 				},
 			}
 
-			const result = await Effect.runPromise(
-				getEntities({filter}).pipe(provideDeps)
-			)
+			const result = await Effect.runPromise(getEntities({filter}).pipe(provideDeps))
 
 			const testResults = filterToTestEntities(result)
 			expect(testResults).toHaveLength(0)
@@ -731,9 +687,7 @@ describe("Entity Filters Integration Tests", () => {
 				},
 			}
 
-			const result = await Effect.runPromise(
-				getEntities({filter}).pipe(provideDeps)
-			)
+			const result = await Effect.runPromise(getEntities({filter}).pipe(provideDeps))
 
 			const testResults = filterToTestEntities(result)
 			expect(testResults).toHaveLength(0)
@@ -750,9 +704,7 @@ describe("Entity Filters Integration Tests", () => {
 				},
 			}
 
-			const result = await Effect.runPromise(
-				getEntities({filter}).pipe(provideDeps)
-			)
+			const result = await Effect.runPromise(getEntities({filter}).pipe(provideDeps))
 
 			// Filter to only our test entities to ensure isolation
 			const testEntityResults = filterToTestEntities(result)
@@ -777,12 +729,13 @@ describe("Entity Filters Integration Tests", () => {
 				},
 			}
 
-			const positiveResult = await Effect.runPromise(
-				getEntities({filter: positiveFilter}).pipe(provideDeps)
-			)
+			const positiveResult = await Effect.runPromise(getEntities({filter: positiveFilter}).pipe(provideDeps))
 
 			const positiveTestResults = filterToTestEntities(positiveResult)
-			console.log("Entities that contain 'Hello':", positiveTestResults.map(r => ({ id: r.id, name: r.name })))
+			console.log(
+				"Entities that contain 'Hello':",
+				positiveTestResults.map((r) => ({id: r.id, name: r.name})),
+			)
 			expect(positiveTestResults).toHaveLength(2) // Should be entities 1 and 2
 
 			// Now test the complex NOT filter
@@ -797,19 +750,20 @@ describe("Entity Filters Integration Tests", () => {
 				},
 			}
 
-			const notResult = await Effect.runPromise(
-				getEntities({filter: notFilter}).pipe(provideDeps)
-			)
+			const notResult = await Effect.runPromise(getEntities({filter: notFilter}).pipe(provideDeps))
 
 			console.log("Total entities returned by NOT filter:", notResult.length)
-			
+
 			const notTestResults = filterToTestEntities(notResult)
-			console.log("Test entities in NOT result:", notTestResults.map(r => ({ id: r.id, name: r.name })))
+			console.log(
+				"Test entities in NOT result:",
+				notTestResults.map((r) => ({id: r.id, name: r.name})),
+			)
 
 			// The NOT filter should return entities that do NOT have a value containing "Hello"
 			// This should include Entity 3, and exclude entities 1 and 2
 			// However, it might also exclude Entity 3 if the logic is wrong
-			
+
 			// Let's also test what happens if we query for entities that have the property but don't contain "Hello"
 			const specificNotFilter: EntityFilter = {
 				value: {
@@ -823,11 +777,14 @@ describe("Entity Filters Integration Tests", () => {
 			}
 
 			const specificNotResult = await Effect.runPromise(
-				getEntities({filter: specificNotFilter}).pipe(provideDeps)
+				getEntities({filter: specificNotFilter}).pipe(provideDeps),
 			)
 
 			const specificNotTestResults = filterToTestEntities(specificNotResult)
-			console.log("Test entities with property-level NOT:", specificNotTestResults.map(r => ({ id: r.id, name: r.name })))
+			console.log(
+				"Test entities with property-level NOT:",
+				specificNotTestResults.map((r) => ({id: r.id, name: r.name})),
+			)
 
 			// This test is just for debugging, so let's just ensure we get some insights
 			expect(positiveTestResults).toHaveLength(2)

@@ -218,7 +218,8 @@ export function getBlocks(entityId: string) {
 
 			return blockRelations.map((relation) => {
 				const block = relation.toEntity
-				const blockTypeId = block.fromRelations.find((r) => r.typeId === SystemIds.TYPES_PROPERTY)?.toEntity?.id ?? null
+				const blockTypeId =
+					block.fromRelations.find((r) => r.typeId === SystemIds.TYPES_PROPERTY)?.toEntity?.id ?? null
 
 				// Determine the appropriate value based on block type
 				let value: string | null = null
@@ -235,8 +236,8 @@ export function getBlocks(entityId: string) {
 					type = BlockType.Data
 					value = block.values.find((v) => v.propertyId === SystemIds.FILTER)?.value ?? null
 					const maybeDataSourceType =
-						block.fromRelations.find((r) => r.typeId === SystemIds.DATA_SOURCE_TYPE_RELATION_TYPE)?.toEntity?.id ??
-						null
+						block.fromRelations.find((r) => r.typeId === SystemIds.DATA_SOURCE_TYPE_RELATION_TYPE)?.toEntity
+							?.id ?? null
 
 					dataSourceType = getDataSourceType(maybeDataSourceType)
 				}

@@ -1,7 +1,7 @@
 import {SystemIds} from "@graphprotocol/grc-20"
 import {and, eq} from "drizzle-orm"
 import {Effect} from "effect"
-import  {type QueryTypesArgs, ValueType} from "../generated/graphql"
+import {type QueryTypesArgs, ValueType} from "../generated/graphql"
 import {relations} from "../services/storage/schema"
 import {Storage} from "../services/storage/storage"
 
