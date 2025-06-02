@@ -268,15 +268,23 @@ describe("Entity Filters Integration Tests", () => {
 
 				yield* storage.use(async (client) => {
 					// Clean up in the correct order due to foreign key constraints
-					await client.delete(relations).where(
-						or(eq(relations.spaceId, TEST_SPACE_ID), eq(relations.spaceId, TEST_SPACE_2_ID))
-					)
-					await client.delete(values).where(
-						or(eq(values.spaceId, TEST_SPACE_ID), eq(values.spaceId, TEST_SPACE_2_ID))
-					)
+					await client
+						.delete(relations)
+						.where(or(eq(relations.spaceId, TEST_SPACE_ID), eq(relations.spaceId, TEST_SPACE_2_ID)))
+					await client
+						.delete(values)
+						.where(or(eq(values.spaceId, TEST_SPACE_ID), eq(values.spaceId, TEST_SPACE_2_ID)))
 					await client
 						.delete(entities)
-						.where(inArray(entities.id, [TEST_ENTITY_1_ID, TEST_ENTITY_2_ID, TEST_ENTITY_3_ID, TEST_ENTITY_4_ID, TEST_ENTITY_5_ID]))
+						.where(
+							inArray(entities.id, [
+								TEST_ENTITY_1_ID,
+								TEST_ENTITY_2_ID,
+								TEST_ENTITY_3_ID,
+								TEST_ENTITY_4_ID,
+								TEST_ENTITY_5_ID,
+							]),
+						)
 				})
 			}).pipe(provideDeps),
 		)
@@ -284,7 +292,9 @@ describe("Entity Filters Integration Tests", () => {
 
 	// Helper function to filter results to only our test entities
 	const filterToTestEntities = (results: any[]) => {
-		return results.filter((r) => [TEST_ENTITY_1_ID, TEST_ENTITY_2_ID, TEST_ENTITY_3_ID, TEST_ENTITY_4_ID, TEST_ENTITY_5_ID].includes(r.id))
+		return results.filter((r) =>
+			[TEST_ENTITY_1_ID, TEST_ENTITY_2_ID, TEST_ENTITY_3_ID, TEST_ENTITY_4_ID, TEST_ENTITY_5_ID].includes(r.id),
+		)
 	}
 
 	describe("Text Filters", () => {
@@ -556,8 +566,6 @@ describe("Entity Filters Integration Tests", () => {
 	})
 
 	describe("Relation Filters", () => {
-
-
 		it("should filter by from relation with typeId and toEntityId", async () => {
 			const filter: EntityFilter = {
 				fromRelation: {
@@ -833,7 +841,7 @@ describe("Entity Filters Integration Tests", () => {
 			// NOTE: There's a known issue with NOT filters in the current implementation
 			// Similar to the complex NOT filter test, this may not work as expected
 			// For now, we test what we can verify and document the limitation
-			
+
 			const filter: EntityFilter = {
 				NOT: {
 					fromRelation: {
@@ -852,7 +860,7 @@ describe("Entity Filters Integration Tests", () => {
 					typeId: TEST_RELATION_TYPE_2_ID,
 				},
 			}
-			const positiveResult = await Effect.runPromise(getEntities({positiveFilter}).pipe(provideDeps))
+			const positiveResult = await Effect.runPromise(getEntities({filter: positiveFilter}).pipe(provideDeps))
 			const positiveTestResults = filterToTestEntities(positiveResult)
 
 			// Verify that entities with TYPE_2 relations are not in NOT results
@@ -1047,7 +1055,7 @@ describe("Entity Filters Integration Tests", () => {
 
 			const result = await Effect.runPromise(getEntities({filter}).pipe(provideDeps))
 			const testResults = filterToTestEntities(result)
-			
+
 			// Should return all entities that have outgoing relations of either type
 			// Based on setup: ENTITY_1, ENTITY_2, ENTITY_3, ENTITY_4 all have outgoing relations
 			// ENTITY_5 has no outgoing relations
@@ -1105,19 +1113,19 @@ describe("Entity Filters Integration Tests", () => {
 		/*
 		 * COMPREHENSIVE RELATION FILTER TEST COVERAGE SUMMARY
 		 * ===================================================
-		 * 
+		 *
 		 * The tests above provide comprehensive coverage for all relation filter capabilities:
-		 * 
+		 *
 		 * Test Data Structure:
 		 * 1. ENTITY_1 -> ENTITY_2 (type: TYPE_1, space: SPACE_1)
-		 * 2. ENTITY_2 -> ENTITY_3 (type: TYPE_1, space: SPACE_1)  
+		 * 2. ENTITY_2 -> ENTITY_3 (type: TYPE_1, space: SPACE_1)
 		 * 3. ENTITY_1 -> ENTITY_4 (type: TYPE_2, space: SPACE_1)
 		 * 4. ENTITY_4 -> ENTITY_2 (type: TYPE_1, space: SPACE_1)
 		 * 5. ENTITY_3 -> ENTITY_5 (type: TYPE_1, space: SPACE_2)
 		 * 6. ENTITY_4 -> ENTITY_4 (type: TYPE_2, space: SPACE_1) - self-relation
-		 * 
+		 *
 		 * Capabilities Tested:
-		 * 
+		 *
 		 * ✅ Basic fromRelation filtering by typeId, toEntityId, fromEntityId, spaceId
 		 * ✅ Basic toRelation filtering by typeId, toEntityId, fromEntityId, spaceId
 		 * ✅ Multiple criteria filtering (combining typeId + spaceId + entityId)
@@ -1130,7 +1138,7 @@ describe("Entity Filters Integration Tests", () => {
 		 * ✅ NOT logic for relation filters (with known implementation limitations)
 		 * ✅ Nested complex filter combinations
 		 * ✅ Edge cases and error conditions
-		 * 
+		 *
 		 * All relation filter functionality specified in schema.graphql is fully tested
 		 * and working as expected, providing robust filtering capabilities for the API.
 		 */
