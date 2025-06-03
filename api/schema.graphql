@@ -9,8 +9,13 @@ type Entity {
   updatedAt: String!
   updatedAtBlock: String!
 
-  values: [Value]!
-  relations: [Relation]!
+  # Values associated with this entity, optionally filtered by spaceId
+  # When spaceId is provided, only returns values from that specific space
+  values(spaceId: String, filter: ValueFilter): [Value]!
+
+  # Relations associated with this entity, optionally filtered by spaceId
+  # When spaceId is provided, only returns relations from that specific space
+  relations(spaceId: String, filter: RelationFilter): [Relation]!
 
   types: [Entity]!
   spaces: [String]!
@@ -96,13 +101,19 @@ type Type {
 }
 
 type Query {
+  # Get multiple entities with optional space filtering
+  # When spaceId is provided, the spaceId propagates to child resolvers for values and relations
   entities(
     filter: EntityFilter
     limit: Int = 100
     offset: Int = 0
     spaceId: String
   ): [Entity]!
+
+  # Get a single entity by ID with optional space context
+  # When spaceId is provided, the spaceId propagates to child resolvers for values and relations
   entity(id: String!, spaceId: String): Entity
+
   types(spaceId: String, limit: Int = 100, offset: Int = 0): [Type]!
   # fuzzy search
   # relation
@@ -161,9 +172,10 @@ input RelationFilter {
   typeId: String
   fromEntityId: String
   toEntityId: String
-  spaceId: String
 }
 
+# Filter input for entities in Query.entities
+# Supports logical operators and filtering by values and relations
 input EntityFilter {
   OR: [EntityFilter!]
   NOT: EntityFilter

@@ -5,12 +5,12 @@ import {Storage} from "../services/storage/storage"
 import {type EntityFilter, buildEntityWhere} from "./filters"
 
 export function getEntities(args: QueryEntitiesArgs) {
-	const {filter, limit = 100, offset = 0} = args
+	const {filter, limit = 100, offset = 0, spaceId} = args
 
 	return Effect.gen(function* () {
 		const db = yield* Storage
 
-		const whereClauses = filter ? buildEntityWhere(filter as EntityFilter) : undefined
+		const whereClauses = buildEntityWhere(filter as EntityFilter, spaceId)
 
 		return yield* db.use(async (client) => {
 			const entitiesWithMatchingValue = await client.query.entities.findMany({
@@ -99,13 +99,19 @@ export function getEntityDescription(id: string) {
 	})
 }
 
-export function getValues(id: string) {
+export function getValues(id: string, spaceId?: string | null) {
 	return Effect.gen(function* () {
 		const db = yield* Storage
 
 		return yield* db.use(async (client) => {
 			const result = await client.query.properties.findMany({
-				where: (properties, {eq}) => eq(properties.entityId, id),
+				where: (properties, {eq, and}) => {
+					const conditions = [eq(properties.entityId, id)]
+					if (spaceId) {
+						conditions.push(eq(properties.spaceId, spaceId))
+					}
+					return and(...conditions)
+				},
 			})
 
 			return result
@@ -113,13 +119,19 @@ export function getValues(id: string) {
 	})
 }
 
-export function getRelations(id: string) {
+export function getRelations(id: string, spaceId?: string | null) {
 	return Effect.gen(function* () {
 		const db = yield* Storage
 
 		return yield* db.use(async (client) => {
 			const result = await client.query.relations.findMany({
-				where: (relations, {eq}) => eq(relations.fromEntityId, id),
+				where: (relations, {eq, and}) => {
+					const conditions = [eq(relations.fromEntityId, id)]
+					if (spaceId) {
+						conditions.push(eq(relations.spaceId, spaceId))
+					}
+					return and(...conditions)
+				},
 			})
 
 			return result.map((relation) => ({

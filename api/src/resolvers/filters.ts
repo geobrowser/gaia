@@ -115,8 +115,13 @@ function buildValueConditions(filter: PropertyFilter) {
 	return conditions
 }
 
-function buildValueWhere(filter: PropertyFilter) {
+function buildValueWhere(filter: PropertyFilter, spaceId?: string | null) {
 	const conditions = [sql`values.property_id = ${filter.property}`]
+	
+	// Add spaceId filtering if provided
+	if (spaceId) {
+		conditions.push(sql`values.space_id = ${spaceId}`)
+	}
 
 	if (filter.text) {
 		const f = filter.text
@@ -189,7 +194,7 @@ function buildValueWhere(filter: PropertyFilter) {
 	return sql.join(conditions, sql` AND `)
 }
 
-function buildRelationConditions(filter: RelationFilter) {
+function buildRelationConditions(filter: RelationFilter, spaceId?: string | null) {
 	const conditions = []
 
 	if (filter.typeId !== undefined) {
@@ -204,40 +209,62 @@ function buildRelationConditions(filter: RelationFilter) {
 	if (filter.spaceId !== undefined) {
 		conditions.push(sql`space_id = ${filter.spaceId}`)
 	}
+	
+	// Add spaceId filtering if provided and not already specified in filter
+	if (spaceId && filter.spaceId === undefined) {
+		conditions.push(sql`space_id = ${spaceId}`)
+	}
 
 	return conditions.length > 0 ? sql.join(conditions, sql` AND `) : undefined
 }
 
-export function buildEntityWhere(filter: EntityFilter | null): SQL | undefined {
-	if (!filter) return undefined
+export function buildEntityWhere(filter: EntityFilter | null, spaceId?: string | null): SQL | undefined {
+	if (!filter && !spaceId) return undefined
 
 	const clauses = []
 
-	if (filter.AND) {
-		clauses.push(and(...filter.AND.map(buildEntityWhere)))
+	// Add spaceId filtering if provided
+	if (spaceId) {
+		clauses.push(
+			sql`(
+				EXISTS (
+					SELECT 1 FROM ${values} 
+					WHERE values.entity_id = entities.id 
+					AND values.space_id = ${spaceId}
+				) OR EXISTS (
+					SELECT 1 FROM relations 
+					WHERE relations.from_entity_id = entities.id 
+					AND relations.space_id = ${spaceId}
+				)
+			)`
+		)
 	}
-	if (filter.OR) {
-		clauses.push(or(...filter.OR.map(buildEntityWhere)))
+
+	if (filter?.AND) {
+		clauses.push(and(...filter.AND.map(f => buildEntityWhere(f, spaceId))))
 	}
-	if (filter.NOT) {
-		const notCondition = buildEntityWhere(filter.NOT)
+	if (filter?.OR) {
+		clauses.push(or(...filter.OR.map(f => buildEntityWhere(f, spaceId))))
+	}
+	if (filter?.NOT) {
+		const notCondition = buildEntityWhere(filter.NOT, spaceId)
 		if (notCondition) {
 			clauses.push(not(notCondition))
 		}
 	}
-	if (filter.value) {
+	if (filter?.value) {
 		// This checks: exists a value with this filter for the entity
 		clauses.push(
 			sql`EXISTS (
         SELECT 1 FROM ${values}
         WHERE values.entity_id = entities.id
-        AND ${buildValueWhere(filter.value)}
+        AND ${buildValueWhere(filter.value, spaceId)}
       )`,
 		)
 	}
-	if (filter.fromRelation) {
+	if (filter?.fromRelation) {
 		// This checks: exists a relation where this entity is the fromEntity
-		const relationConditions = buildRelationConditions(filter.fromRelation)
+		const relationConditions = buildRelationConditions(filter.fromRelation, spaceId)
 		if (relationConditions) {
 			clauses.push(
 				sql`EXISTS (
@@ -254,9 +281,9 @@ export function buildEntityWhere(filter: EntityFilter | null): SQL | undefined {
 			)
 		}
 	}
-	if (filter.toRelation) {
+	if (filter?.toRelation) {
 		// This checks: exists a relation where this entity is the toEntity
-		const relationConditions = buildRelationConditions(filter.toRelation)
+		const relationConditions = buildRelationConditions(filter.toRelation, spaceId)
 		if (relationConditions) {
 			clauses.push(
 				sql`EXISTS (

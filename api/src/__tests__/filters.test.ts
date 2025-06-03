@@ -3,7 +3,7 @@ import {eq, inArray, or} from "drizzle-orm"
 import {Effect, Layer} from "effect"
 import {v4 as uuid} from "uuid"
 import {afterEach, beforeEach, describe, expect, it} from "vitest"
-import {getEntities} from "../resolvers/entities"
+import {getEntities, getValues, getRelations} from "../resolvers/entities"
 import type {EntityFilter} from "../resolvers/filters"
 import {Environment, make as makeEnvironment} from "../services/environment"
 import {entities, relations, values} from "../services/storage/schema"
@@ -1398,6 +1398,459 @@ describe("Entity Filters Integration Tests", () => {
 			// This test is just for debugging, so let's just ensure we get some insights
 			expect(positiveTestResults).toHaveLength(2)
 			expect(specificNotTestResults).toHaveLength(1) // This should work based on our previous test
+		})
+	})
+
+	describe("SpaceId Filters", () => {
+		it("should return only entities with data in the specified space", async () => {
+			// Query entities from TEST_SPACE_ID only
+			const result = await Effect.runPromise(
+				getEntities({
+					spaceId: TEST_SPACE_ID,
+					limit: 100,
+					offset: 0,
+				}).pipe(provideDeps),
+			)
+
+			const testResults = filterToTestEntities(result)
+
+			// Should return entities that have values or relations in TEST_SPACE_ID
+			// From our test data: TEST_ENTITY_1_ID, TEST_ENTITY_2_ID, TEST_ENTITY_3_ID, TEST_ENTITY_4_ID have data in TEST_SPACE_ID
+			// TEST_ENTITY_5_ID only has data in TEST_SPACE_2_ID
+			expect(testResults).toHaveLength(4)
+			expect(testResults.map((r) => r.id).sort()).toEqual([
+				TEST_ENTITY_1_ID,
+				TEST_ENTITY_2_ID,
+				TEST_ENTITY_3_ID,
+				TEST_ENTITY_4_ID,
+			].sort())
+		})
+
+		it("should return only entities with data in the second space", async () => {
+			// Query entities from TEST_SPACE_2_ID only
+			const result = await Effect.runPromise(
+				getEntities({
+					spaceId: TEST_SPACE_2_ID,
+					limit: 100,
+					offset: 0,
+				}).pipe(provideDeps),
+			)
+
+			const testResults = filterToTestEntities(result)
+
+			// Should return entities that have values or relations in TEST_SPACE_2_ID
+			// From our test data: TEST_ENTITY_5_ID has data in TEST_SPACE_2_ID
+			expect(testResults).toHaveLength(1)
+			expect(testResults[0].id).toBe(TEST_ENTITY_5_ID)
+		})
+
+		it("should return empty array when no entities exist in specified space", async () => {
+			const nonExistentSpaceId = uuid()
+
+			const result = await Effect.runPromise(
+				getEntities({
+					spaceId: nonExistentSpaceId,
+					limit: 100,
+					offset: 0,
+				}).pipe(provideDeps),
+			)
+
+			const testResults = filterToTestEntities(result)
+			expect(testResults).toHaveLength(0)
+		})
+
+		it("should combine spaceId filter with value filters", async () => {
+			// Query entities in TEST_SPACE_ID that have a specific text value
+			const result = await Effect.runPromise(
+				getEntities({
+					spaceId: TEST_SPACE_ID,
+					filter: {
+						value: {
+							property: TEXT_PROPERTY_ID,
+							text: {
+								contains: "test",
+							},
+						},
+					},
+					limit: 100,
+					offset: 0,
+				}).pipe(provideDeps),
+			)
+
+			const testResults = filterToTestEntities(result)
+
+			// Should return only entities in TEST_SPACE_ID that also match the text filter
+			// TEST_ENTITY_1_ID has "test value" in TEST_SPACE_ID
+			expect(testResults).toHaveLength(1)
+			expect(testResults[0].id).toBe(TEST_ENTITY_1_ID)
+		})
+
+		it("should combine spaceId filter with relation filters", async () => {
+			// Query entities in TEST_SPACE_ID that have specific relation
+			const result = await Effect.runPromise(
+				getEntities({
+					spaceId: TEST_SPACE_ID,
+					filter: {
+						fromRelation: {
+							typeId: TEST_RELATION_TYPE_ID,
+						},
+					},
+					limit: 100,
+					offset: 0,
+				}).pipe(provideDeps),
+			)
+
+			const testResults = filterToTestEntities(result)
+
+			// Should return only entities in TEST_SPACE_ID that also have the specified relation
+			// TEST_ENTITY_1_ID has both relations and values in TEST_SPACE_ID
+			expect(testResults).toHaveLength(1)
+			expect(testResults[0].id).toBe(TEST_ENTITY_1_ID)
+		})
+
+		it("should handle complex filters with spaceId", async () => {
+			// Query entities in TEST_SPACE_ID with OR condition
+			const result = await Effect.runPromise(
+				getEntities({
+					spaceId: TEST_SPACE_ID,
+					filter: {
+						OR: [
+							{
+								value: {
+									property: TEXT_PROPERTY_ID,
+									text: {
+										contains: "test",
+									},
+								},
+							},
+							{
+								value: {
+									property: NUMBER_PROPERTY_ID,
+									number: {
+										greaterThan: 100,
+									},
+								},
+							},
+						],
+					},
+					limit: 100,
+					offset: 0,
+				}).pipe(provideDeps),
+			)
+
+			const testResults = filterToTestEntities(result)
+
+			// Should return entities in TEST_SPACE_ID that match either condition
+			// TEST_ENTITY_1_ID matches text condition, TEST_ENTITY_2_ID matches number condition
+			expect(testResults).toHaveLength(2)
+			expect(testResults.map((r) => r.id).sort()).toEqual([TEST_ENTITY_1_ID, TEST_ENTITY_2_ID].sort())
+		})
+
+		it("should handle NOT filters with spaceId", async () => {
+			// Query entities in TEST_SPACE_ID that do NOT have specific text
+			const result = await Effect.runPromise(
+				getEntities({
+					spaceId: TEST_SPACE_ID,
+					filter: {
+						NOT: {
+							value: {
+								property: TEXT_PROPERTY_ID,
+								text: {
+									contains: "test",
+								},
+							},
+						},
+					},
+					limit: 100,
+					offset: 0,
+				}).pipe(provideDeps),
+			)
+
+			const testResults = filterToTestEntities(result)
+
+			// Should return entities in TEST_SPACE_ID that do NOT match the text condition
+			// TEST_ENTITY_2_ID, TEST_ENTITY_3_ID, TEST_ENTITY_4_ID don't have "test" in text
+			expect(testResults).toHaveLength(3)
+			expect(testResults.map((r) => r.id).sort()).toEqual([
+				TEST_ENTITY_2_ID,
+				TEST_ENTITY_3_ID,
+				TEST_ENTITY_4_ID,
+			].sort())
+		})
+
+		it("should filter entities with only values in specified space", async () => {
+			// Create a test entity that only has values but no relations in TEST_SPACE_ID
+			const valueOnlyEntityId = uuid()
+
+			await Effect.runPromise(
+				Effect.gen(function* () {
+					const storage = yield* Storage
+
+					yield* storage.use(async (client) => {
+						await client.insert(entities).values([
+							{
+								id: valueOnlyEntityId,
+								createdAt: new Date().toISOString(),
+								createdAtBlock: "block1",
+								updatedAt: new Date().toISOString(),
+								updatedAtBlock: "block1",
+							},
+						])
+
+						await client.insert(values).values([
+							{
+								id: uuid(),
+								entityId: valueOnlyEntityId,
+								propertyId: TEXT_PROPERTY_ID,
+								value: "value only entity",
+								spaceId: TEST_SPACE_ID,
+							},
+						])
+					})
+				}).pipe(provideDeps),
+			)
+
+			const result = await Effect.runPromise(
+				getEntities({
+					spaceId: TEST_SPACE_ID,
+					limit: 100,
+					offset: 0,
+				}).pipe(provideDeps),
+			)
+
+			const testResults = result.filter((r) => r.id === valueOnlyEntityId)
+			expect(testResults).toHaveLength(1)
+			expect(testResults[0]?.id).toBe(valueOnlyEntityId)
+
+			// Clean up
+			await Effect.runPromise(
+				Effect.gen(function* () {
+					const storage = yield* Storage
+
+					yield* storage.use(async (client) => {
+						await client.delete(values).where(eq(values.entityId, valueOnlyEntityId))
+						await client.delete(entities).where(eq(entities.id, valueOnlyEntityId))
+					})
+				}).pipe(provideDeps),
+			)
+		})
+
+		it("should filter entities with only relations in specified space", async () => {
+			// Create a test entity that only has relations but no values in TEST_SPACE_ID
+			const relationOnlyEntityId = uuid()
+
+			await Effect.runPromise(
+				Effect.gen(function* () {
+					const storage = yield* Storage
+
+					yield* storage.use(async (client) => {
+						await client.insert(entities).values([
+							{
+								id: relationOnlyEntityId,
+								createdAt: new Date().toISOString(),
+								createdAtBlock: "block1",
+								updatedAt: new Date().toISOString(),
+								updatedAtBlock: "block1",
+							},
+						])
+
+						await client.insert(relations).values([
+							{
+								id: uuid(),
+								entityId: relationOnlyEntityId,
+								typeId: TEST_RELATION_TYPE_ID,
+								fromEntityId: relationOnlyEntityId,
+								toEntityId: TEST_ENTITY_1_ID,
+								spaceId: TEST_SPACE_ID,
+							},
+						])
+					})
+				}).pipe(provideDeps),
+			)
+
+			const result = await Effect.runPromise(
+				getEntities({
+					spaceId: TEST_SPACE_ID,
+					limit: 100,
+					offset: 0,
+				}).pipe(provideDeps),
+			)
+
+			const testResults = result.filter((r) => r.id === relationOnlyEntityId)
+			expect(testResults).toHaveLength(1)
+			expect(testResults[0]?.id).toBe(relationOnlyEntityId)
+
+			// Clean up
+			await Effect.runPromise(
+				Effect.gen(function* () {
+					const storage = yield* Storage
+
+					yield* storage.use(async (client) => {
+						await client.delete(relations).where(eq(relations.entityId, relationOnlyEntityId))
+						await client.delete(entities).where(eq(entities.id, relationOnlyEntityId))
+					})
+				}).pipe(provideDeps),
+			)
+		})
+
+		it("should respect spaceId in nested value filters", async () => {
+			// Query with spaceId should only consider values from that space
+			// even when filter doesn't explicitly specify spaceId
+			const result = await Effect.runPromise(
+				getEntities({
+					spaceId: TEST_SPACE_2_ID,
+					filter: {
+						value: {
+							property: TEXT_PROPERTY_ID,
+							text: {
+								contains: "space2",
+							},
+						},
+					},
+					limit: 100,
+					offset: 0,
+				}).pipe(provideDeps),
+			)
+
+			const testResults = filterToTestEntities(result)
+
+			// Should only find entities that have "space2" text in TEST_SPACE_2_ID
+			// TEST_ENTITY_5_ID has "space2 value" in TEST_SPACE_2_ID
+			expect(testResults).toHaveLength(1)
+			expect(testResults[0].id).toBe(TEST_ENTITY_5_ID)
+		})
+
+		it("should respect spaceId in nested relation filters", async () => {
+			// Query with spaceId should only consider relations from that space
+			const result = await Effect.runPromise(
+				getEntities({
+					spaceId: TEST_SPACE_2_ID,
+					filter: {
+						fromRelation: {
+							typeId: TEST_RELATION_TYPE_ID,
+						},
+					},
+					limit: 100,
+					offset: 0,
+				}).pipe(provideDeps),
+			)
+
+			const testResults = filterToTestEntities(result)
+
+			// Should only find entities that have the relation in TEST_SPACE_2_ID
+			// TEST_ENTITY_5_ID has relations in TEST_SPACE_2_ID
+			expect(testResults).toHaveLength(1)
+			expect(testResults[0].id).toBe(TEST_ENTITY_5_ID)
+		})
+	})
+
+	describe("Individual Resolver SpaceId Filtering", () => {
+		it("should filter values by spaceId in getValues function", async () => {
+			// Test getValues with spaceId parameter
+			const valuesResult = await Effect.runPromise(
+				getValues(TEST_ENTITY_1_ID, TEST_SPACE_ID).pipe(provideDeps)
+			)
+
+			// Should only return values from TEST_SPACE_ID
+			expect(valuesResult).toHaveLength(4) // 4 properties in TEST_SPACE_ID
+			expect(valuesResult.every(v => v.spaceId === TEST_SPACE_ID)).toBe(true)
+		})
+
+		it("should filter values by different spaceId in getValues function", async () => {
+			// Test getValues with different spaceId parameter
+			const valuesResult = await Effect.runPromise(
+				getValues(TEST_ENTITY_5_ID, TEST_SPACE_2_ID).pipe(provideDeps)
+			)
+
+			// Should only return values from TEST_SPACE_2_ID
+			expect(valuesResult).toHaveLength(4) // 4 properties in TEST_SPACE_2_ID
+			expect(valuesResult.every(v => v.spaceId === TEST_SPACE_2_ID)).toBe(true)
+		})
+
+		it("should return empty array when entity has no values in specified space", async () => {
+			// Test getValues with spaceId that entity doesn't have data in
+			const valuesResult = await Effect.runPromise(
+				getValues(TEST_ENTITY_1_ID, TEST_SPACE_2_ID).pipe(provideDeps)
+			)
+
+			// Should return empty array since TEST_ENTITY_1_ID has no values in TEST_SPACE_2_ID
+			expect(valuesResult).toHaveLength(0)
+		})
+
+		it("should return all values when no spaceId provided to getValues", async () => {
+			// Test getValues without spaceId parameter
+			const valuesResult = await Effect.runPromise(
+				getValues(TEST_ENTITY_1_ID).pipe(provideDeps)
+			)
+
+			// Should return all values regardless of space
+			expect(valuesResult.length).toBeGreaterThan(0)
+			// TEST_ENTITY_1_ID only has values in TEST_SPACE_ID
+			expect(valuesResult.every(v => v.spaceId === TEST_SPACE_ID)).toBe(true)
+		})
+
+		it("should filter relations by spaceId in getRelations function", async () => {
+			// Test getRelations with spaceId parameter
+			const relationsResult = await Effect.runPromise(
+				getRelations(TEST_ENTITY_1_ID, TEST_SPACE_ID).pipe(provideDeps)
+			)
+
+			// Should only return relations from TEST_SPACE_ID
+			expect(relationsResult.length).toBeGreaterThan(0)
+			expect(relationsResult.every(r => r.spaceId === TEST_SPACE_ID)).toBe(true)
+		})
+
+		it("should filter relations by different spaceId in getRelations function", async () => {
+			// Test getRelations with different spaceId parameter
+			const relationsResult = await Effect.runPromise(
+				getRelations(TEST_ENTITY_5_ID, TEST_SPACE_2_ID).pipe(provideDeps)
+			)
+
+			// Should only return relations from TEST_SPACE_2_ID
+			expect(relationsResult.length).toBeGreaterThan(0)
+			expect(relationsResult.every(r => r.spaceId === TEST_SPACE_2_ID)).toBe(true)
+		})
+
+		it("should return empty array when entity has no relations in specified space", async () => {
+			// Test getRelations with spaceId that entity doesn't have relations in
+			const relationsResult = await Effect.runPromise(
+				getRelations(TEST_ENTITY_1_ID, TEST_SPACE_2_ID).pipe(provideDeps)
+			)
+
+			// Should return empty array since TEST_ENTITY_1_ID has no relations in TEST_SPACE_2_ID
+			expect(relationsResult).toHaveLength(0)
+		})
+
+		it("should return all relations when no spaceId provided to getRelations", async () => {
+			// Test getRelations without spaceId parameter
+			const relationsResult = await Effect.runPromise(
+				getRelations(TEST_ENTITY_1_ID).pipe(provideDeps)
+			)
+
+			// Should return all relations regardless of space
+			expect(relationsResult.length).toBeGreaterThan(0)
+			// TEST_ENTITY_1_ID only has relations in TEST_SPACE_ID
+			expect(relationsResult.every(r => r.spaceId === TEST_SPACE_ID)).toBe(true)
+		})
+
+		it("should handle null spaceId parameter in getValues", async () => {
+			// Test getValues with explicit null spaceId
+			const valuesResult = await Effect.runPromise(
+				getValues(TEST_ENTITY_1_ID, null).pipe(provideDeps)
+			)
+
+			// Should return all values when spaceId is null
+			expect(valuesResult.length).toBeGreaterThan(0)
+		})
+
+		it("should handle null spaceId parameter in getRelations", async () => {
+			// Test getRelations with explicit null spaceId
+			const relationsResult = await Effect.runPromise(
+				getRelations(TEST_ENTITY_1_ID, null).pipe(provideDeps)
+			)
+
+			// Should return all relations when spaceId is null
+			expect(relationsResult.length).toBeGreaterThan(0)
 		})
 	})
 })

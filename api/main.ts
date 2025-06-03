@@ -1,25 +1,33 @@
 import {makeExecutableSchema} from "@graphql-tools/schema"
 import {file} from "bun"
 import {createYoga} from "graphql-yoga"
-import type {QueryTypesArgs, Resolvers as GeneratedResolvers} from "./src/generated/graphql"
+import type {
+	EntityRelationsArgs,
+	EntityValuesArgs,
+	Resolvers as GeneratedResolvers,
+	InputMaybe,
+} from "./src/generated/graphql"
 import * as Resolvers from "./src/resolvers/root"
+
+interface GraphQLContext {
+	spaceId?: InputMaybe<string>
+}
 
 const schemaFile = await file("./schema.graphql").text()
 
 const resolvers: GeneratedResolvers = {
 	Query: {
-		entities: async (_, args) => {
+		entities: async (_, args, context: GraphQLContext) => {
+			context.spaceId = args.spaceId
 			return await Resolvers.entities(args)
 		},
-		entity: async (_, args) => {
+		entity: async (_, args, context: GraphQLContext) => {
+			context.spaceId = args.spaceId
 			return await Resolvers.entity(args)
 		},
-		types: async (_, args) => {
-			const result = await Resolvers.types(args)
-			return result.map((type) => ({
-				...type,
-				__spaceId: args.spaceId,
-			}))
+		types: async (_, args, context: GraphQLContext) => {
+			context.spaceId = args.spaceId
+			return await Resolvers.types(args)
 		},
 	},
 	Entity: {
@@ -38,11 +46,13 @@ const resolvers: GeneratedResolvers = {
 		spaces: async (parent: {id: string}) => {
 			return Resolvers.spaces({id: parent.id})
 		},
-		values: async (parent: {id: string}) => {
-			return Resolvers.values({id: parent.id})
+		values: async (parent: {id: string}, args: EntityValuesArgs, context: GraphQLContext) => {
+			const spaceId = args.spaceId ?? context.spaceId
+			return Resolvers.values({id: parent.id, spaceId})
 		},
-		relations: async (parent: {id: string}) => {
-			return Resolvers.relations({id: parent.id})
+		relations: async (parent: {id: string}, args: EntityRelationsArgs, context: GraphQLContext) => {
+			const spaceId = args.spaceId ?? context.spaceId
+			return Resolvers.relations({id: parent.id, spaceId})
 		},
 	},
 	Type: {
@@ -55,10 +65,8 @@ const resolvers: GeneratedResolvers = {
 		entity: async (parent: {id: string}) => {
 			return Resolvers.entity({id: parent.id})
 		},
-		properties: async (parent: {id: string}) => {
-			// @ts-expect-error type jankiness. Overwriting for now
-			const spaceId = (parent.__spaceId as QueryTypesArgs["spaceId"]) ?? null
-			return Resolvers.properties(parent.id, {spaceId: spaceId})
+		properties: async (parent: {id: string}, _: unknown, context: GraphQLContext) => {
+			return Resolvers.properties(parent.id, {spaceId: context.spaceId})
 		},
 	},
 	Value: {
@@ -95,6 +103,7 @@ const schema = makeExecutableSchema({
 const yoga = createYoga({
 	schema,
 	batching: true,
+	context: (): GraphQLContext => ({}),
 })
 
 const server = Bun.serve({
