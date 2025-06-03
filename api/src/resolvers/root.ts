@@ -1,8 +1,9 @@
 import {Effect, Layer} from "effect"
-import type {QueryEntitiesArgs, QueryEntityArgs, QueryTypesArgs} from "../generated/graphql"
+import type {QueryEntitiesArgs, QueryEntityArgs, QueryTypesArgs, QuerySearchArgs} from "../generated/graphql"
 import {Environment, make as makeEnvironment} from "../services/environment"
 import {Storage, make as makeStorage} from "../services/storage/storage"
 import * as EntityResolvers from "./entities"
+import * as SearchResolvers from "./search"
 import * as PropertyResolvers from "./properties"
 import * as TypeResolvers from "./types"
 
@@ -57,4 +58,8 @@ export const types = async (args: QueryTypesArgs) => {
 
 export const blocks = async (args: QueryEntityArgs) => {
 	return await Effect.runPromise(EntityResolvers.getBlocks(args.id).pipe(provideDeps))
+}
+
+export const search = async (args: QuerySearchArgs) => {
+	return await Effect.runPromise(SearchResolvers.search(args).pipe(provideDeps))
 }
