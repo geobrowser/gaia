@@ -78,7 +78,6 @@ jobs:
 
       - name: Setup database schema
         run: bun run db:setup
-</edits>
 
       - name: Run linting
         run: bunx @biomejs/biome check src/
