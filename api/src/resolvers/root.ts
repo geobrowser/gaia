@@ -35,12 +35,12 @@ export const spaces = async (args: QueryEntityArgs) => {
 	return await Effect.runPromise(EntityResolvers.getSpaces(args.id).pipe(provideDeps))
 }
 
-export const values = async (args: QueryEntityArgs) => {
-	return await Effect.runPromise(EntityResolvers.getValues(args.id).pipe(provideDeps))
+export const values = async (args: QueryEntityArgs & {spaceId?: string | null}) => {
+	return await Effect.runPromise(EntityResolvers.getValues(args.id, args.spaceId).pipe(provideDeps))
 }
 
-export const relations = async (args: QueryEntityArgs) => {
-	return await Effect.runPromise(EntityResolvers.getRelations(args.id).pipe(provideDeps))
+export const relations = async (args: QueryEntityArgs & {spaceId?: string | null}) => {
+	return await Effect.runPromise(EntityResolvers.getRelations(args.id, args.spaceId).pipe(provideDeps))
 }
 
 export const property = async (args: QueryEntityArgs) => {

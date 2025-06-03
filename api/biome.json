@@ -10,7 +10,7 @@
       },
       "complexity": {
         "noStaticOnlyClass": "off",
-        "noBannedTypes": "warn",
+        "noBannedTypes": "off",
         "noForEach": "off"
       },
       "style": {

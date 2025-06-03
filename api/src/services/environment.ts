@@ -1,4 +1,4 @@
-import {Config, Context, Effect, Option, Redacted} from "effect"
+import {Config, Context, Effect, Option, type Redacted} from "effect"
 
 export type IEnvironment = Readonly<{
 	databaseUrl: Redacted.Redacted

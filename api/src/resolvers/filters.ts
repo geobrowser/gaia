@@ -1,5 +1,5 @@
-import {and, eq, isNull, like, not, or, sql, type SQL} from "drizzle-orm"
-import {entities, values} from "../services/storage/schema"
+import {type SQL, and, not, or, sql} from "drizzle-orm"
+import {values} from "../services/storage/schema"
 
 type TextFilter = {
 	is?: string
@@ -54,8 +54,74 @@ export type EntityFilter = {
 	toRelation?: RelationFilter
 }
 
-function buildValueWhere(filter: PropertyFilter) {
+function buildValueConditions(filter: PropertyFilter) {
+	const conditions = []
+
+	if (filter.text) {
+		const f = filter.text
+		if (f.is !== undefined) conditions.push(sql`values.value = ${f.is}`)
+		if (f.contains !== undefined) conditions.push(sql`values.value LIKE ${`%${f.contains}%`}`)
+		if (f.startsWith !== undefined) conditions.push(sql`values.value LIKE ${`${f.startsWith}%`}`)
+		if (f.endsWith !== undefined) conditions.push(sql`values.value LIKE ${`%${f.endsWith}`}`)
+		if (f.exists !== undefined) {
+			conditions.push(f.exists ? sql`values.value IS NOT NULL` : sql`values.value IS NULL`)
+		}
+	}
+
+	if (filter.number) {
+		const f = filter.number
+		// Use CASE to safely cast, returning NULL for non-numeric values
+		const safeCasted = sql`CASE
+        WHEN values.value ~ '^-?([0-9]+\.?[0-9]*|\.[0-9]+)([eE][-+]?[0-9]+)?$'
+
+        THEN values.value::numeric
+        ELSE NULL
+    END`
+
+		if (f.is !== undefined) conditions.push(sql`${safeCasted} = ${f.is}`)
+		if (f.lessThan !== undefined) conditions.push(sql`${safeCasted} < ${f.lessThan}`)
+		if (f.lessThanOrEqual !== undefined) conditions.push(sql`${safeCasted} <= ${f.lessThanOrEqual}`)
+		if (f.greaterThan !== undefined) conditions.push(sql`${safeCasted} > ${f.greaterThan}`)
+		if (f.greaterThanOrEqual !== undefined) conditions.push(sql`${safeCasted} >= ${f.greaterThanOrEqual}`)
+
+		if (f.exists !== undefined) {
+			// For exists, check if the value exists AND is numeric
+			const isNumeric = sql`values.value ~ '^-?([0-9]+\.?[0-9]*|\.[0-9]+)([eE][-+]?[0-9]+)?$'`
+
+			if (f.exists) {
+				conditions.push(sql`(values.value IS NOT NULL AND ${isNumeric})`)
+			} else {
+				conditions.push(sql`(values.value IS NULL OR NOT ${isNumeric})`)
+			}
+		}
+	}
+
+	if (filter.checkbox) {
+		const f = filter.checkbox
+		if (f.is !== undefined) conditions.push(sql`values.value = ${f.is.toString()}`)
+		if (f.exists !== undefined) {
+			conditions.push(f.exists ? sql`values.value IS NOT NULL` : sql`values.value IS NULL`)
+		}
+	}
+
+	if (filter.point) {
+		const f = filter.point
+		if (f.is !== undefined) conditions.push(sql`values.value = ${JSON.stringify(f.is)}`)
+		if (f.exists !== undefined) {
+			conditions.push(f.exists ? sql`values.value IS NOT NULL` : sql`values.value IS NULL`)
+		}
+	}
+
+	return conditions
+}
+
+function buildValueWhere(filter: PropertyFilter, spaceId?: string | null) {
 	const conditions = [sql`values.property_id = ${filter.property}`]
+
+	// Add spaceId filtering if provided
+	if (spaceId) {
+		conditions.push(sql`values.space_id = ${spaceId}`)
+	}
 
 	if (filter.text) {
 		const f = filter.text
@@ -67,9 +133,9 @@ function buildValueWhere(filter: PropertyFilter) {
 			conditions.push(f.exists ? sql`values.value IS NOT NULL` : sql`values.value IS NULL`)
 		}
 		if (f.NOT) {
-			const notCondition = buildValueWhere({property: filter.property, text: f.NOT})
-			if (notCondition) {
-				conditions.push(not(notCondition))
+			const notConditions = buildValueConditions({property: filter.property, text: f.NOT})
+			if (notConditions.length > 0) {
+				conditions.push(not(sql.join(notConditions, sql` AND `)))
 			}
 		}
 	}
@@ -102,9 +168,9 @@ function buildValueWhere(filter: PropertyFilter) {
 		}
 
 		if (f.NOT) {
-			const notCondition = buildValueWhere({property: filter.property, number: f.NOT})
-			if (notCondition) {
-				conditions.push(not(notCondition))
+			const notConditions = buildValueConditions({property: filter.property, number: f.NOT})
+			if (notConditions.length > 0) {
+				conditions.push(not(sql.join(notConditions, sql` AND `)))
 			}
 		}
 	}
@@ -128,7 +194,7 @@ function buildValueWhere(filter: PropertyFilter) {
 	return sql.join(conditions, sql` AND `)
 }
 
-function buildRelationConditions(filter: RelationFilter) {
+function buildRelationConditions(filter: RelationFilter, spaceId?: string | null) {
 	const conditions = []
 
 	if (filter.typeId !== undefined) {
@@ -144,39 +210,61 @@ function buildRelationConditions(filter: RelationFilter) {
 		conditions.push(sql`space_id = ${filter.spaceId}`)
 	}
 
+	// Add spaceId filtering if provided and not already specified in filter
+	if (spaceId && filter.spaceId === undefined) {
+		conditions.push(sql`space_id = ${spaceId}`)
+	}
+
 	return conditions.length > 0 ? sql.join(conditions, sql` AND `) : undefined
 }
 
-export function buildEntityWhere(filter: EntityFilter | null): SQL | undefined {
-	if (!filter) return undefined
+export function buildEntityWhere(filter: EntityFilter | null, spaceId?: string | null): SQL | undefined {
+	if (!filter && !spaceId) return undefined
 
 	const clauses = []
 
-	if (filter.AND) {
-		clauses.push(and(...filter.AND.map(buildEntityWhere)))
+	// Add spaceId filtering if provided
+	if (spaceId) {
+		clauses.push(
+			sql`(
+				EXISTS (
+					SELECT 1 FROM ${values} 
+					WHERE values.entity_id = entities.id 
+					AND values.space_id = ${spaceId}
+				) OR EXISTS (
+					SELECT 1 FROM relations 
+					WHERE relations.from_entity_id = entities.id 
+					AND relations.space_id = ${spaceId}
+				)
+			)`,
+		)
 	}
-	if (filter.OR) {
-		clauses.push(or(...filter.OR.map(buildEntityWhere)))
+
+	if (filter?.AND) {
+		clauses.push(and(...filter.AND.map((f) => buildEntityWhere(f, spaceId))))
 	}
-	if (filter.NOT) {
-		const notCondition = buildEntityWhere(filter.NOT)
+	if (filter?.OR) {
+		clauses.push(or(...filter.OR.map((f) => buildEntityWhere(f, spaceId))))
+	}
+	if (filter?.NOT) {
+		const notCondition = buildEntityWhere(filter.NOT, spaceId)
 		if (notCondition) {
 			clauses.push(not(notCondition))
 		}
 	}
-	if (filter.value) {
+	if (filter?.value) {
 		// This checks: exists a value with this filter for the entity
 		clauses.push(
 			sql`EXISTS (
         SELECT 1 FROM ${values}
         WHERE values.entity_id = entities.id
-        AND ${buildValueWhere(filter.value)}
+        AND ${buildValueWhere(filter.value, spaceId)}
       )`,
 		)
 	}
-	if (filter.fromRelation) {
+	if (filter?.fromRelation) {
 		// This checks: exists a relation where this entity is the fromEntity
-		const relationConditions = buildRelationConditions(filter.fromRelation)
+		const relationConditions = buildRelationConditions(filter.fromRelation, spaceId)
 		if (relationConditions) {
 			clauses.push(
 				sql`EXISTS (
@@ -193,9 +281,9 @@ export function buildEntityWhere(filter: EntityFilter | null): SQL | undefined {
 			)
 		}
 	}
-	if (filter.toRelation) {
+	if (filter?.toRelation) {
 		// This checks: exists a relation where this entity is the toEntity
-		const relationConditions = buildRelationConditions(filter.toRelation)
+		const relationConditions = buildRelationConditions(filter.toRelation, spaceId)
 		if (relationConditions) {
 			clauses.push(
 				sql`EXISTS (
