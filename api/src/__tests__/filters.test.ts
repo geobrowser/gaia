@@ -1436,9 +1436,9 @@ describe("Entity Filters Integration Tests", () => {
 			const testResults = filterToTestEntities(result)
 
 			// Should return entities that have values or relations in TEST_SPACE_2_ID
-			// From our test data: TEST_ENTITY_5_ID has data in TEST_SPACE_2_ID
-			expect(testResults).toHaveLength(1)
-			expect(testResults[0].id).toBe(TEST_ENTITY_5_ID)
+			// From our test data: TEST_ENTITY_3_ID has relation to 5 in TEST_SPACE_2_ID, TEST_ENTITY_5_ID has name in TEST_SPACE_2_ID
+			expect(testResults).toHaveLength(2)
+			expect(testResults.map((r) => r.id).sort()).toEqual([TEST_ENTITY_3_ID, TEST_ENTITY_5_ID].sort())
 		})
 
 		it("should return empty array when no entities exist in specified space", async () => {
@@ -1465,7 +1465,7 @@ describe("Entity Filters Integration Tests", () => {
 						value: {
 							property: TEXT_PROPERTY_ID,
 							text: {
-								contains: "test",
+								contains: "Hello",
 							},
 						},
 					},
@@ -1477,9 +1477,9 @@ describe("Entity Filters Integration Tests", () => {
 			const testResults = filterToTestEntities(result)
 
 			// Should return only entities in TEST_SPACE_ID that also match the text filter
-			// TEST_ENTITY_1_ID has "test value" in TEST_SPACE_ID
-			expect(testResults).toHaveLength(1)
-			expect(testResults[0].id).toBe(TEST_ENTITY_1_ID)
+			// TEST_ENTITY_1_ID has "Hello World" and TEST_ENTITY_2_ID has "Hello Universe" in TEST_SPACE_ID
+			expect(testResults).toHaveLength(2)
+			expect(testResults.map((r) => r.id).sort()).toEqual([TEST_ENTITY_1_ID, TEST_ENTITY_2_ID].sort())
 		})
 
 		it("should combine spaceId filter with relation filters", async () => {
@@ -1499,10 +1499,10 @@ describe("Entity Filters Integration Tests", () => {
 
 			const testResults = filterToTestEntities(result)
 
-			// Should return only entities in TEST_SPACE_ID that also have the specified relation
-			// TEST_ENTITY_1_ID has both relations and values in TEST_SPACE_ID
-			expect(testResults).toHaveLength(1)
-			expect(testResults[0].id).toBe(TEST_ENTITY_1_ID)
+			// Should return entities in TEST_SPACE_ID that have outgoing relations of TEST_RELATION_TYPE_ID
+			// TEST_ENTITY_1_ID (1->2), TEST_ENTITY_2_ID (2->3), TEST_ENTITY_4_ID (4->2) all have this relation type
+			expect(testResults).toHaveLength(3)
+			expect(testResults.map((r) => r.id).sort()).toEqual([TEST_ENTITY_1_ID, TEST_ENTITY_2_ID, TEST_ENTITY_4_ID].sort())
 		})
 
 		it("should handle complex filters with spaceId", async () => {
@@ -1516,7 +1516,7 @@ describe("Entity Filters Integration Tests", () => {
 								value: {
 									property: TEXT_PROPERTY_ID,
 									text: {
-										contains: "test",
+										contains: "Hello",
 									},
 								},
 							},
@@ -1524,7 +1524,7 @@ describe("Entity Filters Integration Tests", () => {
 								value: {
 									property: NUMBER_PROPERTY_ID,
 									number: {
-										greaterThan: 100,
+										greaterThan: 50,
 									},
 								},
 							},
@@ -1538,7 +1538,7 @@ describe("Entity Filters Integration Tests", () => {
 			const testResults = filterToTestEntities(result)
 
 			// Should return entities in TEST_SPACE_ID that match either condition
-			// TEST_ENTITY_1_ID matches text condition, TEST_ENTITY_2_ID matches number condition
+			// TEST_ENTITY_1_ID and TEST_ENTITY_2_ID match text condition, TEST_ENTITY_2_ID matches number condition (100 > 50)
 			expect(testResults).toHaveLength(2)
 			expect(testResults.map((r) => r.id).sort()).toEqual([TEST_ENTITY_1_ID, TEST_ENTITY_2_ID].sort())
 		})
@@ -1553,7 +1553,7 @@ describe("Entity Filters Integration Tests", () => {
 							value: {
 								property: TEXT_PROPERTY_ID,
 								text: {
-									contains: "test",
+									contains: "Hello",
 								},
 							},
 						},
@@ -1566,11 +1566,12 @@ describe("Entity Filters Integration Tests", () => {
 			const testResults = filterToTestEntities(result)
 
 			// Should return entities in TEST_SPACE_ID that do NOT match the text condition
-			// TEST_ENTITY_2_ID, TEST_ENTITY_3_ID, TEST_ENTITY_4_ID don't have "test" in text
-			expect(testResults).toHaveLength(3)
-			expect(testResults.map((r) => r.id).sort()).toEqual(
-				[TEST_ENTITY_2_ID, TEST_ENTITY_3_ID, TEST_ENTITY_4_ID].sort(),
-			)
+			// TEST_ENTITY_3_ID has "Goodbye World" (doesn't contain "Hello"), TEST_ENTITY_4_ID has no text value
+			expect(testResults).toHaveLength(2)
+			expect(testResults.map((r) => r.id).sort()).toEqual([
+				TEST_ENTITY_3_ID,
+				TEST_ENTITY_4_ID,
+			].sort())
 		})
 
 		it("should filter entities with only values in specified space", async () => {
@@ -1696,9 +1697,9 @@ describe("Entity Filters Integration Tests", () => {
 					spaceId: TEST_SPACE_2_ID,
 					filter: {
 						value: {
-							property: TEXT_PROPERTY_ID,
+							property: SystemIds.NAME_PROPERTY,
 							text: {
-								contains: "space2",
+								contains: "Five",
 							},
 						},
 					},
@@ -1709,8 +1710,8 @@ describe("Entity Filters Integration Tests", () => {
 
 			const testResults = filterToTestEntities(result)
 
-			// Should only find entities that have "space2" text in TEST_SPACE_2_ID
-			// TEST_ENTITY_5_ID has "space2 value" in TEST_SPACE_2_ID
+			// Should only find entities that have "Five" in name in TEST_SPACE_2_ID
+			// TEST_ENTITY_5_ID has "Entity Five" name in TEST_SPACE_2_ID
 			expect(testResults).toHaveLength(1)
 			expect(testResults[0].id).toBe(TEST_ENTITY_5_ID)
 		})
@@ -1732,10 +1733,10 @@ describe("Entity Filters Integration Tests", () => {
 
 			const testResults = filterToTestEntities(result)
 
-			// Should only find entities that have the relation in TEST_SPACE_2_ID
-			// TEST_ENTITY_5_ID has relations in TEST_SPACE_2_ID
+			// Should only find entities that have outgoing relations of TEST_RELATION_TYPE_ID in TEST_SPACE_2_ID
+			// TEST_ENTITY_3_ID has relation 3->5 in TEST_SPACE_2_ID
 			expect(testResults).toHaveLength(1)
-			expect(testResults[0].id).toBe(TEST_ENTITY_5_ID)
+			expect(testResults[0].id).toBe(TEST_ENTITY_3_ID)
 		})
 	})
 
@@ -1745,8 +1746,9 @@ describe("Entity Filters Integration Tests", () => {
 			const valuesResult = await Effect.runPromise(getValues(TEST_ENTITY_1_ID, TEST_SPACE_ID).pipe(provideDeps))
 
 			// Should only return values from TEST_SPACE_ID
-			expect(valuesResult).toHaveLength(4) // 4 properties in TEST_SPACE_ID
-			expect(valuesResult.every((v) => v.spaceId === TEST_SPACE_ID)).toBe(true)
+			// Entity 1 has: text, number, checkbox, point, name = 5 properties
+			expect(valuesResult).toHaveLength(5)
+			expect(valuesResult.every(v => v.spaceId === TEST_SPACE_ID)).toBe(true)
 		})
 
 		it("should filter values by different spaceId in getValues function", async () => {
@@ -1754,8 +1756,9 @@ describe("Entity Filters Integration Tests", () => {
 			const valuesResult = await Effect.runPromise(getValues(TEST_ENTITY_5_ID, TEST_SPACE_2_ID).pipe(provideDeps))
 
 			// Should only return values from TEST_SPACE_2_ID
-			expect(valuesResult).toHaveLength(4) // 4 properties in TEST_SPACE_2_ID
-			expect(valuesResult.every((v) => v.spaceId === TEST_SPACE_2_ID)).toBe(true)
+			// Entity 5 only has name property in TEST_SPACE_2_ID
+			expect(valuesResult).toHaveLength(1)
+			expect(valuesResult.every(v => v.spaceId === TEST_SPACE_2_ID)).toBe(true)
 		})
 
 		it("should return empty array when entity has no values in specified space", async () => {
@@ -1779,23 +1782,24 @@ describe("Entity Filters Integration Tests", () => {
 		it("should filter relations by spaceId in getRelations function", async () => {
 			// Test getRelations with spaceId parameter
 			const relationsResult = await Effect.runPromise(
-				getRelations(TEST_ENTITY_1_ID, TEST_SPACE_ID).pipe(provideDeps),
+				getRelations(TEST_ENTITY_1_ID, TEST_SPACE_ID).pipe(provideDeps)
 			)
 
 			// Should only return relations from TEST_SPACE_ID
 			expect(relationsResult.length).toBeGreaterThan(0)
-			expect(relationsResult.every((r) => r.spaceId === TEST_SPACE_ID)).toBe(true)
+			expect(relationsResult.every(r => r.spaceId === TEST_SPACE_ID)).toBe(true)
 		})
 
 		it("should filter relations by different spaceId in getRelations function", async () => {
-			// Test getRelations with different spaceId parameter
+			// Test getRelations with different spaceId parameter  
 			const relationsResult = await Effect.runPromise(
-				getRelations(TEST_ENTITY_5_ID, TEST_SPACE_2_ID).pipe(provideDeps),
+				getRelations(TEST_ENTITY_3_ID, TEST_SPACE_2_ID).pipe(provideDeps)
 			)
 
 			// Should only return relations from TEST_SPACE_2_ID
+			// Entity 3 has one outgoing relation (3->5) in TEST_SPACE_2_ID
 			expect(relationsResult.length).toBeGreaterThan(0)
-			expect(relationsResult.every((r) => r.spaceId === TEST_SPACE_2_ID)).toBe(true)
+			expect(relationsResult.every(r => r.spaceId === TEST_SPACE_2_ID)).toBe(true)
 		})
 
 		it("should return empty array when entity has no relations in specified space", async () => {
