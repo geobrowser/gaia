@@ -1,10 +1,10 @@
 import {Effect, Layer} from "effect"
-import type {QueryEntitiesArgs, QueryEntityArgs, QueryTypesArgs, QuerySearchArgs} from "../generated/graphql"
+import type {QueryEntitiesArgs, QueryEntityArgs, QuerySearchArgs, QueryTypesArgs} from "../generated/graphql"
 import {Environment, make as makeEnvironment} from "../services/environment"
 import {Storage, make as makeStorage} from "../services/storage/storage"
 import * as EntityResolvers from "./entities"
-import * as SearchResolvers from "./search"
 import * as PropertyResolvers from "./properties"
+import * as SearchResolvers from "./search"
 import * as TypeResolvers from "./types"
 
 const EnvironmentLayer = Layer.effect(Environment, makeEnvironment)

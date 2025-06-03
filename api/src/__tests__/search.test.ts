@@ -1,12 +1,12 @@
 import {SystemIds} from "@graphprotocol/grc-20"
-import {Effect, Layer} from "effect"
 import {sql} from "drizzle-orm"
+import {Effect, Layer} from "effect"
 import {beforeEach, describe, expect, it} from "vitest"
-import {entities, values, relations} from "../services/storage/schema"
-import type {DbEntity} from "../services/storage/schema"
-import {Environment, make as makeEnvironment} from "../services/environment"
-import {Storage, make as makeStorage} from "../services/storage/storage"
 import * as SearchResolvers from "../resolvers/search"
+import {Environment, make as makeEnvironment} from "../services/environment"
+import {entities, relations, values} from "../services/storage/schema"
+import type {DbEntity} from "../services/storage/schema"
+import {Storage, make as makeStorage} from "../services/storage/storage"
 
 const EnvironmentLayer = Layer.effect(Environment, makeEnvironment)
 const StorageLayer = Layer.effect(Storage, makeStorage).pipe(Layer.provide(EnvironmentLayer))
@@ -98,8 +98,8 @@ describe("Search Integration Tests", () => {
 			yield* db.use(async (client) => {
 				const testEntityIds = [
 					"550e8400-e29b-41d4-a716-446655440001",
-					"550e8400-e29b-41d4-a716-446655440002", 
-					"550e8400-e29b-41d4-a716-446655440003"
+					"550e8400-e29b-41d4-a716-446655440002",
+					"550e8400-e29b-41d4-a716-446655440003",
 				]
 				for (const entityId of testEntityIds) {
 					await client.delete(relations).where(sql`entity_id = ${entityId}`).execute()
@@ -129,7 +129,7 @@ describe("Search Integration Tests", () => {
 					query: "artificial",
 					limit: 10,
 					offset: 0,
-				}).pipe(provideDeps)
+				}).pipe(provideDeps),
 			)
 
 			expect(result).toHaveLength(1)
@@ -142,11 +142,11 @@ describe("Search Integration Tests", () => {
 					query: "learning",
 					limit: 10,
 					offset: 0,
-				}).pipe(provideDeps)
+				}).pipe(provideDeps),
 			)
 
 			expect(result).toHaveLength(2)
-			const entityIds = result.map(r => r.id).sort()
+			const entityIds = result.map((r) => r.id).sort()
 			expect(entityIds).toEqual(["550e8400-e29b-41d4-a716-446655440001", "550e8400-e29b-41d4-a716-446655440002"])
 		})
 
@@ -156,7 +156,7 @@ describe("Search Integration Tests", () => {
 					query: "neural",
 					limit: 10,
 					offset: 0,
-				}).pipe(provideDeps)
+				}).pipe(provideDeps),
 			)
 
 			expect(result).toHaveLength(1)
@@ -169,7 +169,7 @@ describe("Search Integration Tests", () => {
 					query: "data science",
 					limit: 10,
 					offset: 0,
-				}).pipe(provideDeps)
+				}).pipe(provideDeps),
 			)
 
 			expect(result).toHaveLength(1)
@@ -182,7 +182,7 @@ describe("Search Integration Tests", () => {
 					query: "blockchain",
 					limit: 10,
 					offset: 0,
-				}).pipe(provideDeps)
+				}).pipe(provideDeps),
 			)
 
 			expect(result).toHaveLength(0)
@@ -197,7 +197,7 @@ describe("Search Integration Tests", () => {
 					spaceId: "space1",
 					limit: 10,
 					offset: 0,
-				}).pipe(provideDeps)
+				}).pipe(provideDeps),
 			)
 
 			expect(result).toHaveLength(1)
@@ -211,7 +211,7 @@ describe("Search Integration Tests", () => {
 					spaceId: "space2",
 					limit: 10,
 					offset: 0,
-				}).pipe(provideDeps)
+				}).pipe(provideDeps),
 			)
 
 			expect(result).toHaveLength(1)
@@ -225,7 +225,7 @@ describe("Search Integration Tests", () => {
 					spaceId: "nonexistent-space",
 					limit: 10,
 					offset: 0,
-				}).pipe(provideDeps)
+				}).pipe(provideDeps),
 			)
 
 			expect(result).toHaveLength(0)
@@ -237,11 +237,11 @@ describe("Search Integration Tests", () => {
 					query: "data",
 					limit: 10,
 					offset: 0,
-				}).pipe(provideDeps)
+				}).pipe(provideDeps),
 			)
 
 			expect(result).toHaveLength(2)
-			const entityIds = result.map(r => r.id).sort()
+			const entityIds = result.map((r) => r.id).sort()
 			expect(entityIds).toEqual(["550e8400-e29b-41d4-a716-446655440002", "550e8400-e29b-41d4-a716-446655440003"])
 		})
 	})
@@ -253,7 +253,7 @@ describe("Search Integration Tests", () => {
 					query: "artificial",
 					limit: 10,
 					offset: 0,
-				}).pipe(provideDeps)
+				}).pipe(provideDeps),
 			)
 
 			expect(result).toHaveLength(1)
@@ -267,7 +267,7 @@ describe("Search Integration Tests", () => {
 					spaceId: "space2",
 					limit: 10,
 					offset: 0,
-				}).pipe(provideDeps)
+				}).pipe(provideDeps),
 			)
 
 			expect(result).toHaveLength(1)
@@ -281,7 +281,7 @@ describe("Search Integration Tests", () => {
 					spaceId: "space1",
 					limit: 10,
 					offset: 0,
-				}).pipe(provideDeps)
+				}).pipe(provideDeps),
 			)
 
 			expect(result).toHaveLength(0)
@@ -295,7 +295,7 @@ describe("Search Integration Tests", () => {
 					query: "data",
 					limit: 1,
 					offset: 0,
-				}).pipe(provideDeps)
+				}).pipe(provideDeps),
 			)
 
 			expect(result).toHaveLength(1)
@@ -307,7 +307,7 @@ describe("Search Integration Tests", () => {
 					query: "data",
 					limit: 10,
 					offset: 0,
-				}).pipe(provideDeps)
+				}).pipe(provideDeps),
 			)
 
 			const offsetResults = await Effect.runPromise(
@@ -315,7 +315,7 @@ describe("Search Integration Tests", () => {
 					query: "data",
 					limit: 10,
 					offset: 1,
-				}).pipe(provideDeps)
+				}).pipe(provideDeps),
 			)
 
 			expect(allResults).toHaveLength(2)
@@ -331,7 +331,7 @@ describe("Search Integration Tests", () => {
 					query: "",
 					limit: 10,
 					offset: 0,
-				}).pipe(provideDeps)
+				}).pipe(provideDeps),
 			)
 
 			expect(result).toHaveLength(0)
@@ -343,7 +343,7 @@ describe("Search Integration Tests", () => {
 					query: "a",
 					limit: 10,
 					offset: 0,
-				}).pipe(provideDeps)
+				}).pipe(provideDeps),
 			)
 
 			// Single characters may not work well with trigrams, expect few or no results
@@ -356,7 +356,7 @@ describe("Search Integration Tests", () => {
 					query: "AI-systems",
 					limit: 10,
 					offset: 0,
-				}).pipe(provideDeps)
+				}).pipe(provideDeps),
 			)
 
 			expect(result.length).toBeGreaterThanOrEqual(0)
@@ -368,7 +368,7 @@ describe("Search Integration Tests", () => {
 					query: "artificial",
 					limit: 10,
 					offset: 0,
-				}).pipe(provideDeps)
+				}).pipe(provideDeps),
 			)
 
 			const upperResult = await Effect.runPromise(
@@ -376,7 +376,7 @@ describe("Search Integration Tests", () => {
 					query: "ARTIFICIAL",
 					limit: 10,
 					offset: 0,
-				}).pipe(provideDeps)
+				}).pipe(provideDeps),
 			)
 
 			expect(lowerResult).toHaveLength(1)
