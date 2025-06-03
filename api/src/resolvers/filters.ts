@@ -117,7 +117,7 @@ function buildValueConditions(filter: PropertyFilter) {
 
 function buildValueWhere(filter: PropertyFilter, spaceId?: string | null) {
 	const conditions = [sql`values.property_id = ${filter.property}`]
-	
+
 	// Add spaceId filtering if provided
 	if (spaceId) {
 		conditions.push(sql`values.space_id = ${spaceId}`)
@@ -209,7 +209,7 @@ function buildRelationConditions(filter: RelationFilter, spaceId?: string | null
 	if (filter.spaceId !== undefined) {
 		conditions.push(sql`space_id = ${filter.spaceId}`)
 	}
-	
+
 	// Add spaceId filtering if provided and not already specified in filter
 	if (spaceId && filter.spaceId === undefined) {
 		conditions.push(sql`space_id = ${spaceId}`)
@@ -236,15 +236,15 @@ export function buildEntityWhere(filter: EntityFilter | null, spaceId?: string |
 					WHERE relations.from_entity_id = entities.id 
 					AND relations.space_id = ${spaceId}
 				)
-			)`
+			)`,
 		)
 	}
 
 	if (filter?.AND) {
-		clauses.push(and(...filter.AND.map(f => buildEntityWhere(f, spaceId))))
+		clauses.push(and(...filter.AND.map((f) => buildEntityWhere(f, spaceId))))
 	}
 	if (filter?.OR) {
-		clauses.push(or(...filter.OR.map(f => buildEntityWhere(f, spaceId))))
+		clauses.push(or(...filter.OR.map((f) => buildEntityWhere(f, spaceId))))
 	}
 	if (filter?.NOT) {
 		const notCondition = buildEntityWhere(filter.NOT, spaceId)
