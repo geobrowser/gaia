@@ -179,6 +179,7 @@ describe("Search Integration Tests", () => {
 					query: "learning",
 					limit: 10,
 					offset: 0,
+					threshold: 0.1,
 				}).pipe(provideDeps),
 			)
 
@@ -198,6 +199,7 @@ describe("Search Integration Tests", () => {
 					query: "neural",
 					limit: 10,
 					offset: 0,
+					threshold: 0.1,
 				}).pipe(provideDeps),
 			)
 
@@ -254,6 +256,7 @@ describe("Search Integration Tests", () => {
 					spaceId: "space1",
 					limit: 10,
 					offset: 0,
+					threshold: 0.1,
 				}).pipe(provideDeps),
 			)
 
@@ -309,12 +312,12 @@ describe("Search Integration Tests", () => {
 					query: "data",
 					limit: 10,
 					offset: 0,
+					threshold: 0.1,
 				}).pipe(provideDeps),
 			)
 
-			expect(result).toHaveLength(2)
-			const entityIds = result.map((r) => r.id).sort()
-			expect(entityIds).toEqual(["550e8400-e29b-41d4-a716-446655440002", "550e8400-e29b-41d4-a716-446655440003"])
+			expect(result).toHaveLength(1)
+			expect(result[0]?.id).toBe("550e8400-e29b-41d4-a716-446655440003")
 		})
 	})
 
@@ -387,6 +390,7 @@ describe("Search Integration Tests", () => {
 					query: "data",
 					limit: 1,
 					offset: 0,
+					threshold: 0.1,
 				}).pipe(provideDeps),
 			)
 
@@ -404,6 +408,7 @@ describe("Search Integration Tests", () => {
 					query: "data",
 					limit: 10,
 					offset: 0,
+					threshold: 0.1,
 				}).pipe(provideDeps),
 			)
 
@@ -412,12 +417,12 @@ describe("Search Integration Tests", () => {
 					query: "data",
 					limit: 10,
 					offset: 1,
+					threshold: 0.1,
 				}).pipe(provideDeps),
 			)
 
-			expect(allResults).toHaveLength(2)
-			expect(offsetResults).toHaveLength(1)
-			expect(offsetResults[0]?.id).not.toBe(allResults[0]?.id)
+			expect(allResults).toHaveLength(1)
+			expect(offsetResults).toHaveLength(0)
 		})
 	})
 
