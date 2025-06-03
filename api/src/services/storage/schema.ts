@@ -1,5 +1,5 @@
 import {type InferSelectModel, relations as drizzleRelations} from "drizzle-orm"
-import {boolean, jsonb, pgEnum, pgTable, serial, text, uuid} from "drizzle-orm/pg-core"
+import {boolean, index, jsonb, pgEnum, pgTable, serial, text, uuid} from "drizzle-orm/pg-core"
 
 export const ipfsCache = pgTable("ipfs_cache", {
 	id: serial(),
@@ -31,15 +31,24 @@ export const properties = pgTable("properties", {
 	type: dataTypesEnum().notNull(),
 })
 
-export const values = pgTable("values", {
-	id: text().primaryKey(),
-	propertyId: uuid().notNull(),
-	entityId: uuid().notNull(),
-	spaceId: text().notNull(),
-	value: text().notNull(),
-	language: text(),
-	unit: text(),
-})
+export const values = pgTable(
+	"values",
+	{
+		id: text().primaryKey(),
+		propertyId: uuid().notNull(),
+		entityId: uuid().notNull(),
+		spaceId: text().notNull(),
+		value: text().notNull(),
+		language: text(),
+		unit: text(),
+	},
+	(table) => [
+		// Basic index for text searches - will add GIN via migration
+		index("values_text_idx").on(table.value),
+		// Composite index for space-filtered searches
+		index("values_space_text_idx").on(table.spaceId, table.value),
+	],
+)
 
 export const relations = pgTable("relations", {
 	id: uuid().primaryKey(),

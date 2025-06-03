@@ -70,6 +70,12 @@ jobs:
         env:
           PGPASSWORD: test_password
 
+      - name: Create pg_trgm extension
+        run: |
+          psql -h localhost -p 5432 -U test_user -d gaia_test -c "CREATE EXTENSION IF NOT EXISTS pg_trgm;"
+        env:
+          PGPASSWORD: test_password
+
       - name: Setup database schema
         run: bun run db:setup
 

@@ -4,6 +4,7 @@ import {createYoga} from "graphql-yoga"
 import type {
 	EntityRelationsArgs,
 	EntityValuesArgs,
+	QuerySearchArgs,
 	Resolvers as GeneratedResolvers,
 	InputMaybe,
 } from "./src/generated/graphql"
@@ -28,6 +29,10 @@ const resolvers: GeneratedResolvers = {
 		types: async (_, args, context: GraphQLContext) => {
 			context.spaceId = args.spaceId
 			return await Resolvers.types(args)
+		},
+		search: async (_, args: QuerySearchArgs, context: GraphQLContext) => {
+			context.spaceId = args.spaceId
+			return await Resolvers.search(args)
 		},
 	},
 	Entity: {

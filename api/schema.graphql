@@ -115,7 +115,16 @@ type Query {
   entity(id: String!, spaceId: String): Entity
 
   types(spaceId: String, limit: Int = 100, offset: Int = 0): [Type]!
-  # fuzzy search
+
+  # Search entities by name and description using pg_trgm similarity
+  search(
+    query: String!
+    spaceId: String
+    limit: Int = 10
+    offset: Int = 0
+    threshold: Float = 0.3
+  ): [Entity]!
+
   # relation
   # relations
   # property

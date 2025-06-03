@@ -104,6 +104,7 @@ export type Query = {
 	__typename?: "Query"
 	entities: Array<Maybe<Entity>>
 	entity?: Maybe<Entity>
+	search: Array<Maybe<Entity>>
 	types: Array<Maybe<Type>>
 }
 
@@ -117,6 +118,14 @@ export type QueryEntitiesArgs = {
 export type QueryEntityArgs = {
 	id: Scalars["String"]["input"]
 	spaceId?: InputMaybe<Scalars["String"]["input"]>
+}
+
+export type QuerySearchArgs = {
+	limit?: InputMaybe<Scalars["Int"]["input"]>
+	offset?: InputMaybe<Scalars["Int"]["input"]>
+	query: Scalars["String"]["input"]
+	spaceId?: InputMaybe<Scalars["String"]["input"]>
+	threshold?: InputMaybe<Scalars["Float"]["input"]>
 }
 
 export type QueryTypesArgs = {
@@ -404,6 +413,12 @@ export type QueryResolvers<
 		RequireFields<QueryEntitiesArgs, "limit" | "offset">
 	>
 	entity?: Resolver<Maybe<ResolversTypes["Entity"]>, ParentType, ContextType, RequireFields<QueryEntityArgs, "id">>
+	search?: Resolver<
+		Array<Maybe<ResolversTypes["Entity"]>>,
+		ParentType,
+		ContextType,
+		RequireFields<QuerySearchArgs, "limit" | "offset" | "query" | "threshold">
+	>
 	types?: Resolver<
 		Array<Maybe<ResolversTypes["Type"]>>,
 		ParentType,
