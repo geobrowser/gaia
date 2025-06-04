@@ -1,0 +1,95 @@
+name: Indexer Integration Tests
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - "indexer/**"
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - "indexer/**"
+  workflow_dispatch:
+
+jobs:
+  indexer-integration-tests:
+    name: Indexer Integration Tests
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: test_user
+          POSTGRES_PASSWORD: test_password
+          POSTGRES_DB: gaia_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    env:
+      DATABASE_URL: postgresql://test_user:test_password@localhost:5432/gaia_test
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust dependencies
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target/
+          key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-cargo-
+
+      - name: Setup Bun for database migrations
+        uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: latest
+
+      - name: Install API dependencies
+        working-directory: ./api
+        run: bun install --frozen-lockfile
+
+      - name: Wait for PostgreSQL
+        run: |
+          until pg_isready -h localhost -p 5432 -U test_user; do
+            echo "Waiting for PostgreSQL..."
+            sleep 2
+          done
+        env:
+          PGPASSWORD: test_password
+
+      - name: Create pg_trgm extension
+        run: |
+          psql -h localhost -p 5432 -U test_user -d gaia_test -c "CREATE EXTENSION IF NOT EXISTS pg_trgm;"
+        env:
+          PGPASSWORD: test_password
+
+      - name: Setup database schema
+        working-directory: ./api
+        run: bun run db:setup
+
+      - name: Run indexer integration tests
+        run: cargo test --package indexer --test integration
+        env:
+          RUST_BACKTRACE: 1
+
+      - name: Upload test results
+        uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: indexer-test-results
+          path: |
+            target/debug/deps/integration-*
+          retention-days: 7
