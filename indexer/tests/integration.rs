@@ -75,7 +75,7 @@ async fn main() -> Result<(), IndexingError> {
                         },
                         TestValue {
                             property_id: "6ba7b810-9dad-11d1-80b4-00c04fd430c2".to_string(),
-                            value: Some("value 1".to_string()),
+                            value: Some("1".to_string()),
                         },
                     ],
                 ),
@@ -84,7 +84,7 @@ async fn main() -> Result<(), IndexingError> {
                     "550e8400-e29b-41d4-a716-446655440002",
                     vec![TestValue {
                         property_id: "6ba7b810-9dad-11d1-80b4-00c04fd430c2".to_string(),
-                        value: Some("value 2".to_string()),
+                        value: Some("2".to_string()),
                     }],
                 ),
                 make_entity_op(
@@ -259,6 +259,346 @@ async fn main() -> Result<(), IndexingError> {
             Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c2").unwrap()
         );
         assert_eq!(property.data_type, DataType::Number);
+    }
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_validation_rejects_invalid_number() -> Result<(), IndexingError> {
+    dotenv().ok();
+    let database_url = env::var("DATABASE_URL").expect("DATABASE_URL not set");
+    let storage = Arc::new(PostgresStorage::new(&database_url).await?);
+    let properties_cache = Arc::new(PropertiesCache::new());
+    let indexer = TestIndexer::new(storage.clone(), properties_cache);
+
+    // Create a Number property
+    let property_id = "11111111-1111-1111-1111-111111111111";
+    let property_op = make_property_op(property_id, PbDataType::Number);
+
+    // Try to set an invalid number value (contains letters)
+    let invalid_entity_op = make_entity_op(
+        TestEntityOpType::UPDATE,
+        "22222222-2222-2222-2222-222222222222",
+        vec![TestValue {
+            property_id: property_id.to_string(),
+            value: Some("not_a_number".to_string()),
+        }],
+    );
+
+    let edit = make_edit(
+        "33333333-3333-3333-3333-333333333333",
+        "Validation Test Edit",
+        "44444444-4444-4444-4444-444444444444",
+        vec![property_op, invalid_entity_op],
+    );
+
+    let item = PreprocessedEdit {
+        edit: Some(edit),
+        is_errored: false,
+        space_id: Uuid::parse_str("55555555-5555-5555-5555-555555555555").unwrap(),
+    };
+
+    let kg_data = make_kg_data_with_spaces(10, vec![item], vec![]);
+    let blocks = vec![kg_data];
+
+    // Run the indexer - this should succeed (no crash) but invalid data should be rejected
+    indexer.run(&blocks).await?;
+
+    // Verify the property was created
+    let property = storage.get_property(&property_id.to_string()).await.unwrap();
+    assert_eq!(property.data_type, DataType::Number);
+
+    // Verify the invalid value was NOT stored in the database
+    let entity_id = Uuid::parse_str("22222222-2222-2222-2222-222222222222").unwrap();
+    let property_id_uuid = Uuid::parse_str(property_id).unwrap();
+    let space_id = Uuid::parse_str("55555555-5555-5555-5555-555555555555").unwrap();
+    let expected_value_id = derive_value_id(&entity_id, &property_id_uuid, &space_id);
+
+    let value_result = storage.get_value(&expected_value_id.to_string()).await;
+    assert!(value_result.is_err(), "Invalid number value should not be stored in database");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_validation_rejects_invalid_checkbox() -> Result<(), IndexingError> {
+    dotenv().ok();
+    let database_url = env::var("DATABASE_URL").expect("DATABASE_URL not set");
+    let storage = Arc::new(PostgresStorage::new(&database_url).await?);
+    let properties_cache = Arc::new(PropertiesCache::new());
+    let indexer = TestIndexer::new(storage.clone(), properties_cache);
+
+    // Create a Checkbox property
+    let property_id = "66666666-6666-6666-6666-666666666666";
+    let property_op = make_property_op(property_id, PbDataType::Checkbox);
+
+    // Try to set an invalid checkbox value (should be 0 or 1)
+    let invalid_entity_op = make_entity_op(
+        TestEntityOpType::UPDATE,
+        "77777777-7777-7777-7777-777777777777",
+        vec![TestValue {
+            property_id: property_id.to_string(),
+            value: Some("2".to_string()), // Invalid: checkboxes only accept 0 or 1
+        }],
+    );
+
+    let edit = make_edit(
+        "88888888-8888-8888-8888-888888888888",
+        "Checkbox Validation Test",
+        "99999999-9999-9999-9999-999999999999",
+        vec![property_op, invalid_entity_op],
+    );
+
+    let item = PreprocessedEdit {
+        edit: Some(edit),
+        is_errored: false,
+        space_id: Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa").unwrap(),
+    };
+
+    let kg_data = make_kg_data_with_spaces(11, vec![item], vec![]);
+    let blocks = vec![kg_data];
+
+    // Run the indexer
+    indexer.run(&blocks).await?;
+
+    // Verify the property was created
+    let property = storage.get_property(&property_id.to_string()).await.unwrap();
+    assert_eq!(property.data_type, DataType::Checkbox);
+
+    // Verify the invalid value was NOT stored
+    let entity_id = Uuid::parse_str("77777777-7777-7777-7777-777777777777").unwrap();
+    let property_id_uuid = Uuid::parse_str(property_id).unwrap();
+    let space_id = Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa").unwrap();
+    let expected_value_id = derive_value_id(&entity_id, &property_id_uuid, &space_id);
+
+    let value_result = storage.get_value(&expected_value_id.to_string()).await;
+    assert!(value_result.is_err(), "Invalid checkbox value should not be stored in database");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_validation_rejects_invalid_time() -> Result<(), IndexingError> {
+    dotenv().ok();
+    let database_url = env::var("DATABASE_URL").expect("DATABASE_URL not set");
+    let storage = Arc::new(PostgresStorage::new(&database_url).await?);
+    let properties_cache = Arc::new(PropertiesCache::new());
+    let indexer = TestIndexer::new(storage.clone(), properties_cache);
+
+    // Create a Time property
+    let property_id = "bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb";
+    let property_op = make_property_op(property_id, PbDataType::Time);
+
+    // Try to set an invalid time value
+    let invalid_entity_op = make_entity_op(
+        TestEntityOpType::UPDATE,
+        "cccccccc-cccc-cccc-cccc-cccccccccccc",
+        vec![TestValue {
+            property_id: property_id.to_string(),
+            value: Some("not-a-valid-time".to_string()),
+        }],
+    );
+
+    let edit = make_edit(
+        "dddddddd-dddd-dddd-dddd-dddddddddddd",
+        "Time Validation Test",
+        "eeeeeeee-eeee-eeee-eeee-eeeeeeeeeeee",
+        vec![property_op, invalid_entity_op],
+    );
+
+    let item = PreprocessedEdit {
+        edit: Some(edit),
+        is_errored: false,
+        space_id: Uuid::parse_str("ffffffff-ffff-ffff-ffff-ffffffffffff").unwrap(),
+    };
+
+    let kg_data = make_kg_data_with_spaces(12, vec![item], vec![]);
+    let blocks = vec![kg_data];
+
+    // Run the indexer
+    indexer.run(&blocks).await?;
+
+    // Verify the property was created
+    let property = storage.get_property(&property_id.to_string()).await.unwrap();
+    assert_eq!(property.data_type, DataType::Time);
+
+    // Verify the invalid value was NOT stored
+    let entity_id = Uuid::parse_str("cccccccc-cccc-cccc-cccc-cccccccccccc").unwrap();
+    let property_id_uuid = Uuid::parse_str(property_id).unwrap();
+    let space_id = Uuid::parse_str("ffffffff-ffff-ffff-ffff-ffffffffffff").unwrap();
+    let expected_value_id = derive_value_id(&entity_id, &property_id_uuid, &space_id);
+
+    let value_result = storage.get_value(&expected_value_id.to_string()).await;
+    assert!(value_result.is_err(), "Invalid time value should not be stored in database");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_validation_rejects_invalid_point() -> Result<(), IndexingError> {
+    dotenv().ok();
+    let database_url = env::var("DATABASE_URL").expect("DATABASE_URL not set");
+    let storage = Arc::new(PostgresStorage::new(&database_url).await?);
+    let properties_cache = Arc::new(PropertiesCache::new());
+    let indexer = TestIndexer::new(storage.clone(), properties_cache);
+
+    // Create a Point property
+    let property_id = "12345678-1234-1234-1234-123456789012";
+    let property_op = make_property_op(property_id, PbDataType::Point);
+
+    // Try to set an invalid point value (should be "x,y" format)
+    let invalid_entity_op = make_entity_op(
+        TestEntityOpType::UPDATE,
+        "23456789-2345-2345-2345-234567890123",
+        vec![TestValue {
+            property_id: property_id.to_string(),
+            value: Some("invalid-point-format".to_string()),
+        }],
+    );
+
+    let edit = make_edit(
+        "34567890-3456-3456-3456-345678901234",
+        "Point Validation Test",
+        "45678901-4567-4567-4567-456789012345",
+        vec![property_op, invalid_entity_op],
+    );
+
+    let item = PreprocessedEdit {
+        edit: Some(edit),
+        is_errored: false,
+        space_id: Uuid::parse_str("56789012-5678-5678-5678-567890123456").unwrap(),
+    };
+
+    let kg_data = make_kg_data_with_spaces(13, vec![item], vec![]);
+    let blocks = vec![kg_data];
+
+    // Run the indexer
+    indexer.run(&blocks).await?;
+
+    // Verify the property was created
+    let property = storage.get_property(&property_id.to_string()).await.unwrap();
+    assert_eq!(property.data_type, DataType::Point);
+
+    // Verify the invalid value was NOT stored
+    let entity_id = Uuid::parse_str("23456789-2345-2345-2345-234567890123").unwrap();
+    let property_id_uuid = Uuid::parse_str(property_id).unwrap();
+    let space_id = Uuid::parse_str("56789012-5678-5678-5678-567890123456").unwrap();
+    let expected_value_id = derive_value_id(&entity_id, &property_id_uuid, &space_id);
+
+    let value_result = storage.get_value(&expected_value_id.to_string()).await;
+    assert!(value_result.is_err(), "Invalid point value should not be stored in database");
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_validation_allows_valid_data_mixed_with_invalid() -> Result<(), IndexingError> {
+    dotenv().ok();
+    let database_url = env::var("DATABASE_URL").expect("DATABASE_URL not set");
+    let storage = Arc::new(PostgresStorage::new(&database_url).await?);
+    let properties_cache = Arc::new(PropertiesCache::new());
+    let indexer = TestIndexer::new(storage.clone(), properties_cache);
+
+    // Create multiple properties
+    let number_prop_id = "67890123-6789-6789-6789-678901234567";
+    let text_prop_id = "78901234-7890-7890-7890-789012345678";
+    
+    let number_prop_op = make_property_op(number_prop_id, PbDataType::Number);
+    let text_prop_op = make_property_op(text_prop_id, PbDataType::Text);
+
+    // Entity with mixed valid and invalid values
+    let mixed_entity_op = make_entity_op(
+        TestEntityOpType::UPDATE,
+        "89012345-8901-8901-8901-890123456789",
+        vec![
+            TestValue {
+                property_id: number_prop_id.to_string(),
+                value: Some("42.5".to_string()), // Valid number
+            },
+            TestValue {
+                property_id: text_prop_id.to_string(),
+                value: Some("Valid text".to_string()), // Valid text
+            },
+        ],
+    );
+
+    // Another entity with invalid number but valid text
+    let invalid_entity_op = make_entity_op(
+        TestEntityOpType::UPDATE,
+        "90123456-9012-9012-9012-901234567890",
+        vec![
+            TestValue {
+                property_id: number_prop_id.to_string(),
+                value: Some("not_a_number".to_string()), // Invalid number
+            },
+            TestValue {
+                property_id: text_prop_id.to_string(),
+                value: Some("Another valid text".to_string()), // Valid text
+            },
+        ],
+    );
+
+    let edit = make_edit(
+        "01234567-0123-0123-0123-012345678901",
+        "Mixed Validation Test",
+        "10987654-1098-1098-1098-109876543210",
+        vec![number_prop_op, text_prop_op, mixed_entity_op, invalid_entity_op],
+    );
+
+    let item = PreprocessedEdit {
+        edit: Some(edit),
+        is_errored: false,
+        space_id: Uuid::parse_str("21098765-2109-2109-2109-210987654321").unwrap(),
+    };
+
+    let kg_data = make_kg_data_with_spaces(14, vec![item], vec![]);
+    let blocks = vec![kg_data];
+
+    // Run the indexer
+    indexer.run(&blocks).await?;
+
+    // Verify properties were created
+    let number_property = storage.get_property(&number_prop_id.to_string()).await.unwrap();
+    assert_eq!(number_property.data_type, DataType::Number);
+    let text_property = storage.get_property(&text_prop_id.to_string()).await.unwrap();
+    assert_eq!(text_property.data_type, DataType::Text);
+
+    let space_id = Uuid::parse_str("21098765-2109-2109-2109-210987654321").unwrap();
+
+    // Check first entity - valid values should be stored
+    {
+        let entity_id = Uuid::parse_str("89012345-8901-8901-8901-890123456789").unwrap();
+        let number_prop_uuid = Uuid::parse_str(number_prop_id).unwrap();
+        let text_prop_uuid = Uuid::parse_str(text_prop_id).unwrap();
+        
+        let number_value_id = derive_value_id(&entity_id, &number_prop_uuid, &space_id);
+        let text_value_id = derive_value_id(&entity_id, &text_prop_uuid, &space_id);
+
+        // Both valid values should be stored
+        let number_value = storage.get_value(&number_value_id.to_string()).await.unwrap();
+        assert_eq!(number_value.value, Some("42.5".to_string()));
+        
+        let text_value = storage.get_value(&text_value_id.to_string()).await.unwrap();
+        assert_eq!(text_value.value, Some("Valid text".to_string()));
+    }
+
+    // Check second entity - only valid text should be stored, invalid number should be rejected
+    {
+        let entity_id = Uuid::parse_str("90123456-9012-9012-9012-901234567890").unwrap();
+        let number_prop_uuid = Uuid::parse_str(number_prop_id).unwrap();
+        let text_prop_uuid = Uuid::parse_str(text_prop_id).unwrap();
+        
+        let number_value_id = derive_value_id(&entity_id, &number_prop_uuid, &space_id);
+        let text_value_id = derive_value_id(&entity_id, &text_prop_uuid, &space_id);
+
+        // Invalid number should NOT be stored
+        let number_value_result = storage.get_value(&number_value_id.to_string()).await;
+        assert!(number_value_result.is_err(), "Invalid number should not be stored");
+        
+        // Valid text should be stored
+        let text_value = storage.get_value(&text_value_id.to_string()).await.unwrap();
+        assert_eq!(text_value.value, Some("Another valid text".to_string()));
     }
 
     Ok(())
