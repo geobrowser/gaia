@@ -1,7 +1,9 @@
+import tsconfigPaths from "vite-tsconfig-paths"
 /// <reference types="vitest" />
 import {defineConfig} from "vitest/config"
 
 export default defineConfig({
+	plugins: [tsconfigPaths()],
 	test: {
 		globals: true,
 		environment: "node",
@@ -13,11 +15,6 @@ export default defineConfig({
 			reporter: ["text", "json", "html"],
 			include: ["src/**/*.{js,ts}"],
 			exclude: ["src/**/*.{test,spec}.{js,ts}", "src/generated/**"],
-		},
-	},
-	resolve: {
-		alias: {
-			"~": "./",
 		},
 	},
 })
