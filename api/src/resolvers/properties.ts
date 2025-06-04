@@ -1,36 +1,35 @@
 import {SystemIds} from "@graphprotocol/grc-20"
 import {and, eq} from "drizzle-orm"
 import {Effect} from "effect"
-import {type QueryTypesArgs, ValueType} from "../generated/graphql"
-import {relations} from "../services/storage/schema"
+import {DataType, type QueryTypesArgs} from "../generated/graphql"
+import {properties, relations} from "../services/storage/schema"
 import {Storage} from "../services/storage/storage"
 
-export function property(propertyId: string) {
+export function getProperty(propertyId: string) {
 	return Effect.gen(function* () {
 		const db = yield* Storage
 
 		return yield* db.use(async (client) => {
-			const result = await client.query.relations.findFirst({
-				where: (relations, {eq, and}) =>
-					and(eq(relations.fromEntityId, propertyId), eq(relations.typeId, SystemIds.VALUE_TYPE_PROPERTY)),
+			const result = await client.query.properties.findFirst({
+				where: (properties, {eq, and}) => and(eq(properties.id, propertyId)),
 			})
 
 			if (!result) {
 				return {
 					id: propertyId,
-					valueType: ValueType.Text,
+					dataType: DataType.Text,
 				}
 			}
 
 			return {
 				id: propertyId,
-				valueType: getValueTypeAsText(result.toEntityId),
+				dataType: getValueTypeAsText(result.type),
 			}
 		})
 	})
 }
 
-export function properties(typeId: string, args: QueryTypesArgs) {
+export function getProperties(typeId: string, args: QueryTypesArgs) {
 	return Effect.gen(function* () {
 		const db = yield* Storage
 
@@ -40,57 +39,41 @@ export function properties(typeId: string, args: QueryTypesArgs) {
 			where.push(eq(relations.spaceId, args.spaceId))
 		}
 
-		const propertyRelations = yield* db.use(async (client) => {
-			return await client.query.relations.findMany({
-				where: and(...where),
-				with: {
-					toEntity: {
-						with: {
-							fromRelations: {
-								where: eq(relations.typeId, SystemIds.VALUE_TYPE_PROPERTY),
-							},
-						},
-					},
-				},
-			})
+		const result = yield* db.use(async (client) => {
+			return await client
+				.select({
+					propertyId: relations.toEntityId,
+					propertyType: properties.type,
+				})
+				.from(relations)
+				.innerJoin(properties, eq(relations.toEntityId, properties.id))
+				.where(and(...where))
+				.limit(Number(args.limit))
+				.offset(Number(args.offset))
 		})
 
-		return propertyRelations.map((r) => {
-			const maybeValueType = r.toEntity.fromRelations.find(
-				(relation) => relation.typeId === SystemIds.VALUE_TYPE_PROPERTY,
-			)?.toEntityId
-
-			return {
-				id: r.toEntity.id,
-				valueType: getValueTypeAsText(maybeValueType),
-			}
-		})
+		return result.map((r) => ({
+			id: r.propertyId,
+			dataType: getValueTypeAsText(r.propertyType),
+		}))
 	})
 }
 
-function getValueTypeAsText(valueTypeId: string | undefined): ValueType {
-	if (!valueTypeId) {
-		return ValueType.Text
-	}
-
+function getValueTypeAsText(valueTypeId: string): DataType {
 	switch (valueTypeId) {
-		case SystemIds.TEXT:
-			return ValueType.Text
-		case SystemIds.NUMBER:
-			return ValueType.Number
-		case SystemIds.CHECKBOX:
-			return ValueType.Checkbox
-		case SystemIds.TIME:
-			return ValueType.Time
-		case SystemIds.URL:
-			return ValueType.Url
-		case SystemIds.POINT:
-			return ValueType.Point
-		case SystemIds.IMAGE:
-			return ValueType.Image
-		case SystemIds.RELATION:
-			return ValueType.Relation
+		case "Text":
+			return DataType.Text
+		case "Number":
+			return DataType.Number
+		case "Checkbox":
+			return DataType.Checkbox
+		case "Time":
+			return DataType.Time
+		case "Point":
+			return DataType.Point
+		case "Relation":
+			return DataType.Relation
 		default:
-			return ValueType.Text
+			return DataType.Text
 	}
 }

@@ -44,6 +44,15 @@ export enum DataSourceType {
 	Query = "QUERY",
 }
 
+export enum DataType {
+	Checkbox = "CHECKBOX",
+	Number = "NUMBER",
+	Point = "POINT",
+	Relation = "RELATION",
+	Text = "TEXT",
+	Time = "TIME",
+}
+
 export type Entity = {
 	__typename?: "Entity"
 	blocks: Array<Maybe<Block>>
@@ -95,9 +104,9 @@ export type PointFilter = {
 
 export type Property = {
 	__typename?: "Property"
+	dataType: DataType
 	entity?: Maybe<Entity>
 	id: Scalars["ID"]["output"]
-	valueType: ValueType
 }
 
 export type Query = {
@@ -197,17 +206,6 @@ export type ValueFilter = {
 	text?: InputMaybe<TextFilter>
 }
 
-export enum ValueType {
-	Checkbox = "CHECKBOX",
-	Image = "IMAGE",
-	Number = "NUMBER",
-	Point = "POINT",
-	Relation = "RELATION",
-	Text = "TEXT",
-	Time = "TIME",
-	Url = "URL",
-}
-
 export type WithIndex<TObject> = TObject & Record<string, any>
 export type ResolversObject<TObject> = WithIndex<TObject>
 
@@ -288,6 +286,7 @@ export type ResolversTypes = ResolversObject<{
 	Boolean: ResolverTypeWrapper<Scalars["Boolean"]["output"]>
 	CheckboxFilter: CheckboxFilter
 	DataSourceType: DataSourceType
+	DataType: DataType
 	Entity: ResolverTypeWrapper<DbEntity>
 	EntityFilter: EntityFilter
 	Float: ResolverTypeWrapper<Scalars["Float"]["output"]>
@@ -320,7 +319,6 @@ export type ResolversTypes = ResolversObject<{
 		}
 	>
 	ValueFilter: ValueFilter
-	ValueType: ValueType
 }>
 
 /** Mapping between all available schema types and the resolvers parents */
@@ -396,9 +394,9 @@ export type PropertyResolvers<
 	ContextType = any,
 	ParentType extends ResolversParentTypes["Property"] = ResolversParentTypes["Property"],
 > = ResolversObject<{
+	dataType?: Resolver<ResolversTypes["DataType"], ParentType, ContextType>
 	entity?: Resolver<Maybe<ResolversTypes["Entity"]>, ParentType, ContextType>
 	id?: Resolver<ResolversTypes["ID"], ParentType, ContextType>
-	valueType?: Resolver<ResolversTypes["ValueType"], ParentType, ContextType>
 	__isTypeOf?: IsTypeOfResolverFn<ParentType, ContextType>
 }>
 

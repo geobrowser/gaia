@@ -41,20 +41,18 @@ type Block {
   dataSourceType: DataSourceType
 }
 
-enum ValueType {
+enum DataType {
   TEXT
   NUMBER
   CHECKBOX
-  URL
   TIME
   POINT
   RELATION
-  IMAGE
 }
 
 type Property {
   id: ID!
-  valueType: ValueType!
+  dataType: DataType!
   entity: Entity
 }
 

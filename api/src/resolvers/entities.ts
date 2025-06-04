@@ -70,9 +70,9 @@ export function getEntityName(id: string) {
 		const db = yield* Storage
 
 		const nameProperty = yield* db.use(async (client) => {
-			const result = await client.query.properties.findFirst({
-				where: (properties, {eq, and}) =>
-					and(eq(properties.propertyId, SystemIds.NAME_PROPERTY), eq(properties.entityId, id)),
+			const result = await client.query.values.findFirst({
+				where: (values, {eq, and}) =>
+					and(eq(values.propertyId, SystemIds.NAME_PROPERTY), eq(values.entityId, id)),
 			})
 
 			return result
@@ -87,9 +87,9 @@ export function getEntityDescription(id: string) {
 		const db = yield* Storage
 
 		const nameProperty = yield* db.use(async (client) => {
-			const result = await client.query.properties.findFirst({
-				where: (properties, {eq, and}) =>
-					and(eq(properties.propertyId, SystemIds.DESCRIPTION_PROPERTY), eq(properties.entityId, id)),
+			const result = await client.query.values.findFirst({
+				where: (values, {eq, and}) =>
+					and(eq(values.propertyId, SystemIds.DESCRIPTION_PROPERTY), eq(values.entityId, id)),
 			})
 
 			return result
@@ -104,11 +104,11 @@ export function getValues(id: string, spaceId?: string | null) {
 		const db = yield* Storage
 
 		return yield* db.use(async (client) => {
-			const result = await client.query.properties.findMany({
-				where: (properties, {eq, and}) => {
-					const conditions = [eq(properties.entityId, id)]
+			const result = await client.query.values.findMany({
+				where: (values, {eq, and}) => {
+					const conditions = [eq(values.entityId, id)]
 					if (spaceId) {
-						conditions.push(eq(properties.spaceId, spaceId))
+						conditions.push(eq(values.spaceId, spaceId))
 					}
 					return and(...conditions)
 				},
@@ -181,9 +181,9 @@ export function getSpaces(id: string) {
 			//
 			// For now we just query them separately. This avoids joins so might be
 			// faster anyway (needs validation).
-			const [properties, relations] = await Promise.all([
-				client.query.properties.findMany({
-					where: (properties, {eq}) => eq(properties.entityId, id),
+			const [values, relations] = await Promise.all([
+				client.query.values.findMany({
+					where: (values, {eq}) => eq(values.entityId, id),
 					columns: {
 						spaceId: true,
 					},
@@ -196,7 +196,7 @@ export function getSpaces(id: string) {
 				}),
 			])
 
-			const propertySpaces = properties.map((p) => p.spaceId)
+			const propertySpaces = values.map((p) => p.spaceId)
 			const relationSpaces = relations.map((r) => r.spaceId)
 
 			return Array.from(new Set([...propertySpaces, ...relationSpaces]))
