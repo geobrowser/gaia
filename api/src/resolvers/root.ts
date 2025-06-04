@@ -45,11 +45,11 @@ export const relations = async (args: QueryEntityArgs & {spaceId?: string | null
 }
 
 export const property = async (args: QueryEntityArgs) => {
-	return await Effect.runPromise(PropertyResolvers.property(args.id).pipe(provideDeps))
+	return await Effect.runPromise(PropertyResolvers.getProperty(args.id).pipe(provideDeps))
 }
 
 export const properties = async (typeId: string, args: QueryTypesArgs) => {
-	return await Effect.runPromise(PropertyResolvers.properties(typeId, args).pipe(provideDeps))
+	return await Effect.runPromise(PropertyResolvers.getProperties(typeId, args).pipe(provideDeps))
 }
 
 export const types = async (args: QueryTypesArgs) => {

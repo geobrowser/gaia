@@ -7,6 +7,7 @@ import {
 	entities,
 	entityForeignValues,
 	ipfsCache,
+	properties,
 	propertiesEntityRelations,
 	relations,
 	relationsEntityRelations,
@@ -34,7 +35,8 @@ export const createDb = (connectionString: string) => {
 		schema: {
 			ipfsCache,
 			entities,
-			properties: values,
+			properties: properties,
+			values: values,
 			relations: relations,
 
 			entityForeignProperties: entityForeignValues,
