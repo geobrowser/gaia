@@ -10,7 +10,7 @@ use crate::storage::StorageBackend;
 use crate::KgData;
 
 pub async fn run<S, C>(
-    output: KgData,
+    output: &KgData,
     block_metadata: &BlockMetadata,
     storage: &Arc<S>,
     properties_cache: &Arc<C>,
@@ -25,8 +25,8 @@ where
     );
 
     let edit_result =
-        edit_handler::run(output.edits, block_metadata, storage, properties_cache).await;
-    let space_result = space_handler::run(output.spaces, block_metadata, storage).await;
+        edit_handler::run(&output.edits, block_metadata, storage, properties_cache).await;
+    let space_result = space_handler::run(&output.spaces, block_metadata, storage).await;
 
     Ok(())
 }

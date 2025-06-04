@@ -26,6 +26,7 @@ pub enum CreatedSpace {
     Public(PublicSpace),
 }
 
+#[derive(Clone)]
 pub struct KgData {
     pub block: BlockMetadata,
     pub edits: Vec<PreprocessedEdit>,

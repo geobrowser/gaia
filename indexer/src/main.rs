@@ -154,7 +154,7 @@ impl PreprocessedSink<KgData> for KgIndexer {
         //
         // async fn process_block(&self, block_data: &DecodedBlockData, _raw_block_data: &BlockScopedData);
         root_handler::run(
-            decoded_data,
+            &decoded_data.clone(), // @TODO Avoid cloning
             &block_metadata,
             &self.storage,
             &self.properties_cache,

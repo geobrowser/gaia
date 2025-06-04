@@ -72,7 +72,7 @@ where
 }
 
 pub async fn run<S, C>(
-    output: Vec<PreprocessedEdit>,
+    output: &Vec<PreprocessedEdit>,
     block_metadata: &BlockMetadata,
     storage: &Arc<S>,
     properties_cache: &Arc<C>,
