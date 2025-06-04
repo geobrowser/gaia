@@ -1,9 +1,9 @@
 import {SystemIds} from "@graphprotocol/grc-20"
 import {and, eq, exists} from "drizzle-orm"
 import {Effect} from "effect"
-import type {QueryTypesArgs} from "../generated/graphql"
-import {entities, relations} from "../services/storage/schema"
-import {Storage} from "../services/storage/storage"
+import type {QueryTypesArgs} from "../../generated/graphql"
+import {entities, relations} from "../../services/storage/schema"
+import {Storage} from "../../services/storage/storage"
 
 export function getTypes(args: QueryTypesArgs) {
 	const {limit, offset, spaceId} = args

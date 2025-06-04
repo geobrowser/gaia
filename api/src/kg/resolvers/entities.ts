@@ -1,7 +1,7 @@
 import {SystemIds} from "@graphprotocol/grc-20"
 import {Effect} from "effect"
-import {BlockType, DataSourceType, type QueryEntitiesArgs} from "../generated/graphql"
-import {Storage} from "../services/storage/storage"
+import {BlockType, DataSourceType, type QueryEntitiesArgs} from "../../generated/graphql"
+import {Storage} from "../../services/storage/storage"
 import {type EntityFilter, buildEntityWhere} from "./filters"
 
 export function getEntities(args: QueryEntitiesArgs) {

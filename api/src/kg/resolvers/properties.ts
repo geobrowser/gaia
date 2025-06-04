@@ -1,9 +1,9 @@
 import {SystemIds} from "@graphprotocol/grc-20"
 import {and, eq} from "drizzle-orm"
 import {Effect} from "effect"
-import {DataType, type QueryTypesArgs} from "../generated/graphql"
-import {properties, relations} from "../services/storage/schema"
-import {Storage} from "../services/storage/storage"
+import {DataType, type QueryTypesArgs} from "../../generated/graphql"
+import {properties, relations} from "../../services/storage/schema"
+import {Storage} from "../../services/storage/storage"
 
 export function getProperty(propertyId: string) {
 	return Effect.gen(function* () {
