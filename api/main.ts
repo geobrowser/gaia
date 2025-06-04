@@ -4,6 +4,7 @@ import {cors} from "hono/cors"
 import {graphqlServer} from "./src/kg/graphql-entry"
 import {Environment, make as makeEnvironment} from "./src/services/environment"
 import {uploadEdit, uploadFile} from "./src/services/ipfs"
+import {getPublishEditCalldata} from "./src/utils/calldata"
 import {deploySpace} from "./src/utils/deploy-space"
 
 const EnvironmentLayer = Layer.effect(Environment, makeEnvironment)
@@ -132,6 +133,94 @@ app.post("/deploy", async (c) => {
 			return Response.json({spaceId})
 		},
 	})
+})
+
+app.post("/space/:spaceId/edit/calldata", async (c) => {
+	const {spaceId} = c.req.param()
+	let {cid, network} = await c.req.json()
+
+	if (!cid || !cid.startsWith("ipfs://")) {
+		console.error(`[SPACE][calldata] Invalid CID ${cid}`)
+		return new Response(
+			JSON.stringify({
+				error: "Missing required parameters",
+				reason: "An IPFS CID prefixed with 'ipfs://' is required. e.g., ipfs://bafkreigkka6xfe3hb2tzcfqgm5clszs7oy7mct2awawivoxddcq6v3g5oi",
+			}),
+			{
+				status: 400,
+			},
+		)
+	}
+
+	if (!network) {
+		network = "MAINNET"
+	}
+
+	if (network !== "TESTNET" && network !== "MAINNET") {
+		console.error(`[SPACE][calldata] Invalid network ${network}`)
+		return new Response(
+			JSON.stringify({
+				error: "Invalid network",
+				reason: "Invalid network. Please use 'TESTNET' or 'MAINNET'.",
+			}),
+			{
+				status: 400,
+			},
+		)
+	}
+
+	const getCalldata = Effect.gen(function* () {
+		return yield* getPublishEditCalldata(spaceId, cid as string, network)
+	})
+
+	const calldata = await Effect.runPromise(Effect.either(getCalldata.pipe(Effect.provide(EnvironmentLayer))))
+
+	if (Either.isLeft(calldata)) {
+		const error = calldata.left
+
+		switch (error._tag) {
+			case "ConfigError":
+				console.error("[SPACE][calldata] Invalid server config")
+				return new Response(
+					JSON.stringify({
+						message: "Invalid server config. Please notify the server administrator.",
+						reason: "Invalid server config. Please notify the server administrator.",
+					}),
+					{
+						status: 500,
+					},
+				)
+
+			default:
+				console.error(
+					`[SPACE][calldata] Failed to generate calldata for edit. message: ${error.message} – cause: ${error.cause}`,
+				)
+
+				return new Response(
+					JSON.stringify({
+						message: `Failed to deploy space. message: ${error.message} – cause: ${error.cause}`,
+						reason: error.message,
+					}),
+					{
+						status: 500,
+					},
+				)
+		}
+	}
+
+	if (calldata.right === null) {
+		return new Response(
+			JSON.stringify({
+				error: "Failed to generate calldata",
+				reason: `Could not find space with id ${spaceId}. Make sure it exists on the network ${network}.`,
+			}),
+			{
+				status: 500,
+			},
+		)
+	}
+
+	return Response.json(calldata.right)
 })
 
 export default app
