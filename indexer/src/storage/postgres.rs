@@ -3,6 +3,9 @@ use async_trait::async_trait;
 use sqlx::{postgres::PgPoolOptions, Postgres, QueryBuilder, Row};
 use uuid::Uuid;
 
+use indexer_utils::id::derive_space_id;
+use indexer_utils::network_ids::GEO;
+
 use crate::models::{
     entities::EntityItem,
     properties::{
@@ -10,8 +13,10 @@ use crate::models::{
         DATA_TYPE_RELATION, DATA_TYPE_TEXT, DATA_TYPE_TIME,
     },
     relations::{SetRelationItem, UnsetRelationItem, UpdateRelationItem},
+    spaces::SpaceItem,
     values::{ValueChangeType, ValueOp},
 };
+use crate::CreatedSpace;
 
 use super::{StorageBackend, StorageError};
 
@@ -147,9 +152,8 @@ impl PostgresStorage {
     }
 
     pub async fn get_property(&self, property_id: &String) -> Result<PropertyItem, StorageError> {
-        let property_uuid = Uuid::parse_str(property_id).map_err(|e| {
-            sqlx::Error::Decode(format!("Invalid UUID format: {}", e).into())
-        })?;
+        let property_uuid = Uuid::parse_str(property_id)
+            .map_err(|e| sqlx::Error::Decode(format!("Invalid UUID format: {}", e).into()))?;
 
         let row = sqlx::query("SELECT id, type::text as type FROM properties WHERE id = $1")
             .bind(property_uuid)
@@ -499,6 +503,34 @@ impl StorageBackend for PostgresStorage {
             .bind(&types)
             .execute(&self.pool)
             .await?;
+
+        Ok(())
+    }
+
+    async fn insert_spaces(&self, spaces: &Vec<SpaceItem>) -> Result<(), StorageError> {
+        if spaces.is_empty() {
+            return Ok(());
+        }
+
+        let mut ids: Vec<Uuid> = Vec::new();
+        let mut dao_addresses: Vec<String> = Vec::new();
+
+        for space in spaces {
+            ids.push(space.id);
+            dao_addresses.push(space.dao_address.clone());
+        }
+
+        sqlx::query!(
+            r#"
+            INSERT INTO spaces (id, dao_address)
+            SELECT * FROM UNNEST($1::uuid[], $2::text[])
+            ON CONFLICT (id) DO NOTHING
+            "#,
+            &ids,
+            &dao_addresses
+        )
+        .execute(&self.pool)
+        .await?;
 
         Ok(())
     }

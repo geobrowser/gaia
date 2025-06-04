@@ -16,6 +16,11 @@ export const ipfsCache = pgTable("ipfs_cache", {
 	space: uuid().notNull(),
 })
 
+export const spaces = pgTable("spaces", {
+	id: uuid().primaryKey(),
+	daoAddress: text(),
+})
+
 export const entities = pgTable("entities", {
 	id: uuid().primaryKey(),
 	createdAt: text().notNull(),

@@ -7,7 +7,7 @@ use indexer::{
     },
     error::IndexingError,
     storage::postgres::PostgresStorage,
-    KgData,
+    CreatedSpace, KgData, PublicSpace,
 };
 use indexer_utils::get_blocklist;
 use prost::Message;
@@ -116,10 +116,20 @@ impl PreprocessedSink<KgData> for KgIndexer {
             edits_guard.clone() // Clone the vector to move it out of the mutex
         };
 
+        // @TODO: Return from preprocess instead and let sink handle orchestration
         self.process_block_scoped_data(
             block_data,
             KgData {
                 edits: final_edits,
+                spaces: geo
+                    .spaces_created
+                    .iter()
+                    .map(|s| {
+                        CreatedSpace::Public(PublicSpace {
+                            dao_address: s.dao_address.clone(),
+                        })
+                    })
+                    .collect(),
                 block: block_metadata,
             },
         )
@@ -144,7 +154,7 @@ impl PreprocessedSink<KgData> for KgIndexer {
         //
         // async fn process_block(&self, block_data: &DecodedBlockData, _raw_block_data: &BlockScopedData);
         root_handler::run(
-            decoded_data.edits,
+            decoded_data,
             &block_metadata,
             &self.storage,
             &self.properties_cache,
