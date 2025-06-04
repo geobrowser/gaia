@@ -143,8 +143,6 @@ impl PreprocessedSink<KgData> for KgIndexer {
         _block_data: &BlockScopedData,
         decoded_data: KgData,
     ) -> Result<(), Self::Error> {
-        let block_metadata = decoded_data.block;
-
         // @TODO: Need to figure out to abstract the different types of streams so
         // people can write their own sinks over specific events however they want.
         //
@@ -154,8 +152,8 @@ impl PreprocessedSink<KgData> for KgIndexer {
         //
         // async fn process_block(&self, block_data: &DecodedBlockData, _raw_block_data: &BlockScopedData);
         root_handler::run(
-            &decoded_data.clone(), // @TODO Avoid cloning
-            &block_metadata,
+            &decoded_data,
+            &decoded_data.block,
             &self.storage,
             &self.properties_cache,
         )

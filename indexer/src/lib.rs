@@ -8,12 +8,14 @@ pub mod models;
 pub mod storage;
 pub mod validators;
 
+#[derive(Clone)]
 pub struct PersonalSpace {
     pub dao_address: String,
     // pub space_address: String,
     // pub personal_plugin: String,
 }
 
+#[derive(Clone)]
 pub struct PublicSpace {
     pub dao_address: String,
     // pub space_address: String,
@@ -21,6 +23,7 @@ pub struct PublicSpace {
     // pub governance_plugin: String,
 }
 
+#[derive(Clone)]
 pub enum CreatedSpace {
     Personal(PersonalSpace),
     Public(PublicSpace),

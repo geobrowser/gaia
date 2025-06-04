@@ -3,8 +3,7 @@ use async_trait::async_trait;
 use sqlx::{postgres::PgPoolOptions, Postgres, QueryBuilder, Row};
 use uuid::Uuid;
 
-use indexer_utils::id::derive_space_id;
-use indexer_utils::network_ids::GEO;
+
 
 use crate::models::{
     entities::EntityItem,
@@ -16,7 +15,7 @@ use crate::models::{
     spaces::SpaceItem,
     values::{ValueChangeType, ValueOp},
 };
-use crate::CreatedSpace;
+
 
 use super::{StorageBackend, StorageError};
 

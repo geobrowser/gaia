@@ -24,9 +24,8 @@ where
         block_metadata.block_number, block_metadata.timestamp,
     );
 
-    let edit_result =
-        edit_handler::run(&output.edits, block_metadata, storage, properties_cache).await;
-    let space_result = space_handler::run(&output.spaces, block_metadata, storage).await;
+    edit_handler::run(&output.edits, block_metadata, storage, properties_cache).await?;
+    space_handler::run(&output.spaces, block_metadata, storage).await?;
 
     Ok(())
 }

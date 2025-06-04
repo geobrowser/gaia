@@ -12,7 +12,6 @@ use crate::models::{
 };
 use crate::storage::StorageBackend;
 use crate::validators::validate_string_by_datatype;
-use crate::KgData;
 use crate::{cache::PreprocessedEdit, error::IndexingError};
 
 /// Validates created values against their property data types.

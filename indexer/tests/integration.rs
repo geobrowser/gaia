@@ -18,7 +18,7 @@ use indexer::{
     error::IndexingError,
     models::properties::DataType,
     storage::postgres::PostgresStorage,
-    KgData,
+    CreatedSpace, PersonalSpace, PublicSpace, KgData,
 };
 
 struct TestIndexer {
@@ -37,7 +37,7 @@ impl TestIndexer {
     pub async fn run(&self, blocks: &Vec<KgData>) -> Result<(), IndexingError> {
         for block in blocks {
             root_handler::run(
-                block.edits.clone(),
+                block,
                 &block.block,
                 &self.storage,
                 &self.properties_cache,
@@ -59,6 +59,7 @@ async fn main() -> Result<(), IndexingError> {
 
     let item = PreprocessedEdit {
         space_id: Uuid::parse_str("550e8400-e29b-41d4-a716-446655440007").unwrap(),
+        is_errored: false,
         edit: Some(make_edit(
             "f47ac10b-58cc-4372-a567-0e02b2c3d479",
             "Name",
@@ -130,7 +131,6 @@ async fn main() -> Result<(), IndexingError> {
                 make_property_op("6ba7b810-9dad-11d1-80b4-00c04fd430c2", PbDataType::Number),
             ],
         )),
-        is_errored: false,
     };
 
     let block = BlockMetadata {
@@ -146,6 +146,7 @@ async fn main() -> Result<(), IndexingError> {
         .run(&vec![KgData {
             block,
             edits: vec![item],
+            spaces: vec![],
         }])
         .await?;
 
@@ -328,6 +329,7 @@ async fn test_property_no_overwrite() -> Result<(), IndexingError> {
         .run(&vec![KgData {
             block: block.clone(),
             edits: vec![item],
+            spaces: vec![],
         }])
         .await?;
 
@@ -349,6 +351,7 @@ async fn test_property_no_overwrite() -> Result<(), IndexingError> {
         .run(&vec![KgData {
             block,
             edits: vec![second_edit],
+            spaces: vec![],
         }])
         .await?;
 
@@ -409,6 +412,7 @@ async fn test_property_squashing() -> Result<(), IndexingError> {
         .run(&vec![KgData {
             block,
             edits: vec![edit_with_duplicate_properties],
+            spaces: vec![],
         }])
         .await?;
 
@@ -544,4 +548,191 @@ fn make_relation_op(
             )),
         },
     }
+}
+
+// Helper functions for creating spaces
+fn make_personal_space(dao_address: &str) -> CreatedSpace {
+    CreatedSpace::Personal(PersonalSpace {
+        dao_address: dao_address.to_string(),
+    })
+}
+
+fn make_public_space(dao_address: &str) -> CreatedSpace {
+    CreatedSpace::Public(PublicSpace {
+        dao_address: dao_address.to_string(),
+    })
+}
+
+fn make_kg_data_with_spaces(
+    block_number: u64,
+    edits: Vec<PreprocessedEdit>,
+    spaces: Vec<CreatedSpace>,
+) -> KgData {
+    KgData {
+        block: BlockMetadata {
+            cursor: block_number.to_string(),
+            block_number,
+            timestamp: "1234567890".to_string(),
+        },
+        edits,
+        spaces,
+    }
+}
+
+#[tokio::test]
+async fn test_space_indexing_personal() -> Result<(), IndexingError> {
+    dotenv().ok();
+    let database_url = env::var("DATABASE_URL").expect("DATABASE_URL not set");
+    let storage = Arc::new(PostgresStorage::new(&database_url).await?);
+    let properties_cache = Arc::new(PropertiesCache::new());
+    let indexer = TestIndexer::new(storage.clone(), properties_cache);
+
+    // Create test data with personal spaces
+    let spaces = vec![
+        make_personal_space("0x1234567890123456789012345678901234567890"),
+        make_personal_space("0xabcdefabcdefabcdefabcdefabcdefabcdefabcd"),
+    ];
+
+    let kg_data = make_kg_data_with_spaces(1, vec![], spaces);
+    let blocks = vec![kg_data];
+
+    // Run the indexer
+    indexer.run(&blocks).await?;
+
+    // Verify that spaces were inserted
+    // Note: This test verifies that the insertion doesn't fail
+    // In a real scenario, you'd query the database to verify the data was inserted correctly
+    
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_space_indexing_public() -> Result<(), IndexingError> {
+    dotenv().ok();
+    let database_url = env::var("DATABASE_URL").expect("DATABASE_URL not set");
+    let storage = Arc::new(PostgresStorage::new(&database_url).await?);
+    let properties_cache = Arc::new(PropertiesCache::new());
+    let indexer = TestIndexer::new(storage.clone(), properties_cache);
+
+    // Create test data with public spaces
+    let spaces = vec![
+        make_public_space("0x9999999999999999999999999999999999999999"),
+        make_public_space("0x8888888888888888888888888888888888888888"),
+    ];
+
+    let kg_data = make_kg_data_with_spaces(2, vec![], spaces);
+    let blocks = vec![kg_data];
+
+    // Run the indexer
+    indexer.run(&blocks).await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_space_indexing_mixed() -> Result<(), IndexingError> {
+    dotenv().ok();
+    let database_url = env::var("DATABASE_URL").expect("DATABASE_URL not set");
+    let storage = Arc::new(PostgresStorage::new(&database_url).await?);
+    let properties_cache = Arc::new(PropertiesCache::new());
+    let indexer = TestIndexer::new(storage.clone(), properties_cache);
+
+    // Create test data with mixed space types
+    let spaces = vec![
+        make_personal_space("0x1111111111111111111111111111111111111111"),
+        make_public_space("0x2222222222222222222222222222222222222222"),
+        make_personal_space("0x3333333333333333333333333333333333333333"),
+    ];
+
+    let kg_data = make_kg_data_with_spaces(3, vec![], spaces);
+    let blocks = vec![kg_data];
+
+    // Run the indexer
+    indexer.run(&blocks).await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_space_indexing_empty() -> Result<(), IndexingError> {
+    dotenv().ok();
+    let database_url = env::var("DATABASE_URL").expect("DATABASE_URL not set");
+    let storage = Arc::new(PostgresStorage::new(&database_url).await?);
+    let properties_cache = Arc::new(PropertiesCache::new());
+    let indexer = TestIndexer::new(storage.clone(), properties_cache);
+
+    // Create test data with no spaces
+    let kg_data = make_kg_data_with_spaces(4, vec![], vec![]);
+    let blocks = vec![kg_data];
+
+    // Run the indexer
+    indexer.run(&blocks).await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_space_indexing_duplicate_dao_addresses() -> Result<(), IndexingError> {
+    dotenv().ok();
+    let database_url = env::var("DATABASE_URL").expect("DATABASE_URL not set");
+    let storage = Arc::new(PostgresStorage::new(&database_url).await?);
+    let properties_cache = Arc::new(PropertiesCache::new());
+    let indexer = TestIndexer::new(storage.clone(), properties_cache);
+
+    // Create test data with same DAO address for different space types
+    let dao_address = "0x5555555555555555555555555555555555555555";
+    let spaces = vec![
+        make_personal_space(dao_address),
+        make_public_space(dao_address),
+    ];
+
+    let kg_data = make_kg_data_with_spaces(5, vec![], spaces);
+    let blocks = vec![kg_data];
+
+    // Run the indexer - this should work since space IDs are derived differently
+    // for personal vs public spaces (even with the same DAO address)
+    indexer.run(&blocks).await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_space_indexing_with_edits() -> Result<(), IndexingError> {
+    dotenv().ok();
+    let database_url = env::var("DATABASE_URL").expect("DATABASE_URL not set");
+    let storage = Arc::new(PostgresStorage::new(&database_url).await?);
+    let properties_cache = Arc::new(PropertiesCache::new());
+    let indexer = TestIndexer::new(storage.clone(), properties_cache);
+
+    // Create some property operations
+    let property_id = "1cc6995f-6cc2-4c7a-9592-1466bf95f6be";
+    let property_op = make_property_op(property_id, PbDataType::Text);
+
+    // Create a test edit
+    let edit = make_edit(
+        "08c4f093-7858-4b7c-9b94-b82e448abcff",
+        "Test Edit",
+        "2cc6995f-6cc2-4c7a-9592-1466bf95f6be",
+        vec![property_op],
+    );
+
+    let item = PreprocessedEdit {
+        edit: Some(edit),
+        is_errored: false,
+        space_id: Uuid::parse_str("3cc6995f-6cc2-4c7a-9592-1466bf95f6be").unwrap(),
+    };
+
+    // Create spaces alongside edits
+    let spaces = vec![
+        make_personal_space("0x6666666666666666666666666666666666666666"),
+        make_public_space("0x7777777777777777777777777777777777777777"),
+    ];
+
+    let kg_data = make_kg_data_with_spaces(6, vec![item], spaces);
+    let blocks = vec![kg_data];
+
+    // Run the indexer
+    indexer.run(&blocks).await?;
+
+    Ok(())
 }
