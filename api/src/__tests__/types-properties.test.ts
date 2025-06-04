@@ -234,9 +234,7 @@ describe("Types and Properties Integration Tests", () => {
 		})
 
 		it("should return empty array for non-existent spaceId", async () => {
-			const result = await Effect.runPromise(
-				provideDeps(getTypes({limit: 10, offset: 0, spaceId: "non-existent-space"})),
-			)
+			const result = await Effect.runPromise(provideDeps(getTypes({limit: 10, offset: 0, spaceId: uuid()})))
 
 			expect(result).toHaveLength(0)
 		})
@@ -351,21 +349,19 @@ describe("Types and Properties Integration Tests", () => {
 		})
 
 		it("should return empty array for non-existent type", async () => {
-			const result = await Effect.runPromise(
-				provideDeps(getProperties("non-existent-type", {limit: 10, offset: 0})),
-			)
+			const result = await Effect.runPromise(provideDeps(getProperties(uuid(), {limit: 10, offset: 0})))
 
 			expect(result).toHaveLength(0)
 		})
 
 		it("should return empty array for type with no properties", async () => {
 			// Create a type with no properties
+			const emptyTypeId = uuid()
 			await Effect.runPromise(
 				provideDeps(
 					Effect.gen(function* () {
 						const db = yield* Storage
 						yield* db.use(async (client) => {
-							const emptyTypeId = "empty-type-id"
 							await client.insert(entities).values({
 								id: emptyTypeId,
 								createdAt: "2023-01-01T00:00:00Z",
@@ -387,14 +383,14 @@ describe("Types and Properties Integration Tests", () => {
 				),
 			)
 
-			const result = await Effect.runPromise(provideDeps(getProperties("empty-type-id", {limit: 10, offset: 0})))
+			const result = await Effect.runPromise(provideDeps(getProperties(emptyTypeId, {limit: 10, offset: 0})))
 
 			expect(result).toHaveLength(0)
 		})
 
 		it("should handle non-existent spaceId", async () => {
 			const result = await Effect.runPromise(
-				provideDeps(getProperties(TYPE_ID_1, {limit: 10, offset: 0, spaceId: "non-existent"})),
+				provideDeps(getProperties(TYPE_ID_1, {limit: 10, offset: 0, spaceId: uuid()})),
 			)
 
 			expect(result).toHaveLength(0)
@@ -418,27 +414,44 @@ describe("Types and Properties Integration Tests", () => {
 			expect(dataTypes).toEqual([DataType.Checkbox, DataType.Number, DataType.Point, DataType.Text])
 		})
 
-		it("should default to TEXT for unknown data types", async () => {
-			// Insert a property with an unknown type (this would be handled by the default case)
+		it("should map Time and Relation data types correctly", async () => {
+			// Insert properties with Time and Relation types that aren't in our default test data
+			const timePropId = uuid()
+			const relationPropId = uuid()
 			await Effect.runPromise(
 				provideDeps(
 					Effect.gen(function* () {
 						const db = yield* Storage
 						yield* db.use(async (client) => {
-							const unknownPropId = "unknown-prop-id"
-							await client.insert(properties).values({
-								id: unknownPropId,
-								type: "Unknown" as "Text",
-							})
+							await client.insert(properties).values([
+								{
+									id: timePropId,
+									type: "Time",
+								},
+								{
+									id: relationPropId,
+									type: "Relation",
+								},
+							])
 
-							await client.insert(relations).values({
-								id: uuid(),
-								entityId: TYPE_ID_1,
-								typeId: SystemIds.PROPERTIES,
-								fromEntityId: TYPE_ID_1,
-								toEntityId: unknownPropId,
-								spaceId: TEST_SPACE_ID,
-							})
+							await client.insert(relations).values([
+								{
+									id: uuid(),
+									entityId: TYPE_ID_1,
+									typeId: SystemIds.PROPERTIES,
+									fromEntityId: TYPE_ID_1,
+									toEntityId: timePropId,
+									spaceId: TEST_SPACE_ID,
+								},
+								{
+									id: uuid(),
+									entityId: TYPE_ID_1,
+									typeId: SystemIds.PROPERTIES,
+									fromEntityId: TYPE_ID_1,
+									toEntityId: relationPropId,
+									spaceId: TEST_SPACE_ID,
+								},
+							])
 						})
 					}),
 				),
@@ -446,8 +459,11 @@ describe("Types and Properties Integration Tests", () => {
 
 			const result = await Effect.runPromise(provideDeps(getProperties(TYPE_ID_1, {limit: 10, offset: 0})))
 
-			const unknownProp = result.find((p) => p.id === "unknown-prop-id")
-			expect(unknownProp?.dataType).toBe(DataType.Text)
+			const timeProp = result.find((p) => p.id === timePropId)
+			const relationProp = result.find((p) => p.id === relationPropId)
+
+			expect(timeProp?.dataType).toBe(DataType.Time)
+			expect(relationProp?.dataType).toBe(DataType.Relation)
 		})
 	})
 

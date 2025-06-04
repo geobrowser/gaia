@@ -48,6 +48,8 @@ export function getProperties(typeId: string, args: QueryTypesArgs) {
 				.from(relations)
 				.innerJoin(properties, eq(relations.toEntityId, properties.id))
 				.where(and(...where))
+				.limit(Number(args.limit))
+				.offset(Number(args.offset))
 		})
 
 		return result.map((r) => ({
