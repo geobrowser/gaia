@@ -32,7 +32,7 @@ jobs:
           - 5432:5432
 
     env:
-      chainId: "19411"
+      CHAIN_ID: "19411"
       DATABASE_URL: postgresql://test_user:test_password@localhost:5432/gaia_test
       NODE_ENV: test
       IPFS_KEY: test_ipfs_key
