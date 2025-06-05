@@ -1,0 +1,66 @@
+name: Indexer Unit Tests
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'indexer/**'
+      - '.github/workflows/indexer-unit-tests.yml'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'indexer/**'
+      - '.github/workflows/indexer-unit-tests.yml'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  unit-tests:
+    name: Run Unit Tests
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Install Rust toolchain
+      uses: dtolnay/rust-toolchain@stable
+      with:
+        components: rustfmt, clippy
+
+    - name: Cache cargo registry
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-
+
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libpq-dev
+
+    - name: Check formatting
+      run: cargo fmt --all -- --check
+      working-directory: ./indexer
+
+    - name: Run clippy
+      run: cargo clippy --all-targets --all-features -- -D warnings
+      working-directory: ./indexer
+
+    - name: Run unit tests
+      run: cargo test --lib --bins
+      working-directory: ./indexer
+      env:
+        RUST_BACKTRACE: 1
+
+    - name: Run doc tests
+      run: cargo test --doc
+      working-directory: ./indexer
+      env:
+        RUST_BACKTRACE: 1
