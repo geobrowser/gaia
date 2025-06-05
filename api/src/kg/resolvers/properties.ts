@@ -59,6 +59,27 @@ export function getProperties(typeId: string, args: QueryTypesArgs) {
 	})
 }
 
+export function getPropertyRelationValueTypes(propertyId: string) {
+	return Effect.gen(function* () {
+		const db = yield* Storage
+
+		const result = yield* db.use(async (client) => {
+			return await client.query.relations.findMany({
+				where: (relations, {and, eq}) =>
+					and(
+						eq(relations.fromEntityId, propertyId),
+						eq(relations.typeId, SystemIds.RELATION_VALUE_RELATIONSHIP_TYPE),
+					),
+				with: {
+					toEntity: true,
+				},
+			})
+		})
+
+		return result.map((r) => r.toEntity)
+	})
+}
+
 function getValueTypeAsText(valueTypeId: string): DataType {
 	switch (valueTypeId) {
 		case "Text":

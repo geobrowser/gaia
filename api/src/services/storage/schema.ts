@@ -77,8 +77,12 @@ export const relations = pgTable("relations", {
 	verified: boolean(),
 })
 
-export const entityForeignValues = drizzleRelations(entities, ({many}) => ({
+export const entityForeignValues = drizzleRelations(entities, ({many, one}) => ({
 	values: many(values),
+	property: one(properties, {
+		fields: [entities.id],
+		references: [properties.id],
+	}),
 	fromRelations: many(relations, {
 		relationName: "fromEntity",
 	}),
@@ -99,6 +103,13 @@ export const entityForeignValues = drizzleRelations(entities, ({many}) => ({
 export const propertiesEntityRelations = drizzleRelations(values, ({one}) => ({
 	entity: one(entities, {
 		fields: [values.entityId],
+		references: [entities.id],
+	}),
+}))
+
+export const propertiesRelations = drizzleRelations(properties, ({one}) => ({
+	entity: one(entities, {
+		fields: [properties.id],
 		references: [entities.id],
 	}),
 }))

@@ -107,6 +107,7 @@ export type Property = {
 	dataType: DataType
 	entity?: Maybe<Entity>
 	id: Scalars["ID"]["output"]
+	relationValueTypes?: Maybe<Array<Maybe<Entity>>>
 }
 
 export type Query = {
@@ -294,7 +295,12 @@ export type ResolversTypes = ResolversObject<{
 	Int: ResolverTypeWrapper<Scalars["Int"]["output"]>
 	NumberFilter: NumberFilter
 	PointFilter: PointFilter
-	Property: ResolverTypeWrapper<Omit<Property, "entity"> & {entity?: Maybe<ResolversTypes["Entity"]>}>
+	Property: ResolverTypeWrapper<
+		Omit<Property, "entity" | "relationValueTypes"> & {
+			entity?: Maybe<ResolversTypes["Entity"]>
+			relationValueTypes?: Maybe<Array<Maybe<ResolversTypes["Entity"]>>>
+		}
+	>
 	Query: ResolverTypeWrapper<{}>
 	Relation: ResolverTypeWrapper<
 		Omit<Relation, "from" | "to" | "type"> & {
@@ -333,7 +339,10 @@ export type ResolversParentTypes = ResolversObject<{
 	Int: Scalars["Int"]["output"]
 	NumberFilter: NumberFilter
 	PointFilter: PointFilter
-	Property: Omit<Property, "entity"> & {entity?: Maybe<ResolversParentTypes["Entity"]>}
+	Property: Omit<Property, "entity" | "relationValueTypes"> & {
+		entity?: Maybe<ResolversParentTypes["Entity"]>
+		relationValueTypes?: Maybe<Array<Maybe<ResolversParentTypes["Entity"]>>>
+	}
 	Query: {}
 	Relation: Omit<Relation, "from" | "to" | "type"> & {
 		from?: Maybe<ResolversParentTypes["Entity"]>
@@ -397,6 +406,7 @@ export type PropertyResolvers<
 	dataType?: Resolver<ResolversTypes["DataType"], ParentType, ContextType>
 	entity?: Resolver<Maybe<ResolversTypes["Entity"]>, ParentType, ContextType>
 	id?: Resolver<ResolversTypes["ID"], ParentType, ContextType>
+	relationValueTypes?: Resolver<Maybe<Array<Maybe<ResolversTypes["Entity"]>>>, ParentType, ContextType>
 	__isTypeOf?: IsTypeOfResolverFn<ParentType, ContextType>
 }>
 
