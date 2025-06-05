@@ -97,7 +97,7 @@ impl TestStorage {
                 property_id: row.property_id,
                 entity_id: row.entity_id,
                 space_id: row.space_id,
-                value: row.value,
+                value: row.value.unwrap(),
                 language: row.language,
                 unit: row.unit,
             })
