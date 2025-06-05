@@ -1,5 +1,5 @@
-use std::sync::Arc;
 use sqlx::{Postgres, Row};
+use std::sync::Arc;
 use uuid::Uuid;
 
 use crate::{
@@ -56,7 +56,10 @@ impl TestStorage {
     }
 
     /// Test helper: Get entity data by ID
-    pub async fn get_entity_by_id(&self, entity_id: &Uuid) -> Result<Option<EntityRow>, IndexingError> {
+    pub async fn get_entity_by_id(
+        &self,
+        entity_id: &Uuid,
+    ) -> Result<Option<EntityRow>, IndexingError> {
         let row = sqlx::query!(
             "SELECT id, created_at, created_at_block, updated_at, updated_at_block FROM entities WHERE id = $1",
             entity_id
@@ -94,7 +97,7 @@ impl TestStorage {
                 property_id: row.property_id,
                 entity_id: row.entity_id,
                 space_id: row.space_id,
-                value: row.value.unwrap_or_default(),
+                value: row.value,
                 language: row.language,
                 unit: row.unit,
             })
@@ -207,18 +210,27 @@ pub struct RelationRow {
 impl SpaceRow {
     /// Helper method to check if this is a personal space
     pub fn is_personal(&self) -> bool {
-        self.space_type.as_ref().map(|t| t == "Personal").unwrap_or(false)
+        self.space_type
+            .as_ref()
+            .map(|t| t == "Personal")
+            .unwrap_or(false)
     }
 
     /// Helper method to check if this is a public space
     pub fn is_public(&self) -> bool {
-        self.space_type.as_ref().map(|t| t == "Public").unwrap_or(false)
+        self.space_type
+            .as_ref()
+            .map(|t| t == "Public")
+            .unwrap_or(false)
     }
 
     /// Validate that a personal space has correct field values
     pub fn validate_personal_space(&self) -> Result<(), String> {
         if !self.is_personal() {
-            return Err(format!("Expected Personal space, got {:?}", self.space_type));
+            return Err(format!(
+                "Expected Personal space, got {:?}",
+                self.space_type
+            ));
         }
         if self.main_voting_address.is_some() {
             return Err("Personal space should not have main_voting_address".to_string());
