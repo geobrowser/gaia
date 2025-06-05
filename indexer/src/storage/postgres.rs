@@ -12,7 +12,7 @@ use crate::models::{
         DATA_TYPE_RELATION, DATA_TYPE_TEXT, DATA_TYPE_TIME,
     },
     relations::{SetRelationItem, UnsetRelationItem, UpdateRelationItem},
-    spaces::SpaceItem,
+    spaces::{SpaceItem, SpaceType},
     values::{ValueChangeType, ValueOp},
 };
 
@@ -512,21 +512,41 @@ impl StorageBackend for PostgresStorage {
         }
 
         let mut ids: Vec<Uuid> = Vec::new();
+        let mut types: Vec<String> = Vec::new();
         let mut dao_addresses: Vec<String> = Vec::new();
+        let mut space_addresses: Vec<String> = Vec::new();
+        let mut main_voting_addresses: Vec<Option<String>> = Vec::new();
+        let mut membership_addresses: Vec<Option<String>> = Vec::new();
+        let mut personal_addresses: Vec<Option<String>> = Vec::new();
 
         for space in spaces {
             ids.push(space.id);
+            types.push(match space.space_type {
+                SpaceType::Personal => "Personal".to_string(),
+                SpaceType::Public => "Public".to_string(),
+            });
             dao_addresses.push(space.dao_address.clone());
+            space_addresses.push(space.space_address.clone());
+            main_voting_addresses.push(space.voting_address.clone());
+            membership_addresses.push(space.membership_address.clone());
+            personal_addresses.push(space.personal_address.clone());
         }
 
         sqlx::query!(
             r#"
-            INSERT INTO spaces (id, dao_address)
-            SELECT * FROM UNNEST($1::uuid[], $2::text[])
+            INSERT INTO spaces (id, type, dao_address, space_address, main_voting_address, membership_address, personal_address)
+            SELECT id, type::"spaceTypes", dao_address, space_address, main_voting_address, membership_address, personal_address 
+            FROM UNNEST($1::uuid[], $2::text[], $3::text[], $4::text[], $5::text[], $6::text[], $7::text[]) 
+            AS t(id, type, dao_address, space_address, main_voting_address, membership_address, personal_address)
             ON CONFLICT (id) DO NOTHING
             "#,
             &ids,
-            &dao_addresses
+            &types,
+            &dao_addresses,
+            &space_addresses,
+            &main_voting_addresses as &[Option<String>],
+            &membership_addresses as &[Option<String>],
+            &personal_addresses as &[Option<String>]
         )
         .execute(&self.pool)
         .await?;
