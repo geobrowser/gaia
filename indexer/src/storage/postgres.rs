@@ -10,6 +10,7 @@ use crate::models::{
         DATA_TYPE_RELATION, DATA_TYPE_TEXT, DATA_TYPE_TIME,
     },
     relations::{SetRelationItem, UnsetRelationItem, UpdateRelationItem},
+    spaces::{SpaceItem, SpaceType},
     values::{ValueChangeType, ValueOp},
 };
 
@@ -52,7 +53,7 @@ struct RelationRow {
 }
 
 pub struct PostgresStorage {
-    pool: sqlx::Pool<Postgres>,
+    pub pool: sqlx::Pool<Postgres>,
 }
 
 impl PostgresStorage {
@@ -147,9 +148,8 @@ impl PostgresStorage {
     }
 
     pub async fn get_property(&self, property_id: &String) -> Result<PropertyItem, StorageError> {
-        let property_uuid = Uuid::parse_str(property_id).map_err(|e| {
-            sqlx::Error::Decode(format!("Invalid UUID format: {}", e).into())
-        })?;
+        let property_uuid = Uuid::parse_str(property_id)
+            .map_err(|e| sqlx::Error::Decode(format!("Invalid UUID format: {}", e).into()))?;
 
         let row = sqlx::query("SELECT id, type::text as type FROM properties WHERE id = $1")
             .bind(property_uuid)
@@ -499,6 +499,54 @@ impl StorageBackend for PostgresStorage {
             .bind(&types)
             .execute(&self.pool)
             .await?;
+
+        Ok(())
+    }
+
+    async fn insert_spaces(&self, spaces: &Vec<SpaceItem>) -> Result<(), StorageError> {
+        if spaces.is_empty() {
+            return Ok(());
+        }
+
+        let mut ids: Vec<Uuid> = Vec::new();
+        let mut types: Vec<String> = Vec::new();
+        let mut dao_addresses: Vec<String> = Vec::new();
+        let mut space_addresses: Vec<String> = Vec::new();
+        let mut main_voting_addresses: Vec<Option<String>> = Vec::new();
+        let mut membership_addresses: Vec<Option<String>> = Vec::new();
+        let mut personal_addresses: Vec<Option<String>> = Vec::new();
+
+        for space in spaces {
+            ids.push(space.id);
+            types.push(match space.space_type {
+                SpaceType::Personal => "Personal".to_string(),
+                SpaceType::Public => "Public".to_string(),
+            });
+            dao_addresses.push(space.dao_address.clone());
+            space_addresses.push(space.space_address.clone());
+            main_voting_addresses.push(space.voting_address.clone());
+            membership_addresses.push(space.membership_address.clone());
+            personal_addresses.push(space.personal_address.clone());
+        }
+
+        sqlx::query!(
+            r#"
+            INSERT INTO spaces (id, type, dao_address, space_address, main_voting_address, membership_address, personal_address)
+            SELECT id, type::"spaceTypes", dao_address, space_address, main_voting_address, membership_address, personal_address
+            FROM UNNEST($1::uuid[], $2::text[], $3::text[], $4::text[], $5::text[], $6::text[], $7::text[])
+            AS t(id, type, dao_address, space_address, main_voting_address, membership_address, personal_address)
+            ON CONFLICT (id) DO NOTHING
+            "#,
+            &ids,
+            &types,
+            &dao_addresses,
+            &space_addresses,
+            &main_voting_addresses as &[Option<String>],
+            &membership_addresses as &[Option<String>],
+            &personal_addresses as &[Option<String>]
+        )
+        .execute(&self.pool)
+        .await?;
 
         Ok(())
     }

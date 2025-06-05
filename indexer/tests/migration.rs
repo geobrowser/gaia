@@ -30,7 +30,7 @@ impl TestIndexer {
     pub async fn run(&self, blocks: &Vec<KgData>) -> Result<(), IndexingError> {
         for block in blocks {
             root_handler::run(
-                block.edits.clone(),
+                block,
                 &block.block,
                 &self.storage,
                 &self.properties_cache,
@@ -81,6 +81,7 @@ async fn main() -> Result<(), IndexingError> {
         .run(&vec![KgData {
             block,
             edits: vec![root_space_preprocessed_edit, crypto_space_preprocessed_edit],
+            spaces: vec![],
         }])
         .await?;
 

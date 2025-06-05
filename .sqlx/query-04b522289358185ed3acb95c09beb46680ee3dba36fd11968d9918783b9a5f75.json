@@ -1,58 +1,58 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT id, property_id, entity_id, space_id, value, language, unit FROM values WHERE id = $1",
+  "query": "SELECT id, dao_address, type::text as type, space_address, main_voting_address, membership_address, personal_address FROM spaces WHERE dao_address = ANY($1) ORDER BY dao_address",
   "describe": {
     "columns": [
       {
         "ordinal": 0,
         "name": "id",
-        "type_info": "Text"
+        "type_info": "Uuid"
       },
       {
         "ordinal": 1,
-        "name": "property_id",
-        "type_info": "Uuid"
+        "name": "dao_address",
+        "type_info": "Text"
       },
       {
         "ordinal": 2,
-        "name": "entity_id",
-        "type_info": "Uuid"
+        "name": "type",
+        "type_info": "Text"
       },
       {
         "ordinal": 3,
-        "name": "space_id",
+        "name": "space_address",
         "type_info": "Text"
       },
       {
         "ordinal": 4,
-        "name": "value",
+        "name": "main_voting_address",
         "type_info": "Text"
       },
       {
         "ordinal": 5,
-        "name": "language",
+        "name": "membership_address",
         "type_info": "Text"
       },
       {
         "ordinal": 6,
-        "name": "unit",
+        "name": "personal_address",
         "type_info": "Text"
       }
     ],
     "parameters": {
       "Left": [
-        "Text"
+        "TextArray"
       ]
     },
     "nullable": [
       false,
       false,
+      null,
       false,
-      false,
-      false,
+      true,
       true,
       true
     ]
   },
-  "hash": "c43afb14b1142d19bc1ab6c0e5f86a139286301cce8af63838b92cbc7838203b"
+  "hash": "04b522289358185ed3acb95c09beb46680ee3dba36fd11968d9918783b9a5f75"
 }
