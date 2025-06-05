@@ -658,8 +658,8 @@ mod tests {
             Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c1").unwrap()
         );
         assert_eq!(created_op.value, Some("test value".to_string()));
-        // The language should be the replacement character string
-        assert_eq!(created_op.language, Some("��".to_string()));
+        // The language should be None for invalid UTF-8
+        assert_eq!(created_op.language, None);
         assert_eq!(created_op.unit, None);
         assert!(matches!(created_op.change_type, ValueChangeType::SET));
     }

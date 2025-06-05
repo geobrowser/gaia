@@ -1,0 +1,53 @@
+name: Indexer Unit Tests
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'indexer/**'
+      - '.github/workflows/indexer-unit-tests.yml'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'indexer/**'
+      - '.github/workflows/indexer-unit-tests.yml'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  unit-tests:
+    name: Run Unit Tests
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Cache cargo registry
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-
+
+    - name: Install system dependencies
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y libpq-dev
+
+    - name: Run unit tests
+      run: cargo test --lib --bins -- --test-threads=1
+      working-directory: ./indexer
+      env:
+        RUST_BACKTRACE: 1
+
+    - name: Run doc tests
+      run: cargo test --doc -- --test-threads=1
+      working-directory: ./indexer
+      env:
+        RUST_BACKTRACE: 1
