@@ -53,6 +53,7 @@ enum DataType {
 type Property {
   id: ID!
   dataType: DataType!
+  relationValueTypes: [Entity]
   entity: Entity
 }
 
