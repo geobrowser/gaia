@@ -17,7 +17,7 @@ use indexer::{
     cache::{properties_cache::PropertiesCache, PreprocessedEdit},
     error::IndexingError,
     models::properties::DataType,
-    storage::postgres::PostgresStorage,
+    storage::{postgres::PostgresStorage, StorageError},
     CreatedSpace, PersonalSpace, PublicSpace, KgData,
 };
 
@@ -933,9 +933,11 @@ async fn test_space_indexing_personal() -> Result<(), IndexingError> {
     let indexer = TestIndexer::new(storage.clone(), properties_cache);
 
     // Create test data with personal spaces
+    let dao_address1 = "0x1234567890123456789012345678901234567890";
+    let dao_address2 = "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd";
     let spaces = vec![
-        make_personal_space("0x1234567890123456789012345678901234567890"),
-        make_personal_space("0xabcdefabcdefabcdefabcdefabcdefabcdefabcd"),
+        make_personal_space(dao_address1),
+        make_personal_space(dao_address2),
     ];
 
     let kg_data = make_kg_data_with_spaces(1, vec![], spaces);
@@ -944,9 +946,25 @@ async fn test_space_indexing_personal() -> Result<(), IndexingError> {
     // Run the indexer
     indexer.run(&blocks).await?;
 
-    // Verify that spaces were inserted
-    // Note: This test verifies that the insertion doesn't fail
-    // In a real scenario, you'd query the database to verify the data was inserted correctly
+    // Verify that personal spaces were inserted correctly
+    let dao_addresses = vec![dao_address1.to_string(), dao_address2.to_string()];
+    let space_rows = sqlx::query!(
+        "SELECT dao_address, type::text as type, space_address, main_voting_address, membership_address, personal_address FROM spaces WHERE dao_address = ANY($1)",
+        &dao_addresses
+    )
+    .fetch_all(storage.get_pool_for_tests())
+    .await
+    .map_err(|e| IndexingError::StorageError(StorageError::Database(e)))?;
+
+    assert_eq!(space_rows.len(), 2);
+    for row in space_rows {
+        assert_eq!(row.r#type.as_ref().unwrap(), "Personal");
+        assert!(row.main_voting_address.is_none());
+        assert!(row.membership_address.is_none());
+        assert!(row.personal_address.is_some());
+        assert_eq!(row.personal_address.as_ref().unwrap(), &format!("{}_personal_plugin", row.dao_address));
+        assert_eq!(row.space_address, format!("{}_space", row.dao_address));
+    }
     
     Ok(())
 }
@@ -960,9 +978,11 @@ async fn test_space_indexing_public() -> Result<(), IndexingError> {
     let indexer = TestIndexer::new(storage.clone(), properties_cache);
 
     // Create test data with public spaces
+    let dao_address1 = "0x9999999999999999999999999999999999999999";
+    let dao_address2 = "0x8888888888888888888888888888888888888888";
     let spaces = vec![
-        make_public_space("0x9999999999999999999999999999999999999999"),
-        make_public_space("0x8888888888888888888888888888888888888888"),
+        make_public_space(dao_address1),
+        make_public_space(dao_address2),
     ];
 
     let kg_data = make_kg_data_with_spaces(2, vec![], spaces);
@@ -970,6 +990,27 @@ async fn test_space_indexing_public() -> Result<(), IndexingError> {
 
     // Run the indexer
     indexer.run(&blocks).await?;
+
+    // Verify that public spaces were inserted correctly
+    let dao_addresses = vec![dao_address1.to_string(), dao_address2.to_string()];
+    let space_rows = sqlx::query!(
+        "SELECT dao_address, type::text as type, space_address, main_voting_address, membership_address, personal_address FROM spaces WHERE dao_address = ANY($1)",
+        &dao_addresses
+    )
+    .fetch_all(storage.get_pool_for_tests())
+    .await
+    .map_err(|e| IndexingError::StorageError(StorageError::Database(e)))?;
+
+    assert_eq!(space_rows.len(), 2);
+    for row in space_rows {
+        assert_eq!(row.r#type.as_ref().unwrap(), "Public");
+        assert!(row.main_voting_address.is_some());
+        assert!(row.membership_address.is_some());
+        assert!(row.personal_address.is_none());
+        assert_eq!(row.main_voting_address.as_ref().unwrap(), &format!("{}_governance_plugin", row.dao_address));
+        assert_eq!(row.membership_address.as_ref().unwrap(), &format!("{}_membership_plugin", row.dao_address));
+        assert_eq!(row.space_address, format!("{}_space", row.dao_address));
+    }
 
     Ok(())
 }
@@ -983,10 +1024,13 @@ async fn test_space_indexing_mixed() -> Result<(), IndexingError> {
     let indexer = TestIndexer::new(storage.clone(), properties_cache);
 
     // Create test data with mixed space types
+    let personal_dao1 = "0x1111111111111111111111111111111111111111";
+    let public_dao = "0x2222222222222222222222222222222222222222";
+    let personal_dao2 = "0x3333333333333333333333333333333333333333";
     let spaces = vec![
-        make_personal_space("0x1111111111111111111111111111111111111111"),
-        make_public_space("0x2222222222222222222222222222222222222222"),
-        make_personal_space("0x3333333333333333333333333333333333333333"),
+        make_personal_space(personal_dao1),
+        make_public_space(public_dao),
+        make_personal_space(personal_dao2),
     ];
 
     let kg_data = make_kg_data_with_spaces(3, vec![], spaces);
@@ -994,6 +1038,42 @@ async fn test_space_indexing_mixed() -> Result<(), IndexingError> {
 
     // Run the indexer
     indexer.run(&blocks).await?;
+
+    // Verify that mixed space types were inserted correctly
+    let dao_addresses = vec![personal_dao1.to_string(), public_dao.to_string(), personal_dao2.to_string()];
+    let space_rows = sqlx::query!(
+        "SELECT dao_address, type::text as type, space_address, main_voting_address, membership_address, personal_address FROM spaces WHERE dao_address = ANY($1) ORDER BY dao_address",
+        &dao_addresses
+    )
+    .fetch_all(storage.get_pool_for_tests())
+    .await
+    .map_err(|e| IndexingError::StorageError(StorageError::Database(e)))?;
+
+    assert_eq!(space_rows.len(), 3);
+
+    // Check personal space 1
+    let personal_row1 = &space_rows[0];
+    assert_eq!(personal_row1.dao_address, personal_dao1);
+    assert_eq!(personal_row1.r#type.as_ref().unwrap(), "Personal");
+    assert!(personal_row1.main_voting_address.is_none());
+    assert!(personal_row1.membership_address.is_none());
+    assert!(personal_row1.personal_address.is_some());
+
+    // Check public space
+    let public_row = &space_rows[1];
+    assert_eq!(public_row.dao_address, public_dao);
+    assert_eq!(public_row.r#type.as_ref().unwrap(), "Public");
+    assert!(public_row.main_voting_address.is_some());
+    assert!(public_row.membership_address.is_some());
+    assert!(public_row.personal_address.is_none());
+
+    // Check personal space 2
+    let personal_row2 = &space_rows[2];
+    assert_eq!(personal_row2.dao_address, personal_dao2);
+    assert_eq!(personal_row2.r#type.as_ref().unwrap(), "Personal");
+    assert!(personal_row2.main_voting_address.is_none());
+    assert!(personal_row2.membership_address.is_none());
+    assert!(personal_row2.personal_address.is_some());
 
     Ok(())
 }
