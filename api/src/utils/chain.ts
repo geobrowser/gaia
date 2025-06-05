@@ -2,19 +2,19 @@ import type {Chain} from "viem"
 import {EnvironmentLive} from "../services/environment"
 
 export const GEOGENESIS: Chain = {
-	id: 80451, // or 80451 for mainnet
+	id: 80451, // or 19411 for testnet
 	name: "Geo Genesis",
 	nativeCurrency: {
-		name: "Ethereum",
-		symbol: "ETH",
+		name: "The Graph",
+		symbol: "GRT",
 		decimals: 18,
 	},
 	rpcUrls: {
 		default: {
-			http: [EnvironmentLive.rpcEndpointMainnet],
+			http: [EnvironmentLive.rpcEndpoint],
 		},
 		public: {
-			http: [EnvironmentLive.rpcEndpointMainnet],
+			http: [EnvironmentLive.rpcEndpoint],
 		},
 	},
 }
@@ -29,10 +29,10 @@ export const TESTNET: Chain = {
 	},
 	rpcUrls: {
 		default: {
-			http: [EnvironmentLive.rpcEndpointTestnet],
+			http: [EnvironmentLive.rpcEndpoint],
 		},
 		public: {
-			http: [EnvironmentLive.rpcEndpointTestnet],
+			http: [EnvironmentLive.rpcEndpoint],
 		},
 	},
 }

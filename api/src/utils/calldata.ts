@@ -1,7 +1,6 @@
 import {MainVotingAbi, PersonalSpaceAdminAbi} from "@graphprotocol/grc-20/abis"
 import {Effect} from "effect"
 import {encodeFunctionData, stringToHex} from "viem"
-import {Environment} from "../services/environment"
 import {graphql} from "./graphql"
 
 const query = (spaceId: string) => {
@@ -31,10 +30,9 @@ type NetworkResult = {
 	} | null
 }
 
-export function getPublishEditCalldata(spaceId: string, cid: string, network: "TESTNET" | "MAINNET") {
+export function getPublishEditCalldata(spaceId: string, cid: string) {
 	return Effect.gen(function* () {
-		const config = yield* Environment
-		// @TODO: Use correct endpoint
+		// @TODO: Read from space
 		const endpoint = ""
 		// const endpoint = network === "TESTNET" ? config.API_ENDPOINT_TESTNET : config.API_ENDPOINT_MAINNET
 
