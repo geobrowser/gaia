@@ -94,7 +94,7 @@ impl TestStorage {
                 property_id: row.property_id,
                 entity_id: row.entity_id,
                 space_id: row.space_id,
-                value: row.value,
+                value: row.value.unwrap_or_default(),
                 language: row.language,
                 unit: row.unit,
             })
@@ -183,7 +183,7 @@ pub struct ValueRow {
     pub property_id: Uuid,
     pub entity_id: Uuid,
     pub space_id: String,
-    pub value: Option<String>,
+    pub value: String,
     pub language: Option<String>,
     pub unit: Option<String>,
 }
