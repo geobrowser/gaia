@@ -7,18 +7,22 @@ export type IEnvironment = Readonly<{
 	ipfsKey: string
 	ipfsGatewayWrite: string
 	ipfsGatewayRead: string
-	rpcEndpointTestnet: string
-	rpcEndpointMainnet: string
+	rpcEndpoint: string
+	chainId: "80451" | "19411"
 }>
 
 export const make = Effect.gen(function* (_) {
-	const DATABASE_URL = yield* _(Config.redacted("DATABASE_URL"))
+	const databaseUrl = yield* _(Config.redacted("DATABASE_URL"))
 	const maybeDebug = yield* _(Config.option(Config.boolean("DEBUG")))
-	const IPFS_KEY = yield* Config.string("IPFS_KEY")
-	const IPFS_GATEWAY_WRITE = yield* Config.string("IPFS_GATEWAY_WRITE")
-	const IPFS_GATEWAY_READ = yield* Config.string("IPFS_GATEWAY_READ")
-	const RPC_ENDPOINT_TESTNET = yield* Config.string("RPC_ENDPOINT_TESTNET")
-	const RPC_ENDPOINT_MAINNET = yield* Config.string("RPC_ENDPOINT_MAINNET")
+	const ipfsKey = yield* Config.string("IPFS_KEY")
+	const ipfsGatewayWrite = yield* Config.string("IPFS_GATEWAY_WRITE")
+	const ipfsGatewayRead = yield* Config.string("IPFS_GATEWAY_READ")
+	const rpcEndpoint = yield* Config.string("RPC_ENDPOINT")
+	const chainId = yield* Config.string("CHAIN_ID")
+
+	if (chainId !== "19411" && chainId !== "80451") {
+		throw new Error(`Invalid configuration for chain id. Expected 19411 or 80451. Got ${chainId}`)
+	}
 
 	const maybeTelemetryUrl = yield* _(Config.option(Config.redacted("TELEMETRY_URL")))
 	const telemetryUrl = Option.match(maybeTelemetryUrl, {
@@ -31,14 +35,14 @@ export const make = Effect.gen(function* (_) {
 	})
 
 	return {
-		databaseUrl: DATABASE_URL,
+		chainId,
+		databaseUrl: databaseUrl,
 		telemetryUrl,
 		debug,
-		ipfsKey: IPFS_KEY,
-		ipfsGatewayWrite: IPFS_GATEWAY_WRITE,
-		ipfsGatewayRead: IPFS_GATEWAY_READ,
-		rpcEndpointTestnet: RPC_ENDPOINT_TESTNET,
-		rpcEndpointMainnet: RPC_ENDPOINT_MAINNET,
+		ipfsKey: ipfsKey,
+		ipfsGatewayWrite: ipfsGatewayWrite,
+		ipfsGatewayRead: ipfsGatewayRead,
+		rpcEndpoint: rpcEndpoint,
 	} as const
 })
 

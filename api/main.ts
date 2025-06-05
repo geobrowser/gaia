@@ -2,12 +2,16 @@ import {Duration, Effect, Either, Layer, Schedule} from "effect"
 import {Hono} from "hono"
 import {cors} from "hono/cors"
 import {graphqlServer} from "./src/kg/graphql-entry"
-import {Environment, make as makeEnvironment} from "./src/services/environment"
+import {Environment, EnvironmentLive, make as makeEnvironment} from "./src/services/environment"
 import {uploadEdit, uploadFile} from "./src/services/ipfs"
+import {Storage, make as makeStorage} from "./src/services/storage/storage"
 import {getPublishEditCalldata} from "./src/utils/calldata"
 import {deploySpace} from "./src/utils/deploy-space"
 
 const EnvironmentLayer = Layer.effect(Environment, makeEnvironment)
+const StorageLayer = Layer.effect(Storage, makeStorage).pipe(Layer.provide(EnvironmentLayer))
+const layers = Layer.mergeAll(EnvironmentLayer, StorageLayer)
+const provideDeps = Effect.provide(layers)
 
 const app = new Hono()
 app.use("*", cors())
@@ -61,7 +65,7 @@ app.post("/ipfs/upload-file", async (c) => {
 })
 
 app.post("/deploy", async (c) => {
-	const {initialEditorAddress, spaceName, network = "MAINNET"} = await c.req.json()
+	const {initialEditorAddress, spaceName} = await c.req.json()
 
 	if (initialEditorAddress === null || spaceName === null) {
 		console.error(
@@ -83,7 +87,6 @@ app.post("/deploy", async (c) => {
 		deploySpace({
 			initialEditorAddress,
 			spaceName,
-			network,
 		}).pipe(Effect.provide(EnvironmentLayer)),
 		{
 			schedule: Schedule.exponential(Duration.millis(100)).pipe(
@@ -95,8 +98,10 @@ app.post("/deploy", async (c) => {
 		},
 	)
 
+	const providedDeploy = deployWithRetry.pipe(provideDeps)
+
 	const result = await Effect.runPromise(
-		Effect.either(deployWithRetry).pipe(Effect.annotateLogs({editor: initialEditorAddress, spaceName})),
+		Effect.either(providedDeploy).pipe(Effect.annotateLogs({editor: initialEditorAddress, spaceName})),
 	)
 
 	return Either.match(result, {
@@ -137,7 +142,7 @@ app.post("/deploy", async (c) => {
 
 app.post("/space/:spaceId/edit/calldata", async (c) => {
 	const {spaceId} = c.req.param()
-	let {cid, network} = await c.req.json()
+	const {cid} = await c.req.json()
 
 	if (!cid || !cid.startsWith("ipfs://")) {
 		console.error(`[SPACE][calldata] Invalid CID ${cid}`)
@@ -152,28 +157,11 @@ app.post("/space/:spaceId/edit/calldata", async (c) => {
 		)
 	}
 
-	if (!network) {
-		network = "MAINNET"
-	}
-
-	if (network !== "TESTNET" && network !== "MAINNET") {
-		console.error(`[SPACE][calldata] Invalid network ${network}`)
-		return new Response(
-			JSON.stringify({
-				error: "Invalid network",
-				reason: "Invalid network. Please use 'TESTNET' or 'MAINNET'.",
-			}),
-			{
-				status: 400,
-			},
-		)
-	}
-
 	const getCalldata = Effect.gen(function* () {
-		return yield* getPublishEditCalldata(spaceId, cid as string, network)
+		return yield* getPublishEditCalldata(spaceId, cid as string)
 	})
 
-	const calldata = await Effect.runPromise(Effect.either(getCalldata.pipe(Effect.provide(EnvironmentLayer))))
+	const calldata = await Effect.runPromise(Effect.either(getCalldata.pipe(provideDeps)))
 
 	if (Either.isLeft(calldata)) {
 		const error = calldata.left
@@ -212,7 +200,7 @@ app.post("/space/:spaceId/edit/calldata", async (c) => {
 		return new Response(
 			JSON.stringify({
 				error: "Failed to generate calldata",
-				reason: `Could not find space with id ${spaceId}. Make sure it exists on the network ${network}.`,
+				reason: `Could not find space with id ${spaceId}. Ensure the space exists and that it's on the correct network. This API is associated with chain id ${EnvironmentLive.chainId}`,
 			}),
 			{
 				status: 500,

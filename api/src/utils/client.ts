@@ -7,26 +7,23 @@ import {GEOGENESIS, TESTNET} from "./chain"
 
 const geoAccount = privateKeyToAccount(process.env.DEPLOYER_PK as `0x${string}`)
 
-export const getWalletClient = (network: "TESTNET" | "MAINNET") => {
-	const rpcEndpoint = network === "TESTNET" ? EnvironmentLive.rpcEndpointTestnet : EnvironmentLive.rpcEndpointMainnet
+export const getWalletClient = () => {
 	return createWalletClient({
 		account: geoAccount,
-		chain: network === "TESTNET" ? TESTNET : GEOGENESIS,
-		transport: http(rpcEndpoint, {batch: true}),
+		chain: EnvironmentLive.chainId === "19411" ? TESTNET : GEOGENESIS,
+		transport: http(EnvironmentLive.rpcEndpoint, {batch: true}),
 	})
 }
 
-export const getPublicClient = (network: "TESTNET" | "MAINNET") => {
-	const rpcEndpoint = network === "TESTNET" ? EnvironmentLive.rpcEndpointTestnet : EnvironmentLive.rpcEndpointMainnet
-
+export const getPublicClient = () => {
 	return createPublicClient({
 		chain: GEOGENESIS,
-		transport: http(rpcEndpoint, {batch: true}),
+		transport: http(EnvironmentLive.rpcEndpoint, {batch: true}),
 	})
 }
 
-export const getSigner = (network: "TESTNET" | "MAINNET") => {
-	const walletClient = getWalletClient(network)
+export const getSigner = () => {
+	const walletClient = getWalletClient()
 	return walletClientToSigner(walletClient)
 }
 

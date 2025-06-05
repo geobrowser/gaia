@@ -9,34 +9,29 @@ import {
 import {type ContextParams, type CreateDaoParams, DaoCreationSteps, PermissionIds} from "@aragon/sdk-client"
 import {DaoCreationError, MissingExecPermissionError} from "@aragon/sdk-client-common"
 import {id} from "@ethersproject/hash"
-import {Graph, Id, SystemIds, getChecksumAddress} from "@graphprotocol/grc-20"
+import {Graph, SystemIds, getChecksumAddress} from "@graphprotocol/grc-20"
 import {MAINNET, TESTNET} from "@graphprotocol/grc-20/contracts"
 import {EditProposal} from "@graphprotocol/grc-20/proto"
-import {Duration, Effect, Either, Schedule} from "effect"
+import {Duration, Effect, Schedule} from "effect"
 import {providers} from "ethers"
 import {encodeAbiParameters, encodeFunctionData, stringToHex, zeroAddress} from "viem"
 import type {OmitStrict} from "~/src/types"
 import {Environment, EnvironmentLive} from "../services/environment"
 import {upload} from "../services/ipfs"
+import {Storage} from "../services/storage/storage"
 import {abi as DaoFactoryAbi} from "./abi"
 import {getPublicClient, getSigner, getWalletClient} from "./client"
-import {graphql} from "./graphql"
 
-const contracts = {
-	TESTNET: TESTNET,
-	MAINNET: MAINNET,
-}
+const contracts = EnvironmentLive.chainId === "19411" ? TESTNET : MAINNET
 
-const getDeployParams = (network: "TESTNET" | "MAINNET") => {
-	const daoFactory = contracts[network].DAO_FACTORY_ADDRESS
-	const ensRegistry = contracts[network].ENS_REGISTRY_ADDRESS
-
-	const rpcEndpoint = network === "TESTNET" ? EnvironmentLive.rpcEndpointTestnet : EnvironmentLive.rpcEndpointMainnet
+const getDeployParams = () => {
+	const daoFactory = contracts.DAO_FACTORY_ADDRESS
+	const ensRegistry = contracts.ENS_REGISTRY_ADDRESS
 
 	return {
 		network: SupportedNetworks.LOCAL, // I don't think this matters but is required by Aragon SDK
-		signer: getSigner(network),
-		web3Providers: new providers.JsonRpcProvider(rpcEndpoint),
+		signer: getSigner(),
+		web3Providers: new providers.JsonRpcProvider(EnvironmentLive.rpcEndpoint),
 		DAOFactory: daoFactory,
 		ENSRegistry: ensRegistry,
 	}
@@ -53,15 +48,12 @@ class WaitForSpaceToBeIndexedError extends Error {
 interface DeployArgs {
 	spaceName: string
 	initialEditorAddress: string
-	network: "TESTNET" | "MAINNET"
 }
 
 export function deploySpace(args: DeployArgs) {
-	const {network} = args
-
 	return Effect.gen(function* () {
 		const config = yield* Environment
-		yield* Effect.logInfo("[SPACE][deploy] Deploying space to " + network)
+		yield* Effect.logInfo("[SPACE][deploy] Deploying space")
 		const initialEditorAddress = getChecksumAddress(args.initialEditorAddress)
 
 		const entityOp = Graph.createEntity({
@@ -88,14 +80,12 @@ export function deploySpace(args: DeployArgs) {
 			// @HACK: Using a different upgrader from the governance plugin to work around
 			// a limitation in Aragon.
 			pluginUpgrader: getChecksumAddress("0x42de4E0f9CdFbBc070e25efFac78F5E5bA820853"),
-			network,
 		})
 
 		plugins.push(spacePluginInstallItem)
 
 		const personalSpacePluginItem = getPersonalSpaceGovernancePluginInstallItem({
 			initialEditor: getChecksumAddress(initialEditorAddress),
-			network,
 		})
 
 		plugins.push(personalSpacePluginItem)
@@ -109,7 +99,7 @@ export function deploySpace(args: DeployArgs) {
 
 		const dao = yield* Effect.tryPromise({
 			try: async () => {
-				const steps = createDao(createParams, getDeployParams(network), network)
+				const steps = createDao(createParams, getDeployParams())
 				let dao = ""
 				let pluginAddresses: string[] = []
 
@@ -136,20 +126,12 @@ export function deploySpace(args: DeployArgs) {
 			Effect.annotateLogs({dao: dao.dao, pluginAddresses: dao.pluginAddresses}),
 		)
 
-		const waitStartTime = Date.now()
-
 		yield* Effect.logInfo("[SPACE][deploy] Waiting for DAO to be indexed into a space").pipe(
 			Effect.annotateLogs({dao: dao.dao}),
 		)
-		const waitResult = yield* Effect.tryPromise({
-			try: async () => {
-				const result = await waitForSpaceToBeIndexed(dao.dao, network)
-				return result
-			},
-			catch: (e) => new WaitForSpaceToBeIndexedError(`Failed waiting for space to be indexed: ${e}`),
-		})
 
-		const waitEndTime = Date.now() - waitStartTime
+		const waitResult = yield* waitForSpaceToBeIndexed(dao.dao)
+
 		yield* Effect.logInfo("[SPACE][deploy] Space indexed successfully").pipe(
 			Effect.annotateLogs({
 				dao: dao.dao,
@@ -162,78 +144,25 @@ export function deploySpace(args: DeployArgs) {
 	})
 }
 
-class TimeoutError extends Error {
-	_tag = "TimeoutError"
-}
-
-const query = (daoAddress: string) => ` {
-  spaces(filter: { daoAddress: { equalTo: "${getChecksumAddress(daoAddress)}" } }) {
-    nodes {
-      id
-
-      spacesMetadatum {
-        version {
-          entityId
-        }
-      }
-    }
-  }
-}`
-
-async function waitForSpaceToBeIndexed(daoAddress: string, network: "TESTNET" | "MAINNET") {
-	// @TODO: Where do we fetch?
-	const endpoint = ""
-	// network === "TESTNET" ? EnvironmentLive.apiEndpointTestnet : EnvironmentLiveRaw.API_ENDPOINT_MAINNET
-
-	const graphqlFetchEffect = graphql<{
-		spaces: {nodes: {id: string; spacesMetadatum: {version: {entityId: string}}}[]}
-	}>({
-		endpoint,
-		query: query(daoAddress),
-	})
-
-	const graphqlFetchWithErrorFallbacks = Effect.gen(function* () {
-		const resultOrError = yield* Effect.either(graphqlFetchEffect)
-
-		if (Either.isLeft(resultOrError)) {
-			const error = resultOrError.left
-
-			switch (error._tag) {
-				case "GraphqlRuntimeError":
-					console.error(
-						`Encountered runtime graphql error in waitForSpaceToBeIndexed. endpoint: ${endpoint}
-
-            queryString: ${query(daoAddress)}
-            `,
-						error.message,
-					)
-
-					return null
-
-				default:
-					console.error(`${error._tag}: Unable to wait for space to be indexed, endpoint: ${endpoint}`)
-
-					return null
-			}
-		}
-
-		const maybeSpace = resultOrError.right.spaces.nodes[0]
+function waitForSpaceToBeIndexed(daoAddress: string) {
+	const checkForSpace = Effect.gen(function* () {
+		const db = yield* Storage
+		const maybeSpace = yield* db.use((client) =>
+			client.query.spaces.findFirst({
+				where: (spaces, {eq}) => eq(spaces.daoAddress, daoAddress),
+			}),
+		)
 
 		if (!maybeSpace) {
-			yield* Effect.fail(new TimeoutError("Could not find deployed space"))
-			return null
-		}
-
-		if (!maybeSpace.spacesMetadatum) {
-			yield* Effect.fail(new TimeoutError("Could not find deployed space"))
+			yield* Effect.fail(new WaitForSpaceToBeIndexedError("Could not find deployed space"))
 			return null
 		}
 
 		return maybeSpace.id
 	})
 
-	const retried = Effect.retry(
-		graphqlFetchWithErrorFallbacks,
+	return Effect.retry(
+		checkForSpace,
 		Schedule.exponential(100).pipe(
 			Schedule.jittered,
 			Schedule.compose(Schedule.elapsed),
@@ -241,11 +170,9 @@ async function waitForSpaceToBeIndexed(daoAddress: string, network: "TESTNET" | 
 			Schedule.whileOutput(Duration.lessThanOrEqualTo(Duration.seconds(60))),
 		),
 	)
-
-	return await Effect.runPromise(retried)
 }
 
-async function* createDao(params: CreateGeoDaoParams, context: ContextParams, network: "TESTNET" | "MAINNET") {
+async function* createDao(params: CreateGeoDaoParams, context: ContextParams) {
 	if (!(context.signer && context.DAOFactory)) {
 		return
 	}
@@ -273,7 +200,7 @@ async function* createDao(params: CreateGeoDaoParams, context: ContextParams, ne
 	// This check isn't 100% correct all the time
 	// simulate the DAO creation to get an address
 	// const pluginSetupProcessorAddr = await daoFactoryInstance.pluginSetupProcessor();
-	const pluginSetupProcessorAddress = contracts[network].PLUGIN_SETUP_PROCESSOR_ADDRESS
+	const pluginSetupProcessorAddress = contracts.PLUGIN_SETUP_PROCESSOR_ADDRESS
 	const pluginSetupProcessor = PluginSetupProcessor__factory.connect(pluginSetupProcessorAddress, signer)
 	let execPermissionFound = false
 
@@ -299,11 +226,11 @@ async function* createDao(params: CreateGeoDaoParams, context: ContextParams, ne
 		throw new MissingExecPermissionError()
 	}
 
-	const walletClient = getWalletClient(network)
+	const walletClient = getWalletClient()
 
 	// We use viem as we run into unexpected "unknown account" errors when using ethers to
 	// write the tx using the geo signer.
-	const daoFactoryAddress = contracts[network].DAO_FACTORY_ADDRESS
+	const daoFactoryAddress = contracts.DAO_FACTORY_ADDRESS
 	const hash = await walletClient.sendTransaction({
 		to: daoFactoryAddress as `0x${string}`,
 		data: encodeFunctionData({
@@ -340,7 +267,7 @@ async function* createDao(params: CreateGeoDaoParams, context: ContextParams, ne
 		txHash: hash,
 	}
 
-	const publicClient = getPublicClient(network)
+	const publicClient = getPublicClient()
 	const receipt = await publicClient.getTransactionReceipt({
 		hash: hash,
 	})
@@ -395,12 +322,10 @@ export function getSpacePluginInstallItem({
 	firstBlockContentUri,
 	pluginUpgrader,
 	precedessorSpace = zeroAddress,
-	network,
 }: {
 	firstBlockContentUri: string
 	pluginUpgrader: string
 	precedessorSpace?: string
-	network: "TESTNET" | "MAINNET"
 }): PluginInstallationWithViem {
 	// from `encodeInstallationParams`
 	const prepareInstallationInputs = [
@@ -429,7 +354,7 @@ export function getSpacePluginInstallItem({
 		pluginUpgrader,
 	])
 
-	const spacePluginRepoAddress = contracts[network].SPACE_PLUGIN_REPO_ADDRESS
+	const spacePluginRepoAddress = contracts.SPACE_PLUGIN_REPO_ADDRESS
 
 	return {
 		id: spacePluginRepoAddress as `0x${string}`,
@@ -439,10 +364,8 @@ export function getSpacePluginInstallItem({
 
 export function getPersonalSpaceGovernancePluginInstallItem({
 	initialEditor,
-	network,
 }: {
 	initialEditor: string
-	network: "TESTNET" | "MAINNET"
 }): PluginInstallationWithViem {
 	// Define the ABI for the prepareInstallation function's inputs. This comes from the
 	// `personal-space-admin-build-metadata.json` in our contracts repo, not from the setup plugin's ABIs.
@@ -457,7 +380,7 @@ export function getPersonalSpaceGovernancePluginInstallItem({
 
 	const encodedParams = encodeAbiParameters(prepareInstallationInputs, [initialEditor])
 
-	const personalSpaceAdminPluginRepoAddress = contracts[network].PERSONAL_SPACE_ADMIN_PLUGIN_REPO_ADDRESS
+	const personalSpaceAdminPluginRepoAddress = contracts.PERSONAL_SPACE_ADMIN_PLUGIN_REPO_ADDRESS
 
 	return {
 		id: personalSpaceAdminPluginRepoAddress as `0x${string}`,
