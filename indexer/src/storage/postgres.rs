@@ -3,8 +3,6 @@ use async_trait::async_trait;
 use sqlx::{postgres::PgPoolOptions, Postgres, QueryBuilder, Row};
 use uuid::Uuid;
 
-
-
 use crate::models::{
     entities::EntityItem,
     properties::{
@@ -15,7 +13,6 @@ use crate::models::{
     spaces::{SpaceItem, SpaceType},
     values::{ValueChangeType, ValueOp},
 };
-
 
 use super::{StorageBackend, StorageError};
 
@@ -56,7 +53,7 @@ struct RelationRow {
 }
 
 pub struct PostgresStorage {
-    pool: sqlx::Pool<Postgres>,
+    pub pool: sqlx::Pool<Postgres>,
 }
 
 impl PostgresStorage {
@@ -68,13 +65,6 @@ impl PostgresStorage {
 
         return Ok(PostgresStorage { pool });
     }
-
-    /// Internal method for accessing the pool, primarily used by test utilities
-    pub(crate) fn get_pool(&self) -> &sqlx::Pool<Postgres> {
-        &self.pool
-    }
-
-
 
     pub async fn get_entity(&self, entity_id: &String) -> Result<EntityItem, StorageError> {
         let entity_uuid = Uuid::parse_str(entity_id)
@@ -542,8 +532,8 @@ impl StorageBackend for PostgresStorage {
         sqlx::query!(
             r#"
             INSERT INTO spaces (id, type, dao_address, space_address, main_voting_address, membership_address, personal_address)
-            SELECT id, type::"spaceTypes", dao_address, space_address, main_voting_address, membership_address, personal_address 
-            FROM UNNEST($1::uuid[], $2::text[], $3::text[], $4::text[], $5::text[], $6::text[], $7::text[]) 
+            SELECT id, type::"spaceTypes", dao_address, space_address, main_voting_address, membership_address, personal_address
+            FROM UNNEST($1::uuid[], $2::text[], $3::text[], $4::text[], $5::text[], $6::text[], $7::text[])
             AS t(id, type, dao_address, space_address, main_voting_address, membership_address, personal_address)
             ON CONFLICT (id) DO NOTHING
             "#,

@@ -25,7 +25,7 @@ impl TestStorage {
 
     /// Get direct access to the database pool for custom queries in tests
     pub fn get_pool(&self) -> &sqlx::Pool<Postgres> {
-        self.storage.get_pool()
+        &self.storage.pool
     }
 
     /// Test helper: Get space data by DAO addresses
@@ -97,7 +97,7 @@ impl TestStorage {
                 property_id: row.property_id,
                 entity_id: row.entity_id,
                 space_id: row.space_id,
-                value: row.value.unwrap(),
+                value: row.value,
                 language: row.language,
                 unit: row.unit,
             })
