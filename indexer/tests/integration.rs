@@ -894,12 +894,17 @@ fn make_relation_op(
 fn make_personal_space(dao_address: &str) -> CreatedSpace {
     CreatedSpace::Personal(PersonalSpace {
         dao_address: dao_address.to_string(),
+        space_address: format!("{}_space", dao_address),
+        personal_plugin: format!("{}_personal_plugin", dao_address),
     })
 }
 
 fn make_public_space(dao_address: &str) -> CreatedSpace {
     CreatedSpace::Public(PublicSpace {
         dao_address: dao_address.to_string(),
+        space_address: format!("{}_space", dao_address),
+        membership_plugin: format!("{}_membership_plugin", dao_address),
+        governance_plugin: format!("{}_governance_plugin", dao_address),
     })
 }
 

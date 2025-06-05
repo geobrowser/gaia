@@ -11,16 +11,16 @@ pub mod validators;
 #[derive(Clone)]
 pub struct PersonalSpace {
     pub dao_address: String,
-    // pub space_address: String,
-    // pub personal_plugin: String,
+    pub space_address: String,
+    pub personal_plugin: String,
 }
 
 #[derive(Clone)]
 pub struct PublicSpace {
     pub dao_address: String,
-    // pub space_address: String,
-    // pub membership_plugin: String,
-    // pub governance_plugin: String,
+    pub space_address: String,
+    pub membership_plugin: String,
+    pub governance_plugin: String,
 }
 
 #[derive(Clone)]
