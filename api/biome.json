@@ -11,7 +11,8 @@
       "complexity": {
         "noStaticOnlyClass": "off",
         "noBannedTypes": "off",
-        "noForEach": "off"
+        "noForEach": "off",
+        "useLiteralKeys": "off"
       },
       "style": {
         "useTemplate": "off"

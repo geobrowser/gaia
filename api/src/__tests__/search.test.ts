@@ -2,11 +2,11 @@ import {SystemIds} from "@graphprotocol/grc-20"
 import {sql} from "drizzle-orm"
 import {Effect, Layer} from "effect"
 import {beforeAll, beforeEach, describe, expect, it} from "vitest"
-import * as SearchResolvers from "../resolvers/search"
-import {Environment, make as makeEnvironment} from "../services/environment"
-import {entities, relations, values} from "../services/storage/schema"
-import type {DbEntity} from "../services/storage/schema"
-import {Storage, make as makeStorage} from "../services/storage/storage"
+import * as SearchResolvers from "~/src/kg/resolvers/search"
+import {Environment, make as makeEnvironment} from "~/src/services/environment"
+import {entities, relations, values} from "~/src/services/storage/schema"
+import type {DbEntity} from "~/src/services/storage/schema"
+import {Storage, make as makeStorage} from "~/src/services/storage/storage"
 
 const EnvironmentLayer = Layer.effect(Environment, makeEnvironment)
 const StorageLayer = Layer.effect(Storage, makeStorage).pipe(Layer.provide(EnvironmentLayer))

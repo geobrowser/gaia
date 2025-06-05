@@ -3,11 +3,11 @@ import {eq, inArray, or} from "drizzle-orm"
 import {Effect, Layer} from "effect"
 import {v4 as uuid} from "uuid"
 import {afterEach, beforeEach, describe, expect, it} from "vitest"
-import {getEntities, getRelations, getValues} from "../resolvers/entities"
-import type {EntityFilter} from "../resolvers/filters"
-import {Environment, make as makeEnvironment} from "../services/environment"
-import {entities, relations, values} from "../services/storage/schema"
-import {Storage, make as makeStorage} from "../services/storage/storage"
+import {getEntities, getRelations, getValues} from "~/src/kg/resolvers/entities"
+import type {EntityFilter} from "~/src/kg/resolvers/filters"
+import {Environment, make as makeEnvironment} from "~/src/services/environment"
+import {entities, relations, values} from "~/src/services/storage/schema"
+import {Storage, make as makeStorage} from "~/src/services/storage/storage"
 
 // Set up Effect layers like in the main application
 const EnvironmentLayer = Layer.effect(Environment, makeEnvironment)

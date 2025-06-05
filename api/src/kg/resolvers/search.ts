@@ -1,8 +1,8 @@
 import {SystemIds} from "@graphprotocol/grc-20"
 import {and, desc, eq, isNotNull, or, sql} from "drizzle-orm"
 import {Effect} from "effect"
-import {entities, values} from "../services/storage/schema"
-import {Storage} from "../services/storage/storage"
+import {entities, values} from "../../services/storage/schema"
+import {Storage} from "../../services/storage/storage"
 
 interface SearchArgs {
 	query: string

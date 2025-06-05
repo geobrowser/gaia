@@ -34,6 +34,11 @@ jobs:
     env:
       DATABASE_URL: postgresql://test_user:test_password@localhost:5432/gaia_test
       NODE_ENV: test
+      IPFS_KEY: test_ipfs_key
+      IPFS_GATEWAY_WRITE: https://test-ipfs-write.example.com
+      IPFS_GATEWAY_READ: https://test-ipfs-read.example.com
+      RPC_ENDPOINT_TESTNET: https://test-rpc-testnet.example.com
+      RPC_ENDPOINT_MAINNET: https://test-rpc-mainnet.example.com
 
     defaults:
       run:
