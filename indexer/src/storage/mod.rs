@@ -9,6 +9,7 @@ use crate::models::{
     entities::EntityItem,
     properties::PropertyItem,
     relations::{SetRelationItem, UnsetRelationItem, UpdateRelationItem},
+    spaces::SpaceItem,
     values::ValueOp,
 };
 
@@ -42,4 +43,5 @@ pub trait StorageBackend: Send + Sync {
         space_id: &Uuid,
     ) -> Result<(), StorageError>;
     async fn insert_properties(&self, properties: &Vec<PropertyItem>) -> Result<(), StorageError>;
+    async fn insert_spaces(&self, spaces: &Vec<SpaceItem>) -> Result<(), StorageError>;
 }
