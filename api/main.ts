@@ -4,10 +4,14 @@ import {cors} from "hono/cors"
 import {graphqlServer} from "./src/kg/graphql-entry"
 import {Environment, EnvironmentLive, make as makeEnvironment} from "./src/services/environment"
 import {uploadEdit, uploadFile} from "./src/services/ipfs"
+import {Storage, make as makeStorage} from "./src/services/storage/storage"
 import {getPublishEditCalldata} from "./src/utils/calldata"
 import {deploySpace} from "./src/utils/deploy-space"
 
 const EnvironmentLayer = Layer.effect(Environment, makeEnvironment)
+const StorageLayer = Layer.effect(Storage, makeStorage).pipe(Layer.provide(EnvironmentLayer))
+const layers = Layer.mergeAll(EnvironmentLayer, StorageLayer)
+const provideDeps = Effect.provide(layers)
 
 const app = new Hono()
 app.use("*", cors())
@@ -94,8 +98,10 @@ app.post("/deploy", async (c) => {
 		},
 	)
 
+	const providedDeploy = deployWithRetry.pipe(provideDeps)
+
 	const result = await Effect.runPromise(
-		Effect.either(deployWithRetry).pipe(Effect.annotateLogs({editor: initialEditorAddress, spaceName})),
+		Effect.either(providedDeploy).pipe(Effect.annotateLogs({editor: initialEditorAddress, spaceName})),
 	)
 
 	return Either.match(result, {
@@ -155,7 +161,7 @@ app.post("/space/:spaceId/edit/calldata", async (c) => {
 		return yield* getPublishEditCalldata(spaceId, cid as string)
 	})
 
-	const calldata = await Effect.runPromise(Effect.either(getCalldata.pipe(Effect.provide(EnvironmentLayer))))
+	const calldata = await Effect.runPromise(Effect.either(getCalldata.pipe(provideDeps)))
 
 	if (Either.isLeft(calldata)) {
 		const error = calldata.left

@@ -9,8 +9,10 @@ import {
 	ipfsCache,
 	properties,
 	propertiesEntityRelations,
+	propertiesRelations,
 	relations,
 	relationsEntityRelations,
+	spaces,
 	values,
 } from "./schema"
 
@@ -38,10 +40,12 @@ export const createDb = (connectionString: string) => {
 			properties: properties,
 			values: values,
 			relations: relations,
+			spaces,
 
 			entityForeignProperties: entityForeignValues,
 			propertiesEntityRelations,
 			relationsEntityRelations,
+			propertiesRelations,
 		},
 	})
 }

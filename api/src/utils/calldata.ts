@@ -1,72 +1,44 @@
 import {MainVotingAbi, PersonalSpaceAdminAbi} from "@graphprotocol/grc-20/abis"
 import {Effect} from "effect"
 import {encodeFunctionData, stringToHex} from "viem"
-import {graphql} from "./graphql"
-
-const query = (spaceId: string) => {
-	return `
-    query {
-      space(id: "${spaceId}") {
-        id
-        type
-        daoAddress
-        mainVotingPluginAddress
-        memberAccessPluginAddress
-        personalSpaceAdminPluginAddress
-        spacePluginAddress
-      }
-    }`
-}
-
-type NetworkResult = {
-	space: {
-		id: string
-		type: "PERSONAL" | "PUBLIC"
-		daoAddress: string
-		spacePluginAddress: string
-		mainVotingPluginAddress: string | null
-		memberAccessPluginAddress: string | null
-		personalSpaceAdminPluginAddress: string | null
-	} | null
-}
+import {Storage} from "../services/storage/storage"
 
 export function getPublishEditCalldata(spaceId: string, cid: string) {
 	return Effect.gen(function* () {
-		// @TODO: Read from space
-		const endpoint = ""
-		// const endpoint = network === "TESTNET" ? config.API_ENDPOINT_TESTNET : config.API_ENDPOINT_MAINNET
+		const db = yield* Storage
 
-		const result = yield* graphql<NetworkResult>({
-			endpoint,
-			query: query(spaceId),
-		})
+		const maybeSpace = yield* db.use((client) =>
+			client.query.spaces.findFirst({
+				where: (spaces, {eq}) => eq(spaces.id, spaceId),
+			}),
+		)
 
-		if (!result.space) {
+		if (!maybeSpace) {
 			return null
 		}
 
-		if (result.space.type === "PERSONAL") {
+		if (maybeSpace.type === "Personal") {
 			const calldata = encodeFunctionData({
 				functionName: "submitEdits",
 				abi: PersonalSpaceAdminAbi,
-				args: [cid, result.space.spacePluginAddress as `0x${string}`],
+				args: [cid, maybeSpace.spaceAddress as `0x${string}`],
 			})
 
 			return {
-				to: result.space.personalSpaceAdminPluginAddress,
+				to: maybeSpace.personalAddress,
 				data: calldata,
 			}
 		}
 
-		if (result.space.type === "PUBLIC") {
+		if (maybeSpace.type === "Public") {
 			const calldata = encodeFunctionData({
 				functionName: "proposeEdits",
 				abi: MainVotingAbi,
-				args: [stringToHex(cid), cid, result.space.spacePluginAddress as `0x${string}`],
+				args: [stringToHex(cid), cid, maybeSpace.spaceAddress as `0x${string}`],
 			})
 
 			return {
-				to: result.space.mainVotingPluginAddress as `0x${string}`,
+				to: maybeSpace.mainVotingAddress as `0x${string}`,
 				data: calldata,
 			}
 		}

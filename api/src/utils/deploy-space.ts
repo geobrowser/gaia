@@ -12,15 +12,15 @@ import {id} from "@ethersproject/hash"
 import {Graph, SystemIds, getChecksumAddress} from "@graphprotocol/grc-20"
 import {MAINNET, TESTNET} from "@graphprotocol/grc-20/contracts"
 import {EditProposal} from "@graphprotocol/grc-20/proto"
-import {Duration, Effect, Either, Schedule} from "effect"
+import {Duration, Effect, Schedule} from "effect"
 import {providers} from "ethers"
 import {encodeAbiParameters, encodeFunctionData, stringToHex, zeroAddress} from "viem"
 import type {OmitStrict} from "~/src/types"
 import {Environment, EnvironmentLive} from "../services/environment"
 import {upload} from "../services/ipfs"
+import {Storage} from "../services/storage/storage"
 import {abi as DaoFactoryAbi} from "./abi"
 import {getPublicClient, getSigner, getWalletClient} from "./client"
-import {graphql} from "./graphql"
 
 const contracts = EnvironmentLive.chainId === "19411" ? TESTNET : MAINNET
 
@@ -126,20 +126,12 @@ export function deploySpace(args: DeployArgs) {
 			Effect.annotateLogs({dao: dao.dao, pluginAddresses: dao.pluginAddresses}),
 		)
 
-		const waitStartTime = Date.now()
-
 		yield* Effect.logInfo("[SPACE][deploy] Waiting for DAO to be indexed into a space").pipe(
 			Effect.annotateLogs({dao: dao.dao}),
 		)
-		const waitResult = yield* Effect.tryPromise({
-			try: async () => {
-				const result = await waitForSpaceToBeIndexed(dao.dao)
-				return result
-			},
-			catch: (e) => new WaitForSpaceToBeIndexedError(`Failed waiting for space to be indexed: ${e}`),
-		})
 
-		const waitEndTime = Date.now() - waitStartTime
+		const waitResult = yield* waitForSpaceToBeIndexed(dao.dao)
+
 		yield* Effect.logInfo("[SPACE][deploy] Space indexed successfully").pipe(
 			Effect.annotateLogs({
 				dao: dao.dao,
@@ -152,78 +144,25 @@ export function deploySpace(args: DeployArgs) {
 	})
 }
 
-class TimeoutError extends Error {
-	_tag = "TimeoutError"
-}
-
-const query = (daoAddress: string) => ` {
-  spaces(filter: { daoAddress: { equalTo: "${getChecksumAddress(daoAddress)}" } }) {
-    nodes {
-      id
-
-      spacesMetadatum {
-        version {
-          entityId
-        }
-      }
-    }
-  }
-}`
-
-async function waitForSpaceToBeIndexed(daoAddress: string) {
-	// @TODO: Where do we fetch?
-	const endpoint = ""
-	// network === "TESTNET" ? EnvironmentLive.apiEndpointTestnet : EnvironmentLiveRaw.API_ENDPOINT_MAINNET
-
-	const graphqlFetchEffect = graphql<{
-		spaces: {nodes: {id: string; spacesMetadatum: {version: {entityId: string}}}[]}
-	}>({
-		endpoint,
-		query: query(daoAddress),
-	})
-
-	const graphqlFetchWithErrorFallbacks = Effect.gen(function* () {
-		const resultOrError = yield* Effect.either(graphqlFetchEffect)
-
-		if (Either.isLeft(resultOrError)) {
-			const error = resultOrError.left
-
-			switch (error._tag) {
-				case "GraphqlRuntimeError":
-					console.error(
-						`Encountered runtime graphql error in waitForSpaceToBeIndexed. endpoint: ${endpoint}
-
-            queryString: ${query(daoAddress)}
-            `,
-						error.message,
-					)
-
-					return null
-
-				default:
-					console.error(`${error._tag}: Unable to wait for space to be indexed, endpoint: ${endpoint}`)
-
-					return null
-			}
-		}
-
-		const maybeSpace = resultOrError.right.spaces.nodes[0]
+function waitForSpaceToBeIndexed(daoAddress: string) {
+	const checkForSpace = Effect.gen(function* () {
+		const db = yield* Storage
+		const maybeSpace = yield* db.use((client) =>
+			client.query.spaces.findFirst({
+				where: (spaces, {eq}) => eq(spaces.daoAddress, daoAddress),
+			}),
+		)
 
 		if (!maybeSpace) {
-			yield* Effect.fail(new TimeoutError("Could not find deployed space"))
-			return null
-		}
-
-		if (!maybeSpace.spacesMetadatum) {
-			yield* Effect.fail(new TimeoutError("Could not find deployed space"))
+			yield* Effect.fail(new WaitForSpaceToBeIndexedError("Could not find deployed space"))
 			return null
 		}
 
 		return maybeSpace.id
 	})
 
-	const retried = Effect.retry(
-		graphqlFetchWithErrorFallbacks,
+	return Effect.retry(
+		checkForSpace,
 		Schedule.exponential(100).pipe(
 			Schedule.jittered,
 			Schedule.compose(Schedule.elapsed),
@@ -231,8 +170,6 @@ async function waitForSpaceToBeIndexed(daoAddress: string) {
 			Schedule.whileOutput(Duration.lessThanOrEqualTo(Duration.seconds(60))),
 		),
 	)
-
-	return await Effect.runPromise(retried)
 }
 
 async function* createDao(params: CreateGeoDaoParams, context: ContextParams) {
