@@ -18,6 +18,7 @@ use indexer::{
     error::IndexingError,
     models::properties::DataType,
     storage::{postgres::PostgresStorage, StorageError},
+    test_utils::TestStorage,
     CreatedSpace, PersonalSpace, PublicSpace, KgData,
 };
 
@@ -928,9 +929,10 @@ fn make_kg_data_with_spaces(
 async fn test_space_indexing_personal() -> Result<(), IndexingError> {
     dotenv().ok();
     let database_url = env::var("DATABASE_URL").expect("DATABASE_URL not set");
-    let storage = Arc::new(PostgresStorage::new(&database_url).await?);
+    let postgres_storage = Arc::new(PostgresStorage::new(&database_url).await?);
+    let test_storage = TestStorage::new(postgres_storage.clone());
     let properties_cache = Arc::new(PropertiesCache::new());
-    let indexer = TestIndexer::new(storage.clone(), properties_cache);
+    let indexer = TestIndexer::new(postgres_storage, properties_cache);
 
     // Create test data with personal spaces
     let dao_address1 = "0x1234567890123456789012345678901234567890";
@@ -948,20 +950,11 @@ async fn test_space_indexing_personal() -> Result<(), IndexingError> {
 
     // Verify that personal spaces were inserted correctly
     let dao_addresses = vec![dao_address1.to_string(), dao_address2.to_string()];
-    let space_rows = sqlx::query!(
-        "SELECT dao_address, type::text as type, space_address, main_voting_address, membership_address, personal_address FROM spaces WHERE dao_address = ANY($1)",
-        &dao_addresses
-    )
-    .fetch_all(storage.get_pool_for_tests())
-    .await
-    .map_err(|e| IndexingError::StorageError(StorageError::Database(e)))?;
+    let space_rows = test_storage.get_spaces_by_dao_addresses(&dao_addresses).await?;
 
     assert_eq!(space_rows.len(), 2);
-    for row in space_rows {
-        assert_eq!(row.r#type.as_ref().unwrap(), "Personal");
-        assert!(row.main_voting_address.is_none());
-        assert!(row.membership_address.is_none());
-        assert!(row.personal_address.is_some());
+    for row in &space_rows {
+        row.validate_personal_space().map_err(|_e| IndexingError::StorageError(StorageError::Database(sqlx::Error::RowNotFound)))?;
         assert_eq!(row.personal_address.as_ref().unwrap(), &format!("{}_personal_plugin", row.dao_address));
         assert_eq!(row.space_address, format!("{}_space", row.dao_address));
     }
@@ -973,9 +966,10 @@ async fn test_space_indexing_personal() -> Result<(), IndexingError> {
 async fn test_space_indexing_public() -> Result<(), IndexingError> {
     dotenv().ok();
     let database_url = env::var("DATABASE_URL").expect("DATABASE_URL not set");
-    let storage = Arc::new(PostgresStorage::new(&database_url).await?);
+    let postgres_storage = Arc::new(PostgresStorage::new(&database_url).await?);
+    let test_storage = TestStorage::new(postgres_storage.clone());
     let properties_cache = Arc::new(PropertiesCache::new());
-    let indexer = TestIndexer::new(storage.clone(), properties_cache);
+    let indexer = TestIndexer::new(postgres_storage, properties_cache);
 
     // Create test data with public spaces
     let dao_address1 = "0x9999999999999999999999999999999999999999";
@@ -993,20 +987,11 @@ async fn test_space_indexing_public() -> Result<(), IndexingError> {
 
     // Verify that public spaces were inserted correctly
     let dao_addresses = vec![dao_address1.to_string(), dao_address2.to_string()];
-    let space_rows = sqlx::query!(
-        "SELECT dao_address, type::text as type, space_address, main_voting_address, membership_address, personal_address FROM spaces WHERE dao_address = ANY($1)",
-        &dao_addresses
-    )
-    .fetch_all(storage.get_pool_for_tests())
-    .await
-    .map_err(|e| IndexingError::StorageError(StorageError::Database(e)))?;
+    let space_rows = test_storage.get_spaces_by_dao_addresses(&dao_addresses).await?;
 
     assert_eq!(space_rows.len(), 2);
-    for row in space_rows {
-        assert_eq!(row.r#type.as_ref().unwrap(), "Public");
-        assert!(row.main_voting_address.is_some());
-        assert!(row.membership_address.is_some());
-        assert!(row.personal_address.is_none());
+    for row in &space_rows {
+        row.validate_public_space().map_err(|_e| IndexingError::StorageError(StorageError::Database(sqlx::Error::RowNotFound)))?;
         assert_eq!(row.main_voting_address.as_ref().unwrap(), &format!("{}_governance_plugin", row.dao_address));
         assert_eq!(row.membership_address.as_ref().unwrap(), &format!("{}_membership_plugin", row.dao_address));
         assert_eq!(row.space_address, format!("{}_space", row.dao_address));
@@ -1019,9 +1004,10 @@ async fn test_space_indexing_public() -> Result<(), IndexingError> {
 async fn test_space_indexing_mixed() -> Result<(), IndexingError> {
     dotenv().ok();
     let database_url = env::var("DATABASE_URL").expect("DATABASE_URL not set");
-    let storage = Arc::new(PostgresStorage::new(&database_url).await?);
+    let postgres_storage = Arc::new(PostgresStorage::new(&database_url).await?);
+    let test_storage = TestStorage::new(postgres_storage.clone());
     let properties_cache = Arc::new(PropertiesCache::new());
-    let indexer = TestIndexer::new(storage.clone(), properties_cache);
+    let indexer = TestIndexer::new(postgres_storage, properties_cache);
 
     // Create test data with mixed space types
     let personal_dao1 = "0x1111111111111111111111111111111111111111";
@@ -1041,39 +1027,21 @@ async fn test_space_indexing_mixed() -> Result<(), IndexingError> {
 
     // Verify that mixed space types were inserted correctly
     let dao_addresses = vec![personal_dao1.to_string(), public_dao.to_string(), personal_dao2.to_string()];
-    let space_rows = sqlx::query!(
-        "SELECT dao_address, type::text as type, space_address, main_voting_address, membership_address, personal_address FROM spaces WHERE dao_address = ANY($1) ORDER BY dao_address",
-        &dao_addresses
-    )
-    .fetch_all(storage.get_pool_for_tests())
-    .await
-    .map_err(|e| IndexingError::StorageError(StorageError::Database(e)))?;
+    let space_rows = test_storage.get_spaces_by_dao_addresses(&dao_addresses).await?;
 
     assert_eq!(space_rows.len(), 3);
 
     // Check personal space 1
-    let personal_row1 = &space_rows[0];
-    assert_eq!(personal_row1.dao_address, personal_dao1);
-    assert_eq!(personal_row1.r#type.as_ref().unwrap(), "Personal");
-    assert!(personal_row1.main_voting_address.is_none());
-    assert!(personal_row1.membership_address.is_none());
-    assert!(personal_row1.personal_address.is_some());
+    let personal_row1 = space_rows.iter().find(|r| r.dao_address == personal_dao1).unwrap();
+    personal_row1.validate_personal_space().map_err(|_e| IndexingError::StorageError(StorageError::Database(sqlx::Error::RowNotFound)))?;
 
     // Check public space
-    let public_row = &space_rows[1];
-    assert_eq!(public_row.dao_address, public_dao);
-    assert_eq!(public_row.r#type.as_ref().unwrap(), "Public");
-    assert!(public_row.main_voting_address.is_some());
-    assert!(public_row.membership_address.is_some());
-    assert!(public_row.personal_address.is_none());
+    let public_row = space_rows.iter().find(|r| r.dao_address == public_dao).unwrap();
+    public_row.validate_public_space().map_err(|_e| IndexingError::StorageError(StorageError::Database(sqlx::Error::RowNotFound)))?;
 
     // Check personal space 2
-    let personal_row2 = &space_rows[2];
-    assert_eq!(personal_row2.dao_address, personal_dao2);
-    assert_eq!(personal_row2.r#type.as_ref().unwrap(), "Personal");
-    assert!(personal_row2.main_voting_address.is_none());
-    assert!(personal_row2.membership_address.is_none());
-    assert!(personal_row2.personal_address.is_some());
+    let personal_row2 = space_rows.iter().find(|r| r.dao_address == personal_dao2).unwrap();
+    personal_row2.validate_personal_space().map_err(|_e| IndexingError::StorageError(StorageError::Database(sqlx::Error::RowNotFound)))?;
 
     Ok(())
 }

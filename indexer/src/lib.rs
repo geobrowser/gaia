@@ -8,6 +8,8 @@ pub mod models;
 pub mod storage;
 pub mod validators;
 
+pub mod test_utils;
+
 #[derive(Clone)]
 pub struct PersonalSpace {
     pub dao_address: String,

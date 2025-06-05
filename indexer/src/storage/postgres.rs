@@ -69,9 +69,12 @@ impl PostgresStorage {
         return Ok(PostgresStorage { pool });
     }
 
-    pub fn get_pool_for_tests(&self) -> &sqlx::Pool<Postgres> {
+    /// Internal method for accessing the pool, primarily used by test utilities
+    pub(crate) fn get_pool(&self) -> &sqlx::Pool<Postgres> {
         &self.pool
     }
+
+
 
     pub async fn get_entity(&self, entity_id: &String) -> Result<EntityItem, StorageError> {
         let entity_uuid = Uuid::parse_str(entity_id)
