@@ -2,6 +2,7 @@
   "name": "api",
   "version": "1.0.0",
   "main": "main.ts",
+  "type": "module",
   "scripts": {
     "start": "bun run main.ts",
     "generate": "graphql-codegen --config codegen.yml",
