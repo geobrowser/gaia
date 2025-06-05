@@ -41,7 +41,13 @@ jobs:
         sudo apt-get install -y libpq-dev
 
     - name: Run unit tests
-      run: cargo test --lib --bins
+      run: cargo test --lib --bins -- --test-threads=1
+      working-directory: ./indexer
+      env:
+        RUST_BACKTRACE: 1
+
+    - name: Run doc tests
+      run: cargo test --doc -- --test-threads=1
       working-directory: ./indexer
       env:
         RUST_BACKTRACE: 1
