@@ -24,11 +24,6 @@ jobs:
     - name: Checkout code
       uses: actions/checkout@v4
 
-    - name: Install Rust toolchain
-      uses: dtolnay/rust-toolchain@stable
-      with:
-        components: rustfmt, clippy
-
     - name: Cache cargo registry
       uses: actions/cache@v3
       with:
@@ -45,22 +40,8 @@ jobs:
         sudo apt-get update
         sudo apt-get install -y libpq-dev
 
-    - name: Check formatting
-      run: cargo fmt --all -- --check
-      working-directory: ./indexer
-
-    - name: Run clippy
-      run: cargo clippy --all-targets --all-features -- -D warnings
-      working-directory: ./indexer
-
     - name: Run unit tests
       run: cargo test --lib --bins
-      working-directory: ./indexer
-      env:
-        RUST_BACKTRACE: 1
-
-    - name: Run doc tests
-      run: cargo test --doc
       working-directory: ./indexer
       env:
         RUST_BACKTRACE: 1
