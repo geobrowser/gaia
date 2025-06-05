@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO spaces (id, dao_address)\n            SELECT * FROM UNNEST($1::uuid[], $2::text[])\n            ON CONFLICT (id) DO NOTHING\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "UuidArray",
+        "TextArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "a873d1ca1242475a2a8b6dea56f2dccdef8d264dd6d79e77ac12e908a01b1df4"
+}
