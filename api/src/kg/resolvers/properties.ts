@@ -15,8 +15,8 @@ export function getProperties(args: QueryPropertiesArgs) {
 				where: dataTypeFilter
 					? (properties, {eq}) => eq(properties.type, getDataTypeAsText(dataTypeFilter))
 					: undefined,
-				limit: args.limit || 100,
-				offset: args.offset || 0,
+				limit: args.limit ?? 100,
+				offset: args.offset ?? 0,
 			})
 
 			return result.map((property) => ({
