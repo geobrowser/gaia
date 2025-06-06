@@ -1,9 +1,31 @@
 import {SystemIds} from "@graphprotocol/grc-20"
 import {and, eq} from "drizzle-orm"
 import {Effect} from "effect"
-import {DataType, type QueryTypesArgs} from "../../generated/graphql"
+import {DataType, type QueryPropertiesArgs, type QueryTypesArgs} from "../../generated/graphql"
 import {properties, relations} from "../../services/storage/schema"
 import {Storage} from "../../services/storage/storage"
+
+export function getProperties(args: QueryPropertiesArgs) {
+	return Effect.gen(function* () {
+		const db = yield* Storage
+
+		return yield* db.use(async (client) => {
+			const dataTypeFilter = args.filter?.dataType
+			const result = await client.query.properties.findMany({
+				where: dataTypeFilter
+					? (properties, {eq}) => eq(properties.type, getDataTypeAsText(dataTypeFilter))
+					: undefined,
+				limit: args.limit ?? 100,
+				offset: args.offset ?? 0,
+			})
+
+			return result.map((property) => ({
+				id: property.id,
+				dataType: getTextAsDataType(property.type),
+			}))
+		})
+	})
+}
 
 export function getProperty(propertyId: string) {
 	return Effect.gen(function* () {
@@ -23,13 +45,13 @@ export function getProperty(propertyId: string) {
 
 			return {
 				id: propertyId,
-				dataType: getValueTypeAsText(result.type),
+				dataType: getTextAsDataType(result.type),
 			}
 		})
 	})
 }
 
-export function getProperties(typeId: string, args: QueryTypesArgs) {
+export function getPropertiesForType(typeId: string, args: QueryTypesArgs) {
 	return Effect.gen(function* () {
 		const db = yield* Storage
 
@@ -54,7 +76,7 @@ export function getProperties(typeId: string, args: QueryTypesArgs) {
 
 		return result.map((r) => ({
 			id: r.propertyId,
-			dataType: getValueTypeAsText(r.propertyType),
+			dataType: getTextAsDataType(r.propertyType),
 		}))
 	})
 }
@@ -80,7 +102,7 @@ export function getPropertyRelationValueTypes(propertyId: string) {
 	})
 }
 
-function getValueTypeAsText(valueTypeId: string): DataType {
+function getTextAsDataType(valueTypeId: string): DataType {
 	switch (valueTypeId) {
 		case "Text":
 			return DataType.Text
@@ -96,5 +118,24 @@ function getValueTypeAsText(valueTypeId: string): DataType {
 			return DataType.Relation
 		default:
 			return DataType.Text
+	}
+}
+
+function getDataTypeAsText(dataType: DataType): "Text" | "Number" | "Checkbox" | "Time" | "Point" | "Relation" {
+	switch (dataType) {
+		case DataType.Text:
+			return "Text"
+		case DataType.Number:
+			return "Number"
+		case DataType.Checkbox:
+			return "Checkbox"
+		case DataType.Time:
+			return "Time"
+		case DataType.Point:
+			return "Point"
+		case DataType.Relation:
+			return "Relation"
+		default:
+			return "Text"
 	}
 }

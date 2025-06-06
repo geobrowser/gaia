@@ -3,7 +3,7 @@ import {Effect, Layer} from "effect"
 import {v4 as uuid} from "uuid"
 import {afterEach, beforeEach, describe, expect, it} from "vitest"
 import {DataType} from "../generated/graphql"
-import {getProperties} from "../kg/resolvers/properties"
+import {getPropertiesForType} from "../kg/resolvers/properties"
 import {getTypes} from "../kg/resolvers/types"
 import {Environment, make as makeEnvironment} from "../services/environment"
 import {entities, properties, relations, values} from "../services/storage/schema"
@@ -297,14 +297,14 @@ describe("Types and Properties Integration Tests", () => {
 
 	describe("Properties Child Query", () => {
 		it("should return properties for a type", async () => {
-			const result = await Effect.runPromise(provideDeps(getProperties(TYPE_ID_1, {limit: 10, offset: 0})))
+			const result = await Effect.runPromise(provideDeps(getPropertiesForType(TYPE_ID_1, {limit: 10, offset: 0})))
 
 			expect(result).toHaveLength(2)
 			expect(result.map((r) => r.id).sort()).toEqual([PROPERTY_ID_1, PROPERTY_ID_2].sort())
 		})
 
 		it("should return correct data types", async () => {
-			const result = await Effect.runPromise(provideDeps(getProperties(TYPE_ID_1, {limit: 10, offset: 0})))
+			const result = await Effect.runPromise(provideDeps(getPropertiesForType(TYPE_ID_1, {limit: 10, offset: 0})))
 
 			const textProperty = result.find((r) => r.id === PROPERTY_ID_1)
 			const numberProperty = result.find((r) => r.id === PROPERTY_ID_2)
@@ -314,7 +314,7 @@ describe("Types and Properties Integration Tests", () => {
 		})
 
 		it("should return different property types", async () => {
-			const result = await Effect.runPromise(provideDeps(getProperties(TYPE_ID_2, {limit: 10, offset: 0})))
+			const result = await Effect.runPromise(provideDeps(getPropertiesForType(TYPE_ID_2, {limit: 10, offset: 0})))
 
 			expect(result).toHaveLength(1)
 			expect(result[0]?.id).toBe(PROPERTY_ID_3)
@@ -323,7 +323,7 @@ describe("Types and Properties Integration Tests", () => {
 
 		it("should filter properties by spaceId", async () => {
 			const result = await Effect.runPromise(
-				provideDeps(getProperties(TYPE_ID_1, {limit: 10, offset: 0, spaceId: TEST_SPACE_ID})),
+				provideDeps(getPropertiesForType(TYPE_ID_1, {limit: 10, offset: 0, spaceId: TEST_SPACE_ID})),
 			)
 
 			expect(result).toHaveLength(2)
@@ -332,7 +332,7 @@ describe("Types and Properties Integration Tests", () => {
 
 		it("should return empty array for different spaceId", async () => {
 			const result = await Effect.runPromise(
-				provideDeps(getProperties(TYPE_ID_1, {limit: 10, offset: 0, spaceId: TEST_SPACE_ID_2})),
+				provideDeps(getPropertiesForType(TYPE_ID_1, {limit: 10, offset: 0, spaceId: TEST_SPACE_ID_2})),
 			)
 
 			expect(result).toHaveLength(0)
@@ -340,7 +340,7 @@ describe("Types and Properties Integration Tests", () => {
 
 		it("should return properties for type in different space", async () => {
 			const result = await Effect.runPromise(
-				provideDeps(getProperties(TYPE_ID_3, {limit: 10, offset: 0, spaceId: TEST_SPACE_ID_2})),
+				provideDeps(getPropertiesForType(TYPE_ID_3, {limit: 10, offset: 0, spaceId: TEST_SPACE_ID_2})),
 			)
 
 			expect(result).toHaveLength(1)
@@ -349,7 +349,7 @@ describe("Types and Properties Integration Tests", () => {
 		})
 
 		it("should return empty array for non-existent type", async () => {
-			const result = await Effect.runPromise(provideDeps(getProperties(uuid(), {limit: 10, offset: 0})))
+			const result = await Effect.runPromise(provideDeps(getPropertiesForType(uuid(), {limit: 10, offset: 0})))
 
 			expect(result).toHaveLength(0)
 		})
@@ -383,14 +383,16 @@ describe("Types and Properties Integration Tests", () => {
 				),
 			)
 
-			const result = await Effect.runPromise(provideDeps(getProperties(emptyTypeId, {limit: 10, offset: 0})))
+			const result = await Effect.runPromise(
+				provideDeps(getPropertiesForType(emptyTypeId, {limit: 10, offset: 0})),
+			)
 
 			expect(result).toHaveLength(0)
 		})
 
 		it("should handle non-existent spaceId", async () => {
 			const result = await Effect.runPromise(
-				provideDeps(getProperties(TYPE_ID_1, {limit: 10, offset: 0, spaceId: uuid()})),
+				provideDeps(getPropertiesForType(TYPE_ID_1, {limit: 10, offset: 0, spaceId: uuid()})),
 			)
 
 			expect(result).toHaveLength(0)
@@ -400,12 +402,16 @@ describe("Types and Properties Integration Tests", () => {
 	describe("Data Type Mapping", () => {
 		it("should map all supported data types correctly", async () => {
 			// We have Text, Number, Checkbox, Point in our test data
-			const type1Props = await Effect.runPromise(provideDeps(getProperties(TYPE_ID_1, {limit: 10, offset: 0})))
+			const type1Props = await Effect.runPromise(
+				provideDeps(getPropertiesForType(TYPE_ID_1, {limit: 10, offset: 0})),
+			)
 
-			const type2Props = await Effect.runPromise(provideDeps(getProperties(TYPE_ID_2, {limit: 10, offset: 0})))
+			const type2Props = await Effect.runPromise(
+				provideDeps(getPropertiesForType(TYPE_ID_2, {limit: 10, offset: 0})),
+			)
 
 			const type3Props = await Effect.runPromise(
-				provideDeps(getProperties(TYPE_ID_3, {limit: 10, offset: 0, spaceId: TEST_SPACE_ID_2})),
+				provideDeps(getPropertiesForType(TYPE_ID_3, {limit: 10, offset: 0, spaceId: TEST_SPACE_ID_2})),
 			)
 
 			const allProps = [...type1Props, ...type2Props, ...type3Props]
@@ -457,7 +463,7 @@ describe("Types and Properties Integration Tests", () => {
 				),
 			)
 
-			const result = await Effect.runPromise(provideDeps(getProperties(TYPE_ID_1, {limit: 10, offset: 0})))
+			const result = await Effect.runPromise(provideDeps(getPropertiesForType(TYPE_ID_1, {limit: 10, offset: 0})))
 
 			const timeProp = result.find((p) => p.id === timePropId)
 			const relationProp = result.find((p) => p.id === relationPropId)
@@ -481,13 +487,15 @@ describe("Types and Properties Integration Tests", () => {
 		})
 
 		it("should handle properties query with limit 0", async () => {
-			const result = await Effect.runPromise(provideDeps(getProperties(TYPE_ID_1, {limit: 0, offset: 0})))
+			const result = await Effect.runPromise(provideDeps(getPropertiesForType(TYPE_ID_1, {limit: 0, offset: 0})))
 
 			expect(result).toHaveLength(0)
 		})
 
 		it("should handle properties query with large offset", async () => {
-			const result = await Effect.runPromise(provideDeps(getProperties(TYPE_ID_1, {limit: 10, offset: 1000})))
+			const result = await Effect.runPromise(
+				provideDeps(getPropertiesForType(TYPE_ID_1, {limit: 10, offset: 1000})),
+			)
 
 			expect(result).toHaveLength(0)
 		})

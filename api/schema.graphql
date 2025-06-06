@@ -115,6 +115,12 @@ type Query {
 
   types(spaceId: String, limit: Int = 100, offset: Int = 0): [Type]!
 
+  properties(
+    filter: PropertyFilter
+    limit: Int = 100
+    offset: Int = 0
+  ): [Property]!
+
   # Search entities by name and description using pg_trgm similarity
   search(
     query: String!
@@ -137,6 +143,10 @@ type Query {
   # edits
   # version?
   # versions?
+}
+
+input PropertyFilter {
+  dataType: DataType
 }
 
 input TextFilter {
