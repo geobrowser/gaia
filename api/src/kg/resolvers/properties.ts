@@ -92,13 +92,10 @@ export function getPropertyRelationValueTypes(propertyId: string) {
 						eq(relations.fromEntityId, propertyId),
 						eq(relations.typeId, SystemIds.RELATION_VALUE_RELATIONSHIP_TYPE),
 					),
-				with: {
-					toEntity: true,
-				},
 			})
 		})
 
-		return result.map((r) => r.toEntity)
+		return result.map((r) => ({ id: r.toEntityId }))
 	})
 }
 
