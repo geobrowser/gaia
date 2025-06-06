@@ -110,10 +110,15 @@ export type Property = {
 	relationValueTypes?: Maybe<Array<Maybe<Entity>>>
 }
 
+export type PropertyFilter = {
+	dataType?: InputMaybe<DataType>
+}
+
 export type Query = {
 	__typename?: "Query"
 	entities: Array<Maybe<Entity>>
 	entity?: Maybe<Entity>
+	properties: Array<Maybe<Property>>
 	search: Array<Maybe<Entity>>
 	types: Array<Maybe<Type>>
 }
@@ -127,6 +132,13 @@ export type QueryEntitiesArgs = {
 
 export type QueryEntityArgs = {
 	id: Scalars["String"]["input"]
+	spaceId?: InputMaybe<Scalars["String"]["input"]>
+}
+
+export type QueryPropertiesArgs = {
+	filter?: InputMaybe<PropertyFilter>
+	limit?: InputMaybe<Scalars["Int"]["input"]>
+	offset?: InputMaybe<Scalars["Int"]["input"]>
 	spaceId?: InputMaybe<Scalars["String"]["input"]>
 }
 
@@ -301,6 +313,7 @@ export type ResolversTypes = ResolversObject<{
 			relationValueTypes?: Maybe<Array<Maybe<ResolversTypes["Entity"]>>>
 		}
 	>
+	PropertyFilter: PropertyFilter
 	Query: ResolverTypeWrapper<{}>
 	Relation: ResolverTypeWrapper<
 		Omit<Relation, "from" | "to" | "type"> & {
@@ -343,6 +356,7 @@ export type ResolversParentTypes = ResolversObject<{
 		entity?: Maybe<ResolversParentTypes["Entity"]>
 		relationValueTypes?: Maybe<Array<Maybe<ResolversParentTypes["Entity"]>>>
 	}
+	PropertyFilter: PropertyFilter
 	Query: {}
 	Relation: Omit<Relation, "from" | "to" | "type"> & {
 		from?: Maybe<ResolversParentTypes["Entity"]>
@@ -421,6 +435,12 @@ export type QueryResolvers<
 		RequireFields<QueryEntitiesArgs, "limit" | "offset">
 	>
 	entity?: Resolver<Maybe<ResolversTypes["Entity"]>, ParentType, ContextType, RequireFields<QueryEntityArgs, "id">>
+	properties?: Resolver<
+		Array<Maybe<ResolversTypes["Property"]>>,
+		ParentType,
+		ContextType,
+		RequireFields<QueryPropertiesArgs, "limit" | "offset">
+	>
 	search?: Resolver<
 		Array<Maybe<ResolversTypes["Entity"]>>,
 		ParentType,

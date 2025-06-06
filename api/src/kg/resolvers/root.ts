@@ -1,5 +1,11 @@
 import {Effect, Layer} from "effect"
-import type {QueryEntitiesArgs, QueryEntityArgs, QuerySearchArgs, QueryTypesArgs} from "../../generated/graphql"
+import type {
+	QueryEntitiesArgs,
+	QueryEntityArgs,
+	QueryPropertiesArgs,
+	QuerySearchArgs,
+	QueryTypesArgs,
+} from "../../generated/graphql"
 import {Environment, make as makeEnvironment} from "../../services/environment"
 import {Storage, make as makeStorage} from "../../services/storage/storage"
 import * as EntityResolvers from "./entities"
@@ -48,8 +54,8 @@ export const property = async (args: QueryEntityArgs) => {
 	return await Effect.runPromise(PropertyResolvers.getProperty(args.id).pipe(provideDeps))
 }
 
-export const properties = async (typeId: string, args: QueryTypesArgs) => {
-	return await Effect.runPromise(PropertyResolvers.getProperties(typeId, args).pipe(provideDeps))
+export const propertiesForType = async (typeId: string, args: QueryTypesArgs) => {
+	return await Effect.runPromise(PropertyResolvers.getPropertiesForType(typeId, args).pipe(provideDeps))
 }
 
 export const propertyRelationValueTypes = async (args: QueryEntityArgs) => {
@@ -66,4 +72,8 @@ export const blocks = async (args: QueryEntityArgs) => {
 
 export const search = async (args: QuerySearchArgs) => {
 	return await Effect.runPromise(SearchResolvers.search(args).pipe(provideDeps))
+}
+
+export const properties = async (args: QueryPropertiesArgs) => {
+	return await Effect.runPromise(PropertyResolvers.getProperties(args).pipe(provideDeps))
 }

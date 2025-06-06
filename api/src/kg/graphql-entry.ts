@@ -34,6 +34,9 @@ const resolvers: GeneratedResolvers = {
 			context.spaceId = args.spaceId
 			return await Resolvers.search(args)
 		},
+		properties: async (_, args, context: GraphQLContext) => {
+			return await Resolvers.properties(args)
+		},
 	},
 	Entity: {
 		name: async (parent: {id: string}) => {
@@ -71,7 +74,7 @@ const resolvers: GeneratedResolvers = {
 			return Resolvers.entity({id: parent.id})
 		},
 		properties: async (parent: {id: string}, _: unknown, context: GraphQLContext) => {
-			return Resolvers.properties(parent.id, {spaceId: context.spaceId})
+			return Resolvers.propertiesForType(parent.id, {spaceId: context.spaceId})
 		},
 	},
 	Value: {
