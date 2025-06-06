@@ -55,6 +55,19 @@ export function getPropertiesForType(typeId: string, args: QueryTypesArgs) {
 	return Effect.gen(function* () {
 		const db = yield* Storage
 
+		// Always include Name and Description properties first
+		const systemProperties = [
+			{
+				id: SystemIds.NAME_PROPERTY,
+				dataType: DataType.Text,
+			},
+			{
+				id: SystemIds.DESCRIPTION_PROPERTY,
+				dataType: DataType.Text,
+			},
+		]
+
+		// Query existing custom properties with space filtering (no pagination here)
 		const where = [eq(relations.fromEntityId, typeId), eq(relations.typeId, SystemIds.PROPERTIES)]
 
 		if (args.spaceId) {
@@ -70,14 +83,25 @@ export function getPropertiesForType(typeId: string, args: QueryTypesArgs) {
 				.from(relations)
 				.innerJoin(properties, eq(relations.toEntityId, properties.id))
 				.where(and(...where))
-				.limit(Number(args.limit))
-				.offset(Number(args.offset))
 		})
 
-		return result.map((r) => ({
+		const customProperties = result.map((r) => ({
 			id: r.propertyId,
 			dataType: getTextAsDataType(r.propertyType),
 		}))
+
+		// Filter out system properties if they're already in custom properties to avoid duplicates
+		const customPropertyIds = new Set(customProperties.map((p) => p.id))
+		const systemPropsToAdd = systemProperties.filter((p) => !customPropertyIds.has(p.id))
+
+		// Combine system properties with custom properties
+		const allProperties = [...systemPropsToAdd, ...customProperties]
+
+		// Apply pagination to the combined result
+		const limit = Number(args.limit ?? 100)
+		const offset = Number(args.offset ?? 0)
+
+		return allProperties.slice(offset, offset + limit)
 	})
 }
 
