@@ -95,7 +95,7 @@ export function getPropertyRelationValueTypes(propertyId: string) {
 			})
 		})
 
-		return result.map((r) => ({ id: r.toEntityId }))
+		return result.map((r) => ({id: r.toEntityId}))
 	})
 }
 
