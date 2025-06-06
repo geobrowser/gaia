@@ -257,7 +257,7 @@ describe("Properties Query Integration Tests", () => {
 			const offsetResults = await Effect.runPromise(provideDeps(getProperties({limit: 100, offset: 2})))
 
 			expect(offsetResults).toHaveLength(5) // 7 total - 2 offset
-			
+
 			// Ensure the first two results are not in the offset results
 			const allIds = allResults.map((p) => p.id)
 			const offsetIds = offsetResults.map((p) => p.id)
