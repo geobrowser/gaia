@@ -299,8 +299,10 @@ describe("Types and Properties Integration Tests", () => {
 		it("should return properties for a type", async () => {
 			const result = await Effect.runPromise(provideDeps(getPropertiesForType(TYPE_ID_1, {limit: 10, offset: 0})))
 
-			expect(result).toHaveLength(2)
-			expect(result.map((r) => r.id).sort()).toEqual([PROPERTY_ID_1, PROPERTY_ID_2].sort())
+			expect(result).toHaveLength(4)
+			expect(result.map((r) => r.id).sort()).toEqual(
+				[SystemIds.NAME_PROPERTY, SystemIds.DESCRIPTION_PROPERTY, PROPERTY_ID_1, PROPERTY_ID_2].sort(),
+			)
 		})
 
 		it("should return correct data types", async () => {
@@ -316,9 +318,14 @@ describe("Types and Properties Integration Tests", () => {
 		it("should return different property types", async () => {
 			const result = await Effect.runPromise(provideDeps(getPropertiesForType(TYPE_ID_2, {limit: 10, offset: 0})))
 
-			expect(result).toHaveLength(1)
-			expect(result[0]?.id).toBe(PROPERTY_ID_3)
-			expect(result[0]?.dataType).toBe(DataType.Checkbox)
+			expect(result).toHaveLength(3)
+			const propertyIds = result.map((r) => r.id)
+			expect(propertyIds).toContain(SystemIds.NAME_PROPERTY)
+			expect(propertyIds).toContain(SystemIds.DESCRIPTION_PROPERTY)
+			expect(propertyIds).toContain(PROPERTY_ID_3)
+
+			const checkboxProperty = result.find((r) => r.id === PROPERTY_ID_3)
+			expect(checkboxProperty?.dataType).toBe(DataType.Checkbox)
 		})
 
 		it("should filter properties by spaceId", async () => {
@@ -326,8 +333,10 @@ describe("Types and Properties Integration Tests", () => {
 				provideDeps(getPropertiesForType(TYPE_ID_1, {limit: 10, offset: 0, spaceId: TEST_SPACE_ID})),
 			)
 
-			expect(result).toHaveLength(2)
-			expect(result.map((r) => r.id).sort()).toEqual([PROPERTY_ID_1, PROPERTY_ID_2].sort())
+			expect(result).toHaveLength(4)
+			expect(result.map((r) => r.id).sort()).toEqual(
+				[SystemIds.NAME_PROPERTY, SystemIds.DESCRIPTION_PROPERTY, PROPERTY_ID_1, PROPERTY_ID_2].sort(),
+			)
 		})
 
 		it("should return empty array for different spaceId", async () => {
@@ -335,7 +344,10 @@ describe("Types and Properties Integration Tests", () => {
 				provideDeps(getPropertiesForType(TYPE_ID_1, {limit: 10, offset: 0, spaceId: TEST_SPACE_ID_2})),
 			)
 
-			expect(result).toHaveLength(0)
+			expect(result).toHaveLength(2)
+			expect(result.map((r) => r.id).sort()).toEqual(
+				[SystemIds.NAME_PROPERTY, SystemIds.DESCRIPTION_PROPERTY].sort(),
+			)
 		})
 
 		it("should return properties for type in different space", async () => {
@@ -343,15 +355,23 @@ describe("Types and Properties Integration Tests", () => {
 				provideDeps(getPropertiesForType(TYPE_ID_3, {limit: 10, offset: 0, spaceId: TEST_SPACE_ID_2})),
 			)
 
-			expect(result).toHaveLength(1)
-			expect(result[0]?.id).toBe(PROPERTY_ID_4)
-			expect(result[0]?.dataType).toBe(DataType.Point)
+			expect(result).toHaveLength(3)
+			const propertyIds = result.map((r) => r.id)
+			expect(propertyIds).toContain(SystemIds.NAME_PROPERTY)
+			expect(propertyIds).toContain(SystemIds.DESCRIPTION_PROPERTY)
+			expect(propertyIds).toContain(PROPERTY_ID_4)
+
+			const pointProperty = result.find((r) => r.id === PROPERTY_ID_4)
+			expect(pointProperty?.dataType).toBe(DataType.Point)
 		})
 
 		it("should return empty array for non-existent type", async () => {
 			const result = await Effect.runPromise(provideDeps(getPropertiesForType(uuid(), {limit: 10, offset: 0})))
 
-			expect(result).toHaveLength(0)
+			expect(result).toHaveLength(2)
+			expect(result.map((r) => r.id).sort()).toEqual(
+				[SystemIds.NAME_PROPERTY, SystemIds.DESCRIPTION_PROPERTY].sort(),
+			)
 		})
 
 		it("should return empty array for type with no properties", async () => {
@@ -387,7 +407,10 @@ describe("Types and Properties Integration Tests", () => {
 				provideDeps(getPropertiesForType(emptyTypeId, {limit: 10, offset: 0})),
 			)
 
-			expect(result).toHaveLength(0)
+			expect(result).toHaveLength(2)
+			expect(result.map((r) => r.id).sort()).toEqual(
+				[SystemIds.NAME_PROPERTY, SystemIds.DESCRIPTION_PROPERTY].sort(),
+			)
 		})
 
 		it("should handle non-existent spaceId", async () => {
@@ -395,7 +418,10 @@ describe("Types and Properties Integration Tests", () => {
 				provideDeps(getPropertiesForType(TYPE_ID_1, {limit: 10, offset: 0, spaceId: uuid()})),
 			)
 
-			expect(result).toHaveLength(0)
+			expect(result).toHaveLength(2)
+			expect(result.map((r) => r.id).sort()).toEqual(
+				[SystemIds.NAME_PROPERTY, SystemIds.DESCRIPTION_PROPERTY].sort(),
+			)
 		})
 	})
 
@@ -417,7 +443,18 @@ describe("Types and Properties Integration Tests", () => {
 			const allProps = [...type1Props, ...type2Props, ...type3Props]
 			const dataTypes = allProps.map((p) => p.dataType).sort()
 
-			expect(dataTypes).toEqual([DataType.Checkbox, DataType.Number, DataType.Point, DataType.Text])
+			expect(dataTypes).toEqual([
+				DataType.Checkbox,
+				DataType.Number,
+				DataType.Point,
+				DataType.Text,
+				DataType.Text,
+				DataType.Text,
+				DataType.Text,
+				DataType.Text,
+				DataType.Text,
+				DataType.Text,
+			])
 		})
 
 		it("should map Time and Relation data types correctly", async () => {
