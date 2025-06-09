@@ -136,6 +136,7 @@ export function getRelations(id: string, spaceId?: string | null) {
 
 			return result.map((relation) => ({
 				id: relation.id,
+				entityId: relation.entityId,
 				typeId: relation.typeId,
 				fromId: relation.fromEntityId,
 				toId: relation.toEntityId,

@@ -90,10 +90,6 @@ export const entityForeignValues = drizzleRelations(entities, ({many, one}) => (
 	toRelations: many(relations, {
 		relationName: "toEntity",
 	}),
-	// If an entity is the type of relation
-	typeRelations: many(relations, {
-		relationName: "typeEntity",
-	}),
 	// If an entity is directly linked (e.g. as owning the relation row)
 	relationEntityRelations: many(relations, {
 		relationName: "entity",
@@ -107,10 +103,14 @@ export const propertiesEntityRelations = drizzleRelations(values, ({one}) => ({
 	}),
 }))
 
-export const propertiesRelations = drizzleRelations(properties, ({one}) => ({
+export const propertiesRelations = drizzleRelations(properties, ({one, many}) => ({
 	entity: one(entities, {
 		fields: [properties.id],
 		references: [entities.id],
+	}),
+	// Relations where this property is used as the type
+	typeRelations: many(relations, {
+		relationName: "typeProperty",
 	}),
 }))
 
@@ -125,15 +125,15 @@ export const relationsEntityRelations = drizzleRelations(relations, ({one}) => (
 		references: [entities.id],
 		relationName: "toEntity",
 	}),
-	typeEntity: one(entities, {
+	typeProperty: one(properties, {
 		fields: [relations.typeId],
-		references: [entities.id],
-		relationName: "typeEntity",
+		references: [properties.id],
+		relationName: "typeProperty",
 	}),
-	entity: one(entities, {
+	relationEntity: one(entities, {
 		fields: [relations.entityId],
 		references: [entities.id],
-		relationName: "entity",
+		relationName: "relationEntity",
 	}),
 }))
 

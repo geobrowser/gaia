@@ -75,6 +75,7 @@ type Value {
 
 type Relation {
   id: ID!
+  entityId: ID!
   spaceId: String!
   typeId: String!
   fromId: String!
@@ -83,9 +84,10 @@ type Relation {
   position: String
   verified: Boolean
 
-  type: Entity
+  type: Property
   from: Entity
   to: Entity
+  relationEntity: Entity
 }
 
 type Type {
