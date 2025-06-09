@@ -2,7 +2,7 @@ import {drizzle} from "drizzle-orm/node-postgres"
 import {Context, Data, Effect, Redacted} from "effect"
 import {Pool} from "pg"
 
-import {Environment} from "../environment"
+import {EnvironmentLive} from "../environment"
 import {
 	entities,
 	entityForeignValues,
@@ -21,7 +21,10 @@ export class StorageError extends Data.TaggedError("StorageError")<{
 	message?: string
 }> {}
 
-let _pool: Pool | null = null
+const _pool = new Pool({
+	connectionString: Redacted.value(EnvironmentLive.databaseUrl),
+	max: 97,
+})
 
 const schemaDefinition = {
 	ipfsCache,
@@ -39,38 +42,19 @@ const schemaDefinition = {
 
 type DbSchema = typeof schemaDefinition
 
-let _drizzle: ReturnType<typeof drizzle<DbSchema>> | null = null
-
-export const createDb = (connectionString: string) => {
-	if (!_pool) {
-		_pool = new Pool({
-			connectionString,
-			max: 80,
-		})
-	}
-
-	if (!_drizzle) {
-		_drizzle = drizzle({
-			casing: "snake_case",
-			client: _pool,
-			schema: schemaDefinition,
-		})
-	}
-
-	return _drizzle
-}
+const db = drizzle<DbSchema>({
+	casing: "snake_case",
+	client: _pool,
+	schema: schemaDefinition,
+})
 
 interface StorageShape {
-	use: <T>(fn: (client: ReturnType<typeof createDb>) => T) => Effect.Effect<Awaited<T>, StorageError, never>
+	use: <T>(fn: (client: typeof db) => T) => Effect.Effect<Awaited<T>, StorageError, never>
 }
 
 export class Storage extends Context.Tag("Storage")<Storage, StorageShape>() {}
 
 export const make = Effect.gen(function* () {
-	const environment = yield* Environment
-
-	const db = createDb(Redacted.value(environment.databaseUrl))
-
 	return Storage.of({
 		use: (fn) => {
 			return Effect.gen(function* () {
