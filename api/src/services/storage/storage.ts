@@ -23,6 +23,24 @@ export class StorageError extends Data.TaggedError("StorageError")<{
 
 let _pool: Pool | null = null
 
+const schemaDefinition = {
+	ipfsCache,
+	entities,
+	properties: properties,
+	values: values,
+	relations: relations,
+	spaces,
+
+	entityForeignProperties: entityForeignValues,
+	propertiesEntityRelations,
+	relationsEntityRelations,
+	propertiesRelations,
+} as const
+
+type DbSchema = typeof schemaDefinition
+
+let _drizzle: ReturnType<typeof drizzle<DbSchema>> | null = null
+
 export const createDb = (connectionString: string) => {
 	if (!_pool) {
 		_pool = new Pool({
@@ -31,23 +49,15 @@ export const createDb = (connectionString: string) => {
 		})
 	}
 
-	return drizzle({
-		casing: "snake_case",
-		client: _pool,
-		schema: {
-			ipfsCache,
-			entities,
-			properties: properties,
-			values: values,
-			relations: relations,
-			spaces,
+	if (!_drizzle) {
+		_drizzle = drizzle({
+			casing: "snake_case",
+			client: _pool,
+			schema: schemaDefinition,
+		})
+	}
 
-			entityForeignProperties: entityForeignValues,
-			propertiesEntityRelations,
-			relationsEntityRelations,
-			propertiesRelations,
-		},
-	})
+	return _drizzle
 }
 
 interface StorageShape {
