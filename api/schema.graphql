@@ -71,8 +71,6 @@ type Value {
   format: String
   unit: String
   timezone: String
-  hasTime: Boolean
-  hasDate: Boolean
 }
 
 type Relation {
@@ -83,11 +81,11 @@ type Relation {
   toId: String!
   toSpaceId: String
   position: String
+  verified: Boolean
 
   type: Entity
   from: Entity
   to: Entity
-  # toSpace: Space
 }
 
 type Type {

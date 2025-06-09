@@ -139,6 +139,8 @@ export function getRelations(id: string, spaceId?: string | null) {
 				typeId: relation.typeId,
 				fromId: relation.fromEntityId,
 				toId: relation.toEntityId,
+				toSpaceId: relation.toSpaceId,
+				verified: relation.verified,
 				position: relation.position,
 				spaceId: relation.spaceId,
 			}))
