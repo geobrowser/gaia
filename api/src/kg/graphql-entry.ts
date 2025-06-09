@@ -101,7 +101,10 @@ const resolvers: GeneratedResolvers = {
 			return Resolvers.entity({id: parent.toId})
 		},
 		type: async (parent: {typeId: string}) => {
-			return Resolvers.entity({id: parent.typeId})
+			return Resolvers.property({id: parent.typeId})
+		},
+		relationEntity: async (parent: {entityId: string}) => {
+			return Resolvers.entity({id: parent.entityId})
 		},
 	},
 }

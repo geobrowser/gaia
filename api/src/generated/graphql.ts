@@ -165,7 +165,7 @@ export type Relation = {
 	to?: Maybe<Entity>
 	toId: Scalars["String"]["output"]
 	toSpaceId?: Maybe<Scalars["String"]["output"]>
-	type?: Maybe<Entity>
+	type?: Maybe<Property>
 	typeId: Scalars["String"]["output"]
 	verified?: Maybe<Scalars["Boolean"]["output"]>
 }
@@ -317,7 +317,7 @@ export type ResolversTypes = ResolversObject<{
 		Omit<Relation, "from" | "to" | "type"> & {
 			from?: Maybe<ResolversTypes["Entity"]>
 			to?: Maybe<ResolversTypes["Entity"]>
-			type?: Maybe<ResolversTypes["Entity"]>
+			type?: Maybe<ResolversTypes["Property"]>
 		}
 	>
 	RelationFilter: RelationFilter
@@ -359,7 +359,7 @@ export type ResolversParentTypes = ResolversObject<{
 	Relation: Omit<Relation, "from" | "to" | "type"> & {
 		from?: Maybe<ResolversParentTypes["Entity"]>
 		to?: Maybe<ResolversParentTypes["Entity"]>
-		type?: Maybe<ResolversParentTypes["Entity"]>
+		type?: Maybe<ResolversParentTypes["Property"]>
 	}
 	RelationFilter: RelationFilter
 	String: Scalars["String"]["output"]
@@ -465,7 +465,7 @@ export type RelationResolvers<
 	to?: Resolver<Maybe<ResolversTypes["Entity"]>, ParentType, ContextType>
 	toId?: Resolver<ResolversTypes["String"], ParentType, ContextType>
 	toSpaceId?: Resolver<Maybe<ResolversTypes["String"]>, ParentType, ContextType>
-	type?: Resolver<Maybe<ResolversTypes["Entity"]>, ParentType, ContextType>
+	type?: Resolver<Maybe<ResolversTypes["Property"]>, ParentType, ContextType>
 	typeId?: Resolver<ResolversTypes["String"], ParentType, ContextType>
 	verified?: Resolver<Maybe<ResolversTypes["Boolean"]>, ParentType, ContextType>
 	__isTypeOf?: IsTypeOfResolverFn<ParentType, ContextType>
