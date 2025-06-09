@@ -23,7 +23,10 @@ export class StorageError extends Data.TaggedError("StorageError")<{
 
 const _pool = new Pool({
 	connectionString: Redacted.value(EnvironmentLive.databaseUrl),
-	max: 97,
+	max: 20, // Reduced from 80 to prevent overwhelming DB
+	min: 2,
+	idleTimeoutMillis: 30000,
+	connectionTimeoutMillis: 10000,
 })
 
 const schemaDefinition = {
