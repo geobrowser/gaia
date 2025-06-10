@@ -1,5 +1,5 @@
-import {type SQL, and, not, or, sql} from "drizzle-orm"
-import {values} from "../../services/storage/schema"
+import {type SQL, and, inArray, not, or, sql} from "drizzle-orm"
+import {entities, values} from "../../services/storage/schema"
 
 type TextFilter = {
 	is?: string
@@ -30,6 +30,10 @@ type PointFilter = {
 	exists?: boolean
 }
 
+type IdFilter = {
+	in?: string[]
+}
+
 type PropertyFilter = {
 	property: string
 	text?: TextFilter
@@ -49,6 +53,7 @@ export type EntityFilter = {
 	AND?: EntityFilter[]
 	OR?: EntityFilter[]
 	NOT?: EntityFilter
+	id?: IdFilter
 	value?: PropertyFilter
 	fromRelation?: RelationFilter
 	toRelation?: RelationFilter
@@ -240,6 +245,14 @@ export function buildEntityWhere(filter: EntityFilter | null, spaceId?: string |
 		)
 	}
 
+	if (filter?.id) {
+		if (filter.id.in && filter.id.in.length > 0) {
+			clauses.push(inArray(entities.id, filter.id.in))
+		} else if (filter.id.in && filter.id.in.length === 0) {
+			// Empty array should return no results
+			clauses.push(sql`false`)
+		}
+	}
 	if (filter?.AND) {
 		clauses.push(and(...filter.AND.map((f) => buildEntityWhere(f, spaceId))))
 	}

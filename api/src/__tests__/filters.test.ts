@@ -565,6 +565,90 @@ describe("Entity Filters Integration Tests", () => {
 		})
 	})
 
+	describe("ID Filters", () => {
+		it("should filter by single entity ID in array", async () => {
+			const filter: EntityFilter = {
+				id: {
+					in: [TEST_ENTITY_1_ID],
+				},
+			}
+
+			const result = await Effect.runPromise(getEntities({filter}).pipe(provideDeps))
+
+			const testResults = filterToTestEntities(result)
+			expect(testResults).toHaveLength(1)
+			expect(testResults[0].id).toBe(TEST_ENTITY_1_ID)
+			expect(testResults[0].name).toBe("Entity One")
+		})
+
+		it("should filter by multiple entity IDs in array", async () => {
+			const filter: EntityFilter = {
+				id: {
+					in: [TEST_ENTITY_1_ID, TEST_ENTITY_3_ID],
+				},
+			}
+
+			const result = await Effect.runPromise(getEntities({filter}).pipe(provideDeps))
+
+			const testResults = filterToTestEntities(result)
+			expect(testResults).toHaveLength(2)
+			expect(testResults.map((r) => r.id).sort()).toEqual([TEST_ENTITY_1_ID, TEST_ENTITY_3_ID].sort())
+			expect(testResults.map((r) => r.name).sort()).toEqual(["Entity One", "Entity Three"].sort())
+		})
+
+		it("should return empty array for empty ID array", async () => {
+			const filter: EntityFilter = {
+				id: {
+					in: [],
+				},
+			}
+
+			const result = await Effect.runPromise(getEntities({filter}).pipe(provideDeps))
+
+			const testResults = filterToTestEntities(result)
+			expect(testResults).toHaveLength(0)
+		})
+
+		it("should return empty array for non-existent IDs", async () => {
+			const filter: EntityFilter = {
+				id: {
+					in: [uuid(), uuid()],
+				},
+			}
+
+			const result = await Effect.runPromise(getEntities({filter}).pipe(provideDeps))
+
+			const testResults = filterToTestEntities(result)
+			expect(testResults).toHaveLength(0)
+		})
+
+		it("should combine ID filter with other filters using AND logic", async () => {
+			const filter: EntityFilter = {
+				AND: [
+					{
+						id: {
+							in: [TEST_ENTITY_1_ID, TEST_ENTITY_2_ID],
+						},
+					},
+					{
+						value: {
+							property: TEXT_PROPERTY_ID,
+							text: {
+								contains: "World",
+							},
+						},
+					},
+				],
+			}
+
+			const result = await Effect.runPromise(getEntities({filter}).pipe(provideDeps))
+
+			const testResults = filterToTestEntities(result)
+			expect(testResults).toHaveLength(1)
+			expect(testResults[0].id).toBe(TEST_ENTITY_1_ID)
+		})
+	})
+
 	describe("Relation Filters", () => {
 		it("should filter by from relation with typeId and toEntityId", async () => {
 			const filter: EntityFilter = {
