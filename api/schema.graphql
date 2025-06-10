@@ -192,11 +192,16 @@ input RelationFilter {
   toEntityId: String
 }
 
+input IdFilter {
+  in: [String!]
+}
+
 # Filter input for entities in Query.entities
 # Supports logical operators and filtering by values and relations
 input EntityFilter {
   OR: [EntityFilter!]
   NOT: EntityFilter
+  id: IdFilter
   value: ValueFilter
   fromRelation: RelationFilter
   toRelation: RelationFilter

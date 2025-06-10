@@ -83,8 +83,13 @@ export type EntityFilter = {
 	NOT?: InputMaybe<EntityFilter>
 	OR?: InputMaybe<Array<EntityFilter>>
 	fromRelation?: InputMaybe<RelationFilter>
+	id?: InputMaybe<IdFilter>
 	toRelation?: InputMaybe<RelationFilter>
 	value?: InputMaybe<ValueFilter>
+}
+
+export type IdFilter = {
+	in?: InputMaybe<Array<Scalars["String"]["input"]>>
 }
 
 export type NumberFilter = {
@@ -157,10 +162,12 @@ export type QueryTypesArgs = {
 
 export type Relation = {
 	__typename?: "Relation"
+	entityId: Scalars["ID"]["output"]
 	from?: Maybe<Entity>
 	fromId: Scalars["String"]["output"]
 	id: Scalars["ID"]["output"]
 	position?: Maybe<Scalars["String"]["output"]>
+	relationEntity?: Maybe<Entity>
 	spaceId: Scalars["String"]["output"]
 	to?: Maybe<Entity>
 	toId: Scalars["String"]["output"]
@@ -302,6 +309,7 @@ export type ResolversTypes = ResolversObject<{
 	EntityFilter: EntityFilter
 	Float: ResolverTypeWrapper<Scalars["Float"]["output"]>
 	ID: ResolverTypeWrapper<Scalars["ID"]["output"]>
+	IdFilter: IdFilter
 	Int: ResolverTypeWrapper<Scalars["Int"]["output"]>
 	NumberFilter: NumberFilter
 	PointFilter: PointFilter
@@ -314,8 +322,9 @@ export type ResolversTypes = ResolversObject<{
 	PropertyFilter: PropertyFilter
 	Query: ResolverTypeWrapper<{}>
 	Relation: ResolverTypeWrapper<
-		Omit<Relation, "from" | "to" | "type"> & {
+		Omit<Relation, "from" | "relationEntity" | "to" | "type"> & {
 			from?: Maybe<ResolversTypes["Entity"]>
+			relationEntity?: Maybe<ResolversTypes["Entity"]>
 			to?: Maybe<ResolversTypes["Entity"]>
 			type?: Maybe<ResolversTypes["Property"]>
 		}
@@ -347,6 +356,7 @@ export type ResolversParentTypes = ResolversObject<{
 	EntityFilter: EntityFilter
 	Float: Scalars["Float"]["output"]
 	ID: Scalars["ID"]["output"]
+	IdFilter: IdFilter
 	Int: Scalars["Int"]["output"]
 	NumberFilter: NumberFilter
 	PointFilter: PointFilter
@@ -356,8 +366,9 @@ export type ResolversParentTypes = ResolversObject<{
 	}
 	PropertyFilter: PropertyFilter
 	Query: {}
-	Relation: Omit<Relation, "from" | "to" | "type"> & {
+	Relation: Omit<Relation, "from" | "relationEntity" | "to" | "type"> & {
 		from?: Maybe<ResolversParentTypes["Entity"]>
+		relationEntity?: Maybe<ResolversParentTypes["Entity"]>
 		to?: Maybe<ResolversParentTypes["Entity"]>
 		type?: Maybe<ResolversParentTypes["Property"]>
 	}
@@ -457,10 +468,12 @@ export type RelationResolvers<
 	ContextType = any,
 	ParentType extends ResolversParentTypes["Relation"] = ResolversParentTypes["Relation"],
 > = ResolversObject<{
+	entityId?: Resolver<ResolversTypes["ID"], ParentType, ContextType>
 	from?: Resolver<Maybe<ResolversTypes["Entity"]>, ParentType, ContextType>
 	fromId?: Resolver<ResolversTypes["String"], ParentType, ContextType>
 	id?: Resolver<ResolversTypes["ID"], ParentType, ContextType>
 	position?: Resolver<Maybe<ResolversTypes["String"]>, ParentType, ContextType>
+	relationEntity?: Resolver<Maybe<ResolversTypes["Entity"]>, ParentType, ContextType>
 	spaceId?: Resolver<ResolversTypes["String"], ParentType, ContextType>
 	to?: Resolver<Maybe<ResolversTypes["Entity"]>, ParentType, ContextType>
 	toId?: Resolver<ResolversTypes["String"], ParentType, ContextType>
