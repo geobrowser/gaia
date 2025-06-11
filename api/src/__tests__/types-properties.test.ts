@@ -565,12 +565,16 @@ describe("Types and Properties Integration Tests", () => {
 
 		describe("Property Renderable Type", () => {
 			it("should return Image renderable type for properties with IMAGE relation", async () => {
-				const result = await Effect.runPromise(provideDeps(getPropertyRenderableType(RENDERABLE_PROPERTY_ID_IMAGE)))
+				const result = await Effect.runPromise(
+					provideDeps(getPropertyRenderableType(RENDERABLE_PROPERTY_ID_IMAGE)),
+				)
 				expect(result).toBe(RenderableType.Image)
 			})
 
 			it("should return URL renderable type for properties with URL relation", async () => {
-				const result = await Effect.runPromise(provideDeps(getPropertyRenderableType(RENDERABLE_PROPERTY_ID_URL)))
+				const result = await Effect.runPromise(
+					provideDeps(getPropertyRenderableType(RENDERABLE_PROPERTY_ID_URL)),
+				)
 				expect(result).toBe(RenderableType.Url)
 			})
 
