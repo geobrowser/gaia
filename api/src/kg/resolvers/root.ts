@@ -62,6 +62,10 @@ export const propertyRelationValueTypes = async (args: QueryEntityArgs) => {
 	return await Effect.runPromise(PropertyResolvers.getPropertyRelationValueTypes(args.id).pipe(provideDeps))
 }
 
+export const propertyRenderableType = async (args: QueryEntityArgs) => {
+	return await Effect.runPromise(PropertyResolvers.getPropertyRenderableType(args.id).pipe(provideDeps))
+}
+
 export const types = async (args: QueryTypesArgs) => {
 	return await Effect.runPromise(TypeResolvers.getTypes(args).pipe(provideDeps))
 }

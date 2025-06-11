@@ -50,9 +50,15 @@ enum DataType {
   RELATION
 }
 
+enum RenderableType {
+  URL
+  IMAGE
+}
+
 type Property {
   id: ID!
   dataType: DataType!
+  renderableType: RenderableType
   relationValueTypes: [Type]
   entity: Entity
 }

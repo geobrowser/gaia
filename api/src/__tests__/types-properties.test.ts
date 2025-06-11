@@ -2,8 +2,8 @@ import {SystemIds} from "@graphprotocol/grc-20"
 import {Effect, Layer} from "effect"
 import {v4 as uuid} from "uuid"
 import {afterEach, beforeEach, describe, expect, it} from "vitest"
-import {DataType} from "../generated/graphql"
-import {getPropertiesForType} from "../kg/resolvers/properties"
+import {DataType, RenderableType} from "../generated/graphql"
+import {getPropertiesForType, getPropertyRenderableType} from "../kg/resolvers/properties"
 import {getTypes} from "../kg/resolvers/types"
 import {Environment, make as makeEnvironment} from "../services/environment"
 import {entities, properties, relations, values} from "../services/storage/schema"
@@ -14,6 +14,9 @@ const EnvironmentLayer = Layer.effect(Environment, makeEnvironment)
 const StorageLayer = Layer.effect(Storage, makeStorage).pipe(Layer.provide(EnvironmentLayer))
 const layers = Layer.mergeAll(EnvironmentLayer, StorageLayer)
 const provideDeps = Effect.provide(layers)
+
+// Constants for renderable type testing
+const RENDERABLE_TYPE_RELATION_ID = "2316bbe1-c76f-4635-83f2-3e03b4f1fe46"
 
 describe("Types and Properties Integration Tests", () => {
 	// Test data variables - will be regenerated for each test
@@ -26,6 +29,8 @@ describe("Types and Properties Integration Tests", () => {
 	let PROPERTY_ID_2: string
 	let PROPERTY_ID_3: string
 	let PROPERTY_ID_4: string
+	let RENDERABLE_PROPERTY_ID_IMAGE: string
+	let RENDERABLE_PROPERTY_ID_URL: string
 
 	beforeEach(async () => {
 		// Generate fresh UUIDs for each test to ensure isolation
@@ -38,6 +43,8 @@ describe("Types and Properties Integration Tests", () => {
 		PROPERTY_ID_2 = uuid()
 		PROPERTY_ID_3 = uuid()
 		PROPERTY_ID_4 = uuid()
+		RENDERABLE_PROPERTY_ID_IMAGE = uuid()
+		RENDERABLE_PROPERTY_ID_URL = uuid()
 		await Effect.runPromise(
 			provideDeps(
 				Effect.gen(function* () {
@@ -81,6 +88,8 @@ describe("Types and Properties Integration Tests", () => {
 							{id: PROPERTY_ID_2, type: "Number"},
 							{id: PROPERTY_ID_3, type: "Checkbox"},
 							{id: PROPERTY_ID_4, type: "Point"},
+							{id: RENDERABLE_PROPERTY_ID_IMAGE, type: "Text"},
+							{id: RENDERABLE_PROPERTY_ID_URL, type: "Text"},
 						])
 
 						// Insert relations to mark entities as types
@@ -108,6 +117,23 @@ describe("Types and Properties Integration Tests", () => {
 								fromEntityId: TYPE_ID_3,
 								toEntityId: SystemIds.SCHEMA_TYPE,
 								spaceId: TEST_SPACE_ID_2,
+							},
+							// Add renderable type relations
+							{
+								id: uuid(),
+								entityId: RENDERABLE_PROPERTY_ID_IMAGE,
+								typeId: RENDERABLE_TYPE_RELATION_ID,
+								fromEntityId: RENDERABLE_PROPERTY_ID_IMAGE,
+								toEntityId: SystemIds.IMAGE,
+								spaceId: TEST_SPACE_ID,
+							},
+							{
+								id: uuid(),
+								entityId: RENDERABLE_PROPERTY_ID_URL,
+								typeId: RENDERABLE_TYPE_RELATION_ID,
+								fromEntityId: RENDERABLE_PROPERTY_ID_URL,
+								toEntityId: SystemIds.URL,
+								spaceId: TEST_SPACE_ID,
 							},
 						])
 
@@ -535,6 +561,28 @@ describe("Types and Properties Integration Tests", () => {
 			)
 
 			expect(result).toHaveLength(0)
+		})
+
+		describe("Property Renderable Type", () => {
+			it("should return Image renderable type for properties with IMAGE relation", async () => {
+				const result = await Effect.runPromise(provideDeps(getPropertyRenderableType(RENDERABLE_PROPERTY_ID_IMAGE)))
+				expect(result).toBe(RenderableType.Image)
+			})
+
+			it("should return URL renderable type for properties with URL relation", async () => {
+				const result = await Effect.runPromise(provideDeps(getPropertyRenderableType(RENDERABLE_PROPERTY_ID_URL)))
+				expect(result).toBe(RenderableType.Url)
+			})
+
+			it("should return null for properties without renderable type relation", async () => {
+				const result = await Effect.runPromise(provideDeps(getPropertyRenderableType(PROPERTY_ID_1)))
+				expect(result).toBeNull()
+			})
+
+			it("should return null for non-existent property", async () => {
+				const result = await Effect.runPromise(provideDeps(getPropertyRenderableType(uuid())))
+				expect(result).toBeNull()
+			})
 		})
 	})
 })

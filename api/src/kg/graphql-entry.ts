@@ -92,6 +92,9 @@ const resolvers: GeneratedResolvers = {
 		relationValueTypes: async (parent: {id: string}) => {
 			return Resolvers.propertyRelationValueTypes({id: parent.id})
 		},
+		renderableType: async (parent: {id: string}) => {
+			return Resolvers.propertyRenderableType({id: parent.id})
+		},
 	},
 	Relation: {
 		from: async (parent: {fromId: string}) => {
