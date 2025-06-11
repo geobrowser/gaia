@@ -1,9 +1,12 @@
 import {SystemIds} from "@graphprotocol/grc-20"
 import {and, eq} from "drizzle-orm"
 import {Effect} from "effect"
-import {DataType, type QueryPropertiesArgs, type QueryTypesArgs} from "../../generated/graphql"
+import {DataType, type QueryPropertiesArgs, type QueryTypesArgs, RenderableType} from "../../generated/graphql"
 import {properties, relations} from "../../services/storage/schema"
 import {Storage} from "../../services/storage/storage"
+
+// Constants for renderable type relations
+const RENDERABLE_TYPE_RELATION_ID = "2316bbe1-c76f-4635-83f2-3e03b4f1fe46"
 
 export function getProperties(args: QueryPropertiesArgs) {
 	return Effect.gen(function* () {
@@ -22,6 +25,7 @@ export function getProperties(args: QueryPropertiesArgs) {
 			return result.map((property) => ({
 				id: property.id,
 				dataType: getTextAsDataType(property.type),
+				renderableType: null, // Will be resolved by field resolver
 			}))
 		})
 	})
@@ -40,12 +44,14 @@ export function getProperty(propertyId: string) {
 				return {
 					id: propertyId,
 					dataType: DataType.Text,
+					renderableType: null, // Will be resolved by field resolver
 				}
 			}
 
 			return {
 				id: propertyId,
 				dataType: getTextAsDataType(result.type),
+				renderableType: null, // Will be resolved by field resolver
 			}
 		})
 	})
@@ -60,10 +66,12 @@ export function getPropertiesForType(typeId: string, args: QueryTypesArgs) {
 			{
 				id: SystemIds.NAME_PROPERTY,
 				dataType: DataType.Text,
+				renderableType: null,
 			},
 			{
 				id: SystemIds.DESCRIPTION_PROPERTY,
 				dataType: DataType.Text,
+				renderableType: null,
 			},
 		]
 
@@ -88,6 +96,7 @@ export function getPropertiesForType(typeId: string, args: QueryTypesArgs) {
 		const customProperties = result.map((r) => ({
 			id: r.propertyId,
 			dataType: getTextAsDataType(r.propertyType),
+			renderableType: null, // Will be resolved by field resolver
 		}))
 
 		// Filter out system properties if they're already in custom properties to avoid duplicates
@@ -120,6 +129,33 @@ export function getPropertyRelationValueTypes(propertyId: string) {
 		})
 
 		return result.map((r) => ({id: r.toEntityId}))
+	})
+}
+
+export function getPropertyRenderableType(propertyId: string) {
+	return Effect.gen(function* () {
+		const db = yield* Storage
+
+		const result = yield* db.use(async (client) => {
+			return await client.query.relations.findFirst({
+				where: (relations, {and, eq}) =>
+					and(eq(relations.fromEntityId, propertyId), eq(relations.typeId, RENDERABLE_TYPE_RELATION_ID)),
+			})
+		})
+
+		if (!result) {
+			return null
+		}
+
+		// Map the toEntityId to RenderableType enum
+		switch (result.toEntityId) {
+			case SystemIds.IMAGE:
+				return RenderableType.Image
+			case SystemIds.URL:
+				return RenderableType.Url
+			default:
+				return null
+		}
 	})
 }
 

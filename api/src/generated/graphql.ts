@@ -113,6 +113,7 @@ export type Property = {
 	entity?: Maybe<Entity>
 	id: Scalars["ID"]["output"]
 	relationValueTypes?: Maybe<Array<Maybe<Type>>>
+	renderableType?: Maybe<RenderableType>
 }
 
 export type PropertyFilter = {
@@ -181,6 +182,11 @@ export type RelationFilter = {
 	fromEntityId?: InputMaybe<Scalars["String"]["input"]>
 	toEntityId?: InputMaybe<Scalars["String"]["input"]>
 	typeId?: InputMaybe<Scalars["String"]["input"]>
+}
+
+export enum RenderableType {
+	Image = "IMAGE",
+	Url = "URL",
 }
 
 export type TextFilter = {
@@ -330,6 +336,7 @@ export type ResolversTypes = ResolversObject<{
 		}
 	>
 	RelationFilter: RelationFilter
+	RenderableType: RenderableType
 	String: ResolverTypeWrapper<Scalars["String"]["output"]>
 	TextFilter: TextFilter
 	Type: ResolverTypeWrapper<
@@ -430,6 +437,7 @@ export type PropertyResolvers<
 	entity?: Resolver<Maybe<ResolversTypes["Entity"]>, ParentType, ContextType>
 	id?: Resolver<ResolversTypes["ID"], ParentType, ContextType>
 	relationValueTypes?: Resolver<Maybe<Array<Maybe<ResolversTypes["Type"]>>>, ParentType, ContextType>
+	renderableType?: Resolver<Maybe<ResolversTypes["RenderableType"]>, ParentType, ContextType>
 	__isTypeOf?: IsTypeOfResolverFn<ParentType, ContextType>
 }>
 
