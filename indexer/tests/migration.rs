@@ -11,7 +11,7 @@ use indexer::{
     cache::{properties_cache::PropertiesCache, PreprocessedEdit},
     error::IndexingError,
     storage::postgres::PostgresStorage,
-    KgData,
+    CreatedSpace, PersonalSpace, PublicSpace, KgData,
 };
 
 struct TestIndexer {
@@ -75,13 +75,26 @@ async fn main() -> Result<(), IndexingError> {
         timestamp: String::from("5"),
     };
 
+    let root_space = CreatedSpace::Public(PublicSpace {
+        dao_address: "0x1234567890123456789012345678901234567890".to_string(),
+        space_address: "0xABCDEF1234567890123456789012345678901234".to_string(),
+        membership_plugin: "0x1111111111111111111111111111111111111111".to_string(),
+        governance_plugin: "0x3333333333333333333333333333333333333333".to_string(),
+    });
+
+    let crypto_space = CreatedSpace::Personal(PersonalSpace {
+        dao_address: "0x0987654321098765432109876543210987654321".to_string(),
+        space_address: "0xFEDCBA0987654321098765432109876543210987".to_string(),
+        personal_plugin: "0x2222222222222222222222222222222222222222".to_string(),
+    });
+
     let indexer = TestIndexer::new(storage.clone(), properties_cache.clone());
 
     indexer
         .run(&vec![KgData {
             block,
             edits: vec![root_space_preprocessed_edit, crypto_space_preprocessed_edit],
-            spaces: vec![],
+            spaces: vec![root_space, crypto_space],
         }])
         .await?;
 
