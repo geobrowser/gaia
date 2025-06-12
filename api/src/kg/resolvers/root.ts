@@ -90,3 +90,7 @@ export const spaces = async () => {
 export const space = async (id: string) => {
 	return await Effect.runPromise(SpaceResolvers.getSpace(id).pipe(provideDeps))
 }
+
+export const spaceEntity = async (id: string) => {
+	return await Effect.runPromise(SpaceResolvers.getSpaceEntity(id).pipe(provideDeps))
+}

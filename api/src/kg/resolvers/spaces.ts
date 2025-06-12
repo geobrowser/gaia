@@ -1,6 +1,7 @@
+import {SystemIds} from "@graphprotocol/grc-20"
 import {Effect} from "effect"
 import {SpaceType} from "~/src/generated/graphql"
-import {spaces} from "../../services/storage/schema"
+import {spaces} from "../../services/storage/schema" // Added relations import
 import {Storage} from "../../services/storage/storage"
 
 export const getSpaces = Effect.gen(function* () {
@@ -43,5 +44,26 @@ export const getSpace = (id: string) =>
 				membershipAddress: space.membershipAddress,
 				personalAddress: space.personalAddress,
 			}
+		})
+	})
+
+export const getSpaceEntity = (spaceId: string) =>
+	Effect.gen(function* () {
+		const db = yield* Storage
+
+		return yield* db.use(async (client) => {
+			const spaceEntity = await client.query.relations.findFirst({
+				where: (relations, {eq, and}) =>
+					and(eq(relations.spaceId, spaceId), eq(relations.typeId, SystemIds.SPACE_TYPE)),
+				with: {
+					toEntity: true,
+				},
+			})
+
+			if (!spaceEntity) {
+				return null
+			}
+
+			return spaceEntity.toEntity
 		})
 	})

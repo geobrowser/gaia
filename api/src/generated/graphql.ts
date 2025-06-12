@@ -128,6 +128,7 @@ export type Query = {
   entity?: Maybe<Entity>;
   properties: Array<Maybe<Property>>;
   search: Array<Maybe<Entity>>;
+  space?: Maybe<Space>;
   spaces: Array<Maybe<Space>>;
   types: Array<Maybe<Type>>;
 };
@@ -160,6 +161,11 @@ export type QuerySearchArgs = {
   query: Scalars['String']['input'];
   spaceId?: InputMaybe<Scalars['String']['input']>;
   threshold?: InputMaybe<Scalars['Float']['input']>;
+};
+
+
+export type QuerySpaceArgs = {
+  id: Scalars['String']['input'];
 };
 
 
@@ -200,6 +206,7 @@ export enum RenderableType {
 export type Space = {
   __typename?: 'Space';
   daoAddress: Scalars['String']['output'];
+  entity?: Maybe<Entity>;
   id: Scalars['ID']['output'];
   mainVotingAddress?: Maybe<Scalars['String']['output']>;
   membershipAddress?: Maybe<Scalars['String']['output']>;
@@ -346,7 +353,7 @@ export type ResolversTypes = ResolversObject<{
   Relation: ResolverTypeWrapper<Omit<Relation, 'from' | 'relationEntity' | 'to' | 'type'> & { from?: Maybe<ResolversTypes['Entity']>, relationEntity?: Maybe<ResolversTypes['Entity']>, to?: Maybe<ResolversTypes['Entity']>, type?: Maybe<ResolversTypes['Property']> }>;
   RelationFilter: RelationFilter;
   RenderableType: RenderableType;
-  Space: ResolverTypeWrapper<Space>;
+  Space: ResolverTypeWrapper<Omit<Space, 'entity'> & { entity?: Maybe<ResolversTypes['Entity']> }>;
   SpaceType: SpaceType;
   String: ResolverTypeWrapper<Scalars['String']['output']>;
   TextFilter: TextFilter;
@@ -373,7 +380,7 @@ export type ResolversParentTypes = ResolversObject<{
   Query: {};
   Relation: Omit<Relation, 'from' | 'relationEntity' | 'to' | 'type'> & { from?: Maybe<ResolversParentTypes['Entity']>, relationEntity?: Maybe<ResolversParentTypes['Entity']>, to?: Maybe<ResolversParentTypes['Entity']>, type?: Maybe<ResolversParentTypes['Property']> };
   RelationFilter: RelationFilter;
-  Space: Space;
+  Space: Omit<Space, 'entity'> & { entity?: Maybe<ResolversParentTypes['Entity']> };
   String: Scalars['String']['output'];
   TextFilter: TextFilter;
   Type: Omit<Type, 'entity' | 'properties'> & { entity?: Maybe<ResolversParentTypes['Entity']>, properties?: Maybe<Array<Maybe<ResolversParentTypes['Property']>>> };
@@ -420,6 +427,7 @@ export type QueryResolvers<ContextType = any, ParentType extends ResolversParent
   entity?: Resolver<Maybe<ResolversTypes['Entity']>, ParentType, ContextType, RequireFields<QueryEntityArgs, 'id'>>;
   properties?: Resolver<Array<Maybe<ResolversTypes['Property']>>, ParentType, ContextType, RequireFields<QueryPropertiesArgs, 'limit' | 'offset'>>;
   search?: Resolver<Array<Maybe<ResolversTypes['Entity']>>, ParentType, ContextType, RequireFields<QuerySearchArgs, 'limit' | 'offset' | 'query' | 'threshold'>>;
+  space?: Resolver<Maybe<ResolversTypes['Space']>, ParentType, ContextType, RequireFields<QuerySpaceArgs, 'id'>>;
   spaces?: Resolver<Array<Maybe<ResolversTypes['Space']>>, ParentType, ContextType>;
   types?: Resolver<Array<Maybe<ResolversTypes['Type']>>, ParentType, ContextType, RequireFields<QueryTypesArgs, 'limit' | 'offset'>>;
 }>;
@@ -443,6 +451,7 @@ export type RelationResolvers<ContextType = any, ParentType extends ResolversPar
 
 export type SpaceResolvers<ContextType = any, ParentType extends ResolversParentTypes['Space'] = ResolversParentTypes['Space']> = ResolversObject<{
   daoAddress?: Resolver<ResolversTypes['String'], ParentType, ContextType>;
+  entity?: Resolver<Maybe<ResolversTypes['Entity']>, ParentType, ContextType>;
   id?: Resolver<ResolversTypes['ID'], ParentType, ContextType>;
   mainVotingAddress?: Resolver<Maybe<ResolversTypes['String']>, ParentType, ContextType>;
   membershipAddress?: Resolver<Maybe<ResolversTypes['String']>, ParentType, ContextType>;

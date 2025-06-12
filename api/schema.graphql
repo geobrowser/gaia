@@ -118,6 +118,8 @@ type Space {
   mainVotingAddress: String
   membershipAddress: String
   personalAddress: String
+
+  entity: Entity
 }
 
 type Query {
@@ -153,6 +155,7 @@ type Query {
 
   # space
   spaces: [Space]!
+  space(id: String!): Space
 
   # relation
   # relations

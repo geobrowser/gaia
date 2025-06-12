@@ -7,6 +7,7 @@ import type {
 	Resolvers as GeneratedResolvers,
 	InputMaybe,
 	QuerySearchArgs,
+	QuerySpaceArgs,
 } from "../generated/graphql"
 import * as Resolvers from "./resolvers/root"
 
@@ -39,6 +40,10 @@ const resolvers: GeneratedResolvers = {
 		},
 		spaces: async (_) => {
 			return await Resolvers.spaces()
+		},
+		space: async (_, args: QuerySpaceArgs, context: GraphQLContext) => {
+			context.spaceId = args.id
+			return await Resolvers.space(args.id)
 		},
 	},
 	Entity: {
@@ -111,6 +116,15 @@ const resolvers: GeneratedResolvers = {
 		},
 		relationEntity: async (parent: {entityId: string}) => {
 			return Resolvers.entity({id: parent.entityId})
+		},
+	},
+	Space: {
+		entity: async (_, __, context: GraphQLContext) => {
+			if (!context.spaceId) {
+				return null
+			}
+
+			return Resolvers.spaceEntity(context.spaceId)
 		},
 	},
 }
