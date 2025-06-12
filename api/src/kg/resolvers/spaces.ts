@@ -69,9 +69,13 @@ export const getSpaceEntity = (spaceId: string) =>
 		return yield* db.use(async (client) => {
 			const spaceEntity = await client.query.relations.findFirst({
 				where: (relations, {eq, and}) =>
-					and(eq(relations.spaceId, spaceId), eq(relations.typeId, SystemIds.SPACE_TYPE)),
+					and(
+						eq(relations.spaceId, spaceId),
+						eq(relations.typeId, SystemIds.TYPES_PROPERTY),
+						eq(relations.toEntityId, SystemIds.SPACE_TYPE),
+					),
 				with: {
-					toEntity: true,
+					fromEntity: true,
 				},
 			})
 
@@ -79,6 +83,6 @@ export const getSpaceEntity = (spaceId: string) =>
 				return null
 			}
 
-			return spaceEntity.toEntity
+			return spaceEntity.fromEntity
 		})
 	})

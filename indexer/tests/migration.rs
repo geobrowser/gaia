@@ -11,7 +11,7 @@ use indexer::{
     cache::{properties_cache::PropertiesCache, PreprocessedEdit},
     error::IndexingError,
     storage::postgres::PostgresStorage,
-    CreatedSpace, PersonalSpace, PublicSpace, KgData,
+    CreatedSpace, KgData, PersonalSpace, PublicSpace,
 };
 
 struct TestIndexer {
@@ -29,13 +29,7 @@ impl TestIndexer {
 
     pub async fn run(&self, blocks: &Vec<KgData>) -> Result<(), IndexingError> {
         for block in blocks {
-            root_handler::run(
-                block,
-                &block.block,
-                &self.storage,
-                &self.properties_cache,
-            )
-            .await?;
+            root_handler::run(block, &block.block, &self.storage, &self.properties_cache).await?;
         }
 
         Ok(())
@@ -57,14 +51,14 @@ async fn main() -> Result<(), IndexingError> {
 
     let root_space_preprocessed_edit = PreprocessedEdit {
         // For now we use a random UUID instead of the correct UUID for the root space
-        space_id: Uuid::parse_str("37fd5794-82cb-4b7e-9617-c0a14e8c6ff0").unwrap(),
+        space_id: Uuid::parse_str("8ef40bdd-cf69-4ad7-a9a1-f71c15653994").unwrap(),
         edit: Some(root_space_edit.clone().unwrap()),
         is_errored: false,
     };
 
     let crypto_space_preprocessed_edit = PreprocessedEdit {
         // For now we use a random UUID instead of the correct UUID for the crypto space
-        space_id: Uuid::parse_str("73f5366c-95fe-48e9-b1bb-07b470714577").unwrap(),
+        space_id: Uuid::parse_str("aa84b08d-779a-495c-93f1-44e667baf6d7").unwrap(),
         edit: Some(crypto_space_edit.clone().unwrap()),
         is_errored: false,
     };
