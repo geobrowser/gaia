@@ -55,6 +55,11 @@ enum RenderableType {
   IMAGE
 }
 
+enum SpaceType {
+  PERSONAL
+  PUBLIC
+}
+
 type Property {
   id: ID!
   dataType: DataType!
@@ -105,6 +110,16 @@ type Type {
   entity: Entity
 }
 
+type Space {
+  id: ID!
+  type: SpaceType!
+  daoAddress: String!
+  spaceAddress: String!
+  mainVotingAddress: String
+  membershipAddress: String
+  personalAddress: String
+}
+
 type Query {
   # Get multiple entities with optional space filtering
   # When spaceId is provided, the spaceId propagates to child resolvers for values and relations
@@ -136,13 +151,15 @@ type Query {
     threshold: Float = 0.3
   ): [Entity]!
 
+  # space
+  spaces: [Space]!
+
   # relation
   # relations
   # property
   # properties
   # type
-  # space
-  # spaces
+
   # proposal
   # proposals
   # edit

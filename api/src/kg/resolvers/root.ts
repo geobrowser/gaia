@@ -11,6 +11,7 @@ import {Storage, make as makeStorage} from "../../services/storage/storage"
 import * as EntityResolvers from "./entities"
 import * as PropertyResolvers from "./properties"
 import * as SearchResolvers from "./search"
+import * as SpaceResolvers from "./spaces"
 import * as TypeResolvers from "./types"
 
 const EnvironmentLayer = Layer.effect(Environment, makeEnvironment)
@@ -38,7 +39,7 @@ export const entityTypes = async (args: QueryEntityArgs) => {
 	return await Effect.runPromise(EntityResolvers.getEntityTypes(args.id).pipe(provideDeps))
 }
 
-export const spaces = async (args: QueryEntityArgs) => {
+export const entitySpaces = async (args: QueryEntityArgs) => {
 	return await Effect.runPromise(EntityResolvers.getSpaces(args.id).pipe(provideDeps))
 }
 
@@ -80,4 +81,12 @@ export const search = async (args: QuerySearchArgs) => {
 
 export const properties = async (args: QueryPropertiesArgs) => {
 	return await Effect.runPromise(PropertyResolvers.getProperties(args).pipe(provideDeps))
+}
+
+export const spaces = async () => {
+	return await Effect.runPromise(SpaceResolvers.getSpaces.pipe(provideDeps))
+}
+
+export const space = async (id: string) => {
+	return await Effect.runPromise(SpaceResolvers.getSpace(id).pipe(provideDeps))
 }
