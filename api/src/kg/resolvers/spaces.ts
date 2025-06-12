@@ -11,8 +11,8 @@ export const getSpaces = (args: QuerySpacesArgs) => {
 
 		return yield* db.use(async (client) => {
 			const spacesResult = await client.query.spaces.findMany({
-				where: (spaces, {inArray, eq, sql}) => {
-					if (filter?.id?.in !== undefined) {
+				where: (spaces, {inArray, sql}) => {
+					if (filter?.id?.in !== undefined && filter?.id.in !== null) {
 						if (filter.id.in.length === 0) {
 							// Return condition that matches nothing for empty arrays
 							return sql`false`
