@@ -837,5 +837,63 @@ describe("Spaces Query Integration Tests", () => {
 			expect(personalResult?.id).toBe(SPACE_ENTITY_ID)
 			expect(publicResult?.id).toBe(SPACE_ENTITY_ID_2)
 		})
+
+		it("should work with spaces query to populate entity field", async () => {
+			// Get all spaces
+			const spaces = await Effect.runPromise(provideDeps(getSpaces({})))
+
+			expect(spaces).toHaveLength(3)
+
+			// Test entity resolution for each space
+			const personalSpace = spaces.find((s) => s.id === PERSONAL_SPACE_ID)
+			const publicSpace = spaces.find((s) => s.id === PUBLIC_SPACE_ID)
+			const completeSpace = spaces.find((s) => s.id === COMPLETE_SPACE_ID)
+
+			expect(personalSpace).toBeDefined()
+			expect(publicSpace).toBeDefined()
+			expect(completeSpace).toBeDefined()
+
+			// Test entity field resolution for personal space
+			if (personalSpace) {
+				const personalEntity = await Effect.runPromise(provideDeps(getSpaceEntity(personalSpace.id)))
+				expect(personalEntity).not.toBeNull()
+				expect(personalEntity?.id).toBe(SPACE_ENTITY_ID)
+			}
+
+			// Test entity field resolution for public space
+			if (publicSpace) {
+				const publicEntity = await Effect.runPromise(provideDeps(getSpaceEntity(publicSpace.id)))
+				expect(publicEntity).not.toBeNull()
+				expect(publicEntity?.id).toBe(SPACE_ENTITY_ID_2)
+			}
+
+			// Test entity field resolution for complete space (should be null)
+			if (completeSpace) {
+				const completeEntity = await Effect.runPromise(provideDeps(getSpaceEntity(completeSpace.id)))
+				expect(completeEntity).toBeNull()
+			}
+		})
+
+		it("should return consistent entity data when accessed via spaces query", async () => {
+			// Get spaces
+			const spaces = await Effect.runPromise(provideDeps(getSpaces({filter: {id: {in: [PERSONAL_SPACE_ID]}}})))
+			expect(spaces).toHaveLength(1)
+
+			const space = spaces[0]
+			expect(space).toBeDefined()
+			expect(space?.id).toBe(PERSONAL_SPACE_ID)
+
+			if (space) {
+				// Get entity via space
+				const entityViaSpace = await Effect.runPromise(provideDeps(getSpaceEntity(space.id)))
+
+				// Get entity directly
+				const entityDirect = await Effect.runPromise(provideDeps(getSpaceEntity(PERSONAL_SPACE_ID)))
+
+				// Both should return the same entity
+				expect(entityViaSpace).toEqual(entityDirect)
+				expect(entityViaSpace?.id).toBe(SPACE_ENTITY_ID)
+			}
+		})
 	})
 })

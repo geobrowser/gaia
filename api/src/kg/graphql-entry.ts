@@ -42,8 +42,7 @@ const resolvers: GeneratedResolvers = {
 		spaces: async (_, args: QuerySpacesArgs) => {
 			return await Resolvers.spaces(args)
 		},
-		space: async (_, args: QuerySpaceArgs, context: GraphQLContext) => {
-			context.spaceId = args.id
+		space: async (_, args: QuerySpaceArgs) => {
 			return await Resolvers.space(args.id)
 		},
 	},
