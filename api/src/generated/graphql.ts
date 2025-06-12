@@ -126,6 +126,8 @@ export type Query = {
 	entity?: Maybe<Entity>
 	properties: Array<Maybe<Property>>
 	search: Array<Maybe<Entity>>
+	space?: Maybe<Space>
+	spaces: Array<Maybe<Space>>
 	types: Array<Maybe<Type>>
 }
 
@@ -153,6 +155,16 @@ export type QuerySearchArgs = {
 	query: Scalars["String"]["input"]
 	spaceId?: InputMaybe<Scalars["String"]["input"]>
 	threshold?: InputMaybe<Scalars["Float"]["input"]>
+}
+
+export type QuerySpaceArgs = {
+	id: Scalars["String"]["input"]
+}
+
+export type QuerySpacesArgs = {
+	filter?: InputMaybe<SpaceFilter>
+	limit?: InputMaybe<Scalars["Int"]["input"]>
+	offset?: InputMaybe<Scalars["Int"]["input"]>
 }
 
 export type QueryTypesArgs = {
@@ -187,6 +199,27 @@ export type RelationFilter = {
 export enum RenderableType {
 	Image = "IMAGE",
 	Url = "URL",
+}
+
+export type Space = {
+	__typename?: "Space"
+	daoAddress: Scalars["String"]["output"]
+	entity?: Maybe<Entity>
+	id: Scalars["ID"]["output"]
+	mainVotingAddress?: Maybe<Scalars["String"]["output"]>
+	membershipAddress?: Maybe<Scalars["String"]["output"]>
+	personalAddress?: Maybe<Scalars["String"]["output"]>
+	spaceAddress: Scalars["String"]["output"]
+	type: SpaceType
+}
+
+export type SpaceFilter = {
+	id?: InputMaybe<IdFilter>
+}
+
+export enum SpaceType {
+	Personal = "PERSONAL",
+	Public = "PUBLIC",
 }
 
 export type TextFilter = {
@@ -337,6 +370,9 @@ export type ResolversTypes = ResolversObject<{
 	>
 	RelationFilter: RelationFilter
 	RenderableType: RenderableType
+	Space: ResolverTypeWrapper<Omit<Space, "entity"> & {entity?: Maybe<ResolversTypes["Entity"]>}>
+	SpaceFilter: SpaceFilter
+	SpaceType: SpaceType
 	String: ResolverTypeWrapper<Scalars["String"]["output"]>
 	TextFilter: TextFilter
 	Type: ResolverTypeWrapper<
@@ -380,6 +416,8 @@ export type ResolversParentTypes = ResolversObject<{
 		type?: Maybe<ResolversParentTypes["Property"]>
 	}
 	RelationFilter: RelationFilter
+	Space: Omit<Space, "entity"> & {entity?: Maybe<ResolversParentTypes["Entity"]>}
+	SpaceFilter: SpaceFilter
 	String: Scalars["String"]["output"]
 	TextFilter: TextFilter
 	Type: Omit<Type, "entity" | "properties"> & {
@@ -464,6 +502,13 @@ export type QueryResolvers<
 		ContextType,
 		RequireFields<QuerySearchArgs, "limit" | "offset" | "query" | "threshold">
 	>
+	space?: Resolver<Maybe<ResolversTypes["Space"]>, ParentType, ContextType, RequireFields<QuerySpaceArgs, "id">>
+	spaces?: Resolver<
+		Array<Maybe<ResolversTypes["Space"]>>,
+		ParentType,
+		ContextType,
+		RequireFields<QuerySpacesArgs, "limit" | "offset">
+	>
 	types?: Resolver<
 		Array<Maybe<ResolversTypes["Type"]>>,
 		ParentType,
@@ -489,6 +534,21 @@ export type RelationResolvers<
 	type?: Resolver<Maybe<ResolversTypes["Property"]>, ParentType, ContextType>
 	typeId?: Resolver<ResolversTypes["String"], ParentType, ContextType>
 	verified?: Resolver<Maybe<ResolversTypes["Boolean"]>, ParentType, ContextType>
+	__isTypeOf?: IsTypeOfResolverFn<ParentType, ContextType>
+}>
+
+export type SpaceResolvers<
+	ContextType = any,
+	ParentType extends ResolversParentTypes["Space"] = ResolversParentTypes["Space"],
+> = ResolversObject<{
+	daoAddress?: Resolver<ResolversTypes["String"], ParentType, ContextType>
+	entity?: Resolver<Maybe<ResolversTypes["Entity"]>, ParentType, ContextType>
+	id?: Resolver<ResolversTypes["ID"], ParentType, ContextType>
+	mainVotingAddress?: Resolver<Maybe<ResolversTypes["String"]>, ParentType, ContextType>
+	membershipAddress?: Resolver<Maybe<ResolversTypes["String"]>, ParentType, ContextType>
+	personalAddress?: Resolver<Maybe<ResolversTypes["String"]>, ParentType, ContextType>
+	spaceAddress?: Resolver<ResolversTypes["String"], ParentType, ContextType>
+	type?: Resolver<ResolversTypes["SpaceType"], ParentType, ContextType>
 	__isTypeOf?: IsTypeOfResolverFn<ParentType, ContextType>
 }>
 
@@ -528,6 +588,7 @@ export type Resolvers<ContextType = any> = ResolversObject<{
 	Property?: PropertyResolvers<ContextType>
 	Query?: QueryResolvers<ContextType>
 	Relation?: RelationResolvers<ContextType>
+	Space?: SpaceResolvers<ContextType>
 	Type?: TypeResolvers<ContextType>
 	Value?: ValueResolvers<ContextType>
 }>

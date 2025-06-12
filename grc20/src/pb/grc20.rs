@@ -66,7 +66,7 @@ pub mod file {
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct Op {
-    #[prost(oneof = "op::Payload", tags = "1, 2, 3, 4, 5, 6, 7, 8")]
+    #[prost(oneof = "op::Payload", tags = "1, 2, 3, 4, 5, 6, 7")]
     pub payload: ::core::option::Option<op::Payload>,
 }
 /// Nested message and enum types in `Op`.
@@ -76,19 +76,17 @@ pub mod op {
     pub enum Payload {
         #[prost(message, tag = "1")]
         UpdateEntity(super::Entity),
-        #[prost(bytes, tag = "2")]
-        DeleteEntity(::prost::alloc::vec::Vec<u8>),
-        #[prost(message, tag = "3")]
+        #[prost(message, tag = "2")]
         CreateRelation(super::Relation),
-        #[prost(message, tag = "4")]
+        #[prost(message, tag = "3")]
         UpdateRelation(super::RelationUpdate),
-        #[prost(bytes, tag = "5")]
+        #[prost(bytes, tag = "4")]
         DeleteRelation(::prost::alloc::vec::Vec<u8>),
-        #[prost(message, tag = "6")]
+        #[prost(message, tag = "5")]
         CreateProperty(super::Property),
-        #[prost(message, tag = "7")]
+        #[prost(message, tag = "6")]
         UnsetEntityValues(super::UnsetEntityValues),
-        #[prost(message, tag = "8")]
+        #[prost(message, tag = "7")]
         UnsetRelationFields(super::UnsetRelationFields),
     }
 }
