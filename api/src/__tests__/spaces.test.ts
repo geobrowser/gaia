@@ -3,7 +3,7 @@ import {Effect, Layer} from "effect"
 import {v4 as uuid} from "uuid"
 import {afterEach, beforeEach, describe, expect, it} from "vitest"
 import {SpaceType} from "../generated/graphql"
-import {getSpace, getSpaces, getSpaceEntity} from "../kg/resolvers/spaces"
+import {getSpace, getSpaceEntity, getSpaces} from "../kg/resolvers/spaces"
 import {Environment, make as makeEnvironment} from "../services/environment"
 import {entities, relations, spaces} from "../services/storage/schema"
 import {Storage, make as makeStorage} from "../services/storage/storage"
@@ -672,9 +672,7 @@ describe("Spaces Query Integration Tests", () => {
 		})
 
 		it("should handle multiple concurrent getSpace calls", async () => {
-			const promises = Array.from({length: 10}, () =>
-				Effect.runPromise(provideDeps(getSpace(PERSONAL_SPACE_ID))),
-			)
+			const promises = Array.from({length: 10}, () => Effect.runPromise(provideDeps(getSpace(PERSONAL_SPACE_ID))))
 
 			const results = await Promise.all(promises)
 
