@@ -1,26 +1,31 @@
 import {SystemIds} from "@graphprotocol/grc-20"
 import {Effect} from "effect"
-import {SpaceType} from "~/src/generated/graphql"
+import {type QuerySpacesArgs, SpaceType} from "~/src/generated/graphql"
 import {spaces} from "../../services/storage/schema" // Added relations import
 import {Storage} from "../../services/storage/storage"
 
-export const getSpaces = Effect.gen(function* () {
-	const db = yield* Storage
+export const getSpaces = (args: QuerySpacesArgs) =>
+	Effect.gen(function* () {
+		const db = yield* Storage
 
-	return yield* db.use(async (client) => {
-		const spacesResult = await client.select().from(spaces)
+		return yield* db.use(async (client) => {
+			const spacesResult = await client
+				.select()
+				.from(spaces)
+				.limit(args.limit ?? 100)
+				.offset(args.offset ?? 0)
 
-		return spacesResult.map((space) => ({
-			id: space.id,
-			type: space.type === "Personal" ? SpaceType.Personal : SpaceType.Public,
-			daoAddress: space.daoAddress,
-			spaceAddress: space.spaceAddress,
-			mainVotingAddress: space.mainVotingAddress,
-			membershipAddress: space.membershipAddress,
-			personalAddress: space.personalAddress,
-		}))
+			return spacesResult.map((space) => ({
+				id: space.id,
+				type: space.type === "Personal" ? SpaceType.Personal : SpaceType.Public,
+				daoAddress: space.daoAddress,
+				spaceAddress: space.spaceAddress,
+				mainVotingAddress: space.mainVotingAddress,
+				membershipAddress: space.membershipAddress,
+				personalAddress: space.personalAddress,
+			}))
+		})
 	})
-})
 
 export const getSpace = (id: string) =>
 	Effect.gen(function* () {

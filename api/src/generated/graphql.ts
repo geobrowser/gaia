@@ -169,6 +169,12 @@ export type QuerySpaceArgs = {
 };
 
 
+export type QuerySpacesArgs = {
+  limit?: InputMaybe<Scalars['Int']['input']>;
+  offset?: InputMaybe<Scalars['Int']['input']>;
+};
+
+
 export type QueryTypesArgs = {
   limit?: InputMaybe<Scalars['Int']['input']>;
   offset?: InputMaybe<Scalars['Int']['input']>;
@@ -428,7 +434,7 @@ export type QueryResolvers<ContextType = any, ParentType extends ResolversParent
   properties?: Resolver<Array<Maybe<ResolversTypes['Property']>>, ParentType, ContextType, RequireFields<QueryPropertiesArgs, 'limit' | 'offset'>>;
   search?: Resolver<Array<Maybe<ResolversTypes['Entity']>>, ParentType, ContextType, RequireFields<QuerySearchArgs, 'limit' | 'offset' | 'query' | 'threshold'>>;
   space?: Resolver<Maybe<ResolversTypes['Space']>, ParentType, ContextType, RequireFields<QuerySpaceArgs, 'id'>>;
-  spaces?: Resolver<Array<Maybe<ResolversTypes['Space']>>, ParentType, ContextType>;
+  spaces?: Resolver<Array<Maybe<ResolversTypes['Space']>>, ParentType, ContextType, RequireFields<QuerySpacesArgs, 'limit' | 'offset'>>;
   types?: Resolver<Array<Maybe<ResolversTypes['Type']>>, ParentType, ContextType, RequireFields<QueryTypesArgs, 'limit' | 'offset'>>;
 }>;
 

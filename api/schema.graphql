@@ -154,7 +154,7 @@ type Query {
   ): [Entity]!
 
   # space
-  spaces: [Space]!
+  spaces(limit: Int = 100, offset: Int = 0): [Space]!
   space(id: String!): Space
 
   # relation
