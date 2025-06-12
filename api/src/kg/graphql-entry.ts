@@ -120,12 +120,8 @@ const resolvers: GeneratedResolvers = {
 		},
 	},
 	Space: {
-		entity: async (_, __, context: GraphQLContext) => {
-			if (!context.spaceId) {
-				return null
-			}
-
-			return Resolvers.spaceEntity(context.spaceId)
+		entity: async (parent: {id: string}) => {
+			return Resolvers.spaceEntity(parent.id)
 		},
 	},
 }
