@@ -99,15 +99,15 @@ describe("Spaces Query Integration Tests", () => {
 							},
 						])
 
-						// Insert test relations - linking spaces to entities with SPACE_TYPE
+						// Insert test relations - linking spaces to entities with TYPES_PROPERTY -> SPACE_TYPE
 						await client.insert(relations).values([
 							{
 								id: uuid(),
 								entityId: uuid(), // Relation entity ID
 								spaceId: PERSONAL_SPACE_ID,
-								typeId: SystemIds.SPACE_TYPE,
-								fromEntityId: PERSONAL_SPACE_ID,
-								toEntityId: SPACE_ENTITY_ID,
+								typeId: SystemIds.TYPES_PROPERTY,
+								fromEntityId: SPACE_ENTITY_ID,
+								toEntityId: SystemIds.SPACE_TYPE,
 								toSpaceId: PERSONAL_SPACE_ID,
 								verified: true,
 							},
@@ -115,20 +115,20 @@ describe("Spaces Query Integration Tests", () => {
 								id: uuid(),
 								entityId: uuid(), // Relation entity ID
 								spaceId: PUBLIC_SPACE_ID,
-								typeId: SystemIds.SPACE_TYPE,
-								fromEntityId: PUBLIC_SPACE_ID,
-								toEntityId: SPACE_ENTITY_ID_2,
+								typeId: SystemIds.TYPES_PROPERTY,
+								fromEntityId: SPACE_ENTITY_ID_2,
+								toEntityId: SystemIds.SPACE_TYPE,
 								toSpaceId: PUBLIC_SPACE_ID,
 								verified: true,
 							},
-							// Add a non-SPACE_TYPE relation for testing
+							// Add a non-TYPES_PROPERTY relation for testing
 							{
 								id: uuid(),
 								entityId: uuid(), // Relation entity ID
 								spaceId: COMPLETE_SPACE_ID,
-								typeId: uuid(), // Not SPACE_TYPE
-								fromEntityId: COMPLETE_SPACE_ID,
-								toEntityId: NON_SPACE_ENTITY_ID,
+								typeId: uuid(), // Not TYPES_PROPERTY
+								fromEntityId: NON_SPACE_ENTITY_ID,
+								toEntityId: uuid(), // Not SPACE_TYPE
 								toSpaceId: COMPLETE_SPACE_ID,
 								verified: false,
 							},
@@ -706,7 +706,7 @@ describe("Spaces Query Integration Tests", () => {
 			expect(personalResult?.id).not.toBe(publicResult?.id)
 		})
 
-		it("should return null for space without SPACE_TYPE relation", async () => {
+		it("should return null for space without TYPES_PROPERTY -> SPACE_TYPE relation", async () => {
 			const result = await Effect.runPromise(provideDeps(getSpaceEntity(COMPLETE_SPACE_ID)))
 
 			expect(result).toBeNull()
@@ -773,12 +773,12 @@ describe("Spaces Query Integration Tests", () => {
 			await expect(Effect.runPromise(provideDeps(getSpaceEntity(specialCharId)))).rejects.toThrow()
 		})
 
-		it("should only return entities with SPACE_TYPE relation", async () => {
-			// Verify that the space with non-SPACE_TYPE relation returns null
+		it("should only return entities with TYPES_PROPERTY -> SPACE_TYPE relation", async () => {
+			// Verify that the space with non-TYPES_PROPERTY relation returns null
 			const result = await Effect.runPromise(provideDeps(getSpaceEntity(COMPLETE_SPACE_ID)))
 			expect(result).toBeNull()
 
-			// Verify that spaces with SPACE_TYPE relation return entities
+			// Verify that spaces with TYPES_PROPERTY -> SPACE_TYPE relation return entities
 			const personalResult = await Effect.runPromise(provideDeps(getSpaceEntity(PERSONAL_SPACE_ID)))
 			const publicResult = await Effect.runPromise(provideDeps(getSpaceEntity(PUBLIC_SPACE_ID)))
 			expect(personalResult).not.toBeNull()
