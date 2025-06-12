@@ -1,10 +1,11 @@
+import {SystemIds} from "@graphprotocol/grc-20"
 import {Effect, Layer} from "effect"
 import {v4 as uuid} from "uuid"
 import {afterEach, beforeEach, describe, expect, it} from "vitest"
 import {SpaceType} from "../generated/graphql"
-import {getSpace, getSpaces} from "../kg/resolvers/spaces"
+import {getSpace, getSpaces, getSpaceEntity} from "../kg/resolvers/spaces"
 import {Environment, make as makeEnvironment} from "../services/environment"
-import {spaces} from "../services/storage/schema"
+import {entities, relations, spaces} from "../services/storage/schema"
 import {Storage, make as makeStorage} from "../services/storage/storage"
 
 // Set up Effect layers like in the main application
@@ -18,12 +19,18 @@ describe("Spaces Query Integration Tests", () => {
 	let PERSONAL_SPACE_ID: string
 	let PUBLIC_SPACE_ID: string
 	let COMPLETE_SPACE_ID: string
+	let SPACE_ENTITY_ID: string
+	let SPACE_ENTITY_ID_2: string
+	let NON_SPACE_ENTITY_ID: string
 
 	beforeEach(async () => {
 		// Generate fresh UUIDs for each test to ensure isolation
 		PERSONAL_SPACE_ID = uuid()
 		PUBLIC_SPACE_ID = uuid()
 		COMPLETE_SPACE_ID = uuid()
+		SPACE_ENTITY_ID = uuid()
+		SPACE_ENTITY_ID_2 = uuid()
+		NON_SPACE_ENTITY_ID = uuid()
 
 		await Effect.runPromise(
 			provideDeps(
@@ -32,7 +39,34 @@ describe("Spaces Query Integration Tests", () => {
 
 					yield* db.use(async (client) => {
 						// Clear existing test data
+						await client.delete(relations)
+						await client.delete(entities)
 						await client.delete(spaces)
+
+						// Insert test entities
+						await client.insert(entities).values([
+							{
+								id: SPACE_ENTITY_ID,
+								createdAt: "2024-01-01T00:00:00Z",
+								createdAtBlock: "1000000",
+								updatedAt: "2024-01-01T00:00:00Z",
+								updatedAtBlock: "1000000",
+							},
+							{
+								id: SPACE_ENTITY_ID_2,
+								createdAt: "2024-01-01T00:00:00Z",
+								createdAtBlock: "1000001",
+								updatedAt: "2024-01-01T00:00:00Z",
+								updatedAtBlock: "1000001",
+							},
+							{
+								id: NON_SPACE_ENTITY_ID,
+								createdAt: "2024-01-01T00:00:00Z",
+								createdAtBlock: "1000002",
+								updatedAt: "2024-01-01T00:00:00Z",
+								updatedAtBlock: "1000002",
+							},
+						])
 
 						// Insert test spaces with different configurations
 						await client.insert(spaces).values([
@@ -64,6 +98,41 @@ describe("Spaces Query Integration Tests", () => {
 								personalAddress: "0x9999999999999999999999999999999999999999",
 							},
 						])
+
+						// Insert test relations - linking spaces to entities with SPACE_TYPE
+						await client.insert(relations).values([
+							{
+								id: uuid(),
+								entityId: uuid(), // Relation entity ID
+								spaceId: PERSONAL_SPACE_ID,
+								typeId: SystemIds.SPACE_TYPE,
+								fromEntityId: PERSONAL_SPACE_ID,
+								toEntityId: SPACE_ENTITY_ID,
+								toSpaceId: PERSONAL_SPACE_ID,
+								verified: true,
+							},
+							{
+								id: uuid(),
+								entityId: uuid(), // Relation entity ID
+								spaceId: PUBLIC_SPACE_ID,
+								typeId: SystemIds.SPACE_TYPE,
+								fromEntityId: PUBLIC_SPACE_ID,
+								toEntityId: SPACE_ENTITY_ID_2,
+								toSpaceId: PUBLIC_SPACE_ID,
+								verified: true,
+							},
+							// Add a non-SPACE_TYPE relation for testing
+							{
+								id: uuid(),
+								entityId: uuid(), // Relation entity ID
+								spaceId: COMPLETE_SPACE_ID,
+								typeId: uuid(), // Not SPACE_TYPE
+								fromEntityId: COMPLETE_SPACE_ID,
+								toEntityId: NON_SPACE_ENTITY_ID,
+								toSpaceId: COMPLETE_SPACE_ID,
+								verified: false,
+							},
+						])
 					})
 				}),
 			),
@@ -76,6 +145,8 @@ describe("Spaces Query Integration Tests", () => {
 				Effect.gen(function* () {
 					const db = yield* Storage
 					yield* db.use(async (client) => {
+						await client.delete(relations)
+						await client.delete(entities)
 						await client.delete(spaces)
 					})
 				}),
@@ -611,6 +682,162 @@ describe("Spaces Query Integration Tests", () => {
 			for (let i = 1; i < results.length; i++) {
 				expect(results[i]).toEqual(results[0])
 			}
+		})
+	})
+
+	describe("getSpaceEntity - Get Space Entity", () => {
+		it("should return the entity associated with a space", async () => {
+			const result = await Effect.runPromise(provideDeps(getSpaceEntity(PERSONAL_SPACE_ID)))
+
+			expect(result).not.toBeNull()
+			expect(result?.id).toBe(SPACE_ENTITY_ID)
+			expect(result?.createdAt).toBe("2024-01-01T00:00:00Z")
+			expect(result?.createdAtBlock).toBe("1000000")
+			expect(result?.updatedAt).toBe("2024-01-01T00:00:00Z")
+			expect(result?.updatedAtBlock).toBe("1000000")
+		})
+
+		it("should return the correct entity for different spaces", async () => {
+			const personalResult = await Effect.runPromise(provideDeps(getSpaceEntity(PERSONAL_SPACE_ID)))
+			const publicResult = await Effect.runPromise(provideDeps(getSpaceEntity(PUBLIC_SPACE_ID)))
+
+			expect(personalResult).not.toBeNull()
+			expect(publicResult).not.toBeNull()
+			expect(personalResult?.id).toBe(SPACE_ENTITY_ID)
+			expect(publicResult?.id).toBe(SPACE_ENTITY_ID_2)
+			expect(personalResult?.id).not.toBe(publicResult?.id)
+		})
+
+		it("should return null for space without SPACE_TYPE relation", async () => {
+			const result = await Effect.runPromise(provideDeps(getSpaceEntity(COMPLETE_SPACE_ID)))
+
+			expect(result).toBeNull()
+		})
+
+		it("should return null for non-existent space ID", async () => {
+			const nonExistentId = uuid()
+			const result = await Effect.runPromise(provideDeps(getSpaceEntity(nonExistentId)))
+
+			expect(result).toBeNull()
+		})
+
+		it("should handle invalid UUID format with database error", async () => {
+			await expect(Effect.runPromise(provideDeps(getSpaceEntity("invalid-uuid")))).rejects.toThrow()
+		})
+
+		it("should return complete entity structure", async () => {
+			const result = await Effect.runPromise(provideDeps(getSpaceEntity(PERSONAL_SPACE_ID)))
+
+			expect(result).not.toBeNull()
+			expect(result).toHaveProperty("id")
+			expect(result).toHaveProperty("createdAt")
+			expect(result).toHaveProperty("createdAtBlock")
+			expect(result).toHaveProperty("updatedAt")
+			expect(result).toHaveProperty("updatedAtBlock")
+
+			expect(typeof result?.id).toBe("string")
+			expect(typeof result?.createdAt).toBe("string")
+			expect(typeof result?.createdAtBlock).toBe("string")
+			expect(typeof result?.updatedAt).toBe("string")
+			expect(typeof result?.updatedAtBlock).toBe("string")
+		})
+
+		it("should maintain consistency across multiple queries", async () => {
+			const result1 = await Effect.runPromise(provideDeps(getSpaceEntity(PERSONAL_SPACE_ID)))
+			const result2 = await Effect.runPromise(provideDeps(getSpaceEntity(PERSONAL_SPACE_ID)))
+
+			expect(result1).toEqual(result2)
+		})
+
+		it("should handle empty string ID with database error", async () => {
+			await expect(Effect.runPromise(provideDeps(getSpaceEntity("")))).rejects.toThrow()
+		})
+
+		it("should handle null ID gracefully", async () => {
+			const result = await Effect.runPromise(provideDeps(getSpaceEntity(null as unknown as string)))
+
+			expect(result).toBeNull()
+		})
+
+		it("should handle undefined ID gracefully", async () => {
+			const result = await Effect.runPromise(provideDeps(getSpaceEntity(undefined as unknown as string)))
+
+			expect(result).toBeNull()
+		})
+
+		it("should handle very long ID strings with database error", async () => {
+			const veryLongId = "a".repeat(1000)
+			await expect(Effect.runPromise(provideDeps(getSpaceEntity(veryLongId)))).rejects.toThrow()
+		})
+
+		it("should handle special characters in ID with database error", async () => {
+			const specialCharId = "!@#$%^&*()_+-={}[]|;:,.<>?"
+			await expect(Effect.runPromise(provideDeps(getSpaceEntity(specialCharId)))).rejects.toThrow()
+		})
+
+		it("should only return entities with SPACE_TYPE relation", async () => {
+			// Verify that the space with non-SPACE_TYPE relation returns null
+			const result = await Effect.runPromise(provideDeps(getSpaceEntity(COMPLETE_SPACE_ID)))
+			expect(result).toBeNull()
+
+			// Verify that spaces with SPACE_TYPE relation return entities
+			const personalResult = await Effect.runPromise(provideDeps(getSpaceEntity(PERSONAL_SPACE_ID)))
+			const publicResult = await Effect.runPromise(provideDeps(getSpaceEntity(PUBLIC_SPACE_ID)))
+			expect(personalResult).not.toBeNull()
+			expect(publicResult).not.toBeNull()
+		})
+
+		it("should handle multiple concurrent getSpaceEntity calls", async () => {
+			const promises = Array.from({length: 10}, () =>
+				Effect.runPromise(provideDeps(getSpaceEntity(PERSONAL_SPACE_ID))),
+			)
+
+			const results = await Promise.all(promises)
+
+			// All results should be identical
+			for (let i = 1; i < results.length; i++) {
+				expect(results[i]).toEqual(results[0])
+			}
+
+			// Verify the result is correct
+			expect(results[0]).not.toBeNull()
+			expect(results[0]?.id).toBe(SPACE_ENTITY_ID)
+		})
+
+		it("should validate entity data types", async () => {
+			const result = await Effect.runPromise(provideDeps(getSpaceEntity(PERSONAL_SPACE_ID)))
+
+			expect(result).not.toBeNull()
+			expect(typeof result?.id).toBe("string")
+			expect(typeof result?.createdAt).toBe("string")
+			expect(typeof result?.createdAtBlock).toBe("string")
+			expect(typeof result?.updatedAt).toBe("string")
+			expect(typeof result?.updatedAtBlock).toBe("string")
+
+			// Validate timestamp format (ISO 8601)
+			expect(result?.createdAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/)
+			expect(result?.updatedAt).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/)
+
+			// Validate block numbers are strings with numeric content
+			expect(result?.createdAtBlock).toMatch(/^\d+$/)
+			expect(result?.updatedAtBlock).toMatch(/^\d+$/)
+		})
+
+		it("should handle concurrent requests for different spaces", async () => {
+			const promises = [
+				Effect.runPromise(provideDeps(getSpaceEntity(PERSONAL_SPACE_ID))),
+				Effect.runPromise(provideDeps(getSpaceEntity(PUBLIC_SPACE_ID))),
+				Effect.runPromise(provideDeps(getSpaceEntity(COMPLETE_SPACE_ID))),
+			]
+
+			const [personalResult, publicResult, completeResult] = await Promise.all(promises)
+
+			expect(personalResult).not.toBeNull()
+			expect(publicResult).not.toBeNull()
+			expect(completeResult).toBeNull()
+
+			expect(personalResult?.id).toBe(SPACE_ENTITY_ID)
+			expect(publicResult?.id).toBe(SPACE_ENTITY_ID_2)
 		})
 	})
 })
