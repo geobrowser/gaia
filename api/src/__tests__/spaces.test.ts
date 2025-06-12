@@ -85,7 +85,7 @@ describe("Spaces Query Integration Tests", () => {
 
 	describe("getSpaces - Get All Spaces", () => {
 		it("should return all spaces", async () => {
-			const result = await Effect.runPromise(provideDeps(getSpaces))
+			const result = await Effect.runPromise(provideDeps(getSpaces({})))
 
 			expect(result).toHaveLength(3)
 			const spaceIds = result.map((s) => s.id).sort()
@@ -94,7 +94,7 @@ describe("Spaces Query Integration Tests", () => {
 		})
 
 		it("should return correct space types", async () => {
-			const result = await Effect.runPromise(provideDeps(getSpaces))
+			const result = await Effect.runPromise(provideDeps(getSpaces({})))
 
 			const spaceMap = new Map(result.map((s) => [s.id, s]))
 
@@ -104,7 +104,7 @@ describe("Spaces Query Integration Tests", () => {
 		})
 
 		it("should return all required fields", async () => {
-			const result = await Effect.runPromise(provideDeps(getSpaces))
+			const result = await Effect.runPromise(provideDeps(getSpaces({})))
 
 			for (const space of result) {
 				expect(space).toHaveProperty("id")
@@ -123,7 +123,7 @@ describe("Spaces Query Integration Tests", () => {
 		})
 
 		it("should handle optional fields correctly", async () => {
-			const result = await Effect.runPromise(provideDeps(getSpaces))
+			const result = await Effect.runPromise(provideDeps(getSpaces({})))
 
 			const personalSpace = result.find((s) => s.id === PERSONAL_SPACE_ID)
 			const publicSpace = result.find((s) => s.id === PUBLIC_SPACE_ID)
@@ -158,9 +158,229 @@ describe("Spaces Query Integration Tests", () => {
 				),
 			)
 
-			const result = await Effect.runPromise(provideDeps(getSpaces))
+			const result = await Effect.runPromise(provideDeps(getSpaces({})))
 
 			expect(result).toHaveLength(0)
+		})
+	})
+
+	describe("getSpaces - Filtering", () => {
+		it("should filter by single space ID", async () => {
+			const result = await Effect.runPromise(
+				provideDeps(
+					getSpaces({
+						filter: {
+							id: {
+								in: [PERSONAL_SPACE_ID],
+							},
+						},
+					}),
+				),
+			)
+
+			expect(result).toHaveLength(1)
+			expect(result[0]).toBeDefined()
+			expect(result[0]?.id).toBe(PERSONAL_SPACE_ID)
+			expect(result[0]?.type).toBe(SpaceType.Personal)
+		})
+
+		it("should filter by multiple space IDs", async () => {
+			const result = await Effect.runPromise(
+				provideDeps(
+					getSpaces({
+						filter: {
+							id: {
+								in: [PERSONAL_SPACE_ID, PUBLIC_SPACE_ID],
+							},
+						},
+					}),
+				),
+			)
+
+			expect(result).toHaveLength(2)
+			const resultIds = result.map((s) => s.id).sort()
+			const expectedIds = [PERSONAL_SPACE_ID, PUBLIC_SPACE_ID].sort()
+			expect(resultIds).toEqual(expectedIds)
+		})
+
+		it("should filter by all space IDs", async () => {
+			const result = await Effect.runPromise(
+				provideDeps(
+					getSpaces({
+						filter: {
+							id: {
+								in: [PERSONAL_SPACE_ID, PUBLIC_SPACE_ID, COMPLETE_SPACE_ID],
+							},
+						},
+					}),
+				),
+			)
+
+			expect(result).toHaveLength(3)
+			const resultIds = result.map((s) => s.id).sort()
+			const expectedIds = [PERSONAL_SPACE_ID, PUBLIC_SPACE_ID, COMPLETE_SPACE_ID].sort()
+			expect(resultIds).toEqual(expectedIds)
+		})
+
+		it("should return empty array for non-existent space IDs", async () => {
+			const nonExistentId1 = uuid()
+			const nonExistentId2 = uuid()
+
+			const result = await Effect.runPromise(
+				provideDeps(
+					getSpaces({
+						filter: {
+							id: {
+								in: [nonExistentId1, nonExistentId2],
+							},
+						},
+					}),
+				),
+			)
+
+			expect(result).toHaveLength(0)
+		})
+
+		it("should filter correctly with mix of existing and non-existent IDs", async () => {
+			const nonExistentId = uuid()
+
+			const result = await Effect.runPromise(
+				provideDeps(
+					getSpaces({
+						filter: {
+							id: {
+								in: [PERSONAL_SPACE_ID, nonExistentId, PUBLIC_SPACE_ID],
+							},
+						},
+					}),
+				),
+			)
+
+			expect(result).toHaveLength(2)
+			const resultIds = result.map((s) => s.id).sort()
+			const expectedIds = [PERSONAL_SPACE_ID, PUBLIC_SPACE_ID].sort()
+			expect(resultIds).toEqual(expectedIds)
+		})
+
+		it("should return empty array when filter ID array is empty", async () => {
+			const result = await Effect.runPromise(
+				provideDeps(
+					getSpaces({
+						filter: {
+							id: {
+								in: [],
+							},
+						},
+					}),
+				),
+			)
+
+			expect(result).toHaveLength(0)
+		})
+
+		it("should return all spaces when no filter is provided", async () => {
+			const result = await Effect.runPromise(
+				provideDeps(
+					getSpaces({
+						filter: {},
+					}),
+				),
+			)
+
+			expect(result).toHaveLength(3)
+		})
+
+		it("should return all spaces when filter is undefined", async () => {
+			const result = await Effect.runPromise(
+				provideDeps(
+					getSpaces({
+						filter: undefined,
+					}),
+				),
+			)
+
+			expect(result).toHaveLength(3)
+		})
+
+		it("should work with limit and offset when filtering", async () => {
+			const result = await Effect.runPromise(
+				provideDeps(
+					getSpaces({
+						filter: {
+							id: {
+								in: [PERSONAL_SPACE_ID, PUBLIC_SPACE_ID, COMPLETE_SPACE_ID],
+							},
+						},
+						limit: 2,
+						offset: 1,
+					}),
+				),
+			)
+
+			expect(result).toHaveLength(2)
+			// Should skip the first result and return the next 2
+		})
+
+		it("should respect limit when filtering", async () => {
+			const result = await Effect.runPromise(
+				provideDeps(
+					getSpaces({
+						filter: {
+							id: {
+								in: [PERSONAL_SPACE_ID, PUBLIC_SPACE_ID, COMPLETE_SPACE_ID],
+							},
+						},
+						limit: 1,
+					}),
+				),
+			)
+
+			expect(result).toHaveLength(1)
+		})
+
+		it("should handle invalid UUID in filter array", async () => {
+			// Database should handle invalid UUIDs gracefully in the filter
+			await expect(
+				Effect.runPromise(
+					provideDeps(
+						getSpaces({
+							filter: {
+								id: {
+									in: ["invalid-uuid"],
+								},
+							},
+						}),
+					),
+				),
+			).rejects.toThrow()
+		})
+
+		it("should maintain data integrity when filtering", async () => {
+			const result1 = await Effect.runPromise(
+				provideDeps(
+					getSpaces({
+						filter: {
+							id: {
+								in: [PERSONAL_SPACE_ID],
+							},
+						},
+					}),
+				),
+			)
+
+			const result2 = await Effect.runPromise(
+				provideDeps(
+					getSpaces({
+						filter: {
+							id: {
+								in: [PERSONAL_SPACE_ID],
+							},
+						},
+					}),
+				),
+			)
+
+			expect(result1).toEqual(result2)
 		})
 	})
 
@@ -217,8 +437,8 @@ describe("Spaces Query Integration Tests", () => {
 
 	describe("Data Integrity", () => {
 		it("should maintain consistency across multiple queries", async () => {
-			const result1 = await Effect.runPromise(provideDeps(getSpaces))
-			const result2 = await Effect.runPromise(provideDeps(getSpaces))
+			const result1 = await Effect.runPromise(provideDeps(getSpaces({})))
+			const result2 = await Effect.runPromise(provideDeps(getSpaces({})))
 
 			expect(result1).toEqual(result2)
 		})
@@ -248,7 +468,7 @@ describe("Spaces Query Integration Tests", () => {
 		})
 
 		it("should properly map database enum values to GraphQL enum values", async () => {
-			const result = await Effect.runPromise(provideDeps(getSpaces))
+			const result = await Effect.runPromise(provideDeps(getSpaces({})))
 
 			// Verify that database enum values are correctly mapped to GraphQL enum values
 			for (const space of result) {
@@ -258,8 +478,8 @@ describe("Spaces Query Integration Tests", () => {
 			const personalSpace = result.find((s) => s.id === PERSONAL_SPACE_ID)
 			const publicSpace = result.find((s) => s.id === PUBLIC_SPACE_ID)
 
-			expect(personalSpace?.type).toBe("PERSONAL")
-			expect(publicSpace?.type).toBe("PUBLIC")
+			expect(personalSpace?.type).toBe(SpaceType.Personal)
+			expect(publicSpace?.type).toBe(SpaceType.Public)
 		})
 	})
 
@@ -271,14 +491,14 @@ describe("Spaces Query Integration Tests", () => {
 
 		it("should handle null ID gracefully", async () => {
 			// TypeScript would prevent this, but testing runtime behavior
-			const result = await Effect.runPromise(provideDeps(getSpace(null as any)))
+			const result = await Effect.runPromise(provideDeps(getSpace(null as unknown as string)))
 
 			expect(result).toBeNull()
 		})
 
 		it("should handle undefined ID gracefully", async () => {
 			// TypeScript would prevent this, but testing runtime behavior
-			const result = await Effect.runPromise(provideDeps(getSpace(undefined as any)))
+			const result = await Effect.runPromise(provideDeps(getSpace(undefined as unknown as string)))
 
 			expect(result).toBeNull()
 		})
@@ -298,7 +518,7 @@ describe("Spaces Query Integration Tests", () => {
 
 	describe("Database Schema Validation", () => {
 		it("should validate required fields are present", async () => {
-			const result = await Effect.runPromise(provideDeps(getSpaces))
+			const result = await Effect.runPromise(provideDeps(getSpaces({})))
 
 			for (const space of result) {
 				// Required fields should never be null/undefined
@@ -313,7 +533,7 @@ describe("Spaces Query Integration Tests", () => {
 		})
 
 		it("should validate address field formats", async () => {
-			const result = await Effect.runPromise(provideDeps(getSpaces))
+			const result = await Effect.runPromise(provideDeps(getSpaces({})))
 
 			for (const space of result) {
 				// All addresses should be strings when present
@@ -333,7 +553,7 @@ describe("Spaces Query Integration Tests", () => {
 		})
 
 		it("should validate space type enum values", async () => {
-			const result = await Effect.runPromise(provideDeps(getSpaces))
+			const result = await Effect.runPromise(provideDeps(getSpaces({})))
 
 			const validTypes = [SpaceType.Personal, SpaceType.Public]
 			for (const space of result) {
@@ -344,7 +564,7 @@ describe("Spaces Query Integration Tests", () => {
 
 	describe("Performance", () => {
 		it("should handle multiple concurrent getSpaces calls", async () => {
-			const promises = Array.from({length: 10}, () => Effect.runPromise(provideDeps(getSpaces)))
+			const promises = Array.from({length: 10}, () => Effect.runPromise(provideDeps(getSpaces({}))))
 
 			const results = await Promise.all(promises)
 
@@ -352,6 +572,32 @@ describe("Spaces Query Integration Tests", () => {
 			for (let i = 1; i < results.length; i++) {
 				expect(results[i]).toEqual(results[0])
 			}
+		})
+
+		it("should handle multiple concurrent filtered getSpaces calls", async () => {
+			const promises = Array.from({length: 10}, () =>
+				Effect.runPromise(
+					provideDeps(
+						getSpaces({
+							filter: {
+								id: {
+									in: [PERSONAL_SPACE_ID, PUBLIC_SPACE_ID],
+								},
+							},
+						}),
+					),
+				),
+			)
+
+			const results = await Promise.all(promises)
+
+			// All results should be identical
+			for (let i = 1; i < results.length; i++) {
+				expect(results[i]).toEqual(results[0])
+			}
+
+			// Verify the filter worked correctly
+			expect(results[0]).toHaveLength(2)
 		})
 
 		it("should handle multiple concurrent getSpace calls", async () => {
