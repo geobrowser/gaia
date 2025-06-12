@@ -4,7 +4,6 @@ import type {
 	QueryEntityArgs,
 	QueryPropertiesArgs,
 	QuerySearchArgs,
-	QuerySpacesArgs,
 	QueryTypesArgs,
 } from "../../generated/graphql"
 import {Environment, make as makeEnvironment} from "../../services/environment"
@@ -84,8 +83,8 @@ export const properties = async (args: QueryPropertiesArgs) => {
 	return await Effect.runPromise(PropertyResolvers.getProperties(args).pipe(provideDeps))
 }
 
-export const spaces = async (args: QuerySpacesArgs) => {
-	return await Effect.runPromise(SpaceResolvers.getSpaces(args).pipe(provideDeps))
+export const spaces = async () => {
+	return await Effect.runPromise(SpaceResolvers.getSpaces.pipe(provideDeps))
 }
 
 export const space = async (id: string) => {

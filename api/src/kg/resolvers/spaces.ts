@@ -1,19 +1,26 @@
 import {SystemIds} from "@graphprotocol/grc-20"
 import {Effect} from "effect"
 import {type QuerySpacesArgs, SpaceType} from "~/src/generated/graphql"
-import {spaces} from "../../services/storage/schema" // Added relations import
 import {Storage} from "../../services/storage/storage"
 
-export const getSpaces = (args: QuerySpacesArgs) =>
-	Effect.gen(function* () {
+export const getSpaces = (args: QuerySpacesArgs) => {
+	const {filter, limit, offset} = args
+
+	return Effect.gen(function* () {
 		const db = yield* Storage
 
 		return yield* db.use(async (client) => {
-			const spacesResult = await client
-				.select()
-				.from(spaces)
-				.limit(args.limit ?? 100)
-				.offset(args.offset ?? 0)
+			const spacesResult = await client.query.spaces.findMany({
+				where: (spaces, {inArray}) => {
+					if (filter?.id) {
+						if (filter?.id.in && filter.id.in.length > 0) {
+							return inArray(spaces.id, filter.id.in)
+						}
+					}
+				},
+				limit: limit ?? 100,
+				offset: offset ?? 0,
+			})
 
 			return spacesResult.map((space) => ({
 				id: space.id,
@@ -26,6 +33,7 @@ export const getSpaces = (args: QuerySpacesArgs) =>
 			}))
 		})
 	})
+}
 
 export const getSpace = (id: string) =>
 	Effect.gen(function* () {

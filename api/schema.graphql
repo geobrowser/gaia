@@ -153,8 +153,7 @@ type Query {
     threshold: Float = 0.3
   ): [Entity]!
 
-  # space
-  spaces(limit: Int = 100, offset: Int = 0): [Space]!
+  spaces(filter: SpaceFilter, limit: Int = 100, offset: Int = 0): [Space]!
   space(id: String!): Space
 
   # relation
@@ -169,6 +168,10 @@ type Query {
   # edits
   # version?
   # versions?
+}
+
+input SpaceFilter {
+  id: IdFilter
 }
 
 input PropertyFilter {

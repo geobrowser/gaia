@@ -170,6 +170,7 @@ export type QuerySpaceArgs = {
 
 
 export type QuerySpacesArgs = {
+  filter?: InputMaybe<SpaceFilter>;
   limit?: InputMaybe<Scalars['Int']['input']>;
   offset?: InputMaybe<Scalars['Int']['input']>;
 };
@@ -219,6 +220,10 @@ export type Space = {
   personalAddress?: Maybe<Scalars['String']['output']>;
   spaceAddress: Scalars['String']['output'];
   type: SpaceType;
+};
+
+export type SpaceFilter = {
+  id?: InputMaybe<IdFilter>;
 };
 
 export enum SpaceType {
@@ -360,6 +365,7 @@ export type ResolversTypes = ResolversObject<{
   RelationFilter: RelationFilter;
   RenderableType: RenderableType;
   Space: ResolverTypeWrapper<Omit<Space, 'entity'> & { entity?: Maybe<ResolversTypes['Entity']> }>;
+  SpaceFilter: SpaceFilter;
   SpaceType: SpaceType;
   String: ResolverTypeWrapper<Scalars['String']['output']>;
   TextFilter: TextFilter;
@@ -387,6 +393,7 @@ export type ResolversParentTypes = ResolversObject<{
   Relation: Omit<Relation, 'from' | 'relationEntity' | 'to' | 'type'> & { from?: Maybe<ResolversParentTypes['Entity']>, relationEntity?: Maybe<ResolversParentTypes['Entity']>, to?: Maybe<ResolversParentTypes['Entity']>, type?: Maybe<ResolversParentTypes['Property']> };
   RelationFilter: RelationFilter;
   Space: Omit<Space, 'entity'> & { entity?: Maybe<ResolversParentTypes['Entity']> };
+  SpaceFilter: SpaceFilter;
   String: Scalars['String']['output'];
   TextFilter: TextFilter;
   Type: Omit<Type, 'entity' | 'properties'> & { entity?: Maybe<ResolversParentTypes['Entity']>, properties?: Maybe<Array<Maybe<ResolversParentTypes['Property']>>> };
