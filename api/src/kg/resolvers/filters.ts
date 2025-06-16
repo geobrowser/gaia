@@ -124,7 +124,7 @@ function buildValueWhere(filter: PropertyFilter, spaceId?: string | null) {
 	const conditions = [sql`values.property_id = ${filter.property}`]
 
 	// Add spaceId filtering if provided
-	if (spaceId) {
+	if (spaceId && spaceId.trim() !== "") {
 		conditions.push(sql`values.space_id = ${spaceId}`)
 	}
 
@@ -229,11 +229,11 @@ export function buildEntityWhere(filter: EntityFilter | null, spaceId?: string |
 	const clauses = []
 
 	// Add spaceId filtering if provided
-	if (spaceId) {
+	if (spaceId && spaceId.trim() !== "") {
 		clauses.push(
 			sql`(
 				EXISTS (
-					SELECT 1 FROM ${values} 
+					SELECT 1 FROM ${values}
 					WHERE values.entity_id = entities.id 
 					AND values.space_id = ${spaceId}
 				) OR EXISTS (

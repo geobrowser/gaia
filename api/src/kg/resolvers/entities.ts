@@ -107,7 +107,7 @@ export function getValues(id: string, spaceId?: string | null) {
 			const result = await client.query.values.findMany({
 				where: (values, {eq, and}) => {
 					const conditions = [eq(values.entityId, id)]
-					if (spaceId) {
+					if (spaceId && spaceId.trim() !== "") {
 						conditions.push(eq(values.spaceId, spaceId))
 					}
 					return and(...conditions)
@@ -127,7 +127,7 @@ export function getRelations(id: string, spaceId?: string | null) {
 			const result = await client.query.relations.findMany({
 				where: (relations, {eq, and}) => {
 					const conditions = [eq(relations.fromEntityId, id)]
-					if (spaceId) {
+					if (spaceId && spaceId.trim() !== "") {
 						conditions.push(eq(relations.spaceId, spaceId))
 					}
 					return and(...conditions)
