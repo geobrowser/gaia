@@ -14,7 +14,7 @@ export function getTypes(args: QueryTypesArgs) {
 		eq(relations.toEntityId, SystemIds.SCHEMA_TYPE),
 	]
 
-	if (spaceId && spaceId !== "") {
+	if (spaceId) {
 		where.push(eq(relations.spaceId, spaceId))
 	}
 
