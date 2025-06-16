@@ -24,16 +24,16 @@ async function setupTestDatabase() {
 
 		await pool.end()
 
-		// Push schema using drizzle-kit
-		console.log("📋 Pushing database schema...")
-		const result = await $`bunx drizzle-kit push --verbose`.env({
+		// Run migrations using drizzle-kit
+		console.log("📋 Running database migrations...")
+		const result = await $`bunx drizzle-kit migrate --verbose`.env({
 			DATABASE_URL: databaseUrl,
 		})
 
 		if (result.exitCode === 0) {
-			console.log("✅ Database schema pushed successfully")
+			console.log("✅ Database migrations applied successfully")
 		} else {
-			console.error("❌ Failed to push database schema")
+			console.error("❌ Failed to apply database migrations")
 			console.error(result.stderr.toString())
 			process.exit(1)
 		}
