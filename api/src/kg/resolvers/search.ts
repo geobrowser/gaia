@@ -1,5 +1,5 @@
 import {SystemIds} from "@graphprotocol/grc-20"
-import {and, desc, eq, inArray, isNotNull, not, or, sql, type SQL} from "drizzle-orm"
+import {type SQL, and, desc, eq, inArray, isNotNull, not, or, sql} from "drizzle-orm"
 import {Effect} from "effect"
 import type {SearchFilter} from "../../generated/graphql"
 import {entities, relations, values} from "../../services/storage/schema"
@@ -51,12 +51,8 @@ function buildTypeFilterConditions(filter: SearchFilter): SQL[] {
 // Check if filter needs type joining
 function needsTypeFilter(filter?: SearchFilter | null): boolean {
 	if (!filter) return false
-	
-	return !!(
-		(filter.types?.in && filter.types.in.length > 0) ||
-		filter.NOT ||
-		(filter.OR && filter.OR.length > 0)
-	)
+
+	return !!((filter.types?.in && filter.types.in.length > 0) || filter.NOT || (filter.OR && filter.OR.length > 0))
 }
 
 export const search = (args: SearchArgs) =>
