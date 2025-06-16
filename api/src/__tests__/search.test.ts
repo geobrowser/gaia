@@ -13,7 +13,7 @@ const StorageLayer = Layer.effect(Storage, makeStorage).pipe(Layer.provide(Envir
 const layers = Layer.mergeAll(EnvironmentLayer, StorageLayer)
 const provideDeps = Effect.provide(layers)
 
-describe.skip("Search Integration Tests", () => {
+describe("Search Integration Tests", () => {
 	let testEntities: DbEntity[]
 	let extensionAvailable = true
 
