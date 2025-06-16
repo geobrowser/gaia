@@ -194,36 +194,9 @@ describe("Search Integration Tests", () => {
 					"550e8400-e29b-41d4-a716-446655440010",
 					"550e8400-e29b-41d4-a716-446655440011",
 				]
-
-				const testValueIds = [
-					"test-search-value-1",
-					"test-search-value-2",
-					"test-search-value-3",
-					"test-search-value-4",
-					"test-search-value-5",
-					"test-search-value-6",
-					"test-search-value-7",
-					"test-search-value-8",
-				]
-
-				const testRelationIds = [
-					"550e8400-e29b-41d4-a716-446655440020",
-					"550e8400-e29b-41d4-a716-446655440021",
-					"550e8400-e29b-41d4-a716-446655440022",
-				]
-
-				// Clean up relations first (foreign key constraints)
-				for (const relationId of testRelationIds) {
-					await client.delete(relations).where(sql`id = ${relationId}`).execute()
-				}
-
-				// Clean up values
-				for (const valueId of testValueIds) {
-					await client.delete(values).where(sql`id = ${valueId}`).execute()
-				}
-
-				// Clean up entities
 				for (const entityId of testEntityIds) {
+					await client.delete(relations).where(sql`entity_id = ${entityId}`).execute()
+					await client.delete(values).where(sql`entity_id = ${entityId}`).execute()
 					await client.delete(entities).where(sql`id = ${entityId}`).execute()
 				}
 			})
@@ -431,7 +404,6 @@ describe("Search Integration Tests", () => {
 					query: "artificial",
 					limit: 10,
 					offset: 0,
-					threshold: 0.2,
 				}).pipe(provideDeps),
 			)
 
@@ -611,7 +583,6 @@ describe("Search Integration Tests", () => {
 					},
 					limit: 10,
 					offset: 0,
-					threshold: 0.2,
 				}).pipe(provideDeps),
 			)
 
@@ -636,7 +607,6 @@ describe("Search Integration Tests", () => {
 					},
 					limit: 10,
 					offset: 0,
-					threshold: 0.2,
 				}).pipe(provideDeps),
 			)
 
@@ -850,12 +820,9 @@ describe("Search Integration Tests", () => {
 				return
 			}
 
-			// Use lower threshold to account for potential CI environment differences
-			// where similarity calculations might vary slightly
 			const lowerResult = await Effect.runPromise(
 				SearchResolvers.search({
 					query: "artificial",
-					threshold: 0.2,
 					limit: 10,
 					offset: 0,
 				}).pipe(provideDeps),
@@ -864,7 +831,6 @@ describe("Search Integration Tests", () => {
 			const upperResult = await Effect.runPromise(
 				SearchResolvers.search({
 					query: "ARTIFICIAL",
-					threshold: 0.2,
 					limit: 10,
 					offset: 0,
 				}).pipe(provideDeps),
