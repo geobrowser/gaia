@@ -172,6 +172,8 @@ type Query {
 }
 
 input SearchFilter {
+  OR: [SearchFilter!]
+  NOT: SearchFilter
   types: IdFilter
 }
 

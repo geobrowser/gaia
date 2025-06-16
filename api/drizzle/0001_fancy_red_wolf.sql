@@ -1,1 +1,0 @@
-ALTER TABLE "triples" ALTER COLUMN "value_type" SET NOT NULL;

@@ -154,8 +154,7 @@ function waitForSpaceToBeIndexed(daoAddress: string) {
 		)
 
 		if (!maybeSpace) {
-			yield* Effect.fail(new WaitForSpaceToBeIndexedError("Could not find deployed space"))
-			return null
+			return yield* Effect.fail(new WaitForSpaceToBeIndexedError("Could not find deployed space"))
 		}
 
 		return maybeSpace.id

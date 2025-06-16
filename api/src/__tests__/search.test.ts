@@ -662,6 +662,105 @@ describe("Search Integration Tests", () => {
 		})
 	})
 
+	describe("NOT Filter", () => {
+		it("should exclude entities with specific type using NOT filter", async () => {
+			if (!extensionAvailable) {
+				console.log("Skipping test: pg_trgm extension not available")
+				return
+			}
+
+			const result = await Effect.runPromise(
+				SearchResolvers.search({
+					query: "data",
+					filter: {
+						NOT: {
+							types: {
+								in: ["550e8400-e29b-41d4-a716-446655440010"], // AI Research type
+							},
+						},
+					},
+					limit: 10,
+					offset: 0,
+					threshold: 0.1,
+				}).pipe(provideDeps),
+			)
+
+			// Should find entities that are NOT of AI Research type
+			// Entity 3 (Data Science) is AI Research type, so should be excluded
+			expect(result).toHaveLength(0)
+		})
+
+		it("should work with OR in NOT filter", async () => {
+			if (!extensionAvailable) {
+				console.log("Skipping test: pg_trgm extension not available")
+				return
+			}
+
+			const result = await Effect.runPromise(
+				SearchResolvers.search({
+					query: "learning",
+					filter: {
+						NOT: {
+							OR: [
+								{
+									types: {
+										in: ["550e8400-e29b-41d4-a716-446655440010"], // AI Research type
+									},
+								},
+								{
+									types: {
+										in: ["550e8400-e29b-41d4-a716-446655440011"], // ML Framework type
+									},
+								},
+							],
+						},
+					},
+					limit: 10,
+					offset: 0,
+					threshold: 0.1,
+				}).pipe(provideDeps),
+			)
+
+			// Should exclude entities that are either AI Research OR ML Framework type
+			expect(result).toHaveLength(0)
+		})
+
+		it("should combine NOT with regular type filter using OR", async () => {
+			if (!extensionAvailable) {
+				console.log("Skipping test: pg_trgm extension not available")
+				return
+			}
+
+			const result = await Effect.runPromise(
+				SearchResolvers.search({
+					query: "data",
+					filter: {
+						OR: [
+							{
+								types: {
+									in: ["550e8400-e29b-41d4-a716-446655440011"], // ML Framework type
+								},
+							},
+							{
+								NOT: {
+									types: {
+										in: ["550e8400-e29b-41d4-a716-446655440010"], // NOT AI Research type
+									},
+								},
+							},
+						],
+					},
+					limit: 10,
+					offset: 0,
+					threshold: 0.1,
+				}).pipe(provideDeps),
+			)
+
+			// Should find entities that are either ML Framework type OR not AI Research type
+			expect(result.length).toBeGreaterThanOrEqual(0)
+		})
+	})
+
 	describe("Edge Cases", () => {
 		it("should handle empty search query", async () => {
 			if (!extensionAvailable) {

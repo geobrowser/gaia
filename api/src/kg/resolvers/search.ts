@@ -1,5 +1,5 @@
 import {SystemIds} from "@graphprotocol/grc-20"
-import {and, desc, eq, inArray, isNotNull, or, sql} from "drizzle-orm"
+import {and, desc, eq, inArray, isNotNull, not, or, sql, type SQL} from "drizzle-orm"
 import {Effect} from "effect"
 import type {SearchFilter} from "../../generated/graphql"
 import {entities, relations, values} from "../../services/storage/schema"
@@ -12,6 +12,51 @@ interface SearchArgs {
 	limit?: number | null
 	offset?: number | null
 	threshold?: number | null
+}
+
+// Helper function to recursively build type filter conditions
+function buildTypeFilterConditions(filter: SearchFilter): SQL[] {
+	const conditions: SQL[] = []
+
+	// Handle types filter
+	if (filter.types?.in && filter.types.in.length > 0) {
+		conditions.push(inArray(relations.toEntityId, filter.types.in))
+	}
+
+	// Handle OR conditions
+	if (filter.OR && filter.OR.length > 0) {
+		const orConditions: SQL[] = []
+		for (const orFilter of filter.OR) {
+			const subConditions = buildTypeFilterConditions(orFilter)
+			orConditions.push(...subConditions)
+		}
+		if (orConditions.length > 0) {
+			conditions.push(or(...orConditions))
+		}
+	}
+
+	// Handle NOT condition
+	if (filter.NOT) {
+		const notConditions = buildTypeFilterConditions(filter.NOT)
+		if (notConditions.length === 1) {
+			conditions.push(not(notConditions[0] as SQL))
+		} else if (notConditions.length > 1) {
+			conditions.push(not(and(...notConditions)))
+		}
+	}
+
+	return conditions
+}
+
+// Check if filter needs type joining
+function needsTypeFilter(filter?: SearchFilter | null): boolean {
+	if (!filter) return false
+	
+	return !!(
+		(filter.types?.in && filter.types.in.length > 0) ||
+		filter.NOT ||
+		(filter.OR && filter.OR.length > 0)
+	)
 }
 
 export const search = (args: SearchArgs) =>
@@ -43,18 +88,17 @@ export const search = (args: SearchArgs) =>
 			].filter(Boolean)
 
 			// Build query with or without type filtering
-			const searchQuery =
-				filter?.types?.in && filter.types.in.length > 0
-					? baseQuery
-							.innerJoin(
-								relations,
-								and(
-									eq(relations.fromEntityId, entities.id),
-									eq(relations.typeId, SystemIds.TYPES_PROPERTY),
-								),
-							)
-							.where(and(...whereConditions, inArray(relations.toEntityId, filter.types.in)))
-					: baseQuery.where(and(...whereConditions))
+			const searchQuery = needsTypeFilter(filter)
+				? baseQuery
+						.innerJoin(
+							relations,
+							and(
+								eq(relations.fromEntityId, entities.id),
+								eq(relations.typeId, SystemIds.TYPES_PROPERTY),
+							),
+						)
+						.where(and(...whereConditions, ...buildTypeFilterConditions(filter as SearchFilter)))
+				: baseQuery.where(and(...whereConditions))
 
 			const results = await searchQuery
 				.groupBy(
@@ -113,18 +157,17 @@ export const searchNameDescription = (args: SearchArgs) =>
 			].filter(Boolean)
 
 			// Build query with or without type filtering
-			const searchQuery =
-				filter?.types?.in && filter.types.in.length > 0
-					? baseQuery
-							.innerJoin(
-								relations,
-								and(
-									eq(relations.fromEntityId, entities.id),
-									eq(relations.typeId, SystemIds.TYPES_PROPERTY),
-								),
-							)
-							.where(and(...whereConditions, inArray(relations.toEntityId, filter.types.in)))
-					: baseQuery.where(and(...whereConditions))
+			const searchQuery = needsTypeFilter(filter)
+				? baseQuery
+						.innerJoin(
+							relations,
+							and(
+								eq(relations.fromEntityId, entities.id),
+								eq(relations.typeId, SystemIds.TYPES_PROPERTY),
+							),
+						)
+						.where(and(...whereConditions, ...buildTypeFilterConditions(filter as SearchFilter)))
+				: baseQuery.where(and(...whereConditions))
 
 			const results = await searchQuery
 				.groupBy(
