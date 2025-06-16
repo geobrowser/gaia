@@ -53,7 +53,7 @@ interface DeployArgs {
 export function deploySpace(args: DeployArgs) {
 	return Effect.gen(function* () {
 		const config = yield* Environment
-		yield* Effect.logInfo("[SPACE][deploy] Deploying space")
+		yield* Effect.logInfo(`[SPACE][deploy] Deploying space for ${config.chainId}`)
 		const initialEditorAddress = getChecksumAddress(args.initialEditorAddress)
 
 		const entityOp = Graph.createEntity({
@@ -134,7 +134,7 @@ export function deploySpace(args: DeployArgs) {
 
 		yield* Effect.logInfo("[SPACE][deploy] Space indexed successfully").pipe(
 			Effect.annotateLogs({
-				dao: dao.dao,
+				dao: getChecksumAddress(dao.dao),
 				pluginAddresses: dao.pluginAddresses,
 				spaceId: waitResult,
 			}),
@@ -147,18 +147,23 @@ export function deploySpace(args: DeployArgs) {
 function waitForSpaceToBeIndexed(daoAddress: string) {
 	const checkForSpace = Effect.gen(function* () {
 		const db = yield* Storage
-		const maybeSpace = yield* db.use((client) =>
-			client.query.spaces.findFirst({
-				where: (spaces, {eq}) => eq(spaces.daoAddress, daoAddress),
-			}),
-		)
+		const maybeSpace = yield* db.use(async (client) => {
+			const result = await client.query.spaces.findFirst({
+				where: (spaces, {eq}) => eq(spaces.daoAddress, getChecksumAddress(daoAddress)),
+			})
+
+			if (!result) {
+				return null
+			}
+
+			return result.id
+		})
 
 		if (!maybeSpace) {
-			yield* Effect.fail(new WaitForSpaceToBeIndexedError("Could not find deployed space"))
-			return null
+			return yield* Effect.fail(new WaitForSpaceToBeIndexedError("Could not find deployed space"))
 		}
 
-		return maybeSpace.id
+		return maybeSpace
 	})
 
 	return Effect.retry(
