@@ -144,7 +144,7 @@ describe("Search Integration Tests", () => {
 				propertyId: SystemIds.NAME_PROPERTY,
 				entityId: "550e8400-e29b-41d4-a716-446655440011",
 				spaceId: "550e8400-e29b-41d4-a716-446655440100",
-				value: "ML Framework Type",
+				value: "ML Algorithm Type",
 			},
 		]
 
