@@ -22,7 +22,7 @@ import {Storage} from "../services/storage/storage"
 import {abi as DaoFactoryAbi} from "./abi"
 import {getPublicClient, getSigner, getWalletClient} from "./client"
 
-const contracts = EnvironmentLive.chainId === "19411" ? TESTNET : MAINNET
+const contracts = EnvironmentLive.chainId === "19411" ? MAINNET : TESTNET
 
 const getDeployParams = () => {
 	const daoFactory = contracts.DAO_FACTORY_ADDRESS

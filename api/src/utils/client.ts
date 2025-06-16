@@ -10,14 +10,14 @@ const geoAccount = privateKeyToAccount(process.env.DEPLOYER_PK as `0x${string}`)
 export const getWalletClient = () => {
 	return createWalletClient({
 		account: geoAccount,
-		chain: EnvironmentLive.chainId === "19411" ? TESTNET : GEOGENESIS,
+		chain: EnvironmentLive.chainId === "19411" ? GEOGENESIS : TESTNET,
 		transport: http(EnvironmentLive.rpcEndpoint, {batch: true}),
 	})
 }
 
 export const getPublicClient = () => {
 	return createPublicClient({
-		chain: GEOGENESIS,
+		chain: EnvironmentLive.chainId === "19411" ? GEOGENESIS : TESTNET,
 		transport: http(EnvironmentLive.rpcEndpoint, {batch: true}),
 	})
 }

@@ -233,12 +233,12 @@ export function buildEntityWhere(filter: EntityFilter | null, spaceId?: string |
 		clauses.push(
 			sql`(
 				EXISTS (
-					SELECT 1 FROM ${values} 
-					WHERE values.entity_id = entities.id 
+					SELECT 1 FROM ${values}
+					WHERE values.entity_id = entities.id
 					AND values.space_id = ${spaceId}
 				) OR EXISTS (
-					SELECT 1 FROM relations 
-					WHERE relations.from_entity_id = entities.id 
+					SELECT 1 FROM relations
+					WHERE relations.from_entity_id = entities.id
 					AND relations.space_id = ${spaceId}
 				)
 			)`,
