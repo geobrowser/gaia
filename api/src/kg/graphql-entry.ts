@@ -9,6 +9,7 @@ import type {
 	QuerySearchArgs,
 	QuerySpaceArgs,
 	QuerySpacesArgs,
+	SearchFilter,
 } from "../generated/graphql"
 import * as Resolvers from "./resolvers/root"
 

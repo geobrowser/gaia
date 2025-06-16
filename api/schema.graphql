@@ -148,6 +148,7 @@ type Query {
   search(
     query: String!
     spaceId: String
+    filter: SearchFilter
     limit: Int = 10
     offset: Int = 0
     threshold: Float = 0.3
@@ -168,6 +169,10 @@ type Query {
   # edits
   # version?
   # versions?
+}
+
+input SearchFilter {
+  types: IdFilter
 }
 
 input SpaceFilter {

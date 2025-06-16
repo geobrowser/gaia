@@ -67,6 +67,21 @@ describe("Search Integration Tests", () => {
 				updatedAt: "2024-01-01T00:00:00Z",
 				updatedAtBlock: "1",
 			},
+			// Type entities for testing type filtering
+			{
+				id: "550e8400-e29b-41d4-a716-446655440010",
+				createdAt: "2024-01-01T00:00:00Z",
+				createdAtBlock: "1",
+				updatedAt: "2024-01-01T00:00:00Z",
+				updatedAtBlock: "1",
+			},
+			{
+				id: "550e8400-e29b-41d4-a716-446655440011",
+				createdAt: "2024-01-01T00:00:00Z",
+				createdAtBlock: "1",
+				updatedAt: "2024-01-01T00:00:00Z",
+				updatedAtBlock: "1",
+			},
 		]
 
 		// Create test values with searchable content
@@ -76,14 +91,14 @@ describe("Search Integration Tests", () => {
 				id: "test-search-value-1",
 				propertyId: SystemIds.NAME_PROPERTY,
 				entityId: "550e8400-e29b-41d4-a716-446655440001",
-				spaceId: "space1",
+				spaceId: "550e8400-e29b-41d4-a716-446655440100",
 				value: "Artificial Intelligence Research",
 			},
 			{
 				id: "test-search-value-2",
 				propertyId: SystemIds.DESCRIPTION_PROPERTY,
 				entityId: "550e8400-e29b-41d4-a716-446655440001",
-				spaceId: "space1",
+				spaceId: "550e8400-e29b-41d4-a716-446655440100",
 				value: "Advanced AI systems and machine learning algorithms",
 			},
 			// Entity 2 - machine learning content in space2
@@ -91,14 +106,14 @@ describe("Search Integration Tests", () => {
 				id: "test-search-value-3",
 				propertyId: SystemIds.NAME_PROPERTY,
 				entityId: "550e8400-e29b-41d4-a716-446655440002",
-				spaceId: "space2",
+				spaceId: "550e8400-e29b-41d4-a716-446655440101",
 				value: "Machine Learning Framework",
 			},
 			{
 				id: "test-search-value-4",
 				propertyId: SystemIds.DESCRIPTION_PROPERTY,
 				entityId: "550e8400-e29b-41d4-a716-446655440002",
-				spaceId: "space2",
+				spaceId: "550e8400-e29b-41d4-a716-446655440101",
 				value: "Deep learning neural networks for classification",
 			},
 			// Entity 3 - data science content in space1
@@ -106,15 +121,64 @@ describe("Search Integration Tests", () => {
 				id: "test-search-value-5",
 				propertyId: SystemIds.NAME_PROPERTY,
 				entityId: "550e8400-e29b-41d4-a716-446655440003",
-				spaceId: "space1",
+				spaceId: "550e8400-e29b-41d4-a716-446655440100",
 				value: "Data Science Platform",
 			},
 			{
 				id: "test-search-value-6",
 				propertyId: SystemIds.DESCRIPTION_PROPERTY,
 				entityId: "550e8400-e29b-41d4-a716-446655440003",
-				spaceId: "space1",
+				spaceId: "550e8400-e29b-41d4-a716-446655440100",
 				value: "Statistical analysis and data visualization tools",
+			},
+			// Type entities values
+			{
+				id: "test-search-value-7",
+				propertyId: SystemIds.NAME_PROPERTY,
+				entityId: "550e8400-e29b-41d4-a716-446655440010",
+				spaceId: "550e8400-e29b-41d4-a716-446655440100",
+				value: "AI Research Type",
+			},
+			{
+				id: "test-search-value-8",
+				propertyId: SystemIds.NAME_PROPERTY,
+				entityId: "550e8400-e29b-41d4-a716-446655440011",
+				spaceId: "550e8400-e29b-41d4-a716-446655440100",
+				value: "ML Framework Type",
+			},
+		]
+
+		// Create test relations to connect entities to their types
+		const testRelations = [
+			// Entity 1 is of type AI Research
+			{
+				id: "550e8400-e29b-41d4-a716-446655440020",
+				entityId: "550e8400-e29b-41d4-a716-446655440001",
+				typeId: SystemIds.TYPES_PROPERTY,
+				fromEntityId: "550e8400-e29b-41d4-a716-446655440001",
+				toEntityId: "550e8400-e29b-41d4-a716-446655440010",
+				spaceId: "550e8400-e29b-41d4-a716-446655440100",
+				verified: true,
+			},
+			// Entity 2 is of type ML Framework
+			{
+				id: "550e8400-e29b-41d4-a716-446655440021",
+				entityId: "550e8400-e29b-41d4-a716-446655440002",
+				typeId: SystemIds.TYPES_PROPERTY,
+				fromEntityId: "550e8400-e29b-41d4-a716-446655440002",
+				toEntityId: "550e8400-e29b-41d4-a716-446655440011",
+				spaceId: "550e8400-e29b-41d4-a716-446655440101",
+				verified: true,
+			},
+			// Entity 3 is also of type AI Research
+			{
+				id: "550e8400-e29b-41d4-a716-446655440022",
+				entityId: "550e8400-e29b-41d4-a716-446655440003",
+				typeId: SystemIds.TYPES_PROPERTY,
+				fromEntityId: "550e8400-e29b-41d4-a716-446655440003",
+				toEntityId: "550e8400-e29b-41d4-a716-446655440010",
+				spaceId: "550e8400-e29b-41d4-a716-446655440100",
+				verified: true,
 			},
 		]
 
@@ -127,6 +191,8 @@ describe("Search Integration Tests", () => {
 					"550e8400-e29b-41d4-a716-446655440001",
 					"550e8400-e29b-41d4-a716-446655440002",
 					"550e8400-e29b-41d4-a716-446655440003",
+					"550e8400-e29b-41d4-a716-446655440010",
+					"550e8400-e29b-41d4-a716-446655440011",
 				]
 				for (const entityId of testEntityIds) {
 					await client.delete(relations).where(sql`entity_id = ${entityId}`).execute()
@@ -143,6 +209,11 @@ describe("Search Integration Tests", () => {
 			// Insert test values using Drizzle
 			yield* db.use(async (client) => {
 				await client.insert(values).values(testValues).execute()
+			})
+
+			// Insert test relations using Drizzle
+			yield* db.use(async (client) => {
+				await client.insert(relations).values(testRelations).execute()
 			})
 		})
 
@@ -253,7 +324,7 @@ describe("Search Integration Tests", () => {
 			const result = await Effect.runPromise(
 				SearchResolvers.search({
 					query: "learning",
-					spaceId: "space1",
+					spaceId: "550e8400-e29b-41d4-a716-446655440100",
 					limit: 10,
 					offset: 0,
 					threshold: 0.1,
@@ -273,7 +344,7 @@ describe("Search Integration Tests", () => {
 			const result = await Effect.runPromise(
 				SearchResolvers.search({
 					query: "learning",
-					spaceId: "space2",
+					spaceId: "550e8400-e29b-41d4-a716-446655440101",
 					limit: 10,
 					offset: 0,
 				}).pipe(provideDeps),
@@ -349,7 +420,7 @@ describe("Search Integration Tests", () => {
 			const result = await Effect.runPromise(
 				SearchResolvers.searchNameDescription({
 					query: "framework",
-					spaceId: "space2",
+					spaceId: "550e8400-e29b-41d4-a716-446655440101",
 					limit: 10,
 					offset: 0,
 				}).pipe(provideDeps),
@@ -368,7 +439,7 @@ describe("Search Integration Tests", () => {
 			const result = await Effect.runPromise(
 				SearchResolvers.searchNameDescription({
 					query: "framework",
-					spaceId: "space1",
+					spaceId: "550e8400-e29b-41d4-a716-446655440100",
 					limit: 10,
 					offset: 0,
 				}).pipe(provideDeps),
@@ -423,6 +494,171 @@ describe("Search Integration Tests", () => {
 
 			expect(allResults).toHaveLength(1)
 			expect(offsetResults).toHaveLength(0)
+		})
+	})
+
+	describe("Type Filtering", () => {
+		it("should filter entities by single type", async () => {
+			if (!extensionAvailable) {
+				console.log("Skipping test: pg_trgm extension not available")
+				return
+			}
+
+			const result = await Effect.runPromise(
+				SearchResolvers.search({
+					query: "artificial",
+					filter: {
+						types: {
+							in: ["550e8400-e29b-41d4-a716-446655440010"],
+						},
+					},
+					limit: 10,
+					offset: 0,
+				}).pipe(provideDeps),
+			)
+
+			expect(result).toHaveLength(1)
+			expect(result[0]?.id).toBe("550e8400-e29b-41d4-a716-446655440001")
+		})
+
+		it("should filter entities by multiple types", async () => {
+			if (!extensionAvailable) {
+				console.log("Skipping test: pg_trgm extension not available")
+				return
+			}
+
+			const result = await Effect.runPromise(
+				SearchResolvers.search({
+					query: "data",
+					filter: {
+						types: {
+							in: ["550e8400-e29b-41d4-a716-446655440010", "550e8400-e29b-41d4-a716-446655440011"],
+						},
+					},
+					limit: 10,
+					offset: 0,
+					threshold: 0.1,
+				}).pipe(provideDeps),
+			)
+
+			expect(result).toHaveLength(1)
+			expect(result[0]?.id).toBe("550e8400-e29b-41d4-a716-446655440003")
+		})
+
+		it("should return empty results when filtering by non-matching type", async () => {
+			if (!extensionAvailable) {
+				console.log("Skipping test: pg_trgm extension not available")
+				return
+			}
+
+			const result = await Effect.runPromise(
+				SearchResolvers.search({
+					query: "artificial",
+					filter: {
+						types: {
+							in: ["550e8400-e29b-41d4-a716-446655440011"],
+						},
+					},
+					limit: 10,
+					offset: 0,
+				}).pipe(provideDeps),
+			)
+
+			expect(result).toHaveLength(0)
+		})
+
+		it("should work with searchNameDescription and type filtering", async () => {
+			if (!extensionAvailable) {
+				console.log("Skipping test: pg_trgm extension not available")
+				return
+			}
+
+			const result = await Effect.runPromise(
+				SearchResolvers.searchNameDescription({
+					query: "framework",
+					filter: {
+						types: {
+							in: ["550e8400-e29b-41d4-a716-446655440011"],
+						},
+					},
+					limit: 10,
+					offset: 0,
+				}).pipe(provideDeps),
+			)
+
+			expect(result).toHaveLength(1)
+			expect(result[0]?.id).toBe("550e8400-e29b-41d4-a716-446655440002")
+		})
+
+		it("should combine type filtering with space filtering", async () => {
+			if (!extensionAvailable) {
+				console.log("Skipping test: pg_trgm extension not available")
+				return
+			}
+
+			const result = await Effect.runPromise(
+				SearchResolvers.search({
+					query: "artificial",
+					spaceId: "550e8400-e29b-41d4-a716-446655440100",
+					filter: {
+						types: {
+							in: ["550e8400-e29b-41d4-a716-446655440010"],
+						},
+					},
+					limit: 10,
+					offset: 0,
+				}).pipe(provideDeps),
+			)
+
+			expect(result).toHaveLength(1)
+			expect(result[0]?.id).toBe("550e8400-e29b-41d4-a716-446655440001")
+		})
+
+		it("should return empty results when type filter conflicts with space filter", async () => {
+			if (!extensionAvailable) {
+				console.log("Skipping test: pg_trgm extension not available")
+				return
+			}
+
+			const result = await Effect.runPromise(
+				SearchResolvers.search({
+					query: "framework",
+					spaceId: "550e8400-e29b-41d4-a716-446655440100", // Entity 2 is in space2
+					filter: {
+						types: {
+							in: ["550e8400-e29b-41d4-a716-446655440011"],
+						},
+					},
+					limit: 10,
+					offset: 0,
+				}).pipe(provideDeps),
+			)
+
+			expect(result).toHaveLength(0)
+		})
+
+		it("should handle empty type filter array", async () => {
+			if (!extensionAvailable) {
+				console.log("Skipping test: pg_trgm extension not available")
+				return
+			}
+
+			const result = await Effect.runPromise(
+				SearchResolvers.search({
+					query: "artificial",
+					filter: {
+						types: {
+							in: [],
+						},
+					},
+					limit: 10,
+					offset: 0,
+				}).pipe(provideDeps),
+			)
+
+			// Should work like no filter when empty array
+			expect(result).toHaveLength(1)
+			expect(result[0]?.id).toBe("550e8400-e29b-41d4-a716-446655440001")
 		})
 	})
 
