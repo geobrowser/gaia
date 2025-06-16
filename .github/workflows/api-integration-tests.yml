@@ -18,7 +18,7 @@ jobs:
 
     services:
       postgres:
-        image: postgres:16
+        image: postgres:17
         env:
           POSTGRES_USER: test_user
           POSTGRES_PASSWORD: test_password
@@ -77,18 +77,46 @@ jobs:
 
       - name: Create pg_trgm extension
         run: |
-          psql -h localhost -p 5432 -U test_user -d gaia_test -c "CREATE EXTENSION IF NOT EXISTS pg_trgm;"
+          echo "Checking available extensions..."
+          psql -h localhost -p 5432 -U test_user -d gaia_test -c "SELECT name FROM pg_available_extensions WHERE name = 'pg_trgm';"
+          
+          echo "Creating pg_trgm extension..."
+          psql -h localhost -p 5432 -U test_user -d gaia_test -c "CREATE EXTENSION IF NOT EXISTS pg_trgm;" -v ON_ERROR_STOP=1
+          
+          echo "Verifying extension was created..."
+          psql -h localhost -p 5432 -U test_user -d gaia_test -c "SELECT extname FROM pg_extension WHERE extname = 'pg_trgm';"
+          
+          echo "Testing similarity function..."
+          psql -h localhost -p 5432 -U test_user -d gaia_test -c "SELECT similarity('test', 'test');" || echo "Similarity function test failed"
         env:
           PGPASSWORD: test_password
 
       - name: Setup database schema
         run: bun run db:setup
 
+      - name: Verify database schema
+        run: |
+          echo "Verifying database tables exist..."
+          psql -h localhost -p 5432 -U test_user -d gaia_test -c "\dt" || echo "Failed to list tables"
+          
+          echo "Checking entities table..."
+          psql -h localhost -p 5432 -U test_user -d gaia_test -c "SELECT COUNT(*) FROM entities;" || echo "Entities table not accessible"
+          
+          echo "Checking values table..."
+          psql -h localhost -p 5432 -U test_user -d gaia_test -c "SELECT COUNT(*) FROM values;" || echo "Values table not accessible"
+          
+          echo "Checking relations table..."
+          psql -h localhost -p 5432 -U test_user -d gaia_test -c "SELECT COUNT(*) FROM relations;" || echo "Relations table not accessible"
+        env:
+          PGPASSWORD: test_password
+
       - name: Run linting
         run: bunx @biomejs/biome check src/
 
       - name: Run integration tests
-        run: bun run test:ci
+        run: |
+          echo "Running integration tests with verbose output..."
+          bun run test:ci --reporter=verbose
 
       - name: Upload test results
         uses: actions/upload-artifact@v4
