@@ -1,1 +1,0 @@
-ALTER TABLE "relations" ALTER COLUMN "to_space_id" DROP NOT NULL;
