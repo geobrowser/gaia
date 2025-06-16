@@ -1,15 +1,15 @@
-use indexer_utils::{id::derive_space_id, network_ids::GEO};
+use indexer_utils::{checksum_address, id::derive_space_id, network_ids::GEO};
 use uuid::Uuid;
 
 use crate::CreatedSpace;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum SpaceType {
     Personal,
     Public,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct SpaceItem {
     pub id: Uuid,
     pub space_type: SpaceType,
@@ -29,26 +29,32 @@ impl SpacesModel {
         for space in spaces {
             let space_item = match space {
                 CreatedSpace::Personal(personal) => {
-                    let space_id = derive_space_id(GEO, &personal.dao_address);
+                    let space_id =
+                        derive_space_id(GEO, &checksum_address(personal.dao_address.clone()));
+
                     SpaceItem {
                         id: space_id,
                         space_type: SpaceType::Personal,
-                        dao_address: personal.dao_address.clone(),
-                        space_address: personal.space_address.clone(),
+                        dao_address: checksum_address(personal.dao_address.clone()),
+                        space_address: checksum_address(personal.space_address.clone()),
                         voting_address: None,
                         membership_address: None,
-                        personal_address: Some(personal.personal_plugin.clone()),
+                        personal_address: Some(checksum_address(personal.personal_plugin.clone())),
                     }
                 }
                 CreatedSpace::Public(public) => {
-                    let space_id = derive_space_id(GEO, &public.dao_address);
+                    let space_id =
+                        derive_space_id(GEO, &checksum_address(public.dao_address.clone()));
+
                     SpaceItem {
                         id: space_id,
                         space_type: SpaceType::Public,
-                        dao_address: public.dao_address.clone(),
-                        space_address: public.space_address.clone(),
-                        voting_address: Some(public.governance_plugin.clone()),
-                        membership_address: Some(public.membership_plugin.clone()),
+                        dao_address: checksum_address(public.dao_address.clone()),
+                        space_address: checksum_address(public.space_address.clone()),
+                        voting_address: Some(checksum_address(public.governance_plugin.clone())),
+                        membership_address: Some(checksum_address(
+                            public.membership_plugin.clone(),
+                        )),
                         personal_address: None,
                     }
                 }
