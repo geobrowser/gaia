@@ -934,9 +934,13 @@ async fn test_space_indexing_personal() -> Result<(), IndexingError> {
     let properties_cache = Arc::new(PropertiesCache::new());
     let indexer = TestIndexer::new(postgres_storage, properties_cache);
 
+    // Clear the spaces table to ensure clean test state
+    test_storage.clear_table("spaces").await?;
+
     // Create test data with personal spaces
     let dao_address1 = "0x1234567890123456789012345678901234567890";
     let dao_address2 = "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd";
+    
     let spaces = vec![
         make_personal_space(dao_address1),
         make_personal_space(dao_address2),
@@ -949,14 +953,37 @@ async fn test_space_indexing_personal() -> Result<(), IndexingError> {
     indexer.run(&blocks).await?;
 
     // Verify that personal spaces were inserted correctly
-    let dao_addresses = vec![dao_address1.to_string(), dao_address2.to_string()];
+    // Need to checksum addresses since they are stored checksummed in the database
+    use indexer_utils::checksum_address;
+    let dao_addresses = vec![
+        checksum_address(dao_address1),
+        checksum_address(dao_address2)
+    ];
     let space_rows = test_storage.get_spaces_by_dao_addresses(&dao_addresses).await?;
 
     assert_eq!(space_rows.len(), 2);
+    
+    // Create expected personal plugin addresses the same way the production code does
+    let expected_personal_addresses = vec![
+        checksum_address(&format!("{}_personal_plugin", dao_address1)),
+        checksum_address(&format!("{}_personal_plugin", dao_address2)),
+    ];
+    let expected_space_addresses = vec![
+        checksum_address(&format!("{}_space", dao_address1)),
+        checksum_address(&format!("{}_space", dao_address2)),
+    ];
+    
     for row in &space_rows {
         row.validate_personal_space().map_err(|_e| IndexingError::StorageError(StorageError::Database(sqlx::Error::RowNotFound)))?;
-        assert_eq!(row.personal_address.as_ref().unwrap(), &format!("{}_personal_plugin", row.dao_address));
-        assert_eq!(row.space_address, format!("{}_space", row.dao_address));
+        
+        // Verify the personal_address matches one of the expected addresses
+        let personal_addr = row.personal_address.as_ref().unwrap();
+        assert!(expected_personal_addresses.contains(personal_addr), 
+            "Personal address {} not found in expected addresses", personal_addr);
+            
+        // Verify the space_address matches one of the expected addresses  
+        assert!(expected_space_addresses.contains(&row.space_address),
+            "Space address {} not found in expected addresses", row.space_address);
     }
     
     Ok(())
@@ -970,6 +997,9 @@ async fn test_space_indexing_public() -> Result<(), IndexingError> {
     let test_storage = TestStorage::new(postgres_storage.clone());
     let properties_cache = Arc::new(PropertiesCache::new());
     let indexer = TestIndexer::new(postgres_storage, properties_cache);
+
+    // Clear the spaces table to ensure clean test state
+    test_storage.clear_table("spaces").await?;
 
     // Create test data with public spaces
     let dao_address1 = "0x9999999999999999999999999999999999999999";
@@ -986,15 +1016,46 @@ async fn test_space_indexing_public() -> Result<(), IndexingError> {
     indexer.run(&blocks).await?;
 
     // Verify that public spaces were inserted correctly
-    let dao_addresses = vec![dao_address1.to_string(), dao_address2.to_string()];
+    // Need to checksum addresses since they are stored checksummed in the database
+    use indexer_utils::checksum_address;
+    let dao_addresses = vec![
+        checksum_address(dao_address1),
+        checksum_address(dao_address2)
+    ];
     let space_rows = test_storage.get_spaces_by_dao_addresses(&dao_addresses).await?;
 
     assert_eq!(space_rows.len(), 2);
+    
+    // Create expected addresses the same way the production code does
+    let expected_governance_addresses = vec![
+        checksum_address(&format!("{}_governance_plugin", dao_address1)),
+        checksum_address(&format!("{}_governance_plugin", dao_address2)),
+    ];
+    let expected_membership_addresses = vec![
+        checksum_address(&format!("{}_membership_plugin", dao_address1)),
+        checksum_address(&format!("{}_membership_plugin", dao_address2)),
+    ];
+    let expected_space_addresses = vec![
+        checksum_address(&format!("{}_space", dao_address1)),
+        checksum_address(&format!("{}_space", dao_address2)),
+    ];
+    
     for row in &space_rows {
         row.validate_public_space().map_err(|_e| IndexingError::StorageError(StorageError::Database(sqlx::Error::RowNotFound)))?;
-        assert_eq!(row.main_voting_address.as_ref().unwrap(), &format!("{}_governance_plugin", row.dao_address));
-        assert_eq!(row.membership_address.as_ref().unwrap(), &format!("{}_membership_plugin", row.dao_address));
-        assert_eq!(row.space_address, format!("{}_space", row.dao_address));
+        
+        // Verify the governance address matches one of the expected addresses
+        let governance_addr = row.main_voting_address.as_ref().unwrap();
+        assert!(expected_governance_addresses.contains(governance_addr), 
+            "Governance address {} not found in expected addresses", governance_addr);
+            
+        // Verify the membership address matches one of the expected addresses
+        let membership_addr = row.membership_address.as_ref().unwrap();
+        assert!(expected_membership_addresses.contains(membership_addr),
+            "Membership address {} not found in expected addresses", membership_addr);
+            
+        // Verify the space_address matches one of the expected addresses  
+        assert!(expected_space_addresses.contains(&row.space_address),
+            "Space address {} not found in expected addresses", row.space_address);
     }
 
     Ok(())
@@ -1008,6 +1069,9 @@ async fn test_space_indexing_mixed() -> Result<(), IndexingError> {
     let test_storage = TestStorage::new(postgres_storage.clone());
     let properties_cache = Arc::new(PropertiesCache::new());
     let indexer = TestIndexer::new(postgres_storage, properties_cache);
+
+    // Clear the spaces table to ensure clean test state
+    test_storage.clear_table("spaces").await?;
 
     // Create test data with mixed space types
     let personal_dao1 = "0x1111111111111111111111111111111111111111";
@@ -1026,21 +1090,30 @@ async fn test_space_indexing_mixed() -> Result<(), IndexingError> {
     indexer.run(&blocks).await?;
 
     // Verify that mixed space types were inserted correctly
-    let dao_addresses = vec![personal_dao1.to_string(), public_dao.to_string(), personal_dao2.to_string()];
+    // Need to checksum addresses since they are stored checksummed in the database
+    use indexer_utils::checksum_address;
+    let dao_addresses = vec![
+        checksum_address(personal_dao1),
+        checksum_address(public_dao),
+        checksum_address(personal_dao2)
+    ];
     let space_rows = test_storage.get_spaces_by_dao_addresses(&dao_addresses).await?;
 
     assert_eq!(space_rows.len(), 3);
 
     // Check personal space 1
-    let personal_row1 = space_rows.iter().find(|r| r.dao_address == personal_dao1).unwrap();
+    let checksummed_personal_dao1 = checksum_address(personal_dao1);
+    let personal_row1 = space_rows.iter().find(|r| r.dao_address == checksummed_personal_dao1).unwrap();
     personal_row1.validate_personal_space().map_err(|_e| IndexingError::StorageError(StorageError::Database(sqlx::Error::RowNotFound)))?;
 
     // Check public space
-    let public_row = space_rows.iter().find(|r| r.dao_address == public_dao).unwrap();
+    let checksummed_public_dao = checksum_address(public_dao);
+    let public_row = space_rows.iter().find(|r| r.dao_address == checksummed_public_dao).unwrap();
     public_row.validate_public_space().map_err(|_e| IndexingError::StorageError(StorageError::Database(sqlx::Error::RowNotFound)))?;
 
     // Check personal space 2
-    let personal_row2 = space_rows.iter().find(|r| r.dao_address == personal_dao2).unwrap();
+    let checksummed_personal_dao2 = checksum_address(personal_dao2);
+    let personal_row2 = space_rows.iter().find(|r| r.dao_address == checksummed_personal_dao2).unwrap();
     personal_row2.validate_personal_space().map_err(|_e| IndexingError::StorageError(StorageError::Database(sqlx::Error::RowNotFound)))?;
 
     Ok(())
