@@ -1,1 +1,0 @@
-ALTER TABLE "properties" DROP COLUMN "name";

@@ -1,1 +1,0 @@
-ALTER TABLE "relations" ADD COLUMN "space_id" text NOT NULL;

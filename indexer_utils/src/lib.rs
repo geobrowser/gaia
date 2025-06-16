@@ -50,6 +50,11 @@ mod tests {
     #[test]
     fn test_checksum_address() {
         assert_eq!(
+            checksum_address("0x7e3dfcf5e438bab9d1c6f1a4542c916432fb9feb"),
+            "0x7E3DFCf5E438bAb9d1C6F1A4542c916432Fb9FEB"
+        );
+
+        assert_eq!(
             checksum_address("0x5a0b54d5dc17e0aadc383d2db43b0a0d3e029c4c"),
             "0x5A0b54D5dc17e0AadC383d2db43B0a0D3E029c4c"
         );

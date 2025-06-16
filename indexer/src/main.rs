@@ -23,7 +23,7 @@ use stream::{pb::sf::substreams::rpc::v2::BlockScopedData, PreprocessedSink};
 
 const PKG_FILE: &str = "geo_substream.spkg";
 const MODULE_NAME: &str = "geo_out";
-const START_BLOCK: i64 = 881;
+const START_BLOCK: i64 = 53821;
 
 /// Matches spaces with their corresponding plugins based on DAO address
 /// Returns a vector of CreatedSpace variants (Public or Personal)
@@ -33,7 +33,7 @@ fn match_spaces_with_plugins(
     personal_plugins: &[grc20::pb::chain::GeoPersonalSpaceAdminPluginCreated],
 ) -> Vec<CreatedSpace> {
     let mut created_spaces = Vec::new();
-    
+
     for space in spaces {
         // Try to find a matching governance plugin first (for public spaces)
         if let Some(governance_plugin) = governance_plugins
@@ -83,8 +83,6 @@ impl KgIndexer {
             properties_cache: Arc::new(properties_cache),
         }
     }
-
-
 }
 
 impl PreprocessedSink<KgData> for KgIndexer {
@@ -97,8 +95,6 @@ impl PreprocessedSink<KgData> for KgIndexer {
     async fn persist_cursor(&self, _cursor: String) -> Result<(), Self::Error> {
         Ok(())
     }
-
-
 
     /**
     We can pre-process any edits we care about in the chain in this separate function.
@@ -207,7 +203,9 @@ impl PreprocessedSink<KgData> for KgIndexer {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use grc20::pb::chain::{GeoSpaceCreated, GeoGovernancePluginCreated, GeoPersonalSpaceAdminPluginCreated};
+    use grc20::pb::chain::{
+        GeoGovernancePluginCreated, GeoPersonalSpaceAdminPluginCreated, GeoSpaceCreated,
+    };
 
     fn create_test_space(dao_address: &str, space_address: &str) -> GeoSpaceCreated {
         GeoSpaceCreated {
@@ -339,7 +337,9 @@ mod tests {
                 assert_eq!(public_space.governance_plugin, "voting1");
                 assert_eq!(public_space.membership_plugin, "member1");
             }
-            CreatedSpace::Personal(_) => panic!("Expected public space (governance should take precedence)"),
+            CreatedSpace::Personal(_) => {
+                panic!("Expected public space (governance should take precedence)")
+            }
         }
     }
 
@@ -367,7 +367,7 @@ mod tests {
         let result = match_spaces_with_plugins(&spaces, &governance_plugins, &personal_plugins);
 
         assert_eq!(result.len(), 2);
-    
+
         for space in &result {
             match space {
                 CreatedSpace::Public(public_space) => {
