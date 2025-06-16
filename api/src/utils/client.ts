@@ -17,7 +17,7 @@ export const getWalletClient = () => {
 
 export const getPublicClient = () => {
 	return createPublicClient({
-		chain: GEOGENESIS,
+		chain: EnvironmentLive.chainId === "19411" ? TESTNET : GEOGENESIS,
 		transport: http(EnvironmentLive.rpcEndpoint, {batch: true}),
 	})
 }
