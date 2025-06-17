@@ -9,7 +9,7 @@ import {
 import {type ContextParams, type CreateDaoParams, DaoCreationSteps, PermissionIds} from "@aragon/sdk-client"
 import {DaoCreationError, MissingExecPermissionError} from "@aragon/sdk-client-common"
 import {id} from "@ethersproject/hash"
-import {Graph, SystemIds, getChecksumAddress} from "@graphprotocol/grc-20"
+import {Graph, type Op, SystemIds, getChecksumAddress} from "@graphprotocol/grc-20"
 import {MAINNET, TESTNET} from "@graphprotocol/grc-20/contracts"
 import {EditProposal} from "@graphprotocol/grc-20/proto"
 import {Duration, Effect, Schedule} from "effect"
@@ -48,6 +48,8 @@ class WaitForSpaceToBeIndexedError extends Error {
 interface DeployArgs {
 	spaceName: string
 	initialEditorAddress: string
+	spaceEntityId?: string
+	ops?: Op[]
 }
 
 export function deploySpace(args: DeployArgs) {
@@ -57,6 +59,7 @@ export function deploySpace(args: DeployArgs) {
 		const initialEditorAddress = getChecksumAddress(args.initialEditorAddress)
 
 		const entityOp = Graph.createEntity({
+			id: args.spaceEntityId,
 			name: args.spaceName,
 			types: [SystemIds.SPACE_TYPE],
 		})
@@ -64,7 +67,7 @@ export function deploySpace(args: DeployArgs) {
 		const initialContent = EditProposal.encode({
 			name: args.spaceName,
 			author: initialEditorAddress,
-			ops: entityOp.ops,
+			ops: [...entityOp.ops, ...(args.ops ? args.ops : [])],
 		})
 
 		yield* Effect.logInfo("[SPACE][deploy] Uploading EDIT to IPFS")

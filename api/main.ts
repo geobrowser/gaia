@@ -65,7 +65,7 @@ app.post("/ipfs/upload-file", async (c) => {
 })
 
 app.post("/deploy", async (c) => {
-	const {initialEditorAddress, spaceName} = await c.req.json()
+	const {initialEditorAddress, spaceName, spaceEntityId, ops} = await c.req.json()
 
 	if (initialEditorAddress === null || spaceName === null) {
 		console.error(
@@ -87,6 +87,8 @@ app.post("/deploy", async (c) => {
 		deploySpace({
 			initialEditorAddress,
 			spaceName,
+			spaceEntityId,
+			ops,
 		}).pipe(Effect.provide(EnvironmentLayer)),
 		{
 			schedule: Schedule.exponential(Duration.millis(100)).pipe(
