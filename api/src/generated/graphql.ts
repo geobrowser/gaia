@@ -150,6 +150,7 @@ export type QueryPropertiesArgs = {
 }
 
 export type QuerySearchArgs = {
+	filter?: InputMaybe<SearchFilter>
 	limit?: InputMaybe<Scalars["Int"]["input"]>
 	offset?: InputMaybe<Scalars["Int"]["input"]>
 	query: Scalars["String"]["input"]
@@ -199,6 +200,12 @@ export type RelationFilter = {
 export enum RenderableType {
 	Image = "IMAGE",
 	Url = "URL",
+}
+
+export type SearchFilter = {
+	NOT?: InputMaybe<SearchFilter>
+	OR?: InputMaybe<Array<SearchFilter>>
+	types?: InputMaybe<IdFilter>
 }
 
 export type Space = {
@@ -370,6 +377,7 @@ export type ResolversTypes = ResolversObject<{
 	>
 	RelationFilter: RelationFilter
 	RenderableType: RenderableType
+	SearchFilter: SearchFilter
 	Space: ResolverTypeWrapper<Omit<Space, "entity"> & {entity?: Maybe<ResolversTypes["Entity"]>}>
 	SpaceFilter: SpaceFilter
 	SpaceType: SpaceType
@@ -416,6 +424,7 @@ export type ResolversParentTypes = ResolversObject<{
 		type?: Maybe<ResolversParentTypes["Property"]>
 	}
 	RelationFilter: RelationFilter
+	SearchFilter: SearchFilter
 	Space: Omit<Space, "entity"> & {entity?: Maybe<ResolversParentTypes["Entity"]>}
 	SpaceFilter: SpaceFilter
 	String: Scalars["String"]["output"]
