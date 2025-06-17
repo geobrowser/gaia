@@ -24,8 +24,9 @@ where
         block_metadata.block_number, block_metadata.timestamp,
     );
 
-    edit_handler::run(&output.edits, block_metadata, storage, properties_cache).await?;
+    // @TODO: Should put these into their own tasks to parallelize
     space_handler::run(&output.spaces, block_metadata, storage).await?;
+    edit_handler::run(&output.edits, block_metadata, storage, properties_cache).await?;
 
     Ok(())
 }

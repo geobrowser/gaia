@@ -7,42 +7,40 @@ export function getPublishEditCalldata(spaceId: string, cid: string) {
 	return Effect.gen(function* () {
 		const db = yield* Storage
 
-		const maybeSpace = yield* db.use((client) =>
-			client.query.spaces.findFirst({
+		return yield* db.use(async (client) => {
+			const maybeSpace = await client.query.spaces.findFirst({
 				where: (spaces, {eq}) => eq(spaces.id, spaceId),
-			}),
-		)
-
-		if (!maybeSpace) {
-			return null
-		}
-
-		if (maybeSpace.type === "Personal") {
-			const calldata = encodeFunctionData({
-				functionName: "submitEdits",
-				abi: PersonalSpaceAdminAbi,
-				args: [cid, maybeSpace.spaceAddress as `0x${string}`],
 			})
 
-			return {
-				to: maybeSpace.personalAddress,
-				data: calldata,
+			if (!maybeSpace) {
+				return null
 			}
-		}
 
-		if (maybeSpace.type === "Public") {
-			const calldata = encodeFunctionData({
-				functionName: "proposeEdits",
-				abi: MainVotingAbi,
-				args: [stringToHex(cid), cid, maybeSpace.spaceAddress as `0x${string}`],
-			})
+			if (maybeSpace.type === "Personal") {
+				const calldata = encodeFunctionData({
+					functionName: "submitEdits",
+					abi: PersonalSpaceAdminAbi,
+					args: [cid, maybeSpace.spaceAddress as `0x${string}`],
+				})
 
-			return {
-				to: maybeSpace.mainVotingAddress as `0x${string}`,
-				data: calldata,
+				return {
+					to: maybeSpace.personalAddress,
+					data: calldata,
+				}
 			}
-		}
 
-		return null
+			if (maybeSpace.type === "Public") {
+				const calldata = encodeFunctionData({
+					functionName: "proposeEdits",
+					abi: MainVotingAbi,
+					args: [stringToHex(cid), cid, maybeSpace.spaceAddress as `0x${string}`],
+				})
+
+				return {
+					to: maybeSpace.mainVotingAddress as `0x${string}`,
+					data: calldata,
+				}
+			}
+		})
 	})
 }
