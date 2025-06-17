@@ -6,6 +6,9 @@ pub mod spaces;
 pub mod values;
 
 #[cfg(test)]
+mod membership_test;
+
+#[cfg(test)]
 mod relations_test;
 
 #[cfg(test)]

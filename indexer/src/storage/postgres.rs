@@ -171,6 +171,36 @@ impl PostgresStorage {
             data_type: property_type,
         })
     }
+
+    pub async fn get_member(&self, address: &str, space_id: &Uuid) -> Result<MemberItem, StorageError> {
+        let query = sqlx::query!(
+            "SELECT address, space_id FROM members WHERE address = $1 AND space_id = $2",
+            address,
+            space_id
+        )
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(MemberItem {
+            address: query.address,
+            space_id: query.space_id,
+        })
+    }
+
+    pub async fn get_editor(&self, address: &str, space_id: &Uuid) -> Result<EditorItem, StorageError> {
+        let query = sqlx::query!(
+            "SELECT address, space_id FROM editors WHERE address = $1 AND space_id = $2",
+            address,
+            space_id
+        )
+        .fetch_one(&self.pool)
+        .await?;
+
+        Ok(EditorItem {
+            address: query.address,
+            space_id: query.space_id,
+        })
+    }
 }
 
 #[async_trait]
