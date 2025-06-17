@@ -1,8 +1,6 @@
 use indexer::{
     block_handler::root_handler,
-    cache::{
-        postgres::PostgresCache, properties_cache::PropertiesCache,
-    },
+    cache::{postgres::PostgresCache, properties_cache::PropertiesCache},
     error::IndexingError,
     preprocess,
     storage::postgres::PostgresStorage,
@@ -16,8 +14,6 @@ use stream::{pb::sf::substreams::rpc::v2::BlockScopedData, PreprocessedSink};
 const PKG_FILE: &str = "geo_substream.spkg";
 const MODULE_NAME: &str = "geo_out";
 const START_BLOCK: i64 = 53968;
-
-
 
 struct KgIndexer {
     storage: Arc<PostgresStorage>,
@@ -59,12 +55,11 @@ impl PreprocessedSink<KgData> for KgIndexer {
     async fn preprocess_block_scoped_data(
         &self,
         block_data: &BlockScopedData,
-    ) -> Result<(), Self::Error> {
-        let kg_data = preprocess::preprocess_block_scoped_data(block_data, &self.ipfs_cache).await?;
-        
-        self.process_block_scoped_data(block_data, kg_data).await?;
+    ) -> Result<KgData, Self::Error> {
+        let kg_data =
+            preprocess::preprocess_block_scoped_data(block_data, &self.ipfs_cache).await?;
 
-        Ok(())
+        Ok(kg_data)
     }
 
     async fn process_block_scoped_data(
@@ -91,8 +86,6 @@ impl PreprocessedSink<KgData> for KgIndexer {
         Ok(())
     }
 }
-
-
 
 #[tokio::main]
 async fn main() -> Result<(), IndexingError> {
