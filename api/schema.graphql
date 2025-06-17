@@ -144,6 +144,8 @@ type Query {
     offset: Int = 0
   ): [Property]!
 
+  property(id: String!): Property
+
   # Search entities by name and description using pg_trgm similarity
   search(
     query: String!
