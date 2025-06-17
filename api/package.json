@@ -20,7 +20,7 @@
     "@aragon/osx-ethers": "^1.4.0",
     "@aragon/sdk-client": "^1.26.0",
     "@aragon/sdk-client-common": "^1.17.0",
-    "@graphprotocol/grc-20": "^0.15.0",
+    "@graphprotocol/grc-20": "^0.18.0",
     "@graphql-tools/schema": "^10.0.23",
     "@pothos/core": "^4.6.2",
     "@types/uuid": "^10.0.0",
