@@ -22,7 +22,7 @@ pub trait PreprocessedSink<P: Send>: Send + Sync {
     fn preprocess_block_scoped_data(
         &self,
         block_data: &BlockScopedData,
-    ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send;
+    ) -> impl std::future::Future<Output = Result<P, Self::Error>> + Send;
 
     fn process_block_scoped_data(
         &self,
@@ -105,7 +105,8 @@ pub trait PreprocessedSink<P: Send>: Send + Sync {
                         break;
                     }
                     Some(Ok(BlockResponse::New(data))) => {
-                        self.preprocess_block_scoped_data(&data).await?;
+                        let decoded_data = self.preprocess_block_scoped_data(&data).await?;
+                        self.process_block_scoped_data(&data, decoded_data).await?;
                         self.persist_cursor(data.cursor).await?;
                     }
                     Some(Ok(BlockResponse::Undo(undo_signal))) => {

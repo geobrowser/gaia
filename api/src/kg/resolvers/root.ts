@@ -3,6 +3,7 @@ import type {
 	QueryEntitiesArgs,
 	QueryEntityArgs,
 	QueryPropertiesArgs,
+	QueryRelationsArgs,
 	QuerySearchArgs,
 	QuerySpacesArgs,
 	QueryTypesArgs,
@@ -48,8 +49,16 @@ export const values = async (args: QueryEntityArgs & {spaceId?: string | null}) 
 	return await Effect.runPromise(EntityResolvers.getValues(args.id, args.spaceId).pipe(provideDeps))
 }
 
-export const relations = async (args: QueryEntityArgs & {spaceId?: string | null}) => {
+export const entityRelations = async (args: QueryEntityArgs & {spaceId?: string | null}) => {
 	return await Effect.runPromise(EntityResolvers.getRelations(args.id, args.spaceId).pipe(provideDeps))
+}
+
+export const relations = async (args: QueryRelationsArgs) => {
+	return await Effect.runPromise(EntityResolvers.getAllRelations(args).pipe(provideDeps))
+}
+
+export const relation = async (args: QueryEntityArgs) => {
+	return await Effect.runPromise(EntityResolvers.getRelation(args.id).pipe(provideDeps))
 }
 
 export const property = async (args: QueryEntityArgs) => {

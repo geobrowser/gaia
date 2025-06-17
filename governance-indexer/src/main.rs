@@ -6,7 +6,7 @@ use stream::Sink;
 
 const PKG_FILE: &str = "geo_substream.spkg";
 const MODULE_NAME: &str = "geo_out";
-const START_BLOCK: i64 = 53821;
+const START_BLOCK: i64 = 53968;
 
 type GovernanceIndexerError = Error;
 

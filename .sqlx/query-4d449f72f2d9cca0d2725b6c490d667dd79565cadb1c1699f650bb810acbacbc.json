@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO members (address, space_id)\n            SELECT address, space_id\n            FROM UNNEST($1::text[], $2::uuid[])\n            AS t(address, space_id)\n            ON CONFLICT (address, space_id) DO NOTHING\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "TextArray",
+        "UuidArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "4d449f72f2d9cca0d2725b6c490d667dd79565cadb1c1699f650bb810acbacbc"
+}

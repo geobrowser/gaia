@@ -1,5 +1,5 @@
 import {type InferSelectModel, relations as drizzleRelations} from "drizzle-orm"
-import {boolean, index, jsonb, pgEnum, pgTable, serial, text, uuid} from "drizzle-orm/pg-core"
+import {boolean, index, jsonb, pgEnum, pgTable, primaryKey, serial, text, uuid} from "drizzle-orm/pg-core"
 
 export const ipfsCache = pgTable("ipfs_cache", {
 	id: serial(),
@@ -77,6 +77,24 @@ export const relations = pgTable("relations", {
 	verified: boolean(),
 })
 
+export const members = pgTable(
+	"members",
+	{
+		address: text().notNull(),
+		spaceId: uuid().notNull(),
+	},
+	(table) => [primaryKey({columns: [table.address, table.spaceId]})],
+)
+
+export const editors = pgTable(
+	"editors",
+	{
+		address: text().notNull(),
+		spaceId: uuid().notNull(),
+	},
+	(table) => [primaryKey({columns: [table.address, table.spaceId]})],
+)
+
 export const entityForeignValues = drizzleRelations(entities, ({many, one}) => ({
 	values: many(values),
 	property: one(properties, {
@@ -137,7 +155,28 @@ export const relationsEntityRelations = drizzleRelations(relations, ({one}) => (
 	}),
 }))
 
+export const membersRelations = drizzleRelations(members, ({one}) => ({
+	space: one(spaces, {
+		fields: [members.spaceId],
+		references: [spaces.id],
+	}),
+}))
+
+export const editorsRelations = drizzleRelations(editors, ({one}) => ({
+	space: one(spaces, {
+		fields: [editors.spaceId],
+		references: [spaces.id],
+	}),
+}))
+
+export const spacesRelations = drizzleRelations(spaces, ({many}) => ({
+	members: many(members),
+	editors: many(editors),
+}))
+
 export type IpfsCacheItem = InferSelectModel<typeof ipfsCache>
 export type DbEntity = InferSelectModel<typeof entities>
 export type DbProperty = InferSelectModel<typeof values>
 export type DbRelations = InferSelectModel<typeof relations>
+export type DbMember = InferSelectModel<typeof members>
+export type DbEditor = InferSelectModel<typeof editors>

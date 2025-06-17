@@ -19,8 +19,12 @@ use indexer::{
     models::properties::DataType,
     storage::{postgres::PostgresStorage, StorageError},
     test_utils::TestStorage,
-    CreatedSpace, PersonalSpace, PublicSpace, KgData,
+    AddedMember, RemovedMember, CreatedSpace, PersonalSpace, PublicSpace, KgData,
 };
+use serial_test::serial;
+use indexer_utils::{checksum_address, id::derive_space_id, network_ids::GEO};
+use std::time::{SystemTime, UNIX_EPOCH};
+use std::sync::atomic::{AtomicU64, Ordering};
 
 struct TestIndexer {
     storage: Arc<PostgresStorage>,
@@ -148,6 +152,10 @@ async fn main() -> Result<(), IndexingError> {
             block,
             edits: vec![item],
             spaces: vec![],
+            added_editors: vec![],
+            added_members: vec![],
+            removed_editors: vec![],
+            removed_members: vec![],
         }])
         .await?;
 
@@ -266,6 +274,7 @@ async fn main() -> Result<(), IndexingError> {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_validation_rejects_invalid_number() -> Result<(), IndexingError> {
     dotenv().ok();
     let database_url = env::var("DATABASE_URL").expect("DATABASE_URL not set");
@@ -323,6 +332,7 @@ async fn test_validation_rejects_invalid_number() -> Result<(), IndexingError> {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_validation_rejects_invalid_checkbox() -> Result<(), IndexingError> {
     dotenv().ok();
     let database_url = env::var("DATABASE_URL").expect("DATABASE_URL not set");
@@ -380,6 +390,7 @@ async fn test_validation_rejects_invalid_checkbox() -> Result<(), IndexingError>
 }
 
 #[tokio::test]
+#[serial]
 async fn test_validation_rejects_invalid_time() -> Result<(), IndexingError> {
     dotenv().ok();
     let database_url = env::var("DATABASE_URL").expect("DATABASE_URL not set");
@@ -437,6 +448,7 @@ async fn test_validation_rejects_invalid_time() -> Result<(), IndexingError> {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_validation_rejects_invalid_point() -> Result<(), IndexingError> {
     dotenv().ok();
     let database_url = env::var("DATABASE_URL").expect("DATABASE_URL not set");
@@ -494,6 +506,7 @@ async fn test_validation_rejects_invalid_point() -> Result<(), IndexingError> {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_validation_allows_valid_data_mixed_with_invalid() -> Result<(), IndexingError> {
     dotenv().ok();
     let database_url = env::var("DATABASE_URL").expect("DATABASE_URL not set");
@@ -621,6 +634,7 @@ fn derive_value_id(entity_id: &Uuid, property_id: &Uuid, space_id: &Uuid) -> Uui
 }
 
 #[tokio::test]
+#[serial]
 async fn test_property_no_overwrite() -> Result<(), IndexingError> {
     dotenv().ok();
     let database_url = env::var("DATABASE_URL").expect("DATABASE_URL not set");
@@ -671,6 +685,10 @@ async fn test_property_no_overwrite() -> Result<(), IndexingError> {
             block: block.clone(),
             edits: vec![item],
             spaces: vec![],
+            added_editors: vec![],
+            added_members: vec![],
+            removed_editors: vec![],
+            removed_members: vec![],
         }])
         .await?;
 
@@ -693,6 +711,10 @@ async fn test_property_no_overwrite() -> Result<(), IndexingError> {
             block,
             edits: vec![second_edit],
             spaces: vec![],
+            added_editors: vec![],
+            added_members: vec![],
+            removed_editors: vec![],
+            removed_members: vec![],
         }])
         .await?;
 
@@ -713,6 +735,7 @@ async fn test_property_no_overwrite() -> Result<(), IndexingError> {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_property_squashing() -> Result<(), IndexingError> {
     dotenv().ok();
     let database_url = env::var("DATABASE_URL").expect("DATABASE_URL not set");
@@ -754,6 +777,10 @@ async fn test_property_squashing() -> Result<(), IndexingError> {
             block,
             edits: vec![edit_with_duplicate_properties],
             spaces: vec![],
+            added_editors: vec![],
+            added_members: vec![],
+            removed_editors: vec![],
+            removed_members: vec![],
         }])
         .await?;
 
@@ -922,10 +949,15 @@ fn make_kg_data_with_spaces(
         },
         edits,
         spaces,
+        added_editors: vec![],
+        added_members: vec![],
+        removed_editors: vec![],
+        removed_members: vec![],
     }
 }
 
 #[tokio::test]
+#[serial]
 async fn test_space_indexing_personal() -> Result<(), IndexingError> {
     dotenv().ok();
     let database_url = env::var("DATABASE_URL").expect("DATABASE_URL not set");
@@ -938,12 +970,12 @@ async fn test_space_indexing_personal() -> Result<(), IndexingError> {
     test_storage.clear_table("spaces").await?;
 
     // Create test data with personal spaces
-    let dao_address1 = "0x1234567890123456789012345678901234567890";
-    let dao_address2 = "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd";
+    let dao_address1 = generate_unique_address("personal_space_test_1");
+    let dao_address2 = generate_unique_address("personal_space_test_2");
     
     let spaces = vec![
-        make_personal_space(dao_address1),
-        make_personal_space(dao_address2),
+        make_personal_space(&dao_address1),
+        make_personal_space(&dao_address2),
     ];
 
     let kg_data = make_kg_data_with_spaces(1, vec![], spaces);
@@ -956,8 +988,8 @@ async fn test_space_indexing_personal() -> Result<(), IndexingError> {
     // Need to checksum addresses since they are stored checksummed in the database
     use indexer_utils::checksum_address;
     let dao_addresses = vec![
-        checksum_address(dao_address1),
-        checksum_address(dao_address2)
+        checksum_address(&dao_address1),
+        checksum_address(&dao_address2)
     ];
     let space_rows = test_storage.get_spaces_by_dao_addresses(&dao_addresses).await?;
 
@@ -990,6 +1022,7 @@ async fn test_space_indexing_personal() -> Result<(), IndexingError> {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_space_indexing_public() -> Result<(), IndexingError> {
     dotenv().ok();
     let database_url = env::var("DATABASE_URL").expect("DATABASE_URL not set");
@@ -1002,11 +1035,11 @@ async fn test_space_indexing_public() -> Result<(), IndexingError> {
     test_storage.clear_table("spaces").await?;
 
     // Create test data with public spaces
-    let dao_address1 = "0x9999999999999999999999999999999999999999";
-    let dao_address2 = "0x8888888888888888888888888888888888888888";
+    let dao_address1 = generate_unique_address("public_space_test_1");
+    let dao_address2 = generate_unique_address("public_space_test_2");
     let spaces = vec![
-        make_public_space(dao_address1),
-        make_public_space(dao_address2),
+        make_public_space(&dao_address1),
+        make_public_space(&dao_address2),
     ];
 
     let kg_data = make_kg_data_with_spaces(2, vec![], spaces);
@@ -1019,8 +1052,8 @@ async fn test_space_indexing_public() -> Result<(), IndexingError> {
     // Need to checksum addresses since they are stored checksummed in the database
     use indexer_utils::checksum_address;
     let dao_addresses = vec![
-        checksum_address(dao_address1),
-        checksum_address(dao_address2)
+        checksum_address(&dao_address1),
+        checksum_address(&dao_address2)
     ];
     let space_rows = test_storage.get_spaces_by_dao_addresses(&dao_addresses).await?;
 
@@ -1062,6 +1095,7 @@ async fn test_space_indexing_public() -> Result<(), IndexingError> {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_space_indexing_mixed() -> Result<(), IndexingError> {
     dotenv().ok();
     let database_url = env::var("DATABASE_URL").expect("DATABASE_URL not set");
@@ -1074,13 +1108,13 @@ async fn test_space_indexing_mixed() -> Result<(), IndexingError> {
     test_storage.clear_table("spaces").await?;
 
     // Create test data with mixed space types
-    let personal_dao1 = "0x1111111111111111111111111111111111111111";
-    let public_dao = "0x2222222222222222222222222222222222222222";
-    let personal_dao2 = "0x3333333333333333333333333333333333333333";
+    let personal_dao1 = generate_unique_address("mixed_space_test_personal1");
+    let public_dao = generate_unique_address("mixed_space_test_public");
+    let personal_dao2 = generate_unique_address("mixed_space_test_personal2");
     let spaces = vec![
-        make_personal_space(personal_dao1),
-        make_public_space(public_dao),
-        make_personal_space(personal_dao2),
+        make_personal_space(&personal_dao1),
+        make_public_space(&public_dao),
+        make_personal_space(&personal_dao2),
     ];
 
     let kg_data = make_kg_data_with_spaces(3, vec![], spaces);
@@ -1093,26 +1127,26 @@ async fn test_space_indexing_mixed() -> Result<(), IndexingError> {
     // Need to checksum addresses since they are stored checksummed in the database
     use indexer_utils::checksum_address;
     let dao_addresses = vec![
-        checksum_address(personal_dao1),
-        checksum_address(public_dao),
-        checksum_address(personal_dao2)
+        checksum_address(&personal_dao1),
+        checksum_address(&public_dao),
+        checksum_address(&personal_dao2)
     ];
     let space_rows = test_storage.get_spaces_by_dao_addresses(&dao_addresses).await?;
 
     assert_eq!(space_rows.len(), 3);
 
     // Check personal space 1
-    let checksummed_personal_dao1 = checksum_address(personal_dao1);
+    let checksummed_personal_dao1 = checksum_address(&personal_dao1);
     let personal_row1 = space_rows.iter().find(|r| r.dao_address == checksummed_personal_dao1).unwrap();
     personal_row1.validate_personal_space().map_err(|_e| IndexingError::StorageError(StorageError::Database(sqlx::Error::RowNotFound)))?;
 
     // Check public space
-    let checksummed_public_dao = checksum_address(public_dao);
+    let checksummed_public_dao = checksum_address(&public_dao);
     let public_row = space_rows.iter().find(|r| r.dao_address == checksummed_public_dao).unwrap();
     public_row.validate_public_space().map_err(|_e| IndexingError::StorageError(StorageError::Database(sqlx::Error::RowNotFound)))?;
 
     // Check personal space 2
-    let checksummed_personal_dao2 = checksum_address(personal_dao2);
+    let checksummed_personal_dao2 = checksum_address(&personal_dao2);
     let personal_row2 = space_rows.iter().find(|r| r.dao_address == checksummed_personal_dao2).unwrap();
     personal_row2.validate_personal_space().map_err(|_e| IndexingError::StorageError(StorageError::Database(sqlx::Error::RowNotFound)))?;
 
@@ -1120,6 +1154,7 @@ async fn test_space_indexing_mixed() -> Result<(), IndexingError> {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_space_indexing_empty() -> Result<(), IndexingError> {
     dotenv().ok();
     let database_url = env::var("DATABASE_URL").expect("DATABASE_URL not set");
@@ -1137,7 +1172,353 @@ async fn test_space_indexing_empty() -> Result<(), IndexingError> {
     Ok(())
 }
 
+fn generate_unique_address(prefix: &str) -> String {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    
+    let timestamp = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_nanos();
+    
+    // Get a unique counter value for this call
+    let counter = COUNTER.fetch_add(1, Ordering::SeqCst);
+    
+    // Create a hash from prefix to get deterministic but unique start
+    let mut hasher = DefaultHasher::new();
+    prefix.hash(&mut hasher);
+    counter.hash(&mut hasher); // Include counter in hash for extra uniqueness
+    timestamp.hash(&mut hasher); // Include timestamp in hash
+    let prefix_hash = hasher.finish();
+    
+    // Combine prefix hash, timestamp, and counter to create exactly 40 hex characters
+    let part1 = prefix_hash & 0xFFFFFFFFFFFFFFFF;
+    let part2 = (timestamp ^ (counter as u128)) & 0xFFFFFFFFFFFFFFFF;
+    let part3 = ((timestamp >> 64) ^ (counter as u128)) & 0xFFFFFFFF;
+    
+    format!("0x{:016x}{:016x}{:08x}", part1, part2 as u64, part3 as u32)
+}
+
+fn make_added_member(dao_address: &str, editor_address: &str) -> AddedMember {
+    AddedMember {
+        dao_address: dao_address.to_string(),
+        editor_address: editor_address.to_string(),
+    }
+}
+
+fn make_removed_member(dao_address: &str, editor_address: &str) -> RemovedMember {
+    RemovedMember {
+        dao_address: dao_address.to_string(),
+        editor_address: editor_address.to_string(),
+    }
+}
+
+fn make_kg_data_with_membership(
+    block_number: u64,
+    added_members: Vec<AddedMember>,
+    removed_members: Vec<RemovedMember>,
+    added_editors: Vec<AddedMember>,
+    removed_editors: Vec<RemovedMember>,
+) -> KgData {
+    KgData {
+        block: BlockMetadata {
+            cursor: block_number.to_string(),
+            block_number,
+            timestamp: "1234567890".to_string(),
+        },
+        edits: vec![],
+        spaces: vec![],
+        added_members,
+        removed_members,
+        added_editors,
+        removed_editors,
+    }
+}
+
 #[tokio::test]
+#[serial]
+async fn test_membership_indexing_added_members() -> Result<(), IndexingError> {
+    dotenv().ok();
+    let database_url = env::var("DATABASE_URL").expect("DATABASE_URL not set");
+    let postgres_storage = Arc::new(PostgresStorage::new(&database_url).await?);
+    let test_storage = TestStorage::new(postgres_storage.clone());
+    let properties_cache = Arc::new(PropertiesCache::new());
+    let indexer = TestIndexer::new(postgres_storage, properties_cache);
+
+    // Clear the members table to ensure clean test state
+    test_storage.clear_table("members").await?;
+
+    let dao_address = generate_unique_address("add_members_test_dao");
+    let member_address1 = generate_unique_address("add_members_test_mem1");
+    let member_address2 = generate_unique_address("add_members_test_mem2");
+
+    let added_members = vec![
+        make_added_member(&dao_address, &member_address1),
+        make_added_member(&dao_address, &member_address2),
+    ];
+
+    let kg_data = make_kg_data_with_membership(1, added_members, vec![], vec![], vec![]);
+    let blocks = vec![kg_data];
+
+    // Run the indexer
+    indexer.run(&blocks).await?;
+
+    // Verify members were inserted
+    let space_id = derive_space_id(GEO, &checksum_address(dao_address.to_string()));
+    let member1 = indexer.storage.get_member(&checksum_address(member_address1.to_string()), &space_id).await;
+    let member2 = indexer.storage.get_member(&checksum_address(member_address2.to_string()), &space_id).await;
+
+    assert!(member1.is_ok());
+    assert!(member2.is_ok());
+
+    Ok(())
+}
+
+#[tokio::test]
+#[serial]
+async fn test_membership_indexing_added_editors() -> Result<(), IndexingError> {
+    dotenv().ok();
+    let database_url = env::var("DATABASE_URL").expect("DATABASE_URL not set");
+    let postgres_storage = Arc::new(PostgresStorage::new(&database_url).await?);
+    let test_storage = TestStorage::new(postgres_storage.clone());
+    let properties_cache = Arc::new(PropertiesCache::new());
+    let indexer = TestIndexer::new(postgres_storage, properties_cache);
+
+    // Clear the editors table to ensure clean test state
+    test_storage.clear_table("editors").await?;
+
+    let dao_address = generate_unique_address("add_editors_test_dao");
+    let editor_address1 = generate_unique_address("add_editors_test_edit1");
+    let editor_address2 = generate_unique_address("add_editors_test_edit2");
+
+    let added_editors = vec![
+        make_added_member(&dao_address, &editor_address1),
+        make_added_member(&dao_address, &editor_address2),
+    ];
+
+    let kg_data = make_kg_data_with_membership(1, vec![], vec![], added_editors, vec![]);
+    let blocks = vec![kg_data];
+
+    // Run the indexer
+    indexer.run(&blocks).await?;
+
+    // Verify editors were inserted
+    let space_id = derive_space_id(GEO, &checksum_address(dao_address.to_string()));
+    let editor1 = indexer.storage.get_editor(&checksum_address(editor_address1.to_string()), &space_id).await;
+    let editor2 = indexer.storage.get_editor(&checksum_address(editor_address2.to_string()), &space_id).await;
+
+    assert!(editor1.is_ok());
+    assert!(editor2.is_ok());
+
+    Ok(())
+}
+
+#[tokio::test]
+#[serial]
+async fn test_membership_indexing_removed_members() -> Result<(), IndexingError> {
+    dotenv().ok();
+    let database_url = env::var("DATABASE_URL").expect("DATABASE_URL not set");
+    let postgres_storage = Arc::new(PostgresStorage::new(&database_url).await?);
+    let test_storage = TestStorage::new(postgres_storage.clone());
+    let properties_cache = Arc::new(PropertiesCache::new());
+    let indexer = TestIndexer::new(postgres_storage, properties_cache);
+
+    // Clear the members table to ensure clean test state
+    test_storage.clear_table("members").await?;
+
+    let dao_address = generate_unique_address("remove_members_test_dao");
+    let member_address = generate_unique_address("remove_members_test_mem");
+
+    // First add a member
+    let added_members = vec![make_added_member(&dao_address, &member_address)];
+    let kg_data_add = make_kg_data_with_membership(1, added_members, vec![], vec![], vec![]);
+    
+    // Then remove the member
+    let removed_members = vec![make_removed_member(&dao_address, &member_address)];
+    let kg_data_remove = make_kg_data_with_membership(2, vec![], removed_members, vec![], vec![]);
+    
+    let blocks = vec![kg_data_add, kg_data_remove];
+
+    // Run the indexer
+    indexer.run(&blocks).await?;
+
+    // Verify member was removed
+    let space_id = derive_space_id(GEO, &checksum_address(dao_address.to_string()));
+    let member = indexer.storage.get_member(&checksum_address(member_address.to_string()), &space_id).await;
+
+    assert!(member.is_err()); // Should not exist after removal
+
+    Ok(())
+}
+
+#[tokio::test]
+#[serial]
+async fn test_membership_indexing_removed_editors() -> Result<(), IndexingError> {
+    dotenv().ok();
+    let database_url = env::var("DATABASE_URL").expect("DATABASE_URL not set");
+    let postgres_storage = Arc::new(PostgresStorage::new(&database_url).await?);
+    let test_storage = TestStorage::new(postgres_storage.clone());
+    let properties_cache = Arc::new(PropertiesCache::new());
+    let indexer = TestIndexer::new(postgres_storage, properties_cache);
+
+    // Clear the editors table to ensure clean test state
+    test_storage.clear_table("editors").await?;
+
+    let dao_address = generate_unique_address("remove_editors_test_dao");
+    let editor_address = generate_unique_address("remove_editors_test_edit");
+
+    // First add an editor
+    let added_editors = vec![make_added_member(&dao_address, &editor_address)];
+    let kg_data_add = make_kg_data_with_membership(1, vec![], vec![], added_editors, vec![]);
+    
+    // Then remove the editor
+    let removed_editors = vec![make_removed_member(&dao_address, &editor_address)];
+    let kg_data_remove = make_kg_data_with_membership(2, vec![], vec![], vec![], removed_editors);
+    
+    let blocks = vec![kg_data_add, kg_data_remove];
+
+    // Run the indexer
+    indexer.run(&blocks).await?;
+
+    // Verify editor was removed
+    let space_id = derive_space_id(GEO, &checksum_address(dao_address.to_string()));
+    let editor = indexer.storage.get_editor(&checksum_address(editor_address.to_string()), &space_id).await;
+
+    assert!(editor.is_err()); // Should not exist after removal
+
+    Ok(())
+}
+
+#[tokio::test]
+#[serial]
+async fn test_membership_indexing_mixed_operations() -> Result<(), IndexingError> {
+    dotenv().ok();
+    let database_url = env::var("DATABASE_URL").expect("DATABASE_URL not set");
+    let postgres_storage = Arc::new(PostgresStorage::new(&database_url).await?);
+    let test_storage = TestStorage::new(postgres_storage.clone());
+    let properties_cache = Arc::new(PropertiesCache::new());
+    let indexer = TestIndexer::new(postgres_storage, properties_cache);
+
+    // Clear the membership tables to ensure clean test state
+    test_storage.clear_table("members").await?;
+    test_storage.clear_table("editors").await?;
+
+    let dao_address = generate_unique_address("mixed_ops_test_dao");
+    let member_address1 = generate_unique_address("mixed_ops_test_mem1");
+    let member_address2 = generate_unique_address("mixed_ops_test_mem2");
+    let editor_address1 = generate_unique_address("mixed_ops_test_edit1");
+    let editor_address2 = generate_unique_address("mixed_ops_test_edit2");
+
+    let added_members = vec![
+        make_added_member(&dao_address, &member_address1),
+        make_added_member(&dao_address, &member_address2),
+    ];
+    let removed_members = vec![
+        make_removed_member(&dao_address, &member_address1), // Remove first member
+    ];
+    let added_editors = vec![
+        make_added_member(&dao_address, &editor_address1),
+        make_added_member(&dao_address, &editor_address2),
+    ];
+    let removed_editors = vec![
+        make_removed_member(&dao_address, &editor_address1), // Remove first editor
+    ];
+
+    let kg_data = make_kg_data_with_membership(1, added_members, removed_members, added_editors, removed_editors);
+    let blocks = vec![kg_data];
+
+    // Run the indexer
+    indexer.run(&blocks).await?;
+
+    let space_id = derive_space_id(GEO, &checksum_address(dao_address.to_string()));
+
+    // Verify only member2 exists
+    let member1 = indexer.storage.get_member(&checksum_address(member_address1.to_string()), &space_id).await;
+    let member2 = indexer.storage.get_member(&checksum_address(member_address2.to_string()), &space_id).await;
+    assert!(member1.is_err()); // Should not exist
+    assert!(member2.is_ok()); // Should exist
+
+    // Verify only editor2 exists
+    let editor1 = indexer.storage.get_editor(&checksum_address(editor_address1.to_string()), &space_id).await;
+    let editor2 = indexer.storage.get_editor(&checksum_address(editor_address2.to_string()), &space_id).await;
+    assert!(editor1.is_err()); // Should not exist
+    assert!(editor2.is_ok()); // Should exist
+
+    Ok(())
+}
+
+#[tokio::test]
+#[serial]
+async fn test_membership_indexing_multiple_spaces() -> Result<(), IndexingError> {
+    dotenv().ok();
+    let database_url = env::var("DATABASE_URL").expect("DATABASE_URL not set");
+    let postgres_storage = Arc::new(PostgresStorage::new(&database_url).await?);
+    let test_storage = TestStorage::new(postgres_storage.clone());
+    let properties_cache = Arc::new(PropertiesCache::new());
+    let indexer = TestIndexer::new(postgres_storage, properties_cache);
+
+    // Clear the membership tables to ensure clean test state
+    test_storage.clear_table("members").await?;
+    test_storage.clear_table("editors").await?;
+
+    let dao_address1 = generate_unique_address("multi_spaces_test_dao1");
+    let dao_address2 = generate_unique_address("multi_spaces_test_dao2");
+    let member_address = generate_unique_address("multi_spaces_test_mem");
+    let editor_address = generate_unique_address("multi_spaces_test_edit");
+
+    let added_members = vec![
+        make_added_member(&dao_address1, &member_address),
+        make_added_member(&dao_address2, &member_address), // Same member in different spaces
+    ];
+    let added_editors = vec![
+        make_added_member(&dao_address1, &editor_address),
+        make_added_member(&dao_address2, &editor_address), // Same editor in different spaces
+    ];
+
+    let kg_data = make_kg_data_with_membership(1, added_members, vec![], added_editors, vec![]);
+    let blocks = vec![kg_data];
+
+    // Run the indexer
+    indexer.run(&blocks).await?;
+
+    let space_id1 = derive_space_id(GEO, &checksum_address(dao_address1.to_string()));
+    let space_id2 = derive_space_id(GEO, &checksum_address(dao_address2.to_string()));
+
+    // Verify member exists in both spaces
+    let member1 = indexer.storage.get_member(&checksum_address(member_address.to_string()), &space_id1).await;
+    let member2 = indexer.storage.get_member(&checksum_address(member_address.to_string()), &space_id2).await;
+    assert!(member1.is_ok());
+    assert!(member2.is_ok());
+
+    // Verify editor exists in both spaces
+    let editor1 = indexer.storage.get_editor(&checksum_address(editor_address.to_string()), &space_id1).await;
+    let editor2 = indexer.storage.get_editor(&checksum_address(editor_address.to_string()), &space_id2).await;
+    assert!(editor1.is_ok());
+    assert!(editor2.is_ok());
+
+    Ok(())
+}
+
+#[tokio::test]
+#[serial]
+async fn test_membership_indexing_empty() -> Result<(), IndexingError> {
+    dotenv().ok();
+    let database_url = env::var("DATABASE_URL").expect("DATABASE_URL not set");
+    let postgres_storage = Arc::new(PostgresStorage::new(&database_url).await?);
+    let _test_storage = TestStorage::new(postgres_storage.clone());
+    let properties_cache = Arc::new(PropertiesCache::new());
+    let indexer = TestIndexer::new(postgres_storage, properties_cache);
+
+    let kg_data = make_kg_data_with_membership(1, vec![], vec![], vec![], vec![]);
+    let blocks = vec![kg_data];
+
+    // Run the indexer - should not fail with empty membership data
+    indexer.run(&blocks).await?;
+
+    Ok(())
+}
+
+#[tokio::test]
+#[serial]
 async fn test_space_indexing_duplicate_dao_addresses() -> Result<(), IndexingError> {
     dotenv().ok();
     let database_url = env::var("DATABASE_URL").expect("DATABASE_URL not set");
@@ -1146,10 +1527,10 @@ async fn test_space_indexing_duplicate_dao_addresses() -> Result<(), IndexingErr
     let indexer = TestIndexer::new(storage.clone(), properties_cache);
 
     // Create test data with same DAO address for different space types
-    let dao_address = "0x5555555555555555555555555555555555555555";
+    let dao_address = generate_unique_address("duplicate_dao_test");
     let spaces = vec![
-        make_personal_space(dao_address),
-        make_public_space(dao_address),
+        make_personal_space(&dao_address),
+        make_public_space(&dao_address),
     ];
 
     let kg_data = make_kg_data_with_spaces(5, vec![], spaces);
@@ -1163,6 +1544,7 @@ async fn test_space_indexing_duplicate_dao_addresses() -> Result<(), IndexingErr
 }
 
 #[tokio::test]
+#[serial]
 async fn test_space_indexing_with_edits() -> Result<(), IndexingError> {
     dotenv().ok();
     let database_url = env::var("DATABASE_URL").expect("DATABASE_URL not set");
@@ -1190,8 +1572,8 @@ async fn test_space_indexing_with_edits() -> Result<(), IndexingError> {
 
     // Create spaces alongside edits
     let spaces = vec![
-        make_personal_space("0x6666666666666666666666666666666666666666"),
-        make_public_space("0x7777777777777777777777777777777777777777"),
+        make_personal_space(&generate_unique_address("space_with_edits_test_personal")),
+        make_public_space(&generate_unique_address("space_with_edits_test_public")),
     ];
 
     let kg_data = make_kg_data_with_spaces(6, vec![item], spaces);

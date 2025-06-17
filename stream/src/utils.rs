@@ -11,7 +11,7 @@ pub fn output(block_data: &BlockScopedData) -> &prost_types::Any {
         .unwrap();
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct BlockMetadata {
     pub cursor: String,
     pub block_number: u64,
