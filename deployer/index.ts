@@ -14,14 +14,14 @@ const {address} = privateKeyToAccount(PK as `0x${string}`)
 const ROOT_ENTITY_ID = "6b9f649e-38b6-4224-927d-d66171343730"
 const CRYPTO_ENTITY_ID = "23575692-bda8-4a71-8694-04da2e2af18f"
 
-console.log(`Deploying space with ${rootData.data.length} ops`)
+console.log(`Deploying space with ${cryptoData.data.length} ops`)
 
 const space = await Graph.createSpace({
 	editorAddress: address,
-	name: "Test root",
+	name: "Test crypto",
 	network: "TESTNET",
-	ops: rootData.data as Op[],
-	spaceEntityId: ROOT_ENTITY_ID,
+	ops: cryptoData.data as Op[],
+	spaceEntityId: CRYPTO_ENTITY_ID,
 })
 
 console.log("space", space)
