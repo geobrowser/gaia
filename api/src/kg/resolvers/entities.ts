@@ -181,6 +181,20 @@ export function getAllRelations(args: QueryRelationsArgs) {
 	const {filter, limit = 100, offset = 0} = args
 
 	return Effect.gen(function* () {
+		// Early return for empty string filters since they will never match any valid entity IDs
+		if (filter?.relationEntityId === "") {
+			return []
+		}
+		if (filter?.typeId === "") {
+			return []
+		}
+		if (filter?.fromEntityId === "") {
+			return []
+		}
+		if (filter?.toEntityId === "") {
+			return []
+		}
+
 		const db = yield* Storage
 
 		return yield* db.use(async (client) => {

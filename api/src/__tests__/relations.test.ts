@@ -370,6 +370,94 @@ describe("Relation Queries Integration Tests", () => {
 
 			expect(result).toHaveLength(0)
 		})
+
+		it("should filter relations by relationEntityId", async () => {
+			const result = await Effect.runPromise(
+				getAllRelations({
+					filter: {relationEntityId: TEST_RELATION_ENTITY_1_ID},
+				}).pipe(provideDeps),
+			)
+
+			expect(result).toHaveLength(1)
+			if (result[0]) {
+				expect(result[0].id).toBe(TEST_RELATION_1_ID)
+				expect(result[0].entityId).toBe(TEST_RELATION_ENTITY_1_ID)
+			}
+		})
+
+		it("should filter relations by different relationEntityId", async () => {
+			const result = await Effect.runPromise(
+				getAllRelations({
+					filter: {relationEntityId: TEST_RELATION_ENTITY_2_ID},
+				}).pipe(provideDeps),
+			)
+
+			expect(result).toHaveLength(1)
+			if (result[0]) {
+				expect(result[0].id).toBe(TEST_RELATION_2_ID)
+				expect(result[0].entityId).toBe(TEST_RELATION_ENTITY_2_ID)
+			}
+		})
+
+		it("should filter relations by relationEntityId combined with typeId", async () => {
+			const result = await Effect.runPromise(
+				getAllRelations({
+					filter: {
+						relationEntityId: TEST_RELATION_ENTITY_1_ID,
+						typeId: TEST_TYPE_1_ID,
+					},
+				}).pipe(provideDeps),
+			)
+
+			expect(result).toHaveLength(1)
+			if (result[0]) {
+				expect(result[0].id).toBe(TEST_RELATION_1_ID)
+				expect(result[0].entityId).toBe(TEST_RELATION_ENTITY_1_ID)
+				expect(result[0].typeId).toBe(TEST_TYPE_1_ID)
+			}
+		})
+
+		it("should filter relations by relationEntityId combined with fromEntityId", async () => {
+			const result = await Effect.runPromise(
+				getAllRelations({
+					filter: {
+						relationEntityId: TEST_RELATION_ENTITY_3_ID,
+						fromEntityId: TEST_ENTITY_1_ID,
+					},
+				}).pipe(provideDeps),
+			)
+
+			expect(result).toHaveLength(1)
+			if (result[0]) {
+				expect(result[0].id).toBe(TEST_RELATION_3_ID)
+				expect(result[0].entityId).toBe(TEST_RELATION_ENTITY_3_ID)
+				expect(result[0].fromId).toBe(TEST_ENTITY_1_ID)
+			}
+		})
+
+		it("should return empty array for non-existent relationEntityId", async () => {
+			const nonExistentRelationEntityId = uuid()
+			const result = await Effect.runPromise(
+				getAllRelations({
+					filter: {relationEntityId: nonExistentRelationEntityId},
+				}).pipe(provideDeps),
+			)
+
+			expect(result).toHaveLength(0)
+		})
+
+		it("should return empty array for impossible relationEntityId combination", async () => {
+			const result = await Effect.runPromise(
+				getAllRelations({
+					filter: {
+						relationEntityId: TEST_RELATION_ENTITY_1_ID,
+						typeId: TEST_TYPE_2_ID, // TYPE_2 doesn't match RELATION_ENTITY_1
+					},
+				}).pipe(provideDeps),
+			)
+
+			expect(result).toHaveLength(0)
+		})
 	})
 
 	describe("Pagination", () => {
@@ -457,6 +545,83 @@ describe("Relation Queries Integration Tests", () => {
 			// Negative offset should throw an error
 			await expect(Effect.runPromise(getAllRelations({offset: -1}).pipe(provideDeps))).rejects.toThrow()
 		})
+
+		it("should handle null relationEntityId", async () => {
+			const result = await Effect.runPromise(
+				getAllRelations({
+					filter: {relationEntityId: null as any},
+				}).pipe(provideDeps),
+			)
+
+			expect(result).toHaveLength(4) // Should return all relations
+		})
+
+		it("should handle undefined relationEntityId", async () => {
+			const result = await Effect.runPromise(
+				getAllRelations({
+					filter: {relationEntityId: undefined},
+				}).pipe(provideDeps),
+			)
+
+			expect(result).toHaveLength(4) // Should return all relations
+		})
+
+		it("should handle empty string relationEntityId", async () => {
+			const result = await Effect.runPromise(
+				getAllRelations({
+					filter: {relationEntityId: ""},
+				}).pipe(provideDeps),
+			)
+
+			expect(result).toHaveLength(0) // Should return no relations
+		})
+
+		it("should handle empty string typeId", async () => {
+			const result = await Effect.runPromise(
+				getAllRelations({
+					filter: {typeId: ""},
+				}).pipe(provideDeps),
+			)
+
+			expect(result).toHaveLength(0) // Should return no relations
+		})
+
+		it("should handle empty string fromEntityId", async () => {
+			const result = await Effect.runPromise(
+				getAllRelations({
+					filter: {fromEntityId: ""},
+				}).pipe(provideDeps),
+			)
+
+			expect(result).toHaveLength(0) // Should return no relations
+		})
+
+		it("should handle empty string toEntityId", async () => {
+			const result = await Effect.runPromise(
+				getAllRelations({
+					filter: {toEntityId: ""},
+				}).pipe(provideDeps),
+			)
+
+			expect(result).toHaveLength(0) // Should return no relations
+		})
+
+		it("should handle relationEntityId with other null filters", async () => {
+			const result = await Effect.runPromise(
+				getAllRelations({
+					filter: {
+						relationEntityId: TEST_RELATION_ENTITY_1_ID,
+						typeId: null as any,
+						fromEntityId: undefined,
+					},
+				}).pipe(provideDeps),
+			)
+
+			expect(result).toHaveLength(1)
+			if (result[0]) {
+				expect(result[0].entityId).toBe(TEST_RELATION_ENTITY_1_ID)
+			}
+		})
 	})
 
 	describe("Different Relation Types", () => {
@@ -501,6 +666,73 @@ describe("Relation Queries Integration Tests", () => {
 				expect(result[0].fromId).toBe(TEST_ENTITY_3_ID)
 				expect(result[0].toId).toBe(TEST_ENTITY_1_ID)
 			}
+		})
+
+		it("should filter by relationEntityId for type-1 relations", async () => {
+			const result = await Effect.runPromise(
+				getAllRelations({
+					filter: {
+						relationEntityId: TEST_RELATION_ENTITY_1_ID,
+						typeId: TEST_TYPE_1_ID,
+					},
+				}).pipe(provideDeps),
+			)
+
+			expect(result).toHaveLength(1)
+			if (result[0]) {
+				expect(result[0].id).toBe(TEST_RELATION_1_ID)
+				expect(result[0].entityId).toBe(TEST_RELATION_ENTITY_1_ID)
+				expect(result[0].typeId).toBe(TEST_TYPE_1_ID)
+			}
+		})
+
+		it("should filter by relationEntityId for type-2 relations", async () => {
+			const result = await Effect.runPromise(
+				getAllRelations({
+					filter: {
+						relationEntityId: TEST_RELATION_ENTITY_2_ID,
+						typeId: TEST_TYPE_2_ID,
+					},
+				}).pipe(provideDeps),
+			)
+
+			expect(result).toHaveLength(1)
+			if (result[0]) {
+				expect(result[0].id).toBe(TEST_RELATION_2_ID)
+				expect(result[0].entityId).toBe(TEST_RELATION_ENTITY_2_ID)
+				expect(result[0].typeId).toBe(TEST_TYPE_2_ID)
+			}
+		})
+
+		it("should filter by relationEntityId for type-3 relations", async () => {
+			const result = await Effect.runPromise(
+				getAllRelations({
+					filter: {
+						relationEntityId: TEST_RELATION_ENTITY_4_ID,
+						typeId: TEST_TYPE_3_ID,
+					},
+				}).pipe(provideDeps),
+			)
+
+			expect(result).toHaveLength(1)
+			if (result[0]) {
+				expect(result[0].id).toBe(TEST_RELATION_4_ID)
+				expect(result[0].entityId).toBe(TEST_RELATION_ENTITY_4_ID)
+				expect(result[0].typeId).toBe(TEST_TYPE_3_ID)
+			}
+		})
+
+		it("should return all relations with same relationEntityId across different types", async () => {
+			// First, let's verify we have different relation entities for different types
+			const type1Results = await Effect.runPromise(
+				getAllRelations({
+					filter: {typeId: TEST_TYPE_1_ID},
+				}).pipe(provideDeps),
+			)
+
+			const relationEntityIds = type1Results.map((r) => r.entityId)
+			expect(relationEntityIds).toContain(TEST_RELATION_ENTITY_1_ID)
+			expect(relationEntityIds).toContain(TEST_RELATION_ENTITY_3_ID)
 		})
 	})
 
