@@ -149,6 +149,34 @@ export function getRelations(id: string, spaceId?: string | null) {
 	})
 }
 
+export function getRelation(id: string) {
+	return Effect.gen(function* () {
+		const db = yield* Storage
+
+		return yield* db.use(async (client) => {
+			const result = await client.query.relations.findFirst({
+				where: (relations, {eq}) => eq(relations.id, id),
+			})
+
+			if (!result) {
+				return null
+			}
+
+			return {
+				id: result.id,
+				entityId: result.entityId,
+				typeId: result.typeId,
+				fromId: result.fromEntityId,
+				toId: result.toEntityId,
+				toSpaceId: result.toSpaceId,
+				verified: result.verified,
+				position: result.position,
+				spaceId: result.spaceId,
+			}
+		})
+	})
+}
+
 export function getEntityTypes(id: string) {
 	return Effect.gen(function* () {
 		const db = yield* Storage

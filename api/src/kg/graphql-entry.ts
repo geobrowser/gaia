@@ -49,6 +49,9 @@ const resolvers: GeneratedResolvers = {
 		space: async (_, args: QuerySpaceArgs) => {
 			return await Resolvers.space(args.id)
 		},
+		relation: async (_, args) => {
+			return await Resolvers.relation({id: args.id})
+		},
 	},
 	Entity: {
 		name: async (parent: {id: string}) => {

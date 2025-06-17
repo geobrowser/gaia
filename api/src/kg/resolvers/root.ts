@@ -52,6 +52,10 @@ export const relations = async (args: QueryEntityArgs & {spaceId?: string | null
 	return await Effect.runPromise(EntityResolvers.getRelations(args.id, args.spaceId).pipe(provideDeps))
 }
 
+export const relation = async (args: QueryEntityArgs) => {
+	return await Effect.runPromise(EntityResolvers.getRelation(args.id).pipe(provideDeps))
+}
+
 export const property = async (args: QueryEntityArgs) => {
 	return await Effect.runPromise(PropertyResolvers.getProperty(args.id).pipe(provideDeps))
 }
