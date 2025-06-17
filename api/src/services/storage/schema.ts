@@ -83,9 +83,7 @@ export const members = pgTable(
 		address: text().notNull(),
 		spaceId: uuid().notNull(),
 	},
-	(table) => [
-		primaryKey({columns: [table.address, table.spaceId]}),
-	],
+	(table) => [primaryKey({columns: [table.address, table.spaceId]})],
 )
 
 export const editors = pgTable(
@@ -94,9 +92,7 @@ export const editors = pgTable(
 		address: text().notNull(),
 		spaceId: uuid().notNull(),
 	},
-	(table) => [
-		primaryKey({columns: [table.address, table.spaceId]}),
-	],
+	(table) => [primaryKey({columns: [table.address, table.spaceId]})],
 )
 
 export const entityForeignValues = drizzleRelations(entities, ({many, one}) => ({
