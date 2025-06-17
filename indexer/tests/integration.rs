@@ -21,6 +21,7 @@ use indexer::{
     test_utils::TestStorage,
     AddedMember, RemovedMember, CreatedSpace, PersonalSpace, PublicSpace, KgData,
 };
+use serial_test::serial;
 use indexer_utils::{checksum_address, id::derive_space_id, network_ids::GEO};
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -273,6 +274,7 @@ async fn main() -> Result<(), IndexingError> {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_validation_rejects_invalid_number() -> Result<(), IndexingError> {
     dotenv().ok();
     let database_url = env::var("DATABASE_URL").expect("DATABASE_URL not set");
@@ -330,6 +332,7 @@ async fn test_validation_rejects_invalid_number() -> Result<(), IndexingError> {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_validation_rejects_invalid_checkbox() -> Result<(), IndexingError> {
     dotenv().ok();
     let database_url = env::var("DATABASE_URL").expect("DATABASE_URL not set");
@@ -387,6 +390,7 @@ async fn test_validation_rejects_invalid_checkbox() -> Result<(), IndexingError>
 }
 
 #[tokio::test]
+#[serial]
 async fn test_validation_rejects_invalid_time() -> Result<(), IndexingError> {
     dotenv().ok();
     let database_url = env::var("DATABASE_URL").expect("DATABASE_URL not set");
@@ -444,6 +448,7 @@ async fn test_validation_rejects_invalid_time() -> Result<(), IndexingError> {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_validation_rejects_invalid_point() -> Result<(), IndexingError> {
     dotenv().ok();
     let database_url = env::var("DATABASE_URL").expect("DATABASE_URL not set");
@@ -501,6 +506,7 @@ async fn test_validation_rejects_invalid_point() -> Result<(), IndexingError> {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_validation_allows_valid_data_mixed_with_invalid() -> Result<(), IndexingError> {
     dotenv().ok();
     let database_url = env::var("DATABASE_URL").expect("DATABASE_URL not set");
@@ -628,6 +634,7 @@ fn derive_value_id(entity_id: &Uuid, property_id: &Uuid, space_id: &Uuid) -> Uui
 }
 
 #[tokio::test]
+#[serial]
 async fn test_property_no_overwrite() -> Result<(), IndexingError> {
     dotenv().ok();
     let database_url = env::var("DATABASE_URL").expect("DATABASE_URL not set");
@@ -728,6 +735,7 @@ async fn test_property_no_overwrite() -> Result<(), IndexingError> {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_property_squashing() -> Result<(), IndexingError> {
     dotenv().ok();
     let database_url = env::var("DATABASE_URL").expect("DATABASE_URL not set");
@@ -949,6 +957,7 @@ fn make_kg_data_with_spaces(
 }
 
 #[tokio::test]
+#[serial]
 async fn test_space_indexing_personal() -> Result<(), IndexingError> {
     dotenv().ok();
     let database_url = env::var("DATABASE_URL").expect("DATABASE_URL not set");
@@ -1013,6 +1022,7 @@ async fn test_space_indexing_personal() -> Result<(), IndexingError> {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_space_indexing_public() -> Result<(), IndexingError> {
     dotenv().ok();
     let database_url = env::var("DATABASE_URL").expect("DATABASE_URL not set");
@@ -1085,6 +1095,7 @@ async fn test_space_indexing_public() -> Result<(), IndexingError> {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_space_indexing_mixed() -> Result<(), IndexingError> {
     dotenv().ok();
     let database_url = env::var("DATABASE_URL").expect("DATABASE_URL not set");
@@ -1143,6 +1154,7 @@ async fn test_space_indexing_mixed() -> Result<(), IndexingError> {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_space_indexing_empty() -> Result<(), IndexingError> {
     dotenv().ok();
     let database_url = env::var("DATABASE_URL").expect("DATABASE_URL not set");
@@ -1223,6 +1235,7 @@ fn make_kg_data_with_membership(
 }
 
 #[tokio::test]
+#[serial]
 async fn test_membership_indexing_added_members() -> Result<(), IndexingError> {
     dotenv().ok();
     let database_url = env::var("DATABASE_URL").expect("DATABASE_URL not set");
@@ -1261,6 +1274,7 @@ async fn test_membership_indexing_added_members() -> Result<(), IndexingError> {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_membership_indexing_added_editors() -> Result<(), IndexingError> {
     dotenv().ok();
     let database_url = env::var("DATABASE_URL").expect("DATABASE_URL not set");
@@ -1299,6 +1313,7 @@ async fn test_membership_indexing_added_editors() -> Result<(), IndexingError> {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_membership_indexing_removed_members() -> Result<(), IndexingError> {
     dotenv().ok();
     let database_url = env::var("DATABASE_URL").expect("DATABASE_URL not set");
@@ -1336,6 +1351,7 @@ async fn test_membership_indexing_removed_members() -> Result<(), IndexingError>
 }
 
 #[tokio::test]
+#[serial]
 async fn test_membership_indexing_removed_editors() -> Result<(), IndexingError> {
     dotenv().ok();
     let database_url = env::var("DATABASE_URL").expect("DATABASE_URL not set");
@@ -1373,6 +1389,7 @@ async fn test_membership_indexing_removed_editors() -> Result<(), IndexingError>
 }
 
 #[tokio::test]
+#[serial]
 async fn test_membership_indexing_mixed_operations() -> Result<(), IndexingError> {
     dotenv().ok();
     let database_url = env::var("DATABASE_URL").expect("DATABASE_URL not set");
@@ -1430,6 +1447,7 @@ async fn test_membership_indexing_mixed_operations() -> Result<(), IndexingError
 }
 
 #[tokio::test]
+#[serial]
 async fn test_membership_indexing_multiple_spaces() -> Result<(), IndexingError> {
     dotenv().ok();
     let database_url = env::var("DATABASE_URL").expect("DATABASE_URL not set");
@@ -1481,6 +1499,7 @@ async fn test_membership_indexing_multiple_spaces() -> Result<(), IndexingError>
 }
 
 #[tokio::test]
+#[serial]
 async fn test_membership_indexing_empty() -> Result<(), IndexingError> {
     dotenv().ok();
     let database_url = env::var("DATABASE_URL").expect("DATABASE_URL not set");
@@ -1499,6 +1518,7 @@ async fn test_membership_indexing_empty() -> Result<(), IndexingError> {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_space_indexing_duplicate_dao_addresses() -> Result<(), IndexingError> {
     dotenv().ok();
     let database_url = env::var("DATABASE_URL").expect("DATABASE_URL not set");
@@ -1524,6 +1544,7 @@ async fn test_space_indexing_duplicate_dao_addresses() -> Result<(), IndexingErr
 }
 
 #[tokio::test]
+#[serial]
 async fn test_space_indexing_with_edits() -> Result<(), IndexingError> {
     dotenv().ok();
     let database_url = env::var("DATABASE_URL").expect("DATABASE_URL not set");
