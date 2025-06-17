@@ -61,7 +61,7 @@ export function deploySpace(args: DeployArgs) {
 		const entityOp = Graph.createEntity({
 			id: args.spaceEntityId,
 			name: args.spaceName,
-			types: [SystemIds.SPACE_TYPE],
+			types: [SystemIds.SPACE_TYPE], // What if the space type is already set?
 		})
 
 		const initialContent = EditProposal.encode({
