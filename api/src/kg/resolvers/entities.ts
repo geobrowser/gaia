@@ -197,6 +197,9 @@ export function getAllRelations(args: QueryRelationsArgs) {
 					if (filter?.toEntityId) {
 						conditions.push(eq(relations.toEntityId, filter.toEntityId))
 					}
+					if (filter?.relationEntityId) {
+						conditions.push(eq(relations.entityId, filter.relationEntityId))
+					}
 
 					return conditions.length > 0 ? and(...conditions) : undefined
 				},
