@@ -148,6 +148,10 @@ async fn main() -> Result<(), IndexingError> {
             block,
             edits: vec![item],
             spaces: vec![],
+            added_editors: vec![],
+            added_members: vec![],
+            removed_editors: vec![],
+            removed_members: vec![],
         }])
         .await?;
 
@@ -671,6 +675,10 @@ async fn test_property_no_overwrite() -> Result<(), IndexingError> {
             block: block.clone(),
             edits: vec![item],
             spaces: vec![],
+            added_editors: vec![],
+            added_members: vec![],
+            removed_editors: vec![],
+            removed_members: vec![],
         }])
         .await?;
 
@@ -693,6 +701,10 @@ async fn test_property_no_overwrite() -> Result<(), IndexingError> {
             block,
             edits: vec![second_edit],
             spaces: vec![],
+            added_editors: vec![],
+            added_members: vec![],
+            removed_editors: vec![],
+            removed_members: vec![],
         }])
         .await?;
 
@@ -754,6 +766,10 @@ async fn test_property_squashing() -> Result<(), IndexingError> {
             block,
             edits: vec![edit_with_duplicate_properties],
             spaces: vec![],
+            added_editors: vec![],
+            added_members: vec![],
+            removed_editors: vec![],
+            removed_members: vec![],
         }])
         .await?;
 
@@ -922,6 +938,10 @@ fn make_kg_data_with_spaces(
         },
         edits,
         spaces,
+        added_editors: vec![],
+        added_members: vec![],
+        removed_editors: vec![],
+        removed_members: vec![],
     }
 }
 

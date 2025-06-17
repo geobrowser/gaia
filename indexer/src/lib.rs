@@ -10,14 +10,14 @@ pub mod validators;
 
 pub mod test_utils;
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PersonalSpace {
     pub dao_address: String,
     pub space_address: String,
     pub personal_plugin: String,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct PublicSpace {
     pub dao_address: String,
     pub space_address: String,
@@ -25,16 +25,32 @@ pub struct PublicSpace {
     pub governance_plugin: String,
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub enum CreatedSpace {
     Personal(PersonalSpace),
     Public(PublicSpace),
 }
 
-#[derive(Clone)]
+#[derive(Clone, Debug)]
+pub struct AddedMember {
+    pub dao_address: String,
+    pub editor_address: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct RemovedMember {
+    pub dao_address: String,
+    pub editor_address: String,
+}
+
+#[derive(Clone, Debug)]
 pub struct KgData {
     pub block: BlockMetadata,
     pub edits: Vec<PreprocessedEdit>,
+    pub added_editors: Vec<AddedMember>,
+    pub removed_editors: Vec<RemovedMember>,
+    pub added_members: Vec<AddedMember>,
+    pub removed_members: Vec<RemovedMember>,
     // Note for now that we only need the dao address. Eventually we'll
     // index the plugin addresses as well.
     pub spaces: Vec<CreatedSpace>,

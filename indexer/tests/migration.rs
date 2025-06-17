@@ -89,6 +89,10 @@ async fn main() -> Result<(), IndexingError> {
             block,
             edits: vec![root_space_preprocessed_edit, crypto_space_preprocessed_edit],
             spaces: vec![root_space, crypto_space],
+            added_editors: vec![],
+            added_members: vec![],
+            removed_editors: vec![],
+            removed_members: vec![],
         }])
         .await?;
 
