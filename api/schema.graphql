@@ -188,7 +188,11 @@ type Query {
   member(id: String!): Membership
 
   relation(id: String!): Relation
-  # relations
+  relations(
+    filter: RelationFilter
+    limit: Int = 100
+    offset: Int = 0
+  ): [Relation]!
   # property
   # properties
   # type

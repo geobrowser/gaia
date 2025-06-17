@@ -1,6 +1,6 @@
 import {SystemIds} from "@graphprotocol/grc-20"
 import {Effect} from "effect"
-import {BlockType, DataSourceType, type QueryEntitiesArgs} from "../../generated/graphql"
+import {BlockType, DataSourceType, type QueryEntitiesArgs, type QueryRelationsArgs} from "../../generated/graphql"
 import {Storage} from "../../services/storage/storage"
 import {type EntityFilter, buildEntityWhere} from "./filters"
 
@@ -173,6 +173,48 @@ export function getRelation(id: string) {
 				position: result.position,
 				spaceId: result.spaceId,
 			}
+		})
+	})
+}
+
+export function getAllRelations(args: QueryRelationsArgs) {
+	const {filter, limit = 100, offset = 0} = args
+
+	return Effect.gen(function* () {
+		const db = yield* Storage
+
+		return yield* db.use(async (client) => {
+			const result = await client.query.relations.findMany({
+				where: (relations, {eq, and}) => {
+					const conditions: any[] = []
+
+					if (filter?.typeId) {
+						conditions.push(eq(relations.typeId, filter.typeId))
+					}
+					if (filter?.fromEntityId) {
+						conditions.push(eq(relations.fromEntityId, filter.fromEntityId))
+					}
+					if (filter?.toEntityId) {
+						conditions.push(eq(relations.toEntityId, filter.toEntityId))
+					}
+
+					return conditions.length > 0 ? and(...conditions) : undefined
+				},
+				limit: Number(limit),
+				offset: Number(offset),
+			})
+
+			return result.map((relation) => ({
+				id: relation.id,
+				entityId: relation.entityId,
+				typeId: relation.typeId,
+				fromId: relation.fromEntityId,
+				toId: relation.toEntityId,
+				toSpaceId: relation.toSpaceId,
+				verified: relation.verified,
+				position: relation.position,
+				spaceId: relation.spaceId,
+			}))
 		})
 	})
 }
