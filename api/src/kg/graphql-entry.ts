@@ -40,6 +40,9 @@ const resolvers: GeneratedResolvers = {
 		properties: async (_, args) => {
 			return await Resolvers.properties(args)
 		},
+		property: async (_, args) => {
+			return await Resolvers.property({id: args.id})
+		},
 		spaces: async (_, args: QuerySpacesArgs) => {
 			return await Resolvers.spaces(args)
 		},
