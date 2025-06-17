@@ -7,6 +7,7 @@ use thiserror::Error;
 
 use crate::models::{
     entities::EntityItem,
+    membership::{EditorItem, MemberItem},
     properties::PropertyItem,
     relations::{SetRelationItem, UnsetRelationItem, UpdateRelationItem},
     spaces::SpaceItem,
@@ -44,4 +45,8 @@ pub trait StorageBackend: Send + Sync {
     ) -> Result<(), StorageError>;
     async fn insert_properties(&self, properties: &Vec<PropertyItem>) -> Result<(), StorageError>;
     async fn insert_spaces(&self, spaces: &Vec<SpaceItem>) -> Result<(), StorageError>;
+    async fn insert_members(&self, members: &Vec<MemberItem>) -> Result<(), StorageError>;
+    async fn remove_members(&self, members: &Vec<MemberItem>) -> Result<(), StorageError>;
+    async fn insert_editors(&self, editors: &Vec<EditorItem>) -> Result<(), StorageError>;
+    async fn remove_editors(&self, editors: &Vec<EditorItem>) -> Result<(), StorageError>;
 }

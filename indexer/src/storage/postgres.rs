@@ -5,6 +5,7 @@ use uuid::Uuid;
 
 use crate::models::{
     entities::EntityItem,
+    membership::{EditorItem, MemberItem},
     properties::{
         DataType, PropertyItem, DATA_TYPE_CHECKBOX, DATA_TYPE_NUMBER, DATA_TYPE_POINT,
         DATA_TYPE_RELATION, DATA_TYPE_TEXT, DATA_TYPE_TIME,
@@ -544,6 +545,128 @@ impl StorageBackend for PostgresStorage {
             &main_voting_addresses as &[Option<String>],
             &membership_addresses as &[Option<String>],
             &personal_addresses as &[Option<String>]
+        )
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    async fn insert_members(&self, members: &Vec<MemberItem>) -> Result<(), StorageError> {
+        if members.is_empty() {
+            return Ok(());
+        }
+
+        let mut addresses: Vec<String> = Vec::new();
+        let mut space_ids: Vec<Uuid> = Vec::new();
+
+        for member in members {
+            addresses.push(member.address.clone());
+            space_ids.push(member.space_id);
+        }
+
+        sqlx::query!(
+            r#"
+            INSERT INTO members (address, space_id)
+            SELECT address, space_id
+            FROM UNNEST($1::text[], $2::uuid[])
+            AS t(address, space_id)
+            ON CONFLICT (address, space_id) DO NOTHING
+            "#,
+            &addresses,
+            &space_ids
+        )
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    async fn remove_members(&self, members: &Vec<MemberItem>) -> Result<(), StorageError> {
+        if members.is_empty() {
+            return Ok(());
+        }
+
+        let mut addresses: Vec<String> = Vec::new();
+        let mut space_ids: Vec<Uuid> = Vec::new();
+
+        for member in members {
+            addresses.push(member.address.clone());
+            space_ids.push(member.space_id);
+        }
+
+        sqlx::query!(
+            r#"
+            DELETE FROM members
+            WHERE (address, space_id) IN (
+                SELECT address, space_id
+                FROM UNNEST($1::text[], $2::uuid[])
+                AS t(address, space_id)
+            )
+            "#,
+            &addresses,
+            &space_ids
+        )
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    async fn insert_editors(&self, editors: &Vec<EditorItem>) -> Result<(), StorageError> {
+        if editors.is_empty() {
+            return Ok(());
+        }
+
+        let mut addresses: Vec<String> = Vec::new();
+        let mut space_ids: Vec<Uuid> = Vec::new();
+
+        for editor in editors {
+            addresses.push(editor.address.clone());
+            space_ids.push(editor.space_id);
+        }
+
+        sqlx::query!(
+            r#"
+            INSERT INTO editors (address, space_id)
+            SELECT address, space_id
+            FROM UNNEST($1::text[], $2::uuid[])
+            AS t(address, space_id)
+            ON CONFLICT (address, space_id) DO NOTHING
+            "#,
+            &addresses,
+            &space_ids
+        )
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
+
+    async fn remove_editors(&self, editors: &Vec<EditorItem>) -> Result<(), StorageError> {
+        if editors.is_empty() {
+            return Ok(());
+        }
+
+        let mut addresses: Vec<String> = Vec::new();
+        let mut space_ids: Vec<Uuid> = Vec::new();
+
+        for editor in editors {
+            addresses.push(editor.address.clone());
+            space_ids.push(editor.space_id);
+        }
+
+        sqlx::query!(
+            r#"
+            DELETE FROM editors
+            WHERE (address, space_id) IN (
+                SELECT address, space_id
+                FROM UNNEST($1::text[], $2::uuid[])
+                AS t(address, space_id)
+            )
+            "#,
+            &addresses,
+            &space_ids
         )
         .execute(&self.pool)
         .await?;
