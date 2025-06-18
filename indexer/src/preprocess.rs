@@ -2,7 +2,7 @@ use futures::future::join_all;
 use grc20::pb::chain::GeoOutput;
 use indexer_utils::get_blocklist;
 use prost::Message;
-use std::sync::Arc;
+use std::{collections::HashSet, sync::Arc};
 use stream::pb::sf::substreams::rpc::v2::BlockScopedData;
 use tokio::{sync::Mutex, task};
 use tokio_retry::{
@@ -68,7 +68,9 @@ pub fn map_editors_added(editors: &[grc20::pb::chain::EditorAdded]) -> Vec<Added
 }
 
 /// Maps initial editor events to AddedMember structs, flattening multiple addresses per event
-pub fn map_initial_editors_added(initial_editors: &[grc20::pb::chain::InitialEditorAdded]) -> Vec<AddedMember> {
+pub fn map_initial_editors_added(
+    initial_editors: &[grc20::pb::chain::InitialEditorAdded],
+) -> Vec<AddedMember> {
     initial_editors
         .iter()
         .flat_map(|e| {
@@ -153,12 +155,35 @@ pub async fn preprocess_block_scoped_data(
     );
 
     let mut added_editors = map_editors_added(&geo.editors_added);
-    
+
     // Merge initial editors into added_editors
     let initial_editors = map_initial_editors_added(&geo.initial_editors_added);
-    added_editors.extend(initial_editors);
+    added_editors.extend(initial_editors.clone());
 
-    let added_members = map_members_added(&geo.members_added);
+    let mut added_members = map_members_added(&geo.members_added);
+
+    // If any added editors come from a space created at the same time, add
+    // them as initial members
+    let created_space_dao_addresses: HashSet<String> = created_spaces
+        .iter()
+        .map(|space| match space {
+            CreatedSpace::Personal(personal_space) => personal_space.dao_address.clone(),
+            CreatedSpace::Public(public_space) => public_space.dao_address.clone(),
+        })
+        .collect();
+
+    for editor in &added_editors {
+        if created_space_dao_addresses.contains(&editor.dao_address) {
+            added_members.push(AddedMember {
+                dao_address: editor.dao_address.clone(),
+                editor_address: editor.editor_address.clone(),
+            });
+        }
+    }
+    if geo.editors_added.len() > 0 {
+        println!("event initial editors {:?}", &geo.editors_added);
+        println!("mapped members {:?}", &added_members);
+    }
 
     Ok(KgData {
         edits: final_edits,
@@ -209,7 +234,10 @@ mod tests {
         }
     }
 
-    fn create_test_editor_added(dao_address: &str, editor_address: &str) -> grc20::pb::chain::EditorAdded {
+    fn create_test_editor_added(
+        dao_address: &str,
+        editor_address: &str,
+    ) -> grc20::pb::chain::EditorAdded {
         grc20::pb::chain::EditorAdded {
             dao_address: dao_address.to_string(),
             editor_address: editor_address.to_string(),
@@ -218,7 +246,10 @@ mod tests {
         }
     }
 
-    fn create_test_initial_editor_added(dao_address: &str, addresses: Vec<&str>) -> grc20::pb::chain::InitialEditorAdded {
+    fn create_test_initial_editor_added(
+        dao_address: &str,
+        addresses: Vec<&str>,
+    ) -> grc20::pb::chain::InitialEditorAdded {
         grc20::pb::chain::InitialEditorAdded {
             dao_address: dao_address.to_string(),
             addresses: addresses.into_iter().map(|s| s.to_string()).collect(),
@@ -226,7 +257,10 @@ mod tests {
         }
     }
 
-    fn create_test_member_added(dao_address: &str, member_address: &str) -> grc20::pb::chain::MemberAdded {
+    fn create_test_member_added(
+        dao_address: &str,
+        member_address: &str,
+    ) -> grc20::pb::chain::MemberAdded {
         grc20::pb::chain::MemberAdded {
             dao_address: dao_address.to_string(),
             member_address: member_address.to_string(),
@@ -388,7 +422,7 @@ mod tests {
     fn test_map_editors_added_single() {
         let editors = vec![create_test_editor_added("dao1", "editor1")];
         let result = map_editors_added(&editors);
-        
+
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].dao_address, "dao1");
         assert_eq!(result[0].editor_address, "editor1");
@@ -402,7 +436,7 @@ mod tests {
             create_test_editor_added("dao1", "editor3"),
         ];
         let result = map_editors_added(&editors);
-        
+
         assert_eq!(result.len(), 3);
         assert_eq!(result[0].dao_address, "dao1");
         assert_eq!(result[0].editor_address, "editor1");
@@ -423,7 +457,7 @@ mod tests {
     fn test_map_initial_editors_added_single_event_single_address() {
         let initial_editors = vec![create_test_initial_editor_added("dao1", vec!["editor1"])];
         let result = map_initial_editors_added(&initial_editors);
-        
+
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].dao_address, "dao1");
         assert_eq!(result[0].editor_address, "editor1");
@@ -431,9 +465,12 @@ mod tests {
 
     #[test]
     fn test_map_initial_editors_added_single_event_multiple_addresses() {
-        let initial_editors = vec![create_test_initial_editor_added("dao1", vec!["editor1", "editor2", "editor3"])];
+        let initial_editors = vec![create_test_initial_editor_added(
+            "dao1",
+            vec!["editor1", "editor2", "editor3"],
+        )];
         let result = map_initial_editors_added(&initial_editors);
-        
+
         assert_eq!(result.len(), 3);
         assert_eq!(result[0].dao_address, "dao1");
         assert_eq!(result[0].editor_address, "editor1");
@@ -451,7 +488,7 @@ mod tests {
             create_test_initial_editor_added("dao1", vec!["editor4", "editor5", "editor6"]),
         ];
         let result = map_initial_editors_added(&initial_editors);
-        
+
         assert_eq!(result.len(), 6);
         // First event - dao1 with 2 editors
         assert_eq!(result[0].dao_address, "dao1");
@@ -488,7 +525,7 @@ mod tests {
     fn test_map_members_added_single() {
         let members = vec![create_test_member_added("dao1", "member1")];
         let result = map_members_added(&members);
-        
+
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].dao_address, "dao1");
         assert_eq!(result[0].editor_address, "member1");
@@ -502,7 +539,7 @@ mod tests {
             create_test_member_added("dao1", "member3"),
         ];
         let result = map_members_added(&members);
-        
+
         assert_eq!(result.len(), 3);
         assert_eq!(result[0].dao_address, "dao1");
         assert_eq!(result[0].editor_address, "member1");
@@ -529,13 +566,13 @@ mod tests {
         added_editors.extend(initial_editors);
 
         assert_eq!(added_editors.len(), 5);
-        
+
         // Check regular editors
         assert_eq!(added_editors[0].dao_address, "dao1");
         assert_eq!(added_editors[0].editor_address, "editor1");
         assert_eq!(added_editors[1].dao_address, "dao2");
         assert_eq!(added_editors[1].editor_address, "editor2");
-        
+
         // Check initial editors
         assert_eq!(added_editors[2].dao_address, "dao1");
         assert_eq!(added_editors[2].editor_address, "initial1");
@@ -543,5 +580,86 @@ mod tests {
         assert_eq!(added_editors[3].editor_address, "initial2");
         assert_eq!(added_editors[4].dao_address, "dao3");
         assert_eq!(added_editors[4].editor_address, "initial3");
+    }
+
+    #[test]
+    fn test_editors_from_newly_created_spaces_added_to_members() {
+        // Create test spaces
+        let spaces = vec![
+            create_test_space("dao1", "space1"),
+            create_test_space("dao2", "space2"),
+        ];
+
+        // Create matching plugins for the spaces
+        let governance_plugins = vec![create_test_governance_plugin("dao1", "member1", "voting1")];
+        let personal_plugins = vec![create_test_personal_plugin("dao2", "admin2", "initial2")];
+
+        // Create editors for the same DAOs that have spaces created
+        let editors = vec![
+            create_test_editor_added("dao1", "editor1"),
+            create_test_editor_added("dao1", "editor2"),
+            create_test_editor_added("dao2", "editor3"),
+            create_test_editor_added("dao3", "editor4"), // This DAO has no space created
+        ];
+
+        // Create some regular members
+        let members = vec![create_test_member_added("dao1", "member1")];
+
+        // Match spaces with plugins
+        let created_spaces =
+            match_spaces_with_plugins(&spaces, &governance_plugins, &personal_plugins);
+
+        // Map editors and members
+        let added_editors = map_editors_added(&editors);
+        let mut added_members = map_members_added(&members);
+
+        // Simulate the logic from preprocess_block_scoped_data
+        let created_space_dao_addresses: std::collections::HashSet<String> = created_spaces
+            .iter()
+            .map(|space| match space {
+                CreatedSpace::Personal(personal_space) => personal_space.dao_address.clone(),
+                CreatedSpace::Public(public_space) => public_space.dao_address.clone(),
+            })
+            .collect();
+
+        for editor in &added_editors {
+            if created_space_dao_addresses.contains(&editor.dao_address) {
+                added_members.push(AddedMember {
+                    dao_address: editor.dao_address.clone(),
+                    editor_address: editor.editor_address.clone(),
+                });
+            }
+        }
+
+        // Verify results
+        assert_eq!(created_spaces.len(), 2); // dao1 and dao2 should have spaces created
+        assert_eq!(added_editors.len(), 4); // All 4 editors should be mapped
+
+        // added_members should include:
+        // - 1 original member (member1 from dao1)
+        // - 3 editors from newly created spaces (editor1, editor2 from dao1; editor3 from dao2)
+        // - editor4 from dao3 should NOT be included since dao3 has no space created
+        assert_eq!(added_members.len(), 4);
+
+        // Check that the original member is still there
+        assert!(added_members
+            .iter()
+            .any(|m| m.dao_address == "dao1" && m.editor_address == "member1"));
+
+        // Check that editors from newly created spaces are added as members
+        assert!(added_members
+            .iter()
+            .any(|m| m.dao_address == "dao1" && m.editor_address == "editor1"));
+        assert!(added_members
+            .iter()
+            .any(|m| m.dao_address == "dao1" && m.editor_address == "editor2"));
+        assert!(added_members
+            .iter()
+            .any(|m| m.dao_address == "dao2" && m.editor_address == "editor3"));
+
+        // Check that editor4 from dao3 (no space created) is NOT added as a member
+        assert!(!added_members
+            .iter()
+            .any(|m| m.dao_address == "dao3" && m.editor_address == "editor4"));
     }
 }
