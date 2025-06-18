@@ -114,14 +114,6 @@ export type Membership = {
 	spaceId: Scalars["String"]["output"]
 }
 
-export type MembershipFilter = {
-	NOT?: InputMaybe<MembershipFilter>
-	OR?: InputMaybe<Array<MembershipFilter>>
-	address?: InputMaybe<TextFilter>
-	id?: InputMaybe<IdFilter>
-	spaceId?: InputMaybe<TextFilter>
-}
-
 export type NumberFilter = {
 	NOT?: InputMaybe<NumberFilter>
 	exists?: InputMaybe<Scalars["Boolean"]["input"]>
@@ -172,9 +164,9 @@ export type QueryAccountArgs = {
 }
 
 export type QueryEditorsArgs = {
-	filter?: InputMaybe<MembershipFilter>
 	limit?: InputMaybe<Scalars["Int"]["input"]>
 	offset?: InputMaybe<Scalars["Int"]["input"]>
+	spaceId?: InputMaybe<Scalars["String"]["input"]>
 }
 
 export type QueryEntitiesArgs = {
@@ -190,9 +182,9 @@ export type QueryEntityArgs = {
 }
 
 export type QueryMembersArgs = {
-	filter?: InputMaybe<MembershipFilter>
 	limit?: InputMaybe<Scalars["Int"]["input"]>
 	offset?: InputMaybe<Scalars["Int"]["input"]>
+	spaceId?: InputMaybe<Scalars["String"]["input"]>
 }
 
 export type QueryPropertiesArgs = {
@@ -433,7 +425,6 @@ export type ResolversTypes = ResolversObject<{
 	IdFilter: IdFilter
 	Int: ResolverTypeWrapper<Scalars["Int"]["output"]>
 	Membership: ResolverTypeWrapper<Omit<Membership, "space"> & {space?: Maybe<ResolversTypes["Space"]>}>
-	MembershipFilter: MembershipFilter
 	NumberFilter: NumberFilter
 	PointFilter: PointFilter
 	Property: ResolverTypeWrapper<
@@ -497,7 +488,6 @@ export type ResolversParentTypes = ResolversObject<{
 	IdFilter: IdFilter
 	Int: Scalars["Int"]["output"]
 	Membership: Omit<Membership, "space"> & {space?: Maybe<ResolversParentTypes["Space"]>}
-	MembershipFilter: MembershipFilter
 	NumberFilter: NumberFilter
 	PointFilter: PointFilter
 	Property: Omit<Property, "entity" | "relationValueTypes"> & {
