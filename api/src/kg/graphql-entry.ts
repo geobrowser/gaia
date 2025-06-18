@@ -59,12 +59,6 @@ const resolvers: GeneratedResolvers = {
 		space: async (_, args: QuerySpaceArgs) => {
 			return await Resolvers.space(args.id)
 		},
-		members: async (_, args: QueryMembersArgs) => {
-			return await Effect.runPromise(MembershipResolvers.getMembers(args).pipe(provideDeps))
-		},
-		editors: async (_, args: QueryEditorsArgs) => {
-			return await Effect.runPromise(MembershipResolvers.getEditors(args).pipe(provideDeps))
-		},
 		relation: async (_, args) => {
 			return await Resolvers.relation({id: args.id})
 		},

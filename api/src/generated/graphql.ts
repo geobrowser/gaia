@@ -145,10 +145,8 @@ export type PropertyFilter = {
 export type Query = {
 	__typename?: "Query"
 	account?: Maybe<Account>
-	editors: Array<Maybe<Membership>>
 	entities: Array<Maybe<Entity>>
 	entity?: Maybe<Entity>
-	members: Array<Maybe<Membership>>
 	properties: Array<Maybe<Property>>
 	property?: Maybe<Property>
 	relation?: Maybe<Relation>
@@ -163,12 +161,6 @@ export type QueryAccountArgs = {
 	address: Scalars["String"]["input"]
 }
 
-export type QueryEditorsArgs = {
-	limit?: InputMaybe<Scalars["Int"]["input"]>
-	offset?: InputMaybe<Scalars["Int"]["input"]>
-	spaceId?: InputMaybe<Scalars["String"]["input"]>
-}
-
 export type QueryEntitiesArgs = {
 	filter?: InputMaybe<EntityFilter>
 	limit?: InputMaybe<Scalars["Int"]["input"]>
@@ -178,12 +170,6 @@ export type QueryEntitiesArgs = {
 
 export type QueryEntityArgs = {
 	id: Scalars["String"]["input"]
-	spaceId?: InputMaybe<Scalars["String"]["input"]>
-}
-
-export type QueryMembersArgs = {
-	limit?: InputMaybe<Scalars["Int"]["input"]>
-	offset?: InputMaybe<Scalars["Int"]["input"]>
 	spaceId?: InputMaybe<Scalars["String"]["input"]>
 }
 
@@ -609,12 +595,6 @@ export type QueryResolvers<
 		ContextType,
 		RequireFields<QueryAccountArgs, "address">
 	>
-	editors?: Resolver<
-		Array<Maybe<ResolversTypes["Membership"]>>,
-		ParentType,
-		ContextType,
-		RequireFields<QueryEditorsArgs, "limit" | "offset">
-	>
 	entities?: Resolver<
 		Array<Maybe<ResolversTypes["Entity"]>>,
 		ParentType,
@@ -622,12 +602,6 @@ export type QueryResolvers<
 		RequireFields<QueryEntitiesArgs, "limit" | "offset">
 	>
 	entity?: Resolver<Maybe<ResolversTypes["Entity"]>, ParentType, ContextType, RequireFields<QueryEntityArgs, "id">>
-	members?: Resolver<
-		Array<Maybe<ResolversTypes["Membership"]>>,
-		ParentType,
-		ContextType,
-		RequireFields<QueryMembersArgs, "limit" | "offset">
-	>
 	properties?: Resolver<
 		Array<Maybe<ResolversTypes["Property"]>>,
 		ParentType,

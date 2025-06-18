@@ -179,9 +179,6 @@ type Query {
   spaces(filter: SpaceFilter, limit: Int = 100, offset: Int = 0): [Space]!
   space(id: String!): Space
 
-  editors(spaceId: String, limit: Int = 100, offset: Int = 0): [Membership]!
-  members(spaceId: String, limit: Int = 100, offset: Int = 0): [Membership]!
-
   # Get a single member by ID
   account(address: String!): Account
 
