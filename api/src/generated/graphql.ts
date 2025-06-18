@@ -26,6 +26,11 @@ export type Account = {
 	spacesWhereMember?: Maybe<Array<Maybe<Space>>>
 }
 
+export type AddressFilter = {
+	in?: InputMaybe<Array<Scalars["String"]["input"]>>
+	is?: InputMaybe<Scalars["String"]["input"]>
+}
+
 export type Block = {
 	__typename?: "Block"
 	dataSourceType?: Maybe<DataSourceType>
@@ -268,7 +273,9 @@ export type Space = {
 }
 
 export type SpaceFilter = {
+	editor?: InputMaybe<AddressFilter>
 	id?: InputMaybe<IdFilter>
+	member?: InputMaybe<AddressFilter>
 }
 
 export enum SpaceType {
@@ -398,6 +405,7 @@ export type ResolversTypes = ResolversObject<{
 			spacesWhereMember?: Maybe<Array<Maybe<ResolversTypes["Space"]>>>
 		}
 	>
+	AddressFilter: AddressFilter
 	Block: ResolverTypeWrapper<Omit<Block, "entity"> & {entity?: Maybe<ResolversTypes["Entity"]>}>
 	BlockType: BlockType
 	Boolean: ResolverTypeWrapper<Scalars["Boolean"]["output"]>
@@ -464,6 +472,7 @@ export type ResolversParentTypes = ResolversObject<{
 		spacesWhereEdtitor?: Maybe<Array<Maybe<ResolversParentTypes["Space"]>>>
 		spacesWhereMember?: Maybe<Array<Maybe<ResolversParentTypes["Space"]>>>
 	}
+	AddressFilter: AddressFilter
 	Block: Omit<Block, "entity"> & {entity?: Maybe<ResolversParentTypes["Entity"]>}
 	Boolean: Scalars["Boolean"]["output"]
 	CheckboxFilter: CheckboxFilter

@@ -1,6 +1,8 @@
 import {SystemIds} from "@graphprotocol/grc-20"
+import {inArray} from "drizzle-orm"
 import {Effect} from "effect"
 import {type QuerySpacesArgs, SpaceType} from "~/src/generated/graphql"
+import {editors, members} from "../../services/storage/schema"
 import {Storage} from "../../services/storage/storage"
 
 export const getSpaces = (args: QuerySpacesArgs) => {
@@ -11,13 +13,103 @@ export const getSpaces = (args: QuerySpacesArgs) => {
 
 		return yield* db.use(async (client) => {
 			const spacesResult = await client.query.spaces.findMany({
-				where: (spaces, {inArray, sql}) => {
+				where: (spaces, {inArray, sql, eq, exists, and}) => {
+					const conditions = []
+
+					// ID filter
 					if (filter?.id?.in !== undefined && filter?.id.in !== null) {
 						if (filter.id.in.length === 0) {
 							// Return condition that matches nothing for empty arrays
 							return sql`false`
 						}
-						return inArray(spaces.id, filter.id.in)
+						conditions.push(inArray(spaces.id, filter.id.in))
+					}
+
+					// Member filter
+					if (filter?.member) {
+						if (filter.member.is) {
+							conditions.push(
+								exists(
+									client
+										.select()
+										.from(members)
+										.where(
+											and(
+												eq(members.spaceId, spaces.id),
+												sql`LOWER(${members.address}) = LOWER(${filter.member.is})`,
+											),
+										),
+								),
+							)
+						}
+						if (filter.member.in !== undefined && filter.member.in !== null) {
+							if (filter.member.in.length === 0) {
+								// Return condition that matches nothing for empty arrays
+								return sql`false`
+							}
+							const lowerAddresses = filter.member.in.map((addr) => addr.toLowerCase())
+							conditions.push(
+								exists(
+									client
+										.select()
+										.from(members)
+										.where(
+											and(
+												eq(members.spaceId, spaces.id),
+												inArray(sql`LOWER(${members.address})`, lowerAddresses),
+											),
+										),
+								),
+							)
+						}
+					}
+
+					// Editor filter
+					if (filter?.editor) {
+						if (filter.editor.is) {
+							conditions.push(
+								exists(
+									client
+										.select()
+										.from(editors)
+										.where(
+											and(
+												eq(editors.spaceId, spaces.id),
+												sql`LOWER(${editors.address}) = LOWER(${filter.editor.is})`,
+											),
+										),
+								),
+							)
+						}
+						if (filter.editor.in !== undefined && filter.editor.in !== null) {
+							if (filter.editor.in.length === 0) {
+								// Return condition that matches nothing for empty arrays
+								return sql`false`
+							}
+							const lowerAddresses = filter.editor.in.map((addr) => addr.toLowerCase())
+							conditions.push(
+								exists(
+									client
+										.select()
+										.from(editors)
+										.where(
+											and(
+												eq(editors.spaceId, spaces.id),
+												inArray(sql`LOWER(${editors.address})`, lowerAddresses),
+											),
+										),
+								),
+							)
+						}
+					}
+
+					// Combine all conditions with AND
+					if (conditions.length === 0) {
+						return undefined // No filters, return all
+					} else if (conditions.length === 1) {
+						return conditions[0]
+					} else {
+						return and(...conditions)
 					}
 				},
 				limit: limit ?? 100,
