@@ -180,10 +180,6 @@ pub async fn preprocess_block_scoped_data(
             });
         }
     }
-    if geo.editors_added.len() > 0 {
-        println!("event initial editors {:?}", &geo.editors_added);
-        println!("mapped members {:?}", &added_members);
-    }
 
     Ok(KgData {
         edits: final_edits,
