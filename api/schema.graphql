@@ -17,6 +17,8 @@ type Entity {
   # When spaceId is provided, only returns relations from that specific space
   relations(spaceId: String, filter: RelationFilter): [Relation]!
 
+  backlinks(spaceId: String, filter: RelationFilter): [Relation]!
+
   types: [Entity]!
   spaces: [String]!
 }
@@ -268,6 +270,7 @@ input RelationFilter {
   typeId: String
   fromEntityId: String
   toEntityId: String
+  relationEntityId: String
 }
 
 input IdFilter {

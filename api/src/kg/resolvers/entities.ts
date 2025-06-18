@@ -149,6 +149,36 @@ export function getRelations(id: string, spaceId?: string | null) {
 	})
 }
 
+export function getBacklinks(id: string, spaceId?: string | null) {
+	return Effect.gen(function* () {
+		const db = yield* Storage
+
+		return yield* db.use(async (client) => {
+			const result = await client.query.relations.findMany({
+				where: (relations, {eq, and}) => {
+					const conditions = [eq(relations.toEntityId, id)]
+					if (spaceId) {
+						conditions.push(eq(relations.spaceId, spaceId))
+					}
+					return and(...conditions)
+				},
+			})
+
+			return result.map((relation) => ({
+				id: relation.id,
+				entityId: relation.entityId,
+				typeId: relation.typeId,
+				fromId: relation.fromEntityId,
+				toId: relation.toEntityId,
+				toSpaceId: relation.toSpaceId,
+				verified: relation.verified,
+				position: relation.position,
+				spaceId: relation.spaceId,
+			}))
+		})
+	})
+}
+
 export function getRelation(id: string) {
 	return Effect.gen(function* () {
 		const db = yield* Storage
@@ -181,6 +211,20 @@ export function getAllRelations(args: QueryRelationsArgs) {
 	const {filter, limit = 100, offset = 0} = args
 
 	return Effect.gen(function* () {
+		// Early return for empty string filters since they will never match any valid entity IDs
+		if (filter?.relationEntityId === "") {
+			return []
+		}
+		if (filter?.typeId === "") {
+			return []
+		}
+		if (filter?.fromEntityId === "") {
+			return []
+		}
+		if (filter?.toEntityId === "") {
+			return []
+		}
+
 		const db = yield* Storage
 
 		return yield* db.use(async (client) => {
@@ -196,6 +240,9 @@ export function getAllRelations(args: QueryRelationsArgs) {
 					}
 					if (filter?.toEntityId) {
 						conditions.push(eq(relations.toEntityId, filter.toEntityId))
+					}
+					if (filter?.relationEntityId) {
+						conditions.push(eq(relations.entityId, filter.relationEntityId))
 					}
 
 					return conditions.length > 0 ? and(...conditions) : undefined

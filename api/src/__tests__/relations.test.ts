@@ -2,7 +2,7 @@ import {inArray} from "drizzle-orm"
 import {Effect, Layer} from "effect"
 import {v4 as uuid} from "uuid"
 import {afterEach, beforeAll, beforeEach, describe, expect, it} from "vitest"
-import {getAllRelations, getRelation} from "~/src/kg/resolvers/entities"
+import {getAllRelations, getBacklinks, getRelation} from "~/src/kg/resolvers/entities"
 import {Environment, make as makeEnvironment} from "~/src/services/environment"
 import {entities, relations, values} from "~/src/services/storage/schema"
 import {Storage, make as makeStorage} from "~/src/services/storage/storage"
@@ -370,6 +370,94 @@ describe("Relation Queries Integration Tests", () => {
 
 			expect(result).toHaveLength(0)
 		})
+
+		it("should filter relations by relationEntityId", async () => {
+			const result = await Effect.runPromise(
+				getAllRelations({
+					filter: {relationEntityId: TEST_RELATION_ENTITY_1_ID},
+				}).pipe(provideDeps),
+			)
+
+			expect(result).toHaveLength(1)
+			if (result[0]) {
+				expect(result[0].id).toBe(TEST_RELATION_1_ID)
+				expect(result[0].entityId).toBe(TEST_RELATION_ENTITY_1_ID)
+			}
+		})
+
+		it("should filter relations by different relationEntityId", async () => {
+			const result = await Effect.runPromise(
+				getAllRelations({
+					filter: {relationEntityId: TEST_RELATION_ENTITY_2_ID},
+				}).pipe(provideDeps),
+			)
+
+			expect(result).toHaveLength(1)
+			if (result[0]) {
+				expect(result[0].id).toBe(TEST_RELATION_2_ID)
+				expect(result[0].entityId).toBe(TEST_RELATION_ENTITY_2_ID)
+			}
+		})
+
+		it("should filter relations by relationEntityId combined with typeId", async () => {
+			const result = await Effect.runPromise(
+				getAllRelations({
+					filter: {
+						relationEntityId: TEST_RELATION_ENTITY_1_ID,
+						typeId: TEST_TYPE_1_ID,
+					},
+				}).pipe(provideDeps),
+			)
+
+			expect(result).toHaveLength(1)
+			if (result[0]) {
+				expect(result[0].id).toBe(TEST_RELATION_1_ID)
+				expect(result[0].entityId).toBe(TEST_RELATION_ENTITY_1_ID)
+				expect(result[0].typeId).toBe(TEST_TYPE_1_ID)
+			}
+		})
+
+		it("should filter relations by relationEntityId combined with fromEntityId", async () => {
+			const result = await Effect.runPromise(
+				getAllRelations({
+					filter: {
+						relationEntityId: TEST_RELATION_ENTITY_3_ID,
+						fromEntityId: TEST_ENTITY_1_ID,
+					},
+				}).pipe(provideDeps),
+			)
+
+			expect(result).toHaveLength(1)
+			if (result[0]) {
+				expect(result[0].id).toBe(TEST_RELATION_3_ID)
+				expect(result[0].entityId).toBe(TEST_RELATION_ENTITY_3_ID)
+				expect(result[0].fromId).toBe(TEST_ENTITY_1_ID)
+			}
+		})
+
+		it("should return empty array for non-existent relationEntityId", async () => {
+			const nonExistentRelationEntityId = uuid()
+			const result = await Effect.runPromise(
+				getAllRelations({
+					filter: {relationEntityId: nonExistentRelationEntityId},
+				}).pipe(provideDeps),
+			)
+
+			expect(result).toHaveLength(0)
+		})
+
+		it("should return empty array for impossible relationEntityId combination", async () => {
+			const result = await Effect.runPromise(
+				getAllRelations({
+					filter: {
+						relationEntityId: TEST_RELATION_ENTITY_1_ID,
+						typeId: TEST_TYPE_2_ID, // TYPE_2 doesn't match RELATION_ENTITY_1
+					},
+				}).pipe(provideDeps),
+			)
+
+			expect(result).toHaveLength(0)
+		})
 	})
 
 	describe("Pagination", () => {
@@ -457,6 +545,83 @@ describe("Relation Queries Integration Tests", () => {
 			// Negative offset should throw an error
 			await expect(Effect.runPromise(getAllRelations({offset: -1}).pipe(provideDeps))).rejects.toThrow()
 		})
+
+		it("should handle null relationEntityId", async () => {
+			const result = await Effect.runPromise(
+				getAllRelations({
+					filter: {relationEntityId: null as any},
+				}).pipe(provideDeps),
+			)
+
+			expect(result).toHaveLength(4) // Should return all relations
+		})
+
+		it("should handle undefined relationEntityId", async () => {
+			const result = await Effect.runPromise(
+				getAllRelations({
+					filter: {relationEntityId: undefined},
+				}).pipe(provideDeps),
+			)
+
+			expect(result).toHaveLength(4) // Should return all relations
+		})
+
+		it("should handle empty string relationEntityId", async () => {
+			const result = await Effect.runPromise(
+				getAllRelations({
+					filter: {relationEntityId: ""},
+				}).pipe(provideDeps),
+			)
+
+			expect(result).toHaveLength(0) // Should return no relations
+		})
+
+		it("should handle empty string typeId", async () => {
+			const result = await Effect.runPromise(
+				getAllRelations({
+					filter: {typeId: ""},
+				}).pipe(provideDeps),
+			)
+
+			expect(result).toHaveLength(0) // Should return no relations
+		})
+
+		it("should handle empty string fromEntityId", async () => {
+			const result = await Effect.runPromise(
+				getAllRelations({
+					filter: {fromEntityId: ""},
+				}).pipe(provideDeps),
+			)
+
+			expect(result).toHaveLength(0) // Should return no relations
+		})
+
+		it("should handle empty string toEntityId", async () => {
+			const result = await Effect.runPromise(
+				getAllRelations({
+					filter: {toEntityId: ""},
+				}).pipe(provideDeps),
+			)
+
+			expect(result).toHaveLength(0) // Should return no relations
+		})
+
+		it("should handle relationEntityId with other null filters", async () => {
+			const result = await Effect.runPromise(
+				getAllRelations({
+					filter: {
+						relationEntityId: TEST_RELATION_ENTITY_1_ID,
+						typeId: null as any,
+						fromEntityId: undefined,
+					},
+				}).pipe(provideDeps),
+			)
+
+			expect(result).toHaveLength(1)
+			if (result[0]) {
+				expect(result[0].entityId).toBe(TEST_RELATION_ENTITY_1_ID)
+			}
+		})
 	})
 
 	describe("Different Relation Types", () => {
@@ -502,6 +667,73 @@ describe("Relation Queries Integration Tests", () => {
 				expect(result[0].toId).toBe(TEST_ENTITY_1_ID)
 			}
 		})
+
+		it("should filter by relationEntityId for type-1 relations", async () => {
+			const result = await Effect.runPromise(
+				getAllRelations({
+					filter: {
+						relationEntityId: TEST_RELATION_ENTITY_1_ID,
+						typeId: TEST_TYPE_1_ID,
+					},
+				}).pipe(provideDeps),
+			)
+
+			expect(result).toHaveLength(1)
+			if (result[0]) {
+				expect(result[0].id).toBe(TEST_RELATION_1_ID)
+				expect(result[0].entityId).toBe(TEST_RELATION_ENTITY_1_ID)
+				expect(result[0].typeId).toBe(TEST_TYPE_1_ID)
+			}
+		})
+
+		it("should filter by relationEntityId for type-2 relations", async () => {
+			const result = await Effect.runPromise(
+				getAllRelations({
+					filter: {
+						relationEntityId: TEST_RELATION_ENTITY_2_ID,
+						typeId: TEST_TYPE_2_ID,
+					},
+				}).pipe(provideDeps),
+			)
+
+			expect(result).toHaveLength(1)
+			if (result[0]) {
+				expect(result[0].id).toBe(TEST_RELATION_2_ID)
+				expect(result[0].entityId).toBe(TEST_RELATION_ENTITY_2_ID)
+				expect(result[0].typeId).toBe(TEST_TYPE_2_ID)
+			}
+		})
+
+		it("should filter by relationEntityId for type-3 relations", async () => {
+			const result = await Effect.runPromise(
+				getAllRelations({
+					filter: {
+						relationEntityId: TEST_RELATION_ENTITY_4_ID,
+						typeId: TEST_TYPE_3_ID,
+					},
+				}).pipe(provideDeps),
+			)
+
+			expect(result).toHaveLength(1)
+			if (result[0]) {
+				expect(result[0].id).toBe(TEST_RELATION_4_ID)
+				expect(result[0].entityId).toBe(TEST_RELATION_ENTITY_4_ID)
+				expect(result[0].typeId).toBe(TEST_TYPE_3_ID)
+			}
+		})
+
+		it("should return all relations with same relationEntityId across different types", async () => {
+			// First, let's verify we have different relation entities for different types
+			const type1Results = await Effect.runPromise(
+				getAllRelations({
+					filter: {typeId: TEST_TYPE_1_ID},
+				}).pipe(provideDeps),
+			)
+
+			const relationEntityIds = type1Results.map((r) => r.entityId)
+			expect(relationEntityIds).toContain(TEST_RELATION_ENTITY_1_ID)
+			expect(relationEntityIds).toContain(TEST_RELATION_ENTITY_3_ID)
+		})
 	})
 
 	describe("Verified Relations", () => {
@@ -523,6 +755,105 @@ describe("Relation Queries Integration Tests", () => {
 			if (verifiedRelation && unverifiedRelation) {
 				expect(verifiedRelation.verified).toBe(true)
 				expect(unverifiedRelation.verified).toBe(false)
+			}
+		})
+	})
+
+	describe("Backlinks", () => {
+		it("should return relations where toEntityId equals the entity's id", async () => {
+			// Get backlinks for TEST_ENTITY_2_ID (should find TEST_RELATION_1_ID)
+			const result = await Effect.runPromise(getBacklinks(TEST_ENTITY_2_ID).pipe(provideDeps))
+
+			expect(result).toHaveLength(1)
+			if (result[0]) {
+				expect(result[0].id).toBe(TEST_RELATION_1_ID)
+				expect(result[0].toId).toBe(TEST_ENTITY_2_ID)
+				expect(result[0].fromId).toBe(TEST_ENTITY_1_ID)
+			}
+		})
+
+		it("should return multiple backlinks when entity is referenced multiple times", async () => {
+			// Get backlinks for TEST_ENTITY_3_ID (should find TEST_RELATION_2_ID and TEST_RELATION_3_ID)
+			const result = await Effect.runPromise(getBacklinks(TEST_ENTITY_3_ID).pipe(provideDeps))
+
+			expect(result).toHaveLength(2)
+			expect(result.map((r) => r.id)).toEqual(expect.arrayContaining([TEST_RELATION_2_ID, TEST_RELATION_3_ID]))
+			expect(result.every((r) => r.toId === TEST_ENTITY_3_ID)).toBe(true)
+		})
+
+		it("should return empty array when entity has no backlinks", async () => {
+			// Create a new entity that has no incoming relations
+			const newEntityId = uuid()
+			await Effect.runPromise(
+				Effect.gen(function* () {
+					const storage = yield* Storage
+					yield* storage.use(async (client) => {
+						await client.insert(entities).values([
+							{
+								id: newEntityId,
+								createdAt: "2024-01-01T00:00:00Z",
+								createdAtBlock: "block-new",
+								updatedAt: "2024-01-01T00:00:00Z",
+								updatedAtBlock: "block-new",
+							},
+						])
+					})
+				}).pipe(provideDeps),
+			)
+
+			const result = await Effect.runPromise(getBacklinks(newEntityId).pipe(provideDeps))
+
+			expect(result).toHaveLength(0)
+
+			// Clean up
+			await Effect.runPromise(
+				Effect.gen(function* () {
+					const storage = yield* Storage
+					yield* storage.use(async (client) => {
+						await client.delete(entities).where(inArray(entities.id, [newEntityId]))
+					})
+				}).pipe(provideDeps),
+			)
+		})
+
+		it("should filter backlinks by spaceId when provided", async () => {
+			// Get backlinks for TEST_ENTITY_3_ID in TEST_SPACE_1_ID (should find only TEST_RELATION_2_ID)
+			const result = await Effect.runPromise(getBacklinks(TEST_ENTITY_3_ID, TEST_SPACE_1_ID).pipe(provideDeps))
+
+			expect(result).toHaveLength(1)
+			if (result[0]) {
+				expect(result[0].id).toBe(TEST_RELATION_2_ID)
+				expect(result[0].toId).toBe(TEST_ENTITY_3_ID)
+				expect(result[0].spaceId).toBe(TEST_SPACE_1_ID)
+			}
+		})
+
+		it("should return backlinks from different spaces when spaceId is not provided", async () => {
+			// Get all backlinks for TEST_ENTITY_3_ID (should find relations from both spaces)
+			const result = await Effect.runPromise(getBacklinks(TEST_ENTITY_3_ID).pipe(provideDeps))
+
+			expect(result).toHaveLength(2)
+			const spaceIds = result.map((r) => r.spaceId)
+			expect(spaceIds).toContain(TEST_SPACE_1_ID)
+			expect(spaceIds).toContain(TEST_SPACE_2_ID)
+		})
+
+		it("should return backlinks with all expected fields", async () => {
+			const result = await Effect.runPromise(getBacklinks(TEST_ENTITY_2_ID).pipe(provideDeps))
+
+			expect(result).toHaveLength(1)
+			if (result[0]) {
+				expect(result[0]).toEqual({
+					id: TEST_RELATION_1_ID,
+					entityId: TEST_RELATION_ENTITY_1_ID,
+					typeId: TEST_TYPE_1_ID,
+					fromId: TEST_ENTITY_1_ID,
+					toId: TEST_ENTITY_2_ID,
+					toSpaceId: TEST_SPACE_1_ID,
+					verified: true,
+					position: "1",
+					spaceId: TEST_SPACE_1_ID,
+				})
 			}
 		})
 	})
