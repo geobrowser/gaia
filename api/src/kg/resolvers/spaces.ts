@@ -34,10 +34,7 @@ export const getSpaces = (args: QuerySpacesArgs) => {
 										.select()
 										.from(members)
 										.where(
-											and(
-												eq(members.spaceId, spaces.id),
-												sql`LOWER(${members.address}) = LOWER(${filter.member.is})`,
-											),
+											and(eq(members.spaceId, spaces.id), eq(members.address, filter.member.is)),
 										),
 								),
 							)
@@ -47,7 +44,6 @@ export const getSpaces = (args: QuerySpacesArgs) => {
 								// Return condition that matches nothing for empty arrays
 								return sql`false`
 							}
-							const lowerAddresses = filter.member.in.map((addr) => addr.toLowerCase())
 							conditions.push(
 								exists(
 									client
@@ -56,7 +52,7 @@ export const getSpaces = (args: QuerySpacesArgs) => {
 										.where(
 											and(
 												eq(members.spaceId, spaces.id),
-												inArray(sql`LOWER(${members.address})`, lowerAddresses),
+												inArray(members.address, filter.member.in),
 											),
 										),
 								),
@@ -73,10 +69,7 @@ export const getSpaces = (args: QuerySpacesArgs) => {
 										.select()
 										.from(editors)
 										.where(
-											and(
-												eq(editors.spaceId, spaces.id),
-												sql`LOWER(${editors.address}) = LOWER(${filter.editor.is})`,
-											),
+											and(eq(editors.spaceId, spaces.id), eq(editors.address, filter.editor.is)),
 										),
 								),
 							)
@@ -86,7 +79,6 @@ export const getSpaces = (args: QuerySpacesArgs) => {
 								// Return condition that matches nothing for empty arrays
 								return sql`false`
 							}
-							const lowerAddresses = filter.editor.in.map((addr) => addr.toLowerCase())
 							conditions.push(
 								exists(
 									client
@@ -95,7 +87,7 @@ export const getSpaces = (args: QuerySpacesArgs) => {
 										.where(
 											and(
 												eq(editors.spaceId, spaces.id),
-												inArray(sql`LOWER(${editors.address})`, lowerAddresses),
+												inArray(editors.address, filter.editor.in),
 											),
 										),
 								),

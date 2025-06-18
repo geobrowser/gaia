@@ -862,8 +862,9 @@ describe("Spaces Query Integration Tests", () => {
 		})
 
 		describe("Member and Editor Filter Edge Cases", () => {
-			it("should handle case-insensitive member address filtering", async () => {
-				const result = await Effect.runPromise(
+			it("should handle case-sensitive member address filtering", async () => {
+				// Test that uppercase address does NOT match lowercase stored address
+				const upperCaseResult = await Effect.runPromise(
 					provideDeps(
 						getSpaces({
 							filter: {
@@ -875,13 +876,29 @@ describe("Spaces Query Integration Tests", () => {
 					),
 				)
 
-				expect(result).toHaveLength(2)
-				const spaceIds = result.map((s) => s.id).sort()
+				expect(upperCaseResult).toHaveLength(0)
+
+				// Test that exact case match works
+				const exactCaseResult = await Effect.runPromise(
+					provideDeps(
+						getSpaces({
+							filter: {
+								member: {
+									is: MEMBER_ADDRESS_1,
+								},
+							},
+						}),
+					),
+				)
+
+				expect(exactCaseResult).toHaveLength(2)
+				const spaceIds = exactCaseResult.map((s) => s.id).sort()
 				expect(spaceIds).toEqual([PERSONAL_SPACE_ID, COMPLETE_SPACE_ID].sort())
 			})
 
-			it("should handle case-insensitive editor address filtering", async () => {
-				const result = await Effect.runPromise(
+			it("should handle case-sensitive editor address filtering", async () => {
+				// Test that uppercase address does NOT match lowercase stored address
+				const upperCaseResult = await Effect.runPromise(
 					provideDeps(
 						getSpaces({
 							filter: {
@@ -893,8 +910,23 @@ describe("Spaces Query Integration Tests", () => {
 					),
 				)
 
-				expect(result).toHaveLength(2)
-				const spaceIds = result.map((s) => s.id).sort()
+				expect(upperCaseResult).toHaveLength(0)
+
+				// Test that exact case match works
+				const exactCaseResult = await Effect.runPromise(
+					provideDeps(
+						getSpaces({
+							filter: {
+								editor: {
+									is: EDITOR_ADDRESS_1,
+								},
+							},
+						}),
+					),
+				)
+
+				expect(exactCaseResult).toHaveLength(2)
+				const spaceIds = exactCaseResult.map((s) => s.id).sort()
 				expect(spaceIds).toEqual([PERSONAL_SPACE_ID, PUBLIC_SPACE_ID].sort())
 			})
 
