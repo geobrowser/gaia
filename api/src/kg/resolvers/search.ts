@@ -24,9 +24,9 @@ function buildTypeFilterConditions(filter: SearchFilter): SQL[] {
 	}
 
 	// Handle OR conditions
-	if (filter.OR && filter.OR.length > 0) {
+	if (filter.or && filter.or.length > 0) {
 		const orConditions: SQL[] = []
-		for (const orFilter of filter.OR) {
+		for (const orFilter of filter.or) {
 			const subConditions = buildTypeFilterConditions(orFilter)
 			orConditions.push(...subConditions)
 		}
@@ -36,8 +36,8 @@ function buildTypeFilterConditions(filter: SearchFilter): SQL[] {
 	}
 
 	// Handle NOT condition
-	if (filter.NOT) {
-		const notConditions = buildTypeFilterConditions(filter.NOT)
+	if (filter.not) {
+		const notConditions = buildTypeFilterConditions(filter.not)
 		if (notConditions.length === 1) {
 			conditions.push(not(notConditions[0] as SQL))
 		} else if (notConditions.length > 1) {
@@ -52,7 +52,7 @@ function buildTypeFilterConditions(filter: SearchFilter): SQL[] {
 function needsTypeFilter(filter?: SearchFilter | null): boolean {
 	if (!filter) return false
 
-	return !!((filter.types?.in && filter.types.in.length > 0) || filter.NOT || (filter.OR && filter.OR.length > 0))
+	return !!((filter.types?.in && filter.types.in.length > 0) || filter.not || (filter.or && filter.or.length > 0))
 }
 
 export const search = (args: SearchArgs) =>

@@ -388,7 +388,7 @@ describe("Entity Filters Integration Tests", () => {
 				value: {
 					property: TEXT_PROPERTY_ID,
 					text: {
-						NOT: {
+						not: {
 							contains: "Hello",
 						},
 					},
@@ -624,7 +624,7 @@ describe("Entity Filters Integration Tests", () => {
 
 		it("should combine ID filter with other filters using AND logic", async () => {
 			const filter: EntityFilter = {
-				AND: [
+				and: [
 					{
 						id: {
 							in: [TEST_ENTITY_1_ID, TEST_ENTITY_2_ID],
@@ -898,7 +898,7 @@ describe("Entity Filters Integration Tests", () => {
 
 		it("should work with OR logic for relation filters", async () => {
 			const filter: EntityFilter = {
-				OR: [
+				or: [
 					{
 						fromRelation: {
 							toEntityId: TEST_ENTITY_2_ID,
@@ -927,7 +927,7 @@ describe("Entity Filters Integration Tests", () => {
 			// For now, we test what we can verify and document the limitation
 
 			const filter: EntityFilter = {
-				NOT: {
+				not: {
 					fromRelation: {
 						typeId: TEST_RELATION_TYPE_2_ID,
 					},
@@ -1041,7 +1041,7 @@ describe("Entity Filters Integration Tests", () => {
 
 		it("should combine different relation types with OR logic", async () => {
 			const filter: EntityFilter = {
-				OR: [
+				or: [
 					{
 						fromRelation: {
 							typeId: TEST_RELATION_TYPE_ID,
@@ -1086,9 +1086,9 @@ describe("Entity Filters Integration Tests", () => {
 
 		it("should filter by complex nested relation conditions", async () => {
 			const filter: EntityFilter = {
-				OR: [
+				or: [
 					{
-						AND: [
+						and: [
 							{
 								fromRelation: {
 									typeId: TEST_RELATION_TYPE_ID,
@@ -1123,7 +1123,7 @@ describe("Entity Filters Integration Tests", () => {
 		it("should handle empty relation filter objects", async () => {
 			// Test with OR of both relation types to catch entities with any outgoing relations
 			const filter: EntityFilter = {
-				OR: [
+				or: [
 					{
 						fromRelation: {
 							typeId: TEST_RELATION_TYPE_ID,
@@ -1170,7 +1170,7 @@ describe("Entity Filters Integration Tests", () => {
 
 		it("should handle relation filters with mixed spaces", async () => {
 			const filter: EntityFilter = {
-				OR: [
+				or: [
 					{
 						fromRelation: {
 							spaceId: TEST_SPACE_ID,
@@ -1231,7 +1231,7 @@ describe("Entity Filters Integration Tests", () => {
 	describe("Complex Filters", () => {
 		it("should handle AND filters", async () => {
 			const filter: EntityFilter = {
-				AND: [
+				and: [
 					{
 						value: {
 							property: TEXT_PROPERTY_ID,
@@ -1260,7 +1260,7 @@ describe("Entity Filters Integration Tests", () => {
 
 		it("should handle OR filters", async () => {
 			const filter: EntityFilter = {
-				OR: [
+				or: [
 					{
 						value: {
 							property: TEXT_PROPERTY_ID,
@@ -1292,7 +1292,7 @@ describe("Entity Filters Integration Tests", () => {
 			// where it may return 0 results instead of the expected entities that don't match
 			// the criteria. This test documents the current behavior and ensures no false positives.
 			const filter: EntityFilter = {
-				NOT: {
+				not: {
 					value: {
 						property: TEXT_PROPERTY_ID,
 						text: {
@@ -1326,9 +1326,9 @@ describe("Entity Filters Integration Tests", () => {
 
 		it("should handle nested complex filters", async () => {
 			const filter: EntityFilter = {
-				OR: [
+				or: [
 					{
-						AND: [
+						and: [
 							{
 								value: {
 									property: TEXT_PROPERTY_ID,
@@ -1443,7 +1443,7 @@ describe("Entity Filters Integration Tests", () => {
 
 			// Now test the complex NOT filter
 			const notFilter: EntityFilter = {
-				NOT: {
+				not: {
 					value: {
 						property: TEXT_PROPERTY_ID,
 						text: {
@@ -1466,7 +1466,7 @@ describe("Entity Filters Integration Tests", () => {
 				value: {
 					property: TEXT_PROPERTY_ID,
 					text: {
-						NOT: {
+						not: {
 							contains: "Hello",
 						},
 					},
@@ -1597,7 +1597,7 @@ describe("Entity Filters Integration Tests", () => {
 				getEntities({
 					spaceId: TEST_SPACE_ID,
 					filter: {
-						OR: [
+						or: [
 							{
 								value: {
 									property: TEXT_PROPERTY_ID,
@@ -1635,7 +1635,7 @@ describe("Entity Filters Integration Tests", () => {
 				getEntities({
 					spaceId: TEST_SPACE_ID,
 					filter: {
-						NOT: {
+						not: {
 							value: {
 								property: TEXT_PROPERTY_ID,
 								text: {
