@@ -6,6 +6,7 @@ import type {
 	EntityValuesArgs,
 	Resolvers as GeneratedResolvers,
 	InputMaybe,
+	QueryMembersArgs,
 	QuerySearchArgs,
 	QuerySpaceArgs,
 	QuerySpacesArgs,
@@ -47,6 +48,9 @@ const resolvers: GeneratedResolvers = {
 		},
 		space: async (_, args: QuerySpaceArgs) => {
 			return await Resolvers.space(args.id)
+		},
+		members: async (_, args: QueryMembersArgs) => {
+			//
 		},
 		relation: async (_, args) => {
 			return await Resolvers.relation({id: args.id})

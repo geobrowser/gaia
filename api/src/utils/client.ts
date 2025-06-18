@@ -1,6 +1,6 @@
 import {providers} from "ethers"
-import {http, createPublicClient, createWalletClient} from "viem"
 import type {WalletClient} from "viem"
+import {createPublicClient, createWalletClient, http} from "viem"
 import {privateKeyToAccount} from "viem/accounts"
 import {EnvironmentLive} from "../services/environment"
 import {GEOGENESIS, TESTNET} from "./chain"

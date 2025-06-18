@@ -7,7 +7,7 @@ import {getEntities, getRelations, getValues} from "~/src/kg/resolvers/entities"
 import type {EntityFilter} from "~/src/kg/resolvers/filters"
 import {Environment, make as makeEnvironment} from "~/src/services/environment"
 import {entities, relations, values} from "~/src/services/storage/schema"
-import {Storage, make as makeStorage} from "~/src/services/storage/storage"
+import {make as makeStorage, Storage} from "~/src/services/storage/storage"
 
 // Set up Effect layers like in the main application
 const EnvironmentLayer = Layer.effect(Environment, makeEnvironment)

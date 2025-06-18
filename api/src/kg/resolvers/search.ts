@@ -1,5 +1,5 @@
 import {SystemIds} from "@graphprotocol/grc-20"
-import {type SQL, and, desc, eq, inArray, isNotNull, not, or, sql} from "drizzle-orm"
+import {and, desc, eq, inArray, isNotNull, not, or, type SQL, sql} from "drizzle-orm"
 import {Effect} from "effect"
 import type {SearchFilter} from "../../generated/graphql"
 import {entities, relations, values} from "../../services/storage/schema"

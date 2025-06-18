@@ -1,7 +1,7 @@
 import {Effect} from "effect"
 
 import {entities, properties, relations, spaces, values} from "../../services/storage/schema"
-import {Storage, make} from "../../services/storage/storage"
+import {make, Storage} from "../../services/storage/storage"
 import {Environment, make as makeEnvironment} from "../environment"
 
 const reset = Effect.gen(function* () {

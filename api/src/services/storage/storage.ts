@@ -4,20 +4,15 @@ import {Pool} from "pg"
 
 import {EnvironmentLive} from "../environment"
 import {
-	editors,
-	editorsRelations,
 	entities,
 	entityForeignValues,
 	ipfsCache,
-	members,
-	membersRelations,
 	properties,
 	propertiesEntityRelations,
 	propertiesRelations,
 	relations,
 	relationsEntityRelations,
 	spaces,
-	spacesRelations,
 	values,
 } from "./schema"
 
@@ -41,16 +36,11 @@ const schemaDefinition = {
 	values: values,
 	relations: relations,
 	spaces,
-	members,
-	editors,
 
 	entityForeignProperties: entityForeignValues,
 	propertiesEntityRelations,
 	relationsEntityRelations,
 	propertiesRelations,
-	membersRelations,
-	editorsRelations,
-	spacesRelations,
 } as const
 
 type DbSchema = typeof schemaDefinition
