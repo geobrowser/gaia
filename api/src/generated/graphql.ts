@@ -104,6 +104,7 @@ export type EntityFilter = {
 	fromRelation?: InputMaybe<RelationFilter>
 	id?: InputMaybe<IdFilter>
 	toRelation?: InputMaybe<RelationFilter>
+	types?: InputMaybe<IdFilter>
 	value?: InputMaybe<ValueFilter>
 }
 

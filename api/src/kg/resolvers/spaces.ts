@@ -1,5 +1,4 @@
 import {SystemIds} from "@graphprotocol/grc-20"
-import {inArray} from "drizzle-orm"
 import {Effect} from "effect"
 import {type QuerySpacesArgs, SpaceType} from "~/src/generated/graphql"
 import {editors, members} from "../../services/storage/schema"

@@ -1,3 +1,4 @@
+import {SystemIds} from "@graphprotocol/grc-20"
 import {and, inArray, not, or, type SQL, sql} from "drizzle-orm"
 import {entities, values} from "../../services/storage/schema"
 
@@ -54,6 +55,7 @@ export type EntityFilter = {
 	OR?: EntityFilter[]
 	NOT?: EntityFilter
 	id?: IdFilter
+	types?: IdFilter
 	value?: PropertyFilter
 	fromRelation?: RelationFilter
 	toRelation?: RelationFilter
@@ -138,7 +140,10 @@ function buildValueWhere(filter: PropertyFilter, spaceId?: string | null) {
 			conditions.push(f.exists ? sql`values.value IS NOT NULL` : sql`values.value IS NULL`)
 		}
 		if (f.NOT) {
-			const notConditions = buildValueConditions({property: filter.property, text: f.NOT})
+			const notConditions = buildValueConditions({
+				property: filter.property,
+				text: f.NOT,
+			})
 			if (notConditions.length > 0) {
 				conditions.push(not(sql.join(notConditions, sql` AND `)))
 			}
@@ -173,7 +178,10 @@ function buildValueWhere(filter: PropertyFilter, spaceId?: string | null) {
 		}
 
 		if (f.NOT) {
-			const notConditions = buildValueConditions({property: filter.property, number: f.NOT})
+			const notConditions = buildValueConditions({
+				property: filter.property,
+				number: f.NOT,
+			})
 			if (notConditions.length > 0) {
 				conditions.push(not(sql.join(notConditions, sql` AND `)))
 			}
@@ -253,6 +261,25 @@ export function buildEntityWhere(filter: EntityFilter | null, spaceId?: string |
 			clauses.push(sql`false`)
 		}
 	}
+	if (filter?.types) {
+		if (filter.types.in && filter.types.in.length > 0) {
+			clauses.push(
+				sql`EXISTS (
+					SELECT 1 FROM relations
+					WHERE relations.from_entity_id = entities.id
+					AND relations.type_id = ${SystemIds.TYPES_PROPERTY}
+					AND relations.to_entity_id IN (${sql.join(
+						filter.types.in.map((id: string) => sql`${id}`),
+						sql`, `,
+					)})
+					${spaceId ? sql`AND relations.space_id = ${spaceId}` : sql``}
+				)`,
+			)
+		} else if (filter.types.in && filter.types.in.length === 0) {
+			// Empty array should return no results
+			clauses.push(sql`false`)
+		}
+	}
 	if (filter?.AND) {
 		clauses.push(and(...filter.AND.map((f) => buildEntityWhere(f, spaceId))))
 	}
@@ -294,6 +321,7 @@ export function buildEntityWhere(filter: EntityFilter | null, spaceId?: string |
 			)
 		}
 	}
+
 	if (filter?.toRelation) {
 		// This checks: exists a relation where this entity is the toEntity
 		const relationConditions = buildRelationConditions(filter.toRelation, spaceId)
