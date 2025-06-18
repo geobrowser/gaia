@@ -7,7 +7,7 @@ import {getPropertiesForType, getPropertyRenderableType} from "../kg/resolvers/p
 import {getTypes} from "../kg/resolvers/types"
 import {Environment, make as makeEnvironment} from "../services/environment"
 import {entities, properties, relations, values} from "../services/storage/schema"
-import {Storage, make as makeStorage} from "../services/storage/storage"
+import {make as makeStorage, Storage} from "../services/storage/storage"
 
 // Set up Effect layers like in the main application
 const EnvironmentLayer = Layer.effect(Environment, makeEnvironment)

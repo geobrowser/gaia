@@ -5,7 +5,7 @@ import {DataType} from "../generated/graphql"
 import {getProperties} from "../kg/resolvers/properties"
 import {Environment, make as makeEnvironment} from "../services/environment"
 import {properties} from "../services/storage/schema"
-import {Storage, make as makeStorage} from "../services/storage/storage"
+import {make as makeStorage, Storage} from "../services/storage/storage"
 
 // Set up Effect layers like in the main application
 const EnvironmentLayer = Layer.effect(Environment, makeEnvironment)

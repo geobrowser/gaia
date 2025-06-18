@@ -9,7 +9,7 @@ import type {
 	QueryTypesArgs,
 } from "../../generated/graphql"
 import {Environment, make as makeEnvironment} from "../../services/environment"
-import {Storage, make as makeStorage} from "../../services/storage/storage"
+import {make as makeStorage, Storage} from "../../services/storage/storage"
 import * as EntityResolvers from "./entities"
 import * as PropertyResolvers from "./properties"
 import * as SearchResolvers from "./search"

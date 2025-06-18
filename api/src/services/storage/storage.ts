@@ -4,15 +4,20 @@ import {Pool} from "pg"
 
 import {EnvironmentLive} from "../environment"
 import {
+	editors,
+	editorsRelations,
 	entities,
 	entityForeignValues,
 	ipfsCache,
+	members,
+	membersRelations,
 	properties,
 	propertiesEntityRelations,
 	propertiesRelations,
 	relations,
 	relationsEntityRelations,
 	spaces,
+	spacesRelations,
 	values,
 } from "./schema"
 
@@ -36,11 +41,16 @@ const schemaDefinition = {
 	values: values,
 	relations: relations,
 	spaces,
+	members,
+	editors,
 
 	entityForeignProperties: entityForeignValues,
 	propertiesEntityRelations,
 	relationsEntityRelations,
 	propertiesRelations,
+	membersRelations,
+	editorsRelations,
+	spacesRelations,
 } as const
 
 type DbSchema = typeof schemaDefinition
@@ -64,7 +74,10 @@ export const make = Effect.gen(function* () {
 				const result = yield* Effect.try({
 					try: () => fn(db),
 					catch: (error) =>
-						new StorageError({message: `Synchronous error in Db.use ${String(error)}`, cause: error}),
+						new StorageError({
+							message: `Synchronous error in Db.use ${String(error)}`,
+							cause: error,
+						}),
 				})
 
 				if (result instanceof Promise) {

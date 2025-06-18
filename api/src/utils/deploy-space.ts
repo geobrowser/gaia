@@ -9,7 +9,7 @@ import {
 import {type ContextParams, type CreateDaoParams, DaoCreationSteps, PermissionIds} from "@aragon/sdk-client"
 import {DaoCreationError, MissingExecPermissionError} from "@aragon/sdk-client-common"
 import {id} from "@ethersproject/hash"
-import {Graph, type Op, SystemIds, getChecksumAddress} from "@graphprotocol/grc-20"
+import {Graph, getChecksumAddress, type Op, SystemIds} from "@graphprotocol/grc-20"
 import {MAINNET, TESTNET} from "@graphprotocol/grc-20/contracts"
 import {EditProposal} from "@graphprotocol/grc-20/proto"
 import {Duration, Effect, Schedule} from "effect"

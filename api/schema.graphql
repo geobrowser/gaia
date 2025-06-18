@@ -122,6 +122,16 @@ type Space {
   personalAddress: String
 
   entity: Entity
+  editors: [Membership!]
+  members: [Membership!]
+}
+
+type Account {
+  id: ID!
+  address: String!
+
+  spacesWhereEdtitor: [Space]
+  spacesWhereMember: [Space]
 }
 
 type Membership {
@@ -169,25 +179,8 @@ type Query {
   spaces(filter: SpaceFilter, limit: Int = 100, offset: Int = 0): [Space]!
   space(id: String!): Space
 
-  # Get multiple editors with optional filtering by address and/or space
-  editors(
-    filter: MembershipFilter
-    limit: Int = 100
-    offset: Int = 0
-  ): [Membership]!
-
-  # Get a single editor by ID
-  editor(id: String!): Membership
-
-  # Get multiple members with optional filtering by address and/or space
-  members(
-    filter: MembershipFilter
-    limit: Int = 100
-    offset: Int = 0
-  ): [Membership]!
-
   # Get a single member by ID
-  member(id: String!): Membership
+  account(address: String!): Account
 
   relation(id: String!): Relation
   relations(
@@ -213,16 +206,15 @@ input SearchFilter {
   types: IdFilter
 }
 
-input SpaceFilter {
-  id: IdFilter
+input AddressFilter {
+  is: String
+  in: [String!]
 }
 
-input MembershipFilter {
-  OR: [MembershipFilter!]
-  NOT: MembershipFilter
+input SpaceFilter {
   id: IdFilter
-  address: TextFilter
-  spaceId: TextFilter
+  editor: AddressFilter
+  member: AddressFilter
 }
 
 input PropertyFilter {

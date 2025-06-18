@@ -1,14 +1,12 @@
 import {eq} from "drizzle-orm"
-import {Effect} from "effect"
-import {Layer} from "effect"
+import {Effect, Layer} from "effect"
 import {v4 as uuid} from "uuid"
 import {beforeAll, describe, expect, test} from "vitest"
 import {DataType} from "../generated/graphql"
 import * as PropertyResolvers from "../kg/resolvers/properties"
 import {Environment, make as makeEnvironment} from "../services/environment"
 import {properties} from "../services/storage/schema"
-import {Storage} from "../services/storage/storage"
-import {make as makeStorage} from "../services/storage/storage"
+import {make as makeStorage, Storage} from "../services/storage/storage"
 
 const EnvironmentLayer = Layer.effect(Environment, makeEnvironment)
 const StorageLayer = Layer.effect(Storage, makeStorage).pipe(Layer.provide(EnvironmentLayer))

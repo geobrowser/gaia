@@ -1,4 +1,4 @@
-import {type InferSelectModel, relations as drizzleRelations} from "drizzle-orm"
+import {relations as drizzleRelations, type InferSelectModel} from "drizzle-orm"
 import {boolean, index, jsonb, pgEnum, pgTable, primaryKey, serial, text, uuid} from "drizzle-orm/pg-core"
 
 export const ipfsCache = pgTable("ipfs_cache", {

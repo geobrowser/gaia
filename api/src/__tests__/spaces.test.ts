@@ -5,8 +5,8 @@ import {afterEach, beforeEach, describe, expect, it} from "vitest"
 import {SpaceType} from "../generated/graphql"
 import {getSpace, getSpaceEntity, getSpaces} from "../kg/resolvers/spaces"
 import {Environment, make as makeEnvironment} from "../services/environment"
-import {entities, relations, spaces} from "../services/storage/schema"
-import {Storage, make as makeStorage} from "../services/storage/storage"
+import {editors, entities, members, relations, spaces} from "../services/storage/schema"
+import {make as makeStorage, Storage} from "../services/storage/storage"
 
 // Set up Effect layers like in the main application
 const EnvironmentLayer = Layer.effect(Environment, makeEnvironment)
@@ -22,6 +22,13 @@ describe("Spaces Query Integration Tests", () => {
 	let SPACE_ENTITY_ID: string
 	let SPACE_ENTITY_ID_2: string
 	let NON_SPACE_ENTITY_ID: string
+	// Member and Editor test addresses
+	let MEMBER_ADDRESS_1: string
+	let MEMBER_ADDRESS_2: string
+	let MEMBER_ADDRESS_3: string
+	let EDITOR_ADDRESS_1: string
+	let EDITOR_ADDRESS_2: string
+	let EDITOR_ADDRESS_3: string
 
 	beforeEach(async () => {
 		// Generate fresh UUIDs for each test to ensure isolation
@@ -31,6 +38,13 @@ describe("Spaces Query Integration Tests", () => {
 		SPACE_ENTITY_ID = uuid()
 		SPACE_ENTITY_ID_2 = uuid()
 		NON_SPACE_ENTITY_ID = uuid()
+		// Generate test addresses
+		MEMBER_ADDRESS_1 = "0xaaaa111122223333444455556666777788889999"
+		MEMBER_ADDRESS_2 = "0xbbbb111122223333444455556666777788889999"
+		MEMBER_ADDRESS_3 = "0xcccc111122223333444455556666777788889999"
+		EDITOR_ADDRESS_1 = "0xdddd111122223333444455556666777788889999"
+		EDITOR_ADDRESS_2 = "0xeeee111122223333444455556666777788889999"
+		EDITOR_ADDRESS_3 = "0xffff111122223333444455556666777788889999"
 
 		await Effect.runPromise(
 			provideDeps(
@@ -42,6 +56,8 @@ describe("Spaces Query Integration Tests", () => {
 						await client.delete(relations)
 						await client.delete(entities)
 						await client.delete(spaces)
+						await client.delete(members)
+						await client.delete(editors)
 
 						// Insert test entities
 						await client.insert(entities).values([
@@ -99,6 +115,56 @@ describe("Spaces Query Integration Tests", () => {
 							},
 						])
 
+						// Insert test members
+						await client.insert(members).values([
+							// PERSONAL_SPACE_ID members
+							{
+								address: MEMBER_ADDRESS_1,
+								spaceId: PERSONAL_SPACE_ID,
+							},
+							{
+								address: MEMBER_ADDRESS_2,
+								spaceId: PERSONAL_SPACE_ID,
+							},
+							// PUBLIC_SPACE_ID members
+							{
+								address: MEMBER_ADDRESS_2,
+								spaceId: PUBLIC_SPACE_ID,
+							},
+							{
+								address: MEMBER_ADDRESS_3,
+								spaceId: PUBLIC_SPACE_ID,
+							},
+							// COMPLETE_SPACE_ID members
+							{
+								address: MEMBER_ADDRESS_1,
+								spaceId: COMPLETE_SPACE_ID,
+							},
+						])
+
+						// Insert test editors
+						await client.insert(editors).values([
+							// PERSONAL_SPACE_ID editors
+							{
+								address: EDITOR_ADDRESS_1,
+								spaceId: PERSONAL_SPACE_ID,
+							},
+							// PUBLIC_SPACE_ID editors
+							{
+								address: EDITOR_ADDRESS_1,
+								spaceId: PUBLIC_SPACE_ID,
+							},
+							{
+								address: EDITOR_ADDRESS_2,
+								spaceId: PUBLIC_SPACE_ID,
+							},
+							// COMPLETE_SPACE_ID editors
+							{
+								address: EDITOR_ADDRESS_3,
+								spaceId: COMPLETE_SPACE_ID,
+							},
+						])
+
 						// Insert test relations - linking spaces to entities with TYPES_PROPERTY -> SPACE_TYPE
 						await client.insert(relations).values([
 							{
@@ -148,6 +214,8 @@ describe("Spaces Query Integration Tests", () => {
 						await client.delete(relations)
 						await client.delete(entities)
 						await client.delete(spaces)
+						await client.delete(members)
+						await client.delete(editors)
 					})
 				}),
 			),
@@ -452,6 +520,564 @@ describe("Spaces Query Integration Tests", () => {
 			)
 
 			expect(result1).toEqual(result2)
+		})
+
+		describe("Member Filtering", () => {
+			it("should filter spaces by single member address using 'is'", async () => {
+				const result = await Effect.runPromise(
+					provideDeps(
+						getSpaces({
+							filter: {
+								member: {
+									is: MEMBER_ADDRESS_1,
+								},
+							},
+						}),
+					),
+				)
+
+				expect(result).toHaveLength(2)
+				const spaceIds = result.map((s) => s.id).sort()
+				expect(spaceIds).toEqual([PERSONAL_SPACE_ID, COMPLETE_SPACE_ID].sort())
+			})
+
+			it("should filter spaces by single member address using 'in' array", async () => {
+				const result = await Effect.runPromise(
+					provideDeps(
+						getSpaces({
+							filter: {
+								member: {
+									in: [MEMBER_ADDRESS_2],
+								},
+							},
+						}),
+					),
+				)
+
+				expect(result).toHaveLength(2)
+				const spaceIds = result.map((s) => s.id).sort()
+				expect(spaceIds).toEqual([PERSONAL_SPACE_ID, PUBLIC_SPACE_ID].sort())
+			})
+
+			it("should filter spaces by multiple member addresses using 'in' array", async () => {
+				const result = await Effect.runPromise(
+					provideDeps(
+						getSpaces({
+							filter: {
+								member: {
+									in: [MEMBER_ADDRESS_1, MEMBER_ADDRESS_3],
+								},
+							},
+						}),
+					),
+				)
+
+				expect(result).toHaveLength(3)
+				const spaceIds = result.map((s) => s.id).sort()
+				expect(spaceIds).toEqual([PERSONAL_SPACE_ID, PUBLIC_SPACE_ID, COMPLETE_SPACE_ID].sort())
+			})
+
+			it("should return empty array for non-existent member address", async () => {
+				const result = await Effect.runPromise(
+					provideDeps(
+						getSpaces({
+							filter: {
+								member: {
+									is: "0x9999888877776666555544443333222211110000",
+								},
+							},
+						}),
+					),
+				)
+
+				expect(result).toHaveLength(0)
+			})
+
+			it("should return empty array for empty member address array", async () => {
+				const result = await Effect.runPromise(
+					provideDeps(
+						getSpaces({
+							filter: {
+								member: {
+									in: [],
+								},
+							},
+						}),
+					),
+				)
+
+				expect(result).toHaveLength(0)
+			})
+
+			it("should combine member filter with ID filter", async () => {
+				const result = await Effect.runPromise(
+					provideDeps(
+						getSpaces({
+							filter: {
+								id: {
+									in: [PERSONAL_SPACE_ID, PUBLIC_SPACE_ID],
+								},
+								member: {
+									is: MEMBER_ADDRESS_2,
+								},
+							},
+						}),
+					),
+				)
+
+				expect(result).toHaveLength(2)
+				const spaceIds = result.map((s) => s.id).sort()
+				expect(spaceIds).toEqual([PERSONAL_SPACE_ID, PUBLIC_SPACE_ID].sort())
+			})
+
+			it("should work with pagination when filtering by member", async () => {
+				const result = await Effect.runPromise(
+					provideDeps(
+						getSpaces({
+							filter: {
+								member: {
+									in: [MEMBER_ADDRESS_1, MEMBER_ADDRESS_2, MEMBER_ADDRESS_3],
+								},
+							},
+							limit: 2,
+							offset: 0,
+						}),
+					),
+				)
+
+				expect(result).toHaveLength(2)
+			})
+		})
+
+		describe("Editor Filtering", () => {
+			it("should filter spaces by single editor address using 'is'", async () => {
+				const result = await Effect.runPromise(
+					provideDeps(
+						getSpaces({
+							filter: {
+								editor: {
+									is: EDITOR_ADDRESS_1,
+								},
+							},
+						}),
+					),
+				)
+
+				expect(result).toHaveLength(2)
+				const spaceIds = result.map((s) => s.id).sort()
+				expect(spaceIds).toEqual([PERSONAL_SPACE_ID, PUBLIC_SPACE_ID].sort())
+			})
+
+			it("should filter spaces by single editor address using 'in' array", async () => {
+				const result = await Effect.runPromise(
+					provideDeps(
+						getSpaces({
+							filter: {
+								editor: {
+									in: [EDITOR_ADDRESS_2],
+								},
+							},
+						}),
+					),
+				)
+
+				expect(result).toHaveLength(1)
+				expect(result[0]?.id).toBe(PUBLIC_SPACE_ID)
+			})
+
+			it("should filter spaces by multiple editor addresses using 'in' array", async () => {
+				const result = await Effect.runPromise(
+					provideDeps(
+						getSpaces({
+							filter: {
+								editor: {
+									in: [EDITOR_ADDRESS_1, EDITOR_ADDRESS_3],
+								},
+							},
+						}),
+					),
+				)
+
+				expect(result).toHaveLength(3)
+				const spaceIds = result.map((s) => s.id).sort()
+				expect(spaceIds).toEqual([PERSONAL_SPACE_ID, PUBLIC_SPACE_ID, COMPLETE_SPACE_ID].sort())
+			})
+
+			it("should return empty array for non-existent editor address", async () => {
+				const result = await Effect.runPromise(
+					provideDeps(
+						getSpaces({
+							filter: {
+								editor: {
+									is: "0x9999888877776666555544443333222211110000",
+								},
+							},
+						}),
+					),
+				)
+
+				expect(result).toHaveLength(0)
+			})
+
+			it("should return empty array for empty editor address array", async () => {
+				const result = await Effect.runPromise(
+					provideDeps(
+						getSpaces({
+							filter: {
+								editor: {
+									in: [],
+								},
+							},
+						}),
+					),
+				)
+
+				expect(result).toHaveLength(0)
+			})
+
+			it("should combine editor filter with ID filter", async () => {
+				const result = await Effect.runPromise(
+					provideDeps(
+						getSpaces({
+							filter: {
+								id: {
+									in: [PUBLIC_SPACE_ID, COMPLETE_SPACE_ID],
+								},
+								editor: {
+									is: EDITOR_ADDRESS_1,
+								},
+							},
+						}),
+					),
+				)
+
+				expect(result).toHaveLength(1)
+				expect(result[0]?.id).toBe(PUBLIC_SPACE_ID)
+			})
+
+			it("should work with pagination when filtering by editor", async () => {
+				const result = await Effect.runPromise(
+					provideDeps(
+						getSpaces({
+							filter: {
+								editor: {
+									in: [EDITOR_ADDRESS_1, EDITOR_ADDRESS_2, EDITOR_ADDRESS_3],
+								},
+							},
+							limit: 2,
+							offset: 0,
+						}),
+					),
+				)
+
+				expect(result).toHaveLength(2)
+			})
+		})
+
+		describe("Combined Member and Editor Filtering", () => {
+			it("should filter spaces by both member and editor (AND logic)", async () => {
+				const result = await Effect.runPromise(
+					provideDeps(
+						getSpaces({
+							filter: {
+								member: {
+									is: MEMBER_ADDRESS_2,
+								},
+								editor: {
+									is: EDITOR_ADDRESS_1,
+								},
+							},
+						}),
+					),
+				)
+
+				expect(result).toHaveLength(2)
+				const spaceIds = result.map((s) => s.id).sort()
+				expect(spaceIds).toEqual([PERSONAL_SPACE_ID, PUBLIC_SPACE_ID].sort())
+			})
+
+			it("should return empty array when member and editor filters don't overlap", async () => {
+				const result = await Effect.runPromise(
+					provideDeps(
+						getSpaces({
+							filter: {
+								member: {
+									is: MEMBER_ADDRESS_1,
+								},
+								editor: {
+									is: EDITOR_ADDRESS_2,
+								},
+							},
+						}),
+					),
+				)
+
+				expect(result).toHaveLength(0)
+			})
+
+			it("should combine member, editor, and ID filters", async () => {
+				const result = await Effect.runPromise(
+					provideDeps(
+						getSpaces({
+							filter: {
+								id: {
+									in: [PERSONAL_SPACE_ID, PUBLIC_SPACE_ID, COMPLETE_SPACE_ID],
+								},
+								member: {
+									in: [MEMBER_ADDRESS_1, MEMBER_ADDRESS_2],
+								},
+								editor: {
+									in: [EDITOR_ADDRESS_1],
+								},
+							},
+						}),
+					),
+				)
+
+				expect(result).toHaveLength(2)
+				const spaceIds = result.map((s) => s.id).sort()
+				expect(spaceIds).toEqual([PERSONAL_SPACE_ID, PUBLIC_SPACE_ID].sort())
+			})
+
+			it("should handle complex filtering with multiple addresses", async () => {
+				const result = await Effect.runPromise(
+					provideDeps(
+						getSpaces({
+							filter: {
+								member: {
+									in: [MEMBER_ADDRESS_1, MEMBER_ADDRESS_2],
+								},
+								editor: {
+									in: [EDITOR_ADDRESS_1, EDITOR_ADDRESS_2],
+								},
+							},
+						}),
+					),
+				)
+
+				expect(result).toHaveLength(2)
+				const spaceIds = result.map((s) => s.id).sort()
+				expect(spaceIds).toEqual([PERSONAL_SPACE_ID, PUBLIC_SPACE_ID].sort())
+			})
+		})
+
+		describe("Member and Editor Filter Edge Cases", () => {
+			it("should handle case-sensitive member address filtering", async () => {
+				// Test that uppercase address does NOT match lowercase stored address
+				const upperCaseResult = await Effect.runPromise(
+					provideDeps(
+						getSpaces({
+							filter: {
+								member: {
+									is: MEMBER_ADDRESS_1.toUpperCase(),
+								},
+							},
+						}),
+					),
+				)
+
+				expect(upperCaseResult).toHaveLength(0)
+
+				// Test that exact case match works
+				const exactCaseResult = await Effect.runPromise(
+					provideDeps(
+						getSpaces({
+							filter: {
+								member: {
+									is: MEMBER_ADDRESS_1,
+								},
+							},
+						}),
+					),
+				)
+
+				expect(exactCaseResult).toHaveLength(2)
+				const spaceIds = exactCaseResult.map((s) => s.id).sort()
+				expect(spaceIds).toEqual([PERSONAL_SPACE_ID, COMPLETE_SPACE_ID].sort())
+			})
+
+			it("should handle case-sensitive editor address filtering", async () => {
+				// Test that uppercase address does NOT match lowercase stored address
+				const upperCaseResult = await Effect.runPromise(
+					provideDeps(
+						getSpaces({
+							filter: {
+								editor: {
+									is: EDITOR_ADDRESS_1.toUpperCase(),
+								},
+							},
+						}),
+					),
+				)
+
+				expect(upperCaseResult).toHaveLength(0)
+
+				// Test that exact case match works
+				const exactCaseResult = await Effect.runPromise(
+					provideDeps(
+						getSpaces({
+							filter: {
+								editor: {
+									is: EDITOR_ADDRESS_1,
+								},
+							},
+						}),
+					),
+				)
+
+				expect(exactCaseResult).toHaveLength(2)
+				const spaceIds = exactCaseResult.map((s) => s.id).sort()
+				expect(spaceIds).toEqual([PERSONAL_SPACE_ID, PUBLIC_SPACE_ID].sort())
+			})
+
+			it("should maintain consistency across multiple member filter queries", async () => {
+				const result1 = await Effect.runPromise(
+					provideDeps(
+						getSpaces({
+							filter: {
+								member: {
+									is: MEMBER_ADDRESS_1,
+								},
+							},
+						}),
+					),
+				)
+
+				const result2 = await Effect.runPromise(
+					provideDeps(
+						getSpaces({
+							filter: {
+								member: {
+									is: MEMBER_ADDRESS_1,
+								},
+							},
+						}),
+					),
+				)
+
+				expect(result1).toEqual(result2)
+				expect(result1).toHaveLength(2)
+			})
+
+			it("should maintain consistency across multiple editor filter queries", async () => {
+				const result1 = await Effect.runPromise(
+					provideDeps(
+						getSpaces({
+							filter: {
+								editor: {
+									is: EDITOR_ADDRESS_1,
+								},
+							},
+						}),
+					),
+				)
+
+				const result2 = await Effect.runPromise(
+					provideDeps(
+						getSpaces({
+							filter: {
+								editor: {
+									is: EDITOR_ADDRESS_1,
+								},
+							},
+						}),
+					),
+				)
+
+				expect(result1).toEqual(result2)
+				expect(result1).toHaveLength(2)
+			})
+
+			it("should handle concurrent member and editor filter requests", async () => {
+				const promises = [
+					Effect.runPromise(
+						provideDeps(
+							getSpaces({
+								filter: {
+									member: {
+										is: MEMBER_ADDRESS_1,
+									},
+								},
+							}),
+						),
+					),
+					Effect.runPromise(
+						provideDeps(
+							getSpaces({
+								filter: {
+									editor: {
+										is: EDITOR_ADDRESS_1,
+									},
+								},
+							}),
+						),
+					),
+					Effect.runPromise(
+						provideDeps(
+							getSpaces({
+								filter: {
+									member: {
+										is: MEMBER_ADDRESS_2,
+									},
+									editor: {
+										is: EDITOR_ADDRESS_1,
+									},
+								},
+							}),
+						),
+					),
+				]
+
+				const [memberResult, editorResult, combinedResult] = await Promise.all(promises)
+
+				expect(memberResult).toHaveLength(2)
+				expect(editorResult).toHaveLength(2)
+				expect(combinedResult).toHaveLength(2)
+				const combinedSpaceIds = combinedResult.map((s) => s.id).sort()
+				expect(combinedSpaceIds).toEqual([PERSONAL_SPACE_ID, PUBLIC_SPACE_ID].sort())
+			})
+
+			it("should validate that all returned spaces actually have the filtered members", async () => {
+				const result = await Effect.runPromise(
+					provideDeps(
+						getSpaces({
+							filter: {
+								member: {
+									is: MEMBER_ADDRESS_1,
+								},
+							},
+						}),
+					),
+				)
+
+				expect(result).toHaveLength(2)
+
+				// Verify each returned space actually has the member
+				for (const space of result) {
+					expect([PERSONAL_SPACE_ID, COMPLETE_SPACE_ID]).toContain(space.id)
+				}
+			})
+
+			it("should validate that all returned spaces actually have the filtered editors", async () => {
+				const result = await Effect.runPromise(
+					provideDeps(
+						getSpaces({
+							filter: {
+								editor: {
+									is: EDITOR_ADDRESS_1,
+								},
+							},
+						}),
+					),
+				)
+
+				expect(result).toHaveLength(2)
+
+				// Verify each returned space actually has the editor
+				for (const space of result) {
+					expect([PERSONAL_SPACE_ID, PUBLIC_SPACE_ID]).toContain(space.id)
+				}
+			})
 		})
 	})
 

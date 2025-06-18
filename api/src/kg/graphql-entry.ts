@@ -1,17 +1,27 @@
 import {makeExecutableSchema} from "@graphql-tools/schema"
 import {file} from "bun"
+import {Effect, Layer} from "effect"
 import {createYoga} from "graphql-yoga"
 import type {
 	EntityRelationsArgs,
 	EntityValuesArgs,
 	Resolvers as GeneratedResolvers,
 	InputMaybe,
+	QueryEditorsArgs,
+	QueryMembersArgs,
 	QuerySearchArgs,
 	QuerySpaceArgs,
 	QuerySpacesArgs,
-	SearchFilter,
 } from "../generated/graphql"
+import {Environment, make as makeEnvironment} from "../services/environment"
+import {make as makeStorage, Storage} from "../services/storage/storage"
+import * as MembershipResolvers from "./resolvers/membership"
 import * as Resolvers from "./resolvers/root"
+
+const EnvironmentLayer = Layer.effect(Environment, makeEnvironment)
+const StorageLayer = Layer.effect(Storage, makeStorage).pipe(Layer.provide(EnvironmentLayer))
+const layers = Layer.mergeAll(EnvironmentLayer, StorageLayer)
+const provideDeps = Effect.provide(layers)
 
 interface GraphQLContext {
 	spaceId?: InputMaybe<string>
@@ -96,7 +106,9 @@ const resolvers: GeneratedResolvers = {
 			return Resolvers.entity({id: parent.id})
 		},
 		properties: async (parent: {id: string}, _: unknown, context: GraphQLContext) => {
-			return Resolvers.propertiesForType(parent.id, {spaceId: context.spaceId})
+			return Resolvers.propertiesForType(parent.id, {
+				spaceId: context.spaceId,
+			})
 		},
 	},
 	Value: {
@@ -135,6 +147,12 @@ const resolvers: GeneratedResolvers = {
 	Space: {
 		entity: async (parent: {id: string}) => {
 			return Resolvers.spaceEntity(parent.id)
+		},
+		editors: async (parent: {id: string}) => {
+			return await Effect.runPromise(MembershipResolvers.getEditors({spaceId: parent.id}).pipe(provideDeps))
+		},
+		members: async (parent: {id: string}) => {
+			return await Effect.runPromise(MembershipResolvers.getMembers({spaceId: parent.id}).pipe(provideDeps))
 		},
 	},
 }

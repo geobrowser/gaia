@@ -2,14 +2,14 @@ use std::sync::Arc;
 
 use stream::utils::BlockMetadata;
 
-use crate::block_handler::{edit_handler, membership_handler, space_handler, utils::handle_task_result};
+use crate::block_handler::{
+    edit_handler, membership_handler, space_handler, utils::handle_task_result,
+};
 use crate::cache::properties_cache::ImmutableCache;
 
 use crate::error::IndexingError;
 use crate::storage::StorageBackend;
 use crate::KgData;
-
-
 
 pub async fn run<S, C>(
     output: &KgData,
@@ -30,9 +30,8 @@ where
         let storage = Arc::clone(storage);
         let block_metadata = block_metadata.clone();
         let spaces = output.spaces.clone();
-        tokio::spawn(async move {
-            space_handler::run(&spaces, &block_metadata, &storage).await
-        })
+
+        tokio::spawn(async move { space_handler::run(&spaces, &block_metadata, &storage).await })
     };
 
     let edit_task = {
@@ -60,12 +59,14 @@ where
                 &removed_editors,
                 &block_metadata,
                 &storage,
-            ).await
+            )
+            .await
         })
     };
 
-    let (space_result, edit_result, membership_result) = tokio::join!(space_task, edit_task, membership_task);
-    
+    let (space_result, edit_result, membership_result) =
+        tokio::join!(space_task, edit_task, membership_task);
+
     handle_task_result(space_result)?;
     handle_task_result(edit_result)?;
     handle_task_result(membership_result)?;

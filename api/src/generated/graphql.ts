@@ -18,6 +18,19 @@ export type Scalars = {
 	Float: {input: number; output: number}
 }
 
+export type Account = {
+	__typename?: "Account"
+	address: Scalars["String"]["output"]
+	id: Scalars["ID"]["output"]
+	spacesWhereEdtitor?: Maybe<Array<Maybe<Space>>>
+	spacesWhereMember?: Maybe<Array<Maybe<Space>>>
+}
+
+export type AddressFilter = {
+	in?: InputMaybe<Array<Scalars["String"]["input"]>>
+	is?: InputMaybe<Scalars["String"]["input"]>
+}
+
 export type Block = {
 	__typename?: "Block"
 	dataSourceType?: Maybe<DataSourceType>
@@ -106,14 +119,6 @@ export type Membership = {
 	spaceId: Scalars["String"]["output"]
 }
 
-export type MembershipFilter = {
-	NOT?: InputMaybe<MembershipFilter>
-	OR?: InputMaybe<Array<MembershipFilter>>
-	address?: InputMaybe<TextFilter>
-	id?: InputMaybe<IdFilter>
-	spaceId?: InputMaybe<TextFilter>
-}
-
 export type NumberFilter = {
 	NOT?: InputMaybe<NumberFilter>
 	exists?: InputMaybe<Scalars["Boolean"]["input"]>
@@ -144,12 +149,9 @@ export type PropertyFilter = {
 
 export type Query = {
 	__typename?: "Query"
-	editor?: Maybe<Membership>
-	editors: Array<Maybe<Membership>>
+	account?: Maybe<Account>
 	entities: Array<Maybe<Entity>>
 	entity?: Maybe<Entity>
-	member?: Maybe<Membership>
-	members: Array<Maybe<Membership>>
 	properties: Array<Maybe<Property>>
 	property?: Maybe<Property>
 	relation?: Maybe<Relation>
@@ -160,14 +162,8 @@ export type Query = {
 	types: Array<Maybe<Type>>
 }
 
-export type QueryEditorArgs = {
-	id: Scalars["String"]["input"]
-}
-
-export type QueryEditorsArgs = {
-	filter?: InputMaybe<MembershipFilter>
-	limit?: InputMaybe<Scalars["Int"]["input"]>
-	offset?: InputMaybe<Scalars["Int"]["input"]>
+export type QueryAccountArgs = {
+	address: Scalars["String"]["input"]
 }
 
 export type QueryEntitiesArgs = {
@@ -180,16 +176,6 @@ export type QueryEntitiesArgs = {
 export type QueryEntityArgs = {
 	id: Scalars["String"]["input"]
 	spaceId?: InputMaybe<Scalars["String"]["input"]>
-}
-
-export type QueryMemberArgs = {
-	id: Scalars["String"]["input"]
-}
-
-export type QueryMembersArgs = {
-	filter?: InputMaybe<MembershipFilter>
-	limit?: InputMaybe<Scalars["Int"]["input"]>
-	offset?: InputMaybe<Scalars["Int"]["input"]>
 }
 
 export type QueryPropertiesArgs = {
@@ -275,9 +261,11 @@ export type SearchFilter = {
 export type Space = {
 	__typename?: "Space"
 	daoAddress: Scalars["String"]["output"]
+	editors?: Maybe<Array<Membership>>
 	entity?: Maybe<Entity>
 	id: Scalars["ID"]["output"]
 	mainVotingAddress?: Maybe<Scalars["String"]["output"]>
+	members?: Maybe<Array<Membership>>
 	membershipAddress?: Maybe<Scalars["String"]["output"]>
 	personalAddress?: Maybe<Scalars["String"]["output"]>
 	spaceAddress: Scalars["String"]["output"]
@@ -285,7 +273,9 @@ export type Space = {
 }
 
 export type SpaceFilter = {
+	editor?: InputMaybe<AddressFilter>
 	id?: InputMaybe<IdFilter>
+	member?: InputMaybe<AddressFilter>
 }
 
 export enum SpaceType {
@@ -409,6 +399,13 @@ export type DirectiveResolverFn<TResult = {}, TParent = {}, TContext = {}, TArgs
 
 /** Mapping between all available schema types and the resolvers types */
 export type ResolversTypes = ResolversObject<{
+	Account: ResolverTypeWrapper<
+		Omit<Account, "spacesWhereEdtitor" | "spacesWhereMember"> & {
+			spacesWhereEdtitor?: Maybe<Array<Maybe<ResolversTypes["Space"]>>>
+			spacesWhereMember?: Maybe<Array<Maybe<ResolversTypes["Space"]>>>
+		}
+	>
+	AddressFilter: AddressFilter
 	Block: ResolverTypeWrapper<Omit<Block, "entity"> & {entity?: Maybe<ResolversTypes["Entity"]>}>
 	BlockType: BlockType
 	Boolean: ResolverTypeWrapper<Scalars["Boolean"]["output"]>
@@ -422,7 +419,6 @@ export type ResolversTypes = ResolversObject<{
 	IdFilter: IdFilter
 	Int: ResolverTypeWrapper<Scalars["Int"]["output"]>
 	Membership: ResolverTypeWrapper<Omit<Membership, "space"> & {space?: Maybe<ResolversTypes["Space"]>}>
-	MembershipFilter: MembershipFilter
 	NumberFilter: NumberFilter
 	PointFilter: PointFilter
 	Property: ResolverTypeWrapper<
@@ -444,7 +440,13 @@ export type ResolversTypes = ResolversObject<{
 	RelationFilter: RelationFilter
 	RenderableType: RenderableType
 	SearchFilter: SearchFilter
-	Space: ResolverTypeWrapper<Omit<Space, "entity"> & {entity?: Maybe<ResolversTypes["Entity"]>}>
+	Space: ResolverTypeWrapper<
+		Omit<Space, "editors" | "entity" | "members"> & {
+			editors?: Maybe<Array<ResolversTypes["Membership"]>>
+			entity?: Maybe<ResolversTypes["Entity"]>
+			members?: Maybe<Array<ResolversTypes["Membership"]>>
+		}
+	>
 	SpaceFilter: SpaceFilter
 	SpaceType: SpaceType
 	String: ResolverTypeWrapper<Scalars["String"]["output"]>
@@ -466,6 +468,11 @@ export type ResolversTypes = ResolversObject<{
 
 /** Mapping between all available schema types and the resolvers parents */
 export type ResolversParentTypes = ResolversObject<{
+	Account: Omit<Account, "spacesWhereEdtitor" | "spacesWhereMember"> & {
+		spacesWhereEdtitor?: Maybe<Array<Maybe<ResolversParentTypes["Space"]>>>
+		spacesWhereMember?: Maybe<Array<Maybe<ResolversParentTypes["Space"]>>>
+	}
+	AddressFilter: AddressFilter
 	Block: Omit<Block, "entity"> & {entity?: Maybe<ResolversParentTypes["Entity"]>}
 	Boolean: Scalars["Boolean"]["output"]
 	CheckboxFilter: CheckboxFilter
@@ -476,7 +483,6 @@ export type ResolversParentTypes = ResolversObject<{
 	IdFilter: IdFilter
 	Int: Scalars["Int"]["output"]
 	Membership: Omit<Membership, "space"> & {space?: Maybe<ResolversParentTypes["Space"]>}
-	MembershipFilter: MembershipFilter
 	NumberFilter: NumberFilter
 	PointFilter: PointFilter
 	Property: Omit<Property, "entity" | "relationValueTypes"> & {
@@ -493,7 +499,11 @@ export type ResolversParentTypes = ResolversObject<{
 	}
 	RelationFilter: RelationFilter
 	SearchFilter: SearchFilter
-	Space: Omit<Space, "entity"> & {entity?: Maybe<ResolversParentTypes["Entity"]>}
+	Space: Omit<Space, "editors" | "entity" | "members"> & {
+		editors?: Maybe<Array<ResolversParentTypes["Membership"]>>
+		entity?: Maybe<ResolversParentTypes["Entity"]>
+		members?: Maybe<Array<ResolversParentTypes["Membership"]>>
+	}
 	SpaceFilter: SpaceFilter
 	String: Scalars["String"]["output"]
 	TextFilter: TextFilter
@@ -506,6 +516,17 @@ export type ResolversParentTypes = ResolversObject<{
 		property?: Maybe<ResolversParentTypes["Property"]>
 	}
 	ValueFilter: ValueFilter
+}>
+
+export type AccountResolvers<
+	ContextType = any,
+	ParentType extends ResolversParentTypes["Account"] = ResolversParentTypes["Account"],
+> = ResolversObject<{
+	address?: Resolver<ResolversTypes["String"], ParentType, ContextType>
+	id?: Resolver<ResolversTypes["ID"], ParentType, ContextType>
+	spacesWhereEdtitor?: Resolver<Maybe<Array<Maybe<ResolversTypes["Space"]>>>, ParentType, ContextType>
+	spacesWhereMember?: Resolver<Maybe<Array<Maybe<ResolversTypes["Space"]>>>, ParentType, ContextType>
+	__isTypeOf?: IsTypeOfResolverFn<ParentType, ContextType>
 }>
 
 export type BlockResolvers<
@@ -577,17 +598,11 @@ export type QueryResolvers<
 	ContextType = any,
 	ParentType extends ResolversParentTypes["Query"] = ResolversParentTypes["Query"],
 > = ResolversObject<{
-	editor?: Resolver<
-		Maybe<ResolversTypes["Membership"]>,
+	account?: Resolver<
+		Maybe<ResolversTypes["Account"]>,
 		ParentType,
 		ContextType,
-		RequireFields<QueryEditorArgs, "id">
-	>
-	editors?: Resolver<
-		Array<Maybe<ResolversTypes["Membership"]>>,
-		ParentType,
-		ContextType,
-		RequireFields<QueryEditorsArgs, "limit" | "offset">
+		RequireFields<QueryAccountArgs, "address">
 	>
 	entities?: Resolver<
 		Array<Maybe<ResolversTypes["Entity"]>>,
@@ -596,18 +611,6 @@ export type QueryResolvers<
 		RequireFields<QueryEntitiesArgs, "limit" | "offset">
 	>
 	entity?: Resolver<Maybe<ResolversTypes["Entity"]>, ParentType, ContextType, RequireFields<QueryEntityArgs, "id">>
-	member?: Resolver<
-		Maybe<ResolversTypes["Membership"]>,
-		ParentType,
-		ContextType,
-		RequireFields<QueryMemberArgs, "id">
-	>
-	members?: Resolver<
-		Array<Maybe<ResolversTypes["Membership"]>>,
-		ParentType,
-		ContextType,
-		RequireFields<QueryMembersArgs, "limit" | "offset">
-	>
 	properties?: Resolver<
 		Array<Maybe<ResolversTypes["Property"]>>,
 		ParentType,
@@ -678,9 +681,11 @@ export type SpaceResolvers<
 	ParentType extends ResolversParentTypes["Space"] = ResolversParentTypes["Space"],
 > = ResolversObject<{
 	daoAddress?: Resolver<ResolversTypes["String"], ParentType, ContextType>
+	editors?: Resolver<Maybe<Array<ResolversTypes["Membership"]>>, ParentType, ContextType>
 	entity?: Resolver<Maybe<ResolversTypes["Entity"]>, ParentType, ContextType>
 	id?: Resolver<ResolversTypes["ID"], ParentType, ContextType>
 	mainVotingAddress?: Resolver<Maybe<ResolversTypes["String"]>, ParentType, ContextType>
+	members?: Resolver<Maybe<Array<ResolversTypes["Membership"]>>, ParentType, ContextType>
 	membershipAddress?: Resolver<Maybe<ResolversTypes["String"]>, ParentType, ContextType>
 	personalAddress?: Resolver<Maybe<ResolversTypes["String"]>, ParentType, ContextType>
 	spaceAddress?: Resolver<ResolversTypes["String"], ParentType, ContextType>
@@ -719,6 +724,7 @@ export type ValueResolvers<
 }>
 
 export type Resolvers<ContextType = any> = ResolversObject<{
+	Account?: AccountResolvers<ContextType>
 	Block?: BlockResolvers<ContextType>
 	Entity?: EntityResolvers<ContextType>
 	Membership?: MembershipResolvers<ContextType>

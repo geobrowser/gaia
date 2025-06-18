@@ -58,10 +58,10 @@ where
                 // can't get out of sync.
                 Err(_) => {
                     // @TODO: tracing
-                    eprintln!(
-                        "Property {} not found in cache, skipping value validation",
-                        value.property_id
-                    );
+                    // eprintln!(
+                    //     "Property {} not found in cache, skipping value validation",
+                    //     value.property_id
+                    // );
                 }
             }
         }
