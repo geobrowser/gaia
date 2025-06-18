@@ -99,10 +99,10 @@ export type EntityValuesArgs = {
 }
 
 export type EntityFilter = {
-	NOT?: InputMaybe<EntityFilter>
-	OR?: InputMaybe<Array<EntityFilter>>
 	fromRelation?: InputMaybe<RelationFilter>
 	id?: InputMaybe<IdFilter>
+	not?: InputMaybe<EntityFilter>
+	or?: InputMaybe<Array<EntityFilter>>
 	toRelation?: InputMaybe<RelationFilter>
 	types?: InputMaybe<IdFilter>
 	value?: InputMaybe<ValueFilter>
@@ -121,13 +121,13 @@ export type Membership = {
 }
 
 export type NumberFilter = {
-	NOT?: InputMaybe<NumberFilter>
 	exists?: InputMaybe<Scalars["Boolean"]["input"]>
 	greaterThan?: InputMaybe<Scalars["Float"]["input"]>
 	greaterThanOrEqual?: InputMaybe<Scalars["Float"]["input"]>
 	is?: InputMaybe<Scalars["Float"]["input"]>
 	lessThan?: InputMaybe<Scalars["Float"]["input"]>
 	lessThanOrEqual?: InputMaybe<Scalars["Float"]["input"]>
+	not?: InputMaybe<NumberFilter>
 }
 
 export type PointFilter = {
@@ -254,8 +254,8 @@ export enum RenderableType {
 }
 
 export type SearchFilter = {
-	NOT?: InputMaybe<SearchFilter>
-	OR?: InputMaybe<Array<SearchFilter>>
+	not?: InputMaybe<SearchFilter>
+	or?: InputMaybe<Array<SearchFilter>>
 	types?: InputMaybe<IdFilter>
 }
 
@@ -285,11 +285,11 @@ export enum SpaceType {
 }
 
 export type TextFilter = {
-	NOT?: InputMaybe<TextFilter>
 	contains?: InputMaybe<Scalars["String"]["input"]>
 	endsWith?: InputMaybe<Scalars["String"]["input"]>
 	exists?: InputMaybe<Scalars["Boolean"]["input"]>
 	is?: InputMaybe<Scalars["String"]["input"]>
+	not?: InputMaybe<TextFilter>
 	startsWith?: InputMaybe<Scalars["String"]["input"]>
 }
 

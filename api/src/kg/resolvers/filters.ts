@@ -8,7 +8,7 @@ type TextFilter = {
 	startsWith?: string
 	endsWith?: string
 	exists?: boolean
-	NOT?: TextFilter
+	not?: TextFilter
 }
 
 type NumberFilter = {
@@ -18,7 +18,7 @@ type NumberFilter = {
 	greaterThan?: number
 	greaterThanOrEqual?: number
 	exists?: boolean
-	NOT?: NumberFilter
+	not?: NumberFilter
 }
 
 type CheckboxFilter = {
@@ -51,9 +51,9 @@ type RelationFilter = {
 }
 
 export type EntityFilter = {
-	AND?: EntityFilter[]
-	OR?: EntityFilter[]
-	NOT?: EntityFilter
+	and?: EntityFilter[]
+	or?: EntityFilter[]
+	not?: EntityFilter
 	id?: IdFilter
 	types?: IdFilter
 	value?: PropertyFilter
@@ -139,10 +139,10 @@ function buildValueWhere(filter: PropertyFilter, spaceId?: string | null) {
 		if (f.exists !== undefined) {
 			conditions.push(f.exists ? sql`values.value IS NOT NULL` : sql`values.value IS NULL`)
 		}
-		if (f.NOT) {
+		if (f.not) {
 			const notConditions = buildValueConditions({
 				property: filter.property,
-				text: f.NOT,
+				text: f.not,
 			})
 			if (notConditions.length > 0) {
 				conditions.push(not(sql.join(notConditions, sql` AND `)))
@@ -177,10 +177,10 @@ function buildValueWhere(filter: PropertyFilter, spaceId?: string | null) {
 			}
 		}
 
-		if (f.NOT) {
+		if (f.not) {
 			const notConditions = buildValueConditions({
 				property: filter.property,
-				number: f.NOT,
+				number: f.not,
 			})
 			if (notConditions.length > 0) {
 				conditions.push(not(sql.join(notConditions, sql` AND `)))
@@ -280,14 +280,14 @@ export function buildEntityWhere(filter: EntityFilter | null, spaceId?: string |
 			clauses.push(sql`false`)
 		}
 	}
-	if (filter?.AND) {
-		clauses.push(and(...filter.AND.map((f) => buildEntityWhere(f, spaceId))))
+	if (filter?.and) {
+		clauses.push(and(...filter.and.map((f) => buildEntityWhere(f, spaceId))))
 	}
-	if (filter?.OR) {
-		clauses.push(or(...filter.OR.map((f) => buildEntityWhere(f, spaceId))))
+	if (filter?.or) {
+		clauses.push(or(...filter.or.map((f) => buildEntityWhere(f, spaceId))))
 	}
-	if (filter?.NOT) {
-		const notCondition = buildEntityWhere(filter.NOT, spaceId)
+	if (filter?.not) {
+		const notCondition = buildEntityWhere(filter.not, spaceId)
 		if (notCondition) {
 			clauses.push(not(notCondition))
 		}

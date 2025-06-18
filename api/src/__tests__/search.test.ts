@@ -673,7 +673,7 @@ describe("Search Integration Tests", () => {
 				SearchResolvers.search({
 					query: "data",
 					filter: {
-						NOT: {
+						not: {
 							types: {
 								in: ["550e8400-e29b-41d4-a716-446655440010"], // AI Research type
 							},
@@ -700,8 +700,8 @@ describe("Search Integration Tests", () => {
 				SearchResolvers.search({
 					query: "learning",
 					filter: {
-						NOT: {
-							OR: [
+						not: {
+							or: [
 								{
 									types: {
 										in: ["550e8400-e29b-41d4-a716-446655440010"], // AI Research type
@@ -735,14 +735,14 @@ describe("Search Integration Tests", () => {
 				SearchResolvers.search({
 					query: "data",
 					filter: {
-						OR: [
+						or: [
 							{
 								types: {
 									in: ["550e8400-e29b-41d4-a716-446655440011"], // ML Framework type
 								},
 							},
 							{
-								NOT: {
+								not: {
 									types: {
 										in: ["550e8400-e29b-41d4-a716-446655440010"], // NOT AI Research type
 									},

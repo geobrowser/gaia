@@ -201,8 +201,8 @@ type Query {
 }
 
 input SearchFilter {
-  OR: [SearchFilter!]
-  NOT: SearchFilter
+  or: [SearchFilter!]
+  not: SearchFilter
   types: IdFilter
 }
 
@@ -227,7 +227,7 @@ input TextFilter {
   startsWith: String
   endsWith: String
   exists: Boolean
-  NOT: TextFilter
+  not: TextFilter
 }
 
 input NumberFilter {
@@ -237,7 +237,7 @@ input NumberFilter {
   greaterThan: Float
   greaterThanOrEqual: Float
   exists: Boolean
-  NOT: NumberFilter
+  not: NumberFilter
 }
 
 input CheckboxFilter {
@@ -272,8 +272,8 @@ input IdFilter {
 # Filter input for entities in Query.entities
 # Supports logical operators and filtering by values and relations
 input EntityFilter {
-  OR: [EntityFilter!]
-  NOT: EntityFilter
+  or: [EntityFilter!]
+  not: EntityFilter
   id: IdFilter
   types: IdFilter
   value: ValueFilter
