@@ -55,6 +55,7 @@ export enum DataType {
 
 export type Entity = {
 	__typename?: "Entity"
+	backlinks: Array<Maybe<Relation>>
 	blocks: Array<Maybe<Block>>
 	createdAt: Scalars["String"]["output"]
 	createdAtBlock: Scalars["String"]["output"]
@@ -67,6 +68,11 @@ export type Entity = {
 	updatedAt: Scalars["String"]["output"]
 	updatedAtBlock: Scalars["String"]["output"]
 	values: Array<Maybe<Value>>
+}
+
+export type EntityBacklinksArgs = {
+	filter?: InputMaybe<RelationFilter>
+	spaceId?: InputMaybe<Scalars["String"]["input"]>
 }
 
 export type EntityRelationsArgs = {
@@ -518,6 +524,12 @@ export type EntityResolvers<
 	ContextType = any,
 	ParentType extends ResolversParentTypes["Entity"] = ResolversParentTypes["Entity"],
 > = ResolversObject<{
+	backlinks?: Resolver<
+		Array<Maybe<ResolversTypes["Relation"]>>,
+		ParentType,
+		ContextType,
+		Partial<EntityBacklinksArgs>
+	>
 	blocks?: Resolver<Array<Maybe<ResolversTypes["Block"]>>, ParentType, ContextType>
 	createdAt?: Resolver<ResolversTypes["String"], ParentType, ContextType>
 	createdAtBlock?: Resolver<ResolversTypes["String"], ParentType, ContextType>

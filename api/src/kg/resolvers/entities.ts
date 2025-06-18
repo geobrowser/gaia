@@ -149,6 +149,36 @@ export function getRelations(id: string, spaceId?: string | null) {
 	})
 }
 
+export function getBacklinks(id: string, spaceId?: string | null) {
+	return Effect.gen(function* () {
+		const db = yield* Storage
+
+		return yield* db.use(async (client) => {
+			const result = await client.query.relations.findMany({
+				where: (relations, {eq, and}) => {
+					const conditions = [eq(relations.toEntityId, id)]
+					if (spaceId) {
+						conditions.push(eq(relations.spaceId, spaceId))
+					}
+					return and(...conditions)
+				},
+			})
+
+			return result.map((relation) => ({
+				id: relation.id,
+				entityId: relation.entityId,
+				typeId: relation.typeId,
+				fromId: relation.fromEntityId,
+				toId: relation.toEntityId,
+				toSpaceId: relation.toSpaceId,
+				verified: relation.verified,
+				position: relation.position,
+				spaceId: relation.spaceId,
+			}))
+		})
+	})
+}
+
 export function getRelation(id: string) {
 	return Effect.gen(function* () {
 		const db = yield* Storage

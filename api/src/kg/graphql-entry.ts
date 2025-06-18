@@ -80,6 +80,10 @@ const resolvers: GeneratedResolvers = {
 			const spaceId = args.spaceId ?? context.spaceId
 			return Resolvers.entityRelations({id: parent.id, spaceId})
 		},
+		backlinks: async (parent: {id: string}, args: EntityRelationsArgs, context: GraphQLContext) => {
+			const spaceId = args.spaceId ?? context.spaceId
+			return Resolvers.entityBacklinks({id: parent.id, spaceId})
+		},
 	},
 	Type: {
 		name: async (parent: {id: string}) => {

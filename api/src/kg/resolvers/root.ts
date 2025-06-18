@@ -53,6 +53,10 @@ export const entityRelations = async (args: QueryEntityArgs & {spaceId?: string 
 	return await Effect.runPromise(EntityResolvers.getRelations(args.id, args.spaceId).pipe(provideDeps))
 }
 
+export const entityBacklinks = async (args: QueryEntityArgs & {spaceId?: string | null}) => {
+	return await Effect.runPromise(EntityResolvers.getBacklinks(args.id, args.spaceId).pipe(provideDeps))
+}
+
 export const relations = async (args: QueryRelationsArgs) => {
 	return await Effect.runPromise(EntityResolvers.getAllRelations(args).pipe(provideDeps))
 }
