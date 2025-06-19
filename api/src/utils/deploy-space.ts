@@ -6,21 +6,14 @@ import {
 	PluginRepo__factory,
 	PluginSetupProcessor__factory,
 } from "@aragon/osx-ethers"
-import {
-	type ContextParams,
-	type CreateDaoParams,
-	DaoCreationSteps,
-	PermissionIds,
-	type VotingMode,
-} from "@aragon/sdk-client"
+import {type ContextParams, type CreateDaoParams, DaoCreationSteps, PermissionIds, VotingMode} from "@aragon/sdk-client"
 import {DaoCreationError, MissingExecPermissionError} from "@aragon/sdk-client-common"
 import {id} from "@ethersproject/hash"
 import {Graph, getChecksumAddress, type Op, SystemIds} from "@graphprotocol/grc-20"
 import {MAINNET, TESTNET} from "@graphprotocol/grc-20/contracts"
 import {EditProposal} from "@graphprotocol/grc-20/proto"
 import {Duration, Effect, Schedule} from "effect"
-import type ethers from "ethers"
-import {providers} from "ethers"
+import ethers, {providers} from "ethers"
 import {encodeAbiParameters, encodeFunctionData, stringToHex, zeroAddress} from "viem"
 import type {OmitStrict} from "~/src/types"
 import {Environment, EnvironmentLive} from "../services/environment"
@@ -30,6 +23,9 @@ import {abi as DaoFactoryAbi} from "./abi"
 import {getPublicClient, getSigner, getWalletClient} from "./client"
 
 const contracts = EnvironmentLive.chainId === "19411" ? MAINNET : TESTNET
+
+const RATIO_BASE = ethers.BigNumber.from(10).pow(6) // 100% => 10**6
+const pctToRatio = (x: number) => RATIO_BASE.mul(x).div(100)
 
 const getDeployParams = () => {
 	const daoFactory = contracts.DAO_FACTORY_ADDRESS
@@ -65,7 +61,6 @@ export function deploySpace(args: DeployArgs) {
 		const config = yield* Environment
 		yield* Effect.logInfo(`[SPACE][deploy] Deploying space for ${config.chainId}`)
 		const initialEditorAddress = getChecksumAddress(args.initialEditorAddress)
-		const spaceType: "PERSONAL" | "PUBLIC" = args.spaceType ?? "PERSONAL"
 
 		const entityOp = Graph.createEntity({
 			id: args.spaceEntityId,
@@ -98,11 +93,36 @@ export function deploySpace(args: DeployArgs) {
 
 		plugins.push(spacePluginInstallItem)
 
-		const personalSpacePluginItem = getPersonalSpaceGovernancePluginInstallItem({
-			initialEditor: getChecksumAddress(initialEditorAddress),
-		})
+		let spaceType: "PERSONAL" | "PUBLIC" | null = args.spaceType ?? null
 
-		plugins.push(personalSpacePluginItem)
+		if (!spaceType) {
+			yield* Effect.logInfo(`[SPACE][deploy], no space type set, defaulting to PERSONAL`)
+			spaceType = "PERSONAL"
+		}
+
+		if (spaceType === "PERSONAL") {
+			const personalSpacePluginItem = getPersonalSpaceGovernancePluginInstallItem({
+				initialEditor: getChecksumAddress(initialEditorAddress),
+			})
+
+			plugins.push(personalSpacePluginItem)
+		}
+
+		if (spaceType === "PUBLIC") {
+			const governancePluginConfig: Parameters<typeof getGovernancePluginInstallItem>[0] = {
+				votingSettings: {
+					votingMode: VotingMode.EARLY_EXECUTION,
+					supportThreshold: pctToRatio(50),
+					duration: BigInt(60 * 60 * 24), // 4 hours
+				},
+				memberAccessProposalDuration: BigInt(60 * 60 * 4), // 4 hours
+				initialEditors: [getChecksumAddress(initialEditorAddress)],
+				pluginUpgrader: getChecksumAddress(initialEditorAddress),
+			}
+
+			const governancePluginInstallItem = getGovernancePluginInstallItem(governancePluginConfig)
+			plugins.push(governancePluginInstallItem)
+		}
 
 		const createParams: CreateGeoDaoParams = {
 			metadataUri: firstBlockContentUri,
