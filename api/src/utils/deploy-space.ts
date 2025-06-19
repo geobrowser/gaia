@@ -6,13 +6,20 @@ import {
 	PluginRepo__factory,
 	PluginSetupProcessor__factory,
 } from "@aragon/osx-ethers"
-import {type ContextParams, type CreateDaoParams, DaoCreationSteps, PermissionIds} from "@aragon/sdk-client"
+import {
+	type ContextParams,
+	type CreateDaoParams,
+	DaoCreationSteps,
+	PermissionIds,
+	type VotingMode,
+} from "@aragon/sdk-client"
 import {DaoCreationError, MissingExecPermissionError} from "@aragon/sdk-client-common"
 import {id} from "@ethersproject/hash"
 import {Graph, getChecksumAddress, type Op, SystemIds} from "@graphprotocol/grc-20"
 import {MAINNET, TESTNET} from "@graphprotocol/grc-20/contracts"
 import {EditProposal} from "@graphprotocol/grc-20/proto"
 import {Duration, Effect, Schedule} from "effect"
+import type ethers from "ethers"
 import {providers} from "ethers"
 import {encodeAbiParameters, encodeFunctionData, stringToHex, zeroAddress} from "viem"
 import type {OmitStrict} from "~/src/types"
@@ -49,6 +56,7 @@ interface DeployArgs {
 	spaceName: string
 	initialEditorAddress: string
 	spaceEntityId?: string
+	spaceType?: "PERSONAL" | "PUBLIC"
 	ops?: Op[]
 }
 
@@ -57,6 +65,7 @@ export function deploySpace(args: DeployArgs) {
 		const config = yield* Environment
 		yield* Effect.logInfo(`[SPACE][deploy] Deploying space for ${config.chainId}`)
 		const initialEditorAddress = getChecksumAddress(args.initialEditorAddress)
+		const spaceType: "PERSONAL" | "PUBLIC" = args.spaceType ?? "PERSONAL"
 
 		const entityOp = Graph.createEntity({
 			id: args.spaceEntityId,
@@ -71,7 +80,9 @@ export function deploySpace(args: DeployArgs) {
 		})
 
 		yield* Effect.logInfo("[SPACE][deploy] Uploading EDIT to IPFS")
-		const blob = new Blob([initialContent], {type: "application/octet-stream"})
+		const blob = new Blob([initialContent], {
+			type: "application/octet-stream",
+		})
 		const formData = new FormData()
 		formData.append("file", blob)
 		const firstBlockContentUri = yield* upload(formData, config.ipfsGatewayWrite)
@@ -126,7 +137,10 @@ export function deploySpace(args: DeployArgs) {
 		})
 
 		yield* Effect.logInfo("[SPACE][deploy] Deployed DAO successfully!").pipe(
-			Effect.annotateLogs({dao: dao.dao, pluginAddresses: dao.pluginAddresses}),
+			Effect.annotateLogs({
+				dao: dao.dao,
+				pluginAddresses: dao.pluginAddresses,
+			}),
 		)
 
 		yield* Effect.logInfo("[SPACE][deploy] Waiting for DAO to be indexed into a space").pipe(
@@ -392,6 +406,70 @@ export function getPersonalSpaceGovernancePluginInstallItem({
 
 	return {
 		id: personalSpaceAdminPluginRepoAddress as `0x${string}`,
+		data: encodedParams,
+	}
+}
+
+export function getGovernancePluginInstallItem(params: {
+	votingSettings: {
+		votingMode: VotingMode
+		supportThreshold: ethers.BigNumber
+		duration: bigint
+	}
+	initialEditors: `0x${string}`[]
+	memberAccessProposalDuration: bigint
+	pluginUpgrader: `0x${string}`
+}): PluginInstallationWithViem {
+	// From `encodeInstallationParams`
+	const prepareInstallationInputs = [
+		{
+			components: [
+				{
+					internalType: "enum MajorityVotingBase.VotingMode",
+					name: "votingMode",
+					type: "uint8",
+				},
+				{
+					internalType: "uint32",
+					name: "supportThreshold",
+					type: "uint32",
+				},
+				{
+					internalType: "uint64",
+					name: "duration",
+					type: "uint64",
+				},
+			],
+			internalType: "struct MajorityVotingBase.VotingSettings",
+			name: "_votingSettings",
+			type: "tuple",
+		},
+		{
+			internalType: "address[]",
+			name: "_initialEditors",
+			type: "address[]",
+		},
+		{
+			internalType: "uint64",
+			name: "_memberAccessProposalDuration",
+			type: "uint64",
+		},
+		{
+			internalType: "address",
+			name: "_pluginUpgrader",
+			type: "address",
+		},
+	]
+
+	const encodedParams = encodeAbiParameters(prepareInstallationInputs, [
+		params.votingSettings,
+		params.initialEditors,
+		params.memberAccessProposalDuration,
+		params.pluginUpgrader,
+	])
+
+	return {
+		id: contracts.GOVERNANCE_PLUGIN_REPO_ADDRESS as `0x${string}`,
 		data: encodedParams,
 	}
 }

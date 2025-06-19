@@ -65,7 +65,7 @@ app.post("/ipfs/upload-file", async (c) => {
 })
 
 app.post("/deploy", async (c) => {
-	const {initialEditorAddress, spaceName, spaceEntityId, ops} = await c.req.json()
+	const {initialEditorAddress, spaceName, spaceEntityId, ops, spaceType} = await c.req.json()
 
 	if (initialEditorAddress === null || spaceName === null) {
 		console.error(
@@ -83,12 +83,29 @@ app.post("/deploy", async (c) => {
 		)
 	}
 
+	if (spaceType && spaceType !== 'PUBLIC' && spaceType !== 'PERSONAL') {
+		console.error(
+			`[SPACE][deploy] Invalid value for spaceType. spaceType must be "PERSONAL" or "PUBLIC". Received ${spaceType}`,
+		)
+
+		return new Response(
+			JSON.stringify({
+				error: "Invalid Parameter for spaceType",
+				reason: `Invalid value for spaceType. spaceType must be "PERSONAL" or "PUBLIC". Received ${spaceType}`,
+			}),
+			{
+				status: 400,
+			},
+		)
+	}
+
 	const deployWithRetry = Effect.retry(
 		deploySpace({
 			initialEditorAddress,
 			spaceName,
 			spaceEntityId,
 			ops,
+			spaceType
 		}).pipe(Effect.provide(EnvironmentLayer)),
 		{
 			schedule: Schedule.exponential(Duration.millis(100)).pipe(
