@@ -197,6 +197,7 @@ export type QueryRelationsArgs = {
 	filter?: InputMaybe<RelationFilter>
 	limit?: InputMaybe<Scalars["Int"]["input"]>
 	offset?: InputMaybe<Scalars["Int"]["input"]>
+	spaceId?: InputMaybe<Scalars["String"]["input"]>
 }
 
 export type QuerySearchArgs = {
