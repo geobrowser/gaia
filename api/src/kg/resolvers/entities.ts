@@ -208,7 +208,7 @@ export function getRelation(id: string) {
 }
 
 export function getAllRelations(args: QueryRelationsArgs) {
-	const {filter, limit = 100, offset = 0} = args
+	const {filter, spaceId, limit = 100, offset = 0} = args
 
 	return Effect.gen(function* () {
 		// Early return for empty string filters since they will never match any valid entity IDs
@@ -243,6 +243,9 @@ export function getAllRelations(args: QueryRelationsArgs) {
 					}
 					if (filter?.relationEntityId) {
 						conditions.push(eq(relations.entityId, filter.relationEntityId))
+					}
+					if (spaceId) {
+						conditions.push(eq(relations.spaceId, spaceId))
 					}
 
 					return conditions.length > 0 ? and(...conditions) : undefined

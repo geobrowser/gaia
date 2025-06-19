@@ -7,8 +7,6 @@ import type {
 	EntityValuesArgs,
 	Resolvers as GeneratedResolvers,
 	InputMaybe,
-	QueryEditorsArgs,
-	QueryMembersArgs,
 	QuerySearchArgs,
 	QuerySpaceArgs,
 	QuerySpacesArgs,

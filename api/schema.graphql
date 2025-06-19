@@ -184,6 +184,7 @@ type Query {
 
   relation(id: String!): Relation
   relations(
+    spaceId: String
     filter: RelationFilter
     limit: Int = 100
     offset: Int = 0
