@@ -264,6 +264,11 @@ input RelationFilter {
   fromEntityId: String
   toEntityId: String
   relationEntityId: String
+
+  type: IdFilter
+  fromEntity: EntityFilter
+  toEntity: EntityFilter
+  relationEntity: EntityFilter
 }
 
 input IdFilter {
