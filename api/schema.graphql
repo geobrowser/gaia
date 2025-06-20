@@ -283,6 +283,6 @@ input EntityFilter {
   id: IdFilter
   types: IdFilter
   value: ValueFilter
-  relation: RelationFilter
-  backlink: RelationFilter
+  relations: RelationFilter
+  backlinks: RelationFilter
 }
