@@ -63,8 +63,8 @@ export type EntityFilter = {
 	id?: IdFilter
 	types?: IdFilter
 	value?: PropertyFilter
-	fromRelation?: RelationFilter
-	toRelation?: RelationFilter
+	relation?: RelationFilter
+	backlink?: RelationFilter
 }
 
 function buildValueConditions(filter: PropertyFilter) {
@@ -338,9 +338,9 @@ export function buildEntityWhere(
       )`,
 		)
 	}
-	if (filter?.fromRelation) {
+	if (filter?.relation) {
 		// This checks: exists a relation where this entity is the fromEntity
-		const relationConditions = buildRelationConditions(filter.fromRelation, spaceId, "from")
+		const relationConditions = buildRelationConditions(filter.relation, spaceId, "from")
 		if (relationConditions) {
 			clauses.push(
 				sql`EXISTS (
@@ -358,9 +358,9 @@ export function buildEntityWhere(
 		}
 	}
 
-	if (filter?.toRelation) {
+	if (filter?.backlink) {
 		// This checks: exists a relation where this entity is the toEntity
-		const relationConditions = buildRelationConditions(filter.toRelation, spaceId, "to")
+		const relationConditions = buildRelationConditions(filter.backlink, spaceId, "to")
 		if (relationConditions) {
 			clauses.push(
 				sql`EXISTS (
