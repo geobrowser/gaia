@@ -1626,7 +1626,7 @@ describe("Entity Filters Integration Tests", () => {
 				getEntities({
 					spaceId: TEST_SPACE_ID,
 					filter: {
-						fromRelation: {
+						relations: {
 							typeId: TEST_RELATION_TYPE_ID,
 						},
 					},
@@ -1859,7 +1859,7 @@ describe("Entity Filters Integration Tests", () => {
 				getEntities({
 					spaceId: TEST_SPACE_2_ID,
 					filter: {
-						fromRelation: {
+						relations: {
 							typeId: TEST_RELATION_TYPE_ID,
 						},
 					},
