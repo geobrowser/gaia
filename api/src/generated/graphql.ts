@@ -99,11 +99,11 @@ export type EntityValuesArgs = {
 }
 
 export type EntityFilter = {
-	fromRelation?: InputMaybe<RelationFilter>
+	backlinks?: InputMaybe<RelationFilter>
 	id?: InputMaybe<IdFilter>
 	not?: InputMaybe<EntityFilter>
 	or?: InputMaybe<Array<EntityFilter>>
-	toRelation?: InputMaybe<RelationFilter>
+	relations?: InputMaybe<RelationFilter>
 	types?: InputMaybe<IdFilter>
 	value?: InputMaybe<ValueFilter>
 }
