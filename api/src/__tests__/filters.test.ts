@@ -652,7 +652,7 @@ describe("Entity Filters Integration Tests", () => {
 	describe("Relation Filters", () => {
 		it("should filter by from relation with typeId and toEntityId", async () => {
 			const filter: EntityFilter = {
-				fromRelation: {
+				relations: {
 					typeId: TEST_RELATION_TYPE_ID,
 					toEntityId: TEST_ENTITY_2_ID,
 				},
@@ -668,7 +668,7 @@ describe("Entity Filters Integration Tests", () => {
 
 		it("should filter by to relation with typeId and fromEntityId", async () => {
 			const filter: EntityFilter = {
-				toRelation: {
+				backlinks: {
 					typeId: TEST_RELATION_TYPE_ID,
 					fromEntityId: TEST_ENTITY_1_ID,
 				},
@@ -683,7 +683,7 @@ describe("Entity Filters Integration Tests", () => {
 
 		it("should filter by from relation with only typeId", async () => {
 			const filter: EntityFilter = {
-				fromRelation: {
+				relations: {
 					typeId: TEST_RELATION_TYPE_ID,
 				},
 			}
@@ -700,7 +700,7 @@ describe("Entity Filters Integration Tests", () => {
 
 		it("should filter by to relation with only typeId", async () => {
 			const filter: EntityFilter = {
-				toRelation: {
+				backlinks: {
 					typeId: TEST_RELATION_TYPE_ID,
 				},
 			}
@@ -716,7 +716,7 @@ describe("Entity Filters Integration Tests", () => {
 
 		it("should filter by from relation with only toEntityId", async () => {
 			const filter: EntityFilter = {
-				fromRelation: {
+				relations: {
 					toEntityId: TEST_ENTITY_3_ID,
 				},
 			}
@@ -730,7 +730,7 @@ describe("Entity Filters Integration Tests", () => {
 
 		it("should filter by to relation with only fromEntityId", async () => {
 			const filter: EntityFilter = {
-				toRelation: {
+				backlinks: {
 					fromEntityId: TEST_ENTITY_2_ID,
 				},
 			}
@@ -744,7 +744,7 @@ describe("Entity Filters Integration Tests", () => {
 
 		it("should filter by from relation with spaceId", async () => {
 			const filter: EntityFilter = {
-				fromRelation: {
+				relations: {
 					spaceId: TEST_SPACE_ID,
 				},
 			}
@@ -760,7 +760,7 @@ describe("Entity Filters Integration Tests", () => {
 
 		it("should filter by to relation with spaceId", async () => {
 			const filter: EntityFilter = {
-				toRelation: {
+				backlinks: {
 					spaceId: TEST_SPACE_ID,
 				},
 			}
@@ -776,7 +776,7 @@ describe("Entity Filters Integration Tests", () => {
 
 		it("should filter by from relation with multiple criteria", async () => {
 			const filter: EntityFilter = {
-				fromRelation: {
+				relations: {
 					typeId: TEST_RELATION_TYPE_ID,
 					toEntityId: TEST_ENTITY_2_ID,
 					spaceId: TEST_SPACE_ID,
@@ -793,7 +793,7 @@ describe("Entity Filters Integration Tests", () => {
 
 		it("should filter by to relation with multiple criteria", async () => {
 			const filter: EntityFilter = {
-				toRelation: {
+				backlinks: {
 					typeId: TEST_RELATION_TYPE_ID,
 					fromEntityId: TEST_ENTITY_2_ID,
 					spaceId: TEST_SPACE_ID,
@@ -810,7 +810,7 @@ describe("Entity Filters Integration Tests", () => {
 		it("should return empty array for non-matching from relation typeId", async () => {
 			const nonExistentTypeId = uuid()
 			const filter: EntityFilter = {
-				fromRelation: {
+				relations: {
 					typeId: nonExistentTypeId,
 				},
 			}
@@ -824,7 +824,7 @@ describe("Entity Filters Integration Tests", () => {
 		it("should return empty array for non-matching to relation typeId", async () => {
 			const nonExistentTypeId = uuid()
 			const filter: EntityFilter = {
-				toRelation: {
+				backlinks: {
 					typeId: nonExistentTypeId,
 				},
 			}
@@ -838,7 +838,7 @@ describe("Entity Filters Integration Tests", () => {
 		it("should return empty array for non-matching from relation entity", async () => {
 			const nonExistentEntityId = uuid()
 			const filter: EntityFilter = {
-				fromRelation: {
+				relations: {
 					toEntityId: nonExistentEntityId,
 				},
 			}
@@ -852,7 +852,7 @@ describe("Entity Filters Integration Tests", () => {
 		it("should return empty array for non-matching to relation entity", async () => {
 			const nonExistentEntityId = uuid()
 			const filter: EntityFilter = {
-				toRelation: {
+				backlinks: {
 					fromEntityId: nonExistentEntityId,
 				},
 			}
@@ -866,7 +866,7 @@ describe("Entity Filters Integration Tests", () => {
 		it("should return empty array for non-matching spaceId", async () => {
 			const nonExistentSpaceId = uuid()
 			const filter: EntityFilter = {
-				fromRelation: {
+				relations: {
 					spaceId: nonExistentSpaceId,
 				},
 			}
@@ -879,10 +879,10 @@ describe("Entity Filters Integration Tests", () => {
 
 		it("should combine from and to relation filters with AND logic", async () => {
 			const filter: EntityFilter = {
-				fromRelation: {
+				relations: {
 					typeId: TEST_RELATION_TYPE_ID,
 				},
-				toRelation: {
+				backlinks: {
 					typeId: TEST_RELATION_TYPE_ID,
 				},
 			}
@@ -900,12 +900,12 @@ describe("Entity Filters Integration Tests", () => {
 			const filter: EntityFilter = {
 				or: [
 					{
-						fromRelation: {
+						relations: {
 							toEntityId: TEST_ENTITY_2_ID,
 						},
 					},
 					{
-						toRelation: {
+						backlinks: {
 							fromEntityId: TEST_ENTITY_2_ID,
 						},
 					},
@@ -928,7 +928,7 @@ describe("Entity Filters Integration Tests", () => {
 
 			const filter: EntityFilter = {
 				not: {
-					fromRelation: {
+					relations: {
 						typeId: TEST_RELATION_TYPE_2_ID,
 					},
 				},
@@ -940,7 +940,7 @@ describe("Entity Filters Integration Tests", () => {
 			// Test what we can verify: entities that DO have TYPE_2 relations
 			// should definitely NOT be in the results
 			const positiveFilter: EntityFilter = {
-				fromRelation: {
+				relations: {
 					typeId: TEST_RELATION_TYPE_2_ID,
 				},
 			}
@@ -965,7 +965,7 @@ describe("Entity Filters Integration Tests", () => {
 
 		it("should filter by different relation types", async () => {
 			const filter: EntityFilter = {
-				fromRelation: {
+				relations: {
 					typeId: TEST_RELATION_TYPE_2_ID,
 				},
 			}
@@ -980,7 +980,7 @@ describe("Entity Filters Integration Tests", () => {
 
 		it("should handle self-relations", async () => {
 			const filter: EntityFilter = {
-				fromRelation: {
+				relations: {
 					toEntityId: TEST_ENTITY_4_ID,
 				},
 			}
@@ -995,7 +995,7 @@ describe("Entity Filters Integration Tests", () => {
 
 		it("should filter by cross-space relations", async () => {
 			const filter: EntityFilter = {
-				fromRelation: {
+				relations: {
 					spaceId: TEST_SPACE_2_ID,
 				},
 			}
@@ -1010,7 +1010,7 @@ describe("Entity Filters Integration Tests", () => {
 		it("should handle entities with multiple outgoing relations", async () => {
 			// Find entities that receive relations from TEST_ENTITY_1_ID
 			const filter: EntityFilter = {
-				toRelation: {
+				backlinks: {
 					fromEntityId: TEST_ENTITY_1_ID,
 				},
 			}
@@ -1026,7 +1026,7 @@ describe("Entity Filters Integration Tests", () => {
 		it("should handle entities with multiple incoming relations", async () => {
 			// Find entities that send relations to TEST_ENTITY_2_ID
 			const filter: EntityFilter = {
-				fromRelation: {
+				relations: {
 					toEntityId: TEST_ENTITY_2_ID,
 				},
 			}
@@ -1043,12 +1043,12 @@ describe("Entity Filters Integration Tests", () => {
 			const filter: EntityFilter = {
 				or: [
 					{
-						fromRelation: {
+						relations: {
 							typeId: TEST_RELATION_TYPE_ID,
 						},
 					},
 					{
-						fromRelation: {
+						relations: {
 							typeId: TEST_RELATION_TYPE_2_ID,
 						},
 					},
@@ -1068,10 +1068,10 @@ describe("Entity Filters Integration Tests", () => {
 		it("should filter by specific relation combinations", async () => {
 			// Find entities that have both incoming and outgoing relations of the same type
 			const filter: EntityFilter = {
-				fromRelation: {
+				relations: {
 					typeId: TEST_RELATION_TYPE_ID,
 				},
-				toRelation: {
+				backlinks: {
 					typeId: TEST_RELATION_TYPE_ID,
 				},
 			}
@@ -1090,19 +1090,19 @@ describe("Entity Filters Integration Tests", () => {
 					{
 						and: [
 							{
-								fromRelation: {
+								relations: {
 									typeId: TEST_RELATION_TYPE_ID,
 								},
 							},
 							{
-								toRelation: {
+								backlinks: {
 									typeId: TEST_RELATION_TYPE_ID,
 								},
 							},
 						],
 					},
 					{
-						fromRelation: {
+						relations: {
 							typeId: TEST_RELATION_TYPE_2_ID,
 							toEntityId: TEST_ENTITY_4_ID,
 						},
@@ -1125,12 +1125,12 @@ describe("Entity Filters Integration Tests", () => {
 			const filter: EntityFilter = {
 				or: [
 					{
-						fromRelation: {
+						relations: {
 							typeId: TEST_RELATION_TYPE_ID,
 						},
 					},
 					{
-						fromRelation: {
+						relations: {
 							typeId: TEST_RELATION_TYPE_2_ID,
 						},
 					},
@@ -1152,7 +1152,7 @@ describe("Entity Filters Integration Tests", () => {
 
 		it("should filter by specific space for relations", async () => {
 			const filter: EntityFilter = {
-				fromRelation: {
+				relations: {
 					spaceId: TEST_SPACE_ID,
 				},
 			}
@@ -1172,12 +1172,12 @@ describe("Entity Filters Integration Tests", () => {
 			const filter: EntityFilter = {
 				or: [
 					{
-						fromRelation: {
+						relations: {
 							spaceId: TEST_SPACE_ID,
 						},
 					},
 					{
-						fromRelation: {
+						relations: {
 							spaceId: TEST_SPACE_2_ID,
 						},
 					},
@@ -1191,6 +1191,59 @@ describe("Entity Filters Integration Tests", () => {
 			expect(testResults.map((r) => r.id)).toContain(TEST_ENTITY_1_ID)
 			expect(testResults.map((r) => r.id)).toContain(TEST_ENTITY_2_ID)
 			expect(testResults.map((r) => r.id)).toContain(TEST_ENTITY_3_ID)
+			expect(testResults.map((r) => r.id)).toContain(TEST_ENTITY_4_ID)
+		})
+
+		it("should filter by nested toEntity in fromRelation", async () => {
+			// Find entities that have a relation to another entity that has a specific text value
+			// This demonstrates the nested entity filter capability
+			const filter: EntityFilter = {
+				relations: {
+					toEntity: {
+						value: {
+							property: TEXT_PROPERTY_ID,
+							text: {
+								contains: "Hello",
+							},
+						},
+					},
+				},
+			}
+
+			const result = await Effect.runPromise(getEntities({filter}).pipe(provideDeps))
+
+			const testResults = filterToTestEntities(result)
+			// Should return entities that have relations to entities with "Hello" in their text
+			// TEST_ENTITY_1_ID relates to TEST_ENTITY_2_ID (which has "Hello Universe")
+			// TEST_ENTITY_4_ID relates to TEST_ENTITY_2_ID (which has "Hello Universe")
+			expect(testResults).toHaveLength(2)
+			expect(testResults.map((r) => r.id)).toContain(TEST_ENTITY_1_ID)
+			expect(testResults.map((r) => r.id)).toContain(TEST_ENTITY_4_ID)
+		})
+
+		it("should filter by nested toEntity in toRelation", async () => {
+			// Find entities that are the target of a relation from an entity with a specific property
+			const filter: EntityFilter = {
+				backlinks: {
+					toEntity: {
+						value: {
+							property: CHECKBOX_PROPERTY_ID,
+							checkbox: {
+								is: true,
+							},
+						},
+					},
+				},
+			}
+
+			const result = await Effect.runPromise(getEntities({filter}).pipe(provideDeps))
+
+			const testResults = filterToTestEntities(result)
+			// Should return entities that are the target of a relation from an entity with checkbox=true
+			// TEST_ENTITY_2_ID and TEST_ENTITY_4_ID are targets of relations from TEST_ENTITY_1_ID
+			// (which has checkbox=true)
+			expect(testResults).toHaveLength(2)
+			expect(testResults.map((r) => r.id)).toContain(TEST_ENTITY_2_ID)
 			expect(testResults.map((r) => r.id)).toContain(TEST_ENTITY_4_ID)
 		})
 
@@ -1221,6 +1274,7 @@ describe("Entity Filters Integration Tests", () => {
 		 * ✅ Empty result handling for non-existent criteria
 		 * ✅ NOT logic for relation filters (with known implementation limitations)
 		 * ✅ Nested complex filter combinations
+		 * ✅ Nested entity filters (filtering by properties of related entities)
 		 * ✅ Edge cases and error conditions
 		 *
 		 * All relation filter functionality specified in schema.graphql is fully tested
@@ -1572,7 +1626,7 @@ describe("Entity Filters Integration Tests", () => {
 				getEntities({
 					spaceId: TEST_SPACE_ID,
 					filter: {
-						fromRelation: {
+						relations: {
 							typeId: TEST_RELATION_TYPE_ID,
 						},
 					},
@@ -1805,7 +1859,7 @@ describe("Entity Filters Integration Tests", () => {
 				getEntities({
 					spaceId: TEST_SPACE_2_ID,
 					filter: {
-						fromRelation: {
+						relations: {
 							typeId: TEST_RELATION_TYPE_ID,
 						},
 					},

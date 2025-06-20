@@ -47,7 +47,13 @@ type RelationFilter = {
 	typeId?: string
 	fromEntityId?: string
 	toEntityId?: string
+	relationEntityId?: string
 	spaceId?: string
+
+	type?: IdFilter
+	fromEntity?: EntityFilter
+	toEntity?: EntityFilter
+	relationEntity?: EntityFilter
 }
 
 export type EntityFilter = {
@@ -57,8 +63,8 @@ export type EntityFilter = {
 	id?: IdFilter
 	types?: IdFilter
 	value?: PropertyFilter
-	fromRelation?: RelationFilter
-	toRelation?: RelationFilter
+	relations?: RelationFilter
+	backlinks?: RelationFilter
 }
 
 function buildValueConditions(filter: PropertyFilter) {
@@ -207,7 +213,11 @@ function buildValueWhere(filter: PropertyFilter, spaceId?: string | null) {
 	return sql.join(conditions, sql` AND `)
 }
 
-function buildRelationConditions(filter: RelationFilter, spaceId?: string | null) {
+function buildRelationConditions(
+	filter: RelationFilter,
+	spaceId?: string | null,
+	relationContext: "from" | "to" = "from",
+) {
 	const conditions = []
 
 	if (filter.typeId !== undefined) {
@@ -219,6 +229,9 @@ function buildRelationConditions(filter: RelationFilter, spaceId?: string | null
 	if (filter.toEntityId !== undefined) {
 		conditions.push(sql`to_entity_id = ${filter.toEntityId}`)
 	}
+	if (filter.relationEntityId !== undefined) {
+		conditions.push(sql`entity_id = ${filter.relationEntityId}`)
+	}
 	if (filter.spaceId !== undefined) {
 		conditions.push(sql`space_id = ${filter.spaceId}`)
 	}
@@ -228,10 +241,26 @@ function buildRelationConditions(filter: RelationFilter, spaceId?: string | null
 		conditions.push(sql`space_id = ${spaceId}`)
 	}
 
+	// Handle nested toEntity filter
+	if (filter.toEntity) {
+		const targetField = relationContext === "from" ? "to_entity_id" : "from_entity_id"
+		conditions.push(
+			sql`EXISTS (
+				SELECT 1 FROM entities e2
+				WHERE e2.id = relations.${sql.identifier(targetField)}
+				AND ${buildEntityWhere(filter.toEntity, spaceId, "e2")}
+			)`,
+		)
+	}
+
 	return conditions.length > 0 ? sql.join(conditions, sql` AND `) : undefined
 }
 
-export function buildEntityWhere(filter: EntityFilter | null, spaceId?: string | null): SQL | undefined {
+export function buildEntityWhere(
+	filter: EntityFilter | null,
+	spaceId?: string | null,
+	entityAlias = "entities",
+): SQL | undefined {
 	if (!filter && !spaceId) return undefined
 
 	const clauses = []
@@ -242,11 +271,11 @@ export function buildEntityWhere(filter: EntityFilter | null, spaceId?: string |
 			sql`(
 				EXISTS (
 					SELECT 1 FROM ${values}
-					WHERE values.entity_id = entities.id
+					WHERE values.entity_id = ${sql.identifier(entityAlias)}.id
 					AND values.space_id = ${spaceId}
 				) OR EXISTS (
 					SELECT 1 FROM relations
-					WHERE relations.from_entity_id = entities.id
+					WHERE relations.from_entity_id = ${sql.identifier(entityAlias)}.id
 					AND relations.space_id = ${spaceId}
 				)
 			)`,
@@ -255,7 +284,14 @@ export function buildEntityWhere(filter: EntityFilter | null, spaceId?: string |
 
 	if (filter?.id) {
 		if (filter.id.in && filter.id.in.length > 0) {
-			clauses.push(inArray(entities.id, filter.id.in))
+			clauses.push(
+				entityAlias === "entities"
+					? inArray(entities.id, filter.id.in)
+					: sql`${sql.identifier(entityAlias)}.id IN (${sql.join(
+							filter.id.in.map((id) => sql`${id}`),
+							sql`, `,
+						)})`,
+			)
 		} else if (filter.id.in && filter.id.in.length === 0) {
 			// Empty array should return no results
 			clauses.push(sql`false`)
@@ -266,7 +302,7 @@ export function buildEntityWhere(filter: EntityFilter | null, spaceId?: string |
 			clauses.push(
 				sql`EXISTS (
 					SELECT 1 FROM relations
-					WHERE relations.from_entity_id = entities.id
+					WHERE relations.from_entity_id = ${sql.identifier(entityAlias)}.id
 					AND relations.type_id = ${SystemIds.TYPES_PROPERTY}
 					AND relations.to_entity_id IN (${sql.join(
 						filter.types.in.map((id: string) => sql`${id}`),
@@ -281,13 +317,13 @@ export function buildEntityWhere(filter: EntityFilter | null, spaceId?: string |
 		}
 	}
 	if (filter?.and) {
-		clauses.push(and(...filter.and.map((f) => buildEntityWhere(f, spaceId))))
+		clauses.push(and(...filter.and.map((f) => buildEntityWhere(f, spaceId, entityAlias))))
 	}
 	if (filter?.or) {
-		clauses.push(or(...filter.or.map((f) => buildEntityWhere(f, spaceId))))
+		clauses.push(or(...filter.or.map((f) => buildEntityWhere(f, spaceId, entityAlias))))
 	}
 	if (filter?.not) {
-		const notCondition = buildEntityWhere(filter.not, spaceId)
+		const notCondition = buildEntityWhere(filter.not, spaceId, entityAlias)
 		if (notCondition) {
 			clauses.push(not(notCondition))
 		}
@@ -297,46 +333,46 @@ export function buildEntityWhere(filter: EntityFilter | null, spaceId?: string |
 		clauses.push(
 			sql`EXISTS (
         SELECT 1 FROM ${values}
-        WHERE values.entity_id = entities.id
+        WHERE values.entity_id = ${sql.identifier(entityAlias)}.id
         AND ${buildValueWhere(filter.value, spaceId)}
       )`,
 		)
 	}
-	if (filter?.fromRelation) {
+	if (filter?.relations) {
 		// This checks: exists a relation where this entity is the fromEntity
-		const relationConditions = buildRelationConditions(filter.fromRelation, spaceId)
+		const relationConditions = buildRelationConditions(filter.relations, spaceId, "from")
 		if (relationConditions) {
 			clauses.push(
 				sql`EXISTS (
           SELECT 1 FROM relations
-          WHERE from_entity_id = entities.id AND ${relationConditions}
+          WHERE from_entity_id = ${sql.identifier(entityAlias)}.id AND ${relationConditions}
         )`,
 			)
 		} else {
 			clauses.push(
 				sql`EXISTS (
           SELECT 1 FROM relations
-          WHERE from_entity_id = entities.id
+          WHERE from_entity_id = ${sql.identifier(entityAlias)}.id
         )`,
 			)
 		}
 	}
 
-	if (filter?.toRelation) {
+	if (filter?.backlinks) {
 		// This checks: exists a relation where this entity is the toEntity
-		const relationConditions = buildRelationConditions(filter.toRelation, spaceId)
+		const relationConditions = buildRelationConditions(filter.backlinks, spaceId, "to")
 		if (relationConditions) {
 			clauses.push(
 				sql`EXISTS (
           SELECT 1 FROM relations
-          WHERE to_entity_id = entities.id AND ${relationConditions}
+          WHERE to_entity_id = ${sql.identifier(entityAlias)}.id AND ${relationConditions}
         )`,
 			)
 		} else {
 			clauses.push(
 				sql`EXISTS (
           SELECT 1 FROM relations
-          WHERE to_entity_id = entities.id
+          WHERE to_entity_id = ${sql.identifier(entityAlias)}.id
         )`,
 			)
 		}

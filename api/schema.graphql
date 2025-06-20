@@ -264,6 +264,11 @@ input RelationFilter {
   fromEntityId: String
   toEntityId: String
   relationEntityId: String
+
+  type: IdFilter
+  fromEntity: EntityFilter
+  toEntity: EntityFilter
+  relationEntity: EntityFilter
 }
 
 input IdFilter {
@@ -278,6 +283,6 @@ input EntityFilter {
   id: IdFilter
   types: IdFilter
   value: ValueFilter
-  fromRelation: RelationFilter
-  toRelation: RelationFilter
+  relations: RelationFilter
+  backlinks: RelationFilter
 }
