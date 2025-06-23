@@ -1,5 +1,8 @@
 use crate::models::values::{ValueChangeType, ValuesModel};
-use grc20::pb::grc20::{op::Payload, Edit, Entity, Op, UnsetEntityValues, Value, Options, TextOptions, NumberOptions, options};
+use grc20::pb::grc20::{
+    op::Payload, options, Edit, Entity, NumberOptions, Op, Options, TextOptions, UnsetEntityValues,
+    Value,
+};
 use uuid::Uuid;
 
 #[cfg(test)]
@@ -53,12 +56,18 @@ mod tests {
         assert_eq!(deleted.len(), 0);
 
         let created_op = &created[0];
-        assert_eq!(created_op.entity_id, Uuid::parse_str("550e8400-e29b-41d4-a716-446655440001").unwrap());
+        assert_eq!(
+            created_op.entity_id,
+            Uuid::parse_str("550e8400-e29b-41d4-a716-446655440001").unwrap()
+        );
         assert_eq!(
             created_op.property_id,
             Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c1").unwrap()
         );
-        assert_eq!(created_op.space_id, Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap());
+        assert_eq!(
+            created_op.space_id,
+            Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap()
+        );
         assert_eq!(created_op.value, Some("value1".to_string()));
         // The id is now a deterministically generated UUID, so we just check it exists
         assert_ne!(created_op.id, Uuid::nil());
@@ -135,18 +144,30 @@ mod tests {
         assert_eq!(deleted.len(), 0);
 
         // Check first value
-        let first_op = created.iter().find(|op| {
-            op.property_id == Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c1").unwrap()
-        }).unwrap();
-        assert_eq!(first_op.entity_id, Uuid::parse_str("550e8400-e29b-41d4-a716-446655440001").unwrap());
+        let first_op = created
+            .iter()
+            .find(|op| {
+                op.property_id == Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c1").unwrap()
+            })
+            .unwrap();
+        assert_eq!(
+            first_op.entity_id,
+            Uuid::parse_str("550e8400-e29b-41d4-a716-446655440001").unwrap()
+        );
         assert_eq!(first_op.value, Some("value1".to_string()));
         assert!(matches!(first_op.change_type, ValueChangeType::SET));
 
         // Check second value
-        let second_op = created.iter().find(|op| {
-            op.property_id == Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c2").unwrap()
-        }).unwrap();
-        assert_eq!(second_op.entity_id, Uuid::parse_str("550e8400-e29b-41d4-a716-446655440001").unwrap());
+        let second_op = created
+            .iter()
+            .find(|op| {
+                op.property_id == Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c2").unwrap()
+            })
+            .unwrap();
+        assert_eq!(
+            second_op.entity_id,
+            Uuid::parse_str("550e8400-e29b-41d4-a716-446655440001").unwrap()
+        );
         assert_eq!(second_op.value, Some("value2".to_string()));
         assert!(matches!(second_op.change_type, ValueChangeType::SET));
     }
@@ -201,9 +222,12 @@ mod tests {
         assert_eq!(deleted.len(), 0);
 
         // Check first entity value
-        let first_op = created.iter().find(|op| {
-            op.entity_id == Uuid::parse_str("550e8400-e29b-41d4-a716-446655440001").unwrap()
-        }).unwrap();
+        let first_op = created
+            .iter()
+            .find(|op| {
+                op.entity_id == Uuid::parse_str("550e8400-e29b-41d4-a716-446655440001").unwrap()
+            })
+            .unwrap();
         assert_eq!(
             first_op.property_id,
             Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c1").unwrap()
@@ -212,9 +236,12 @@ mod tests {
         assert!(matches!(first_op.change_type, ValueChangeType::SET));
 
         // Check second entity value
-        let second_op = created.iter().find(|op| {
-            op.entity_id == Uuid::parse_str("550e8400-e29b-41d4-a716-446655440002").unwrap()
-        }).unwrap();
+        let second_op = created
+            .iter()
+            .find(|op| {
+                op.entity_id == Uuid::parse_str("550e8400-e29b-41d4-a716-446655440002").unwrap()
+            })
+            .unwrap();
         assert_eq!(
             second_op.property_id,
             Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c2").unwrap()
@@ -274,7 +301,10 @@ mod tests {
         assert_eq!(deleted.len(), 0);
 
         let created_op = &created[0];
-        assert_eq!(created_op.entity_id, Uuid::parse_str("550e8400-e29b-41d4-a716-446655440001").unwrap());
+        assert_eq!(
+            created_op.entity_id,
+            Uuid::parse_str("550e8400-e29b-41d4-a716-446655440001").unwrap()
+        );
         assert_eq!(
             created_op.property_id,
             Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c1").unwrap()
@@ -378,7 +408,10 @@ mod tests {
         assert_eq!(deleted.len(), 0);
 
         let created_op = &created[0];
-        assert_eq!(created_op.entity_id, Uuid::parse_str("550e8400-e29b-41d4-a716-446655440001").unwrap());
+        assert_eq!(
+            created_op.entity_id,
+            Uuid::parse_str("550e8400-e29b-41d4-a716-446655440001").unwrap()
+        );
         assert_eq!(
             created_op.property_id,
             Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c1").unwrap()
@@ -463,16 +496,28 @@ mod tests {
         assert_eq!(deleted.len(), 1);
 
         // Check the two created values
-        let first_created = created.iter().find(|op| {
-            op.property_id == Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c1").unwrap()
-        }).unwrap();
-        assert_eq!(first_created.entity_id, Uuid::parse_str("550e8400-e29b-41d4-a716-446655440001").unwrap());
+        let first_created = created
+            .iter()
+            .find(|op| {
+                op.property_id == Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c1").unwrap()
+            })
+            .unwrap();
+        assert_eq!(
+            first_created.entity_id,
+            Uuid::parse_str("550e8400-e29b-41d4-a716-446655440001").unwrap()
+        );
         assert_eq!(first_created.value, Some("value1".to_string()));
 
-        let second_created = created.iter().find(|op| {
-            op.property_id == Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c3").unwrap()
-        }).unwrap();
-        assert_eq!(second_created.entity_id, Uuid::parse_str("550e8400-e29b-41d4-a716-446655440002").unwrap());
+        let second_created = created
+            .iter()
+            .find(|op| {
+                op.property_id == Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c3").unwrap()
+            })
+            .unwrap();
+        assert_eq!(
+            second_created.entity_id,
+            Uuid::parse_str("550e8400-e29b-41d4-a716-446655440002").unwrap()
+        );
         assert_eq!(second_created.value, Some("value3".to_string()));
 
         // Check the deleted value
@@ -514,12 +559,18 @@ mod tests {
         assert_eq!(deleted.len(), 0);
 
         let created_op = &created[0];
-        assert_eq!(created_op.entity_id, Uuid::parse_str("550e8400-e29b-41d4-a716-446655440001").unwrap());
+        assert_eq!(
+            created_op.entity_id,
+            Uuid::parse_str("550e8400-e29b-41d4-a716-446655440001").unwrap()
+        );
         assert_eq!(
             created_op.property_id,
             Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c1").unwrap()
         );
-        assert_eq!(created_op.space_id, Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap());
+        assert_eq!(
+            created_op.space_id,
+            Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap()
+        );
         assert_eq!(created_op.value, Some("Hello World".to_string()));
         assert_eq!(created_op.language, Some("en".to_string()));
         assert_eq!(created_op.unit, None);
@@ -528,6 +579,10 @@ mod tests {
 
     #[test]
     fn test_map_edit_to_values_with_number_options() {
+        // Create a UUID for the number unit
+        let unit_uuid = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440002").unwrap();
+        let unit_bytes = unit_uuid.as_bytes().to_vec();
+
         // Create an update entity operation with number options
         let entity = Entity {
             id: Uuid::parse_str("550e8400-e29b-41d4-a716-446655440001")
@@ -542,7 +597,7 @@ mod tests {
                 value: "42.5".to_string(),
                 options: Some(Options {
                     value: Some(options::Value::Number(NumberOptions {
-                        unit: Some("kg".as_bytes().to_vec()),
+                        unit: Some(unit_bytes),
                     })),
                 }),
             }],
@@ -561,15 +616,21 @@ mod tests {
         assert_eq!(deleted.len(), 0);
 
         let created_op = &created[0];
-        assert_eq!(created_op.entity_id, Uuid::parse_str("550e8400-e29b-41d4-a716-446655440001").unwrap());
+        assert_eq!(
+            created_op.entity_id,
+            Uuid::parse_str("550e8400-e29b-41d4-a716-446655440001").unwrap()
+        );
         assert_eq!(
             created_op.property_id,
             Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c1").unwrap()
         );
-        assert_eq!(created_op.space_id, Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap());
+        assert_eq!(
+            created_op.space_id,
+            Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap()
+        );
         assert_eq!(created_op.value, Some("42.5".to_string()));
         assert_eq!(created_op.language, None);
-        assert_eq!(created_op.unit, Some("kg".to_string()));
+        assert_eq!(created_op.unit, Some(unit_uuid.to_string()));
         assert!(matches!(created_op.change_type, ValueChangeType::SET));
     }
 
@@ -604,12 +665,18 @@ mod tests {
         assert_eq!(deleted.len(), 0);
 
         let created_op = &created[0];
-        assert_eq!(created_op.entity_id, Uuid::parse_str("550e8400-e29b-41d4-a716-446655440001").unwrap());
+        assert_eq!(
+            created_op.entity_id,
+            Uuid::parse_str("550e8400-e29b-41d4-a716-446655440001").unwrap()
+        );
         assert_eq!(
             created_op.property_id,
             Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c1").unwrap()
         );
-        assert_eq!(created_op.space_id, Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap());
+        assert_eq!(
+            created_op.space_id,
+            Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap()
+        );
         assert_eq!(created_op.value, Some("test value".to_string()));
         assert_eq!(created_op.language, None);
         assert_eq!(created_op.unit, None);
@@ -652,7 +719,10 @@ mod tests {
         assert_eq!(deleted.len(), 0);
 
         let created_op = &created[0];
-        assert_eq!(created_op.entity_id, Uuid::parse_str("550e8400-e29b-41d4-a716-446655440001").unwrap());
+        assert_eq!(
+            created_op.entity_id,
+            Uuid::parse_str("550e8400-e29b-41d4-a716-446655440001").unwrap()
+        );
         assert_eq!(
             created_op.property_id,
             Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c1").unwrap()
@@ -693,7 +763,12 @@ mod tests {
                     value: "100".to_string(),
                     options: Some(Options {
                         value: Some(options::Value::Number(NumberOptions {
-                            unit: Some("m".as_bytes().to_vec()),
+                            unit: Some(
+                                Uuid::parse_str("550e8400-e29b-41d4-a716-446655440003")
+                                    .unwrap()
+                                    .as_bytes()
+                                    .to_vec(),
+                            ),
                         })),
                     }),
                 },
@@ -723,21 +798,34 @@ mod tests {
         // Find each value by property_id and check its options
         let text_value = created
             .iter()
-            .find(|op| op.property_id == Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c1").unwrap())
+            .find(|op| {
+                op.property_id == Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c1").unwrap()
+            })
             .unwrap();
         assert_eq!(text_value.language, Some("fr".to_string()));
         assert_eq!(text_value.unit, None);
 
         let number_value = created
             .iter()
-            .find(|op| op.property_id == Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c2").unwrap())
+            .find(|op| {
+                op.property_id == Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c2").unwrap()
+            })
             .unwrap();
         assert_eq!(number_value.language, None);
-        assert_eq!(number_value.unit, Some("m".to_string()));
+        assert_eq!(
+            number_value.unit,
+            Some(
+                Uuid::parse_str("550e8400-e29b-41d4-a716-446655440003")
+                    .unwrap()
+                    .to_string()
+            )
+        );
 
         let plain_value = created
             .iter()
-            .find(|op| op.property_id == Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c3").unwrap())
+            .find(|op| {
+                op.property_id == Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c3").unwrap()
+            })
             .unwrap();
         assert_eq!(plain_value.language, None);
         assert_eq!(plain_value.unit, None);
