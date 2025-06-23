@@ -45,9 +45,11 @@ async fn main() -> Result<(), IndexingError> {
 
     let root_space_bytes = fs::read("./tests/25omwWh6HYgeRQKCaSpVpa_ops");
     let crypto_space_bytes = fs::read("./tests/SgjATMbm41LX6naizMqBVd_ops");
+    let crypto_news_space_bytes = fs::read("./tests/LHDnAidYUSBJuvq7wDPRQZ_ops");
 
     let root_space_edit = Edit::decode(Bytes::from(root_space_bytes.unwrap()));
     let crypto_space_edit = Edit::decode(Bytes::from(crypto_space_bytes.unwrap()));
+    let crypto_news_space_edit = Edit::decode(Bytes::from(crypto_news_space_bytes.unwrap()));
 
     let root_space_preprocessed_edit = PreprocessedEdit {
         // For now we use a random UUID instead of the correct UUID for the root space
@@ -63,10 +65,24 @@ async fn main() -> Result<(), IndexingError> {
         is_errored: false,
     };
 
-    let block = BlockMetadata {
+    let crypto_news_space_preprocessed_edit = PreprocessedEdit {
+        // For now we use a random UUID instead of the correct UUID for the crypto space
+        space_id: Uuid::parse_str("26c7edb1-ca79-4a56-8cc6-04a8e689a8f0").unwrap(),
+        edit: Some(crypto_news_space_edit.clone().unwrap()),
+        is_errored: false,
+    };
+
+
+    let block_1 = BlockMetadata {
         cursor: String::from("5"),
         block_number: 1,
         timestamp: String::from("5"),
+    };
+
+    let block_2 = BlockMetadata {
+        cursor: String::from("6"),
+        block_number: 2,
+        timestamp: String::from("6"),
     };
 
     let root_space = CreatedSpace::Public(PublicSpace {
@@ -82,18 +98,52 @@ async fn main() -> Result<(), IndexingError> {
         personal_plugin: "0x2222222222222222222222222222222222222222".to_string(),
     });
 
+    let crypto_news_space = CreatedSpace::Personal(PersonalSpace {
+        dao_address: "0x098765432109876543210987654321098765432f".to_string(),
+        space_address: "0xFEDCBA0987654321098765432109876543210987".to_string(),
+        personal_plugin: "0x2222222222222222222222222222222222222222".to_string(),
+    });
+
     let indexer = TestIndexer::new(storage.clone(), properties_cache.clone());
 
     indexer
-        .run(&vec![KgData {
-            block,
-            edits: vec![root_space_preprocessed_edit, crypto_space_preprocessed_edit],
-            spaces: vec![root_space, crypto_space],
-            added_editors: vec![],
-            added_members: vec![],
-            removed_editors: vec![],
-            removed_members: vec![],
-        }])
+        .run(&vec![
+            KgData {
+                block: block_1,
+                edits: vec![
+                    root_space_preprocessed_edit,
+                    crypto_space_preprocessed_edit,
+                    // crypto_news_space_preprocessed_edit,
+                ],
+                spaces: vec![
+                    root_space,
+                    crypto_space,
+                    // crypto_news_space,
+                ],
+
+                added_editors: vec![],
+                added_members: vec![],
+                removed_editors: vec![],
+                removed_members: vec![],
+            },
+            KgData {
+                block: block_2,
+                edits: vec![
+                    // root_space_preprocessed_edit,
+                    // crypto_space_preprocessed_edit,
+                    crypto_news_space_preprocessed_edit,
+                ],
+                spaces: vec![
+                    // root_space,
+                    // crypto_space,
+                    crypto_news_space,
+                ],
+                added_editors: vec![],
+                added_members: vec![],
+                removed_editors: vec![],
+                removed_members: vec![],
+            },
+        ])
         .await?;
 
     Ok(())
