@@ -46,10 +46,12 @@ async fn main() -> Result<(), IndexingError> {
     let root_space_bytes = fs::read("./tests/25omwWh6HYgeRQKCaSpVpa_ops");
     let crypto_space_bytes = fs::read("./tests/SgjATMbm41LX6naizMqBVd_ops");
     let crypto_news_space_bytes = fs::read("./tests/LHDnAidYUSBJuvq7wDPRQZ_ops");
+    let regions_space_bytes = fs::read("./tests/D8akqNQr8RMdCdFHecT2n_ops");
 
     let root_space_edit = Edit::decode(Bytes::from(root_space_bytes.unwrap()));
     let crypto_space_edit = Edit::decode(Bytes::from(crypto_space_bytes.unwrap()));
     let crypto_news_space_edit = Edit::decode(Bytes::from(crypto_news_space_bytes.unwrap()));
+    let regions_space_edit = Edit::decode(Bytes::from(regions_space_bytes.unwrap()));
 
     let root_space_preprocessed_edit = PreprocessedEdit {
         // For now we use a random UUID instead of the correct UUID for the root space
@@ -72,6 +74,12 @@ async fn main() -> Result<(), IndexingError> {
         is_errored: false,
     };
 
+    let regions_space_preprocessed_edit = PreprocessedEdit {
+        // For now we use a random UUID instead of the correct UUID for the crypto space
+        space_id: Uuid::parse_str("c0814872-672e-46c0-8cdb-73ad34e0b77b").unwrap(),
+        edit: Some(regions_space_edit.clone().unwrap()),
+        is_errored: false,
+    };
 
     let block_1 = BlockMetadata {
         cursor: String::from("5"),
@@ -104,6 +112,12 @@ async fn main() -> Result<(), IndexingError> {
         personal_plugin: "0x2222222222222222222222222222222222222222".to_string(),
     });
 
+    let regions_space = CreatedSpace::Personal(PersonalSpace {
+        dao_address: "0x098765432109876543210987654321098765432e".to_string(),
+        space_address: "0xFEDCBA0987654321098765432109876543210987".to_string(),
+        personal_plugin: "0x2222222222222222222222222222222222222222".to_string(),
+    });
+
     let indexer = TestIndexer::new(storage.clone(), properties_cache.clone());
 
     indexer
@@ -132,11 +146,13 @@ async fn main() -> Result<(), IndexingError> {
                     // root_space_preprocessed_edit,
                     // crypto_space_preprocessed_edit,
                     crypto_news_space_preprocessed_edit,
+                    regions_space_preprocessed_edit,
                 ],
                 spaces: vec![
                     // root_space,
                     // crypto_space,
                     crypto_news_space,
+                    regions_space,
                 ],
                 added_editors: vec![],
                 added_members: vec![],

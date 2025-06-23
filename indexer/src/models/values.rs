@@ -184,10 +184,17 @@ fn extract_options(
                     (language, None)
                 }
                 options::Value::Number(number_opts) => {
-                    let unit = number_opts
-                        .unit
-                        .as_ref()
-                        .and_then(|u| String::from_utf8(u.clone()).ok());
+                    let unit = number_opts.unit.as_ref().and_then(|unit_bytes| {
+                        // If UTF-8 conversion fails, try treating it as raw UUID bytes
+                        match id::transform_id_bytes(unit_bytes.clone()) {
+                            Ok(uuid_bytes) => {
+                                let uuid = Uuid::from_bytes(uuid_bytes);
+                                return Some(uuid.to_string());
+                            }
+                            Err(_) => None,
+                        }
+                    });
+
                     (None, unit)
                 }
             }

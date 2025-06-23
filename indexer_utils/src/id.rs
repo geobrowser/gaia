@@ -1,4 +1,5 @@
 use md5::{Digest, Md5};
+use tracing;
 use uuid::{Builder, Uuid};
 
 use crate::checksum_address;
@@ -73,9 +74,24 @@ pub enum IdError {
 }
 
 pub fn transform_id_bytes(bytes: Vec<u8>) -> Result<[u8; 16], IdError> {
+    // Capture length and preview of bytes before the move
+    let length = bytes.len();
+    let preview = if !bytes.is_empty() {
+        format!("{:?}", &bytes[..length.min(4)])
+    } else {
+        "[]".to_string()
+    };
+
     match bytes.try_into() {
         Ok(value) => Ok(value),
-        Err(_) => Err(IdError::DecodeError),
+        Err(err) => {
+            println!(
+                "Failed to convert Vec<u8> to [u8; 16]. Input length: {}, expected: 16. Error: {:?}",
+                length, err
+            );
+            println!("First few bytes of input: {}", preview);
+            Err(IdError::DecodeError)
+        }
     }
 }
 
