@@ -45,9 +45,9 @@ impl PreprocessedSink<KgData> for KgIndexer {
             .map_err(IndexingError::from)
     }
 
-    async fn persist_cursor(&self, cursor: String) -> Result<(), Self::Error> {
+    async fn persist_cursor(&self, cursor: String, block: u64) -> Result<(), Self::Error> {
         self.storage
-            .persist_cursor("kg_indexer", &cursor)
+            .persist_cursor("kg_indexer", &cursor, &block)
             .await
             .map_err(IndexingError::from)
     }

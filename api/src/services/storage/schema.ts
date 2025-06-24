@@ -33,6 +33,7 @@ export const ipfsCache = pgTable("ipfs_cache", {
 export const cursors = pgTable("cursors", {
 	id: text().primaryKey(),
 	cursor: text().notNull(),
+	blockNumber: text().notNull(),
 })
 
 export const spaceTypesEnum = pgEnum("spaceTypes", ["Personal", "Public"])

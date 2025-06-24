@@ -45,6 +45,7 @@ pub trait PreprocessedSink<P: Send>: Send + Sync {
     fn persist_cursor(
         &self,
         _cursor: String,
+        _block: u64,
     ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send {
         // FIXME: Handling of the cursor is missing here. It should be saved each time
         // a full block has been correctly processed/persisted. The saving location
@@ -107,11 +108,16 @@ pub trait PreprocessedSink<P: Send>: Send + Sync {
                     Some(Ok(BlockResponse::New(data))) => {
                         let decoded_data = self.preprocess_block_scoped_data(&data).await?;
                         self.process_block_scoped_data(&data, decoded_data).await?;
-                        self.persist_cursor(data.cursor).await?;
+                        self.persist_cursor(data.cursor, data.clock.unwrap().number)
+                            .await?;
                     }
                     Some(Ok(BlockResponse::Undo(undo_signal))) => {
                         self.process_block_undo_signal(&undo_signal)?;
-                        self.persist_cursor(undo_signal.last_valid_cursor).await?;
+                        self.persist_cursor(
+                            undo_signal.last_valid_cursor,
+                            undo_signal.last_valid_block.unwrap().number,
+                        )
+                        .await?;
                     }
                     Some(Err(err)) => {
                         println!();
@@ -150,6 +156,7 @@ pub trait Sink<T: Send>: Send + Sync {
     fn persist_cursor(
         &self,
         _cursor: String,
+        _block: u64,
     ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send {
         // FIXME: Handling of the cursor is missing here. It should be saved each time
         // a full block has been correctly processed/persisted. The saving location
@@ -211,11 +218,16 @@ pub trait Sink<T: Send>: Send + Sync {
                     }
                     Some(Ok(BlockResponse::New(data))) => {
                         self.process_block_scoped_data(&data).await?;
-                        self.persist_cursor(data.cursor).await?;
+                        self.persist_cursor(data.cursor, data.clock.unwrap().number)
+                            .await?;
                     }
                     Some(Ok(BlockResponse::Undo(undo_signal))) => {
                         self.process_block_undo_signal(&undo_signal)?;
-                        self.persist_cursor(undo_signal.last_valid_cursor).await?;
+                        self.persist_cursor(
+                            undo_signal.last_valid_cursor,
+                            undo_signal.last_valid_block.unwrap().number,
+                        )
+                        .await?;
                     }
                     Some(Err(err)) => {
                         println!();

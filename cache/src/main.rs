@@ -63,11 +63,11 @@ impl Sink<EventData> for CacheIndexer {
             .map_err(|e| Error::new(std::io::ErrorKind::Other, e))
     }
 
-    async fn persist_cursor(&self, cursor: String) -> Result<(), Self::Error> {
+    async fn persist_cursor(&self, cursor: String, block: u64) -> Result<(), Self::Error> {
         self.cache
             .lock()
             .await
-            .persist_cursor("ipfs_indexer", &cursor)
+            .persist_cursor("ipfs_indexer", &cursor, &block)
             .await
             .map_err(|e| Error::new(std::io::ErrorKind::Other, e))
     }

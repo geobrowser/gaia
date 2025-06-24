@@ -71,11 +71,17 @@ impl Storage {
         Ok(result.map(|row| row.cursor))
     }
 
-    pub async fn persist_cursor(&self, id: &str, cursor: &str) -> Result<(), CacheError> {
+    pub async fn persist_cursor(
+        &self,
+        id: &str,
+        cursor: &str,
+        block: &u64,
+    ) -> Result<(), CacheError> {
         sqlx::query!(
-            "INSERT INTO cursors (id, cursor) VALUES ($1, $2) ON CONFLICT (id) DO UPDATE SET cursor = $2",
+            "INSERT INTO cursors (id, cursor, block_number) VALUES ($1, $2, $3) ON CONFLICT (id) DO UPDATE SET cursor = $2, block_number = $3",
             id,
-            cursor
+            cursor,
+            block.to_string()
         )
         .execute(&self.connection)
         .await?;
@@ -116,7 +122,12 @@ impl Cache {
         self.storage.load_cursor(id).await
     }
 
-    pub async fn persist_cursor(&self, id: &str, cursor: &str) -> Result<(), CacheError> {
-        self.storage.persist_cursor(id, cursor).await
+    pub async fn persist_cursor(
+        &self,
+        id: &str,
+        cursor: &str,
+        block: &u64,
+    ) -> Result<(), CacheError> {
+        self.storage.persist_cursor(id, cursor, block).await
     }
 }
