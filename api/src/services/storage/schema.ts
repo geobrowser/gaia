@@ -1,19 +1,5 @@
-import {
-	relations as drizzleRelations,
-	type InferSelectModel,
-} from "drizzle-orm";
-import {
-	boolean,
-	index,
-	integer,
-	jsonb,
-	pgEnum,
-	pgTable,
-	primaryKey,
-	serial,
-	text,
-	uuid,
-} from "drizzle-orm/pg-core";
+import {relations as drizzleRelations, type InferSelectModel} from "drizzle-orm"
+import {boolean, index, integer, jsonb, pgEnum, pgTable, primaryKey, serial, text, uuid} from "drizzle-orm/pg-core"
 
 export const ipfsCache = pgTable("ipfs_cache", {
 	id: serial(),
@@ -28,7 +14,7 @@ export const ipfsCache = pgTable("ipfs_cache", {
 	isErrored: boolean().notNull().default(false),
 	block: text().notNull(),
 	space: uuid().notNull(),
-});
+})
 
 /**
  * Cursors store the latest indexed block log. Indexers store their latest
@@ -47,9 +33,9 @@ export const ipfsCache = pgTable("ipfs_cache", {
 export const cursors = pgTable("cursors", {
 	id: text().primaryKey(),
 	cursor: text().notNull(),
-});
+})
 
-export const spaceTypesEnum = pgEnum("spaceTypes", ["Personal", "Public"]);
+export const spaceTypesEnum = pgEnum("spaceTypes", ["Personal", "Public"])
 
 export const spaces = pgTable("spaces", {
 	id: uuid().primaryKey(),
@@ -59,7 +45,7 @@ export const spaces = pgTable("spaces", {
 	mainVotingAddress: text(),
 	membershipAddress: text(),
 	personalAddress: text(),
-});
+})
 
 export const entities = pgTable("entities", {
 	id: uuid().primaryKey(),
@@ -67,21 +53,14 @@ export const entities = pgTable("entities", {
 	createdAtBlock: text().notNull(),
 	updatedAt: text().notNull(),
 	updatedAtBlock: text().notNull(),
-});
+})
 
-export const dataTypesEnum = pgEnum("dataTypes", [
-	"Text",
-	"Number",
-	"Checkbox",
-	"Time",
-	"Point",
-	"Relation",
-]);
+export const dataTypesEnum = pgEnum("dataTypes", ["Text", "Number", "Checkbox", "Time", "Point", "Relation"])
 
 export const properties = pgTable("properties", {
 	id: uuid().primaryKey(),
 	type: dataTypesEnum().notNull(),
-});
+})
 
 export const values = pgTable(
 	"values",
@@ -100,7 +79,7 @@ export const values = pgTable(
 		// Composite index for space-filtered searches
 		index("values_space_text_idx").on(table.spaceId, table.value),
 	],
-);
+)
 
 export const relations = pgTable("relations", {
 	id: uuid().primaryKey(),
@@ -115,7 +94,7 @@ export const relations = pgTable("relations", {
 	position: text(),
 	spaceId: uuid().notNull(),
 	verified: boolean(),
-});
+})
 
 export const members = pgTable(
 	"members",
@@ -123,8 +102,8 @@ export const members = pgTable(
 		address: text().notNull(),
 		spaceId: uuid().notNull(),
 	},
-	(table) => [primaryKey({ columns: [table.address, table.spaceId] })],
-);
+	(table) => [primaryKey({columns: [table.address, table.spaceId]})],
+)
 
 export const editors = pgTable(
 	"editors",
@@ -132,103 +111,91 @@ export const editors = pgTable(
 		address: text().notNull(),
 		spaceId: uuid().notNull(),
 	},
-	(table) => [primaryKey({ columns: [table.address, table.spaceId] })],
-);
+	(table) => [primaryKey({columns: [table.address, table.spaceId]})],
+)
 
-export const entityForeignValues = drizzleRelations(
-	entities,
-	({ many, one }) => ({
-		values: many(values),
-		property: one(properties, {
-			fields: [entities.id],
-			references: [properties.id],
-		}),
-		fromRelations: many(relations, {
-			relationName: "fromEntity",
-		}),
-		// If an entity is the object (i.e. toEntity)
-		toRelations: many(relations, {
-			relationName: "toEntity",
-		}),
-		// If an entity is directly linked (e.g. as owning the relation row)
-		relationEntityRelations: many(relations, {
-			relationName: "entity",
-		}),
+export const entityForeignValues = drizzleRelations(entities, ({many, one}) => ({
+	values: many(values),
+	property: one(properties, {
+		fields: [entities.id],
+		references: [properties.id],
 	}),
-);
-
-export const propertiesEntityRelations = drizzleRelations(
-	values,
-	({ one }) => ({
-		entity: one(entities, {
-			fields: [values.entityId],
-			references: [entities.id],
-		}),
+	fromRelations: many(relations, {
+		relationName: "fromEntity",
 	}),
-);
-
-export const propertiesRelations = drizzleRelations(
-	properties,
-	({ one, many }) => ({
-		entity: one(entities, {
-			fields: [properties.id],
-			references: [entities.id],
-		}),
-		// Relations where this property is used as the type
-		typeRelations: many(relations, {
-			relationName: "typeProperty",
-		}),
+	// If an entity is the object (i.e. toEntity)
+	toRelations: many(relations, {
+		relationName: "toEntity",
 	}),
-);
-
-export const relationsEntityRelations = drizzleRelations(
-	relations,
-	({ one }) => ({
-		fromEntity: one(entities, {
-			fields: [relations.fromEntityId],
-			references: [entities.id],
-			relationName: "fromEntity",
-		}),
-		toEntity: one(entities, {
-			fields: [relations.toEntityId],
-			references: [entities.id],
-			relationName: "toEntity",
-		}),
-		typeProperty: one(properties, {
-			fields: [relations.typeId],
-			references: [properties.id],
-			relationName: "typeProperty",
-		}),
-		relationEntity: one(entities, {
-			fields: [relations.entityId],
-			references: [entities.id],
-			relationName: "relationEntity",
-		}),
+	// If an entity is directly linked (e.g. as owning the relation row)
+	relationEntityRelations: many(relations, {
+		relationName: "entity",
 	}),
-);
+}))
 
-export const membersRelations = drizzleRelations(members, ({ one }) => ({
+export const propertiesEntityRelations = drizzleRelations(values, ({one}) => ({
+	entity: one(entities, {
+		fields: [values.entityId],
+		references: [entities.id],
+	}),
+}))
+
+export const propertiesRelations = drizzleRelations(properties, ({one, many}) => ({
+	entity: one(entities, {
+		fields: [properties.id],
+		references: [entities.id],
+	}),
+	// Relations where this property is used as the type
+	typeRelations: many(relations, {
+		relationName: "typeProperty",
+	}),
+}))
+
+export const relationsEntityRelations = drizzleRelations(relations, ({one}) => ({
+	fromEntity: one(entities, {
+		fields: [relations.fromEntityId],
+		references: [entities.id],
+		relationName: "fromEntity",
+	}),
+	toEntity: one(entities, {
+		fields: [relations.toEntityId],
+		references: [entities.id],
+		relationName: "toEntity",
+	}),
+	typeProperty: one(properties, {
+		fields: [relations.typeId],
+		references: [properties.id],
+		relationName: "typeProperty",
+	}),
+	relationEntity: one(entities, {
+		fields: [relations.entityId],
+		references: [entities.id],
+		relationName: "relationEntity",
+	}),
+}))
+
+export const membersRelations = drizzleRelations(members, ({one}) => ({
 	space: one(spaces, {
 		fields: [members.spaceId],
 		references: [spaces.id],
 	}),
-}));
+}))
 
-export const editorsRelations = drizzleRelations(editors, ({ one }) => ({
+export const editorsRelations = drizzleRelations(editors, ({one}) => ({
 	space: one(spaces, {
 		fields: [editors.spaceId],
 		references: [spaces.id],
 	}),
-}));
+}))
 
-export const spacesRelations = drizzleRelations(spaces, ({ many }) => ({
+export const spacesRelations = drizzleRelations(spaces, ({many}) => ({
 	members: many(members),
 	editors: many(editors),
-}));
+}))
 
-export type IpfsCacheItem = InferSelectModel<typeof ipfsCache>;
-export type DbEntity = InferSelectModel<typeof entities>;
-export type DbProperty = InferSelectModel<typeof values>;
-export type DbRelations = InferSelectModel<typeof relations>;
-export type DbMember = InferSelectModel<typeof members>;
-export type DbEditor = InferSelectModel<typeof editors>;
+export type IpfsCacheItem = InferSelectModel<typeof ipfsCache>
+export type DbEntity = InferSelectModel<typeof entities>
+export type DbProperty = InferSelectModel<typeof values>
+export type DbRelations = InferSelectModel<typeof relations>
+export type DbMember = InferSelectModel<typeof members>
+export type DbEditor = InferSelectModel<typeof editors>
