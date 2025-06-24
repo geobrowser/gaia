@@ -1,6 +1,6 @@
 import {Effect} from "effect"
 
-import {editors, entities, members, properties, relations, spaces, values} from "../../services/storage/schema"
+import {cursors, editors, entities, members, properties, relations, spaces, values} from "../../services/storage/schema"
 import {make, Storage} from "../../services/storage/storage"
 import {Environment, make as makeEnvironment} from "../environment"
 
@@ -15,8 +15,9 @@ const reset = Effect.gen(function* () {
 	const s = yield* db.use(async (client) => await client.delete(spaces).execute())
 	const ed = yield* db.use(async (client) => await client.delete(editors).execute())
 	const m = yield* db.use(async (client) => await client.delete(members).execute())
+	const c = yield* db.use(async (client) => await client.delete(cursors).execute())
 
-	console.log("Results:", {e, p, r, v, s, ed, m})
+	console.log("Results:", {e, p, r, v, s, ed, m, c})
 }).pipe(Effect.provideServiceEffect(Storage, make))
 
 Effect.runPromise(reset.pipe(Effect.provideServiceEffect(Environment, makeEnvironment)))
