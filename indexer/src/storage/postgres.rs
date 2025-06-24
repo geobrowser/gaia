@@ -209,6 +209,26 @@ impl PostgresStorage {
             space_id: query.space_id,
         })
     }
+
+    pub async fn load_cursor(&self, id: &str) -> Result<Option<String>, StorageError> {
+        let result = sqlx::query!("SELECT cursor FROM cursors WHERE id = $1", id)
+            .fetch_optional(&self.pool)
+            .await?;
+
+        Ok(result.map(|row| row.cursor))
+    }
+
+    pub async fn persist_cursor(&self, id: &str, cursor: &str) -> Result<(), StorageError> {
+        sqlx::query!(
+            "INSERT INTO cursors (id, cursor) VALUES ($1, $2) ON CONFLICT (id) DO UPDATE SET cursor = $2",
+            id,
+            cursor
+        )
+        .execute(&self.pool)
+        .await?;
+
+        Ok(())
+    }
 }
 
 #[async_trait]

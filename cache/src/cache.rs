@@ -62,6 +62,26 @@ impl Storage {
 
         Ok(maybe_exists.exists.unwrap_or(false))
     }
+
+    pub async fn load_cursor(&self, id: &str) -> Result<Option<String>, CacheError> {
+        let result = sqlx::query!("SELECT cursor FROM cursors WHERE id = $1", id)
+            .fetch_optional(&self.connection)
+            .await?;
+
+        Ok(result.map(|row| row.cursor))
+    }
+
+    pub async fn persist_cursor(&self, id: &str, cursor: &str) -> Result<(), CacheError> {
+        sqlx::query!(
+            "INSERT INTO cursors (id, cursor) VALUES ($1, $2) ON CONFLICT (id) DO UPDATE SET cursor = $2",
+            id,
+            cursor
+        )
+        .execute(&self.connection)
+        .await?;
+
+        Ok(())
+    }
 }
 
 pub struct Cache {
@@ -90,5 +110,13 @@ impl Cache {
     pub async fn has(&mut self, uri: &String) -> Result<bool, CacheError> {
         let result = self.storage.has(uri).await?;
         Ok(result)
+    }
+
+    pub async fn load_cursor(&self, id: &str) -> Result<Option<String>, CacheError> {
+        self.storage.load_cursor(id).await
+    }
+
+    pub async fn persist_cursor(&self, id: &str, cursor: &str) -> Result<(), CacheError> {
+        self.storage.persist_cursor(id, cursor).await
     }
 }

@@ -55,11 +55,21 @@ impl Sink<EventData> for CacheIndexer {
     type Error = CacheIndexerError;
 
     async fn load_persisted_cursor(&self) -> Result<Option<String>, Self::Error> {
-        Ok(Some("".to_string()))
+        self.cache
+            .lock()
+            .await
+            .load_cursor("ipfs_indexer")
+            .await
+            .map_err(|e| Error::new(std::io::ErrorKind::Other, e))
     }
 
-    async fn persist_cursor(&self, _cursor: String) -> Result<(), Self::Error> {
-        Ok(())
+    async fn persist_cursor(&self, cursor: String) -> Result<(), Self::Error> {
+        self.cache
+            .lock()
+            .await
+            .persist_cursor("ipfs_indexer", &cursor)
+            .await
+            .map_err(|e| Error::new(std::io::ErrorKind::Other, e))
     }
 
     async fn process_block_scoped_data(

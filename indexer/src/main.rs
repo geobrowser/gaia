@@ -39,11 +39,17 @@ impl PreprocessedSink<KgData> for KgIndexer {
     type Error = IndexingError;
 
     async fn load_persisted_cursor(&self) -> Result<Option<String>, Self::Error> {
-        Ok(Some("".to_string()))
+        self.storage
+            .load_cursor("kg_indexer")
+            .await
+            .map_err(IndexingError::from)
     }
 
-    async fn persist_cursor(&self, _cursor: String) -> Result<(), Self::Error> {
-        Ok(())
+    async fn persist_cursor(&self, cursor: String) -> Result<(), Self::Error> {
+        self.storage
+            .persist_cursor("kg_indexer", &cursor)
+            .await
+            .map_err(IndexingError::from)
     }
 
     /**
