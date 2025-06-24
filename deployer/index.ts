@@ -6,8 +6,8 @@ import regionsData from './D8akqNQr8RMdCdFHecT2n_ops.json'
 
 const ROOT_ENTITY_ID = "6b9f649e-38b6-4224-927d-d66171343730"
 const CRYPTO_ENTITY_ID = "23575692-bda8-4a71-8694-04da2e2af18f"
-const CRYPTO_EVENTS_ENTITY_ID = "26c7edb1-ca79-4a56-8cc6-04a8e689a8f0"
-const REGIONS_ENTITY_ID = "c0814872-672e-46c0-8cdb-73ad34e0b77b"
+const CRYPTO_EVENTS_ENTITY_ID = "320ab568-68cf-4587-8dc9-ae82f55587ce"
+const REGIONS_ENTITY_ID = "1d7ee87f-70d7-462d-9b72-ce845aa15986"
 
 console.log(`Deploying space with ${regionsData.data.length} ops`)
 
