@@ -29,10 +29,15 @@ export class StorageError extends Data.TaggedError("StorageError")<{
 
 const _pool = new Pool({
 	connectionString: Redacted.value(EnvironmentLive.databaseUrl),
-	max: 20, // Reduced from 80 to prevent overwhelming DB
+	max: 15, // Reasonable limit to prevent overwhelming DB
 	min: 2,
 	idleTimeoutMillis: 30000,
 	connectionTimeoutMillis: 10000,
+})
+
+// Add basic error handling for the pool
+_pool.on("error", (err) => {
+	console.error("PostgreSQL pool error:", err)
 })
 
 const schemaDefinition = {
@@ -65,6 +70,16 @@ const db = drizzle<DbSchema>({
 
 interface StorageShape {
 	use: <T>(fn: (client: typeof db) => T) => Effect.Effect<Awaited<T>, StorageError, never>
+	getPoolStats: () => Effect.Effect<
+		{
+			totalConnections: number
+			idleConnections: number
+			waitingCount: number
+			maxConnections: number
+		},
+		never,
+		never
+	>
 }
 
 export class Storage extends Context.Tag("Storage")<Storage, StorageShape>() {}
@@ -75,26 +90,70 @@ export const make = Effect.gen(function* () {
 			return Effect.gen(function* () {
 				const result = yield* Effect.try({
 					try: () => fn(db),
-					catch: (error) =>
-						new StorageError({
-							message: `Synchronous error in Db.use ${String(error)}`,
+					catch: (error) => {
+						const errorMessage = String(error)
+
+						// Provide more specific error messages for common pool issues
+						if (errorMessage.includes("too many clients")) {
+							return new StorageError({
+								message: `Database connection pool exhausted. Consider implementing DataLoaders to reduce concurrent queries.`,
+								cause: error,
+							})
+						}
+
+						if (errorMessage.includes("pool is closed")) {
+							return new StorageError({
+								message: `Database connection pool is closed.`,
+								cause: error,
+							})
+						}
+
+						return new StorageError({
+							message: `Database operation failed: ${errorMessage}`,
 							cause: error,
-						}),
+						})
+					},
 				})
 
 				if (result instanceof Promise) {
 					return yield* Effect.tryPromise({
 						try: () => result,
-						catch: (error) =>
-							new StorageError({
+						catch: (error) => {
+							const errorMessage = String(error)
+
+							if (errorMessage.includes("too many clients")) {
+								return new StorageError({
+									cause: error,
+									message: `Database connection pool exhausted. Consider implementing DataLoaders to reduce concurrent queries.`,
+								})
+							}
+
+							if (errorMessage.includes("pool is closed")) {
+								return new StorageError({
+									cause: error,
+									message: `Database connection pool is closed.`,
+								})
+							}
+
+							return new StorageError({
 								cause: error,
-								message: `Asynchronous error in Db.use ${String(error)}`,
-							}),
+								message: `Async database operation failed: ${errorMessage}`,
+							})
+						},
 					})
 				}
 
 				return result
 			})
+		},
+
+		getPoolStats: () => {
+			return Effect.sync(() => ({
+				totalConnections: _pool.totalCount,
+				idleConnections: _pool.idleCount,
+				waitingCount: _pool.waitingCount,
+				maxConnections: _pool.options.max || 10,
+			}))
 		},
 	})
 })

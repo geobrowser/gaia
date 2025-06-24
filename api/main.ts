@@ -2,6 +2,7 @@ import {Duration, Effect, Either, Layer, Schedule} from "effect"
 import {Hono} from "hono"
 import {cors} from "hono/cors"
 import {graphqlServer} from "./src/kg/graphql-entry"
+import {health} from "./src/health"
 import {Environment, EnvironmentLive, make as makeEnvironment} from "./src/services/environment"
 import {uploadEdit, uploadFile} from "./src/services/ipfs"
 import {Storage, make as makeStorage} from "./src/services/storage/storage"
@@ -16,9 +17,7 @@ const provideDeps = Effect.provide(layers)
 const app = new Hono()
 app.use("*", cors())
 
-app.get("/health", (c) => {
-	return c.json({healthy: true})
-})
+app.route("/health", health)
 
 app.use("/graphql", async (c) => {
 	return graphqlServer.fetch(c.req.raw)

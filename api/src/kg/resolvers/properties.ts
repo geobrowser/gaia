@@ -2,6 +2,7 @@ import {SystemIds} from "@graphprotocol/grc-20"
 import {and, eq} from "drizzle-orm"
 import {Effect} from "effect"
 import {DataType, type QueryPropertiesArgs, type QueryTypesArgs, RenderableType} from "../../generated/graphql"
+import {Batching} from "../../services/storage/dataloaders"
 import {properties, relations} from "../../services/storage/schema"
 import {Storage} from "../../services/storage/storage"
 
@@ -33,27 +34,23 @@ export function getProperties(args: QueryPropertiesArgs) {
 
 export function getProperty(propertyId: string) {
 	return Effect.gen(function* () {
-		const db = yield* Storage
+		const batching = yield* Batching
 
-		return yield* db.use(async (client) => {
-			const result = await client.query.properties.findFirst({
-				where: (properties, {eq, and}) => and(eq(properties.id, propertyId)),
-			})
+		const property = yield* batching.loadProperty(propertyId)
 
-			if (!result) {
-				return {
-					id: propertyId,
-					dataType: DataType.Text,
-					renderableType: null, // Will be resolved by field resolver
-				}
-			}
-
+		if (!property) {
 			return {
 				id: propertyId,
-				dataType: getTextAsDataType(result.type),
+				dataType: DataType.Text,
 				renderableType: null, // Will be resolved by field resolver
 			}
-		})
+		}
+
+		return {
+			id: propertyId,
+			dataType: getTextAsDataType(property.type),
+			renderableType: null, // Will be resolved by field resolver
+		}
 	})
 }
 
@@ -116,39 +113,32 @@ export function getPropertiesForType(typeId: string, args: QueryTypesArgs) {
 
 export function getPropertyRelationValueTypes(propertyId: string) {
 	return Effect.gen(function* () {
-		const db = yield* Storage
+		const batching = yield* Batching
 
-		const result = yield* db.use(async (client) => {
-			return await client.query.relations.findMany({
-				where: (relations, {and, eq}) =>
-					and(
-						eq(relations.fromEntityId, propertyId),
-						eq(relations.typeId, SystemIds.RELATION_VALUE_RELATIONSHIP_TYPE),
-					),
-			})
-		})
+		const relations = yield* batching.loadEntityRelations(propertyId)
 
-		return result.map((r) => ({id: r.toEntityId}))
+		const relationValueTypes = relations
+			.filter((relation) => relation.typeId === SystemIds.RELATION_VALUE_RELATIONSHIP_TYPE)
+			.map((r) => ({id: r.toEntityId}))
+
+		return relationValueTypes
 	})
 }
 
 export function getPropertyRenderableType(propertyId: string) {
 	return Effect.gen(function* () {
-		const db = yield* Storage
+		const batching = yield* Batching
 
-		const result = yield* db.use(async (client) => {
-			return await client.query.relations.findFirst({
-				where: (relations, {and, eq}) =>
-					and(eq(relations.fromEntityId, propertyId), eq(relations.typeId, RENDERABLE_TYPE_RELATION_ID)),
-			})
-		})
+		const relations = yield* batching.loadEntityRelations(propertyId)
 
-		if (!result) {
+		const renderableTypeRelation = relations.find((relation) => relation.typeId === RENDERABLE_TYPE_RELATION_ID)
+
+		if (!renderableTypeRelation) {
 			return null
 		}
 
 		// Map the toEntityId to RenderableType enum
-		switch (result.toEntityId) {
+		switch (renderableTypeRelation.toEntityId) {
 			case SystemIds.IMAGE:
 				return RenderableType.Image
 			case SystemIds.URL:

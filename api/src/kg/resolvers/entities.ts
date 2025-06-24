@@ -1,6 +1,7 @@
 import {SystemIds} from "@graphprotocol/grc-20"
 import {Effect} from "effect"
 import {BlockType, DataSourceType, type QueryEntitiesArgs, type QueryRelationsArgs} from "../../generated/graphql"
+import {Batching} from "../../services/storage/dataloaders"
 import {Storage} from "../../services/storage/storage"
 import {buildEntityWhere, type EntityFilter} from "./filters"
 
@@ -43,139 +44,83 @@ export function getEntities(args: QueryEntitiesArgs) {
 
 export function getEntity(id: string) {
 	return Effect.gen(function* () {
-		const db = yield* Storage
+		const batching = yield* Batching
 
-		return yield* db.use(async (client) => {
-			const result = await client.query.entities.findFirst({
-				where: (entities, {eq}) => eq(entities.id, id),
-			})
+		const entity = yield* batching.loadEntity(id)
 
-			if (!result) {
-				return null
-			}
+		if (!entity) {
+			return null
+		}
 
-			return {
-				id: result.id,
-				createdAt: result.createdAt,
-				createdAtBlock: result.createdAtBlock,
-				updatedAt: result.updatedAt,
-				updatedAtBlock: result.updatedAtBlock,
-			}
-		})
+		return {
+			id: entity.id,
+			createdAt: entity.createdAt,
+			createdAtBlock: entity.createdAtBlock,
+			updatedAt: entity.updatedAt,
+			updatedAtBlock: entity.updatedAtBlock,
+		}
 	})
 }
 
 export function getEntityName(id: string) {
 	return Effect.gen(function* () {
-		const db = yield* Storage
-
-		const nameProperty = yield* db.use(async (client) => {
-			const result = await client.query.values.findFirst({
-				where: (values, {eq, and}) =>
-					and(eq(values.propertyId, SystemIds.NAME_PROPERTY), eq(values.entityId, id)),
-			})
-
-			return result
-		})
-
-		return nameProperty?.value ?? null
+		const batching = yield* Batching
+		const name = yield* batching.loadEntityName(id)
+		return name
 	})
 }
 
 export function getEntityDescription(id: string) {
 	return Effect.gen(function* () {
-		const db = yield* Storage
-
-		const nameProperty = yield* db.use(async (client) => {
-			const result = await client.query.values.findFirst({
-				where: (values, {eq, and}) =>
-					and(eq(values.propertyId, SystemIds.DESCRIPTION_PROPERTY), eq(values.entityId, id)),
-			})
-
-			return result
-		})
-
-		return nameProperty?.value ?? null
+		const batching = yield* Batching
+		const description = yield* batching.loadEntityDescription(id)
+		return description
 	})
 }
 
 export function getValues(id: string, spaceId?: string | null) {
 	return Effect.gen(function* () {
-		const db = yield* Storage
-
-		return yield* db.use(async (client) => {
-			const result = await client.query.values.findMany({
-				where: (values, {eq, and}) => {
-					const conditions = [eq(values.entityId, id)]
-					if (spaceId) {
-						conditions.push(eq(values.spaceId, spaceId))
-					}
-					return and(...conditions)
-				},
-			})
-
-			return result
-		})
+		const batching = yield* Batching
+		const values = yield* batching.loadEntityValues(id, spaceId)
+		return values
 	})
 }
 
 export function getRelations(id: string, spaceId?: string | null) {
 	return Effect.gen(function* () {
-		const db = yield* Storage
+		const batching = yield* Batching
+		const relations = yield* batching.loadEntityRelations(id, spaceId)
 
-		return yield* db.use(async (client) => {
-			const result = await client.query.relations.findMany({
-				where: (relations, {eq, and}) => {
-					const conditions = [eq(relations.fromEntityId, id)]
-					if (spaceId) {
-						conditions.push(eq(relations.spaceId, spaceId))
-					}
-					return and(...conditions)
-				},
-			})
-
-			return result.map((relation) => ({
-				id: relation.id,
-				entityId: relation.entityId,
-				typeId: relation.typeId,
-				fromId: relation.fromEntityId,
-				toId: relation.toEntityId,
-				toSpaceId: relation.toSpaceId,
-				verified: relation.verified,
-				position: relation.position,
-				spaceId: relation.spaceId,
-			}))
-		})
+		return relations.map((relation) => ({
+			id: relation.id,
+			entityId: relation.entityId,
+			typeId: relation.typeId,
+			fromId: relation.fromEntityId,
+			toId: relation.toEntityId,
+			toSpaceId: relation.toSpaceId,
+			verified: relation.verified,
+			position: relation.position,
+			spaceId: relation.spaceId,
+		}))
 	})
 }
 
 export function getBacklinks(id: string, spaceId?: string | null) {
 	return Effect.gen(function* () {
-		const db = yield* Storage
+		const batching = yield* Batching
+		const backlinks = yield* batching.loadEntityBacklinks(id, spaceId)
 
-		return yield* db.use(async (client) => {
-			const result = await client.query.relations.findMany({
-				where: (relations, {eq, and}) => {
-					const conditions = [eq(relations.toEntityId, id)]
-					if (spaceId) {
-						conditions.push(eq(relations.spaceId, spaceId))
-					}
-					return and(...conditions)
-				},
-			})
-
-			return result.map((relation) => ({
-				id: relation.id,
-				entityId: relation.entityId,
-				typeId: relation.typeId,
-				fromId: relation.fromEntityId,
-				toId: relation.toEntityId,
-				toSpaceId: relation.toSpaceId,
-				verified: relation.verified,
-				position: relation.position,
-				spaceId: relation.spaceId,
-			}))
-		})
+		return backlinks.map((relation) => ({
+			id: relation.id,
+			entityId: relation.entityId,
+			typeId: relation.typeId,
+			fromId: relation.fromEntityId,
+			toId: relation.toEntityId,
+			toSpaceId: relation.toSpaceId,
+			verified: relation.verified,
+			position: relation.position,
+			spaceId: relation.spaceId,
+		}))
 	})
 }
 
@@ -271,90 +216,86 @@ export function getAllRelations(args: QueryRelationsArgs) {
 
 export function getEntityTypes(id: string) {
 	return Effect.gen(function* () {
-		const db = yield* Storage
+		const batching = yield* Batching
+		const relations = yield* batching.loadEntityRelations(id)
 
-		return yield* db.use(async (client) => {
-			const result = await client.query.relations.findMany({
-				where: (relations, {eq, and}) =>
-					and(eq(relations.fromEntityId, id), eq(relations.typeId, SystemIds.TYPES_PROPERTY)),
-				with: {
-					toEntity: true,
-				},
-			})
+		// Filter for type relations and load the target entities
+		const typeRelations = relations.filter((relation) => relation.typeId === SystemIds.TYPES_PROPERTY)
 
-			return result.map((relation) => ({
-				id: relation.toEntity.id,
-				createdAt: relation.toEntity.createdAt,
-				createdAtBlock: relation.toEntity.createdAtBlock,
-				updatedAt: relation.toEntity.updatedAt,
-				updatedAtBlock: relation.toEntity.updatedAtBlock,
+		// Use batching to load the type entities
+		const typeEntities = yield* Effect.forEach(
+			typeRelations,
+			(relation) => batching.loadEntity(relation.toEntityId),
+			{concurrency: "unbounded"},
+		)
+
+		// Filter out null results and transform
+		return typeEntities
+			.filter((entity): entity is NonNullable<typeof entity> => entity !== null)
+			.map((entity) => ({
+				id: entity.id,
+				createdAt: entity.createdAt,
+				createdAtBlock: entity.createdAtBlock,
+				updatedAt: entity.updatedAt,
+				updatedAtBlock: entity.updatedAtBlock,
 			}))
-		})
 	})
 }
 
 export function getSpaces(id: string) {
 	return Effect.gen(function* () {
-		const db = yield* Storage
+		const batching = yield* Batching
 
-		return yield* db.use(async (client) => {
-			// There's currently some kind of circular dependency or disambiguation
-			// issue with drizzle if we try and query properties and relations at
-			// the same time using query.entities.findFirst({ with: { properties: true, relations: true } })
-			//
-			// For now we just query them separately. This avoids joins so might be
-			// faster anyway (needs validation).
-			const [values, relations] = await Promise.all([
-				client.query.values.findMany({
-					where: (values, {eq}) => eq(values.entityId, id),
-					columns: {
-						spaceId: true,
-					},
-				}),
-				client.query.relations.findMany({
-					where: (relations, {eq}) => eq(relations.fromEntityId, id),
-					columns: {
-						spaceId: true,
-					},
-				}),
-			])
+		// Load both values and relations for the entity
+		const [values, relations] = yield* Effect.all([batching.loadEntityValues(id), batching.loadEntityRelations(id)])
 
-			const propertySpaces = values.map((p) => p.spaceId)
-			const relationSpaces = relations.map((r) => r.spaceId)
+		const propertySpaces = values.map((p) => p.spaceId)
+		const relationSpaces = relations.map((r) => r.spaceId)
 
-			return Array.from(new Set([...propertySpaces, ...relationSpaces]))
-		})
+		return Array.from(new Set([...propertySpaces, ...relationSpaces]))
 	})
 }
 
 export function getBlocks(entityId: string) {
 	return Effect.gen(function* () {
-		const db = yield* Storage
+		const batching = yield* Batching
 
-		return yield* db.use(async (client) => {
-			// Get all block relations for the entity
-			const blockRelations = await client.query.relations.findMany({
-				where: (relations, {eq, and}) =>
-					and(eq(relations.fromEntityId, entityId), eq(relations.typeId, SystemIds.BLOCKS)),
-				with: {
-					toEntity: {
-						with: {
-							fromRelations: {
-								with: {
-									toEntity: true,
-								},
-							},
-							values: true,
-						},
-					},
-				},
-				orderBy: (relations, {asc}) => asc(relations.position),
-			})
+		// Get all relations for the entity
+		const relations = yield* batching.loadEntityRelations(entityId)
 
-			return blockRelations.map((relation) => {
-				const block = relation.toEntity
-				const blockTypeId =
-					block.fromRelations.find((r) => r.typeId === SystemIds.TYPES_PROPERTY)?.toEntity?.id ?? null
+		// Filter for block relations
+		const blockRelations = relations
+			.filter((relation) => relation.typeId === SystemIds.BLOCKS)
+			.sort((a, b) => (a.position || 0) - (b.position || 0))
+
+		// Load all block entities in parallel
+		const blockEntities = yield* Effect.forEach(
+			blockRelations,
+			(relation) =>
+				Effect.gen(function* () {
+					const entity = yield* batching.loadEntity(relation.toEntityId)
+					if (!entity) return null
+
+					// Load entity relations and values in parallel
+					const [entityRelations, entityValues] = yield* Effect.all([
+						batching.loadEntityRelations(relation.toEntityId),
+						batching.loadEntityValues(relation.toEntityId),
+					])
+
+					return {
+						entity,
+						relations: entityRelations,
+						values: entityValues,
+					}
+				}),
+			{concurrency: "unbounded"},
+		)
+
+		return blockEntities
+			.filter((blockData): blockData is NonNullable<typeof blockData> => blockData !== null)
+			.map((blockData) => {
+				const {entity, relations: fromRelations, values} = blockData
+				const blockTypeId = fromRelations.find((r) => r.typeId === SystemIds.TYPES_PROPERTY)?.toEntityId ?? null
 
 				// Determine the appropriate value based on block type
 				let value: string | null = null
@@ -363,35 +304,34 @@ export function getBlocks(entityId: string) {
 
 				if (blockTypeId === SystemIds.TEXT_BLOCK) {
 					type = BlockType.Text
-					value = block.values.find((v) => v.propertyId === SystemIds.MARKDOWN_CONTENT)?.value ?? null
+					value = values.find((v) => v.propertyId === SystemIds.MARKDOWN_CONTENT)?.value ?? null
 				} else if (blockTypeId === SystemIds.IMAGE_TYPE) {
 					type = BlockType.Image
-					value = block.values.find((v) => v.propertyId === SystemIds.IMAGE_URL_PROPERTY)?.value ?? null
+					value = values.find((v) => v.propertyId === SystemIds.IMAGE_URL_PROPERTY)?.value ?? null
 				} else if (blockTypeId === SystemIds.DATA_BLOCK) {
 					type = BlockType.Data
-					value = block.values.find((v) => v.propertyId === SystemIds.FILTER)?.value ?? null
+					value = values.find((v) => v.propertyId === SystemIds.FILTER)?.value ?? null
 					const maybeDataSourceType =
-						block.fromRelations.find((r) => r.typeId === SystemIds.DATA_SOURCE_TYPE_RELATION_TYPE)?.toEntity
-							?.id ?? null
+						fromRelations.find((r) => r.typeId === SystemIds.DATA_SOURCE_TYPE_RELATION_TYPE)?.toEntityId ??
+						null
 
 					dataSourceType = getDataSourceType(maybeDataSourceType)
 				}
 
 				return {
-					id: block.id,
+					id: entity.id,
 					type: type,
 					value: value,
 					dataSourceType,
 					entity: {
-						id: block.id,
-						createdAt: block.createdAt,
-						createdAtBlock: block.createdAtBlock,
-						updatedAt: block.updatedAt,
-						updatedAtBlock: block.updatedAtBlock,
+						id: entity.id,
+						createdAt: entity.createdAt,
+						createdAtBlock: entity.createdAtBlock,
+						updatedAt: entity.updatedAt,
+						updatedAtBlock: entity.updatedAtBlock,
 					},
 				}
 			})
-		})
 	})
 }
 

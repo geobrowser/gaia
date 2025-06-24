@@ -1,4 +1,5 @@
 import {Effect, Layer} from "effect"
+import {Batching, make as makeBatching} from "~/src/services/storage/dataloaders"
 import type {
 	QueryEntitiesArgs,
 	QueryEntityArgs,
@@ -19,7 +20,8 @@ import * as TypeResolvers from "./types"
 
 const EnvironmentLayer = Layer.effect(Environment, makeEnvironment)
 const StorageLayer = Layer.effect(Storage, makeStorage).pipe(Layer.provide(EnvironmentLayer))
-const layers = Layer.mergeAll(EnvironmentLayer, StorageLayer)
+const BatchingLayer = Layer.effect(Batching, makeBatching).pipe(Layer.provide(StorageLayer))
+const layers = Layer.mergeAll(EnvironmentLayer, StorageLayer, BatchingLayer)
 const provideDeps = Effect.provide(layers)
 
 export const entities = async (args: QueryEntitiesArgs) => {

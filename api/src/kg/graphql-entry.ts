@@ -12,13 +12,15 @@ import type {
 	QuerySpacesArgs,
 } from "../generated/graphql"
 import {Environment, make as makeEnvironment} from "../services/environment"
+import {Batching, make as makeBatching} from "../services/storage/dataloaders"
 import {make as makeStorage, Storage} from "../services/storage/storage"
 import * as MembershipResolvers from "./resolvers/membership"
 import * as Resolvers from "./resolvers/root"
 
 const EnvironmentLayer = Layer.effect(Environment, makeEnvironment)
 const StorageLayer = Layer.effect(Storage, makeStorage).pipe(Layer.provide(EnvironmentLayer))
-const layers = Layer.mergeAll(EnvironmentLayer, StorageLayer)
+const BatchingLayer = Layer.effect(Batching, makeBatching).pipe(Layer.provide(StorageLayer))
+const layers = Layer.mergeAll(EnvironmentLayer, StorageLayer, BatchingLayer)
 const provideDeps = Effect.provide(layers)
 
 interface GraphQLContext {
