@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO cursors (id, cursor) VALUES ($1, $2) ON CONFLICT (id) DO UPDATE SET cursor = $2",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "6e5daba5f53c139dbbaa2d586faf4ebc79e6aaa701a23e246b7692b008de3664"
+}
