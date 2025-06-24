@@ -39,11 +39,7 @@ export function getProperty(propertyId: string) {
 		const property = yield* batching.loadProperty(propertyId)
 
 		if (!property) {
-			return {
-				id: propertyId,
-				dataType: DataType.Text,
-				renderableType: null, // Will be resolved by field resolver
-			}
+			return null
 		}
 
 		return {
