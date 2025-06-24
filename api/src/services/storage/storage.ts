@@ -4,6 +4,7 @@ import {Pool} from "pg"
 
 import {EnvironmentLive} from "../environment"
 import {
+	cursors,
 	editors,
 	editorsRelations,
 	entities,
@@ -43,6 +44,7 @@ const schemaDefinition = {
 	spaces,
 	members,
 	editors,
+	cursors,
 
 	entityForeignProperties: entityForeignValues,
 	propertiesEntityRelations,

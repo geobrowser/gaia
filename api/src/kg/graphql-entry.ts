@@ -29,6 +29,9 @@ const schemaFile = await file("./schema.graphql").text()
 
 const resolvers: GeneratedResolvers = {
 	Query: {
+		meta: async () => {
+			return await Resolvers.meta()
+		},
 		entities: async (_, args, context: GraphQLContext) => {
 			context.spaceId = args.spaceId
 			return await Resolvers.entities(args)

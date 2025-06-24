@@ -120,6 +120,12 @@ export type Membership = {
 	spaceId: Scalars["String"]["output"]
 }
 
+export type Meta = {
+	__typename?: "Meta"
+	blockCursor?: Maybe<Scalars["String"]["output"]>
+	blockNumber?: Maybe<Scalars["String"]["output"]>
+}
+
 export type NumberFilter = {
 	exists?: InputMaybe<Scalars["Boolean"]["input"]>
 	greaterThan?: InputMaybe<Scalars["Float"]["input"]>
@@ -153,6 +159,7 @@ export type Query = {
 	account?: Maybe<Account>
 	entities: Array<Maybe<Entity>>
 	entity?: Maybe<Entity>
+	meta?: Maybe<Meta>
 	properties: Array<Maybe<Property>>
 	property?: Maybe<Property>
 	relation?: Maybe<Relation>
@@ -425,6 +432,7 @@ export type ResolversTypes = ResolversObject<{
 	IdFilter: IdFilter
 	Int: ResolverTypeWrapper<Scalars["Int"]["output"]>
 	Membership: ResolverTypeWrapper<Omit<Membership, "space"> & {space?: Maybe<ResolversTypes["Space"]>}>
+	Meta: ResolverTypeWrapper<Meta>
 	NumberFilter: NumberFilter
 	PointFilter: PointFilter
 	Property: ResolverTypeWrapper<
@@ -489,6 +497,7 @@ export type ResolversParentTypes = ResolversObject<{
 	IdFilter: IdFilter
 	Int: Scalars["Int"]["output"]
 	Membership: Omit<Membership, "space"> & {space?: Maybe<ResolversParentTypes["Space"]>}
+	Meta: Meta
 	NumberFilter: NumberFilter
 	PointFilter: PointFilter
 	Property: Omit<Property, "entity" | "relationValueTypes"> & {
@@ -588,6 +597,15 @@ export type MembershipResolvers<
 	__isTypeOf?: IsTypeOfResolverFn<ParentType, ContextType>
 }>
 
+export type MetaResolvers<
+	ContextType = any,
+	ParentType extends ResolversParentTypes["Meta"] = ResolversParentTypes["Meta"],
+> = ResolversObject<{
+	blockCursor?: Resolver<Maybe<ResolversTypes["String"]>, ParentType, ContextType>
+	blockNumber?: Resolver<Maybe<ResolversTypes["String"]>, ParentType, ContextType>
+	__isTypeOf?: IsTypeOfResolverFn<ParentType, ContextType>
+}>
+
 export type PropertyResolvers<
 	ContextType = any,
 	ParentType extends ResolversParentTypes["Property"] = ResolversParentTypes["Property"],
@@ -617,6 +635,7 @@ export type QueryResolvers<
 		RequireFields<QueryEntitiesArgs, "limit" | "offset">
 	>
 	entity?: Resolver<Maybe<ResolversTypes["Entity"]>, ParentType, ContextType, RequireFields<QueryEntityArgs, "id">>
+	meta?: Resolver<Maybe<ResolversTypes["Meta"]>, ParentType, ContextType>
 	properties?: Resolver<
 		Array<Maybe<ResolversTypes["Property"]>>,
 		ParentType,
@@ -734,6 +753,7 @@ export type Resolvers<ContextType = any> = ResolversObject<{
 	Block?: BlockResolvers<ContextType>
 	Entity?: EntityResolvers<ContextType>
 	Membership?: MembershipResolvers<ContextType>
+	Meta?: MetaResolvers<ContextType>
 	Property?: PropertyResolvers<ContextType>
 	Query?: QueryResolvers<ContextType>
 	Relation?: RelationResolvers<ContextType>

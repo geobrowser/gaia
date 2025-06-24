@@ -11,6 +11,7 @@ import type {
 import {Environment, make as makeEnvironment} from "../../services/environment"
 import {make as makeStorage, Storage} from "../../services/storage/storage"
 import * as EntityResolvers from "./entities"
+import * as MetaResolvers from "./meta"
 import * as PropertyResolvers from "./properties"
 import * as SearchResolvers from "./search"
 import * as SpaceResolvers from "./spaces"
@@ -107,4 +108,8 @@ export const space = async (id: string) => {
 
 export const spaceEntity = async (id: string) => {
 	return await Effect.runPromise(SpaceResolvers.getSpaceEntity(id).pipe(provideDeps))
+}
+
+export const meta = async () => {
+	return await Effect.runPromise(MetaResolvers.getMeta().pipe(provideDeps))
 }

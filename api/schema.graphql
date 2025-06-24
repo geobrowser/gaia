@@ -142,7 +142,14 @@ type Membership {
   space: Space
 }
 
+type Meta {
+  blockCursor: String
+  blockNumber: String
+}
+
 type Query {
+  meta: Meta
+
   # Get multiple entities with optional space filtering
   # When spaceId is provided, the spaceId propagates to child resolvers for values and relations
   entities(

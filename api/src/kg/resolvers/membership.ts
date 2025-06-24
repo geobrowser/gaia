@@ -1,9 +1,8 @@
 import {Effect} from "effect"
-import type {QueryMembersArgs} from "~/src/generated/graphql"
 import {Storage} from "~/src/services/storage/storage"
 
-export function getMembers(args: QueryMembersArgs) {
-	const {spaceId, limit, offset} = args
+export function getMembers(args: {spaceId: string}) {
+	const {spaceId} = args
 
 	return Effect.gen(function* () {
 		const db = yield* Storage
@@ -15,8 +14,6 @@ export function getMembers(args: QueryMembersArgs) {
 						return eq(members.spaceId, spaceId)
 					}
 				},
-				limit: limit ?? 100,
-				offset: offset ?? 0,
 			})
 
 			return result.map((member) => ({
@@ -28,8 +25,8 @@ export function getMembers(args: QueryMembersArgs) {
 	})
 }
 
-export function getEditors(args: QueryMembersArgs) {
-	const {spaceId, limit, offset} = args
+export function getEditors(args: {spaceId: string}) {
+	const {spaceId} = args
 
 	return Effect.gen(function* () {
 		const db = yield* Storage
@@ -41,8 +38,6 @@ export function getEditors(args: QueryMembersArgs) {
 						return eq(members.spaceId, spaceId)
 					}
 				},
-				limit: limit ?? 100,
-				offset: offset ?? 0,
 			})
 
 			return result.map((member) => ({
