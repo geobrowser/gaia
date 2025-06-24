@@ -14,7 +14,7 @@ use tokio::sync::{Mutex, Semaphore};
 
 const PKG_FILE: &str = "geo_substream.spkg";
 const MODULE_NAME: &str = "geo_out";
-const START_BLOCK: i64 = 54900;
+const START_BLOCK: i64 = 54924;
 
 use grc20::pb::chain::{EditPublished, GeoOutput};
 

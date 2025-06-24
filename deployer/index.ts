@@ -13,7 +13,7 @@ console.log(`Deploying space with ${regionsData.data.length} ops`)
 
 const space = await Graph.createSpace({
 	editorAddress: "0xCA4F46DA82E880C9bDeF0632B32CC82495b661C3",
-	name: "Regions",
+	name: "Crypto events",
 	network: "TESTNET",
 	ops: regionsData.data as Op[],
 	spaceEntityId: REGIONS_ENTITY_ID,
@@ -21,7 +21,8 @@ const space = await Graph.createSpace({
 
 console.log("space", space)
 
-// Root b02b4b5f-5082-4b3f-a2b5-1d6ca3fa7fbc
-// Crypto f1e17dc1-a6c5-4005-9765-5640c4b1f68f
-// Crypto events a671acd2-a1e2-4224-bb49-236030c1ec2d
-// Regions 6060f4b8-01ce-4735-ac56-4b4940d4b9c5
+// 54924
+// Root 28badf57-306c-4e2f-94da-03d27f16b8d6
+// Crypto d630af0d-a8b7-4209-ae46-202517a194ec
+// Crypto events 2033ec33-e05d-4763-99f7-0043a671ac4e
+// Regions 2e02e5e1-0c1c-4105-b032-a655c375b0e0
