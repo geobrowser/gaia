@@ -6,13 +6,15 @@ import {afterEach, beforeEach, describe, expect, it} from "vitest"
 import {getEntities, getRelations, getValues} from "~/src/kg/resolvers/entities"
 import type {EntityFilter} from "~/src/kg/resolvers/filters"
 import {Environment, make as makeEnvironment} from "~/src/services/environment"
+import {Batching, make as makeBatching} from "~/src/services/storage/dataloaders"
 import {entities, relations, values} from "~/src/services/storage/schema"
 import {make as makeStorage, Storage} from "~/src/services/storage/storage"
 
 // Set up Effect layers like in the main application
 const EnvironmentLayer = Layer.effect(Environment, makeEnvironment)
 const StorageLayer = Layer.effect(Storage, makeStorage).pipe(Layer.provide(EnvironmentLayer))
-const layers = Layer.mergeAll(EnvironmentLayer, StorageLayer)
+const BatchingLayer = Layer.effect(Batching, makeBatching).pipe(Layer.provide(StorageLayer))
+const layers = Layer.mergeAll(EnvironmentLayer, StorageLayer, BatchingLayer)
 const provideDeps = Effect.provide(layers)
 
 describe("Entity Filters Integration Tests", () => {

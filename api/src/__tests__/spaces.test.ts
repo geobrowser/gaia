@@ -2,6 +2,7 @@ import {SystemIds} from "@graphprotocol/grc-20"
 import {Effect, Layer} from "effect"
 import {v4 as uuid} from "uuid"
 import {afterEach, beforeEach, describe, expect, it} from "vitest"
+import {Batching, make as makeBatching} from "~/src/services/storage/dataloaders"
 import {SpaceType} from "../generated/graphql"
 import {getSpace, getSpaceEntity, getSpaces} from "../kg/resolvers/spaces"
 import {Environment, make as makeEnvironment} from "../services/environment"
@@ -11,7 +12,8 @@ import {make as makeStorage, Storage} from "../services/storage/storage"
 // Set up Effect layers like in the main application
 const EnvironmentLayer = Layer.effect(Environment, makeEnvironment)
 const StorageLayer = Layer.effect(Storage, makeStorage).pipe(Layer.provide(EnvironmentLayer))
-const layers = Layer.mergeAll(EnvironmentLayer, StorageLayer)
+const BatchingLayer = Layer.effect(Batching, makeBatching).pipe(Layer.provide(StorageLayer))
+const layers = Layer.mergeAll(EnvironmentLayer, StorageLayer, BatchingLayer)
 const provideDeps = Effect.provide(layers)
 
 describe("Spaces Query Integration Tests", () => {
@@ -1033,7 +1035,7 @@ describe("Spaces Query Integration Tests", () => {
 				expect(memberResult).toHaveLength(2)
 				expect(editorResult).toHaveLength(2)
 				expect(combinedResult).toHaveLength(2)
-				const combinedSpaceIds = combinedResult.map((s) => s.id).sort()
+				const combinedSpaceIds = combinedResult?.map((s) => s.id).sort()
 				expect(combinedSpaceIds).toEqual([PERSONAL_SPACE_ID, PUBLIC_SPACE_ID].sort())
 			})
 

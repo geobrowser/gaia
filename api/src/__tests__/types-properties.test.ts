@@ -6,13 +6,15 @@ import {DataType, RenderableType} from "../generated/graphql"
 import {getPropertiesForType, getPropertyRenderableType} from "../kg/resolvers/properties"
 import {getTypes} from "../kg/resolvers/types"
 import {Environment, make as makeEnvironment} from "../services/environment"
+import {Batching, make as makeBatching} from "../services/storage/dataloaders"
 import {entities, properties, relations, values} from "../services/storage/schema"
 import {make as makeStorage, Storage} from "../services/storage/storage"
 
 // Set up Effect layers like in the main application
 const EnvironmentLayer = Layer.effect(Environment, makeEnvironment)
 const StorageLayer = Layer.effect(Storage, makeStorage).pipe(Layer.provide(EnvironmentLayer))
-const layers = Layer.mergeAll(EnvironmentLayer, StorageLayer)
+const BatchingLayer = Layer.effect(Batching, makeBatching).pipe(Layer.provide(StorageLayer))
+const layers = Layer.mergeAll(EnvironmentLayer, StorageLayer, BatchingLayer)
 const provideDeps = Effect.provide(layers)
 
 // Constants for renderable type testing
@@ -356,7 +358,13 @@ describe("Types and Properties Integration Tests", () => {
 
 		it("should filter properties by spaceId", async () => {
 			const result = await Effect.runPromise(
-				provideDeps(getPropertiesForType(TYPE_ID_1, {limit: 10, offset: 0, spaceId: TEST_SPACE_ID})),
+				provideDeps(
+					getPropertiesForType(TYPE_ID_1, {
+						limit: 10,
+						offset: 0,
+						spaceId: TEST_SPACE_ID,
+					}),
+				),
 			)
 
 			expect(result).toHaveLength(4)
@@ -367,7 +375,13 @@ describe("Types and Properties Integration Tests", () => {
 
 		it("should return empty array for different spaceId", async () => {
 			const result = await Effect.runPromise(
-				provideDeps(getPropertiesForType(TYPE_ID_1, {limit: 10, offset: 0, spaceId: TEST_SPACE_ID_2})),
+				provideDeps(
+					getPropertiesForType(TYPE_ID_1, {
+						limit: 10,
+						offset: 0,
+						spaceId: TEST_SPACE_ID_2,
+					}),
+				),
 			)
 
 			expect(result).toHaveLength(2)
@@ -378,7 +392,13 @@ describe("Types and Properties Integration Tests", () => {
 
 		it("should return properties for type in different space", async () => {
 			const result = await Effect.runPromise(
-				provideDeps(getPropertiesForType(TYPE_ID_3, {limit: 10, offset: 0, spaceId: TEST_SPACE_ID_2})),
+				provideDeps(
+					getPropertiesForType(TYPE_ID_3, {
+						limit: 10,
+						offset: 0,
+						spaceId: TEST_SPACE_ID_2,
+					}),
+				),
 			)
 
 			expect(result).toHaveLength(3)
@@ -441,7 +461,13 @@ describe("Types and Properties Integration Tests", () => {
 
 		it("should handle non-existent spaceId", async () => {
 			const result = await Effect.runPromise(
-				provideDeps(getPropertiesForType(TYPE_ID_1, {limit: 10, offset: 0, spaceId: uuid()})),
+				provideDeps(
+					getPropertiesForType(TYPE_ID_1, {
+						limit: 10,
+						offset: 0,
+						spaceId: uuid(),
+					}),
+				),
 			)
 
 			expect(result).toHaveLength(2)
@@ -463,7 +489,13 @@ describe("Types and Properties Integration Tests", () => {
 			)
 
 			const type3Props = await Effect.runPromise(
-				provideDeps(getPropertiesForType(TYPE_ID_3, {limit: 10, offset: 0, spaceId: TEST_SPACE_ID_2})),
+				provideDeps(
+					getPropertiesForType(TYPE_ID_3, {
+						limit: 10,
+						offset: 0,
+						spaceId: TEST_SPACE_ID_2,
+					}),
+				),
 			)
 
 			const allProps = [...type1Props, ...type2Props, ...type3Props]
