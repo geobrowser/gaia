@@ -58,10 +58,17 @@ export const entities = pgTable("entities", {
 
 export const dataTypesEnum = pgEnum("dataTypes", ["Text", "Number", "Checkbox", "Time", "Point", "Relation"])
 
-export const properties = pgTable("properties", {
-	id: uuid().primaryKey(),
-	type: dataTypesEnum().notNull(),
-})
+export const properties = pgTable(
+	"properties",
+	{
+		id: uuid().primaryKey(),
+		type: dataTypesEnum().notNull(),
+	},
+	(table) => [
+		// Index for filtering by data type
+		index("properties_type_idx").on(table.type),
+	],
+)
 
 export const values = pgTable(
 	"values",
@@ -75,27 +82,64 @@ export const values = pgTable(
 		unit: text(),
 	},
 	(table) => [
+		// Foreign key indexes for join performance
+		index("values_property_id_idx").on(table.propertyId),
+		index("values_entity_id_idx").on(table.entityId),
+		index("values_space_id_idx").on(table.spaceId),
+
 		// Basic index for text searches - will add GIN via migration
 		index("values_text_idx").on(table.value),
+
+		// Composite indexes for common query patterns
+		index("values_entity_property_idx").on(table.entityId, table.propertyId),
+		index("values_entity_space_idx").on(table.entityId, table.spaceId),
+		index("values_property_space_idx").on(table.propertyId, table.spaceId),
+		index("values_entity_property_space_idx").on(table.entityId, table.propertyId, table.spaceId),
+
 		// Composite index for space-filtered searches
 		index("values_space_text_idx").on(table.spaceId, table.value),
+
+		// Additional indexes for filtering
+		index("values_language_idx").on(table.language),
+		index("values_unit_idx").on(table.unit),
 	],
 )
 
-export const relations = pgTable("relations", {
-	id: uuid().primaryKey(),
-	entityId: uuid().notNull(),
-	typeId: uuid().notNull(),
-	fromEntityId: uuid().notNull(),
-	fromSpaceId: uuid(),
-	fromVersionId: uuid(),
-	toEntityId: uuid().notNull(),
-	toSpaceId: uuid(),
-	toVersionId: uuid(),
-	position: text(),
-	spaceId: uuid().notNull(),
-	verified: boolean(),
-})
+export const relations = pgTable(
+	"relations",
+	{
+		id: uuid().primaryKey(),
+		entityId: uuid().notNull(),
+		typeId: uuid().notNull(),
+		fromEntityId: uuid().notNull(),
+		fromSpaceId: uuid(),
+		fromVersionId: uuid(),
+		toEntityId: uuid().notNull(),
+		toSpaceId: uuid(),
+		toVersionId: uuid(),
+		position: text(),
+		spaceId: uuid().notNull(),
+		verified: boolean(),
+	},
+	(table) => [
+		// Foreign key indexes for join performance
+		index("relations_entity_id_idx").on(table.entityId),
+		index("relations_type_id_idx").on(table.typeId),
+		index("relations_from_entity_id_idx").on(table.fromEntityId),
+		index("relations_to_entity_id_idx").on(table.toEntityId),
+		index("relations_space_id_idx").on(table.spaceId),
+
+		// Composite indexes for common query patterns
+		index("relations_space_from_to_idx").on(table.spaceId, table.fromEntityId, table.toEntityId),
+		index("relations_space_type_idx").on(table.spaceId, table.typeId),
+		index("relations_to_entity_space_idx").on(table.toEntityId, table.spaceId),
+		index("relations_from_entity_space_idx").on(table.fromEntityId, table.spaceId),
+
+		// Additional composite indexes for complex queries
+		index("relations_entity_type_space_idx").on(table.entityId, table.typeId, table.spaceId),
+		index("relations_type_from_to_idx").on(table.typeId, table.fromEntityId, table.toEntityId),
+	],
+)
 
 export const members = pgTable(
 	"members",
