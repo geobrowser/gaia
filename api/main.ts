@@ -1,4 +1,5 @@
-import { Duration, Effect, Either, Layer, Schedule } from "effect";
+import { Duration, Effect, Either, Layer, Schedule, Schema } from "effect";
+import { updateEffect } from "effect/SynchronizedRef";
 import { Hono } from "hono";
 import { cors } from "hono/cors";
 import { health } from "./src/health";
@@ -157,9 +158,36 @@ app.post("/deploy", async (c) => {
 	});
 });
 
+const CalldataRequestSchema = Schema.Struct({
+	cid: Schema.String,
+});
+
 app.post("/space/:spaceId/edit/calldata", async (c) => {
 	const { spaceId } = c.req.param();
-	const { cid } = await c.req.json();
+	const maybeRequestJson = await c.req.json();
+
+	const parsedRequestJsonResult = Schema.decodeUnknownEither(
+		CalldataRequestSchema,
+	)(maybeRequestJson);
+
+	if (Either.isLeft(parsedRequestJsonResult)) {
+		console.error(
+			`[SPACE][calldata] Invalid request json. ${maybeRequestJson}`,
+		);
+
+		return new Response(
+			JSON.stringify({
+				error: "Missing required parameters",
+				reason:
+					"An IPFS CID prefixed with 'ipfs://' is required. e.g., ipfs://bafkreigkka6xfe3hb2tzcfqgm5clszs7oy7mct2awawivoxddcq6v3g5oi",
+			}),
+			{
+				status: 400,
+			},
+		);
+	}
+
+	const cid = parsedRequestJsonResult.right.cid;
 
 	if (!cid || !cid.startsWith("ipfs://")) {
 		console.error(`[SPACE][calldata] Invalid CID ${cid}`);
