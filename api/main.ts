@@ -219,6 +219,10 @@ app.post("/space/:spaceId/edit/calldata", async (c) => {
 	}
 
 	if (calldata.right === null) {
+		console.error(
+			`Failed to generate calldata. Could not find space with id ${spaceId}.`,
+		);
+
 		return new Response(
 			JSON.stringify({
 				error: "Failed to generate calldata",
