@@ -20,5 +20,5 @@ export function getMeta() {
 				blockNumber: result.blockNumber,
 			}
 		})
-	})
+	}).pipe(Effect.withSpan("getMeta"))
 }

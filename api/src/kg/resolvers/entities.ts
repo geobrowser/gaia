@@ -66,6 +66,7 @@ export function getEntityName(id: string) {
 	return Effect.gen(function* () {
 		const batching = yield* Batching
 		const name = yield* batching.loadEntityName(id)
+
 		return name
 	})
 }
@@ -74,6 +75,7 @@ export function getEntityDescription(id: string) {
 	return Effect.gen(function* () {
 		const batching = yield* Batching
 		const description = yield* batching.loadEntityDescription(id)
+
 		return description
 	})
 }
@@ -82,6 +84,7 @@ export function getValues(id: string, spaceId?: string | null) {
 	return Effect.gen(function* () {
 		const batching = yield* Batching
 		const values = yield* batching.loadEntityValues(id, spaceId)
+
 		return values
 	})
 }
