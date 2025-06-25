@@ -9,17 +9,37 @@ const CRYPTO_ENTITY_ID = "23575692-bda8-4a71-8694-04da2e2af18f"
 const CRYPTO_EVENTS_ENTITY_ID = "320ab568-68cf-4587-8dc9-ae82f55587ce"
 const REGIONS_ENTITY_ID = "1d7ee87f-70d7-462d-9b72-ce845aa15986"
 
-console.log(`Deploying space with ${regionsData.data.length} ops`)
+const deployables = [{
+  entityId: ROOT_ENTITY_ID,
+  name: "Geo",
+  data: rootData.data,
+}, {
+  entityId: CRYPTO_ENTITY_ID,
+  name: "Crypto",
+  data: cryptoData.data,
+}, {
+  entityId: CRYPTO_EVENTS_ENTITY_ID,
+  name: "Crypto events",
+  data: cryptoEventsData.data,
+}, {
+  entityId: REGIONS_ENTITY_ID,
+  name: "Regions",
+  data: regionsData.data
+}]
 
-const space = await Graph.createSpace({
-	editorAddress: "0x84713663033dC5ba5699280728545df11e76BCC1",
-	name: "Regions",
-	network: "TESTNET",
-	ops: regionsData.data as Op[],
-	spaceEntityId: REGIONS_ENTITY_ID,
-})
+for (const deploy of deployables) {
+  console.log(`Deploying ${deploy.name} with ${regionsData.data.length} ops`)
 
-console.log("space", space)
+  const space = await Graph.createSpace({
+  	editorAddress: "0x84713663033dC5ba5699280728545df11e76BCC1",
+  	name: deploy.name,
+  	network: "TESTNET",
+  	ops: deploy.data as Op[],
+  	spaceEntityId: deploy.entityId,
+  })
+
+  console.log("space", space)
+}
 
 // 55053
 // Root 64ed9ffa-e7b3-40f6-ae99-fbf6112d10f8
