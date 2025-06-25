@@ -245,6 +245,245 @@ describe("Properties Query Integration Tests", () => {
 		})
 	})
 
+	describe("ID Filtering", () => {
+		it("should filter properties by single ID", async () => {
+			const result = await Effect.runPromise(
+				provideDeps(
+					getProperties({
+						filter: {id: {in: [TEXT_PROPERTY_ID]}},
+						limit: 100,
+						offset: 0,
+					}),
+				),
+			)
+
+			expect(result).toHaveLength(1)
+			expect(result[0]?.id).toBe(TEXT_PROPERTY_ID)
+			expect(result[0]?.dataType).toBe(DataType.Text)
+		})
+
+		it("should filter properties by multiple IDs", async () => {
+			const result = await Effect.runPromise(
+				provideDeps(
+					getProperties({
+						filter: {
+							id: {
+								in: [TEXT_PROPERTY_ID, NUMBER_PROPERTY_ID, CHECKBOX_PROPERTY_ID],
+							},
+						},
+						limit: 100,
+						offset: 0,
+					}),
+				),
+			)
+
+			expect(result).toHaveLength(3)
+			const propertyIds = result.map((p) => p.id).sort()
+			expect(propertyIds).toEqual([TEXT_PROPERTY_ID, NUMBER_PROPERTY_ID, CHECKBOX_PROPERTY_ID].sort())
+
+			// Verify each property has correct data type
+			const propertyMap = new Map(result.map((p) => [p.id, p.dataType]))
+			expect(propertyMap.get(TEXT_PROPERTY_ID)).toBe(DataType.Text)
+			expect(propertyMap.get(NUMBER_PROPERTY_ID)).toBe(DataType.Number)
+			expect(propertyMap.get(CHECKBOX_PROPERTY_ID)).toBe(DataType.Checkbox)
+		})
+
+		it("should filter properties by all available IDs", async () => {
+			const allIds = [
+				TEXT_PROPERTY_ID,
+				NUMBER_PROPERTY_ID,
+				CHECKBOX_PROPERTY_ID,
+				TIME_PROPERTY_ID,
+				POINT_PROPERTY_ID,
+				RELATION_PROPERTY_ID,
+				EXTRA_TEXT_PROPERTY_ID,
+			]
+
+			const result = await Effect.runPromise(
+				provideDeps(
+					getProperties({
+						filter: {id: {in: allIds}},
+						limit: 100,
+						offset: 0,
+					}),
+				),
+			)
+
+			expect(result).toHaveLength(7)
+			const propertyIds = result.map((p) => p.id).sort()
+			expect(propertyIds).toEqual(allIds.sort())
+		})
+
+		it("should return empty array for non-existent ID", async () => {
+			const nonExistentId = uuid()
+
+			const result = await Effect.runPromise(
+				provideDeps(
+					getProperties({
+						filter: {id: {in: [nonExistentId]}},
+						limit: 100,
+						offset: 0,
+					}),
+				),
+			)
+
+			expect(result).toHaveLength(0)
+		})
+
+		it("should return partial results for mix of existing and non-existent IDs", async () => {
+			const nonExistentId = uuid()
+
+			const result = await Effect.runPromise(
+				provideDeps(
+					getProperties({
+						filter: {
+							id: {in: [TEXT_PROPERTY_ID, nonExistentId, NUMBER_PROPERTY_ID]},
+						},
+						limit: 100,
+						offset: 0,
+					}),
+				),
+			)
+
+			expect(result).toHaveLength(2)
+			const propertyIds = result.map((p) => p.id).sort()
+			expect(propertyIds).toEqual([TEXT_PROPERTY_ID, NUMBER_PROPERTY_ID].sort())
+		})
+
+		it("should return empty array for empty ID array", async () => {
+			const result = await Effect.runPromise(
+				provideDeps(
+					getProperties({
+						filter: {id: {in: []}},
+						limit: 100,
+						offset: 0,
+					}),
+				),
+			)
+
+			expect(result).toHaveLength(0)
+		})
+
+		it("should handle duplicate IDs in filter", async () => {
+			const result = await Effect.runPromise(
+				provideDeps(
+					getProperties({
+						filter: {
+							id: {
+								in: [TEXT_PROPERTY_ID, TEXT_PROPERTY_ID, NUMBER_PROPERTY_ID],
+							},
+						},
+						limit: 100,
+						offset: 0,
+					}),
+				),
+			)
+
+			expect(result).toHaveLength(2)
+			const propertyIds = result.map((p) => p.id).sort()
+			expect(propertyIds).toEqual([TEXT_PROPERTY_ID, NUMBER_PROPERTY_ID].sort())
+		})
+	})
+
+	describe("Combined Filtering", () => {
+		it("should filter by both ID and data type - matching case", async () => {
+			const result = await Effect.runPromise(
+				provideDeps(
+					getProperties({
+						filter: {
+							id: {in: [TEXT_PROPERTY_ID, NUMBER_PROPERTY_ID]},
+							dataType: DataType.Text,
+						},
+						limit: 100,
+						offset: 0,
+					}),
+				),
+			)
+
+			expect(result).toHaveLength(1)
+			expect(result[0]?.id).toBe(TEXT_PROPERTY_ID)
+			expect(result[0]?.dataType).toBe(DataType.Text)
+		})
+
+		it("should filter by both ID and data type - non-matching case", async () => {
+			const result = await Effect.runPromise(
+				provideDeps(
+					getProperties({
+						filter: {
+							id: {in: [TEXT_PROPERTY_ID, EXTRA_TEXT_PROPERTY_ID]},
+							dataType: DataType.Number,
+						},
+						limit: 100,
+						offset: 0,
+					}),
+				),
+			)
+
+			expect(result).toHaveLength(0)
+		})
+
+		it("should filter by both ID and data type with multiple matching results", async () => {
+			const result = await Effect.runPromise(
+				provideDeps(
+					getProperties({
+						filter: {
+							id: {
+								in: [TEXT_PROPERTY_ID, EXTRA_TEXT_PROPERTY_ID, NUMBER_PROPERTY_ID],
+							},
+							dataType: DataType.Text,
+						},
+						limit: 100,
+						offset: 0,
+					}),
+				),
+			)
+
+			expect(result).toHaveLength(2)
+			const propertyIds = result.map((p) => p.id).sort()
+			expect(propertyIds).toEqual([TEXT_PROPERTY_ID, EXTRA_TEXT_PROPERTY_ID].sort())
+			expect(result.every((p) => p.dataType === DataType.Text)).toBe(true)
+		})
+
+		it("should handle combined filtering with pagination", async () => {
+			const result = await Effect.runPromise(
+				provideDeps(
+					getProperties({
+						filter: {
+							id: {
+								in: [TEXT_PROPERTY_ID, EXTRA_TEXT_PROPERTY_ID, NUMBER_PROPERTY_ID],
+							},
+							dataType: DataType.Text,
+						},
+						limit: 1,
+						offset: 0,
+					}),
+				),
+			)
+
+			expect(result).toHaveLength(1)
+			expect(result[0]?.dataType).toBe(DataType.Text)
+
+			const offsetResult = await Effect.runPromise(
+				provideDeps(
+					getProperties({
+						filter: {
+							id: {
+								in: [TEXT_PROPERTY_ID, EXTRA_TEXT_PROPERTY_ID, NUMBER_PROPERTY_ID],
+							},
+							dataType: DataType.Text,
+						},
+						limit: 1,
+						offset: 1,
+					}),
+				),
+			)
+
+			expect(offsetResult).toHaveLength(1)
+			expect(offsetResult[0]?.dataType).toBe(DataType.Text)
+			expect(offsetResult[0]?.id).not.toBe(result[0]?.id)
+		})
+	})
+
 	describe("Pagination", () => {
 		it("should respect limit parameter", async () => {
 			const result = await Effect.runPromise(provideDeps(getProperties({limit: 3, offset: 0})))
