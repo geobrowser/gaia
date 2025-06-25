@@ -9,7 +9,16 @@ export class BatchingError extends Data.TaggedError("BatchingError")<{
 
 // Simple batching utility that collects requests and executes them together
 class SimpleBatcher<K, V> {
-	private pending = new Map<string, {keys: K[]; resolve: (values: V[]) => void; reject: (error: any) => void}>()
+	private pending = new Map<
+		string,
+		{
+			key: K
+			resolvers: Array<{
+				resolve: (value: V) => void
+				reject: (error: any) => void
+			}>
+		}
+	>()
 	private batchTimeout: NodeJS.Timeout | null = null
 
 	constructor(
@@ -25,34 +34,11 @@ class SimpleBatcher<K, V> {
 		return new Promise<V>((resolve, reject) => {
 			// Add to pending batch
 			if (!this.pending.has(keyStr)) {
-				this.pending.set(keyStr, {keys: [], resolve: () => {}, reject: () => {}})
+				this.pending.set(keyStr, {key, resolvers: []})
 			}
 
 			const batch = this.pending.get(keyStr)!
-			batch.keys.push(key)
-
-			const originalResolve = batch.resolve
-			const originalReject = batch.reject
-
-			batch.resolve = (values: V[]) => {
-				const index = batch.keys.indexOf(key)
-				if (index >= 0 && index < values.length) {
-					const value = values[index]
-					if (value !== undefined) {
-						resolve(value)
-					} else {
-						reject(new Error(`Undefined value for key: ${keyStr}`))
-					}
-				} else {
-					reject(new Error(`Value not found for key: ${keyStr}`))
-				}
-				originalResolve(values)
-			}
-
-			batch.reject = (error: any) => {
-				reject(error)
-				originalReject(error)
-			}
+			batch.resolvers.push({resolve, reject})
 
 			// Schedule batch execution
 			this.scheduleBatch()
@@ -72,22 +58,45 @@ class SimpleBatcher<K, V> {
 		const batches = Array.from(this.pending.entries())
 		this.pending.clear()
 
-		// Group all keys together
-		const allKeys: K[] = []
-		const resolvers: Array<{resolve: (values: any[]) => void; reject: (error: any) => void}> = []
+		// Group all unique keys together
+		const uniqueKeys: K[] = []
+		const batchMap = new Map<
+			string,
+			{
+				key: K
+				resolvers: Array<{
+					resolve: (value: V) => void
+					reject: (error: any) => void
+				}>
+			}
+		>()
 
-		for (const [_, batch] of batches) {
-			allKeys.push(...batch.keys)
-			resolvers.push({resolve: batch.resolve, reject: batch.reject})
+		for (const [keyStr, batch] of batches) {
+			uniqueKeys.push(batch.key)
+			batchMap.set(keyStr, batch)
 		}
 
-		if (allKeys.length === 0) return
+		if (uniqueKeys.length === 0) return
 
 		try {
-			const results = await this.batchFn(allKeys)
-			resolvers.forEach(({resolve}) => resolve(results))
+			const results = await this.batchFn(uniqueKeys)
+
+			// Resolve each key's promises with its corresponding result
+			uniqueKeys.forEach((key, index) => {
+				const keyStr = this.keyFn(key)
+				const batch = batchMap.get(keyStr)
+				if (batch && index < results.length) {
+					const value = results[index]
+					batch.resolvers.forEach(({resolve}) => resolve(value))
+				} else {
+					batch?.resolvers.forEach(({reject}) => reject(new Error(`Value not found for key: ${keyStr}`)))
+				}
+			})
 		} catch (error) {
-			resolvers.forEach(({reject}) => reject(error))
+			// Reject all pending promises
+			for (const batch of batchMap.values()) {
+				batch.resolvers.forEach(({reject}) => reject(error))
+			}
 		}
 	}
 }
