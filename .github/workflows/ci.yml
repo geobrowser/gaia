@@ -27,9 +27,6 @@ jobs:
           toolchain: ${{ matrix.rust }}
           components: rustfmt
 
-      - name: Install Protoc
-        uses: arduino/setup-protoc@v3
-
       - name: Cache Dependencies
         uses: Swatinem/rust-cache@v2
 
