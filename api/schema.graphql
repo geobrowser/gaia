@@ -196,8 +196,6 @@ type Query {
     limit: Int = 100
     offset: Int = 0
   ): [Relation]!
-  # property
-  # properties
   # type
 
   # proposal
@@ -227,6 +225,7 @@ input SpaceFilter {
 
 input PropertyFilter {
   dataType: DataType
+  id: IdFilter
 }
 
 input TextFilter {

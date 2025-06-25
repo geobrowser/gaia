@@ -152,6 +152,7 @@ export type Property = {
 
 export type PropertyFilter = {
 	dataType?: InputMaybe<DataType>
+	id?: InputMaybe<IdFilter>
 }
 
 export type Query = {
