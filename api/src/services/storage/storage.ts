@@ -29,7 +29,7 @@ export class StorageError extends Data.TaggedError("StorageError")<{
 
 const _pool = new Pool({
 	connectionString: Redacted.value(EnvironmentLive.databaseUrl),
-	max: 30, // Reasonable limit to prevent overwhelming DB
+	max: 15, // Reasonable limit to prevent overwhelming DB
 	min: 2,
 	idleTimeoutMillis: 30000,
 	connectionTimeoutMillis: 10000,
