@@ -70,7 +70,11 @@ const resolvers: GeneratedResolvers = {
 		},
 	},
 	Entity: {
-		name: async (parent: {id: string}) => {
+		name: async (parent: {id: string; name?: string}) => {
+			// Use prefetched data if available
+			if (parent.name !== undefined) {
+				return parent.name
+			}
 			return Resolvers.entityName({id: parent.id})
 		},
 		description: async (parent: {id: string}) => {
@@ -85,13 +89,17 @@ const resolvers: GeneratedResolvers = {
 		spaces: async (parent: {id: string}) => {
 			return Resolvers.entitySpaces({id: parent.id})
 		},
-		values: async (parent: {id: string}, args: EntityValuesArgs, context: GraphQLContext) => {
+		values: async (parent: {id: string; values?: any[]}, args: EntityValuesArgs, context: GraphQLContext) => {
 			const spaceId = args.spaceId ?? context.spaceId
+			// Use prefetched data if available and matches the requested spaceId
+			if (parent.values && !args.spaceId && !context.spaceId) {
+				return parent.values
+			}
 			return Resolvers.values({id: parent.id, spaceId})
 		},
 		relations: async (parent: {id: string}, args: EntityRelationsArgs, context: GraphQLContext) => {
 			const spaceId = args.spaceId ?? context.spaceId
-			return Resolvers.entityRelations({id: parent.id, spaceId})
+			return await Resolvers.entityRelationsWithData({id: parent.id, spaceId})
 		},
 		backlinks: async (parent: {id: string}, args: EntityRelationsArgs, context: GraphQLContext) => {
 			const spaceId = args.spaceId ?? context.spaceId
@@ -137,7 +145,21 @@ const resolvers: GeneratedResolvers = {
 		from: async (parent: {fromId: string}) => {
 			return Resolvers.entity({id: parent.fromId})
 		},
-		to: async (parent: {toId: string}) => {
+		to: async (parent: {toId: string; toEntity?: any}) => {
+			// Use prefetched data if available, otherwise fall back to regular lookup
+			if (parent.toEntity) {
+				return {
+					id: parent.toEntity.id,
+					createdAt: parent.toEntity.createdAt,
+					createdAtBlock: parent.toEntity.createdAtBlock,
+					updatedAt: parent.toEntity.updatedAt,
+					updatedAtBlock: parent.toEntity.updatedAtBlock,
+					// Pass through prefetched nested data
+					name: parent.toEntity.name,
+					values: parent.toEntity.values,
+					types: parent.toEntity.types,
+				}
+			}
 			return Resolvers.entity({id: parent.toId})
 		},
 		type: async (parent: {typeId: string}) => {

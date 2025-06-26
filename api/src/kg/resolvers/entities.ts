@@ -108,12 +108,34 @@ export function getRelations(id: string, spaceId?: string | null) {
 	})
 }
 
+export function getRelationsWithData(id: string, spaceId?: string | null) {
+	return Effect.gen(function* () {
+		const batching = yield* Batching
+		const relations = yield* batching.loadEntityRelationsWithData(id, spaceId)
+
+		return relations.map((relation) => ({
+			id: relation.id,
+			entityId: relation.entityId,
+			typeId: relation.typeId,
+			fromId: relation.fromEntityId,
+			toId: relation.toEntityId,
+			toSpaceId: relation.toSpaceId,
+			verified: relation.verified,
+			position: relation.position,
+			spaceId: relation.spaceId,
+			// Include prefetched data
+			toEntity: relation.toEntity,
+			typeEntity: relation.typeEntity,
+		}))
+	})
+}
+
 export function getBacklinks(id: string, spaceId?: string | null) {
 	return Effect.gen(function* () {
 		const batching = yield* Batching
 		const backlinks = yield* batching.loadEntityBacklinks(id, spaceId)
 
-		return backlinks.map((relation) => ({
+		return backlinks.map((relation: any) => ({
 			id: relation.id,
 			entityId: relation.entityId,
 			typeId: relation.typeId,
@@ -220,28 +242,15 @@ export function getAllRelations(args: QueryRelationsArgs) {
 export function getEntityTypes(id: string) {
 	return Effect.gen(function* () {
 		const batching = yield* Batching
-		const relations = yield* batching.loadEntityRelations(id)
+		const typeEntities = yield* batching.loadEntityTypes(id)
 
-		// Filter for type relations and load the target entities
-		const typeRelations = relations.filter((relation) => relation.typeId === SystemIds.TYPES_PROPERTY)
-
-		// Use batching to load the type entities
-		const typeEntities = yield* Effect.forEach(
-			typeRelations,
-			(relation) => batching.loadEntity(relation.toEntityId),
-			{concurrency: "unbounded"},
-		)
-
-		// Filter out null results and transform
-		return typeEntities
-			.filter((entity): entity is NonNullable<typeof entity> => entity !== null)
-			.map((entity) => ({
-				id: entity.id,
-				createdAt: entity.createdAt,
-				createdAtBlock: entity.createdAtBlock,
-				updatedAt: entity.updatedAt,
-				updatedAtBlock: entity.updatedAtBlock,
-			}))
+		return typeEntities.map((entity) => ({
+			id: entity.id,
+			createdAt: entity.createdAt,
+			createdAtBlock: entity.createdAtBlock,
+			updatedAt: entity.updatedAt,
+			updatedAtBlock: entity.updatedAtBlock,
+		}))
 	})
 }
 
@@ -269,7 +278,7 @@ export function getBlocks(entityId: string) {
 		// Filter for block relations
 		const blockRelations = relations
 			.filter((relation) => relation.typeId === SystemIds.BLOCKS)
-			.sort((a, b) => (a.position || 0) - (b.position || 0))
+			.sort((a, b) => Number(a.position || 0) - Number(b.position || 0))
 
 		// Load all block entities in parallel
 		const blockEntities = yield* Effect.forEach(

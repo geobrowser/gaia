@@ -105,6 +105,16 @@ export const entityRelations = async (args: QueryEntityArgs & {spaceId?: string 
 	)
 }
 
+export const entityRelationsWithData = async (args: QueryEntityArgs & {spaceId?: string | null}) => {
+	return await Effect.runPromise(
+		EntityResolvers.getRelationsWithData(args.id, args.spaceId).pipe(
+			Effect.withSpan("getRelationsWithData"),
+			Effect.annotateSpans({entityId: args.id, spaceId: args.spaceId}),
+			provideDeps,
+		),
+	)
+}
+
 export const entityBacklinks = async (args: QueryEntityArgs & {spaceId?: string | null}) => {
 	return await Effect.runPromise(
 		EntityResolvers.getBacklinks(args.id, args.spaceId).pipe(
