@@ -1,6 +1,7 @@
 import {SystemIds} from "@graphprotocol/grc-20"
 import DataLoader from "dataloader"
 import {Context, Data, Effect} from "effect"
+import type {Entity, Property, Relation, Value} from "~/src/generated/graphql"
 import {Storage} from "./storage"
 
 export class BatchingError extends Data.TaggedError("BatchingError")<{
@@ -10,13 +11,65 @@ export class BatchingError extends Data.TaggedError("BatchingError")<{
 
 // Request-scoped batching service
 interface BatchingShape {
-	loadEntity: (id: string) => Effect.Effect<any, BatchingError, never>
+	loadEntity: (id: string) => Effect.Effect<
+		{
+			createdAt: string
+			createdAtBlock: string
+			id: string
+			updatedAt: string
+			updatedAtBlock: string
+		} | null,
+		BatchingError,
+		never
+	>
 	loadEntityName: (id: string) => Effect.Effect<string | null, BatchingError, never>
 	loadEntityDescription: (id: string) => Effect.Effect<string | null, BatchingError, never>
-	loadEntityValues: (entityId: string, spaceId?: string | null) => Effect.Effect<any[], BatchingError, never>
-	loadEntityRelations: (entityId: string, spaceId?: string | null) => Effect.Effect<any[], BatchingError, never>
-	loadEntityBacklinks: (entityId: string, spaceId?: string | null) => Effect.Effect<any[], BatchingError, never>
-	loadProperty: (propertyId: string) => Effect.Effect<any, BatchingError, never>
+	loadEntityValues: (
+		entityId: string,
+		spaceId?: string | null,
+	) => Effect.Effect<
+		{
+			id: string
+			propertyId: string
+			entityId: string
+			spaceId: string
+			value: string
+			language: string | null
+			unit: string | null
+		}[],
+		BatchingError,
+		never
+	>
+	loadEntityRelations: (
+		entityId: string,
+		spaceId?: string | null,
+	) => Effect.Effect<
+		{
+			id: string
+			entityId: string
+			spaceId: string
+			typeId: string
+			fromEntityId: string
+			fromSpaceId: string | null
+			fromVersionId: string | null
+			toEntityId: string
+			toSpaceId: string | null
+			toVersionId: string | null
+			position: string | null
+			verified: boolean | null
+		}[],
+		BatchingError,
+		never
+	>
+	loadEntityBacklinks: (entityId: string, spaceId?: string | null) => Effect.Effect<Entity[], BatchingError, never>
+	loadProperty: (propertyId: string) => Effect.Effect<
+		{
+			id: string
+			type: "Text" | "Number" | "Checkbox" | "Time" | "Point" | "Relation"
+		} | null,
+		BatchingError,
+		never
+	>
 }
 
 export class Batching extends Context.Tag("Batching")<Batching, BatchingShape>() {}
@@ -29,12 +82,12 @@ export const make = Effect.gen(function* () {
 		const result = await Effect.runPromise(
 			storage.use(async (client) => {
 				const entities = await client.query.entities.findMany({
-					where: (entities, {inArray}) => inArray(entities.id, [...ids]),
+					where: (entities, {inArray}) => inArray(entities.id, ids),
 				})
 
 				// Create lookup map and return results in same order as input
 				const entityMap = new Map(entities.map((e) => [e.id, e]))
-				return ids.map((id) => entityMap.get(id) || null)
+				return ids.map((id) => entityMap.get(id) ?? null)
 			}),
 		)
 		return result
@@ -90,7 +143,7 @@ export const make = Effect.gen(function* () {
 					})
 
 					// Group by entityId and filter by spaceId if needed
-					const valuesByEntity = new Map<string, any[]>()
+					const valuesByEntity = new Map<string, (typeof allValues)[number][]>()
 					for (const value of allValues) {
 						if (!valuesByEntity.has(value.entityId)) {
 							valuesByEntity.set(value.entityId, [])
@@ -124,7 +177,7 @@ export const make = Effect.gen(function* () {
 					})
 
 					// Group by fromEntityId and filter by spaceId if needed
-					const relationsByEntity = new Map<string, any[]>()
+					const relationsByEntity = new Map<string, (typeof allRelations)[number][]>()
 					for (const relation of allRelations) {
 						if (!relationsByEntity.has(relation.fromEntityId)) {
 							relationsByEntity.set(relation.fromEntityId, [])
