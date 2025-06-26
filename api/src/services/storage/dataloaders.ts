@@ -1,7 +1,7 @@
 import {SystemIds} from "@graphprotocol/grc-20"
 import DataLoader from "dataloader"
 import {Context, Data, Effect} from "effect"
-import type {Entity, Property, Relation, Value} from "~/src/generated/graphql"
+import type {Entity} from "~/src/generated/graphql"
 import {Storage} from "./storage"
 
 export class BatchingError extends Data.TaggedError("BatchingError")<{
@@ -77,18 +77,18 @@ export class Batching extends Context.Tag("Batching")<Batching, BatchingShape>()
 export const make = Effect.gen(function* () {
 	const storage = yield* Storage
 
-	// Create DataLoader instances with performance optimizations
 	const entitiesLoader = new DataLoader(async (ids: readonly string[]) => {
 		const result = await Effect.runPromise(
-			storage.use(async (client) => {
-				const entities = await client.query.entities.findMany({
-					where: (entities, {inArray}) => inArray(entities.id, ids),
-				})
+			storage
+				.use(async (client) => {
+					const entities = await client.query.entities.findMany({
+						where: (entities, {inArray}) => inArray(entities.id, ids),
+					})
 
-				// Create lookup map and return results in same order as input
-				const entityMap = new Map(entities.map((e) => [e.id, e]))
-				return ids.map((id) => entityMap.get(id) ?? null)
-			}),
+					const entityMap = new Map(entities.map((e) => [e.id, e]))
+					return ids.map((id) => entityMap.get(id) ?? null)
+				})
+				.pipe(Effect.withSpan("entitiesLoader"), Effect.annotateSpans({ids})),
 		)
 		return result
 	})
@@ -98,14 +98,13 @@ export const make = Effect.gen(function* () {
 			storage.use(async (client) => {
 				const values = await client.query.values.findMany({
 					where: (values, {inArray, and, eq}) =>
-						and(inArray(values.entityId, [...ids]), eq(values.propertyId, SystemIds.NAME_PROPERTY)),
+						and(inArray(values.entityId, ids), eq(values.propertyId, SystemIds.NAME_PROPERTY)),
 					columns: {
 						entityId: true,
 						value: true,
-					}, // Only select needed columns
+					},
 				})
 
-				// Create lookup map and return results in same order as input
 				const valueMap = new Map(values.map((v) => [v.entityId, v.value]))
 				return ids.map((id) => valueMap.get(id) || null)
 			}),
@@ -115,20 +114,21 @@ export const make = Effect.gen(function* () {
 
 	const entityDescriptionsLoader = new DataLoader(async (ids: readonly string[]) => {
 		const result = await Effect.runPromise(
-			storage.use(async (client) => {
-				const values = await client.query.values.findMany({
-					where: (values, {inArray, and, eq}) =>
-						and(inArray(values.entityId, [...ids]), eq(values.propertyId, SystemIds.DESCRIPTION_PROPERTY)),
-					columns: {
-						entityId: true,
-						value: true,
-					}, // Only select needed columns
-				})
+			storage
+				.use(async (client) => {
+					const values = await client.query.values.findMany({
+						where: (values, {inArray, and, eq}) =>
+							and(inArray(values.entityId, ids), eq(values.propertyId, SystemIds.DESCRIPTION_PROPERTY)),
+						columns: {
+							entityId: true,
+							value: true,
+						},
+					})
 
-				// Create lookup map and return results in same order as input
-				const valueMap = new Map(values.map((v) => [v.entityId, v.value]))
-				return ids.map((id) => valueMap.get(id) || null)
-			}),
+					const valueMap = new Map(values.map((v) => [v.entityId, v.value]))
+					return ids.map((id) => valueMap.get(id) || null)
+				})
+				.pipe(Effect.withSpan("entityDescriptionsLoader"), Effect.annotateSpans({ids})),
 		)
 		return result
 	})
@@ -136,29 +136,30 @@ export const make = Effect.gen(function* () {
 	const entityValuesLoader = new DataLoader(
 		async (keys: readonly {entityId: string; spaceId?: string | null}[]) => {
 			const result = await Effect.runPromise(
-				storage.use(async (client) => {
-					const entityIds = keys.map((k) => k.entityId)
-					const allValues = await client.query.values.findMany({
-						where: (values, {inArray}) => inArray(values.entityId, entityIds),
-					})
+				storage
+					.use(async (client) => {
+						const entityIds = keys.map((k) => k.entityId)
+						const allValues = await client.query.values.findMany({
+							where: (values, {inArray}) => inArray(values.entityId, entityIds),
+						})
 
-					// Group by entityId and filter by spaceId if needed
-					const valuesByEntity = new Map<string, (typeof allValues)[number][]>()
-					for (const value of allValues) {
-						if (!valuesByEntity.has(value.entityId)) {
-							valuesByEntity.set(value.entityId, [])
+						const valuesByEntity = new Map<string, (typeof allValues)[number][]>()
+						for (const value of allValues) {
+							if (!valuesByEntity.has(value.entityId)) {
+								valuesByEntity.set(value.entityId, [])
+							}
+							valuesByEntity.get(value.entityId)!.push(value)
 						}
-						valuesByEntity.get(value.entityId)!.push(value)
-					}
 
-					return keys.map((key) => {
-						const entityValues = valuesByEntity.get(key.entityId) || []
-						if (key.spaceId) {
-							return entityValues.filter((v) => v.spaceId === key.spaceId)
-						}
-						return entityValues
+						return keys.map((key) => {
+							const entityValues = valuesByEntity.get(key.entityId) || []
+							if (key.spaceId) {
+								return entityValues.filter((v) => v.spaceId === key.spaceId)
+							}
+							return entityValues
+						})
 					})
-				}),
+					.pipe(Effect.withSpan("entityValuesLoader"), Effect.annotateSpans({keys})),
 			)
 			return result
 		},
@@ -170,29 +171,30 @@ export const make = Effect.gen(function* () {
 	const entityRelationsLoader = new DataLoader(
 		async (keys: readonly {entityId: string; spaceId?: string | null}[]) => {
 			const result = await Effect.runPromise(
-				storage.use(async (client) => {
-					const entityIds = keys.map((k) => k.entityId)
-					const allRelations = await client.query.relations.findMany({
-						where: (relations, {inArray}) => inArray(relations.fromEntityId, entityIds),
-					})
+				storage
+					.use(async (client) => {
+						const entityIds = keys.map((k) => k.entityId)
+						const allRelations = await client.query.relations.findMany({
+							where: (relations, {inArray}) => inArray(relations.fromEntityId, entityIds),
+						})
 
-					// Group by fromEntityId and filter by spaceId if needed
-					const relationsByEntity = new Map<string, (typeof allRelations)[number][]>()
-					for (const relation of allRelations) {
-						if (!relationsByEntity.has(relation.fromEntityId)) {
-							relationsByEntity.set(relation.fromEntityId, [])
+						const relationsByEntity = new Map<string, (typeof allRelations)[number][]>()
+						for (const relation of allRelations) {
+							if (!relationsByEntity.has(relation.fromEntityId)) {
+								relationsByEntity.set(relation.fromEntityId, [])
+							}
+							relationsByEntity.get(relation.fromEntityId)!.push(relation)
 						}
-						relationsByEntity.get(relation.fromEntityId)!.push(relation)
-					}
 
-					return keys.map((key) => {
-						const entityRelations = relationsByEntity.get(key.entityId) || []
-						if (key.spaceId) {
-							return entityRelations.filter((r) => r.spaceId === key.spaceId)
-						}
-						return entityRelations
+						return keys.map((key) => {
+							const entityRelations = relationsByEntity.get(key.entityId) || []
+							if (key.spaceId) {
+								return entityRelations.filter((r) => r.spaceId === key.spaceId)
+							}
+							return entityRelations
+						})
 					})
-				}),
+					.pipe(Effect.withSpan("entityRelationsLoader"), Effect.annotateSpans({keys})),
 			)
 			return result
 		},
@@ -204,29 +206,30 @@ export const make = Effect.gen(function* () {
 	const entityBacklinksLoader = new DataLoader(
 		async (keys: readonly {entityId: string; spaceId?: string | null}[]) => {
 			const result = await Effect.runPromise(
-				storage.use(async (client) => {
-					const entityIds = keys.map((k) => k.entityId)
-					const allBacklinks = await client.query.relations.findMany({
-						where: (relations, {inArray}) => inArray(relations.toEntityId, entityIds),
-					})
+				storage
+					.use(async (client) => {
+						const entityIds = keys.map((k) => k.entityId)
+						const allBacklinks = await client.query.relations.findMany({
+							where: (relations, {inArray}) => inArray(relations.toEntityId, entityIds),
+						})
 
-					// Group by toEntityId and filter by spaceId if needed
-					const backlinksByEntity = new Map<string, any[]>()
-					for (const backlink of allBacklinks) {
-						if (!backlinksByEntity.has(backlink.toEntityId)) {
-							backlinksByEntity.set(backlink.toEntityId, [])
+						const backlinksByEntity = new Map<string, any[]>()
+						for (const backlink of allBacklinks) {
+							if (!backlinksByEntity.has(backlink.toEntityId)) {
+								backlinksByEntity.set(backlink.toEntityId, [])
+							}
+							backlinksByEntity.get(backlink.toEntityId)!.push(backlink)
 						}
-						backlinksByEntity.get(backlink.toEntityId)!.push(backlink)
-					}
 
-					return keys.map((key) => {
-						const entityBacklinks = backlinksByEntity.get(key.entityId) || []
-						if (key.spaceId) {
-							return entityBacklinks.filter((r) => r.spaceId === key.spaceId)
-						}
-						return entityBacklinks
+						return keys.map((key) => {
+							const entityBacklinks = backlinksByEntity.get(key.entityId) || []
+							if (key.spaceId) {
+								return entityBacklinks.filter((r) => r.spaceId === key.spaceId)
+							}
+							return entityBacklinks
+						})
 					})
-				}),
+					.pipe(Effect.withSpan("entityBacklinksLoader"), Effect.annotateSpans({keys})),
 			)
 			return result
 		},
@@ -237,15 +240,16 @@ export const make = Effect.gen(function* () {
 
 	const propertiesLoader = new DataLoader(async (ids: readonly string[]) => {
 		const result = await Effect.runPromise(
-			storage.use(async (client) => {
-				const properties = await client.query.properties.findMany({
-					where: (properties, {inArray}) => inArray(properties.id, [...ids]),
-				})
+			storage
+				.use(async (client) => {
+					const properties = await client.query.properties.findMany({
+						where: (properties, {inArray}) => inArray(properties.id, ids),
+					})
 
-				// Create lookup map and return results in same order as input
-				const propertyMap = new Map(properties.map((p) => [p.id, p]))
-				return ids.map((id) => propertyMap.get(id) || null)
-			}),
+					const propertyMap = new Map(properties.map((p) => [p.id, p]))
+					return ids.map((id) => propertyMap.get(id) || null)
+				})
+				.pipe(Effect.withSpan("propertiesLoader"), Effect.annotateSpans({ids})),
 		)
 		return result
 	})
