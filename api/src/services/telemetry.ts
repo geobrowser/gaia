@@ -1,6 +1,6 @@
 import {NodeSdk} from "@effect/opentelemetry"
 import {OTLPTraceExporter} from "@opentelemetry/exporter-trace-otlp-proto"
-import {BatchSpanProcessor, ConsoleSpanExporter} from "@opentelemetry/sdk-trace-base"
+import {BatchSpanProcessor} from "@opentelemetry/sdk-trace-base"
 import {Redacted} from "effect"
 import {EnvironmentLive} from "./environment"
 

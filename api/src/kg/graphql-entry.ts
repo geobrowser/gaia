@@ -31,38 +31,6 @@ interface GraphQLContext {
 
 const schemaFile = await file("./schema.graphql").text()
 
-const entitiesLoader = new DataLoader(async (ids: readonly string[]) => {
-	const entities = await db.query.entities.findMany({
-		where: (entities, {inArray}) => inArray(entities.id, ids),
-	})
-
-	const entityMap = new Map(entities.map((e) => [e.id, e]))
-	return ids.map((id) => entityMap.get(id) ?? null)
-})
-
-const propertiesLoader = new DataLoader(async (ids: readonly string[]) => {
-	const properties = await db.query.properties.findMany({
-		where: (properties, {inArray}) => inArray(properties.id, ids),
-	})
-
-	const propertyMap = new Map(properties.map((p) => [p.id, p]))
-	return ids.map((id) => propertyMap.get(id) || null)
-})
-
-const entityNamesLoader = new DataLoader(async (ids: readonly string[]) => {
-	const values = await db.query.values.findMany({
-		where: (values, {inArray, and, eq}) =>
-			and(inArray(values.entityId, ids), eq(values.propertyId, SystemIds.NAME_PROPERTY)),
-		columns: {
-			entityId: true,
-			value: true,
-		},
-	})
-
-	const valueMap = new Map(values.map((v) => [v.entityId, v.value]))
-	return ids.map((id) => valueMap.get(id) || null)
-})
-
 const resolvers: GeneratedResolvers = {
 	Query: {
 		meta: async () => {
@@ -74,8 +42,7 @@ const resolvers: GeneratedResolvers = {
 		},
 		entity: async (_, args, context: GraphQLContext) => {
 			context.spaceId = args.spaceId
-			return entitiesLoader.load(args.id)
-			// return Resolvers.entity(args);
+			return Resolvers.entity(args)
 		},
 		types: async (_, args, context: GraphQLContext) => {
 			context.spaceId = args.spaceId
@@ -106,8 +73,7 @@ const resolvers: GeneratedResolvers = {
 	},
 	Entity: {
 		name: (parent: {id: string}) => {
-			return entityNamesLoader.load(parent.id)
-			// return Resolvers.entityName({ id: parent.id });
+			return Resolvers.entityName({id: parent.id})
 		},
 		description: (parent: {id: string}) => {
 			return Resolvers.entityDescription({id: parent.id})
@@ -162,8 +128,7 @@ const resolvers: GeneratedResolvers = {
 	},
 	Property: {
 		entity: (parent: {id: string}) => {
-			return entitiesLoader.load(parent.id)
-			// return Resolvers.entity({ id: parent.id });
+			return Resolvers.entity({id: parent.id})
 		},
 		relationValueTypes: (parent: {id: string}) => {
 			return Resolvers.propertyRelationValueTypes({id: parent.id})
@@ -174,24 +139,16 @@ const resolvers: GeneratedResolvers = {
 	},
 	Relation: {
 		from: (parent: {fromId: string}) => {
-			return entitiesLoader.load(parent.fromId)
-
-			// return Resolvers.entity({ id: parent.fromId });
+			return Resolvers.entity({id: parent.fromId})
 		},
 		to: (parent: {toId: string}) => {
-			return entitiesLoader.load(parent.toId)
-
-			// return Resolvers.entity({ id: parent.toId });
+			return Resolvers.entity({id: parent.toId})
 		},
 		type: (parent: {typeId: string}) => {
-			return propertiesLoader.load(parent.typeId)
-
-			// return Resolvers.property({ id: parent.typeId });
+			return Resolvers.property({id: parent.typeId})
 		},
 		relationEntity: async (parent: {entityId: string}) => {
-			return entitiesLoader.load(parent.entityId)
-
-			// return Resolvers.entity({ id: parent.entityId });
+			return Resolvers.entity({id: parent.entityId})
 		},
 	},
 	Space: {
