@@ -185,7 +185,7 @@ pub struct ValueRow {
     pub id: String,
     pub property_id: Uuid,
     pub entity_id: Uuid,
-    pub space_id: String,
+    pub space_id: Uuid,
     pub value: String,
     pub language: Option<String>,
     pub unit: Option<String>,

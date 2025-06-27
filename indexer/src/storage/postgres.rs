@@ -303,7 +303,7 @@ impl StorageBackend for PostgresStorage {
                     $1::text[],
                     $2::uuid[],
                     $3::uuid[],
-                    $4::text[],
+                    $4::uuid[],
                     $5::text[],
                     $6::text[],
                     $7::text[]

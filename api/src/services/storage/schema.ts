@@ -76,7 +76,7 @@ export const values = pgTable(
 		id: text().primaryKey(),
 		propertyId: uuid().notNull(),
 		entityId: uuid().notNull(),
-		spaceId: text().notNull(),
+		spaceId: uuid().notNull(),
 		value: text().notNull(),
 		language: text(),
 		unit: text(),
