@@ -2,7 +2,7 @@ import {SystemIds} from "@graphprotocol/grc-20"
 import {Effect, Layer} from "effect"
 import {v4 as uuid} from "uuid"
 import {afterEach, beforeEach, describe, expect, it} from "vitest"
-import {DataType, RenderableType} from "../generated/graphql"
+import {DataType} from "../generated/graphql"
 import {getPropertiesForType, getPropertyRenderableType} from "../kg/resolvers/properties"
 import {getTypes} from "../kg/resolvers/types"
 import {Environment, make as makeEnvironment} from "../services/environment"
@@ -600,14 +600,14 @@ describe("Types and Properties Integration Tests", () => {
 				const result = await Effect.runPromise(
 					provideDeps(getPropertyRenderableType(RENDERABLE_PROPERTY_ID_IMAGE)),
 				)
-				expect(result).toBe(RenderableType.Image)
+				expect(result).toBe(SystemIds.IMAGE)
 			})
 
 			it("should return URL renderable type for properties with URL relation", async () => {
 				const result = await Effect.runPromise(
 					provideDeps(getPropertyRenderableType(RENDERABLE_PROPERTY_ID_URL)),
 				)
-				expect(result).toBe(RenderableType.Url)
+				expect(result).toBe(SystemIds.URL)
 			})
 
 			it("should return null for properties without renderable type relation", async () => {

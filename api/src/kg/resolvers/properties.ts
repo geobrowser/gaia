@@ -1,7 +1,7 @@
 import {SystemIds} from "@graphprotocol/grc-20"
 import {and, eq, inArray, sql} from "drizzle-orm"
 import {Effect} from "effect"
-import {DataType, type QueryPropertiesArgs, type QueryTypesArgs, RenderableType} from "../../generated/graphql"
+import {DataType, type QueryPropertiesArgs, type QueryTypesArgs} from "../../generated/graphql"
 import {Batching} from "../../services/storage/dataloaders"
 import {properties, relations} from "../../services/storage/schema"
 import {Storage} from "../../services/storage/storage"
@@ -149,15 +149,7 @@ export function getPropertyRenderableType(propertyId: string) {
 			return null
 		}
 
-		// Map the toEntityId to RenderableType enum
-		switch (renderableTypeRelation.toEntityId) {
-			case SystemIds.IMAGE:
-				return RenderableType.Image
-			case SystemIds.URL:
-				return RenderableType.Url
-			default:
-				return null
-		}
+		return renderableTypeRelation.toEntityId
 	})
 }
 

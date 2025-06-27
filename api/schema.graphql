@@ -52,11 +52,6 @@ enum DataType {
   RELATION
 }
 
-enum RenderableType {
-  URL
-  IMAGE
-}
-
 enum SpaceType {
   PERSONAL
   PUBLIC
@@ -65,7 +60,7 @@ enum SpaceType {
 type Property {
   id: ID!
   dataType: DataType!
-  renderableType: RenderableType
+  renderableType: String
   relationValueTypes: [Type]
   entity: Entity
 }
