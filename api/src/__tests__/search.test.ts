@@ -363,7 +363,7 @@ describe("Search Integration Tests", () => {
 			const result = await Effect.runPromise(
 				SearchResolvers.search({
 					query: "artificial",
-					spaceId: "nonexistent-space",
+					spaceId: "550e8400-0000-41d4-a716-446655440003",
 					limit: 10,
 					offset: 0,
 				}).pipe(provideDeps),

@@ -12,10 +12,10 @@ const exporter = EnvironmentLive.telemetryToken
 				"X-Axiom-Dataset": "gaia.api",
 			},
 		})
-	: new ConsoleSpanExporter()
+	: undefined
 
 // Set up tracing with the OpenTelemetry SDK
 export const NodeSdkLive = NodeSdk.layer(() => ({
 	resource: {serviceName: "gaia.api"},
-	spanProcessor: new BatchSpanProcessor(exporter),
+	spanProcessor: exporter ? new BatchSpanProcessor(exporter) : undefined,
 }))
