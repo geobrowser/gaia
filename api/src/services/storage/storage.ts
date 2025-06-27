@@ -63,7 +63,7 @@ const schemaDefinition = {
 
 type DbSchema = typeof schemaDefinition
 
-const db = drizzle<DbSchema>({
+export const db = drizzle<DbSchema>({
 	casing: "snake_case",
 	client: _pool,
 	schema: schemaDefinition,

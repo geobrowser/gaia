@@ -1,7 +1,7 @@
 import {SystemIds} from "@graphprotocol/grc-20"
 import DataLoader from "dataloader"
 import {Context, Data, Effect} from "effect"
-import type {Entity} from "~/src/generated/graphql"
+import type {RelationFilter, ValueFilter} from "~/src/generated/graphql"
 import {Storage} from "./storage"
 
 export class BatchingError extends Data.TaggedError("BatchingError")<{
@@ -27,6 +27,7 @@ interface BatchingShape {
 	loadEntityValues: (
 		entityId: string,
 		spaceId?: string | null,
+		filter?: ValueFilter | null,
 	) => Effect.Effect<
 		{
 			id: string
@@ -43,6 +44,7 @@ interface BatchingShape {
 	loadEntityRelations: (
 		entityId: string,
 		spaceId?: string | null,
+		filter?: RelationFilter | null,
 	) => Effect.Effect<
 		{
 			id: string
@@ -61,7 +63,28 @@ interface BatchingShape {
 		BatchingError,
 		never
 	>
-	loadEntityBacklinks: (entityId: string, spaceId?: string | null) => Effect.Effect<Entity[], BatchingError, never>
+	loadEntityBacklinks: (
+		entityId: string,
+		spaceId?: string | null,
+		filter?: RelationFilter | null,
+	) => Effect.Effect<
+		{
+			id: string
+			entityId: string
+			spaceId: string
+			typeId: string
+			fromEntityId: string
+			fromSpaceId: string | null
+			fromVersionId: string | null
+			toEntityId: string
+			toSpaceId: string | null
+			toVersionId: string | null
+			position: string | null
+			verified: boolean | null
+		}[],
+		BatchingError,
+		never
+	>
 	loadProperty: (propertyId: string) => Effect.Effect<
 		{
 			id: string
@@ -77,8 +100,8 @@ export class Batching extends Context.Tag("Batching")<Batching, BatchingShape>()
 export const make = Effect.gen(function* () {
 	const storage = yield* Storage
 
-	const entitiesLoader = new DataLoader(async (ids: readonly string[]) => {
-		const result = await Effect.runPromise(
+	const entitiesLoader = new DataLoader((ids: readonly string[]) => {
+		return Effect.runPromise(
 			storage
 				.use(async (client) => {
 					const entities = await client.query.entities.findMany({
@@ -90,11 +113,10 @@ export const make = Effect.gen(function* () {
 				})
 				.pipe(Effect.withSpan("entitiesLoader"), Effect.annotateSpans({ids})),
 		)
-		return result
 	})
 
-	const entityNamesLoader = new DataLoader(async (ids: readonly string[]) => {
-		const result = await Effect.runPromise(
+	const entityNamesLoader = new DataLoader((ids: readonly string[]) => {
+		return Effect.runPromise(
 			storage.use(async (client) => {
 				const values = await client.query.values.findMany({
 					where: (values, {inArray, and, eq}) =>
@@ -109,11 +131,10 @@ export const make = Effect.gen(function* () {
 				return ids.map((id) => valueMap.get(id) || null)
 			}),
 		)
-		return result
 	})
 
-	const entityDescriptionsLoader = new DataLoader(async (ids: readonly string[]) => {
-		const result = await Effect.runPromise(
+	const entityDescriptionsLoader = new DataLoader((ids: readonly string[]) => {
+		return Effect.runPromise(
 			storage
 				.use(async (client) => {
 					const values = await client.query.values.findMany({
@@ -130,12 +151,17 @@ export const make = Effect.gen(function* () {
 				})
 				.pipe(Effect.withSpan("entityDescriptionsLoader"), Effect.annotateSpans({ids})),
 		)
-		return result
 	})
 
 	const entityValuesLoader = new DataLoader(
-		async (keys: readonly {entityId: string; spaceId?: string | null}[]) => {
-			const result = await Effect.runPromise(
+		(
+			keys: readonly {
+				entityId: string
+				spaceId?: string | null
+				filter?: ValueFilter | null
+			}[],
+		) => {
+			return Effect.runPromise(
 				storage
 					.use(async (client) => {
 						const entityIds = keys.map((k) => k.entityId)
@@ -148,29 +174,42 @@ export const make = Effect.gen(function* () {
 							if (!valuesByEntity.has(value.entityId)) {
 								valuesByEntity.set(value.entityId, [])
 							}
-							valuesByEntity.get(value.entityId)!.push(value)
+							valuesByEntity.get(value.entityId)?.push(value)
 						}
 
 						return keys.map((key) => {
-							const entityValues = valuesByEntity.get(key.entityId) || []
+							let entityValues = valuesByEntity.get(key.entityId) || []
+
+							// Apply spaceId filter
 							if (key.spaceId) {
-								return entityValues.filter((v) => v.spaceId === key.spaceId)
+								entityValues = entityValues.filter((v) => v.spaceId === key.spaceId)
 							}
+
+							// Apply value filter
+							if (key.filter?.property) {
+								entityValues = entityValues.filter((v) => v.propertyId === key.filter?.property)
+							}
+
 							return entityValues
 						})
 					})
 					.pipe(Effect.withSpan("entityValuesLoader"), Effect.annotateSpans({keys})),
 			)
-			return result
 		},
 		{
-			cacheKeyFn: (key) => `${key.entityId}:${key.spaceId || "null"}`,
+			cacheKeyFn: (key) => `${key.entityId}:${key.spaceId || "null"}:${JSON.stringify(key.filter) || "null"}`,
 		},
 	)
 
 	const entityRelationsLoader = new DataLoader(
-		async (keys: readonly {entityId: string; spaceId?: string | null}[]) => {
-			const result = await Effect.runPromise(
+		(
+			keys: readonly {
+				entityId: string
+				spaceId?: string | null
+				filter?: RelationFilter | null
+			}[],
+		) => {
+			return Effect.runPromise(
 				storage
 					.use(async (client) => {
 						const entityIds = keys.map((k) => k.entityId)
@@ -183,29 +222,60 @@ export const make = Effect.gen(function* () {
 							if (!relationsByEntity.has(relation.fromEntityId)) {
 								relationsByEntity.set(relation.fromEntityId, [])
 							}
-							relationsByEntity.get(relation.fromEntityId)!.push(relation)
+							relationsByEntity.get(relation.fromEntityId)?.push(relation)
 						}
 
 						return keys.map((key) => {
-							const entityRelations = relationsByEntity.get(key.entityId) || []
+							let entityRelations = relationsByEntity.get(key.entityId) || []
+
+							// Apply spaceId filter
 							if (key.spaceId) {
-								return entityRelations.filter((r) => r.spaceId === key.spaceId)
+								entityRelations = entityRelations.filter((r) => r.spaceId === key.spaceId)
 							}
+
+							// Apply relation filters
+							if (key.filter) {
+								if (key.filter.typeId && key.filter.typeId !== "") {
+									entityRelations = entityRelations.filter((r) => r.typeId === key.filter?.typeId)
+								}
+								if (key.filter.fromEntityId && key.filter.fromEntityId !== "") {
+									entityRelations = entityRelations.filter(
+										(r) => r.fromEntityId === key.filter?.fromEntityId,
+									)
+								}
+								if (key.filter.toEntityId && key.filter.toEntityId !== "") {
+									entityRelations = entityRelations.filter(
+										(r) => r.toEntityId === key.filter?.toEntityId,
+									)
+								}
+								if (key.filter.relationEntityId && key.filter.relationEntityId !== "") {
+									entityRelations = entityRelations.filter(
+										(r) => r.entityId === key.filter?.relationEntityId,
+									)
+								}
+							}
+
 							return entityRelations
 						})
 					})
 					.pipe(Effect.withSpan("entityRelationsLoader"), Effect.annotateSpans({keys})),
 			)
-			return result
 		},
 		{
-			cacheKeyFn: (key) => `relations:${key.entityId}:${key.spaceId || "null"}`,
+			cacheKeyFn: (key) =>
+				`relations:${key.entityId}:${key.spaceId || "null"}:${JSON.stringify(key.filter) || "null"}`,
 		},
 	)
 
 	const entityBacklinksLoader = new DataLoader(
-		async (keys: readonly {entityId: string; spaceId?: string | null}[]) => {
-			const result = await Effect.runPromise(
+		(
+			keys: readonly {
+				entityId: string
+				spaceId?: string | null
+				filter?: RelationFilter | null
+			}[],
+		) => {
+			return Effect.runPromise(
 				storage
 					.use(async (client) => {
 						const entityIds = keys.map((k) => k.entityId)
@@ -213,33 +283,58 @@ export const make = Effect.gen(function* () {
 							where: (relations, {inArray}) => inArray(relations.toEntityId, entityIds),
 						})
 
-						const backlinksByEntity = new Map<string, any[]>()
+						const backlinksByEntity = new Map<string, (typeof allBacklinks)[number][]>()
 						for (const backlink of allBacklinks) {
 							if (!backlinksByEntity.has(backlink.toEntityId)) {
 								backlinksByEntity.set(backlink.toEntityId, [])
 							}
-							backlinksByEntity.get(backlink.toEntityId)!.push(backlink)
+							backlinksByEntity.get(backlink.toEntityId)?.push(backlink)
 						}
 
 						return keys.map((key) => {
-							const entityBacklinks = backlinksByEntity.get(key.entityId) || []
+							let entityBacklinks = backlinksByEntity.get(key.entityId) || []
+
+							// Apply spaceId filter
 							if (key.spaceId) {
-								return entityBacklinks.filter((r) => r.spaceId === key.spaceId)
+								entityBacklinks = entityBacklinks.filter((r) => r.spaceId === key.spaceId)
 							}
+
+							// Apply relation filters
+							if (key.filter) {
+								if (key.filter.typeId && key.filter.typeId !== "") {
+									entityBacklinks = entityBacklinks.filter((r) => r.typeId === key.filter?.typeId)
+								}
+								if (key.filter.fromEntityId && key.filter.fromEntityId !== "") {
+									entityBacklinks = entityBacklinks.filter(
+										(r) => r.fromEntityId === key.filter?.fromEntityId,
+									)
+								}
+								if (key.filter.toEntityId && key.filter.toEntityId !== "") {
+									entityBacklinks = entityBacklinks.filter(
+										(r) => r.toEntityId === key.filter?.toEntityId,
+									)
+								}
+								if (key.filter.relationEntityId && key.filter.relationEntityId !== "") {
+									entityBacklinks = entityBacklinks.filter(
+										(r) => r.entityId === key.filter?.relationEntityId,
+									)
+								}
+							}
+
 							return entityBacklinks
 						})
 					})
 					.pipe(Effect.withSpan("entityBacklinksLoader"), Effect.annotateSpans({keys})),
 			)
-			return result
 		},
 		{
-			cacheKeyFn: (key) => `backlinks:${key.entityId}:${key.spaceId || "null"}`,
+			cacheKeyFn: (key) =>
+				`backlinks:${key.entityId}:${key.spaceId || "null"}:${JSON.stringify(key.filter) || "null"}`,
 		},
 	)
 
-	const propertiesLoader = new DataLoader(async (ids: readonly string[]) => {
-		const result = await Effect.runPromise(
+	const propertiesLoader = new DataLoader((ids: readonly string[]) => {
+		return Effect.runPromise(
 			storage
 				.use(async (client) => {
 					const properties = await client.query.properties.findMany({
@@ -251,7 +346,6 @@ export const make = Effect.gen(function* () {
 				})
 				.pipe(Effect.withSpan("propertiesLoader"), Effect.annotateSpans({ids})),
 		)
-		return result
 	})
 
 	return Batching.of({
@@ -285,35 +379,35 @@ export const make = Effect.gen(function* () {
 					}),
 			}).pipe(Effect.annotateSpans({entityId: id}), Effect.withSpan("loadEntityDescription")),
 
-		loadEntityValues: (entityId: string, spaceId?: string | null) =>
+		loadEntityValues: (entityId: string, spaceId?: string | null, filter?: ValueFilter | null) =>
 			Effect.tryPromise({
-				try: () => entityValuesLoader.load({entityId, spaceId}),
+				try: () => entityValuesLoader.load({entityId, spaceId, filter}),
 				catch: (error) =>
 					new BatchingError({
 						cause: error,
 						message: `Failed to batch load entity values ${entityId}: ${String(error)}`,
 					}),
-			}).pipe(Effect.annotateSpans({entityId, spaceId}), Effect.withSpan("loadEntityValues")),
+			}).pipe(Effect.annotateSpans({entityId, spaceId, filter}), Effect.withSpan("loadEntityValues")),
 
-		loadEntityRelations: (entityId: string, spaceId?: string | null) =>
+		loadEntityRelations: (entityId: string, spaceId?: string | null, filter?: RelationFilter | null) =>
 			Effect.tryPromise({
-				try: () => entityRelationsLoader.load({entityId, spaceId}),
+				try: () => entityRelationsLoader.load({entityId, spaceId, filter}),
 				catch: (error) =>
 					new BatchingError({
 						cause: error,
 						message: `Failed to batch load entity relations ${entityId}: ${String(error)}`,
 					}),
-			}).pipe(Effect.annotateSpans({entityId, spaceId}), Effect.withSpan("loadEntityRelations")),
+			}).pipe(Effect.annotateSpans({entityId, spaceId, filter}), Effect.withSpan("loadEntityRelations")),
 
-		loadEntityBacklinks: (entityId: string, spaceId?: string | null) =>
+		loadEntityBacklinks: (entityId: string, spaceId?: string | null, filter?: RelationFilter | null) =>
 			Effect.tryPromise({
-				try: () => entityBacklinksLoader.load({entityId, spaceId}),
+				try: () => entityBacklinksLoader.load({entityId, spaceId, filter}),
 				catch: (error) =>
 					new BatchingError({
 						cause: error,
 						message: `Failed to batch load entity backlinks ${entityId}: ${String(error)}`,
 					}),
-			}).pipe(Effect.annotateSpans({entityId, spaceId}), Effect.withSpan("loadEntityBacklinks")),
+			}).pipe(Effect.annotateSpans({entityId, spaceId, filter}), Effect.withSpan("loadEntityBacklinks")),
 
 		loadProperty: (propertyId: string) =>
 			Effect.tryPromise({

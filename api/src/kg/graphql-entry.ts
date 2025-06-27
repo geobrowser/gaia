@@ -1,7 +1,9 @@
-import {makeExecutableSchema} from "@graphql-tools/schema"
-import {file} from "bun"
-import {Effect, Layer} from "effect"
-import {createYoga} from "graphql-yoga"
+import { SystemIds } from "@graphprotocol/grc-20";
+import { makeExecutableSchema } from "@graphql-tools/schema";
+import { file } from "bun";
+import DataLoader from "dataloader";
+import { Effect, Layer } from "effect";
+import { createYoga } from "graphql-yoga";
 import type {
 	EntityRelationsArgs,
 	EntityValuesArgs,
@@ -10,165 +12,244 @@ import type {
 	QuerySearchArgs,
 	QuerySpaceArgs,
 	QuerySpacesArgs,
-} from "../generated/graphql"
-import {Environment, make as makeEnvironment} from "../services/environment"
-import {Batching, make as makeBatching} from "../services/storage/dataloaders"
-import {make as makeStorage, Storage} from "../services/storage/storage"
-import * as MembershipResolvers from "./resolvers/membership"
-import * as Resolvers from "./resolvers/root"
+} from "../generated/graphql";
+import { Environment, make as makeEnvironment } from "../services/environment";
+import {
+	Batching,
+	make as makeBatching,
+} from "../services/storage/dataloaders";
+import { db, make as makeStorage, Storage } from "../services/storage/storage";
+import * as MembershipResolvers from "./resolvers/membership";
+import * as Resolvers from "./resolvers/root";
 
-const EnvironmentLayer = Layer.effect(Environment, makeEnvironment)
-const StorageLayer = Layer.effect(Storage, makeStorage).pipe(Layer.provide(EnvironmentLayer))
-const BatchingLayer = Layer.effect(Batching, makeBatching).pipe(Layer.provide(StorageLayer))
-const layers = Layer.mergeAll(EnvironmentLayer, StorageLayer, BatchingLayer)
-const provideDeps = Effect.provide(layers)
+const EnvironmentLayer = Layer.effect(Environment, makeEnvironment);
+const StorageLayer = Layer.effect(Storage, makeStorage).pipe(
+	Layer.provide(EnvironmentLayer),
+);
+const BatchingLayer = Layer.effect(Batching, makeBatching).pipe(
+	Layer.provide(StorageLayer),
+);
+const layers = Layer.mergeAll(EnvironmentLayer, StorageLayer, BatchingLayer);
+const provideDeps = Effect.provide(layers);
 
 interface GraphQLContext {
-	spaceId?: InputMaybe<string>
+	spaceId?: InputMaybe<string>;
 }
 
-const schemaFile = await file("./schema.graphql").text()
+const schemaFile = await file("./schema.graphql").text();
+
+const entitiesLoader = new DataLoader(async (ids: readonly string[]) => {
+	const entities = await db.query.entities.findMany({
+		where: (entities, { inArray }) => inArray(entities.id, ids),
+	});
+
+	const entityMap = new Map(entities.map((e) => [e.id, e]));
+	return ids.map((id) => entityMap.get(id) ?? null);
+});
+
+const propertiesLoader = new DataLoader(async (ids: readonly string[]) => {
+	const properties = await db.query.properties.findMany({
+		where: (properties, { inArray }) => inArray(properties.id, ids),
+	});
+
+	const propertyMap = new Map(properties.map((p) => [p.id, p]));
+	return ids.map((id) => propertyMap.get(id) || null);
+});
+
+const entityNamesLoader = new DataLoader(async (ids: readonly string[]) => {
+	const values = await db.query.values.findMany({
+		where: (values, { inArray, and, eq }) =>
+			and(
+				inArray(values.entityId, ids),
+				eq(values.propertyId, SystemIds.NAME_PROPERTY),
+			),
+		columns: {
+			entityId: true,
+			value: true,
+		},
+	});
+
+	const valueMap = new Map(values.map((v) => [v.entityId, v.value]));
+	return ids.map((id) => valueMap.get(id) || null);
+});
 
 const resolvers: GeneratedResolvers = {
 	Query: {
 		meta: async () => {
-			return await Resolvers.meta()
+			return Resolvers.meta();
 		},
 		entities: async (_, args, context: GraphQLContext) => {
-			context.spaceId = args.spaceId
-			return await Resolvers.entities(args)
+			context.spaceId = args.spaceId;
+			return Resolvers.entities(args);
 		},
 		entity: async (_, args, context: GraphQLContext) => {
-			context.spaceId = args.spaceId
-			return await Resolvers.entity(args)
+			context.spaceId = args.spaceId;
+			return entitiesLoader.load(args.id);
+			// return Resolvers.entity(args);
 		},
 		types: async (_, args, context: GraphQLContext) => {
-			context.spaceId = args.spaceId
-			return await Resolvers.types(args)
+			context.spaceId = args.spaceId;
+			return Resolvers.types(args);
 		},
-		search: async (_, args: QuerySearchArgs, context: GraphQLContext) => {
-			context.spaceId = args.spaceId
-			return await Resolvers.search(args)
+		search: (_, args: QuerySearchArgs, context: GraphQLContext) => {
+			context.spaceId = args.spaceId;
+			return Resolvers.search(args);
 		},
-		properties: async (_, args) => {
-			return await Resolvers.properties(args)
+		properties: (_, args) => {
+			return Resolvers.properties(args);
 		},
-		property: async (_, args) => {
-			return await Resolvers.property({id: args.id})
+		property: (_, args) => {
+			return Resolvers.property({ id: args.id });
 		},
-		spaces: async (_, args: QuerySpacesArgs) => {
-			return await Resolvers.spaces(args)
+		spaces: (_, args: QuerySpacesArgs) => {
+			return Resolvers.spaces(args);
 		},
-		space: async (_, args: QuerySpaceArgs) => {
-			return await Resolvers.space(args.id)
+		space: (_, args: QuerySpaceArgs) => {
+			return Resolvers.space(args.id);
 		},
-		relation: async (_, args) => {
-			return await Resolvers.relation({id: args.id})
+		relation: (_, args) => {
+			return Resolvers.relation({ id: args.id });
 		},
-		relations: async (_, args) => {
-			return await Resolvers.relations(args)
+		relations: (_, args) => {
+			return Resolvers.relations(args);
 		},
 	},
 	Entity: {
-		name: async (parent: {id: string}) => {
-			return Resolvers.entityName({id: parent.id})
+		name: (parent: { id: string }) => {
+			return entityNamesLoader.load(parent.id);
+			// return Resolvers.entityName({ id: parent.id });
 		},
-		description: async (parent: {id: string}) => {
-			return Resolvers.entityDescription({id: parent.id})
+		description: (parent: { id: string }) => {
+			return Resolvers.entityDescription({ id: parent.id });
 		},
-		blocks: async (parent: {id: string}) => {
-			return Resolvers.blocks({id: parent.id})
+		blocks: (parent: { id: string }) => {
+			return Resolvers.blocks({ id: parent.id });
 		},
-		types: async (parent: {id: string}) => {
-			return Resolvers.entityTypes({id: parent.id})
+		types: (parent: { id: string }) => {
+			return Resolvers.entityTypes({ id: parent.id });
 		},
-		spaces: async (parent: {id: string}) => {
-			return Resolvers.entitySpaces({id: parent.id})
+		spaces: (parent: { id: string }) => {
+			return Resolvers.entitySpaces({ id: parent.id });
 		},
-		values: async (parent: {id: string}, args: EntityValuesArgs, context: GraphQLContext) => {
-			const spaceId = args.spaceId ?? context.spaceId
-			return Resolvers.values({id: parent.id, spaceId})
+		values: (
+			parent: { id: string },
+			args: EntityValuesArgs,
+			context: GraphQLContext,
+		) => {
+			const spaceId = args.spaceId ?? context.spaceId;
+			return Resolvers.values({ id: parent.id, spaceId });
 		},
-		relations: async (parent: {id: string}, args: EntityRelationsArgs, context: GraphQLContext) => {
-			const spaceId = args.spaceId ?? context.spaceId
-			return Resolvers.entityRelations({id: parent.id, spaceId})
+		relations: (
+			parent: { id: string },
+			args: EntityRelationsArgs,
+			context: GraphQLContext,
+		) => {
+			const spaceId = args.spaceId ?? context.spaceId;
+			return Resolvers.entityRelations({ id: parent.id, spaceId });
 		},
-		backlinks: async (parent: {id: string}, args: EntityRelationsArgs, context: GraphQLContext) => {
-			const spaceId = args.spaceId ?? context.spaceId
-			return Resolvers.entityBacklinks({id: parent.id, spaceId})
+		backlinks: (
+			parent: { id: string },
+			args: EntityRelationsArgs,
+			context: GraphQLContext,
+		) => {
+			const spaceId = args.spaceId ?? context.spaceId;
+			return Resolvers.entityBacklinks({ id: parent.id, spaceId });
 		},
 	},
 	Type: {
-		name: async (parent: {id: string}) => {
-			return Resolvers.entityName({id: parent.id})
+		name: (parent: { id: string }) => {
+			return Resolvers.entityName({ id: parent.id });
 		},
-		description: async (parent: {id: string}) => {
-			return Resolvers.entityDescription({id: parent.id})
+		description: (parent: { id: string }) => {
+			return Resolvers.entityDescription({ id: parent.id });
 		},
-		entity: async (parent: {id: string}) => {
-			return Resolvers.entity({id: parent.id})
+		entity: (parent: { id: string }) => {
+			return Resolvers.entity({ id: parent.id });
 		},
-		properties: async (parent: {id: string}, _: unknown, context: GraphQLContext) => {
+		properties: (
+			parent: { id: string },
+			_: unknown,
+			context: GraphQLContext,
+		) => {
 			return Resolvers.propertiesForType(parent.id, {
 				spaceId: context.spaceId,
-			})
+			});
 		},
 	},
 	Value: {
-		entity: async (parent: {entityId: string}) => {
-			return Resolvers.entity({id: parent.entityId})
+		entity: (parent: { entityId: string }) => {
+			return Resolvers.entity({ id: parent.entityId });
 		},
-		property: async (parent: {propertyId: string}) => {
-			return Resolvers.property({id: parent.propertyId})
+		property: (parent: { propertyId: string }) => {
+			return Resolvers.property({
+				id: parent.propertyId,
+			});
 		},
 	},
 	Property: {
-		entity: async (parent: {id: string}) => {
-			return Resolvers.entity({id: parent.id})
+		entity: (parent: { id: string }) => {
+			return entitiesLoader.load(parent.id);
+			// return Resolvers.entity({ id: parent.id });
 		},
-		relationValueTypes: async (parent: {id: string}) => {
-			return Resolvers.propertyRelationValueTypes({id: parent.id})
+		relationValueTypes: (parent: { id: string }) => {
+			return Resolvers.propertyRelationValueTypes({ id: parent.id });
 		},
-		renderableType: async (parent: {id: string}) => {
-			return Resolvers.propertyRenderableType({id: parent.id})
+		renderableType: (parent: { id: string }) => {
+			return Resolvers.propertyRenderableType({ id: parent.id });
 		},
 	},
 	Relation: {
-		from: async (parent: {fromId: string}) => {
-			return Resolvers.entity({id: parent.fromId})
+		from: (parent: { fromId: string }) => {
+			return entitiesLoader.load(parent.fromId);
+
+			// return Resolvers.entity({ id: parent.fromId });
 		},
-		to: async (parent: {toId: string}) => {
-			return Resolvers.entity({id: parent.toId})
+		to: (parent: { toId: string }) => {
+			return entitiesLoader.load(parent.toId);
+
+			// return Resolvers.entity({ id: parent.toId });
 		},
-		type: async (parent: {typeId: string}) => {
-			return Resolvers.property({id: parent.typeId})
+		type: (parent: { typeId: string }) => {
+			return propertiesLoader.load(parent.typeId);
+
+			// return Resolvers.property({ id: parent.typeId });
 		},
-		relationEntity: async (parent: {entityId: string}) => {
-			return Resolvers.entity({id: parent.entityId})
+		relationEntity: async (parent: { entityId: string }) => {
+			return entitiesLoader.load(parent.entityId);
+
+			// return Resolvers.entity({ id: parent.entityId });
 		},
 	},
 	Space: {
-		entity: async (parent: {id: string}) => {
-			return Resolvers.spaceEntity(parent.id)
+		entity: (parent: { id: string }) => {
+			return Resolvers.spaceEntity(parent.id);
 		},
-		editors: async (parent: {id: string}) => {
-			return await Effect.runPromise(MembershipResolvers.getEditors({spaceId: parent.id}).pipe(provideDeps))
+		editors: (parent: { id: string }) => {
+			return Effect.runPromise(
+				MembershipResolvers.getEditors({ spaceId: parent.id }).pipe(
+					provideDeps,
+				),
+			);
 		},
-		members: async (parent: {id: string}) => {
-			return await Effect.runPromise(MembershipResolvers.getMembers({spaceId: parent.id}).pipe(provideDeps))
+		members: (parent: { id: string }) => {
+			return Effect.runPromise(
+				MembershipResolvers.getMembers({ spaceId: parent.id }).pipe(
+					provideDeps,
+				),
+			);
 		},
 	},
-}
+};
 
 const schema = makeExecutableSchema({
 	typeDefs: schemaFile,
 	resolvers,
-})
+});
 
 export const graphqlServer = createYoga({
 	schema,
 	batching: true,
 	context: (): GraphQLContext => ({}),
 	graphqlEndpoint: "/graphql",
-	fetchAPI: {Response, Request},
-})
+	fetchAPI: { Response, Request },
+});

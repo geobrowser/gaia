@@ -1,6 +1,13 @@
 import {SystemIds} from "@graphprotocol/grc-20"
 import {Effect} from "effect"
-import {BlockType, DataSourceType, type QueryEntitiesArgs, type QueryRelationsArgs} from "../../generated/graphql"
+import {
+	BlockType,
+	DataSourceType,
+	type QueryEntitiesArgs,
+	type QueryRelationsArgs,
+	type RelationFilter,
+	type ValueFilter,
+} from "../../generated/graphql"
 import {Batching} from "../../services/storage/dataloaders"
 import {Storage} from "../../services/storage/storage"
 import {buildEntityWhere, type EntityFilter} from "./filters"
@@ -80,19 +87,19 @@ export function getEntityDescription(id: string) {
 	})
 }
 
-export function getValues(id: string, spaceId?: string | null) {
+export function getValues(id: string, spaceId?: string | null, filter?: ValueFilter | null) {
 	return Effect.gen(function* () {
 		const batching = yield* Batching
-		const values = yield* batching.loadEntityValues(id, spaceId)
+		const values = yield* batching.loadEntityValues(id, spaceId, filter)
 
 		return values
 	})
 }
 
-export function getRelations(id: string, spaceId?: string | null) {
+export function getRelations(id: string, spaceId?: string | null, filter?: RelationFilter | null) {
 	return Effect.gen(function* () {
 		const batching = yield* Batching
-		const relations = yield* batching.loadEntityRelations(id, spaceId)
+		const relations = yield* batching.loadEntityRelations(id, spaceId, filter)
 
 		return relations.map((relation) => ({
 			id: relation.id,
@@ -108,10 +115,10 @@ export function getRelations(id: string, spaceId?: string | null) {
 	})
 }
 
-export function getBacklinks(id: string, spaceId?: string | null) {
+export function getBacklinks(id: string, spaceId?: string | null, filter?: RelationFilter | null) {
 	return Effect.gen(function* () {
 		const batching = yield* Batching
-		const backlinks = yield* batching.loadEntityBacklinks(id, spaceId)
+		const backlinks = yield* batching.loadEntityBacklinks(id, spaceId, filter)
 
 		return backlinks.map((relation) => ({
 			id: relation.id,
@@ -178,7 +185,7 @@ export function getAllRelations(args: QueryRelationsArgs) {
 		return yield* db.use(async (client) => {
 			const result = await client.query.relations.findMany({
 				where: (relations, {eq, and}) => {
-					const conditions: any[] = []
+					const conditions: ReturnType<typeof eq>[] = []
 
 					if (filter?.typeId) {
 						conditions.push(eq(relations.typeId, filter.typeId))
@@ -269,7 +276,7 @@ export function getBlocks(entityId: string) {
 		// Filter for block relations
 		const blockRelations = relations
 			.filter((relation) => relation.typeId === SystemIds.BLOCKS)
-			.sort((a, b) => (a.position || 0) - (b.position || 0))
+			.sort((a, b) => (Number(a.position) || 0) - (Number(b.position) || 0))
 
 		// Load all block entities in parallel
 		const blockEntities = yield* Effect.forEach(

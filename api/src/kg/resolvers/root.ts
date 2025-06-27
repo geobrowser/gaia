@@ -25,8 +25,8 @@ const BatchingLayer = Layer.effect(Batching, makeBatching).pipe(Layer.provide(St
 const layers = Layer.mergeAll(EnvironmentLayer, StorageLayer, BatchingLayer, NodeSdkLive)
 const provideDeps = Effect.provide(layers)
 
-export const entities = async (args: QueryEntitiesArgs) => {
-	return await Effect.runPromise(
+export const entities = (args: QueryEntitiesArgs) => {
+	return Effect.runPromise(
 		EntityResolvers.getEntities(args).pipe(
 			Effect.withSpan("getEntities"),
 			Effect.annotateSpans({...args}),
@@ -35,8 +35,8 @@ export const entities = async (args: QueryEntitiesArgs) => {
 	)
 }
 
-export const entity = async (args: QueryEntityArgs) => {
-	return await Effect.runPromise(
+export const entity = (args: QueryEntityArgs) => {
+	return Effect.runPromise(
 		EntityResolvers.getEntity(args.id).pipe(
 			Effect.withSpan("getEntity"),
 			Effect.annotateSpans({entityId: args.id}),
@@ -45,8 +45,8 @@ export const entity = async (args: QueryEntityArgs) => {
 	)
 }
 
-export const entityName = async (args: QueryEntityArgs) => {
-	return await Effect.runPromise(
+export const entityName = (args: QueryEntityArgs) => {
+	return Effect.runPromise(
 		EntityResolvers.getEntityName(args.id).pipe(
 			Effect.withSpan("getEntityName"),
 			Effect.annotateSpans({entityId: args.id}),
@@ -55,8 +55,8 @@ export const entityName = async (args: QueryEntityArgs) => {
 	)
 }
 
-export const entityDescription = async (args: QueryEntityArgs) => {
-	return await Effect.runPromise(
+export const entityDescription = (args: QueryEntityArgs) => {
+	return Effect.runPromise(
 		EntityResolvers.getEntityDescription(args.id).pipe(
 			Effect.withSpan("getEntityDescription"),
 			Effect.annotateSpans({entityId: args.id}),
@@ -65,8 +65,8 @@ export const entityDescription = async (args: QueryEntityArgs) => {
 	)
 }
 
-export const entityTypes = async (args: QueryEntityArgs) => {
-	return await Effect.runPromise(
+export const entityTypes = (args: QueryEntityArgs) => {
+	return Effect.runPromise(
 		EntityResolvers.getEntityTypes(args.id).pipe(
 			Effect.withSpan("getEntityTypes"),
 			Effect.annotateSpans({entityId: args.id}),
@@ -75,8 +75,8 @@ export const entityTypes = async (args: QueryEntityArgs) => {
 	)
 }
 
-export const entitySpaces = async (args: QueryEntityArgs) => {
-	return await Effect.runPromise(
+export const entitySpaces = (args: QueryEntityArgs) => {
+	return Effect.runPromise(
 		EntityResolvers.getSpaces(args.id).pipe(
 			Effect.withSpan("getSpaces"),
 			Effect.annotateSpans({entityId: args.id}),
@@ -85,8 +85,8 @@ export const entitySpaces = async (args: QueryEntityArgs) => {
 	)
 }
 
-export const values = async (args: QueryEntityArgs & {spaceId?: string | null}) => {
-	return await Effect.runPromise(
+export const values = (args: QueryEntityArgs & {spaceId?: string | null}) => {
+	return Effect.runPromise(
 		EntityResolvers.getValues(args.id, args.spaceId).pipe(
 			Effect.withSpan("getValues"),
 			Effect.annotateSpans({entityId: args.id, spaceId: args.spaceId}),
@@ -95,8 +95,8 @@ export const values = async (args: QueryEntityArgs & {spaceId?: string | null}) 
 	)
 }
 
-export const entityRelations = async (args: QueryEntityArgs & {spaceId?: string | null}) => {
-	return await Effect.runPromise(
+export const entityRelations = (args: QueryEntityArgs & {spaceId?: string | null}) => {
+	return Effect.runPromise(
 		EntityResolvers.getRelations(args.id, args.spaceId).pipe(
 			Effect.withSpan("getRelations"),
 			Effect.annotateSpans({entityId: args.id, spaceId: args.spaceId}),
@@ -105,8 +105,8 @@ export const entityRelations = async (args: QueryEntityArgs & {spaceId?: string 
 	)
 }
 
-export const entityBacklinks = async (args: QueryEntityArgs & {spaceId?: string | null}) => {
-	return await Effect.runPromise(
+export const entityBacklinks = (args: QueryEntityArgs & {spaceId?: string | null}) => {
+	return Effect.runPromise(
 		EntityResolvers.getBacklinks(args.id, args.spaceId).pipe(
 			Effect.withSpan("getBacklinks"),
 			Effect.annotateSpans({entityId: args.id, spaceId: args.spaceId}),
@@ -115,8 +115,8 @@ export const entityBacklinks = async (args: QueryEntityArgs & {spaceId?: string 
 	)
 }
 
-export const relations = async (args: QueryRelationsArgs) => {
-	return await Effect.runPromise(
+export const relations = (args: QueryRelationsArgs) => {
+	return Effect.runPromise(
 		EntityResolvers.getAllRelations(args).pipe(
 			Effect.withSpan("getAllRelations"),
 			Effect.annotateSpans({...args}),
@@ -125,8 +125,8 @@ export const relations = async (args: QueryRelationsArgs) => {
 	)
 }
 
-export const relation = async (args: QueryEntityArgs) => {
-	return await Effect.runPromise(
+export const relation = (args: QueryEntityArgs) => {
+	return Effect.runPromise(
 		EntityResolvers.getRelation(args.id).pipe(
 			Effect.withSpan("getRelation"),
 			Effect.annotateSpans({...args}),
@@ -135,18 +135,23 @@ export const relation = async (args: QueryEntityArgs) => {
 	)
 }
 
-export const property = async (args: QueryEntityArgs) => {
-	return await Effect.runPromise(
-		PropertyResolvers.getProperty(args.id).pipe(
-			Effect.withSpan("getProperty"),
-			Effect.annotateSpans({entityId: args.id}),
-			provideDeps,
-		),
+export const property = (args: QueryEntityArgs) => {
+	const idk = Effect.gen(function* () {
+		const timestamp = Date.now()
+		console.log(`🏠 Property ${args.id} type resolver START: ${timestamp}`)
+
+		const result = yield* PropertyResolvers.getProperty(args.id)
+		console.log(`🏠 Property ${args.id} type resolver END: ${Date.now() - timestamp}ms`)
+		return result
+	})
+
+	return Effect.runPromise(
+		idk.pipe(Effect.withSpan("getProperty"), Effect.annotateSpans({entityId: args.id}), provideDeps),
 	)
 }
 
-export const propertiesForType = async (typeId: string, args: QueryTypesArgs) => {
-	return await Effect.runPromise(
+export const propertiesForType = (typeId: string, args: QueryTypesArgs) => {
+	return Effect.runPromise(
 		PropertyResolvers.getPropertiesForType(typeId, args).pipe(
 			Effect.withSpan("getPropertiesForType"),
 			Effect.annotateSpans({typeId, ...args}),
@@ -155,8 +160,8 @@ export const propertiesForType = async (typeId: string, args: QueryTypesArgs) =>
 	)
 }
 
-export const propertyRelationValueTypes = async (args: QueryEntityArgs) => {
-	return await Effect.runPromise(
+export const propertyRelationValueTypes = (args: QueryEntityArgs) => {
+	return Effect.runPromise(
 		PropertyResolvers.getPropertyRelationValueTypes(args.id).pipe(
 			Effect.withSpan("getPropertyRelationValueTypes"),
 			Effect.annotateSpans({entityId: args.id}),
@@ -165,8 +170,8 @@ export const propertyRelationValueTypes = async (args: QueryEntityArgs) => {
 	)
 }
 
-export const propertyRenderableType = async (args: QueryEntityArgs) => {
-	return await Effect.runPromise(
+export const propertyRenderableType = (args: QueryEntityArgs) => {
+	return Effect.runPromise(
 		PropertyResolvers.getPropertyRenderableType(args.id).pipe(
 			Effect.withSpan("getPropertyRenderableType"),
 			Effect.annotateSpans({entityId: args.id}),
@@ -175,14 +180,14 @@ export const propertyRenderableType = async (args: QueryEntityArgs) => {
 	)
 }
 
-export const types = async (args: QueryTypesArgs) => {
-	return await Effect.runPromise(
+export const types = (args: QueryTypesArgs) => {
+	return Effect.runPromise(
 		TypeResolvers.getTypes(args).pipe(Effect.withSpan("getTypes"), Effect.annotateSpans({...args}), provideDeps),
 	)
 }
 
-export const blocks = async (args: QueryEntityArgs) => {
-	return await Effect.runPromise(
+export const blocks = (args: QueryEntityArgs) => {
+	return Effect.runPromise(
 		EntityResolvers.getBlocks(args.id).pipe(
 			Effect.withSpan("getBlocks"),
 			Effect.annotateSpans({entityId: args.id}),
@@ -191,14 +196,14 @@ export const blocks = async (args: QueryEntityArgs) => {
 	)
 }
 
-export const search = async (args: QuerySearchArgs) => {
-	return await Effect.runPromise(
+export const search = (args: QuerySearchArgs) => {
+	return Effect.runPromise(
 		SearchResolvers.search(args).pipe(Effect.withSpan("search"), Effect.annotateSpans({...args}), provideDeps),
 	)
 }
 
-export const properties = async (args: QueryPropertiesArgs) => {
-	return await Effect.runPromise(
+export const properties = (args: QueryPropertiesArgs) => {
+	return Effect.runPromise(
 		PropertyResolvers.getProperties(args).pipe(
 			Effect.withSpan("getProperties"),
 			Effect.annotateSpans({...args}),
@@ -207,20 +212,20 @@ export const properties = async (args: QueryPropertiesArgs) => {
 	)
 }
 
-export const spaces = async (args: QuerySpacesArgs) => {
-	return await Effect.runPromise(
+export const spaces = (args: QuerySpacesArgs) => {
+	return Effect.runPromise(
 		SpaceResolvers.getSpaces(args).pipe(Effect.withSpan("getSpaces"), Effect.annotateSpans({...args}), provideDeps),
 	)
 }
 
-export const space = async (id: string) => {
-	return await Effect.runPromise(
+export const space = (id: string) => {
+	return Effect.runPromise(
 		SpaceResolvers.getSpace(id).pipe(Effect.withSpan("getSpace"), Effect.annotateSpans({spaceId: id}), provideDeps),
 	)
 }
 
-export const spaceEntity = async (id: string) => {
-	return await Effect.runPromise(
+export const spaceEntity = (id: string) => {
+	return Effect.runPromise(
 		SpaceResolvers.getSpaceEntity(id).pipe(
 			Effect.withSpan("getSpaceEntity"),
 			Effect.annotateSpans({spaceId: id}),
@@ -229,6 +234,6 @@ export const spaceEntity = async (id: string) => {
 	)
 }
 
-export const meta = async () => {
-	return await Effect.runPromise(MetaResolvers.getMeta().pipe(Effect.withSpan("Query.meta"), provideDeps))
+export const meta = () => {
+	return Effect.runPromise(MetaResolvers.getMeta().pipe(Effect.withSpan("Query.meta"), provideDeps))
 }
