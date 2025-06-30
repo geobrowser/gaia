@@ -34,17 +34,20 @@ const resolvers: GeneratedResolvers = {
 		meta: async () => {
 			return Resolvers.meta()
 		},
-		entities: async (_, args) => {
+		entities: async (_, args, context: GraphQLContext) => {
+			context.spaceId = args.spaceId
 			return Resolvers.entities(args)
 		},
-		entity: async (_, args) => {
+		entity: async (_, args, context: GraphQLContext) => {
+			context.spaceId = args.spaceId
 			return Resolvers.entity(args)
 		},
 		types: async (_, args, context: GraphQLContext) => {
 			context.spaceId = args.spaceId
 			return Resolvers.types(args)
 		},
-		search: (_, args: QuerySearchArgs) => {
+		search: (_, args: QuerySearchArgs, context: GraphQLContext) => {
+			context.spaceId = args.spaceId
 			return Resolvers.search(args)
 		},
 		properties: (_, args) => {
@@ -82,19 +85,22 @@ const resolvers: GeneratedResolvers = {
 		spaces: (parent: {id: string}) => {
 			return Resolvers.entitySpaces({id: parent.id})
 		},
-		values: (parent: {id: string}, args: EntityValuesArgs) => {
-			return Resolvers.values({id: parent.id, spaceId: args.spaceId})
+		values: (parent: {id: string}, args: EntityValuesArgs, context: GraphQLContext) => {
+			const spaceId = args.spaceId ?? context.spaceId
+			return Resolvers.values({id: parent.id, spaceId})
 		},
-		relations: (parent: {id: string}, args: EntityRelationsArgs) => {
+		relations: (parent: {id: string}, args: EntityRelationsArgs, context: GraphQLContext) => {
+			const spaceId = args.spaceId ?? context.spaceId
 			return Resolvers.entityRelations({
 				id: parent.id,
-				spaceId: args.spaceId,
+				spaceId,
 			})
 		},
-		backlinks: (parent: {id: string}, args: EntityRelationsArgs) => {
+		backlinks: (parent: {id: string}, args: EntityRelationsArgs, context: GraphQLContext) => {
+			const spaceId = args.spaceId ?? context.spaceId
 			return Resolvers.entityBacklinks({
 				id: parent.id,
-				spaceId: args.spaceId,
+				spaceId: spaceId,
 			})
 		},
 	},
@@ -170,7 +176,6 @@ const schema = makeExecutableSchema({
 export const graphqlServer = createYoga({
 	schema,
 	batching: true,
-	context: (): GraphQLContext => ({}),
 	graphqlEndpoint: "/graphql",
 	fetchAPI: {Response, Request},
 })
