@@ -1,21 +1,18 @@
-import {SystemIds} from "@graphprotocol/grc-20"
 import {makeExecutableSchema} from "@graphql-tools/schema"
 import {file} from "bun"
-import DataLoader from "dataloader"
 import {Effect, Layer} from "effect"
 import {createYoga} from "graphql-yoga"
 import type {
 	EntityRelationsArgs,
 	EntityValuesArgs,
 	Resolvers as GeneratedResolvers,
-	InputMaybe,
 	QuerySearchArgs,
 	QuerySpaceArgs,
 	QuerySpacesArgs,
 } from "../generated/graphql"
 import {Environment, make as makeEnvironment} from "../services/environment"
 import {Batching, make as makeBatching} from "../services/storage/dataloaders"
-import {db, make as makeStorage, Storage} from "../services/storage/storage"
+import {make as makeStorage, Storage} from "../services/storage/storage"
 import * as MembershipResolvers from "./resolvers/membership"
 import * as Resolvers from "./resolvers/root"
 
@@ -25,10 +22,6 @@ const BatchingLayer = Layer.effect(Batching, makeBatching).pipe(Layer.provide(St
 const layers = Layer.mergeAll(EnvironmentLayer, StorageLayer, BatchingLayer)
 const provideDeps = Effect.provide(layers)
 
-interface GraphQLContext {
-	spaceId?: InputMaybe<string>
-}
-
 const schemaFile = await file("./schema.graphql").text()
 
 const resolvers: GeneratedResolvers = {
@@ -36,20 +29,16 @@ const resolvers: GeneratedResolvers = {
 		meta: async () => {
 			return Resolvers.meta()
 		},
-		entities: async (_, args, context: GraphQLContext) => {
-			context.spaceId = args.spaceId
+		entities: async (_, args) => {
 			return Resolvers.entities(args)
 		},
-		entity: async (_, args, context: GraphQLContext) => {
-			context.spaceId = args.spaceId
+		entity: async (_, args) => {
 			return Resolvers.entity(args)
 		},
-		types: async (_, args, context: GraphQLContext) => {
-			context.spaceId = args.spaceId
+		types: async (_, args) => {
 			return Resolvers.types(args)
 		},
-		search: (_, args: QuerySearchArgs, context: GraphQLContext) => {
-			context.spaceId = args.spaceId
+		search: (_, args: QuerySearchArgs) => {
 			return Resolvers.search(args)
 		},
 		properties: (_, args) => {
@@ -87,17 +76,20 @@ const resolvers: GeneratedResolvers = {
 		spaces: (parent: {id: string}) => {
 			return Resolvers.entitySpaces({id: parent.id})
 		},
-		values: (parent: {id: string}, args: EntityValuesArgs, context: GraphQLContext) => {
-			const spaceId = args.spaceId ?? context.spaceId
-			return Resolvers.values({id: parent.id, spaceId})
+		values: (parent: {id: string}, args: EntityValuesArgs) => {
+			return Resolvers.values({id: parent.id, spaceId: args.spaceId})
 		},
-		relations: (parent: {id: string}, args: EntityRelationsArgs, context: GraphQLContext) => {
-			const spaceId = args.spaceId ?? context.spaceId
-			return Resolvers.entityRelations({id: parent.id, spaceId})
+		relations: (parent: {id: string}, args: EntityRelationsArgs) => {
+			return Resolvers.entityRelations({
+				id: parent.id,
+				spaceId: args.spaceId,
+			})
 		},
-		backlinks: (parent: {id: string}, args: EntityRelationsArgs, context: GraphQLContext) => {
-			const spaceId = args.spaceId ?? context.spaceId
-			return Resolvers.entityBacklinks({id: parent.id, spaceId})
+		backlinks: (parent: {id: string}, args: EntityRelationsArgs) => {
+			return Resolvers.entityBacklinks({
+				id: parent.id,
+				spaceId: args.spaceId,
+			})
 		},
 	},
 	Type: {
@@ -110,7 +102,7 @@ const resolvers: GeneratedResolvers = {
 		entity: (parent: {id: string}) => {
 			return Resolvers.entity({id: parent.id})
 		},
-		properties: (parent: {id: string}, _: unknown, context: GraphQLContext) => {
+		properties: (parent: {id: string}, _: unknown) => {
 			return Resolvers.propertiesForType(parent.id, {
 				spaceId: context.spaceId,
 			})
@@ -172,7 +164,6 @@ const schema = makeExecutableSchema({
 export const graphqlServer = createYoga({
 	schema,
 	batching: true,
-	context: (): GraphQLContext => ({}),
 	graphqlEndpoint: "/graphql",
 	fetchAPI: {Response, Request},
 })

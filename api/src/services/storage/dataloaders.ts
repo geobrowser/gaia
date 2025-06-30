@@ -98,8 +98,6 @@ interface BatchingShape {
 export class Batching extends Context.Tag("Batching")<Batching, BatchingShape>() {}
 
 export const make = Effect.gen(function* () {
-	const storage = yield* Storage
-
 	return Batching.of({
 		loadEntity: (id: string) =>
 			Effect.tryPromise({
