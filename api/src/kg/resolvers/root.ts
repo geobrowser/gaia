@@ -1,14 +1,15 @@
 import {Effect, Layer} from "effect"
 import {Batching, make as makeBatching} from "~/src/services/storage/dataloaders"
 import {NodeSdkLive} from "~/src/services/telemetry"
-import type {
-	QueryEntitiesArgs,
-	QueryEntityArgs,
-	QueryPropertiesArgs,
-	QueryRelationsArgs,
-	QuerySearchArgs,
-	QuerySpacesArgs,
-	QueryTypesArgs,
+import {
+	DataType,
+	type QueryEntitiesArgs,
+	type QueryEntityArgs,
+	type QueryPropertiesArgs,
+	type QueryRelationsArgs,
+	type QuerySearchArgs,
+	type QuerySpacesArgs,
+	type QueryTypesArgs,
 } from "../../generated/graphql"
 import {Environment, make as makeEnvironment} from "../../services/environment"
 import {make as makeStorage, Storage} from "../../services/storage/storage"
@@ -155,7 +156,12 @@ export const propertiesForType = (typeId: string, args: QueryTypesArgs) => {
 	)
 }
 
-export const propertyRelationValueTypes = (args: QueryEntityArgs) => {
+export const propertyRelationValueTypes = (args: QueryEntityArgs & {dataType: DataType}) => {
+	// Only relations can have a relation value type
+	if (args.dataType !== DataType.Relation) {
+		return []
+	}
+
 	return Effect.runPromise(
 		PropertyResolvers.getPropertyRelationValueTypes(args.id).pipe(
 			Effect.withSpan("getPropertyRelationValueTypes"),

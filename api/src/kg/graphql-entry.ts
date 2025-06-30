@@ -3,6 +3,7 @@ import {file} from "bun"
 import {Effect, Layer} from "effect"
 import {createYoga} from "graphql-yoga"
 import type {
+	DataType,
 	EntityRelationsArgs,
 	EntityValuesArgs,
 	Resolvers as GeneratedResolvers,
@@ -134,8 +135,11 @@ const resolvers: GeneratedResolvers = {
 		entity: (parent: {id: string}) => {
 			return Resolvers.entity({id: parent.id})
 		},
-		relationValueTypes: (parent: {id: string}) => {
-			return Resolvers.propertyRelationValueTypes({id: parent.id})
+		relationValueTypes: (parent: {id: string; dataType: DataType}) => {
+			return Resolvers.propertyRelationValueTypes({
+				id: parent.id,
+				dataType: parent.dataType,
+			})
 		},
 		renderableType: (parent: {id: string}) => {
 			return Resolvers.propertyRenderableType({id: parent.id})
