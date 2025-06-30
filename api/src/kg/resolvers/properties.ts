@@ -57,9 +57,12 @@ export function getProperty(propertyId: string) {
 			return null
 		}
 
+		const renderableType = yield* getPropertyRenderableType(propertyId)
+
 		return {
 			id: propertyId,
 			dataType: getTextAsDataType(property.type),
+			renderableType,
 		}
 	})
 }
@@ -105,7 +108,18 @@ export function getPropertiesForType(typeId: string, args: QueryTypesArgs) {
 		const systemPropsToAdd = systemProperties.filter((p) => !customPropertyIds.has(p.id))
 
 		// Combine system properties with custom properties
-		return [...systemPropsToAdd, ...customProperties]
+		const allProperties = [...systemPropsToAdd, ...customProperties]
+
+		// Apply pagination
+		const limit = args.limit ?? 100
+		const offset = args.offset ?? 0
+
+		// Handle limit = 0 case (should return empty array)
+		if (limit === 0) {
+			return []
+		}
+
+		return allProperties.slice(offset, offset + limit)
 	})
 }
 

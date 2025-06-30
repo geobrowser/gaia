@@ -1,9 +1,10 @@
 import {SystemIds} from "@graphprotocol/grc-20"
 import DataLoader from "dataloader"
 import {Context, Data, Effect} from "effect"
+import {LRUMap} from "lru_map"
 import type {RelationFilter, ValueFilter} from "~/src/generated/graphql"
 import {NodeSdkLive} from "../telemetry"
-import {db, Storage} from "./storage"
+import {db} from "./storage"
 
 export class BatchingError extends Data.TaggedError("BatchingError")<{
 	cause?: unknown
@@ -172,72 +173,87 @@ export const make = Effect.gen(function* () {
 	})
 })
 
-const entitiesLoader = new DataLoader((ids: readonly string[]) => {
-	const batch = async () => {
-		const entities = await db.query.entities.findMany({
-			where: (entities, {inArray}) => inArray(entities.id, ids),
-		})
+const entitiesLoader = new DataLoader(
+	(ids: readonly string[]) => {
+		const batch = async () => {
+			const entities = await db.query.entities.findMany({
+				where: (entities, {inArray}) => inArray(entities.id, ids),
+			})
 
-		const entityMap = new Map(entities.map((e) => [e.id, e]))
-		return ids.map((id) => entityMap.get(id) ?? null)
-	}
+			const entityMap = new Map(entities.map((e) => [e.id, e]))
+			return ids.map((id) => entityMap.get(id) ?? null)
+		}
 
-	return Effect.runPromise(
-		Effect.promise(batch).pipe(
-			Effect.withSpan("entitiesLoader"),
-			Effect.annotateSpans({ids, batchLength: ids.length}),
-			Effect.provide(NodeSdkLive),
-		),
-	)
-})
+		return Effect.runPromise(
+			Effect.promise(batch).pipe(
+				Effect.withSpan("entitiesLoader"),
+				Effect.annotateSpans({ids, batchLength: ids.length}),
+				Effect.provide(NodeSdkLive),
+			),
+		)
+	},
+	{
+		cacheMap: new LRUMap(10000),
+	},
+)
 
-const entityNamesLoader = new DataLoader((ids: readonly string[]) => {
-	const batch = async () => {
-		const values = await db.query.values.findMany({
-			where: (values, {inArray, and, eq}) =>
-				and(inArray(values.entityId, ids), eq(values.propertyId, SystemIds.NAME_PROPERTY)),
-			columns: {
-				entityId: true,
-				value: true,
-			},
-		})
+const entityNamesLoader = new DataLoader(
+	(ids: readonly string[]) => {
+		const batch = async () => {
+			const values = await db.query.values.findMany({
+				where: (values, {inArray, and, eq}) =>
+					and(inArray(values.entityId, ids), eq(values.propertyId, SystemIds.NAME_PROPERTY)),
+				columns: {
+					entityId: true,
+					value: true,
+				},
+			})
 
-		const valueMap = new Map(values.map((v) => [v.entityId, v.value]))
-		return ids.map((id) => valueMap.get(id) || null)
-	}
+			const valueMap = new Map(values.map((v) => [v.entityId, v.value]))
+			return ids.map((id) => valueMap.get(id) || null)
+		}
 
-	return Effect.runPromise(
-		Effect.promise(batch).pipe(
-			Effect.withSpan("entityNamesLoader"),
-			Effect.annotateSpans({ids, batchLength: ids.length}),
-			Effect.provide(NodeSdkLive),
-		),
-	)
-})
+		return Effect.runPromise(
+			Effect.promise(batch).pipe(
+				Effect.withSpan("entityNamesLoader"),
+				Effect.annotateSpans({ids, batchLength: ids.length}),
+				Effect.provide(NodeSdkLive),
+			),
+		)
+	},
+	{
+		cacheMap: new LRUMap(10000),
+	},
+)
 
-const entityDescriptionsLoader = new DataLoader((ids: readonly string[]) => {
-	const batch = async () => {
-		const values = await db.query.values.findMany({
-			where: (values, {inArray, and, eq}) =>
-				and(inArray(values.entityId, ids), eq(values.propertyId, SystemIds.DESCRIPTION_PROPERTY)),
-			columns: {
-				entityId: true,
-				value: true,
-			},
-		})
+const entityDescriptionsLoader = new DataLoader(
+	(ids: readonly string[]) => {
+		const batch = async () => {
+			const values = await db.query.values.findMany({
+				where: (values, {inArray, and, eq}) =>
+					and(inArray(values.entityId, ids), eq(values.propertyId, SystemIds.DESCRIPTION_PROPERTY)),
+				columns: {
+					entityId: true,
+					value: true,
+				},
+			})
 
-		const valueMap = new Map(values.map((v) => [v.entityId, v.value]))
-		return ids.map((id) => valueMap.get(id) || null)
-	}
+			const valueMap = new Map(values.map((v) => [v.entityId, v.value]))
+			return ids.map((id) => valueMap.get(id) || null)
+		}
 
-	return Effect.runPromise(
-		Effect.promise(batch).pipe(
-			Effect.withSpan("entityDescriptionsLoader"),
-			Effect.annotateSpans({ids, batchLength: ids.length}),
-			Effect.provide(NodeSdkLive),
-		),
-	)
-})
+		return Effect.runPromise(
+			Effect.promise(batch).pipe(
+				Effect.withSpan("entityDescriptionsLoader"),
+				Effect.annotateSpans({ids, batchLength: ids.length}),
+				Effect.provide(NodeSdkLive),
+			),
+		)
+	},
+	{
+		cacheMap: new LRUMap(10000),
+	},
+)
 
 const entityValuesLoader = new DataLoader(
 	(
@@ -286,6 +302,7 @@ const entityValuesLoader = new DataLoader(
 		)
 	},
 	{
+		cacheMap: new LRUMap(1000),
 		cacheKeyFn: (key) => `${key.entityId}:${key.spaceId || "null"}:${JSON.stringify(key.filter) || "null"}`,
 	},
 )
@@ -349,29 +366,35 @@ const entityRelationsLoader = new DataLoader(
 		)
 	},
 	{
+		cacheMap: new LRUMap(1000),
 		cacheKeyFn: (key) =>
 			`relations:${key.entityId}:${key.spaceId || "null"}:${JSON.stringify(key.filter) || "null"}`,
 	},
 )
 
-const propertiesLoader = new DataLoader((ids: readonly string[]) => {
-	const batch = async () => {
-		const properties = await db.query.properties.findMany({
-			where: (properties, {inArray}) => inArray(properties.id, ids),
-		})
+const propertiesLoader = new DataLoader(
+	(ids: readonly string[]) => {
+		const batch = async () => {
+			const properties = await db.query.properties.findMany({
+				where: (properties, {inArray}) => inArray(properties.id, ids),
+			})
 
-		const propertyMap = new Map(properties.map((p) => [p.id, p]))
-		return ids.map((id) => propertyMap.get(id) || null)
-	}
+			const propertyMap = new Map(properties.map((p) => [p.id, p]))
+			return ids.map((id) => propertyMap.get(id) || null)
+		}
 
-	return Effect.runPromise(
-		Effect.promise(batch).pipe(
-			Effect.withSpan("propertiesLoader"),
-			Effect.annotateSpans({ids, batchLength: ids.length}),
-			Effect.provide(NodeSdkLive),
-		),
-	)
-})
+		return Effect.runPromise(
+			Effect.promise(batch).pipe(
+				Effect.withSpan("propertiesLoader"),
+				Effect.annotateSpans({ids, batchLength: ids.length}),
+				Effect.provide(NodeSdkLive),
+			),
+		)
+	},
+	{
+		cacheMap: new LRUMap(1000),
+	},
+)
 
 const entityBacklinksLoader = new DataLoader(
 	(
@@ -432,6 +455,7 @@ const entityBacklinksLoader = new DataLoader(
 		)
 	},
 	{
+		cacheMap: new LRUMap(1000),
 		cacheKeyFn: (key) =>
 			`backlinks:${key.entityId}:${key.spaceId || "null"}:${JSON.stringify(key.filter) || "null"}`,
 	},
