@@ -3,7 +3,7 @@ import {and, eq, inArray, sql} from "drizzle-orm"
 import {Effect} from "effect"
 import {DataType, type QueryPropertiesArgs, type QueryTypesArgs} from "../../generated/graphql"
 import {Batching} from "../../services/storage/dataloaders"
-import {properties, relations} from "../../services/storage/schema"
+import {properties} from "../../services/storage/schema"
 import {Storage} from "../../services/storage/storage"
 
 // Constants for renderable type relations
@@ -42,7 +42,6 @@ export function getProperties(args: QueryPropertiesArgs) {
 			return result.map((property) => ({
 				id: property.id,
 				dataType: getTextAsDataType(property.type),
-				renderableType: null, // Will be resolved by field resolver
 			}))
 		})
 	})
@@ -61,70 +60,65 @@ export function getProperty(propertyId: string) {
 		return {
 			id: propertyId,
 			dataType: getTextAsDataType(property.type),
-			renderableType: null, // Will be resolved by field resolver
 		}
 	})
 }
 
+// Always include Name and Description properties first
+const systemProperties = [
+	{
+		id: SystemIds.NAME_PROPERTY,
+		dataType: DataType.Text,
+	},
+	{
+		id: SystemIds.DESCRIPTION_PROPERTY,
+		dataType: DataType.Text,
+	},
+]
+
+const systemPropertyIds = new Set<string>([SystemIds.NAME_PROPERTY, SystemIds.DESCRIPTION_PROPERTY])
+
 export function getPropertiesForType(typeId: string, args: QueryTypesArgs) {
 	return Effect.gen(function* () {
-		const db = yield* Storage
+		const batching = yield* Batching
 
-		// Always include Name and Description properties first
-		const systemProperties = [
-			{
-				id: SystemIds.NAME_PROPERTY,
-				dataType: DataType.Text,
-				renderableType: null,
-			},
-			{
-				id: SystemIds.DESCRIPTION_PROPERTY,
-				dataType: DataType.Text,
-				renderableType: null,
-			},
-		]
+		// Load entity relations and filter for properties
+		const entityRelations = yield* batching.loadEntityRelations(typeId, args.spaceId)
+		const propertyRelations = entityRelations.filter((relation) => relation.typeId === SystemIds.PROPERTIES)
 
-		// Query existing custom properties with space filtering (no pagination here)
-		const where = [eq(relations.fromEntityId, typeId), eq(relations.typeId, SystemIds.PROPERTIES)]
+		// Load all property details in parallel
+		const propertyDetails = yield* Effect.forEach(
+			propertyRelations,
+			(relation) => batching.loadProperty(relation.toEntityId),
+			{concurrency: "unbounded"},
+		).pipe(Effect.withSpan("getPropertiesForType.propertyDetails"))
 
-		if (args.spaceId) {
-			where.push(eq(relations.spaceId, args.spaceId))
-		}
-
-		const result = yield* db.use(async (client) => {
-			return await client
-				.select({
-					propertyId: relations.toEntityId,
-					propertyType: properties.type,
-				})
-				.from(relations)
-				.innerJoin(properties, eq(relations.toEntityId, properties.id))
-				.where(and(...where))
-		})
-
-		const customProperties = result.map((r) => ({
-			id: r.propertyId,
-			dataType: getTextAsDataType(r.propertyType),
-			renderableType: null, // Will be resolved by field resolver
-		}))
+		const customProperties = propertyDetails
+			.filter((property) => property !== null)
+			.map((property) => ({
+				id: property.id,
+				dataType: getTextAsDataType(property.type),
+			}))
 
 		// Filter out system properties if they're already in custom properties to avoid duplicates
 		const customPropertyIds = new Set(customProperties.map((p) => p.id))
 		const systemPropsToAdd = systemProperties.filter((p) => !customPropertyIds.has(p.id))
 
 		// Combine system properties with custom properties
-		const allProperties = [...systemPropsToAdd, ...customProperties]
-
-		// Apply pagination to the combined result
-		const limit = Number(args.limit ?? 100)
-		const offset = Number(args.offset ?? 0)
-
-		return allProperties.slice(offset, offset + limit)
+		return [...systemPropsToAdd, ...customProperties]
 	})
 }
 
 export function getPropertyRelationValueTypes(propertyId: string) {
 	return Effect.gen(function* () {
+		// Every property automatically has name and description added, which
+		// creates a lot of unnecessary work for nested type queries which
+		// also read property value types. Since we know name and description
+		// are TEXT data types, we can just return early.
+		if (systemPropertyIds.has(propertyId)) {
+			return []
+		}
+
 		const batching = yield* Batching
 
 		const relations = yield* batching.loadEntityRelations(propertyId)
@@ -139,6 +133,14 @@ export function getPropertyRelationValueTypes(propertyId: string) {
 
 export function getPropertyRenderableType(propertyId: string) {
 	return Effect.gen(function* () {
+		// Every property automatically has name and description added, which
+		// creates a lot of unnecessary work for nested type queries which
+		// also read property value types. Since we know name and description
+		// are TEXT data types, we can just return early.
+		if (systemPropertyIds.has(propertyId)) {
+			return null
+		}
+
 		const batching = yield* Batching
 
 		const relations = yield* batching.loadEntityRelations(propertyId)
