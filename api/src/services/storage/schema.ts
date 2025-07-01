@@ -1,5 +1,5 @@
 import {relations as drizzleRelations, type InferSelectModel} from "drizzle-orm"
-import {boolean, index, jsonb, pgEnum, pgTable, primaryKey, serial, text, uuid} from "drizzle-orm/pg-core"
+import {boolean, foreignKey, index, jsonb, pgEnum, pgTable, primaryKey, references, serial, text, uuid} from "drizzle-orm/pg-core"
 
 export const ipfsCache = pgTable("ipfs_cache", {
 	id: serial(),
@@ -13,7 +13,7 @@ export const ipfsCache = pgTable("ipfs_cache", {
 	 */
 	isErrored: boolean().notNull().default(false),
 	block: text().notNull(),
-	space: uuid().notNull(),
+	space: uuid().notNull()
 })
 
 /**
@@ -61,7 +61,7 @@ export const dataTypesEnum = pgEnum("dataTypes", ["Text", "Number", "Checkbox", 
 export const properties = pgTable(
 	"properties",
 	{
-		id: uuid().primaryKey(),
+		id: uuid().primaryKey().references(() => entities.id),
 		type: dataTypesEnum().notNull(),
 	},
 	(table) => [
@@ -74,9 +74,9 @@ export const values = pgTable(
 	"values",
 	{
 		id: text().primaryKey(),
-		propertyId: uuid().notNull(),
-		entityId: uuid().notNull(),
-		spaceId: uuid().notNull(),
+		propertyId: uuid().notNull().references(() => properties.id),
+		entityId: uuid().notNull().references(() => entities.id),
+		spaceId: uuid().notNull().references(() => spaces.id),
 		value: text().notNull(),
 		language: text(),
 		unit: text(),
@@ -109,16 +109,16 @@ export const relations = pgTable(
 	"relations",
 	{
 		id: uuid().primaryKey(),
-		entityId: uuid().notNull(),
-		typeId: uuid().notNull(),
-		fromEntityId: uuid().notNull(),
-		fromSpaceId: uuid(),
+		entityId: uuid().notNull().references(() => entities.id),
+		typeId: uuid().notNull().references(() => properties.id),
+		fromEntityId: uuid().notNull().references(() => entities.id),
+		fromSpaceId: uuid().references(() => spaces.id),
 		fromVersionId: uuid(),
-		toEntityId: uuid().notNull(),
-		toSpaceId: uuid(),
+		toEntityId: uuid().notNull().references(() => entities.id),
+		toSpaceId: uuid().references(() => spaces.id),
 		toVersionId: uuid(),
 		position: text(),
-		spaceId: uuid().notNull(),
+		spaceId: uuid().notNull().references(() => spaces.id),
 		verified: boolean(),
 	},
 	(table) => [
@@ -145,7 +145,7 @@ export const members = pgTable(
 	"members",
 	{
 		address: text().notNull(),
-		spaceId: uuid().notNull(),
+		spaceId: uuid().notNull().references(() => spaces.id),
 	},
 	(table) => [primaryKey({columns: [table.address, table.spaceId]})],
 )
@@ -154,7 +154,7 @@ export const editors = pgTable(
 	"editors",
 	{
 		address: text().notNull(),
-		spaceId: uuid().notNull(),
+		spaceId: uuid().notNull().references(() => spaces.id),
 	},
 	(table) => [primaryKey({columns: [table.address, table.spaceId]})],
 )

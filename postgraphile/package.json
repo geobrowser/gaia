@@ -1,0 +1,20 @@
+{
+  "name": "postgraphile",
+  "version": "1.0.0",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "Byron Guina",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "@graphprotocol/grc-20": "^0.21.3",
+    "@types/express": "^5.0.3",
+    "express": "^5.1.0",
+    "graphile-utils": "^4.14.1",
+    "pg": "^8.16.3",
+    "postgraphile": "^4.14.1",
+    "postgraphile-plugin-connection-filter": "^2.3.0"
+  }
+}

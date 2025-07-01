@@ -15,6 +15,20 @@
       "when": 1751047300828,
       "tag": "0001_whole_psynapse",
       "breakpoints": true
+    },
+    {
+      "idx": 2,
+      "version": "7",
+      "when": 1751328537166,
+      "tag": "0002_unusual_shen",
+      "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1751330070458,
+      "tag": "0003_rainy_darkhawk",
+      "breakpoints": true
     }
   ]
 }
