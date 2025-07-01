@@ -63,10 +63,12 @@ export function getProperty(propertyId: string, context: GraphQLContext) {
 			return null
 		}
 
+		const renderableTypes = yield* getPropertyRenderableType(propertyId, context)
+
 		return {
 			id: propertyId,
 			dataType: getTextAsDataType(property.type),
-			renderableType: null,
+			renderableType: renderableTypes,
 		}
 	})
 }

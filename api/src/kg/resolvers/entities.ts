@@ -91,7 +91,7 @@ export function getEntityName(id: string, context: GraphQLContext) {
 
 export function getEntityDescription(id: string, context: GraphQLContext) {
 	return Effect.gen(function* () {
-		const description = Effect.tryPromise({
+		const description = yield* Effect.tryPromise({
 			try: () => context.entityDescriptionsLoader.load(id),
 			catch: (error) =>
 				new BatchingError({
