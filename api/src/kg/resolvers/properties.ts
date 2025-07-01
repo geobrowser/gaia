@@ -1,6 +1,7 @@
 import {SystemIds} from "@graphprotocol/grc-20"
 import {and, eq, inArray, sql} from "drizzle-orm"
 import {Effect} from "effect"
+import {BatchingError, type GraphQLContext} from "~/src/types"
 import {DataType, type QueryPropertiesArgs, type QueryTypesArgs} from "../../generated/graphql"
 import {Batching} from "../../services/storage/dataloaders"
 import {properties} from "../../services/storage/schema"
@@ -47,22 +48,25 @@ export function getProperties(args: QueryPropertiesArgs) {
 	})
 }
 
-export function getProperty(propertyId: string) {
+export function getProperty(propertyId: string, context: GraphQLContext) {
 	return Effect.gen(function* () {
-		const batching = yield* Batching
-
-		const property = yield* batching.loadProperty(propertyId)
+		const property = yield* Effect.tryPromise({
+			try: () => context.propertiesLoader.load(propertyId),
+			catch: (error) =>
+				new BatchingError({
+					cause: error,
+					message: `Failed to batch load property ${propertyId}: ${String(error)}`,
+				}),
+		}).pipe(Effect.annotateSpans({propertyId}), Effect.withSpan("getProperty.loadProperty"))
 
 		if (!property) {
 			return null
 		}
 
-		const renderableType = yield* getPropertyRenderableType(propertyId)
-
 		return {
 			id: propertyId,
 			dataType: getTextAsDataType(property.type),
-			renderableType,
+			renderableType: null,
 		}
 	})
 }
@@ -81,18 +85,42 @@ const systemProperties = [
 
 const systemPropertyIds = new Set<string>([SystemIds.NAME_PROPERTY, SystemIds.DESCRIPTION_PROPERTY])
 
-export function getPropertiesForType(typeId: string, args: QueryTypesArgs) {
+export function getPropertiesForType(typeId: string, args: QueryTypesArgs, context: GraphQLContext) {
 	return Effect.gen(function* () {
-		const batching = yield* Batching
-
 		// Load entity relations and filter for properties
-		const entityRelations = yield* batching.loadEntityRelations(typeId, args.spaceId)
+		const entityRelations = yield* Effect.tryPromise({
+			try: () =>
+				context.entityRelationsLoader.load({
+					entityId: typeId,
+					spaceId: args.spaceId,
+				}),
+			catch: (error) =>
+				new BatchingError({
+					cause: error,
+					message: `Failed to batch load entity relations ${typeId}: ${String(error)}`,
+				}),
+		}).pipe(
+			Effect.annotateSpans({entityId: typeId, spaceId: args.spaceId}),
+			Effect.withSpan("getPropertiesForType.loadEntityRelations"),
+		)
+
 		const propertyRelations = entityRelations.filter((relation) => relation.typeId === SystemIds.PROPERTIES)
 
 		// Load all property details in parallel
 		const propertyDetails = yield* Effect.forEach(
 			propertyRelations,
-			(relation) => batching.loadProperty(relation.toEntityId),
+			(relation) =>
+				Effect.tryPromise({
+					try: () => context.propertiesLoader.load(relation.toEntityId),
+					catch: (error) =>
+						new BatchingError({
+							cause: error,
+							message: `Failed to batch load property ${relation.toEntityId}: ${String(error)}`,
+						}),
+				}).pipe(
+					Effect.annotateSpans({propertyId: relation.toEntityId}),
+					Effect.withSpan("getPropertiesForType.loadProperty"),
+				),
 			{concurrency: "unbounded"},
 		).pipe(Effect.withSpan("getPropertiesForType.propertyDetails"))
 
@@ -123,7 +151,7 @@ export function getPropertiesForType(typeId: string, args: QueryTypesArgs) {
 	})
 }
 
-export function getPropertyRelationValueTypes(propertyId: string) {
+export function getPropertyRelationValueTypes(propertyId: string, context: GraphQLContext) {
 	return Effect.gen(function* () {
 		// Every property automatically has name and description added, which
 		// creates a lot of unnecessary work for nested type queries which
@@ -133,9 +161,20 @@ export function getPropertyRelationValueTypes(propertyId: string) {
 			return []
 		}
 
-		const batching = yield* Batching
-
-		const relations = yield* batching.loadEntityRelations(propertyId)
+		const relations = yield* Effect.tryPromise({
+			try: () =>
+				context.entityRelationsLoader.load({
+					entityId: propertyId,
+				}),
+			catch: (error) =>
+				new BatchingError({
+					cause: error,
+					message: `Failed to batch load entity relations ${propertyId}: ${String(error)}`,
+				}),
+		}).pipe(
+			Effect.annotateSpans({entityId: propertyId}),
+			Effect.withSpan("getPropertyRelationValueTypes.loadEntityRelations"),
+		)
 
 		const relationValueTypes = relations
 			.filter((relation) => relation.typeId === SystemIds.RELATION_VALUE_RELATIONSHIP_TYPE)
@@ -145,7 +184,7 @@ export function getPropertyRelationValueTypes(propertyId: string) {
 	})
 }
 
-export function getPropertyRenderableType(propertyId: string) {
+export function getPropertyRenderableType(propertyId: string, context: GraphQLContext) {
 	return Effect.gen(function* () {
 		// Every property automatically has name and description added, which
 		// creates a lot of unnecessary work for nested type queries which
@@ -155,9 +194,20 @@ export function getPropertyRenderableType(propertyId: string) {
 			return null
 		}
 
-		const batching = yield* Batching
-
-		const relations = yield* batching.loadEntityRelations(propertyId)
+		const relations = yield* Effect.tryPromise({
+			try: () =>
+				context.entityRelationsLoader.load({
+					entityId: propertyId,
+				}),
+			catch: (error) =>
+				new BatchingError({
+					cause: error,
+					message: `Failed to batch load entity relations ${propertyId}: ${String(error)}`,
+				}),
+		}).pipe(
+			Effect.annotateSpans({entityId: propertyId}),
+			Effect.withSpan("getPropertyRenderableType.loadEntityRelations"),
+		)
 
 		const renderableTypeRelation = relations.find((relation) => relation.typeId === RENDERABLE_TYPE_RELATION_ID)
 
