@@ -90,7 +90,7 @@ for (const deploy of deployables) {
 // 56013
 // Root 2df11968-9d1c-489f-91b7-bdc88b472161
 // Crypto b2565802-3118-47be-91f2-e59170735bac
-// Crypto news dabe3133-4334-47a0-85c5-f965a3a94d4c
+// Crypto events dabe3133-4334-47a0-85c5-f965a3a94d4c
 // Regions aea9f05a-2797-4e7e-aeae-5059ada3b56b
 // Crypto news 27af9116-ddb6-4baa-b4f0-c54f0774d346
 // Industries bf44e948-07e0-4297-a2e7-371c22670f98

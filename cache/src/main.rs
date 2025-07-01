@@ -157,7 +157,10 @@ async fn process_edit_event(
             cache_instance.put(&item).await?;
         }
         Err(error) => {
-            println!("Error writing decoded edit event to cache {}", error);
+            println!(
+                "Error writing decoded edit event to cache for uri {} {}",
+                edit.content_uri, error
+            );
 
             // We may receive events where the format of the ipfs contents is
             // invalid. We still write a cache item with an is_errored status
