@@ -1,0 +1,2055 @@
+[
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "0d3c978b-5aad-451e-af7a-58c8e7050245",
+      "values": [
+        {
+          "property": "a126ca53-0c8e-48d5-b888-82c734c38935",
+          "value": "Operations"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "b9f3d564-0dc3-4785-95cc-2bae09a2dd56",
+      "entity": "8ed2a639-0a78-46d2-a235-5c260719dfa4",
+      "fromEntity": "0d3c978b-5aad-451e-af7a-58c8e7050245",
+      "position": "a01lL",
+      "toEntity": "9ca6ab1f-3a11-4e49-bbaf-72e0c9a985cf",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "CREATE_PROPERTY",
+    "property": {
+      "id": "102c6264-7abc-4323-8b9d-dad980dd7a87",
+      "dataType": "RELATION"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "102c6264-7abc-4323-8b9d-dad980dd7a87",
+      "values": []
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "756c4e99-1bf0-4554-bac7-33774a3769e1",
+      "entity": "9611b1ec-dd09-4bb1-8593-10b0c68828e6",
+      "fromEntity": "102c6264-7abc-4323-8b9d-dad980dd7a87",
+      "toEntity": "808a04ce-b21c-4d88-8ad1-2e240613e5ca",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "102c6264-7abc-4323-8b9d-dad980dd7a87",
+      "values": [
+        {
+          "property": "a126ca53-0c8e-48d5-b888-82c734c38935",
+          "value": "Features"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "4cbb3bb2-8f58-4f35-af06-cc6b73e2e0ad",
+      "entity": "08da9e8d-8049-4bce-8c9b-76e421dad41e",
+      "fromEntity": "102c6264-7abc-4323-8b9d-dad980dd7a87",
+      "position": "a09GK",
+      "toEntity": "d87a7bed-3eda-4a06-a871-0e6836962bd7",
+      "type": "9eea393f-17dd-4971-a62e-a603e8bfec20"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "1372fffa-5a9d-4aaf-8043-152ad802d82a",
+      "values": [
+        {
+          "property": "a126ca53-0c8e-48d5-b888-82c734c38935",
+          "value": "Competition"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "1ab987f9-4d2a-4795-b933-98711caba8c7",
+      "entity": "24a61115-0986-4631-9401-9966065d6595",
+      "fromEntity": "1372fffa-5a9d-4aaf-8043-152ad802d82a",
+      "position": "a02e3",
+      "toEntity": "fb1551b2-1816-46eb-8919-c73253c32022",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "1585a66b-df73-459a-8b58-3d58a3ee7a01",
+      "values": [
+        {
+          "property": "a126ca53-0c8e-48d5-b888-82c734c38935",
+          "value": "Competition is good for consumers"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "05f096e3-7485-4c70-ad6f-a8aeb57bfcea",
+      "entity": "011b0e64-bb81-49f0-89ca-f0c7a3462e4d",
+      "fromEntity": "1585a66b-df73-459a-8b58-3d58a3ee7a01",
+      "position": "a00HV",
+      "toEntity": "0f526048-26cf-40d6-8bab-967e5fb1a08a",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "CREATE_PROPERTY",
+    "property": {
+      "id": "16a04efc-a3ff-4c71-972c-05daa8504f33",
+      "dataType": "RELATION"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "16a04efc-a3ff-4c71-972c-05daa8504f33",
+      "values": []
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "d7b4a1e4-4693-45fc-8595-c0230a414ca4",
+      "entity": "e112727b-933e-444f-9876-34b5e1989d1b",
+      "fromEntity": "16a04efc-a3ff-4c71-972c-05daa8504f33",
+      "toEntity": "808a04ce-b21c-4d88-8ad1-2e240613e5ca",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "16a04efc-a3ff-4c71-972c-05daa8504f33",
+      "values": [
+        {
+          "property": "a126ca53-0c8e-48d5-b888-82c734c38935",
+          "value": "Subquestions"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "dfed5b39-f20b-4d2c-9a49-84172779bd28",
+      "entity": "e5a21259-d9a6-4d93-962d-698ecde58e07",
+      "fromEntity": "16a04efc-a3ff-4c71-972c-05daa8504f33",
+      "position": "a0BQ0",
+      "toEntity": "d31f7aa9-0323-4e3b-ba81-d8ea37141be8",
+      "type": "9eea393f-17dd-4971-a62e-a603e8bfec20"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "19ac08e5-8d37-4c5f-9add-33d808d64f7b",
+      "values": [
+        {
+          "property": "a126ca53-0c8e-48d5-b888-82c734c38935",
+          "value": "Service"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "9a3f1743-385c-4c36-80d6-97a6ad52f9c0",
+      "entity": "9f73bd4c-5316-4c23-9e67-a9cd82318b77",
+      "fromEntity": "19ac08e5-8d37-4c5f-9add-33d808d64f7b",
+      "position": "a042A",
+      "toEntity": "e7d737c5-3676-4c60-9fa1-6aa64a8c90ad",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "1cf8552b-4091-427e-b89a-5919868a06f0",
+      "values": [
+        {
+          "property": "8a743832-c094-4a62-b665-0c3cc2f9c7bc",
+          "value": "ipfs://bafybeiafalcnab52gaxyhuyaa7sme6wo3esl46ajwr4bu6goh5tvwhdfru"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "2c1f1c1f-2a48-4c6e-870b-ddb9ccbc1a6f",
+      "entity": "71faa100-dbf5-4938-aeac-0a3fe6aefe65",
+      "fromEntity": "1cf8552b-4091-427e-b89a-5919868a06f0",
+      "position": "a01dU",
+      "toEntity": "ba4e4146-0010-499d-a0a3-caaa7f579d0e",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "23df5acd-c9c7-4c09-ae52-eea3ef6ffecb",
+      "values": [
+        {
+          "property": "a126ca53-0c8e-48d5-b888-82c734c38935",
+          "value": "Fund raising"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "a07f0a19-715b-49bd-a1cb-0b7b9a608b70",
+      "entity": "4255279c-5533-458d-a7a8-9a77a8b752a2",
+      "fromEntity": "23df5acd-c9c7-4c09-ae52-eea3ef6ffecb",
+      "position": "a05EX",
+      "toEntity": "9ca6ab1f-3a11-4e49-bbaf-72e0c9a985cf",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "244914ac-a4a7-49e0-ab87-575aa3945d75",
+      "values": [
+        {
+          "property": "a126ca53-0c8e-48d5-b888-82c734c38935",
+          "value": "Product"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "352c7f71-dccd-4aac-bb55-f6e32fdec311",
+      "entity": "4be34795-5828-4653-a0d7-145427c08bde",
+      "fromEntity": "244914ac-a4a7-49e0-ab87-575aa3945d75",
+      "position": "a06IY",
+      "toEntity": "e7d737c5-3676-4c60-9fa1-6aa64a8c90ad",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "26b0f02c-a52e-4006-9989-0822247cc705",
+      "values": []
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "15bc4128-1978-42b7-a6f5-705a55c3fdfe",
+      "entity": "4ffbffee-eddf-4aa8-ac04-211c12feaffd",
+      "fromEntity": "26b0f02c-a52e-4006-9989-0822247cc705",
+      "position": "a01Wm",
+      "toEntity": "d172f6f6-93a8-4c28-9577-e9d43259863b",
+      "type": "62dfabe5-282d-44a7-ba93-f2e80d20743d"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "b8c9044d-b82d-4351-b4ed-46f707e9ee94",
+      "entity": "b14cf584-26f2-41b0-91a9-c2434675b8ee",
+      "fromEntity": "26b0f02c-a52e-4006-9989-0822247cc705",
+      "position": "a1BMm",
+      "toEntity": "480e3fc2-67f3-4993-85fb-acdf4ddeaa6b",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "2b4d48b4-5afb-4086-8f63-5bc08e256b83",
+      "values": [
+        {
+          "property": "a126ca53-0c8e-48d5-b888-82c734c38935",
+          "value": "Cofounder"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "1cf44a4f-b49b-4f24-8363-45ee0d4316e1",
+      "entity": "7f920b6f-c8c2-43f2-9dc6-5675b9a972de",
+      "fromEntity": "2b4d48b4-5afb-4086-8f63-5bc08e256b83",
+      "position": "a03Cl",
+      "toEntity": "e4e366e9-d555-4b68-92bf-7358e824afd2",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "33bb4bdf-010e-4be1-b917-39ca9976ff59",
+      "values": []
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "61103d19-4966-46a4-b4c0-df3e78676ba2",
+      "entity": "09d75fb9-d087-4d7f-8fea-fa04615b124f",
+      "fromEntity": "33bb4bdf-010e-4be1-b917-39ca9976ff59",
+      "position": "a08gT",
+      "toEntity": "f93d044e-61f6-42a8-92eb-ef37a377a535",
+      "type": "62dfabe5-282d-44a7-ba93-f2e80d20743d"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "56e43852-3994-4878-b9bd-3346131789ab",
+      "entity": "4645b344-952a-47cc-a94d-e6e9fd87cf1a",
+      "fromEntity": "33bb4bdf-010e-4be1-b917-39ca9976ff59",
+      "position": "a16EH",
+      "toEntity": "480e3fc2-67f3-4993-85fb-acdf4ddeaa6b",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "3bf9ef6c-6eff-4d1f-87fe-0d2d9aa45939",
+      "values": [
+        {
+          "property": "a126ca53-0c8e-48d5-b888-82c734c38935",
+          "value": "Ontology"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "3129d908-5351-418a-bd09-0b1e619ffb22",
+      "entity": "cc4b5635-9a82-48c3-9138-3f46711aaa41",
+      "fromEntity": "3bf9ef6c-6eff-4d1f-87fe-0d2d9aa45939",
+      "position": "a0AH9",
+      "toEntity": "43892c2a-4fad-4e88-ae71-9dcc4da10026",
+      "type": "beaba5cb-a677-41a8-b353-77030613fc70"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "62bb9860-3571-4acf-b820-420a08af0f74",
+      "entity": "8b4edc5e-fdab-447d-bee4-b4ffdb19c99a",
+      "fromEntity": "3bf9ef6c-6eff-4d1f-87fe-0d2d9aa45939",
+      "position": "a15Sm",
+      "toEntity": "480e3fc2-67f3-4993-85fb-acdf4ddeaa6b",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "4283f208-f77f-4ced-badb-918c327375f6",
+      "entity": "f4c89beb-bd5a-4d78-b17d-168aa1baccad",
+      "fromEntity": "3bf9ef6c-6eff-4d1f-87fe-0d2d9aa45939",
+      "position": "a21W5",
+      "toEntity": "6e7215ec-10ca-4904-8895-2d89070a9c69",
+      "type": "62dfabe5-282d-44a7-ba93-f2e80d20743d"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "3f3ca767-ffcd-416c-a834-43d0879968b7",
+      "values": []
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "fa9611c9-e974-4975-ac06-0fa8fb64d7c2",
+      "entity": "8259e088-50e9-4480-a27a-01cddae46145",
+      "fromEntity": "3f3ca767-ffcd-416c-a834-43d0879968b7",
+      "position": "a0AVO",
+      "toEntity": "1743389c-dafb-49a6-b667-9d8bc46f3f52",
+      "type": "62dfabe5-282d-44a7-ba93-f2e80d20743d"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "9ba02b74-664a-4ec3-bc04-1b1ee24b8aa9",
+      "entity": "643cc3fe-a398-4fac-a3a3-f55a33925648",
+      "fromEntity": "3f3ca767-ffcd-416c-a834-43d0879968b7",
+      "position": "a13KV",
+      "toEntity": "480e3fc2-67f3-4993-85fb-acdf4ddeaa6b",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "43892c2a-4fad-4e88-ae71-9dcc4da10026",
+      "values": [
+        {
+          "property": "a126ca53-0c8e-48d5-b888-82c734c38935",
+          "value": "Types"
+        },
+        {
+          "property": "14a46854-bfd1-4b18-8215-2785c2dab9f3",
+          "value": "{\"spaceId\":{\"in\":[\"67face10-7390-4315-987c-20ea3585fc53\"]},\"filter\":{\"8f151ba4-de20-4e3c-9cb4-99ddf96f48f1\":{\"is\":\"e7d737c5-3676-4c60-9fa1-6aa64a8c90ad\"}}}"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "9a7bd4d3-1e17-4942-bc09-fa7e94813131",
+      "entity": "d4b3c50d-35bc-4ec6-bcfc-a3e084245c13",
+      "fromEntity": "43892c2a-4fad-4e88-ae71-9dcc4da10026",
+      "position": "a09IS",
+      "toEntity": "b8803a86-65de-412b-bb35-7e0c84adf473",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "6f4baac0-8d80-4230-8222-852ac3f08c92",
+      "entity": "ad3b6eb8-1be8-40d1-860a-816a9adb4bde",
+      "fromEntity": "43892c2a-4fad-4e88-ae71-9dcc4da10026",
+      "position": "a18cq",
+      "toEntity": "3b069b04-adbe-4728-917d-1283fd4ac27e",
+      "type": "1f69cc98-80d4-44ab-ad49-3df6a7b15ee4"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "4caccf33-6f6d-4ed3-b621-1887c07dccad",
+      "values": [
+        {
+          "property": "a126ca53-0c8e-48d5-b888-82c734c38935",
+          "value": "Marketing"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "3a261a77-d36d-49dd-822b-0d613ec2f4e7",
+      "entity": "7360a393-a2ab-4da1-b6d8-76d98fca561f",
+      "fromEntity": "4caccf33-6f6d-4ed3-b621-1887c07dccad",
+      "position": "a09eU",
+      "toEntity": "9ca6ab1f-3a11-4e49-bbaf-72e0c9a985cf",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "51725d6a-21b2-4396-a89c-1b7d2008ac65",
+      "values": [
+        {
+          "property": "a126ca53-0c8e-48d5-b888-82c734c38935",
+          "value": "Industries"
+        },
+        {
+          "property": "9b1f76ff-9711-404c-861e-59dc3fa7d037",
+          "value": "A top level space for all for profit industries"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "8d5905cd-ba86-40dd-b923-67b6c0b3b925",
+      "entity": "bd8f2dc6-ff9e-4fb2-bc87-047b7a53425f",
+      "fromEntity": "51725d6a-21b2-4396-a89c-1b7d2008ac65",
+      "position": "a08FU",
+      "toEntity": "1cf8552b-4091-427e-b89a-5919868a06f0",
+      "type": "34f53507-2e6b-42c5-a844-43981a77cfa2"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "0471bd8c-8a19-40c5-8f42-3660dcc32a1e",
+      "entity": "b874db5f-685e-4153-b6a1-1299bd5708bc",
+      "fromEntity": "51725d6a-21b2-4396-a89c-1b7d2008ac65",
+      "position": "a1AyW",
+      "toEntity": "568508eb-32b8-4125-9731-8aefab89b1aa",
+      "type": "2b167901-66f8-40b6-b60e-de0ce01fe4ba"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "8e8dc8b1-57da-4b18-b9fa-edda933ca11b",
+      "entity": "70bb8808-8630-4fa9-85e1-17c6b99394a9",
+      "fromEntity": "51725d6a-21b2-4396-a89c-1b7d2008ac65",
+      "position": "a29CG",
+      "toEntity": "c73a79c4-05dc-47a9-9069-250e326b97c3",
+      "type": "2b167901-66f8-40b6-b60e-de0ce01fe4ba"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "cd74eb5b-e737-499b-969d-f9985510bc17",
+      "entity": "4fab32e8-df1b-4be5-9c1c-edbee98f368e",
+      "fromEntity": "51725d6a-21b2-4396-a89c-1b7d2008ac65",
+      "position": "a37cL",
+      "toEntity": "1585a66b-df73-459a-8b58-3d58a3ee7a01",
+      "type": "29c1b655-27b9-4e4e-b264-f7378c92a3fa"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "867897b3-053c-4527-a8d7-48c3d2f89b9c",
+      "entity": "659b06e6-6cf0-4254-9f2d-6eb850081b34",
+      "fromEntity": "51725d6a-21b2-4396-a89c-1b7d2008ac65",
+      "position": "a44TT",
+      "toEntity": "dd63defc-061c-4e03-bc78-27b45c0b4a12",
+      "type": "29c1b655-27b9-4e4e-b264-f7378c92a3fa"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "eb6a6b24-931e-475c-a8bc-523e4ea1afc3",
+      "entity": "83f4c358-9561-4def-b180-5e434fe83029",
+      "fromEntity": "51725d6a-21b2-4396-a89c-1b7d2008ac65",
+      "position": "a53wd",
+      "toEntity": "1372fffa-5a9d-4aaf-8043-152ad802d82a",
+      "type": "81ff33dc-1e3c-4c0e-ae53-1f014113371c"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "d0152067-9e4e-416a-b5e2-5784693445fc",
+      "entity": "6046db36-890d-4b53-95a6-ae77371a314c",
+      "fromEntity": "51725d6a-21b2-4396-a89c-1b7d2008ac65",
+      "position": "a69So",
+      "toEntity": "765dc9b5-9f19-4228-aca7-030e53c03dd7",
+      "type": "839357d0-377f-4b22-b98e-4083701532d9"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "10620565-c74e-46d4-9e1a-ccb7dc31ab48",
+      "entity": "b9f99cc5-6053-4d5c-89be-58020e2cc62f",
+      "fromEntity": "51725d6a-21b2-4396-a89c-1b7d2008ac65",
+      "position": "a7C90",
+      "toEntity": "3bf9ef6c-6eff-4d1f-87fe-0d2d9aa45939",
+      "type": "4d9cba1c-4766-4698-81cd-3273891a018b"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "17932644-cda5-4c2b-9f11-54d7cd6378ce",
+      "entity": "29e45a11-b916-47df-a062-72a58c224011",
+      "fromEntity": "51725d6a-21b2-4396-a89c-1b7d2008ac65",
+      "position": "a83Aw",
+      "toEntity": "fc512a40-8b55-44dc-85b8-5aae88b51fae",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "11320bcd-be80-4e30-a937-b062208225c4",
+      "entity": "0cec5db6-718d-4027-b98b-263b9ef57dc4",
+      "fromEntity": "51725d6a-21b2-4396-a89c-1b7d2008ac65",
+      "position": "a9AO5",
+      "toEntity": "362c1dbd-dc64-44bb-a3c4-652f38a642d7",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "564ada96-4293-4dee-8b3c-965c3966a8cf",
+      "values": [
+        {
+          "property": "a126ca53-0c8e-48d5-b888-82c734c38935",
+          "value": "Answer"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "19035d80-1b3d-45ec-90fe-aa8a5711b137",
+      "entity": "5d879c86-8ed4-4e3f-94cd-89e973f50052",
+      "fromEntity": "564ada96-4293-4dee-8b3c-965c3966a8cf",
+      "position": "a02Nf",
+      "toEntity": "e7d737c5-3676-4c60-9fa1-6aa64a8c90ad",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "568508eb-32b8-4125-9731-8aefab89b1aa",
+      "values": [
+        {
+          "property": "a126ca53-0c8e-48d5-b888-82c734c38935",
+          "value": "Provide quality products to consumers"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "ca2ed8c1-865e-49fa-9f97-5801ff2e44ee",
+      "entity": "33ca120c-b854-43a2-9fb1-afdda7a1b2e2",
+      "fromEntity": "568508eb-32b8-4125-9731-8aefab89b1aa",
+      "position": "a02S4",
+      "toEntity": "1845ee99-80c6-48a3-abc3-809de1753c63",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "58c0bef8-8550-425d-bfb7-fb1762179897",
+      "values": [
+        {
+          "property": "a126ca53-0c8e-48d5-b888-82c734c38935",
+          "value": "Sales"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "ac559aaf-4f75-4e9a-8bf7-ab762f8c4a84",
+      "entity": "7216892b-9ca5-4e67-9e83-e4aca2fe42e1",
+      "fromEntity": "58c0bef8-8550-425d-bfb7-fb1762179897",
+      "position": "a09tR",
+      "toEntity": "9ca6ab1f-3a11-4e49-bbaf-72e0c9a985cf",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "5a36d39b-805c-4d50-8718-db39d17dd82d",
+      "values": [
+        {
+          "property": "a126ca53-0c8e-48d5-b888-82c734c38935",
+          "value": "Entrepreneurship"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "49b661ad-ec6e-4ae0-b206-70155aa7f1e1",
+      "entity": "d8a2ccfa-b18d-4021-a820-11b2f15441cf",
+      "fromEntity": "5a36d39b-805c-4d50-8718-db39d17dd82d",
+      "position": "a02ld",
+      "toEntity": "9ca6ab1f-3a11-4e49-bbaf-72e0c9a985cf",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "CREATE_PROPERTY",
+    "property": {
+      "id": "612512ca-2d76-4e36-85fc-ff5df76aa20a",
+      "dataType": "RELATION"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "612512ca-2d76-4e36-85fc-ff5df76aa20a",
+      "values": []
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "c9bc1ba7-b647-4753-9d5a-0737801a56b6",
+      "entity": "b6c912e2-f413-4259-ac65-b83305323853",
+      "fromEntity": "612512ca-2d76-4e36-85fc-ff5df76aa20a",
+      "toEntity": "808a04ce-b21c-4d88-8ad1-2e240613e5ca",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "612512ca-2d76-4e36-85fc-ff5df76aa20a",
+      "values": [
+        {
+          "property": "a126ca53-0c8e-48d5-b888-82c734c38935",
+          "value": "Subproblems"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "0701199c-6a85-4291-bc13-15b0cb1e7889",
+      "entity": "74d46d1c-f8d9-4640-9591-9546ef736e07",
+      "fromEntity": "612512ca-2d76-4e36-85fc-ff5df76aa20a",
+      "position": "a02ig",
+      "toEntity": "c4e978e6-cc21-4de7-8d40-ff01f023d494",
+      "type": "9eea393f-17dd-4971-a62e-a603e8bfec20"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "675105ab-4864-4b8f-ad85-7c7322174f85",
+      "values": []
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "46f57c68-e60e-4549-8a39-d80112932f6b",
+      "entity": "26907c6b-6261-4e56-b550-e0f6d8404ad3",
+      "fromEntity": "675105ab-4864-4b8f-ad85-7c7322174f85",
+      "position": "a01sD",
+      "toEntity": "480e3fc2-67f3-4993-85fb-acdf4ddeaa6b",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "c9656134-b582-40e5-8f91-6eb9e93be8d1",
+      "entity": "9b9293c8-5c71-481d-8b5f-2926f39dfcb3",
+      "fromEntity": "675105ab-4864-4b8f-ad85-7c7322174f85",
+      "position": "a12xB",
+      "toEntity": "92e64c6e-36ad-453b-9533-9e4be1033cdf",
+      "type": "62dfabe5-282d-44a7-ba93-f2e80d20743d"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "72c70c58-234f-4306-a45a-44fccdf54c5f",
+      "values": [
+        {
+          "property": "a126ca53-0c8e-48d5-b888-82c734c38935",
+          "value": "Director of marketing"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "2f1e5e59-71c6-42b2-8099-aded0ccb8282",
+      "entity": "dab28043-3206-4d07-9a08-57d386b1dee6",
+      "fromEntity": "72c70c58-234f-4306-a45a-44fccdf54c5f",
+      "position": "a00AW",
+      "toEntity": "e4e366e9-d555-4b68-92bf-7358e824afd2",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "765dc9b5-9f19-4228-aca7-030e53c03dd7",
+      "values": [
+        {
+          "property": "a126ca53-0c8e-48d5-b888-82c734c38935",
+          "value": "Projects and people must not commit fraud"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "5b3b043e-3b41-41ac-8da7-9ce7d5021533",
+      "entity": "c37a4bde-1dd0-4710-95e8-ec499522654f",
+      "fromEntity": "765dc9b5-9f19-4228-aca7-030e53c03dd7",
+      "position": "a05tx",
+      "toEntity": "7f237bdd-d95f-4d3f-8686-f52a5dd29386",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "7e90eeb7-9977-472d-8aa9-60eed247603b",
+      "values": [
+        {
+          "property": "a126ca53-0c8e-48d5-b888-82c734c38935",
+          "value": "CMO"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "910ad70b-3802-4fc7-93ec-605f3d46dcf2",
+      "entity": "7a9844e9-977b-4710-93a3-9232b654cf8a",
+      "fromEntity": "7e90eeb7-9977-472d-8aa9-60eed247603b",
+      "position": "a06hR",
+      "toEntity": "e4e366e9-d555-4b68-92bf-7358e824afd2",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "CREATE_PROPERTY",
+    "property": {
+      "id": "8069d56f-eb80-4895-a9e3-239e3399a0bf",
+      "dataType": "RELATION"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "8069d56f-eb80-4895-a9e3-239e3399a0bf",
+      "values": []
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "d2d4b45f-8b01-4e48-83a1-4cd85db08f6d",
+      "entity": "633a0983-b399-47c1-9ab0-a8acc1611773",
+      "fromEntity": "8069d56f-eb80-4895-a9e3-239e3399a0bf",
+      "toEntity": "808a04ce-b21c-4d88-8ad1-2e240613e5ca",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "8069d56f-eb80-4895-a9e3-239e3399a0bf",
+      "values": [
+        {
+          "property": "a126ca53-0c8e-48d5-b888-82c734c38935",
+          "value": "Tasks"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "71185ed8-43d1-4a04-9694-ca378a372152",
+      "entity": "66d6e673-2c6a-49ff-861a-5a0a902bdc41",
+      "fromEntity": "8069d56f-eb80-4895-a9e3-239e3399a0bf",
+      "position": "a07je",
+      "toEntity": "954dc723-3f5c-4269-a09e-0fbaec08e0c2",
+      "type": "9eea393f-17dd-4971-a62e-a603e8bfec20"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "84e25d14-be63-45f9-8bf9-2d3c313e257b",
+      "values": [
+        {
+          "property": "a126ca53-0c8e-48d5-b888-82c734c38935",
+          "value": "Milestone"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "d490ca1d-2509-42cf-85cb-c725eac7fa0d",
+      "entity": "612d9960-6ccf-4a95-8669-b03875db7603",
+      "fromEntity": "84e25d14-be63-45f9-8bf9-2d3c313e257b",
+      "position": "a05fX",
+      "toEntity": "102c6264-7abc-4323-8b9d-dad980dd7a87",
+      "type": "01412f83-8189-4ab1-8365-65c7fd358cc1"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "a6229a09-03b7-411c-b215-3268a25a69d7",
+      "entity": "a966cc9c-217d-4041-bf04-5143504501fc",
+      "fromEntity": "84e25d14-be63-45f9-8bf9-2d3c313e257b",
+      "position": "a25oK",
+      "toEntity": "8069d56f-eb80-4895-a9e3-239e3399a0bf",
+      "type": "01412f83-8189-4ab1-8365-65c7fd358cc1"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "1fadb83d-3948-4f41-aa05-a2c34b0c24d7",
+      "entity": "586fc6d8-8c11-4057-855a-c4a85b376c9a",
+      "fromEntity": "84e25d14-be63-45f9-8bf9-2d3c313e257b",
+      "position": "a15tt",
+      "toEntity": "e7d737c5-3676-4c60-9fa1-6aa64a8c90ad",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "8530e35c-158a-470b-952f-8e4ff74ef47d",
+      "values": [
+        {
+          "property": "a126ca53-0c8e-48d5-b888-82c734c38935",
+          "value": "Skills"
+        },
+        {
+          "property": "14a46854-bfd1-4b18-8215-2785c2dab9f3",
+          "value": "{\"filter\":{\"8f151ba4-de20-4e3c-9cb4-99ddf96f48f1\":{\"is\":\"9ca6ab1f-3a11-4e49-bbaf-72e0c9a985cf\"}}}"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "c227f67a-5929-4ea0-983d-773a02bc9112",
+      "entity": "55b98745-32b5-48f1-a3de-c2762901fe18",
+      "fromEntity": "8530e35c-158a-470b-952f-8e4ff74ef47d",
+      "position": "a068n",
+      "toEntity": "4caccf33-6f6d-4ed3-b621-1887c07dccad",
+      "type": "a99f9ce1-2ffa-4dac-8c61-f6310d46064a"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "2b7d7acc-3e29-4ce1-b8ef-6a5d989fa3f4",
+      "entity": "3ea81766-9e06-4ebd-8d36-99057176d2d3",
+      "fromEntity": "8530e35c-158a-470b-952f-8e4ff74ef47d",
+      "position": "a13Za",
+      "toEntity": "a6001164-ee05-4b08-a382-90716eaaf873",
+      "type": "a99f9ce1-2ffa-4dac-8c61-f6310d46064a"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "05bb9017-b869-4cf2-bb12-97bacefbdc6c",
+      "entity": "024a4fb4-a74c-41f7-9453-2f3f2b0a9bd6",
+      "fromEntity": "8530e35c-158a-470b-952f-8e4ff74ef47d",
+      "position": "a23Sk",
+      "toEntity": "0d3c978b-5aad-451e-af7a-58c8e7050245",
+      "type": "a99f9ce1-2ffa-4dac-8c61-f6310d46064a"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "057c31d1-25a0-45fe-a22c-c2aea9f6e2e8",
+      "entity": "c13491ff-094f-422d-99eb-27dabdc0039a",
+      "fromEntity": "8530e35c-158a-470b-952f-8e4ff74ef47d",
+      "position": "a32ep",
+      "toEntity": "58c0bef8-8550-425d-bfb7-fb1762179897",
+      "type": "a99f9ce1-2ffa-4dac-8c61-f6310d46064a"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "9705d7c5-ee07-4da8-a6b8-e3d849682c9b",
+      "entity": "fe96a9ef-f93d-43eb-9be2-505fcf11763b",
+      "fromEntity": "8530e35c-158a-470b-952f-8e4ff74ef47d",
+      "position": "a49VL",
+      "toEntity": "028a2b66-c698-4c6e-944e-88ded415536a",
+      "type": "a99f9ce1-2ffa-4dac-8c61-f6310d46064a"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "a6b16402-ad1d-4091-9e74-3848772342d9",
+      "entity": "9790fd96-359c-4aac-84c4-8be30e50db5b",
+      "fromEntity": "8530e35c-158a-470b-952f-8e4ff74ef47d",
+      "position": "a53ov",
+      "toEntity": "23df5acd-c9c7-4c09-ae52-eea3ef6ffecb",
+      "type": "a99f9ce1-2ffa-4dac-8c61-f6310d46064a"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "4b81a957-4df9-450f-9fb1-0849dbf8b2aa",
+      "entity": "3a659b8f-fb7b-41dc-9901-48ad055b2a7f",
+      "fromEntity": "8530e35c-158a-470b-952f-8e4ff74ef47d",
+      "position": "a60uj",
+      "toEntity": "c332256f-fe7c-4ff7-a563-ae8ff1467a32",
+      "type": "a99f9ce1-2ffa-4dac-8c61-f6310d46064a"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "f9b49eca-8d52-4330-9f81-c2285f8a1d0b",
+      "entity": "16c5ad1c-7958-4aa6-9248-32ca7a7f5d5f",
+      "fromEntity": "8530e35c-158a-470b-952f-8e4ff74ef47d",
+      "position": "a71ZT",
+      "toEntity": "5a36d39b-805c-4d50-8718-db39d17dd82d",
+      "type": "a99f9ce1-2ffa-4dac-8c61-f6310d46064a"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "58b12d60-b89d-48a9-b7d4-ac15c06496cb",
+      "entity": "dae5eb9c-6340-4a5d-aa27-7e098ac71248",
+      "fromEntity": "8530e35c-158a-470b-952f-8e4ff74ef47d",
+      "position": "a89Y8",
+      "toEntity": "b8803a86-65de-412b-bb35-7e0c84adf473",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "f0fbef7c-deab-485b-9881-0011f0df6b34",
+      "entity": "e435d157-f9cd-417b-8874-c558b41e3a49",
+      "fromEntity": "8530e35c-158a-470b-952f-8e4ff74ef47d",
+      "position": "a91Tq",
+      "toEntity": "1295037a-5d9c-4d09-b27c-5502654b9177",
+      "type": "1f69cc98-80d4-44ab-ad49-3df6a7b15ee4"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "86dfd3d7-cdd4-4d10-957a-ae629d8d3248",
+      "values": []
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "7dd6495e-6d5a-4d98-825c-e33a7e18390f",
+      "entity": "ed49992b-2b3f-41f2-9dea-93d03630f3d6",
+      "fromEntity": "86dfd3d7-cdd4-4d10-957a-ae629d8d3248",
+      "position": "a01SA",
+      "toEntity": "eac8913d-1816-47e3-8ffa-cec178599863",
+      "type": "beaba5cb-a677-41a8-b353-77030613fc70"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "bf429d70-3dec-4a2f-9ef0-8292dbd6b1f7",
+      "entity": "166841a0-6d8c-487d-8b44-7fcd29757f19",
+      "fromEntity": "86dfd3d7-cdd4-4d10-957a-ae629d8d3248",
+      "position": "a19Tb",
+      "toEntity": "8530e35c-158a-470b-952f-8e4ff74ef47d",
+      "type": "beaba5cb-a677-41a8-b353-77030613fc70"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "35720ed3-5d87-47fb-994e-75a514eee287",
+      "entity": "3d8d4009-9c58-458c-a3f1-e952d6c9855b",
+      "fromEntity": "86dfd3d7-cdd4-4d10-957a-ae629d8d3248",
+      "position": "a22XE",
+      "toEntity": "480e3fc2-67f3-4993-85fb-acdf4ddeaa6b",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "7950cc2d-277f-40b0-a17f-bd10980c9af6",
+      "entity": "c54668b1-07a5-4255-ab3e-39c9e78b66cb",
+      "fromEntity": "86dfd3d7-cdd4-4d10-957a-ae629d8d3248",
+      "position": "a32GL",
+      "toEntity": "b4ac6985-5e8e-46d8-8f73-3ed8a918d33a",
+      "type": "62dfabe5-282d-44a7-ba93-f2e80d20743d"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "8a684ee5-b0d2-4317-8d61-45c98e80119b",
+      "values": [
+        {
+          "property": "a126ca53-0c8e-48d5-b888-82c734c38935",
+          "value": "CFO"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "2dfa3860-6464-447d-9e3c-f2dd61e0f9ac",
+      "entity": "5b5ba272-3800-4622-9b86-664c0f98641c",
+      "fromEntity": "8a684ee5-b0d2-4317-8d61-45c98e80119b",
+      "position": "a08DF",
+      "toEntity": "e4e366e9-d555-4b68-92bf-7358e824afd2",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "CREATE_PROPERTY",
+    "property": {
+      "id": "8cf49df2-d478-4c70-988d-c0e7bb107119",
+      "dataType": "RELATION"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "8cf49df2-d478-4c70-988d-c0e7bb107119",
+      "values": []
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "cab3c416-8736-48e7-82d1-694c1f35272d",
+      "entity": "a24a8eef-3726-4b69-8032-7a00367e6ee1",
+      "fromEntity": "8cf49df2-d478-4c70-988d-c0e7bb107119",
+      "toEntity": "808a04ce-b21c-4d88-8ad1-2e240613e5ca",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "8cf49df2-d478-4c70-988d-c0e7bb107119",
+      "values": [
+        {
+          "property": "a126ca53-0c8e-48d5-b888-82c734c38935",
+          "value": "Problems"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "864d8925-a7f5-40e9-b578-37e9d82b277a",
+      "entity": "6fb56d66-baea-4f8f-b0bc-d842b71f0c75",
+      "fromEntity": "8cf49df2-d478-4c70-988d-c0e7bb107119",
+      "position": "a04Vn",
+      "toEntity": "c4e978e6-cc21-4de7-8d40-ff01f023d494",
+      "type": "9eea393f-17dd-4971-a62e-a603e8bfec20"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "028a2b66-c698-4c6e-944e-88ded415536a",
+      "values": [
+        {
+          "property": "a126ca53-0c8e-48d5-b888-82c734c38935",
+          "value": "Management"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "824ea3f7-201f-4b39-9769-4fc2c542e3a0",
+      "entity": "dad173c1-2579-4f66-ad66-e1aa4b977598",
+      "fromEntity": "028a2b66-c698-4c6e-944e-88ded415536a",
+      "position": "a033H",
+      "toEntity": "9ca6ab1f-3a11-4e49-bbaf-72e0c9a985cf",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "9383ba9b-d690-47f7-98b3-0b2646d51f16",
+      "values": [
+        {
+          "property": "a126ca53-0c8e-48d5-b888-82c734c38935",
+          "value": "Solution"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "9a760f98-eb37-479b-b2fa-3761262c1a3a",
+      "entity": "e7f55374-b936-49f2-b9d3-990c35e30e24",
+      "fromEntity": "9383ba9b-d690-47f7-98b3-0b2646d51f16",
+      "position": "a07U3",
+      "toEntity": "e7d737c5-3676-4c60-9fa1-6aa64a8c90ad",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "704dd3d8-13da-449a-9723-9404c5faa59b",
+      "entity": "3ed85d78-8fff-4461-8e36-89298b9de79b",
+      "fromEntity": "9383ba9b-d690-47f7-98b3-0b2646d51f16",
+      "position": "a13BN",
+      "toEntity": "cc4e4c81-eac4-402d-9cda-1574e827cb3f",
+      "type": "01412f83-8189-4ab1-8365-65c7fd358cc1"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "954dc723-3f5c-4269-a09e-0fbaec08e0c2",
+      "values": [
+        {
+          "property": "a126ca53-0c8e-48d5-b888-82c734c38935",
+          "value": "Task"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "4be42d1f-0b9f-4623-b54a-7c93f51f9ff8",
+      "entity": "e9ec533b-98f7-4962-82e4-313f84b82ce2",
+      "fromEntity": "954dc723-3f5c-4269-a09e-0fbaec08e0c2",
+      "position": "a048b",
+      "toEntity": "e7d737c5-3676-4c60-9fa1-6aa64a8c90ad",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "9d0a5316-1995-4a14-977f-baa2f13de73d",
+      "values": []
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "6f6ac453-a292-4390-a2d4-88d66416caaa",
+      "entity": "a14379a9-8d86-4343-b5ca-f8c575474c02",
+      "fromEntity": "9d0a5316-1995-4a14-977f-baa2f13de73d",
+      "position": "a08EB",
+      "toEntity": "480e3fc2-67f3-4993-85fb-acdf4ddeaa6b",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "8a79d7d4-41ca-4983-8fc4-5c4c4cdc47ed",
+      "entity": "f9220bbb-1bea-4c97-a557-3e347a07c97f",
+      "fromEntity": "9d0a5316-1995-4a14-977f-baa2f13de73d",
+      "position": "a12Xo",
+      "toEntity": "6e7215ec-10ca-4904-8895-2d89070a9c69",
+      "type": "62dfabe5-282d-44a7-ba93-f2e80d20743d"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "a027028d-b102-4a6a-920c-db5c6d50b1a3",
+      "values": [
+        {
+          "property": "a126ca53-0c8e-48d5-b888-82c734c38935",
+          "value": "COO"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "e087d0fc-3604-496e-bd3f-9ee820c66f3b",
+      "entity": "f2935071-8104-422b-900c-dbfe39a887a5",
+      "fromEntity": "a027028d-b102-4a6a-920c-db5c6d50b1a3",
+      "position": "a08ek",
+      "toEntity": "e4e366e9-d555-4b68-92bf-7358e824afd2",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "a6001164-ee05-4b08-a382-90716eaaf873",
+      "values": [
+        {
+          "property": "a126ca53-0c8e-48d5-b888-82c734c38935",
+          "value": "Hiring"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "e7606118-f496-422f-bdc2-04b52d68c953",
+      "entity": "99afc0b2-9d73-462c-9a31-62be49044d5b",
+      "fromEntity": "a6001164-ee05-4b08-a382-90716eaaf873",
+      "position": "a07ba",
+      "toEntity": "9ca6ab1f-3a11-4e49-bbaf-72e0c9a985cf",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "b13bd395-a0d8-4624-9206-10911c9ed2ec",
+      "values": [
+        {
+          "property": "a126ca53-0c8e-48d5-b888-82c734c38935",
+          "value": "Workstream"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "f04e94dd-a86d-48a2-a311-5505f0529b0e",
+      "entity": "1d79c953-79b2-4bbc-a709-f9bd2596ddbb",
+      "fromEntity": "b13bd395-a0d8-4624-9206-10911c9ed2ec",
+      "position": "a0BFr",
+      "toEntity": "e7d737c5-3676-4c60-9fa1-6aa64a8c90ad",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "1403a7f6-eba9-451c-b2db-a886a26a040f",
+      "entity": "04a71759-bcce-4375-a06b-0eee59cc6fb1",
+      "fromEntity": "b13bd395-a0d8-4624-9206-10911c9ed2ec",
+      "position": "a19Qi",
+      "toEntity": "102c6264-7abc-4323-8b9d-dad980dd7a87",
+      "type": "01412f83-8189-4ab1-8365-65c7fd358cc1"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "b8b45003-6c69-4921-bd64-52b5ca8d1376",
+      "values": [
+        {
+          "property": "a126ca53-0c8e-48d5-b888-82c734c38935",
+          "value": "CEO"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "31f27694-30aa-427c-8f13-3242fea4f369",
+      "entity": "01462e5c-1b5f-4334-a2df-6f68606a33dd",
+      "fromEntity": "b8b45003-6c69-4921-bd64-52b5ca8d1376",
+      "position": "a02FA",
+      "toEntity": "e4e366e9-d555-4b68-92bf-7358e824afd2",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "bc135fb9-b4eb-4a37-9d07-ed5d22e5cba4",
+      "values": [
+        {
+          "property": "a126ca53-0c8e-48d5-b888-82c734c38935",
+          "value": "Founder"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "4c884dda-c0d3-483a-a530-0e208960477e",
+      "entity": "ef7e3d27-acdb-4f5c-9b04-c7b47bb1efbb",
+      "fromEntity": "bc135fb9-b4eb-4a37-9d07-ed5d22e5cba4",
+      "position": "a07C6",
+      "toEntity": "e4e366e9-d555-4b68-92bf-7358e824afd2",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "c332256f-fe7c-4ff7-a563-ae8ff1467a32",
+      "values": [
+        {
+          "property": "a126ca53-0c8e-48d5-b888-82c734c38935",
+          "value": "Social media"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "69517da1-8394-4a88-80e6-f235942cd566",
+      "entity": "aab26d3d-101a-4cd3-94ff-32e9755ed4cd",
+      "fromEntity": "c332256f-fe7c-4ff7-a563-ae8ff1467a32",
+      "position": "a00g5",
+      "toEntity": "9ca6ab1f-3a11-4e49-bbaf-72e0c9a985cf",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "c4e978e6-cc21-4de7-8d40-ff01f023d494",
+      "values": [
+        {
+          "property": "a126ca53-0c8e-48d5-b888-82c734c38935",
+          "value": "Problem"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "acd65a98-8b7f-40c3-88bf-15ac308d0210",
+      "entity": "ff79efa5-50e2-4101-9eac-10479464f653",
+      "fromEntity": "c4e978e6-cc21-4de7-8d40-ff01f023d494",
+      "position": "a01Gq",
+      "toEntity": "612512ca-2d76-4e36-85fc-ff5df76aa20a",
+      "type": "01412f83-8189-4ab1-8365-65c7fd358cc1"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "b08484bc-5134-4f53-88a7-7a5d6c29621a",
+      "entity": "d258304c-bdd7-47c4-b5a9-f46204959ac6",
+      "fromEntity": "c4e978e6-cc21-4de7-8d40-ff01f023d494",
+      "position": "a10yE",
+      "toEntity": "e8a2250d-969d-4cc4-8f4b-234b9905cbd7",
+      "type": "01412f83-8189-4ab1-8365-65c7fd358cc1"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "597fdaed-d16d-487a-9b28-4af680941b26",
+      "entity": "c7330e76-0286-4e65-ac20-3a6016e49e3a",
+      "fromEntity": "c4e978e6-cc21-4de7-8d40-ff01f023d494",
+      "position": "a20Oh",
+      "toEntity": "e7d737c5-3676-4c60-9fa1-6aa64a8c90ad",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "c59d5771-0ff1-47d2-a5ce-12ecddd6a6eb",
+      "values": []
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "a465c3e9-bd3a-41e4-a573-6db9c1536fd8",
+      "entity": "7781510d-e788-44f8-a5ea-5635753aced1",
+      "fromEntity": "c59d5771-0ff1-47d2-a5ce-12ecddd6a6eb",
+      "position": "a03DV",
+      "toEntity": "238bce0f-1420-4df7-85a3-088aded159fd",
+      "type": "62dfabe5-282d-44a7-ba93-f2e80d20743d"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "f2217813-6239-42ed-a79d-892d4e6f37d7",
+      "entity": "ed8c7907-ef2c-4858-96ff-880b2eb4a607",
+      "fromEntity": "c59d5771-0ff1-47d2-a5ce-12ecddd6a6eb",
+      "position": "a13rP",
+      "toEntity": "480e3fc2-67f3-4993-85fb-acdf4ddeaa6b",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "c703e4cf-8288-4fb8-8799-300108169e24",
+      "values": [
+        {
+          "property": "a126ca53-0c8e-48d5-b888-82c734c38935",
+          "value": "CTO"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "7f4ae80e-f35a-4cc3-9998-1ad0cb110097",
+      "entity": "87c1d384-4fb0-4856-9385-e4c685cd151f",
+      "fromEntity": "c703e4cf-8288-4fb8-8799-300108169e24",
+      "position": "a0Aw8",
+      "toEntity": "e4e366e9-d555-4b68-92bf-7358e824afd2",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "c73a79c4-05dc-47a9-9069-250e326b97c3",
+      "values": [
+        {
+          "property": "a126ca53-0c8e-48d5-b888-82c734c38935",
+          "value": "Provide quality services to consumers"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "2b8d41a7-8cbf-4145-ad8b-3618258d7c4d",
+      "entity": "03ca17cc-ef4a-4dc3-86ac-53acad3baa79",
+      "fromEntity": "c73a79c4-05dc-47a9-9069-250e326b97c3",
+      "position": "a02Up",
+      "toEntity": "1845ee99-80c6-48a3-abc3-809de1753c63",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "ca3b1f60-5683-4371-873e-dbbe82a6094a",
+      "values": [
+        {
+          "property": "a126ca53-0c8e-48d5-b888-82c734c38935",
+          "value": "Component"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "c02a35a7-53b7-46c8-8148-2e813422ae3b",
+      "entity": "fd079afa-c911-466c-8c8b-6e3beebad464",
+      "fromEntity": "ca3b1f60-5683-4371-873e-dbbe82a6094a",
+      "position": "a08R2",
+      "toEntity": "e7d737c5-3676-4c60-9fa1-6aa64a8c90ad",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "cc4b5635-9a82-48c3-9138-3f46711aaa41",
+      "values": []
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "48ae617a-3a69-443e-9769-9895cec3dace",
+      "entity": "9e13d1d8-f2a2-47b4-9908-82ec545d617d",
+      "fromEntity": "cc4b5635-9a82-48c3-9138-3f46711aaa41",
+      "position": "a07os",
+      "toEntity": "01412f83-8189-4ab1-8365-65c7fd358cc1",
+      "type": "4221fb36-dcab-4c68-b150-701aaba6c8e0"
+    }
+  },
+  {
+    "type": "CREATE_PROPERTY",
+    "property": {
+      "id": "cc4e4c81-eac4-402d-9cda-1574e827cb3f",
+      "dataType": "RELATION"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "cc4e4c81-eac4-402d-9cda-1574e827cb3f",
+      "values": []
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "7f45bedf-7140-4e59-846d-303ff0552b7e",
+      "entity": "da671aee-7b8d-4c7c-b542-e58a48e78a5c",
+      "fromEntity": "cc4e4c81-eac4-402d-9cda-1574e827cb3f",
+      "toEntity": "808a04ce-b21c-4d88-8ad1-2e240613e5ca",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "cc4e4c81-eac4-402d-9cda-1574e827cb3f",
+      "values": [
+        {
+          "property": "a126ca53-0c8e-48d5-b888-82c734c38935",
+          "value": "Subsolutions"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "8979c79f-7e47-45b5-8bcd-7efa8b8f92a5",
+      "entity": "00add4fd-7de1-4595-976a-682c53b0a5be",
+      "fromEntity": "cc4e4c81-eac4-402d-9cda-1574e827cb3f",
+      "position": "a00zY",
+      "toEntity": "9383ba9b-d690-47f7-98b3-0b2646d51f16",
+      "type": "9eea393f-17dd-4971-a62e-a603e8bfec20"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "cee01e2d-b9d1-4136-862d-548e0a65f8b6",
+      "values": [
+        {
+          "property": "a126ca53-0c8e-48d5-b888-82c734c38935",
+          "value": "VP of sales"
+        }
+      ]
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "d31f7aa9-0323-4e3b-ba81-d8ea37141be8",
+      "values": [
+        {
+          "property": "a126ca53-0c8e-48d5-b888-82c734c38935",
+          "value": "Question"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "98bc1fde-07fe-45c0-994d-a6f6fd960c7e",
+      "entity": "d1fcc50b-9ba9-4bb9-8bc6-d825b3b8a482",
+      "fromEntity": "d31f7aa9-0323-4e3b-ba81-d8ea37141be8",
+      "position": "a03Zf",
+      "toEntity": "e7d737c5-3676-4c60-9fa1-6aa64a8c90ad",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "16039eac-218b-4122-96c0-c8c67fafa474",
+      "entity": "ea525b4c-35de-40f8-8f15-842d48068d38",
+      "fromEntity": "d31f7aa9-0323-4e3b-ba81-d8ea37141be8",
+      "position": "a14TS",
+      "toEntity": "16a04efc-a3ff-4c71-972c-05daa8504f33",
+      "type": "01412f83-8189-4ab1-8365-65c7fd358cc1"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "d89bfa19-9037-45d6-a61f-0b049e4373c1",
+      "entity": "55121ad2-7567-4425-9c0a-1540ffa99dbf",
+      "fromEntity": "d31f7aa9-0323-4e3b-ba81-d8ea37141be8",
+      "position": "a293L",
+      "toEntity": "e5b0028d-6277-4d93-85d3-7df65678b21a",
+      "type": "01412f83-8189-4ab1-8365-65c7fd358cc1"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "d87a7bed-3eda-4a06-a871-0e6836962bd7",
+      "values": [
+        {
+          "property": "a126ca53-0c8e-48d5-b888-82c734c38935",
+          "value": "Feature"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "31cb9fe6-35f9-46e7-ab00-adc466355876",
+      "entity": "4db34158-c9b3-4ee9-ac12-6339b0b902a2",
+      "fromEntity": "d87a7bed-3eda-4a06-a871-0e6836962bd7",
+      "position": "a099F",
+      "toEntity": "e7d737c5-3676-4c60-9fa1-6aa64a8c90ad",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "dd63defc-061c-4e03-bc78-27b45c0b4a12",
+      "values": [
+        {
+          "property": "a126ca53-0c8e-48d5-b888-82c734c38935",
+          "value": "Free markets create opportunity"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "931af81e-7211-4a25-8d80-b2573c42384f",
+      "entity": "4c2cdeae-a618-4935-9e01-cb88a6932a61",
+      "fromEntity": "dd63defc-061c-4e03-bc78-27b45c0b4a12",
+      "position": "a08fF",
+      "toEntity": "0f526048-26cf-40d6-8bab-967e5fb1a08a",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "e2f5c592-8709-48c4-b756-a1a93cb7ba52",
+      "values": [
+        {
+          "property": "a126ca53-0c8e-48d5-b888-82c734c38935",
+          "value": "Growth"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "f60e7cfa-bc5b-44c3-b747-d80bc1604bec",
+      "entity": "26b25a5d-78e6-4647-9dbb-d3c761b10b3e",
+      "fromEntity": "e2f5c592-8709-48c4-b756-a1a93cb7ba52",
+      "position": "a02FD",
+      "toEntity": "e4e366e9-d555-4b68-92bf-7358e824afd2",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "CREATE_PROPERTY",
+    "property": {
+      "id": "e5b0028d-6277-4d93-85d3-7df65678b21a",
+      "dataType": "RELATION"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "e5b0028d-6277-4d93-85d3-7df65678b21a",
+      "values": []
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "ff54ad76-f917-408d-a478-6b4385b7cabd",
+      "entity": "6f598cc5-02b9-47d8-9f3e-5095ca436cf2",
+      "fromEntity": "e5b0028d-6277-4d93-85d3-7df65678b21a",
+      "toEntity": "808a04ce-b21c-4d88-8ad1-2e240613e5ca",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "e5b0028d-6277-4d93-85d3-7df65678b21a",
+      "values": [
+        {
+          "property": "a126ca53-0c8e-48d5-b888-82c734c38935",
+          "value": "Possible answers"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "a4e32abe-a870-42b6-b06c-d7e25d3a6e8a",
+      "entity": "465540c8-5a96-4edf-baff-38130e197e06",
+      "fromEntity": "e5b0028d-6277-4d93-85d3-7df65678b21a",
+      "position": "a00Ru",
+      "toEntity": "564ada96-4293-4dee-8b3c-965c3966a8cf",
+      "type": "9eea393f-17dd-4971-a62e-a603e8bfec20"
+    }
+  },
+  {
+    "type": "CREATE_PROPERTY",
+    "property": {
+      "id": "e8a2250d-969d-4cc4-8f4b-234b9905cbd7",
+      "dataType": "RELATION"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "e8a2250d-969d-4cc4-8f4b-234b9905cbd7",
+      "values": []
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "ae124e43-b889-423c-a72a-f7da1b6a4421",
+      "entity": "48afa592-3bb9-45c8-adce-db66a5eb869d",
+      "fromEntity": "e8a2250d-969d-4cc4-8f4b-234b9905cbd7",
+      "toEntity": "808a04ce-b21c-4d88-8ad1-2e240613e5ca",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "e8a2250d-969d-4cc4-8f4b-234b9905cbd7",
+      "values": [
+        {
+          "property": "a126ca53-0c8e-48d5-b888-82c734c38935",
+          "value": "Possible solutions"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "4cbc516e-9ae7-4377-840b-71cdd7e86398",
+      "entity": "5af91734-4d1b-4682-95cc-48663be700be",
+      "fromEntity": "e8a2250d-969d-4cc4-8f4b-234b9905cbd7",
+      "position": "a0AC0",
+      "toEntity": "9383ba9b-d690-47f7-98b3-0b2646d51f16",
+      "type": "9eea393f-17dd-4971-a62e-a603e8bfec20"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "eac8913d-1816-47e3-8ffa-cec178599863",
+      "values": [
+        {
+          "property": "14a46854-bfd1-4b18-8215-2785c2dab9f3",
+          "value": "{\"filter\":{\"8f151ba4-de20-4e3c-9cb4-99ddf96f48f1\":{\"is\":\"e4e366e9-d555-4b68-92bf-7358e824afd2\"}}}"
+        },
+        {
+          "property": "a126ca53-0c8e-48d5-b888-82c734c38935",
+          "value": "Roles"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "f6cce27b-1c2a-4218-8c0f-444da731992b",
+      "entity": "63fa4497-ae69-472b-b63e-097a56331f07",
+      "fromEntity": "eac8913d-1816-47e3-8ffa-cec178599863",
+      "position": "a0CI6",
+      "toEntity": "c703e4cf-8288-4fb8-8799-300108169e24",
+      "type": "a99f9ce1-2ffa-4dac-8c61-f6310d46064a"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "387f9adc-b7d7-4a7f-8ab0-00ada70d5914",
+      "entity": "6029f874-87df-4a9c-8c03-3f1d5a1f0e51",
+      "fromEntity": "eac8913d-1816-47e3-8ffa-cec178599863",
+      "position": "a1ASQ",
+      "toEntity": "7e90eeb7-9977-472d-8aa9-60eed247603b",
+      "type": "a99f9ce1-2ffa-4dac-8c61-f6310d46064a"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "5eb0b3ec-671e-4bcb-a818-4c3c2ecdfcc0",
+      "entity": "91775300-fea4-47f1-aabd-78204618d1cb",
+      "fromEntity": "eac8913d-1816-47e3-8ffa-cec178599863",
+      "position": "a22ka",
+      "toEntity": "cee01e2d-b9d1-4136-862d-548e0a65f8b6",
+      "type": "a99f9ce1-2ffa-4dac-8c61-f6310d46064a"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "71252259-29f4-46b1-8414-1cd2479401ae",
+      "entity": "add5b954-c819-4606-bb88-7a5d59760d37",
+      "fromEntity": "eac8913d-1816-47e3-8ffa-cec178599863",
+      "position": "a34Rs",
+      "toEntity": "72c70c58-234f-4306-a45a-44fccdf54c5f",
+      "type": "a99f9ce1-2ffa-4dac-8c61-f6310d46064a"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "ffebb7e2-8bc8-44bc-83ef-66a4235f2552",
+      "entity": "bfcd8a62-cd89-4dd2-b5a2-c3957d9b6229",
+      "fromEntity": "eac8913d-1816-47e3-8ffa-cec178599863",
+      "position": "a45A2",
+      "toEntity": "2b4d48b4-5afb-4086-8f63-5bc08e256b83",
+      "type": "a99f9ce1-2ffa-4dac-8c61-f6310d46064a"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "824e69c2-65f6-468e-abe8-fe1b6c6d9b1e",
+      "entity": "3f002725-7752-4f7b-8bea-4eb26ac6abdf",
+      "fromEntity": "eac8913d-1816-47e3-8ffa-cec178599863",
+      "position": "a5CMj",
+      "toEntity": "e2f5c592-8709-48c4-b756-a1a93cb7ba52",
+      "type": "a99f9ce1-2ffa-4dac-8c61-f6310d46064a"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "97606f86-cbd1-46df-afe8-fb77f185bb8e",
+      "entity": "cb919f11-5933-450c-b20b-9adf484825c4",
+      "fromEntity": "eac8913d-1816-47e3-8ffa-cec178599863",
+      "position": "a616a",
+      "toEntity": "8a684ee5-b0d2-4317-8d61-45c98e80119b",
+      "type": "a99f9ce1-2ffa-4dac-8c61-f6310d46064a"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "e4d56e8f-a238-448d-8850-564f1808437a",
+      "entity": "53fcd28d-7778-4311-a833-ceb8674bd53b",
+      "fromEntity": "eac8913d-1816-47e3-8ffa-cec178599863",
+      "position": "a72DL",
+      "toEntity": "a027028d-b102-4a6a-920c-db5c6d50b1a3",
+      "type": "a99f9ce1-2ffa-4dac-8c61-f6310d46064a"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "cda3725f-011c-44ea-a8bf-19f6dd4e930d",
+      "entity": "b39338f9-6c70-470e-bf8e-61391ed65b29",
+      "fromEntity": "eac8913d-1816-47e3-8ffa-cec178599863",
+      "position": "aA6g6",
+      "toEntity": "b8b45003-6c69-4921-bd64-52b5ca8d1376",
+      "type": "a99f9ce1-2ffa-4dac-8c61-f6310d46064a"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "6c772560-f638-4b4d-bc0c-bf28c3424b04",
+      "entity": "3fc89b12-7b12-47b3-aa53-29356efbdbde",
+      "fromEntity": "eac8913d-1816-47e3-8ffa-cec178599863",
+      "position": "aB9LI",
+      "toEntity": "bc135fb9-b4eb-4a37-9d07-ed5d22e5cba4",
+      "type": "a99f9ce1-2ffa-4dac-8c61-f6310d46064a"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "d545be6b-fd86-4949-a342-6e28a35bec60",
+      "entity": "82fedb01-e2e1-4041-a027-8bf98c6500b8",
+      "fromEntity": "eac8913d-1816-47e3-8ffa-cec178599863",
+      "position": "a8680",
+      "toEntity": "1295037a-5d9c-4d09-b27c-5502654b9177",
+      "type": "1f69cc98-80d4-44ab-ad49-3df6a7b15ee4"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "419f9417-0fca-4d0b-8d11-ff7b581d117c",
+      "entity": "f726184c-db37-4c2c-abb8-cb77ba04d52d",
+      "fromEntity": "eac8913d-1816-47e3-8ffa-cec178599863",
+      "position": "a96Fp",
+      "toEntity": "b8803a86-65de-412b-bb35-7e0c84adf473",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "f5572a79-a44d-41d4-b3fe-32bed9446aae",
+      "values": [
+        {
+          "property": "a126ca53-0c8e-48d5-b888-82c734c38935",
+          "value": "Release"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "122417f1-28c1-4890-8f80-110aaac960ee",
+      "entity": "f4793444-030f-44d0-8e10-e0ad1b1d017a",
+      "fromEntity": "f5572a79-a44d-41d4-b3fe-32bed9446aae",
+      "position": "a0C5c",
+      "toEntity": "e7d737c5-3676-4c60-9fa1-6aa64a8c90ad",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "f7dab316-b137-4857-b376-e15e8b08dd3b",
+      "values": [
+        {
+          "property": "8a743832-c094-4a62-b665-0c3cc2f9c7bc",
+          "value": "ipfs://bafybeif3rgwxaz5gy5bacfuqsnf3k2co7dqffdo5zqwzf5qogzhukyti7a"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "e9f61586-7339-4ee0-999d-bd20631415dc",
+      "entity": "168a0175-deb9-469a-a6c4-7a296bb60400",
+      "fromEntity": "f7dab316-b137-4857-b376-e15e8b08dd3b",
+      "position": "a01Le",
+      "toEntity": "ba4e4146-0010-499d-a0a3-caaa7f579d0e",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  }
+]

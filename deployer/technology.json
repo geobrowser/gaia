@@ -1,0 +1,457 @@
+[
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "1c208f7b-c024-408f-8b76-6a41391abb5b",
+      "values": [
+        {
+          "property": "8a743832-c094-4a62-b665-0c3cc2f9c7bc",
+          "value": "ipfs://bafkreibdzb3lzrldrz44bqvx4iauayfa6cfqjidahxhlfxh3evw3zw6gmq"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "321286e1-2409-4e8c-b279-eb22eaeff30a",
+      "entity": "9b45212f-5aad-4c9e-9dce-3a325d909071",
+      "fromEntity": "1c208f7b-c024-408f-8b76-6a41391abb5b",
+      "position": "a03Qf",
+      "toEntity": "ba4e4146-0010-499d-a0a3-caaa7f579d0e",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "231f66a2-ee7d-413f-9aa8-5c113e092f0c",
+      "values": [
+        {
+          "property": "8a743832-c094-4a62-b665-0c3cc2f9c7bc",
+          "value": "ipfs://bafkreiggg5xis2xcgcl4geizd2qefwpzh6icvvqesw4qoqtayz4grzieka"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "c962633d-2af2-40b3-8e19-a2664d8573be",
+      "entity": "9a8319b2-969e-4487-99e0-ed0849f140fb",
+      "fromEntity": "231f66a2-ee7d-413f-9aa8-5c113e092f0c",
+      "position": "a05UO",
+      "toEntity": "ba4e4146-0010-499d-a0a3-caaa7f579d0e",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "269ab492-097b-4eab-94be-a2cf28c4309c",
+      "values": [
+        {
+          "property": "eed38e74-e679-46bf-8a42-ea3e4f8fb5fb",
+          "value": "https://cloud.google.com/"
+        },
+        {
+          "property": "a126ca53-0c8e-48d5-b888-82c734c38935",
+          "value": "Google Cloud"
+        },
+        {
+          "property": "9b1f76ff-9711-404c-861e-59dc3fa7d037",
+          "value": "Google Cloud Platform is a suite of cloud computing services offered by Google that provides a series of modular cloud services including computing, data storage, data analytics, and machine learning, alongside a set of management tools."
+        },
+        {
+          "property": "0d625978-4b3c-4b57-a86f-de45c997c73c",
+          "value": "https://x.com/googlecloud"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "ae234a33-027d-4644-99c8-1e876af02c85",
+      "entity": "fb5c81f9-7da4-4969-854c-18883fbd8397",
+      "fromEntity": "269ab492-097b-4eab-94be-a2cf28c4309c",
+      "position": "a05o8",
+      "toEntity": "484a18c5-030a-499c-b0f2-ef588ff16d50",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "d9cf41de-e3b1-488e-a584-9513caef2e1d",
+      "entity": "ce55fb81-cffa-4858-9783-0b345eed0130",
+      "fromEntity": "269ab492-097b-4eab-94be-a2cf28c4309c",
+      "position": "a1BmJ",
+      "toEntity": "e059a29e-6f6b-437b-bc15-c7983d078c0d",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "50f2e4c2-14b7-4886-a706-d0f031d0844c",
+      "entity": "37361dc6-30d0-4934-b960-99c3cfbcd033",
+      "fromEntity": "269ab492-097b-4eab-94be-a2cf28c4309c",
+      "position": "a27I1",
+      "toEntity": "f3f5ff5e-207e-4529-b1f7-6b901b00973d",
+      "type": "1155beff-fad5-49b7-a2e0-da4777b8792c"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "831fe1a9-9c22-402f-b6e1-7934b21c1e24",
+      "entity": "a52b5d9b-7aa6-44a6-babd-429bc36d8a22",
+      "fromEntity": "269ab492-097b-4eab-94be-a2cf28c4309c",
+      "position": "a31qZ",
+      "toEntity": "589db439-dfac-48e3-a8a5-c48475644b2e",
+      "type": "34f53507-2e6b-42c5-a844-43981a77cfa2"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "4cd3a58c-e80d-4db9-9aa8-bf2b870a04cf",
+      "values": [
+        {
+          "property": "8a743832-c094-4a62-b665-0c3cc2f9c7bc",
+          "value": "ipfs://bafybeigy34c5yar6voh2fliwlu4qset6nlcd5ityhl7jvoengofosfs6ui"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "1b176614-3420-4e08-a6f6-099d4fd0cbf6",
+      "entity": "152fa39e-d408-4e3c-95ac-32e0da0e1a83",
+      "fromEntity": "4cd3a58c-e80d-4db9-9aa8-bf2b870a04cf",
+      "position": "a094k",
+      "toEntity": "ba4e4146-0010-499d-a0a3-caaa7f579d0e",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "50a07a18-0586-48c7-a7f3-a35db1a39c4c",
+      "values": [
+        {
+          "property": "14a46854-bfd1-4b18-8215-2785c2dab9f3",
+          "value": "{\"spaceId\":{\"in\":[\"6cf3f985-17a9-42a9-8f21-672a58e32ae8\"]},\"filter\":{\"8f151ba4-de20-4e3c-9cb4-99ddf96f48f1\":{\"is\":\"484a18c5-030a-499c-b0f2-ef588ff16d50\"}}}"
+        },
+        {
+          "property": "a126ca53-0c8e-48d5-b888-82c734c38935",
+          "value": "Companies"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "cdf74e16-b82d-4bb2-8cd6-3a29be4dab55",
+      "entity": "9f65ce4e-f238-491b-8ace-27d010fcfa81",
+      "fromEntity": "50a07a18-0586-48c7-a7f3-a35db1a39c4c",
+      "position": "a05rP",
+      "toEntity": "b8803a86-65de-412b-bb35-7e0c84adf473",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "4c66fe02-3515-4b9c-be35-511c1e5809de",
+      "entity": "7ff2f767-c6b1-41f7-a532-b064128008b1",
+      "fromEntity": "50a07a18-0586-48c7-a7f3-a35db1a39c4c",
+      "position": "a10a3",
+      "toEntity": "3b069b04-adbe-4728-917d-1283fd4ac27e",
+      "type": "1f69cc98-80d4-44ab-ad49-3df6a7b15ee4"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "589db439-dfac-48e3-a8a5-c48475644b2e",
+      "values": [
+        {
+          "property": "8a743832-c094-4a62-b665-0c3cc2f9c7bc",
+          "value": "ipfs://bafkreihbozuxyeeehpel5lre6pg7xaon4vrprjf53opofwh7cbcvzxfqre"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "c57ef7a8-3f86-4bd7-8a8a-d6e2b12afa7a",
+      "entity": "69082f98-effb-468b-a6e0-299374760bc7",
+      "fromEntity": "589db439-dfac-48e3-a8a5-c48475644b2e",
+      "position": "a06mi",
+      "toEntity": "ba4e4146-0010-499d-a0a3-caaa7f579d0e",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "a56e7d86-9a0a-47df-a1f9-6c2cf658f79e",
+      "values": [
+        {
+          "property": "a126ca53-0c8e-48d5-b888-82c734c38935",
+          "value": "Technology"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "31c7671a-e3af-43f4-bf17-262a09c6a2d0",
+      "entity": "18a666bd-540c-41cf-9058-a8f9a079a9a9",
+      "fromEntity": "a56e7d86-9a0a-47df-a1f9-6c2cf658f79e",
+      "position": "a0AlS",
+      "toEntity": "4cd3a58c-e80d-4db9-9aa8-bf2b870a04cf",
+      "type": "34f53507-2e6b-42c5-a844-43981a77cfa2"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "92b1e0ad-7ddc-4e15-af08-3b28727bbc62",
+      "entity": "2417caa9-4982-4225-b60e-f4592492d5e1",
+      "fromEntity": "a56e7d86-9a0a-47df-a1f9-6c2cf658f79e",
+      "position": "a10vH",
+      "toEntity": "362c1dbd-dc64-44bb-a3c4-652f38a642d7",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "da857dfb-ec7d-49fb-b913-05e40d526fd2",
+      "entity": "c349cea7-1b3b-451c-9f22-7ff37e26050f",
+      "fromEntity": "a56e7d86-9a0a-47df-a1f9-6c2cf658f79e",
+      "position": "a2Bu9",
+      "toEntity": "50a07a18-0586-48c7-a7f3-a35db1a39c4c",
+      "type": "beaba5cb-a677-41a8-b353-77030613fc70"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "c349cea7-1b3b-451c-9f22-7ff37e26050f",
+      "values": []
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "7f099798-60ea-4e6c-a7b7-1912b37a399e",
+      "entity": "9b732752-831f-4cec-899a-4ca0ad6f9550",
+      "fromEntity": "c349cea7-1b3b-451c-9f22-7ff37e26050f",
+      "position": "a09m2",
+      "toEntity": "7d497dba-09c2-49b8-968f-716bcf520473",
+      "type": "1907fd1c-8111-4a3c-a378-b1f353425b65"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "f31fd872-140c-4a2b-ad3f-36bd777750b2",
+      "entity": "467d1857-51ca-42b1-aa3d-191077e2f5a9",
+      "fromEntity": "c349cea7-1b3b-451c-9f22-7ff37e26050f",
+      "position": "a128e",
+      "toEntity": "1155beff-fad5-49b7-a2e0-da4777b8792c",
+      "type": "01412f83-8189-4ab1-8365-65c7fd358cc1"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "c7ae0c11-210b-4718-8f05-f58a4f9b5146",
+      "values": [
+        {
+          "property": "8a743832-c094-4a62-b665-0c3cc2f9c7bc",
+          "value": "ipfs://bafkreidlwfujfakkmpiudonhl3rgyx3iz4ndnqfa3j3y2dtci2u2ixj3ti"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "f8e991c4-6c36-42f2-8b52-d20bf50a578c",
+      "entity": "ce0427f9-601f-45fa-b40d-aac597ca0ce0",
+      "fromEntity": "c7ae0c11-210b-4718-8f05-f58a4f9b5146",
+      "position": "a07Op",
+      "toEntity": "ba4e4146-0010-499d-a0a3-caaa7f579d0e",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "dbe7b3eb-3053-44cb-948b-b6469f5a69d6",
+      "values": [
+        {
+          "property": "8a743832-c094-4a62-b665-0c3cc2f9c7bc",
+          "value": "ipfs://bafkreifzkfa2ekcxkxxsowcqkqafrptxdtxpcpl5uoxsvsrwlys2shjdhy"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "f0b9c319-b2a6-433f-931d-12e2ca93f2b6",
+      "entity": "b6e1e13e-8201-4c1e-b178-66cf2e3a99a0",
+      "fromEntity": "dbe7b3eb-3053-44cb-948b-b6469f5a69d6",
+      "position": "a06rs",
+      "toEntity": "ba4e4146-0010-499d-a0a3-caaa7f579d0e",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "f3f5ff5e-207e-4529-b1f7-6b901b00973d",
+      "values": [
+        {
+          "property": "8a743832-c094-4a62-b665-0c3cc2f9c7bc",
+          "value": "ipfs://bafkreifkiqhisemoixaybtkiazsyqf7dsitcwmzkw4wetp3hmtgyd4bfaa"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "81b30f98-cdf2-452b-8e57-12ebefd1d721",
+      "entity": "6b167866-9e4e-41e0-a205-e17966ee3ae4",
+      "fromEntity": "f3f5ff5e-207e-4529-b1f7-6b901b00973d",
+      "position": "a02Iz",
+      "toEntity": "ba4e4146-0010-499d-a0a3-caaa7f579d0e",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "f83b34bd-d2b6-45dc-b0ba-62f72ac52398",
+      "values": [
+        {
+          "property": "a126ca53-0c8e-48d5-b888-82c734c38935",
+          "value": "WIA"
+        },
+        {
+          "property": "0d625978-4b3c-4b57-a86f-de45c997c73c",
+          "value": "https://x.com/WIA_internet"
+        },
+        {
+          "property": "9b1f76ff-9711-404c-861e-59dc3fa7d037",
+          "value": "We are a dynamic telecommunications operator with a wide portfolio of products. Home users, small businesses and corporations with high demands choose us."
+        },
+        {
+          "property": "eed38e74-e679-46bf-8a42-ea3e4f8fb5fb",
+          "value": "https://wia.cz/"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "5742612b-6458-487e-bee4-7e1984fe62ef",
+      "entity": "35e72017-7ad0-488e-9668-59011cd4c2b2",
+      "fromEntity": "f83b34bd-d2b6-45dc-b0ba-62f72ac52398",
+      "position": "a06or",
+      "toEntity": "484a18c5-030a-499c-b0f2-ef588ff16d50",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "07ca4f27-9b60-4a62-853b-15633f69a330",
+      "entity": "1a953691-eda2-4297-a6a1-aa369c77c186",
+      "fromEntity": "f83b34bd-d2b6-45dc-b0ba-62f72ac52398",
+      "position": "a15y2",
+      "toEntity": "231f66a2-ee7d-413f-9aa8-5c113e092f0c",
+      "type": "1155beff-fad5-49b7-a2e0-da4777b8792c"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "948386f6-ec29-4b52-88ef-926a68a0db7c",
+      "entity": "9539433b-a6c4-4f49-a496-70210f4613ba",
+      "fromEntity": "f83b34bd-d2b6-45dc-b0ba-62f72ac52398",
+      "position": "a24iR",
+      "toEntity": "dbe7b3eb-3053-44cb-948b-b6469f5a69d6",
+      "type": "34f53507-2e6b-42c5-a844-43981a77cfa2"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "f9d8ff4e-52f1-4e73-b8f2-bbb31dce5465",
+      "values": [
+        {
+          "property": "eed38e74-e679-46bf-8a42-ea3e4f8fb5fb",
+          "value": "https://www.mapbox.com/"
+        },
+        {
+          "property": "9b1f76ff-9711-404c-861e-59dc3fa7d037",
+          "value": "We equip innovators to keep up with a changing world through using real-time data and map rendering technologies that make it look easy."
+        },
+        {
+          "property": "a126ca53-0c8e-48d5-b888-82c734c38935",
+          "value": "Mapbox"
+        },
+        {
+          "property": "0d625978-4b3c-4b57-a86f-de45c997c73c",
+          "value": "https://x.com/Mapbox"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "f295713e-3ace-4943-930c-f0fddd18e871",
+      "entity": "3225b971-967a-4ddf-902e-8662bd6e248d",
+      "fromEntity": "f9d8ff4e-52f1-4e73-b8f2-bbb31dce5465",
+      "position": "a01yj",
+      "toEntity": "484a18c5-030a-499c-b0f2-ef588ff16d50",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "ab83b3ac-a72a-4006-b6d2-d456301ba5f9",
+      "entity": "993cd0e5-ee5c-4964-94e7-b960c70d261c",
+      "fromEntity": "f9d8ff4e-52f1-4e73-b8f2-bbb31dce5465",
+      "position": "a1BmJ",
+      "toEntity": "c7ae0c11-210b-4718-8f05-f58a4f9b5146",
+      "type": "34f53507-2e6b-42c5-a844-43981a77cfa2"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "5665ce85-766c-4755-b490-67588cf0b920",
+      "entity": "52b3dd7a-661a-4b37-ae97-e493b551f2be",
+      "fromEntity": "f9d8ff4e-52f1-4e73-b8f2-bbb31dce5465",
+      "position": "a22Z3",
+      "toEntity": "1c208f7b-c024-408f-8b76-6a41391abb5b",
+      "type": "1155beff-fad5-49b7-a2e0-da4777b8792c"
+    }
+  }
+]
