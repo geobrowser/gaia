@@ -24,6 +24,13 @@ import type {GraphQLContext} from "../types"
 import * as MembershipResolvers from "./resolvers/membership"
 import * as Resolvers from "./resolvers/root"
 
+/**
+ * Currently hand-rolling a compression polyfill until Bun implements
+ * CompressionStream in the runtime.
+ * https://github.com/oven-sh/bun/issues/1723
+ */
+import "./compression-polyfill"
+
 const EnvironmentLayer = Layer.effect(Environment, makeEnvironment)
 const StorageLayer = Layer.effect(Storage, makeStorage).pipe(Layer.provide(EnvironmentLayer))
 
@@ -233,7 +240,6 @@ export const graphqlServer = createYoga({
 		const entityNamesLoader = new DataLoader(
 			(ids: readonly string[]) => {
 				const batch = async () => {
-					console.log("batching names", ids.length)
 					const values = await db.query.values.findMany({
 						where: (values, {inArray, and, eq}) =>
 							and(inArray(values.entityId, ids), eq(values.propertyId, SystemIds.NAME_PROPERTY)),
@@ -299,7 +305,6 @@ export const graphqlServer = createYoga({
 			) => {
 				const batch = async () => {
 					const entityIds = keys.map((k) => k.entityId)
-					console.log("batching values?", keys.length)
 
 					const allValues = await db.query.values.findMany({
 						where: (values, {inArray}) => inArray(values.entityId, entityIds),
@@ -356,8 +361,6 @@ export const graphqlServer = createYoga({
 				}[],
 			) => {
 				const batch = async () => {
-					console.log("batching relations?", keys.length)
-
 					const entityIds = keys.map((k) => k.entityId)
 					const allRelations = await db.query.relations.findMany({
 						where: (relations, {inArray}) => inArray(relations.fromEntityId, entityIds),
@@ -428,7 +431,6 @@ export const graphqlServer = createYoga({
 		const propertiesLoader = new DataLoader(
 			(ids: readonly string[]) => {
 				const batch = async () => {
-					console.log("batching properties?", ids.length)
 					const properties = await db.query.properties.findMany({
 						where: (properties, {inArray}) => inArray(properties.id, ids),
 					})
