@@ -168,7 +168,7 @@ where
                                 storage.delete_values(&deleted_values, &space_id).await;
 
                             if let Err(error) = write_values_result {
-                                println!("Error writing set values {}", error);
+                                println!("Error writing delete values {}", error);
                             }
                         }));
                     }
