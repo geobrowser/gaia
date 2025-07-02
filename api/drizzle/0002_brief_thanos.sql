@@ -345,6 +345,4 @@ IS E'@fieldName space\n@foreignFieldName editors\n@foreignSimpleFieldName editor
 COMMENT ON CONSTRAINT members_address_space_id_pk ON MEMBERS IS E'@omit';
 COMMENT ON CONSTRAINT editors_address_space_id_pk ON EDITORS IS E'@omit';
 
-COMMENT ON TABLE properties IS E'@omit node';
-
 COMMENT ON TABLE ipfs_cache IS E'@omit';
