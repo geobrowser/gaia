@@ -149,3 +149,40 @@ RETURNS public.entities AS $$
     AND r.to_entity_id = '362c1dbd-dc64-44bb-a3c4-652f38a642d7' -- SystemIds.SPACE_TYPE
   LIMIT 1;
 $$ LANGUAGE sql STABLE;
+
+/*
+ * Returns the renderable type entity ID for a property
+ */
+CREATE OR REPLACE FUNCTION public.properties_renderable_type(property properties)
+RETURNS UUID AS $$
+  -- Skip system properties (NAME and DESCRIPTION)
+  -- SystemIds.NAME_PROPERTY = 'a126ca53-0c8e-48d5-b888-82c734c38935'
+  -- SystemIds.DESCRIPTION_PROPERTY = '9b1f76ff-9711-404c-861e-59dc3fa7d037'
+  SELECT CASE
+    WHEN property.id IN ('a126ca53-0c8e-48d5-b888-82c734c38935', '9b1f76ff-9711-404c-861e-59dc3fa7d037') THEN NULL
+    ELSE (
+      SELECT r.to_entity_id
+      FROM relations r
+      WHERE r.from_entity_id = property.id
+        AND r.type_id = '2316bbe1-c76f-4635-83f2-3e03b4f1fe46' -- RENDERABLE_TYPE_RELATION_ID
+      LIMIT 1
+    )
+  END;
+$$ LANGUAGE sql STABLE;
+
+/*
+ * Returns all relation value types for a property
+ */
+CREATE OR REPLACE FUNCTION public.properties_relation_value_types(property properties)
+RETURNS SETOF public.entities AS $$
+  -- Skip system properties (NAME and DESCRIPTION)
+  -- SystemIds.NAME_PROPERTY = 'a126ca53-0c8e-48d5-b888-82c734c38935'
+  -- SystemIds.DESCRIPTION_PROPERTY = '9b1f76ff-9711-404c-861e-59dc3fa7d037'
+  SELECT e.*
+  FROM entities e
+  JOIN relations r ON r.to_entity_id = e.id
+  WHERE property.id NOT IN ('a126ca53-0c8e-48d5-b888-82c734c38935', '9b1f76ff-9711-404c-861e-59dc3fa7d037')
+    AND r.from_entity_id = property.id
+    AND r.type_id = '9eea393f-17dd-4971-a62e-a603e8bfec20' -- SystemIds.RELATION_VALUE_RELATIONSHIP_TYPE
+  ORDER BY e.id;
+$$ LANGUAGE sql STABLE;

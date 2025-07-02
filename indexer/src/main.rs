@@ -13,7 +13,7 @@ use stream::{pb::sf::substreams::rpc::v2::BlockScopedData, PreprocessedSink};
 
 const PKG_FILE: &str = "geo_substream.spkg";
 const MODULE_NAME: &str = "geo_out";
-const START_BLOCK: i64 = 55053;
+const START_BLOCK: i64 = 56013;
 
 struct KgIndexer {
     storage: Arc<PostgresStorage>,
