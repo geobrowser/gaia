@@ -133,3 +133,19 @@ RETURNS SETOF public.spaces AS $$
   ) AS all_spaces
   JOIN spaces s ON s.id = all_spaces.space_id;
 $$ LANGUAGE sql STABLE;
+
+/*
+ * Returns the space type entity for a given space
+ * This finds the first entity that has a relation type of SystemIds.Types
+ * and a toEntityId of SystemIds.SPACE_TYPE
+ */
+CREATE OR REPLACE FUNCTION public.spaces_page(space spaces)
+RETURNS public.entities AS $$
+  SELECT e.*
+  FROM entities e
+  JOIN relations r ON r.from_entity_id = e.id
+  WHERE r.space_id = space.id
+    AND r.type_id = '8f151ba4-de20-4e3c-9cb4-99ddf96f48f1' -- SystemIds.Types
+    AND r.to_entity_id = '362c1dbd-dc64-44bb-a3c4-652f38a642d7' -- SystemIds.SPACE_TYPE
+  LIMIT 1;
+$$ LANGUAGE sql STABLE;
