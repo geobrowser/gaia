@@ -116,3 +116,20 @@ CREATE OR REPLACE FUNCTION public.search(
   ORDER BY
     re.max_score DESC, e.id;
 $$ LANGUAGE sql STABLE;
+
+CREATE OR REPLACE FUNCTION public.entities_spaces_in(entity entities)
+RETURNS SETOF public.spaces AS $$
+  SELECT DISTINCT s.*
+  FROM (
+    -- Spaces from values table
+    SELECT space_id
+    FROM values
+    WHERE entity_id = entity.id
+    UNION
+    -- Spaces from relations table where entity is the from entity
+    SELECT space_id
+    FROM relations
+    WHERE from_entity_id = entity.id
+  ) AS all_spaces
+  JOIN spaces s ON s.id = all_spaces.space_id;
+$$ LANGUAGE sql STABLE;
