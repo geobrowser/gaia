@@ -274,7 +274,7 @@ COMMENT ON COLUMN public.properties.type IS E'@name dataType';
 
 COMMENT ON CONSTRAINT relations_type_id_properties_id_fk
 ON relations
-IS E'@fieldName type';
+IS E'@fieldName type\n@omit many';
 
 COMMENT ON CONSTRAINT relations_space_id_spaces_id_fk
 ON relations
@@ -290,7 +290,7 @@ IS E'@fieldName fromSpace';
 
 COMMENT ON CONSTRAINT values_property_id_properties_id_fk
 ON values
-IS E'@fieldName property';
+IS E'@fieldName property\n@omit many';
 
 COMMENT ON CONSTRAINT values_space_id_spaces_id_fk
 ON values
@@ -311,3 +311,11 @@ IS E'@fieldName toEntity\n@foreignFieldName backlinks\n@foreignSimpleFieldName b
 COMMENT ON CONSTRAINT relations_entity_id_entities_id_fk
 ON relations
 IS E'@fieldName entity\n@foreignFieldName relationsWhereEntity\n@foreignSimpleFieldName relationsWhereEntityList';
+
+COMMENT ON CONSTRAINT members_space_id_spaces_id_fk
+ON members
+IS E'@fieldName space\n@foreignFieldName members\n@foreignSimpleFieldName membersList';
+
+COMMENT ON CONSTRAINT editors_space_id_spaces_id_fk
+ON editors
+IS E'@fieldName space\n@foreignFieldName editors\n@foreignSimpleFieldName editorsList';
