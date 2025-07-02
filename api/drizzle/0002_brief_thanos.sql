@@ -173,9 +173,9 @@ $$ LANGUAGE sql STABLE;
 
 COMMENT ON FUNCTION public.types(UUID, INTEGER, INTEGER) IS E'@name allTypes';
 
-CREATE OR REPLACE FUNCTION public.entities_properties_for(
+CREATE OR REPLACE FUNCTION public.entities_properties(
   entity entities,
-  space_id UUID DEFAULT NULL,
+  space_id UUID DEFAULT NULL
 )
 RETURNS SETOF public.properties AS $$
   WITH type_property_relations AS (
@@ -215,6 +215,8 @@ RETURNS SETOF public.properties AS $$
   JOIN all_properties_with_priority app ON p.id = app.id
   ORDER BY app.priority
 $$ LANGUAGE sql STABLE;
+
+COMMENT ON FUNCTION public.entities_properties(entities, UUID) IS E'@fieldName properties\n@resultFieldName properties\n@resultListFieldName propertiesList';
 
 /*
  * Returns the renderable type entity ID for a property
