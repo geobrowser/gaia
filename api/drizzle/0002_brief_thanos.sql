@@ -286,14 +286,6 @@ COMMENT ON CONSTRAINT relations_from_space_id_spaces_id_fk
 ON relations
 IS E'@fieldName fromSpace';
 
-COMMENT ON CONSTRAINT relations_entity_id_entities_id_fk
-ON relations
-IS E'@fieldName entity';
-
-COMMENT ON CONSTRAINT values_entity_id_entities_id_fk
-ON values
-IS E'@fieldName entity';
-
 COMMENT ON CONSTRAINT values_property_id_properties_id_fk
 ON values
 IS E'@fieldName property';
@@ -304,7 +296,7 @@ IS E'@fieldName space';
 
 COMMENT ON CONSTRAINT values_entity_id_entities_id_fk
 ON values
-IS E'@foreignFieldName values\n@foreignSimpleFieldName valuesList';
+IS E'@fieldName entity\n@foreignFieldName values\n@foreignSimpleFieldName valuesList';
 
 COMMENT ON CONSTRAINT relations_from_entity_id_entities_id_fk
 ON relations
