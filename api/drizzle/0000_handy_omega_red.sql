@@ -1,11 +1,5 @@
 CREATE TYPE "public"."dataTypes" AS ENUM('Text', 'Number', 'Checkbox', 'Time', 'Point', 'Relation');--> statement-breakpoint
 CREATE TYPE "public"."spaceTypes" AS ENUM('Personal', 'Public');--> statement-breakpoint
-CREATE TABLE "cursors" (
-	"id" text PRIMARY KEY NOT NULL,
-	"cursor" text NOT NULL,
-	"block_number" text NOT NULL
-);
---> statement-breakpoint
 CREATE TABLE "editors" (
 	"address" text NOT NULL,
 	"space_id" uuid NOT NULL,
@@ -34,6 +28,12 @@ CREATE TABLE "members" (
 	"address" text NOT NULL,
 	"space_id" uuid NOT NULL,
 	CONSTRAINT "members_address_space_id_pk" PRIMARY KEY("address","space_id")
+);
+--> statement-breakpoint
+CREATE TABLE "meta" (
+	"id" text PRIMARY KEY NOT NULL,
+	"cursor" text NOT NULL,
+	"block_number" text NOT NULL
 );
 --> statement-breakpoint
 CREATE TABLE "properties" (

@@ -64,7 +64,7 @@ impl Storage {
     }
 
     pub async fn load_cursor(&self, id: &str) -> Result<Option<String>, CacheError> {
-        let result = sqlx::query!("SELECT cursor FROM cursors WHERE id = $1", id)
+        let result = sqlx::query!("SELECT cursor FROM meta WHERE id = $1", id)
             .fetch_optional(&self.connection)
             .await?;
 
@@ -78,7 +78,7 @@ impl Storage {
         block: &u64,
     ) -> Result<(), CacheError> {
         sqlx::query!(
-            "INSERT INTO cursors (id, cursor, block_number) VALUES ($1, $2, $3) ON CONFLICT (id) DO UPDATE SET cursor = $2, block_number = $3",
+            "INSERT INTO meta (id, cursor, block_number) VALUES ($1, $2, $3) ON CONFLICT (id) DO UPDATE SET cursor = $2, block_number = $3",
             id,
             cursor,
             block.to_string()

@@ -1,5 +1,18 @@
-import {relations as drizzleRelations, type InferSelectModel} from "drizzle-orm"
-import {boolean, index, jsonb, pgEnum, pgTable, primaryKey, serial, text, uuid} from "drizzle-orm/pg-core"
+import {
+	relations as drizzleRelations,
+	type InferSelectModel,
+} from "drizzle-orm";
+import {
+	boolean,
+	index,
+	jsonb,
+	pgEnum,
+	pgTable,
+	primaryKey,
+	serial,
+	text,
+	uuid,
+} from "drizzle-orm/pg-core";
 
 export const ipfsCache = pgTable("ipfs_cache", {
 	id: serial(),
@@ -14,7 +27,7 @@ export const ipfsCache = pgTable("ipfs_cache", {
 	isErrored: boolean().notNull().default(false),
 	block: text().notNull(),
 	space: uuid().notNull(),
-})
+});
 
 /**
  * Cursors store the latest indexed block log. Indexers store their latest
@@ -30,13 +43,13 @@ export const ipfsCache = pgTable("ipfs_cache", {
  * example, the kg indexer may use an id of "kg_indexer", and the ipfs cache
  * indexer may use "ipfs_indexer"
  */
-export const cursors = pgTable("cursors", {
+export const meta = pgTable("meta", {
 	id: text().primaryKey(),
 	cursor: text().notNull(),
 	blockNumber: text().notNull(),
-})
+});
 
-export const spaceTypesEnum = pgEnum("spaceTypes", ["Personal", "Public"])
+export const spaceTypesEnum = pgEnum("spaceTypes", ["Personal", "Public"]);
 
 export const spaces = pgTable("spaces", {
 	id: uuid().primaryKey(),
@@ -46,7 +59,7 @@ export const spaces = pgTable("spaces", {
 	mainVotingAddress: text(),
 	membershipAddress: text(),
 	personalAddress: text(),
-})
+});
 
 export const entities = pgTable("entities", {
 	id: uuid().primaryKey(),
@@ -54,9 +67,16 @@ export const entities = pgTable("entities", {
 	createdAtBlock: text().notNull(),
 	updatedAt: text().notNull(),
 	updatedAtBlock: text().notNull(),
-})
+});
 
-export const dataTypesEnum = pgEnum("dataTypes", ["Text", "Number", "Checkbox", "Time", "Point", "Relation"])
+export const dataTypesEnum = pgEnum("dataTypes", [
+	"Text",
+	"Number",
+	"Checkbox",
+	"Time",
+	"Point",
+	"Relation",
+]);
 
 export const properties = pgTable(
 	"properties",
@@ -68,15 +88,21 @@ export const properties = pgTable(
 		// Index for filtering by data type
 		index("properties_type_idx").on(table.type),
 	],
-)
+);
 
 export const values = pgTable(
 	"values",
 	{
 		id: text().primaryKey(),
-		propertyId: uuid().notNull(),
-		entityId: uuid().notNull(),
-		spaceId: uuid().notNull(),
+		propertyId: uuid()
+			.notNull()
+			.references(() => properties.id),
+		entityId: uuid()
+			.notNull()
+			.references(() => entities.id),
+		spaceId: uuid()
+			.notNull()
+			.references(() => spaces.id),
 		value: text().notNull(),
 		language: text(),
 		unit: text(),
@@ -94,7 +120,11 @@ export const values = pgTable(
 		index("values_entity_property_idx").on(table.entityId, table.propertyId),
 		index("values_entity_space_idx").on(table.entityId, table.spaceId),
 		index("values_property_space_idx").on(table.propertyId, table.spaceId),
-		index("values_entity_property_space_idx").on(table.entityId, table.propertyId, table.spaceId),
+		index("values_entity_property_space_idx").on(
+			table.entityId,
+			table.propertyId,
+			table.spaceId,
+		),
 
 		// Composite index for space-filtered searches
 		index("values_space_text_idx").on(table.spaceId, table.value),
@@ -103,22 +133,32 @@ export const values = pgTable(
 		index("values_language_idx").on(table.language),
 		index("values_unit_idx").on(table.unit),
 	],
-)
+);
 
 export const relations = pgTable(
 	"relations",
 	{
 		id: uuid().primaryKey(),
-		entityId: uuid().notNull(),
-		typeId: uuid().notNull(),
-		fromEntityId: uuid().notNull(),
-		fromSpaceId: uuid(),
+		entityId: uuid()
+			.notNull()
+			.references(() => entities.id),
+		typeId: uuid()
+			.notNull()
+			.references(() => properties.id),
+		fromEntityId: uuid()
+			.notNull()
+			.references(() => entities.id),
+		fromSpaceId: uuid().references(() => spaces.id),
 		fromVersionId: uuid(),
-		toEntityId: uuid().notNull(),
-		toSpaceId: uuid(),
+		toEntityId: uuid()
+			.notNull()
+			.references(() => entities.id),
+		toSpaceId: uuid().references(() => spaces.id),
 		toVersionId: uuid(),
 		position: text(),
-		spaceId: uuid().notNull(),
+		spaceId: uuid()
+			.notNull()
+			.references(() => spaces.id),
 		verified: boolean(),
 	},
 	(table) => [
@@ -130,117 +170,148 @@ export const relations = pgTable(
 		index("relations_space_id_idx").on(table.spaceId),
 
 		// Composite indexes for common query patterns
-		index("relations_space_from_to_idx").on(table.spaceId, table.fromEntityId, table.toEntityId),
+		index("relations_space_from_to_idx").on(
+			table.spaceId,
+			table.fromEntityId,
+			table.toEntityId,
+		),
 		index("relations_space_type_idx").on(table.spaceId, table.typeId),
 		index("relations_to_entity_space_idx").on(table.toEntityId, table.spaceId),
-		index("relations_from_entity_space_idx").on(table.fromEntityId, table.spaceId),
+		index("relations_from_entity_space_idx").on(
+			table.fromEntityId,
+			table.spaceId,
+		),
 
 		// Additional composite indexes for complex queries
-		index("relations_entity_type_space_idx").on(table.entityId, table.typeId, table.spaceId),
-		index("relations_type_from_to_idx").on(table.typeId, table.fromEntityId, table.toEntityId),
+		index("relations_entity_type_space_idx").on(
+			table.entityId,
+			table.typeId,
+			table.spaceId,
+		),
+		index("relations_type_from_to_idx").on(
+			table.typeId,
+			table.fromEntityId,
+			table.toEntityId,
+		),
 	],
-)
+);
 
 export const members = pgTable(
 	"members",
 	{
 		address: text().notNull(),
-		spaceId: uuid().notNull(),
+		spaceId: uuid()
+			.notNull()
+			.references(() => spaces.id),
 	},
-	(table) => [primaryKey({columns: [table.address, table.spaceId]})],
-)
+	(table) => [primaryKey({ columns: [table.address, table.spaceId] })],
+);
 
 export const editors = pgTable(
 	"editors",
 	{
 		address: text().notNull(),
-		spaceId: uuid().notNull(),
+		spaceId: uuid()
+			.notNull()
+			.references(() => spaces.id),
 	},
-	(table) => [primaryKey({columns: [table.address, table.spaceId]})],
-)
+	(table) => [primaryKey({ columns: [table.address, table.spaceId] })],
+);
 
-export const entityForeignValues = drizzleRelations(entities, ({many, one}) => ({
-	values: many(values),
-	property: one(properties, {
-		fields: [entities.id],
-		references: [properties.id],
+export const entityForeignValues = drizzleRelations(
+	entities,
+	({ many, one }) => ({
+		values: many(values),
+		property: one(properties, {
+			fields: [entities.id],
+			references: [properties.id],
+		}),
+		fromRelations: many(relations, {
+			relationName: "fromEntity",
+		}),
+		// If an entity is the object (i.e. toEntity)
+		toRelations: many(relations, {
+			relationName: "toEntity",
+		}),
+		// If an entity is directly linked (e.g. as owning the relation row)
+		relationEntityRelations: many(relations, {
+			relationName: "entity",
+		}),
 	}),
-	fromRelations: many(relations, {
-		relationName: "fromEntity",
-	}),
-	// If an entity is the object (i.e. toEntity)
-	toRelations: many(relations, {
-		relationName: "toEntity",
-	}),
-	// If an entity is directly linked (e.g. as owning the relation row)
-	relationEntityRelations: many(relations, {
-		relationName: "entity",
-	}),
-}))
+);
 
-export const propertiesEntityRelations = drizzleRelations(values, ({one}) => ({
-	entity: one(entities, {
-		fields: [values.entityId],
-		references: [entities.id],
+export const propertiesEntityRelations = drizzleRelations(
+	values,
+	({ one }) => ({
+		entity: one(entities, {
+			fields: [values.entityId],
+			references: [entities.id],
+		}),
 	}),
-}))
+);
 
-export const propertiesRelations = drizzleRelations(properties, ({one, many}) => ({
-	entity: one(entities, {
-		fields: [properties.id],
-		references: [entities.id],
+export const propertiesRelations = drizzleRelations(
+	properties,
+	({ one, many }) => ({
+		entity: one(entities, {
+			fields: [properties.id],
+			references: [entities.id],
+		}),
+		// Relations where this property is used as the type
+		typeRelations: many(relations, {
+			relationName: "typeProperty",
+		}),
 	}),
-	// Relations where this property is used as the type
-	typeRelations: many(relations, {
-		relationName: "typeProperty",
-	}),
-}))
+);
 
-export const relationsEntityRelations = drizzleRelations(relations, ({one}) => ({
-	fromEntity: one(entities, {
-		fields: [relations.fromEntityId],
-		references: [entities.id],
-		relationName: "fromEntity",
+export const relationsEntityRelations = drizzleRelations(
+	relations,
+	({ one }) => ({
+		fromEntity: one(entities, {
+			fields: [relations.fromEntityId],
+			references: [entities.id],
+			relationName: "fromEntity",
+		}),
+		toEntity: one(entities, {
+			fields: [relations.toEntityId],
+			references: [entities.id],
+			relationName: "toEntity",
+		}),
+		typeProperty: one(properties, {
+			fields: [relations.typeId],
+			references: [properties.id],
+			relationName: "typeProperty",
+		}),
+		relationEntity: one(entities, {
+			fields: [relations.entityId],
+			references: [entities.id],
+			relationName: "relationEntity",
+		}),
 	}),
-	toEntity: one(entities, {
-		fields: [relations.toEntityId],
-		references: [entities.id],
-		relationName: "toEntity",
-	}),
-	typeProperty: one(properties, {
-		fields: [relations.typeId],
-		references: [properties.id],
-		relationName: "typeProperty",
-	}),
-	relationEntity: one(entities, {
-		fields: [relations.entityId],
-		references: [entities.id],
-		relationName: "relationEntity",
-	}),
-}))
+);
 
-export const membersRelations = drizzleRelations(members, ({one}) => ({
+export const membersRelations = drizzleRelations(members, ({ one }) => ({
 	space: one(spaces, {
 		fields: [members.spaceId],
 		references: [spaces.id],
 	}),
-}))
+}));
 
-export const editorsRelations = drizzleRelations(editors, ({one}) => ({
+export const editorsRelations = drizzleRelations(editors, ({ one }) => ({
 	space: one(spaces, {
 		fields: [editors.spaceId],
 		references: [spaces.id],
 	}),
-}))
+}));
 
-export const spacesRelations = drizzleRelations(spaces, ({many}) => ({
+export const spacesRelations = drizzleRelations(spaces, ({ many }) => ({
 	members: many(members),
 	editors: many(editors),
-}))
+}));
 
-export type IpfsCacheItem = InferSelectModel<typeof ipfsCache>
-export type DbEntity = InferSelectModel<typeof entities>
-export type DbProperty = InferSelectModel<typeof values>
-export type DbRelations = InferSelectModel<typeof relations>
-export type DbMember = InferSelectModel<typeof members>
-export type DbEditor = InferSelectModel<typeof editors>
+export type IpfsCacheItem = InferSelectModel<typeof ipfsCache>;
+export type DbEntity = InferSelectModel<typeof entities>;
+export type DbProperty = InferSelectModel<typeof values>;
+export type DbRelations = InferSelectModel<typeof relations>;
+export type DbMember = InferSelectModel<typeof members>;
+export type DbEditor = InferSelectModel<typeof editors>;
