@@ -122,17 +122,19 @@ RETURNS SETOF public.spaces AS $$
   SELECT DISTINCT s.*
   FROM (
     -- Spaces from values table
-    SELECT space_id
+    SELECT DISTINCT space_id
     FROM values
     WHERE entity_id = entity.id
     UNION
     -- Spaces from relations table where entity is the from entity
-    SELECT space_id
+    SELECT DISTINCT space_id
     FROM relations
     WHERE from_entity_id = entity.id
   ) AS all_spaces
   JOIN spaces s ON s.id = all_spaces.space_id;
 $$ LANGUAGE sql STABLE;
+
+-- We don't need these comments as they're causing errors - will define properly below
 
 /*
  * Returns the space type entity for a given space
@@ -143,7 +145,7 @@ CREATE OR REPLACE FUNCTION public.spaces_page(space spaces)
 RETURNS public.entities AS $$
   SELECT e.*
   FROM entities e
-  JOIN relations r ON r.from_entity_id = e.id
+  JOIN relations r ON e.id = r.from_entity_id
   WHERE r.space_id = space.id
     AND r.type_id = '8f151ba4-de20-4e3c-9cb4-99ddf96f48f1' -- SystemIds.Types
     AND r.to_entity_id = '362c1dbd-dc64-44bb-a3c4-652f38a642d7' -- SystemIds.SPACE_TYPE
