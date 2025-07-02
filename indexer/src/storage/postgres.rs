@@ -330,22 +330,21 @@ impl StorageBackend for PostgresStorage {
 
     async fn delete_values(
         &self,
-        property_ids: &Vec<Uuid>,
+        value_ids: &Vec<Uuid>,
         space_id: &Uuid,
     ) -> Result<(), StorageError> {
-        if property_ids.is_empty() {
+        if value_ids.is_empty() {
             return Ok(());
         }
 
-        let ids: Vec<String> = property_ids.iter().map(|id| id.to_string()).collect();
-        let space_id_str = space_id.to_string();
+        let ids: Vec<String> = value_ids.iter().map(|id| id.to_string()).collect();
 
         sqlx::query(
             "DELETE FROM values
                      WHERE space_id = $1 AND id IN
                      (SELECT * FROM UNNEST($2::text[]))",
         )
-        .bind(&space_id_str)
+        .bind(space_id)
         .bind(&ids)
         .execute(&self.pool)
         .await?;
