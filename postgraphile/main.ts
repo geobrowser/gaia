@@ -1,4 +1,3 @@
-import { SystemIds } from "@graphprotocol/grc-20";
 import express from "express";
 import { postgraphile } from "postgraphile";
 import ConnectionFilterPlugin from 'postgraphile-plugin-connection-filter';
