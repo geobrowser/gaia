@@ -1,9 +1,10 @@
 import {SystemIds} from "@graphprotocol/grc-20"
 import {makeExecutableSchema} from "@graphql-tools/schema"
+import {useResponseCache} from "@graphql-yoga/plugin-response-cache"
 import {file} from "bun"
 import DataLoader from "dataloader"
 import {Effect, Layer} from "effect"
-import {createYoga} from "graphql-yoga"
+import {createYoga, useExecutionCancellation} from "graphql-yoga"
 import type {
 	DataType,
 	EntityRelationsArgs,
@@ -197,6 +198,13 @@ const schema = makeExecutableSchema({
 export const graphqlServer = createYoga({
 	schema,
 	batching: true,
+	plugins: [
+		useExecutionCancellation(),
+		useResponseCache({
+			session: () => null,
+			ttl: 10_000, // 10 seconds
+		}),
+	],
 	context: (): GraphQLContext => {
 		const entitiesLoader = new DataLoader(
 			(ids: readonly string[]) => {

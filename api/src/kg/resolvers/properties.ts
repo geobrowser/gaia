@@ -3,7 +3,6 @@ import {and, eq, inArray, sql} from "drizzle-orm"
 import {Effect} from "effect"
 import {BatchingError, type GraphQLContext} from "~/src/types"
 import {DataType, type QueryPropertiesArgs, type QueryTypesArgs} from "../../generated/graphql"
-import {Batching} from "../../services/storage/dataloaders"
 import {properties} from "../../services/storage/schema"
 import {Storage} from "../../services/storage/storage"
 
