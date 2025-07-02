@@ -68,3 +68,6 @@ CREATE OR REPLACE FUNCTION public.entities_backlinks(entity entities) RETURNS SE
   FROM relations r
   WHERE r.to_entity_id = entity.id
 $$ LANGUAGE sql STABLE;
+
+CREATE EXTENSION IF NOT EXISTS pg_trgm;
+CREATE INDEX IF NOT EXISTS values_text_gin_trgm_idx ON values USING GIN (value gin_trgm_ops);
