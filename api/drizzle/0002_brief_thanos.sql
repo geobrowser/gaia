@@ -71,3 +71,48 @@ $$ LANGUAGE sql STABLE;
 
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 CREATE INDEX IF NOT EXISTS values_text_gin_trgm_idx ON values USING GIN (value gin_trgm_ops);
+
+-- Create a simplified fuzzy search function that only searches name and description properties
+CREATE OR REPLACE FUNCTION public.search(
+  search_text TEXT,
+  space_id UUID DEFAULT NULL,
+  similarity_threshold FLOAT DEFAULT 0.3,
+  max_results INTEGER DEFAULT 100
+) RETURNS SETOF public.entities AS $$
+  WITH search_values AS (
+    SELECT
+      v.entity_id,
+      CASE
+        WHEN v.property_id = 'a126ca53-0c8e-48d5-b888-82c734c38935' THEN similarity(v.value, search_text) * 2.0  -- Name property
+        WHEN v.property_id = '9b1f76ff-9711-404c-861e-59dc3fa7d037' THEN similarity(v.value, search_text) * 1.5  -- Description property
+      END AS sim_score
+    FROM
+      values v
+    WHERE
+      v.value % search_text
+      AND similarity(v.value, search_text) >= similarity_threshold
+      AND (space_id IS NULL OR v.space_id = space_id)
+      AND (
+        v.property_id = 'a126ca53-0c8e-48d5-b888-82c734c38935' OR  -- Name property
+        v.property_id = '9b1f76ff-9711-404c-861e-59dc3fa7d037'      -- Description property
+      )
+  ),
+  ranked_entities AS (
+    SELECT
+      sv.entity_id,
+      MAX(sv.sim_score) AS max_score
+    FROM
+      search_values sv
+    GROUP BY
+      sv.entity_id
+    ORDER BY
+      max_score DESC, sv.entity_id
+    LIMIT max_results
+  )
+  SELECT e.*
+  FROM
+    ranked_entities re
+    JOIN entities e ON e.id = re.entity_id
+  ORDER BY
+    re.max_score DESC, e.id;
+$$ LANGUAGE sql STABLE;
