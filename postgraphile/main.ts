@@ -21,6 +21,9 @@ const middleware = postgraphile(process.env.DATABASE_URL!, "public", {
 	watchPg: true,
 	dynamicJson: true,
 	ignoreRBAC: false,
+	graphileBuildOptions: {
+    connectionFilterRelations: true, // default: false
+  },
 });
 
 const app = express();
