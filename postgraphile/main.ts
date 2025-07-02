@@ -1,12 +1,16 @@
 import express from "express";
 import { postgraphile } from "postgraphile";
 import ConnectionFilterPlugin from 'postgraphile-plugin-connection-filter';
+import SimplifyInflectionPlugin from '@graphile-contrib/pg-simplify-inflector';
+
 
 const middleware = postgraphile(process.env.DATABASE_URL!, "public", {
-	appendPlugins: [ConnectionFilterPlugin],
+	appendPlugins: [ConnectionFilterPlugin, SimplifyInflectionPlugin],
 	graphiql: true,
 	enhanceGraphiql: true,
 	disableQueryLog: true,
+	disableDefaultMutations: true,
+	nodeIdFieldName: "internalNodeId",
 	simpleCollections: "both",
 	// Enable function-based computed columns
 	setofFunctionsContainNulls: false,
@@ -22,6 +26,11 @@ const middleware = postgraphile(process.env.DATABASE_URL!, "public", {
 	ignoreRBAC: false,
 	graphileBuildOptions: {
     connectionFilterRelations: true, // default: false
+    connectionFilterOperatorNames: {
+      equalTo: "is",
+      notEqualTo: "isNot",
+    },
+    pgOmitListSuffix: true
   },
 });
 

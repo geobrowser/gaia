@@ -4,6 +4,8 @@
     "": {
       "name": "postgraphile",
       "dependencies": {
+        "@graphile-contrib/pg-simplify-inflector": "^6.1.0",
+        "@graphile/simplify-inflection": "^8.0.0-beta.7",
         "@graphprotocol/grc-20": "^0.21.3",
         "@types/express": "^5.0.3",
         "express": "^5.1.0",
@@ -115,7 +117,11 @@
 
     "@ethersproject/wordlists": ["@ethersproject/wordlists@5.8.0", "", { "dependencies": { "@ethersproject/bytes": "^5.8.0", "@ethersproject/hash": "^5.8.0", "@ethersproject/logger": "^5.8.0", "@ethersproject/properties": "^5.8.0", "@ethersproject/strings": "^5.8.0" } }, "sha512-2df9bbXicZws2Sb5S6ET493uJ0Z84Fjr3pC4tu/qlnZERibZCeUVuqdtt+7Tv9xxhUxHoIekIA7avrKUWHrezg=="],
 
+    "@graphile-contrib/pg-simplify-inflector": ["@graphile-contrib/pg-simplify-inflector@6.1.0", "", {}, "sha512-3eI2FP4ulu/fxwkJBNXhR6XEzqVz4wJWFr4LfeyUNNArUtLFx0DpP6YdcARCYgwLExFcIQNE8fnul3JKiciYIw=="],
+
     "@graphile/lru": ["@graphile/lru@4.11.0", "", { "dependencies": { "tslib": "^2.0.1" } }, "sha512-Fakuk190EAKxWSa9YQyr/87g8mvAv8HBvk6yPCPuIoA3bYXF7n6kl0XSqKjSd5VfjEqhtnzQ6zJGzDf1Gv/tJg=="],
+
+    "@graphile/simplify-inflection": ["@graphile/simplify-inflection@8.0.0-beta.7", "", {}, "sha512-Put/sBvxJAl19GdpLP6G4c/CJYBjuH7ct1RF6+tVRfRWrg5XnsXXnCCcCO3GBlpGlQeRzgzr7ahnyza259GgGw=="],
 
     "@graphprotocol/grc-20": ["@graphprotocol/grc-20@0.21.3", "", { "dependencies": { "@bufbuild/protobuf": "^1.9.0", "@changesets/cli": "^2.27.12", "effect": "^3.13.6", "ethers": "^5.7.2", "fflate": "^0.8.2", "fractional-indexing-jittered": "^1.0.0", "graphql-request": "^7.1.2", "image-size": "^2.0.0", "permissionless": "^0.2.35", "uuid": "^11.1.0", "viem": "^2.23.6" } }, "sha512-g9N25MRtJEher3OClvF2DV2OcnxaPmd0AhxhML6R++GMB7IjcSKX+At6flWCFRBbSphYN8VQsYlHDBzFoXA8zA=="],
 

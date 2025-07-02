@@ -56,23 +56,22 @@ CREATE INDEX IF NOT EXISTS values_text_gin_trgm_idx ON values USING GIN (value g
 
 -- Create a simplified fuzzy search function that only searches name and description properties
 CREATE OR REPLACE FUNCTION public.search(
-  search_text TEXT,
+  query TEXT,
   space_id UUID DEFAULT NULL,
   similarity_threshold FLOAT DEFAULT 0.3,
-  max_results INTEGER DEFAULT 100
 ) RETURNS SETOF public.entities AS $$
   WITH search_values AS (
     SELECT
       v.entity_id,
       CASE
-        WHEN v.property_id = 'a126ca53-0c8e-48d5-b888-82c734c38935' THEN similarity(v.value, search_text) * 2.0  -- Name property
-        WHEN v.property_id = '9b1f76ff-9711-404c-861e-59dc3fa7d037' THEN similarity(v.value, search_text) * 1.5  -- Description property
+        WHEN v.property_id = 'a126ca53-0c8e-48d5-b888-82c734c38935' THEN similarity(v.value, query) * 2.0  -- Name property
+        WHEN v.property_id = '9b1f76ff-9711-404c-861e-59dc3fa7d037' THEN similarity(v.value, query) * 1.5  -- Description property
       END AS sim_score
     FROM
       values v
     WHERE
-      v.value % search_text
-      AND similarity(v.value, search_text) >= similarity_threshold
+      v.value % query
+      AND similarity(v.value, query) >= similarity_threshold
       AND (space_id IS NULL OR v.space_id = space_id)
       AND (
         v.property_id = 'a126ca53-0c8e-48d5-b888-82c734c38935' OR  -- Name property
@@ -89,7 +88,6 @@ CREATE OR REPLACE FUNCTION public.search(
       sv.entity_id
     ORDER BY
       max_score DESC, sv.entity_id
-    LIMIT max_results
   )
   SELECT e.*
   FROM
@@ -319,3 +317,10 @@ IS E'@fieldName space\n@foreignFieldName members\n@foreignSimpleFieldName member
 COMMENT ON CONSTRAINT editors_space_id_spaces_id_fk
 ON editors
 IS E'@fieldName space\n@foreignFieldName editors\n@foreignSimpleFieldName editorsList';
+
+COMMENT ON CONSTRAINT members_address_space_id_pk ON MEMBERS IS E'@omit';
+COMMENT ON CONSTRAINT editors_address_space_id_pk ON EDITORS IS E'@omit';
+
+COMMENT ON TABLE properties IS E'@omit node';
+
+COMMENT ON TABLE ipfs_cache IS E'@omit';
