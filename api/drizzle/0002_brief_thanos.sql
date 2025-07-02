@@ -38,11 +38,9 @@ CREATE OR REPLACE FUNCTION public.entities_name(entity entities) RETURNS text AS
   SELECT value FROM values WHERE entity_id = entity.id AND property_id = 'a126ca53-0c8e-48d5-b888-82c734c38935' LIMIT 1;
 $$ LANGUAGE sql STABLE;
 
-
 CREATE OR REPLACE FUNCTION public.entities_description(entity entities) RETURNS text AS $$
   SELECT value FROM values WHERE entity_id = entity.id AND property_id = '9b1f76ff-9711-404c-861e-59dc3fa7d037' LIMIT 1;
 $$ LANGUAGE sql STABLE;
-
 
 CREATE OR REPLACE FUNCTION public.entities_types(entity entities) RETURNS SETOF public.entities AS $$
   SELECT e.*
@@ -51,6 +49,8 @@ CREATE OR REPLACE FUNCTION public.entities_types(entity entities) RETURNS SETOF 
   WHERE r.from_entity_id = entity.id AND r.type_id = '8f151ba4-de20-4e3c-9cb4-99ddf96f48f1';
 $$ LANGUAGE sql STABLE;
 
+COMMENT ON FUNCTION public.entities_types(public.entities) IS '@filterable';
+
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 CREATE INDEX IF NOT EXISTS values_text_gin_trgm_idx ON values USING GIN (value gin_trgm_ops);
 
@@ -58,7 +58,7 @@ CREATE INDEX IF NOT EXISTS values_text_gin_trgm_idx ON values USING GIN (value g
 CREATE OR REPLACE FUNCTION public.search(
   query TEXT,
   space_id UUID DEFAULT NULL,
-  similarity_threshold FLOAT DEFAULT 0.3,
+  similarity_threshold FLOAT DEFAULT 0.3
 ) RETURNS SETOF public.entities AS $$
   WITH search_values AS (
     SELECT
@@ -114,7 +114,15 @@ RETURNS SETOF public.spaces AS $$
   JOIN spaces s ON s.id = all_spaces.space_id;
 $$ LANGUAGE sql STABLE;
 
--- We don't need these comments as they're causing errors - will define properly below
+CREATE OR REPLACE FUNCTION public.entities_space_ids(entity entities)
+RETURNS uuid[] AS $$
+  SELECT ARRAY_AGG(DISTINCT space_id)
+  FROM (
+    SELECT space_id FROM values WHERE entity_id = entity.id
+    UNION
+    SELECT space_id FROM relations WHERE from_entity_id = entity.id
+  ) AS all_spaces;
+$$ LANGUAGE sql STABLE;
 
 /*
  * Returns the space front page entity for a given space
@@ -133,9 +141,7 @@ RETURNS public.entities AS $$
 $$ LANGUAGE sql STABLE;
 
 CREATE OR REPLACE FUNCTION public.types(
-  space_id UUID DEFAULT NULL,
-  limit_val INTEGER DEFAULT 100,
-  offset_val INTEGER DEFAULT 0
+  space_id UUID DEFAULT NULL
 )
 RETURNS SETOF public.entities AS $$
   SELECT e.*
@@ -148,28 +154,26 @@ RETURNS SETOF public.entities AS $$
       AND r.to_entity_id = 'e7d737c5-3676-4c60-9fa1-6aa64a8c90ad' -- SystemIds.TYPE
       AND (space_id IS NULL OR r.space_id = space_id)
   )
-  ORDER BY e.id
-  LIMIT limit_val
-  OFFSET offset_val;
+  ORDER BY e.id;
 $$ LANGUAGE sql STABLE;
 
 -- Simple function to get a single type entity by ID
-CREATE OR REPLACE FUNCTION public.type(type_id UUID)
+CREATE OR REPLACE FUNCTION public.type(id UUID)
 RETURNS public.entities AS $$
   SELECT e.*
   FROM entities e
-  WHERE e.id = type_id
+  WHERE e.id = id
     AND EXISTS (
       SELECT 1
       FROM relations r
       WHERE r.from_entity_id = e.id
         AND r.type_id = '8f151ba4-de20-4e3c-9cb4-99ddf96f48f1' -- SystemIds.Types
-        AND r.to_entity_id = '362c1dbd-dc64-44bb-a3c4-652f38a642d7' -- SystemIds.TYPE
+        AND r.to_entity_id = 'e7d737c5-3676-4c60-9fa1-6aa64a8c90ad' -- SystemIds.TYPE
     )
   LIMIT 1;
 $$ LANGUAGE sql STABLE;
 
-COMMENT ON FUNCTION public.types(UUID, INTEGER, INTEGER) IS E'@name allTypes';
+COMMENT ON FUNCTION public.types(UUID) IS E'@name typesList';
 
 CREATE OR REPLACE FUNCTION public.entities_properties(
   entity entities,

@@ -25,10 +25,15 @@ const middleware = postgraphile(process.env.DATABASE_URL!, "public", {
 	dynamicJson: true,
 	ignoreRBAC: false,
 	graphileBuildOptions: {
-    connectionFilterRelations: true, // default: false
+    connectionFilterRelations: true,
+    connectionFilterComputedColumns: true,
+
     connectionFilterOperatorNames: {
       equalTo: "is",
+      equalToInsensitive: "isInsensitive",
       notEqualTo: "isNot",
+      notEqualToInsensitive: "isNotInsensitive",
+      contains: "in"
     },
     pgOmitListSuffix: true
   },
