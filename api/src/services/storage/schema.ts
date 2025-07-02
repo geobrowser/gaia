@@ -1,5 +1,9 @@
-import {relations as drizzleRelations, type InferSelectModel} from "drizzle-orm"
+import {relations as drizzleRelations, type InferSelectModel, sql} from "drizzle-orm"
 import {boolean, index, jsonb, pgEnum, pgTable, primaryKey, serial, text, uuid} from "drizzle-orm/pg-core"
+
+// Enable the pg_trgm extension for similarity searches (executed at runtime)
+// This comment signals that we want the trigram extension available
+// The actual extension creation is handled in migrations
 
 export const ipfsCache = pgTable("ipfs_cache", {
 	id: serial(),
@@ -87,8 +91,9 @@ export const values = pgTable(
 		index("values_entity_id_idx").on(table.entityId),
 		index("values_space_id_idx").on(table.spaceId),
 
-		// Basic index for text searches - will add GIN via migration
+		// Basic B-tree index for text searches
 		index("values_text_idx").on(table.value),
+		// GIN index creation is handled via migration
 
 		// Composite indexes for common query patterns
 		index("values_entity_property_idx").on(table.entityId, table.propertyId),
