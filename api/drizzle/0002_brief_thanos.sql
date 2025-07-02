@@ -42,14 +42,19 @@ CREATE OR REPLACE FUNCTION public.entities_description(entity entities) RETURNS 
   SELECT value FROM values WHERE entity_id = entity.id AND property_id = '9b1f76ff-9711-404c-861e-59dc3fa7d037' LIMIT 1;
 $$ LANGUAGE sql STABLE;
 
-CREATE OR REPLACE FUNCTION public.entities_types(entity entities) RETURNS SETOF public.entities AS $$
+CREATE OR REPLACE FUNCTION public.entities_types(entities entities) RETURNS SETOF public.entities AS $$
   SELECT e.*
   FROM entities e
   INNER JOIN relations r ON e.id = r.to_entity_id
-  WHERE r.from_entity_id = entity.id AND r.type_id = '8f151ba4-de20-4e3c-9cb4-99ddf96f48f1';
+  WHERE r.from_entity_id = entities.id AND r.type_id = '8f151ba4-de20-4e3c-9cb4-99ddf96f48f1';
 $$ LANGUAGE sql STABLE;
 
-COMMENT ON FUNCTION public.entities_types(public.entities) IS '@filterable';
+CREATE OR REPLACE FUNCTION public.entities_type_ids(entities entities) RETURNS uuid[] AS $$
+  SELECT array_agg(DISTINCT e.id)
+  FROM entities e
+  INNER JOIN relations r ON e.id = r.to_entity_id
+  WHERE r.from_entity_id = entities.id AND r.type_id = '8f151ba4-de20-4e3c-9cb4-99ddf96f48f1';
+$$ LANGUAGE sql STABLE;
 
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 CREATE INDEX IF NOT EXISTS values_text_gin_trgm_idx ON values USING GIN (value gin_trgm_ops);
