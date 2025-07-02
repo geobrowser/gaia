@@ -51,25 +51,6 @@ CREATE OR REPLACE FUNCTION public.entities_types(entity entities) RETURNS SETOF 
   WHERE r.from_entity_id = entity.id AND r.type_id = '8f151ba4-de20-4e3c-9cb4-99ddf96f48f1';
 $$ LANGUAGE sql STABLE;
 
-
-CREATE OR REPLACE FUNCTION public.entities_values(entity entities) RETURNS SETOF public.values AS $$
-  SELECT v.*
-  FROM values v
-  WHERE v.entity_id = entity.id
-$$ LANGUAGE sql STABLE;
-
-CREATE OR REPLACE FUNCTION public.entities_relations(entity entities) RETURNS SETOF public.relations AS $$
-  SELECT r.*
-  FROM relations r
-  WHERE r.from_entity_id = entity.id
-$$ LANGUAGE sql STABLE;
-
-CREATE OR REPLACE FUNCTION public.entities_backlinks(entity entities) RETURNS SETOF public.relations AS $$
-  SELECT r.*
-  FROM relations r
-  WHERE r.to_entity_id = entity.id
-$$ LANGUAGE sql STABLE;
-
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
 CREATE INDEX IF NOT EXISTS values_text_gin_trgm_idx ON values USING GIN (value gin_trgm_ops);
 
@@ -288,3 +269,51 @@ $$ LANGUAGE sql STABLE;
 
 -- Rename properties.type to dataType in GraphQL schema
 COMMENT ON COLUMN public.properties.type IS E'@name dataType';
+
+COMMENT ON CONSTRAINT relations_type_id_properties_id_fk
+ON relations
+IS E'@fieldName type';
+
+COMMENT ON CONSTRAINT relations_space_id_spaces_id_fk
+ON relations
+IS E'@fieldName space';
+
+COMMENT ON CONSTRAINT relations_to_space_id_spaces_id_fk
+ON relations
+IS E'@fieldName toSpace';
+
+COMMENT ON CONSTRAINT relations_from_space_id_spaces_id_fk
+ON relations
+IS E'@fieldName fromSpace';
+
+COMMENT ON CONSTRAINT relations_entity_id_entities_id_fk
+ON relations
+IS E'@fieldName entity';
+
+COMMENT ON CONSTRAINT values_entity_id_entities_id_fk
+ON values
+IS E'@fieldName entity';
+
+COMMENT ON CONSTRAINT values_property_id_properties_id_fk
+ON values
+IS E'@fieldName property';
+
+COMMENT ON CONSTRAINT values_space_id_spaces_id_fk
+ON values
+IS E'@fieldName space';
+
+COMMENT ON CONSTRAINT values_entity_id_entities_id_fk
+ON values
+IS E'@foreignFieldName values\n@foreignSimpleFieldName valuesList';
+
+COMMENT ON CONSTRAINT relations_from_entity_id_entities_id_fk
+ON relations
+IS E'@fieldName fromEntity\n@foreignFieldName relations\n@foreignSimpleFieldName relationsList';
+
+COMMENT ON CONSTRAINT relations_to_entity_id_entities_id_fk
+ON relations
+IS E'@fieldName toEntity\n@foreignFieldName backlinks\n@foreignSimpleFieldName backlinksList';
+
+COMMENT ON CONSTRAINT relations_entity_id_entities_id_fk
+ON relations
+IS E'@fieldName entity\n@foreignFieldName relationsWhereEntity\n@foreignSimpleFieldName relationsWhereEntityList';
