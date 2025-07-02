@@ -23,7 +23,8 @@ ALTER TABLE "values" ADD CONSTRAINT "values_entity_id_entities_id_fk" FOREIGN KE
 ALTER TABLE "values" DROP CONSTRAINT IF EXISTS "values_space_id_spaces_id_fk";
 ALTER TABLE "values" ADD CONSTRAINT "values_space_id_spaces_id_fk" FOREIGN KEY ("space_id") REFERENCES "public"."spaces"("id") ON DELETE no action ON UPDATE no action NOT VALID;
 
--- Disable ALL triggers for every table
+-- Disable ALL triggers for every table so we can batch write data. We only add the FOREIGN
+-- key constraints so that postgraphile can pick up our relational schema.
 ALTER TABLE "spaces" DISABLE TRIGGER ALL;
 ALTER TABLE "entities" DISABLE TRIGGER ALL;
 ALTER TABLE "properties" DISABLE TRIGGER ALL;
@@ -137,7 +138,7 @@ $$ LANGUAGE sql STABLE;
 -- We don't need these comments as they're causing errors - will define properly below
 
 /*
- * Returns the space type entity for a given space
+ * Returns the space front page entity for a given space
  * This finds the first entity that has a relation type of SystemIds.Types
  * and a toEntityId of SystemIds.SPACE_TYPE
  */
@@ -150,6 +151,88 @@ RETURNS public.entities AS $$
     AND r.type_id = '8f151ba4-de20-4e3c-9cb4-99ddf96f48f1' -- SystemIds.Types
     AND r.to_entity_id = '362c1dbd-dc64-44bb-a3c4-652f38a642d7' -- SystemIds.SPACE_TYPE
   LIMIT 1;
+$$ LANGUAGE sql STABLE;
+
+CREATE OR REPLACE FUNCTION public.types(
+  space_id UUID DEFAULT NULL,
+  limit_val INTEGER DEFAULT 100,
+  offset_val INTEGER DEFAULT 0
+)
+RETURNS SETOF public.entities AS $$
+  SELECT e.*
+  FROM entities e
+  WHERE EXISTS (
+    SELECT 1
+    FROM relations r
+    WHERE r.from_entity_id = e.id
+      AND r.type_id = '8f151ba4-de20-4e3c-9cb4-99ddf96f48f1' -- SystemIds.Types
+      AND r.to_entity_id = 'e7d737c5-3676-4c60-9fa1-6aa64a8c90ad' -- SystemIds.TYPE
+      AND (space_id IS NULL OR r.space_id = space_id)
+  )
+  ORDER BY e.id
+  LIMIT limit_val
+  OFFSET offset_val;
+$$ LANGUAGE sql STABLE;
+
+-- Simple function to get a single type entity by ID
+CREATE OR REPLACE FUNCTION public.type(type_id UUID)
+RETURNS public.entities AS $$
+  SELECT e.*
+  FROM entities e
+  WHERE e.id = type_id
+    AND EXISTS (
+      SELECT 1
+      FROM relations r
+      WHERE r.from_entity_id = e.id
+        AND r.type_id = '8f151ba4-de20-4e3c-9cb4-99ddf96f48f1' -- SystemIds.Types
+        AND r.to_entity_id = '362c1dbd-dc64-44bb-a3c4-652f38a642d7' -- SystemIds.TYPE
+    )
+  LIMIT 1;
+$$ LANGUAGE sql STABLE;
+
+COMMENT ON FUNCTION public.types(UUID, INTEGER, INTEGER) IS E'@name allTypes';
+
+CREATE OR REPLACE FUNCTION public.entities_properties_for(
+  entity entities,
+  space_id UUID DEFAULT NULL,
+)
+RETURNS SETOF public.properties AS $$
+  WITH type_property_relations AS (
+    -- Get all relations where this type has properties
+    SELECT r.to_entity_id AS property_id
+    FROM relations r
+    WHERE r.from_entity_id = entity.id
+      AND r.type_id = '01412f83-8189-4ab1-8365-65c7fd358cc1' -- SystemIds.PROPERTIES
+      AND (space_id IS NULL OR r.space_id = space_id)
+  ),
+  -- Always include name and description properties
+  system_properties AS (
+    SELECT
+      id,
+      ROW_NUMBER() OVER (ORDER BY id) AS priority
+    FROM properties
+    WHERE id IN ('a126ca53-0c8e-48d5-b888-82c734c38935', '9b1f76ff-9711-404c-861e-59dc3fa7d037')
+  ),
+  -- Custom properties from relations
+  custom_properties AS (
+    SELECT
+      p.id,
+      100 + ROW_NUMBER() OVER (ORDER BY p.id) AS priority
+    FROM properties p
+    JOIN type_property_relations tpr ON p.id = tpr.property_id
+    WHERE p.id NOT IN ('a126ca53-0c8e-48d5-b888-82c734c38935', '9b1f76ff-9711-404c-861e-59dc3fa7d037')
+  ),
+  -- Combine system and custom properties with priority ordering
+  all_properties_with_priority AS (
+    SELECT * FROM system_properties
+    UNION ALL
+    SELECT * FROM custom_properties
+  )
+  -- Get the final result with pagination
+  SELECT p.*
+  FROM properties p
+  JOIN all_properties_with_priority app ON p.id = app.id
+  ORDER BY app.priority
 $$ LANGUAGE sql STABLE;
 
 /*
@@ -186,5 +269,22 @@ RETURNS SETOF public.entities AS $$
   WHERE property.id NOT IN ('a126ca53-0c8e-48d5-b888-82c734c38935', '9b1f76ff-9711-404c-861e-59dc3fa7d037')
     AND r.from_entity_id = property.id
     AND r.type_id = '9eea393f-17dd-4971-a62e-a603e8bfec20' -- SystemIds.RELATION_VALUE_RELATIONSHIP_TYPE
-  ORDER BY e.id;
+  ORDER BY e.id
 $$ LANGUAGE sql STABLE;
+
+/**
+* Returns name of a property
+*/
+CREATE OR REPLACE FUNCTION public.properties_name(property properties) RETURNS text AS $$
+  SELECT value FROM values WHERE entity_id = property.id AND property_id = 'a126ca53-0c8e-48d5-b888-82c734c38935' LIMIT 1;
+$$ LANGUAGE sql STABLE;
+
+/**
+* Returns description of a property
+*/
+CREATE OR REPLACE FUNCTION public.properties_description(property properties) RETURNS text AS $$
+  SELECT value FROM values WHERE entity_id = property.id AND property_id = '9b1f76ff-9711-404c-861e-59dc3fa7d037' LIMIT 1;
+$$ LANGUAGE sql STABLE;
+
+-- Rename properties.type to dataType in GraphQL schema
+COMMENT ON COLUMN public.properties.type IS E'@name dataType';
