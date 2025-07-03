@@ -15,7 +15,12 @@ where
     S: StorageBackend + Send + Sync + 'static,
 {
     let created_spaces = SpacesModel::map_created_spaces(output);
-    storage.clone().insert_spaces(&created_spaces).await?;
+    let mut tx = storage.get_pool().begin().await?;
+    storage
+        .clone()
+        .insert_spaces(&created_spaces, &mut tx)
+        .await?;
+    tx.commit().await?;
 
     Ok(())
 }

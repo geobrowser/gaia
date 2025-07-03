@@ -239,7 +239,15 @@ impl PostgresStorage {
 
 #[async_trait]
 impl StorageBackend for PostgresStorage {
-    async fn insert_entities(&self, entities: &Vec<EntityItem>) -> Result<(), StorageError> {
+    fn get_pool(&self) -> &sqlx::Pool<Postgres> {
+        &self.pool
+    }
+
+    async fn insert_entities(
+        &self,
+        entities: &Vec<EntityItem>,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    ) -> Result<(), StorageError> {
         let ids: Vec<Uuid> = entities.iter().map(|x| x.id).collect();
         let created_ats: Vec<String> = entities.iter().map(|x| x.created_at.clone()).collect();
         let created_at_blocks: Vec<String> = entities
@@ -264,14 +272,16 @@ impl StorageBackend for PostgresStorage {
             &created_at_blocks,
             &updated_ats,
             &updated_at_blocks
-        )
-        .execute(&self.pool)
-        .await?;
+        ).execute(&mut **tx).await?;
 
         Ok(())
     }
 
-    async fn insert_values(&self, values: &Vec<ValueOp>) -> Result<(), StorageError> {
+    async fn insert_values(
+        &self,
+        values: &Vec<ValueOp>,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    ) -> Result<(), StorageError> {
         if values.is_empty() {
             return Ok(());
         }
@@ -322,7 +332,7 @@ impl StorageBackend for PostgresStorage {
             .bind(&value_values)
             .bind(&languages)
             .bind(&units)
-            .execute(&self.pool)
+            .execute(&mut **tx)
             .await?;
 
         Ok(())
@@ -332,6 +342,7 @@ impl StorageBackend for PostgresStorage {
         &self,
         value_ids: &Vec<Uuid>,
         space_id: &Uuid,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     ) -> Result<(), StorageError> {
         if value_ids.is_empty() {
             return Ok(());
@@ -346,13 +357,17 @@ impl StorageBackend for PostgresStorage {
         )
         .bind(space_id)
         .bind(&ids)
-        .execute(&self.pool)
+        .execute(&mut **tx)
         .await?;
 
         Ok(())
     }
 
-    async fn insert_relations(&self, relations: &Vec<SetRelationItem>) -> Result<(), StorageError> {
+    async fn insert_relations(
+        &self,
+        relations: &Vec<SetRelationItem>,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    ) -> Result<(), StorageError> {
         if relations.is_empty() {
             return Ok(());
         }
@@ -409,7 +424,7 @@ impl StorageBackend for PostgresStorage {
             .bind(&type_ids)
             .bind(&positions)
             .bind(&verified)
-            .execute(&self.pool)
+            .execute(&mut **tx)
             .await?;
 
         Ok(())
@@ -418,6 +433,7 @@ impl StorageBackend for PostgresStorage {
     async fn update_relations(
         &self,
         relations: &Vec<UpdateRelationItem>,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     ) -> Result<(), StorageError> {
         if relations.is_empty() {
             return Ok(());
@@ -442,7 +458,7 @@ impl StorageBackend for PostgresStorage {
         });
 
         // Execute the query
-        let result = query_builder.build().execute(&self.pool).await;
+        let result = query_builder.build().execute(&mut **tx).await;
 
         if let Err(error) = result {
             println!("Error writing relations {}", error);
@@ -454,6 +470,7 @@ impl StorageBackend for PostgresStorage {
     async fn unset_relation_fields(
         &self,
         relations: &Vec<UnsetRelationItem>,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     ) -> Result<(), StorageError> {
         if relations.is_empty() {
             return Ok(());
@@ -494,7 +511,7 @@ impl StorageBackend for PostgresStorage {
               WHERE relations.id = v.id",
         );
 
-        query_builder.build().execute(&self.pool).await?;
+        query_builder.build().execute(&mut **tx).await?;
 
         Ok(())
     }
@@ -503,6 +520,7 @@ impl StorageBackend for PostgresStorage {
         &self,
         relation_ids: &Vec<Uuid>,
         space_id: &Uuid,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     ) -> Result<(), StorageError> {
         if relation_ids.is_empty() {
             return Ok(());
@@ -515,7 +533,7 @@ impl StorageBackend for PostgresStorage {
         )
         .bind(space_id)
         .bind(relation_ids)
-        .execute(&self.pool)
+        .execute(&mut **tx)
         .await?;
 
         Ok(())
@@ -532,7 +550,11 @@ impl StorageBackend for PostgresStorage {
     /// The knowledge graph engine validates that all values associated with
     /// a property correctly conform to the property's Data Type. Additionally,
     /// changing the Property's Data Type is not allowed.
-    async fn insert_properties(&self, properties: &Vec<PropertyItem>) -> Result<(), StorageError> {
+    async fn insert_properties(
+        &self,
+        properties: &Vec<PropertyItem>,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    ) -> Result<(), StorageError> {
         if properties.is_empty() {
             return Ok(());
         }
@@ -561,13 +583,17 @@ impl StorageBackend for PostgresStorage {
         sqlx::query(query)
             .bind(&ids)
             .bind(&types)
-            .execute(&self.pool)
+            .execute(&mut **tx)
             .await?;
 
         Ok(())
     }
 
-    async fn insert_spaces(&self, spaces: &Vec<SpaceItem>) -> Result<(), StorageError> {
+    async fn insert_spaces(
+        &self,
+        spaces: &Vec<SpaceItem>,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    ) -> Result<(), StorageError> {
         if spaces.is_empty() {
             return Ok(());
         }
@@ -609,13 +635,17 @@ impl StorageBackend for PostgresStorage {
             &membership_addresses as &[Option<String>],
             &personal_addresses as &[Option<String>]
         )
-        .execute(&self.pool)
+        .execute(&mut **tx)
         .await?;
 
         Ok(())
     }
 
-    async fn insert_members(&self, members: &Vec<MemberItem>) -> Result<(), StorageError> {
+    async fn insert_members(
+        &self,
+        members: &Vec<MemberItem>,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    ) -> Result<(), StorageError> {
         if members.is_empty() {
             return Ok(());
         }
@@ -639,13 +669,17 @@ impl StorageBackend for PostgresStorage {
             &addresses,
             &space_ids
         )
-        .execute(&self.pool)
+        .execute(&mut **tx)
         .await?;
 
         Ok(())
     }
 
-    async fn remove_members(&self, members: &Vec<MemberItem>) -> Result<(), StorageError> {
+    async fn remove_members(
+        &self,
+        members: &Vec<MemberItem>,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    ) -> Result<(), StorageError> {
         if members.is_empty() {
             return Ok(());
         }
@@ -670,13 +704,17 @@ impl StorageBackend for PostgresStorage {
             &addresses,
             &space_ids
         )
-        .execute(&self.pool)
+        .execute(&mut **tx)
         .await?;
 
         Ok(())
     }
 
-    async fn insert_editors(&self, editors: &Vec<EditorItem>) -> Result<(), StorageError> {
+    async fn insert_editors(
+        &self,
+        editors: &Vec<EditorItem>,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    ) -> Result<(), StorageError> {
         if editors.is_empty() {
             return Ok(());
         }
@@ -700,13 +738,17 @@ impl StorageBackend for PostgresStorage {
             &addresses,
             &space_ids
         )
-        .execute(&self.pool)
+        .execute(&mut **tx)
         .await?;
 
         Ok(())
     }
 
-    async fn remove_editors(&self, editors: &Vec<EditorItem>) -> Result<(), StorageError> {
+    async fn remove_editors(
+        &self,
+        editors: &Vec<EditorItem>,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    ) -> Result<(), StorageError> {
         if editors.is_empty() {
             return Ok(());
         }
@@ -731,7 +773,7 @@ impl StorageBackend for PostgresStorage {
             &addresses,
             &space_ids
         )
-        .execute(&self.pool)
+        .execute(&mut **tx)
         .await?;
 
         Ok(())

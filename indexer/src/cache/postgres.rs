@@ -6,7 +6,6 @@ use uuid::Uuid;
 
 use super::{CacheBackend, CacheError, PreprocessedEdit};
 
-
 pub struct PostgresCache {
     pool: sqlx::Pool<Postgres>,
 }
@@ -23,6 +22,10 @@ impl PostgresCache {
             .await?;
 
         return Ok(PostgresCache { pool });
+    }
+
+    pub fn get_pool(&self) -> &sqlx::Pool<Postgres> {
+        &self.pool
     }
 }
 
