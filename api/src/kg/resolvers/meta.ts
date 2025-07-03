@@ -7,8 +7,8 @@ export function getMeta() {
 		const db = yield* Storage
 
 		return yield* db.use(async (client): Promise<Meta | null> => {
-			const result = await client.query.cursors.findFirst({
-				where: (cursors, {eq}) => eq(cursors.id, "kg_indexer"),
+			const result = await client.query.meta.findFirst({
+				where: (meta, {eq}) => eq(meta.id, "kg_indexer"),
 			})
 
 			if (!result) {

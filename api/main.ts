@@ -3,7 +3,7 @@ import { Hono } from "hono";
 import { compress } from "hono/compress";
 import { cors } from "hono/cors";
 import { health } from "./src/health";
-import { graphqlServer } from "./src/kg/graphql-entry";
+import { graphqlServer } from "./src/kg/postgraphile";
 import {
 	Environment,
 	EnvironmentLive,

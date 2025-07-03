@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "SELECT cursor FROM cursors WHERE id = $1",
+  "query": "SELECT cursor FROM meta WHERE id = $1",
   "describe": {
     "columns": [
       {
@@ -18,5 +18,5 @@
       false
     ]
   },
-  "hash": "ae8d7b0cdd3c444bbf71dd2c7d7972ac3549ac38d8eab23c70191df730d8e9e4"
+  "hash": "ea4687b7fbd07b829d5aa5d6150dce01548452fa4d3c4b9b9239b1ca783a026a"
 }

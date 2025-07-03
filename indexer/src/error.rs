@@ -17,4 +17,7 @@ pub enum IndexingError {
 
     #[error("Indexing error: {0}")]
     TaskError(#[from] JoinError),
+
+    #[error("Indexing error: {0}")]
+    SqlxError(#[from] sqlx::Error),
 }

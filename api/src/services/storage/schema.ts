@@ -34,7 +34,7 @@ export const ipfsCache = pgTable("ipfs_cache", {
  * example, the kg indexer may use an id of "kg_indexer", and the ipfs cache
  * indexer may use "ipfs_indexer"
  */
-export const cursors = pgTable("cursors", {
+export const meta = pgTable("meta", {
 	id: text().primaryKey(),
 	cursor: text().notNull(),
 	blockNumber: text().notNull(),
@@ -78,9 +78,15 @@ export const values = pgTable(
 	"values",
 	{
 		id: text().primaryKey(),
-		propertyId: uuid().notNull(),
-		entityId: uuid().notNull(),
-		spaceId: uuid().notNull(),
+		propertyId: uuid()
+			.notNull()
+			.references(() => properties.id),
+		entityId: uuid()
+			.notNull()
+			.references(() => entities.id),
+		spaceId: uuid()
+			.notNull()
+			.references(() => spaces.id),
 		value: text().notNull(),
 		language: text(),
 		unit: text(),
@@ -114,16 +120,26 @@ export const relations = pgTable(
 	"relations",
 	{
 		id: uuid().primaryKey(),
-		entityId: uuid().notNull(),
-		typeId: uuid().notNull(),
-		fromEntityId: uuid().notNull(),
-		fromSpaceId: uuid(),
+		entityId: uuid()
+			.notNull()
+			.references(() => entities.id),
+		typeId: uuid()
+			.notNull()
+			.references(() => properties.id),
+		fromEntityId: uuid()
+			.notNull()
+			.references(() => entities.id),
+		fromSpaceId: uuid().references(() => spaces.id),
 		fromVersionId: uuid(),
-		toEntityId: uuid().notNull(),
-		toSpaceId: uuid(),
+		toEntityId: uuid()
+			.notNull()
+			.references(() => entities.id),
+		toSpaceId: uuid().references(() => spaces.id),
 		toVersionId: uuid(),
 		position: text(),
-		spaceId: uuid().notNull(),
+		spaceId: uuid()
+			.notNull()
+			.references(() => spaces.id),
 		verified: boolean(),
 	},
 	(table) => [
@@ -150,18 +166,22 @@ export const members = pgTable(
 	"members",
 	{
 		address: text().notNull(),
-		spaceId: uuid().notNull(),
+		spaceId: uuid()
+			.notNull()
+			.references(() => spaces.id),
 	},
-	(table) => [primaryKey({columns: [table.address, table.spaceId]})],
+	(table) => [primaryKey({columns: [table.address, table.spaceId]}), index("members_space_id_idx").on(table.spaceId)],
 )
 
 export const editors = pgTable(
 	"editors",
 	{
 		address: text().notNull(),
-		spaceId: uuid().notNull(),
+		spaceId: uuid()
+			.notNull()
+			.references(() => spaces.id),
 	},
-	(table) => [primaryKey({columns: [table.address, table.spaceId]})],
+	(table) => [primaryKey({columns: [table.address, table.spaceId]}), index("editors_space_id_idx").on(table.spaceId)],
 )
 
 export const entityForeignValues = drizzleRelations(entities, ({many, one}) => ({
