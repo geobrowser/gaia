@@ -10,7 +10,6 @@ const middleware = postgraphile(process.env.DATABASE_URL!, "public", {
 	enhanceGraphiql: true,
 	disableQueryLog: true,
 	disableDefaultMutations: true,
-	nodeIdFieldName: "internalNodeId",
 	simpleCollections: "both",
 	// Enable function-based computed columns
 	setofFunctionsContainNulls: false,

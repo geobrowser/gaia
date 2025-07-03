@@ -286,27 +286,27 @@ IS E'@fieldName space';
 
 COMMENT ON CONSTRAINT values_entity_id_entities_id_fk
 ON values
-IS E'@fieldName entity\n@foreignFieldName valuesConnection\n@foreignSimpleFieldName values';
+IS E'@fieldName entity\n@foreignFieldName values\n@foreignSimpleFieldName valuesList';
 
 COMMENT ON CONSTRAINT relations_from_entity_id_entities_id_fk
 ON relations
-IS E'@fieldName fromEntity\n@foreignFieldName relationsConnection\n@foreignSimpleFieldName relations';
+IS E'@fieldName fromEntity\n@foreignFieldName relations\n@foreignSimpleFieldName relationsList';
 
 COMMENT ON CONSTRAINT relations_to_entity_id_entities_id_fk
 ON relations
-IS E'@fieldName toEntity\n@foreignFieldName backlinksConnection\n@foreignSimpleFieldName backlinks';
+IS E'@fieldName toEntity\n@foreignFieldName backlinks\n@foreignSimpleFieldName backlinksList';
 
 COMMENT ON CONSTRAINT relations_entity_id_entities_id_fk
 ON relations
-IS E'@fieldName entity\n@foreignFieldName relationsWhereEntityConnection\n@foreignSimpleFieldName relationsWhereEntity';
+IS E'@fieldName entity\n@foreignFieldName relationsWhereEntity\n@foreignSimpleFieldName relationsWhereEntityList';
 
 COMMENT ON CONSTRAINT members_space_id_spaces_id_fk
 ON members
-IS E'@fieldName space\n@foreignFieldName membersConnection\n@foreignSimpleFieldName members';
+IS E'@fieldName space\n@foreignFieldName members\n@foreignSimpleFieldName membersList';
 
 COMMENT ON CONSTRAINT editors_space_id_spaces_id_fk
 ON editors
-IS E'@fieldName space\n@foreignFieldName editorsConnection\n@foreignSimpleFieldName editors';
+IS E'@fieldName space\n@foreignFieldName editors\n@foreignSimpleFieldName editorsList';
 
 COMMENT ON CONSTRAINT members_address_space_id_pk ON MEMBERS IS E'@omit';
 COMMENT ON CONSTRAINT editors_address_space_id_pk ON EDITORS IS E'@omit';
