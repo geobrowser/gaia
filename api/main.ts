@@ -14,6 +14,13 @@ import { make as makeStorage, Storage } from "./src/services/storage/storage";
 import { getPublishEditCalldata } from "./src/utils/calldata";
 import { deploySpace } from "./src/utils/deploy-space";
 
+/**
+ * Currently hand-rolling a compression polyfill until Bun implements
+ * CompressionStream in the runtime.
+ * https://github.com/oven-sh/bun/issues/1723
+ */
+import "./src/compression-polyfill"
+
 const EnvironmentLayer = Layer.effect(Environment, makeEnvironment);
 const StorageLayer = Layer.effect(Storage, makeStorage).pipe(
 	Layer.provide(EnvironmentLayer),
