@@ -64,30 +64,35 @@ async fn main() -> Result<(), IndexingError> {
         space_id: Uuid::parse_str("8ef40bdd-cf69-4ad7-a9a1-f71c15653994").unwrap(),
         edit: Some(root_space_edit.clone().unwrap()),
         is_errored: false,
+        cid: "".to_string(),
     };
 
     let crypto_space_preprocessed_edit = PreprocessedEdit {
         space_id: Uuid::parse_str("aa84b08d-779a-495c-93f1-44e667baf6d7").unwrap(),
         edit: Some(crypto_space_edit.clone().unwrap()),
         is_errored: false,
+        cid: "".to_string(),
     };
 
     let crypto_events_space_preprocessed_edit = PreprocessedEdit {
         space_id: Uuid::parse_str("26c7edb1-ca79-4a56-8cc6-04a8e689a8f0").unwrap(),
         edit: Some(crypto_events_space_edit.clone().unwrap()),
         is_errored: false,
+        cid: "".to_string(),
     };
 
     let regions_space_preprocessed_edit = PreprocessedEdit {
         space_id: Uuid::parse_str("c0814872-672e-46c0-8cdb-73ad34e0b77b").unwrap(),
         edit: Some(regions_space_edit.clone().unwrap()),
         is_errored: false,
+        cid: "".to_string(),
     };
 
     let crypto_news_preprocessed_edit = PreprocessedEdit {
         space_id: Uuid::parse_str("41f4a7ce-159d-4bfc-beca-753ede566d91").unwrap(),
         edit: Some(crypto_news_space_edit.clone().unwrap()),
         is_errored: false,
+        cid: "".to_string(),
     };
 
     let block_1 = BlockMetadata {
