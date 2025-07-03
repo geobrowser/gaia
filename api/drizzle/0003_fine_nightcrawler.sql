@@ -133,7 +133,7 @@ CREATE OR REPLACE FUNCTION public.type(id UUID)
 RETURNS public.entities AS $$
   SELECT e.*
   FROM entities e
-  WHERE e.id = id
+  WHERE e.id = type.id
     AND EXISTS (
       SELECT 1
       FROM relations r
