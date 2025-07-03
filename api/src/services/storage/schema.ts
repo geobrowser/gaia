@@ -165,7 +165,7 @@ export const members = pgTable(
 			.notNull()
 			.references(() => spaces.id),
 	},
-	(table) => [primaryKey({columns: [table.address, table.spaceId]})],
+	(table) => [primaryKey({columns: [table.address, table.spaceId]}), index("members_space_id_idx").on(table.spaceId)],
 )
 
 export const editors = pgTable(
@@ -176,7 +176,7 @@ export const editors = pgTable(
 			.notNull()
 			.references(() => spaces.id),
 	},
-	(table) => [primaryKey({columns: [table.address, table.spaceId]})],
+	(table) => [primaryKey({columns: [table.address, table.spaceId]}), index("editors_space_id_idx").on(table.spaceId)],
 )
 
 export const entityForeignValues = drizzleRelations(entities, ({many, one}) => ({
