@@ -19,12 +19,12 @@ use indexer::{
     models::properties::DataType,
     storage::{postgres::PostgresStorage, StorageError},
     test_utils::TestStorage,
-    AddedMember, RemovedMember, CreatedSpace, PersonalSpace, PublicSpace, KgData,
+    AddedMember, CreatedSpace, KgData, PersonalSpace, PublicSpace, RemovedMember,
 };
-use serial_test::serial;
 use indexer_utils::{checksum_address, id::derive_space_id, network_ids::GEO};
-use std::time::{SystemTime, UNIX_EPOCH};
+use serial_test::serial;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::time::{SystemTime, UNIX_EPOCH};
 
 struct TestIndexer {
     storage: Arc<PostgresStorage>,
@@ -41,13 +41,7 @@ impl TestIndexer {
 
     pub async fn run(&self, blocks: &Vec<KgData>) -> Result<(), IndexingError> {
         for block in blocks {
-            root_handler::run(
-                block,
-                &block.block,
-                &self.storage,
-                &self.properties_cache,
-            )
-            .await?;
+            root_handler::run(block, &block.block, &self.storage, &self.properties_cache).await?;
         }
 
         Ok(())
@@ -307,6 +301,7 @@ async fn test_validation_rejects_invalid_number() -> Result<(), IndexingError> {
         edit: Some(edit),
         is_errored: false,
         space_id: Uuid::parse_str("55555555-5555-5555-5555-555555555555").unwrap(),
+        cid: "".to_string(),
     };
 
     let kg_data = make_kg_data_with_spaces(10, vec![item], vec![]);
@@ -316,7 +311,10 @@ async fn test_validation_rejects_invalid_number() -> Result<(), IndexingError> {
     indexer.run(&blocks).await?;
 
     // Verify the property was created
-    let property = storage.get_property(&property_id.to_string()).await.unwrap();
+    let property = storage
+        .get_property(&property_id.to_string())
+        .await
+        .unwrap();
     assert_eq!(property.data_type, DataType::Number);
 
     // Verify the invalid value was NOT stored in the database
@@ -326,7 +324,10 @@ async fn test_validation_rejects_invalid_number() -> Result<(), IndexingError> {
     let expected_value_id = derive_value_id(&entity_id, &property_id_uuid, &space_id);
 
     let value_result = storage.get_value(&expected_value_id.to_string()).await;
-    assert!(value_result.is_err(), "Invalid number value should not be stored in database");
+    assert!(
+        value_result.is_err(),
+        "Invalid number value should not be stored in database"
+    );
 
     Ok(())
 }
@@ -365,6 +366,7 @@ async fn test_validation_rejects_invalid_checkbox() -> Result<(), IndexingError>
         edit: Some(edit),
         is_errored: false,
         space_id: Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa").unwrap(),
+        cid: "".to_string(),
     };
 
     let kg_data = make_kg_data_with_spaces(11, vec![item], vec![]);
@@ -374,7 +376,10 @@ async fn test_validation_rejects_invalid_checkbox() -> Result<(), IndexingError>
     indexer.run(&blocks).await?;
 
     // Verify the property was created
-    let property = storage.get_property(&property_id.to_string()).await.unwrap();
+    let property = storage
+        .get_property(&property_id.to_string())
+        .await
+        .unwrap();
     assert_eq!(property.data_type, DataType::Checkbox);
 
     // Verify the invalid value was NOT stored
@@ -384,7 +389,10 @@ async fn test_validation_rejects_invalid_checkbox() -> Result<(), IndexingError>
     let expected_value_id = derive_value_id(&entity_id, &property_id_uuid, &space_id);
 
     let value_result = storage.get_value(&expected_value_id.to_string()).await;
-    assert!(value_result.is_err(), "Invalid checkbox value should not be stored in database");
+    assert!(
+        value_result.is_err(),
+        "Invalid checkbox value should not be stored in database"
+    );
 
     Ok(())
 }
@@ -423,6 +431,7 @@ async fn test_validation_rejects_invalid_time() -> Result<(), IndexingError> {
         edit: Some(edit),
         is_errored: false,
         space_id: Uuid::parse_str("ffffffff-ffff-ffff-ffff-ffffffffffff").unwrap(),
+        cid: "".to_string(),
     };
 
     let kg_data = make_kg_data_with_spaces(12, vec![item], vec![]);
@@ -432,7 +441,10 @@ async fn test_validation_rejects_invalid_time() -> Result<(), IndexingError> {
     indexer.run(&blocks).await?;
 
     // Verify the property was created
-    let property = storage.get_property(&property_id.to_string()).await.unwrap();
+    let property = storage
+        .get_property(&property_id.to_string())
+        .await
+        .unwrap();
     assert_eq!(property.data_type, DataType::Time);
 
     // Verify the invalid value was NOT stored
@@ -442,7 +454,10 @@ async fn test_validation_rejects_invalid_time() -> Result<(), IndexingError> {
     let expected_value_id = derive_value_id(&entity_id, &property_id_uuid, &space_id);
 
     let value_result = storage.get_value(&expected_value_id.to_string()).await;
-    assert!(value_result.is_err(), "Invalid time value should not be stored in database");
+    assert!(
+        value_result.is_err(),
+        "Invalid time value should not be stored in database"
+    );
 
     Ok(())
 }
@@ -481,6 +496,7 @@ async fn test_validation_rejects_invalid_point() -> Result<(), IndexingError> {
         edit: Some(edit),
         is_errored: false,
         space_id: Uuid::parse_str("56789012-5678-5678-5678-567890123456").unwrap(),
+        cid: "".to_string(),
     };
 
     let kg_data = make_kg_data_with_spaces(13, vec![item], vec![]);
@@ -490,7 +506,10 @@ async fn test_validation_rejects_invalid_point() -> Result<(), IndexingError> {
     indexer.run(&blocks).await?;
 
     // Verify the property was created
-    let property = storage.get_property(&property_id.to_string()).await.unwrap();
+    let property = storage
+        .get_property(&property_id.to_string())
+        .await
+        .unwrap();
     assert_eq!(property.data_type, DataType::Point);
 
     // Verify the invalid value was NOT stored
@@ -500,7 +519,10 @@ async fn test_validation_rejects_invalid_point() -> Result<(), IndexingError> {
     let expected_value_id = derive_value_id(&entity_id, &property_id_uuid, &space_id);
 
     let value_result = storage.get_value(&expected_value_id.to_string()).await;
-    assert!(value_result.is_err(), "Invalid point value should not be stored in database");
+    assert!(
+        value_result.is_err(),
+        "Invalid point value should not be stored in database"
+    );
 
     Ok(())
 }
@@ -517,7 +539,7 @@ async fn test_validation_allows_valid_data_mixed_with_invalid() -> Result<(), In
     // Create multiple properties
     let number_prop_id = "67890123-6789-6789-6789-678901234567";
     let text_prop_id = "78901234-7890-7890-7890-789012345678";
-    
+
     let number_prop_op = make_property_op(number_prop_id, PbDataType::Number);
     let text_prop_op = make_property_op(text_prop_id, PbDataType::Text);
 
@@ -557,13 +579,19 @@ async fn test_validation_allows_valid_data_mixed_with_invalid() -> Result<(), In
         "01234567-0123-0123-0123-012345678901",
         "Mixed Validation Test",
         "10987654-1098-1098-1098-109876543210",
-        vec![number_prop_op, text_prop_op, mixed_entity_op, invalid_entity_op],
+        vec![
+            number_prop_op,
+            text_prop_op,
+            mixed_entity_op,
+            invalid_entity_op,
+        ],
     );
 
     let item = PreprocessedEdit {
         edit: Some(edit),
         is_errored: false,
         space_id: Uuid::parse_str("21098765-2109-2109-2109-210987654321").unwrap(),
+        cid: "".to_string(),
     };
 
     let kg_data = make_kg_data_with_spaces(14, vec![item], vec![]);
@@ -573,9 +601,15 @@ async fn test_validation_allows_valid_data_mixed_with_invalid() -> Result<(), In
     indexer.run(&blocks).await?;
 
     // Verify properties were created
-    let number_property = storage.get_property(&number_prop_id.to_string()).await.unwrap();
+    let number_property = storage
+        .get_property(&number_prop_id.to_string())
+        .await
+        .unwrap();
     assert_eq!(number_property.data_type, DataType::Number);
-    let text_property = storage.get_property(&text_prop_id.to_string()).await.unwrap();
+    let text_property = storage
+        .get_property(&text_prop_id.to_string())
+        .await
+        .unwrap();
     assert_eq!(text_property.data_type, DataType::Text);
 
     let space_id = Uuid::parse_str("21098765-2109-2109-2109-210987654321").unwrap();
@@ -585,14 +619,17 @@ async fn test_validation_allows_valid_data_mixed_with_invalid() -> Result<(), In
         let entity_id = Uuid::parse_str("89012345-8901-8901-8901-890123456789").unwrap();
         let number_prop_uuid = Uuid::parse_str(number_prop_id).unwrap();
         let text_prop_uuid = Uuid::parse_str(text_prop_id).unwrap();
-        
+
         let number_value_id = derive_value_id(&entity_id, &number_prop_uuid, &space_id);
         let text_value_id = derive_value_id(&entity_id, &text_prop_uuid, &space_id);
 
         // Both valid values should be stored
-        let number_value = storage.get_value(&number_value_id.to_string()).await.unwrap();
+        let number_value = storage
+            .get_value(&number_value_id.to_string())
+            .await
+            .unwrap();
         assert_eq!(number_value.value, Some("42.5".to_string()));
-        
+
         let text_value = storage.get_value(&text_value_id.to_string()).await.unwrap();
         assert_eq!(text_value.value, Some("Valid text".to_string()));
     }
@@ -602,14 +639,17 @@ async fn test_validation_allows_valid_data_mixed_with_invalid() -> Result<(), In
         let entity_id = Uuid::parse_str("90123456-9012-9012-9012-901234567890").unwrap();
         let number_prop_uuid = Uuid::parse_str(number_prop_id).unwrap();
         let text_prop_uuid = Uuid::parse_str(text_prop_id).unwrap();
-        
+
         let number_value_id = derive_value_id(&entity_id, &number_prop_uuid, &space_id);
         let text_value_id = derive_value_id(&entity_id, &text_prop_uuid, &space_id);
 
         // Invalid number should NOT be stored
         let number_value_result = storage.get_value(&number_value_id.to_string()).await;
-        assert!(number_value_result.is_err(), "Invalid number should not be stored");
-        
+        assert!(
+            number_value_result.is_err(),
+            "Invalid number should not be stored"
+        );
+
         // Valid text should be stored
         let text_value = storage.get_value(&text_value_id.to_string()).await.unwrap();
         assert_eq!(text_value.value, Some("Another valid text".to_string()));
@@ -653,6 +693,7 @@ async fn test_property_no_overwrite() -> Result<(), IndexingError> {
             )],
         )),
         is_errored: false,
+        cid: "".to_string(),
     };
 
     // Second edit - attempt to create same property with Number type
@@ -668,6 +709,7 @@ async fn test_property_no_overwrite() -> Result<(), IndexingError> {
             )],
         )),
         is_errored: false,
+        cid: "".to_string(),
     };
 
     let block = BlockMetadata {
@@ -760,6 +802,7 @@ async fn test_property_squashing() -> Result<(), IndexingError> {
             ],
         )),
         is_errored: false,
+        cid: "".to_string(),
     };
 
     let block = BlockMetadata {
@@ -972,7 +1015,7 @@ async fn test_space_indexing_personal() -> Result<(), IndexingError> {
     // Create test data with personal spaces
     let dao_address1 = generate_unique_address("personal_space_test_1");
     let dao_address2 = generate_unique_address("personal_space_test_2");
-    
+
     let spaces = vec![
         make_personal_space(&dao_address1),
         make_personal_space(&dao_address2),
@@ -989,12 +1032,14 @@ async fn test_space_indexing_personal() -> Result<(), IndexingError> {
     use indexer_utils::checksum_address;
     let dao_addresses = vec![
         checksum_address(&dao_address1),
-        checksum_address(&dao_address2)
+        checksum_address(&dao_address2),
     ];
-    let space_rows = test_storage.get_spaces_by_dao_addresses(&dao_addresses).await?;
+    let space_rows = test_storage
+        .get_spaces_by_dao_addresses(&dao_addresses)
+        .await?;
 
     assert_eq!(space_rows.len(), 2);
-    
+
     // Create expected personal plugin addresses the same way the production code does
     let expected_personal_addresses = vec![
         checksum_address(&format!("{}_personal_plugin", dao_address1)),
@@ -1004,20 +1049,28 @@ async fn test_space_indexing_personal() -> Result<(), IndexingError> {
         checksum_address(&format!("{}_space", dao_address1)),
         checksum_address(&format!("{}_space", dao_address2)),
     ];
-    
+
     for row in &space_rows {
-        row.validate_personal_space().map_err(|_e| IndexingError::StorageError(StorageError::Database(sqlx::Error::RowNotFound)))?;
-        
+        row.validate_personal_space().map_err(|_e| {
+            IndexingError::StorageError(StorageError::Database(sqlx::Error::RowNotFound))
+        })?;
+
         // Verify the personal_address matches one of the expected addresses
         let personal_addr = row.personal_address.as_ref().unwrap();
-        assert!(expected_personal_addresses.contains(personal_addr), 
-            "Personal address {} not found in expected addresses", personal_addr);
-            
-        // Verify the space_address matches one of the expected addresses  
-        assert!(expected_space_addresses.contains(&row.space_address),
-            "Space address {} not found in expected addresses", row.space_address);
+        assert!(
+            expected_personal_addresses.contains(personal_addr),
+            "Personal address {} not found in expected addresses",
+            personal_addr
+        );
+
+        // Verify the space_address matches one of the expected addresses
+        assert!(
+            expected_space_addresses.contains(&row.space_address),
+            "Space address {} not found in expected addresses",
+            row.space_address
+        );
     }
-    
+
     Ok(())
 }
 
@@ -1053,12 +1106,14 @@ async fn test_space_indexing_public() -> Result<(), IndexingError> {
     use indexer_utils::checksum_address;
     let dao_addresses = vec![
         checksum_address(&dao_address1),
-        checksum_address(&dao_address2)
+        checksum_address(&dao_address2),
     ];
-    let space_rows = test_storage.get_spaces_by_dao_addresses(&dao_addresses).await?;
+    let space_rows = test_storage
+        .get_spaces_by_dao_addresses(&dao_addresses)
+        .await?;
 
     assert_eq!(space_rows.len(), 2);
-    
+
     // Create expected addresses the same way the production code does
     let expected_governance_addresses = vec![
         checksum_address(&format!("{}_governance_plugin", dao_address1)),
@@ -1072,23 +1127,34 @@ async fn test_space_indexing_public() -> Result<(), IndexingError> {
         checksum_address(&format!("{}_space", dao_address1)),
         checksum_address(&format!("{}_space", dao_address2)),
     ];
-    
+
     for row in &space_rows {
-        row.validate_public_space().map_err(|_e| IndexingError::StorageError(StorageError::Database(sqlx::Error::RowNotFound)))?;
-        
+        row.validate_public_space().map_err(|_e| {
+            IndexingError::StorageError(StorageError::Database(sqlx::Error::RowNotFound))
+        })?;
+
         // Verify the governance address matches one of the expected addresses
         let governance_addr = row.main_voting_address.as_ref().unwrap();
-        assert!(expected_governance_addresses.contains(governance_addr), 
-            "Governance address {} not found in expected addresses", governance_addr);
-            
+        assert!(
+            expected_governance_addresses.contains(governance_addr),
+            "Governance address {} not found in expected addresses",
+            governance_addr
+        );
+
         // Verify the membership address matches one of the expected addresses
         let membership_addr = row.membership_address.as_ref().unwrap();
-        assert!(expected_membership_addresses.contains(membership_addr),
-            "Membership address {} not found in expected addresses", membership_addr);
-            
-        // Verify the space_address matches one of the expected addresses  
-        assert!(expected_space_addresses.contains(&row.space_address),
-            "Space address {} not found in expected addresses", row.space_address);
+        assert!(
+            expected_membership_addresses.contains(membership_addr),
+            "Membership address {} not found in expected addresses",
+            membership_addr
+        );
+
+        // Verify the space_address matches one of the expected addresses
+        assert!(
+            expected_space_addresses.contains(&row.space_address),
+            "Space address {} not found in expected addresses",
+            row.space_address
+        );
     }
 
     Ok(())
@@ -1129,26 +1195,43 @@ async fn test_space_indexing_mixed() -> Result<(), IndexingError> {
     let dao_addresses = vec![
         checksum_address(&personal_dao1),
         checksum_address(&public_dao),
-        checksum_address(&personal_dao2)
+        checksum_address(&personal_dao2),
     ];
-    let space_rows = test_storage.get_spaces_by_dao_addresses(&dao_addresses).await?;
+    let space_rows = test_storage
+        .get_spaces_by_dao_addresses(&dao_addresses)
+        .await?;
 
     assert_eq!(space_rows.len(), 3);
 
     // Check personal space 1
     let checksummed_personal_dao1 = checksum_address(&personal_dao1);
-    let personal_row1 = space_rows.iter().find(|r| r.dao_address == checksummed_personal_dao1).unwrap();
-    personal_row1.validate_personal_space().map_err(|_e| IndexingError::StorageError(StorageError::Database(sqlx::Error::RowNotFound)))?;
+    let personal_row1 = space_rows
+        .iter()
+        .find(|r| r.dao_address == checksummed_personal_dao1)
+        .unwrap();
+    personal_row1.validate_personal_space().map_err(|_e| {
+        IndexingError::StorageError(StorageError::Database(sqlx::Error::RowNotFound))
+    })?;
 
     // Check public space
     let checksummed_public_dao = checksum_address(&public_dao);
-    let public_row = space_rows.iter().find(|r| r.dao_address == checksummed_public_dao).unwrap();
-    public_row.validate_public_space().map_err(|_e| IndexingError::StorageError(StorageError::Database(sqlx::Error::RowNotFound)))?;
+    let public_row = space_rows
+        .iter()
+        .find(|r| r.dao_address == checksummed_public_dao)
+        .unwrap();
+    public_row.validate_public_space().map_err(|_e| {
+        IndexingError::StorageError(StorageError::Database(sqlx::Error::RowNotFound))
+    })?;
 
     // Check personal space 2
     let checksummed_personal_dao2 = checksum_address(&personal_dao2);
-    let personal_row2 = space_rows.iter().find(|r| r.dao_address == checksummed_personal_dao2).unwrap();
-    personal_row2.validate_personal_space().map_err(|_e| IndexingError::StorageError(StorageError::Database(sqlx::Error::RowNotFound)))?;
+    let personal_row2 = space_rows
+        .iter()
+        .find(|r| r.dao_address == checksummed_personal_dao2)
+        .unwrap();
+    personal_row2.validate_personal_space().map_err(|_e| {
+        IndexingError::StorageError(StorageError::Database(sqlx::Error::RowNotFound))
+    })?;
 
     Ok(())
 }
@@ -1174,27 +1257,27 @@ async fn test_space_indexing_empty() -> Result<(), IndexingError> {
 
 fn generate_unique_address(prefix: &str) -> String {
     static COUNTER: AtomicU64 = AtomicU64::new(0);
-    
+
     let timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_nanos();
-    
+
     // Get a unique counter value for this call
     let counter = COUNTER.fetch_add(1, Ordering::SeqCst);
-    
+
     // Create a hash from prefix to get deterministic but unique start
     let mut hasher = DefaultHasher::new();
     prefix.hash(&mut hasher);
     counter.hash(&mut hasher); // Include counter in hash for extra uniqueness
     timestamp.hash(&mut hasher); // Include timestamp in hash
     let prefix_hash = hasher.finish();
-    
+
     // Combine prefix hash, timestamp, and counter to create exactly 40 hex characters
     let part1 = prefix_hash & 0xFFFFFFFFFFFFFFFF;
     let part2 = (timestamp ^ (counter as u128)) & 0xFFFFFFFFFFFFFFFF;
     let part3 = ((timestamp >> 64) ^ (counter as u128)) & 0xFFFFFFFF;
-    
+
     format!("0x{:016x}{:016x}{:08x}", part1, part2 as u64, part3 as u32)
 }
 
@@ -1264,8 +1347,14 @@ async fn test_membership_indexing_added_members() -> Result<(), IndexingError> {
 
     // Verify members were inserted
     let space_id = derive_space_id(GEO, &checksum_address(dao_address.to_string()));
-    let member1 = indexer.storage.get_member(&checksum_address(member_address1.to_string()), &space_id).await;
-    let member2 = indexer.storage.get_member(&checksum_address(member_address2.to_string()), &space_id).await;
+    let member1 = indexer
+        .storage
+        .get_member(&checksum_address(member_address1.to_string()), &space_id)
+        .await;
+    let member2 = indexer
+        .storage
+        .get_member(&checksum_address(member_address2.to_string()), &space_id)
+        .await;
 
     assert!(member1.is_ok());
     assert!(member2.is_ok());
@@ -1303,8 +1392,14 @@ async fn test_membership_indexing_added_editors() -> Result<(), IndexingError> {
 
     // Verify editors were inserted
     let space_id = derive_space_id(GEO, &checksum_address(dao_address.to_string()));
-    let editor1 = indexer.storage.get_editor(&checksum_address(editor_address1.to_string()), &space_id).await;
-    let editor2 = indexer.storage.get_editor(&checksum_address(editor_address2.to_string()), &space_id).await;
+    let editor1 = indexer
+        .storage
+        .get_editor(&checksum_address(editor_address1.to_string()), &space_id)
+        .await;
+    let editor2 = indexer
+        .storage
+        .get_editor(&checksum_address(editor_address2.to_string()), &space_id)
+        .await;
 
     assert!(editor1.is_ok());
     assert!(editor2.is_ok());
@@ -1331,11 +1426,11 @@ async fn test_membership_indexing_removed_members() -> Result<(), IndexingError>
     // First add a member
     let added_members = vec![make_added_member(&dao_address, &member_address)];
     let kg_data_add = make_kg_data_with_membership(1, added_members, vec![], vec![], vec![]);
-    
+
     // Then remove the member
     let removed_members = vec![make_removed_member(&dao_address, &member_address)];
     let kg_data_remove = make_kg_data_with_membership(2, vec![], removed_members, vec![], vec![]);
-    
+
     let blocks = vec![kg_data_add, kg_data_remove];
 
     // Run the indexer
@@ -1343,7 +1438,10 @@ async fn test_membership_indexing_removed_members() -> Result<(), IndexingError>
 
     // Verify member was removed
     let space_id = derive_space_id(GEO, &checksum_address(dao_address.to_string()));
-    let member = indexer.storage.get_member(&checksum_address(member_address.to_string()), &space_id).await;
+    let member = indexer
+        .storage
+        .get_member(&checksum_address(member_address.to_string()), &space_id)
+        .await;
 
     assert!(member.is_err()); // Should not exist after removal
 
@@ -1369,11 +1467,11 @@ async fn test_membership_indexing_removed_editors() -> Result<(), IndexingError>
     // First add an editor
     let added_editors = vec![make_added_member(&dao_address, &editor_address)];
     let kg_data_add = make_kg_data_with_membership(1, vec![], vec![], added_editors, vec![]);
-    
+
     // Then remove the editor
     let removed_editors = vec![make_removed_member(&dao_address, &editor_address)];
     let kg_data_remove = make_kg_data_with_membership(2, vec![], vec![], vec![], removed_editors);
-    
+
     let blocks = vec![kg_data_add, kg_data_remove];
 
     // Run the indexer
@@ -1381,7 +1479,10 @@ async fn test_membership_indexing_removed_editors() -> Result<(), IndexingError>
 
     // Verify editor was removed
     let space_id = derive_space_id(GEO, &checksum_address(dao_address.to_string()));
-    let editor = indexer.storage.get_editor(&checksum_address(editor_address.to_string()), &space_id).await;
+    let editor = indexer
+        .storage
+        .get_editor(&checksum_address(editor_address.to_string()), &space_id)
+        .await;
 
     assert!(editor.is_err()); // Should not exist after removal
 
@@ -1423,7 +1524,13 @@ async fn test_membership_indexing_mixed_operations() -> Result<(), IndexingError
         make_removed_member(&dao_address, &editor_address1), // Remove first editor
     ];
 
-    let kg_data = make_kg_data_with_membership(1, added_members, removed_members, added_editors, removed_editors);
+    let kg_data = make_kg_data_with_membership(
+        1,
+        added_members,
+        removed_members,
+        added_editors,
+        removed_editors,
+    );
     let blocks = vec![kg_data];
 
     // Run the indexer
@@ -1432,14 +1539,26 @@ async fn test_membership_indexing_mixed_operations() -> Result<(), IndexingError
     let space_id = derive_space_id(GEO, &checksum_address(dao_address.to_string()));
 
     // Verify only member2 exists
-    let member1 = indexer.storage.get_member(&checksum_address(member_address1.to_string()), &space_id).await;
-    let member2 = indexer.storage.get_member(&checksum_address(member_address2.to_string()), &space_id).await;
+    let member1 = indexer
+        .storage
+        .get_member(&checksum_address(member_address1.to_string()), &space_id)
+        .await;
+    let member2 = indexer
+        .storage
+        .get_member(&checksum_address(member_address2.to_string()), &space_id)
+        .await;
     assert!(member1.is_err()); // Should not exist
     assert!(member2.is_ok()); // Should exist
 
     // Verify only editor2 exists
-    let editor1 = indexer.storage.get_editor(&checksum_address(editor_address1.to_string()), &space_id).await;
-    let editor2 = indexer.storage.get_editor(&checksum_address(editor_address2.to_string()), &space_id).await;
+    let editor1 = indexer
+        .storage
+        .get_editor(&checksum_address(editor_address1.to_string()), &space_id)
+        .await;
+    let editor2 = indexer
+        .storage
+        .get_editor(&checksum_address(editor_address2.to_string()), &space_id)
+        .await;
     assert!(editor1.is_err()); // Should not exist
     assert!(editor2.is_ok()); // Should exist
 
@@ -1484,14 +1603,26 @@ async fn test_membership_indexing_multiple_spaces() -> Result<(), IndexingError>
     let space_id2 = derive_space_id(GEO, &checksum_address(dao_address2.to_string()));
 
     // Verify member exists in both spaces
-    let member1 = indexer.storage.get_member(&checksum_address(member_address.to_string()), &space_id1).await;
-    let member2 = indexer.storage.get_member(&checksum_address(member_address.to_string()), &space_id2).await;
+    let member1 = indexer
+        .storage
+        .get_member(&checksum_address(member_address.to_string()), &space_id1)
+        .await;
+    let member2 = indexer
+        .storage
+        .get_member(&checksum_address(member_address.to_string()), &space_id2)
+        .await;
     assert!(member1.is_ok());
     assert!(member2.is_ok());
 
     // Verify editor exists in both spaces
-    let editor1 = indexer.storage.get_editor(&checksum_address(editor_address.to_string()), &space_id1).await;
-    let editor2 = indexer.storage.get_editor(&checksum_address(editor_address.to_string()), &space_id2).await;
+    let editor1 = indexer
+        .storage
+        .get_editor(&checksum_address(editor_address.to_string()), &space_id1)
+        .await;
+    let editor2 = indexer
+        .storage
+        .get_editor(&checksum_address(editor_address.to_string()), &space_id2)
+        .await;
     assert!(editor1.is_ok());
     assert!(editor2.is_ok());
 
@@ -1568,6 +1699,7 @@ async fn test_space_indexing_with_edits() -> Result<(), IndexingError> {
         edit: Some(edit),
         is_errored: false,
         space_id: Uuid::parse_str("3cc6995f-6cc2-4c7a-9592-1466bf95f6be").unwrap(),
+        cid: "".to_string(),
     };
 
     // Create spaces alongside edits
