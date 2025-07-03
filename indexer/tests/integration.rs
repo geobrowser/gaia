@@ -130,6 +130,7 @@ async fn main() -> Result<(), IndexingError> {
                 make_property_op("6ba7b810-9dad-11d1-80b4-00c04fd430c2", PbDataType::Number),
             ],
         )),
+        cid: "".to_string(),
     };
 
     let block = BlockMetadata {
