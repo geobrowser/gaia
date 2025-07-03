@@ -21,7 +21,7 @@ const reset = Effect.gen(function* () {
 	const results = yield* db.use(async (client) => {
 		const result = await client.transaction(async (tx) => {
 			// Delete in an order that respects foreign key constraints
-			await tx.delete(ipfsCache).execute();
+			// await tx.delete(ipfsCache).execute()
 			const v = await tx.delete(values).execute()
 			const r = await tx.delete(relations).execute()
 			const ed = await tx.delete(editors).execute()
