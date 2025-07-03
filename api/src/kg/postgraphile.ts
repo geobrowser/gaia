@@ -68,19 +68,3 @@ export const graphqlServer = createYoga({
 		return await contextPromise
 	},
 })
-
-// Custom handler that ensures proper cleanup
-app.all("/graphql", async (c) => {
-	try {
-		const response = await yoga.fetch(c.req.raw)
-		return response
-	} catch (error) {
-		console.error("GraphQL execution error:", error)
-		return new Response("Internal Server Error", {status: 500})
-	}
-})
-
-// Health check
-app.get("/health", (c) => {
-	return c.json({status: "ok"})
-})
