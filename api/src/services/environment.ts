@@ -6,7 +6,6 @@ export type IEnvironment = Readonly<{
 	telemetryToken: Redacted.Redacted | null
 	ipfsKey: string
 	ipfsGatewayWrite: string
-	ipfsGatewayRead: string
 	rpcEndpoint: string
 	chainId: "80451" | "19411"
 }>
@@ -16,7 +15,6 @@ export const make = Effect.gen(function* (_) {
 	const maybeDebug = yield* _(Config.option(Config.boolean("DEBUG")))
 	const ipfsKey = yield* Config.string("IPFS_KEY")
 	const ipfsGatewayWrite = yield* Config.string("IPFS_GATEWAY_WRITE")
-	const ipfsGatewayRead = yield* Config.string("IPFS_GATEWAY_READ")
 	const rpcEndpoint = yield* Config.string("RPC_ENDPOINT")
 	const chainId = yield* Config.string("CHAIN_ID")
 
@@ -42,7 +40,6 @@ export const make = Effect.gen(function* (_) {
 		debug,
 		ipfsKey: ipfsKey,
 		ipfsGatewayWrite: ipfsGatewayWrite,
-		ipfsGatewayRead: ipfsGatewayRead,
 		rpcEndpoint: rpcEndpoint,
 	} as const
 })

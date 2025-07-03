@@ -37,7 +37,6 @@ jobs:
       NODE_ENV: test
       IPFS_KEY: test_ipfs_key
       IPFS_GATEWAY_WRITE: https://test-ipfs-write.example.com
-      IPFS_GATEWAY_READ: https://test-ipfs-read.example.com
       RPC_ENDPOINT: https://test-rpc.example.com
 
     defaults:

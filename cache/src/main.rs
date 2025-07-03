@@ -164,8 +164,9 @@ async fn process_edit_event(
             match res {
                 Ok(_) => {
                     println!(
-                        "Successfully wrote cid to cache {}",
-                        edit.content_uri.clone()
+                        "Successfully wrote cid to cache {} for block {}",
+                        edit.content_uri.clone(),
+                        block.block_number,
                     );
                 }
                 Err(err) => {
