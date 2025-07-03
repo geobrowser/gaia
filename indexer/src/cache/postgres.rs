@@ -45,6 +45,7 @@ impl CacheBackend for PostgresCache {
                 edit: None,
                 is_errored: true,
                 space_id: space,
+                cid: uri.clone(),
             });
         }
 
@@ -56,6 +57,7 @@ impl CacheBackend for PostgresCache {
             edit: Some(edit),
             is_errored: false,
             space_id: space,
+            cid: uri.clone(),
         })
     }
 }

@@ -20,6 +20,7 @@ pub enum CacheError {
 
 #[derive(Clone, Debug)]
 pub struct PreprocessedEdit {
+    pub cid: String,
     pub edit: Option<Edit>,
     pub is_errored: bool,
     pub space_id: Uuid,

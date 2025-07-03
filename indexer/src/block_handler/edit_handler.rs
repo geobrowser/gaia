@@ -193,10 +193,19 @@ where
                     if let Err(write_error) = delete_relations_result {
                         println!("Error deleting relations {}", write_error);
                     }
+                } else {
+                    println!(
+                        "Encountered errored ipfs cache entry. Skipping indexing. Space id: {}, cid: {}",
+                        preprocessed_edit.space_id,
+                        preprocessed_edit.cid
+                    )
                 }
 
                 if let Err(error) = tx.commit().await {
-                    eprintln!("Error committing transaction: {}", error);
+                    println!(
+                        "Error committing transaction for edit with uri: {} {}",
+                        preprocessed_edit.cid, error
+                    );
                 }
             }
         })

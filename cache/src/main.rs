@@ -114,6 +114,11 @@ impl Sink<EventData> for CacheIndexer {
             let cache = self.cache.clone();
             let ipfs = self.ipfs.clone();
 
+            println!(
+                "Processing cache entry for uri {} in block {}",
+                edit.content_uri, block_metadata.block_number
+            );
+
             let block_metadata = stream::utils::block_metadata(block_data);
 
             task::spawn(async move {
@@ -146,7 +151,7 @@ async fn process_edit_event(
     match data {
         Ok(result) => {
             let item = CacheItem {
-                uri: edit.content_uri,
+                uri: edit.content_uri.clone(),
                 block: block.timestamp.clone(),
                 json: Some(result),
                 space: derive_space_id(GEO, &edit.dao_address),
@@ -154,12 +159,24 @@ async fn process_edit_event(
             };
 
             let mut cache_instance = cache.lock().await;
-            cache_instance.put(&item).await?;
+            let res = cache_instance.put(&item).await;
+
+            match res {
+                Ok(_) => {
+                    println!(
+                        "Successfully wrote cid to cache {}",
+                        edit.content_uri.clone()
+                    );
+                }
+                Err(err) => {
+                    println!("Err {:?}", err)
+                }
+            }
         }
         Err(error) => {
             println!(
-                "Error writing decoded edit event to cache for uri {} {}",
-                edit.content_uri, error
+                "Error writing decoded edit event to cache for uri {} in block {} {}",
+                edit.content_uri, block.block_number, error
             );
 
             // We may receive events where the format of the ipfs contents is
@@ -187,7 +204,8 @@ async fn process_edit_event(
 async fn main() -> Result<(), Error> {
     dotenv().ok();
 
-    let ipfs = IpfsClient::new("https://gateway.lighthouse.storage/ipfs/");
+    let ipfs_gateway = env::var("IPFS_GATEWAY").expect("IPFS_GATEWAY not set");
+    let ipfs = IpfsClient::new(&ipfs_gateway);
     let storage = cache::Storage::new().await;
 
     match storage {
