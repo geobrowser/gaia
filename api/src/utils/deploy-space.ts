@@ -71,10 +71,17 @@ export function deploySpace(args: DeployArgs) {
 		})
 
 		yield* Effect.logInfo("[SPACE][deploy] Uploading EDIT to IPFS")
-		const blob = new Blob([initialContent], {type: "application/octet-stream"})
+		const blob = new Blob([initialContent], {
+			type: "application/octet-stream",
+		})
 		const formData = new FormData()
 		formData.append("file", blob)
-		const firstBlockContentUri = yield* upload(formData, config.ipfsGatewayWrite)
+		const firstBlockContentUri = yield* upload(formData, config.ipfsGatewayWrite).pipe(
+			Effect.withSpan("deploySpace.upload"),
+			Effect.annotateSpans({
+				...args,
+			}),
+		)
 
 		const plugins: PluginInstallationWithViem[] = []
 
@@ -123,17 +130,23 @@ export function deploySpace(args: DeployArgs) {
 				console.error(`[SPACE][deploy] Failed creating DAO: ${e}`)
 				return new DeployDaoError(`Failed creating DAO: ${e}`)
 			},
-		})
+		}).pipe(Effect.withSpan("deploySpace.createDao"), Effect.annotateSpans({...createParams, ...args}))
 
 		yield* Effect.logInfo("[SPACE][deploy] Deployed DAO successfully!").pipe(
-			Effect.annotateLogs({dao: dao.dao, pluginAddresses: dao.pluginAddresses}),
+			Effect.annotateLogs({
+				dao: dao.dao,
+				pluginAddresses: dao.pluginAddresses,
+			}),
 		)
 
 		yield* Effect.logInfo("[SPACE][deploy] Waiting for DAO to be indexed into a space").pipe(
-			Effect.annotateLogs({dao: dao.dao}),
+			Effect.annotateLogs({dao: dao.dao, ...args, ...createParams}),
 		)
 
-		const waitResult = yield* waitForSpaceToBeIndexed(dao.dao)
+		const waitResult = yield* waitForSpaceToBeIndexed(dao.dao).pipe(
+			Effect.withSpan("deploySpace.waitForSpaceToBeIndexed"),
+			Effect.annotateSpans({dao: dao.dao}),
+		)
 
 		yield* Effect.logInfo("[SPACE][deploy] Space indexed successfully").pipe(
 			Effect.annotateLogs({

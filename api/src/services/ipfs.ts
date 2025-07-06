@@ -29,7 +29,7 @@ export function uploadEdit(file: File) {
 		formData.append("file", blob)
 
 		yield* Effect.logInfo("[IPFS][binary] Uploading content...")
-		const hash = yield* upload(formData, config.ipfsGatewayWrite)
+		const hash = yield* upload(formData, config.ipfsGatewayWrite).pipe(Effect.withSpan("ipfs.uploadEdit.upload"))
 		yield* Effect.logInfo("[IPFS][binary] Validating CID")
 		yield* validateCid(hash)
 		yield* Effect.logInfo("[IPFS][binary] Uploaded to IPFS successfully")
@@ -57,7 +57,7 @@ export function uploadFile(file: File) {
 		formData.append("file", file)
 
 		yield* Effect.logInfo("[IPFS][upload] Uploading content...")
-		const hash = yield* upload(formData, config.ipfsGatewayWrite)
+		const hash = yield* upload(formData, config.ipfsGatewayWrite).pipe(Effect.withSpan("ipfs.uploadFile.upload"))
 		yield* Effect.logInfo("[IPFS][upload] Uploaded to IPFS successfully")
 
 		return {
@@ -98,7 +98,7 @@ export function upload(formData: FormData, url: string) {
 					},
 				}),
 			catch: (error) => new IpfsUploadError(`IPFS upload failed: ${error}`),
-		})
+		}).pipe(Effect.withSpan("ipfs.upload"))
 
 		const {Hash} = yield* Effect.tryPromise({
 			try: () => response.json(),

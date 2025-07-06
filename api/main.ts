@@ -19,7 +19,8 @@ import { deploySpace } from "./src/utils/deploy-space";
  * CompressionStream in the runtime.
  * https://github.com/oven-sh/bun/issues/1723
  */
-import "./src/compression-polyfill"
+import "./src/compression-polyfill";
+import { NodeSdkLive } from "./src/services/telemetry";
 
 const EnvironmentLayer = Layer.effect(Environment, makeEnvironment);
 const StorageLayer = Layer.effect(Storage, makeStorage).pipe(
@@ -51,7 +52,11 @@ app.post("/ipfs/upload-edit", async (c) => {
 	}
 
 	const result = await Effect.runPromise(
-		Effect.either(uploadEdit(file)).pipe(Effect.provide(EnvironmentLayer)),
+		Effect.either(uploadEdit(file)).pipe(
+			Effect.withSpan("/ipfs/upload-edit.uploadEdit"),
+			Effect.provide(EnvironmentLayer),
+			Effect.provide(NodeSdkLive),
+		),
 	);
 
 	if (Either.isLeft(result)) {
@@ -73,7 +78,11 @@ app.post("/ipfs/upload-file", async (c) => {
 	}
 
 	const result = await Effect.runPromise(
-		Effect.either(uploadFile(file)).pipe(Effect.provide(EnvironmentLayer)),
+		Effect.either(uploadFile(file)).pipe(
+			Effect.withSpan("/ipfs/upload-file.uploadEdit"),
+			Effect.provide(EnvironmentLayer),
+			Effect.provide(NodeSdkLive),
+		),
 	);
 
 	if (Either.isLeft(result)) {
@@ -113,7 +122,16 @@ app.post("/deploy", async (c) => {
 			spaceName,
 			spaceEntityId,
 			ops,
-		}).pipe(Effect.provide(EnvironmentLayer)),
+		}).pipe(
+			Effect.withSpan("/deploy.deploySpace"),
+			Effect.annotateSpans({
+				initialEditorAddress,
+				spaceName,
+				spaceEntityId,
+			}),
+			Effect.provide(NodeSdkLive),
+			Effect.provide(EnvironmentLayer),
+		),
 		{
 			schedule: Schedule.exponential(Duration.millis(100)).pipe(
 				Schedule.jittered,
