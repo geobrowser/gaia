@@ -79,7 +79,7 @@ app.post("/ipfs/upload-file", async (c) => {
 
 	const result = await Effect.runPromise(
 		Effect.either(uploadFile(file)).pipe(
-			Effect.withSpan("/ipfs/upload-file.uploadEdit"),
+			Effect.withSpan("/ipfs/upload-file.uploadFile"),
 			Effect.provide(EnvironmentLayer),
 			Effect.provide(NodeSdkLive),
 		),
