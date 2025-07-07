@@ -15,14 +15,20 @@ The database has an expected schema for the IPFS cache and indexers. For now all
 To run migrations, first populate a `.env` file in the `/api` directory with the following:
 
 ```sh
-DATABASE_URL=""
+DATABASE_URL="postgresql://localhost:5432/gaia" # or any connection string
+CHAIN_ID="80451" # or 19411 for mainnet
+IPFS_KEY=''
+IPFS_GATEWAY_WRITE=''
+IPFS_GATEWAY_READ=''
+RPC_ENDPOINT=''
+DEPLOYER_PK=''
 ```
 
 Then run the following commands from within the `/api` directory:
 
 ```sh
 bun install
-bun drizzle-kit migrate
+bun run db:migrate
 ```
 
 If done correctly you should see logs signaling a successful migration.
@@ -34,7 +40,7 @@ The indexers depend on the IPFS cache to handle preprocessing of IPFS contents. 
 ```sh
 SUBSTREAMS_API_TOKEN=""
 SUBSTREAMS_ENDPOINT=""
-DATABASE_URL=""
+DATABASE_URL="postgresql://localhost:5432/gaia" # or any connection string
 ```
 
 Then run the following command
