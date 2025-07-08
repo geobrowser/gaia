@@ -1,6 +1,6 @@
 ## Running the data service stack
 
-The knowledge graph data service is comprised of three components: 1) Indexers, 2) an IPFS cache, and 3) the API. The indexers read through the knowledge graph blockchain serially and index relevant events sequentially. For any events that read from IPFS, it reads from the IPFS cache. Reading from IPFS can be slow, especially for large files, so the IPFS cache is a separate process that reads through the chain in an optimized way and writes the IPFS contents to a local store on disk. Lastly the API reads indexed data from the database and serves it to consumers in an ergnomic way.
+The knowledge graph data service is comprised of three components: 1) Indexers, 2) an IPFS cache, and 3) the API. The indexers read through the knowledge graph blockchain serially and index relevant events sequentially. For any events that read from IPFS, it reads from the IPFS cache. Reading from IPFS can be slow, especially for large files, so the IPFS cache is a separate process that reads through the chain in an optimized way and writes the IPFS contents to a local store on disk. Lastly the API reads indexed data from the database and serves it to consumers in an ergonomic way.
 
 ### Install dependencies and run migrations
 
@@ -12,7 +12,7 @@ The data service is dependent on the following tools:
 
 The database has an expected schema for the IPFS cache and indexers. For now all of the schemas are managed through the API project.
 
-To run migrations, first populate a `.env` file in the `/api` directory with the following:
+To run migrations, first populate an `.env` file in the `/api` directory with the following:
 
 ```sh
 DATABASE_URL="postgresql://localhost:5432/gaia" # or any connection string
@@ -31,11 +31,11 @@ bun install
 bun run db:migrate
 ```
 
-If done correctly you should see logs signaling a successful migration.
+If done correctly, you should see logs signaling a successful migration.
 
 ### Running the IPFS cache
 
-The indexers depend on the IPFS cache to handle preprocessing of IPFS contents. To run the cache populate an `.env` file in the root of this directory.
+The indexers depend on the IPFS cache to handle preprocessing of IPFS contents. To run the cache, populate an `.env` file in the root of this directory.
 
 ```sh
 SUBSTREAMS_API_TOKEN=""
