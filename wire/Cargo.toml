@@ -1,0 +1,18 @@
+[package]
+name = "wire"
+version = "0.1.0"
+edition = "2024"
+
+[lib]
+name = "wire"
+path = "src/lib.rs"
+
+[dependencies]
+zstd = "0.13.3"
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "compression_bench"
+harness = false
