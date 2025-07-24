@@ -1,5 +1,8 @@
 use reqwest::Client as ReqwestClient;
-use wire::{deserialize::deserialize, pb::grc20::Edit};
+use wire::{
+    deserialize::{deserialize, DeserializeError},
+    pb::grc20::Edit,
+};
 
 #[derive(Debug, thiserror::Error)]
 pub enum IpfsError {
@@ -11,6 +14,8 @@ pub enum IpfsError {
     Prost(#[from] prost::DecodeError),
     #[error("cid error: {0}")]
     CidError(String),
+    #[error("deserialize error error: {0}")]
+    DeserializeError(#[from] DeserializeError),
 }
 
 type Result<T> = std::result::Result<T, IpfsError>;
