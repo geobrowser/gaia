@@ -1,5 +1,4 @@
 use futures::future::join_all;
-use grc20::pb::chain::GeoOutput;
 use indexer_utils::get_blocklist;
 use prost::Message;
 use std::{collections::HashSet, sync::Arc};
@@ -9,6 +8,7 @@ use tokio_retry::{
     strategy::{jitter, ExponentialBackoff},
     Retry,
 };
+use wire::pb::chain::GeoOutput;
 
 use crate::{
     cache::{postgres::PostgresCache, CacheBackend, PreprocessedEdit},
@@ -19,9 +19,9 @@ use crate::{
 /// Matches spaces with their corresponding plugins based on DAO address
 /// Returns a vector of CreatedSpace variants (Public or Personal)
 pub fn match_spaces_with_plugins(
-    spaces: &[grc20::pb::chain::GeoSpaceCreated],
-    governance_plugins: &[grc20::pb::chain::GeoGovernancePluginCreated],
-    personal_plugins: &[grc20::pb::chain::GeoPersonalSpaceAdminPluginCreated],
+    spaces: &[wire::pb::chain::GeoSpaceCreated],
+    governance_plugins: &[wire::pb::chain::GeoGovernancePluginCreated],
+    personal_plugins: &[wire::pb::chain::GeoPersonalSpaceAdminPluginCreated],
 ) -> Vec<CreatedSpace> {
     let mut created_spaces = Vec::new();
 
@@ -57,7 +57,7 @@ pub fn match_spaces_with_plugins(
 }
 
 /// Maps editor events to AddedMember structs
-pub fn map_editors_added(editors: &[grc20::pb::chain::EditorAdded]) -> Vec<AddedMember> {
+pub fn map_editors_added(editors: &[wire::pb::chain::EditorAdded]) -> Vec<AddedMember> {
     editors
         .iter()
         .map(|e| AddedMember {
@@ -69,7 +69,7 @@ pub fn map_editors_added(editors: &[grc20::pb::chain::EditorAdded]) -> Vec<Added
 
 /// Maps initial editor events to AddedMember structs, flattening multiple addresses per event
 pub fn map_initial_editors_added(
-    initial_editors: &[grc20::pb::chain::InitialEditorAdded],
+    initial_editors: &[wire::pb::chain::InitialEditorAdded],
 ) -> Vec<AddedMember> {
     initial_editors
         .iter()
@@ -83,7 +83,7 @@ pub fn map_initial_editors_added(
 }
 
 /// Maps member events to AddedMember structs
-pub fn map_members_added(members: &[grc20::pb::chain::MemberAdded]) -> Vec<AddedMember> {
+pub fn map_members_added(members: &[wire::pb::chain::MemberAdded]) -> Vec<AddedMember> {
     members
         .iter()
         .map(|e| AddedMember {
@@ -195,7 +195,7 @@ pub async fn preprocess_block_scoped_data(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use grc20::pb::chain::{
+    use wire::pb::chain::{
         GeoGovernancePluginCreated, GeoPersonalSpaceAdminPluginCreated, GeoSpaceCreated,
     };
 
@@ -233,8 +233,8 @@ mod tests {
     fn create_test_editor_added(
         dao_address: &str,
         editor_address: &str,
-    ) -> grc20::pb::chain::EditorAdded {
-        grc20::pb::chain::EditorAdded {
+    ) -> wire::pb::chain::EditorAdded {
+        wire::pb::chain::EditorAdded {
             dao_address: dao_address.to_string(),
             editor_address: editor_address.to_string(),
             main_voting_plugin_address: "voting_plugin".to_string(),
@@ -245,8 +245,8 @@ mod tests {
     fn create_test_initial_editor_added(
         dao_address: &str,
         addresses: Vec<&str>,
-    ) -> grc20::pb::chain::InitialEditorAdded {
-        grc20::pb::chain::InitialEditorAdded {
+    ) -> wire::pb::chain::InitialEditorAdded {
+        wire::pb::chain::InitialEditorAdded {
             dao_address: dao_address.to_string(),
             addresses: addresses.into_iter().map(|s| s.to_string()).collect(),
             plugin_address: "plugin".to_string(),
@@ -256,8 +256,8 @@ mod tests {
     fn create_test_member_added(
         dao_address: &str,
         member_address: &str,
-    ) -> grc20::pb::chain::MemberAdded {
-        grc20::pb::chain::MemberAdded {
+    ) -> wire::pb::chain::MemberAdded {
+        wire::pb::chain::MemberAdded {
             dao_address: dao_address.to_string(),
             member_address: member_address.to_string(),
             main_voting_plugin_address: "voting_plugin".to_string(),

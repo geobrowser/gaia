@@ -1,8 +1,8 @@
 use std::collections::HashMap;
 
-use grc20::pb::grc20::{op::Payload, Edit};
 use indexer_utils::id;
 use uuid::Uuid;
+use wire::pb::grc20::{op::Payload, Edit};
 
 #[derive(Clone, Debug)]
 pub struct SetRelationItem {

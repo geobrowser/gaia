@@ -9,6 +9,11 @@ path = "src/lib.rs"
 
 [dependencies]
 zstd = "0.13.3"
+prost = "0.13.5"
+serde = { version = "1.0", features = ["derive"] }
+
+[build-dependencies]
+prost-build = "0.13.5"
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }

@@ -6,6 +6,7 @@ use std::{env, io::Error};
 use stream::utils::BlockMetadata;
 use thiserror::Error;
 use tokio::task;
+use wire::pb::chain::{EditPublished, GeoOutput};
 
 use dotenv::dotenv;
 use prost::Message;
@@ -15,8 +16,6 @@ use tokio::sync::{Mutex, Semaphore};
 const PKG_FILE: &str = "geo_substream.spkg";
 const MODULE_NAME: &str = "geo_out";
 const START_BLOCK: i64 = 56013;
-
-use grc20::pb::chain::{EditPublished, GeoOutput};
 
 mod cache;
 use cache::{Cache, CacheItem};

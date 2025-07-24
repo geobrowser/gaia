@@ -1,10 +1,10 @@
 use std::env;
 
-use grc20::pb::grc20::Edit;
 use sqlx::{postgres::PgPoolOptions, Postgres};
 use uuid::Uuid;
 
 use thiserror::Error;
+use wire::pb::grc20::Edit;
 
 #[derive(Error, Debug)]
 pub enum CacheError {

@@ -1,3 +1,0 @@
-The `grc20` package contains tooling for interacting with the GRC-20 compliant protobufs. We generate Rust bindings for the protobuf contents using `prost` and `prost_build`. Currently we've separately protobufs for knowledge graph content from the governance actions into separate protobuf packages 1) ipfs.proto and 2) chain.proto. They generate an `ipfs.rs` and `chain.rs` respectively which both get exported by the `grc20` package.
-
-We can generate new Rust bindings from protobufs by uncommenting and optionally modifying the `build.rs` entrypoint. For now it's commented-out so we don't need to ship protobuf compilers to our prod deployments of our sinks/apis.

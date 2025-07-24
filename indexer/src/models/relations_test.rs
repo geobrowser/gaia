@@ -1,8 +1,8 @@
 use std::vec;
 use uuid::Uuid;
 
-use grc20::pb::grc20::op::Payload;
-use grc20::pb::grc20::{Edit, Op, Relation, RelationUpdate, UnsetRelationFields};
+use wire::pb::grc20::op::Payload;
+use wire::pb::grc20::{Edit, Op, Relation, RelationUpdate, UnsetRelationFields};
 
 use super::relations::{RelationsModel, SetRelationItem, UpdateRelationItem};
 
@@ -113,11 +113,26 @@ mod tests {
 
     // Helper function to verify a SetRelationItem
     fn verify_set_relation(item: &SetRelationItem, space_id: &Uuid) {
-        assert_eq!(item.id, Uuid::parse_str("12345678-1234-4012-8def-123456789012").unwrap());
-        assert_eq!(item.entity_id, Uuid::parse_str("23456789-1234-4012-8def-123456789012").unwrap());
-        assert_eq!(item.type_id, Uuid::parse_str("34567890-1234-4012-8def-123456789012").unwrap());
-        assert_eq!(item.from_id, Uuid::parse_str("45678901-1234-4012-8def-123456789012").unwrap());
-        assert_eq!(item.to_id, Uuid::parse_str("56789012-1234-4012-8def-123456789012").unwrap());
+        assert_eq!(
+            item.id,
+            Uuid::parse_str("12345678-1234-4012-8def-123456789012").unwrap()
+        );
+        assert_eq!(
+            item.entity_id,
+            Uuid::parse_str("23456789-1234-4012-8def-123456789012").unwrap()
+        );
+        assert_eq!(
+            item.type_id,
+            Uuid::parse_str("34567890-1234-4012-8def-123456789012").unwrap()
+        );
+        assert_eq!(
+            item.from_id,
+            Uuid::parse_str("45678901-1234-4012-8def-123456789012").unwrap()
+        );
+        assert_eq!(
+            item.to_id,
+            Uuid::parse_str("56789012-1234-4012-8def-123456789012").unwrap()
+        );
         assert_eq!(
             item.to_space_id,
             Some("67890123-1234-4012-8def-123456789012".to_string())
@@ -129,7 +144,10 @@ mod tests {
 
     // Helper function to verify an UpdateRelationItem
     fn verify_update_relation(item: &UpdateRelationItem, space_id: &Uuid) {
-        assert_eq!(item.id, Uuid::parse_str("12345678-1234-4012-8def-123456789012").unwrap());
+        assert_eq!(
+            item.id,
+            Uuid::parse_str("12345678-1234-4012-8def-123456789012").unwrap()
+        );
         assert_eq!(
             item.from_space_id,
             Some("01234567-1234-4012-8def-123456789012".to_string())
@@ -186,7 +204,10 @@ mod tests {
         assert_eq!(update_relations.len(), 0);
         assert_eq!(unset_relations.len(), 0);
         assert_eq!(deleted_relations.len(), 1);
-        assert_eq!(deleted_relations[0], Uuid::parse_str("12345678-1234-4012-8def-123456789012").unwrap());
+        assert_eq!(
+            deleted_relations[0],
+            Uuid::parse_str("12345678-1234-4012-8def-123456789012").unwrap()
+        );
     }
 
     #[test]
@@ -260,7 +281,10 @@ mod tests {
         assert_eq!(deleted_relations.len(), 0);
 
         // Verify the second create operation overwrote the first
-        assert_eq!(set_relations[0].id, Uuid::parse_str("12345678-1234-4012-8def-123456789012").unwrap());
+        assert_eq!(
+            set_relations[0].id,
+            Uuid::parse_str("12345678-1234-4012-8def-123456789012").unwrap()
+        );
         assert_eq!(
             set_relations[0].entity_id,
             Uuid::parse_str("a1234567-1234-4012-8def-123456789012").unwrap()
@@ -328,7 +352,10 @@ mod tests {
         assert_eq!(deleted_relations.len(), 0);
 
         // Verify original values preserved but updated values overrode originals
-        assert_eq!(set_relations[0].id, Uuid::parse_str("12345678-1234-4012-8def-123456789012").unwrap());
+        assert_eq!(
+            set_relations[0].id,
+            Uuid::parse_str("12345678-1234-4012-8def-123456789012").unwrap()
+        );
         assert_eq!(
             set_relations[0].entity_id,
             Uuid::parse_str("23456789-1234-4012-8def-123456789012").unwrap()
@@ -393,7 +420,10 @@ mod tests {
         assert_eq!(update_relations.len(), 0);
         assert_eq!(unset_relations.len(), 0);
         assert_eq!(deleted_relations.len(), 1);
-        assert_eq!(deleted_relations[0], Uuid::parse_str("12345678-1234-4012-8def-123456789012").unwrap());
+        assert_eq!(
+            deleted_relations[0],
+            Uuid::parse_str("12345678-1234-4012-8def-123456789012").unwrap()
+        );
     }
 
     #[test]
@@ -439,7 +469,10 @@ mod tests {
         assert_eq!(deleted_relations.len(), 0);
 
         // Verify the create relation has the fields unset
-        assert_eq!(set_relations[0].id, Uuid::parse_str("12345678-1234-4012-8def-123456789012").unwrap());
+        assert_eq!(
+            set_relations[0].id,
+            Uuid::parse_str("12345678-1234-4012-8def-123456789012").unwrap()
+        );
         assert_eq!(
             set_relations[0].entity_id,
             Uuid::parse_str("23456789-1234-4012-8def-123456789012").unwrap()
@@ -560,7 +593,10 @@ mod tests {
         assert_eq!(update_relations.len(), 0);
         assert_eq!(unset_relations.len(), 0);
         assert_eq!(deleted_relations.len(), 1);
-        assert_eq!(deleted_relations[0], Uuid::parse_str("12345678-1234-4012-8def-123456789012").unwrap());
+        assert_eq!(
+            deleted_relations[0],
+            Uuid::parse_str("12345678-1234-4012-8def-123456789012").unwrap()
+        );
     }
 
     #[test]
@@ -661,7 +697,10 @@ mod tests {
         assert_eq!(deleted_relations.len(), 0);
 
         // Verify the create values
-        assert_eq!(set_relations[0].id, Uuid::parse_str("12345678-1234-4012-8def-123456789012").unwrap());
+        assert_eq!(
+            set_relations[0].id,
+            Uuid::parse_str("12345678-1234-4012-8def-123456789012").unwrap()
+        );
         assert_eq!(
             set_relations[0].entity_id,
             Uuid::parse_str("a1234567-1234-4012-8def-123456789012").unwrap()
@@ -761,7 +800,10 @@ mod tests {
         assert_eq!(update_relations.len(), 0);
         assert_eq!(unset_relations.len(), 0);
         assert_eq!(deleted_relations.len(), 1);
-        assert_eq!(deleted_relations[0], Uuid::parse_str("12345678-1234-4012-8def-123456789012").unwrap());
+        assert_eq!(
+            deleted_relations[0],
+            Uuid::parse_str("12345678-1234-4012-8def-123456789012").unwrap()
+        );
     }
 
     #[test]
@@ -812,7 +854,10 @@ mod tests {
         assert_eq!(deleted_relations.len(), 0);
 
         // Verify the create values
-        assert_eq!(set_relations[0].id, Uuid::parse_str("12345678-1234-4012-8def-123456789012").unwrap());
+        assert_eq!(
+            set_relations[0].id,
+            Uuid::parse_str("12345678-1234-4012-8def-123456789012").unwrap()
+        );
         assert_eq!(
             set_relations[0].entity_id,
             Uuid::parse_str("a1234567-1234-4012-8def-123456789012").unwrap()
@@ -903,7 +948,10 @@ mod tests {
         assert_eq!(deleted_relations.len(), 0);
 
         // Verify the final state matches the last create
-        assert_eq!(set_relations[0].id, Uuid::parse_str("12345678-1234-4012-8def-123456789012").unwrap());
+        assert_eq!(
+            set_relations[0].id,
+            Uuid::parse_str("12345678-1234-4012-8def-123456789012").unwrap()
+        );
         assert_eq!(
             set_relations[0].entity_id,
             Uuid::parse_str("a1234567-1234-4012-8def-123456789012").unwrap()
@@ -1002,7 +1050,10 @@ mod tests {
         assert_eq!(deleted_relations.len(), 1);
 
         // Verify the create for rel1 with updated position
-        assert_eq!(set_relations[0].id, Uuid::parse_str("12345678-1234-4012-8def-123456789012").unwrap());
+        assert_eq!(
+            set_relations[0].id,
+            Uuid::parse_str("12345678-1234-4012-8def-123456789012").unwrap()
+        );
         assert_eq!(
             set_relations[0].entity_id,
             Uuid::parse_str("23456789-1234-4012-8def-123456789012").unwrap()
@@ -1011,7 +1062,10 @@ mod tests {
         assert_eq!(set_relations[0].verified, Some(true)); // Unchanged
 
         // Verify the delete for rel2
-        assert_eq!(deleted_relations[0], Uuid::parse_str("87654321-1234-4012-8def-123456789012").unwrap());
+        assert_eq!(
+            deleted_relations[0],
+            Uuid::parse_str("87654321-1234-4012-8def-123456789012").unwrap()
+        );
     }
 
     #[test]
@@ -1089,31 +1143,76 @@ mod tests {
         assert_eq!(deleted_relations.len(), 0);
 
         // Verify relation 1 (find by ID since order may vary)
-        let rel1 = set_relations.iter().find(|r| r.id == Uuid::parse_str("11111111-1111-4012-8def-123456789012").unwrap()).unwrap();
-        assert_eq!(rel1.entity_id, Uuid::parse_str("e0101010-1234-4012-8def-123456789012").unwrap());
-        assert_eq!(rel1.type_id, Uuid::parse_str("10e00001-1234-4012-8def-123456789012").unwrap());
-        assert_eq!(rel1.from_id, Uuid::parse_str("f0000001-1234-4012-8def-123456789012").unwrap());
-        assert_eq!(rel1.to_id, Uuid::parse_str("10000001-1234-4012-8def-123456789012").unwrap());
+        let rel1 = set_relations
+            .iter()
+            .find(|r| r.id == Uuid::parse_str("11111111-1111-4012-8def-123456789012").unwrap())
+            .unwrap();
+        assert_eq!(
+            rel1.entity_id,
+            Uuid::parse_str("e0101010-1234-4012-8def-123456789012").unwrap()
+        );
+        assert_eq!(
+            rel1.type_id,
+            Uuid::parse_str("10e00001-1234-4012-8def-123456789012").unwrap()
+        );
+        assert_eq!(
+            rel1.from_id,
+            Uuid::parse_str("f0000001-1234-4012-8def-123456789012").unwrap()
+        );
+        assert_eq!(
+            rel1.to_id,
+            Uuid::parse_str("10000001-1234-4012-8def-123456789012").unwrap()
+        );
         assert_eq!(rel1.position, Some("position1".to_string()));
         assert_eq!(rel1.verified, Some(true));
         assert_eq!(rel1.space_id, space_id);
 
         // Verify relation 2 (find by ID since order may vary)
-        let rel2 = set_relations.iter().find(|r| r.id == Uuid::parse_str("22222222-2222-4012-8def-123456789012").unwrap()).unwrap();
-        assert_eq!(rel2.entity_id, Uuid::parse_str("e0101020-1234-4012-8def-123456789012").unwrap());
-        assert_eq!(rel2.type_id, Uuid::parse_str("10e00002-1234-4012-8def-123456789012").unwrap());
-        assert_eq!(rel2.from_id, Uuid::parse_str("f0000002-1234-4012-8def-123456789012").unwrap());
-        assert_eq!(rel2.to_id, Uuid::parse_str("10000002-1234-4012-8def-123456789012").unwrap());
+        let rel2 = set_relations
+            .iter()
+            .find(|r| r.id == Uuid::parse_str("22222222-2222-4012-8def-123456789012").unwrap())
+            .unwrap();
+        assert_eq!(
+            rel2.entity_id,
+            Uuid::parse_str("e0101020-1234-4012-8def-123456789012").unwrap()
+        );
+        assert_eq!(
+            rel2.type_id,
+            Uuid::parse_str("10e00002-1234-4012-8def-123456789012").unwrap()
+        );
+        assert_eq!(
+            rel2.from_id,
+            Uuid::parse_str("f0000002-1234-4012-8def-123456789012").unwrap()
+        );
+        assert_eq!(
+            rel2.to_id,
+            Uuid::parse_str("10000002-1234-4012-8def-123456789012").unwrap()
+        );
         assert_eq!(rel2.position, Some("position2".to_string()));
         assert_eq!(rel2.verified, Some(false));
         assert_eq!(rel2.space_id, space_id);
 
         // Verify relation 3 (find by ID since order may vary)
-        let rel3 = set_relations.iter().find(|r| r.id == Uuid::parse_str("33333333-3333-4012-8def-123456789012").unwrap()).unwrap();
-        assert_eq!(rel3.entity_id, Uuid::parse_str("e0101030-1234-4012-8def-123456789012").unwrap());
-        assert_eq!(rel3.type_id, Uuid::parse_str("10e00003-1234-4012-8def-123456789012").unwrap());
-        assert_eq!(rel3.from_id, Uuid::parse_str("f0000003-1234-4012-8def-123456789012").unwrap());
-        assert_eq!(rel3.to_id, Uuid::parse_str("10000003-1234-4012-8def-123456789012").unwrap());
+        let rel3 = set_relations
+            .iter()
+            .find(|r| r.id == Uuid::parse_str("33333333-3333-4012-8def-123456789012").unwrap())
+            .unwrap();
+        assert_eq!(
+            rel3.entity_id,
+            Uuid::parse_str("e0101030-1234-4012-8def-123456789012").unwrap()
+        );
+        assert_eq!(
+            rel3.type_id,
+            Uuid::parse_str("10e00003-1234-4012-8def-123456789012").unwrap()
+        );
+        assert_eq!(
+            rel3.from_id,
+            Uuid::parse_str("f0000003-1234-4012-8def-123456789012").unwrap()
+        );
+        assert_eq!(
+            rel3.to_id,
+            Uuid::parse_str("10000003-1234-4012-8def-123456789012").unwrap()
+        );
         assert_eq!(rel3.position, None);
         assert_eq!(rel3.verified, None);
         assert_eq!(rel3.space_id, space_id);

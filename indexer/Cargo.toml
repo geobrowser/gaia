@@ -9,7 +9,7 @@ chrono = "0.4.41"
 dotenv = "0.15.0"
 stream = { version = "0.1.0", path = "../stream" }
 tokio = { version = "1.44.2", features = ["macros", "rt-multi-thread"] }
-grc20 = { version = "0.1.0", path = "../grc20" }
+wire = { version = "0.1.0", path = "../wire" }
 indexer_utils = { version = "0.1.0", path = "../indexer_utils" }
 prost = "0.13.3"
 prost-types = "0.13.3"

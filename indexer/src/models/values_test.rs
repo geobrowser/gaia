@@ -1,9 +1,9 @@
 use crate::models::values::{ValueChangeType, ValuesModel};
-use grc20::pb::grc20::{
+use uuid::Uuid;
+use wire::pb::grc20::{
     op::Payload, options, Edit, Entity, NumberOptions, Op, Options, TextOptions, UnsetEntityValues,
     Value,
 };
-use uuid::Uuid;
 
 #[cfg(test)]
 mod tests {

@@ -1,8 +1,8 @@
-use grc20::pb::grc20::{op::Payload, DataType as PbDataType, Edit};
 use indexer_utils::id;
 use std::collections::HashMap;
 use std::fmt;
 use uuid::Uuid;
+use wire::pb::grc20::{op::Payload, DataType as PbDataType, Edit};
 
 // Constants for PostgreSQL enum values - must match schema.ts dataTypesEnum
 pub const DATA_TYPE_TEXT: &str = "Text";

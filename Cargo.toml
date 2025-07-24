@@ -1,3 +1,11 @@
 [workspace]
-members = ["stream", "indexer", "indexer_utils", "grc20", "cache", "ipfs", "wire"]
+members = [
+    "stream",
+    "indexer",
+    "indexer_utils",
+    "wire",
+    "cache",
+    "ipfs",
+    "wire",
+]
 resolver = "2"

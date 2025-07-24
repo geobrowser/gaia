@@ -1,6 +1,5 @@
-use grc20::pb::grc20::Edit;
-use prost::Message;
 use reqwest::Client as ReqwestClient;
+use wire::{deserialize::deserialize, pb::grc20::Edit};
 
 #[derive(Debug, thiserror::Error)]
 pub enum IpfsError {
@@ -15,10 +14,6 @@ pub enum IpfsError {
 }
 
 type Result<T> = std::result::Result<T, IpfsError>;
-
-pub fn deserialize(buf: &[u8]) -> std::result::Result<Edit, prost::DecodeError> {
-    Edit::decode(buf)
-}
 
 pub struct IpfsClient {
     url: String,

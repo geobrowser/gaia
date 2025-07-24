@@ -1,8 +1,8 @@
 use std::env;
 
-use grc20::pb::grc20::Edit;
 use sqlx::{postgres::PgPoolOptions, Postgres, Row};
 use uuid::Uuid;
+use wire::pb::grc20::Edit;
 
 use super::{CacheBackend, CacheError, PreprocessedEdit};
 

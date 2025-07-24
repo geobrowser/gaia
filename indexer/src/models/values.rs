@@ -1,9 +1,9 @@
-use grc20::pb::grc20::{op::Payload, options, Edit, Op};
 use indexer_utils::id;
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use uuid::Uuid;
+use wire::pb::grc20::{op::Payload, options, Edit, Op};
 
 #[derive(Clone)]
 pub enum ValueChangeType {
@@ -170,9 +170,7 @@ fn value_op_from_op(op: &Op, space_id: &Uuid) -> Vec<ValueOp> {
     return values;
 }
 
-fn extract_options(
-    options: &Option<grc20::pb::grc20::Options>,
-) -> (Option<String>, Option<String>) {
+fn extract_options(options: &Option<wire::pb::grc20::Options>) -> (Option<String>, Option<String>) {
     if let Some(opts) = options {
         if let Some(value) = &opts.value {
             match value {

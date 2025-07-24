@@ -2,9 +2,9 @@ use async_trait::async_trait;
 pub mod postgres;
 pub mod properties_cache;
 
-use grc20::pb::grc20::Edit;
 use thiserror::Error;
 use uuid::Uuid;
+use wire::pb::grc20::Edit;
 
 #[derive(Error, Debug)]
 pub enum CacheError {

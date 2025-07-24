@@ -1,9 +1,9 @@
 use std::collections::HashSet;
 
-use grc20::pb::grc20::{op::Payload, Edit};
 use indexer_utils::id;
 use stream::utils::BlockMetadata;
 use uuid::Uuid;
+use wire::pb::grc20::{op::Payload, Edit};
 
 #[derive(Clone)]
 pub struct EntityItem {
@@ -60,8 +60,7 @@ impl EntitiesModel {
                                 continue;
                             }
 
-                            let property_id =
-                                Uuid::from_bytes(property_id_bytes.unwrap());
+                            let property_id = Uuid::from_bytes(property_id_bytes.unwrap());
 
                             if !seen.contains(&property_id) {
                                 entities.push(EntityItem {
@@ -112,8 +111,7 @@ impl EntitiesModel {
                                 continue;
                             }
 
-                            let property_id =
-                                Uuid::from_bytes(property_id_bytes.unwrap());
+                            let property_id = Uuid::from_bytes(property_id_bytes.unwrap());
 
                             if !seen.contains(&property_id) {
                                 entities.push(EntityItem {
