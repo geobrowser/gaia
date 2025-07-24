@@ -1,7 +1,3 @@
-use grc20::pb::grc20::{
-    op::Payload, DataType as PbDataType, Edit, Entity, Op, Property, Relation, UnsetEntityValues,
-    Value,
-};
 use std::{
     collections::hash_map::DefaultHasher,
     env,
@@ -10,6 +6,10 @@ use std::{
 };
 use stream::utils::BlockMetadata;
 use uuid::Uuid;
+use wire::pb::grc20::{
+    op::Payload, DataType as PbDataType, Edit, Entity, Op, Property, Relation, UnsetEntityValues,
+    Value,
+};
 
 use dotenv::dotenv;
 use indexer::{
@@ -944,7 +944,7 @@ fn make_relation_op(
             })),
         },
         TestRelationOpType::UPDATE => Op {
-            payload: Some(Payload::UpdateRelation(grc20::pb::grc20::RelationUpdate {
+            payload: Some(Payload::UpdateRelation(wire::pb::grc20::RelationUpdate {
                 id: Uuid::parse_str(relation_id).unwrap().as_bytes().to_vec(),
                 from_space: None,
                 from_version: None,

@@ -1,9 +1,9 @@
 use bytes::Bytes;
-use grc20::pb::grc20::Edit;
 use prost::Message;
 use std::{env, fs, sync::Arc};
 use stream::utils::BlockMetadata;
 use uuid::Uuid;
+use wire::pb::grc20::Edit;
 
 use dotenv::dotenv;
 use indexer::{
