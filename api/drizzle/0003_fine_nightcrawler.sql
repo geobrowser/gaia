@@ -211,6 +211,24 @@ RETURNS UUID AS $$
   END;
 $$ LANGUAGE sql STABLE;
 
+CREATE OR REPLACE FUNCTION public.properties_unit(properties properties)
+RETURNS UUID AS $$
+      SELECT r.to_entity_id
+      FROM relations r
+      WHERE r.from_entity_id = properties.id
+        AND r.type_id = '11b06581-20d3-41ea-b570-2ef4ee0a4ffd' -- UNIT property id
+      LIMIT 1
+$$ LANGUAGE sql STABLE;
+
+CREATE OR REPLACE FUNCTION public.properties_format(properties properties)
+RETURNS TEXT AS $$
+      SELECT v.value
+      FROM values v
+      WHERE v.entity_id = properties.id
+        AND v.property_id = '396f8c72-dfd0-4b57-91ea-09c1b9321b2f' -- format property id
+      LIMIT 1
+$$ LANGUAGE sql STABLE;
+
 /*
  * Returns all relation value types for a property
  */
