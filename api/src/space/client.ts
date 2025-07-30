@@ -3,7 +3,7 @@ import type {WalletClient} from "viem"
 import {createPublicClient, createWalletClient, http} from "viem"
 import {privateKeyToAccount} from "viem/accounts"
 import {EnvironmentLive} from "../services/environment"
-import {GEOGENESIS, TESTNET} from "./chain"
+import {GEOGENESIS, TESTNET} from "../utils/chain"
 
 const geoAccount = privateKeyToAccount(process.env.DEPLOYER_PK as `0x${string}`)
 

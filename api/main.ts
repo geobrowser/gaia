@@ -1,18 +1,15 @@
-import {effectValidator} from "@hono/effect-validator"
 import {swaggerUI} from "@hono/swagger-ui"
-import {Duration, Effect, Either, JSONSchema, Layer, Schedule, Schema} from "effect"
+import {Duration, Effect, Either, Layer, Schedule, Schema} from "effect"
 import {Hono} from "hono"
 import {compress} from "hono/compress"
 import {cors} from "hono/cors"
-import {describeRoute, openAPISpecs} from "hono-openapi"
-import {resolver} from "hono-openapi/effect"
+import {openAPISpecs} from "hono-openapi"
 import {health} from "./src/health"
 import {graphqlServer} from "./src/kg/postgraphile"
 import {Environment, EnvironmentLive, make as makeEnvironment} from "./src/services/environment"
 import {uploadEdit, uploadFile} from "./src/services/ipfs"
 import {make as makeStorage, Storage} from "./src/services/storage/storage"
 import {getPublishEditCalldata} from "./src/utils/calldata"
-import {deploySpace} from "./src/utils/deploy-space"
 
 /**
  * Currently hand-rolling a compression polyfill until Bun implements
@@ -21,6 +18,8 @@ import {deploySpace} from "./src/utils/deploy-space"
  */
 import "./src/compression-polyfill"
 import {NodeSdkLive} from "./src/services/telemetry"
+import {deployPersonalSpace} from "./src/space/deploy-personal-space"
+import {deployPublicSpace} from "./src/space/deploy-public-space"
 
 const EnvironmentLayer = Layer.effect(Environment, makeEnvironment)
 const StorageLayer = Layer.effect(Storage, makeStorage).pipe(Layer.provide(EnvironmentLayer))
@@ -95,51 +94,245 @@ app.post("/ipfs/upload-file", async (c) => {
 	return c.json({cid})
 })
 
-const DeployParametersSchema = Schema.Struct({
-	initialEditorAddresses: Schema.Array(Schema.StringFromHex),
-	spaceName: Schema.String,
-	ops: Schema.Array(Schema.Any),
-	spaceEntityId: Schema.NullOr(Schema.String),
-	governanceType: Schema.Union(Schema.Literal("PERSONAL"), Schema.Literal("PUBLIC")),
+// const DeployParametersSchema = Schema.Struct({
+// 	initialEditorAddresses: Schema.Array(Schema.StringFromHex),
+// 	spaceName: Schema.String,
+// 	ops: Schema.Array(Schema.Any),
+// 	spaceEntityId: Schema.NullOr(Schema.String),
+// 	governanceType: Schema.Union(Schema.Literal("PERSONAL"), Schema.Literal("PUBLIC")),
+// })
+
+// const DeployResponseSchema = Schema.Struct({
+// 	spaceId: Schema.String,
+// })
+
+app.post("deploy/personal", async (c) => {
+	const {initialEditorAddress, spaceName, spaceEntityId, ops} = await c.req.json()
+
+	if (initialEditorAddress === null || spaceName === null) {
+		console.error(
+			`[SPACE][deploy] Missing required parameters to deploy a space ${JSON.stringify({initialEditorAddress, spaceName})}`,
+		)
+
+		return new Response(
+			JSON.stringify({
+				error: "Missing required parameters",
+				reason: "An initial editor account and space name are required to deploy a space.",
+			}),
+			{
+				status: 400,
+			},
+		)
+	}
+
+	const deployWithRetry = Effect.retry(
+		deployPersonalSpace({
+			initialEditorAddress,
+			spaceName,
+			spaceEntityId,
+			ops,
+		}).pipe(
+			Effect.withSpan("/deploy/personal.deploySpace"),
+			Effect.annotateSpans({
+				initialEditorAddress,
+				spaceName,
+				spaceEntityId,
+			}),
+			Effect.provide(NodeSdkLive),
+			Effect.provide(EnvironmentLayer),
+		),
+		{
+			schedule: Schedule.exponential(Duration.millis(100)).pipe(
+				Schedule.jittered,
+				Schedule.compose(Schedule.elapsed),
+				Schedule.whileOutput(Duration.lessThanOrEqualTo(Duration.minutes(1))),
+			),
+			while: (error) => error._tag !== "WaitForSpaceToBeIndexedError",
+		},
+	)
+
+	const providedDeploy = deployWithRetry.pipe(provideDeps)
+
+	const result = await Effect.runPromise(
+		Effect.either(providedDeploy).pipe(Effect.annotateLogs({editor: initialEditorAddress, spaceName})),
+	)
+
+	return Either.match(result, {
+		onLeft: (error) => {
+			switch (error._tag) {
+				case "ConfigError":
+					console.error("[SPACE][deploy] Invalid server config")
+					return new Response(
+						JSON.stringify({
+							message: "Invalid server config. Please notify the server administrator.",
+							reason: "Invalid server config. Please notify the server administrator.",
+						}),
+						{
+							status: 500,
+						},
+					)
+				default:
+					console.error(
+						`[SPACE][deploy] Failed to deploy space. message: ${error.message} – cause: ${error.cause}`,
+					)
+
+					return new Response(
+						JSON.stringify({
+							message: `Failed to deploy space. message: ${error.message} – cause: ${error.cause}`,
+							reason: error.message,
+						}),
+						{
+							status: 500,
+						},
+					)
+			}
+		},
+		onRight: (spaceId) => {
+			return Response.json({spaceId})
+		},
+	})
 })
 
-const DeployResponseSchema = Schema.Struct({
-	spaceId: Schema.String,
+app.post("deploy/public", async (c) => {
+	const {initialEditorAddresses, spaceName, spaceEntityId, ops} = await c.req.json()
+
+	if (initialEditorAddresses === null || spaceName === null) {
+		console.error(
+			`[SPACE][deploy] Missing required parameters to deploy a space ${JSON.stringify({initialEditorAddresses, spaceName})}`,
+		)
+
+		return new Response(
+			JSON.stringify({
+				error: "Missing required parameters",
+				reason: "An initial editor account and space name are required to deploy a space.",
+			}),
+			{
+				status: 400,
+			},
+		)
+	}
+
+	if (initialEditorAddresses.length === 0) {
+		console.error(
+			"[SPACE][deploy] Invalid parameter initialEditorAddresses. At least one valid account address is required to deploy a space.",
+		)
+
+		return new Response(
+			JSON.stringify({
+				error: "Invalid parameter initialEditorAddresses",
+				reason: "Invalid parameter initialEditorAddresses. At least one valid account address is required to deploy a space.",
+			}),
+			{
+				status: 400,
+			},
+		)
+	}
+
+	const deployWithRetry = Effect.retry(
+		deployPublicSpace({
+			initialEditorAddresses,
+			spaceName,
+			spaceEntityId,
+			ops,
+		}).pipe(
+			Effect.withSpan("/deploy/public.deploySpace"),
+			Effect.annotateSpans({
+				initialEditorAddresses,
+				spaceName,
+				spaceEntityId,
+			}),
+			Effect.provide(NodeSdkLive),
+			Effect.provide(EnvironmentLayer),
+		),
+		{
+			schedule: Schedule.exponential(Duration.millis(100)).pipe(
+				Schedule.jittered,
+				Schedule.compose(Schedule.elapsed),
+				Schedule.whileOutput(Duration.lessThanOrEqualTo(Duration.minutes(1))),
+			),
+			while: (error) => error._tag !== "WaitForSpaceToBeIndexedError",
+		},
+	)
+
+	const providedDeploy = deployWithRetry.pipe(provideDeps)
+
+	const result = await Effect.runPromise(
+		Effect.either(providedDeploy).pipe(Effect.annotateLogs({editor: initialEditorAddresses, spaceName})),
+	)
+
+	return Either.match(result, {
+		onLeft: (error) => {
+			switch (error._tag) {
+				case "ConfigError":
+					console.error("[SPACE][deploy] Invalid server config")
+					return new Response(
+						JSON.stringify({
+							message: "Invalid server config. Please notify the server administrator.",
+							reason: "Invalid server config. Please notify the server administrator.",
+						}),
+						{
+							status: 500,
+						},
+					)
+				default:
+					console.error(
+						`[SPACE][deploy] Failed to deploy space. message: ${error.message} – cause: ${error.cause}`,
+					)
+
+					return new Response(
+						JSON.stringify({
+							message: `Failed to deploy space. message: ${error.message} – cause: ${error.cause}`,
+							reason: error.message,
+						}),
+						{
+							status: 500,
+						},
+					)
+			}
+		},
+		onRight: (spaceId) => {
+			return Response.json({spaceId})
+		},
+	})
 })
 
+/**
+ * The /deploy route is a legacy route for deploying PERSONAL spaces. Leaving it for
+ * now until we're ready to deprecate it.
+ */
 app.post(
 	"deploy",
-	describeRoute({
-		validateResponse: true,
-		description: "Deploys a space with the provided parameters",
-		// requestBody: {
-		// 	required: true,
-		// 	content: {
-		// 		"application/json": {
-		// 			schema: DeployParametersSchema,
-		// 		},
-		// 	},
-		// },
-		responses: {
-			200: {
-				description: "Successful space deployment",
-				content: {
-					"application/json": {schema: resolver(DeployResponseSchema)},
-				},
-			},
-			400: {
-				description:
-					"Missing required parameters. An initial editor account and space name are required to deploy a space.",
-			},
-		},
-	}),
-	effectValidator("json", DeployParametersSchema),
+	// describeRoute({
+	// 	validateResponse: true,
+	// 	description: "Deploys a space with the provided parameters",
+	// requestBody: {
+	// 	required: true,
+	// 	content: {
+	// 		"application/json": {
+	// 			schema: DeployParametersSchema,
+	// 		},
+	// 	},
+	// },
+	// 	responses: {
+	// 		200: {
+	// 			description: "Successful space deployment",
+	// 			content: {
+	// 				"application/json": {schema: resolver(DeployResponseSchema)},
+	// 			},
+	// 		},
+	// 		400: {
+	// 			description:
+	// 				"Missing required parameters. An initial editor account and space name are required to deploy a space.",
+	// 		},
+	// 	},
+	// }),
+	// effectValidator("json", DeployParametersSchema),
 	async (c) => {
-		const {initialEditorAddresses, spaceName, spaceEntityId, ops, governanceType = "PERSONAL"} = await c.req.json()
+		const {initialEditorAddress, spaceName, spaceEntityId, ops} = await c.req.json()
 
-		if (initialEditorAddresses === null || initialEditorAddresses.length === 0 || spaceName === null) {
+		if (initialEditorAddress === null || spaceName === null) {
 			console.error(
-				`[SPACE][deploy] Missing required parameters to deploy a space ${JSON.stringify({initialEditorAddresses, spaceName})}`,
+				`[SPACE][deploy] Missing required parameters to deploy a space ${JSON.stringify({initialEditorAddress, spaceName})}`,
 			)
 
 			return new Response(
@@ -154,15 +347,15 @@ app.post(
 		}
 
 		const deployWithRetry = Effect.retry(
-			deploySpace({
-				initialEditorAddress: initialEditorAddresses[0],
+			deployPersonalSpace({
+				initialEditorAddress,
 				spaceName,
 				spaceEntityId,
 				ops,
 			}).pipe(
 				Effect.withSpan("/deploy.deploySpace"),
 				Effect.annotateSpans({
-					initialEditorAddress: initialEditorAddresses[0],
+					initialEditorAddress,
 					spaceName,
 					spaceEntityId,
 				}),
@@ -182,7 +375,7 @@ app.post(
 		const providedDeploy = deployWithRetry.pipe(provideDeps)
 
 		const result = await Effect.runPromise(
-			Effect.either(providedDeploy).pipe(Effect.annotateLogs({editor: initialEditorAddresses[0], spaceName})),
+			Effect.either(providedDeploy).pipe(Effect.annotateLogs({editor: initialEditorAddress, spaceName})),
 		)
 
 		return Either.match(result, {
