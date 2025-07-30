@@ -1,39 +1,39 @@
 {
-  "compilerOptions": {
-    /* Basic Options */
-    "esModuleInterop": true,
-    "skipLibCheck": true,
-    "target": "ES2022",
-    "verbatimModuleSyntax": true,
-    "resolveJsonModule": true,
-    "moduleDetection": "force",
-    /* Strictness Options */
-    "strict": true,
-    "noUncheckedIndexedAccess": true,
-    /* Module resolution when transpiling with TypeScript */
-    // "moduleResolution": "NodeNext",
-    // "module": "NodeNext",
-    // "outDir": "dist",
-    // "sourceMap": true,
-    /*
+	"compilerOptions": {
+		/* Basic Options */
+		"esModuleInterop": true,
+		"skipLibCheck": true,
+		"target": "ES2022",
+		"verbatimModuleSyntax": true,
+		"resolveJsonModule": true,
+		"moduleDetection": "force",
+		/* Strictness Options */
+		"strict": true,
+		"noUncheckedIndexedAccess": true,
+		/* Module resolution when transpiling with TypeScript */
+		// "moduleResolution": "NodeNext",
+		// "module": "NodeNext",
+		// "outDir": "dist",
+		// "sourceMap": true,
+		/*
       Module resolution when not transpiling with TypeScript.
       We're currently not bundling so we use the following options.
     */
-    "moduleResolution": "Bundler",
-    "module": "ESNext",
-    "noEmit": true,
-    /* Lib when not targeting the browser */
-    "lib": ["ES2022"],
-    /* Lib when targeting the browser */
-    // "lib": ["ES2022", "DOM", "DOM.Iterable"]
-    /* When building a library */
-    // "declaration": true,
-    /* When building a library in a monorepo */
-    // "composite": true,
-    // "declarationMap": true,
-    "paths": {
-      "~/*": ["./*"]
-    }
-  },
-  "include": ["./**/*"]
+		"moduleResolution": "Bundler",
+		"module": "ESNext",
+		"noEmit": true,
+		/* Lib when not targeting the browser */
+		"lib": ["ES2022"],
+		/* Lib when targeting the browser */
+		// "lib": ["ES2022", "DOM", "DOM.Iterable"]
+		/* When building a library */
+		// "declaration": true,
+		/* When building a library in a monorepo */
+		// "composite": true,
+		// "declarationMap": true,
+		"paths": {
+			"~/*": ["./*"]
+		}
+	},
+	"include": ["./**/*"]
 }
