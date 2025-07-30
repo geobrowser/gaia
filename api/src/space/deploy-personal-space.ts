@@ -4,7 +4,7 @@ import {Effect} from "effect"
 import {encodeAbiParameters} from "viem"
 import {Environment} from "../services/environment"
 import {upload} from "../services/ipfs"
-import {deployAndValidateDao} from "./deploy-dao"
+import {type CreateGeoDaoParams, deployAndValidateDao} from "./deploy-dao"
 import {contracts, generateEditFormData, getSpacePluginInstallItem, type PluginInstallationWithViem} from "./std"
 
 interface DeployArgs {

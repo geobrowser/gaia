@@ -1,5 +1,3 @@
-import {VotingMode} from "@aragon/sdk-client"
-
 import {Graph, getChecksumAddress, type Op, SystemIds} from "@graphprotocol/grc-20"
 import {EditProposal} from "@graphprotocol/grc-20/proto"
 import {Effect} from "effect"
@@ -16,6 +14,12 @@ import {
 	type PluginInstallationWithViem,
 	pctToRatio,
 } from "./std"
+
+enum VotingMode {
+	STANDARD = 1,
+	EARLY_EXECUTION = 2,
+	VOTE_REPLACEMENT = 3,
+}
 
 interface DeployArgs {
 	spaceName: string

@@ -71,7 +71,7 @@ export function deployAndValidateDao(params: CreateGeoDaoParams) {
 			}),
 		)
 
-		return dao
+		return waitResult
 	})
 }
 

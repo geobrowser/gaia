@@ -11,7 +11,7 @@ import {EnvironmentLive} from "../services/environment"
 import {Storage} from "../services/storage/storage"
 import {getSigner} from "./client"
 
-export const contracts = EnvironmentLive.chainId === "19411" ? MAINNET : TESTNET
+export const contracts = EnvironmentLive.chainId === "19411" ? TESTNET : MAINNET
 
 const RATIO_BASE = ethers.BigNumber.from(10).pow(6) // 100% => 10**6
 export const pctToRatio = (x: number) => RATIO_BASE.mul(x).div(100)
