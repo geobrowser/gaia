@@ -117,7 +117,7 @@ impl PostgresStorage {
 
             language,
             unit,
-            text,
+            string: text,
             number,
             boolean,
             time,
@@ -318,7 +318,7 @@ impl StorageBackend for PostgresStorage {
             units.push(&prop.unit);
 
             // Add type-specific values
-            text_values.push(prop.text.as_deref());
+            text_values.push(prop.string.as_deref());
             number_values.push(prop.number);
             boolean_values.push(prop.boolean);
             time_values.push(prop.time.as_deref());

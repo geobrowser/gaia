@@ -36,7 +36,7 @@ where
     created_values
         .into_iter()
         .filter(|value| {
-            value.text.is_some()
+            value.string.is_some()
                 || value.number.is_some()
                 || value.boolean.is_some()
                 || value.time.is_some()
@@ -229,7 +229,7 @@ mod tests {
 
             language: None,
             unit: None,
-            text: None,
+            string: None,
             number: Some(123.45),
             boolean: None,
             time: None,
@@ -261,7 +261,7 @@ mod tests {
 
             language: None,
             unit: None,
-            text: None,
+            string: None,
             number: Some(123.45), // Properly populated number field
             boolean: None,
             time: None,
@@ -293,7 +293,7 @@ mod tests {
 
             language: None,
             unit: None,
-            text: None,
+            string: None,
             number: None,
             boolean: None,
             time: None,
@@ -321,7 +321,7 @@ mod tests {
 
             language: None,
             unit: None,
-            text: Some("some text".to_string()),
+            string: Some("some text".to_string()),
             number: None,
             boolean: None,
             time: None,
@@ -359,7 +359,7 @@ mod tests {
 
                 language: None,
                 unit: None,
-                text: Some("Hello World".to_string()), // Text field populated
+                string: Some("Hello World".to_string()), // String field populated
                 number: None,
                 boolean: None,
                 time: None,
@@ -374,7 +374,7 @@ mod tests {
 
                 language: None,
                 unit: None,
-                text: None,
+                string: None,
                 number: None,
                 boolean: Some(true), // Boolean field populated
                 time: None,
@@ -389,7 +389,7 @@ mod tests {
 
                 language: None,
                 unit: None,
-                text: None,
+                string: None,
                 number: None,
                 boolean: None, // Not populated due to validation failure
                 time: None,
@@ -404,7 +404,7 @@ mod tests {
 
                 language: None,
                 unit: None,
-                text: None,
+                string: None,
                 number: None,
                 boolean: None,
                 time: None,
@@ -423,7 +423,7 @@ mod tests {
             .filter(|v| v.property_id == text_prop_id)
             .collect();
         assert_eq!(text_values.len(), 1);
-        assert_eq!(text_values[0].text, Some("Hello World".to_string()));
+        assert_eq!(text_values[0].string, Some("Hello World".to_string()));
 
         let valid_checkbox_values: Vec<_> = validated
             .iter()

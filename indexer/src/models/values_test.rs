@@ -112,7 +112,7 @@ mod tests {
             created_op.space_id,
             Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap()
         );
-        assert_eq!(created_op.text, Some("value1".to_string()));
+        assert_eq!(created_op.string, Some("value1".to_string()));
         // The id is now a deterministically generated UUID, so we just check it exists
         assert_ne!(created_op.id, Uuid::nil());
         assert!(matches!(created_op.change_type, ValueChangeType::SET));
@@ -213,7 +213,7 @@ mod tests {
             first_op.entity_id,
             Uuid::parse_str("550e8400-e29b-41d4-a716-446655440001").unwrap()
         );
-        assert_eq!(first_op.text, Some("value1".to_string()));
+        assert_eq!(first_op.string, Some("value1".to_string()));
         assert!(matches!(first_op.change_type, ValueChangeType::SET));
 
         // Check second value
@@ -227,7 +227,7 @@ mod tests {
             second_op.entity_id,
             Uuid::parse_str("550e8400-e29b-41d4-a716-446655440001").unwrap()
         );
-        assert_eq!(second_op.text, Some("value2".to_string()));
+        assert_eq!(second_op.string, Some("value2".to_string()));
         assert!(matches!(second_op.change_type, ValueChangeType::SET));
     }
 
@@ -303,7 +303,7 @@ mod tests {
             first_op.property_id,
             Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c1").unwrap()
         );
-        assert_eq!(first_op.text, Some("value1".to_string()));
+        assert_eq!(first_op.string, Some("value1".to_string()));
         assert!(matches!(first_op.change_type, ValueChangeType::SET));
 
         // Check second entity value
@@ -317,7 +317,7 @@ mod tests {
             second_op.property_id,
             Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c2").unwrap()
         );
-        assert_eq!(second_op.text, Some("value2".to_string()));
+        assert_eq!(second_op.string, Some("value2".to_string()));
         assert!(matches!(second_op.change_type, ValueChangeType::SET));
     }
 
@@ -388,7 +388,7 @@ mod tests {
             created_op.property_id,
             Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c1").unwrap()
         );
-        assert_eq!(created_op.text, Some("value2".to_string()));
+        assert_eq!(created_op.string, Some("value2".to_string()));
         assert!(matches!(created_op.change_type, ValueChangeType::SET));
     }
 
@@ -506,7 +506,7 @@ mod tests {
             created_op.property_id,
             Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c1").unwrap()
         );
-        assert_eq!(created_op.text, Some("value1".to_string()));
+        assert_eq!(created_op.string, Some("value1".to_string()));
         assert!(matches!(created_op.change_type, ValueChangeType::SET));
     }
 
@@ -612,7 +612,7 @@ mod tests {
             first_created.entity_id,
             Uuid::parse_str("550e8400-e29b-41d4-a716-446655440001").unwrap()
         );
-        assert_eq!(first_created.text, Some("value1".to_string()));
+        assert_eq!(first_created.string, Some("value1".to_string()));
 
         let second_created = created
             .iter()
@@ -624,7 +624,7 @@ mod tests {
             second_created.entity_id,
             Uuid::parse_str("550e8400-e29b-41d4-a716-446655440002").unwrap()
         );
-        assert_eq!(second_created.text, Some("value3".to_string()));
+        assert_eq!(second_created.string, Some("value3".to_string()));
 
         // Check the deleted value
         assert_ne!(deleted[0], Uuid::nil());
@@ -685,7 +685,7 @@ mod tests {
             created_op.space_id,
             Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap()
         );
-        assert_eq!(created_op.text, Some("Hello World".to_string()));
+        assert_eq!(created_op.string, Some("Hello World".to_string()));
         assert_eq!(created_op.language, Some("en".to_string()));
         assert_eq!(created_op.unit, None);
         assert!(matches!(created_op.change_type, ValueChangeType::SET));
@@ -807,7 +807,7 @@ mod tests {
             created_op.space_id,
             Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap()
         );
-        assert_eq!(created_op.text, Some("test value".to_string()));
+        assert_eq!(created_op.string, Some("test value".to_string()));
         assert_eq!(created_op.language, None);
         assert_eq!(created_op.unit, None);
         assert!(matches!(created_op.change_type, ValueChangeType::SET));
@@ -865,7 +865,7 @@ mod tests {
             created_op.property_id,
             Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c1").unwrap()
         );
-        assert_eq!(created_op.text, Some("test value".to_string()));
+        assert_eq!(created_op.string, Some("test value".to_string()));
         // The language should be None for invalid UTF-8
         assert_eq!(created_op.language, None);
         assert_eq!(created_op.unit, None);

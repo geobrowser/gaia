@@ -25,7 +25,7 @@ pub struct ValueOp {
     pub language: Option<String>,
     pub unit: Option<String>,
     // Data type specific fields
-    pub text: Option<String>,
+    pub string: Option<String>,
     pub number: Option<f64>,
     pub boolean: Option<bool>,
     pub time: Option<String>,
@@ -131,7 +131,7 @@ where
                                 space_id: space_id.clone(),
                                 language,
                                 unit,
-                                text: None,
+                                string: None,
                                 number: None,
                                 boolean: None,
                                 time: None,
@@ -182,7 +182,7 @@ where
                                 space_id: space_id.clone(),
                                 language: None,
                                 unit: None,
-                                text: None,
+                                string: None,
                                 number: None,
                                 boolean: None,
                                 time: None,
@@ -225,9 +225,9 @@ where
                 // Set the appropriate field based on the validated value
                 match validated_value {
                     ValidatedValue::Text(text) => {
-                        // Even if it's a relation type, store as text
+                        // Even if it's a relation type, store as string
                         // Relations will be filtered out later
-                        base_op.text = Some(text);
+                        base_op.string = Some(text);
                     }
                     ValidatedValue::Number(num) => {
                         base_op.number = Some(num);
@@ -328,7 +328,7 @@ mod tests {
             space_id,
             language: None,
             unit: None,
-            text: None,
+            string: None,
             number: None,
             boolean: None,
             time: None,
@@ -344,7 +344,7 @@ mod tests {
             space_id,
             language: None,
             unit: None,
-            text: None,
+            string: None,
             number: None,
             boolean: None,
             time: None,
