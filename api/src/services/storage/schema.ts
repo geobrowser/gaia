@@ -124,6 +124,10 @@ export const values = pgTable(
 
 		// Basic B-tree index for text searches
 		index("values_text_idx").on(table.text),
+		index("values_number_idx").on(table.number),
+		index("values_point_idx").on(table.point),
+		index("values_boolean_idx").on(table.boolean),
+		index("values_time_idx").on(table.time),
 		// GIN index creation is handled via migration
 
 		// Composite indexes for common query patterns
