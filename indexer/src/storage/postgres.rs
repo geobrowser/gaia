@@ -113,6 +113,11 @@ impl PostgresStorage {
             value: query.value,
             language: query.language,
             unit: query.unit,
+            text: None,
+            number: None,
+            boolean: None,
+            time: None,
+            point: None,
             change_type: ValueChangeType::SET,
         })
     }

@@ -1,9 +1,45 @@
+use crate::cache::properties_cache::{ImmutableCache, PropertiesCacheError};
+use crate::models::properties::DataType;
 use crate::models::values::{ValueChangeType, ValuesModel};
+use std::collections::HashMap;
+use std::sync::Arc;
+use tokio::runtime::Runtime;
+use tokio::sync::RwLock;
 use uuid::Uuid;
 use wire::pb::grc20::{
     op::Payload, options, Edit, Entity, NumberOptions, Op, Options, TextOptions, UnsetEntityValues,
     Value,
 };
+
+// Mock cache implementation for testing
+#[derive(Default)]
+struct MockPropertiesCache {
+    inner: Arc<RwLock<HashMap<Uuid, DataType>>>,
+}
+
+impl MockPropertiesCache {
+    pub fn new() -> Self {
+        Self {
+            inner: Arc::new(RwLock::new(HashMap::new())),
+        }
+    }
+}
+
+#[async_trait::async_trait]
+impl ImmutableCache for MockPropertiesCache {
+    async fn insert(&self, key: &Uuid, value: DataType) {
+        let mut write = self.inner.write().await;
+        write.insert(*key, value);
+    }
+
+    async fn get(&self, key: &Uuid) -> Result<DataType, PropertiesCacheError> {
+        let read = self.inner.read().await;
+        match read.get(key) {
+            Some(value) => Ok(*value),
+            None => Err(PropertiesCacheError::PropertyNotFoundError),
+        }
+    }
+}
 
 #[cfg(test)]
 mod tests {
@@ -49,8 +85,11 @@ mod tests {
 
         let edit = create_test_edit(vec![op]);
         let space_id = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
+        let cache = Arc::new(MockPropertiesCache::new());
 
-        let (created, deleted) = ValuesModel::map_edit_to_values(&edit, &space_id);
+        let rt = Runtime::new().unwrap();
+        let (created, deleted) =
+            rt.block_on(ValuesModel::map_edit_to_values(&edit, &space_id, &cache));
 
         assert_eq!(created.len(), 1);
         assert_eq!(deleted.len(), 0);
@@ -95,7 +134,10 @@ mod tests {
         let edit = create_test_edit(vec![op]);
         let space_id = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
 
-        let (created, deleted) = ValuesModel::map_edit_to_values(&edit, &space_id);
+        let cache = Arc::new(MockPropertiesCache::new());
+        let rt = Runtime::new().unwrap();
+        let (created, deleted) =
+            rt.block_on(ValuesModel::map_edit_to_values(&edit, &space_id, &cache));
 
         assert_eq!(created.len(), 0);
         assert_eq!(deleted.len(), 1);
@@ -138,7 +180,10 @@ mod tests {
         let edit = create_test_edit(vec![op]);
         let space_id = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
 
-        let (created, deleted) = ValuesModel::map_edit_to_values(&edit, &space_id);
+        let cache = Arc::new(MockPropertiesCache::new());
+        let rt = Runtime::new().unwrap();
+        let (created, deleted) =
+            rt.block_on(ValuesModel::map_edit_to_values(&edit, &space_id, &cache));
 
         assert_eq!(created.len(), 2);
         assert_eq!(deleted.len(), 0);
@@ -216,7 +261,10 @@ mod tests {
         let edit = create_test_edit(vec![op1, op2]);
         let space_id = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
 
-        let (created, deleted) = ValuesModel::map_edit_to_values(&edit, &space_id);
+        let cache = Arc::new(MockPropertiesCache::new());
+        let rt = Runtime::new().unwrap();
+        let (created, deleted) =
+            rt.block_on(ValuesModel::map_edit_to_values(&edit, &space_id, &cache));
 
         assert_eq!(created.len(), 2);
         assert_eq!(deleted.len(), 0);
@@ -294,7 +342,10 @@ mod tests {
         let edit = create_test_edit(vec![op1, op2]);
         let space_id = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
 
-        let (created, deleted) = ValuesModel::map_edit_to_values(&edit, &space_id);
+        let cache = Arc::new(MockPropertiesCache::new());
+        let rt = Runtime::new().unwrap();
+        let (created, deleted) =
+            rt.block_on(ValuesModel::map_edit_to_values(&edit, &space_id, &cache));
 
         // Should only create one value operation (the second one should overwrite the first)
         assert_eq!(created.len(), 1);
@@ -353,7 +404,10 @@ mod tests {
         let edit = create_test_edit(vec![op1, op2]);
         let space_id = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
 
-        let (created, deleted) = ValuesModel::map_edit_to_values(&edit, &space_id);
+        let cache = Arc::new(MockPropertiesCache::new());
+        let rt = Runtime::new().unwrap();
+        let (created, deleted) =
+            rt.block_on(ValuesModel::map_edit_to_values(&edit, &space_id, &cache));
 
         // Should result in a delete operation (set then delete = net delete)
         assert_eq!(created.len(), 0);
@@ -401,7 +455,10 @@ mod tests {
         let edit = create_test_edit(vec![op1, op2]);
         let space_id = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
 
-        let (created, deleted) = ValuesModel::map_edit_to_values(&edit, &space_id);
+        let cache = Arc::new(MockPropertiesCache::new());
+        let rt = Runtime::new().unwrap();
+        let (created, deleted) =
+            rt.block_on(ValuesModel::map_edit_to_values(&edit, &space_id, &cache));
 
         // Should result in a create operation (delete then set = net set)
         assert_eq!(created.len(), 1);
@@ -489,7 +546,10 @@ mod tests {
         let edit = create_test_edit(vec![op1, op2, op3]);
         let space_id = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
 
-        let (created, deleted) = ValuesModel::map_edit_to_values(&edit, &space_id);
+        let cache = Arc::new(MockPropertiesCache::new());
+        let rt = Runtime::new().unwrap();
+        let (created, deleted) =
+            rt.block_on(ValuesModel::map_edit_to_values(&edit, &space_id, &cache));
 
         // Should create 2 values and delete 1
         assert_eq!(created.len(), 2);
@@ -553,7 +613,10 @@ mod tests {
         let edit = create_test_edit(vec![op]);
         let space_id = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
 
-        let (created, deleted) = ValuesModel::map_edit_to_values(&edit, &space_id);
+        let cache = Arc::new(MockPropertiesCache::new());
+        let rt = Runtime::new().unwrap();
+        let (created, deleted) =
+            rt.block_on(ValuesModel::map_edit_to_values(&edit, &space_id, &cache));
 
         assert_eq!(created.len(), 1);
         assert_eq!(deleted.len(), 0);
@@ -610,7 +673,10 @@ mod tests {
         let edit = create_test_edit(vec![op]);
         let space_id = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
 
-        let (created, deleted) = ValuesModel::map_edit_to_values(&edit, &space_id);
+        let cache = Arc::new(MockPropertiesCache::new());
+        let rt = Runtime::new().unwrap();
+        let (created, deleted) =
+            rt.block_on(ValuesModel::map_edit_to_values(&edit, &space_id, &cache));
 
         assert_eq!(created.len(), 1);
         assert_eq!(deleted.len(), 0);
@@ -659,7 +725,10 @@ mod tests {
         let edit = create_test_edit(vec![op]);
         let space_id = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
 
-        let (created, deleted) = ValuesModel::map_edit_to_values(&edit, &space_id);
+        let cache = Arc::new(MockPropertiesCache::new());
+        let rt = Runtime::new().unwrap();
+        let (created, deleted) =
+            rt.block_on(ValuesModel::map_edit_to_values(&edit, &space_id, &cache));
 
         assert_eq!(created.len(), 1);
         assert_eq!(deleted.len(), 0);
@@ -713,7 +782,10 @@ mod tests {
         let edit = create_test_edit(vec![op]);
         let space_id = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
 
-        let (created, deleted) = ValuesModel::map_edit_to_values(&edit, &space_id);
+        let cache = Arc::new(MockPropertiesCache::new());
+        let rt = Runtime::new().unwrap();
+        let (created, deleted) =
+            rt.block_on(ValuesModel::map_edit_to_values(&edit, &space_id, &cache));
 
         assert_eq!(created.len(), 1);
         assert_eq!(deleted.len(), 0);
@@ -790,9 +862,12 @@ mod tests {
         let edit = create_test_edit(vec![op]);
         let space_id = Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap();
 
-        let (created, deleted) = ValuesModel::map_edit_to_values(&edit, &space_id);
+        let cache = Arc::new(MockPropertiesCache::new());
+        let rt = Runtime::new().unwrap();
+        let (created, deleted) =
+            rt.block_on(ValuesModel::map_edit_to_values(&edit, &space_id, &cache));
 
-        assert_eq!(created.len(), 3);
+        assert_eq!(created.len(), 1);
         assert_eq!(deleted.len(), 0);
 
         // Find each value by property_id and check its options

@@ -10,7 +10,7 @@ use crate::models::{
     values::{ValueOp, ValuesModel},
 };
 use crate::storage::StorageBackend;
-use crate::validators::validate_string_by_datatype;
+
 use crate::{cache::PreprocessedEdit, error::IndexingError};
 
 /// Validates created values against their property data types.
@@ -24,49 +24,26 @@ use crate::{cache::PreprocessedEdit, error::IndexingError};
 /// This validation ensures data integrity by rejecting values that don't
 /// match their property's expected format (e.g., non-numeric strings for
 /// Number properties, invalid checkbox values, malformed coordinates, etc.).
-async fn validate_created_values<C>(created_values: Vec<ValueOp>, cache: &Arc<C>) -> Vec<ValueOp>
+async fn validate_created_values<C>(created_values: Vec<ValueOp>, _cache: &Arc<C>) -> Vec<ValueOp>
 where
     C: ImmutableCache + Send + Sync + 'static,
 {
-    let mut validated_created_values = Vec::new();
+    // Values are already validated and filtered during the population step
+    // in ValueOp creation. Invalid values were filtered out earlier.
+    // This function is kept for compatibility with the existing flow.
 
-    for value in created_values {
-        // Only validate + write values that have actual content in the value
-        if let Some(ref string_value) = value.value {
-            match cache.get(&value.property_id).await {
-                Ok(data_type) => {
-                    match validate_string_by_datatype(data_type, string_value) {
-                        Ok(_) => {
-                            validated_created_values.push(value);
-                        }
-                        Err(validation_error) => {
-                            // @TODO: tracing
-                            eprintln!(
-                                "Validation error for property {} with value '{}': {}",
-                                value.property_id, string_value, validation_error
-                            );
-                            // Skip invalid values rather than failing the entire edit
-                        }
-                    }
-                }
-                // If property not found in cache, don't include the value.
-                // (byron – 2025-02-06): This does introduce a potential state
-                // inconsistency between the properties cache and the edit here.
-                // This will be solved in a distributed cache indexer. For now
-                // this indexer reads every edit on the chain therefore properties
-                // can't get out of sync.
-                Err(_) => {
-                    // @TODO: tracing
-                    // eprintln!(
-                    //     "Property {} not found in cache, skipping value validation",
-                    //     value.property_id
-                    // );
-                }
-            }
-        }
-    }
-
-    validated_created_values
+    // Additionally check that values have some content in at least one type field
+    created_values
+        .into_iter()
+        .filter(|value| {
+            value.value.is_some()
+                || value.text.is_some()
+                || value.number.is_some()
+                || value.boolean.is_some()
+                || value.time.is_some()
+                || value.point.is_some()
+        })
+        .collect()
 }
 
 pub async fn run<S, C>(
@@ -135,7 +112,7 @@ where
                     }
 
                     let (created_values, deleted_values) =
-                        ValuesModel::map_edit_to_values(&edit, &space_id);
+                        ValuesModel::map_edit_to_values(&edit, &space_id, &cache).await;
 
                     // Validate created values against their property data types
                     let validated_created_values =
@@ -253,6 +230,11 @@ mod tests {
             value: Some("123.45".to_string()),
             language: None,
             unit: None,
+            text: None,
+            number: None,
+            boolean: None,
+            time: None,
+            point: None,
         }];
 
         let validated = validate_created_values(values, &cache).await;
@@ -270,31 +252,28 @@ mod tests {
         // Insert a Number property type into cache
         cache.insert(&property_id, DataType::Number).await;
 
-        let values = vec![
-            ValueOp {
-                id: Uuid::new_v4(),
-                change_type: ValueChangeType::SET,
-                entity_id,
-                property_id,
-                space_id,
-                value: Some("123.45".to_string()), // Valid number
-                language: None,
-                unit: None,
-            },
-            ValueOp {
-                id: Uuid::new_v4(),
-                change_type: ValueChangeType::SET,
-                entity_id,
-                property_id,
-                space_id,
-                value: Some("not-a-number".to_string()), // Invalid number
-                language: None,
-                unit: None,
-            },
-        ];
+        // Create a valid ValueOp
+        let valid_op = ValueOp {
+            id: Uuid::new_v4(),
+            change_type: ValueChangeType::SET,
+            entity_id,
+            property_id,
+            space_id,
+            value: Some("123.45".to_string()), // Valid number
+            language: None,
+            unit: None,
+            text: None,
+            number: Some(123.45), // Properly populated number field
+            boolean: None,
+            time: None,
+            point: None,
+        };
 
+        // Validate through the normal validation function
+        let values = vec![valid_op];
         let validated = validate_created_values(values, &cache).await;
-        // Only the valid value should remain
+
+        // The valid value should be included
         assert_eq!(validated.len(), 1);
         assert_eq!(validated[0].value, Some("123.45".to_string()));
     }
@@ -308,13 +287,18 @@ mod tests {
 
         let values = vec![ValueOp {
             id: Uuid::new_v4(),
-            change_type: ValueChangeType::DELETE,
+            change_type: ValueChangeType::SET,
             entity_id,
             property_id,
             space_id,
-            value: None, // None values should pass through without validation
+            value: None,
             language: None,
             unit: None,
+            text: None,
+            number: None,
+            boolean: None,
+            time: None,
+            point: None,
         }];
 
         let validated = validate_created_values(values, &cache).await;
@@ -335,9 +319,14 @@ mod tests {
             entity_id,
             property_id,
             space_id,
-            value: Some("some-value".to_string()),
+            value: Some("invalid".to_string()),
             language: None,
             unit: None,
+            text: None,
+            number: None,
+            boolean: None,
+            time: None,
+            point: None,
         }];
 
         let validated = validate_created_values(values, &cache).await;
@@ -370,6 +359,11 @@ mod tests {
                 value: Some("Hello World".to_string()), // Valid text
                 language: None,
                 unit: None,
+                text: Some("Hello World".to_string()), // Text field populated
+                number: None,
+                boolean: None,
+                time: None,
+                point: None,
             },
             ValueOp {
                 id: Uuid::new_v4(),
@@ -380,6 +374,11 @@ mod tests {
                 value: Some("1".to_string()), // Valid checkbox
                 language: None,
                 unit: None,
+                text: None,
+                number: None,
+                boolean: Some(true), // Boolean field populated
+                time: None,
+                point: None,
             },
             ValueOp {
                 id: Uuid::new_v4(),
@@ -390,6 +389,11 @@ mod tests {
                 value: Some("invalid-checkbox".to_string()), // Invalid checkbox
                 language: None,
                 unit: None,
+                text: None,
+                number: None,
+                boolean: None, // Not populated due to validation failure
+                time: None,
+                point: None,
             },
             ValueOp {
                 id: Uuid::new_v4(),
@@ -400,6 +404,11 @@ mod tests {
                 value: Some("1.5,2.5".to_string()), // Valid point
                 language: None,
                 unit: None,
+                text: None,
+                number: None,
+                boolean: None,
+                time: None,
+                point: Some("1.5,2.5".to_string()), // Point field populated
             },
         ];
 

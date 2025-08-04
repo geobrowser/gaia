@@ -93,13 +93,18 @@ impl TestStorage {
         Ok(rows
             .into_iter()
             .map(|row| ValueRow {
-                id: row.id,
+                id: Uuid::parse_str(&row.id).unwrap(),
                 property_id: row.property_id,
                 entity_id: row.entity_id,
                 space_id: row.space_id,
                 value: row.value,
                 language: row.language,
                 unit: row.unit,
+                text: None,
+                number: None,
+                boolean: None,
+                time: None,
+                point: None,
             })
             .collect())
     }
@@ -182,13 +187,18 @@ pub struct EntityRow {
 
 #[derive(Debug, Clone)]
 pub struct ValueRow {
-    pub id: String,
+    pub id: Uuid,
     pub property_id: Uuid,
     pub entity_id: Uuid,
     pub space_id: Uuid,
-    pub value: String,
+    pub value: Option<String>,
     pub language: Option<String>,
     pub unit: Option<String>,
+    pub text: Option<String>,
+    pub number: Option<f64>,
+    pub boolean: Option<bool>,
+    pub time: Option<String>,
+    pub point: Option<String>,
 }
 
 #[derive(Debug, Clone)]
