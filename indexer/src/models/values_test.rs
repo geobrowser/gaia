@@ -88,6 +88,11 @@ mod tests {
         let cache = Arc::new(MockPropertiesCache::new());
 
         let rt = Runtime::new().unwrap();
+        // Add property to cache
+        rt.block_on(cache.insert(
+            &Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c1").unwrap(),
+            DataType::Text,
+        ));
         let (created, deleted) =
             rt.block_on(ValuesModel::map_edit_to_values(&edit, &space_id, &cache));
 
@@ -182,6 +187,15 @@ mod tests {
 
         let cache = Arc::new(MockPropertiesCache::new());
         let rt = Runtime::new().unwrap();
+        // Add properties to cache
+        rt.block_on(cache.insert(
+            &Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c1").unwrap(),
+            DataType::Text,
+        ));
+        rt.block_on(cache.insert(
+            &Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c2").unwrap(),
+            DataType::Text,
+        ));
         let (created, deleted) =
             rt.block_on(ValuesModel::map_edit_to_values(&edit, &space_id, &cache));
 
@@ -263,6 +277,15 @@ mod tests {
 
         let cache = Arc::new(MockPropertiesCache::new());
         let rt = Runtime::new().unwrap();
+        // Add properties to cache
+        rt.block_on(cache.insert(
+            &Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c1").unwrap(),
+            DataType::Text,
+        ));
+        rt.block_on(cache.insert(
+            &Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c2").unwrap(),
+            DataType::Text,
+        ));
         let (created, deleted) =
             rt.block_on(ValuesModel::map_edit_to_values(&edit, &space_id, &cache));
 
@@ -344,6 +367,11 @@ mod tests {
 
         let cache = Arc::new(MockPropertiesCache::new());
         let rt = Runtime::new().unwrap();
+        // Add property to cache
+        rt.block_on(cache.insert(
+            &Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c1").unwrap(),
+            DataType::Text,
+        ));
         let (created, deleted) =
             rt.block_on(ValuesModel::map_edit_to_values(&edit, &space_id, &cache));
 
@@ -457,6 +485,11 @@ mod tests {
 
         let cache = Arc::new(MockPropertiesCache::new());
         let rt = Runtime::new().unwrap();
+        // Add property to cache
+        rt.block_on(cache.insert(
+            &Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c1").unwrap(),
+            DataType::Text,
+        ));
         let (created, deleted) =
             rt.block_on(ValuesModel::map_edit_to_values(&edit, &space_id, &cache));
 
@@ -548,6 +581,19 @@ mod tests {
 
         let cache = Arc::new(MockPropertiesCache::new());
         let rt = Runtime::new().unwrap();
+        // Add properties to cache
+        rt.block_on(cache.insert(
+            &Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c1").unwrap(),
+            DataType::Text,
+        ));
+        rt.block_on(cache.insert(
+            &Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c2").unwrap(),
+            DataType::Number,
+        ));
+        rt.block_on(cache.insert(
+            &Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c3").unwrap(),
+            DataType::Text,
+        ));
         let (created, deleted) =
             rt.block_on(ValuesModel::map_edit_to_values(&edit, &space_id, &cache));
 
@@ -615,6 +661,11 @@ mod tests {
 
         let cache = Arc::new(MockPropertiesCache::new());
         let rt = Runtime::new().unwrap();
+        // Add property to cache
+        rt.block_on(cache.insert(
+            &Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c1").unwrap(),
+            DataType::Text,
+        ));
         let (created, deleted) =
             rt.block_on(ValuesModel::map_edit_to_values(&edit, &space_id, &cache));
 
@@ -675,6 +726,11 @@ mod tests {
 
         let cache = Arc::new(MockPropertiesCache::new());
         let rt = Runtime::new().unwrap();
+        // Add property to cache
+        rt.block_on(cache.insert(
+            &Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c1").unwrap(),
+            DataType::Number,
+        ));
         let (created, deleted) =
             rt.block_on(ValuesModel::map_edit_to_values(&edit, &space_id, &cache));
 
@@ -727,6 +783,11 @@ mod tests {
 
         let cache = Arc::new(MockPropertiesCache::new());
         let rt = Runtime::new().unwrap();
+        // Add property to cache
+        rt.block_on(cache.insert(
+            &Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c1").unwrap(),
+            DataType::Text,
+        ));
         let (created, deleted) =
             rt.block_on(ValuesModel::map_edit_to_values(&edit, &space_id, &cache));
 
@@ -784,6 +845,11 @@ mod tests {
 
         let cache = Arc::new(MockPropertiesCache::new());
         let rt = Runtime::new().unwrap();
+        // Add property to cache
+        rt.block_on(cache.insert(
+            &Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c1").unwrap(),
+            DataType::Text,
+        ));
         let (created, deleted) =
             rt.block_on(ValuesModel::map_edit_to_values(&edit, &space_id, &cache));
 
@@ -864,10 +930,23 @@ mod tests {
 
         let cache = Arc::new(MockPropertiesCache::new());
         let rt = Runtime::new().unwrap();
+        // Add properties to cache
+        rt.block_on(cache.insert(
+            &Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c1").unwrap(),
+            DataType::Text,
+        ));
+        rt.block_on(cache.insert(
+            &Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c2").unwrap(),
+            DataType::Number,
+        ));
+        rt.block_on(cache.insert(
+            &Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c3").unwrap(),
+            DataType::Text,
+        ));
         let (created, deleted) =
             rt.block_on(ValuesModel::map_edit_to_values(&edit, &space_id, &cache));
 
-        assert_eq!(created.len(), 1);
+        assert_eq!(created.len(), 3);
         assert_eq!(deleted.len(), 0);
 
         // Find each value by property_id and check its options

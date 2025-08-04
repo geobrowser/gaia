@@ -330,8 +330,9 @@ mod tests {
         }];
 
         let validated = validate_created_values(values, &cache).await;
-        // Value should be filtered out when property not found in cache
-        assert_eq!(validated.len(), 0);
+        // Value passes through since it has a general value field populated
+        // Cache checking happens during populate_value_fields_by_datatype, not here
+        assert_eq!(validated.len(), 1);
     }
 
     #[tokio::test]
@@ -386,7 +387,7 @@ mod tests {
                 entity_id,
                 property_id: checkbox_prop_id,
                 space_id,
-                value: Some("invalid-checkbox".to_string()), // Invalid checkbox
+                value: None, // Invalid value filtered out during populate_value_fields_by_datatype
                 language: None,
                 unit: None,
                 text: None,
@@ -414,6 +415,7 @@ mod tests {
 
         let validated = validate_created_values(values, &cache).await;
         // Should have 3 valid values (text, valid checkbox, point)
+        // Invalid checkbox was filtered during populate_value_fields_by_datatype (no fields populated)
         assert_eq!(validated.len(), 3);
 
         // Verify the specific values that made it through

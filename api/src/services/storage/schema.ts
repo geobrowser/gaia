@@ -1,10 +1,10 @@
 import {
 	relations as drizzleRelations,
 	type InferSelectModel,
-	sql,
 } from "drizzle-orm";
 import {
 	boolean,
+	decimal,
 	index,
 	jsonb,
 	pgEnum,
@@ -14,7 +14,6 @@ import {
 	text,
 	uuid,
 } from "drizzle-orm/pg-core";
-import type { number } from "effect/Match";
 
 // Enable the pg_trgm extension for similarity searches (executed at runtime)
 // This comment signals that we want the trigram extension available
@@ -111,7 +110,7 @@ export const values = pgTable(
 			.references(() => spaces.id),
 		text: text(),
 		boolean: boolean(),
-		number: boolean(),
+		number: decimal(),
 		point: text(),
 		time: text(),
 		language: text(),
