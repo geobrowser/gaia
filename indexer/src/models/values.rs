@@ -22,7 +22,6 @@ pub struct ValueOp {
     pub entity_id: Uuid,
     pub property_id: Uuid,
     pub space_id: Uuid,
-    pub value: Option<String>,
     pub language: Option<String>,
     pub unit: Option<String>,
     // Data type specific fields
@@ -130,7 +129,6 @@ where
                                 property_id,
                                 entity_id,
                                 space_id: space_id.clone(),
-                                value: Some(value.value.clone()),
                                 language,
                                 unit,
                                 text: None,
@@ -141,7 +139,8 @@ where
                             };
 
                             if let Some(populated_op) =
-                                populate_value_fields_by_datatype(base_op, cache).await
+                                populate_value_fields_by_datatype(base_op, &value.value, cache)
+                                    .await
                             {
                                 values.push(populated_op);
                             }
@@ -181,7 +180,6 @@ where
                                 property_id,
                                 entity_id,
                                 space_id: space_id.clone(),
-                                value: None,
                                 language: None,
                                 unit: None,
                                 text: None,
@@ -209,6 +207,7 @@ where
 /// Returns None if validation fails, indicating the value should be filtered out.
 pub async fn populate_value_fields_by_datatype<C>(
     mut base_op: ValueOp,
+    raw_value: &str,
     cache: &Arc<C>,
 ) -> Option<ValueOp>
 where
@@ -219,64 +218,53 @@ where
         return Some(base_op);
     }
 
-    if let Some(string_value) = base_op.value.clone() {
-        // Try to get the data type from cache
-        if let Ok(data_type) = cache.get(&base_op.property_id).await {
-            match validate_by_datatype(data_type, &string_value) {
-                Ok(validated_value) => {
-                    // First clear all type-specific fields
-                    base_op.text = None;
-                    base_op.number = None;
-                    base_op.boolean = None;
-                    base_op.time = None;
-                    base_op.point = None;
-
-                    // Then set the appropriate field based on the validated value
-                    match validated_value {
-                        ValidatedValue::Text(text) => {
-                            // Even if it's a relation type, store as text
-                            // Relations will be filtered out later
-                            base_op.text = Some(text);
-                        }
-                        ValidatedValue::Number(num) => {
-                            base_op.number = Some(num);
-                        }
-                        ValidatedValue::Checkbox(bool_val) => {
-                            base_op.boolean = Some(bool_val);
-                        }
-                        ValidatedValue::Time(_) => {
-                            base_op.time = Some(string_value);
-                        }
-                        ValidatedValue::Point(_) => {
-                            base_op.point = Some(string_value);
-                        }
+    // Try to get the data type from cache
+    if let Ok(data_type) = cache.get(&base_op.property_id).await {
+        match validate_by_datatype(data_type, raw_value) {
+            Ok(validated_value) => {
+                // Set the appropriate field based on the validated value
+                match validated_value {
+                    ValidatedValue::Text(text) => {
+                        // Even if it's a relation type, store as text
+                        // Relations will be filtered out later
+                        base_op.text = Some(text);
                     }
+                    ValidatedValue::Number(num) => {
+                        base_op.number = Some(num);
+                    }
+                    ValidatedValue::Checkbox(bool_val) => {
+                        base_op.boolean = Some(bool_val);
+                    }
+                    ValidatedValue::Time(_) => {
+                        base_op.time = Some(raw_value.to_string());
+                    }
+                    ValidatedValue::Point(_) => {
+                        base_op.point = Some(raw_value.to_string());
+                    }
+                }
 
-                    return Some(base_op);
-                }
-                Err(error) => {
-                    // If validation fails, log the error and filter out the value
-                    tracing::warn!(
-                        "Validation failed for property {} with value '{}': {}",
-                        base_op.property_id,
-                        string_value,
-                        error
-                    );
-                    return None;
-                }
+                return Some(base_op);
+            }
+            Err(error) => {
+                // If validation fails, log the error and filter out the value
+                tracing::warn!(
+                    "Validation failed for property {} with value '{}': {}",
+                    base_op.property_id,
+                    raw_value,
+                    error
+                );
+                return None;
             }
         }
-        // If property not found in cache, filter out the value
-        else {
-            tracing::debug!(
-                "Property {} not found in cache, skipping value validation",
-                base_op.property_id
-            );
-            return None;
-        }
     }
-
-    Some(base_op)
+    // If property not found in cache, filter out the value
+    else {
+        tracing::debug!(
+            "Property {} not found in cache, skipping value validation",
+            base_op.property_id
+        );
+        return None;
+    }
 }
 
 #[cfg(test)]
@@ -338,7 +326,6 @@ mod tests {
             entity_id,
             property_id,
             space_id,
-            value: Some("123.45".to_string()),
             language: None,
             unit: None,
             text: None,
@@ -355,7 +342,6 @@ mod tests {
             entity_id,
             property_id,
             space_id,
-            value: Some("not-a-number".to_string()),
             language: None,
             unit: None,
             text: None,
@@ -366,9 +352,16 @@ mod tests {
         };
 
         // Validate results
-        let valid_result = rt.block_on(populate_value_fields_by_datatype(valid_number_op, &cache));
-        let invalid_result =
-            rt.block_on(populate_value_fields_by_datatype(invalid_number_op, &cache));
+        let valid_result = rt.block_on(populate_value_fields_by_datatype(
+            valid_number_op,
+            "123.45",
+            &cache,
+        ));
+        let invalid_result = rt.block_on(populate_value_fields_by_datatype(
+            invalid_number_op,
+            "not-a-number",
+            &cache,
+        ));
 
         // Valid number should be returned with number field populated
         assert!(valid_result.is_some());

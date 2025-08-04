@@ -85,7 +85,7 @@ impl TestStorage {
         let rows = sqlx::query!(
             r#"SELECT
                 id, property_id, entity_id, space_id,
-                language, unit, text,
+                language, unit, string,
                 number::text as number,
                 boolean, time, point
                 FROM values WHERE entity_id = $1"#,
@@ -104,7 +104,7 @@ impl TestStorage {
                 space_id: row.space_id,
                 language: row.language,
                 unit: row.unit,
-                text: row.text,
+                text: row.string,
                 number: row.number.as_ref().and_then(|n| n.parse::<f64>().ok()),
                 boolean: row.boolean,
                 time: row.time,

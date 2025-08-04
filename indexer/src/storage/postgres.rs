@@ -82,7 +82,7 @@ impl PostgresStorage {
         let row = sqlx::query(
             r#"SELECT
                 id, property_id, entity_id, space_id,
-                language, unit, text,
+                language, unit, string,
                 number::float8 as number, boolean, time, point
                 FROM values WHERE id = $1"#,
         )
@@ -101,7 +101,7 @@ impl PostgresStorage {
 
         let language: Option<String> = row.try_get("language")?;
         let unit: Option<String> = row.try_get("unit")?;
-        let text: Option<String> = row.try_get("text")?;
+        let text: Option<String> = row.try_get("string")?;
 
         let number: Option<f64> = row.try_get("number")?;
 
@@ -114,7 +114,7 @@ impl PostgresStorage {
             property_id,
             entity_id,
             space_id,
-            value: text.clone(), // Use text for backward compatibility
+
             language,
             unit,
             text,
@@ -318,7 +318,7 @@ impl StorageBackend for PostgresStorage {
             units.push(&prop.unit);
 
             // Add type-specific values
-            text_values.push(prop.text.as_deref().or(prop.value.as_deref()));
+            text_values.push(prop.text.as_deref());
             number_values.push(prop.number);
             boolean_values.push(prop.boolean);
             time_values.push(prop.time.as_deref());
@@ -328,7 +328,7 @@ impl StorageBackend for PostgresStorage {
         let query = r#"
                 INSERT INTO values (
                     id, entity_id, property_id, space_id, language, unit,
-                    text, number, boolean, time, point
+                    string, number, boolean, time, point
                 )
                 SELECT * FROM UNNEST(
                     $1::text[],
@@ -346,7 +346,7 @@ impl StorageBackend for PostgresStorage {
                 ON CONFLICT (id) DO UPDATE SET
                     language = EXCLUDED.language,
                     unit = EXCLUDED.unit,
-                    text = EXCLUDED.text,
+                    string = EXCLUDED.string,
                     number = EXCLUDED.number,
                     boolean = EXCLUDED.boolean,
                     time = EXCLUDED.time,

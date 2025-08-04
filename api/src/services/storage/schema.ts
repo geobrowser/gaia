@@ -108,7 +108,7 @@ export const values = pgTable(
 		spaceId: uuid()
 			.notNull()
 			.references(() => spaces.id),
-		text: text(),
+		string: text(),
 		boolean: boolean(),
 		number: decimal(),
 		point: text(),
@@ -123,7 +123,7 @@ export const values = pgTable(
 		index("values_space_id_idx").on(table.spaceId),
 
 		// Basic B-tree index for text searches
-		index("values_text_idx").on(table.text),
+		index("values_text_idx").on(table.string),
 		index("values_number_idx").on(table.number),
 		index("values_point_idx").on(table.point),
 		index("values_boolean_idx").on(table.boolean),
@@ -141,7 +141,7 @@ export const values = pgTable(
 		),
 
 		// Composite index for space-filtered searches
-		index("values_space_text_idx").on(table.spaceId, table.text),
+		index("values_space_text_idx").on(table.spaceId, table.string),
 
 		// Additional indexes for filtering
 		index("values_language_idx").on(table.language),

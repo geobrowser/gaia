@@ -629,10 +629,10 @@ async fn test_validation_allows_valid_data_mixed_with_invalid() -> Result<(), In
             .get_value(&number_value_id.to_string())
             .await
             .unwrap();
-        assert_eq!(number_value.value, Some("42.5".to_string()));
+        assert_eq!(number_value.number, Some(42.5));
 
         let text_value = storage.get_value(&text_value_id.to_string()).await.unwrap();
-        assert_eq!(text_value.value, Some("Valid text".to_string()));
+        assert_eq!(text_value.text, Some("Valid text".to_string()));
     }
 
     // Check second entity - only valid text should be stored, invalid number should be rejected
@@ -653,7 +653,7 @@ async fn test_validation_allows_valid_data_mixed_with_invalid() -> Result<(), In
 
         // Valid text should be stored
         let text_value = storage.get_value(&text_value_id.to_string()).await.unwrap();
-        assert_eq!(text_value.value, Some("Another valid text".to_string()));
+        assert_eq!(text_value.text, Some("Another valid text".to_string()));
     }
 
     Ok(())

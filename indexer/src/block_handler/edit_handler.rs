@@ -36,8 +36,7 @@ where
     created_values
         .into_iter()
         .filter(|value| {
-            value.value.is_some()
-                || value.text.is_some()
+            value.text.is_some()
                 || value.number.is_some()
                 || value.boolean.is_some()
                 || value.time.is_some()
@@ -227,11 +226,11 @@ mod tests {
             entity_id,
             property_id,
             space_id,
-            value: Some("123.45".to_string()),
+
             language: None,
             unit: None,
             text: None,
-            number: None,
+            number: Some(123.45),
             boolean: None,
             time: None,
             point: None,
@@ -239,7 +238,7 @@ mod tests {
 
         let validated = validate_created_values(values, &cache).await;
         assert_eq!(validated.len(), 1);
-        assert_eq!(validated[0].value, Some("123.45".to_string()));
+        assert_eq!(validated[0].number, Some(123.45));
     }
 
     #[tokio::test]
@@ -259,7 +258,7 @@ mod tests {
             entity_id,
             property_id,
             space_id,
-            value: Some("123.45".to_string()), // Valid number
+
             language: None,
             unit: None,
             text: None,
@@ -275,7 +274,7 @@ mod tests {
 
         // The valid value should be included
         assert_eq!(validated.len(), 1);
-        assert_eq!(validated[0].value, Some("123.45".to_string()));
+        assert_eq!(validated[0].number, Some(123.45));
     }
 
     #[tokio::test]
@@ -291,7 +290,7 @@ mod tests {
             entity_id,
             property_id,
             space_id,
-            value: None,
+
             language: None,
             unit: None,
             text: None,
@@ -319,10 +318,10 @@ mod tests {
             entity_id,
             property_id,
             space_id,
-            value: Some("invalid".to_string()),
+
             language: None,
             unit: None,
-            text: None,
+            text: Some("some text".to_string()),
             number: None,
             boolean: None,
             time: None,
@@ -357,7 +356,7 @@ mod tests {
                 entity_id,
                 property_id: text_prop_id,
                 space_id,
-                value: Some("Hello World".to_string()), // Valid text
+
                 language: None,
                 unit: None,
                 text: Some("Hello World".to_string()), // Text field populated
@@ -372,7 +371,7 @@ mod tests {
                 entity_id,
                 property_id: checkbox_prop_id,
                 space_id,
-                value: Some("1".to_string()), // Valid checkbox
+
                 language: None,
                 unit: None,
                 text: None,
@@ -387,7 +386,7 @@ mod tests {
                 entity_id,
                 property_id: checkbox_prop_id,
                 space_id,
-                value: None, // Invalid value filtered out during populate_value_fields_by_datatype
+
                 language: None,
                 unit: None,
                 text: None,
@@ -402,7 +401,7 @@ mod tests {
                 entity_id,
                 property_id: point_prop_id,
                 space_id,
-                value: Some("1.5,2.5".to_string()), // Valid point
+
                 language: None,
                 unit: None,
                 text: None,
@@ -424,20 +423,20 @@ mod tests {
             .filter(|v| v.property_id == text_prop_id)
             .collect();
         assert_eq!(text_values.len(), 1);
-        assert_eq!(text_values[0].value, Some("Hello World".to_string()));
+        assert_eq!(text_values[0].text, Some("Hello World".to_string()));
 
         let valid_checkbox_values: Vec<_> = validated
             .iter()
             .filter(|v| v.property_id == checkbox_prop_id)
             .collect();
         assert_eq!(valid_checkbox_values.len(), 1);
-        assert_eq!(valid_checkbox_values[0].value, Some("1".to_string()));
+        assert_eq!(valid_checkbox_values[0].boolean, Some(true));
 
         let point_values: Vec<_> = validated
             .iter()
             .filter(|v| v.property_id == point_prop_id)
             .collect();
         assert_eq!(point_values.len(), 1);
-        assert_eq!(point_values[0].value, Some("1.5,2.5".to_string()));
+        assert_eq!(point_values[0].point, Some("1.5,2.5".to_string()));
     }
 }

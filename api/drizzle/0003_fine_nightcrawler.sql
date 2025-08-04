@@ -1,11 +1,11 @@
 -- Custom SQL migration file, put your code below! --
 -- Custom SQL migration file, put your code below! --
 CREATE OR REPLACE FUNCTION public.entities_name(entity entities) RETURNS text AS $$
-  SELECT text FROM values WHERE entity_id = entity.id AND property_id = 'a126ca53-0c8e-48d5-b888-82c734c38935' LIMIT 1;
+  SELECT string FROM values WHERE entity_id = entity.id AND property_id = 'a126ca53-0c8e-48d5-b888-82c734c38935' LIMIT 1;
 $$ LANGUAGE sql STABLE;
 
 CREATE OR REPLACE FUNCTION public.entities_description(entity entities) RETURNS text AS $$
-  SELECT text FROM values WHERE entity_id = entity.id AND property_id = '9b1f76ff-9711-404c-861e-59dc3fa7d037' LIMIT 1;
+  SELECT string FROM values WHERE entity_id = entity.id AND property_id = '9b1f76ff-9711-404c-861e-59dc3fa7d037' LIMIT 1;
 $$ LANGUAGE sql STABLE;
 
 CREATE OR REPLACE FUNCTION public.entities_types(entities entities) RETURNS SETOF public.entities AS $$
@@ -23,7 +23,7 @@ CREATE OR REPLACE FUNCTION public.entities_type_ids(entities entities) RETURNS u
 $$ LANGUAGE sql STABLE;
 
 CREATE EXTENSION IF NOT EXISTS pg_trgm;
-CREATE INDEX IF NOT EXISTS values_text_gin_trgm_idx ON values USING GIN (text gin_trgm_ops);
+CREATE INDEX IF NOT EXISTS values_text_gin_trgm_idx ON values USING GIN (string gin_trgm_ops);
 
 -- Create a simplified fuzzy search function that only searches name and description properties
 CREATE OR REPLACE FUNCTION public.search(
@@ -35,14 +35,14 @@ CREATE OR REPLACE FUNCTION public.search(
     SELECT
       v.entity_id,
       CASE
-        WHEN v.property_id = 'a126ca53-0c8e-48d5-b888-82c734c38935' THEN similarity(v.text, query) * 2.0  -- Name property
-        WHEN v.property_id = '9b1f76ff-9711-404c-861e-59dc3fa7d037' THEN similarity(v.text, query) * 1.5  -- Description property
+        WHEN v.property_id = 'a126ca53-0c8e-48d5-b888-82c734c38935' THEN similarity(v.string, query) * 2.0  -- Name property
+        WHEN v.property_id = '9b1f76ff-9711-404c-861e-59dc3fa7d037' THEN similarity(v.string, query) * 1.5  -- Description property
       END AS sim_score
     FROM
       values v
     WHERE
-      v.text % query
-      AND similarity(v.text, query) >= similarity_threshold
+      v.string % query
+      AND similarity(v.string, query) >= similarity_threshold
       AND (space_id IS NULL OR v.space_id = space_id)
       AND (
         v.property_id = 'a126ca53-0c8e-48d5-b888-82c734c38935' OR  -- Name property
@@ -222,7 +222,7 @@ $$ LANGUAGE sql STABLE;
 
 CREATE OR REPLACE FUNCTION public.properties_format(properties properties)
 RETURNS TEXT AS $$
-      SELECT v.text
+      SELECT v.string
       FROM values v
       WHERE v.entity_id = properties.id
         AND v.property_id = '396f8c72-dfd0-4b57-91ea-09c1b9321b2f' -- format property id
@@ -265,14 +265,14 @@ $$ LANGUAGE sql STABLE;
 * Returns name of a property
 */
 CREATE OR REPLACE FUNCTION public.properties_name(property properties) RETURNS text AS $$
-  SELECT text FROM values WHERE entity_id = property.id AND property_id = 'a126ca53-0c8e-48d5-b888-82c734c38935' LIMIT 1;
+  SELECT string FROM values WHERE entity_id = property.id AND property_id = 'a126ca53-0c8e-48d5-b888-82c734c38935' LIMIT 1;
 $$ LANGUAGE sql STABLE;
 
 /**
 * Returns description of a property
 */
 CREATE OR REPLACE FUNCTION public.properties_description(property properties) RETURNS text AS $$
-  SELECT text FROM values WHERE entity_id = property.id AND property_id = '9b1f76ff-9711-404c-861e-59dc3fa7d037' LIMIT 1;
+  SELECT string FROM values WHERE entity_id = property.id AND property_id = '9b1f76ff-9711-404c-861e-59dc3fa7d037' LIMIT 1;
 $$ LANGUAGE sql STABLE;
 
 -- Rename properties.type to dataType in GraphQL schema
