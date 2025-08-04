@@ -7,8 +7,8 @@ use crate::models::{
     entities::EntityItem,
     membership::{EditorItem, MemberItem},
     properties::{
-        DataType, PropertyItem, DATA_TYPE_CHECKBOX, DATA_TYPE_NUMBER, DATA_TYPE_POINT,
-        DATA_TYPE_RELATION, DATA_TYPE_TEXT, DATA_TYPE_TIME,
+        DataType, PropertyItem, DATA_TYPE_BOOLEAN, DATA_TYPE_NUMBER, DATA_TYPE_POINT,
+        DATA_TYPE_RELATION, DATA_TYPE_STRING, DATA_TYPE_TIME,
     },
     relations::{SetRelationItem, UnsetRelationItem, UpdateRelationItem},
     spaces::{SpaceItem, SpaceType},
@@ -815,9 +815,9 @@ impl StorageBackend for PostgresStorage {
 
 fn string_to_data_type(s: &str) -> Option<DataType> {
     match s {
-        DATA_TYPE_TEXT => Some(DataType::Text),
+        DATA_TYPE_STRING => Some(DataType::String),
         DATA_TYPE_NUMBER => Some(DataType::Number),
-        DATA_TYPE_CHECKBOX => Some(DataType::Checkbox),
+        DATA_TYPE_BOOLEAN => Some(DataType::Boolean),
         DATA_TYPE_TIME => Some(DataType::Time),
         DATA_TYPE_POINT => Some(DataType::Point),
         DATA_TYPE_RELATION => Some(DataType::Relation),

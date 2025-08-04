@@ -91,7 +91,7 @@ mod tests {
         // Add property to cache
         rt.block_on(cache.insert(
             &Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c1").unwrap(),
-            DataType::Text,
+            DataType::String,
         ));
         let (created, deleted) =
             rt.block_on(ValuesModel::map_edit_to_values(&edit, &space_id, &cache));
@@ -190,11 +190,11 @@ mod tests {
         // Add properties to cache
         rt.block_on(cache.insert(
             &Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c1").unwrap(),
-            DataType::Text,
+            DataType::String,
         ));
         rt.block_on(cache.insert(
             &Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c2").unwrap(),
-            DataType::Text,
+            DataType::String,
         ));
         let (created, deleted) =
             rt.block_on(ValuesModel::map_edit_to_values(&edit, &space_id, &cache));
@@ -280,11 +280,11 @@ mod tests {
         // Add properties to cache
         rt.block_on(cache.insert(
             &Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c1").unwrap(),
-            DataType::Text,
+            DataType::String,
         ));
         rt.block_on(cache.insert(
             &Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c2").unwrap(),
-            DataType::Text,
+            DataType::String,
         ));
         let (created, deleted) =
             rt.block_on(ValuesModel::map_edit_to_values(&edit, &space_id, &cache));
@@ -370,7 +370,7 @@ mod tests {
         // Add property to cache
         rt.block_on(cache.insert(
             &Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c1").unwrap(),
-            DataType::Text,
+            DataType::String,
         ));
         let (created, deleted) =
             rt.block_on(ValuesModel::map_edit_to_values(&edit, &space_id, &cache));
@@ -488,7 +488,7 @@ mod tests {
         // Add property to cache
         rt.block_on(cache.insert(
             &Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c1").unwrap(),
-            DataType::Text,
+            DataType::String,
         ));
         let (created, deleted) =
             rt.block_on(ValuesModel::map_edit_to_values(&edit, &space_id, &cache));
@@ -584,7 +584,7 @@ mod tests {
         // Add properties to cache
         rt.block_on(cache.insert(
             &Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c1").unwrap(),
-            DataType::Text,
+            DataType::String,
         ));
         rt.block_on(cache.insert(
             &Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c2").unwrap(),
@@ -592,7 +592,7 @@ mod tests {
         ));
         rt.block_on(cache.insert(
             &Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c3").unwrap(),
-            DataType::Text,
+            DataType::String,
         ));
         let (created, deleted) =
             rt.block_on(ValuesModel::map_edit_to_values(&edit, &space_id, &cache));
@@ -664,7 +664,7 @@ mod tests {
         // Add property to cache
         rt.block_on(cache.insert(
             &Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c1").unwrap(),
-            DataType::Text,
+            DataType::String,
         ));
         let (created, deleted) =
             rt.block_on(ValuesModel::map_edit_to_values(&edit, &space_id, &cache));
@@ -786,7 +786,7 @@ mod tests {
         // Add property to cache
         rt.block_on(cache.insert(
             &Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c1").unwrap(),
-            DataType::Text,
+            DataType::String,
         ));
         let (created, deleted) =
             rt.block_on(ValuesModel::map_edit_to_values(&edit, &space_id, &cache));
@@ -848,7 +848,7 @@ mod tests {
         // Add property to cache
         rt.block_on(cache.insert(
             &Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c1").unwrap(),
-            DataType::Text,
+            DataType::String,
         ));
         let (created, deleted) =
             rt.block_on(ValuesModel::map_edit_to_values(&edit, &space_id, &cache));
@@ -933,7 +933,7 @@ mod tests {
         // Add properties to cache
         rt.block_on(cache.insert(
             &Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c1").unwrap(),
-            DataType::Text,
+            DataType::String,
         ));
         rt.block_on(cache.insert(
             &Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c2").unwrap(),
@@ -941,7 +941,7 @@ mod tests {
         ));
         rt.block_on(cache.insert(
             &Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c3").unwrap(),
-            DataType::Text,
+            DataType::String,
         ));
         let (created, deleted) =
             rt.block_on(ValuesModel::map_edit_to_values(&edit, &space_id, &cache));

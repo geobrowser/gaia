@@ -75,9 +75,9 @@ export const entities = pgTable("entities", {
 });
 
 export const dataTypesEnum = pgEnum("dataTypes", [
-	"Text",
+	"String",
 	"Number",
-	"Checkbox",
+	"Boolean",
 	"Time",
 	"Point",
 	"Relation",

@@ -86,11 +86,11 @@ mod tests {
         let cache = PropertiesCache::new();
         let key = Uuid::new_v4();
 
-        cache.insert(&key, DataType::Text).await;
+        cache.insert(&key, DataType::String).await;
 
         let result = cache.get(&key).await;
         assert!(result.is_ok());
-        assert_eq!(result.unwrap(), DataType::Text);
+        assert_eq!(result.unwrap(), DataType::String);
     }
 
     #[tokio::test]
@@ -99,8 +99,8 @@ mod tests {
 
         // Test Text
         let text_uuid = Uuid::new_v4();
-        cache.insert(&text_uuid, DataType::Text).await;
-        assert_eq!(cache.get(&text_uuid).await.unwrap(), DataType::Text);
+        cache.insert(&text_uuid, DataType::String).await;
+        assert_eq!(cache.get(&text_uuid).await.unwrap(), DataType::String);
 
         // Test Number
         let number_uuid = Uuid::new_v4();
@@ -109,8 +109,8 @@ mod tests {
 
         // Test Checkbox
         let checkbox_uuid = Uuid::new_v4();
-        cache.insert(&checkbox_uuid, DataType::Checkbox).await;
-        assert_eq!(cache.get(&checkbox_uuid).await.unwrap(), DataType::Checkbox);
+        cache.insert(&checkbox_uuid, DataType::Boolean).await;
+        assert_eq!(cache.get(&checkbox_uuid).await.unwrap(), DataType::Boolean);
 
         // Test Time
         let time_uuid = Uuid::new_v4();
@@ -134,16 +134,16 @@ mod tests {
         let key = Uuid::new_v4();
 
         // Insert initial value
-        cache.insert(&key, DataType::Text).await;
+        cache.insert(&key, DataType::String).await;
         let initial_value = cache.get(&key).await.unwrap();
-        assert_eq!(initial_value, DataType::Text);
+        assert_eq!(initial_value, DataType::String);
 
         // Attempt to overwrite with different data type
         cache.insert(&key, DataType::Number).await;
 
         // Value should remain unchanged (immutable)
         let final_value = cache.get(&key).await.unwrap();
-        assert_eq!(final_value, DataType::Text); // Should still be Text, not Number
+        assert_eq!(final_value, DataType::String); // Should still be Text, not Number
     }
 
     #[tokio::test]
@@ -152,12 +152,12 @@ mod tests {
         let key = Uuid::new_v4();
 
         // Insert initial value
-        cache.insert(&key, DataType::Checkbox).await;
+        cache.insert(&key, DataType::Boolean).await;
         let initial_value = cache.get(&key).await.unwrap();
-        assert_eq!(initial_value, DataType::Checkbox);
+        assert_eq!(initial_value, DataType::Boolean);
 
         // Attempt multiple overwrites with different data types
-        cache.insert(&key, DataType::Text).await;
+        cache.insert(&key, DataType::String).await;
         cache.insert(&key, DataType::Number).await;
         cache.insert(&key, DataType::Time).await;
         cache.insert(&key, DataType::Point).await;
@@ -165,7 +165,7 @@ mod tests {
 
         // Value should remain unchanged
         let final_value = cache.get(&key).await.unwrap();
-        assert_eq!(final_value, DataType::Checkbox); // Should still be Checkbox
+        assert_eq!(final_value, DataType::Boolean); // Should still be Checkbox
     }
 
     #[tokio::test]
@@ -195,9 +195,9 @@ mod tests {
             let cache_clone = Arc::clone(&cache);
             let handle = tokio::spawn(async move {
                 let data_type = match i % 6 {
-                    0 => DataType::Text,
+                    0 => DataType::String,
                     1 => DataType::Number,
-                    2 => DataType::Checkbox,
+                    2 => DataType::Boolean,
                     3 => DataType::Time,
                     4 => DataType::Point,
                     _ => DataType::Relation,
@@ -217,9 +217,15 @@ mod tests {
         assert!(result.is_ok());
         let value = result.unwrap();
         // Should be one of the valid DataType variants
-        assert!(matches!(value, 
-            DataType::Text | DataType::Number | DataType::Checkbox | 
-            DataType::Time | DataType::Point | DataType::Relation));
+        assert!(matches!(
+            value,
+            DataType::String
+                | DataType::Number
+                | DataType::Boolean
+                | DataType::Time
+                | DataType::Point
+                | DataType::Relation
+        ));
     }
 
     #[tokio::test]
@@ -231,14 +237,14 @@ mod tests {
         let prop2 = Uuid::new_v4();
         let prop3 = Uuid::new_v4();
 
-        cache.insert(&prop1, DataType::Text).await;
+        cache.insert(&prop1, DataType::String).await;
         cache.insert(&prop2, DataType::Number).await;
-        cache.insert(&prop3, DataType::Checkbox).await;
+        cache.insert(&prop3, DataType::Boolean).await;
 
         // Verify all are stored correctly
-        assert_eq!(cache.get(&prop1).await.unwrap(), DataType::Text);
+        assert_eq!(cache.get(&prop1).await.unwrap(), DataType::String);
         assert_eq!(cache.get(&prop2).await.unwrap(), DataType::Number);
-        assert_eq!(cache.get(&prop3).await.unwrap(), DataType::Checkbox);
+        assert_eq!(cache.get(&prop3).await.unwrap(), DataType::Boolean);
 
         // Verify we can still get error for non-existent property
         let prop4 = Uuid::new_v4();

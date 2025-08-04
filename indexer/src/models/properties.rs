@@ -4,19 +4,19 @@ use std::fmt;
 use uuid::Uuid;
 use wire::pb::grc20::{op::Payload, DataType as PbDataType, Edit};
 
-// Constants for PostgreSQL enum values - must match schema.ts dataTypesEnum
-pub const DATA_TYPE_TEXT: &str = "Text";
+// Constants for PostgreSQL enum values - must match the data type enum in the db
+pub const DATA_TYPE_STRING: &str = "String";
 pub const DATA_TYPE_NUMBER: &str = "Number";
-pub const DATA_TYPE_CHECKBOX: &str = "Checkbox";
+pub const DATA_TYPE_BOOLEAN: &str = "Boolean";
 pub const DATA_TYPE_TIME: &str = "Time";
 pub const DATA_TYPE_POINT: &str = "Point";
 pub const DATA_TYPE_RELATION: &str = "Relation";
 
 // All valid data type enum values
 pub const VALID_DATA_TYPE_VALUES: &[&str] = &[
-    DATA_TYPE_TEXT,
+    DATA_TYPE_STRING,
     DATA_TYPE_NUMBER,
-    DATA_TYPE_CHECKBOX,
+    DATA_TYPE_BOOLEAN,
     DATA_TYPE_TIME,
     DATA_TYPE_POINT,
     DATA_TYPE_RELATION,
@@ -25,9 +25,9 @@ pub const VALID_DATA_TYPE_VALUES: &[&str] = &[
 /// Type-safe representation of data types
 #[derive(Clone, Debug, PartialEq, Copy)]
 pub enum DataType {
-    Text,
+    String,
     Number,
-    Checkbox,
+    Boolean,
     Time,
     Point,
     Relation,
@@ -36,9 +36,9 @@ pub enum DataType {
 impl fmt::Display for DataType {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            DataType::Text => write!(f, "{}", DATA_TYPE_TEXT),
+            DataType::String => write!(f, "{}", DATA_TYPE_STRING),
             DataType::Number => write!(f, "{}", DATA_TYPE_NUMBER),
-            DataType::Checkbox => write!(f, "{}", DATA_TYPE_CHECKBOX),
+            DataType::Boolean => write!(f, "{}", DATA_TYPE_BOOLEAN),
             DataType::Time => write!(f, "{}", DATA_TYPE_TIME),
             DataType::Point => write!(f, "{}", DATA_TYPE_POINT),
             DataType::Relation => write!(f, "{}", DATA_TYPE_RELATION),
@@ -49,9 +49,9 @@ impl fmt::Display for DataType {
 impl AsRef<str> for DataType {
     fn as_ref(&self) -> &str {
         match self {
-            DataType::Text => DATA_TYPE_TEXT,
+            DataType::String => DATA_TYPE_STRING,
             DataType::Number => DATA_TYPE_NUMBER,
-            DataType::Checkbox => DATA_TYPE_CHECKBOX,
+            DataType::Boolean => DATA_TYPE_BOOLEAN,
             DataType::Time => DATA_TYPE_TIME,
             DataType::Point => DATA_TYPE_POINT,
             DataType::Relation => DATA_TYPE_RELATION,
@@ -64,9 +64,9 @@ impl std::convert::TryFrom<&str> for DataType {
 
     fn try_from(value: &str) -> Result<Self, Self::Error> {
         match value {
-            DATA_TYPE_TEXT => Ok(DataType::Text),
+            DATA_TYPE_STRING => Ok(DataType::String),
             DATA_TYPE_NUMBER => Ok(DataType::Number),
-            DATA_TYPE_CHECKBOX => Ok(DataType::Checkbox),
+            DATA_TYPE_BOOLEAN => Ok(DataType::Boolean),
             DATA_TYPE_TIME => Ok(DataType::Time),
             DATA_TYPE_POINT => Ok(DataType::Point),
             DATA_TYPE_RELATION => Ok(DataType::Relation),
@@ -91,9 +91,9 @@ impl DataType {
     /// Returns all valid DataType enum variants
     pub fn all_variants() -> Vec<DataType> {
         vec![
-            DataType::Text,
+            DataType::String,
             DataType::Number,
-            DataType::Checkbox,
+            DataType::Boolean,
             DataType::Time,
             DataType::Point,
             DataType::Relation,
@@ -173,9 +173,9 @@ fn squash_properties(properties: &Vec<PropertyItem>) -> Vec<PropertyItem> {
 
 fn native_type_to_data_type(native_type: i32) -> Option<DataType> {
     match PbDataType::try_from(native_type) {
-        Ok(PbDataType::Text) => Some(DataType::Text),
+        Ok(PbDataType::Text) => Some(DataType::String),
         Ok(PbDataType::Number) => Some(DataType::Number),
-        Ok(PbDataType::Checkbox) => Some(DataType::Checkbox),
+        Ok(PbDataType::Checkbox) => Some(DataType::Boolean),
         Ok(PbDataType::Time) => Some(DataType::Time),
         Ok(PbDataType::Point) => Some(DataType::Point),
         Ok(PbDataType::Relation) => Some(DataType::Relation),

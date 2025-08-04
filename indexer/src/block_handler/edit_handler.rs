@@ -345,8 +345,8 @@ mod tests {
         let space_id = Uuid::new_v4();
 
         // Insert different property types into cache
-        cache.insert(&text_prop_id, DataType::Text).await;
-        cache.insert(&checkbox_prop_id, DataType::Checkbox).await;
+        cache.insert(&text_prop_id, DataType::String).await;
+        cache.insert(&checkbox_prop_id, DataType::Boolean).await;
         cache.insert(&point_prop_id, DataType::Point).await;
 
         let values = vec![
