@@ -1,0 +1,82 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT\n                id, property_id, entity_id, space_id,\n                language, unit, string,\n                number::text as number,\n                boolean, time, point\n                FROM values WHERE entity_id = $1",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 1,
+        "name": "property_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "entity_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 3,
+        "name": "space_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 4,
+        "name": "language",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 5,
+        "name": "unit",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 6,
+        "name": "string",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 7,
+        "name": "number",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 8,
+        "name": "boolean",
+        "type_info": "Bool"
+      },
+      {
+        "ordinal": 9,
+        "name": "time",
+        "type_info": "Text"
+      },
+      {
+        "ordinal": 10,
+        "name": "point",
+        "type_info": "Text"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      true,
+      true,
+      true,
+      null,
+      true,
+      true,
+      true
+    ]
+  },
+  "hash": "641c06d098f955e9bd2ee9b22d0e57959232aa74b2796f3cdffaee831c4ea2a5"
+}
