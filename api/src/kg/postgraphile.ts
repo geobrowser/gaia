@@ -1,7 +1,6 @@
 import SimplifyInflectionPlugin from "@graphile-contrib/pg-simplify-inflector"
 import {useResponseCache} from "@graphql-yoga/plugin-response-cache"
 import {createYoga, useExecutionCancellation} from "graphql-yoga"
-import {Hono} from "hono"
 import {Pool} from "pg"
 import {createPostGraphileSchema, withPostGraphileContext} from "postgraphile"
 import ConnectionFilterPlugin from "postgraphile-plugin-connection-filter"
@@ -13,10 +12,12 @@ const pgPool = new Pool({
 
 // PostGraphile options
 const postgraphileOptions = {
+	watchPg: true,
+	graphiql: true,
+	enhanceGraphiql: true,
 	dynamicJson: true,
 	setofFunctionsContainNulls: false,
 	ignoreRBAC: false,
-	ignoreIndexes: false,
 	appendPlugins: [ConnectionFilterPlugin, SimplifyInflectionPlugin],
 	disableDefaultMutations: true,
 	simpleCollections: "both" as const,
