@@ -66,13 +66,22 @@ export const spaces = pgTable("spaces", {
 	personalAddress: text(),
 });
 
-export const entities = pgTable("entities", {
-	id: uuid().primaryKey(),
-	createdAt: text().notNull(),
-	createdAtBlock: text().notNull(),
-	updatedAt: text().notNull(),
-	updatedAtBlock: text().notNull(),
-});
+export const entities = pgTable(
+	"entities",
+	{
+		id: uuid().primaryKey(),
+		createdAt: text().notNull(),
+		createdAtBlock: text().notNull(),
+		updatedAt: text().notNull(),
+		updatedAtBlock: text().notNull(),
+	},
+	(table) => [
+		// Index for ordering queries
+		index("entities_updated_at_idx").on(table.updatedAt),
+		// Composite index for ordering with id for stable pagination
+		index("entities_updated_at_id_idx").on(table.updatedAt, table.id),
+	],
+);
 
 export const dataTypesEnum = pgEnum("dataTypes", [
 	"String",

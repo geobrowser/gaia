@@ -71,28 +71,28 @@ $$ LANGUAGE sql STABLE;
 CREATE OR REPLACE FUNCTION public.entities_spaces_in(entity entities)
 RETURNS SETOF public.spaces AS $$
   SELECT DISTINCT s.*
-  FROM (
-    -- Spaces from values table
-    SELECT DISTINCT space_id
-    FROM values
-    WHERE entity_id = entity.id
-    UNION
-    -- Spaces from relations table where entity is the from entity
-    SELECT DISTINCT space_id
-    FROM relations
-    WHERE from_entity_id = entity.id
-  ) AS all_spaces
-  JOIN spaces s ON s.id = all_spaces.space_id;
+  FROM spaces s
+  WHERE EXISTS (
+    SELECT 1 FROM values v WHERE v.entity_id = entity.id AND v.space_id = s.id
+    UNION ALL
+    SELECT 1 FROM relations r WHERE r.from_entity_id = entity.id AND r.space_id = s.id
+  )
 $$ LANGUAGE sql STABLE;
 
 CREATE OR REPLACE FUNCTION public.entities_space_ids(entity entities)
 RETURNS uuid[] AS $$
-  SELECT ARRAY_AGG(DISTINCT space_id)
-  FROM (
-    SELECT space_id FROM values WHERE entity_id = entity.id
-    UNION
-    SELECT space_id FROM relations WHERE from_entity_id = entity.id
-  ) AS all_spaces;
+  SELECT COALESCE(
+    ARRAY(
+      SELECT DISTINCT space_id
+      FROM (
+        SELECT space_id FROM values WHERE entity_id = entity.id
+        UNION ALL
+        SELECT space_id FROM relations WHERE from_entity_id = entity.id
+      ) AS all_spaces
+      WHERE space_id IS NOT NULL
+    ),
+    '{}'::uuid[]
+  );
 $$ LANGUAGE sql STABLE;
 
 /*
