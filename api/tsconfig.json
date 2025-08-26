@@ -24,6 +24,7 @@
 		"noEmit": true,
 		/* Lib when not targeting the browser */
 		"lib": ["ES2022"],
+		"types": ["bun"],
 		/* Lib when targeting the browser */
 		// "lib": ["ES2022", "DOM", "DOM.Iterable"]
 		/* When building a library */

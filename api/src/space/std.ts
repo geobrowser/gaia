@@ -129,8 +129,10 @@ export function getChecksumAddresses(addresses: string[]): `0x${string}`[] {
 	})
 }
 
-export function generateEditFormData(content: Uint8Array<ArrayBufferLike>): FormData {
-	const blob = new Blob([content], {
+export function generateEditFormData(content: Uint8Array): FormData {
+	// Convert to regular Uint8Array if needed for compatibility
+	const buffer = new Uint8Array(content)
+	const blob = new Blob([buffer], {
 		type: "application/octet-stream",
 	})
 	const formData = new FormData()
