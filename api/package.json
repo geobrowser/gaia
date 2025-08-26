@@ -8,7 +8,6 @@
 		"generate": "graphql-codegen --config codegen.yml",
 		"test": "vitest",
 		"lint": "biome check src/ --apply",
-		"test:ci": "bun test",
 		"check": "tsc --noEmit",
 		"db:setup": "bun run scripts/setup-test-db.ts",
 		"db:generate": "bun drizzle-kit generate",
