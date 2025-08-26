@@ -7,6 +7,10 @@ use std::sync::Arc;
 use crate::config::handlers::VoteHandler;
 use crate::errors::IndexingError;
 
+// Use CARGO_MANIFEST_DIR to get path relative to the crate
+const PKG_FILE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/geo-actions-v0.1.0.spkg");
+const MODULE_NAME: &str = "map_actions";
+
 /// `Dependencies` struct holds the necessary components for the action indexer.
 ///
 /// It includes a consumer for ingesting actions, a processor for handling
@@ -33,8 +37,8 @@ impl Dependencies {
 
         let substreams_endpoint = std::env::var("SUBSTREAMS_ENDPOINT").expect("SUBSTREAMS_ENDPOINT must be set");
         let substreams_api_token = std::env::var("SUBSTREAMS_API_TOKEN").expect("SUBSTREAMS_API_TOKEN must be set");
-        let package_file = String::from("./src/package/geo-actions-v0.1.0.spkg");
-        let module_name = String::from("map_actions");
+        let package_file = PKG_FILE.to_string();
+        let module_name = MODULE_NAME.to_string();
         let block_range = None;
         let params = vec![];
 
