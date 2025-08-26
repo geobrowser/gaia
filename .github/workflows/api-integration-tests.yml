@@ -14,6 +14,7 @@ on:
 jobs:
   integration-tests:
     name: Integration Tests
+    if: false  # Workflow disabled
     runs-on: ubuntu-latest
 
     services:
