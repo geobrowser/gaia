@@ -37,3 +37,4 @@ jobs:
           IPFS_GATEWAY_WRITE: "https://ipfs.io"
           RPC_ENDPOINT: "https://rpc.testnet.example.com"
           CHAIN_ID: "80451"
+          DEPLOYER_PK: "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
