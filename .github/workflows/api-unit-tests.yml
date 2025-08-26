@@ -31,3 +31,9 @@ jobs:
       
       - name: Run unit tests
         run: bun run test
+        env:
+          DATABASE_URL: "postgresql://test:test@localhost:5432/test"
+          IPFS_KEY: "test-key"
+          IPFS_GATEWAY_WRITE: "https://ipfs.io"
+          RPC_ENDPOINT: "https://rpc.testnet.example.com"
+          CHAIN_ID: "80451"
