@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest"
 import { EditProposal } from "@graphprotocol/grc-20/proto"
+import { Id, Graph } from "@graphprotocol/grc-20"
 import { generateEditFormData } from "./std"
 
 describe("generateEditFormData", () => {
@@ -7,7 +8,7 @@ describe("generateEditFormData", () => {
 		// Create an EditProposal and encode it
 		const editProposal = {
 			name: "Test Space",
-			author: "0x1234567890123456789012345678901234567890",
+			author: "0x1234567890123456789012345678901234567890" as `0x${string}`,
 			ops: []
 		}
 		
@@ -34,13 +35,14 @@ describe("generateEditFormData", () => {
 		// Test with a more complex EditProposal with operations
 		const editProposal = {
 			name: "Production Space",
-			author: "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd",
+			author: "0xabcdefabcdefabcdefabcdefabcdefabcdefabcd" as `0x${string}`,
 			ops: [
 				{
-					type: "entity",
+					type: "UPDATE_ENTITY" as const,
 					entity: {
-						id: new Uint8Array([1, 2, 3, 4]),
-						name: "TestEntity"
+						id: Id.Id("test-entity-id"),
+						name: "TestEntity",
+						values: []
 					}
 				}
 			]
@@ -59,7 +61,7 @@ describe("generateEditFormData", () => {
 	it("should preserve the encoded content size", async () => {
 		const editProposal = {
 			name: "Integrity Test Space",
-			author: "0x5555555555555555555555555555555555555555",
+			author: "0x5555555555555555555555555555555555555555" as `0x${string}`,
 			ops: []
 		}
 		
