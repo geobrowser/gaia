@@ -1,0 +1,65 @@
+name: API Integration Tests
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'api/**'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'api/**'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./api
+    
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: test
+          POSTGRES_USER: test
+          POSTGRES_PASSWORD: test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: latest
+      
+      - name: Install dependencies
+        run: bun install
+      
+      - name: Setup test database
+        run: bun run scripts/setup-test-db.ts
+        env:
+          DATABASE_URL: "postgresql://test:test@localhost:5432/test"
+          IPFS_KEY: "test-key"
+          IPFS_GATEWAY_WRITE: "https://ipfs.io"
+          RPC_ENDPOINT: "https://rpc.testnet.example.com"
+          CHAIN_ID: "80451"
+          DEPLOYER_PK: "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
+      
+      - name: Run integration tests
+        run: bun run test src/kg/__tests__/
+        env:
+          DATABASE_URL: "postgresql://test:test@localhost:5432/test"
+          IPFS_KEY: "test-key"
+          IPFS_GATEWAY_WRITE: "https://ipfs.io"
+          RPC_ENDPOINT: "https://rpc.testnet.example.com"
+          CHAIN_ID: "80451"
+          DEPLOYER_PK: "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef"
