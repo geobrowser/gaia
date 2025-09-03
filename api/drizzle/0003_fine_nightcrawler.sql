@@ -384,19 +384,19 @@ RETURNS SETOF entities AS $$
     CASE WHEN sort_direction = 'ASC' THEN
       CASE 
         WHEN property_type = 'String' THEN string
-        WHEN property_type = 'Number' THEN number::text
         WHEN property_type = 'Boolean' THEN boolean::text
         WHEN property_type = 'Time' THEN time
         WHEN property_type = 'Point' THEN point
       END
     END ASC,
+    CASE WHEN sort_direction = 'ASC' AND property_type = 'Number' THEN number::numeric END ASC,
     CASE WHEN sort_direction = 'DESC' THEN
       CASE 
         WHEN property_type = 'String' THEN string
-        WHEN property_type = 'Number' THEN number::text
         WHEN property_type = 'Boolean' THEN boolean::text
         WHEN property_type = 'Time' THEN time
         WHEN property_type = 'Point' THEN point
       END
-    END DESC;
+    END DESC,
+    CASE WHEN sort_direction = 'DESC' AND property_type = 'Number' THEN number::numeric END DESC;
 $$ LANGUAGE sql STABLE;

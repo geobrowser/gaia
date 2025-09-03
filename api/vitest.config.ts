@@ -11,7 +11,7 @@ export default defineConfig({
 		exclude: ["node_modules", "dist", ".git", ".cache"],
 		setupFiles: ["./src/test-setup.ts"],
 		env: {
-			DATABASE_URL: "postgresql://test:test@localhost:5432/test",
+			DATABASE_URL: process.env.DATABASE_URL || "postgresql://localhost:5432/gaia",
 			IPFS_KEY: "test-key",
 			IPFS_GATEWAY_WRITE: "https://ipfs.io",
 			RPC_ENDPOINT: "https://rpc.testnet.example.com",
