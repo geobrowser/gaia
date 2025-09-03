@@ -330,3 +330,78 @@ COMMENT ON CONSTRAINT members_address_space_id_pk ON MEMBERS IS E'@omit';
 COMMENT ON CONSTRAINT editors_address_space_id_pk ON EDITORS IS E'@omit';
 
 COMMENT ON TABLE ipfs_cache IS E'@omit';
+
+-- Custom query function to order entities by property value
+CREATE OR REPLACE FUNCTION entities_ordered_by_property(
+  property_id uuid,
+  space_id uuid DEFAULT NULL,
+  ascending boolean DEFAULT true,
+  max_results integer DEFAULT 100
+)
+RETURNS SETOF entities AS $$
+  WITH entity_values AS (
+    SELECT 
+      e.id,
+      e.created_at,
+      e.created_at_block,
+      e.updated_at,
+      e.updated_at_block,
+      ROW_NUMBER() OVER (
+        PARTITION BY e.id 
+        ORDER BY 
+          CASE WHEN ascending THEN
+            CASE p.type
+              WHEN 'String' THEN v.string
+              WHEN 'Number' THEN v.number::text
+              WHEN 'Boolean' THEN v.boolean::text
+              WHEN 'Time' THEN v.time
+              WHEN 'Point' THEN v.point
+              WHEN 'Relation' THEN v.string
+              ELSE v.string
+            END
+          END ASC,
+          CASE WHEN NOT ascending THEN
+            CASE p.type
+              WHEN 'String' THEN v.string
+              WHEN 'Number' THEN v.number::text
+              WHEN 'Boolean' THEN v.boolean::text
+              WHEN 'Time' THEN v.time
+              WHEN 'Point' THEN v.point
+              WHEN 'Relation' THEN v.string
+              ELSE v.string
+            END
+          END DESC
+      ) as rn,
+      CASE p.type
+        WHEN 'String' THEN v.string
+        WHEN 'Number' THEN v.number::text
+        WHEN 'Boolean' THEN v.boolean::text
+        WHEN 'Time' THEN v.time
+        WHEN 'Point' THEN v.point
+        WHEN 'Relation' THEN v.string
+        ELSE v.string
+      END as sort_value
+    FROM entities e
+    INNER JOIN values v ON e.id = v.entity_id
+    INNER JOIN properties p ON v.property_id = p.id
+    WHERE v.property_id = property_id
+      AND (space_id IS NULL OR v.space_id = space_id)
+      AND CASE p.type
+        WHEN 'String' THEN v.string IS NOT NULL
+        WHEN 'Number' THEN v.number IS NOT NULL
+        WHEN 'Boolean' THEN v.boolean IS NOT NULL
+        WHEN 'Time' THEN v.time IS NOT NULL
+        WHEN 'Point' THEN v.point IS NOT NULL
+        WHEN 'Relation' THEN v.string IS NOT NULL
+        ELSE v.string IS NOT NULL
+      END
+  )
+  SELECT id, created_at, created_at_block, updated_at, updated_at_block
+  FROM entity_values
+  WHERE rn = 1
+  ORDER BY 
+    CASE WHEN ascending THEN sort_value END ASC,
+    CASE WHEN NOT ascending THEN sort_value END DESC,
+    id
+  LIMIT max_results;
+$$ LANGUAGE sql STABLE;
