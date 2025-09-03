@@ -158,7 +158,7 @@ describe("property helper functions", () => {
 			`)
 
 			expect(result.rows).toHaveLength(1)
-			expect(typeof result.rows[0].name === 'string' || result.rows[0].name === null).toBe(true)
+			expect(typeof result.rows[0]?.name === 'string' || result.rows[0]?.name === null).toBe(true)
 		})
 
 		it("should return name when property has name value", async () => {
@@ -169,7 +169,7 @@ describe("property helper functions", () => {
 			`)
 
 			expect(result.rows).toHaveLength(1)
-			expect(result.rows[0].name).toBe('Test Property Name')
+			expect(result.rows[0]?.name).toBe('Test Property Name')
 		})
 	})
 
@@ -182,7 +182,7 @@ describe("property helper functions", () => {
 			`)
 
 			expect(result.rows).toHaveLength(1)
-			expect(typeof result.rows[0].description === 'string' || result.rows[0].description === null).toBe(true)
+			expect(typeof result.rows[0]?.description === 'string' || result.rows[0]?.description === null).toBe(true)
 		})
 
 		it("should return description when property has description value", async () => {
@@ -193,7 +193,7 @@ describe("property helper functions", () => {
 			`)
 
 			expect(result.rows).toHaveLength(1)
-			expect(result.rows[0].description).toBe('Test Property Description')
+			expect(result.rows[0]?.description).toBe('Test Property Description')
 		})
 	})
 
@@ -207,7 +207,7 @@ describe("property helper functions", () => {
 
 			expect(result.rows).toHaveLength(1)
 			// Should return UUID string or null
-			const renderableType = result.rows[0].renderable_type
+			const renderableType = result.rows[0]?.renderable_type
 			expect(typeof renderableType === 'string' || renderableType === null).toBe(true)
 		})
 
@@ -219,7 +219,7 @@ describe("property helper functions", () => {
 			`)
 
 			expect(result.rows).toHaveLength(1)
-			expect(result.rows[0].renderable_type).toBe(testRenderableTypeId)
+			expect(result.rows[0]?.renderable_type).toBe(testRenderableTypeId)
 		})
 
 		it("should return null for system name property", async () => {
@@ -237,7 +237,7 @@ describe("property helper functions", () => {
 			`)
 
 			expect(result.rows).toHaveLength(1)
-			expect(result.rows[0].renderable_type).toBeNull()
+			expect(result.rows[0]?.renderable_type).toBeNull()
 		})
 
 		it("should return null for system description property", async () => {
@@ -255,7 +255,7 @@ describe("property helper functions", () => {
 			`)
 
 			expect(result.rows).toHaveLength(1)
-			expect(result.rows[0].renderable_type).toBeNull()
+			expect(result.rows[0]?.renderable_type).toBeNull()
 		})
 	})
 
@@ -269,7 +269,7 @@ describe("property helper functions", () => {
 
 			expect(result.rows).toHaveLength(1)
 			// Should return UUID string or null
-			const unit = result.rows[0].unit
+			const unit = result.rows[0]?.unit
 			expect(typeof unit === 'string' || unit === null).toBe(true)
 		})
 
@@ -281,7 +281,7 @@ describe("property helper functions", () => {
 			`)
 
 			expect(result.rows).toHaveLength(1)
-			expect(result.rows[0].unit).toBe(testUnitId)
+			expect(result.rows[0]?.unit).toBe(testUnitId)
 		})
 	})
 
@@ -294,7 +294,7 @@ describe("property helper functions", () => {
 			`)
 
 			expect(result.rows).toHaveLength(1)
-			expect(typeof result.rows[0].format === 'string' || result.rows[0].format === null).toBe(true)
+			expect(typeof result.rows[0]?.format === 'string' || result.rows[0]?.format === null).toBe(true)
 		})
 
 		it("should return format when property has format value", async () => {
@@ -305,7 +305,7 @@ describe("property helper functions", () => {
 			`)
 
 			expect(result.rows).toHaveLength(1)
-			expect(result.rows[0].format).toBe('Test Format')
+			expect(result.rows[0]?.format).toBe('Test Format')
 		})
 	})
 
@@ -329,7 +329,7 @@ describe("property helper functions", () => {
 			`)
 
 			expect(result.rows).toHaveLength(1)
-			expect(result.rows[0].value_type_id).toBe(testRelationValueTypeId)
+			expect(result.rows[0]?.value_type_id).toBe(testRelationValueTypeId)
 		})
 
 		it("should return empty for system name property", async () => {
@@ -376,7 +376,7 @@ describe("property helper functions", () => {
 			`)
 
 			expect(result.rows).toHaveLength(1)
-			expect(Array.isArray(result.rows[0].value_type_ids) || result.rows[0].value_type_ids === null).toBe(true)
+			expect(Array.isArray(result.rows[0]?.value_type_ids) || result.rows[0]?.value_type_ids === null).toBe(true)
 		})
 
 		it("should return relation value type ids for relation property", async () => {
@@ -387,8 +387,8 @@ describe("property helper functions", () => {
 			`)
 
 			expect(result.rows).toHaveLength(1)
-			expect(Array.isArray(result.rows[0].value_type_ids)).toBe(true)
-			expect(result.rows[0].value_type_ids).toContain(testRelationValueTypeId)
+			expect(Array.isArray(result.rows[0]?.value_type_ids)).toBe(true)
+			expect(result.rows[0]?.value_type_ids).toContain(testRelationValueTypeId)
 		})
 
 		it("should return null for system name property", async () => {
@@ -406,7 +406,7 @@ describe("property helper functions", () => {
 			`)
 
 			expect(result.rows).toHaveLength(1)
-			expect(result.rows[0].value_type_ids).toBeNull()
+			expect(result.rows[0]?.value_type_ids).toBeNull()
 		})
 
 		it("should return null for system description property", async () => {
@@ -424,7 +424,7 @@ describe("property helper functions", () => {
 			`)
 
 			expect(result.rows).toHaveLength(1)
-			expect(result.rows[0].value_type_ids).toBeNull()
+			expect(result.rows[0]?.value_type_ids).toBeNull()
 		})
 	})
 })
