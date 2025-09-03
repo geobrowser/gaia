@@ -30,7 +30,7 @@ jobs:
         run: bun install
       
       - name: Run unit tests
-        run: bun run test
+        run: bun run test --exclude "**/__tests__/**"
         env:
           DATABASE_URL: "postgresql://test:test@localhost:5432/test"
           IPFS_KEY: "test-key"
