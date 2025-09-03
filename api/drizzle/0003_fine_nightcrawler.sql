@@ -335,36 +335,51 @@ COMMENT ON TABLE ipfs_cache IS E'@omit';
 CREATE OR REPLACE FUNCTION entities_ordered_by_property(
   property_id uuid,
   space_id uuid DEFAULT NULL,
-  ascending boolean DEFAULT true,
-  max_results integer DEFAULT 100
+  ascending boolean DEFAULT true
 )
 RETURNS SETOF entities AS $$
-  SELECT 
-    e.id,
-    e.created_at,
-    e.created_at_block,
-    e.updated_at,
-    e.updated_at_block
-  FROM entities e
-  WHERE EXISTS (
-    SELECT 1
-    FROM values v
+  WITH filtered_entities AS (
+    SELECT DISTINCT
+      e.id,
+      e.created_at,
+      e.created_at_block,
+      e.updated_at,
+      e.updated_at_block,
+      p.type as property_type,
+      v.string,
+      v.number,
+      v.boolean,
+      v.time,
+      v.point
+    FROM entities e
+    INNER JOIN values v ON v.entity_id = e.id
     INNER JOIN properties p ON v.property_id = p.id
-    WHERE v.entity_id = e.id
-      AND v.property_id = property_id
-      AND (space_id IS NULL OR v.space_id = space_id)
-      AND p.type = 'Time'
-      AND v.time IS NOT NULL
+    WHERE v.property_id = entities_ordered_by_property.property_id
+      AND (entities_ordered_by_property.space_id IS NULL OR v.space_id = entities_ordered_by_property.space_id)
+      AND (
+        (p.type = 'String' AND v.string IS NOT NULL AND trim(v.string) != '') OR
+        (p.type = 'Number' AND v.number IS NOT NULL) OR
+        (p.type = 'Boolean' AND v.boolean IS NOT NULL) OR
+        (p.type = 'Time' AND v.time IS NOT NULL AND trim(v.time) != '') OR
+        (p.type = 'Point' AND v.point IS NOT NULL AND trim(v.point) != '') OR
+        (p.type = 'Relation' AND v.string IS NOT NULL AND trim(v.string) != '')
+      )
   )
-  ORDER BY (
-    SELECT v.time
-    FROM values v
-    INNER JOIN properties p ON v.property_id = p.id
-    WHERE v.entity_id = e.id
-      AND v.property_id = property_id
-      AND p.type = 'Time'
-      AND v.time IS NOT NULL
-    LIMIT 1
-  ) ASC
-  LIMIT max_results;
+  SELECT 
+    id,
+    created_at,
+    created_at_block,
+    updated_at,
+    updated_at_block
+  FROM filtered_entities
+  ORDER BY 
+    CASE 
+      WHEN property_type = 'String' THEN string
+      WHEN property_type = 'Number' THEN number::text
+      WHEN property_type = 'Boolean' THEN boolean::text
+      WHEN property_type = 'Time' THEN time
+      WHEN property_type = 'Point' THEN point
+      WHEN property_type = 'Relation' THEN string
+      ELSE string
+    END ASC;
 $$ LANGUAGE sql STABLE;
