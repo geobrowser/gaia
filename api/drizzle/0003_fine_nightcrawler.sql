@@ -331,8 +331,13 @@ COMMENT ON CONSTRAINT editors_address_space_id_pk ON EDITORS IS E'@omit';
 
 COMMENT ON TABLE ipfs_cache IS E'@omit';
 
--- Create enum for sort order
-CREATE TYPE sort_order AS ENUM ('ASC', 'DESC');
+-- Create enum for sort order if it doesn't exist
+DO $$ 
+BEGIN
+    IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'sort_order') THEN
+        CREATE TYPE sort_order AS ENUM ('ASC', 'DESC');
+    END IF;
+END $$;
 
 -- Custom query function to order entities by property value  
 CREATE OR REPLACE FUNCTION entities_ordered_by_property(
