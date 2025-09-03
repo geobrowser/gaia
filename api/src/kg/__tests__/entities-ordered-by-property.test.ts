@@ -133,6 +133,7 @@ describe("entities_ordered_by_property integration tests", () => {
 			}
 			if (value.boolean !== undefined) {
 				columns.push('boolean')
+				// @ts-expect-error idk
 				values.push(value.boolean)
 				placeholders.push(`$${values.length}`)
 			}
