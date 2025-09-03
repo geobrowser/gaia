@@ -331,11 +331,14 @@ COMMENT ON CONSTRAINT editors_address_space_id_pk ON EDITORS IS E'@omit';
 
 COMMENT ON TABLE ipfs_cache IS E'@omit';
 
+-- Create enum for sort order
+CREATE TYPE sort_order AS ENUM ('ASC', 'DESC');
+
 -- Custom query function to order entities by property value  
 CREATE OR REPLACE FUNCTION entities_ordered_by_property(
   property_id uuid,
   space_id uuid DEFAULT NULL,
-  ascending boolean DEFAULT true
+  sort_direction sort_order DEFAULT 'ASC'
 )
 RETURNS SETOF entities AS $$
   WITH filtered_entities AS (
@@ -362,7 +365,7 @@ RETURNS SETOF entities AS $$
         (p.type = 'Boolean' AND v.boolean IS NOT NULL) OR
         (p.type = 'Time' AND v.time IS NOT NULL AND trim(v.time) != '') OR
         (p.type = 'Point' AND v.point IS NOT NULL AND trim(v.point) != '') OR
-        (p.type = 'Relation' AND v.string IS NOT NULL AND trim(v.string) != '')
+        (p.type = 'Relation' AND FALSE)
       )
   )
   SELECT 
@@ -373,13 +376,22 @@ RETURNS SETOF entities AS $$
     updated_at_block
   FROM filtered_entities
   ORDER BY 
-    CASE 
-      WHEN property_type = 'String' THEN string
-      WHEN property_type = 'Number' THEN number::text
-      WHEN property_type = 'Boolean' THEN boolean::text
-      WHEN property_type = 'Time' THEN time
-      WHEN property_type = 'Point' THEN point
-      WHEN property_type = 'Relation' THEN string
-      ELSE string
-    END ASC;
+    CASE WHEN sort_direction = 'ASC' THEN
+      CASE 
+        WHEN property_type = 'String' THEN string
+        WHEN property_type = 'Number' THEN number::text
+        WHEN property_type = 'Boolean' THEN boolean::text
+        WHEN property_type = 'Time' THEN time
+        WHEN property_type = 'Point' THEN point
+      END
+    END ASC,
+    CASE WHEN sort_direction = 'DESC' THEN
+      CASE 
+        WHEN property_type = 'String' THEN string
+        WHEN property_type = 'Number' THEN number::text
+        WHEN property_type = 'Boolean' THEN boolean::text
+        WHEN property_type = 'Time' THEN time
+        WHEN property_type = 'Point' THEN point
+      END
+    END DESC;
 $$ LANGUAGE sql STABLE;
