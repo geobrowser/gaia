@@ -1,10 +1,12 @@
-name: Build
+name: Indexer Check
 
 on:
   push:
     branches: [main]
+    paths: [indexer/**]
   pull_request:
     branches: [main]
+    paths: [indexer/**]
 
 env:
   CARGO_TERM_COLOR: always
@@ -17,6 +19,9 @@ jobs:
         os: [ubuntu-latest]
         rust: [stable]
     runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        working-directory: ./indexer
 
     steps:
       - uses: actions/checkout@v3
@@ -29,6 +34,8 @@ jobs:
 
       - name: Cache Dependencies
         uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ./indexer
 
       - name: Build
         run: cargo build --verbose --workspace
