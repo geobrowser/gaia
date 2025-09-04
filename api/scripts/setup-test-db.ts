@@ -38,6 +38,19 @@ async function setupTestDatabase() {
 			process.exit(1)
 		}
 
+		console.log("🔧 Running SQL functions script...")
+		const fnResult = await $`./scripts/migrate-custom.sh`.env({
+			DATABASE_URL: databaseUrl,
+		})
+
+		if (fnResult.exitCode === 0) {
+			console.log("✅ SQL functions applied successfully")
+		} else {
+			console.error("❌ Failed to apply SQL functions")
+			console.error(fnResult.stderr.toString())
+			process.exit(1)
+		}
+
 		// Verify schema by checking if tables exist
 		console.log("🔍 Verifying schema...")
 		const verifyPool = new Pool({connectionString: databaseUrl})
