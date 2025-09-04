@@ -5,11 +5,17 @@ on:
     branches: [ main, develop ]
     paths:
       - 'indexer/**'
+      - 'stream/**'
+      - 'wire/**'
+      - 'indexer_utils/**'
       - '.github/workflows/indexer-unit-tests.yml'
   pull_request:
     branches: [ main, develop ]
     paths:
       - 'indexer/**'
+      - 'stream/**'
+      - 'wire/**'
+      - 'indexer_utils/**'
       - '.github/workflows/indexer-unit-tests.yml'
 
 env:

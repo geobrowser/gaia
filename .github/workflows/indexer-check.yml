@@ -3,10 +3,10 @@ name: Indexer Check
 on:
   push:
     branches: [main]
-    paths: [indexer/**]
+    paths: [indexer/**, stream/**, wire/**, indexer_utils/**]
   pull_request:
     branches: [main]
-    paths: [indexer/**]
+    paths: [indexer/**, stream/**, wire/**, indexer_utils/**]
 
 env:
   CARGO_TERM_COLOR: always

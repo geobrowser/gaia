@@ -5,10 +5,16 @@ on:
     branches: [main, develop]
     paths:
       - "indexer/**"
+      - "stream/**"
+      - "wire/**"
+      - "indexer_utils/**"
   pull_request:
     branches: [main, develop]
     paths:
       - "indexer/**"
+      - "stream/**"
+      - "wire/**"
+      - "indexer_utils/**"
   workflow_dispatch:
 
 jobs:
