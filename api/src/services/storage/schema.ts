@@ -253,6 +253,23 @@ export const editors = pgTable(
 	],
 );
 
+export const subspaces = pgTable(
+	"subspaces",
+	{
+		parentSpaceId: uuid()
+			.notNull()
+			.references(() => spaces.id),
+		childSpaceId: uuid()
+			.notNull()
+			.references(() => spaces.id),
+	},
+	(table) => [
+		primaryKey({ columns: [table.parentSpaceId, table.childSpaceId] }),
+		index("subspaces_parent_space_id_idx").on(table.parentSpaceId),
+		index("subspaces_child_space_id_idx").on(table.childSpaceId),
+	],
+);
+
 export const entityForeignValues = drizzleRelations(
 	entities,
 	({ many, one }) => ({
@@ -339,9 +356,28 @@ export const editorsRelations = drizzleRelations(editors, ({ one }) => ({
 	}),
 }));
 
+export const subspacesRelations = drizzleRelations(subspaces, ({ one }) => ({
+	parentSpace: one(spaces, {
+		fields: [subspaces.parentSpaceId],
+		references: [spaces.id],
+		relationName: "parentSpace",
+	}),
+	childSpace: one(spaces, {
+		fields: [subspaces.childSpaceId],
+		references: [spaces.id],
+		relationName: "childSpace",
+	}),
+}));
+
 export const spacesRelations = drizzleRelations(spaces, ({ many }) => ({
 	members: many(members),
 	editors: many(editors),
+	parentSpaces: many(subspaces, {
+		relationName: "childSpace",
+	}),
+	childSpaces: many(subspaces, {
+		relationName: "parentSpace",
+	}),
 }));
 
 export type IpfsCacheItem = InferSelectModel<typeof ipfsCache>;
@@ -350,6 +386,7 @@ export type DbProperty = InferSelectModel<typeof values>;
 export type DbRelations = InferSelectModel<typeof relations>;
 export type DbMember = InferSelectModel<typeof members>;
 export type DbEditor = InferSelectModel<typeof editors>;
+export type DbSubspace = InferSelectModel<typeof subspaces>;
 
 /** Actions Schema definitions */
 
