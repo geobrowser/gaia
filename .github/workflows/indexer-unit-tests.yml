@@ -8,7 +8,6 @@ on:
       - 'stream/**'
       - 'wire/**'
       - 'indexer_utils/**'
-      - '.github/workflows/indexer-unit-tests.yml'
   pull_request:
     branches: [ main, develop ]
     paths:
@@ -16,7 +15,6 @@ on:
       - 'stream/**'
       - 'wire/**'
       - 'indexer_utils/**'
-      - '.github/workflows/indexer-unit-tests.yml'
 
 env:
   CARGO_TERM_COLOR: always
