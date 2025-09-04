@@ -11,7 +11,7 @@
 		"check": "tsc --noEmit",
 		"db:setup": "bun run scripts/setup-test-db.ts",
 		"db:generate": "bun drizzle-kit generate",
-		"db:migrate": "bun drizzle-kit migrate && scripts/migrate-fns.sh"
+		"db:migrate": "bun drizzle-kit migrate && scripts/migrate-custom.sh"
 	},
 	"author": "Byron Guina",
 	"license": "ISC",
