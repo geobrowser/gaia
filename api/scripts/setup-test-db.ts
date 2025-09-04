@@ -26,7 +26,7 @@ async function setupTestDatabase() {
 
 		// Run migrations using drizzle-kit
 		console.log("📋 Running database migrations...")
-		const result = await $`bun run db:migrate`.env({
+		const result = await $`bun drizzle-kit push`.env({
 			DATABASE_URL: databaseUrl,
 		})
 
