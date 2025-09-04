@@ -69,6 +69,18 @@ cargo run -p indexer
 
 If done correctly you should see the indexer begin processing the knowledge graph events sequentially.
 
+### Running the actions indexer
+
+The actions indexer processes all knowledge graph onchain actions. Currently the only action implemented is entity curation/voting.
+
+To run the actions indexer, run the following commands:
+
+```sh
+cargo run -p actions-indexer
+# or with the --release flag to run in "production" mode
+# cargo run -p indexer --release
+```
+
 ### Other indexers
 
 Currently only the knowledge graph indexer is implemented, but in the near future there will be other indexers for processing governance events or managing the knowledge graph's history.
