@@ -64,8 +64,8 @@ pub struct KgData {
     pub removed_editors: Vec<RemovedMember>,
     pub added_members: Vec<AddedMember>,
     pub removed_members: Vec<RemovedMember>,
-    pub added_subspace: Vec<AddedSubspace>,
-    pub removed_subspace: Vec<RemovedSubspace>,
+    pub added_subspaces: Vec<AddedSubspace>,
+    pub removed_subspaces: Vec<RemovedSubspace>,
     // Note for now that we only need the dao address. Eventually we'll
     // index the plugin addresses as well.
     pub spaces: Vec<CreatedSpace>,

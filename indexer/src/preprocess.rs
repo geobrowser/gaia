@@ -13,8 +13,7 @@ use wire::pb::chain::GeoOutput;
 use crate::{
     cache::{postgres::PostgresCache, CacheBackend, PreprocessedEdit},
     error::IndexingError,
-    AddedMember, AddedSubspace, CreatedSpace, KgData, PersonalSpace, PublicSpace,
-    RemovedSubspace,
+    AddedMember, AddedSubspace, CreatedSpace, KgData, PersonalSpace, PublicSpace, RemovedSubspace,
 };
 
 /// Matches spaces with their corresponding plugins based on DAO address
@@ -216,8 +215,8 @@ pub async fn preprocess_block_scoped_data(
         added_members,
         removed_editors: vec![],
         removed_members: vec![],
-        added_subspace: added_subspaces,
-        removed_subspace: removed_subspaces,
+        added_subspaces,
+        removed_subspaces,
         block: block_metadata,
     })
 }
