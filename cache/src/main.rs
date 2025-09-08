@@ -92,12 +92,19 @@ impl Sink<EventData> for CacheIndexer {
 
         let block_metadata = stream::utils::block_metadata(block_data);
 
+        let block_timestamp_seconds: i64 = block_metadata.timestamp.parse().unwrap_or(0);
+        let block_datetime = chrono::DateTime::from_timestamp(block_timestamp_seconds, 0)
+            .unwrap_or_else(|| chrono::Utc::now())
+            .with_timezone(&chrono::Local);
+        let drift_str = stream::utils::format_drift(&block_metadata);
+
         println!(
-            "Block #{} - Payload {} ({} bytes) - Drift {}s – Edits Published {}",
+            "Processing Block #{} [{}] - Payload {} ({} bytes) - Drift {} – Edits Published {}",
             block_metadata.block_number,
+            block_datetime.format("%Y-%m-%d %H:%M:%S"),
             output.type_url.replace("type.googleapis.com/", ""),
             output.value.len(),
-            block_metadata.timestamp,
+            drift_str,
             geo.edits_published.len()
         );
 
