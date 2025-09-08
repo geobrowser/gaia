@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
-use stream::utils::BlockMetadata;
+use chrono::{DateTime, Local, Utc};
+use stream::utils::{self, BlockMetadata};
 
 use crate::block_handler::{
     edit_handler, membership_handler, space_handler, subspace_handler, utils::handle_task_result,
@@ -21,9 +22,17 @@ where
     S: StorageBackend + Send + Sync + 'static,
     C: ImmutableCache + Send + Sync + 'static,
 {
+    let block_timestamp_seconds: i64 = block_metadata.timestamp.parse().unwrap_or(0);
+    let block_datetime = DateTime::from_timestamp(block_timestamp_seconds, 0)
+        .unwrap_or_else(|| Utc::now());
+    let block_datetime_local = block_datetime.with_timezone(&Local);
+    let drift_str = utils::format_drift(block_metadata);
+
     println!(
-        "Block #{} – Drift {}s",
-        block_metadata.block_number, block_metadata.timestamp,
+        "Processing Block #{} [{}] – Drift {}",
+        block_metadata.block_number,
+        block_datetime_local.format("%Y-%m-%d %H:%M:%S"),
+        drift_str,
     );
 
     let space_task = {
