@@ -13,7 +13,8 @@ use wire::pb::chain::GeoOutput;
 use crate::{
     cache::{postgres::PostgresCache, CacheBackend, PreprocessedEdit},
     error::IndexingError,
-    AddedMember, CreatedSpace, KgData, PersonalSpace, PublicSpace,
+    AddedMember, AddedSubspace, CreatedSpace, KgData, PersonalSpace, PublicSpace,
+    RemovedSubspace,
 };
 
 /// Matches spaces with their corresponding plugins based on DAO address
@@ -89,6 +90,30 @@ pub fn map_members_added(members: &[wire::pb::chain::MemberAdded]) -> Vec<AddedM
         .map(|e| AddedMember {
             dao_address: e.dao_address.clone(),
             editor_address: e.member_address.clone(),
+        })
+        .collect()
+}
+
+/// Maps subspace added events to AddedSubspace structs
+pub fn map_subspaces_added(subspaces: &[wire::pb::chain::SubspaceAdded]) -> Vec<AddedSubspace> {
+    subspaces
+        .iter()
+        .map(|s| AddedSubspace {
+            dao_address: s.dao_address.clone(),
+            editor_address: s.subspace.clone(),
+        })
+        .collect()
+}
+
+/// Maps subspace removed events to RemovedSubspace structs
+pub fn map_subspaces_removed(
+    subspaces: &[wire::pb::chain::SubspaceRemoved],
+) -> Vec<RemovedSubspace> {
+    subspaces
+        .iter()
+        .map(|s| RemovedSubspace {
+            dao_address: s.dao_address.clone(),
+            editor_address: s.subspace.clone(),
         })
         .collect()
 }
@@ -181,6 +206,9 @@ pub async fn preprocess_block_scoped_data(
         }
     }
 
+    let added_subspaces = map_subspaces_added(&geo.subspaces_added);
+    let removed_subspaces = map_subspaces_removed(&geo.subspaces_removed);
+
     Ok(KgData {
         edits: final_edits,
         spaces: created_spaces,
@@ -188,6 +216,8 @@ pub async fn preprocess_block_scoped_data(
         added_members,
         removed_editors: vec![],
         removed_members: vec![],
+        added_subspace: added_subspaces,
+        removed_subspace: removed_subspaces,
         block: block_metadata,
     })
 }
@@ -261,6 +291,30 @@ mod tests {
             dao_address: dao_address.to_string(),
             member_address: member_address.to_string(),
             main_voting_plugin_address: "voting_plugin".to_string(),
+            change_type: "0".to_string(),
+        }
+    }
+
+    fn create_test_subspace_added(
+        dao_address: &str,
+        subspace: &str,
+    ) -> wire::pb::chain::SubspaceAdded {
+        wire::pb::chain::SubspaceAdded {
+            dao_address: dao_address.to_string(),
+            subspace: subspace.to_string(),
+            plugin_address: "plugin".to_string(),
+            change_type: "0".to_string(),
+        }
+    }
+
+    fn create_test_subspace_removed(
+        dao_address: &str,
+        subspace: &str,
+    ) -> wire::pb::chain::SubspaceRemoved {
+        wire::pb::chain::SubspaceRemoved {
+            dao_address: dao_address.to_string(),
+            subspace: subspace.to_string(),
+            plugin_address: "plugin".to_string(),
             change_type: "0".to_string(),
         }
     }
@@ -657,5 +711,75 @@ mod tests {
         assert!(!added_members
             .iter()
             .any(|m| m.dao_address == "dao3" && m.editor_address == "editor4"));
+    }
+
+    #[test]
+    fn test_map_subspaces_added_empty() {
+        let subspaces = vec![];
+        let result = map_subspaces_added(&subspaces);
+        assert_eq!(result.len(), 0);
+    }
+
+    #[test]
+    fn test_map_subspaces_added_single() {
+        let subspaces = vec![create_test_subspace_added("dao1", "subspace1")];
+        let result = map_subspaces_added(&subspaces);
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].dao_address, "dao1");
+        assert_eq!(result[0].editor_address, "subspace1");
+    }
+
+    #[test]
+    fn test_map_subspaces_added_multiple() {
+        let subspaces = vec![
+            create_test_subspace_added("dao1", "subspace1"),
+            create_test_subspace_added("dao2", "subspace2"),
+            create_test_subspace_added("dao1", "subspace3"),
+        ];
+        let result = map_subspaces_added(&subspaces);
+
+        assert_eq!(result.len(), 3);
+        assert_eq!(result[0].dao_address, "dao1");
+        assert_eq!(result[0].editor_address, "subspace1");
+        assert_eq!(result[1].dao_address, "dao2");
+        assert_eq!(result[1].editor_address, "subspace2");
+        assert_eq!(result[2].dao_address, "dao1");
+        assert_eq!(result[2].editor_address, "subspace3");
+    }
+
+    #[test]
+    fn test_map_subspaces_removed_empty() {
+        let subspaces = vec![];
+        let result = map_subspaces_removed(&subspaces);
+        assert_eq!(result.len(), 0);
+    }
+
+    #[test]
+    fn test_map_subspaces_removed_single() {
+        let subspaces = vec![create_test_subspace_removed("dao1", "subspace1")];
+        let result = map_subspaces_removed(&subspaces);
+
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].dao_address, "dao1");
+        assert_eq!(result[0].editor_address, "subspace1");
+    }
+
+    #[test]
+    fn test_map_subspaces_removed_multiple() {
+        let subspaces = vec![
+            create_test_subspace_removed("dao1", "subspace1"),
+            create_test_subspace_removed("dao2", "subspace2"),
+            create_test_subspace_removed("dao1", "subspace3"),
+        ];
+        let result = map_subspaces_removed(&subspaces);
+
+        assert_eq!(result.len(), 3);
+        assert_eq!(result[0].dao_address, "dao1");
+        assert_eq!(result[0].editor_address, "subspace1");
+        assert_eq!(result[1].dao_address, "dao2");
+        assert_eq!(result[1].editor_address, "subspace2");
+        assert_eq!(result[2].dao_address, "dao1");
+        assert_eq!(result[2].editor_address, "subspace3");
     }
 }

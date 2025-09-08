@@ -45,6 +45,18 @@ pub struct RemovedMember {
 }
 
 #[derive(Clone, Debug)]
+pub struct AddedSubspace {
+    pub dao_address: String,
+    pub editor_address: String,
+}
+
+#[derive(Clone, Debug)]
+pub struct RemovedSubspace {
+    pub dao_address: String,
+    pub editor_address: String,
+}
+
+#[derive(Clone, Debug)]
 pub struct KgData {
     pub block: BlockMetadata,
     pub edits: Vec<PreprocessedEdit>,
@@ -52,6 +64,8 @@ pub struct KgData {
     pub removed_editors: Vec<RemovedMember>,
     pub added_members: Vec<AddedMember>,
     pub removed_members: Vec<RemovedMember>,
+    pub added_subspace: Vec<AddedSubspace>,
+    pub removed_subspace: Vec<RemovedSubspace>,
     // Note for now that we only need the dao address. Eventually we'll
     // index the plugin addresses as well.
     pub spaces: Vec<CreatedSpace>,
