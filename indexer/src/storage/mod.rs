@@ -12,6 +12,7 @@ use crate::models::{
     properties::PropertyItem,
     relations::{SetRelationItem, UnsetRelationItem, UpdateRelationItem},
     spaces::SpaceItem,
+    subspaces::SubspaceItem,
     values::ValueOp,
 };
 
@@ -89,6 +90,16 @@ pub trait StorageBackend: Send + Sync {
     async fn remove_editors(
         &self,
         editors: &Vec<EditorItem>,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    ) -> Result<(), StorageError>;
+    async fn insert_subspaces(
+        &self,
+        subspaces: &Vec<SubspaceItem>,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    ) -> Result<(), StorageError>;
+    async fn remove_subspaces(
+        &self,
+        subspaces: &Vec<SubspaceItem>,
         tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     ) -> Result<(), StorageError>;
 }

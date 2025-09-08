@@ -3,7 +3,7 @@ use std::sync::Arc;
 use stream::utils::BlockMetadata;
 
 use crate::block_handler::{
-    edit_handler, membership_handler, space_handler, utils::handle_task_result,
+    edit_handler, membership_handler, space_handler, subspace_handler, utils::handle_task_result,
 };
 use crate::cache::properties_cache::ImmutableCache;
 
@@ -64,12 +64,29 @@ where
         })
     };
 
-    let (space_result, edit_result, membership_result) =
-        tokio::join!(space_task, edit_task, membership_task);
+    let subspace_task = {
+        let storage = Arc::clone(storage);
+        let block_metadata = block_metadata.clone();
+        let added_subspaces = output.added_subspaces.clone();
+        let removed_subspaces = output.removed_subspaces.clone();
+        tokio::spawn(async move {
+            subspace_handler::run(
+                &added_subspaces,
+                &removed_subspaces,
+                &block_metadata,
+                &storage,
+            )
+            .await
+        })
+    };
+
+    let (space_result, edit_result, membership_result, subspace_result) =
+        tokio::join!(space_task, edit_task, membership_task, subspace_task);
 
     handle_task_result(space_result)?;
     handle_task_result(edit_result)?;
     handle_task_result(membership_result)?;
+    handle_task_result(subspace_result)?;
 
     Ok(())
 }

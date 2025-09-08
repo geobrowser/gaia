@@ -12,6 +12,7 @@ use crate::models::{
     },
     relations::{SetRelationItem, UnsetRelationItem, UpdateRelationItem},
     spaces::{SpaceItem, SpaceType},
+    subspaces::SubspaceItem,
     values::{ValueChangeType, ValueOp},
 };
 
@@ -805,6 +806,75 @@ impl StorageBackend for PostgresStorage {
             "#,
             &addresses,
             &space_ids
+        )
+        .execute(&mut **tx)
+        .await?;
+
+        Ok(())
+    }
+
+    async fn insert_subspaces(
+        &self,
+        subspaces: &Vec<SubspaceItem>,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    ) -> Result<(), StorageError> {
+        if subspaces.is_empty() {
+            return Ok(());
+        }
+
+        let mut subspace_ids: Vec<Uuid> = Vec::new();
+        let mut parent_space_ids: Vec<Uuid> = Vec::new();
+
+        for subspace in subspaces {
+            subspace_ids.push(subspace.subspace_id);
+            parent_space_ids.push(subspace.parent_space_id);
+        }
+
+        sqlx::query!(
+            r#"
+            INSERT INTO subspaces (subspace_id, parent_space_id)
+            SELECT subspace_id, parent_space_id
+            FROM UNNEST($1::uuid[], $2::uuid[])
+            AS t(subspace_id, parent_space_id)
+            ON CONFLICT (subspace_id, parent_space_id) DO NOTHING
+            "#,
+            &subspace_ids,
+            &parent_space_ids
+        )
+        .execute(&mut **tx)
+        .await?;
+
+        Ok(())
+    }
+
+    async fn remove_subspaces(
+        &self,
+        subspaces: &Vec<SubspaceItem>,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    ) -> Result<(), StorageError> {
+        if subspaces.is_empty() {
+            return Ok(());
+        }
+
+        let mut subspace_ids: Vec<Uuid> = Vec::new();
+        let mut parent_space_ids: Vec<Uuid> = Vec::new();
+
+        for subspace in subspaces {
+            subspace_ids.push(subspace.subspace_id);
+            parent_space_ids.push(subspace.parent_space_id);
+        }
+
+        sqlx::query!(
+            r#"
+            DELETE FROM subspaces
+            WHERE (subspace_id, parent_space_id) IN (
+                SELECT subspace_id, parent_space_id
+                FROM UNNEST($1::uuid[], $2::uuid[])
+                AS t(subspace_id, parent_space_id)
+            )
+            "#,
+            &subspace_ids,
+            &parent_space_ids
         )
         .execute(&mut **tx)
         .await?;
