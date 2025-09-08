@@ -19,7 +19,8 @@ use indexer::{
     models::properties::DataType,
     storage::{postgres::PostgresStorage, StorageError},
     test_utils::TestStorage,
-    AddedMember, AddedSubspace, CreatedSpace, KgData, PersonalSpace, PublicSpace, RemovedMember, RemovedSubspace,
+    AddedMember, AddedSubspace, CreatedSpace, KgData, PersonalSpace, PublicSpace, RemovedMember,
+    RemovedSubspace,
 };
 use indexer_utils::{checksum_address, id::derive_space_id, network_ids::GEO};
 use serial_test::serial;
@@ -1733,7 +1734,7 @@ async fn test_space_indexing_with_edits() -> Result<(), IndexingError> {
 fn make_added_subspace(dao_address: &str, subspace_address: &str) -> AddedSubspace {
     AddedSubspace {
         dao_address: dao_address.to_string(),
-        editor_address: subspace_address.to_string(),
+        subspace_address: subspace_address.to_string(),
     }
 }
 
@@ -1836,7 +1837,10 @@ async fn test_subspace_indexing_removed_subspaces() -> Result<(), IndexingError>
     let kg_data_add = make_kg_data_with_subspaces(2, added_subspaces, vec![]);
 
     // Then remove the subspace
-    let removed_subspaces = vec![make_removed_subspace(&parent_dao_address, &subspace_address)];
+    let removed_subspaces = vec![make_removed_subspace(
+        &parent_dao_address,
+        &subspace_address,
+    )];
     let kg_data_remove = make_kg_data_with_subspaces(3, vec![], removed_subspaces);
 
     let blocks = vec![kg_data_spaces, kg_data_add, kg_data_remove];

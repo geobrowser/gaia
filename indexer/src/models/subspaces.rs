@@ -17,9 +17,11 @@ impl SubspaceModel {
         let mut subspaces = Vec::new();
 
         for subspace in added_subspaces {
-            let parent_space_id = derive_space_id(GEO, &checksum_address(subspace.dao_address.clone()));
-            let subspace_id = derive_space_id(GEO, &checksum_address(subspace.editor_address.clone()));
-            
+            let parent_space_id =
+                derive_space_id(GEO, &checksum_address(subspace.dao_address.clone()));
+            let subspace_id =
+                derive_space_id(GEO, &checksum_address(subspace.subspace_address.clone()));
+
             subspaces.push(SubspaceItem {
                 subspace_id,
                 parent_space_id,
@@ -34,9 +36,11 @@ impl SubspaceModel {
         let mut subspaces = Vec::new();
 
         for subspace in removed_subspaces {
-            let parent_space_id = derive_space_id(GEO, &checksum_address(subspace.dao_address.clone()));
-            let subspace_id = derive_space_id(GEO, &checksum_address(subspace.editor_address.clone()));
-            
+            let parent_space_id =
+                derive_space_id(GEO, &checksum_address(subspace.dao_address.clone()));
+            let subspace_id =
+                derive_space_id(GEO, &checksum_address(subspace.editor_address.clone()));
+
             subspaces.push(SubspaceItem {
                 subspace_id,
                 parent_space_id,
@@ -63,14 +67,14 @@ mod tests {
         let added_subspaces = vec![
             AddedSubspace {
                 dao_address: "0x1234567890abcdef".to_string(),
-                editor_address: "0xfedcba0987654321".to_string(),
+                subspace_address: "0xfedcba0987654321".to_string(),
             },
             AddedSubspace {
                 dao_address: "0xaabbccddee112233".to_string(),
-                editor_address: "0x9988776655443322".to_string(),
+                subspace_address: "0x9988776655443322".to_string(),
             },
         ];
-        
+
         let result = SubspaceModel::map_added_subspaces(&added_subspaces);
         assert_eq!(result.len(), 2);
     }
@@ -84,13 +88,11 @@ mod tests {
 
     #[test]
     fn test_map_removed_subspaces() {
-        let removed_subspaces = vec![
-            RemovedSubspace {
-                dao_address: "0x1234567890abcdef".to_string(),
-                editor_address: "0xfedcba0987654321".to_string(),
-            },
-        ];
-        
+        let removed_subspaces = vec![RemovedSubspace {
+            dao_address: "0x1234567890abcdef".to_string(),
+            editor_address: "0xfedcba0987654321".to_string(),
+        }];
+
         let result = SubspaceModel::map_removed_subspaces(&removed_subspaces);
         assert_eq!(result.len(), 1);
     }

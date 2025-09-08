@@ -47,7 +47,7 @@ pub struct RemovedMember {
 #[derive(Clone, Debug)]
 pub struct AddedSubspace {
     pub dao_address: String,
-    pub editor_address: String,
+    pub subspace_address: String,
 }
 
 #[derive(Clone, Debug)]
