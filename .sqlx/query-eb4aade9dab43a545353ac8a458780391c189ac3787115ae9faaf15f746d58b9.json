@@ -1,0 +1,41 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            SELECT entity_id, space_id, upvotes, downvotes\n            FROM votes_count\n            WHERE (entity_id, space_id) IN (SELECT * FROM UNNEST($1::uuid[], $2::text[]))\n            ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "entity_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 1,
+        "name": "space_id",
+        "type_info": "Varchar"
+      },
+      {
+        "ordinal": 2,
+        "name": "upvotes",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 3,
+        "name": "downvotes",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "UuidArray",
+        "TextArray"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "eb4aade9dab43a545353ac8a458780391c189ac3787115ae9faaf15f746d58b9"
+}
