@@ -832,11 +832,11 @@ impl StorageBackend for PostgresStorage {
 
         sqlx::query!(
             r#"
-            INSERT INTO subspaces (subspace_id, parent_space_id)
-            SELECT subspace_id, parent_space_id
+            INSERT INTO subspaces (child_space_id, parent_space_id)
+            SELECT child_space_id, parent_space_id
             FROM UNNEST($1::uuid[], $2::uuid[])
-            AS t(subspace_id, parent_space_id)
-            ON CONFLICT (subspace_id, parent_space_id) DO NOTHING
+            AS t(child_space_id, parent_space_id)
+            ON CONFLICT (parent_space_id, child_space_id) DO NOTHING
             "#,
             &subspace_ids,
             &parent_space_ids
@@ -867,10 +867,10 @@ impl StorageBackend for PostgresStorage {
         sqlx::query!(
             r#"
             DELETE FROM subspaces
-            WHERE (subspace_id, parent_space_id) IN (
-                SELECT subspace_id, parent_space_id
+            WHERE (child_space_id, parent_space_id) IN (
+                SELECT child_space_id, parent_space_id
                 FROM UNNEST($1::uuid[], $2::uuid[])
-                AS t(subspace_id, parent_space_id)
+                AS t(child_space_id, parent_space_id)
             )
             "#,
             &subspace_ids,
