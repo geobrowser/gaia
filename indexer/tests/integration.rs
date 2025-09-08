@@ -1741,7 +1741,7 @@ fn make_added_subspace(dao_address: &str, subspace_address: &str) -> AddedSubspa
 fn make_removed_subspace(dao_address: &str, subspace_address: &str) -> RemovedSubspace {
     RemovedSubspace {
         dao_address: dao_address.to_string(),
-        editor_address: subspace_address.to_string(),
+        subspace_address: subspace_address.to_string(),
     }
 }
 

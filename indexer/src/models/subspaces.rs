@@ -39,7 +39,7 @@ impl SubspaceModel {
             let parent_space_id =
                 derive_space_id(GEO, &checksum_address(subspace.dao_address.clone()));
             let subspace_id =
-                derive_space_id(GEO, &checksum_address(subspace.editor_address.clone()));
+                derive_space_id(GEO, &checksum_address(subspace.subspace_address.clone()));
 
             subspaces.push(SubspaceItem {
                 subspace_id,
@@ -90,7 +90,7 @@ mod tests {
     fn test_map_removed_subspaces() {
         let removed_subspaces = vec![RemovedSubspace {
             dao_address: "0x1234567890abcdef".to_string(),
-            editor_address: "0xfedcba0987654321".to_string(),
+            subspace_address: "0xfedcba0987654321".to_string(),
         }];
 
         let result = SubspaceModel::map_removed_subspaces(&removed_subspaces);

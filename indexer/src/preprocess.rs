@@ -112,7 +112,7 @@ pub fn map_subspaces_removed(
         .iter()
         .map(|s| RemovedSubspace {
             dao_address: s.dao_address.clone(),
-            editor_address: s.subspace.clone(),
+            subspace_address: s.subspace.clone(),
         })
         .collect()
 }
@@ -761,7 +761,7 @@ mod tests {
 
         assert_eq!(result.len(), 1);
         assert_eq!(result[0].dao_address, "dao1");
-        assert_eq!(result[0].editor_address, "subspace1");
+        assert_eq!(result[0].subspace_address, "subspace1");
     }
 
     #[test]
@@ -775,10 +775,10 @@ mod tests {
 
         assert_eq!(result.len(), 3);
         assert_eq!(result[0].dao_address, "dao1");
-        assert_eq!(result[0].editor_address, "subspace1");
+        assert_eq!(result[0].subspace_address, "subspace1");
         assert_eq!(result[1].dao_address, "dao2");
-        assert_eq!(result[1].editor_address, "subspace2");
+        assert_eq!(result[1].subspace_address, "subspace2");
         assert_eq!(result[2].dao_address, "dao1");
-        assert_eq!(result[2].editor_address, "subspace3");
+        assert_eq!(result[2].subspace_address, "subspace3");
     }
 }
