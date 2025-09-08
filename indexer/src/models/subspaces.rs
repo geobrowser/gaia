@@ -66,12 +66,12 @@ mod tests {
     fn test_map_added_subspaces() {
         let added_subspaces = vec![
             AddedSubspace {
-                dao_address: "0x1234567890abcdef".to_string(),
-                subspace_address: "0xfedcba0987654321".to_string(),
+                dao_address: "0x1234567890abcdef1234567890abcdef12345678".to_string(),
+                subspace_address: "0xfedcba0987654321fedcba0987654321fedcba09".to_string(),
             },
             AddedSubspace {
-                dao_address: "0xaabbccddee112233".to_string(),
-                subspace_address: "0x9988776655443322".to_string(),
+                dao_address: "0xaabbccddee112233aabbccddee112233aabbccdd".to_string(),
+                subspace_address: "0x9988776655443322998877665544332299887766".to_string(),
             },
         ];
 
@@ -89,8 +89,8 @@ mod tests {
     #[test]
     fn test_map_removed_subspaces() {
         let removed_subspaces = vec![RemovedSubspace {
-            dao_address: "0x1234567890abcdef".to_string(),
-            subspace_address: "0xfedcba0987654321".to_string(),
+            dao_address: "0x1234567890abcdef1234567890abcdef12345678".to_string(),
+            subspace_address: "0xfedcba0987654321fedcba0987654321fedcba09".to_string(),
         }];
 
         let result = SubspaceModel::map_removed_subspaces(&removed_subspaces);
