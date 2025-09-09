@@ -97,7 +97,7 @@ where
                     }
 
                     if let Err(error) = storage.insert_properties(&properties, &mut tx).await {
-                        println!("Error writing properties: {}", error);
+                        tracing::error!("Error writing properties: {}", error);
                     }
 
                     let edit = edit.clone();
@@ -107,7 +107,7 @@ where
                     let entities = EntitiesModel::map_edit_to_entities(&edit, &block);
 
                     if let Err(error) = storage.insert_entities(&entities, &mut tx).await {
-                        eprintln!("Error writing entities: {}", error);
+                        tracing::error!("Error writing entities: {}", error);
                     }
 
                     let (created_values, deleted_values) =
@@ -122,7 +122,7 @@ where
                         .await;
 
                     if let Err(error) = write_values_result {
-                        println!("Error writing set values {}", error);
+                        tracing::error!("Error writing set values: {}", error);
                     }
 
                     let write_values_result = storage
@@ -130,7 +130,7 @@ where
                         .await;
 
                     if let Err(error) = write_values_result {
-                        println!("Error writing delete values {}", error);
+                        tracing::error!("Error writing delete values: {}", error);
                     }
 
                     let (
@@ -144,14 +144,14 @@ where
                         storage.insert_relations(&created_relations, &mut tx).await;
 
                     if let Err(write_error) = write_relations_result {
-                        println!("Error writing relations {}", write_error);
+                        tracing::error!("Error writing relations: {}", write_error);
                     }
 
                     let update_relations_result =
                         storage.update_relations(&updated_relations, &mut tx).await;
 
                     if let Err(write_error) = update_relations_result {
-                        println!("Error updating relations {}", write_error);
+                        tracing::error!("Error updating relations: {}", write_error);
                     }
 
                     let unset_relations_result = storage
@@ -159,7 +159,7 @@ where
                         .await;
 
                     if let Err(write_error) = unset_relations_result {
-                        println!("Error unsetting relation fields {}", write_error);
+                        tracing::error!("Error unsetting relation fields: {}", write_error);
                     }
 
                     let delete_relations_result = storage
@@ -167,10 +167,10 @@ where
                         .await;
 
                     if let Err(write_error) = delete_relations_result {
-                        println!("Error deleting relations {}", write_error);
+                        tracing::error!("Error deleting relations: {}", write_error);
                     }
                 } else {
-                    println!(
+                    tracing::warn!(
                         "Encountered errored ipfs cache entry. Skipping indexing. Space id: {}, cid: {}",
                         preprocessed_edit.space_id,
                         preprocessed_edit.cid
@@ -178,7 +178,7 @@ where
                 }
 
                 if let Err(error) = tx.commit().await {
-                    println!(
+                    tracing::error!(
                         "Error committing transaction for edit with uri: {} {}",
                         preprocessed_edit.cid, error
                     );
@@ -191,7 +191,7 @@ where
             Ok(_) => {
                 //
             }
-            Err(error) => println!(
+            Err(error) => tracing::error!(
                 "[Root handler] Error executing task {} for edit {:?}",
                 error, preprocessed_edit
             ),
