@@ -243,7 +243,7 @@ async fn main() -> Result<(), IndexingError> {
     match storage {
         Ok(result) => {
             let cache = PostgresCache::new().await?;
-            let properties_cache = PropertiesCache::new();
+            let properties_cache = PropertiesCache::from_storage(&result).await?;
             
             let indexer = KgIndexer::new(result, cache, properties_cache);
 

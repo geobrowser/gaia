@@ -183,6 +183,31 @@ impl PostgresStorage {
         })
     }
 
+    pub async fn get_all_properties(&self) -> Result<Vec<PropertyItem>, StorageError> {
+        let rows = sqlx::query("SELECT id, type::text as type FROM properties")
+            .fetch_all(&self.pool)
+            .await?;
+
+        let mut properties = Vec::new();
+        for row in rows {
+            let id: Uuid = row.get("id");
+            let type_value: String = row.get("type");
+
+            let property_type = string_to_data_type(&type_value).ok_or_else(|| {
+                sqlx::Error::Decode(
+                    format!("Invalid enum value '{}' for dataTypes enum", type_value).into(),
+                )
+            })?;
+
+            properties.push(PropertyItem {
+                id,
+                data_type: property_type,
+            });
+        }
+
+        Ok(properties)
+    }
+
     pub async fn get_member(
         &self,
         address: &str,

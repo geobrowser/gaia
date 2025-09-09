@@ -4,6 +4,7 @@ use tokio::sync::RwLock;
 use uuid::Uuid;
 
 use crate::models::properties::DataType;
+use crate::storage::{postgres::PostgresStorage, StorageError};
 
 pub struct PropertiesCache {
     /// Represents the cache of property id -> data type. We store
@@ -29,6 +30,24 @@ impl PropertiesCache {
         Self {
             inner: Arc::new(RwLock::new(HashMap::new())),
         }
+    }
+
+    pub async fn from_storage(storage: &PostgresStorage) -> Result<Self, StorageError> {
+        let properties = storage.get_all_properties().await?;
+        let mut cache_map = HashMap::new();
+        
+        for property in properties {
+            cache_map.insert(property.id, property.data_type);
+        }
+
+        tracing::info!(
+            "Initialized PropertiesCache from database with {} properties",
+            cache_map.len()
+        );
+
+        Ok(Self {
+            inner: Arc::new(RwLock::new(cache_map)),
+        })
     }
 }
 

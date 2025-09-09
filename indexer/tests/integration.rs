@@ -14,7 +14,7 @@ use wire::pb::grc20::{
 use dotenv::dotenv;
 use indexer::{
     block_handler::root_handler,
-    cache::{properties_cache::PropertiesCache, PreprocessedEdit},
+    cache::{properties_cache::{PropertiesCache, ImmutableCache}, PreprocessedEdit},
     error::IndexingError,
     models::properties::DataType,
     storage::{postgres::PostgresStorage, StorageError},
@@ -2005,5 +2005,104 @@ async fn test_subspace_indexing_with_other_operations() -> Result<(), IndexingEr
     // Run the indexer - should handle all operations together
     indexer.run(&blocks).await?;
 
+    Ok(())
+}
+
+#[tokio::test]
+#[serial]
+async fn test_properties_cache_initialization_from_database() -> Result<(), IndexingError> {
+    dotenv().ok();
+    let database_url = env::var("DATABASE_URL").expect("DATABASE_URL not set");
+    let storage = Arc::new(PostgresStorage::new(&database_url).await?);
+    let test_storage = TestStorage::new(storage.clone());
+    
+    // Clear properties table to ensure clean test state
+    test_storage.clear_table("properties").await?;
+    
+    // Define test properties with all data types
+    let test_properties = vec![
+        ("11111111-1111-1111-1111-111111111111", DataType::String),
+        ("22222222-2222-2222-2222-222222222222", DataType::Number),
+        ("33333333-3333-3333-3333-333333333333", DataType::Boolean),
+        ("44444444-4444-4444-4444-444444444444", DataType::Time),
+        ("55555555-5555-5555-5555-555555555555", DataType::Point),
+        ("66666666-6666-6666-6666-666666666666", DataType::Relation),
+    ];
+    
+    // Insert properties directly into database using the indexer
+    let properties_cache_empty = Arc::new(PropertiesCache::new());
+    let indexer = TestIndexer::new(storage.clone(), properties_cache_empty);
+    
+    // Create property operations for each test property
+    let mut property_ops = Vec::new();
+    for (property_id, data_type) in &test_properties {
+        let pb_data_type = match data_type {
+            DataType::String => PbDataType::Text,
+            DataType::Number => PbDataType::Number,
+            DataType::Boolean => PbDataType::Checkbox,
+            DataType::Time => PbDataType::Time,
+            DataType::Point => PbDataType::Point,
+            DataType::Relation => PbDataType::Relation,
+        };
+        property_ops.push(make_property_op(property_id, pb_data_type));
+    }
+    
+    // Create an edit with all property operations
+    let edit = make_edit(
+        "77777777-7777-7777-7777-777777777777",
+        "Properties Cache Test Edit",
+        "88888888-8888-8888-8888-888888888888",
+        property_ops,
+    );
+    
+    let item = PreprocessedEdit {
+        edit: Some(edit),
+        is_errored: false,
+        space_id: Uuid::parse_str("99999999-9999-9999-9999-999999999999").unwrap(),
+        cid: "".to_string(),
+    };
+    
+    let kg_data = make_kg_data_with_spaces(1, vec![item], vec![]);
+    let blocks = vec![kg_data];
+    
+    // Run the indexer to create properties in database
+    indexer.run(&blocks).await?;
+    
+    // Verify properties were created in database
+    for (property_id, expected_data_type) in &test_properties {
+        let property = storage
+            .get_property(&property_id.to_string())
+            .await
+            .unwrap();
+        assert_eq!(property.data_type, *expected_data_type);
+    }
+    
+    // Now test cache initialization from database
+    let initialized_cache = PropertiesCache::from_storage(&storage).await
+        .map_err(|e| IndexingError::StorageError(e))?;
+    
+    // Verify all properties are loaded into the cache
+    for (property_id, expected_data_type) in &test_properties {
+        let property_uuid = Uuid::parse_str(property_id).unwrap();
+        let cached_data_type = initialized_cache.get(&property_uuid).await
+            .map_err(|_| IndexingError::StorageError(StorageError::Database(sqlx::Error::RowNotFound)))?;
+        assert_eq!(cached_data_type, *expected_data_type, 
+                   "Property {} should have data type {:?} in cache", property_id, expected_data_type);
+    }
+    
+    // Test cache behavior: accessing non-existent property should return error
+    let non_existent_id = Uuid::parse_str("aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa").unwrap();
+    let result = initialized_cache.get(&non_existent_id).await;
+    assert!(result.is_err(), "Non-existent property should return error");
+    
+    // Test empty database scenario
+    test_storage.clear_table("properties").await?;
+    let empty_cache = PropertiesCache::from_storage(&storage).await
+        .map_err(|e| IndexingError::StorageError(e))?;
+    
+    // Any property lookup should fail on empty cache
+    let result = empty_cache.get(&test_properties[0].0.parse().unwrap()).await;
+    assert!(result.is_err(), "Empty cache should return error for any property");
+    
     Ok(())
 }
