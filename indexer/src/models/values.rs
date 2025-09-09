@@ -3,6 +3,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::sync::Arc;
+use tracing::{debug, instrument, warn};
 use uuid::Uuid;
 use wire::pb::grc20::{op::Payload, options, Edit, Op};
 
@@ -35,6 +36,7 @@ pub struct ValueOp {
 pub struct ValuesModel;
 
 impl ValuesModel {
+    #[instrument(skip_all, fields(space_id = %space_id, op_count = edit.ops.len()))]
     pub async fn map_edit_to_values<C>(
         edit: &Edit,
         space_id: &Uuid,
@@ -56,11 +58,27 @@ impl ValuesModel {
         //
         // Ordering of these to-be-squashed ops matters. We use what the order is in
         // the edit.
+        let original_count = value_ops.len();
         let squashed = squash_values(&value_ops);
+        
+        if squashed.len() < original_count {
+            debug!(
+                original_count,
+                squashed_count = squashed.len(),
+                dropped = original_count - squashed.len(),
+                "Squashed duplicate value operations"
+            );
+        }
 
         let (created, deleted): (Vec<ValueOp>, Vec<ValueOp>) = squashed
             .into_iter()
             .partition(|op| matches!(op.change_type, ValueChangeType::SET));
+
+        debug!(
+            created_count = created.len(),
+            deleted_count = deleted.len(),
+            "Processed value operations"
+        );
 
         return (created, deleted.iter().map(|op| op.id).collect());
     }
@@ -107,15 +125,18 @@ where
                 match entity_id_bytes {
                     Ok(entity_id_bytes) => {
                         let entity_id = Uuid::from_bytes(entity_id_bytes);
+                        let mut skipped_values = 0;
 
                         for value in &entity.values {
                             let property_id_bytes = id::transform_id_bytes(value.property.clone());
 
                             if let Err(_) = property_id_bytes {
-                                tracing::error!(
-                                    "[Values][UpdateEntity] Could not transform Vec<u8> for property.id {:?}",
-                                    &entity.id
+                                warn!(
+                                    entity_id = %entity_id,
+                                    property_bytes = ?value.property,
+                                    "[Values][UpdateEntity] Could not transform Vec<u8> for property.id"
                                 );
+                                skipped_values += 1;
                                 continue;
                             }
 
@@ -143,12 +164,23 @@ where
                                     .await
                             {
                                 values.push(populated_op);
+                            } else {
+                                skipped_values += 1;
                             }
                         }
+                        
+                        if skipped_values > 0 {
+                            warn!(
+                                entity_id = %entity_id,
+                                skipped_count = skipped_values,
+                                total_values = entity.values.len(),
+                                "Some values were skipped during processing"
+                            );
+                        }
                     }
-                    Err(_) => tracing::error!(
-                        "[Values][UpdateEntity] Could not transform Vec<u8> for entity.id {:?}",
-                        &entity.id
+                    Err(_) => warn!(
+                        entity_bytes = ?entity.id,
+                        "[Values][UpdateEntity] Could not transform Vec<u8> for entity.id"
                     ),
                 }
             }
@@ -164,9 +196,10 @@ where
                                 id::transform_id_bytes(property.clone());
 
                             if let Err(_) = property_id_bytes {
-                                tracing::error!(
-                                    "[Values][UnsetEntityValues] Could not transform Vec<u8> for property id {:?}",
-                                    &property
+                                warn!(
+                                    entity_id = %entity_id,
+                                    property_bytes = ?property,
+                                    "[Values][UnsetEntityValues] Could not transform Vec<u8> for property id"
                                 );
                                 continue;
                             }
@@ -190,9 +223,9 @@ where
                             });
                         }
                     },
-                    Err(_) => tracing::error!(
-                        "[Values][UnsetEntityValues] Could not transform Vec<u8> for entity.id {:?}",
-                        &entity.id
+                    Err(_) => warn!(
+                        entity_bytes = ?entity.id,
+                        "[Values][UnsetEntityValues] Could not transform Vec<u8> for entity.id"
                     )
                 }
             }
@@ -205,6 +238,7 @@ where
 
 /// Validates and populates the appropriate type-specific field based on data type.
 /// Returns None if validation fails, indicating the value should be filtered out.
+#[instrument(skip_all, fields(property_id = %base_op.property_id, entity_id = %base_op.entity_id))]
 pub async fn populate_value_fields_by_datatype<C>(
     mut base_op: ValueOp,
     raw_value: &str,
@@ -247,11 +281,13 @@ where
             }
             Err(error) => {
                 // If validation fails, log the error and filter out the value
-                tracing::warn!(
-                    "Validation failed for property {} with value '{}': {}",
-                    base_op.property_id,
-                    raw_value,
-                    error
+                warn!(
+                    property_id = %base_op.property_id,
+                    entity_id = %base_op.entity_id,
+                    data_type = ?data_type,
+                    value = raw_value,
+                    error = %error,
+                    "Value validation failed, filtering out"
                 );
                 return None;
             }
@@ -259,9 +295,10 @@ where
     }
     // If property not found in cache, filter out the value
     else {
-        tracing::debug!(
-            "Property {} not found in cache, skipping value validation",
-            base_op.property_id
+        warn!(
+            property_id = %base_op.property_id,
+            entity_id = %base_op.entity_id,
+            "Property not found in cache, filtering out value"
         );
         return None;
     }

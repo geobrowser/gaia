@@ -8,7 +8,7 @@ futures = "0.3"
 chrono = "0.4.41"
 dotenv = "0.15.0"
 stream = { version = "0.1.0", path = "../stream" }
-tokio = { version = "1.44.2", features = ["macros", "rt-multi-thread"] }
+tokio = { version = "1.38.0", features = ["macros", "rt-multi-thread"] }
 wire = { version = "0.1.0", path = "../wire" }
 indexer_utils = { version = "0.1.0", path = "../indexer_utils" }
 prost = "0.13.3"
@@ -27,6 +27,9 @@ async-trait = "0.1.88"
 uuid = { version = "1.17.0", features = ["v4"] }
 bytes = "1.10.1"
 tracing = "0.1.41"
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+# Axiom integration using official Rust SDK
+axiom-rs = "0.11"
 
 [dev-dependencies]
 criterion = { version = "0.6.0", features = ["html_reports"] }

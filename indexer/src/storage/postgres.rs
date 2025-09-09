@@ -1,6 +1,7 @@
 use async_trait::async_trait;
 
 use sqlx::{postgres::PgPoolOptions, Postgres, QueryBuilder, Row};
+use tracing::error;
 use uuid::Uuid;
 
 use crate::models::{
@@ -495,7 +496,7 @@ impl StorageBackend for PostgresStorage {
         let result = query_builder.build().execute(&mut **tx).await;
 
         if let Err(error) = result {
-            println!("Error writing relations {}", error);
+            error!("Error writing relations: {}", error);
         }
 
         Ok(())

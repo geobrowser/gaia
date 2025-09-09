@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 
 use indexer_utils::id;
+use tracing::{debug, instrument, warn};
 use uuid::Uuid;
 use wire::pb::grc20::{op::Payload, Edit};
 
@@ -192,6 +193,7 @@ impl RelationItem {
 pub struct RelationsModel;
 
 impl RelationsModel {
+    #[instrument(skip_all, fields(space_id = %space_id, op_count = edit.ops.len()))]
     pub fn map_edit_to_relations(
         edit: &Edit,
         space_id: &Uuid,
@@ -210,9 +212,9 @@ impl RelationsModel {
                         let relation_id_bytes = id::transform_id_bytes(relation.id.clone());
 
                         if let Err(_) = relation_id_bytes {
-                            tracing::error!(
-                                "[Relations][CreateRelation] Could not transform Vec<u8> for relation.id {:?}",
-                                &relation.id
+                            warn!(
+                                relation_bytes = ?relation.id,
+                                "[Relations][CreateRelation] Could not transform Vec<u8> for relation.id"
                             );
                             continue;
                         }
@@ -220,9 +222,9 @@ impl RelationsModel {
                         let entity_id_bytes = id::transform_id_bytes(relation.entity.clone());
 
                         if let Err(_) = entity_id_bytes {
-                            tracing::error!(
-                                "[Relations][CreateRelation] Could not transform Vec<u8> for relation.entity {:?}",
-                                &relation.entity
+                            warn!(
+                                entity_bytes = ?relation.entity,
+                                "[Relations][CreateRelation] Could not transform Vec<u8> for relation.entity"
                             );
                             continue;
                         }
@@ -230,9 +232,9 @@ impl RelationsModel {
                         let type_id_bytes = id::transform_id_bytes(relation.r#type.clone());
 
                         if let Err(_) = type_id_bytes {
-                            tracing::error!(
-                                "[Relations][CreateRelation] Could not transform Vec<u8> for relation.type {:?}",
-                                &relation.r#type
+                            warn!(
+                                type_bytes = ?relation.r#type,
+                                "[Relations][CreateRelation] Could not transform Vec<u8> for relation.type"
                             );
                             continue;
                         }
@@ -240,9 +242,9 @@ impl RelationsModel {
                         let from_id_bytes = id::transform_id_bytes(relation.from_entity.clone());
 
                         if let Err(_) = from_id_bytes {
-                            tracing::error!(
-                                "[Relations][CreateRelation] Could not transform Vec<u8> for relation.from_entity {:?}",
-                                &relation.from_entity
+                            warn!(
+                                from_entity_bytes = ?relation.from_entity,
+                                "[Relations][CreateRelation] Could not transform Vec<u8> for relation.from_entity"
                             );
                             continue;
                         }
@@ -250,9 +252,9 @@ impl RelationsModel {
                         let to_id_bytes = id::transform_id_bytes(relation.to_entity.clone());
 
                         if let Err(_) = to_id_bytes {
-                            tracing::error!(
-                                "[Relations][CreateRelation] Could not transform Vec<u8> for relation.to_entity {:?}",
-                                &relation.to_entity
+                            warn!(
+                                to_entity_bytes = ?relation.to_entity,
+                                "[Relations][CreateRelation] Could not transform Vec<u8> for relation.to_entity"
                             );
                             continue;
                         }
@@ -306,9 +308,9 @@ impl RelationsModel {
                         let relation_id_bytes = id::transform_id_bytes(relation_id.clone());
 
                         if let Err(_) = relation_id_bytes {
-                            tracing::error!(
-                                "[Relations][UpdateRelation] Could not transform Vec<u8> for relation.id {:?}",
-                                &relation_id
+                            warn!(
+                                relation_bytes = ?relation_id,
+                                "[Relations][DeleteRelation] Could not transform Vec<u8> for relation.id"
                             );
                             continue;
                         }
@@ -324,9 +326,9 @@ impl RelationsModel {
                         let relation_id_bytes = id::transform_id_bytes(updated_relation.id.clone());
 
                         if let Err(_) = relation_id_bytes {
-                            tracing::error!(
-                                "[Relations][UpdateRelation] Could not transform Vec<u8> for relation.id {:?}",
-                                &updated_relation.id
+                            warn!(
+                                relation_bytes = ?updated_relation.id,
+                                "[Relations][UpdateRelation] Could not transform Vec<u8> for relation.id"
                             );
                             continue;
                         }
@@ -372,9 +374,9 @@ impl RelationsModel {
                         let relation_id_bytes = id::transform_id_bytes(unset_fields.id.clone());
 
                         if let Err(_) = relation_id_bytes {
-                            tracing::error!(
-                                "[Relations][UnsetRelationFields] Could not transform Vec<u8> for relation.id {:?}",
-                                &unset_fields.id
+                            warn!(
+                                relation_bytes = ?unset_fields.id,
+                                "[Relations][UnsetRelationFields] Could not transform Vec<u8> for relation.id"
                             );
                             continue;
                         }
@@ -403,7 +405,17 @@ impl RelationsModel {
         //
         // Ordering of these to-be-squashed ops matters. We use what the order is in
         // the edit.
+        let original_count = relations.len();
         let squashed = squash_relations(&relations);
+        
+        if squashed.len() < original_count {
+            debug!(
+                original_count,
+                squashed_count = squashed.len(),
+                dropped = original_count - squashed.len(),
+                "Squashed duplicate relation operations"
+            );
+        }
 
         let mut set_relations: Vec<SetRelationItem> = Vec::new();
         let mut update_relations: Vec<UpdateRelationItem> = Vec::new();
@@ -419,6 +431,14 @@ impl RelationsModel {
             }
         }
 
+        debug!(
+            set_count = set_relations.len(),
+            update_count = update_relations.len(),
+            unset_count = unset_relations.len(),
+            delete_count = delete_relations.len(),
+            "Processed relation operations"
+        );
+        
         return (
             set_relations,
             update_relations,

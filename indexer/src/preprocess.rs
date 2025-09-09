@@ -8,6 +8,7 @@ use tokio_retry::{
     strategy::{jitter, ExponentialBackoff},
     Retry,
 };
+use tracing::{debug, info, instrument, warn};
 use wire::pb::chain::GeoOutput;
 
 use crate::{
@@ -18,12 +19,14 @@ use crate::{
 
 /// Matches spaces with their corresponding plugins based on DAO address
 /// Returns a vector of CreatedSpace variants (Public or Personal)
+#[instrument(skip_all, fields(space_count = spaces.len(), governance_plugin_count = governance_plugins.len(), personal_plugin_count = personal_plugins.len()))]
 pub fn match_spaces_with_plugins(
     spaces: &[wire::pb::chain::GeoSpaceCreated],
     governance_plugins: &[wire::pb::chain::GeoGovernancePluginCreated],
     personal_plugins: &[wire::pb::chain::GeoPersonalSpaceAdminPluginCreated],
 ) -> Vec<CreatedSpace> {
     let mut created_spaces = Vec::new();
+    let mut unmatched_spaces = 0;
 
     for space in spaces {
         // Try to find a matching governance plugin first (for public spaces)
@@ -51,6 +54,22 @@ pub fn match_spaces_with_plugins(
         }
         // If no matching plugin is found, we skip this space
         // This could happen if events arrive in different blocks
+        else {
+            unmatched_spaces += 1;
+            debug!(
+                dao_address = %space.dao_address,
+                space_address = %space.space_address,
+                "Space has no matching plugin, skipping"
+            );
+        }
+    }
+
+    if unmatched_spaces > 0 {
+        warn!(
+            unmatched_count = unmatched_spaces,
+            total_spaces = spaces.len(),
+            "Some spaces had no matching plugins"
+        );
     }
 
     created_spaces
@@ -118,6 +137,10 @@ pub fn map_subspaces_removed(
 }
 
 /// Preprocesses block scoped data from the substream
+#[instrument(skip_all, fields(
+    block_number = block_data.clock.as_ref().map(|c| c.number).unwrap_or(0),
+    block_timestamp = block_data.clock.as_ref().and_then(|c| c.timestamp.as_ref()).map(|t| t.seconds).unwrap_or(0)
+))]
 pub async fn preprocess_block_scoped_data(
     block_data: &BlockScopedData,
     ipfs_cache: &Arc<PostgresCache>,
@@ -129,6 +152,8 @@ pub async fn preprocess_block_scoped_data(
     let edits = Arc::new(Mutex::new(Vec::<PreprocessedEdit>::new()));
 
     let mut handles = Vec::new();
+    let mut blocklisted_count = 0;
+    let total_edits = geo.edits_published.len();
 
     // @TODO: We can separate this cache reading step into a separate module
     for chain_edit in geo.edits_published.clone() {
@@ -136,11 +161,20 @@ pub async fn preprocess_block_scoped_data(
             .dao_addresses
             .contains(&chain_edit.dao_address.as_str())
         {
+            blocklisted_count += 1;
+            debug!(
+                dao_address = %chain_edit.dao_address,
+                content_uri = %chain_edit.content_uri,
+                "Skipping blocklisted DAO"
+            );
             continue;
         }
 
         let cache = cache.clone();
         let edits_clone = edits.clone();
+
+        let content_uri = chain_edit.content_uri.clone();
+        let dao_address = chain_edit.dao_address.clone();
 
         let handle = task::spawn(async move {
             // We retry requests to the cache in the case that the cache is
@@ -150,27 +184,68 @@ pub async fn preprocess_block_scoped_data(
                 .factor(2)
                 .max_delay(std::time::Duration::from_secs(5))
                 .map(jitter);
-            let cached_edit_entry =
-                Retry::spawn(retry, async || cache.get(&chain_edit.content_uri).await).await?;
 
-            {
-                let mut edits_guard = edits_clone.lock().await;
-                edits_guard.push(cached_edit_entry);
+            match Retry::spawn(retry, async || cache.get(&content_uri).await).await {
+                Ok(cached_edit_entry) => {
+                    if cached_edit_entry.is_errored {
+                        warn!(
+                            dao_address = %dao_address,
+                            content_uri = %content_uri,
+                            "Cached edit entry is errored"
+                        );
+                    }
+
+                    {
+                        let mut edits_guard = edits_clone.lock().await;
+                        edits_guard.push(cached_edit_entry);
+                    }
+                    Ok::<(), IndexingError>(())
+                }
+                Err(e) => {
+                    warn!(
+                        dao_address = %dao_address,
+                        content_uri = %content_uri,
+                        error = %e,
+                        "Failed to fetch edit from cache after retries"
+                    );
+                    Err(IndexingError::CacheError(e))
+                }
             }
-
-            Ok::<(), IndexingError>(())
         });
 
         handles.push(handle);
     }
 
-    join_all(handles).await;
+    let results = join_all(handles).await;
+
+    let mut failed_fetches = 0;
+    for result in results {
+        if let Err(_) = result {
+            failed_fetches += 1;
+        }
+    }
+
+    if failed_fetches > 0 {
+        warn!(
+            failed_count = failed_fetches,
+            "Some edits failed to fetch from cache"
+        );
+    }
 
     // Extract the edits from the Arc<Mutex<>> for further processing
     let final_edits = {
         let edits_guard = edits.lock().await;
         edits_guard.clone() // Clone the vector to move it out of the mutex
     };
+
+    if blocklisted_count > 0 {
+        info!(
+            blocklisted_count,
+            processed_count = final_edits.len(),
+            total_count = total_edits,
+            "Filtered blocklisted DAOs from edits"
+        );
+    }
 
     let created_spaces = match_spaces_with_plugins(
         &geo.spaces_created,
@@ -208,17 +283,29 @@ pub async fn preprocess_block_scoped_data(
     let added_subspaces = map_subspaces_added(&geo.subspaces_added);
     let removed_subspaces = map_subspaces_removed(&geo.subspaces_removed);
 
-    Ok(KgData {
-        edits: final_edits,
-        spaces: created_spaces,
-        added_editors,
-        added_members,
+    let kg_data = KgData {
+        edits: final_edits.clone(),
+        spaces: created_spaces.clone(),
+        added_editors: added_editors.clone(),
+        added_members: added_members.clone(),
         removed_editors: vec![],
         removed_members: vec![],
-        added_subspaces,
-        removed_subspaces,
+        added_subspaces: added_subspaces.clone(),
+        removed_subspaces: removed_subspaces.clone(),
         block: block_metadata,
-    })
+    };
+
+    info!(
+        edit_count = kg_data.edits.len(),
+        space_count = kg_data.spaces.len(),
+        editor_count = kg_data.added_editors.len(),
+        member_count = kg_data.added_members.len(),
+        subspace_added_count = kg_data.added_subspaces.len(),
+        subspace_removed_count = kg_data.removed_subspaces.len(),
+        "Preprocessed block data"
+    );
+
+    Ok(kg_data)
 }
 
 #[cfg(test)]

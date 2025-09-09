@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use stream::utils::BlockMetadata;
+use tracing::{debug, error, instrument, warn, Instrument};
 
 use crate::cache::properties_cache::ImmutableCache;
 use crate::models::properties::PropertiesModel;
@@ -24,6 +25,7 @@ use crate::{cache::PreprocessedEdit, error::IndexingError};
 /// This validation ensures data integrity by rejecting values that don't
 /// match their property's expected format (e.g., non-numeric strings for
 /// Number properties, invalid checkbox values, malformed coordinates, etc.).
+#[instrument(skip_all, fields(value_count = created_values.len()))]
 async fn validate_created_values<C>(created_values: Vec<ValueOp>, _cache: &Arc<C>) -> Vec<ValueOp>
 where
     C: ImmutableCache + Send + Sync + 'static,
@@ -32,19 +34,47 @@ where
     // in ValueOp creation. Invalid values were filtered out earlier.
     // This function is kept for compatibility with the existing flow.
 
+    let initial_count = created_values.len();
+    
     // Additionally check that values have some content in at least one type field
-    created_values
+    let validated: Vec<ValueOp> = created_values
         .into_iter()
         .filter(|value| {
-            value.string.is_some()
+            let has_content = value.string.is_some()
                 || value.number.is_some()
                 || value.boolean.is_some()
                 || value.time.is_some()
-                || value.point.is_some()
+                || value.point.is_some();
+            
+            if !has_content {
+                debug!(
+                    value_id = %value.id,
+                    entity_id = %value.entity_id,
+                    property_id = %value.property_id,
+                    "Filtering out value with no populated fields"
+                );
+            }
+            
+            has_content
         })
-        .collect()
+        .collect();
+    
+    if validated.len() < initial_count {
+        warn!(
+            initial_count,
+            validated_count = validated.len(),
+            dropped = initial_count - validated.len(),
+            "Some values were filtered out due to empty fields"
+        );
+    }
+    
+    validated
 }
 
+#[instrument(skip_all, fields(
+    edit_count = output.len(),
+    block_number = block_metadata.block_number
+))]
 pub async fn run<S, C>(
     output: &Vec<PreprocessedEdit>,
     block_metadata: &BlockMetadata,
@@ -55,19 +85,46 @@ where
     S: StorageBackend + Send + Sync + 'static,
     C: ImmutableCache + Send + Sync + 'static,
 {
+    // Ensure block context is available to all child operations
+    let current_span = tracing::Span::current();
+    current_span.record("block_number", block_metadata.block_number);
     for preprocessed_edit in output {
         let storage = storage.clone();
         let block = block_metadata.clone();
 
+        let _block_number = block_metadata.block_number;
+        let _space_id = preprocessed_edit.space_id;
+        let _cid = preprocessed_edit.cid.clone();
+        
         let handle = tokio::spawn({
             let preprocessed_edit = preprocessed_edit.clone();
             let storage = storage.clone();
             let cache = properties_cache.clone();
             let block = block.clone();
 
-            let mut tx = storage.get_pool().begin().await?;
+            // Create a span for this specific edit processing with block context
+            let edit_span = tracing::info_span!(
+                "process_edit",
+                block_number = block.block_number,
+                space_id = %preprocessed_edit.space_id,
+                cid = %preprocessed_edit.cid,
+                is_errored = preprocessed_edit.is_errored
+            );
 
             async move {
+                let tx_result = storage.get_pool().begin().await;
+                let mut tx = match tx_result {
+                    Ok(transaction) => transaction,
+                    Err(error) => {
+                        error!(
+                            error = %error,
+                            cid = %preprocessed_edit.cid,
+                            space_id = %preprocessed_edit.space_id,
+                            "Error starting transaction for edit"
+                        );
+                        return;
+                    }
+                };
                 // The Edit might be malformed. The Cache still stores it with an
                 // is_errored flag to denote that the entry exists but can't be
                 // decoded.
@@ -170,20 +227,22 @@ where
                         tracing::error!("Error deleting relations: {}", write_error);
                     }
                 } else {
-                    tracing::warn!(
-                        "Encountered errored ipfs cache entry. Skipping indexing. Space id: {}, cid: {}",
-                        preprocessed_edit.space_id,
-                        preprocessed_edit.cid
+                    warn!(
+                        space_id = %preprocessed_edit.space_id,
+                        cid = %preprocessed_edit.cid,
+                        "Encountered errored ipfs cache entry, skipping indexing"
                     )
                 }
 
                 if let Err(error) = tx.commit().await {
-                    tracing::error!(
-                        "Error committing transaction for edit with uri: {} {}",
-                        preprocessed_edit.cid, error
+                    error!(
+                        cid = %preprocessed_edit.cid,
+                        space_id = %preprocessed_edit.space_id,
+                        error = %error,
+                        "Error committing transaction for edit"
                     );
                 }
-            }
+            }.instrument(edit_span)
         })
         .await;
 
@@ -191,9 +250,11 @@ where
             Ok(_) => {
                 //
             }
-            Err(error) => tracing::error!(
-                "[Root handler] Error executing task {} for edit {:?}",
-                error, preprocessed_edit
+            Err(error) => error!(
+                error = %error,
+                cid = %preprocessed_edit.cid,
+                space_id = %preprocessed_edit.space_id,
+                "[Root handler] Error executing task for edit"
             ),
         }
     }
