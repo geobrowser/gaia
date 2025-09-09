@@ -301,41 +301,68 @@ fn init_tracing() -> Result<(), IndexingError> {
         );
     
     if axiom_token.is_some() {
-        // Set up tracing with Axiom layer and console logging
-        registry
-            .with(AxiomLayer::new(axiom_dataset.clone()))
-            .with(
-                tracing_subscriber::fmt::layer()
-                    .with_target(true)
-                    .with_thread_ids(true)
-                    .with_thread_names(true)
-                    .json(), // Use JSON format for structured logging
-            )
-            .init();
+        // Set up tracing with Axiom layer
+        let mut layers = registry.with(AxiomLayer::new(axiom_dataset.clone()));
         
+        // Only add console logging in debug builds
+        #[cfg(debug_assertions)]
+        let layers = layers.with(
+            tracing_subscriber::fmt::layer()
+                .with_target(true)
+                .with_thread_ids(true)
+                .with_thread_names(true)
+                .json(), // Use JSON format for structured logging
+        );
+        
+        layers.init();
+        
+        #[cfg(debug_assertions)]
         info!(
             service_name = "gaia.indexer",
             service_version = env!("CARGO_PKG_VERSION"),
             axiom_dataset = axiom_dataset,
             "Tracing initialized with Axiom ingestion and console logging"
         );
-    } else {
-        // Set up console-only tracing with structured logging
-        registry
-            .with(
-                tracing_subscriber::fmt::layer()
-                    .with_target(true)
-                    .with_thread_ids(true)
-                    .with_thread_names(true)
-                    .json(), // Use JSON format for structured logging
-            )
-            .init();
         
+        #[cfg(not(debug_assertions))]
         info!(
             service_name = "gaia.indexer",
             service_version = env!("CARGO_PKG_VERSION"),
-            "Tracing initialized with console logging (AXIOM_TOKEN not set)"
+            axiom_dataset = axiom_dataset,
+            "Tracing initialized with Axiom ingestion only"
         );
+    } else {
+        // Only set up console tracing in debug builds
+        #[cfg(debug_assertions)]
+        {
+            registry
+                .with(
+                    tracing_subscriber::fmt::layer()
+                        .with_target(true)
+                        .with_thread_ids(true)
+                        .with_thread_names(true)
+                        .json(), // Use JSON format for structured logging
+                )
+                .init();
+            
+            info!(
+                service_name = "gaia.indexer",
+                service_version = env!("CARGO_PKG_VERSION"),
+                "Tracing initialized with console logging (AXIOM_TOKEN not set)"
+            );
+        }
+        
+        #[cfg(not(debug_assertions))]
+        {
+            // In release mode without Axiom, just use a minimal registry
+            registry.init();
+            
+            info!(
+                service_name = "gaia.indexer",
+                service_version = env!("CARGO_PKG_VERSION"),
+                "Tracing initialized without console logging (release mode, AXIOM_TOKEN not set)"
+            );
+        }
     }
     
     Ok(())
