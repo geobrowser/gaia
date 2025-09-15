@@ -61,7 +61,7 @@ jobs:
       - name: Setup Bun for database migrations
         uses: oven-sh/setup-bun@v1
         with:
-          bun-version: latest
+          bun-version: 1.2.21
 
       - name: Install API dependencies
         working-directory: ./api
