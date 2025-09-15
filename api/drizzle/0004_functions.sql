@@ -1,5 +1,3 @@
--- Custom SQL migration file, put your code below! --
--- Custom SQL migration file, put your code below! --
 CREATE OR REPLACE FUNCTION public.entities_name(entity entities) RETURNS text AS $$
   SELECT string FROM values WHERE entity_id = entity.id AND property_id = 'a126ca53-0c8e-48d5-b888-82c734c38935' LIMIT 1;
 $$ LANGUAGE sql STABLE;
@@ -332,14 +330,14 @@ COMMENT ON CONSTRAINT editors_address_space_id_pk ON EDITORS IS E'@omit';
 COMMENT ON TABLE ipfs_cache IS E'@omit';
 
 -- Create enum for sort order if it doesn't exist
-DO $$ 
+DO $$
 BEGIN
     IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'sort_order') THEN
         CREATE TYPE sort_order AS ENUM ('ASC', 'DESC');
     END IF;
 END $$;
 
--- Custom query function to order entities by property value  
+-- Custom query function to order entities by property value
 CREATE OR REPLACE FUNCTION entities_ordered_by_property(
   property_id uuid,
   space_id uuid DEFAULT NULL,
@@ -373,16 +371,16 @@ RETURNS SETOF entities AS $$
         (p.type = 'Relation' AND FALSE)
       )
   )
-  SELECT 
+  SELECT
     id,
     created_at,
     created_at_block,
     updated_at,
     updated_at_block
   FROM filtered_entities
-  ORDER BY 
+  ORDER BY
     CASE WHEN sort_direction = 'ASC' THEN
-      CASE 
+      CASE
         WHEN property_type = 'String' THEN string
         WHEN property_type = 'Boolean' THEN boolean::text
         WHEN property_type = 'Time' THEN time
@@ -391,7 +389,7 @@ RETURNS SETOF entities AS $$
     END ASC,
     CASE WHEN sort_direction = 'ASC' AND property_type = 'Number' THEN number::numeric END ASC,
     CASE WHEN sort_direction = 'DESC' THEN
-      CASE 
+      CASE
         WHEN property_type = 'String' THEN string
         WHEN property_type = 'Boolean' THEN boolean::text
         WHEN property_type = 'Time' THEN time

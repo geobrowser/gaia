@@ -22,6 +22,20 @@
       "when": 1757005157447,
       "tag": "0002_concerned_pride",
       "breakpoints": true
+    },
+    {
+      "idx": 3,
+      "version": "7",
+      "when": 1757965521849,
+      "tag": "0003_remove-constraints",
+      "breakpoints": true
+    },
+    {
+      "idx": 4,
+      "version": "7",
+      "when": 1757965546079,
+      "tag": "0004_functions",
+      "breakpoints": true
     }
   ]
 }
