@@ -38,6 +38,7 @@ CREATE TABLE "votes_count" (
 );
 --> statement-breakpoint
 ALTER TABLE "values" RENAME COLUMN "value" TO "string";--> statement-breakpoint
+ALTER TABLE "values" ALTER COLUMN "string" DROP NOT NULL;--> statement-breakpoint
 ALTER TABLE "properties" ALTER COLUMN "type" SET DATA TYPE text;--> statement-breakpoint
 DROP TYPE "public"."dataTypes";--> statement-breakpoint
 CREATE TYPE "public"."dataTypes" AS ENUM('String', 'Number', 'Boolean', 'Time', 'Point', 'Relation');--> statement-breakpoint
