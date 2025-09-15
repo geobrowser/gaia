@@ -20,6 +20,19 @@ describe("entities_ordered_by_property integration tests", () => {
 			connectionString: process.env.DATABASE_URL
 		})
 
+		// Verify the function exists
+		const functionCheck = await pool.query(`
+			SELECT EXISTS (
+				SELECT 1 FROM pg_proc p
+				JOIN pg_namespace n ON p.pronamespace = n.oid
+				WHERE n.nspname = 'public' AND p.proname = 'entities_ordered_by_property'
+			) as function_exists
+		`)
+		
+		if (!functionCheck.rows[0].function_exists) {
+			throw new Error("entities_ordered_by_property function does not exist in database. Make sure migrations have been applied correctly.")
+		}
+
 		// Reset and seed test data
 		await resetAndSeedTestData()
 	}, 10000) // 10 second timeout for data setup
