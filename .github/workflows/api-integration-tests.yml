@@ -5,10 +5,12 @@ on:
     branches: [ main, develop ]
     paths:
       - 'api/**'
+      - '.github/workflows/api-integration-tests.yml'
   pull_request:
     branches: [ main, develop ]
     paths:
       - 'api/**'
+      - '.github/workflows/api-integration-tests.yml'
 
 jobs:
   test:
@@ -39,7 +41,7 @@ jobs:
       - name: Setup Bun
         uses: oven-sh/setup-bun@v2
         with:
-          bun-version: latest
+          bun-version: 1.2.21
       
       - name: Install dependencies
         run: bun install
