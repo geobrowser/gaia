@@ -1,0 +1,44 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT * FROM votes_count",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Int4"
+      },
+      {
+        "ordinal": 1,
+        "name": "entity_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 2,
+        "name": "space_id",
+        "type_info": "Uuid"
+      },
+      {
+        "ordinal": 3,
+        "name": "upvotes",
+        "type_info": "Int8"
+      },
+      {
+        "ordinal": 4,
+        "name": "downvotes",
+        "type_info": "Int8"
+      }
+    ],
+    "parameters": {
+      "Left": []
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "f2d454767d01b6cd6ff66a73ed8d75921e378e7d95b3745e085314b4abf3e779"
+}
