@@ -36,6 +36,13 @@
       "when": 1757965546079,
       "tag": "0004_functions",
       "breakpoints": true
+    },
+    {
+      "idx": 5,
+      "version": "7",
+      "when": 1758046012262,
+      "tag": "0005_actions-v2",
+      "breakpoints": true
     }
   ]
 }
