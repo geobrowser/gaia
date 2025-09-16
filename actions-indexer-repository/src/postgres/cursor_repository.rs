@@ -2,9 +2,9 @@
 //!
 //! Stores cursor state in a `meta` table to enable indexer resumption after restarts.
 
-use async_trait::async_trait;
 use crate::CursorRepository;
 use crate::errors::CursorRepositoryError;
+use async_trait::async_trait;
 
 /// PostgreSQL-backed cursor repository.
 ///
@@ -28,7 +28,6 @@ impl PostgresCursorRepository {
     pub async fn new(pool: sqlx::PgPool) -> Result<Self, CursorRepositoryError> {
         Ok(Self { pool })
     }
-
 }
 
 #[async_trait]
@@ -41,12 +40,17 @@ impl CursorRepository for PostgresCursorRepository {
         Ok(result.map(|row| row.cursor))
     }
 
-    async fn save_cursor(&self, id: &str, cursor: &str, block_number: &i64) -> Result<(), CursorRepositoryError> {
+    async fn save_cursor(
+        &self,
+        id: &str,
+        cursor: &str,
+        block_number: &i64,
+    ) -> Result<(), CursorRepositoryError> {
         sqlx::query!(
             "INSERT INTO meta (id, cursor, block_number) VALUES ($1, $2, $3) ON CONFLICT (id) DO UPDATE SET cursor = $2, block_number = $3",
             id,
             cursor,
-            block_number
+            block_number.to_string()
         )
         .execute(&self.pool)
         .await?;

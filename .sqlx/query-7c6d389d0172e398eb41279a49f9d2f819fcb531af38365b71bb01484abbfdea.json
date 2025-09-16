@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "\n            SELECT user_id, entity_id, space_id, vote_type, voted_at\n            FROM user_votes\n            WHERE (user_id, entity_id, space_id) IN (SELECT * FROM UNNEST($1::text[], $2::uuid[], $3::text[]))\n            ",
+  "query": "\n            SELECT user_id, entity_id, space_id, vote_type, voted_at\n            FROM user_votes\n            WHERE (user_id, entity_id, space_id) IN (SELECT * FROM UNNEST($1::text[], $2::uuid[], $3::uuid[]))\n            ",
   "describe": {
     "columns": [
       {
@@ -16,7 +16,7 @@
       {
         "ordinal": 2,
         "name": "space_id",
-        "type_info": "Varchar"
+        "type_info": "Uuid"
       },
       {
         "ordinal": 3,
@@ -33,7 +33,7 @@
       "Left": [
         "TextArray",
         "UuidArray",
-        "TextArray"
+        "UuidArray"
       ]
     },
     "nullable": [
@@ -44,5 +44,5 @@
       false
     ]
   },
-  "hash": "78ef763a3de3da2bfccd844336b470e28e4597922282898b8eb709476724feb6"
+  "hash": "7c6d389d0172e398eb41279a49f9d2f819fcb531af38365b71bb01484abbfdea"
 }

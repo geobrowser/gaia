@@ -6,7 +6,7 @@
     "parameters": {
       "Left": [
         "Uuid",
-        "Varchar",
+        "Uuid",
         "Int8",
         "Int8"
       ]
