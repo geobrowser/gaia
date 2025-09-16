@@ -5,11 +5,13 @@ on:
     branches: [ main, develop ]
     paths:
       - 'api/**'
+      - 'api/drizzle/**'
       - '.github/workflows/api-integration-tests.yml'
   pull_request:
     branches: [ main, develop ]
     paths:
       - 'api/**'
+      - 'api/drizzle/**'
       - '.github/workflows/api-integration-tests.yml'
 
 jobs:

@@ -8,6 +8,7 @@ on:
       - "stream/**"
       - "wire/**"
       - "indexer_utils/**"
+      - "api/drizzle/**"
   pull_request:
     branches: [main, develop]
     paths:
@@ -15,6 +16,7 @@ on:
       - "stream/**"
       - "wire/**"
       - "indexer_utils/**"
+      - "api/drizzle/**"
   workflow_dispatch:
 
 jobs:

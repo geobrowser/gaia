@@ -12,6 +12,7 @@ on:
             - 'actions-indexer-pipeline/**'
             - 'actions-indexer-shared/**'
             - 'actions-indexer-repository/**'
+            - 'api/drizzle/**'
             - '.github/workflows/actions-integration-tests.yml'
     push:
         branches:
@@ -19,6 +20,7 @@ on:
             - main
         paths:
             - 'actions-indexer-repository/**'
+            - 'api/drizzle/**'
 
 permissions:
   contents: read

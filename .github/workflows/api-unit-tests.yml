@@ -5,10 +5,12 @@ on:
     branches: [ main, develop ]
     paths:
       - 'api/**'
+      - 'api/drizzle/**'
   pull_request:
     branches: [ main, develop ]
     paths:
       - 'api/**'
+      - 'api/drizzle/**'
 
 jobs:
   test:

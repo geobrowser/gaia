@@ -4,9 +4,11 @@ on:
   push:
     paths:
       - 'api/**'
+      - 'api/drizzle/**'
   pull_request:
     paths:
       - 'api/**'
+      - 'api/drizzle/**'
 
 jobs:
   check:
