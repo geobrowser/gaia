@@ -75,6 +75,7 @@ jobs:
           bun-version: 1.2.21
 
       - name: Install dependencies
+        working-directory: api
         run: bun install
 
       - name: Setup test database
