@@ -2,25 +2,25 @@
 name: Actions Integration Tests
 
 on:
-    pull_request:
-        types: [opened, synchronize]
-        branches:
-            - dev
-            - main
-        paths:
-            - 'actions-indexer/**'
-            - 'actions-indexer-pipeline/**'
-            - 'actions-indexer-shared/**'
-            - 'actions-indexer-repository/**'
-            - 'api/drizzle/**'
-            - '.github/workflows/actions-integration-tests.yml'
-    push:
-        branches:
-            - dev
-            - main
-        paths:
-            - 'actions-indexer-repository/**'
-            - 'api/drizzle/**'
+  pull_request:
+    types: [opened, synchronize]
+    branches:
+      - dev
+      - main
+    paths:
+      - "actions-indexer/**"
+      - "actions-indexer-pipeline/**"
+      - "actions-indexer-shared/**"
+      - "actions-indexer-repository/**"
+      - "api/drizzle/**"
+      - ".github/workflows/actions-integration-tests.yml"
+  push:
+    branches:
+      - dev
+      - main
+    paths:
+      - "actions-indexer-repository/**"
+      - "api/drizzle/**"
 
 permissions:
   contents: read
@@ -69,16 +69,21 @@ jobs:
             sleep 2
           done
 
-      - name: Install sqlx-cli
-        run: cargo install sqlx-cli --no-default-features --features postgres
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.2.21
+
+      - name: Install dependencies
+        run: bun install
+
+      - name: Setup test database
+        working-directory: api
+        run: bun run scripts/setup-test-db.ts
 
       - name: Run migrations
-        working-directory: actions-indexer-repository
-        run: sqlx migrate run --source src/postgres/migrations
-
-      - name: Generate sqlx query cache
-        working-directory: actions-indexer-repository
-        run: cargo sqlx prepare
+        working-directory: api
+        run: bun run db:migrate
 
       - name: Run integration tests
         env:
