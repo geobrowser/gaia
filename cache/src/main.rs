@@ -15,7 +15,7 @@ use tokio::sync::{Mutex, Semaphore};
 
 const PKG_FILE: &str = "geo_substream.spkg";
 const MODULE_NAME: &str = "geo_out";
-const START_BLOCK: i64 = 56013;
+const START_BLOCK: i64 = 66877;
 
 mod cache;
 use cache::{Cache, CacheItem};
