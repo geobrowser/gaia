@@ -85,27 +85,39 @@ export function getSpacePluginInstallItem({
 }): PluginInstallationWithViem {
 	// from `encodeInstallationParams`
 	const prepareInstallationInputs = [
-		{
-			internalType: "string",
-			name: "_firstBlockContentUri",
-			type: "string",
-		},
-		{
-			internalType: "address",
-			name: "_predecessorAddress",
-			type: "address",
-		},
-		{
-			internalType: "address",
-			name: "_pluginUpgrader",
-			type: "address",
-		},
-	]
+      {
+        "internalType": "address",
+        "name": "_paymentManager",
+        "type": "address"
+      },
+      {
+        "internalType": "string",
+        "name": "_firstBlockEditsContentUri",
+        "type": "string"
+      },
+      {
+        "internalType": "bytes",
+        "name": "_firstBlockEditsMetadata",
+        "type": "bytes"
+      },
+      {
+        "internalType": "address",
+        "name": "_predecessorAddress",
+        "type": "address"
+      },
+      {
+        "internalType": "address",
+        "name": "_pluginUpgrader",
+        "type": "address"
+      }
+    ]
 
 	// This works but only if it's the only plugin being published. If we try multiple plugins with
 	// the same upgrader we get an unpredictable gas limit
 	const encodedParams = encodeAbiParameters(prepareInstallationInputs, [
+	  pluginUpgrader,
 		firstBlockContentUri,
+		"",
 		precedessorSpace,
 		pluginUpgrader,
 	])

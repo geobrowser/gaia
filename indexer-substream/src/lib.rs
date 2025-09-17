@@ -444,7 +444,7 @@ fn map_edits_published(block: eth::v2::Block) -> Result<EditsPublished, substrea
         .filter_map(|log| {
             if let Some(edit_published) = EditsPublishedEvent::match_and_decode(log) {
                 return Some(EditPublished {
-                    content_uri: edit_published.content_uri,
+                    content_uri: edit_published.edits_content_uri,
                     dao_address: format_hex(&edit_published.dao),
                     plugin_address: format_hex(&log.address()),
                 });
@@ -506,7 +506,7 @@ fn map_publish_edits_proposals_created(
                     creator: format_hex(&proposed_edit.creator),
                     start_time: proposed_edit.start_date.to_string(),
                     end_time: proposed_edit.end_date.to_string(),
-                    content_uri: proposed_edit.content_uri,
+                    content_uri: proposed_edit.edits_content_uri,
                     plugin_address: format_hex(&log.address()),
                     dao_address: format_hex(&proposed_edit.dao),
                 });

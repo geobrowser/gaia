@@ -1,4 +1,5 @@
 import {Graph, type Op} from "@graphprotocol/grc-20"
+import {EditProposal} from '@graphprotocol/grc-20/proto'
 import rootData from "./root.json" // 2258 ops
 import cryptoData from "./crypto.json" // 22788 ops
 import cryptoEventsData from './crypto-events.json' // 3701 ops
@@ -22,11 +23,11 @@ const ACADEMIA_ENTITY_ID = "0fa96f99-1faa-48f2-b825-a1113de0e4be"
 const TECHNOLOGY_ENTITY_ID = "a56e7d86-9a0a-47df-a1f9-6c2cf658f79e"
 
 const deployables = [
-//   {
-//   entityId: ROOT_ENTITY_ID,
-//   name: "Geo",
-//   data: rootData,
-// },
+  {
+  entityId: ROOT_ENTITY_ID,
+  name: "Geo",
+  data: rootData,
+},
 // {
 //   entityId: CRYPTO_ENTITY_ID,
 //   name: "Crypto",
@@ -46,11 +47,11 @@ const deployables = [
 //   name: "Crypto news",
 //   data: cryptoNewsData
 // },
-{
-  entityId: SF_ENTITY_ID,
-  name: "San Francisco",
-  data: sfData
-},
+// {
+//   entityId: SF_ENTITY_ID,
+//   name: "San Francisco",
+//   data: sfData
+// },
   // {
   //   entityId: INDUSTRIES_ENTITY_ID,
   //   name: "Industries",
@@ -86,15 +87,3 @@ for (const deploy of deployables) {
 
   console.log("space", space)
 }
-
-// 56013
-// Root 2df11968-9d1c-489f-91b7-bdc88b472161
-// Crypto b2565802-3118-47be-91f2-e59170735bac
-// Crypto events dabe3133-4334-47a0-85c5-f965a3a94d4c
-// Regions aea9f05a-2797-4e7e-aeae-5059ada3b56b
-// Crypto news 27af9116-ddb6-4baa-b4f0-c54f0774d346
-// Industries bf44e948-07e0-4297-a2e7-371c22670f98
-// Education 0fcbc499-71e5-4505-a081-aa26edd97937
-// Academia b9192469-f28f-498c-a486-b78f68ab05f0
-// Technology d1a3b7e7-37c0-4126-b2bf-53ff46977fb2
-// SF b42fa1af-1d67-4058-a6f1-4be5d7360caf
