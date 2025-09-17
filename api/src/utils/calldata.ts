@@ -20,7 +20,7 @@ export function getPublishEditCalldata(spaceId: string, cid: string) {
 				const calldata = encodeFunctionData({
 					functionName: "submitEdits",
 					abi: PersonalSpaceAdminAbi,
-					args: [cid, maybeSpace.spaceAddress as `0x${string}`],
+					args: [cid, '0x', maybeSpace.spaceAddress as `0x${string}`],
 				})
 
 				return {
@@ -33,7 +33,7 @@ export function getPublishEditCalldata(spaceId: string, cid: string) {
 				const calldata = encodeFunctionData({
 					functionName: "proposeEdits",
 					abi: MainVotingAbi,
-					args: [stringToHex(cid), cid, maybeSpace.spaceAddress as `0x${string}`],
+					args: [stringToHex(cid), cid, "0x", maybeSpace.spaceAddress as `0x${string}`],
 				})
 
 				return {

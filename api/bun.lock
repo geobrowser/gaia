@@ -9,7 +9,7 @@
         "@aragon/sdk-client-common": "^1.17.0",
         "@effect/opentelemetry": "^0.53.0",
         "@graphile-contrib/pg-simplify-inflector": "^6.1.0",
-        "@graphprotocol/grc-20": "^0.25.0",
+        "@graphprotocol/grc-20": "^0.25.1",
         "@graphql-tools/schema": "^10.0.23",
         "@graphql-yoga/plugin-response-cache": "^3.16.0",
         "@hono/effect-validator": "^1.2.0",
@@ -260,7 +260,7 @@
 
     "@graphile/lru": ["@graphile/lru@4.11.0", "", { "dependencies": { "tslib": "^2.0.1" } }, "sha512-Fakuk190EAKxWSa9YQyr/87g8mvAv8HBvk6yPCPuIoA3bYXF7n6kl0XSqKjSd5VfjEqhtnzQ6zJGzDf1Gv/tJg=="],
 
-    "@graphprotocol/grc-20": ["@graphprotocol/grc-20@0.25.0", "", { "dependencies": { "@bufbuild/protobuf": "^1.9.0", "effect": "^3.13.6", "fflate": "^0.8.2", "fractional-indexing-jittered": "^1.0.0", "image-size": "^2.0.0", "permissionless": "^0.2.35", "uuid": "^11.1.0", "viem": "^2.23.6" } }, "sha512-CGGzSvLLTQhDecCgMF+ssY8qS0NGIFS2YsVmGRGJTtsHkuwWbXE3nDa1M1WST/ddbcjWLNaaZPvCluY47Ub2kw=="],
+    "@graphprotocol/grc-20": ["@graphprotocol/grc-20@0.25.1", "", { "dependencies": { "@bufbuild/protobuf": "^1.9.0", "effect": "^3.13.6", "fflate": "^0.8.2", "fractional-indexing-jittered": "^1.0.0", "image-size": "^2.0.0", "permissionless": "^0.2.35", "uuid": "^11.1.0", "viem": "^2.23.6" } }, "sha512-L8FFIPbZ5h7j816xKApeENRo9kHRjf1j4B1wcGTLFWN+ylwhR0lNBoLfdMbCFHqP0VLZolc1LkjHA3LlQ9xUSA=="],
 
     "@graphql-codegen/add": ["@graphql-codegen/add@5.0.3", "", { "dependencies": { "@graphql-codegen/plugin-helpers": "^5.0.3", "tslib": "~2.6.0" }, "peerDependencies": { "graphql": "^0.8.0 || ^0.9.0 || ^0.10.0 || ^0.11.0 || ^0.12.0 || ^0.13.0 || ^14.0.0 || ^15.0.0 || ^16.0.0" } }, "sha512-SxXPmramkth8XtBlAHu4H4jYcYXM/o3p01+psU+0NADQowA8jtYkK6MW5rV6T+CxkEaNZItfSmZRPgIuypcqnA=="],
 
