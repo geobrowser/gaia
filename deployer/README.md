@@ -20,13 +20,11 @@ The `main.ts` script deploys Geo spaces by:
 ## Important notes
 
 - Only uncomment and deploy spaces that haven't been deployed yet to avoid duplicate data
-- Previously deployed spaces are tracked in comments (see line 34-36)
-- Most spaces are commented out by default - uncomment the ones you want to deploy
-- Order matters for deploying if spaces are dependent on properties in other spaces
-- Deployment metadata is automatically saved to `deployed.json` after each successful deployment, keyed by space name with:
+- Previous deployment metadata is automatically saved to `deployed.json` after each successful deployment, keyed by space name with:
   - `spaceId`: The generated space ID
   - `entityId`: The entity ID used for deployment
-  - `timestamp`: ISO timestamp of when the deployment occurred
+  - `timestamp`: ISO timestamp of when the deployment occurred- Most spaces are commented out by default - uncomment the ones you want to deploy
+- Order matters for deploying if spaces are dependent on properties in other spaces
 
 ### Running the script
 
