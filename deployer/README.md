@@ -1,15 +1,16 @@
-# deployer
+This project is a simple script to deploy spaces with seeded data from production.
 
-To install dependencies:
+`main.ts` contains the following
 
-```bash
+- imports with the JSON representation of the ops for each space
+- array containing list of spaces to deploy when running the script
+- entity ids representing each space's front page
+- logging of the space id when each space is deployed
+
+### Running the script
+
+```sh
+# from within /deployer directory
 bun install
+bun run main.ts
 ```
-
-To run:
-
-```bash
-bun run index.ts
-```
-
-This project was created using `bun init` in bun v1.2.4. [Bun](https://bun.sh) is a fast all-in-one JavaScript runtime.
