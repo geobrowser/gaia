@@ -16,7 +16,7 @@ use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
 const PKG_FILE: &str = "geo_substream.spkg";
 const MODULE_NAME: &str = "geo_out";
-const START_BLOCK: i64 = 66877;
+const START_BLOCK: i64 = 67162;
 
 struct KgIndexer {
     storage: Arc<PostgresStorage>,
