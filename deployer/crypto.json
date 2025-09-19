@@ -22081,7 +22081,7 @@
     "type": "CREATE_PROPERTY",
     "property": {
       "id": "cdf139bc-e610-446c-ac42-d57cd7967478",
-      "dataType": "TEXT"
+      "dataType": "STRING"
     }
   },
   {
@@ -27830,7 +27830,7 @@
     "type": "CREATE_PROPERTY",
     "property": {
       "id": "f020f9bb-153c-47e0-8a3e-440f52c8ca2f",
-      "dataType": "TEXT"
+      "dataType": "STRING"
     }
   },
   {
@@ -32570,7 +32570,7 @@
     "type": "CREATE_PROPERTY",
     "property": {
       "id": "56b5944f-f059-48d1-b0fa-34abe84219da",
-      "dataType": "TEXT"
+      "dataType": "STRING"
     }
   },
   {
@@ -67173,7 +67173,7 @@
     "type": "CREATE_PROPERTY",
     "property": {
       "id": "20b4a731-6129-41fa-82b6-936a4e5c9428",
-      "dataType": "TEXT"
+      "dataType": "STRING"
     }
   },
   {
@@ -97016,7 +97016,7 @@
     "type": "CREATE_PROPERTY",
     "property": {
       "id": "1519f4ac-8394-4e32-9ab1-428967d6c744",
-      "dataType": "TEXT"
+      "dataType": "STRING"
     }
   },
   {
@@ -119762,7 +119762,7 @@
     "type": "CREATE_PROPERTY",
     "property": {
       "id": "9eedefa8-60ae-4ac1-9a04-805054a4b094",
-      "dataType": "TEXT"
+      "dataType": "STRING"
     }
   },
   {
@@ -196498,7 +196498,7 @@
     "type": "CREATE_PROPERTY",
     "property": {
       "id": "dc70a838-441c-4377-a514-f951e81c66ae",
-      "dataType": "TEXT"
+      "dataType": "STRING"
     }
   },
   {
@@ -262678,7 +262678,7 @@
     "type": "CREATE_PROPERTY",
     "property": {
       "id": "3becdda5-6b9c-487a-9198-a9f85d4160e3",
-      "dataType": "TEXT"
+      "dataType": "STRING"
     }
   },
   {
@@ -287633,7 +287633,7 @@
     "type": "CREATE_PROPERTY",
     "property": {
       "id": "ac5cad78-976e-4275-b28f-aa197780bbf2",
-      "dataType": "TEXT"
+      "dataType": "STRING"
     }
   },
   {
@@ -295413,7 +295413,7 @@
     "type": "CREATE_PROPERTY",
     "property": {
       "id": "5ac6d6f6-4f69-4c08-bf5e-f8b4301d448c",
-      "dataType": "TEXT"
+      "dataType": "STRING"
     }
   },
   {
