@@ -47,23 +47,22 @@ const deployables: Deployable[] = [
   // {
   //   entityId: CRYPTO_ENTITY_ID,
   //   name: "Crypto",
-  //   data: cryptoData as Op[],
+  //   data: cryptoData,
   // },
-  // {
-  //   entityId: CRYPTO_EVENTS_ENTITY_ID,
-  //   name: "Crypto events",
-  //   data: cryptoEventsData as Op[],
-  // },
-//  {
+// {
+//   entityId: CRYPTO_EVENTS_ENTITY_ID,
+//   name: "Crypto events",
+//   data: cryptoEventsData,
+// }, {
 //   entityId: REGIONS_ENTITY_ID,
 //   name: "Regions",
 //   data: regionsData
 // },
-  // {
-  //   entityId: CRYPTO_NEWS_ENTITY_ID,
-  //   name: "Crypto news",
-  //   data: cryptoNewsData as Op[]
-  // },
+// {
+//   entityId: CRYPTO_NEWS_ENTITY_ID,
+//   name: "Crypto news",
+//   data: cryptoNewsData
+// },
 // {
 //   entityId: SF_ENTITY_ID,
 //   name: "San Francisco",
