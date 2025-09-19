@@ -1,11 +1,28 @@
 This project is a simple script to deploy spaces with seeded data from production.
 
-`main.ts` contains the following
+## How it works
 
-- imports with the JSON representation of the ops for each space
-- array containing list of spaces to deploy when running the script
-- entity ids representing each space's front page
-- logging of the space id when each space is deployed
+The `main.ts` script deploys Geo spaces by:
+
+1. **Importing space data**: Each space's operations are imported from JSON files (e.g., `root.json`, `crypto.json`) containing the ops that define the space's content
+2. **Configuring deployables**: Spaces to deploy are defined in the `deployables` array, where each entry contains:
+   - `entityId`: Unique identifier for the space's front page entity
+   - `name`: Display name for the space
+   - `data`: Reference to the imported JSON ops data
+3. **Creating spaces**: For each deployable, the script calls `Graph.createSpace()` with:
+   - Editor address (hardcoded wallet address)
+   - Space name
+   - Network configuration (TESTNET)
+   - Ops data from the JSON file
+   - Space entity ID
+4. **Logging results**: The space ID is logged after successful deployment
+
+## Important notes
+
+- Only uncomment and deploy spaces that haven't been deployed yet to avoid duplicate data
+- Previously deployed spaces are tracked in comments (see line 34-36)
+- Most spaces are commented out by default - uncomment the ones you want to deploy
+- Order matters for deploying if spaces are dependent on properties in other spaces
 
 ### Running the script
 
