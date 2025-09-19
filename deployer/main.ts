@@ -9,6 +9,7 @@ import industriesData from './industries.json'
 import educationData from './education.json'
 import academiaData from './academia.json'
 import technologyData from './technology.json'
+import { writeFileSync, existsSync, readFileSync } from 'fs'
 
 const DUMMY_ENTITY_ID = "3beec887-060d-4d55-9710-863f9206fddf"
 const ROOT_ENTITY_ID = "6b9f649e-38b6-4224-927d-d66171343730"
@@ -29,10 +30,8 @@ type Deployable = {
 }
 
 /**
- * @NOTE Only deploy spaces that haven't already been deployed or you'll end up duplicate data
- *
- * Deployed spaces:
- * root: 1349bc10-dbaa-47b2-8f3c-1244db66a856
+ * @NOTE Only deploy spaces that haven't already been deployed or you'll end up duplicate data.
+ * See deployed.json for metadata for each already-deployed space.
  */
 const deployables: Deployable[] = [
   {
@@ -91,6 +90,15 @@ const deployables: Deployable[] = [
   // }
 ]
 
+// Load existing deployed spaces or create new object
+let deployed: Record<string, { spaceId: string, entityId: string, timestamp: string }> = {}
+const deployedFilePath = './deployed.json'
+
+if (existsSync(deployedFilePath)) {
+  const existingData = readFileSync(deployedFilePath, 'utf8')
+  deployed = JSON.parse(existingData)
+}
+
 for (const deploy of deployables) {
   console.log(`Deploying ${deploy.name} with ${deploy.data.length} ops`)
 
@@ -102,5 +110,16 @@ for (const deploy of deployables) {
   	spaceEntityId: deploy.entityId,
   })
 
-  console.log(`${deploy} spaceId: `, space)
+  console.log(`${deploy.name} spaceId: `, space)
+
+  // Record deployment info
+  deployed[deploy.name] = {
+    spaceId: space.id,
+    entityId: deploy.entityId,
+    timestamp: new Date().toISOString()
+  }
+
+  // Write to deployed.json
+  writeFileSync(deployedFilePath, JSON.stringify(deployed, null, 2))
+  console.log(`Saved deployment info to ${deployedFilePath}`)
 }
