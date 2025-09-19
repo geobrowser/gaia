@@ -563,7 +563,7 @@
     "type": "CREATE_PROPERTY",
     "property": {
       "id": "0d625978-4b3c-4b57-a86f-de45c997c73c",
-      "dataType": "TEXT"
+      "dataType": "STRING"
     }
   },
   {
@@ -1115,7 +1115,7 @@
     "type": "CREATE_PROPERTY",
     "property": {
       "id": "14a46854-bfd1-4b18-8215-2785c2dab9f3",
-      "dataType": "TEXT"
+      "dataType": "STRING"
     }
   },
   {
@@ -1659,7 +1659,7 @@
     "type": "CREATE_PROPERTY",
     "property": {
       "id": "1a1fff33-5782-4c33-93c7-c3a5f3592b60",
-      "dataType": "TEXT"
+      "dataType": "STRING"
     }
   },
   {
@@ -2778,7 +2778,7 @@
     "type": "CREATE_PROPERTY",
     "property": {
       "id": "265e869b-3a27-40bd-b652-a7a77b0df24f",
-      "dataType": "CHECKBOX"
+      "dataType": "BOOLEAN"
     }
   },
   {
@@ -2871,7 +2871,7 @@
     "type": "CREATE_PROPERTY",
     "property": {
       "id": "2877c1c3-d2ad-493f-abe7-6e1bb16e1c37",
-      "dataType": "TEXT"
+      "dataType": "STRING"
     }
   },
   {
@@ -3986,7 +3986,7 @@
     "type": "CREATE_PROPERTY",
     "property": {
       "id": "355acff4-251d-4b94-8894-0db0364f285b",
-      "dataType": "TEXT"
+      "dataType": "STRING"
     }
   },
   {
@@ -4218,7 +4218,7 @@
     "type": "CREATE_PROPERTY",
     "property": {
       "id": "38ad3edb-8eda-4330-941b-e9abd0dbc9e1",
-      "dataType": "TEXT"
+      "dataType": "STRING"
     }
   },
   {
@@ -4292,7 +4292,7 @@
     "type": "CREATE_PROPERTY",
     "property": {
       "id": "396f8c72-dfd0-4b57-91ea-09c1b9321b2f",
-      "dataType": "TEXT"
+      "dataType": "STRING"
     }
   },
   {
@@ -5111,7 +5111,7 @@
     "type": "CREATE_PROPERTY",
     "property": {
       "id": "412ff593-e915-4012-a43d-4c27ec5c68b6",
-      "dataType": "TEXT"
+      "dataType": "STRING"
     }
   },
   {
@@ -7056,7 +7056,7 @@
     "type": "CREATE_PROPERTY",
     "property": {
       "id": "50371e54-a068-4bc7-886c-16bc7de15a3b",
-      "dataType": "TEXT"
+      "dataType": "STRING"
     }
   },
   {
@@ -7092,7 +7092,7 @@
     "type": "CREATE_PROPERTY",
     "property": {
       "id": "503e9e78-8669-4243-9777-af8fb75cdc56",
-      "dataType": "TEXT"
+      "dataType": "STRING"
     }
   },
   {
@@ -7576,7 +7576,7 @@
     "type": "CREATE_PROPERTY",
     "property": {
       "id": "54aa3b25-c45d-4974-a937-6bb895aeaefe",
-      "dataType": "TEXT"
+      "dataType": "STRING"
     }
   },
   {
@@ -8476,7 +8476,7 @@
     "type": "CREATE_PROPERTY",
     "property": {
       "id": "5e92c8a4-1714-4ee7-9a09-389ef4336aeb",
-      "dataType": "TEXT"
+      "dataType": "STRING"
     }
   },
   {
@@ -12345,7 +12345,7 @@
     "type": "CREATE_PROPERTY",
     "property": {
       "id": "85cebdf1-d84f-4afd-993b-35f182096b59",
-      "dataType": "TEXT"
+      "dataType": "STRING"
     }
   },
   {
@@ -13003,7 +13003,7 @@
     "type": "CREATE_PROPERTY",
     "property": {
       "id": "8a743832-c094-4a62-b665-0c3cc2f9c7bc",
-      "dataType": "TEXT"
+      "dataType": "STRING"
     }
   },
   {
@@ -14294,7 +14294,7 @@
     "type": "CREATE_PROPERTY",
     "property": {
       "id": "95d77002-1faf-4f7c-b7de-b21a7d48cda0",
-      "dataType": "TEXT"
+      "dataType": "STRING"
     }
   },
   {
@@ -14743,7 +14743,7 @@
     "type": "CREATE_PROPERTY",
     "property": {
       "id": "9b1f76ff-9711-404c-861e-59dc3fa7d037",
-      "dataType": "TEXT"
+      "dataType": "STRING"
     }
   },
   {
@@ -15380,7 +15380,7 @@
     "type": "CREATE_PROPERTY",
     "property": {
       "id": "a126ca53-0c8e-48d5-b888-82c734c38935",
-      "dataType": "TEXT"
+      "dataType": "STRING"
     }
   },
   {
@@ -15845,7 +15845,7 @@
     "type": "CREATE_PROPERTY",
     "property": {
       "id": "a5de82d0-80d4-45aa-a76b-76baf2864dcc",
-      "dataType": "TEXT"
+      "dataType": "STRING"
     }
   },
   {
@@ -16268,7 +16268,7 @@
     "type": "CREATE_PROPERTY",
     "property": {
       "id": "ace1e96c-9b83-47b4-bd33-1d302ec0a0f5",
-      "dataType": "TEXT"
+      "dataType": "STRING"
     }
   },
   {
@@ -19857,7 +19857,7 @@
     "type": "CREATE_PROPERTY",
     "property": {
       "id": "cdf139bc-e610-446c-ac42-d57cd7967478",
-      "dataType": "TEXT"
+      "dataType": "STRING"
     }
   },
   {
@@ -20245,7 +20245,7 @@
     "type": "CREATE_PROPERTY",
     "property": {
       "id": "d2c1a101-14e3-464a-8272-f4e75b0f1407",
-      "dataType": "CHECKBOX"
+      "dataType": "BOOLEAN"
     }
   },
   {
@@ -20308,7 +20308,7 @@
     "type": "CREATE_PROPERTY",
     "property": {
       "id": "d378e881-3ed9-4a60-b552-43ce64dac439",
-      "dataType": "TEXT"
+      "dataType": "STRING"
     }
   },
   {
@@ -20699,7 +20699,7 @@
     "type": "CREATE_PROPERTY",
     "property": {
       "id": "d9ada086-52e3-4b66-8893-0ccf2f9fd9ea",
-      "dataType": "TEXT"
+      "dataType": "STRING"
     }
   },
   {
@@ -21694,7 +21694,7 @@
     "type": "CREATE_PROPERTY",
     "property": {
       "id": "e3e363d1-dd29-4ccb-8e6f-f3b76d99bc33",
-      "dataType": "TEXT"
+      "dataType": "STRING"
     }
   },
   {
@@ -22685,7 +22685,7 @@
     "type": "CREATE_PROPERTY",
     "property": {
       "id": "ede47e69-30b0-4499-8ea4-aafbda449609",
-      "dataType": "TEXT"
+      "dataType": "STRING"
     }
   },
   {
@@ -22896,7 +22896,7 @@
     "type": "CREATE_PROPERTY",
     "property": {
       "id": "eed38e74-e679-46bf-8a42-ea3e4f8fb5fb",
-      "dataType": "TEXT"
+      "dataType": "STRING"
     }
   },
   {
