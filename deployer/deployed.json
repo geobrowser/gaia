@@ -13,5 +13,15 @@
     "spaceId": "3f32353d-3b27-4a13-b71a-746f06e1f7db",
     "entityId": "23575692-bda8-4a71-8694-04da2e2af18f",
     "timestamp": "2025-09-19T22:48:13.668Z"
+  },
+  "Crypto events": {
+    "spaceId": "bd8f744d-6154-4d97-b5fe-dcca270b6666",
+    "entityId": "320ab568-68cf-4587-8dc9-ae82f55587ce",
+    "timestamp": "2025-09-19T23:30:58.069Z"
+  },
+  "Crypto news": {
+    "spaceId": "c11c6aa0-9f58-4805-9d2d-2f30263e3ae6",
+    "entityId": "fd34c360-59ca-4284-9f13-44d81da56837",
+    "timestamp": "2025-09-19T23:34:40.972Z"
   }
 }
