@@ -1,5 +1,6 @@
 use cache::PreprocessedEdit;
 use stream::utils::BlockMetadata;
+use uuid::Uuid;
 
 pub mod block_handler;
 pub mod cache;
@@ -72,6 +73,7 @@ pub enum ProposalCreated {
         content_uri: String,
         dao_address: String,
         plugin_address: String,
+        edit_id: Option<Uuid>, // ID from the cached Edit
     },
     AddMember {
         proposal_id: String,

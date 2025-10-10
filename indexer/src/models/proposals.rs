@@ -54,12 +54,18 @@ impl ProposalsModel {
                     end_time,
                     content_uri,
                     dao_address,
+                    edit_id,
                     ..
                 } => {
                     let space_id = derive_space_id(GEO, &checksum_address(dao_address.clone()));
                     
+                    // Use the Edit ID if available, otherwise use the proposal ID
+                    let id = edit_id.unwrap_or_else(|| {
+                        Uuid::parse_str(proposal_id).unwrap_or_else(|_| Uuid::new_v4())
+                    });
+                    
                     ProposalItem {
-                        id: Uuid::parse_str(proposal_id).unwrap_or_else(|_| Uuid::new_v4()),
+                        id,
                         space_id,
                         proposal_type: ProposalType::PublishEdit,
                         creator: checksum_address(creator.clone()),

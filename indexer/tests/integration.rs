@@ -51,6 +51,7 @@ impl TestIndexer {
 
 // @TODO: Different test for the cache preprocessing
 
+
 #[tokio::test]
 async fn main() -> Result<(), IndexingError> {
     dotenv().ok();
@@ -2161,6 +2162,7 @@ async fn test_proposals_indexing() -> Result<(), IndexingError> {
         content_uri: "ipfs://QmTest123".to_string(),
         dao_address: space_dao_address.clone(),
         plugin_address: "0x4444444444444444444444444444444444444444".to_string(),
+        edit_id: None, // No edit_id for this test
     };
 
     let add_member_proposal = ProposalCreated::AddMember {
@@ -2258,6 +2260,7 @@ async fn test_executed_proposals() -> Result<(), IndexingError> {
         content_uri: "ipfs://QmTest123".to_string(),
         dao_address: space_dao_address.clone(),
         plugin_address: "0x4444444444444444444444444444444444444444".to_string(),
+        edit_id: None, // No edit_id for this test
     };
 
     let create_kg_data = KgData {

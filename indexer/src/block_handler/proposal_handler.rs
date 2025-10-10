@@ -3,11 +3,8 @@ use std::sync::Arc;
 use stream::utils::BlockMetadata;
 
 use crate::{
-    error::IndexingError, 
-    models::proposals::ProposalsModel, 
-    storage::StorageBackend, 
-    ProposalCreated, 
-    ExecutedProposal
+    error::IndexingError, models::proposals::ProposalsModel, storage::StorageBackend,
+    ExecutedProposal, ProposalCreated,
 };
 
 pub async fn run<S>(
@@ -25,9 +22,7 @@ where
     if !created_proposals.is_empty() {
         let block_number = block_metadata.block_number as i64;
         let proposal_items = ProposalsModel::map_created_proposals(created_proposals, block_number);
-        storage
-            .insert_proposals(&proposal_items, &mut tx)
-            .await?;
+        storage.insert_proposals(&proposal_items, &mut tx).await?;
     }
 
     // Update executed proposal statuses
