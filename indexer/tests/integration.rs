@@ -2155,7 +2155,7 @@ async fn test_proposals_indexing() -> Result<(), IndexingError> {
 
     // Create test proposals
     let publish_edit_proposal = ProposalCreated::PublishEdit {
-        proposal_id: proposal_id.clone(),
+        proposal_id: Uuid::parse_str(&proposal_id).unwrap(),
         creator: creator_address.clone(),
         start_time: "1234567890".to_string(),
         end_time: "1234567999".to_string(),
@@ -2166,7 +2166,7 @@ async fn test_proposals_indexing() -> Result<(), IndexingError> {
     };
 
     let add_member_proposal = ProposalCreated::AddMember {
-        proposal_id: "550e8400-e29b-41d4-a716-446655440002".to_string(),
+        proposal_id: Uuid::parse_str("550e8400-e29b-41d4-a716-446655440002").unwrap(),
         creator: creator_address.clone(),
         start_time: "1234567890".to_string(),
         end_time: "1234567999".to_string(),
@@ -2253,7 +2253,7 @@ async fn test_executed_proposals() -> Result<(), IndexingError> {
 
     // First, create a proposal
     let created_proposal = ProposalCreated::PublishEdit {
-        proposal_id: proposal_id.clone(),
+        proposal_id: Uuid::parse_str(&proposal_id).unwrap(),
         creator: "0xabcdef1234567890abcdef1234567890abcdef12".to_string(),
         start_time: "1234567890".to_string(),
         end_time: "1234567999".to_string(),

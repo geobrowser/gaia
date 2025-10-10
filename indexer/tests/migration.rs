@@ -8,6 +8,7 @@ use wire::pb::grc20::Edit;
 use dotenv::dotenv;
 use indexer::{
     block_handler::root_handler,
+    cache::PreprocessedEdit,
     cache::properties_cache::PropertiesCache,
     error::IndexingError,
     storage::postgres::PostgresStorage,

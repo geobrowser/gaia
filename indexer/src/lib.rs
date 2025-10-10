@@ -66,7 +66,7 @@ pub struct ExecutedProposal {
 #[derive(Clone, Debug)]
 pub enum ProposalCreated {
     PublishEdit {
-        proposal_id: String,
+        proposal_id: Uuid,
         creator: String,
         start_time: String,
         end_time: String,
@@ -76,7 +76,7 @@ pub enum ProposalCreated {
         edit_id: Option<Uuid>, // ID from the cached Edit
     },
     AddMember {
-        proposal_id: String,
+        proposal_id: Uuid,
         creator: String,
         start_time: String,
         end_time: String,
@@ -86,7 +86,7 @@ pub enum ProposalCreated {
         change_type: String,
     },
     RemoveMember {
-        proposal_id: String,
+        proposal_id: Uuid,
         creator: String,
         start_time: String,
         end_time: String,
@@ -96,7 +96,7 @@ pub enum ProposalCreated {
         change_type: String,
     },
     AddEditor {
-        proposal_id: String,
+        proposal_id: Uuid,
         creator: String,
         start_time: String,
         end_time: String,
@@ -106,7 +106,7 @@ pub enum ProposalCreated {
         change_type: String,
     },
     RemoveEditor {
-        proposal_id: String,
+        proposal_id: Uuid,
         creator: String,
         start_time: String,
         end_time: String,
@@ -116,7 +116,7 @@ pub enum ProposalCreated {
         change_type: String,
     },
     AddSubspace {
-        proposal_id: String,
+        proposal_id: Uuid,
         creator: String,
         start_time: String,
         end_time: String,
@@ -126,7 +126,7 @@ pub enum ProposalCreated {
         change_type: String,
     },
     RemoveSubspace {
-        proposal_id: String,
+        proposal_id: Uuid,
         creator: String,
         start_time: String,
         end_time: String,

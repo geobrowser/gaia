@@ -60,9 +60,7 @@ impl ProposalsModel {
                     let space_id = derive_space_id(GEO, &checksum_address(dao_address.clone()));
                     
                     // Use the Edit ID if available, otherwise use the proposal ID
-                    let id = edit_id.unwrap_or_else(|| {
-                        Uuid::parse_str(proposal_id).unwrap_or_else(|_| Uuid::new_v4())
-                    });
+                    let id = edit_id.unwrap_or(*proposal_id);
                     
                     ProposalItem {
                         id,
@@ -89,7 +87,7 @@ impl ProposalsModel {
                     let space_id = derive_space_id(GEO, &checksum_address(dao_address.clone()));
                     
                     ProposalItem {
-                        id: Uuid::parse_str(proposal_id).unwrap_or_else(|_| Uuid::new_v4()),
+                        id: *proposal_id,
                         space_id,
                         proposal_type: ProposalType::AddMember,
                         creator: checksum_address(creator.clone()),
@@ -113,7 +111,7 @@ impl ProposalsModel {
                     let space_id = derive_space_id(GEO, &checksum_address(dao_address.clone()));
                     
                     ProposalItem {
-                        id: Uuid::parse_str(proposal_id).unwrap_or_else(|_| Uuid::new_v4()),
+                        id: *proposal_id,
                         space_id,
                         proposal_type: ProposalType::RemoveMember,
                         creator: checksum_address(creator.clone()),
@@ -137,7 +135,7 @@ impl ProposalsModel {
                     let space_id = derive_space_id(GEO, &checksum_address(dao_address.clone()));
                     
                     ProposalItem {
-                        id: Uuid::parse_str(proposal_id).unwrap_or_else(|_| Uuid::new_v4()),
+                        id: *proposal_id,
                         space_id,
                         proposal_type: ProposalType::AddEditor,
                         creator: checksum_address(creator.clone()),
@@ -161,7 +159,7 @@ impl ProposalsModel {
                     let space_id = derive_space_id(GEO, &checksum_address(dao_address.clone()));
                     
                     ProposalItem {
-                        id: Uuid::parse_str(proposal_id).unwrap_or_else(|_| Uuid::new_v4()),
+                        id: *proposal_id,
                         space_id,
                         proposal_type: ProposalType::RemoveEditor,
                         creator: checksum_address(creator.clone()),
@@ -185,7 +183,7 @@ impl ProposalsModel {
                     let space_id = derive_space_id(GEO, &checksum_address(dao_address.clone()));
                     
                     ProposalItem {
-                        id: Uuid::parse_str(proposal_id).unwrap_or_else(|_| Uuid::new_v4()),
+                        id: *proposal_id,
                         space_id,
                         proposal_type: ProposalType::AddSubspace,
                         creator: checksum_address(creator.clone()),
@@ -209,7 +207,7 @@ impl ProposalsModel {
                     let space_id = derive_space_id(GEO, &checksum_address(dao_address.clone()));
                     
                     ProposalItem {
-                        id: Uuid::parse_str(proposal_id).unwrap_or_else(|_| Uuid::new_v4()),
+                        id: *proposal_id,
                         space_id,
                         proposal_type: ProposalType::RemoveSubspace,
                         creator: checksum_address(creator.clone()),
