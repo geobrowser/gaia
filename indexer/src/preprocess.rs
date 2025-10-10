@@ -20,7 +20,7 @@ use crate::{
     AddedMember, AddedSubspace, CreatedSpace, ExecutedProposal, KgData, PersonalSpace,
     ProposalCreated, PublicSpace, RemovedMember, RemovedSubspace,
 };
-use indexer_utils::id;
+use indexer_utils::id::{self, derive_proposal_id};
 use uuid::Uuid;
 
 /// Matches spaces with their corresponding plugins based on DAO address
@@ -300,7 +300,9 @@ pub fn map_created_proposals(
 
     // Map AddMember proposals
     for p in &geo.proposed_added_members {
+        let id = derive_proposal_id(&p.dao_address, &p.proposal_id, &p.plugin_address);
         proposals.push(ProposalCreated::AddMember {
+            id,
             proposal_id: p.proposal_id.clone(),
             creator: p.creator.clone(),
             start_time: p.start_time.clone(),
@@ -314,7 +316,9 @@ pub fn map_created_proposals(
 
     // Map RemoveMember proposals
     for p in &geo.proposed_removed_members {
+        let id = derive_proposal_id(&p.dao_address, &p.proposal_id, &p.plugin_address);
         proposals.push(ProposalCreated::RemoveMember {
+            id,
             proposal_id: p.proposal_id.clone(),
             creator: p.creator.clone(),
             start_time: p.start_time.clone(),
@@ -328,7 +332,9 @@ pub fn map_created_proposals(
 
     // Map AddEditor proposals
     for p in &geo.proposed_added_editors {
+        let id = derive_proposal_id(&p.dao_address, &p.proposal_id, &p.plugin_address);
         proposals.push(ProposalCreated::AddEditor {
+            id,
             proposal_id: p.proposal_id.clone(),
             creator: p.creator.clone(),
             start_time: p.start_time.clone(),
@@ -342,7 +348,9 @@ pub fn map_created_proposals(
 
     // Map RemoveEditor proposals
     for p in &geo.proposed_removed_editors {
+        let id = derive_proposal_id(&p.dao_address, &p.proposal_id, &p.plugin_address);
         proposals.push(ProposalCreated::RemoveEditor {
+            id,
             proposal_id: p.proposal_id.clone(),
             creator: p.creator.clone(),
             start_time: p.start_time.clone(),
@@ -356,7 +364,9 @@ pub fn map_created_proposals(
 
     // Map AddSubspace proposals
     for p in &geo.proposed_added_subspaces {
+        let id = derive_proposal_id(&p.dao_address, &p.proposal_id, &p.plugin_address);
         proposals.push(ProposalCreated::AddSubspace {
+            id,
             proposal_id: p.proposal_id.clone(),
             creator: p.creator.clone(),
             start_time: p.start_time.clone(),
@@ -370,7 +380,9 @@ pub fn map_created_proposals(
 
     // Map RemoveSubspace proposals
     for p in &geo.proposed_removed_subspaces {
+        let id = derive_proposal_id(&p.dao_address, &p.proposal_id, &p.plugin_address);
         proposals.push(ProposalCreated::RemoveSubspace {
+            id,
             proposal_id: p.proposal_id.clone(),
             creator: p.creator.clone(),
             start_time: p.start_time.clone(),
