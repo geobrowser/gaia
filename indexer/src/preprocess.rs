@@ -1,9 +1,9 @@
 use futures::future::join_all;
 use indexer_utils::get_blocklist;
 use prost::Message;
-use std::{collections::HashSet, sync::Arc};
+use std::{collections::{HashMap, HashSet}, sync::Arc};
 use stream::pb::sf::substreams::rpc::v2::BlockScopedData;
-use tokio::{sync::Mutex, task};
+use tokio::task;
 use tokio_retry::{
     strategy::{jitter, ExponentialBackoff},
     Retry,
@@ -174,76 +174,122 @@ pub fn map_executed_proposals(
         .collect()
 }
 
-/// Maps created proposal events to ProposalCreated enum variants
-pub async fn map_created_proposals(geo: &wire::pb::chain::GeoOutput, cache: &Arc<impl CacheBackend>) -> Result<Vec<ProposalCreated>, IndexingError> {
-    let mut proposals = Vec::new();
+/// Deduplicates a list of content URIs, returning only unique ones
+fn deduplicate_content_uris(content_uris: Vec<String>) -> Vec<String> {
+    let unique_uris: HashSet<String> = content_uris.into_iter().collect();
+    unique_uris.into_iter().collect()
+}
 
-    // Map PublishEdit proposals concurrently
-    if !geo.edits.is_empty() {
-        // Create futures for concurrent cache reads
-        let cache_futures = geo.edits.iter().map(|p| {
-            let cache = cache.clone();
-            let content_uri = p.content_uri.clone();
-            async move {
-                (content_uri.clone(), cache.get(&content_uri).await)
+/// Fetches all unique content URIs from the cache concurrently, deduplicating requests
+async fn fetch_deduplicated_cache_entries(
+    content_uris: Vec<String>,
+    cache: &Arc<impl CacheBackend + 'static>,
+) -> HashMap<String, PreprocessedEdit> {
+    // Deduplicate content URIs
+    let unique_uris = deduplicate_content_uris(content_uris);
+    let mut handles = Vec::new();
+
+    // Create concurrent cache read tasks for unique URIs only
+    for content_uri in unique_uris {
+        let cache = cache.clone();
+        let uri = content_uri.clone();
+
+        let handle = task::spawn(async move {
+            // Retry logic for cache reads
+            let retry = ExponentialBackoff::from_millis(10)
+                .factor(2)
+                .max_delay(std::time::Duration::from_secs(5))
+                .map(jitter);
+
+            match Retry::spawn(retry, async || cache.get(&uri).await).await {
+                Ok(cached_edit_entry) => {
+                    if cached_edit_entry.is_errored {
+                        warn!(
+                            content_uri = %uri,
+                            "Cached edit entry is errored"
+                        );
+                    }
+                    Some((uri, cached_edit_entry))
+                }
+                Err(e) => {
+                    warn!(
+                        content_uri = %uri,
+                        error = %e,
+                        "Failed to fetch edit from cache after retries"
+                    );
+                    None
+                }
             }
         });
 
-        // Execute all cache reads concurrently
-        let cache_results = futures::future::join_all(cache_futures).await;
+        handles.push(handle);
+    }
 
-        // Process results and create proposals
-        for (p, (content_uri, cache_result)) in geo.edits.iter().zip(cache_results.iter()) {
-            let edit_id = match cache_result {
-                Ok(cached_edit) if !cached_edit.is_errored => {
-                    if let Some(edit) = &cached_edit.edit {
-                        // Transform the edit.id to UUID using the same logic as entities
-                        match id::transform_id_bytes(edit.id.clone()) {
-                            Ok(bytes) => Some(Uuid::from_bytes(bytes)),
-                            Err(_) => {
-                                tracing::warn!(
-                                    content_uri = %content_uri,
-                                    "Failed to transform edit.id bytes, using None"
-                                );
-                                None
-                            }
-                        }
-                    } else {
-                        tracing::warn!(
-                            content_uri = %content_uri,
-                            "Cached edit has no edit data, using None"
-                        );
-                        None
-                    }
-                }
-                Ok(_) => {
-                    tracing::warn!(
-                        content_uri = %content_uri,
-                        "Cached edit is errored, using None"
-                    );
-                    None
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        content_uri = %content_uri,
-                        error = %e,
-                        "Failed to read edit from cache, using None"
-                    );
-                    None
-                }
-            };
+    // Collect results
+    let results = join_all(handles).await;
+    let mut cache_map = HashMap::new();
 
-            proposals.push(ProposalCreated::PublishEdit {
-                proposal_id: p.proposal_id.clone(),
-                creator: p.creator.clone(),
-                start_time: p.start_time.clone(),
-                end_time: p.end_time.clone(),
-                content_uri: p.content_uri.clone(),
-                dao_address: p.dao_address.clone(),
-                plugin_address: p.plugin_address.clone(),
-                edit_id,
-            });
+    for result in results {
+        if let Ok(Some((uri, cached_edit))) = result {
+            cache_map.insert(uri, cached_edit);
         }
+    }
+
+    cache_map
+}
+
+/// Maps created proposal events to ProposalCreated enum variants
+pub fn map_created_proposals(geo: &wire::pb::chain::GeoOutput, cache_map: &HashMap<String, PreprocessedEdit>) -> Result<Vec<ProposalCreated>, IndexingError> {
+    let mut proposals = Vec::new();
+
+    // Map PublishEdit proposals using cached data
+    for p in &geo.edits {
+        let edit_id = if let Some(cached_edit) = cache_map.get(&p.content_uri) {
+            if !cached_edit.is_errored {
+                if let Some(edit) = &cached_edit.edit {
+                    // Transform the edit.id to UUID using the same logic as entities
+                    match id::transform_id_bytes(edit.id.clone()) {
+                        Ok(bytes) => Some(Uuid::from_bytes(bytes)),
+                        Err(_) => {
+                            tracing::warn!(
+                                content_uri = %p.content_uri,
+                                "Failed to transform edit.id bytes, using None"
+                            );
+                            None
+                        }
+                    }
+                } else {
+                    tracing::warn!(
+                        content_uri = %p.content_uri,
+                        "Cached edit has no edit data, using None"
+                    );
+                    None
+                }
+            } else {
+                tracing::warn!(
+                    content_uri = %p.content_uri,
+                    "Cached edit is errored, using None"
+                );
+                None
+            }
+        } else {
+            tracing::warn!(
+                content_uri = %p.content_uri,
+                "No cached data found for content URI, using None"
+            );
+            None
+        };
+
+        proposals.push(ProposalCreated::PublishEdit {
+            proposal_id: p.proposal_id.clone(),
+            creator: p.creator.clone(),
+            start_time: p.start_time.clone(),
+            end_time: p.end_time.clone(),
+            content_uri: p.content_uri.clone(),
+            dao_address: p.dao_address.clone(),
+            plugin_address: p.plugin_address.clone(),
+            edit_id,
+        });
     }
 
     // Map AddMember proposals
@@ -345,15 +391,15 @@ pub async fn preprocess_block_scoped_data(
     let output = stream::utils::output(block_data);
     let block_metadata = stream::utils::block_metadata(block_data);
     let geo = GeoOutput::decode(output.value.as_slice())?;
-    let cache = ipfs_cache;
-    let edits = Arc::new(Mutex::new(Vec::<PreprocessedEdit>::new()));
 
-    let mut handles = Vec::new();
+    // Collect all content URIs from both geo.edits_published and geo.edits
+    let mut all_content_uris = Vec::new();
     let mut blocklisted_count = 0;
     let total_edits = geo.edits_published.len();
 
-    // @TODO: We can separate this cache reading step into a separate module
-    for chain_edit in geo.edits_published.clone() {
+    // Filter out blocklisted DAOs and collect their content URIs
+    let mut non_blocklisted_edits_published = Vec::new();
+    for chain_edit in &geo.edits_published {
         if get_blocklist()
             .dao_addresses
             .contains(&chain_edit.dao_address.as_str())
@@ -366,74 +412,25 @@ pub async fn preprocess_block_scoped_data(
             );
             continue;
         }
-
-        let cache = cache.clone();
-        let edits_clone = edits.clone();
-
-        let content_uri = chain_edit.content_uri.clone();
-        let dao_address = chain_edit.dao_address.clone();
-
-        let handle = task::spawn(async move {
-            // We retry requests to the cache in the case that the cache is
-            // still populating. For now we assume writing to + reading from
-            // the cache can't fail
-            let retry = ExponentialBackoff::from_millis(10)
-                .factor(2)
-                .max_delay(std::time::Duration::from_secs(5))
-                .map(jitter);
-
-            match Retry::spawn(retry, async || cache.get(&content_uri).await).await {
-                Ok(cached_edit_entry) => {
-                    if cached_edit_entry.is_errored {
-                        warn!(
-                            dao_address = %dao_address,
-                            content_uri = %content_uri,
-                            "Cached edit entry is errored"
-                        );
-                    }
-
-                    {
-                        let mut edits_guard = edits_clone.lock().await;
-                        edits_guard.push(cached_edit_entry);
-                    }
-                    Ok::<(), IndexingError>(())
-                }
-                Err(e) => {
-                    warn!(
-                        dao_address = %dao_address,
-                        content_uri = %content_uri,
-                        error = %e,
-                        "Failed to fetch edit from cache after retries"
-                    );
-                    Err(IndexingError::CacheError(e))
-                }
-            }
-        });
-
-        handles.push(handle);
+        non_blocklisted_edits_published.push(chain_edit);
+        all_content_uris.push(chain_edit.content_uri.clone());
     }
 
-    let results = join_all(handles).await;
+    // Add content URIs from geo.edits (for proposals)
+    for edit_proposal in &geo.edits {
+        all_content_uris.push(edit_proposal.content_uri.clone());
+    }
 
-    let mut failed_fetches = 0;
-    for result in results {
-        if let Err(_) = result {
-            failed_fetches += 1;
+    // Fetch all cache entries in a single deduplicated operation
+    let cache_map = fetch_deduplicated_cache_entries(all_content_uris, ipfs_cache).await;
+
+    // Extract edits for the non-blocklisted published edits
+    let mut final_edits = Vec::new();
+    for chain_edit in &non_blocklisted_edits_published {
+        if let Some(cached_edit) = cache_map.get(&chain_edit.content_uri) {
+            final_edits.push(cached_edit.clone());
         }
     }
-
-    if failed_fetches > 0 {
-        warn!(
-            failed_count = failed_fetches,
-            "Some edits failed to fetch from cache"
-        );
-    }
-
-    // Extract the edits from the Arc<Mutex<>> for further processing
-    let final_edits = {
-        let edits_guard = edits.lock().await;
-        edits_guard.clone() // Clone the vector to move it out of the mutex
-    };
 
 
     if blocklisted_count > 0 {
@@ -485,7 +482,7 @@ pub async fn preprocess_block_scoped_data(
     let removed_editors = map_editors_removed(&geo.editors_removed);
     
     let executed_proposals = map_executed_proposals(&geo.executed_proposals);
-    let created_proposals = map_created_proposals(&geo, &ipfs_cache).await?;
+    let created_proposals = map_created_proposals(&geo, &cache_map)?;
 
     let kg_data = KgData {
         edits: final_edits.clone(),
@@ -1179,21 +1176,22 @@ mod tests {
         use crate::cache::{CacheBackend, CacheError};
         use async_trait::async_trait;
         use std::collections::HashMap;
-        use tokio::sync::Mutex;
         use wire::pb::grc20::Edit;
 
         // Mock cache implementation for testing
         pub struct MockCache {
-            data: Arc<Mutex<HashMap<String, PreprocessedEdit>>>,
+            data: Arc<tokio::sync::Mutex<HashMap<String, PreprocessedEdit>>>,
         }
 
         impl MockCache {
+            #[allow(dead_code)]
             pub fn new() -> Self {
                 Self {
-                    data: Arc::new(Mutex::new(HashMap::new())),
+                    data: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
                 }
             }
 
+            #[allow(dead_code)]
             pub async fn insert(&self, uri: String, edit: PreprocessedEdit) {
                 let mut data = self.data.lock().await;
                 data.insert(uri, edit);
@@ -1235,8 +1233,6 @@ mod tests {
 
         #[tokio::test]
         async fn test_map_created_proposals_with_cache_success() {
-            let cache = Arc::new(MockCache::new());
-            
             // Create test Edit with known ID bytes
             let edit_id_bytes = vec![
                 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
@@ -1252,8 +1248,9 @@ mod tests {
                 space_id: Uuid::new_v4(),
             };
 
-            // Insert into mock cache
-            cache.insert("ipfs://QmTest123".to_string(), preprocessed_edit).await;
+            // Create cache map
+            let mut cache_map = HashMap::new();
+            cache_map.insert("ipfs://QmTest123".to_string(), preprocessed_edit);
 
             // Create test GeoOutput with proposal
             let geo = wire::pb::chain::GeoOutput {
@@ -1262,7 +1259,7 @@ mod tests {
             };
 
             // Test the function
-            let result = map_created_proposals(&geo, &cache).await.unwrap();
+            let result = map_created_proposals(&geo, &cache_map).unwrap();
 
             assert_eq!(result.len(), 1);
             
@@ -1281,9 +1278,8 @@ mod tests {
 
         #[tokio::test]
         async fn test_map_created_proposals_with_cache_not_found() {
-            let cache = Arc::new(MockCache::new());
-            
-            // Don't insert anything into cache to simulate cache miss
+            // Create empty cache map to simulate cache miss
+            let cache_map = HashMap::new();
 
             // Create test GeoOutput with proposal
             let geo = wire::pb::chain::GeoOutput {
@@ -1292,7 +1288,7 @@ mod tests {
             };
 
             // Test the function
-            let result = map_created_proposals(&geo, &cache).await.unwrap();
+            let result = map_created_proposals(&geo, &cache_map).unwrap();
 
             assert_eq!(result.len(), 1);
             
@@ -1307,8 +1303,6 @@ mod tests {
 
         #[tokio::test]
         async fn test_map_created_proposals_with_errored_cache_entry() {
-            let cache = Arc::new(MockCache::new());
-            
             // Create errored preprocessed edit
             let preprocessed_edit = PreprocessedEdit {
                 cid: "ipfs://QmErrored".to_string(),
@@ -1317,8 +1311,9 @@ mod tests {
                 space_id: Uuid::new_v4(),
             };
 
-            // Insert into mock cache
-            cache.insert("ipfs://QmErrored".to_string(), preprocessed_edit).await;
+            // Create cache map with errored entry
+            let mut cache_map = HashMap::new();
+            cache_map.insert("ipfs://QmErrored".to_string(), preprocessed_edit);
 
             // Create test GeoOutput with proposal
             let geo = wire::pb::chain::GeoOutput {
@@ -1327,7 +1322,7 @@ mod tests {
             };
 
             // Test the function
-            let result = map_created_proposals(&geo, &cache).await.unwrap();
+            let result = map_created_proposals(&geo, &cache_map).unwrap();
 
             assert_eq!(result.len(), 1);
             
@@ -1342,8 +1337,6 @@ mod tests {
 
         #[tokio::test]
         async fn test_map_created_proposals_with_invalid_edit_id() {
-            let cache = Arc::new(MockCache::new());
-            
             // Create test Edit with invalid ID bytes (wrong length)
             let invalid_edit_id_bytes = vec![0x01, 0x02, 0x03]; // Too short for UUID
             let test_edit = create_test_edit(invalid_edit_id_bytes);
@@ -1356,8 +1349,9 @@ mod tests {
                 space_id: Uuid::new_v4(),
             };
 
-            // Insert into mock cache
-            cache.insert("ipfs://QmInvalidId".to_string(), preprocessed_edit).await;
+            // Create cache map
+            let mut cache_map = HashMap::new();
+            cache_map.insert("ipfs://QmInvalidId".to_string(), preprocessed_edit);
 
             // Create test GeoOutput with proposal
             let geo = wire::pb::chain::GeoOutput {
@@ -1366,7 +1360,7 @@ mod tests {
             };
 
             // Test the function
-            let result = map_created_proposals(&geo, &cache).await.unwrap();
+            let result = map_created_proposals(&geo, &cache_map).unwrap();
 
             assert_eq!(result.len(), 1);
             
@@ -1381,8 +1375,6 @@ mod tests {
 
         #[tokio::test]
         async fn test_map_created_proposals_concurrent_cache_reads() {
-            let cache = Arc::new(MockCache::new());
-            
             // Create multiple test Edits with different IDs
             let edit_id_bytes_1 = vec![
                 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
@@ -1410,9 +1402,10 @@ mod tests {
                 space_id: Uuid::new_v4(),
             };
 
-            // Insert into mock cache
-            cache.insert("ipfs://QmTest1".to_string(), preprocessed_edit_1).await;
-            cache.insert("ipfs://QmTest2".to_string(), preprocessed_edit_2).await;
+            // Create cache map
+            let mut cache_map = HashMap::new();
+            cache_map.insert("ipfs://QmTest1".to_string(), preprocessed_edit_1);
+            cache_map.insert("ipfs://QmTest2".to_string(), preprocessed_edit_2);
 
             // Create test GeoOutput with multiple proposals
             let geo = wire::pb::chain::GeoOutput {
@@ -1425,7 +1418,7 @@ mod tests {
             };
 
             // Test the function
-            let result = map_created_proposals(&geo, &cache).await.unwrap();
+            let result = map_created_proposals(&geo, &cache_map).unwrap();
 
             assert_eq!(result.len(), 3);
             
@@ -1463,8 +1456,6 @@ mod tests {
 
         #[tokio::test]
         async fn test_map_created_proposals_with_mixed_proposal_types() {
-            let cache = Arc::new(MockCache::new());
-            
             // Create test Edit for PublishEdit proposal
             let edit_id_bytes = vec![
                 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
@@ -1479,7 +1470,9 @@ mod tests {
                 space_id: Uuid::new_v4(),
             };
 
-            cache.insert("ipfs://QmEdit123".to_string(), preprocessed_edit).await;
+            // Create cache map
+            let mut cache_map = HashMap::new();
+            cache_map.insert("ipfs://QmEdit123".to_string(), preprocessed_edit);
 
             // Create test GeoOutput with mixed proposal types
             let geo = wire::pb::chain::GeoOutput {
@@ -1498,7 +1491,7 @@ mod tests {
             };
 
             // Test the function
-            let result = map_created_proposals(&geo, &cache).await.unwrap();
+            let result = map_created_proposals(&geo, &cache_map).unwrap();
 
             assert_eq!(result.len(), 2);
             
@@ -1524,7 +1517,8 @@ mod tests {
 
         #[tokio::test]
         async fn test_map_created_proposals_empty_edits() {
-            let cache = Arc::new(MockCache::new());
+            // Create empty cache map
+            let cache_map = HashMap::new();
 
             // Create test GeoOutput with no edit proposals
             let geo = wire::pb::chain::GeoOutput {
@@ -1543,7 +1537,7 @@ mod tests {
             };
 
             // Test the function
-            let result = map_created_proposals(&geo, &cache).await.unwrap();
+            let result = map_created_proposals(&geo, &cache_map).unwrap();
 
             assert_eq!(result.len(), 1);
             
@@ -1555,10 +1549,282 @@ mod tests {
             }
         }
 
+        #[test]
+        fn test_deduplicate_content_uris() {
+            // Test with duplicates
+            let content_uris = vec![
+                "ipfs://QmTest1".to_string(),
+                "ipfs://QmTest2".to_string(),
+                "ipfs://QmTest1".to_string(), // Duplicate
+                "ipfs://QmTest3".to_string(),
+                "ipfs://QmTest2".to_string(), // Duplicate
+                "ipfs://QmTest1".to_string(), // Another duplicate
+            ];
+
+            let result = deduplicate_content_uris(content_uris);
+            
+            // Should have exactly 3 unique URIs
+            assert_eq!(result.len(), 3, "Should have 3 unique URIs");
+            
+            // Check that all expected URIs are present (order doesn't matter due to HashSet)
+            assert!(result.contains(&"ipfs://QmTest1".to_string()));
+            assert!(result.contains(&"ipfs://QmTest2".to_string()));
+            assert!(result.contains(&"ipfs://QmTest3".to_string()));
+        }
+
+        #[test]
+        fn test_deduplicate_content_uris_empty() {
+            let content_uris = vec![];
+            let result = deduplicate_content_uris(content_uris);
+            assert_eq!(result.len(), 0, "Empty input should return empty result");
+        }
+
+        #[test]
+        fn test_deduplicate_content_uris_no_duplicates() {
+            let content_uris = vec![
+                "ipfs://QmTest1".to_string(),
+                "ipfs://QmTest2".to_string(),
+                "ipfs://QmTest3".to_string(),
+            ];
+
+            let result = deduplicate_content_uris(content_uris.clone());
+            
+            // Should have same number as input
+            assert_eq!(result.len(), 3, "Should have same number when no duplicates");
+            
+            // All original URIs should be present
+            for uri in content_uris {
+                assert!(result.contains(&uri), "Should contain original URI: {}", uri);
+            }
+        }
+
+        #[tokio::test]
+        async fn test_fetch_deduplicated_cache_entries_deduplicates_uris() {
+            // Create a mock cache that tracks how many times each URI is requested
+            use std::sync::atomic::{AtomicUsize, Ordering};
+            use std::sync::Arc;
+            
+            #[derive(Debug)]
+            struct TrackingMockCache {
+                data: Arc<tokio::sync::Mutex<HashMap<String, PreprocessedEdit>>>,
+                request_counts: Arc<tokio::sync::Mutex<HashMap<String, AtomicUsize>>>,
+            }
+
+            impl TrackingMockCache {
+                pub fn new() -> Self {
+                    Self {
+                        data: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+                        request_counts: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+                    }
+                }
+
+                pub async fn insert(&self, uri: String, edit: PreprocessedEdit) {
+                    let mut data = self.data.lock().await;
+                    data.insert(uri.clone(), edit);
+                    
+                    let mut counts = self.request_counts.lock().await;
+                    counts.insert(uri, AtomicUsize::new(0));
+                }
+
+                pub async fn get_request_count(&self, uri: &str) -> usize {
+                    let counts = self.request_counts.lock().await;
+                    counts.get(uri).map(|c| c.load(Ordering::SeqCst)).unwrap_or(0)
+                }
+            }
+
+            #[async_trait]
+            impl CacheBackend for TrackingMockCache {
+                async fn get(&self, uri: &String) -> Result<PreprocessedEdit, CacheError> {
+                    // Increment request count
+                    {
+                        let counts = self.request_counts.lock().await;
+                        if let Some(counter) = counts.get(uri) {
+                            counter.fetch_add(1, Ordering::SeqCst);
+                        }
+                    }
+                    
+                    let data = self.data.lock().await;
+                    data.get(uri).cloned().ok_or(CacheError::NotFound)
+                }
+            }
+
+            let cache = Arc::new(TrackingMockCache::new());
+            
+            // Create test data
+            let edit1 = create_test_edit(vec![0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10]);
+            let edit2 = create_test_edit(vec![0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20]);
+            
+            let preprocessed_edit1 = PreprocessedEdit {
+                cid: "ipfs://QmTest1".to_string(),
+                edit: Some(edit1),
+                is_errored: false,
+                space_id: Uuid::new_v4(),
+            };
+            let preprocessed_edit2 = PreprocessedEdit {
+                cid: "ipfs://QmTest2".to_string(),
+                edit: Some(edit2),
+                is_errored: false,
+                space_id: Uuid::new_v4(),
+            };
+
+            // Insert test data
+            cache.insert("ipfs://QmTest1".to_string(), preprocessed_edit1).await;
+            cache.insert("ipfs://QmTest2".to_string(), preprocessed_edit2).await;
+
+            // Create content URIs with duplicates - this simulates the scenario where
+            // the same content URI appears in both geo.edits_published and geo.edits
+            let content_uris = vec![
+                "ipfs://QmTest1".to_string(), // First occurrence
+                "ipfs://QmTest2".to_string(), // First occurrence
+                "ipfs://QmTest1".to_string(), // Duplicate!
+                "ipfs://QmTest2".to_string(), // Duplicate!
+                "ipfs://QmTest1".to_string(), // Another duplicate!
+            ];
+
+            // Call the deduplication function
+            let result = fetch_deduplicated_cache_entries(content_uris, &cache).await;
+
+            // Verify results
+            assert_eq!(result.len(), 2, "Should return 2 unique cache entries");
+            assert!(result.contains_key("ipfs://QmTest1"), "Should contain QmTest1");
+            assert!(result.contains_key("ipfs://QmTest2"), "Should contain QmTest2");
+
+            // Verify deduplication worked by checking request counts
+            assert_eq!(cache.get_request_count("ipfs://QmTest1").await, 1, "QmTest1 should be requested exactly once despite appearing 3 times");
+            assert_eq!(cache.get_request_count("ipfs://QmTest2").await, 1, "QmTest2 should be requested exactly once despite appearing 2 times");
+        }
+
+        #[tokio::test]
+        async fn test_integration_deduplicates_content_uris_across_edits_published_and_edits() {
+            // This test demonstrates that the same content URI appearing in both
+            // geo.edits_published and geo.edits is only fetched from cache once
+            use std::sync::atomic::{AtomicUsize, Ordering};
+            use std::sync::Arc;
+            
+            // Create tracking cache that counts requests
+            #[derive(Debug)]
+            struct TrackingCache {
+                data: Arc<tokio::sync::Mutex<HashMap<String, PreprocessedEdit>>>,
+                request_counts: Arc<tokio::sync::Mutex<HashMap<String, AtomicUsize>>>,
+            }
+
+            impl TrackingCache {
+                pub fn new() -> Self {
+                    Self {
+                        data: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+                        request_counts: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
+                    }
+                }
+
+                pub async fn insert(&self, uri: String, edit: PreprocessedEdit) {
+                    let mut data = self.data.lock().await;
+                    data.insert(uri.clone(), edit);
+                    
+                    let mut counts = self.request_counts.lock().await;
+                    counts.insert(uri, AtomicUsize::new(0));
+                }
+
+                pub async fn get_request_count(&self, uri: &str) -> usize {
+                    let counts = self.request_counts.lock().await;
+                    counts.get(uri).map(|c| c.load(Ordering::SeqCst)).unwrap_or(0)
+                }
+            }
+
+            #[async_trait]
+            impl CacheBackend for TrackingCache {
+                async fn get(&self, uri: &String) -> Result<PreprocessedEdit, CacheError> {
+                    // Increment request count
+                    {
+                        let counts = self.request_counts.lock().await;
+                        if let Some(counter) = counts.get(uri) {
+                            counter.fetch_add(1, Ordering::SeqCst);
+                        }
+                    }
+                    
+                    let data = self.data.lock().await;
+                    data.get(uri).cloned().ok_or(CacheError::NotFound)
+                }
+            }
+
+            let cache = Arc::new(TrackingCache::new());
+            
+            // Create test edits
+            let edit1 = create_test_edit(vec![0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08, 0x09, 0x0a, 0x0b, 0x0c, 0x0d, 0x0e, 0x0f, 0x10]);
+            let edit2 = create_test_edit(vec![0x11, 0x12, 0x13, 0x14, 0x15, 0x16, 0x17, 0x18, 0x19, 0x1a, 0x1b, 0x1c, 0x1d, 0x1e, 0x1f, 0x20]);
+            
+            let preprocessed_edit1 = PreprocessedEdit {
+                cid: "ipfs://QmShared".to_string(), // Same URI will appear in both places
+                edit: Some(edit1),
+                is_errored: false,
+                space_id: Uuid::new_v4(),
+            };
+            let preprocessed_edit2 = PreprocessedEdit {
+                cid: "ipfs://QmUnique".to_string(),
+                edit: Some(edit2),
+                is_errored: false,
+                space_id: Uuid::new_v4(),
+            };
+
+            // Insert test data
+            cache.insert("ipfs://QmShared".to_string(), preprocessed_edit1).await;
+            cache.insert("ipfs://QmUnique".to_string(), preprocessed_edit2).await;
+
+            // Create GeoOutput that has the SAME content URI in both edits_published and edits
+            let geo = wire::pb::chain::GeoOutput {
+                edits_published: vec![
+                    wire::pb::chain::EditPublished {
+                        content_uri: "ipfs://QmShared".to_string(), // Same URI as in edits
+                        plugin_address: "0xplugin1".to_string(),
+                        dao_address: "0xdao1".to_string(),
+                    },
+                    wire::pb::chain::EditPublished {
+                        content_uri: "ipfs://QmUnique".to_string(), // Unique to edits_published
+                        plugin_address: "0xplugin2".to_string(),
+                        dao_address: "0xdao2".to_string(),
+                    },
+                ],
+                edits: vec![
+                    create_test_proposal_created_event("proposal1", "ipfs://QmShared"), // Same URI as in edits_published!
+                ],
+                ..Default::default()
+            };
+
+            // Test the integration by calling the cache fetching logic directly
+            // Simulate what preprocess_block_scoped_data does
+            let mut all_content_uris = Vec::new();
+            
+            // Add URIs from edits_published (filtering out blocklisted ones)
+            for edit_published in &geo.edits_published {
+                if !get_blocklist().dao_addresses.contains(&edit_published.dao_address.as_str()) {
+                    all_content_uris.push(edit_published.content_uri.clone());
+                }
+            }
+            
+            // Add URIs from edits
+            for edit_proposal in &geo.edits {
+                all_content_uris.push(edit_proposal.content_uri.clone());
+            }
+            
+            // This should contain duplicates: ["ipfs://QmShared", "ipfs://QmUnique", "ipfs://QmShared"]
+            assert_eq!(all_content_uris.len(), 3, "Should have 3 total URIs before deduplication");
+            
+            // Now call our deduplication function
+            let cache_map = fetch_deduplicated_cache_entries(all_content_uris, &cache).await;
+            
+            // Verify results
+            assert_eq!(cache_map.len(), 2, "Should have 2 unique cache entries");
+            assert!(cache_map.contains_key("ipfs://QmShared"));
+            assert!(cache_map.contains_key("ipfs://QmUnique"));
+
+            // Most importantly: verify that the shared URI was only requested ONCE despite appearing twice
+            assert_eq!(cache.get_request_count("ipfs://QmShared").await, 1, 
+                "Shared URI should be requested exactly once despite appearing in both edits_published and edits");
+            assert_eq!(cache.get_request_count("ipfs://QmUnique").await, 1, 
+                "Unique URI should be requested exactly once");
+        }
+
         #[tokio::test]
         async fn test_proposal_item_uses_edit_id_from_cache() {
-            let cache = Arc::new(MockCache::new());
-            
             // Create test Edit with known ID bytes
             let edit_id_bytes = vec![
                 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07, 0x08,
@@ -1575,8 +1841,9 @@ mod tests {
                 space_id: Uuid::new_v4(),
             };
 
-            // Insert into mock cache
-            cache.insert("ipfs://QmTestEditId".to_string(), preprocessed_edit).await;
+            // Create cache map
+            let mut cache_map = HashMap::new();
+            cache_map.insert("ipfs://QmTestEditId".to_string(), preprocessed_edit);
 
             // Create test GeoOutput with proposal that has different proposal_id than edit_id
             let geo = wire::pb::chain::GeoOutput {
@@ -1585,7 +1852,7 @@ mod tests {
             };
 
             // Test map_created_proposals
-            let result = map_created_proposals(&geo, &cache).await.unwrap();
+            let result = map_created_proposals(&geo, &cache_map).unwrap();
             assert_eq!(result.len(), 1);
             
             if let ProposalCreated::PublishEdit { edit_id, proposal_id, .. } = &result[0] {
