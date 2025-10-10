@@ -133,11 +133,9 @@ impl Sink<EventData> for CacheIndexer {
         let drift_str = stream::utils::format_drift(&block_metadata);
 
         println!(
-            "Processing Block #{} [{}] - Payload {} ({} bytes) - Drift {} – Edits Published {} – Proposal Edits {}",
+            "block_number={} block_time=\"{}\" drift=\"{}\" edits_published_count={} proposal_edits_count={} Processing block data",
             block_metadata.block_number,
             block_datetime.format("%Y-%m-%d %H:%M:%S"),
-            output.type_url.replace("type.googleapis.com/", ""),
-            output.value.len(),
             drift_str,
             geo.edits_published.len(),
             geo.edits.len()
@@ -156,8 +154,8 @@ impl Sink<EventData> for CacheIndexer {
             let ipfs = self.ipfs.clone();
 
             println!(
-                "Processing cache entry for uri {} in block {}",
-                edit.content_uri, block_metadata.block_number
+                "block_number={} content_uri=\"{}\" Processing cache entry for published edit",
+                block_metadata.block_number, edit.content_uri
             );
 
             let block_metadata = stream::utils::block_metadata(block_data);
@@ -182,8 +180,8 @@ impl Sink<EventData> for CacheIndexer {
             let ipfs = self.ipfs.clone();
 
             println!(
-                "Processing cache entry for proposal {} with uri {} in block {}",
-                edit.proposal_id, edit.content_uri, block_metadata.block_number
+                "block_number={} proposal_id=\"{}\" content_uri=\"{}\" Processing cache entry for proposal edit",
+                block_metadata.block_number, edit.proposal_id, edit.content_uri
             );
 
             let block_metadata = stream::utils::block_metadata(block_data);
@@ -231,20 +229,30 @@ async fn process_edit_event<T: CacheableEvent>(
             match res {
                 Ok(_) => {
                     println!(
-                        "Successfully wrote cid to cache for {} in block {}",
-                        edit.event_description(),
+                        "block_number={} content_uri=\"{}\" Successfully wrote to cache for {}",
                         block.block_number,
+                        edit.content_uri(),
+                        edit.event_description(),
                     );
                 }
                 Err(err) => {
-                    println!("Err {:?}", err)
+                    println!(
+                        "block_number={} content_uri=\"{}\" error=\"{:?}\" Failed to write to cache for {}",
+                        block.block_number,
+                        edit.content_uri(),
+                        err,
+                        edit.event_description(),
+                    );
                 }
             }
         }
         Err(error) => {
             println!(
-                "Error writing decoded edit event to cache for {} in block {} {}",
-                edit.event_description(), block.block_number, error
+                "block_number={} content_uri=\"{}\" error=\"{}\" Error writing decoded edit event to cache for {}",
+                block.block_number,
+                edit.content_uri(),
+                error,
+                edit.event_description(),
             );
 
             // We may receive events where the format of the ipfs contents is
@@ -289,7 +297,7 @@ async fn main() -> Result<(), Error> {
                 .await;
         }
         Err(err) => {
-            println!("Error initializing stream {}", err);
+            println!("error=\"{}\" Error initializing cache storage", err);
         }
     }
 
