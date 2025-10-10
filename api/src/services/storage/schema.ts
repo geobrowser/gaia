@@ -316,6 +316,29 @@ export const proposals = pgTable("proposals",
   ]
 )
 
+export const votes = pgTable(
+  "votes",
+  {
+    id: uuid().primaryKey(),
+    onchainProposalId: text("onchain_proposal_id").notNull(),
+    voterAddress: varchar("voter_address", { length: 42 }).notNull(),
+    voteOption: smallint("vote_option").notNull(),
+    pluginAddress: varchar("plugin_address", { length: 42 }).notNull(),
+    spaceId: uuid("space_id").notNull().references(() => spaces.id),
+    proposalId: uuid("proposal_id").references(() => proposals.id),
+    createdAt: timestamp("created_at", { withTimezone: true, mode: "date" }).notNull().defaultNow(),
+  },
+  (table) => [
+    unique("votes_onchain_proposal_voter_unique").on(table.onchainProposalId, table.voterAddress),
+    index("votes_space_id_idx").on(table.spaceId),
+    index("votes_proposal_id_idx").on(table.proposalId),
+    index("votes_voter_idx").on(table.voterAddress),
+    index("votes_plugin_address_idx").on(table.pluginAddress),
+    index("votes_onchain_proposal_idx").on(table.onchainProposalId),
+    index("votes_space_proposal_idx").on(table.spaceId, table.proposalId),
+  ]
+)
+
 export const entityForeignValues = drizzleRelations(
 	entities,
 	({ many, one }) => ({
@@ -424,6 +447,27 @@ export const spacesRelations = drizzleRelations(spaces, ({ many }) => ({
 	childSpaces: many(subspaces, {
 		relationName: "parentSpace",
 	}),
+	proposals: many(proposals),
+	votes: many(votes),
+}));
+
+export const proposalsRelations = drizzleRelations(proposals, ({ one, many }) => ({
+	space: one(spaces, {
+		fields: [proposals.spaceId],
+		references: [spaces.id],
+	}),
+	votes: many(votes),
+}));
+
+export const votesRelations = drizzleRelations(votes, ({ one }) => ({
+	space: one(spaces, {
+		fields: [votes.spaceId],
+		references: [spaces.id],
+	}),
+	proposal: one(proposals, {
+		fields: [votes.proposalId],
+		references: [proposals.id],
+	}),
 }));
 
 export type IpfsCacheItem = InferSelectModel<typeof ipfsCache>;
@@ -432,6 +476,8 @@ export type DbProperty = InferSelectModel<typeof values>;
 export type DbRelations = InferSelectModel<typeof relations>;
 export type DbMember = InferSelectModel<typeof members>;
 export type DbEditor = InferSelectModel<typeof editors>;
+export type DbProposal = InferSelectModel<typeof proposals>;
+export type DbVote = InferSelectModel<typeof votes>;
 
 /** Actions Schema definitions */
 
