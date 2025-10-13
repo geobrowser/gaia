@@ -1517,4 +1517,9 @@ mod tests {
         // Expect: No editors added
         assert_eq!(result.editors.len(), 0);
     }
+
+    // Note: Direct testing of substreams map functions is complex due to code generation
+    // from the #[substreams::handlers::map] attribute. For comprehensive testing of the new
+    // vote casting functionality with DAO address derivation, use integration tests or test
+    // the substream end-to-end with actual blockchain data.
 }
