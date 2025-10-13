@@ -20,7 +20,7 @@ use indexer::{
     storage::{postgres::PostgresStorage, StorageError},
     test_utils::TestStorage,
     AddedMember, AddedSubspace, CreatedSpace, ExecutedProposal, KgData, PersonalSpace, ProposalCreated, PublicSpace, RemovedMember,
-    RemovedSubspace,
+    RemovedSubspace, VoteCast,
 };
 use indexer_utils::{checksum_address, id::derive_space_id, network_ids::GEO};
 use serial_test::serial;
@@ -2331,6 +2331,300 @@ async fn test_executed_proposals() -> Result<(), IndexingError> {
     let proposals = test_storage.get_proposals_by_space(&space_id).await?;
     assert_eq!(proposals.len(), 1);
     assert_eq!(proposals[0].status, "executed");
+
+    Ok(())
+}
+
+#[tokio::test] 
+#[serial]
+async fn test_votes_indexing() -> Result<(), Box<dyn std::error::Error>> {
+    dotenv().ok();
+    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL not set");
+    let postgres_storage = Arc::new(PostgresStorage::new(&database_url).await?);
+    let test_storage = TestStorage::new(postgres_storage.clone());
+    let properties_cache = Arc::new(PropertiesCache::new());
+    let indexer = TestIndexer::new(postgres_storage, properties_cache);
+
+    // Clear test data
+    test_storage.clear_table("votes").await?;
+    test_storage.clear_table("proposals").await?;
+    test_storage.clear_table("spaces").await?;
+
+    // Create a test space
+    let space_dao_address = "0x1234567890123456789012345678901234567890".to_string();
+    let space_id = derive_space_id(GEO, &checksum_address(space_dao_address.clone()));
+    let test_space = CreatedSpace::Public(PublicSpace {
+        dao_address: space_dao_address.clone(),
+        space_address: "0x1111111111111111111111111111111111111111".to_string(),
+        membership_plugin: "0x2222222222222222222222222222222222222222".to_string(),
+        governance_plugin: "0x3333333333333333333333333333333333333333".to_string(),
+    });
+
+    // Create a test proposal
+    let proposal_id = Uuid::new_v4();
+    let test_proposal = ProposalCreated::PublishEdit {
+        proposal_id,
+        creator: "0x1111111111111111111111111111111111111111".to_string(),
+        start_time: "1234567890".to_string(),
+        end_time: "1234567999".to_string(),
+        content_uri: "ipfs://QmTest123".to_string(),
+        dao_address: space_dao_address.clone(),
+        plugin_address: "0x3333333333333333333333333333333333333333".to_string(),
+        edit_id: None,
+    };
+
+    // Create test votes with different options and voters
+    let votes = vec![
+        VoteCast {
+            onchain_proposal_id: proposal_id.to_string(),
+            voter: "0x1111111111111111111111111111111111111111".to_string(),
+            vote_option: 1, // Yes vote
+            plugin_address: "0x3333333333333333333333333333333333333333".to_string(),
+            dao_address: space_dao_address.clone(),
+        },
+        VoteCast {
+            onchain_proposal_id: proposal_id.to_string(),
+            voter: "0x2222222222222222222222222222222222222222".to_string(),
+            vote_option: 2, // No vote
+            plugin_address: "0x3333333333333333333333333333333333333333".to_string(),
+            dao_address: space_dao_address.clone(),
+        },
+        VoteCast {
+            onchain_proposal_id: proposal_id.to_string(),
+            voter: "0x4444444444444444444444444444444444444444".to_string(),
+            vote_option: 3, // Abstain vote
+            plugin_address: "0x3333333333333333333333333333333333333333".to_string(),
+            dao_address: space_dao_address.clone(),
+        },
+    ];
+
+    let kg_data = KgData {
+        block: BlockMetadata {
+            cursor: String::from("1"),
+            block_number: 100,
+            timestamp: String::from("1234567890"),
+        },
+        edits: vec![],
+        spaces: vec![test_space],
+        added_editors: vec![],
+        added_members: vec![],
+        removed_editors: vec![],
+        removed_members: vec![],
+        added_subspaces: vec![],
+        removed_subspaces: vec![],
+        executed_proposals: vec![],
+        created_proposals: vec![test_proposal],
+        votes,
+    };
+
+    // Run the indexer
+    indexer.run(&vec![kg_data]).await?;
+
+    // Verify space was created
+    let spaces = test_storage.get_all_spaces().await?;
+    assert_eq!(spaces.len(), 1);
+    assert_eq!(spaces[0].id, space_id);
+
+    // Verify proposal was created
+    let proposals = test_storage.get_proposals_by_space(&space_id).await?;
+    assert_eq!(proposals.len(), 1);
+    assert_eq!(proposals[0].id, proposal_id);
+
+    // Verify votes were inserted
+    let votes = test_storage.get_votes_by_space(&space_id).await?;
+    assert_eq!(votes.len(), 3);
+
+    // Check vote details
+    let vote1 = votes.iter().find(|v| v.voter_address == "0x1111111111111111111111111111111111111111").unwrap();
+    assert_eq!(vote1.onchain_proposal_id, proposal_id.to_string());
+    assert_eq!(vote1.vote_option, 1);
+    assert_eq!(vote1.plugin_address, "0x3333333333333333333333333333333333333333");
+    assert_eq!(vote1.proposal_id, Some(proposal_id));
+
+    let vote2 = votes.iter().find(|v| v.voter_address == "0x2222222222222222222222222222222222222222").unwrap();
+    assert_eq!(vote2.vote_option, 2);
+
+    let vote3 = votes.iter().find(|v| v.voter_address == "0x4444444444444444444444444444444444444444").unwrap();
+    assert_eq!(vote3.vote_option, 3);
+
+    Ok(())
+}
+
+#[tokio::test]
+#[serial] 
+async fn test_votes_indexing_with_vote_updates() -> Result<(), Box<dyn std::error::Error>> {
+    dotenv().ok();
+    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL not set");
+    let postgres_storage = Arc::new(PostgresStorage::new(&database_url).await?);
+    let test_storage = TestStorage::new(postgres_storage.clone());
+    let properties_cache = Arc::new(PropertiesCache::new());
+    let indexer = TestIndexer::new(postgres_storage, properties_cache);
+
+    // Clear test data
+    test_storage.clear_table("votes").await?;
+    test_storage.clear_table("proposals").await?;
+    test_storage.clear_table("spaces").await?;
+
+    // Create a test space
+    let space_dao_address = "0xabcdef1234567890123456789012345678901234".to_string();
+    let space_id = derive_space_id(GEO, &checksum_address(space_dao_address.clone()));
+    let test_space = CreatedSpace::Public(PublicSpace {
+        dao_address: space_dao_address.clone(),
+        space_address: "0x1111111111111111111111111111111111111111".to_string(),
+        membership_plugin: "0x2222222222222222222222222222222222222222".to_string(),
+        governance_plugin: "0x3333333333333333333333333333333333333333".to_string(),
+    });
+
+    let proposal_id = Uuid::new_v4();
+    let voter_address = "0x1111111111111111111111111111111111111111".to_string();
+    let plugin_address = "0x3333333333333333333333333333333333333333".to_string();
+
+    // Create a test proposal
+    let test_proposal = ProposalCreated::PublishEdit {
+        proposal_id,
+        creator: "0x1111111111111111111111111111111111111111".to_string(),
+        start_time: "1234567890".to_string(),
+        end_time: "1234567999".to_string(),
+        content_uri: "ipfs://QmTest123".to_string(),
+        dao_address: space_dao_address.clone(),
+        plugin_address: plugin_address.clone(),
+        edit_id: None,
+    };
+
+    // First vote (Yes)
+    let initial_vote = VoteCast {
+        onchain_proposal_id: proposal_id.to_string(),
+        voter: voter_address.clone(),
+        vote_option: 1, // Yes
+        plugin_address: plugin_address.clone(),
+        dao_address: space_dao_address.clone(),
+    };
+
+    let kg_data_1 = KgData {
+        block: BlockMetadata {
+            cursor: String::from("1"),
+            block_number: 100,
+            timestamp: String::from("1234567890"),
+        },
+        edits: vec![],
+        spaces: vec![test_space],
+        added_editors: vec![],
+        added_members: vec![],
+        removed_editors: vec![],
+        removed_members: vec![],
+        added_subspaces: vec![],
+        removed_subspaces: vec![],
+        executed_proposals: vec![],
+        created_proposals: vec![test_proposal],
+        votes: vec![initial_vote],
+    };
+
+    // Run first block
+    indexer.run(&vec![kg_data_1]).await?;
+
+    // Verify initial vote
+    let votes = test_storage.get_votes_by_space(&space_id).await?;
+    assert_eq!(votes.len(), 1);
+    assert_eq!(votes[0].vote_option, 1);
+
+    // Updated vote (No) - same voter changes their vote
+    let updated_vote = VoteCast {
+        onchain_proposal_id: proposal_id.to_string(),
+        voter: voter_address.clone(),
+        vote_option: 2, // No
+        plugin_address: plugin_address.clone(),
+        dao_address: space_dao_address.clone(),
+    };
+
+    let kg_data_2 = KgData {
+        block: BlockMetadata {
+            cursor: String::from("2"),
+            block_number: 101,
+            timestamp: String::from("1234567900"),
+        },
+        edits: vec![],
+        spaces: vec![],
+        added_editors: vec![],
+        added_members: vec![],
+        removed_editors: vec![],
+        removed_members: vec![],
+        added_subspaces: vec![],
+        removed_subspaces: vec![],
+        executed_proposals: vec![],
+        created_proposals: vec![],
+        votes: vec![updated_vote],
+    };
+
+    // Run second block
+    indexer.run(&vec![kg_data_2]).await?;
+
+    // Verify vote was updated (should still be only 1 vote, but with updated option)
+    let votes = test_storage.get_votes_by_space(&space_id).await?;
+    assert_eq!(votes.len(), 1);
+    assert_eq!(votes[0].vote_option, 2); // Should be updated to "No"
+    assert_eq!(votes[0].voter_address, voter_address);
+
+    Ok(())
+}
+
+#[tokio::test]
+#[serial]
+async fn test_votes_indexing_invalid_dao_addresses() -> Result<(), Box<dyn std::error::Error>> {
+    dotenv().ok();
+    let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL not set");
+    let postgres_storage = Arc::new(PostgresStorage::new(&database_url).await?);
+    let test_storage = TestStorage::new(postgres_storage.clone());
+    let properties_cache = Arc::new(PropertiesCache::new());
+    let indexer = TestIndexer::new(postgres_storage, properties_cache);
+
+    // Clear test data
+    test_storage.clear_table("votes").await?;
+    test_storage.clear_table("proposals").await?;
+    test_storage.clear_table("spaces").await?;
+
+    // Create votes with invalid DAO addresses (not valid UUIDs)
+    let votes = vec![
+        VoteCast {
+            onchain_proposal_id: "proposal123".to_string(),
+            voter: "0x1111111111111111111111111111111111111111".to_string(),
+            vote_option: 1,
+            plugin_address: "0x3333333333333333333333333333333333333333".to_string(),
+            dao_address: "invalid-dao-address".to_string(), // Invalid UUID
+        },
+        VoteCast {
+            onchain_proposal_id: "proposal456".to_string(),
+            voter: "0x2222222222222222222222222222222222222222".to_string(),
+            vote_option: 2,
+            plugin_address: "0x3333333333333333333333333333333333333333".to_string(),
+            dao_address: "also-invalid".to_string(), // Invalid UUID
+        },
+    ];
+
+    let kg_data = KgData {
+        block: BlockMetadata {
+            cursor: String::from("1"),
+            block_number: 100,
+            timestamp: String::from("1234567890"),
+        },
+        edits: vec![],
+        spaces: vec![],
+        added_editors: vec![],
+        added_members: vec![],
+        removed_editors: vec![],
+        removed_members: vec![],
+        added_subspaces: vec![],
+        removed_subspaces: vec![],
+        executed_proposals: vec![],
+        created_proposals: vec![],
+        votes,
+    };
+
+    // Run the indexer
+    indexer.run(&vec![kg_data]).await?;
+
+    // Verify no votes were inserted (due to invalid DAO addresses)
+    let all_votes = test_storage.get_all_votes().await?;
+    assert_eq!(all_votes.len(), 0);
 
     Ok(())
 }

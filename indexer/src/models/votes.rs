@@ -1,6 +1,7 @@
 use uuid::Uuid;
 use crate::VoteCast;
 use tracing::{instrument, warn};
+use indexer_utils::{checksum_address, id::derive_space_id, network_ids::GEO};
 
 #[derive(Debug, Clone)]
 pub struct VoteItem {
@@ -27,37 +28,43 @@ impl VotesModel {
                 // Generate deterministic UUID for the vote based on onchain_proposal_id and voter
                 let vote_id = generate_vote_id(&vote.onchain_proposal_id, &vote.voter);
                 
-                // Try to parse the dao_address as a space UUID
-                match Uuid::parse_str(&vote.dao_address) {
-                    Ok(space_id) => {
-                        // Try to parse the onchain_proposal_id as a proposal UUID
-                        let proposal_id = Uuid::parse_str(&vote.onchain_proposal_id).ok();
-                        
-                        Some(VoteItem {
-                            id: vote_id,
-                            onchain_proposal_id: vote.onchain_proposal_id.clone(),
-                            voter_address: vote.voter.clone(),
-                            vote_option: vote.vote_option as i16,
-                            plugin_address: vote.plugin_address.clone(),
-                            space_id,
-                            proposal_id,
-                        })
-                    }
-                    Err(e) => {
-                        warn!(
-                            dao_address = %vote.dao_address,
-                            onchain_proposal_id = %vote.onchain_proposal_id,
-                            voter = %vote.voter,
-                            error = %e,
-                            block_number = block_number,
-                            "Failed to parse dao_address as UUID for vote, skipping"
-                        );
-                        None
-                    }
+                // Validate DAO address format before attempting checksum
+                if !is_valid_ethereum_address(&vote.dao_address) {
+                    warn!(
+                        dao_address = %vote.dao_address,
+                        onchain_proposal_id = %vote.onchain_proposal_id,
+                        voter = %vote.voter,
+                        block_number = block_number,
+                        "Invalid DAO address format for vote, skipping"
+                    );
+                    return None;
                 }
+                
+                // Derive space_id from DAO address using the same logic as other models
+                let checksummed_dao = checksum_address(vote.dao_address.clone());
+                let space_id = derive_space_id(GEO, &checksummed_dao);
+                
+                // Try to parse the onchain_proposal_id as a proposal UUID
+                let proposal_id = Uuid::parse_str(&vote.onchain_proposal_id).ok();
+                
+                Some(VoteItem {
+                    id: vote_id,
+                    onchain_proposal_id: vote.onchain_proposal_id.clone(),
+                    voter_address: checksum_address(vote.voter.clone()),
+                    vote_option: vote.vote_option as i16,
+                    plugin_address: checksum_address(vote.plugin_address.clone()),
+                    space_id,
+                    proposal_id,
+                })
             })
             .collect()
     }
+}
+
+/// Validate if a string is a valid Ethereum address format
+fn is_valid_ethereum_address(address: &str) -> bool {
+    let cleaned = address.to_lowercase().replace("0x", "");
+    cleaned.len() == 40 && cleaned.chars().all(|c| c.is_ascii_hexdigit())
 }
 
 /// Generate a deterministic UUID for a vote based on proposal ID and voter address
@@ -112,34 +119,37 @@ mod tests {
 
     #[test]
     fn test_map_votes() {
+        let dao_address1 = "0x1234567890123456789012345678901234567890".to_string();
+        let dao_address2 = "0xabcdef1234567890123456789012345678901234".to_string();
+        
         let votes = vec![
             VoteCast {
                 onchain_proposal_id: "550e8400-e29b-41d4-a716-446655440000".to_string(),
                 voter: "0x1234567890123456789012345678901234567890".to_string(),
                 vote_option: 1,
-                plugin_address: "0xplugin123".to_string(),
-                dao_address: "550e8400-e29b-41d4-a716-446655440001".to_string(), // Valid UUID
+                plugin_address: "0x1111111111111111111111111111111111111111".to_string(),
+                dao_address: dao_address1.clone(),
             },
             VoteCast {
                 onchain_proposal_id: "proposal123".to_string(),
-                voter: "0xabcdef".to_string(),
+                voter: "0xabcdef1234567890123456789012345678901234".to_string(),
                 vote_option: 2,
-                plugin_address: "0xplugin456".to_string(),
-                dao_address: "invalid-uuid".to_string(), // Invalid UUID
+                plugin_address: "0x2222222222222222222222222222222222222222".to_string(),
+                dao_address: dao_address2.clone(),
             },
         ];
 
         let vote_items = VotesModel::map_votes(&votes, 12345);
         
-        // Only the first vote should be mapped (valid UUID for dao_address)
-        assert_eq!(vote_items.len(), 1);
+        // Both votes should be mapped since we now derive space_id from DAO address
+        assert_eq!(vote_items.len(), 2);
         
         let vote_item = &vote_items[0];
         assert_eq!(vote_item.onchain_proposal_id, "550e8400-e29b-41d4-a716-446655440000");
-        assert_eq!(vote_item.voter_address, "0x1234567890123456789012345678901234567890");
+        assert_eq!(vote_item.voter_address, checksum_address("0x1234567890123456789012345678901234567890"));
         assert_eq!(vote_item.vote_option, 1);
-        assert_eq!(vote_item.plugin_address, "0xplugin123");
-        assert_eq!(vote_item.space_id.to_string(), "550e8400-e29b-41d4-a716-446655440001");
+        assert_eq!(vote_item.plugin_address, checksum_address("0x1111111111111111111111111111111111111111"));
+        assert_eq!(vote_item.space_id, derive_space_id(GEO, &checksum_address(dao_address1)));
         assert!(vote_item.proposal_id.is_some());
     }
 }

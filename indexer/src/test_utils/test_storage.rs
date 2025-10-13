@@ -55,6 +55,29 @@ impl TestStorage {
             .collect())
     }
 
+    /// Test helper: Get all spaces
+    pub async fn get_all_spaces(&self) -> Result<Vec<SpaceRow>, IndexingError> {
+        let rows = sqlx::query!(
+            "SELECT id, dao_address, type::text as type, space_address, main_voting_address, membership_address, personal_address FROM spaces ORDER BY dao_address"
+        )
+        .fetch_all(self.get_pool())
+        .await
+        .map_err(|e| IndexingError::StorageError(StorageError::Database(e)))?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| SpaceRow {
+                id: row.id,
+                dao_address: row.dao_address,
+                space_type: row.r#type,
+                space_address: row.space_address,
+                main_voting_address: row.main_voting_address,
+                membership_address: row.membership_address,
+                personal_address: row.personal_address,
+            })
+            .collect())
+    }
+
     /// Test helper: Get entity data by ID
     pub async fn get_entity_by_id(
         &self,
@@ -229,6 +252,60 @@ impl TestStorage {
             created_at_block: r.created_at_block,
         }))
     }
+
+    /// Test helper: Get votes by space ID
+    pub async fn get_votes_by_space(
+        &self,
+        space_id: &Uuid,
+    ) -> Result<Vec<VoteRow>, IndexingError> {
+        let rows = sqlx::query!(
+            r#"SELECT 
+                id, onchain_proposal_id, voter_address, vote_option, 
+                plugin_address, proposal_id
+                FROM votes WHERE space_id = $1 ORDER BY onchain_proposal_id"#,
+            space_id
+        )
+        .fetch_all(self.get_pool())
+        .await
+        .map_err(|e| IndexingError::StorageError(StorageError::Database(e)))?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| VoteRow {
+                id: row.id,
+                onchain_proposal_id: row.onchain_proposal_id,
+                voter_address: row.voter_address,
+                vote_option: row.vote_option,
+                plugin_address: row.plugin_address,
+                proposal_id: row.proposal_id,
+            })
+            .collect())
+    }
+
+    /// Test helper: Get all votes
+    pub async fn get_all_votes(&self) -> Result<Vec<VoteRow>, IndexingError> {
+        let rows = sqlx::query!(
+            r#"SELECT 
+                id, onchain_proposal_id, voter_address, vote_option, 
+                plugin_address, proposal_id
+                FROM votes ORDER BY onchain_proposal_id"#
+        )
+        .fetch_all(self.get_pool())
+        .await
+        .map_err(|e| IndexingError::StorageError(StorageError::Database(e)))?;
+
+        Ok(rows
+            .into_iter()
+            .map(|row| VoteRow {
+                id: row.id,
+                onchain_proposal_id: row.onchain_proposal_id,
+                voter_address: row.voter_address,
+                vote_option: row.vote_option,
+                plugin_address: row.plugin_address,
+                proposal_id: row.proposal_id,
+            })
+            .collect())
+    }
 }
 
 /// Test data structures for database row verification
@@ -295,6 +372,16 @@ pub struct ProposalRow {
     pub content_uri: Option<String>,
     pub address: Option<String>,
     pub created_at_block: i64,
+}
+
+#[derive(Debug, Clone)]
+pub struct VoteRow {
+    pub id: Uuid,
+    pub onchain_proposal_id: String,
+    pub voter_address: String,
+    pub vote_option: i16,
+    pub plugin_address: String,
+    pub proposal_id: Option<Uuid>,
 }
 
 impl SpaceRow {
