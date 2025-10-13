@@ -65,6 +65,8 @@ use space_setup::events::GeoSpacePluginCreated as SpacePluginCreatedEvent;
 fn map_successor_spaces_created(
     block: eth::v2::Block,
 ) -> Result<SuccessorSpacesCreated, substreams::errors::Error> {
+    substreams::log::info!("map_successor_spaces_created: Processing block #{} with {} logs", block.number, block.logs().count());
+    
     let successor_spaces: Vec<SuccessorSpaceCreated> = block
         .logs()
         .filter_map(|log| {
@@ -72,10 +74,16 @@ fn map_successor_spaces_created(
 
             if let Some(successor_space_created) = SuccessorSpaceCreatedEvent::match_and_decode(log)
             {
+                let predecessor = format_hex(&successor_space_created.predecessor_space);
+                let dao_address = format_hex(&successor_space_created.dao);
+                
+                substreams::log::info!("map_successor_spaces_created: Found successor space creation - plugin: {}, predecessor: {}, DAO: {}", 
+                    address, predecessor, dao_address);
+                
                 return Some(SuccessorSpaceCreated {
                     plugin_address: address,
-                    predecessor_space: format_hex(&successor_space_created.predecessor_space),
-                    dao_address: format_hex(&successor_space_created.dao),
+                    predecessor_space: predecessor,
+                    dao_address,
                 });
             }
 
@@ -83,6 +91,7 @@ fn map_successor_spaces_created(
         })
         .collect();
 
+    substreams::log::info!("map_successor_spaces_created: Found {} successor space events", successor_spaces.len());
     Ok(SuccessorSpacesCreated {
         spaces: successor_spaces,
     })
@@ -100,13 +109,21 @@ fn map_successor_spaces_created(
 fn map_spaces_created(
     block: eth::v2::Block,
 ) -> Result<GeoSpacesCreated, substreams::errors::Error> {
+    substreams::log::info!("map_spaces_created: Processing block #{} with {} logs", block.number, block.logs().count());
+    
     let spaces: Vec<GeoSpaceCreated> = block
         .logs()
         .filter_map(|log| {
             if let Some(space_created) = SpacePluginCreatedEvent::match_and_decode(log) {
+                let dao_address = format_hex(&space_created.dao);
+                let space_address = format_hex(&space_created.plugin);
+                
+                substreams::log::info!("map_spaces_created: Found space creation - DAO: {}, space plugin: {}", 
+                    dao_address, space_address);
+                
                 return Some(GeoSpaceCreated {
-                    dao_address: format_hex(&space_created.dao),
-                    space_address: format_hex(&space_created.plugin),
+                    dao_address,
+                    space_address,
                 });
             }
 
@@ -114,20 +131,30 @@ fn map_spaces_created(
         })
         .collect();
 
+    substreams::log::info!("map_spaces_created: Found {} space creation events", spaces.len());
     Ok(GeoSpacesCreated { spaces })
 }
 
 #[substreams::handlers::map]
 fn map_subspaces_added(block: eth::v2::Block) -> Result<SubspacesAdded, substreams::errors::Error> {
+    substreams::log::info!("map_subspaces_added: Processing block #{} with {} logs", block.number, block.logs().count());
+    
     let subspaces: Vec<SubspaceAdded> = block
         .logs()
         .filter_map(|log| {
             if let Some(space_created) = SubspaceAcceptedEvent::match_and_decode(log) {
+                let subspace = format_hex(&space_created.subspace_dao);
+                let plugin_address = format_hex(&log.address());
+                let dao_address = format_hex(&space_created.dao);
+                
+                substreams::log::info!("map_subspaces_added: Found subspace added - subspace: {}, parent DAO: {}, plugin: {}", 
+                    subspace, dao_address, plugin_address);
+                
                 return Some(SubspaceAdded {
                     change_type: "added".to_string(),
-                    subspace: format_hex(&space_created.subspace_dao),
-                    plugin_address: format_hex(&log.address()),
-                    dao_address: format_hex(&space_created.dao),
+                    subspace,
+                    plugin_address,
+                    dao_address,
                 });
             }
 
@@ -135,6 +162,7 @@ fn map_subspaces_added(block: eth::v2::Block) -> Result<SubspacesAdded, substrea
         })
         .collect();
 
+    substreams::log::info!("map_subspaces_added: Found {} subspace addition events", subspaces.len());
     Ok(SubspacesAdded { subspaces })
 }
 
@@ -142,15 +170,24 @@ fn map_subspaces_added(block: eth::v2::Block) -> Result<SubspacesAdded, substrea
 fn map_subspaces_removed(
     block: eth::v2::Block,
 ) -> Result<SubspacesRemoved, substreams::errors::Error> {
+    substreams::log::info!("map_subspaces_removed: Processing block #{} with {} logs", block.number, block.logs().count());
+    
     let subspaces: Vec<SubspaceRemoved> = block
         .logs()
         .filter_map(|log| {
             if let Some(space_created) = SubspaceRemovedEvent::match_and_decode(log) {
+                let subspace = format_hex(&space_created.subspace_dao);
+                let plugin_address = format_hex(&log.address());
+                let dao_address = format_hex(&space_created.dao);
+                
+                substreams::log::info!("map_subspaces_removed: Found subspace removed - subspace: {}, parent DAO: {}, plugin: {}", 
+                    subspace, dao_address, plugin_address);
+                
                 return Some(SubspaceRemoved {
                     change_type: "removed".to_string(),
-                    subspace: format_hex(&space_created.subspace_dao),
-                    plugin_address: format_hex(&log.address()),
-                    dao_address: format_hex(&space_created.dao),
+                    subspace,
+                    plugin_address,
+                    dao_address,
                 });
             }
 
@@ -158,6 +195,7 @@ fn map_subspaces_removed(
         })
         .collect();
 
+    substreams::log::info!("map_subspaces_removed: Found {} subspace removal events", subspaces.len());
     Ok(SubspacesRemoved { subspaces })
 }
 
@@ -330,6 +368,22 @@ fn store_plugin_to_dao(
 
 #[substreams::handlers::map]
 fn map_members_added(block: eth::v2::Block) -> Result<MembersAdded, substreams::errors::Error> {
+    substreams::log::info!("map_members_added: Processing block #{} with {} logs", block.number, block.logs().count());
+    let result = _map_members_added(block);
+    match &result {
+        Ok(members_added) => {
+            substreams::log::info!("map_members_added: Found {} member events", members_added.members.len());
+            for member in &members_added.members {
+                substreams::log::info!("map_members_added: Member {} added to DAO {} via plugin {}", 
+                    member.member_address, member.dao_address, member.main_voting_plugin_address);
+            }
+        },
+        Err(e) => substreams::log::info!("map_members_added: Error processing block: {:?}", e),
+    }
+    result
+}
+
+fn _map_members_added(block: eth::v2::Block) -> Result<MembersAdded, substreams::errors::Error> {
     let members: Vec<MemberAdded> = block
         .logs()
         .flat_map(|log| {
@@ -365,15 +419,24 @@ fn map_members_added(block: eth::v2::Block) -> Result<MembersAdded, substreams::
 
 #[substreams::handlers::map]
 fn map_members_removed(block: eth::v2::Block) -> Result<MembersRemoved, substreams::errors::Error> {
+    substreams::log::info!("map_members_removed: Processing block #{} with {} logs", block.number, block.logs().count());
+    
     let members: Vec<MemberRemoved> = block
         .logs()
         .filter_map(|log| {
             if let Some(members_approved) = MemberRemovedEvent::match_and_decode(log) {
+                let dao_address = format_hex(&members_approved.dao);
+                let plugin_address = format_hex(&log.address());
+                let member_address = format_hex(&members_approved.member);
+                
+                substreams::log::info!("map_members_removed: Member {} removed from DAO {} via plugin {}", 
+                    member_address, dao_address, plugin_address);
+                
                 return Some(MemberRemoved {
                     change_type: "removed".to_string(),
-                    dao_address: format_hex(&members_approved.dao),
-                    plugin_address: format_hex(&log.address()),
-                    member_address: format_hex(&members_approved.member),
+                    dao_address,
+                    plugin_address,
+                    member_address,
                 });
             }
 
@@ -381,6 +444,7 @@ fn map_members_removed(block: eth::v2::Block) -> Result<MembersRemoved, substrea
         })
         .collect();
 
+    substreams::log::info!("map_members_removed: Found {} member removal events", members.len());
     Ok(MembersRemoved { members })
 }
 
@@ -437,15 +501,24 @@ fn _map_editors_added(block: eth::v2::Block) -> Result<EditorsAdded, substreams:
 
 #[substreams::handlers::map]
 fn map_editors_removed(block: eth::v2::Block) -> Result<EditorsRemoved, substreams::errors::Error> {
+    substreams::log::info!("map_editors_removed: Processing block #{} with {} logs", block.number, block.logs().count());
+    
     let editors: Vec<EditorRemoved> = block
         .logs()
         .filter_map(|log| {
             if let Some(members_approved) = EditorRemovedEvent::match_and_decode(log) {
+                let plugin_address = format_hex(&log.address());
+                let editor_address = format_hex(&members_approved.editor);
+                let dao_address = format_hex(&members_approved.dao);
+                
+                substreams::log::info!("map_editors_removed: Editor {} removed from DAO {} via plugin {}", 
+                    editor_address, dao_address, plugin_address);
+                
                 return Some(EditorRemoved {
                     change_type: "removed".to_string(),
-                    plugin_address: format_hex(&log.address()),
-                    editor_address: format_hex(&members_approved.editor),
-                    dao_address: format_hex(&members_approved.dao),
+                    plugin_address,
+                    editor_address,
+                    dao_address,
                 });
             }
 
@@ -453,6 +526,7 @@ fn map_editors_removed(block: eth::v2::Block) -> Result<EditorsRemoved, substrea
         })
         .collect();
 
+    substreams::log::info!("map_editors_removed: Found {} editor removal events", editors.len());
     Ok(EditorsRemoved { editors })
 }
 
@@ -517,13 +591,21 @@ fn map_editors_removed(block: eth::v2::Block) -> Result<EditorsRemoved, substrea
 fn map_proposals_executed(
     block: eth::v2::Block,
 ) -> Result<ProposalsExecuted, substreams::errors::Error> {
+    substreams::log::info!("map_proposals_executed: Processing block #{} with {} logs", block.number, block.logs().count());
+    
     let executed_proposals: Vec<ProposalExecuted> = block
         .logs()
         .filter_map(|log| {
             if let Some(proposal_created) = ProposalExecutedEvent::match_and_decode(log) {
+                let plugin_address = format_hex(&log.address());
+                let proposal_id = proposal_created.proposal_id.to_string();
+                
+                substreams::log::info!("map_proposals_executed: Proposal {} executed via plugin {}", 
+                    proposal_id, plugin_address);
+                
                 return Some(ProposalExecuted {
-                    plugin_address: format_hex(&log.address()),
-                    proposal_id: proposal_created.proposal_id.to_string(),
+                    plugin_address,
+                    proposal_id,
                 });
             }
 
@@ -531,6 +613,7 @@ fn map_proposals_executed(
         })
         .collect();
 
+    substreams::log::info!("map_proposals_executed: Found {} proposal execution events", executed_proposals.len());
     Ok(ProposalsExecuted { executed_proposals })
 }
 
@@ -544,14 +627,23 @@ fn map_proposals_executed(
 */
 #[substreams::handlers::map]
 fn map_edits_published(block: eth::v2::Block) -> Result<EditsPublished, substreams::errors::Error> {
+    substreams::log::info!("map_edits_published: Processing block #{} with {} logs", block.number, block.logs().count());
+    
     let edits: Vec<EditPublished> = block
         .logs()
         .filter_map(|log| {
             if let Some(edit_published) = EditsPublishedEvent::match_and_decode(log) {
+                let content_uri = edit_published.edits_content_uri.clone();
+                let dao_address = format_hex(&edit_published.dao);
+                let plugin_address = format_hex(&log.address());
+                
+                substreams::log::info!("map_edits_published: Edits published for DAO {} via plugin {}, content URI: {}", 
+                    dao_address, plugin_address, content_uri);
+                
                 return Some(EditPublished {
-                    content_uri: edit_published.edits_content_uri,
-                    dao_address: format_hex(&edit_published.dao),
-                    plugin_address: format_hex(&log.address()),
+                    content_uri,
+                    dao_address,
+                    plugin_address,
                 });
             }
 
@@ -559,6 +651,7 @@ fn map_edits_published(block: eth::v2::Block) -> Result<EditsPublished, substrea
         })
         .collect();
 
+    substreams::log::info!("map_edits_published: Found {} edit publication events", edits.len());
     Ok(EditsPublished { edits })
 }
 
@@ -619,22 +712,29 @@ fn map_votes_cast(
 fn map_publish_edits_proposals_created(
     block: eth::v2::Block,
 ) -> Result<PublishEditsProposalsCreated, substreams::errors::Error> {
+    substreams::log::info!("map_publish_edits_proposals_created: Processing block #{} with {} logs", block.number, block.logs().count());
+    
     let edits: Vec<PublishEditProposalCreated> = block
         .logs()
         .filter_map(|log| {
-            // @TODO: Should we track our plugins/daos and only emit if the address is one of them?
             if let Some(proposed_edit) = PublishEditsProposalCreatedEvent::match_and_decode(log) {
+                let proposal_id = proposed_edit.proposal_id.to_string();
+                let creator = format_hex(&proposed_edit.creator);
+                let plugin_address = format_hex(&log.address());
+                let dao_address = format_hex(&proposed_edit.dao);
+                let content_uri = proposed_edit.edits_content_uri.clone();
+                
+                substreams::log::info!("map_publish_edits_proposals_created: Publish edits proposal {} created by {} for DAO {} via plugin {}", 
+                    proposal_id, creator, dao_address, plugin_address);
+                
                 return Some(PublishEditProposalCreated {
-                    // The onchain proposal id is an incrementing integer. We represent
-                    // the proposal with a more unique id in the sink, so we remap the
-                    // name here to disambiguate between the onchain id and the sink id.
-                    proposal_id: proposed_edit.proposal_id.to_string(),
-                    creator: format_hex(&proposed_edit.creator),
+                    proposal_id,
+                    creator,
                     start_time: proposed_edit.start_date.to_string(),
                     end_time: proposed_edit.end_date.to_string(),
-                    content_uri: proposed_edit.edits_content_uri,
-                    plugin_address: format_hex(&log.address()),
-                    dao_address: format_hex(&proposed_edit.dao),
+                    content_uri,
+                    plugin_address,
+                    dao_address,
                 });
             }
 
@@ -642,6 +742,7 @@ fn map_publish_edits_proposals_created(
         })
         .collect();
 
+    substreams::log::info!("map_publish_edits_proposals_created: Found {} publish edits proposal events", edits.len());
     Ok(PublishEditsProposalsCreated { edits })
 }
 
@@ -649,19 +750,30 @@ fn map_publish_edits_proposals_created(
 fn map_add_member_proposals_created(
     block: eth::v2::Block,
 ) -> Result<AddMemberProposalsCreated, substreams::errors::Error> {
+    substreams::log::info!("map_add_member_proposals_created: Processing block #{} with {} logs", block.number, block.logs().count());
+    
     let proposed_members: Vec<AddMemberProposalCreated> = block
         .logs()
         .filter_map(|log| {
             if let Some(proposed_edit) = AddMemberProposalCreatedEvent::match_and_decode(log) {
+                let proposal_id = proposed_edit.proposal_id.to_string();
+                let creator = format_hex(&proposed_edit.creator);
+                let plugin_address = format_hex(&log.address());
+                let dao_address = format_hex(&proposed_edit.dao);
+                let member = format_hex(&proposed_edit.member);
+                
+                substreams::log::info!("map_add_member_proposals_created: Add member proposal {} created by {} to add member {} to DAO {} via plugin {}", 
+                    proposal_id, creator, member, dao_address, plugin_address);
+                
                 return Some(AddMemberProposalCreated {
-                    proposal_id: proposed_edit.proposal_id.to_string(),
-                    creator: format_hex(&proposed_edit.creator),
+                    proposal_id,
+                    creator,
                     start_time: proposed_edit.start_date.to_string(),
                     end_time: proposed_edit.end_date.to_string(),
-                    plugin_address: format_hex(&log.address()),
-                    dao_address: format_hex(&proposed_edit.dao),
+                    plugin_address,
+                    dao_address,
                     change_type: "added".to_string(),
-                    member: format_hex(&proposed_edit.member),
+                    member,
                 });
             }
 
@@ -669,6 +781,7 @@ fn map_add_member_proposals_created(
         })
         .collect();
 
+    substreams::log::info!("map_add_member_proposals_created: Found {} add member proposal events", proposed_members.len());
     Ok(AddMemberProposalsCreated { proposed_members })
 }
 
@@ -676,19 +789,30 @@ fn map_add_member_proposals_created(
 fn map_remove_member_proposals_created(
     block: eth::v2::Block,
 ) -> Result<RemoveMemberProposalsCreated, substreams::errors::Error> {
+    substreams::log::info!("map_remove_member_proposals_created: Processing block #{} with {} logs", block.number, block.logs().count());
+    
     let proposed_members: Vec<RemoveMemberProposalCreated> = block
         .logs()
         .filter_map(|log| {
             if let Some(proposed_edit) = RemoveMemberProposalCreatedEvent::match_and_decode(log) {
+                let proposal_id = proposed_edit.proposal_id.to_string();
+                let creator = format_hex(&proposed_edit.creator);
+                let plugin_address = format_hex(&log.address());
+                let dao_address = format_hex(&proposed_edit.dao);
+                let member = format_hex(&proposed_edit.member);
+                
+                substreams::log::info!("map_remove_member_proposals_created: Remove member proposal {} created by {} to remove member {} from DAO {} via plugin {}", 
+                    proposal_id, creator, member, dao_address, plugin_address);
+                
                 return Some(RemoveMemberProposalCreated {
-                    proposal_id: proposed_edit.proposal_id.to_string(),
-                    creator: format_hex(&proposed_edit.creator),
+                    proposal_id,
+                    creator,
                     start_time: proposed_edit.start_date.to_string(),
                     end_time: proposed_edit.end_date.to_string(),
-                    plugin_address: format_hex(&log.address()),
-                    dao_address: format_hex(&proposed_edit.dao),
+                    plugin_address,
+                    dao_address,
                     change_type: "removed".to_string(),
-                    member: format_hex(&proposed_edit.member),
+                    member,
                 });
             }
 
@@ -696,6 +820,7 @@ fn map_remove_member_proposals_created(
         })
         .collect();
 
+    substreams::log::info!("map_remove_member_proposals_created: Found {} remove member proposal events", proposed_members.len());
     Ok(RemoveMemberProposalsCreated { proposed_members })
 }
 
@@ -703,19 +828,30 @@ fn map_remove_member_proposals_created(
 fn map_add_editor_proposals_created(
     block: eth::v2::Block,
 ) -> Result<AddEditorProposalsCreated, substreams::errors::Error> {
+    substreams::log::info!("map_add_editor_proposals_created: Processing block #{} with {} logs", block.number, block.logs().count());
+    
     let proposed_editors: Vec<AddEditorProposalCreated> = block
         .logs()
         .filter_map(|log| {
             if let Some(proposed_edit) = AddEditorProposalCreatedEvent::match_and_decode(log) {
+                let proposal_id = proposed_edit.proposal_id.to_string();
+                let creator = format_hex(&proposed_edit.creator);
+                let plugin_address = format_hex(&log.address());
+                let dao_address = format_hex(&proposed_edit.dao);
+                let editor = format_hex(&proposed_edit.editor);
+                
+                substreams::log::info!("map_add_editor_proposals_created: Add editor proposal {} created by {} to add editor {} to DAO {} via plugin {}", 
+                    proposal_id, creator, editor, dao_address, plugin_address);
+                
                 return Some(AddEditorProposalCreated {
-                    proposal_id: proposed_edit.proposal_id.to_string(),
-                    creator: format_hex(&proposed_edit.creator),
+                    proposal_id,
+                    creator,
                     start_time: proposed_edit.start_date.to_string(),
                     end_time: proposed_edit.end_date.to_string(),
-                    plugin_address: format_hex(&log.address()),
-                    dao_address: format_hex(&proposed_edit.dao),
+                    plugin_address,
+                    dao_address,
                     change_type: "added".to_string(),
-                    editor: format_hex(&proposed_edit.editor),
+                    editor,
                 });
             }
 
@@ -723,6 +859,7 @@ fn map_add_editor_proposals_created(
         })
         .collect();
 
+    substreams::log::info!("map_add_editor_proposals_created: Found {} add editor proposal events", proposed_editors.len());
     Ok(AddEditorProposalsCreated { proposed_editors })
 }
 
@@ -730,19 +867,30 @@ fn map_add_editor_proposals_created(
 fn map_remove_editor_proposals_created(
     block: eth::v2::Block,
 ) -> Result<RemoveEditorProposalsCreated, substreams::errors::Error> {
+    substreams::log::info!("map_remove_editor_proposals_created: Processing block #{} with {} logs", block.number, block.logs().count());
+    
     let proposed_editors: Vec<RemoveEditorProposalCreated> = block
         .logs()
         .filter_map(|log| {
             if let Some(proposed_edit) = RemoveEditorProposalCreatedEvent::match_and_decode(log) {
+                let proposal_id = proposed_edit.proposal_id.to_string();
+                let creator = format_hex(&proposed_edit.creator);
+                let plugin_address = format_hex(&log.address());
+                let dao_address = format_hex(&proposed_edit.dao);
+                let editor = format_hex(&proposed_edit.editor);
+                
+                substreams::log::info!("map_remove_editor_proposals_created: Remove editor proposal {} created by {} to remove editor {} from DAO {} via plugin {}", 
+                    proposal_id, creator, editor, dao_address, plugin_address);
+                
                 return Some(RemoveEditorProposalCreated {
-                    proposal_id: proposed_edit.proposal_id.to_string(),
-                    creator: format_hex(&proposed_edit.creator),
+                    proposal_id,
+                    creator,
                     start_time: proposed_edit.start_date.to_string(),
                     end_time: proposed_edit.end_date.to_string(),
-                    plugin_address: format_hex(&log.address()),
-                    dao_address: format_hex(&proposed_edit.dao),
+                    plugin_address,
+                    dao_address,
                     change_type: "removed".to_string(),
-                    editor: format_hex(&proposed_edit.editor),
+                    editor,
                 });
             }
 
@@ -750,6 +898,7 @@ fn map_remove_editor_proposals_created(
         })
         .collect();
 
+    substreams::log::info!("map_remove_editor_proposals_created: Found {} remove editor proposal events", proposed_editors.len());
     Ok(RemoveEditorProposalsCreated { proposed_editors })
 }
 
@@ -757,19 +906,30 @@ fn map_remove_editor_proposals_created(
 fn map_add_subspace_proposals_created(
     block: eth::v2::Block,
 ) -> Result<AddSubspaceProposalsCreated, substreams::errors::Error> {
+    substreams::log::info!("map_add_subspace_proposals_created: Processing block #{} with {} logs", block.number, block.logs().count());
+    
     let proposed_subspaces: Vec<AddSubspaceProposalCreated> = block
         .logs()
         .filter_map(|log| {
             if let Some(proposed_edit) = AcceptSubspaceProposalCreatedEvent::match_and_decode(log) {
+                let proposal_id = proposed_edit.proposal_id.to_string();
+                let creator = format_hex(&proposed_edit.creator);
+                let plugin_address = format_hex(&log.address());
+                let dao_address = format_hex(&proposed_edit.dao);
+                let subspace = format_hex(&proposed_edit.subspace);
+                
+                substreams::log::info!("map_add_subspace_proposals_created: Add subspace proposal {} created by {} to add subspace {} to DAO {} via plugin {}", 
+                    proposal_id, creator, subspace, dao_address, plugin_address);
+                
                 return Some(AddSubspaceProposalCreated {
-                    proposal_id: proposed_edit.proposal_id.to_string(),
-                    creator: format_hex(&proposed_edit.creator),
+                    proposal_id,
+                    creator,
                     start_time: proposed_edit.start_date.to_string(),
                     end_time: proposed_edit.end_date.to_string(),
-                    plugin_address: format_hex(&log.address()),
-                    dao_address: format_hex(&proposed_edit.dao),
+                    plugin_address,
+                    dao_address,
                     change_type: "added".to_string(),
-                    subspace: format_hex(&proposed_edit.subspace),
+                    subspace,
                 });
             }
 
@@ -777,6 +937,7 @@ fn map_add_subspace_proposals_created(
         })
         .collect();
 
+    substreams::log::info!("map_add_subspace_proposals_created: Found {} add subspace proposal events", proposed_subspaces.len());
     Ok(AddSubspaceProposalsCreated { proposed_subspaces })
 }
 
@@ -784,19 +945,30 @@ fn map_add_subspace_proposals_created(
 fn map_remove_subspace_proposals_created(
     block: eth::v2::Block,
 ) -> Result<RemoveSubspaceProposalsCreated, substreams::errors::Error> {
+    substreams::log::info!("map_remove_subspace_proposals_created: Processing block #{} with {} logs", block.number, block.logs().count());
+    
     let proposed_subspaces: Vec<RemoveSubspaceProposalCreated> = block
         .logs()
         .filter_map(|log| {
             if let Some(proposed_edit) = RemoveSubspaceProposalCreatedEvent::match_and_decode(log) {
+                let proposal_id = proposed_edit.proposal_id.to_string();
+                let creator = format_hex(&proposed_edit.creator);
+                let plugin_address = format_hex(&log.address());
+                let dao_address = format_hex(&proposed_edit.dao);
+                let subspace = format_hex(&proposed_edit.subspace);
+                
+                substreams::log::info!("map_remove_subspace_proposals_created: Remove subspace proposal {} created by {} to remove subspace {} from DAO {} via plugin {}", 
+                    proposal_id, creator, subspace, dao_address, plugin_address);
+                
                 return Some(RemoveSubspaceProposalCreated {
-                    proposal_id: proposed_edit.proposal_id.to_string(),
-                    creator: format_hex(&proposed_edit.creator),
+                    proposal_id,
+                    creator,
                     start_time: proposed_edit.start_date.to_string(),
                     end_time: proposed_edit.end_date.to_string(),
-                    plugin_address: format_hex(&log.address()),
-                    dao_address: format_hex(&proposed_edit.dao),
-                    change_type: "added".to_string(),
-                    subspace: format_hex(&proposed_edit.subspace),
+                    plugin_address,
+                    dao_address,
+                    change_type: "removed".to_string(),
+                    subspace,
                 });
             }
 
@@ -804,6 +976,7 @@ fn map_remove_subspace_proposals_created(
         })
         .collect();
 
+    substreams::log::info!("map_remove_subspace_proposals_created: Found {} remove subspace proposal events", proposed_subspaces.len());
     Ok(RemoveSubspaceProposalsCreated { proposed_subspaces })
 }
 
