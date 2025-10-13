@@ -105,12 +105,9 @@ message EditsPublished {
  * permissions.
 */
 message SubspaceAdded {
-  // Subspace dao address
   string subspace = 1;
-  // Plugin address of the space that added the subspace (parent space)
   string plugin_address = 2;
   string change_type = 3;
-  // DAO address of the space that added the subspace (parent space)
   string dao_address = 4;
 }
 
@@ -119,12 +116,9 @@ message SubspacesAdded {
 }
 
 message SubspaceRemoved {
-  // Subspace dao address
   string subspace = 1;
-  // Plugin address of the space that removed the subspace (parent space)
   string plugin_address = 2;
   string change_type = 3;
-  // DAO address of the space that removed the subspace (parent space)
   string dao_address = 4;
 }
 
@@ -144,6 +138,7 @@ message VoteCast {
   string voter = 2;
   uint64 vote_option = 3;
   string plugin_address = 4;
+  string dao_address = 5;
 }
 
 message VotesCast {

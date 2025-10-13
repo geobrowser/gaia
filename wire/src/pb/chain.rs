@@ -188,6 +188,8 @@ pub struct VoteCast {
     pub vote_option: u64,
     #[prost(string, tag = "4")]
     pub plugin_address: ::prost::alloc::string::String,
+    #[prost(string, tag = "5")]
+    pub dao_address: ::prost::alloc::string::String,
 }
 #[derive(serde::Serialize, serde::Deserialize)]
 #[derive(Clone, PartialEq, ::prost::Message)]
