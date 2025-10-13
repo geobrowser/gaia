@@ -182,6 +182,8 @@ pub struct VoteCast {
     pub vote_option: u64,
     #[prost(string, tag="4")]
     pub plugin_address: ::prost::alloc::string::String,
+    #[prost(string, tag="5")]
+    pub dao_address: ::prost::alloc::string::String,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]

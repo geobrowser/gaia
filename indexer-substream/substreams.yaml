@@ -107,6 +107,12 @@ modules:
     initialBlock: 67162
     inputs:
       - source: sf.ethereum.type.v2.Block
+      - store: store_dao_governance_type
+        mode: get
+      - store: store_dao_plugins
+        mode: get
+      - store: store_plugin_to_dao
+        mode: get
     output:
       type: proto:schema.VotesCast
 

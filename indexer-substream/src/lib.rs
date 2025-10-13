@@ -570,23 +570,48 @@ fn map_edits_published(block: eth::v2::Block) -> Result<EditsPublished, substrea
  * _and_ members can create them.
  */
 #[substreams::handlers::map]
-fn map_votes_cast(block: eth::v2::Block) -> Result<VotesCast, substreams::errors::Error> {
+fn map_votes_cast(
+    block: eth::v2::Block,
+    get_dao_governance_type: StoreGetString,
+    get_dao_plugins: StoreGetString,
+    get_plugin_to_dao: StoreGetString,
+) -> Result<VotesCast, substreams::errors::Error> {
+    substreams::log::info!("map_votes_cast: Processing block #{} with {} logs", block.number, block.logs().count());
+    
     let votes: Vec<VoteCast> = block
         .logs()
         .filter_map(|log| {
             if let Some(vote_cast) = VoteCastEvent::match_and_decode(log) {
-                return Some(VoteCast {
-                    onchain_proposal_id: vote_cast.proposal_id.to_string(),
-                    voter: format_hex(&vote_cast.voter),
-                    plugin_address: format_hex(&log.address()),
-                    vote_option: vote_cast.vote_option.to_u64(),
-                });
+                let plugin_address = format_hex(&log.address());
+                
+                // Derive DAO address from plugin address using store lookup
+                if let Some(dao_address) = validate_plugin_for_dao(
+                    &plugin_address,
+                    &get_dao_governance_type,
+                    &get_dao_plugins,
+                    &get_plugin_to_dao,
+                ) {
+                    substreams::log::info!("map_votes_cast: Processing valid vote from plugin {} for DAO {}", 
+                        plugin_address, dao_address);
+                    
+                    return Some(VoteCast {
+                        onchain_proposal_id: vote_cast.proposal_id.to_string(),
+                        voter: format_hex(&vote_cast.voter),
+                        plugin_address,
+                        vote_option: vote_cast.vote_option.to_u64(),
+                        dao_address,
+                    });
+                } else {
+                    substreams::log::info!("map_votes_cast: Filtered out vote from invalid plugin: {}", plugin_address);
+                    return None;
+                }
             }
 
             return None;
         })
         .collect();
 
+    substreams::log::info!("map_votes_cast: Found {} valid vote events", votes.len());
     Ok(VotesCast { votes })
 }
 
@@ -817,17 +842,9 @@ fn geo_out(
     substreams::log::info!("geo_out: Processing {} spaces_created, {} governance_plugins, {} personal_plugins (plugin creation events - not validated)", 
         spaces_created.len(), governance_plugins_created.len(), personal_admin_plugins_created.len());
     
-    // Filter plugin-based events through validation
-    substreams::log::info!("geo_out: Filtering {} votes_cast events", votes_cast.votes.len());
-    let votes_cast = votes_cast.votes.into_iter()
-        .filter(|vote| {
-            let is_valid = validate_plugin_for_dao(&vote.plugin_address, &get_dao_governance_type, &get_dao_plugins, &get_plugin_to_dao).is_some();
-            if !is_valid {
-                substreams::log::info!("Filtered out vote from plugin: {}", vote.plugin_address);
-            }
-            is_valid
-        })
-        .collect();
+    // Votes are now filtered at the map level, so no additional filtering needed
+    substreams::log::info!("geo_out: Processing {} votes_cast events (pre-filtered)", votes_cast.votes.len());
+    let votes_cast = votes_cast.votes;
     
     let edits_published = edits_published.edits.into_iter()
         .filter(|edit| validate_plugin_for_dao(&edit.plugin_address, &get_dao_governance_type, &get_dao_plugins, &get_plugin_to_dao).is_some())
