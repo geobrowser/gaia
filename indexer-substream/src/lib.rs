@@ -18,6 +18,7 @@ use pb::schema::{
 };
 
 use substreams_ethereum::{pb::eth, use_contract, Event};
+use substreams::store::{StoreGet, StoreGetString, StoreNew, StoreSet, StoreSetString};
 
 use helpers::*;
 
@@ -176,12 +177,19 @@ fn map_subspaces_removed(
 fn map_governance_plugins_created(
     block: eth::v2::Block,
 ) -> Result<GeoGovernancePluginsCreated, substreams::errors::Error> {
+    substreams::log::info!("map_governance_plugins_created: Processing block #{} with {} logs", block.number, block.logs().count());
+    
     let plugins: Vec<GeoGovernancePluginCreated> = block
         .logs()
         .filter_map(|log| {
             if let Some(space_governance_created) =
                 GovernancePluginCreatedEvent::match_and_decode(log)
             {
+                substreams::log::info!("map_governance_plugins_created: Found governance plugin created event: DAO={}, voting={}, member={}", 
+                    format_hex(&space_governance_created.dao),
+                    format_hex(&space_governance_created.main_voting_plugin),
+                    format_hex(&space_governance_created.member_access_plugin)
+                );
                 return Some(GeoGovernancePluginCreated {
                     dao_address: format_hex(&space_governance_created.dao),
                     main_voting_address: format_hex(&space_governance_created.main_voting_plugin),
@@ -195,6 +203,7 @@ fn map_governance_plugins_created(
         })
         .collect();
 
+    substreams::log::info!("map_governance_plugins_created: Found {} governance plugin events", plugins.len());
     Ok(GeoGovernancePluginsCreated { plugins })
 }
 
@@ -202,12 +211,18 @@ fn map_governance_plugins_created(
 fn map_personal_admin_plugins_created(
     block: eth::v2::Block,
 ) -> Result<GeoPersonalSpaceAdminPluginsCreated, substreams::errors::Error> {
+    substreams::log::info!("map_personal_admin_plugins_created: Processing block #{} with {} logs", block.number, block.logs().count());
+    
     let plugins: Vec<GeoPersonalSpaceAdminPluginCreated> = block
         .logs()
         .filter_map(|log| {
             if let Some(personal_space_created) =
                 GeoPersonalAdminPluginCreatedEvent::match_and_decode(log)
             {
+                substreams::log::info!("map_personal_admin_plugins_created: Found personal admin plugin created event: DAO={}, admin={}", 
+                    format_hex(&personal_space_created.dao),
+                    format_hex(&personal_space_created.personal_admin_plugin)
+                );
                 return Some(GeoPersonalSpaceAdminPluginCreated {
                     dao_address: format_hex(&personal_space_created.dao),
                     personal_admin_address: (format_hex(
@@ -220,15 +235,101 @@ fn map_personal_admin_plugins_created(
         })
         .collect();
 
+    substreams::log::info!("map_personal_admin_plugins_created: Found {} personal admin plugin events", plugins.len());
     Ok(GeoPersonalSpaceAdminPluginsCreated { plugins })
 }
 
-#[substreams::handlers::map]
-fn map_members_added(block: eth::v2::Block) -> Result<MembersAdded, substreams::errors::Error> {
-    _map_members_added(block)
+#[substreams::handlers::store]
+fn store_dao_governance_type(
+    governance_plugins: GeoGovernancePluginsCreated,
+    personal_plugins: GeoPersonalSpaceAdminPluginsCreated,
+    store: StoreSetString,
+) {
+    substreams::log::info!("store_dao_governance_type: {} governance plugins, {} personal plugins", 
+        governance_plugins.plugins.len(), personal_plugins.plugins.len());
+        
+    for plugin in governance_plugins.plugins {
+        let dao_type_key = format!("dao:type:{}", plugin.dao_address);
+        store.set(0, dao_type_key.clone(), &"governance".to_string());
+        substreams::log::info!("Stored governance type for DAO: {} -> governance", plugin.dao_address);
+    }
+    
+    for plugin in personal_plugins.plugins {
+        let dao_type_key = format!("dao:type:{}", plugin.dao_address);
+        store.set(0, dao_type_key.clone(), &"personal".to_string());
+        substreams::log::info!("Stored personal type for DAO: {} -> personal", plugin.dao_address);
+    }
 }
 
-fn _map_members_added(block: eth::v2::Block) -> Result<MembersAdded, substreams::errors::Error> {
+#[substreams::handlers::store]
+fn store_dao_plugins(
+    spaces: GeoSpacesCreated,
+    governance_plugins: GeoGovernancePluginsCreated,
+    personal_plugins: GeoPersonalSpaceAdminPluginsCreated,
+    store: StoreSetString,
+) {
+    substreams::log::info!("store_dao_plugins: {} spaces, {} governance plugins, {} personal plugins", 
+        spaces.spaces.len(), governance_plugins.plugins.len(), personal_plugins.plugins.len());
+        
+    for space in spaces.spaces {
+        let space_key = format!("dao:space:{}", space.dao_address);
+        store.set(0, space_key.clone(), &space.space_address);
+        substreams::log::info!("Stored space plugin for DAO: {} -> {}", space.dao_address, space.space_address);
+    }
+    
+    for plugin in governance_plugins.plugins {
+        let voting_key = format!("dao:voting:{}", plugin.dao_address);
+        let member_key = format!("dao:member_access:{}", plugin.dao_address);
+        store.set(0, voting_key.clone(), &plugin.main_voting_address);
+        store.set(0, member_key.clone(), &plugin.member_access_address);
+        substreams::log::info!("Stored governance plugins for DAO: {} -> voting={}, member={}", 
+            plugin.dao_address, plugin.main_voting_address, plugin.member_access_address);
+    }
+    
+    for plugin in personal_plugins.plugins {
+        let personal_admin_key = format!("dao:personal_admin:{}", plugin.dao_address);
+        store.set(0, personal_admin_key.clone(), &plugin.personal_admin_address);
+        substreams::log::info!("Stored personal admin plugin for DAO: {} -> {}", 
+            plugin.dao_address, plugin.personal_admin_address);
+    }
+}
+
+#[substreams::handlers::store]
+fn store_plugin_to_dao(
+    spaces: GeoSpacesCreated,
+    governance_plugins: GeoGovernancePluginsCreated,
+    personal_plugins: GeoPersonalSpaceAdminPluginsCreated,
+    store: StoreSetString,
+) {
+    substreams::log::info!("store_plugin_to_dao: {} spaces, {} governance plugins, {} personal plugins", 
+        spaces.spaces.len(), governance_plugins.plugins.len(), personal_plugins.plugins.len());
+        
+    for space in spaces.spaces {
+        let plugin_key = format!("plugin:{}", space.space_address);
+        store.set(0, plugin_key.clone(), &space.dao_address);
+        substreams::log::info!("Stored plugin->DAO mapping: {} -> {}", space.space_address, space.dao_address);
+    }
+    
+    for plugin in governance_plugins.plugins {
+        let voting_plugin_key = format!("plugin:{}", plugin.main_voting_address);
+        let member_plugin_key = format!("plugin:{}", plugin.member_access_address);
+        store.set(0, voting_plugin_key.clone(), &plugin.dao_address);
+        store.set(0, member_plugin_key.clone(), &plugin.dao_address);
+        substreams::log::info!("Stored governance plugin->DAO mappings: {} -> {}, {} -> {}", 
+            plugin.main_voting_address, plugin.dao_address, plugin.member_access_address, plugin.dao_address);
+    }
+    
+    for plugin in personal_plugins.plugins {
+        let plugin_key = format!("plugin:{}", plugin.personal_admin_address);
+        store.set(0, plugin_key.clone(), &plugin.dao_address);
+        substreams::log::info!("Stored personal plugin->DAO mapping: {} -> {}", 
+            plugin.personal_admin_address, plugin.dao_address);
+    }
+}
+
+
+#[substreams::handlers::map]
+fn map_members_added(block: eth::v2::Block) -> Result<MembersAdded, substreams::errors::Error> {
     let members: Vec<MemberAdded> = block
         .logs()
         .flat_map(|log| {
@@ -285,7 +386,19 @@ fn map_members_removed(block: eth::v2::Block) -> Result<MembersRemoved, substrea
 
 #[substreams::handlers::map]
 fn map_editors_added(block: eth::v2::Block) -> Result<EditorsAdded, substreams::errors::Error> {
-    _map_editors_added(block)
+    substreams::log::info!("map_editors_added: Processing block #{} with {} logs", block.number, block.logs().count());
+    let result = _map_editors_added(block);
+    match &result {
+        Ok(editors_added) => {
+            substreams::log::info!("map_editors_added: Found {} editor events", editors_added.editors.len());
+            for editor in &editors_added.editors {
+                substreams::log::info!("map_editors_added: Editor {} added to DAO {} via plugin {}", 
+                    editor.editor_address, editor.dao_address, editor.main_voting_plugin_address);
+            }
+        },
+        Err(e) => substreams::log::info!("map_editors_added: Error processing block: {:?}", e),
+    }
+    result
 }
 
 fn _map_editors_added(block: eth::v2::Block) -> Result<EditorsAdded, substreams::errors::Error> {
@@ -461,12 +574,8 @@ fn map_votes_cast(block: eth::v2::Block) -> Result<VotesCast, substreams::errors
     let votes: Vec<VoteCast> = block
         .logs()
         .filter_map(|log| {
-            // @TODO: Should we track our plugins/daos and only emit if the address is one of them?
             if let Some(vote_cast) = VoteCastEvent::match_and_decode(log) {
                 return Some(VoteCast {
-                    // The onchain proposal id is an incrementing integer. We represent
-                    // the proposal with a more unique id in the sink, so we remap the
-                    // name here to disambiguate between the onchain id and the sink id.
                     onchain_proposal_id: vote_cast.proposal_id.to_string(),
                     voter: format_hex(&vote_cast.voter),
                     plugin_address: format_hex(&log.address()),
@@ -695,21 +804,103 @@ fn geo_out(
     proposed_removed_editors: RemoveEditorProposalsCreated,
     proposed_added_subspaces: AddSubspaceProposalsCreated,
     proposed_removed_subspaces: RemoveSubspaceProposalsCreated,
+    get_dao_governance_type: StoreGetString,
+    get_dao_plugins: StoreGetString,
+    get_plugin_to_dao: StoreGetString,
 ) -> Result<GeoOutput, substreams::errors::Error> {
+    // Plugin creation events are NEVER validated - they establish the legitimate plugins
     let spaces_created = spaces_created.spaces;
     let governance_plugins_created = governance_plugins_created.plugins;
-    let votes_cast = votes_cast.votes;
-    let edits_published = edits_published.edits;
     let successor_spaces_created = successor_spaces_created.spaces;
-    let added_subspaces = subspaces_added.subspaces;
-    let removed_subspaces = subspaces_removed.subspaces;
-    let executed_proposals = proposals_executed.executed_proposals;
-    let members_added = members_added.members;
-    let editors_added = editors_added.editors;
-    let members_removed = members_removed.members;
-    let editors_removed = editors_removed.editors;
     let personal_admin_plugins_created = personal_admin_plugins_created.plugins;
-    let edit_proposals_created = edit_proposals.edits;
+    
+    substreams::log::info!("geo_out: Processing {} spaces_created, {} governance_plugins, {} personal_plugins (plugin creation events - not validated)", 
+        spaces_created.len(), governance_plugins_created.len(), personal_admin_plugins_created.len());
+    
+    // Filter plugin-based events through validation
+    substreams::log::info!("geo_out: Filtering {} votes_cast events", votes_cast.votes.len());
+    let votes_cast = votes_cast.votes.into_iter()
+        .filter(|vote| {
+            let is_valid = validate_plugin_for_dao(&vote.plugin_address, &get_dao_governance_type, &get_dao_plugins, &get_plugin_to_dao).is_some();
+            if !is_valid {
+                substreams::log::info!("Filtered out vote from plugin: {}", vote.plugin_address);
+            }
+            is_valid
+        })
+        .collect();
+    
+    let edits_published = edits_published.edits.into_iter()
+        .filter(|edit| validate_plugin_for_dao(&edit.plugin_address, &get_dao_governance_type, &get_dao_plugins, &get_plugin_to_dao).is_some())
+        .collect();
+    
+    let added_subspaces = subspaces_added.subspaces.into_iter()
+        .filter(|subspace| validate_plugin_for_dao(&subspace.plugin_address, &get_dao_governance_type, &get_dao_plugins, &get_plugin_to_dao).is_some())
+        .collect();
+    
+    let removed_subspaces = subspaces_removed.subspaces.into_iter()
+        .filter(|subspace| validate_plugin_for_dao(&subspace.plugin_address, &get_dao_governance_type, &get_dao_plugins, &get_plugin_to_dao).is_some())
+        .collect();
+    
+    let executed_proposals = proposals_executed.executed_proposals.into_iter()
+        .filter(|proposal| validate_plugin_for_dao(&proposal.plugin_address, &get_dao_governance_type, &get_dao_plugins, &get_plugin_to_dao).is_some())
+        .collect();
+    
+    substreams::log::info!("geo_out: Filtering {} members_added events", members_added.members.len());
+    let members_added = members_added.members.into_iter()
+        .filter(|member| {
+            let is_valid = validate_plugin_for_dao(&member.main_voting_plugin_address, &get_dao_governance_type, &get_dao_plugins, &get_plugin_to_dao).is_some();
+            if !is_valid {
+                substreams::log::info!("Filtered out member_added from plugin: {}", member.main_voting_plugin_address);
+            }
+            is_valid
+        })
+        .collect();
+    
+    let editors_added = editors_added.editors.into_iter()
+        .filter(|editor| {
+            let is_valid = validate_plugin_for_dao(&editor.main_voting_plugin_address, &get_dao_governance_type, &get_dao_plugins, &get_plugin_to_dao).is_some();
+            if !is_valid {
+                substreams::log::info!("Filtered out editor_added from plugin: {}", editor.main_voting_plugin_address);
+            }
+            is_valid
+        })
+        .collect();
+    
+    let members_removed = members_removed.members.into_iter()
+        .filter(|member| validate_plugin_for_dao(&member.plugin_address, &get_dao_governance_type, &get_dao_plugins, &get_plugin_to_dao).is_some())
+        .collect();
+    
+    let editors_removed = editors_removed.editors.into_iter()
+        .filter(|editor| validate_plugin_for_dao(&editor.plugin_address, &get_dao_governance_type, &get_dao_plugins, &get_plugin_to_dao).is_some())
+        .collect();
+    
+    let edit_proposals_created = edit_proposals.edits.into_iter()
+        .filter(|proposal| validate_plugin_for_dao(&proposal.plugin_address, &get_dao_governance_type, &get_dao_plugins, &get_plugin_to_dao).is_some())
+        .collect();
+    
+    let proposed_added_members = proposed_added_members.proposed_members.into_iter()
+        .filter(|proposal| validate_plugin_for_dao(&proposal.plugin_address, &get_dao_governance_type, &get_dao_plugins, &get_plugin_to_dao).is_some())
+        .collect();
+    
+    let proposed_removed_members = proposed_removed_members.proposed_members.into_iter()
+        .filter(|proposal| validate_plugin_for_dao(&proposal.plugin_address, &get_dao_governance_type, &get_dao_plugins, &get_plugin_to_dao).is_some())
+        .collect();
+    
+    let proposed_added_editors = proposed_added_editors.proposed_editors.into_iter()
+        .filter(|proposal| validate_plugin_for_dao(&proposal.plugin_address, &get_dao_governance_type, &get_dao_plugins, &get_plugin_to_dao).is_some())
+        .collect();
+    
+    let proposed_removed_editors = proposed_removed_editors.proposed_editors.into_iter()
+        .filter(|proposal| validate_plugin_for_dao(&proposal.plugin_address, &get_dao_governance_type, &get_dao_plugins, &get_plugin_to_dao).is_some())
+        .collect();
+    
+    let proposed_added_subspaces = proposed_added_subspaces.proposed_subspaces.into_iter()
+        .filter(|proposal| validate_plugin_for_dao(&proposal.plugin_address, &get_dao_governance_type, &get_dao_plugins, &get_plugin_to_dao).is_some())
+        .collect();
+    
+    let proposed_removed_subspaces = proposed_removed_subspaces.proposed_subspaces.into_iter()
+        .filter(|proposal| validate_plugin_for_dao(&proposal.plugin_address, &get_dao_governance_type, &get_dao_plugins, &get_plugin_to_dao).is_some())
+        .collect();
 
     Ok(GeoOutput {
         spaces_created,
@@ -726,12 +917,12 @@ fn geo_out(
         members_removed,
         editors_removed,
         edits: edit_proposals_created,
-        proposed_added_members: proposed_added_members.proposed_members,
-        proposed_removed_members: proposed_removed_members.proposed_members,
-        proposed_added_editors: proposed_added_editors.proposed_editors,
-        proposed_removed_editors: proposed_removed_editors.proposed_editors,
-        proposed_added_subspaces: proposed_added_subspaces.proposed_subspaces,
-        proposed_removed_subspaces: proposed_removed_subspaces.proposed_subspaces,
+        proposed_added_members,
+        proposed_removed_members,
+        proposed_added_editors,
+        proposed_removed_editors,
+        proposed_added_subspaces,
+        proposed_removed_subspaces,
     })
 }
 
