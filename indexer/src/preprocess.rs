@@ -18,7 +18,7 @@ use crate::{
     cache::{postgres::PostgresCache, CacheBackend, PreprocessedEdit},
     error::IndexingError,
     AddedMember, AddedSubspace, CreatedSpace, ExecutedProposal, KgData, PersonalSpace,
-    ProposalCreated, PublicSpace, RemovedMember, RemovedSubspace,
+    ProposalCreated, PublicSpace, RemovedMember, RemovedSubspace, VoteCast,
 };
 use indexer_utils::id::{self, derive_proposal_id};
 use uuid::Uuid;
@@ -160,6 +160,32 @@ pub fn map_executed_proposals(
             plugin_address: p.plugin_address.clone(),
         })
         .collect()
+}
+
+/// Maps vote cast events to VoteCast structs
+/// Note: DAO address derivation needs to be implemented based on your system's plugin->DAO mapping
+pub fn map_votes_cast(votes: &[wire::pb::chain::VoteCast]) -> Vec<VoteCast> {
+    votes
+        .iter()
+        .map(|v| VoteCast {
+            onchain_proposal_id: v.onchain_proposal_id.clone(),
+            voter: v.voter.clone(),
+            vote_option: v.vote_option,
+            plugin_address: v.plugin_address.clone(),
+            dao_address: derive_dao_address_from_plugin(&v.plugin_address),
+        })
+        .collect()
+}
+
+/// Derives DAO address from plugin address
+/// TODO: Implement the actual logic to derive DAO address from plugin address
+/// This might involve:
+/// 1. Querying a plugin->DAO mapping stored in your system
+/// 2. Using proposal data to find the associated DAO
+/// 3. Looking up the DAO from other events in the same block
+fn derive_dao_address_from_plugin(plugin_address: &str) -> String {
+    // Placeholder implementation - replace with actual logic
+    format!("dao_for_{}", plugin_address)
 }
 
 /// Deduplicates a list of content URIs, returning only unique ones
@@ -487,6 +513,7 @@ pub async fn preprocess_block_scoped_data(
 
     let executed_proposals = map_executed_proposals(&geo.executed_proposals);
     let created_proposals = map_created_proposals(&geo, &cache_map)?;
+    let votes = map_votes_cast(&geo.votes_cast);
 
     let kg_data = KgData {
         edits: final_edits.clone(),
@@ -500,6 +527,7 @@ pub async fn preprocess_block_scoped_data(
         block: block_metadata,
         executed_proposals: executed_proposals.clone(),
         created_proposals: created_proposals.clone(),
+        votes: votes.clone(),
     };
 
     info!(
@@ -513,6 +541,7 @@ pub async fn preprocess_block_scoped_data(
         subspace_removed_count = kg_data.removed_subspaces.len(),
         executed_proposal_count = kg_data.executed_proposals.len(),
         created_proposal_count = kg_data.created_proposals.len(),
+        vote_count = kg_data.votes.len(),
         "Preprocessed block data"
     );
 

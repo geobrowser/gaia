@@ -64,6 +64,15 @@ pub struct ExecutedProposal {
 }
 
 #[derive(Clone, Debug)]
+pub struct VoteCast {
+    pub onchain_proposal_id: String,
+    pub voter: String,
+    pub vote_option: u64,
+    pub plugin_address: String,
+    pub dao_address: String,
+}
+
+#[derive(Clone, Debug)]
 pub enum ProposalCreated {
     PublishEdit {
         proposal_id: Uuid,
@@ -152,4 +161,5 @@ pub struct KgData {
     pub spaces: Vec<CreatedSpace>,
     pub executed_proposals: Vec<ExecutedProposal>,
     pub created_proposals: Vec<ProposalCreated>,
+    pub votes: Vec<VoteCast>,
 }
