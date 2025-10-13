@@ -5,7 +5,7 @@ use stream::utils::{self, BlockMetadata};
 use tracing::{info, instrument, Instrument};
 
 use crate::block_handler::{
-    edit_handler, membership_handler, proposal_handler, space_handler, subspace_handler, utils::handle_task_result,
+    edit_handler, membership_handler, proposal_handler, space_handler, subspace_handler, vote_handler, utils::handle_task_result,
 };
 use crate::cache::properties_cache::ImmutableCache;
 
@@ -22,7 +22,8 @@ use crate::KgData;
     editor_count = output.added_editors.len(),
     subspace_count = output.added_subspaces.len(),
     created_proposal_count = output.created_proposals.len(),
-    executed_proposal_count = output.executed_proposals.len()
+    executed_proposal_count = output.executed_proposals.len(),
+    vote_count = output.votes.len()
 ))]
 pub async fn run<S, C>(
     output: &KgData,
@@ -52,6 +53,7 @@ where
         space_count = output.spaces.len(),
         created_proposal_count = output.created_proposals.len(),
         executed_proposal_count = output.executed_proposals.len(),
+        vote_count = output.votes.len(),
         "Processing block"
     );
 
@@ -164,14 +166,38 @@ where
         )
     };
 
-    let (space_result, edit_result, membership_result, subspace_result, proposal_result) =
-        tokio::join!(space_task, edit_task, membership_task, subspace_task, proposal_task);
+    let vote_task = {
+        let storage = Arc::clone(storage);
+        let block_metadata = block_metadata.clone();
+        let votes = output.votes.clone();
+        let block_number = block_metadata.block_number;
+        let vote_count = votes.len();
+        
+        tokio::spawn(
+            async move {
+                vote_handler::run(
+                    &votes,
+                    &block_metadata,
+                    &storage,
+                )
+                .await
+            }
+            .instrument(tracing::info_span!("vote_task", 
+                block_number = block_number,
+                vote_count = vote_count
+            ))
+        )
+    };
+
+    let (space_result, edit_result, membership_result, subspace_result, proposal_result, vote_result) =
+        tokio::join!(space_task, edit_task, membership_task, subspace_task, proposal_task, vote_task);
 
     handle_task_result(space_result)?;
     handle_task_result(edit_result)?;
     handle_task_result(membership_result)?;
     handle_task_result(subspace_result)?;
     handle_task_result(proposal_result)?;
+    handle_task_result(vote_result)?;
 
     info!(
         block_number = block_metadata.block_number,

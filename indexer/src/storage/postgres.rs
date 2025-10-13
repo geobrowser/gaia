@@ -16,6 +16,7 @@ use crate::models::{
     spaces::{SpaceItem, SpaceType},
     subspaces::SubspaceItem,
     values::{ValueChangeType, ValueOp},
+    votes::VoteItem,
 };
 
 use super::{StorageBackend, StorageError};
@@ -1005,6 +1006,78 @@ impl StorageBackend for PostgresStorage {
         )
         .bind(proposal_ids)
         .bind(status)
+        .execute(&mut **tx)
+        .await?;
+
+        Ok(())
+    }
+
+    async fn insert_votes(
+        &self,
+        votes: &Vec<VoteItem>,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    ) -> Result<(), StorageError> {
+        if votes.is_empty() {
+            return Ok(());
+        }
+
+        let mut ids = Vec::with_capacity(votes.len());
+        let mut onchain_proposal_ids = Vec::with_capacity(votes.len());
+        let mut voter_addresses = Vec::with_capacity(votes.len());
+        let mut vote_options = Vec::with_capacity(votes.len());
+        let mut plugin_addresses = Vec::with_capacity(votes.len());
+        let mut space_ids = Vec::with_capacity(votes.len());
+        let mut proposal_ids = Vec::with_capacity(votes.len());
+
+        for vote in votes {
+            ids.push(&vote.id);
+            onchain_proposal_ids.push(&vote.onchain_proposal_id);
+            voter_addresses.push(&vote.voter_address);
+            vote_options.push(&vote.vote_option);
+            plugin_addresses.push(&vote.plugin_address);
+            space_ids.push(&vote.space_id);
+            proposal_ids.push(vote.proposal_id.as_ref());
+        }
+
+        sqlx::query(
+            r#"
+            INSERT INTO votes (
+                id,
+                onchain_proposal_id,
+                voter_address,
+                vote_option,
+                plugin_address,
+                space_id,
+                proposal_id
+            )
+            SELECT 
+                t.id,
+                t.onchain_proposal_id,
+                t.voter_address,
+                t.vote_option,
+                t.plugin_address,
+                t.space_id,
+                t.proposal_id
+            FROM UNNEST(
+                $1::uuid[],
+                $2::text[],
+                $3::varchar(42)[],
+                $4::smallint[],
+                $5::varchar(42)[],
+                $6::uuid[],
+                $7::uuid[]
+            ) AS t(id, onchain_proposal_id, voter_address, vote_option, plugin_address, space_id, proposal_id)
+            ON CONFLICT (onchain_proposal_id, voter_address) DO UPDATE SET
+                vote_option = EXCLUDED.vote_option
+            "#
+        )
+        .bind(&ids)
+        .bind(&onchain_proposal_ids)
+        .bind(&voter_addresses)
+        .bind(&vote_options)
+        .bind(&plugin_addresses)
+        .bind(&space_ids)
+        .bind(&proposal_ids)
         .execute(&mut **tx)
         .await?;
 

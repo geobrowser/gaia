@@ -157,6 +157,7 @@ async fn main() -> Result<(), IndexingError> {
             removed_subspaces: vec![],
             executed_proposals: vec![],
             created_proposals: vec![],
+            votes: vec![],
         }])
         .await?;
 
@@ -742,6 +743,7 @@ async fn test_property_no_overwrite() -> Result<(), IndexingError> {
             removed_subspaces: vec![],
             executed_proposals: vec![],
             created_proposals: vec![],
+            votes: vec![],
         }])
         .await?;
 
@@ -772,6 +774,7 @@ async fn test_property_no_overwrite() -> Result<(), IndexingError> {
             removed_subspaces: vec![],
             executed_proposals: vec![],
             created_proposals: vec![],
+            votes: vec![],
         }])
         .await?;
 
@@ -843,6 +846,7 @@ async fn test_property_squashing() -> Result<(), IndexingError> {
             removed_subspaces: vec![],
             executed_proposals: vec![],
             created_proposals: vec![],
+            votes: vec![],
         }])
         .await?;
 
@@ -1019,6 +1023,7 @@ fn make_kg_data_with_spaces(
         removed_subspaces: vec![],
         executed_proposals: vec![],
         created_proposals: vec![],
+        votes: vec![],
     }
 }
 
@@ -1341,6 +1346,7 @@ fn make_kg_data_with_membership(
         removed_subspaces: vec![],
         executed_proposals: vec![],
         created_proposals: vec![],
+        votes: vec![],
     }
 }
 
@@ -1779,6 +1785,7 @@ fn make_kg_data_with_subspaces(
         removed_subspaces,
         executed_proposals: vec![],
         created_proposals: vec![],
+        votes: vec![],
     }
 }
 
@@ -2016,6 +2023,7 @@ async fn test_subspace_indexing_with_other_operations() -> Result<(), IndexingEr
         removed_subspaces: vec![],
         executed_proposals: vec![],
         created_proposals: vec![],
+        votes: vec![],
     };
     let blocks = vec![kg_data];
 
@@ -2192,6 +2200,7 @@ async fn test_proposals_indexing() -> Result<(), IndexingError> {
         removed_subspaces: vec![],
         executed_proposals: vec![],
         created_proposals: vec![publish_edit_proposal, add_member_proposal],
+        votes: vec![],
     };
 
     // Run the indexer
@@ -2279,6 +2288,7 @@ async fn test_executed_proposals() -> Result<(), IndexingError> {
         removed_subspaces: vec![],
         executed_proposals: vec![],
         created_proposals: vec![created_proposal],
+        votes: vec![],
     };
 
     // Run the indexer to create the proposal
@@ -2311,6 +2321,7 @@ async fn test_executed_proposals() -> Result<(), IndexingError> {
         removed_subspaces: vec![],
         executed_proposals: vec![executed_proposal],
         created_proposals: vec![],
+        votes: vec![],
     };
 
     // Run the indexer to execute the proposal

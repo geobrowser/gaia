@@ -162,30 +162,34 @@ pub fn map_executed_proposals(
         .collect()
 }
 
-/// Maps vote cast events to VoteCast structs
-/// Note: DAO address derivation needs to be implemented based on your system's plugin->DAO mapping
-pub fn map_votes_cast(votes: &[wire::pb::chain::VoteCast]) -> Vec<VoteCast> {
+/// Maps vote cast events to VoteCast structs  
+/// Uses the plugin_to_dao_mapping to find the correct DAO/space for each vote
+pub fn map_votes_cast(
+    votes: &[wire::pb::chain::VoteCast],
+    plugin_to_dao_mapping: &std::collections::HashMap<String, String>,
+) -> Vec<VoteCast> {
     votes
         .iter()
-        .map(|v| VoteCast {
-            onchain_proposal_id: v.onchain_proposal_id.clone(),
-            voter: v.voter.clone(),
-            vote_option: v.vote_option,
-            plugin_address: v.plugin_address.clone(),
-            dao_address: derive_dao_address_from_plugin(&v.plugin_address),
+        .filter_map(|v| {
+            // Look up the DAO address from the plugin mapping
+            if let Some(dao_address) = plugin_to_dao_mapping.get(&v.plugin_address) {
+                Some(VoteCast {
+                    onchain_proposal_id: v.onchain_proposal_id.clone(),
+                    voter: v.voter.clone(),
+                    vote_option: v.vote_option,
+                    plugin_address: v.plugin_address.clone(),
+                    dao_address: dao_address.clone(),
+                })
+            } else {
+                debug!(
+                    plugin_address = %v.plugin_address,
+                    onchain_proposal_id = %v.onchain_proposal_id,
+                    "No DAO mapping found for plugin address, skipping vote"
+                );
+                None
+            }
         })
         .collect()
-}
-
-/// Derives DAO address from plugin address
-/// TODO: Implement the actual logic to derive DAO address from plugin address
-/// This might involve:
-/// 1. Querying a plugin->DAO mapping stored in your system
-/// 2. Using proposal data to find the associated DAO
-/// 3. Looking up the DAO from other events in the same block
-fn derive_dao_address_from_plugin(plugin_address: &str) -> String {
-    // Placeholder implementation - replace with actual logic
-    format!("dao_for_{}", plugin_address)
 }
 
 /// Deduplicates a list of content URIs, returning only unique ones
@@ -483,6 +487,69 @@ pub async fn preprocess_block_scoped_data(
         &geo.personal_plugins_created,
     );
 
+    // Build a mapping from plugin addresses to DAO addresses for vote processing
+    let mut plugin_to_dao_mapping = std::collections::HashMap::new();
+    
+    // Add governance plugin mappings
+    for plugin in &geo.governance_plugins_created {
+        plugin_to_dao_mapping.insert(
+            plugin.main_voting_address.clone(),
+            plugin.dao_address.clone(),
+        );
+    }
+    
+    // Add personal plugin mappings  
+    for plugin in &geo.personal_plugins_created {
+        plugin_to_dao_mapping.insert(
+            plugin.personal_admin_address.clone(),
+            plugin.dao_address.clone(),
+        );
+    }
+    
+    // Also add any existing plugin addresses from created proposals
+    for proposal in &geo.edits {
+        plugin_to_dao_mapping.insert(
+            proposal.plugin_address.clone(),
+            proposal.dao_address.clone(),
+        );
+    }
+    for proposal in &geo.proposed_added_members {
+        plugin_to_dao_mapping.insert(
+            proposal.plugin_address.clone(),
+            proposal.dao_address.clone(),
+        );
+    }
+    for proposal in &geo.proposed_removed_members {
+        plugin_to_dao_mapping.insert(
+            proposal.plugin_address.clone(),
+            proposal.dao_address.clone(),
+        );
+    }
+    for proposal in &geo.proposed_added_editors {
+        plugin_to_dao_mapping.insert(
+            proposal.plugin_address.clone(),
+            proposal.dao_address.clone(),
+        );
+    }
+    for proposal in &geo.proposed_removed_editors {
+        plugin_to_dao_mapping.insert(
+            proposal.plugin_address.clone(),
+            proposal.dao_address.clone(),
+        );
+    }
+    for proposal in &geo.proposed_added_subspaces {
+        plugin_to_dao_mapping.insert(
+            proposal.plugin_address.clone(),
+            proposal.dao_address.clone(),
+        );
+    }
+    for proposal in &geo.proposed_removed_subspaces {
+        plugin_to_dao_mapping.insert(
+            proposal.plugin_address.clone(),
+            proposal.dao_address.clone(),
+        );
+    }
+
     let added_editors = map_editors_added(&geo.editors_added);
     let mut added_members = map_members_added(&geo.members_added);
 
@@ -513,7 +580,7 @@ pub async fn preprocess_block_scoped_data(
 
     let executed_proposals = map_executed_proposals(&geo.executed_proposals);
     let created_proposals = map_created_proposals(&geo, &cache_map)?;
-    let votes = map_votes_cast(&geo.votes_cast);
+    let votes = map_votes_cast(&geo.votes_cast, &plugin_to_dao_mapping);
 
     let kg_data = KgData {
         edits: final_edits.clone(),

@@ -15,6 +15,7 @@ use crate::models::{
     spaces::SpaceItem,
     subspaces::SubspaceItem,
     values::ValueOp,
+    votes::VoteItem,
 };
 
 #[derive(Error, Debug)]
@@ -112,6 +113,11 @@ pub trait StorageBackend: Send + Sync {
         &self,
         proposal_ids: &Vec<Uuid>,
         status: &str,
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    ) -> Result<(), StorageError>;
+    async fn insert_votes(
+        &self,
+        votes: &Vec<VoteItem>,
         tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     ) -> Result<(), StorageError>;
 }

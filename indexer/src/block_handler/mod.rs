@@ -5,3 +5,4 @@ pub mod root_handler;
 pub mod space_handler;
 pub mod subspace_handler;
 pub mod utils;
+pub mod vote_handler;

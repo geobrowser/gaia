@@ -6,6 +6,7 @@ pub mod relations;
 pub mod spaces;
 pub mod subspaces;
 pub mod values;
+pub mod votes;
 
 #[cfg(test)]
 mod membership_test;
