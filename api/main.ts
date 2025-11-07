@@ -1,15 +1,15 @@
-import {swaggerUI} from "@hono/swagger-ui"
-import {Duration, Effect, Either, Layer, Schedule, Schema} from "effect"
-import {Hono} from "hono"
-import {compress} from "hono/compress"
-import {cors} from "hono/cors"
-import {openAPISpecs} from "hono-openapi"
-import {health} from "./src/health"
-import {graphqlServer} from "./src/kg/postgraphile"
-import {Environment, EnvironmentLive, make as makeEnvironment} from "./src/services/environment"
-import {uploadEdit, uploadFile} from "./src/services/ipfs"
-import {make as makeStorage, Storage} from "./src/services/storage/storage"
-import {getPublishEditCalldata} from "./src/utils/calldata"
+import { swaggerUI } from "@hono/swagger-ui"
+import { Duration, Effect, Either, Layer, Schedule, Schema } from "effect"
+import { Hono } from "hono"
+import { openAPISpecs } from "hono-openapi"
+import { compress } from "hono/compress"
+import { cors } from "hono/cors"
+import { health } from "./src/health"
+import { graphqlServer } from "./src/kg/postgraphile"
+import { Environment, EnvironmentLive, make as makeEnvironment } from "./src/services/environment"
+import { uploadEdit, uploadFile, uploadFileAlternativeGateway } from "./src/services/ipfs"
+import { make as makeStorage, Storage } from "./src/services/storage/storage"
+import { getPublishEditCalldata } from "./src/utils/calldata"
 
 /**
  * Currently hand-rolling a compression polyfill until Bun implements
@@ -17,9 +17,9 @@ import {getPublishEditCalldata} from "./src/utils/calldata"
  * https://github.com/oven-sh/bun/issues/1723
  */
 import "./src/compression-polyfill"
-import {NodeSdkLive} from "./src/services/telemetry"
-import {deployPersonalSpace} from "./src/space/deploy-personal-space"
-import {deployPublicSpace} from "./src/space/deploy-public-space"
+import { NodeSdkLive } from "./src/services/telemetry"
+import { deployPersonalSpace } from "./src/space/deploy-personal-space"
+import { deployPublicSpace } from "./src/space/deploy-public-space"
 
 const EnvironmentLayer = Layer.effect(Environment, makeEnvironment)
 const StorageLayer = Layer.effect(Storage, makeStorage).pipe(Layer.provide(EnvironmentLayer))
@@ -79,6 +79,32 @@ app.post("/ipfs/upload-file", async (c) => {
 	const result = await Effect.runPromise(
 		Effect.either(uploadFile(file)).pipe(
 			Effect.withSpan("/ipfs/upload-file.uploadFile"),
+			Effect.provide(EnvironmentLayer),
+			Effect.provide(NodeSdkLive),
+		),
+	)
+
+	if (Either.isLeft(result)) {
+		// @TODO: Logging/tracing
+		return new Response("Failed to upload file", {status: 500})
+	}
+
+	const cid = result.right.cid
+
+	return c.json({cid})
+})
+
+app.post("/ipfs/upload-file-alternative-gateway", async (c) => {
+	const formData = await c.req.formData()
+	const file = formData.get("file") as File | undefined
+
+	if (!file) {
+		return new Response("No file provided", {status: 400})
+	}
+
+	const result = await Effect.runPromise(
+		Effect.either(uploadFileAlternativeGateway(file)).pipe(
+			Effect.withSpan("/ipfs/upload-file-alternative-gateway.uploadFile"),
 			Effect.provide(EnvironmentLayer),
 			Effect.provide(NodeSdkLive),
 		),
