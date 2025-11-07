@@ -1,0 +1,24 @@
+name: Railway Deploy (curator-backend)
+on:
+  push:
+    branches:
+      - main
+      - nik/ci-deploy
+    paths:
+      - 'api/**'
+      - '.github/workflows/api-railway-deploy.yml'
+  
+jobs:
+  deploy:
+    name: Deploy api
+    runs-on: ubuntu-latest
+    concurrency: deploy-group # optional: ensure only one action runs at a time
+    container: ghcr.io/railwayapp/cli:latest
+    env:
+      SERVICE_ID: ${{ vars.RAILWAY_SERVICE_ID_TESTNET_V2 }}
+      RAILWAY_TOKEN: ${{ secrets.RAILWAY_TOKEN }}
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deploy api
+        working-directory: ./api
+        run: railway up --service=${{ env.SERVICE_ID }}

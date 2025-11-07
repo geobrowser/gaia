@@ -149,12 +149,19 @@ export function uploadAlternativeGateway(formData: FormData, url: string) {
 						Authorization: `Bearer ${config.ipfsAlternativeGatewayKey}`,
 					},
 				}),
-			catch: (error) => new IpfsUploadError(`IPFS alternative gateway upload failed: ${error}`),
+			catch: (error) => {
+				console.error("Alternative gateway upload error:", error)
+				return new IpfsUploadError(`IPFS alternative gateway upload failed: ${error}`)
+			},
 		}).pipe(Effect.withSpan("ipfs.uploadAlternativeGateway"))
+
 
 		const responseJson = yield* Effect.tryPromise({
 			try: () => response.json(),
-			catch: (error) => new IpfsParseResponseError(`Could not parse IPFS alternative gateway JSON response: ${error}`),
+			catch: (error) => {
+				console.error("Alternative gateway Json parse error:", error)
+				return new IpfsParseResponseError(`Could not parse IPFS alternative gateway JSON response: ${error}`)
+			},
 		})
 
 		if (responseJson.error) {
