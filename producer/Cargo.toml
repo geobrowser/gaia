@@ -1,0 +1,15 @@
+[package]
+name = "kafka-producer"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+rdkafka = { version = "0.36", features = ["cmake-build", "zstd"] }
+prost = "0.14.1"
+tokio = { version = "1", features = ["full"] }
+uuid = { version = "1.0", features = ["v4"] }
+chrono = "0.4"
+hex = "0.4"
+
+[build-dependencies]
+prost-build = "0.14.1"
