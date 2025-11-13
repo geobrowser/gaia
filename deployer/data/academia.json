@@ -1,1508 +1,1508 @@
 [
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "0e4e9a28-6fe2-4389-b431-32fef7e1f113",
-			"values": [
-				{
-					"property": "8a743832-c094-4a62-b665-0c3cc2f9c7bc",
-					"value": "ipfs://bafkreigf74agfh23kypicbwcesjjv4tg3dveeaf4un33s7ivch7xlm2z2a"
-				}
-			]
-		}
-	},
-	{
-		"type": "CREATE_RELATION",
-		"relation": {
-			"id": "7cfd210c-1b1a-4abd-b4cd-33784d69fb0f",
-			"entity": "7c634dee-8768-4631-acab-d2b34fe282e8",
-			"fromEntity": "0e4e9a28-6fe2-4389-b431-32fef7e1f113",
-			"position": "a087b",
-			"toEntity": "ba4e4146-0010-499d-a0a3-caaa7f579d0e",
-			"type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "0fa96f99-1faa-48f2-b825-a1113de0e4be",
-			"values": [
-				{
-					"property": "a126ca53-0c8e-48d5-b888-82c734c38935",
-					"value": "Academia"
-				}
-			]
-		}
-	},
-	{
-		"type": "CREATE_RELATION",
-		"relation": {
-			"id": "862dc3f9-2385-4165-9ef1-e2fc0fb357f6",
-			"entity": "d5658523-1141-40ef-bbed-606fa5d95126",
-			"fromEntity": "0fa96f99-1faa-48f2-b825-a1113de0e4be",
-			"position": "a00ip",
-			"toEntity": "575a1660-5d1d-4642-85f2-e01dc76d5971",
-			"type": "beaba5cb-a677-41a8-b353-77030613fc70"
-		}
-	},
-	{
-		"type": "CREATE_RELATION",
-		"relation": {
-			"id": "4674dc1e-bb15-4d5c-93ac-2ad75e2fa837",
-			"entity": "452e41c1-5d90-4ea0-a5ef-e046eeed34ed",
-			"fromEntity": "0fa96f99-1faa-48f2-b825-a1113de0e4be",
-			"position": "a17DA",
-			"toEntity": "362c1dbd-dc64-44bb-a3c4-652f38a642d7",
-			"type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
-		}
-	},
-	{
-		"type": "CREATE_RELATION",
-		"relation": {
-			"id": "c3782247-f313-419a-b649-6d841ceb9e25",
-			"entity": "46a9d904-0392-4db9-a2f1-8d3bd6d16200",
-			"fromEntity": "0fa96f99-1faa-48f2-b825-a1113de0e4be",
-			"position": "a23JS",
-			"toEntity": "dcc2e824-2dcc-40f2-a3c5-8baa17a09a36",
-			"type": "34f53507-2e6b-42c5-a844-43981a77cfa2"
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "103773aa-5120-4d7d-aeb3-a8a96095183a",
-			"values": [
-				{
-					"property": "8a743832-c094-4a62-b665-0c3cc2f9c7bc",
-					"value": "ipfs://bafkreigkhr76ryjfx2gasccktsvokf5fuhtljb63mxoifempooezcqr5oa"
-				}
-			]
-		}
-	},
-	{
-		"type": "CREATE_RELATION",
-		"relation": {
-			"id": "6610b070-cfc8-4baf-af31-c8618c0398a2",
-			"entity": "25d5a02d-6c30-43df-a28e-625dca0f8e4c",
-			"fromEntity": "103773aa-5120-4d7d-aeb3-a8a96095183a",
-			"position": "a05jx",
-			"toEntity": "ba4e4146-0010-499d-a0a3-caaa7f579d0e",
-			"type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "137ddf52-a7ea-4e43-a04d-56bdb0feabb3",
-			"values": []
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "1c5e07d1-4c3a-489d-8b4e-41d7b834321f",
-			"values": []
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "21ce5561-04d7-445c-8e4e-006a58927183",
-			"values": [
-				{
-					"property": "a126ca53-0c8e-48d5-b888-82c734c38935",
-					"value": "University of Cincinnati"
-				}
-			]
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "2295ce06-c126-430c-8384-0f96d4b8b724",
-			"values": []
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "264f7c6d-c2c1-4d6e-9e33-bb3c0ecb0d9c",
-			"values": []
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "268fefcc-9f0f-41c6-b665-2ecbbfd876cc",
-			"values": []
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "2a4884a4-83af-43ed-9a21-6b01becb3454",
-			"values": []
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "2c45b780-8421-4c88-9330-de96937f04b6",
-			"values": [
-				{
-					"property": "0d625978-4b3c-4b57-a86f-de45c997c73c",
-					"value": "https://x.com/UZH_en"
-				},
-				{
-					"property": "9b1f76ff-9711-404c-861e-59dc3fa7d037",
-					"value": "The University of Zurich is a public research university in Zurich, Switzerland. It is the largest university in Switzerland, with its 28,000 enrolled students. It was founded in 1833 from the existing colleges of theology, law, medicine which go back to 1525, and a new faculty of philosophy."
-				},
-				{
-					"property": "a126ca53-0c8e-48d5-b888-82c734c38935",
-					"value": "University of Zurich"
-				},
-				{
-					"property": "eed38e74-e679-46bf-8a42-ea3e4f8fb5fb",
-					"value": "https://www.uzh.ch/"
-				}
-			]
-		}
-	},
-	{
-		"type": "CREATE_RELATION",
-		"relation": {
-			"id": "5c97f44a-41e1-4be2-a5c0-beb60ddb5f56",
-			"entity": "a34be6f9-c8f4-4e80-b38c-0b3107c63037",
-			"fromEntity": "2c45b780-8421-4c88-9330-de96937f04b6",
-			"position": "a03PD",
-			"toEntity": "9af19b7e-2cc9-4a60-8d20-e0a51ffb1b7c",
-			"type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
-		}
-	},
-	{
-		"type": "CREATE_RELATION",
-		"relation": {
-			"id": "e86c7dd8-a5d5-43d5-9b0c-bedbf7cc8f8e",
-			"entity": "fb889d84-b6fe-400f-b450-f2a275789b52",
-			"fromEntity": "2c45b780-8421-4c88-9330-de96937f04b6",
-			"position": "a17ir",
-			"toEntity": "484a18c5-030a-499c-b0f2-ef588ff16d50",
-			"type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
-		}
-	},
-	{
-		"type": "CREATE_RELATION",
-		"relation": {
-			"id": "d9f1e0b9-db44-48d7-95ee-e6cfca11754c",
-			"entity": "42062b80-4f76-422a-bc76-724810070ef3",
-			"fromEntity": "2c45b780-8421-4c88-9330-de96937f04b6",
-			"position": "a20Ih",
-			"toEntity": "804d83af-9484-4608-af4f-f62f532c8cbd",
-			"type": "34f53507-2e6b-42c5-a844-43981a77cfa2"
-		}
-	},
-	{
-		"type": "CREATE_RELATION",
-		"relation": {
-			"id": "903587f6-8171-46ed-8236-b8107c5717b6",
-			"entity": "81bef7ef-28a5-40d4-8d29-c7bc52f20faf",
-			"fromEntity": "2c45b780-8421-4c88-9330-de96937f04b6",
-			"position": "a32iB",
-			"toEntity": "5d987713-2470-4be8-9299-336dfadf61a3",
-			"type": "1155beff-fad5-49b7-a2e0-da4777b8792c"
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "32685bbf-6ac7-4aaf-bc4e-722c0ea3abe2",
-			"values": []
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "3b718504-30a6-41e5-afbd-10be446671a3",
-			"values": []
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "3cca7d59-4009-4393-b7b7-be0047eff272",
-			"values": []
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "3dc909ad-ff2c-42b5-99e5-051ef1240e32",
-			"values": [
-				{
-					"property": "8a743832-c094-4a62-b665-0c3cc2f9c7bc",
-					"value": "ipfs://bafkreifvj3vnftpxebni3onkwr74zzhgumryyejlgzvxdtyro4qsaldkpq"
-				}
-			]
-		}
-	},
-	{
-		"type": "CREATE_RELATION",
-		"relation": {
-			"id": "ef3ab8ca-ce83-48a2-91e1-32f935e6f373",
-			"entity": "90697f99-78d2-4ca0-b12a-a31dd1d93a52",
-			"fromEntity": "3dc909ad-ff2c-42b5-99e5-051ef1240e32",
-			"position": "a09k7",
-			"toEntity": "ba4e4146-0010-499d-a0a3-caaa7f579d0e",
-			"type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "3ec88bd8-ce2a-48dc-a824-cea81521f1ed",
-			"values": []
-		}
-	},
-	{
-		"type": "CREATE_RELATION",
-		"relation": {
-			"id": "0a804f0b-0643-4c18-88db-2d743dd0107e",
-			"entity": "7e60ce94-41ce-4e73-90c4-300a0d7093e1",
-			"fromEntity": "3ec88bd8-ce2a-48dc-a824-cea81521f1ed",
-			"position": "a06WR",
-			"toEntity": "7d497dba-09c2-49b8-968f-716bcf520473",
-			"type": "1907fd1c-8111-4a3c-a378-b1f353425b65"
-		}
-	},
-	{
-		"type": "CREATE_RELATION",
-		"relation": {
-			"id": "ad730703-6195-4b17-814d-818d5bd9b6c2",
-			"entity": "2722818b-fa59-47eb-8298-e24b5351933e",
-			"fromEntity": "3ec88bd8-ce2a-48dc-a824-cea81521f1ed",
-			"position": "a1569",
-			"toEntity": "1155beff-fad5-49b7-a2e0-da4777b8792c",
-			"type": "01412f83-8189-4ab1-8365-65c7fd358cc1"
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "43d4038d-ce27-49b0-95e2-39d4327e3e10",
-			"values": []
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "449a1424-1b3e-45cd-812b-2548d246aa8d",
-			"values": [
-				{
-					"property": "8a743832-c094-4a62-b665-0c3cc2f9c7bc",
-					"value": "ipfs://bafybeig2ijwbn43szkkwzdm43a3qxmzw6kbxhcvxxdoj5ourx4p26rxh3y"
-				}
-			]
-		}
-	},
-	{
-		"type": "CREATE_RELATION",
-		"relation": {
-			"id": "da1c10f8-b459-4ef9-b966-217e72bd837d",
-			"entity": "a78d74c0-90de-4ae7-aca7-a043307ff830",
-			"fromEntity": "449a1424-1b3e-45cd-812b-2548d246aa8d",
-			"position": "a0Ar2",
-			"toEntity": "ba4e4146-0010-499d-a0a3-caaa7f579d0e",
-			"type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "46456c63-4a0e-4892-b5e5-345d01eb54d3",
-			"values": []
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "47014d3a-c592-4c1a-9080-2a8b1f427705",
-			"values": [
-				{
-					"property": "8a743832-c094-4a62-b665-0c3cc2f9c7bc",
-					"value": "ipfs://bafkreiemv3ppljrhotyqraha63pqwfvnluv2tg44bmwxo2ggskin4rc3yq"
-				}
-			]
-		}
-	},
-	{
-		"type": "CREATE_RELATION",
-		"relation": {
-			"id": "6c616ce7-be59-4526-8bd5-d4b2257739ff",
-			"entity": "6d21e125-031c-4a2d-a3d7-1dc9f00d8c9a",
-			"fromEntity": "47014d3a-c592-4c1a-9080-2a8b1f427705",
-			"position": "a00Hp",
-			"toEntity": "ba4e4146-0010-499d-a0a3-caaa7f579d0e",
-			"type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "47d1980c-01cb-49ea-bc45-944dd975899c",
-			"values": []
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "56449f63-39c4-463e-bd4e-7ff8cddc14c6",
-			"values": [
-				{
-					"property": "8a743832-c094-4a62-b665-0c3cc2f9c7bc",
-					"value": "ipfs://bafybeicg4mpakbknvhozfzdkqio6lhpwpdd36s5dmxqmn34lxbiwtlume4"
-				}
-			]
-		}
-	},
-	{
-		"type": "CREATE_RELATION",
-		"relation": {
-			"id": "51d5ac94-f099-47b9-8b16-7769ec335955",
-			"entity": "9c4b4b11-63e9-4b88-9665-bc9ed3a5d8d2",
-			"fromEntity": "56449f63-39c4-463e-bd4e-7ff8cddc14c6",
-			"position": "a01LQ",
-			"toEntity": "ba4e4146-0010-499d-a0a3-caaa7f579d0e",
-			"type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "56cf658b-74f1-486d-9a8d-6ace1f94fc4e",
-			"values": [
-				{
-					"property": "9b1f76ff-9711-404c-861e-59dc3fa7d037",
-					"value": "Czech Technical University in Prague is one of the largest universities in the Czech Republic with 8 faculties, and is one of the oldest institutes of technology in Central Europe. It is also the oldest non-military technical university in Europe."
-				},
-				{
-					"property": "a126ca53-0c8e-48d5-b888-82c734c38935",
-					"value": "Czech Technical University in Prague"
-				},
-				{
-					"property": "eed38e74-e679-46bf-8a42-ea3e4f8fb5fb",
-					"value": "https://www.cvut.cz/en"
-				}
-			]
-		}
-	},
-	{
-		"type": "CREATE_RELATION",
-		"relation": {
-			"id": "d808a8cc-313a-4f96-95bb-dc892f4b6e20",
-			"entity": "2cfac706-f2c1-439b-b7ff-ce16f4bddbe9",
-			"fromEntity": "56cf658b-74f1-486d-9a8d-6ace1f94fc4e",
-			"position": "a00aq",
-			"toEntity": "9af19b7e-2cc9-4a60-8d20-e0a51ffb1b7c",
-			"type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
-		}
-	},
-	{
-		"type": "CREATE_RELATION",
-		"relation": {
-			"id": "4c8b2617-fc02-4484-9e8d-5322829d208d",
-			"entity": "a5ac785a-f08a-4745-b3a7-374fc3ec9ad4",
-			"fromEntity": "56cf658b-74f1-486d-9a8d-6ace1f94fc4e",
-			"position": "a1C9H",
-			"toEntity": "484a18c5-030a-499c-b0f2-ef588ff16d50",
-			"type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
-		}
-	},
-	{
-		"type": "CREATE_RELATION",
-		"relation": {
-			"id": "4b6c9f9d-376b-45c1-b0c4-9314ce96b7c5",
-			"entity": "e4e6878e-a54e-46ca-9606-c6f9df6586b1",
-			"fromEntity": "56cf658b-74f1-486d-9a8d-6ace1f94fc4e",
-			"position": "a25sq",
-			"toEntity": "97f3c169-f1e2-4483-9dcc-ee31d9e96328",
-			"type": "1155beff-fad5-49b7-a2e0-da4777b8792c"
-		}
-	},
-	{
-		"type": "CREATE_RELATION",
-		"relation": {
-			"id": "62eddacc-f553-42e3-8e13-66fd7b6e24d4",
-			"entity": "a4769c93-8b64-4bed-97bd-73c3e90af46e",
-			"fromEntity": "56cf658b-74f1-486d-9a8d-6ace1f94fc4e",
-			"position": "a35tE",
-			"toEntity": "90c29ec9-a7b3-4139-b281-235167ca4143",
-			"type": "34f53507-2e6b-42c5-a844-43981a77cfa2"
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "575a1660-5d1d-4642-85f2-e01dc76d5971",
-			"values": [
-				{
-					"property": "14a46854-bfd1-4b18-8215-2785c2dab9f3",
-					"value": "{\"spaceId\":{\"in\":[\"76fc86bd-da72-49a9-9786-e13da36512fb\"]},\"filter\":{\"8f151ba4-de20-4e3c-9cb4-99ddf96f48f1\":{\"is\":\"484a18c5-030a-499c-b0f2-ef588ff16d50\"}}}"
-				},
-				{
-					"property": "a126ca53-0c8e-48d5-b888-82c734c38935",
-					"value": "Universities"
-				}
-			]
-		}
-	},
-	{
-		"type": "CREATE_RELATION",
-		"relation": {
-			"id": "71d8c162-a9ec-437f-b76d-a168806c575a",
-			"entity": "b2ef89e1-9e34-474d-a02e-8d6236ff8dc0",
-			"fromEntity": "575a1660-5d1d-4642-85f2-e01dc76d5971",
-			"position": "a00ud",
-			"toEntity": "b8803a86-65de-412b-bb35-7e0c84adf473",
-			"type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
-		}
-	},
-	{
-		"type": "CREATE_RELATION",
-		"relation": {
-			"id": "f7bf56e8-e7ac-4e3e-9781-df5e5c651349",
-			"entity": "d5ec493e-e597-4ce3-905a-bda8fb9dcc48",
-			"fromEntity": "575a1660-5d1d-4642-85f2-e01dc76d5971",
-			"position": "a19Ni",
-			"toEntity": "3b069b04-adbe-4728-917d-1283fd4ac27e",
-			"type": "1f69cc98-80d4-44ab-ad49-3df6a7b15ee4"
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "5a38a355-dbc6-4685-a78d-3396db83d168",
-			"values": []
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "5af3e1f8-018f-48d3-b26a-6a2ae6d80779",
-			"values": []
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "5d311acb-455e-4727-949d-26e38aef7bdc",
-			"values": []
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "5d7f2990-304b-4127-b5d1-c234499223b1",
-			"values": []
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "5d987713-2470-4be8-9299-336dfadf61a3",
-			"values": [
-				{
-					"property": "8a743832-c094-4a62-b665-0c3cc2f9c7bc",
-					"value": "ipfs://bafkreidzsu7u5ro5aopiut6qca2cr2l3frqfaouk36drrxi2i5jl3gsnpm"
-				}
-			]
-		}
-	},
-	{
-		"type": "CREATE_RELATION",
-		"relation": {
-			"id": "eadc117a-b52b-4965-a151-e74e214bff6e",
-			"entity": "1451db0e-2fe4-43ee-ab56-f1bd30f2a757",
-			"fromEntity": "5d987713-2470-4be8-9299-336dfadf61a3",
-			"position": "a047n",
-			"toEntity": "ba4e4146-0010-499d-a0a3-caaa7f579d0e",
-			"type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "5e0f2e1b-8ee5-4fd3-90cf-b8c0cf5b5d63",
-			"values": []
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "6500fa07-16db-4fb0-969c-f63a27d3eeb1",
-			"values": []
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "679b7592-e290-4292-81eb-2e80f8154eca",
-			"values": [
-				{
-					"property": "9b1f76ff-9711-404c-861e-59dc3fa7d037",
-					"value": "The University of Cambridge is a public collegiate research university in Cambridge, England. Founded in 1209, the University of Cambridge is the world's third-oldest university in continuous operation."
-				},
-				{
-					"property": "a126ca53-0c8e-48d5-b888-82c734c38935",
-					"value": "University of Cambridge"
-				},
-				{
-					"property": "eed38e74-e679-46bf-8a42-ea3e4f8fb5fb",
-					"value": "https://www.cam.ac.uk/"
-				}
-			]
-		}
-	},
-	{
-		"type": "CREATE_RELATION",
-		"relation": {
-			"id": "c99184bb-e113-4cb1-aba0-bfa3ff457e04",
-			"entity": "5ac0aeab-efa1-4704-9ed5-36d0d7a094a6",
-			"fromEntity": "679b7592-e290-4292-81eb-2e80f8154eca",
-			"position": "a05x4",
-			"toEntity": "9af19b7e-2cc9-4a60-8d20-e0a51ffb1b7c",
-			"type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
-		}
-	},
-	{
-		"type": "CREATE_RELATION",
-		"relation": {
-			"id": "bff0a91a-009e-49d2-a47e-c9061b20ae6b",
-			"entity": "554063dd-360b-4145-a751-1bb5a540f2ee",
-			"fromEntity": "679b7592-e290-4292-81eb-2e80f8154eca",
-			"position": "a16XW",
-			"toEntity": "484a18c5-030a-499c-b0f2-ef588ff16d50",
-			"type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
-		}
-	},
-	{
-		"type": "CREATE_RELATION",
-		"relation": {
-			"id": "240abf83-0307-401d-b229-cb7f12a83ccc",
-			"entity": "4bf193a8-ed43-4fcb-942e-8e1027cca42a",
-			"fromEntity": "679b7592-e290-4292-81eb-2e80f8154eca",
-			"position": "a26hk",
-			"toEntity": "c0fe5350-df05-4204-a791-f71bf80ea182",
-			"type": "1155beff-fad5-49b7-a2e0-da4777b8792c"
-		}
-	},
-	{
-		"type": "CREATE_RELATION",
-		"relation": {
-			"id": "51246f6f-98f5-4d66-8f04-d83fdb1b771d",
-			"entity": "c2bf0d10-228f-4708-90e0-52a9e6c25a54",
-			"fromEntity": "679b7592-e290-4292-81eb-2e80f8154eca",
-			"position": "a342N",
-			"toEntity": "56449f63-39c4-463e-bd4e-7ff8cddc14c6",
-			"type": "34f53507-2e6b-42c5-a844-43981a77cfa2"
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "6bfa3b4e-c4f6-4a61-adb1-dc91d32704e5",
-			"values": []
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "6d4709fa-8d93-44f3-b641-daa791b842c7",
-			"values": [
-				{
-					"property": "9b1f76ff-9711-404c-861e-59dc3fa7d037",
-					"value": "The Institute for Climate Protection, Energy and Mobility (IKEM) is a non-profit think tank that explores energy-transition pathways towards a sustainable society, focussing on the interactions between the legal, economic, and political framework behind Germany’s Energiewende. At IKEM more than 50 scientists work together under the scientific direction of Prof. Dr. Michael Rodi. IKEM is a public charity and affiliated with the University of Greifswald. Since 2017, the Institute has held Special Consultative Status with the United Nations Economic and Social Council."
-				},
-				{
-					"property": "a126ca53-0c8e-48d5-b888-82c734c38935",
-					"value": "IKEM"
-				},
-				{
-					"property": "eed38e74-e679-46bf-8a42-ea3e4f8fb5fb",
-					"value": "https://www.ikem.de/en/"
-				}
-			]
-		}
-	},
-	{
-		"type": "CREATE_RELATION",
-		"relation": {
-			"id": "d3dba277-4651-45b4-9319-2eef3c86c05e",
-			"entity": "c352c6e2-bc24-4430-9022-74d4e60fa7a9",
-			"fromEntity": "6d4709fa-8d93-44f3-b641-daa791b842c7",
-			"position": "a0BPe",
-			"toEntity": "484a18c5-030a-499c-b0f2-ef588ff16d50",
-			"type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
-		}
-	},
-	{
-		"type": "CREATE_RELATION",
-		"relation": {
-			"id": "6c62acef-4f07-447f-9fbd-547ba0de951c",
-			"entity": "59f42c50-fb5a-4f7a-816b-917160316476",
-			"fromEntity": "6d4709fa-8d93-44f3-b641-daa791b842c7",
-			"position": "a12z7",
-			"toEntity": "47014d3a-c592-4c1a-9080-2a8b1f427705",
-			"type": "1155beff-fad5-49b7-a2e0-da4777b8792c"
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "70cf5a29-982d-4fb0-9aed-b8791f1a2437",
-			"values": []
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "74c67b8b-4461-41e9-a9a1-d85474f7b57e",
-			"values": []
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "76d67592-0477-4089-a636-5dfae28db8ee",
-			"values": []
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "786e4cd5-c4b5-4960-89c3-905f3397c892",
-			"values": [
-				{
-					"property": "9b1f76ff-9711-404c-861e-59dc3fa7d037",
-					"value": "Brno University of Technology is a university located in Brno, Czech Republic. Being founded in 1899 and initially offering a single course in civil engineering, it grew to become a major technical Czech university with over 18,000 students enrolled at 8 faculties and 2 university institutes."
-				},
-				{
-					"property": "a126ca53-0c8e-48d5-b888-82c734c38935",
-					"value": "Brno University of Technology"
-				},
-				{
-					"property": "eed38e74-e679-46bf-8a42-ea3e4f8fb5fb",
-					"value": "https://www.vut.cz/en/"
-				}
-			]
-		}
-	},
-	{
-		"type": "CREATE_RELATION",
-		"relation": {
-			"id": "1e7c94b9-1fd5-4e3b-8dd8-b30f0fe0d624",
-			"entity": "0d6cf996-0f81-4a40-b992-a539034887bc",
-			"fromEntity": "786e4cd5-c4b5-4960-89c3-905f3397c892",
-			"position": "a04V6",
-			"toEntity": "9af19b7e-2cc9-4a60-8d20-e0a51ffb1b7c",
-			"type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
-		}
-	},
-	{
-		"type": "CREATE_RELATION",
-		"relation": {
-			"id": "6e7dd169-3316-4f8e-a613-bddd43c9b598",
-			"entity": "43e038bf-dd67-44db-8a2f-5e21a9f0a103",
-			"fromEntity": "786e4cd5-c4b5-4960-89c3-905f3397c892",
-			"position": "a1AQX",
-			"toEntity": "484a18c5-030a-499c-b0f2-ef588ff16d50",
-			"type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
-		}
-	},
-	{
-		"type": "CREATE_RELATION",
-		"relation": {
-			"id": "e728c343-d442-43f5-81e1-05dc4de74896",
-			"entity": "973bbb86-c6e9-4927-9825-a06abe2d11b1",
-			"fromEntity": "786e4cd5-c4b5-4960-89c3-905f3397c892",
-			"position": "a29Kr",
-			"toEntity": "3dc909ad-ff2c-42b5-99e5-051ef1240e32",
-			"type": "1155beff-fad5-49b7-a2e0-da4777b8792c"
-		}
-	},
-	{
-		"type": "CREATE_RELATION",
-		"relation": {
-			"id": "513ae833-cf10-495a-bc7d-797e3cb8901a",
-			"entity": "c62460d8-fff8-4dcd-a819-b29ba311d7da",
-			"fromEntity": "786e4cd5-c4b5-4960-89c3-905f3397c892",
-			"position": "a32KR",
-			"toEntity": "aa63aac6-3f66-4753-8aee-b05257cbc075",
-			"type": "34f53507-2e6b-42c5-a844-43981a77cfa2"
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "7aca093c-7584-40e1-b91f-7434d96421c6",
-			"values": [
-				{
-					"property": "9b1f76ff-9711-404c-861e-59dc3fa7d037",
-					"value": "Paderborn University is one of the fourteen public research universities in the state of North Rhine-Westphalia in Germany. It was founded in 1972 and 20,308 students were enrolled at the university in the winter semester 2016/2017."
-				},
-				{
-					"property": "a126ca53-0c8e-48d5-b888-82c734c38935",
-					"value": "Paderborn University"
-				},
-				{
-					"property": "eed38e74-e679-46bf-8a42-ea3e4f8fb5fb",
-					"value": "https://www.uni-paderborn.de/"
-				}
-			]
-		}
-	},
-	{
-		"type": "CREATE_RELATION",
-		"relation": {
-			"id": "55a6ec67-23aa-4bb3-92be-20ef1d159cda",
-			"entity": "2407c584-7bc7-476c-9ff8-2bba3504e646",
-			"fromEntity": "7aca093c-7584-40e1-b91f-7434d96421c6",
-			"position": "a09YN",
-			"toEntity": "9af19b7e-2cc9-4a60-8d20-e0a51ffb1b7c",
-			"type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
-		}
-	},
-	{
-		"type": "CREATE_RELATION",
-		"relation": {
-			"id": "e90a8f0a-8e44-4079-9456-9fb1f2d0da03",
-			"entity": "bc149b27-c996-4517-818f-308d795c9e8b",
-			"fromEntity": "7aca093c-7584-40e1-b91f-7434d96421c6",
-			"position": "a193M",
-			"toEntity": "484a18c5-030a-499c-b0f2-ef588ff16d50",
-			"type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
-		}
-	},
-	{
-		"type": "CREATE_RELATION",
-		"relation": {
-			"id": "9353f168-54b0-4bf1-820b-5c9d6529f35c",
-			"entity": "d3aef6ed-427e-453d-8e87-1d90ce1c2254",
-			"fromEntity": "7aca093c-7584-40e1-b91f-7434d96421c6",
-			"position": "a28Qv",
-			"toEntity": "a1fd9405-5301-4696-a8b4-29be5ea8bc79",
-			"type": "1155beff-fad5-49b7-a2e0-da4777b8792c"
-		}
-	},
-	{
-		"type": "CREATE_RELATION",
-		"relation": {
-			"id": "47aca96d-03c0-43f7-bfba-be01c84fe3f5",
-			"entity": "a64edd83-4f38-414b-ac77-285c258a9c29",
-			"fromEntity": "7aca093c-7584-40e1-b91f-7434d96421c6",
-			"position": "a34Ng",
-			"toEntity": "449a1424-1b3e-45cd-812b-2548d246aa8d",
-			"type": "34f53507-2e6b-42c5-a844-43981a77cfa2"
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "804d83af-9484-4608-af4f-f62f532c8cbd",
-			"values": [
-				{
-					"property": "8a743832-c094-4a62-b665-0c3cc2f9c7bc",
-					"value": "ipfs://bafybeify44mn6owqgwtcl5wspw2suzouyr4e7pnbauvujsqk5quj6hbkqy"
-				}
-			]
-		}
-	},
-	{
-		"type": "CREATE_RELATION",
-		"relation": {
-			"id": "44e206f9-9fe6-4ee2-9665-999edac9e5b8",
-			"entity": "94effb12-f511-497e-bc92-8353a5a09e65",
-			"fromEntity": "804d83af-9484-4608-af4f-f62f532c8cbd",
-			"position": "a06cs",
-			"toEntity": "ba4e4146-0010-499d-a0a3-caaa7f579d0e",
-			"type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "8198457c-328d-43ea-81f6-42ee64163b18",
-			"values": []
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "82eb02d4-27d0-40cd-bfaa-a11d6195e7e5",
-			"values": []
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "8602ec7e-d518-4329-9a05-a5e31b0d30ec",
-			"values": []
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "87fe5a33-1be8-4546-a7eb-d6dfd214bb3b",
-			"values": []
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "880c4771-cf9b-4f82-8236-183c8b8d2c91",
-			"values": []
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "898249dd-b655-4aab-a23f-ecff87b907df",
-			"values": []
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "8acca198-e3db-4dd4-93cd-91570d44c335",
-			"values": []
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "8b7496d6-6806-405b-a212-b6301c5ee308",
-			"values": []
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "90579ab7-d845-44ba-b786-449f2e91e2e7",
-			"values": []
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "90c29ec9-a7b3-4139-b281-235167ca4143",
-			"values": [
-				{
-					"property": "8a743832-c094-4a62-b665-0c3cc2f9c7bc",
-					"value": "ipfs://bafybeihaskdcbr4gilopzhiapx6fcyosvp6czcsd77c5mauq32lbt2zuwe"
-				}
-			]
-		}
-	},
-	{
-		"type": "CREATE_RELATION",
-		"relation": {
-			"id": "87f29087-1a5b-4df9-acce-24f4d635bcc3",
-			"entity": "64ebdf37-9816-4902-b4df-10f514ce3af7",
-			"fromEntity": "90c29ec9-a7b3-4139-b281-235167ca4143",
-			"position": "a02g6",
-			"toEntity": "ba4e4146-0010-499d-a0a3-caaa7f579d0e",
-			"type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "93ce3479-b196-4a41-9efd-f9b710c46c26",
-			"values": []
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "9587836b-9322-453a-812d-da9a0d954c7c",
-			"values": []
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "977da6b6-6e66-4d30-832e-571c9054ba4f",
-			"values": [
-				{
-					"property": "0d625978-4b3c-4b57-a86f-de45c997c73c",
-					"value": "https://x.com/TU_Muenchen"
-				},
-				{
-					"property": "9b1f76ff-9711-404c-861e-59dc3fa7d037",
-					"value": "The Technical University of Munich is a public research university in Munich, Bavaria, Germany. It specializes in engineering, technology, medicine, and applied and natural sciences."
-				},
-				{
-					"property": "a126ca53-0c8e-48d5-b888-82c734c38935",
-					"value": "Technical University of Munich"
-				},
-				{
-					"property": "eed38e74-e679-46bf-8a42-ea3e4f8fb5fb",
-					"value": "https://www.tum.de/en/"
-				}
-			]
-		}
-	},
-	{
-		"type": "CREATE_RELATION",
-		"relation": {
-			"id": "2d2decda-f00a-4751-ad13-7b112e7f8ce0",
-			"entity": "ff87fd30-45e1-4d33-bbfc-5c736027851e",
-			"fromEntity": "977da6b6-6e66-4d30-832e-571c9054ba4f",
-			"position": "a03Hi",
-			"toEntity": "484a18c5-030a-499c-b0f2-ef588ff16d50",
-			"type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
-		}
-	},
-	{
-		"type": "CREATE_RELATION",
-		"relation": {
-			"id": "65cce7dd-f470-4d92-97cd-8947e7cc0e58",
-			"entity": "6ca4313c-b170-4d76-9fab-5414ce6ca5a1",
-			"fromEntity": "977da6b6-6e66-4d30-832e-571c9054ba4f",
-			"position": "a17qb",
-			"toEntity": "9af19b7e-2cc9-4a60-8d20-e0a51ffb1b7c",
-			"type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
-		}
-	},
-	{
-		"type": "CREATE_RELATION",
-		"relation": {
-			"id": "9d3661f5-f3a4-4e8a-bdaf-7a566868fa6a",
-			"entity": "0d742439-b938-47e0-9910-568e0c3bbb57",
-			"fromEntity": "977da6b6-6e66-4d30-832e-571c9054ba4f",
-			"position": "a24BZ",
-			"toEntity": "ccdc2dd4-602d-4719-bfa6-641faf0f739a",
-			"type": "1155beff-fad5-49b7-a2e0-da4777b8792c"
-		}
-	},
-	{
-		"type": "CREATE_RELATION",
-		"relation": {
-			"id": "efafbd03-36d0-4d7b-aa96-c27b87c631cb",
-			"entity": "3eacf357-0f55-4e1f-a506-b7e406907d06",
-			"fromEntity": "977da6b6-6e66-4d30-832e-571c9054ba4f",
-			"position": "a38bJ",
-			"toEntity": "103773aa-5120-4d7d-aeb3-a8a96095183a",
-			"type": "34f53507-2e6b-42c5-a844-43981a77cfa2"
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "97f3c169-f1e2-4483-9dcc-ee31d9e96328",
-			"values": [
-				{
-					"property": "8a743832-c094-4a62-b665-0c3cc2f9c7bc",
-					"value": "ipfs://bafkreibjfprv56hiafnrjtqxmqsfhy34dkjjqbszay4uxjwu7e7vxx43za"
-				}
-			]
-		}
-	},
-	{
-		"type": "CREATE_RELATION",
-		"relation": {
-			"id": "1e3b03c4-6152-4bfc-b675-9dde96cc80f5",
-			"entity": "80beb978-5ca8-4a95-986d-d78d0e2360a0",
-			"fromEntity": "97f3c169-f1e2-4483-9dcc-ee31d9e96328",
-			"position": "a01s2",
-			"toEntity": "ba4e4146-0010-499d-a0a3-caaa7f579d0e",
-			"type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "98cf1474-efe3-4082-8031-be5d86c09d86",
-			"values": []
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "9adc3e0e-1678-464e-81a7-c11c0f036e5f",
-			"values": []
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "9fe089e6-a193-4d6d-ab7e-6e27d6632bf1",
-			"values": []
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "a1fd9405-5301-4696-a8b4-29be5ea8bc79",
-			"values": [
-				{
-					"property": "8a743832-c094-4a62-b665-0c3cc2f9c7bc",
-					"value": "ipfs://bafkreigxcyk5ftscslk5cxo33b5tfhiir7rybjywiweqecxsjgom2jpqdi"
-				}
-			]
-		}
-	},
-	{
-		"type": "CREATE_RELATION",
-		"relation": {
-			"id": "75b3d9e0-70bf-4c09-ad23-eb5ab4b7b3b2",
-			"entity": "bc2d6861-4a87-4a7c-93a9-dbcbc5532a2f",
-			"fromEntity": "a1fd9405-5301-4696-a8b4-29be5ea8bc79",
-			"position": "a0B4h",
-			"toEntity": "ba4e4146-0010-499d-a0a3-caaa7f579d0e",
-			"type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "a233071e-5c71-4d23-9aaa-09087f0f2c7a",
-			"values": [
-				{
-					"property": "9b1f76ff-9711-404c-861e-59dc3fa7d037",
-					"value": "The Prague University of Economics and Business is an economics and business-oriented public university located in Prague, Czech Republic."
-				},
-				{
-					"property": "a126ca53-0c8e-48d5-b888-82c734c38935",
-					"value": "Prague University of Economics and Business"
-				},
-				{
-					"property": "eed38e74-e679-46bf-8a42-ea3e4f8fb5fb",
-					"value": "https://www.vse.cz/english/"
-				}
-			]
-		}
-	},
-	{
-		"type": "CREATE_RELATION",
-		"relation": {
-			"id": "d4ea4e78-4312-4254-8f5f-7c7afc3cfde5",
-			"entity": "c13cb06b-e04c-4cf5-b434-34e26a8fac37",
-			"fromEntity": "a233071e-5c71-4d23-9aaa-09087f0f2c7a",
-			"position": "a06f9",
-			"toEntity": "9af19b7e-2cc9-4a60-8d20-e0a51ffb1b7c",
-			"type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
-		}
-	},
-	{
-		"type": "CREATE_RELATION",
-		"relation": {
-			"id": "6fc794dc-f1af-4cf1-b1d3-f8af2fac5c25",
-			"entity": "4e398dd0-f4c4-4e91-9cd1-301d3768ed35",
-			"fromEntity": "a233071e-5c71-4d23-9aaa-09087f0f2c7a",
-			"position": "a12ex",
-			"toEntity": "484a18c5-030a-499c-b0f2-ef588ff16d50",
-			"type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
-		}
-	},
-	{
-		"type": "CREATE_RELATION",
-		"relation": {
-			"id": "f81996eb-4467-4541-8c3a-7096c9db2f07",
-			"entity": "8cb16d10-1cc8-4ca2-ab92-ee321bdbf5c7",
-			"fromEntity": "a233071e-5c71-4d23-9aaa-09087f0f2c7a",
-			"position": "a28Fw",
-			"toEntity": "b718a8e7-c0f4-4a4c-8341-d6e19fd20a31",
-			"type": "34f53507-2e6b-42c5-a844-43981a77cfa2"
-		}
-	},
-	{
-		"type": "CREATE_RELATION",
-		"relation": {
-			"id": "20d76cf3-22de-4c74-a5a3-f7b906239f2d",
-			"entity": "f9d6f7bf-ae12-44ad-9cea-516206cd2565",
-			"fromEntity": "a233071e-5c71-4d23-9aaa-09087f0f2c7a",
-			"position": "a39YW",
-			"toEntity": "ef539503-e919-42c8-8f40-8603329b9e32",
-			"type": "1155beff-fad5-49b7-a2e0-da4777b8792c"
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "a65e1a5c-a553-4e8b-afef-a5832ac29046",
-			"values": []
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "a6c13b61-48c8-4d0f-9dc0-8535ce1e29c5",
-			"values": []
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "a8b1bf06-7d51-4180-8b8e-8d50dafb9b44",
-			"values": [
-				{
-					"property": "9b1f76ff-9711-404c-861e-59dc3fa7d037",
-					"value": "Leuphana University Lüneburg is a public university in Lüneburg, Lower Saxony, Germany. Leuphana was founded in 1946 as a college of education. Leuphana has since established a unique university model within the German academic landscape that has received several awards."
-				},
-				{
-					"property": "a126ca53-0c8e-48d5-b888-82c734c38935",
-					"value": "Leuphana University of Lüneburg"
-				},
-				{
-					"property": "eed38e74-e679-46bf-8a42-ea3e4f8fb5fb",
-					"value": "https://www.leuphana.de"
-				}
-			]
-		}
-	},
-	{
-		"type": "CREATE_RELATION",
-		"relation": {
-			"id": "cf026194-9529-4ca9-a0da-55a51591612e",
-			"entity": "5022d3e5-0224-469d-9189-0d4ef3ae6d5d",
-			"fromEntity": "a8b1bf06-7d51-4180-8b8e-8d50dafb9b44",
-			"position": "a0AHk",
-			"toEntity": "9af19b7e-2cc9-4a60-8d20-e0a51ffb1b7c",
-			"type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
-		}
-	},
-	{
-		"type": "CREATE_RELATION",
-		"relation": {
-			"id": "39c4bdea-49df-486d-89ba-942399f580dc",
-			"entity": "577918a2-b199-4134-a89f-c13c1f9214f5",
-			"fromEntity": "a8b1bf06-7d51-4180-8b8e-8d50dafb9b44",
-			"position": "a15Zm",
-			"toEntity": "484a18c5-030a-499c-b0f2-ef588ff16d50",
-			"type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
-		}
-	},
-	{
-		"type": "CREATE_RELATION",
-		"relation": {
-			"id": "6067722d-153d-4fe5-bc8c-869c9f580cfa",
-			"entity": "27d35207-1347-4663-86be-189d4328bba8",
-			"fromEntity": "a8b1bf06-7d51-4180-8b8e-8d50dafb9b44",
-			"position": "a25GD",
-			"toEntity": "b2f27989-713e-4c0a-9c4f-0c95e7f28f17",
-			"type": "1155beff-fad5-49b7-a2e0-da4777b8792c"
-		}
-	},
-	{
-		"type": "CREATE_RELATION",
-		"relation": {
-			"id": "f895fefc-4249-482c-9e1d-ec237f61bdd3",
-			"entity": "e961b9f9-3090-4392-9abb-f5ed1b774d59",
-			"fromEntity": "a8b1bf06-7d51-4180-8b8e-8d50dafb9b44",
-			"position": "a3ANA",
-			"toEntity": "0e4e9a28-6fe2-4389-b431-32fef7e1f113",
-			"type": "34f53507-2e6b-42c5-a844-43981a77cfa2"
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "aa63aac6-3f66-4753-8aee-b05257cbc075",
-			"values": [
-				{
-					"property": "8a743832-c094-4a62-b665-0c3cc2f9c7bc",
-					"value": "ipfs://bafybeiedglddurs6r3x2roh57grjk34ia2a7elkv5d25rffyj62duyznqq"
-				}
-			]
-		}
-	},
-	{
-		"type": "CREATE_RELATION",
-		"relation": {
-			"id": "6f5c24cc-f653-44a6-9502-5cad5b144442",
-			"entity": "97fdd33e-6565-489f-86bf-64c223398e1a",
-			"fromEntity": "aa63aac6-3f66-4753-8aee-b05257cbc075",
-			"position": "a03uv",
-			"toEntity": "ba4e4146-0010-499d-a0a3-caaa7f579d0e",
-			"type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "b168b9e6-7859-4468-848a-dd7fd58de48b",
-			"values": []
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "b2f27989-713e-4c0a-9c4f-0c95e7f28f17",
-			"values": [
-				{
-					"property": "8a743832-c094-4a62-b665-0c3cc2f9c7bc",
-					"value": "ipfs://bafkreierga6asuwtduzw3pnkel3ym474h2vcnahk6xpozl2adayhl3g4k4"
-				}
-			]
-		}
-	},
-	{
-		"type": "CREATE_RELATION",
-		"relation": {
-			"id": "7a56bf06-b061-4bac-9269-2eeeb2698e42",
-			"entity": "e2a9ad84-2e87-4347-acd3-45eff326ca00",
-			"fromEntity": "b2f27989-713e-4c0a-9c4f-0c95e7f28f17",
-			"position": "a03ul",
-			"toEntity": "ba4e4146-0010-499d-a0a3-caaa7f579d0e",
-			"type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "b408f62a-b7fb-4481-aba9-830fdb0e9673",
-			"values": []
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "b477395b-9614-4401-82ce-61a22a207b9f",
-			"values": []
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "b58cb576-0d24-42f4-bbfe-dbdc99a02348",
-			"values": []
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "b718a8e7-c0f4-4a4c-8341-d6e19fd20a31",
-			"values": [
-				{
-					"property": "8a743832-c094-4a62-b665-0c3cc2f9c7bc",
-					"value": "ipfs://bafkreifqky7qhkguatslxhscm36duscs327a427tcrav33sdocxnphmodq"
-				}
-			]
-		}
-	},
-	{
-		"type": "CREATE_RELATION",
-		"relation": {
-			"id": "161e85c1-7d8f-49b2-8c54-38e56dac30fa",
-			"entity": "9bfda883-b6ce-4926-a467-70f16d9e6fe5",
-			"fromEntity": "b718a8e7-c0f4-4a4c-8341-d6e19fd20a31",
-			"position": "a08Hm",
-			"toEntity": "ba4e4146-0010-499d-a0a3-caaa7f579d0e",
-			"type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "b7347ce4-ebac-447b-918a-5ea83fe184e2",
-			"values": []
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "c0fe5350-df05-4204-a791-f71bf80ea182",
-			"values": [
-				{
-					"property": "8a743832-c094-4a62-b665-0c3cc2f9c7bc",
-					"value": "ipfs://bafkreihece32olgyt2wkljohyjvj7yct3kkzs5znzp4rn7fagyzqeha3ye"
-				}
-			]
-		}
-	},
-	{
-		"type": "CREATE_RELATION",
-		"relation": {
-			"id": "e5e57e58-a15d-4be3-b9c7-faba99e33022",
-			"entity": "fdb021e2-7766-40de-b7c3-ccccc4ca724e",
-			"fromEntity": "c0fe5350-df05-4204-a791-f71bf80ea182",
-			"position": "a0BLj",
-			"toEntity": "ba4e4146-0010-499d-a0a3-caaa7f579d0e",
-			"type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "c99aef87-bb1c-46cc-b303-78af5d3de8f5",
-			"values": []
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "cc208455-9558-4e92-bdb3-62fc62c8c043",
-			"values": []
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "ccdc2dd4-602d-4719-bfa6-641faf0f739a",
-			"values": [
-				{
-					"property": "8a743832-c094-4a62-b665-0c3cc2f9c7bc",
-					"value": "ipfs://bafkreihmw6oe7csvh3eylcwdd2jucyvnai6qtqbegi4qbg33xs5g7jqciy"
-				}
-			]
-		}
-	},
-	{
-		"type": "CREATE_RELATION",
-		"relation": {
-			"id": "4bacf16b-4bd3-45f4-abb8-a33a80b8b785",
-			"entity": "56382a6a-0035-4235-9dbb-9be27346ce3d",
-			"fromEntity": "ccdc2dd4-602d-4719-bfa6-641faf0f739a",
-			"position": "a03g2",
-			"toEntity": "ba4e4146-0010-499d-a0a3-caaa7f579d0e",
-			"type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "cf6981a6-5e69-4034-9a0b-6dff32d994a2",
-			"values": []
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "d352881f-307c-40a6-8481-a184e5295190",
-			"values": []
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "db8a542f-f1a7-471c-bf14-492218403ec9",
-			"values": []
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "dcc2e824-2dcc-40f2-a3c5-8baa17a09a36",
-			"values": [
-				{
-					"property": "8a743832-c094-4a62-b665-0c3cc2f9c7bc",
-					"value": "ipfs://bafybeid4jiamou7zfi2iylhoq4cja4ftnlyvrwp47zsxabfkusaixl5zcq"
-				}
-			]
-		}
-	},
-	{
-		"type": "CREATE_RELATION",
-		"relation": {
-			"id": "27178dd7-bb62-4d05-9825-2e76d939656a",
-			"entity": "c261fceb-93f4-4eec-995e-f98fb19c2df3",
-			"fromEntity": "dcc2e824-2dcc-40f2-a3c5-8baa17a09a36",
-			"position": "a04vO",
-			"toEntity": "ba4e4146-0010-499d-a0a3-caaa7f579d0e",
-			"type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "deb52747-d7cd-4ed2-8778-57a973a3668c",
-			"values": []
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "dfa20ecb-0578-4288-abd2-5e5b6a42af4c",
-			"values": []
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "e466ec6b-70a0-4b5a-b5fa-93c5fb3959a8",
-			"values": []
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "e677a45f-72f7-47f3-9cd2-938ed261b3d1",
-			"values": []
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "e8a4a701-6b55-4801-b6f0-0dd28a6b0cc4",
-			"values": []
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "ef539503-e919-42c8-8f40-8603329b9e32",
-			"values": [
-				{
-					"property": "8a743832-c094-4a62-b665-0c3cc2f9c7bc",
-					"value": "ipfs://bafkreidwl3cunlz3wfwlrin4mafcv6bj26qh5yc4wsqxq3rseg4is3yoey"
-				}
-			]
-		}
-	},
-	{
-		"type": "CREATE_RELATION",
-		"relation": {
-			"id": "fda08694-b3ef-4a7e-9cb2-3b9f92e62ad7",
-			"entity": "c363ebbe-474c-45e9-880f-3451797ebefe",
-			"fromEntity": "ef539503-e919-42c8-8f40-8603329b9e32",
-			"position": "a06J1",
-			"toEntity": "ba4e4146-0010-499d-a0a3-caaa7f579d0e",
-			"type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "f11678e7-8e34-4982-bd5c-f8db936c1fd2",
-			"values": []
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "f234323c-d7b6-4674-a4a6-e075fbe922af",
-			"values": []
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "f5570e13-d9c6-4217-aead-68dfec56834c",
-			"values": []
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "fa587744-3076-47c4-aaf2-88ebb5049cfa",
-			"values": []
-		}
-	},
-	{
-		"type": "UPDATE_ENTITY",
-		"entity": {
-			"id": "fd93548d-8e45-4552-93e3-adb77b23a7d2",
-			"values": []
-		}
-	}
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "0e4e9a28-6fe2-4389-b431-32fef7e1f113",
+      "values": [
+        {
+          "property": "8a743832-c094-4a62-b665-0c3cc2f9c7bc",
+          "value": "ipfs://bafkreigf74agfh23kypicbwcesjjv4tg3dveeaf4un33s7ivch7xlm2z2a"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "948ed4ae-f3e1-4afc-9f16-f426d8c60da9",
+      "entity": "1c5e07d1-4c3a-489d-8b4e-41d7b834321f",
+      "fromEntity": "0e4e9a28-6fe2-4389-b431-32fef7e1f113",
+      "position": "a0Bdy",
+      "toEntity": "ba4e4146-0010-499d-a0a3-caaa7f579d0e",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "0fa96f99-1faa-48f2-b825-a1113de0e4be",
+      "values": [
+        {
+          "property": "a126ca53-0c8e-48d5-b888-82c734c38935",
+          "value": "Academia"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "22f78b26-2eeb-4b2a-be5f-2c3e4c585f10",
+      "entity": "3ec88bd8-ce2a-48dc-a824-cea81521f1ed",
+      "fromEntity": "0fa96f99-1faa-48f2-b825-a1113de0e4be",
+      "position": "a04go",
+      "toEntity": "575a1660-5d1d-4642-85f2-e01dc76d5971",
+      "type": "beaba5cb-a677-41a8-b353-77030613fc70"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "62891ea2-e7dc-4bba-b8af-6500ec410a45",
+      "entity": "8602ec7e-d518-4329-9a05-a5e31b0d30ec",
+      "fromEntity": "0fa96f99-1faa-48f2-b825-a1113de0e4be",
+      "position": "a124B",
+      "toEntity": "362c1dbd-dc64-44bb-a3c4-652f38a642d7",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "ef7a8f8a-460a-4f1b-9ac4-1fc01bef7f65",
+      "entity": "8198457c-328d-43ea-81f6-42ee64163b18",
+      "fromEntity": "0fa96f99-1faa-48f2-b825-a1113de0e4be",
+      "position": "a21lV",
+      "toEntity": "dcc2e824-2dcc-40f2-a3c5-8baa17a09a36",
+      "type": "34f53507-2e6b-42c5-a844-43981a77cfa2"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "103773aa-5120-4d7d-aeb3-a8a96095183a",
+      "values": [
+        {
+          "property": "8a743832-c094-4a62-b665-0c3cc2f9c7bc",
+          "value": "ipfs://bafkreigkhr76ryjfx2gasccktsvokf5fuhtljb63mxoifempooezcqr5oa"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "a2ec6541-66aa-470f-9b92-d77a2e93ee95",
+      "entity": "b168b9e6-7859-4468-848a-dd7fd58de48b",
+      "fromEntity": "103773aa-5120-4d7d-aeb3-a8a96095183a",
+      "position": "a02HY",
+      "toEntity": "ba4e4146-0010-499d-a0a3-caaa7f579d0e",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "137ddf52-a7ea-4e43-a04d-56bdb0feabb3",
+      "values": []
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "1c5e07d1-4c3a-489d-8b4e-41d7b834321f",
+      "values": []
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "21ce5561-04d7-445c-8e4e-006a58927183",
+      "values": [
+        {
+          "property": "a126ca53-0c8e-48d5-b888-82c734c38935",
+          "value": "University of Cincinnati"
+        }
+      ]
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "2295ce06-c126-430c-8384-0f96d4b8b724",
+      "values": []
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "264f7c6d-c2c1-4d6e-9e33-bb3c0ecb0d9c",
+      "values": []
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "268fefcc-9f0f-41c6-b665-2ecbbfd876cc",
+      "values": []
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "2a4884a4-83af-43ed-9a21-6b01becb3454",
+      "values": []
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "2c45b780-8421-4c88-9330-de96937f04b6",
+      "values": [
+        {
+          "property": "0d625978-4b3c-4b57-a86f-de45c997c73c",
+          "value": "https://x.com/UZH_en"
+        },
+        {
+          "property": "9b1f76ff-9711-404c-861e-59dc3fa7d037",
+          "value": "The University of Zurich is a public research university in Zurich, Switzerland. It is the largest university in Switzerland, with its 28,000 enrolled students. It was founded in 1833 from the existing colleges of theology, law, medicine which go back to 1525, and a new faculty of philosophy."
+        },
+        {
+          "property": "a126ca53-0c8e-48d5-b888-82c734c38935",
+          "value": "University of Zurich"
+        },
+        {
+          "property": "eed38e74-e679-46bf-8a42-ea3e4f8fb5fb",
+          "value": "https://www.uzh.ch/"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "043d50b4-cbab-477f-a0df-14576a93ff1c",
+      "entity": "8b7496d6-6806-405b-a212-b6301c5ee308",
+      "fromEntity": "2c45b780-8421-4c88-9330-de96937f04b6",
+      "position": "a03Gc",
+      "toEntity": "9af19b7e-2cc9-4a60-8d20-e0a51ffb1b7c",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "cc661ba7-4b0a-46a8-b9a7-56048d3cdba1",
+      "entity": "93ce3479-b196-4a41-9efd-f9b710c46c26",
+      "fromEntity": "2c45b780-8421-4c88-9330-de96937f04b6",
+      "position": "a19Bf",
+      "toEntity": "484a18c5-030a-499c-b0f2-ef588ff16d50",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "214dbc68-3ca1-40e2-b210-587ba8cd3368",
+      "entity": "9fe089e6-a193-4d6d-ab7e-6e27d6632bf1",
+      "fromEntity": "2c45b780-8421-4c88-9330-de96937f04b6",
+      "position": "a23Z4",
+      "toEntity": "804d83af-9484-4608-af4f-f62f532c8cbd",
+      "type": "34f53507-2e6b-42c5-a844-43981a77cfa2"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "528af1ff-9079-47f1-8542-078a65eb5996",
+      "entity": "c99aef87-bb1c-46cc-b303-78af5d3de8f5",
+      "fromEntity": "2c45b780-8421-4c88-9330-de96937f04b6",
+      "position": "a39BY",
+      "toEntity": "5d987713-2470-4be8-9299-336dfadf61a3",
+      "type": "1155beff-fad5-49b7-a2e0-da4777b8792c"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "32685bbf-6ac7-4aaf-bc4e-722c0ea3abe2",
+      "values": []
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "3b718504-30a6-41e5-afbd-10be446671a3",
+      "values": []
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "3cca7d59-4009-4393-b7b7-be0047eff272",
+      "values": []
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "3dc909ad-ff2c-42b5-99e5-051ef1240e32",
+      "values": [
+        {
+          "property": "8a743832-c094-4a62-b665-0c3cc2f9c7bc",
+          "value": "ipfs://bafkreifvj3vnftpxebni3onkwr74zzhgumryyejlgzvxdtyro4qsaldkpq"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "c5a4fc12-04a0-41a3-98a8-99bdc1e9ab40",
+      "entity": "3b718504-30a6-41e5-afbd-10be446671a3",
+      "fromEntity": "3dc909ad-ff2c-42b5-99e5-051ef1240e32",
+      "position": "a07y8",
+      "toEntity": "ba4e4146-0010-499d-a0a3-caaa7f579d0e",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "3ec88bd8-ce2a-48dc-a824-cea81521f1ed",
+      "values": []
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "c653bffa-5d51-4562-84f2-693433316e7f",
+      "entity": "9587836b-9322-453a-812d-da9a0d954c7c",
+      "fromEntity": "3ec88bd8-ce2a-48dc-a824-cea81521f1ed",
+      "position": "a07S4",
+      "toEntity": "7d497dba-09c2-49b8-968f-716bcf520473",
+      "type": "1907fd1c-8111-4a3c-a378-b1f353425b65"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "e6529026-9e58-44ae-b058-62ef849c812c",
+      "entity": "5d311acb-455e-4727-949d-26e38aef7bdc",
+      "fromEntity": "3ec88bd8-ce2a-48dc-a824-cea81521f1ed",
+      "position": "a1BvA",
+      "toEntity": "1155beff-fad5-49b7-a2e0-da4777b8792c",
+      "type": "01412f83-8189-4ab1-8365-65c7fd358cc1"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "43d4038d-ce27-49b0-95e2-39d4327e3e10",
+      "values": []
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "449a1424-1b3e-45cd-812b-2548d246aa8d",
+      "values": [
+        {
+          "property": "8a743832-c094-4a62-b665-0c3cc2f9c7bc",
+          "value": "ipfs://bafybeig2ijwbn43szkkwzdm43a3qxmzw6kbxhcvxxdoj5ourx4p26rxh3y"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "24de0f01-b3be-4e7a-91a0-20d4db1a6c32",
+      "entity": "a65e1a5c-a553-4e8b-afef-a5832ac29046",
+      "fromEntity": "449a1424-1b3e-45cd-812b-2548d246aa8d",
+      "position": "a00hf",
+      "toEntity": "ba4e4146-0010-499d-a0a3-caaa7f579d0e",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "46456c63-4a0e-4892-b5e5-345d01eb54d3",
+      "values": []
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "47014d3a-c592-4c1a-9080-2a8b1f427705",
+      "values": [
+        {
+          "property": "8a743832-c094-4a62-b665-0c3cc2f9c7bc",
+          "value": "ipfs://bafkreiemv3ppljrhotyqraha63pqwfvnluv2tg44bmwxo2ggskin4rc3yq"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "ae4fda76-8899-485a-b732-128009f2b3aa",
+      "entity": "dfa20ecb-0578-4288-abd2-5e5b6a42af4c",
+      "fromEntity": "47014d3a-c592-4c1a-9080-2a8b1f427705",
+      "position": "a08jD",
+      "toEntity": "ba4e4146-0010-499d-a0a3-caaa7f579d0e",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "47d1980c-01cb-49ea-bc45-944dd975899c",
+      "values": []
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "56449f63-39c4-463e-bd4e-7ff8cddc14c6",
+      "values": [
+        {
+          "property": "8a743832-c094-4a62-b665-0c3cc2f9c7bc",
+          "value": "ipfs://bafybeicg4mpakbknvhozfzdkqio6lhpwpdd36s5dmxqmn34lxbiwtlume4"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "9f0abd6e-505f-4b58-b0fd-12fc81ecc0a2",
+      "entity": "cf6981a6-5e69-4034-9a0b-6dff32d994a2",
+      "fromEntity": "56449f63-39c4-463e-bd4e-7ff8cddc14c6",
+      "position": "a04F6",
+      "toEntity": "ba4e4146-0010-499d-a0a3-caaa7f579d0e",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "56cf658b-74f1-486d-9a8d-6ace1f94fc4e",
+      "values": [
+        {
+          "property": "9b1f76ff-9711-404c-861e-59dc3fa7d037",
+          "value": "Czech Technical University in Prague is one of the largest universities in the Czech Republic with 8 faculties, and is one of the oldest institutes of technology in Central Europe. It is also the oldest non-military technical university in Europe."
+        },
+        {
+          "property": "a126ca53-0c8e-48d5-b888-82c734c38935",
+          "value": "Czech Technical University in Prague"
+        },
+        {
+          "property": "eed38e74-e679-46bf-8a42-ea3e4f8fb5fb",
+          "value": "https://www.cvut.cz/en"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "29db496c-7a43-4364-aec0-414347e323b7",
+      "entity": "5a38a355-dbc6-4685-a78d-3396db83d168",
+      "fromEntity": "56cf658b-74f1-486d-9a8d-6ace1f94fc4e",
+      "position": "a0Aj3",
+      "toEntity": "9af19b7e-2cc9-4a60-8d20-e0a51ffb1b7c",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "5b3adc0d-8951-4e36-9127-defaf27661f6",
+      "entity": "90579ab7-d845-44ba-b786-449f2e91e2e7",
+      "fromEntity": "56cf658b-74f1-486d-9a8d-6ace1f94fc4e",
+      "position": "a15rQ",
+      "toEntity": "484a18c5-030a-499c-b0f2-ef588ff16d50",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "b721f86e-7bcd-4df1-8e19-8f419648b70b",
+      "entity": "43d4038d-ce27-49b0-95e2-39d4327e3e10",
+      "fromEntity": "56cf658b-74f1-486d-9a8d-6ace1f94fc4e",
+      "position": "a20Rm",
+      "toEntity": "97f3c169-f1e2-4483-9dcc-ee31d9e96328",
+      "type": "1155beff-fad5-49b7-a2e0-da4777b8792c"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "7592864f-d77c-4482-ace7-5a71d9c5f1cf",
+      "entity": "b408f62a-b7fb-4481-aba9-830fdb0e9673",
+      "fromEntity": "56cf658b-74f1-486d-9a8d-6ace1f94fc4e",
+      "position": "a395U",
+      "toEntity": "90c29ec9-a7b3-4139-b281-235167ca4143",
+      "type": "34f53507-2e6b-42c5-a844-43981a77cfa2"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "575a1660-5d1d-4642-85f2-e01dc76d5971",
+      "values": [
+        {
+          "property": "14a46854-bfd1-4b18-8215-2785c2dab9f3",
+          "value": "{\"spaceId\":{\"in\":[\"76fc86bd-da72-49a9-9786-e13da36512fb\"]},\"filter\":{\"8f151ba4-de20-4e3c-9cb4-99ddf96f48f1\":{\"is\":\"484a18c5-030a-499c-b0f2-ef588ff16d50\"}}}"
+        },
+        {
+          "property": "a126ca53-0c8e-48d5-b888-82c734c38935",
+          "value": "Universities"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "afa971c7-94f8-4ad2-88ed-577f58a0a702",
+      "entity": "82eb02d4-27d0-40cd-bfaa-a11d6195e7e5",
+      "fromEntity": "575a1660-5d1d-4642-85f2-e01dc76d5971",
+      "position": "a0ABe",
+      "toEntity": "b8803a86-65de-412b-bb35-7e0c84adf473",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "2237deba-741e-4bd2-b8ff-e14d2ca50c52",
+      "entity": "32685bbf-6ac7-4aaf-bc4e-722c0ea3abe2",
+      "fromEntity": "575a1660-5d1d-4642-85f2-e01dc76d5971",
+      "position": "a17vK",
+      "toEntity": "3b069b04-adbe-4728-917d-1283fd4ac27e",
+      "type": "1f69cc98-80d4-44ab-ad49-3df6a7b15ee4"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "5a38a355-dbc6-4685-a78d-3396db83d168",
+      "values": []
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "5af3e1f8-018f-48d3-b26a-6a2ae6d80779",
+      "values": []
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "5d311acb-455e-4727-949d-26e38aef7bdc",
+      "values": []
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "5d7f2990-304b-4127-b5d1-c234499223b1",
+      "values": []
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "5d987713-2470-4be8-9299-336dfadf61a3",
+      "values": [
+        {
+          "property": "8a743832-c094-4a62-b665-0c3cc2f9c7bc",
+          "value": "ipfs://bafkreidzsu7u5ro5aopiut6qca2cr2l3frqfaouk36drrxi2i5jl3gsnpm"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "8bea282d-c1e0-4ea4-bbdc-f7bdf20ac01c",
+      "entity": "74c67b8b-4461-41e9-a9a1-d85474f7b57e",
+      "fromEntity": "5d987713-2470-4be8-9299-336dfadf61a3",
+      "position": "a02Kq",
+      "toEntity": "ba4e4146-0010-499d-a0a3-caaa7f579d0e",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "5e0f2e1b-8ee5-4fd3-90cf-b8c0cf5b5d63",
+      "values": []
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "6500fa07-16db-4fb0-969c-f63a27d3eeb1",
+      "values": []
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "679b7592-e290-4292-81eb-2e80f8154eca",
+      "values": [
+        {
+          "property": "9b1f76ff-9711-404c-861e-59dc3fa7d037",
+          "value": "The University of Cambridge is a public collegiate research university in Cambridge, England. Founded in 1209, the University of Cambridge is the world's third-oldest university in continuous operation."
+        },
+        {
+          "property": "a126ca53-0c8e-48d5-b888-82c734c38935",
+          "value": "University of Cambridge"
+        },
+        {
+          "property": "eed38e74-e679-46bf-8a42-ea3e4f8fb5fb",
+          "value": "https://www.cam.ac.uk/"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "69dc5542-c365-43e2-9aa5-1603df308fb2",
+      "entity": "f11678e7-8e34-4982-bd5c-f8db936c1fd2",
+      "fromEntity": "679b7592-e290-4292-81eb-2e80f8154eca",
+      "position": "a09Nh",
+      "toEntity": "9af19b7e-2cc9-4a60-8d20-e0a51ffb1b7c",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "bed1536a-a447-4b3b-9291-974d978cec4d",
+      "entity": "cc208455-9558-4e92-bdb3-62fc62c8c043",
+      "fromEntity": "679b7592-e290-4292-81eb-2e80f8154eca",
+      "position": "a17zP",
+      "toEntity": "484a18c5-030a-499c-b0f2-ef588ff16d50",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "c216e9aa-e515-42ff-b80c-49361d19e3a1",
+      "entity": "2295ce06-c126-430c-8384-0f96d4b8b724",
+      "fromEntity": "679b7592-e290-4292-81eb-2e80f8154eca",
+      "position": "a23ek",
+      "toEntity": "c0fe5350-df05-4204-a791-f71bf80ea182",
+      "type": "1155beff-fad5-49b7-a2e0-da4777b8792c"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "31019380-2741-4281-9720-ad35f4c6ea21",
+      "entity": "264f7c6d-c2c1-4d6e-9e33-bb3c0ecb0d9c",
+      "fromEntity": "679b7592-e290-4292-81eb-2e80f8154eca",
+      "position": "a3BAC",
+      "toEntity": "56449f63-39c4-463e-bd4e-7ff8cddc14c6",
+      "type": "34f53507-2e6b-42c5-a844-43981a77cfa2"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "6bfa3b4e-c4f6-4a61-adb1-dc91d32704e5",
+      "values": []
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "6d4709fa-8d93-44f3-b641-daa791b842c7",
+      "values": [
+        {
+          "property": "9b1f76ff-9711-404c-861e-59dc3fa7d037",
+          "value": "The Institute for Climate Protection, Energy and Mobility (IKEM) is a non-profit think tank that explores energy-transition pathways towards a sustainable society, focussing on the interactions between the legal, economic, and political framework behind Germany’s Energiewende. At IKEM more than 50 scientists work together under the scientific direction of Prof. Dr. Michael Rodi. IKEM is a public charity and affiliated with the University of Greifswald. Since 2017, the Institute has held Special Consultative Status with the United Nations Economic and Social Council."
+        },
+        {
+          "property": "a126ca53-0c8e-48d5-b888-82c734c38935",
+          "value": "IKEM"
+        },
+        {
+          "property": "eed38e74-e679-46bf-8a42-ea3e4f8fb5fb",
+          "value": "https://www.ikem.de/en/"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "8c899b43-3681-4e83-bc44-842ffd1cc244",
+      "entity": "268fefcc-9f0f-41c6-b665-2ecbbfd876cc",
+      "fromEntity": "6d4709fa-8d93-44f3-b641-daa791b842c7",
+      "position": "a0Bmw",
+      "toEntity": "484a18c5-030a-499c-b0f2-ef588ff16d50",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "337e48ff-b56f-4324-8ee8-6b4ed7fd82b6",
+      "entity": "137ddf52-a7ea-4e43-a04d-56bdb0feabb3",
+      "fromEntity": "6d4709fa-8d93-44f3-b641-daa791b842c7",
+      "position": "a10GB",
+      "toEntity": "47014d3a-c592-4c1a-9080-2a8b1f427705",
+      "type": "1155beff-fad5-49b7-a2e0-da4777b8792c"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "70cf5a29-982d-4fb0-9aed-b8791f1a2437",
+      "values": []
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "74c67b8b-4461-41e9-a9a1-d85474f7b57e",
+      "values": []
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "76d67592-0477-4089-a636-5dfae28db8ee",
+      "values": []
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "786e4cd5-c4b5-4960-89c3-905f3397c892",
+      "values": [
+        {
+          "property": "9b1f76ff-9711-404c-861e-59dc3fa7d037",
+          "value": "Brno University of Technology is a university located in Brno, Czech Republic. Being founded in 1899 and initially offering a single course in civil engineering, it grew to become a major technical Czech university with over 18,000 students enrolled at 8 faculties and 2 university institutes."
+        },
+        {
+          "property": "a126ca53-0c8e-48d5-b888-82c734c38935",
+          "value": "Brno University of Technology"
+        },
+        {
+          "property": "eed38e74-e679-46bf-8a42-ea3e4f8fb5fb",
+          "value": "https://www.vut.cz/en/"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "f5a6b6bf-a8a2-4af8-bf3a-638ea85d3df5",
+      "entity": "fd93548d-8e45-4552-93e3-adb77b23a7d2",
+      "fromEntity": "786e4cd5-c4b5-4960-89c3-905f3397c892",
+      "position": "a05Bj",
+      "toEntity": "9af19b7e-2cc9-4a60-8d20-e0a51ffb1b7c",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "8cfdded4-5361-4d60-bde4-88956f997fb9",
+      "entity": "6500fa07-16db-4fb0-969c-f63a27d3eeb1",
+      "fromEntity": "786e4cd5-c4b5-4960-89c3-905f3397c892",
+      "position": "a11UT",
+      "toEntity": "484a18c5-030a-499c-b0f2-ef588ff16d50",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "7762a4e8-e905-4982-b0f4-433ae38565c4",
+      "entity": "e677a45f-72f7-47f3-9cd2-938ed261b3d1",
+      "fromEntity": "786e4cd5-c4b5-4960-89c3-905f3397c892",
+      "position": "a24r2",
+      "toEntity": "3dc909ad-ff2c-42b5-99e5-051ef1240e32",
+      "type": "1155beff-fad5-49b7-a2e0-da4777b8792c"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "0614d65f-0cf6-455a-aaef-40f4e85603c7",
+      "entity": "9adc3e0e-1678-464e-81a7-c11c0f036e5f",
+      "fromEntity": "786e4cd5-c4b5-4960-89c3-905f3397c892",
+      "position": "a3287",
+      "toEntity": "aa63aac6-3f66-4753-8aee-b05257cbc075",
+      "type": "34f53507-2e6b-42c5-a844-43981a77cfa2"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "7aca093c-7584-40e1-b91f-7434d96421c6",
+      "values": [
+        {
+          "property": "9b1f76ff-9711-404c-861e-59dc3fa7d037",
+          "value": "Paderborn University is one of the fourteen public research universities in the state of North Rhine-Westphalia in Germany. It was founded in 1972 and 20,308 students were enrolled at the university in the winter semester 2016/2017."
+        },
+        {
+          "property": "a126ca53-0c8e-48d5-b888-82c734c38935",
+          "value": "Paderborn University"
+        },
+        {
+          "property": "eed38e74-e679-46bf-8a42-ea3e4f8fb5fb",
+          "value": "https://www.uni-paderborn.de/"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "f15bfaac-6be1-476e-86a8-946e325c5b5f",
+      "entity": "fa587744-3076-47c4-aaf2-88ebb5049cfa",
+      "fromEntity": "7aca093c-7584-40e1-b91f-7434d96421c6",
+      "position": "a08l5",
+      "toEntity": "9af19b7e-2cc9-4a60-8d20-e0a51ffb1b7c",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "22dadfb8-4250-485c-a02d-e7660657620e",
+      "entity": "98cf1474-efe3-4082-8031-be5d86c09d86",
+      "fromEntity": "7aca093c-7584-40e1-b91f-7434d96421c6",
+      "position": "a18hv",
+      "toEntity": "484a18c5-030a-499c-b0f2-ef588ff16d50",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "6d545402-aa24-4f65-9346-8d6d01f6a498",
+      "entity": "6bfa3b4e-c4f6-4a61-adb1-dc91d32704e5",
+      "fromEntity": "7aca093c-7584-40e1-b91f-7434d96421c6",
+      "position": "a29RL",
+      "toEntity": "a1fd9405-5301-4696-a8b4-29be5ea8bc79",
+      "type": "1155beff-fad5-49b7-a2e0-da4777b8792c"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "60ff0c85-cbce-4b16-a116-6b7666fe4b21",
+      "entity": "3cca7d59-4009-4393-b7b7-be0047eff272",
+      "fromEntity": "7aca093c-7584-40e1-b91f-7434d96421c6",
+      "position": "a3BMw",
+      "toEntity": "449a1424-1b3e-45cd-812b-2548d246aa8d",
+      "type": "34f53507-2e6b-42c5-a844-43981a77cfa2"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "804d83af-9484-4608-af4f-f62f532c8cbd",
+      "values": [
+        {
+          "property": "8a743832-c094-4a62-b665-0c3cc2f9c7bc",
+          "value": "ipfs://bafybeify44mn6owqgwtcl5wspw2suzouyr4e7pnbauvujsqk5quj6hbkqy"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "7c9c5ad9-8f6d-4b11-b0e5-894b1715d464",
+      "entity": "e466ec6b-70a0-4b5a-b5fa-93c5fb3959a8",
+      "fromEntity": "804d83af-9484-4608-af4f-f62f532c8cbd",
+      "position": "a08Is",
+      "toEntity": "ba4e4146-0010-499d-a0a3-caaa7f579d0e",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "8198457c-328d-43ea-81f6-42ee64163b18",
+      "values": []
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "82eb02d4-27d0-40cd-bfaa-a11d6195e7e5",
+      "values": []
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "8602ec7e-d518-4329-9a05-a5e31b0d30ec",
+      "values": []
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "87fe5a33-1be8-4546-a7eb-d6dfd214bb3b",
+      "values": []
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "880c4771-cf9b-4f82-8236-183c8b8d2c91",
+      "values": []
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "898249dd-b655-4aab-a23f-ecff87b907df",
+      "values": []
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "8acca198-e3db-4dd4-93cd-91570d44c335",
+      "values": []
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "8b7496d6-6806-405b-a212-b6301c5ee308",
+      "values": []
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "90579ab7-d845-44ba-b786-449f2e91e2e7",
+      "values": []
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "90c29ec9-a7b3-4139-b281-235167ca4143",
+      "values": [
+        {
+          "property": "8a743832-c094-4a62-b665-0c3cc2f9c7bc",
+          "value": "ipfs://bafybeihaskdcbr4gilopzhiapx6fcyosvp6czcsd77c5mauq32lbt2zuwe"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "a2a44eec-34cc-4e57-bd8c-eaf9af643026",
+      "entity": "a6c13b61-48c8-4d0f-9dc0-8535ce1e29c5",
+      "fromEntity": "90c29ec9-a7b3-4139-b281-235167ca4143",
+      "position": "a06qL",
+      "toEntity": "ba4e4146-0010-499d-a0a3-caaa7f579d0e",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "93ce3479-b196-4a41-9efd-f9b710c46c26",
+      "values": []
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "9587836b-9322-453a-812d-da9a0d954c7c",
+      "values": []
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "977da6b6-6e66-4d30-832e-571c9054ba4f",
+      "values": [
+        {
+          "property": "0d625978-4b3c-4b57-a86f-de45c997c73c",
+          "value": "https://x.com/TU_Muenchen"
+        },
+        {
+          "property": "9b1f76ff-9711-404c-861e-59dc3fa7d037",
+          "value": "The Technical University of Munich is a public research university in Munich, Bavaria, Germany. It specializes in engineering, technology, medicine, and applied and natural sciences."
+        },
+        {
+          "property": "a126ca53-0c8e-48d5-b888-82c734c38935",
+          "value": "Technical University of Munich"
+        },
+        {
+          "property": "eed38e74-e679-46bf-8a42-ea3e4f8fb5fb",
+          "value": "https://www.tum.de/en/"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "231f23fd-30ff-4662-b76c-2898c4f3f1e6",
+      "entity": "70cf5a29-982d-4fb0-9aed-b8791f1a2437",
+      "fromEntity": "977da6b6-6e66-4d30-832e-571c9054ba4f",
+      "position": "a01yJ",
+      "toEntity": "484a18c5-030a-499c-b0f2-ef588ff16d50",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "2ee6456a-d132-432e-8b2a-65319683cc31",
+      "entity": "b7347ce4-ebac-447b-918a-5ea83fe184e2",
+      "fromEntity": "977da6b6-6e66-4d30-832e-571c9054ba4f",
+      "position": "a156n",
+      "toEntity": "9af19b7e-2cc9-4a60-8d20-e0a51ffb1b7c",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "8c450cdf-bac5-4a4d-ab90-91b62efa4f35",
+      "entity": "880c4771-cf9b-4f82-8236-183c8b8d2c91",
+      "fromEntity": "977da6b6-6e66-4d30-832e-571c9054ba4f",
+      "position": "a25bT",
+      "toEntity": "ccdc2dd4-602d-4719-bfa6-641faf0f739a",
+      "type": "1155beff-fad5-49b7-a2e0-da4777b8792c"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "5c6607c1-55e3-4607-a32b-379f42735ed7",
+      "entity": "47d1980c-01cb-49ea-bc45-944dd975899c",
+      "fromEntity": "977da6b6-6e66-4d30-832e-571c9054ba4f",
+      "position": "a361F",
+      "toEntity": "103773aa-5120-4d7d-aeb3-a8a96095183a",
+      "type": "34f53507-2e6b-42c5-a844-43981a77cfa2"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "97f3c169-f1e2-4483-9dcc-ee31d9e96328",
+      "values": [
+        {
+          "property": "8a743832-c094-4a62-b665-0c3cc2f9c7bc",
+          "value": "ipfs://bafkreibjfprv56hiafnrjtqxmqsfhy34dkjjqbszay4uxjwu7e7vxx43za"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "f97b1b22-d676-4193-9a20-7e981de9f433",
+      "entity": "db8a542f-f1a7-471c-bf14-492218403ec9",
+      "fromEntity": "97f3c169-f1e2-4483-9dcc-ee31d9e96328",
+      "position": "a02CU",
+      "toEntity": "ba4e4146-0010-499d-a0a3-caaa7f579d0e",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "98cf1474-efe3-4082-8031-be5d86c09d86",
+      "values": []
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "9adc3e0e-1678-464e-81a7-c11c0f036e5f",
+      "values": []
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "9fe089e6-a193-4d6d-ab7e-6e27d6632bf1",
+      "values": []
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "a1fd9405-5301-4696-a8b4-29be5ea8bc79",
+      "values": [
+        {
+          "property": "8a743832-c094-4a62-b665-0c3cc2f9c7bc",
+          "value": "ipfs://bafkreigxcyk5ftscslk5cxo33b5tfhiir7rybjywiweqecxsjgom2jpqdi"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "18667002-5ce1-4dc7-b982-e0c370adefc1",
+      "entity": "5e0f2e1b-8ee5-4fd3-90cf-b8c0cf5b5d63",
+      "fromEntity": "a1fd9405-5301-4696-a8b4-29be5ea8bc79",
+      "position": "a05yA",
+      "toEntity": "ba4e4146-0010-499d-a0a3-caaa7f579d0e",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "a233071e-5c71-4d23-9aaa-09087f0f2c7a",
+      "values": [
+        {
+          "property": "9b1f76ff-9711-404c-861e-59dc3fa7d037",
+          "value": "The Prague University of Economics and Business is an economics and business-oriented public university located in Prague, Czech Republic."
+        },
+        {
+          "property": "a126ca53-0c8e-48d5-b888-82c734c38935",
+          "value": "Prague University of Economics and Business"
+        },
+        {
+          "property": "eed38e74-e679-46bf-8a42-ea3e4f8fb5fb",
+          "value": "https://www.vse.cz/english/"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "0a50cf15-b8fb-4532-8a75-27f66aa004b3",
+      "entity": "f234323c-d7b6-4674-a4a6-e075fbe922af",
+      "fromEntity": "a233071e-5c71-4d23-9aaa-09087f0f2c7a",
+      "position": "a03uz",
+      "toEntity": "9af19b7e-2cc9-4a60-8d20-e0a51ffb1b7c",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "8a1c73f2-467b-459b-b3a6-93e8c1623191",
+      "entity": "87fe5a33-1be8-4546-a7eb-d6dfd214bb3b",
+      "fromEntity": "a233071e-5c71-4d23-9aaa-09087f0f2c7a",
+      "position": "a16bD",
+      "toEntity": "484a18c5-030a-499c-b0f2-ef588ff16d50",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "954a418d-60e1-4f5b-820e-37907c8f0d34",
+      "entity": "5d7f2990-304b-4127-b5d1-c234499223b1",
+      "fromEntity": "a233071e-5c71-4d23-9aaa-09087f0f2c7a",
+      "position": "a23X3",
+      "toEntity": "b718a8e7-c0f4-4a4c-8341-d6e19fd20a31",
+      "type": "34f53507-2e6b-42c5-a844-43981a77cfa2"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "67f9caee-b1bd-48ab-bb0b-1af0fb8beb94",
+      "entity": "898249dd-b655-4aab-a23f-ecff87b907df",
+      "fromEntity": "a233071e-5c71-4d23-9aaa-09087f0f2c7a",
+      "position": "a3A4v",
+      "toEntity": "ef539503-e919-42c8-8f40-8603329b9e32",
+      "type": "1155beff-fad5-49b7-a2e0-da4777b8792c"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "a65e1a5c-a553-4e8b-afef-a5832ac29046",
+      "values": []
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "a6c13b61-48c8-4d0f-9dc0-8535ce1e29c5",
+      "values": []
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "a8b1bf06-7d51-4180-8b8e-8d50dafb9b44",
+      "values": [
+        {
+          "property": "9b1f76ff-9711-404c-861e-59dc3fa7d037",
+          "value": "Leuphana University Lüneburg is a public university in Lüneburg, Lower Saxony, Germany. Leuphana was founded in 1946 as a college of education. Leuphana has since established a unique university model within the German academic landscape that has received several awards."
+        },
+        {
+          "property": "a126ca53-0c8e-48d5-b888-82c734c38935",
+          "value": "Leuphana University of Lüneburg"
+        },
+        {
+          "property": "eed38e74-e679-46bf-8a42-ea3e4f8fb5fb",
+          "value": "https://www.leuphana.de"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "f7da34b8-4ec6-47f3-932b-6148c0797678",
+      "entity": "e8a4a701-6b55-4801-b6f0-0dd28a6b0cc4",
+      "fromEntity": "a8b1bf06-7d51-4180-8b8e-8d50dafb9b44",
+      "position": "a0BPY",
+      "toEntity": "9af19b7e-2cc9-4a60-8d20-e0a51ffb1b7c",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "3e62e8f7-3405-4822-89f4-70820f0a1757",
+      "entity": "8acca198-e3db-4dd4-93cd-91570d44c335",
+      "fromEntity": "a8b1bf06-7d51-4180-8b8e-8d50dafb9b44",
+      "position": "a18Xm",
+      "toEntity": "484a18c5-030a-499c-b0f2-ef588ff16d50",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "fb321c06-f2fc-4a20-aabf-d8d4068741bf",
+      "entity": "76d67592-0477-4089-a636-5dfae28db8ee",
+      "fromEntity": "a8b1bf06-7d51-4180-8b8e-8d50dafb9b44",
+      "position": "a275m",
+      "toEntity": "b2f27989-713e-4c0a-9c4f-0c95e7f28f17",
+      "type": "1155beff-fad5-49b7-a2e0-da4777b8792c"
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "c176d3f3-85fe-4679-861f-c3022ff6166c",
+      "entity": "b58cb576-0d24-42f4-bbfe-dbdc99a02348",
+      "fromEntity": "a8b1bf06-7d51-4180-8b8e-8d50dafb9b44",
+      "position": "a3Abt",
+      "toEntity": "0e4e9a28-6fe2-4389-b431-32fef7e1f113",
+      "type": "34f53507-2e6b-42c5-a844-43981a77cfa2"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "aa63aac6-3f66-4753-8aee-b05257cbc075",
+      "values": [
+        {
+          "property": "8a743832-c094-4a62-b665-0c3cc2f9c7bc",
+          "value": "ipfs://bafybeiedglddurs6r3x2roh57grjk34ia2a7elkv5d25rffyj62duyznqq"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "054b6960-2da2-4ddd-bc37-21bae0a52b5d",
+      "entity": "5af3e1f8-018f-48d3-b26a-6a2ae6d80779",
+      "fromEntity": "aa63aac6-3f66-4753-8aee-b05257cbc075",
+      "position": "a02EF",
+      "toEntity": "ba4e4146-0010-499d-a0a3-caaa7f579d0e",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "b168b9e6-7859-4468-848a-dd7fd58de48b",
+      "values": []
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "b2f27989-713e-4c0a-9c4f-0c95e7f28f17",
+      "values": [
+        {
+          "property": "8a743832-c094-4a62-b665-0c3cc2f9c7bc",
+          "value": "ipfs://bafkreierga6asuwtduzw3pnkel3ym474h2vcnahk6xpozl2adayhl3g4k4"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "77c268b5-ee51-4751-a72b-d8ce4340d502",
+      "entity": "b477395b-9614-4401-82ce-61a22a207b9f",
+      "fromEntity": "b2f27989-713e-4c0a-9c4f-0c95e7f28f17",
+      "position": "a04ny",
+      "toEntity": "ba4e4146-0010-499d-a0a3-caaa7f579d0e",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "b408f62a-b7fb-4481-aba9-830fdb0e9673",
+      "values": []
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "b477395b-9614-4401-82ce-61a22a207b9f",
+      "values": []
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "b58cb576-0d24-42f4-bbfe-dbdc99a02348",
+      "values": []
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "b718a8e7-c0f4-4a4c-8341-d6e19fd20a31",
+      "values": [
+        {
+          "property": "8a743832-c094-4a62-b665-0c3cc2f9c7bc",
+          "value": "ipfs://bafkreifqky7qhkguatslxhscm36duscs327a427tcrav33sdocxnphmodq"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "41252ee0-475f-4e26-a04a-769c50918c90",
+      "entity": "deb52747-d7cd-4ed2-8778-57a973a3668c",
+      "fromEntity": "b718a8e7-c0f4-4a4c-8341-d6e19fd20a31",
+      "position": "a09Pj",
+      "toEntity": "ba4e4146-0010-499d-a0a3-caaa7f579d0e",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "b7347ce4-ebac-447b-918a-5ea83fe184e2",
+      "values": []
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "c0fe5350-df05-4204-a791-f71bf80ea182",
+      "values": [
+        {
+          "property": "8a743832-c094-4a62-b665-0c3cc2f9c7bc",
+          "value": "ipfs://bafkreihece32olgyt2wkljohyjvj7yct3kkzs5znzp4rn7fagyzqeha3ye"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "46f45eb2-bf40-4e26-8bc6-751a37a7fab9",
+      "entity": "d352881f-307c-40a6-8481-a184e5295190",
+      "fromEntity": "c0fe5350-df05-4204-a791-f71bf80ea182",
+      "position": "a0AJ4",
+      "toEntity": "ba4e4146-0010-499d-a0a3-caaa7f579d0e",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "c99aef87-bb1c-46cc-b303-78af5d3de8f5",
+      "values": []
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "cc208455-9558-4e92-bdb3-62fc62c8c043",
+      "values": []
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "ccdc2dd4-602d-4719-bfa6-641faf0f739a",
+      "values": [
+        {
+          "property": "8a743832-c094-4a62-b665-0c3cc2f9c7bc",
+          "value": "ipfs://bafkreihmw6oe7csvh3eylcwdd2jucyvnai6qtqbegi4qbg33xs5g7jqciy"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "eaedeafb-9e1a-4842-a97f-83d83222170c",
+      "entity": "f5570e13-d9c6-4217-aead-68dfec56834c",
+      "fromEntity": "ccdc2dd4-602d-4719-bfa6-641faf0f739a",
+      "position": "a0CGi",
+      "toEntity": "ba4e4146-0010-499d-a0a3-caaa7f579d0e",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "cf6981a6-5e69-4034-9a0b-6dff32d994a2",
+      "values": []
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "d352881f-307c-40a6-8481-a184e5295190",
+      "values": []
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "db8a542f-f1a7-471c-bf14-492218403ec9",
+      "values": []
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "dcc2e824-2dcc-40f2-a3c5-8baa17a09a36",
+      "values": [
+        {
+          "property": "8a743832-c094-4a62-b665-0c3cc2f9c7bc",
+          "value": "ipfs://bafybeid4jiamou7zfi2iylhoq4cja4ftnlyvrwp47zsxabfkusaixl5zcq"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "cece48b3-afef-4504-b69e-5838eb0cdb52",
+      "entity": "2a4884a4-83af-43ed-9a21-6b01becb3454",
+      "fromEntity": "dcc2e824-2dcc-40f2-a3c5-8baa17a09a36",
+      "position": "a01lC",
+      "toEntity": "ba4e4146-0010-499d-a0a3-caaa7f579d0e",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "deb52747-d7cd-4ed2-8778-57a973a3668c",
+      "values": []
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "dfa20ecb-0578-4288-abd2-5e5b6a42af4c",
+      "values": []
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "e466ec6b-70a0-4b5a-b5fa-93c5fb3959a8",
+      "values": []
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "e677a45f-72f7-47f3-9cd2-938ed261b3d1",
+      "values": []
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "e8a4a701-6b55-4801-b6f0-0dd28a6b0cc4",
+      "values": []
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "ef539503-e919-42c8-8f40-8603329b9e32",
+      "values": [
+        {
+          "property": "8a743832-c094-4a62-b665-0c3cc2f9c7bc",
+          "value": "ipfs://bafkreidwl3cunlz3wfwlrin4mafcv6bj26qh5yc4wsqxq3rseg4is3yoey"
+        }
+      ]
+    }
+  },
+  {
+    "type": "CREATE_RELATION",
+    "relation": {
+      "id": "483d561f-b011-46ed-aa73-0f59c4689ea8",
+      "entity": "46456c63-4a0e-4892-b5e5-345d01eb54d3",
+      "fromEntity": "ef539503-e919-42c8-8f40-8603329b9e32",
+      "position": "a03Db",
+      "toEntity": "ba4e4146-0010-499d-a0a3-caaa7f579d0e",
+      "type": "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "f11678e7-8e34-4982-bd5c-f8db936c1fd2",
+      "values": []
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "f234323c-d7b6-4674-a4a6-e075fbe922af",
+      "values": []
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "f5570e13-d9c6-4217-aead-68dfec56834c",
+      "values": []
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "fa587744-3076-47c4-aaf2-88ebb5049cfa",
+      "values": []
+    }
+  },
+  {
+    "type": "UPDATE_ENTITY",
+    "entity": {
+      "id": "fd93548d-8e45-4552-93e3-adb77b23a7d2",
+      "values": []
+    }
+  }
 ]
