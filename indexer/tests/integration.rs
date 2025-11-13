@@ -127,7 +127,7 @@ async fn main() -> Result<(), IndexingError> {
                     "550e8400-e29b-41d4-a716-446655440003",
                     "550e8400-e29b-41d4-a716-446655440004",
                 ),
-                make_property_op("6ba7b810-9dad-11d1-80b4-00c04fd430c1", PbDataType::Text),
+                make_property_op("6ba7b810-9dad-11d1-80b4-00c04fd430c1", PbDataType::String),
                 make_property_op("6ba7b810-9dad-11d1-80b4-00c04fd430c2", PbDataType::Number),
             ],
         )),
@@ -347,7 +347,7 @@ async fn test_validation_rejects_invalid_checkbox() -> Result<(), IndexingError>
 
     // Create a Checkbox property
     let property_id = "66666666-6666-6666-6666-666666666666";
-    let property_op = make_property_op(property_id, PbDataType::Checkbox);
+    let property_op = make_property_op(property_id, PbDataType::Boolean);
 
     // Try to set an invalid checkbox value (should be 0 or 1)
     let invalid_entity_op = make_entity_op(
@@ -545,7 +545,7 @@ async fn test_validation_allows_valid_data_mixed_with_invalid() -> Result<(), In
     let text_prop_id = "78901234-7890-7890-7890-789012345678";
 
     let number_prop_op = make_property_op(number_prop_id, PbDataType::Number);
-    let text_prop_op = make_property_op(text_prop_id, PbDataType::Text);
+    let text_prop_op = make_property_op(text_prop_id, PbDataType::String);
 
     // Entity with mixed valid and invalid values
     let mixed_entity_op = make_entity_op(
@@ -693,7 +693,7 @@ async fn test_property_no_overwrite() -> Result<(), IndexingError> {
             "f47ac10b-58cc-4372-a567-0e02b2c3d480",
             vec![make_property_op(
                 "aba7b810-9dad-11d1-80b4-00c04fd430c1",
-                PbDataType::Text,
+                PbDataType::String,
             )],
         )),
         is_errored: false,
@@ -800,11 +800,11 @@ async fn test_property_squashing() -> Result<(), IndexingError> {
             "f47ac10b-58cc-4372-a567-0e02b2c3d480",
             vec![
                 // First: create property with Text type
-                make_property_op("bba7b810-9dad-11d1-80b4-00c04fd430c1", PbDataType::Text),
+                make_property_op("bba7b810-9dad-11d1-80b4-00c04fd430c1", PbDataType::String),
                 // Second: create same property with Number type
                 make_property_op("bba7b810-9dad-11d1-80b4-00c04fd430c1", PbDataType::Number),
                 // Third: create same property with Checkbox type (this should be the final one)
-                make_property_op("bba7b810-9dad-11d1-80b4-00c04fd430c1", PbDataType::Checkbox),
+                make_property_op("bba7b810-9dad-11d1-80b4-00c04fd430c1", PbDataType::Boolean),
                 // Different property to ensure squashing only affects same IDs
                 make_property_op("bba7b810-9dad-11d1-80b4-00c04fd430c2", PbDataType::Time),
             ],
@@ -1699,7 +1699,7 @@ async fn test_space_indexing_with_edits() -> Result<(), IndexingError> {
 
     // Create some property operations
     let property_id = "1cc6995f-6cc2-4c7a-9592-1466bf95f6be";
-    let property_op = make_property_op(property_id, PbDataType::Text);
+    let property_op = make_property_op(property_id, PbDataType::String);
 
     // Create a test edit
     let edit = make_edit(
@@ -2037,9 +2037,9 @@ async fn test_properties_cache_initialization_from_database() -> Result<(), Inde
     let mut property_ops = Vec::new();
     for (property_id, data_type) in &test_properties {
         let pb_data_type = match data_type {
-            DataType::String => PbDataType::Text,
+            DataType::String => PbDataType::String,
             DataType::Number => PbDataType::Number,
-            DataType::Boolean => PbDataType::Checkbox,
+            DataType::Boolean => PbDataType::Boolean,
             DataType::Time => PbDataType::Time,
             DataType::Point => PbDataType::Point,
             DataType::Relation => PbDataType::Relation,
