@@ -14,7 +14,7 @@ message HermesEdit {
   string space_id = 6;
   bool is_canonical = 7;
   // Blockchain Metadata
-  string created_at = 8;
+  uint64 created_at = 8;  // Unix timestamp in seconds
   bytes created_by = 9;
   uint64 block_number = 10;
   string cursor = 11;

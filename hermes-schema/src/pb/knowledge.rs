@@ -17,8 +17,10 @@ pub struct HermesEdit {
     #[prost(bool, tag = "7")]
     pub is_canonical: bool,
     /// Blockchain Metadata
-    #[prost(string, tag = "8")]
-    pub created_at: ::prost::alloc::string::String,
+    ///
+    /// Unix timestamp in seconds
+    #[prost(uint64, tag = "8")]
+    pub created_at: u64,
     #[prost(bytes = "vec", tag = "9")]
     pub created_by: ::prost::alloc::vec::Vec<u8>,
     #[prost(uint64, tag = "10")]
