@@ -7,7 +7,7 @@ import { cors } from "hono/cors"
 import { health } from "./src/health"
 import { graphqlServer } from "./src/kg/postgraphile"
 import { Environment, EnvironmentLive, make as makeEnvironment } from "./src/services/environment"
-import { uploadEdit, uploadFile, uploadFileAlternativeGateway } from "./src/services/ipfs"
+import { uploadEdit, uploadFile } from "./src/services/ipfs"
 import { make as makeStorage, Storage } from "./src/services/storage/storage"
 import { getPublishEditCalldata } from "./src/utils/calldata"
 
@@ -94,6 +94,9 @@ app.post("/ipfs/upload-file", async (c) => {
 	return c.json({cid})
 })
 
+
+// 2025-11-13: Deprecated route for uploading files to the alternative IPFS gateway
+// Can be removed after a grace period for grc-20 migrations
 app.post("/ipfs/upload-file-alternative-gateway", async (c) => {
 	const formData = await c.req.formData()
 	const file = formData.get("file") as File | undefined
@@ -103,7 +106,7 @@ app.post("/ipfs/upload-file-alternative-gateway", async (c) => {
 	}
 
 	const result = await Effect.runPromise(
-		Effect.either(uploadFileAlternativeGateway(file)).pipe(
+		Effect.either(uploadFile(file)).pipe(
 			Effect.withSpan("/ipfs/upload-file-alternative-gateway.uploadFile"),
 			Effect.provide(EnvironmentLayer),
 			Effect.provide(NodeSdkLive),
