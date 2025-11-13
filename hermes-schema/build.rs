@@ -5,7 +5,7 @@ fn main() -> Result<()> {
     let out_dir = PathBuf::from("src/pb");
     fs::create_dir_all(&out_dir).expect("Failed to create output directory");
 
-    let protos = vec!["proto/knowledge.proto", "proto/user_event.proto"];
+    let protos = vec!["proto/knowledge.proto"];
     let proto_include = &["proto/", "../wire/proto/"];
 
     let mut config = prost_build::Config::new();
@@ -17,10 +17,7 @@ fn main() -> Result<()> {
         .expect("Failed to compile protos");
 
     // Create a mod.rs file that re-exports each generated file
-    // Prost generates files based on package name, not file name:
-    // - knowledge.proto (package knowledge) -> knowledge.rs
-    // - user_event.proto (package events) -> events.rs
-    let mod_file = "pub mod knowledge;\npub mod events;\n";
+    let mod_file = "pub mod knowledge;\n";
 
     fs::write(out_dir.join("mod.rs"), mod_file).expect("Failed to write mod.rs");
     Ok(())

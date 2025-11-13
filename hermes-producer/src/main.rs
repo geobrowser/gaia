@@ -5,54 +5,52 @@ use rdkafka::message::{Header, OwnedHeaders};
 use rdkafka::producer::{FutureProducer, FutureRecord, Producer};
 use std::env;
 use std::time::Duration;
-use uuid::Uuid;
 
-use hermes_schema::pb::events::{EventType, UserEvent, UserEventData};
+use hermes_schema::pb::knowledge::HermesEdit;
 
-fn create_user_event(user_id: String, event_type: EventType, data: UserEventData) -> UserEvent {
-    UserEvent {
-        event_id: Uuid::new_v4().to_string(),
-        timestamp: Utc::now().timestamp_millis(),
-        user_id,
-        event_type: event_type as i32,
-        data: Some(data),
+fn create_sample_edit(space_id: String, name: String) -> HermesEdit {
+    HermesEdit {
+        id: vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16], // Sample UUID bytes
+        name,
+        ops: vec![], // Empty ops for demo
+        authors: vec![vec![0; 32]], // Sample author ID
+        language: Some(vec![0; 16]), // Sample language ID
+        space_id,
+        is_canonical: true,
+        created_at: Utc::now().timestamp().to_string(),
+        created_by: vec![0; 32], // Sample creator address
+        block_number: 12345,
+        cursor: "sample_cursor".to_string(),
     }
 }
 
-async fn send_event(
+async fn send_edit(
     producer: &FutureProducer,
     topic: &str,
-    event: &UserEvent,
+    edit: &HermesEdit,
 ) -> Result<(), Box<dyn std::error::Error>> {
     // Serialize to protobuf
     let mut payload = Vec::new();
-    event.encode(&mut payload)?;
-
-    let event_type_str = match EventType::try_from(event.event_type) {
-        Ok(EventType::UserRegistered) => "USER_REGISTERED",
-        Ok(EventType::UserLogin) => "USER_LOGIN",
-        Ok(EventType::UserLogout) => "USER_LOGOUT",
-        _ => "UNKNOWN",
-    };
+    edit.encode(&mut payload)?;
 
     let record = FutureRecord::to(topic)
-        .key(&event.user_id)
+        .key(&edit.space_id)
         .payload(&payload)
         .headers(OwnedHeaders::new().insert(Header {
-            key: "event-type",
-            value: Some(event_type_str),
+            key: "edit-name",
+            value: Some(&edit.name),
         }));
 
     match producer.send(record, Duration::from_secs(5)).await {
         Ok(delivery) => {
             println!(
-                "Event sent successfully: {} - {:?}",
-                event.event_id, delivery
+                "Edit sent successfully: {} in space {} - {:?}",
+                edit.name, edit.space_id, delivery
             );
             Ok(())
         }
         Err((e, _)) => {
-            eprintln!("Error sending event: {:?}", e);
+            eprintln!("Error sending edit: {:?}", e);
             Err(Box::new(e))
         }
     }
@@ -66,7 +64,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Create producer with ZSTD compression
     let producer: FutureProducer = ClientConfig::new()
         .set("bootstrap.servers", &broker)
-        .set("client.id", "my-app")
+        .set("client.id", "hermes-producer")
         .set("compression.type", "zstd") // Enable ZSTD compression
         .set("message.timeout.ms", "5000")
         .set("queue.buffering.max.messages", "100000")
@@ -76,39 +74,25 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Producer connected to {}", broker);
 
-    // Send a single event
-    let mut metadata = std::collections::HashMap::new();
-    metadata.insert("source".to_string(), "web".to_string());
-    metadata.insert("ip".to_string(), "192.168.1.1".to_string());
-
-    let event = create_user_event(
-        "user-123".to_string(),
-        EventType::UserRegistered,
-        UserEventData {
-            email: Some("user@example.com".to_string()),
-            username: Some("john_doe".to_string()),
-            metadata,
-        },
+    // Send a single edit
+    let edit = create_sample_edit(
+        "space-123".to_string(),
+        "Initial Edit".to_string(),
     );
 
-    send_event(&producer, "user.events", &event).await?;
+    send_edit(&producer, "knowledge.edits", &edit).await?;
 
-    // Send multiple events in batch
-    println!("Sending 100 events in batch...");
-    for i in 0..100 {
-        let event = create_user_event(
-            format!("user-{}", i),
-            EventType::UserLogin,
-            UserEventData {
-                email: None,
-                username: None,
-                metadata: std::collections::HashMap::new(),
-            },
+    // Send multiple edits in batch
+    println!("Sending 10 edits in batch...");
+    for i in 0..10 {
+        let edit = create_sample_edit(
+            format!("space-{}", i),
+            format!("Edit {}", i),
         );
-        send_event(&producer, "user.events", &event).await?;
+        send_edit(&producer, "knowledge.edits", &edit).await?;
     }
 
-    println!("Sent 100 events in batch");
+    println!("Sent 10 edits in batch");
 
     // Flush any remaining messages
     producer.flush(Duration::from_secs(5))?;
