@@ -2,41 +2,20 @@ syntax = "proto3";
 
 package knowledge;
 
-import "wire/proto/common.proto";
+import "grc20.proto";
 
-message Edit {
+message HermesEdit {
   bytes id = 1;
   string name = 2;
-  repeated common.Op ops = 3;
+  repeated grc20.Op ops = 3;
   repeated bytes authors = 4;
   optional bytes language = 5;
+  // Space Topology metadata
   string space_id = 6;
   bool is_canonical = 7;
-}
-
-message ImportEdit {
-  bytes id = 1;
-  string name = 2;
-  repeated common.Op ops = 3;
-  repeated bytes authors = 4;
-  bytes created_by = 5;
-  string created_at = 6;
-  bytes block_hash = 7;
-  string block_number = 8;
-  bytes transaction_hash = 9;
-}
-
-message Import {
-  // these strings are IPFS cids representing the import edit message
-  repeated string edits = 1;
-}
-
-message File {
-  string version = 1;
-
-  oneof payload {
-    Edit add_edit = 2;
-    Import import_space = 3;
-    bytes archive_space = 4;
-  }
+  // Blockchain Metadata
+  string created_at = 8;
+  bytes created_by = 9;
+  uint64 block_number = 10;
+  string cursor = 11;
 }

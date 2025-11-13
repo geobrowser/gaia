@@ -12,6 +12,10 @@ pub mod events {
     include!(concat!(env!("OUT_DIR"), "/events.rs"));
 }
 
+pub mod knowledge {
+    include!(concat!(env!("OUT_DIR"), "/knowledge.rs"));
+}
+
 use events::{EventType, UserEvent, UserEventData};
 
 impl UserEvent {

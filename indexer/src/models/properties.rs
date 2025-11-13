@@ -173,9 +173,9 @@ fn squash_properties(properties: &Vec<PropertyItem>) -> Vec<PropertyItem> {
 
 fn native_type_to_data_type(native_type: i32) -> Option<DataType> {
     match PbDataType::try_from(native_type) {
-        Ok(PbDataType::Text) => Some(DataType::String),
+        Ok(PbDataType::String) => Some(DataType::String),
         Ok(PbDataType::Number) => Some(DataType::Number),
-        Ok(PbDataType::Checkbox) => Some(DataType::Boolean),
+        Ok(PbDataType::Boolean) => Some(DataType::Boolean),
         Ok(PbDataType::Time) => Some(DataType::Time),
         Ok(PbDataType::Point) => Some(DataType::Point),
         Ok(PbDataType::Relation) => Some(DataType::Relation),

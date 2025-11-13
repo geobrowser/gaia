@@ -3,7 +3,8 @@ use std::collections::HashSet;
 use indexer_utils::id;
 use stream::utils::BlockMetadata;
 use uuid::Uuid;
-use wire::pb::grc20::{op::Payload, Edit};
+use wire::pb::grc20::op::Payload;
+use wire::pb::grc20::Edit;
 
 #[derive(Clone)]
 pub struct EntityItem {
