@@ -1,8 +1,8 @@
 syntax = "proto3";
 
-package grc20;
+package knowledge;
 
-import "common.proto";
+import "wire/proto/common.proto";
 
 message Edit {
   bytes id = 1;
@@ -10,6 +10,8 @@ message Edit {
   repeated common.Op ops = 3;
   repeated bytes authors = 4;
   optional bytes language = 5;
+  string space_id = 6;
+  bool is_canonical = 7;
 }
 
 message ImportEdit {
