@@ -1,5 +1,6 @@
 import {
 	relations as drizzleRelations,
+	sql,
 	type InferSelectModel,
 } from "drizzle-orm";
 import {
@@ -137,8 +138,11 @@ export const values = pgTable(
 		index("values_entity_id_idx").on(table.entityId),
 		index("values_space_id_idx").on(table.spaceId),
 
-		// Basic B-tree index for text searches
-		index("values_text_idx").on(table.string),
+		// Partial B-tree index for text searches (only indexes strings ≤2000 chars)
+		// Longer strings will use sequential scan, but won't cause index size errors
+		index("values_text_idx")
+			.on(table.string)
+			.where(sql`length(${table.string}) <= 2000`),
 		index("values_number_idx").on(table.number),
 		index("values_point_idx").on(table.point),
 		index("values_boolean_idx").on(table.boolean),
@@ -156,7 +160,7 @@ export const values = pgTable(
 		),
 
 		// Composite index for space-filtered searches
-		index("values_space_text_idx").on(table.spaceId, table.string),
+		// index("values_space_text_idx").on(table.spaceId, table.string),
 
 		// Additional indexes for filtering
 		index("values_language_idx").on(table.language),

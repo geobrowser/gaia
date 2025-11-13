@@ -1,0 +1,1 @@
+CREATE INDEX "values_text_idx" ON "values" USING btree ("string") WHERE length("values"."string") <= 2000;
