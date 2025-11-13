@@ -8,6 +8,11 @@ use std::time::Duration;
 
 use hermes_schema::pb::knowledge::HermesEdit;
 
+trait Hermes {
+
+}
+
+
 fn create_sample_edit(space_id: String, name: String) -> HermesEdit {
     HermesEdit {
         id: vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16], // Sample UUID bytes
@@ -17,7 +22,7 @@ fn create_sample_edit(space_id: String, name: String) -> HermesEdit {
         language: Some(vec![0; 16]), // Sample language ID
         space_id,
         is_canonical: true,
-        created_at: Utc::now().timestamp().to_string(),
+        created_at: Utc::now().timestamp().try_into().expect("timestamp should be positive"),
         created_by: vec![0; 32], // Sample creator address
         block_number: 12345,
         cursor: "sample_cursor".to_string(),
