@@ -7,26 +7,15 @@ use std::env;
 use std::time::Duration;
 use uuid::Uuid;
 
-// Include the generated protobuf code
-pub mod events {
-    include!(concat!(env!("OUT_DIR"), "/events.rs"));
-}
+use hermes_schema::pb::events::{EventType, UserEvent, UserEventData};
 
-pub mod knowledge {
-    include!(concat!(env!("OUT_DIR"), "/knowledge.rs"));
-}
-
-use events::{EventType, UserEvent, UserEventData};
-
-impl UserEvent {
-    fn new(user_id: String, event_type: EventType, data: UserEventData) -> Self {
-        Self {
-            event_id: Uuid::new_v4().to_string(),
-            timestamp: Utc::now().timestamp_millis(),
-            user_id,
-            event_type: event_type as i32,
-            data: Some(data),
-        }
+fn create_user_event(user_id: String, event_type: EventType, data: UserEventData) -> UserEvent {
+    UserEvent {
+        event_id: Uuid::new_v4().to_string(),
+        timestamp: Utc::now().timestamp_millis(),
+        user_id,
+        event_type: event_type as i32,
+        data: Some(data),
     }
 }
 
@@ -92,7 +81,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     metadata.insert("source".to_string(), "web".to_string());
     metadata.insert("ip".to_string(), "192.168.1.1".to_string());
 
-    let event = UserEvent::new(
+    let event = create_user_event(
         "user-123".to_string(),
         EventType::UserRegistered,
         UserEventData {
@@ -107,7 +96,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Send multiple events in batch
     println!("Sending 100 events in batch...");
     for i in 0..100 {
-        let event = UserEvent::new(
+        let event = create_user_event(
             format!("user-{}", i),
             EventType::UserLogin,
             UserEventData {

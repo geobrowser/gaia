@@ -11,7 +11,9 @@ members = [
     "actions-indexer-pipeline",
     "actions-indexer-shared",
     "actions-indexer-repository",
-    "actions-substream"
+    "actions-substream",
+
+    "hermes-schema"
 ]
 # `substreams build` doesn't seem to work well when in a workspace. The CLI looks to
 # read the target directory from within indexer-substream, but the workspace hoists

@@ -1,0 +1,15 @@
+[package]
+name = "hermes-schema"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "hermes_schema"
+path = "src/lib.rs"
+
+[dependencies]
+prost = "0.13.5"
+wire = { path = "../wire" }
+
+[build-dependencies]
+prost-build = "0.13.5"
