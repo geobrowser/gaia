@@ -1,42 +1,7 @@
 {
   "Geo": {
-    "spaceId": "06f49ce6-c1b7-481a-80f1-7180add68ef9",
+    "spaceId": "2a98e6b4-3728-44a4-9b8e-02e15f0677c8",
     "entityId": "6b9f649e-38b6-4224-927d-d66171343730",
-    "timestamp": "2025-11-12T21:32:03.452Z"
-  },
-  "Crypto": {
-    "spaceId": "e5c27822-da25-4961-a979-877280a3e4f6",
-    "entityId": "23575692-bda8-4a71-8694-04da2e2af18f",
-    "timestamp": "2025-11-12T21:35:04.624Z"
-  },
-  "Crypto events": {
-    "spaceId": "6a2353ad-7429-4ff2-85b2-906790f9b024",
-    "entityId": "320ab568-68cf-4587-8dc9-ae82f55587ce",
-    "timestamp": "2025-11-12T21:35:16.500Z"
-  },
-  "Regions": {
-    "spaceId": "0318a742-d546-40e8-b63f-a1fdb68f6382",
-    "entityId": "1d7ee87f-70d7-462d-9b72-ce845aa15986",
-    "timestamp": "2025-11-12T21:35:26.106Z"
-  },
-  "Industries": {
-    "spaceId": "69e66b12-4fbd-46cd-97f9-767037fbdf33",
-    "entityId": "51725d6a-21b2-4396-a89c-1b7d2008ac65",
-    "timestamp": "2025-11-12T21:48:16.783Z"
-  },
-  "Education": {
-    "spaceId": "b212e82e-f197-43ab-b4a3-39c4855a6d86",
-    "entityId": "be259c52-532d-4269-9a6c-e93dd4f11e17",
-    "timestamp": "2025-11-12T21:48:19.014Z"
-  },
-  "Academia": {
-    "spaceId": "bd8dda68-bb2b-4836-8624-ed16a60d4fc6",
-    "entityId": "0fa96f99-1faa-48f2-b825-a1113de0e4be",
-    "timestamp": "2025-11-12T21:48:23.269Z"
-  },
-  "Technology": {
-    "spaceId": "3b9d80b6-d022-4a97-9c22-3b4072701708",
-    "entityId": "a56e7d86-9a0a-47df-a1f9-6c2cf658f79e",
-    "timestamp": "2025-11-12T21:48:24.766Z"
+    "timestamp": "2025-11-13T00:16:38.481Z"
   }
 }
