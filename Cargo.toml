@@ -19,5 +19,5 @@ members = [
 # `substreams build` doesn't seem to work well when in a workspace. The CLI looks to
 # read the target directory from within indexer-substream, but the workspace hoists
 # it to the workspace root.
-exclude = ["indexer-substream", "hermes-producer"]
+exclude = ["indexer-substream"]
 resolver = "2"

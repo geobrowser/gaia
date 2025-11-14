@@ -10,12 +10,5 @@ patches:
       name: kafka-broker
     patch: |-
       - op: replace
-        path: /spec/template/spec/containers/0/env/3/value
-        value: "PLAINTEXT://kafka-broker-0.broker.kafka.svc.cluster.local:29092,PLAINTEXT_HOST://138.197.252.214:9092"
-  - target:
-      kind: StatefulSet
-      name: kafka-broker
-    patch: |-
-      - op: replace
         path: /spec/volumeClaimTemplates/0/spec/storageClassName
         value: do-block-storage
