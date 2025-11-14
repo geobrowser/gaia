@@ -19,7 +19,8 @@ hermes/
 │       └── kustomization.yaml
 ├── deploy.sh                # Auto-detects environment
 ├── cleanup.sh
-└── connect.sh
+├── connect.sh
+└── port-forward-local.sh    # Port-forward broker + UI (local only)
 ```
 
 ## Components
@@ -76,11 +77,11 @@ This shows you how to connect based on your current environment:
 
 **Local:**
 ```bash
-# In one terminal, forward the port
-kubectl port-forward -n kafka svc/broker 9092:9092
+# In one terminal, start port-forwards
+./port-forward-local.sh
 
 # In another terminal, run the producer
-cd producer
+cd ../hermes-producer
 KAFKA_BROKER=localhost:9092 cargo run
 ```
 
