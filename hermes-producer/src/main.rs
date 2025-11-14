@@ -10,6 +10,7 @@ use uuid::Uuid;
 use rand::Rng;
 
 use hermes_schema::pb::knowledge::HermesEdit;
+use hermes_schema::pb::space::{HermesCreateSpace, PersonalSpacePayload, DefaultDaoSpacePayload};
 use wire::pb::grc20::{Op, Entity, Value, Property, DataType, Relation};
 
 fn random_uuid_bytes() -> Vec<u8> {
@@ -19,6 +20,33 @@ fn random_uuid_bytes() -> Vec<u8> {
 fn random_address() -> Vec<u8> {
     let mut rng = rand::thread_rng();
     (0..32).map(|_| rng.gen()).collect()
+}
+
+fn create_sample_space() -> HermesCreateSpace {
+    let mut rng = rand::thread_rng();
+    let is_personal = rng.gen_bool(0.5);
+    
+    HermesCreateSpace {
+        space_id: random_uuid_bytes(),
+        topic_id: random_uuid_bytes(),
+        payload: if is_personal {
+            Some(hermes_schema::pb::space::hermes_create_space::Payload::PersonalSpace(
+                PersonalSpacePayload {
+                    owner: random_address(),
+                }
+            ))
+        } else {
+            let editor_count = rng.gen_range(1..=5);
+            let member_count = rng.gen_range(3..=10);
+            Some(hermes_schema::pb::space::hermes_create_space::Payload::DefaultDaoSpace(
+                DefaultDaoSpacePayload {
+                    initial_editors: (0..editor_count).map(|_| random_uuid_bytes()).collect(),
+                    initial_members: (0..member_count).map(|_| random_uuid_bytes()).collect(),
+                }
+            ))
+        },
+    }
+}
 
 fn create_random_entity_op() -> Op {
     Op {
@@ -122,6 +150,43 @@ fn send_edit(
     }
 }
 
+fn send_space(
+    producer: &BaseProducer,
+    topic: &str,
+    space: &HermesCreateSpace,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut payload = Vec::new();
+    space.encode(&mut payload)?;
+
+    let space_type = match &space.payload {
+        Some(hermes_schema::pb::space::hermes_create_space::Payload::PersonalSpace(_)) => "PERSONAL",
+        Some(hermes_schema::pb::space::hermes_create_space::Payload::DefaultDaoSpace(_)) => "DEFAULT_DAO",
+        None => "UNKNOWN",
+    };
+
+    let record = BaseRecord::to(topic)
+        .key(&space.space_id)
+        .payload(&payload)
+        .headers(OwnedHeaders::new().insert(Header {
+            key: "space-type",
+            value: Some(space_type),
+        }));
+
+    match producer.send(record) {
+        Ok(_) => {
+            producer.flush(Duration::from_secs(5))?;
+            println!(
+                "Space created successfully: {} type",
+                space_type
+            );
+            Ok(())
+        }
+        Err((e, _)) => {
+            Err(Box::new(e))
+        }
+    }
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let broker = env::var("KAFKA_BROKER").unwrap_or_else(|_| "localhost:9092".to_string());
 
@@ -136,22 +201,76 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .create()?;
 
     println!("Mock producer connected to {}", broker);
-    println!("Emitting random HermesEdit every 3 seconds (Ctrl+C to stop)");
-
-    let mut counter = 0u64;
-
-    loop {
-        thread::sleep(Duration::from_secs(3));
+    
+    println!("\n=== Deterministic Flow: Creating 5 spaces with 10 edits each ===");
+    
+    for space_num in 1..=5 {
+        println!("\nCreating space #{}", space_num);
+        let space = create_sample_space();
+        let space_id_hex = hex::encode(&space.space_id);
         
-        counter += 1;
-        let space_id = format!("space-{}", rand::thread_rng().gen_range(1..=5));
-        let edit = create_sample_edit(
-            space_id.clone(),
-            format!("Random Edit #{}", counter),
-        );
-
-        if let Err(e) = send_edit(&producer, "knowledge.edits", &edit) {
-            eprintln!("Failed to send edit: {}", e);
+        if let Err(e) = send_space(&producer, "space.creations", &space) {
+            eprintln!("Failed to send space: {}", e);
+            continue;
+        }
+        
+        thread::sleep(Duration::from_millis(500));
+        
+        for edit_num in 1..=10 {
+            let edit = create_sample_edit(
+                space_id_hex.clone(),
+                format!("Space {} Edit #{}", space_num, edit_num),
+            );
+            
+            if let Err(e) = send_edit(&producer, "knowledge.edits", &edit) {
+                eprintln!("Failed to send edit: {}", e);
+            }
+            
+            thread::sleep(Duration::from_millis(200));
         }
     }
+    
+    println!("\n=== Deterministic flow complete: 5 spaces, 50 edits total ===");
+    println!("Producer finished. Exiting.\n");
+    
+    Ok(())
+    
+    // Random flow disabled for now
+    // println!("=== Switching to random emission mode ===\n");
+    // 
+    // let mut edit_counter = 50u64;
+    // let mut loop_counter = 0u64;
+    // let mut created_spaces: Vec<Vec<u8>> = Vec::new();
+    //
+    // println!("Creating initial space for random mode...");
+    // let initial_space = create_sample_space();
+    // created_spaces.push(initial_space.space_id.clone());
+    // if let Err(e) = send_space(&producer, "space.creations", &initial_space) {
+    //     eprintln!("Failed to send initial space: {}", e);
+    // }
+    //
+    // loop {
+    //     thread::sleep(Duration::from_secs(3));
+    //     loop_counter += 1;
+    //     
+    //     edit_counter += 1;
+    //     let space_id_bytes = created_spaces[rand::thread_rng().gen_range(0..created_spaces.len())].clone();
+    //     let space_id_hex = hex::encode(&space_id_bytes);
+    //     let edit = create_sample_edit(
+    //         space_id_hex.clone(),
+    //         format!("Random Edit #{}", edit_counter),
+    //     );
+    //
+    //     if let Err(e) = send_edit(&producer, "knowledge.edits", &edit) {
+    //         eprintln!("Failed to send edit: {}", e);
+    //     }
+    //
+    //     if loop_counter % 3 == 0 {
+    //         let space = create_sample_space();
+    //         created_spaces.push(space.space_id.clone());
+    //         if let Err(e) = send_space(&producer, "space.creations", &space) {
+    //             eprintln!("Failed to send space: {}", e);
+    //         }
+    //     }
+    // }
 }
