@@ -1,0 +1,60 @@
+name: Deploy Hermes to Production
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'hermes/**'
+      - 'hermes-producer/**'
+      - 'hermes-schema/**'
+      - 'wire/**'
+      - '.github/workflows/hermes-deploy.yml'
+
+env:
+  REGISTRY: registry.digitalocean.com/geo
+  IMAGE_NAME: hermes-producer
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install doctl
+        uses: digitalocean/action-doctl@v2
+        with:
+          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+
+      - name: Log in to DigitalOcean Container Registry
+        run: doctl registry login --expiry-seconds 1200
+
+      - name: Build and push Docker image
+        run: |
+          docker build -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
+                       -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest \
+                       -f hermes-producer/Dockerfile .
+          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v4
+
+      - name: Configure kubectl for DigitalOcean
+        run: |
+          doctl kubernetes cluster kubeconfig save ${{ secrets.DIGITALOCEAN_CLUSTER_NAME }}
+
+      - name: Deploy to Kubernetes
+        run: |
+          kubectl kustomize hermes/overlays/digitalocean | kubectl apply -f -
+
+      - name: Restart hermes-producer job
+        run: |
+          kubectl delete job hermes-producer -n kafka --ignore-not-found=true
+          kubectl kustomize hermes/overlays/digitalocean | kubectl apply -f -
+
+      - name: Verify deployment
+        run: |
+          kubectl get pods -n kafka -l app=hermes-producer
+          kubectl get statefulset kafka-broker -n kafka
