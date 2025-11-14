@@ -1,14 +1,14 @@
-# Kafka Producer with ZSTD Compression
+# Hermes Producer
 
-A high-performance Kafka producer written in Rust with ZSTD compression and Protocol Buffers serialization.
+A mock Kafka producer for testing the Hermes event stream service. Emits randomized HermesEdit messages to simulate real-world Geo knowledge graph edits.
 
 ## Features
 
+- **Mock Data Generation** - Creates random HermesEdit messages with realistic structure
+- **Continuous Streaming** - Emits messages every 3 seconds
 - **Protocol Buffers** for compact, type-safe serialization
 - **ZSTD compression** for optimal bandwidth and storage efficiency
-- **Async/await** using Tokio runtime
-- **Batching** for better compression ratios
-- **Type-safe** event definitions generated from protobuf schemas
+- **Randomized Content** - Random entities, properties, and relations for testing
 - **Environment-based** configuration
 
 ## Prerequisites
@@ -17,18 +17,16 @@ A high-performance Kafka producer written in Rust with ZSTD compression and Prot
 - Protocol Buffers compiler (`protoc`)
 - Kafka broker running (default: localhost:9092)
 
-## Schema Management
+## Mock Data Generation
 
-Protobuf schemas are centrally managed in `../schemas/`. To update schemas:
-
-```bash
-cd ../schemas
-# Edit proto/user_event.proto
-make validate  # Validate syntax
-make sync      # Update k8s ConfigMap
-```
-
-The producer automatically uses the central schema via `build.rs` at compile time. See `../schemas/README.md` for details.
+The producer generates randomized HermesEdit messages with:
+- Random UUIDs for entity/property/relation IDs
+- Random space IDs (space-1 through space-5)
+- Random block numbers (1,000,000 - 9,999,999)
+- Random author addresses (32 bytes)
+- 1-4 random operations per edit
+- 80% probability of being canonical
+- Sequential naming (Random Edit #1, #2, etc.)
 
 ## Building
 
@@ -48,9 +46,9 @@ cargo run
 KAFKA_BROKER=kafka.example.com:9092 cargo run
 ```
 
-## Configuration
+The producer will run continuously, emitting a random HermesEdit message every 3 seconds. Press Ctrl+C to stop.
 
-Set the following environment variables:
+## Configuration
 
 - `KAFKA_BROKER` - Kafka broker address (default: `localhost:9092`)
 
@@ -65,30 +63,28 @@ The producer is configured with:
 
 ## Event Structure
 
-Events are serialized using Protocol Buffers. The schema is defined in `../schemas/proto/user_event.proto`:
+Events are serialized using Protocol Buffers. The HermesEdit schema is defined in `../hermes-schema/proto/knowledge.proto`:
 
 ```protobuf
-message UserEvent {
-  string event_id = 1;
-  int64 timestamp = 2;
-  string user_id = 3;
-  EventType event_type = 4;
-  UserEventData data = 5;
-}
-
-enum EventType {
-  UNKNOWN = 0;
-  USER_REGISTERED = 1;
-  USER_LOGIN = 2;
-  USER_LOGOUT = 3;
-}
-
-message UserEventData {
-  optional string email = 1;
-  optional string username = 2;
-  map<string, string> metadata = 3;
+message HermesEdit {
+  bytes id = 1;
+  string name = 2;
+  repeated grc20.Op ops = 3;
+  repeated bytes authors = 4;
+  optional bytes language = 5;
+  string space_id = 6;
+  bool is_canonical = 7;
+  uint64 created_at = 8;
+  bytes created_by = 9;
+  uint64 block_number = 10;
+  string cursor = 11;
 }
 ```
+
+Each message contains 1-4 random operations (Op) which can be:
+- **Entity updates** - Random entity with values
+- **Property creation** - Random property definitions
+- **Relation creation** - Random relations between entities
 
 ## Performance
 

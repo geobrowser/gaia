@@ -49,27 +49,19 @@ else
     ENVIRONMENT="unknown"
 fi
 
-# Deploy resources
+# Deploy resources using Kustomize
 print_info "Deploying Kafka infrastructure to ${ENVIRONMENT}..."
 
-# Step 1: Create namespace
-print_info "Creating namespace..."
-kubectl apply -f namespace.yaml
-
-# Wait for namespace to be ready
-sleep 2
-
-# Step 2: Deploy ConfigMap
-print_info "Deploying protobuf schemas..."
-kubectl apply -f protobuf-configmap.yaml
-
-# Step 3: Deploy Kafka broker
-print_info "Deploying Kafka broker..."
-kubectl apply -f kafka-broker.yaml
-
-# Step 4: Deploy kafka-ui
-print_info "Deploying kafka-ui..."
-kubectl apply -f kafka-ui.yaml
+if [[ $ENVIRONMENT == "local" ]]; then
+    print_info "Applying local overlay..."
+    kubectl apply -k overlays/local
+elif [[ $ENVIRONMENT == "digitalocean" ]]; then
+    print_info "Applying DigitalOcean overlay..."
+    kubectl apply -k overlays/digitalocean
+else
+    print_warning "Unknown environment, applying base configuration..."
+    kubectl apply -k base
+fi
 
 # Wait for pods to be ready
 print_info "Waiting for pods to be ready..."

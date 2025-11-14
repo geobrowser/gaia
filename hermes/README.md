@@ -1,14 +1,33 @@
 # Kubernetes Deployment for Kafka Producer
 
-This directory contains Kubernetes manifests to deploy the Kafka infrastructure. **The same manifests work for both local (minikube) and DigitalOcean** - only the kubectl context changes.
+This directory contains Kubernetes manifests to deploy the Kafka infrastructure. **Uses Kustomize overlays to support both local (minikube) and DigitalOcean** - only the kubectl context changes.
+
+## Structure
+
+```
+hermes/
+├── base/                    # Shared configuration
+│   ├── kustomization.yaml
+│   ├── namespace.yaml
+│   ├── kafka-broker.yaml
+│   ├── kafka-ui.yaml
+│   └── protobuf-configmap.yaml
+├── overlays/
+│   ├── local/               # Minikube-specific config
+│   │   └── kustomization.yaml
+│   └── digitalocean/        # DigitalOcean-specific config
+│       └── kustomization.yaml
+├── deploy.sh                # Auto-detects environment
+├── cleanup.sh
+└── connect.sh
+```
 
 ## Components
 
-- **namespace.yaml** - Creates the `kafka` namespace
-- **kafka-broker.yaml** - Kafka broker deployment and service
-- **kafka-ui.yaml** - kafka-ui deployment and service for viewing messages
-- **protobuf-configmap.yaml** - ConfigMap containing protobuf schemas
-- **deploy.sh** - Unified deployment script (auto-detects environment)
+- **base/** - Shared Kubernetes manifests (namespace, broker, ui, configmap)
+- **overlays/local/** - Local overrides (ClusterIP service)
+- **overlays/digitalocean/** - Production overrides (LoadBalancer, external listener, DO storage)
+- **deploy.sh** - Unified deployment script (auto-detects environment and applies correct overlay)
 - **cleanup.sh** - Cleanup script
 - **connect.sh** - Shows connection information for your environment
 
@@ -91,14 +110,17 @@ kubectl config use-context do-<region>-<cluster-name>
 
 ## Manual Deployment (Optional)
 
-If you prefer to deploy manually:
+If you prefer to deploy manually with Kustomize:
 
 ```bash
-kubectl apply -f namespace.yaml
-sleep 2
-kubectl apply -f protobuf-configmap.yaml
-kubectl apply -f kafka-broker.yaml
-kubectl apply -f kafka-ui.yaml
+# Local (minikube)
+kubectl apply -k overlays/local
+
+# DigitalOcean
+kubectl apply -k overlays/digitalocean
+
+# Or just the base (not recommended)
+kubectl apply -k base
 ```
 
 ## Useful Commands
@@ -133,11 +155,12 @@ kubectl delete namespace kafka
 
 | Feature | Local (minikube) | DigitalOcean |
 |---------|------------------|--------------|
-| **Deployment** | Same manifests | Same manifests |
+| **Deployment** | `overlays/local` | `overlays/digitalocean` |
+| **Service Type** | ClusterIP | LoadBalancer |
+| **Storage Class** | standard | do-block-storage |
+| **Kafka Listener** | Internal only | Internal + External (LoadBalancer IP) |
 | **Access** | Port-forward required | External LoadBalancer IPs |
 | **Cost** | Free | ~$72/month (2 nodes + 2 LBs) |
-| **DNS** | localhost | External IPs |
-| **Persistence** | emptyDir (ephemeral) | Can use DO Block Storage |
 
 ## Production Considerations
 
