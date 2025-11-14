@@ -1,15 +1,13 @@
-# ArgoCD Setup for Hermes
+# ArgoCD Setup for Hermes Visualization
 
-This directory contains ArgoCD configuration for automated GitOps deployment of Hermes to production.
+ArgoCD is used for **visualization and monitoring** of the Hermes deployment. GitHub Actions handles the actual automated deployment.
 
-## What is ArgoCD?
+## Why This Approach?
 
-ArgoCD is a GitOps continuous delivery tool for Kubernetes. It automatically syncs your k8s cluster with your Git repository, providing:
-- Automatic deployment when you merge to `main`
-- Visual UI showing deployment status
-- Automatic drift detection and self-healing
-- Easy rollbacks
-- Deployment history
+- **GitHub Actions** handles deployment (builds images, applies k8s manifests)
+- **ArgoCD** provides a beautiful UI to visualize and monitor your services
+- **No Git writes** - ArgoCD doesn't auto-sync, avoiding branch protection issues
+- **Simple flow** - Merge PR → GitHub Actions deploys → View in ArgoCD UI
 
 ## Initial Setup
 
@@ -61,85 +59,143 @@ kubectl apply -f hermes/argocd/hermes-application.yaml
 This creates an ArgoCD Application that:
 - Watches the `main` branch of your repository
 - Monitors `hermes/overlays/digitalocean/`
-- Automatically syncs changes to the cluster
-- Self-heals if someone manually changes resources in the cluster
+- **Does NOT auto-sync** - used for visualization only
+- Shows the status of all your Hermes resources
 
 ## How It Works
 
-### Automated Deployment Flow
+### Deployment Flow
 
-1. You make changes to files in `hermes/`
-2. You merge a PR to `main`
-3. ArgoCD detects the change (within ~3 minutes)
-4. ArgoCD automatically applies the changes to the cluster
-5. You can watch the deployment in the ArgoCD UI
+1. You merge a PR to `main`
+2. **GitHub Actions** automatically:
+   - Builds Docker image with `:latest` tag
+   - Pushes to DigitalOcean registry
+   - Applies k8s manifests using `kubectl apply`
+   - Restarts the hermes-producer Job
+3. **ArgoCD UI** shows the updated deployment status
 
-### What Gets Deployed
+### What ArgoCD Shows
 
-ArgoCD will deploy all resources in `hermes/overlays/digitalocean/`:
-- Kafka broker (StatefulSet)
-- Kafka UI
-- Hermes Producer (Job)
-- ConfigMaps (protobuf schemas)
+In the UI, you'll see:
+- **Kafka broker** (StatefulSet) - running status, pod health
+- **Kafka UI** - deployment status, service endpoint
+- **Hermes Producer** (Job) - completion status, pod logs
+- **ConfigMaps** - protobuf schema versions
+- **All resource relationships** - visual graph of how everything connects
 
-## Using ArgoCD
+## Using ArgoCD for Visualization
 
-### View Deployment Status
+### View Application Status
 
+**In the UI:**
+1. Open ArgoCD (https://localhost:8080 or your LoadBalancer IP)
+2. Click on the "hermes" application
+3. See a visual graph of all resources
+4. Click on any resource to view details, logs, events
+
+**Via CLI:**
 ```bash
-# CLI
 kubectl get applications -n argocd
-
-# Or use the ArgoCD UI (much better!)
-```
-
-### Manually Trigger Sync
-
-```bash
-kubectl patch application hermes -n argocd --type merge -p '{"metadata": {"annotations": {"argocd.argoproj.io/refresh": "normal"}}}'
-```
-
-Or click "Sync" in the UI.
-
-### View Application Details
-
-```bash
-# Get app status
-kubectl get application hermes -n argocd -o yaml
-
-# View sync status
 kubectl describe application hermes -n argocd
 ```
 
-### Rollback to Previous Version
+### View Logs
 
 In the ArgoCD UI:
-1. Go to the Hermes application
-2. Click "History and Rollback"
-3. Select the version you want to rollback to
-4. Click "Rollback"
+1. Click on the "hermes" application
+2. Click on a pod
+3. Click the "Logs" tab
 
-## Docker Image Updates
+### Check Sync Status
 
-For the hermes-producer Docker image, you still need to:
+The UI will show if the cluster state matches Git:
+- **Synced** - Cluster matches Git ✅
+- **OutOfSync** - Someone manually changed something in the cluster ⚠️
 
-1. Build and push the image to the registry
-2. Update the image tag in `hermes/base/hermes-producer.yaml` if you want to use specific versions
+Since GitHub Actions deploys directly, you might see "OutOfSync" status. This is normal! It means GitHub Actions deployed something that ArgoCD hasn't refreshed yet.
 
-Or keep using `:latest` tag and ArgoCD will restart the Job when the manifest changes.
+### Manually Sync (Optional)
 
-### Recommended Workflow with Image Tags
+If you want to deploy directly from ArgoCD:
+1. Click "Sync" in the UI
+2. Click "Synchronize"
 
-Update the GitHub Actions workflow to:
-1. Build image with tag `v1.2.3` (or commit SHA)
-2. Push to registry
-3. Update `hermes/base/hermes-producer.yaml` with the new tag
-4. Commit and push the tag update
-5. ArgoCD automatically deploys the new version
+This applies the manifests from Git to the cluster.
+
+## GitHub Actions Deployment
+
+The workflow at `.github/workflows/hermes-deploy.yml` automatically deploys when you merge to main.
+
+### Required GitHub Secrets
+
+- `DIGITALOCEAN_ACCESS_TOKEN` - Your DigitalOcean API token
+- `DIGITALOCEAN_CLUSTER_NAME` - Your k8s cluster name
+
+### What Gets Deployed
+
+When changes are detected in:
+- `hermes-producer/**` - Rebuilds and redeploys producer
+- `hermes-schema/**` - Rebuilds producer with new schemas
+- `wire/**` - Rebuilds producer with dependency changes
+- `hermes/**` - Applies k8s manifest changes (kafka-broker, kafka-ui, etc.)
+
+### View Deployment Logs
+
+Check GitHub Actions:
+1. Go to your repo → Actions tab
+2. Click on the latest "Deploy Hermes Producer" workflow
+3. View logs for each step
+
+## Troubleshooting
+
+### ArgoCD shows "OutOfSync"
+
+This is normal! GitHub Actions deploys directly, so ArgoCD's view might be slightly behind. Click "Refresh" in the UI to update.
+
+### Want to deploy manually from ArgoCD?
+
+Click "Sync" in the UI. But normally GitHub Actions handles this automatically.
+
+### ArgoCD not showing resources
+
+1. Check the Application is created:
+   ```bash
+   kubectl get application hermes -n argocd
+   ```
+
+2. Check for errors:
+   ```bash
+   kubectl describe application hermes -n argocd
+   ```
+
+3. View ArgoCD logs:
+   ```bash
+   kubectl logs -n argocd deployment/argocd-application-controller
+   ```
+
+## Alternative Visualization Tools
+
+### Lens (Recommended for Development)
+- Download: https://k8slens.dev
+- Desktop app with amazing UX
+- No cluster installation needed
+- Multi-cluster support
+
+### k9s (Terminal UI)
+```bash
+brew install k9s
+k9s
+```
+
+### Kubernetes Dashboard
+```bash
+kubectl apply -f https://raw.githubusercontent.com/kubernetes/dashboard/v2.7.0/aio/deploy/recommended.yaml
+kubectl proxy
+```
 
 ## ArgoCD CLI (Optional)
 
-Install the ArgoCD CLI for more control:
+Install for command-line access:
 
 ```bash
 # macOS
@@ -151,54 +207,26 @@ argocd login localhost:8080
 # View apps
 argocd app list
 
-# Sync app
-argocd app sync hermes
+# Get app details
+argocd app get hermes
 
 # View logs
 argocd app logs hermes
 ```
 
-## Troubleshooting
+## Configuration Files
 
-### Application not syncing
+- `hermes-application.yaml` - ArgoCD Application manifest
+- `install.yaml` - ArgoCD installation reference
 
-Check the application status:
-```bash
-kubectl get application hermes -n argocd -o jsonpath='{.status.sync.status}'
-```
+## Summary
 
-View sync errors:
-```bash
-kubectl describe application hermes -n argocd
-```
+**Deployment:** GitHub Actions (automated on merge to main)
+**Visualization:** ArgoCD UI (shows status, logs, resource graph)
+**No Git writes:** Everything stays simple and predictable
 
-### Force refresh
-
-```bash
-argocd app get hermes --refresh
-```
-
-### View ArgoCD logs
-
-```bash
-kubectl logs -n argocd deployment/argocd-application-controller
-```
-
-## Security Notes
-
-1. **Private Repositories**: If your repo is private, you need to configure ArgoCD with access:
-   ```bash
-   argocd repo add https://github.com/geobrowser/gaia.git --username <username> --password <token>
-   ```
-
-2. **RBAC**: ArgoCD has built-in RBAC. Configure users/permissions as needed.
-
-3. **Secrets**: Don't store secrets in Git. Use sealed-secrets or external-secrets with ArgoCD.
-
-## Next Steps
-
-1. ✅ Install ArgoCD in your cluster
-2. ✅ Deploy the Hermes Application
-3. Update the GitHub Actions workflow to build Docker images only (remove k8s apply)
-4. Consider using image tags instead of `:latest` for better version tracking
-5. Set up notifications (Slack, etc.) for deployment status
+This gives you the best of both worlds:
+- ✅ Beautiful visualization
+- ✅ Simple deployment flow
+- ✅ No branch protection issues
+- ✅ Full control

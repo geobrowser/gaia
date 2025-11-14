@@ -17,11 +17,9 @@ spec:
     server: https://kubernetes.default.svc
     namespace: kafka
 
+  # Manual sync only - ArgoCD is used for visualization
+  # GitHub Actions handles automated deployment
   syncPolicy:
-    automated:
-      prune: true # Remove resources that are no longer in Git
-      selfHeal: true # Automatically sync when cluster state drifts from Git
-      allowEmpty: false
     syncOptions:
       - CreateNamespace=true # Create the kafka namespace if it doesn't exist
       - PrunePropagationPolicy=foreground

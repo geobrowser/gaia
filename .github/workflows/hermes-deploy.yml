@@ -1,4 +1,4 @@
-name: Build and Push Hermes Producer
+name: Deploy Hermes Producer
 
 on:
   push:
@@ -8,6 +8,7 @@ on:
       - 'hermes-producer/**'
       - 'hermes-schema/**'
       - 'wire/**'
+      - 'hermes/**'
       - '.github/workflows/hermes-deploy.yml'
 
 env:
@@ -15,7 +16,7 @@ env:
   IMAGE_NAME: hermes-producer
 
 jobs:
-  build-and-push:
+  deploy:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -37,21 +38,33 @@ jobs:
           docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
           docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
 
-      - name: Update image tag in k8s manifest
-        run: |
-          sed -i "s|image: registry.digitalocean.com/geo/hermes-producer:.*|image: registry.digitalocean.com/geo/hermes-producer:${{ github.sha }}|" hermes/base/hermes-producer.yaml
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v4
 
-      - name: Commit and push updated manifest
+      - name: Configure kubectl for DigitalOcean
         run: |
-          git config --global user.name 'github-actions[bot]'
-          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
-          git add hermes/base/hermes-producer.yaml
-          if git diff --staged --quiet; then
-            echo "No changes to commit"
-          else
-            git commit -m "chore: update hermes-producer image to ${{ github.sha }}"
-            git push
-          fi
+          doctl kubernetes cluster kubeconfig save ${{ secrets.DIGITALOCEAN_CLUSTER_NAME }}
 
-  # Note: ArgoCD will automatically detect the manifest change and deploy
-  # No need to manually apply k8s resources - ArgoCD handles that!
+      - name: Apply k8s manifests
+        run: |
+          kubectl apply -k hermes/overlays/digitalocean
+
+      - name: Restart hermes-producer job
+        run: |
+          kubectl delete job hermes-producer -n kafka --ignore-not-found=true
+          kubectl apply -k hermes/overlays/digitalocean
+
+      - name: Wait for job to start
+        run: |
+          kubectl wait --for=condition=ready pod -l app=hermes-producer -n kafka --timeout=60s || true
+
+      - name: Show deployment status
+        run: |
+          echo "=== Hermes Producer Job ==="
+          kubectl get job hermes-producer -n kafka || echo "Job not found"
+          echo ""
+          echo "=== Hermes Producer Pods ==="
+          kubectl get pods -n kafka -l app=hermes-producer
+          echo ""
+          echo "=== Recent Events ==="
+          kubectl get events -n kafka --sort-by='.lastTimestamp' | tail -10
