@@ -1,11 +1,10 @@
-name: Deploy Hermes to Production
+name: Build and Push Hermes Producer
 
 on:
   push:
     branches:
       - main
     paths:
-      - 'hermes/**'
       - 'hermes-producer/**'
       - 'hermes-schema/**'
       - 'wire/**'
@@ -16,7 +15,7 @@ env:
   IMAGE_NAME: hermes-producer
 
 jobs:
-  build-and-deploy:
+  build-and-push:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
@@ -38,23 +37,21 @@ jobs:
           docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
           docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
 
-      - name: Set up kubectl
-        uses: azure/setup-kubectl@v4
-
-      - name: Configure kubectl for DigitalOcean
+      - name: Update image tag in k8s manifest
         run: |
-          doctl kubernetes cluster kubeconfig save ${{ secrets.DIGITALOCEAN_CLUSTER_NAME }}
+          sed -i "s|image: registry.digitalocean.com/geo/hermes-producer:.*|image: registry.digitalocean.com/geo/hermes-producer:${{ github.sha }}|" hermes/base/hermes-producer.yaml
 
-      - name: Deploy to Kubernetes
+      - name: Commit and push updated manifest
         run: |
-          kubectl kustomize hermes/overlays/digitalocean | kubectl apply -f -
+          git config --global user.name 'github-actions[bot]'
+          git config --global user.email 'github-actions[bot]@users.noreply.github.com'
+          git add hermes/base/hermes-producer.yaml
+          if git diff --staged --quiet; then
+            echo "No changes to commit"
+          else
+            git commit -m "chore: update hermes-producer image to ${{ github.sha }}"
+            git push
+          fi
 
-      - name: Restart hermes-producer job
-        run: |
-          kubectl delete job hermes-producer -n kafka --ignore-not-found=true
-          kubectl kustomize hermes/overlays/digitalocean | kubectl apply -f -
-
-      - name: Verify deployment
-        run: |
-          kubectl get pods -n kafka -l app=hermes-producer
-          kubectl get statefulset kafka-broker -n kafka
+  # Note: ArgoCD will automatically detect the manifest change and deploy
+  # No need to manually apply k8s resources - ArgoCD handles that!
