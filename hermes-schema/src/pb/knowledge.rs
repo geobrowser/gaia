@@ -30,6 +30,7 @@ pub struct HermesEdit {
     /// Unix timestamp in seconds
     #[prost(uint64, tag = "8")]
     pub created_at: u64,
+    /// address
     #[prost(bytes = "vec", tag = "9")]
     pub created_by: ::prost::alloc::vec::Vec<u8>,
     #[prost(uint64, tag = "10")]

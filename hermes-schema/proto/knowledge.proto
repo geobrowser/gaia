@@ -25,7 +25,7 @@ message HermesEdit {
   bool is_canonical = 7;
   // Blockchain Metadata
   uint64 created_at = 8;  // Unix timestamp in seconds
-  bytes created_by = 9;
+  bytes created_by = 9;   // address
   uint64 block_number = 10;
   string cursor = 11;
 }

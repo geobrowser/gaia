@@ -24,4 +24,9 @@ message HermesCreateSpace {
         PersonalSpacePayload personal_space = 3;
         DefaultDaoSpacePayload default_dao_space = 4;
     }
+    // Blockchain Metadata
+    uint64 created_at = 5;  // Unix timestamp in seconds
+    bytes created_by = 6;   // address
+    uint64 block_number = 7;
+    string cursor = 8;
 }

@@ -21,6 +21,18 @@ pub struct HermesCreateSpace {
     /// uuid
     #[prost(bytes = "vec", tag = "2")]
     pub topic_id: ::prost::alloc::vec::Vec<u8>,
+    /// Blockchain Metadata
+    ///
+    /// Unix timestamp in seconds
+    #[prost(uint64, tag = "5")]
+    pub created_at: u64,
+    /// address
+    #[prost(bytes = "vec", tag = "6")]
+    pub created_by: ::prost::alloc::vec::Vec<u8>,
+    #[prost(uint64, tag = "7")]
+    pub block_number: u64,
+    #[prost(string, tag = "8")]
+    pub cursor: ::prost::alloc::string::String,
     #[prost(oneof = "hermes_create_space::Payload", tags = "3, 4")]
     pub payload: ::core::option::Option<hermes_create_space::Payload>,
 }

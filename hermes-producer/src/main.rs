@@ -45,6 +45,10 @@ fn create_sample_space() -> HermesCreateSpace {
                 }
             ))
         },
+        created_at: Utc::now().timestamp().try_into().expect("timestamp should be positive"),
+        created_by: random_address(),
+        block_number: rng.gen_range(1000000..9999999),
+        cursor: format!("cursor_{}", Uuid::new_v4()),
     }
 }
 
