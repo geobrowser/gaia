@@ -39,8 +39,12 @@ spec:
               value: "local"
             - name: KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS
               value: "kafka-broker-0.broker.kafka.svc.cluster.local:29092"
-            - name: KAFKA_CLUSTERS_0_SCHEMAREGISTRY_PROTOBUFFILESDIR
-              value: "/proto"
+            - name: KAFKA_CLUSTERS_0_PROTOBUF_FILES_0_PATH
+              value: "/proto/knowledge.proto"
+            - name: KAFKA_CLUSTERS_0_PROTOBUF_FILES_1_PATH
+              value: "/proto/space.proto"
+            - name: KAFKA_CLUSTERS_0_PROTOBUF_FILES_2_PATH
+              value: "/proto/grc20.proto"
           volumeMounts:
             - name: protobuf-schemas
               mountPath: /proto
