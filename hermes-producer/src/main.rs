@@ -9,6 +9,7 @@ use std::thread;
 use uuid::Uuid;
 use rand::Rng;
 
+use hermes_schema::pb::blockchain_metadata::BlockchainMetadata;
 use hermes_schema::pb::knowledge::HermesEdit;
 use hermes_schema::pb::space::{HermesCreateSpace, PersonalSpacePayload, DefaultDaoSpacePayload};
 use wire::pb::grc20::{Op, Entity, Value, Property, DataType, Relation};
@@ -25,7 +26,7 @@ fn random_address() -> Vec<u8> {
 fn create_sample_space() -> HermesCreateSpace {
     let mut rng = rand::thread_rng();
     let is_personal = rng.gen_bool(0.5);
-    
+
     HermesCreateSpace {
         space_id: random_uuid_bytes(),
         topic_id: random_uuid_bytes(),
@@ -45,10 +46,12 @@ fn create_sample_space() -> HermesCreateSpace {
                 }
             ))
         },
-        created_at: Utc::now().timestamp().try_into().expect("timestamp should be positive"),
-        created_by: random_address(),
-        block_number: rng.gen_range(1000000..9999999),
-        cursor: format!("cursor_{}", Uuid::new_v4()),
+        meta: Some(BlockchainMetadata {
+            created_at: Utc::now().timestamp().try_into().expect("timestamp should be positive"),
+            created_by: random_address(),
+            block_number: rng.gen_range(1000000..9999999),
+            cursor: format!("cursor_{}", Uuid::new_v4()),
+        }),
     }
 }
 
@@ -98,7 +101,7 @@ fn create_sample_edit(space_id: String, name: String) -> HermesEdit {
     let mut rng = rand::thread_rng();
     let op_count = rng.gen_range(1..5);
     let mut ops = Vec::new();
-    
+
     for _ in 0..op_count {
         let op_type = rng.gen_range(0..3);
         ops.push(match op_type {
@@ -107,7 +110,7 @@ fn create_sample_edit(space_id: String, name: String) -> HermesEdit {
             _ => create_random_relation_op(),
         });
     }
-    
+
     HermesEdit {
         id: random_uuid_bytes(),
         name,
@@ -116,10 +119,12 @@ fn create_sample_edit(space_id: String, name: String) -> HermesEdit {
         language: Some(random_uuid_bytes()),
         space_id,
         is_canonical: rng.gen_bool(0.8),
-        created_at: Utc::now().timestamp().try_into().expect("timestamp should be positive"),
-        created_by: random_address(),
-        block_number: rng.gen_range(1000000..9999999),
-        cursor: format!("cursor_{}", Uuid::new_v4()),
+        meta: Some(BlockchainMetadata {
+            created_at: Utc::now().timestamp().try_into().expect("timestamp should be positive"),
+            created_by: random_address(),
+            block_number: rng.gen_range(1000000..9999999),
+            cursor: format!("cursor_{}", Uuid::new_v4()),
+        }),
     }
 }
 

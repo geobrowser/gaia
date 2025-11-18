@@ -3,6 +3,7 @@ syntax = "proto3";
 package knowledge;
 
 import "grc20.proto";
+import "blockchain_metadata.proto";
 
 /**
  * November 13, 2025
@@ -23,9 +24,6 @@ message HermesEdit {
   // Space Topology metadata
   string space_id = 6;
   bool is_canonical = 7;
-  // Blockchain Metadata
-  uint64 created_at = 8;  // Unix timestamp in seconds
-  bytes created_by = 9;   // address
-  uint64 block_number = 10;
-  string cursor = 11;
+
+  blockchain_metadata.BlockchainMetadata meta = 8;
 }

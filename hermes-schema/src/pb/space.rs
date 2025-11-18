@@ -21,18 +21,8 @@ pub struct HermesCreateSpace {
     /// uuid
     #[prost(bytes = "vec", tag = "2")]
     pub topic_id: ::prost::alloc::vec::Vec<u8>,
-    /// Blockchain Metadata
-    ///
-    /// Unix timestamp in seconds
-    #[prost(uint64, tag = "5")]
-    pub created_at: u64,
-    /// address
-    #[prost(bytes = "vec", tag = "6")]
-    pub created_by: ::prost::alloc::vec::Vec<u8>,
-    #[prost(uint64, tag = "7")]
-    pub block_number: u64,
-    #[prost(string, tag = "8")]
-    pub cursor: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "5")]
+    pub meta: ::core::option::Option<super::blockchain_metadata::BlockchainMetadata>,
     #[prost(oneof = "hermes_create_space::Payload", tags = "3, 4")]
     pub payload: ::core::option::Option<hermes_create_space::Payload>,
 }
@@ -42,33 +32,60 @@ pub mod hermes_create_space {
     pub enum Payload {
         #[prost(message, tag = "3")]
         PersonalSpace(super::PersonalSpacePayload),
+        /// We could have a generic space payload using a mapping
+        /// between string->bytes, where the key is the field and
+        /// the bytes are the value. This makes sense as a generic
+        /// interface for new spaces, but at that point the producer
+        /// already knows the interface for the space, and we should
+        /// just encode it in the schema anyway.
+        ///
+        /// The only time this approach may make sense is if we allow
+        /// 3rd-party producer to publish data to our stream, which we
+        /// obviously don't want. Or we could consume some sort of registry
+        /// or module-based system that knows how to map from the onchain
+        /// event into our hermes payload.
+        /// UnknownSpacePayload unknown_space = 5;
         #[prost(message, tag = "4")]
         DefaultDaoSpace(super::DefaultDaoSpacePayload),
     }
 }
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
-#[repr(i32)]
-pub enum SpaceType {
-    Default = 0,
-    Personal = 1,
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct VerifiedExtension {
+    /// uuid of the space receiving verified trust
+    #[prost(bytes = "vec", tag = "1")]
+    pub target_space_id: ::prost::alloc::vec::Vec<u8>,
 }
-impl SpaceType {
-    /// String value of the enum field names used in the ProtoBuf definition.
-    ///
-    /// The values are not transformed in any way and thus are considered stable
-    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
-    pub fn as_str_name(&self) -> &'static str {
-        match self {
-            Self::Default => "DEFAULT",
-            Self::Personal => "PERSONAL",
-        }
-    }
-    /// Creates an enum from field names used in the ProtoBuf definition.
-    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
-        match value {
-            "DEFAULT" => Some(Self::Default),
-            "PERSONAL" => Some(Self::Personal),
-            _ => None,
-        }
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RelatedExtension {
+    /// uuid of the space receiving related trust
+    #[prost(bytes = "vec", tag = "1")]
+    pub target_space_id: ::prost::alloc::vec::Vec<u8>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SubtopicExtension {
+    /// uuid of the topic receiving trust
+    #[prost(bytes = "vec", tag = "1")]
+    pub target_topic_id: ::prost::alloc::vec::Vec<u8>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct HermesSpaceTrustExtension {
+    /// uuid of the space extending trust
+    #[prost(bytes = "vec", tag = "1")]
+    pub source_space_id: ::prost::alloc::vec::Vec<u8>,
+    #[prost(message, optional, tag = "5")]
+    pub meta: ::core::option::Option<super::blockchain_metadata::BlockchainMetadata>,
+    #[prost(oneof = "hermes_space_trust_extension::Extension", tags = "2, 3, 4")]
+    pub extension: ::core::option::Option<hermes_space_trust_extension::Extension>,
+}
+/// Nested message and enum types in `HermesSpaceTrustExtension`.
+pub mod hermes_space_trust_extension {
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum Extension {
+        #[prost(message, tag = "2")]
+        Verified(super::VerifiedExtension),
+        #[prost(message, tag = "3")]
+        Related(super::RelatedExtension),
+        #[prost(message, tag = "4")]
+        Subtopic(super::SubtopicExtension),
     }
 }

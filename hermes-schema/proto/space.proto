@@ -2,6 +2,8 @@ syntax = "proto3";
 
 package space;
 
+import "blockchain_metadata.proto";
+
 message PersonalSpacePayload {
     bytes owner = 1;
 }
@@ -41,11 +43,32 @@ message HermesCreateSpace {
         // event into our hermes payload.
         // UnknownSpacePayload unknown_space = 5;
     }
-    // Blockchain Metadata
-    uint64 created_at = 5;  // Unix timestamp in seconds
-    bytes created_by = 6;   // address
-    uint64 block_number = 7;
-    string cursor = 8;
+
+    blockchain_metadata.BlockchainMetadata meta = 5;
+}
+
+message VerifiedExtension {
+    bytes target_space_id = 1; // uuid of the space receiving verified trust
+}
+
+message RelatedExtension {
+    bytes target_space_id = 1; // uuid of the space receiving related trust
+}
+
+message SubtopicExtension {
+    bytes target_topic_id = 1; // uuid of the topic receiving trust
+}
+
+message HermesSpaceTrustExtension {
+    bytes source_space_id = 1; // uuid of the space extending trust
+
+    oneof extension {
+        VerifiedExtension verified = 2;
+        RelatedExtension related = 3;
+        SubtopicExtension subtopic = 4;
+    }
+
+    blockchain_metadata.BlockchainMetadata meta = 5;
 }
 
 // web of trust changes

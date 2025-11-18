@@ -25,16 +25,6 @@ pub struct HermesEdit {
     pub space_id: ::prost::alloc::string::String,
     #[prost(bool, tag = "7")]
     pub is_canonical: bool,
-    /// Blockchain Metadata
-    ///
-    /// Unix timestamp in seconds
-    #[prost(uint64, tag = "8")]
-    pub created_at: u64,
-    /// address
-    #[prost(bytes = "vec", tag = "9")]
-    pub created_by: ::prost::alloc::vec::Vec<u8>,
-    #[prost(uint64, tag = "10")]
-    pub block_number: u64,
-    #[prost(string, tag = "11")]
-    pub cursor: ::prost::alloc::string::String,
+    #[prost(message, optional, tag = "8")]
+    pub meta: ::core::option::Option<super::blockchain_metadata::BlockchainMetadata>,
 }
