@@ -13,9 +13,14 @@ patches:
         path: /spec/type
         value: ClusterIP
   - target:
-      kind: StatefulSet
-      name: kafka-broker
+      kind: Job
+      name: hermes-producer
     patch: |-
       - op: replace
-        path: /spec/template/spec/containers/0/env/3/value
-        value: "PLAINTEXT://kafka-broker-0.broker.kafka.svc.cluster.local:29092,PLAINTEXT_HOST://localhost:9092"
+        path: /spec/template/spec/containers/0/image
+        value: hermes-producer:local
+      - op: replace
+        path: /spec/template/spec/containers/0/imagePullPolicy
+        value: Never
+      - op: remove
+        path: /spec/template/spec/imagePullSecrets

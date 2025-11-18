@@ -75,7 +75,23 @@ This shows you how to connect based on your current environment:
 
 ### 4. Run the Producer
 
-**Local:**
+**Local (Kubernetes Job):**
+
+The producer runs as a Kubernetes Job in the local environment. After making code changes:
+
+```bash
+# 1. Build the Docker image
+docker build -t hermes-producer:local -f hermes-producer/Dockerfile .
+
+# 2. Load it into minikube
+minikube image load hermes-producer:local
+
+# 3. Restart the job
+kubectl delete job hermes-producer -n kafka
+kubectl apply -k overlays/local
+```
+
+**Local (Standalone for development):**
 ```bash
 # In one terminal, start port-forwards
 ./port-forward-local.sh
@@ -87,12 +103,9 @@ KAFKA_BROKER=localhost:9092 cargo run
 
 **DigitalOcean:**
 ```bash
-# Get the external IP
-./connect.sh
-
-# Run the producer with the external IP
-cd producer
-KAFKA_BROKER=<EXTERNAL-IP>:9092 cargo run
+# The producer job runs automatically in the cluster
+# Check logs with:
+kubectl logs -n kafka -l app=hermes-producer --tail=50 -f
 ```
 
 ## Switching Between Environments
@@ -161,6 +174,8 @@ kubectl delete namespace kafka
 | **Storage Class** | standard | do-block-storage |
 | **Kafka Listener** | Internal only | Internal + External (LoadBalancer IP) |
 | **Access** | Port-forward required | External LoadBalancer IPs |
+| **Producer Image** | Local build (`hermes-producer:local`) | DigitalOcean Registry |
+| **Image Pull Policy** | Never (local images only) | Always (pull from registry) |
 | **Cost** | Free | ~$72/month (2 nodes + 2 LBs) |
 
 ## Production Considerations
