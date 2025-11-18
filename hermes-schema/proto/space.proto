@@ -2,11 +2,6 @@ syntax = "proto3";
 
 package space;
 
-enum SpaceType {
-    DEFAULT = 0;
-    PERSONAL = 1;
-}
-
 message PersonalSpacePayload {
     bytes owner = 1;
 }
@@ -16,6 +11,15 @@ message DefaultDaoSpacePayload {
     repeated bytes initial_members = 2; // uuids
 }
 
+// UnknownSpacePayload provides a flexible fallback for new or experimental
+// space types without requiring schema changes. Consumers can look up known
+// keys in the map and decode the bytes according to their expected format.
+// Once a space type is stable and well-understood, it should be promoted to
+// a specific payload type for better efficiency and type safety.
+// message UnknownSpacePayload {
+    // map<string, bytes> data = 1;
+// }
+
 message HermesCreateSpace {
     bytes space_id = 1; // uuid
     bytes topic_id = 2; // uuid
@@ -23,6 +27,19 @@ message HermesCreateSpace {
     oneof payload {
         PersonalSpacePayload personal_space = 3;
         DefaultDaoSpacePayload default_dao_space = 4;
+        // We could have a generic space payload using a mapping
+        // between string->bytes, where the key is the field and
+        // the bytes are the value. This makes sense as a generic
+        // interface for new spaces, but at that point the producer
+        // already knows the interface for the space, and we should
+        // just encode it in the schema anyway.
+        //
+        // The only time this approach may make sense is if we allow
+        // 3rd-party producer to publish data to our stream, which we
+        // obviously don't want. Or we could consume some sort of registry
+        // or module-based system that knows how to map from the onchain
+        // event into our hermes payload.
+        // UnknownSpacePayload unknown_space = 5;
     }
     // Blockchain Metadata
     uint64 created_at = 5;  // Unix timestamp in seconds
@@ -30,3 +47,5 @@ message HermesCreateSpace {
     uint64 block_number = 7;
     string cursor = 8;
 }
+
+// web of trust changes
