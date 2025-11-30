@@ -11,7 +11,10 @@ use rand::Rng;
 
 use hermes_schema::pb::blockchain_metadata::BlockchainMetadata;
 use hermes_schema::pb::knowledge::HermesEdit;
-use hermes_schema::pb::space::{HermesCreateSpace, PersonalSpacePayload, DefaultDaoSpacePayload};
+use hermes_schema::pb::space::{
+    HermesCreateSpace, PersonalSpacePayload, DefaultDaoSpacePayload,
+    HermesSpaceTrustExtension, VerifiedExtension, RelatedExtension, SubtopicExtension
+};
 use wire::pb::grc20::{Op, Entity, Value, Property, DataType, Relation};
 
 fn random_uuid_bytes() -> Vec<u8> {
@@ -46,6 +49,63 @@ fn create_sample_space() -> HermesCreateSpace {
                 }
             ))
         },
+        meta: Some(BlockchainMetadata {
+            created_at: Utc::now().timestamp().try_into().expect("timestamp should be positive"),
+            created_by: random_address(),
+            block_number: rng.gen_range(1000000..9999999),
+            cursor: format!("cursor_{}", Uuid::new_v4()),
+        }),
+    }
+}
+
+fn create_verified_trust_extension(
+    source_space_id: Vec<u8>,
+    target_space_id: Vec<u8>,
+) -> HermesSpaceTrustExtension {
+    let mut rng = rand::thread_rng();
+    HermesSpaceTrustExtension {
+        source_space_id,
+        extension: Some(hermes_schema::pb::space::hermes_space_trust_extension::Extension::Verified(
+            VerifiedExtension { target_space_id }
+        )),
+        meta: Some(BlockchainMetadata {
+            created_at: Utc::now().timestamp().try_into().expect("timestamp should be positive"),
+            created_by: random_address(),
+            block_number: rng.gen_range(1000000..9999999),
+            cursor: format!("cursor_{}", Uuid::new_v4()),
+        }),
+    }
+}
+
+fn create_related_trust_extension(
+    source_space_id: Vec<u8>,
+    target_space_id: Vec<u8>,
+) -> HermesSpaceTrustExtension {
+    let mut rng = rand::thread_rng();
+    HermesSpaceTrustExtension {
+        source_space_id,
+        extension: Some(hermes_schema::pb::space::hermes_space_trust_extension::Extension::Related(
+            RelatedExtension { target_space_id }
+        )),
+        meta: Some(BlockchainMetadata {
+            created_at: Utc::now().timestamp().try_into().expect("timestamp should be positive"),
+            created_by: random_address(),
+            block_number: rng.gen_range(1000000..9999999),
+            cursor: format!("cursor_{}", Uuid::new_v4()),
+        }),
+    }
+}
+
+fn create_subtopic_trust_extension(
+    source_space_id: Vec<u8>,
+    target_topic_id: Vec<u8>,
+) -> HermesSpaceTrustExtension {
+    let mut rng = rand::thread_rng();
+    HermesSpaceTrustExtension {
+        source_space_id,
+        extension: Some(hermes_schema::pb::space::hermes_space_trust_extension::Extension::Subtopic(
+            SubtopicExtension { target_topic_id }
+        )),
         meta: Some(BlockchainMetadata {
             created_at: Utc::now().timestamp().try_into().expect("timestamp should be positive"),
             created_by: random_address(),
@@ -196,6 +256,44 @@ fn send_space(
     }
 }
 
+fn send_trust_extension(
+    producer: &BaseProducer,
+    topic: &str,
+    trust_extension: &HermesSpaceTrustExtension,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let mut payload = Vec::new();
+    trust_extension.encode(&mut payload)?;
+
+    let extension_type = match &trust_extension.extension {
+        Some(hermes_schema::pb::space::hermes_space_trust_extension::Extension::Verified(_)) => "VERIFIED",
+        Some(hermes_schema::pb::space::hermes_space_trust_extension::Extension::Related(_)) => "RELATED",
+        Some(hermes_schema::pb::space::hermes_space_trust_extension::Extension::Subtopic(_)) => "SUBTOPIC",
+        None => "UNKNOWN",
+    };
+
+    let record = BaseRecord::to(topic)
+        .key(&trust_extension.source_space_id)
+        .payload(&payload)
+        .headers(OwnedHeaders::new().insert(Header {
+            key: "extension-type",
+            value: Some(extension_type),
+        }));
+
+    match producer.send(record) {
+        Ok(_) => {
+            producer.flush(Duration::from_secs(5))?;
+            println!(
+                "Trust extension sent successfully: {} type",
+                extension_type
+            );
+            Ok(())
+        }
+        Err((e, _)) => {
+            Err(Box::new(e))
+        }
+    }
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let broker = env::var("KAFKA_BROKER").unwrap_or_else(|_| "localhost:9092".to_string());
 
@@ -210,38 +308,118 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .create()?;
 
     println!("Mock producer connected to {}", broker);
-    
+
     println!("\n=== Deterministic Flow: Creating 5 spaces with 10 edits each ===");
-    
+
+    // Store created spaces to build trust relationships between them
+    let mut created_spaces: Vec<HermesCreateSpace> = Vec::new();
+
     for space_num in 1..=5 {
         println!("\nCreating space #{}", space_num);
         let space = create_sample_space();
         let space_id_hex = hex::encode(&space.space_id);
-        
+
         if let Err(e) = send_space(&producer, "space.creations", &space) {
             eprintln!("Failed to send space: {}", e);
             continue;
         }
-        
+
+        created_spaces.push(space.clone());
+
         thread::sleep(Duration::from_millis(500));
-        
+
         for edit_num in 1..=10 {
             let edit = create_sample_edit(
                 space_id_hex.clone(),
                 format!("Space {} Edit #{}", space_num, edit_num),
             );
-            
+
             if let Err(e) = send_edit(&producer, "knowledge.edits", &edit) {
                 eprintln!("Failed to send edit: {}", e);
             }
-            
+
             thread::sleep(Duration::from_millis(200));
         }
     }
-    
-    println!("\n=== Deterministic flow complete: 5 spaces, 50 edits total ===");
+
+    println!("\n=== Creating trust extensions between spaces ===");
+
+    // Create various trust relationships between the created spaces
+    if created_spaces.len() >= 2 {
+        // Space 0 -> Space 1: Verified trust
+        let verified_ext = create_verified_trust_extension(
+            created_spaces[0].space_id.clone(),
+            created_spaces[1].space_id.clone(),
+        );
+        if let Err(e) = send_trust_extension(&producer, "space.trust.extensions", &verified_ext) {
+            eprintln!("Failed to send verified trust extension: {}", e);
+        }
+        thread::sleep(Duration::from_millis(300));
+
+        // Space 1 -> Space 2: Related trust
+        if created_spaces.len() >= 3 {
+            let related_ext = create_related_trust_extension(
+                created_spaces[1].space_id.clone(),
+                created_spaces[2].space_id.clone(),
+            );
+            if let Err(e) = send_trust_extension(&producer, "space.trust.extensions", &related_ext) {
+                eprintln!("Failed to send related trust extension: {}", e);
+            }
+            thread::sleep(Duration::from_millis(300));
+        }
+
+        // Space 2 -> Space 3: Verified trust
+        if created_spaces.len() >= 4 {
+            let verified_ext = create_verified_trust_extension(
+                created_spaces[2].space_id.clone(),
+                created_spaces[3].space_id.clone(),
+            );
+            if let Err(e) = send_trust_extension(&producer, "space.trust.extensions", &verified_ext) {
+                eprintln!("Failed to send verified trust extension: {}", e);
+            }
+            thread::sleep(Duration::from_millis(300));
+        }
+
+        // Space 0 -> Topic of Space 3: Subtopic trust
+        if created_spaces.len() >= 4 {
+            let subtopic_ext = create_subtopic_trust_extension(
+                created_spaces[0].space_id.clone(),
+                created_spaces[3].topic_id.clone(),
+            );
+            if let Err(e) = send_trust_extension(&producer, "space.trust.extensions", &subtopic_ext) {
+                eprintln!("Failed to send subtopic trust extension: {}", e);
+            }
+            thread::sleep(Duration::from_millis(300));
+        }
+
+        // Space 3 -> Space 4: Related trust
+        if created_spaces.len() >= 5 {
+            let related_ext = create_related_trust_extension(
+                created_spaces[3].space_id.clone(),
+                created_spaces[4].space_id.clone(),
+            );
+            if let Err(e) = send_trust_extension(&producer, "space.trust.extensions", &related_ext) {
+                eprintln!("Failed to send related trust extension: {}", e);
+            }
+            thread::sleep(Duration::from_millis(300));
+        }
+
+        // Space 4 -> Space 0: Verified trust (completing a trust cycle)
+        if created_spaces.len() >= 5 {
+            let verified_ext = create_verified_trust_extension(
+                created_spaces[4].space_id.clone(),
+                created_spaces[0].space_id.clone(),
+            );
+            if let Err(e) = send_trust_extension(&producer, "space.trust.extensions", &verified_ext) {
+                eprintln!("Failed to send verified trust extension: {}", e);
+            }
+            thread::sleep(Duration::from_millis(300));
+        }
+    }
+
+    println!("\n=== Deterministic flow complete: 5 spaces, 50 edits, 6 trust extensions ===");
     println!("Producer finished. Exiting.\n");
-    
+
     Ok(())
     
     // Random flow disabled for now
