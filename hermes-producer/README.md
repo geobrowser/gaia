@@ -11,11 +11,29 @@ A mock Kafka producer for testing the Hermes event stream service. Emits randomi
 - **Randomized Content** - Random entities, properties, and relations for testing
 - **Environment-based** configuration
 
+## Local Development
+
+Start Kafka locally using docker-compose:
+
+```bash
+cd hermes
+docker-compose up
+```
+
+Then run the producer:
+
+```bash
+cd hermes-producer
+KAFKA_BROKER=localhost:9092 cargo run
+```
+
+Access Kafka UI at http://localhost:8080 to view messages.
+
 ## Prerequisites
 
 - Rust (latest stable version)
 - Protocol Buffers compiler (`protoc`)
-- Kafka broker running (default: localhost:9092)
+- Docker (for local Kafka)
 
 ## Mock Data Generation
 
