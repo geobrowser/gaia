@@ -47,12 +47,12 @@ jobs:
 
       - name: Apply k8s manifests
         run: |
-          kubectl apply -k hermes/overlays/digitalocean
+          kubectl apply -k hermes/k8s
 
       - name: Restart hermes-producer job
         run: |
           kubectl delete job hermes-producer -n kafka --ignore-not-found=true
-          kubectl apply -k hermes/overlays/digitalocean
+          kubectl apply -k hermes/k8s
 
       - name: Wait for job to start
         run: |
