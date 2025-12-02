@@ -77,6 +77,13 @@ spec:
               value: "/var/lib/kafka/data"
             - name: CLUSTER_ID
               value: "MkU3OEVBNTcwNTJENDM2Qk"
+            # Disable log deletion and compaction - keep all messages indefinitely
+            - name: KAFKA_LOG_RETENTION_MS
+              value: "-1"
+            - name: KAFKA_LOG_RETENTION_BYTES
+              value: "-1"
+            - name: KAFKA_LOG_CLEANUP_POLICY
+              value: "delete"
           resources:
             requests:
               memory: "2Gi"
