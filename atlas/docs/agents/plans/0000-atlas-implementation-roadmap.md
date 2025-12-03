@@ -58,6 +58,11 @@ Atlas follows the existing indexer pattern in the codebase (see `actions-indexer
 | 1.5 | Define/reuse substream for space topology events | 1.4 |
 | 1.6 | Wire consumer to `GraphState` updates | 1.3, 1.5 |
 
+**Benchmarks**:
+- `GraphState` event application latency (single event)
+- `GraphState` batch event application (100, 1K, 10K events)
+- Memory usage per node/edge in `GraphState`
+
 **Deliverable**: Atlas consumes blockchain events via substreams and builds in-memory graph state.
 
 ### Phase 2: Transitive Graph Processor
@@ -75,6 +80,14 @@ See [0002: Transitive Graph Implementation Plan](./0002-transitive-graph-impleme
 | 2.5 | Implement reverse dependency index for invalidation | 2.4 |
 | 2.6 | Wire cache invalidation to `GraphState` events | 1.6, 2.5 |
 
+**Benchmarks**:
+- Single transitive graph computation (100, 1K, 10K nodes)
+- Full vs explicit-only transitive comparison
+- Topic edge resolution latency (sparse vs dense topics)
+- Cache hit/miss latency comparison
+- Invalidation cascade size and latency
+- Memory usage per cached transitive graph
+
 **Deliverable**: `TransitiveProcessor` computes and caches per-space transitive graphs.
 
 ### Phase 3: Canonical Graph Processor
@@ -91,6 +104,14 @@ See [0001: Canonical Graph Implementation Plan](./0001-canonical-graph-implement
 | 3.4 | Implement tree hashing for change detection | 3.3 |
 | 3.5 | Wire canonical computation to run after transitive invalidation | 2.6, 3.4 |
 
+**Benchmarks**:
+- Phase 1 latency (canonical set from transitive cache)
+- Phase 2 latency (topic edge resolution and subtree filtering)
+- Full canonical computation (100, 1K, 10K canonical nodes)
+- Subtree filtering latency (by subtree size)
+- Tree hashing latency (by tree size)
+- Change detection overhead (hash comparison)
+
 **Deliverable**: `CanonicalProcessor` computes canonical graph and detects changes.
 
 ### Phase 4: Event Emission
@@ -103,6 +124,12 @@ See [0001: Canonical Graph Implementation Plan](./0001-canonical-graph-implement
 | 4.2 | Set up Kafka producer in Atlas | 1.1 |
 | 4.3 | Serialize `CanonicalGraph` to protobuf | 3.1, 4.1 |
 | 4.4 | Emit to Kafka on canonical graph change | 3.5, 4.2, 4.3 |
+
+**Benchmarks**:
+- Protobuf serialization latency (by tree size)
+- Serialized message size (by tree size)
+- Kafka producer latency (message send time)
+- End-to-end latency: event received → message emitted
 
 **Deliverable**: Downstream consumers receive canonical graph updates via Kafka.
 
@@ -119,11 +146,17 @@ See [0001: Canonical Graph Implementation Plan](./0001-canonical-graph-implement
 | 5.5 | Implement startup recovery from PostgreSQL snapshot | 5.4 |
 | 5.6 | Implement cursor tracking for substream resumption | 1.4, 5.4 |
 
+**Benchmarks**:
+- Canonical graph persistence latency (by tree size)
+- Topology state snapshot persistence latency
+- Startup recovery time from snapshot (by state size)
+- Cursor persistence overhead per block
+
 **Deliverable**: Atlas survives restarts without reprocessing all events.
 
-### Phase 6: Testing and Benchmarking
+### Phase 6: Testing and Integration
 
-**Goal**: Validate correctness and performance.
+**Goal**: Validate correctness and end-to-end behavior.
 
 | Step | Description | Dependency |
 |------|-------------|------------|
@@ -131,11 +164,45 @@ See [0001: Canonical Graph Implementation Plan](./0001-canonical-graph-implement
 | 6.2 | Unit tests for transitive graph computation | 2.2, 2.3 |
 | 6.3 | Unit tests for canonical graph computation | 3.3 |
 | 6.4 | Integration tests (substreams + Kafka) | 4.4 |
-| 6.5 | Benchmarks for transitive computation | 2.4 |
-| 6.6 | Benchmarks for canonical computation | 3.5 |
-| 6.7 | End-to-end latency benchmarks | 4.4, 5.3 |
+| 6.5 | End-to-end latency profiling | 4.4, 5.3 |
 
-**Deliverable**: Confidence in correctness and performance characteristics.
+**Deliverable**: Confidence in correctness and end-to-end behavior.
+
+## Benchmarking Strategy
+
+Benchmarks are integrated into each phase rather than deferred to the end. This enables:
+- Early detection of performance bottlenecks
+- Informed optimization decisions
+- Granular understanding of where time is spent
+
+### Benchmark Infrastructure
+
+```
+atlas/
+├── benches/
+│   ├── graph_state.rs      # Phase 1 benchmarks
+│   ├── transitive.rs       # Phase 2 benchmarks
+│   ├── canonical.rs        # Phase 3 benchmarks
+│   ├── emission.rs         # Phase 4 benchmarks
+│   ├── persistence.rs      # Phase 5 benchmarks
+│   └── helpers.rs          # Synthetic graph generation
+```
+
+### Benchmark Summary by Phase
+
+| Phase | Key Metrics |
+|-------|-------------|
+| 1. Foundation | Event application latency, memory per node/edge |
+| 2. Transitive | BFS latency, cache hit/miss, invalidation cascade |
+| 3. Canonical | Phase 1/2 latency, subtree filtering, hashing overhead |
+| 4. Emission | Serialization latency, message size, Kafka send time |
+| 5. Persistence | Write latency, snapshot size, recovery time |
+
+### Continuous Benchmarking
+
+- Run benchmarks after each phase completion
+- Compare against previous runs to detect regressions
+- Profile hotspots using `perf` or `flamegraph` when bottlenecks appear
 
 ## Dependency Graph
 
