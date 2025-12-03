@@ -4,6 +4,8 @@
 
 This document outlines the plan to implement push-based canonical graph computation for Atlas, integrated with the Hermes event streaming infrastructure.
 
+**Prerequisite**: This plan depends on [0002: Transitive Graph Implementation](./0002-transitive-graph-implementation-plan.md), which provides the foundational `TransitiveProcessor` and `TransitiveCache` used for efficient canonical graph computation.
+
 ## Background
 
 ### Current State
@@ -182,28 +184,47 @@ Persist to PostgreSQL + Emit to Kafka
 
 ### 3. Canonical Graph Algorithm
 
-Two-phase BFS as specified in `graph-concepts.md`:
+The canonical graph algorithm leverages pre-computed transitive graphs from `TransitiveProcessor` (see [0002](./0002-transitive-graph-implementation-plan.md)).
 
-**Phase 1 - Explicit Edges Only:**
-1. Initialize visited set, tree nodes map, queue, deferred topic edges
-2. Start from root node
-3. BFS traversal processing only explicit edges
-4. Collect topic edges for phase 2
-5. Result: visited set contains all canonical nodes
+**Phase 1 - Establish Canonical Set:**
+1. Get root's explicit-only transitive graph from `TransitiveCache`
+2. The canonical set is the flat set from this transitive graph
+3. The initial tree structure comes from this transitive graph
+
+```rust
+let root_transitive = transitive_cache.get_explicit_only(root, state);
+let canonical_set = root_transitive.flat.clone();
+let mut tree = root_transitive.tree.clone();
+```
 
 **Phase 2 - Topic Edge Addition:**
-1. For each deferred topic edge (source → topic_id):
+1. Collect all topic edges from canonical nodes
+2. For each topic edge (source → topic_id):
    - Resolve topic to spaces that announced it
-   - Filter to spaces in canonical set (visited)
+   - Filter to spaces in canonical set
    - For each canonical member:
-     - Add edge from source to member
-     - Recursively add member's transitive subtree (only canonical descendants)
-2. Result: complete tree with topic edges included
+     - Get member's pre-computed full transitive graph from `TransitiveCache`
+     - Filter subtree to only canonical descendants
+     - Attach filtered subtree to source node
+3. Result: complete tree with topic edges included
+
+```rust
+for (source, topic_id) in topic_edges_from_canonical {
+    for member in resolve_topic(topic_id) {
+        if canonical_set.contains(&member) {
+            let member_transitive = transitive_cache.get_full(member, state);
+            let filtered = filter_to_canonical(&member_transitive.tree, &canonical_set);
+            attach_subtree(&mut tree, source, filtered, topic_id);
+        }
+    }
+}
+```
 
 **Implementation Details:**
+- Phase 1 is O(1) lookup instead of O(edges) BFS
+- Phase 2 clones and filters pre-computed subtrees instead of re-traversing
 - Deterministic child ordering (sort by SpaceId) for consistent hashing
 - Tree serialization and hashing for change detection
-- BFS "first visit wins" handles cycles naturally
 
 ### 4. PostgreSQL Schema
 
@@ -263,87 +284,6 @@ gaia/
 ```
 
 ## Future Optimizations
-
-### Pre-Computed Transitive Graphs
-
-Since adding a node to the canonical graph pulls in its entire transitive subtree, we can leverage pre-computed transitive graphs from the `TransitiveProcessor` to avoid re-traversal during canonical computation.
-
-**Current approach (no caching):**
-- Phase 1: BFS from root following explicit edges
-- Phase 2: For each topic edge member, recursively traverse to build subtree
-
-**Optimized approach (transitive graph reuse):**
-- `TransitiveProcessor` maintains per-space transitive graphs
-- `CanonicalProcessor` reads from this cache during computation
-
-```rust
-struct TransitiveCache {
-    // Per-space transitive graphs (explicit + topic edges)
-    transitive_graphs: HashMap<SpaceId, TransitiveGraph>,
-
-    // Per-space explicit-only transitive graphs (for Phase 1)
-    explicit_only_graphs: HashMap<SpaceId, TransitiveGraph>,
-}
-
-struct TransitiveGraph {
-    tree: TreeNode,
-    flat: HashSet<SpaceId>,
-}
-```
-
-**Canonical computation with cache:**
-
-```rust
-fn compute_canonical(&self, cache: &TransitiveCache) -> CanonicalGraph {
-    // Phase 1: Use root's explicit-only transitive graph
-    let root_explicit = cache.explicit_only_graphs.get(&self.root);
-    let canonical_set: HashSet<SpaceId> = root_explicit.flat.clone();
-
-    // Phase 2: For each topic edge, look up pre-computed transitive graphs
-    for (source, topic_id) in self.topic_edges_from_canonical(&canonical_set) {
-        for member in self.resolve_topic(topic_id) {
-            if canonical_set.contains(&member) {
-                // Clone pre-computed subtree instead of re-traversing
-                let subtree = cache.transitive_graphs.get(&member).tree.clone();
-                self.attach_subtree(source, member, subtree, &canonical_set);
-            }
-        }
-    }
-}
-```
-
-**Benefits:**
-- Phase 1 becomes O(1) lookup instead of O(explicit_edges) BFS
-- Phase 2 subtree attachment becomes O(clone) instead of O(subtree_size) traversal
-- Transitive graphs are computed once and reused across canonical computations
-
-**Trade-offs:**
-- Memory overhead for storing all transitive graphs
-- Need to invalidate/update transitive graphs when edges change
-- Adds dependency between processors
-
-**Invalidation strategy:**
-- When an edge is added/removed from space S, invalidate:
-  - S's transitive graph
-  - Transitive graphs of all spaces that have S in their transitive set (reverse dependency)
-- Use reverse index: `space_id → set of spaces whose transitive graph includes this space`
-
-### Subtree Reuse in Phase 2 (Without Transitive Cache)
-
-If transitive caching is not yet implemented, a simpler optimization is to cache subtrees within a single canonical computation. The Phase 2 algorithm re-traverses subtrees when adding canonical members via topic edges. Since these subtrees were already computed in Phase 1, we can cache and reuse them:
-
-```rust
-// During Phase 1, store each node's computed subtree
-node_trees: HashMap<SpaceId, TreeNode>
-
-// Phase 2: reuse instead of re-traversing
-if canonical_set.contains(&member) {
-    let subtree = node_trees.get(&member).clone();
-    source_node.add_child(subtree);
-}
-```
-
-This reduces Phase 2 from O(topic_edges × subtree_size) to O(topic_edges × clone_cost).
 
 ### Incremental Canonical Graph Updates
 
@@ -608,9 +548,9 @@ Initial implementation should meet these targets (to be validated/adjusted after
 1. Define protobuf messages in `hermes-schema/proto/topology.proto`
 2. Set up `atlas` crate with basic structure
 3. Implement `GraphState` and event processing
-4. Implement processor trait and `CanonicalProcessor` (two-phase BFS)
-5. Add tree hashing and change detection
-6. Add PostgreSQL persistence
-7. Add Kafka consumer/producer integration
-8. Testing and integration
-9. (Future) Implement `TransitiveProcessor` for per-space graphs
+4. **Implement `TransitiveProcessor` first** (see [0002](./0002-transitive-graph-implementation-plan.md))
+5. Implement `CanonicalProcessor` using `TransitiveCache`
+6. Add tree hashing and change detection
+7. Add PostgreSQL persistence
+8. Add Kafka consumer/producer integration
+9. Testing and integration
