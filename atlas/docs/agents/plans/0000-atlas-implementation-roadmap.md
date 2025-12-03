@@ -2,7 +2,7 @@
 
 ## Overview
 
-Atlas is the topology processor for the Gaia system. It consumes space topology events from Kafka, maintains graph state, computes transitive and canonical graphs, and emits graph updates back to Kafka.
+Atlas is the topology processor for the Gaia system. It consumes space topology events from blockchain substreams (via gRPC), maintains graph state, computes transitive and canonical graphs, and emits graph updates to Kafka (Hermes).
 
 This document provides a high-level implementation roadmap, connecting the individual component plans.
 
@@ -13,35 +13,52 @@ This document provides a high-level implementation roadmap, connecting the indiv
 │                              Atlas                                       │
 │                                                                          │
 │  ┌──────────────┐    ┌─────────────┐    ┌─────────────────────────────┐ │
-│  │    Kafka     │    │             │    │        Processors           │ │
+│  │  Substreams  │    │             │    │        Processors           │ │
 │  │   Consumer   │───▶│ GraphState  │───▶│  ┌───────────┐ ┌─────────┐  │ │
-│  │              │    │             │    │  │Transitive │▶│Canonical│  │ │
+│  │   (gRPC)     │    │             │    │  │Transitive │▶│Canonical│  │ │
 │  └──────────────┘    └─────────────┘    │  └───────────┘ └─────────┘  │ │
 │                             │           └─────────────────────────────┘ │
 │                             ▼                         │                  │
 │                      ┌─────────────┐                  ▼                  │
 │                      │ PostgreSQL  │           ┌──────────────┐          │
 │                      │ Persistence │           │    Kafka     │          │
-│                      └─────────────┘           │   Producer   │          │
-│                                                └──────────────┘          │
+│                      └─────────────┘           │   (Hermes)   │          │
 └─────────────────────────────────────────────────────────────────────────┘
 ```
+
+## Event Flow
+
+```
+Blockchain ──▶ Substreams RPC ──▶ Atlas (gRPC client) ──▶ Kafka (Hermes)
+                                        │
+                                        ├──▶ GraphState
+                                        ├──▶ TransitiveProcessor
+                                        ├──▶ CanonicalProcessor
+                                        └──▶ PostgreSQL
+```
+
+Atlas follows the existing indexer pattern in the codebase (see `actions-indexer-pipeline`):
+- Connects to Substreams RPC endpoint via gRPC
+- Streams `BlockScopedData` containing space topology events
+- Persists cursor after processing each block for resumability
+- Handles `BlockUndoSignal` for blockchain reorganizations
 
 ## Implementation Phases
 
 ### Phase 1: Foundation
 
-**Goal**: Set up the crate structure, core types, and Kafka consumer.
+**Goal**: Set up the crate structure, core types, and substreams consumer.
 
 | Step | Description | Dependency |
 |------|-------------|------------|
 | 1.1 | Create `atlas` crate with workspace integration | - |
 | 1.2 | Define core types (`SpaceId`, `TopicId`, `EdgeType`, `TreeNode`) | 1.1 |
 | 1.3 | Implement `GraphState` struct and event application | 1.2 |
-| 1.4 | Set up Kafka consumer for `HermesCreateSpace` and `HermesSpaceTrustExtension` | 1.1 |
-| 1.5 | Wire consumer to `GraphState` updates | 1.3, 1.4 |
+| 1.4 | Set up substreams consumer (gRPC client using `stream` crate) | 1.1 |
+| 1.5 | Define/reuse substream for space topology events | 1.4 |
+| 1.6 | Wire consumer to `GraphState` updates | 1.3, 1.5 |
 
-**Deliverable**: Atlas consumes events and builds in-memory graph state.
+**Deliverable**: Atlas consumes blockchain events via substreams and builds in-memory graph state.
 
 ### Phase 2: Transitive Graph Processor
 
@@ -56,7 +73,7 @@ See [0002: Transitive Graph Implementation Plan](./0002-transitive-graph-impleme
 | 2.3 | Implement BFS algorithm for explicit-only transitive graph | 2.1 |
 | 2.4 | Implement `TransitiveCache` with lazy computation | 2.2, 2.3 |
 | 2.5 | Implement reverse dependency index for invalidation | 2.4 |
-| 2.6 | Wire cache invalidation to `GraphState` events | 1.5, 2.5 |
+| 2.6 | Wire cache invalidation to `GraphState` events | 1.6, 2.5 |
 
 **Deliverable**: `TransitiveProcessor` computes and caches per-space transitive graphs.
 
@@ -98,9 +115,9 @@ See [0001: Canonical Graph Implementation Plan](./0001-canonical-graph-implement
 | 5.1 | Define PostgreSQL schema for `canonical_graph` table | - |
 | 5.2 | Define PostgreSQL schema for `topology_state` table | - |
 | 5.3 | Implement canonical graph persistence on change | 3.5, 5.1 |
-| 5.4 | Implement topology state snapshot persistence | 1.5, 5.2 |
+| 5.4 | Implement topology state snapshot persistence | 1.6, 5.2 |
 | 5.5 | Implement startup recovery from PostgreSQL snapshot | 5.4 |
-| 5.6 | Implement Kafka offset tracking for resumption | 1.4, 5.4 |
+| 5.6 | Implement cursor tracking for substream resumption | 1.4, 5.4 |
 
 **Deliverable**: Atlas survives restarts without reprocessing all events.
 
@@ -113,7 +130,7 @@ See [0001: Canonical Graph Implementation Plan](./0001-canonical-graph-implement
 | 6.1 | Unit tests for `GraphState` event application | 1.3 |
 | 6.2 | Unit tests for transitive graph computation | 2.2, 2.3 |
 | 6.3 | Unit tests for canonical graph computation | 3.3 |
-| 6.4 | Integration tests with Kafka | 4.4 |
+| 6.4 | Integration tests (substreams + Kafka) | 4.4 |
 | 6.5 | Benchmarks for transitive computation | 2.4 |
 | 6.6 | Benchmarks for canonical computation | 3.5 |
 | 6.7 | End-to-end latency benchmarks | 4.4, 5.3 |
@@ -126,7 +143,7 @@ See [0001: Canonical Graph Implementation Plan](./0001-canonical-graph-implement
 Phase 1: Foundation
     1.1 ─┬─▶ 1.2 ───▶ 1.3 ───┐
          │                    │
-         └─▶ 1.4 ────────────┴──▶ 1.5
+         └─▶ 1.4 ──▶ 1.5 ────┴──▶ 1.6
                                    │
 Phase 2: Transitive                ▼
     1.2 ──▶ 2.1 ─┬─▶ 2.2 ─┬─▶ 2.4 ──▶ 2.5 ──▶ 2.6
@@ -164,7 +181,7 @@ For fastest path to a working system:
 2. **2.1 → 2.2 → 2.3 → 2.4**: Transitive computation (no caching yet)
 3. **3.1 → 3.2 → 3.3 → 3.4**: Canonical computation
 4. **4.1 → 4.2 → 4.3 → 4.4**: Kafka emission
-5. **1.4 → 1.5 → 2.5 → 2.6 → 3.5**: Wire up event consumption and invalidation
+5. **1.4 → 1.5 → 1.6 → 2.5 → 2.6 → 3.5**: Wire up substreams consumption and invalidation
 6. **5.1 → 5.2 → 5.3 → 5.4 → 5.5 → 5.6**: Add persistence
 7. **6.x**: Testing and benchmarking throughout
 
@@ -172,11 +189,11 @@ For fastest path to a working system:
 
 | Milestone | Criteria |
 |-----------|----------|
-| Phase 1 complete | Events consumed, graph state updated in memory |
+| Phase 1 complete | Substreams events consumed, graph state updated in memory |
 | Phase 2 complete | Transitive graphs computed correctly for any space |
 | Phase 3 complete | Canonical graph computed correctly with change detection |
 | Phase 4 complete | `CanonicalGraphUpdated` messages emitted to Kafka |
-| Phase 5 complete | Atlas restarts from snapshot, resumes from Kafka offset |
+| Phase 5 complete | Atlas restarts from snapshot, resumes from cursor |
 | Phase 6 complete | Tests pass, benchmarks meet targets |
 
 ## Related Documents
