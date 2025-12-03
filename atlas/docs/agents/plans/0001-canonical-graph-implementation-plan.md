@@ -345,6 +345,194 @@ struct IncrementalState {
 
 Start with full recomputation + subtree reuse. Add incremental updates later if profiling shows recomputation is a bottleneck. The canonical set is likely small relative to event frequency, making full recomputation acceptable initially.
 
+## Benchmarking
+
+### Goals
+
+Establish baseline performance metrics and identify bottlenecks before optimizing. Benchmarks should answer:
+
+1. How long does full canonical graph computation take at various graph sizes?
+2. What is the overhead of hash-based change detection?
+3. How does topic edge resolution scale with topic membership size?
+4. What is the end-to-end latency from event receipt to emission?
+
+### Benchmark Scenarios
+
+#### 1. Graph Computation Benchmarks
+
+Test canonical graph computation with synthetic graphs of varying characteristics:
+
+| Scenario | Nodes | Explicit Edges | Topic Edges | Topics | Members/Topic |
+|----------|-------|----------------|-------------|--------|---------------|
+| Small | 100 | 200 | 20 | 10 | 5 |
+| Medium | 1,000 | 5,000 | 200 | 50 | 20 |
+| Large | 10,000 | 50,000 | 2,000 | 200 | 50 |
+| Wide Topics | 1,000 | 2,000 | 100 | 10 | 100 |
+| Deep Tree | 1,000 | 999 | 100 | 50 | 20 |
+
+**Metrics to capture:**
+- Phase 1 duration (explicit edge BFS)
+- Phase 2 duration (topic edge resolution)
+- Total computation time
+- Memory allocation
+- Tree node count in output
+
+#### 2. Change Detection Benchmarks
+
+Measure overhead of hash-based change detection:
+
+| Scenario | Description |
+|----------|-------------|
+| No change | Event processed but graph unchanged |
+| Small change | Single node added to canonical set |
+| Large change | Subtree of 100+ nodes added |
+
+**Metrics to capture:**
+- Serialization time
+- Hash computation time
+- Comparison time
+- Percentage overhead vs. computation
+
+#### 3. Topic Resolution Benchmarks
+
+Isolate topic edge resolution performance:
+
+| Scenario | Canonical Set Size | Topic Members | Canonical Members in Topic |
+|----------|-------------------|---------------|---------------------------|
+| Sparse | 1,000 | 100 | 10 |
+| Dense | 1,000 | 100 | 90 |
+| Large Topic | 1,000 | 1,000 | 500 |
+
+**Metrics to capture:**
+- Lookup time (`topic_spaces[topic_id]`)
+- Filter time (canonical set intersection)
+- Subtree attachment time
+
+#### 4. End-to-End Latency Benchmarks
+
+Measure full processing pipeline:
+
+```
+Event received → GraphState updated → Canonical computed → Hash compared → Persisted → Emitted
+```
+
+**Metrics to capture:**
+- Total latency (p50, p95, p99)
+- Breakdown by stage
+- Throughput (events/second)
+
+### Benchmark Implementation
+
+```rust
+// atlas/benches/canonical.rs
+
+use criterion::{criterion_group, criterion_main, Criterion, BenchmarkId};
+
+fn bench_canonical_computation(c: &mut Criterion) {
+    let mut group = c.benchmark_group("canonical_computation");
+
+    for (name, nodes, edges, topic_edges) in [
+        ("small", 100, 200, 20),
+        ("medium", 1_000, 5_000, 200),
+        ("large", 10_000, 50_000, 2_000),
+    ] {
+        let state = generate_graph_state(nodes, edges, topic_edges);
+
+        group.bench_with_input(
+            BenchmarkId::new("full_computation", name),
+            &state,
+            |b, state| {
+                b.iter(|| {
+                    let processor = CanonicalProcessor::new(root_id);
+                    processor.compute(state)
+                });
+            },
+        );
+    }
+
+    group.finish();
+}
+
+fn bench_change_detection(c: &mut Criterion) {
+    let mut group = c.benchmark_group("change_detection");
+
+    let state = generate_graph_state(1_000, 5_000, 200);
+    let tree = compute_canonical_tree(&state);
+
+    group.bench_function("serialize", |b| {
+        b.iter(|| serialize_tree(&tree));
+    });
+
+    group.bench_function("hash", |b| {
+        let serialized = serialize_tree(&tree);
+        b.iter(|| hash_tree(&serialized));
+    });
+
+    group.finish();
+}
+
+fn bench_topic_resolution(c: &mut Criterion) {
+    let mut group = c.benchmark_group("topic_resolution");
+
+    for (name, canonical_size, topic_members, overlap) in [
+        ("sparse", 1_000, 100, 10),
+        ("dense", 1_000, 100, 90),
+        ("large_topic", 1_000, 1_000, 500),
+    ] {
+        let (state, canonical_set, topic_id) =
+            generate_topic_scenario(canonical_size, topic_members, overlap);
+
+        group.bench_with_input(
+            BenchmarkId::new("resolve_topic", name),
+            &(state, canonical_set, topic_id),
+            |b, (state, canonical_set, topic_id)| {
+                b.iter(|| {
+                    resolve_topic_members(state, canonical_set, *topic_id)
+                });
+            },
+        );
+    }
+
+    group.finish();
+}
+
+criterion_group!(
+    benches,
+    bench_canonical_computation,
+    bench_change_detection,
+    bench_topic_resolution,
+);
+criterion_main!(benches);
+```
+
+### File Structure Addition
+
+```
+atlas/
+├── benches/
+│   ├── canonical.rs          # Canonical graph computation benchmarks
+│   ├── change_detection.rs   # Hash and serialization benchmarks
+│   └── helpers.rs            # Synthetic graph generation utilities
+```
+
+### Success Criteria
+
+Initial implementation should meet these targets (to be validated/adjusted after first benchmarks):
+
+| Metric | Target |
+|--------|--------|
+| Full computation (1K nodes) | < 10ms |
+| Full computation (10K nodes) | < 100ms |
+| Change detection overhead | < 5% of computation time |
+| End-to-end latency (p95) | < 50ms |
+| Throughput | > 100 events/second |
+
+### Benchmark Schedule
+
+1. **Before optimization**: Run full benchmark suite to establish baseline
+2. **After each optimization**: Re-run to measure improvement
+3. **Before release**: Full regression suite to ensure no performance degradation
+
 ## Open Questions
 
 1. **Root Configuration**: How is the root space ID provided? Environment variable? Database config?
