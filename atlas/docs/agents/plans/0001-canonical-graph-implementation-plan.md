@@ -264,9 +264,73 @@ gaia/
 
 ## Future Optimizations
 
-### Subtree Reuse in Phase 2
+### Pre-Computed Transitive Graphs
 
-The current Phase 2 algorithm re-traverses subtrees when adding canonical members via topic edges. Since these subtrees were already computed in Phase 1, we can cache and reuse them:
+Since adding a node to the canonical graph pulls in its entire transitive subtree, we can leverage pre-computed transitive graphs from the `TransitiveProcessor` to avoid re-traversal during canonical computation.
+
+**Current approach (no caching):**
+- Phase 1: BFS from root following explicit edges
+- Phase 2: For each topic edge member, recursively traverse to build subtree
+
+**Optimized approach (transitive graph reuse):**
+- `TransitiveProcessor` maintains per-space transitive graphs
+- `CanonicalProcessor` reads from this cache during computation
+
+```rust
+struct TransitiveCache {
+    // Per-space transitive graphs (explicit + topic edges)
+    transitive_graphs: HashMap<SpaceId, TransitiveGraph>,
+
+    // Per-space explicit-only transitive graphs (for Phase 1)
+    explicit_only_graphs: HashMap<SpaceId, TransitiveGraph>,
+}
+
+struct TransitiveGraph {
+    tree: TreeNode,
+    flat: HashSet<SpaceId>,
+}
+```
+
+**Canonical computation with cache:**
+
+```rust
+fn compute_canonical(&self, cache: &TransitiveCache) -> CanonicalGraph {
+    // Phase 1: Use root's explicit-only transitive graph
+    let root_explicit = cache.explicit_only_graphs.get(&self.root);
+    let canonical_set: HashSet<SpaceId> = root_explicit.flat.clone();
+
+    // Phase 2: For each topic edge, look up pre-computed transitive graphs
+    for (source, topic_id) in self.topic_edges_from_canonical(&canonical_set) {
+        for member in self.resolve_topic(topic_id) {
+            if canonical_set.contains(&member) {
+                // Clone pre-computed subtree instead of re-traversing
+                let subtree = cache.transitive_graphs.get(&member).tree.clone();
+                self.attach_subtree(source, member, subtree, &canonical_set);
+            }
+        }
+    }
+}
+```
+
+**Benefits:**
+- Phase 1 becomes O(1) lookup instead of O(explicit_edges) BFS
+- Phase 2 subtree attachment becomes O(clone) instead of O(subtree_size) traversal
+- Transitive graphs are computed once and reused across canonical computations
+
+**Trade-offs:**
+- Memory overhead for storing all transitive graphs
+- Need to invalidate/update transitive graphs when edges change
+- Adds dependency between processors
+
+**Invalidation strategy:**
+- When an edge is added/removed from space S, invalidate:
+  - S's transitive graph
+  - Transitive graphs of all spaces that have S in their transitive set (reverse dependency)
+- Use reverse index: `space_id → set of spaces whose transitive graph includes this space`
+
+### Subtree Reuse in Phase 2 (Without Transitive Cache)
+
+If transitive caching is not yet implemented, a simpler optimization is to cache subtrees within a single canonical computation. The Phase 2 algorithm re-traverses subtrees when adding canonical members via topic edges. Since these subtrees were already computed in Phase 1, we can cache and reuse them:
 
 ```rust
 // During Phase 1, store each node's computed subtree
