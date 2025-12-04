@@ -1,0 +1,46 @@
+name: Atlas Unit Tests
+
+on:
+  push:
+    branches: [ main, develop ]
+    paths:
+      - 'atlas/**'
+  pull_request:
+    branches: [ main, develop ]
+    paths:
+      - 'atlas/**'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  unit-tests:
+    name: Run Unit Tests
+    runs-on: ubuntu-latest
+
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+
+    - name: Cache cargo registry
+      uses: actions/cache@v3
+      with:
+        path: |
+          ~/.cargo/registry
+          ~/.cargo/git
+          target
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-
+
+    - name: Run unit tests
+      run: cargo test --lib --bins -- --test-threads=1
+      working-directory: ./atlas
+      env:
+        RUST_BACKTRACE: 1
+
+    - name: Run doc tests
+      run: cargo test --doc -- --test-threads=1
+      working-directory: ./atlas
+      env:
+        RUST_BACKTRACE: 1
