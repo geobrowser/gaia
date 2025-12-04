@@ -28,6 +28,10 @@ pub struct GraphState {
 
     /// Topic edges: source -> [topic_ids]
     pub topic_edges: HashMap<SpaceId, HashSet<TopicId>>,
+
+    /// Reverse topic edges: topic -> spaces that have edges TO this topic
+    /// Used for O(1) lookup of which spaces are affected when a topic changes
+    pub topic_edge_sources: HashMap<TopicId, HashSet<SpaceId>>,
 }
 
 impl GraphState {
@@ -85,6 +89,12 @@ impl GraphState {
                     .entry(source)
                     .or_default()
                     .insert(*target_topic_id);
+
+                // Maintain reverse index for O(1) lookup
+                self.topic_edge_sources
+                    .entry(*target_topic_id)
+                    .or_default()
+                    .insert(source);
             }
         }
     }
@@ -112,6 +122,11 @@ impl GraphState {
     /// Get topic edges from a space
     pub fn get_topic_edges(&self, space_id: &SpaceId) -> Option<&HashSet<TopicId>> {
         self.topic_edges.get(space_id)
+    }
+
+    /// Get all spaces that have a topic edge TO the given topic (O(1) lookup)
+    pub fn get_topic_edge_sources(&self, topic_id: &TopicId) -> Option<&HashSet<SpaceId>> {
+        self.topic_edge_sources.get(topic_id)
     }
 
     /// Get total number of spaces

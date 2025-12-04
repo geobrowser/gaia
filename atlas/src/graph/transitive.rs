@@ -177,10 +177,10 @@ impl TransitiveProcessor {
         match &event.payload {
             SpaceTopologyPayload::SpaceCreated(created) => {
                 // New space might affect existing topic edges
-                // Invalidate all spaces that have topic edges to this space's topic
-                if let Some(sources) = self.find_topic_edge_sources(&created.topic_id, state) {
+                // Invalidate all spaces that have topic edges to this space's topic (O(1) lookup)
+                if let Some(sources) = state.get_topic_edge_sources(&created.topic_id) {
                     for source in sources {
-                        self.cache.invalidate(&source);
+                        self.cache.invalidate(source);
                     }
                 }
             }
@@ -206,21 +206,6 @@ impl TransitiveProcessor {
         }
     }
 
-    /// Find all spaces that have a topic edge to the given topic
-    fn find_topic_edge_sources(&self, topic_id: &crate::events::TopicId, state: &GraphState) -> Option<Vec<SpaceId>> {
-        let mut sources = Vec::new();
-        for (space, topics) in &state.topic_edges {
-            if topics.contains(topic_id) {
-                sources.push(*space);
-            }
-        }
-        if sources.is_empty() {
-            None
-        } else {
-            Some(sources)
-        }
-    }
-
     /// Compute a transitive graph using BFS
     fn compute(
         &self,
@@ -231,20 +216,24 @@ impl TransitiveProcessor {
         let mut visited: HashSet<SpaceId> = HashSet::new();
         let mut queue: VecDeque<SpaceId> = VecDeque::new();
 
-        // Map from space_id to its TreeNode (built during BFS)
-        let mut tree_nodes: HashMap<SpaceId, TreeNode> = HashMap::new();
-        // Track parent relationships to build tree
-        let mut parents: HashMap<SpaceId, (SpaceId, EdgeType, Option<crate::events::TopicId>)> =
+        // Track node metadata (edge_type, topic_id) - no TreeNode allocation yet
+        let mut node_metadata: HashMap<SpaceId, (EdgeType, Option<crate::events::TopicId>)> =
             HashMap::new();
+
+        // Build children index directly: parent -> [children] (O(1) lookup)
+        let mut children_index: HashMap<SpaceId, Vec<SpaceId>> = HashMap::new();
+
+        // Reusable edge buffer to avoid allocations in the loop
+        let mut edges: Vec<(SpaceId, EdgeType, Option<crate::events::TopicId>)> = Vec::new();
 
         // Initialize with root
         visited.insert(root);
         queue.push_back(root);
-        tree_nodes.insert(root, TreeNode::new_root(root));
+        node_metadata.insert(root, (EdgeType::Root, None));
 
         while let Some(current) = queue.pop_front() {
-            // Collect all edges from current node
-            let mut edges: Vec<(SpaceId, EdgeType, Option<crate::events::TopicId>)> = Vec::new();
+            // Clear and reuse the edges buffer
+            edges.clear();
 
             // Collect explicit edges
             if let Some(explicit) = state.get_explicit_edges(&current) {
@@ -267,52 +256,50 @@ impl TransitiveProcessor {
             }
 
             // Sort for deterministic ordering
-            edges.sort_by_key(|(id, _, _)| *id);
+            edges.sort_unstable_by_key(|(id, _, _)| *id);
 
-            // Process edges
-            for (target, edge_type, topic_id) in edges {
-                if visited.insert(target) {
-                    queue.push_back(target);
-                    parents.insert(target, (current, edge_type, topic_id));
+            // Process edges and build children index
+            for (target, edge_type, topic_id) in &edges {
+                if visited.insert(*target) {
+                    queue.push_back(*target);
+                    node_metadata.insert(*target, (*edge_type, *topic_id));
 
-                    // Create tree node for this target
-                    let node = match topic_id {
-                        Some(tid) => TreeNode::new_with_topic(target, tid),
-                        None => TreeNode::new(target, edge_type),
-                    };
-                    tree_nodes.insert(target, node);
+                    // Add to children index (O(1) amortized)
+                    children_index
+                        .entry(current)
+                        .or_default()
+                        .push(*target);
                 }
             }
         }
 
-        // Build tree structure recursively
+        // Build tree structure using children index (O(n) total)
         fn build_tree(
             node_id: SpaceId,
-            parents: &HashMap<SpaceId, (SpaceId, EdgeType, Option<crate::events::TopicId>)>,
-            tree_nodes: &HashMap<SpaceId, TreeNode>,
+            node_metadata: &HashMap<SpaceId, (EdgeType, Option<crate::events::TopicId>)>,
+            children_index: &HashMap<SpaceId, Vec<SpaceId>>,
         ) -> TreeNode {
-            let mut node = tree_nodes.get(&node_id).cloned().unwrap();
+            let (edge_type, topic_id) = node_metadata.get(&node_id).copied().unwrap();
 
-            // Find all children of this node
-            let mut children: Vec<SpaceId> = parents
-                .iter()
-                .filter(|(_, (parent, _, _))| *parent == node_id)
-                .map(|(child, _)| *child)
-                .collect();
+            let mut node = match topic_id {
+                Some(tid) => TreeNode::new_with_topic(node_id, tid),
+                None if edge_type == EdgeType::Root => TreeNode::new_root(node_id),
+                None => TreeNode::new(node_id, edge_type),
+            };
 
-            // Sort for deterministic order
-            children.sort();
-
-            // Recursively build child subtrees
-            for child_id in children {
-                let child_tree = build_tree(child_id, parents, tree_nodes);
-                node.add_child(child_tree);
+            // Children are already collected - just iterate (O(1) lookup)
+            if let Some(children) = children_index.get(&node_id) {
+                // Reserve capacity to avoid reallocations
+                node.children.reserve(children.len());
+                for child_id in children {
+                    node.children.push(build_tree(*child_id, node_metadata, children_index));
+                }
             }
 
             node
         }
 
-        let tree = build_tree(root, &parents, &tree_nodes);
+        let tree = build_tree(root, &node_metadata, &children_index);
 
         TransitiveGraph::new(root, tree, visited)
     }
