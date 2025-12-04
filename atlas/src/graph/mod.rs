@@ -5,10 +5,12 @@
 //! - `TransitiveGraph`: Result of transitive closure computation
 //! - `GraphState`: In-memory representation of the topology graph
 
+mod hash;
 mod state;
 mod transitive;
 mod tree;
 
+pub use hash::{hash_tree, DefaultTreeHasher, TreeHasher};
 pub use state::GraphState;
 pub use transitive::{TransitiveCache, TransitiveGraph, TransitiveProcessor};
 pub use tree::{EdgeType, TreeNode};

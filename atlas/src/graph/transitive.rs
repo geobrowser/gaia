@@ -5,7 +5,7 @@
 //! - Full transitive: follows both explicit and topic edges
 //! - Explicit-only transitive: follows only explicit edges
 
-use super::{EdgeType, GraphState, TreeNode};
+use super::{hash_tree, EdgeType, GraphState, TreeNode};
 use crate::events::{SpaceId, SpaceTopologyEvent, SpaceTopologyPayload, TrustExtension};
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -28,7 +28,7 @@ pub struct TransitiveGraph {
 impl TransitiveGraph {
     /// Create a new transitive graph
     pub fn new(root: SpaceId, tree: TreeNode, flat: HashSet<SpaceId>) -> Self {
-        let hash = tree.compute_hash();
+        let hash = hash_tree(&tree);
         Self {
             root,
             tree,

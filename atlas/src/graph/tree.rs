@@ -4,7 +4,6 @@
 //! preserving the parent-child relationships and edge metadata.
 
 use crate::events::{SpaceId, TopicId};
-use std::hash::{Hash, Hasher};
 
 /// The type of edge connecting a node to its parent
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
@@ -75,24 +74,6 @@ impl TreeNode {
     pub fn node_count(&self) -> usize {
         1 + self.children.iter().map(|c| c.node_count()).sum::<usize>()
     }
-
-    /// Compute a hash of the tree structure for change detection
-    pub fn compute_hash(&self) -> u64 {
-        let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        self.hash_into(&mut hasher);
-        hasher.finish()
-    }
-
-    /// Recursively hash tree structure
-    fn hash_into<H: Hasher>(&self, hasher: &mut H) {
-        self.space_id.hash(hasher);
-        self.edge_type.hash(hasher);
-        self.topic_id.hash(hasher);
-        self.children.len().hash(hasher);
-        for child in &self.children {
-            child.hash_into(hasher);
-        }
-    }
 }
 
 #[cfg(test)]
@@ -156,26 +137,5 @@ mod tests {
         root.add_child(child2);
 
         assert_eq!(root.node_count(), 4);
-    }
-
-    #[test]
-    fn test_compute_hash_deterministic() {
-        let mut root1 = TreeNode::new_root(make_space_id(1));
-        root1.add_child(TreeNode::new(make_space_id(2), EdgeType::Verified));
-
-        let mut root2 = TreeNode::new_root(make_space_id(1));
-        root2.add_child(TreeNode::new(make_space_id(2), EdgeType::Verified));
-
-        assert_eq!(root1.compute_hash(), root2.compute_hash());
-    }
-
-    #[test]
-    fn test_compute_hash_different_structures() {
-        let root1 = TreeNode::new_root(make_space_id(1));
-
-        let mut root2 = TreeNode::new_root(make_space_id(1));
-        root2.add_child(TreeNode::new(make_space_id(2), EdgeType::Verified));
-
-        assert_ne!(root1.compute_hash(), root2.compute_hash());
     }
 }
