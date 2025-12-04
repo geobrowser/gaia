@@ -224,7 +224,44 @@ for (source, topic_id) in topic_edges_from_canonical {
 - Phase 1 is O(1) lookup instead of O(edges) BFS
 - Phase 2 clones and filters pre-computed subtrees instead of re-traversing
 - Deterministic child ordering (sort by SpaceId) for consistent hashing
-- Tree serialization and hashing for change detection
+
+### Event Filtering
+
+Not every topology event affects the canonical graph. Before recomputing, check if the event can possibly change the canonical set or tree structure:
+
+```rust
+impl CanonicalProcessor {
+    /// Check if an event can affect the canonical graph
+    fn affects_canonical(&self, event: &SpaceTopologyEvent, canonical_set: &HashSet<SpaceId>) -> bool {
+        match &event.payload {
+            // New spaces are not canonical until reached via explicit edges from root
+            SpaceTopologyPayload::SpaceCreated(_) => false,
+
+            SpaceTopologyPayload::TrustExtended(extended) => {
+                // Only events from canonical sources can affect the canonical graph
+                canonical_set.contains(&extended.source_space_id)
+            }
+        }
+    }
+}
+```
+
+**Event Analysis:**
+
+| Event | Affects Canonical? | Reason |
+|-------|-------------------|--------|
+| `SpaceCreated` | No | New spaces aren't canonical until reached via explicit edges |
+| `VerifiedExtension` from canonical source | Yes | Target becomes canonical |
+| `RelatedExtension` from canonical source | Yes | Target becomes canonical |
+| `SubtopicExtension` from canonical source | Yes | Tree structure changes (adds topic edge connections) |
+| Any extension from non-canonical source | No | Cannot affect canonical set or tree |
+
+**Benefits:**
+- Skip recomputation entirely for events outside the canonical graph
+- O(1) check using the flat canonical set
+- No hash comparison needed - if source isn't canonical, nothing changed
+
+**Note:** This replaces the previous hash-based change detection approach. Since we can determine from the event alone whether the canonical graph is affected, we don't need to recompute and compare hashes.
 
 ### 4. PostgreSQL Schema
 
@@ -356,9 +393,8 @@ Start with full recomputation + subtree reuse. Add incremental updates later if 
 Establish baseline performance metrics and identify bottlenecks before optimizing. Benchmarks should answer:
 
 1. How long does full canonical graph computation take at various graph sizes?
-2. What is the overhead of hash-based change detection?
-3. How does topic edge resolution scale with topic membership size?
-4. What is the end-to-end latency from event receipt to emission?
+2. How does topic edge resolution scale with topic membership size?
+3. What is the end-to-end latency from event receipt to emission?
 
 ### Benchmark Scenarios
 
@@ -381,21 +417,18 @@ Test canonical graph computation with synthetic graphs of varying characteristic
 - Memory allocation
 - Tree node count in output
 
-#### 2. Change Detection Benchmarks
+#### 2. Event Filtering Benchmarks
 
-Measure overhead of hash-based change detection:
+Measure the `affects_canonical` check performance:
 
 | Scenario | Description |
 |----------|-------------|
-| No change | Event processed but graph unchanged |
-| Small change | Single node added to canonical set |
-| Large change | Subtree of 100+ nodes added |
+| Canonical source | Event from a space in the canonical set |
+| Non-canonical source | Event from a space outside the canonical set |
 
 **Metrics to capture:**
-- Serialization time
-- Hash computation time
-- Comparison time
-- Percentage overhead vs. computation
+- HashSet lookup time
+- Events filtered per second
 
 #### 3. Topic Resolution Benchmarks
 
@@ -417,7 +450,7 @@ Isolate topic edge resolution performance:
 Measure full processing pipeline:
 
 ```
-Event received → GraphState updated → Canonical computed → Hash compared → Persisted → Emitted
+Event received → affects_canonical? → GraphState updated → Canonical computed → Persisted → Emitted
 ```
 
 **Metrics to capture:**
@@ -457,19 +490,21 @@ fn bench_canonical_computation(c: &mut Criterion) {
     group.finish();
 }
 
-fn bench_change_detection(c: &mut Criterion) {
-    let mut group = c.benchmark_group("change_detection");
+fn bench_event_filtering(c: &mut Criterion) {
+    let mut group = c.benchmark_group("event_filtering");
 
-    let state = generate_graph_state(1_000, 5_000, 200);
-    let tree = compute_canonical_tree(&state);
+    let (state, canonical_set) = generate_canonical_scenario(1_000);
 
-    group.bench_function("serialize", |b| {
-        b.iter(|| serialize_tree(&tree));
+    group.bench_function("affects_canonical_hit", |b| {
+        let canonical_space = *canonical_set.iter().next().unwrap();
+        let event = make_verified_event(canonical_space, some_target);
+        b.iter(|| processor.affects_canonical(&event, &canonical_set));
     });
 
-    group.bench_function("hash", |b| {
-        let serialized = serialize_tree(&tree);
-        b.iter(|| hash_tree(&serialized));
+    group.bench_function("affects_canonical_miss", |b| {
+        let non_canonical_space = make_space_id(9999);
+        let event = make_verified_event(non_canonical_space, some_target);
+        b.iter(|| processor.affects_canonical(&event, &canonical_set));
     });
 
     group.finish();
@@ -515,7 +550,7 @@ criterion_main!(benches);
 atlas/
 ├── benches/
 │   ├── canonical.rs          # Canonical graph computation benchmarks
-│   ├── change_detection.rs   # Hash and serialization benchmarks
+│   ├── event_filtering.rs    # affects_canonical check benchmarks
 │   └── helpers.rs            # Synthetic graph generation utilities
 ```
 
@@ -527,7 +562,7 @@ Initial implementation should meet these targets (to be validated/adjusted after
 |--------|--------|
 | Full computation (1K nodes) | < 10ms |
 | Full computation (10K nodes) | < 100ms |
-| Change detection overhead | < 5% of computation time |
+| Event filtering (`affects_canonical`) | < 100ns |
 | End-to-end latency (p95) | < 50ms |
 | Throughput | > 100 events/second |
 
