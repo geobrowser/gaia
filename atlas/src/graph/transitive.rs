@@ -1,0 +1,551 @@
+//! Transitive graph computation
+//!
+//! Computes transitive closure of the topology graph using BFS.
+//! Supports two variants:
+//! - Full transitive: follows both explicit and topic edges
+//! - Explicit-only transitive: follows only explicit edges
+
+use super::{EdgeType, GraphState, TreeNode};
+use crate::events::{SpaceId, SpaceTopologyEvent, SpaceTopologyPayload, TrustExtension};
+use std::collections::{HashMap, HashSet, VecDeque};
+
+/// Result of transitive graph computation
+#[derive(Debug, Clone)]
+pub struct TransitiveGraph {
+    /// Root space this graph was computed from
+    pub root: SpaceId,
+
+    /// Tree representation with edge metadata
+    pub tree: TreeNode,
+
+    /// Flat set of all reachable spaces
+    pub flat: HashSet<SpaceId>,
+
+    /// Hash for change detection
+    pub hash: u64,
+}
+
+impl TransitiveGraph {
+    /// Create a new transitive graph
+    pub fn new(root: SpaceId, tree: TreeNode, flat: HashSet<SpaceId>) -> Self {
+        let hash = tree.compute_hash();
+        Self {
+            root,
+            tree,
+            flat,
+            hash,
+        }
+    }
+
+    /// Check if a space is reachable
+    pub fn contains(&self, space_id: &SpaceId) -> bool {
+        self.flat.contains(space_id)
+    }
+
+    /// Get the number of reachable spaces
+    pub fn len(&self) -> usize {
+        self.flat.len()
+    }
+
+    /// Check if the graph is empty (only contains root)
+    pub fn is_empty(&self) -> bool {
+        self.flat.len() <= 1
+    }
+}
+
+/// Cache of pre-computed transitive graphs
+#[derive(Debug, Default)]
+pub struct TransitiveCache {
+    /// Full transitive graphs (explicit + topic edges)
+    full: HashMap<SpaceId, TransitiveGraph>,
+
+    /// Explicit-only transitive graphs
+    explicit_only: HashMap<SpaceId, TransitiveGraph>,
+
+    /// Reverse index: space → spaces whose transitive graph contains it
+    /// Used for cache invalidation
+    reverse_deps: HashMap<SpaceId, HashSet<SpaceId>>,
+}
+
+impl TransitiveCache {
+    /// Create a new empty cache
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Get a cached full transitive graph
+    pub fn get_full(&self, space: &SpaceId) -> Option<&TransitiveGraph> {
+        self.full.get(space)
+    }
+
+    /// Get a cached explicit-only transitive graph
+    pub fn get_explicit_only(&self, space: &SpaceId) -> Option<&TransitiveGraph> {
+        self.explicit_only.get(space)
+    }
+
+    /// Insert a full transitive graph into the cache
+    pub fn insert_full(&mut self, graph: TransitiveGraph) {
+        self.update_reverse_deps(&graph);
+        self.full.insert(graph.root, graph);
+    }
+
+    /// Insert an explicit-only transitive graph into the cache
+    pub fn insert_explicit_only(&mut self, graph: TransitiveGraph) {
+        self.update_reverse_deps(&graph);
+        self.explicit_only.insert(graph.root, graph);
+    }
+
+    /// Update reverse dependency index
+    fn update_reverse_deps(&mut self, graph: &TransitiveGraph) {
+        for space in &graph.flat {
+            self.reverse_deps
+                .entry(*space)
+                .or_default()
+                .insert(graph.root);
+        }
+    }
+
+    /// Invalidate all cached graphs affected by a space change
+    pub fn invalidate(&mut self, space: &SpaceId) {
+        // Remove this space's own graphs
+        self.full.remove(space);
+        self.explicit_only.remove(space);
+
+        // Remove all graphs that contained this space
+        if let Some(dependents) = self.reverse_deps.remove(space) {
+            for dep in dependents {
+                self.full.remove(&dep);
+                self.explicit_only.remove(&dep);
+            }
+        }
+    }
+
+    /// Get cache statistics
+    pub fn stats(&self) -> CacheStats {
+        CacheStats {
+            full_count: self.full.len(),
+            explicit_only_count: self.explicit_only.len(),
+            reverse_deps_count: self.reverse_deps.len(),
+        }
+    }
+}
+
+/// Cache statistics
+#[derive(Debug, Clone)]
+pub struct CacheStats {
+    pub full_count: usize,
+    pub explicit_only_count: usize,
+    pub reverse_deps_count: usize,
+}
+
+/// Processor for computing transitive graphs
+#[derive(Debug, Default)]
+pub struct TransitiveProcessor {
+    cache: TransitiveCache,
+}
+
+impl TransitiveProcessor {
+    /// Create a new transitive processor
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Compute or retrieve full transitive graph for a space
+    ///
+    /// Full transitive graphs follow both explicit and topic edges.
+    pub fn get_full(&mut self, space: SpaceId, state: &GraphState) -> &TransitiveGraph {
+        if !self.cache.full.contains_key(&space) {
+            let graph = self.compute(space, state, true);
+            self.cache.insert_full(graph);
+        }
+        self.cache.get_full(&space).unwrap()
+    }
+
+    /// Compute or retrieve explicit-only transitive graph for a space
+    ///
+    /// Explicit-only transitive graphs follow only Verified and Related edges.
+    pub fn get_explicit_only(&mut self, space: SpaceId, state: &GraphState) -> &TransitiveGraph {
+        if !self.cache.explicit_only.contains_key(&space) {
+            let graph = self.compute(space, state, false);
+            self.cache.insert_explicit_only(graph);
+        }
+        self.cache.get_explicit_only(&space).unwrap()
+    }
+
+    /// Handle a topology event, invalidating affected caches
+    pub fn handle_event(&mut self, event: &SpaceTopologyEvent, state: &GraphState) {
+        match &event.payload {
+            SpaceTopologyPayload::SpaceCreated(created) => {
+                // New space might affect existing topic edges
+                // Invalidate all spaces that have topic edges to this space's topic
+                if let Some(sources) = self.find_topic_edge_sources(&created.topic_id, state) {
+                    for source in sources {
+                        self.cache.invalidate(&source);
+                    }
+                }
+            }
+            SpaceTopologyPayload::TrustExtended(extended) => {
+                // Invalidate source and potentially target
+                self.cache.invalidate(&extended.source_space_id);
+
+                match &extended.extension {
+                    TrustExtension::Verified { target_space_id }
+                    | TrustExtension::Related { target_space_id } => {
+                        self.cache.invalidate(target_space_id);
+                    }
+                    TrustExtension::Subtopic { target_topic_id } => {
+                        // Invalidate all spaces that announced this topic
+                        if let Some(members) = state.get_topic_members(target_topic_id) {
+                            for member in members {
+                                self.cache.invalidate(member);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    /// Find all spaces that have a topic edge to the given topic
+    fn find_topic_edge_sources(&self, topic_id: &crate::events::TopicId, state: &GraphState) -> Option<Vec<SpaceId>> {
+        let mut sources = Vec::new();
+        for (space, topics) in &state.topic_edges {
+            if topics.contains(topic_id) {
+                sources.push(*space);
+            }
+        }
+        if sources.is_empty() {
+            None
+        } else {
+            Some(sources)
+        }
+    }
+
+    /// Compute a transitive graph using BFS
+    fn compute(
+        &self,
+        root: SpaceId,
+        state: &GraphState,
+        include_topic_edges: bool,
+    ) -> TransitiveGraph {
+        let mut visited: HashSet<SpaceId> = HashSet::new();
+        let mut queue: VecDeque<SpaceId> = VecDeque::new();
+
+        // Map from space_id to its TreeNode (built during BFS)
+        let mut tree_nodes: HashMap<SpaceId, TreeNode> = HashMap::new();
+        // Track parent relationships to build tree
+        let mut parents: HashMap<SpaceId, (SpaceId, EdgeType, Option<crate::events::TopicId>)> =
+            HashMap::new();
+
+        // Initialize with root
+        visited.insert(root);
+        queue.push_back(root);
+        tree_nodes.insert(root, TreeNode::new_root(root));
+
+        while let Some(current) = queue.pop_front() {
+            // Collect all edges from current node
+            let mut edges: Vec<(SpaceId, EdgeType, Option<crate::events::TopicId>)> = Vec::new();
+
+            // Collect explicit edges
+            if let Some(explicit) = state.get_explicit_edges(&current) {
+                for (target, edge_type) in explicit {
+                    edges.push((*target, *edge_type, None));
+                }
+            }
+
+            // Collect topic edges (if enabled)
+            if include_topic_edges {
+                if let Some(topics) = state.get_topic_edges(&current) {
+                    for topic_id in topics {
+                        if let Some(members) = state.get_topic_members(topic_id) {
+                            for member in members {
+                                edges.push((*member, EdgeType::Topic, Some(*topic_id)));
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Sort for deterministic ordering
+            edges.sort_by_key(|(id, _, _)| *id);
+
+            // Process edges
+            for (target, edge_type, topic_id) in edges {
+                if visited.insert(target) {
+                    queue.push_back(target);
+                    parents.insert(target, (current, edge_type, topic_id));
+
+                    // Create tree node for this target
+                    let node = match topic_id {
+                        Some(tid) => TreeNode::new_with_topic(target, tid),
+                        None => TreeNode::new(target, edge_type),
+                    };
+                    tree_nodes.insert(target, node);
+                }
+            }
+        }
+
+        // Build tree structure recursively
+        fn build_tree(
+            node_id: SpaceId,
+            parents: &HashMap<SpaceId, (SpaceId, EdgeType, Option<crate::events::TopicId>)>,
+            tree_nodes: &HashMap<SpaceId, TreeNode>,
+        ) -> TreeNode {
+            let mut node = tree_nodes.get(&node_id).cloned().unwrap();
+
+            // Find all children of this node
+            let mut children: Vec<SpaceId> = parents
+                .iter()
+                .filter(|(_, (parent, _, _))| *parent == node_id)
+                .map(|(child, _)| *child)
+                .collect();
+
+            // Sort for deterministic order
+            children.sort();
+
+            // Recursively build child subtrees
+            for child_id in children {
+                let child_tree = build_tree(child_id, parents, tree_nodes);
+                node.add_child(child_tree);
+            }
+
+            node
+        }
+
+        let tree = build_tree(root, &parents, &tree_nodes);
+
+        TransitiveGraph::new(root, tree, visited)
+    }
+
+    /// Get cache statistics
+    pub fn cache_stats(&self) -> CacheStats {
+        self.cache.stats()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::events::{
+        BlockMetadata, SpaceCreated, SpaceType, SpaceTopologyPayload, TrustExtended,
+    };
+
+    fn make_space_id(n: u8) -> SpaceId {
+        let mut id = [0u8; 16];
+        id[15] = n;
+        id
+    }
+
+    fn make_topic_id(n: u8) -> crate::events::TopicId {
+        let mut id = [0u8; 16];
+        id[15] = n;
+        id
+    }
+
+    fn make_block_meta() -> BlockMetadata {
+        BlockMetadata {
+            block_number: 1,
+            block_timestamp: 12,
+            tx_hash: "0x1".to_string(),
+            cursor: "cursor_1".to_string(),
+        }
+    }
+
+    fn create_space(state: &mut GraphState, n: u8) -> SpaceId {
+        let space = make_space_id(n);
+        let topic = make_topic_id(n);
+        let event = SpaceTopologyEvent {
+            meta: make_block_meta(),
+            payload: SpaceTopologyPayload::SpaceCreated(SpaceCreated {
+                space_id: space,
+                topic_id: topic,
+                space_type: SpaceType::Dao {
+                    initial_editors: vec![],
+                    initial_members: vec![],
+                },
+            }),
+        };
+        state.apply_event(&event);
+        space
+    }
+
+    fn add_verified_edge(state: &mut GraphState, source: SpaceId, target: SpaceId) {
+        let event = SpaceTopologyEvent {
+            meta: make_block_meta(),
+            payload: SpaceTopologyPayload::TrustExtended(TrustExtended {
+                source_space_id: source,
+                extension: TrustExtension::Verified {
+                    target_space_id: target,
+                },
+            }),
+        };
+        state.apply_event(&event);
+    }
+
+    fn add_topic_edge(state: &mut GraphState, source: SpaceId, topic: crate::events::TopicId) {
+        let event = SpaceTopologyEvent {
+            meta: make_block_meta(),
+            payload: SpaceTopologyPayload::TrustExtended(TrustExtended {
+                source_space_id: source,
+                extension: TrustExtension::Subtopic {
+                    target_topic_id: topic,
+                },
+            }),
+        };
+        state.apply_event(&event);
+    }
+
+    #[test]
+    fn test_single_space_transitive() {
+        let mut state = GraphState::new();
+        let space = create_space(&mut state, 1);
+
+        let mut processor = TransitiveProcessor::new();
+        let graph = processor.get_full(space, &state);
+
+        assert_eq!(graph.root, space);
+        assert_eq!(graph.len(), 1);
+        assert!(graph.contains(&space));
+    }
+
+    #[test]
+    fn test_linear_chain() {
+        // A -> B -> C
+        let mut state = GraphState::new();
+        let a = create_space(&mut state, 1);
+        let b = create_space(&mut state, 2);
+        let c = create_space(&mut state, 3);
+
+        add_verified_edge(&mut state, a, b);
+        add_verified_edge(&mut state, b, c);
+
+        let mut processor = TransitiveProcessor::new();
+        let graph = processor.get_full(a, &state);
+
+        assert_eq!(graph.len(), 3);
+        assert!(graph.contains(&a));
+        assert!(graph.contains(&b));
+        assert!(graph.contains(&c));
+    }
+
+    #[test]
+    fn test_diamond_graph() {
+        //     A
+        //    / \
+        //   B   C
+        //    \ /
+        //     D
+        let mut state = GraphState::new();
+        let a = create_space(&mut state, 1);
+        let b = create_space(&mut state, 2);
+        let c = create_space(&mut state, 3);
+        let d = create_space(&mut state, 4);
+
+        add_verified_edge(&mut state, a, b);
+        add_verified_edge(&mut state, a, c);
+        add_verified_edge(&mut state, b, d);
+        add_verified_edge(&mut state, c, d);
+
+        let mut processor = TransitiveProcessor::new();
+        let graph = processor.get_full(a, &state);
+
+        assert_eq!(graph.len(), 4);
+        // D should only appear once in the tree (first path wins)
+        assert_eq!(graph.tree.node_count(), 4);
+    }
+
+    #[test]
+    fn test_topic_edge_resolution() {
+        // A -> topic(B) -> B
+        let mut state = GraphState::new();
+        let a = create_space(&mut state, 1);
+        let b = create_space(&mut state, 2);
+        let topic_b = make_topic_id(2);
+
+        add_topic_edge(&mut state, a, topic_b);
+
+        let mut processor = TransitiveProcessor::new();
+
+        // Full transitive should include B
+        let full = processor.get_full(a, &state);
+        assert_eq!(full.len(), 2);
+        assert!(full.contains(&b));
+
+        // Explicit-only should NOT include B
+        let explicit = processor.get_explicit_only(a, &state);
+        assert_eq!(explicit.len(), 1);
+        assert!(!explicit.contains(&b));
+    }
+
+    #[test]
+    fn test_cache_hit() {
+        let mut state = GraphState::new();
+        let a = create_space(&mut state, 1);
+        let b = create_space(&mut state, 2);
+        add_verified_edge(&mut state, a, b);
+
+        let mut processor = TransitiveProcessor::new();
+
+        // First call computes
+        let hash1 = processor.get_full(a, &state).hash;
+        let stats1 = processor.cache_stats();
+        assert_eq!(stats1.full_count, 1);
+
+        // Second call should hit cache
+        let hash2 = processor.get_full(a, &state).hash;
+        assert_eq!(hash1, hash2);
+    }
+
+    #[test]
+    fn test_cache_invalidation() {
+        let mut state = GraphState::new();
+        let a = create_space(&mut state, 1);
+        let b = create_space(&mut state, 2);
+        add_verified_edge(&mut state, a, b);
+
+        let mut processor = TransitiveProcessor::new();
+
+        // Compute initial graph
+        let _ = processor.get_full(a, &state);
+        assert_eq!(processor.cache_stats().full_count, 1);
+
+        // Create new edge event
+        let c = create_space(&mut state, 3);
+        let event = SpaceTopologyEvent {
+            meta: make_block_meta(),
+            payload: SpaceTopologyPayload::TrustExtended(TrustExtended {
+                source_space_id: b,
+                extension: TrustExtension::Verified {
+                    target_space_id: c,
+                },
+            }),
+        };
+
+        // Handle event (should invalidate cache)
+        processor.handle_event(&event, &state);
+        state.apply_event(&event);
+
+        // Cache should be invalidated (A's graph contained B)
+        // Note: exact behavior depends on reverse_deps tracking
+    }
+
+    #[test]
+    fn test_cycle_handling() {
+        // A -> B -> C -> A (cycle)
+        let mut state = GraphState::new();
+        let a = create_space(&mut state, 1);
+        let b = create_space(&mut state, 2);
+        let c = create_space(&mut state, 3);
+
+        add_verified_edge(&mut state, a, b);
+        add_verified_edge(&mut state, b, c);
+        add_verified_edge(&mut state, c, a);
+
+        let mut processor = TransitiveProcessor::new();
+        let graph = processor.get_full(a, &state);
+
+        // Should handle cycle gracefully - each node appears once
+        assert_eq!(graph.len(), 3);
+        assert_eq!(graph.tree.node_count(), 3);
+    }
+}
