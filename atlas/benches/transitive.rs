@@ -6,7 +6,7 @@ use atlas::events::{
     BlockMetadata, SpaceCreated, SpaceId, SpaceTopologyEvent, SpaceTopologyPayload, SpaceType,
     TopicId, TrustExtended, TrustExtension,
 };
-use atlas::graph::{hash_tree, GraphState, TransitiveProcessor};
+use atlas::graph::{hash_tree, memory, GraphState, TransitiveProcessor};
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use rand::prelude::*;
 
@@ -429,6 +429,110 @@ fn bench_invalidation(c: &mut Criterion) {
     group.finish();
 }
 
+// ============================================================================
+// Memory size benchmarks (not timing benchmarks - just measurements)
+// ============================================================================
+
+/// Print memory usage statistics for various graph sizes
+/// This is not a timing benchmark - it measures and reports memory usage
+fn bench_memory_sizes(c: &mut Criterion) {
+    let mut group = c.benchmark_group("memory_sizes");
+
+    // We use a trivial benchmark that just measures memory, not time
+    // The actual memory values are printed to stdout
+
+    println!("\n");
+    println!("╔══════════════════════════════════════════════════════════════════════════════╗");
+    println!("║                         MEMORY SIZE MEASUREMENTS                             ║");
+    println!("╠══════════════════════════════════════════════════════════════════════════════╣");
+
+    // GraphState memory at different scales
+    println!("║                                                                              ║");
+    println!("║  GraphState Memory                                                           ║");
+    println!("║  ─────────────────                                                           ║");
+    println!("║  {:>8} {:>12} {:>12} {:>12} {:>12}                   ║", "Nodes", "Edges", "Total", "Per Node", "Per Edge");
+
+    for (nodes, edges_per_node) in [(100, 2), (1_000, 4), (5_000, 4), (10_000, 4), (50_000, 4)] {
+        let (state, _root) = generate_random_graph(nodes, nodes * edges_per_node, 42);
+        let mem = memory::graph_state_size(&state);
+        let total_edges = state.explicit_edge_count();
+        let per_node = if nodes > 0 { mem.total_bytes / nodes as usize } else { 0 };
+        let per_edge = if total_edges > 0 { mem.total_bytes / total_edges } else { 0 };
+
+        println!(
+            "║  {:>8} {:>12} {:>12} {:>12} {:>12}                   ║",
+            nodes,
+            total_edges,
+            memory::format_bytes(mem.total_bytes),
+            memory::format_bytes(per_node),
+            memory::format_bytes(per_edge)
+        );
+    }
+
+    // TransitiveGraph memory at different scales
+    println!("║                                                                              ║");
+    println!("║  TransitiveGraph Memory (single graph)                                       ║");
+    println!("║  ────────────────────────────────────────                                    ║");
+    println!("║  {:>8} {:>12} {:>12} {:>12}                             ║", "Nodes", "Total", "Tree", "FlatSet");
+
+    for nodes in [100, 1_000, 5_000, 10_000] {
+        let (state, root) = generate_linear_chain(nodes);
+        let mut processor = TransitiveProcessor::new();
+        let graph = processor.get_full(root, &state);
+        let mem = memory::transitive_graph_size(graph);
+
+        println!(
+            "║  {:>8} {:>12} {:>12} {:>12}                             ║",
+            graph.len(),
+            memory::format_bytes(mem.total_bytes),
+            memory::format_bytes(mem.tree_bytes),
+            memory::format_bytes(mem.flat_set_bytes)
+        );
+    }
+
+    // Cache memory with multiple cached graphs
+    println!("║                                                                              ║");
+    println!("║  Cache Memory (multiple cached graphs)                                       ║");
+    println!("║  ──────────────────────────────────────                                      ║");
+    println!("║  {:>8} {:>12} {:>14} {:>12}                           ║", "Graphs", "Nodes/Graph", "Cache Total", "Per Graph");
+
+    for (graph_count, nodes_per_graph) in [(10, 100), (100, 100), (10, 1_000), (100, 1_000)] {
+        let (state, _) = generate_random_graph(graph_count * nodes_per_graph, graph_count * nodes_per_graph * 2, 42);
+        let mut processor = TransitiveProcessor::new();
+
+        // Cache multiple graphs
+        for i in 0..graph_count {
+            let space = make_space_id(i);
+            let _ = processor.get_full(space, &state);
+        }
+
+        let cache_bytes = processor.cache_memory_bytes();
+        let per_graph = if graph_count > 0 { cache_bytes / graph_count as usize } else { 0 };
+
+        println!(
+            "║  {:>8} {:>12} {:>14} {:>12}                           ║",
+            graph_count,
+            nodes_per_graph,
+            memory::format_bytes(cache_bytes),
+            memory::format_bytes(per_graph)
+        );
+    }
+
+    println!("║                                                                              ║");
+    println!("╚══════════════════════════════════════════════════════════════════════════════╝");
+    println!();
+
+    // Run a trivial benchmark so criterion doesn't complain
+    group.bench_function("memory_measurement_overhead", |b| {
+        let state = GraphState::new();
+        b.iter(|| {
+            black_box(memory::graph_state_size(&state))
+        });
+    });
+
+    group.finish();
+}
+
 criterion_group!(
     benches,
     bench_bfs_linear_chain,
@@ -440,6 +544,7 @@ criterion_group!(
     bench_tree_hashing,
     bench_graph_state_event_application,
     bench_invalidation,
+    bench_memory_sizes,
 );
 
 criterion_main!(benches);

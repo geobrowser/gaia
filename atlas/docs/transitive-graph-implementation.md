@@ -215,6 +215,7 @@ cargo bench -p atlas
 | `tree_hashing` | Hash computation by tree size |
 | `graph_state_events` | Event application overhead |
 | `cache_invalidation` | Invalidation cost |
+| `memory_sizes` | Memory usage measurements |
 
 ### Results
 
@@ -248,12 +249,47 @@ Measured on Apple M1 Pro:
 | 1,000 | 23 µs |
 | 5,000 | 115 µs |
 
+#### Memory Usage
+
+Memory calculations are provided by the `atlas::graph::memory` module.
+
+##### GraphState Memory
+
+| Nodes | Edges | Total | Per Node | Per Edge |
+|-------|-------|-------|----------|----------|
+| 100 | 195 | 39 KB | 401 B | 205 B |
+| 1,000 | 4,000 | 564 KB | 577 B | 144 B |
+| 5,000 | 20,000 | 2.4 MB | 500 B | 125 B |
+| 10,000 | 40,000 | 4.8 MB | 500 B | 125 B |
+| 50,000 | 200,000 | 21 MB | 438 B | 109 B |
+
+##### TransitiveGraph Memory (single graph)
+
+| Nodes | Total | Tree | FlatSet |
+|-------|-------|------|---------|
+| 100 | 28 KB | 25 KB | 3.5 KB |
+| 1,000 | 306 KB | 250 KB | 56 KB |
+| 5,000 | 1.4 MB | 1.2 MB | 224 KB |
+| 10,000 | 2.9 MB | 2.4 MB | 448 KB |
+
+##### Cache Memory (multiple cached graphs)
+
+| Graphs | Nodes/Graph | Cache Total | Per Graph |
+|--------|-------------|-------------|-----------|
+| 10 | 100 | 1.6 MB | 163 KB |
+| 100 | 100 | 155 MB | 1.6 MB |
+| 10 | 1,000 | 14 MB | 1.4 MB |
+| 100 | 1,000 | 1.6 GB | 16 MB |
+
+**Note**: Cache memory grows significantly with the number of cached graphs due to the reverse dependency index tracking which spaces appear in which transitive graphs. See [Future Optimizations](#future-optimizations) for potential mitigation strategies.
+
 ### Key Observations
 
 1. **Throughput is consistent** (~2M elements/second) across graph shapes, indicating O(V+E) scaling
 2. **Cache hits are extremely fast** (~39ns) - just a HashMap lookup
 3. **Tree hashing scales linearly** with node count
 4. **The optimizations matter**: cache provides 15,000x speedup over recomputation
+5. **Memory scales linearly**: ~500 bytes per node for GraphState, ~300 bytes per node for TransitiveGraph
 
 ### Performance Targets
 
@@ -266,6 +302,86 @@ From the implementation plan:
 | Cache lookup | < 1ms | ~39 ns ✓ |
 
 All targets are met with significant margin.
+
+## Future Optimizations
+
+The current cache implementation is simple but can consume significant memory when caching many graphs. The following optimizations could be considered if memory becomes a bottleneck.
+
+### Cache Eviction Strategies
+
+**Current limitation**: The `reverse_deps` index tracks which cached graphs contain each space, enabling efficient invalidation. This index grows with the number of cached graphs and creates a tradeoff between memory usage and invalidation efficiency.
+
+**Option 1: LRU Eviction with On-Demand Recomputation**
+
+Evict least-recently-used graphs when cache exceeds a size limit. Evicted graphs are recomputed on next access.
+
+```rust
+struct BoundedTransitiveCache {
+    full: LruCache<SpaceId, TransitiveGraph>,
+    explicit_only: LruCache<SpaceId, TransitiveGraph>,
+    reverse_deps: HashMap<SpaceId, HashSet<SpaceId>>,
+    max_entries: usize,
+}
+```
+
+Tradeoffs:
+- Pro: Bounded memory usage
+- Con: Cache misses require full recomputation (~600µs for 1K nodes)
+- Con: `reverse_deps` cleanup on eviction adds complexity
+
+**Option 2: Canonical-Only Cache**
+
+For canonical graph computation, only cache what's strictly needed:
+- 1 explicit-only graph (the root's)
+- N full graphs (canonical spaces that are targets of topic edges)
+
+```rust
+struct CanonicalCache {
+    root_explicit_only: Option<TransitiveGraph>,
+    canonical_member_graphs: HashMap<SpaceId, TransitiveGraph>,
+}
+```
+
+Tradeoffs:
+- Pro: Bounded by canonical set size, not total space count
+- Pro: No wasted memory on graphs that won't be used
+- Con: Requires knowledge of canonical set membership
+
+**Option 3: Invalidation Without Reverse Deps**
+
+Remove `reverse_deps` entirely. On any graph change, invalidate all cached graphs.
+
+Tradeoffs:
+- Pro: Dramatically reduces memory (no reverse index)
+- Pro: Simpler implementation
+- Con: Over-invalidates, causing unnecessary recomputation
+
+**Option 4: Generation-Based Invalidation**
+
+Track a global generation counter. Each cached graph stores its generation. On any change, bump the generation. Cache hits check generation match.
+
+```rust
+struct GenerationalCache {
+    generation: u64,
+    full: HashMap<SpaceId, (u64, TransitiveGraph)>,  // (gen, graph)
+    explicit_only: HashMap<SpaceId, (u64, TransitiveGraph)>,
+}
+```
+
+Tradeoffs:
+- Pro: No reverse_deps memory overhead
+- Pro: Simple invalidation (just increment counter)
+- Con: Stale entries consume memory until accessed and evicted
+
+### Recommendation
+
+Start with the current implementation. If memory becomes a problem:
+
+1. **First**: Profile actual usage patterns to understand which graphs are accessed
+2. **If canonical-only**: Implement Option 2 (Canonical-Only Cache)
+3. **If general purpose**: Implement Option 1 (LRU) or Option 4 (Generation-Based)
+
+The ~15,000x speedup from caching means even occasional cache misses are acceptable, so aggressive caching may not be necessary.
 
 ## Related Documents
 

@@ -128,6 +128,54 @@ impl TransitiveCache {
             reverse_deps_count: self.reverse_deps.len(),
         }
     }
+
+    /// Get estimated heap memory usage of the cache in bytes
+    pub fn heap_size(&self) -> usize {
+        use super::memory::transitive_graph_size;
+        use std::collections::HashSet;
+        use std::mem;
+
+        // Helper to estimate HashSet heap size
+        fn hashset_heap_size<T>(set: &HashSet<T>) -> usize {
+            set.capacity() * (mem::size_of::<T>() + 16)
+        }
+
+        // full: HashMap<SpaceId, TransitiveGraph>
+        let full_table = self.full.capacity()
+            * (mem::size_of::<crate::events::SpaceId>() + mem::size_of::<TransitiveGraph>() + 16);
+        let full_graphs: usize = self
+            .full
+            .values()
+            .map(|g| transitive_graph_size(g).total_bytes)
+            .sum();
+
+        // explicit_only: HashMap<SpaceId, TransitiveGraph>
+        let explicit_only_table = self.explicit_only.capacity()
+            * (mem::size_of::<crate::events::SpaceId>() + mem::size_of::<TransitiveGraph>() + 16);
+        let explicit_only_graphs: usize = self
+            .explicit_only
+            .values()
+            .map(|g| transitive_graph_size(g).total_bytes)
+            .sum();
+
+        // reverse_deps: HashMap<SpaceId, HashSet<SpaceId>>
+        let reverse_deps_table = self.reverse_deps.capacity()
+            * (mem::size_of::<crate::events::SpaceId>()
+                + mem::size_of::<HashSet<crate::events::SpaceId>>()
+                + 16);
+        let reverse_deps_sets: usize = self
+            .reverse_deps
+            .values()
+            .map(|s| hashset_heap_size(s))
+            .sum();
+
+        full_table
+            + full_graphs
+            + explicit_only_table
+            + explicit_only_graphs
+            + reverse_deps_table
+            + reverse_deps_sets
+    }
 }
 
 /// Cache statistics
@@ -307,6 +355,11 @@ impl TransitiveProcessor {
     /// Get cache statistics
     pub fn cache_stats(&self) -> CacheStats {
         self.cache.stats()
+    }
+
+    /// Get estimated heap memory usage of the cache in bytes
+    pub fn cache_memory_bytes(&self) -> usize {
+        self.cache.heap_size()
     }
 }
 

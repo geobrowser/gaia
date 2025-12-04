@@ -4,8 +4,10 @@
 //! - `TreeNode`: Represents a node in a tree with edge metadata
 //! - `TransitiveGraph`: Result of transitive closure computation
 //! - `GraphState`: In-memory representation of the topology graph
+//! - `memory`: Functions for estimating heap memory usage
 
 mod hash;
+pub mod memory;
 mod state;
 mod transitive;
 mod tree;
