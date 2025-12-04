@@ -7,6 +7,13 @@ edition = "2021"
 name = "atlas"
 path = "src/main.rs"
 
+[[bench]]
+name = "transitive"
+harness = false
+
 [dependencies]
 rand = "0.8"
 hex = "0.4"
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }

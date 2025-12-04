@@ -54,7 +54,7 @@ impl TransitiveGraph {
 }
 
 /// Cache of pre-computed transitive graphs
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct TransitiveCache {
     /// Full transitive graphs (explicit + topic edges)
     full: HashMap<SpaceId, TransitiveGraph>,
@@ -139,7 +139,7 @@ pub struct CacheStats {
 }
 
 /// Processor for computing transitive graphs
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub struct TransitiveProcessor {
     cache: TransitiveCache,
 }
