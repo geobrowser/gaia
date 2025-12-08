@@ -48,16 +48,12 @@ pub struct CanonicalGraph {
 
     /// Flat set of all canonical spaces
     pub flat: HashSet<SpaceId>,
-
-    /// Hash for change detection
-    pub hash: u64,
 }
 ```
 
 The `CanonicalGraph` contains:
 - **tree**: A tree structure preserving parent-child relationships and edge metadata. Nodes can appear multiple times (once via explicit edge, once via topic edge) to preserve all paths.
 - **flat**: A flat set for O(1) membership checks. Each node appears exactly once regardless of how many paths lead to it.
-- **hash**: A deterministic hash of the tree for efficient change detection.
 
 ### CanonicalProcessor
 
@@ -66,12 +62,12 @@ pub struct CanonicalProcessor {
     /// The root space for canonical graph computation
     root: SpaceId,
 
-    /// Current canonical graph hash (for change detection)
-    current_hash: Option<u64>,
+    /// Hash of the last computed tree structure (for change detection)
+    last_hash: Option<u64>,
 }
 ```
 
-The processor is stateless except for tracking the current hash. It delegates to `TransitiveProcessor` for the heavy lifting of graph traversal.
+The processor tracks the last tree hash to detect changes. It delegates to `TransitiveProcessor` for the heavy lifting of graph traversal.
 
 ## Algorithm
 
@@ -141,11 +137,12 @@ After computing the tree, we hash it and compare with the previous hash:
 ```rust
 let graph = CanonicalGraph::new(self.root, tree, canonical_set);
 
-if self.last_hash == Some(graph.hash) {
+let new_hash = hash_tree(&graph.tree);
+if self.last_hash == Some(new_hash) {
     return None;  // Tree structure unchanged
 }
 
-self.last_hash = Some(graph.hash);
+self.last_hash = Some(new_hash);
 Some(graph)
 ```
 

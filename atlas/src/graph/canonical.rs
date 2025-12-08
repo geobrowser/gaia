@@ -23,23 +23,12 @@ pub struct CanonicalGraph {
 
     /// Flat set of all canonical spaces
     pub flat: HashSet<SpaceId>,
-
-    /// Hash of the tree structure for detecting changes
-    /// Two graphs with the same canonical set may have different tree structures
-    /// due to BFS traversal order and cycle avoidance
-    pub hash: u64,
 }
 
 impl CanonicalGraph {
     /// Create a new canonical graph
     pub fn new(root: SpaceId, tree: TreeNode, flat: HashSet<SpaceId>) -> Self {
-        let hash = hash_tree(&tree);
-        Self {
-            root,
-            tree,
-            flat,
-            hash,
-        }
+        Self { root, tree, flat }
     }
 
     /// Check if a space is in the canonical set
@@ -151,11 +140,12 @@ impl CanonicalProcessor {
         let graph = CanonicalGraph::new(self.root, tree, canonical_set);
 
         // Check if tree structure changed
-        if self.last_hash == Some(graph.hash) {
+        let new_hash = hash_tree(&graph.tree);
+        if self.last_hash == Some(new_hash) {
             return None;
         }
 
-        self.last_hash = Some(graph.hash);
+        self.last_hash = Some(new_hash);
         Some(graph)
     }
 
@@ -594,7 +584,7 @@ mod tests {
         // First computation should return a graph
         let graph1 = processor.compute(&state, &mut transitive);
         assert!(graph1.is_some());
-        let hash1 = graph1.unwrap().hash;
+        let graph1 = graph1.unwrap();
 
         // Second computation with no changes should return None
         let graph2 = processor.compute(&state, &mut transitive);
@@ -618,11 +608,14 @@ mod tests {
             &state,
         );
 
-        // Third computation should return a new graph with different hash
+        // Third computation should return a new graph (tree structure changed)
         let graph3 = processor.compute(&state, &mut transitive);
         assert!(graph3.is_some());
-        let hash3 = graph3.unwrap().hash;
-        assert_ne!(hash1, hash3);
+        let graph3 = graph3.unwrap();
+
+        // Verify the graphs are different
+        assert_eq!(graph1.len(), 1); // Just root
+        assert_eq!(graph3.len(), 2); // Root + A
     }
 
     #[test]

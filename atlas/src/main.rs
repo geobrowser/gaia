@@ -62,7 +62,6 @@ fn main() {
 
     if let Some(ref graph) = canonical {
         println!("│ Canonical nodes:  {:>4}                                                       │", graph.len());
-        println!("│ Hash:             {:016x}                                   │", graph.hash);
         println!("├──────────────────────────────────────────────────────────────────────────────┤");
         println!("│ Tree Structure:                                                              │");
         print_tree_boxed(&graph.tree, 1);
