@@ -44,3 +44,7 @@ jobs:
       working-directory: ./atlas
       env:
         RUST_BACKTRACE: 1
+
+    - name: Check benchmarks compile
+      run: cargo build --benches
+      working-directory: ./atlas
