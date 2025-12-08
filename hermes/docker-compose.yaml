@@ -47,5 +47,26 @@ services:
       kafka:
         condition: service_healthy
 
+  hermes-processor:
+    build:
+      context: ..
+      dockerfile: hermes-processor/Dockerfile
+    environment:
+      KAFKA_BROKER: kafka:29092
+    depends_on:
+      kafka:
+        condition: service_healthy
+
+  atlas:
+    build:
+      context: ..
+      dockerfile: atlas/Dockerfile
+    environment:
+      KAFKA_BROKER: kafka:29092
+      KAFKA_TOPIC: topology.canonical
+    depends_on:
+      kafka:
+        condition: service_healthy
+
 volumes:
   kafka-data:

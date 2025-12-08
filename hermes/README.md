@@ -7,23 +7,38 @@ Kafka infrastructure for the Hermes event stream service.
 Use docker-compose for local development:
 
 ```bash
+cd hermes
 docker-compose up
 ```
 
-Services:
+This starts all services:
 - **Kafka broker**: `localhost:9092`
 - **Kafka UI**: http://localhost:8080
+- **hermes-processor**: Processes mock-substream events and publishes to Kafka
+- **atlas**: Builds canonical graph from topology events and publishes to Kafka
 
-Run the producer:
+### Running Services Individually
+
+If you prefer to run the Rust services outside Docker (for faster iteration):
+
 ```bash
-cd hermes-producer
-KAFKA_BROKER=localhost:9092 cargo run
+# Start just Kafka and UI
+docker-compose up kafka kafka-ui
+
+# In another terminal, run hermes-processor
+KAFKA_BROKER=localhost:9092 cargo run -p hermes-processor
+
+# In another terminal, run atlas
+KAFKA_BROKER=localhost:9092 KAFKA_TOPIC=topology.canonical cargo run -p atlas
 ```
 
-Run Atlas:
+### Rebuilding Images
+
+After code changes, rebuild the Docker images:
+
 ```bash
-cd atlas
-KAFKA_BROKER=localhost:9092 KAFKA_TOPIC=topology.canonical cargo run
+docker-compose build hermes-processor atlas
+docker-compose up
 ```
 
 ## Production
@@ -43,7 +58,7 @@ kubectl port-forward -n kafka svc/kafka-ui 8080:8080
 
 # View logs
 kubectl logs -n kafka -l app=kafka-broker --tail=50 -f
-kubectl logs -n kafka -l app=hermes-producer --tail=50 -f
+kubectl logs -n kafka -l app=hermes-processor --tail=50 -f
 kubectl logs -n kafka -l app=atlas --tail=50 -f
 ```
 
