@@ -1,0 +1,64 @@
+syntax = "proto3";
+
+package topology;
+
+import "blockchain_metadata.proto";
+
+// Emitted when the canonical graph changes.
+// The canonical graph represents the "trusted" portion of the topology,
+// where trust flows only through explicit edges (Verified, Related).
+message CanonicalGraphUpdated {
+  // Root space this graph was computed from
+  bytes root_id = 1;
+
+  // Tree representation with edge metadata.
+  // The tree structure preserves distance from root, which matters
+  // for downstream consumers.
+  CanonicalTreeNode tree = 2;
+
+  // Flat set of all canonical space IDs.
+  // Useful for quick membership checks without traversing the tree.
+  repeated bytes canonical_space_ids = 3;
+
+  // Monotonically increasing sequence number for ordering.
+  // Consumers can use this to detect out-of-order delivery.
+  uint64 sequence_number = 4;
+
+  // Block metadata from the event that triggered this update
+  blockchain_metadata.BlockchainMetadata meta = 5;
+}
+
+// A node in the canonical tree.
+// Represents a space and how it was reached from its parent.
+message CanonicalTreeNode {
+  // The space this node represents
+  bytes space_id = 1;
+
+  // How this node was reached from its parent
+  EdgeType edge_type = 2;
+
+  // If reached via topic edge, which topic (otherwise empty).
+  // Only set when edge_type is EDGE_TYPE_TOPIC.
+  bytes topic_id = 3;
+
+  // Children of this node in the traversal
+  repeated CanonicalTreeNode children = 4;
+}
+
+// The type of edge connecting a node to its parent in the tree.
+enum EdgeType {
+  // Default value, should not appear in valid messages
+  EDGE_TYPE_UNSPECIFIED = 0;
+
+  // Root node has no incoming edge
+  EDGE_TYPE_ROOT = 1;
+
+  // Verified trust relationship (explicit edge)
+  EDGE_TYPE_VERIFIED = 2;
+
+  // Related trust relationship (explicit edge)
+  EDGE_TYPE_RELATED = 3;
+
+  // Topic-based membership (resolved from SubtopicExtension)
+  EDGE_TYPE_TOPIC = 4;
+}
