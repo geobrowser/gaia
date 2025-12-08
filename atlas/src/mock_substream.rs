@@ -2,6 +2,61 @@
 //!
 //! Generates synthetic space topology events for testing the Atlas
 //! graph processing pipeline without requiring a real blockchain connection.
+//!
+//! # Deterministic Topology
+//!
+//! The `generate_deterministic_topology()` method creates a hand-crafted graph
+//! that demonstrates all topological categories:
+//!
+//! ```text
+//! CANONICAL SPACES (reachable from Root via explicit edges):
+//! =========================================================
+//!
+//!   Root (0x01)
+//!    ├─verified─▶ A (0x0A) ─verified─▶ C (0x0C) ─verified─▶ F (0x0F)
+//!    │             │                    └─related─▶ G (0x10)
+//!    │             └─related─▶ D (0x0D)
+//!    ├─verified─▶ B (0x0B) ─verified─▶ E (0x0E)
+//!    │             └─topic[T_H]─▶ H (already canonical via explicit)
+//!    └─related─▶ H (0x11) ─verified─▶ I (0x12)
+//!                           └─verified─▶ J (0x13)
+//!
+//!   Canonical set: {Root, A, B, C, D, E, F, G, H, I, J} = 11 nodes
+//!
+//! NON-CANONICAL SPACES (not reachable from Root):
+//! ===============================================
+//!
+//!   Island 1: X (0x20) ─verified─▶ Y (0x21) ─verified─▶ Z (0x22)
+//!              └─related─▶ W (0x23)
+//!
+//!   Island 2: P (0x30) ─verified─▶ Q (0x31)
+//!              └─topic[T_Q]─▶ Q
+//!
+//!   Island 3 (single node): S (0x40)
+//!
+//!   Non-canonical set: {X, Y, Z, W, P, Q, S} = 7 nodes
+//!
+//! TOPIC EDGES (demonstrate topic resolution):
+//! ===========================================
+//!
+//!   - B ─topic[T_H]─▶ resolves to H (canonical) → includes H's subtree {H, I, J}
+//!   - Root ─topic[T_E]─▶ resolves to E (canonical) → already in tree
+//!   - X ─topic[T_A]─▶ resolves to A (canonical in Root's graph, but X isn't canonical)
+//!   - P ─topic[T_Q]─▶ resolves to Q (both non-canonical)
+//!
+//! SHARED TOPICS (multiple spaces announce same topic):
+//! ===================================================
+//!
+//!   Topic T_SHARED (0xF0) announced by: C, G, Y
+//!   - A ─topic[T_SHARED]─▶ resolves to {C, G} (canonical), not Y (non-canonical)
+//!
+//! SPACES WITH EDGES POINTING TO CANONICAL (but not themselves canonical):
+//! ======================================================================
+//!
+//!   - X ─topic[T_A]─▶ A (X not canonical, but points to canonical A)
+//!   - W ─verified─▶ Root (W not canonical despite pointing to Root)
+//!
+//! ```
 
 use crate::events::{
     Address, BlockMetadata, SpaceCreated, SpaceId, SpaceTopologyEvent, SpaceTopologyPayload,
@@ -9,18 +64,67 @@ use crate::events::{
 };
 use rand::Rng;
 
-/// Well-known root space ID (deterministic across runs)
-/// This is the starting point for the canonical graph.
-pub const ROOT_SPACE_ID: SpaceId = [
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x01,
-];
+// ============================================================================
+// Well-known IDs (deterministic across runs)
+// ============================================================================
 
-/// Well-known root topic ID (deterministic across runs)
-pub const ROOT_TOPIC_ID: TopicId = [
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00,
-    0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x02,
-];
+/// Root space ID - starting point for canonical graph
+pub const ROOT_SPACE_ID: SpaceId = make_id(0x01);
+/// Root topic ID
+pub const ROOT_TOPIC_ID: TopicId = make_id(0x02);
+
+// Canonical spaces
+pub const SPACE_A: SpaceId = make_id(0x0A);
+pub const SPACE_B: SpaceId = make_id(0x0B);
+pub const SPACE_C: SpaceId = make_id(0x0C);
+pub const SPACE_D: SpaceId = make_id(0x0D);
+pub const SPACE_E: SpaceId = make_id(0x0E);
+pub const SPACE_F: SpaceId = make_id(0x0F);
+pub const SPACE_G: SpaceId = make_id(0x10);
+pub const SPACE_H: SpaceId = make_id(0x11);
+pub const SPACE_I: SpaceId = make_id(0x12);
+pub const SPACE_J: SpaceId = make_id(0x13);
+
+// Non-canonical spaces - Island 1
+pub const SPACE_X: SpaceId = make_id(0x20);
+pub const SPACE_Y: SpaceId = make_id(0x21);
+pub const SPACE_Z: SpaceId = make_id(0x22);
+pub const SPACE_W: SpaceId = make_id(0x23);
+
+// Non-canonical spaces - Island 2
+pub const SPACE_P: SpaceId = make_id(0x30);
+pub const SPACE_Q: SpaceId = make_id(0x31);
+
+// Non-canonical spaces - Island 3 (isolated)
+pub const SPACE_S: SpaceId = make_id(0x40);
+
+// Topics (each space announces its own topic, named T_<space>)
+pub const TOPIC_ROOT: TopicId = ROOT_TOPIC_ID;
+pub const TOPIC_A: TopicId = make_id(0x8A);
+pub const TOPIC_B: TopicId = make_id(0x8B);
+pub const TOPIC_C: TopicId = make_id(0x8C);
+pub const TOPIC_D: TopicId = make_id(0x8D);
+pub const TOPIC_E: TopicId = make_id(0x8E);
+pub const TOPIC_F: TopicId = make_id(0x8F);
+pub const TOPIC_G: TopicId = make_id(0x90);
+pub const TOPIC_H: TopicId = make_id(0x91);
+pub const TOPIC_I: TopicId = make_id(0x92);
+pub const TOPIC_J: TopicId = make_id(0x93);
+pub const TOPIC_X: TopicId = make_id(0xA0);
+pub const TOPIC_Y: TopicId = make_id(0xA1);
+pub const TOPIC_Z: TopicId = make_id(0xA2);
+pub const TOPIC_W: TopicId = make_id(0xA3);
+pub const TOPIC_P: TopicId = make_id(0xB0);
+pub const TOPIC_Q: TopicId = make_id(0xB1);
+pub const TOPIC_S: TopicId = make_id(0xC0);
+
+// Shared topic (announced by multiple spaces: C, G, Y)
+pub const TOPIC_SHARED: TopicId = make_id(0xF0);
+
+/// Helper to create a deterministic ID from a single byte
+const fn make_id(n: u8) -> [u8; 16] {
+    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, n]
+}
 
 /// Mock substream that generates synthetic space topology events
 pub struct MockSubstream {
@@ -321,6 +425,182 @@ impl MockSubstream {
         }
 
         events
+    }
+
+    /// Generate a deterministic topology that demonstrates all topological categories.
+    ///
+    /// This creates a hand-crafted graph with:
+    /// - 11 canonical spaces (reachable from Root via explicit edges)
+    /// - 7 non-canonical spaces (isolated islands)
+    /// - Topic edges demonstrating topic resolution
+    /// - Shared topics (multiple spaces announce the same topic)
+    /// - Spaces pointing to canonical nodes but not themselves canonical
+    ///
+    /// See module-level documentation for the full topology diagram.
+    pub fn generate_deterministic_topology(&mut self) -> Vec<SpaceTopologyEvent> {
+        let mut events = Vec::new();
+
+        // =====================================================================
+        // Phase 1: Create all spaces
+        // =====================================================================
+
+        // Root space (canonical)
+        events.push(self.create_space_with_id(ROOT_SPACE_ID, TOPIC_ROOT));
+
+        // Canonical spaces (will be connected to Root)
+        events.push(self.create_space_with_id(SPACE_A, TOPIC_A));
+        events.push(self.create_space_with_id(SPACE_B, TOPIC_B));
+        events.push(self.create_space_with_id(SPACE_C, TOPIC_SHARED)); // C announces shared topic
+        events.push(self.create_space_with_id(SPACE_D, TOPIC_D));
+        events.push(self.create_space_with_id(SPACE_E, TOPIC_E));
+        events.push(self.create_space_with_id(SPACE_F, TOPIC_F));
+        events.push(self.create_space_with_id(SPACE_G, TOPIC_SHARED)); // G also announces shared topic
+        events.push(self.create_space_with_id(SPACE_H, TOPIC_H));
+        events.push(self.create_space_with_id(SPACE_I, TOPIC_I));
+        events.push(self.create_space_with_id(SPACE_J, TOPIC_J));
+
+        // Non-canonical spaces - Island 1
+        events.push(self.create_space_with_id(SPACE_X, TOPIC_X));
+        events.push(self.create_space_with_id(SPACE_Y, TOPIC_SHARED)); // Y also announces shared topic
+        events.push(self.create_space_with_id(SPACE_Z, TOPIC_Z));
+        events.push(self.create_space_with_id(SPACE_W, TOPIC_W));
+
+        // Non-canonical spaces - Island 2
+        events.push(self.create_space_with_id(SPACE_P, TOPIC_P));
+        events.push(self.create_space_with_id(SPACE_Q, TOPIC_Q));
+
+        // Non-canonical spaces - Island 3 (isolated single node)
+        events.push(self.create_space_with_id(SPACE_S, TOPIC_S));
+
+        // =====================================================================
+        // Phase 2: Create explicit edges for canonical graph
+        // =====================================================================
+
+        // Root's direct children
+        events.push(self.create_verified_extension_unchecked(ROOT_SPACE_ID, SPACE_A));
+        events.push(self.create_verified_extension_unchecked(ROOT_SPACE_ID, SPACE_B));
+        events.push(self.create_related_extension_unchecked(ROOT_SPACE_ID, SPACE_H));
+
+        // A's subtree
+        events.push(self.create_verified_extension_unchecked(SPACE_A, SPACE_C));
+        events.push(self.create_related_extension_unchecked(SPACE_A, SPACE_D));
+
+        // B's subtree
+        events.push(self.create_verified_extension_unchecked(SPACE_B, SPACE_E));
+
+        // C's subtree
+        events.push(self.create_verified_extension_unchecked(SPACE_C, SPACE_F));
+        events.push(self.create_related_extension_unchecked(SPACE_C, SPACE_G));
+
+        // H's subtree
+        events.push(self.create_verified_extension_unchecked(SPACE_H, SPACE_I));
+        events.push(self.create_verified_extension_unchecked(SPACE_H, SPACE_J));
+
+        // =====================================================================
+        // Phase 3: Create explicit edges for non-canonical islands
+        // =====================================================================
+
+        // Island 1: X -> Y -> Z, X -> W
+        events.push(self.create_verified_extension_unchecked(SPACE_X, SPACE_Y));
+        events.push(self.create_verified_extension_unchecked(SPACE_Y, SPACE_Z));
+        events.push(self.create_related_extension_unchecked(SPACE_X, SPACE_W));
+
+        // Island 2: P -> Q
+        events.push(self.create_verified_extension_unchecked(SPACE_P, SPACE_Q));
+
+        // W points to Root (but W is still not canonical - edge goes wrong direction)
+        events.push(self.create_verified_extension_unchecked(SPACE_W, ROOT_SPACE_ID));
+
+        // =====================================================================
+        // Phase 4: Create topic edges
+        // =====================================================================
+
+        // B -> topic[H] : resolves to H (canonical), adds H's subtree {I, J}
+        events.push(self.create_subtopic_extension_unchecked(SPACE_B, TOPIC_H));
+
+        // Root -> topic[E] : resolves to E (canonical), already in tree via B
+        events.push(self.create_subtopic_extension_unchecked(ROOT_SPACE_ID, TOPIC_E));
+
+        // A -> topic[SHARED] : resolves to {C, G} (canonical), Y is filtered out
+        events.push(self.create_subtopic_extension_unchecked(SPACE_A, TOPIC_SHARED));
+
+        // X -> topic[A] : X is not canonical, but points to canonical A
+        // This demonstrates that pointing to canonical doesn't make you canonical
+        events.push(self.create_subtopic_extension_unchecked(SPACE_X, TOPIC_A));
+
+        // P -> topic[Q] : both P and Q are non-canonical
+        events.push(self.create_subtopic_extension_unchecked(SPACE_P, TOPIC_Q));
+
+        events
+    }
+
+    /// Create a space with a specific ID and topic
+    fn create_space_with_id(&mut self, space_id: SpaceId, topic_id: TopicId) -> SpaceTopologyEvent {
+        self.spaces.push(space_id);
+        self.space_topics.push(topic_id);
+
+        SpaceTopologyEvent {
+            meta: self.next_block_meta(),
+            payload: SpaceTopologyPayload::SpaceCreated(SpaceCreated {
+                space_id,
+                topic_id,
+                space_type: SpaceType::Dao {
+                    initial_editors: vec![],
+                    initial_members: vec![],
+                },
+            }),
+        }
+    }
+
+    /// Create a verified extension without validation (for deterministic topology)
+    fn create_verified_extension_unchecked(
+        &mut self,
+        source: SpaceId,
+        target: SpaceId,
+    ) -> SpaceTopologyEvent {
+        SpaceTopologyEvent {
+            meta: self.next_block_meta(),
+            payload: SpaceTopologyPayload::TrustExtended(TrustExtended {
+                source_space_id: source,
+                extension: TrustExtension::Verified {
+                    target_space_id: target,
+                },
+            }),
+        }
+    }
+
+    /// Create a related extension without validation (for deterministic topology)
+    fn create_related_extension_unchecked(
+        &mut self,
+        source: SpaceId,
+        target: SpaceId,
+    ) -> SpaceTopologyEvent {
+        SpaceTopologyEvent {
+            meta: self.next_block_meta(),
+            payload: SpaceTopologyPayload::TrustExtended(TrustExtended {
+                source_space_id: source,
+                extension: TrustExtension::Related {
+                    target_space_id: target,
+                },
+            }),
+        }
+    }
+
+    /// Create a subtopic extension without validation (for deterministic topology)
+    fn create_subtopic_extension_unchecked(
+        &mut self,
+        source: SpaceId,
+        target_topic: TopicId,
+    ) -> SpaceTopologyEvent {
+        SpaceTopologyEvent {
+            meta: self.next_block_meta(),
+            payload: SpaceTopologyPayload::TrustExtended(TrustExtended {
+                source_space_id: source,
+                extension: TrustExtension::Subtopic {
+                    target_topic_id: target_topic,
+                },
+            }),
+        }
     }
 
     /// Get all created spaces
