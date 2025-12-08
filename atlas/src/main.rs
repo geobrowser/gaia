@@ -3,9 +3,12 @@
 //! Entry point for the Atlas graph processing pipeline.
 //! Consumes space topology events and computes transitive and canonical graphs.
 
+use atlas::convert::convert_mock_blocks;
 use atlas::events::{SpaceId, SpaceTopologyEvent, SpaceTopologyPayload};
 use atlas::graph::{CanonicalProcessor, GraphState, TransitiveProcessor};
-use atlas::mock_substream::{MockSubstream, SPACE_P, SPACE_X};
+
+// Use the shared mock_substream crate
+use mock_substream::test_topology;
 
 fn main() {
     println!("╔══════════════════════════════════════════════════════════════════════════════╗");
@@ -13,13 +16,13 @@ fn main() {
     println!("╚══════════════════════════════════════════════════════════════════════════════╝");
     println!();
 
-    // Create mock substream and generate deterministic topology
-    let mut substream = MockSubstream::new();
-    let events = substream.generate_deterministic_topology();
+    // Generate deterministic topology from shared mock_substream crate
+    let blocks = test_topology::generate();
+    let events = convert_mock_blocks(&blocks);
 
-    let root_space = substream.root_space_id();
+    let root_space = test_topology::ROOT_SPACE_ID;
 
-    println!("Generated {} events from mock substream", events.len());
+    println!("Generated {} topology events from mock substream", events.len());
     println!("Root space: {}", format_space_id(root_space));
     println!();
 
@@ -91,7 +94,7 @@ fn main() {
     println!("├──────────────────────────────────────────────────────────────────────────────┤");
 
     // Island 1: X's transitive graph
-    let x_transitive = transitive.get_full(SPACE_X, &state);
+    let x_transitive = transitive.get_full(test_topology::SPACE_X, &state);
     println!(
         "│ Island 1 (from X): {} nodes                                                   │",
         x_transitive.len()
@@ -100,7 +103,7 @@ fn main() {
     println!("│                                                                              │");
 
     // Island 2: P's transitive graph
-    let p_transitive = transitive.get_full(SPACE_P, &state);
+    let p_transitive = transitive.get_full(test_topology::SPACE_P, &state);
     println!(
         "│ Island 2 (from P): {} nodes                                                   │",
         p_transitive.len()
