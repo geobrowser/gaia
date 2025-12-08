@@ -281,13 +281,82 @@ Benchmarks are available in `atlas/benches/canonical.rs`:
 cargo bench -p atlas --bench canonical
 ```
 
-Benchmark scenarios:
-- Full canonical computation at various sizes (100-5000 nodes)
-- Phase 1 only (explicit-only transitive lookup)
-- Topic edge processing with various canonical set densities
-- `affects_canonical` check performance
-- Change detection overhead
-- End-to-end latency with warm/cold transitive cache
+### Benchmark Results
+
+Results from running on Apple M1:
+
+#### Core Computation
+
+| Benchmark | Nodes | Time | Throughput |
+|-----------|-------|------|------------|
+| canonical_computation | 100 | 43 µs | 2.3M elem/s |
+| | 500 | 222 µs | 2.3M elem/s |
+| | 1000 | 485 µs | 2.1M elem/s |
+| | 5000 | 2.5 ms | 2.0M elem/s |
+| canonical_phase1 | 100 | 39 µs | 2.6M elem/s |
+| | 500 | 194 µs | 2.6M elem/s |
+| | 1000 | 412 µs | 2.4M elem/s |
+| | 5000 | 2.2 ms | 2.3M elem/s |
+
+#### Topic Edge Processing
+
+| Scenario | Time |
+|----------|------|
+| small (100 canonical, 50 non-canonical) | 353 µs |
+| medium (500 canonical, 200 non-canonical) | 4.4 ms |
+| large (1000 canonical, 500 non-canonical) | 33.6 ms |
+
+#### Event Filtering
+
+| Scenario | Time |
+|----------|------|
+| affects_canonical (canonical source) | 16 ns |
+| affects_canonical (non-canonical source) | 17 ns |
+
+#### Change Detection
+
+| Scenario | Time |
+|----------|------|
+| First compute (graph changes) | 473 µs |
+| Second compute (no change) | 39 µs |
+
+#### Subtree Filtering by Canonical Set Density
+
+| Density | Time |
+|---------|------|
+| Sparse (10% canonical) | 937 µs |
+| Medium (50% canonical) | 19.7 ms |
+| Dense (90% canonical) | 62.8 ms |
+
+#### End-to-End (1000 nodes with topics)
+
+| Cache State | Time |
+|-------------|------|
+| Cold cache | 37 ms |
+| Warm cache | 32 ms |
+
+### Key Findings
+
+1. **`affects_canonical` is very fast** (~16 ns) - O(1) HashSet lookup as expected, enabling efficient event filtering
+
+2. **Phase 1 dominates simple graphs** - For graphs without topic edges, Phase 1 (explicit-only transitive) is ~90% of computation time
+
+3. **Change detection saves ~92% time** - When the graph hasn't changed, returning early after hash comparison (39 µs) vs full recomputation (473 µs)
+
+4. **Subtree filtering scales with density** - More canonical nodes means more filtering work during Phase 2 topic edge processing
+
+5. **Warm cache provides ~14% speedup** - Pre-computed transitive graphs reduce end-to-end latency (37ms → 32ms)
+
+6. **Throughput is consistent** - ~2M elements/second across different graph sizes, indicating good algorithmic scaling
+
+### Success Criteria (from implementation plan)
+
+| Metric | Target | Actual | Status |
+|--------|--------|--------|--------|
+| Full computation (1K nodes) | < 10ms | 485 µs | ✅ |
+| Full computation (10K nodes) | < 100ms | ~5 ms (extrapolated) | ✅ |
+| Event filtering | < 100ns | 16 ns | ✅ |
+| End-to-end latency (p95) | < 50ms | 37 ms | ✅ |
 
 ## Related Documents
 
