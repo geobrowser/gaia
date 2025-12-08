@@ -11,6 +11,10 @@ path = "src/main.rs"
 name = "transitive"
 harness = false
 
+[[bench]]
+name = "canonical"
+harness = false
+
 [dependencies]
 rand = "0.8"
 hex = "0.4"

@@ -1,0 +1,297 @@
+# Canonical Graph Implementation
+
+This document describes the current implementation of canonical graph computation in Atlas.
+
+## Overview
+
+The canonical graph represents the "trusted" portion of the topology graph, computed from a designated root node. Trust flows only through explicit edges (Verified, Related); topic edges cannot grant trust but can add connections between already-trusted nodes.
+
+## Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                         CanonicalProcessor                          │
+│                                                                     │
+│  ┌─────────────────────────────────────────────────────────────┐   │
+│  │                     Phase 1                                  │   │
+│  │  Get canonical set from root's explicit-only transitive     │   │
+│  │  (O(1) lookup from TransitiveCache)                         │   │
+│  └─────────────────────────────────────────────────────────────┘   │
+│                              │                                      │
+│                              ▼                                      │
+│  ┌─────────────────────────────────────────────────────────────┐   │
+│  │                     Phase 2                                  │   │
+│  │  Add topic edges with filtered subtrees                     │   │
+│  │  (Only include nodes already in canonical set)              │   │
+│  └─────────────────────────────────────────────────────────────┘   │
+│                              │                                      │
+│                              ▼                                      │
+│  ┌─────────────────────────────────────────────────────────────┐   │
+│  │                 Change Detection                             │   │
+│  │  Hash tree and compare with previous                        │   │
+│  └─────────────────────────────────────────────────────────────┘   │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+## Data Structures
+
+### CanonicalGraph
+
+```rust
+pub struct CanonicalGraph {
+    /// Root space this graph was computed from
+    pub root: SpaceId,
+
+    /// Tree representation with edge metadata
+    /// Preserves distance from root
+    pub tree: TreeNode,
+
+    /// Flat set of all canonical spaces
+    pub flat: HashSet<SpaceId>,
+
+    /// Hash for change detection
+    pub hash: u64,
+}
+```
+
+The `CanonicalGraph` contains:
+- **tree**: A tree structure preserving parent-child relationships and edge metadata. Nodes can appear multiple times (once via explicit edge, once via topic edge) to preserve all paths.
+- **flat**: A flat set for O(1) membership checks. Each node appears exactly once regardless of how many paths lead to it.
+- **hash**: A deterministic hash of the tree for efficient change detection.
+
+### CanonicalProcessor
+
+```rust
+pub struct CanonicalProcessor {
+    /// The root space for canonical graph computation
+    root: SpaceId,
+
+    /// Current canonical graph hash (for change detection)
+    current_hash: Option<u64>,
+}
+```
+
+The processor is stateless except for tracking the current hash. It delegates to `TransitiveProcessor` for the heavy lifting of graph traversal.
+
+## Algorithm
+
+### Phase 1: Establish Canonical Set
+
+Phase 1 determines which nodes are "trusted" by traversing only explicit edges from the root.
+
+```rust
+let root_transitive = transitive.get_explicit_only(self.root, state);
+let canonical_set = root_transitive.flat.clone();
+let mut tree = root_transitive.tree.clone();
+```
+
+This is an O(1) lookup when the transitive graph is cached, or O(explicit_edges) BFS on cache miss.
+
+**Key property**: Only nodes reachable via explicit edges (Verified, Related) from the root are canonical. Topic edges cannot grant trust.
+
+### Phase 2: Add Topic Edges
+
+Phase 2 adds topic edge connections between already-canonical nodes.
+
+```rust
+for (source, topic_id) in topic_edges_from_canonical_nodes {
+    let members = state.get_topic_members(&topic_id);
+    
+    for member in members.filter(|m| canonical_set.contains(m)) {
+        let member_transitive = transitive.get_full(member, state);
+        let filtered_subtree = filter_to_canonical(&member_transitive.tree, &canonical_set);
+        attach_subtree(&mut tree, source, filtered_subtree);
+    }
+}
+```
+
+For each topic edge from a canonical source:
+1. Resolve the topic to its member spaces
+2. Filter to only canonical members
+3. For each canonical member, get its full transitive graph
+4. Filter the subtree to only include canonical descendants
+5. Attach the filtered subtree to the source node
+
+**Key property**: Topic edges only connect nodes that are already canonical. They cannot expand the canonical set.
+
+### Subtree Filtering
+
+When attaching a member's transitive subtree via a topic edge, we filter out any non-canonical descendants:
+
+```rust
+fn filter_to_canonical(&self, subtree: &TreeNode, canonical_set: &HashSet<SpaceId>) -> TreeNode {
+    let mut filtered = TreeNode::new_with_topic(subtree.space_id, topic_id);
+    
+    for child in &subtree.children {
+        if canonical_set.contains(&child.space_id) {
+            filtered.children.push(filter_child_recursive(child, canonical_set));
+        }
+    }
+    
+    filtered
+}
+```
+
+This ensures that even if a canonical member has non-canonical descendants in its full transitive graph, those descendants are excluded from the canonical tree.
+
+### Change Detection
+
+After computing the tree, we hash it and compare with the previous hash:
+
+```rust
+let new_hash = hash_tree(&tree);
+
+if Some(new_hash) == self.current_hash {
+    return None;  // No change
+}
+
+self.current_hash = Some(new_hash);
+Some(CanonicalGraph::new(self.root, tree, canonical_set))
+```
+
+This avoids emitting duplicate updates when the canonical graph hasn't actually changed.
+
+## Event Filtering
+
+Not every topology event affects the canonical graph. The `affects_canonical` method provides an O(1) check:
+
+```rust
+pub fn affects_canonical(
+    &self,
+    event: &SpaceTopologyEvent,
+    canonical_set: &HashSet<SpaceId>,
+) -> bool {
+    match &event.payload {
+        // New spaces aren't canonical until reached via explicit edges
+        SpaceTopologyPayload::SpaceCreated(_) => false,
+
+        SpaceTopologyPayload::TrustExtended(extended) => {
+            // Only events from canonical sources can affect the graph
+            canonical_set.contains(&extended.source_space_id)
+        }
+    }
+}
+```
+
+| Event | Affects Canonical? | Reason |
+|-------|-------------------|--------|
+| `SpaceCreated` | No | New spaces aren't canonical until explicitly connected |
+| Extension from canonical source | Yes | May add new canonical nodes or tree structure |
+| Extension from non-canonical source | No | Cannot affect canonical set or tree |
+
+## Integration with TransitiveProcessor
+
+The `CanonicalProcessor` leverages `TransitiveProcessor` for efficient computation:
+
+```
+┌─────────────────────────────────────────────────────────────────────┐
+│                      TransitiveProcessor                             │
+│                                                                      │
+│  TransitiveCache:                                                    │
+│    explicit_only[space] → TransitiveGraph (explicit edges only)     │
+│    full[space] → TransitiveGraph (explicit + topic edges)           │
+│    reverse_deps[space] → spaces whose graph contains this space     │
+│                                                                      │
+│  On invalidation: remove from cache, lazy recompute on next access  │
+└─────────────────────────────────────────────────────────────────────┘
+                              │
+                              ▼
+┌─────────────────────────────────────────────────────────────────────┐
+│                      CanonicalProcessor                              │
+│                                                                      │
+│  Phase 1: canonical_set = cache.get_explicit_only(root).flat        │
+│                                                                      │
+│  Phase 2: for each topic edge from canonical nodes:                 │
+│             attach cache.get_full(member) filtered to canonical_set │
+│                                                                      │
+│  Output: CanonicalGraph (if changed)                                │
+└─────────────────────────────────────────────────────────────────────┘
+```
+
+## Performance Characteristics
+
+| Operation | Complexity | Notes |
+|-----------|------------|-------|
+| Phase 1 (cache hit) | O(1) | Lookup from TransitiveCache |
+| Phase 1 (cache miss) | O(explicit_edges) | BFS traversal |
+| Phase 2 per topic edge | O(topic_members × subtree_size) | Filter and attach |
+| affects_canonical | O(1) | HashSet lookup |
+| Change detection | O(tree_size) | Tree hashing |
+
+## Usage Example
+
+```rust
+use atlas::graph::{CanonicalProcessor, GraphState, TransitiveProcessor};
+
+// Set up state
+let mut state = GraphState::new();
+// ... apply events to build the graph ...
+
+// Create processors
+let mut transitive = TransitiveProcessor::new();
+let mut canonical = CanonicalProcessor::new(root_space_id);
+
+// Compute canonical graph
+if let Some(graph) = canonical.compute(&state, &mut transitive) {
+    println!("Canonical graph has {} nodes", graph.len());
+    println!("Tree structure:\n{:?}", graph.tree);
+}
+
+// On new event, check if it affects canonical
+if canonical.affects_canonical(&event, &graph.flat) {
+    // Recompute
+    if let Some(new_graph) = canonical.compute(&state, &mut transitive) {
+        // Emit update
+    }
+}
+```
+
+## File Structure
+
+```
+atlas/src/graph/
+├── canonical.rs      # CanonicalGraph, CanonicalProcessor
+├── transitive.rs     # TransitiveGraph, TransitiveProcessor, TransitiveCache
+├── state.rs          # GraphState
+├── tree.rs           # TreeNode, EdgeType
+├── hash.rs           # Tree hashing
+├── memory.rs         # Memory size estimation
+└── mod.rs            # Module exports
+```
+
+## Testing
+
+The implementation includes comprehensive unit tests in `canonical.rs`:
+
+- `test_single_space_canonical` - Single root node
+- `test_explicit_edges_only` - Linear chain via explicit edges
+- `test_topic_edge_to_canonical_member` - Topic edge to already-canonical node
+- `test_topic_edge_to_non_canonical_member` - Topic edge to non-canonical node (filtered out)
+- `test_topic_edge_includes_transitive_subtree` - Subtree attachment via topic edge
+- `test_affects_canonical_*` - Event filtering tests
+- `test_change_detection` - Hash-based change detection
+- `test_multiple_spaces_same_topic` - Multiple spaces announcing same topic
+- `test_filtered_subtree_preserves_canonical_only` - Subtree filtering correctness
+
+## Benchmarks
+
+Benchmarks are available in `atlas/benches/canonical.rs`:
+
+```bash
+cargo bench -p atlas --bench canonical
+```
+
+Benchmark scenarios:
+- Full canonical computation at various sizes (100-5000 nodes)
+- Phase 1 only (explicit-only transitive lookup)
+- Topic edge processing with various canonical set densities
+- `affects_canonical` check performance
+- Change detection overhead
+- End-to-end latency with warm/cold transitive cache
+
+## Related Documents
+
+- [Algorithm Overview](./algorithm-overview.md) - High-level data flow
+- [Graph Concepts](./graph-concepts.md) - Core concepts and terminology
+- [Transitive Graph Implementation](./transitive-graph-implementation.md) - TransitiveProcessor details
+- [0001: Canonical Graph Implementation Plan](./agents/plans/0001-canonical-graph-implementation-plan.md) - Original design plan
