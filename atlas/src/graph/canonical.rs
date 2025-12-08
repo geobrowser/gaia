@@ -24,7 +24,9 @@ pub struct CanonicalGraph {
     /// Flat set of all canonical spaces
     pub flat: HashSet<SpaceId>,
 
-    /// Hash for change detection
+    /// Hash of the tree structure for detecting changes
+    /// Two graphs with the same canonical set may have different tree structures
+    /// due to BFS traversal order and cycle avoidance
     pub hash: u64,
 }
 
@@ -65,8 +67,9 @@ pub struct CanonicalProcessor {
     /// The root space for canonical graph computation
     root: SpaceId,
 
-    /// Current canonical graph hash (for change detection)
-    current_hash: Option<u64>,
+    /// Hash of the last computed tree structure
+    /// Used to detect changes in tree structure (not just canonical set)
+    last_hash: Option<u64>,
 }
 
 impl CanonicalProcessor {
@@ -74,18 +77,13 @@ impl CanonicalProcessor {
     pub fn new(root: SpaceId) -> Self {
         Self {
             root,
-            current_hash: None,
+            last_hash: None,
         }
     }
 
     /// Get the root space ID
     pub fn root(&self) -> SpaceId {
         self.root
-    }
-
-    /// Get the current canonical graph hash
-    pub fn current_hash(&self) -> Option<u64> {
-        self.current_hash
     }
 
     /// Check if an event can affect the canonical graph
@@ -110,11 +108,19 @@ impl CanonicalProcessor {
 
     /// Compute the canonical graph
     ///
-    /// Returns `Some(CanonicalGraph)` if the graph changed, `None` if unchanged.
+    /// Returns `Some(CanonicalGraph)` if the tree structure changed since the last
+    /// computation, `None` if the tree is identical.
     ///
     /// The algorithm has two phases:
     /// 1. Get the canonical set from root's explicit-only transitive graph
     /// 2. Add topic edges, attaching filtered subtrees for canonical members
+    ///
+    /// Use `affects_canonical` to check if an event could possibly require
+    /// recomputation before calling this method.
+    ///
+    /// Note: Even if `affects_canonical` returns true, the tree structure may
+    /// not actually change (e.g., adding a duplicate edge). The hash comparison
+    /// detects this case.
     pub fn compute(
         &mut self,
         state: &GraphState,
@@ -142,16 +148,15 @@ impl CanonicalProcessor {
             );
         }
 
-        // Compute hash for change detection
-        let new_hash = hash_tree(&tree);
+        let graph = CanonicalGraph::new(self.root, tree, canonical_set);
 
-        // Check if changed
-        if Some(new_hash) == self.current_hash {
+        // Check if tree structure changed
+        if self.last_hash == Some(graph.hash) {
             return None;
         }
 
-        self.current_hash = Some(new_hash);
-        Some(CanonicalGraph::new(self.root, tree, canonical_set))
+        self.last_hash = Some(graph.hash);
+        Some(graph)
     }
 
     /// Collect all topic edges from canonical nodes

@@ -134,22 +134,39 @@ fn filter_to_canonical(&self, subtree: &TreeNode, canonical_set: &HashSet<SpaceI
 
 This ensures that even if a canonical member has non-canonical descendants in its full transitive graph, those descendants are excluded from the canonical tree.
 
-### Change Detection
+### Tree Structure Change Detection
 
 After computing the tree, we hash it and compare with the previous hash:
 
 ```rust
-let new_hash = hash_tree(&tree);
+let graph = CanonicalGraph::new(self.root, tree, canonical_set);
 
-if Some(new_hash) == self.current_hash {
-    return None;  // No change
+if self.last_hash == Some(graph.hash) {
+    return None;  // Tree structure unchanged
 }
 
-self.current_hash = Some(new_hash);
-Some(CanonicalGraph::new(self.root, tree, canonical_set))
+self.last_hash = Some(graph.hash);
+Some(graph)
 ```
 
-This avoids emitting duplicate updates when the canonical graph hasn't actually changed.
+**Why hash the tree?**
+
+Even when the canonical *set* doesn't change, the tree *structure* can change due to:
+
+1. **BFS traversal order** - A node reachable via multiple paths appears at the first depth encountered
+2. **New shorter paths** - Adding an edge can move a node closer to the root
+3. **Topic edge attachment order** - Different orderings can attach subtrees in different places
+
+Example:
+```
+Before: Root -> A -> B -> C  (C at depth 3)
+After:  Root -> A -> B -> C
+        Root -> D -> C       (new edge, C now at depth 2 via D)
+```
+
+The canonical set `{Root, A, B, C, D}` may be the same, but the tree structure changed because C moved from depth 3 to depth 2. Since downstream consumers care about distance from root, we must detect and emit this change.
+
+**Note**: This hash comparison happens *after* full recomputation. It detects when the tree structure is actually unchanged despite an event from a canonical source. The real optimization for skipping computation is event filtering (below).
 
 ## Event Filtering
 
@@ -313,12 +330,14 @@ Results from running on Apple M1:
 | affects_canonical (canonical source) | 16 ns |
 | affects_canonical (non-canonical source) | 17 ns |
 
-#### Change Detection
+#### Repeated Computation (warm transitive cache)
 
 | Scenario | Time |
 |----------|------|
-| First compute (graph changes) | 473 µs |
-| Second compute (no change) | 39 µs |
+| First compute (cold transitive cache) | 473 µs |
+| Second compute (warm cache, tree unchanged) | 39 µs |
+
+Note: The speedup is from the transitive cache hit (O(1) lookup vs BFS traversal). The hash comparison adds negligible overhead.
 
 #### Subtree Filtering by Canonical Set Density
 
@@ -341,7 +360,7 @@ Results from running on Apple M1:
 
 2. **Phase 1 dominates simple graphs** - For graphs without topic edges, Phase 1 (explicit-only transitive) is ~90% of computation time
 
-3. **Change detection saves ~92% time** - When the graph hasn't changed, returning early after hash comparison (39 µs) vs full recomputation (473 µs)
+3. **Transitive cache provides major speedup** - Warm cache (39 µs) vs cold cache (473 µs) is ~12x faster due to O(1) transitive graph lookups instead of BFS traversal
 
 4. **Subtree filtering scales with density** - More canonical nodes means more filtering work during Phase 2 topic edge processing
 
