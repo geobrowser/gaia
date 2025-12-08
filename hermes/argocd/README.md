@@ -71,7 +71,7 @@ This creates an ArgoCD Application that:
    - Builds Docker image with `:latest` tag
    - Pushes to DigitalOcean registry
    - Applies k8s manifests using `kubectl apply`
-   - Restarts the hermes-producer Job
+   - Restarts the hermes-processor Job
 3. **ArgoCD UI** shows the updated deployment status
 
 ### What ArgoCD Shows
@@ -79,7 +79,8 @@ This creates an ArgoCD Application that:
 In the UI, you'll see:
 - **Kafka broker** (StatefulSet) - running status, pod health
 - **Kafka UI** - deployment status, service endpoint
-- **Hermes Producer** (Job) - completion status, pod logs
+- **Hermes Processor** (Job) - completion status, pod logs
+- **Atlas** (Job) - completion status, pod logs
 - **ConfigMaps** - protobuf schema versions
 - **All resource relationships** - visual graph of how everything connects
 
@@ -134,9 +135,11 @@ The workflow at `.github/workflows/hermes-deploy.yml` automatically deploys when
 ### What Gets Deployed
 
 When changes are detected in:
-- `hermes-producer/**` - Rebuilds and redeploys producer
-- `hermes-schema/**` - Rebuilds producer with new schemas
-- `wire/**` - Rebuilds producer with dependency changes
+- `hermes-processor/**` - Rebuilds and redeploys hermes-processor
+- `atlas/**` - Rebuilds and redeploys atlas
+- `mock-substream/**` - Rebuilds both services
+- `hermes-schema/**` - Rebuilds services with new schemas
+- `wire/**` - Rebuilds services with dependency changes
 - `hermes/**` - Applies k8s manifest changes (kafka-broker, kafka-ui, etc.)
 
 ### View Deployment Logs
