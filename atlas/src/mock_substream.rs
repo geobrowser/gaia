@@ -232,6 +232,9 @@ impl MockSubstream {
     /// Creates `num_spaces` spaces with various trust relationships between them.
     /// The root space is created first, then additional spaces are created and
     /// connected with trust relationships.
+    ///
+    /// The topology ensures the root space has outgoing edges so the canonical
+    /// graph contains more than just the root.
     pub fn generate_topology(&mut self, num_spaces: usize) -> Vec<SpaceTopologyEvent> {
         let mut rng = rand::thread_rng();
         let mut events = Vec::new();
@@ -245,9 +248,30 @@ impl MockSubstream {
             events.push(self.create_space());
         }
 
-        // Create trust relationships between spaces
+        // Ensure root has some outgoing edges for a meaningful canonical graph
+        // Connect root to ~30% of other spaces via verified edges
+        if self.spaces.len() > 1 {
+            let root = self.spaces[0];
+            let num_root_edges = std::cmp::max(1, (self.spaces.len() - 1) * 3 / 10);
+            let mut connected: Vec<usize> = Vec::new();
+
+            for _ in 0..num_root_edges {
+                let target_idx = loop {
+                    let idx = rng.gen_range(1..self.spaces.len());
+                    if !connected.contains(&idx) {
+                        break idx;
+                    }
+                };
+                connected.push(target_idx);
+                if let Some(event) = self.create_verified_extension(root, self.spaces[target_idx]) {
+                    events.push(event);
+                }
+            }
+        }
+
+        // Create trust relationships between non-root spaces
         // Only create edges from spaces that exist to spaces/topics that exist
-        for i in 0..self.spaces.len() {
+        for i in 1..self.spaces.len() {
             let source = self.spaces[i];
 
             // Verified edges (~30% chance)

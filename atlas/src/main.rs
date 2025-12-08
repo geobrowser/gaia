@@ -4,7 +4,7 @@
 //! Consumes space topology events and computes transitive and canonical graphs.
 
 use atlas::events::{SpaceTopologyEvent, SpaceTopologyPayload};
-use atlas::graph::{GraphState, TransitiveProcessor};
+use atlas::graph::{CanonicalProcessor, GraphState, TransitiveProcessor};
 use atlas::mock_substream::MockSubstream;
 
 fn main() {
@@ -64,6 +64,26 @@ fn main() {
         explicit.hash
     );
 
+    // Compute canonical graph
+    println!();
+    println!("=== Canonical Graph ===");
+
+    let mut canonical_processor = CanonicalProcessor::new(root_space);
+    if let Some(canonical) = canonical_processor.compute(&state, &mut transitive) {
+        println!(
+            "Canonical graph: {} nodes (hash: {:016x})",
+            canonical.len(),
+            canonical.hash
+        );
+
+        // Print canonical tree structure
+        println!();
+        println!("=== Canonical Tree ===");
+        print_tree(&canonical.tree, 0);
+    } else {
+        println!("Canonical graph unchanged");
+    }
+
     // Show cache stats
     let stats = transitive.cache_stats();
     println!();
@@ -71,11 +91,6 @@ fn main() {
     println!("Full graphs cached: {}", stats.full_count);
     println!("Explicit-only graphs cached: {}", stats.explicit_only_count);
     println!("Reverse deps tracked: {}", stats.reverse_deps_count);
-
-    // Print tree structure for root's full transitive
-    println!();
-    println!("=== Root Full Transitive Tree ===");
-    print_tree(&full.tree, 0);
 }
 
 /// Print a single topology event
