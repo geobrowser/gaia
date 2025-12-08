@@ -22,7 +22,10 @@ fn main() {
 
     let root_space = test_topology::ROOT_SPACE_ID;
 
-    println!("Generated {} topology events from mock substream", events.len());
+    println!(
+        "Generated {} topology events from mock substream",
+        events.len()
+    );
     println!("Root space: {}", format_space_id(root_space));
     println!();
 
