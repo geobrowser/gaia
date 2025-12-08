@@ -386,8 +386,7 @@ impl MockSubstream {
                         break idx;
                     }
                 };
-                if let Some(event) =
-                    self.create_verified_extension(source, self.spaces[target_idx])
+                if let Some(event) = self.create_verified_extension(source, self.spaces[target_idx])
                 {
                     events.push(event);
                 }
@@ -401,8 +400,7 @@ impl MockSubstream {
                         break idx;
                     }
                 };
-                if let Some(event) =
-                    self.create_related_extension(source, self.spaces[target_idx])
+                if let Some(event) = self.create_related_extension(source, self.spaces[target_idx])
                 {
                     events.push(event);
                 }
@@ -437,8 +435,12 @@ impl MockSubstream {
     /// - Spaces pointing to canonical nodes but not themselves canonical
     ///
     /// See module-level documentation for the full topology diagram.
+    // Allow vec_init_then_push: We can't use vec![] macro here because each push
+    // calls methods that mutate `self` (incrementing block numbers, etc.)
+    #[allow(clippy::vec_init_then_push)]
     pub fn generate_deterministic_topology(&mut self) -> Vec<SpaceTopologyEvent> {
-        let mut events = Vec::new();
+        // Pre-allocate: 18 spaces + 14 explicit edges + 5 topic edges = 37 events
+        let mut events = Vec::with_capacity(37);
 
         // =====================================================================
         // Phase 1: Create all spaces
@@ -714,14 +716,12 @@ mod tests {
             .expect("Should create subtopic extension to existing topic");
 
         match event.payload {
-            SpaceTopologyPayload::TrustExtended(extended) => {
-                match extended.extension {
-                    TrustExtension::Subtopic { target_topic_id } => {
-                        assert_eq!(target_topic_id, new_topic);
-                    }
-                    _ => panic!("Expected Subtopic extension"),
+            SpaceTopologyPayload::TrustExtended(extended) => match extended.extension {
+                TrustExtension::Subtopic { target_topic_id } => {
+                    assert_eq!(target_topic_id, new_topic);
                 }
-            }
+                _ => panic!("Expected Subtopic extension"),
+            },
             _ => panic!("Expected TrustExtended event"),
         }
     }

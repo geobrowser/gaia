@@ -46,9 +46,18 @@ fn main() {
     println!("┌──────────────────────────────────────────────────────────────────────────────┐");
     println!("│ Graph State Summary                                                          │");
     println!("├──────────────────────────────────────────────────────────────────────────────┤");
-    println!("│ Total spaces:     {:>4}                                                       │", state.space_count());
-    println!("│ Explicit edges:   {:>4}                                                       │", state.explicit_edge_count());
-    println!("│ Topic edges:      {:>4}                                                       │", state.topic_edge_count());
+    println!(
+        "│ Total spaces:     {:>4}                                                       │",
+        state.space_count()
+    );
+    println!(
+        "│ Explicit edges:   {:>4}                                                       │",
+        state.explicit_edge_count()
+    );
+    println!(
+        "│ Topic edges:      {:>4}                                                       │",
+        state.topic_edge_count()
+    );
     println!("└──────────────────────────────────────────────────────────────────────────────┘");
 
     // Compute canonical graph
@@ -61,9 +70,16 @@ fn main() {
     let canonical = canonical_processor.compute(&state, &mut transitive);
 
     if let Some(ref graph) = canonical {
-        println!("│ Canonical nodes:  {:>4}                                                       │", graph.len());
-        println!("├──────────────────────────────────────────────────────────────────────────────┤");
-        println!("│ Tree Structure:                                                              │");
+        println!(
+            "│ Canonical nodes:  {:>4}                                                       │",
+            graph.len()
+        );
+        println!(
+            "├──────────────────────────────────────────────────────────────────────────────┤"
+        );
+        println!(
+            "│ Tree Structure:                                                              │"
+        );
         print_tree_boxed(&graph.tree, 1);
     }
     println!("└──────────────────────────────────────────────────────────────────────────────┘");
@@ -76,13 +92,19 @@ fn main() {
 
     // Island 1: X's transitive graph
     let x_transitive = transitive.get_full(SPACE_X, &state);
-    println!("│ Island 1 (from X): {} nodes                                                   │", x_transitive.len());
+    println!(
+        "│ Island 1 (from X): {} nodes                                                   │",
+        x_transitive.len()
+    );
     print_tree_boxed(&x_transitive.tree, 1);
     println!("│                                                                              │");
 
     // Island 2: P's transitive graph
     let p_transitive = transitive.get_full(SPACE_P, &state);
-    println!("│ Island 2 (from P): {} nodes                                                   │", p_transitive.len());
+    println!(
+        "│ Island 2 (from P): {} nodes                                                   │",
+        p_transitive.len()
+    );
     print_tree_boxed(&p_transitive.tree, 1);
     println!("└──────────────────────────────────────────────────────────────────────────────┘");
 
@@ -92,9 +114,18 @@ fn main() {
     println!("┌──────────────────────────────────────────────────────────────────────────────┐");
     println!("│ Cache Statistics                                                             │");
     println!("├──────────────────────────────────────────────────────────────────────────────┤");
-    println!("│ Full graphs cached:         {:>4}                                             │", stats.full_count);
-    println!("│ Explicit-only graphs cached:{:>4}                                             │", stats.explicit_only_count);
-    println!("│ Reverse deps tracked:       {:>4}                                             │", stats.reverse_deps_count);
+    println!(
+        "│ Full graphs cached:         {:>4}                                             │",
+        stats.full_count
+    );
+    println!(
+        "│ Explicit-only graphs cached:{:>4}                                             │",
+        stats.explicit_only_count
+    );
+    println!(
+        "│ Reverse deps tracked:       {:>4}                                             │",
+        stats.reverse_deps_count
+    );
     println!("└──────────────────────────────────────────────────────────────────────────────┘");
 
     // Summary of what the demo shows
@@ -237,7 +268,9 @@ fn print_tree_boxed(node: &atlas::graph::TreeNode, depth: usize) {
         format_space_id(node.space_id),
         edge_str,
         topic_str,
-        " ".repeat(40_usize.saturating_sub(indent.len() + format_space_id(node.space_id).len() + edge_str.len() + topic_str.len()))
+        " ".repeat(40_usize.saturating_sub(
+            indent.len() + format_space_id(node.space_id).len() + edge_str.len() + topic_str.len()
+        ))
     );
 
     for child in &node.children {

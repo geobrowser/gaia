@@ -211,7 +211,7 @@ impl CanonicalProcessor {
                 self.filter_to_canonical(&member_transitive.tree, canonical_set, topic_id);
 
             // Attach the filtered subtree to the source node in the tree
-            self.attach_subtree(tree, source, filtered_subtree);
+            attach_subtree(tree, source, filtered_subtree);
         }
     }
 
@@ -233,48 +233,44 @@ impl CanonicalProcessor {
             if canonical_set.contains(&child.space_id) {
                 filtered
                     .children
-                    .push(self.filter_child_recursive(child, canonical_set));
+                    .push(filter_child_recursive(child, canonical_set));
             }
         }
 
         filtered
     }
+}
 
-    /// Recursively filter a child node and its descendants
-    ///
-    /// Unlike `filter_to_canonical`, this preserves the original edge type
-    /// since we're not at the root of the topic edge attachment.
-    fn filter_child_recursive(
-        &self,
-        node: &TreeNode,
-        canonical_set: &HashSet<SpaceId>,
-    ) -> TreeNode {
-        let mut filtered = TreeNode::new(node.space_id, node.edge_type);
-        filtered.topic_id = node.topic_id;
+/// Recursively filter a child node and its descendants
+///
+/// Unlike `filter_to_canonical`, this preserves the original edge type
+/// since we're not at the root of the topic edge attachment.
+fn filter_child_recursive(node: &TreeNode, canonical_set: &HashSet<SpaceId>) -> TreeNode {
+    let mut filtered = TreeNode::new(node.space_id, node.edge_type);
+    filtered.topic_id = node.topic_id;
 
-        for child in &node.children {
-            if canonical_set.contains(&child.space_id) {
-                filtered
-                    .children
-                    .push(self.filter_child_recursive(child, canonical_set));
-            }
+    for child in &node.children {
+        if canonical_set.contains(&child.space_id) {
+            filtered
+                .children
+                .push(filter_child_recursive(child, canonical_set));
         }
-
-        filtered
     }
 
-    /// Attach a subtree to a source node in the tree
-    ///
-    /// Finds the source node in the tree and adds the subtree as a child.
-    fn attach_subtree(&self, tree: &mut TreeNode, source: SpaceId, subtree: TreeNode) {
-        if tree.space_id == source {
-            tree.children.push(subtree);
-            return;
-        }
+    filtered
+}
 
-        for child in &mut tree.children {
-            self.attach_subtree(child, source, subtree.clone());
-        }
+/// Attach a subtree to a source node in the tree
+///
+/// Finds the source node in the tree and adds the subtree as a child.
+fn attach_subtree(tree: &mut TreeNode, source: SpaceId, subtree: TreeNode) {
+    if tree.space_id == source {
+        tree.children.push(subtree);
+        return;
+    }
+
+    for child in &mut tree.children {
+        attach_subtree(child, source, subtree.clone());
     }
 }
 
@@ -282,8 +278,7 @@ impl CanonicalProcessor {
 mod tests {
     use super::*;
     use crate::events::{
-        BlockMetadata, SpaceCreated, SpaceTopologyPayload, SpaceType, TrustExtended,
-        TrustExtension,
+        BlockMetadata, SpaceCreated, SpaceTopologyPayload, SpaceType, TrustExtended, TrustExtension,
     };
 
     fn make_space_id(n: u8) -> SpaceId {
@@ -600,9 +595,7 @@ mod tests {
                 meta: make_block_meta(),
                 payload: SpaceTopologyPayload::TrustExtended(TrustExtended {
                     source_space_id: root,
-                    extension: TrustExtension::Verified {
-                        target_space_id: a,
-                    },
+                    extension: TrustExtension::Verified { target_space_id: a },
                 }),
             },
             &state,

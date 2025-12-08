@@ -1,0 +1,44 @@
+name: Atlas Check
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'atlas/**'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'atlas/**'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: Build & Lint
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./atlas
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ./atlas
+
+      - name: Check formatting
+        run: cargo fmt --check
+
+      - name: Run clippy
+        run: cargo clippy --all-targets -- -D warnings
+
+      - name: Build
+        run: cargo build --verbose

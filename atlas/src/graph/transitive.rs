@@ -163,11 +163,7 @@ impl TransitiveCache {
             * (mem::size_of::<crate::events::SpaceId>()
                 + mem::size_of::<HashSet<crate::events::SpaceId>>()
                 + 16);
-        let reverse_deps_sets: usize = self
-            .reverse_deps
-            .values()
-            .map(|s| hashset_heap_size(s))
-            .sum();
+        let reverse_deps_sets: usize = self.reverse_deps.values().map(hashset_heap_size).sum();
 
         full_table
             + full_graphs
@@ -313,10 +309,7 @@ impl TransitiveProcessor {
                     node_metadata.insert(*target, (*edge_type, *topic_id));
 
                     // Add to children index (O(1) amortized)
-                    children_index
-                        .entry(current)
-                        .or_default()
-                        .push(*target);
+                    children_index.entry(current).or_default().push(*target);
                 }
             }
         }
@@ -340,7 +333,8 @@ impl TransitiveProcessor {
                 // Reserve capacity to avoid reallocations
                 node.children.reserve(children.len());
                 for child_id in children {
-                    node.children.push(build_tree(*child_id, node_metadata, children_index));
+                    node.children
+                        .push(build_tree(*child_id, node_metadata, children_index));
                 }
             }
 
@@ -367,7 +361,7 @@ impl TransitiveProcessor {
 mod tests {
     use super::*;
     use crate::events::{
-        BlockMetadata, SpaceCreated, SpaceType, SpaceTopologyPayload, TrustExtended,
+        BlockMetadata, SpaceCreated, SpaceTopologyPayload, SpaceType, TrustExtended,
     };
 
     fn make_space_id(n: u8) -> SpaceId {
@@ -555,9 +549,7 @@ mod tests {
             meta: make_block_meta(),
             payload: SpaceTopologyPayload::TrustExtended(TrustExtended {
                 source_space_id: b,
-                extension: TrustExtension::Verified {
-                    target_space_id: c,
-                },
+                extension: TrustExtension::Verified { target_space_id: c },
             }),
         };
 

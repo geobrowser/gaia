@@ -10,7 +10,6 @@ use atlas::graph::{CanonicalProcessor, GraphState, TransitiveProcessor};
 use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, Throughput};
 use rand::prelude::*;
 
-
 // ============================================================================
 // Helpers for synthetic graph generation
 // ============================================================================
@@ -293,15 +292,11 @@ fn bench_affects_canonical(c: &mut Criterion) {
     };
 
     group.bench_function("canonical_source", |b| {
-        b.iter(|| {
-            black_box(processor.affects_canonical(&event_canonical, &canonical_set))
-        });
+        b.iter(|| black_box(processor.affects_canonical(&event_canonical, &canonical_set)));
     });
 
     group.bench_function("non_canonical_source", |b| {
-        b.iter(|| {
-            black_box(processor.affects_canonical(&event_non_canonical, &canonical_set))
-        });
+        b.iter(|| black_box(processor.affects_canonical(&event_non_canonical, &canonical_set)));
     });
 
     group.finish();
@@ -351,7 +346,8 @@ fn bench_subtree_filtering(c: &mut Criterion) {
     ];
 
     for (total, canonical_count, name) in scenarios {
-        let (state, root) = generate_canonical_with_topics(canonical_count, total - canonical_count, 5, 10, 42);
+        let (state, root) =
+            generate_canonical_with_topics(canonical_count, total - canonical_count, 5, 10, 42);
 
         group.bench_with_input(BenchmarkId::from_parameter(name), &name, |b, _| {
             b.iter(|| {
