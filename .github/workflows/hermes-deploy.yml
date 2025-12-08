@@ -1,19 +1,20 @@
-name: Deploy Hermes Producer
+name: Deploy Hermes Processor
 
 on:
   push:
     branches:
       - main
     paths:
-      - 'hermes-producer/**'
+      - 'hermes-processor/**'
       - 'hermes-schema/**'
+      - 'mock-substream/**'
       - 'wire/**'
       - 'hermes/**'
       - '.github/workflows/hermes-deploy.yml'
 
 env:
   REGISTRY: registry.digitalocean.com/geo
-  IMAGE_NAME: hermes-producer
+  IMAGE_NAME: hermes-processor
 
 jobs:
   deploy:
@@ -34,7 +35,7 @@ jobs:
         run: |
           docker build -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
                        -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest \
-                       -f hermes-producer/Dockerfile .
+                       -f hermes-processor/Dockerfile .
           docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
           docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
 
@@ -49,22 +50,22 @@ jobs:
         run: |
           kubectl apply -k hermes/k8s
 
-      - name: Restart hermes-producer job
+      - name: Restart hermes-processor job
         run: |
-          kubectl delete job hermes-producer -n kafka --ignore-not-found=true
+          kubectl delete job hermes-processor -n kafka --ignore-not-found=true
           kubectl apply -k hermes/k8s
 
       - name: Wait for job to start
         run: |
-          kubectl wait --for=condition=ready pod -l app=hermes-producer -n kafka --timeout=60s || true
+          kubectl wait --for=condition=ready pod -l app=hermes-processor -n kafka --timeout=60s || true
 
       - name: Show deployment status
         run: |
-          echo "=== Hermes Producer Job ==="
-          kubectl get job hermes-producer -n kafka || echo "Job not found"
+          echo "=== Hermes Processor Job ==="
+          kubectl get job hermes-processor -n kafka || echo "Job not found"
           echo ""
-          echo "=== Hermes Producer Pods ==="
-          kubectl get pods -n kafka -l app=hermes-producer
+          echo "=== Hermes Processor Pods ==="
+          kubectl get pods -n kafka -l app=hermes-processor
           echo ""
           echo "=== Recent Events ==="
           kubectl get events -n kafka --sort-by='.lastTimestamp' | tail -10

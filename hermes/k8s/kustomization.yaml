@@ -6,5 +6,5 @@ resources:
   - protobuf-configmap.yaml
   - kafka-broker.yaml
   - kafka-ui.yaml
-  - hermes-producer.yaml
+  - hermes-processor.yaml
   - atlas.yaml

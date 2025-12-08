@@ -1,0 +1,12 @@
+[package]
+name = "mock-substream"
+version = "0.1.0"
+edition = "2021"
+description = "Unified mock substream event generation for testing"
+
+[dependencies]
+rand = { version = "0.8", optional = true }
+
+[features]
+default = []
+random = ["rand"]

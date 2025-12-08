@@ -1,20 +1,20 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: hermes-producer
+  name: hermes-processor
   namespace: kafka
 spec:
   template:
     metadata:
       labels:
-        app: hermes-producer
+        app: hermes-processor
     spec:
       restartPolicy: OnFailure
       imagePullSecrets:
         - name: regcred
       containers:
-        - name: hermes-producer
-          image: registry.digitalocean.com/geo/hermes-producer:latest
+        - name: hermes-processor
+          image: registry.digitalocean.com/geo/hermes-processor:latest
           imagePullPolicy: Always
           env:
             - name: KAFKA_BROKER

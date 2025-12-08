@@ -11,13 +11,14 @@ RUN apt-get update && \
 
 WORKDIR /app
 
-# Copy only what we need - no workspace complexity
-COPY hermes-producer ./hermes-producer
+# Copy only what we need
+COPY hermes-processor ./hermes-processor
 COPY hermes-schema ./hermes-schema
+COPY mock-substream ./mock-substream
 COPY wire ./wire
 
-# Build directly from the hermes-producer directory
-WORKDIR /app/hermes-producer
+# Build from the hermes-processor directory
+WORKDIR /app/hermes-processor
 RUN cargo build --release --target x86_64-unknown-linux-gnu
 
 FROM --platform=linux/amd64 debian:bookworm-slim
@@ -26,8 +27,8 @@ RUN apt-get update && \
     apt-get install -y ca-certificates libssl3 && \
     rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /app/hermes-producer/target/x86_64-unknown-linux-gnu/release/hermes-producer /usr/local/bin/hermes-producer
+COPY --from=builder /app/hermes-processor/target/x86_64-unknown-linux-gnu/release/hermes-processor /usr/local/bin/hermes-processor
 
 ENV KAFKA_BROKER=kafka-broker-0.broker.kafka.svc.cluster.local:29092
 
-CMD ["hermes-producer"]
+CMD ["hermes-processor"]

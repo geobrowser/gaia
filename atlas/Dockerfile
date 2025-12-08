@@ -14,6 +14,7 @@ WORKDIR /app
 # Copy dependencies
 COPY atlas ./atlas
 COPY hermes-schema ./hermes-schema
+COPY mock-substream ./mock-substream
 COPY wire ./wire
 
 # Build from the atlas directory

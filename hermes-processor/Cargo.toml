@@ -1,17 +1,13 @@
 [package]
-name = "hermes-producer"
+name = "hermes-processor"
 version = "0.1.0"
 edition = "2021"
 
 [dependencies]
 rdkafka = { version = "0.36", features = ["cmake-build", "zstd"] }
 prost = "0.13.5"
-uuid = { version = "1.0", features = ["v4"] }
 chrono = "0.4"
 hex = "0.4"
-rand = "0.8"
 wire = { path = "../wire" }
 hermes-schema = { path = "../hermes-schema" }
-
-[build-dependencies]
-prost-build = "0.13.5"
+mock-substream = { path = "../mock-substream" }

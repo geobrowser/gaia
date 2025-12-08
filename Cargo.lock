@@ -935,6 +935,7 @@ dependencies = [
  "criterion 0.5.1",
  "hermes-schema",
  "hex",
+ "mock-substream",
  "prost 0.13.5",
  "rand 0.8.5",
  "rdkafka",
@@ -2377,17 +2378,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 
 [[package]]
-name = "hermes-producer"
+name = "hermes-processor"
 version = "0.1.0"
 dependencies = [
  "chrono",
  "hermes-schema",
  "hex",
+ "mock-substream",
  "prost 0.13.5",
- "prost-build 0.13.5",
- "rand 0.8.5",
  "rdkafka",
- "uuid",
  "wire",
 ]
 
@@ -3213,6 +3212,13 @@ dependencies = [
  "libc",
  "wasi 0.11.1+wasi-snapshot-preview1",
  "windows-sys 0.59.0",
+]
+
+[[package]]
+name = "mock-substream"
+version = "0.1.0"
+dependencies = [
+ "rand 0.8.5",
 ]
 
 [[package]]
