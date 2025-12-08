@@ -1,20 +1,34 @@
 //! Atlas - Space Topology Processor
 //!
 //! Entry point for the Atlas graph processing pipeline.
-//! Consumes space topology events and computes transitive and canonical graphs.
+//! Consumes space topology events, computes canonical graphs,
+//! and publishes updates to Kafka.
+
+use std::env;
 
 use atlas::convert::convert_mock_blocks;
 use atlas::events::{SpaceId, SpaceTopologyEvent, SpaceTopologyPayload};
 use atlas::graph::{CanonicalProcessor, GraphState, TransitiveProcessor};
+use atlas::kafka::{AtlasProducer, CanonicalGraphEmitter};
 
 // Use the shared mock_substream crate
 use mock_substream::test_topology;
 
-fn main() {
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    let broker = env::var("KAFKA_BROKER").unwrap_or_else(|_| "localhost:9092".to_string());
+    let topic = env::var("KAFKA_TOPIC").unwrap_or_else(|_| "topology.canonical".to_string());
+
     println!("╔══════════════════════════════════════════════════════════════════════════════╗");
-    println!("║                     Atlas Topology Processor Demo                            ║");
+    println!("║                     Atlas Topology Processor                                 ║");
     println!("╚══════════════════════════════════════════════════════════════════════════════╝");
     println!();
+    println!("Kafka broker: {}", broker);
+    println!("Output topic: {}", topic);
+    println!();
+
+    // Set up Kafka producer
+    let producer = AtlasProducer::new(&broker, &topic)?;
+    let emitter = CanonicalGraphEmitter::new(producer);
 
     // Generate deterministic topology from shared mock_substream crate
     let blocks = test_topology::generate();
@@ -29,14 +43,18 @@ fn main() {
     println!("Root space: {}", format_space_id(root_space));
     println!();
 
-    // Create graph state and transitive processor
+    // Create graph state and processors
     let mut state = GraphState::new();
     let mut transitive = TransitiveProcessor::new();
+    let mut canonical_processor = CanonicalProcessor::new(root_space);
 
     // Process each event
     println!("┌──────────────────────────────────────────────────────────────────────────────┐");
     println!("│ Processing Events                                                            │");
     println!("├──────────────────────────────────────────────────────────────────────────────┤");
+
+    let mut emit_count = 0;
+
     for (i, event) in events.iter().enumerate() {
         print_event(i, event);
 
@@ -45,124 +63,45 @@ fn main() {
 
         // Apply event to graph state
         state.apply_event(event);
+
+        // Compute canonical graph and emit if changed
+        if let Some(graph) = canonical_processor.compute(&state, &mut transitive) {
+            emitter.emit(&graph, &event.meta)?;
+            emit_count += 1;
+            println!(
+                "│      └─▶ Emitted canonical graph update ({} nodes)",
+                graph.len()
+            );
+        }
     }
     println!("└──────────────────────────────────────────────────────────────────────────────┘");
 
     println!();
     println!("┌──────────────────────────────────────────────────────────────────────────────┐");
-    println!("│ Graph State Summary                                                          │");
+    println!("│ Summary                                                                      │");
     println!("├──────────────────────────────────────────────────────────────────────────────┤");
     println!(
-        "│ Total spaces:     {:>4}                                                       │",
+        "│ Total spaces:        {:>4}                                                    │",
         state.space_count()
     );
     println!(
-        "│ Explicit edges:   {:>4}                                                       │",
+        "│ Explicit edges:      {:>4}                                                    │",
         state.explicit_edge_count()
     );
     println!(
-        "│ Topic edges:      {:>4}                                                       │",
+        "│ Topic edges:         {:>4}                                                    │",
         state.topic_edge_count()
     );
+    println!(
+        "│ Kafka messages sent: {:>4}                                                    │",
+        emit_count
+    );
     println!("└──────────────────────────────────────────────────────────────────────────────┘");
 
-    // Compute canonical graph
     println!();
-    println!("┌──────────────────────────────────────────────────────────────────────────────┐");
-    println!("│ Canonical Graph (from Root)                                                  │");
-    println!("├──────────────────────────────────────────────────────────────────────────────┤");
+    println!("Atlas processing complete.");
 
-    let mut canonical_processor = CanonicalProcessor::new(root_space);
-    let canonical = canonical_processor.compute(&state, &mut transitive);
-
-    if let Some(ref graph) = canonical {
-        println!(
-            "│ Canonical nodes:  {:>4}                                                       │",
-            graph.len()
-        );
-        println!(
-            "├──────────────────────────────────────────────────────────────────────────────┤"
-        );
-        println!(
-            "│ Tree Structure:                                                              │"
-        );
-        print_tree_boxed(&graph.tree, 1);
-    }
-    println!("└──────────────────────────────────────────────────────────────────────────────┘");
-
-    // Show non-canonical transitive graphs
-    println!();
-    println!("┌──────────────────────────────────────────────────────────────────────────────┐");
-    println!("│ Non-Canonical Islands (Transitive Graphs)                                    │");
-    println!("├──────────────────────────────────────────────────────────────────────────────┤");
-
-    // Island 1: X's transitive graph
-    let x_transitive = transitive.get_full(test_topology::SPACE_X, &state);
-    println!(
-        "│ Island 1 (from X): {} nodes                                                   │",
-        x_transitive.len()
-    );
-    print_tree_boxed(&x_transitive.tree, 1);
-    println!("│                                                                              │");
-
-    // Island 2: P's transitive graph
-    let p_transitive = transitive.get_full(test_topology::SPACE_P, &state);
-    println!(
-        "│ Island 2 (from P): {} nodes                                                   │",
-        p_transitive.len()
-    );
-    print_tree_boxed(&p_transitive.tree, 1);
-    println!("└──────────────────────────────────────────────────────────────────────────────┘");
-
-    // Show cache stats
-    let stats = transitive.cache_stats();
-    println!();
-    println!("┌──────────────────────────────────────────────────────────────────────────────┐");
-    println!("│ Cache Statistics                                                             │");
-    println!("├──────────────────────────────────────────────────────────────────────────────┤");
-    println!(
-        "│ Full graphs cached:         {:>4}                                             │",
-        stats.full_count
-    );
-    println!(
-        "│ Explicit-only graphs cached:{:>4}                                             │",
-        stats.explicit_only_count
-    );
-    println!(
-        "│ Reverse deps tracked:       {:>4}                                             │",
-        stats.reverse_deps_count
-    );
-    println!("└──────────────────────────────────────────────────────────────────────────────┘");
-
-    // Summary of what the demo shows
-    println!();
-    println!("┌──────────────────────────────────────────────────────────────────────────────┐");
-    println!("│ Demo Summary                                                                 │");
-    println!("├──────────────────────────────────────────────────────────────────────────────┤");
-    println!("│ This topology demonstrates:                                                  │");
-    println!("│                                                                              │");
-    println!("│ 1. CANONICAL GRAPH: 11 spaces reachable from Root via explicit edges         │");
-    println!("│    - Root -> A, B (verified), H (related)                                    │");
-    println!("│    - A -> C (verified), D (related)                                          │");
-    println!("│    - B -> E (verified)                                                       │");
-    println!("│    - C -> F (verified), G (related)                                          │");
-    println!("│    - H -> I, J (verified)                                                    │");
-    println!("│                                                                              │");
-    println!("│ 2. TOPIC EDGES: Add connections between canonical nodes                      │");
-    println!("│    - B -> topic[H] attaches H's subtree {{I, J}}                               │");
-    println!("│    - A -> topic[SHARED] resolves to {{C, G}} (Y filtered out)                  │");
-    println!("│                                                                              │");
-    println!("│ 3. NON-CANONICAL ISLANDS: Spaces not reachable from Root                     │");
-    println!("│    - Island 1: X -> Y -> Z, X -> W (4 nodes)                                 │");
-    println!("│    - Island 2: P -> Q (2 nodes)                                              │");
-    println!("│    - Island 3: S (isolated, 1 node)                                          │");
-    println!("│                                                                              │");
-    println!("│ 4. SHARED TOPIC: Topic 0xF0 announced by C, G (canonical) and Y (not)        │");
-    println!("│    - When A resolves topic[SHARED], Y is filtered out                        │");
-    println!("│                                                                              │");
-    println!("│ 5. POINTING TO CANONICAL: W -> Root, X -> topic[A]                           │");
-    println!("│    - Having an edge TO canonical doesn't make you canonical                  │");
-    println!("└──────────────────────────────────────────────────────────────────────────────┘");
+    Ok(())
 }
 
 /// Format a space ID with a friendly name if known
@@ -250,36 +189,5 @@ fn print_event(index: usize, event: &SpaceTopologyEvent) {
                 extension_str,
             );
         }
-    }
-}
-
-/// Print a tree node with box drawing characters
-fn print_tree_boxed(node: &atlas::graph::TreeNode, depth: usize) {
-    let indent = "│   ".repeat(depth);
-    let edge_str = match node.edge_type {
-        atlas::graph::EdgeType::Root => "ROOT",
-        atlas::graph::EdgeType::Verified => "verified",
-        atlas::graph::EdgeType::Related => "related",
-        atlas::graph::EdgeType::Topic => "topic",
-    };
-
-    let topic_str = node
-        .topic_id
-        .map(|t| format!(" via {}", format_topic_id(&t)))
-        .unwrap_or_default();
-
-    println!(
-        "│ {} {} ({}{}){}",
-        indent,
-        format_space_id(node.space_id),
-        edge_str,
-        topic_str,
-        " ".repeat(40_usize.saturating_sub(
-            indent.len() + format_space_id(node.space_id).len() + edge_str.len() + topic_str.len()
-        ))
-    );
-
-    for child in &node.children {
-        print_tree_boxed(child, depth + 1);
     }
 }
