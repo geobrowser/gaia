@@ -933,8 +933,11 @@ name = "atlas"
 version = "0.1.0"
 dependencies = [
  "criterion 0.5.1",
+ "hermes-schema",
  "hex",
+ "prost 0.13.5",
  "rand 0.8.5",
+ "rdkafka",
 ]
 
 [[package]]

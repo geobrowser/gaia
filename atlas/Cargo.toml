@@ -18,6 +18,9 @@ harness = false
 [dependencies]
 rand = "0.8"
 hex = "0.4"
+prost = "0.13.5"
+rdkafka = { version = "0.36", features = ["cmake-build", "zstd"] }
+hermes-schema = { path = "../hermes-schema" }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
