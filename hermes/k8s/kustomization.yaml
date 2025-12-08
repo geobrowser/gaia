@@ -7,3 +7,4 @@ resources:
   - kafka-broker.yaml
   - kafka-ui.yaml
   - hermes-producer.yaml
+  - atlas.yaml
