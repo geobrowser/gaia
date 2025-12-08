@@ -1,18 +1,15 @@
-apiVersion: apps/v1
-kind: Deployment
+apiVersion: batch/v1
+kind: Job
 metadata:
   name: atlas
   namespace: kafka
 spec:
-  replicas: 1
-  selector:
-    matchLabels:
-      app: atlas
   template:
     metadata:
       labels:
         app: atlas
     spec:
+      restartPolicy: OnFailure
       imagePullSecrets:
         - name: regcred
       containers:

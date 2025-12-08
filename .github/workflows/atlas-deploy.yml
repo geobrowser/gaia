@@ -50,18 +50,19 @@ jobs:
         run: |
           kubectl apply -k hermes/k8s
 
-      - name: Restart atlas deployment
+      - name: Restart atlas job
         run: |
-          kubectl rollout restart deployment/atlas -n kafka
+          kubectl delete job atlas -n kafka --ignore-not-found=true
+          kubectl apply -k hermes/k8s
 
-      - name: Wait for rollout
+      - name: Wait for job to start
         run: |
-          kubectl rollout status deployment/atlas -n kafka --timeout=120s
+          kubectl wait --for=condition=ready pod -l app=atlas -n kafka --timeout=60s || true
 
       - name: Show deployment status
         run: |
-          echo "=== Atlas Deployment ==="
-          kubectl get deployment atlas -n kafka
+          echo "=== Atlas Job ==="
+          kubectl get job atlas -n kafka || echo "Job not found"
           echo ""
           echo "=== Atlas Pods ==="
           kubectl get pods -n kafka -l app=atlas
