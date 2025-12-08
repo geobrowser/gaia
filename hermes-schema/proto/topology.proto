@@ -20,12 +20,8 @@ message CanonicalGraphUpdated {
   // Useful for quick membership checks without traversing the tree.
   repeated bytes canonical_space_ids = 3;
 
-  // Monotonically increasing sequence number for ordering.
-  // Consumers can use this to detect out-of-order delivery.
-  uint64 sequence_number = 4;
-
   // Block metadata from the event that triggered this update
-  blockchain_metadata.BlockchainMetadata meta = 5;
+  blockchain_metadata.BlockchainMetadata meta = 4;
 }
 
 // A node in the canonical tree.

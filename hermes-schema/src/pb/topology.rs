@@ -16,12 +16,8 @@ pub struct CanonicalGraphUpdated {
     /// Useful for quick membership checks without traversing the tree.
     #[prost(bytes = "vec", repeated, tag = "3")]
     pub canonical_space_ids: ::prost::alloc::vec::Vec<::prost::alloc::vec::Vec<u8>>,
-    /// Monotonically increasing sequence number for ordering.
-    /// Consumers can use this to detect out-of-order delivery.
-    #[prost(uint64, tag = "4")]
-    pub sequence_number: u64,
     /// Block metadata from the event that triggered this update
-    #[prost(message, optional, tag = "5")]
+    #[prost(message, optional, tag = "4")]
     pub meta: ::core::option::Option<super::blockchain_metadata::BlockchainMetadata>,
 }
 /// A node in the canonical tree.
