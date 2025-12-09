@@ -4,7 +4,7 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-rdkafka = { version = "0.36", features = ["cmake-build", "zstd"] }
+rdkafka = { version = "0.36", features = ["cmake-build", "zstd", "ssl"] }
 prost = "0.13.5"
 chrono = "0.4"
 hex = "0.4"
