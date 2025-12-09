@@ -11,5 +11,7 @@ resources:
   #     --from-literal=KAFKA_USERNAME=<username> \
   #     --from-literal=KAFKA_PASSWORD=<password> \
   #     --from-literal=KAFKA_SSL_CA_PEM="$(doctl databases get-ca <kafka-cluster-id> --format Certificate --no-header)"
+  - protobuf-schemas.yaml
   - hermes-processor.yaml
   - atlas.yaml
+  - kafka-ui.yaml

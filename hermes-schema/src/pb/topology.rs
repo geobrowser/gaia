@@ -27,55 +27,47 @@ pub struct CanonicalTreeNode {
     /// The space this node represents
     #[prost(bytes = "vec", tag = "1")]
     pub space_id: ::prost::alloc::vec::Vec<u8>,
-    /// How this node was reached from its parent
-    #[prost(enumeration = "EdgeType", tag = "2")]
-    pub edge_type: i32,
-    /// If reached via topic edge, which topic (otherwise empty).
-    /// Only set when edge_type is EDGE_TYPE_TOPIC.
-    #[prost(bytes = "vec", tag = "3")]
-    pub topic_id: ::prost::alloc::vec::Vec<u8>,
     /// Children of this node in the traversal
-    #[prost(message, repeated, tag = "4")]
+    #[prost(message, repeated, tag = "6")]
     pub children: ::prost::alloc::vec::Vec<CanonicalTreeNode>,
+    /// How this node was reached from its parent.
+    /// Uses oneof to enforce that topic_id is only present for topic edges.
+    #[prost(oneof = "canonical_tree_node::Edge", tags = "2, 3, 4, 5")]
+    pub edge: ::core::option::Option<canonical_tree_node::Edge>,
 }
-/// The type of edge connecting a node to its parent in the tree.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
-#[repr(i32)]
-pub enum EdgeType {
-    /// Default value, should not appear in valid messages
-    Unspecified = 0,
-    /// Root node has no incoming edge
-    Root = 1,
-    /// Verified trust relationship (explicit edge)
-    Verified = 2,
-    /// Related trust relationship (explicit edge)
-    Related = 3,
-    /// Topic-based membership (resolved from SubtopicExtension)
-    Topic = 4,
+/// Nested message and enum types in `CanonicalTreeNode`.
+pub mod canonical_tree_node {
+    /// How this node was reached from its parent.
+    /// Uses oneof to enforce that topic_id is only present for topic edges.
+    #[derive(Clone, PartialEq, ::prost::Oneof)]
+    pub enum Edge {
+        /// Root node has no incoming edge
+        #[prost(message, tag = "2")]
+        Root(super::RootEdge),
+        /// Verified trust relationship (explicit edge)
+        #[prost(message, tag = "3")]
+        Verified(super::VerifiedEdge),
+        /// Related trust relationship (explicit edge)
+        #[prost(message, tag = "4")]
+        Related(super::RelatedEdge),
+        /// Topic-based membership (resolved from SubtopicExtension)
+        #[prost(message, tag = "5")]
+        Topic(super::TopicEdge),
+    }
 }
-impl EdgeType {
-    /// String value of the enum field names used in the ProtoBuf definition.
-    ///
-    /// The values are not transformed in any way and thus are considered stable
-    /// (if the ProtoBuf definition does not change) and safe for programmatic use.
-    pub fn as_str_name(&self) -> &'static str {
-        match self {
-            Self::Unspecified => "EDGE_TYPE_UNSPECIFIED",
-            Self::Root => "EDGE_TYPE_ROOT",
-            Self::Verified => "EDGE_TYPE_VERIFIED",
-            Self::Related => "EDGE_TYPE_RELATED",
-            Self::Topic => "EDGE_TYPE_TOPIC",
-        }
-    }
-    /// Creates an enum from field names used in the ProtoBuf definition.
-    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
-        match value {
-            "EDGE_TYPE_UNSPECIFIED" => Some(Self::Unspecified),
-            "EDGE_TYPE_ROOT" => Some(Self::Root),
-            "EDGE_TYPE_VERIFIED" => Some(Self::Verified),
-            "EDGE_TYPE_RELATED" => Some(Self::Related),
-            "EDGE_TYPE_TOPIC" => Some(Self::Topic),
-            _ => None,
-        }
-    }
+/// Root node edge - no additional data needed
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+pub struct RootEdge {}
+/// Verified trust relationship edge - no additional data needed
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+pub struct VerifiedEdge {}
+/// Related trust relationship edge - no additional data needed
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+pub struct RelatedEdge {}
+/// Topic-based membership edge - includes the topic ID
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct TopicEdge {
+    /// The topic through which this space was reached
+    #[prost(bytes = "vec", tag = "1")]
+    pub topic_id: ::prost::alloc::vec::Vec<u8>,
 }

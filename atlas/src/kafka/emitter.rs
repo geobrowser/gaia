@@ -28,7 +28,8 @@ use crate::graph::{CanonicalGraph, EdgeType, TreeNode};
 use crate::kafka::{AtlasProducer, ProducerError};
 use hermes_schema::pb::blockchain_metadata::BlockchainMetadata as ProtoBlockchainMetadata;
 use hermes_schema::pb::topology::{
-    CanonicalGraphUpdated, CanonicalTreeNode, EdgeType as ProtoEdgeType,
+    canonical_tree_node::Edge, CanonicalGraphUpdated, CanonicalTreeNode, RelatedEdge, RootEdge,
+    TopicEdge, VerifiedEdge,
 };
 use prost::Message;
 
@@ -69,15 +70,18 @@ impl CanonicalGraphEmitter {
 }
 
 fn tree_node_to_proto(node: &TreeNode) -> CanonicalTreeNode {
+    let edge = match node.edge_type {
+        EdgeType::Root => Edge::Root(RootEdge {}),
+        EdgeType::Verified => Edge::Verified(VerifiedEdge {}),
+        EdgeType::Related => Edge::Related(RelatedEdge {}),
+        EdgeType::Topic => Edge::Topic(TopicEdge {
+            topic_id: node.topic_id.expect("Topic edge must have topic_id").to_vec(),
+        }),
+    };
+
     CanonicalTreeNode {
         space_id: node.space_id.to_vec(),
-        edge_type: match node.edge_type {
-            EdgeType::Root => ProtoEdgeType::Root,
-            EdgeType::Verified => ProtoEdgeType::Verified,
-            EdgeType::Related => ProtoEdgeType::Related,
-            EdgeType::Topic => ProtoEdgeType::Topic,
-        } as i32,
-        topic_id: node.topic_id.map(|t| t.to_vec()).unwrap_or_default(),
+        edge: Some(edge),
         children: node.children.iter().map(tree_node_to_proto).collect(),
     }
 }
