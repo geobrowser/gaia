@@ -222,6 +222,11 @@ fn create_producer(broker: &str) -> Result<BaseProducer, Box<dyn std::error::Err
             .set("sasl.mechanisms", "PLAIN")
             .set("sasl.username", &username)
             .set("sasl.password", &password);
+
+        // Use custom CA certificate if provided (PEM format string)
+        if let Ok(ca_pem) = env::var("KAFKA_SSL_CA_PEM") {
+            config.set("ssl.ca.pem", &ca_pem);
+        }
     }
 
     Ok(config.create()?)

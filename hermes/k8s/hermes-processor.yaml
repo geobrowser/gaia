@@ -32,6 +32,11 @@ spec:
                 secretKeyRef:
                   name: kafka-credentials
                   key: KAFKA_PASSWORD
+            - name: KAFKA_SSL_CA_PEM
+              valueFrom:
+                secretKeyRef:
+                  name: kafka-credentials
+                  key: KAFKA_SSL_CA_PEM
           resources:
             requests:
               memory: "256Mi"

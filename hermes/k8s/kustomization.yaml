@@ -3,11 +3,13 @@ kind: Kustomization
 
 resources:
   - namespace.yaml
-  # kafka-credentials.yaml is a template - create the actual secret manually:
+  # Create the kafka-credentials secret manually before deploying:
+  #
   #   kubectl create secret generic kafka-credentials \
   #     --namespace=kafka \
   #     --from-literal=KAFKA_BROKER=<broker> \
   #     --from-literal=KAFKA_USERNAME=<username> \
-  #     --from-literal=KAFKA_PASSWORD=<password>
+  #     --from-literal=KAFKA_PASSWORD=<password> \
+  #     --from-literal=KAFKA_SSL_CA_PEM="$(doctl databases get-ca <kafka-cluster-id> --format Certificate --no-header)"
   - hermes-processor.yaml
   - atlas.yaml

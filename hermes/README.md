@@ -56,9 +56,12 @@ Both `hermes-processor` and `atlas` support the following environment variables:
 | `KAFKA_BROKER` | No | `localhost:9092` | Kafka bootstrap server address |
 | `KAFKA_USERNAME` | No | - | SASL username for managed Kafka authentication |
 | `KAFKA_PASSWORD` | No | - | SASL password for managed Kafka authentication |
+| `KAFKA_SSL_CA_PEM` | No | - | CA certificate (PEM format) for SSL verification |
 | `KAFKA_TOPIC` | No | `topology.canonical` | Output topic (atlas only) |
 
 When `KAFKA_USERNAME` and `KAFKA_PASSWORD` are both set, the producers automatically enable SASL/SSL authentication (required for DigitalOcean Managed Kafka). When unset, plaintext connections are used (for local development).
+
+For managed Kafka, you also need to provide the CA certificate via `KAFKA_SSL_CA_PEM`.
 
 ### Manual Access
 
