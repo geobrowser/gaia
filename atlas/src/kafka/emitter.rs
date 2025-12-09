@@ -75,7 +75,10 @@ fn tree_node_to_proto(node: &TreeNode) -> CanonicalTreeNode {
         EdgeType::Verified => Edge::Verified(VerifiedEdge {}),
         EdgeType::Related => Edge::Related(RelatedEdge {}),
         EdgeType::Topic => Edge::Topic(TopicEdge {
-            topic_id: node.topic_id.expect("Topic edge must have topic_id").to_vec(),
+            topic_id: node
+                .topic_id
+                .expect("Topic edge must have topic_id")
+                .to_vec(),
         }),
     };
 
