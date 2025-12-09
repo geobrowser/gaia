@@ -63,6 +63,35 @@ When `KAFKA_USERNAME` and `KAFKA_PASSWORD` are both set, the producers automatic
 
 For managed Kafka, you also need to provide the CA certificate via `KAFKA_SSL_CA_PEM`.
 
+### Kafka Topics
+
+The following topics must be created on the managed Kafka cluster:
+
+| Topic | Producer | Description |
+|-------|----------|-------------|
+| `topology.canonical` | atlas | Canonical graph updates |
+| `space.creations` | hermes-processor | Space creation events |
+| `space.trust.extensions` | hermes-processor | Trust extension events |
+| `knowledge.edits` | hermes-processor | Knowledge edit events |
+
+Create topics with infinite retention using `doctl`:
+
+```bash
+KAFKA_ID=<kafka-cluster-id>
+
+# Create topics
+doctl databases topics create $KAFKA_ID topology.canonical --replication-factor 3 --partition-count 1
+doctl databases topics create $KAFKA_ID space.creations --replication-factor 3 --partition-count 1
+doctl databases topics create $KAFKA_ID space.trust.extensions --replication-factor 3 --partition-count 1
+doctl databases topics create $KAFKA_ID knowledge.edits --replication-factor 3 --partition-count 1
+
+# Set infinite retention (disable automatic deletion)
+doctl databases topics update $KAFKA_ID topology.canonical --retention-ms -1
+doctl databases topics update $KAFKA_ID space.creations --retention-ms -1
+doctl databases topics update $KAFKA_ID space.trust.extensions --retention-ms -1
+doctl databases topics update $KAFKA_ID knowledge.edits --retention-ms -1
+```
+
 ### Manual Access
 
 ```bash
