@@ -30,31 +30,37 @@ message CanonicalTreeNode {
   // The space this node represents
   bytes space_id = 1;
 
-  // How this node was reached from its parent
-  EdgeType edge_type = 2;
+  // How this node was reached from its parent.
+  // Uses oneof to enforce that topic_id is only present for topic edges.
+  oneof edge {
+    // Root node has no incoming edge
+    RootEdge root = 2;
 
-  // If reached via topic edge, which topic (otherwise empty).
-  // Only set when edge_type is EDGE_TYPE_TOPIC.
-  bytes topic_id = 3;
+    // Verified trust relationship (explicit edge)
+    VerifiedEdge verified = 3;
+
+    // Related trust relationship (explicit edge)
+    RelatedEdge related = 4;
+
+    // Topic-based membership (resolved from SubtopicExtension)
+    TopicEdge topic = 5;
+  }
 
   // Children of this node in the traversal
-  repeated CanonicalTreeNode children = 4;
+  repeated CanonicalTreeNode children = 6;
 }
 
-// The type of edge connecting a node to its parent in the tree.
-enum EdgeType {
-  // Default value, should not appear in valid messages
-  EDGE_TYPE_UNSPECIFIED = 0;
+// Root node edge - no additional data needed
+message RootEdge {}
 
-  // Root node has no incoming edge
-  EDGE_TYPE_ROOT = 1;
+// Verified trust relationship edge - no additional data needed
+message VerifiedEdge {}
 
-  // Verified trust relationship (explicit edge)
-  EDGE_TYPE_VERIFIED = 2;
+// Related trust relationship edge - no additional data needed  
+message RelatedEdge {}
 
-  // Related trust relationship (explicit edge)
-  EDGE_TYPE_RELATED = 3;
-
-  // Topic-based membership (resolved from SubtopicExtension)
-  EDGE_TYPE_TOPIC = 4;
+// Topic-based membership edge - includes the topic ID
+message TopicEdge {
+  // The topic through which this space was reached
+  bytes topic_id = 1;
 }

@@ -1,6 +1,13 @@
 apiVersion: kustomize.config.k8s.io/v1beta1
 kind: Kustomization
 
+# NOTE: This kustomization uses symlinks to reference proto files from hermes-schema/ and wire/.
+# You must use --load-restrictor LoadRestrictionsNone when running kustomize:
+#   kubectl kustomize --load-restrictor LoadRestrictionsNone hermes/k8s
+#   kubectl apply -k hermes/k8s --load-restrictor LoadRestrictionsNone
+
+namespace: kafka
+
 resources:
   - namespace.yaml
   # Create the kafka-credentials secret manually before deploying:
@@ -13,3 +20,15 @@ resources:
   #     --from-literal=KAFKA_SSL_CA_PEM="$(doctl databases get-ca <kafka-cluster-id> --format Certificate --no-header)"
   - hermes-processor.yaml
   - atlas.yaml
+  - kafka-ui.yaml
+
+configMapGenerator:
+  - name: protobuf-schemas
+    options:
+      disableNameSuffixHash: true
+    files:
+      - proto/grc20.proto
+      - proto/blockchain_metadata.proto
+      - proto/knowledge.proto
+      - proto/space.proto
+      - proto/topology.proto
