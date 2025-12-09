@@ -46,13 +46,12 @@ jobs:
         run: |
           doctl kubernetes cluster kubeconfig save ${{ secrets.DIGITALOCEAN_CLUSTER_NAME }}
 
-      - name: Apply k8s manifests
-        run: |
-          kubectl apply -k hermes/k8s
-
-      - name: Restart atlas job
+      - name: Delete existing job (jobs are immutable)
         run: |
           kubectl delete job atlas -n kafka --ignore-not-found=true
+
+      - name: Apply k8s manifests
+        run: |
           kubectl apply -k hermes/k8s
 
       - name: Wait for job to start
