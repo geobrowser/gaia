@@ -3,8 +3,11 @@ kind: Kustomization
 
 resources:
   - namespace.yaml
-  - protobuf-configmap.yaml
-  - kafka-broker.yaml
-  - kafka-ui.yaml
+  # kafka-credentials.yaml is a template - create the actual secret manually:
+  #   kubectl create secret generic kafka-credentials \
+  #     --namespace=kafka \
+  #     --from-literal=KAFKA_BROKER=<broker> \
+  #     --from-literal=KAFKA_USERNAME=<username> \
+  #     --from-literal=KAFKA_PASSWORD=<password>
   - hermes-processor.yaml
   - atlas.yaml

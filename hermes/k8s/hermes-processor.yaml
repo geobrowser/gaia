@@ -18,7 +18,20 @@ spec:
           imagePullPolicy: Always
           env:
             - name: KAFKA_BROKER
-              value: "kafka-broker-0.broker.kafka.svc.cluster.local:29092"
+              valueFrom:
+                secretKeyRef:
+                  name: kafka-credentials
+                  key: KAFKA_BROKER
+            - name: KAFKA_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: kafka-credentials
+                  key: KAFKA_USERNAME
+            - name: KAFKA_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: kafka-credentials
+                  key: KAFKA_PASSWORD
           resources:
             requests:
               memory: "256Mi"
