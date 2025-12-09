@@ -43,9 +43,22 @@ docker-compose up
 
 ## Production
 
-Production runs on DigitalOcean Kubernetes and is deployed via GitHub Actions.
+Production runs on DigitalOcean Managed Kafka and is deployed to DigitalOcean Kubernetes via GitHub Actions.
 
 The Kubernetes manifests are in `k8s/`.
+
+### Environment Variables
+
+Both `hermes-processor` and `atlas` support the following environment variables:
+
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `KAFKA_BROKER` | No | `localhost:9092` | Kafka bootstrap server address |
+| `KAFKA_USERNAME` | No | - | SASL username for managed Kafka authentication |
+| `KAFKA_PASSWORD` | No | - | SASL password for managed Kafka authentication |
+| `KAFKA_TOPIC` | No | `topology.canonical` | Output topic (atlas only) |
+
+When `KAFKA_USERNAME` and `KAFKA_PASSWORD` are both set, the producers automatically enable SASL/SSL authentication (required for DigitalOcean Managed Kafka). When unset, plaintext connections are used (for local development).
 
 ### Manual Access
 
@@ -53,11 +66,7 @@ The Kubernetes manifests are in `k8s/`.
 # Connect to cluster
 doctl kubernetes cluster kubeconfig save <cluster-name>
 
-# Kafka UI
-kubectl port-forward -n kafka svc/kafka-ui 8080:8080
-
 # View logs
-kubectl logs -n kafka -l app=kafka-broker --tail=50 -f
 kubectl logs -n kafka -l app=hermes-processor --tail=50 -f
 kubectl logs -n kafka -l app=atlas --tail=50 -f
 ```

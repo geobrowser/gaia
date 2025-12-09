@@ -42,9 +42,15 @@ Access Kafka UI at http://localhost:8080 to view messages.
 
 ## Configuration
 
-| Environment Variable | Default | Description |
-|---------------------|---------|-------------|
-| `KAFKA_BROKER` | `localhost:9092` | Kafka broker address |
+| Environment Variable | Required | Default | Description |
+|---------------------|----------|---------|-------------|
+| `KAFKA_BROKER` | No | `localhost:9092` | Kafka bootstrap server address |
+| `KAFKA_USERNAME` | No | - | SASL username for managed Kafka authentication |
+| `KAFKA_PASSWORD` | No | - | SASL password for managed Kafka authentication |
+
+### Authentication
+
+When `KAFKA_USERNAME` and `KAFKA_PASSWORD` are both set, the producer automatically enables SASL/SSL authentication (required for DigitalOcean Managed Kafka). When unset, plaintext connections are used (for local development).
 
 ## Event Flow
 
