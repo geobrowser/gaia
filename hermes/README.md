@@ -92,6 +92,17 @@ doctl databases topics update $KAFKA_ID space.trust.extensions --retention-ms -1
 doctl databases topics update $KAFKA_ID knowledge.edits --retention-ms -1
 ```
 
+### Kafka UI
+
+A kafka-ui instance is deployed to the cluster for browsing topics and messages:
+
+```bash
+# Port forward to access locally
+kubectl port-forward -n kafka svc/kafka-ui 8080:8080
+
+# Then open http://localhost:8080
+```
+
 ### Manual Access
 
 ```bash

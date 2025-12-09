@@ -1,0 +1,96 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafka-ui
+  namespace: kafka
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+      protocol: TCP
+  selector:
+    app: kafka-ui
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kafka-ui
+  namespace: kafka
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kafka-ui
+  template:
+    metadata:
+      labels:
+        app: kafka-ui
+    spec:
+      containers:
+        - name: kafka-ui
+          image: provectuslabs/kafka-ui:latest
+          ports:
+            - containerPort: 8080
+              name: http
+          env:
+            - name: KAFKA_CLUSTERS_0_NAME
+              value: "do-managed"
+            - name: KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS
+              valueFrom:
+                secretKeyRef:
+                  name: kafka-credentials
+                  key: KAFKA_BROKER
+            - name: KAFKA_CLUSTERS_0_PROPERTIES_SECURITY_PROTOCOL
+              value: "SASL_SSL"
+            - name: KAFKA_CLUSTERS_0_PROPERTIES_SASL_MECHANISM
+              value: "PLAIN"
+            - name: KAFKA_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: kafka-credentials
+                  key: KAFKA_USERNAME
+            - name: KAFKA_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: kafka-credentials
+                  key: KAFKA_PASSWORD
+            - name: KAFKA_CLUSTERS_0_PROPERTIES_SASL_JAAS_CONFIG
+              value: "org.apache.kafka.common.security.plain.PlainLoginModule required username='$(KAFKA_USERNAME)' password='$(KAFKA_PASSWORD)';"
+            - name: KAFKA_CLUSTERS_0_SSL_TRUSTSTORELOCATION
+              value: "/etc/kafka/truststore.jks"
+            - name: KAFKA_CLUSTERS_0_SSL_TRUSTSTOREPASSWORD
+              value: "changeit"
+          volumeMounts:
+            - name: truststore
+              mountPath: /etc/kafka
+              readOnly: true
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+      initContainers:
+        - name: create-truststore
+          image: eclipse-temurin:17-jdk
+          command:
+            - /bin/sh
+            - -c
+            - |
+              echo "$KAFKA_SSL_CA_PEM" > /tmp/ca.crt
+              keytool -importcert -alias kafka-ca -file /tmp/ca.crt -keystore /truststore/truststore.jks -storepass changeit -noprompt
+          env:
+            - name: KAFKA_SSL_CA_PEM
+              valueFrom:
+                secretKeyRef:
+                  name: kafka-credentials
+                  key: KAFKA_SSL_CA_PEM
+          volumeMounts:
+            - name: truststore
+              mountPath: /truststore
+      volumes:
+        - name: truststore
+          emptyDir: {}
