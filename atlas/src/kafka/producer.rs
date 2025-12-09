@@ -62,16 +62,31 @@ impl AtlasProducer {
     /// let producer = AtlasProducer::new("localhost:9092", "topology.canonical")?;
     /// ```
     pub fn new(broker: &str, topic: &str) -> Result<Self, ProducerError> {
-        let producer = ClientConfig::new()
+        let mut config = ClientConfig::new();
+
+        config
             .set("bootstrap.servers", broker)
             .set("client.id", "atlas-producer")
             .set("compression.type", "zstd")
             .set("message.timeout.ms", "5000")
             .set("queue.buffering.max.messages", "100000")
             .set("queue.buffering.max.kbytes", "1048576") // 1GB buffer
-            .set("batch.num.messages", "10000")
-            .create()
-            .map_err(ProducerError::Creation)?;
+            .set("batch.num.messages", "10000");
+
+        // If SASL credentials are provided, enable SASL/SSL (for managed Kafka)
+        // Otherwise, use plaintext (for local development)
+        if let (Ok(username), Ok(password)) = (
+            std::env::var("KAFKA_USERNAME"),
+            std::env::var("KAFKA_PASSWORD"),
+        ) {
+            config
+                .set("security.protocol", "SASL_SSL")
+                .set("sasl.mechanisms", "PLAIN")
+                .set("sasl.username", &username)
+                .set("sasl.password", &password);
+        }
+
+        let producer = config.create().map_err(ProducerError::Creation)?;
 
         Ok(Self {
             producer,
