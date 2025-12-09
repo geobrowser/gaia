@@ -1,0 +1,45 @@
+name: Deploy Kafka UI
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'hermes/k8s/kafka-ui.yaml'
+      - '.github/workflows/kafka-ui-deploy.yml'
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install doctl
+        uses: digitalocean/action-doctl@v2
+        with:
+          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v4
+
+      - name: Configure kubectl for DigitalOcean
+        run: |
+          doctl kubernetes cluster kubeconfig save ${{ secrets.DIGITALOCEAN_CLUSTER_NAME }}
+
+      - name: Apply k8s manifests
+        run: |
+          kubectl apply -f hermes/k8s/namespace.yaml
+          kubectl apply -f hermes/k8s/kafka-ui.yaml
+
+      - name: Wait for deployment to be ready
+        run: |
+          kubectl rollout status deployment/kafka-ui -n kafka --timeout=120s
+
+      - name: Show deployment status
+        run: |
+          echo "=== Kafka UI Deployment ==="
+          kubectl get deployment kafka-ui -n kafka
+          echo ""
+          echo "=== Kafka UI Pods ==="
+          kubectl get pods -n kafka -l app=kafka-ui
