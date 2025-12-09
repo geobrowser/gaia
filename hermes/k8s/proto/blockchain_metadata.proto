@@ -1,0 +1,10 @@
+syntax = "proto3";
+
+package blockchain_metadata;
+
+message BlockchainMetadata {
+    uint64 created_at = 1;  // Unix timestamp in seconds
+    bytes created_by = 2;   // address
+    uint64 block_number = 3;
+    string cursor = 4;
+}
