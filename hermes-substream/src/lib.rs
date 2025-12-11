@@ -4,7 +4,7 @@
 //! Provides both raw actions and pre-filtered typed events.
 
 pub mod helpers;
-mod pb;
+pub mod pb;
 
 use pb::hermes::*;
 use substreams_ethereum::{block_view::LogView, pb::eth};

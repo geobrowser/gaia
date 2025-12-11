@@ -1,17 +1,16 @@
 [package]
-name = "hermes_substream"
+name = "hermes-substream"
 version = "0.1.0"
 edition = "2021"
 
 [lib]
-name = "hermes_substream"
-crate-type = ["cdylib"]
+crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-substreams = "0.5.12"
-substreams-ethereum = "0.9"
-prost = "0.11"
-prost-types = "0.11"
+substreams = "0.7"
+substreams-ethereum = "0.11"
+prost = "0.13"
+prost-types = "0.13"
 ethabi = "18.0.0"
 
 [profile.release]
