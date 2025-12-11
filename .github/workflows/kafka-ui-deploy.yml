@@ -6,7 +6,8 @@ on:
       - main
     paths:
       - 'hermes/k8s/kafka-ui.yaml'
-      - 'hermes/k8s/proto/**'
+      - 'hermes-schema/proto/**'
+      - 'wire/proto/grc20.proto'
       - '.github/workflows/kafka-ui-deploy.yml'
 
 jobs:
@@ -32,7 +33,11 @@ jobs:
         run: |
           kubectl apply -f hermes/k8s/namespace.yaml
           kubectl create configmap protobuf-schemas \
-            --from-file=hermes/k8s/proto/ \
+            --from-file=grc20.proto=wire/proto/grc20.proto \
+            --from-file=blockchain_metadata.proto=hermes-schema/proto/blockchain_metadata.proto \
+            --from-file=knowledge.proto=hermes-schema/proto/knowledge.proto \
+            --from-file=space.proto=hermes-schema/proto/space.proto \
+            --from-file=topology.proto=hermes-schema/proto/topology.proto \
             --namespace=kafka \
             --dry-run=client -o yaml | kubectl apply -f -
           kubectl apply -f hermes/k8s/kafka-ui.yaml
