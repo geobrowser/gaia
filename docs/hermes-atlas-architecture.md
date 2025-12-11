@@ -4,35 +4,60 @@ This document describes the architecture of the Hermes and Atlas event processin
 
 ## Overview
 
-Hermes and Atlas are parallel consumers of blockchain events that process space topology and knowledge graph edits:
+Hermes and Atlas are parallel consumers of blockchain events that process space topology and knowledge graph edits. The system receives blockchain events through Substreams, which fall into several categories:
+
+1. **Space changes** - creations, topology changes
+2. **Edit publishing** - content modifications (contain IPFS hashes pointing to actual content)
+3. **Governance** - proposals, voting, membership changes (future)
+4. **Curation** - ranking, voting on entities (future)
 
 ```
-                         Blockchain
-                             │
-                             ▼
-                      ┌─────────────┐
-                      │  Substream  │
-                      └──────┬──────┘
-                             │
-              ┌──────────────┴──────────────┐
-              │                             │
-              ▼                             ▼
-    ┌─────────────────┐           ┌─────────────────┐
-    │hermes-processor │           │      atlas      │
-    │                 │           │                 │
-    │ Transforms to   │           │ Builds canonical│
-    │ Hermes protos   │           │ graph           │
-    └────────┬────────┘           └────────┬────────┘
-             │                             │
-             ▼                             ▼
-    ┌─────────────────┐           ┌─────────────────┐
-    │ space.creations │           │topology.canonical│
-    │ space.trust.*   │           └─────────────────┘
-    │ knowledge.edits │
-    └─────────────────┘
+                                    ┌────────────────────────────────────┐
+                                    │  Hermes                            │
+                                    │                                    │
+                              ┌────▶│  Edit Events ──▶ IPFS Cache ───────│──▶ Kafka: edits
+                              │     │                  (wait if miss)    │
+Substreams ───────────────────┤     │                                    │
+(globally ordered)            │     │  Space Events ─────────────────────│──▶ Kafka: spaces
+                              │     │                                    │
+                              │     └────────────────────────────────────┘
+                              │
+                              │     ┌────────────────────────────────────┐
+                              └────▶│  Atlas                             │
+                                    │                                    │──▶ Kafka: topology
+                                    │  Topology ──▶ Canonical Graph      │
+                                    └────────────────────────────────────┘
+
+                              ┌────────────────────────────────────────┐
+Substreams ──────────────────▶│  IPFS Cache (parallel, ahead-of-time) │
+                              └────────────────────────────────────────┘
 ```
+
+## Ordering Guarantees
+
+| Event Type | Ordering Requirement |
+|------------|---------------------|
+| Edits | Globally ordered within edits (diffs depend on prior state) |
+| Space/Governance/Curation | Globally ordered (substream order) |
+| Canonical Graph (Atlas) | Ordered per emission (independent stream) |
+
+Edit events must maintain global ordering because edits are diffs - each edit depends on the state established by prior edits.
 
 ## Components
+
+### IPFS Cache Service
+
+Pre-populates resolved IPFS contents ahead of time so Hermes doesn't block on network I/O.
+
+**Location:** `cache/`
+
+**How it works:**
+1. Consumes the same Substream (parallelized)
+2. For each edit event, fetches the IPFS content by CID
+3. Stores resolved content in the cache
+4. Runs ahead of Hermes so content is available when needed
+
+**Cache miss behavior:** If Hermes encounters a cache miss, it waits and retries until the content appears. The cache should always be ahead, so misses indicate the cache is catching up.
 
 ### mock-substream (Library)
 
@@ -51,23 +76,35 @@ Transforms raw substream events into Hermes protobuf messages and publishes to K
 
 **Location:** `hermes-processor/`
 
-**Input:** Mock substream events  
+**Input:** Substream events  
 **Output:** Kafka topics
+
+**Two transformation types:**
+
+1. **Edit Resolution** (via IPFS Cache)
+   - Edit events contain an IPFS hash (CID)
+   - Content is fetched from the IPFS cache (pre-populated)
+   - Decoded into the `Edit` protobuf format (see `wire/proto/grc20.proto`)
+   - The `Edit` message contains: id, name, list of `Op`s (operations), authors, and optional language
+
+2. **Space Events** (direct transformation)
+   - Space creation and trust extension events
+   - Normalized and emitted directly
 
 | Event Type | Output Topic | Protobuf Message |
 |------------|--------------|------------------|
-| SpaceCreated | `space.creations` | `HermesCreateSpace` |
-| TrustExtended | `space.trust.extensions` | `HermesSpaceTrustExtension` |
-| EditPublished | `knowledge.edits` | `HermesEdit` |
+| SpaceCreated | `spaces` | `HermesCreateSpace` |
+| TrustExtended | `spaces` | `HermesSpaceTrustExtension` |
+| EditPublished | `edits` | `HermesEdit` |
 
 ### atlas (Service)
 
-Builds and maintains the canonical graph - the set of spaces that are "trusted" based on reachability from a root space.
+Builds and maintains the canonical graph - the set of spaces that are "trusted" based on reachability from a root space. Atlas consumes the Substream independently from Hermes.
 
 **Location:** `atlas/`
 
-**Input:** Mock substream events (topology only - ignores edits)  
-**Output:** `topology.canonical` Kafka topic
+**Input:** Substream events (topology only - ignores edits)  
+**Output:** `topology` Kafka topic
 
 **Key modules:**
 - `GraphState` - Stores all spaces, edges, and topic memberships
@@ -83,6 +120,7 @@ Protobuf definitions for Hermes messages.
 **Protos:**
 - `knowledge.proto` - HermesEdit message
 - `space.proto` - HermesCreateSpace, HermesSpaceTrustExtension
+- `topology.proto` - CanonicalGraphUpdated, CanonicalTreeNode
 - `blockchain_metadata.proto` - Common metadata fields
 
 ## Event Types
@@ -182,10 +220,11 @@ A ─topic[T_SHARED]─▶ resolves to {C, G} (canonical)
 
 | Topic | Producer | Message Type | Description |
 |-------|----------|--------------|-------------|
-| `space.creations` | hermes-processor | HermesCreateSpace | New space events |
-| `space.trust.extensions` | hermes-processor | HermesSpaceTrustExtension | Trust relationship changes |
-| `knowledge.edits` | hermes-processor | HermesEdit | Knowledge graph edits |
-| `topology.canonical` | atlas | CanonicalGraph | Canonical graph updates |
+| `spaces` | hermes-processor | HermesCreateSpace, HermesSpaceTrustExtension | Space creation and trust changes |
+| `edits` | hermes-processor | HermesEdit | Resolved knowledge graph edits |
+| `topology` | atlas | CanonicalGraphUpdated | Canonical graph updates |
+| `governance` | hermes-processor | (TBD) | Proposals, voting, membership (future) |
+| `curation` | hermes-processor | (TBD) | Ranking, voting on entities (future) |
 
 ## Deployment
 
@@ -216,16 +255,33 @@ Deployed via GitHub Actions on push to `main`.
 
 ## Data Flow Example
 
-1. **mock-substream** generates: `SpaceCreated(Root)`, `SpaceCreated(A)`, `TrustExtended(Root→A)`
+### Space and Topology Events
+
+1. **Substream** emits: `SpaceCreated(Root)`, `SpaceCreated(A)`, `TrustExtended(Root→A)`
 
 2. **hermes-processor**:
-   - Converts to `HermesCreateSpace` protos
-   - Publishes to `space.creations` and `space.trust.extensions`
+   - Converts to `HermesCreateSpace` and `HermesSpaceTrustExtension` protos
+   - Publishes to `spaces` topic
 
-3. **atlas**:
+3. **atlas** (parallel, independent consumer):
    - Updates `GraphState` with new space and edge
    - Recomputes canonical graph (Root + A are now canonical)
-   - Publishes updated graph to `topology.canonical`
+   - Publishes updated graph to `topology` topic
+
+### Edit Events
+
+1. **Substream** emits: `EditPublished { space_id, ipfs_cid }`
+
+2. **IPFS Cache Service** (running ahead):
+   - Already fetched content for `ipfs_cid`
+   - Content stored in cache
+
+3. **hermes-processor**:
+   - Receives edit event
+   - Reads resolved content from IPFS cache (waits if miss)
+   - Decodes into `Edit` protobuf (ops, authors, etc.)
+   - Enriches with blockchain metadata
+   - Publishes `HermesEdit` to `edits` topic
 
 4. **Downstream consumers** read from Kafka topics to:
    - Update search indices
