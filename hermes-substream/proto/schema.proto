@@ -1,0 +1,16 @@
+syntax = "proto3";
+
+package hermes;
+
+// TODO: Define Hermes event types here
+//
+// Based on the architecture doc, we need events for:
+// - SpaceCreated
+// - TrustExtended (Verified, Related, Subtopic)
+// - EditPublished
+// - Governance events (future)
+// - Curation events (future)
+
+message HermesOutput {
+    // TODO: Add event fields
+}
