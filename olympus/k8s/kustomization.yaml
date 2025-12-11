@@ -3,17 +3,17 @@ kind: Kustomization
 
 # NOTE: This kustomization uses symlinks to reference proto files from hermes-schema/ and wire/.
 # You must use --load-restrictor LoadRestrictionsNone when running kustomize:
-#   kubectl kustomize --load-restrictor LoadRestrictionsNone hermes/k8s
-#   kubectl apply -k hermes/k8s --load-restrictor LoadRestrictionsNone
+#   kubectl kustomize --load-restrictor LoadRestrictionsNone olympus/k8s
+#   kubectl apply -k olympus/k8s --load-restrictor LoadRestrictionsNone
 
-namespace: kafka
+namespace: olympus-prod
 
 resources:
   - namespace.yaml
   # Create the kafka-credentials secret manually before deploying:
   #
   #   kubectl create secret generic kafka-credentials \
-  #     --namespace=kafka \
+  #     --namespace=olympus-prod \
   #     --from-literal=KAFKA_BROKER=<broker> \
   #     --from-literal=KAFKA_USERNAME=<username> \
   #     --from-literal=KAFKA_PASSWORD=<password> \

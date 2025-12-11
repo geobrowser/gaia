@@ -1,20 +1,20 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: atlas
-  namespace: kafka
+  name: hermes-processor
+  namespace: olympus-prod
 spec:
   template:
     metadata:
       labels:
-        app: atlas
+        app: hermes-processor
     spec:
       restartPolicy: OnFailure
       imagePullSecrets:
         - name: regcred
       containers:
-        - name: atlas
-          image: registry.digitalocean.com/geo/atlas:latest
+        - name: hermes-processor
+          image: registry.digitalocean.com/geo/hermes-processor:latest
           imagePullPolicy: Always
           env:
             - name: KAFKA_BROKER
@@ -37,12 +37,10 @@ spec:
                 secretKeyRef:
                   name: kafka-credentials
                   key: KAFKA_SSL_CA_PEM
-            - name: KAFKA_TOPIC
-              value: "topology.canonical"
           resources:
             requests:
               memory: "256Mi"
               cpu: "250m"
             limits:
-              memory: "1Gi"
-              cpu: "1000m"
+              memory: "512Mi"
+              cpu: "500m"
