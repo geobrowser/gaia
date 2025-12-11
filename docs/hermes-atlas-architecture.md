@@ -63,14 +63,17 @@ This enables:
 - **Independent replay** - Reprocess edits from block 1M while spaces continues from current
 - **Failure isolation** - If edits crashes, spaces keeps running
 
-### Shared Relay Library
+### Shared Libraries
 
-The `relay` library provides shared infrastructure:
+**`hermes-relay`** provides shared infrastructure for data source access:
 - Connection setup to blockchain data source
-- Event decoding (raw bytes → typed events)
-- Cursor persistence helpers
+- Cursor/checkpoint persistence
 
-This keeps transformers independent while sharing "how to talk to the blockchain" logic. If the underlying data source changes (e.g., swap substreams for something else), only relay changes.
+**`wire`** provides event decoding:
+- Protobuf definitions for blockchain events
+- Decoding raw bytes → typed events (GeoOutput, EditPublished, etc.)
+
+This separation keeps transformers independent while sharing common logic. If the underlying data source changes (e.g., swap substreams for something else), only relay changes. If event formats change, only wire changes.
 
 ## Ordering Guarantees
 
