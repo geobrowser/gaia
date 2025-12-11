@@ -110,3 +110,12 @@ The Space Registry contract address is configured in `src/lib.rs`:
 ```rust
 const SPACE_REGISTRY_ADDRESS: [u8; 20] = [0u8; 20]; // TODO: Set actual address
 ```
+
+## Development
+
+See [docs/modifying-events.md](docs/modifying-events.md) for instructions on:
+- Adding new events
+- Modifying existing events
+- Removing events
+- Updating the ABI
+- Testing changes
