@@ -249,7 +249,7 @@ lazy_static! {
 
 const REGISTRY_URL: &str = "https://spkg.io";
 
-async fn read_package(input: &str) -> Result<Package, anyhow::Error> {
+pub async fn read_package(input: &str) -> Result<Package, anyhow::Error> {
     let mut mutable_input = input.to_string();
 
     let val = parse_standard_package_and_version(input);

@@ -3,30 +3,37 @@
 //! Shared library for connecting to the hermes-substream blockchain data source.
 //!
 //! This crate provides:
-//! - Re-exports of `stream` crate infrastructure (SubstreamsEndpoint, Sink traits, etc.)
+//! - [`Sink`] and [`PreprocessedSink`] traits for consuming hermes-substream events
 //! - Hermes-specific configuration (module names, package paths)
 //! - Action type constants for filtering raw actions
 //!
 //! ## Usage
 //!
-//! Transformers implement the `Sink` or `PreprocessedSink` trait and use the
-//! hermes configuration to connect to the appropriate substream module:
+//! Transformers implement the [`Sink`] trait and call `run` with a type-safe
+//! [`HermesModule`]:
 //!
 //! ```ignore
-//! use hermes_relay::{Sink, HermesModule, HERMES_SPKG};
+//! use hermes_relay::{Sink, HermesModule};
+//! use stream::pb::sf::substreams::rpc::v2::BlockScopedData;
 //!
 //! struct EditsTransformer { /* ... */ }
 //!
-//! impl Sink<EditData> for EditsTransformer {
-//!     // Implement cursor persistence and block processing...
+//! impl Sink for EditsTransformer {
+//!     type Error = anyhow::Error;
+//!     
+//!     async fn process_block_scoped_data(&self, data: &BlockScopedData) -> Result<(), Self::Error> {
+//!         // Process the block...
+//!         Ok(())
+//!     }
+//!     
+//!     // Implement cursor persistence...
 //! }
 //!
-//! // Run the transformer with a specific module
-//! let module = HermesModule::EditsPublished;
+//! // Run with type-safe module selection
+//! let transformer = EditsTransformer { /* ... */ };
 //! transformer.run(
 //!     &endpoint_url,
-//!     HERMES_SPKG,
-//!     module.as_str(),
+//!     HermesModule::EditsPublished,
 //!     start_block,
 //!     end_block,
 //! ).await?;
@@ -41,10 +48,7 @@
 //! and filter client-side using the constants in the [`actions`] module:
 //!
 //! ```ignore
-//! use hermes_relay::{Sink, HermesModule, HERMES_SPKG, actions};
-//!
-//! // Spaces transformer needs: SpacesRegistered, SubspacesAdded, SubspacesRemoved
-//! // Use HermesModule::Actions and filter by action type
+//! use hermes_relay::{actions, HermesModule};
 //!
 //! fn is_space_event(action_bytes: &[u8]) -> bool {
 //!     actions::matches(action_bytes, &actions::SPACE_REGISTERED)
@@ -57,16 +61,18 @@
 
 pub mod actions;
 pub mod config;
+pub mod sink;
 
 // Re-export config types at crate root for convenience
 pub use config::{HermesModule, HERMES_SPKG};
 
-// Re-export stream crate types for transformers
+// Re-export sink traits
+pub use sink::{PreprocessedSink, Sink};
+
+// Re-export stream crate types that consumers need
 pub use stream::{
     pb, // Substreams protobuf types
     substreams::SubstreamsEndpoint,
     substreams_stream::{BlockResponse, SubstreamsStream},
     utils, // Block metadata utilities
-    PreprocessedSink,
-    Sink,
 };

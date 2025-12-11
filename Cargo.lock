@@ -2396,6 +2396,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "futures 0.3.31",
  "prost 0.13.5",
  "stream",
  "thiserror 1.0.69",

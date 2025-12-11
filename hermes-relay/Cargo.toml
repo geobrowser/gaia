@@ -13,3 +13,4 @@ async-trait = "0.1"
 tokio = { version = "1.41", features = ["sync"] }
 prost = "0.13"
 thiserror = "1"
+futures03 = { version = "0.3.1", package = "futures", features = ["compat"] }
