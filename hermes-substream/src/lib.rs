@@ -7,7 +7,7 @@ pub mod helpers;
 mod pb;
 
 use pb::hermes::*;
-use substreams_ethereum::pb::eth;
+use substreams_ethereum::{block_view::LogView, pb::eth};
 
 // TODO: Replace with actual Space Registry contract address
 const SPACE_REGISTRY_ADDRESS: [u8; 20] = [0u8; 20];
@@ -34,9 +34,9 @@ const ACTION_OBJECT_UPVOTED: [u8; 32] = [0x2c, 0xdd, 0x99, 0xb8, 0xdb, 0xde, 0x9
 const ACTION_OBJECT_DOWNVOTED: [u8; 32] = [0xb0, 0x6b, 0x60, 0xe1, 0x1f, 0x65, 0x13, 0xf3, 0xdf, 0x5a, 0x5e, 0x0b, 0x09, 0x5a, 0xec, 0xc4, 0x0f, 0xae, 0x02, 0xb1, 0x85, 0x63, 0xc6, 0x11, 0xf1, 0x0a, 0xb5, 0xed, 0x9d, 0x9b, 0xb7, 0x15];
 const ACTION_OBJECT_UNVOTED: [u8; 32] = [0xab, 0xa4, 0x9c, 0x6d, 0xa7, 0x70, 0x58, 0x8e, 0xd6, 0x02, 0x5f, 0x73, 0x6d, 0xa8, 0x76, 0xb7, 0x3b, 0xc0, 0xc7, 0xdc, 0xfd, 0xcd, 0x27, 0x5f, 0xb4, 0x31, 0x6e, 0x8b, 0xf2, 0x25, 0xc1, 0x83];
 
-/// Parse Action event from log topics.
+/// Parse Action event from log.
 /// Returns None if not a valid Action event from Space Registry.
-fn parse_action(log: &eth::v2::Log) -> Option<Action> {
+fn parse_action(log: LogView) -> Option<Action> {
     if log.address() != SPACE_REGISTRY_ADDRESS {
         return None;
     }
@@ -64,7 +64,7 @@ fn parse_action(log: &eth::v2::Log) -> Option<Action> {
 fn map_actions(block: eth::v2::Block) -> Result<Actions, substreams::errors::Error> {
     let actions: Vec<Action> = block
         .logs()
-        .filter_map(|log| parse_action(&log))
+        .filter_map(|log| parse_action(log))
         .collect();
 
     Ok(Actions { actions })
@@ -78,7 +78,7 @@ fn map_actions(block: eth::v2::Block) -> Result<Actions, substreams::errors::Err
 fn map_spaces_registered(block: eth::v2::Block) -> Result<SpaceRegisteredList, substreams::errors::Error> {
     let spaces: Vec<SpaceRegistered> = block
         .logs()
-        .filter_map(|log| parse_action(&log))
+        .filter_map(|log| parse_action(log))
         .filter(|action| action.action.as_slice() == ACTION_SPACE_ID_REGISTERED)
         .map(|action| SpaceRegistered {
             space_id: action.from_id,
@@ -94,7 +94,7 @@ fn map_spaces_registered(block: eth::v2::Block) -> Result<SpaceRegisteredList, s
 fn map_spaces_migrated(block: eth::v2::Block) -> Result<SpaceMigratedList, substreams::errors::Error> {
     let spaces: Vec<SpaceMigrated> = block
         .logs()
-        .filter_map(|log| parse_action(&log))
+        .filter_map(|log| parse_action(log))
         .filter(|action| action.action.as_slice() == ACTION_SPACE_ID_MIGRATED)
         .map(|action| SpaceMigrated {
             space_id: action.from_id,
@@ -110,7 +110,7 @@ fn map_spaces_migrated(block: eth::v2::Block) -> Result<SpaceMigratedList, subst
 fn map_proposals_created(block: eth::v2::Block) -> Result<ProposalCreatedList, substreams::errors::Error> {
     let proposals: Vec<ProposalCreated> = block
         .logs()
-        .filter_map(|log| parse_action(&log))
+        .filter_map(|log| parse_action(log))
         .filter(|action| action.action.as_slice() == ACTION_PROPOSAL_CREATED)
         .map(|action| ProposalCreated {
             space_id: action.from_id,
@@ -126,7 +126,7 @@ fn map_proposals_created(block: eth::v2::Block) -> Result<ProposalCreatedList, s
 fn map_proposals_voted(block: eth::v2::Block) -> Result<ProposalVotedList, substreams::errors::Error> {
     let votes: Vec<ProposalVoted> = block
         .logs()
-        .filter_map(|log| parse_action(&log))
+        .filter_map(|log| parse_action(log))
         .filter(|action| action.action.as_slice() == ACTION_PROPOSAL_VOTED)
         .map(|action| ProposalVoted {
             voter_id: action.from_id,
@@ -143,7 +143,7 @@ fn map_proposals_voted(block: eth::v2::Block) -> Result<ProposalVotedList, subst
 fn map_proposals_executed(block: eth::v2::Block) -> Result<ProposalExecutedList, substreams::errors::Error> {
     let proposals: Vec<ProposalExecuted> = block
         .logs()
-        .filter_map(|log| parse_action(&log))
+        .filter_map(|log| parse_action(log))
         .filter(|action| action.action.as_slice() == ACTION_PROPOSAL_EXECUTED)
         .map(|action| ProposalExecuted {
             space_id: action.from_id,
@@ -159,7 +159,7 @@ fn map_proposals_executed(block: eth::v2::Block) -> Result<ProposalExecutedList,
 fn map_editors_added(block: eth::v2::Block) -> Result<EditorAddedList, substreams::errors::Error> {
     let editors: Vec<EditorAdded> = block
         .logs()
-        .filter_map(|log| parse_action(&log))
+        .filter_map(|log| parse_action(log))
         .filter(|action| action.action.as_slice() == ACTION_EDITOR_ADDED)
         .map(|action| EditorAdded {
             space_id: action.from_id,
@@ -175,7 +175,7 @@ fn map_editors_added(block: eth::v2::Block) -> Result<EditorAddedList, substream
 fn map_editors_removed(block: eth::v2::Block) -> Result<EditorRemovedList, substreams::errors::Error> {
     let editors: Vec<EditorRemoved> = block
         .logs()
-        .filter_map(|log| parse_action(&log))
+        .filter_map(|log| parse_action(log))
         .filter(|action| action.action.as_slice() == ACTION_EDITOR_REMOVED)
         .map(|action| EditorRemoved {
             space_id: action.from_id,
@@ -191,7 +191,7 @@ fn map_editors_removed(block: eth::v2::Block) -> Result<EditorRemovedList, subst
 fn map_members_added(block: eth::v2::Block) -> Result<MemberAddedList, substreams::errors::Error> {
     let members: Vec<MemberAdded> = block
         .logs()
-        .filter_map(|log| parse_action(&log))
+        .filter_map(|log| parse_action(log))
         .filter(|action| action.action.as_slice() == ACTION_MEMBER_ADDED)
         .map(|action| MemberAdded {
             space_id: action.from_id,
@@ -207,7 +207,7 @@ fn map_members_added(block: eth::v2::Block) -> Result<MemberAddedList, substream
 fn map_members_removed(block: eth::v2::Block) -> Result<MemberRemovedList, substreams::errors::Error> {
     let members: Vec<MemberRemoved> = block
         .logs()
-        .filter_map(|log| parse_action(&log))
+        .filter_map(|log| parse_action(log))
         .filter(|action| action.action.as_slice() == ACTION_MEMBER_REMOVED)
         .map(|action| MemberRemoved {
             space_id: action.from_id,
@@ -223,7 +223,7 @@ fn map_members_removed(block: eth::v2::Block) -> Result<MemberRemovedList, subst
 fn map_editors_flagged(block: eth::v2::Block) -> Result<EditorFlaggedList, substreams::errors::Error> {
     let editors: Vec<EditorFlagged> = block
         .logs()
-        .filter_map(|log| parse_action(&log))
+        .filter_map(|log| parse_action(log))
         .filter(|action| action.action.as_slice() == ACTION_EDITOR_FLAGGED)
         .map(|action| EditorFlagged {
             space_id: action.from_id,
@@ -239,7 +239,7 @@ fn map_editors_flagged(block: eth::v2::Block) -> Result<EditorFlaggedList, subst
 fn map_editors_unflagged(block: eth::v2::Block) -> Result<EditorUnflaggedList, substreams::errors::Error> {
     let editors: Vec<EditorUnflagged> = block
         .logs()
-        .filter_map(|log| parse_action(&log))
+        .filter_map(|log| parse_action(log))
         .filter(|action| action.action.as_slice() == ACTION_EDITOR_UNFLAGGED)
         .map(|action| EditorUnflagged {
             space_id: action.from_id,
@@ -255,7 +255,7 @@ fn map_editors_unflagged(block: eth::v2::Block) -> Result<EditorUnflaggedList, s
 fn map_spaces_left(block: eth::v2::Block) -> Result<SpaceLeftList, substreams::errors::Error> {
     let spaces: Vec<SpaceLeft> = block
         .logs()
-        .filter_map(|log| parse_action(&log))
+        .filter_map(|log| parse_action(log))
         .filter(|action| action.action.as_slice() == ACTION_SPACE_LEFT)
         .map(|action| SpaceLeft {
             member_id: action.from_id,
@@ -271,7 +271,7 @@ fn map_spaces_left(block: eth::v2::Block) -> Result<SpaceLeftList, substreams::e
 fn map_topics_declared(block: eth::v2::Block) -> Result<TopicDeclaredList, substreams::errors::Error> {
     let topics: Vec<TopicDeclared> = block
         .logs()
-        .filter_map(|log| parse_action(&log))
+        .filter_map(|log| parse_action(log))
         .filter(|action| action.action.as_slice() == ACTION_TOPIC_DECLARED)
         .map(|action| TopicDeclared {
             space_id: action.from_id,
@@ -287,7 +287,7 @@ fn map_topics_declared(block: eth::v2::Block) -> Result<TopicDeclaredList, subst
 fn map_edits_published(block: eth::v2::Block) -> Result<EditsPublishedList, substreams::errors::Error> {
     let edits: Vec<EditsPublished> = block
         .logs()
-        .filter_map(|log| parse_action(&log))
+        .filter_map(|log| parse_action(log))
         .filter(|action| action.action.as_slice() == ACTION_EDITS_PUBLISHED)
         .map(|action| EditsPublished {
             space_id: action.from_id,
@@ -302,7 +302,7 @@ fn map_edits_published(block: eth::v2::Block) -> Result<EditsPublishedList, subs
 fn map_content_flagged(block: eth::v2::Block) -> Result<ContentFlaggedList, substreams::errors::Error> {
     let flags: Vec<ContentFlagged> = block
         .logs()
-        .filter_map(|log| parse_action(&log))
+        .filter_map(|log| parse_action(log))
         .filter(|action| action.action.as_slice() == ACTION_FLAGGED)
         .map(|action| ContentFlagged {
             flagger_id: action.from_id,
@@ -318,7 +318,7 @@ fn map_content_flagged(block: eth::v2::Block) -> Result<ContentFlaggedList, subs
 fn map_subspaces_added(block: eth::v2::Block) -> Result<SubspaceAddedList, substreams::errors::Error> {
     let subspaces: Vec<SubspaceAdded> = block
         .logs()
-        .filter_map(|log| parse_action(&log))
+        .filter_map(|log| parse_action(log))
         .filter(|action| action.action.as_slice() == ACTION_SUBSPACE_ADDED)
         .map(|action| SubspaceAdded {
             parent_space_id: action.from_id,
@@ -334,7 +334,7 @@ fn map_subspaces_added(block: eth::v2::Block) -> Result<SubspaceAddedList, subst
 fn map_subspaces_removed(block: eth::v2::Block) -> Result<SubspaceRemovedList, substreams::errors::Error> {
     let subspaces: Vec<SubspaceRemoved> = block
         .logs()
-        .filter_map(|log| parse_action(&log))
+        .filter_map(|log| parse_action(log))
         .filter(|action| action.action.as_slice() == ACTION_SUBSPACE_REMOVED)
         .map(|action| SubspaceRemoved {
             parent_space_id: action.from_id,
@@ -354,7 +354,7 @@ fn map_subspaces_removed(block: eth::v2::Block) -> Result<SubspaceRemovedList, s
 fn map_objects_upvoted(block: eth::v2::Block) -> Result<ObjectUpvotedList, substreams::errors::Error> {
     let votes: Vec<ObjectVoted> = block
         .logs()
-        .filter_map(|log| parse_action(&log))
+        .filter_map(|log| parse_action(log))
         .filter(|action| action.action.as_slice() == ACTION_OBJECT_UPVOTED)
         .map(|action| ObjectVoted {
             voter_id: action.from_id,
@@ -371,7 +371,7 @@ fn map_objects_upvoted(block: eth::v2::Block) -> Result<ObjectUpvotedList, subst
 fn map_objects_downvoted(block: eth::v2::Block) -> Result<ObjectDownvotedList, substreams::errors::Error> {
     let votes: Vec<ObjectVoted> = block
         .logs()
-        .filter_map(|log| parse_action(&log))
+        .filter_map(|log| parse_action(log))
         .filter(|action| action.action.as_slice() == ACTION_OBJECT_DOWNVOTED)
         .map(|action| ObjectVoted {
             voter_id: action.from_id,
@@ -388,7 +388,7 @@ fn map_objects_downvoted(block: eth::v2::Block) -> Result<ObjectDownvotedList, s
 fn map_objects_unvoted(block: eth::v2::Block) -> Result<ObjectUnvotedList, substreams::errors::Error> {
     let votes: Vec<ObjectVoted> = block
         .logs()
-        .filter_map(|log| parse_action(&log))
+        .filter_map(|log| parse_action(log))
         .filter(|action| action.action.as_slice() == ACTION_OBJECT_UNVOTED)
         .map(|action| ObjectVoted {
             voter_id: action.from_id,
