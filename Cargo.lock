@@ -2394,7 +2394,12 @@ dependencies = [
 name = "hermes-relay"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "async-trait",
+ "prost 0.13.5",
  "stream",
+ "thiserror 1.0.69",
+ "tokio",
 ]
 
 [[package]]
