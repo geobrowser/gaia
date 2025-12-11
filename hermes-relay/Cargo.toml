@@ -1,8 +1,10 @@
 [package]
-name = "hermes-indexer"
+name = "hermes-relay"
 version = "0.1.0"
 edition = "2021"
 
+[lib]
+path = "src/lib.rs"
+
 [dependencies]
 stream = { path = "../stream" }
-# cache = { path = "../cache" }  # TODO: expose cache as a library
