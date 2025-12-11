@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - 'hermes/k8s/kafka-ui.yaml'
+      - 'hermes/k8s/proto/**'
       - '.github/workflows/kafka-ui-deploy.yml'
 
 jobs:
@@ -30,6 +31,10 @@ jobs:
       - name: Apply k8s manifests
         run: |
           kubectl apply -f hermes/k8s/namespace.yaml
+          kubectl create configmap protobuf-schemas \
+            --from-file=hermes/k8s/proto/ \
+            --namespace=kafka \
+            --dry-run=client -o yaml | kubectl apply -f -
           kubectl apply -f hermes/k8s/kafka-ui.yaml
 
       - name: Wait for deployment to be ready
