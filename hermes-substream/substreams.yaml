@@ -186,4 +186,4 @@ modules:
     output:
       type: proto:hermes.ObjectUnvotedList
 
-network: polygon
+network: ethereum

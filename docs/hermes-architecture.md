@@ -25,7 +25,7 @@ The system receives blockchain events which fall into several categories:
                               │                                                          │
 ┌──────────────┐              │  ┌────────────────┐    ┌─────────────────────────────┐   │
 │  Blockchain  │              │  │ hermes-        │    │  hermes-relay (lib)         │   │
-│  (Polygon)   │─────────────▶│  │ substream      │───▶│  - Connect to substream     │   │
+│    (Geo)     │─────────────▶│  │ substream      │───▶│  - Connect to substream     │   │
 └──────────────┘              │  │ (excluded from │    │  - Cursor/checkpoint mgmt   │   │
                               │  │  workspace)    │    │  - Typed event stream       │   │
                               │  └────────────────┘    └──────────────┬──────────────┘   │
