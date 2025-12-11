@@ -1,0 +1,8 @@
+[package]
+name = "hermes-indexer"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+stream = { path = "../stream" }
+# cache = { path = "../cache" }  # TODO: expose cache as a library

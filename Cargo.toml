@@ -15,6 +15,7 @@ members = [
 
     "hermes-schema",
     "hermes-processor",
+    "hermes-indexer",
 
     "atlas",
     "mock-substream",
