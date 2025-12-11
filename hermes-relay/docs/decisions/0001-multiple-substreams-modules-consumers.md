@@ -1,4 +1,4 @@
-# ADR-0001: Multiple Substreams Modules for Consumers
+# 0001: Multiple Substreams Modules for Consumers
 
 ## Status
 
