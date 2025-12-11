@@ -120,4 +120,13 @@ cargo bench -p atlas
 
 ## Documentation
 
-See the `docs/` directory for detailed architecture documentation.
+See the `docs/` directory for detailed architecture documentation:
+
+- [Algorithm Overview](docs/algorithm-overview.md) - High-level data flow
+- [Graph Concepts](docs/graph-concepts.md) - Core concepts and terminology
+- [Canonical Graph Implementation](docs/canonical-graph-implementation.md) - How canonical computation works
+- [Transitive Graph Implementation](docs/transitive-graph-implementation.md) - BFS traversal and caching
+
+## Related Documents
+
+- [Hermes Architecture](../docs/hermes-architecture.md) - Event streaming system that feeds Atlas

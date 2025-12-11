@@ -107,3 +107,8 @@ This is optional and adds operational complexity. Only implement if security req
 <service>-secrets    # Service-specific secrets
 <shared>-credentials # Shared infrastructure credentials (kafka, redis, etc.)
 ```
+
+## Related Documents
+
+- [Hermes Architecture](./hermes-architecture.md) - System architecture for services using these secrets
+- [Hermes Infrastructure](../hermes/README.md) - Kubernetes deployment details

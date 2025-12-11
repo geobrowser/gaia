@@ -178,3 +178,8 @@ mock-substream/
 - **Reusable deterministic topology** for integration tests
 - **Type-safe conversions** between mock events and consumer types
 - **Easier maintenance** when event schemas change
+
+## Related Documents
+
+- [Hermes Architecture](../docs/hermes-architecture.md) - System that consumes substream events
+- [Atlas README](../atlas/README.md) - Canonical graph consumer

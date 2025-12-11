@@ -121,3 +121,11 @@ hermes/
 ├── docker-compose.yaml  # Local development
 └── k8s/                 # Kubernetes manifests (production)
 ```
+
+## Related Documents
+
+- [Hermes Architecture](../docs/hermes-architecture.md) - System design and component overview
+- [K8s Secrets Isolation](../docs/k8s-secrets-isolation.md) - Secrets management for production
+- [Hermes Processor](../hermes-processor/README.md) - Event processor details
+- [Hermes Schema](../hermes-schema/README.md) - Protobuf schema management
+- [Hermes Substream](../hermes-substream/README.md) - Blockchain event filtering
