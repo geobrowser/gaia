@@ -9,7 +9,7 @@ on:
       - 'hermes-schema/**'
       - 'mock-substream/**'
       - 'wire/**'
-      - 'hermes/**'
+      - 'hermes/k8s/hermes-processor.yaml'
       - '.github/workflows/hermes-deploy.yml'
 
 env:
