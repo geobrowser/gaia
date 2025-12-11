@@ -138,9 +138,27 @@ spec:
           volumeMounts:
             - name: truststore
               mountPath: /truststore
+        - name: copy-proto-files
+          image: busybox:1.36
+          command:
+            - /bin/sh
+            - -c
+            - |
+              # Copy only the actual proto files, excluding Kubernetes symlink metadata
+              for f in /proto-configmap/*.proto; do
+                cp "$f" /proto/
+              done
+          volumeMounts:
+            - name: proto-configmap
+              mountPath: /proto-configmap
+              readOnly: true
+            - name: proto-files
+              mountPath: /proto
       volumes:
         - name: truststore
           emptyDir: {}
         - name: proto-files
+          emptyDir: {}
+        - name: proto-configmap
           configMap:
             name: protobuf-schemas
