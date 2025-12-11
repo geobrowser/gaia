@@ -15,16 +15,6 @@ binaries:
     file: ./target/wasm32-unknown-unknown/release/hermes_substream.wasm
 
 modules:
-  # TODO: Add map modules for each event type
-  # Example:
-  # - name: map_spaces_created
-  #   kind: map
-  #   initialBlock: 0
-  #   inputs:
-  #     - source: sf.ethereum.type.v2.Block
-  #   output:
-  #     type: proto:hermes.SpacesCreated
-
   - name: hermes_out
     kind: map
     initialBlock: 0

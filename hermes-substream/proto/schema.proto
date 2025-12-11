@@ -2,15 +2,17 @@ syntax = "proto3";
 
 package hermes;
 
-// TODO: Define Hermes event types here
-//
-// Based on the architecture doc, we need events for:
-// - SpaceCreated
-// - TrustExtended (Verified, Related, Subtopic)
-// - EditPublished
-// - Governance events (future)
-// - Curation events (future)
+// Raw Action event from the Space Registry contract.
+// Downstream consumers (hermes-relay) are responsible for interpreting
+// the action type and decoding the topic/data fields accordingly.
+message Action {
+    bytes from_id = 1;    // 16 bytes - source space ID
+    bytes to_id = 2;      // 16 bytes - target space ID
+    bytes action = 3;     // 32 bytes - keccak256 hash of action name
+    bytes topic = 4;      // 32 bytes - context-dependent (address, proposalId, topicId, etc.)
+    bytes data = 5;       // variable - action-specific payload
+}
 
 message HermesOutput {
-    // TODO: Add event fields
+    repeated Action actions = 1;
 }
