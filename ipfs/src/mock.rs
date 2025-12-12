@@ -103,8 +103,7 @@ impl Default for MockIpfsClient {
 impl IpfsFetcher for MockIpfsClient {
     async fn get(&self, uri: &str) -> Result<Edit> {
         let bytes = self.get_bytes(uri).await?;
-        let edit =
-            Edit::decode(bytes.as_slice()).map_err(IpfsError::Prost)?;
+        let edit = Edit::decode(bytes.as_slice()).map_err(IpfsError::Prost)?;
         Ok(edit)
     }
 

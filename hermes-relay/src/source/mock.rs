@@ -149,7 +149,14 @@ mod tests {
         assert_eq!(blocks.len(), 1);
         assert_eq!(blocks[0].clock.as_ref().unwrap().number, 999);
         assert_eq!(
-            blocks[0].output.as_ref().unwrap().map_output.as_ref().unwrap().value,
+            blocks[0]
+                .output
+                .as_ref()
+                .unwrap()
+                .map_output
+                .as_ref()
+                .unwrap()
+                .value,
             vec![42]
         );
     }

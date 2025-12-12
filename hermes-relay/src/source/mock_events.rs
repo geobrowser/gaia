@@ -72,13 +72,13 @@ pub fn space_created_dao(
 ) -> Action {
     // Encode editors and members into data field
     let mut data = Vec::new();
-    
+
     // Number of editors (2 bytes)
     data.extend_from_slice(&(initial_editors.len() as u16).to_be_bytes());
     for editor in &initial_editors {
         data.extend_from_slice(editor);
     }
-    
+
     // Number of members (2 bytes)
     data.extend_from_slice(&(initial_members.len() as u16).to_be_bytes());
     for member in &initial_members {
@@ -192,8 +192,8 @@ pub const fn make_id(last_byte: u8) -> SpaceId {
 /// Creates an address with all zeros except the last byte.
 pub const fn make_address(last_byte: u8) -> Address {
     [
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 
-        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, last_byte,
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
+        0, last_byte,
     ]
 }
 

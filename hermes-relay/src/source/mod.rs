@@ -31,7 +31,7 @@
 //! }
 //! ```
 
-pub mod mock_events;
 mod mock;
+pub mod mock_events;
 
 pub use mock::MockSource;

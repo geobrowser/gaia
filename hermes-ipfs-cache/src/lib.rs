@@ -183,11 +183,7 @@ impl Sink for IpfsCacheSink {
         let edit_count = edits_list.edits.len();
 
         if edit_count > 0 {
-            tracing::info!(
-                block = block_number,
-                edits = edit_count,
-                "Processing edits"
-            );
+            tracing::info!(block = block_number, edits = edit_count, "Processing edits");
 
             // Register all pending fetches for this block upfront
             self.pending
@@ -215,7 +211,10 @@ impl Sink for IpfsCacheSink {
                 let cursor_to_persist = pending.lock().await.complete_one(block_num);
 
                 if let Some((persist_block, persist_cursor)) = cursor_to_persist {
-                    tracing::debug!(block = persist_block, "Block fully cached, persisting cursor");
+                    tracing::debug!(
+                        block = persist_block,
+                        "Block fully cached, persisting cursor"
+                    );
                     if let Err(e) = cache
                         .lock()
                         .await
@@ -340,7 +339,10 @@ mod tests {
         assert_eq!(pending.complete_one(100), None);
 
         // Third completion should persist
-        assert_eq!(pending.complete_one(100), Some((100, "cursor_100".to_string())));
+        assert_eq!(
+            pending.complete_one(100),
+            Some((100, "cursor_100".to_string()))
+        );
 
         assert!(pending.blocks.is_empty());
     }
@@ -354,10 +356,16 @@ mod tests {
 
         // Complete block 100 first
         assert_eq!(pending.complete_one(100), None); // 1 remaining
-        assert_eq!(pending.complete_one(100), Some((100, "cursor_100".to_string())));
+        assert_eq!(
+            pending.complete_one(100),
+            Some((100, "cursor_100".to_string()))
+        );
 
         // Now complete block 101
-        assert_eq!(pending.complete_one(101), Some((101, "cursor_101".to_string())));
+        assert_eq!(
+            pending.complete_one(101),
+            Some((101, "cursor_101".to_string()))
+        );
 
         assert!(pending.blocks.is_empty());
     }
@@ -377,7 +385,10 @@ mod tests {
 
         // Complete block 100
         assert_eq!(pending.complete_one(100), None); // 1 remaining
-        assert_eq!(pending.complete_one(100), Some((100, "cursor_100".to_string())));
+        assert_eq!(
+            pending.complete_one(100),
+            Some((100, "cursor_100".to_string()))
+        );
 
         assert!(pending.blocks.is_empty());
     }
@@ -397,7 +408,10 @@ mod tests {
         assert_eq!(pending.complete_one(102), None);
 
         // Complete first block - should persist
-        assert_eq!(pending.complete_one(100), Some((100, "cursor_100".to_string())));
+        assert_eq!(
+            pending.complete_one(100),
+            Some((100, "cursor_100".to_string()))
+        );
 
         // 101 and 102 were already removed, nothing left
         assert!(pending.blocks.is_empty());
@@ -443,7 +457,10 @@ mod tests {
         assert!(!pending.blocks.contains_key(&101));
 
         // Complete 100 - persist cursor 100 (it's now the min and complete)
-        assert_eq!(pending.complete_one(100), Some((100, "cursor_100".to_string())));
+        assert_eq!(
+            pending.complete_one(100),
+            Some((100, "cursor_100".to_string()))
+        );
 
         // All blocks removed
         assert!(pending.blocks.is_empty());
@@ -461,7 +478,10 @@ mod tests {
         assert_eq!(pending.complete_one(101), None); // 101: 1 remaining
         assert_eq!(pending.complete_one(100), None); // 100: 1 remaining
         assert_eq!(pending.complete_one(101), None); // 101: 0 remaining, but 100 still pending
-        assert_eq!(pending.complete_one(100), Some((100, "cursor_100".to_string()))); // 100: 0 remaining
+        assert_eq!(
+            pending.complete_one(100),
+            Some((100, "cursor_100".to_string()))
+        ); // 100: 0 remaining
 
         assert!(pending.blocks.is_empty());
     }

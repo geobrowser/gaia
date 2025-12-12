@@ -35,7 +35,10 @@ fn convert_block_metadata(meta: &BlockMetadata) -> BlockchainMetadata {
 /// - to_id: space_id (16 bytes, same as from_id)
 /// - topic: space_address (20 bytes, padded to 32)
 /// - data: encoded space creation payload
-pub fn convert_space_registered(action: &Action, meta: &BlockMetadata) -> Result<HermesCreateSpace> {
+pub fn convert_space_registered(
+    action: &Action,
+    meta: &BlockMetadata,
+) -> Result<HermesCreateSpace> {
     let space_id = action.from_id.clone();
 
     // For now, we'll create a basic space without decoding the payload

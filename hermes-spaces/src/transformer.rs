@@ -5,12 +5,14 @@ use std::fmt;
 
 use hermes_kafka::BaseProducer;
 
-use hermes_relay::{actions, Actions, Sink};
 use hermes_relay::stream::pb::sf::substreams::rpc::v2::BlockScopedData;
 use hermes_relay::stream::utils;
+use hermes_relay::{actions, Actions, Sink};
 use hermes_schema::pb::space::HermesSpaceTrustExtension;
 
-use crate::conversion::{convert_space_registered, convert_subspace_added, convert_subspace_removed};
+use crate::conversion::{
+    convert_space_registered, convert_subspace_added, convert_subspace_removed,
+};
 use crate::kafka::{send_space_creation, send_trust_extension};
 
 /// Error type for the spaces transformer that implements std::error::Error
@@ -128,7 +130,10 @@ impl Sink for SpacesTransformer {
         // In a production system, we would delete any data recorded after this block
         println!(
             "Block undo signal received: rolling back to block {}",
-            undo_signal.last_valid_block.as_ref().map_or(0, |b| b.number)
+            undo_signal
+                .last_valid_block
+                .as_ref()
+                .map_or(0, |b| b.number)
         );
 
         // TODO: Implement actual rollback logic when cursor persistence is added

@@ -292,11 +292,7 @@ fn parse_standard_package_and_version(input: &str) -> Result<(String, String), E
         ));
     }
 
-    if parts.len() == 1
-        || parts
-            .get(1)
-            .is_none_or(|v| v.is_empty() || *v == "latest")
-    {
+    if parts.len() == 1 || parts.get(1).is_none_or(|v| v.is_empty() || *v == "latest") {
         return Ok((package_name, "latest".to_string()));
     }
 

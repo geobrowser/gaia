@@ -32,17 +32,21 @@ pub fn block_metadata(block_data: &BlockScopedData) -> BlockMetadata {
 pub fn format_drift(block_metadata: &BlockMetadata) -> String {
     let now = Utc::now();
     let block_timestamp_seconds: i64 = block_metadata.timestamp.parse().unwrap_or(0);
-    let block_datetime = DateTime::from_timestamp(block_timestamp_seconds, 0).unwrap_or_else(Utc::now);
-    
+    let block_datetime =
+        DateTime::from_timestamp(block_timestamp_seconds, 0).unwrap_or_else(Utc::now);
+
     let drift = now - block_datetime;
     let days = drift.num_days();
     let hours = drift.num_hours() % 24;
     let minutes = drift.num_minutes() % 60;
     let seconds = drift.num_seconds() % 60;
     let milliseconds = drift.num_milliseconds() % 1000;
-    
+
     if days > 0 {
-        format!("{}d {}h {}m {}s {}ms", days, hours, minutes, seconds, milliseconds)
+        format!(
+            "{}d {}h {}m {}s {}ms",
+            days, hours, minutes, seconds, milliseconds
+        )
     } else if hours > 0 {
         format!("{}h {}m {}s {}ms", hours, minutes, seconds, milliseconds)
     } else if minutes > 0 {
