@@ -63,18 +63,46 @@ CREATE TABLE meta (
 );
 ```
 
-## Usage
+## Local Development
 
-### As a binary
+### Using docker-compose
+
+The easiest way to run locally is with docker-compose from the `hermes/` directory:
 
 ```bash
-DATABASE_URL=postgres://... \
+cd hermes
+
+# Set required env vars
+export SUBSTREAMS_ENDPOINT=https://...
+export SUBSTREAMS_API_TOKEN=...
+
+# Start postgres and the cache service
+docker-compose up ipfs-cache-postgres hermes-ipfs-cache
+```
+
+This starts:
+- **ipfs-cache-postgres**: PostgreSQL 16 on port 5433
+- **hermes-ipfs-cache**: The cache service
+
+**Note**: Database tables must be created separately before running.
+
+### Running directly with cargo
+
+If you prefer to run outside Docker:
+
+```bash
+# Start postgres (via docker-compose or locally)
+cd hermes && docker-compose up ipfs-cache-postgres
+
+# Run the service
+DATABASE_URL=postgres://postgres:postgres@localhost:5433/ipfs_cache \
 IPFS_GATEWAY=https://gateway.ipfs.io/ipfs/ \
 SUBSTREAMS_ENDPOINT=https://... \
+SUBSTREAMS_API_TOKEN=... \
 cargo run -p hermes-ipfs-cache
 ```
 
-### As a library
+## Usage as a Library
 
 ```rust
 use hermes_ipfs_cache::{IpfsCacheSink, cache::{Cache, Storage}};

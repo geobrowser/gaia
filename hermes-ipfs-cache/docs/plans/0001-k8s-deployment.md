@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed
+In Progress
 
 ## Context
 
@@ -16,50 +16,41 @@ Current Hermes services are deployed as Jobs to the `kafka` namespace on Digital
 
 ## Implementation Plan
 
-### Phase 1: Dockerfile
+### Phase 1: Dockerfile ✅
 
-Create `hermes-ipfs-cache/Dockerfile`:
+Created `hermes-ipfs-cache/Dockerfile` with multi-stage build.
 
-```dockerfile
-FROM rust:1.85-bookworm as builder
+### Phase 2: Local Development ✅
 
-RUN apt-get update && \
-    apt-get install -y \
-    cmake \
-    libclang-dev \
-    libssl-dev \
-    pkg-config \
-    protobuf-compiler \
-    && rm -rf /var/lib/apt/lists/*
+Added to `hermes/docker-compose.yaml`:
+- `ipfs-cache-postgres`: PostgreSQL 16 instance on port 5433
+- `hermes-ipfs-cache`: The cache service
 
-WORKDIR /app
+**Running locally:**
 
-# Copy workspace dependencies
-COPY Cargo.toml Cargo.lock ./
-COPY hermes-ipfs-cache ./hermes-ipfs-cache
-COPY hermes-relay ./hermes-relay
-COPY hermes-substream ./hermes-substream
-COPY stream ./stream
-COPY wire ./wire
-COPY ipfs ./ipfs
+```bash
+cd hermes
 
-# Build
-RUN cargo build --release -p hermes-ipfs-cache
+# Set required env vars
+export SUBSTREAMS_ENDPOINT=https://...
+export SUBSTREAMS_API_TOKEN=...
 
-FROM debian:bookworm-slim
+# Start postgres and the cache service
+docker-compose up ipfs-cache-postgres hermes-ipfs-cache
 
-RUN apt-get update && \
-    apt-get install -y ca-certificates libssl3 && \
-    rm -rf /var/lib/apt/lists/*
-
-COPY --from=builder /app/target/release/hermes-ipfs-cache /usr/local/bin/hermes-ipfs-cache
-
-CMD ["hermes-ipfs-cache"]
+# Or run service directly (requires local postgres with tables created)
+DATABASE_URL=postgres://postgres:postgres@localhost:5433/ipfs_cache \
+IPFS_GATEWAY=https://gateway.ipfs.io/ipfs/ \
+SUBSTREAMS_ENDPOINT=https://... \
+SUBSTREAMS_API_TOKEN=... \
+cargo run -p hermes-ipfs-cache
 ```
 
-### Phase 2: Kubernetes Manifests
+**Note**: Database tables must be created separately before running.
 
-#### 2.1 Database Credentials Secret
+### Phase 3: Kubernetes Manifests
+
+#### 3.1 Database Credentials Secret
 
 Create secret for PostgreSQL connection (manual step, not in git):
 
@@ -69,7 +60,7 @@ kubectl create secret generic ipfs-cache-db-credentials \
   --from-literal=DATABASE_URL="postgres://user:pass@host:5432/dbname?sslmode=require"
 ```
 
-#### 2.2 Substreams Credentials Secret
+#### 3.2 Substreams Credentials Secret
 
 Create secret for substreams API token (manual step, not in git):
 
@@ -80,7 +71,7 @@ kubectl create secret generic substreams-credentials \
   --from-literal=SUBSTREAMS_ENDPOINT="https://mainnet.eth.streamingfast.io"
 ```
 
-#### 2.3 Deployment Manifest
+#### 3.3 Deployment Manifest
 
 Create `hermes/k8s/hermes-ipfs-cache.yaml`:
 
@@ -142,7 +133,7 @@ spec:
 - Needs automatic restart on failure
 - Cursor persistence allows resuming from last position
 
-#### 2.4 Update Kustomization
+#### 3.4 Update Kustomization
 
 Add to `hermes/k8s/kustomization.yaml`:
 
@@ -155,9 +146,9 @@ resources:
   - kafka-ui.yaml
 ```
 
-### Phase 3: Database Setup
+### Phase 4: Database Setup
 
-#### 3.1 Option A: DigitalOcean Managed PostgreSQL
+#### 4.1 Option A: DigitalOcean Managed PostgreSQL
 
 Use existing or create new managed database:
 
@@ -173,7 +164,7 @@ doctl databases create ipfs-cache \
 doctl databases connection <db-id> --format URI
 ```
 
-#### 3.2 Option B: In-Cluster PostgreSQL
+#### 4.2 Option B: In-Cluster PostgreSQL
 
 Deploy PostgreSQL to the cluster (for dev/staging):
 
@@ -236,38 +227,9 @@ spec:
     - port: 5432
 ```
 
-#### 3.3 Schema Migration
+### Phase 5: CI/CD
 
-Run schema migration before first deployment:
-
-```bash
-# Port forward to database
-kubectl port-forward -n kafka svc/ipfs-cache-postgres 5432:5432
-
-# Run migrations
-psql postgres://user:pass@localhost:5432/ipfs_cache <<EOF
-CREATE TABLE IF NOT EXISTS ipfs_cache (
-    uri TEXT PRIMARY KEY,
-    json JSONB,
-    block TEXT NOT NULL,
-    space_id TEXT NOT NULL,
-    is_errored BOOLEAN NOT NULL DEFAULT FALSE
-);
-
-CREATE TABLE IF NOT EXISTS meta (
-    id TEXT PRIMARY KEY,
-    cursor TEXT NOT NULL,
-    block_number TEXT NOT NULL
-);
-
-CREATE INDEX IF NOT EXISTS idx_ipfs_cache_space_id ON ipfs_cache(space_id);
-CREATE INDEX IF NOT EXISTS idx_ipfs_cache_block ON ipfs_cache(block);
-EOF
-```
-
-### Phase 4: CI/CD
-
-#### 4.1 GitHub Actions Workflow
+#### 5.1 GitHub Actions Workflow
 
 Add to `.github/workflows/` a workflow for building and pushing the image:
 
@@ -311,67 +273,15 @@ jobs:
           kubectl rollout restart deployment/hermes-ipfs-cache -n kafka
 ```
 
-### Phase 5: Local Development
+## Progress Summary
 
-#### 5.1 Add to docker-compose.yaml
-
-```yaml
-services:
-  # ... existing services ...
-
-  ipfs-cache-postgres:
-    image: postgres:16
-    environment:
-      POSTGRES_DB: ipfs_cache
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-    ports:
-      - "5433:5432"
-    volumes:
-      - ipfs-cache-data:/var/lib/postgresql/data
-
-  hermes-ipfs-cache:
-    build:
-      context: ..
-      dockerfile: hermes-ipfs-cache/Dockerfile
-    environment:
-      DATABASE_URL: postgres://postgres:postgres@ipfs-cache-postgres:5432/ipfs_cache
-      IPFS_GATEWAY: https://gateway.ipfs.io/ipfs/
-      SUBSTREAMS_ENDPOINT: ${SUBSTREAMS_ENDPOINT}
-      SUBSTREAMS_API_TOKEN: ${SUBSTREAMS_API_TOKEN}
-      RUST_LOG: info,hermes_ipfs_cache=debug
-    depends_on:
-      - ipfs-cache-postgres
-
-volumes:
-  kafka-data:
-  ipfs-cache-data:
-```
-
-#### 5.2 Running Locally
-
-```bash
-# With docker-compose
-cd hermes
-docker-compose up ipfs-cache-postgres hermes-ipfs-cache
-
-# Or run service directly
-DATABASE_URL=postgres://postgres:postgres@localhost:5433/ipfs_cache \
-IPFS_GATEWAY=https://gateway.ipfs.io/ipfs/ \
-SUBSTREAMS_ENDPOINT=https://... \
-SUBSTREAMS_API_TOKEN=... \
-cargo run -p hermes-ipfs-cache
-```
-
-## File Changes Summary
-
-| File | Action | Description |
-|------|--------|-------------|
-| `hermes-ipfs-cache/Dockerfile` | Create | Multi-stage build |
-| `hermes/k8s/hermes-ipfs-cache.yaml` | Create | Deployment manifest |
-| `hermes/k8s/kustomization.yaml` | Modify | Add new resource |
-| `hermes/docker-compose.yaml` | Modify | Add local dev services |
-| `.github/workflows/hermes-ipfs-cache.yaml` | Create | CI/CD pipeline |
+| Phase | Status | Description |
+|-------|--------|-------------|
+| Phase 1: Dockerfile | ✅ Done | `hermes-ipfs-cache/Dockerfile` |
+| Phase 2: Local Development | ✅ Done | `hermes/docker-compose.yaml` updated |
+| Phase 3: K8s Manifests | ⏳ Pending | Deployment manifest and secrets |
+| Phase 4: Database Setup | ⏳ Pending | Managed or in-cluster PostgreSQL |
+| Phase 5: CI/CD | ⏳ Pending | GitHub Actions workflow |
 
 ## Secrets Required
 
