@@ -20,7 +20,7 @@ members = [
     "hermes-schema",
     "hermes-processor",
     "hermes-relay",
-    "hermes-spaces",
+    "hermes-pipeline",
     "hermes-ipfs-cache",
 
     "atlas",

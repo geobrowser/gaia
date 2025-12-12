@@ -34,7 +34,7 @@ The system receives blockchain events which fall into several categories:
                               │                  │                    │            │          │
                               │                  ▼                    ▼            ▼          │
                               │  ┌───────────────────────────┐  ┌──────────┐  ┌─────────┐     │
-                              │  │  hermes-spaces (bin)      │  │  atlas   │  │ future  │     │
+                              │  │  hermes-pipeline (bin)      │  │  atlas   │  │ future  │     │
                               │  │  - Space events           │  │  (bin)   │  │  ...    │     │
                               │  │  - Edit events + IPFS     │  └────┬─────┘  └────┬────┘     │
                               │  │    cache integration      │       │             │          │
@@ -50,7 +50,7 @@ The system receives blockchain events which fall into several categories:
 
                               ┌────────────────────────────────────────┐
 Blockchain ──────────────────▶│  IPFS Cache (parallel, ahead-of-time) │
-Data Source                   │  (hermes-spaces uses mock cache for   │
+Data Source                   │  (hermes-pipeline uses mock cache for   │
                               │   dev, live cache for production)     │
                               └────────────────────────────────────────┘
 ```
@@ -59,7 +59,7 @@ Data Source                   │  (hermes-spaces uses mock cache for   │
 
 ### Consolidated Transformers
 
-`hermes-spaces` is the primary transformer that handles most blockchain events:
+`hermes-pipeline` is the primary transformer that handles most blockchain events:
 - Space registrations and migrations
 - Trust relationships (subspaces)
 - Edit publishing (with IPFS cache integration)
@@ -169,11 +169,11 @@ Protobuf definitions for Kafka output messages.
 - `topology.proto` - CanonicalGraphUpdated, CanonicalTreeNode
 - `blockchain_metadata.proto` - Common metadata fields
 
-### hermes-spaces (Binary)
+### hermes-pipeline (Binary)
 
 Primary transformer that handles space events, trust relationships, and edit publishing.
 
-**Location:** `hermes-spaces/`
+**Location:** `hermes-pipeline/`
 
 **Uses:** `hermes-relay`, IPFS cache (mock or live)  
 **Subscribes to:** `map_actions` (filters client-side for relevant action types)  
@@ -210,7 +210,7 @@ Computes the canonical graph from space topology events.
 
 ### IPFS Cache Service
 
-Pre-populates resolved IPFS contents ahead of time so `hermes-spaces` doesn't block on network I/O when processing edits.
+Pre-populates resolved IPFS contents ahead of time so `hermes-pipeline` doesn't block on network I/O when processing edits.
 
 **Location:** `hermes-ipfs-cache/`
 
@@ -219,9 +219,9 @@ Pre-populates resolved IPFS contents ahead of time so `hermes-spaces` doesn't bl
 2. For each edit event, fetches the IPFS content by CID
 3. Stores resolved content in PostgreSQL cache
 
-**Cache miss behavior:** If `hermes-spaces` encounters a cache miss, it waits and retries until the content appears. The cache should always be ahead, so misses indicate the cache is catching up.
+**Cache miss behavior:** If `hermes-pipeline` encounters a cache miss, it waits and retries until the content appears. The cache should always be ahead, so misses indicate the cache is catching up.
 
-**Development mode:** `hermes-spaces` includes a mock IPFS cache with pre-populated test edits, allowing development without running the full cache service.
+**Development mode:** `hermes-pipeline` includes a mock IPFS cache with pre-populated test edits, allowing development without running the full cache service.
 
 ### mock-substream (Library)
 
@@ -308,9 +308,9 @@ NON-CANONICAL (isolated islands):
 
 | Topic | Producer | Message Type | Description |
 |-------|----------|--------------|-------------|
-| `space.creations` | hermes-spaces | HermesCreateSpace | Space creation events |
-| `space.trust.extensions` | hermes-spaces | HermesSpaceTrustExtension | Trust extension events (verified, related, subtopic) |
-| `knowledge.edits` | hermes-spaces | HermesEdit | Resolved knowledge graph edits |
+| `space.creations` | hermes-pipeline | HermesCreateSpace | Space creation events |
+| `space.trust.extensions` | hermes-pipeline | HermesSpaceTrustExtension | Trust extension events (verified, related, subtopic) |
+| `knowledge.edits` | hermes-pipeline | HermesEdit | Resolved knowledge graph edits |
 | `topology.canonical` | atlas | CanonicalGraphUpdated | Canonical graph updates |
 | `governance` | (future) | (TBD) | Proposals, voting, membership |
 | `curation` | (future) | (TBD) | Ranking, voting on entities |
@@ -322,14 +322,14 @@ gaia/
 ├── hermes-substream/    # Substream: decodes Space Registry events (excluded from workspace)
 ├── hermes-relay/        # Library: connects to substream, provides typed event stream
 ├── hermes-schema/       # Library: Kafka output protobuf definitions
-├── hermes-spaces/       # Binary: primary transformer (spaces, trust, edits)
+├── hermes-pipeline/       # Binary: primary transformer (spaces, trust, edits)
 ├── hermes-ipfs-cache/   # Service: IPFS content pre-fetcher (production)
 ├── hermes-processor/    # Binary: standalone mock processor (development/testing)
 ├── mock-substream/      # Library: test event generation
 └── atlas/               # Binary: canonical graph computation, publishes to Kafka
 ```
 
-`hermes-spaces` is the primary transformer, handling space events, trust relationships, and edits. It depends on `hermes-relay` for data source access, `hermes-schema` for output types, and uses either a mock or live IPFS cache for edit content resolution.
+`hermes-pipeline` is the primary transformer, handling space events, trust relationships, and edits. It depends on `hermes-relay` for data source access, `hermes-schema` for output types, and uses either a mock or live IPFS cache for edit content resolution.
 
 ## Data Flow Example
 
@@ -366,7 +366,7 @@ gaia/
    - Filters for edit actions
    - Emits `EditsPublished` protobuf
 
-4. **hermes-spaces** (via hermes-relay):
+4. **hermes-pipeline** (via hermes-relay):
    - Subscribes to `map_actions`, filters for `EDITS_PUBLISHED`
    - Extracts IPFS CID from action data
    - Reads resolved content from IPFS cache (mock or live)
@@ -391,7 +391,7 @@ docker-compose up
 # Starts:
 # - Kafka broker (localhost:9092)
 # - Kafka UI (http://localhost:8080)
-# - hermes-spaces transformer
+# - hermes-pipeline transformer
 # - atlas (topology transformer)
 # - hermes-ipfs-cache service
 # - PostgreSQL (for IPFS cache)
@@ -402,12 +402,12 @@ All services run with mock data by default, processing a deterministic test topo
 ### Independent Operations
 
 ```bash
-# Restart hermes-spaces (handles spaces, trust, and edits)
-kubectl rollout restart deployment/hermes-spaces
+# Restart hermes-pipeline (handles spaces, trust, and edits)
+kubectl rollout restart deployment/hermes-pipeline
 
 # Replay from specific block
-kubectl set env deployment/hermes-spaces START_BLOCK=1000000
-kubectl rollout restart deployment/hermes-spaces
+kubectl set env deployment/hermes-pipeline START_BLOCK=1000000
+kubectl rollout restart deployment/hermes-pipeline
 
 # atlas (topology) continues unaffected
 kubectl rollout restart deployment/atlas

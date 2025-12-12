@@ -1,4 +1,4 @@
-//! Hermes Spaces Transformer
+//! Hermes Pipeline
 //!
 //! Consumes space-related events from hermes-substream via hermes-relay and
 //! transforms them into Hermes protobuf messages for publication to Kafka.
@@ -32,7 +32,7 @@ use transformer::SpacesTransformer;
 
 #[tokio::main]
 async fn main() -> Result<()> {
-    println!("Hermes Spaces Transformer starting...");
+    println!("Hermes Pipeline starting...");
 
     let broker = env::var("KAFKA_BROKER").unwrap_or_else(|_| "localhost:9092".to_string());
 
@@ -41,7 +41,7 @@ async fn main() -> Result<()> {
 
     // Create Kafka producer
     println!("\nConnecting to Kafka broker...");
-    let producer = create_producer(&broker, "hermes-spaces")?;
+    let producer = create_producer(&broker, "hermes-pipeline")?;
     println!("Connected to Kafka broker");
 
     // Create the transformer

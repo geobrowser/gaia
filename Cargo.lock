@@ -2546,6 +2546,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "hermes-pipeline"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "hermes-kafka",
+ "hermes-relay",
+ "hermes-schema",
+ "hex",
+ "prost 0.13.5",
+ "stream",
+ "tokio",
+]
+
+[[package]]
 name = "hermes-processor"
 version = "0.1.0"
 dependencies = [
@@ -2580,20 +2594,6 @@ dependencies = [
  "prost 0.13.5",
  "prost-build 0.13.5",
  "wire",
-]
-
-[[package]]
-name = "hermes-spaces"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "hermes-kafka",
- "hermes-relay",
- "hermes-schema",
- "hex",
- "prost 0.13.5",
- "stream",
- "tokio",
 ]
 
 [[package]]

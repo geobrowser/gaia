@@ -1,10 +1,10 @@
-name: Hermes Spaces Check
+name: Hermes Pipeline Check
 
 on:
   push:
     branches: [main, develop]
     paths:
-      - 'hermes-spaces/**'
+      - 'hermes-pipeline/**'
       - 'hermes-relay/**'
       - 'hermes-substream/**'
       - 'hermes-kafka/**'
@@ -12,7 +12,7 @@ on:
   pull_request:
     branches: [main, develop]
     paths:
-      - 'hermes-spaces/**'
+      - 'hermes-pipeline/**'
       - 'hermes-relay/**'
       - 'hermes-substream/**'
       - 'hermes-kafka/**'
@@ -27,7 +27,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: ./hermes-spaces
+        working-directory: ./hermes-pipeline
 
     steps:
       - uses: actions/checkout@v4
@@ -52,7 +52,7 @@ jobs:
       - name: Cache Dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: ./hermes-spaces
+          workspaces: ./hermes-pipeline
 
       - name: Check formatting
         run: cargo fmt --check

@@ -6,9 +6,9 @@ Proposed
 
 ## Context
 
-The original `hermes-spaces` design (see `0001-complete-action-support.md`) excluded `EDITS_PUBLISHED` events, with the assumption that a dedicated `hermes-edits` transformer would handle them separately. This was based on the principle of specialized transformers.
+The original `hermes-pipeline` design (see `0001-complete-action-support.md`) excluded `EDITS_PUBLISHED` events, with the assumption that a dedicated `hermes-edits` transformer would handle them separately. This was based on the principle of specialized transformers.
 
-However, after further consideration, consolidating edit processing into `hermes-spaces` provides several benefits:
+However, after further consideration, consolidating edit processing into `hermes-pipeline` provides several benefits:
 - **Simpler deployment**: One binary handles all space-related events
 - **Shared infrastructure**: Reuses existing Kafka producer, cursor management
 - **Consistent patterns**: Same conversion/emit patterns as other actions
@@ -32,7 +32,7 @@ Each IPFS hash needs corresponding mock `Edit` content.
 
 ## Decision
 
-Add `EDITS_PUBLISHED` support to `hermes-spaces` as another data pipeline.
+Add `EDITS_PUBLISHED` support to `hermes-pipeline` as another data pipeline.
 
 ### Data Pipelines
 
@@ -69,7 +69,7 @@ If cache lookups become a bottleneck, we can later:
 Organize pipelines into separate modules. Each pipeline is a simple function:
 
 ```
-hermes-spaces/src/
+hermes-pipeline/src/
 ├── main.rs                      # Runs all pipelines per action
 ├── pipelines/
 │   ├── mod.rs                   # Re-exports all pipelines
@@ -86,7 +86,7 @@ hermes-spaces/src/
 
 Each pipeline is a simple module with a `process` function:
 
-**File:** `hermes-spaces/src/pipelines/spaces.rs`
+**File:** `hermes-pipeline/src/pipelines/spaces.rs`
 ```rust
 //! Pipeline: SPACE_REGISTERED → space.creations
 
@@ -118,7 +118,7 @@ fn convert(action: &Action, meta: &BlockMetadata) -> Result<HermesCreateSpace> {
 }
 ```
 
-**File:** `hermes-spaces/src/pipelines/trust.rs`
+**File:** `hermes-pipeline/src/pipelines/trust.rs`
 ```rust
 //! Pipeline: SUBSPACE_ADDED/REMOVED → space.trust.extensions
 
@@ -160,7 +160,7 @@ fn convert_removed(action: &Action, meta: &BlockMetadata) -> Result<HermesSpaceT
 
 ### Phase 2: Add Edits Pipeline
 
-**File:** `hermes-spaces/src/pipelines/edits.rs`
+**File:** `hermes-pipeline/src/pipelines/edits.rs`
 ```rust
 //! Pipeline: EDITS_PUBLISHED → knowledge.edits
 //!
@@ -214,7 +214,7 @@ fn convert(action: &Action, edit: &Edit, meta: &BlockMetadata) -> Result<HermesE
 
 ### Phase 3: Add Cache Module
 
-**File:** `hermes-spaces/src/cache/mod.rs`
+**File:** `hermes-pipeline/src/cache/mod.rs`
 ```rust
 mod mock;
 pub use mock::MockCache;
@@ -227,7 +227,7 @@ pub trait IpfsCache {
 }
 ```
 
-**File:** `hermes-spaces/src/cache/mock.rs`
+**File:** `hermes-pipeline/src/cache/mock.rs`
 ```rust
 //! Mock IPFS cache for development/testing
 
@@ -272,7 +272,7 @@ fn create_topic_edit() -> Edit { /* ... */ }
 
 ### Phase 4: Update Main
 
-**File:** `hermes-spaces/src/main.rs`
+**File:** `hermes-pipeline/src/main.rs`
 ```rust
 mod cache;
 mod pipelines;
@@ -309,7 +309,7 @@ async fn main() -> Result<()> {
 
 ### Phase 6: Add Dependencies
 
-**File:** `hermes-spaces/Cargo.toml`
+**File:** `hermes-pipeline/Cargo.toml`
 ```toml
 [dependencies]
 wire = { path = "../wire" }
@@ -320,18 +320,18 @@ wire = { path = "../wire" }
 
 | File | Action | Description |
 |------|--------|-------------|
-| `hermes-spaces/Cargo.toml` | Modify | Add `wire` dependency |
-| `hermes-spaces/src/main.rs` | Modify | Run all pipelines sequentially |
-| `hermes-spaces/src/pipelines/mod.rs` | Create | Re-export pipelines |
-| `hermes-spaces/src/pipelines/spaces.rs` | Create | SPACE_REGISTERED pipeline |
-| `hermes-spaces/src/pipelines/trust.rs` | Create | SUBSPACE_ADDED/REMOVED pipeline |
-| `hermes-spaces/src/pipelines/edits.rs` | Create | EDITS_PUBLISHED pipeline |
-| `hermes-spaces/src/cache/mod.rs` | Create | IpfsCache trait |
-| `hermes-spaces/src/cache/mock.rs` | Create | Mock cache with test edits |
-| `hermes-spaces/src/shared.rs` | Create | BlockMetadata conversion |
-| `hermes-spaces/src/conversion.rs` | Delete | Moved to pipelines/ |
-| `hermes-spaces/src/kafka.rs` | Delete | Inlined in pipelines/ |
-| `hermes-spaces/src/transformer.rs` | Delete | Replaced by pipelines/ |
+| `hermes-pipeline/Cargo.toml` | Modify | Add `wire` dependency |
+| `hermes-pipeline/src/main.rs` | Modify | Run all pipelines sequentially |
+| `hermes-pipeline/src/pipelines/mod.rs` | Create | Re-export pipelines |
+| `hermes-pipeline/src/pipelines/spaces.rs` | Create | SPACE_REGISTERED pipeline |
+| `hermes-pipeline/src/pipelines/trust.rs` | Create | SUBSPACE_ADDED/REMOVED pipeline |
+| `hermes-pipeline/src/pipelines/edits.rs` | Create | EDITS_PUBLISHED pipeline |
+| `hermes-pipeline/src/cache/mod.rs` | Create | IpfsCache trait |
+| `hermes-pipeline/src/cache/mock.rs` | Create | Mock cache with test edits |
+| `hermes-pipeline/src/shared.rs` | Create | BlockMetadata conversion |
+| `hermes-pipeline/src/conversion.rs` | Delete | Moved to pipelines/ |
+| `hermes-pipeline/src/kafka.rs` | Delete | Inlined in pipelines/ |
+| `hermes-pipeline/src/transformer.rs` | Delete | Replaced by pipelines/ |
 
 ## Well-Known IDs for Mock Edits
 
@@ -485,8 +485,8 @@ This will require:
 
 After implementation, update `docs/hermes-architecture.md` to:
 1. Remove the separate `edits` binary from the architecture
-2. Show edits processing happening in `hermes-spaces`
-3. Update the diagram to show IPFS cache integration within hermes-spaces
+2. Show edits processing happening in `hermes-pipeline`
+3. Update the diagram to show IPFS cache integration within hermes-pipeline
 
 ## Consequences
 
@@ -498,7 +498,7 @@ After implementation, update `docs/hermes-architecture.md` to:
 
 ### Negative
 
-- **Larger binary**: More code in hermes-spaces
+- **Larger binary**: More code in hermes-pipeline
 - **Cache dependency**: Requires IPFS cache (mock or live) at runtime
 
 ### Neutral

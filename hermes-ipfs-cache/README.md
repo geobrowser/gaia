@@ -1,10 +1,10 @@
 # hermes-ipfs-cache
 
-Pre-fetches IPFS content for `EditsPublished` events so `hermes-spaces` doesn't block on network I/O when processing edits.
+Pre-fetches IPFS content for `EditsPublished` events so `hermes-pipeline` doesn't block on network I/O when processing edits.
 
 ## Overview
 
-This service runs ahead of `hermes-spaces`, subscribing to `EditsPublished` events from hermes-substream and fetching IPFS content by CID. The resolved content is stored in PostgreSQL so downstream consumers can read directly from the cache.
+This service runs ahead of `hermes-pipeline`, subscribing to `EditsPublished` events from hermes-substream and fetching IPFS content by CID. The resolved content is stored in PostgreSQL so downstream consumers can read directly from the cache.
 
 ```
                                     ┌─────────────────────┐
@@ -152,6 +152,6 @@ This ensures that on restart, processing resumes from the oldest incomplete bloc
 
 ## Cache Miss Behavior
 
-Downstream consumers (like `hermes-spaces`) should retry on cache miss. Since this service runs ahead, misses indicate the cache is catching up. The retry should eventually succeed once the content is fetched and stored.
+Downstream consumers (like `hermes-pipeline`) should retry on cache miss. Since this service runs ahead, misses indicate the cache is catching up. The retry should eventually succeed once the content is fetched and stored.
 
-**Note**: For local development, `hermes-spaces` includes a mock IPFS cache with pre-populated test edits, so this service is only needed for production.
+**Note**: For local development, `hermes-pipeline` includes a mock IPFS cache with pre-populated test edits, so this service is only needed for production.
