@@ -12,10 +12,7 @@ RUN apt-get update && \
 
 WORKDIR /app
 
-# Copy workspace Cargo files
-COPY Cargo.toml Cargo.lock ./
-
-# Copy all required crates for atlas
+# Copy only required crates (no workspace Cargo.toml - build standalone)
 COPY atlas ./atlas
 COPY hermes-relay ./hermes-relay
 COPY hermes-schema ./hermes-schema
@@ -23,7 +20,7 @@ COPY hermes-substream ./hermes-substream
 COPY stream ./stream
 COPY wire ./wire
 
-# Build from the atlas directory
+# Build from the crate directory (standalone, not as workspace member)
 WORKDIR /app/atlas
 RUN cargo build --release
 

@@ -204,7 +204,7 @@ Computes the canonical graph from space topology events.
 
 Pre-populates resolved IPFS contents ahead of time so the edits transformer doesn't block on network I/O.
 
-**Location:** `cache/`
+**Location:** `hermes-ipfs-cache/`
 
 **How it works:**
 1. Connects to hermes-substream `map_edits_published` (parallelized, runs ahead)
@@ -298,9 +298,10 @@ NON-CANONICAL (isolated islands):
 
 | Topic | Producer | Message Type | Description |
 |-------|----------|--------------|-------------|
-| `spaces` | spaces | HermesCreateSpace | Space creation and relationship changes |
-| `edits` | edits | HermesEdit | Resolved knowledge graph edits |
-| `topology` | topology | CanonicalGraphUpdated | Canonical graph updates |
+| `space.creations` | hermes-processor | HermesCreateSpace | Space creation events |
+| `space.trust.extensions` | hermes-processor | HermesSpaceTrustExtension | Trust extension events (verified, related, subtopic) |
+| `knowledge.edits` | hermes-processor | HermesEdit | Resolved knowledge graph edits |
+| `topology.canonical` | atlas | CanonicalGraphUpdated | Canonical graph updates |
 | `governance` | (future) | (TBD) | Proposals, voting, membership |
 | `curation` | (future) | (TBD) | Ranking, voting on entities |
 
@@ -311,10 +312,11 @@ gaia/
 ├── hermes-substream/    # Substream: decodes Space Registry events (excluded from workspace)
 ├── hermes-relay/        # Library: connects to substream, provides typed event stream
 ├── hermes-schema/       # Library: Kafka output protobuf definitions
-├── hermes-processor/    # Binary: main processor (TBD)
-├── cache/               # Service: IPFS content pre-fetcher
+├── hermes-processor/    # Binary: processes mock events, publishes to Kafka (spaces, edits)
+├── hermes-spaces/       # Binary: spaces transformer (uses hermes-relay)
+├── hermes-ipfs-cache/   # Service: IPFS content pre-fetcher
 ├── mock-substream/      # Library: test event generation
-└── atlas/               # Library: canonical graph computation
+└── atlas/               # Binary: canonical graph computation, publishes to Kafka
 ```
 
 Each binary depends on `hermes-relay` for data source access and `hermes-schema` for output types.
@@ -371,17 +373,20 @@ Each binary depends on `hermes-relay` for data source access and `hermes-schema`
 Each transformer runs as an independent service:
 
 ```bash
-# Local development
+# Local development (from hermes/ directory)
+cd hermes
 docker-compose up
 
 # Starts:
 # - Kafka broker (localhost:9092)
 # - Kafka UI (http://localhost:8080)
-# - spaces transformer
-# - edits transformer
-# - topology transformer
-# - IPFS cache service
+# - hermes-spaces transformer
+# - atlas (topology transformer)
+# - hermes-ipfs-cache service
+# - PostgreSQL (for IPFS cache)
 ```
+
+All services run with mock data by default, processing a deterministic test topology and publishing to Kafka topics.
 
 ### Independent Operations
 
