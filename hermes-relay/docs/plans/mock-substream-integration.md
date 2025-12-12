@@ -439,7 +439,7 @@ MockEvent::EditPublished(edit) -> hermes_substream::pb::hermes::EditsPublished {
 }
 ```
 
-## IPFS Cache Mocking
+## IPFS Content Generation
 
 The edits transformer relies on the IPFS cache to resolve edit content. In production:
 
@@ -458,124 +458,97 @@ The edits transformer relies on the IPFS cache to resolve edit content. In produ
 4. Stores the decoded `Edit` proto in PostgreSQL
 5. Edits transformer reads from cache, enriches with blockchain/topology metadata, and emits `HermesEdit` to Kafka
 
-To fully test the pipeline, we need to mock the IPFS cache as well.
+For mock mode, we don't want to mock the cache itself - the real cache infrastructure should work as normal. Instead, we need to **pre-populate the cache with real `grc20.Edit` data** that corresponds to our mock `EditsPublished` events.
 
-### IpfsCache Trait
+### Approach
 
-Abstract the cache interface to support both real and mock implementations:
+1. Generate mock `EditsPublished` events with deterministic CIDs
+2. Convert `mock_substream::EditPublished` to real `grc20.Edit` protos
+3. Pre-populate the IPFS cache (PostgreSQL) with these edits before running tests
+4. The edits transformer reads from the cache as normal
 
-```rust
-// hermes-ipfs-cache/src/cache.rs
+This tests the full production path - the only thing mocked is the source of the blockchain events and the IPFS content (which is real GRC-20 data, just not fetched from IPFS).
 
-/// Trait for IPFS cache implementations.
-#[async_trait]
-pub trait IpfsCache: Send + Sync {
-    /// Store an item in the cache.
-    async fn put(&self, item: &CacheItem) -> Result<(), CacheError>;
-    
-    /// Get an item from the cache by URI.
-    async fn get(&self, uri: &str) -> Result<Option<CacheItem>, CacheError>;
-    
-    /// Load the cursor for a given indexer ID.
-    async fn load_cursor(&self, id: &str) -> Result<Option<String>, CacheError>;
-    
-    /// Persist the cursor for a given indexer ID.
-    async fn persist_cursor(&self, id: &str, cursor: &str, block: u64) -> Result<(), CacheError>;
-}
+### Cache Seeding
 
-/// Production implementation using PostgreSQL.
-pub struct PostgresCache {
-    storage: Storage,
-}
-
-#[async_trait]
-impl IpfsCache for PostgresCache {
-    // ... existing implementation ...
-}
-```
-
-### Mock IPFS Cache
-
-In-memory implementation that can be pre-populated with mock edit data:
+Add a utility to seed the cache with mock edit data:
 
 ```rust
-// hermes-ipfs-cache/src/mock.rs (or mock-substream/src/ipfs_cache.rs)
+// mock-substream/src/cache_seeder.rs
 
-use std::collections::HashMap;
-use std::sync::RwLock;
+use hermes_ipfs_cache::cache::{Cache, CacheItem};
+use wire::pb::grc20;
 
-/// In-memory mock IPFS cache for testing.
-pub struct MockIpfsCache {
-    items: RwLock<HashMap<String, CacheItem>>,
-    cursors: RwLock<HashMap<String, (String, u64)>>,
+/// Seeds the IPFS cache with real GRC-20 edit data from mock events.
+pub struct CacheSeeder {
+    cache: Cache,
 }
 
-impl MockIpfsCache {
-    pub fn new() -> Self {
-        Self {
-            items: RwLock::new(HashMap::new()),
-            cursors: RwLock::new(HashMap::new()),
-        }
+impl CacheSeeder {
+    pub fn new(cache: Cache) -> Self {
+        Self { cache }
     }
     
-    /// Pre-populate the cache with mock edit data.
+    /// Seed the cache with all edit events from the mock topology.
     ///
-    /// Converts `mock_substream::EditPublished` events to `CacheItem`s
-    /// and stores them with deterministic CIDs.
-    pub fn populate_from_topology(blocks: &[MockBlock]) -> Self {
-        let cache = Self::new();
-        
+    /// For each `EditPublished` event, converts it to a real `grc20.Edit`
+    /// proto and stores it in the cache with a deterministic CID.
+    pub async fn seed_from_topology(&self, blocks: &[MockBlock]) -> Result<(), CacheError> {
         for block in blocks {
             for event in &block.events {
                 if let MockEvent::EditPublished(edit) = event {
                     let cid = Self::deterministic_cid(&edit.edit_id);
-                    let wire_edit = Self::mock_event_to_wire_edit(edit);
+                    let wire_edit = Self::to_grc20_edit(edit);
                     
-                    cache.items.write().unwrap().insert(cid.clone(), CacheItem {
+                    let item = CacheItem {
                         uri: format!("ipfs://{}", cid),
                         json: Some(wire_edit),
                         block: block.timestamp.to_string(),
                         space_id: hex::encode(&edit.space_id),
                         is_errored: false,
-                    });
+                    };
+                    
+                    self.cache.put(&item).await?;
                 }
             }
         }
         
-        cache
+        Ok(())
     }
     
     /// Generate a deterministic CID from an edit ID.
     ///
     /// In production, CIDs are content-addressed hashes. For testing,
-    /// we use a simple encoding of the edit ID.
-    fn deterministic_cid(edit_id: &EditId) -> String {
+    /// we use a simple encoding of the edit ID that both the mock source
+    /// and cache seeder agree on.
+    pub fn deterministic_cid(edit_id: &EditId) -> String {
+        // Use a fake but valid-looking CID format
         format!("Qm{}", hex::encode(edit_id))
     }
     
-    /// Convert mock edit to wire format (`grc20.Edit` proto).
+    /// Convert mock edit to real `grc20.Edit` proto.
     ///
-    /// This matches the structure stored in IPFS and expected by the
-    /// edits transformer. See `wire/proto/grc20.proto` for the schema.
-    fn mock_event_to_wire_edit(edit: &EditPublished) -> wire::pb::grc20::Edit {
-        wire::pb::grc20::Edit {
+    /// This produces the exact same structure that would be stored in IPFS
+    /// and fetched by the production IPFS cache service.
+    fn to_grc20_edit(edit: &EditPublished) -> grc20::Edit {
+        grc20::Edit {
             id: edit.edit_id.to_vec(),
             name: edit.name.clone(),
-            ops: edit.ops.iter().map(Self::convert_op).collect(),
+            ops: edit.ops.iter().map(Self::to_grc20_op).collect(),
             authors: edit.authors.iter().map(|a| a.to_vec()).collect(),
             language: None,
         }
     }
     
-    /// Convert mock op to wire format (`grc20.Op` proto).
-    fn convert_op(op: &mock_substream::Op) -> wire::pb::grc20::Op {
-        use wire::pb::grc20::op::Payload;
+    /// Convert mock op to `grc20.Op` proto.
+    fn to_grc20_op(op: &mock_substream::Op) -> grc20::Op {
+        use grc20::op::Payload;
         
         let payload = match op {
             mock_substream::Op::UpdateEntity(u) => {
-                Payload::UpdateEntity(wire::pb::grc20::Entity {
+                Payload::UpdateEntity(grc20::Entity {
                     id: u.id.to_vec(),
-                    values: u.values.iter().map(|v| wire::pb::grc20::Value {
+                    values: u.values.iter().map(|v| grc20::Value {
                         property: v.property.to_vec(),
                         value: v.value.clone(),
                         options: None,
@@ -583,7 +556,7 @@ impl MockIpfsCache {
                 })
             }
             mock_substream::Op::CreateRelation(r) => {
-                Payload::CreateRelation(wire::pb::grc20::Relation {
+                Payload::CreateRelation(grc20::Relation {
                     id: r.id.to_vec(),
                     r#type: r.relation_type.to_vec(),
                     from_entity: r.from_entity.to_vec(),
@@ -598,7 +571,7 @@ impl MockIpfsCache {
                 })
             }
             mock_substream::Op::UpdateRelation(r) => {
-                Payload::UpdateRelation(wire::pb::grc20::RelationUpdate {
+                Payload::UpdateRelation(grc20::RelationUpdate {
                     id: r.id.to_vec(),
                     from_space: r.from_space.map(|s| s.to_vec()),
                     from_version: None,
@@ -612,19 +585,19 @@ impl MockIpfsCache {
                 Payload::DeleteRelation(id.to_vec())
             }
             mock_substream::Op::CreateProperty(p) => {
-                Payload::CreateProperty(wire::pb::grc20::Property {
+                Payload::CreateProperty(grc20::Property {
                     id: p.id.to_vec(),
                     data_type: p.data_type as i32,
                 })
             }
             mock_substream::Op::UnsetEntityValues(u) => {
-                Payload::UnsetEntityValues(wire::pb::grc20::UnsetEntityValues {
+                Payload::UnsetEntityValues(grc20::UnsetEntityValues {
                     id: u.id.to_vec(),
                     properties: u.properties.iter().map(|p| p.to_vec()).collect(),
                 })
             }
             mock_substream::Op::UnsetRelationFields(u) => {
-                Payload::UnsetRelationFields(wire::pb::grc20::UnsetRelationFields {
+                Payload::UnsetRelationFields(grc20::UnsetRelationFields {
                     id: u.id.to_vec(),
                     from_space: u.from_space,
                     from_version: None,
@@ -636,80 +609,50 @@ impl MockIpfsCache {
             }
         };
         
-        wire::pb::grc20::Op { payload: Some(payload) }
-    }
-}
-
-#[async_trait]
-impl IpfsCache for MockIpfsCache {
-    async fn put(&self, item: &CacheItem) -> Result<(), CacheError> {
-        self.items.write().unwrap().insert(item.uri.clone(), item.clone());
-        Ok(())
-    }
-    
-    async fn get(&self, uri: &str) -> Result<Option<CacheItem>, CacheError> {
-        Ok(self.items.read().unwrap().get(uri).cloned())
-    }
-    
-    async fn load_cursor(&self, id: &str) -> Result<Option<String>, CacheError> {
-        Ok(self.cursors.read().unwrap().get(id).map(|(c, _)| c.clone()))
-    }
-    
-    async fn persist_cursor(&self, id: &str, cursor: &str, block: u64) -> Result<(), CacheError> {
-        self.cursors.write().unwrap().insert(id.to_string(), (cursor.to_string(), block));
-        Ok(())
+        grc20::Op { payload: Some(payload) }
     }
 }
 ```
 
-### MockSource Integration with IPFS Cache
+### MockSource CID Generation
 
-The `MockSource` needs to generate CIDs that match what's in the mock cache:
+The `MockSource` must generate the same CIDs that the cache seeder uses:
 
 ```rust
 // hermes-relay/src/source/mock.rs
 
 impl MockSource {
-    /// Create a mock source with pre-populated IPFS cache.
-    pub fn with_ipfs_cache(
-        blocks: Vec<MockBlock>,
-        module: HermesModule,
-    ) -> (Self, MockIpfsCache) {
-        let cache = MockIpfsCache::populate_from_topology(&blocks);
-        let source = Self::new(blocks, module);
-        (source, cache)
-    }
-    
-    /// Encode edit event with CID matching the mock cache.
+    /// Encode edit event with CID matching what's in the seeded cache.
     fn encode_edit_data(&self, edit: &EditPublished) -> Vec<u8> {
-        // Generate the same deterministic CID used by MockIpfsCache
+        // Must match CacheSeeder::deterministic_cid()
         let cid = format!("Qm{}", hex::encode(&edit.edit_id));
         format!("ipfs://{}", cid).into_bytes()
     }
 }
 ```
 
-### Usage Example
+### Test Setup
 
 ```rust
 #[tokio::test]
-async fn test_edits_transformer_with_mock() {
+async fn test_edits_transformer_with_seeded_cache() {
+    // Setup: real PostgreSQL cache (can use testcontainers)
+    let cache = Cache::new(Storage::new().await.unwrap());
+    
     // Generate deterministic topology
     let blocks = mock_substream::test_topology::generate();
     
-    // Create mock source and pre-populated IPFS cache
-    let (source, ipfs_cache) = MockSource::with_ipfs_cache(
-        blocks,
-        HermesModule::EditsPublished,
-    );
+    // Seed the cache with real GRC-20 edit data
+    let seeder = CacheSeeder::new(cache.clone());
+    seeder.seed_from_topology(&blocks).await.unwrap();
     
-    // Create transformer with mock cache
-    let transformer = EditsTransformer::new(
-        Arc::new(ipfs_cache),
-        kafka_producer_mock,
-    );
+    // Create mock source (generates matching CIDs)
+    let source = MockSource::new(blocks, HermesModule::EditsPublished);
     
-    // Run the pipeline
+    // Create transformer with real cache
+    let transformer = EditsTransformer::new(cache, kafka_producer);
+    
+    // Run the pipeline - cache lookups work normally
     transformer.run_with_source(source).await.unwrap();
     
     // Verify edits were processed
@@ -717,17 +660,31 @@ async fn test_edits_transformer_with_mock() {
 }
 ```
 
-### Implementation Location
+### E2E Test Flow
 
-The mock IPFS cache can live in one of two places:
+```bash
+# 1. Start infrastructure
+docker-compose up -d postgres kafka
 
-1. **`mock-substream/src/ipfs_cache.rs`** - Co-located with other mock infrastructure
-2. **`hermes-ipfs-cache/src/mock.rs`** - Co-located with the real implementation
+# 2. Run migrations
+sqlx migrate run
 
-Option 1 is recommended because:
-- Keeps all mock infrastructure together
-- `mock-substream` already has the `MockEvent` types needed for conversion
-- Avoids adding test-only code to production crates
+# 3. Seed the cache with mock GRC-20 data
+cargo run --bin cache-seeder -- --topology deterministic
+
+# 4. Run transformers with mock block source
+MOCK_MODE=1 cargo run --bin hermes-edits
+
+# 5. Verify Kafka output
+kafka-console-consumer --topic edits --from-beginning
+```
+
+### Why This Approach
+
+1. **Tests real code paths** - The cache, database, and transformer logic are all production code
+2. **Real GRC-20 data** - The edit content is valid `grc20.Edit` protos, not fake data
+3. **Deterministic** - Same topology always produces same CIDs and cache entries
+4. **Debuggable** - Can inspect the cache contents in PostgreSQL during test failures
 
 ## Testing Strategy
 
