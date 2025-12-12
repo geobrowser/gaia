@@ -1,36 +1,35 @@
 //! Hermes sink traits for consuming blockchain events.
 //!
-//! These traits wrap the low-level `stream` crate sinks with hermes-specific
-//! configuration, providing type-safe module selection via [`HermesModule`].
-//!
-//! ## Cursor Persistence
-//!
-//! Consumers must implement `persist_cursor` and `load_persisted_cursor` to
-//! enable resuming from the last processed block after a restart. The default
-//! implementations are no-ops (cursor is not persisted).
-//!
-//! See `indexer/src/storage/postgres.rs` for an example of cursor persistence
-//! with PostgreSQL.
-//!
-//! ## Using BlockSource
-//!
-//! The `run_with_source` method allows running the sink with any [`BlockSource`],
-//! enabling testing with mock data:
+//! # Example
 //!
 //! ```ignore
 //! use hermes_relay::{Sink, HermesModule};
-//! use hermes_relay::source::MockSource;
-//! use hermes_substream::pb::hermes::Actions;
-//! use prost::Message;
 //!
-//! let actions = Actions { actions: vec![/* ... */] };
-//! let source = MockSource::new(actions.encode_to_vec()).with_blocks(1000, 1010);
-//! transformer.run_with_source(source).await?;
+//! struct MyTransformer { /* ... */ }
+//!
+//! impl Sink for MyTransformer {
+//!     type Error = anyhow::Error;
+//!
+//!     async fn process_block_scoped_data(&self, data: &BlockScopedData) -> Result<(), Self::Error> {
+//!         // Process events...
+//!         Ok(())
+//!     }
+//! }
+//!
+//! // Run against real substream
+//! transformer.run(&endpoint_url, HermesModule::Actions, start_block, end_block).await?;
+//!
+//! // Or test with mock data
+//! use hermes_relay::source::MockSource;
+//! for block in MockSource::new(data).with_blocks(100, 110) {
+//!     transformer.process_block_scoped_data(&block).await?;
+//! }
 //! ```
 
 use std::{env, process::exit, sync::Arc};
 
-use crate::source::{BlockSource, SubstreamSource};
+use futures03::StreamExt;
+
 use crate::{HermesModule, HERMES_SPKG};
 use stream::{
     pb::sf::substreams::rpc::v2::{BlockScopedData, BlockUndoSignal},
@@ -39,71 +38,18 @@ use stream::{
 };
 
 /// Trait for processing hermes-substream blocks.
-///
-/// Implement this trait to create a transformer that consumes events from
-/// hermes-substream. The `run` method handles connection setup and streaming,
-/// while you implement the block processing and cursor persistence logic.
-///
-/// # Example
-///
-/// ```ignore
-/// use hermes_relay::{Sink, HermesModule};
-///
-/// struct SpacesTransformer { /* ... */ }
-///
-/// impl Sink for SpacesTransformer {
-///     type Error = anyhow::Error;
-///
-///     async fn process_block_scoped_data(
-///         &self,
-///         data: &BlockScopedData,
-///     ) -> Result<(), Self::Error> {
-///         // Process space events...
-///         Ok(())
-///     }
-///
-///     async fn persist_cursor(&self, cursor: String, block: u64) -> Result<(), Self::Error> {
-///         // Save cursor to database...
-///         Ok(())
-///     }
-///
-///     async fn load_persisted_cursor(&self) -> Result<Option<String>, Self::Error> {
-///         // Load cursor from database...
-///         Ok(None)
-///     }
-/// }
-///
-/// // Run the transformer
-/// let transformer = SpacesTransformer { /* ... */ };
-/// transformer.run(
-///     &endpoint_url,
-///     HermesModule::Actions,
-///     start_block,
-///     end_block,
-/// ).await?;
-/// ```
 pub trait Sink: Send + Sync {
     type Error: std::error::Error + Send + Sync + 'static;
 
-    /// Process a new block of data.
     fn process_block_scoped_data(
         &self,
         data: &BlockScopedData,
     ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send;
 
-    /// Handle a block undo signal (chain reorganization).
-    ///
-    /// You must delete any data recorded after the block height specified
-    /// in the undo signal.
     fn process_block_undo_signal(&self, _undo_signal: &BlockUndoSignal) -> Result<(), Self::Error> {
-        unimplemented!(
-            "you must implement block undo handling, or request only final blocks"
-        )
+        unimplemented!("implement block undo handling, or request only final blocks")
     }
 
-    /// Persist the cursor after successfully processing a block.
-    ///
-    /// The cursor allows resuming from the correct position after a restart.
     fn persist_cursor(
         &self,
         _cursor: String,
@@ -112,16 +58,12 @@ pub trait Sink: Send + Sync {
         async { Ok(()) }
     }
 
-    /// Load the previously persisted cursor.
-    ///
-    /// Returns `None` if no cursor has been saved (start from beginning).
     fn load_persisted_cursor(
         &self,
     ) -> impl std::future::Future<Output = Result<Option<String>, Self::Error>> + Send {
         async { Ok(None) }
     }
 
-    /// Run the sink, consuming events from hermes-substream.
     fn run(
         &self,
         endpoint_url: &str,
@@ -136,46 +78,17 @@ pub trait Sink: Send + Sync {
             let package = stream::read_package(HERMES_SPKG).await?;
             let endpoint = Arc::new(SubstreamsEndpoint::new(endpoint_url, token).await?);
 
-            let stream = SubstreamsStream::new(
+            let mut stream = SubstreamsStream::new(
                 endpoint,
-                cursor.clone(),
+                cursor,
                 package.modules.clone(),
                 module.to_string(),
                 start_block,
                 end_block,
             );
 
-            let source = SubstreamSource::new(stream, cursor);
-            self.run_with_source(source).await
-        }
-    }
-
-    /// Run the sink with a custom block source.
-    ///
-    /// This method allows running the sink with any [`BlockSource`], enabling
-    /// testing with mock data or other custom sources.
-    ///
-    /// # Example
-    ///
-    /// ```ignore
-    /// use hermes_relay::{Sink, HermesModule};
-    /// use hermes_relay::source::MockSource;
-    /// use hermes_substream::pb::hermes::Actions;
-    /// use prost::Message;
-    ///
-    /// let actions = Actions { actions: vec![/* ... */] };
-    /// let source = MockSource::new(actions.encode_to_vec()).with_blocks(1000, 1010);
-    /// transformer.run_with_source(source).await?;
-    /// ```
-    fn run_with_source<S: BlockSource>(
-        &self,
-        source: S,
-    ) -> impl std::future::Future<Output = Result<(), anyhow::Error>> + Send {
-        async move {
-            let mut source = source;
-
             loop {
-                match source.next().await {
+                match stream.next().await {
                     None => {
                         println!("Stream consumed");
                         break;
@@ -205,35 +118,25 @@ pub trait Sink: Send + Sync {
     }
 }
 
-/// Trait for processing hermes-substream blocks with a preprocessing step.
-///
-/// Similar to [`Sink`], but allows decoding/preprocessing the block data
-/// before the main processing step. Useful when you need to decode protobuf
-/// messages before processing.
+/// Sink with a preprocessing step (e.g., protobuf decoding).
 pub trait PreprocessedSink<P: Send>: Send + Sync {
     type Error: std::error::Error + Send + Sync + 'static;
 
-    /// Preprocess/decode the block data.
     fn preprocess_block_scoped_data(
         &self,
         data: &BlockScopedData,
     ) -> impl std::future::Future<Output = Result<P, Self::Error>> + Send;
 
-    /// Process the preprocessed block data.
     fn process_block_scoped_data(
         &self,
         data: &BlockScopedData,
         preprocessed: P,
     ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send;
 
-    /// Handle a block undo signal (chain reorganization).
     fn process_block_undo_signal(&self, _undo_signal: &BlockUndoSignal) -> Result<(), Self::Error> {
-        unimplemented!(
-            "you must implement block undo handling, or request only final blocks"
-        )
+        unimplemented!("implement block undo handling, or request only final blocks")
     }
 
-    /// Persist the cursor after successfully processing a block.
     fn persist_cursor(
         &self,
         _cursor: String,
@@ -242,14 +145,12 @@ pub trait PreprocessedSink<P: Send>: Send + Sync {
         async { Ok(()) }
     }
 
-    /// Load the previously persisted cursor.
     fn load_persisted_cursor(
         &self,
     ) -> impl std::future::Future<Output = Result<Option<String>, Self::Error>> + Send {
         async { Ok(None) }
     }
 
-    /// Run the sink, consuming events from hermes-substream.
     fn run(
         &self,
         endpoint_url: &str,
@@ -264,33 +165,17 @@ pub trait PreprocessedSink<P: Send>: Send + Sync {
             let package = stream::read_package(HERMES_SPKG).await?;
             let endpoint = Arc::new(SubstreamsEndpoint::new(endpoint_url, token).await?);
 
-            let stream = SubstreamsStream::new(
+            let mut stream = SubstreamsStream::new(
                 endpoint,
-                cursor.clone(),
+                cursor,
                 package.modules.clone(),
                 module.to_string(),
                 start_block,
                 end_block,
             );
 
-            let source = SubstreamSource::new(stream, cursor);
-            self.run_with_source(source).await
-        }
-    }
-
-    /// Run the sink with a custom block source.
-    ///
-    /// This method allows running the sink with any [`BlockSource`], enabling
-    /// testing with mock data or other custom sources.
-    fn run_with_source<S: BlockSource>(
-        &self,
-        source: S,
-    ) -> impl std::future::Future<Output = Result<(), anyhow::Error>> + Send {
-        async move {
-            let mut source = source;
-
             loop {
-                match source.next().await {
+                match stream.next().await {
                     None => {
                         println!("Stream consumed");
                         break;
