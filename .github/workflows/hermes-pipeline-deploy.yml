@@ -1,0 +1,74 @@
+name: Deploy Hermes Pipeline
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'hermes-pipeline/**'
+      - 'hermes-relay/**'
+      - 'hermes-schema/**'
+      - 'hermes-substream/**'
+      - 'hermes-kafka/**'
+      - 'stream/**'
+      - 'wire/**'
+      - 'hermes/k8s/hermes-pipeline.yaml'
+      - '.github/workflows/hermes-pipeline-deploy.yml'
+
+env:
+  REGISTRY: registry.digitalocean.com/geo
+  IMAGE_NAME: hermes-pipeline
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install doctl
+        uses: digitalocean/action-doctl@v2
+        with:
+          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+
+      - name: Log in to DigitalOcean Container Registry
+        run: doctl registry login --expiry-seconds 1200
+
+      - name: Build and push Docker image
+        run: |
+          docker build -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
+                       -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest \
+                       -f hermes-pipeline/Dockerfile .
+          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v4
+
+      - name: Configure kubectl for DigitalOcean
+        run: |
+          doctl kubernetes cluster kubeconfig save ${{ secrets.DIGITALOCEAN_CLUSTER_NAME }}
+
+      - name: Delete existing job (jobs are immutable)
+        run: |
+          kubectl delete job hermes-pipeline -n kafka --ignore-not-found=true
+
+      - name: Apply k8s manifests
+        run: |
+          kubectl apply -f hermes/k8s/namespace.yaml
+          kubectl apply -f hermes/k8s/hermes-pipeline.yaml
+
+      - name: Wait for job to start
+        run: |
+          kubectl wait --for=condition=ready pod -l app=hermes-pipeline -n kafka --timeout=60s || true
+
+      - name: Show deployment status
+        run: |
+          echo "=== Hermes Pipeline Job ==="
+          kubectl get job hermes-pipeline -n kafka || echo "Job not found"
+          echo ""
+          echo "=== Hermes Pipeline Pods ==="
+          kubectl get pods -n kafka -l app=hermes-pipeline
+          echo ""
+          echo "=== Recent Events ==="
+          kubectl get events -n kafka --sort-by='.lastTimestamp' | tail -10
