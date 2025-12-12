@@ -17,6 +17,7 @@ ipfs = { path = "../ipfs" }
 wire = { path = "../wire" }
 
 anyhow = "1"
+async-trait = "0.1"
 chrono = "0.4"
 dotenv = "0.15"
 hex = "0.4"

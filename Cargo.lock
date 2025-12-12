@@ -2518,6 +2518,7 @@ name = "hermes-ipfs-cache"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "chrono",
  "dotenv",
  "hermes-relay",
@@ -3111,6 +3112,7 @@ dependencies = [
 name = "ipfs"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "prost 0.13.5",
  "reqwest 0.12.25",
  "thiserror 2.0.17",
