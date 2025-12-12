@@ -1,0 +1,747 @@
+{
+  "id": null,
+  "uid": "opensearch-overview",
+  "title": "OpenSearch Overview",
+  "tags": ["opensearch", "prometheus"],
+  "timezone": "browser",
+  "schemaVersion": 39,
+  "version": 1,
+  "refresh": "10s",
+  "time": {
+    "from": "now-1h",
+    "to": "now"
+  },
+  "panels": [
+    {
+      "type": "stat",
+      "title": "Total Search QPS",
+      "description": "Total search queries per second across all indices, averaged over the last 5 minutes.",
+      "id": 1,
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 0 },
+      "targets": [
+        {
+          "expr": "sum(rate(elasticsearch_indices_search_query_total[5m]))",
+          "legendFormat": "QPS",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Avg Search Latency (ms, 5m)",
+      "description": "Average search request latency in milliseconds over the last 5 minutes, computed from total search time divided by query count.",
+      "id": 2,
+      "gridPos": { "h": 4, "w": 6, "x": 6, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms"
+        },
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "1000 * (sum(rate(elasticsearch_indices_search_query_time_seconds[5m])) / sum(rate(elasticsearch_indices_search_query_total[5m])))",
+          "legendFormat": "latency",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Total Docs (All Indices)",
+      "description": "Total number of documents stored across all non-internal indices in the cluster.",
+      "id": 3,
+      "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "green"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "value": null,
+                "color": "green"
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value"
+      },
+      "targets": [
+        {
+          "expr": "sum(elasticsearch_indices_docs{index!~\"\\\\..*\"})",
+          "legendFormat": "docs",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Avg Doc Size (All Indices)",
+      "description": "Average document size in bytes across all non-internal indices, calculated from total storage size divided by total document count.",
+      "id": 28,
+      "gridPos": { "h": 4, "w": 6, "x": 18, "y": 0 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "decbytes",
+          "decimals": 2,
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "green"
+          },
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "value": null,
+                "color": "green"
+              }
+            ]
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "colorMode": "value"
+      },
+      "targets": [
+        {
+          "expr": "sum(elasticsearch_indices_store_size_bytes{index!~\"\\\\..*\"}) / sum(elasticsearch_indices_docs{index!~\"\\\\..*\"})",
+          "legendFormat": "avg_doc_size",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Search QPS by Index",
+      "description": "Per-index search queries per second, averaged over the last 5 minutes.",
+      "id": 4,
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 4 },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "expr": "rate(elasticsearch_indices_search_query_total[5m])",
+          "legendFormat": "{{index}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Avg Search Latency by Index (s)",
+      "description": "Per-index average search latency in seconds over the last 5 minutes.",
+      "id": 5,
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 4 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "µs"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "expr": "rate(elasticsearch_indices_search_query_time_seconds[5m]) / rate(elasticsearch_indices_search_query_total[5m])",
+          "legendFormat": "{{index}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Docs Indexed per Second by Index",
+      "description": "Indexing throughput per index (documents indexed per second) over the last 5 minutes.",
+      "id": 6,
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 12 },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "expr": "rate(elasticsearch_indices_indexing_index_total[5m])",
+          "legendFormat": "{{index}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Total Docs by Index",
+      "description": "Current document count per index in the cluster.",
+      "id": 7,
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 12 },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "expr": "elasticsearch_indices_docs",
+          "legendFormat": "{{index}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Cluster Shards (Active vs Unassigned)",
+      "description": "Total number of active shards versus unassigned shards in the cluster. Unassigned shards greater than zero usually indicate a problem.",
+      "id": 9,
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 20 },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "expr": "elasticsearch_cluster_health_active_shards",
+          "legendFormat": "active_shards",
+          "refId": "A"
+        },
+        {
+          "expr": "elasticsearch_cluster_health_unassigned_shards",
+          "legendFormat": "unassigned_shards",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Cluster Health Status",
+      "description": "Cluster health status broken down by color (green, yellow, red) from the OpenSearch cluster health API.",
+      "id": 10,
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 28 },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "targets": [
+        {
+          "expr": "sum(elasticsearch_cluster_health_status{color=\"green\"})",
+          "legendFormat": "green",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(elasticsearch_cluster_health_status{color=\"yellow\"})",
+          "legendFormat": "yellow",
+          "refId": "B"
+        },
+        {
+          "expr": "sum(elasticsearch_cluster_health_status{color=\"red\"})",
+          "legendFormat": "red",
+          "refId": "C"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Cluster Store Size (All Indices)",
+      "description": "Total store size in bytes across all indices in the cluster.",
+      "id": 11,
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 20 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "decbytes"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(elasticsearch_indices_store_size_bytes)",
+          "legendFormat": "total_store",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Store Size by Index",
+      "description": "Store size in bytes for each index in the cluster.",
+      "id": 12,
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 28 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "decbytes"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "expr": "elasticsearch_indices_store_size_bytes",
+          "legendFormat": "{{index}}",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Indexing Rate & Failures (All Indices)",
+      "description": "Total indexing operations per second vs failed indexing operations per second across all indices over the last 5 minutes.",
+      "id": 13,
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 32 },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(elasticsearch_indices_indexing_index_total[5m]))",
+          "legendFormat": "index_ops_per_s",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(rate(elasticsearch_indices_indexing_index_failed_total[5m]))",
+          "legendFormat": "failed_index_ops_per_s",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Node OS Load Average (1m / 5m / 15m)",
+      "description": "Unix-style load average per OpenSearch node. Roughly, a value of 1.0 per CPU core is fully utilized. No explicit unit; dimensionless queue length.",
+      "id": 14,
+      "gridPos": { "h": 6, "w": 12, "x": 0, "y": 40 },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "expr": "elasticsearch_os_load1",
+          "legendFormat": "load1 (1m)",
+          "refId": "A"
+        },
+        {
+          "expr": "elasticsearch_os_load5",
+          "legendFormat": "load5 (5m)",
+          "refId": "B"
+        },
+        {
+          "expr": "elasticsearch_os_load15",
+          "legendFormat": "load15 (15m)",
+          "refId": "C"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "OS vs OpenSearch CPU Utilization (%)",
+      "description": "CPU utilization percentage reported by the OS and by the OpenSearch process on each node.",
+      "id": 15,
+      "gridPos": { "h": 6, "w": 12, "x": 12, "y": 40 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "percent"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "expr": "elasticsearch_os_cpu_percent",
+          "legendFormat": "OS CPU %",
+          "refId": "A"
+        },
+        {
+          "expr": "elasticsearch_process_cpu_percent",
+          "legendFormat": "OpenSearch CPU %",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "JVM Heap Usage vs Max (bytes)",
+      "description": "Total JVM heap used vs configured heap max across all nodes. High sustained usage (>75-80%) can lead to long GC pauses.",
+      "id": 16,
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 46 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "decbytes"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(elasticsearch_jvm_memory_used_bytes{area=\"heap\"})",
+          "legendFormat": "heap used",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(elasticsearch_jvm_memory_max_bytes{area=\"heap\"})",
+          "legendFormat": "heap max",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "JVM GC Time & Frequency (5m rate)",
+      "description": "GC time spent and GC runs per second over the last 5 minutes. Spikes here often correlate with latency or heap pressure issues.",
+      "id": 17,
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 46 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "s"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "expr": "sum(rate(elasticsearch_jvm_gc_collection_seconds_sum[5m]))",
+          "legendFormat": "GC time (s/s)",
+          "refId": "A"
+        },
+        {
+          "expr": "sum(rate(elasticsearch_jvm_gc_collection_seconds_count[5m]))",
+          "legendFormat": "GC runs (/s)",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Filesystem Utilization per Data Path (bytes)",
+      "description": "Used vs total filesystem size for each OpenSearch data path. Watch for disks approaching capacity or uneven utilization across nodes.",
+      "id": 18,
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 54 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "decbytes"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "expr": "elasticsearch_filesystem_data_size_bytes - elasticsearch_filesystem_data_available_bytes",
+          "legendFormat": "{{node}} used",
+          "refId": "A"
+        },
+        {
+          "expr": "elasticsearch_filesystem_data_size_bytes",
+          "legendFormat": "{{node}} size",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Filesystem I/O Operations (reads/writes per second)",
+      "description": "Read and write operation rates per node over the last 5 minutes. Useful for spotting I/O bottlenecks or hotspots.",
+      "id": 19,
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 54 },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "expr": "rate(elasticsearch_filesystem_io_stats_device_read_operations_count[5m])",
+          "legendFormat": "{{node}} read ops/s",
+          "refId": "A"
+        },
+        {
+          "expr": "rate(elasticsearch_filesystem_io_stats_device_write_operations_count[5m])",
+          "legendFormat": "{{node}} write ops/s",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Age of Latest Snapshot (hours)",
+      "description": "Time elapsed since the most recent SUCCESS or PARTIAL snapshot, in hours. Use this to verify your snapshot schedule is running as expected.",
+      "id": 20,
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 62 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "h"
+        },
+        "overrides": []
+      },
+      "options": {},
+      "targets": [
+        {
+          "expr": "(time() - max(elasticsearch_snapshot_stats_latest_snapshot_timestamp_seconds)) / 3600",
+          "legendFormat": "hours_since_last_snapshot",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Snapshot Shard Outcomes (last run)",
+      "description": "Shard-level success, failure, and total counts for the most recent snapshot operation.",
+      "id": 21,
+      "gridPos": { "h": 8, "w": 12, "x": 6, "y": 62 },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "expr": "elasticsearch_snapshot_stats_snapshot_successful_shards",
+          "legendFormat": "successful_shards",
+          "refId": "A"
+        },
+        {
+          "expr": "elasticsearch_snapshot_stats_snapshot_failed_shards",
+          "legendFormat": "failed_shards",
+          "refId": "B"
+        },
+        {
+          "expr": "elasticsearch_snapshot_stats_snapshot_total_shards",
+          "legendFormat": "total_shards",
+          "refId": "C"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "OpenSearch Process Memory Usage (bytes)",
+      "description": "Resident, shared, and virtual memory used by the OpenSearch process on each node, in bytes.",
+      "id": 23,
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 70 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "decbytes"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "expr": "elasticsearch_process_mem_resident_size_bytes",
+          "legendFormat": "{{node}} resident",
+          "refId": "A"
+        },
+        {
+          "expr": "elasticsearch_process_mem_share_size_bytes",
+          "legendFormat": "{{node}} shared",
+          "refId": "B"
+        },
+        {
+          "expr": "elasticsearch_process_mem_virtual_size_bytes",
+          "legendFormat": "{{node}} virtual",
+          "refId": "C"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Thread Pool Queue & Rejections (by pool)",
+      "description": "Per-thread-pool queue depth and rejected operations. Persistent queues or rising rejections usually indicate resource saturation.",
+      "id": 24,
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 70 },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "expr": "elasticsearch_thread_pool_queue_count",
+          "legendFormat": "{{node}} {{type}} queue",
+          "refId": "A"
+        },
+        {
+          "expr": "rate(elasticsearch_thread_pool_rejected_count[5m])",
+          "legendFormat": "{{node}} {{type}} rejected/s",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Circuit Breaker Estimated Size vs Limit (bytes)",
+      "description": "Estimated memory usage vs configured limit for OpenSearch circuit breakers, by breaker type.",
+      "id": 25,
+      "gridPos": { "h": 8, "w": 12, "x": 0, "y": 78 },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "decbytes"
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "expr": "elasticsearch_breakers_estimated_size_bytes",
+          "legendFormat": "{{name}} estimated",
+          "refId": "A"
+        },
+        {
+          "expr": "elasticsearch_breakers_limit_size_bytes",
+          "legendFormat": "{{name}} limit",
+          "refId": "B"
+        }
+      ]
+    },
+    {
+      "type": "timeseries",
+      "title": "Circuit Breaker Trips (5m rate)",
+      "description": "Rate of circuit breaker trips over the last 5 minutes, by breaker type.",
+      "id": 26,
+      "gridPos": { "h": 8, "w": 12, "x": 12, "y": 78 },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "table",
+          "placement": "bottom"
+        }
+      },
+      "targets": [
+        {
+          "expr": "rate(elasticsearch_breakers_tripped[5m])",
+          "legendFormat": "{{name}} trips/s",
+          "refId": "A"
+        }
+      ]
+    },
+    {
+      "type": "stat",
+      "title": "Cluster Pending Tasks & In-Flight Fetches",
+      "description": "Number of pending cluster-level tasks and in-flight shard fetches. Spikes can indicate coordination or state update bottlenecks.",
+      "id": 27,
+      "gridPos": { "h": 4, "w": 6, "x": 0, "y": 86 },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      },
+      "options": {},
+      "targets": [
+        {
+          "expr": "elasticsearch_cluster_health_number_of_pending_tasks",
+          "legendFormat": "pending_tasks",
+          "refId": "A"
+        },
+        {
+          "expr": "elasticsearch_cluster_health_number_of_in_flight_fetch",
+          "legendFormat": "in_flight_fetches",
+          "refId": "B"
+        }
+      ]
+    }
+  ],
+  "templating": {
+    "list": []
+  }
+}

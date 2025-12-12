@@ -1,0 +1,22 @@
+[package]
+name = "search-indexer-repository"
+version = "0.1.0"
+edition = "2021"
+description = "Repository interfaces and OpenSearch implementation for the search indexer"
+
+[dependencies]
+search-indexer-shared = { path = "../search-indexer-shared" }
+opensearch = "2.3.0"
+tokio = { version = "1.38.0", features = ["macros", "rt-multi-thread"] }
+async-trait = "0.1.88"
+thiserror = "2.0.12"
+serde = { version = "1.0.219", features = ["derive"] }
+serde_json = "1.0.140"
+uuid = { version = "1.17.0", features = ["v4", "serde"] }
+tracing = "0.1.41"
+url = "2.5.4"
+chrono = { version = "0.4", features = ["serde"] }
+
+[dev-dependencies]
+tokio = { version = "1.38.0", features = ["macros", "rt-multi-thread", "test-util"] }
+

@@ -1,0 +1,11 @@
+[package]
+name = "hermes-kafka"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+path = "src/lib.rs"
+
+[dependencies]
+rdkafka = { version = "0.36", features = ["cmake-build", "zstd", "ssl"] }
+anyhow = "1"

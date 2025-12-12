@@ -1,0 +1,20 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+# Required secrets in `search` namespace (create before deploying):
+#   - grafana-credentials: ADMIN_USER, ADMIN_PASSWORD
+#
+# See README.md for details.
+
+resources:
+  - namespace.yaml
+  - monitoring.yaml
+
+configMapGenerator:
+  - name: grafana-dashboards
+    namespace: search
+    options:
+      disableNameSuffixHash: true
+    files:
+      - opensearch-overview.json=../grafana/dashboards/opensearch-overview-dashboard.json
+

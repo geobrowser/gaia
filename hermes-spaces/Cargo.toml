@@ -1,0 +1,18 @@
+[package]
+name = "hermes-spaces"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "hermes-spaces"
+path = "src/main.rs"
+
+[dependencies]
+hermes-kafka = { path = "../hermes-kafka" }
+hermes-relay = { path = "../hermes-relay" }
+hermes-schema = { path = "../hermes-schema" }
+stream = { path = "../stream" }
+prost = "0.13.5"
+tokio = { version = "1", features = ["full"] }
+anyhow = "1"
+hex = "0.4"

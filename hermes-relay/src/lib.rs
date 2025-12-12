@@ -69,10 +69,8 @@ pub use config::{HermesModule, HERMES_SPKG};
 // Re-export sink traits
 pub use sink::{PreprocessedSink, Sink};
 
-// Re-export stream crate types that consumers need
-pub use stream::{
-    pb, // Substreams protobuf types
-    substreams::SubstreamsEndpoint,
-    substreams_stream::{BlockResponse, SubstreamsStream},
-    utils, // Block metadata utilities
-};
+// Re-export hermes-substream types for consumers
+pub use hermes_substream::pb::hermes::{Action, Actions};
+
+// Re-export stream crate for consumers who need substreams types
+pub use stream;
