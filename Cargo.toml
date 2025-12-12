@@ -18,7 +18,6 @@ members = [
 
     "hermes-kafka",
     "hermes-schema",
-    "hermes-processor",
     "hermes-relay",
     "hermes-pipeline",
     "hermes-ipfs-cache",

@@ -2565,19 +2565,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "hermes-processor"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "hermes-schema",
- "hex",
- "mock-substream",
- "prost 0.13.5",
- "rdkafka",
- "wire",
-]
-
-[[package]]
 name = "hermes-relay"
 version = "0.1.0"
 dependencies = [
