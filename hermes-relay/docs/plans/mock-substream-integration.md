@@ -933,38 +933,7 @@ docker-compose --profile mock up
 docker-compose up -d postgres kafka
 ```
 
-#### Custom Topology for Local Dev
 
-For more control, allow loading a custom topology:
-
-```rust
-async fn run_mock_mode(cache: Cache) -> Result<()> {
-    let blocks = if let Ok(path) = env::var("HERMES_MOCK_TOPOLOGY") {
-        // Load custom topology from file
-        let json = std::fs::read_to_string(&path)?;
-        serde_json::from_str(&json)?
-    } else {
-        // Use default deterministic topology
-        mock_substream::test_topology::generate()
-    };
-    
-    tracing::info!(
-        blocks = blocks.len(),
-        "Running in mock mode"
-    );
-    
-    let mock_ipfs = MockIpfsClient::from_topology(&blocks);
-    let sink = IpfsCacheSink::new(cache, mock_ipfs);
-    let source = MockSource::new(blocks, HermesModule::EditsPublished);
-    
-    sink.run_with_source(source).await
-}
-```
-
-This allows developers to:
-1. Use the default deterministic topology for quick testing
-2. Load a custom topology JSON file for specific scenarios
-3. Generate topology programmatically for edge cases
 
 ### Test Setup
 
