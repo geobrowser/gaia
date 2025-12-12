@@ -11,11 +11,27 @@
 //!
 //! See `indexer/src/storage/postgres.rs` for an example of cursor persistence
 //! with PostgreSQL.
+//!
+//! ## Using BlockSource
+//!
+//! The `run_with_source` method allows running the sink with any [`BlockSource`],
+//! enabling testing with mock data:
+//!
+//! ```ignore
+//! use hermes_relay::{Sink, HermesModule};
+//! use hermes_relay::source::{BlockSource, MockSource};
+//!
+//! // Run with mock data
+//! let blocks = mock_substream::test_topology::generate();
+//! let source = MockSource::new(blocks, HermesModule::Actions);
+//! transformer.run_with_source(source).await?;
+//! ```
 
 use std::{env, process::exit, sync::Arc};
 
 use futures03::StreamExt;
 
+use crate::source::{BlockResponse as SourceBlockResponse, BlockSource};
 use crate::{HermesModule, HERMES_SPKG};
 use stream::{
     pb::sf::substreams::rpc::v2::{BlockScopedData, BlockUndoSignal},
@@ -159,6 +175,56 @@ pub trait Sink: Send + Sync {
             Ok(())
         }
     }
+
+    /// Run the sink with a custom block source.
+    ///
+    /// This method allows running the sink with any [`BlockSource`], enabling
+    /// testing with mock data or other custom sources.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use hermes_relay::{Sink, HermesModule};
+    /// use hermes_relay::source::{BlockSource, MockSource};
+    ///
+    /// let blocks = mock_substream::test_topology::generate();
+    /// let source = MockSource::new(blocks, HermesModule::Actions);
+    /// transformer.run_with_source(source).await?;
+    /// ```
+    fn run_with_source<S: BlockSource>(
+        &self,
+        source: S,
+    ) -> impl std::future::Future<Output = Result<(), anyhow::Error>> + Send {
+        async move {
+            let mut source = source;
+
+            loop {
+                match source.next().await {
+                    None => {
+                        println!("Stream consumed");
+                        break;
+                    }
+                    Some(Ok(SourceBlockResponse::New(data))) => {
+                        let block_scoped_data = data.to_block_scoped_data();
+                        self.process_block_scoped_data(&block_scoped_data).await?;
+                        self.persist_cursor(data.cursor, data.block_number).await?;
+                    }
+                    Some(Ok(SourceBlockResponse::Undo(signal))) => {
+                        let undo_signal = signal.to_block_undo_signal();
+                        self.process_block_undo_signal(&undo_signal)?;
+                        self.persist_cursor(signal.last_valid_cursor, signal.last_valid_block)
+                            .await?;
+                    }
+                    Some(Err(err)) => {
+                        println!("Stream terminated with error: {:?}", err);
+                        exit(1);
+                    }
+                }
+            }
+
+            Ok(())
+        }
+    }
 }
 
 /// Trait for processing hermes-substream blocks with a preprocessing step.
@@ -248,6 +314,48 @@ pub trait PreprocessedSink<P: Send>: Send + Sync {
                             undo_signal.last_valid_block.unwrap().number,
                         )
                         .await?;
+                    }
+                    Some(Err(err)) => {
+                        println!("Stream terminated with error: {:?}", err);
+                        exit(1);
+                    }
+                }
+            }
+
+            Ok(())
+        }
+    }
+
+    /// Run the sink with a custom block source.
+    ///
+    /// This method allows running the sink with any [`BlockSource`], enabling
+    /// testing with mock data or other custom sources.
+    fn run_with_source<S: BlockSource>(
+        &self,
+        source: S,
+    ) -> impl std::future::Future<Output = Result<(), anyhow::Error>> + Send {
+        async move {
+            let mut source = source;
+
+            loop {
+                match source.next().await {
+                    None => {
+                        println!("Stream consumed");
+                        break;
+                    }
+                    Some(Ok(SourceBlockResponse::New(data))) => {
+                        let block_scoped_data = data.to_block_scoped_data();
+                        let preprocessed =
+                            self.preprocess_block_scoped_data(&block_scoped_data).await?;
+                        self.process_block_scoped_data(&block_scoped_data, preprocessed)
+                            .await?;
+                        self.persist_cursor(data.cursor, data.block_number).await?;
+                    }
+                    Some(Ok(SourceBlockResponse::Undo(signal))) => {
+                        let undo_signal = signal.to_block_undo_signal();
+                        self.process_block_undo_signal(&undo_signal)?;
+                        self.persist_cursor(signal.last_valid_cursor, signal.last_valid_block)
+                            .await?;
                     }
                     Some(Err(err)) => {
                         println!("Stream terminated with error: {:?}", err);

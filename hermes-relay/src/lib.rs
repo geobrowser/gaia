@@ -4,6 +4,7 @@
 //!
 //! This crate provides:
 //! - [`Sink`] and [`PreprocessedSink`] traits for consuming hermes-substream events
+//! - [`source::BlockSource`] trait for abstracting over real and mock data sources
 //! - Hermes-specific configuration (module names, package paths)
 //! - Action type constants for filtering raw actions
 //!
@@ -39,6 +40,20 @@
 //! ).await?;
 //! ```
 //!
+//! ## Mock Data Testing
+//!
+//! Use `run_with_source` with a [`source::MockSource`] for testing without
+//! a real substream connection (requires the `mock` feature):
+//!
+//! ```ignore
+//! use hermes_relay::{Sink, HermesModule};
+//! use hermes_relay::source::MockSource;
+//!
+//! let blocks = mock_substream::test_topology::generate();
+//! let source = MockSource::new(blocks, HermesModule::Actions);
+//! transformer.run_with_source(source).await?;
+//! ```
+//!
 //! ## Single vs Multiple Event Types
 //!
 //! For transformers that need a **single event type**, use the specific module
@@ -62,6 +77,7 @@
 pub mod actions;
 pub mod config;
 pub mod sink;
+pub mod source;
 
 // Re-export config types at crate root for convenience
 pub use config::{HermesModule, HERMES_SPKG};

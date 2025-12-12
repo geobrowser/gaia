@@ -2563,6 +2563,7 @@ dependencies = [
  "futures 0.3.31",
  "hermes-substream",
  "prost 0.13.5",
+ "prost-types 0.13.5",
  "stream",
  "thiserror 1.0.69",
  "tokio",
