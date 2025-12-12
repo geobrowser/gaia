@@ -439,12 +439,12 @@ MockEvent::EditPublished(edit) -> hermes_substream::pb::hermes::EditsPublished {
 }
 ```
 
-## IPFS Content Generation
+## Mock IPFS Client
 
 The edits transformer relies on the IPFS cache to resolve edit content. In production:
 
 1. `hermes-ipfs-cache` subscribes to `EditsPublished` events
-2. For each event, it fetches content from IPFS by CID
+2. For each event, it calls `IpfsClient::get(cid)` to fetch content from IPFS
 3. The IPFS content is a `grc20.Edit` proto (defined in `wire/proto/grc20.proto`):
    ```protobuf
    message Edit {
@@ -455,81 +455,113 @@ The edits transformer relies on the IPFS cache to resolve edit content. In produ
      optional bytes language = 5;
    }
    ```
-4. Stores the decoded `Edit` proto in PostgreSQL
+4. Stores the decoded `Edit` proto in PostgreSQL via the `Cache`
 5. Edits transformer reads from cache, enriches with blockchain/topology metadata, and emits `HermesEdit` to Kafka
 
-For mock mode, we don't want to mock the cache itself - the real cache infrastructure should work as normal. Instead, we need to **pre-populate the cache with real `grc20.Edit` data** that corresponds to our mock `EditsPublished` events.
+For mock mode, we mock the **IPFS fetch** (the network call), not the cache. The cache operates normally - it just receives data from a mocked `IpfsClient` instead of fetching from the real IPFS network.
 
-### Approach
+### IpfsClient Trait
 
-1. Generate mock `EditsPublished` events with deterministic CIDs
-2. Convert `mock_substream::EditPublished` to real `grc20.Edit` protos
-3. Pre-populate the IPFS cache (PostgreSQL) with these edits before running tests
-4. The edits transformer reads from the cache as normal
-
-This tests the full production path - the only thing mocked is the source of the blockchain events and the IPFS content (which is real GRC-20 data, just not fetched from IPFS).
-
-### Cache Seeding
-
-Add a utility to seed the cache with mock edit data:
+First, abstract the IPFS client behind a trait so we can swap implementations:
 
 ```rust
-// mock-substream/src/cache_seeder.rs
+// ipfs/src/lib.rs
 
-use hermes_ipfs_cache::cache::{Cache, CacheItem};
-use wire::pb::grc20;
-
-/// Seeds the IPFS cache with real GRC-20 edit data from mock events.
-pub struct CacheSeeder {
-    cache: Cache,
+/// Trait for fetching content from IPFS.
+#[async_trait]
+pub trait IpfsFetcher: Send + Sync {
+    /// Fetch and decode a GRC-20 Edit from IPFS by URI.
+    async fn get(&self, uri: &str) -> Result<Edit>;
+    
+    /// Fetch raw bytes from IPFS by CID.
+    async fn get_bytes(&self, cid: &str) -> Result<Vec<u8>>;
 }
 
-impl CacheSeeder {
-    pub fn new(cache: Cache) -> Self {
-        Self { cache }
+/// Production IPFS client that fetches from a gateway.
+pub struct IpfsClient {
+    url: String,
+    client: ReqwestClient,
+}
+
+#[async_trait]
+impl IpfsFetcher for IpfsClient {
+    async fn get(&self, uri: &str) -> Result<Edit> {
+        let cid = uri.split_once("://").map(|(_, c)| c).unwrap_or("");
+        let bytes = self.get_bytes(cid).await?;
+        let data = deserialize(&bytes)?;
+        Ok(data)
     }
     
-    /// Seed the cache with all edit events from the mock topology.
-    ///
-    /// For each `EditPublished` event, converts it to a real `grc20.Edit`
-    /// proto and stores it in the cache with a deterministic CID.
-    pub async fn seed_from_topology(&self, blocks: &[MockBlock]) -> Result<(), CacheError> {
+    async fn get_bytes(&self, cid: &str) -> Result<Vec<u8>> {
+        let url = format!("{}{}", self.url, cid);
+        let res = self.client.get(&url).send().await?;
+        let bytes = res.bytes().await?;
+        Ok(bytes.to_vec())
+    }
+}
+```
+
+### Mock IPFS Client
+
+The mock client returns pre-configured `grc20.Edit` data based on the CID:
+
+```rust
+// mock-substream/src/ipfs.rs (or ipfs/src/mock.rs)
+
+use std::collections::HashMap;
+use std::sync::RwLock;
+use wire::pb::grc20;
+
+/// Mock IPFS client that returns pre-configured edit data.
+///
+/// Instead of fetching from IPFS, returns `grc20.Edit` protos that
+/// correspond to mock `EditsPublished` events.
+pub struct MockIpfsClient {
+    /// Map of CID -> serialized Edit bytes
+    edits: RwLock<HashMap<String, Vec<u8>>>,
+}
+
+impl MockIpfsClient {
+    pub fn new() -> Self {
+        Self {
+            edits: RwLock::new(HashMap::new()),
+        }
+    }
+    
+    /// Create a mock client pre-populated with edits from the test topology.
+    pub fn from_topology(blocks: &[MockBlock]) -> Self {
+        let client = Self::new();
+        
         for block in blocks {
             for event in &block.events {
                 if let MockEvent::EditPublished(edit) = event {
                     let cid = Self::deterministic_cid(&edit.edit_id);
                     let wire_edit = Self::to_grc20_edit(edit);
                     
-                    let item = CacheItem {
-                        uri: format!("ipfs://{}", cid),
-                        json: Some(wire_edit),
-                        block: block.timestamp.to_string(),
-                        space_id: hex::encode(&edit.space_id),
-                        is_errored: false,
-                    };
-                    
-                    self.cache.put(&item).await?;
+                    // Serialize the Edit proto to bytes (as it would be stored in IPFS)
+                    let bytes = wire::serialize::serialize(&wire_edit);
+                    client.edits.write().unwrap().insert(cid, bytes);
                 }
             }
         }
         
-        Ok(())
+        client
+    }
+    
+    /// Register an edit to be returned for a given CID.
+    pub fn register_edit(&self, cid: &str, edit: grc20::Edit) {
+        let bytes = wire::serialize::serialize(&edit);
+        self.edits.write().unwrap().insert(cid.to_string(), bytes);
     }
     
     /// Generate a deterministic CID from an edit ID.
     ///
-    /// In production, CIDs are content-addressed hashes. For testing,
-    /// we use a simple encoding of the edit ID that both the mock source
-    /// and cache seeder agree on.
+    /// Both `MockSource` and `MockIpfsClient` use this to ensure CIDs match.
     pub fn deterministic_cid(edit_id: &EditId) -> String {
-        // Use a fake but valid-looking CID format
         format!("Qm{}", hex::encode(edit_id))
     }
     
     /// Convert mock edit to real `grc20.Edit` proto.
-    ///
-    /// This produces the exact same structure that would be stored in IPFS
-    /// and fetched by the production IPFS cache service.
     fn to_grc20_edit(edit: &EditPublished) -> grc20::Edit {
         grc20::Edit {
             id: edit.edit_id.to_vec(),
@@ -612,21 +644,66 @@ impl CacheSeeder {
         grc20::Op { payload: Some(payload) }
     }
 }
+
+#[async_trait]
+impl IpfsFetcher for MockIpfsClient {
+    async fn get(&self, uri: &str) -> Result<Edit> {
+        let cid = uri.split_once("://").map(|(_, c)| c).unwrap_or(uri);
+        let bytes = self.get_bytes(cid).await?;
+        let edit = wire::deserialize::deserialize(&bytes)?;
+        Ok(edit)
+    }
+    
+    async fn get_bytes(&self, cid: &str) -> Result<Vec<u8>> {
+        self.edits
+            .read()
+            .unwrap()
+            .get(cid)
+            .cloned()
+            .ok_or_else(|| IpfsError::CidError(format!("CID not found in mock: {}", cid)))
+    }
+}
 ```
 
 ### MockSource CID Generation
 
-The `MockSource` must generate the same CIDs that the cache seeder uses:
+The `MockSource` must generate the same CIDs that the mock IPFS client expects:
 
 ```rust
 // hermes-relay/src/source/mock.rs
 
 impl MockSource {
-    /// Encode edit event with CID matching what's in the seeded cache.
+    /// Encode edit event with CID matching what MockIpfsClient expects.
     fn encode_edit_data(&self, edit: &EditPublished) -> Vec<u8> {
-        // Must match CacheSeeder::deterministic_cid()
+        // Must match MockIpfsClient::deterministic_cid()
         let cid = format!("Qm{}", hex::encode(&edit.edit_id));
         format!("ipfs://{}", cid).into_bytes()
+    }
+}
+```
+
+### Updated IpfsCacheSink
+
+Update `hermes-ipfs-cache` to accept any `IpfsFetcher`:
+
+```rust
+// hermes-ipfs-cache/src/lib.rs
+
+pub struct IpfsCacheSink<F: IpfsFetcher> {
+    cache: Arc<Mutex<Cache>>,
+    ipfs: Arc<F>,
+    semaphore: Arc<Semaphore>,
+    pending: Arc<Mutex<PendingFetches>>,
+}
+
+impl<F: IpfsFetcher> IpfsCacheSink<F> {
+    pub fn new(cache: Cache, ipfs: F) -> Self {
+        Self {
+            cache: Arc::new(Mutex::new(cache)),
+            ipfs: Arc::new(ipfs),
+            semaphore: Arc::new(Semaphore::new(MAX_CONCURRENT_FETCHES)),
+            pending: Arc::new(Mutex::new(PendingFetches::default())),
+        }
     }
 }
 ```
@@ -635,32 +712,46 @@ impl MockSource {
 
 ```rust
 #[tokio::test]
-async fn test_edits_transformer_with_seeded_cache() {
-    // Setup: real PostgreSQL cache (can use testcontainers)
-    let cache = Cache::new(Storage::new().await.unwrap());
-    
+async fn test_ipfs_cache_with_mock_fetcher() {
     // Generate deterministic topology
     let blocks = mock_substream::test_topology::generate();
     
-    // Seed the cache with real GRC-20 edit data
-    let seeder = CacheSeeder::new(cache.clone());
-    seeder.seed_from_topology(&blocks).await.unwrap();
+    // Create mock IPFS client with pre-populated edits
+    let mock_ipfs = MockIpfsClient::from_topology(&blocks);
     
-    // Create mock source (generates matching CIDs)
+    // Create real cache (PostgreSQL)
+    let cache = Cache::new(Storage::new().await.unwrap());
+    
+    // Create cache sink with mock IPFS fetcher
+    let sink = IpfsCacheSink::new(cache.clone(), mock_ipfs);
+    
+    // Create mock block source
     let source = MockSource::new(blocks, HermesModule::EditsPublished);
     
-    // Create transformer with real cache
-    let transformer = EditsTransformer::new(cache, kafka_producer);
+    // Run the cache service - fetches go to mock, writes go to real cache
+    sink.run_with_source(source).await.unwrap();
     
-    // Run the pipeline - cache lookups work normally
-    transformer.run_with_source(source).await.unwrap();
-    
-    // Verify edits were processed
-    assert_eq!(kafka_mock.messages.len(), 6); // 6 edits in test topology
+    // Verify edits were cached
+    let cached = cache.get("ipfs://Qm00000000000000000000000000000000e1").await.unwrap();
+    assert!(cached.is_some());
+    assert!(!cached.unwrap().is_errored);
 }
 ```
 
 ### E2E Test Flow
+
+```
+┌─────────────────┐     ┌─────────────────┐     ┌─────────────────┐
+│   MockSource    │────▶│ IpfsCacheSink   │────▶│  Cache (real)   │
+│ (mock blocks)   │     │                 │     │  (PostgreSQL)   │
+└─────────────────┘     └────────┬────────┘     └─────────────────┘
+                                 │
+                        ┌────────▼────────┐
+                        │ MockIpfsClient  │
+                        │ (returns real   │
+                        │  grc20.Edit)    │
+                        └─────────────────┘
+```
 
 ```bash
 # 1. Start infrastructure
@@ -669,10 +760,10 @@ docker-compose up -d postgres kafka
 # 2. Run migrations
 sqlx migrate run
 
-# 3. Seed the cache with mock GRC-20 data
-cargo run --bin cache-seeder -- --topology deterministic
+# 3. Run IPFS cache service with mock fetcher
+MOCK_MODE=1 cargo run --bin hermes-ipfs-cache
 
-# 4. Run transformers with mock block source
+# 4. Run edits transformer with mock block source
 MOCK_MODE=1 cargo run --bin hermes-edits
 
 # 5. Verify Kafka output
@@ -681,10 +772,11 @@ kafka-console-consumer --topic edits --from-beginning
 
 ### Why This Approach
 
-1. **Tests real code paths** - The cache, database, and transformer logic are all production code
-2. **Real GRC-20 data** - The edit content is valid `grc20.Edit` protos, not fake data
-3. **Deterministic** - Same topology always produces same CIDs and cache entries
-4. **Debuggable** - Can inspect the cache contents in PostgreSQL during test failures
+1. **Tests real cache code** - The `Cache` and PostgreSQL storage work exactly as in production
+2. **Real GRC-20 data** - The `MockIpfsClient` returns valid `grc20.Edit` protos
+3. **Minimal mocking** - Only the network fetch is mocked; everything else is production code
+4. **Deterministic** - Same topology always produces same CIDs and edit content
+5. **Debuggable** - Can inspect the cache contents in PostgreSQL during test failures
 
 ## Testing Strategy
 
