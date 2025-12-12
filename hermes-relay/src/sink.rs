@@ -30,9 +30,7 @@
 
 use std::{env, process::exit, sync::Arc};
 
-use futures03::StreamExt;
-
-use crate::source::BlockSource;
+use crate::source::{BlockSource, SubstreamSource};
 use crate::{HermesModule, HERMES_SPKG};
 use stream::{
     pb::sf::substreams::rpc::v2::{BlockScopedData, BlockUndoSignal},
@@ -138,42 +136,17 @@ pub trait Sink: Send + Sync {
             let package = stream::read_package(HERMES_SPKG).await?;
             let endpoint = Arc::new(SubstreamsEndpoint::new(endpoint_url, token).await?);
 
-            let mut stream = SubstreamsStream::new(
+            let stream = SubstreamsStream::new(
                 endpoint,
-                cursor,
+                cursor.clone(),
                 package.modules.clone(),
                 module.to_string(),
                 start_block,
                 end_block,
             );
 
-            loop {
-                match stream.next().await {
-                    None => {
-                        println!("Stream consumed");
-                        break;
-                    }
-                    Some(Ok(BlockResponse::New(data))) => {
-                        self.process_block_scoped_data(&data).await?;
-                        self.persist_cursor(data.cursor, data.clock.unwrap().number)
-                            .await?;
-                    }
-                    Some(Ok(BlockResponse::Undo(undo_signal))) => {
-                        self.process_block_undo_signal(&undo_signal)?;
-                        self.persist_cursor(
-                            undo_signal.last_valid_cursor,
-                            undo_signal.last_valid_block.unwrap().number,
-                        )
-                        .await?;
-                    }
-                    Some(Err(err)) => {
-                        println!("Stream terminated with error: {:?}", err);
-                        exit(1);
-                    }
-                }
-            }
-
-            Ok(())
+            let source = SubstreamSource::new(stream, cursor);
+            self.run_with_source(source).await
         }
     }
 
@@ -291,43 +264,17 @@ pub trait PreprocessedSink<P: Send>: Send + Sync {
             let package = stream::read_package(HERMES_SPKG).await?;
             let endpoint = Arc::new(SubstreamsEndpoint::new(endpoint_url, token).await?);
 
-            let mut stream = SubstreamsStream::new(
+            let stream = SubstreamsStream::new(
                 endpoint,
-                cursor,
+                cursor.clone(),
                 package.modules.clone(),
                 module.to_string(),
                 start_block,
                 end_block,
             );
 
-            loop {
-                match stream.next().await {
-                    None => {
-                        println!("Stream consumed");
-                        break;
-                    }
-                    Some(Ok(BlockResponse::New(data))) => {
-                        let preprocessed = self.preprocess_block_scoped_data(&data).await?;
-                        self.process_block_scoped_data(&data, preprocessed).await?;
-                        self.persist_cursor(data.cursor, data.clock.unwrap().number)
-                            .await?;
-                    }
-                    Some(Ok(BlockResponse::Undo(undo_signal))) => {
-                        self.process_block_undo_signal(&undo_signal)?;
-                        self.persist_cursor(
-                            undo_signal.last_valid_cursor,
-                            undo_signal.last_valid_block.unwrap().number,
-                        )
-                        .await?;
-                    }
-                    Some(Err(err)) => {
-                        println!("Stream terminated with error: {:?}", err);
-                        exit(1);
-                    }
-                }
-            }
-
-            Ok(())
+            let source = SubstreamSource::new(stream, cursor);
+            self.run_with_source(source).await
         }
     }
 

@@ -30,7 +30,8 @@ mod mock;
 pub use mock::MockSource;
 
 use async_trait::async_trait;
-use stream::substreams_stream::BlockResponse;
+use futures03::StreamExt;
+use stream::substreams_stream::{BlockResponse, SubstreamsStream};
 
 /// Trait for consuming blocks from any source.
 ///
@@ -46,4 +47,44 @@ pub trait BlockSource: Send {
 
     /// Get the current cursor position.
     fn cursor(&self) -> Option<&str>;
+}
+
+/// Wrapper around `SubstreamsStream` that implements `BlockSource`.
+pub struct SubstreamSource {
+    stream: SubstreamsStream,
+    current_cursor: Option<String>,
+}
+
+impl SubstreamSource {
+    pub fn new(stream: SubstreamsStream, cursor: Option<String>) -> Self {
+        Self {
+            stream,
+            current_cursor: cursor,
+        }
+    }
+}
+
+#[async_trait]
+impl BlockSource for SubstreamSource {
+    async fn next(&mut self) -> Option<Result<BlockResponse, anyhow::Error>> {
+        let result = self.stream.next().await?;
+
+        // Update cursor on successful responses
+        if let Ok(ref response) = result {
+            match response {
+                BlockResponse::New(data) => {
+                    self.current_cursor = Some(data.cursor.clone());
+                }
+                BlockResponse::Undo(signal) => {
+                    self.current_cursor = Some(signal.last_valid_cursor.clone());
+                }
+            }
+        }
+
+        Some(result)
+    }
+
+    fn cursor(&self) -> Option<&str> {
+        self.current_cursor.as_deref()
+    }
 }
