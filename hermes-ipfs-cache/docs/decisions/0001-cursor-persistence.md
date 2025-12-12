@@ -40,7 +40,7 @@ persist_cursor(block);
 
 ### Option 2: Persist cursor immediately, rely on consumer retry
 
-The hermes-relay `Sink` trait calls `persist_cursor` after each `process_block_scoped_data` returns. We could persist immediately and rely on downstream consumers (edits transformer) to retry on cache miss.
+The hermes-relay `Sink` trait calls `persist_cursor` after each `process_block_scoped_data` returns. We could persist immediately and rely on downstream consumers (`hermes-spaces`) to retry on cache miss.
 
 **Pros:**
 - Maximum throughput
