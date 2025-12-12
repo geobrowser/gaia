@@ -20,48 +20,57 @@ The system receives blockchain events which fall into several categories:
 4. **Curation** - ranking, voting on entities
 
 ```
-                              ┌──────────────────────────────────────────────────────────┐
-                              │  Hermes                                                  │
-                              │                                                          │
-┌──────────────┐              │  ┌────────────────┐    ┌─────────────────────────────┐   │
-│  Blockchain  │              │  │ hermes-        │    │  hermes-relay (lib)         │   │
-│    (Geo)     │─────────────▶│  │ substream      │───▶│  - Connect to substream     │   │
-└──────────────┘              │  │ (excluded from │    │  - Cursor/checkpoint mgmt   │   │
-                              │  │  workspace)    │    │  - Typed event stream       │   │
-                              │  └────────────────┘    └──────────────┬──────────────┘   │
-                              │                                       │                  │
-                              │                  ┌────────────────────┼────────────┐     │
-                              │                  │                    │            │     │
-                              │                  ▼                    ▼            ▼     │
-                              │            ┌──────────┐        ┌──────────┐  ┌─────────┐ │
-                              │            │  spaces  │        │  edits   │  │ future  │ │
-                              │            │  (bin)   │        │  (bin)   │  │  ...    │ │
-                              │            └────┬─────┘        └────┬─────┘  └────┬────┘ │
-                              │                 │                   │             │      │
-                              └─────────────────┼───────────────────┼─────────────┼──────┘
-                                                │                   │             │
-                                                ▼                   ▼             ▼
-                                             Kafka:              Kafka:        Kafka:
-                                             spaces              edits          ...
+                              ┌───────────────────────────────────────────────────────────────┐
+                              │  Hermes                                                       │
+                              │                                                               │
+┌──────────────┐              │  ┌────────────────┐    ┌─────────────────────────────┐        │
+│  Blockchain  │              │  │ hermes-        │    │  hermes-relay (lib)         │        │
+│    (Geo)     │─────────────▶│  │ substream      │───▶│  - Connect to substream     │        │
+└──────────────┘              │  │ (excluded from │    │  - Cursor/checkpoint mgmt   │        │
+                              │  │  workspace)    │    │  - Typed event stream       │        │
+                              │  └────────────────┘    └──────────────┬──────────────┘        │
+                              │                                       │                       │
+                              │                  ┌────────────────────┼────────────┐          │
+                              │                  │                    │            │          │
+                              │                  ▼                    ▼            ▼          │
+                              │  ┌───────────────────────────┐  ┌──────────┐  ┌─────────┐     │
+                              │  │  hermes-spaces (bin)      │  │  atlas   │  │ future  │     │
+                              │  │  - Space events           │  │  (bin)   │  │  ...    │     │
+                              │  │  - Edit events + IPFS     │  └────┬─────┘  └────┬────┘     │
+                              │  │    cache integration      │       │             │          │
+                              │  └────────────┬──────────────┘       │             │          │
+                              │               │                      │             │          │
+                              └───────────────┼──────────────────────┼─────────────┼──────────┘
+                                              │                      │             │
+                                              ▼                      ▼             ▼
+                                           Kafka:                 Kafka:        Kafka:
+                                           space.creations        topology       ...
+                                           space.trust.extensions canonical
+                                           knowledge.edits
 
                               ┌────────────────────────────────────────┐
 Blockchain ──────────────────▶│  IPFS Cache (parallel, ahead-of-time) │
-Data Source                   └────────────────────────────────────────┘
+Data Source                   │  (hermes-spaces uses mock cache for   │
+                              │   dev, live cache for production)     │
+                              └────────────────────────────────────────┘
 ```
 
 ## Design Principles
 
-### Independent Transformers
+### Consolidated Transformers
 
-Each transformer is a separate binary with its own:
-- Connection to the data source (via relay)
-- Cursor/checkpoint
-- Kafka producer
+`hermes-spaces` is the primary transformer that handles most blockchain events:
+- Space registrations and migrations
+- Trust relationships (subspaces)
+- Edit publishing (with IPFS cache integration)
+- Governance and membership (future)
 
-This enables:
-- **Independent deployments** - Fix a bug in edits without restarting spaces
-- **Independent replay** - Reprocess edits from block 1M while spaces continues from current
-- **Failure isolation** - If edits crashes, spaces keeps running
+This consolidation provides:
+- **Simpler deployment** - One binary for all space-related events
+- **Shared infrastructure** - Single Kafka producer, cursor management
+- **Consistent patterns** - Same conversion/emit patterns across event types
+
+`atlas` remains a separate binary for canonical graph computation, as it maintains complex in-memory state and has different scaling characteristics.
 
 ### Shared Libraries
 
@@ -160,32 +169,31 @@ Protobuf definitions for Kafka output messages.
 - `topology.proto` - CanonicalGraphUpdated, CanonicalTreeNode
 - `blockchain_metadata.proto` - Common metadata fields
 
-### spaces (Binary)
+### hermes-spaces (Binary)
 
-Transforms space events and emits to Kafka.
+Primary transformer that handles space events, trust relationships, and edit publishing.
 
-**Uses:** `hermes-relay`  
-**Subscribes to:** `map_spaces_registered`, `map_subspaces_added`, `map_subspaces_removed`  
-**Output:** `spaces` Kafka topic
+**Location:** `hermes-spaces/`
+
+**Uses:** `hermes-relay`, IPFS cache (mock or live)  
+**Subscribes to:** `map_actions` (filters client-side for relevant action types)  
+**Output:** `space.creations`, `space.trust.extensions`, `knowledge.edits` Kafka topics
 
 **Handles:**
-- Space registration events
-- Subspace relationship changes
+- **Space registration** (`SPACE_REGISTERED`) → `space.creations` topic
+- **Trust relationships** (`SUBSPACE_ADDED`, `SUBSPACE_REMOVED`) → `space.trust.extensions` topic
+- **Edit publishing** (`EDITS_PUBLISHED`) → `knowledge.edits` topic
 
-### edits (Binary)
-
-Transforms edit events, resolving IPFS content via cache, and emits to Kafka.
-
-**Uses:** `hermes-relay`, IPFS cache  
-**Subscribes to:** `map_edits_published`  
-**Output:** `edits` Kafka topic
-
-**How it works:**
-1. Receives `EditsPublished` event (contains IPFS CID in data field)
+**Edit processing:**
+1. Receives `EDITS_PUBLISHED` action (contains IPFS CID in data field)
 2. Reads resolved content from IPFS cache
 3. Decodes into `Edit` protobuf (ops, authors, etc.)
 4. Enriches with blockchain metadata
-5. Emits `HermesEdit` to Kafka
+5. Emits `HermesEdit` to `knowledge.edits` topic
+
+**IPFS Cache modes:**
+- **Mock mode** (development): In-memory cache with pre-populated test edits
+- **Live mode** (production): Reads from `hermes-ipfs-cache` PostgreSQL store
 
 ### topology (Binary) [Atlas]
 
@@ -202,16 +210,18 @@ Computes the canonical graph from space topology events.
 
 ### IPFS Cache Service
 
-Pre-populates resolved IPFS contents ahead of time so the edits transformer doesn't block on network I/O.
+Pre-populates resolved IPFS contents ahead of time so `hermes-spaces` doesn't block on network I/O when processing edits.
 
 **Location:** `hermes-ipfs-cache/`
 
 **How it works:**
 1. Connects to hermes-substream `map_edits_published` (parallelized, runs ahead)
 2. For each edit event, fetches the IPFS content by CID
-3. Stores resolved content in the cache
+3. Stores resolved content in PostgreSQL cache
 
-**Cache miss behavior:** If edits encounters a cache miss, it waits and retries until the content appears. The cache should always be ahead, so misses indicate the cache is catching up.
+**Cache miss behavior:** If `hermes-spaces` encounters a cache miss, it waits and retries until the content appears. The cache should always be ahead, so misses indicate the cache is catching up.
+
+**Development mode:** `hermes-spaces` includes a mock IPFS cache with pre-populated test edits, allowing development without running the full cache service.
 
 ### mock-substream (Library)
 
@@ -298,9 +308,9 @@ NON-CANONICAL (isolated islands):
 
 | Topic | Producer | Message Type | Description |
 |-------|----------|--------------|-------------|
-| `space.creations` | hermes-processor | HermesCreateSpace | Space creation events |
-| `space.trust.extensions` | hermes-processor | HermesSpaceTrustExtension | Trust extension events (verified, related, subtopic) |
-| `knowledge.edits` | hermes-processor | HermesEdit | Resolved knowledge graph edits |
+| `space.creations` | hermes-spaces | HermesCreateSpace | Space creation events |
+| `space.trust.extensions` | hermes-spaces | HermesSpaceTrustExtension | Trust extension events (verified, related, subtopic) |
+| `knowledge.edits` | hermes-spaces | HermesEdit | Resolved knowledge graph edits |
 | `topology.canonical` | atlas | CanonicalGraphUpdated | Canonical graph updates |
 | `governance` | (future) | (TBD) | Proposals, voting, membership |
 | `curation` | (future) | (TBD) | Ranking, voting on entities |
@@ -312,14 +322,14 @@ gaia/
 ├── hermes-substream/    # Substream: decodes Space Registry events (excluded from workspace)
 ├── hermes-relay/        # Library: connects to substream, provides typed event stream
 ├── hermes-schema/       # Library: Kafka output protobuf definitions
-├── hermes-processor/    # Binary: processes mock events, publishes to Kafka (spaces, edits)
-├── hermes-spaces/       # Binary: spaces transformer (uses hermes-relay)
-├── hermes-ipfs-cache/   # Service: IPFS content pre-fetcher
+├── hermes-spaces/       # Binary: primary transformer (spaces, trust, edits)
+├── hermes-ipfs-cache/   # Service: IPFS content pre-fetcher (production)
+├── hermes-processor/    # Binary: standalone mock processor (development/testing)
 ├── mock-substream/      # Library: test event generation
 └── atlas/               # Binary: canonical graph computation, publishes to Kafka
 ```
 
-Each binary depends on `hermes-relay` for data source access and `hermes-schema` for output types.
+`hermes-spaces` is the primary transformer, handling space events, trust relationships, and edits. It depends on `hermes-relay` for data source access, `hermes-schema` for output types, and uses either a mock or live IPFS cache for edit content resolution.
 
 ## Data Flow Example
 
@@ -347,21 +357,22 @@ Each binary depends on `hermes-relay` for data source access and `hermes-schema`
 
 1. **Space Registry contract** emits: `Action(GOVERNANCE.EDITS_PUBLISHED, ..., ipfs_cid)`
 
-2. **IPFS Cache Service** (running ahead):
+2. **IPFS Cache Service** (running ahead, production only):
    - Subscribes to `map_edits_published`
    - Fetches content for `ipfs_cid`
-   - Stores in cache
+   - Stores in PostgreSQL cache
 
 3. **hermes-substream** `map_edits_published`:
    - Filters for edit actions
    - Emits `EditsPublished` protobuf
 
-4. **edits transformer** (via hermes-relay):
-   - Subscribes to `map_edits_published`
-   - Reads resolved content from IPFS cache (waits if miss)
+4. **hermes-spaces** (via hermes-relay):
+   - Subscribes to `map_actions`, filters for `EDITS_PUBLISHED`
+   - Extracts IPFS CID from action data
+   - Reads resolved content from IPFS cache (mock or live)
    - Decodes into `Edit` protobuf
    - Enriches with blockchain metadata
-   - Publishes `HermesEdit` to `edits` topic
+   - Publishes `HermesEdit` to `knowledge.edits` topic
 
 5. **Downstream consumers** read from Kafka topics to:
    - Update search indices
@@ -391,14 +402,15 @@ All services run with mock data by default, processing a deterministic test topo
 ### Independent Operations
 
 ```bash
-# Restart only edits (e.g., after bug fix)
-kubectl rollout restart deployment/hermes-edits
+# Restart hermes-spaces (handles spaces, trust, and edits)
+kubectl rollout restart deployment/hermes-spaces
 
-# Replay spaces from specific block
+# Replay from specific block
 kubectl set env deployment/hermes-spaces START_BLOCK=1000000
 kubectl rollout restart deployment/hermes-spaces
 
-# topology continues unaffected
+# atlas (topology) continues unaffected
+kubectl rollout restart deployment/atlas
 ```
 
 ## Related Documents
