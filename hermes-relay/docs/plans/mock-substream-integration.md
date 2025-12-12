@@ -22,11 +22,21 @@ Production Path:
 ┌──────────────┐     ┌─────────────────┐     ┌────────────────┐     ┌───────┐
 │  Blockchain  │────▶│ hermes-substream│────▶│  hermes-relay  │────▶│ Kafka │
 └──────────────┘     └─────────────────┘     └────────────────┘     └───────┘
+                                                     │
+                                              ┌──────▼──────┐
+                                              │  IPFS Cache │
+                                              │ (PostgreSQL)│
+                                              └─────────────┘
 
 Mock Path:
 ┌──────────────┐     ┌────────────────┐     ┌───────┐
 │mock-substream│────▶│  hermes-relay  │────▶│ Kafka │
 └──────────────┘     └────────────────┘     └───────┘
+                             │
+                      ┌──────▼──────┐
+                      │  Mock IPFS  │
+                      │   Cache     │
+                      └─────────────┘
 ```
 
 ## Design
@@ -429,11 +439,295 @@ MockEvent::EditPublished(edit) -> hermes_substream::pb::hermes::EditsPublished {
 }
 ```
 
-For edits, we have two options:
-1. **Direct encoding:** Encode `Op` directly to wire format, bypassing IPFS
-2. **Mock IPFS cache:** Store encoded edits in a mock cache, return CID in event
+## IPFS Cache Mocking
 
-Option 1 is simpler for testing but diverges from production. Option 2 tests the full path including IPFS resolution.
+The edits transformer relies on the IPFS cache to resolve edit content. In production:
+
+1. `hermes-ipfs-cache` subscribes to `EditsPublished` events
+2. For each event, it fetches content from IPFS by CID
+3. The IPFS content is a `grc20.Edit` proto (defined in `wire/proto/grc20.proto`):
+   ```protobuf
+   message Edit {
+     bytes id = 1;
+     string name = 2;
+     repeated Op ops = 3;
+     repeated bytes authors = 4;
+     optional bytes language = 5;
+   }
+   ```
+4. Stores the decoded `Edit` proto in PostgreSQL
+5. Edits transformer reads from cache, enriches with blockchain/topology metadata, and emits `HermesEdit` to Kafka
+
+To fully test the pipeline, we need to mock the IPFS cache as well.
+
+### IpfsCache Trait
+
+Abstract the cache interface to support both real and mock implementations:
+
+```rust
+// hermes-ipfs-cache/src/cache.rs
+
+/// Trait for IPFS cache implementations.
+#[async_trait]
+pub trait IpfsCache: Send + Sync {
+    /// Store an item in the cache.
+    async fn put(&self, item: &CacheItem) -> Result<(), CacheError>;
+    
+    /// Get an item from the cache by URI.
+    async fn get(&self, uri: &str) -> Result<Option<CacheItem>, CacheError>;
+    
+    /// Load the cursor for a given indexer ID.
+    async fn load_cursor(&self, id: &str) -> Result<Option<String>, CacheError>;
+    
+    /// Persist the cursor for a given indexer ID.
+    async fn persist_cursor(&self, id: &str, cursor: &str, block: u64) -> Result<(), CacheError>;
+}
+
+/// Production implementation using PostgreSQL.
+pub struct PostgresCache {
+    storage: Storage,
+}
+
+#[async_trait]
+impl IpfsCache for PostgresCache {
+    // ... existing implementation ...
+}
+```
+
+### Mock IPFS Cache
+
+In-memory implementation that can be pre-populated with mock edit data:
+
+```rust
+// hermes-ipfs-cache/src/mock.rs (or mock-substream/src/ipfs_cache.rs)
+
+use std::collections::HashMap;
+use std::sync::RwLock;
+
+/// In-memory mock IPFS cache for testing.
+pub struct MockIpfsCache {
+    items: RwLock<HashMap<String, CacheItem>>,
+    cursors: RwLock<HashMap<String, (String, u64)>>,
+}
+
+impl MockIpfsCache {
+    pub fn new() -> Self {
+        Self {
+            items: RwLock::new(HashMap::new()),
+            cursors: RwLock::new(HashMap::new()),
+        }
+    }
+    
+    /// Pre-populate the cache with mock edit data.
+    ///
+    /// Converts `mock_substream::EditPublished` events to `CacheItem`s
+    /// and stores them with deterministic CIDs.
+    pub fn populate_from_topology(blocks: &[MockBlock]) -> Self {
+        let cache = Self::new();
+        
+        for block in blocks {
+            for event in &block.events {
+                if let MockEvent::EditPublished(edit) = event {
+                    let cid = Self::deterministic_cid(&edit.edit_id);
+                    let wire_edit = Self::mock_event_to_wire_edit(edit);
+                    
+                    cache.items.write().unwrap().insert(cid.clone(), CacheItem {
+                        uri: format!("ipfs://{}", cid),
+                        json: Some(wire_edit),
+                        block: block.timestamp.to_string(),
+                        space_id: hex::encode(&edit.space_id),
+                        is_errored: false,
+                    });
+                }
+            }
+        }
+        
+        cache
+    }
+    
+    /// Generate a deterministic CID from an edit ID.
+    ///
+    /// In production, CIDs are content-addressed hashes. For testing,
+    /// we use a simple encoding of the edit ID.
+    fn deterministic_cid(edit_id: &EditId) -> String {
+        format!("Qm{}", hex::encode(edit_id))
+    }
+    
+    /// Convert mock edit to wire format (`grc20.Edit` proto).
+    ///
+    /// This matches the structure stored in IPFS and expected by the
+    /// edits transformer. See `wire/proto/grc20.proto` for the schema.
+    fn mock_event_to_wire_edit(edit: &EditPublished) -> wire::pb::grc20::Edit {
+        wire::pb::grc20::Edit {
+            id: edit.edit_id.to_vec(),
+            name: edit.name.clone(),
+            ops: edit.ops.iter().map(Self::convert_op).collect(),
+            authors: edit.authors.iter().map(|a| a.to_vec()).collect(),
+            language: None,
+        }
+    }
+    
+    /// Convert mock op to wire format (`grc20.Op` proto).
+    fn convert_op(op: &mock_substream::Op) -> wire::pb::grc20::Op {
+        use wire::pb::grc20::op::Payload;
+        
+        let payload = match op {
+            mock_substream::Op::UpdateEntity(u) => {
+                Payload::UpdateEntity(wire::pb::grc20::Entity {
+                    id: u.id.to_vec(),
+                    values: u.values.iter().map(|v| wire::pb::grc20::Value {
+                        property: v.property.to_vec(),
+                        value: v.value.clone(),
+                        options: None,
+                    }).collect(),
+                })
+            }
+            mock_substream::Op::CreateRelation(r) => {
+                Payload::CreateRelation(wire::pb::grc20::Relation {
+                    id: r.id.to_vec(),
+                    r#type: r.relation_type.to_vec(),
+                    from_entity: r.from_entity.to_vec(),
+                    from_space: r.from_space.map(|s| s.to_vec()),
+                    from_version: None,
+                    to_entity: r.to_entity.to_vec(),
+                    to_space: r.to_space.map(|s| s.to_vec()),
+                    to_version: None,
+                    entity: r.entity.to_vec(),
+                    position: r.position.clone(),
+                    verified: r.verified,
+                })
+            }
+            mock_substream::Op::UpdateRelation(r) => {
+                Payload::UpdateRelation(wire::pb::grc20::RelationUpdate {
+                    id: r.id.to_vec(),
+                    from_space: r.from_space.map(|s| s.to_vec()),
+                    from_version: None,
+                    to_space: r.to_space.map(|s| s.to_vec()),
+                    to_version: None,
+                    position: r.position.clone(),
+                    verified: r.verified,
+                })
+            }
+            mock_substream::Op::DeleteRelation(id) => {
+                Payload::DeleteRelation(id.to_vec())
+            }
+            mock_substream::Op::CreateProperty(p) => {
+                Payload::CreateProperty(wire::pb::grc20::Property {
+                    id: p.id.to_vec(),
+                    data_type: p.data_type as i32,
+                })
+            }
+            mock_substream::Op::UnsetEntityValues(u) => {
+                Payload::UnsetEntityValues(wire::pb::grc20::UnsetEntityValues {
+                    id: u.id.to_vec(),
+                    properties: u.properties.iter().map(|p| p.to_vec()).collect(),
+                })
+            }
+            mock_substream::Op::UnsetRelationFields(u) => {
+                Payload::UnsetRelationFields(wire::pb::grc20::UnsetRelationFields {
+                    id: u.id.to_vec(),
+                    from_space: u.from_space,
+                    from_version: None,
+                    to_space: u.to_space,
+                    to_version: None,
+                    position: u.position,
+                    verified: u.verified,
+                })
+            }
+        };
+        
+        wire::pb::grc20::Op { payload: Some(payload) }
+    }
+}
+
+#[async_trait]
+impl IpfsCache for MockIpfsCache {
+    async fn put(&self, item: &CacheItem) -> Result<(), CacheError> {
+        self.items.write().unwrap().insert(item.uri.clone(), item.clone());
+        Ok(())
+    }
+    
+    async fn get(&self, uri: &str) -> Result<Option<CacheItem>, CacheError> {
+        Ok(self.items.read().unwrap().get(uri).cloned())
+    }
+    
+    async fn load_cursor(&self, id: &str) -> Result<Option<String>, CacheError> {
+        Ok(self.cursors.read().unwrap().get(id).map(|(c, _)| c.clone()))
+    }
+    
+    async fn persist_cursor(&self, id: &str, cursor: &str, block: u64) -> Result<(), CacheError> {
+        self.cursors.write().unwrap().insert(id.to_string(), (cursor.to_string(), block));
+        Ok(())
+    }
+}
+```
+
+### MockSource Integration with IPFS Cache
+
+The `MockSource` needs to generate CIDs that match what's in the mock cache:
+
+```rust
+// hermes-relay/src/source/mock.rs
+
+impl MockSource {
+    /// Create a mock source with pre-populated IPFS cache.
+    pub fn with_ipfs_cache(
+        blocks: Vec<MockBlock>,
+        module: HermesModule,
+    ) -> (Self, MockIpfsCache) {
+        let cache = MockIpfsCache::populate_from_topology(&blocks);
+        let source = Self::new(blocks, module);
+        (source, cache)
+    }
+    
+    /// Encode edit event with CID matching the mock cache.
+    fn encode_edit_data(&self, edit: &EditPublished) -> Vec<u8> {
+        // Generate the same deterministic CID used by MockIpfsCache
+        let cid = format!("Qm{}", hex::encode(&edit.edit_id));
+        format!("ipfs://{}", cid).into_bytes()
+    }
+}
+```
+
+### Usage Example
+
+```rust
+#[tokio::test]
+async fn test_edits_transformer_with_mock() {
+    // Generate deterministic topology
+    let blocks = mock_substream::test_topology::generate();
+    
+    // Create mock source and pre-populated IPFS cache
+    let (source, ipfs_cache) = MockSource::with_ipfs_cache(
+        blocks,
+        HermesModule::EditsPublished,
+    );
+    
+    // Create transformer with mock cache
+    let transformer = EditsTransformer::new(
+        Arc::new(ipfs_cache),
+        kafka_producer_mock,
+    );
+    
+    // Run the pipeline
+    transformer.run_with_source(source).await.unwrap();
+    
+    // Verify edits were processed
+    assert_eq!(kafka_mock.messages.len(), 6); // 6 edits in test topology
+}
+```
+
+### Implementation Location
+
+The mock IPFS cache can live in one of two places:
+
+1. **`mock-substream/src/ipfs_cache.rs`** - Co-located with other mock infrastructure
+2. **`hermes-ipfs-cache/src/mock.rs`** - Co-located with the real implementation
+
+Option 1 is recommended because:
+- Keeps all mock infrastructure together
+- `mock-substream` already has the `MockEvent` types needed for conversion
+- Avoids adding test-only code to production crates
 
 ## Testing Strategy
 
@@ -491,13 +785,375 @@ HERMES_MOCK_MODE=1 cargo run --bin hermes-edits --features mock
 kafka-console-consumer --topic spaces --from-beginning
 ```
 
+## Cursor Persistence
+
+Cursor persistence is critical for testing restart and replay scenarios. The mock infrastructure must support persisting and loading cursors to verify that transformers correctly resume from their last processed block.
+
+### CursorStore Trait
+
+Abstract cursor persistence to support both real (PostgreSQL) and mock (in-memory) implementations:
+
+```rust
+// hermes-relay/src/cursor.rs
+
+/// Trait for cursor persistence implementations.
+#[async_trait]
+pub trait CursorStore: Send + Sync {
+    /// Load the cursor for a given indexer ID.
+    async fn load(&self, indexer_id: &str) -> Result<Option<CursorPosition>, anyhow::Error>;
+    
+    /// Persist the cursor for a given indexer ID.
+    async fn persist(&self, indexer_id: &str, position: &CursorPosition) -> Result<(), anyhow::Error>;
+}
+
+/// Cursor position in the block stream.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CursorPosition {
+    /// Opaque cursor string for resuming the stream.
+    pub cursor: String,
+    /// Block number for debugging/logging.
+    pub block_number: u64,
+    /// Timestamp when this cursor was persisted.
+    pub persisted_at: u64,
+}
+```
+
+### Mock Cursor Store
+
+In-memory implementation for testing:
+
+```rust
+// mock-substream/src/cursor.rs (or hermes-relay/src/cursor/mock.rs)
+
+use std::collections::HashMap;
+use std::sync::RwLock;
+
+/// In-memory cursor store for testing.
+pub struct MockCursorStore {
+    cursors: RwLock<HashMap<String, CursorPosition>>,
+    /// History of all persist calls for verification.
+    history: RwLock<Vec<(String, CursorPosition)>>,
+}
+
+impl MockCursorStore {
+    pub fn new() -> Self {
+        Self {
+            cursors: RwLock::new(HashMap::new()),
+            history: RwLock::new(Vec::new()),
+        }
+    }
+    
+    /// Create a cursor store pre-populated with a starting position.
+    ///
+    /// Useful for testing resume-from-cursor scenarios.
+    pub fn with_cursor(indexer_id: &str, position: CursorPosition) -> Self {
+        let store = Self::new();
+        store.cursors.write().unwrap().insert(indexer_id.to_string(), position);
+        store
+    }
+    
+    /// Get the history of all persist calls.
+    ///
+    /// Useful for verifying cursor progression in tests.
+    pub fn persist_history(&self) -> Vec<(String, CursorPosition)> {
+        self.history.read().unwrap().clone()
+    }
+    
+    /// Get the number of times persist was called for an indexer.
+    pub fn persist_count(&self, indexer_id: &str) -> usize {
+        self.history.read().unwrap()
+            .iter()
+            .filter(|(id, _)| id == indexer_id)
+            .count()
+    }
+    
+    /// Clear all cursors and history. Useful between test runs.
+    pub fn clear(&self) {
+        self.cursors.write().unwrap().clear();
+        self.history.write().unwrap().clear();
+    }
+}
+
+#[async_trait]
+impl CursorStore for MockCursorStore {
+    async fn load(&self, indexer_id: &str) -> Result<Option<CursorPosition>, anyhow::Error> {
+        Ok(self.cursors.read().unwrap().get(indexer_id).cloned())
+    }
+    
+    async fn persist(&self, indexer_id: &str, position: &CursorPosition) -> Result<(), anyhow::Error> {
+        self.cursors.write().unwrap().insert(indexer_id.to_string(), position.clone());
+        self.history.write().unwrap().push((indexer_id.to_string(), position.clone()));
+        Ok(())
+    }
+}
+```
+
+### Updated Sink Trait
+
+Modify the `Sink` trait to accept a `CursorStore`:
+
+```rust
+// hermes-relay/src/sink.rs
+
+pub trait Sink: Send + Sync {
+    type Error: std::error::Error + Send + Sync + 'static;
+
+    /// The indexer ID used for cursor persistence.
+    fn indexer_id(&self) -> &str;
+
+    /// Process a new block of data.
+    fn process_block_scoped_data(
+        &self,
+        data: &BlockScopedData,
+    ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send;
+
+    /// Handle a block undo signal (chain reorganization).
+    fn process_block_undo_signal(&self, _undo_signal: &BlockUndoSignal) -> Result<(), Self::Error> {
+        unimplemented!("you must implement block undo handling, or request only final blocks")
+    }
+
+    /// Run the sink with a custom block source and cursor store.
+    fn run_with_source<S, C>(
+        &self,
+        source: S,
+        cursor_store: C,
+    ) -> impl std::future::Future<Output = Result<(), anyhow::Error>> + Send
+    where
+        S: BlockSource,
+        C: CursorStore,
+    {
+        async move {
+            let mut source = source;
+            
+            loop {
+                match source.next().await {
+                    None => {
+                        println!("Stream consumed");
+                        break;
+                    }
+                    Some(Ok(BlockResponse::New(data))) => {
+                        let block_scoped_data = self.block_data_to_scoped(&data)?;
+                        self.process_block_scoped_data(&block_scoped_data).await?;
+                        
+                        // Persist cursor after successful processing
+                        cursor_store.persist(self.indexer_id(), &CursorPosition {
+                            cursor: data.cursor,
+                            block_number: data.block_number,
+                            persisted_at: std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap()
+                                .as_secs(),
+                        }).await?;
+                    }
+                    Some(Ok(BlockResponse::Undo(signal))) => {
+                        self.process_block_undo_signal(&signal.into())?;
+                        
+                        cursor_store.persist(self.indexer_id(), &CursorPosition {
+                            cursor: signal.last_valid_cursor,
+                            block_number: signal.last_valid_block,
+                            persisted_at: std::time::SystemTime::now()
+                                .duration_since(std::time::UNIX_EPOCH)
+                                .unwrap()
+                                .as_secs(),
+                        }).await?;
+                    }
+                    Some(Err(err)) => {
+                        println!("Stream terminated with error: {:?}", err);
+                        std::process::exit(1);
+                    }
+                }
+            }
+            
+            Ok(())
+        }
+    }
+}
+```
+
+### MockSource with Cursor Resume
+
+The `MockSource` should support starting from a cursor position:
+
+```rust
+// hermes-relay/src/source/mock.rs
+
+impl MockSource {
+    /// Create a mock source that resumes from a cursor position.
+    ///
+    /// Skips blocks until the cursor is found, then begins emitting.
+    pub fn resume_from(
+        blocks: Vec<MockBlock>,
+        module: HermesModule,
+        cursor: &str,
+    ) -> Self {
+        let mut source = Self::new(blocks, module);
+        
+        // Skip blocks until we find the cursor
+        while let Some(block) = source.blocks.front() {
+            if block.cursor == cursor {
+                // Found the cursor - remove this block (already processed)
+                // and start from the next one
+                source.blocks.pop_front();
+                source.current_cursor = Some(cursor.to_string());
+                break;
+            }
+            source.blocks.pop_front();
+        }
+        
+        source
+    }
+    
+    /// Create a mock source with cursor store integration.
+    ///
+    /// Automatically loads the cursor and resumes from the correct position.
+    pub async fn with_cursor_store<C: CursorStore>(
+        blocks: Vec<MockBlock>,
+        module: HermesModule,
+        cursor_store: &C,
+        indexer_id: &str,
+    ) -> Result<Self, anyhow::Error> {
+        let cursor = cursor_store.load(indexer_id).await?;
+        
+        Ok(match cursor {
+            Some(pos) => Self::resume_from(blocks, module, &pos.cursor),
+            None => Self::new(blocks, module),
+        })
+    }
+}
+```
+
+### Testing Cursor Persistence
+
+```rust
+#[tokio::test]
+async fn test_cursor_persisted_after_each_block() {
+    let blocks = mock_substream::test_topology::generate();
+    let block_count = blocks.len();
+    
+    let source = MockSource::new(blocks, HermesModule::Actions);
+    let cursor_store = MockCursorStore::new();
+    let transformer = SpacesTransformer::new(kafka_mock);
+    
+    transformer.run_with_source(source, &cursor_store).await.unwrap();
+    
+    // Verify cursor was persisted after each block
+    assert_eq!(cursor_store.persist_count("hermes_spaces"), block_count);
+    
+    // Verify final cursor position
+    let final_cursor = cursor_store.load("hermes_spaces").await.unwrap().unwrap();
+    assert_eq!(final_cursor.block_number, 1_000_000 + block_count as u64 - 1);
+}
+
+#[tokio::test]
+async fn test_resume_from_cursor() {
+    let blocks = mock_substream::test_topology::generate();
+    let total_blocks = blocks.len();
+    
+    // Process first half
+    let cursor_store = MockCursorStore::new();
+    let first_half: Vec<_> = blocks.iter().take(total_blocks / 2).cloned().collect();
+    let source = MockSource::new(first_half, HermesModule::Actions);
+    let transformer = SpacesTransformer::new(kafka_mock.clone());
+    
+    transformer.run_with_source(source, &cursor_store).await.unwrap();
+    
+    let halfway_cursor = cursor_store.load("hermes_spaces").await.unwrap().unwrap();
+    let first_half_messages = kafka_mock.messages.len();
+    
+    // Resume from cursor with all blocks
+    let source = MockSource::resume_from(blocks, HermesModule::Actions, &halfway_cursor.cursor);
+    
+    transformer.run_with_source(source, &cursor_store).await.unwrap();
+    
+    // Should have processed remaining blocks
+    let total_messages = kafka_mock.messages.len();
+    assert!(total_messages > first_half_messages);
+}
+
+#[tokio::test]
+async fn test_restart_from_persisted_cursor() {
+    let blocks = mock_substream::test_topology::generate();
+    
+    // First run - process some blocks then "crash"
+    let cursor_store = Arc::new(MockCursorStore::new());
+    let partial_blocks: Vec<_> = blocks.iter().take(5).cloned().collect();
+    let source = MockSource::new(partial_blocks, HermesModule::Actions);
+    let transformer = SpacesTransformer::new(kafka_mock.clone());
+    
+    transformer.run_with_source(source, cursor_store.as_ref()).await.unwrap();
+    
+    // Simulate restart - create new source from cursor store
+    let source = MockSource::with_cursor_store(
+        blocks.clone(),
+        HermesModule::Actions,
+        cursor_store.as_ref(),
+        "hermes_spaces",
+    ).await.unwrap();
+    
+    // Should skip already-processed blocks
+    let remaining_blocks: Vec<_> = source.blocks.iter().collect();
+    assert_eq!(remaining_blocks.len(), blocks.len() - 5);
+}
+```
+
+### PostgreSQL Cursor Store (Production)
+
+For completeness, here's the production implementation:
+
+```rust
+// hermes-relay/src/cursor/postgres.rs
+
+pub struct PostgresCursorStore {
+    pool: sqlx::PgPool,
+}
+
+impl PostgresCursorStore {
+    pub fn new(pool: sqlx::PgPool) -> Self {
+        Self { pool }
+    }
+}
+
+#[async_trait]
+impl CursorStore for PostgresCursorStore {
+    async fn load(&self, indexer_id: &str) -> Result<Option<CursorPosition>, anyhow::Error> {
+        let row = sqlx::query_as::<_, (String, i64, i64)>(
+            "SELECT cursor, block_number, persisted_at FROM cursors WHERE indexer_id = $1"
+        )
+        .bind(indexer_id)
+        .fetch_optional(&self.pool)
+        .await?;
+        
+        Ok(row.map(|(cursor, block_number, persisted_at)| CursorPosition {
+            cursor,
+            block_number: block_number as u64,
+            persisted_at: persisted_at as u64,
+        }))
+    }
+    
+    async fn persist(&self, indexer_id: &str, position: &CursorPosition) -> Result<(), anyhow::Error> {
+        sqlx::query(
+            "INSERT INTO cursors (indexer_id, cursor, block_number, persisted_at) \
+             VALUES ($1, $2, $3, $4) \
+             ON CONFLICT (indexer_id) DO UPDATE SET \
+                cursor = EXCLUDED.cursor, \
+                block_number = EXCLUDED.block_number, \
+                persisted_at = EXCLUDED.persisted_at"
+        )
+        .bind(indexer_id)
+        .bind(&position.cursor)
+        .bind(position.block_number as i64)
+        .bind(position.persisted_at as i64)
+        .execute(&self.pool)
+        .await?;
+        
+        Ok(())
+    }
+}
+```
+
 ## Open Questions
 
-1. **IPFS Cache Mocking:** Should we mock the IPFS cache or encode edits directly? Direct encoding is simpler but doesn't test the cache integration.
-
-2. **Undo Signal Testing:** Should `MockSource` support generating undo signals for reorg testing? This would require extending `mock_substream::MockBlock`.
-
-3. **Cursor Persistence:** Should mock mode persist cursors? Useful for testing restart behavior but adds complexity.
+1. **Undo Signal Testing:** Should `MockSource` support generating undo signals for reorg testing? This would require extending `mock_substream::MockBlock`.
 
 ## References
 
