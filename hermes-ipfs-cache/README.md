@@ -72,7 +72,7 @@ The easiest way to run locally is with docker-compose from the `hermes/` directo
 ```bash
 cd hermes
 
-# Set required env vars
+# Set required env vars (or use .env file)
 export SUBSTREAMS_ENDPOINT=https://...
 export SUBSTREAMS_API_TOKEN=...
 
@@ -99,6 +99,25 @@ DATABASE_URL=postgres://postgres:postgres@localhost:5433/ipfs_cache \
 IPFS_GATEWAY=https://gateway.ipfs.io/ipfs/ \
 SUBSTREAMS_ENDPOINT=https://... \
 SUBSTREAMS_API_TOKEN=... \
+cargo run -p hermes-ipfs-cache
+```
+
+### Using a .env file
+
+The service loads environment variables from a `.env` file in the working directory. Create a `.env` file:
+
+```bash
+DATABASE_URL=postgres://postgres:postgres@localhost:5433/ipfs_cache
+IPFS_GATEWAY=https://gateway.ipfs.io/ipfs/
+SUBSTREAMS_ENDPOINT=https://...
+SUBSTREAMS_API_TOKEN=...
+START_BLOCK=0
+RUST_LOG=info,hermes_ipfs_cache=debug
+```
+
+Then simply run:
+
+```bash
 cargo run -p hermes-ipfs-cache
 ```
 
