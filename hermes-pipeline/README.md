@@ -1,4 +1,4 @@
-# Hermes Spaces Transformer
+# Hermes Pipeline
 
 A transformer binary that consumes space-related events from `hermes-substream` via `hermes-relay` and publishes them to Kafka topics.
 
@@ -52,28 +52,28 @@ docker-compose -f hermes/docker-compose.yaml up -d
 SUBSTREAMS_ENDPOINT=https://mainnet.eth.streamingfast.io \
 SUBSTREAMS_API_TOKEN=your-token \
 KAFKA_BROKER=localhost:9092 \
-cargo run --package hermes-spaces
+cargo run --package hermes-pipeline
 ```
 
 ### Docker
 
 ```bash
 # Build
-docker build -f hermes-spaces/Dockerfile -t hermes-spaces .
+docker build -f hermes-pipeline/Dockerfile -t hermes-pipeline .
 
 # Run
 docker run \
   -e SUBSTREAMS_ENDPOINT=https://mainnet.eth.streamingfast.io \
   -e SUBSTREAMS_API_TOKEN=your-token \
   -e KAFKA_BROKER=localhost:9092 \
-  hermes-spaces
+  hermes-pipeline
 ```
 
 ## Architecture
 
 ```
 ┌─────────────────┐     ┌──────────────┐     ┌─────────────────┐
-│ hermes-substream│────▶│ hermes-relay │────▶│  hermes-spaces  │
+│ hermes-substream│────▶│ hermes-relay │────▶│ hermes-pipeline │
 │  (blockchain)   │     │   (stream)   │     │  (transformer)  │
 └─────────────────┘     └──────────────┘     └────────┬────────┘
                                                       │

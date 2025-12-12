@@ -1,4 +1,4 @@
-# Migrate hermes-processor and hermes-spaces to hermes-relay
+# Migrate hermes-processor and hermes-pipeline to hermes-relay
 
 ## Status
 
@@ -9,7 +9,7 @@ Proposed
 Several services still use outdated patterns for consuming blockchain events:
 
 1. **hermes-processor** - Uses `mock-substream` directly instead of `hermes-relay`
-2. **hermes-spaces** - Uses old `hermes-relay` API (`run(&endpoint, module, start, end)`)
+2. **hermes-pipeline** - Uses old `hermes-relay` API (`run(&endpoint, module, start, end)`)
 3. **hermes-ipfs-cache** - Uses old `hermes-relay` API and needs `MockIpfsClient` for testing
 
 These services need to be updated to use the new `StreamSource` config-based API introduced in hermes-relay.
@@ -17,7 +17,7 @@ These services need to be updated to use the new `StreamSource` config-based API
 ## Goals
 
 1. Migrate `hermes-processor` from `mock-substream` to `hermes-relay`
-2. Update `hermes-spaces` to use `StreamSource` API
+2. Update `hermes-pipeline` to use `StreamSource` API
 3. Update `hermes-ipfs-cache` to use `StreamSource` API
 4. Add `MockIpfsClient` for testing IPFS-dependent services
 5. Update GitHub workflows and Dockerfiles
@@ -249,7 +249,7 @@ impl IpfsSource {
      # Remove: - 'mock-substream/**'
    ```
 
-### 2. hermes-spaces
+### 2. hermes-pipeline
 
 **Current state:** Uses old `run(&endpoint, module, start, end)` API.
 
@@ -327,7 +327,7 @@ async fn main() -> Result<()> {
 | `hermes-processor/Cargo.toml` | Replace mock-substream with hermes-relay |
 | `hermes-processor/src/main.rs` | Implement Sink trait, use StreamSource |
 | `hermes-processor/Dockerfile` | Update COPY statements |
-| `hermes-spaces/src/main.rs` | Use StreamSource API |
+| `hermes-pipeline/src/main.rs` | Use StreamSource API |
 | `hermes-ipfs-cache/src/lib.rs` | Make generic over IpfsFetcher |
 | `hermes-ipfs-cache/src/main.rs` | Use StreamSource and IpfsSource |
 | `.github/workflows/hermes-deploy.yml` | Update paths |
@@ -341,7 +341,7 @@ async fn main() -> Result<()> {
 ## Rollout Plan
 
 1. Implement `IpfsFetcher` trait and `MockIpfsClient`
-2. Migrate `hermes-spaces` (smallest change, already uses hermes-relay)
+2. Migrate `hermes-pipeline` (smallest change, already uses hermes-relay)
 3. Migrate `hermes-processor` (larger change, needs full rewrite)
 4. Migrate `hermes-ipfs-cache` (needs generic IpfsFetcher)
 5. Update all workflows and Dockerfiles

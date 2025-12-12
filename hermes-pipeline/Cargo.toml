@@ -1,10 +1,10 @@
 [package]
-name = "hermes-spaces"
+name = "hermes-pipeline"
 version = "0.1.0"
 edition = "2021"
 
 [[bin]]
-name = "hermes-spaces"
+name = "hermes-pipeline"
 path = "src/main.rs"
 
 [dependencies]

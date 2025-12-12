@@ -6,9 +6,9 @@ Proposed
 
 ## Context
 
-The `hermes-spaces` transformer currently handles only a subset of the actions emitted by `hermes-substream`. The original implementation focused on space registration and trust relationships (subspaces), which were the immediate requirements for the initial deployment.
+The `hermes-pipeline` transformer currently handles only a subset of the actions emitted by `hermes-substream`. The original implementation focused on space registration and trust relationships (subspaces), which were the immediate requirements for the initial deployment.
 
-However, `hermes-substream` defines 20 distinct action types that represent the full spectrum of on-chain governance and membership events. To provide a complete picture of space activity for downstream consumers, `hermes-spaces` should be expanded to handle all relevant actions.
+However, `hermes-substream` defines 20 distinct action types that represent the full spectrum of on-chain governance and membership events. To provide a complete picture of space activity for downstream consumers, `hermes-pipeline` should be expanded to handle all relevant actions.
 
 ### Current State
 
@@ -42,11 +42,11 @@ However, `hermes-substream` defines 20 distinct action types that represent the 
 
 ### Scope Consideration
 
-`EDITS_PUBLISHED` is intentionally excluded from `hermes-spaces` as it's handled by the dedicated `hermes-ipfs-cache` transformer, which resolves IPFS content and caches it. This separation follows the Hermes architecture principle of specialized transformers (see `docs/hermes-architecture.md`).
+`EDITS_PUBLISHED` is intentionally excluded from `hermes-pipeline` as it's handled by the dedicated `hermes-ipfs-cache` transformer, which resolves IPFS content and caches it. This separation follows the Hermes architecture principle of specialized transformers (see `docs/hermes-architecture.md`).
 
 ## Decision
 
-Expand `hermes-spaces` to handle all space-related actions except `EDITS_PUBLISHED`. Group related actions into logical Kafka topics to simplify downstream consumption.
+Expand `hermes-pipeline` to handle all space-related actions except `EDITS_PUBLISHED`. Group related actions into logical Kafka topics to simplify downstream consumption.
 
 ### Kafka Topic Design
 
@@ -181,9 +181,9 @@ Priority: High
 3. Update `transformer.rs` to handle `SPACE_MIGRATED`
 
 **Files changed:**
-- `hermes-spaces/src/conversion.rs`
-- `hermes-spaces/src/kafka.rs`
-- `hermes-spaces/src/transformer.rs`
+- `hermes-pipeline/src/conversion.rs`
+- `hermes-pipeline/src/kafka.rs`
+- `hermes-pipeline/src/transformer.rs`
 
 ### Phase 3: Governance Events
 
@@ -196,9 +196,9 @@ Priority: Medium
 3. Update transformer to handle governance actions
 
 **Files changed:**
-- `hermes-spaces/src/conversion.rs`
-- `hermes-spaces/src/kafka.rs`
-- `hermes-spaces/src/transformer.rs`
+- `hermes-pipeline/src/conversion.rs`
+- `hermes-pipeline/src/kafka.rs`
+- `hermes-pipeline/src/transformer.rs`
 
 ### Phase 4: Membership Events
 
@@ -211,9 +211,9 @@ Priority: Medium
 3. Update transformer to handle membership actions
 
 **Files changed:**
-- `hermes-spaces/src/conversion.rs`
-- `hermes-spaces/src/kafka.rs`
-- `hermes-spaces/src/transformer.rs`
+- `hermes-pipeline/src/conversion.rs`
+- `hermes-pipeline/src/kafka.rs`
+- `hermes-pipeline/src/transformer.rs`
 
 ### Phase 5: Moderation Events
 
@@ -226,9 +226,9 @@ Priority: Low
 3. Update transformer to handle moderation actions
 
 **Files changed:**
-- `hermes-spaces/src/conversion.rs`
-- `hermes-spaces/src/kafka.rs`
-- `hermes-spaces/src/transformer.rs`
+- `hermes-pipeline/src/conversion.rs`
+- `hermes-pipeline/src/kafka.rs`
+- `hermes-pipeline/src/transformer.rs`
 
 ### Phase 6: Topic & Voting Events
 
@@ -241,9 +241,9 @@ Priority: Low
 3. Update transformer to handle these actions
 
 **Files changed:**
-- `hermes-spaces/src/conversion.rs`
-- `hermes-spaces/src/kafka.rs`
-- `hermes-spaces/src/transformer.rs`
+- `hermes-pipeline/src/conversion.rs`
+- `hermes-pipeline/src/kafka.rs`
+- `hermes-pipeline/src/transformer.rs`
 
 ### Phase 7: Testing & Documentation
 
@@ -259,10 +259,10 @@ Priority: High (alongside each phase)
 | File | Action | Phase |
 |------|--------|-------|
 | `hermes-schema/proto/space.proto` | Modify | 1 |
-| `hermes-spaces/src/conversion.rs` | Modify | 2-6 |
-| `hermes-spaces/src/kafka.rs` | Modify | 2-6 |
-| `hermes-spaces/src/transformer.rs` | Modify | 2-6 |
-| `hermes-spaces/README.md` | Modify | 7 |
+| `hermes-pipeline/src/conversion.rs` | Modify | 2-6 |
+| `hermes-pipeline/src/kafka.rs` | Modify | 2-6 |
+| `hermes-pipeline/src/transformer.rs` | Modify | 2-6 |
+| `hermes-pipeline/README.md` | Modify | 7 |
 
 ## Consequences
 
@@ -289,7 +289,7 @@ Priority: High (alongside each phase)
 1. **Should governance events be a separate transformer?**
    - Governance has complex state (proposals, voting periods)
    - May warrant dedicated `hermes-governance` transformer
-   - Decision: Start in `hermes-spaces`, extract if complexity grows
+   - Decision: Start in `hermes-pipeline`, extract if complexity grows
 
 2. **Should we add filtering configuration?**
    - Allow operators to enable/disable specific event types
@@ -306,4 +306,3 @@ Priority: High (alongside each phase)
 - `docs/hermes-architecture.md` - Overall Hermes system design
 - `hermes-substream/proto/schema.proto` - Source event definitions
 - `hermes-relay/src/actions.rs` - Action type constants
-- `docs/plans/0001-hermes-spaces-events-transformer.md` - Original implementation plan
