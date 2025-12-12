@@ -986,13 +986,16 @@ dependencies = [
 name = "atlas"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "criterion 0.5.1",
+ "hermes-relay",
  "hermes-schema",
  "hex",
- "mock-substream",
  "prost 0.13.5",
  "rand 0.8.5",
  "rdkafka",
+ "thiserror 1.0.69",
+ "tokio",
 ]
 
 [[package]]

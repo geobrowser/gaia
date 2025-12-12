@@ -4,17 +4,17 @@
 //!
 //! This crate provides:
 //! - [`Sink`] and [`PreprocessedSink`] traits for consuming hermes-substream events
-//! - [`source::MockSource`] and [`source::mock_events`] for testing with mock data
+//! - [`StreamSource`] config for explicitly choosing mock or live data sources
+//! - [`source::MockSource`] and [`source::mock_events`] for custom mock data
 //! - Hermes-specific configuration (module names, package paths)
 //! - Action type constants for filtering raw actions
 //!
 //! ## Usage
 //!
-//! Transformers implement the [`Sink`] trait and call `run` with a type-safe
-//! [`HermesModule`]:
+//! Transformers implement the [`Sink`] trait and call `run` with a [`StreamSource`]:
 //!
 //! ```ignore
-//! use hermes_relay::{Sink, HermesModule};
+//! use hermes_relay::{Sink, StreamSource, HermesModule};
 //! use stream::pb::sf::substreams::rpc::v2::BlockScopedData;
 //!
 //! struct EditsTransformer { /* ... */ }
@@ -28,13 +28,22 @@
 //!     }
 //! }
 //!
-//! // Run with type-safe module selection
-//! transformer.run(&endpoint_url, HermesModule::EditsPublished, start_block, end_block).await?;
+//! // Development/testing: use mock data (all events in a single block)
+//! transformer.run(StreamSource::mock()).await?;
+//!
+//! // Production: use live substream
+//! let source = StreamSource::live(
+//!     "https://substreams.example.com",
+//!     HermesModule::EditsPublished,
+//!     0,
+//!     1000,
+//! );
+//! transformer.run(source).await?;
 //! ```
 //!
 //! ## Mock Data Testing
 //!
-//! Use [`source::MockSource`] to test sink implementations without a real substream:
+//! For more control over mock data, use [`source::MockSource`] directly:
 //!
 //! ```ignore
 //! use hermes_relay::source::{MockSource, mock_events};
@@ -87,8 +96,8 @@ pub mod source;
 // Re-export config types at crate root for convenience
 pub use config::{HermesModule, HERMES_SPKG};
 
-// Re-export sink traits
-pub use sink::{PreprocessedSink, Sink};
+// Re-export sink traits and stream source config
+pub use sink::{PreprocessedSink, Sink, StreamSource};
 
 // Re-export hermes-substream types for consumers
 pub use hermes_substream::pb::hermes::{Action, Actions};

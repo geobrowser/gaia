@@ -3,7 +3,7 @@
 //! # Example
 //!
 //! ```ignore
-//! use hermes_relay::{Sink, HermesModule};
+//! use hermes_relay::{Sink, StreamSource, HermesModule};
 //!
 //! struct MyTransformer { /* ... */ }
 //!
@@ -16,26 +16,79 @@
 //!     }
 //! }
 //!
-//! // Run against real substream
-//! transformer.run(&endpoint_url, HermesModule::Actions, start_block, end_block).await?;
+//! // Run with mock data (for development/testing)
+//! transformer.run(StreamSource::mock()).await?;
 //!
-//! // Or test with mock data
-//! use hermes_relay::source::MockSource;
-//! for block in MockSource::new(data).with_blocks(100, 110) {
-//!     transformer.process_block_scoped_data(&block).await?;
-//! }
+//! // Run with live substream (for production)
+//! let source = StreamSource::live(
+//!     "https://substreams.example.com",
+//!     HermesModule::Actions,
+//!     0,
+//!     1000,
+//! );
+//! transformer.run(source).await?;
 //! ```
 
 use std::{env, process::exit, sync::Arc};
 
 use futures03::StreamExt;
 
-use crate::{HermesModule, HERMES_SPKG};
+use crate::{source::MockSource, HermesModule, HERMES_SPKG};
 use stream::{
     pb::sf::substreams::rpc::v2::{BlockScopedData, BlockUndoSignal},
     substreams::SubstreamsEndpoint,
     substreams_stream::{BlockResponse, SubstreamsStream},
 };
+
+/// Configuration for the stream source.
+///
+/// Use this to explicitly choose between mock and live data sources.
+#[derive(Debug, Clone)]
+pub enum StreamSource {
+    /// Use mock test topology data.
+    ///
+    /// Generates deterministic test data with:
+    /// - 18 space creations (11 canonical + 7 non-canonical)
+    /// - 19 trust extensions (14 explicit + 5 topic-based)
+    /// - 6 edit events
+    ///
+    /// All events are delivered in a single block.
+    Mock,
+
+    /// Connect to a live substream endpoint.
+    Live {
+        /// The substream endpoint URL
+        endpoint_url: String,
+        /// The hermes module to consume
+        module: HermesModule,
+        /// First block to consume (can be negative for relative positioning)
+        start_block: i64,
+        /// Last block to consume
+        end_block: u64,
+    },
+}
+
+impl StreamSource {
+    /// Create a mock source that delivers all test topology events in a single block.
+    pub fn mock() -> Self {
+        Self::Mock
+    }
+
+    /// Create a live source with the given endpoint, module, and block range.
+    pub fn live(
+        endpoint_url: impl Into<String>,
+        module: HermesModule,
+        start_block: i64,
+        end_block: u64,
+    ) -> Self {
+        Self::Live {
+            endpoint_url: endpoint_url.into(),
+            module,
+            start_block,
+            end_block,
+        }
+    }
+}
 
 /// Trait for processing hermes-substream blocks.
 pub trait Sink: Send + Sync {
@@ -64,7 +117,75 @@ pub trait Sink: Send + Sync {
         async { Ok(None) }
     }
 
+    /// Run the sink with the specified source.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// // Development: use mock data
+    /// sink.run(StreamSource::mock()).await?;
+    ///
+    /// // Production: use live substream
+    /// let source = StreamSource::live(
+    ///     "https://substreams.example.com",
+    ///     HermesModule::Actions,
+    ///     0,
+    ///     1000,
+    /// );
+    /// sink.run(source).await?;
+    /// ```
     fn run(
+        &self,
+        source: StreamSource,
+    ) -> impl std::future::Future<Output = Result<(), anyhow::Error>> + Send
+    where
+        Self::Error: Into<anyhow::Error>,
+    {
+        async move {
+            match source {
+                StreamSource::Mock => self.run_mock().await,
+                StreamSource::Live {
+                    endpoint_url,
+                    module,
+                    start_block,
+                    end_block,
+                } => {
+                    self.run_live(&endpoint_url, module, start_block, end_block)
+                        .await
+                }
+            }
+        }
+    }
+
+    /// Run with mock data using the test topology.
+    ///
+    /// All test topology events are delivered in a single block (block 0).
+    fn run_mock(&self) -> impl std::future::Future<Output = Result<(), anyhow::Error>> + Send
+    where
+        Self::Error: Into<anyhow::Error>,
+    {
+        async move {
+            println!("Running with mock test topology");
+            // Use a single block (0) containing all test topology events
+            let source = MockSource::test_topology().single_block(0);
+
+            for block in source {
+                let block_num = block.clock.as_ref().map(|c| c.number).unwrap_or(0);
+                self.process_block_scoped_data(&block)
+                    .await
+                    .map_err(Into::into)?;
+                self.persist_cursor(block.cursor, block_num)
+                    .await
+                    .map_err(Into::into)?;
+            }
+
+            println!("Mock stream consumed");
+            Ok(())
+        }
+    }
+
+    /// Run with a live substream connection.
+    fn run_live(
         &self,
         endpoint_url: &str,
         module: HermesModule,
@@ -151,7 +272,63 @@ pub trait PreprocessedSink<P: Send>: Send + Sync {
         async { Ok(None) }
     }
 
+    /// Run the sink with the specified source.
     fn run(
+        &self,
+        source: StreamSource,
+    ) -> impl std::future::Future<Output = Result<(), anyhow::Error>> + Send
+    where
+        Self::Error: Into<anyhow::Error>,
+    {
+        async move {
+            match source {
+                StreamSource::Mock => self.run_mock().await,
+                StreamSource::Live {
+                    endpoint_url,
+                    module,
+                    start_block,
+                    end_block,
+                } => {
+                    self.run_live(&endpoint_url, module, start_block, end_block)
+                        .await
+                }
+            }
+        }
+    }
+
+    /// Run with mock data using the test topology.
+    ///
+    /// All test topology events are delivered in a single block (block 0).
+    fn run_mock(&self) -> impl std::future::Future<Output = Result<(), anyhow::Error>> + Send
+    where
+        Self::Error: Into<anyhow::Error>,
+    {
+        async move {
+            println!("Running with mock test topology");
+            // Use a single block (0) containing all test topology events
+            let source = MockSource::test_topology().single_block(0);
+
+            for block in source {
+                let block_num = block.clock.as_ref().map(|c| c.number).unwrap_or(0);
+                let preprocessed = self
+                    .preprocess_block_scoped_data(&block)
+                    .await
+                    .map_err(Into::into)?;
+                self.process_block_scoped_data(&block, preprocessed)
+                    .await
+                    .map_err(Into::into)?;
+                self.persist_cursor(block.cursor, block_num)
+                    .await
+                    .map_err(Into::into)?;
+            }
+
+            println!("Mock stream consumed");
+            Ok(())
+        }
+    }
+
+    /// Run with a live substream connection.
+    fn run_live(
         &self,
         endpoint_url: &str,
         module: HermesModule,
