@@ -21,6 +21,7 @@ members = [
     "hermes-processor",
     "hermes-relay",
     "hermes-spaces",
+    "hermes-ipfs-cache",
 
     "atlas",
     "mock-substream",
