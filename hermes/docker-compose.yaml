@@ -68,10 +68,10 @@ services:
       kafka:
         condition: service_healthy
 
-  hermes-processor:
+  hermes-spaces:
     build:
       context: ..
-      dockerfile: hermes-processor/Dockerfile
+      dockerfile: hermes-spaces/Dockerfile
     environment:
       KAFKA_BROKER: kafka:29092
     depends_on:
