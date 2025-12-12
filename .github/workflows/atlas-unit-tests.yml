@@ -5,10 +5,16 @@ on:
     branches: [ main, develop ]
     paths:
       - 'atlas/**'
+      - 'hermes-relay/**'
+      - 'hermes-substream/**'
+      - 'stream/**'
   pull_request:
     branches: [ main, develop ]
     paths:
       - 'atlas/**'
+      - 'hermes-relay/**'
+      - 'hermes-substream/**'
+      - 'stream/**'
 
 env:
   CARGO_TERM_COLOR: always
