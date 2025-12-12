@@ -113,8 +113,10 @@ impl MockIpfsCache {
         // Space A edits
         self.edits
             .insert("QmSpaceAEdit1CreateOrg".into(), create_org_edit());
-        self.edits
-            .insert("QmSpaceAEdit2CreateRelations".into(), create_relations_edit());
+        self.edits.insert(
+            "QmSpaceAEdit2CreateRelations".into(),
+            create_relations_edit(),
+        );
 
         // Space B edits
         self.edits
@@ -137,7 +139,10 @@ impl IpfsCache for MockIpfsCache {
     async fn get(&self, ipfs_hash: &str, space_id: &[u8]) -> Result<CachedEdit, CacheError> {
         // Check if this hash is marked as errored
         if self.errored_hashes.contains(ipfs_hash) {
-            return Ok(CachedEdit::errored(ipfs_hash.to_string(), space_id.to_vec()));
+            return Ok(CachedEdit::errored(
+                ipfs_hash.to_string(),
+                space_id.to_vec(),
+            ));
         }
 
         // Look up the edit
@@ -151,10 +156,7 @@ impl IpfsCache for MockIpfsCache {
         }
     }
 
-    async fn get_batch(
-        &self,
-        requests: &[(&str, &[u8])],
-    ) -> Vec<Result<CachedEdit, CacheError>> {
+    async fn get_batch(&self, requests: &[(&str, &[u8])]) -> Vec<Result<CachedEdit, CacheError>> {
         // Mock cache can just do sequential lookups since it's in-memory
         let mut results = Vec::with_capacity(requests.len());
         for (ipfs_hash, space_id) in requests {
@@ -397,12 +399,24 @@ mod tests {
         let space_id = vec![0x01; 16];
 
         // All 6 edits from mock_events.rs should be present
-        assert!(cache.get("QmRootEdit1CreatePersons", &space_id).await.is_ok());
-        assert!(cache.get("QmRootEdit2AddDescriptions", &space_id).await.is_ok());
+        assert!(cache
+            .get("QmRootEdit1CreatePersons", &space_id)
+            .await
+            .is_ok());
+        assert!(cache
+            .get("QmRootEdit2AddDescriptions", &space_id)
+            .await
+            .is_ok());
         assert!(cache.get("QmSpaceAEdit1CreateOrg", &space_id).await.is_ok());
-        assert!(cache.get("QmSpaceAEdit2CreateRelations", &space_id).await.is_ok());
+        assert!(cache
+            .get("QmSpaceAEdit2CreateRelations", &space_id)
+            .await
+            .is_ok());
         assert!(cache.get("QmSpaceBEdit1CreateDoc", &space_id).await.is_ok());
-        assert!(cache.get("QmSpaceCEdit1CreateTopic", &space_id).await.is_ok());
+        assert!(cache
+            .get("QmSpaceCEdit1CreateTopic", &space_id)
+            .await
+            .is_ok());
     }
 
     #[tokio::test]
@@ -419,7 +433,10 @@ mod tests {
         let cache = MockIpfsCache::new();
         let space_id = vec![0x01; 16];
 
-        let result = cache.get("QmRootEdit1CreatePersons", &space_id).await.unwrap();
+        let result = cache
+            .get("QmRootEdit1CreatePersons", &space_id)
+            .await
+            .unwrap();
 
         assert_eq!(result.cid, "QmRootEdit1CreatePersons");
         assert!(!result.is_errored);
@@ -436,7 +453,10 @@ mod tests {
         let cache = MockIpfsCache::with_errored_hashes(vec!["QmRootEdit1CreatePersons".into()]);
         let space_id = vec![0x01; 16];
 
-        let result = cache.get("QmRootEdit1CreatePersons", &space_id).await.unwrap();
+        let result = cache
+            .get("QmRootEdit1CreatePersons", &space_id)
+            .await
+            .unwrap();
 
         assert!(result.is_errored);
         assert!(!result.has_content());

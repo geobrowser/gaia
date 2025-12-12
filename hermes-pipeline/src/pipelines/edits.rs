@@ -71,7 +71,7 @@ struct EditRequest {
 /// Result of fetching an edit from the cache.
 enum EditFetchResult {
     /// Successfully fetched and converted to HermesEdit.
-    Success(HermesEdit),
+    Success(Box<HermesEdit>),
     /// Cache miss after all retries.
     CacheMiss,
     /// Entry exists but is marked as errored.
@@ -122,7 +122,7 @@ pub async fn transform<C: IpfsCache + 'static>(
     for fetch_result in fetch_results {
         match fetch_result {
             EditFetchResult::Success(event) => {
-                result.events.push(event);
+                result.events.push(*event);
             }
             EditFetchResult::CacheMiss => {
                 result.cache_misses += 1;
@@ -194,7 +194,7 @@ async fn fetch_edit_with_retry<C: IpfsCache>(
                 EditFetchResult::Errored
             } else if let Some(edit) = cached_edit.edit {
                 match convert(action, &edit, meta) {
-                    Ok(event) => EditFetchResult::Success(event),
+                    Ok(event) => EditFetchResult::Success(Box::new(event)),
                     Err(_) => EditFetchResult::FetchFailed,
                 }
             } else {

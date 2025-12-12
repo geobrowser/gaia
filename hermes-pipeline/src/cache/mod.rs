@@ -43,6 +43,7 @@ pub enum CacheError {
 #[derive(Clone, Debug)]
 pub struct CachedEdit {
     /// The IPFS CID/hash that was looked up.
+    #[allow(dead_code)] // Part of public API for future use
     pub cid: String,
 
     /// The deserialized edit content, if available.
@@ -55,6 +56,7 @@ pub struct CachedEdit {
     pub is_errored: bool,
 
     /// The space ID that published this edit (from the action).
+    #[allow(dead_code)] // Part of public API for future use
     pub space_id: Vec<u8>,
 }
 
@@ -80,6 +82,7 @@ impl CachedEdit {
     }
 
     /// Check if this entry has valid edit content.
+    #[allow(dead_code)] // Used in tests and future use
     pub fn has_content(&self) -> bool {
         !self.is_errored && self.edit.is_some()
     }
@@ -118,10 +121,8 @@ pub trait IpfsCache: Send + Sync {
     ///
     /// # Returns
     /// A vector of results, one for each request. The order matches the input.
-    async fn get_batch(
-        &self,
-        requests: &[(&str, &[u8])],
-    ) -> Vec<Result<CachedEdit, CacheError>> {
+    #[allow(dead_code)] // Part of public API for future use
+    async fn get_batch(&self, requests: &[(&str, &[u8])]) -> Vec<Result<CachedEdit, CacheError>> {
         let mut results = Vec::with_capacity(requests.len());
         for (ipfs_hash, space_id) in requests {
             results.push(self.get(ipfs_hash, space_id).await);
@@ -138,10 +139,7 @@ impl<T: IpfsCache + ?Sized> IpfsCache for Arc<T> {
         (**self).get(ipfs_hash, space_id).await
     }
 
-    async fn get_batch(
-        &self,
-        requests: &[(&str, &[u8])],
-    ) -> Vec<Result<CachedEdit, CacheError>> {
+    async fn get_batch(&self, requests: &[(&str, &[u8])]) -> Vec<Result<CachedEdit, CacheError>> {
         (**self).get_batch(requests).await
     }
 }

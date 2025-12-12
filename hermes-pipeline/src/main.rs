@@ -203,7 +203,10 @@ impl Sink for Pipeline {
             self.emitter.emit(event)?;
             println!(
                 "Block {}: Edit published: {} (space: {}, ops: {})",
-                meta.block_number, event.name, event.space_id, event.ops.len()
+                meta.block_number,
+                event.name,
+                event.space_id,
+                event.ops.len()
             );
         }
 
@@ -297,9 +300,7 @@ async fn main() -> anyhow::Result<()> {
 
     println!("\nStarting pipeline with mock data...");
     println!("Subscribing to module: {}", HermesModule::Actions);
-    println!(
-        "Processing: SPACE_REGISTERED, SUBSPACE_ADDED, SUBSPACE_REMOVED, EDITS_PUBLISHED"
-    );
+    println!("Processing: SPACE_REGISTERED, SUBSPACE_ADDED, SUBSPACE_REMOVED, EDITS_PUBLISHED");
     println!("Output topics:");
     println!("  - {} (spaces)", topics::SPACE_CREATIONS);
     println!("  - {} (trust)", topics::TRUST_EXTENSIONS);
