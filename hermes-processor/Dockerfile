@@ -1,4 +1,4 @@
-FROM rust:1.85-bookworm as builder
+FROM rust:1.92-bookworm as builder
 
 # Install build dependencies for rdkafka
 RUN apt-get update && \
