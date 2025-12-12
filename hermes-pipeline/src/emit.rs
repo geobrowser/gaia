@@ -1,8 +1,7 @@
 //! Kafka emission module for sending transformed events.
 //!
-//! This module provides a unified interface for emitting events to Kafka.
-//! Each event type implements the `KafkaEmit` trait which defines how to
-//! encode and send the event.
+//! The `Emitter` wraps a Kafka producer and provides a generic `emit` method
+//! for any type that implements `KafkaEvent + prost::Message`.
 
 use anyhow::Result;
 use prost::Message;
@@ -10,8 +9,15 @@ use prost::Message;
 use hermes_kafka::{BaseProducer, BaseRecord, Header, OwnedHeaders};
 use hermes_schema::pb::{
     knowledge::HermesEdit,
-    space::{hermes_create_space, hermes_space_trust_extension, HermesCreateSpace, HermesSpaceTrustExtension},
+    space::{
+        hermes_create_space, hermes_space_trust_extension, HermesCreateSpace,
+        HermesSpaceTrustExtension,
+    },
 };
+
+// =============================================================================
+// Topics
+// =============================================================================
 
 /// Kafka topics for each event type.
 pub mod topics {
@@ -20,52 +26,34 @@ pub mod topics {
     pub const EDITS: &str = "knowledge.edits";
 }
 
+// =============================================================================
+// KafkaEvent trait
+// =============================================================================
+
 /// Trait for types that can be emitted to Kafka.
-pub trait KafkaEmit {
+///
+/// Each implementing type declares its topic as an associated constant,
+/// providing a compile-time mapping from protobuf type to Kafka topic.
+pub trait KafkaEvent {
     /// The Kafka topic this event type is emitted to.
-    fn topic(&self) -> &'static str;
+    const TOPIC: &'static str;
 
     /// The key used for Kafka partitioning.
     fn key(&self) -> Vec<u8>;
 
-    /// Encode the event to protobuf bytes.
-    fn encode_payload(&self) -> Result<Vec<u8>>;
-
     /// Build Kafka headers for this event.
     fn headers(&self) -> OwnedHeaders;
-
-    /// Emit this event to Kafka.
-    fn emit(&self, producer: &BaseProducer) -> Result<()> {
-        let payload = self.encode_payload()?;
-        let key = self.key();
-
-        let record = BaseRecord::to(self.topic())
-            .key(&key)
-            .payload(&payload)
-            .headers(self.headers());
-
-        producer.send(record).map_err(|(e, _)| anyhow::anyhow!(e))?;
-        Ok(())
-    }
 }
 
 // =============================================================================
-// HermesCreateSpace implementation
+// KafkaEvent implementations
 // =============================================================================
 
-impl KafkaEmit for HermesCreateSpace {
-    fn topic(&self) -> &'static str {
-        topics::SPACE_CREATIONS
-    }
+impl KafkaEvent for HermesCreateSpace {
+    const TOPIC: &'static str = topics::SPACE_CREATIONS;
 
     fn key(&self) -> Vec<u8> {
         self.space_id.clone()
-    }
-
-    fn encode_payload(&self) -> Result<Vec<u8>> {
-        let mut buf = Vec::new();
-        self.encode(&mut buf)?;
-        Ok(buf)
     }
 
     fn headers(&self) -> OwnedHeaders {
@@ -82,23 +70,11 @@ impl KafkaEmit for HermesCreateSpace {
     }
 }
 
-// =============================================================================
-// HermesSpaceTrustExtension implementation
-// =============================================================================
-
-impl KafkaEmit for HermesSpaceTrustExtension {
-    fn topic(&self) -> &'static str {
-        topics::TRUST_EXTENSIONS
-    }
+impl KafkaEvent for HermesSpaceTrustExtension {
+    const TOPIC: &'static str = topics::TRUST_EXTENSIONS;
 
     fn key(&self) -> Vec<u8> {
         self.source_space_id.clone()
-    }
-
-    fn encode_payload(&self) -> Result<Vec<u8>> {
-        let mut buf = Vec::new();
-        self.encode(&mut buf)?;
-        Ok(buf)
     }
 
     fn headers(&self) -> OwnedHeaders {
@@ -116,23 +92,11 @@ impl KafkaEmit for HermesSpaceTrustExtension {
     }
 }
 
-// =============================================================================
-// HermesEdit implementation
-// =============================================================================
-
-impl KafkaEmit for HermesEdit {
-    fn topic(&self) -> &'static str {
-        topics::EDITS
-    }
+impl KafkaEvent for HermesEdit {
+    const TOPIC: &'static str = topics::EDITS;
 
     fn key(&self) -> Vec<u8> {
         self.space_id.as_bytes().to_vec()
-    }
-
-    fn encode_payload(&self) -> Result<Vec<u8>> {
-        let mut buf = Vec::new();
-        self.encode(&mut buf)?;
-        Ok(buf)
     }
 
     fn headers(&self) -> OwnedHeaders {
@@ -149,19 +113,46 @@ impl KafkaEmit for HermesEdit {
 }
 
 // =============================================================================
-// Batch emission helper
+// Emitter
 // =============================================================================
 
-/// Emit a batch of events to Kafka.
-///
-/// Returns the number of events successfully emitted.
-pub fn emit_batch<T: KafkaEmit>(producer: &BaseProducer, events: &[T]) -> Result<u64> {
-    let mut count = 0;
-    for event in events {
-        event.emit(producer)?;
-        count += 1;
+/// Emitter wraps a Kafka producer and provides generic event emission.
+pub struct Emitter {
+    producer: BaseProducer,
+}
+
+impl Emitter {
+    /// Create a new emitter wrapping the given Kafka producer.
+    pub fn new(producer: BaseProducer) -> Self {
+        Self { producer }
     }
-    Ok(count)
+
+    /// Emit any event that implements `KafkaEvent + Message`.
+    pub fn emit<T: KafkaEvent + Message>(&self, event: &T) -> Result<()> {
+        let mut payload = Vec::new();
+        event.encode(&mut payload)?;
+
+        let key = event.key();
+        let record = BaseRecord::to(T::TOPIC)
+            .key(&key)
+            .payload(&payload)
+            .headers(event.headers());
+
+        self.producer
+            .send(record)
+            .map_err(|(e, _)| anyhow::anyhow!(e))?;
+        Ok(())
+    }
+
+    /// Emit a batch of events.
+    pub fn emit_batch<T: KafkaEvent + Message>(&self, events: &[T]) -> Result<u64> {
+        let mut count = 0;
+        for event in events {
+            self.emit(event)?;
+            count += 1;
+        }
+        Ok(count)
+    }
 }
 
 #[cfg(test)]
@@ -170,38 +161,17 @@ mod tests {
 
     #[test]
     fn test_space_topic() {
-        let space = HermesCreateSpace {
-            space_id: vec![1; 16],
-            topic_id: vec![2; 32],
-            payload: None,
-            meta: None,
-        };
-        assert_eq!(space.topic(), topics::SPACE_CREATIONS);
+        assert_eq!(HermesCreateSpace::TOPIC, "space.creations");
     }
 
     #[test]
     fn test_trust_topic() {
-        let trust = HermesSpaceTrustExtension {
-            source_space_id: vec![1; 16],
-            extension: None,
-            meta: None,
-        };
-        assert_eq!(trust.topic(), topics::TRUST_EXTENSIONS);
+        assert_eq!(HermesSpaceTrustExtension::TOPIC, "space.trust.extensions");
     }
 
     #[test]
     fn test_edit_topic() {
-        let edit = HermesEdit {
-            id: vec![1; 16],
-            name: "Test".into(),
-            ops: vec![],
-            authors: vec![],
-            language: None,
-            space_id: "test_space".into(),
-            is_canonical: true,
-            meta: None,
-        };
-        assert_eq!(edit.topic(), topics::EDITS);
+        assert_eq!(HermesEdit::TOPIC, "knowledge.edits");
     }
 
     #[test]

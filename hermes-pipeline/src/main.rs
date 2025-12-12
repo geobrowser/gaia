@@ -35,13 +35,13 @@ use std::sync::Arc;
 
 use prost::Message;
 
-use hermes_kafka::{create_producer, BaseProducer};
+use hermes_kafka::create_producer;
 use hermes_relay::stream::pb::sf::substreams::rpc::v2::BlockScopedData;
 use hermes_relay::stream::utils;
 use hermes_relay::{Actions, HermesModule, Sink, StreamSource};
 
 use cache::MockIpfsCache;
-use emit::{emit_batch, topics, KafkaEmit};
+use emit::{topics, Emitter};
 use pipelines::edits::RetryConfig;
 use pipelines::trust::get_extension_type;
 use pipelines::BlockMetadata;
@@ -83,15 +83,15 @@ impl From<prost::DecodeError> for PipelineError {
 ///
 /// All pipelines run in parallel, then events are emitted to Kafka in order.
 pub struct Pipeline {
-    producer: BaseProducer,
+    emitter: Emitter,
     cache: Arc<MockIpfsCache>,
     retry_config: RetryConfig,
 }
 
 impl Pipeline {
-    pub fn new(producer: BaseProducer) -> Self {
+    pub fn new(emitter: Emitter) -> Self {
         Self {
-            producer,
+            emitter,
             cache: Arc::new(MockIpfsCache::new()),
             retry_config: RetryConfig::default(),
         }
@@ -99,9 +99,9 @@ impl Pipeline {
 
     /// Create a pipeline with custom retry configuration.
     #[allow(dead_code)]
-    pub fn with_retry_config(producer: BaseProducer, retry_config: RetryConfig) -> Self {
+    pub fn with_retry_config(emitter: Emitter, retry_config: RetryConfig) -> Self {
         Self {
-            producer,
+            emitter,
             cache: Arc::new(MockIpfsCache::new()),
             retry_config,
         }
@@ -173,7 +173,7 @@ impl Sink for Pipeline {
 
         // Emit spaces
         for event in &spaces.events {
-            event.emit(&self.producer)?;
+            self.emitter.emit(event)?;
             println!(
                 "Block {}: Space registered: {}",
                 meta.block_number,
@@ -183,8 +183,12 @@ impl Sink for Pipeline {
 
         // Emit trust events
         for trust_event in &trust.events {
-            trust_event.event.emit(&self.producer)?;
-            let action_type = if trust_event.is_removal { "removed" } else { "added" };
+            self.emitter.emit(&trust_event.event)?;
+            let action_type = if trust_event.is_removal {
+                "removed"
+            } else {
+                "added"
+            };
             println!(
                 "Block {}: Subspace {}: {} -> {}",
                 meta.block_number,
@@ -195,8 +199,8 @@ impl Sink for Pipeline {
         }
 
         // Emit edits
-        let edit_count = emit_batch(&self.producer, &edits.events)?;
         for event in &edits.events {
+            self.emitter.emit(event)?;
             println!(
                 "Block {}: Edit published: {} (space: {}, ops: {})",
                 meta.block_number, event.name, event.space_id, event.ops.len()
@@ -229,6 +233,7 @@ impl Sink for Pipeline {
 
         let space_count = spaces.events.len() as u64;
         let trust_count = trust.events.len() as u64;
+        let edit_count = edits.events.len() as u64;
 
         let total = space_count + trust_count + edit_count;
         if total > 0 || edits.cache_misses > 0 || edits.errored_entries > 0 {
@@ -281,13 +286,14 @@ async fn main() -> anyhow::Result<()> {
     println!("Configuration:");
     println!("  Kafka broker: {}", broker);
 
-    // Create Kafka producer
+    // Create Kafka producer and wrap in Emitter
     println!("\nConnecting to Kafka broker...");
     let producer = create_producer(&broker, "hermes-pipeline")?;
+    let emitter = Emitter::new(producer);
     println!("Connected to Kafka broker");
 
     // Create the pipeline
-    let pipeline = Pipeline::new(producer);
+    let pipeline = Pipeline::new(emitter);
 
     println!("\nStarting pipeline with mock data...");
     println!("Subscribing to module: {}", HermesModule::Actions);
