@@ -247,6 +247,7 @@ pub mod test_topology {
     /// - 18 space creations (11 canonical + 7 non-canonical)
     /// - 14 explicit trust edges + 5 topic edges
     /// - 6 edit events
+    #[allow(clippy::vec_init_then_push)]
     pub fn generate() -> Vec<Action> {
         let mut actions = Vec::new();
 

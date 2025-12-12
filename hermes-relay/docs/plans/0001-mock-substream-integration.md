@@ -70,7 +70,7 @@ let actions = Actions {
 };
 
 // Iterate and process directly
-for block in MockSource::new(actions.encode_to_vec()).single_block(100) {
+for block in MockSource::builder(actions.encode_to_vec()).single_block(100) {
     transformer.process_block_scoped_data(&block).await?;
 }
 ```
@@ -156,7 +156,7 @@ let actions = Actions {
     ],
 };
 
-for block in MockSource::new(actions.encode_to_vec()).single_block(100) {
+for block in MockSource::builder(actions.encode_to_vec()).single_block(100) {
     sink.process_block_scoped_data(&block).await?;
 }
 ```
@@ -174,7 +174,7 @@ async fn test_handles_space_creation() {
         ],
     };
     
-    for block in MockSource::new(actions.encode_to_vec()).single_block(100) {
+    for block in MockSource::builder(actions.encode_to_vec()).single_block(100) {
         sink.process_block_scoped_data(&block).await.unwrap();
     }
     

@@ -15,7 +15,7 @@
 //!         mock_events::edit_published([0x01; 16], "QmYwAPJzv5CZsnA..."),
 //!     ],
 //! };
-//! let source = MockSource::new(actions.encode_to_vec()).with_blocks(100, 105);
+//! let source = MockSource::builder(actions.encode_to_vec()).with_blocks(100, 105);
 //!
 //! // Or use test_topology() for the full mock-substream test graph
 //! let source = MockSource::test_topology().with_blocks(100, 105);
@@ -38,7 +38,7 @@ pub struct MockSource {
 
 impl MockSource {
     /// Create a builder with the given protobuf-encoded output.
-    pub fn new(output: Vec<u8>) -> MockSourceBuilder {
+    pub fn builder(output: Vec<u8>) -> MockSourceBuilder {
         MockSourceBuilder {
             output,
             module_name: "map_actions".to_string(),
@@ -52,7 +52,7 @@ impl MockSource {
         let actions = Actions {
             actions: mock_events::test_topology::generate(),
         };
-        Self::new(actions.encode_to_vec())
+        Self::builder(actions.encode_to_vec())
     }
 
     /// Create from pre-built blocks.
@@ -128,7 +128,7 @@ mod tests {
 
     #[test]
     fn test_iterates_blocks_in_order() {
-        let blocks: Vec<_> = MockSource::new(vec![1, 2, 3])
+        let blocks: Vec<_> = MockSource::builder(vec![1, 2, 3])
             .with_blocks(100, 103)
             .into_iter()
             .collect();
@@ -141,7 +141,7 @@ mod tests {
 
     #[test]
     fn test_single_block() {
-        let blocks: Vec<_> = MockSource::new(vec![42])
+        let blocks: Vec<_> = MockSource::builder(vec![42])
             .single_block(999)
             .into_iter()
             .collect();

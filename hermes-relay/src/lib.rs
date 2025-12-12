@@ -60,7 +60,7 @@
 //! };
 //!
 //! // Iterate over mock blocks and process directly
-//! for block in MockSource::new(actions.encode_to_vec()).with_blocks(100, 110) {
+//! for block in MockSource::builder(actions.encode_to_vec()).with_blocks(100, 110) {
 //!     transformer.process_block_scoped_data(&block).await?;
 //! }
 //!

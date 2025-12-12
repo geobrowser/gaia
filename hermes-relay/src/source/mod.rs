@@ -21,7 +21,7 @@
 //!     ],
 //! };
 //!
-//! let source = MockSource::new(actions.encode_to_vec()).with_blocks(100, 110);
+//! let source = MockSource::builder(actions.encode_to_vec()).with_blocks(100, 110);
 //!
 //! // Or use the full test topology matching mock-substream
 //! let source = MockSource::test_topology().with_blocks(100, 110);

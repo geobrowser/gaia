@@ -100,6 +100,7 @@ fn convert_space_registered(action: &Action, meta: &BlockMetadata) -> Option<Spa
 /// - N * 16 bytes: editor space IDs
 /// - 2 bytes: number of members (big-endian u16)
 /// - M * 16 bytes: member space IDs
+#[allow(clippy::type_complexity)]
 fn parse_dao_data(data: &[u8]) -> Option<(Vec<[u8; 16]>, Vec<[u8; 16]>)> {
     if data.len() < 4 {
         return Some((vec![], vec![]));
