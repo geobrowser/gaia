@@ -791,6 +791,181 @@ pub type ProductionCacheSink = IpfsCacheSink<ipfs::IpfsClient>;
 pub type MockCacheSink = IpfsCacheSink<mock_substream::MockIpfsClient>;
 ```
 
+### Local Development Mode
+
+The mock setup isn't just for tests - it's also useful for local development when you want to run the full hermes stack without connecting to real blockchain infrastructure.
+
+#### Runtime Mode Selection
+
+Use an environment variable to switch between production and mock modes:
+
+```rust
+// hermes-ipfs-cache/src/main.rs
+
+use ipfs::{IpfsClient, IpfsFetcher};
+use mock_substream::MockIpfsClient;
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let cache = Cache::new(Storage::new().await?);
+    let mock_mode = env::var("HERMES_MOCK_MODE").is_ok();
+    
+    if mock_mode {
+        run_mock_mode(cache).await
+    } else {
+        run_production_mode(cache).await
+    }
+}
+
+async fn run_production_mode(cache: Cache) -> Result<()> {
+    let ipfs = IpfsClient::new(&env::var("IPFS_GATEWAY_URL")?);
+    let sink = IpfsCacheSink::new(cache, ipfs);
+    
+    sink.run(
+        &env::var("SUBSTREAMS_ENDPOINT")?,
+        HermesModule::EditsPublished,
+        start_block,
+        end_block,
+    ).await
+}
+
+async fn run_mock_mode(cache: Cache) -> Result<()> {
+    tracing::info!("Running in mock mode with deterministic topology");
+    
+    // Generate deterministic test data
+    let blocks = mock_substream::test_topology::generate();
+    
+    // Create mock IPFS client with matching edit data
+    let mock_ipfs = MockIpfsClient::from_topology(&blocks);
+    let sink = IpfsCacheSink::new(cache, mock_ipfs);
+    
+    // Create mock block source
+    let source = MockSource::new(blocks, HermesModule::EditsPublished);
+    
+    // Run with mock data
+    sink.run_with_source(source).await
+}
+```
+
+#### Local Development Workflow
+
+```bash
+# Start local infrastructure
+docker-compose up -d postgres kafka
+
+# Run migrations
+sqlx migrate run
+
+# Run all hermes services in mock mode
+HERMES_MOCK_MODE=1 cargo run --bin hermes-ipfs-cache &
+HERMES_MOCK_MODE=1 cargo run --bin hermes-spaces &
+HERMES_MOCK_MODE=1 cargo run --bin hermes-edits &
+
+# Watch Kafka topics to see the output
+kafka-console-consumer --topic spaces --from-beginning
+kafka-console-consumer --topic edits --from-beginning
+```
+
+#### Docker Compose for Local Dev
+
+Add a mock mode profile to docker-compose:
+
+```yaml
+# hermes/docker-compose.yaml
+
+services:
+  postgres:
+    image: postgres:15
+    environment:
+      POSTGRES_DB: hermes
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    # ... kafka config ...
+
+  # Mock mode services
+  ipfs-cache-mock:
+    build: ../hermes-ipfs-cache
+    environment:
+      - HERMES_MOCK_MODE=1
+      - DATABASE_URL=postgres://postgres:postgres@postgres:5432/hermes
+      - KAFKA_BROKERS=kafka:9092
+    depends_on:
+      - postgres
+      - kafka
+    profiles:
+      - mock
+
+  spaces-mock:
+    build: ../hermes-spaces
+    environment:
+      - HERMES_MOCK_MODE=1
+      - KAFKA_BROKERS=kafka:9092
+    depends_on:
+      - kafka
+    profiles:
+      - mock
+
+  edits-mock:
+    build: ../hermes-edits
+    environment:
+      - HERMES_MOCK_MODE=1
+      - DATABASE_URL=postgres://postgres:postgres@postgres:5432/hermes
+      - KAFKA_BROKERS=kafka:9092
+    depends_on:
+      - postgres
+      - kafka
+      - ipfs-cache-mock
+    profiles:
+      - mock
+```
+
+Run mock mode with:
+
+```bash
+# Start infrastructure + mock services
+docker-compose --profile mock up
+
+# Or just infrastructure (run services locally)
+docker-compose up -d postgres kafka
+```
+
+#### Custom Topology for Local Dev
+
+For more control, allow loading a custom topology:
+
+```rust
+async fn run_mock_mode(cache: Cache) -> Result<()> {
+    let blocks = if let Ok(path) = env::var("HERMES_MOCK_TOPOLOGY") {
+        // Load custom topology from file
+        let json = std::fs::read_to_string(&path)?;
+        serde_json::from_str(&json)?
+    } else {
+        // Use default deterministic topology
+        mock_substream::test_topology::generate()
+    };
+    
+    tracing::info!(
+        blocks = blocks.len(),
+        "Running in mock mode"
+    );
+    
+    let mock_ipfs = MockIpfsClient::from_topology(&blocks);
+    let sink = IpfsCacheSink::new(cache, mock_ipfs);
+    let source = MockSource::new(blocks, HermesModule::EditsPublished);
+    
+    sink.run_with_source(source).await
+}
+```
+
+This allows developers to:
+1. Use the default deterministic topology for quick testing
+2. Load a custom topology JSON file for specific scenarios
+3. Generate topology programmatically for edge cases
+
 ### Test Setup
 
 ```rust
