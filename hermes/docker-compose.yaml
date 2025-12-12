@@ -89,5 +89,37 @@ services:
       kafka:
         condition: service_healthy
 
+  ipfs-cache-postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: ipfs_cache
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5433:5432"
+    volumes:
+      - ipfs-cache-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d ipfs_cache"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  hermes-ipfs-cache:
+    build:
+      context: ..
+      dockerfile: hermes-ipfs-cache/Dockerfile
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@ipfs-cache-postgres:5432/ipfs_cache
+      IPFS_GATEWAY: https://gateway.ipfs.io/ipfs/
+      SUBSTREAMS_ENDPOINT: ${SUBSTREAMS_ENDPOINT}
+      SUBSTREAMS_API_TOKEN: ${SUBSTREAMS_API_TOKEN}
+      START_BLOCK: ${START_BLOCK:-0}
+      RUST_LOG: info,hermes_ipfs_cache=debug
+    depends_on:
+      ipfs-cache-postgres:
+        condition: service_healthy
+
 volumes:
   kafka-data:
+  ipfs-cache-data:
