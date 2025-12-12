@@ -1063,192 +1063,11 @@ kafka-console-consumer --topic spaces --from-beginning
 
 ## Cursor Persistence
 
-Cursor persistence is critical for testing restart and replay scenarios. The mock infrastructure must support persisting and loading cursors to verify that transformers correctly resume from their last processed block.
-
-### CursorStore Trait
-
-Abstract cursor persistence to support both real (PostgreSQL) and mock (in-memory) implementations:
-
-```rust
-// hermes-relay/src/cursor.rs
-
-/// Trait for cursor persistence implementations.
-#[async_trait]
-pub trait CursorStore: Send + Sync {
-    /// Load the cursor for a given indexer ID.
-    async fn load(&self, indexer_id: &str) -> Result<Option<CursorPosition>, anyhow::Error>;
-    
-    /// Persist the cursor for a given indexer ID.
-    async fn persist(&self, indexer_id: &str, position: &CursorPosition) -> Result<(), anyhow::Error>;
-}
-
-/// Cursor position in the block stream.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct CursorPosition {
-    /// Opaque cursor string for resuming the stream.
-    pub cursor: String,
-    /// Block number for debugging/logging.
-    pub block_number: u64,
-    /// Timestamp when this cursor was persisted.
-    pub persisted_at: u64,
-}
-```
-
-### Mock Cursor Store
-
-In-memory implementation for testing:
-
-```rust
-// mock-substream/src/cursor.rs (or hermes-relay/src/cursor/mock.rs)
-
-use std::collections::HashMap;
-use std::sync::RwLock;
-
-/// In-memory cursor store for testing.
-pub struct MockCursorStore {
-    cursors: RwLock<HashMap<String, CursorPosition>>,
-    /// History of all persist calls for verification.
-    history: RwLock<Vec<(String, CursorPosition)>>,
-}
-
-impl MockCursorStore {
-    pub fn new() -> Self {
-        Self {
-            cursors: RwLock::new(HashMap::new()),
-            history: RwLock::new(Vec::new()),
-        }
-    }
-    
-    /// Create a cursor store pre-populated with a starting position.
-    ///
-    /// Useful for testing resume-from-cursor scenarios.
-    pub fn with_cursor(indexer_id: &str, position: CursorPosition) -> Self {
-        let store = Self::new();
-        store.cursors.write().unwrap().insert(indexer_id.to_string(), position);
-        store
-    }
-    
-    /// Get the history of all persist calls.
-    ///
-    /// Useful for verifying cursor progression in tests.
-    pub fn persist_history(&self) -> Vec<(String, CursorPosition)> {
-        self.history.read().unwrap().clone()
-    }
-    
-    /// Get the number of times persist was called for an indexer.
-    pub fn persist_count(&self, indexer_id: &str) -> usize {
-        self.history.read().unwrap()
-            .iter()
-            .filter(|(id, _)| id == indexer_id)
-            .count()
-    }
-    
-    /// Clear all cursors and history. Useful between test runs.
-    pub fn clear(&self) {
-        self.cursors.write().unwrap().clear();
-        self.history.write().unwrap().clear();
-    }
-}
-
-#[async_trait]
-impl CursorStore for MockCursorStore {
-    async fn load(&self, indexer_id: &str) -> Result<Option<CursorPosition>, anyhow::Error> {
-        Ok(self.cursors.read().unwrap().get(indexer_id).cloned())
-    }
-    
-    async fn persist(&self, indexer_id: &str, position: &CursorPosition) -> Result<(), anyhow::Error> {
-        self.cursors.write().unwrap().insert(indexer_id.to_string(), position.clone());
-        self.history.write().unwrap().push((indexer_id.to_string(), position.clone()));
-        Ok(())
-    }
-}
-```
-
-### Updated Sink Trait
-
-Modify the `Sink` trait to accept a `CursorStore`:
-
-```rust
-// hermes-relay/src/sink.rs
-
-pub trait Sink: Send + Sync {
-    type Error: std::error::Error + Send + Sync + 'static;
-
-    /// The indexer ID used for cursor persistence.
-    fn indexer_id(&self) -> &str;
-
-    /// Process a new block of data.
-    fn process_block_scoped_data(
-        &self,
-        data: &BlockScopedData,
-    ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send;
-
-    /// Handle a block undo signal (chain reorganization).
-    fn process_block_undo_signal(&self, _undo_signal: &BlockUndoSignal) -> Result<(), Self::Error> {
-        unimplemented!("you must implement block undo handling, or request only final blocks")
-    }
-
-    /// Run the sink with a custom block source and cursor store.
-    fn run_with_source<S, C>(
-        &self,
-        source: S,
-        cursor_store: C,
-    ) -> impl std::future::Future<Output = Result<(), anyhow::Error>> + Send
-    where
-        S: BlockSource,
-        C: CursorStore,
-    {
-        async move {
-            let mut source = source;
-            
-            loop {
-                match source.next().await {
-                    None => {
-                        println!("Stream consumed");
-                        break;
-                    }
-                    Some(Ok(BlockResponse::New(data))) => {
-                        let block_scoped_data = self.block_data_to_scoped(&data)?;
-                        self.process_block_scoped_data(&block_scoped_data).await?;
-                        
-                        // Persist cursor after successful processing
-                        cursor_store.persist(self.indexer_id(), &CursorPosition {
-                            cursor: data.cursor,
-                            block_number: data.block_number,
-                            persisted_at: std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .unwrap()
-                                .as_secs(),
-                        }).await?;
-                    }
-                    Some(Ok(BlockResponse::Undo(signal))) => {
-                        self.process_block_undo_signal(&signal.into())?;
-                        
-                        cursor_store.persist(self.indexer_id(), &CursorPosition {
-                            cursor: signal.last_valid_cursor,
-                            block_number: signal.last_valid_block,
-                            persisted_at: std::time::SystemTime::now()
-                                .duration_since(std::time::UNIX_EPOCH)
-                                .unwrap()
-                                .as_secs(),
-                        }).await?;
-                    }
-                    Some(Err(err)) => {
-                        println!("Stream terminated with error: {:?}", err);
-                        std::process::exit(1);
-                    }
-                }
-            }
-            
-            Ok(())
-        }
-    }
-}
-```
+Cursor persistence is critical for testing restart and replay scenarios. We use the real PostgreSQL cursor storage in tests to verify that transformers correctly resume from their last processed block.
 
 ### MockSource with Cursor Resume
 
-The `MockSource` should support starting from a cursor position:
+The `MockSource` should support starting from a cursor position stored in the database:
 
 ```rust
 // hermes-relay/src/source/mock.rs
@@ -1278,68 +1097,50 @@ impl MockSource {
         
         source
     }
-    
-    /// Create a mock source with cursor store integration.
-    ///
-    /// Automatically loads the cursor and resumes from the correct position.
-    pub async fn with_cursor_store<C: CursorStore>(
-        blocks: Vec<MockBlock>,
-        module: HermesModule,
-        cursor_store: &C,
-        indexer_id: &str,
-    ) -> Result<Self, anyhow::Error> {
-        let cursor = cursor_store.load(indexer_id).await?;
-        
-        Ok(match cursor {
-            Some(pos) => Self::resume_from(blocks, module, &pos.cursor),
-            None => Self::new(blocks, module),
-        })
-    }
 }
 ```
 
 ### Testing Cursor Persistence
 
+Tests use real PostgreSQL to verify cursor behavior:
+
 ```rust
 #[tokio::test]
 async fn test_cursor_persisted_after_each_block() {
+    let storage = Storage::new().await.unwrap();
     let blocks = mock_substream::test_topology::generate();
     let block_count = blocks.len();
     
     let source = MockSource::new(blocks, HermesModule::Actions);
-    let cursor_store = MockCursorStore::new();
-    let transformer = SpacesTransformer::new(kafka_mock);
+    let transformer = SpacesTransformer::new(storage.clone(), kafka_mock);
     
-    transformer.run_with_source(source, &cursor_store).await.unwrap();
+    transformer.run_with_source(source).await.unwrap();
     
-    // Verify cursor was persisted after each block
-    assert_eq!(cursor_store.persist_count("hermes_spaces"), block_count);
-    
-    // Verify final cursor position
-    let final_cursor = cursor_store.load("hermes_spaces").await.unwrap().unwrap();
+    // Verify final cursor position in real database
+    let final_cursor = storage.load_cursor("hermes_spaces").await.unwrap().unwrap();
     assert_eq!(final_cursor.block_number, 1_000_000 + block_count as u64 - 1);
 }
 
 #[tokio::test]
 async fn test_resume_from_cursor() {
+    let storage = Storage::new().await.unwrap();
     let blocks = mock_substream::test_topology::generate();
     let total_blocks = blocks.len();
     
     // Process first half
-    let cursor_store = MockCursorStore::new();
     let first_half: Vec<_> = blocks.iter().take(total_blocks / 2).cloned().collect();
     let source = MockSource::new(first_half, HermesModule::Actions);
-    let transformer = SpacesTransformer::new(kafka_mock.clone());
+    let transformer = SpacesTransformer::new(storage.clone(), kafka_mock.clone());
     
-    transformer.run_with_source(source, &cursor_store).await.unwrap();
+    transformer.run_with_source(source).await.unwrap();
     
-    let halfway_cursor = cursor_store.load("hermes_spaces").await.unwrap().unwrap();
+    let halfway_cursor = storage.load_cursor("hermes_spaces").await.unwrap().unwrap();
     let first_half_messages = kafka_mock.messages.len();
     
     // Resume from cursor with all blocks
     let source = MockSource::resume_from(blocks, HermesModule::Actions, &halfway_cursor.cursor);
     
-    transformer.run_with_source(source, &cursor_store).await.unwrap();
+    transformer.run_with_source(source).await.unwrap();
     
     // Should have processed remaining blocks
     let total_messages = kafka_mock.messages.len();
@@ -1348,23 +1149,19 @@ async fn test_resume_from_cursor() {
 
 #[tokio::test]
 async fn test_restart_from_persisted_cursor() {
+    let storage = Storage::new().await.unwrap();
     let blocks = mock_substream::test_topology::generate();
     
     // First run - process some blocks then "crash"
-    let cursor_store = Arc::new(MockCursorStore::new());
     let partial_blocks: Vec<_> = blocks.iter().take(5).cloned().collect();
     let source = MockSource::new(partial_blocks, HermesModule::Actions);
-    let transformer = SpacesTransformer::new(kafka_mock.clone());
+    let transformer = SpacesTransformer::new(storage.clone(), kafka_mock.clone());
     
-    transformer.run_with_source(source, cursor_store.as_ref()).await.unwrap();
+    transformer.run_with_source(source).await.unwrap();
     
-    // Simulate restart - create new source from cursor store
-    let source = MockSource::with_cursor_store(
-        blocks.clone(),
-        HermesModule::Actions,
-        cursor_store.as_ref(),
-        "hermes_spaces",
-    ).await.unwrap();
+    // Simulate restart - load cursor from database and resume
+    let cursor = storage.load_cursor("hermes_spaces").await.unwrap().unwrap();
+    let source = MockSource::resume_from(blocks.clone(), HermesModule::Actions, &cursor.cursor);
     
     // Should skip already-processed blocks
     let remaining_blocks: Vec<_> = source.blocks.iter().collect();
@@ -1372,58 +1169,314 @@ async fn test_restart_from_persisted_cursor() {
 }
 ```
 
-### PostgreSQL Cursor Store (Production)
+## Testing Failure States
 
-For completeness, here's the production implementation:
+Distributed systems fail in various ways. The mock infrastructure should support simulating failure modes to test resilience, especially around the IPFS cache which is a critical coordination point between services.
+
+### IPFS Fetch Failures
+
+The `MockIpfsClient` can be extended to simulate various failure modes:
 
 ```rust
-// hermes-relay/src/cursor/postgres.rs
+// mock-substream/src/ipfs.rs
 
-pub struct PostgresCursorStore {
-    pool: sqlx::PgPool,
+/// Failure modes that can be injected into the mock IPFS client.
+#[derive(Debug, Clone)]
+pub enum IpfsFailureMode {
+    /// All fetches succeed (default)
+    None,
+    /// Specific CIDs fail with an error
+    FailCids(HashSet<String>),
+    /// Random failures with given probability (0.0 - 1.0)
+    RandomFailure(f64),
+    /// All fetches timeout (hang forever)
+    Timeout,
+    /// Fetches succeed but return malformed/corrupt data
+    CorruptData,
+    /// Fetches fail for the first N attempts, then succeed
+    FailThenSucceed { attempts: usize },
+    /// Fetches are delayed by a fixed duration
+    Delay(Duration),
 }
 
-impl PostgresCursorStore {
-    pub fn new(pool: sqlx::PgPool) -> Self {
-        Self { pool }
+pub struct MockIpfsClient {
+    edits: RwLock<HashMap<String, Vec<u8>>>,
+    failure_mode: RwLock<IpfsFailureMode>,
+    attempt_counts: RwLock<HashMap<String, usize>>,
+}
+
+impl MockIpfsClient {
+    /// Set the failure mode for this client.
+    pub fn set_failure_mode(&self, mode: IpfsFailureMode) {
+        *self.failure_mode.write().unwrap() = mode;
+    }
+    
+    /// Simulate a network partition - all fetches fail.
+    pub fn simulate_network_partition(&self) {
+        self.set_failure_mode(IpfsFailureMode::RandomFailure(1.0));
+    }
+    
+    /// Simulate network recovery - fetches succeed again.
+    pub fn simulate_network_recovery(&self) {
+        self.set_failure_mode(IpfsFailureMode::None);
+    }
+    
+    /// Simulate specific CIDs being unavailable (e.g., not yet pinned).
+    pub fn simulate_missing_cids(&self, cids: HashSet<String>) {
+        self.set_failure_mode(IpfsFailureMode::FailCids(cids));
     }
 }
 
 #[async_trait]
-impl CursorStore for PostgresCursorStore {
-    async fn load(&self, indexer_id: &str) -> Result<Option<CursorPosition>, anyhow::Error> {
-        let row = sqlx::query_as::<_, (String, i64, i64)>(
-            "SELECT cursor, block_number, persisted_at FROM cursors WHERE indexer_id = $1"
-        )
-        .bind(indexer_id)
-        .fetch_optional(&self.pool)
-        .await?;
+impl IpfsFetcher for MockIpfsClient {
+    async fn get(&self, uri: &str) -> Result<Edit> {
+        let cid = uri.split_once("://").map(|(_, c)| c).unwrap_or(uri);
         
-        Ok(row.map(|(cursor, block_number, persisted_at)| CursorPosition {
-            cursor,
-            block_number: block_number as u64,
-            persisted_at: persisted_at as u64,
-        }))
+        // Check failure mode
+        match &*self.failure_mode.read().unwrap() {
+            IpfsFailureMode::None => {}
+            
+            IpfsFailureMode::FailCids(cids) => {
+                if cids.contains(cid) {
+                    return Err(IpfsError::CidError(format!("CID unavailable: {}", cid)));
+                }
+            }
+            
+            IpfsFailureMode::RandomFailure(probability) => {
+                if rand::random::<f64>() < *probability {
+                    return Err(IpfsError::Io(std::io::Error::new(
+                        std::io::ErrorKind::ConnectionReset,
+                        "Simulated network failure",
+                    )));
+                }
+            }
+            
+            IpfsFailureMode::Timeout => {
+                // Hang forever (or until test timeout)
+                futures::future::pending::<()>().await;
+                unreachable!()
+            }
+            
+            IpfsFailureMode::CorruptData => {
+                return Err(IpfsError::DeserializeError(
+                    wire::deserialize::DeserializeError::InvalidData("Corrupt data".into())
+                ));
+            }
+            
+            IpfsFailureMode::FailThenSucceed { attempts } => {
+                let mut counts = self.attempt_counts.write().unwrap();
+                let count = counts.entry(cid.to_string()).or_insert(0);
+                *count += 1;
+                if *count <= *attempts {
+                    return Err(IpfsError::Io(std::io::Error::new(
+                        std::io::ErrorKind::ConnectionReset,
+                        format!("Simulated failure, attempt {}/{}", count, attempts),
+                    )));
+                }
+            }
+            
+            IpfsFailureMode::Delay(duration) => {
+                tokio::time::sleep(*duration).await;
+            }
+        }
+        
+        // Normal fetch
+        let bytes = self.get_bytes(cid).await?;
+        let edit = wire::deserialize::deserialize(&bytes)?;
+        Ok(edit)
+    }
+}
+```
+
+### Cache Failure Scenarios
+
+Test scenarios for IPFS cache resilience:
+
+```rust
+#[tokio::test]
+async fn test_cache_handles_ipfs_timeout() {
+    let blocks = test_topology::generate();
+    let mock_ipfs = MockIpfsClient::from_topology(&blocks);
+    
+    // Simulate IPFS gateway being slow/unavailable
+    mock_ipfs.set_failure_mode(IpfsFailureMode::Timeout);
+    
+    let cache = Cache::new(Storage::new().await.unwrap());
+    let sink = IpfsCacheSink::new(cache, mock_ipfs);
+    let source = MockSource::new(blocks, HermesModule::EditsPublished);
+    
+    // Should timeout or handle gracefully (depending on implementation)
+    let result = tokio::time::timeout(
+        Duration::from_secs(5),
+        sink.run_with_source(source),
+    ).await;
+    
+    assert!(result.is_err(), "Should timeout when IPFS is unavailable");
+}
+
+#[tokio::test]
+async fn test_cache_retries_failed_fetches() {
+    let blocks = test_topology::generate();
+    let mock_ipfs = MockIpfsClient::from_topology(&blocks);
+    
+    // Fail first 2 attempts, then succeed
+    mock_ipfs.set_failure_mode(IpfsFailureMode::FailThenSucceed { attempts: 2 });
+    
+    let cache = Cache::new(Storage::new().await.unwrap());
+    let sink = IpfsCacheSink::new(cache, mock_ipfs);
+    let source = MockSource::new(blocks, HermesModule::EditsPublished);
+    
+    // Should eventually succeed after retries
+    sink.run_with_source(source).await.unwrap();
+    
+    // Verify all edits were cached
+    // ...
+}
+
+#[tokio::test]
+async fn test_cache_marks_corrupt_data_as_errored() {
+    let blocks = test_topology::generate();
+    let mock_ipfs = MockIpfsClient::from_topology(&blocks);
+    
+    // Return corrupt data for all fetches
+    mock_ipfs.set_failure_mode(IpfsFailureMode::CorruptData);
+    
+    let cache = Cache::new(Storage::new().await.unwrap());
+    let sink = IpfsCacheSink::new(cache, mock_ipfs);
+    let source = MockSource::new(blocks, HermesModule::EditsPublished);
+    
+    sink.run_with_source(source).await.unwrap();
+    
+    // Verify edits were cached but marked as errored
+    let item = cache.get("ipfs://Qm...").await.unwrap().unwrap();
+    assert!(item.is_errored);
+    assert!(item.json.is_none());
+}
+
+#[tokio::test]
+async fn test_cache_handles_partial_failures() {
+    let blocks = test_topology::generate();
+    let mock_ipfs = MockIpfsClient::from_topology(&blocks);
+    
+    // Only some CIDs fail
+    let failing_cids: HashSet<_> = vec![
+        "Qm00000000000000000000000000000000e1".to_string(),
+        "Qm00000000000000000000000000000000ea".to_string(),
+    ].into_iter().collect();
+    mock_ipfs.set_failure_mode(IpfsFailureMode::FailCids(failing_cids));
+    
+    let cache = Cache::new(Storage::new().await.unwrap());
+    let sink = IpfsCacheSink::new(cache, mock_ipfs);
+    let source = MockSource::new(blocks, HermesModule::EditsPublished);
+    
+    sink.run_with_source(source).await.unwrap();
+    
+    // Successful CIDs should be cached normally
+    // Failed CIDs should be marked as errored
+}
+```
+
+### Downstream Consumer Resilience
+
+Test that downstream consumers (edits transformer) handle cache states correctly:
+
+```rust
+#[tokio::test]
+async fn test_edits_transformer_waits_for_cache() {
+    // Cache is empty - edits transformer should wait/retry
+    let cache = Cache::new(Storage::new().await.unwrap());
+    let transformer = EditsTransformer::new(cache, kafka_producer);
+    
+    let blocks = test_topology::generate();
+    let source = MockSource::new(blocks, HermesModule::EditsPublished);
+    
+    // Start transformer (will wait for cache)
+    let transformer_handle = tokio::spawn(async move {
+        transformer.run_with_source(source).await
+    });
+    
+    // Simulate cache being populated after a delay
+    tokio::time::sleep(Duration::from_millis(500)).await;
+    populate_cache_from_topology(&cache, &blocks).await;
+    
+    // Transformer should complete successfully
+    transformer_handle.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn test_edits_transformer_skips_errored_cache_entries() {
+    let blocks = test_topology::generate();
+    
+    // Pre-populate cache with some errored entries
+    let cache = Cache::new(Storage::new().await.unwrap());
+    for block in &blocks {
+        for event in &block.events {
+            if let MockEvent::EditPublished(edit) = event {
+                let cid = MockIpfsClient::deterministic_cid(&edit.edit_id);
+                let is_errored = edit.edit_id == EDIT_ROOT_1; // Mark one as errored
+                
+                cache.put(&CacheItem {
+                    uri: format!("ipfs://{}", cid),
+                    json: if is_errored { None } else { Some(to_grc20_edit(edit)) },
+                    block: block.timestamp.to_string(),
+                    space_id: hex::encode(&edit.space_id),
+                    is_errored,
+                }).await.unwrap();
+            }
+        }
     }
     
-    async fn persist(&self, indexer_id: &str, position: &CursorPosition) -> Result<(), anyhow::Error> {
-        sqlx::query(
-            "INSERT INTO cursors (indexer_id, cursor, block_number, persisted_at) \
-             VALUES ($1, $2, $3, $4) \
-             ON CONFLICT (indexer_id) DO UPDATE SET \
-                cursor = EXCLUDED.cursor, \
-                block_number = EXCLUDED.block_number, \
-                persisted_at = EXCLUDED.persisted_at"
-        )
-        .bind(indexer_id)
-        .bind(&position.cursor)
-        .bind(position.block_number as i64)
-        .bind(position.persisted_at as i64)
-        .execute(&self.pool)
-        .await?;
-        
-        Ok(())
-    }
+    let transformer = EditsTransformer::new(cache, kafka_producer);
+    let source = MockSource::new(blocks, HermesModule::EditsPublished);
+    
+    transformer.run_with_source(source).await.unwrap();
+    
+    // Should have produced 5 edits (skipped 1 errored)
+    assert_eq!(kafka_mock.messages.len(), 5);
+}
+```
+
+### Network Partition Simulation
+
+Test behavior during network partitions between services:
+
+```rust
+#[tokio::test]
+async fn test_cache_cursor_consistency_during_partition() {
+    let blocks = test_topology::generate();
+    let mock_ipfs = MockIpfsClient::from_topology(&blocks);
+    let cache = Cache::new(Storage::new().await.unwrap());
+    let sink = IpfsCacheSink::new(cache.clone(), mock_ipfs.clone());
+    
+    // Process first half of blocks
+    let first_half: Vec<_> = blocks.iter().take(blocks.len() / 2).cloned().collect();
+    let source = MockSource::new(first_half, HermesModule::EditsPublished);
+    sink.run_with_source(source).await.unwrap();
+    
+    let cursor_before = cache.load_cursor("hermes_ipfs_cache").await.unwrap();
+    
+    // Simulate network partition during second half
+    mock_ipfs.simulate_network_partition();
+    
+    let second_half: Vec<_> = blocks.iter().skip(blocks.len() / 2).cloned().collect();
+    let source = MockSource::new(second_half.clone(), HermesModule::EditsPublished);
+    
+    // This should fail or timeout
+    let result = sink.run_with_source(source).await;
+    assert!(result.is_err());
+    
+    // Cursor should not have advanced past the partition
+    let cursor_after = cache.load_cursor("hermes_ipfs_cache").await.unwrap();
+    assert_eq!(cursor_before, cursor_after, "Cursor should not advance during failed processing");
+    
+    // Recover and retry
+    mock_ipfs.simulate_network_recovery();
+    let source = MockSource::new(second_half, HermesModule::EditsPublished);
+    sink.run_with_source(source).await.unwrap();
+    
+    // Now cursor should have advanced
+    let cursor_final = cache.load_cursor("hermes_ipfs_cache").await.unwrap();
+    assert!(cursor_final.unwrap().block_number > cursor_before.unwrap().block_number);
 }
 ```
 
