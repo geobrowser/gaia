@@ -2,7 +2,7 @@
 
 ## Status
 
-Proposed
+Implemented (Superseded by hermes-spaces/docs/plans/0002-edits-published-support.md for edit handling)
 
 ## Context
 
@@ -25,7 +25,7 @@ Create a new binary crate `hermes-spaces` that:
    - `SPACE_REGISTERED` - new space registrations
    - `SUBSPACE_ADDED` - trust extensions (verified/related/subtopic)
    - `SUBSPACE_REMOVED` - trust revocations
-3. **Excludes edit events** (`EDITS_PUBLISHED`) - these will be handled by a separate `hermes-edits` transformer
+3. **Handles edit events** (`EDITS_PUBLISHED`) - with IPFS cache integration (see `hermes-spaces/docs/plans/0002-edits-published-support.md`)
 4. **Transforms events** into Hermes protobuf messages:
    - `HermesCreateSpace` for space registrations
    - `HermesSpaceTrustExtension` for trust changes
@@ -207,6 +207,10 @@ See `hermes-relay/docs/decisions/0001-multiple-substreams-modules-consumers.md` 
 ## Future Work
 
 1. **Cursor persistence**: Add PostgreSQL or Redis storage for cursor
-2. **hermes-edits transformer**: Similar pattern for edit events with IPFS resolution
-3. **Shared Kafka utilities**: Extract common code if pattern repeats
-4. **Metrics/observability**: Add Prometheus metrics, structured logging
+2. **Shared Kafka utilities**: Extract common code if pattern repeats
+3. **Metrics/observability**: Add Prometheus metrics, structured logging
+
+## Related Plans
+
+- `hermes-spaces/docs/plans/0001-complete-action-support.md` - Expanding to handle all action types
+- `hermes-spaces/docs/plans/0002-edits-published-support.md` - Adding EDITS_PUBLISHED support with IPFS cache

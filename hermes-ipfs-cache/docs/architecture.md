@@ -4,7 +4,7 @@ This document describes the implementation details of the IPFS cache service.
 
 ## Overview
 
-The IPFS cache pre-fetches content for `EditsPublished` events from hermes-substream. It runs ahead of the edits transformer, storing resolved IPFS content in PostgreSQL so downstream consumers don't block on network I/O.
+The IPFS cache pre-fetches content for `EditsPublished` events from hermes-substream. It runs ahead of `hermes-spaces`, storing resolved IPFS content in PostgreSQL so the edits pipeline doesn't block on network I/O.
 
 ```
 ┌─────────────────┐     ┌─────────────────────┐     ┌─────────────────┐
@@ -16,7 +16,7 @@ The IPFS cache pre-fetches content for `EditsPublished` events from hermes-subst
                         │  └───────┬───────┘  │              │
                         │          │          │              ▼
                         │  ┌───────▼───────┐  │     ┌─────────────────┐
-                        │  │  Semaphore    │  │     │ edits transformer│
+                        │  │  Semaphore    │  │     │  hermes-spaces  │
                         │  │ (20 permits)  │  │     │  (reads cache)  │
                         │  └───────┬───────┘  │     └─────────────────┘
                         │          │          │
