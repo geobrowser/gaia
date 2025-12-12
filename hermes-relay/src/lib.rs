@@ -43,14 +43,16 @@
 //! ## Mock Data Testing
 //!
 //! Use `run_with_source` with a [`source::MockSource`] for testing without
-//! a real substream connection (requires the `mock` feature):
+//! a real substream connection:
 //!
 //! ```ignore
 //! use hermes_relay::{Sink, HermesModule};
 //! use hermes_relay::source::MockSource;
+//! use hermes_substream::pb::hermes::Actions;
+//! use prost::Message;
 //!
-//! let blocks = mock_substream::test_topology::generate();
-//! let source = MockSource::new(blocks, HermesModule::Actions);
+//! let actions = Actions { actions: vec![/* ... */] };
+//! let source = MockSource::new(actions.encode_to_vec()).with_blocks(1000, 1010);
 //! transformer.run_with_source(source).await?;
 //! ```
 //!
