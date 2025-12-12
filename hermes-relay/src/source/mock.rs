@@ -3,19 +3,33 @@
 //! # Example
 //!
 //! ```ignore
-//! use hermes_relay::source::MockSource;
+//! use hermes_relay::source::{MockSource, mock_events};
 //! use hermes_substream::pb::hermes::Actions;
 //! use prost::Message;
 //!
-//! let actions = Actions { actions: vec![/* ... */] };
+//! // Create with specific events
+//! let actions = Actions {
+//!     actions: vec![
+//!         mock_events::space_created([0x01; 16], [0xaa; 32]),
+//!         mock_events::trust_extended_verified([0x01; 16], [0x02; 16]),
+//!         mock_events::edit_published([0x01; 16], "QmYwAPJzv5CZsnA..."),
+//!     ],
+//! };
 //! let source = MockSource::new(actions.encode_to_vec()).with_blocks(100, 105);
+//!
+//! // Or use test_topology() for the full mock-substream test graph
+//! let source = MockSource::test_topology().with_blocks(100, 105);
 //!
 //! for block in source {
 //!     sink.process_block_scoped_data(&block).await?;
 //! }
 //! ```
 
+use hermes_substream::pb::hermes::Actions;
+use prost::Message;
 use stream::pb::sf::substreams::{rpc::v2::BlockScopedData, v1::Clock};
+
+use super::mock_events;
 
 /// Creates mock `BlockScopedData` for testing.
 pub struct MockSource {
@@ -29,6 +43,16 @@ impl MockSource {
             output,
             module_name: "map_actions".to_string(),
         }
+    }
+
+    /// Create a builder with the full test topology from mock-substream.
+    ///
+    /// Generates 18 spaces, 19 trust edges, and 6 edits.
+    pub fn test_topology() -> MockSourceBuilder {
+        let actions = Actions {
+            actions: mock_events::test_topology::generate(),
+        };
+        Self::new(actions.encode_to_vec())
     }
 
     /// Create from pre-built blocks.

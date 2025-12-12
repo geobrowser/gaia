@@ -4,7 +4,7 @@
 //!
 //! This crate provides:
 //! - [`Sink`] and [`PreprocessedSink`] traits for consuming hermes-substream events
-//! - [`source::BlockSource`] trait for abstracting over real and mock data sources
+//! - [`source::MockSource`] and [`source::mock_events`] for testing with mock data
 //! - Hermes-specific configuration (module names, package paths)
 //! - Action type constants for filtering raw actions
 //!
@@ -26,34 +26,39 @@
 //!         // Process the block...
 //!         Ok(())
 //!     }
-//!     
-//!     // Implement cursor persistence...
 //! }
 //!
 //! // Run with type-safe module selection
-//! let transformer = EditsTransformer { /* ... */ };
-//! transformer.run(
-//!     &endpoint_url,
-//!     HermesModule::EditsPublished,
-//!     start_block,
-//!     end_block,
-//! ).await?;
+//! transformer.run(&endpoint_url, HermesModule::EditsPublished, start_block, end_block).await?;
 //! ```
 //!
 //! ## Mock Data Testing
 //!
-//! Use `run_with_source` with a [`source::MockSource`] for testing without
-//! a real substream connection:
+//! Use [`source::MockSource`] to test sink implementations without a real substream:
 //!
 //! ```ignore
-//! use hermes_relay::{Sink, HermesModule};
-//! use hermes_relay::source::MockSource;
+//! use hermes_relay::source::{MockSource, mock_events};
 //! use hermes_substream::pb::hermes::Actions;
 //! use prost::Message;
 //!
-//! let actions = Actions { actions: vec![/* ... */] };
-//! let source = MockSource::new(actions.encode_to_vec()).with_blocks(1000, 1010);
-//! transformer.run_with_source(source).await?;
+//! // Create mock actions
+//! let actions = Actions {
+//!     actions: vec![
+//!         mock_events::space_created([0x01; 16], [0xaa; 32]),
+//!         mock_events::trust_extended_verified([0x01; 16], [0x02; 16]),
+//!         mock_events::edit_published([0x01; 16], "QmYwAPJzv5CZsnA..."),
+//!     ],
+//! };
+//!
+//! // Iterate over mock blocks and process directly
+//! for block in MockSource::new(actions.encode_to_vec()).with_blocks(100, 110) {
+//!     transformer.process_block_scoped_data(&block).await?;
+//! }
+//!
+//! // Or use the full test topology matching mock-substream
+//! for block in MockSource::test_topology().with_blocks(100, 150) {
+//!     transformer.process_block_scoped_data(&block).await?;
+//! }
 //! ```
 //!
 //! ## Single vs Multiple Event Types
@@ -73,8 +78,6 @@
 //!         || actions::matches(action_bytes, &actions::SUBSPACE_REMOVED)
 //! }
 //! ```
-//!
-//! See `docs/decisions/0001-multiple-substreams-modules-consumers.md` for more details.
 
 pub mod actions;
 pub mod config;
