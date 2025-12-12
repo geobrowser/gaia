@@ -7,7 +7,7 @@
 /// 1. Resolves the IPFS CID into the serialized edit representation
 /// 2. Appends any blockchain metadata useful for downstream consumers
 /// 3. Appends any community or space topology metadata useful for
-///     downstream consumers
+///    downstream consumers
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct HermesEdit {
     #[prost(bytes = "vec", tag = "1")]

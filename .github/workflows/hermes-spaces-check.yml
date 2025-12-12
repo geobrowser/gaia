@@ -1,19 +1,21 @@
-name: Atlas Check
+name: Hermes Spaces Check
 
 on:
   push:
     branches: [main, develop]
     paths:
-      - 'atlas/**'
+      - 'hermes-spaces/**'
       - 'hermes-relay/**'
       - 'hermes-substream/**'
+      - 'hermes-kafka/**'
       - 'stream/**'
   pull_request:
     branches: [main, develop]
     paths:
-      - 'atlas/**'
+      - 'hermes-spaces/**'
       - 'hermes-relay/**'
       - 'hermes-substream/**'
+      - 'hermes-kafka/**'
       - 'stream/**'
 
 env:
@@ -25,7 +27,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: ./atlas
+        working-directory: ./hermes-spaces
 
     steps:
       - uses: actions/checkout@v4
@@ -36,16 +38,30 @@ jobs:
           toolchain: "1.92.0"
           components: rustfmt, clippy
 
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get install -y \
+            cmake \
+            libclang-dev \
+            libssl-dev \
+            pkg-config
+
       - name: Cache Dependencies
         uses: Swatinem/rust-cache@v2
         with:
-          workspaces: ./atlas
+          workspaces: ./hermes-spaces
 
       - name: Check formatting
         run: cargo fmt --check
 
       - name: Run clippy
-        run: cargo clippy --all-targets -- -D warnings -A clippy::doc_overindented_list_items
+        run: cargo clippy --all-targets -- -D warnings
 
       - name: Build
         run: cargo build --verbose
+
+      - name: Run tests
+        run: cargo test --verbose

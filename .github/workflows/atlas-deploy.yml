@@ -6,8 +6,10 @@ on:
       - main
     paths:
       - 'atlas/**'
+      - 'hermes-relay/**'
       - 'hermes-schema/**'
-      - 'mock-substream/**'
+      - 'hermes-substream/**'
+      - 'stream/**'
       - 'wire/**'
       - 'hermes/k8s/atlas.yaml'
       - '.github/workflows/atlas-deploy.yml'

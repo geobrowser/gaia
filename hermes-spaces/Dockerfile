@@ -1,4 +1,4 @@
-FROM rust:1.85-bookworm as builder
+FROM rust:1.92-bookworm as builder
 
 # Install build dependencies for rdkafka and protobuf
 RUN apt-get update && \
@@ -12,21 +12,18 @@ RUN apt-get update && \
 
 WORKDIR /app
 
-# Copy workspace configuration
-COPY Cargo.toml Cargo.lock ./
-
-# Copy all required crates
+# Copy only required crates (no workspace Cargo.toml - build standalone)
 COPY hermes-spaces ./hermes-spaces
 COPY hermes-relay ./hermes-relay
+COPY hermes-kafka ./hermes-kafka
 COPY hermes-schema ./hermes-schema
+COPY hermes-substream ./hermes-substream
 COPY stream ./stream
 COPY wire ./wire
 
-# Copy the substream package file
-COPY hermes-substream/hermes-substream.spkg ./hermes-substream.spkg
-
-# Build from the workspace root
-RUN cargo build --release --package hermes-spaces
+# Build from the crate directory (standalone, not as workspace member)
+WORKDIR /app/hermes-spaces
+RUN cargo build --release
 
 FROM debian:bookworm-slim
 
@@ -34,10 +31,7 @@ RUN apt-get update && \
     apt-get install -y ca-certificates libssl3 && \
     rm -rf /var/lib/apt/lists/*
 
-COPY --from=builder /app/target/release/hermes-spaces /usr/local/bin/hermes-spaces
-COPY --from=builder /app/hermes-substream.spkg /app/hermes-substream.spkg
-
-WORKDIR /app
+COPY --from=builder /app/hermes-spaces/target/release/hermes-spaces /usr/local/bin/hermes-spaces
 
 # Default environment variables
 ENV KAFKA_BROKER=kafka-broker-0.broker.kafka.svc.cluster.local:29092

@@ -1,94 +1,108 @@
 //! Hermes sink traits for consuming blockchain events.
 //!
-//! These traits wrap the low-level `stream` crate sinks with hermes-specific
-//! configuration, providing type-safe module selection via [`HermesModule`].
+//! # Example
 //!
-//! ## Cursor Persistence
+//! ```ignore
+//! use hermes_relay::{Sink, StreamSource, HermesModule};
 //!
-//! Consumers must implement `persist_cursor` and `load_persisted_cursor` to
-//! enable resuming from the last processed block after a restart. The default
-//! implementations are no-ops (cursor is not persisted).
+//! struct MyTransformer { /* ... */ }
 //!
-//! See `indexer/src/storage/postgres.rs` for an example of cursor persistence
-//! with PostgreSQL.
+//! impl Sink for MyTransformer {
+//!     type Error = anyhow::Error;
+//!
+//!     async fn process_block_scoped_data(&self, data: &BlockScopedData) -> Result<(), Self::Error> {
+//!         // Process events...
+//!         Ok(())
+//!     }
+//! }
+//!
+//! // Run with mock data (for development/testing)
+//! transformer.run(StreamSource::mock()).await?;
+//!
+//! // Run with live substream (for production)
+//! let source = StreamSource::live(
+//!     "https://substreams.example.com",
+//!     HermesModule::Actions,
+//!     0,
+//!     1000,
+//! );
+//! transformer.run(source).await?;
+//! ```
 
 use std::{env, process::exit, sync::Arc};
 
 use futures03::StreamExt;
 
-use crate::{HermesModule, HERMES_SPKG};
+use crate::{source::MockSource, HermesModule, HERMES_SPKG};
 use stream::{
     pb::sf::substreams::rpc::v2::{BlockScopedData, BlockUndoSignal},
     substreams::SubstreamsEndpoint,
     substreams_stream::{BlockResponse, SubstreamsStream},
 };
 
+/// Configuration for the stream source.
+///
+/// Use this to explicitly choose between mock and live data sources.
+#[derive(Debug, Clone)]
+pub enum StreamSource {
+    /// Use mock test topology data.
+    ///
+    /// Generates deterministic test data with:
+    /// - 18 space creations (11 canonical + 7 non-canonical)
+    /// - 19 trust extensions (14 explicit + 5 topic-based)
+    /// - 6 edit events
+    ///
+    /// All events are delivered in a single block.
+    Mock,
+
+    /// Connect to a live substream endpoint.
+    Live {
+        /// The substream endpoint URL
+        endpoint_url: String,
+        /// The hermes module to consume
+        module: HermesModule,
+        /// First block to consume (can be negative for relative positioning)
+        start_block: i64,
+        /// Last block to consume
+        end_block: u64,
+    },
+}
+
+impl StreamSource {
+    /// Create a mock source that delivers all test topology events in a single block.
+    pub fn mock() -> Self {
+        Self::Mock
+    }
+
+    /// Create a live source with the given endpoint, module, and block range.
+    pub fn live(
+        endpoint_url: impl Into<String>,
+        module: HermesModule,
+        start_block: i64,
+        end_block: u64,
+    ) -> Self {
+        Self::Live {
+            endpoint_url: endpoint_url.into(),
+            module,
+            start_block,
+            end_block,
+        }
+    }
+}
+
 /// Trait for processing hermes-substream blocks.
-///
-/// Implement this trait to create a transformer that consumes events from
-/// hermes-substream. The `run` method handles connection setup and streaming,
-/// while you implement the block processing and cursor persistence logic.
-///
-/// # Example
-///
-/// ```ignore
-/// use hermes_relay::{Sink, HermesModule};
-///
-/// struct SpacesTransformer { /* ... */ }
-///
-/// impl Sink for SpacesTransformer {
-///     type Error = anyhow::Error;
-///
-///     async fn process_block_scoped_data(
-///         &self,
-///         data: &BlockScopedData,
-///     ) -> Result<(), Self::Error> {
-///         // Process space events...
-///         Ok(())
-///     }
-///
-///     async fn persist_cursor(&self, cursor: String, block: u64) -> Result<(), Self::Error> {
-///         // Save cursor to database...
-///         Ok(())
-///     }
-///
-///     async fn load_persisted_cursor(&self) -> Result<Option<String>, Self::Error> {
-///         // Load cursor from database...
-///         Ok(None)
-///     }
-/// }
-///
-/// // Run the transformer
-/// let transformer = SpacesTransformer { /* ... */ };
-/// transformer.run(
-///     &endpoint_url,
-///     HermesModule::Actions,
-///     start_block,
-///     end_block,
-/// ).await?;
-/// ```
 pub trait Sink: Send + Sync {
     type Error: std::error::Error + Send + Sync + 'static;
 
-    /// Process a new block of data.
     fn process_block_scoped_data(
         &self,
         data: &BlockScopedData,
     ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send;
 
-    /// Handle a block undo signal (chain reorganization).
-    ///
-    /// You must delete any data recorded after the block height specified
-    /// in the undo signal.
     fn process_block_undo_signal(&self, _undo_signal: &BlockUndoSignal) -> Result<(), Self::Error> {
-        unimplemented!(
-            "you must implement block undo handling, or request only final blocks"
-        )
+        unimplemented!("implement block undo handling, or request only final blocks")
     }
 
-    /// Persist the cursor after successfully processing a block.
-    ///
-    /// The cursor allows resuming from the correct position after a restart.
     fn persist_cursor(
         &self,
         _cursor: String,
@@ -97,17 +111,81 @@ pub trait Sink: Send + Sync {
         async { Ok(()) }
     }
 
-    /// Load the previously persisted cursor.
-    ///
-    /// Returns `None` if no cursor has been saved (start from beginning).
     fn load_persisted_cursor(
         &self,
     ) -> impl std::future::Future<Output = Result<Option<String>, Self::Error>> + Send {
         async { Ok(None) }
     }
 
-    /// Run the sink, consuming events from hermes-substream.
+    /// Run the sink with the specified source.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// // Development: use mock data
+    /// sink.run(StreamSource::mock()).await?;
+    ///
+    /// // Production: use live substream
+    /// let source = StreamSource::live(
+    ///     "https://substreams.example.com",
+    ///     HermesModule::Actions,
+    ///     0,
+    ///     1000,
+    /// );
+    /// sink.run(source).await?;
+    /// ```
     fn run(
+        &self,
+        source: StreamSource,
+    ) -> impl std::future::Future<Output = Result<(), anyhow::Error>> + Send
+    where
+        Self::Error: Into<anyhow::Error>,
+    {
+        async move {
+            match source {
+                StreamSource::Mock => self.run_mock().await,
+                StreamSource::Live {
+                    endpoint_url,
+                    module,
+                    start_block,
+                    end_block,
+                } => {
+                    self.run_live(&endpoint_url, module, start_block, end_block)
+                        .await
+                }
+            }
+        }
+    }
+
+    /// Run with mock data using the test topology.
+    ///
+    /// All test topology events are delivered in a single block (block 0).
+    fn run_mock(&self) -> impl std::future::Future<Output = Result<(), anyhow::Error>> + Send
+    where
+        Self::Error: Into<anyhow::Error>,
+    {
+        async move {
+            println!("Running with mock test topology");
+            // Use a single block (0) containing all test topology events
+            let source = MockSource::test_topology().single_block(0);
+
+            for block in source {
+                let block_num = block.clock.as_ref().map(|c| c.number).unwrap_or(0);
+                self.process_block_scoped_data(&block)
+                    .await
+                    .map_err(Into::into)?;
+                self.persist_cursor(block.cursor, block_num)
+                    .await
+                    .map_err(Into::into)?;
+            }
+
+            println!("Mock stream consumed");
+            Ok(())
+        }
+    }
+
+    /// Run with a live substream connection.
+    fn run_live(
         &self,
         endpoint_url: &str,
         module: HermesModule,
@@ -161,35 +239,25 @@ pub trait Sink: Send + Sync {
     }
 }
 
-/// Trait for processing hermes-substream blocks with a preprocessing step.
-///
-/// Similar to [`Sink`], but allows decoding/preprocessing the block data
-/// before the main processing step. Useful when you need to decode protobuf
-/// messages before processing.
+/// Sink with a preprocessing step (e.g., protobuf decoding).
 pub trait PreprocessedSink<P: Send>: Send + Sync {
     type Error: std::error::Error + Send + Sync + 'static;
 
-    /// Preprocess/decode the block data.
     fn preprocess_block_scoped_data(
         &self,
         data: &BlockScopedData,
     ) -> impl std::future::Future<Output = Result<P, Self::Error>> + Send;
 
-    /// Process the preprocessed block data.
     fn process_block_scoped_data(
         &self,
         data: &BlockScopedData,
         preprocessed: P,
     ) -> impl std::future::Future<Output = Result<(), Self::Error>> + Send;
 
-    /// Handle a block undo signal (chain reorganization).
     fn process_block_undo_signal(&self, _undo_signal: &BlockUndoSignal) -> Result<(), Self::Error> {
-        unimplemented!(
-            "you must implement block undo handling, or request only final blocks"
-        )
+        unimplemented!("implement block undo handling, or request only final blocks")
     }
 
-    /// Persist the cursor after successfully processing a block.
     fn persist_cursor(
         &self,
         _cursor: String,
@@ -198,15 +266,69 @@ pub trait PreprocessedSink<P: Send>: Send + Sync {
         async { Ok(()) }
     }
 
-    /// Load the previously persisted cursor.
     fn load_persisted_cursor(
         &self,
     ) -> impl std::future::Future<Output = Result<Option<String>, Self::Error>> + Send {
         async { Ok(None) }
     }
 
-    /// Run the sink, consuming events from hermes-substream.
+    /// Run the sink with the specified source.
     fn run(
+        &self,
+        source: StreamSource,
+    ) -> impl std::future::Future<Output = Result<(), anyhow::Error>> + Send
+    where
+        Self::Error: Into<anyhow::Error>,
+    {
+        async move {
+            match source {
+                StreamSource::Mock => self.run_mock().await,
+                StreamSource::Live {
+                    endpoint_url,
+                    module,
+                    start_block,
+                    end_block,
+                } => {
+                    self.run_live(&endpoint_url, module, start_block, end_block)
+                        .await
+                }
+            }
+        }
+    }
+
+    /// Run with mock data using the test topology.
+    ///
+    /// All test topology events are delivered in a single block (block 0).
+    fn run_mock(&self) -> impl std::future::Future<Output = Result<(), anyhow::Error>> + Send
+    where
+        Self::Error: Into<anyhow::Error>,
+    {
+        async move {
+            println!("Running with mock test topology");
+            // Use a single block (0) containing all test topology events
+            let source = MockSource::test_topology().single_block(0);
+
+            for block in source {
+                let block_num = block.clock.as_ref().map(|c| c.number).unwrap_or(0);
+                let preprocessed = self
+                    .preprocess_block_scoped_data(&block)
+                    .await
+                    .map_err(Into::into)?;
+                self.process_block_scoped_data(&block, preprocessed)
+                    .await
+                    .map_err(Into::into)?;
+                self.persist_cursor(block.cursor, block_num)
+                    .await
+                    .map_err(Into::into)?;
+            }
+
+            println!("Mock stream consumed");
+            Ok(())
+        }
+    }
+
+    /// Run with a live substream connection.
+    fn run_live(
         &self,
         endpoint_url: &str,
         module: HermesModule,

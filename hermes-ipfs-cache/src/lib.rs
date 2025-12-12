@@ -11,18 +11,22 @@
 //! ## Usage
 //!
 //! ```ignore
-//! use hermes_ipfs_cache::{IpfsCacheSink, cache::Cache};
+//! use hermes_ipfs_cache::{IpfsCacheSink, cache::CacheSource};
+//! use hermes_relay::{Sink, StreamSource};
+//! use ipfs::IpfsSource;
+//! use std::collections::HashMap;
 //!
-//! let cache = Cache::new(storage);
-//! let ipfs = ipfs::IpfsClient::new(&gateway_url);
-//! let sink = IpfsCacheSink::new(cache, ipfs);
+//! // Development: use all mock sources
+//! let cache = CacheSource::mock().into_cache().await?;
+//! let mut edits = HashMap::new();
+//! edits.insert("QmTestCid".to_string(), test_edit);
+//! let sink = IpfsCacheSink::new(cache, IpfsSource::mock(edits));
+//! sink.run(StreamSource::mock()).await?;
 //!
-//! sink.run(
-//!     &endpoint_url,
-//!     HermesModule::EditsPublished,
-//!     start_block,
-//!     end_block,
-//! ).await?;
+//! // Production: use live sources
+//! let cache = CacheSource::live(&database_url).into_cache().await?;
+//! let sink = IpfsCacheSink::new(cache, IpfsSource::live(&gateway_url));
+//! sink.run(StreamSource::live(&endpoint, module, start, end)).await?;
 //! ```
 
 pub mod cache;
@@ -32,7 +36,7 @@ use std::sync::Arc;
 
 use hermes_relay::{HermesModule, Sink};
 use hermes_substream::pb::hermes::{EditsPublished, EditsPublishedList};
-use ipfs::IpfsClient;
+use ipfs::{IpfsFetcher, IpfsSource};
 use prost::Message;
 use tokio::sync::{Mutex, Semaphore};
 use tokio::task;
@@ -112,17 +116,29 @@ impl PendingFetches {
 /// to populate the cache for downstream consumers.
 pub struct IpfsCacheSink {
     cache: Arc<Mutex<Cache>>,
-    ipfs: Arc<IpfsClient>,
+    ipfs: Arc<dyn IpfsFetcher>,
     semaphore: Arc<Semaphore>,
     pending: Arc<Mutex<PendingFetches>>,
 }
 
 impl IpfsCacheSink {
-    /// Create a new IPFS cache sink.
-    pub fn new(cache: Cache, ipfs: IpfsClient) -> Self {
+    /// Create a new IPFS cache sink with the given IPFS source configuration.
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// // Development: use mock IPFS data
+    /// let mut edits = HashMap::new();
+    /// edits.insert("QmTestCid".to_string(), test_edit);
+    /// let sink = IpfsCacheSink::new(cache, IpfsSource::mock(edits));
+    ///
+    /// // Production: use live IPFS gateway
+    /// let sink = IpfsCacheSink::new(cache, IpfsSource::live("https://ipfs.io/ipfs/"));
+    /// ```
+    pub fn new(cache: Cache, ipfs_source: IpfsSource) -> Self {
         Self {
             cache: Arc::new(Mutex::new(cache)),
-            ipfs: Arc::new(ipfs),
+            ipfs: Arc::from(ipfs_source.into_fetcher()),
             semaphore: Arc::new(Semaphore::new(MAX_CONCURRENT_FETCHES)),
             pending: Arc::new(Mutex::new(PendingFetches::default())),
         }
@@ -167,11 +183,7 @@ impl Sink for IpfsCacheSink {
         let edit_count = edits_list.edits.len();
 
         if edit_count > 0 {
-            tracing::info!(
-                block = block_number,
-                edits = edit_count,
-                "Processing edits"
-            );
+            tracing::info!(block = block_number, edits = edit_count, "Processing edits");
 
             // Register all pending fetches for this block upfront
             self.pending
@@ -199,7 +211,10 @@ impl Sink for IpfsCacheSink {
                 let cursor_to_persist = pending.lock().await.complete_one(block_num);
 
                 if let Some((persist_block, persist_cursor)) = cursor_to_persist {
-                    tracing::debug!(block = persist_block, "Block fully cached, persisting cursor");
+                    tracing::debug!(
+                        block = persist_block,
+                        "Block fully cached, persisting cursor"
+                    );
                     if let Err(e) = cache
                         .lock()
                         .await
@@ -233,7 +248,7 @@ impl Sink for IpfsCacheSink {
 async fn process_edit_event(
     edit: EditsPublished,
     cache: &Arc<Mutex<Cache>>,
-    ipfs: &Arc<IpfsClient>,
+    ipfs: &Arc<dyn IpfsFetcher>,
     block_timestamp: &str,
     block_number: u64,
 ) -> Result<(), CacheError> {
@@ -324,7 +339,10 @@ mod tests {
         assert_eq!(pending.complete_one(100), None);
 
         // Third completion should persist
-        assert_eq!(pending.complete_one(100), Some((100, "cursor_100".to_string())));
+        assert_eq!(
+            pending.complete_one(100),
+            Some((100, "cursor_100".to_string()))
+        );
 
         assert!(pending.blocks.is_empty());
     }
@@ -338,10 +356,16 @@ mod tests {
 
         // Complete block 100 first
         assert_eq!(pending.complete_one(100), None); // 1 remaining
-        assert_eq!(pending.complete_one(100), Some((100, "cursor_100".to_string())));
+        assert_eq!(
+            pending.complete_one(100),
+            Some((100, "cursor_100".to_string()))
+        );
 
         // Now complete block 101
-        assert_eq!(pending.complete_one(101), Some((101, "cursor_101".to_string())));
+        assert_eq!(
+            pending.complete_one(101),
+            Some((101, "cursor_101".to_string()))
+        );
 
         assert!(pending.blocks.is_empty());
     }
@@ -361,7 +385,10 @@ mod tests {
 
         // Complete block 100
         assert_eq!(pending.complete_one(100), None); // 1 remaining
-        assert_eq!(pending.complete_one(100), Some((100, "cursor_100".to_string())));
+        assert_eq!(
+            pending.complete_one(100),
+            Some((100, "cursor_100".to_string()))
+        );
 
         assert!(pending.blocks.is_empty());
     }
@@ -381,7 +408,10 @@ mod tests {
         assert_eq!(pending.complete_one(102), None);
 
         // Complete first block - should persist
-        assert_eq!(pending.complete_one(100), Some((100, "cursor_100".to_string())));
+        assert_eq!(
+            pending.complete_one(100),
+            Some((100, "cursor_100".to_string()))
+        );
 
         // 101 and 102 were already removed, nothing left
         assert!(pending.blocks.is_empty());
@@ -427,7 +457,10 @@ mod tests {
         assert!(!pending.blocks.contains_key(&101));
 
         // Complete 100 - persist cursor 100 (it's now the min and complete)
-        assert_eq!(pending.complete_one(100), Some((100, "cursor_100".to_string())));
+        assert_eq!(
+            pending.complete_one(100),
+            Some((100, "cursor_100".to_string()))
+        );
 
         // All blocks removed
         assert!(pending.blocks.is_empty());
@@ -445,7 +478,10 @@ mod tests {
         assert_eq!(pending.complete_one(101), None); // 101: 1 remaining
         assert_eq!(pending.complete_one(100), None); // 100: 1 remaining
         assert_eq!(pending.complete_one(101), None); // 101: 0 remaining, but 100 still pending
-        assert_eq!(pending.complete_one(100), Some((100, "cursor_100".to_string()))); // 100: 0 remaining
+        assert_eq!(
+            pending.complete_one(100),
+            Some((100, "cursor_100".to_string()))
+        ); // 100: 0 remaining
 
         assert!(pending.blocks.is_empty());
     }

@@ -986,13 +986,16 @@ dependencies = [
 name = "atlas"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "criterion 0.5.1",
+ "hermes-relay",
  "hermes-schema",
  "hex",
- "mock-substream",
  "prost 0.13.5",
  "rand 0.8.5",
  "rdkafka",
+ "thiserror 1.0.69",
+ "tokio",
 ]
 
 [[package]]
@@ -2515,6 +2518,7 @@ name = "hermes-ipfs-cache"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
  "chrono",
  "dotenv",
  "hermes-relay",
@@ -2563,6 +2567,7 @@ dependencies = [
  "futures 0.3.31",
  "hermes-substream",
  "prost 0.13.5",
+ "prost-types 0.13.5",
  "stream",
  "thiserror 1.0.69",
  "tokio",
@@ -3107,6 +3112,7 @@ dependencies = [
 name = "ipfs"
 version = "0.1.0"
 dependencies = [
+ "async-trait",
  "prost 0.13.5",
  "reqwest 0.12.25",
  "thiserror 2.0.17",

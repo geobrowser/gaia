@@ -1,20 +1,175 @@
 //! Atlas - Space Topology Processor
 //!
 //! Entry point for the Atlas graph processing pipeline.
-//! Consumes space topology events, computes canonical graphs,
+//! Consumes space topology events from hermes-relay, computes canonical graphs,
 //! and publishes updates to Kafka.
 
 use std::env;
+use std::sync::Mutex;
 
-use atlas::convert::convert_mock_blocks;
-use atlas::events::{SpaceId, SpaceTopologyEvent, SpaceTopologyPayload};
+use atlas::convert::convert_action;
+use atlas::events::{BlockMetadata, SpaceId, SpaceTopologyEvent, SpaceTopologyPayload};
 use atlas::graph::{CanonicalProcessor, GraphState, TransitiveProcessor};
 use atlas::kafka::{AtlasProducer, CanonicalGraphEmitter};
+use hermes_relay::source::mock_events::test_topology::ROOT_SPACE_ID;
+use hermes_relay::{Actions, Sink, StreamSource};
+use prost::Message;
 
-// Use the shared mock_substream crate
-use mock_substream::test_topology;
+/// Atlas topology processor that implements the hermes-relay Sink trait.
+struct AtlasSink {
+    /// Graph state tracking all spaces and edges
+    state: Mutex<GraphState>,
+    /// Transitive closure processor
+    transitive: Mutex<TransitiveProcessor>,
+    /// Canonical graph processor
+    canonical_processor: Mutex<CanonicalProcessor>,
+    /// Kafka emitter for canonical graph updates
+    emitter: CanonicalGraphEmitter,
+    /// Event counter for logging
+    event_count: Mutex<usize>,
+    /// Emit counter for summary
+    emit_count: Mutex<usize>,
+}
 
-fn main() -> Result<(), Box<dyn std::error::Error>> {
+impl AtlasSink {
+    fn new(root_space: SpaceId, emitter: CanonicalGraphEmitter) -> Self {
+        Self {
+            state: Mutex::new(GraphState::new()),
+            transitive: Mutex::new(TransitiveProcessor::new()),
+            canonical_processor: Mutex::new(CanonicalProcessor::new(root_space)),
+            emitter,
+            event_count: Mutex::new(0),
+            emit_count: Mutex::new(0),
+        }
+    }
+
+    fn summary(&self) {
+        let state = self.state.lock().unwrap();
+        let emit_count = *self.emit_count.lock().unwrap();
+
+        println!();
+        println!(
+            "┌──────────────────────────────────────────────────────────────────────────────┐"
+        );
+        println!(
+            "│ Summary                                                                      │"
+        );
+        println!(
+            "├──────────────────────────────────────────────────────────────────────────────┤"
+        );
+        println!(
+            "│ Total spaces:        {:>4}                                                    │",
+            state.space_count()
+        );
+        println!(
+            "│ Explicit edges:      {:>4}                                                    │",
+            state.explicit_edge_count()
+        );
+        println!(
+            "│ Topic edges:         {:>4}                                                    │",
+            state.topic_edge_count()
+        );
+        println!(
+            "│ Kafka messages sent: {:>4}                                                    │",
+            emit_count
+        );
+        println!(
+            "└──────────────────────────────────────────────────────────────────────────────┘"
+        );
+    }
+}
+
+#[derive(Debug, thiserror::Error)]
+enum AtlasError {
+    #[error("Failed to decode actions: {0}")]
+    DecodeError(#[from] prost::DecodeError),
+    #[error("Kafka error: {0}")]
+    KafkaError(String),
+}
+
+impl Sink for AtlasSink {
+    type Error = AtlasError;
+
+    async fn process_block_scoped_data(
+        &self,
+        data: &hermes_relay::stream::pb::sf::substreams::rpc::v2::BlockScopedData,
+    ) -> Result<(), Self::Error> {
+        // Extract block metadata
+        let clock = data.clock.as_ref();
+        let block_number = clock.map(|c| c.number).unwrap_or(0);
+        let block_timestamp = clock
+            .and_then(|c| c.timestamp.as_ref())
+            .map(|t| t.seconds as u64)
+            .unwrap_or(0);
+
+        let meta = BlockMetadata {
+            block_number,
+            block_timestamp,
+            tx_hash: String::new(),
+            cursor: data.cursor.clone(),
+        };
+
+        // Decode actions from the block output
+        let output = data
+            .output
+            .as_ref()
+            .and_then(|o| o.map_output.as_ref())
+            .map(|a| a.value.as_slice())
+            .unwrap_or(&[]);
+
+        if output.is_empty() {
+            return Ok(());
+        }
+
+        let actions = Actions::decode(output)?;
+
+        // Convert actions to topology events and process them
+        for action in &actions.actions {
+            if let Some(event) = convert_action(action, &meta) {
+                self.process_event(&event)?;
+            }
+        }
+
+        Ok(())
+    }
+}
+
+impl AtlasSink {
+    fn process_event(&self, event: &SpaceTopologyEvent) -> Result<(), AtlasError> {
+        let mut state = self.state.lock().unwrap();
+        let mut transitive = self.transitive.lock().unwrap();
+        let mut canonical_processor = self.canonical_processor.lock().unwrap();
+        let mut event_count = self.event_count.lock().unwrap();
+        let mut emit_count = self.emit_count.lock().unwrap();
+
+        // Log the event
+        print_event(*event_count, event);
+        *event_count += 1;
+
+        // Update transitive cache based on event
+        transitive.handle_event(event, &state);
+
+        // Apply event to graph state
+        state.apply_event(event);
+
+        // Compute canonical graph and emit if changed
+        if let Some(graph) = canonical_processor.compute(&state, &mut transitive) {
+            self.emitter
+                .emit(&graph, &event.meta)
+                .map_err(|e| AtlasError::KafkaError(e.to_string()))?;
+            *emit_count += 1;
+            println!(
+                "│      └─▶ Emitted canonical graph update ({} nodes)",
+                graph.len()
+            );
+        }
+
+        Ok(())
+    }
+}
+
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let broker = env::var("KAFKA_BROKER").unwrap_or_else(|_| "localhost:9092".to_string());
     let topic = env::var("KAFKA_TOPIC").unwrap_or_else(|_| "topology.canonical".to_string());
 
@@ -30,73 +185,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let producer = AtlasProducer::new(&broker, &topic)?;
     let emitter = CanonicalGraphEmitter::new(producer);
 
-    // Generate deterministic topology from shared mock_substream crate
-    let blocks = test_topology::generate();
-    let events = convert_mock_blocks(&blocks);
+    // Create the sink with root space from test topology
+    let sink = AtlasSink::new(ROOT_SPACE_ID, emitter);
 
-    let root_space = test_topology::ROOT_SPACE_ID;
-
-    println!(
-        "Generated {} topology events from mock substream",
-        events.len()
-    );
-    println!("Root space: {}", format_space_id(root_space));
-    println!();
-
-    // Create graph state and processors
-    let mut state = GraphState::new();
-    let mut transitive = TransitiveProcessor::new();
-    let mut canonical_processor = CanonicalProcessor::new(root_space);
-
-    // Process each event
     println!("┌──────────────────────────────────────────────────────────────────────────────┐");
     println!("│ Processing Events                                                            │");
     println!("├──────────────────────────────────────────────────────────────────────────────┤");
 
-    let mut emit_count = 0;
+    // Run with mock data source (all events in a single block)
+    // In production, this would be StreamSource::live(endpoint_url, module, start_block, end_block)
+    sink.run(StreamSource::mock()).await?;
 
-    for (i, event) in events.iter().enumerate() {
-        print_event(i, event);
-
-        // Update transitive cache based on event
-        transitive.handle_event(event, &state);
-
-        // Apply event to graph state
-        state.apply_event(event);
-
-        // Compute canonical graph and emit if changed
-        if let Some(graph) = canonical_processor.compute(&state, &mut transitive) {
-            emitter.emit(&graph, &event.meta)?;
-            emit_count += 1;
-            println!(
-                "│      └─▶ Emitted canonical graph update ({} nodes)",
-                graph.len()
-            );
-        }
-    }
     println!("└──────────────────────────────────────────────────────────────────────────────┘");
 
-    println!();
-    println!("┌──────────────────────────────────────────────────────────────────────────────┐");
-    println!("│ Summary                                                                      │");
-    println!("├──────────────────────────────────────────────────────────────────────────────┤");
-    println!(
-        "│ Total spaces:        {:>4}                                                    │",
-        state.space_count()
-    );
-    println!(
-        "│ Explicit edges:      {:>4}                                                    │",
-        state.explicit_edge_count()
-    );
-    println!(
-        "│ Topic edges:         {:>4}                                                    │",
-        state.topic_edge_count()
-    );
-    println!(
-        "│ Kafka messages sent: {:>4}                                                    │",
-        emit_count
-    );
-    println!("└──────────────────────────────────────────────────────────────────────────────┘");
+    sink.summary();
 
     println!();
     println!("Atlas processing complete.");

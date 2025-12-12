@@ -1,4 +1,4 @@
-FROM rust:1.86-bookworm as builder
+FROM rust:1.92-bookworm as builder
 
 # Install build dependencies for rdkafka
 RUN apt-get update && \
@@ -7,17 +7,20 @@ RUN apt-get update && \
     libclang-dev \
     libssl-dev \
     pkg-config \
+    protobuf-compiler \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app
 
-# Copy dependencies
+# Copy only required crates (no workspace Cargo.toml - build standalone)
 COPY atlas ./atlas
+COPY hermes-relay ./hermes-relay
 COPY hermes-schema ./hermes-schema
-COPY mock-substream ./mock-substream
+COPY hermes-substream ./hermes-substream
+COPY stream ./stream
 COPY wire ./wire
 
-# Build from the atlas directory
+# Build from the crate directory (standalone, not as workspace member)
 WORKDIR /app/atlas
 RUN cargo build --release
 

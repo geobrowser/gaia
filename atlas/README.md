@@ -4,7 +4,7 @@ Graph processing system for computing canonical space topology.
 
 ## Overview
 
-Atlas consumes space topology events from the mock-substream and computes:
+Atlas consumes space topology events from hermes-relay and computes:
 
 1. **Transitive Graph** - All spaces reachable from a given root via explicit edges
 2. **Canonical Graph** - The subset of spaces that are "canonical" (trusted) based on reachability from the root space
@@ -57,7 +57,7 @@ When `KAFKA_USERNAME` and `KAFKA_PASSWORD` are both set, the producer automatica
 ## Architecture
 
 ```
-mock-substream crate
+hermes-relay (StreamSource::mock() or StreamSource::live())
         │
         ▼
 ┌───────────────────────────────────────┐
@@ -76,6 +76,26 @@ mock-substream crate
 └────────────────────────────┼──────────┘
                              ▼
                    topology.canonical topic
+```
+
+### Stream Source Configuration
+
+Atlas uses `hermes-relay`'s `StreamSource` to choose between mock and live data:
+
+```rust
+use hermes_relay::{Sink, StreamSource, HermesModule};
+
+// Development: mock data (all test topology events in one block)
+sink.run(StreamSource::mock()).await?;
+
+// Production: live substream
+let source = StreamSource::live(
+    "https://substreams.example.com",
+    HermesModule::Actions,
+    start_block,
+    end_block,
+);
+sink.run(source).await?;
 ```
 
 ## Graph Concepts

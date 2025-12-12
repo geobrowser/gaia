@@ -252,9 +252,7 @@ const REGISTRY_URL: &str = "https://spkg.io";
 pub async fn read_package(input: &str) -> Result<Package, anyhow::Error> {
     let mut mutable_input = input.to_string();
 
-    let val = parse_standard_package_and_version(input);
-    if val.is_ok() {
-        let package_and_version = val.unwrap();
+    if let Ok(package_and_version) = parse_standard_package_and_version(input) {
         mutable_input = format!(
             "{}/v1/packages/{}/{}",
             REGISTRY_URL, package_and_version.0, package_and_version.1
@@ -294,11 +292,7 @@ fn parse_standard_package_and_version(input: &str) -> Result<(String, String), E
         ));
     }
 
-    if parts.len() == 1
-        || parts
-            .get(1)
-            .map_or(true, |v| v.is_empty() || *v == "latest")
-    {
+    if parts.len() == 1 || parts.get(1).is_none_or(|v| v.is_empty() || *v == "latest") {
         return Ok((package_name, "latest".to_string()));
     }
 
