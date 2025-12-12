@@ -81,8 +81,7 @@ fn convert_space_registered(action: &Action, meta: &BlockMetadata) -> Option<Spa
     // For space creation, the topic_id is derived from the space_id
     // In the mock implementation, spaces announce a topic at creation
     // We use the first 16 bytes of the topic field as topic_id
-    let topic_id = to_array::<16>(&action.topic[..16.min(action.topic.len())])
-        .unwrap_or([0u8; 16]);
+    let topic_id = to_array::<16>(&action.topic[..16.min(action.topic.len())]).unwrap_or([0u8; 16]);
 
     Some(SpaceTopologyEvent {
         meta: meta.clone(),
@@ -290,14 +289,12 @@ mod tests {
         let event = convert_action(&action, &meta).expect("should convert");
 
         match event.payload {
-            SpaceTopologyPayload::TrustExtended(extended) => {
-                match extended.extension {
-                    TrustExtension::Related { target_space_id } => {
-                        assert_eq!(target_space_id, make_id(0x02));
-                    }
-                    _ => panic!("Expected Related extension"),
+            SpaceTopologyPayload::TrustExtended(extended) => match extended.extension {
+                TrustExtension::Related { target_space_id } => {
+                    assert_eq!(target_space_id, make_id(0x02));
                 }
-            }
+                _ => panic!("Expected Related extension"),
+            },
             _ => panic!("Expected TrustExtended"),
         }
     }
@@ -310,14 +307,12 @@ mod tests {
         let event = convert_action(&action, &meta).expect("should convert");
 
         match event.payload {
-            SpaceTopologyPayload::TrustExtended(extended) => {
-                match extended.extension {
-                    TrustExtension::Subtopic { target_topic_id } => {
-                        assert_eq!(target_topic_id, make_id(0x8A));
-                    }
-                    _ => panic!("Expected Subtopic extension"),
+            SpaceTopologyPayload::TrustExtended(extended) => match extended.extension {
+                TrustExtension::Subtopic { target_topic_id } => {
+                    assert_eq!(target_topic_id, make_id(0x8A));
                 }
-            }
+                _ => panic!("Expected Subtopic extension"),
+            },
             _ => panic!("Expected TrustExtended"),
         }
     }
