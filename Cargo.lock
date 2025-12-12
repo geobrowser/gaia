@@ -2550,13 +2550,18 @@ name = "hermes-pipeline"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "async-trait",
+ "futures 0.3.31",
  "hermes-kafka",
  "hermes-relay",
  "hermes-schema",
  "hex",
  "prost 0.13.5",
  "stream",
+ "thiserror 1.0.69",
  "tokio",
+ "tokio-retry",
+ "wire",
 ]
 
 [[package]]
