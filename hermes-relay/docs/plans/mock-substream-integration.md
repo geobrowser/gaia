@@ -684,11 +684,16 @@ impl MockSource {
 
 ### Updated IpfsCacheSink
 
-Update `hermes-ipfs-cache` to accept any `IpfsFetcher`:
+Update `hermes-ipfs-cache` to accept any `IpfsFetcher` implementation. The sink becomes generic over the fetcher type:
 
 ```rust
 // hermes-ipfs-cache/src/lib.rs
 
+use ipfs::IpfsFetcher;
+
+/// IPFS cache sink that implements the hermes-relay Sink trait.
+///
+/// Generic over the IPFS fetcher, allowing injection of mock implementations.
 pub struct IpfsCacheSink<F: IpfsFetcher> {
     cache: Arc<Mutex<Cache>>,
     ipfs: Arc<F>,
@@ -696,7 +701,8 @@ pub struct IpfsCacheSink<F: IpfsFetcher> {
     pending: Arc<Mutex<PendingFetches>>,
 }
 
-impl<F: IpfsFetcher> IpfsCacheSink<F> {
+impl<F: IpfsFetcher + 'static> IpfsCacheSink<F> {
+    /// Create a new IPFS cache sink with the given fetcher.
     pub fn new(cache: Cache, ipfs: F) -> Self {
         Self {
             cache: Arc::new(Mutex::new(cache)),
@@ -706,6 +712,83 @@ impl<F: IpfsFetcher> IpfsCacheSink<F> {
         }
     }
 }
+
+impl<F: IpfsFetcher + 'static> Sink for IpfsCacheSink<F> {
+    type Error = IpfsCacheError;
+    
+    // ... implementation unchanged, just uses self.ipfs which is now generic ...
+}
+```
+
+#### Production Usage
+
+In production, pass the real `IpfsClient`:
+
+```rust
+// hermes-ipfs-cache/src/main.rs
+
+use ipfs::IpfsClient;
+
+#[tokio::main]
+async fn main() -> Result<()> {
+    let cache = Cache::new(Storage::new().await?);
+    let ipfs = IpfsClient::new(&env::var("IPFS_GATEWAY_URL")?);
+    
+    // Type is IpfsCacheSink<IpfsClient>
+    let sink = IpfsCacheSink::new(cache, ipfs);
+    
+    sink.run(
+        &env::var("SUBSTREAMS_ENDPOINT")?,
+        HermesModule::EditsPublished,
+        start_block,
+        end_block,
+    ).await
+}
+```
+
+#### Mock Usage
+
+In tests or mock mode, pass the `MockIpfsClient`:
+
+```rust
+// tests/integration.rs
+
+use mock_substream::{test_topology, MockIpfsClient};
+
+#[tokio::test]
+async fn test_cache_with_mock_ipfs() {
+    let blocks = test_topology::generate();
+    
+    // Create mock IPFS client pre-populated with edit data
+    let mock_ipfs = MockIpfsClient::from_topology(&blocks);
+    
+    // Create real cache
+    let cache = Cache::new(Storage::new().await.unwrap());
+    
+    // Type is IpfsCacheSink<MockIpfsClient>
+    let sink = IpfsCacheSink::new(cache, mock_ipfs);
+    
+    // Create mock block source
+    let source = MockSource::new(blocks, HermesModule::EditsPublished);
+    
+    // Run with mock source - IPFS fetches go to MockIpfsClient
+    sink.run_with_source(source).await.unwrap();
+}
+```
+
+#### Type Alias for Convenience
+
+Optionally, provide type aliases to reduce verbosity:
+
+```rust
+// hermes-ipfs-cache/src/lib.rs
+
+/// Production cache sink using real IPFS client.
+pub type ProductionCacheSink = IpfsCacheSink<ipfs::IpfsClient>;
+
+/// Mock cache sink for testing.
+#[cfg(feature = "mock")]
+pub type MockCacheSink = IpfsCacheSink<mock_substream::MockIpfsClient>;
 ```
 
 ### Test Setup
