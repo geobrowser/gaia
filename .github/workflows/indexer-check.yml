@@ -38,4 +38,4 @@ jobs:
           workspaces: ./indexer
 
       - name: Build
-        run: cargo build --verbose --workspace
+        run: cargo build --verbose -p indexer
