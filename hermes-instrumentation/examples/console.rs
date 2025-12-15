@@ -2,7 +2,7 @@
 //!
 //! Run with: cargo run -p hermes-instrumentation --example console
 
-use hermes_instrumentation::{info, info_span, Backend, Config, Instrument};
+use hermes_instrumentation::{Backend, Config, Instrument, info, info_span};
 
 fn process_item(item_id: u32) {
     info!(item_id, "Processing item");

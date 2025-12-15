@@ -32,25 +32,25 @@ mod init;
 pub use config::{Backend, Config};
 
 // Re-export initialization
-pub use init::{init, shutdown, Error};
+pub use init::{Error, init, shutdown};
 
 // Re-export tracing macros for convenience
 pub use tracing::{
-    // Event macros
-    debug,
-    error,
-    info,
-    trace,
-    warn,
-    // Span macros
-    debug_span,
-    error_span,
-    info_span,
-    trace_span,
-    warn_span,
-    // Utilities
-    instrument,
     Instrument,
     Level,
     Span,
+    // Event macros
+    debug,
+    // Span macros
+    debug_span,
+    error,
+    error_span,
+    info,
+    info_span,
+    // Utilities
+    instrument,
+    trace,
+    trace_span,
+    warn,
+    warn_span,
 };

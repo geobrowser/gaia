@@ -1,7 +1,7 @@
 //! Telemetry initialization.
 
 use crate::config::{Backend, Config};
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 /// Errors that can occur during telemetry initialization.
 #[derive(Debug, thiserror::Error)]
@@ -119,10 +119,9 @@ where
                 let ext = span.extensions();
                 if let Some(fields) = ext
                     .get::<tracing_subscriber::fmt::FormattedFields<N>>()
+                    .filter(|f| !f.is_empty())
                 {
-                    if !fields.is_empty() {
-                        write!(writer, "{{{}}}", fields)?;
-                    }
+                    write!(writer, "{{{}}}", fields)?;
                 }
                 first = false;
             }
@@ -142,10 +141,10 @@ where
 }
 
 fn init_otlp(namespace: &'static str, endpoint: &'static str) -> Result<(), Error> {
-    use opentelemetry::trace::TracerProvider as _;
     use opentelemetry::KeyValue;
+    use opentelemetry::trace::TracerProvider as _;
     use opentelemetry_otlp::WithExportConfig;
-    use opentelemetry_sdk::{trace::TracerProvider, Resource};
+    use opentelemetry_sdk::{Resource, trace::TracerProvider};
 
     // Create OTLP exporter
     let exporter = opentelemetry_otlp::SpanExporter::builder()

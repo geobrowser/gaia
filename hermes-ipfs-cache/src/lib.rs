@@ -103,11 +103,7 @@ impl PendingFetches {
         let is_min = self.blocks.first_key_value().map(|(b, _)| *b) == Some(block);
         self.blocks.remove(&block);
 
-        if is_min {
-            Some((block, cursor))
-        } else {
-            None
-        }
+        if is_min { Some((block, cursor)) } else { None }
     }
 }
 

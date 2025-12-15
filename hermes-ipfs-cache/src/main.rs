@@ -4,8 +4,8 @@
 
 use std::collections::HashMap;
 
-use hermes_instrumentation::{info, Backend, Config};
-use hermes_ipfs_cache::{cache::CacheSource, IpfsCacheSink};
+use hermes_instrumentation::{Backend, Config, info};
+use hermes_ipfs_cache::{IpfsCacheSink, cache::CacheSource};
 use hermes_relay::{Sink, StreamSource};
 use ipfs::IpfsSource;
 use wire::pb::grc20::Edit;
