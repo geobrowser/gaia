@@ -1,0 +1,216 @@
+syntax = "proto3";
+
+package hermes;
+
+// =============================================================================
+// Raw Action - for consumers who want full control
+// =============================================================================
+
+message Action {
+    bytes from_id = 1;    // 16 bytes - source space ID
+    bytes to_id = 2;      // 16 bytes - target space ID
+    bytes action = 3;     // 32 bytes - keccak256 hash of action name
+    bytes topic = 4;      // 32 bytes - context-dependent (address, proposalId, topicId, etc.)
+    bytes data = 5;       // variable - action-specific payload
+}
+
+message Actions {
+    repeated Action actions = 1;
+}
+
+// =============================================================================
+// Governance Events - pre-filtered typed events
+// =============================================================================
+
+message SpaceRegistered {
+    bytes space_id = 1;          // 16 bytes
+    bytes space_address = 2;     // 20 bytes - from topic field
+    bytes data = 3;
+}
+
+message SpaceRegisteredList {
+    repeated SpaceRegistered spaces = 1;
+}
+
+message SpaceMigrated {
+    bytes space_id = 1;              // 16 bytes
+    bytes new_space_address = 2;     // 20 bytes - from topic field
+    bytes data = 3;
+}
+
+message SpaceMigratedList {
+    repeated SpaceMigrated spaces = 1;
+}
+
+message ProposalCreated {
+    bytes space_id = 1;          // 16 bytes - space creating proposal
+    bytes proposal_id = 2;       // 32 bytes - from topic field
+    bytes data = 3;              // Proposal metadata
+}
+
+message ProposalCreatedList {
+    repeated ProposalCreated proposals = 1;
+}
+
+message ProposalVoted {
+    bytes voter_id = 1;          // 16 bytes - voter space
+    bytes space_id = 2;          // 16 bytes - proposal's space
+    bytes proposal_id = 3;       // 32 bytes - from topic field
+    bytes data = 4;              // Vote choice
+}
+
+message ProposalVotedList {
+    repeated ProposalVoted votes = 1;
+}
+
+message ProposalExecuted {
+    bytes space_id = 1;          // 16 bytes
+    bytes proposal_id = 2;       // 32 bytes - from topic field
+    bytes data = 3;
+}
+
+message ProposalExecutedList {
+    repeated ProposalExecuted proposals = 1;
+}
+
+message EditorAdded {
+    bytes space_id = 1;          // 16 bytes
+    bytes editor_address = 2;    // 20 bytes - from topic field
+    bytes data = 3;
+}
+
+message EditorAddedList {
+    repeated EditorAdded editors = 1;
+}
+
+message EditorRemoved {
+    bytes space_id = 1;          // 16 bytes
+    bytes editor_address = 2;    // 20 bytes - from topic field
+    bytes data = 3;
+}
+
+message EditorRemovedList {
+    repeated EditorRemoved editors = 1;
+}
+
+message MemberAdded {
+    bytes space_id = 1;          // 16 bytes
+    bytes member_address = 2;    // 20 bytes - from topic field
+    bytes data = 3;
+}
+
+message MemberAddedList {
+    repeated MemberAdded members = 1;
+}
+
+message MemberRemoved {
+    bytes space_id = 1;          // 16 bytes
+    bytes member_address = 2;    // 20 bytes - from topic field
+    bytes data = 3;
+}
+
+message MemberRemovedList {
+    repeated MemberRemoved members = 1;
+}
+
+message EditorFlagged {
+    bytes space_id = 1;          // 16 bytes
+    bytes editor_address = 2;    // 20 bytes - from topic field
+    bytes data = 3;
+}
+
+message EditorFlaggedList {
+    repeated EditorFlagged editors = 1;
+}
+
+message EditorUnflagged {
+    bytes space_id = 1;          // 16 bytes
+    bytes editor_address = 2;    // 20 bytes - from topic field
+    bytes data = 3;
+}
+
+message EditorUnflaggedList {
+    repeated EditorUnflagged editors = 1;
+}
+
+message SpaceLeft {
+    bytes member_id = 1;         // 16 bytes - member leaving
+    bytes space_id = 2;          // 16 bytes - space being left
+    bytes data = 3;
+}
+
+message SpaceLeftList {
+    repeated SpaceLeft spaces = 1;
+}
+
+message TopicDeclared {
+    bytes space_id = 1;          // 16 bytes
+    bytes topic_id = 2;          // 32 bytes - keccak256 of topic name
+    bytes data = 3;
+}
+
+message TopicDeclaredList {
+    repeated TopicDeclared topics = 1;
+}
+
+message EditsPublished {
+    bytes space_id = 1;          // 16 bytes
+    bytes data = 2;              // IPFS CID or edit content
+}
+
+message EditsPublishedList {
+    repeated EditsPublished edits = 1;
+}
+
+message ContentFlagged {
+    bytes flagger_id = 1;        // 16 bytes - space flagging content
+    bytes space_id = 2;          // 16 bytes - space being flagged
+    bytes data = 3;              // Flag details
+}
+
+message ContentFlaggedList {
+    repeated ContentFlagged flags = 1;
+}
+
+message SubspaceAdded {
+    bytes parent_space_id = 1;   // 16 bytes - parent space
+    bytes subspace_id = 2;       // 16 bytes - from topic field
+    bytes data = 3;
+}
+
+message SubspaceAddedList {
+    repeated SubspaceAdded subspaces = 1;
+}
+
+message SubspaceRemoved {
+    bytes parent_space_id = 1;   // 16 bytes - parent space
+    bytes subspace_id = 2;       // 16 bytes - from topic field
+    bytes data = 3;
+}
+
+message SubspaceRemovedList {
+    repeated SubspaceRemoved subspaces = 1;
+}
+
+// =============================================================================
+// Permissionless Events
+// =============================================================================
+
+message ObjectVoted {
+    bytes voter_id = 1;          // 16 bytes - voter space
+    bytes object_type = 2;       // 4 bytes
+    bytes object_id = 3;         // 16 bytes
+    bytes data = 4;
+}
+
+message ObjectUpvotedList {
+    repeated ObjectVoted votes = 1;
+}
+
+message ObjectDownvotedList {
+    repeated ObjectVoted votes = 1;
+}
+
+message ObjectUnvotedList {
+    repeated ObjectVoted votes = 1;
+}

@@ -64,6 +64,13 @@
       "when": 1763073630908,
       "tag": "0008_loving_stingray",
       "breakpoints": true
+    },
+    {
+      "idx": 9,
+      "version": "7",
+      "when": 1765393818084,
+      "tag": "0009_flimsy_serpent_society",
+      "breakpoints": true
     }
   ]
 }

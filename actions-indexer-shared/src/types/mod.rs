@@ -1,6 +1,7 @@
 //! This module defines the core data structures and types used across the actions indexer.
 //! It re-exports specific types like `Action`, `UserVote`, `VotesCount`, `Changeset`, `ActionRaw`, `Vote`, and `VoteValue`.
 use alloy::primitives::Address;
+use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 mod action;
@@ -17,12 +18,21 @@ pub use changeset::Changeset;
 pub use action_raw::ActionRaw;
 pub use action_vote::{Vote, VoteValue};
 
-pub type EntityId = Uuid;
+pub type ObjectId = Uuid;
 pub type GroupId = Uuid;
 pub type SpaceId = Uuid;
 pub type UserAddress = Address;
-pub type VoteCriteria = (UserAddress, EntityId, SpaceId);
-pub type VoteCountCriteria = (EntityId, SpaceId);
+pub type VoteCriteria = (UserAddress, ObjectId, SpaceId, ObjectType);
+pub type VoteCountCriteria = (ObjectId, SpaceId, ObjectType);
 pub type ActionVersion = u64;
-pub type ActionType = u64;
-pub type ObjectType = u64;
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Hash, Copy)]
+pub enum ObjectType {
+    Entity,
+    Relation,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, Hash, Copy)]
+pub enum ActionType {
+    Vote,
+}

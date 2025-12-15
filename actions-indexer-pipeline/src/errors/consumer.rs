@@ -36,4 +36,8 @@ pub enum ConsumerError {
     InvalidTxHash(String),
     #[error("Missing field: {0}")]
     MissingField(String),
+    #[error("Invalid action type: {0}")]
+    InvalidActionType(String),
+    #[error("Invalid object type: {0}")]
+    InvalidObjectType(String),
 }

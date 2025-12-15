@@ -1,0 +1,51 @@
+name: Atlas Check
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'atlas/**'
+      - 'hermes-relay/**'
+      - 'hermes-substream/**'
+      - 'stream/**'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'atlas/**'
+      - 'hermes-relay/**'
+      - 'hermes-substream/**'
+      - 'stream/**'
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  check:
+    name: Build & Lint
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ./atlas
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.92.0"
+          components: rustfmt, clippy
+
+      - name: Cache Dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: ./atlas
+
+      - name: Check formatting
+        run: cargo fmt --check
+
+      - name: Run clippy
+        run: cargo clippy --all-targets -- -D warnings -A clippy::doc_overindented_list_items
+
+      - name: Build
+        run: cargo build --verbose

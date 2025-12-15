@@ -1,4 +1,4 @@
-use crate::types::{UserAddress, SpaceId, EntityId, GroupId, ObjectType};
+use crate::types::{UserAddress, SpaceId, ObjectId, GroupId, ObjectType, ActionType};
 use alloy::primitives::{BlockNumber, BlockTimestamp, Bytes, TxHash};
 use serde::{Deserialize, Serialize};
 
@@ -8,10 +8,10 @@ use serde::{Deserialize, Serialize};
 /// providing a base for further processing into specific `Action` variants.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize, Eq)]
 pub struct ActionRaw {
-    pub action_type: u64,
+    pub action_type: ActionType,
     pub action_version: u64,
     pub sender: UserAddress,
-    pub entity: EntityId,
+    pub object_id: ObjectId,
     pub group_id: Option<GroupId>,
     pub space_pov: SpaceId,
     pub metadata: Option<Bytes>,

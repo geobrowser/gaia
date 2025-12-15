@@ -98,7 +98,7 @@ pub fn tree_node_size(node: &TreeNode) -> usize {
     // Vec allocation for children
     let vec_alloc = node.children.capacity() * mem::size_of::<TreeNode>();
     // Recursive children heap allocations
-    let children_heap: usize = node.children.iter().map(|c| tree_node_size(c)).sum();
+    let children_heap: usize = node.children.iter().map(tree_node_size).sum();
     vec_alloc + children_heap
 }
 
@@ -123,9 +123,9 @@ pub fn processor_cache_size(processor: &super::TransitiveProcessor) -> CacheMemo
     let total = processor.cache_memory_bytes();
     CacheMemory {
         total_bytes: total,
-        full_graphs_bytes: 0,       // Would need internal access
+        full_graphs_bytes: 0,          // Would need internal access
         explicit_only_graphs_bytes: 0, // Would need internal access
-        reverse_deps_bytes: 0,      // Would need internal access
+        reverse_deps_bytes: 0,         // Would need internal access
     }
 }
 
@@ -154,8 +154,8 @@ fn hashmap_with_hashset_size<K, V>(map: &HashMap<K, HashSet<V>>) -> usize {
 
 /// Estimate heap size of HashMap<SpaceId, Vec<(SpaceId, EdgeType)>>
 fn hashmap_with_vec_size(map: &HashMap<SpaceId, Vec<(SpaceId, EdgeType)>>) -> usize {
-    let table_size =
-        map.capacity() * (mem::size_of::<SpaceId>() + mem::size_of::<Vec<(SpaceId, EdgeType)>>() + 16);
+    let table_size = map.capacity()
+        * (mem::size_of::<SpaceId>() + mem::size_of::<Vec<(SpaceId, EdgeType)>>() + 16);
     let vecs_size: usize = map
         .values()
         .map(|v| v.capacity() * mem::size_of::<(SpaceId, EdgeType)>())

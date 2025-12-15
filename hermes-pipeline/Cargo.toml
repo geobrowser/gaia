@@ -1,0 +1,23 @@
+[package]
+name = "hermes-pipeline"
+version = "0.1.0"
+edition = "2021"
+
+[[bin]]
+name = "hermes-pipeline"
+path = "src/main.rs"
+
+[dependencies]
+hermes-kafka = { path = "../hermes-kafka" }
+hermes-relay = { path = "../hermes-relay" }
+hermes-schema = { path = "../hermes-schema" }
+stream = { path = "../stream" }
+wire = { path = "../wire" }
+prost = "0.13.5"
+tokio = { version = "1", features = ["full"] }
+tokio-retry = "0.3"
+async-trait = "0.1"
+thiserror = "1"
+futures = "0.3"
+anyhow = "1"
+hex = "0.4"

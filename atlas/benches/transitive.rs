@@ -357,7 +357,7 @@ fn bench_graph_state_event_application(c: &mut Criterion) {
     // Benchmark space creation
     group.bench_function("space_created", |b| {
         b.iter_batched(
-            || GraphState::new(),
+            GraphState::new,
             |mut state| {
                 for i in 0..100 {
                     create_space(&mut state, i);
@@ -450,14 +450,25 @@ fn bench_memory_sizes(c: &mut Criterion) {
     println!("║                                                                              ║");
     println!("║  GraphState Memory                                                           ║");
     println!("║  ─────────────────                                                           ║");
-    println!("║  {:>8} {:>12} {:>12} {:>12} {:>12}                   ║", "Nodes", "Edges", "Total", "Per Node", "Per Edge");
+    println!(
+        "║  {:>8} {:>12} {:>12} {:>12} {:>12}                   ║",
+        "Nodes", "Edges", "Total", "Per Node", "Per Edge"
+    );
 
     for (nodes, edges_per_node) in [(100, 2), (1_000, 4), (5_000, 4), (10_000, 4), (50_000, 4)] {
         let (state, _root) = generate_random_graph(nodes, nodes * edges_per_node, 42);
         let mem = memory::graph_state_size(&state);
         let total_edges = state.explicit_edge_count();
-        let per_node = if nodes > 0 { mem.total_bytes / nodes as usize } else { 0 };
-        let per_edge = if total_edges > 0 { mem.total_bytes / total_edges } else { 0 };
+        let per_node = if nodes > 0 {
+            mem.total_bytes / nodes as usize
+        } else {
+            0
+        };
+        let per_edge = if total_edges > 0 {
+            mem.total_bytes / total_edges
+        } else {
+            0
+        };
 
         println!(
             "║  {:>8} {:>12} {:>12} {:>12} {:>12}                   ║",
@@ -473,7 +484,10 @@ fn bench_memory_sizes(c: &mut Criterion) {
     println!("║                                                                              ║");
     println!("║  TransitiveGraph Memory (single graph)                                       ║");
     println!("║  ────────────────────────────────────────                                    ║");
-    println!("║  {:>8} {:>12} {:>12} {:>12}                             ║", "Nodes", "Total", "Tree", "FlatSet");
+    println!(
+        "║  {:>8} {:>12} {:>12} {:>12}                             ║",
+        "Nodes", "Total", "Tree", "FlatSet"
+    );
 
     for nodes in [100, 1_000, 5_000, 10_000] {
         let (state, root) = generate_linear_chain(nodes);
@@ -494,10 +508,17 @@ fn bench_memory_sizes(c: &mut Criterion) {
     println!("║                                                                              ║");
     println!("║  Cache Memory (multiple cached graphs)                                       ║");
     println!("║  ──────────────────────────────────────                                      ║");
-    println!("║  {:>8} {:>12} {:>14} {:>12}                           ║", "Graphs", "Nodes/Graph", "Cache Total", "Per Graph");
+    println!(
+        "║  {:>8} {:>12} {:>14} {:>12}                           ║",
+        "Graphs", "Nodes/Graph", "Cache Total", "Per Graph"
+    );
 
     for (graph_count, nodes_per_graph) in [(10, 100), (100, 100), (10, 1_000), (100, 1_000)] {
-        let (state, _) = generate_random_graph(graph_count * nodes_per_graph, graph_count * nodes_per_graph * 2, 42);
+        let (state, _) = generate_random_graph(
+            graph_count * nodes_per_graph,
+            graph_count * nodes_per_graph * 2,
+            42,
+        );
         let mut processor = TransitiveProcessor::new();
 
         // Cache multiple graphs
@@ -507,7 +528,11 @@ fn bench_memory_sizes(c: &mut Criterion) {
         }
 
         let cache_bytes = processor.cache_memory_bytes();
-        let per_graph = if graph_count > 0 { cache_bytes / graph_count as usize } else { 0 };
+        let per_graph = if graph_count > 0 {
+            cache_bytes / graph_count as usize
+        } else {
+            0
+        };
 
         println!(
             "║  {:>8} {:>12} {:>14} {:>12}                           ║",
@@ -525,9 +550,7 @@ fn bench_memory_sizes(c: &mut Criterion) {
     // Run a trivial benchmark so criterion doesn't complain
     group.bench_function("memory_measurement_overhead", |b| {
         let state = GraphState::new();
-        b.iter(|| {
-            black_box(memory::graph_state_size(&state))
-        });
+        b.iter(|| black_box(memory::graph_state_size(&state)));
     });
 
     group.finish();

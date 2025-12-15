@@ -1,0 +1,46 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: hermes-pipeline
+  namespace: kafka
+spec:
+  template:
+    metadata:
+      labels:
+        app: hermes-pipeline
+    spec:
+      restartPolicy: OnFailure
+      imagePullSecrets:
+        - name: regcred
+      containers:
+        - name: hermes-pipeline
+          image: registry.digitalocean.com/geo/hermes-pipeline:latest
+          imagePullPolicy: Always
+          env:
+            - name: KAFKA_BROKER
+              valueFrom:
+                secretKeyRef:
+                  name: kafka-credentials
+                  key: KAFKA_BROKER
+            - name: KAFKA_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: kafka-credentials
+                  key: KAFKA_USERNAME
+            - name: KAFKA_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: kafka-credentials
+                  key: KAFKA_PASSWORD
+            - name: KAFKA_SSL_CA_PEM
+              valueFrom:
+                secretKeyRef:
+                  name: kafka-credentials
+                  key: KAFKA_SSL_CA_PEM
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "250m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"

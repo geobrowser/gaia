@@ -13,13 +13,21 @@ members = [
     "actions-indexer-repository",
     "actions-substream",
 
-    "hermes-schema",
-    "hermes-producer",
+    "search-indexer-shared",
+    "search-indexer-repository",
 
-    "atlas"
+    "hermes-kafka",
+    "hermes-schema",
+    "hermes-relay",
+    "hermes-pipeline",
+    "hermes-ipfs-cache",
+
+    "atlas",
+    "mock-substream",
+    "hermes-substream",
 ]
-# `substreams build` doesn't seem to work well when in a workspace. The CLI looks to
-# read the target directory from within indexer-substream, but the workspace hoists
-# it to the workspace root.
+# `substreams build` doesn't work well when in a workspace. The CLI looks for the
+# target directory within the substream crate, but the workspace hoists it to the
+# workspace root. indexer-substream still uses prost 0.11, so it remains excluded.
 exclude = ["indexer-substream"]
 resolver = "2"

@@ -88,3 +88,14 @@ cargo run -p actions-indexer
 ### Other indexers
 
 Currently only the knowledge graph indexer is implemented, but in the near future there will be other indexers for processing governance events or managing the knowledge graph's history.
+
+## Documentation
+
+Architecture and design documents are in the `docs/` directory:
+
+- [Hermes Architecture](docs/hermes-architecture.md) - Event streaming from blockchain to Kafka
+- [K8s Secrets Isolation](docs/k8s-secrets-isolation.md) - Kubernetes secrets management
+
+Project-specific documentation lives in each project's directory:
+- [Atlas](atlas/docs/) - Canonical graph computation
+- [Hermes Substream](hermes-substream/docs/) - Event filtering and modification

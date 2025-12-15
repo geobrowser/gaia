@@ -47,7 +47,9 @@ pub struct SpaceCreated {
 /// The type of space being created
 #[derive(Debug, Clone)]
 pub enum SpaceType {
-    Personal { owner: Address },
+    Personal {
+        owner: Address,
+    },
     Dao {
         initial_editors: Vec<SpaceId>,
         initial_members: Vec<SpaceId>,

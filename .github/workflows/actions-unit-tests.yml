@@ -7,6 +7,8 @@ on:
         branches:
             - dev
             - main
+            - upstream-dev
+
         paths:
             - 'actions-indexer/**'
             - 'actions-indexer-pipeline/**'

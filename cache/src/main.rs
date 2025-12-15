@@ -19,7 +19,7 @@ const START_BLOCK: i64 = 74964;
 
 mod cache;
 use cache::{Cache, CacheItem};
-use ipfs::IpfsClient;
+use ipfs::{IpfsClient, IpfsFetcher};
 
 type CacheIndexerError = Error;
 

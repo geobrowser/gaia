@@ -3,6 +3,7 @@ use actions_indexer_pipeline::loader::ActionsLoader;
 use actions_indexer_pipeline::processor::ActionsProcessor;
 use actions_indexer_pipeline::consumer::stream::sink::SubstreamsStreamProvider;
 use actions_indexer_repository::{PostgresActionsRepository, PostgresCursorRepository};
+use actions_indexer_shared::types::{ActionType, ObjectType};
 use std::sync::Arc;
 use crate::config::handlers::VoteHandler;
 use crate::errors::IndexingError;
@@ -52,7 +53,8 @@ impl Dependencies {
 
         let actions_consumer = ActionsConsumer::new(Box::new(substreams_stream_provider));
         let mut actions_processor = ActionsProcessor::new();
-        actions_processor.register_handler(1, 0, 0, Arc::new(VoteHandler));
+        actions_processor.register_handler(1, ActionType::Vote, ObjectType::Entity, Arc::new(VoteHandler));
+        actions_processor.register_handler(1, ActionType::Vote, ObjectType::Relation, Arc::new(VoteHandler));
 
         let pool = sqlx::PgPool::connect(&database_url).await.map_err(|e| IndexingError::Database(e.into()))?;
 
@@ -178,7 +180,7 @@ mod tests {
         ));
         
         let mut mock_processor = ActionsProcessor::new();
-        mock_processor.register_handler(1, 1, 0, Arc::new(VoteHandler));
+        mock_processor.register_handler(1, ActionType::Vote, ObjectType::Entity, Arc::new(VoteHandler));
         
         // Note: We can't easily create a mock loader without a real database connection
         // This test focuses on the struct creation aspects
@@ -217,7 +219,7 @@ mod tests {
         let mut processor = ActionsProcessor::new();
         
         // This should not panic
-        processor.register_handler(1, 1, 0, Arc::new(vote_handler));
+        processor.register_handler(1, ActionType::Vote, ObjectType::Entity, Arc::new(vote_handler));
         
         // Verify the processor was created successfully
         assert!(true); // If we get here, registration worked

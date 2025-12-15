@@ -34,18 +34,92 @@ services:
     environment:
       KAFKA_CLUSTERS_0_NAME: local
       KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS: kafka:29092
-      KAFKA_CLUSTERS_0_PROTOBUF_FILES_0_PATH: /proto/grc20.proto
-      KAFKA_CLUSTERS_0_PROTOBUF_FILES_1_PATH: /proto/blockchain_metadata.proto
-      KAFKA_CLUSTERS_0_PROTOBUF_FILES_2_PATH: /proto/knowledge.proto
-      KAFKA_CLUSTERS_0_PROTOBUF_FILES_3_PATH: /proto/space.proto
+      # Protobuf serde for space.creations topic
+      kafka.clusters.0.serde.0.name: SpaceCreations
+      kafka.clusters.0.serde.0.className: com.provectus.kafka.ui.serdes.builtin.ProtobufFileSerde
+      kafka.clusters.0.serde.0.topicValuesPattern: "space.creations"
+      kafka.clusters.0.serde.0.properties.protobufFilesDir: /proto/
+      kafka.clusters.0.serde.0.properties.protobufMessageName: space.HermesCreateSpace
+      # Protobuf serde for space.trust.extensions topic
+      kafka.clusters.0.serde.1.name: SpaceTrustExtensions
+      kafka.clusters.0.serde.1.className: com.provectus.kafka.ui.serdes.builtin.ProtobufFileSerde
+      kafka.clusters.0.serde.1.topicValuesPattern: "space.trust.extensions"
+      kafka.clusters.0.serde.1.properties.protobufFilesDir: /proto/
+      kafka.clusters.0.serde.1.properties.protobufMessageName: space.HermesSpaceTrustExtension
+      # Protobuf serde for knowledge.edits topic
+      kafka.clusters.0.serde.2.name: KnowledgeEdits
+      kafka.clusters.0.serde.2.className: com.provectus.kafka.ui.serdes.builtin.ProtobufFileSerde
+      kafka.clusters.0.serde.2.topicValuesPattern: "knowledge.edits"
+      kafka.clusters.0.serde.2.properties.protobufFilesDir: /proto/
+      kafka.clusters.0.serde.2.properties.protobufMessageName: knowledge.HermesEdit
+      # Protobuf serde for topology.canonical topic
+      kafka.clusters.0.serde.3.name: TopologyCanonical
+      kafka.clusters.0.serde.3.className: com.provectus.kafka.ui.serdes.builtin.ProtobufFileSerde
+      kafka.clusters.0.serde.3.topicValuesPattern: "topology.canonical"
+      kafka.clusters.0.serde.3.properties.protobufFilesDir: /proto/
+      kafka.clusters.0.serde.3.properties.protobufMessageName: topology.CanonicalGraphUpdated
     volumes:
       - ../wire/proto/grc20.proto:/proto/grc20.proto:ro
       - ../hermes-schema/proto/blockchain_metadata.proto:/proto/blockchain_metadata.proto:ro
       - ../hermes-schema/proto/knowledge.proto:/proto/knowledge.proto:ro
       - ../hermes-schema/proto/space.proto:/proto/space.proto:ro
+      - ../hermes-schema/proto/topology.proto:/proto/topology.proto:ro
     depends_on:
       kafka:
         condition: service_healthy
 
+  hermes-pipeline:
+    build:
+      context: ..
+      dockerfile: hermes-pipeline/Dockerfile
+    environment:
+      KAFKA_BROKER: kafka:29092
+    depends_on:
+      kafka:
+        condition: service_healthy
+
+  atlas:
+    build:
+      context: ..
+      dockerfile: atlas/Dockerfile
+    environment:
+      KAFKA_BROKER: kafka:29092
+      KAFKA_TOPIC: topology.canonical
+    depends_on:
+      kafka:
+        condition: service_healthy
+
+  ipfs-cache-postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: ipfs_cache
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5433:5432"
+    volumes:
+      - ipfs-cache-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d ipfs_cache"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+  hermes-ipfs-cache:
+    build:
+      context: ..
+      dockerfile: hermes-ipfs-cache/Dockerfile
+    environment:
+      DATABASE_URL: postgres://postgres:postgres@ipfs-cache-postgres:5432/ipfs_cache
+      IPFS_GATEWAY: https://gateway.ipfs.io/ipfs/
+      SUBSTREAMS_ENDPOINT: ${SUBSTREAMS_ENDPOINT}
+      SUBSTREAMS_API_TOKEN: ${SUBSTREAMS_API_TOKEN}
+      START_BLOCK: ${START_BLOCK:-0}
+      RUST_LOG: info,hermes_ipfs_cache=debug
+    depends_on:
+      ipfs-cache-postgres:
+        condition: service_healthy
+
 volumes:
   kafka-data:
+  ipfs-cache-data:

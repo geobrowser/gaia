@@ -6,6 +6,7 @@
 //! Run with: `cargo test --test postgres_cursor`
 
 use actions_indexer_repository::{CursorRepository, PostgresCursorRepository};
+use sqlx::Row;
 
 /// Creates test cursor data for testing.
 fn make_test_cursor_data() -> (&'static str, &'static str, i64) {
@@ -33,17 +34,15 @@ async fn test_save_and_get_cursor(pool: sqlx::PgPool) {
     assert_eq!(retrieved_cursor.unwrap(), cursor);
 
     // Verify in database
-    let row = sqlx::query!(
-        "SELECT id, cursor, block_number FROM meta WHERE id = $1",
-        id
-    )
-    .fetch_one(&pool)
-    .await
-    .unwrap();
+    let row = sqlx::query("SELECT id, cursor, block_number FROM meta WHERE id = $1")
+        .bind(id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
 
-    assert_eq!(row.id, id);
-    assert_eq!(row.cursor, cursor);
-    assert_eq!(row.block_number, block_number.to_string());
+    assert_eq!(row.get::<String, _>("id"), id);
+    assert_eq!(row.get::<String, _>("cursor"), cursor);
+    assert_eq!(row.get::<String, _>("block_number"), block_number.to_string());
 }
 
 #[sqlx::test(migrations = "src/postgres/migrations")]
@@ -79,19 +78,21 @@ async fn test_update_existing_cursor(pool: sqlx::PgPool) {
     assert_eq!(retrieved_cursor.unwrap(), updated_cursor);
 
     // Verify only one record exists
-    let count = sqlx::query!("SELECT COUNT(*) as count FROM meta WHERE id = $1", id)
+    let count = sqlx::query("SELECT COUNT(*) as count FROM meta WHERE id = $1")
+        .bind(id)
         .fetch_one(&pool)
         .await
         .unwrap();
-    assert_eq!(count.count.unwrap(), 1);
+    assert_eq!(count.get::<i64, _>("count"), 1);
 
     // Verify values in database
-    let row = sqlx::query!("SELECT cursor, block_number FROM meta WHERE id = $1", id)
+    let row = sqlx::query("SELECT cursor, block_number FROM meta WHERE id = $1")
+        .bind(id)
         .fetch_one(&pool)
         .await
         .unwrap();
-    assert_eq!(row.cursor, updated_cursor);
-    assert_eq!(row.block_number, updated_block.to_string());
+    assert_eq!(row.get::<String, _>("cursor"), updated_cursor);
+    assert_eq!(row.get::<String, _>("block_number"), updated_block.to_string());
 }
 
 // ============================================================================

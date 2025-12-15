@@ -4,7 +4,6 @@ version = "0.1.0"
 edition = "2021"
 
 [lib]
-name = "hermes_schema"
 path = "src/lib.rs"
 
 [dependencies]

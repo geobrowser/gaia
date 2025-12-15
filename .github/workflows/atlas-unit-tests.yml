@@ -5,10 +5,16 @@ on:
     branches: [ main, develop ]
     paths:
       - 'atlas/**'
+      - 'hermes-relay/**'
+      - 'hermes-substream/**'
+      - 'stream/**'
   pull_request:
     branches: [ main, develop ]
     paths:
       - 'atlas/**'
+      - 'hermes-relay/**'
+      - 'hermes-substream/**'
+      - 'stream/**'
 
 env:
   CARGO_TERM_COLOR: always
@@ -44,3 +50,7 @@ jobs:
       working-directory: ./atlas
       env:
         RUST_BACKTRACE: 1
+
+    - name: Check benchmarks compile
+      run: cargo build --benches
+      working-directory: ./atlas

@@ -19,4 +19,7 @@ pub enum ActionsRepositoryError {
 
     #[error("Invalid vote type: {0}")]
     InvalidVoteType(i16),
+
+    #[error("Invalid object type: {0}")]
+    InvalidObjectType(i16),
 }

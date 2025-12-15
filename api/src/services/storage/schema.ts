@@ -418,7 +418,7 @@ export const rawActions = pgTable(
 		actionType: bigint("action_type", { mode: "number" }).notNull(),
 		actionVersion: bigint("action_version", { mode: "number" }).notNull(),
 		sender: varchar("sender", { length: 42 }).notNull(),
-		entity: uuid("entity").notNull(),
+		objectId: uuid("object_id").notNull(),
 		groupId: uuid("group_id"),
 		spacePov: uuid("space_pov").notNull(),
 		metadata: bytea("metadata"),
@@ -428,6 +428,7 @@ export const rawActions = pgTable(
 			mode: "date",
 		}).notNull(),
 		txHash: varchar("tx_hash", { length: 66 }).notNull(),
+		objectType: smallint("object_type").notNull(),
 	},
 	// no explicit indexes/uniques defined in SQL for this table
 );
@@ -440,7 +441,8 @@ export const userVotes = pgTable(
 	{
 		id: serial("id").primaryKey(),
 		userId: varchar("user_id", { length: 42 }).notNull(),
-		entityId: uuid("entity_id").notNull(),
+		objectId: uuid("object_id").notNull(),
+		objectType: smallint("object_type").notNull(),
 		spaceId: uuid("space_id").notNull(),
 		voteType: smallint("vote_type").notNull(),
 		votedAt: timestamp("voted_at", {
@@ -450,16 +452,18 @@ export const userVotes = pgTable(
 	},
 	(table) => {
 		return {
-			// UNIQUE(user_id, entity_id, space_id)
-			uqUserEntitySpace: unique("user_votes_user_entity_space_unique").on(
+			// UNIQUE(user_id, object_id, space_id)
+			uqUserEntityObjectTypeSpace: unique("user_votes_user_entity_object_type_space_unique").on(
 				table.userId,
-				table.entityId,
+				table.objectId,
+				table.objectType,
 				table.spaceId,
 			),
-			// CREATE INDEX idx_user_votes_user_entity_space ON user_votes(user_id, entity_id, space_id)
-			idxUserEntitySpace: index("idx_user_votes_user_entity_space").on(
+			// CREATE INDEX idx_user_votes_user_entity_space ON user_votes(user_id, object_id, space_id)
+			idxUserEntityObjectTypeSpace: index("idx_user_votes_user_entity_object_type_space").on(
 				table.userId,
-				table.entityId,
+				table.objectId,
+				table.objectType,
 				table.spaceId,
 			),
 		};
@@ -473,23 +477,26 @@ export const votesCount = pgTable(
 	"votes_count",
 	{
 		id: serial("id").primaryKey(),
-		entityId: uuid("entity_id").notNull(),
+		objectId: uuid("object_id").notNull(),
+		objectType: smallint("object_type").notNull(),
 		spaceId: uuid("space_id").notNull(),
 		upvotes: bigint("upvotes", { mode: "number" }).notNull().default(0),
 		downvotes: bigint("downvotes", { mode: "number" }).notNull().default(0),
 	},
 	(table) => {
 		return {
-			// UNIQUE(entity_id, space_id)
-			uqEntitySpace: unique("votes_count_entity_space_unique").on(
-				table.entityId,
+			// UNIQUE(object_id, object_type, space_id)
+			uqObjectObjectTypeSpace: unique("votes_count_object_object_type_space_unique").on(
+				table.objectId,
+				table.objectType,
 				table.spaceId,
 			),
 			// CREATE INDEX idx_votes_count_space ON votes_count(space_id)
 			idxSpace: index("idx_votes_count_space").on(table.spaceId),
-			// CREATE INDEX idx_votes_count_entity_space ON votes_count(entity_id, space_id)
-			idxEntitySpace: index("idx_votes_count_entity_space").on(
-				table.entityId,
+			// CREATE INDEX idx_votes_count_entity_space ON votes_count(object_id, object_type, space_id)
+			idxObjectObjectTypeSpace: index("idx_votes_count_object_object_type_space").on(
+				table.objectId,
+				table.objectType,
 				table.spaceId,
 			),
 		};

@@ -1,0 +1,19 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n                INSERT INTO user_votes (user_id, object_id, object_type, space_id, vote_type, voted_at)\n                VALUES ($1, $2, $3, $4, $5, $6)\n                ON CONFLICT (user_id, object_id, object_type, space_id)\n                DO UPDATE SET\n                    vote_type = EXCLUDED.vote_type,\n                    voted_at = EXCLUDED.voted_at\n                ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Varchar",
+        "Uuid",
+        "Int2",
+        "Uuid",
+        "Int2",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "bb0271e8fd47f9d27ed65cc6ca0ff8935c92b7429d015cc88e7e007e5d5200cc"
+}

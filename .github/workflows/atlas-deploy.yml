@@ -1,0 +1,73 @@
+name: Deploy Atlas
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'atlas/**'
+      - 'hermes-relay/**'
+      - 'hermes-schema/**'
+      - 'hermes-substream/**'
+      - 'stream/**'
+      - 'wire/**'
+      - 'hermes/k8s/atlas.yaml'
+      - '.github/workflows/atlas-deploy.yml'
+
+env:
+  REGISTRY: registry.digitalocean.com/geo
+  IMAGE_NAME: atlas
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install doctl
+        uses: digitalocean/action-doctl@v2
+        with:
+          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+
+      - name: Log in to DigitalOcean Container Registry
+        run: doctl registry login --expiry-seconds 1200
+
+      - name: Build and push Docker image
+        run: |
+          docker build -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
+                       -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest \
+                       -f atlas/Dockerfile .
+          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v4
+
+      - name: Configure kubectl for DigitalOcean
+        run: |
+          doctl kubernetes cluster kubeconfig save ${{ secrets.DIGITALOCEAN_CLUSTER_NAME }}
+
+      - name: Delete existing job (jobs are immutable)
+        run: |
+          kubectl delete job atlas -n kafka --ignore-not-found=true
+
+      - name: Apply k8s manifests
+        run: |
+          kubectl apply -f hermes/k8s/namespace.yaml
+          kubectl apply -f hermes/k8s/atlas.yaml
+
+      - name: Wait for job to start
+        run: |
+          kubectl wait --for=condition=ready pod -l app=atlas -n kafka --timeout=60s || true
+
+      - name: Show deployment status
+        run: |
+          echo "=== Atlas Job ==="
+          kubectl get job atlas -n kafka || echo "Job not found"
+          echo ""
+          echo "=== Atlas Pods ==="
+          kubectl get pods -n kafka -l app=atlas
+          echo ""
+          echo "=== Recent Events ==="
+          kubectl get events -n kafka --sort-by='.lastTimestamp' | tail -10

@@ -1,0 +1,189 @@
+specVersion: v0.1.0
+package:
+  name: "hermes_substream"
+  version: v0.1.0
+
+protobuf:
+  files:
+    - schema.proto
+  importPaths:
+    - ./proto
+
+binaries:
+  default:
+    type: wasm/rust-v1
+    file: ./target/wasm32-unknown-unknown/release/hermes_substream.wasm
+
+modules:
+  # Raw actions - for consumers who want full control
+  - name: map_actions
+    kind: map
+    initialBlock: 0
+    inputs:
+      - source: sf.ethereum.type.v2.Block
+    output:
+      type: proto:hermes.Actions
+
+  # Governance events - pre-filtered typed events
+  - name: map_spaces_registered
+    kind: map
+    initialBlock: 0
+    inputs:
+      - source: sf.ethereum.type.v2.Block
+    output:
+      type: proto:hermes.SpaceRegisteredList
+
+  - name: map_spaces_migrated
+    kind: map
+    initialBlock: 0
+    inputs:
+      - source: sf.ethereum.type.v2.Block
+    output:
+      type: proto:hermes.SpaceMigratedList
+
+  - name: map_proposals_created
+    kind: map
+    initialBlock: 0
+    inputs:
+      - source: sf.ethereum.type.v2.Block
+    output:
+      type: proto:hermes.ProposalCreatedList
+
+  - name: map_proposals_voted
+    kind: map
+    initialBlock: 0
+    inputs:
+      - source: sf.ethereum.type.v2.Block
+    output:
+      type: proto:hermes.ProposalVotedList
+
+  - name: map_proposals_executed
+    kind: map
+    initialBlock: 0
+    inputs:
+      - source: sf.ethereum.type.v2.Block
+    output:
+      type: proto:hermes.ProposalExecutedList
+
+  - name: map_editors_added
+    kind: map
+    initialBlock: 0
+    inputs:
+      - source: sf.ethereum.type.v2.Block
+    output:
+      type: proto:hermes.EditorAddedList
+
+  - name: map_editors_removed
+    kind: map
+    initialBlock: 0
+    inputs:
+      - source: sf.ethereum.type.v2.Block
+    output:
+      type: proto:hermes.EditorRemovedList
+
+  - name: map_members_added
+    kind: map
+    initialBlock: 0
+    inputs:
+      - source: sf.ethereum.type.v2.Block
+    output:
+      type: proto:hermes.MemberAddedList
+
+  - name: map_members_removed
+    kind: map
+    initialBlock: 0
+    inputs:
+      - source: sf.ethereum.type.v2.Block
+    output:
+      type: proto:hermes.MemberRemovedList
+
+  - name: map_editors_flagged
+    kind: map
+    initialBlock: 0
+    inputs:
+      - source: sf.ethereum.type.v2.Block
+    output:
+      type: proto:hermes.EditorFlaggedList
+
+  - name: map_editors_unflagged
+    kind: map
+    initialBlock: 0
+    inputs:
+      - source: sf.ethereum.type.v2.Block
+    output:
+      type: proto:hermes.EditorUnflaggedList
+
+  - name: map_spaces_left
+    kind: map
+    initialBlock: 0
+    inputs:
+      - source: sf.ethereum.type.v2.Block
+    output:
+      type: proto:hermes.SpaceLeftList
+
+  - name: map_topics_declared
+    kind: map
+    initialBlock: 0
+    inputs:
+      - source: sf.ethereum.type.v2.Block
+    output:
+      type: proto:hermes.TopicDeclaredList
+
+  - name: map_edits_published
+    kind: map
+    initialBlock: 0
+    inputs:
+      - source: sf.ethereum.type.v2.Block
+    output:
+      type: proto:hermes.EditsPublishedList
+
+  - name: map_content_flagged
+    kind: map
+    initialBlock: 0
+    inputs:
+      - source: sf.ethereum.type.v2.Block
+    output:
+      type: proto:hermes.ContentFlaggedList
+
+  - name: map_subspaces_added
+    kind: map
+    initialBlock: 0
+    inputs:
+      - source: sf.ethereum.type.v2.Block
+    output:
+      type: proto:hermes.SubspaceAddedList
+
+  - name: map_subspaces_removed
+    kind: map
+    initialBlock: 0
+    inputs:
+      - source: sf.ethereum.type.v2.Block
+    output:
+      type: proto:hermes.SubspaceRemovedList
+
+  # Permissionless events
+  - name: map_objects_upvoted
+    kind: map
+    initialBlock: 0
+    inputs:
+      - source: sf.ethereum.type.v2.Block
+    output:
+      type: proto:hermes.ObjectUpvotedList
+
+  - name: map_objects_downvoted
+    kind: map
+    initialBlock: 0
+    inputs:
+      - source: sf.ethereum.type.v2.Block
+    output:
+      type: proto:hermes.ObjectDownvotedList
+
+  - name: map_objects_unvoted
+    kind: map
+    initialBlock: 0
+    inputs:
+      - source: sf.ethereum.type.v2.Block
+    output:
+      type: proto:hermes.ObjectUnvotedList
+
+network: ethereum

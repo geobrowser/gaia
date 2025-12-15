@@ -18,13 +18,13 @@ pub struct Action {
     /// UserAddress (hex-encoded address)
     #[prost(string, tag="3")]
     pub sender: ::prost::alloc::string::String,
-    /// EntityId (UUID string)
+    /// ObjectId (UUID string)
     #[prost(string, tag="4")]
-    pub entity: ::prost::alloc::string::String,
+    pub object_id: ::prost::alloc::string::String,
     /// Optional GroupId (UUID string)
     #[prost(string, optional, tag="5")]
     pub group_id: ::core::option::Option<::prost::alloc::string::String>,
-    /// SpaceAddress (hex-encoded address)
+    /// SpacePOV (UUID string)
     #[prost(string, tag="6")]
     pub space_pov: ::prost::alloc::string::String,
     /// Optional metadata bytes
@@ -39,5 +39,8 @@ pub struct Action {
     /// TxHash (hex-encoded hash)
     #[prost(string, tag="10")]
     pub tx_hash: ::prost::alloc::string::String,
+    /// Object type identifier
+    #[prost(uint64, tag="11")]
+    pub object_type: u64,
 }
 // @@protoc_insertion_point(module)

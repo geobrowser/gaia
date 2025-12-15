@@ -4,7 +4,7 @@ use regex::Regex;
 use semver::Version;
 use lazy_static::lazy_static;
 
-use actions_indexer_shared::types::ActionRaw;
+use actions_indexer_shared::types::{ActionRaw, ActionType, ObjectType};
 
 use super::pb::sf::substreams::rpc::v2::{BlockScopedData, BlockUndoSignal};
 use super::pb::sf::substreams::v1::Package;
@@ -358,11 +358,14 @@ impl TryFrom<&Action> for ActionRaw {
         Ok(ActionRaw {
             sender: action.sender.parse()
                 .map_err(|e| ConsumerError::InvalidAddress(format!("sender: {}", e)))?,
-            action_type: action.action_type,
+            action_type: match action.action_type {
+                0 => ActionType::Vote,
+                _ => return Err(ConsumerError::InvalidActionType(format!("action_type: {}", action.action_type))),
+            },
             action_version: action.action_version,
             space_pov: action.space_pov.parse()
                 .map_err(|e| ConsumerError::InvalidAddress(format!("space_pov: {}", e)))?,
-            entity: action.entity.parse()
+            object_id: action.object_id.parse()
                 .map_err(|e| ConsumerError::InvalidUuid(format!("entity: {}", e)))?,
             group_id: if action.group_id.is_some() {
                 Some(action.group_id.as_ref().unwrap().parse()
@@ -375,7 +378,11 @@ impl TryFrom<&Action> for ActionRaw {
             block_timestamp: action.block_timestamp.into(),
             tx_hash: action.tx_hash.parse()
                 .map_err(|e| ConsumerError::InvalidTxHash(format!("tx_hash: {}", e)))?,
-            object_type: 0,
+            object_type: match action.object_type {
+                0 => ObjectType::Entity,
+                1 => ObjectType::Relation,
+                _ => return Err(ConsumerError::InvalidObjectType(format!("object_type: {}", action.object_type))),
+            },
         })
     }
 }

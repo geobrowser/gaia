@@ -36,20 +36,129 @@ spec:
               name: http
           env:
             - name: KAFKA_CLUSTERS_0_NAME
-              value: "local"
+              value: "do-managed"
             - name: KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS
-              value: "kafka-broker-0.broker.kafka.svc.cluster.local:29092"
-            - name: KAFKA_CLUSTERS_0_PROTOBUF_FILES_0_PATH
-              value: "/proto/knowledge.proto"
-            - name: KAFKA_CLUSTERS_0_PROTOBUF_FILES_1_PATH
-              value: "/proto/space.proto"
-            - name: KAFKA_CLUSTERS_0_PROTOBUF_FILES_2_PATH
-              value: "/proto/grc20.proto"
+              valueFrom:
+                secretKeyRef:
+                  name: kafka-credentials
+                  key: KAFKA_BROKER
+            - name: KAFKA_CLUSTERS_0_PROPERTIES_SECURITY_PROTOCOL
+              value: "SASL_SSL"
+            - name: KAFKA_CLUSTERS_0_PROPERTIES_SASL_MECHANISM
+              value: "PLAIN"
+            - name: KAFKA_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: kafka-credentials
+                  key: KAFKA_USERNAME
+            - name: KAFKA_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: kafka-credentials
+                  key: KAFKA_PASSWORD
+            - name: KAFKA_CLUSTERS_0_PROPERTIES_SASL_JAAS_CONFIG
+              value: "org.apache.kafka.common.security.plain.PlainLoginModule required username='$(KAFKA_USERNAME)' password='$(KAFKA_PASSWORD)';"
+            - name: KAFKA_CLUSTERS_0_SSL_TRUSTSTORELOCATION
+              value: "/etc/kafka/truststore.jks"
+            - name: KAFKA_CLUSTERS_0_SSL_TRUSTSTOREPASSWORD
+              value: "changeit"
+            # Protobuf serde for space.creations topic
+            - name: kafka.clusters.0.serde.0.name
+              value: "SpaceCreations"
+            - name: kafka.clusters.0.serde.0.className
+              value: "com.provectus.kafka.ui.serdes.builtin.ProtobufFileSerde"
+            - name: kafka.clusters.0.serde.0.topicValuesPattern
+              value: "space.creations"
+            - name: kafka.clusters.0.serde.0.properties.protobufFilesDir
+              value: "/proto/"
+            - name: kafka.clusters.0.serde.0.properties.protobufMessageName
+              value: "space.HermesCreateSpace"
+            # Protobuf serde for space.trust.extensions topic
+            - name: kafka.clusters.0.serde.1.name
+              value: "SpaceTrustExtensions"
+            - name: kafka.clusters.0.serde.1.className
+              value: "com.provectus.kafka.ui.serdes.builtin.ProtobufFileSerde"
+            - name: kafka.clusters.0.serde.1.topicValuesPattern
+              value: "space.trust.extensions"
+            - name: kafka.clusters.0.serde.1.properties.protobufFilesDir
+              value: "/proto/"
+            - name: kafka.clusters.0.serde.1.properties.protobufMessageName
+              value: "space.HermesSpaceTrustExtension"
+            # Protobuf serde for knowledge.edits topic
+            - name: kafka.clusters.0.serde.2.name
+              value: "KnowledgeEdits"
+            - name: kafka.clusters.0.serde.2.className
+              value: "com.provectus.kafka.ui.serdes.builtin.ProtobufFileSerde"
+            - name: kafka.clusters.0.serde.2.topicValuesPattern
+              value: "knowledge.edits"
+            - name: kafka.clusters.0.serde.2.properties.protobufFilesDir
+              value: "/proto/"
+            - name: kafka.clusters.0.serde.2.properties.protobufMessageName
+              value: "knowledge.HermesEdit"
+            # Protobuf serde for topology.canonical topic
+            - name: kafka.clusters.0.serde.3.name
+              value: "TopologyCanonical"
+            - name: kafka.clusters.0.serde.3.className
+              value: "com.provectus.kafka.ui.serdes.builtin.ProtobufFileSerde"
+            - name: kafka.clusters.0.serde.3.topicValuesPattern
+              value: "topology.canonical"
+            - name: kafka.clusters.0.serde.3.properties.protobufFilesDir
+              value: "/proto/"
+            - name: kafka.clusters.0.serde.3.properties.protobufMessageName
+              value: "topology.CanonicalGraphUpdated"
           volumeMounts:
-            - name: protobuf-schemas
+            - name: truststore
+              mountPath: /etc/kafka
+              readOnly: true
+            - name: proto-files
               mountPath: /proto
               readOnly: true
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+      initContainers:
+        - name: create-truststore
+          image: eclipse-temurin:17-jdk
+          command:
+            - /bin/sh
+            - -c
+            - |
+              echo "$KAFKA_SSL_CA_PEM" > /tmp/ca.crt
+              keytool -importcert -alias kafka-ca -file /tmp/ca.crt -keystore /truststore/truststore.jks -storepass changeit -noprompt
+          env:
+            - name: KAFKA_SSL_CA_PEM
+              valueFrom:
+                secretKeyRef:
+                  name: kafka-credentials
+                  key: KAFKA_SSL_CA_PEM
+          volumeMounts:
+            - name: truststore
+              mountPath: /truststore
+        - name: copy-proto-files
+          image: busybox:1.36
+          command:
+            - /bin/sh
+            - -c
+            - |
+              # Copy only the actual proto files, excluding Kubernetes symlink metadata
+              for f in /proto-configmap/*.proto; do
+                cp "$f" /proto/
+              done
+          volumeMounts:
+            - name: proto-configmap
+              mountPath: /proto-configmap
+              readOnly: true
+            - name: proto-files
+              mountPath: /proto
       volumes:
-        - name: protobuf-schemas
+        - name: truststore
+          emptyDir: {}
+        - name: proto-files
+          emptyDir: {}
+        - name: proto-configmap
           configMap:
             name: protobuf-schemas

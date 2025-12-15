@@ -1,0 +1,66 @@
+syntax = "proto3";
+
+package topology;
+
+import "blockchain_metadata.proto";
+
+// Emitted when the canonical graph changes.
+// The canonical graph represents the "trusted" portion of the topology,
+// where trust flows only through explicit edges (Verified, Related).
+message CanonicalGraphUpdated {
+  // Root space this graph was computed from
+  bytes root_id = 1;
+
+  // Tree representation with edge metadata.
+  // The tree structure preserves distance from root, which matters
+  // for downstream consumers.
+  CanonicalTreeNode tree = 2;
+
+  // Flat set of all canonical space IDs.
+  // Useful for quick membership checks without traversing the tree.
+  repeated bytes canonical_space_ids = 3;
+
+  // Block metadata from the event that triggered this update
+  blockchain_metadata.BlockchainMetadata meta = 4;
+}
+
+// A node in the canonical tree.
+// Represents a space and how it was reached from its parent.
+message CanonicalTreeNode {
+  // The space this node represents
+  bytes space_id = 1;
+
+  // How this node was reached from its parent.
+  // Uses oneof to enforce that topic_id is only present for topic edges.
+  oneof edge {
+    // Root node has no incoming edge
+    RootEdge root = 2;
+
+    // Verified trust relationship (explicit edge)
+    VerifiedEdge verified = 3;
+
+    // Related trust relationship (explicit edge)
+    RelatedEdge related = 4;
+
+    // Topic-based membership (resolved from SubtopicExtension)
+    TopicEdge topic = 5;
+  }
+
+  // Children of this node in the traversal
+  repeated CanonicalTreeNode children = 6;
+}
+
+// Root node edge - no additional data needed
+message RootEdge {}
+
+// Verified trust relationship edge - no additional data needed
+message VerifiedEdge {}
+
+// Related trust relationship edge - no additional data needed  
+message RelatedEdge {}
+
+// Topic-based membership edge - includes the topic ID
+message TopicEdge {
+  // The topic through which this space was reached
+  bytes topic_id = 1;
+}
