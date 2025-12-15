@@ -34,6 +34,7 @@ pub mod cache;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use hermes_instrumentation::{debug, error, info, warn};
 use hermes_relay::{HermesModule, Sink};
 use hermes_substream::pb::hermes::{EditsPublished, EditsPublishedList};
 use ipfs::{IpfsFetcher, IpfsSource};
@@ -102,11 +103,7 @@ impl PendingFetches {
         let is_min = self.blocks.first_key_value().map(|(b, _)| *b) == Some(block);
         self.blocks.remove(&block);
 
-        if is_min {
-            Some((block, cursor))
-        } else {
-            None
-        }
+        if is_min { Some((block, cursor)) } else { None }
     }
 }
 
@@ -183,7 +180,7 @@ impl Sink for IpfsCacheSink {
         let edit_count = edits_list.edits.len();
 
         if edit_count > 0 {
-            tracing::info!(block = block_number, edits = edit_count, "Processing edits");
+            info!(block = block_number, edits = edit_count, "Processing edits");
 
             // Register all pending fetches for this block upfront
             self.pending
@@ -204,14 +201,14 @@ impl Sink for IpfsCacheSink {
             task::spawn(async move {
                 let result = process_edit_event(edit, &cache, &ipfs, &block_ts, block_num).await;
                 if let Err(e) = result {
-                    tracing::error!(error = %e, "Failed to process edit event");
+                    error!(error = %e, "Failed to process edit event");
                 }
 
                 // Mark this fetch as complete - persist cursor if block fully completed
                 let cursor_to_persist = pending.lock().await.complete_one(block_num);
 
                 if let Some((persist_block, persist_cursor)) = cursor_to_persist {
-                    tracing::debug!(
+                    debug!(
                         block = persist_block,
                         "Block fully cached, persisting cursor"
                     );
@@ -221,7 +218,7 @@ impl Sink for IpfsCacheSink {
                         .persist_cursor(INDEXER_ID, &persist_cursor, persist_block)
                         .await
                     {
-                        tracing::error!(error = %e, "Failed to persist cursor");
+                        error!(error = %e, "Failed to persist cursor");
                     }
                 }
 
@@ -259,7 +256,7 @@ async fn process_edit_event(
     // Convert space_id bytes to hex string
     let space_id = hex::encode(&edit.space_id);
 
-    tracing::debug!(
+    debug!(
         uri = %uri,
         space_id = %space_id,
         block = block_number,
@@ -271,7 +268,7 @@ async fn process_edit_event(
 
     let item = match result {
         Ok(decoded_edit) => {
-            tracing::info!(
+            info!(
                 uri = %uri,
                 block = block_number,
                 "Successfully cached IPFS content"
@@ -285,7 +282,7 @@ async fn process_edit_event(
             }
         }
         Err(error) => {
-            tracing::warn!(
+            warn!(
                 uri = %uri,
                 block = block_number,
                 error = %error,

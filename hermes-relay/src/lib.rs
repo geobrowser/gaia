@@ -94,7 +94,7 @@ pub mod sink;
 pub mod source;
 
 // Re-export config types at crate root for convenience
-pub use config::{HermesModule, HERMES_SPKG};
+pub use config::{HERMES_SPKG, HermesModule};
 
 // Re-export sink traits and stream source config
 pub use sink::{PreprocessedSink, Sink, StreamSource};

@@ -4,9 +4,9 @@
 
 use anyhow::Result;
 
-use hermes_relay::{actions, Action};
+use hermes_relay::{Action, actions};
 use hermes_schema::pb::space::{
-    hermes_space_trust_extension, HermesSpaceTrustExtension, VerifiedExtension,
+    HermesSpaceTrustExtension, VerifiedExtension, hermes_space_trust_extension,
 };
 
 use super::BlockMetadata;

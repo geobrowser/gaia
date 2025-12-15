@@ -41,10 +41,10 @@ use hermes_relay::stream::utils;
 use hermes_relay::{Actions, HermesModule, Sink, StreamSource};
 
 use cache::MockIpfsCache;
-use emit::{topics, Emitter};
+use emit::{Emitter, topics};
+use pipelines::BlockMetadata;
 use pipelines::edits::RetryConfig;
 use pipelines::trust::get_extension_type;
-use pipelines::BlockMetadata;
 
 /// Error type for the pipeline that implements std::error::Error
 #[derive(Debug)]

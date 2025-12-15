@@ -4,9 +4,9 @@
 
 use anyhow::Result;
 
-use hermes_relay::{actions, Action};
+use hermes_relay::{Action, actions};
 use hermes_schema::pb::space::{
-    hermes_create_space, DefaultDaoSpacePayload, HermesCreateSpace, PersonalSpacePayload,
+    DefaultDaoSpacePayload, HermesCreateSpace, PersonalSpacePayload, hermes_create_space,
 };
 
 use super::BlockMetadata;

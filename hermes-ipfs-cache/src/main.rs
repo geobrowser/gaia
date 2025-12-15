@@ -4,7 +4,8 @@
 
 use std::collections::HashMap;
 
-use hermes_ipfs_cache::{cache::CacheSource, IpfsCacheSink};
+use hermes_instrumentation::{Backend, Config, info};
+use hermes_ipfs_cache::{IpfsCacheSink, cache::CacheSource};
 use hermes_relay::{Sink, StreamSource};
 use ipfs::IpfsSource;
 use wire::pb::grc20::Edit;
@@ -56,10 +57,13 @@ fn test_topology_edits() -> HashMap<String, Edit> {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    // Initialize tracing
-    tracing_subscriber::fmt::init();
+    // Initialize telemetry
+    hermes_instrumentation::init(Config {
+        namespace: "ipfs-cache",
+        backend: Backend::Console,
+    })?;
 
-    tracing::info!("Starting Hermes IPFS Cache with mock data");
+    info!("Starting Hermes IPFS Cache with mock data");
 
     // Create mock cache (in-memory)
     let cache = CacheSource::mock().into_cache().await?;
@@ -71,7 +75,7 @@ async fn main() -> anyhow::Result<()> {
     let sink = IpfsCacheSink::new(cache, ipfs_source);
     sink.run(StreamSource::mock()).await?;
 
-    tracing::info!("Hermes IPFS Cache finished");
+    info!("Hermes IPFS Cache finished");
 
     Ok(())
 }
