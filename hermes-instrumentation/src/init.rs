@@ -1,6 +1,7 @@
 //! Telemetry initialization.
 
 use crate::config::{Backend, Config};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 /// Errors that can occur during telemetry initialization.
 #[derive(Debug, thiserror::Error)]
@@ -25,7 +26,7 @@ pub enum Error {
 ///
 /// fn main() -> Result<(), hermes_instrumentation::Error> {
 ///     hermes_instrumentation::init(Config {
-///         namespace: "my-service".to_string(),
+///         namespace: "my-service",
 ///         backend: Backend::Console,
 ///     })?;
 ///
@@ -40,17 +41,107 @@ pub enum Error {
 /// OpenTelemetry initialization fails.
 pub fn init(config: Config) -> Result<(), Error> {
     match config.backend {
-        Backend::Console => init_console(&config.namespace),
-        Backend::Otlp { endpoint } => init_otlp(&config.namespace, &endpoint),
+        Backend::Console => init_console(config.namespace),
+        Backend::Otlp { endpoint } => init_otlp(config.namespace, endpoint),
     }
 }
 
-fn init_console(_namespace: &str) -> Result<(), Error> {
-    // TODO: Implement in Phase 2
-    todo!("Console backend not yet implemented")
+fn init_console(namespace: &'static str) -> Result<(), Error> {
+    // Create a formatting layer for console output
+    // Use a custom format that includes the namespace
+    let fmt_layer = tracing_subscriber::fmt::layer()
+        .with_target(true)
+        .with_thread_ids(false)
+        .with_file(false)
+        .with_line_number(false)
+        .event_format(NamespacedEventFormat::new(namespace));
+
+    // Use RUST_LOG env var for filtering, with a sensible default
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+
+    tracing_subscriber::registry()
+        .with(filter)
+        .with(fmt_layer)
+        .init();
+
+    // Log startup
+    tracing::info!(service.name = namespace, "Telemetry initialized");
+
+    Ok(())
 }
 
-fn init_otlp(_namespace: &str, _endpoint: &str) -> Result<(), Error> {
+/// Custom event formatter that prefixes span names with the namespace.
+struct NamespacedEventFormat {
+    namespace: &'static str,
+    timer: tracing_subscriber::fmt::time::SystemTime,
+}
+
+impl NamespacedEventFormat {
+    fn new(namespace: &'static str) -> Self {
+        Self {
+            namespace,
+            timer: tracing_subscriber::fmt::time::SystemTime,
+        }
+    }
+}
+
+impl<S, N> tracing_subscriber::fmt::FormatEvent<S, N> for NamespacedEventFormat
+where
+    S: tracing::Subscriber + for<'a> tracing_subscriber::registry::LookupSpan<'a>,
+    N: for<'a> tracing_subscriber::fmt::FormatFields<'a> + 'static,
+{
+    fn format_event(
+        &self,
+        ctx: &tracing_subscriber::fmt::FmtContext<'_, S, N>,
+        mut writer: tracing_subscriber::fmt::format::Writer<'_>,
+        event: &tracing::Event<'_>,
+    ) -> std::fmt::Result {
+        use tracing_subscriber::fmt::time::FormatTime;
+
+        // Timestamp
+        self.timer.format_time(&mut writer)?;
+        write!(writer, " ")?;
+
+        // Level
+        let level = *event.metadata().level();
+        write!(writer, "{:>5} ", level)?;
+
+        // Span context with namespace prefix
+        if let Some(scope) = ctx.event_scope() {
+            let mut first = true;
+            for span in scope.from_root() {
+                if !first {
+                    write!(writer, ":")?;
+                }
+                // Prefix span name with namespace
+                write!(writer, "{}.{}", self.namespace, span.name())?;
+
+                let ext = span.extensions();
+                if let Some(fields) = ext
+                    .get::<tracing_subscriber::fmt::FormattedFields<N>>()
+                {
+                    if !fields.is_empty() {
+                        write!(writer, "{{{}}}", fields)?;
+                    }
+                }
+                first = false;
+            }
+            if !first {
+                write!(writer, ": ")?;
+            }
+        }
+
+        // Target
+        write!(writer, "{}: ", event.metadata().target())?;
+
+        // Event fields
+        ctx.field_format().format_fields(writer.by_ref(), event)?;
+
+        writeln!(writer)
+    }
+}
+
+fn init_otlp(_namespace: &'static str, _endpoint: &'static str) -> Result<(), Error> {
     // TODO: Implement in Phase 4
     todo!("OTLP backend not yet implemented")
 }

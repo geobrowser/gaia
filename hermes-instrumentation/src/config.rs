@@ -7,7 +7,7 @@ pub struct Config {
     ///
     /// For example, if namespace is "ipfs-cache", a span named "fetch_content"
     /// will appear as "ipfs-cache.fetch_content" in telemetry output.
-    pub namespace: String,
+    pub namespace: &'static str,
 
     /// Telemetry backend to use.
     pub backend: Backend,
@@ -34,6 +34,6 @@ pub enum Backend {
         /// Examples:
         /// - `http://localhost:4317` (local collector)
         /// - `https://api.axiom.co` (Axiom direct)
-        endpoint: String,
+        endpoint: &'static str,
     },
 }
