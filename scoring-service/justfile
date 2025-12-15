@@ -14,3 +14,6 @@ run:
 test:
     uv run pytest
 
+# Run with Docker Compose
+docker-run:
+    docker compose up --build -d && docker compose logs -f
