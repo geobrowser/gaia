@@ -84,7 +84,7 @@ pub use tracing::{
 pub struct Config {
     /// Service namespace, prefixed to all span names
     /// e.g., "ipfs-cache" results in spans like "ipfs-cache.fetch_content"
-    pub namespace: String,
+    pub namespace: &'static str,
     
     /// Telemetry backend
     pub backend: Backend,
@@ -94,10 +94,20 @@ pub enum Backend {
     /// Log spans and events to stdout
     Console,
     
-    /// Export via OpenTelemetry Protocol
-    Otlp {
-        /// OTLP endpoint (e.g., "http://localhost:4317" or "https://api.axiom.co")
-        endpoint: String,
+    /// Export via OpenTelemetry Protocol over gRPC
+    /// For local collectors (Jaeger, OTel Collector)
+    OtlpGrpc {
+        endpoint: &'static str,      // e.g., "http://localhost:4317"
+        headers: &'static [(&'static str, &'static str)],
+        debug: bool,                  // Also emit to stdout
+    },
+    
+    /// Export via OpenTelemetry Protocol over HTTP  
+    /// For cloud providers (Axiom, Grafana Cloud)
+    OtlpHttp {
+        endpoint: &'static str,      // e.g., "https://api.axiom.co/v1/traces"
+        headers: &'static [(&'static str, &'static str)],
+        debug: bool,
     },
 }
 
@@ -130,13 +140,13 @@ pub fn init(config: Config) -> Result<(), Error>;
 ```rust
 // hermes-ipfs-cache/src/main.rs
 
-use hermes_instrumentation::{self, info, instrument, Config, Backend};
+use hermes_instrumentation::{info, Config, Backend};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     // Initialize telemetry
     hermes_instrumentation::init(Config {
-        namespace: "ipfs-cache".to_string(),
+        namespace: "ipfs-cache",
         backend: Backend::Console,
     })?;
     

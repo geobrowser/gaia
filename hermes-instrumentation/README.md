@@ -132,6 +132,21 @@ async fn my_function(id: u32) {
 }
 ```
 
+## Examples
+
+Run the examples to see telemetry in action:
+
+```sh
+# Console output
+cargo run -p hermes-instrumentation --example console
+
+# OTLP over gRPC (for Jaeger, OTel Collector)
+cargo run -p hermes-instrumentation --example otlp_grpc
+
+# OTLP over HTTP (for Axiom, Grafana Cloud)
+cargo run -p hermes-instrumentation --example otlp_http
+```
+
 ## Shutdown
 
 When using the OTLP backend, call `shutdown()` before exit to flush pending spans:

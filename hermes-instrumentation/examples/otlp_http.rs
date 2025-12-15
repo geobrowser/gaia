@@ -1,24 +1,22 @@
-//! Example demonstrating OTLP telemetry export.
+//! Example demonstrating OTLP telemetry export over HTTP.
 //!
-//! This example exports traces via OTLP gRPC to the configured endpoint.
+//! Use this for cloud providers like Axiom that require HTTP.
 //!
-//! To test with a local collector:
+//! To test with Axiom:
 //!
-//! ```sh
-//! # Option 1: Jaeger all-in-one with OTLP support
-//! docker run -d --name jaeger \
-//!   -p 4317:4317 \
-//!   -p 4318:4318 \
-//!   -p 16686:16686 \
-//!   jaegertracing/all-in-one:latest
+//! 1. Create a dataset at https://app.axiom.co
+//! 2. Create an API token with ingest permissions
+//! 3. Set environment variables:
+//!    ```sh
+//!    export AXIOM_TOKEN="xaat-xxx"
+//!    export AXIOM_DATASET="my-traces"
+//!    ```
+//! 4. Run this example:
+//!    ```sh
+//!    cargo run -p hermes-instrumentation --example otlp_http
+//!    ```
 //!
-//! # Then run this example
-//! cargo run -p hermes-instrumentation --example otlp
-//!
-//! # View traces at http://localhost:16686
-//! ```
-//!
-//! Run with: cargo run -p hermes-instrumentation --example otlp
+//! Run with: cargo run -p hermes-instrumentation --example otlp_http
 
 use hermes_instrumentation::{Backend, Config, Instrument, info, info_span};
 
@@ -65,14 +63,20 @@ async fn fetch_data(source: &str) {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Initialize telemetry with OTLP backend
-    // Default Jaeger OTLP endpoint (no auth headers needed)
+    // Initialize telemetry with OTLP HTTP backend for Axiom
     // Set debug: true to also emit OTEL spans to stdout
+    //
+    // For production, use environment variables:
+    //   AXIOM_TOKEN and AXIOM_DATASET
     hermes_instrumentation::init(Config {
         namespace: "example-service",
-        backend: Backend::OtlpGrpc {
-            endpoint: "http://localhost:4317",
-            headers: &[],
+        backend: Backend::OtlpHttp {
+            endpoint: "https://api.axiom.co/v1/traces",
+            headers: &[
+                // Replace with your actual token, or use env vars in production
+                ("Authorization", "Bearer xaat-your-token-here"),
+                ("X-Axiom-Dataset", "your-dataset-name"),
+            ],
             debug: true,
         },
     })?;
