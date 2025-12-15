@@ -7,10 +7,25 @@ pub struct Config {
     ///
     /// For example, if namespace is "ipfs-cache", a span named "fetch_content"
     /// will appear as "ipfs-cache.fetch_content" in telemetry output.
-    pub namespace: &'static str,
+    pub namespace: String,
 
     /// Telemetry backend to use.
     pub backend: Backend,
+}
+
+impl Config {
+    /// Create a new configuration with the given namespace and backend.
+    pub fn new(namespace: impl Into<String>, backend: Backend) -> Self {
+        Self {
+            namespace: namespace.into(),
+            backend,
+        }
+    }
+
+    /// Create a console backend configuration.
+    pub fn console(namespace: impl Into<String>) -> Self {
+        Self::new(namespace, Backend::Console)
+    }
 }
 
 /// Telemetry backend selection.
@@ -29,17 +44,17 @@ pub enum Backend {
     ///
     /// ```ignore
     /// Backend::OtlpGrpc {
-    ///     endpoint: "http://localhost:4317",
-    ///     headers: &[],
+    ///     endpoint: "http://localhost:4317".into(),
+    ///     headers: vec![],
     ///     debug: false,
     /// }
     /// ```
     OtlpGrpc {
         /// OTLP gRPC endpoint (typically port 4317).
-        endpoint: &'static str,
+        endpoint: String,
 
         /// Optional headers/metadata for authentication.
-        headers: &'static [(&'static str, &'static str)],
+        headers: Vec<(String, String)>,
 
         /// If true, also emit OTEL spans to stdout.
         debug: bool,
@@ -51,20 +66,20 @@ pub enum Backend {
     ///
     /// ```ignore
     /// Backend::OtlpHttp {
-    ///     endpoint: "https://api.axiom.co/v1/traces",
-    ///     headers: &[
-    ///         ("Authorization", "Bearer API_TOKEN"),
-    ///         ("X-Axiom-Dataset", "my-dataset"),
+    ///     endpoint: "https://api.axiom.co/v1/traces".into(),
+    ///     headers: vec![
+    ///         ("Authorization".into(), "Bearer API_TOKEN".into()),
+    ///         ("X-Axiom-Dataset".into(), "my-dataset".into()),
     ///     ],
     ///     debug: false,
     /// }
     /// ```
     OtlpHttp {
         /// OTLP HTTP endpoint (include full path, e.g., `/v1/traces`).
-        endpoint: &'static str,
+        endpoint: String,
 
         /// Headers for authentication.
-        headers: &'static [(&'static str, &'static str)],
+        headers: Vec<(String, String)>,
 
         /// If true, also emit OTEL spans to stdout.
         debug: bool,

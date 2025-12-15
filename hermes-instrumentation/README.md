@@ -22,16 +22,20 @@ hermes-instrumentation = { path = "../hermes-instrumentation" }
 Initialize telemetry at startup:
 
 ```rust
-use hermes_instrumentation::{init, info, info_span, Config, Backend, Instrument};
+use hermes_instrumentation::{init, info, info_span, Config, Instrument};
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Initialize with console output
-    hermes_instrumentation::init(Config {
-        namespace: "my-service",
-        backend: Backend::Console,
-    })?;
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Initialize telemetry BEFORE starting the tokio runtime (see note below)
+    hermes_instrumentation::init(Config::console("my-service"))?;
 
+    // Start tokio runtime
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?
+        .block_on(async_main())
+}
+
+async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Service started");
 
     // Create spans explicitly at call sites
@@ -44,6 +48,33 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 ```
+
+### Important: Initialization Order with Async Runtimes
+
+When using the OTLP HTTP backend with tokio, you **must** initialize telemetry **before** creating the tokio runtime:
+
+```rust
+// ✅ Correct: Initialize before runtime
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    hermes_instrumentation::init(config)?;
+    
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?
+        .block_on(async_main())
+}
+
+// ❌ Wrong: Will panic with "Cannot drop a runtime in a context where blocking is not allowed"
+#[tokio::main]
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    hermes_instrumentation::init(config)?;
+    // ...
+}
+```
+
+**Why?** The OTLP HTTP backend uses a `BatchSpanProcessor` that runs in a background thread. This processor uses a blocking HTTP client (`reqwest::blocking`) which creates its own internal tokio runtime. Tokio runtimes cannot be nested, so if you initialize telemetry inside `#[tokio::main]`, it will panic when the blocking client tries to create its nested runtime.
+
+The Console and OTLP gRPC backends do not have this restriction.
 
 ## Backends
 
@@ -61,8 +92,8 @@ For local collectors that support gRPC (Jaeger, OpenTelemetry Collector):
 
 ```rust
 Backend::OtlpGrpc {
-    endpoint: "http://localhost:4317",
-    headers: &[],
+    endpoint: "http://localhost:4317".into(),
+    headers: vec![],
     debug: false,
 }
 ```
@@ -73,10 +104,10 @@ For cloud providers that require HTTP (Axiom, Grafana Cloud):
 
 ```rust
 Backend::OtlpHttp {
-    endpoint: "https://api.axiom.co/v1/traces",
-    headers: &[
-        ("Authorization", "Bearer API_TOKEN"),
-        ("X-Axiom-Dataset", "my-dataset"),
+    endpoint: "https://api.axiom.co/v1/traces".into(),
+    headers: vec![
+        ("Authorization".into(), "Bearer API_TOKEN".into()),
+        ("X-Axiom-Dataset".into(), "my-dataset".into()),
     ],
     debug: false,
 }
@@ -132,6 +163,14 @@ async fn my_function(id: u32) {
 }
 ```
 
+## Shutdown
+
+For long-running services, the tracer provider will automatically flush and shutdown when the process exits. For short-lived processes or tests, you can optionally call `shutdown()` to ensure all spans are exported:
+
+```rust
+hermes_instrumentation::shutdown();
+```
+
 ## Examples
 
 Run the examples to see telemetry in action:
@@ -145,12 +184,4 @@ cargo run -p hermes-instrumentation --example otlp_grpc
 
 # OTLP over HTTP (for Axiom, Grafana Cloud)
 cargo run -p hermes-instrumentation --example otlp_http
-```
-
-## Shutdown
-
-When using the OTLP backend, call `shutdown()` before exit to flush pending spans:
-
-```rust
-hermes_instrumentation::shutdown();
 ```

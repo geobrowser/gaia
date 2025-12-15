@@ -2567,7 +2567,9 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "async-trait",
+ "dotenv",
  "futures 0.3.31",
+ "hermes-instrumentation",
  "hermes-kafka",
  "hermes-relay",
  "hermes-schema",

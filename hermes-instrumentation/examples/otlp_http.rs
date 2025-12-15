@@ -16,6 +16,11 @@
 //!    cargo run -p hermes-instrumentation --example otlp_http
 //!    ```
 //!
+//! **Important:** When using OTLP HTTP, telemetry must be initialized BEFORE
+//! the tokio runtime starts. This is because the batch span processor uses a
+//! blocking HTTP client that creates its own internal runtime, and tokio
+//! runtimes cannot be nested.
+//!
 //! Run with: cargo run -p hermes-instrumentation --example otlp_http
 
 use hermes_instrumentation::{Backend, Config, Instrument, info, info_span};
@@ -61,26 +66,37 @@ async fn fetch_data(source: &str) {
     info!("Data fetched successfully");
 }
 
-#[tokio::main]
-async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Initialize telemetry with OTLP HTTP backend for Axiom
-    // Set debug: true to also emit OTEL spans to stdout
+fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Initialize telemetry BEFORE starting the tokio runtime.
+    // The OTLP HTTP backend uses a blocking HTTP client internally,
+    // which creates its own runtime. Tokio runtimes cannot be nested.
     //
     // For production, use environment variables:
     //   AXIOM_TOKEN and AXIOM_DATASET
-    hermes_instrumentation::init(Config {
-        namespace: "example-service",
-        backend: Backend::OtlpHttp {
-            endpoint: "https://api.axiom.co/v1/traces",
-            headers: &[
+    hermes_instrumentation::init(Config::new(
+        "example-service",
+        Backend::OtlpHttp {
+            endpoint: "https://api.axiom.co/v1/traces".into(),
+            headers: vec![
                 // Replace with your actual token, or use env vars in production
-                ("Authorization", "Bearer xaat-your-token-here"),
-                ("X-Axiom-Dataset", "your-dataset-name"),
+                ("Authorization".into(), "Bearer xaat-your-token-here".into()),
+                ("X-Axiom-Dataset".into(), "your-dataset-name".into()),
             ],
             debug: true,
         },
-    })?;
+    ))?;
 
+    // Create tokio runtime manually (instead of #[tokio::main]) since telemetry
+    // must be initialized first.
+    // - new_multi_thread(): Thread pool for parallel task execution
+    // - enable_all(): Enables I/O and time drivers for network ops and delays
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()?
+        .block_on(async_main())
+}
+
+async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
     info!("Application starting");
 
     // Parent span with child spans (sync)
@@ -116,12 +132,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await;
 
     info!("Application finished");
-
-    // Give time for spans to be exported
-    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-
-    // Shutdown telemetry to flush remaining spans
-    hermes_instrumentation::shutdown();
 
     Ok(())
 }

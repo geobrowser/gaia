@@ -8,6 +8,7 @@ name = "hermes-pipeline"
 path = "src/main.rs"
 
 [dependencies]
+hermes-instrumentation = { path = "../hermes-instrumentation" }
 hermes-kafka = { path = "../hermes-kafka" }
 hermes-relay = { path = "../hermes-relay" }
 hermes-schema = { path = "../hermes-schema" }
@@ -20,4 +21,5 @@ async-trait = "0.1"
 thiserror = "1"
 futures = "0.3"
 anyhow = "1"
+dotenv = "0.15"
 hex = "0.4"

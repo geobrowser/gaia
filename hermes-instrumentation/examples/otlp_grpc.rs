@@ -64,17 +64,18 @@ async fn fetch_data(source: &str) {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Initialize telemetry with OTLP backend
+    // Initialize telemetry with OTLP gRPC backend.
+    // gRPC backend uses tonic which works within tokio, so #[tokio::main] is fine here.
     // Default Jaeger OTLP endpoint (no auth headers needed)
     // Set debug: true to also emit OTEL spans to stdout
-    hermes_instrumentation::init(Config {
-        namespace: "example-service",
-        backend: Backend::OtlpGrpc {
-            endpoint: "http://localhost:4317",
-            headers: &[],
+    hermes_instrumentation::init(Config::new(
+        "example-service",
+        Backend::OtlpGrpc {
+            endpoint: "http://localhost:4317".into(),
+            headers: vec![],
             debug: true,
         },
-    })?;
+    ))?;
 
     info!("Application starting");
 
@@ -111,12 +112,6 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     .await;
 
     info!("Application finished");
-
-    // Give time for spans to be exported
-    tokio::time::sleep(std::time::Duration::from_secs(1)).await;
-
-    // Shutdown telemetry to flush remaining spans
-    hermes_instrumentation::shutdown();
 
     Ok(())
 }
