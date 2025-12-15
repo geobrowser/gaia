@@ -7,6 +7,7 @@ fn main() -> Result<()> {
 
     // let protos = vec![
     //     "proto/blockchain_metadata.proto",
+    //     "proto/governance.proto",
     //     "proto/knowledge.proto",
     //     "proto/space.proto",
     //     "proto/topology.proto",
@@ -22,7 +23,7 @@ fn main() -> Result<()> {
     //     .expect("Failed to compile protos");
 
     // // Create a mod.rs file that re-exports each generated file
-    // let mod_file = "pub mod blockchain_metadata;\npub mod knowledge;\npub mod space;\npub mod topology;";
+    // let mod_file = "pub mod blockchain_metadata;\npub mod governance;\npub mod knowledge;\npub mod space;\npub mod topology;";
 
     // fs::write(out_dir.join("mod.rs"), mod_file).expect("Failed to write mod.rs");
     Ok(())
