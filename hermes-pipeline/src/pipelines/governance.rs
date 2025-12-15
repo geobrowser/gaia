@@ -5,7 +5,7 @@
 use anyhow::Result;
 use hermes_instrumentation::debug_span;
 
-use hermes_relay::{actions, Action};
+use hermes_relay::{Action, actions};
 use hermes_schema::pb::governance::{
     HermesProposalCreated, HermesProposalExecuted, HermesProposalVoted,
 };
@@ -22,9 +22,7 @@ pub struct TransformResult {
 
 impl TransformResult {
     pub fn total(&self) -> usize {
-        self.proposals_created.len()
-            + self.proposals_voted.len()
-            + self.proposals_executed.len()
+        self.proposals_created.len() + self.proposals_voted.len() + self.proposals_executed.len()
     }
 }
 
@@ -74,7 +72,10 @@ pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformRe
 /// - to_id: unused
 /// - topic: proposal_id (32 bytes) - unique proposal identifier
 /// - data: proposal metadata (title, description, voting period, etc.)
-fn convert_proposal_created(action: &Action, meta: &BlockMetadata) -> Result<HermesProposalCreated> {
+fn convert_proposal_created(
+    action: &Action,
+    meta: &BlockMetadata,
+) -> Result<HermesProposalCreated> {
     Ok(HermesProposalCreated {
         space_id: action.from_id.clone(),
         proposal_id: action.topic.clone(),
@@ -154,8 +155,8 @@ mod tests {
             from_id: vec![1; 16], // voter
             to_id: vec![2; 16],   // space
             action: actions::PROPOSAL_VOTED.to_vec(),
-            topic: vec![3; 32],   // proposal
-            data: vec![4, 5, 6],  // vote data
+            topic: vec![3; 32],  // proposal
+            data: vec![4, 5, 6], // vote data
         };
 
         let result = convert_proposal_voted(&action, &test_meta()).unwrap();
