@@ -10,7 +10,7 @@
 //! # Usage
 //!
 //! ```rust,no_run
-//! use hermes_instrumentation::{init, info, instrument, Config, Backend};
+//! use hermes_instrumentation::{init, info, info_span, Config, Backend, Instrument};
 //!
 //! #[tokio::main]
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -48,7 +48,7 @@ pub use tracing::{
     info_span,
     trace_span,
     warn_span,
-    // Attributes and utilities
+    // Utilities
     instrument,
     Instrument,
     Level,

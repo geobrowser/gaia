@@ -2,14 +2,12 @@
 //!
 //! Run with: cargo run -p hermes-instrumentation --example console
 
-use hermes_instrumentation::{info, info_span, instrument, Backend, Config, Instrument};
+use hermes_instrumentation::{info, info_span, Backend, Config, Instrument};
 
-#[instrument]
 fn process_item(item_id: u32) {
     info!(item_id, "Processing item");
 }
 
-#[instrument]
 async fn fetch_data(source: &str) {
     info!(source, "Fetching data");
     tokio::time::sleep(std::time::Duration::from_millis(10)).await;
@@ -26,13 +24,19 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     info!("Application starting");
 
-    // Demonstrate sync instrumentation
+    // Demonstrate explicit span instrumentation for sync code
     for i in 1..=3 {
+        let span = info_span!("process_item", item_id = i);
+        let _enter = span.enter();
         process_item(i);
     }
 
-    // Demonstrate async instrumentation
-    fetch_data("database").await;
+    // Demonstrate explicit span instrumentation for async code
+    async {
+        fetch_data("database").await;
+    }
+    .instrument(info_span!("fetch_data", source = "database"))
+    .await;
 
     // Demonstrate manual span creation
     let span = info_span!("batch_operation", batch_size = 10);
