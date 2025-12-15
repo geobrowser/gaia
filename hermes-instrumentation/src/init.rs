@@ -141,7 +141,51 @@ where
     }
 }
 
-fn init_otlp(_namespace: &'static str, _endpoint: &'static str) -> Result<(), Error> {
-    // TODO: Implement in Phase 4
-    todo!("OTLP backend not yet implemented")
+fn init_otlp(namespace: &'static str, endpoint: &'static str) -> Result<(), Error> {
+    use opentelemetry::trace::TracerProvider as _;
+    use opentelemetry::KeyValue;
+    use opentelemetry_otlp::WithExportConfig;
+    use opentelemetry_sdk::{trace::TracerProvider, Resource};
+
+    // Create OTLP exporter
+    let exporter = opentelemetry_otlp::SpanExporter::builder()
+        .with_tonic()
+        .with_endpoint(endpoint)
+        .build()
+        .map_err(|e| Error::OpenTelemetry(e.to_string()))?;
+
+    // Create tracer provider with service.name resource
+    // Use simple exporter for immediate export (no batching)
+    let resource = Resource::new(vec![KeyValue::new("service.name", namespace)]);
+
+    let provider = TracerProvider::builder()
+        .with_simple_exporter(exporter)
+        .with_resource(resource)
+        .build();
+
+    // Get tracer before setting global provider
+    let tracer = provider.tracer(namespace);
+
+    // Set global tracer provider
+    opentelemetry::global::set_tracer_provider(provider);
+
+    // Create OpenTelemetry tracing layer
+    let telemetry_layer = tracing_opentelemetry::layer().with_tracer(tracer);
+
+    // Use RUST_LOG env var for filtering, with a sensible default
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+
+    tracing_subscriber::registry()
+        .with(filter)
+        .with(telemetry_layer)
+        .init();
+
+    Ok(())
+}
+
+/// Shutdown the telemetry system, flushing any pending spans.
+///
+/// This should be called before the application exits to ensure all spans are exported.
+pub fn shutdown() {
+    opentelemetry::global::shutdown_tracer_provider();
 }

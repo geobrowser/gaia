@@ -32,7 +32,7 @@ mod init;
 pub use config::{Backend, Config};
 
 // Re-export initialization
-pub use init::{init, Error};
+pub use init::{init, shutdown, Error};
 
 // Re-export tracing macros for convenience
 pub use tracing::{
