@@ -48,10 +48,7 @@ async fn fetch_data(source: &str) {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize telemetry with console backend
-    hermes_instrumentation::init(Config {
-        namespace: "example-service",
-        backend: Backend::Console,
-    })?;
+    hermes_instrumentation::init(Config::console("example-service"))?;
 
     info!("Application starting");
 

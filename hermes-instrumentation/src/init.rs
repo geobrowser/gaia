@@ -25,10 +25,7 @@ pub enum Error {
 /// use hermes_instrumentation::{init, Config, Backend};
 ///
 /// fn main() -> Result<(), hermes_instrumentation::Error> {
-///     hermes_instrumentation::init(Config {
-///         namespace: "my-service",
-///         backend: Backend::Console,
-///     })?;
+///     hermes_instrumentation::init(Config::console("my-service"))?;
 ///
 ///     tracing::info!("Service started");
 ///     Ok(())
@@ -40,18 +37,21 @@ pub enum Error {
 /// Returns an error if the global subscriber has already been set or if
 /// OpenTelemetry initialization fails.
 pub fn init(config: Config) -> Result<(), Error> {
+    // Leak the namespace to get a &'static str for tracing
+    let namespace: &'static str = Box::leak(config.namespace.into_boxed_str());
+
     match config.backend {
-        Backend::Console => init_console(config.namespace),
+        Backend::Console => init_console(namespace),
         Backend::OtlpGrpc {
             endpoint,
             headers,
             debug,
-        } => init_otlp_grpc(config.namespace, endpoint, headers, debug),
+        } => init_otlp_grpc(namespace, &endpoint, &headers, debug),
         Backend::OtlpHttp {
             endpoint,
             headers,
             debug,
-        } => init_otlp_http(config.namespace, endpoint, headers, debug),
+        } => init_otlp_http(namespace, &endpoint, &headers, debug),
     }
 }
 
@@ -151,8 +151,8 @@ where
 
 fn init_otlp_grpc(
     namespace: &'static str,
-    endpoint: &'static str,
-    headers: &'static [(&'static str, &'static str)],
+    endpoint: &str,
+    headers: &[(String, String)],
     debug: bool,
 ) -> Result<(), Error> {
     use opentelemetry::KeyValue;
@@ -229,8 +229,8 @@ fn init_otlp_grpc(
 
 fn init_otlp_http(
     namespace: &'static str,
-    endpoint: &'static str,
-    headers: &'static [(&'static str, &'static str)],
+    endpoint: &str,
+    headers: &[(String, String)],
     debug: bool,
 ) -> Result<(), Error> {
     use opentelemetry::KeyValue;
@@ -239,10 +239,8 @@ fn init_otlp_http(
     use opentelemetry_sdk::{Resource, trace::SdkTracerProvider};
 
     // Build headers map
-    let mut header_map = std::collections::HashMap::new();
-    for (key, value) in headers {
-        header_map.insert(key.to_string(), value.to_string());
-    }
+    let header_map: std::collections::HashMap<String, String> =
+        headers.iter().cloned().collect();
 
     // Create OTLP HTTP exporter with headers
     let otlp_exporter = opentelemetry_otlp::SpanExporter::builder()

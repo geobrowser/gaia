@@ -68,18 +68,18 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     //
     // For production, use environment variables:
     //   AXIOM_TOKEN and AXIOM_DATASET
-    hermes_instrumentation::init(Config {
-        namespace: "example-service",
-        backend: Backend::OtlpHttp {
-            endpoint: "https://api.axiom.co/v1/traces",
-            headers: &[
+    hermes_instrumentation::init(Config::new(
+        "example-service",
+        Backend::OtlpHttp {
+            endpoint: "https://api.axiom.co/v1/traces".into(),
+            headers: vec![
                 // Replace with your actual token, or use env vars in production
-                ("Authorization", "Bearer xaat-your-token-here"),
-                ("X-Axiom-Dataset", "your-dataset-name"),
+                ("Authorization".into(), "Bearer xaat-your-token-here".into()),
+                ("X-Axiom-Dataset".into(), "your-dataset-name".into()),
             ],
             debug: true,
         },
-    })?;
+    ))?;
 
     info!("Application starting");
 

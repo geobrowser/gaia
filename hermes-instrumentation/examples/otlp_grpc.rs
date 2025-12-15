@@ -67,14 +67,14 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize telemetry with OTLP backend
     // Default Jaeger OTLP endpoint (no auth headers needed)
     // Set debug: true to also emit OTEL spans to stdout
-    hermes_instrumentation::init(Config {
-        namespace: "example-service",
-        backend: Backend::OtlpGrpc {
-            endpoint: "http://localhost:4317",
-            headers: &[],
+    hermes_instrumentation::init(Config::new(
+        "example-service",
+        Backend::OtlpGrpc {
+            endpoint: "http://localhost:4317".into(),
+            headers: vec![],
             debug: true,
         },
-    })?;
+    ))?;
 
     info!("Application starting");
 

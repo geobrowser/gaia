@@ -2568,6 +2568,7 @@ dependencies = [
  "anyhow",
  "async-trait",
  "futures 0.3.31",
+ "hermes-instrumentation",
  "hermes-kafka",
  "hermes-relay",
  "hermes-schema",

@@ -15,10 +15,7 @@
 //! #[tokio::main]
 //! async fn main() -> Result<(), Box<dyn std::error::Error>> {
 //!     // Initialize telemetry at startup
-//!     hermes_instrumentation::init(Config {
-//!         namespace: "my-service".to_string(),
-//!         backend: Backend::Console,
-//!     })?;
+//!     hermes_instrumentation::init(Config::console("my-service"))?;
 //!
 //!     info!("Service started");
 //!     Ok(())

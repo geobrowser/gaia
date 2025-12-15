@@ -40,6 +40,17 @@ This transformer is part of the Hermes architecture (see `docs/hermes-architectu
 | `START_BLOCK` | Block number to start from | `0` |
 | `END_BLOCK` | Block number to stop at (0 = live streaming) | `0` |
 
+### Telemetry Environment Variables
+
+If `OTEL_URL` is set, telemetry is exported via OTLP HTTP. Otherwise, logs are written to the console.
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `OTEL_URL` | OTLP HTTP endpoint | - |
+| `OTEL_TOKEN` | Bearer token for authentication | - |
+| `OTEL_DATASET` | Dataset name (sent as `X-Axiom-Dataset` header) | - |
+| `OTEL_DEBUG` | Also emit spans to stdout | `false` |
+
 ## Usage
 
 ### Local Development

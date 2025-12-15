@@ -280,8 +280,51 @@ impl Sink for Pipeline {
     }
 }
 
+/// Build telemetry configuration from environment variables.
+///
+/// Environment variables:
+/// - `OTEL_URL` - OTLP HTTP endpoint (e.g., "https://api.axiom.co/v1/traces")
+/// - `OTEL_TOKEN` - Bearer token for authentication
+/// - `OTEL_DATASET` - Dataset name (sent as X-Axiom-Dataset header)
+/// - `OTEL_DEBUG` - Set to "true" to also emit spans to stdout
+///
+/// If `OTEL_URL` is not set, falls back to Console backend.
+fn build_telemetry_config() -> hermes_instrumentation::Config {
+    use hermes_instrumentation::{Backend, Config};
+
+    let backend = match env::var("OTEL_URL") {
+        Ok(endpoint) => {
+            let mut headers = Vec::new();
+
+            if let Ok(token) = env::var("OTEL_TOKEN") {
+                headers.push(("Authorization".into(), format!("Bearer {}", token)));
+            }
+
+            if let Ok(dataset) = env::var("OTEL_DATASET") {
+                headers.push(("X-Axiom-Dataset".into(), dataset));
+            }
+
+            let debug = env::var("OTEL_DEBUG")
+                .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+                .unwrap_or(false);
+
+            Backend::OtlpHttp {
+                endpoint,
+                headers,
+                debug,
+            }
+        }
+        _ => Backend::Console,
+    };
+
+    Config::new("hermes-pipeline", backend)
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Initialize telemetry
+    hermes_instrumentation::init(build_telemetry_config())?;
+
     println!("Hermes Pipeline starting...");
 
     let broker = env::var("KAFKA_BROKER").unwrap_or_else(|_| "localhost:9092".to_string());
