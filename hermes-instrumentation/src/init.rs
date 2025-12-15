@@ -242,9 +242,13 @@ fn init_otlp_http(
     let header_map: std::collections::HashMap<String, String> =
         headers.iter().cloned().collect();
 
+    // Create reqwest client
+    let http_client = reqwest::Client::new();
+
     // Create OTLP HTTP exporter with headers
     let otlp_exporter = opentelemetry_otlp::SpanExporter::builder()
         .with_http()
+        .with_http_client(http_client)
         .with_endpoint(endpoint)
         .with_headers(header_map)
         .build()

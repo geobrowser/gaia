@@ -37,6 +37,24 @@ spec:
                 secretKeyRef:
                   name: kafka-credentials
                   key: KAFKA_SSL_CA_PEM
+            - name: OTEL_URL
+              valueFrom:
+                secretKeyRef:
+                  name: hermes-pipeline-otel
+                  key: OTEL_URL
+                  optional: true
+            - name: OTEL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hermes-pipeline-otel
+                  key: OTEL_TOKEN
+                  optional: true
+            - name: OTEL_DATASET
+              valueFrom:
+                secretKeyRef:
+                  name: hermes-pipeline-otel
+                  key: OTEL_DATASET
+                  optional: true
           resources:
             requests:
               memory: "256Mi"

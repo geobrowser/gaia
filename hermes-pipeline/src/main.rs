@@ -300,13 +300,20 @@ fn build_telemetry_config() -> hermes_instrumentation::Config {
                 headers.push(("Authorization".into(), format!("Bearer {}", token)));
             }
 
-            if let Ok(dataset) = env::var("OTEL_DATASET") {
-                headers.push(("X-Axiom-Dataset".into(), dataset));
+            let dataset = env::var("OTEL_DATASET").ok();
+            if let Some(ref dataset) = dataset {
+                headers.push(("X-Axiom-Dataset".into(), dataset.clone()));
             }
 
             let debug = env::var("OTEL_DEBUG")
                 .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
                 .unwrap_or(false);
+
+            println!(
+                "Telemetry: OTLP HTTP -> {} (dataset: {})",
+                endpoint,
+                dataset.as_deref().unwrap_or("none")
+            );
 
             Backend::OtlpHttp {
                 endpoint,
@@ -314,7 +321,10 @@ fn build_telemetry_config() -> hermes_instrumentation::Config {
                 debug,
             }
         }
-        _ => Backend::Console,
+        _ => {
+            println!("Telemetry: Console");
+            Backend::Console
+        }
     };
 
     Config::new("hermes-pipeline", backend)
@@ -322,6 +332,9 @@ fn build_telemetry_config() -> hermes_instrumentation::Config {
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Load .env file if present (ignored in production)
+    dotenv::dotenv().ok();
+
     // Initialize telemetry
     hermes_instrumentation::init(build_telemetry_config())?;
 
