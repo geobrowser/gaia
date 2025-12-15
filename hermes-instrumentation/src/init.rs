@@ -152,17 +152,21 @@ fn init_otlp(
 ) -> Result<(), Error> {
     use opentelemetry::KeyValue;
     use opentelemetry::trace::TracerProvider as _;
+    use opentelemetry_otlp::tonic_types::metadata::MetadataMap;
     use opentelemetry_otlp::{WithExportConfig, WithTonicConfig};
-    use opentelemetry_sdk::{Resource, trace::TracerProvider};
+    use opentelemetry_sdk::{Resource, trace::SdkTracerProvider};
 
-    // Build metadata from headers
-    let mut metadata = tonic::metadata::MetadataMap::new();
-    for (key, value) in headers {
-        if let (Ok(key), Ok(value)) = (
-            key.parse::<tonic::metadata::MetadataKey<_>>(),
-            value.parse::<tonic::metadata::MetadataValue<_>>(),
-        ) {
-            metadata.insert(key, value);
+    // Build metadata from headers using the underlying http::HeaderMap
+    let mut metadata = MetadataMap::default();
+    {
+        let header_map = metadata.as_mut();
+        for (key, value) in headers {
+            if let (Ok(key), Ok(value)) = (
+                key.parse::<http::header::HeaderName>(),
+                value.parse::<http::header::HeaderValue>(),
+            ) {
+                header_map.insert(key, value);
+            }
         }
     }
 
@@ -176,9 +180,11 @@ fn init_otlp(
 
     // Create tracer provider with service.name resource
     // Use simple exporter for immediate export (no batching)
-    let resource = Resource::new(vec![KeyValue::new("service.name", namespace)]);
+    let resource = Resource::builder()
+        .with_attribute(KeyValue::new("service.name", namespace))
+        .build();
 
-    let mut provider_builder = TracerProvider::builder()
+    let mut provider_builder = SdkTracerProvider::builder()
         .with_simple_exporter(otlp_exporter)
         .with_resource(resource);
 
@@ -220,5 +226,8 @@ fn init_otlp(
 ///
 /// This should be called before the application exits to ensure all spans are exported.
 pub fn shutdown() {
-    opentelemetry::global::shutdown_tracer_provider();
+    // In OpenTelemetry 0.31+, shutdown is handled by dropping the provider
+    // or calling shutdown on it directly. The global provider doesn't have
+    // a shutdown function anymore, so we just need to ensure spans are flushed.
+    // For simple exporters, spans are exported immediately, so this is a no-op.
 }
