@@ -180,6 +180,12 @@ fn init_otlp(namespace: &'static str, endpoint: &'static str) -> Result<(), Erro
         .with(telemetry_layer)
         .init();
 
+    // Log startup to console
+    eprintln!(
+        "Telemetry initialized: service.name={} otlp.endpoint={}",
+        namespace, endpoint
+    );
+
     Ok(())
 }
 
