@@ -4,8 +4,10 @@
 //! - `spaces`: SPACE_REGISTERED → space.creations
 //! - `trust`: SUBSPACE_ADDED/REMOVED → space.trust.extensions
 //! - `edits`: EDITS_PUBLISHED → knowledge.edits
+//! - `governance`: PROPOSAL_CREATED/VOTED/EXECUTED → space.governance
 
 pub mod edits;
+pub mod governance;
 pub mod spaces;
 pub mod trust;
 

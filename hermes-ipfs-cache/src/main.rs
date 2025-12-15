@@ -59,7 +59,7 @@ fn test_topology_edits() -> HashMap<String, Edit> {
 async fn main() -> anyhow::Result<()> {
     // Initialize telemetry
     hermes_instrumentation::init(Config {
-        namespace: "ipfs-cache",
+        namespace: "ipfs-cache".to_string(),
         backend: Backend::Console,
     })?;
 

@@ -9,6 +9,7 @@ use prost::Message;
 
 use hermes_kafka::{BaseProducer, BaseRecord, Header, OwnedHeaders};
 use hermes_schema::pb::{
+    governance::{HermesProposalCreated, HermesProposalExecuted, HermesProposalVoted},
     knowledge::HermesEdit,
     space::{
         HermesCreateSpace, HermesSpaceTrustExtension, hermes_create_space,
@@ -25,6 +26,7 @@ pub mod topics {
     pub const SPACE_CREATIONS: &str = "space.creations";
     pub const TRUST_EXTENSIONS: &str = "space.trust.extensions";
     pub const EDITS: &str = "knowledge.edits";
+    pub const GOVERNANCE: &str = "space.governance";
 }
 
 // =============================================================================
@@ -110,6 +112,51 @@ impl KafkaEvent for HermesEdit {
                 key: "ops-count",
                 value: Some(&self.ops.len().to_string()),
             })
+    }
+}
+
+impl KafkaEvent for HermesProposalCreated {
+    const TOPIC: &'static str = topics::GOVERNANCE;
+
+    fn key(&self) -> Vec<u8> {
+        self.space_id.clone()
+    }
+
+    fn headers(&self) -> OwnedHeaders {
+        OwnedHeaders::new().insert(Header {
+            key: "event-type",
+            value: Some("PROPOSAL_CREATED"),
+        })
+    }
+}
+
+impl KafkaEvent for HermesProposalVoted {
+    const TOPIC: &'static str = topics::GOVERNANCE;
+
+    fn key(&self) -> Vec<u8> {
+        self.space_id.clone() // Key by proposal's space for ordering
+    }
+
+    fn headers(&self) -> OwnedHeaders {
+        OwnedHeaders::new().insert(Header {
+            key: "event-type",
+            value: Some("PROPOSAL_VOTED"),
+        })
+    }
+}
+
+impl KafkaEvent for HermesProposalExecuted {
+    const TOPIC: &'static str = topics::GOVERNANCE;
+
+    fn key(&self) -> Vec<u8> {
+        self.space_id.clone()
+    }
+
+    fn headers(&self) -> OwnedHeaders {
+        OwnedHeaders::new().insert(Header {
+            key: "event-type",
+            value: Some("PROPOSAL_EXECUTED"),
+        })
     }
 }
 
@@ -200,5 +247,47 @@ mod tests {
             meta: None,
         };
         assert_eq!(edit.key(), b"my_space_id".to_vec());
+    }
+
+    #[test]
+    fn test_governance_topics() {
+        assert_eq!(HermesProposalCreated::TOPIC, "space.governance");
+        assert_eq!(HermesProposalVoted::TOPIC, "space.governance");
+        assert_eq!(HermesProposalExecuted::TOPIC, "space.governance");
+    }
+
+    #[test]
+    fn test_proposal_created_key() {
+        let event = HermesProposalCreated {
+            space_id: vec![0xAB; 16],
+            proposal_id: vec![0xCD; 32],
+            data: vec![],
+            meta: None,
+        };
+        assert_eq!(event.key(), vec![0xAB; 16]);
+    }
+
+    #[test]
+    fn test_proposal_voted_key() {
+        let event = HermesProposalVoted {
+            voter_id: vec![0x11; 16],
+            space_id: vec![0xAB; 16],
+            proposal_id: vec![0xCD; 32],
+            data: vec![],
+            meta: None,
+        };
+        // Should key by space_id, not voter_id
+        assert_eq!(event.key(), vec![0xAB; 16]);
+    }
+
+    #[test]
+    fn test_proposal_executed_key() {
+        let event = HermesProposalExecuted {
+            space_id: vec![0xAB; 16],
+            proposal_id: vec![0xCD; 32],
+            data: vec![],
+            meta: None,
+        };
+        assert_eq!(event.key(), vec![0xAB; 16]);
     }
 }

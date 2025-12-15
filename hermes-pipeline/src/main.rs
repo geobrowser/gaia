@@ -9,13 +9,16 @@
 //! - `SUBSPACE_ADDED` - trust extensions -> `space.trust.extensions` topic
 //! - `SUBSPACE_REMOVED` - trust revocations -> `space.trust.extensions` topic
 //! - `EDITS_PUBLISHED` - edit publications -> `knowledge.edits` topic
+//! - `PROPOSAL_CREATED` - proposal creations -> `space.governance` topic
+//! - `PROPOSAL_VOTED` - proposal votes -> `space.governance` topic
+//! - `PROPOSAL_EXECUTED` - proposal executions -> `space.governance` topic
 //!
 //! ## Architecture
 //!
 //! The pipeline processes blocks in three parallel stages:
 //! 1. **Transform**: All pipelines run concurrently to transform actions into events
 //! 2. **Join**: Wait for all transformations to complete
-//! 3. **Emit**: Send events to Kafka in order (spaces, trust, edits)
+//! 3. **Emit**: Send events to Kafka in order (spaces, trust, governance, edits)
 //!
 //! ## Configuration
 //!
@@ -80,6 +83,7 @@ impl From<prost::DecodeError> for PipelineError {
 /// Subscribes to `HermesModule::Actions` and processes:
 /// - `SPACE_REGISTERED` -> spaces pipeline
 /// - `SUBSPACE_ADDED/REMOVED` -> trust pipeline
+/// - `PROPOSAL_CREATED/VOTED/EXECUTED` -> governance pipeline
 /// - `EDITS_PUBLISHED` -> edits pipeline (with IPFS cache lookup)
 ///
 /// All pipelines run in parallel, then events are emitted to Kafka in order.
@@ -131,6 +135,9 @@ impl Pipeline {
         let trust = info_span!("transform.trust", action_count = actions.len())
             .in_scope(|| pipelines::trust::transform(actions, &meta))?;
 
+        let governance = info_span!("transform.governance", action_count = actions.len())
+            .in_scope(|| pipelines::governance::transform(actions, &meta))?;
+
         // Async transform - has cache lookups with retries
         let edits = pipelines::edits::transform(actions, &meta, &self.cache, &self.retry_config)
             .instrument(info_span!("transform.edits", action_count = actions.len()))
@@ -140,9 +147,10 @@ impl Pipeline {
         // Phase 3: Emit events to Kafka in order
         // =========================================================================
         // Ordering matters here:
-        // 1. Spaces must be emitted first since trust and edit events reference spaces
+        // 1. Spaces must be emitted first since trust, governance, and edit events reference spaces
         // 2. Trust events come next as they define the space topology
-        // 3. Edits come last as they may reference entities across trusted spaces
+        // 3. Governance events come after trust (proposals reference spaces)
+        // 4. Edits come last as they may reference entities across trusted spaces
 
         {
             let _emit_span = info_span!("emit").entered();
@@ -169,6 +177,36 @@ impl Pipeline {
                         extension_type = get_extension_type(&trust_event.event),
                         is_removal = trust_event.is_removal,
                         "Trust event emitted"
+                    );
+                }
+            }
+
+            // Emit governance events
+            {
+                let _span = info_span!("emit.governance", count = governance.total()).entered();
+                for event in &governance.proposals_created {
+                    self.emitter.emit(event)?;
+                    debug!(
+                        space_id = %hex::encode(&event.space_id),
+                        proposal_id = %hex::encode(&event.proposal_id),
+                        "Proposal created"
+                    );
+                }
+                for event in &governance.proposals_voted {
+                    self.emitter.emit(event)?;
+                    debug!(
+                        voter_id = %hex::encode(&event.voter_id),
+                        space_id = %hex::encode(&event.space_id),
+                        proposal_id = %hex::encode(&event.proposal_id),
+                        "Proposal voted"
+                    );
+                }
+                for event in &governance.proposals_executed {
+                    self.emitter.emit(event)?;
+                    debug!(
+                        space_id = %hex::encode(&event.space_id),
+                        proposal_id = %hex::encode(&event.proposal_id),
+                        "Proposal executed"
                     );
                 }
             }
@@ -208,14 +246,16 @@ impl Pipeline {
         // Log block summary
         let space_count = spaces.events.len() as u64;
         let trust_count = trust.events.len() as u64;
+        let governance_count = governance.total() as u64;
         let edit_count = edits.events.len() as u64;
-        let total = space_count + trust_count + edit_count;
+        let total = space_count + trust_count + governance_count + edit_count;
 
         if total > 0 || edits.cache_misses > 0 || edits.errored_entries > 0 {
             info!(
                 spaces = space_count,
                 trust_added = trust.added,
                 trust_removed = trust.removed,
+                governance = governance_count,
                 edits = edit_count,
                 cache_misses = edits.cache_misses,
                 errored_entries = edits.errored_entries,
@@ -365,6 +405,7 @@ async fn async_main() -> anyhow::Result<()> {
         module = %HermesModule::Actions,
         topics.spaces = topics::SPACE_CREATIONS,
         topics.trust = topics::TRUST_EXTENSIONS,
+        topics.governance = topics::GOVERNANCE,
         topics.edits = topics::EDITS,
         retry_initial_ms = pipeline.retry_config.initial_delay_ms,
         retry_factor = pipeline.retry_config.factor,
