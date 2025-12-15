@@ -14,6 +14,7 @@ tracing-opentelemetry = "0.28"
 opentelemetry = "0.27"
 opentelemetry_sdk = { version = "0.27", features = ["rt-tokio"] }
 opentelemetry-otlp = { version = "0.27", features = ["grpc-tonic"] }
+opentelemetry-stdout = { version = "0.27", features = ["trace"] }
 tonic = "0.12"
 
 # Error handling

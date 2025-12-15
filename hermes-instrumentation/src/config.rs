@@ -44,8 +44,14 @@ pub enum Backend {
         ///         ("Authorization", "Bearer API_TOKEN"),
         ///         ("X-Axiom-Dataset", "my-dataset"),
         ///     ],
+        ///     debug: false,
         /// }
         /// ```
         headers: &'static [(&'static str, &'static str)],
+
+        /// If true, also emit OTEL spans to stdout in JSON format.
+        ///
+        /// Useful for debugging to see the raw span data being exported.
+        debug: bool,
     },
 }

@@ -65,6 +65,7 @@ Local collector (Jaeger, OpenTelemetry Collector):
 Backend::Otlp {
     endpoint: "http://localhost:4317",
     headers: &[],
+    debug: false,
 }
 ```
 
@@ -77,8 +78,11 @@ Backend::Otlp {
         ("Authorization", "Bearer API_TOKEN"),
         ("X-Axiom-Dataset", "my-dataset"),
     ],
+    debug: false,
 }
 ```
+
+Set `debug: true` to also emit OTEL spans to stdout, showing trace IDs, span IDs, timing, and all attributes.
 
 ## Instrumentation
 

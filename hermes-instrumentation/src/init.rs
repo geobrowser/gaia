@@ -42,7 +42,11 @@ pub enum Error {
 pub fn init(config: Config) -> Result<(), Error> {
     match config.backend {
         Backend::Console => init_console(config.namespace),
-        Backend::Otlp { endpoint, headers } => init_otlp(config.namespace, endpoint, headers),
+        Backend::Otlp {
+            endpoint,
+            headers,
+            debug,
+        } => init_otlp(config.namespace, endpoint, headers, debug),
     }
 }
 
@@ -144,6 +148,7 @@ fn init_otlp(
     namespace: &'static str,
     endpoint: &'static str,
     headers: &'static [(&'static str, &'static str)],
+    debug: bool,
 ) -> Result<(), Error> {
     use opentelemetry::KeyValue;
     use opentelemetry::trace::TracerProvider as _;
@@ -162,7 +167,7 @@ fn init_otlp(
     }
 
     // Create OTLP exporter with headers
-    let exporter = opentelemetry_otlp::SpanExporter::builder()
+    let otlp_exporter = opentelemetry_otlp::SpanExporter::builder()
         .with_tonic()
         .with_endpoint(endpoint)
         .with_metadata(metadata)
@@ -173,10 +178,17 @@ fn init_otlp(
     // Use simple exporter for immediate export (no batching)
     let resource = Resource::new(vec![KeyValue::new("service.name", namespace)]);
 
-    let provider = TracerProvider::builder()
-        .with_simple_exporter(exporter)
-        .with_resource(resource)
-        .build();
+    let mut provider_builder = TracerProvider::builder()
+        .with_simple_exporter(otlp_exporter)
+        .with_resource(resource);
+
+    // Optionally add stdout exporter for debugging
+    if debug {
+        let stdout_exporter = opentelemetry_stdout::SpanExporter::default();
+        provider_builder = provider_builder.with_simple_exporter(stdout_exporter);
+    }
+
+    let provider = provider_builder.build();
 
     // Get tracer before setting global provider
     let tracer = provider.tracer(namespace);
