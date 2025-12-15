@@ -4,6 +4,7 @@
 //! for any type that implements `KafkaEvent + prost::Message`.
 
 use anyhow::Result;
+use hermes_instrumentation::debug_span;
 use prost::Message;
 
 use hermes_kafka::{BaseProducer, BaseRecord, Header, OwnedHeaders};
@@ -132,16 +133,17 @@ impl Emitter {
         let mut payload = Vec::new();
         event.encode(&mut payload)?;
 
-        let key = event.key();
-        let record = BaseRecord::to(T::TOPIC)
-            .key(&key)
-            .payload(&payload)
-            .headers(event.headers());
+        debug_span!("kafka.send", topic = T::TOPIC, payload_size = payload.len()).in_scope(|| {
+            let key = event.key();
+            let record = BaseRecord::to(T::TOPIC)
+                .key(&key)
+                .payload(&payload)
+                .headers(event.headers());
 
-        self.producer
-            .send(record)
-            .map_err(|(e, _)| anyhow::anyhow!(e))?;
-        Ok(())
+            self.producer
+                .send(record)
+                .map_err(|(e, _)| anyhow::anyhow!(e))
+        })
     }
 
     /// Emit a batch of events.

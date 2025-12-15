@@ -14,6 +14,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use futures::future::join_all;
+use hermes_instrumentation::{Instrument, debug_span, info_span};
 use tokio_retry::Retry;
 use tokio_retry::strategy::{ExponentialBackoff, jitter};
 
@@ -114,7 +115,10 @@ pub async fn transform<C: IpfsCache + 'static>(
     }
 
     // Fetch all edits in parallel
-    let fetch_results = fetch_edits_parallel(requests, meta, cache, retry_config).await;
+    let request_count = requests.len();
+    let fetch_results = fetch_edits_parallel(requests, meta, cache, retry_config)
+        .instrument(info_span!("fetch.batch", count = request_count))
+        .await;
 
     // Collect results
     let mut result = TransformResult::default();
@@ -152,10 +156,14 @@ async fn fetch_edits_parallel<C: IpfsCache + 'static>(
             let cache = Arc::clone(cache);
             let retry_config = retry_config.clone();
             let meta = meta.clone();
+            let ipfs_hash = req.ipfs_hash.clone();
 
-            tokio::spawn(async move {
-                fetch_edit_with_retry(req, &action, &meta, &cache, &retry_config).await
-            })
+            tokio::spawn(
+                async move {
+                    fetch_edit_with_retry(req, &action, &meta, &cache, &retry_config).await
+                }
+                .instrument(info_span!("fetch.edit", ipfs_hash = %ipfs_hash)),
+            )
         })
         .collect();
 
@@ -183,8 +191,14 @@ async fn fetch_edit_with_retry<C: IpfsCache>(
         .map(jitter)
         .take(config.max_retries);
 
-    let result = Retry::spawn(retry_strategy, || async {
-        cache.get(&req.ipfs_hash, &req.space_id).await
+    let ipfs_hash = req.ipfs_hash.clone();
+    let space_id = req.space_id.clone();
+    let result = Retry::spawn(retry_strategy, || {
+        let hash = ipfs_hash.clone();
+        let hash_for_span = hash.clone();
+        let space = space_id.clone();
+        async move { cache.get(&hash, &space).await }
+            .instrument(debug_span!("cache.get", ipfs_hash = %hash_for_span))
     })
     .await;
 
@@ -193,10 +207,10 @@ async fn fetch_edit_with_retry<C: IpfsCache>(
             if cached_edit.is_errored {
                 EditFetchResult::Errored
             } else if let Some(edit) = cached_edit.edit {
-                match convert(action, &edit, meta) {
+                debug_span!("convert").in_scope(|| match convert(action, &edit, meta) {
                     Ok(event) => EditFetchResult::Success(Box::new(event)),
                     Err(_) => EditFetchResult::FetchFailed,
-                }
+                })
             } else {
                 // Entry exists but no edit content
                 EditFetchResult::Errored

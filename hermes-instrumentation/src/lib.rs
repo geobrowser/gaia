@@ -10,17 +10,31 @@
 //! # Usage
 //!
 //! ```rust,no_run
-//! use hermes_instrumentation::{init, info, info_span, Config, Backend, Instrument};
+//! use hermes_instrumentation::{init, info, info_span, Config, Instrument};
 //!
-//! #[tokio::main]
-//! async fn main() -> Result<(), Box<dyn std::error::Error>> {
-//!     // Initialize telemetry at startup
+//! fn main() -> Result<(), Box<dyn std::error::Error>> {
+//!     // Initialize telemetry BEFORE starting the tokio runtime
 //!     hermes_instrumentation::init(Config::console("my-service"))?;
 //!
-//!     info!("Service started");
-//!     Ok(())
+//!     tokio::runtime::Builder::new_multi_thread()
+//!         .enable_all()
+//!         .build()?
+//!         .block_on(async {
+//!             info!("Service started");
+//!             // ... application runs ...
+//!             Ok(())
+//!         })
 //! }
 //! ```
+//!
+//! # Important: OTLP HTTP and Async Runtimes
+//!
+//! When using the OTLP HTTP backend, you **must** initialize telemetry before creating
+//! a tokio runtime. The HTTP backend uses a blocking reqwest client internally (for the
+//! background batch processor), which creates its own internal runtime. Tokio runtimes
+//! cannot be nested, so initializing inside `#[tokio::main]` will panic.
+//!
+//! The Console and OTLP gRPC backends do not have this restriction.
 
 mod config;
 mod init;

@@ -5,18 +5,24 @@ on:
     branches: [main, develop]
     paths:
       - 'hermes-pipeline/**'
+      - 'hermes-instrumentation/**'
       - 'hermes-relay/**'
+      - 'hermes-schema/**'
       - 'hermes-substream/**'
       - 'hermes-kafka/**'
       - 'stream/**'
+      - 'wire/**'
   pull_request:
     branches: [main, develop]
     paths:
       - 'hermes-pipeline/**'
+      - 'hermes-instrumentation/**'
       - 'hermes-relay/**'
+      - 'hermes-schema/**'
       - 'hermes-substream/**'
       - 'hermes-kafka/**'
       - 'stream/**'
+      - 'wire/**'
 
 env:
   CARGO_TERM_COLOR: always

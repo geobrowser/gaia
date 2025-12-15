@@ -2,7 +2,7 @@
 //!
 //! Run with: cargo run -p hermes-instrumentation --example console
 
-use hermes_instrumentation::{Backend, Config, Instrument, info, info_span};
+use hermes_instrumentation::{Config, Instrument, info, info_span};
 
 fn validate_item(item_id: u32) {
     info!(item_id, "Validating item");
@@ -47,7 +47,8 @@ async fn fetch_data(source: &str) {
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // Initialize telemetry with console backend
+    // Initialize telemetry with console backend.
+    // Console backend doesn't have the runtime nesting issue, so #[tokio::main] is fine.
     hermes_instrumentation::init(Config::console("example-service"))?;
 
     info!("Application starting");

@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - 'hermes-pipeline/**'
+      - 'hermes-instrumentation/**'
       - 'hermes-relay/**'
       - 'hermes-schema/**'
       - 'hermes-substream/**'
