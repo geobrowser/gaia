@@ -1,0 +1,19 @@
+[package]
+name = "hermes-instrumentation"
+version = "0.1.0"
+edition = "2024"
+description = "Unified telemetry for the Hermes ecosystem"
+
+[dependencies]
+# Tracing core
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# OpenTelemetry
+tracing-opentelemetry = "0.28"
+opentelemetry = "0.27"
+opentelemetry_sdk = { version = "0.27", features = ["rt-tokio"] }
+opentelemetry-otlp = { version = "0.27", features = ["grpc-tonic"] }
+
+# Error handling
+thiserror = "2"
