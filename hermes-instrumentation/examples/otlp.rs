@@ -35,11 +35,12 @@ async fn fetch_data(source: &str) {
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Initialize telemetry with OTLP backend
-    // Default Jaeger OTLP endpoint
+    // Default Jaeger OTLP endpoint (no auth headers needed)
     hermes_instrumentation::init(Config {
         namespace: "example-service",
         backend: Backend::Otlp {
             endpoint: "http://localhost:4317",
+            headers: &[],
         },
     })?;
 

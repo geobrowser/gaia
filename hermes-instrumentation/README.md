@@ -57,11 +57,26 @@ Backend::Console
 
 ### OTLP
 
-Exports traces via OpenTelemetry Protocol (gRPC) to any OTLP-compatible backend (Jaeger, Grafana Tempo, Axiom, etc.):
+Exports traces via OpenTelemetry Protocol (gRPC) to any OTLP-compatible backend.
+
+Local collector (Jaeger, OpenTelemetry Collector):
 
 ```rust
 Backend::Otlp {
     endpoint: "http://localhost:4317",
+    headers: &[],
+}
+```
+
+Cloud providers with authentication (Axiom, Grafana Cloud):
+
+```rust
+Backend::Otlp {
+    endpoint: "https://api.axiom.co",
+    headers: &[
+        ("Authorization", "Bearer API_TOKEN"),
+        ("X-Axiom-Dataset", "my-dataset"),
+    ],
 }
 ```
 

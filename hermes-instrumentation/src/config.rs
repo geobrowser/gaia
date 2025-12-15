@@ -21,19 +21,31 @@ pub enum Backend {
     /// Useful for local development and debugging.
     Console,
 
-    /// Export telemetry via OpenTelemetry Protocol (OTLP).
+    /// Export telemetry via OpenTelemetry Protocol (OTLP) over gRPC.
     ///
     /// Can target any OTLP-compatible backend:
     /// - OpenTelemetry Collector
     /// - Jaeger (with OTLP receiver)
-    /// - Axiom (direct OTLP ingestion)
     /// - Grafana Cloud
     Otlp {
         /// OTLP gRPC endpoint.
         ///
         /// Examples:
         /// - `http://localhost:4317` (local collector)
-        /// - `https://api.axiom.co` (Axiom direct)
         endpoint: &'static str,
+
+        /// Optional headers to include with each request.
+        ///
+        /// Useful for authentication with cloud providers like Axiom:
+        /// ```ignore
+        /// Backend::Otlp {
+        ///     endpoint: "https://api.axiom.co",
+        ///     headers: &[
+        ///         ("Authorization", "Bearer API_TOKEN"),
+        ///         ("X-Axiom-Dataset", "my-dataset"),
+        ///     ],
+        /// }
+        /// ```
+        headers: &'static [(&'static str, &'static str)],
     },
 }

@@ -42,7 +42,7 @@ pub enum Error {
 pub fn init(config: Config) -> Result<(), Error> {
     match config.backend {
         Backend::Console => init_console(config.namespace),
-        Backend::Otlp { endpoint } => init_otlp(config.namespace, endpoint),
+        Backend::Otlp { endpoint, headers } => init_otlp(config.namespace, endpoint, headers),
     }
 }
 
@@ -140,16 +140,32 @@ where
     }
 }
 
-fn init_otlp(namespace: &'static str, endpoint: &'static str) -> Result<(), Error> {
+fn init_otlp(
+    namespace: &'static str,
+    endpoint: &'static str,
+    headers: &'static [(&'static str, &'static str)],
+) -> Result<(), Error> {
     use opentelemetry::KeyValue;
     use opentelemetry::trace::TracerProvider as _;
-    use opentelemetry_otlp::WithExportConfig;
+    use opentelemetry_otlp::{WithExportConfig, WithTonicConfig};
     use opentelemetry_sdk::{Resource, trace::TracerProvider};
 
-    // Create OTLP exporter
+    // Build metadata from headers
+    let mut metadata = tonic::metadata::MetadataMap::new();
+    for (key, value) in headers {
+        if let (Ok(key), Ok(value)) = (
+            key.parse::<tonic::metadata::MetadataKey<_>>(),
+            value.parse::<tonic::metadata::MetadataValue<_>>(),
+        ) {
+            metadata.insert(key, value);
+        }
+    }
+
+    // Create OTLP exporter with headers
     let exporter = opentelemetry_otlp::SpanExporter::builder()
         .with_tonic()
         .with_endpoint(endpoint)
+        .with_metadata(metadata)
         .build()
         .map_err(|e| Error::OpenTelemetry(e.to_string()))?;
 
