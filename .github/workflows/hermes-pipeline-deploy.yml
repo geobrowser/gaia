@@ -1,12 +1,20 @@
 name: Deploy Hermes Pipeline
 
 on:
-  workflow_run:
-    workflows: ["Hermes Pipeline Check"]
-    types:
-      - completed
+  push:
     branches:
       - main
+    paths:
+      - 'hermes-pipeline/**'
+      - 'hermes-instrumentation/**'
+      - 'hermes-relay/**'
+      - 'hermes-schema/**'
+      - 'hermes-substream/**'
+      - 'hermes-kafka/**'
+      - 'stream/**'
+      - 'wire/**'
+      - 'hermes/k8s/hermes-pipeline.yaml'
+      - '.github/workflows/hermes-pipeline-deploy.yml'
 
 env:
   REGISTRY: registry.digitalocean.com/geo
@@ -15,8 +23,6 @@ env:
 jobs:
   deploy:
     runs-on: ubuntu-latest
-    # Only deploy if the check workflow succeeded
-    if: ${{ github.event.workflow_run.conclusion == 'success' }}
     steps:
       - name: Checkout code
         uses: actions/checkout@v4
