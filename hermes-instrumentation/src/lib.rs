@@ -13,8 +13,9 @@
 //! use hermes_instrumentation::{init, info, info_span, Config, Instrument};
 //!
 //! fn main() -> Result<(), Box<dyn std::error::Error>> {
-//!     // Initialize telemetry BEFORE starting the tokio runtime
-//!     hermes_instrumentation::init(Config::console("my-service"))?;
+//!     // Initialize telemetry BEFORE starting the tokio runtime.
+//!     // Keep the guard alive until the end of main to ensure spans are flushed.
+//!     let _telemetry = hermes_instrumentation::init(Config::console("my-service"))?;
 //!
 //!     tokio::runtime::Builder::new_multi_thread()
 //!         .enable_all()
@@ -43,7 +44,8 @@ mod init;
 pub use config::{Backend, Config};
 
 // Re-export initialization
-pub use init::{Error, init, shutdown};
+#[allow(deprecated)]
+pub use init::{Error, TelemetryGuard, init, shutdown};
 
 // Re-export tracing macros for convenience
 pub use tracing::{

@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - 'atlas/**'
+      - 'hermes-instrumentation/**'
       - 'hermes-relay/**'
       - 'hermes-schema/**'
       - 'hermes-substream/**'

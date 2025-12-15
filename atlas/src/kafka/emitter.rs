@@ -26,6 +26,7 @@
 use crate::events::BlockMetadata;
 use crate::graph::{CanonicalGraph, EdgeType, TreeNode};
 use crate::kafka::{AtlasProducer, ProducerError};
+use hermes_instrumentation::debug_span;
 use hermes_schema::pb::blockchain_metadata::BlockchainMetadata as ProtoBlockchainMetadata;
 use hermes_schema::pb::topology::{
     canonical_tree_node::Edge, CanonicalGraphUpdated, CanonicalTreeNode, RelatedEdge, RootEdge,
@@ -65,7 +66,12 @@ impl CanonicalGraphEmitter {
             .encode(&mut payload)
             .expect("Vec<u8> provides sufficient buffer capacity");
 
-        self.producer.send_and_flush(&graph.root, &payload)
+        debug_span!(
+            "kafka.send",
+            payload_size = payload.len(),
+            node_count = graph.len()
+        )
+        .in_scope(|| self.producer.send_and_flush(&graph.root, &payload))
     }
 }
 

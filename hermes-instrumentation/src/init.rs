@@ -1,6 +1,7 @@
 //! Telemetry initialization.
 
 use crate::config::{Backend, Config};
+use opentelemetry_sdk::trace::SdkTracerProvider;
 use tracing_subscriber::filter::LevelFilter;
 use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
@@ -16,7 +17,30 @@ pub enum Error {
     OpenTelemetry(String),
 }
 
+/// Guard that shuts down the tracer provider when dropped.
+///
+/// Keep this guard alive for the duration of your application. When dropped,
+/// it will flush any pending spans and shut down the tracer provider.
+pub struct TelemetryGuard {
+    provider: Option<SdkTracerProvider>,
+}
+
+impl Drop for TelemetryGuard {
+    fn drop(&mut self) {
+        if let Some(provider) = self.provider.take() {
+            // Shutdown flushes all pending spans before returning
+            if let Err(e) = provider.shutdown() {
+                eprintln!("Error shutting down tracer provider: {:?}", e);
+            }
+        }
+    }
+}
+
 /// Initialize telemetry with the given configuration.
+///
+/// Returns a guard that must be kept alive for the duration of the application.
+/// When the guard is dropped, it will flush any pending spans and shut down
+/// the tracer provider.
 ///
 /// Must be called once at service startup, before any tracing occurs.
 ///
@@ -30,7 +54,8 @@ pub enum Error {
 ///
 /// fn main() -> Result<(), Box<dyn std::error::Error>> {
 ///     // Initialize telemetry before tokio runtime
-///     hermes_instrumentation::init(Config::console("my-service"))?;
+///     // Keep the guard alive until the end of main
+///     let _telemetry = hermes_instrumentation::init(Config::console("my-service"))?;
 ///
 ///     tokio::runtime::Builder::new_multi_thread()
 ///         .enable_all()
@@ -46,34 +71,45 @@ pub enum Error {
 ///
 /// Returns an error if the global subscriber has already been set or if
 /// OpenTelemetry initialization fails.
-pub fn init(config: Config) -> Result<(), Error> {
+pub fn init(config: Config) -> Result<TelemetryGuard, Error> {
     // Leak the namespace to get a &'static str for tracing
     let namespace: &'static str = Box::leak(config.namespace.into_boxed_str());
 
     match config.backend {
-        Backend::Console => init_console(namespace),
+        Backend::Console => {
+            init_console(namespace)?;
+            Ok(TelemetryGuard { provider: None })
+        }
         Backend::OtlpGrpc {
             endpoint,
             headers,
             debug,
-        } => init_otlp_grpc(namespace, &endpoint, &headers, debug),
+        } => {
+            let provider = init_otlp_grpc(namespace, &endpoint, &headers, debug)?;
+            Ok(TelemetryGuard {
+                provider: Some(provider),
+            })
+        }
         Backend::OtlpHttp {
             endpoint,
             headers,
             debug,
-        } => init_otlp_http(namespace, &endpoint, &headers, debug),
+        } => {
+            let provider = init_otlp_http(namespace, &endpoint, &headers, debug)?;
+            Ok(TelemetryGuard {
+                provider: Some(provider),
+            })
+        }
     }
 }
 
 /// Shutdown telemetry, flushing any pending spans.
 ///
-/// This is optional for long-running services since the `SdkTracerProvider`
-/// will automatically flush and shutdown when the process exits. However,
-/// for short-lived processes or tests, calling this ensures all spans are exported.
+/// **Deprecated:** Use the `TelemetryGuard` returned by `init()` instead.
+/// This function is kept for backwards compatibility but does nothing useful.
+#[deprecated(note = "Use the TelemetryGuard returned by init() instead")]
 pub fn shutdown() {
-    // The global tracer provider will be shut down when dropped.
-    // For batch processors, give time for the background thread to flush.
-    std::thread::sleep(std::time::Duration::from_millis(500));
+    // No-op - shutdown is now handled by dropping the TelemetryGuard
 }
 
 fn init_console(namespace: &'static str) -> Result<(), Error> {
@@ -175,13 +211,13 @@ fn init_otlp_grpc(
     endpoint: &str,
     headers: &[(String, String)],
     debug: bool,
-) -> Result<(), Error> {
+) -> Result<SdkTracerProvider, Error> {
     use opentelemetry::KeyValue;
     use opentelemetry::trace::TracerProvider as _;
     use opentelemetry_otlp::tonic_types::metadata::MetadataMap;
     use opentelemetry_otlp::{WithExportConfig, WithTonicConfig};
     use opentelemetry_sdk::Resource;
-    use opentelemetry_sdk::trace::{BatchSpanProcessor, SdkTracerProvider};
+    use opentelemetry_sdk::trace::BatchSpanProcessor;
 
     // Build metadata from headers using the underlying http::HeaderMap
     let mut metadata = MetadataMap::default();
@@ -226,11 +262,8 @@ fn init_otlp_grpc(
 
     let provider = provider_builder.build();
 
-    // Get tracer before setting global provider
+    // Get tracer from provider
     let tracer = provider.tracer(namespace);
-
-    // Set global tracer provider
-    opentelemetry::global::set_tracer_provider(provider);
 
     // Create OpenTelemetry tracing layer with tracked inactivity for async spans
     let telemetry_layer = tracing_opentelemetry::layer()
@@ -254,7 +287,7 @@ fn init_otlp_grpc(
         namespace, endpoint
     );
 
-    Ok(())
+    Ok(provider)
 }
 
 fn init_otlp_http(
@@ -262,12 +295,12 @@ fn init_otlp_http(
     endpoint: &str,
     headers: &[(String, String)],
     debug: bool,
-) -> Result<(), Error> {
+) -> Result<SdkTracerProvider, Error> {
     use opentelemetry::KeyValue;
     use opentelemetry::trace::TracerProvider as _;
     use opentelemetry_otlp::{WithExportConfig, WithHttpConfig};
     use opentelemetry_sdk::Resource;
-    use opentelemetry_sdk::trace::{BatchSpanProcessor, SdkTracerProvider};
+    use opentelemetry_sdk::trace::BatchSpanProcessor;
 
     // Build headers map
     let header_map: std::collections::HashMap<String, String> = headers.iter().cloned().collect();
@@ -308,11 +341,8 @@ fn init_otlp_http(
 
     let provider = provider_builder.build();
 
-    // Get tracer before setting global provider
+    // Get tracer from provider
     let tracer = provider.tracer(namespace);
-
-    // Set global tracer provider
-    opentelemetry::global::set_tracer_provider(provider);
 
     // Create OpenTelemetry tracing layer with tracked inactivity for async spans
     let telemetry_layer = tracing_opentelemetry::layer()
@@ -354,5 +384,5 @@ fn init_otlp_http(
         namespace, endpoint
     );
 
-    Ok(())
+    Ok(provider)
 }

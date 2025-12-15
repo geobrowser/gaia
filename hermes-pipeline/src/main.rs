@@ -331,7 +331,9 @@ fn main() -> anyhow::Result<()> {
     // The OTLP HTTP backend uses a blocking HTTP client that creates its own
     // internal tokio runtime. Tokio runtimes cannot be nested, so we must
     // initialize telemetry before creating our application's runtime.
-    hermes_instrumentation::init(build_telemetry_config())?;
+    //
+    // Keep the guard alive until the end of main to ensure spans are flushed.
+    let _telemetry = hermes_instrumentation::init(build_telemetry_config())?;
 
     // Create and run the tokio runtime manually (instead of #[tokio::main])
     // - new_multi_thread(): Uses a thread pool for parallel task execution,
