@@ -14,10 +14,10 @@ use std::time::Duration;
 
 use anyhow::Result;
 use futures::future::join_all;
-use tokio_retry::strategy::{jitter, ExponentialBackoff};
 use tokio_retry::Retry;
+use tokio_retry::strategy::{ExponentialBackoff, jitter};
 
-use hermes_relay::{actions, Action};
+use hermes_relay::{Action, actions};
 use hermes_schema::pb::knowledge::HermesEdit;
 use wire::pb::grc20::Edit;
 

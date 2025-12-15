@@ -10,8 +10,8 @@ use hermes_kafka::{BaseProducer, BaseRecord, Header, OwnedHeaders};
 use hermes_schema::pb::{
     knowledge::HermesEdit,
     space::{
-        hermes_create_space, hermes_space_trust_extension, HermesCreateSpace,
-        HermesSpaceTrustExtension,
+        HermesCreateSpace, HermesSpaceTrustExtension, hermes_create_space,
+        hermes_space_trust_extension,
     },
 };
 

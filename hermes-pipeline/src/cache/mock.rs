@@ -399,24 +399,32 @@ mod tests {
         let space_id = vec![0x01; 16];
 
         // All 6 edits from mock_events.rs should be present
-        assert!(cache
-            .get("QmRootEdit1CreatePersons", &space_id)
-            .await
-            .is_ok());
-        assert!(cache
-            .get("QmRootEdit2AddDescriptions", &space_id)
-            .await
-            .is_ok());
+        assert!(
+            cache
+                .get("QmRootEdit1CreatePersons", &space_id)
+                .await
+                .is_ok()
+        );
+        assert!(
+            cache
+                .get("QmRootEdit2AddDescriptions", &space_id)
+                .await
+                .is_ok()
+        );
         assert!(cache.get("QmSpaceAEdit1CreateOrg", &space_id).await.is_ok());
-        assert!(cache
-            .get("QmSpaceAEdit2CreateRelations", &space_id)
-            .await
-            .is_ok());
+        assert!(
+            cache
+                .get("QmSpaceAEdit2CreateRelations", &space_id)
+                .await
+                .is_ok()
+        );
         assert!(cache.get("QmSpaceBEdit1CreateDoc", &space_id).await.is_ok());
-        assert!(cache
-            .get("QmSpaceCEdit1CreateTopic", &space_id)
-            .await
-            .is_ok());
+        assert!(
+            cache
+                .get("QmSpaceCEdit1CreateTopic", &space_id)
+                .await
+                .is_ok()
+        );
     }
 
     #[tokio::test]
