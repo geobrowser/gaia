@@ -66,8 +66,12 @@ impl CanonicalGraphEmitter {
             .encode(&mut payload)
             .expect("Vec<u8> provides sufficient buffer capacity");
 
-        debug_span!("kafka.send", payload_size = payload.len(), node_count = graph.len())
-            .in_scope(|| self.producer.send_and_flush(&graph.root, &payload))
+        debug_span!(
+            "kafka.send",
+            payload_size = payload.len(),
+            node_count = graph.len()
+        )
+        .in_scope(|| self.producer.send_and_flush(&graph.root, &payload))
     }
 }
 
