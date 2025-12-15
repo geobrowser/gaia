@@ -70,7 +70,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Set debug: true to also emit OTEL spans to stdout
     hermes_instrumentation::init(Config {
         namespace: "example-service",
-        backend: Backend::Otlp {
+        backend: Backend::OtlpGrpc {
             endpoint: "http://localhost:4317",
             headers: &[],
             debug: true,

@@ -42,11 +42,16 @@ pub enum Error {
 pub fn init(config: Config) -> Result<(), Error> {
     match config.backend {
         Backend::Console => init_console(config.namespace),
-        Backend::Otlp {
+        Backend::OtlpGrpc {
             endpoint,
             headers,
             debug,
-        } => init_otlp(config.namespace, endpoint, headers, debug),
+        } => init_otlp_grpc(config.namespace, endpoint, headers, debug),
+        Backend::OtlpHttp {
+            endpoint,
+            headers,
+            debug,
+        } => init_otlp_http(config.namespace, endpoint, headers, debug),
     }
 }
 
@@ -144,7 +149,7 @@ where
     }
 }
 
-fn init_otlp(
+fn init_otlp_grpc(
     namespace: &'static str,
     endpoint: &'static str,
     headers: &'static [(&'static str, &'static str)],
@@ -170,7 +175,7 @@ fn init_otlp(
         }
     }
 
-    // Create OTLP exporter with headers
+    // Create OTLP gRPC exporter with headers
     let otlp_exporter = opentelemetry_otlp::SpanExporter::builder()
         .with_tonic()
         .with_endpoint(endpoint)
@@ -215,7 +220,75 @@ fn init_otlp(
 
     // Log startup to console
     eprintln!(
-        "Telemetry initialized: service.name={} otlp.endpoint={}",
+        "Telemetry initialized: service.name={} otlp.endpoint={} (gRPC)",
+        namespace, endpoint
+    );
+
+    Ok(())
+}
+
+fn init_otlp_http(
+    namespace: &'static str,
+    endpoint: &'static str,
+    headers: &'static [(&'static str, &'static str)],
+    debug: bool,
+) -> Result<(), Error> {
+    use opentelemetry::KeyValue;
+    use opentelemetry::trace::TracerProvider as _;
+    use opentelemetry_otlp::{WithExportConfig, WithHttpConfig};
+    use opentelemetry_sdk::{Resource, trace::SdkTracerProvider};
+
+    // Build headers map
+    let mut header_map = std::collections::HashMap::new();
+    for (key, value) in headers {
+        header_map.insert(key.to_string(), value.to_string());
+    }
+
+    // Create OTLP HTTP exporter with headers
+    let otlp_exporter = opentelemetry_otlp::SpanExporter::builder()
+        .with_http()
+        .with_endpoint(endpoint)
+        .with_headers(header_map)
+        .build()
+        .map_err(|e| Error::OpenTelemetry(e.to_string()))?;
+
+    // Create tracer provider with service.name resource
+    let resource = Resource::builder()
+        .with_attribute(KeyValue::new("service.name", namespace))
+        .build();
+
+    let mut provider_builder = SdkTracerProvider::builder()
+        .with_simple_exporter(otlp_exporter)
+        .with_resource(resource);
+
+    // Optionally add stdout exporter for debugging
+    if debug {
+        let stdout_exporter = opentelemetry_stdout::SpanExporter::default();
+        provider_builder = provider_builder.with_simple_exporter(stdout_exporter);
+    }
+
+    let provider = provider_builder.build();
+
+    // Get tracer before setting global provider
+    let tracer = provider.tracer(namespace);
+
+    // Set global tracer provider
+    opentelemetry::global::set_tracer_provider(provider);
+
+    // Create OpenTelemetry tracing layer
+    let telemetry_layer = tracing_opentelemetry::layer().with_tracer(tracer);
+
+    // Use RUST_LOG env var for filtering, with a sensible default
+    let filter = EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info"));
+
+    tracing_subscriber::registry()
+        .with(filter)
+        .with(telemetry_layer)
+        .init();
+
+    // Log startup to console
+    eprintln!(
+        "Telemetry initialized: service.name={} otlp.endpoint={} (HTTP)",
         namespace, endpoint
     );
 

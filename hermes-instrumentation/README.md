@@ -55,25 +55,25 @@ Outputs formatted logs to stdout with namespace-prefixed spans:
 Backend::Console
 ```
 
-### OTLP
+### OTLP (gRPC)
 
-Exports traces via OpenTelemetry Protocol (gRPC) to any OTLP-compatible backend.
-
-Local collector (Jaeger, OpenTelemetry Collector):
+For local collectors that support gRPC (Jaeger, OpenTelemetry Collector):
 
 ```rust
-Backend::Otlp {
+Backend::OtlpGrpc {
     endpoint: "http://localhost:4317",
     headers: &[],
     debug: false,
 }
 ```
 
-Cloud providers with authentication (Axiom, Grafana Cloud):
+### OTLP (HTTP)
+
+For cloud providers that require HTTP (Axiom, Grafana Cloud):
 
 ```rust
-Backend::Otlp {
-    endpoint: "https://api.axiom.co",
+Backend::OtlpHttp {
+    endpoint: "https://api.axiom.co/v1/traces",
     headers: &[
         ("Authorization", "Bearer API_TOKEN"),
         ("X-Axiom-Dataset", "my-dataset"),

@@ -13,9 +13,10 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-opentelemetry = "0.32"
 opentelemetry = "0.31"
 opentelemetry_sdk = { version = "0.31", features = ["rt-tokio"] }
-opentelemetry-otlp = { version = "0.31", features = ["grpc-tonic"] }
+opentelemetry-otlp = { version = "0.31", features = ["grpc-tonic", "http-proto", "reqwest-client"] }
 opentelemetry-stdout = { version = "0.31", features = ["trace"] }
 http = "1"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
 
 # Error handling
 thiserror = "2"

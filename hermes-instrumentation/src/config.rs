@@ -23,35 +23,50 @@ pub enum Backend {
 
     /// Export telemetry via OpenTelemetry Protocol (OTLP) over gRPC.
     ///
-    /// Can target any OTLP-compatible backend:
+    /// Best for local collectors that support gRPC:
     /// - OpenTelemetry Collector
     /// - Jaeger (with OTLP receiver)
-    /// - Grafana Cloud
-    Otlp {
-        /// OTLP gRPC endpoint.
-        ///
-        /// Examples:
-        /// - `http://localhost:4317` (local collector)
+    ///
+    /// ```ignore
+    /// Backend::OtlpGrpc {
+    ///     endpoint: "http://localhost:4317",
+    ///     headers: &[],
+    ///     debug: false,
+    /// }
+    /// ```
+    OtlpGrpc {
+        /// OTLP gRPC endpoint (typically port 4317).
         endpoint: &'static str,
 
-        /// Optional headers to include with each request.
-        ///
-        /// Useful for authentication with cloud providers like Axiom:
-        /// ```ignore
-        /// Backend::Otlp {
-        ///     endpoint: "https://api.axiom.co",
-        ///     headers: &[
-        ///         ("Authorization", "Bearer API_TOKEN"),
-        ///         ("X-Axiom-Dataset", "my-dataset"),
-        ///     ],
-        ///     debug: false,
-        /// }
-        /// ```
+        /// Optional headers/metadata for authentication.
         headers: &'static [(&'static str, &'static str)],
 
-        /// If true, also emit OTEL spans to stdout in JSON format.
-        ///
-        /// Useful for debugging to see the raw span data being exported.
+        /// If true, also emit OTEL spans to stdout.
+        debug: bool,
+    },
+
+    /// Export telemetry via OpenTelemetry Protocol (OTLP) over HTTP.
+    ///
+    /// Required for cloud providers like Axiom that only support HTTP:
+    ///
+    /// ```ignore
+    /// Backend::OtlpHttp {
+    ///     endpoint: "https://api.axiom.co/v1/traces",
+    ///     headers: &[
+    ///         ("Authorization", "Bearer API_TOKEN"),
+    ///         ("X-Axiom-Dataset", "my-dataset"),
+    ///     ],
+    ///     debug: false,
+    /// }
+    /// ```
+    OtlpHttp {
+        /// OTLP HTTP endpoint (include full path, e.g., `/v1/traces`).
+        endpoint: &'static str,
+
+        /// Headers for authentication.
+        headers: &'static [(&'static str, &'static str)],
+
+        /// If true, also emit OTEL spans to stdout.
         debug: bool,
     },
 }
