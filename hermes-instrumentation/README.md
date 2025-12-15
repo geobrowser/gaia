@@ -92,14 +92,14 @@ async {
 .await;
 ```
 
-For sync code, use `span.enter()`:
+For sync code, use `span.in_scope()`:
 
 ```rust
 use hermes_instrumentation::info_span;
 
-let span = info_span!("sync_operation");
-let _guard = span.enter();
-// work here - span active until _guard is dropped
+info_span!("sync_operation").in_scope(|| {
+    // work here
+});
 ```
 
 The `#[instrument]` attribute macro is also available for automatic function instrumentation:

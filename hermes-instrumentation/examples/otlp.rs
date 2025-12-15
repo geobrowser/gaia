@@ -47,9 +47,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Demonstrate explicit span instrumentation for sync code
     for i in 1..=3 {
-        let span = info_span!("process_item", item_id = i);
-        let _enter = span.enter();
-        process_item(i);
+        info_span!("process_item", item_id = i).in_scope(|| {
+            process_item(i);
+        });
     }
 
     // Demonstrate explicit span instrumentation for async code
