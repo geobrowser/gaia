@@ -988,6 +988,8 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "criterion 0.5.1",
+ "dotenv",
+ "hermes-instrumentation",
  "hermes-relay",
  "hermes-schema",
  "hex",
