@@ -12,14 +12,15 @@ However, `hermes-substream` defines 20 distinct action types that represent the 
 
 ### Current State
 
-**Supported actions (3):**
+**Supported actions (4):**
 | Action | Kafka Topic | Description |
 |--------|-------------|-------------|
 | `SPACE_REGISTERED` | `space.creations` | New space registrations |
 | `SUBSPACE_ADDED` | `space.trust.extensions` | Trust extensions (verified/related/subtopic) |
 | `SUBSPACE_REMOVED` | `space.trust.extensions` | Trust revocations |
+| `EDITS_PUBLISHED` | `knowledge.edits` | Published edits (fetched from IPFS cache) |
 
-**Unsupported actions (17):**
+**Unsupported actions (16):**
 | Category | Action | Description |
 |----------|--------|-------------|
 | **Space Lifecycle** | `SPACE_MIGRATED` | Space contract address updates |
@@ -35,31 +36,31 @@ However, `hermes-substream` defines 20 distinct action types that represent the 
 | | `EDITOR_UNFLAGGED` | Unflagged editors |
 | | `CONTENT_FLAGGED` | Flagged content |
 | **Content** | `TOPIC_DECLARED` | Topic declarations |
-| | `EDITS_PUBLISHED` | Published edits (handled by `hermes-ipfs-cache`) |
 | **Voting** | `OBJECT_UPVOTED` | Upvotes on objects |
 | | `OBJECT_DOWNVOTED` | Downvotes on objects |
 | | `OBJECT_UNVOTED` | Vote removals |
 
 ### Scope Consideration
 
-`EDITS_PUBLISHED` is intentionally excluded from `hermes-pipeline` as it's handled by the dedicated `hermes-ipfs-cache` transformer, which resolves IPFS content and caches it. This separation follows the Hermes architecture principle of specialized transformers (see `docs/hermes-architecture.md`).
+`EDITS_PUBLISHED` is handled within `hermes-pipeline` via the `pipelines/edits.rs` module. Unlike other pipelines, this requires an external cache lookup to resolve IPFS hash → Edit content. The pipeline fetches cached edits from `hermes-ipfs-cache` (which resolves and caches IPFS content) and emits them to the `knowledge.edits` Kafka topic.
 
 ## Decision
 
-Expand `hermes-pipeline` to handle all space-related actions except `EDITS_PUBLISHED`. Group related actions into logical Kafka topics to simplify downstream consumption.
+Expand `hermes-pipeline` to handle all remaining space-related actions. Group related actions into logical Kafka topics to simplify downstream consumption.
 
 ### Kafka Topic Design
 
-| Topic | Actions | Message Type |
-|-------|---------|--------------|
-| `space.creations` | `SPACE_REGISTERED` | `HermesCreateSpace` |
-| `space.migrations` | `SPACE_MIGRATED` | `HermesSpaceMigration` (new) |
-| `space.trust.extensions` | `SUBSPACE_ADDED`, `SUBSPACE_REMOVED` | `HermesSpaceTrustExtension` |
-| `space.governance` | `PROPOSAL_CREATED`, `PROPOSAL_VOTED`, `PROPOSAL_EXECUTED` | `HermesGovernanceEvent` (new) |
-| `space.membership` | `EDITOR_ADDED`, `EDITOR_REMOVED`, `MEMBER_ADDED`, `MEMBER_REMOVED`, `SPACE_LEFT` | `HermesMembershipEvent` (new) |
-| `space.moderation` | `EDITOR_FLAGGED`, `EDITOR_UNFLAGGED`, `CONTENT_FLAGGED` | `HermesModerationEvent` (new) |
-| `space.topics` | `TOPIC_DECLARED` | `HermesTopicDeclared` (new) |
-| `space.votes` | `OBJECT_UPVOTED`, `OBJECT_DOWNVOTED`, `OBJECT_UNVOTED` | `HermesObjectVote` (new) |
+| Topic | Actions | Message Type | Status |
+|-------|---------|--------------|--------|
+| `space.creations` | `SPACE_REGISTERED` | `HermesCreateSpace` | ✅ Implemented |
+| `space.trust.extensions` | `SUBSPACE_ADDED`, `SUBSPACE_REMOVED` | `HermesSpaceTrustExtension` | ✅ Implemented |
+| `knowledge.edits` | `EDITS_PUBLISHED` | `HermesEdit` | ✅ Implemented |
+| `space.migrations` | `SPACE_MIGRATED` | `HermesSpaceMigration` (new) | ❌ Not started |
+| `space.governance` | `PROPOSAL_CREATED`, `PROPOSAL_VOTED`, `PROPOSAL_EXECUTED` | `HermesGovernanceEvent` (new) | ❌ Not started |
+| `space.membership` | `EDITOR_ADDED`, `EDITOR_REMOVED`, `MEMBER_ADDED`, `MEMBER_REMOVED`, `SPACE_LEFT` | `HermesMembershipEvent` (new) | ❌ Not started |
+| `space.moderation` | `EDITOR_FLAGGED`, `EDITOR_UNFLAGGED`, `CONTENT_FLAGGED` | `HermesModerationEvent` (new) | ❌ Not started |
+| `space.topics` | `TOPIC_DECLARED` | `HermesTopicDeclared` (new) | ❌ Not started |
+| `space.votes` | `OBJECT_UPVOTED`, `OBJECT_DOWNVOTED`, `OBJECT_UNVOTED` | `HermesObjectVote` (new) | ❌ Not started |
 
 ## Implementation Plan
 
@@ -259,9 +260,10 @@ Priority: High (alongside each phase)
 | File | Action | Phase |
 |------|--------|-------|
 | `hermes-schema/proto/space.proto` | Modify | 1 |
-| `hermes-pipeline/src/conversion.rs` | Modify | 2-6 |
-| `hermes-pipeline/src/kafka.rs` | Modify | 2-6 |
-| `hermes-pipeline/src/transformer.rs` | Modify | 2-6 |
+| `hermes-pipeline/src/pipelines/*.rs` | Add new pipeline modules | 2-6 |
+| `hermes-pipeline/src/pipelines/mod.rs` | Modify to export new pipelines | 2-6 |
+| `hermes-pipeline/src/emit.rs` | Modify to add new topics and `KafkaEvent` impls | 2-6 |
+| `hermes-pipeline/src/main.rs` | Modify to handle new action types | 2-6 |
 | `hermes-pipeline/README.md` | Modify | 7 |
 
 ## Consequences
