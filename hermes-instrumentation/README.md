@@ -4,64 +4,119 @@ Unified telemetry for the Hermes ecosystem.
 
 ## Overview
 
-`hermes-instrumentation` provides a single dependency for all observability needs across Hermes services. It wraps the `tracing` crate ecosystem and provides:
+This crate provides a single dependency for all observability needs across Hermes services. It wraps the `tracing` crate ecosystem and provides:
 
-- Automatic namespace prefixing for spans
+- Automatic namespace prefixing for spans (e.g., `ipfs-cache.fetch_content`)
 - Console and OpenTelemetry (OTLP) backend support
 - Re-exported tracing macros for convenience
 
 ## Usage
 
+Add the dependency:
+
+```toml
+[dependencies]
+hermes-instrumentation = { path = "../hermes-instrumentation" }
+```
+
+Initialize telemetry at startup:
+
 ```rust
-use hermes_instrumentation::{init, info, instrument, Config, Backend};
+use hermes_instrumentation::{init, info, info_span, Config, Backend, Instrument};
 
 #[tokio::main]
-async fn main() -> anyhow::Result<()> {
-    // Initialize telemetry at startup
+async fn main() -> Result<(), Box<dyn std::error::Error>> {
+    // Initialize with console output
     hermes_instrumentation::init(Config {
-        namespace: "my-service".to_string(),
+        namespace: "my-service",
         backend: Backend::Console,
     })?;
 
     info!("Service started");
-    
-    process_work().await
-}
 
-#[instrument]
-async fn process_work() -> anyhow::Result<()> {
-    // This span will be named "my-service.process_work"
-    info!("Processing...");
+    // Create spans explicitly at call sites
+    async {
+        info!("Doing work");
+    }
+    .instrument(info_span!("my_operation"))
+    .await;
+
     Ok(())
 }
 ```
 
-## Configuration
+## Backends
 
-### Console Backend
+### Console
 
-Logs spans and events to stdout:
+Outputs formatted logs to stdout with namespace-prefixed spans:
 
 ```rust
 Backend::Console
 ```
 
-### OTLP Backend
+### OTLP
 
-Exports telemetry via OpenTelemetry Protocol:
+Exports traces via OpenTelemetry Protocol (gRPC) to any OTLP-compatible backend (Jaeger, Grafana Tempo, Axiom, etc.):
 
 ```rust
 Backend::Otlp {
-    endpoint: "http://localhost:4317".to_string(),
+    endpoint: "http://localhost:4317",
 }
 ```
 
-The OTLP endpoint can point to:
-- OpenTelemetry Collector
-- Jaeger (with OTLP receiver)
-- Axiom (direct OTLP ingestion)
-- Any OTLP-compatible backend
+## Instrumentation
 
-## Architecture
+### Events (logs)
 
-See [docs/plans/0001-telemetry-crate.md](docs/plans/0001-telemetry-crate.md) for the full design document.
+Use the re-exported macros for logging:
+
+```rust
+use hermes_instrumentation::{trace, debug, info, warn, error};
+
+info!(user_id = 42, "User logged in");
+error!(error = %err, "Request failed");
+```
+
+### Spans
+
+Create spans explicitly at call sites using `.instrument()` for async code:
+
+```rust
+use hermes_instrumentation::{info_span, Instrument};
+
+async {
+    // work here
+}
+.instrument(info_span!("operation_name", key = "value"))
+.await;
+```
+
+For sync code, use `span.enter()`:
+
+```rust
+use hermes_instrumentation::info_span;
+
+let span = info_span!("sync_operation");
+let _guard = span.enter();
+// work here - span active until _guard is dropped
+```
+
+The `#[instrument]` attribute macro is also available for automatic function instrumentation:
+
+```rust
+use hermes_instrumentation::instrument;
+
+#[instrument]
+async fn my_function(id: u32) {
+    // automatically creates a span named "my_function"
+}
+```
+
+## Shutdown
+
+When using the OTLP backend, call `shutdown()` before exit to flush pending spans:
+
+```rust
+hermes_instrumentation::shutdown();
+```

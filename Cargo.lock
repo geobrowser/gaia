@@ -2535,6 +2535,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "dotenv",
+ "hermes-instrumentation",
  "hermes-relay",
  "hermes-substream",
  "hex",
@@ -2545,8 +2546,6 @@ dependencies = [
  "sqlx",
  "thiserror 2.0.17",
  "tokio",
- "tracing",
- "tracing-subscriber",
  "uuid",
  "wire",
 ]
