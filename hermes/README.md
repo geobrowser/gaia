@@ -14,7 +14,7 @@ docker-compose up
 This starts all services:
 - **Kafka broker**: `localhost:9092`
 - **Kafka UI**: http://localhost:8080
-- **hermes-processor**: Processes mock-substream events and publishes to Kafka
+- **hermes-processor**: Processes blockchain events and publishes to Kafka
 - **atlas**: Builds canonical graph from topology events and publishes to Kafka
 
 ### Running Services Individually
