@@ -1,4 +1,4 @@
-//! Pipeline: UPVOTED, DOWNVOTED, UNVOTED → social.votes
+//! Pipeline: UPVOTED, DOWNVOTED, UNVOTED → curation.votes
 //!
 //! Converts permissionless voting actions to typed Hermes events.
 

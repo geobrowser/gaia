@@ -33,9 +33,9 @@ However, `hermes-substream` defines 20 distinct action types that represent the 
 | **Governance** | `PROPOSAL_CREATED` | `space.governance` | New governance proposals |
 | | `PROPOSAL_VOTED` | `space.governance` | Votes cast on proposals |
 | | `PROPOSAL_EXECUTED` | `space.governance` | Executed proposals |
-| **Voting** | `UPVOTED` | `social.votes` | Upvotes on objects |
-| | `DOWNVOTED` | `social.votes` | Downvotes on objects |
-| | `UNVOTED` | `social.votes` | Vote removals |
+| **Voting** | `UPVOTED` | `curation.votes` | Upvotes on objects |
+| | `DOWNVOTED` | `curation.votes` | Downvotes on objects |
+| | `UNVOTED` | `curation.votes` | Vote removals |
 | **Knowledge** | `EDITS_PUBLISHED` | `knowledge.edits` | Published edits (fetched from IPFS cache) |
 
 **Not implemented:**
@@ -61,7 +61,7 @@ Expand `hermes-pipeline` to handle all remaining space-related actions. Group re
 | `space.moderation` | `EDITOR_FLAGGED`, `EDITOR_UNFLAGGED`, `FLAGGED`, `UNFLAGGED` | `HermesEditorFlagged`, `HermesEditorUnflagged`, `HermesContentFlagged`, `HermesContentUnflagged` | ✅ Implemented |
 | `space.topics` | `TOPIC_DECLARED` | `HermesTopicDeclared` | ✅ Implemented |
 | `space.governance` | `PROPOSAL_CREATED`, `PROPOSAL_VOTED`, `PROPOSAL_EXECUTED` | `HermesGovernanceEvent` | ✅ Implemented |
-| `social.votes` | `UPVOTED`, `DOWNVOTED`, `UNVOTED` | `HermesVoteCast` | ✅ Implemented |
+| `curation.votes` | `UPVOTED`, `DOWNVOTED`, `UNVOTED` | `HermesVoteCast` | ✅ Implemented |
 | `knowledge.edits` | `EDITS_PUBLISHED` | `HermesEdit` | ✅ Implemented |
 | `space.migrations` | `SPACE_MIGRATED` | - | ❌ Not started |
 

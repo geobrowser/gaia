@@ -35,7 +35,7 @@ pub mod topics {
     pub const MODERATION: &str = "space.moderation";
     pub const TOPICS: &str = "space.topics";
     pub const GOVERNANCE: &str = "space.governance";
-    pub const VOTING: &str = "social.votes";
+    pub const VOTING: &str = "curation.votes";
     pub const EDITS: &str = "knowledge.edits";
 }
 
@@ -506,7 +506,7 @@ mod tests {
 
     #[test]
     fn test_voting_topic() {
-        assert_eq!(HermesVoteCast::TOPIC, "social.votes");
+        assert_eq!(HermesVoteCast::TOPIC, "curation.votes");
     }
 
     #[test]

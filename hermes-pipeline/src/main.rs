@@ -11,7 +11,7 @@
 //! - `EDITOR_FLAGGED/UNFLAGGED`, `FLAGGED/UNFLAGGED` - moderation -> `space.moderation` topic
 //! - `TOPIC_DECLARED` - topic declarations -> `space.topics` topic
 //! - `PROPOSAL_CREATED/VOTED/EXECUTED` - governance -> `space.governance` topic
-//! - `UPVOTED/DOWNVOTED/UNVOTED` - social voting -> `social.votes` topic
+//! - `UPVOTED/DOWNVOTED/UNVOTED` - curation voting -> `curation.votes` topic
 //! - `EDITS_PUBLISHED` - edit publications -> `knowledge.edits` topic
 //!
 //! ## Architecture

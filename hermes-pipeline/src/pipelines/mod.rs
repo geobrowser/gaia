@@ -8,7 +8,7 @@
 //! - `membership`: EDITOR/MEMBER ADDED/REMOVED, SPACE_LEFT → space.membership
 //! - `moderation`: EDITOR_FLAGGED/UNFLAGGED, FLAGGED/UNFLAGGED → space.moderation
 //! - `topics`: TOPIC_DECLARED → space.topics
-//! - `voting`: UPVOTED/DOWNVOTED/UNVOTED → social.votes
+//! - `voting`: UPVOTED/DOWNVOTED/UNVOTED → curation.votes
 
 pub mod edits;
 pub mod governance;

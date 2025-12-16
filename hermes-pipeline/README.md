@@ -66,9 +66,9 @@ This transformer is part of the Hermes architecture (see `docs/hermes-architectu
 
 | Event | Description | Kafka Topic |
 |-------|-------------|-------------|
-| `UPVOTED` | Object upvoted | `social.votes` |
-| `DOWNVOTED` | Object downvoted | `social.votes` |
-| `UNVOTED` | Vote removed | `social.votes` |
+| `UPVOTED` | Object upvoted | `curation.votes` |
+| `DOWNVOTED` | Object downvoted | `curation.votes` |
+| `UNVOTED` | Vote removed | `curation.votes` |
 
 ### Knowledge
 
@@ -167,7 +167,7 @@ docker run \
                                              │  │ space.    │  │
                                              │  │governance │  │
                                              │  ├───────────┤  │
-                                             │  │ social.   │  │
+                                             │  │ curation. │  │
                                              │  │  votes    │  │
                                              │  ├───────────┤  │
                                              │  │knowledge. │  │
@@ -188,7 +188,7 @@ The pipeline is organized into modules that handle specific action categories:
 | `moderation` | `EDITOR_FLAGGED/UNFLAGGED`, `FLAGGED/UNFLAGGED` | `space.moderation` |
 | `topics` | `TOPIC_DECLARED` | `space.topics` |
 | `governance` | `PROPOSAL_CREATED/VOTED/EXECUTED` | `space.governance` |
-| `voting` | `UPVOTED/DOWNVOTED/UNVOTED` | `social.votes` |
+| `voting` | `UPVOTED/DOWNVOTED/UNVOTED` | `curation.votes` |
 | `edits` | `EDITS_PUBLISHED` | `knowledge.edits` |
 
 ## Processing Order
