@@ -1,8 +1,10 @@
 services:
   scoring-service:
-    build: .
+    build:
+      context: ..
+      dockerfile: scoring-service/Dockerfile
     volumes:
-      - .:/app
+      - ./:/app/scoring-service
     environment:
       # Database connection string (provided by deployment infrastructure)
       - DATABASE_URL
