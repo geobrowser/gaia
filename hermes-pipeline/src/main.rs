@@ -138,8 +138,9 @@ impl Pipeline {
 
         // Kick off edits transform FIRST - it has async IPFS fetching that can
         // happen in parallel with the sync transforms below
-        let edits_future = pipelines::edits::transform(actions, &meta, &self.cache, &self.retry_config)
-            .instrument(info_span!("transform.edits", action_count = actions.len()));
+        let edits_future =
+            pipelines::edits::transform(actions, &meta, &self.cache, &self.retry_config)
+                .instrument(info_span!("transform.edits", action_count = actions.len()));
 
         // Sync transforms - fast, no I/O, run while edits fetches from IPFS
         let spaces = info_span!("transform.spaces", action_count = actions.len())
@@ -225,7 +226,7 @@ impl Pipeline {
 
             // 3. Emit trust events
             {
-                let _span = info_span!("emit.trust", count = trust.events.len()).entered();
+                let _span = info_span!("emit.trust", count = trust.total()).entered();
                 for trust_event in &trust.events {
                     self.emitter.emit(&trust_event.event)?;
                     debug!(
@@ -366,14 +367,20 @@ impl Pipeline {
         // Log block summary
         let space_count = spaces.events.len() as u64;
         let membership_count = membership.total() as u64;
-        let trust_count = trust.events.len() as u64;
+        let trust_count = trust.total();
         let moderation_count = moderation.total() as u64;
         let topics_count = topics.total() as u64;
         let governance_count = governance.total() as u64;
         let voting_count = voting.total() as u64;
         let edit_count = edits.events.len() as u64;
-        let total = space_count + membership_count + trust_count + moderation_count
-            + topics_count + governance_count + voting_count + edit_count;
+        let total = space_count
+            + membership_count
+            + trust_count
+            + moderation_count
+            + topics_count
+            + governance_count
+            + voting_count
+            + edit_count;
 
         if total > 0 || edits.cache_misses > 0 || edits.errored_entries > 0 {
             info!(

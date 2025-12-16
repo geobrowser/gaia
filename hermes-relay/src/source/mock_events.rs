@@ -800,7 +800,14 @@ mod tests {
         let voter = make_id(0x01);
         let object_type = [0x00, 0x00, 0x00, 0x01];
         let object_id = make_id(0x02);
-        let action = upvoted(voter, object_type, object_id, 1, make_id(0x03), make_id(0x04));
+        let action = upvoted(
+            voter,
+            object_type,
+            object_id,
+            1,
+            make_id(0x03),
+            make_id(0x04),
+        );
 
         assert_eq!(action.from_id, voter.to_vec());
         assert_eq!(action.action, actions::UPVOTED.to_vec());
