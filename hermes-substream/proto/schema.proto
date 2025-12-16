@@ -182,16 +182,6 @@ message UnflaggedList {
     repeated Unflagged unflags = 1;
 }
 
-message SubspaceAdded {
-    bytes parent_space_id = 1;   // 16 bytes - parent space
-    bytes subspace_id = 2;       // 16 bytes - from topic field
-    bytes data = 3;
-}
-
-message SubspaceAddedList {
-    repeated SubspaceAdded subspaces = 1;
-}
-
 message SubspaceRemoved {
     bytes parent_space_id = 1;   // 16 bytes - parent space
     bytes subspace_id = 2;       // 16 bytes - from topic field

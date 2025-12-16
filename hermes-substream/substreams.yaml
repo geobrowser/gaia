@@ -153,14 +153,6 @@ modules:
     output:
       type: proto:hermes.UnflaggedList
 
-  - name: map_subspaces_added
-    kind: map
-    initialBlock: 0
-    inputs:
-      - source: sf.ethereum.type.v2.Block
-    output:
-      type: proto:hermes.SubspaceAddedList
-
   - name: map_subspaces_removed
     kind: map
     initialBlock: 0

@@ -55,7 +55,6 @@ substreams pack -o hermes-substream.spkg
 | `map_edits_published` | `EditsPublishedList` | Published edits |
 | `map_flagged` | `FlaggedList` | Flagged content |
 | `map_unflagged` | `UnflaggedList` | Unflagged content |
-| `map_subspaces_added` | `SubspaceAddedList` | Subspaces added to parent spaces |
 | `map_subspaces_removed` | `SubspaceRemovedList` | Subspaces removed from parent spaces |
 | `map_subspaces_verified` | `SubspaceVerifiedList` | Verified subspaces |
 | `map_subspaces_related` | `SubspaceRelatedList` | Related subspaces |
@@ -78,7 +77,7 @@ Consumers specify which module(s) to subscribe to:
 substreams run hermes-substream.spkg map_edits_published
 
 # Subscribe to multiple modules
-substreams run hermes-substream.spkg map_edits_published,map_editors_added,map_subspaces_added
+substreams run hermes-substream.spkg map_edits_published,map_editors_added,map_subspaces_verified
 
 # Subscribe to all raw actions
 substreams run hermes-substream.spkg map_actions
@@ -108,7 +107,6 @@ Events are identified by keccak256 hashes of action name strings:
 | Edits Published | `GOVERNANCE.EDITS_PUBLISHED` |
 | Content Flagged | `GOVERNANCE.FLAGGED` |
 | Content Unflagged | `GOVERNANCE.UNFLAGGED` |
-| Subspace Added | `GOVERNANCE.SUBSPACE_ADDED` |
 | Subspace Removed | `GOVERNANCE.SUBSPACE_REMOVED` |
 | Subspace Verified | `GOVERNANCE.SUBSPACE_VERIFIED` |
 | Subspace Related | `GOVERNANCE.SUBSPACE_RELATED` |
