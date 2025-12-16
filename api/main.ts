@@ -383,19 +383,33 @@ app.post("deploy/dao", async (c) => {
 
 	return Either.match(result, {
 		onLeft: (error) => {
-			console.error(
-				`[DAO_SPACE][deploy] Failed to deploy DAO space. message: ${error.message} – cause: ${error.cause}`,
-			)
+			switch (error._tag) {
+				case "ConfigError":
+					console.error("[DAO_SPACE][deploy] Invalid server config")
+					return new Response(
+						JSON.stringify({
+							message: "Invalid server config. Please notify the server administrator.",
+							reason: "Invalid server config. Please notify the server administrator.",
+						}),
+						{
+							status: 500,
+						},
+					)
+				default:
+					console.error(
+						`[DAO_SPACE][deploy] Failed to deploy DAO space. message: ${error.message} – cause: ${error.cause}`,
+					)
 
-			return new Response(
-				JSON.stringify({
-					message: `Failed to deploy DAO space. message: ${error.message} – cause: ${error.cause}`,
-					reason: error.message,
-				}),
-				{
-					status: 500,
-				},
-			)
+					return new Response(
+						JSON.stringify({
+							message: `Failed to deploy DAO space. message: ${error.message} – cause: ${error.cause}`,
+							reason: error.message,
+						}),
+						{
+							status: 500,
+						},
+					)
+			}
 		},
 		onRight: (txHash) => {
 			return Response.json({txHash})
