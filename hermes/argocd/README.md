@@ -137,7 +137,7 @@ The workflow at `.github/workflows/hermes-deploy.yml` automatically deploys when
 When changes are detected in:
 - `hermes-processor/**` - Rebuilds and redeploys hermes-processor
 - `atlas/**` - Rebuilds and redeploys atlas
-- `mock-substream/**` - Rebuilds both services
+
 - `hermes-schema/**` - Rebuilds services with new schemas
 - `wire/**` - Rebuilds services with dependency changes
 - `hermes/**` - Applies k8s manifest changes (kafka-broker, kafka-ui, etc.)

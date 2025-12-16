@@ -24,7 +24,6 @@ members = [
     "hermes-instrumentation",
 
     "atlas",
-    "mock-substream",
     "hermes-substream",
 ]
 # `substreams build` doesn't work well when in a workspace. The CLI looks for the
