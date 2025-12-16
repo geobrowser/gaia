@@ -2,6 +2,7 @@ apiVersion: batch/v1
 kind: CronJob
 metadata:
   name: scoring-service
+  namespace: scoring
 spec:
   schedule: "0 3 * * *"  # Run at 3am every day
   jobTemplate:
@@ -9,8 +10,9 @@ spec:
       template:
         spec:
           restartPolicy: OnFailure
+          imagePullSecrets:
+            - name: regcred
           containers:
-            # TODO: Determine the image build process
             - name: scoring-service
               image: registry.digitalocean.com/geo/scoring-service:latest
               imagePullPolicy: Always
@@ -27,4 +29,3 @@ spec:
                 limits:
                   memory: "2048Mi"
                   cpu: "2000m"
-
