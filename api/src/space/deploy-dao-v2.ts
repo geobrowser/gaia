@@ -9,11 +9,29 @@ const DAO_SPACE_FACTORY_ADDRESS = "0x86C773b693053D6899409f7deAb46ebd5FA0301c"
 // Contract constants from DAOSpace.sol
 export const RATIO_BASE = BigInt(10e6) // 10,000,000 (100% = 10e6, so 50% = 5e6)
 export const MINIMUM_VOTING_DURATION = BigInt(2 * 24 * 60 * 60) // 2 days in seconds
+export const MINIMUM_VOTING_DURATION_DAYS = 2
 
 class DeployDaoSpaceError extends Error {
 	readonly _tag = "DeployDaoSpaceError"
 }
 
+/**
+ * User-friendly voting settings input (using percentages and days)
+ */
+export interface VotingSettingsInput {
+	/** Percentage threshold for slow path (0-100) */
+	slowPathPercentageThreshold: number
+	/** Number of editors required for fast path approval */
+	fastPathFlatThreshold: number
+	/** Minimum number of editors required to vote */
+	quorum: number
+	/** Voting duration in days (minimum 2 days) */
+	durationInDays: number
+}
+
+/**
+ * Contract-level voting settings (using raw values)
+ */
 export interface VotingSettings {
 	slowPathPercentageThreshold: bigint
 	fastPathFlatThreshold: bigint
@@ -22,23 +40,49 @@ export interface VotingSettings {
 }
 
 interface DeployDaoSpaceArgs {
-	votingSettings: VotingSettings
+	votingSettings: VotingSettingsInput
 	initialEditors: string[]
 	initialMembers: string[]
 }
 
-export function validateVotingSettings(settings: VotingSettings, totalEditors: number): string | null {
-	if (settings.slowPathPercentageThreshold > RATIO_BASE) {
-		return `slowPathPercentageThreshold must be <= ${RATIO_BASE} (100%)`
+/**
+ * Convert a percentage (0-100) to the contract's ratio format
+ */
+export function percentageToRatio(percentage: number): bigint {
+	return BigInt(Math.floor(percentage * 10e6 / 100))
+}
+
+/**
+ * Convert days to seconds
+ */
+export function daysToSeconds(days: number): bigint {
+	return BigInt(Math.floor(days * 24 * 60 * 60))
+}
+
+/**
+ * Convert user-friendly voting settings to contract format
+ */
+export function toContractVotingSettings(input: VotingSettingsInput): VotingSettings {
+	return {
+		slowPathPercentageThreshold: percentageToRatio(input.slowPathPercentageThreshold),
+		fastPathFlatThreshold: BigInt(input.fastPathFlatThreshold),
+		quorum: BigInt(input.quorum),
+		duration: daysToSeconds(input.durationInDays),
 	}
-	if (settings.fastPathFlatThreshold > BigInt(totalEditors)) {
-		return `fastPathFlatThreshold must be <= number of initial editors (${totalEditors})`
+}
+
+export function validateVotingSettingsInput(settings: VotingSettingsInput, totalEditors: number): string | null {
+	if (settings.slowPathPercentageThreshold < 0 || settings.slowPathPercentageThreshold > 100) {
+		return "slowPathPercentageThreshold must be between 0 and 100"
 	}
-	if (settings.quorum > BigInt(totalEditors)) {
-		return `quorum must be <= number of initial editors (${totalEditors})`
+	if (settings.fastPathFlatThreshold < 0 || settings.fastPathFlatThreshold > totalEditors) {
+		return `fastPathFlatThreshold must be between 0 and ${totalEditors} (number of initial editors)`
 	}
-	if (settings.duration < MINIMUM_VOTING_DURATION) {
-		return `duration must be >= ${MINIMUM_VOTING_DURATION} seconds (2 days)`
+	if (settings.quorum < 0 || settings.quorum > totalEditors) {
+		return `quorum must be between 0 and ${totalEditors} (number of initial editors)`
+	}
+	if (settings.durationInDays < MINIMUM_VOTING_DURATION_DAYS) {
+		return `durationInDays must be at least ${MINIMUM_VOTING_DURATION_DAYS} days`
 	}
 	return null
 }
@@ -56,11 +100,12 @@ export function deployDaoSpace(args: DeployDaoSpaceArgs) {
 			)
 		}
 
-		const validationError = validateVotingSettings(args.votingSettings, initialEditors.length)
+		const validationError = validateVotingSettingsInput(args.votingSettings, initialEditors.length)
 		if (validationError) {
 			return yield* Effect.fail(new DeployDaoSpaceError(validationError))
 		}
 
+		const contractVotingSettings = toContractVotingSettings(args.votingSettings)
 		const walletClient = getWalletClient()
 
 		yield* Effect.logInfo("[DAO_SPACE][deploy] Sending createDAOSpaceProxy transaction")
@@ -74,10 +119,10 @@ export function deployDaoSpace(args: DeployDaoSpaceArgs) {
 						functionName: "createDAOSpaceProxy",
 						args: [
 							{
-								slowPathPercentageThreshold: args.votingSettings.slowPathPercentageThreshold,
-								fastPathFlatThreshold: args.votingSettings.fastPathFlatThreshold,
-								quorum: args.votingSettings.quorum,
-								duration: args.votingSettings.duration,
+								slowPathPercentageThreshold: contractVotingSettings.slowPathPercentageThreshold,
+								fastPathFlatThreshold: contractVotingSettings.fastPathFlatThreshold,
+								quorum: contractVotingSettings.quorum,
+								duration: contractVotingSettings.duration,
 							},
 							initialEditors,
 							initialMembers,

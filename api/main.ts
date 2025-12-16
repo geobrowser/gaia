@@ -360,10 +360,10 @@ app.post("deploy/dao", async (c) => {
 
 	const deploy = deployDaoSpace({
 		votingSettings: {
-			slowPathPercentageThreshold: BigInt(votingSettings.slowPathPercentageThreshold ?? 0),
-			fastPathFlatThreshold: BigInt(votingSettings.fastPathFlatThreshold ?? 0),
-			quorum: BigInt(votingSettings.quorum ?? 0),
-			duration: BigInt(votingSettings.duration ?? 0),
+			slowPathPercentageThreshold: Number(votingSettings.slowPathPercentageThreshold ?? 0),
+			fastPathFlatThreshold: Number(votingSettings.fastPathFlatThreshold ?? 0),
+			quorum: Number(votingSettings.quorum ?? 0),
+			durationInDays: Number(votingSettings.durationInDays ?? 0),
 		},
 		initialEditors,
 		initialMembers: initialMembers ?? [],
