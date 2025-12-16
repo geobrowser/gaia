@@ -223,17 +223,6 @@ Pre-populates resolved IPFS contents ahead of time so `hermes-pipeline` doesn't 
 
 **Development mode:** `hermes-pipeline` includes a mock IPFS cache with pre-populated test edits, allowing development without running the full cache service.
 
-### mock-substream (Library)
-
-Generates deterministic blockchain events for testing.
-
-**Location:** `mock-substream/`
-
-**Exports:**
-- `MockEvent` - Enum of event types (SpaceRegistered, EditsPublished, etc.)
-- `test_topology::generate()` - Generates deterministic test topology
-- Well-known IDs for spaces, topics, entities, etc.
-
 ## Event Types
 
 ### Space Registered
@@ -324,8 +313,6 @@ gaia/
 ├── hermes-schema/       # Library: Kafka output protobuf definitions
 ├── hermes-pipeline/       # Binary: primary transformer (spaces, trust, edits)
 ├── hermes-ipfs-cache/   # Service: IPFS content pre-fetcher (production)
-├── hermes-processor/    # Binary: standalone mock processor (development/testing)
-├── mock-substream/      # Library: test event generation
 └── atlas/               # Binary: canonical graph computation, publishes to Kafka
 ```
 
