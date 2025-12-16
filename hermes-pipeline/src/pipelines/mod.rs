@@ -2,14 +2,22 @@
 //!
 //! Each pipeline handles a specific action type:
 //! - `spaces`: SPACE_REGISTERED → space.creations
-//! - `trust`: SUBSPACE_ADDED/REMOVED → space.trust.extensions
+//! - `trust`: SUBSPACE_VERIFIED/RELATED/TOPIC_DECLARED/REMOVED → space.trust.extensions
 //! - `edits`: EDITS_PUBLISHED → knowledge.edits
 //! - `governance`: PROPOSAL_CREATED/VOTED/EXECUTED → space.governance
+//! - `membership`: EDITOR/MEMBER ADDED/REMOVED, SPACE_LEFT → space.membership
+//! - `moderation`: EDITOR_FLAGGED/UNFLAGGED, FLAGGED/UNFLAGGED → space.moderation
+//! - `topics`: TOPIC_DECLARED → space.topics
+//! - `voting`: UPVOTED/DOWNVOTED/UNVOTED → curation.votes
 
 pub mod edits;
 pub mod governance;
+pub mod membership;
+pub mod moderation;
 pub mod spaces;
+pub mod topics;
 pub mod trust;
+pub mod voting;
 
 use hermes_schema::pb::blockchain_metadata::BlockchainMetadata;
 

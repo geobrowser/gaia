@@ -1,0 +1,34 @@
+syntax = "proto3";
+
+package membership;
+
+import "blockchain_metadata.proto";
+
+// Role types for membership changes
+enum MembershipRole {
+  EDITOR = 0;
+  MEMBER = 1;
+}
+
+// HermesRoleGranted - editor or member added to a space
+message HermesRoleGranted {
+  bytes space_id = 1;           // 16 bytes - space granting role
+  bytes account = 2;            // 20 bytes - address receiving role
+  MembershipRole role = 3;      // EDITOR or MEMBER
+  blockchain_metadata.BlockchainMetadata meta = 4;
+}
+
+// HermesRoleRevoked - editor or member removed from a space
+message HermesRoleRevoked {
+  bytes space_id = 1;           // 16 bytes - space revoking role
+  bytes account = 2;            // 20 bytes - address losing role
+  MembershipRole role = 3;      // EDITOR or MEMBER
+  blockchain_metadata.BlockchainMetadata meta = 4;
+}
+
+// HermesSpaceLeft - member voluntarily left a space
+message HermesSpaceLeft {
+  bytes member_id = 1;          // 16 bytes - member's space ID
+  bytes space_id = 2;           // 16 bytes - space being left
+  blockchain_metadata.BlockchainMetadata meta = 3;
+}

@@ -17,18 +17,15 @@
 //!
 //! Atlas processes topology events:
 //! - `SPACE_REGISTERED`: New space creation
-//! - `SUBSPACE_ADDED`: Trust extension between spaces
+//! - `SUBSPACE_VERIFIED`: Verified trust extension (explicit canonical trust)
+//! - `SUBSPACE_RELATED`: Related trust extension (explicit non-canonical trust)
+//! - `SUBSPACE_TOPIC_DECLARED`: Topic-based trust extension
 
 use crate::events::{
     BlockMetadata, SpaceCreated, SpaceTopologyEvent, SpaceTopologyPayload, SpaceType,
     TrustExtended, TrustExtension,
 };
 use hermes_relay::{actions, Action};
-
-// Trust extension type bytes (first 2 bytes of data field)
-const TRUST_TYPE_VERIFIED: [u8; 2] = [0x00, 0x00];
-const TRUST_TYPE_RELATED: [u8; 2] = [0x00, 0x01];
-const TRUST_TYPE_SUBTOPIC: [u8; 2] = [0x00, 0x02];
 
 /// Convert a slice to a fixed-size array, returning None if length doesn't match.
 fn to_array<const N: usize>(slice: &[u8]) -> Option<[u8; N]> {
@@ -39,7 +36,9 @@ fn to_array<const N: usize>(slice: &[u8]) -> Option<[u8; N]> {
 ///
 /// Returns `Some(event)` for:
 /// - `SPACE_REGISTERED` actions → SpaceCreated
-/// - `SUBSPACE_ADDED` actions → TrustExtended
+/// - `SUBSPACE_VERIFIED` actions → TrustExtended (Verified)
+/// - `SUBSPACE_RELATED` actions → TrustExtended (Related)
+/// - `SUBSPACE_TOPIC_DECLARED` actions → TrustExtended (Subtopic)
 ///
 /// Returns `None` for other action types (edits, proposals, etc.)
 pub fn convert_action(action: &Action, meta: &BlockMetadata) -> Option<SpaceTopologyEvent> {
@@ -47,8 +46,12 @@ pub fn convert_action(action: &Action, meta: &BlockMetadata) -> Option<SpaceTopo
 
     if actions::matches(action_type, &actions::SPACE_REGISTERED) {
         convert_space_registered(action, meta)
-    } else if actions::matches(action_type, &actions::SUBSPACE_ADDED) {
-        convert_subspace_added(action, meta)
+    } else if actions::matches(action_type, &actions::SUBSPACE_VERIFIED) {
+        convert_subspace_verified(action, meta)
+    } else if actions::matches(action_type, &actions::SUBSPACE_RELATED) {
+        convert_subspace_related(action, meta)
+    } else if actions::matches(action_type, &actions::SUBSPACE_TOPIC_DECLARED) {
+        convert_subspace_topic_declared(action, meta)
     } else {
         None
     }
@@ -146,51 +149,75 @@ fn parse_dao_data(data: &[u8]) -> Option<(Vec<[u8; 16]>, Vec<[u8; 16]>)> {
     Some((editors, members))
 }
 
-/// Convert a SUBSPACE_ADDED action to TrustExtended event.
+/// Convert a SUBSPACE_VERIFIED action to TrustExtended event.
 ///
 /// Action format:
 /// - `from_id`: source_space_id (16 bytes)
 /// - `topic[0..16]`: padding (zeros)
-/// - `topic[16..32]`: target_space_id or target_topic_id (16 bytes)
-/// - `data[0..2]`: trust type (VERIFIED=0x0000, RELATED=0x0001, SUBTOPIC=0x0002)
-fn convert_subspace_added(action: &Action, meta: &BlockMetadata) -> Option<SpaceTopologyEvent> {
+/// - `topic[16..32]`: target_space_id (16 bytes)
+fn convert_subspace_verified(action: &Action, meta: &BlockMetadata) -> Option<SpaceTopologyEvent> {
     let source_space_id = to_array::<16>(&action.from_id)?;
 
-    // Extract target from topic[16..32]
     if action.topic.len() < 32 {
         return None;
     }
-    let target_id = to_array::<16>(&action.topic[16..32])?;
-
-    // Parse trust type from data field
-    let extension = if action.data.len() >= 2 {
-        let trust_type: [u8; 2] = [action.data[0], action.data[1]];
-        match trust_type {
-            TRUST_TYPE_VERIFIED => TrustExtension::Verified {
-                target_space_id: target_id,
-            },
-            TRUST_TYPE_RELATED => TrustExtension::Related {
-                target_space_id: target_id,
-            },
-            TRUST_TYPE_SUBTOPIC => TrustExtension::Subtopic {
-                target_topic_id: target_id,
-            },
-            _ => TrustExtension::Verified {
-                target_space_id: target_id,
-            },
-        }
-    } else {
-        // Default to verified if no type specified
-        TrustExtension::Verified {
-            target_space_id: target_id,
-        }
-    };
+    let target_space_id = to_array::<16>(&action.topic[16..32])?;
 
     Some(SpaceTopologyEvent {
         meta: meta.clone(),
         payload: SpaceTopologyPayload::TrustExtended(TrustExtended {
             source_space_id,
-            extension,
+            extension: TrustExtension::Verified { target_space_id },
+        }),
+    })
+}
+
+/// Convert a SUBSPACE_RELATED action to TrustExtended event.
+///
+/// Action format:
+/// - `from_id`: source_space_id (16 bytes)
+/// - `topic[0..16]`: padding (zeros)
+/// - `topic[16..32]`: target_space_id (16 bytes)
+fn convert_subspace_related(action: &Action, meta: &BlockMetadata) -> Option<SpaceTopologyEvent> {
+    let source_space_id = to_array::<16>(&action.from_id)?;
+
+    if action.topic.len() < 32 {
+        return None;
+    }
+    let target_space_id = to_array::<16>(&action.topic[16..32])?;
+
+    Some(SpaceTopologyEvent {
+        meta: meta.clone(),
+        payload: SpaceTopologyPayload::TrustExtended(TrustExtended {
+            source_space_id,
+            extension: TrustExtension::Related { target_space_id },
+        }),
+    })
+}
+
+/// Convert a SUBSPACE_TOPIC_DECLARED action to TrustExtended event.
+///
+/// Action format:
+/// - `from_id`: source_space_id (16 bytes)
+/// - `topic[0..16]`: subspace_id (16 bytes)
+/// - `topic[16..32]`: topic_id (16 bytes)
+fn convert_subspace_topic_declared(
+    action: &Action,
+    meta: &BlockMetadata,
+) -> Option<SpaceTopologyEvent> {
+    let source_space_id = to_array::<16>(&action.from_id)?;
+
+    if action.topic.len() < 32 {
+        return None;
+    }
+    // Topic ID is in the last 16 bytes
+    let target_topic_id = to_array::<16>(&action.topic[16..32])?;
+
+    Some(SpaceTopologyEvent {
+        meta: meta.clone(),
+        payload: SpaceTopologyPayload::TrustExtended(TrustExtended {
+            source_space_id,
+            extension: TrustExtension::Subtopic { target_topic_id },
         }),
     })
 }
@@ -199,8 +226,8 @@ fn convert_subspace_added(action: &Action, meta: &BlockMetadata) -> Option<Space
 mod tests {
     use super::*;
     use hermes_relay::source::mock_events::{
-        self, make_address, make_id, space_created, space_created_dao, trust_extended_related,
-        trust_extended_subtopic, trust_extended_verified,
+        self, make_address, make_id, space_created, space_created_dao, subspace_related,
+        subspace_topic_declared, subspace_verified,
     };
 
     fn test_meta() -> BlockMetadata {
@@ -262,8 +289,8 @@ mod tests {
     }
 
     #[test]
-    fn test_convert_trust_extended_verified() {
-        let action = trust_extended_verified(make_id(0x01), make_id(0x02));
+    fn test_convert_subspace_verified() {
+        let action = subspace_verified(make_id(0x01), make_id(0x02));
         let meta = test_meta();
 
         let event = convert_action(&action, &meta).expect("should convert");
@@ -283,8 +310,8 @@ mod tests {
     }
 
     #[test]
-    fn test_convert_trust_extended_related() {
-        let action = trust_extended_related(make_id(0x01), make_id(0x02));
+    fn test_convert_subspace_related() {
+        let action = subspace_related(make_id(0x01), make_id(0x02));
         let meta = test_meta();
 
         let event = convert_action(&action, &meta).expect("should convert");
@@ -301,8 +328,8 @@ mod tests {
     }
 
     #[test]
-    fn test_convert_trust_extended_subtopic() {
-        let action = trust_extended_subtopic(make_id(0x01), make_id(0x8A));
+    fn test_convert_subspace_topic_declared() {
+        let action = subspace_topic_declared(make_id(0x01), make_id(0x02), make_id(0x8A));
         let meta = test_meta();
 
         let event = convert_action(&action, &meta).expect("should convert");
@@ -348,9 +375,9 @@ mod tests {
 
         // 18 spaces: 11 canonical + 7 non-canonical
         assert_eq!(space_count, 18);
-        // 14 explicit edges + 5 topic edges = 19 trust extensions
+        // 10 verified + 4 related + 5 topic declarations = 19 trust extensions
         assert_eq!(trust_count, 19);
-        // Total topology events (edits filtered out)
+        // Total topology events (edits, proposals, flagging, voting filtered out)
         assert_eq!(events.len(), 37);
     }
 }

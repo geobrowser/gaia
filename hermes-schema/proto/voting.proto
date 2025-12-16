@@ -1,0 +1,22 @@
+syntax = "proto3";
+
+package voting;
+
+import "blockchain_metadata.proto";
+
+// Vote direction
+enum VoteDirection {
+  UP = 0;
+  DOWN = 1;
+  NONE = 2;  // For unvote
+}
+
+// HermesVoteCast - vote cast on an object
+message HermesVoteCast {
+  bytes voter_id = 1;           // 16 bytes - voter's space ID
+  bytes object_type = 2;        // 4 bytes - type discriminator
+  bytes object_id = 3;          // 16 bytes - object being voted on
+  VoteDirection direction = 4;  // UP, DOWN, or NONE (unvote)
+  bytes data = 5;               // Additional vote data
+  blockchain_metadata.BlockchainMetadata meta = 6;
+}

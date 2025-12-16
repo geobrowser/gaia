@@ -1,11 +1,15 @@
-//! Mock event builders mirroring mock-substream's event types.
+//! Mock event builders mirroring contract action types.
 //!
 //! These builders create `Action` events in the chain format, matching
-//! the semantic events from `mock-substream`:
+//! the action types from the Space Registry contract:
 //!
-//! - `SpaceCreated` → `SPACE_REGISTERED` action
-//! - `TrustExtended` (Verified/Related/Subtopic) → `SUBSPACE_ADDED` action
-//! - `EditPublished` → `EDITS_PUBLISHED` action
+//! - `space_created` → `GOVERNANCE.SPACE_ID_REGISTERED` action
+//! - `subspace_added` → `GOVERNANCE.SUBSPACE_ADDED` action
+//! - `subspace_verified` → `GOVERNANCE.SUBSPACE_VERIFIED` action
+//! - `subspace_related` → `GOVERNANCE.SUBSPACE_RELATED` action
+//! - `subspace_topic_declared` → `GOVERNANCE.SUBSPACE_TOPIC_DECLARED` action
+//! - `edit_published` → `GOVERNANCE.EDITS_PUBLISHED` action
+//! - And more...
 //!
 //! # Example
 //!
@@ -15,8 +19,8 @@
 //! let actions = vec![
 //!     // Create a personal space
 //!     events::space_created([0x01; 16], [0xaa; 32]),
-//!     // Extend verified trust
-//!     events::trust_extended_verified([0x01; 16], [0x02; 16]),
+//!     // Add a verified subspace
+//!     events::subspace_verified([0x01; 16], [0x02; 16]),
 //!     // Publish edits with IPFS hash
 //!     events::edit_published([0x01; 16], "QmYwAPJzv5CZsnANOTaREALhashhere"),
 //! ];
@@ -25,29 +29,23 @@
 use crate::actions;
 use hermes_substream::pb::hermes::Action;
 
-// Trust extension type bytes (first 2 bytes of data field)
-const TRUST_TYPE_VERIFIED: [u8; 2] = [0x00, 0x00];
-const TRUST_TYPE_RELATED: [u8; 2] = [0x00, 0x01];
-const TRUST_TYPE_SUBTOPIC: [u8; 2] = [0x00, 0x02];
-
 // =============================================================================
-// Type aliases (matching mock-substream)
+// Type aliases
 // =============================================================================
 
 pub type SpaceId = [u8; 16];
 pub type TopicId = [u8; 16];
 pub type Address = [u8; 32];
+pub type ProposalId = [u8; 32];
 
 // =============================================================================
-// SpaceCreated -> SPACE_REGISTERED
+// Space Registration Actions
 // =============================================================================
 
-/// Create a SPACE_REGISTERED action (SpaceCreated event).
-///
-/// Maps to mock-substream's `SpaceCreated` with `SpaceType::Personal`.
+/// Create a SPACE_REGISTERED action (personal space).
 ///
 /// - `space_id`: The 16-byte ID of the new space
-/// - `owner`: The 32-byte owner address
+/// - `owner`: The 32-byte owner address (stored in topic field as bytes32(bytes20(address)))
 pub fn space_created(space_id: SpaceId, owner: Address) -> Action {
     Action {
         from_id: space_id.to_vec(),
@@ -59,8 +57,6 @@ pub fn space_created(space_id: SpaceId, owner: Address) -> Action {
 }
 
 /// Create a SPACE_REGISTERED action for a DAO space.
-///
-/// Maps to mock-substream's `SpaceCreated` with `SpaceType::Dao`.
 ///
 /// - `space_id`: The 16-byte ID of the new space  
 /// - `initial_editors`: List of initial editor space IDs
@@ -94,74 +90,290 @@ pub fn space_created_dao(
     }
 }
 
-// =============================================================================
-// TrustExtended -> SUBSPACE_ADDED
-// =============================================================================
-
-/// Create a SUBSPACE_ADDED action for verified trust.
+/// Create a SPACE_MIGRATED action.
 ///
-/// Maps to mock-substream's `TrustExtended` with `TrustExtension::Verified`.
-///
-/// - `source_space_id`: The space extending trust
-/// - `target_space_id`: The space being verified
-pub fn trust_extended_verified(source_space_id: SpaceId, target_space_id: SpaceId) -> Action {
-    let mut topic = vec![0u8; 16];
-    topic.extend_from_slice(&target_space_id);
-
+/// - `space_id`: The 16-byte ID of the space being migrated
+/// - `new_space_address`: The new contract address (as bytes32(bytes20(address)))
+pub fn space_migrated(space_id: SpaceId, new_space_address: Address) -> Action {
     Action {
-        from_id: source_space_id.to_vec(),
+        from_id: space_id.to_vec(),
         to_id: vec![0u8; 16],
-        action: actions::SUBSPACE_ADDED.to_vec(),
-        topic,
-        data: TRUST_TYPE_VERIFIED.to_vec(),
-    }
-}
-
-/// Create a SUBSPACE_ADDED action for related trust.
-///
-/// Maps to mock-substream's `TrustExtended` with `TrustExtension::Related`.
-///
-/// - `source_space_id`: The space extending trust
-/// - `target_space_id`: The related space
-pub fn trust_extended_related(source_space_id: SpaceId, target_space_id: SpaceId) -> Action {
-    let mut topic = vec![0u8; 16];
-    topic.extend_from_slice(&target_space_id);
-
-    Action {
-        from_id: source_space_id.to_vec(),
-        to_id: vec![0u8; 16],
-        action: actions::SUBSPACE_ADDED.to_vec(),
-        topic,
-        data: TRUST_TYPE_RELATED.to_vec(),
-    }
-}
-
-/// Create a SUBSPACE_ADDED action for subtopic trust.
-///
-/// Maps to mock-substream's `TrustExtended` with `TrustExtension::Subtopic`.
-///
-/// - `source_space_id`: The space extending trust
-/// - `target_topic_id`: The subtopic's topic ID
-pub fn trust_extended_subtopic(source_space_id: SpaceId, target_topic_id: TopicId) -> Action {
-    let mut topic = vec![0u8; 16];
-    topic.extend_from_slice(&target_topic_id);
-
-    Action {
-        from_id: source_space_id.to_vec(),
-        to_id: vec![0u8; 16],
-        action: actions::SUBSPACE_ADDED.to_vec(),
-        topic,
-        data: TRUST_TYPE_SUBTOPIC.to_vec(),
+        action: actions::SPACE_MIGRATED.to_vec(),
+        topic: new_space_address.to_vec(),
+        data: vec![],
     }
 }
 
 // =============================================================================
-// EditPublished -> EDITS_PUBLISHED
+// Subspace Actions
 // =============================================================================
+
+/// Create a SUBSPACE_ADDED action.
+///
+/// - `parent_space_id`: The parent space adding the subspace
+/// - `subspace_id`: The subspace being added
+pub fn subspace_added(parent_space_id: SpaceId, subspace_id: SpaceId) -> Action {
+    let mut topic = vec![0u8; 16];
+    topic.extend_from_slice(&subspace_id);
+
+    Action {
+        from_id: parent_space_id.to_vec(),
+        to_id: vec![0u8; 16],
+        action: actions::SUBSPACE_ADDED.to_vec(),
+        topic,
+        data: vec![],
+    }
+}
+
+/// Create a SUBSPACE_REMOVED action.
+///
+/// - `parent_space_id`: The parent space removing the subspace
+/// - `subspace_id`: The subspace being removed
+pub fn subspace_removed(parent_space_id: SpaceId, subspace_id: SpaceId) -> Action {
+    let mut topic = vec![0u8; 16];
+    topic.extend_from_slice(&subspace_id);
+
+    Action {
+        from_id: parent_space_id.to_vec(),
+        to_id: vec![0u8; 16],
+        action: actions::SUBSPACE_REMOVED.to_vec(),
+        topic,
+        data: vec![],
+    }
+}
+
+/// Create a SUBSPACE_VERIFIED action.
+///
+/// - `parent_space_id`: The space verifying the subspace
+/// - `subspace_id`: The verified subspace
+pub fn subspace_verified(parent_space_id: SpaceId, subspace_id: SpaceId) -> Action {
+    let mut topic = vec![0u8; 16];
+    topic.extend_from_slice(&subspace_id);
+
+    Action {
+        from_id: parent_space_id.to_vec(),
+        to_id: vec![0u8; 16],
+        action: actions::SUBSPACE_VERIFIED.to_vec(),
+        topic,
+        data: vec![],
+    }
+}
+
+/// Create a SUBSPACE_RELATED action.
+///
+/// - `parent_space_id`: The space marking another as related
+/// - `subspace_id`: The related subspace
+pub fn subspace_related(parent_space_id: SpaceId, subspace_id: SpaceId) -> Action {
+    let mut topic = vec![0u8; 16];
+    topic.extend_from_slice(&subspace_id);
+
+    Action {
+        from_id: parent_space_id.to_vec(),
+        to_id: vec![0u8; 16],
+        action: actions::SUBSPACE_RELATED.to_vec(),
+        topic,
+        data: vec![],
+    }
+}
+
+/// Create a SUBSPACE_TOPIC_DECLARED action.
+///
+/// - `parent_space_id`: The parent space declaring the topic
+/// - `subspace_id`: The subspace (first 16 bytes of topic field)
+/// - `topic_id`: The topic ID (last 16 bytes of topic field)
+pub fn subspace_topic_declared(
+    parent_space_id: SpaceId,
+    subspace_id: SpaceId,
+    topic_id: TopicId,
+) -> Action {
+    let mut topic = subspace_id.to_vec();
+    topic.extend_from_slice(&topic_id);
+
+    Action {
+        from_id: parent_space_id.to_vec(),
+        to_id: vec![0u8; 16],
+        action: actions::SUBSPACE_TOPIC_DECLARED.to_vec(),
+        topic,
+        data: vec![],
+    }
+}
+
+// =============================================================================
+// Proposal Actions
+// =============================================================================
+
+/// Create a PROPOSAL_CREATED action.
+///
+/// - `space_id`: The space creating the proposal
+/// - `proposal_id`: The proposal ID (32 bytes)
+pub fn proposal_created(space_id: SpaceId, proposal_id: ProposalId) -> Action {
+    Action {
+        from_id: space_id.to_vec(),
+        to_id: vec![0u8; 16],
+        action: actions::PROPOSAL_CREATED.to_vec(),
+        topic: proposal_id.to_vec(),
+        data: vec![],
+    }
+}
+
+/// Create a PROPOSAL_VOTED action.
+///
+/// - `voter_id`: The voter's space ID
+/// - `space_id`: The space containing the proposal
+/// - `proposal_id`: The proposal being voted on
+/// - `vote_option`: The vote choice (encoded in data)
+pub fn proposal_voted(
+    voter_id: SpaceId,
+    space_id: SpaceId,
+    proposal_id: ProposalId,
+    vote_option: u8,
+) -> Action {
+    Action {
+        from_id: voter_id.to_vec(),
+        to_id: space_id.to_vec(),
+        action: actions::PROPOSAL_VOTED.to_vec(),
+        topic: proposal_id.to_vec(),
+        data: vec![vote_option],
+    }
+}
+
+/// Create a PROPOSAL_EXECUTED action.
+///
+/// - `space_id`: The space with the executed proposal
+/// - `proposal_id`: The executed proposal ID
+pub fn proposal_executed(space_id: SpaceId, proposal_id: ProposalId) -> Action {
+    Action {
+        from_id: space_id.to_vec(),
+        to_id: vec![0u8; 16],
+        action: actions::PROPOSAL_EXECUTED.to_vec(),
+        topic: proposal_id.to_vec(),
+        data: vec![],
+    }
+}
+
+// =============================================================================
+// Editor/Member Actions
+// =============================================================================
+
+/// Create an EDITOR_ADDED action.
+///
+/// - `space_id`: The space adding the editor
+/// - `editor_address`: The editor's address (as bytes32(bytes20(address)))
+pub fn editor_added(space_id: SpaceId, editor_address: Address) -> Action {
+    Action {
+        from_id: space_id.to_vec(),
+        to_id: vec![0u8; 16],
+        action: actions::EDITOR_ADDED.to_vec(),
+        topic: editor_address.to_vec(),
+        data: vec![],
+    }
+}
+
+/// Create an EDITOR_REMOVED action.
+///
+/// - `space_id`: The space removing the editor
+/// - `editor_address`: The editor's address (as bytes32(bytes20(address)))
+pub fn editor_removed(space_id: SpaceId, editor_address: Address) -> Action {
+    Action {
+        from_id: space_id.to_vec(),
+        to_id: vec![0u8; 16],
+        action: actions::EDITOR_REMOVED.to_vec(),
+        topic: editor_address.to_vec(),
+        data: vec![],
+    }
+}
+
+/// Create a MEMBER_ADDED action.
+///
+/// - `space_id`: The space adding the member
+/// - `member_address`: The member's address (as bytes32(bytes20(address)))
+pub fn member_added(space_id: SpaceId, member_address: Address) -> Action {
+    Action {
+        from_id: space_id.to_vec(),
+        to_id: vec![0u8; 16],
+        action: actions::MEMBER_ADDED.to_vec(),
+        topic: member_address.to_vec(),
+        data: vec![],
+    }
+}
+
+/// Create a MEMBER_REMOVED action.
+///
+/// - `space_id`: The space removing the member
+/// - `member_address`: The member's address (as bytes32(bytes20(address)))
+pub fn member_removed(space_id: SpaceId, member_address: Address) -> Action {
+    Action {
+        from_id: space_id.to_vec(),
+        to_id: vec![0u8; 16],
+        action: actions::MEMBER_REMOVED.to_vec(),
+        topic: member_address.to_vec(),
+        data: vec![],
+    }
+}
+
+/// Create an EDITOR_FLAGGED action.
+///
+/// - `space_id`: The space flagging the editor
+/// - `editor_address`: The flagged editor's address
+pub fn editor_flagged(space_id: SpaceId, editor_address: Address) -> Action {
+    Action {
+        from_id: space_id.to_vec(),
+        to_id: vec![0u8; 16],
+        action: actions::EDITOR_FLAGGED.to_vec(),
+        topic: editor_address.to_vec(),
+        data: vec![],
+    }
+}
+
+/// Create an EDITOR_UNFLAGGED action.
+///
+/// - `space_id`: The space unflagging the editor
+/// - `editor_address`: The unflagged editor's address
+pub fn editor_unflagged(space_id: SpaceId, editor_address: Address) -> Action {
+    Action {
+        from_id: space_id.to_vec(),
+        to_id: vec![0u8; 16],
+        action: actions::EDITOR_UNFLAGGED.to_vec(),
+        topic: editor_address.to_vec(),
+        data: vec![],
+    }
+}
+
+/// Create a SPACE_LEFT action.
+///
+/// - `member_id`: The member leaving the space
+/// - `space_id`: The space being left
+/// - `role`: The role being left (e.g., keccak256("EDITOR") or keccak256("MEMBER"))
+pub fn space_left(member_id: SpaceId, space_id: SpaceId, role: [u8; 32]) -> Action {
+    Action {
+        from_id: member_id.to_vec(),
+        to_id: space_id.to_vec(),
+        action: actions::SPACE_LEFT.to_vec(),
+        topic: role.to_vec(),
+        data: vec![],
+    }
+}
+
+// =============================================================================
+// Content Actions
+// =============================================================================
+
+/// Create a TOPIC_DECLARED action.
+///
+/// - `space_id`: The space declaring the topic
+/// - `topic_id`: The topic ID (keccak256 of topic name)
+/// - `content_metadata`: Optional metadata
+pub fn topic_declared(space_id: SpaceId, topic_id: [u8; 32], content_metadata: &[u8]) -> Action {
+    Action {
+        from_id: space_id.to_vec(),
+        to_id: vec![0u8; 16],
+        action: actions::TOPIC_DECLARED.to_vec(),
+        topic: topic_id.to_vec(),
+        data: content_metadata.to_vec(),
+    }
+}
 
 /// Create an EDITS_PUBLISHED action.
-///
-/// Maps to mock-substream's `EditPublished`.
 ///
 /// - `space_id`: The space publishing the edit
 /// - `ipfs_hash`: The IPFS hash of the edit content (e.g., "QmYwAPJzv5CZsnA...")
@@ -175,8 +387,146 @@ pub fn edit_published(space_id: SpaceId, ipfs_hash: &str) -> Action {
     }
 }
 
+/// Create a FLAGGED action.
+///
+/// - `flagger_id`: The space flagging the content
+/// - `space_id`: The space being flagged
+/// - `flagged_uri`: URI of the flagged content
+pub fn flagged(flagger_id: SpaceId, space_id: SpaceId, flagged_uri: &str) -> Action {
+    Action {
+        from_id: flagger_id.to_vec(),
+        to_id: space_id.to_vec(),
+        action: actions::FLAGGED.to_vec(),
+        topic: vec![0u8; 32], // Optional topic
+        data: flagged_uri.as_bytes().to_vec(),
+    }
+}
+
+/// Create an UNFLAGGED action.
+///
+/// - `unflagger_id`: The space unflagging the content
+/// - `space_id`: The space being unflagged
+/// - `unflagged_uri`: URI of the unflagged content
+pub fn unflagged(unflagger_id: SpaceId, space_id: SpaceId, unflagged_uri: &str) -> Action {
+    Action {
+        from_id: unflagger_id.to_vec(),
+        to_id: space_id.to_vec(),
+        action: actions::UNFLAGGED.to_vec(),
+        topic: vec![0u8; 32], // Optional topic
+        data: unflagged_uri.as_bytes().to_vec(),
+    }
+}
+
 // =============================================================================
-// Helper functions (matching mock-substream)
+// Permissionless Voting Actions
+// =============================================================================
+
+/// Create an UPVOTED action.
+///
+/// - `voter_id`: The voter's space ID
+/// - `object_type`: 4-byte object type identifier
+/// - `object_id`: 16-byte object ID
+/// - `version`: Version number
+/// - `group_id`: Group ID for the vote
+/// - `space_pov`: Space point-of-view
+pub fn upvoted(
+    voter_id: SpaceId,
+    object_type: [u8; 4],
+    object_id: SpaceId,
+    version: u16,
+    group_id: SpaceId,
+    space_pov: SpaceId,
+) -> Action {
+    // Topic: bytes32(bytes4(objectType) << 224) | (bytes16(objectId) << 96)
+    let mut topic = vec![0u8; 32];
+    topic[0..4].copy_from_slice(&object_type);
+    topic[4..20].copy_from_slice(&object_id);
+
+    // Data: abi.encode(uint16(version), bytes16(groupId), bytes16(spacePOV))
+    let mut data = Vec::new();
+    data.extend_from_slice(&version.to_be_bytes());
+    data.extend_from_slice(&group_id);
+    data.extend_from_slice(&space_pov);
+
+    Action {
+        from_id: voter_id.to_vec(),
+        to_id: vec![0u8; 16],
+        action: actions::UPVOTED.to_vec(),
+        topic,
+        data,
+    }
+}
+
+/// Create a DOWNVOTED action.
+///
+/// - `voter_id`: The voter's space ID
+/// - `object_type`: 4-byte object type identifier
+/// - `object_id`: 16-byte object ID
+/// - `version`: Version number
+/// - `group_id`: Group ID for the vote
+/// - `space_pov`: Space point-of-view
+pub fn downvoted(
+    voter_id: SpaceId,
+    object_type: [u8; 4],
+    object_id: SpaceId,
+    version: u16,
+    group_id: SpaceId,
+    space_pov: SpaceId,
+) -> Action {
+    let mut topic = vec![0u8; 32];
+    topic[0..4].copy_from_slice(&object_type);
+    topic[4..20].copy_from_slice(&object_id);
+
+    let mut data = Vec::new();
+    data.extend_from_slice(&version.to_be_bytes());
+    data.extend_from_slice(&group_id);
+    data.extend_from_slice(&space_pov);
+
+    Action {
+        from_id: voter_id.to_vec(),
+        to_id: vec![0u8; 16],
+        action: actions::DOWNVOTED.to_vec(),
+        topic,
+        data,
+    }
+}
+
+/// Create an UNVOTED action.
+///
+/// - `voter_id`: The voter's space ID
+/// - `object_type`: 4-byte object type identifier
+/// - `object_id`: 16-byte object ID
+/// - `version`: Version number
+/// - `group_id`: Group ID for the vote
+/// - `space_pov`: Space point-of-view
+pub fn unvoted(
+    voter_id: SpaceId,
+    object_type: [u8; 4],
+    object_id: SpaceId,
+    version: u16,
+    group_id: SpaceId,
+    space_pov: SpaceId,
+) -> Action {
+    let mut topic = vec![0u8; 32];
+    topic[0..4].copy_from_slice(&object_type);
+    topic[4..20].copy_from_slice(&object_id);
+
+    let mut data = Vec::new();
+    data.extend_from_slice(&version.to_be_bytes());
+    data.extend_from_slice(&group_id);
+    data.extend_from_slice(&space_pov);
+
+    Action {
+        from_id: voter_id.to_vec(),
+        to_id: vec![0u8; 16],
+        action: actions::UNVOTED.to_vec(),
+        topic,
+        data,
+    }
+}
+
+// =============================================================================
+// Helper functions
 // =============================================================================
 
 /// Helper to create a well-known ID from a single byte.
@@ -197,11 +547,16 @@ pub const fn make_address(last_byte: u8) -> Address {
     ]
 }
 
+/// Helper to create a proposal ID from a single byte.
+pub const fn make_proposal_id(last_byte: u8) -> ProposalId {
+    make_address(last_byte)
+}
+
 // =============================================================================
-// Convenience: Generate test topology matching mock-substream
+// Test topology - comprehensive example with all action types
 // =============================================================================
 
-/// Well-known space IDs (matching mock-substream::test_topology)
+/// Well-known space IDs for testing
 pub mod test_topology {
     use super::*;
 
@@ -241,12 +596,23 @@ pub mod test_topology {
     pub const USER_2: Address = make_address(0x12);
     pub const USER_3: Address = make_address(0x13);
 
-    /// Generate all events matching mock-substream's test_topology::generate().
+    // Proposal IDs
+    pub const PROPOSAL_1: ProposalId = make_proposal_id(0xA1);
+    pub const PROPOSAL_2: ProposalId = make_proposal_id(0xA2);
+
+    // Object types for voting
+    pub const OBJECT_TYPE_ENTITY: [u8; 4] = [0x00, 0x00, 0x00, 0x01];
+    pub const OBJECT_TYPE_TRIPLE: [u8; 4] = [0x00, 0x00, 0x00, 0x02];
+
+    /// Generate a comprehensive set of test events covering all action types.
     ///
     /// Returns actions for:
-    /// - 18 space creations (11 canonical + 7 non-canonical)
-    /// - 14 explicit trust edges + 5 topic edges
-    /// - 6 edit events
+    /// - Space registrations (personal and DAO)
+    /// - Subspace operations (added, removed, verified, related, topic declared)
+    /// - Editor/member management
+    /// - Proposals (created, voted, executed)
+    /// - Content operations (edits, flagging)
+    /// - Permissionless voting
     #[allow(clippy::vec_init_then_push)]
     pub fn generate() -> Vec<Action> {
         let mut actions = Vec::new();
@@ -277,42 +643,81 @@ pub mod test_topology {
         // Non-canonical - Island 3
         actions.push(space_created(SPACE_S, USER_3));
 
-        // Phase 2: Trust edges (canonical graph)
-        actions.push(trust_extended_verified(ROOT_SPACE_ID, SPACE_A));
-        actions.push(trust_extended_verified(ROOT_SPACE_ID, SPACE_B));
-        actions.push(trust_extended_related(ROOT_SPACE_ID, SPACE_H));
+        // Phase 2: Subspace operations - verified
+        actions.push(subspace_verified(ROOT_SPACE_ID, SPACE_A));
+        actions.push(subspace_verified(ROOT_SPACE_ID, SPACE_B));
+        actions.push(subspace_verified(SPACE_A, SPACE_C));
+        actions.push(subspace_verified(SPACE_B, SPACE_E));
+        actions.push(subspace_verified(SPACE_C, SPACE_F));
+        actions.push(subspace_verified(SPACE_H, SPACE_I));
+        actions.push(subspace_verified(SPACE_H, SPACE_J));
+        actions.push(subspace_verified(SPACE_X, SPACE_Y));
+        actions.push(subspace_verified(SPACE_Y, SPACE_Z));
+        actions.push(subspace_verified(SPACE_P, SPACE_Q));
 
-        actions.push(trust_extended_verified(SPACE_A, SPACE_C));
-        actions.push(trust_extended_related(SPACE_A, SPACE_D));
+        // Phase 3: Subspace operations - related
+        actions.push(subspace_related(ROOT_SPACE_ID, SPACE_H));
+        actions.push(subspace_related(SPACE_A, SPACE_D));
+        actions.push(subspace_related(SPACE_C, SPACE_G));
+        actions.push(subspace_related(SPACE_X, SPACE_W));
 
-        actions.push(trust_extended_verified(SPACE_B, SPACE_E));
+        // Phase 4: Subspace topic declarations
+        actions.push(subspace_topic_declared(SPACE_B, SPACE_H, TOPIC_H));
+        actions.push(subspace_topic_declared(ROOT_SPACE_ID, SPACE_E, TOPIC_E));
+        actions.push(subspace_topic_declared(SPACE_A, SPACE_A, TOPIC_SHARED));
+        actions.push(subspace_topic_declared(SPACE_X, SPACE_A, TOPIC_A));
+        actions.push(subspace_topic_declared(SPACE_P, SPACE_Q, TOPIC_Q));
 
-        actions.push(trust_extended_verified(SPACE_C, SPACE_F));
-        actions.push(trust_extended_related(SPACE_C, SPACE_G));
+        // Phase 5: Editor/member operations
+        actions.push(editor_added(SPACE_A, USER_2));
+        actions.push(member_added(SPACE_A, USER_3));
+        actions.push(editor_flagged(SPACE_B, USER_1));
+        actions.push(editor_unflagged(SPACE_B, USER_1));
 
-        actions.push(trust_extended_verified(SPACE_H, SPACE_I));
-        actions.push(trust_extended_verified(SPACE_H, SPACE_J));
+        // Phase 6: Proposals
+        actions.push(proposal_created(SPACE_A, PROPOSAL_1));
+        actions.push(proposal_voted(SPACE_B, SPACE_A, PROPOSAL_1, 1)); // Vote YES
+        actions.push(proposal_voted(SPACE_C, SPACE_A, PROPOSAL_1, 1)); // Vote YES
+        actions.push(proposal_executed(SPACE_A, PROPOSAL_1));
 
-        // Phase 3: Trust edges (non-canonical islands)
-        actions.push(trust_extended_verified(SPACE_X, SPACE_Y));
-        actions.push(trust_extended_related(SPACE_X, SPACE_W));
-        actions.push(trust_extended_verified(SPACE_Y, SPACE_Z));
-        actions.push(trust_extended_verified(SPACE_P, SPACE_Q));
-
-        // Phase 4: Topic-based trust edges
-        actions.push(trust_extended_subtopic(SPACE_B, TOPIC_H));
-        actions.push(trust_extended_subtopic(ROOT_SPACE_ID, TOPIC_E));
-        actions.push(trust_extended_subtopic(SPACE_A, TOPIC_SHARED));
-        actions.push(trust_extended_subtopic(SPACE_X, TOPIC_A));
-        actions.push(trust_extended_subtopic(SPACE_P, TOPIC_Q));
-
-        // Phase 5: Edits
+        // Phase 7: Edits
         actions.push(edit_published(ROOT_SPACE_ID, "QmRootEdit1CreatePersons"));
         actions.push(edit_published(ROOT_SPACE_ID, "QmRootEdit2AddDescriptions"));
         actions.push(edit_published(SPACE_A, "QmSpaceAEdit1CreateOrg"));
         actions.push(edit_published(SPACE_A, "QmSpaceAEdit2CreateRelations"));
         actions.push(edit_published(SPACE_B, "QmSpaceBEdit1CreateDoc"));
         actions.push(edit_published(SPACE_C, "QmSpaceCEdit1CreateTopic"));
+
+        // Phase 8: Content flagging
+        actions.push(flagged(SPACE_A, SPACE_X, "ipfs://QmFlaggedContent1"));
+        actions.push(unflagged(SPACE_A, SPACE_X, "ipfs://QmFlaggedContent1"));
+
+        // Phase 9: Permissionless voting
+        let entity_id = make_id(0xE1);
+        actions.push(upvoted(
+            SPACE_A,
+            OBJECT_TYPE_ENTITY,
+            entity_id,
+            1,
+            ROOT_SPACE_ID,
+            ROOT_SPACE_ID,
+        ));
+        actions.push(downvoted(
+            SPACE_B,
+            OBJECT_TYPE_ENTITY,
+            entity_id,
+            1,
+            ROOT_SPACE_ID,
+            ROOT_SPACE_ID,
+        ));
+        actions.push(unvoted(
+            SPACE_B,
+            OBJECT_TYPE_ENTITY,
+            entity_id,
+            1,
+            ROOT_SPACE_ID,
+            ROOT_SPACE_ID,
+        ));
 
         actions
     }
@@ -334,33 +739,37 @@ mod tests {
     }
 
     #[test]
-    fn test_trust_extended_verified_format() {
-        let source = make_id(0x01);
-        let target = make_id(0x02);
-        let action = trust_extended_verified(source, target);
+    fn test_subspace_verified_format() {
+        let parent = make_id(0x01);
+        let subspace = make_id(0x02);
+        let action = subspace_verified(parent, subspace);
 
-        assert_eq!(action.from_id, source.to_vec());
-        assert_eq!(action.action, actions::SUBSPACE_ADDED.to_vec());
-        assert_eq!(&action.topic[16..32], &target);
-        assert_eq!(action.data, TRUST_TYPE_VERIFIED.to_vec());
+        assert_eq!(action.from_id, parent.to_vec());
+        assert_eq!(action.action, actions::SUBSPACE_VERIFIED.to_vec());
+        assert_eq!(&action.topic[16..32], &subspace);
     }
 
     #[test]
-    fn test_trust_extended_related_format() {
-        let source = make_id(0x01);
-        let target = make_id(0x02);
-        let action = trust_extended_related(source, target);
+    fn test_subspace_related_format() {
+        let parent = make_id(0x01);
+        let related = make_id(0x02);
+        let action = subspace_related(parent, related);
 
-        assert_eq!(action.data, TRUST_TYPE_RELATED.to_vec());
+        assert_eq!(action.from_id, parent.to_vec());
+        assert_eq!(action.action, actions::SUBSPACE_RELATED.to_vec());
+        assert_eq!(&action.topic[16..32], &related);
     }
 
     #[test]
-    fn test_trust_extended_subtopic_format() {
-        let source = make_id(0x01);
-        let topic = make_id(0x02);
-        let action = trust_extended_subtopic(source, topic);
+    fn test_subspace_topic_declared_format() {
+        let parent = make_id(0x01);
+        let subspace = make_id(0x02);
+        let topic = make_id(0x03);
+        let action = subspace_topic_declared(parent, subspace, topic);
 
-        assert_eq!(action.data, TRUST_TYPE_SUBTOPIC.to_vec());
+        assert_eq!(action.from_id, parent.to_vec());
+        assert_eq!(action.action, actions::SUBSPACE_TOPIC_DECLARED.to_vec());
+        assert_eq!(&action.topic[0..16], &subspace);
         assert_eq!(&action.topic[16..32], &topic);
     }
 
@@ -376,6 +785,37 @@ mod tests {
     }
 
     #[test]
+    fn test_flagged_format() {
+        let flagger = make_id(0x01);
+        let target = make_id(0x02);
+        let action = flagged(flagger, target, "ipfs://test");
+
+        assert_eq!(action.from_id, flagger.to_vec());
+        assert_eq!(action.to_id, target.to_vec());
+        assert_eq!(action.action, actions::FLAGGED.to_vec());
+    }
+
+    #[test]
+    fn test_upvoted_format() {
+        let voter = make_id(0x01);
+        let object_type = [0x00, 0x00, 0x00, 0x01];
+        let object_id = make_id(0x02);
+        let action = upvoted(
+            voter,
+            object_type,
+            object_id,
+            1,
+            make_id(0x03),
+            make_id(0x04),
+        );
+
+        assert_eq!(action.from_id, voter.to_vec());
+        assert_eq!(action.action, actions::UPVOTED.to_vec());
+        assert_eq!(&action.topic[0..4], &object_type);
+        assert_eq!(&action.topic[4..20], &object_id);
+    }
+
+    #[test]
     fn test_topology_generate_counts() {
         let actions = test_topology::generate();
 
@@ -383,9 +823,17 @@ mod tests {
             .iter()
             .filter(|a| a.action == actions::SPACE_REGISTERED.to_vec())
             .count();
-        let trust_count = actions
+        let verified_count = actions
             .iter()
-            .filter(|a| a.action == actions::SUBSPACE_ADDED.to_vec())
+            .filter(|a| a.action == actions::SUBSPACE_VERIFIED.to_vec())
+            .count();
+        let related_count = actions
+            .iter()
+            .filter(|a| a.action == actions::SUBSPACE_RELATED.to_vec())
+            .count();
+        let topic_declared_count = actions
+            .iter()
+            .filter(|a| a.action == actions::SUBSPACE_TOPIC_DECLARED.to_vec())
             .count();
         let edit_count = actions
             .iter()
@@ -394,8 +842,12 @@ mod tests {
 
         // 18 spaces: 11 canonical + 7 non-canonical
         assert_eq!(space_count, 18);
-        // 14 explicit edges + 5 topic edges = 19 trust extensions
-        assert_eq!(trust_count, 19);
+        // 10 verified subspaces
+        assert_eq!(verified_count, 10);
+        // 4 related subspaces
+        assert_eq!(related_count, 4);
+        // 5 topic declarations
+        assert_eq!(topic_declared_count, 5);
         // 6 edits
         assert_eq!(edit_count, 6);
     }

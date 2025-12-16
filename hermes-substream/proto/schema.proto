@@ -162,24 +162,24 @@ message EditsPublishedList {
     repeated EditsPublished edits = 1;
 }
 
-message ContentFlagged {
+message Flagged {
     bytes flagger_id = 1;        // 16 bytes - space flagging content
     bytes space_id = 2;          // 16 bytes - space being flagged
     bytes data = 3;              // Flag details
 }
 
-message ContentFlaggedList {
-    repeated ContentFlagged flags = 1;
+message FlaggedList {
+    repeated Flagged flags = 1;
 }
 
-message SubspaceAdded {
-    bytes parent_space_id = 1;   // 16 bytes - parent space
-    bytes subspace_id = 2;       // 16 bytes - from topic field
-    bytes data = 3;
+message Unflagged {
+    bytes unflagger_id = 1;      // 16 bytes - space unflagging content
+    bytes space_id = 2;          // 16 bytes - space being unflagged
+    bytes data = 3;              // Unflag details
 }
 
-message SubspaceAddedList {
-    repeated SubspaceAdded subspaces = 1;
+message UnflaggedList {
+    repeated Unflagged unflags = 1;
 }
 
 message SubspaceRemoved {
@@ -190,6 +190,37 @@ message SubspaceRemoved {
 
 message SubspaceRemovedList {
     repeated SubspaceRemoved subspaces = 1;
+}
+
+message SubspaceVerified {
+    bytes parent_space_id = 1;   // 16 bytes - parent space
+    bytes subspace_id = 2;       // 16 bytes - from topic field
+    bytes data = 3;
+}
+
+message SubspaceVerifiedList {
+    repeated SubspaceVerified subspaces = 1;
+}
+
+message SubspaceRelated {
+    bytes parent_space_id = 1;   // 16 bytes - parent space
+    bytes subspace_id = 2;       // 16 bytes - from topic field
+    bytes data = 3;
+}
+
+message SubspaceRelatedList {
+    repeated SubspaceRelated subspaces = 1;
+}
+
+message SubspaceTopicDeclared {
+    bytes parent_space_id = 1;   // 16 bytes - parent space
+    bytes subspace_id = 2;       // 16 bytes - from topic field (first 16 bytes)
+    bytes topic_id = 3;          // 16 bytes - from topic field (last 16 bytes)
+    bytes data = 4;
+}
+
+message SubspaceTopicDeclaredList {
+    repeated SubspaceTopicDeclared declarations = 1;
 }
 
 // =============================================================================

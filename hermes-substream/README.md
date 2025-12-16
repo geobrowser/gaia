@@ -11,15 +11,21 @@ This substream decodes the `Action` event from the Space Registry contract and p
 ## Building
 
 ```bash
-# Build the WASM binary
-cargo build --target wasm32-unknown-unknown --release
+# 1. Generate protobuf bindings
+substreams protogen ./substreams.yaml --generate-mod-rs
 
-# Generate protobuf bindings
-substreams protogen
+# 2. Build the WASM binary
+cargo build --release --target wasm32-unknown-unknown
 
-# Pack into .spkg
+# 3. Pack into .spkg
 substreams pack -o hermes-substream.spkg
 ```
+
+### Prerequisites
+
+- Rust with `wasm32-unknown-unknown` target: `rustup target add wasm32-unknown-unknown`
+- [Substreams CLI](https://substreams.streamingfast.io/getting-started/installing-the-cli)
+- [Buf CLI](https://buf.build/docs/installation)
 
 ## Modules
 
@@ -47,9 +53,12 @@ substreams pack -o hermes-substream.spkg
 | `map_spaces_left` | `SpaceLeftList` | Members leaving spaces |
 | `map_topics_declared` | `TopicDeclaredList` | New topic declarations |
 | `map_edits_published` | `EditsPublishedList` | Published edits |
-| `map_content_flagged` | `ContentFlaggedList` | Flagged content |
-| `map_subspaces_added` | `SubspaceAddedList` | Subspaces added to parent spaces |
+| `map_flagged` | `FlaggedList` | Flagged content |
+| `map_unflagged` | `UnflaggedList` | Unflagged content |
 | `map_subspaces_removed` | `SubspaceRemovedList` | Subspaces removed from parent spaces |
+| `map_subspaces_verified` | `SubspaceVerifiedList` | Verified subspaces |
+| `map_subspaces_related` | `SubspaceRelatedList` | Related subspaces |
+| `map_subspaces_topic_declared` | `SubspaceTopicDeclaredList` | Topic declarations for subspaces |
 
 ### Permissionless Events
 
@@ -68,7 +77,7 @@ Consumers specify which module(s) to subscribe to:
 substreams run hermes-substream.spkg map_edits_published
 
 # Subscribe to multiple modules
-substreams run hermes-substream.spkg map_edits_published,map_editors_added,map_subspaces_added
+substreams run hermes-substream.spkg map_edits_published,map_editors_added,map_subspaces_verified
 
 # Subscribe to all raw actions
 substreams run hermes-substream.spkg map_actions
@@ -97,11 +106,14 @@ Events are identified by keccak256 hashes of action name strings:
 | Topic Declared | `GOVERNANCE.TOPIC_DECLARED` |
 | Edits Published | `GOVERNANCE.EDITS_PUBLISHED` |
 | Content Flagged | `GOVERNANCE.FLAGGED` |
-| Subspace Added | `GOVERNANCE.SUBSPACE_ADDED` |
+| Content Unflagged | `GOVERNANCE.UNFLAGGED` |
 | Subspace Removed | `GOVERNANCE.SUBSPACE_REMOVED` |
-| Object Upvoted | `PERMISSIONLESS.OBJECT_UPVOTED` |
-| Object Downvoted | `PERMISSIONLESS.OBJECT_DOWNVOTED` |
-| Object Unvoted | `PERMISSIONLESS.OBJECT_UNVOTED` |
+| Subspace Verified | `GOVERNANCE.SUBSPACE_VERIFIED` |
+| Subspace Related | `GOVERNANCE.SUBSPACE_RELATED` |
+| Subspace Topic Declared | `GOVERNANCE.SUBSPACE_TOPIC_DECLARED` |
+| Upvoted | `PERMISSIONLESS.UPVOTED` |
+| Downvoted | `PERMISSIONLESS.DOWNVOTED` |
+| Unvoted | `PERMISSIONLESS.UNVOTED` |
 
 ## Configuration
 

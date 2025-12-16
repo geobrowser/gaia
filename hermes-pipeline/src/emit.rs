@@ -11,10 +11,16 @@ use hermes_kafka::{BaseProducer, BaseRecord, Header, OwnedHeaders};
 use hermes_schema::pb::{
     governance::{HermesProposalCreated, HermesProposalExecuted, HermesProposalVoted},
     knowledge::HermesEdit,
+    membership::{HermesRoleGranted, HermesRoleRevoked, HermesSpaceLeft, MembershipRole},
+    moderation::{
+        HermesContentFlagged, HermesContentUnflagged, HermesEditorFlagged, HermesEditorUnflagged,
+    },
     space::{
         HermesCreateSpace, HermesSpaceTrustExtension, hermes_create_space,
         hermes_space_trust_extension,
     },
+    topics::HermesTopicDeclared,
+    voting::{HermesVoteCast, VoteDirection},
 };
 
 // =============================================================================
@@ -25,8 +31,12 @@ use hermes_schema::pb::{
 pub mod topics {
     pub const SPACE_CREATIONS: &str = "space.creations";
     pub const TRUST_EXTENSIONS: &str = "space.trust.extensions";
-    pub const EDITS: &str = "knowledge.edits";
+    pub const MEMBERSHIP: &str = "space.membership";
+    pub const MODERATION: &str = "space.moderation";
+    pub const TOPICS: &str = "space.topics";
     pub const GOVERNANCE: &str = "space.governance";
+    pub const VOTING: &str = "curation.votes";
+    pub const EDITS: &str = "knowledge.edits";
 }
 
 // =============================================================================
@@ -161,6 +171,189 @@ impl KafkaEvent for HermesProposalExecuted {
 }
 
 // =============================================================================
+// Membership events
+// =============================================================================
+
+impl KafkaEvent for HermesRoleGranted {
+    const TOPIC: &'static str = topics::MEMBERSHIP;
+
+    fn key(&self) -> Vec<u8> {
+        self.space_id.clone()
+    }
+
+    fn headers(&self) -> OwnedHeaders {
+        let role = match MembershipRole::try_from(self.role) {
+            Ok(MembershipRole::Editor) => "EDITOR",
+            Ok(MembershipRole::Member) => "MEMBER",
+            Err(_) => "UNKNOWN",
+        };
+        OwnedHeaders::new()
+            .insert(Header {
+                key: "event-type",
+                value: Some("ROLE_GRANTED"),
+            })
+            .insert(Header {
+                key: "role",
+                value: Some(role),
+            })
+    }
+}
+
+impl KafkaEvent for HermesRoleRevoked {
+    const TOPIC: &'static str = topics::MEMBERSHIP;
+
+    fn key(&self) -> Vec<u8> {
+        self.space_id.clone()
+    }
+
+    fn headers(&self) -> OwnedHeaders {
+        let role = match MembershipRole::try_from(self.role) {
+            Ok(MembershipRole::Editor) => "EDITOR",
+            Ok(MembershipRole::Member) => "MEMBER",
+            Err(_) => "UNKNOWN",
+        };
+        OwnedHeaders::new()
+            .insert(Header {
+                key: "event-type",
+                value: Some("ROLE_REVOKED"),
+            })
+            .insert(Header {
+                key: "role",
+                value: Some(role),
+            })
+    }
+}
+
+impl KafkaEvent for HermesSpaceLeft {
+    const TOPIC: &'static str = topics::MEMBERSHIP;
+
+    fn key(&self) -> Vec<u8> {
+        self.space_id.clone()
+    }
+
+    fn headers(&self) -> OwnedHeaders {
+        OwnedHeaders::new().insert(Header {
+            key: "event-type",
+            value: Some("SPACE_LEFT"),
+        })
+    }
+}
+
+// =============================================================================
+// Moderation events
+// =============================================================================
+
+impl KafkaEvent for HermesEditorFlagged {
+    const TOPIC: &'static str = topics::MODERATION;
+
+    fn key(&self) -> Vec<u8> {
+        self.space_id.clone()
+    }
+
+    fn headers(&self) -> OwnedHeaders {
+        OwnedHeaders::new().insert(Header {
+            key: "event-type",
+            value: Some("EDITOR_FLAGGED"),
+        })
+    }
+}
+
+impl KafkaEvent for HermesEditorUnflagged {
+    const TOPIC: &'static str = topics::MODERATION;
+
+    fn key(&self) -> Vec<u8> {
+        self.space_id.clone()
+    }
+
+    fn headers(&self) -> OwnedHeaders {
+        OwnedHeaders::new().insert(Header {
+            key: "event-type",
+            value: Some("EDITOR_UNFLAGGED"),
+        })
+    }
+}
+
+impl KafkaEvent for HermesContentFlagged {
+    const TOPIC: &'static str = topics::MODERATION;
+
+    fn key(&self) -> Vec<u8> {
+        self.target_space_id.clone()
+    }
+
+    fn headers(&self) -> OwnedHeaders {
+        OwnedHeaders::new().insert(Header {
+            key: "event-type",
+            value: Some("CONTENT_FLAGGED"),
+        })
+    }
+}
+
+impl KafkaEvent for HermesContentUnflagged {
+    const TOPIC: &'static str = topics::MODERATION;
+
+    fn key(&self) -> Vec<u8> {
+        self.target_space_id.clone()
+    }
+
+    fn headers(&self) -> OwnedHeaders {
+        OwnedHeaders::new().insert(Header {
+            key: "event-type",
+            value: Some("CONTENT_UNFLAGGED"),
+        })
+    }
+}
+
+// =============================================================================
+// Topic events
+// =============================================================================
+
+impl KafkaEvent for HermesTopicDeclared {
+    const TOPIC: &'static str = topics::TOPICS;
+
+    fn key(&self) -> Vec<u8> {
+        self.space_id.clone()
+    }
+
+    fn headers(&self) -> OwnedHeaders {
+        OwnedHeaders::new().insert(Header {
+            key: "event-type",
+            value: Some("TOPIC_DECLARED"),
+        })
+    }
+}
+
+// =============================================================================
+// Voting events
+// =============================================================================
+
+impl KafkaEvent for HermesVoteCast {
+    const TOPIC: &'static str = topics::VOTING;
+
+    fn key(&self) -> Vec<u8> {
+        // Key by object_id for partitioning votes on the same object together
+        self.object_id.clone()
+    }
+
+    fn headers(&self) -> OwnedHeaders {
+        let direction = match VoteDirection::try_from(self.direction) {
+            Ok(VoteDirection::Up) => "UP",
+            Ok(VoteDirection::Down) => "DOWN",
+            Ok(VoteDirection::None) => "NONE",
+            Err(_) => "UNKNOWN",
+        };
+        OwnedHeaders::new()
+            .insert(Header {
+                key: "event-type",
+                value: Some("VOTE_CAST"),
+            })
+            .insert(Header {
+                key: "direction",
+                value: Some(direction),
+            })
+    }
+}
+
+// =============================================================================
 // Emitter
 // =============================================================================
 
@@ -288,6 +481,56 @@ mod tests {
             data: vec![],
             meta: None,
         };
+        assert_eq!(event.key(), vec![0xAB; 16]);
+    }
+
+    #[test]
+    fn test_membership_topics() {
+        assert_eq!(HermesRoleGranted::TOPIC, "space.membership");
+        assert_eq!(HermesRoleRevoked::TOPIC, "space.membership");
+        assert_eq!(HermesSpaceLeft::TOPIC, "space.membership");
+    }
+
+    #[test]
+    fn test_moderation_topics() {
+        assert_eq!(HermesEditorFlagged::TOPIC, "space.moderation");
+        assert_eq!(HermesEditorUnflagged::TOPIC, "space.moderation");
+        assert_eq!(HermesContentFlagged::TOPIC, "space.moderation");
+        assert_eq!(HermesContentUnflagged::TOPIC, "space.moderation");
+    }
+
+    #[test]
+    fn test_topic_declared_topic() {
+        assert_eq!(HermesTopicDeclared::TOPIC, "space.topics");
+    }
+
+    #[test]
+    fn test_voting_topic() {
+        assert_eq!(HermesVoteCast::TOPIC, "curation.votes");
+    }
+
+    #[test]
+    fn test_role_granted_key() {
+        let event = HermesRoleGranted {
+            space_id: vec![0xAB; 16],
+            account: vec![0xCD; 20],
+            role: MembershipRole::Editor as i32,
+            meta: None,
+        };
+        assert_eq!(event.key(), vec![0xAB; 16]);
+    }
+
+    #[test]
+    fn test_vote_cast_key() {
+        let event = HermesVoteCast {
+            voter_id: vec![0x11; 16],
+            object_type: vec![0x00, 0x00, 0x00, 0x01],
+            object_id: vec![0xAB; 16],
+            direction: VoteDirection::Up as i32,
+            data: vec![],
+            meta: None,
+        };
+        // Should key by object_id for partitioning
         assert_eq!(event.key(), vec![0xAB; 16]);
     }
 }

@@ -1,0 +1,37 @@
+syntax = "proto3";
+
+package moderation;
+
+import "blockchain_metadata.proto";
+
+// HermesEditorFlagged - editor flagged within a space
+message HermesEditorFlagged {
+  bytes space_id = 1;           // 16 bytes - space containing editor
+  bytes editor_account = 2;     // 20 bytes - flagged editor address
+  bytes data = 3;               // Flag details/reason
+  blockchain_metadata.BlockchainMetadata meta = 4;
+}
+
+// HermesEditorUnflagged - editor unflagged within a space
+message HermesEditorUnflagged {
+  bytes space_id = 1;           // 16 bytes - space containing editor
+  bytes editor_account = 2;     // 20 bytes - unflagged editor address
+  bytes data = 3;               // Unflag details
+  blockchain_metadata.BlockchainMetadata meta = 4;
+}
+
+// HermesContentFlagged - content flagged by a space
+message HermesContentFlagged {
+  bytes flagger_id = 1;         // 16 bytes - space flagging content
+  bytes target_space_id = 2;    // 16 bytes - space whose content is flagged
+  bytes data = 3;               // Flag details (entity type, ID, reason)
+  blockchain_metadata.BlockchainMetadata meta = 4;
+}
+
+// HermesContentUnflagged - content unflagged by a space
+message HermesContentUnflagged {
+  bytes unflagger_id = 1;       // 16 bytes - space unflagging content
+  bytes target_space_id = 2;    // 16 bytes - space whose content is unflagged
+  bytes data = 3;               // Unflag details
+  blockchain_metadata.BlockchainMetadata meta = 4;
+}

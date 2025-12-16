@@ -137,21 +137,21 @@ modules:
     output:
       type: proto:hermes.EditsPublishedList
 
-  - name: map_content_flagged
+  - name: map_flagged
     kind: map
     initialBlock: 0
     inputs:
       - source: sf.ethereum.type.v2.Block
     output:
-      type: proto:hermes.ContentFlaggedList
+      type: proto:hermes.FlaggedList
 
-  - name: map_subspaces_added
+  - name: map_unflagged
     kind: map
     initialBlock: 0
     inputs:
       - source: sf.ethereum.type.v2.Block
     output:
-      type: proto:hermes.SubspaceAddedList
+      type: proto:hermes.UnflaggedList
 
   - name: map_subspaces_removed
     kind: map
@@ -160,6 +160,30 @@ modules:
       - source: sf.ethereum.type.v2.Block
     output:
       type: proto:hermes.SubspaceRemovedList
+
+  - name: map_subspaces_verified
+    kind: map
+    initialBlock: 0
+    inputs:
+      - source: sf.ethereum.type.v2.Block
+    output:
+      type: proto:hermes.SubspaceVerifiedList
+
+  - name: map_subspaces_related
+    kind: map
+    initialBlock: 0
+    inputs:
+      - source: sf.ethereum.type.v2.Block
+    output:
+      type: proto:hermes.SubspaceRelatedList
+
+  - name: map_subspaces_topic_declared
+    kind: map
+    initialBlock: 0
+    inputs:
+      - source: sf.ethereum.type.v2.Block
+    output:
+      type: proto:hermes.SubspaceTopicDeclaredList
 
   # Permissionless events
   - name: map_objects_upvoted
