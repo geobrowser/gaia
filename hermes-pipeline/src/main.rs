@@ -6,19 +6,21 @@
 //! ## Event Types Handled
 //!
 //! - `SPACE_REGISTERED` - new space registrations -> `space.creations` topic
-//! - `SUBSPACE_ADDED` - trust extensions -> `space.trust.extensions` topic
-//! - `SUBSPACE_REMOVED` - trust revocations -> `space.trust.extensions` topic
+//! - `SUBSPACE_VERIFIED/RELATED/TOPIC_DECLARED/REMOVED` - trust events -> `space.trust.extensions` topic
+//! - `EDITOR/MEMBER_ADDED/REMOVED`, `SPACE_LEFT` - membership -> `space.membership` topic
+//! - `EDITOR_FLAGGED/UNFLAGGED`, `FLAGGED/UNFLAGGED` - moderation -> `space.moderation` topic
+//! - `TOPIC_DECLARED` - topic declarations -> `space.topics` topic
+//! - `PROPOSAL_CREATED/VOTED/EXECUTED` - governance -> `space.governance` topic
+//! - `UPVOTED/DOWNVOTED/UNVOTED` - social voting -> `social.votes` topic
 //! - `EDITS_PUBLISHED` - edit publications -> `knowledge.edits` topic
-//! - `PROPOSAL_CREATED` - proposal creations -> `space.governance` topic
-//! - `PROPOSAL_VOTED` - proposal votes -> `space.governance` topic
-//! - `PROPOSAL_EXECUTED` - proposal executions -> `space.governance` topic
 //!
 //! ## Architecture
 //!
-//! The pipeline processes blocks in three parallel stages:
-//! 1. **Transform**: All pipelines run concurrently to transform actions into events
-//! 2. **Join**: Wait for all transformations to complete
-//! 3. **Emit**: Send events to Kafka in order (spaces, trust, governance, edits)
+//! The pipeline processes blocks in two phases:
+//! 1. **Transform**: All pipelines run concurrently. Edits pipeline (async with IPFS fetch)
+//!    is kicked off first so network I/O happens in parallel with sync transforms.
+//! 2. **Emit**: Send events to Kafka in order (spaces, membership, trust, moderation,
+//!    topics, governance, voting, edits)
 //!
 //! ## Configuration
 //!
@@ -49,6 +51,7 @@ use emit::{Emitter, topics};
 use pipelines::BlockMetadata;
 use pipelines::edits::RetryConfig;
 use pipelines::trust::get_extension_type;
+use pipelines::voting::get_vote_direction;
 
 /// Error type for the pipeline that implements std::error::Error
 #[derive(Debug)]
@@ -82,11 +85,16 @@ impl From<prost::DecodeError> for PipelineError {
 ///
 /// Subscribes to `HermesModule::Actions` and processes:
 /// - `SPACE_REGISTERED` -> spaces pipeline
-/// - `SUBSPACE_ADDED/REMOVED` -> trust pipeline
+/// - `SUBSPACE_VERIFIED/RELATED/TOPIC_DECLARED/REMOVED` -> trust pipeline
+/// - `EDITOR/MEMBER_ADDED/REMOVED`, `SPACE_LEFT` -> membership pipeline
+/// - `EDITOR_FLAGGED/UNFLAGGED`, `FLAGGED/UNFLAGGED` -> moderation pipeline
+/// - `TOPIC_DECLARED` -> topics pipeline
 /// - `PROPOSAL_CREATED/VOTED/EXECUTED` -> governance pipeline
+/// - `UPVOTED/DOWNVOTED/UNVOTED` -> voting pipeline
 /// - `EDITS_PUBLISHED` -> edits pipeline (with IPFS cache lookup)
 ///
-/// All pipelines run in parallel, then events are emitted to Kafka in order.
+/// The edits pipeline is kicked off first (async) so IPFS fetching happens
+/// in parallel with the sync transforms. All events are emitted to Kafka in order.
 pub struct Pipeline {
     emitter: Emitter,
     cache: Arc<MockIpfsCache>,
@@ -128,34 +136,53 @@ impl Pipeline {
         // Phase 1: Transform actions into events
         // =========================================================================
 
-        // Sync transforms - fast, no I/O, just run them inline
+        // Kick off edits transform FIRST - it has async IPFS fetching that can
+        // happen in parallel with the sync transforms below
+        let edits_future = pipelines::edits::transform(actions, &meta, &self.cache, &self.retry_config)
+            .instrument(info_span!("transform.edits", action_count = actions.len()));
+
+        // Sync transforms - fast, no I/O, run while edits fetches from IPFS
         let spaces = info_span!("transform.spaces", action_count = actions.len())
             .in_scope(|| pipelines::spaces::transform(actions, &meta))?;
+
+        let membership = info_span!("transform.membership", action_count = actions.len())
+            .in_scope(|| pipelines::membership::transform(actions, &meta))?;
 
         let trust = info_span!("transform.trust", action_count = actions.len())
             .in_scope(|| pipelines::trust::transform(actions, &meta))?;
 
+        let moderation = info_span!("transform.moderation", action_count = actions.len())
+            .in_scope(|| pipelines::moderation::transform(actions, &meta))?;
+
+        let topics = info_span!("transform.topics", action_count = actions.len())
+            .in_scope(|| pipelines::topics::transform(actions, &meta))?;
+
         let governance = info_span!("transform.governance", action_count = actions.len())
             .in_scope(|| pipelines::governance::transform(actions, &meta))?;
 
-        // Async transform - has cache lookups with retries
-        let edits = pipelines::edits::transform(actions, &meta, &self.cache, &self.retry_config)
-            .instrument(info_span!("transform.edits", action_count = actions.len()))
-            .await?;
+        let voting = info_span!("transform.voting", action_count = actions.len())
+            .in_scope(|| pipelines::voting::transform(actions, &meta))?;
+
+        // Now await the edits - IPFS fetch should have been happening in parallel
+        let edits = edits_future.await?;
 
         // =========================================================================
-        // Phase 3: Emit events to Kafka in order
+        // Phase 2: Emit events to Kafka in order
         // =========================================================================
         // Ordering matters here:
-        // 1. Spaces must be emitted first since trust, governance, and edit events reference spaces
-        // 2. Trust events come next as they define the space topology
-        // 3. Governance events come after trust (proposals reference spaces)
-        // 4. Edits come last as they may reference entities across trusted spaces
+        // 1. Spaces must be emitted first since all other events reference spaces
+        // 2. Membership events next (who can do what in spaces)
+        // 3. Trust events define the space topology
+        // 4. Moderation events (flagging)
+        // 5. Topic declarations
+        // 6. Governance events (proposals reference spaces)
+        // 7. Voting events (social layer)
+        // 8. Edits come last as they may reference entities across trusted spaces
 
         {
             let _emit_span = info_span!("emit").entered();
 
-            // Emit spaces
+            // 1. Emit spaces
             {
                 let _span = info_span!("emit.spaces", count = spaces.events.len()).entered();
                 for event in &spaces.events {
@@ -167,7 +194,36 @@ impl Pipeline {
                 }
             }
 
-            // Emit trust events
+            // 2. Emit membership events
+            {
+                let _span = info_span!("emit.membership", count = membership.total()).entered();
+                for event in &membership.roles_granted {
+                    self.emitter.emit(event)?;
+                    debug!(
+                        space_id = %hex::encode(&event.space_id),
+                        account = %hex::encode(&event.account),
+                        "Role granted"
+                    );
+                }
+                for event in &membership.roles_revoked {
+                    self.emitter.emit(event)?;
+                    debug!(
+                        space_id = %hex::encode(&event.space_id),
+                        account = %hex::encode(&event.account),
+                        "Role revoked"
+                    );
+                }
+                for event in &membership.spaces_left {
+                    self.emitter.emit(event)?;
+                    debug!(
+                        member_id = %hex::encode(&event.member_id),
+                        space_id = %hex::encode(&event.space_id),
+                        "Space left"
+                    );
+                }
+            }
+
+            // 3. Emit trust events
             {
                 let _span = info_span!("emit.trust", count = trust.events.len()).entered();
                 for trust_event in &trust.events {
@@ -181,7 +237,57 @@ impl Pipeline {
                 }
             }
 
-            // Emit governance events
+            // 4. Emit moderation events
+            {
+                let _span = info_span!("emit.moderation", count = moderation.total()).entered();
+                for event in &moderation.editors_flagged {
+                    self.emitter.emit(event)?;
+                    debug!(
+                        space_id = %hex::encode(&event.space_id),
+                        editor = %hex::encode(&event.editor_account),
+                        "Editor flagged"
+                    );
+                }
+                for event in &moderation.editors_unflagged {
+                    self.emitter.emit(event)?;
+                    debug!(
+                        space_id = %hex::encode(&event.space_id),
+                        editor = %hex::encode(&event.editor_account),
+                        "Editor unflagged"
+                    );
+                }
+                for event in &moderation.content_flagged {
+                    self.emitter.emit(event)?;
+                    debug!(
+                        flagger_id = %hex::encode(&event.flagger_id),
+                        target_space_id = %hex::encode(&event.target_space_id),
+                        "Content flagged"
+                    );
+                }
+                for event in &moderation.content_unflagged {
+                    self.emitter.emit(event)?;
+                    debug!(
+                        unflagger_id = %hex::encode(&event.unflagger_id),
+                        target_space_id = %hex::encode(&event.target_space_id),
+                        "Content unflagged"
+                    );
+                }
+            }
+
+            // 5. Emit topic declarations
+            {
+                let _span = info_span!("emit.topics", count = topics.total()).entered();
+                for event in &topics.topics_declared {
+                    self.emitter.emit(event)?;
+                    debug!(
+                        space_id = %hex::encode(&event.space_id),
+                        topic_id = %hex::encode(&event.topic_id),
+                        "Topic declared"
+                    );
+                }
+            }
+
+            // 6. Emit governance events
             {
                 let _span = info_span!("emit.governance", count = governance.total()).entered();
                 for event in &governance.proposals_created {
@@ -211,7 +317,21 @@ impl Pipeline {
                 }
             }
 
-            // Emit edits
+            // 7. Emit voting events
+            {
+                let _span = info_span!("emit.voting", count = voting.total()).entered();
+                for event in &voting.votes {
+                    self.emitter.emit(event)?;
+                    debug!(
+                        voter_id = %hex::encode(&event.voter_id),
+                        object_id = %hex::encode(&event.object_id),
+                        direction = get_vote_direction(event),
+                        "Vote cast"
+                    );
+                }
+            }
+
+            // 8. Emit edits
             {
                 let _span = info_span!("emit.edits", count = edits.events.len()).entered();
                 for event in &edits.events {
@@ -245,19 +365,30 @@ impl Pipeline {
 
         // Log block summary
         let space_count = spaces.events.len() as u64;
+        let membership_count = membership.total() as u64;
         let trust_count = trust.events.len() as u64;
+        let moderation_count = moderation.total() as u64;
+        let topics_count = topics.total() as u64;
         let governance_count = governance.total() as u64;
+        let voting_count = voting.total() as u64;
         let edit_count = edits.events.len() as u64;
-        let total = space_count + trust_count + governance_count + edit_count;
+        let total = space_count + membership_count + trust_count + moderation_count
+            + topics_count + governance_count + voting_count + edit_count;
 
         if total > 0 || edits.cache_misses > 0 || edits.errored_entries > 0 {
             info!(
                 spaces = space_count,
+                membership = membership_count,
                 trust_verified = trust.verified,
                 trust_related = trust.related,
                 trust_topic = trust.topic_declared,
                 trust_removed = trust.removed,
+                moderation = moderation_count,
+                topics = topics_count,
                 governance = governance_count,
+                voting_up = voting.upvotes,
+                voting_down = voting.downvotes,
+                voting_unvote = voting.unvotes,
                 edits = edit_count,
                 cache_misses = edits.cache_misses,
                 errored_entries = edits.errored_entries,
@@ -406,8 +537,12 @@ async fn async_main() -> anyhow::Result<()> {
     info!(
         module = %HermesModule::Actions,
         topics.spaces = topics::SPACE_CREATIONS,
+        topics.membership = topics::MEMBERSHIP,
         topics.trust = topics::TRUST_EXTENSIONS,
+        topics.moderation = topics::MODERATION,
+        topics.topics = topics::TOPICS,
         topics.governance = topics::GOVERNANCE,
+        topics.voting = topics::VOTING,
         topics.edits = topics::EDITS,
         retry_initial_ms = pipeline.retry_config.initial_delay_ms,
         retry_factor = pipeline.retry_config.factor,
