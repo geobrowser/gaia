@@ -4,13 +4,17 @@ import {abi as DAOSpaceFactoryAbi} from "./dao-abi-v2"
 import {getWalletClient} from "./client"
 import {getChecksumAddresses} from "./std"
 
-const DAO_SPACE_FACTORY_ADDRESS = "0xd5a61E983C40e0d33aaeE7b8b2DEB08179e0BFeF"
+const DAO_SPACE_FACTORY_ADDRESS = "0x86C773b693053D6899409f7deAb46ebd5FA0301c"
+
+// Contract constants from DAOSpace.sol
+export const RATIO_BASE = BigInt(10000) // 100% = 10000 basis points
+export const MINIMUM_VOTING_DURATION = BigInt(2 * 24 * 60 * 60) // 2 days in seconds
 
 class DeployDaoSpaceError extends Error {
 	readonly _tag = "DeployDaoSpaceError"
 }
 
-interface VotingSettings {
+export interface VotingSettings {
 	slowPathPercentageThreshold: bigint
 	fastPathFlatThreshold: bigint
 	quorum: bigint
@@ -21,6 +25,22 @@ interface DeployDaoSpaceArgs {
 	votingSettings: VotingSettings
 	initialEditors: string[]
 	initialMembers: string[]
+}
+
+export function validateVotingSettings(settings: VotingSettings, totalEditors: number): string | null {
+	if (settings.slowPathPercentageThreshold > RATIO_BASE) {
+		return `slowPathPercentageThreshold must be <= ${RATIO_BASE} (${RATIO_BASE} = 100%)`
+	}
+	if (settings.fastPathFlatThreshold > BigInt(totalEditors)) {
+		return `fastPathFlatThreshold must be <= number of initial editors (${totalEditors})`
+	}
+	if (settings.quorum > BigInt(totalEditors)) {
+		return `quorum must be <= number of initial editors (${totalEditors})`
+	}
+	if (settings.duration < MINIMUM_VOTING_DURATION) {
+		return `duration must be >= ${MINIMUM_VOTING_DURATION} seconds (2 days)`
+	}
+	return null
 }
 
 export function deployDaoSpace(args: DeployDaoSpaceArgs) {
@@ -34,6 +54,11 @@ export function deployDaoSpace(args: DeployDaoSpaceArgs) {
 			return yield* Effect.fail(
 				new DeployDaoSpaceError("At least one initial editor is required"),
 			)
+		}
+
+		const validationError = validateVotingSettings(args.votingSettings, initialEditors.length)
+		if (validationError) {
+			return yield* Effect.fail(new DeployDaoSpaceError(validationError))
 		}
 
 		const walletClient = getWalletClient()
