@@ -7,7 +7,7 @@ import {getChecksumAddresses} from "./std"
 const DAO_SPACE_FACTORY_ADDRESS = "0x86C773b693053D6899409f7deAb46ebd5FA0301c"
 
 // Contract constants from DAOSpace.sol
-export const RATIO_BASE = BigInt(10000) // 100% = 10000 basis points
+export const RATIO_BASE = BigInt(10e6) // 10,000,000 (100% = 10e6, so 50% = 5e6)
 export const MINIMUM_VOTING_DURATION = BigInt(2 * 24 * 60 * 60) // 2 days in seconds
 
 class DeployDaoSpaceError extends Error {
@@ -29,7 +29,7 @@ interface DeployDaoSpaceArgs {
 
 export function validateVotingSettings(settings: VotingSettings, totalEditors: number): string | null {
 	if (settings.slowPathPercentageThreshold > RATIO_BASE) {
-		return `slowPathPercentageThreshold must be <= ${RATIO_BASE} (${RATIO_BASE} = 100%)`
+		return `slowPathPercentageThreshold must be <= ${RATIO_BASE} (100%)`
 	}
 	if (settings.fastPathFlatThreshold > BigInt(totalEditors)) {
 		return `fastPathFlatThreshold must be <= number of initial editors (${totalEditors})`

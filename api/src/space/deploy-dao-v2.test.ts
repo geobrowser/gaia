@@ -3,18 +3,18 @@ import {validateVotingSettings, RATIO_BASE, MINIMUM_VOTING_DURATION} from "./dep
 
 describe("validateVotingSettings", () => {
 	const validSettings = {
-		slowPathPercentageThreshold: BigInt(5000), // 50%
+		slowPathPercentageThreshold: BigInt(5e6), // 50%
 		fastPathFlatThreshold: BigInt(1),
 		quorum: BigInt(1),
 		duration: MINIMUM_VOTING_DURATION,
 	}
 
 	describe("slowPathPercentageThreshold", () => {
-		it("should reject threshold greater than RATIO_BASE (10000)", () => {
+		it("should reject threshold greater than RATIO_BASE (10000000)", () => {
 			const settings = {...validSettings, slowPathPercentageThreshold: RATIO_BASE + BigInt(1)}
 			const error = validateVotingSettings(settings, 1)
 			expect(error).toContain("slowPathPercentageThreshold")
-			expect(error).toContain("10000")
+			expect(error).toContain("10000000")
 		})
 
 		it("should accept threshold equal to RATIO_BASE", () => {
@@ -101,7 +101,7 @@ describe("validateVotingSettings", () => {
 
 		it("should return null for valid settings with multiple editors", () => {
 			const settings = {
-				slowPathPercentageThreshold: BigInt(5000),
+				slowPathPercentageThreshold: BigInt(5e6), // 50%
 				fastPathFlatThreshold: BigInt(3),
 				quorum: BigInt(2),
 				duration: MINIMUM_VOTING_DURATION,
