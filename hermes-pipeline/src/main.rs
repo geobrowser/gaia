@@ -253,7 +253,9 @@ impl Pipeline {
         if total > 0 || edits.cache_misses > 0 || edits.errored_entries > 0 {
             info!(
                 spaces = space_count,
-                trust_added = trust.added,
+                trust_verified = trust.verified,
+                trust_related = trust.related,
+                trust_topic = trust.topic_declared,
                 trust_removed = trust.removed,
                 governance = governance_count,
                 edits = edit_count,

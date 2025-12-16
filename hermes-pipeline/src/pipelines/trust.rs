@@ -1,13 +1,21 @@
-//! Pipeline: SUBSPACE_ADDED/REMOVED → space.trust.extensions
+//! Pipeline: SUBSPACE_VERIFIED/RELATED/TOPIC_DECLARED/ADDED/REMOVED → space.trust.extensions
 //!
 //! Converts trust extension and revocation actions to HermesSpaceTrustExtension events.
+//!
+//! Action types:
+//! - SUBSPACE_VERIFIED: Verified trust extension (explicit canonical trust)
+//! - SUBSPACE_RELATED: Related trust extension (explicit non-canonical trust)
+//! - SUBSPACE_TOPIC_DECLARED: Topic-based trust extension
+//! - SUBSPACE_ADDED: Generic subspace addition (legacy, treated as verified)
+//! - SUBSPACE_REMOVED: Trust revocation
 
 use anyhow::Result;
 use hermes_instrumentation::debug_span;
 
 use hermes_relay::{Action, actions};
 use hermes_schema::pb::space::{
-    HermesSpaceTrustExtension, VerifiedExtension, hermes_space_trust_extension,
+    HermesSpaceTrustExtension, RelatedExtension, SubtopicExtension, VerifiedExtension,
+    hermes_space_trust_extension,
 };
 
 use super::BlockMetadata;
@@ -24,70 +32,182 @@ pub struct TrustEvent {
 pub struct TransformResult {
     /// Transformed trust extension events ready for emission.
     pub events: Vec<TrustEvent>,
-    /// Count of additions.
-    pub added: u64,
+    /// Count of verified extensions.
+    pub verified: u64,
+    /// Count of related extensions.
+    pub related: u64,
+    /// Count of topic declarations.
+    pub topic_declared: u64,
     /// Count of removals.
     pub removed: u64,
 }
 
-/// Transform all SUBSPACE_ADDED and SUBSPACE_REMOVED actions in a block.
+impl TransformResult {
+    /// Total number of trust events.
+    pub fn total(&self) -> u64 {
+        self.verified + self.related + self.topic_declared + self.removed
+    }
+}
+
+/// Transform all trust-related actions in a block.
+///
+/// Handles the following action types:
+/// - SUBSPACE_VERIFIED: Verified trust extension
+/// - SUBSPACE_RELATED: Related trust extension
+/// - SUBSPACE_TOPIC_DECLARED: Topic-based trust extension
+/// - SUBSPACE_ADDED: Generic addition (treated as verified for backwards compatibility)
+/// - SUBSPACE_REMOVED: Trust revocation
 ///
 /// Returns transformed events without sending to Kafka.
 pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformResult> {
-    let mut events = Vec::new();
-    let mut added = 0u64;
-    let mut removed = 0u64;
+    let mut result = TransformResult::default();
 
     for action in actions {
         let action_type = action.action.as_slice();
 
-        if actions::matches(action_type, &actions::SUBSPACE_ADDED) {
+        if actions::matches(action_type, &actions::SUBSPACE_VERIFIED) {
             let event = debug_span!(
-                "convert.trust.added",
+                "convert.trust.verified",
                 source = %hex::encode(&action.from_id),
-                target = %hex::encode(&action.to_id)
+                target = %hex::encode(&action.topic[16..32])
             )
-            .in_scope(|| convert_added(action, meta))?;
-            events.push(TrustEvent {
+            .in_scope(|| convert_verified(action, meta))?;
+            result.events.push(TrustEvent {
                 event,
                 is_removal: false,
             });
-            added += 1;
+            result.verified += 1;
+        } else if actions::matches(action_type, &actions::SUBSPACE_RELATED) {
+            let event = debug_span!(
+                "convert.trust.related",
+                source = %hex::encode(&action.from_id),
+                target = %hex::encode(&action.topic[16..32])
+            )
+            .in_scope(|| convert_related(action, meta))?;
+            result.events.push(TrustEvent {
+                event,
+                is_removal: false,
+            });
+            result.related += 1;
+        } else if actions::matches(action_type, &actions::SUBSPACE_TOPIC_DECLARED) {
+            let event = debug_span!(
+                "convert.trust.topic_declared",
+                source = %hex::encode(&action.from_id),
+                subspace = %hex::encode(&action.topic[0..16]),
+                topic = %hex::encode(&action.topic[16..32])
+            )
+            .in_scope(|| convert_topic_declared(action, meta))?;
+            result.events.push(TrustEvent {
+                event,
+                is_removal: false,
+            });
+            result.topic_declared += 1;
+        } else if actions::matches(action_type, &actions::SUBSPACE_ADDED) {
+            // Legacy: treat SUBSPACE_ADDED as verified for backwards compatibility
+            let event = debug_span!(
+                "convert.trust.added",
+                source = %hex::encode(&action.from_id),
+                target = %hex::encode(&action.topic[16..32])
+            )
+            .in_scope(|| convert_added(action, meta))?;
+            result.events.push(TrustEvent {
+                event,
+                is_removal: false,
+            });
+            result.verified += 1;
         } else if actions::matches(action_type, &actions::SUBSPACE_REMOVED) {
             let event = debug_span!(
                 "convert.trust.removed",
                 source = %hex::encode(&action.from_id),
-                target = %hex::encode(&action.to_id)
+                target = %hex::encode(&action.topic[16..32])
             )
             .in_scope(|| convert_removed(action, meta))?;
-            events.push(TrustEvent {
+            result.events.push(TrustEvent {
                 event,
                 is_removal: true,
             });
-            removed += 1;
+            result.removed += 1;
         }
     }
 
-    Ok(TransformResult {
-        events,
-        added,
-        removed,
+    Ok(result)
+}
+
+/// Convert a SUBSPACE_VERIFIED action to HermesSpaceTrustExtension proto.
+///
+/// The action structure for SUBSPACE_VERIFIED:
+/// - from_id: parent_space_id (16 bytes)
+/// - topic: [padding (16 bytes)][subspace_id (16 bytes)]
+fn convert_verified(action: &Action, meta: &BlockMetadata) -> Result<HermesSpaceTrustExtension> {
+    let source_space_id = action.from_id.clone();
+    // Target space ID is in the last 16 bytes of the topic field
+    let target_space_id = action.topic[16..32].to_vec();
+
+    let extension = Some(hermes_space_trust_extension::Extension::Verified(
+        VerifiedExtension { target_space_id },
+    ));
+
+    Ok(HermesSpaceTrustExtension {
+        source_space_id,
+        extension,
+        meta: Some(meta.to_proto()),
     })
 }
 
-/// Convert a SUBSPACE_ADDED action to HermesSpaceTrustExtension proto.
+/// Convert a SUBSPACE_RELATED action to HermesSpaceTrustExtension proto.
+///
+/// The action structure for SUBSPACE_RELATED:
+/// - from_id: parent_space_id (16 bytes)
+/// - topic: [padding (16 bytes)][subspace_id (16 bytes)]
+fn convert_related(action: &Action, meta: &BlockMetadata) -> Result<HermesSpaceTrustExtension> {
+    let source_space_id = action.from_id.clone();
+    let target_space_id = action.topic[16..32].to_vec();
+
+    let extension = Some(hermes_space_trust_extension::Extension::Related(
+        RelatedExtension { target_space_id },
+    ));
+
+    Ok(HermesSpaceTrustExtension {
+        source_space_id,
+        extension,
+        meta: Some(meta.to_proto()),
+    })
+}
+
+/// Convert a SUBSPACE_TOPIC_DECLARED action to HermesSpaceTrustExtension proto.
+///
+/// The action structure for SUBSPACE_TOPIC_DECLARED:
+/// - from_id: parent_space_id (16 bytes)
+/// - topic: [subspace_id (16 bytes)][topic_id (16 bytes)]
+fn convert_topic_declared(
+    action: &Action,
+    meta: &BlockMetadata,
+) -> Result<HermesSpaceTrustExtension> {
+    let source_space_id = action.from_id.clone();
+    // Topic ID is in the last 16 bytes of the topic field
+    let target_topic_id = action.topic[16..32].to_vec();
+
+    let extension = Some(hermes_space_trust_extension::Extension::Subtopic(
+        SubtopicExtension { target_topic_id },
+    ));
+
+    Ok(HermesSpaceTrustExtension {
+        source_space_id,
+        extension,
+        meta: Some(meta.to_proto()),
+    })
+}
+
+/// Convert a SUBSPACE_ADDED action to HermesSpaceTrustExtension proto (legacy).
 ///
 /// The action structure for SUBSPACE_ADDED:
 /// - from_id: parent_space_id (16 bytes)
-/// - to_id: subspace_id (16 bytes)
-/// - topic: subspace_id padded to 32 bytes
-/// - data: encoded trust type and metadata
+/// - topic: [padding (16 bytes)][subspace_id (16 bytes)]
 fn convert_added(action: &Action, meta: &BlockMetadata) -> Result<HermesSpaceTrustExtension> {
     let source_space_id = action.from_id.clone();
-    let target_space_id = action.to_id.clone();
+    let target_space_id = action.topic[16..32].to_vec();
 
-    // Default to Verified extension type
-    // In a full implementation, we'd decode the data field to determine the type
+    // Treat generic SUBSPACE_ADDED as verified for backwards compatibility
     let extension = Some(hermes_space_trust_extension::Extension::Verified(
         VerifiedExtension { target_space_id },
     ));
@@ -104,7 +224,7 @@ fn convert_added(action: &Action, meta: &BlockMetadata) -> Result<HermesSpaceTru
 /// Uses the same structure as SUBSPACE_ADDED but represents a trust revocation.
 fn convert_removed(action: &Action, meta: &BlockMetadata) -> Result<HermesSpaceTrustExtension> {
     let source_space_id = action.from_id.clone();
-    let target_space_id = action.to_id.clone();
+    let target_space_id = action.topic[16..32].to_vec();
 
     let extension = Some(hermes_space_trust_extension::Extension::Verified(
         VerifiedExtension { target_space_id },
@@ -139,13 +259,87 @@ mod tests {
         }
     }
 
+    fn make_topic_with_target(target: &[u8]) -> Vec<u8> {
+        let mut topic = vec![0u8; 16]; // padding
+        topic.extend_from_slice(target);
+        topic
+    }
+
     #[test]
-    fn test_convert_subspace_added() {
+    fn test_convert_subspace_verified() {
+        let target = vec![2u8; 16];
         let action = Action {
             from_id: vec![1; 16],
-            to_id: vec![2; 16],
+            to_id: vec![],
+            action: actions::SUBSPACE_VERIFIED.to_vec(),
+            topic: make_topic_with_target(&target),
+            data: vec![],
+        };
+
+        let result = convert_verified(&action, &test_meta()).unwrap();
+        assert_eq!(result.source_space_id, vec![1; 16]);
+        match result.extension {
+            Some(hermes_space_trust_extension::Extension::Verified(v)) => {
+                assert_eq!(v.target_space_id, target);
+            }
+            _ => panic!("Expected Verified extension"),
+        }
+    }
+
+    #[test]
+    fn test_convert_subspace_related() {
+        let target = vec![2u8; 16];
+        let action = Action {
+            from_id: vec![1; 16],
+            to_id: vec![],
+            action: actions::SUBSPACE_RELATED.to_vec(),
+            topic: make_topic_with_target(&target),
+            data: vec![],
+        };
+
+        let result = convert_related(&action, &test_meta()).unwrap();
+        assert_eq!(result.source_space_id, vec![1; 16]);
+        match result.extension {
+            Some(hermes_space_trust_extension::Extension::Related(r)) => {
+                assert_eq!(r.target_space_id, target);
+            }
+            _ => panic!("Expected Related extension"),
+        }
+    }
+
+    #[test]
+    fn test_convert_subspace_topic_declared() {
+        let subspace = vec![2u8; 16];
+        let topic_id = vec![3u8; 16];
+        let mut topic = subspace.clone();
+        topic.extend_from_slice(&topic_id);
+
+        let action = Action {
+            from_id: vec![1; 16],
+            to_id: vec![],
+            action: actions::SUBSPACE_TOPIC_DECLARED.to_vec(),
+            topic,
+            data: vec![],
+        };
+
+        let result = convert_topic_declared(&action, &test_meta()).unwrap();
+        assert_eq!(result.source_space_id, vec![1; 16]);
+        match result.extension {
+            Some(hermes_space_trust_extension::Extension::Subtopic(s)) => {
+                assert_eq!(s.target_topic_id, topic_id);
+            }
+            _ => panic!("Expected Subtopic extension"),
+        }
+    }
+
+    #[test]
+    fn test_convert_subspace_added_legacy() {
+        let target = vec![2u8; 16];
+        let action = Action {
+            from_id: vec![1; 16],
+            to_id: vec![],
             action: actions::SUBSPACE_ADDED.to_vec(),
-            topic: vec![2; 32],
+            topic: make_topic_with_target(&target),
             data: vec![],
         };
 
@@ -159,11 +353,12 @@ mod tests {
 
     #[test]
     fn test_convert_subspace_removed() {
+        let target = vec![2u8; 16];
         let action = Action {
             from_id: vec![1; 16],
-            to_id: vec![2; 16],
+            to_id: vec![],
             action: actions::SUBSPACE_REMOVED.to_vec(),
-            topic: vec![2; 32],
+            topic: make_topic_with_target(&target),
             data: vec![],
         };
 
@@ -176,30 +371,44 @@ mod tests {
         let actions = vec![
             Action {
                 from_id: vec![1; 16],
-                to_id: vec![2; 16],
-                action: actions::SUBSPACE_ADDED.to_vec(),
-                topic: vec![2; 32],
+                to_id: vec![],
+                action: actions::SUBSPACE_VERIFIED.to_vec(),
+                topic: make_topic_with_target(&vec![2u8; 16]),
                 data: vec![],
             },
             Action {
                 from_id: vec![3; 16],
-                to_id: vec![4; 16],
-                action: actions::SUBSPACE_ADDED.to_vec(),
-                topic: vec![4; 32],
+                to_id: vec![],
+                action: actions::SUBSPACE_RELATED.to_vec(),
+                topic: make_topic_with_target(&vec![4u8; 16]),
                 data: vec![],
             },
             Action {
                 from_id: vec![5; 16],
-                to_id: vec![6; 16],
+                to_id: vec![],
+                action: actions::SUBSPACE_TOPIC_DECLARED.to_vec(),
+                topic: {
+                    let mut t = vec![6u8; 16];
+                    t.extend_from_slice(&vec![7u8; 16]);
+                    t
+                },
+                data: vec![],
+            },
+            Action {
+                from_id: vec![8; 16],
+                to_id: vec![],
                 action: actions::SUBSPACE_REMOVED.to_vec(),
-                topic: vec![6; 32],
+                topic: make_topic_with_target(&vec![9u8; 16]),
                 data: vec![],
             },
         ];
 
         let result = transform(&actions, &test_meta()).unwrap();
-        assert_eq!(result.events.len(), 3);
-        assert_eq!(result.added, 2);
+        assert_eq!(result.events.len(), 4);
+        assert_eq!(result.verified, 1);
+        assert_eq!(result.related, 1);
+        assert_eq!(result.topic_declared, 1);
         assert_eq!(result.removed, 1);
+        assert_eq!(result.total(), 4);
     }
 }
