@@ -18,6 +18,7 @@ import { getPublishEditCalldata } from "./src/utils/calldata"
  */
 import "./src/compression-polyfill"
 import { NodeSdkLive } from "./src/services/telemetry"
+import { deployDaoSpace } from "./src/space/deploy-dao-v2"
 import { deployPersonalSpace } from "./src/space/deploy-personal-space"
 import { deployPublicSpace } from "./src/space/deploy-public-space"
 
@@ -318,6 +319,86 @@ app.post("deploy/public", async (c) => {
 		},
 		onRight: (spaceId) => {
 			return Response.json({spaceId})
+		},
+	})
+})
+
+app.post("deploy/dao", async (c) => {
+	const {votingSettings, initialEditors, initialMembers} = await c.req.json()
+
+	if (!votingSettings || !initialEditors) {
+		console.error(
+			`[DAO_SPACE][deploy] Missing required parameters to deploy a DAO space ${JSON.stringify({votingSettings, initialEditors})}`,
+		)
+
+		return new Response(
+			JSON.stringify({
+				error: "Missing required parameters",
+				reason: "Voting settings and initial editors are required to deploy a DAO space.",
+			}),
+			{
+				status: 400,
+			},
+		)
+	}
+
+	if (!Array.isArray(initialEditors) || initialEditors.length === 0) {
+		console.error(
+			"[DAO_SPACE][deploy] Invalid parameter initialEditors. At least one valid account address is required to deploy a DAO space.",
+		)
+
+		return new Response(
+			JSON.stringify({
+				error: "Invalid parameter initialEditors",
+				reason: "At least one valid account address is required to deploy a DAO space.",
+			}),
+			{
+				status: 400,
+			},
+		)
+	}
+
+	const deploy = deployDaoSpace({
+		votingSettings: {
+			slowPathPercentageThreshold: BigInt(votingSettings.slowPathPercentageThreshold ?? 0),
+			fastPathFlatThreshold: BigInt(votingSettings.fastPathFlatThreshold ?? 0),
+			quorum: BigInt(votingSettings.quorum ?? 0),
+			duration: BigInt(votingSettings.duration ?? 0),
+		},
+		initialEditors,
+		initialMembers: initialMembers ?? [],
+	}).pipe(
+		Effect.withSpan("/deploy/dao.deployDaoSpace"),
+		Effect.annotateSpans({
+			initialEditors,
+			initialMembers,
+		}),
+		Effect.provide(NodeSdkLive),
+		Effect.provide(EnvironmentLayer),
+	)
+
+	const result = await Effect.runPromise(
+		Effect.either(deploy).pipe(Effect.annotateLogs({initialEditors, initialMembers})),
+	)
+
+	return Either.match(result, {
+		onLeft: (error) => {
+			console.error(
+				`[DAO_SPACE][deploy] Failed to deploy DAO space. message: ${error.message} – cause: ${error.cause}`,
+			)
+
+			return new Response(
+				JSON.stringify({
+					message: `Failed to deploy DAO space. message: ${error.message} – cause: ${error.cause}`,
+					reason: error.message,
+				}),
+				{
+					status: 500,
+				},
+			)
+		},
+		onRight: (txHash) => {
+			return Response.json({txHash})
 		},
 	})
 })
