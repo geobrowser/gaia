@@ -390,6 +390,9 @@ export type DbProperty = InferSelectModel<typeof values>;
 export type DbRelations = InferSelectModel<typeof relations>;
 export type DbMember = InferSelectModel<typeof members>;
 export type DbEditor = InferSelectModel<typeof editors>;
+export type DbGlobalScore = InferSelectModel<typeof globalScores>;
+export type DbLocalScore = InferSelectModel<typeof localScores>;
+export type DbSpaceScore = InferSelectModel<typeof spaceScores>;
 
 /** Actions Schema definitions */
 
@@ -502,3 +505,62 @@ export const votesCount = pgTable(
 		};
 	},
 );
+
+/** Scoring Tables */
+
+/**
+ * global_scores
+ *
+ * Stores the global score for each entity across all spaces.
+ * Each entity has exactly one global score.
+ */
+export const globalScores = pgTable("global_scores", {
+	entityId: uuid("entity_id").primaryKey(),
+	score: decimal("score").notNull(),
+	updatedAt: timestamp("updated_at", {
+		withTimezone: true,
+		mode: "date",
+	}).notNull(),
+});
+
+/**
+ * local_scores
+ *
+ * Stores the local score for an entity within a specific space.
+ */
+export const localScores = pgTable(
+	"local_scores",
+	{
+		entityId: uuid("entity_id").notNull(),
+		spaceId: uuid("space_id").notNull(),
+		score: decimal("score").notNull(),
+		updatedAt: timestamp("updated_at", {
+			withTimezone: true,
+			mode: "date",
+		}).notNull(),
+	},
+	(table) => {
+		return {
+			pk: primaryKey({ columns: [table.entityId, table.spaceId] }),
+			idxSpaceId: index("idx_local_scores_space_id").on(table.spaceId),
+			idxEntityId: index("idx_local_scores_entity_id").on(table.entityId),
+		};
+	},
+);
+
+/**
+ * space_scores
+ *
+ * Stores the overall score for each space.
+ * Each space has exactly one score.
+ */
+export const spaceScores = pgTable("space_scores", {
+	spaceId: uuid("space_id").primaryKey(),
+	score: decimal("score").notNull(),
+	updatedAt: timestamp("updated_at", {
+		withTimezone: true,
+		mode: "date",
+	}).notNull(),
+});
+
+

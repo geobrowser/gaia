@@ -1,0 +1,19 @@
+# Install dependencies
+setup:
+    uv sync
+
+# Install all dependencies including dev
+setup-dev:
+    uv sync --all-extras
+
+# Run the application
+run:
+    uv run python main.py
+
+# Run tests
+test:
+    uv run pytest
+
+# Run with Docker Compose
+docker-run:
+    docker compose up --build -d && docker compose logs -f

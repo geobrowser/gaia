@@ -1,0 +1,58 @@
+name: Deploy Scoring Service
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'scoring-service/**'
+      - '.github/workflows/scoring-service-deploy.yml'
+
+env:
+  REGISTRY: registry.digitalocean.com/geo
+  IMAGE_NAME: scoring-service
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6.0.1
+
+      - name: Install doctl
+        uses: digitalocean/action-doctl@v2.5.1
+        with:
+          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+
+      - name: Log in to DigitalOcean Container Registry
+        run: doctl registry login --expiry-seconds 1200
+
+      - name: Build and push Docker image
+        run: |
+          docker build -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
+                       -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest \
+                       -f scoring-service/Dockerfile .
+          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+
+      - name: Set up kubectl
+        uses: Azure/setup-kubectl@v4.0.1
+
+      - name: Configure kubectl for DigitalOcean
+        run: |
+          doctl kubernetes cluster kubeconfig save ${{ secrets.DIGITALOCEAN_CLUSTER_NAME }}
+
+      - name: Apply k8s manifests
+        run: |
+          kubectl apply -f scoring-service/deployment/cronjob.yaml
+
+      - name: Show deployment status
+        run: |
+          echo "=== Scoring Service CronJob ==="
+          kubectl get cronjob scoring-service || echo "CronJob not found"
+          echo ""
+          echo "=== Recent Jobs ==="
+          kubectl get jobs -l job-name=scoring-service --sort-by='.metadata.creationTimestamp' | tail -5
+          echo ""
+          echo "=== Recent Events ==="
+          kubectl get events --field-selector involvedObject.name=scoring-service --sort-by='.lastTimestamp' | tail -10
