@@ -16,13 +16,15 @@ name = "canonical"
 harness = false
 
 [dependencies]
+hermes-instrumentation = { path = "../hermes-instrumentation" }
+hermes-relay = { path = "../hermes-relay" }
+hermes-schema = { path = "../hermes-schema" }
 hex = "0.4"
 prost = "0.13.5"
 rdkafka = { version = "0.36", features = ["cmake-build", "zstd", "ssl"] }
-hermes-schema = { path = "../hermes-schema" }
-hermes-relay = { path = "../hermes-relay" }
 tokio = { version = "1.41", features = ["rt-multi-thread", "macros"] }
 anyhow = "1"
+dotenv = "0.15"
 thiserror = "1"
 
 [dev-dependencies]

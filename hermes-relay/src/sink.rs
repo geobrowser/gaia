@@ -33,7 +33,7 @@ use std::{env, process::exit, sync::Arc};
 
 use futures03::StreamExt;
 
-use crate::{source::MockSource, HermesModule, HERMES_SPKG};
+use crate::{HERMES_SPKG, HermesModule, source::MockSource};
 use stream::{
     pb::sf::substreams::rpc::v2::{BlockScopedData, BlockUndoSignal},
     substreams::SubstreamsEndpoint,

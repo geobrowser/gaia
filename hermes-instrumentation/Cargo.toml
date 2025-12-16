@@ -1,0 +1,27 @@
+[package]
+name = "hermes-instrumentation"
+version = "0.1.0"
+edition = "2024"
+description = "Unified telemetry for the Hermes ecosystem"
+
+[dependencies]
+# Tracing core
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+
+# OpenTelemetry
+tracing-opentelemetry = "0.32"
+opentelemetry = "0.31"
+opentelemetry_sdk = { version = "0.31", features = ["rt-tokio"] }
+# Use reqwest-blocking-client for HTTP exports - the BatchSpanProcessor runs in a
+# background thread without a tokio runtime, so we need a blocking HTTP client
+opentelemetry-otlp = { version = "0.31", features = ["grpc-tonic", "http-proto", "reqwest-blocking-client"] }
+opentelemetry-stdout = { version = "0.31", features = ["trace"] }
+http = "1"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+
+# Error handling
+thiserror = "2"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "time"] }

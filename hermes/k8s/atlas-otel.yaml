@@ -1,0 +1,20 @@
+# OTEL credentials for atlas
+#
+# To create the secret:
+#   kubectl create secret generic atlas-otel \
+#     --namespace=kafka \
+#     --from-literal=OTEL_URL=<endpoint> \
+#     --from-literal=OTEL_TOKEN=<token> \
+#     --from-literal=OTEL_DATASET=atlas
+#
+# DO NOT commit actual credentials to version control.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: atlas-otel
+  namespace: kafka
+type: Opaque
+stringData:
+  OTEL_URL: "<endpoint>"
+  OTEL_TOKEN: "<token>"
+  OTEL_DATASET: "atlas"

@@ -3,10 +3,11 @@
 //! Converts trust extension and revocation actions to HermesSpaceTrustExtension events.
 
 use anyhow::Result;
+use hermes_instrumentation::debug_span;
 
-use hermes_relay::{actions, Action};
+use hermes_relay::{Action, actions};
 use hermes_schema::pb::space::{
-    hermes_space_trust_extension, HermesSpaceTrustExtension, VerifiedExtension,
+    HermesSpaceTrustExtension, VerifiedExtension, hermes_space_trust_extension,
 };
 
 use super::BlockMetadata;
@@ -41,14 +42,24 @@ pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformRe
         let action_type = action.action.as_slice();
 
         if actions::matches(action_type, &actions::SUBSPACE_ADDED) {
-            let event = convert_added(action, meta)?;
+            let event = debug_span!(
+                "convert.trust.added",
+                source = %hex::encode(&action.from_id),
+                target = %hex::encode(&action.to_id)
+            )
+            .in_scope(|| convert_added(action, meta))?;
             events.push(TrustEvent {
                 event,
                 is_removal: false,
             });
             added += 1;
         } else if actions::matches(action_type, &actions::SUBSPACE_REMOVED) {
-            let event = convert_removed(action, meta)?;
+            let event = debug_span!(
+                "convert.trust.removed",
+                source = %hex::encode(&action.from_id),
+                target = %hex::encode(&action.to_id)
+            )
+            .in_scope(|| convert_removed(action, meta))?;
             events.push(TrustEvent {
                 event,
                 is_removal: true,

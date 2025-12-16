@@ -74,6 +74,10 @@ services:
       dockerfile: hermes-pipeline/Dockerfile
     environment:
       KAFKA_BROKER: kafka:29092
+      OTEL_URL: ${OTEL_URL:-}
+      OTEL_TOKEN: ${OTEL_TOKEN:-}
+      OTEL_DATASET: ${OTEL_DATASET:-}
+      OTEL_DEBUG: ${OTEL_DEBUG:-false}
     depends_on:
       kafka:
         condition: service_healthy
@@ -85,6 +89,10 @@ services:
     environment:
       KAFKA_BROKER: kafka:29092
       KAFKA_TOPIC: topology.canonical
+      OTEL_URL: ${OTEL_URL:-}
+      OTEL_TOKEN: ${OTEL_TOKEN:-}
+      OTEL_DATASET: ${OTEL_DATASET:-}
+      OTEL_DEBUG: ${OTEL_DEBUG:-false}
     depends_on:
       kafka:
         condition: service_healthy

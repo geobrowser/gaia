@@ -5,6 +5,7 @@ on:
     branches: [main, develop]
     paths:
       - 'atlas/**'
+      - 'hermes-instrumentation/**'
       - 'hermes-relay/**'
       - 'hermes-substream/**'
       - 'stream/**'
@@ -12,6 +13,7 @@ on:
     branches: [main, develop]
     paths:
       - 'atlas/**'
+      - 'hermes-instrumentation/**'
       - 'hermes-relay/**'
       - 'hermes-substream/**'
       - 'stream/**'

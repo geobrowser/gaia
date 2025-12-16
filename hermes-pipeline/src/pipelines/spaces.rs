@@ -3,10 +3,11 @@
 //! Converts space registration actions to HermesCreateSpace events.
 
 use anyhow::Result;
+use hermes_instrumentation::debug_span;
 
-use hermes_relay::{actions, Action};
+use hermes_relay::{Action, actions};
 use hermes_schema::pb::space::{
-    hermes_create_space, DefaultDaoSpacePayload, HermesCreateSpace, PersonalSpacePayload,
+    DefaultDaoSpacePayload, HermesCreateSpace, PersonalSpacePayload, hermes_create_space,
 };
 
 use super::BlockMetadata;
@@ -29,7 +30,8 @@ pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformRe
             continue;
         }
 
-        let event = convert(action, meta)?;
+        let event = debug_span!("convert.space", space_id = %hex::encode(&action.from_id))
+            .in_scope(|| convert(action, meta))?;
         events.push(event);
     }
 

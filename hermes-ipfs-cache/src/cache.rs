@@ -180,7 +180,7 @@ impl CacheStorage for MockStorage {
 // PostgreSQL Storage
 // =============================================================================
 
-use sqlx::{postgres::PgPoolOptions, Postgres};
+use sqlx::{Postgres, postgres::PgPoolOptions};
 
 /// PostgreSQL storage backend for the IPFS cache.
 pub struct PostgresStorage {
