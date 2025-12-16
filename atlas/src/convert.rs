@@ -20,7 +20,6 @@
 //! - `SUBSPACE_VERIFIED`: Verified trust extension (explicit canonical trust)
 //! - `SUBSPACE_RELATED`: Related trust extension (explicit non-canonical trust)
 //! - `SUBSPACE_TOPIC_DECLARED`: Topic-based trust extension
-//! - `SUBSPACE_ADDED`: Generic subspace addition (legacy, treated as verified)
 
 use crate::events::{
     BlockMetadata, SpaceCreated, SpaceTopologyEvent, SpaceTopologyPayload, SpaceType,
@@ -40,7 +39,6 @@ fn to_array<const N: usize>(slice: &[u8]) -> Option<[u8; N]> {
 /// - `SUBSPACE_VERIFIED` actions → TrustExtended (Verified)
 /// - `SUBSPACE_RELATED` actions → TrustExtended (Related)
 /// - `SUBSPACE_TOPIC_DECLARED` actions → TrustExtended (Subtopic)
-/// - `SUBSPACE_ADDED` actions → TrustExtended (legacy, treated as Verified)
 ///
 /// Returns `None` for other action types (edits, proposals, etc.)
 pub fn convert_action(action: &Action, meta: &BlockMetadata) -> Option<SpaceTopologyEvent> {
@@ -54,9 +52,6 @@ pub fn convert_action(action: &Action, meta: &BlockMetadata) -> Option<SpaceTopo
         convert_subspace_related(action, meta)
     } else if actions::matches(action_type, &actions::SUBSPACE_TOPIC_DECLARED) {
         convert_subspace_topic_declared(action, meta)
-    } else if actions::matches(action_type, &actions::SUBSPACE_ADDED) {
-        // Legacy: treat SUBSPACE_ADDED as verified for backwards compatibility
-        convert_subspace_added(action, meta)
     } else {
         None
     }
@@ -223,63 +218,6 @@ fn convert_subspace_topic_declared(
         payload: SpaceTopologyPayload::TrustExtended(TrustExtended {
             source_space_id,
             extension: TrustExtension::Subtopic { target_topic_id },
-        }),
-    })
-}
-
-/// Convert a SUBSPACE_ADDED action to TrustExtended event (legacy).
-///
-/// This handles the legacy SUBSPACE_ADDED action format where the trust type
-/// was encoded in the data field. For backwards compatibility, this treats
-/// unknown types as Verified.
-///
-/// Action format:
-/// - `from_id`: source_space_id (16 bytes)
-/// - `topic[0..16]`: padding (zeros)
-/// - `topic[16..32]`: target_space_id or target_topic_id (16 bytes)
-/// - `data[0..2]`: trust type (VERIFIED=0x0000, RELATED=0x0001, SUBTOPIC=0x0002)
-fn convert_subspace_added(action: &Action, meta: &BlockMetadata) -> Option<SpaceTopologyEvent> {
-    // Trust extension type bytes (first 2 bytes of data field) - legacy format
-    const TRUST_TYPE_VERIFIED: [u8; 2] = [0x00, 0x00];
-    const TRUST_TYPE_RELATED: [u8; 2] = [0x00, 0x01];
-    const TRUST_TYPE_SUBTOPIC: [u8; 2] = [0x00, 0x02];
-
-    let source_space_id = to_array::<16>(&action.from_id)?;
-
-    if action.topic.len() < 32 {
-        return None;
-    }
-    let target_id = to_array::<16>(&action.topic[16..32])?;
-
-    // Parse trust type from data field (legacy format)
-    let extension = if action.data.len() >= 2 {
-        let trust_type: [u8; 2] = [action.data[0], action.data[1]];
-        match trust_type {
-            TRUST_TYPE_VERIFIED => TrustExtension::Verified {
-                target_space_id: target_id,
-            },
-            TRUST_TYPE_RELATED => TrustExtension::Related {
-                target_space_id: target_id,
-            },
-            TRUST_TYPE_SUBTOPIC => TrustExtension::Subtopic {
-                target_topic_id: target_id,
-            },
-            _ => TrustExtension::Verified {
-                target_space_id: target_id,
-            },
-        }
-    } else {
-        // Default to verified if no type specified
-        TrustExtension::Verified {
-            target_space_id: target_id,
-        }
-    };
-
-    Some(SpaceTopologyEvent {
-        meta: meta.clone(),
-        payload: SpaceTopologyPayload::TrustExtended(TrustExtended {
-            source_space_id,
-            extension,
         }),
     })
 }

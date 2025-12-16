@@ -1,4 +1,4 @@
-//! Pipeline: SUBSPACE_VERIFIED/RELATED/TOPIC_DECLARED/ADDED/REMOVED → space.trust.extensions
+//! Pipeline: SUBSPACE_VERIFIED/RELATED/TOPIC_DECLARED/REMOVED → space.trust.extensions
 //!
 //! Converts trust extension and revocation actions to HermesSpaceTrustExtension events.
 //!
@@ -6,7 +6,6 @@
 //! - SUBSPACE_VERIFIED: Verified trust extension (explicit canonical trust)
 //! - SUBSPACE_RELATED: Related trust extension (explicit non-canonical trust)
 //! - SUBSPACE_TOPIC_DECLARED: Topic-based trust extension
-//! - SUBSPACE_ADDED: Generic subspace addition (legacy, treated as verified)
 //! - SUBSPACE_REMOVED: Trust revocation
 
 use anyhow::Result;
@@ -102,19 +101,6 @@ pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformRe
                 is_removal: false,
             });
             result.topic_declared += 1;
-        } else if actions::matches(action_type, &actions::SUBSPACE_ADDED) {
-            // Legacy: treat SUBSPACE_ADDED as verified for backwards compatibility
-            let event = debug_span!(
-                "convert.trust.added",
-                source = %hex::encode(&action.from_id),
-                target = %hex::encode(&action.topic[16..32])
-            )
-            .in_scope(|| convert_added(action, meta))?;
-            result.events.push(TrustEvent {
-                event,
-                is_removal: false,
-            });
-            result.verified += 1;
         } else if actions::matches(action_type, &actions::SUBSPACE_REMOVED) {
             let event = debug_span!(
                 "convert.trust.removed",
@@ -189,27 +175,6 @@ fn convert_topic_declared(
 
     let extension = Some(hermes_space_trust_extension::Extension::Subtopic(
         SubtopicExtension { target_topic_id },
-    ));
-
-    Ok(HermesSpaceTrustExtension {
-        source_space_id,
-        extension,
-        meta: Some(meta.to_proto()),
-    })
-}
-
-/// Convert a SUBSPACE_ADDED action to HermesSpaceTrustExtension proto (legacy).
-///
-/// The action structure for SUBSPACE_ADDED:
-/// - from_id: parent_space_id (16 bytes)
-/// - topic: [padding (16 bytes)][subspace_id (16 bytes)]
-fn convert_added(action: &Action, meta: &BlockMetadata) -> Result<HermesSpaceTrustExtension> {
-    let source_space_id = action.from_id.clone();
-    let target_space_id = action.topic[16..32].to_vec();
-
-    // Treat generic SUBSPACE_ADDED as verified for backwards compatibility
-    let extension = Some(hermes_space_trust_extension::Extension::Verified(
-        VerifiedExtension { target_space_id },
     ));
 
     Ok(HermesSpaceTrustExtension {
@@ -330,25 +295,6 @@ mod tests {
             }
             _ => panic!("Expected Subtopic extension"),
         }
-    }
-
-    #[test]
-    fn test_convert_subspace_added_legacy() {
-        let target = vec![2u8; 16];
-        let action = Action {
-            from_id: vec![1; 16],
-            to_id: vec![],
-            action: actions::SUBSPACE_ADDED.to_vec(),
-            topic: make_topic_with_target(&target),
-            data: vec![],
-        };
-
-        let result = convert_added(&action, &test_meta()).unwrap();
-        assert_eq!(result.source_space_id, vec![1; 16]);
-        assert!(matches!(
-            result.extension,
-            Some(hermes_space_trust_extension::Extension::Verified(_))
-        ));
     }
 
     #[test]
