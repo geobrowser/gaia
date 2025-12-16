@@ -319,14 +319,14 @@ mod tests {
                 from_id: vec![1; 16],
                 to_id: vec![],
                 action: actions::SUBSPACE_VERIFIED.to_vec(),
-                topic: make_topic_with_target(&vec![2u8; 16]),
+                topic: make_topic_with_target(&[2u8; 16]),
                 data: vec![],
             },
             Action {
                 from_id: vec![3; 16],
                 to_id: vec![],
                 action: actions::SUBSPACE_RELATED.to_vec(),
-                topic: make_topic_with_target(&vec![4u8; 16]),
+                topic: make_topic_with_target(&[4u8; 16]),
                 data: vec![],
             },
             Action {
@@ -335,7 +335,7 @@ mod tests {
                 action: actions::SUBSPACE_TOPIC_DECLARED.to_vec(),
                 topic: {
                     let mut t = vec![6u8; 16];
-                    t.extend_from_slice(&vec![7u8; 16]);
+                    t.extend_from_slice(&[7u8; 16]);
                     t
                 },
                 data: vec![],
@@ -344,7 +344,7 @@ mod tests {
                 from_id: vec![8; 16],
                 to_id: vec![],
                 action: actions::SUBSPACE_REMOVED.to_vec(),
-                topic: make_topic_with_target(&vec![9u8; 16]),
+                topic: make_topic_with_target(&[9u8; 16]),
                 data: vec![],
             },
         ];
