@@ -8,7 +8,7 @@
 //! proposal_id but different action_index values.
 
 use anyhow::Result;
-use hermes_instrumentation::{debug_span, warn};
+use hermes_instrumentation::{debug, debug_span, warn};
 
 use hermes_relay::{Action, actions};
 use hermes_schema::pb::governance::{
@@ -139,6 +139,21 @@ fn convert_proposal_created(
         .enumerate()
         .map(|(idx, a)| {
             let action_type = ProposalActionType::from_calldata(&a.data);
+            let selector = if a.data.len() >= 4 {
+                hex::encode(&a.data[0..4])
+            } else {
+                "none".to_string()
+            };
+
+            debug!(
+                action_index = idx,
+                action_count = action_count,
+                selector = %selector,
+                action_type = ?action_type,
+                target = %hex::encode(&a.to),
+                "Decoded proposal action"
+            );
+
             HermesProposalCreated {
                 space_id: action.from_id.clone(),
                 proposal_id: action.topic.clone(),
