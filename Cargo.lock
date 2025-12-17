@@ -2568,8 +2568,10 @@ dependencies = [
 name = "hermes-pipeline"
 version = "0.1.0"
 dependencies = [
+ "alloy",
  "anyhow",
  "async-trait",
+ "criterion 0.5.1",
  "dotenv",
  "futures 0.3.31",
  "hermes-instrumentation",
@@ -2589,6 +2591,7 @@ dependencies = [
 name = "hermes-relay"
 version = "0.1.0"
 dependencies = [
+ "alloy",
  "anyhow",
  "async-trait",
  "futures 0.3.31",

@@ -26,8 +26,15 @@ impl ActionsProcessor {
     /// * `kind` - The kind of the action to register the handler for.
     /// * `handler` - An `Arc` boxed trait object that implements `HandleAction`,
     ///             responsible for processing the specific action type.
-    pub fn register_handler(&mut self, version: ActionVersion, kind: ActionType, object_type: ObjectType, handler: Arc<dyn HandleAction>) {
-        self.handler_registry.insert((version, kind, object_type), handler);
+    pub fn register_handler(
+        &mut self,
+        version: ActionVersion,
+        kind: ActionType,
+        object_type: ObjectType,
+        handler: Arc<dyn HandleAction>,
+    ) {
+        self.handler_registry
+            .insert((version, kind, object_type), handler);
     }
 }
 
@@ -47,7 +54,11 @@ impl ProcessActions for ActionsProcessor {
     fn process(&self, actions: &[ActionRaw]) -> Vec<Action> {
         let mut results = Vec::new();
         for action in actions {
-            let handler = self.handler_registry.get(&(action.action_version, action.action_type, action.object_type));
+            let handler = self.handler_registry.get(&(
+                action.action_version,
+                action.action_type,
+                action.object_type,
+            ));
             if let Some(handler) = handler {
                 if let Ok(result) = handler.handle(action) {
                     results.push(result);
@@ -68,7 +79,9 @@ mod tests {
 
     use crate::errors::ProcessorError;
     use crate::processor::{ActionsProcessor, HandleAction, ProcessActions};
-    use actions_indexer_shared::types::{Action, ActionRaw, Vote, VoteValue, ActionType, ObjectType};
+    use actions_indexer_shared::types::{
+        Action, ActionRaw, ActionType, ObjectType, Vote, VoteValue,
+    };
     use alloy::hex::FromHex;
     use alloy::primitives::{Address, Bytes, TxHash};
     use uuid::uuid;
@@ -120,7 +133,12 @@ mod tests {
 
     fn mocked_processor() -> ActionsProcessor {
         let mut processor = ActionsProcessor::new();
-        processor.register_handler(1, ActionType::Vote, ObjectType::Entity, Arc::new(MockHandler));
+        processor.register_handler(
+            1,
+            ActionType::Vote,
+            ObjectType::Entity,
+            Arc::new(MockHandler),
+        );
         processor
     }
 
@@ -131,10 +149,14 @@ mod tests {
         let result = processor.process(&[action_event.clone()]);
         assert!(result.len() == 1);
         let action = result[0].clone();
-        assert_is_vote_action(&action, &action_event, Vote {
-            raw: action_event.clone().into(),
-            vote: VoteValue::Up,
-        });
+        assert_is_vote_action(
+            &action,
+            &action_event,
+            Vote {
+                raw: action_event.clone().into(),
+                vote: VoteValue::Up,
+            },
+        );
     }
 
     #[test]
@@ -144,10 +166,14 @@ mod tests {
         let result = processor.process(&[action_event.clone()]);
         assert!(result.len() == 1);
         let action = result[0].clone();
-        assert_is_vote_action(&action, &action_event, Vote {
-            raw: action_event.clone().into(),
-            vote: VoteValue::Down,
-        });
+        assert_is_vote_action(
+            &action,
+            &action_event,
+            Vote {
+                raw: action_event.clone().into(),
+                vote: VoteValue::Down,
+            },
+        );
     }
 
     #[test]
@@ -157,10 +183,14 @@ mod tests {
         let result = processor.process(&[action_event.clone()]);
         assert!(result.len() == 1);
         let action = result[0].clone();
-        assert_is_vote_action(&action, &action_event, Vote {
-            raw: action_event.clone().into(),
-            vote: VoteValue::Remove,
-        });
+        assert_is_vote_action(
+            &action,
+            &action_event,
+            Vote {
+                raw: action_event.clone().into(),
+                vote: VoteValue::Remove,
+            },
+        );
     }
 
     #[test]
@@ -169,14 +199,22 @@ mod tests {
         let action_events = vec![make_action_event(0), make_action_event(1)];
         let result = processor.process(&action_events);
         assert!(result.len() == 2);
-        assert_is_vote_action(&result[0], &action_events[0], Vote {
-            raw: action_events[0].clone().into(),
-            vote: VoteValue::Up,
-        });
-        assert_is_vote_action(&result[1], &action_events[1], Vote {
-            raw: action_events[1].clone().into(),
-            vote: VoteValue::Down,
-        });
+        assert_is_vote_action(
+            &result[0],
+            &action_events[0],
+            Vote {
+                raw: action_events[0].clone().into(),
+                vote: VoteValue::Up,
+            },
+        );
+        assert_is_vote_action(
+            &result[1],
+            &action_events[1],
+            Vote {
+                raw: action_events[1].clone().into(),
+                vote: VoteValue::Down,
+            },
+        );
     }
 
     #[test]

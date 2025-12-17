@@ -10,4 +10,4 @@ use thiserror::Error;
 pub enum CursorRepositoryError {
     #[error("Database error: {0}")]
     DatabaseError(#[from] sqlx::Error),
-}   
+}

@@ -42,7 +42,10 @@ async fn test_save_and_get_cursor(pool: sqlx::PgPool) {
 
     assert_eq!(row.get::<String, _>("id"), id);
     assert_eq!(row.get::<String, _>("cursor"), cursor);
-    assert_eq!(row.get::<String, _>("block_number"), block_number.to_string());
+    assert_eq!(
+        row.get::<String, _>("block_number"),
+        block_number.to_string()
+    );
 }
 
 #[sqlx::test(migrations = "src/postgres/migrations")]
@@ -92,7 +95,10 @@ async fn test_update_existing_cursor(pool: sqlx::PgPool) {
         .await
         .unwrap();
     assert_eq!(row.get::<String, _>("cursor"), updated_cursor);
-    assert_eq!(row.get::<String, _>("block_number"), updated_block.to_string());
+    assert_eq!(
+        row.get::<String, _>("block_number"),
+        updated_block.to_string()
+    );
 }
 
 // ============================================================================

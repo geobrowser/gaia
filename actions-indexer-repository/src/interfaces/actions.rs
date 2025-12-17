@@ -11,8 +11,10 @@
 //!
 //! The trait is designed to support transactional operations and efficient batch processing,
 //! making it suitable for high-throughput blockchain data indexing scenarios.
-use actions_indexer_shared::types::{Action, UserVote, VotesCount, Changeset, VoteCriteria, VoteCountCriteria};
 use crate::errors::ActionsRepositoryError;
+use actions_indexer_shared::types::{
+    Action, Changeset, UserVote, VoteCountCriteria, VoteCriteria, VotesCount,
+};
 
 /// Repository interface for managing actions indexer data storage operations.
 ///
@@ -49,10 +51,7 @@ pub trait ActionsRepository: Send + Sync {
     ///
     /// This method is optimized for batch operations and should be preferred over
     /// individual insertions for better performance in high-throughput scenarios.
-    async fn insert_actions(
-        &self,
-        actions: &[Action],
-    ) -> Result<(), ActionsRepositoryError>;
+    async fn insert_actions(&self, actions: &[Action]) -> Result<(), ActionsRepositoryError>;
 
     /// Updates or inserts user vote records in the repository.
     ///
@@ -63,7 +62,7 @@ pub trait ActionsRepository: Send + Sync {
     /// # Arguments
     ///
     /// * `user_votes` - A slice of `UserVote` objects to be updated/inserted. Each vote
-    ///   contains user_id (voter address), entity_id (what was voted on), space_id 
+    ///   contains user_id (voter address), entity_id (what was voted on), space_id
     ///   (voting context), vote_type (e.g., upvote/downvote), and timestamp.
     ///
     /// # Returns

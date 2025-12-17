@@ -1,9 +1,9 @@
+use crate::types::{ObjectId, ObjectType, SpaceId};
 use serde::{Deserialize, Serialize};
-use crate::types::{ObjectId, SpaceId, ObjectType};
 
 /// Represents the aggregated vote counts for an entity and space.
 ///
-/// This struct is intended to store the total number of upvotes and 
+/// This struct is intended to store the total number of upvotes and
 /// downvotes for a particular entity and space.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct VotesCount {

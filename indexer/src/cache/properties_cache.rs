@@ -35,7 +35,7 @@ impl PropertiesCache {
     pub async fn from_storage(storage: &PostgresStorage) -> Result<Self, StorageError> {
         let properties = storage.get_all_properties().await?;
         let mut cache_map = HashMap::new();
-        
+
         for property in properties {
             cache_map.insert(property.id, property.data_type);
         }

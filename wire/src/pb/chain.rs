@@ -5,8 +5,7 @@
 ///
 /// This is immediately useful when migrating from legacy spaces to the new DAO-based spaces,
 /// but it's generally applicable across any space.
-#[derive(serde::Serialize, serde::Deserialize)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, PartialEq, ::prost::Message)]
 pub struct SuccessorSpaceCreated {
     #[prost(string, tag = "1")]
     pub predecessor_space: ::prost::alloc::string::String,
@@ -15,8 +14,7 @@ pub struct SuccessorSpaceCreated {
     #[prost(string, tag = "3")]
     pub dao_address: ::prost::alloc::string::String,
 }
-#[derive(serde::Serialize, serde::Deserialize)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, PartialEq, ::prost::Message)]
 pub struct SuccessorSpacesCreated {
     #[prost(message, repeated, tag = "1")]
     pub spaces: ::prost::alloc::vec::Vec<SuccessorSpaceCreated>,
@@ -28,16 +26,14 @@ pub struct SuccessorSpacesCreated {
 ///
 /// This event maps creation of the Space plugin and associates the Space plugin contract
 /// address with the address of the DAO contract.
-#[derive(serde::Serialize, serde::Deserialize)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, PartialEq, ::prost::Message)]
 pub struct GeoSpaceCreated {
     #[prost(string, tag = "1")]
     pub dao_address: ::prost::alloc::string::String,
     #[prost(string, tag = "2")]
     pub space_address: ::prost::alloc::string::String,
 }
-#[derive(serde::Serialize, serde::Deserialize)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, PartialEq, ::prost::Message)]
 pub struct GeoSpacesCreated {
     #[prost(message, repeated, tag = "1")]
     pub spaces: ::prost::alloc::vec::Vec<GeoSpaceCreated>,
@@ -53,8 +49,7 @@ pub struct GeoSpacesCreated {
 /// As of January 23, 2024 there are two governance plugins:
 /// 1. Voting plugin – This defines the voting and proposal rules and behaviors for a DAO
 /// 2. Member access plugin – This defines the membership rules and behaviors for a DAO
-#[derive(serde::Serialize, serde::Deserialize)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, PartialEq, ::prost::Message)]
 pub struct GeoGovernancePluginCreated {
     #[prost(string, tag = "1")]
     pub dao_address: ::prost::alloc::string::String,
@@ -63,14 +58,12 @@ pub struct GeoGovernancePluginCreated {
     #[prost(string, tag = "3")]
     pub member_access_address: ::prost::alloc::string::String,
 }
-#[derive(serde::Serialize, serde::Deserialize)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, PartialEq, ::prost::Message)]
 pub struct GeoGovernancePluginsCreated {
     #[prost(message, repeated, tag = "1")]
     pub plugins: ::prost::alloc::vec::Vec<GeoGovernancePluginCreated>,
 }
-#[derive(serde::Serialize, serde::Deserialize)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, PartialEq, ::prost::Message)]
 pub struct GeoPersonalSpaceAdminPluginCreated {
     #[prost(string, tag = "1")]
     pub dao_address: ::prost::alloc::string::String,
@@ -79,8 +72,7 @@ pub struct GeoPersonalSpaceAdminPluginCreated {
     #[prost(string, tag = "3")]
     pub initial_editor: ::prost::alloc::string::String,
 }
-#[derive(serde::Serialize, serde::Deserialize)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, PartialEq, ::prost::Message)]
 pub struct GeoPersonalSpaceAdminPluginsCreated {
     #[prost(message, repeated, tag = "1")]
     pub plugins: ::prost::alloc::vec::Vec<GeoPersonalSpaceAdminPluginCreated>,
@@ -101,8 +93,7 @@ pub struct GeoPersonalSpaceAdminPluginsCreated {
 ///    in the space vote on whether to accept the new editor.
 /// 2. They are added as a set of initial editors when first creating the space. This allows
 ///    space deployers to bootstrap a set of editors on space creation.
-#[derive(serde::Serialize, serde::Deserialize)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, PartialEq, ::prost::Message)]
 pub struct InitialEditorAdded {
     /// The event emits an array of addresses. We only emit multiple addresses
     /// when first creating the governance plugin. After that we only emit one
@@ -114,8 +105,7 @@ pub struct InitialEditorAdded {
     #[prost(string, tag = "3")]
     pub dao_address: ::prost::alloc::string::String,
 }
-#[derive(serde::Serialize, serde::Deserialize)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, PartialEq, ::prost::Message)]
 pub struct InitialEditorsAdded {
     #[prost(message, repeated, tag = "1")]
     pub editors: ::prost::alloc::vec::Vec<InitialEditorAdded>,
@@ -124,16 +114,14 @@ pub struct InitialEditorsAdded {
 /// space's main voting plugin. The DAO itself also emits the executed event,
 /// but the ABI/interface is different. We really only care about the one
 /// from our plugins.
-#[derive(serde::Serialize, serde::Deserialize)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, PartialEq, ::prost::Message)]
 pub struct ProposalExecuted {
     #[prost(string, tag = "1")]
     pub proposal_id: ::prost::alloc::string::String,
     #[prost(string, tag = "2")]
     pub plugin_address: ::prost::alloc::string::String,
 }
-#[derive(serde::Serialize, serde::Deserialize)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, PartialEq, ::prost::Message)]
 pub struct ProposalsExecuted {
     #[prost(message, repeated, tag = "1")]
     pub executed_proposals: ::prost::alloc::vec::Vec<ProposalExecuted>,
@@ -145,8 +133,7 @@ pub struct ProposalsExecuted {
 /// We use the content URI to represent the content that was approved. We
 /// only consume the `proposalId` in the content URI to map the processed
 /// data to an existing proposal onchain and in the sink.
-#[derive(serde::Serialize, serde::Deserialize)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, PartialEq, ::prost::Message)]
 pub struct EditPublished {
     #[prost(string, tag = "1")]
     pub content_uri: ::prost::alloc::string::String,
@@ -155,8 +142,7 @@ pub struct EditPublished {
     #[prost(string, tag = "3")]
     pub dao_address: ::prost::alloc::string::String,
 }
-#[derive(serde::Serialize, serde::Deserialize)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, PartialEq, ::prost::Message)]
 pub struct EditsPublished {
     #[prost(message, repeated, tag = "1")]
     pub edits: ::prost::alloc::vec::Vec<EditPublished>,
@@ -166,8 +152,7 @@ pub struct EditsPublished {
 /// of the DAO-based space. This is useful to "link" Spaces together in a
 /// tree of spaces, allowing us to curate the graph of their knowledge and
 /// permissions.
-#[derive(serde::Serialize, serde::Deserialize)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, PartialEq, ::prost::Message)]
 pub struct SubspaceAdded {
     /// Subspace dao address
     #[prost(string, tag = "1")]
@@ -181,14 +166,12 @@ pub struct SubspaceAdded {
     #[prost(string, tag = "4")]
     pub dao_address: ::prost::alloc::string::String,
 }
-#[derive(serde::Serialize, serde::Deserialize)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, PartialEq, ::prost::Message)]
 pub struct SubspacesAdded {
     #[prost(message, repeated, tag = "1")]
     pub subspaces: ::prost::alloc::vec::Vec<SubspaceAdded>,
 }
-#[derive(serde::Serialize, serde::Deserialize)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, PartialEq, ::prost::Message)]
 pub struct SubspaceRemoved {
     /// Subspace dao address
     #[prost(string, tag = "1")]
@@ -202,8 +185,7 @@ pub struct SubspaceRemoved {
     #[prost(string, tag = "4")]
     pub dao_address: ::prost::alloc::string::String,
 }
-#[derive(serde::Serialize, serde::Deserialize)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, PartialEq, ::prost::Message)]
 pub struct SubspacesRemoved {
     #[prost(message, repeated, tag = "1")]
     pub subspaces: ::prost::alloc::vec::Vec<SubspaceRemoved>,
@@ -214,8 +196,7 @@ pub struct SubspacesRemoved {
 /// Currently we use a simple majority voting model, where a proposal requires 51% of the
 /// available votes in order to pass. Only editors are allowed to vote on proposals, but editors
 /// _and_ members can create them.
-#[derive(serde::Serialize, serde::Deserialize)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, PartialEq, ::prost::Message)]
 pub struct VoteCast {
     #[prost(string, tag = "1")]
     pub onchain_proposal_id: ::prost::alloc::string::String,
@@ -226,14 +207,12 @@ pub struct VoteCast {
     #[prost(string, tag = "4")]
     pub plugin_address: ::prost::alloc::string::String,
 }
-#[derive(serde::Serialize, serde::Deserialize)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, PartialEq, ::prost::Message)]
 pub struct VotesCast {
     #[prost(message, repeated, tag = "1")]
     pub votes: ::prost::alloc::vec::Vec<VoteCast>,
 }
-#[derive(serde::Serialize, serde::Deserialize)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, PartialEq, ::prost::Message)]
 pub struct MemberAdded {
     #[prost(string, tag = "1")]
     pub member_address: ::prost::alloc::string::String,
@@ -244,14 +223,12 @@ pub struct MemberAdded {
     #[prost(string, tag = "4")]
     pub dao_address: ::prost::alloc::string::String,
 }
-#[derive(serde::Serialize, serde::Deserialize)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, PartialEq, ::prost::Message)]
 pub struct MembersAdded {
     #[prost(message, repeated, tag = "1")]
     pub members: ::prost::alloc::vec::Vec<MemberAdded>,
 }
-#[derive(serde::Serialize, serde::Deserialize)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, PartialEq, ::prost::Message)]
 pub struct MemberRemoved {
     #[prost(string, tag = "1")]
     pub member_address: ::prost::alloc::string::String,
@@ -262,14 +239,12 @@ pub struct MemberRemoved {
     #[prost(string, tag = "4")]
     pub dao_address: ::prost::alloc::string::String,
 }
-#[derive(serde::Serialize, serde::Deserialize)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, PartialEq, ::prost::Message)]
 pub struct MembersRemoved {
     #[prost(message, repeated, tag = "1")]
     pub members: ::prost::alloc::vec::Vec<MemberRemoved>,
 }
-#[derive(serde::Serialize, serde::Deserialize)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, PartialEq, ::prost::Message)]
 pub struct EditorAdded {
     #[prost(string, tag = "1")]
     pub editor_address: ::prost::alloc::string::String,
@@ -280,14 +255,12 @@ pub struct EditorAdded {
     #[prost(string, tag = "4")]
     pub dao_address: ::prost::alloc::string::String,
 }
-#[derive(serde::Serialize, serde::Deserialize)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, PartialEq, ::prost::Message)]
 pub struct EditorsAdded {
     #[prost(message, repeated, tag = "1")]
     pub editors: ::prost::alloc::vec::Vec<EditorAdded>,
 }
-#[derive(serde::Serialize, serde::Deserialize)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, PartialEq, ::prost::Message)]
 pub struct EditorRemoved {
     #[prost(string, tag = "1")]
     pub editor_address: ::prost::alloc::string::String,
@@ -298,14 +271,12 @@ pub struct EditorRemoved {
     #[prost(string, tag = "4")]
     pub dao_address: ::prost::alloc::string::String,
 }
-#[derive(serde::Serialize, serde::Deserialize)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, PartialEq, ::prost::Message)]
 pub struct EditorsRemoved {
     #[prost(message, repeated, tag = "1")]
     pub editors: ::prost::alloc::vec::Vec<EditorRemoved>,
 }
-#[derive(serde::Serialize, serde::Deserialize)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, PartialEq, ::prost::Message)]
 pub struct PublishEditProposalCreated {
     #[prost(string, tag = "1")]
     pub proposal_id: ::prost::alloc::string::String,
@@ -322,14 +293,12 @@ pub struct PublishEditProposalCreated {
     #[prost(string, tag = "7")]
     pub plugin_address: ::prost::alloc::string::String,
 }
-#[derive(serde::Serialize, serde::Deserialize)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, PartialEq, ::prost::Message)]
 pub struct PublishEditsProposalsCreated {
     #[prost(message, repeated, tag = "1")]
     pub edits: ::prost::alloc::vec::Vec<PublishEditProposalCreated>,
 }
-#[derive(serde::Serialize, serde::Deserialize)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, PartialEq, ::prost::Message)]
 pub struct AddMemberProposalCreated {
     #[prost(string, tag = "1")]
     pub proposal_id: ::prost::alloc::string::String,
@@ -348,14 +317,12 @@ pub struct AddMemberProposalCreated {
     #[prost(string, tag = "8")]
     pub change_type: ::prost::alloc::string::String,
 }
-#[derive(serde::Serialize, serde::Deserialize)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, PartialEq, ::prost::Message)]
 pub struct AddMemberProposalsCreated {
     #[prost(message, repeated, tag = "1")]
     pub proposed_members: ::prost::alloc::vec::Vec<AddMemberProposalCreated>,
 }
-#[derive(serde::Serialize, serde::Deserialize)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, PartialEq, ::prost::Message)]
 pub struct RemoveMemberProposalCreated {
     #[prost(string, tag = "1")]
     pub proposal_id: ::prost::alloc::string::String,
@@ -374,14 +341,12 @@ pub struct RemoveMemberProposalCreated {
     #[prost(string, tag = "8")]
     pub change_type: ::prost::alloc::string::String,
 }
-#[derive(serde::Serialize, serde::Deserialize)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, PartialEq, ::prost::Message)]
 pub struct RemoveMemberProposalsCreated {
     #[prost(message, repeated, tag = "1")]
     pub proposed_members: ::prost::alloc::vec::Vec<RemoveMemberProposalCreated>,
 }
-#[derive(serde::Serialize, serde::Deserialize)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, PartialEq, ::prost::Message)]
 pub struct AddEditorProposalCreated {
     #[prost(string, tag = "1")]
     pub proposal_id: ::prost::alloc::string::String,
@@ -400,14 +365,12 @@ pub struct AddEditorProposalCreated {
     #[prost(string, tag = "8")]
     pub change_type: ::prost::alloc::string::String,
 }
-#[derive(serde::Serialize, serde::Deserialize)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, PartialEq, ::prost::Message)]
 pub struct AddEditorProposalsCreated {
     #[prost(message, repeated, tag = "1")]
     pub proposed_editors: ::prost::alloc::vec::Vec<AddEditorProposalCreated>,
 }
-#[derive(serde::Serialize, serde::Deserialize)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, PartialEq, ::prost::Message)]
 pub struct RemoveEditorProposalCreated {
     #[prost(string, tag = "1")]
     pub proposal_id: ::prost::alloc::string::String,
@@ -426,14 +389,12 @@ pub struct RemoveEditorProposalCreated {
     #[prost(string, tag = "8")]
     pub change_type: ::prost::alloc::string::String,
 }
-#[derive(serde::Serialize, serde::Deserialize)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, PartialEq, ::prost::Message)]
 pub struct RemoveEditorProposalsCreated {
     #[prost(message, repeated, tag = "1")]
     pub proposed_editors: ::prost::alloc::vec::Vec<RemoveEditorProposalCreated>,
 }
-#[derive(serde::Serialize, serde::Deserialize)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, PartialEq, ::prost::Message)]
 pub struct AddSubspaceProposalCreated {
     #[prost(string, tag = "1")]
     pub proposal_id: ::prost::alloc::string::String,
@@ -452,14 +413,12 @@ pub struct AddSubspaceProposalCreated {
     #[prost(string, tag = "8")]
     pub change_type: ::prost::alloc::string::String,
 }
-#[derive(serde::Serialize, serde::Deserialize)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, PartialEq, ::prost::Message)]
 pub struct AddSubspaceProposalsCreated {
     #[prost(message, repeated, tag = "1")]
     pub proposed_subspaces: ::prost::alloc::vec::Vec<AddSubspaceProposalCreated>,
 }
-#[derive(serde::Serialize, serde::Deserialize)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, PartialEq, ::prost::Message)]
 pub struct RemoveSubspaceProposalCreated {
     #[prost(string, tag = "1")]
     pub proposal_id: ::prost::alloc::string::String,
@@ -478,14 +437,12 @@ pub struct RemoveSubspaceProposalCreated {
     #[prost(string, tag = "8")]
     pub change_type: ::prost::alloc::string::String,
 }
-#[derive(serde::Serialize, serde::Deserialize)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, PartialEq, ::prost::Message)]
 pub struct RemoveSubspaceProposalsCreated {
     #[prost(message, repeated, tag = "1")]
     pub proposed_subspaces: ::prost::alloc::vec::Vec<RemoveSubspaceProposalCreated>,
 }
-#[derive(serde::Serialize, serde::Deserialize)]
-#[derive(Clone, PartialEq, ::prost::Message)]
+#[derive(serde::Serialize, serde::Deserialize, Clone, PartialEq, ::prost::Message)]
 pub struct GeoOutput {
     #[prost(message, repeated, tag = "1")]
     pub spaces_created: ::prost::alloc::vec::Vec<GeoSpaceCreated>,
@@ -510,9 +467,7 @@ pub struct GeoOutput {
     #[prost(message, repeated, tag = "11")]
     pub editors_added: ::prost::alloc::vec::Vec<EditorAdded>,
     #[prost(message, repeated, tag = "12")]
-    pub personal_plugins_created: ::prost::alloc::vec::Vec<
-        GeoPersonalSpaceAdminPluginCreated,
-    >,
+    pub personal_plugins_created: ::prost::alloc::vec::Vec<GeoPersonalSpaceAdminPluginCreated>,
     #[prost(message, repeated, tag = "13")]
     pub members_removed: ::prost::alloc::vec::Vec<MemberRemoved>,
     #[prost(message, repeated, tag = "14")]
@@ -530,7 +485,5 @@ pub struct GeoOutput {
     #[prost(message, repeated, tag = "20")]
     pub proposed_added_subspaces: ::prost::alloc::vec::Vec<AddSubspaceProposalCreated>,
     #[prost(message, repeated, tag = "21")]
-    pub proposed_removed_subspaces: ::prost::alloc::vec::Vec<
-        RemoveSubspaceProposalCreated,
-    >,
+    pub proposed_removed_subspaces: ::prost::alloc::vec::Vec<RemoveSubspaceProposalCreated>,
 }

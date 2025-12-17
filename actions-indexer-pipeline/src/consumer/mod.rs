@@ -58,7 +58,7 @@ impl ActionsConsumer {
     ///
     /// This method delegates to the underlying stream provider to initiate the
     /// streaming process. It will continue until the stream ends or an error occurs.
-    /// 
+    ///
     /// # Arguments
     ///
     /// * `sender` - Channel sender for streaming messages to the orchestrator
@@ -74,7 +74,11 @@ impl ActionsConsumer {
     /// - The stream provider fails to initialize or connect
     /// - Network connectivity issues occur during streaming
     /// - Data parsing or validation errors happen
-    pub async fn run(&self, sender: mpsc::Sender<StreamMessage>, cursor: Option<String>) -> Result<(), ConsumerError> {
+    pub async fn run(
+        &self,
+        sender: mpsc::Sender<StreamMessage>,
+        cursor: Option<String>,
+    ) -> Result<(), ConsumerError> {
         self.stream_provider.stream_events(sender, cursor).await?;
         Ok(())
     }
@@ -98,5 +102,9 @@ pub trait ConsumeActionsStream: Send + Sync {
     /// # Returns
     ///
     /// A `Result` indicating success or a `ConsumerError` if streaming fails.
-    async fn stream_events(&self, sender: mpsc::Sender<StreamMessage>, cursor: Option<String>) -> Result<(), ConsumerError>;
+    async fn stream_events(
+        &self,
+        sender: mpsc::Sender<StreamMessage>,
+        cursor: Option<String>,
+    ) -> Result<(), ConsumerError>;
 }

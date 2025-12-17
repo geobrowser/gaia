@@ -1,4 +1,4 @@
-use crate::types::{UserAddress, SpaceId, ObjectId, GroupId, ObjectType, ActionType};
+use crate::types::{ActionType, GroupId, ObjectId, ObjectType, SpaceId, UserAddress};
 use alloy::primitives::{BlockNumber, BlockTimestamp, Bytes, TxHash};
 use serde::{Deserialize, Serialize};
 

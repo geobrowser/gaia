@@ -4,19 +4,23 @@ package voting;
 
 import "blockchain_metadata.proto";
 
-// Vote direction
+// Vote direction for permissionless voting
 enum VoteDirection {
-  UP = 0;
-  DOWN = 1;
-  NONE = 2;  // For unvote
+  VOTE_DIRECTION_UP = 0;
+  VOTE_DIRECTION_DOWN = 1;
+  VOTE_DIRECTION_NONE = 2;  // For unvote
 }
 
-// HermesVoteCast - vote cast on an object
+// HermesVoteCast - vote cast on an object (upvote, downvote, or unvote)
+// Topic encoding: bytes32(bytes4(objectType) << 224) | (bytes16(objectId) << 96)
+// Data encoding: abi.encode(uint16(version), bytes16(groupId), bytes16(spacePOV))
 message HermesVoteCast {
-  bytes voter_id = 1;           // 16 bytes - voter's space ID
-  bytes object_type = 2;        // 4 bytes - type discriminator
-  bytes object_id = 3;          // 16 bytes - object being voted on
-  VoteDirection direction = 4;  // UP, DOWN, or NONE (unvote)
-  bytes data = 5;               // Additional vote data
-  blockchain_metadata.BlockchainMetadata meta = 6;
+  bytes voter_id = 1;             // 16 bytes - voter's space ID
+  bytes object_type = 2;          // 4 bytes - type discriminator
+  bytes object_id = 3;            // 16 bytes - object being voted on
+  VoteDirection direction = 4;    // UP, DOWN, or NONE (unvote)
+  uint32 version = 5;             // Vote format version (uint16 stored as uint32)
+  bytes group_id = 6;             // 16 bytes - group identifier
+  bytes space_pov = 7;            // 16 bytes - space point of view
+  blockchain_metadata.BlockchainMetadata meta = 8;
 }

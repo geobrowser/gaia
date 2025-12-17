@@ -1,12 +1,14 @@
 //! Pipeline: UPVOTED, DOWNVOTED, UNVOTED → curation.votes
 //!
-//! Converts permissionless voting actions to typed Hermes events.
+//! Converts permissionless voting actions to typed Hermes events with decoded data.
 
 use anyhow::Result;
-use hermes_instrumentation::debug_span;
+use hermes_instrumentation::{debug_span, warn};
 
 use hermes_relay::{Action, actions};
 use hermes_schema::pb::voting::{HermesVoteCast, VoteDirection};
+
+use crate::decode;
 
 use super::BlockMetadata;
 
@@ -93,12 +95,27 @@ fn convert_vote(
         vec![0; 16]
     };
 
+    // Decode the data field
+    let (version, group_id, space_pov) = match decode::decode_vote_data(&action.data) {
+        Ok(decoded) => (decoded.version as u32, decoded.group_id, decoded.space_pov),
+        Err(e) => {
+            warn!(
+                error = %e,
+                voter_id = %hex::encode(&action.from_id),
+                "Failed to decode vote data"
+            );
+            (0, vec![0; 16], vec![0; 16])
+        }
+    };
+
     Ok(HermesVoteCast {
         voter_id: action.from_id.clone(),
         object_type,
         object_id,
         direction: direction as i32,
-        data: action.data.clone(),
+        version,
+        group_id,
+        space_pov,
         meta: Some(meta.to_proto()),
     })
 }
@@ -133,15 +150,16 @@ mod tests {
     }
 
     #[test]
-    fn test_convert_upvote() {
+    fn test_convert_upvote_empty_data() {
         let object_type = [0x00, 0x00, 0x00, 0x01];
         let object_id = [2u8; 16];
+
         let action = Action {
             from_id: vec![1; 16],
             to_id: vec![],
             action: actions::UPVOTED.to_vec(),
             topic: make_vote_topic(object_type, object_id),
-            data: vec![3, 4, 5],
+            data: vec![],
         };
 
         let result = convert_vote(&action, &test_meta(), VoteDirection::Up).unwrap();
@@ -149,11 +167,14 @@ mod tests {
         assert_eq!(result.object_type, object_type.to_vec());
         assert_eq!(result.object_id, object_id.to_vec());
         assert_eq!(result.direction, VoteDirection::Up as i32);
-        assert_eq!(result.data, vec![3, 4, 5]);
+        // Default values when decode fails
+        assert_eq!(result.version, 0);
+        assert_eq!(result.group_id.len(), 16);
+        assert_eq!(result.space_pov.len(), 16);
     }
 
     #[test]
-    fn test_convert_downvote() {
+    fn test_convert_downvote_empty_data() {
         let object_type = [0x00, 0x00, 0x00, 0x02];
         let object_id = [5u8; 16];
         let action = Action {
@@ -166,6 +187,9 @@ mod tests {
 
         let result = convert_vote(&action, &test_meta(), VoteDirection::Down).unwrap();
         assert_eq!(result.direction, VoteDirection::Down as i32);
+        assert_eq!(result.version, 0);
+        assert_eq!(result.group_id.len(), 16);
+        assert_eq!(result.space_pov.len(), 16);
     }
 
     #[test]
@@ -240,7 +264,9 @@ mod tests {
             object_type: vec![],
             object_id: vec![],
             direction: VoteDirection::Up as i32,
-            data: vec![],
+            version: 0,
+            group_id: vec![],
+            space_pov: vec![],
             meta: None,
         };
         assert_eq!(get_vote_direction(&vote), "UP");

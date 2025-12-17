@@ -1,5 +1,5 @@
-use actions_indexer_pipeline::processor::HandleAction;
 use actions_indexer_pipeline::errors::ProcessorError;
+use actions_indexer_pipeline::processor::HandleAction;
 use actions_indexer_shared::types::{Action, ActionRaw, Vote, VoteValue};
 
 pub struct VoteHandler;

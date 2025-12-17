@@ -5,7 +5,7 @@ use crate::types::{Action, UserVote, VotesCount};
 /// A `Changeset` bundles new actions, updated user votes, and updated vote counts
 /// together for atomic persistence operations.
 pub struct Changeset<'a> {
-	pub actions: &'a [Action],
-	pub user_votes: &'a [UserVote],
-	pub votes_count: &'a [VotesCount]
+    pub actions: &'a [Action],
+    pub user_votes: &'a [UserVote],
+    pub votes_count: &'a [VotesCount],
 }
