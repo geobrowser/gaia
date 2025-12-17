@@ -105,6 +105,36 @@ impl ProposalActionType {
             Self::Ping => 10,
         }
     }
+
+    /// Returns true if this action type takes an address argument.
+    pub fn has_address_arg(&self) -> bool {
+        matches!(
+            self,
+            Self::AddMember
+                | Self::RemoveMember
+                | Self::AddEditor
+                | Self::RemoveEditor
+                | Self::UnflagEditor
+        )
+    }
+}
+
+/// Decode an address argument from calldata.
+///
+/// For functions like addMember(address), the calldata is:
+/// - 4 bytes: function selector
+/// - 32 bytes: ABI-encoded address (left-padded with zeros)
+///
+/// Returns the 20-byte address.
+pub fn decode_address_arg(calldata: &[u8]) -> Option<Vec<u8>> {
+    // Need at least selector (4) + padded address (32) = 36 bytes
+    if calldata.len() < 36 {
+        return None;
+    }
+
+    // ABI-encoded address is 32 bytes, with address in last 20 bytes
+    // bytes 4..16 are padding (zeros), bytes 16..36 are the address
+    Some(calldata[16..36].to_vec())
 }
 
 // ============================================================================
@@ -487,5 +517,46 @@ mod tests {
         assert_eq!(ProposalActionType::UnflagEditor.to_proto_value(), 8);
         assert_eq!(ProposalActionType::UpdateVotingSettings.to_proto_value(), 9);
         assert_eq!(ProposalActionType::Ping.to_proto_value(), 10);
+    }
+
+    #[test]
+    fn test_proposal_action_type_has_address_arg() {
+        assert!(ProposalActionType::AddMember.has_address_arg());
+        assert!(ProposalActionType::RemoveMember.has_address_arg());
+        assert!(ProposalActionType::AddEditor.has_address_arg());
+        assert!(ProposalActionType::RemoveEditor.has_address_arg());
+        assert!(ProposalActionType::UnflagEditor.has_address_arg());
+
+        assert!(!ProposalActionType::Unknown.has_address_arg());
+        assert!(!ProposalActionType::Publish.has_address_arg());
+        assert!(!ProposalActionType::Flag.has_address_arg());
+        assert!(!ProposalActionType::Unflag.has_address_arg());
+        assert!(!ProposalActionType::UpdateVotingSettings.has_address_arg());
+        assert!(!ProposalActionType::Ping.has_address_arg());
+    }
+
+    #[test]
+    fn test_decode_address_arg() {
+        // Create calldata for addMember(0x1111...1111)
+        let mut calldata = selectors::ADD_MEMBER.to_vec();
+        // ABI-encoded address: 12 bytes padding + 20 bytes address
+        calldata.extend_from_slice(&[0u8; 12]);
+        calldata.extend_from_slice(&[0x11u8; 20]);
+
+        let result = decode_address_arg(&calldata);
+        assert!(result.is_some());
+        assert_eq!(result.unwrap(), vec![0x11u8; 20]);
+    }
+
+    #[test]
+    fn test_decode_address_arg_too_short() {
+        // Only selector, no address
+        let calldata = selectors::ADD_MEMBER.to_vec();
+        assert!(decode_address_arg(&calldata).is_none());
+
+        // Partially filled
+        let mut calldata = selectors::ADD_MEMBER.to_vec();
+        calldata.extend_from_slice(&[0u8; 20]); // Only 24 bytes total
+        assert!(decode_address_arg(&calldata).is_none());
     }
 }

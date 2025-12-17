@@ -16,7 +16,7 @@ use hermes_schema::pb::governance::{
     ProposalVoteOption, VotingMode,
 };
 
-use crate::decode::{self, ProposalActionType};
+use crate::decode::{self, decode_address_arg, ProposalActionType};
 
 use super::BlockMetadata;
 
@@ -145,12 +145,20 @@ fn convert_proposal_created(
                 "none".to_string()
             };
 
+            // Decode address argument if this action type takes one
+            let target_address = if action_type.has_address_arg() {
+                decode_address_arg(&a.data).unwrap_or_default()
+            } else {
+                vec![]
+            };
+
             debug!(
                 action_index = idx,
                 action_count = action_count,
                 selector = %selector,
                 action_type = ?action_type,
                 target = %hex::encode(&a.to),
+                target_address = %hex::encode(&target_address),
                 "Decoded proposal action"
             );
 
@@ -165,6 +173,7 @@ fn convert_proposal_created(
                     to: a.to,
                     value: a.value,
                     data: a.data,
+                    target_address,
                 }),
                 meta: Some(meta.to_proto()),
             }
@@ -333,5 +342,64 @@ mod tests {
         assert_eq!(result.proposals_voted.len(), 1);
         assert_eq!(result.proposals_executed.len(), 1);
         assert_eq!(result.total(), 3);
+    }
+
+    #[test]
+    fn test_convert_proposal_created_with_add_member_action() {
+        use alloy::primitives::{Address, U256};
+        use alloy::sol;
+        use alloy::sol_types::SolType;
+
+        // Define the Action struct for encoding
+        sol! {
+            struct TestAction {
+                address to;
+                uint256 value;
+                bytes data;
+            }
+        }
+
+        // Create ABI-encoded data for a proposal with addMember(address) action
+        let member_address: [u8; 20] = [0xAA; 20];
+
+        // Build the calldata for addMember(address)
+        let mut calldata = decode::selectors::ADD_MEMBER.to_vec();
+        calldata.extend_from_slice(&[0u8; 12]); // padding
+        calldata.extend_from_slice(&member_address);
+
+        // Build the Action struct
+        let action_data = TestAction {
+            to: Address::ZERO,
+            value: U256::ZERO,
+            data: calldata.into(),
+        };
+
+        // Encode: (uint8 votingMode, Action[])
+        type ProposalCreatedDataType = sol! { (uint8, TestAction[]) };
+        let encoded = ProposalCreatedDataType::abi_encode(&(0u8, vec![action_data]));
+
+        let action = Action {
+            from_id: vec![1; 16],
+            to_id: vec![],
+            action: actions::PROPOSAL_CREATED.to_vec(),
+            topic: vec![2; 32],
+            data: encoded,
+        };
+
+        let results = convert_proposal_created(&action, &test_meta()).unwrap();
+        assert_eq!(results.len(), 1);
+
+        let result = &results[0];
+        assert_eq!(
+            result.action_type,
+            decode::ProposalActionType::AddMember.to_proto_value()
+        );
+        assert_eq!(result.action_count, 1);
+        assert_eq!(result.action_index, 0);
+        assert_eq!(result.voting_mode, VotingMode::Fast as i32);
+
+        // Verify the target_address was decoded
+        let proposal_action = result.action.as_ref().unwrap();
+        assert_eq!(proposal_action.target_address, member_address.to_vec());
     }
 }

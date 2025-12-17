@@ -106,7 +106,7 @@ impl ProposalActionType {
         }
     }
 }
-/// Action to be executed when proposal passes (raw form)
+/// Action to be executed when proposal passes
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ProposalAction {
     /// 20 bytes - target contract address
@@ -118,6 +118,11 @@ pub struct ProposalAction {
     /// calldata (function selector + encoded args)
     #[prost(bytes = "vec", tag = "3")]
     pub data: ::prost::alloc::vec::Vec<u8>,
+    /// Decoded arguments (populated based on action type)
+    /// For ADD_MEMBER, REMOVE_MEMBER, ADD_EDITOR, REMOVE_EDITOR, UNFLAG_EDITOR:
+    /// 20 bytes - the address argument
+    #[prost(bytes = "vec", tag = "4")]
+    pub target_address: ::prost::alloc::vec::Vec<u8>,
 }
 /// HermesProposalCreated - emitted for EACH action in a proposal
 /// For proposals with multiple actions, multiple events are emitted with the same proposal_id

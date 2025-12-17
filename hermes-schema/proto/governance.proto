@@ -33,11 +33,15 @@ enum ProposalActionType {
   PROPOSAL_ACTION_PING = 10;
 }
 
-// Action to be executed when proposal passes (raw form)
+// Action to be executed when proposal passes
 message ProposalAction {
   bytes to = 1;        // 20 bytes - target contract address
   bytes value = 2;     // 32 bytes - uint256 ETH value to send
   bytes data = 3;      // calldata (function selector + encoded args)
+  
+  // Decoded arguments (populated based on action type)
+  // For ADD_MEMBER, REMOVE_MEMBER, ADD_EDITOR, REMOVE_EDITOR, UNFLAG_EDITOR:
+  bytes target_address = 4;  // 20 bytes - the address argument
 }
 
 // HermesProposalCreated - emitted for EACH action in a proposal

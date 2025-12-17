@@ -61,6 +61,10 @@ One event is emitted **per action** in the proposal. For proposals with multiple
 | `to` | bytes (20) - target address |
 | `value` | bytes (32) - uint256 ETH value |
 | `data` | bytes - calldata |
+| `target_address` | bytes (20) - decoded address argument (for address-taking actions) |
+
+The `target_address` field is populated for actions that take an address argument:
+`ADD_MEMBER`, `REMOVE_MEMBER`, `ADD_EDITOR`, `REMOVE_EDITOR`, `UNFLAG_EDITOR`
 
 **ProposalActionType** (decoded from first 4 bytes of calldata):
 
