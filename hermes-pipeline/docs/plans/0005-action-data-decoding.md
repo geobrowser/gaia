@@ -2,7 +2,7 @@
 
 ## Status
 
-In Progress
+Implemented
 
 ## Context
 
@@ -35,9 +35,20 @@ Actions emitted from the Space Registry contract include a `data` field that con
 
 | Action | Topic Field | Data Encoding | Decoded Fields |
 |--------|-------------|---------------|----------------|
-| Proposal Created | `bytes32(proposalId)` | `abi.encode(Operation[], VoteOption)` | `operations`, `default_vote` |
-| Proposal Voted | `bytes32(proposalId)` | `abi.encode(bytes32(proposalId), VoteOption)` | `vote` |
-| Proposal Executed | `bytes32(proposalId)` | `abi.encode(bytes32(proposalId))` | (none - data redundant) |
+| Proposal Created | `bytes32(proposalId)` | `abi.encode(VotingMode, Action[])` | `voting_mode`, `action_index`, `action_count`, `action_type`, `action` |
+| Proposal Voted | `bytes32(proposalId)` | `abi.encode(uint256(proposalId), VoteOption)` | `vote` |
+| Proposal Executed | `bytes32(proposalId)` | `abi.encode(uint256(proposalId))` | (none - data redundant) |
+
+**VotingMode:** `Fast (0)`, `Slow (1)`
+**VoteOption:** `None (0)`, `Yes (1)`, `No (2)`, `Abstain (3)`
+**Action struct:** `{address to, uint256 value, bytes data}`
+
+**ProposalActionType** (decoded from calldata function selector):
+- `ADD_MEMBER`, `REMOVE_MEMBER`, `ADD_EDITOR`, `REMOVE_EDITOR`
+- `PUBLISH`, `FLAG`, `UNFLAG`, `UNFLAG_EDITOR`
+- `UPDATE_VOTING_SETTINGS`, `PING`
+
+Multi-action proposals emit one `HermesProposalCreated` event per action.
 
 #### Content Actions
 

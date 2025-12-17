@@ -83,22 +83,51 @@ Event builders create `Action` events in the chain format:
 |------------|---------|-------------|
 | Personal Space | `space_created(space_id, owner)` | `SPACE_REGISTERED` |
 | DAO Space | `space_created_dao(space_id, editors, members)` | `SPACE_REGISTERED` |
-| Verified Trust | `trust_extended_verified(source, target)` | `SUBSPACE_ADDED` |
-| Related Trust | `trust_extended_related(source, target)` | `SUBSPACE_ADDED` |
-| Subtopic Trust | `trust_extended_subtopic(source, topic)` | `SUBSPACE_ADDED` |
+| Verified Trust | `subspace_verified(source, target)` | `SUBSPACE_VERIFIED` |
+| Related Trust | `subspace_related(source, target)` | `SUBSPACE_RELATED` |
+| Subtopic Trust | `subspace_topic_declared(source, subspace, topic)` | `SUBSPACE_TOPIC_DECLARED` |
 | Edit | `edit_published(space_id, ipfs_hash)` | `EDITS_PUBLISHED` |
+| Proposal Created | `proposal_created(space_id, proposal_id, voting_mode, actions)` | `PROPOSAL_CREATED` |
+| Proposal Voted | `proposal_voted(voter_id, space_id, proposal_id, vote_option)` | `PROPOSAL_VOTED` |
+| Proposal Executed | `proposal_executed(space_id, proposal_id)` | `PROPOSAL_EXECUTED` |
 
-Trust extension types are encoded in the first 2 bytes of the `data` field:
-- Verified: `[0x00, 0x00]`
-- Related: `[0x00, 0x01]`
-- Subtopic: `[0x00, 0x02]`
+#### Governance Types
+
+Typed enums and builders for governance actions:
+
+```rust
+use hermes_relay::source::mock_events::{
+    VotingMode, VoteOption, ProposalAction, selectors,
+};
+
+// VotingMode
+VotingMode::Fast  // threshold-based, immediate execution
+VotingMode::Slow  // majority voting with voting window
+
+// VoteOption
+VoteOption::None
+VoteOption::Yes
+VoteOption::No
+VoteOption::Abstain
+
+// ProposalAction builders
+ProposalAction::add_member([0xAA; 20])
+ProposalAction::add_editor([0xBB; 20])
+ProposalAction::publish(topic_id, content_uri, metadata)
+```
+
+Function selectors are available via `mock_events::selectors::*` for custom calldata construction.
 
 ### Test Topology
 
 `MockSource::test_topology()` and `mock_events::test_topology::generate()` produce:
 - 18 space creations (11 canonical + 7 non-canonical)
-- 19 trust extensions (14 explicit + 5 topic-based)
+- 10 verified subspace relations
+- 4 related subspace relations  
+- 5 topic declarations
 - 6 edit events
+- 1 proposal with votes and execution
+- 3 permissionless voting actions
 
 ### Helper Functions
 
