@@ -23,3 +23,4 @@ futures = "0.3"
 anyhow = "1"
 dotenv = "0.15"
 hex = "0.4"
+alloy = { version = "1.0.24", features = ["sol-types"] }

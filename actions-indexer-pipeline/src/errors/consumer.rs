@@ -20,7 +20,7 @@ pub enum ConsumerError {
     StreamError(String),
     #[error("Error decoding actions: {0}")]
     DecodingActions(String),
-    #[error("Error processing block undo signal: {0}")] 
+    #[error("Error processing block undo signal: {0}")]
     ProcessingBlockUndoSignal(String),
     #[error("Error sending message through channel: {0}")]
     ChannelSend(String),

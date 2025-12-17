@@ -1,14 +1,16 @@
 //! Pipeline: EDITOR_FLAGGED, EDITOR_UNFLAGGED, FLAGGED, UNFLAGGED → space.moderation
 //!
-//! Converts moderation actions to typed Hermes events.
+//! Converts moderation actions to typed Hermes events with decoded data.
 
 use anyhow::Result;
-use hermes_instrumentation::debug_span;
+use hermes_instrumentation::{debug_span, warn};
 
 use hermes_relay::{Action, actions};
 use hermes_schema::pb::moderation::{
     HermesContentFlagged, HermesContentUnflagged, HermesEditorFlagged, HermesEditorUnflagged,
 };
+
+use crate::decode;
 
 use super::BlockMetadata;
 
@@ -82,7 +84,7 @@ pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformRe
 /// The action structure:
 /// - from_id: space_id (16 bytes) - space containing editor
 /// - topic: editor address (32 bytes, padded from 20)
-/// - data: flag details/reason
+/// - data: empty
 fn convert_editor_flagged(action: &Action, meta: &BlockMetadata) -> Result<HermesEditorFlagged> {
     // Extract the 20-byte address from the 32-byte topic (last 20 bytes)
     let editor_account = if action.topic.len() >= 20 {
@@ -94,7 +96,6 @@ fn convert_editor_flagged(action: &Action, meta: &BlockMetadata) -> Result<Herme
     Ok(HermesEditorFlagged {
         space_id: action.from_id.clone(),
         editor_account,
-        data: action.data.clone(),
         meta: Some(meta.to_proto()),
     })
 }
@@ -104,7 +105,7 @@ fn convert_editor_flagged(action: &Action, meta: &BlockMetadata) -> Result<Herme
 /// The action structure:
 /// - from_id: space_id (16 bytes) - space containing editor
 /// - topic: editor address (32 bytes, padded from 20)
-/// - data: unflag details
+/// - data: empty
 fn convert_editor_unflagged(
     action: &Action,
     meta: &BlockMetadata,
@@ -118,7 +119,6 @@ fn convert_editor_unflagged(
     Ok(HermesEditorUnflagged {
         space_id: action.from_id.clone(),
         editor_account,
-        data: action.data.clone(),
         meta: Some(meta.to_proto()),
     })
 }
@@ -128,12 +128,27 @@ fn convert_editor_unflagged(
 /// The action structure:
 /// - from_id: flagger_id (16 bytes) - space flagging content
 /// - to_id: target_space_id (16 bytes) - space whose content is flagged
-/// - data: flag details (entity type, ID, reason)
+/// - topic: topic_id (32 bytes) - optional topic UUID
+/// - data: abi.encode(bytes(flaggedUri))
 fn convert_content_flagged(action: &Action, meta: &BlockMetadata) -> Result<HermesContentFlagged> {
+    // Decode the URI from the data field
+    let uri = match decode::decode_flag_data(&action.data) {
+        Ok(decoded_uri) => decoded_uri,
+        Err(e) => {
+            warn!(
+                error = %e,
+                flagger_id = %hex::encode(&action.from_id),
+                "Failed to decode content flagged data"
+            );
+            String::new()
+        }
+    };
+
     Ok(HermesContentFlagged {
         flagger_id: action.from_id.clone(),
         target_space_id: action.to_id.clone(),
-        data: action.data.clone(),
+        topic_id: action.topic.clone(),
+        uri,
         meta: Some(meta.to_proto()),
     })
 }
@@ -143,15 +158,30 @@ fn convert_content_flagged(action: &Action, meta: &BlockMetadata) -> Result<Herm
 /// The action structure:
 /// - from_id: unflagger_id (16 bytes) - space unflagging content
 /// - to_id: target_space_id (16 bytes) - space whose content is unflagged
-/// - data: unflag details
+/// - topic: topic_id (32 bytes) - optional topic UUID
+/// - data: abi.encode(bytes(unflaggedUri))
 fn convert_content_unflagged(
     action: &Action,
     meta: &BlockMetadata,
 ) -> Result<HermesContentUnflagged> {
+    // Decode the URI from the data field
+    let uri = match decode::decode_flag_data(&action.data) {
+        Ok(decoded_uri) => decoded_uri,
+        Err(e) => {
+            warn!(
+                error = %e,
+                unflagger_id = %hex::encode(&action.from_id),
+                "Failed to decode content unflagged data"
+            );
+            String::new()
+        }
+    };
+
     Ok(HermesContentUnflagged {
         unflagger_id: action.from_id.clone(),
         target_space_id: action.to_id.clone(),
-        data: action.data.clone(),
+        topic_id: action.topic.clone(),
+        uri,
         meta: Some(meta.to_proto()),
     })
 }
@@ -175,29 +205,45 @@ mod tests {
             to_id: vec![],
             action: actions::EDITOR_FLAGGED.to_vec(),
             topic: vec![0; 12].into_iter().chain(vec![2; 20]).collect(),
-            data: vec![3, 4, 5],
+            data: vec![],
         };
 
         let result = convert_editor_flagged(&action, &test_meta()).unwrap();
         assert_eq!(result.space_id, vec![1; 16]);
         assert_eq!(result.editor_account, vec![2; 20]);
-        assert_eq!(result.data, vec![3, 4, 5]);
     }
 
     #[test]
-    fn test_convert_content_flagged() {
+    fn test_convert_content_flagged_empty_data() {
         let action = Action {
             from_id: vec![1; 16],
             to_id: vec![2; 16],
             action: actions::FLAGGED.to_vec(),
-            topic: vec![0; 32],
-            data: b"ipfs://QmTest".to_vec(),
+            topic: vec![3; 32],
+            data: vec![],
         };
 
         let result = convert_content_flagged(&action, &test_meta()).unwrap();
         assert_eq!(result.flagger_id, vec![1; 16]);
         assert_eq!(result.target_space_id, vec![2; 16]);
-        assert_eq!(result.data, b"ipfs://QmTest".to_vec());
+        assert!(result.uri.is_empty());
+    }
+
+    #[test]
+    fn test_convert_content_unflagged_empty_data() {
+        let action = Action {
+            from_id: vec![4; 16],
+            to_id: vec![5; 16],
+            action: actions::UNFLAGGED.to_vec(),
+            topic: vec![6; 32],
+            data: vec![],
+        };
+
+        let result = convert_content_unflagged(&action, &test_meta()).unwrap();
+        assert_eq!(result.unflagger_id, vec![4; 16]);
+        assert_eq!(result.target_space_id, vec![5; 16]);
+        assert_eq!(result.topic_id, vec![6; 32]);
+        assert!(result.uri.is_empty());
     }
 
     #[test]

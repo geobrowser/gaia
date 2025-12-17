@@ -1,12 +1,14 @@
 //! Pipeline: TOPIC_DECLARED → space.topics
 //!
-//! Converts topic declaration actions to typed Hermes events.
+//! Converts topic declaration actions to typed Hermes events with decoded data.
 
 use anyhow::Result;
-use hermes_instrumentation::debug_span;
+use hermes_instrumentation::{debug_span, warn};
 
 use hermes_relay::{Action, actions};
 use hermes_schema::pb::topics::HermesTopicDeclared;
+
+use crate::decode;
 
 use super::BlockMetadata;
 
@@ -49,13 +51,24 @@ pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformRe
 ///
 /// The action structure:
 /// - from_id: space_id (16 bytes) - space declaring topic
-/// - topic: topic_id (32 bytes) - keccak256 of topic name
-/// - data: topic metadata (name, description)
+/// - data: abi.encode(bytes16(topicId))
 fn convert_topic_declared(action: &Action, meta: &BlockMetadata) -> Result<HermesTopicDeclared> {
+    // Decode the topic_id from the data field
+    let topic_id = match decode::decode_topic_declared(&action.data) {
+        Ok(id) => id,
+        Err(e) => {
+            warn!(
+                error = %e,
+                space_id = %hex::encode(&action.from_id),
+                "Failed to decode topic declared data"
+            );
+            vec![0; 16]
+        }
+    };
+
     Ok(HermesTopicDeclared {
         space_id: action.from_id.clone(),
-        topic_id: action.topic.clone(),
-        data: action.data.clone(),
+        topic_id,
         meta: Some(meta.to_proto()),
     })
 }
@@ -73,19 +86,19 @@ mod tests {
     }
 
     #[test]
-    fn test_convert_topic_declared() {
+    fn test_convert_topic_declared_empty_data() {
         let action = Action {
             from_id: vec![1; 16],
             to_id: vec![],
             action: actions::TOPIC_DECLARED.to_vec(),
             topic: vec![2; 32],
-            data: b"science".to_vec(),
+            data: vec![],
         };
 
         let result = convert_topic_declared(&action, &test_meta()).unwrap();
         assert_eq!(result.space_id, vec![1; 16]);
-        assert_eq!(result.topic_id, vec![2; 32]);
-        assert_eq!(result.data, b"science".to_vec());
+        // Empty data defaults to zero-filled 16-byte UUID
+        assert_eq!(result.topic_id, vec![0; 16]);
     }
 
     #[test]

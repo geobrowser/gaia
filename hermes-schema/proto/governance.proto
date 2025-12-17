@@ -4,27 +4,75 @@ package governance;
 
 import "blockchain_metadata.proto";
 
-// HermesProposalCreated - emitted when a new proposal is created in a space
+// Voting mode for proposals
+enum VotingMode {
+  VOTING_MODE_FAST = 0;   // Fast path - threshold-based, immediate execution
+  VOTING_MODE_SLOW = 1;   // Slow path - majority voting with voting window
+}
+
+// Vote option for governance proposals
+enum ProposalVoteOption {
+  VOTE_OPTION_NONE = 0;
+  VOTE_OPTION_YES = 1;
+  VOTE_OPTION_NO = 2;
+  VOTE_OPTION_ABSTAIN = 3;
+}
+
+// Type of action in a proposal, decoded from calldata function selector
+enum ProposalActionType {
+  PROPOSAL_ACTION_UNKNOWN = 0;
+  PROPOSAL_ACTION_ADD_MEMBER = 1;
+  PROPOSAL_ACTION_REMOVE_MEMBER = 2;
+  PROPOSAL_ACTION_ADD_EDITOR = 3;
+  PROPOSAL_ACTION_REMOVE_EDITOR = 4;
+  PROPOSAL_ACTION_PUBLISH = 5;
+  PROPOSAL_ACTION_FLAG = 6;
+  PROPOSAL_ACTION_UNFLAG = 7;
+  PROPOSAL_ACTION_UNFLAG_EDITOR = 8;
+  PROPOSAL_ACTION_UPDATE_VOTING_SETTINGS = 9;
+  PROPOSAL_ACTION_PING = 10;
+}
+
+// Action to be executed when proposal passes
+message ProposalAction {
+  bytes to = 1;        // 20 bytes - target contract address
+  bytes value = 2;     // 32 bytes - uint256 ETH value to send
+  bytes data = 3;      // calldata (function selector + encoded args)
+  
+  // Decoded arguments (populated based on action type)
+  // For ADD_MEMBER, REMOVE_MEMBER, ADD_EDITOR, REMOVE_EDITOR, UNFLAG_EDITOR:
+  bytes target_address = 4;  // 20 bytes - the address argument
+}
+
+// HermesProposalCreated - emitted for EACH action in a proposal
+// For proposals with multiple actions, multiple events are emitted with the same proposal_id
+// but different action_index values.
+// Data encoding: abi.encode(VotingMode, Action[])
 message HermesProposalCreated {
-  bytes space_id = 1;       // 16 bytes - space creating the proposal
-  bytes proposal_id = 2;    // 32 bytes - unique proposal identifier (from topic field)
-  bytes data = 3;           // proposal metadata (title, description, voting period, etc.)
-  blockchain_metadata.BlockchainMetadata meta = 4;
+  bytes space_id = 1;                                   // 16 bytes - space creating the proposal
+  bytes proposal_id = 2;                                // 32 bytes - unique proposal identifier (from topic field)
+  VotingMode voting_mode = 3;                           // Fast or Slow path
+  uint32 action_index = 4;                              // Index of this action in the proposal (0-based)
+  uint32 action_count = 5;                              // Total number of actions in the proposal
+  ProposalActionType action_type = 6;                   // Decoded action type from calldata selector
+  ProposalAction action = 7;                            // Raw action data (to, value, calldata)
+  blockchain_metadata.BlockchainMetadata meta = 8;
 }
 
 // HermesProposalVoted - emitted when a vote is cast on a proposal
+// Data encoding: abi.encode(bytes32(proposalId), VoteOption)
 message HermesProposalVoted {
-  bytes voter_id = 1;       // 16 bytes - space casting the vote (from from_id)
-  bytes space_id = 2;       // 16 bytes - space that owns the proposal (from to_id)
-  bytes proposal_id = 3;    // 32 bytes - proposal being voted on (from topic field)
-  bytes data = 4;           // vote choice and any additional vote data
+  bytes voter_id = 1;                                   // 16 bytes - space casting the vote (from from_id)
+  bytes space_id = 2;                                   // 16 bytes - space that owns the proposal (from to_id)
+  bytes proposal_id = 3;                                // 32 bytes - proposal being voted on (from topic field)
+  ProposalVoteOption vote = 4;                          // The vote cast
   blockchain_metadata.BlockchainMetadata meta = 5;
 }
 
 // HermesProposalExecuted - emitted when a passed proposal is executed
+// Data encoding: abi.encode(bytes32(proposalId))
 message HermesProposalExecuted {
-  bytes space_id = 1;       // 16 bytes - space executing the proposal
-  bytes proposal_id = 2;    // 32 bytes - executed proposal identifier (from topic field)
-  bytes data = 3;           // execution result/details
-  blockchain_metadata.BlockchainMetadata meta = 4;
+  bytes space_id = 1;                                   // 16 bytes - space executing the proposal
+  bytes proposal_id = 2;                                // 32 bytes - executed proposal identifier (from topic field)
+  blockchain_metadata.BlockchainMetadata meta = 3;
 }

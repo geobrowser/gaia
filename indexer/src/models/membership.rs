@@ -24,7 +24,7 @@ impl MembershipModel {
 
         for member in added_members {
             let space_id = derive_space_id(GEO, &checksum_address(member.dao_address.clone()));
-            
+
             members.push(MemberItem {
                 address: checksum_address(member.editor_address.clone()),
                 space_id,
@@ -40,7 +40,7 @@ impl MembershipModel {
 
         for member in removed_members {
             let space_id = derive_space_id(GEO, &checksum_address(member.dao_address.clone()));
-            
+
             members.push(MemberItem {
                 address: checksum_address(member.editor_address.clone()),
                 space_id,
@@ -56,7 +56,7 @@ impl MembershipModel {
 
         for editor in added_editors {
             let space_id = derive_space_id(GEO, &checksum_address(editor.dao_address.clone()));
-            
+
             editors.push(EditorItem {
                 address: checksum_address(editor.editor_address.clone()),
                 space_id,
@@ -72,7 +72,7 @@ impl MembershipModel {
 
         for editor in removed_editors {
             let space_id = derive_space_id(GEO, &checksum_address(editor.dao_address.clone()));
-            
+
             editors.push(EditorItem {
                 address: checksum_address(editor.editor_address.clone()),
                 space_id,

@@ -4,8 +4,8 @@ use stream::utils::BlockMetadata;
 
 use crate::block_handler::utils::handle_task_result;
 use crate::{
-    error::IndexingError, models::subspaces::SubspaceModel, storage::StorageBackend,
-    AddedSubspace, RemovedSubspace,
+    error::IndexingError, models::subspaces::SubspaceModel, storage::StorageBackend, AddedSubspace,
+    RemovedSubspace,
 };
 
 pub async fn run<S>(
@@ -33,7 +33,9 @@ where
             // Process removed subspaces
             if !removed_subspaces.is_empty() {
                 let subspaces_to_remove = SubspaceModel::map_removed_subspaces(&removed_subspaces);
-                storage.remove_subspaces(&subspaces_to_remove, &mut tx).await?;
+                storage
+                    .remove_subspaces(&subspaces_to_remove, &mut tx)
+                    .await?;
             }
 
             tx.commit().await?;

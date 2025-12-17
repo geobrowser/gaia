@@ -407,7 +407,7 @@ impl RelationsModel {
         // the edit.
         let original_count = relations.len();
         let squashed = squash_relations(&relations);
-        
+
         if squashed.len() < original_count {
             debug!(
                 original_count,
@@ -438,7 +438,7 @@ impl RelationsModel {
             delete_count = delete_relations.len(),
             "Processed relation operations"
         );
-        
+
         return (
             set_relations,
             update_relations,

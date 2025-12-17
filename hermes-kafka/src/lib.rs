@@ -92,7 +92,9 @@ impl ProducerConfig {
 /// - zstd compression
 /// - Optimized buffering settings for high throughput
 /// - SASL/SSL authentication if credentials are provided
-pub fn create_producer_with_config(config: &ProducerConfig) -> Result<rdkafka::producer::BaseProducer> {
+pub fn create_producer_with_config(
+    config: &ProducerConfig,
+) -> Result<rdkafka::producer::BaseProducer> {
     let mut client_config = ClientConfig::new();
 
     client_config

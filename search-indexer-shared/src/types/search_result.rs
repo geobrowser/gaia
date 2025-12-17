@@ -153,4 +153,3 @@ mod tests {
         assert_eq!(response.results.len(), deserialized.results.len());
     }
 }
-

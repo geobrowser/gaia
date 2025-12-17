@@ -8,4 +8,3 @@ pub mod types;
 pub use types::entity_document::EntityDocument;
 pub use types::search_query::{SearchQuery, SearchScope};
 pub use types::search_result::{SearchResponse, SearchResult};
-
