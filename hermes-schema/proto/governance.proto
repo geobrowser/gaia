@@ -18,21 +18,41 @@ enum ProposalVoteOption {
   VOTE_OPTION_ABSTAIN = 3;
 }
 
-// Action to be executed when proposal passes
+// Type of action in a proposal, decoded from calldata function selector
+enum ProposalActionType {
+  PROPOSAL_ACTION_UNKNOWN = 0;
+  PROPOSAL_ACTION_ADD_MEMBER = 1;
+  PROPOSAL_ACTION_REMOVE_MEMBER = 2;
+  PROPOSAL_ACTION_ADD_EDITOR = 3;
+  PROPOSAL_ACTION_REMOVE_EDITOR = 4;
+  PROPOSAL_ACTION_PUBLISH = 5;
+  PROPOSAL_ACTION_FLAG = 6;
+  PROPOSAL_ACTION_UNFLAG = 7;
+  PROPOSAL_ACTION_UNFLAG_EDITOR = 8;
+  PROPOSAL_ACTION_UPDATE_VOTING_SETTINGS = 9;
+  PROPOSAL_ACTION_PING = 10;
+}
+
+// Action to be executed when proposal passes (raw form)
 message ProposalAction {
   bytes to = 1;        // 20 bytes - target contract address
   bytes value = 2;     // 32 bytes - uint256 ETH value to send
   bytes data = 3;      // calldata (function selector + encoded args)
 }
 
-// HermesProposalCreated - emitted when a new proposal is created in a space
+// HermesProposalCreated - emitted for EACH action in a proposal
+// For proposals with multiple actions, multiple events are emitted with the same proposal_id
+// but different action_index values.
 // Data encoding: abi.encode(VotingMode, Action[])
 message HermesProposalCreated {
   bytes space_id = 1;                                   // 16 bytes - space creating the proposal
   bytes proposal_id = 2;                                // 32 bytes - unique proposal identifier (from topic field)
   VotingMode voting_mode = 3;                           // Fast or Slow path
-  repeated ProposalAction actions = 4;                  // Actions to execute if proposal passes
-  blockchain_metadata.BlockchainMetadata meta = 5;
+  uint32 action_index = 4;                              // Index of this action in the proposal (0-based)
+  uint32 action_count = 5;                              // Total number of actions in the proposal
+  ProposalActionType action_type = 6;                   // Decoded action type from calldata selector
+  ProposalAction action = 7;                            // Raw action data (to, value, calldata)
+  blockchain_metadata.BlockchainMetadata meta = 8;
 }
 
 // HermesProposalVoted - emitted when a vote is cast on a proposal

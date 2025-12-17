@@ -1,6 +1,11 @@
 //! Pipeline: PROPOSAL_CREATED, PROPOSAL_VOTED, PROPOSAL_EXECUTED → space.governance
 //!
 //! Converts governance actions to typed Hermes events with decoded data.
+//!
+//! For PROPOSAL_CREATED, one event is emitted per action in the proposal. This allows
+//! consumers to understand the proposal type(s) without decoding calldata themselves.
+//! Proposals with multiple actions (slow path only) emit multiple events with the same
+//! proposal_id but different action_index values.
 
 use anyhow::Result;
 use hermes_instrumentation::{debug_span, warn};
@@ -11,7 +16,7 @@ use hermes_schema::pb::governance::{
     ProposalVoteOption, VotingMode,
 };
 
-use crate::decode;
+use crate::decode::{self, ProposalActionType};
 
 use super::BlockMetadata;
 
@@ -39,13 +44,13 @@ pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformRe
         let action_type = action.action.as_slice();
 
         if actions::matches(action_type, &actions::PROPOSAL_CREATED) {
-            let event = debug_span!(
+            let events = debug_span!(
                 "convert.governance.created",
                 space_id = %hex::encode(&action.from_id),
                 proposal_id = %hex::encode(&action.topic)
             )
             .in_scope(|| convert_proposal_created(action, meta))?;
-            result.proposals_created.push(event);
+            result.proposals_created.extend(events);
         } else if actions::matches(action_type, &actions::PROPOSAL_VOTED) {
             let event = debug_span!(
                 "convert.governance.voted",
@@ -68,7 +73,10 @@ pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformRe
     Ok(result)
 }
 
-/// Convert a PROPOSAL_CREATED action to HermesProposalCreated proto.
+/// Convert a PROPOSAL_CREATED action to HermesProposalCreated proto events.
+///
+/// Emits one event per action in the proposal. For proposals with multiple actions,
+/// multiple events are emitted with the same proposal_id but different action_index values.
 ///
 /// The action structure for PROPOSAL_CREATED:
 /// - from_id: space_id (16 bytes) - space creating the proposal
@@ -78,43 +86,77 @@ pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformRe
 fn convert_proposal_created(
     action: &Action,
     meta: &BlockMetadata,
-) -> Result<HermesProposalCreated> {
+) -> Result<Vec<HermesProposalCreated>> {
     // Decode the data field
-    let (voting_mode, actions) = match decode::decode_proposal_created(&action.data) {
-        Ok(decoded) => {
-            let actions: Vec<ProposalAction> = decoded
-                .actions
-                .into_iter()
-                .map(|a| ProposalAction {
-                    to: a.to,
-                    value: a.value,
-                    data: a.data,
-                })
-                .collect();
-            let mode = match decoded.voting_mode {
-                0 => VotingMode::Fast,
-                1 => VotingMode::Slow,
-                _ => VotingMode::Fast, // Default to Fast for unknown values
-            };
-            (mode, actions)
-        }
+    let decoded = match decode::decode_proposal_created(&action.data) {
+        Ok(decoded) => decoded,
         Err(e) => {
             warn!(
                 error = %e,
                 proposal_id = %hex::encode(&action.topic),
                 "Failed to decode proposal created data"
             );
-            (VotingMode::Fast, vec![])
+            // Return empty event with unknown action type
+            return Ok(vec![HermesProposalCreated {
+                space_id: action.from_id.clone(),
+                proposal_id: action.topic.clone(),
+                voting_mode: VotingMode::Fast as i32,
+                action_index: 0,
+                action_count: 0,
+                action_type: ProposalActionType::Unknown.to_proto_value(),
+                action: None,
+                meta: Some(meta.to_proto()),
+            }]);
         }
     };
 
-    Ok(HermesProposalCreated {
-        space_id: action.from_id.clone(),
-        proposal_id: action.topic.clone(),
-        voting_mode: voting_mode as i32,
-        actions,
-        meta: Some(meta.to_proto()),
-    })
+    let voting_mode = match decoded.voting_mode {
+        0 => VotingMode::Fast,
+        1 => VotingMode::Slow,
+        _ => VotingMode::Fast,
+    };
+
+    let action_count = decoded.actions.len() as u32;
+
+    // Handle empty actions (shouldn't happen but be defensive)
+    if decoded.actions.is_empty() {
+        return Ok(vec![HermesProposalCreated {
+            space_id: action.from_id.clone(),
+            proposal_id: action.topic.clone(),
+            voting_mode: voting_mode as i32,
+            action_index: 0,
+            action_count: 0,
+            action_type: ProposalActionType::Unknown.to_proto_value(),
+            action: None,
+            meta: Some(meta.to_proto()),
+        }]);
+    }
+
+    // Emit one event per action
+    let events = decoded
+        .actions
+        .into_iter()
+        .enumerate()
+        .map(|(idx, a)| {
+            let action_type = ProposalActionType::from_calldata(&a.data);
+            HermesProposalCreated {
+                space_id: action.from_id.clone(),
+                proposal_id: action.topic.clone(),
+                voting_mode: voting_mode as i32,
+                action_index: idx as u32,
+                action_count,
+                action_type: action_type.to_proto_value(),
+                action: Some(ProposalAction {
+                    to: a.to,
+                    value: a.value,
+                    data: a.data,
+                }),
+                meta: Some(meta.to_proto()),
+            }
+        })
+        .collect();
+
+    Ok(events)
 }
 
 /// Convert a PROPOSAL_VOTED action to HermesProposalVoted proto.
@@ -194,10 +236,12 @@ mod tests {
             data: vec![],
         };
 
-        let result = convert_proposal_created(&action, &test_meta()).unwrap();
+        let results = convert_proposal_created(&action, &test_meta()).unwrap();
+        assert_eq!(results.len(), 1);
+        let result = &results[0];
         assert_eq!(result.space_id, vec![1; 16]);
         assert_eq!(result.proposal_id, vec![2; 32]);
-        assert!(result.actions.is_empty());
+        assert_eq!(result.action_count, 0);
         assert_eq!(result.voting_mode, VotingMode::Fast as i32);
     }
 

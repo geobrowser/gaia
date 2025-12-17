@@ -21,6 +21,93 @@ pub enum DecodeError {
 }
 
 // ============================================================================
+// DAOSpace Function Selectors
+// ============================================================================
+
+/// Function selectors for DAOSpace contract actions.
+/// These are the first 4 bytes of keccak256(function_signature).
+pub mod selectors {
+    /// addMember(address)
+    pub const ADD_MEMBER: [u8; 4] = [0xca, 0x6d, 0x56, 0xdc];
+    /// removeMember(address)
+    pub const REMOVE_MEMBER: [u8; 4] = [0x0b, 0x1c, 0xa4, 0x9a];
+    /// addEditor(address)
+    pub const ADD_EDITOR: [u8; 4] = [0xe5, 0x97, 0x5b, 0xdc];
+    /// removeEditor(address)
+    pub const REMOVE_EDITOR: [u8; 4] = [0x2d, 0x55, 0xfe, 0xaf];
+    /// publish(bytes32,bytes,bytes)
+    pub const PUBLISH: [u8; 4] = [0x6b, 0x47, 0xf6, 0x1a];
+    /// flag(bytes32,bytes)
+    pub const FLAG: [u8; 4] = [0xfe, 0x1e, 0x30, 0x42];
+    /// unflag(bytes32,bytes)
+    pub const UNFLAG: [u8; 4] = [0xc6, 0x96, 0x84, 0x0f];
+    /// unflagEditor(address)
+    pub const UNFLAG_EDITOR: [u8; 4] = [0x08, 0xf0, 0xdf, 0x71];
+    /// updateVotingSettings((uint256,uint256,uint256,uint256))
+    pub const UPDATE_VOTING_SETTINGS: [u8; 4] = [0xd2, 0x1e, 0x85, 0x41];
+    /// ping(bytes32,bytes32,bytes)
+    pub const PING: [u8; 4] = [0xc7, 0x0d, 0x82, 0x82];
+}
+
+/// Type of action decoded from calldata function selector.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ProposalActionType {
+    Unknown,
+    AddMember,
+    RemoveMember,
+    AddEditor,
+    RemoveEditor,
+    Publish,
+    Flag,
+    Unflag,
+    UnflagEditor,
+    UpdateVotingSettings,
+    Ping,
+}
+
+impl ProposalActionType {
+    /// Decode action type from calldata by matching the function selector.
+    pub fn from_calldata(calldata: &[u8]) -> Self {
+        if calldata.len() < 4 {
+            return Self::Unknown;
+        }
+
+        let selector: [u8; 4] = calldata[0..4].try_into().unwrap_or([0; 4]);
+
+        match selector {
+            selectors::ADD_MEMBER => Self::AddMember,
+            selectors::REMOVE_MEMBER => Self::RemoveMember,
+            selectors::ADD_EDITOR => Self::AddEditor,
+            selectors::REMOVE_EDITOR => Self::RemoveEditor,
+            selectors::PUBLISH => Self::Publish,
+            selectors::FLAG => Self::Flag,
+            selectors::UNFLAG => Self::Unflag,
+            selectors::UNFLAG_EDITOR => Self::UnflagEditor,
+            selectors::UPDATE_VOTING_SETTINGS => Self::UpdateVotingSettings,
+            selectors::PING => Self::Ping,
+            _ => Self::Unknown,
+        }
+    }
+
+    /// Convert to the proto enum value.
+    pub fn to_proto_value(self) -> i32 {
+        match self {
+            Self::Unknown => 0,
+            Self::AddMember => 1,
+            Self::RemoveMember => 2,
+            Self::AddEditor => 3,
+            Self::RemoveEditor => 4,
+            Self::Publish => 5,
+            Self::Flag => 6,
+            Self::Unflag => 7,
+            Self::UnflagEditor => 8,
+            Self::UpdateVotingSettings => 9,
+            Self::Ping => 10,
+        }
+    }
+}
+
+// ============================================================================
 // Solidity Type Definitions
 // ============================================================================
 
@@ -316,5 +403,89 @@ mod tests {
     fn test_decode_flag_data_empty() {
         let result = decode_flag_data(&[]).unwrap();
         assert_eq!(result, "");
+    }
+
+    #[test]
+    fn test_proposal_action_type_from_calldata() {
+        // Test known selectors
+        assert_eq!(
+            ProposalActionType::from_calldata(&selectors::ADD_MEMBER),
+            ProposalActionType::AddMember
+        );
+        assert_eq!(
+            ProposalActionType::from_calldata(&selectors::REMOVE_MEMBER),
+            ProposalActionType::RemoveMember
+        );
+        assert_eq!(
+            ProposalActionType::from_calldata(&selectors::ADD_EDITOR),
+            ProposalActionType::AddEditor
+        );
+        assert_eq!(
+            ProposalActionType::from_calldata(&selectors::REMOVE_EDITOR),
+            ProposalActionType::RemoveEditor
+        );
+        assert_eq!(
+            ProposalActionType::from_calldata(&selectors::PUBLISH),
+            ProposalActionType::Publish
+        );
+        assert_eq!(
+            ProposalActionType::from_calldata(&selectors::FLAG),
+            ProposalActionType::Flag
+        );
+        assert_eq!(
+            ProposalActionType::from_calldata(&selectors::UNFLAG),
+            ProposalActionType::Unflag
+        );
+        assert_eq!(
+            ProposalActionType::from_calldata(&selectors::UNFLAG_EDITOR),
+            ProposalActionType::UnflagEditor
+        );
+        assert_eq!(
+            ProposalActionType::from_calldata(&selectors::UPDATE_VOTING_SETTINGS),
+            ProposalActionType::UpdateVotingSettings
+        );
+        assert_eq!(
+            ProposalActionType::from_calldata(&selectors::PING),
+            ProposalActionType::Ping
+        );
+
+        // Test with extra data after selector
+        let mut calldata_with_args = selectors::ADD_MEMBER.to_vec();
+        calldata_with_args.extend_from_slice(&[0u8; 32]); // padded address arg
+        assert_eq!(
+            ProposalActionType::from_calldata(&calldata_with_args),
+            ProposalActionType::AddMember
+        );
+
+        // Test unknown selector
+        assert_eq!(
+            ProposalActionType::from_calldata(&[0xde, 0xad, 0xbe, 0xef]),
+            ProposalActionType::Unknown
+        );
+
+        // Test too short calldata
+        assert_eq!(
+            ProposalActionType::from_calldata(&[0xca, 0x6d]),
+            ProposalActionType::Unknown
+        );
+        assert_eq!(
+            ProposalActionType::from_calldata(&[]),
+            ProposalActionType::Unknown
+        );
+    }
+
+    #[test]
+    fn test_proposal_action_type_to_proto_value() {
+        assert_eq!(ProposalActionType::Unknown.to_proto_value(), 0);
+        assert_eq!(ProposalActionType::AddMember.to_proto_value(), 1);
+        assert_eq!(ProposalActionType::RemoveMember.to_proto_value(), 2);
+        assert_eq!(ProposalActionType::AddEditor.to_proto_value(), 3);
+        assert_eq!(ProposalActionType::RemoveEditor.to_proto_value(), 4);
+        assert_eq!(ProposalActionType::Publish.to_proto_value(), 5);
+        assert_eq!(ProposalActionType::Flag.to_proto_value(), 6);
+        assert_eq!(ProposalActionType::Unflag.to_proto_value(), 7);
+        assert_eq!(ProposalActionType::UnflagEditor.to_proto_value(), 8);
+        assert_eq!(ProposalActionType::UpdateVotingSettings.to_proto_value(), 9);
+        assert_eq!(ProposalActionType::Ping.to_proto_value(), 10);
     }
 }

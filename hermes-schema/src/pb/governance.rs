@@ -55,7 +55,58 @@ impl ProposalVoteOption {
         }
     }
 }
-/// Action to be executed when proposal passes
+/// Type of action in a proposal, decoded from calldata function selector
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
+#[repr(i32)]
+pub enum ProposalActionType {
+    Unknown = 0,
+    AddMember = 1,
+    RemoveMember = 2,
+    AddEditor = 3,
+    RemoveEditor = 4,
+    Publish = 5,
+    Flag = 6,
+    Unflag = 7,
+    UnflagEditor = 8,
+    UpdateVotingSettings = 9,
+    Ping = 10,
+}
+impl ProposalActionType {
+    /// String value of the enum field names used in the ProtoBuf definition.
+    pub fn as_str_name(&self) -> &'static str {
+        match self {
+            Self::Unknown => "PROPOSAL_ACTION_UNKNOWN",
+            Self::AddMember => "PROPOSAL_ACTION_ADD_MEMBER",
+            Self::RemoveMember => "PROPOSAL_ACTION_REMOVE_MEMBER",
+            Self::AddEditor => "PROPOSAL_ACTION_ADD_EDITOR",
+            Self::RemoveEditor => "PROPOSAL_ACTION_REMOVE_EDITOR",
+            Self::Publish => "PROPOSAL_ACTION_PUBLISH",
+            Self::Flag => "PROPOSAL_ACTION_FLAG",
+            Self::Unflag => "PROPOSAL_ACTION_UNFLAG",
+            Self::UnflagEditor => "PROPOSAL_ACTION_UNFLAG_EDITOR",
+            Self::UpdateVotingSettings => "PROPOSAL_ACTION_UPDATE_VOTING_SETTINGS",
+            Self::Ping => "PROPOSAL_ACTION_PING",
+        }
+    }
+    /// Creates an enum from field names used in the ProtoBuf definition.
+    pub fn from_str_name(value: &str) -> ::core::option::Option<Self> {
+        match value {
+            "PROPOSAL_ACTION_UNKNOWN" => Some(Self::Unknown),
+            "PROPOSAL_ACTION_ADD_MEMBER" => Some(Self::AddMember),
+            "PROPOSAL_ACTION_REMOVE_MEMBER" => Some(Self::RemoveMember),
+            "PROPOSAL_ACTION_ADD_EDITOR" => Some(Self::AddEditor),
+            "PROPOSAL_ACTION_REMOVE_EDITOR" => Some(Self::RemoveEditor),
+            "PROPOSAL_ACTION_PUBLISH" => Some(Self::Publish),
+            "PROPOSAL_ACTION_FLAG" => Some(Self::Flag),
+            "PROPOSAL_ACTION_UNFLAG" => Some(Self::Unflag),
+            "PROPOSAL_ACTION_UNFLAG_EDITOR" => Some(Self::UnflagEditor),
+            "PROPOSAL_ACTION_UPDATE_VOTING_SETTINGS" => Some(Self::UpdateVotingSettings),
+            "PROPOSAL_ACTION_PING" => Some(Self::Ping),
+            _ => None,
+        }
+    }
+}
+/// Action to be executed when proposal passes (raw form)
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct ProposalAction {
     /// 20 bytes - target contract address
@@ -68,8 +119,10 @@ pub struct ProposalAction {
     #[prost(bytes = "vec", tag = "3")]
     pub data: ::prost::alloc::vec::Vec<u8>,
 }
-/// HermesProposalCreated - emitted when a new proposal is created in a space
-/// Data encoding: abi.encode(VotingMode, Action[])
+/// HermesProposalCreated - emitted for EACH action in a proposal
+/// For proposals with multiple actions, multiple events are emitted with the same proposal_id
+/// but different action_index values.
+/// Data encoding: abi.encode(VotingMode, Action\[\])
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct HermesProposalCreated {
     /// 16 bytes - space creating the proposal
@@ -81,10 +134,19 @@ pub struct HermesProposalCreated {
     /// Fast or Slow path
     #[prost(enumeration = "VotingMode", tag = "3")]
     pub voting_mode: i32,
-    /// Actions to execute if proposal passes
-    #[prost(message, repeated, tag = "4")]
-    pub actions: ::prost::alloc::vec::Vec<ProposalAction>,
-    #[prost(message, optional, tag = "5")]
+    /// Index of this action in the proposal (0-based)
+    #[prost(uint32, tag = "4")]
+    pub action_index: u32,
+    /// Total number of actions in the proposal
+    #[prost(uint32, tag = "5")]
+    pub action_count: u32,
+    /// Decoded action type from calldata selector
+    #[prost(enumeration = "ProposalActionType", tag = "6")]
+    pub action_type: i32,
+    /// Raw action data (to, value, calldata)
+    #[prost(message, optional, tag = "7")]
+    pub action: ::core::option::Option<ProposalAction>,
+    #[prost(message, optional, tag = "8")]
     pub meta: ::core::option::Option<super::blockchain_metadata::BlockchainMetadata>,
 }
 /// HermesProposalVoted - emitted when a vote is cast on a proposal

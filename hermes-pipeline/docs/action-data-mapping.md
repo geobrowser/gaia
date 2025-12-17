@@ -17,7 +17,7 @@ Actions emitted from the Space Registry contract have the following structure:
 
 | Action | Kafka Topic | Proto Message |
 |--------|-------------|---------------|
-| PROPOSAL_CREATED | `space.governance` | `HermesProposalCreated` |
+| PROPOSAL_CREATED | `space.governance` | `HermesProposalCreated` (one per action) |
 | PROPOSAL_VOTED | `space.governance` | `HermesProposalVoted` |
 | PROPOSAL_EXECUTED | `space.governance` | `HermesProposalExecuted` |
 
@@ -25,32 +25,67 @@ Actions emitted from the Space Registry contract have the following structure:
 
 **Onchain:**
 - Action: `keccak256('GOVERNANCE.PROPOSAL_CREATED')`
-- Topic: `bytes32(proposalId)`
-- Data: `abi.encode(Operation[], VoteOption)`
+- Topic: `bytes32(proposalId)` - counter-based proposal ID
+- Data: `abi.encode(VotingMode, Action[])`
+
+**VotingMode:** `Fast (0)`, `Slow (1)`
+- Fast path: threshold-based, immediate execution, single action only
+- Slow path: majority voting with voting window, multiple actions allowed
+
+**Action struct:**
+| Field | Type |
+|-------|------|
+| `to` | address (20 bytes) - target contract |
+| `value` | uint256 (32 bytes) - ETH value to send |
+| `data` | bytes - calldata (function selector + encoded args) |
 
 **Proto Output:** `HermesProposalCreated`
+
+One event is emitted **per action** in the proposal. For proposals with multiple actions
+(slow path only), multiple events are emitted with the same `proposal_id` but different
+`action_index` values.
+
 | Field | Source | Type |
 |-------|--------|------|
 | `space_id` | `from_id` | bytes (16) |
 | `proposal_id` | `topic` | bytes (32) |
-| `operations` | Decoded from `data` | `ProposalOperation[]` |
-| `default_vote` | Decoded from `data` | `ProposalVoteOption` enum |
+| `voting_mode` | Decoded from `data` | `VotingMode` enum |
+| `action_index` | Index in actions array | uint32 (0-based) |
+| `action_count` | Length of actions array | uint32 |
+| `action_type` | Decoded from calldata selector | `ProposalActionType` enum |
+| `action` | Raw action data | `ProposalAction` message |
 
-**ProposalOperation:**
+**ProposalAction:**
 | Field | Type |
 |-------|------|
 | `to` | bytes (20) - target address |
 | `value` | bytes (32) - uint256 ETH value |
-| `calldata` | bytes - operation calldata |
+| `data` | bytes - calldata |
 
-**ProposalVoteOption:** `YES (0)`, `NO (1)`, `ABSTAIN (2)`
+**ProposalActionType** (decoded from first 4 bytes of calldata):
+
+| Type | Selector | Function Signature |
+|------|----------|-------------------|
+| `UNKNOWN` | - | Unknown/unrecognized selector |
+| `ADD_MEMBER` | `0xca6d56dc` | `addMember(address)` |
+| `REMOVE_MEMBER` | `0x0b1ca49a` | `removeMember(address)` |
+| `ADD_EDITOR` | `0xe5975bdc` | `addEditor(address)` |
+| `REMOVE_EDITOR` | `0x2d55feaf` | `removeEditor(address)` |
+| `PUBLISH` | `0x6b47f61a` | `publish(bytes32,bytes,bytes)` |
+| `FLAG` | `0xfe1e3042` | `flag(bytes32,bytes)` |
+| `UNFLAG` | `0xc696840f` | `unflag(bytes32,bytes)` |
+| `UNFLAG_EDITOR` | `0x08f0df71` | `unflagEditor(address)` |
+| `UPDATE_VOTING_SETTINGS` | `0xd21e8541` | `updateVotingSettings((uint256,uint256,uint256,uint256))` |
+| `PING` | `0xc70d8282` | `ping(bytes32,bytes32,bytes)` |
 
 #### PROPOSAL_VOTED
 
 **Onchain:**
 - Action: `keccak256('GOVERNANCE.PROPOSAL_VOTED')`
 - Topic: `bytes32(proposalId)`
-- Data: `abi.encode(bytes32(proposalId), VoteOption)`
+- Data: `abi.encode(uint256(proposalId), VoteOption)`
+
+**VoteOption:** `None (0)`, `Yes (1)`, `No (2)`, `Abstain (3)`
 
 **Proto Output:** `HermesProposalVoted`
 | Field | Source | Type |
@@ -65,7 +100,7 @@ Actions emitted from the Space Registry contract have the following structure:
 **Onchain:**
 - Action: `keccak256('GOVERNANCE.PROPOSAL_EXECUTED')`
 - Topic: `bytes32(proposalId)`
-- Data: `abi.encode(bytes32(proposalId))` (redundant)
+- Data: `abi.encode(uint256(proposalId))` (redundant)
 
 **Proto Output:** `HermesProposalExecuted`
 | Field | Source | Type |
