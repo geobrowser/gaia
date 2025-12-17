@@ -1,10 +1,10 @@
 # SDK
 
-A Rust SDK for interacting with Fe knowledge graph.
+A Rust SDK for interacting with Geo knowledge graph.
 
 ## Overview
 
-Entities in The Graph have attributes that provide semantic meaning. Each type of attribute has a unique identifier. This SDK provides constants for well-known attribute IDs, such as name and description attributes.
+Entities in Geo have attributes that provide semantic meaning. Each type of attribute has a unique identifier. This SDK provides constants for well-known attribute IDs, such as name and description attributes.
 
 ## Usage
 
