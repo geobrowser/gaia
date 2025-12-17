@@ -7,6 +7,7 @@
 
 mod mock;
 
+#[allow(unused_imports)] // Re-exported for consumers (used in main.rs)
 pub use mock::MockIpfsCache;
 
 use std::sync::Arc;

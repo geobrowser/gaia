@@ -8,5 +8,5 @@ pub mod decode;
 pub mod pipelines;
 
 // Re-export commonly used types
-pub use decode::{decode_address_arg, ProposalActionType};
+pub use decode::{ProposalActionType, decode_address_arg};
 pub use pipelines::BlockMetadata;

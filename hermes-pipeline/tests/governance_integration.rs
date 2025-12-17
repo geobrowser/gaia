@@ -3,11 +3,11 @@
 //! These tests verify end-to-end decoding of governance events from the mock relay
 //! through the pipeline transformation layer.
 
-use hermes_pipeline::pipelines::governance;
 use hermes_pipeline::pipelines::BlockMetadata;
+use hermes_pipeline::pipelines::governance;
 use hermes_relay::source::mock_events::{
-    make_id, make_proposal_id, proposal_created, proposal_voted, ProposalAction, VoteOption,
-    VotingMode,
+    ProposalAction, VoteOption, VotingMode, make_id, make_proposal_id, proposal_created,
+    proposal_voted,
 };
 use hermes_schema::pb::governance::{ProposalActionType, ProposalVoteOption};
 
@@ -48,10 +48,7 @@ fn test_proposal_created_fast_path_add_member() {
     );
     assert_eq!(event.action_count, 1);
     assert_eq!(event.action_index, 0);
-    assert_eq!(
-        event.action_type,
-        ProposalActionType::AddMember as i32
-    );
+    assert_eq!(event.action_type, ProposalActionType::AddMember as i32);
 
     // Verify the decoded target_address
     let proposal_action = event.action.as_ref().unwrap();
@@ -76,10 +73,7 @@ fn test_proposal_created_fast_path_add_editor() {
     assert_eq!(result.proposals_created.len(), 1);
     let event = &result.proposals_created[0];
 
-    assert_eq!(
-        event.action_type,
-        ProposalActionType::AddEditor as i32
-    );
+    assert_eq!(event.action_type, ProposalActionType::AddEditor as i32);
 
     let proposal_action = event.action.as_ref().unwrap();
     assert_eq!(proposal_action.target_address, editor_address.to_vec());
@@ -161,7 +155,10 @@ fn test_proposal_voted_no() {
     let result = governance::transform(&[action], &test_meta()).unwrap();
 
     assert_eq!(result.proposals_voted.len(), 1);
-    assert_eq!(result.proposals_voted[0].vote, ProposalVoteOption::No as i32);
+    assert_eq!(
+        result.proposals_voted[0].vote,
+        ProposalVoteOption::No as i32
+    );
 }
 
 #[test]
@@ -225,5 +222,8 @@ fn test_full_governance_flow() {
 
     // Verify execution
     assert_eq!(result.proposals_executed[0].space_id, space_id.to_vec());
-    assert_eq!(result.proposals_executed[0].proposal_id, proposal_id.to_vec());
+    assert_eq!(
+        result.proposals_executed[0].proposal_id,
+        proposal_id.to_vec()
+    );
 }

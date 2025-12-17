@@ -157,6 +157,7 @@ type ProposalCreatedDataType = sol! { (uint8, Action[]) };
 // PROPOSAL_VOTED: abi.encode(uint256(proposalId), VoteOption)
 type ProposalVotedDataType = sol! { (uint256, uint8) };
 type VoteDataType = sol! { (uint16, bytes16, bytes16) };
+#[allow(dead_code)] // Prepared for future EDITS_PUBLISHED decoding
 type EditsPublishedDataType = sol! { (bytes, bytes) };
 
 // ============================================================================
@@ -216,6 +217,7 @@ pub fn decode_proposal_created(data: &[u8]) -> Result<ProposalCreatedData, Decod
 #[derive(Debug, Clone)]
 pub struct ProposalVotedData {
     /// Proposal ID (32 bytes).
+    #[allow(dead_code)] // Available for callers who need it
     pub proposal_id: Vec<u8>,
     /// Vote option (0=Yes, 1=No, 2=Abstain).
     pub vote: u8,
@@ -297,6 +299,7 @@ pub fn decode_topic_declared(data: &[u8]) -> Result<Vec<u8>, DecodeError> {
 }
 
 /// Decoded edits published data.
+#[allow(dead_code)] // Prepared for future EDITS_PUBLISHED decoding
 #[derive(Debug, Clone)]
 pub struct EditsPublishedData {
     /// Content URI (e.g., IPFS hash).
@@ -308,6 +311,7 @@ pub struct EditsPublishedData {
 /// Decode EDITS_PUBLISHED data.
 ///
 /// Encoding: `abi.encode(bytes(editsContentUri), bytes(editsMetadata))`
+#[allow(dead_code)] // Prepared for future EDITS_PUBLISHED decoding
 pub fn decode_edits_published(data: &[u8]) -> Result<EditsPublishedData, DecodeError> {
     if data.is_empty() {
         return Ok(EditsPublishedData {

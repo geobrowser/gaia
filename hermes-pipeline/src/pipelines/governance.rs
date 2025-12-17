@@ -16,7 +16,7 @@ use hermes_schema::pb::governance::{
     ProposalVoteOption, VotingMode,
 };
 
-use crate::decode::{self, decode_address_arg, ProposalActionType};
+use crate::decode::{self, ProposalActionType, decode_address_arg};
 
 use super::BlockMetadata;
 
