@@ -20,10 +20,13 @@ The crate uses a trait-based design for dependency injection, allowing:
 ```
 ┌─────────────────────────────────────┐
 │   SearchIndexProvider               │  (trait)
+│  - ensure_index_exists()            │  (setup)
 │  - update_document()                │  (upsert: create or update)
 │  - delete_document()                │
 │  - bulk_update_documents()          │
 │  - bulk_delete_documents()          │
+│  - unset_document_properties()      │
+│  - bulk_unset_properties()          │
 └─────────────────────────────────────┘
                   │
                   ▼
