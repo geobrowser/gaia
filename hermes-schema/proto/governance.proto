@@ -4,27 +4,34 @@ package governance;
 
 import "blockchain_metadata.proto";
 
-// Vote option for governance proposals
-enum ProposalVoteOption {
-  VOTE_OPTION_YES = 0;
-  VOTE_OPTION_NO = 1;
-  VOTE_OPTION_ABSTAIN = 2;
+// Voting mode for proposals
+enum VotingMode {
+  VOTING_MODE_FAST = 0;   // Fast path - threshold-based, immediate execution
+  VOTING_MODE_SLOW = 1;   // Slow path - majority voting with voting window
 }
 
-// Operation to be executed when proposal passes
-message ProposalOperation {
-  bytes to = 1;        // 20 bytes - target address
+// Vote option for governance proposals
+enum ProposalVoteOption {
+  VOTE_OPTION_NONE = 0;
+  VOTE_OPTION_YES = 1;
+  VOTE_OPTION_NO = 2;
+  VOTE_OPTION_ABSTAIN = 3;
+}
+
+// Action to be executed when proposal passes
+message ProposalAction {
+  bytes to = 1;        // 20 bytes - target contract address
   bytes value = 2;     // 32 bytes - uint256 ETH value to send
-  bytes calldata = 3;  // calldata for the operation
+  bytes data = 3;      // calldata (function selector + encoded args)
 }
 
 // HermesProposalCreated - emitted when a new proposal is created in a space
-// Data encoding: abi.encode(Operation[], VoteOption)
+// Data encoding: abi.encode(VotingMode, Action[])
 message HermesProposalCreated {
   bytes space_id = 1;                                   // 16 bytes - space creating the proposal
   bytes proposal_id = 2;                                // 32 bytes - unique proposal identifier (from topic field)
-  repeated ProposalOperation operations = 3;            // Operations to execute if proposal passes
-  ProposalVoteOption default_vote = 4;                  // Default vote option
+  VotingMode voting_mode = 3;                           // Fast or Slow path
+  repeated ProposalAction actions = 4;                  // Actions to execute if proposal passes
   blockchain_metadata.BlockchainMetadata meta = 5;
 }
 

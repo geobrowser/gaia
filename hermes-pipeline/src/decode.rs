@@ -25,9 +25,9 @@ pub enum DecodeError {
 // ============================================================================
 
 sol! {
-    /// Operation to be executed when a proposal passes.
+    /// Action to be executed when a proposal passes.
     #[derive(Debug)]
-    struct Operation {
+    struct Action {
         address to;
         uint256 value;
         bytes data;
@@ -35,8 +35,10 @@ sol! {
 }
 
 // Type aliases for ABI decoding
-type ProposalCreatedDataType = sol! { (Operation[], uint8) };
-type ProposalVotedDataType = sol! { (bytes32, uint8) };
+// PROPOSAL_CREATED: abi.encode(VotingMode, Action[])
+type ProposalCreatedDataType = sol! { (uint8, Action[]) };
+// PROPOSAL_VOTED: abi.encode(uint256(proposalId), VoteOption)
+type ProposalVotedDataType = sol! { (uint256, uint8) };
 type VoteDataType = sol! { (uint16, bytes16, bytes16) };
 type EditsPublishedDataType = sol! { (bytes, bytes) };
 
@@ -47,49 +49,49 @@ type EditsPublishedDataType = sol! { (bytes, bytes) };
 /// Decoded proposal creation data.
 #[derive(Debug, Clone)]
 pub struct ProposalCreatedData {
-    /// Operations to execute if proposal passes.
-    pub operations: Vec<ProposalOperation>,
-    /// Default vote option (0=Yes, 1=No, 2=Abstain).
-    pub default_vote: u8,
+    /// Voting mode (0=Fast, 1=Slow).
+    pub voting_mode: u8,
+    /// Actions to execute if proposal passes.
+    pub actions: Vec<ProposalAction>,
 }
 
-/// A single operation in a proposal.
+/// A single action in a proposal.
 #[derive(Debug, Clone)]
-pub struct ProposalOperation {
-    /// Target address (20 bytes).
+pub struct ProposalAction {
+    /// Target contract address (20 bytes).
     pub to: Vec<u8>,
     /// ETH value to send (32 bytes, big-endian).
     pub value: Vec<u8>,
-    /// Calldata for the operation.
-    pub calldata: Vec<u8>,
+    /// Calldata (function selector + encoded args).
+    pub data: Vec<u8>,
 }
 
 /// Decode PROPOSAL_CREATED data.
 ///
-/// Encoding: `abi.encode(Operation[], VoteOption)`
+/// Encoding: `abi.encode(VotingMode, Action[])`
 pub fn decode_proposal_created(data: &[u8]) -> Result<ProposalCreatedData, DecodeError> {
     if data.is_empty() {
         return Ok(ProposalCreatedData {
-            operations: vec![],
-            default_vote: 0,
+            voting_mode: 0,
+            actions: vec![],
         });
     }
 
-    let (operations, vote_option) = ProposalCreatedDataType::abi_decode(data)
+    let (voting_mode, actions) = ProposalCreatedDataType::abi_decode(data)
         .map_err(|e| DecodeError::AbiDecode(e.to_string()))?;
 
-    let operations = operations
+    let actions = actions
         .into_iter()
-        .map(|op| ProposalOperation {
-            to: op.to.as_slice().to_vec(),
-            value: op.value.to_be_bytes_vec(),
-            calldata: op.data.to_vec(),
+        .map(|action| ProposalAction {
+            to: action.to.as_slice().to_vec(),
+            value: action.value.to_be_bytes_vec(),
+            data: action.data.to_vec(),
         })
         .collect();
 
     Ok(ProposalCreatedData {
-        operations,
-        default_vote: vote_option,
+        voting_mode,
+        actions,
     })
 }
 
@@ -104,7 +106,7 @@ pub struct ProposalVotedData {
 
 /// Decode PROPOSAL_VOTED data.
 ///
-/// Encoding: `abi.encode(bytes32(proposalId), VoteOption)`
+/// Encoding: `abi.encode(uint256(proposalId), VoteOption)`
 pub fn decode_proposal_voted(data: &[u8]) -> Result<ProposalVotedData, DecodeError> {
     if data.is_empty() {
         return Err(DecodeError::DataTooShort {
@@ -117,7 +119,7 @@ pub fn decode_proposal_voted(data: &[u8]) -> Result<ProposalVotedData, DecodeErr
         .map_err(|e| DecodeError::AbiDecode(e.to_string()))?;
 
     Ok(ProposalVotedData {
-        proposal_id: proposal_id.to_vec(),
+        proposal_id: proposal_id.to_be_bytes_vec(),
         vote: vote_option,
     })
 }
@@ -233,35 +235,35 @@ mod tests {
     #[test]
     fn test_decode_proposal_created_empty() {
         let result = decode_proposal_created(&[]).unwrap();
-        assert!(result.operations.is_empty());
-        assert_eq!(result.default_vote, 0);
+        assert!(result.actions.is_empty());
+        assert_eq!(result.voting_mode, 0);
     }
 
     #[test]
     fn test_decode_proposal_created() {
-        // Create test data using the type alias
-        let ops = vec![Operation {
+        // Create test data using the Action struct
+        let actions = vec![Action {
             to: Address::ZERO,
             value: U256::from(1000u64),
             data: vec![1, 2, 3].into(),
         }];
-        let vote_option = 1u8;
-        let encoded = ProposalCreatedDataType::abi_encode(&(ops, vote_option));
+        let voting_mode = 1u8; // Slow
+        let encoded = ProposalCreatedDataType::abi_encode(&(voting_mode, actions));
 
         let result = decode_proposal_created(&encoded).unwrap();
-        assert_eq!(result.operations.len(), 1);
-        assert_eq!(result.operations[0].to, Address::ZERO.as_slice().to_vec());
-        assert_eq!(result.default_vote, 1);
+        assert_eq!(result.actions.len(), 1);
+        assert_eq!(result.actions[0].to, Address::ZERO.as_slice().to_vec());
+        assert_eq!(result.voting_mode, 1);
     }
 
     #[test]
     fn test_decode_proposal_voted() {
-        let proposal_id = FixedBytes::<32>::from([1u8; 32]);
-        let vote_option = 2u8;
+        let proposal_id = U256::from(12345u64);
+        let vote_option = 2u8; // No
         let encoded = ProposalVotedDataType::abi_encode(&(proposal_id, vote_option));
 
         let result = decode_proposal_voted(&encoded).unwrap();
-        assert_eq!(result.proposal_id, vec![1u8; 32]);
+        assert_eq!(result.proposal_id, proposal_id.to_be_bytes_vec());
         assert_eq!(result.vote, 2);
     }
 

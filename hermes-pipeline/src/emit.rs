@@ -451,12 +451,12 @@ mod tests {
 
     #[test]
     fn test_proposal_created_key() {
-        use hermes_schema::pb::governance::ProposalVoteOption;
+        use hermes_schema::pb::governance::VotingMode;
         let event = HermesProposalCreated {
             space_id: vec![0xAB; 16],
             proposal_id: vec![0xCD; 32],
-            operations: vec![],
-            default_vote: ProposalVoteOption::Yes as i32,
+            actions: vec![],
+            voting_mode: VotingMode::Fast as i32,
             meta: None,
         };
         assert_eq!(event.key(), vec![0xAB; 16]);
