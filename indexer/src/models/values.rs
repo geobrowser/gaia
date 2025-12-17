@@ -60,7 +60,7 @@ impl ValuesModel {
         // the edit.
         let original_count = value_ops.len();
         let squashed = squash_values(&value_ops);
-        
+
         if squashed.len() < original_count {
             debug!(
                 original_count,
@@ -168,7 +168,7 @@ where
                                 skipped_values += 1;
                             }
                         }
-                        
+
                         if skipped_values > 0 {
                             warn!(
                                 entity_id = %entity_id,
@@ -192,8 +192,7 @@ where
                         let entity_id = Uuid::from_bytes(entity_id_bytes);
 
                         for property in &entity.properties {
-                            let property_id_bytes =
-                                id::transform_id_bytes(property.clone());
+                            let property_id_bytes = id::transform_id_bytes(property.clone());
 
                             if let Err(_) = property_id_bytes {
                                 warn!(
@@ -204,8 +203,7 @@ where
                                 continue;
                             }
 
-                            let property_id =
-                                Uuid::from_bytes(property_id_bytes.unwrap());
+                            let property_id = Uuid::from_bytes(property_id_bytes.unwrap());
 
                             values.push(ValueOp {
                                 id: derive_value_id(&entity_id, &property_id, space_id),
@@ -222,11 +220,11 @@ where
                                 point: None,
                             });
                         }
-                    },
+                    }
                     Err(_) => warn!(
                         entity_bytes = ?entity.id,
                         "[Values][UnsetEntityValues] Could not transform Vec<u8> for entity.id"
-                    )
+                    ),
                 }
             }
             _ => {}

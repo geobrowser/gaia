@@ -5,9 +5,9 @@ package topics;
 import "blockchain_metadata.proto";
 
 // HermesTopicDeclared - space declares a new topic
+// Data encoding: abi.encode(bytes16(topicId))
 message HermesTopicDeclared {
-  bytes space_id = 1;           // 16 bytes - space declaring topic
-  bytes topic_id = 2;           // 32 bytes - keccak256 of topic name
-  bytes data = 3;               // Topic metadata (name, description)
-  blockchain_metadata.BlockchainMetadata meta = 4;
+  bytes space_id = 1;             // 16 bytes - space declaring topic
+  bytes topic_id = 2;             // 16 bytes - topic UUID
+  blockchain_metadata.BlockchainMetadata meta = 3;
 }

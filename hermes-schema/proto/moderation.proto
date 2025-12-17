@@ -5,33 +5,39 @@ package moderation;
 import "blockchain_metadata.proto";
 
 // HermesEditorFlagged - editor flagged within a space
+// Data: empty
 message HermesEditorFlagged {
   bytes space_id = 1;           // 16 bytes - space containing editor
   bytes editor_account = 2;     // 20 bytes - flagged editor address
-  bytes data = 3;               // Flag details/reason
-  blockchain_metadata.BlockchainMetadata meta = 4;
+  blockchain_metadata.BlockchainMetadata meta = 3;
 }
 
 // HermesEditorUnflagged - editor unflagged within a space
+// Data: empty
 message HermesEditorUnflagged {
   bytes space_id = 1;           // 16 bytes - space containing editor
   bytes editor_account = 2;     // 20 bytes - unflagged editor address
-  bytes data = 3;               // Unflag details
-  blockchain_metadata.BlockchainMetadata meta = 4;
+  blockchain_metadata.BlockchainMetadata meta = 3;
 }
 
 // HermesContentFlagged - content flagged by a space
+// Topic field: bytes32(TOPIC_UUID) - optional
+// Data encoding: abi.encode(bytes(flaggedUri))
 message HermesContentFlagged {
   bytes flagger_id = 1;         // 16 bytes - space flagging content
   bytes target_space_id = 2;    // 16 bytes - space whose content is flagged
-  bytes data = 3;               // Flag details (entity type, ID, reason)
-  blockchain_metadata.BlockchainMetadata meta = 4;
+  bytes topic_id = 3;           // 32 bytes - optional topic UUID
+  string uri = 4;               // Decoded URI of flagged content
+  blockchain_metadata.BlockchainMetadata meta = 5;
 }
 
 // HermesContentUnflagged - content unflagged by a space
+// Topic field: bytes32(TOPIC_UUID) - optional
+// Data encoding: abi.encode(bytes(unflaggedUri))
 message HermesContentUnflagged {
   bytes unflagger_id = 1;       // 16 bytes - space unflagging content
   bytes target_space_id = 2;    // 16 bytes - space whose content is unflagged
-  bytes data = 3;               // Unflag details
-  blockchain_metadata.BlockchainMetadata meta = 4;
+  bytes topic_id = 3;           // 32 bytes - optional topic UUID
+  string uri = 4;               // Decoded URI of unflagged content
+  blockchain_metadata.BlockchainMetadata meta = 5;
 }

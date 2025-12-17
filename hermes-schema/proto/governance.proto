@@ -4,27 +4,44 @@ package governance;
 
 import "blockchain_metadata.proto";
 
+// Vote option for governance proposals
+enum ProposalVoteOption {
+  VOTE_OPTION_YES = 0;
+  VOTE_OPTION_NO = 1;
+  VOTE_OPTION_ABSTAIN = 2;
+}
+
+// Operation to be executed when proposal passes
+message ProposalOperation {
+  bytes to = 1;        // 20 bytes - target address
+  bytes value = 2;     // 32 bytes - uint256 ETH value to send
+  bytes calldata = 3;  // calldata for the operation
+}
+
 // HermesProposalCreated - emitted when a new proposal is created in a space
+// Data encoding: abi.encode(Operation[], VoteOption)
 message HermesProposalCreated {
-  bytes space_id = 1;       // 16 bytes - space creating the proposal
-  bytes proposal_id = 2;    // 32 bytes - unique proposal identifier (from topic field)
-  bytes data = 3;           // proposal metadata (title, description, voting period, etc.)
-  blockchain_metadata.BlockchainMetadata meta = 4;
+  bytes space_id = 1;                                   // 16 bytes - space creating the proposal
+  bytes proposal_id = 2;                                // 32 bytes - unique proposal identifier (from topic field)
+  repeated ProposalOperation operations = 3;            // Operations to execute if proposal passes
+  ProposalVoteOption default_vote = 4;                  // Default vote option
+  blockchain_metadata.BlockchainMetadata meta = 5;
 }
 
 // HermesProposalVoted - emitted when a vote is cast on a proposal
+// Data encoding: abi.encode(bytes32(proposalId), VoteOption)
 message HermesProposalVoted {
-  bytes voter_id = 1;       // 16 bytes - space casting the vote (from from_id)
-  bytes space_id = 2;       // 16 bytes - space that owns the proposal (from to_id)
-  bytes proposal_id = 3;    // 32 bytes - proposal being voted on (from topic field)
-  bytes data = 4;           // vote choice and any additional vote data
+  bytes voter_id = 1;                                   // 16 bytes - space casting the vote (from from_id)
+  bytes space_id = 2;                                   // 16 bytes - space that owns the proposal (from to_id)
+  bytes proposal_id = 3;                                // 32 bytes - proposal being voted on (from topic field)
+  ProposalVoteOption vote = 4;                          // The vote cast
   blockchain_metadata.BlockchainMetadata meta = 5;
 }
 
 // HermesProposalExecuted - emitted when a passed proposal is executed
+// Data encoding: abi.encode(bytes32(proposalId))
 message HermesProposalExecuted {
-  bytes space_id = 1;       // 16 bytes - space executing the proposal
-  bytes proposal_id = 2;    // 32 bytes - executed proposal identifier (from topic field)
-  bytes data = 3;           // execution result/details
-  blockchain_metadata.BlockchainMetadata meta = 4;
+  bytes space_id = 1;                                   // 16 bytes - space executing the proposal
+  bytes proposal_id = 2;                                // 32 bytes - executed proposal identifier (from topic field)
+  blockchain_metadata.BlockchainMetadata meta = 3;
 }

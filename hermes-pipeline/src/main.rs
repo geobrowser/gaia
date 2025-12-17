@@ -31,6 +31,7 @@
 //! - `KAFKA_SSL_CA_PEM` - Custom CA cert for SSL (optional)
 
 mod cache;
+mod decode;
 mod emit;
 mod pipelines;
 

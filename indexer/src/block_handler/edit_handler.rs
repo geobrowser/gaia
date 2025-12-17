@@ -35,7 +35,7 @@ where
     // This function is kept for compatibility with the existing flow.
 
     let initial_count = created_values.len();
-    
+
     // Additionally check that values have some content in at least one type field
     let validated: Vec<ValueOp> = created_values
         .into_iter()
@@ -45,7 +45,7 @@ where
                 || value.boolean.is_some()
                 || value.time.is_some()
                 || value.point.is_some();
-            
+
             if !has_content {
                 debug!(
                     value_id = %value.id,
@@ -54,11 +54,11 @@ where
                     "Filtering out value with no populated fields"
                 );
             }
-            
+
             has_content
         })
         .collect();
-    
+
     if validated.len() < initial_count {
         warn!(
             initial_count,
@@ -67,7 +67,7 @@ where
             "Some values were filtered out due to empty fields"
         );
     }
-    
+
     validated
 }
 
@@ -95,7 +95,7 @@ where
         let _block_number = block_metadata.block_number;
         let _space_id = preprocessed_edit.space_id;
         let _cid = preprocessed_edit.cid.clone();
-        
+
         let handle = tokio::spawn({
             let preprocessed_edit = preprocessed_edit.clone();
             let storage = storage.clone();
@@ -242,7 +242,8 @@ where
                         "Error committing transaction for edit"
                     );
                 }
-            }.instrument(edit_span)
+            }
+            .instrument(edit_span)
         })
         .await;
 

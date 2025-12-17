@@ -2567,6 +2567,7 @@ dependencies = [
 name = "hermes-pipeline"
 version = "0.1.0"
 dependencies = [
+ "alloy",
  "anyhow",
  "async-trait",
  "dotenv",

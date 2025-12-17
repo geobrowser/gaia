@@ -7,19 +7,19 @@ use std::fmt;
 pub enum ValidationError {
     /// Input is empty
     EmptyInput,
-    
+
     /// Input contains invalid characters
     InvalidCharacters,
-    
+
     /// Input has multiple decimal points
     MultipleDecimalPoints,
-    
+
     /// Input cannot be parsed as the target type
     ParseFailure,
-    
+
     /// Input is missing a required decimal point
     MissingDecimalPoint,
-    
+
     /// Input has incorrect number of decimal places
     IncorrectDecimalPlaces(usize, usize), // (expected, found)
 }

@@ -8,4 +8,3 @@ pub mod search_result;
 pub use entity_document::EntityDocument;
 pub use search_query::{SearchQuery, SearchScope};
 pub use search_result::{SearchResponse, SearchResult};
-

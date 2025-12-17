@@ -1,14 +1,17 @@
 //! Pipeline: PROPOSAL_CREATED, PROPOSAL_VOTED, PROPOSAL_EXECUTED → space.governance
 //!
-//! Converts governance actions to typed Hermes events.
+//! Converts governance actions to typed Hermes events with decoded data.
 
 use anyhow::Result;
-use hermes_instrumentation::debug_span;
+use hermes_instrumentation::{debug_span, warn};
 
 use hermes_relay::{Action, actions};
 use hermes_schema::pb::governance::{
-    HermesProposalCreated, HermesProposalExecuted, HermesProposalVoted,
+    HermesProposalCreated, HermesProposalExecuted, HermesProposalVoted, ProposalOperation,
+    ProposalVoteOption,
 };
+
+use crate::decode;
 
 use super::BlockMetadata;
 
@@ -71,15 +74,46 @@ pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformRe
 /// - from_id: space_id (16 bytes) - space creating the proposal
 /// - to_id: unused
 /// - topic: proposal_id (32 bytes) - unique proposal identifier
-/// - data: proposal metadata (title, description, voting period, etc.)
+/// - data: abi.encode(Operation[], VoteOption)
 fn convert_proposal_created(
     action: &Action,
     meta: &BlockMetadata,
 ) -> Result<HermesProposalCreated> {
+    // Decode the data field
+    let (operations, default_vote) = match decode::decode_proposal_created(&action.data) {
+        Ok(decoded) => {
+            let ops: Vec<ProposalOperation> = decoded
+                .operations
+                .into_iter()
+                .map(|op| ProposalOperation {
+                    to: op.to,
+                    value: op.value,
+                    calldata: op.calldata,
+                })
+                .collect();
+            let vote = match decoded.default_vote {
+                0 => ProposalVoteOption::Yes,
+                1 => ProposalVoteOption::No,
+                2 => ProposalVoteOption::Abstain,
+                _ => ProposalVoteOption::Yes, // Default to Yes for unknown values
+            };
+            (ops, vote)
+        }
+        Err(e) => {
+            warn!(
+                error = %e,
+                proposal_id = %hex::encode(&action.topic),
+                "Failed to decode proposal created data"
+            );
+            (vec![], ProposalVoteOption::Yes)
+        }
+    };
+
     Ok(HermesProposalCreated {
         space_id: action.from_id.clone(),
         proposal_id: action.topic.clone(),
-        data: action.data.clone(),
+        operations,
+        default_vote: default_vote as i32,
         meta: Some(meta.to_proto()),
     })
 }
@@ -90,13 +124,31 @@ fn convert_proposal_created(
 /// - from_id: voter_id (16 bytes) - space casting the vote
 /// - to_id: space_id (16 bytes) - space that owns the proposal
 /// - topic: proposal_id (32 bytes) - proposal being voted on
-/// - data: vote choice and additional vote data
+/// - data: abi.encode(bytes32(proposalId), VoteOption)
 fn convert_proposal_voted(action: &Action, meta: &BlockMetadata) -> Result<HermesProposalVoted> {
+    // Decode the data field
+    let vote = match decode::decode_proposal_voted(&action.data) {
+        Ok(decoded) => match decoded.vote {
+            0 => ProposalVoteOption::Yes,
+            1 => ProposalVoteOption::No,
+            2 => ProposalVoteOption::Abstain,
+            _ => ProposalVoteOption::Yes,
+        },
+        Err(e) => {
+            warn!(
+                error = %e,
+                proposal_id = %hex::encode(&action.topic),
+                "Failed to decode proposal voted data"
+            );
+            ProposalVoteOption::Yes
+        }
+    };
+
     Ok(HermesProposalVoted {
         voter_id: action.from_id.clone(),
         space_id: action.to_id.clone(),
         proposal_id: action.topic.clone(),
-        data: action.data.clone(),
+        vote: vote as i32,
         meta: Some(meta.to_proto()),
     })
 }
@@ -107,7 +159,7 @@ fn convert_proposal_voted(action: &Action, meta: &BlockMetadata) -> Result<Herme
 /// - from_id: space_id (16 bytes) - space executing the proposal
 /// - to_id: unused
 /// - topic: proposal_id (32 bytes) - executed proposal identifier
-/// - data: execution result/details
+/// - data: abi.encode(bytes32(proposalId)) - redundant, not needed
 fn convert_proposal_executed(
     action: &Action,
     meta: &BlockMetadata,
@@ -115,7 +167,6 @@ fn convert_proposal_executed(
     Ok(HermesProposalExecuted {
         space_id: action.from_id.clone(),
         proposal_id: action.topic.clone(),
-        data: action.data.clone(),
         meta: Some(meta.to_proto()),
     })
 }
@@ -133,37 +184,39 @@ mod tests {
     }
 
     #[test]
-    fn test_convert_proposal_created() {
+    fn test_convert_proposal_created_empty_data() {
         let action = Action {
             from_id: vec![1; 16],
             to_id: vec![],
             action: actions::PROPOSAL_CREATED.to_vec(),
             topic: vec![2; 32],
-            data: vec![3, 4, 5],
+            data: vec![],
         };
 
         let result = convert_proposal_created(&action, &test_meta()).unwrap();
         assert_eq!(result.space_id, vec![1; 16]);
         assert_eq!(result.proposal_id, vec![2; 32]);
-        assert_eq!(result.data, vec![3, 4, 5]);
-        assert!(result.meta.is_some());
+        assert!(result.operations.is_empty());
+        assert_eq!(result.default_vote, ProposalVoteOption::Yes as i32);
     }
 
     #[test]
-    fn test_convert_proposal_voted() {
+    fn test_convert_proposal_voted_empty_data() {
+        // Empty data should default to Yes vote
         let action = Action {
-            from_id: vec![1; 16], // voter
-            to_id: vec![2; 16],   // space
+            from_id: vec![1; 16],
+            to_id: vec![2; 16],
             action: actions::PROPOSAL_VOTED.to_vec(),
-            topic: vec![3; 32],  // proposal
-            data: vec![4, 5, 6], // vote data
+            topic: vec![3; 32],
+            data: vec![],
         };
 
         let result = convert_proposal_voted(&action, &test_meta()).unwrap();
         assert_eq!(result.voter_id, vec![1; 16]);
         assert_eq!(result.space_id, vec![2; 16]);
         assert_eq!(result.proposal_id, vec![3; 32]);
-        assert_eq!(result.data, vec![4, 5, 6]);
+        // Default vote when decode fails
+        assert_eq!(result.vote, ProposalVoteOption::Yes as i32);
     }
 
     #[test]
@@ -173,19 +226,17 @@ mod tests {
             to_id: vec![],
             action: actions::PROPOSAL_EXECUTED.to_vec(),
             topic: vec![2; 32],
-            data: vec![7, 8, 9],
+            data: vec![],
         };
 
         let result = convert_proposal_executed(&action, &test_meta()).unwrap();
         assert_eq!(result.space_id, vec![1; 16]);
         assert_eq!(result.proposal_id, vec![2; 32]);
-        assert_eq!(result.data, vec![7, 8, 9]);
     }
 
     #[test]
     fn test_transform_filters_actions() {
         let actions = vec![
-            // Should be included
             Action {
                 from_id: vec![1; 16],
                 to_id: vec![],
@@ -193,7 +244,6 @@ mod tests {
                 topic: vec![2; 32],
                 data: vec![],
             },
-            // Should be included
             Action {
                 from_id: vec![3; 16],
                 to_id: vec![4; 16],
@@ -201,7 +251,6 @@ mod tests {
                 topic: vec![5; 32],
                 data: vec![],
             },
-            // Should be included
             Action {
                 from_id: vec![6; 16],
                 to_id: vec![],

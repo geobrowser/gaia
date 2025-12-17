@@ -451,10 +451,12 @@ mod tests {
 
     #[test]
     fn test_proposal_created_key() {
+        use hermes_schema::pb::governance::ProposalVoteOption;
         let event = HermesProposalCreated {
             space_id: vec![0xAB; 16],
             proposal_id: vec![0xCD; 32],
-            data: vec![],
+            operations: vec![],
+            default_vote: ProposalVoteOption::Yes as i32,
             meta: None,
         };
         assert_eq!(event.key(), vec![0xAB; 16]);
@@ -462,11 +464,12 @@ mod tests {
 
     #[test]
     fn test_proposal_voted_key() {
+        use hermes_schema::pb::governance::ProposalVoteOption;
         let event = HermesProposalVoted {
             voter_id: vec![0x11; 16],
             space_id: vec![0xAB; 16],
             proposal_id: vec![0xCD; 32],
-            data: vec![],
+            vote: ProposalVoteOption::Yes as i32,
             meta: None,
         };
         // Should key by space_id, not voter_id
@@ -478,7 +481,6 @@ mod tests {
         let event = HermesProposalExecuted {
             space_id: vec![0xAB; 16],
             proposal_id: vec![0xCD; 32],
-            data: vec![],
             meta: None,
         };
         assert_eq!(event.key(), vec![0xAB; 16]);
@@ -527,7 +529,9 @@ mod tests {
             object_type: vec![0x00, 0x00, 0x00, 0x01],
             object_id: vec![0xAB; 16],
             direction: VoteDirection::Up as i32,
-            data: vec![],
+            version: 1,
+            group_id: vec![0; 16],
+            space_pov: vec![0; 16],
             meta: None,
         };
         // Should key by object_id for partitioning

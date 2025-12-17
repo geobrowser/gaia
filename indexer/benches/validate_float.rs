@@ -3,20 +3,20 @@ use indexer::validators::validate_float::{validate_float, validate_float_compreh
 
 fn benchmark_validate_float(c: &mut Criterion) {
     let mut group = c.benchmark_group("float_validation");
-    
+
     let inputs = [
-        "123.45",       // Valid float
-        "0.0",          // Valid zero
-        "-42.75",       // Valid negative
-        "1e10",         // Valid scientific notation
-        "",             // Empty string
-        "abc",          // Invalid characters
-        "123..456",     // Multiple decimal points
-        "123.456.789",  // Multiple decimal points
-        "1.2e-3",       // Scientific notation with negative exponent
-        "Infinity",     // Special float value
-        "NaN",          // Not a Number
-        "1,234.56",     // Comma as thousand separator (invalid in Rust)
+        "123.45",      // Valid float
+        "0.0",         // Valid zero
+        "-42.75",      // Valid negative
+        "1e10",        // Valid scientific notation
+        "",            // Empty string
+        "abc",         // Invalid characters
+        "123..456",    // Multiple decimal points
+        "123.456.789", // Multiple decimal points
+        "1.2e-3",      // Scientific notation with negative exponent
+        "Infinity",    // Special float value
+        "NaN",         // Not a Number
+        "1,234.56",    // Comma as thousand separator (invalid in Rust)
     ];
 
     // Benchmark the simple validator
