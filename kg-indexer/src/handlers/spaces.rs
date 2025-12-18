@@ -1,5 +1,5 @@
 use hermes_schema::pb::space::{HermesCreateSpace, hermes_create_space::Payload};
-use indexer_utils::{checksum_address, id::derive_space_id, network_ids::GEO};
+use indexer_utils::checksum_address;
 use tracing::debug;
 use uuid::Uuid;
 
@@ -12,12 +12,12 @@ pub async fn handle_create_space(
     space: &HermesCreateSpace,
     storage: &Storage,
 ) -> Result<(), IndexerError> {
+    let space_id = bytes_to_uuid(&space.space_id)?;
+
     let space_item = match &space.payload {
         Some(Payload::PersonalSpace(personal)) => {
-            // Personal space - derive ID from owner address
             let owner_address = hex::encode(&personal.owner);
             let checksummed = checksum_address(format!("0x{}", owner_address));
-            let space_id = derive_space_id(GEO, &checksummed);
 
             SpaceItem {
                 id: space_id,
@@ -30,11 +30,6 @@ pub async fn handle_create_space(
             }
         }
         Some(Payload::DefaultDaoSpace(_dao)) => {
-            // Public DAO space - use space_id from message
-            let space_id = bytes_to_uuid(&space.space_id)?;
-
-            // For DAO spaces, we need the DAO address which isn't directly in the message
-            // We'll derive what we can from the space_id
             let space_id_hex = hex::encode(&space.space_id);
 
             SpaceItem {
