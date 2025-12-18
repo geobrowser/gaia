@@ -225,13 +225,62 @@ async fn main() -> Result<(), IndexerError> {
 }
 
 fn process_message(msg: KgMessage, batch: &mut Batch) -> Result<(), IndexerError> {
+    use handlers::membership::MembershipChange;
+    use models::relations::RelationOp;
+    use models::values::ValueChangeType;
+
     match msg {
-        KgMessage::Edit(edit) => handlers::edits::handle_edit(&edit, batch),
-        KgMessage::CreateSpace(space) => handlers::spaces::handle_create_space(&space, batch),
-        KgMessage::RoleGranted(event) => handlers::membership::handle_role_granted(&event, batch),
-        KgMessage::RoleRevoked(event) => handlers::membership::handle_role_revoked(&event, batch),
+        KgMessage::Edit(edit) => {
+            let result = handlers::edits::handle_edit(&edit)?;
+
+            // Add entities and properties
+            batch.entities.extend(result.entities);
+            batch.properties.extend(result.properties);
+
+            // Partition values into sets and deletes
+            for op in result.values {
+                match op.change_type {
+                    ValueChangeType::Set => batch.set_values.push(op),
+                    ValueChangeType::Delete => {
+                        batch.delete_values.push((op.id, op.space_id));
+                    }
+                }
+            }
+
+            // Partition relations by operation type
+            for op in result.relations {
+                match op {
+                    RelationOp::Create(r) => batch.set_relations.push(r),
+                    RelationOp::Update(r) => batch.update_relations.push(r),
+                    RelationOp::Unset(r) => batch.unset_relations.push(r),
+                    RelationOp::Delete(r) => batch.delete_relations.push((r.id, r.space_id)),
+                }
+            }
+        }
+        KgMessage::CreateSpace(space) => {
+            let space_item = handlers::spaces::handle_create_space(&space)?;
+            batch.spaces.push(space_item);
+        }
+        KgMessage::RoleGranted(event) => {
+            match handlers::membership::handle_role_granted(&event)? {
+                MembershipChange::AddEditor(e) => batch.add_editors.push(e),
+                MembershipChange::AddMember(m) => batch.add_members.push(m),
+                _ => {} // Shouldn't happen for granted
+            }
+        }
+        KgMessage::RoleRevoked(event) => {
+            match handlers::membership::handle_role_revoked(&event)? {
+                MembershipChange::RemoveEditor(e) => batch.remove_editors.push(e),
+                MembershipChange::RemoveMember(m) => batch.remove_members.push(m),
+                _ => {} // Shouldn't happen for revoked
+            }
+        }
         KgMessage::TrustExtension(event) => {
-            handlers::subspaces::handle_trust_extension(&event, batch)
+            if let Some(subspace) = handlers::subspaces::handle_trust_extension(&event)? {
+                batch.add_subspaces.push(subspace);
+            }
         }
     }
+
+    Ok(())
 }

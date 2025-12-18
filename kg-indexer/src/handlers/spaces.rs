@@ -1,14 +1,12 @@
 use hermes_schema::pb::space::{hermes_create_space::Payload, HermesCreateSpace};
 use indexer_utils::checksum_address;
-use tracing::debug;
 use uuid::Uuid;
 
-use crate::batch::Batch;
 use crate::error::IndexerError;
 use crate::models::spaces::{SpaceItem, SpaceType};
 
-/// Process a HermesCreateSpace message and accumulate into batch
-pub fn handle_create_space(space: &HermesCreateSpace, batch: &mut Batch) -> Result<(), IndexerError> {
+/// Process a HermesCreateSpace message and return the space item
+pub fn handle_create_space(space: &HermesCreateSpace) -> Result<SpaceItem, IndexerError> {
     let space_id = bytes_to_uuid(&space.space_id)?;
 
     let space_item = match &space.payload {
@@ -44,10 +42,7 @@ pub fn handle_create_space(space: &HermesCreateSpace, batch: &mut Batch) -> Resu
         }
     };
 
-    debug!(space_id = %space_item.id, space_type = ?space_item.space_type, "Accumulated space into batch");
-    batch.spaces.push(space_item);
-
-    Ok(())
+    Ok(space_item)
 }
 
 fn bytes_to_uuid(bytes: &[u8]) -> Result<Uuid, IndexerError> {

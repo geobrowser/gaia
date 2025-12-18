@@ -40,13 +40,20 @@ pub struct UnsetRelationItem {
     pub verified: Option<bool>,
 }
 
+/// Delete relation item with space context
+#[derive(Clone, Debug)]
+pub struct DeleteRelationItem {
+    pub id: Uuid,
+    pub space_id: Uuid,
+}
+
 /// Enum representing all relation operations for squashing
 #[derive(Clone, Debug)]
 pub enum RelationOp {
     Create(SetRelationItem),
     Update(UpdateRelationItem),
     Unset(UnsetRelationItem),
-    Delete(Uuid),
+    Delete(DeleteRelationItem),
 }
 
 impl RelationOp {
@@ -55,7 +62,16 @@ impl RelationOp {
             RelationOp::Create(r) => r.id,
             RelationOp::Update(r) => r.id,
             RelationOp::Unset(r) => r.id,
-            RelationOp::Delete(id) => *id,
+            RelationOp::Delete(r) => r.id,
+        }
+    }
+
+    pub fn space_id(&self) -> Uuid {
+        match self {
+            RelationOp::Create(r) => r.space_id,
+            RelationOp::Update(r) => r.space_id,
+            RelationOp::Unset(r) => r.space_id,
+            RelationOp::Delete(r) => r.space_id,
         }
     }
 }

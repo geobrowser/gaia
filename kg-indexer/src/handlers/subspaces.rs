@@ -2,36 +2,27 @@ use hermes_schema::pb::space::{hermes_space_trust_extension::Extension, HermesSp
 use tracing::debug;
 use uuid::Uuid;
 
-use crate::batch::Batch;
 use crate::error::IndexerError;
 use crate::models::subspaces::SubspaceItem;
 
-/// Process a HermesSpaceTrustExtension message and accumulate into batch
+/// Process a HermesSpaceTrustExtension message and return a subspace if applicable
 ///
 /// Trust extensions represent parent-child relationships between spaces.
-/// The "Verified" extension type maps to subspace relationships.
+/// Only the "Verified" extension type maps to subspace relationships.
+/// Returns None for Related and Subtopic extensions.
 pub fn handle_trust_extension(
     event: &HermesSpaceTrustExtension,
-    batch: &mut Batch,
-) -> Result<(), IndexerError> {
+) -> Result<Option<SubspaceItem>, IndexerError> {
     let parent_space_id = bytes_to_uuid(&event.source_space_id)?;
 
     match &event.extension {
         Some(Extension::Verified(verified)) => {
             let subspace_id = bytes_to_uuid(&verified.target_space_id)?;
 
-            let subspace = SubspaceItem {
+            Ok(Some(SubspaceItem {
                 subspace_id,
                 parent_space_id,
-            };
-
-            batch.add_subspaces.push(subspace);
-
-            debug!(
-                parent_space_id = %parent_space_id,
-                subspace_id = %subspace_id,
-                "Accumulated verified subspace into batch"
-            );
+            }))
         }
         Some(Extension::Related(related)) => {
             // Related spaces are a different relationship type
@@ -42,6 +33,7 @@ pub fn handle_trust_extension(
                 target_space_id = %target_id,
                 "Received related extension (not stored as subspace)"
             );
+            Ok(None)
         }
         Some(Extension::Subtopic(subtopic)) => {
             // Subtopic relationships are for topic hierarchies
@@ -51,15 +43,12 @@ pub fn handle_trust_extension(
                 target_topic_id = %target_id,
                 "Received subtopic extension (not stored as subspace)"
             );
+            Ok(None)
         }
-        None => {
-            return Err(IndexerError::parse(
-                "HermesSpaceTrustExtension has no extension",
-            ));
-        }
+        None => Err(IndexerError::parse(
+            "HermesSpaceTrustExtension has no extension",
+        )),
     }
-
-    Ok(())
 }
 
 fn bytes_to_uuid(bytes: &[u8]) -> Result<Uuid, IndexerError> {

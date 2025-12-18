@@ -4,19 +4,25 @@ use std::hash::{Hash, Hasher};
 
 use hermes_schema::pb::knowledge::HermesEdit;
 use indexer_utils::id::transform_id_bytes;
-use tracing::debug;
 use uuid::Uuid;
 use wire::pb::grc20::op::Payload;
 use wire::pb::grc20::options;
 
-use crate::batch::Batch;
 use crate::error::IndexerError;
 use crate::models::{
     entities::EntityItem,
     properties::{DataType, PropertyItem},
-    relations::{RelationOp, SetRelationItem, UnsetRelationItem, UpdateRelationItem},
+    relations::{DeleteRelationItem, RelationOp, SetRelationItem, UnsetRelationItem, UpdateRelationItem},
     values::{ValueChangeType, ValueOp},
 };
+
+/// Result of processing an edit message
+pub struct EditResult {
+    pub entities: Vec<EntityItem>,
+    pub properties: Vec<PropertyItem>,
+    pub values: Vec<ValueOp>,
+    pub relations: Vec<RelationOp>,
+}
 
 /// Metadata extracted from the HermesEdit for timestamping
 pub struct EditMetadata {
@@ -39,8 +45,8 @@ impl EditMetadata {
     }
 }
 
-/// Process a HermesEdit message and accumulate operations in the batch
-pub fn handle_edit(edit: &HermesEdit, batch: &mut Batch) -> Result<(), IndexerError> {
+/// Process a HermesEdit message and return the extracted data
+pub fn handle_edit(edit: &HermesEdit) -> Result<EditResult, IndexerError> {
     let space_id = parse_space_id(&edit.space_id)?;
     let meta = EditMetadata::from_edit(edit);
 
@@ -51,37 +57,15 @@ pub fn handle_edit(edit: &HermesEdit, batch: &mut Batch) -> Result<(), IndexerEr
     let relation_ops = extract_relations(edit, &space_id);
 
     // Squash operations within this edit to resolve conflicts
-    let squashed_values = squash_values(&value_ops);
-    let squashed_relations = squash_relations(&relation_ops);
+    let values = squash_values(&value_ops);
+    let relations = squash_relations(&relation_ops);
 
-    // Partition values into sets and deletes
-    for op in squashed_values {
-        match op.change_type {
-            ValueChangeType::Set => batch.set_values.push(op),
-            ValueChangeType::Delete => batch.delete_values.push((op.id, space_id)),
-        }
-    }
-
-    // Partition relations by operation type
-    for op in squashed_relations {
-        match op {
-            RelationOp::Create(r) => batch.set_relations.push(r),
-            RelationOp::Update(r) => batch.update_relations.push(r),
-            RelationOp::Unset(r) => batch.unset_relations.push(r),
-            RelationOp::Delete(id) => batch.delete_relations.push((id, space_id)),
-        }
-    }
-
-    // Accumulate entities and properties (these don't need squashing - upserts handle it)
-    batch.entities.extend(entities);
-    batch.properties.extend(properties);
-
-    debug!(
-        space_id = %space_id,
-        "Accumulated edit into batch"
-    );
-
-    Ok(())
+    Ok(EditResult {
+        entities,
+        properties,
+        values,
+        relations,
+    })
 }
 
 /// Squash value operations - last operation for each value ID wins
@@ -135,7 +119,7 @@ fn merge_relation_ops(existing: RelationOp, new: RelationOp) -> RelationOp {
         }),
 
         // create -> delete: Delete wins
-        (RelationOp::Create(_), RelationOp::Delete(id)) => RelationOp::Delete(id),
+        (RelationOp::Create(_), RelationOp::Delete(d)) => RelationOp::Delete(d),
 
         // create -> unset: Apply unset to create
         (RelationOp::Create(c), RelationOp::Unset(u)) => RelationOp::Create(SetRelationItem {
@@ -169,7 +153,7 @@ fn merge_relation_ops(existing: RelationOp, new: RelationOp) -> RelationOp {
         }),
 
         // update -> delete: Delete wins
-        (RelationOp::Update(_), RelationOp::Delete(id)) => RelationOp::Delete(id),
+        (RelationOp::Update(_), RelationOp::Delete(d)) => RelationOp::Delete(d),
 
         // update -> unset: Apply unset to update
         (RelationOp::Update(e), RelationOp::Unset(u)) => RelationOp::Update(UpdateRelationItem {
@@ -193,7 +177,7 @@ fn merge_relation_ops(existing: RelationOp, new: RelationOp) -> RelationOp {
         (RelationOp::Unset(_), RelationOp::Update(_)) => new,
 
         // unset -> delete: Delete wins
-        (RelationOp::Unset(_), RelationOp::Delete(id)) => RelationOp::Delete(id),
+        (RelationOp::Unset(_), RelationOp::Delete(d)) => RelationOp::Delete(d),
 
         // unset -> unset: Merge the unset flags
         (RelationOp::Unset(e), RelationOp::Unset(u)) => RelationOp::Unset(UnsetRelationItem {
@@ -523,7 +507,10 @@ fn extract_relations(edit: &HermesEdit, space_id: &Uuid) -> Vec<RelationOp> {
                 }
                 Payload::DeleteRelation(relation_id_bytes) => {
                     if let Ok(bytes) = transform_id_bytes(relation_id_bytes.clone()) {
-                        relation_ops.push(RelationOp::Delete(Uuid::from_bytes(bytes)));
+                        relation_ops.push(RelationOp::Delete(DeleteRelationItem {
+                            id: Uuid::from_bytes(bytes),
+                            space_id: *space_id,
+                        }));
                     }
                 }
                 _ => {}
@@ -642,6 +629,10 @@ mod tests {
             position: None,
             verified: None,
         }
+    }
+
+    fn make_delete_relation(id: Uuid, space_id: Uuid) -> DeleteRelationItem {
+        DeleteRelationItem { id, space_id }
     }
 
     // ===================
@@ -763,9 +754,12 @@ mod tests {
     #[test]
     fn test_squash_relations_create_then_delete() {
         let id = Uuid::new_v4();
+        let space_id = Uuid::new_v4();
+        let mut create = make_create_relation(id);
+        create.space_id = space_id;
         let ops = vec![
-            RelationOp::Create(make_create_relation(id)),
-            RelationOp::Delete(id),
+            RelationOp::Create(create),
+            RelationOp::Delete(make_delete_relation(id, space_id)),
         ];
         let result = squash_relations(&ops);
         assert_eq!(result.len(), 1);
@@ -775,8 +769,9 @@ mod tests {
     #[test]
     fn test_squash_relations_delete_then_create() {
         let id = Uuid::new_v4();
+        let space_id = Uuid::new_v4();
         let ops = vec![
-            RelationOp::Delete(id),
+            RelationOp::Delete(make_delete_relation(id, space_id)),
             RelationOp::Create(make_create_relation(id)),
         ];
         let result = squash_relations(&ops);
@@ -841,7 +836,10 @@ mod tests {
         let space_id = Uuid::new_v4();
 
         let update = make_update_relation(id, space_id);
-        let ops = vec![RelationOp::Update(update), RelationOp::Delete(id)];
+        let ops = vec![
+            RelationOp::Update(update),
+            RelationOp::Delete(make_delete_relation(id, space_id)),
+        ];
         let result = squash_relations(&ops);
         assert_eq!(result.len(), 1);
         assert!(matches!(result[0], RelationOp::Delete(_)));
@@ -932,14 +930,17 @@ mod tests {
         let mut create1 = make_create_relation(id1);
         create1.space_id = space_id;
 
+        let mut create2 = make_create_relation(id2);
+        create2.space_id = space_id;
+
         let mut update1 = make_update_relation(id1, space_id);
         update1.position = Some("pos".into());
 
         let ops = vec![
             RelationOp::Create(create1),
-            RelationOp::Create(make_create_relation(id2)),
+            RelationOp::Create(create2),
             RelationOp::Update(update1),
-            RelationOp::Delete(id2), // id2 created then deleted
+            RelationOp::Delete(make_delete_relation(id2, space_id)), // id2 created then deleted
         ];
         let result = squash_relations(&ops);
         assert_eq!(result.len(), 2);
