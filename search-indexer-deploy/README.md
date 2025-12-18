@@ -37,6 +37,7 @@ Before deploying, create the required secrets in the `search` namespace:
 |--------|------|-------------|
 | `kafka-credentials` | `KAFKA_BROKER`, `KAFKA_USERNAME`, `KAFKA_PASSWORD`, `KAFKA_SSL_CA_PEM` | Managed Kafka connection (see [hermes README](../hermes/README.md) for details) |
 | `grafana-credentials` | `ADMIN_USER`, `ADMIN_PASSWORD` | Grafana admin login |
+| `opensearch-credentials` | `OPENSEARCH_URL` | DigitalOcean managed OpenSearch connection string |
 
 See [k8s-secrets-isolation.md](../docs/k8s-secrets-isolation.md) for the secrets strategy.
 
