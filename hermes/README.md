@@ -47,6 +47,18 @@ Production runs on DigitalOcean Managed Kafka and is deployed to DigitalOcean Ku
 
 The Kubernetes manifests are in `k8s/`.
 
+### Prerequisites
+
+Before deploying, create the required secrets in the `kafka` namespace:
+
+| Secret | Keys | Description |
+|--------|------|-------------|
+| `kafka-credentials` | `KAFKA_BROKER`, `KAFKA_USERNAME`, `KAFKA_PASSWORD`, `KAFKA_SSL_CA_PEM` | DigitalOcean managed Kafka connection |
+| `hermes-pipeline-otel` | `OTEL_URL`, `OTEL_TOKEN`, `OTEL_DATASET` | OpenTelemetry credentials for hermes-pipeline (optional) |
+| `atlas-otel` | `OTEL_URL`, `OTEL_TOKEN`, `OTEL_DATASET` | OpenTelemetry credentials for atlas (optional) |
+
+See [k8s-secrets-isolation.md](../docs/k8s-secrets-isolation.md) for the secrets strategy.
+
 ### Environment Variables
 
 Both `hermes-processor` and `atlas` support the following environment variables:
