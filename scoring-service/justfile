@@ -17,3 +17,19 @@ test:
 # Run with Docker Compose
 docker-run:
     docker compose up --build -d && docker compose logs -f
+
+db-up:
+    docker run --name pg_scoring_service \
+        -e POSTGRES_PASSWORD=postgres \
+        -e POSTGRES_USER=postgres \
+        -e POSTGRES_DB=postgres \
+        -p 5432:5432 -d postgres:16
+
+db-down:
+    docker stop pg_scoring_service && docker rm pg_scoring_service
+
+db-restart:
+    just db-down db-up db-migrate
+
+db-migrate:
+    cd ../api && bun install && bun run db:migrate
