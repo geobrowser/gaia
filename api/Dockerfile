@@ -13,8 +13,8 @@ WORKDIR /app
 ENV NODE_ENV=production
 
 # Create non-root user
-RUN addgroup --system --gid 1001 geo && \
-    adduser --system --uid 1001 --ingroup geo geo
+RUN groupadd --system --gid 1001 geo && \
+    useradd --system --uid 1001 --gid geo geo
 
 # Copy dependencies
 COPY --from=deps --chown=geo:geo /app/node_modules ./node_modules
