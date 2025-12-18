@@ -1,5 +1,4 @@
 use sqlx::{postgres::PgPoolOptions, Postgres, QueryBuilder};
-use tracing::error;
 use uuid::Uuid;
 
 use crate::error::IndexerError;
@@ -250,21 +249,32 @@ impl Storage {
         }
 
         let mut query_builder: QueryBuilder<Postgres> = QueryBuilder::new(
-            "UPDATE relations (id, from_space_id, to_space_id, position, verified) ",
+            "UPDATE relations SET
+             from_space_id = COALESCE(v.from_space_id, relations.from_space_id),
+             from_version_id = COALESCE(v.from_version_id, relations.from_version_id),
+             to_space_id = COALESCE(v.to_space_id, relations.to_space_id),
+             to_version_id = COALESCE(v.to_version_id, relations.to_version_id),
+             position = COALESCE(v.position, relations.position),
+             verified = COALESCE(v.verified, relations.verified)
+             FROM (VALUES ",
         );
 
         query_builder.push_values(relations, |mut b, relation| {
             b.push_bind(&relation.id);
             b.push_bind(&relation.from_space_id);
+            b.push_bind(&relation.from_version_id);
             b.push_bind(&relation.to_space_id);
+            b.push_bind(&relation.to_version_id);
             b.push_bind(&relation.position);
             b.push_bind(&relation.verified);
         });
 
-        let result = query_builder.build().execute(&mut **tx).await;
-        if let Err(err) = result {
-            error!("Error updating relations: {}", err);
-        }
+        query_builder.push(
+            ") AS v(id, from_space_id, from_version_id, to_space_id, to_version_id, position, verified)
+             WHERE relations.id = v.id",
+        );
+
+        query_builder.build().execute(&mut **tx).await?;
 
         Ok(())
     }
