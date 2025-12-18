@@ -35,7 +35,10 @@ spec:
           env:
             # OpenSearch connection (same namespace, use simple service name)
             - name: OPENSEARCH_URL
-              value: "http://opensearch:9200"
+              valueFrom:
+                secretKeyRef:
+                  name: search-indexer-secrets
+                  key: OPENSEARCH_URL
             # Index version (defaults to 0 if not set)
             - name: ENTITIES_INDEX_VERSION
               value: "0"
@@ -120,4 +123,5 @@ metadata:
 type: Opaque
 stringData:
   AXIOM_TOKEN: ""  # Set via kubectl or CI/CD
+  OPENSEARCH_URL: ""  # Set via kubectl or CI/CD
 
