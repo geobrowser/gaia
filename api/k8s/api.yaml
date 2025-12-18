@@ -21,27 +21,48 @@ spec:
         fsGroup: 1001
       imagePullSecrets:
         - name: regcred
+      volumes:
+        - name: ssl-certs
+          emptyDir: {}
       initContainers:
-        - name: migrate
+        - name: setup-certs
           image: registry.digitalocean.com/geo/api:latest
           imagePullPolicy: Always
           command:
             - sh
             - -c
             - |
-              echo "$DATABASE_SSL_CA" > /tmp/ca.crt
-              NODE_EXTRA_CA_CERTS=/tmp/ca.crt bun run db:migrate
+              echo "$DATABASE_SSL_CA" > /ssl/ca.crt
+          env:
+            - name: DATABASE_SSL_CA
+              valueFrom:
+                secretKeyRef:
+                  name: api-secrets
+                  key: DATABASE_SSL_CA
+          volumeMounts:
+            - name: ssl-certs
+              mountPath: /ssl
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+        - name: migrate
+          image: registry.digitalocean.com/geo/api:latest
+          imagePullPolicy: Always
+          command: ["bun", "run", "db:migrate"]
           env:
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
                   name: api-secrets
                   key: DATABASE_URL
-            - name: DATABASE_SSL_CA
-              valueFrom:
-                secretKeyRef:
-                  name: api-secrets
-                  key: DATABASE_SSL_CA
+            - name: NODE_EXTRA_CA_CERTS
+              value: /ssl/ca.crt
+          volumeMounts:
+            - name: ssl-certs
+              mountPath: /ssl
+              readOnly: true
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
@@ -59,7 +80,13 @@ spec:
             capabilities:
               drop:
                 - ALL
+          volumeMounts:
+            - name: ssl-certs
+              mountPath: /ssl
+              readOnly: true
           env:
+            - name: NODE_EXTRA_CA_CERTS
+              value: /ssl/ca.crt
             - name: DATABASE_URL
               valueFrom:
                 secretKeyRef:
