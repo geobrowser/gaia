@@ -1,0 +1,140 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api
+  namespace: api
+  labels:
+    app: api
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: api
+  template:
+    metadata:
+      labels:
+        app: api
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        fsGroup: 1001
+      imagePullSecrets:
+        - name: regcred
+      initContainers:
+        - name: migrate
+          image: registry.digitalocean.com/geo/api:latest
+          imagePullPolicy: Always
+          command: ["bun", "run", "db:migrate"]
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: api-secrets
+                  key: DATABASE_URL
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+      containers:
+        - name: api
+          image: registry.digitalocean.com/geo/api:latest
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 3000
+              protocol: TCP
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: api-secrets
+                  key: DATABASE_URL
+            - name: RPC_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: api-secrets
+                  key: RPC_ENDPOINT
+            - name: CHAIN_ID
+              valueFrom:
+                secretKeyRef:
+                  name: api-secrets
+                  key: CHAIN_ID
+            - name: DEPLOYER_PK
+              valueFrom:
+                secretKeyRef:
+                  name: api-secrets
+                  key: DEPLOYER_PK
+            - name: IPFS_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: api-secrets
+                  key: IPFS_KEY
+            - name: IPFS_GATEWAY_WRITE
+              valueFrom:
+                secretKeyRef:
+                  name: api-secrets
+                  key: IPFS_GATEWAY_WRITE
+            - name: IPFS_ALTERNATIVE_GATEWAY_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: api-secrets
+                  key: IPFS_ALTERNATIVE_GATEWAY_KEY
+            - name: IPFS_ALTERNATIVE_GATEWAY_WRITE
+              valueFrom:
+                secretKeyRef:
+                  name: api-secrets
+                  key: IPFS_ALTERNATIVE_GATEWAY_WRITE
+            - name: TELEMETRY_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: api-secrets
+                  key: TELEMETRY_TOKEN
+                  optional: true
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 10
+            periodSeconds: 30
+            timeoutSeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 5
+      restartPolicy: Always
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: api
+  namespace: api
+  labels:
+    app: api
+  annotations:
+    service.beta.kubernetes.io/do-loadbalancer-name: "geo-api-lb"
+    service.beta.kubernetes.io/do-loadbalancer-protocol: "http"
+spec:
+  type: LoadBalancer
+  ports:
+    - name: http
+      port: 80
+      targetPort: 3000
+      protocol: TCP
+  selector:
+    app: api
