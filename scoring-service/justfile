@@ -33,3 +33,6 @@ db-restart:
 
 db-migrate:
     cd ../api && bun install && bun run db:migrate
+
+db-load-dump path:
+    docker exec -i pg_scoring_service psql -U postgres -d postgres < {{path}}
