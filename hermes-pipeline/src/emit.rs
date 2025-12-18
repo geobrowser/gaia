@@ -7,7 +7,7 @@ use anyhow::Result;
 use hermes_instrumentation::debug_span;
 use prost::Message;
 
-use hermes_kafka::{BaseProducer, BaseRecord, Header, OwnedHeaders};
+use hermes_kafka::{BaseProducer, BaseRecord, Header, OwnedHeaders, Producer};
 use hermes_schema::pb::{
     governance::{HermesProposalCreated, HermesProposalExecuted, HermesProposalVoted},
     knowledge::HermesEdit,
@@ -394,6 +394,14 @@ impl Emitter {
             count += 1;
         }
         Ok(count)
+    }
+
+    /// Flush all pending messages to Kafka.
+    ///
+    /// This should be called before shutting down the application to ensure
+    /// all queued messages are delivered to Kafka.
+    pub fn flush(&self, timeout: std::time::Duration) {
+        let _ = self.producer.flush(timeout);
     }
 }
 
