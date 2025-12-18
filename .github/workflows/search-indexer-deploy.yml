@@ -1,0 +1,74 @@
+name: Deploy Search Indexer
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'search-indexer/**'
+      - 'search-indexer-shared/**'
+      - 'search-indexer-repository/**'
+      - 'search-indexer-deploy/k8s/**'
+      - 'sdk/**'
+      - 'hermes-schema/**'
+      - 'wire/**'
+      - 'indexer_utils/**'
+      - '.github/workflows/search-indexer-deploy.yml'
+
+env:
+  REGISTRY: registry.digitalocean.com/geo
+  IMAGE_NAME: search-indexer
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install doctl
+        uses: digitalocean/action-doctl@v2
+        with:
+          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+
+      - name: Log in to DigitalOcean Container Registry
+        run: doctl registry login --expiry-seconds 1200
+
+      - name: Build and push Docker image
+        run: |
+          docker build -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
+                       -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest \
+                       -f search-indexer/Dockerfile .
+          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v4
+
+      - name: Configure kubectl for DigitalOcean
+        run: |
+          doctl kubernetes cluster kubeconfig save ${{ secrets.DIGITALOCEAN_CLUSTER_NAME }}
+
+      - name: Apply k8s manifests
+        run: |
+          kubectl apply -f search-indexer-deploy/k8s/namespace.yaml
+          kubectl apply -f search-indexer-deploy/k8s/search-indexer.yaml
+
+      - name: Restart deployment to pick up new image
+        run: |
+          kubectl rollout restart deployment/search-indexer -n search
+
+      - name: Wait for deployment to be ready
+        run: |
+          kubectl rollout status deployment/search-indexer -n search --timeout=120s
+
+      - name: Show deployment status
+        run: |
+          echo "=== Search Indexer Deployment ==="
+          kubectl get deployment search-indexer -n search || echo "Deployment not found"
+          echo ""
+          echo "=== Search Indexer Pods ==="
+          kubectl get pods -n search -l app=search-indexer
+          echo ""
+          echo "=== Recent Events ==="
+          kubectl get events -n search --sort-by='.lastTimestamp' | tail -10

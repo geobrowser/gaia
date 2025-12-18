@@ -1,0 +1,127 @@
+# =============================================================================
+# Search Indexer Deployment
+# =============================================================================
+# Consumes messages from Kafka and indexes them into OpenSearch
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: search-indexer
+  namespace: search
+  labels:
+    app: search-indexer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: search-indexer
+  template:
+    metadata:
+      labels:
+        app: search-indexer
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+        - name: search-indexer
+          image: registry.digitalocean.com/geo/search-indexer:latest
+          imagePullPolicy: Always
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          env:
+            # OpenSearch connection (same namespace, use simple service name)
+            - name: OPENSEARCH_URL
+              valueFrom:
+                secretKeyRef:
+                  name: search-indexer-secrets
+                  key: OPENSEARCH_URL
+            # Index version (defaults to 0 if not set)
+            - name: ENTITIES_INDEX_VERSION
+              value: "0"
+            # Kafka connection (managed Kafka with SSL)
+            - name: KAFKA_BROKER
+              valueFrom:
+                secretKeyRef:
+                  name: kafka-credentials
+                  key: KAFKA_BROKER
+            - name: KAFKA_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: kafka-credentials
+                  key: KAFKA_USERNAME
+            - name: KAFKA_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: kafka-credentials
+                  key: KAFKA_PASSWORD
+            - name: KAFKA_SSL_CA_PEM
+              valueFrom:
+                secretKeyRef:
+                  name: kafka-credentials
+                  key: KAFKA_SSL_CA_PEM
+            # Kafka consumer configuration
+            - name: KAFKA_BATCH_SIZE
+              value: "50"
+            - name: KAFKA_BATCH_TIMEOUT_MS
+              value: "1000"
+            # Logging
+            - name: RUST_LOG
+              value: "info"
+            # Optional: Axiom for centralized logging
+            - name: AXIOM_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: search-indexer-secrets
+                  key: AXIOM_TOKEN
+                  optional: true
+            - name: AXIOM_DATASET
+              value: "gaia.search-indexer"
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "100m"
+            limits:
+              memory: "768Mi"
+              cpu: "500m"
+          # Health check - indexer logs to stdout regularly, so we check if process is running
+          # For automatic restart
+          # Todo: these are weak probes just checking if logs are being written.
+          # We should add a more robust health check.
+          livenessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - "ps aux | grep search-indexer | grep -v grep"
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          # For readiness check before traffic is routed to the pod
+          readinessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - "ps aux | grep search-indexer | grep -v grep"
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+      restartPolicy: Always
+---
+# Optional: Secret for sensitive configuration
+apiVersion: v1
+kind: Secret
+metadata:
+  name: search-indexer-secrets
+  namespace: search
+type: Opaque
+stringData:
+  AXIOM_TOKEN: ""  # Set via kubectl or CI/CD
+  OPENSEARCH_URL: ""  # Set via kubectl or CI/CD
+

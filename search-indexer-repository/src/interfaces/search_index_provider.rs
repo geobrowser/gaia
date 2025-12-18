@@ -24,8 +24,23 @@ use crate::types::{
 /// There is no separate `create_document` function because all grc-20 events are edits (updates).
 /// The `update_document` function performs an upsert operation: it will create the document if
 /// it doesn't exist, or update it if it does exist.
+///
+/// # Index Initialization
+///
+/// Implementations should call `ensure_index_exists` during application startup to ensure
+/// the search index and any aliases are properly configured before performing document operations.
 #[async_trait]
 pub trait SearchIndexProvider: Send + Sync {
+    /// Ensure the search index and any required aliases exist, creating them if necessary.
+    ///
+    /// This method should be called during application startup to ensure the backend
+    /// is properly initialized before performing document operations.
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(())` - If the index is ready for use
+    /// * `Err(SearchIndexError)` - If initialization fails
+    async fn ensure_index_exists(&self) -> Result<(), SearchIndexError>;
     /// Update specific fields of a document, creating it if it doesn't exist (upsert).
     ///
     /// This function performs an upsert operation: if the document exists, only fields that are
@@ -91,6 +106,24 @@ pub trait SearchIndexProvider: Send + Sync {
     async fn bulk_delete_documents(
         &self,
         requests: &[DeleteEntityRequest],
+    ) -> Result<BatchOperationSummary, SearchIndexError>;
+
+    /// Unset (remove) specific properties from multiple documents in bulk and return a summary of successful and failed operations.
+    ///
+    /// Processes each unset request individually and collects results. Properties that don't
+    /// exist are safely ignored.
+    ///
+    /// # Arguments
+    ///
+    /// * `requests` - Slice of unset requests
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(BatchOperationSummary)` - Contains aggregate statistics and individual results
+    /// * `Err(SearchIndexError)` - If the bulk operation fails entirely
+    async fn bulk_unset_properties(
+        &self,
+        requests: &[UnsetEntityPropertiesRequest],
     ) -> Result<BatchOperationSummary, SearchIndexError>;
 
     /// Unset (remove) specific properties from a document.

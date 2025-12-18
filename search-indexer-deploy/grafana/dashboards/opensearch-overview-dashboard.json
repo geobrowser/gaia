@@ -52,27 +52,6 @@
       "description": "Total number of documents stored across all non-internal indices in the cluster.",
       "id": 3,
       "gridPos": { "h": 4, "w": 6, "x": 12, "y": 0 },
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "fixed",
-            "fixedColor": "green"
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "value": null,
-                "color": "green"
-              }
-            ]
-          }
-        },
-        "overrides": []
-      },
-      "options": {
-        "colorMode": "value"
-      },
       "targets": [
         {
           "expr": "sum(elasticsearch_indices_docs{index!~\"\\\\..*\"})",
@@ -90,25 +69,9 @@
       "fieldConfig": {
         "defaults": {
           "unit": "decbytes",
-          "decimals": 2,
-          "color": {
-            "mode": "fixed",
-            "fixedColor": "green"
-          },
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "value": null,
-                "color": "green"
-              }
-            ]
-          }
+          "decimals": 2
         },
         "overrides": []
-      },
-      "options": {
-        "colorMode": "value"
       },
       "targets": [
         {

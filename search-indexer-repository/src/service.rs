@@ -327,6 +327,56 @@ impl SearchIndexService {
 
         self.provider.bulk_delete_documents(&requests).await
     }
+
+    /// Unset (remove) specific properties from multiple entity documents in bulk and return a summary of successful and failed operations.
+    ///
+    /// This function removes the specified property keys from multiple documents. Properties that don't
+    /// exist are safely ignored. Returns a summary indicating which operations succeeded and which failed.
+    ///
+    /// # Arguments
+    ///
+    /// * `requests` - Vector of UnsetEntityPropertiesRequest, each containing entity_id, space_id, and property keys to remove
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(BatchOperationSummary)` - Contains total count, succeeded count, failed count,
+    ///   and individual results for each request with success status and optional error
+    /// * `Err(SearchIndexError::BatchSizeExceeded)` - If the batch size exceeds the configured maximum
+    /// * `Err(SearchIndexError::ValidationError)` - If any request has invalid UUIDs or empty property keys
+    /// * `Err(SearchIndexError)` - If the bulk operation fails entirely
+    ///
+    /// # Note
+    ///
+    /// The batch size is limited by the configured `max_batch_size` (default: 1000). Individual
+    /// operation failures are reported in the summary rather than causing the entire operation to fail.
+    pub async fn batch_unset_properties(
+        &self,
+        requests: Vec<UnsetEntityPropertiesRequest>,
+    ) -> Result<BatchOperationSummary, SearchIndexError> {
+        if requests.is_empty() {
+            return Ok(BatchOperationSummary {
+                total: 0,
+                succeeded: 0,
+                failed: 0,
+                results: vec![],
+            });
+        }
+
+        self.validate_batch_size(requests.len())?;
+
+        // Validate all requests (UUID format and required fields)
+        for request in &requests {
+            Self::validate_uuid("entity_id", &request.entity_id)?;
+            Self::validate_uuid("space_id", &request.space_id)?;
+            if request.property_keys.is_empty() {
+                return Err(SearchIndexError::ValidationError(
+                    "At least one property key must be provided".to_string(),
+                ));
+            }
+        }
+
+        self.provider.bulk_unset_properties(&requests).await
+    }
 }
 
 #[cfg(test)]
@@ -357,6 +407,10 @@ mod tests {
 
     #[async_trait]
     impl SearchIndexProvider for MockProvider {
+        async fn ensure_index_exists(&self) -> Result<(), SearchIndexError> {
+            Ok(())
+        }
+
         async fn update_document(
             &self,
             request: &UpdateEntityRequest,
@@ -452,6 +506,37 @@ mod tests {
             }
             // Mock implementation - just succeed without tracking
             Ok(())
+        }
+
+        async fn bulk_unset_properties(
+            &self,
+            requests: &[UnsetEntityPropertiesRequest],
+        ) -> Result<BatchOperationSummary, SearchIndexError> {
+            if self.should_fail {
+                return Err(SearchIndexError::bulk_operation("Mock failure"));
+            }
+
+            let mut results = Vec::new();
+            let mut succeeded = 0;
+            let failed = 0;
+
+            for req in requests {
+                let result = BatchOperationResult {
+                    entity_id: req.entity_id.clone(),
+                    space_id: req.space_id.clone(),
+                    success: true,
+                    error: None,
+                };
+                results.push(result);
+                succeeded += 1;
+            }
+
+            Ok(BatchOperationSummary {
+                total: requests.len(),
+                succeeded,
+                failed,
+                results,
+            })
         }
     }
 

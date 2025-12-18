@@ -13,8 +13,11 @@ members = [
     "actions-indexer-repository",
     "actions-substream",
 
+    "search-indexer",
     "search-indexer-shared",
     "search-indexer-repository",
+
+    "sdk",
 
     "hermes-kafka",
     "hermes-schema",
