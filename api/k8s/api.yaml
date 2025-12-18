@@ -25,7 +25,12 @@ spec:
         - name: migrate
           image: registry.digitalocean.com/geo/api:latest
           imagePullPolicy: Always
-          command: ["bun", "run", "db:migrate"]
+          command:
+            - sh
+            - -c
+            - |
+              echo "$DATABASE_SSL_CA" > /tmp/ca.crt
+              NODE_EXTRA_CA_CERTS=/tmp/ca.crt bun run db:migrate
           env:
             - name: DATABASE_URL
               valueFrom:
@@ -37,7 +42,6 @@ spec:
                 secretKeyRef:
                   name: api-secrets
                   key: DATABASE_SSL_CA
-                  optional: true
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
