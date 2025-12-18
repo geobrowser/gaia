@@ -9,9 +9,6 @@ export default defineConfig({
 	schema: "./src/services/storage/schema.ts",
 	dbCredentials: {
 		url: process.env.DATABASE_URL,
-		ssl: process.env.DATABASE_SSL_CA
-			? {rejectUnauthorized: true, ca: process.env.DATABASE_SSL_CA}
-			: undefined,
 	},
 	casing: "snake_case",
 })
