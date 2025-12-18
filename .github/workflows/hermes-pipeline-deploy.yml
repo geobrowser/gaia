@@ -54,9 +54,11 @@ jobs:
         run: |
           kubectl delete job hermes-pipeline -n kafka --ignore-not-found=true
 
-      - name: Apply k8s manifests
+      - name: Deploy to Kubernetes
         run: |
           kubectl apply -f hermes/k8s/namespace.yaml
+          # Update image tag to use SHA and apply
+          sed -i 's|image: registry.digitalocean.com/geo/hermes-pipeline:latest|image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}|g' hermes/k8s/hermes-pipeline.yaml
           kubectl apply -f hermes/k8s/hermes-pipeline.yaml
 
       - name: Wait for job to start
