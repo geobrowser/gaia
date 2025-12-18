@@ -303,8 +303,11 @@ metadata:
   namespace: api
   labels:
     app: api
+  annotations:
+    service.beta.kubernetes.io/do-loadbalancer-name: "geo-api-lb"
+    service.beta.kubernetes.io/do-loadbalancer-protocol: "http"
 spec:
-  type: ClusterIP
+  type: LoadBalancer
   ports:
     - name: http
       port: 80
@@ -312,6 +315,11 @@ spec:
       protocol: TCP
   selector:
     app: api
+```
+
+After deployment, get the external IP:
+```bash
+kubectl get svc api -n api
 ```
 
 ### 6. GitHub Actions Workflow
@@ -450,7 +458,7 @@ api/
 
 - Manual secret creation required (not GitOps for secrets)
 - Migrations run on every pod start (acceptable for now, can optimize later)
-- No ingress configuration (external access requires additional setup)
+- LoadBalancer costs ~$12/month (acceptable for single external service)
 
 ### Risks
 

@@ -126,8 +126,11 @@ metadata:
   namespace: api
   labels:
     app: api
+  annotations:
+    service.beta.kubernetes.io/do-loadbalancer-name: "geo-api-lb"
+    service.beta.kubernetes.io/do-loadbalancer-protocol: "http"
 spec:
-  type: ClusterIP
+  type: LoadBalancer
   ports:
     - name: http
       port: 80
