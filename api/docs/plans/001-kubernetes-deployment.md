@@ -158,7 +158,19 @@ stringData:
   TELEMETRY_TOKEN: "REPLACE_ME"
 ```
 
-### 4. Deployment and Service
+### 4. Database Migrations
+
+Database migrations are handled via an **init container** that runs `bun run db:migrate` before the main API container starts.
+
+**Why init container?**
+- Drizzle migrations are idempotent (safe to run multiple times)
+- Main container won't start if migrations fail
+- No changes to Dockerfile needed
+- Native Kubernetes pattern
+
+**Trade-off**: Migrations run on every pod start (including restarts and scaling). This is acceptable for now since Drizzle only applies pending migrations. Future optimization: use a Kubernetes Job triggered only on schema changes.
+
+### 5. Deployment and Service
 
 **File**: `api/k8s/api.yaml`
 
@@ -186,6 +198,22 @@ spec:
         fsGroup: 1001
       imagePullSecrets:
         - name: regcred
+      initContainers:
+        - name: migrate
+          image: registry.digitalocean.com/geo/api:latest
+          imagePullPolicy: Always
+          command: ["bun", "run", "db:migrate"]
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: api-secrets
+                  key: DATABASE_URL
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
       containers:
         - name: api
           image: registry.digitalocean.com/geo/api:latest
@@ -286,7 +314,7 @@ spec:
     app: api
 ```
 
-### 5. GitHub Actions Workflow
+### 6. GitHub Actions Workflow
 
 **File**: `.github/workflows/api-deploy.yml`
 
@@ -354,7 +382,7 @@ jobs:
           kubectl get svc -n api
 ```
 
-### 6. File Structure
+### 7. File Structure
 
 ```
 api/
@@ -421,7 +449,7 @@ api/
 ### Negative
 
 - Manual secret creation required (not GitOps for secrets)
-- No automatic database migrations (must be run separately)
+- Migrations run on every pod start (acceptable for now, can optimize later)
 - No ingress configuration (external access requires additional setup)
 
 ### Risks
@@ -433,7 +461,7 @@ api/
 ## Future Considerations
 
 1. **Ingress Controller**: Add nginx-ingress or similar for external HTTPS access
-2. **Database Migrations**: Add init container or job for running migrations
+2. **Migration Optimization**: Use a Kubernetes Job for migrations, triggered only on schema changes in CI
 3. **Horizontal Pod Autoscaler**: Scale based on CPU/memory usage
 4. **PodDisruptionBudget**: Ensure availability during node maintenance
 5. **External Secrets Operator**: Consider for GitOps-friendly secret management
