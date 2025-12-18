@@ -19,6 +19,8 @@ spec:
       labels:
         app: search-indexer
     spec:
+      imagePullSecrets:
+        - name: regcred
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
