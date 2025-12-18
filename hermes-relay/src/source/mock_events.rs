@@ -335,6 +335,27 @@ fn encode_vote_data(proposal_id: u64, vote_option: VoteOption) -> Vec<u8> {
     data
 }
 
+// Solidity type for permissionless vote data: (uint16 version, bytes16 groupId, bytes16 spacePOV)
+type PermissionlessVoteDataType = sol! { (uint16, bytes16, bytes16) };
+
+/// ABI-encode permissionless vote data: (uint16 version, bytes16 groupId, bytes16 spacePOV)
+fn encode_permissionless_vote_data(version: u16, group_id: SpaceId, space_pov: SpaceId) -> Vec<u8> {
+    use alloy::primitives::FixedBytes;
+    PermissionlessVoteDataType::abi_encode(&(
+        version,
+        FixedBytes::<16>::from_slice(&group_id),
+        FixedBytes::<16>::from_slice(&space_pov),
+    ))
+}
+
+// Solidity type for content URI: bytes
+type ContentUriType = sol! { bytes };
+
+/// ABI-encode content URI for flagged/unflagged: abi.encode(bytes(uri))
+fn encode_content_uri(uri: &str) -> Vec<u8> {
+    ContentUriType::abi_encode(&uri.as_bytes().to_vec())
+}
+
 /// Create a PROPOSAL_CREATED action.
 ///
 /// - `space_id`: The space creating the proposal
@@ -504,18 +525,21 @@ pub fn space_left(member_id: SpaceId, space_id: SpaceId, role: [u8; 32]) -> Acti
 // Content Actions
 // =============================================================================
 
+// Solidity type for topic declared data: bytes16
+type TopicDeclaredDataType = sol! { bytes16 };
+
 /// Create a TOPIC_DECLARED action.
 ///
 /// - `space_id`: The space declaring the topic
-/// - `topic_id`: The topic ID (keccak256 of topic name)
-/// - `content_metadata`: Optional metadata
-pub fn topic_declared(space_id: SpaceId, topic_id: [u8; 32], content_metadata: &[u8]) -> Action {
+/// - `topic_id`: The 16-byte topic UUID
+pub fn topic_declared(space_id: SpaceId, topic_id: TopicId) -> Action {
+    use alloy::primitives::FixedBytes;
     Action {
         from_id: space_id.to_vec(),
         to_id: vec![0u8; 16],
         action: actions::TOPIC_DECLARED.to_vec(),
-        topic: topic_id.to_vec(),
-        data: content_metadata.to_vec(),
+        topic: vec![0u8; 32], // Empty topic field
+        data: TopicDeclaredDataType::abi_encode(&FixedBytes::<16>::from_slice(&topic_id)),
     }
 }
 
@@ -544,7 +568,7 @@ pub fn flagged(flagger_id: SpaceId, space_id: SpaceId, flagged_uri: &str) -> Act
         to_id: space_id.to_vec(),
         action: actions::FLAGGED.to_vec(),
         topic: vec![0u8; 32], // Optional topic
-        data: flagged_uri.as_bytes().to_vec(),
+        data: encode_content_uri(flagged_uri),
     }
 }
 
@@ -559,7 +583,7 @@ pub fn unflagged(unflagger_id: SpaceId, space_id: SpaceId, unflagged_uri: &str) 
         to_id: space_id.to_vec(),
         action: actions::UNFLAGGED.to_vec(),
         topic: vec![0u8; 32], // Optional topic
-        data: unflagged_uri.as_bytes().to_vec(),
+        data: encode_content_uri(unflagged_uri),
     }
 }
 
@@ -588,18 +612,12 @@ pub fn upvoted(
     topic[0..4].copy_from_slice(&object_type);
     topic[4..20].copy_from_slice(&object_id);
 
-    // Data: abi.encode(uint16(version), bytes16(groupId), bytes16(spacePOV))
-    let mut data = Vec::new();
-    data.extend_from_slice(&version.to_be_bytes());
-    data.extend_from_slice(&group_id);
-    data.extend_from_slice(&space_pov);
-
     Action {
         from_id: voter_id.to_vec(),
         to_id: vec![0u8; 16],
         action: actions::UPVOTED.to_vec(),
         topic,
-        data,
+        data: encode_permissionless_vote_data(version, group_id, space_pov),
     }
 }
 
@@ -623,17 +641,12 @@ pub fn downvoted(
     topic[0..4].copy_from_slice(&object_type);
     topic[4..20].copy_from_slice(&object_id);
 
-    let mut data = Vec::new();
-    data.extend_from_slice(&version.to_be_bytes());
-    data.extend_from_slice(&group_id);
-    data.extend_from_slice(&space_pov);
-
     Action {
         from_id: voter_id.to_vec(),
         to_id: vec![0u8; 16],
         action: actions::DOWNVOTED.to_vec(),
         topic,
-        data,
+        data: encode_permissionless_vote_data(version, group_id, space_pov),
     }
 }
 
@@ -657,17 +670,12 @@ pub fn unvoted(
     topic[0..4].copy_from_slice(&object_type);
     topic[4..20].copy_from_slice(&object_id);
 
-    let mut data = Vec::new();
-    data.extend_from_slice(&version.to_be_bytes());
-    data.extend_from_slice(&group_id);
-    data.extend_from_slice(&space_pov);
-
     Action {
         from_id: voter_id.to_vec(),
         to_id: vec![0u8; 16],
         action: actions::UNVOTED.to_vec(),
         topic,
-        data,
+        data: encode_permissionless_vote_data(version, group_id, space_pov),
     }
 }
 
@@ -879,6 +887,10 @@ pub mod test_topology {
             ROOT_SPACE_ID,
             ROOT_SPACE_ID,
         ));
+
+        // Phase 10: Topic declarations (standalone, not trust-related)
+        actions.push(topic_declared(ROOT_SPACE_ID, make_id(0xD1)));
+        actions.push(topic_declared(SPACE_A, make_id(0xD2)));
 
         actions
     }

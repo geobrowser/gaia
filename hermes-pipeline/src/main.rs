@@ -120,6 +120,11 @@ impl Pipeline {
             retry_config,
         }
     }
+
+    /// Flush all pending messages to Kafka.
+    pub fn flush(&self, timeout: std::time::Duration) {
+        self.emitter.flush(timeout);
+    }
 }
 
 impl Pipeline {
@@ -561,6 +566,10 @@ async fn async_main() -> anyhow::Result<()> {
 
     // Run the pipeline with mock data
     pipeline.run(StreamSource::mock()).await?;
+
+    // Flush all pending messages to Kafka before exiting
+    info!("Flushing Kafka producer");
+    pipeline.flush(std::time::Duration::from_secs(30));
 
     info!("Pipeline finished");
 
