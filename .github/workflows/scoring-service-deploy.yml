@@ -42,9 +42,11 @@ jobs:
         run: |
           doctl kubernetes cluster kubeconfig save ${{ secrets.DIGITALOCEAN_CLUSTER_NAME }}
 
-      - name: Apply k8s manifests
+      - name: Deploy to Kubernetes
         run: |
           kubectl apply -f scoring-service/deployment/namespace.yaml
+          # Update image tag to use SHA and apply
+          sed -i 's|image: registry.digitalocean.com/geo/scoring-service:latest|image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}|g' scoring-service/deployment/cronjob.yaml
           kubectl apply -f scoring-service/deployment/cronjob.yaml
 
       - name: Show deployment status

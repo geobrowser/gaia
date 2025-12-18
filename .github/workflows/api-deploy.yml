@@ -42,14 +42,12 @@ jobs:
         run: |
           doctl kubernetes cluster kubeconfig save ${{ secrets.DIGITALOCEAN_CLUSTER_NAME }}
 
-      - name: Apply Kubernetes manifests
+      - name: Deploy to Kubernetes
         run: |
           kubectl apply -f api/k8s/namespace.yaml
+          # Update image tag to use SHA and apply
+          sed -i 's|image: registry.digitalocean.com/geo/api:latest|image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}|g' api/k8s/api.yaml
           kubectl apply -f api/k8s/api.yaml
-
-      - name: Restart deployment
-        run: |
-          kubectl rollout restart deployment/api -n api
 
       - name: Wait for deployment
         run: |
