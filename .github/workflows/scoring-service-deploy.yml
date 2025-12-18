@@ -44,15 +44,16 @@ jobs:
 
       - name: Apply k8s manifests
         run: |
+          kubectl apply -f scoring-service/deployment/namespace.yaml
           kubectl apply -f scoring-service/deployment/cronjob.yaml
 
       - name: Show deployment status
         run: |
           echo "=== Scoring Service CronJob ==="
-          kubectl get cronjob scoring-service || echo "CronJob not found"
+          kubectl get cronjob scoring-service -n scoring || echo "CronJob not found"
           echo ""
           echo "=== Recent Jobs ==="
-          kubectl get jobs -l job-name=scoring-service --sort-by='.metadata.creationTimestamp' | tail -5
+          kubectl get jobs -n scoring --sort-by='.metadata.creationTimestamp' | tail -5
           echo ""
           echo "=== Recent Events ==="
-          kubectl get events --field-selector involvedObject.name=scoring-service --sort-by='.lastTimestamp' | tail -10
+          kubectl get events -n scoring --sort-by='.lastTimestamp' | tail -10
