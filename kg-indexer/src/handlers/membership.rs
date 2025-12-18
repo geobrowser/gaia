@@ -3,19 +3,14 @@ use indexer_utils::checksum_address;
 use tracing::debug;
 use uuid::Uuid;
 
+use crate::batch::Batch;
 use crate::error::IndexerError;
 use crate::models::membership::{EditorItem, MemberItem};
-use crate::storage::Storage;
 
-/// Process a HermesRoleGranted message and write to storage
-pub async fn handle_role_granted(
-    event: &HermesRoleGranted,
-    storage: &Storage,
-) -> Result<(), IndexerError> {
+/// Process a HermesRoleGranted message and accumulate into batch
+pub fn handle_role_granted(event: &HermesRoleGranted, batch: &mut Batch) -> Result<(), IndexerError> {
     let space_id = bytes_to_uuid(&event.space_id)?;
     let account_address = checksum_address(format!("0x{}", hex::encode(&event.account)));
-
-    let mut tx = storage.pool.begin().await?;
 
     match MembershipRole::try_from(event.role) {
         Ok(MembershipRole::Editor) => {
@@ -23,35 +18,29 @@ pub async fn handle_role_granted(
                 address: account_address.clone(),
                 space_id,
             };
-            storage.insert_editors(&[editor], &mut tx).await?;
-            debug!(space_id = %space_id, address = %account_address, "Added editor");
+            batch.add_editors.push(editor);
+            debug!(space_id = %space_id, address = %account_address, "Accumulated editor into batch");
         }
         Ok(MembershipRole::Member) => {
             let member = MemberItem {
                 address: account_address.clone(),
                 space_id,
             };
-            storage.insert_members(&[member], &mut tx).await?;
-            debug!(space_id = %space_id, address = %account_address, "Added member");
+            batch.add_members.push(member);
+            debug!(space_id = %space_id, address = %account_address, "Accumulated member into batch");
         }
         Err(_) => {
             return Err(IndexerError::parse(format!("Unknown role: {}", event.role)));
         }
     }
 
-    tx.commit().await?;
     Ok(())
 }
 
-/// Process a HermesRoleRevoked message and write to storage
-pub async fn handle_role_revoked(
-    event: &HermesRoleRevoked,
-    storage: &Storage,
-) -> Result<(), IndexerError> {
+/// Process a HermesRoleRevoked message and accumulate into batch
+pub fn handle_role_revoked(event: &HermesRoleRevoked, batch: &mut Batch) -> Result<(), IndexerError> {
     let space_id = bytes_to_uuid(&event.space_id)?;
     let account_address = checksum_address(format!("0x{}", hex::encode(&event.account)));
-
-    let mut tx = storage.pool.begin().await?;
 
     match MembershipRole::try_from(event.role) {
         Ok(MembershipRole::Editor) => {
@@ -59,23 +48,22 @@ pub async fn handle_role_revoked(
                 address: account_address.clone(),
                 space_id,
             };
-            storage.remove_editors(&[editor], &mut tx).await?;
-            debug!(space_id = %space_id, address = %account_address, "Removed editor");
+            batch.remove_editors.push(editor);
+            debug!(space_id = %space_id, address = %account_address, "Accumulated editor removal into batch");
         }
         Ok(MembershipRole::Member) => {
             let member = MemberItem {
                 address: account_address.clone(),
                 space_id,
             };
-            storage.remove_members(&[member], &mut tx).await?;
-            debug!(space_id = %space_id, address = %account_address, "Removed member");
+            batch.remove_members.push(member);
+            debug!(space_id = %space_id, address = %account_address, "Accumulated member removal into batch");
         }
         Err(_) => {
             return Err(IndexerError::parse(format!("Unknown role: {}", event.role)));
         }
     }
 
-    tx.commit().await?;
     Ok(())
 }
 

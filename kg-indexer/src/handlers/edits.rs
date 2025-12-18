@@ -1,6 +1,6 @@
+use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
-use std::collections::hash_map::DefaultHasher;
 
 use hermes_schema::pb::knowledge::HermesEdit;
 use indexer_utils::id::transform_id_bytes;
@@ -9,14 +9,14 @@ use uuid::Uuid;
 use wire::pb::grc20::op::Payload;
 use wire::pb::grc20::options;
 
+use crate::batch::Batch;
 use crate::error::IndexerError;
 use crate::models::{
     entities::EntityItem,
     properties::{DataType, PropertyItem},
-    relations::{SetRelationItem, UnsetRelationItem, UpdateRelationItem},
+    relations::{RelationOp, SetRelationItem, UnsetRelationItem, UpdateRelationItem},
     values::{ValueChangeType, ValueOp},
 };
-use crate::storage::Storage;
 
 /// Metadata extracted from the HermesEdit for timestamping
 pub struct EditMetadata {
@@ -39,69 +39,174 @@ impl EditMetadata {
     }
 }
 
-/// Process a HermesEdit message and write to storage
-pub async fn handle_edit(
-    edit: &HermesEdit,
-    storage: &Storage,
-) -> Result<(), IndexerError> {
+/// Process a HermesEdit message and accumulate operations in the batch
+pub fn handle_edit(edit: &HermesEdit, batch: &mut Batch) -> Result<(), IndexerError> {
     let space_id = parse_space_id(&edit.space_id)?;
     let meta = EditMetadata::from_edit(edit);
 
     // Extract all data from the edit
     let entities = extract_entities(edit, &meta);
     let properties = extract_properties(edit);
-    let (set_values, delete_value_ids) = extract_values(edit, &space_id);
-    let (set_relations, update_relations, unset_relations, delete_relation_ids) =
-        extract_relations(edit, &space_id);
+    let value_ops = extract_values(edit, &space_id);
+    let relation_ops = extract_relations(edit, &space_id);
 
-    // Write to database in a transaction
-    let mut tx = storage.pool.begin().await?;
+    // Squash operations within this edit to resolve conflicts
+    let squashed_values = squash_values(&value_ops);
+    let squashed_relations = squash_relations(&relation_ops);
 
-    // Insert entities first (they may be referenced by values/relations)
-    if !entities.is_empty() {
-        storage.insert_entities(&entities, &mut tx).await?;
-    }
-
-    // Insert properties (must exist before values reference them)
-    if !properties.is_empty() {
-        storage.insert_properties(&properties, &mut tx).await?;
+    // Partition values into sets and deletes
+    for op in squashed_values {
+        match op.change_type {
+            ValueChangeType::Set => batch.set_values.push(op),
+            ValueChangeType::Delete => batch.delete_values.push((op.id, space_id)),
+        }
     }
 
-    // Insert/delete values
-    if !set_values.is_empty() {
-        storage.insert_values(&set_values, &mut tx).await?;
-    }
-    if !delete_value_ids.is_empty() {
-        storage.delete_values(&delete_value_ids, &space_id, &mut tx).await?;
-    }
-
-    // Insert/update/delete relations
-    if !set_relations.is_empty() {
-        storage.insert_relations(&set_relations, &mut tx).await?;
-    }
-    if !update_relations.is_empty() {
-        storage.update_relations(&update_relations, &mut tx).await?;
-    }
-    if !unset_relations.is_empty() {
-        storage.unset_relation_fields(&unset_relations, &mut tx).await?;
-    }
-    if !delete_relation_ids.is_empty() {
-        storage.delete_relations(&delete_relation_ids, &space_id, &mut tx).await?;
+    // Partition relations by operation type
+    for op in squashed_relations {
+        match op {
+            RelationOp::Create(r) => batch.set_relations.push(r),
+            RelationOp::Update(r) => batch.update_relations.push(r),
+            RelationOp::Unset(r) => batch.unset_relations.push(r),
+            RelationOp::Delete(id) => batch.delete_relations.push((id, space_id)),
+        }
     }
 
-    tx.commit().await?;
+    // Accumulate entities and properties (these don't need squashing - upserts handle it)
+    batch.entities.extend(entities);
+    batch.properties.extend(properties);
 
     debug!(
         space_id = %space_id,
-        entity_count = entities.len(),
-        property_count = properties.len(),
-        value_set_count = set_values.len(),
-        value_delete_count = delete_value_ids.len(),
-        relation_set_count = set_relations.len(),
-        "Processed edit"
+        "Accumulated edit into batch"
     );
 
     Ok(())
+}
+
+/// Squash value operations - last operation for each value ID wins
+fn squash_values(value_ops: &[ValueOp]) -> Vec<ValueOp> {
+    let mut hash: HashMap<Uuid, ValueOp> = HashMap::new();
+
+    for op in value_ops {
+        hash.insert(op.id, op.clone());
+    }
+
+    hash.into_values().collect()
+}
+
+/// Squash relation operations with proper merging logic
+fn squash_relations(relation_ops: &[RelationOp]) -> Vec<RelationOp> {
+    let mut hash: HashMap<Uuid, RelationOp> = HashMap::new();
+
+    for op in relation_ops {
+        let id = op.id();
+        if let Some(existing) = hash.get(&id) {
+            let merged = merge_relation_ops(existing.clone(), op.clone());
+            hash.insert(id, merged);
+        } else {
+            hash.insert(id, op.clone());
+        }
+    }
+
+    hash.into_values().collect()
+}
+
+/// Merge two relation operations for the same ID
+fn merge_relation_ops(existing: RelationOp, new: RelationOp) -> RelationOp {
+    match (existing, new.clone()) {
+        // create -> create: Use the new create
+        (RelationOp::Create(_), RelationOp::Create(_)) => new,
+
+        // create -> update: Merge fields into create
+        (RelationOp::Create(c), RelationOp::Update(u)) => RelationOp::Create(SetRelationItem {
+            id: c.id,
+            entity_id: c.entity_id,
+            type_id: c.type_id,
+            from_id: c.from_id,
+            to_id: c.to_id,
+            space_id: c.space_id,
+            from_space_id: u.from_space_id.or(c.from_space_id),
+            from_version_id: u.from_version_id.or(c.from_version_id),
+            to_space_id: u.to_space_id.or(c.to_space_id),
+            to_version_id: u.to_version_id.or(c.to_version_id),
+            position: u.position.or(c.position),
+            verified: u.verified.or(c.verified),
+        }),
+
+        // create -> delete: Delete wins
+        (RelationOp::Create(_), RelationOp::Delete(id)) => RelationOp::Delete(id),
+
+        // create -> unset: Apply unset to create
+        (RelationOp::Create(c), RelationOp::Unset(u)) => RelationOp::Create(SetRelationItem {
+            id: c.id,
+            entity_id: c.entity_id,
+            type_id: c.type_id,
+            from_id: c.from_id,
+            to_id: c.to_id,
+            space_id: c.space_id,
+            from_space_id: if u.from_space_id == Some(true) { None } else { c.from_space_id },
+            from_version_id: if u.from_version_id == Some(true) { None } else { c.from_version_id },
+            to_space_id: if u.to_space_id == Some(true) { None } else { c.to_space_id },
+            to_version_id: if u.to_version_id == Some(true) { None } else { c.to_version_id },
+            position: if u.position == Some(true) { None } else { c.position },
+            verified: if u.verified == Some(true) { None } else { c.verified },
+        }),
+
+        // update -> create: Create wins (overwrites)
+        (RelationOp::Update(_), RelationOp::Create(_)) => new,
+
+        // update -> update: Merge fields
+        (RelationOp::Update(e), RelationOp::Update(u)) => RelationOp::Update(UpdateRelationItem {
+            id: e.id,
+            space_id: e.space_id,
+            from_space_id: u.from_space_id.or(e.from_space_id),
+            from_version_id: u.from_version_id.or(e.from_version_id),
+            to_space_id: u.to_space_id.or(e.to_space_id),
+            to_version_id: u.to_version_id.or(e.to_version_id),
+            position: u.position.or(e.position),
+            verified: u.verified.or(e.verified),
+        }),
+
+        // update -> delete: Delete wins
+        (RelationOp::Update(_), RelationOp::Delete(id)) => RelationOp::Delete(id),
+
+        // update -> unset: Apply unset to update
+        (RelationOp::Update(e), RelationOp::Unset(u)) => RelationOp::Update(UpdateRelationItem {
+            id: e.id,
+            space_id: e.space_id,
+            from_space_id: if u.from_space_id == Some(true) { None } else { e.from_space_id },
+            from_version_id: if u.from_version_id == Some(true) { None } else { e.from_version_id },
+            to_space_id: if u.to_space_id == Some(true) { None } else { e.to_space_id },
+            to_version_id: if u.to_version_id == Some(true) { None } else { e.to_version_id },
+            position: if u.position == Some(true) { None } else { e.position },
+            verified: if u.verified == Some(true) { None } else { e.verified },
+        }),
+
+        // delete -> anything: New op wins (recreation after delete)
+        (RelationOp::Delete(_), _) => new,
+
+        // unset -> create: Create wins
+        (RelationOp::Unset(_), RelationOp::Create(_)) => new,
+
+        // unset -> update: Update wins
+        (RelationOp::Unset(_), RelationOp::Update(_)) => new,
+
+        // unset -> delete: Delete wins
+        (RelationOp::Unset(_), RelationOp::Delete(id)) => RelationOp::Delete(id),
+
+        // unset -> unset: Merge the unset flags
+        (RelationOp::Unset(e), RelationOp::Unset(u)) => RelationOp::Unset(UnsetRelationItem {
+            id: e.id,
+            space_id: e.space_id,
+            from_space_id: u.from_space_id.or(e.from_space_id),
+            from_version_id: u.from_version_id.or(e.from_version_id),
+            to_space_id: u.to_space_id.or(e.to_space_id),
+            to_version_id: u.to_version_id.or(e.to_version_id),
+            position: u.position.or(e.position),
+            verified: u.verified.or(e.verified),
+        }),
+    }
 }
 
 fn parse_space_id(space_id_str: &str) -> Result<Uuid, IndexerError> {
@@ -216,10 +321,8 @@ fn extract_properties(edit: &HermesEdit) -> Vec<PropertyItem> {
     properties
 }
 
-fn extract_values(edit: &HermesEdit, space_id: &Uuid) -> (Vec<ValueOp>, Vec<Uuid>) {
-    let mut set_values = Vec::new();
-    let mut delete_ids = Vec::new();
-    let mut seen: HashMap<Uuid, ValueOp> = HashMap::new();
+fn extract_values(edit: &HermesEdit, space_id: &Uuid) -> Vec<ValueOp> {
+    let mut value_ops = Vec::new();
 
     for op in &edit.ops {
         if let Some(payload) = &op.payload {
@@ -239,7 +342,7 @@ fn extract_values(edit: &HermesEdit, space_id: &Uuid) -> (Vec<ValueOp>, Vec<Uuid
                         let (language, unit) = extract_options(&value.options);
                         let value_id = derive_value_id(&entity_id, &property_id, space_id);
 
-                        let value_op = ValueOp {
+                        value_ops.push(ValueOp {
                             id: value_id,
                             change_type: ValueChangeType::Set,
                             entity_id,
@@ -252,9 +355,7 @@ fn extract_values(edit: &HermesEdit, space_id: &Uuid) -> (Vec<ValueOp>, Vec<Uuid
                             boolean: None,
                             time: None,
                             point: None,
-                        };
-
-                        seen.insert(value_id, value_op);
+                        });
                     }
                 }
                 Payload::UnsetEntityValues(entity) => {
@@ -271,7 +372,7 @@ fn extract_values(edit: &HermesEdit, space_id: &Uuid) -> (Vec<ValueOp>, Vec<Uuid
 
                         let value_id = derive_value_id(&entity_id, &property_id, space_id);
 
-                        let value_op = ValueOp {
+                        value_ops.push(ValueOp {
                             id: value_id,
                             change_type: ValueChangeType::Delete,
                             entity_id,
@@ -284,9 +385,7 @@ fn extract_values(edit: &HermesEdit, space_id: &Uuid) -> (Vec<ValueOp>, Vec<Uuid
                             boolean: None,
                             time: None,
                             point: None,
-                        };
-
-                        seen.insert(value_id, value_op);
+                        });
                     }
                 }
                 _ => {}
@@ -294,24 +393,11 @@ fn extract_values(edit: &HermesEdit, space_id: &Uuid) -> (Vec<ValueOp>, Vec<Uuid
         }
     }
 
-    for (id, op) in seen {
-        match op.change_type {
-            ValueChangeType::Set => set_values.push(op),
-            ValueChangeType::Delete => delete_ids.push(id),
-        }
-    }
-
-    (set_values, delete_ids)
+    value_ops
 }
 
-fn extract_relations(
-    edit: &HermesEdit,
-    space_id: &Uuid,
-) -> (Vec<SetRelationItem>, Vec<UpdateRelationItem>, Vec<UnsetRelationItem>, Vec<Uuid>) {
-    let mut set_relations = Vec::new();
-    let mut update_relations = Vec::new();
-    let mut unset_relations = Vec::new();
-    let mut delete_ids = Vec::new();
+fn extract_relations(edit: &HermesEdit, space_id: &Uuid) -> Vec<RelationOp> {
+    let mut relation_ops = Vec::new();
 
     for op in &edit.ops {
         if let Some(payload) = &op.payload {
@@ -362,7 +448,7 @@ fn extract_relations(
                         .and_then(|s| transform_id_bytes(s).ok())
                         .map(|s| Uuid::from_bytes(s).to_string());
 
-                    set_relations.push(SetRelationItem {
+                    relation_ops.push(RelationOp::Create(SetRelationItem {
                         id: relation_id,
                         entity_id,
                         space_id: *space_id,
@@ -375,7 +461,7 @@ fn extract_relations(
                         to_space_id: to_space,
                         to_version_id: to_version,
                         verified: relation.verified,
-                    });
+                    }));
                 }
                 Payload::UpdateRelation(updated) => {
                     let relation_id = match transform_id_bytes(updated.id.clone()) {
@@ -407,7 +493,7 @@ fn extract_relations(
                         .and_then(|s| transform_id_bytes(s).ok())
                         .map(|s| Uuid::from_bytes(s).to_string());
 
-                    update_relations.push(UpdateRelationItem {
+                    relation_ops.push(RelationOp::Update(UpdateRelationItem {
                         id: relation_id,
                         space_id: *space_id,
                         position: updated.position.clone(),
@@ -416,7 +502,7 @@ fn extract_relations(
                         from_space_id: from_space,
                         from_version_id: from_version,
                         to_version_id: to_version,
-                    });
+                    }));
                 }
                 Payload::UnsetRelationFields(unset) => {
                     let relation_id = match transform_id_bytes(unset.id.clone()) {
@@ -424,7 +510,7 @@ fn extract_relations(
                         Err(_) => continue,
                     };
 
-                    unset_relations.push(UnsetRelationItem {
+                    relation_ops.push(RelationOp::Unset(UnsetRelationItem {
                         id: relation_id,
                         space_id: *space_id,
                         from_space_id: unset.from_space,
@@ -433,11 +519,11 @@ fn extract_relations(
                         to_version_id: unset.to_version,
                         position: unset.position,
                         verified: unset.verified,
-                    });
+                    }));
                 }
                 Payload::DeleteRelation(relation_id_bytes) => {
                     if let Ok(bytes) = transform_id_bytes(relation_id_bytes.clone()) {
-                        delete_ids.push(Uuid::from_bytes(bytes));
+                        relation_ops.push(RelationOp::Delete(Uuid::from_bytes(bytes)));
                     }
                 }
                 _ => {}
@@ -445,7 +531,7 @@ fn extract_relations(
         }
     }
 
-    (set_relations, update_relations, unset_relations, delete_ids)
+    relation_ops
 }
 
 fn derive_value_id(entity_id: &Uuid, property_id: &Uuid, space_id: &Uuid) -> Uuid {
@@ -491,5 +577,383 @@ fn extract_options(options: &Option<wire::pb::grc20::Options>) -> (Option<String
         }
     } else {
         (None, None)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn make_value_op(id: Uuid, change_type: ValueChangeType, value: Option<String>) -> ValueOp {
+        ValueOp {
+            id,
+            change_type,
+            entity_id: Uuid::new_v4(),
+            property_id: Uuid::new_v4(),
+            space_id: Uuid::new_v4(),
+            language: None,
+            unit: None,
+            string: value,
+            number: None,
+            boolean: None,
+            time: None,
+            point: None,
+        }
+    }
+
+    fn make_create_relation(id: Uuid) -> SetRelationItem {
+        SetRelationItem {
+            id,
+            entity_id: Uuid::new_v4(),
+            type_id: Uuid::new_v4(),
+            from_id: Uuid::new_v4(),
+            to_id: Uuid::new_v4(),
+            space_id: Uuid::new_v4(),
+            from_space_id: None,
+            from_version_id: None,
+            to_space_id: None,
+            to_version_id: None,
+            position: None,
+            verified: None,
+        }
+    }
+
+    fn make_update_relation(id: Uuid, space_id: Uuid) -> UpdateRelationItem {
+        UpdateRelationItem {
+            id,
+            space_id,
+            from_space_id: None,
+            from_version_id: None,
+            to_space_id: None,
+            to_version_id: None,
+            position: None,
+            verified: None,
+        }
+    }
+
+    fn make_unset_relation(id: Uuid, space_id: Uuid) -> UnsetRelationItem {
+        UnsetRelationItem {
+            id,
+            space_id,
+            from_space_id: None,
+            from_version_id: None,
+            to_space_id: None,
+            to_version_id: None,
+            position: None,
+            verified: None,
+        }
+    }
+
+    // ===================
+    // Value squashing tests
+    // ===================
+
+    #[test]
+    fn test_squash_values_empty() {
+        let ops: Vec<ValueOp> = vec![];
+        let result = squash_values(&ops);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_squash_values_single_set() {
+        let id = Uuid::new_v4();
+        let ops = vec![make_value_op(id, ValueChangeType::Set, Some("hello".into()))];
+        let result = squash_values(&ops);
+        assert_eq!(result.len(), 1);
+        assert!(matches!(result[0].change_type, ValueChangeType::Set));
+    }
+
+    #[test]
+    fn test_squash_values_set_then_delete_same_id() {
+        let id = Uuid::new_v4();
+        let ops = vec![
+            make_value_op(id, ValueChangeType::Set, Some("hello".into())),
+            make_value_op(id, ValueChangeType::Delete, None),
+        ];
+        let result = squash_values(&ops);
+        assert_eq!(result.len(), 1);
+        assert!(matches!(result[0].change_type, ValueChangeType::Delete));
+    }
+
+    #[test]
+    fn test_squash_values_delete_then_set_same_id() {
+        let id = Uuid::new_v4();
+        let ops = vec![
+            make_value_op(id, ValueChangeType::Delete, None),
+            make_value_op(id, ValueChangeType::Set, Some("recreated".into())),
+        ];
+        let result = squash_values(&ops);
+        assert_eq!(result.len(), 1);
+        assert!(matches!(result[0].change_type, ValueChangeType::Set));
+        assert_eq!(result[0].string, Some("recreated".into()));
+    }
+
+    #[test]
+    fn test_squash_values_multiple_sets_same_id() {
+        let id = Uuid::new_v4();
+        let ops = vec![
+            make_value_op(id, ValueChangeType::Set, Some("first".into())),
+            make_value_op(id, ValueChangeType::Set, Some("second".into())),
+            make_value_op(id, ValueChangeType::Set, Some("third".into())),
+        ];
+        let result = squash_values(&ops);
+        assert_eq!(result.len(), 1);
+        // Last one wins
+        assert_eq!(result[0].string, Some("third".into()));
+    }
+
+    #[test]
+    fn test_squash_values_different_ids_preserved() {
+        let id1 = Uuid::new_v4();
+        let id2 = Uuid::new_v4();
+        let ops = vec![
+            make_value_op(id1, ValueChangeType::Set, Some("value1".into())),
+            make_value_op(id2, ValueChangeType::Set, Some("value2".into())),
+        ];
+        let result = squash_values(&ops);
+        assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn test_squash_values_mixed_operations() {
+        let id1 = Uuid::new_v4();
+        let id2 = Uuid::new_v4();
+        let id3 = Uuid::new_v4();
+        let ops = vec![
+            make_value_op(id1, ValueChangeType::Set, Some("v1".into())),
+            make_value_op(id2, ValueChangeType::Set, Some("v2".into())),
+            make_value_op(id1, ValueChangeType::Delete, None), // id1 gets deleted
+            make_value_op(id3, ValueChangeType::Set, Some("v3".into())),
+            make_value_op(id2, ValueChangeType::Set, Some("v2-updated".into())), // id2 updated
+        ];
+        let result = squash_values(&ops);
+        assert_eq!(result.len(), 3);
+
+        let id1_op = result.iter().find(|op| op.id == id1).unwrap();
+        assert!(matches!(id1_op.change_type, ValueChangeType::Delete));
+
+        let id2_op = result.iter().find(|op| op.id == id2).unwrap();
+        assert_eq!(id2_op.string, Some("v2-updated".into()));
+
+        let id3_op = result.iter().find(|op| op.id == id3).unwrap();
+        assert_eq!(id3_op.string, Some("v3".into()));
+    }
+
+    // ===================
+    // Relation squashing tests
+    // ===================
+
+    #[test]
+    fn test_squash_relations_empty() {
+        let ops: Vec<RelationOp> = vec![];
+        let result = squash_relations(&ops);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn test_squash_relations_single_create() {
+        let id = Uuid::new_v4();
+        let ops = vec![RelationOp::Create(make_create_relation(id))];
+        let result = squash_relations(&ops);
+        assert_eq!(result.len(), 1);
+        assert!(matches!(result[0], RelationOp::Create(_)));
+    }
+
+    #[test]
+    fn test_squash_relations_create_then_delete() {
+        let id = Uuid::new_v4();
+        let ops = vec![
+            RelationOp::Create(make_create_relation(id)),
+            RelationOp::Delete(id),
+        ];
+        let result = squash_relations(&ops);
+        assert_eq!(result.len(), 1);
+        assert!(matches!(result[0], RelationOp::Delete(_)));
+    }
+
+    #[test]
+    fn test_squash_relations_delete_then_create() {
+        let id = Uuid::new_v4();
+        let ops = vec![
+            RelationOp::Delete(id),
+            RelationOp::Create(make_create_relation(id)),
+        ];
+        let result = squash_relations(&ops);
+        assert_eq!(result.len(), 1);
+        assert!(matches!(result[0], RelationOp::Create(_)));
+    }
+
+    #[test]
+    fn test_squash_relations_create_then_update_merges_fields() {
+        let id = Uuid::new_v4();
+        let space_id = Uuid::new_v4();
+
+        let mut create = make_create_relation(id);
+        create.space_id = space_id;
+        create.position = Some("original".into());
+
+        let mut update = make_update_relation(id, space_id);
+        update.position = Some("updated".into());
+        update.verified = Some(true);
+
+        let ops = vec![RelationOp::Create(create), RelationOp::Update(update)];
+        let result = squash_relations(&ops);
+        assert_eq!(result.len(), 1);
+
+        if let RelationOp::Create(r) = &result[0] {
+            assert_eq!(r.position, Some("updated".into()));
+            assert_eq!(r.verified, Some(true));
+        } else {
+            panic!("Expected Create variant");
+        }
+    }
+
+    #[test]
+    fn test_squash_relations_update_then_update_merges_fields() {
+        let id = Uuid::new_v4();
+        let space_id = Uuid::new_v4();
+
+        let mut update1 = make_update_relation(id, space_id);
+        update1.position = Some("pos1".into());
+        update1.from_space_id = Some("from_space".into());
+
+        let mut update2 = make_update_relation(id, space_id);
+        update2.position = Some("pos2".into());
+        update2.to_space_id = Some("to_space".into());
+
+        let ops = vec![RelationOp::Update(update1), RelationOp::Update(update2)];
+        let result = squash_relations(&ops);
+        assert_eq!(result.len(), 1);
+
+        if let RelationOp::Update(r) = &result[0] {
+            assert_eq!(r.position, Some("pos2".into())); // Second update wins
+            assert_eq!(r.from_space_id, Some("from_space".into())); // Preserved from first
+            assert_eq!(r.to_space_id, Some("to_space".into())); // From second
+        } else {
+            panic!("Expected Update variant");
+        }
+    }
+
+    #[test]
+    fn test_squash_relations_update_then_delete() {
+        let id = Uuid::new_v4();
+        let space_id = Uuid::new_v4();
+
+        let update = make_update_relation(id, space_id);
+        let ops = vec![RelationOp::Update(update), RelationOp::Delete(id)];
+        let result = squash_relations(&ops);
+        assert_eq!(result.len(), 1);
+        assert!(matches!(result[0], RelationOp::Delete(_)));
+    }
+
+    #[test]
+    fn test_squash_relations_create_then_unset_clears_fields() {
+        let id = Uuid::new_v4();
+        let space_id = Uuid::new_v4();
+
+        let mut create = make_create_relation(id);
+        create.space_id = space_id;
+        create.position = Some("has_position".into());
+        create.verified = Some(true);
+
+        let mut unset = make_unset_relation(id, space_id);
+        unset.position = Some(true); // Unset position
+        unset.verified = Some(false); // Don't unset verified
+
+        let ops = vec![RelationOp::Create(create), RelationOp::Unset(unset)];
+        let result = squash_relations(&ops);
+        assert_eq!(result.len(), 1);
+
+        if let RelationOp::Create(r) = &result[0] {
+            assert_eq!(r.position, None); // Was unset
+            assert_eq!(r.verified, Some(true)); // Was preserved
+        } else {
+            panic!("Expected Create variant");
+        }
+    }
+
+    #[test]
+    fn test_squash_relations_unset_then_unset_merges() {
+        let id = Uuid::new_v4();
+        let space_id = Uuid::new_v4();
+
+        let mut unset1 = make_unset_relation(id, space_id);
+        unset1.position = Some(true);
+
+        let mut unset2 = make_unset_relation(id, space_id);
+        unset2.verified = Some(true);
+
+        let ops = vec![RelationOp::Unset(unset1), RelationOp::Unset(unset2)];
+        let result = squash_relations(&ops);
+        assert_eq!(result.len(), 1);
+
+        if let RelationOp::Unset(r) = &result[0] {
+            assert_eq!(r.position, Some(true));
+            assert_eq!(r.verified, Some(true));
+        } else {
+            panic!("Expected Unset variant");
+        }
+    }
+
+    #[test]
+    fn test_squash_relations_unset_then_create_overwrites() {
+        let id = Uuid::new_v4();
+        let space_id = Uuid::new_v4();
+
+        let unset = make_unset_relation(id, space_id);
+        let create = make_create_relation(id);
+
+        let ops = vec![RelationOp::Unset(unset), RelationOp::Create(create)];
+        let result = squash_relations(&ops);
+        assert_eq!(result.len(), 1);
+        assert!(matches!(result[0], RelationOp::Create(_)));
+    }
+
+    #[test]
+    fn test_squash_relations_different_ids_preserved() {
+        let id1 = Uuid::new_v4();
+        let id2 = Uuid::new_v4();
+
+        let ops = vec![
+            RelationOp::Create(make_create_relation(id1)),
+            RelationOp::Create(make_create_relation(id2)),
+        ];
+        let result = squash_relations(&ops);
+        assert_eq!(result.len(), 2);
+    }
+
+    #[test]
+    fn test_squash_relations_complex_sequence() {
+        let id1 = Uuid::new_v4();
+        let id2 = Uuid::new_v4();
+        let space_id = Uuid::new_v4();
+
+        let mut create1 = make_create_relation(id1);
+        create1.space_id = space_id;
+
+        let mut update1 = make_update_relation(id1, space_id);
+        update1.position = Some("pos".into());
+
+        let ops = vec![
+            RelationOp::Create(create1),
+            RelationOp::Create(make_create_relation(id2)),
+            RelationOp::Update(update1),
+            RelationOp::Delete(id2), // id2 created then deleted
+        ];
+        let result = squash_relations(&ops);
+        assert_eq!(result.len(), 2);
+
+        // id1 should be Create with merged position
+        let id1_op = result.iter().find(|op| op.id() == id1).unwrap();
+        if let RelationOp::Create(r) = id1_op {
+            assert_eq!(r.position, Some("pos".into()));
+        } else {
+            panic!("Expected Create for id1");
+        }
+
+        // id2 should be Delete
+        let id2_op = result.iter().find(|op| op.id() == id2).unwrap();
+        assert!(matches!(id2_op, RelationOp::Delete(_)));
     }
 }

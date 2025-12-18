@@ -1,18 +1,18 @@
-use hermes_schema::pb::space::{HermesSpaceTrustExtension, hermes_space_trust_extension::Extension};
+use hermes_schema::pb::space::{hermes_space_trust_extension::Extension, HermesSpaceTrustExtension};
 use tracing::debug;
 use uuid::Uuid;
 
+use crate::batch::Batch;
 use crate::error::IndexerError;
 use crate::models::subspaces::SubspaceItem;
-use crate::storage::Storage;
 
-/// Process a HermesSpaceTrustExtension message and write to storage
+/// Process a HermesSpaceTrustExtension message and accumulate into batch
 ///
 /// Trust extensions represent parent-child relationships between spaces.
 /// The "Verified" extension type maps to subspace relationships.
-pub async fn handle_trust_extension(
+pub fn handle_trust_extension(
     event: &HermesSpaceTrustExtension,
-    storage: &Storage,
+    batch: &mut Batch,
 ) -> Result<(), IndexerError> {
     let parent_space_id = bytes_to_uuid(&event.source_space_id)?;
 
@@ -25,14 +25,12 @@ pub async fn handle_trust_extension(
                 parent_space_id,
             };
 
-            let mut tx = storage.pool.begin().await?;
-            storage.insert_subspaces(&[subspace], &mut tx).await?;
-            tx.commit().await?;
+            batch.add_subspaces.push(subspace);
 
             debug!(
                 parent_space_id = %parent_space_id,
                 subspace_id = %subspace_id,
-                "Added verified subspace"
+                "Accumulated verified subspace into batch"
             );
         }
         Some(Extension::Related(related)) => {
@@ -55,7 +53,9 @@ pub async fn handle_trust_extension(
             );
         }
         None => {
-            return Err(IndexerError::parse("HermesSpaceTrustExtension has no extension"));
+            return Err(IndexerError::parse(
+                "HermesSpaceTrustExtension has no extension",
+            ));
         }
     }
 
