@@ -32,6 +32,12 @@ spec:
                 secretKeyRef:
                   name: api-secrets
                   key: DATABASE_URL
+            - name: DATABASE_SSL_CA
+              valueFrom:
+                secretKeyRef:
+                  name: api-secrets
+                  key: DATABASE_SSL_CA
+                  optional: true
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
