@@ -152,21 +152,23 @@ impl Storage {
 
     pub async fn delete_values(
         &self,
-        value_ids: &[Uuid],
-        space_id: &Uuid,
+        deletes: &[(Uuid, Uuid)], // (value_id, space_id)
         tx: &mut sqlx::Transaction<'_, Postgres>,
     ) -> Result<(), IndexerError> {
-        if value_ids.is_empty() {
+        if deletes.is_empty() {
             return Ok(());
         }
 
-        let ids: Vec<String> = value_ids.iter().map(|id| id.to_string()).collect();
+        let ids: Vec<String> = deletes.iter().map(|(id, _)| id.to_string()).collect();
+        let space_ids: Vec<Uuid> = deletes.iter().map(|(_, sid)| *sid).collect();
 
         sqlx::query(
-            "DELETE FROM values WHERE space_id = $1 AND id IN (SELECT * FROM UNNEST($2::text[]))",
+            "DELETE FROM values WHERE (id, space_id) IN (
+                SELECT id, space_id FROM UNNEST($1::text[], $2::uuid[]) AS t(id, space_id)
+            )",
         )
-        .bind(space_id)
         .bind(&ids)
+        .bind(&space_ids)
         .execute(&mut **tx)
         .await?;
 
@@ -330,19 +332,23 @@ impl Storage {
 
     pub async fn delete_relations(
         &self,
-        relation_ids: &[Uuid],
-        space_id: &Uuid,
+        deletes: &[(Uuid, Uuid)], // (relation_id, space_id)
         tx: &mut sqlx::Transaction<'_, Postgres>,
     ) -> Result<(), IndexerError> {
-        if relation_ids.is_empty() {
+        if deletes.is_empty() {
             return Ok(());
         }
 
+        let ids: Vec<Uuid> = deletes.iter().map(|(id, _)| *id).collect();
+        let space_ids: Vec<Uuid> = deletes.iter().map(|(_, sid)| *sid).collect();
+
         sqlx::query(
-            "DELETE FROM relations WHERE space_id = $1 AND id IN (SELECT * FROM UNNEST($2::uuid[]))",
+            "DELETE FROM relations WHERE (id, space_id) IN (
+                SELECT id, space_id FROM UNNEST($1::uuid[], $2::uuid[]) AS t(id, space_id)
+            )",
         )
-        .bind(space_id)
-        .bind(relation_ids)
+        .bind(&ids)
+        .bind(&space_ids)
         .execute(&mut **tx)
         .await?;
 

@@ -102,19 +102,8 @@ impl Batch {
         if !self.set_values.is_empty() {
             storage.insert_values(&self.set_values, &mut tx).await?;
         }
-
-        // Group delete_values by space_id for batch deletion
         if !self.delete_values.is_empty() {
-            let mut by_space: std::collections::HashMap<Uuid, Vec<Uuid>> =
-                std::collections::HashMap::new();
-            for (value_id, space_id) in &self.delete_values {
-                by_space.entry(*space_id).or_default().push(*value_id);
-            }
-            for (space_id, value_ids) in by_space {
-                storage
-                    .delete_values(&value_ids, &space_id, &mut tx)
-                    .await?;
-            }
+            storage.delete_values(&self.delete_values, &mut tx).await?;
         }
 
         // Insert/update/delete relations
@@ -134,18 +123,10 @@ impl Batch {
                 .await?;
         }
 
-        // Group delete_relations by space_id for batch deletion
         if !self.delete_relations.is_empty() {
-            let mut by_space: std::collections::HashMap<Uuid, Vec<Uuid>> =
-                std::collections::HashMap::new();
-            for (relation_id, space_id) in &self.delete_relations {
-                by_space.entry(*space_id).or_default().push(*relation_id);
-            }
-            for (space_id, relation_ids) in by_space {
-                storage
-                    .delete_relations(&relation_ids, &space_id, &mut tx)
-                    .await?;
-            }
+            storage
+                .delete_relations(&self.delete_relations, &mut tx)
+                .await?;
         }
 
         // Membership operations
