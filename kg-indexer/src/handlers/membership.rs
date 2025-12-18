@@ -2,7 +2,7 @@ use hermes_schema::pb::membership::{HermesRoleGranted, HermesRoleRevoked, Member
 use indexer_utils::checksum_address;
 use uuid::Uuid;
 
-use crate::error::IndexerError;
+use crate::error::HandlerError;
 use crate::models::membership::{EditorItem, MemberItem};
 
 /// Result of processing a membership change
@@ -14,7 +14,7 @@ pub enum MembershipChange {
 }
 
 /// Process a HermesRoleGranted message and return the membership change
-pub fn handle_role_granted(event: &HermesRoleGranted) -> Result<MembershipChange, IndexerError> {
+pub fn handle_role_granted(event: &HermesRoleGranted) -> Result<MembershipChange, HandlerError> {
     let space_id = bytes_to_uuid(&event.space_id)?;
     let account_address = checksum_address(format!("0x{}", hex::encode(&event.account)));
 
@@ -27,12 +27,12 @@ pub fn handle_role_granted(event: &HermesRoleGranted) -> Result<MembershipChange
             address: account_address,
             space_id,
         })),
-        Err(_) => Err(IndexerError::parse(format!("Unknown role: {}", event.role))),
+        Err(_) => Err(HandlerError::UnknownRole(event.role)),
     }
 }
 
 /// Process a HermesRoleRevoked message and return the membership change
-pub fn handle_role_revoked(event: &HermesRoleRevoked) -> Result<MembershipChange, IndexerError> {
+pub fn handle_role_revoked(event: &HermesRoleRevoked) -> Result<MembershipChange, HandlerError> {
     let space_id = bytes_to_uuid(&event.space_id)?;
     let account_address = checksum_address(format!("0x{}", hex::encode(&event.account)));
 
@@ -45,16 +45,13 @@ pub fn handle_role_revoked(event: &HermesRoleRevoked) -> Result<MembershipChange
             address: account_address,
             space_id,
         })),
-        Err(_) => Err(IndexerError::parse(format!("Unknown role: {}", event.role))),
+        Err(_) => Err(HandlerError::UnknownRole(event.role)),
     }
 }
 
-fn bytes_to_uuid(bytes: &[u8]) -> Result<Uuid, IndexerError> {
+fn bytes_to_uuid(bytes: &[u8]) -> Result<Uuid, HandlerError> {
     if bytes.len() != 16 {
-        return Err(IndexerError::parse(format!(
-            "Invalid UUID bytes length: expected 16, got {}",
-            bytes.len()
-        )));
+        return Err(HandlerError::InvalidUuidBytes(bytes.len()));
     }
     let mut arr = [0u8; 16];
     arr.copy_from_slice(bytes);

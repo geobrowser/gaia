@@ -8,7 +8,7 @@ use uuid::Uuid;
 use wire::pb::grc20::op::Payload;
 use wire::pb::grc20::options;
 
-use crate::error::IndexerError;
+use crate::error::HandlerError;
 use crate::models::{
     entities::EntityItem,
     properties::{DataType, PropertyItem},
@@ -46,7 +46,7 @@ impl EditMetadata {
 }
 
 /// Process a HermesEdit message and return the extracted data
-pub fn handle_edit(edit: &HermesEdit) -> Result<EditResult, IndexerError> {
+pub fn handle_edit(edit: &HermesEdit) -> Result<EditResult, HandlerError> {
     let space_id = parse_space_id(&edit.space_id)?;
     let meta = EditMetadata::from_edit(edit);
 
@@ -193,7 +193,7 @@ fn merge_relation_ops(existing: RelationOp, new: RelationOp) -> RelationOp {
     }
 }
 
-fn parse_space_id(space_id_str: &str) -> Result<Uuid, IndexerError> {
+fn parse_space_id(space_id_str: &str) -> Result<Uuid, HandlerError> {
     // Handle hex-encoded UUID bytes (32 hex chars) or standard UUID format
     if space_id_str.len() == 32 && space_id_str.chars().all(|c| c.is_ascii_hexdigit()) {
         let uuid_str = format!(
@@ -205,10 +205,10 @@ fn parse_space_id(space_id_str: &str) -> Result<Uuid, IndexerError> {
             &space_id_str[20..32]
         );
         Uuid::parse_str(&uuid_str)
-            .map_err(|e| IndexerError::parse(format!("Invalid hex-encoded space_id: {}", e)))
+            .map_err(|e| HandlerError::InvalidSpaceId(format!("hex: {}", e)))
     } else {
         Uuid::parse_str(space_id_str)
-            .map_err(|e| IndexerError::parse(format!("Invalid space_id: {}", e)))
+            .map_err(|e| HandlerError::InvalidSpaceId(e.to_string()))
     }
 }
 

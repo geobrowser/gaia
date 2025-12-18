@@ -1,5 +1,22 @@
 use thiserror::Error;
 
+/// Errors that can occur when processing messages in handlers
+#[derive(Error, Debug)]
+pub enum HandlerError {
+    #[error("Invalid space ID: {0}")]
+    InvalidSpaceId(String),
+
+    #[error("Invalid UUID bytes: expected 16 bytes, got {0}")]
+    InvalidUuidBytes(usize),
+
+    #[error("Missing payload in message")]
+    MissingPayload,
+
+    #[error("Unknown membership role: {0}")]
+    UnknownRole(i32),
+}
+
+/// Top-level errors for the indexer
 #[derive(Error, Debug)]
 pub enum IndexerError {
     #[error("Kafka error: {0}")]
@@ -8,8 +25,11 @@ pub enum IndexerError {
     #[error("Database error: {0}")]
     Database(#[from] sqlx::Error),
 
-    #[error("Parse error: {0}")]
-    Parse(String),
+    #[error("Handler error: {0}")]
+    Handler(#[from] HandlerError),
+
+    #[error("Decode error: {0}")]
+    Decode(String),
 
     #[error("Config error: {0}")]
     Config(String),
@@ -20,8 +40,8 @@ impl IndexerError {
         IndexerError::Kafka(msg.into())
     }
 
-    pub fn parse(msg: impl Into<String>) -> Self {
-        IndexerError::Parse(msg.into())
+    pub fn decode(msg: impl Into<String>) -> Self {
+        IndexerError::Decode(msg.into())
     }
 
     pub fn config(msg: impl Into<String>) -> Self {

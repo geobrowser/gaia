@@ -2,11 +2,11 @@ use hermes_schema::pb::space::{hermes_create_space::Payload, HermesCreateSpace};
 use indexer_utils::checksum_address;
 use uuid::Uuid;
 
-use crate::error::IndexerError;
+use crate::error::HandlerError;
 use crate::models::spaces::{SpaceItem, SpaceType};
 
 /// Process a HermesCreateSpace message and return the space item
-pub fn handle_create_space(space: &HermesCreateSpace) -> Result<SpaceItem, IndexerError> {
+pub fn handle_create_space(space: &HermesCreateSpace) -> Result<SpaceItem, HandlerError> {
     let space_id = bytes_to_uuid(&space.space_id)?;
 
     let space_item = match &space.payload {
@@ -38,19 +38,16 @@ pub fn handle_create_space(space: &HermesCreateSpace) -> Result<SpaceItem, Index
             }
         }
         None => {
-            return Err(IndexerError::parse("HermesCreateSpace has no payload"));
+            return Err(HandlerError::MissingPayload);
         }
     };
 
     Ok(space_item)
 }
 
-fn bytes_to_uuid(bytes: &[u8]) -> Result<Uuid, IndexerError> {
+fn bytes_to_uuid(bytes: &[u8]) -> Result<Uuid, HandlerError> {
     if bytes.len() != 16 {
-        return Err(IndexerError::parse(format!(
-            "Invalid UUID bytes length: expected 16, got {}",
-            bytes.len()
-        )));
+        return Err(HandlerError::InvalidUuidBytes(bytes.len()));
     }
     let mut arr = [0u8; 16];
     arr.copy_from_slice(bytes);

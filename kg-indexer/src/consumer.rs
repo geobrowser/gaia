@@ -112,12 +112,12 @@ pub fn parse_message(
     match topic {
         "knowledge.edits" => {
             let edit = hermes_schema::pb::knowledge::HermesEdit::decode(payload)
-                .map_err(|e| IndexerError::parse(format!("Failed to decode HermesEdit: {}", e)))?;
+                .map_err(|e| IndexerError::decode(format!("HermesEdit: {}", e)))?;
             Ok(KgMessage::Edit(edit))
         }
         "space.creations" => {
             let space = hermes_schema::pb::space::HermesCreateSpace::decode(payload)
-                .map_err(|e| IndexerError::parse(format!("Failed to decode HermesCreateSpace: {}", e)))?;
+                .map_err(|e| IndexerError::decode(format!("HermesCreateSpace: {}", e)))?;
             Ok(KgMessage::CreateSpace(space))
         }
         "space.membership" => {
@@ -128,13 +128,13 @@ pub fn parse_message(
             if let Ok(revoked) = hermes_schema::pb::membership::HermesRoleRevoked::decode(payload) {
                 return Ok(KgMessage::RoleRevoked(revoked));
             }
-            Err(IndexerError::parse("Failed to decode membership message"))
+            Err(IndexerError::decode("membership message"))
         }
         "space.trust.extensions" => {
             let extension = hermes_schema::pb::space::HermesSpaceTrustExtension::decode(payload)
-                .map_err(|e| IndexerError::parse(format!("Failed to decode HermesSpaceTrustExtension: {}", e)))?;
+                .map_err(|e| IndexerError::decode(format!("HermesSpaceTrustExtension: {}", e)))?;
             Ok(KgMessage::TrustExtension(extension))
         }
-        _ => Err(IndexerError::parse(format!("Unknown topic: {}", topic))),
+        _ => Err(IndexerError::decode(format!("unknown topic: {}", topic))),
     }
 }

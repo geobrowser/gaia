@@ -2,7 +2,7 @@ use hermes_schema::pb::space::{hermes_space_trust_extension::Extension, HermesSp
 use tracing::debug;
 use uuid::Uuid;
 
-use crate::error::IndexerError;
+use crate::error::HandlerError;
 use crate::models::subspaces::SubspaceItem;
 
 /// Process a HermesSpaceTrustExtension message and return a subspace if applicable
@@ -12,7 +12,7 @@ use crate::models::subspaces::SubspaceItem;
 /// Returns None for Related and Subtopic extensions.
 pub fn handle_trust_extension(
     event: &HermesSpaceTrustExtension,
-) -> Result<Option<SubspaceItem>, IndexerError> {
+) -> Result<Option<SubspaceItem>, HandlerError> {
     let parent_space_id = bytes_to_uuid(&event.source_space_id)?;
 
     match &event.extension {
@@ -45,18 +45,13 @@ pub fn handle_trust_extension(
             );
             Ok(None)
         }
-        None => Err(IndexerError::parse(
-            "HermesSpaceTrustExtension has no extension",
-        )),
+        None => Err(HandlerError::MissingPayload),
     }
 }
 
-fn bytes_to_uuid(bytes: &[u8]) -> Result<Uuid, IndexerError> {
+fn bytes_to_uuid(bytes: &[u8]) -> Result<Uuid, HandlerError> {
     if bytes.len() != 16 {
-        return Err(IndexerError::parse(format!(
-            "Invalid UUID bytes length: expected 16, got {}",
-            bytes.len()
-        )));
+        return Err(HandlerError::InvalidUuidBytes(bytes.len()));
     }
     let mut arr = [0u8; 16];
     arr.copy_from_slice(bytes);
