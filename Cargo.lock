@@ -3250,6 +3250,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "kg-indexer"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "axiom-rs",
+ "chrono",
+ "dotenv",
+ "futures 0.3.31",
+ "hermes-schema",
+ "hex",
+ "indexer_utils",
+ "prost 0.13.5",
+ "rdkafka 0.38.0",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "thiserror 2.0.17",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+ "wire",
+]
+
+[[package]]
 name = "lazy_static"
 version = "1.5.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"

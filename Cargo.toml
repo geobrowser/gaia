@@ -28,6 +28,8 @@ members = [
 
     "atlas",
     "hermes-substream",
+
+    "kg-indexer",
 ]
 # `substreams build` doesn't work well when in a workspace. The CLI looks for the
 # target directory within the substream crate, but the workspace hoists it to the
