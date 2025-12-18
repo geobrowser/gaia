@@ -6,8 +6,8 @@ pub enum HandlerError {
     #[error("Invalid space ID: {0}")]
     InvalidSpaceId(String),
 
-    #[error("Invalid UUID bytes: expected 16 bytes, got {0}")]
-    InvalidUuidBytes(usize),
+    #[error("Invalid UUID bytes: {0}")]
+    InvalidUuidBytes(#[from] uuid::Error),
 
     #[error("Missing payload in message")]
     MissingPayload,

@@ -13,11 +13,11 @@ use crate::models::subspaces::SubspaceItem;
 pub fn handle_trust_extension(
     event: &HermesSpaceTrustExtension,
 ) -> Result<Option<SubspaceItem>, HandlerError> {
-    let parent_space_id = bytes_to_uuid(&event.source_space_id)?;
+    let parent_space_id = Uuid::from_slice(&event.source_space_id)?;
 
     match &event.extension {
         Some(Extension::Verified(verified)) => {
-            let subspace_id = bytes_to_uuid(&verified.target_space_id)?;
+            let subspace_id = Uuid::from_slice(&verified.target_space_id)?;
 
             Ok(Some(SubspaceItem {
                 subspace_id,
@@ -27,7 +27,7 @@ pub fn handle_trust_extension(
         Some(Extension::Related(related)) => {
             // Related spaces are a different relationship type
             // For now we don't store these in the subspaces table
-            let target_id = bytes_to_uuid(&related.target_space_id)?;
+            let target_id = Uuid::from_slice(&related.target_space_id)?;
             debug!(
                 source_space_id = %parent_space_id,
                 target_space_id = %target_id,
@@ -37,7 +37,7 @@ pub fn handle_trust_extension(
         }
         Some(Extension::Subtopic(subtopic)) => {
             // Subtopic relationships are for topic hierarchies
-            let target_id = bytes_to_uuid(&subtopic.target_topic_id)?;
+            let target_id = Uuid::from_slice(&subtopic.target_topic_id)?;
             debug!(
                 source_space_id = %parent_space_id,
                 target_topic_id = %target_id,
@@ -47,13 +47,4 @@ pub fn handle_trust_extension(
         }
         None => Err(HandlerError::MissingPayload),
     }
-}
-
-fn bytes_to_uuid(bytes: &[u8]) -> Result<Uuid, HandlerError> {
-    if bytes.len() != 16 {
-        return Err(HandlerError::InvalidUuidBytes(bytes.len()));
-    }
-    let mut arr = [0u8; 16];
-    arr.copy_from_slice(bytes);
-    Ok(Uuid::from_bytes(arr))
 }

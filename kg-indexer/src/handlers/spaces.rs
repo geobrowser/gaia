@@ -7,7 +7,7 @@ use crate::models::spaces::{SpaceItem, SpaceType};
 
 /// Process a HermesCreateSpace message and return the space item
 pub fn handle_create_space(space: &HermesCreateSpace) -> Result<SpaceItem, HandlerError> {
-    let space_id = bytes_to_uuid(&space.space_id)?;
+    let space_id = Uuid::from_slice(&space.space_id)?;
 
     let space_item = match &space.payload {
         Some(Payload::PersonalSpace(personal)) => {
@@ -43,13 +43,4 @@ pub fn handle_create_space(space: &HermesCreateSpace) -> Result<SpaceItem, Handl
     };
 
     Ok(space_item)
-}
-
-fn bytes_to_uuid(bytes: &[u8]) -> Result<Uuid, HandlerError> {
-    if bytes.len() != 16 {
-        return Err(HandlerError::InvalidUuidBytes(bytes.len()));
-    }
-    let mut arr = [0u8; 16];
-    arr.copy_from_slice(bytes);
-    Ok(Uuid::from_bytes(arr))
 }

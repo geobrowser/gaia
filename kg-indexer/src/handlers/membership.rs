@@ -15,7 +15,7 @@ pub enum MembershipChange {
 
 /// Process a HermesRoleGranted message and return the membership change
 pub fn handle_role_granted(event: &HermesRoleGranted) -> Result<MembershipChange, HandlerError> {
-    let space_id = bytes_to_uuid(&event.space_id)?;
+    let space_id = Uuid::from_slice(&event.space_id)?;
     let account_address = checksum_address(format!("0x{}", hex::encode(&event.account)));
 
     match MembershipRole::try_from(event.role) {
@@ -33,7 +33,7 @@ pub fn handle_role_granted(event: &HermesRoleGranted) -> Result<MembershipChange
 
 /// Process a HermesRoleRevoked message and return the membership change
 pub fn handle_role_revoked(event: &HermesRoleRevoked) -> Result<MembershipChange, HandlerError> {
-    let space_id = bytes_to_uuid(&event.space_id)?;
+    let space_id = Uuid::from_slice(&event.space_id)?;
     let account_address = checksum_address(format!("0x{}", hex::encode(&event.account)));
 
     match MembershipRole::try_from(event.role) {
@@ -47,13 +47,4 @@ pub fn handle_role_revoked(event: &HermesRoleRevoked) -> Result<MembershipChange
         })),
         Err(_) => Err(HandlerError::UnknownRole(event.role)),
     }
-}
-
-fn bytes_to_uuid(bytes: &[u8]) -> Result<Uuid, HandlerError> {
-    if bytes.len() != 16 {
-        return Err(HandlerError::InvalidUuidBytes(bytes.len()));
-    }
-    let mut arr = [0u8; 16];
-    arr.copy_from_slice(bytes);
-    Ok(Uuid::from_bytes(arr))
 }
