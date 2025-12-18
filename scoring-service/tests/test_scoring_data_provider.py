@@ -32,8 +32,9 @@ class TestScoringDataProvider:
                 [("0xuser1", "space-2")],
                 # votes query
                 [
-                    ("0xuser1", "entity-1", "space-1", 1, datetime(2024, 1, 1)),
-                    ("0xuser2", "entity-1", "space-1", -1, datetime(2024, 1, 2)),
+                    # vote_type encoding: 0=up, 1=down, 2=remove
+                    ("0xuser1", "entity-1", "space-1", 0, datetime(2024, 1, 1)),
+                    ("0xuser2", "entity-1", "space-1", 1, datetime(2024, 1, 2)),
                 ],
                 # perspectives query (values)
                 [("entity-1", "space-1"), ("entity-1", "space-2")],
@@ -112,15 +113,16 @@ class TestScoringDataProvider:
             mock_conn.cursor.return_value.__enter__.return_value = mock_cursor
 
             mock_cursor.fetchall.return_value = [
-                ("0xuser1", "entity-1", "space-1", 1, datetime(2024, 1, 1)),
-                ("0xuser2", "entity-1", "space-1", -1, datetime(2024, 1, 2)),
-                ("0xuser3", "entity-1", "space-1", 99, datetime(2024, 1, 3)),  # Invalid
+                ("0xuser1", "entity-1", "space-1", 0, datetime(2024, 1, 1)),  # Up
+                ("0xuser2", "entity-1", "space-1", 1, datetime(2024, 1, 2)),  # Down
+                ("0xuser3", "entity-1", "space-1", 2, datetime(2024, 1, 3)),  # Remove (ignored)
+                ("0xuser4", "entity-1", "space-1", 99, datetime(2024, 1, 4)),  # Invalid (ignored)
             ]
 
             provider = ScoringDataProvider("postgresql://test:test@localhost/test")
             votes = provider._fetch_votes(mock_conn)
 
-            # Should only have 2 valid votes (invalid vote_type=99 is skipped)
+            # Should only have 2 valid votes (remove/invalid are skipped)
             assert len(votes) == 2
 
             upvote = next(v for v in votes if v.user_id == "0xuser1")
@@ -128,6 +130,11 @@ class TestScoringDataProvider:
 
             assert upvote.vote_type == VoteType.UPVOTE
             assert downvote.vote_type == VoteType.DOWNVOTE
+
+            # Ensure query is filtering to entity-only votes.
+            executed_sql = mock_cursor.execute.call_args[0][0]
+            assert "FROM user_votes" in executed_sql
+            assert "WHERE object_type = 0" in executed_sql
 
     def test_fetch_perspectives_creates_unique_pairs(self) -> None:
         """Test that perspectives are created from unique entity_id, space_id pairs."""
