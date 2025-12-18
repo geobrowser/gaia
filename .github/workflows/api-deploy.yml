@@ -1,0 +1,61 @@
+name: Deploy API
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'api/**'
+      - '.github/workflows/api-deploy.yml'
+
+env:
+  REGISTRY: registry.digitalocean.com/geo
+  IMAGE_NAME: api
+
+jobs:
+  build-and-deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install doctl
+        uses: digitalocean/action-doctl@v2
+        with:
+          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+
+      - name: Log in to DigitalOcean Container Registry
+        run: doctl registry login --expiry-seconds 1200
+
+      - name: Build and push Docker image
+        run: |
+          docker build -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
+                       -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest \
+                       -f api/Dockerfile ./api
+          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v4
+
+      - name: Configure kubectl for DigitalOcean
+        run: |
+          doctl kubernetes cluster kubeconfig save ${{ secrets.DIGITALOCEAN_CLUSTER_NAME }}
+
+      - name: Apply Kubernetes manifests
+        run: |
+          kubectl apply -f api/k8s/namespace.yaml
+          kubectl apply -f api/k8s/api.yaml
+
+      - name: Restart deployment
+        run: |
+          kubectl rollout restart deployment/api -n api
+
+      - name: Wait for deployment
+        run: |
+          kubectl rollout status deployment/api -n api --timeout=300s
+
+      - name: Show deployment status
+        run: |
+          kubectl get pods -n api
+          kubectl get svc -n api
