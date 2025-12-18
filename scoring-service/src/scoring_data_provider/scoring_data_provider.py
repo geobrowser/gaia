@@ -209,8 +209,9 @@ class ScoringDataProvider:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT user_id, entity_id, space_id, vote_type, voted_at
+                SELECT user_id, object_id, space_id, vote_type, voted_at
                 FROM user_votes
+                WHERE object_type = 0
                 """
             )
             rows = cur.fetchall()
@@ -219,13 +220,14 @@ class ScoringDataProvider:
         for row in rows:
             user_id, entity_id, space_id, vote_type, voted_at = row
 
-            # Map vote_type: 1 = upvote, -1 = downvote
-            if vote_type == 1:
+            # Map vote_type (current DB encoding):
+            # 0 = upvote, 1 = downvote, 2 = remove (ignore)
+            if vote_type == 0:
                 vote_type_enum = VoteType.UPVOTE
-            elif vote_type == -1:
+            elif vote_type == 1:
                 vote_type_enum = VoteType.DOWNVOTE
             else:
-                # Skip invalid vote types
+                # Skip remove/unknown vote types
                 continue
 
             votes.append(
