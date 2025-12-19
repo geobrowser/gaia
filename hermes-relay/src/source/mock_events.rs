@@ -683,12 +683,16 @@ pub fn unvoted(
 // Helper functions
 // =============================================================================
 
-/// Helper to create a well-known ID from a single byte.
+/// Helper to create a well-known UUID v4 from a single byte.
 ///
-/// Creates an ID with all zeros except the last byte.
-/// Example: `make_id(0x0A)` produces `[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0x0A]`
+/// Creates a valid RFC 4122 UUID v4 with:
+/// - Version bits (byte 6 high nibble = 4)
+/// - Variant bits (byte 8 high nibble = 8)
+/// - Distinguishing value in last byte
+///
+/// Example: `make_id(0x0A)` produces a UUID like `00000000-0000-4000-8000-00000000000A`
 pub const fn make_id(last_byte: u8) -> SpaceId {
-    [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, last_byte]
+    [0, 0, 0, 0, 0, 0, 0x40, 0, 0x80, 0, 0, 0, 0, 0, 0, last_byte]
 }
 
 /// Helper to create a well-known address from a single byte.
@@ -790,9 +794,9 @@ pub mod test_topology {
         actions.push(space_created(SPACE_Z, USER_3));
         actions.push(space_created(SPACE_W, USER_1));
 
-        // Non-canonical - Island 2 (P is DAO)
-        actions.push(space_created_dao(SPACE_P, vec![SPACE_Q], vec![]));
+        // Non-canonical - Island 2 (P is DAO, Q must be created first as it's an initial editor)
         actions.push(space_created(SPACE_Q, USER_2));
+        actions.push(space_created_dao(SPACE_P, vec![SPACE_Q], vec![]));
 
         // Non-canonical - Island 3
         actions.push(space_created(SPACE_S, USER_3));

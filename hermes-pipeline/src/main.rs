@@ -149,29 +149,76 @@ impl Pipeline {
                 .instrument(info_span!("transform.edits", action_count = actions.len()));
 
         // Sync transforms - fast, no I/O, run while edits fetches from IPFS
-        let spaces = info_span!("transform.spaces", action_count = actions.len())
+        let mut spaces = info_span!("transform.spaces", action_count = actions.len())
             .in_scope(|| pipelines::spaces::transform(actions, &meta))?;
 
-        let membership = info_span!("transform.membership", action_count = actions.len())
+        let mut membership = info_span!("transform.membership", action_count = actions.len())
             .in_scope(|| pipelines::membership::transform(actions, &meta))?;
 
-        let trust = info_span!("transform.trust", action_count = actions.len())
+        let mut trust = info_span!("transform.trust", action_count = actions.len())
             .in_scope(|| pipelines::trust::transform(actions, &meta))?;
 
-        let moderation = info_span!("transform.moderation", action_count = actions.len())
+        let mut moderation = info_span!("transform.moderation", action_count = actions.len())
             .in_scope(|| pipelines::moderation::transform(actions, &meta))?;
 
-        let topics = info_span!("transform.topics", action_count = actions.len())
+        let mut topics = info_span!("transform.topics", action_count = actions.len())
             .in_scope(|| pipelines::topics::transform(actions, &meta))?;
 
-        let governance = info_span!("transform.governance", action_count = actions.len())
+        let mut governance = info_span!("transform.governance", action_count = actions.len())
             .in_scope(|| pipelines::governance::transform(actions, &meta))?;
 
-        let voting = info_span!("transform.voting", action_count = actions.len())
+        let mut voting = info_span!("transform.voting", action_count = actions.len())
             .in_scope(|| pipelines::voting::transform(actions, &meta))?;
 
         // Now await the edits - IPFS fetch should have been happening in parallel
-        let edits = edits_future.await?;
+        let mut edits = edits_future.await?;
+
+        // =========================================================================
+        // Phase 1.5: Mark the last event in the block
+        // =========================================================================
+        // Find max sequence across all events and mark that event with is_last = true.
+        // This allows consumers to know when they've received all events for a block.
+        {
+            use pipelines::{mark_sequence_as_last, max_sequence};
+
+            let max_seq = [
+                max_sequence(&spaces.events),
+                max_sequence(&membership.roles_granted),
+                max_sequence(&membership.roles_revoked),
+                max_sequence(&membership.spaces_left),
+                max_sequence(&trust.events),
+                max_sequence(&moderation.editors_flagged),
+                max_sequence(&moderation.editors_unflagged),
+                max_sequence(&moderation.content_flagged),
+                max_sequence(&moderation.content_unflagged),
+                max_sequence(&topics.topics_declared),
+                max_sequence(&governance.proposals_created),
+                max_sequence(&governance.proposals_voted),
+                max_sequence(&governance.proposals_executed),
+                max_sequence(&voting.votes),
+                max_sequence(&edits.events),
+            ]
+            .into_iter()
+            .max()
+            .unwrap_or(0);
+
+            // Try to mark the event with max_seq as last (only one will match)
+            let _ = mark_sequence_as_last(&mut spaces.events, max_seq)
+                || mark_sequence_as_last(&mut membership.roles_granted, max_seq)
+                || mark_sequence_as_last(&mut membership.roles_revoked, max_seq)
+                || mark_sequence_as_last(&mut membership.spaces_left, max_seq)
+                || mark_sequence_as_last(&mut trust.events, max_seq)
+                || mark_sequence_as_last(&mut moderation.editors_flagged, max_seq)
+                || mark_sequence_as_last(&mut moderation.editors_unflagged, max_seq)
+                || mark_sequence_as_last(&mut moderation.content_flagged, max_seq)
+                || mark_sequence_as_last(&mut moderation.content_unflagged, max_seq)
+                || mark_sequence_as_last(&mut topics.topics_declared, max_seq)
+                || mark_sequence_as_last(&mut governance.proposals_created, max_seq)
+                || mark_sequence_as_last(&mut governance.proposals_voted, max_seq)
+                || mark_sequence_as_last(&mut governance.proposals_executed, max_seq)
+                || mark_sequence_as_last(&mut voting.votes, max_seq)
+                || mark_sequence_as_last(&mut edits.events, max_seq);
+        }
 
         // =========================================================================
         // Phase 2: Emit events to Kafka in order

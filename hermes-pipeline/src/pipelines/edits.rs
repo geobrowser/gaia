@@ -67,6 +67,7 @@ pub struct TransformResult {
 struct EditRequest {
     ipfs_hash: String,
     space_id: Vec<u8>,
+    sequence: u32,
 }
 
 /// Result of fetching an edit from the cache.
@@ -97,13 +98,15 @@ pub async fn transform<C: IpfsCache + 'static>(
     // Collect all edit requests
     let requests: Vec<(EditRequest, Action)> = actions
         .iter()
-        .filter(|action| actions::matches(&action.action, &actions::EDITS_PUBLISHED))
-        .map(|action| {
+        .enumerate()
+        .filter(|(_, action)| actions::matches(&action.action, &actions::EDITS_PUBLISHED))
+        .map(|(index, action)| {
             let ipfs_hash = String::from_utf8_lossy(&action.data).to_string();
             (
                 EditRequest {
                     ipfs_hash,
                     space_id: action.from_id.clone(),
+                    sequence: index as u32,
                 },
                 action.clone(),
             )
@@ -193,6 +196,7 @@ async fn fetch_edit_with_retry<C: IpfsCache>(
 
     let ipfs_hash = req.ipfs_hash.clone();
     let space_id = req.space_id.clone();
+    let sequence = req.sequence;
     let result = Retry::spawn(retry_strategy, || {
         let hash = ipfs_hash.clone();
         let hash_for_span = hash.clone();
@@ -207,7 +211,7 @@ async fn fetch_edit_with_retry<C: IpfsCache>(
             if cached_edit.is_errored {
                 EditFetchResult::Errored
             } else if let Some(edit) = cached_edit.edit {
-                debug_span!("convert").in_scope(|| match convert(action, &edit, meta) {
+                debug_span!("convert").in_scope(|| match convert(action, &edit, meta, sequence) {
                     Ok(event) => EditFetchResult::Success(Box::new(event)),
                     Err(_) => EditFetchResult::FetchFailed,
                 })
@@ -228,7 +232,12 @@ async fn fetch_edit_with_retry<C: IpfsCache>(
 /// - to_id: unused (zeros)
 /// - topic: unused (zeros)
 /// - data: IPFS hash as bytes
-fn convert(action: &Action, edit: &Edit, meta: &BlockMetadata) -> Result<HermesEdit> {
+fn convert(
+    action: &Action,
+    edit: &Edit,
+    meta: &BlockMetadata,
+    sequence: u32,
+) -> Result<HermesEdit> {
     Ok(HermesEdit {
         id: edit.id.clone(),
         name: edit.name.clone(),
@@ -237,7 +246,7 @@ fn convert(action: &Action, edit: &Edit, meta: &BlockMetadata) -> Result<HermesE
         language: edit.language.clone(),
         space_id: hex::encode(&action.from_id),
         is_canonical: true, // TODO: Determine from topology
-        meta: Some(meta.to_proto()),
+        meta: Some(meta.to_proto(sequence)),
     })
 }
 
@@ -284,7 +293,7 @@ mod tests {
         };
 
         let edit = test_edit();
-        let result = convert(&action, &edit, &test_meta()).unwrap();
+        let result = convert(&action, &edit, &test_meta(), 0).unwrap();
 
         assert_eq!(result.id, vec![1; 16]);
         assert_eq!(result.name, "Test Edit");
