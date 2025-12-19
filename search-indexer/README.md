@@ -64,6 +64,9 @@ Environment variables:
 | `KAFKA_TOPIC` | Kafka topic to consume | `knowledge.edits` |
 | `KAFKA_BATCH_SIZE` | Messages to batch before sending | `50` |
 | `KAFKA_BATCH_TIMEOUT_MS` | Max wait time before flushing batch (ms) | `1000` |
+| `KAFKA_USERNAME` | SASL username for managed Kafka (optional, enables SASL/SSL if set) | - |
+| `KAFKA_PASSWORD` | SASL password for managed Kafka (required if username is set) | - |
+| `KAFKA_SSL_CA_PEM` | Custom CA certificate in PEM format (optional) | - |
 | `OPENSEARCH_CONNECTION_MODE` | Connection mode: `fail-fast` or `retry` | `retry` |
 | `OPENSEARCH_RETRY_INTERVAL_SECS` | Retry interval in seconds (retry mode only) | `15` |
 | `AXIOM_TOKEN` | Axiom API token (optional) | - |
@@ -210,6 +213,8 @@ Key metrics to monitor:
 **Cannot connect to Kafka**
 - Check `KAFKA_BROKER` is correct
 - Verify Kafka is running and `knowledge.edits` topic exists
+- For managed Kafka, ensure `KAFKA_USERNAME`, `KAFKA_PASSWORD`, and `KAFKA_SSL_CA_PEM` are set
+- Check that `security.protocol` is correctly configured (automatically set to `SASL_SSL` when credentials are provided)
 
 **High latency**
 - Check OpenSearch cluster health

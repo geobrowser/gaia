@@ -100,14 +100,14 @@ impl KafkaConsumer {
         batch_size: usize,
         batch_timeout_ms: u64,
     ) -> Result<Self, IngestError> {
-        let consumer: StreamConsumer = ClientConfig::new()
+        let mut client_config = ClientConfig::new();
+
+        client_config
             .set("bootstrap.servers", brokers)
             .set("group.id", group_id)
-            .set("enable.auto.commit", "false")
-            .set("auto.offset.reset", "earliest")
-            .set("session.timeout.ms", "6000")
-            .create()
-            .map_err(|e| IngestError::kafka(e.to_string()))?;
+            .set("enable.auto.commit", "false") // Manual commit for at-least-once delivery
+            .set("auto.offset.reset", "earliest") // Start from beginning if no committed offset
+            .set("session.timeout.ms", "6000");
 
         info!(
             brokers = %brokers,
@@ -116,6 +116,33 @@ impl KafkaConsumer {
             batch_timeout_ms = batch_timeout_ms,
             "Created Kafka consumer with batching"
         );
+
+        // If SASL credentials are provided, enable SASL/SSL (for managed Kafka)
+        // Otherwise, use plaintext (for local development)
+        let username = env::var("KAFKA_USERNAME").ok();
+        let password = env::var("KAFKA_PASSWORD").ok();
+        let ssl_ca_pem = env::var("KAFKA_SSL_CA_PEM").ok();
+
+        if let (Some(username), Some(password)) = (&username, &password) {
+            client_config
+                .set("security.protocol", "SASL_SSL")
+                .set("sasl.mechanisms", "PLAIN")
+                .set("sasl.username", username)
+                .set("sasl.password", password);
+
+            // Use custom CA certificate if provided
+            if let Some(ca_pem) = &ssl_ca_pem {
+                client_config.set("ssl.ca.pem", ca_pem);
+            }
+
+            info!("Configured Kafka consumer with SSL authentication");
+        } else {
+            info!("Using plaintext Kafka connection");
+        }
+
+        let consumer: StreamConsumer = client_config
+            .create()
+            .map_err(|e| IngestError::kafka(e.to_string()))?;
 
         Ok(Self {
             consumer,
