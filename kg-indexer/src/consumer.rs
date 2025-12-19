@@ -95,6 +95,8 @@ impl KafkaConsumer {
     }
 }
 
+use hermes_schema::pb::blockchain_metadata::BlockchainMetadata;
+
 /// Represents a message from any of the consumed topics
 pub enum KgMessage {
     Edit(hermes_schema::pb::knowledge::HermesEdit),
@@ -102,6 +104,34 @@ pub enum KgMessage {
     RoleGranted(hermes_schema::pb::membership::HermesRoleGranted),
     RoleRevoked(hermes_schema::pb::membership::HermesRoleRevoked),
     TrustExtension(hermes_schema::pb::space::HermesSpaceTrustExtension),
+}
+
+impl KgMessage {
+    /// Get the blockchain metadata from the message.
+    pub fn meta(&self) -> Option<&BlockchainMetadata> {
+        match self {
+            KgMessage::Edit(e) => e.meta.as_ref(),
+            KgMessage::CreateSpace(s) => s.meta.as_ref(),
+            KgMessage::RoleGranted(r) => r.meta.as_ref(),
+            KgMessage::RoleRevoked(r) => r.meta.as_ref(),
+            KgMessage::TrustExtension(t) => t.meta.as_ref(),
+        }
+    }
+
+    /// Get the block number from the message metadata.
+    pub fn block_number(&self) -> Option<u64> {
+        self.meta().map(|m| m.block_number)
+    }
+
+    /// Get the sequence number from the message metadata.
+    pub fn sequence(&self) -> u32 {
+        self.meta().map(|m| m.sequence).unwrap_or(0)
+    }
+
+    /// Check if this is the last message in the block.
+    pub fn is_last(&self) -> bool {
+        self.meta().map(|m| m.is_last).unwrap_or(false)
+    }
 }
 
 /// Parse a Kafka message based on its topic

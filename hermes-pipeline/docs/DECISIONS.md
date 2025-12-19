@@ -2,7 +2,7 @@
 
 ## ADR-001: Event sequencing for cross-topic ordering
 
-**Status**: Proposed
+**Status**: Accepted
 
 **Context**: hermes-pipeline emits events to multiple Kafka topics (space.creations, space.membership, knowledge.edits, etc.). Kafka only guarantees ordering within a single topic partition, not across topics. Consumers like kg-indexer may receive events out of order - for example, an edit referencing a space might arrive before the space creation event.
 

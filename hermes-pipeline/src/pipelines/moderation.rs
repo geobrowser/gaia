@@ -38,8 +38,9 @@ impl TransformResult {
 pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformResult> {
     let mut result = TransformResult::default();
 
-    for action in actions {
+    for (index, action) in actions.iter().enumerate() {
         let action_type = action.action.as_slice();
+        let sequence = index as u32;
 
         if actions::matches(action_type, &actions::EDITOR_FLAGGED) {
             let event = debug_span!(
@@ -47,7 +48,7 @@ pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformRe
                 space_id = %hex::encode(&action.from_id),
                 editor = %hex::encode(&action.topic)
             )
-            .in_scope(|| convert_editor_flagged(action, meta))?;
+            .in_scope(|| convert_editor_flagged(action, meta, sequence))?;
             result.editors_flagged.push(event);
         } else if actions::matches(action_type, &actions::EDITOR_UNFLAGGED) {
             let event = debug_span!(
@@ -55,7 +56,7 @@ pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformRe
                 space_id = %hex::encode(&action.from_id),
                 editor = %hex::encode(&action.topic)
             )
-            .in_scope(|| convert_editor_unflagged(action, meta))?;
+            .in_scope(|| convert_editor_unflagged(action, meta, sequence))?;
             result.editors_unflagged.push(event);
         } else if actions::matches(action_type, &actions::FLAGGED) {
             let event = debug_span!(
@@ -63,7 +64,7 @@ pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformRe
                 flagger_id = %hex::encode(&action.from_id),
                 target_space_id = %hex::encode(&action.to_id)
             )
-            .in_scope(|| convert_content_flagged(action, meta))?;
+            .in_scope(|| convert_content_flagged(action, meta, sequence))?;
             result.content_flagged.push(event);
         } else if actions::matches(action_type, &actions::UNFLAGGED) {
             let event = debug_span!(
@@ -71,7 +72,7 @@ pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformRe
                 unflagger_id = %hex::encode(&action.from_id),
                 target_space_id = %hex::encode(&action.to_id)
             )
-            .in_scope(|| convert_content_unflagged(action, meta))?;
+            .in_scope(|| convert_content_unflagged(action, meta, sequence))?;
             result.content_unflagged.push(event);
         }
     }
@@ -85,7 +86,7 @@ pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformRe
 /// - from_id: space_id (16 bytes) - space containing editor
 /// - topic: editor address (32 bytes, padded from 20)
 /// - data: empty
-fn convert_editor_flagged(action: &Action, meta: &BlockMetadata) -> Result<HermesEditorFlagged> {
+fn convert_editor_flagged(action: &Action, meta: &BlockMetadata, sequence: u32) -> Result<HermesEditorFlagged> {
     // Extract the 20-byte address from the 32-byte topic (last 20 bytes)
     let editor_account = if action.topic.len() >= 20 {
         action.topic[action.topic.len() - 20..].to_vec()
@@ -96,7 +97,7 @@ fn convert_editor_flagged(action: &Action, meta: &BlockMetadata) -> Result<Herme
     Ok(HermesEditorFlagged {
         space_id: action.from_id.clone(),
         editor_account,
-        meta: Some(meta.to_proto()),
+        meta: Some(meta.to_proto(sequence)),
     })
 }
 
@@ -109,6 +110,7 @@ fn convert_editor_flagged(action: &Action, meta: &BlockMetadata) -> Result<Herme
 fn convert_editor_unflagged(
     action: &Action,
     meta: &BlockMetadata,
+    sequence: u32,
 ) -> Result<HermesEditorUnflagged> {
     let editor_account = if action.topic.len() >= 20 {
         action.topic[action.topic.len() - 20..].to_vec()
@@ -119,7 +121,7 @@ fn convert_editor_unflagged(
     Ok(HermesEditorUnflagged {
         space_id: action.from_id.clone(),
         editor_account,
-        meta: Some(meta.to_proto()),
+        meta: Some(meta.to_proto(sequence)),
     })
 }
 
@@ -130,7 +132,7 @@ fn convert_editor_unflagged(
 /// - to_id: target_space_id (16 bytes) - space whose content is flagged
 /// - topic: topic_id (32 bytes) - optional topic UUID
 /// - data: abi.encode(bytes(flaggedUri))
-fn convert_content_flagged(action: &Action, meta: &BlockMetadata) -> Result<HermesContentFlagged> {
+fn convert_content_flagged(action: &Action, meta: &BlockMetadata, sequence: u32) -> Result<HermesContentFlagged> {
     // Decode the URI from the data field
     let uri = match decode::decode_flag_data(&action.data) {
         Ok(decoded_uri) => decoded_uri,
@@ -149,7 +151,7 @@ fn convert_content_flagged(action: &Action, meta: &BlockMetadata) -> Result<Herm
         target_space_id: action.to_id.clone(),
         topic_id: action.topic.clone(),
         uri,
-        meta: Some(meta.to_proto()),
+        meta: Some(meta.to_proto(sequence)),
     })
 }
 
@@ -163,6 +165,7 @@ fn convert_content_flagged(action: &Action, meta: &BlockMetadata) -> Result<Herm
 fn convert_content_unflagged(
     action: &Action,
     meta: &BlockMetadata,
+    sequence: u32,
 ) -> Result<HermesContentUnflagged> {
     // Decode the URI from the data field
     let uri = match decode::decode_flag_data(&action.data) {
@@ -182,7 +185,7 @@ fn convert_content_unflagged(
         target_space_id: action.to_id.clone(),
         topic_id: action.topic.clone(),
         uri,
-        meta: Some(meta.to_proto()),
+        meta: Some(meta.to_proto(sequence)),
     })
 }
 
@@ -208,7 +211,7 @@ mod tests {
             data: vec![],
         };
 
-        let result = convert_editor_flagged(&action, &test_meta()).unwrap();
+        let result = convert_editor_flagged(&action, &test_meta(), 0).unwrap();
         assert_eq!(result.space_id, vec![1; 16]);
         assert_eq!(result.editor_account, vec![2; 20]);
     }
@@ -223,7 +226,7 @@ mod tests {
             data: vec![],
         };
 
-        let result = convert_content_flagged(&action, &test_meta()).unwrap();
+        let result = convert_content_flagged(&action, &test_meta(), 0).unwrap();
         assert_eq!(result.flagger_id, vec![1; 16]);
         assert_eq!(result.target_space_id, vec![2; 16]);
         assert!(result.uri.is_empty());
@@ -239,7 +242,7 @@ mod tests {
             data: vec![],
         };
 
-        let result = convert_content_unflagged(&action, &test_meta()).unwrap();
+        let result = convert_content_unflagged(&action, &test_meta(), 0).unwrap();
         assert_eq!(result.unflagger_id, vec![4; 16]);
         assert_eq!(result.target_space_id, vec![5; 16]);
         assert_eq!(result.topic_id, vec![6; 32]);

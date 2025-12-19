@@ -11,4 +11,10 @@ pub struct BlockchainMetadata {
     pub block_number: u64,
     #[prost(string, tag = "4")]
     pub cursor: ::prost::alloc::string::String,
+    /// Blockchain order within block (from action index)
+    #[prost(uint32, tag = "5")]
+    pub sequence: u32,
+    /// True for final event in block
+    #[prost(bool, tag = "6")]
+    pub is_last: bool,
 }

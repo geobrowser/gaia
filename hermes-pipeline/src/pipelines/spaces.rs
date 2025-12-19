@@ -25,13 +25,14 @@ pub struct TransformResult {
 pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformResult> {
     let mut events = Vec::new();
 
-    for action in actions {
+    for (index, action) in actions.iter().enumerate() {
         if !actions::matches(&action.action, &actions::SPACE_REGISTERED) {
             continue;
         }
 
+        let sequence = index as u32;
         let event = debug_span!("convert.space", space_id = %hex::encode(&action.from_id))
-            .in_scope(|| convert(action, meta))?;
+            .in_scope(|| convert(action, meta, sequence))?;
         events.push(event);
     }
 
@@ -45,7 +46,7 @@ pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformRe
 /// - to_id: space_id (16 bytes, same as from_id)
 /// - topic: space_address (20 bytes, padded to 32)
 /// - data: encoded space creation payload (empty for personal, encoded editors/members for DAO)
-fn convert(action: &Action, meta: &BlockMetadata) -> Result<HermesCreateSpace> {
+fn convert(action: &Action, meta: &BlockMetadata, sequence: u32) -> Result<HermesCreateSpace> {
     let space_id = action.from_id.clone();
 
     // Determine space type from data field
@@ -70,7 +71,7 @@ fn convert(action: &Action, meta: &BlockMetadata) -> Result<HermesCreateSpace> {
         space_id,
         topic_id: action.topic.clone(),
         payload,
-        meta: Some(meta.to_proto()),
+        meta: Some(meta.to_proto(sequence)),
     })
 }
 
@@ -141,7 +142,7 @@ mod tests {
             data: vec![], // Empty = personal space
         };
 
-        let result = convert(&action, &test_meta()).unwrap();
+        let result = convert(&action, &test_meta(), 0).unwrap();
         assert_eq!(result.space_id, vec![1; 16]);
         assert!(matches!(
             result.payload,
@@ -165,7 +166,7 @@ mod tests {
             data,
         };
 
-        let result = convert(&action, &test_meta()).unwrap();
+        let result = convert(&action, &test_meta(), 0).unwrap();
         match result.payload {
             Some(hermes_create_space::Payload::DefaultDaoSpace(dao)) => {
                 assert_eq!(dao.initial_editors.len(), 1);

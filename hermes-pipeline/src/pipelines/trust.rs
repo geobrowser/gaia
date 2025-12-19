@@ -17,13 +17,23 @@ use hermes_schema::pb::space::{
     hermes_space_trust_extension,
 };
 
-use super::BlockMetadata;
+use super::{BlockMetadata, HasMeta};
+use hermes_schema::pb::blockchain_metadata::BlockchainMetadata;
 
 /// A trust event with its type (added or removed).
 #[derive(Debug, Clone)]
 pub struct TrustEvent {
     pub event: HermesSpaceTrustExtension,
     pub is_removal: bool,
+}
+
+impl HasMeta for TrustEvent {
+    fn meta(&self) -> Option<&BlockchainMetadata> {
+        self.event.meta.as_ref()
+    }
+    fn meta_mut(&mut self) -> Option<&mut BlockchainMetadata> {
+        self.event.meta.as_mut()
+    }
 }
 
 /// Result of transforming trust actions.
@@ -61,8 +71,9 @@ impl TransformResult {
 pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformResult> {
     let mut result = TransformResult::default();
 
-    for action in actions {
+    for (index, action) in actions.iter().enumerate() {
         let action_type = action.action.as_slice();
+        let sequence = index as u32;
 
         if actions::matches(action_type, &actions::SUBSPACE_VERIFIED) {
             let event = debug_span!(
@@ -70,7 +81,7 @@ pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformRe
                 source = %hex::encode(&action.from_id),
                 target = %hex::encode(&action.topic[16..32])
             )
-            .in_scope(|| convert_verified(action, meta))?;
+            .in_scope(|| convert_verified(action, meta, sequence))?;
             result.events.push(TrustEvent {
                 event,
                 is_removal: false,
@@ -82,7 +93,7 @@ pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformRe
                 source = %hex::encode(&action.from_id),
                 target = %hex::encode(&action.topic[16..32])
             )
-            .in_scope(|| convert_related(action, meta))?;
+            .in_scope(|| convert_related(action, meta, sequence))?;
             result.events.push(TrustEvent {
                 event,
                 is_removal: false,
@@ -95,7 +106,7 @@ pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformRe
                 subspace = %hex::encode(&action.topic[0..16]),
                 topic = %hex::encode(&action.topic[16..32])
             )
-            .in_scope(|| convert_topic_declared(action, meta))?;
+            .in_scope(|| convert_topic_declared(action, meta, sequence))?;
             result.events.push(TrustEvent {
                 event,
                 is_removal: false,
@@ -107,7 +118,7 @@ pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformRe
                 source = %hex::encode(&action.from_id),
                 target = %hex::encode(&action.topic[16..32])
             )
-            .in_scope(|| convert_removed(action, meta))?;
+            .in_scope(|| convert_removed(action, meta, sequence))?;
             result.events.push(TrustEvent {
                 event,
                 is_removal: true,
@@ -124,7 +135,7 @@ pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformRe
 /// The action structure for SUBSPACE_VERIFIED:
 /// - from_id: parent_space_id (16 bytes)
 /// - topic: [padding (16 bytes)][subspace_id (16 bytes)]
-fn convert_verified(action: &Action, meta: &BlockMetadata) -> Result<HermesSpaceTrustExtension> {
+fn convert_verified(action: &Action, meta: &BlockMetadata, sequence: u32) -> Result<HermesSpaceTrustExtension> {
     let source_space_id = action.from_id.clone();
     // Target space ID is in the last 16 bytes of the topic field
     let target_space_id = action.topic[16..32].to_vec();
@@ -136,7 +147,7 @@ fn convert_verified(action: &Action, meta: &BlockMetadata) -> Result<HermesSpace
     Ok(HermesSpaceTrustExtension {
         source_space_id,
         extension,
-        meta: Some(meta.to_proto()),
+        meta: Some(meta.to_proto(sequence)),
     })
 }
 
@@ -145,7 +156,7 @@ fn convert_verified(action: &Action, meta: &BlockMetadata) -> Result<HermesSpace
 /// The action structure for SUBSPACE_RELATED:
 /// - from_id: parent_space_id (16 bytes)
 /// - topic: [padding (16 bytes)][subspace_id (16 bytes)]
-fn convert_related(action: &Action, meta: &BlockMetadata) -> Result<HermesSpaceTrustExtension> {
+fn convert_related(action: &Action, meta: &BlockMetadata, sequence: u32) -> Result<HermesSpaceTrustExtension> {
     let source_space_id = action.from_id.clone();
     let target_space_id = action.topic[16..32].to_vec();
 
@@ -156,7 +167,7 @@ fn convert_related(action: &Action, meta: &BlockMetadata) -> Result<HermesSpaceT
     Ok(HermesSpaceTrustExtension {
         source_space_id,
         extension,
-        meta: Some(meta.to_proto()),
+        meta: Some(meta.to_proto(sequence)),
     })
 }
 
@@ -168,6 +179,7 @@ fn convert_related(action: &Action, meta: &BlockMetadata) -> Result<HermesSpaceT
 fn convert_topic_declared(
     action: &Action,
     meta: &BlockMetadata,
+    sequence: u32,
 ) -> Result<HermesSpaceTrustExtension> {
     let source_space_id = action.from_id.clone();
     // Topic ID is in the last 16 bytes of the topic field
@@ -180,14 +192,14 @@ fn convert_topic_declared(
     Ok(HermesSpaceTrustExtension {
         source_space_id,
         extension,
-        meta: Some(meta.to_proto()),
+        meta: Some(meta.to_proto(sequence)),
     })
 }
 
 /// Convert a SUBSPACE_REMOVED action to HermesSpaceTrustExtension proto.
 ///
 /// Uses the same structure as SUBSPACE_ADDED but represents a trust revocation.
-fn convert_removed(action: &Action, meta: &BlockMetadata) -> Result<HermesSpaceTrustExtension> {
+fn convert_removed(action: &Action, meta: &BlockMetadata, sequence: u32) -> Result<HermesSpaceTrustExtension> {
     let source_space_id = action.from_id.clone();
     let target_space_id = action.topic[16..32].to_vec();
 
@@ -198,7 +210,7 @@ fn convert_removed(action: &Action, meta: &BlockMetadata) -> Result<HermesSpaceT
     Ok(HermesSpaceTrustExtension {
         source_space_id,
         extension,
-        meta: Some(meta.to_proto()),
+        meta: Some(meta.to_proto(sequence)),
     })
 }
 
@@ -241,7 +253,7 @@ mod tests {
             data: vec![],
         };
 
-        let result = convert_verified(&action, &test_meta()).unwrap();
+        let result = convert_verified(&action, &test_meta(), 0).unwrap();
         assert_eq!(result.source_space_id, vec![1; 16]);
         match result.extension {
             Some(hermes_space_trust_extension::Extension::Verified(v)) => {
@@ -262,7 +274,7 @@ mod tests {
             data: vec![],
         };
 
-        let result = convert_related(&action, &test_meta()).unwrap();
+        let result = convert_related(&action, &test_meta(), 0).unwrap();
         assert_eq!(result.source_space_id, vec![1; 16]);
         match result.extension {
             Some(hermes_space_trust_extension::Extension::Related(r)) => {
@@ -287,7 +299,7 @@ mod tests {
             data: vec![],
         };
 
-        let result = convert_topic_declared(&action, &test_meta()).unwrap();
+        let result = convert_topic_declared(&action, &test_meta(), 0).unwrap();
         assert_eq!(result.source_space_id, vec![1; 16]);
         match result.extension {
             Some(hermes_space_trust_extension::Extension::Subtopic(s)) => {
@@ -308,7 +320,7 @@ mod tests {
             data: vec![],
         };
 
-        let result = convert_removed(&action, &test_meta()).unwrap();
+        let result = convert_removed(&action, &test_meta(), 0).unwrap();
         assert_eq!(result.source_space_id, vec![1; 16]);
     }
 

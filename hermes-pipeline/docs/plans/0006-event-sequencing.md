@@ -1,5 +1,7 @@
 # Plan: Event Sequencing for Cross-Topic Ordering
 
+**Status**: Implemented
+
 ## Problem
 
 Kafka only guarantees ordering within a topic partition, not across topics. kg-indexer consumes from multiple topics (space.creations, space.membership, knowledge.edits, etc.) and may receive events out of order. For example, an edit referencing a space might arrive before the space creation event.
@@ -107,9 +109,9 @@ for msg in consumer.poll() {
 
 ### 5. Handle edge cases
 
-- **Empty blocks**: Emit a sentinel event with `is_last = true` and `sequence = 0`
-- **Consumer restart**: On startup, may have partial block in buffer. Need to track committed blocks.
-- **Timeout**: If `is_last` never arrives (producer crash), need timeout + alerting
+- **Empty blocks**: No events emitted; consumers don't need to track empty blocks
+- **Consumer restart**: Kafka offsets only committed after full block processing, so partial blocks are re-delivered
+- **Timeout**: Stale block detection warns if `is_last` never arrives (configurable via `BLOCK_STALE_TIMEOUT_SECS`)
 
 ## Files to Modify
 

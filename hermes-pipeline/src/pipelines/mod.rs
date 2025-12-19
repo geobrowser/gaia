@@ -20,6 +20,79 @@ pub mod trust;
 pub mod voting;
 
 use hermes_schema::pb::blockchain_metadata::BlockchainMetadata;
+use hermes_schema::pb::governance::{
+    HermesProposalCreated, HermesProposalExecuted, HermesProposalVoted,
+};
+use hermes_schema::pb::knowledge::HermesEdit;
+use hermes_schema::pb::membership::{HermesRoleGranted, HermesRoleRevoked, HermesSpaceLeft};
+use hermes_schema::pb::moderation::{
+    HermesContentFlagged, HermesContentUnflagged, HermesEditorFlagged, HermesEditorUnflagged,
+};
+use hermes_schema::pb::space::{HermesCreateSpace, HermesSpaceTrustExtension};
+use hermes_schema::pb::topics::HermesTopicDeclared;
+use hermes_schema::pb::voting::HermesVoteCast;
+
+/// Trait for event types that have blockchain metadata.
+pub trait HasMeta {
+    fn meta(&self) -> Option<&BlockchainMetadata>;
+    fn meta_mut(&mut self) -> Option<&mut BlockchainMetadata>;
+}
+
+macro_rules! impl_has_meta {
+    ($($ty:ty),* $(,)?) => {
+        $(
+            impl HasMeta for $ty {
+                fn meta(&self) -> Option<&BlockchainMetadata> {
+                    self.meta.as_ref()
+                }
+                fn meta_mut(&mut self) -> Option<&mut BlockchainMetadata> {
+                    self.meta.as_mut()
+                }
+            }
+        )*
+    };
+}
+
+impl_has_meta!(
+    HermesCreateSpace,
+    HermesSpaceTrustExtension,
+    HermesRoleGranted,
+    HermesRoleRevoked,
+    HermesSpaceLeft,
+    HermesEditorFlagged,
+    HermesEditorUnflagged,
+    HermesContentFlagged,
+    HermesContentUnflagged,
+    HermesTopicDeclared,
+    HermesProposalCreated,
+    HermesProposalVoted,
+    HermesProposalExecuted,
+    HermesVoteCast,
+    HermesEdit,
+);
+
+/// Get the maximum sequence number from a slice of events.
+pub fn max_sequence<T: HasMeta>(events: &[T]) -> u32 {
+    events
+        .iter()
+        .filter_map(|e| e.meta().map(|m| m.sequence))
+        .max()
+        .unwrap_or(0)
+}
+
+/// Set is_last on the first event with the given sequence number.
+/// Returns true if an event was marked.
+pub fn mark_sequence_as_last<T: HasMeta>(events: &mut [T], target_seq: u32) -> bool {
+    for event in events.iter_mut() {
+        if let Some(meta) = event.meta_mut() {
+            if meta.sequence == target_seq {
+                meta.is_last = true;
+                return true;
+            }
+        }
+    }
+    false
+}
 
 /// Block metadata extracted from substream data.
 ///
@@ -33,7 +106,11 @@ pub struct BlockMetadata {
 
 impl BlockMetadata {
     /// Convert block metadata to BlockchainMetadata proto.
-    pub fn to_proto(&self) -> BlockchainMetadata {
+    ///
+    /// The `sequence` parameter is the action array index, representing
+    /// blockchain order within the block. The `is_last` flag defaults to
+    /// false and is set at emission time.
+    pub fn to_proto(&self, sequence: u32) -> BlockchainMetadata {
         let created_at: u64 = self.timestamp.parse().unwrap_or(0);
 
         BlockchainMetadata {
@@ -41,6 +118,8 @@ impl BlockMetadata {
             created_by: vec![], // Not available in block metadata
             block_number: self.block_number,
             cursor: self.cursor.clone(),
+            sequence,
+            is_last: false,
         }
     }
 }

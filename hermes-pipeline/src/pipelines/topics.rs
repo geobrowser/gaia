@@ -30,8 +30,9 @@ impl TransformResult {
 pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformResult> {
     let mut result = TransformResult::default();
 
-    for action in actions {
+    for (index, action) in actions.iter().enumerate() {
         let action_type = action.action.as_slice();
+        let sequence = index as u32;
 
         if actions::matches(action_type, &actions::TOPIC_DECLARED) {
             let event = debug_span!(
@@ -39,7 +40,7 @@ pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformRe
                 space_id = %hex::encode(&action.from_id),
                 topic_id = %hex::encode(&action.topic)
             )
-            .in_scope(|| convert_topic_declared(action, meta))?;
+            .in_scope(|| convert_topic_declared(action, meta, sequence))?;
             result.topics_declared.push(event);
         }
     }
@@ -52,7 +53,7 @@ pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformRe
 /// The action structure:
 /// - from_id: space_id (16 bytes) - space declaring topic
 /// - data: abi.encode(bytes16(topicId))
-fn convert_topic_declared(action: &Action, meta: &BlockMetadata) -> Result<HermesTopicDeclared> {
+fn convert_topic_declared(action: &Action, meta: &BlockMetadata, sequence: u32) -> Result<HermesTopicDeclared> {
     // Decode the topic_id from the data field
     let topic_id = match decode::decode_topic_declared(&action.data) {
         Ok(id) => id,
@@ -69,7 +70,7 @@ fn convert_topic_declared(action: &Action, meta: &BlockMetadata) -> Result<Herme
     Ok(HermesTopicDeclared {
         space_id: action.from_id.clone(),
         topic_id,
-        meta: Some(meta.to_proto()),
+        meta: Some(meta.to_proto(sequence)),
     })
 }
 
@@ -95,7 +96,7 @@ mod tests {
             data: vec![],
         };
 
-        let result = convert_topic_declared(&action, &test_meta()).unwrap();
+        let result = convert_topic_declared(&action, &test_meta(), 0).unwrap();
         assert_eq!(result.space_id, vec![1; 16]);
         // Empty data defaults to zero-filled 16-byte UUID
         assert_eq!(result.topic_id, vec![0; 16]);

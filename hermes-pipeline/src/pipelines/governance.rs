@@ -40,8 +40,9 @@ impl TransformResult {
 pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformResult> {
     let mut result = TransformResult::default();
 
-    for action in actions {
+    for (index, action) in actions.iter().enumerate() {
         let action_type = action.action.as_slice();
+        let sequence = index as u32;
 
         if actions::matches(action_type, &actions::PROPOSAL_CREATED) {
             let events = debug_span!(
@@ -49,7 +50,7 @@ pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformRe
                 space_id = %hex::encode(&action.from_id),
                 proposal_id = %hex::encode(&action.topic)
             )
-            .in_scope(|| convert_proposal_created(action, meta))?;
+            .in_scope(|| convert_proposal_created(action, meta, sequence))?;
             result.proposals_created.extend(events);
         } else if actions::matches(action_type, &actions::PROPOSAL_VOTED) {
             let event = debug_span!(
@@ -57,7 +58,7 @@ pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformRe
                 voter_id = %hex::encode(&action.from_id),
                 proposal_id = %hex::encode(&action.topic)
             )
-            .in_scope(|| convert_proposal_voted(action, meta))?;
+            .in_scope(|| convert_proposal_voted(action, meta, sequence))?;
             result.proposals_voted.push(event);
         } else if actions::matches(action_type, &actions::PROPOSAL_EXECUTED) {
             let event = debug_span!(
@@ -65,7 +66,7 @@ pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformRe
                 space_id = %hex::encode(&action.from_id),
                 proposal_id = %hex::encode(&action.topic)
             )
-            .in_scope(|| convert_proposal_executed(action, meta))?;
+            .in_scope(|| convert_proposal_executed(action, meta, sequence))?;
             result.proposals_executed.push(event);
         }
     }
@@ -86,6 +87,7 @@ pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformRe
 fn convert_proposal_created(
     action: &Action,
     meta: &BlockMetadata,
+    sequence: u32,
 ) -> Result<Vec<HermesProposalCreated>> {
     // Decode the data field
     let decoded = match decode::decode_proposal_created(&action.data) {
@@ -105,7 +107,7 @@ fn convert_proposal_created(
                 action_count: 0,
                 action_type: ProposalActionType::Unknown.to_proto_value(),
                 action: None,
-                meta: Some(meta.to_proto()),
+                meta: Some(meta.to_proto(sequence)),
             }]);
         }
     };
@@ -128,7 +130,7 @@ fn convert_proposal_created(
             action_count: 0,
             action_type: ProposalActionType::Unknown.to_proto_value(),
             action: None,
-            meta: Some(meta.to_proto()),
+            meta: Some(meta.to_proto(sequence)),
         }]);
     }
 
@@ -175,7 +177,7 @@ fn convert_proposal_created(
                     data: a.data,
                     target_address,
                 }),
-                meta: Some(meta.to_proto()),
+                meta: Some(meta.to_proto(sequence)),
             }
         })
         .collect();
@@ -190,7 +192,7 @@ fn convert_proposal_created(
 /// - to_id: space_id (16 bytes) - space that owns the proposal
 /// - topic: proposal_id (32 bytes) - proposal being voted on
 /// - data: abi.encode(uint256(proposalId), VoteOption)
-fn convert_proposal_voted(action: &Action, meta: &BlockMetadata) -> Result<HermesProposalVoted> {
+fn convert_proposal_voted(action: &Action, meta: &BlockMetadata, sequence: u32) -> Result<HermesProposalVoted> {
     // Decode the data field
     // VoteOption enum: None=0, Yes=1, No=2, Abstain=3
     let vote = match decode::decode_proposal_voted(&action.data) {
@@ -216,7 +218,7 @@ fn convert_proposal_voted(action: &Action, meta: &BlockMetadata) -> Result<Herme
         space_id: action.to_id.clone(),
         proposal_id: action.topic.clone(),
         vote: vote as i32,
-        meta: Some(meta.to_proto()),
+        meta: Some(meta.to_proto(sequence)),
     })
 }
 
@@ -230,11 +232,12 @@ fn convert_proposal_voted(action: &Action, meta: &BlockMetadata) -> Result<Herme
 fn convert_proposal_executed(
     action: &Action,
     meta: &BlockMetadata,
+    sequence: u32,
 ) -> Result<HermesProposalExecuted> {
     Ok(HermesProposalExecuted {
         space_id: action.from_id.clone(),
         proposal_id: action.topic.clone(),
-        meta: Some(meta.to_proto()),
+        meta: Some(meta.to_proto(sequence)),
     })
 }
 
@@ -260,7 +263,7 @@ mod tests {
             data: vec![],
         };
 
-        let results = convert_proposal_created(&action, &test_meta()).unwrap();
+        let results = convert_proposal_created(&action, &test_meta(), 0).unwrap();
         assert_eq!(results.len(), 1);
         let result = &results[0];
         assert_eq!(result.space_id, vec![1; 16]);
@@ -280,7 +283,7 @@ mod tests {
             data: vec![],
         };
 
-        let result = convert_proposal_voted(&action, &test_meta()).unwrap();
+        let result = convert_proposal_voted(&action, &test_meta(), 0).unwrap();
         assert_eq!(result.voter_id, vec![1; 16]);
         assert_eq!(result.space_id, vec![2; 16]);
         assert_eq!(result.proposal_id, vec![3; 32]);
@@ -298,7 +301,7 @@ mod tests {
             data: vec![],
         };
 
-        let result = convert_proposal_executed(&action, &test_meta()).unwrap();
+        let result = convert_proposal_executed(&action, &test_meta(), 0).unwrap();
         assert_eq!(result.space_id, vec![1; 16]);
         assert_eq!(result.proposal_id, vec![2; 32]);
     }
@@ -386,7 +389,7 @@ mod tests {
             data: encoded,
         };
 
-        let results = convert_proposal_created(&action, &test_meta()).unwrap();
+        let results = convert_proposal_created(&action, &test_meta(), 0).unwrap();
         assert_eq!(results.len(), 1);
 
         let result = &results[0];
