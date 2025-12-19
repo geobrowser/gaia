@@ -139,7 +139,11 @@ fn convert_role_revoked(
 /// The action structure:
 /// - from_id: member_id (16 bytes) - member leaving
 /// - to_id: space_id (16 bytes) - space being left
-fn convert_space_left(action: &Action, meta: &BlockMetadata, sequence: u32) -> Result<HermesSpaceLeft> {
+fn convert_space_left(
+    action: &Action,
+    meta: &BlockMetadata,
+    sequence: u32,
+) -> Result<HermesSpaceLeft> {
     Ok(HermesSpaceLeft {
         member_id: action.from_id.clone(),
         space_id: action.to_id.clone(),
@@ -169,7 +173,8 @@ mod tests {
             data: vec![],
         };
 
-        let result = convert_role_granted(&action, &test_meta(), MembershipRole::Editor, 0).unwrap();
+        let result =
+            convert_role_granted(&action, &test_meta(), MembershipRole::Editor, 0).unwrap();
         assert_eq!(result.space_id, vec![1; 16]);
         assert_eq!(result.account, vec![2; 20]);
         assert_eq!(result.role, MembershipRole::Editor as i32);
@@ -185,7 +190,8 @@ mod tests {
             data: vec![],
         };
 
-        let result = convert_role_revoked(&action, &test_meta(), MembershipRole::Member, 0).unwrap();
+        let result =
+            convert_role_revoked(&action, &test_meta(), MembershipRole::Member, 0).unwrap();
         assert_eq!(result.space_id, vec![1; 16]);
         assert_eq!(result.account, vec![3; 20]);
         assert_eq!(result.role, MembershipRole::Member as i32);

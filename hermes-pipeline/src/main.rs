@@ -179,7 +179,7 @@ impl Pipeline {
         // Find max sequence across all events and mark that event with is_last = true.
         // This allows consumers to know when they've received all events for a block.
         {
-            use pipelines::{max_sequence, mark_sequence_as_last};
+            use pipelines::{mark_sequence_as_last, max_sequence};
 
             let max_seq = [
                 max_sequence(&spaces.events),

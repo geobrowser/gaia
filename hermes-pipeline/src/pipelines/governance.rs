@@ -192,7 +192,11 @@ fn convert_proposal_created(
 /// - to_id: space_id (16 bytes) - space that owns the proposal
 /// - topic: proposal_id (32 bytes) - proposal being voted on
 /// - data: abi.encode(uint256(proposalId), VoteOption)
-fn convert_proposal_voted(action: &Action, meta: &BlockMetadata, sequence: u32) -> Result<HermesProposalVoted> {
+fn convert_proposal_voted(
+    action: &Action,
+    meta: &BlockMetadata,
+    sequence: u32,
+) -> Result<HermesProposalVoted> {
     // Decode the data field
     // VoteOption enum: None=0, Yes=1, No=2, Abstain=3
     let vote = match decode::decode_proposal_voted(&action.data) {

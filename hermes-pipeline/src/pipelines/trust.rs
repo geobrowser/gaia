@@ -135,7 +135,11 @@ pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformRe
 /// The action structure for SUBSPACE_VERIFIED:
 /// - from_id: parent_space_id (16 bytes)
 /// - topic: [padding (16 bytes)][subspace_id (16 bytes)]
-fn convert_verified(action: &Action, meta: &BlockMetadata, sequence: u32) -> Result<HermesSpaceTrustExtension> {
+fn convert_verified(
+    action: &Action,
+    meta: &BlockMetadata,
+    sequence: u32,
+) -> Result<HermesSpaceTrustExtension> {
     let source_space_id = action.from_id.clone();
     // Target space ID is in the last 16 bytes of the topic field
     let target_space_id = action.topic[16..32].to_vec();
@@ -156,7 +160,11 @@ fn convert_verified(action: &Action, meta: &BlockMetadata, sequence: u32) -> Res
 /// The action structure for SUBSPACE_RELATED:
 /// - from_id: parent_space_id (16 bytes)
 /// - topic: [padding (16 bytes)][subspace_id (16 bytes)]
-fn convert_related(action: &Action, meta: &BlockMetadata, sequence: u32) -> Result<HermesSpaceTrustExtension> {
+fn convert_related(
+    action: &Action,
+    meta: &BlockMetadata,
+    sequence: u32,
+) -> Result<HermesSpaceTrustExtension> {
     let source_space_id = action.from_id.clone();
     let target_space_id = action.topic[16..32].to_vec();
 
@@ -199,7 +207,11 @@ fn convert_topic_declared(
 /// Convert a SUBSPACE_REMOVED action to HermesSpaceTrustExtension proto.
 ///
 /// Uses the same structure as SUBSPACE_ADDED but represents a trust revocation.
-fn convert_removed(action: &Action, meta: &BlockMetadata, sequence: u32) -> Result<HermesSpaceTrustExtension> {
+fn convert_removed(
+    action: &Action,
+    meta: &BlockMetadata,
+    sequence: u32,
+) -> Result<HermesSpaceTrustExtension> {
     let source_space_id = action.from_id.clone();
     let target_space_id = action.topic[16..32].to_vec();
 

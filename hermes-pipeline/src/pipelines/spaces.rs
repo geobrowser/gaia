@@ -82,6 +82,7 @@ fn convert(action: &Action, meta: &BlockMetadata, sequence: u32) -> Result<Herme
 /// - N * 16 bytes: editor space IDs
 /// - 2 bytes: number of members (u16 big-endian)
 /// - M * 16 bytes: member space IDs
+#[allow(clippy::type_complexity)]
 fn decode_dao_data(data: &[u8]) -> Result<(Vec<Vec<u8>>, Vec<Vec<u8>>)> {
     let mut offset = 0;
 

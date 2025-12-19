@@ -86,7 +86,11 @@ pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformRe
 /// - from_id: space_id (16 bytes) - space containing editor
 /// - topic: editor address (32 bytes, padded from 20)
 /// - data: empty
-fn convert_editor_flagged(action: &Action, meta: &BlockMetadata, sequence: u32) -> Result<HermesEditorFlagged> {
+fn convert_editor_flagged(
+    action: &Action,
+    meta: &BlockMetadata,
+    sequence: u32,
+) -> Result<HermesEditorFlagged> {
     // Extract the 20-byte address from the 32-byte topic (last 20 bytes)
     let editor_account = if action.topic.len() >= 20 {
         action.topic[action.topic.len() - 20..].to_vec()
@@ -132,7 +136,11 @@ fn convert_editor_unflagged(
 /// - to_id: target_space_id (16 bytes) - space whose content is flagged
 /// - topic: topic_id (32 bytes) - optional topic UUID
 /// - data: abi.encode(bytes(flaggedUri))
-fn convert_content_flagged(action: &Action, meta: &BlockMetadata, sequence: u32) -> Result<HermesContentFlagged> {
+fn convert_content_flagged(
+    action: &Action,
+    meta: &BlockMetadata,
+    sequence: u32,
+) -> Result<HermesContentFlagged> {
     // Decode the URI from the data field
     let uri = match decode::decode_flag_data(&action.data) {
         Ok(decoded_uri) => decoded_uri,

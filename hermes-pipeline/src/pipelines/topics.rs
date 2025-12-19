@@ -53,7 +53,11 @@ pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformRe
 /// The action structure:
 /// - from_id: space_id (16 bytes) - space declaring topic
 /// - data: abi.encode(bytes16(topicId))
-fn convert_topic_declared(action: &Action, meta: &BlockMetadata, sequence: u32) -> Result<HermesTopicDeclared> {
+fn convert_topic_declared(
+    action: &Action,
+    meta: &BlockMetadata,
+    sequence: u32,
+) -> Result<HermesTopicDeclared> {
     // Decode the topic_id from the data field
     let topic_id = match decode::decode_topic_declared(&action.data) {
         Ok(id) => id,

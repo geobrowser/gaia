@@ -232,7 +232,12 @@ async fn fetch_edit_with_retry<C: IpfsCache>(
 /// - to_id: unused (zeros)
 /// - topic: unused (zeros)
 /// - data: IPFS hash as bytes
-fn convert(action: &Action, edit: &Edit, meta: &BlockMetadata, sequence: u32) -> Result<HermesEdit> {
+fn convert(
+    action: &Action,
+    edit: &Edit,
+    meta: &BlockMetadata,
+    sequence: u32,
+) -> Result<HermesEdit> {
     Ok(HermesEdit {
         id: edit.id.clone(),
         name: edit.name.clone(),

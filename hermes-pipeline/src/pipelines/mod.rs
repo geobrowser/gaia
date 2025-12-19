@@ -84,11 +84,11 @@ pub fn max_sequence<T: HasMeta>(events: &[T]) -> u32 {
 /// Returns true if an event was marked.
 pub fn mark_sequence_as_last<T: HasMeta>(events: &mut [T], target_seq: u32) -> bool {
     for event in events.iter_mut() {
-        if let Some(meta) = event.meta_mut() {
-            if meta.sequence == target_seq {
-                meta.is_last = true;
-                return true;
-            }
+        if let Some(meta) = event.meta_mut()
+            && meta.sequence == target_seq
+        {
+            meta.is_last = true;
+            return true;
         }
     }
     false
