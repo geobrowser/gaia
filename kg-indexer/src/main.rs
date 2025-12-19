@@ -1,28 +1,19 @@
 use std::env;
-use std::time::{Duration, Instant};
 
 use futures::StreamExt;
 use rdkafka::Message;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
-mod batch;
 mod consumer;
 mod error;
 mod handlers;
 mod models;
 mod storage;
 
-use batch::Batch;
 use consumer::{KafkaConsumer, KgMessage, parse_message};
 use error::IndexerError;
 use storage::Storage;
-
-/// Maximum number of operations to accumulate before flushing
-const BATCH_SIZE_THRESHOLD: usize = 1000;
-
-/// Maximum time to wait before flushing a batch
-const BATCH_TIMEOUT: Duration = Duration::from_secs(5);
 
 #[tokio::main]
 async fn main() -> Result<(), IndexerError> {
@@ -64,56 +55,13 @@ async fn main() -> Result<(), IndexerError> {
     let mut processed_count: u64 = 0;
     let mut error_count: u64 = 0;
 
-    // Batch accumulator
-    let mut batch = Batch::new();
-    let mut last_flush = Instant::now();
-    let mut pending_commits: Vec<(String, i32, i64)> = Vec::new();
-
-    info!(
-        batch_size_threshold = BATCH_SIZE_THRESHOLD,
-        batch_timeout_secs = BATCH_TIMEOUT.as_secs(),
-        "Starting message processing loop with batching"
-    );
+    info!("Starting message processing loop");
 
     loop {
-        // Check if we should flush based on time
-        let should_flush_time = !batch.is_empty() && last_flush.elapsed() >= BATCH_TIMEOUT;
-
         tokio::select! {
             _ = shutdown_rx.recv() => {
                 info!("Shutting down...");
-                // Flush any remaining batch before shutdown
-                if !batch.is_empty() {
-                    if let Err(e) = batch.flush(&storage).await {
-                        error!(error = %e, "Failed to flush final batch");
-                    } else {
-                        // Commit all pending offsets
-                        for (topic, partition, offset) in &pending_commits {
-                            if let Err(e) = consumer.commit_message(topic, *partition, *offset) {
-                                error!(error = %e, "Failed to commit offset");
-                            }
-                        }
-                    }
-                }
                 break;
-            }
-            _ = tokio::time::sleep(Duration::from_millis(100)), if should_flush_time => {
-                // Time-based flush
-                info!(batch_size = batch.len(), "Flushing batch due to timeout");
-                if let Err(e) = batch.flush(&storage).await {
-                    error!(error = %e, "Failed to flush batch");
-                    error_count += pending_commits.len() as u64;
-                } else {
-                    processed_count += pending_commits.len() as u64;
-                    // Commit all pending offsets
-                    for (topic, partition, offset) in &pending_commits {
-                        if let Err(e) = consumer.commit_message(topic, *partition, *offset) {
-                            error!(error = %e, "Failed to commit offset");
-                        }
-                    }
-                }
-                pending_commits.clear();
-                last_flush = Instant::now();
             }
             message = stream.next() => {
                 match message {
@@ -125,42 +73,35 @@ async fn main() -> Result<(), IndexerError> {
                         if let Some(payload) = msg.payload() {
                             match parse_message(&topic, payload) {
                                 Ok(kg_msg) => {
-                                    let result = process_message(kg_msg, &mut batch);
+                                    match process_message(kg_msg, &storage).await {
+                                        Ok(ops) => {
+                                            debug!(
+                                                topic = %topic,
+                                                partition = partition,
+                                                offset = offset,
+                                                ops = ops,
+                                                "Processed message"
+                                            );
+                                            processed_count += 1;
 
-                                    if let Err(e) = result {
-                                        error!(
-                                            topic = %topic,
-                                            partition = partition,
-                                            offset = offset,
-                                            error = %e,
-                                            "Failed to process message"
-                                        );
-                                        error_count += 1;
-                                        // Still commit to avoid getting stuck
-                                        if let Err(e) = consumer.commit_message(&topic, partition, offset) {
-                                            error!(error = %e, "Failed to commit offset");
-                                        }
-                                    } else {
-                                        // Track this message for commit after flush
-                                        pending_commits.push((topic.clone(), partition, offset));
-
-                                        // Check if we should flush based on size
-                                        if batch.len() >= BATCH_SIZE_THRESHOLD {
-                                            info!(batch_size = batch.len(), "Flushing batch due to size threshold");
-                                            if let Err(e) = batch.flush(&storage).await {
-                                                error!(error = %e, "Failed to flush batch");
-                                                error_count += pending_commits.len() as u64;
-                                            } else {
-                                                processed_count += pending_commits.len() as u64;
-                                                // Commit all pending offsets
-                                                for (t, p, o) in &pending_commits {
-                                                    if let Err(e) = consumer.commit_message(t, *p, *o) {
-                                                        error!(error = %e, "Failed to commit offset");
-                                                    }
-                                                }
+                                            // Commit offset after successful processing
+                                            if let Err(e) = consumer.commit_message(&topic, partition, offset) {
+                                                error!(error = %e, "Failed to commit offset");
                                             }
-                                            pending_commits.clear();
-                                            last_flush = Instant::now();
+                                        }
+                                        Err(e) => {
+                                            error!(
+                                                topic = %topic,
+                                                partition = partition,
+                                                offset = offset,
+                                                error = %e,
+                                                "Failed to process message"
+                                            );
+                                            error_count += 1;
+                                            // Still commit to avoid getting stuck
+                                            if let Err(e) = consumer.commit_message(&topic, partition, offset) {
+                                                error!(error = %e, "Failed to commit offset");
+                                            }
                                         }
                                     }
 
@@ -168,7 +109,6 @@ async fn main() -> Result<(), IndexerError> {
                                         info!(
                                             processed = processed_count,
                                             errors = error_count,
-                                            pending = pending_commits.len(),
                                             "Progress update"
                                         );
                                     }
@@ -196,18 +136,6 @@ async fn main() -> Result<(), IndexerError> {
                     }
                     None => {
                         info!("Stream ended");
-                        // Flush any remaining batch
-                        if !batch.is_empty() {
-                            if let Err(e) = batch.flush(&storage).await {
-                                error!(error = %e, "Failed to flush final batch");
-                            } else {
-                                for (topic, partition, offset) in &pending_commits {
-                                    if let Err(e) = consumer.commit_message(topic, *partition, *offset) {
-                                        error!(error = %e, "Failed to commit offset");
-                                    }
-                                }
-                            }
-                        }
                         break;
                     }
                 }
@@ -224,63 +152,106 @@ async fn main() -> Result<(), IndexerError> {
     Ok(())
 }
 
-fn process_message(msg: KgMessage, batch: &mut Batch) -> Result<(), IndexerError> {
+/// Process a single Kafka message within its own transaction.
+/// Returns the number of database operations performed.
+async fn process_message(msg: KgMessage, storage: &Storage) -> Result<usize, IndexerError> {
     use handlers::membership::MembershipChange;
     use models::relations::RelationOp;
     use models::values::ValueChangeType;
 
-    match msg {
+    let mut tx = storage.pool.begin().await?;
+
+    let ops = match msg {
         KgMessage::Edit(edit) => {
             let result = handlers::edits::handle_edit(&edit)?;
 
-            // Add entities and properties
-            batch.entities.extend(result.entities);
-            batch.properties.extend(result.properties);
-
             // Partition values into sets and deletes
-            for op in result.values {
-                match op.change_type {
-                    ValueChangeType::Set => batch.set_values.push(op),
-                    ValueChangeType::Delete => {
-                        batch.delete_values.push((op.id, op.space_id));
-                    }
-                }
-            }
+            let (set_values, delete_values): (Vec<_>, Vec<_>) = result
+                .values
+                .into_iter()
+                .partition(|v| matches!(v.change_type, ValueChangeType::Set));
+
+            let delete_value_ids: Vec<_> = delete_values
+                .into_iter()
+                .map(|v| (v.id, v.space_id))
+                .collect();
 
             // Partition relations by operation type
+            let mut set_relations = Vec::new();
+            let mut update_relations = Vec::new();
+            let mut unset_relations = Vec::new();
+            let mut delete_relations = Vec::new();
+
             for op in result.relations {
                 match op {
-                    RelationOp::Create(r) => batch.set_relations.push(r),
-                    RelationOp::Update(r) => batch.update_relations.push(r),
-                    RelationOp::Unset(r) => batch.unset_relations.push(r),
-                    RelationOp::Delete(r) => batch.delete_relations.push((r.id, r.space_id)),
+                    RelationOp::Create(r) => set_relations.push(r),
+                    RelationOp::Update(r) => update_relations.push(r),
+                    RelationOp::Unset(r) => unset_relations.push(r),
+                    RelationOp::Delete(r) => delete_relations.push((r.id, r.space_id)),
                 }
             }
+
+            let ops = result.entities.len()
+                + result.properties.len()
+                + set_values.len()
+                + delete_value_ids.len()
+                + set_relations.len()
+                + update_relations.len()
+                + unset_relations.len()
+                + delete_relations.len();
+
+            // Bulk insert all operations
+            storage.insert_entities(&result.entities, &mut tx).await?;
+            storage.insert_properties(&result.properties, &mut tx).await?;
+            storage.insert_values(&set_values, &mut tx).await?;
+            storage.delete_values(&delete_value_ids, &mut tx).await?;
+            storage.insert_relations(&set_relations, &mut tx).await?;
+            storage.update_relations(&update_relations, &mut tx).await?;
+            storage.unset_relation_fields(&unset_relations, &mut tx).await?;
+            storage.delete_relations(&delete_relations, &mut tx).await?;
+
+            ops
         }
         KgMessage::CreateSpace(space) => {
             let space_item = handlers::spaces::handle_create_space(&space)?;
-            batch.spaces.push(space_item);
+            storage.insert_spaces(&[space_item], &mut tx).await?;
+            1
         }
         KgMessage::RoleGranted(event) => {
             match handlers::membership::handle_role_granted(&event)? {
-                MembershipChange::AddEditor(e) => batch.add_editors.push(e),
-                MembershipChange::AddMember(m) => batch.add_members.push(m),
+                MembershipChange::AddEditor(e) => {
+                    storage.insert_editors(&[e], &mut tx).await?;
+                }
+                MembershipChange::AddMember(m) => {
+                    storage.insert_members(&[m], &mut tx).await?;
+                }
                 _ => {} // Shouldn't happen for granted
             }
+            1
         }
         KgMessage::RoleRevoked(event) => {
             match handlers::membership::handle_role_revoked(&event)? {
-                MembershipChange::RemoveEditor(e) => batch.remove_editors.push(e),
-                MembershipChange::RemoveMember(m) => batch.remove_members.push(m),
+                MembershipChange::RemoveEditor(e) => {
+                    storage.remove_editors(&[e], &mut tx).await?;
+                }
+                MembershipChange::RemoveMember(m) => {
+                    storage.remove_members(&[m], &mut tx).await?;
+                }
                 _ => {} // Shouldn't happen for revoked
             }
+            1
         }
         KgMessage::TrustExtension(event) => {
             if let Some(subspace) = handlers::subspaces::handle_trust_extension(&event)? {
-                batch.add_subspaces.push(subspace);
+                storage.insert_subspaces(&[subspace], &mut tx).await?;
+                1
+            } else {
+                0
             }
         }
-    }
+    };
 
-    Ok(())
+    tx.commit().await?;
+
+    Ok(ops)
 }
