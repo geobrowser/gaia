@@ -24,6 +24,7 @@ IPFS_ALTERNATIVE_GATEWAY_KEY='' # when using Pinata according to the docs exampl
 IPFS_ALTERNATIVE_GATEWAY_WRITE=''
 RPC_ENDPOINT=''
 DEPLOYER_PK=''
+OPENSEARCH_URL="http://localhost:9200" # OpenSearch server URL (optional - if not set, search routes won't be added)
 ```
 
 You can run a PostgreSQL container using the `docker compose up` command and then set the `DATABASE_URL` to `postgresql://postgres:postgres@localhost:5432/gaia`.

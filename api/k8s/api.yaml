@@ -127,6 +127,11 @@ spec:
                 secretKeyRef:
                   name: api-secrets
                   key: IPFS_ALTERNATIVE_GATEWAY_WRITE
+            - name: OPENSEARCH_URL
+              valueFrom:
+                secretKeyRef:
+                  name: api-secrets
+                  key: OPENSEARCH_URL
             - name: TELEMETRY_TOKEN
               valueFrom:
                 secretKeyRef:
