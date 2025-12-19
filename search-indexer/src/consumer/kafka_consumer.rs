@@ -105,8 +105,8 @@ impl KafkaConsumer {
         client_config
             .set("bootstrap.servers", brokers)
             .set("group.id", group_id)
-            .set("enable.auto.commit", "false")
-            .set("auto.offset.reset", "earliest")
+            .set("enable.auto.commit", "false") // Manual commit for at-least-once delivery
+            .set("auto.offset.reset", "earliest") // Start from beginning if no committed offset
             .set("session.timeout.ms", "6000");
 
         info!(
