@@ -14,7 +14,7 @@ indexer_utils = { path = "../indexer_utils" }
 sdk = { path = "../sdk" }
 
 # Kafka
-rdkafka = { version = "0.38.0", features = ["cmake-build", "zstd"] }
+rdkafka = { version = "0.38.0", features = ["cmake-build", "zstd", "ssl"] }
 
 # Async runtime
 tokio = { version = "1.42.0", features = ["macros", "rt-multi-thread", "sync", "time", "signal"] }
