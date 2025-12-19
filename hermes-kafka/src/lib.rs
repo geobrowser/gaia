@@ -25,7 +25,6 @@
 use std::env;
 
 use anyhow::Result;
-use rdkafka::config::ClientConfig;
 
 /// Configuration for creating a Kafka producer.
 #[derive(Debug, Clone)]
@@ -150,5 +149,9 @@ pub fn create_producer(broker: &str, client_id: &str) -> Result<rdkafka::produce
 }
 
 // Re-export commonly used rdkafka types for convenience
-pub use rdkafka::message::{Header, OwnedHeaders};
+pub use rdkafka::message::{Header, OwnedHeaders, BorrowedMessage, Message};
 pub use rdkafka::producer::{BaseProducer, BaseRecord, Producer};
+pub use rdkafka::consumer::{BaseConsumer, Consumer, StreamConsumer};
+pub use rdkafka::config::ClientConfig;
+pub use rdkafka::error::KafkaError;
+pub use rdkafka::TopicPartitionList;
