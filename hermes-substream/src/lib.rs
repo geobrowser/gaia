@@ -560,6 +560,77 @@ fn map_subspaces_topic_declared(
     Ok(SubspaceTopicDeclaredList { declarations })
 }
 
+#[substreams::handlers::map]
+fn map_space_types_declared(
+    block: eth::v2::Block,
+) -> Result<SpaceTypeDeclaredList, substreams::errors::Error> {
+    let declarations: Vec<SpaceTypeDeclared> = block
+        .logs()
+        .filter_map(|log| parse_action(log))
+        .filter(|action| action.action.as_slice() == ACTION_SPACE_TYPE_DECLARED)
+        .map(|action| SpaceTypeDeclared {
+            space_id: action.from_id, // from_id == to_id for this action
+            space_type: action.topic,
+            version: action.data,
+        })
+        .collect();
+
+    Ok(SpaceTypeDeclaredList { declarations })
+}
+
+#[substreams::handlers::map]
+fn map_spaces_cleared(
+    block: eth::v2::Block,
+) -> Result<SpaceClearedList, substreams::errors::Error> {
+    let spaces: Vec<SpaceCleared> = block
+        .logs()
+        .filter_map(|log| parse_action(log))
+        .filter(|action| action.action.as_slice() == ACTION_SPACE_ID_CLEARED)
+        .map(|action| SpaceCleared {
+            space_id: action.from_id,
+            space_address: action.topic[12..32].to_vec(),
+        })
+        .collect();
+
+    Ok(SpaceClearedList { spaces })
+}
+
+#[substreams::handlers::map]
+fn map_proposal_settings_used(
+    block: eth::v2::Block,
+) -> Result<ProposalSettingsUsedList, substreams::errors::Error> {
+    let settings: Vec<ProposalSettingsUsed> = block
+        .logs()
+        .filter_map(|log| parse_action(log))
+        .filter(|action| action.action.as_slice() == ACTION_PROPOSAL_SETTINGS_USED)
+        .map(|action| ProposalSettingsUsed {
+            space_id: action.from_id,
+            proposal_id: action.topic[16..32].to_vec(),
+            data: action.data,
+        })
+        .collect();
+
+    Ok(ProposalSettingsUsedList { settings })
+}
+
+#[substreams::handlers::map]
+fn map_proposals_updated(
+    block: eth::v2::Block,
+) -> Result<ProposalUpdatedList, substreams::errors::Error> {
+    let proposals: Vec<ProposalUpdated> = block
+        .logs()
+        .filter_map(|log| parse_action(log))
+        .filter(|action| action.action.as_slice() == ACTION_PROPOSAL_UPDATED)
+        .map(|action| ProposalUpdated {
+            space_id: action.from_id,
+            proposal_id: action.topic[16..32].to_vec(),
+            data: action.data,
+        })
+        .collect();
+
+    Ok(ProposalUpdatedList { proposals })
+}
+
 // =============================================================================
 // Permissionless Events
 // =============================================================================
