@@ -11,15 +11,17 @@ This substream decodes the `Action` event from the Space Registry contract and p
 ## Building
 
 ```bash
-# 1. Generate protobuf bindings
-substreams protogen ./substreams.yaml --generate-mod-rs
+# Build everything (generates protos, compiles WASM, creates .spkg)
+substreams build
 
-# 2. Build the WASM binary
-cargo build --release --target wasm32-unknown-unknown
-
-# 3. Pack into .spkg
-substreams pack -o hermes-substream.spkg
+# Or just repack without recompiling
+substreams pack --output-file hermes-substream.spkg
 ```
+
+The `substreams build` command:
+1. Generates Rust protobuf bindings from `proto/schema.proto` → `src/pb/`
+2. Compiles the WASM binary
+3. Creates the `.spkg` package
 
 ### Prerequisites
 
@@ -59,6 +61,10 @@ substreams pack -o hermes-substream.spkg
 | `map_subspaces_verified` | `SubspaceVerifiedList` | Verified subspaces |
 | `map_subspaces_related` | `SubspaceRelatedList` | Related subspaces |
 | `map_subspaces_topic_declared` | `SubspaceTopicDeclaredList` | Topic declarations for subspaces |
+| `map_space_types_declared` | `SpaceTypeDeclaredList` | Space type declarations (e.g., DAO_SPACE) |
+| `map_spaces_cleared` | `SpaceClearedList` | Cleared space IDs |
+| `map_proposal_settings_used` | `ProposalSettingsUsedList` | Proposal settings snapshots |
+| `map_proposals_updated` | `ProposalUpdatedList` | Updated proposals |
 
 ### Permissionless Events
 
@@ -111,6 +117,10 @@ Events are identified by keccak256 hashes of action name strings:
 | Subspace Verified | `GOVERNANCE.SUBSPACE_VERIFIED` |
 | Subspace Related | `GOVERNANCE.SUBSPACE_RELATED` |
 | Subspace Topic Declared | `GOVERNANCE.SUBSPACE_TOPIC_DECLARED` |
+| Space Type Declared | `GOVERNANCE.SPACE_TYPE_DECLARED` |
+| Space ID Cleared | `GOVERNANCE.SPACE_ID_CLEARED` |
+| Proposal Settings Used | `GOVERNANCE.PROPOSAL_SETTINGS_USED` |
+| Proposal Updated | `GOVERNANCE.PROPOSAL_UPDATED` |
 | Upvoted | `PERMISSIONLESS.UPVOTED` |
 | Downvoted | `PERMISSIONLESS.DOWNVOTED` |
 | Unvoted | `PERMISSIONLESS.UNVOTED` |

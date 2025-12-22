@@ -223,6 +223,45 @@ message SubspaceTopicDeclaredList {
     repeated SubspaceTopicDeclared declarations = 1;
 }
 
+message SpaceTypeDeclared {
+    bytes space_id = 1;          // 16 bytes - from both from_id and to_id (same)
+    bytes space_type = 2;        // 32 bytes - from topic field (e.g., keccak256("DAO_SPACE"))
+    bytes version = 3;           // variable - from data field (e.g., "1.0.0" encoded)
+}
+
+message SpaceTypeDeclaredList {
+    repeated SpaceTypeDeclared declarations = 1;
+}
+
+message SpaceCleared {
+    bytes space_id = 1;          // 16 bytes - from from_id
+    bytes space_address = 2;     // 20 bytes - from topic field
+}
+
+message SpaceClearedList {
+    repeated SpaceCleared spaces = 1;
+}
+
+message ProposalSettingsUsed {
+    bytes space_id = 1;          // 16 bytes
+    bytes proposal_id = 2;       // 16 bytes - from topic field (bytes16 padded to 32)
+    bytes data = 3;              // abi.encode(startDate, lastDate, votingMode, quorum, supportThreshold)
+}
+
+message ProposalSettingsUsedList {
+    repeated ProposalSettingsUsed settings = 1;
+}
+
+message ProposalUpdated {
+    bytes space_id = 1;          // 16 bytes
+    bytes proposal_id = 2;       // 16 bytes - from topic field
+    bytes data = 3;              // abi.encode(bytes16, VotingMode, Action[])
+}
+
+message ProposalUpdatedList {
+    repeated ProposalUpdated proposals = 1;
+}
+
 // =============================================================================
 // Permissionless Events
 // =============================================================================

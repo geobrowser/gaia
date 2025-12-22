@@ -328,24 +328,6 @@ pub struct UnflaggedList {
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]
-pub struct SubspaceAdded {
-    /// 16 bytes - parent space
-    #[prost(bytes="vec", tag="1")]
-    pub parent_space_id: ::prost::alloc::vec::Vec<u8>,
-    /// 16 bytes - from topic field
-    #[prost(bytes="vec", tag="2")]
-    pub subspace_id: ::prost::alloc::vec::Vec<u8>,
-    #[prost(bytes="vec", tag="3")]
-    pub data: ::prost::alloc::vec::Vec<u8>,
-}
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct SubspaceAddedList {
-    #[prost(message, repeated, tag="1")]
-    pub subspaces: ::prost::alloc::vec::Vec<SubspaceAdded>,
-}
-#[allow(clippy::derive_partial_eq_without_eq)]
-#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct SubspaceRemoved {
     /// 16 bytes - parent space
     #[prost(bytes="vec", tag="1")]
@@ -418,6 +400,79 @@ pub struct SubspaceTopicDeclared {
 pub struct SubspaceTopicDeclaredList {
     #[prost(message, repeated, tag="1")]
     pub declarations: ::prost::alloc::vec::Vec<SubspaceTopicDeclared>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SpaceTypeDeclared {
+    /// 16 bytes - from both from_id and to_id (same)
+    #[prost(bytes="vec", tag="1")]
+    pub space_id: ::prost::alloc::vec::Vec<u8>,
+    /// 32 bytes - from topic field (e.g., keccak256("DAO_SPACE"))
+    #[prost(bytes="vec", tag="2")]
+    pub space_type: ::prost::alloc::vec::Vec<u8>,
+    /// variable - from data field (e.g., "1.0.0" encoded)
+    #[prost(bytes="vec", tag="3")]
+    pub version: ::prost::alloc::vec::Vec<u8>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SpaceTypeDeclaredList {
+    #[prost(message, repeated, tag="1")]
+    pub declarations: ::prost::alloc::vec::Vec<SpaceTypeDeclared>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SpaceCleared {
+    /// 16 bytes - from from_id
+    #[prost(bytes="vec", tag="1")]
+    pub space_id: ::prost::alloc::vec::Vec<u8>,
+    /// 20 bytes - from topic field
+    #[prost(bytes="vec", tag="2")]
+    pub space_address: ::prost::alloc::vec::Vec<u8>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SpaceClearedList {
+    #[prost(message, repeated, tag="1")]
+    pub spaces: ::prost::alloc::vec::Vec<SpaceCleared>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ProposalSettingsUsed {
+    /// 16 bytes
+    #[prost(bytes="vec", tag="1")]
+    pub space_id: ::prost::alloc::vec::Vec<u8>,
+    /// 16 bytes - from topic field (bytes16 padded to 32)
+    #[prost(bytes="vec", tag="2")]
+    pub proposal_id: ::prost::alloc::vec::Vec<u8>,
+    /// abi.encode(startDate, lastDate, votingMode, quorum, supportThreshold)
+    #[prost(bytes="vec", tag="3")]
+    pub data: ::prost::alloc::vec::Vec<u8>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ProposalSettingsUsedList {
+    #[prost(message, repeated, tag="1")]
+    pub settings: ::prost::alloc::vec::Vec<ProposalSettingsUsed>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ProposalUpdated {
+    /// 16 bytes
+    #[prost(bytes="vec", tag="1")]
+    pub space_id: ::prost::alloc::vec::Vec<u8>,
+    /// 16 bytes - from topic field
+    #[prost(bytes="vec", tag="2")]
+    pub proposal_id: ::prost::alloc::vec::Vec<u8>,
+    /// abi.encode(bytes16, VotingMode, Action\[\])
+    #[prost(bytes="vec", tag="3")]
+    pub data: ::prost::alloc::vec::Vec<u8>,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct ProposalUpdatedList {
+    #[prost(message, repeated, tag="1")]
+    pub proposals: ::prost::alloc::vec::Vec<ProposalUpdated>,
 }
 // =============================================================================
 // Permissionless Events
