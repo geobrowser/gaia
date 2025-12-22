@@ -4,15 +4,12 @@ pub struct PersonalSpacePayload {
     #[prost(bytes = "vec", tag = "1")]
     pub owner: ::prost::alloc::vec::Vec<u8>,
 }
-#[derive(Clone, PartialEq, ::prost::Message)]
-pub struct DefaultDaoSpacePayload {
-    /// uuids
-    #[prost(bytes = "vec", repeated, tag = "1")]
-    pub initial_editors: ::prost::alloc::vec::Vec<::prost::alloc::vec::Vec<u8>>,
-    /// uuids
-    #[prost(bytes = "vec", repeated, tag = "2")]
-    pub initial_members: ::prost::alloc::vec::Vec<::prost::alloc::vec::Vec<u8>>,
-}
+/// DefaultDaoSpacePayload is intentionally empty.
+/// The contract emits individual EDITOR_ADDED/MEMBER_ADDED events for each
+/// initial editor/member during initialization. These are handled by the
+/// membership pipeline, not space creation.
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+pub struct DefaultDaoSpacePayload {}
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct HermesCreateSpace {
     /// uuid
