@@ -218,7 +218,7 @@ fn map_spaces_registered(
         .filter_map(|log| parse_action(log))
         .filter(|action| action.action.as_slice() == ACTION_SPACE_ID_REGISTERED)
         .map(|action| SpaceRegistered {
-            space_id: action.from_id,
+            space_id: action.to_id,
             space_address: action.topic[12..32].to_vec(),
             data: action.data,
         })
