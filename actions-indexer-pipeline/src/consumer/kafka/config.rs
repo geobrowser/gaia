@@ -101,8 +101,12 @@ mod tests {
 
     #[test]
     fn test_consumer_config_new() {
-        let config = ConsumerConfig::new(Url::parse("localhost:9092").unwrap(), "test-group", "test-topic");
-        
+        let config = ConsumerConfig::new(
+            Url::parse("localhost:9092").unwrap(),
+            "test-group",
+            "test-topic",
+        );
+
         assert_eq!(config.broker, Url::parse("localhost:9092").unwrap());
         assert_eq!(config.group_id, "test-group");
         assert_eq!(config.topic, "test-topic");
@@ -113,19 +117,29 @@ mod tests {
 
     #[test]
     fn test_consumer_config_with_credentials() {
-        let config = ConsumerConfig::new(Url::parse("localhost:9092").unwrap(), "test-group", "test-topic")
-            .with_credentials("user".to_string(), "pass".to_string());
-        
+        let config = ConsumerConfig::new(
+            Url::parse("localhost:9092").unwrap(),
+            "test-group",
+            "test-topic",
+        )
+        .with_credentials("user".to_string(), "pass".to_string());
+
         assert_eq!(config.username, Some("user".to_string()));
         assert_eq!(config.password, Some("pass".to_string()));
     }
 
     #[test]
     fn test_consumer_config_with_ssl_ca() {
-        let config = ConsumerConfig::new(Url::parse("localhost:9092").unwrap(), "test-group", "test-topic")
-            .with_ssl_ca("-----BEGIN CERTIFICATE-----".to_string());
-        
-        assert_eq!(config.ssl_ca_pem, Some("-----BEGIN CERTIFICATE-----".to_string()));
+        let config = ConsumerConfig::new(
+            Url::parse("localhost:9092").unwrap(),
+            "test-group",
+            "test-topic",
+        )
+        .with_ssl_ca("-----BEGIN CERTIFICATE-----".to_string());
+
+        assert_eq!(
+            config.ssl_ca_pem,
+            Some("-----BEGIN CERTIFICATE-----".to_string())
+        );
     }
 }
-

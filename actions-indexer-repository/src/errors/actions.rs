@@ -14,6 +14,9 @@ pub enum ActionsRepositoryError {
     #[error("Invalid address: {0}")]
     InvalidAddress(String),
 
+    #[error("Invalid user ID: {0}")]
+    InvalidUserId(String),
+
     #[error("Invalid timestamp: {0}")]
     InvalidTimestamp(u64),
 

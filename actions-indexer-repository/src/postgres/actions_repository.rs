@@ -21,7 +21,6 @@ use actions_indexer_shared::types::{Action, Changeset, UserVote, VotesCount, Obj
 use crate::{ActionsRepository, ActionsRepositoryError};
 use hex;
 use time::OffsetDateTime;
-use alloy::{primitives::Address, hex::FromHex};
 use uuid::Uuid;
 
 /// PostgreSQL implementation of the actions indexer repository.
@@ -86,7 +85,7 @@ impl PostgresActionsRepository {
                         .unwrap_or(OffsetDateTime::now_utc());
                     b.push_bind(vote_action.raw.action_type as i64)
                      .push_bind(vote_action.raw.action_version as i64)
-                     .push_bind(format!("0x{}", hex::encode(vote_action.raw.sender.as_slice())))
+                     .push_bind(vote_action.raw.user_id.to_string())
                      .push_bind(vote_action.raw.object_id.clone())
                      .push_bind(vote_action.raw.group_id.clone())
                      .push_bind(vote_action.raw.space_pov.clone())
@@ -132,7 +131,7 @@ impl PostgresActionsRepository {
                     vote_type = EXCLUDED.vote_type,
                     voted_at = EXCLUDED.voted_at
                 "#,
-                format!("0x{}", hex::encode(vote.user_id.as_slice())),
+                vote.user_id.to_string(),
                 vote.object_id.clone(),
                 vote.object_type as i16,
                 vote.space_id.clone(),
@@ -306,7 +305,7 @@ impl ActionsRepository for PostgresActionsRepository {
             return Ok(Vec::new());
         }
 
-        let user_ids: Vec<String> = vote_criteria.iter().map(|(u, _, _, _)| format!("0x{}", hex::encode(u.as_slice()))).collect();
+        let user_ids: Vec<String> = vote_criteria.iter().map(|(u, _, _, _)| u.to_string()).collect();
         let object_ids: Vec<ObjectId> = vote_criteria.iter().map(|(_, o, _, _)| *o).collect();
         let space_ids: Vec<Uuid> = vote_criteria.iter().map(|(_, _, s, _)| *s).collect();
         let object_types: Vec<i16> = vote_criteria.iter().map(|(_, _, _, o)| *o as i16).collect();
@@ -328,7 +327,7 @@ impl ActionsRepository for PostgresActionsRepository {
         let mut result_votes = Vec::with_capacity(votes.len());
         for v in votes {
             result_votes.push(UserVote {
-                user_id: Address::from_hex(&v.user_id).map_err(|_| ActionsRepositoryError::InvalidAddress(v.user_id))?,
+                user_id: Uuid::parse_str(&v.user_id).map_err(|_| ActionsRepositoryError::InvalidUserId(v.user_id))?,
                 object_id: v.object_id,
                 space_id: v.space_id,
                 object_type: match v.object_type {

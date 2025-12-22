@@ -14,7 +14,7 @@ use super::substreams::SubstreamsEndpoint;
 use super::substreams_stream::{BlockResponse, SubstreamsStream};
 use prost::Message;
 use std::sync::Arc;
-use crate::errors::ConsumerError;
+use crate::errors::{ConfigError, ConsumerError, ConversionError, StreamError};
 use crate::consumer::{ConsumeActionsStream, StreamMessage, BlockDataMessage};
 
 lazy_static! {
@@ -64,12 +64,12 @@ impl SubstreamsStreamProvider {
 
         let output = data.output
             .as_ref()
-            .ok_or_else(|| ConsumerError::MissingField("output".to_string()))?
+            .ok_or_else(|| ConversionError::MissingField("output".to_string()))?
             .map_output
             .as_ref()
-            .ok_or_else(|| ConsumerError::MissingField("map_output".to_string()))?;
+            .ok_or_else(|| ConversionError::MissingField("map_output".to_string()))?;
         let actions = Actions::decode(output.value.as_slice())
-            .map_err(|e| ConsumerError::DecodingActions(e.to_string()))?;
+            .map_err(|e| StreamError::DecodingActions(e.to_string()))?;
         let raw_actions = actions
             .actions
             .iter()
@@ -115,11 +115,11 @@ impl SubstreamsStreamProvider {
 #[async_trait::async_trait]
 impl ConsumeActionsStream for SubstreamsStreamProvider {
     async fn stream_events(&self, sender: tokio::sync::mpsc::Sender<StreamMessage>, cursor: Option<String>) -> Result<(), ConsumerError> {
-        let package = read_package(&self.package_file, self.params.clone()).await.map_err(|e| ConsumerError::ReadingPackage(e.to_string()))?;
-        let block_range = read_block_range(&package, &self.module_name, self.block_range.clone()).map_err(|e| ConsumerError::ReadingBlockRange(e.to_string()))?;
+        let package = read_package(&self.package_file, self.params.clone()).await.map_err(|e| ConfigError::ReadingPackage(e.to_string()))?;
+        let block_range = read_block_range(&package, &self.module_name, self.block_range.clone()).map_err(|e| ConfigError::ReadingBlockRange(e.to_string()))?;
 
         let endpoint =
-            Arc::new(SubstreamsEndpoint::new(&self.endpoint_url, self.token.clone()).await.map_err(|e| ConsumerError::ReadingEndpoint(e.to_string()))?);
+            Arc::new(SubstreamsEndpoint::new(&self.endpoint_url, self.token.clone()).await.map_err(|e| ConfigError::ReadingEndpoint(e.to_string()))?);
 
         let mut stream = SubstreamsStream::new(
             endpoint,
@@ -133,25 +133,25 @@ impl ConsumeActionsStream for SubstreamsStreamProvider {
         loop {
             match stream.next().await {
                 None => {
-                    sender.send(StreamMessage::StreamEnd).await.map_err(|e| ConsumerError::ChannelSend(e.to_string()))?;
+                    sender.send(StreamMessage::StreamEnd).await.map_err(|e| StreamError::ChannelSend(e.to_string()))?;
                     break;
                 }
                 Some(Ok(BlockResponse::New(data))) => {
-                    let actions = self.process_block_scoped_data(&data).map_err(|e| ConsumerError::ProcessingBlockScopedData(e.to_string()))?;
+                    let actions = self.process_block_scoped_data(&data).map_err(|e| StreamError::ProcessingBlockScopedData(e.to_string()))?;
                     sender.send(StreamMessage::BlockData(BlockDataMessage {
                         actions,
                         cursor: data.cursor,
                         block_number: data.clock.unwrap().number as i64,
-                    })).await.map_err(|e| ConsumerError::ChannelSend(e.to_string()))?;
+                    })).await.map_err(|e| StreamError::ChannelSend(e.to_string()))?;
                 }
                 Some(Ok(BlockResponse::Undo(undo_signal))) => {
-                    sender.send(StreamMessage::UndoSignal(undo_signal)).await.map_err(|e| ConsumerError::ChannelSend(e.to_string()))?;
+                    sender.send(StreamMessage::UndoSignal(undo_signal)).await.map_err(|e| StreamError::ChannelSend(e.to_string()))?;
                 }
                 Some(Err(err)) => {
                     println!();
                     println!("Stream terminated with error");
                     println!("{:?}", err);
-                    sender.send(StreamMessage::Error(ConsumerError::StreamingError(err.to_string()))).await.map_err(|e| ConsumerError::ChannelSend(e.to_string()))?;
+                    sender.send(StreamMessage::Error(StreamError::Streaming(err.to_string()).into())).await.map_err(|e| StreamError::ChannelSend(e.to_string()))?;
                     break;
                 }
             }
@@ -356,20 +356,20 @@ impl TryFrom<&Action> for ActionRaw {
 
     fn try_from(action: &Action) -> Result<Self, Self::Error> {
         Ok(ActionRaw {
-            sender: action.sender.parse()
-                .map_err(|e| ConsumerError::InvalidAddress(format!("sender: {}", e)))?,
+            user_id: action.sender.parse()
+                .map_err(|e| ConversionError::InvalidUuid(format!("user_id: {}", e)))?,
             action_type: match action.action_type {
                 0 => ActionType::Vote,
-                _ => return Err(ConsumerError::InvalidActionType(format!("action_type: {}", action.action_type))),
+                _ => return Err(ConversionError::InvalidActionType(format!("action_type: {}", action.action_type)).into()),
             },
             action_version: action.action_version,
             space_pov: action.space_pov.parse()
-                .map_err(|e| ConsumerError::InvalidAddress(format!("space_pov: {}", e)))?,
+                .map_err(|e| ConversionError::InvalidUuid(format!("space_pov: {}", e)))?,
             object_id: action.object_id.parse()
-                .map_err(|e| ConsumerError::InvalidUuid(format!("entity: {}", e)))?,
+                .map_err(|e| ConversionError::InvalidUuid(format!("entity: {}", e)))?,
             group_id: if action.group_id.is_some() {
                 Some(action.group_id.as_ref().unwrap().parse()
-                    .map_err(|e| ConsumerError::InvalidUuid(format!("group_id: {}", e)))?)
+                    .map_err(|e| ConversionError::InvalidUuid(format!("group_id: {}", e)))?)
             } else {
                 None
             },
@@ -377,11 +377,11 @@ impl TryFrom<&Action> for ActionRaw {
             block_number: action.block_number.into(),
             block_timestamp: action.block_timestamp.into(),
             tx_hash: action.tx_hash.parse()
-                .map_err(|e| ConsumerError::InvalidTxHash(format!("tx_hash: {}", e)))?,
+                .map_err(|e| ConversionError::InvalidTxHash(format!("tx_hash: {}", e)))?,
             object_type: match action.object_type {
                 0 => ObjectType::Entity,
                 1 => ObjectType::Relation,
-                _ => return Err(ConsumerError::InvalidObjectType(format!("object_type: {}", action.object_type))),
+                _ => return Err(ConversionError::InvalidObjectType(format!("object_type: {}", action.object_type)).into()),
             },
         })
     }

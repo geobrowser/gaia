@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use crate::types::{ObjectId, SpaceId, UserAddress, VoteValue, ObjectType};
+use crate::types::{ObjectId, SpaceId, UserId, VoteValue, ObjectType};
 
 /// Represents a user's vote on an entity and space.
 ///
@@ -7,7 +7,7 @@ use crate::types::{ObjectId, SpaceId, UserAddress, VoteValue, ObjectType};
 /// on a specific entity and space.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct UserVote {
-    pub user_id: UserAddress,
+    pub user_id: UserId,
     pub object_id: ObjectId,
     pub space_id: SpaceId,
     pub object_type: ObjectType,

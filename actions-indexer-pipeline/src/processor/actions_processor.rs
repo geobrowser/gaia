@@ -70,7 +70,7 @@ mod tests {
     use crate::processor::{ActionsProcessor, HandleAction, ProcessActions};
     use actions_indexer_shared::types::{Action, ActionRaw, Vote, VoteValue, ActionType, ObjectType};
     use alloy::hex::FromHex;
-    use alloy::primitives::{Address, Bytes, TxHash};
+    use alloy::primitives::{Bytes, TxHash};
     use uuid::uuid;
 
     struct MockHandler;
@@ -91,7 +91,7 @@ mod tests {
 
     fn make_action_event(payload_byte: u8) -> ActionRaw {
         ActionRaw {
-            sender: Address::from_hex("0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045").unwrap(),
+            user_id: uuid!("d8da6bf2-6964-af9d-7eed-9e03e53415d3"),
             action_type: ActionType::Vote,
             action_version: 1,
             space_pov: uuid!("e50fe85c-108a-4d4a-97b9-376a1e5d318b"),
@@ -191,7 +191,7 @@ mod tests {
     fn test_process_invalid_action_type() {
         let processor = mocked_processor();
         let action_event = ActionRaw {
-            sender: Address::from_hex("0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045").unwrap(),
+            user_id: uuid!("d8da6bf2-6964-af9d-7eed-9e03e53415d3"),
             action_type: ActionType::Vote,
             action_version: 1,
             space_pov: uuid!("e50fe85c-108a-4d4a-97b9-376a1e5d318b"),

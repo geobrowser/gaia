@@ -160,7 +160,7 @@ fn get_latest_user_votes(votes: &[Vote]) -> Vec<UserVote> {
     let mut latest_votes: HashMap<VoteCriteria, &Vote> = HashMap::new();
     
     for vote in votes {
-        let vote_criteria = (vote.raw.sender, vote.raw.object_id, vote.raw.space_pov, vote.raw.object_type);
+        let vote_criteria = (vote.raw.user_id, vote.raw.object_id, vote.raw.space_pov, vote.raw.object_type);
         latest_votes.insert(vote_criteria, vote);
     }
 
@@ -273,20 +273,19 @@ async fn save_cursor(cursor: &str, block_number: &i64, cursor_repository: &dyn C
 
 #[cfg(test)]    
 mod tests {
-    use alloy::primitives::Address;
-    use uuid::uuid;
-    use alloy::hex::FromHex;
+    use uuid::{uuid, Uuid};
     use super::*;
-    use actions_indexer_shared::types::{ObjectType, ActionType};
+    use actions_indexer_shared::types::{ObjectType, ActionType, UserId};
 
-    pub fn dead_address() -> Address {
-        Address::from_hex("0x000000000000000000000000000000000000dEaD").unwrap()
+    /// Returns a test user ID (UUID)
+    pub fn test_user_id() -> UserId {
+        uuid!("00000000-0000-0000-0000-00000000dead")
     }
 
     #[tokio::test]
     async fn test_calculate_votes_changes_upvote_downvote() {
         let prev_vote = UserVote {
-            user_id: dead_address(),
+            user_id: test_user_id(),
             object_id: uuid!("a7ef0016-a2f4-44fb-82ca-a4f5c61d2cf5"),
             object_type: ObjectType::Entity,
             space_id: uuid!("e50fe85c-108a-4d4a-97b9-376a1e5d318b"),
@@ -295,7 +294,7 @@ mod tests {
         };
         
         let new_vote = UserVote {
-            user_id: dead_address(),
+            user_id: test_user_id(),
             object_id: uuid!("a7ef0016-a2f4-44fb-82ca-a4f5c61d2cf5"),
             object_type: ObjectType::Entity,
             space_id: uuid!("e50fe85c-108a-4d4a-97b9-376a1e5d318b"),
@@ -311,7 +310,7 @@ mod tests {
     #[tokio::test]
     async fn test_calculate_votes_changes_upvote_remove() {
         let prev_vote = UserVote {
-            user_id: dead_address(),
+            user_id: test_user_id(),
             object_id: uuid!("a7ef0016-a2f4-44fb-82ca-a4f5c61d2cf5"),
             object_type: ObjectType::Entity,
             space_id: uuid!("e50fe85c-108a-4d4a-97b9-376a1e5d318b"),
@@ -320,7 +319,7 @@ mod tests {
         };
         
         let new_vote = UserVote {
-            user_id: dead_address(),
+            user_id: test_user_id(),
             object_id: uuid!("a7ef0016-a2f4-44fb-82ca-a4f5c61d2cf5"),
             object_type: ObjectType::Entity,
             space_id: uuid!("e50fe85c-108a-4d4a-97b9-376a1e5d318b"),
@@ -336,7 +335,7 @@ mod tests {
     #[tokio::test]
     async fn test_calculate_votes_changes_downvote_upvote() {
         let prev_vote = UserVote {
-            user_id: dead_address(),
+            user_id: test_user_id(),
             object_id: uuid!("a7ef0016-a2f4-44fb-82ca-a4f5c61d2cf5"),
             object_type: ObjectType::Entity,
             space_id: uuid!("e50fe85c-108a-4d4a-97b9-376a1e5d318b"),
@@ -345,7 +344,7 @@ mod tests {
         };
         
         let new_vote = UserVote {
-            user_id: dead_address(),
+            user_id: test_user_id(),
             object_id: uuid!("a7ef0016-a2f4-44fb-82ca-a4f5c61d2cf5"),
             object_type: ObjectType::Entity,
             space_id: uuid!("e50fe85c-108a-4d4a-97b9-376a1e5d318b"),
@@ -361,7 +360,7 @@ mod tests {
     #[tokio::test]
     async fn test_calculate_votes_changes_downvote_remove() {
         let prev_vote = UserVote {
-            user_id: dead_address(),
+            user_id: test_user_id(),
             object_id: uuid!("a7ef0016-a2f4-44fb-82ca-a4f5c61d2cf5"),
             object_type: ObjectType::Entity,
             space_id: uuid!("e50fe85c-108a-4d4a-97b9-376a1e5d318b"),
@@ -370,7 +369,7 @@ mod tests {
         };
 
         let new_vote = UserVote {
-            user_id: dead_address(),
+            user_id: test_user_id(),
             object_id: uuid!("a7ef0016-a2f4-44fb-82ca-a4f5c61d2cf5"),
             object_type: ObjectType::Entity,
             space_id: uuid!("e50fe85c-108a-4d4a-97b9-376a1e5d318b"),
@@ -390,12 +389,13 @@ mod tests {
     #[tokio::test]
     async fn test_get_latest_user_votes_single_vote() {
         use actions_indexer_shared::types::{ActionRaw, Vote};
+        use alloy::hex::FromHex;
         use alloy::primitives::TxHash;
         
         let raw_action = ActionRaw {
             action_type: ActionType::Vote,
             action_version: 1,
-            sender: dead_address(),
+            user_id: test_user_id(),
             object_id: uuid!("a7ef0016-a2f4-44fb-82ca-a4f5c61d2cf5"),
             group_id: None,
             space_pov: uuid!("e50fe85c-108a-4d4a-97b9-376a1e5d318b"),
@@ -415,7 +415,7 @@ mod tests {
         let user_votes = get_latest_user_votes(&votes);
 
         assert_eq!(user_votes.len(), 1);
-        assert_eq!(user_votes[0].user_id, dead_address());
+        assert_eq!(user_votes[0].user_id, test_user_id());
         assert_eq!(user_votes[0].object_id, uuid!("a7ef0016-a2f4-44fb-82ca-a4f5c61d2cf5"));
         assert_eq!(user_votes[0].space_id, uuid!("e50fe85c-108a-4d4a-97b9-376a1e5d318b"));
         assert_eq!(user_votes[0].vote_type, VoteValue::Up);
@@ -432,12 +432,13 @@ mod tests {
     #[tokio::test]
     async fn test_get_latest_user_votes_multiple_votes_same_user_same_entity() {
         use actions_indexer_shared::types::{ActionRaw, Vote};
+        use alloy::hex::FromHex;
         use alloy::primitives::TxHash;
         
         let base_raw = ActionRaw {
             action_type: ActionType::Vote,
             action_version: 1,
-            sender: dead_address(),
+            user_id: test_user_id(),
             object_id: uuid!("a7ef0016-a2f4-44fb-82ca-a4f5c61d2cf5"),
             group_id: None,
             space_pov: uuid!("e50fe85c-108a-4d4a-97b9-376a1e5d318b"),
@@ -472,7 +473,7 @@ mod tests {
 
         // Should only return one vote (the latest one)
         assert_eq!(user_votes.len(), 1);
-        assert_eq!(user_votes[0].user_id, dead_address());
+        assert_eq!(user_votes[0].user_id, test_user_id());
         assert_eq!(user_votes[0].object_id, uuid!("a7ef0016-a2f4-44fb-82ca-a4f5c61d2cf5"));
         assert_eq!(user_votes[0].space_id, uuid!("e50fe85c-108a-4d4a-97b9-376a1e5d318b"));
         assert_eq!(user_votes[0].vote_type, VoteValue::Down);
@@ -482,17 +483,18 @@ mod tests {
     #[tokio::test]
     async fn test_get_latest_user_votes_multiple_users_same_entity() {
         use actions_indexer_shared::types::{ActionRaw, Vote};
+        use alloy::hex::FromHex;
         use alloy::primitives::TxHash;
         
-        let user1 = dead_address();
-        let user2 = Address::from_hex("0x1234567890123456789012345678901234567890").unwrap();
+        let user1 = test_user_id();
+        let user2 = uuid!("12345678-9012-3456-7890-123456789012");
         let entity_id = uuid!("a7ef0016-a2f4-44fb-82ca-a4f5c61d2cf5");
         
         let vote1 = Vote {
             raw: ActionRaw {
                 action_type: ActionType::Vote,
                 action_version: 1,
-                sender: user1,
+                user_id: user1,
                 object_id: entity_id,
                 group_id: None,
                 space_pov: uuid!("e50fe85c-108a-4d4a-97b9-376a1e5d318b"),
@@ -509,7 +511,7 @@ mod tests {
             raw: ActionRaw {
                 action_type: ActionType::Vote,
                 action_version: 1,
-                sender: user2,
+                user_id: user2,
                 object_id: entity_id,
                 group_id: None,
                 space_pov: uuid!("e50fe85c-108a-4d4a-97b9-376a1e5d318b"),
@@ -542,9 +544,10 @@ mod tests {
     #[tokio::test]
     async fn test_get_latest_user_votes_same_user_different_entities() {
         use actions_indexer_shared::types::{ActionRaw, Vote};
+        use alloy::hex::FromHex;
         use alloy::primitives::TxHash;
         
-        let user = dead_address();
+        let user = test_user_id();
         let entity1 = uuid!("a7ef0016-a2f4-44fb-82ca-a4f5c61d2cf5");
         let entity2 = uuid!("b8f00127-b3f5-55fc-92db-b5f6c72e3cf6");
         
@@ -552,7 +555,7 @@ mod tests {
             raw: ActionRaw {
                 action_type: ActionType::Vote,
                 action_version: 1,
-                sender: user,
+                user_id: user,
                 object_id: entity1,
                 group_id: None,
                 space_pov: uuid!("e50fe85c-108a-4d4a-97b9-376a1e5d318b"),
@@ -569,7 +572,7 @@ mod tests {
             raw: ActionRaw {
                 action_type: ActionType::Vote,
                 action_version: 1,
-                sender: user,
+                user_id: user,
                 object_id: entity2,
                 group_id: None,
                 space_pov: uuid!("e50fe85c-108a-4d4a-97b9-376a1e5d318b"),
@@ -602,18 +605,19 @@ mod tests {
     #[tokio::test]
     async fn test_get_latest_user_votes_different_vote_types() {
         use actions_indexer_shared::types::{ActionRaw, Vote};
+        use alloy::hex::FromHex;
         use alloy::primitives::TxHash;
         
-        let user1 = dead_address();
-        let user2 = Address::from_hex("0x1234567890123456789012345678901234567890").unwrap();
-        let user3 = Address::from_hex("0x9876543210987654321098765432109876543210").unwrap();
+        let user1 = test_user_id();
+        let user2 = uuid!("12345678-9012-3456-7890-123456789012");
+        let user3 = uuid!("98765432-1098-7654-3210-987654321098");
         let entity_id = uuid!("a7ef0016-a2f4-44fb-82ca-a4f5c61d2cf5");
         
         let upvote = Vote {
             raw: ActionRaw {
                 action_type: ActionType::Vote,
                 action_version: 1,
-                sender: user1,
+                user_id: user1,
                 object_id: entity_id,
                 group_id: None,
                 space_pov: uuid!("e50fe85c-108a-4d4a-97b9-376a1e5d318b"),
@@ -630,7 +634,7 @@ mod tests {
             raw: ActionRaw {
                 action_type: ActionType::Vote,
                 action_version: 1,
-                sender: user2,
+                user_id: user2,
                 object_id: entity_id,
                 group_id: None,
                 space_pov: uuid!("e50fe85c-108a-4d4a-97b9-376a1e5d318b"),
@@ -647,7 +651,7 @@ mod tests {
             raw: ActionRaw {
                 action_type: ActionType::Vote,
                 action_version: 1,
-                sender: user3,
+                user_id: user3,
                 object_id: entity_id,
                 group_id: None,
                 space_pov: uuid!("e50fe85c-108a-4d4a-97b9-376a1e5d318b"),
@@ -679,9 +683,10 @@ mod tests {
     #[tokio::test]
     async fn test_get_latest_user_votes_same_user_different_spaces() {
         use actions_indexer_shared::types::{ActionRaw, Vote};
+        use alloy::hex::FromHex;
         use alloy::primitives::TxHash;
         
-        let user = dead_address();
+        let user = test_user_id();
         let entity_id = uuid!("a7ef0016-a2f4-44fb-82ca-a4f5c61d2cf5");
         let space1 = uuid!("e50fe85c-108a-4d4a-97b9-376a1e5d318b");
         let space2 = uuid!("e50fe85c-108a-4d4a-97b9-376a1e5d318a");
@@ -690,7 +695,7 @@ mod tests {
             raw: ActionRaw {
                 action_type: ActionType::Vote,
                 action_version: 1,
-                sender: user,
+                user_id: user,
                 object_id: entity_id,
                 group_id: None,
                 space_pov: space1,
@@ -707,7 +712,7 @@ mod tests {
             raw: ActionRaw {
                 action_type: ActionType::Vote,
                 action_version: 1,
-                sender: user,
+                user_id: user,
                 object_id: entity_id,
                 group_id: None,
                 space_pov: space2,
@@ -740,16 +745,17 @@ mod tests {
     #[tokio::test]
     async fn test_get_latest_user_votes_same_user_different_object_type() {
         use actions_indexer_shared::types::{ActionRaw, Vote};
+        use alloy::hex::FromHex;
         use alloy::primitives::TxHash;
         
-        let user = dead_address();
+        let user = test_user_id();
         let object = uuid!("a7ef0016-a2f4-44fb-82ca-a4f5c61d2cf5");
 
         let vote1 = Vote {
             raw: ActionRaw {
                 action_type: ActionType::Vote,
                 action_version: 1,
-                sender: user,
+                user_id: user,
                 object_id: object,
                 group_id: None,
                 space_pov: uuid!("e50fe85c-108a-4d4a-97b9-376a1e5d318b"),
@@ -766,7 +772,7 @@ mod tests {
             raw: ActionRaw {
                 action_type: ActionType::Vote,
                 action_version: 1,
-                sender: user,
+                user_id: user,
                 object_id: object,
                 group_id: None,
                 space_pov: uuid!("e50fe85c-108a-4d4a-97b9-376a1e5d318b"),
@@ -852,7 +858,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_vote_counts_new_upvote_no_existing_data() {
-        let user = dead_address();
+        let user = test_user_id();
         let object_id = uuid!("a7ef0016-a2f4-44fb-82ca-a4f5c61d2cf5");
         let space_id = uuid!("e50fe85c-108a-4d4a-97b9-376a1e5d318b");
 
@@ -884,7 +890,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_vote_counts_change_upvote_to_downvote() {
-        let user = dead_address();
+        let user = test_user_id();
         let object_id = uuid!("a7ef0016-a2f4-44fb-82ca-a4f5c61d2cf5");
         let space_id = uuid!("e50fe85c-108a-4d4a-97b9-376a1e5d318b");
 
@@ -926,7 +932,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_vote_counts_change_downvote_to_upvote() {
-        let user = dead_address();
+        let user = test_user_id();
         let object_id = uuid!("a7ef0016-a2f4-44fb-82ca-a4f5c61d2cf5");
         let space_id = uuid!("e50fe85c-108a-4d4a-97b9-376a1e5d318b");
 
@@ -968,7 +974,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_vote_counts_remove_upvote() {
-        let user = dead_address();
+        let user = test_user_id();
         let object_id = uuid!("a7ef0016-a2f4-44fb-82ca-a4f5c61d2cf5");
         let space_id = uuid!("e50fe85c-108a-4d4a-97b9-376a1e5d318b");
 
@@ -1010,8 +1016,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_vote_counts_multiple_users_same_object() {
-        let user1 = dead_address();
-        let user2 = Address::from_hex("0x1234567890123456789012345678901234567890").unwrap();
+        let user1 = test_user_id();
+        let user2 = uuid!("12345678-9012-3456-7890-123456789012");
         let object_id = uuid!("a7ef0016-a2f4-44fb-82ca-a4f5c61d2cf5");
         let space_id = uuid!("e50fe85c-108a-4d4a-97b9-376a1e5d318b");
 
@@ -1051,7 +1057,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_vote_counts_multiple_objects() {
-        let user = dead_address();
+        let user = test_user_id();
         let object1 = uuid!("a7ef0016-a2f4-44fb-82ca-a4f5c61d2cf5");
         let object2 = uuid!("b8f00127-b3f5-55fc-92db-b5f6c72e3cf6");
         let space_id = uuid!("e50fe85c-108a-4d4a-97b9-376a1e5d318b");
@@ -1097,7 +1103,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_vote_counts_same_vote_no_change() {
-        let user = dead_address();
+        let user = test_user_id();
         let object_id = uuid!("a7ef0016-a2f4-44fb-82ca-a4f5c61d2cf5");
         let space_id = uuid!("e50fe85c-108a-4d4a-97b9-376a1e5d318b");
 
@@ -1139,7 +1145,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_update_vote_counts_different_object_types() {
-        let user = dead_address();
+        let user = test_user_id();
         let object_id = uuid!("a7ef0016-a2f4-44fb-82ca-a4f5c61d2cf5");
         let space_id = uuid!("e50fe85c-108a-4d4a-97b9-376a1e5d318b");
 

@@ -7,7 +7,7 @@
 
 use actions_indexer_repository::{ActionsRepository, PostgresActionsRepository};
 use actions_indexer_shared::types::{Action, ActionRaw, Vote, UserVote, VotesCount, VoteCriteria, VoteValue, ObjectType, ActionType};
-use alloy::primitives::{Address, TxHash};
+use alloy::primitives::TxHash;
 use alloy::hex::FromHex;
 use uuid::{Uuid, uuid};
 use sqlx::Row;
@@ -18,7 +18,7 @@ fn make_raw_action() -> ActionRaw {
     ActionRaw {
         action_type: ActionType::Vote,
         action_version: 1,
-        sender: Address::from_hex("0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045").unwrap(),
+        sender: uuid!("d8da6bf2-6964-af9d-7eed-9e03e53415d3"),
         object_id: Uuid::new_v4(),
         group_id: None,
         space_pov: uuid!("f5d2fe0c-fb9d-4027-b227-54f59af20f19"),
@@ -33,7 +33,7 @@ fn make_raw_action() -> ActionRaw {
 /// Creates a test user vote with default values.
 fn make_user_vote() -> UserVote {
     UserVote {
-        user_id: Address::from_hex("0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045").unwrap(),
+        user_id: uuid!("d8da6bf2-6964-af9d-7eed-9e03e53415d3"),
         object_id: Uuid::new_v4(),
         object_type: ObjectType::Entity,
         space_id: uuid!("f5d2fe0c-fb9d-4027-b227-54f59af20f19"),
@@ -330,7 +330,7 @@ async fn test_get_user_votes(pool: sqlx::PgPool) {
 
     let user_vote1 = make_user_vote();
     let user_vote2 = UserVote {
-        user_id: Address::from_hex("0x1234567890123456789012345678901234567890").unwrap(),
+        user_id: uuid!("12345678-9012-3456-7890-123456789012"),
         object_id: Uuid::new_v4(),
         space_id: uuid!("f5d2fe0c-fb9d-4027-b227-54f59af20f19"),
         object_type: ObjectType::Entity,
@@ -338,7 +338,7 @@ async fn test_get_user_votes(pool: sqlx::PgPool) {
         voted_at: 1755182913,
     };
     let user_vote3 = UserVote {
-        user_id: Address::from_hex("0x1234567890123456789012345678901234567890").unwrap(),
+        user_id: uuid!("12345678-9012-3456-7890-123456789012"),
         object_id: Uuid::new_v4(),
         space_id: uuid!("f5d2fe0c-fb9d-4027-b227-54f59af20f19"),
         object_type: ObjectType::Entity,
@@ -371,7 +371,7 @@ async fn test_get_user_votes_partial_matches(pool: sqlx::PgPool) {
 
     let user_vote1 = make_user_vote();
     let user_vote2 = UserVote {
-        user_id: Address::from_hex("0x1234567890123456789012345678901234567890").unwrap(),
+        user_id: uuid!("12345678-9012-3456-7890-123456789012"),
         object_id: Uuid::new_v4(),
         space_id: uuid!("f5d2fe0c-fb9d-4027-b227-54f59af20f19"),
         object_type: ObjectType::Entity,
@@ -415,8 +415,8 @@ async fn test_get_user_votes_nonexistent_data(pool: sqlx::PgPool) {
     let repository = PostgresActionsRepository::new(pool.clone()).await.unwrap();
 
     let vote_criteria = [
-        (Address::from_hex("0x1111111111111111111111111111111111111111").unwrap(), Uuid::new_v4(), uuid!("f5d2fe0c-fb9d-4027-b227-54f59af20f19"), ObjectType::Entity),
-        (Address::from_hex("0x3333333333333333333333333333333333333333").unwrap(), Uuid::new_v4(), uuid!("f5d2fe0c-fb9d-4027-b227-54f59af20f19"), ObjectType::Entity),
+        (uuid!("11111111-1111-1111-1111-111111111111"), Uuid::new_v4(), uuid!("f5d2fe0c-fb9d-4027-b227-54f59af20f19"), ObjectType::Entity),
+        (uuid!("33333333-3333-3333-3333-333333333333"), Uuid::new_v4(), uuid!("f5d2fe0c-fb9d-4027-b227-54f59af20f19"), ObjectType::Entity),
     ];
     
     let found_votes = repository.get_user_votes(&vote_criteria).await.unwrap();
