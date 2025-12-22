@@ -9,8 +9,11 @@ pub mod pb;
 use pb::hermes::*;
 use substreams_ethereum::{block_view::LogView, pb::eth};
 
-// TODO: Replace with actual Space Registry contract address
-const SPACE_REGISTRY_ADDRESS: [u8; 20] = [0u8; 20];
+// Space Registry proxy contract address (Base mainnet)
+const SPACE_REGISTRY_ADDRESS: [u8; 20] = [
+    0x6B, 0x9c, 0x88, 0x7C, 0x5D, 0x48, 0x29, 0x3e, 0x8a, 0xE3,
+    0x31, 0x3F, 0xC3, 0xE8, 0x56, 0xc0, 0x79, 0x85, 0xDD, 0x13,
+];
 
 // Action type hashes - keccak256 of action names.
 // These same values are defined in `hermes-relay/src/actions.rs` for consumer-side
