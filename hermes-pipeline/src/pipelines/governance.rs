@@ -324,6 +324,9 @@ fn convert_proposal_executed(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use alloy::primitives::{Address, FixedBytes, U256};
+    use alloy::sol;
+    use alloy::sol_types::SolType;
 
     fn test_meta() -> BlockMetadata {
         BlockMetadata {
@@ -331,6 +334,163 @@ mod tests {
             block_number: 12345,
             timestamp: "1234567890".to_string(),
         }
+    }
+
+    // Helper to create encoded PROPOSAL_CREATED data
+    fn encode_proposal_created_data(proposal_id: [u8; 16], voting_mode: u8) -> Vec<u8> {
+        sol! {
+            struct TestAction {
+                address to;
+                uint256 value;
+                bytes data;
+            }
+        }
+        type ProposalCreatedDataType = sol! { (bytes16, uint8, TestAction[]) };
+
+        let action = TestAction {
+            to: Address::ZERO,
+            value: U256::ZERO,
+            data: vec![].into(),
+        };
+
+        ProposalCreatedDataType::abi_encode(&(
+            FixedBytes::<16>::from_slice(&proposal_id),
+            voting_mode,
+            vec![action],
+        ))
+    }
+
+    // Helper to create encoded PROPOSAL_SETTINGS_USED data
+    fn encode_proposal_settings_data(
+        start_date: u64,
+        last_date: u64,
+        voting_mode: u8,
+        quorum: u64,
+        threshold: u64,
+    ) -> Vec<u8> {
+        type SettingsDataType = sol! { (uint64, uint64, uint8, uint256, uint256) };
+        SettingsDataType::abi_encode(&(
+            start_date,
+            last_date,
+            voting_mode,
+            U256::from(quorum),
+            U256::from(threshold),
+        ))
+    }
+
+    #[test]
+    fn test_squash_proposal_created_with_settings() {
+        let proposal_id = [0xAB; 16];
+        let proposer_id = vec![1; 16];
+        let space_id = vec![2; 16];
+
+        let test_actions = vec![
+            // PROPOSAL_CREATED
+            Action {
+                from_id: proposer_id.clone(),
+                to_id: space_id.clone(),
+                action: actions::PROPOSAL_CREATED.to_vec(),
+                topic: vec![0; 16].into_iter().chain(proposal_id.to_vec()).collect(),
+                data: encode_proposal_created_data(proposal_id, 0), // Fast path
+            },
+            // PROPOSAL_SETTINGS_USED (must have matching proposal_id)
+            Action {
+                from_id: space_id.clone(),
+                to_id: space_id.clone(),
+                action: actions::PROPOSAL_SETTINGS_USED.to_vec(),
+                topic: vec![0; 16].into_iter().chain(proposal_id.to_vec()).collect(),
+                data: encode_proposal_settings_data(1000, 2000, 0, 100, 50),
+            },
+        ];
+
+        let result = transform(&test_actions, &test_meta()).unwrap();
+
+        // Should have 1 squashed event
+        assert_eq!(result.proposals_created.len(), 1);
+
+        let event = &result.proposals_created[0];
+        assert_eq!(event.space_id, space_id);
+        assert_eq!(event.proposer_id, proposer_id);
+        assert_eq!(event.proposal_id, proposal_id.to_vec());
+        assert_eq!(event.voting_mode, VotingMode::Fast as i32);
+
+        // Verify settings were included
+        let settings = event.settings.as_ref().unwrap();
+        assert_eq!(settings.start_date, 1000);
+        assert_eq!(settings.last_date, 2000);
+        assert_eq!(settings.flat_threshold, 50); // Fast path uses flat threshold
+    }
+
+    #[test]
+    fn test_proposal_created_without_settings_discarded() {
+        let proposal_id = [0xCD; 16];
+
+        let test_actions = vec![
+            // PROPOSAL_CREATED without matching PROPOSAL_SETTINGS_USED
+            Action {
+                from_id: vec![1; 16],
+                to_id: vec![2; 16],
+                action: actions::PROPOSAL_CREATED.to_vec(),
+                topic: vec![0; 16].into_iter().chain(proposal_id.to_vec()).collect(),
+                data: encode_proposal_created_data(proposal_id, 0),
+            },
+        ];
+
+        let result = transform(&test_actions, &test_meta()).unwrap();
+
+        // Should be discarded - no matching settings
+        assert_eq!(result.proposals_created.len(), 0);
+    }
+
+    #[test]
+    fn test_proposal_settings_without_created_discarded() {
+        let proposal_id = [0xEF; 16];
+
+        let test_actions = vec![
+            // PROPOSAL_SETTINGS_USED without matching PROPOSAL_CREATED
+            Action {
+                from_id: vec![1; 16],
+                to_id: vec![1; 16],
+                action: actions::PROPOSAL_SETTINGS_USED.to_vec(),
+                topic: vec![0; 16].into_iter().chain(proposal_id.to_vec()).collect(),
+                data: encode_proposal_settings_data(1000, 2000, 0, 100, 50),
+            },
+        ];
+
+        let result = transform(&test_actions, &test_meta()).unwrap();
+
+        // Should be discarded - no matching created
+        assert_eq!(result.proposals_created.len(), 0);
+    }
+
+    #[test]
+    fn test_mismatched_proposal_ids_both_discarded() {
+        let proposal_id_1 = [0x11; 16];
+        let proposal_id_2 = [0x22; 16];
+
+        let test_actions = vec![
+            // PROPOSAL_CREATED with one ID
+            Action {
+                from_id: vec![1; 16],
+                to_id: vec![2; 16],
+                action: actions::PROPOSAL_CREATED.to_vec(),
+                topic: vec![0; 16].into_iter().chain(proposal_id_1.to_vec()).collect(),
+                data: encode_proposal_created_data(proposal_id_1, 0),
+            },
+            // PROPOSAL_SETTINGS_USED with different ID
+            Action {
+                from_id: vec![2; 16],
+                to_id: vec![2; 16],
+                action: actions::PROPOSAL_SETTINGS_USED.to_vec(),
+                topic: vec![0; 16].into_iter().chain(proposal_id_2.to_vec()).collect(),
+                data: encode_proposal_settings_data(1000, 2000, 0, 100, 50),
+            },
+        ];
+
+        let result = transform(&test_actions, &test_meta()).unwrap();
+
+        // Both should be discarded - IDs don't match
+        assert_eq!(result.proposals_created.len(), 0);
     }
 
     #[test]
