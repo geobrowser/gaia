@@ -136,30 +136,26 @@ jobs:
             sleep 2
           done
 
-      - name: Build hermes-pipeline
-        run: cargo build --package hermes-pipeline --release
-
-      - name: Build kg-indexer
-        run: cargo build --package kg-indexer --release
+      - name: Build all binaries and tests
+        run: |
+          cargo build --package hermes-pipeline --release
+          cargo build --package kg-indexer --release
+          cargo test --package kg-indexer --test e2e --release --no-run
 
       - name: Run hermes-pipeline (mock mode)
         run: |
-          ./target/release/hermes-pipeline &
-          PIPELINE_PID=$!
-          echo "PIPELINE_PID=$PIPELINE_PID" >> $GITHUB_ENV
-          # Wait for pipeline to finish producing
-          wait $PIPELINE_PID
+          ./target/release/hermes-pipeline
           echo "hermes-pipeline completed"
 
       - name: Run kg-indexer
         run: |
-          timeout 60 ./target/release/kg-indexer || true
+          timeout 20 ./target/release/kg-indexer || true
         env:
           KAFKA_GROUP_ID: kg-indexer-e2e
-          BLOCK_STALE_TIMEOUT_SECS: 5
+          BLOCK_STALE_TIMEOUT_SECS: 2
           RUST_LOG: kg_indexer=debug
 
       - name: Run E2E assertions
-        run: cargo test --package kg-indexer --test e2e
+        run: cargo test --package kg-indexer --test e2e --release
         env:
           RUST_BACKTRACE: 1

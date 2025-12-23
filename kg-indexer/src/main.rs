@@ -123,10 +123,13 @@ async fn main() -> Result<(), IndexerError> {
     let mut error_count: u64 = 0;
     let mut blocks_processed: u64 = 0;
     let mut last_stale_check = Instant::now();
-    let stale_check_interval = Duration::from_secs(10);
+    let stale_check_interval = Duration::from_millis(500);
+    let poll_timeout = Duration::from_millis(100);
 
     info!(
         stale_timeout_secs = stale_timeout_secs,
+        poll_timeout_ms = poll_timeout.as_millis() as u64,
+        stale_check_interval_ms = stale_check_interval.as_millis() as u64,
         "Starting message processing loop"
     );
 
@@ -136,7 +139,49 @@ async fn main() -> Result<(), IndexerError> {
                 info!("Shutting down...");
                 break;
             }
-            message = stream.next() => {
+            message = tokio::time::timeout(poll_timeout, stream.next()) => {
+                // Unwrap the timeout result - if timeout, continue to stale check
+                let message = match message {
+                    Ok(msg) => msg,
+                    Err(_) => {
+                        // Timeout - no message received, continue to check stale blocks
+                        if last_stale_check.elapsed() > stale_check_interval {
+                            last_stale_check = Instant::now();
+                            let stale = buffer.stale_blocks();
+                            for block_number in stale {
+                                let events = buffer.take_block(block_number);
+                                let event_count = events.len();
+                                warn!(
+                                    block_number = block_number,
+                                    event_count = event_count,
+                                    stale_timeout_secs = stale_timeout_secs,
+                                    "Force-processing stale block (timeout)"
+                                );
+                                match process_block(events, &storage, &consumer).await {
+                                    Ok(count) => {
+                                        processed_count += count as u64;
+                                        blocks_processed += 1;
+                                        info!(
+                                            block_number = block_number,
+                                            processed = count,
+                                            "Force-processed stale block"
+                                        );
+                                    }
+                                    Err(e) => {
+                                        error_count += 1;
+                                        error!(
+                                            block_number = block_number,
+                                            error = %e,
+                                            "Failed to process stale block"
+                                        );
+                                    }
+                                }
+                            }
+                        }
+                        continue;
+                    }
+                };
+                let message = message; // rebind for match below
                 match message {
                     Some(Ok(msg)) => {
                         let topic = msg.topic().to_string();
