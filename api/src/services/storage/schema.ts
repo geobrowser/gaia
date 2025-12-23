@@ -481,6 +481,11 @@ export const proposalActions = pgTable(
 		metadata: bytea("metadata"),
 		// Flag/Unflag actions
 		contentId: bytea("content_id"),
+		// UpdateVotingSettings action
+		quorum: bigint("quorum", { mode: "number" }),
+		fastThreshold: bigint("fast_threshold", { mode: "number" }),
+		slowThreshold: bigint("slow_threshold", { mode: "number" }),
+		duration: bigint("duration", { mode: "number" }),
 	},
 	(table) => [
 		index("proposal_actions_proposal_id_idx").on(table.proposalId),

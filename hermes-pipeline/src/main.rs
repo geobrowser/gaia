@@ -390,9 +390,16 @@ impl Pipeline {
                 let _span = info_span!("emit.edits", count = edits.events.len()).entered();
                 for event in &edits.events {
                     self.emitter.emit(event)?;
+                    let space_id_display = if event.space_id.len() == 16 {
+                        uuid::Uuid::from_bytes(
+                            event.space_id.as_slice().try_into().unwrap_or([0; 16])
+                        ).to_string()
+                    } else {
+                        hex::encode(&event.space_id)
+                    };
                     debug!(
                         name = %event.name,
-                        space_id = %event.space_id,
+                        space_id = %space_id_display,
                         ops_count = event.ops.len(),
                         "Edit published"
                     );

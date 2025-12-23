@@ -6,7 +6,7 @@
 /// 1. Resolves the IPFS CID into the serialized edit representation
 /// 2. Appends any blockchain metadata useful for downstream consumers
 /// 3. Appends any community or space topology metadata useful for
-///    downstream consumers
+///     downstream consumers
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct HermesEdit {
     #[prost(bytes = "vec", tag = "1")]
@@ -19,9 +19,9 @@ pub struct HermesEdit {
     pub authors: ::prost::alloc::vec::Vec<::prost::alloc::vec::Vec<u8>>,
     #[prost(bytes = "vec", optional, tag = "5")]
     pub language: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
-    /// Space Topology metadata
-    #[prost(string, tag = "6")]
-    pub space_id: ::prost::alloc::string::String,
+    /// Space Topology metadata - 16-byte UUID
+    #[prost(bytes = "vec", tag = "6")]
+    pub space_id: ::prost::alloc::vec::Vec<u8>,
     #[prost(bool, tag = "7")]
     pub is_canonical: bool,
     #[prost(message, optional, tag = "8")]

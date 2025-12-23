@@ -293,7 +293,9 @@ impl ProposalActionType {
             Self::ProposalActionFlag => "PROPOSAL_ACTION_FLAG",
             Self::ProposalActionUnflag => "PROPOSAL_ACTION_UNFLAG",
             Self::ProposalActionUnflagEditor => "PROPOSAL_ACTION_UNFLAG_EDITOR",
-            Self::ProposalActionUpdateVotingSettings => "PROPOSAL_ACTION_UPDATE_VOTING_SETTINGS",
+            Self::ProposalActionUpdateVotingSettings => {
+                "PROPOSAL_ACTION_UPDATE_VOTING_SETTINGS"
+            }
             Self::ProposalActionPing => "PROPOSAL_ACTION_PING",
         }
     }

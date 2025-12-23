@@ -109,7 +109,7 @@ impl KafkaEvent for HermesEdit {
     const TOPIC: &'static str = topics::EDITS;
 
     fn key(&self) -> Vec<u8> {
-        self.space_id.as_bytes().to_vec()
+        self.space_id.clone()
     }
 
     fn headers(&self) -> OwnedHeaders {

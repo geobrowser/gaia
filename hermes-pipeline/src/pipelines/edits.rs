@@ -244,7 +244,7 @@ fn convert(
         ops: edit.ops.clone(),
         authors: edit.authors.clone(),
         language: edit.language.clone(),
-        space_id: hex::encode(&action.from_id),
+        space_id: action.from_id.clone(),
         is_canonical: true, // TODO: Determine from topology
         meta: Some(meta.to_proto(sequence)),
     })

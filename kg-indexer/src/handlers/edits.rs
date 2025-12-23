@@ -49,7 +49,7 @@ impl EditMetadata {
 
 /// Process a HermesEdit message and return the extracted data
 pub fn handle_edit(edit: &HermesEdit) -> Result<EditResult, HandlerError> {
-    let space_id = parse_space_id(&edit.space_id)?;
+    let space_id = parse_space_id(edit.space_id.as_slice())?;
     let meta = EditMetadata::from_edit(edit);
 
     // Extract all data from the edit
@@ -243,21 +243,18 @@ fn merge_relation_ops(existing: RelationOp, new: RelationOp) -> RelationOp {
     }
 }
 
-fn parse_space_id(space_id_str: &str) -> Result<Uuid, HandlerError> {
-    // Handle hex-encoded UUID bytes (32 hex chars) or standard UUID format
-    if space_id_str.len() == 32 && space_id_str.chars().all(|c| c.is_ascii_hexdigit()) {
-        let uuid_str = format!(
-            "{}-{}-{}-{}-{}",
-            &space_id_str[0..8],
-            &space_id_str[8..12],
-            &space_id_str[12..16],
-            &space_id_str[16..20],
-            &space_id_str[20..32]
-        );
-        Uuid::parse_str(&uuid_str).map_err(|e| HandlerError::InvalidSpaceId(format!("hex: {}", e)))
-    } else {
-        Uuid::parse_str(space_id_str).map_err(|e| HandlerError::InvalidSpaceId(e.to_string()))
+fn parse_space_id(space_id_bytes: &[u8]) -> Result<Uuid, HandlerError> {
+    // Convert 16-byte UUID to UUID struct
+    if space_id_bytes.len() != 16 {
+        return Err(HandlerError::InvalidSpaceId(format!(
+            "Expected 16 bytes, got {}",
+            space_id_bytes.len()
+        )));
     }
+    let bytes: [u8; 16] = space_id_bytes.try_into().map_err(|_| {
+        HandlerError::InvalidSpaceId("Failed to convert bytes to array".to_string())
+    })?;
+    Ok(Uuid::from_bytes(bytes))
 }
 
 fn extract_entities(edit: &HermesEdit, meta: &EditMetadata) -> Vec<EntityItem> {
