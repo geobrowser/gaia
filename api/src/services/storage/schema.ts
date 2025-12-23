@@ -448,6 +448,8 @@ export const proposals = pgTable(
  *
  * Stores actions within a governance proposal.
  * Each proposal can have multiple actions executed in sequence.
+ * ID is deterministic (derived from proposal_id + index).
+ * Payload fields are nullable - which fields are populated depends on action_type.
  */
 export const proposalActions = pgTable(
 	"proposal_actions",
@@ -456,81 +458,24 @@ export const proposalActions = pgTable(
 		proposalId: uuid("proposal_id")
 			.notNull()
 			.references(() => proposals.id),
-		index: smallint("index").notNull(),
-		toAddress: text("to_address").notNull(),
-		value: text("value").notNull(),
-		data: bytea("data"),
 		actionType: proposalActionTypeEnum("action_type").notNull(),
+		// Member/editor operations: AddMember, RemoveMember, AddEditor, RemoveEditor, UnflagEditor
+		targetAddress: text("target_address"),
+		// Publish action
+		contentUri: text("content_uri"),
+		metadata: bytea("metadata"),
+		// Flag/Unflag actions
+		contentId: bytea("content_id"),
+		// UpdateVotingSettings action
+		quorum: bigint("quorum", { mode: "number" }),
+		fastThreshold: bigint("fast_threshold", { mode: "number" }),
+		slowThreshold: bigint("slow_threshold", { mode: "number" }),
+		duration: bigint("duration", { mode: "number" }),
 	},
 	(table) => [
-		unique("proposal_actions_proposal_index_unique").on(table.proposalId, table.index),
 		index("proposal_actions_proposal_id_idx").on(table.proposalId),
 		index("proposal_actions_action_type_idx").on(table.actionType),
 	],
-);
-
-/**
- * proposal_action_member_changes
- *
- * Payload for member/editor operations: AddMember, RemoveMember, AddEditor, RemoveEditor, UnflagEditor
- */
-export const proposalActionMemberChanges = pgTable(
-	"proposal_action_member_changes",
-	{
-		actionId: uuid("action_id")
-			.primaryKey()
-			.references(() => proposalActions.id),
-		targetAddress: text("target_address").notNull(),
-	},
-);
-
-/**
- * proposal_action_publish
- *
- * Payload for Publish actions
- */
-export const proposalActionPublish = pgTable(
-	"proposal_action_publish",
-	{
-		actionId: uuid("action_id")
-			.primaryKey()
-			.references(() => proposalActions.id),
-		contentUri: bytea("content_uri").notNull(),
-		metadata: bytea("metadata"),
-	},
-);
-
-/**
- * proposal_action_content_flags
- *
- * Payload for Flag/Unflag actions
- */
-export const proposalActionContentFlags = pgTable(
-	"proposal_action_content_flags",
-	{
-		actionId: uuid("action_id")
-			.primaryKey()
-			.references(() => proposalActions.id),
-		contentId: bytea("content_id").notNull(),
-	},
-);
-
-/**
- * proposal_action_voting_settings
- *
- * Payload for UpdateVotingSettings actions
- */
-export const proposalActionVotingSettings = pgTable(
-	"proposal_action_voting_settings",
-	{
-		actionId: uuid("action_id")
-			.primaryKey()
-			.references(() => proposalActions.id),
-		quorum: bigint("quorum", { mode: "number" }).notNull(),
-		fastThreshold: bigint("fast_threshold", { mode: "number" }).notNull(),
-		slowThreshold: bigint("slow_threshold", { mode: "number" }).notNull(),
-		duration: bigint("duration", { mode: "number" }).notNull(),
-	},
 );
 
 /**
@@ -574,63 +519,7 @@ export const proposalActionsRelations = drizzleRelations(proposalActions, ({ one
 		fields: [proposalActions.proposalId],
 		references: [proposals.id],
 	}),
-	memberChange: one(proposalActionMemberChanges, {
-		fields: [proposalActions.id],
-		references: [proposalActionMemberChanges.actionId],
-	}),
-	publish: one(proposalActionPublish, {
-		fields: [proposalActions.id],
-		references: [proposalActionPublish.actionId],
-	}),
-	contentFlag: one(proposalActionContentFlags, {
-		fields: [proposalActions.id],
-		references: [proposalActionContentFlags.actionId],
-	}),
-	votingSettings: one(proposalActionVotingSettings, {
-		fields: [proposalActions.id],
-		references: [proposalActionVotingSettings.actionId],
-	}),
 }));
-
-export const proposalActionMemberChangesRelations = drizzleRelations(
-	proposalActionMemberChanges,
-	({ one }) => ({
-		action: one(proposalActions, {
-			fields: [proposalActionMemberChanges.actionId],
-			references: [proposalActions.id],
-		}),
-	}),
-);
-
-export const proposalActionPublishRelations = drizzleRelations(
-	proposalActionPublish,
-	({ one }) => ({
-		action: one(proposalActions, {
-			fields: [proposalActionPublish.actionId],
-			references: [proposalActions.id],
-		}),
-	}),
-);
-
-export const proposalActionContentFlagsRelations = drizzleRelations(
-	proposalActionContentFlags,
-	({ one }) => ({
-		action: one(proposalActions, {
-			fields: [proposalActionContentFlags.actionId],
-			references: [proposalActions.id],
-		}),
-	}),
-);
-
-export const proposalActionVotingSettingsRelations = drizzleRelations(
-	proposalActionVotingSettings,
-	({ one }) => ({
-		action: one(proposalActions, {
-			fields: [proposalActionVotingSettings.actionId],
-			references: [proposalActions.id],
-		}),
-	}),
-);
 
 export const proposalVotesRelations = drizzleRelations(proposalVotes, ({ one }) => ({
 	proposal: one(proposals, {
@@ -645,10 +534,6 @@ export const proposalVotesRelations = drizzleRelations(proposalVotes, ({ one }) 
 
 export type DbProposal = InferSelectModel<typeof proposals>;
 export type DbProposalAction = InferSelectModel<typeof proposalActions>;
-export type DbProposalActionMemberChange = InferSelectModel<typeof proposalActionMemberChanges>;
-export type DbProposalActionPublish = InferSelectModel<typeof proposalActionPublish>;
-export type DbProposalActionContentFlag = InferSelectModel<typeof proposalActionContentFlags>;
-export type DbProposalActionVotingSettings = InferSelectModel<typeof proposalActionVotingSettings>;
 export type DbProposalVote = InferSelectModel<typeof proposalVotes>;
 
 /** Actions Schema definitions */

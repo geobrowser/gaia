@@ -112,7 +112,7 @@ pub fn decode_address_arg(calldata: &[u8]) -> Option<Vec<u8>> {
 #[derive(Debug, Clone)]
 pub struct PublishArgs {
     /// Content URI (IPFS hash, etc.)
-    pub content_uri: Vec<u8>,
+    pub content_uri: String,
     /// Edit metadata
     pub metadata: Vec<u8>,
 }
@@ -140,8 +140,11 @@ pub fn decode_publish_args(calldata: &[u8]) -> Result<PublishArgs, DecodeError> 
     let (_topic, content_uri, metadata) =
         PublishArgsType::abi_decode(data).map_err(|e| DecodeError::AbiDecode(e.to_string()))?;
 
+    let content_uri_str =
+        String::from_utf8(content_uri.to_vec()).map_err(DecodeError::from)?;
+
     Ok(PublishArgs {
-        content_uri: content_uri.to_vec(),
+        content_uri: content_uri_str,
         metadata: metadata.to_vec(),
     })
 }

@@ -699,198 +699,126 @@ impl Storage {
             return Ok(());
         }
 
-        // Prepare base action data
         let mut ids = Vec::with_capacity(actions.len());
         let mut proposal_ids = Vec::with_capacity(actions.len());
-        let mut indexes = Vec::with_capacity(actions.len());
-        let mut to_addresses = Vec::with_capacity(actions.len());
-        let mut values = Vec::with_capacity(actions.len());
-        let mut datas: Vec<&[u8]> = Vec::with_capacity(actions.len());
         let mut action_types = Vec::with_capacity(actions.len());
-
-        // Prepare payload-specific data
-        let mut member_change_ids = Vec::new();
-        let mut member_change_addresses = Vec::new();
-
-        let mut publish_ids = Vec::new();
-        let mut publish_content_uris: Vec<&[u8]> = Vec::new();
-        let mut publish_metadatas: Vec<Option<&[u8]>> = Vec::new();
-
-        let mut content_flag_ids = Vec::new();
-        let mut content_flag_content_ids: Vec<&[u8]> = Vec::new();
-
-        let mut voting_settings_ids = Vec::new();
-        let mut voting_settings_quorums = Vec::new();
-        let mut voting_settings_fast_thresholds = Vec::new();
-        let mut voting_settings_slow_thresholds = Vec::new();
-        let mut voting_settings_durations = Vec::new();
+        let mut target_addresses: Vec<Option<&str>> = Vec::with_capacity(actions.len());
+        let mut content_uris: Vec<Option<&str>> = Vec::with_capacity(actions.len());
+        let mut metadatas: Vec<Option<&[u8]>> = Vec::with_capacity(actions.len());
+        let mut content_ids: Vec<Option<&[u8]>> = Vec::with_capacity(actions.len());
+        let mut quorums: Vec<Option<i64>> = Vec::with_capacity(actions.len());
+        let mut fast_thresholds: Vec<Option<i64>> = Vec::with_capacity(actions.len());
+        let mut slow_thresholds: Vec<Option<i64>> = Vec::with_capacity(actions.len());
+        let mut durations: Vec<Option<i64>> = Vec::with_capacity(actions.len());
 
         for action in actions {
             ids.push(action.id);
             proposal_ids.push(action.proposal_id);
-            indexes.push(action.index as i16);
-            to_addresses.push(&action.to_address);
-            values.push(&action.value);
-            datas.push(&action.data);
 
-            match &action.payload {
-                ProposalActionPayload::AddMember { target_address } => {
-                    action_types.push("AddMember");
-                    member_change_ids.push(action.id);
-                    member_change_addresses.push(target_address.clone());
+            let mut target_address: Option<&str> = None;
+            let mut content_uri: Option<&str> = None;
+            let mut metadata: Option<&[u8]> = None;
+            let mut content_id: Option<&[u8]> = None;
+            let mut quorum: Option<i64> = None;
+            let mut fast_threshold: Option<i64> = None;
+            let mut slow_threshold: Option<i64> = None;
+            let mut duration: Option<i64> = None;
+
+            let action_type = match &action.payload {
+                ProposalActionPayload::AddMember { target_address: addr } => {
+                    target_address = Some(addr.as_str());
+                    "AddMember"
                 }
-                ProposalActionPayload::RemoveMember { target_address } => {
-                    action_types.push("RemoveMember");
-                    member_change_ids.push(action.id);
-                    member_change_addresses.push(target_address.clone());
+                ProposalActionPayload::RemoveMember { target_address: addr } => {
+                    target_address = Some(addr.as_str());
+                    "RemoveMember"
                 }
-                ProposalActionPayload::AddEditor { target_address } => {
-                    action_types.push("AddEditor");
-                    member_change_ids.push(action.id);
-                    member_change_addresses.push(target_address.clone());
+                ProposalActionPayload::AddEditor { target_address: addr } => {
+                    target_address = Some(addr.as_str());
+                    "AddEditor"
                 }
-                ProposalActionPayload::RemoveEditor { target_address } => {
-                    action_types.push("RemoveEditor");
-                    member_change_ids.push(action.id);
-                    member_change_addresses.push(target_address.clone());
+                ProposalActionPayload::RemoveEditor { target_address: addr } => {
+                    target_address = Some(addr.as_str());
+                    "RemoveEditor"
                 }
-                ProposalActionPayload::UnflagEditor { target_address } => {
-                    action_types.push("UnflagEditor");
-                    member_change_ids.push(action.id);
-                    member_change_addresses.push(target_address.clone());
+                ProposalActionPayload::UnflagEditor { target_address: addr } => {
+                    target_address = Some(addr.as_str());
+                    "UnflagEditor"
                 }
-                ProposalActionPayload::Publish { content_uri, metadata } => {
-                    action_types.push("Publish");
-                    publish_ids.push(action.id);
-                    publish_content_uris.push(content_uri.as_slice());
-                    publish_metadatas.push(if metadata.is_empty() {
-                        None
-                    } else {
-                        Some(metadata.as_slice())
-                    });
+                ProposalActionPayload::Publish { content_uri: uri, metadata: meta } => {
+                    content_uri = Some(uri.as_str());
+                    if !meta.is_empty() {
+                        metadata = Some(meta.as_slice());
+                    }
+                    "Publish"
                 }
-                ProposalActionPayload::Flag { content_id } => {
-                    action_types.push("Flag");
-                    content_flag_ids.push(action.id);
-                    content_flag_content_ids.push(content_id.as_slice());
+                ProposalActionPayload::Flag { content_id: id } => {
+                    content_id = Some(id.as_slice());
+                    "Flag"
                 }
-                ProposalActionPayload::Unflag { content_id } => {
-                    action_types.push("Unflag");
-                    content_flag_ids.push(action.id);
-                    content_flag_content_ids.push(content_id.as_slice());
+                ProposalActionPayload::Unflag { content_id: id } => {
+                    content_id = Some(id.as_slice());
+                    "Unflag"
                 }
                 ProposalActionPayload::UpdateVotingSettings {
-                    quorum,
-                    fast_threshold,
-                    slow_threshold,
-                    duration,
+                    quorum: q,
+                    fast_threshold: ft,
+                    slow_threshold: st,
+                    duration: d,
                 } => {
-                    action_types.push("UpdateVotingSettings");
-                    voting_settings_ids.push(action.id);
-                    voting_settings_quorums.push(*quorum as i64);
-                    voting_settings_fast_thresholds.push(*fast_threshold as i64);
-                    voting_settings_slow_thresholds.push(*slow_threshold as i64);
-                    voting_settings_durations.push(*duration as i64);
+                    quorum = Some(*q as i64);
+                    fast_threshold = Some(*ft as i64);
+                    slow_threshold = Some(*st as i64);
+                    duration = Some(*d as i64);
+                    "UpdateVotingSettings"
                 }
-                ProposalActionPayload::Unknown => {
-                    action_types.push("Unknown");
-                }
-            }
+                ProposalActionPayload::Unknown => "Unknown",
+            };
+
+            action_types.push(action_type);
+            target_addresses.push(target_address);
+            content_uris.push(content_uri);
+            metadatas.push(metadata);
+            content_ids.push(content_id);
+            quorums.push(quorum);
+            fast_thresholds.push(fast_threshold);
+            slow_thresholds.push(slow_threshold);
+            durations.push(duration);
         }
 
-        // Insert base actions
         let query = r#"
             INSERT INTO proposal_actions (
-                id, proposal_id, index, to_address, value, data, action_type
+                id, proposal_id, action_type,
+                target_address, content_uri, metadata, content_id,
+                quorum, fast_threshold, slow_threshold, duration
             )
-            SELECT id, proposal_id, index, to_address, value, data, action_type::"proposalActionType"
+            SELECT id, proposal_id, action_type::"proposalActionType",
+                   target_address, content_uri, metadata, content_id,
+                   quorum, fast_threshold, slow_threshold, duration
             FROM UNNEST(
-                $1::uuid[], $2::uuid[], $3::smallint[], $4::text[], $5::text[], $6::bytea[], $7::text[]
-            ) AS t(id, proposal_id, index, to_address, value, data, action_type)
+                $1::uuid[], $2::uuid[], $3::text[],
+                $4::text[], $5::text[], $6::bytea[], $7::bytea[],
+                $8::bigint[], $9::bigint[], $10::bigint[], $11::bigint[]
+            ) AS t(id, proposal_id, action_type,
+                   target_address, content_uri, metadata, content_id,
+                   quorum, fast_threshold, slow_threshold, duration)
             ON CONFLICT (id) DO NOTHING
         "#;
 
         sqlx::query(query)
             .bind(&ids)
             .bind(&proposal_ids)
-            .bind(&indexes)
-            .bind(&to_addresses)
-            .bind(&values)
-            .bind(&datas)
             .bind(&action_types)
+            .bind(&target_addresses)
+            .bind(&content_uris)
+            .bind(&metadatas)
+            .bind(&content_ids)
+            .bind(&quorums)
+            .bind(&fast_thresholds)
+            .bind(&slow_thresholds)
+            .bind(&durations)
             .execute(&mut **tx)
             .await?;
-
-        // Insert member change payloads
-        if !member_change_ids.is_empty() {
-            sqlx::query(
-                r#"
-                INSERT INTO proposal_action_member_changes (action_id, target_address)
-                SELECT action_id, target_address
-                FROM UNNEST($1::uuid[], $2::text[]) AS t(action_id, target_address)
-                ON CONFLICT (action_id) DO NOTHING
-                "#,
-            )
-            .bind(&member_change_ids)
-            .bind(&member_change_addresses)
-            .execute(&mut **tx)
-            .await?;
-        }
-
-        // Insert publish payloads
-        if !publish_ids.is_empty() {
-            sqlx::query(
-                r#"
-                INSERT INTO proposal_action_publish (action_id, content_uri, metadata)
-                SELECT action_id, content_uri, metadata
-                FROM UNNEST($1::uuid[], $2::bytea[], $3::bytea[]) AS t(action_id, content_uri, metadata)
-                ON CONFLICT (action_id) DO NOTHING
-                "#,
-            )
-            .bind(&publish_ids)
-            .bind(&publish_content_uris)
-            .bind(&publish_metadatas)
-            .execute(&mut **tx)
-            .await?;
-        }
-
-        // Insert content flag payloads
-        if !content_flag_ids.is_empty() {
-            sqlx::query(
-                r#"
-                INSERT INTO proposal_action_content_flags (action_id, content_id)
-                SELECT action_id, content_id
-                FROM UNNEST($1::uuid[], $2::bytea[]) AS t(action_id, content_id)
-                ON CONFLICT (action_id) DO NOTHING
-                "#,
-            )
-            .bind(&content_flag_ids)
-            .bind(&content_flag_content_ids)
-            .execute(&mut **tx)
-            .await?;
-        }
-
-        // Insert voting settings payloads
-        if !voting_settings_ids.is_empty() {
-            sqlx::query(
-                r#"
-                INSERT INTO proposal_action_voting_settings (
-                    action_id, quorum, fast_threshold, slow_threshold, duration
-                )
-                SELECT action_id, quorum, fast_threshold, slow_threshold, duration
-                FROM UNNEST($1::uuid[], $2::bigint[], $3::bigint[], $4::bigint[], $5::bigint[])
-                AS t(action_id, quorum, fast_threshold, slow_threshold, duration)
-                ON CONFLICT (action_id) DO NOTHING
-                "#,
-            )
-            .bind(&voting_settings_ids)
-            .bind(&voting_settings_quorums)
-            .bind(&voting_settings_fast_thresholds)
-            .bind(&voting_settings_slow_thresholds)
-            .bind(&voting_settings_durations)
-            .execute(&mut **tx)
-            .await?;
-        }
 
         Ok(())
     }

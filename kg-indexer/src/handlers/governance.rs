@@ -122,13 +122,22 @@ pub fn handle_proposal_executed(
     })
 }
 
+/// Namespace UUID for generating deterministic action IDs
+const PROPOSAL_ACTION_NAMESPACE: Uuid = Uuid::from_bytes([
+    0x70, 0x72, 0x6f, 0x70, 0x6f, 0x73, 0x61, 0x6c,
+    0x5f, 0x61, 0x63, 0x74, 0x69, 0x6f, 0x6e, 0x73,
+]);
+
 fn map_proposal_action(
     proposal_id: Uuid,
     index: i32,
     action: &hermes_schema::pb::governance::ProposalAction,
 ) -> ProposalActionItem {
-    let to_address = checksum_address(format!("0x{}", hex::encode(&action.to)));
-    let value = format_u256(&action.value);
+    // Generate deterministic UUID from proposal_id + index
+    let id = Uuid::new_v5(
+        &PROPOSAL_ACTION_NAMESPACE,
+        format!("{}:{}", proposal_id, index).as_bytes(),
+    );
 
     let payload = match &action.action {
         Some(Action::AddMember(a)) => ProposalActionPayload::AddMember {
@@ -166,21 +175,8 @@ fn map_proposal_action(
     };
 
     ProposalActionItem {
-        id: Uuid::new_v4(),
+        id,
         proposal_id,
-        index,
-        to_address,
-        value,
-        data: action.data.clone(),
         payload,
     }
-}
-
-/// Format a big-endian bytes slice as a decimal string (for u256 values)
-fn format_u256(bytes: &[u8]) -> String {
-    if bytes.is_empty() || bytes.iter().all(|&b| b == 0) {
-        return "0".to_string();
-    }
-    // For simplicity, just hex encode - proper u256 decimal conversion would need a bigint library
-    format!("0x{}", hex::encode(bytes))
 }

@@ -29,7 +29,7 @@ pub enum ProposalActionPayload {
     /// Unflag an editor
     UnflagEditor { target_address: String },
     /// Publish content
-    Publish { content_uri: Vec<u8>, metadata: Vec<u8> },
+    Publish { content_uri: String, metadata: Vec<u8> },
     /// Flag content
     Flag { content_id: Vec<u8> },
     /// Unflag content
@@ -61,15 +61,12 @@ pub struct ProposalItem {
     pub created_at_block: i64,
 }
 
-/// An action within a proposal
+/// An action within a proposal.
+/// ID is deterministic (derived from proposal_id + index).
 #[derive(Clone, Debug)]
 pub struct ProposalActionItem {
     pub id: Uuid,
     pub proposal_id: Uuid,
-    pub index: i32,
-    pub to_address: String,
-    pub value: String,
-    pub data: Vec<u8>,
     pub payload: ProposalActionPayload,
 }
 
