@@ -42,3 +42,7 @@ axiom-rs = "0.11.4"
 
 [dev-dependencies]
 tokio = { version = "1.42.0", features = ["macros", "rt-multi-thread", "test-util"] }
+
+[[test]]
+name = "e2e"
+path = "tests/e2e.rs"
