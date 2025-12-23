@@ -45,7 +45,7 @@ impl KafkaConsumer {
             .create()
             .map_err(|e| IndexerError::kafka(e.to_string()))?;
 
-        // Topics to consume
+        // Topics to consume (subset of what hermes-pipeline produces)
         let topics = vec![
             "knowledge.edits".to_string(),
             "space.creations".to_string(),
