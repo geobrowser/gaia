@@ -3,7 +3,7 @@
 //! These builders create `Action` events in the chain format, matching
 //! the action types from the Space Registry contract:
 //!
-//! - `space_created` → `GOVERNANCE.SPACE_ID_REGISTERED` action
+//! - `personal_space_registered` → `SPACE_ID_REGISTERED` + `SPACE_TYPE_DECLARED` actions
 //! - `subspace_added` → `GOVERNANCE.SUBSPACE_ADDED` action
 //! - `subspace_verified` → `GOVERNANCE.SUBSPACE_VERIFIED` action
 //! - `subspace_related` → `GOVERNANCE.SUBSPACE_RELATED` action
@@ -16,14 +16,13 @@
 //! ```ignore
 //! use hermes_relay::source::events;
 //!
-//! let actions = vec![
-//!     // Create a personal space
-//!     events::space_created([0x01; 16], [0xaa; 32]),
-//!     // Add a verified subspace
-//!     events::subspace_verified([0x01; 16], [0x02; 16]),
-//!     // Publish edits with IPFS hash
-//!     events::edit_published([0x01; 16], "QmYwAPJzv5CZsnANOTaREALhashhere"),
-//! ];
+//! let mut actions = Vec::new();
+//! // Create a personal space (returns 2 events)
+//! actions.extend(events::personal_space_registered([0x01; 16], [0xaa; 32]));
+//! // Add a verified subspace
+//! actions.push(events::subspace_verified([0x01; 16], [0x02; 16]));
+//! // Publish edits with IPFS hash
+//! actions.push(events::edit_published([0x01; 16], "QmYwAPJzv5CZsnANOTaREALhashhere"));
 //! ```
 
 use alloy::primitives::U256;
@@ -142,19 +141,6 @@ pub fn dao_space_initialized(
 
     actions
 }
-
-/// Legacy helper - Create a SPACE_REGISTERED action (personal space).
-///
-/// DEPRECATED: Use `personal_space_registered()` instead which returns the
-/// correct event sequence (SPACE_ID_REGISTERED + SPACE_TYPE_DECLARED).
-///
-/// - `space_id`: The 16-byte ID of the new space
-/// - `owner`: The 32-byte owner address
-#[deprecated(note = "Use personal_space_registered() instead")]
-pub fn space_created(space_id: SpaceId, owner: Address) -> Action {
-    space_id_registered(space_id, owner)
-}
-
 
 /// Create a SPACE_MIGRATED action.
 ///
