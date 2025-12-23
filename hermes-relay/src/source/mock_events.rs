@@ -40,59 +40,101 @@ use hermes_substream::pb::hermes::Action;
 pub type SpaceId = [u8; 16];
 pub type TopicId = [u8; 16];
 pub type Address = [u8; 32];
-pub type ProposalId = [u8; 32];
+pub type ProposalId = [u8; 16];
 
 // =============================================================================
 // Space Registration Actions
 // =============================================================================
 
-/// Create a SPACE_REGISTERED action (personal space).
+/// Create a SPACE_ID_REGISTERED action (just the registration, no type).
+///
+/// This is the base event emitted when any space is registered.
+/// The space type is determined by a separate SPACE_TYPE_DECLARED event.
 ///
 /// - `space_id`: The 16-byte ID of the new space
-/// - `owner`: The 32-byte owner address (stored in topic field as bytes32(bytes20(address)))
-pub fn space_created(space_id: SpaceId, owner: Address) -> Action {
+pub fn space_id_registered(space_id: SpaceId) -> Action {
     Action {
-        from_id: space_id.to_vec(),
-        to_id: vec![0u8; 16],
+        from_id: vec![0u8; 16],      // zeros per new contract
+        to_id: space_id.to_vec(),    // space_id goes here now
         action: actions::SPACE_REGISTERED.to_vec(),
-        topic: owner.to_vec(),
+        topic: vec![0u8; 32],
         data: vec![],
     }
 }
 
-/// Create a SPACE_REGISTERED action for a DAO space.
+/// Create a SPACE_TYPE_DECLARED action.
 ///
-/// - `space_id`: The 16-byte ID of the new space  
-/// - `initial_editors`: List of initial editor space IDs
-/// - `initial_members`: List of initial member space IDs
-pub fn space_created_dao(
-    space_id: SpaceId,
-    initial_editors: Vec<SpaceId>,
-    initial_members: Vec<SpaceId>,
-) -> Action {
-    // Encode editors and members into data field
-    let mut data = Vec::new();
-
-    // Number of editors (2 bytes)
-    data.extend_from_slice(&(initial_editors.len() as u16).to_be_bytes());
-    for editor in &initial_editors {
-        data.extend_from_slice(editor);
-    }
-
-    // Number of members (2 bytes)
-    data.extend_from_slice(&(initial_members.len() as u16).to_be_bytes());
-    for member in &initial_members {
-        data.extend_from_slice(member);
-    }
-
+/// - `space_id`: The space declaring its type
+/// - `space_type`: The 32-byte space type hash (e.g., SPACE_TYPE_EOA or SPACE_TYPE_DAO)
+/// - `version`: The version bytes (typically empty or version info)
+pub fn space_type_declared(space_id: SpaceId, space_type: [u8; 32], version: &[u8]) -> Action {
     Action {
         from_id: space_id.to_vec(),
-        to_id: vec![0u8; 16],
-        action: actions::SPACE_REGISTERED.to_vec(),
-        topic: vec![0u8; 32], // No owner for DAO
-        data,
+        to_id: space_id.to_vec(),    // from_id == to_id for DAOSpace
+        action: actions::SPACE_TYPE_DECLARED.to_vec(),
+        topic: space_type.to_vec(),
+        data: version.to_vec(),
     }
 }
+
+/// Create all events for a personal (EOA) space registration.
+///
+/// Returns events in correct order:
+/// 1. SPACE_ID_REGISTERED (from_id=zeros, to_id=space_id)
+/// 2. SPACE_TYPE_DECLARED (type=EOA_SPACE)
+pub fn personal_space_registered(space_id: SpaceId) -> Vec<Action> {
+    vec![
+        space_id_registered(space_id),
+        space_type_declared(space_id, actions::SPACE_TYPE_EOA, &[]),
+    ]
+}
+
+/// Create all events for DAO space initialization.
+///
+/// Returns events in correct order:
+/// 1. SPACE_ID_REGISTERED (from_id=zeros, to_id=space_id)
+/// 2. SPACE_TYPE_DECLARED (type=DAO_SPACE)
+/// 3. EDITOR_ADDED for each initial editor
+/// 4. MEMBER_ADDED for each initial member
+pub fn dao_space_initialized(
+    space_id: SpaceId,
+    initial_editors: &[[u8; 20]],
+    initial_members: &[[u8; 20]],
+) -> Vec<Action> {
+    let mut actions = vec![
+        space_id_registered(space_id),
+        space_type_declared(space_id, actions::SPACE_TYPE_DAO, &[]),
+    ];
+
+    // Add EDITOR_ADDED for each initial editor
+    for editor in initial_editors {
+        let mut address = [0u8; 32];
+        address[12..32].copy_from_slice(editor);
+        actions.push(editor_added(space_id, address));
+    }
+
+    // Add MEMBER_ADDED for each initial member
+    for member in initial_members {
+        let mut address = [0u8; 32];
+        address[12..32].copy_from_slice(member);
+        actions.push(member_added(space_id, address));
+    }
+
+    actions
+}
+
+/// Legacy helper - Create a SPACE_REGISTERED action (personal space).
+///
+/// DEPRECATED: Use `personal_space_registered()` instead which returns the
+/// correct event sequence (SPACE_ID_REGISTERED + SPACE_TYPE_DECLARED).
+///
+/// - `space_id`: The 16-byte ID of the new space
+/// - `owner`: The 32-byte owner address (unused in new contract, kept for compatibility)
+#[deprecated(note = "Use personal_space_registered() instead")]
+pub fn space_created(space_id: SpaceId, _owner: Address) -> Action {
+    space_id_registered(space_id)
+}
+
 
 /// Create a SPACE_MIGRATED action.
 ///
@@ -302,11 +344,16 @@ sol! {
     }
 }
 
-// Type alias for encoding proposal data: (uint8, Action[])
-type ProposalDataType = sol! { (uint8, SolAction[]) };
+// Type alias for encoding proposal data: (bytes16, uint8, Action[])
+type ProposalDataType = sol! { (bytes16, uint8, SolAction[]) };
 
-/// ABI-encode proposal data: (VotingMode, Action[])
-fn encode_proposal_data(voting_mode: VotingMode, actions: &[ProposalAction]) -> Vec<u8> {
+/// ABI-encode proposal data: (bytes16 proposalId, uint8 votingMode, Action[])
+fn encode_proposal_data(
+    proposal_id: ProposalId,
+    voting_mode: VotingMode,
+    actions: &[ProposalAction],
+) -> Vec<u8> {
+    use alloy::primitives::FixedBytes;
     // Convert to Solidity types
     let sol_actions: Vec<SolAction> = actions
         .iter()
@@ -317,22 +364,23 @@ fn encode_proposal_data(voting_mode: VotingMode, actions: &[ProposalAction]) -> 
         })
         .collect();
 
-    ProposalDataType::abi_encode(&(voting_mode as u8, sol_actions))
+    ProposalDataType::abi_encode(&(
+        FixedBytes::<16>::from_slice(&proposal_id),
+        voting_mode as u8,
+        sol_actions,
+    ))
 }
 
-/// ABI-encode proposal vote data: (uint256 proposalId, VoteOption)
-fn encode_vote_data(proposal_id: u64, vote_option: VoteOption) -> Vec<u8> {
-    let mut data = Vec::new();
+// Type alias for encoding vote data: (bytes16, uint8)
+type VoteDataType = sol! { (bytes16, uint8) };
 
-    // proposalId as uint256
-    data.extend_from_slice(&[0u8; 24]);
-    data.extend_from_slice(&proposal_id.to_be_bytes());
-
-    // VoteOption as uint8 padded to 32 bytes
-    data.extend_from_slice(&[0u8; 31]);
-    data.push(vote_option as u8);
-
-    data
+/// ABI-encode proposal vote data: (bytes16 proposalId, uint8 voteOption)
+fn encode_vote_data(proposal_id: ProposalId, vote_option: VoteOption) -> Vec<u8> {
+    use alloy::primitives::FixedBytes;
+    VoteDataType::abi_encode(&(
+        FixedBytes::<16>::from_slice(&proposal_id),
+        vote_option as u8,
+    ))
 }
 
 // Solidity type for permissionless vote data: (uint16 version, bytes16 groupId, bytes16 spacePOV)
@@ -359,7 +407,7 @@ fn encode_content_uri(uri: &str) -> Vec<u8> {
 /// Create a PROPOSAL_CREATED action.
 ///
 /// - `space_id`: The space creating the proposal
-/// - `proposal_id`: The proposal ID (32 bytes)
+/// - `proposal_id`: The proposal ID (16 bytes)
 /// - `voting_mode`: Fast or Slow path
 /// - `proposal_actions`: The actions to execute if proposal passes
 pub fn proposal_created(
@@ -368,13 +416,62 @@ pub fn proposal_created(
     voting_mode: VotingMode,
     proposal_actions: Vec<ProposalAction>,
 ) -> Action {
-    let data = encode_proposal_data(voting_mode, &proposal_actions);
+    let data = encode_proposal_data(proposal_id, voting_mode, &proposal_actions);
+
+    // Pad proposal_id to 32 bytes for topic field
+    let mut topic = [0u8; 32];
+    topic[..16].copy_from_slice(&proposal_id);
 
     Action {
         from_id: space_id.to_vec(),
-        to_id: vec![0u8; 16],
+        to_id: space_id.to_vec(),    // from_id == to_id for DAOSpace actions
         action: actions::PROPOSAL_CREATED.to_vec(),
-        topic: proposal_id.to_vec(),
+        topic: topic.to_vec(),
+        data,
+    }
+}
+
+/// Create a PROPOSAL_SETTINGS_USED action.
+///
+/// This event is emitted after PROPOSAL_CREATED to convey the proposal settings.
+/// The pipeline squashes PROPOSAL_CREATED + PROPOSAL_SETTINGS_USED into a single event.
+///
+/// - `space_id`: The space with the proposal
+/// - `proposal_id`: The proposal ID (16 bytes)
+/// - `voting_delay`: Voting delay in seconds
+/// - `voting_period`: Voting period in seconds
+/// - `quorum`: Quorum percentage
+/// - `threshold`: Approval threshold percentage
+pub fn proposal_settings_used(
+    space_id: SpaceId,
+    proposal_id: ProposalId,
+    voting_delay: u32,
+    voting_period: u32,
+    quorum: u16,
+    threshold: u16,
+) -> Action {
+    // Encode settings as: (uint32 votingDelay, uint32 votingPeriod, uint16 quorum, uint16 threshold)
+    use alloy::primitives::FixedBytes;
+    use alloy::sol_types::SolType;
+
+    type SettingsType = sol! { (bytes16, uint32, uint32, uint16, uint16) };
+    let data = SettingsType::abi_encode(&(
+        FixedBytes::<16>::from_slice(&proposal_id),
+        voting_delay,
+        voting_period,
+        quorum,
+        threshold,
+    ));
+
+    // Pad proposal_id to 32 bytes for topic field
+    let mut topic = [0u8; 32];
+    topic[..16].copy_from_slice(&proposal_id);
+
+    Action {
+        from_id: space_id.to_vec(),
+        to_id: space_id.to_vec(),    // from_id == to_id for DAOSpace actions
+        action: actions::PROPOSAL_SETTINGS_USED.to_vec(),
+        topic: topic.to_vec(),
         data,
     }
 }
@@ -383,7 +480,7 @@ pub fn proposal_created(
 ///
 /// - `voter_id`: The voter's space ID
 /// - `space_id`: The space containing the proposal
-/// - `proposal_id`: The proposal being voted on
+/// - `proposal_id`: The proposal being voted on (16 bytes)
 /// - `vote_option`: The vote choice
 pub fn proposal_voted(
     voter_id: SpaceId,
@@ -391,15 +488,17 @@ pub fn proposal_voted(
     proposal_id: ProposalId,
     vote_option: VoteOption,
 ) -> Action {
-    // Extract proposal counter from proposal_id (last 8 bytes as u64)
-    let proposal_counter = u64::from_be_bytes(proposal_id[24..32].try_into().unwrap_or([0; 8]));
-    let data = encode_vote_data(proposal_counter, vote_option);
+    let data = encode_vote_data(proposal_id, vote_option);
+
+    // Pad proposal_id to 32 bytes for topic field
+    let mut topic = [0u8; 32];
+    topic[..16].copy_from_slice(&proposal_id);
 
     Action {
         from_id: voter_id.to_vec(),
         to_id: space_id.to_vec(),
         action: actions::PROPOSAL_VOTED.to_vec(),
-        topic: proposal_id.to_vec(),
+        topic: topic.to_vec(),
         data,
     }
 }
@@ -407,13 +506,17 @@ pub fn proposal_voted(
 /// Create a PROPOSAL_EXECUTED action.
 ///
 /// - `space_id`: The space with the executed proposal
-/// - `proposal_id`: The executed proposal ID
+/// - `proposal_id`: The executed proposal ID (16 bytes)
 pub fn proposal_executed(space_id: SpaceId, proposal_id: ProposalId) -> Action {
+    // Pad proposal_id to 32 bytes for topic field
+    let mut topic = [0u8; 32];
+    topic[..16].copy_from_slice(&proposal_id);
+
     Action {
         from_id: space_id.to_vec(),
-        to_id: vec![0u8; 16],
+        to_id: space_id.to_vec(),    // from_id == to_id for DAOSpace actions
         action: actions::PROPOSAL_EXECUTED.to_vec(),
-        topic: proposal_id.to_vec(),
+        topic: topic.to_vec(),
         data: vec![],
     }
 }
@@ -429,7 +532,7 @@ pub fn proposal_executed(space_id: SpaceId, proposal_id: ProposalId) -> Action {
 pub fn editor_added(space_id: SpaceId, editor_address: Address) -> Action {
     Action {
         from_id: space_id.to_vec(),
-        to_id: vec![0u8; 16],
+        to_id: space_id.to_vec(),    // from_id == to_id for DAOSpace actions
         action: actions::EDITOR_ADDED.to_vec(),
         topic: editor_address.to_vec(),
         data: vec![],
@@ -443,7 +546,7 @@ pub fn editor_added(space_id: SpaceId, editor_address: Address) -> Action {
 pub fn editor_removed(space_id: SpaceId, editor_address: Address) -> Action {
     Action {
         from_id: space_id.to_vec(),
-        to_id: vec![0u8; 16],
+        to_id: space_id.to_vec(),    // from_id == to_id for DAOSpace actions
         action: actions::EDITOR_REMOVED.to_vec(),
         topic: editor_address.to_vec(),
         data: vec![],
@@ -457,7 +560,7 @@ pub fn editor_removed(space_id: SpaceId, editor_address: Address) -> Action {
 pub fn member_added(space_id: SpaceId, member_address: Address) -> Action {
     Action {
         from_id: space_id.to_vec(),
-        to_id: vec![0u8; 16],
+        to_id: space_id.to_vec(),    // from_id == to_id for DAOSpace actions
         action: actions::MEMBER_ADDED.to_vec(),
         topic: member_address.to_vec(),
         data: vec![],
@@ -471,7 +574,7 @@ pub fn member_added(space_id: SpaceId, member_address: Address) -> Action {
 pub fn member_removed(space_id: SpaceId, member_address: Address) -> Action {
     Action {
         from_id: space_id.to_vec(),
-        to_id: vec![0u8; 16],
+        to_id: space_id.to_vec(),    // from_id == to_id for DAOSpace actions
         action: actions::MEMBER_REMOVED.to_vec(),
         topic: member_address.to_vec(),
         data: vec![],
@@ -485,7 +588,7 @@ pub fn member_removed(space_id: SpaceId, member_address: Address) -> Action {
 pub fn editor_flagged(space_id: SpaceId, editor_address: Address) -> Action {
     Action {
         from_id: space_id.to_vec(),
-        to_id: vec![0u8; 16],
+        to_id: space_id.to_vec(),    // from_id == to_id for DAOSpace actions
         action: actions::EDITOR_FLAGGED.to_vec(),
         topic: editor_address.to_vec(),
         data: vec![],
@@ -499,7 +602,7 @@ pub fn editor_flagged(space_id: SpaceId, editor_address: Address) -> Action {
 pub fn editor_unflagged(space_id: SpaceId, editor_address: Address) -> Action {
     Action {
         from_id: space_id.to_vec(),
-        to_id: vec![0u8; 16],
+        to_id: space_id.to_vec(),    // from_id == to_id for DAOSpace actions
         action: actions::EDITOR_UNFLAGGED.to_vec(),
         topic: editor_address.to_vec(),
         data: vec![],
@@ -706,8 +809,10 @@ pub const fn make_address(last_byte: u8) -> Address {
 }
 
 /// Helper to create a proposal ID from a single byte.
+///
+/// Uses the same UUID v4 format as make_id for consistency.
 pub const fn make_proposal_id(last_byte: u8) -> ProposalId {
-    make_address(last_byte)
+    make_id(last_byte)
 }
 
 // =============================================================================
@@ -762,6 +867,9 @@ pub mod test_topology {
     pub const OBJECT_TYPE_ENTITY: [u8; 4] = [0x00, 0x00, 0x00, 0x01];
     pub const OBJECT_TYPE_TRIPLE: [u8; 4] = [0x00, 0x00, 0x00, 0x02];
 
+    // Editor address for initial DAO editors (USER_Q as bytes20)
+    pub const EDITOR_Q: [u8; 20] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x31];
+
     /// Generate a comprehensive set of test events covering all action types.
     ///
     /// Returns actions for:
@@ -775,31 +883,34 @@ pub mod test_topology {
     pub fn generate() -> Vec<Action> {
         let mut actions = Vec::new();
 
-        // Phase 1: Create all spaces
-        actions.push(space_created(ROOT_SPACE_ID, ROOT_OWNER));
-        actions.push(space_created(SPACE_A, USER_1));
-        actions.push(space_created(SPACE_B, USER_2));
-        actions.push(space_created(SPACE_C, USER_1));
-        actions.push(space_created(SPACE_D, USER_2));
-        actions.push(space_created(SPACE_E, USER_3));
-        actions.push(space_created(SPACE_F, USER_1));
-        actions.push(space_created(SPACE_G, USER_2));
-        actions.push(space_created(SPACE_H, USER_3));
-        actions.push(space_created(SPACE_I, USER_1));
-        actions.push(space_created(SPACE_J, USER_2));
+        // Phase 1: Create all spaces using new event sequence
+        // Each personal_space_registered returns 2 events (SPACE_ID_REGISTERED + SPACE_TYPE_DECLARED)
+        actions.extend(personal_space_registered(ROOT_SPACE_ID));
+        actions.extend(personal_space_registered(SPACE_A));
+        actions.extend(personal_space_registered(SPACE_B));
+        actions.extend(personal_space_registered(SPACE_C));
+        actions.extend(personal_space_registered(SPACE_D));
+        actions.extend(personal_space_registered(SPACE_E));
+        actions.extend(personal_space_registered(SPACE_F));
+        actions.extend(personal_space_registered(SPACE_G));
+        actions.extend(personal_space_registered(SPACE_H));
+        actions.extend(personal_space_registered(SPACE_I));
+        actions.extend(personal_space_registered(SPACE_J));
 
         // Non-canonical - Island 1
-        actions.push(space_created(SPACE_X, USER_1));
-        actions.push(space_created(SPACE_Y, USER_2));
-        actions.push(space_created(SPACE_Z, USER_3));
-        actions.push(space_created(SPACE_W, USER_1));
+        actions.extend(personal_space_registered(SPACE_X));
+        actions.extend(personal_space_registered(SPACE_Y));
+        actions.extend(personal_space_registered(SPACE_Z));
+        actions.extend(personal_space_registered(SPACE_W));
 
-        // Non-canonical - Island 2 (P is DAO, Q must be created first as it's an initial editor)
-        actions.push(space_created(SPACE_Q, USER_2));
-        actions.push(space_created_dao(SPACE_P, vec![SPACE_Q], vec![]));
+        // Non-canonical - Island 2 (P is DAO with Q as initial editor)
+        // Q must be created first as it's an initial editor
+        actions.extend(personal_space_registered(SPACE_Q));
+        // DAO space P with SPACE_Q's address as initial editor
+        actions.extend(dao_space_initialized(SPACE_P, &[EDITOR_Q], &[]));
 
         // Non-canonical - Island 3
-        actions.push(space_created(SPACE_S, USER_3));
+        actions.extend(personal_space_registered(SPACE_S));
 
         // Phase 2: Subspace operations - verified
         actions.push(subspace_verified(ROOT_SPACE_ID, SPACE_A));
@@ -833,11 +944,20 @@ pub mod test_topology {
         actions.push(editor_unflagged(SPACE_B, USER_1));
 
         // Phase 6: Proposals (fast path add member proposal)
+        // PROPOSAL_CREATED + PROPOSAL_SETTINGS_USED squashed by pipeline
         actions.push(proposal_created(
             SPACE_A,
             PROPOSAL_1,
             VotingMode::Fast,
             vec![ProposalAction::add_member([0x11; 20])],
+        ));
+        actions.push(proposal_settings_used(
+            SPACE_A,
+            PROPOSAL_1,
+            0,      // voting_delay
+            86400,  // voting_period (1 day)
+            50,     // quorum (50%)
+            60,     // threshold (60%)
         ));
         actions.push(proposal_voted(
             SPACE_B,
@@ -905,14 +1025,50 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_space_created_format() {
+    fn test_space_id_registered_format() {
         let space_id = make_id(0x01);
-        let owner = make_address(0xaa);
-        let action = space_created(space_id, owner);
+        let action = space_id_registered(space_id);
+
+        assert_eq!(action.from_id, vec![0u8; 16]); // zeros
+        assert_eq!(action.to_id, space_id.to_vec());
+        assert_eq!(action.action, actions::SPACE_REGISTERED.to_vec());
+    }
+
+    #[test]
+    fn test_space_type_declared_format() {
+        let space_id = make_id(0x01);
+        let action = space_type_declared(space_id, actions::SPACE_TYPE_EOA, &[]);
 
         assert_eq!(action.from_id, space_id.to_vec());
-        assert_eq!(action.action, actions::SPACE_REGISTERED.to_vec());
-        assert_eq!(action.topic, owner.to_vec());
+        assert_eq!(action.to_id, space_id.to_vec());
+        assert_eq!(action.action, actions::SPACE_TYPE_DECLARED.to_vec());
+        assert_eq!(action.topic, actions::SPACE_TYPE_EOA.to_vec());
+    }
+
+    #[test]
+    fn test_personal_space_registered_sequence() {
+        let space_id = make_id(0x01);
+        let events = personal_space_registered(space_id);
+
+        assert_eq!(events.len(), 2);
+        assert_eq!(events[0].action, actions::SPACE_REGISTERED.to_vec());
+        assert_eq!(events[1].action, actions::SPACE_TYPE_DECLARED.to_vec());
+        assert_eq!(events[1].topic, actions::SPACE_TYPE_EOA.to_vec());
+    }
+
+    #[test]
+    fn test_dao_space_initialized_sequence() {
+        let space_id = make_id(0x01);
+        let editor1: [u8; 20] = [0xAA; 20];
+        let member1: [u8; 20] = [0xBB; 20];
+        let events = dao_space_initialized(space_id, &[editor1], &[member1]);
+
+        assert_eq!(events.len(), 4);
+        assert_eq!(events[0].action, actions::SPACE_REGISTERED.to_vec());
+        assert_eq!(events[1].action, actions::SPACE_TYPE_DECLARED.to_vec());
+        assert_eq!(events[1].topic, actions::SPACE_TYPE_DAO.to_vec());
+        assert_eq!(events[2].action, actions::EDITOR_ADDED.to_vec());
+        assert_eq!(events[3].action, actions::MEMBER_ADDED.to_vec());
     }
 
     #[test]
@@ -1000,6 +1156,10 @@ mod tests {
             .iter()
             .filter(|a| a.action == actions::SPACE_REGISTERED.to_vec())
             .count();
+        let space_type_count = actions
+            .iter()
+            .filter(|a| a.action == actions::SPACE_TYPE_DECLARED.to_vec())
+            .count();
         let verified_count = actions
             .iter()
             .filter(|a| a.action == actions::SUBSPACE_VERIFIED.to_vec())
@@ -1016,9 +1176,14 @@ mod tests {
             .iter()
             .filter(|a| a.action == actions::EDITS_PUBLISHED.to_vec())
             .count();
+        let proposal_settings_count = actions
+            .iter()
+            .filter(|a| a.action == actions::PROPOSAL_SETTINGS_USED.to_vec())
+            .count();
 
-        // 18 spaces: 11 canonical + 7 non-canonical
+        // 18 spaces: 11 canonical + 7 non-canonical (each has SPACE_ID_REGISTERED + SPACE_TYPE_DECLARED)
         assert_eq!(space_count, 18);
+        assert_eq!(space_type_count, 18);
         // 10 verified subspaces
         assert_eq!(verified_count, 10);
         // 4 related subspaces
@@ -1027,6 +1192,8 @@ mod tests {
         assert_eq!(topic_declared_count, 5);
         // 6 edits
         assert_eq!(edit_count, 6);
+        // 1 proposal with settings
+        assert_eq!(proposal_settings_count, 1);
     }
 
     #[test]
@@ -1043,16 +1210,13 @@ mod tests {
         );
 
         assert_eq!(action.from_id, space_id.to_vec());
+        assert_eq!(action.to_id, space_id.to_vec()); // from_id == to_id for DAOSpace
         assert_eq!(action.action, actions::PROPOSAL_CREATED.to_vec());
-        assert_eq!(action.topic, proposal_id.to_vec());
-        // Data should not be empty - it contains ABI-encoded (VotingMode, Action[])
+        // Topic is proposal_id padded to 32 bytes
+        assert_eq!(action.topic.len(), 32);
+        assert_eq!(&action.topic[..16], &proposal_id);
+        // Data should not be empty - it contains ABI-encoded (bytes16, uint8, Action[])
         assert!(!action.data.is_empty());
-        // With proper ABI encoding of (uint8, SolAction[]):
-        // - Byte 31: voting_mode (0 for Fast)
-        // - Byte 63: offset to dynamic array data (should be 64 = 0x40)
-        // However, for packed uint8, the value might be at byte 0
-        // The actual format depends on alloy's encoding behavior
-        // Key assertion: data can be decoded by pipeline
     }
 
     #[test]
@@ -1073,6 +1237,23 @@ mod tests {
     }
 
     #[test]
+    fn test_proposal_settings_used_format() {
+        let space_id = make_id(0x01);
+        let proposal_id = make_proposal_id(0xA1);
+
+        let action = proposal_settings_used(space_id, proposal_id, 0, 86400, 50, 60);
+
+        assert_eq!(action.from_id, space_id.to_vec());
+        assert_eq!(action.to_id, space_id.to_vec()); // from_id == to_id for DAOSpace
+        assert_eq!(action.action, actions::PROPOSAL_SETTINGS_USED.to_vec());
+        // Topic is proposal_id padded to 32 bytes
+        assert_eq!(action.topic.len(), 32);
+        assert_eq!(&action.topic[..16], &proposal_id);
+        // Data should contain ABI-encoded settings
+        assert!(!action.data.is_empty());
+    }
+
+    #[test]
     fn test_proposal_voted_format() {
         let voter_id = make_id(0x01);
         let space_id = make_id(0x02);
@@ -1083,10 +1264,27 @@ mod tests {
         assert_eq!(action.from_id, voter_id.to_vec());
         assert_eq!(action.to_id, space_id.to_vec());
         assert_eq!(action.action, actions::PROPOSAL_VOTED.to_vec());
-        assert_eq!(action.topic, proposal_id.to_vec());
-        // Data should contain encoded (uint256 proposalId, VoteOption)
-        assert_eq!(action.data.len(), 64); // Two 32-byte values
-        assert_eq!(action.data[63], 1); // VoteOption::Yes
+        // Topic is proposal_id padded to 32 bytes
+        assert_eq!(action.topic.len(), 32);
+        assert_eq!(&action.topic[..16], &proposal_id);
+        // Data should contain encoded (bytes16 proposalId, uint8 voteOption)
+        // ABI-encoded: 32 bytes for bytes16 (padded) + 32 bytes for uint8 (padded)
+        assert_eq!(action.data.len(), 64);
+    }
+
+    #[test]
+    fn test_proposal_executed_format() {
+        let space_id = make_id(0x01);
+        let proposal_id = make_proposal_id(0xA1);
+
+        let action = proposal_executed(space_id, proposal_id);
+
+        assert_eq!(action.from_id, space_id.to_vec());
+        assert_eq!(action.to_id, space_id.to_vec()); // from_id == to_id for DAOSpace
+        assert_eq!(action.action, actions::PROPOSAL_EXECUTED.to_vec());
+        // Topic is proposal_id padded to 32 bytes
+        assert_eq!(action.topic.len(), 32);
+        assert_eq!(&action.topic[..16], &proposal_id);
     }
 
     #[test]
