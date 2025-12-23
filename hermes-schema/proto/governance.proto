@@ -33,15 +33,73 @@ enum ProposalActionType {
   PROPOSAL_ACTION_PING = 10;
 }
 
+// Decoded action: add a member to the space
+message AddMemberAction {
+  bytes target_address = 1;  // 20 bytes - address to add as member
+}
+
+// Decoded action: remove a member from the space
+message RemoveMemberAction {
+  bytes target_address = 1;  // 20 bytes - address to remove
+}
+
+// Decoded action: add an editor to the space
+message AddEditorAction {
+  bytes target_address = 1;  // 20 bytes - address to add as editor
+}
+
+// Decoded action: remove an editor from the space
+message RemoveEditorAction {
+  bytes target_address = 1;  // 20 bytes - address to remove
+}
+
+// Decoded action: unflag an editor
+message UnflagEditorAction {
+  bytes target_address = 1;  // 20 bytes - editor address to unflag
+}
+
+// Decoded action: publish content
+message PublishAction {
+  bytes content_uri = 1;  // Content URI (IPFS hash)
+  bytes metadata = 2;     // Edit metadata
+}
+
+// Decoded action: flag content
+message FlagAction {
+  bytes content_id = 1;  // Content identifier being flagged
+}
+
+// Decoded action: unflag content
+message UnflagAction {
+  bytes content_id = 1;  // Content identifier being unflagged
+}
+
+// Decoded action: update voting settings
+message UpdateVotingSettingsAction {
+  uint64 quorum = 1;            // Minimum total votes required
+  uint64 fast_threshold = 2;    // Fast path: absolute YES votes needed
+  uint64 slow_threshold = 3;    // Slow path: percentage of RATIO_BASE (10,000,000)
+  uint64 duration = 4;          // Voting duration
+}
+
 // Action to be executed when proposal passes
 message ProposalAction {
   bytes to = 1;        // 20 bytes - target contract address
   bytes value = 2;     // 32 bytes - uint256 ETH value to send
   bytes data = 3;      // calldata (function selector + encoded args)
 
-  // Decoded arguments (populated based on action type)
-  // For ADD_MEMBER, REMOVE_MEMBER, ADD_EDITOR, REMOVE_EDITOR, UNFLAG_EDITOR:
-  bytes target_address = 4;  // 20 bytes - the address argument
+  // Decoded action (based on function selector in calldata)
+  oneof action {
+    AddMemberAction add_member = 10;
+    RemoveMemberAction remove_member = 11;
+    AddEditorAction add_editor = 12;
+    RemoveEditorAction remove_editor = 13;
+    UnflagEditorAction unflag_editor = 14;
+    PublishAction publish = 15;
+    FlagAction flag = 16;
+    UnflagAction unflag = 17;
+    UpdateVotingSettingsAction update_voting_settings = 18;
+  }
 }
 
 // Voting settings for a proposal, from PROPOSAL_SETTINGS_USED event
