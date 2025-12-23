@@ -4,10 +4,10 @@
 
 use prost::Message;
 use rdkafka::{
-    TopicPartitionList,
     config::ClientConfig,
     consumer::{Consumer, StreamConsumer},
     message::Message as KafkaMessage,
+    TopicPartitionList,
 };
 use std::env;
 use std::time::Duration;

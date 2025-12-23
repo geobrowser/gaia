@@ -13,7 +13,7 @@ mod handlers;
 mod models;
 mod storage;
 
-use consumer::{KafkaConsumer, KgMessage, parse_message};
+use consumer::{parse_message, KafkaConsumer, KgMessage};
 use error::IndexerError;
 use storage::Storage;
 
@@ -46,7 +46,9 @@ impl BlockBuffer {
 
     /// Add an event to the buffer.
     fn push(&mut self, block_number: u64, event: BufferedEvent) {
-        self.first_seen.entry(block_number).or_insert_with(Instant::now);
+        self.first_seen
+            .entry(block_number)
+            .or_insert_with(Instant::now);
         self.events.entry(block_number).or_default().push(event);
     }
 
@@ -210,7 +212,7 @@ async fn main() -> Result<(), IndexerError> {
                                             }
                                         }
 
-                                        if blocks_processed % 10 == 0 && blocks_processed > 0 {
+                                        if blocks_processed.is_multiple_of(10) && blocks_processed > 0 {
                                             info!(
                                                 blocks = blocks_processed,
                                                 messages = processed_count,
@@ -254,7 +256,11 @@ async fn main() -> Result<(), IndexerError> {
             last_stale_check = Instant::now();
             let stale = buffer.stale_blocks();
             for block_number in stale {
-                let event_count = buffer.events.get(&block_number).map(|e| e.len()).unwrap_or(0);
+                let event_count = buffer
+                    .events
+                    .get(&block_number)
+                    .map(|e| e.len())
+                    .unwrap_or(0);
                 warn!(
                     block_number = block_number,
                     event_count = event_count,
@@ -330,12 +336,16 @@ async fn process_message(msg: KgMessage, storage: &Storage) -> Result<usize, Ind
 
             // Bulk insert all operations
             storage.insert_entities(&result.entities, &mut tx).await?;
-            storage.insert_properties(&result.properties, &mut tx).await?;
+            storage
+                .insert_properties(&result.properties, &mut tx)
+                .await?;
             storage.insert_values(&set_values, &mut tx).await?;
             storage.delete_values(&delete_value_ids, &mut tx).await?;
             storage.insert_relations(&set_relations, &mut tx).await?;
             storage.update_relations(&update_relations, &mut tx).await?;
-            storage.unset_relation_fields(&unset_relations, &mut tx).await?;
+            storage
+                .unset_relation_fields(&unset_relations, &mut tx)
+                .await?;
             storage.delete_relations(&delete_relations, &mut tx).await?;
 
             ops
@@ -472,12 +482,16 @@ async fn process_block(
 
                 // Bulk insert all operations
                 storage.insert_entities(&result.entities, &mut tx).await?;
-                storage.insert_properties(&result.properties, &mut tx).await?;
+                storage
+                    .insert_properties(&result.properties, &mut tx)
+                    .await?;
                 storage.insert_values(&set_values, &mut tx).await?;
                 storage.delete_values(&delete_value_ids, &mut tx).await?;
                 storage.insert_relations(&set_relations, &mut tx).await?;
                 storage.update_relations(&update_relations, &mut tx).await?;
-                storage.unset_relation_fields(&unset_relations, &mut tx).await?;
+                storage
+                    .unset_relation_fields(&unset_relations, &mut tx)
+                    .await?;
                 storage.delete_relations(&delete_relations, &mut tx).await?;
 
                 ops

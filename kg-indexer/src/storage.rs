@@ -4,7 +4,10 @@ use uuid::Uuid;
 use crate::error::IndexerError;
 use crate::models::{
     entities::EntityItem,
-    governance::{ProposalActionItem, ProposalActionPayload, ProposalItem, ProposalVoteItem, VoteOption, VotingMode},
+    governance::{
+        ProposalActionItem, ProposalActionPayload, ProposalItem, ProposalVoteItem, VoteOption,
+        VotingMode,
+    },
     membership::{EditorItem, MemberItem},
     properties::{
         DataType, PropertyItem, DATA_TYPE_BOOLEAN, DATA_TYPE_NUMBER, DATA_TYPE_POINT,
@@ -263,13 +266,13 @@ impl Storage {
         );
 
         query_builder.push_values(relations, |mut b, relation| {
-            b.push_bind(&relation.id);
+            b.push_bind(relation.id);
             b.push_bind(&relation.from_space_id);
             b.push_bind(&relation.from_version_id);
             b.push_bind(&relation.to_space_id);
             b.push_bind(&relation.to_version_id);
             b.push_bind(&relation.position);
-            b.push_bind(&relation.verified);
+            b.push_bind(relation.verified);
         });
 
         query_builder.push(
@@ -304,7 +307,7 @@ impl Storage {
 
         query_builder.push_values(relations, |mut b, relation| {
             b.push("(");
-            b.push_bind(&relation.id);
+            b.push_bind(relation.id);
             b.push(", ");
             b.push_bind(relation.from_space_id.unwrap_or(false));
             b.push(", ");
@@ -588,6 +591,7 @@ impl Storage {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub async fn remove_subspaces(
         &self,
         subspaces: &[SubspaceItem],
@@ -618,6 +622,7 @@ impl Storage {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub async fn insert_proposals(
         &self,
         proposals: &[ProposalItem],
@@ -690,6 +695,7 @@ impl Storage {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub async fn insert_proposal_actions(
         &self,
         actions: &[ProposalActionItem],
@@ -725,27 +731,40 @@ impl Storage {
             let mut duration: Option<i64> = None;
 
             let action_type = match &action.payload {
-                ProposalActionPayload::AddMember { target_address: addr } => {
+                ProposalActionPayload::AddMember {
+                    target_address: addr,
+                } => {
                     target_address = Some(addr.as_str());
                     "AddMember"
                 }
-                ProposalActionPayload::RemoveMember { target_address: addr } => {
+                ProposalActionPayload::RemoveMember {
+                    target_address: addr,
+                } => {
                     target_address = Some(addr.as_str());
                     "RemoveMember"
                 }
-                ProposalActionPayload::AddEditor { target_address: addr } => {
+                ProposalActionPayload::AddEditor {
+                    target_address: addr,
+                } => {
                     target_address = Some(addr.as_str());
                     "AddEditor"
                 }
-                ProposalActionPayload::RemoveEditor { target_address: addr } => {
+                ProposalActionPayload::RemoveEditor {
+                    target_address: addr,
+                } => {
                     target_address = Some(addr.as_str());
                     "RemoveEditor"
                 }
-                ProposalActionPayload::UnflagEditor { target_address: addr } => {
+                ProposalActionPayload::UnflagEditor {
+                    target_address: addr,
+                } => {
                     target_address = Some(addr.as_str());
                     "UnflagEditor"
                 }
-                ProposalActionPayload::Publish { content_uri: uri, metadata: meta } => {
+                ProposalActionPayload::Publish {
+                    content_uri: uri,
+                    metadata: meta,
+                } => {
                     content_uri = Some(uri.as_str());
                     if !meta.is_empty() {
                         metadata = Some(meta.as_slice());
@@ -823,6 +842,7 @@ impl Storage {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub async fn insert_proposal_votes(
         &self,
         votes: &[ProposalVoteItem],
@@ -879,6 +899,7 @@ impl Storage {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub async fn update_proposal_executed(
         &self,
         proposal_id: Uuid,
@@ -901,6 +922,7 @@ impl Storage {
     }
 }
 
+#[allow(dead_code)]
 fn string_to_data_type(s: &str) -> Option<DataType> {
     match s {
         DATA_TYPE_STRING => Some(DataType::String),

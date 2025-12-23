@@ -140,8 +140,7 @@ pub fn decode_publish_args(calldata: &[u8]) -> Result<PublishArgs, DecodeError> 
     let (_topic, content_uri, metadata) =
         PublishArgsType::abi_decode(data).map_err(|e| DecodeError::AbiDecode(e.to_string()))?;
 
-    let content_uri_str =
-        String::from_utf8(content_uri.to_vec()).map_err(DecodeError::from)?;
+    let content_uri_str = String::from_utf8(content_uri.to_vec()).map_err(DecodeError::from)?;
 
     Ok(PublishArgs {
         content_uri: content_uri_str,

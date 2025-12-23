@@ -1,8 +1,8 @@
 use prost::Message;
 use rdkafka::{
-    TopicPartitionList,
     config::ClientConfig,
     consumer::{Consumer, DefaultConsumerContext, StreamConsumer},
+    TopicPartitionList,
 };
 use std::env;
 use tracing::{debug, info};
@@ -143,10 +143,7 @@ impl KgMessage {
 }
 
 /// Parse a Kafka message based on its topic
-pub fn parse_message(
-    topic: &str,
-    payload: &[u8],
-) -> Result<KgMessage, IndexerError> {
+pub fn parse_message(topic: &str, payload: &[u8]) -> Result<KgMessage, IndexerError> {
     match topic {
         "knowledge.edits" => {
             let edit = hermes_schema::pb::knowledge::HermesEdit::decode(payload)
@@ -175,10 +172,14 @@ pub fn parse_message(
         }
         "governance.proposals" => {
             // Try to decode as ProposalCreated first, then ProposalExecuted
-            if let Ok(created) = hermes_schema::pb::governance::HermesProposalCreated::decode(payload) {
+            if let Ok(created) =
+                hermes_schema::pb::governance::HermesProposalCreated::decode(payload)
+            {
                 return Ok(KgMessage::ProposalCreated(created));
             }
-            if let Ok(executed) = hermes_schema::pb::governance::HermesProposalExecuted::decode(payload) {
+            if let Ok(executed) =
+                hermes_schema::pb::governance::HermesProposalExecuted::decode(payload)
+            {
                 return Ok(KgMessage::ProposalExecuted(executed));
             }
             Err(IndexerError::decode("governance.proposals message"))

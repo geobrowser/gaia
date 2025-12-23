@@ -29,7 +29,10 @@ pub enum ProposalActionPayload {
     /// Unflag an editor
     UnflagEditor { target_address: String },
     /// Publish content
-    Publish { content_uri: String, metadata: Vec<u8> },
+    Publish {
+        content_uri: String,
+        metadata: Vec<u8>,
+    },
     /// Flag content
     Flag { content_id: Vec<u8> },
     /// Unflag content
@@ -46,6 +49,7 @@ pub enum ProposalActionPayload {
 }
 
 /// A governance proposal
+#[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub struct ProposalItem {
     pub id: Uuid,
@@ -63,6 +67,7 @@ pub struct ProposalItem {
 
 /// An action within a proposal.
 /// ID is deterministic (derived from proposal_id + index).
+#[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub struct ProposalActionItem {
     pub id: Uuid,
@@ -71,6 +76,7 @@ pub struct ProposalActionItem {
 }
 
 /// A vote on a proposal
+#[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub struct ProposalVoteItem {
     pub proposal_id: Uuid,

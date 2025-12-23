@@ -1,23 +1,25 @@
 use hermes_schema::pb::governance::{
-    HermesProposalCreated, HermesProposalExecuted, HermesProposalVoted,
+    proposal_action::Action, HermesProposalCreated, HermesProposalExecuted, HermesProposalVoted,
     ProposalVoteOption, VotingMode as ProtoVotingMode,
-    proposal_action::Action,
 };
 use indexer_utils::checksum_address;
 use uuid::Uuid;
 
 use crate::error::HandlerError;
 use crate::models::governance::{
-    ProposalActionItem, ProposalActionPayload, ProposalItem, ProposalVoteItem, VoteOption, VotingMode,
+    ProposalActionItem, ProposalActionPayload, ProposalItem, ProposalVoteItem, VoteOption,
+    VotingMode,
 };
 
 /// Result of processing a proposal creation
+#[allow(dead_code)]
 pub struct ProposalResult {
     pub proposal: ProposalItem,
     pub actions: Vec<ProposalActionItem>,
 }
 
 /// Result of processing a proposal execution
+#[allow(dead_code)]
 pub struct ProposalExecutionResult {
     pub proposal_id: Uuid,
     pub space_id: Uuid,
@@ -25,7 +27,9 @@ pub struct ProposalExecutionResult {
 }
 
 /// Process a HermesProposalCreated message
-pub fn handle_proposal_created(msg: &HermesProposalCreated) -> Result<ProposalResult, HandlerError> {
+pub fn handle_proposal_created(
+    msg: &HermesProposalCreated,
+) -> Result<ProposalResult, HandlerError> {
     let proposal_id = Uuid::from_slice(&msg.proposal_id)?;
     let space_id = Uuid::from_slice(&msg.space_id)?;
     let proposer_id = Uuid::from_slice(&msg.proposer_id)?;
@@ -109,11 +113,7 @@ pub fn handle_proposal_executed(
     let proposal_id = Uuid::from_slice(&msg.proposal_id)?;
     let space_id = Uuid::from_slice(&msg.space_id)?;
 
-    let executed_at = msg
-        .meta
-        .as_ref()
-        .map(|m| m.created_at as i64)
-        .unwrap_or(0);
+    let executed_at = msg.meta.as_ref().map(|m| m.created_at as i64).unwrap_or(0);
 
     Ok(ProposalExecutionResult {
         proposal_id,
@@ -124,8 +124,7 @@ pub fn handle_proposal_executed(
 
 /// Namespace UUID for generating deterministic action IDs
 const PROPOSAL_ACTION_NAMESPACE: Uuid = Uuid::from_bytes([
-    0x70, 0x72, 0x6f, 0x70, 0x6f, 0x73, 0x61, 0x6c,
-    0x5f, 0x61, 0x63, 0x74, 0x69, 0x6f, 0x6e, 0x73,
+    0x70, 0x72, 0x6f, 0x70, 0x6f, 0x73, 0x61, 0x6c, 0x5f, 0x61, 0x63, 0x74, 0x69, 0x6f, 0x6e, 0x73,
 ]);
 
 fn map_proposal_action(

@@ -66,6 +66,7 @@ impl RelationOp {
         }
     }
 
+    #[allow(dead_code)]
     pub fn space_id(&self) -> Uuid {
         match self {
             RelationOp::Create(r) => r.space_id,

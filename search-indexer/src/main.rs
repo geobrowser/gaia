@@ -7,7 +7,7 @@ use dotenv::dotenv;
 use search_indexer::{Dependencies, IndexingError};
 use std::env;
 use tracing::{error, info};
-use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 /// Initialize tracing/logging.
 fn init_tracing() -> Result<(), IndexingError> {
