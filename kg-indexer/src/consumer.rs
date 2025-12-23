@@ -50,6 +50,8 @@ impl KafkaConsumer {
             "space.creations".to_string(),
             "space.membership".to_string(),
             "space.trust.extensions".to_string(),
+            "governance.proposals".to_string(),
+            "governance.votes".to_string(),
         ];
 
         info!(
@@ -104,6 +106,9 @@ pub enum KgMessage {
     RoleGranted(hermes_schema::pb::membership::HermesRoleGranted),
     RoleRevoked(hermes_schema::pb::membership::HermesRoleRevoked),
     TrustExtension(hermes_schema::pb::space::HermesSpaceTrustExtension),
+    ProposalCreated(hermes_schema::pb::governance::HermesProposalCreated),
+    ProposalVoted(hermes_schema::pb::governance::HermesProposalVoted),
+    ProposalExecuted(hermes_schema::pb::governance::HermesProposalExecuted),
 }
 
 impl KgMessage {
@@ -115,6 +120,9 @@ impl KgMessage {
             KgMessage::RoleGranted(r) => r.meta.as_ref(),
             KgMessage::RoleRevoked(r) => r.meta.as_ref(),
             KgMessage::TrustExtension(t) => t.meta.as_ref(),
+            KgMessage::ProposalCreated(p) => p.meta.as_ref(),
+            KgMessage::ProposalVoted(v) => v.meta.as_ref(),
+            KgMessage::ProposalExecuted(e) => e.meta.as_ref(),
         }
     }
 
@@ -164,6 +172,21 @@ pub fn parse_message(
             let extension = hermes_schema::pb::space::HermesSpaceTrustExtension::decode(payload)
                 .map_err(|e| IndexerError::decode(format!("HermesSpaceTrustExtension: {}", e)))?;
             Ok(KgMessage::TrustExtension(extension))
+        }
+        "governance.proposals" => {
+            // Try to decode as ProposalCreated first, then ProposalExecuted
+            if let Ok(created) = hermes_schema::pb::governance::HermesProposalCreated::decode(payload) {
+                return Ok(KgMessage::ProposalCreated(created));
+            }
+            if let Ok(executed) = hermes_schema::pb::governance::HermesProposalExecuted::decode(payload) {
+                return Ok(KgMessage::ProposalExecuted(executed));
+            }
+            Err(IndexerError::decode("governance.proposals message"))
+        }
+        "governance.votes" => {
+            let voted = hermes_schema::pb::governance::HermesProposalVoted::decode(payload)
+                .map_err(|e| IndexerError::decode(format!("HermesProposalVoted: {}", e)))?;
+            Ok(KgMessage::ProposalVoted(voted))
         }
         _ => Err(IndexerError::decode(format!("unknown topic: {}", topic))),
     }

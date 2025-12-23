@@ -1,4 +1,5 @@
 pub mod entities;
+pub mod governance;
 pub mod membership;
 pub mod properties;
 pub mod relations;
