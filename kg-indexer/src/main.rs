@@ -377,6 +377,32 @@ async fn process_message(msg: KgMessage, storage: &Storage) -> Result<usize, Ind
                 0
             }
         }
+        KgMessage::ProposalCreated(event) => {
+            // Parse into DTOs - storage writes handled by gaia-i6e
+            let _result = handlers::governance::handle_proposal_created(&event)?;
+            debug!(
+                proposal_id = %hex::encode(&event.proposal_id),
+                actions = event.actions.len(),
+                "Parsed ProposalCreated (storage pending)"
+            );
+            0 // No DB ops yet
+        }
+        KgMessage::ProposalVoted(event) => {
+            let _vote = handlers::governance::handle_proposal_voted(&event)?;
+            debug!(
+                proposal_id = %hex::encode(&event.proposal_id),
+                "Parsed ProposalVoted (storage pending)"
+            );
+            0
+        }
+        KgMessage::ProposalExecuted(event) => {
+            let _execution = handlers::governance::handle_proposal_executed(&event)?;
+            debug!(
+                proposal_id = %hex::encode(&event.proposal_id),
+                "Parsed ProposalExecuted (storage pending)"
+            );
+            0
+        }
     };
 
     tx.commit().await?;
@@ -492,6 +518,32 @@ async fn process_block(
                 } else {
                     0
                 }
+            }
+            KgMessage::ProposalCreated(event) => {
+                // Parse into DTOs - storage writes handled by gaia-i6e
+                let _result = handlers::governance::handle_proposal_created(event)?;
+                debug!(
+                    proposal_id = %hex::encode(&event.proposal_id),
+                    actions = event.actions.len(),
+                    "Parsed ProposalCreated (storage pending)"
+                );
+                0
+            }
+            KgMessage::ProposalVoted(event) => {
+                let _vote = handlers::governance::handle_proposal_voted(event)?;
+                debug!(
+                    proposal_id = %hex::encode(&event.proposal_id),
+                    "Parsed ProposalVoted (storage pending)"
+                );
+                0
+            }
+            KgMessage::ProposalExecuted(event) => {
+                let _execution = handlers::governance::handle_proposal_executed(event)?;
+                debug!(
+                    proposal_id = %hex::encode(&event.proposal_id),
+                    "Parsed ProposalExecuted (storage pending)"
+                );
+                0
             }
         };
 
