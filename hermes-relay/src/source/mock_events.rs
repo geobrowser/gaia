@@ -995,6 +995,11 @@ pub mod test_topology {
             VoteOption::Yes,
         ));
         actions.push(proposal_executed(SPACE_A, PROPOSAL_1));
+        // Proposal execution emits events from executed actions
+        // The proposal had add_member([0x11; 20]), so MEMBER_ADDED follows
+        let mut proposed_member_address = [0u8; 32];
+        proposed_member_address[12..32].copy_from_slice(&[0x11; 20]);
+        actions.push(member_added(SPACE_A, proposed_member_address));
 
         // Phase 7: Edits
         actions.push(edit_published(ROOT_SPACE_ID, "QmRootEdit1CreatePersons"));
