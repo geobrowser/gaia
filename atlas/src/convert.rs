@@ -59,32 +59,26 @@ pub fn convert_action(action: &Action, meta: &BlockMetadata) -> Option<SpaceTopo
 
 /// Convert a SPACE_REGISTERED action to SpaceCreated event.
 ///
-/// Action format:
-/// - `from_id`: space_id (16 bytes)
-/// - `topic`: owner address (32 bytes) for personal spaces
-/// - `data`: DAO membership data (if DAO space)
+/// New action format (Space Registry v2):
+/// - `from_id`: zeros (16 bytes)
+/// - `to_id`: space_id (16 bytes)
+/// - `topic`: registrar address as bytes32(bytes20(address))
+///   - For EOA spaces: the owner's address
+///   - For DAO spaces: the DAOSpace contract address
+/// - `data`: empty (space type comes from separate SPACE_TYPE_DECLARED event)
+///
+/// Note: Space type (Personal vs DAO) is determined by a separate SPACE_TYPE_DECLARED
+/// event, not from this event. We default to Personal with the registrar as owner.
 fn convert_space_registered(action: &Action, meta: &BlockMetadata) -> Option<SpaceTopologyEvent> {
-    let space_id = to_array::<16>(&action.from_id)?;
+    // Space ID is now in to_id (from_id is zeros in new format)
+    let space_id = to_array::<16>(&action.to_id)?;
 
-    // For personal spaces, topic contains the owner address
-    // For DAO spaces, topic is zeroed and data contains editor/member lists
-    let space_type = if action.data.is_empty() {
-        // Personal space - topic is owner address
-        let owner = to_array::<32>(&action.topic)?;
-        SpaceType::Personal { owner }
-    } else {
-        // DAO space - parse editor/member lists from data
-        let (initial_editors, initial_members) = parse_dao_data(&action.data)?;
-        SpaceType::Dao {
-            initial_editors,
-            initial_members,
-        }
-    };
+    // Registrar address is in topic - this is the owner for personal spaces
+    let owner = to_array::<32>(&action.topic)?;
+    let space_type = SpaceType::Personal { owner };
 
-    // For space creation, the topic_id is derived from the space_id
-    // In the mock implementation, spaces announce a topic at creation
-    // We use the first 16 bytes of the topic field as topic_id
-    let topic_id = to_array::<16>(&action.topic[..16.min(action.topic.len())]).unwrap_or([0u8; 16]);
+    // Topic ID defaults to zeros - spaces can declare topics separately
+    let topic_id = [0u8; 16];
 
     Some(SpaceTopologyEvent {
         meta: meta.clone(),
@@ -94,59 +88,6 @@ fn convert_space_registered(action: &Action, meta: &BlockMetadata) -> Option<Spa
             space_type,
         }),
     })
-}
-
-/// Parse DAO data field to extract initial editors and members.
-///
-/// Format:
-/// - 2 bytes: number of editors (big-endian u16)
-/// - N * 16 bytes: editor space IDs
-/// - 2 bytes: number of members (big-endian u16)
-/// - M * 16 bytes: member space IDs
-#[allow(clippy::type_complexity)]
-fn parse_dao_data(data: &[u8]) -> Option<(Vec<[u8; 16]>, Vec<[u8; 16]>)> {
-    if data.len() < 4 {
-        return Some((vec![], vec![]));
-    }
-
-    let mut offset = 0;
-
-    // Read number of editors
-    let num_editors = u16::from_be_bytes([data[offset], data[offset + 1]]) as usize;
-    offset += 2;
-
-    // Read editor IDs
-    let mut editors = Vec::with_capacity(num_editors);
-    for _ in 0..num_editors {
-        if offset + 16 > data.len() {
-            break;
-        }
-        if let Some(id) = to_array::<16>(&data[offset..offset + 16]) {
-            editors.push(id);
-        }
-        offset += 16;
-    }
-
-    // Read number of members
-    if offset + 2 > data.len() {
-        return Some((editors, vec![]));
-    }
-    let num_members = u16::from_be_bytes([data[offset], data[offset + 1]]) as usize;
-    offset += 2;
-
-    // Read member IDs
-    let mut members = Vec::with_capacity(num_members);
-    for _ in 0..num_members {
-        if offset + 16 > data.len() {
-            break;
-        }
-        if let Some(id) = to_array::<16>(&data[offset..offset + 16]) {
-            members.push(id);
-        }
-        offset += 16;
-    }
-
-    Some((editors, members))
 }
 
 /// Convert a SUBSPACE_VERIFIED action to TrustExtended event.
@@ -226,7 +167,7 @@ fn convert_subspace_topic_declared(
 mod tests {
     use super::*;
     use hermes_relay::source::mock_events::{
-        self, make_address, make_id, space_created, space_created_dao, subspace_related,
+        self, make_address, make_id, space_id_registered, subspace_related,
         subspace_topic_declared, subspace_verified,
     };
 
@@ -240,8 +181,9 @@ mod tests {
     }
 
     #[test]
-    fn test_convert_space_created_personal() {
-        let action = space_created(make_id(0x01), make_address(0xAA));
+    fn test_convert_space_id_registered() {
+        // New format: space_id in to_id, registrar in topic
+        let action = space_id_registered(make_id(0x01), make_address(0xAA));
         let meta = test_meta();
 
         let event = convert_action(&action, &meta).expect("should convert");
@@ -250,38 +192,13 @@ mod tests {
         match event.payload {
             SpaceTopologyPayload::SpaceCreated(created) => {
                 assert_eq!(created.space_id, make_id(0x01));
+                // All SPACE_ID_REGISTERED events are treated as Personal
+                // (DAO detection requires separate SPACE_TYPE_DECLARED event)
                 match created.space_type {
                     SpaceType::Personal { owner } => {
                         assert_eq!(owner, make_address(0xAA));
                     }
                     _ => panic!("Expected Personal space type"),
-                }
-            }
-            _ => panic!("Expected SpaceCreated"),
-        }
-    }
-
-    #[test]
-    fn test_convert_space_created_dao() {
-        let action = space_created_dao(make_id(0x10), vec![make_id(0x11)], vec![make_id(0x12)]);
-        let meta = test_meta();
-
-        let event = convert_action(&action, &meta).expect("should convert");
-
-        match event.payload {
-            SpaceTopologyPayload::SpaceCreated(created) => {
-                assert_eq!(created.space_id, make_id(0x10));
-                match created.space_type {
-                    SpaceType::Dao {
-                        initial_editors,
-                        initial_members,
-                    } => {
-                        assert_eq!(initial_editors.len(), 1);
-                        assert_eq!(initial_editors[0], make_id(0x11));
-                        assert_eq!(initial_members.len(), 1);
-                        assert_eq!(initial_members[0], make_id(0x12));
-                    }
-                    _ => panic!("Expected Dao space type"),
                 }
             }
             _ => panic!("Expected SpaceCreated"),

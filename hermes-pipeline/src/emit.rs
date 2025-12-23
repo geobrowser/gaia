@@ -71,7 +71,7 @@ impl KafkaEvent for HermesCreateSpace {
 
     fn headers(&self) -> OwnedHeaders {
         let space_type = match &self.payload {
-            Some(hermes_create_space::Payload::PersonalSpace(_)) => "PERSONAL",
+            Some(hermes_create_space::Payload::EoaSpace(_)) => "EOA",
             Some(hermes_create_space::Payload::DefaultDaoSpace(_)) => "DEFAULT_DAO",
             None => "UNKNOWN",
         };
@@ -459,15 +459,14 @@ mod tests {
 
     #[test]
     fn test_proposal_created_key() {
-        use hermes_schema::pb::governance::{ProposalActionType, VotingMode};
+        use hermes_schema::pb::governance::VotingMode;
         let event = HermesProposalCreated {
             space_id: vec![0xAB; 16],
-            proposal_id: vec![0xCD; 32],
+            proposer_id: vec![0x11; 16],
+            proposal_id: vec![0xCD; 16],
             voting_mode: VotingMode::Fast as i32,
-            action_index: 0,
-            action_count: 1,
-            action_type: ProposalActionType::AddMember as i32,
-            action: None,
+            actions: vec![],
+            settings: None,
             meta: None,
         };
         assert_eq!(event.key(), vec![0xAB; 16]);
@@ -479,8 +478,8 @@ mod tests {
         let event = HermesProposalVoted {
             voter_id: vec![0x11; 16],
             space_id: vec![0xAB; 16],
-            proposal_id: vec![0xCD; 32],
-            vote: ProposalVoteOption::Yes as i32,
+            proposal_id: vec![0xCD; 16],
+            vote: ProposalVoteOption::VoteOptionYes as i32,
             meta: None,
         };
         // Should key by space_id, not voter_id
@@ -491,7 +490,7 @@ mod tests {
     fn test_proposal_executed_key() {
         let event = HermesProposalExecuted {
             space_id: vec![0xAB; 16],
-            proposal_id: vec![0xCD; 32],
+            proposal_id: vec![0xCD; 16],
             meta: None,
         };
         assert_eq!(event.key(), vec![0xAB; 16]);

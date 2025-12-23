@@ -10,8 +10,8 @@ pub fn handle_create_space(space: &HermesCreateSpace) -> Result<SpaceItem, Handl
     let space_id = Uuid::from_slice(&space.space_id)?;
 
     let space_item = match &space.payload {
-        Some(Payload::PersonalSpace(personal)) => {
-            let owner_address = hex::encode(&personal.owner);
+        Some(Payload::EoaSpace(eoa)) => {
+            let owner_address = hex::encode(&eoa.owner);
             let checksummed = checksum_address(format!("0x{}", owner_address));
 
             SpaceItem {

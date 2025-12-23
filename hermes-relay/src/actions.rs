@@ -66,6 +66,13 @@ pub use hermes_substream::ACTION_DOWNVOTED as DOWNVOTED;
 pub use hermes_substream::ACTION_UNVOTED as UNVOTED;
 pub use hermes_substream::ACTION_UPVOTED as UPVOTED;
 
+// =============================================================================
+// Space Type Constants
+// =============================================================================
+
+pub use hermes_substream::SPACE_TYPE_DAO;
+pub use hermes_substream::SPACE_TYPE_EOA;
+
 /// Check if an action matches a specific action type.
 pub fn matches(action_bytes: &[u8], action_type: &[u8; 32]) -> bool {
     action_bytes == action_type
