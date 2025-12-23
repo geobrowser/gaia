@@ -16,11 +16,16 @@ use hermes_instrumentation::{debug, debug_span, warn};
 
 use hermes_relay::{Action, actions};
 use hermes_schema::pb::governance::{
-    HermesProposalCreated, HermesProposalExecuted, HermesProposalVoted, ProposalAction,
-    ProposalSettings, ProposalVoteOption, VotingMode,
+    AddEditorAction, AddMemberAction, FlagAction, HermesProposalCreated, HermesProposalExecuted,
+    HermesProposalVoted, ProposalAction, ProposalSettings, ProposalVoteOption, PublishAction,
+    RemoveEditorAction, RemoveMemberAction, UnflagAction, UnflagEditorAction,
+    UpdateVotingSettingsAction, VotingMode, proposal_action,
 };
 
-use crate::decode::{self, ProposalActionType, decode_address_arg};
+use crate::decode::{
+    self, ProposalActionType, decode_address_arg, decode_flag_args, decode_publish_args,
+    decode_voting_settings_args,
+};
 
 use super::BlockMetadata;
 
@@ -146,6 +151,76 @@ pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformRe
     Ok(result)
 }
 
+/// Decode proposal action calldata into the appropriate oneof variant.
+fn decode_proposal_action(
+    action_type: &ProposalActionType,
+    calldata: &[u8],
+) -> Option<proposal_action::Action> {
+    match action_type {
+        ProposalActionType::AddMember => {
+            let addr = decode_address_arg(calldata)?;
+            Some(proposal_action::Action::AddMember(AddMemberAction {
+                target_address: addr,
+            }))
+        }
+        ProposalActionType::RemoveMember => {
+            let addr = decode_address_arg(calldata)?;
+            Some(proposal_action::Action::RemoveMember(RemoveMemberAction {
+                target_address: addr,
+            }))
+        }
+        ProposalActionType::AddEditor => {
+            let addr = decode_address_arg(calldata)?;
+            Some(proposal_action::Action::AddEditor(AddEditorAction {
+                target_address: addr,
+            }))
+        }
+        ProposalActionType::RemoveEditor => {
+            let addr = decode_address_arg(calldata)?;
+            Some(proposal_action::Action::RemoveEditor(RemoveEditorAction {
+                target_address: addr,
+            }))
+        }
+        ProposalActionType::UnflagEditor => {
+            let addr = decode_address_arg(calldata)?;
+            Some(proposal_action::Action::UnflagEditor(UnflagEditorAction {
+                target_address: addr,
+            }))
+        }
+        ProposalActionType::Publish => {
+            let args = decode_publish_args(calldata).ok()?;
+            Some(proposal_action::Action::Publish(PublishAction {
+                content_uri: args.content_uri,
+                metadata: args.metadata,
+            }))
+        }
+        ProposalActionType::Flag => {
+            let args = decode_flag_args(calldata).ok()?;
+            Some(proposal_action::Action::Flag(FlagAction {
+                content_id: args.content_id,
+            }))
+        }
+        ProposalActionType::Unflag => {
+            let args = decode_flag_args(calldata).ok()?;
+            Some(proposal_action::Action::Unflag(UnflagAction {
+                content_id: args.content_id,
+            }))
+        }
+        ProposalActionType::UpdateVotingSettings => {
+            let args = decode_voting_settings_args(calldata).ok()?;
+            Some(proposal_action::Action::UpdateVotingSettings(
+                UpdateVotingSettingsAction {
+                    quorum: args.quorum,
+                    fast_threshold: args.fast_threshold,
+                    slow_threshold: args.slow_threshold,
+                    duration: args.duration,
+                },
+            ))
+        }
+        ProposalActionType::Ping | ProposalActionType::Unknown => None,
+    }
+}
+
 /// Parse a PROPOSAL_CREATED action into pending data.
 ///
 /// The action structure for PROPOSAL_CREATED:
@@ -178,16 +253,11 @@ fn parse_proposal_created(action: &Action, sequence: u32) -> Option<ProposalCrea
         .into_iter()
         .map(|a| {
             let action_type = ProposalActionType::from_calldata(&a.data);
-            let target_address = if action_type.has_address_arg() {
-                decode_address_arg(&a.data).unwrap_or_default()
-            } else {
-                vec![]
-            };
+            let decoded_action = decode_proposal_action(&action_type, &a.data);
 
             debug!(
                 action_type = ?action_type,
                 target = %hex::encode(&a.to),
-                target_address = %hex::encode(&target_address),
                 "Decoded proposal action"
             );
 
@@ -195,7 +265,7 @@ fn parse_proposal_created(action: &Action, sequence: u32) -> Option<ProposalCrea
                 to: a.to,
                 value: a.value,
                 data: a.data,
-                target_address,
+                action: decoded_action,
             }
         })
         .collect();

@@ -88,18 +88,6 @@ impl ProposalActionType {
             _ => Self::Unknown,
         }
     }
-
-    /// Returns true if this action type takes an address argument.
-    pub fn has_address_arg(&self) -> bool {
-        matches!(
-            self,
-            Self::AddMember
-                | Self::RemoveMember
-                | Self::AddEditor
-                | Self::RemoveEditor
-                | Self::UnflagEditor
-        )
-    }
 }
 
 /// Decode an address argument from calldata.
@@ -118,6 +106,124 @@ pub fn decode_address_arg(calldata: &[u8]) -> Option<Vec<u8>> {
     // ABI-encoded address is 32 bytes, with address in last 20 bytes
     // bytes 4..16 are padding (zeros), bytes 16..36 are the address
     Some(calldata[16..36].to_vec())
+}
+
+/// Decoded publish action arguments.
+#[derive(Debug, Clone)]
+pub struct PublishArgs {
+    /// Content URI (IPFS hash, etc.)
+    pub content_uri: Vec<u8>,
+    /// Edit metadata
+    pub metadata: Vec<u8>,
+}
+
+/// Decode publish(bytes32, bytes, bytes) calldata.
+///
+/// The calldata is:
+/// - 4 bytes: function selector
+/// - ABI-encoded (bytes32 topic, bytes contentUri, bytes metadata)
+///
+/// We skip the topic and return contentUri and metadata.
+pub fn decode_publish_args(calldata: &[u8]) -> Result<PublishArgs, DecodeError> {
+    if calldata.len() < 4 {
+        return Err(DecodeError::DataTooShort {
+            expected: 4,
+            actual: calldata.len(),
+        });
+    }
+
+    // Skip the 4-byte selector
+    let data = &calldata[4..];
+
+    // Decode (bytes32, bytes, bytes)
+    type PublishArgsType = sol! { (bytes32, bytes, bytes) };
+    let (_topic, content_uri, metadata) =
+        PublishArgsType::abi_decode(data).map_err(|e| DecodeError::AbiDecode(e.to_string()))?;
+
+    Ok(PublishArgs {
+        content_uri: content_uri.to_vec(),
+        metadata: metadata.to_vec(),
+    })
+}
+
+/// Decoded flag/unflag action arguments.
+#[derive(Debug, Clone)]
+pub struct FlagArgs {
+    /// Content identifier being flagged/unflagged
+    pub content_id: Vec<u8>,
+}
+
+/// Decode flag(bytes32, bytes) or unflag(bytes32, bytes) calldata.
+///
+/// The calldata is:
+/// - 4 bytes: function selector
+/// - ABI-encoded (bytes32 topic, bytes contentId)
+///
+/// We skip the topic and return contentId.
+pub fn decode_flag_args(calldata: &[u8]) -> Result<FlagArgs, DecodeError> {
+    if calldata.len() < 4 {
+        return Err(DecodeError::DataTooShort {
+            expected: 4,
+            actual: calldata.len(),
+        });
+    }
+
+    // Skip the 4-byte selector
+    let data = &calldata[4..];
+
+    // Decode (bytes32, bytes)
+    type FlagArgsType = sol! { (bytes32, bytes) };
+    let (_topic, content_id) =
+        FlagArgsType::abi_decode(data).map_err(|e| DecodeError::AbiDecode(e.to_string()))?;
+
+    Ok(FlagArgs {
+        content_id: content_id.to_vec(),
+    })
+}
+
+/// Decoded voting settings update arguments.
+#[derive(Debug, Clone)]
+pub struct VotingSettingsArgs {
+    /// Minimum total votes required
+    pub quorum: u64,
+    /// Fast path: absolute YES votes needed
+    pub fast_threshold: u64,
+    /// Slow path: percentage of RATIO_BASE (10,000,000)
+    pub slow_threshold: u64,
+    /// Voting duration
+    pub duration: u64,
+}
+
+/// Decode updateVotingSettings((uint256,uint256,uint256,uint256)) calldata.
+///
+/// The calldata is:
+/// - 4 bytes: function selector
+/// - ABI-encoded tuple (quorum, fastThreshold, slowThreshold, duration)
+pub fn decode_voting_settings_args(calldata: &[u8]) -> Result<VotingSettingsArgs, DecodeError> {
+    if calldata.len() < 4 {
+        return Err(DecodeError::DataTooShort {
+            expected: 4,
+            actual: calldata.len(),
+        });
+    }
+
+    // Skip the 4-byte selector
+    let data = &calldata[4..];
+
+    // Decode ((uint256, uint256, uint256, uint256))
+    // Note: Solidity struct is encoded as a tuple
+    type VotingSettingsArgsType = sol! { (uint256, uint256, uint256, uint256) };
+    let (quorum, fast_threshold, slow_threshold, duration) =
+        VotingSettingsArgsType::abi_decode(data)
+            .map_err(|e| DecodeError::AbiDecode(e.to_string()))?;
+
+    // Convert U256 to u64, saturating if too large
+    Ok(VotingSettingsArgs {
+        quorum: quorum.try_into().unwrap_or(u64::MAX),
+        fast_threshold: fast_threshold.try_into().unwrap_or(u64::MAX),
+        slow_threshold: slow_threshold.try_into().unwrap_or(u64::MAX),
+        duration: duration.try_into().unwrap_or(u64::MAX),
+    })
 }
 
 // ============================================================================
@@ -540,22 +646,6 @@ mod tests {
             ProposalActionType::from_calldata(&[]),
             ProposalActionType::Unknown
         );
-    }
-
-    #[test]
-    fn test_proposal_action_type_has_address_arg() {
-        assert!(ProposalActionType::AddMember.has_address_arg());
-        assert!(ProposalActionType::RemoveMember.has_address_arg());
-        assert!(ProposalActionType::AddEditor.has_address_arg());
-        assert!(ProposalActionType::RemoveEditor.has_address_arg());
-        assert!(ProposalActionType::UnflagEditor.has_address_arg());
-
-        assert!(!ProposalActionType::Unknown.has_address_arg());
-        assert!(!ProposalActionType::Publish.has_address_arg());
-        assert!(!ProposalActionType::Flag.has_address_arg());
-        assert!(!ProposalActionType::Unflag.has_address_arg());
-        assert!(!ProposalActionType::UpdateVotingSettings.has_address_arg());
-        assert!(!ProposalActionType::Ping.has_address_arg());
     }
 
     #[test]

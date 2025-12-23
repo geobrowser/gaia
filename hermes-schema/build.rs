@@ -2,6 +2,9 @@ use std::io::Result;
 // use std::{fs, path::PathBuf};
 
 fn main() -> Result<()> {
+    // Proto generation is disabled - generated files are checked into the repo.
+    // To regenerate, uncomment the code below and ensure protoc is installed.
+
     // let out_dir = PathBuf::from("src/pb");
     // fs::create_dir_all(&out_dir).expect("Failed to create output directory");
 
