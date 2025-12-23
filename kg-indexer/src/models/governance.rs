@@ -10,7 +10,6 @@ pub enum VotingMode {
 /// Vote option for governance proposals
 #[derive(Clone, Debug, PartialEq)]
 pub enum VoteOption {
-    None,
     Yes,
     No,
     Abstain,
@@ -51,10 +50,10 @@ pub enum ProposalActionPayload {
 pub struct ProposalItem {
     pub id: Uuid,
     pub space_id: Uuid,
-    pub proposer_id: Uuid,
+    pub proposed_by: Uuid,
     pub voting_mode: VotingMode,
-    pub start_date: i64,
-    pub end_date: i64,
+    pub start_time: i64,
+    pub end_time: i64,
     pub quorum: i64,
     pub threshold: i64,
     pub executed_at: Option<i64>,
@@ -65,6 +64,7 @@ pub struct ProposalItem {
 /// An action within a proposal
 #[derive(Clone, Debug)]
 pub struct ProposalActionItem {
+    pub id: Uuid,
     pub proposal_id: Uuid,
     pub index: i32,
     pub to_address: String,

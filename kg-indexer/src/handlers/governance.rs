@@ -52,10 +52,10 @@ pub fn handle_proposal_created(msg: &HermesProposalCreated) -> Result<ProposalRe
     let proposal = ProposalItem {
         id: proposal_id,
         space_id,
-        proposer_id,
+        proposed_by: proposer_id,
         voting_mode,
-        start_date: settings.start_date as i64,
-        end_date: settings.last_date as i64,
+        start_time: settings.start_date as i64,
+        end_time: settings.last_date as i64,
         quorum: settings.quorum as i64,
         threshold,
         executed_at: None,
@@ -83,7 +83,8 @@ pub fn handle_proposal_voted(msg: &HermesProposalVoted) -> Result<ProposalVoteIt
         Ok(ProposalVoteOption::VoteOptionYes) => VoteOption::Yes,
         Ok(ProposalVoteOption::VoteOptionNo) => VoteOption::No,
         Ok(ProposalVoteOption::VoteOptionAbstain) => VoteOption::Abstain,
-        Ok(ProposalVoteOption::VoteOptionNone) | Err(_) => VoteOption::None,
+        // Default to Abstain for unknown vote types
+        Ok(ProposalVoteOption::VoteOptionNone) | Err(_) => VoteOption::Abstain,
     };
 
     let meta = msg.meta.as_ref();
@@ -165,6 +166,7 @@ fn map_proposal_action(
     };
 
     ProposalActionItem {
+        id: Uuid::new_v4(),
         proposal_id,
         index,
         to_address,

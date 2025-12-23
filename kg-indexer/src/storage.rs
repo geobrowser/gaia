@@ -629,10 +629,10 @@ impl Storage {
 
         let mut ids = Vec::with_capacity(proposals.len());
         let mut space_ids = Vec::with_capacity(proposals.len());
-        let mut proposer_ids = Vec::with_capacity(proposals.len());
+        let mut proposed_bys = Vec::with_capacity(proposals.len());
         let mut voting_modes = Vec::with_capacity(proposals.len());
-        let mut start_dates = Vec::with_capacity(proposals.len());
-        let mut end_dates = Vec::with_capacity(proposals.len());
+        let mut start_times = Vec::with_capacity(proposals.len());
+        let mut end_times = Vec::with_capacity(proposals.len());
         let mut quorums = Vec::with_capacity(proposals.len());
         let mut thresholds = Vec::with_capacity(proposals.len());
         let mut executed_ats: Vec<Option<i64>> = Vec::with_capacity(proposals.len());
@@ -642,13 +642,13 @@ impl Storage {
         for proposal in proposals {
             ids.push(proposal.id);
             space_ids.push(proposal.space_id);
-            proposer_ids.push(proposal.proposer_id);
+            proposed_bys.push(proposal.proposed_by);
             voting_modes.push(match proposal.voting_mode {
                 VotingMode::Fast => "Fast",
                 VotingMode::Slow => "Slow",
             });
-            start_dates.push(proposal.start_date);
-            end_dates.push(proposal.end_date);
+            start_times.push(proposal.start_time);
+            end_times.push(proposal.end_time);
             quorums.push(proposal.quorum);
             thresholds.push(proposal.threshold);
             executed_ats.push(proposal.executed_at);
@@ -658,15 +658,15 @@ impl Storage {
 
         let query = r#"
             INSERT INTO proposals (
-                id, space_id, proposer_id, voting_mode, start_date, end_date,
+                id, space_id, proposed_by, voting_mode, start_time, end_time,
                 quorum, threshold, executed_at, created_at, created_at_block
             )
-            SELECT id, space_id, proposer_id, voting_mode::"votingMode", start_date, end_date,
+            SELECT id, space_id, proposed_by, voting_mode::"votingMode", start_time, end_time,
                    quorum, threshold, executed_at, created_at, created_at_block
             FROM UNNEST(
                 $1::uuid[], $2::uuid[], $3::uuid[], $4::text[], $5::bigint[], $6::bigint[],
                 $7::bigint[], $8::bigint[], $9::bigint[], $10::text[], $11::text[]
-            ) AS t(id, space_id, proposer_id, voting_mode, start_date, end_date,
+            ) AS t(id, space_id, proposed_by, voting_mode, start_time, end_time,
                    quorum, threshold, executed_at, created_at, created_at_block)
             ON CONFLICT (id) DO UPDATE SET
                 executed_at = COALESCE(EXCLUDED.executed_at, proposals.executed_at)
@@ -675,10 +675,10 @@ impl Storage {
         sqlx::query(query)
             .bind(&ids)
             .bind(&space_ids)
-            .bind(&proposer_ids)
+            .bind(&proposed_bys)
             .bind(&voting_modes)
-            .bind(&start_dates)
-            .bind(&end_dates)
+            .bind(&start_times)
+            .bind(&end_times)
             .bind(&quorums)
             .bind(&thresholds)
             .bind(&executed_ats)
@@ -699,87 +699,198 @@ impl Storage {
             return Ok(());
         }
 
+        // Prepare base action data
+        let mut ids = Vec::with_capacity(actions.len());
         let mut proposal_ids = Vec::with_capacity(actions.len());
         let mut indexes = Vec::with_capacity(actions.len());
         let mut to_addresses = Vec::with_capacity(actions.len());
         let mut values = Vec::with_capacity(actions.len());
         let mut datas: Vec<&[u8]> = Vec::with_capacity(actions.len());
-        let mut payload_types = Vec::with_capacity(actions.len());
-        let mut payload_datas = Vec::with_capacity(actions.len());
+        let mut action_types = Vec::with_capacity(actions.len());
+
+        // Prepare payload-specific data
+        let mut member_change_ids = Vec::new();
+        let mut member_change_addresses = Vec::new();
+
+        let mut publish_ids = Vec::new();
+        let mut publish_content_uris: Vec<&[u8]> = Vec::new();
+        let mut publish_metadatas: Vec<Option<&[u8]>> = Vec::new();
+
+        let mut content_flag_ids = Vec::new();
+        let mut content_flag_content_ids: Vec<&[u8]> = Vec::new();
+
+        let mut voting_settings_ids = Vec::new();
+        let mut voting_settings_quorums = Vec::new();
+        let mut voting_settings_fast_thresholds = Vec::new();
+        let mut voting_settings_slow_thresholds = Vec::new();
+        let mut voting_settings_durations = Vec::new();
 
         for action in actions {
+            ids.push(action.id);
             proposal_ids.push(action.proposal_id);
             indexes.push(action.index as i16);
             to_addresses.push(&action.to_address);
             values.push(&action.value);
             datas.push(&action.data);
 
-            let (payload_type, payload_data) = match &action.payload {
+            match &action.payload {
                 ProposalActionPayload::AddMember { target_address } => {
-                    ("AddMember", serde_json::json!({ "target_address": target_address }))
+                    action_types.push("AddMember");
+                    member_change_ids.push(action.id);
+                    member_change_addresses.push(target_address.clone());
                 }
                 ProposalActionPayload::RemoveMember { target_address } => {
-                    ("RemoveMember", serde_json::json!({ "target_address": target_address }))
+                    action_types.push("RemoveMember");
+                    member_change_ids.push(action.id);
+                    member_change_addresses.push(target_address.clone());
                 }
                 ProposalActionPayload::AddEditor { target_address } => {
-                    ("AddEditor", serde_json::json!({ "target_address": target_address }))
+                    action_types.push("AddEditor");
+                    member_change_ids.push(action.id);
+                    member_change_addresses.push(target_address.clone());
                 }
                 ProposalActionPayload::RemoveEditor { target_address } => {
-                    ("RemoveEditor", serde_json::json!({ "target_address": target_address }))
+                    action_types.push("RemoveEditor");
+                    member_change_ids.push(action.id);
+                    member_change_addresses.push(target_address.clone());
                 }
                 ProposalActionPayload::UnflagEditor { target_address } => {
-                    ("UnflagEditor", serde_json::json!({ "target_address": target_address }))
+                    action_types.push("UnflagEditor");
+                    member_change_ids.push(action.id);
+                    member_change_addresses.push(target_address.clone());
                 }
                 ProposalActionPayload::Publish { content_uri, metadata } => {
-                    ("Publish", serde_json::json!({
-                        "content_uri": hex::encode(content_uri),
-                        "metadata": hex::encode(metadata)
-                    }))
+                    action_types.push("Publish");
+                    publish_ids.push(action.id);
+                    publish_content_uris.push(content_uri.as_slice());
+                    publish_metadatas.push(if metadata.is_empty() {
+                        None
+                    } else {
+                        Some(metadata.as_slice())
+                    });
                 }
                 ProposalActionPayload::Flag { content_id } => {
-                    ("Flag", serde_json::json!({ "content_id": hex::encode(content_id) }))
+                    action_types.push("Flag");
+                    content_flag_ids.push(action.id);
+                    content_flag_content_ids.push(content_id.as_slice());
                 }
                 ProposalActionPayload::Unflag { content_id } => {
-                    ("Unflag", serde_json::json!({ "content_id": hex::encode(content_id) }))
+                    action_types.push("Unflag");
+                    content_flag_ids.push(action.id);
+                    content_flag_content_ids.push(content_id.as_slice());
                 }
-                ProposalActionPayload::UpdateVotingSettings { quorum, fast_threshold, slow_threshold, duration } => {
-                    ("UpdateVotingSettings", serde_json::json!({
-                        "quorum": quorum,
-                        "fast_threshold": fast_threshold,
-                        "slow_threshold": slow_threshold,
-                        "duration": duration
-                    }))
+                ProposalActionPayload::UpdateVotingSettings {
+                    quorum,
+                    fast_threshold,
+                    slow_threshold,
+                    duration,
+                } => {
+                    action_types.push("UpdateVotingSettings");
+                    voting_settings_ids.push(action.id);
+                    voting_settings_quorums.push(*quorum as i64);
+                    voting_settings_fast_thresholds.push(*fast_threshold as i64);
+                    voting_settings_slow_thresholds.push(*slow_threshold as i64);
+                    voting_settings_durations.push(*duration as i64);
                 }
                 ProposalActionPayload::Unknown => {
-                    ("Unknown", serde_json::json!({}))
+                    action_types.push("Unknown");
                 }
-            };
-
-            payload_types.push(payload_type);
-            payload_datas.push(payload_data);
+            }
         }
 
+        // Insert base actions
         let query = r#"
             INSERT INTO proposal_actions (
-                proposal_id, index, to_address, value, data, payload_type, payload_data
+                id, proposal_id, index, to_address, value, data, action_type
             )
-            SELECT proposal_id, index, to_address, value, data, payload_type::"proposalActionType", payload_data
+            SELECT id, proposal_id, index, to_address, value, data, action_type::"proposalActionType"
             FROM UNNEST(
-                $1::uuid[], $2::smallint[], $3::text[], $4::text[], $5::bytea[], $6::text[], $7::jsonb[]
-            ) AS t(proposal_id, index, to_address, value, data, payload_type, payload_data)
-            ON CONFLICT (proposal_id, index) DO NOTHING
+                $1::uuid[], $2::uuid[], $3::smallint[], $4::text[], $5::text[], $6::bytea[], $7::text[]
+            ) AS t(id, proposal_id, index, to_address, value, data, action_type)
+            ON CONFLICT (id) DO NOTHING
         "#;
 
         sqlx::query(query)
+            .bind(&ids)
             .bind(&proposal_ids)
             .bind(&indexes)
             .bind(&to_addresses)
             .bind(&values)
             .bind(&datas)
-            .bind(&payload_types)
-            .bind(&payload_datas)
+            .bind(&action_types)
             .execute(&mut **tx)
             .await?;
+
+        // Insert member change payloads
+        if !member_change_ids.is_empty() {
+            sqlx::query(
+                r#"
+                INSERT INTO proposal_action_member_changes (action_id, target_address)
+                SELECT action_id, target_address
+                FROM UNNEST($1::uuid[], $2::text[]) AS t(action_id, target_address)
+                ON CONFLICT (action_id) DO NOTHING
+                "#,
+            )
+            .bind(&member_change_ids)
+            .bind(&member_change_addresses)
+            .execute(&mut **tx)
+            .await?;
+        }
+
+        // Insert publish payloads
+        if !publish_ids.is_empty() {
+            sqlx::query(
+                r#"
+                INSERT INTO proposal_action_publish (action_id, content_uri, metadata)
+                SELECT action_id, content_uri, metadata
+                FROM UNNEST($1::uuid[], $2::bytea[], $3::bytea[]) AS t(action_id, content_uri, metadata)
+                ON CONFLICT (action_id) DO NOTHING
+                "#,
+            )
+            .bind(&publish_ids)
+            .bind(&publish_content_uris)
+            .bind(&publish_metadatas)
+            .execute(&mut **tx)
+            .await?;
+        }
+
+        // Insert content flag payloads
+        if !content_flag_ids.is_empty() {
+            sqlx::query(
+                r#"
+                INSERT INTO proposal_action_content_flags (action_id, content_id)
+                SELECT action_id, content_id
+                FROM UNNEST($1::uuid[], $2::bytea[]) AS t(action_id, content_id)
+                ON CONFLICT (action_id) DO NOTHING
+                "#,
+            )
+            .bind(&content_flag_ids)
+            .bind(&content_flag_content_ids)
+            .execute(&mut **tx)
+            .await?;
+        }
+
+        // Insert voting settings payloads
+        if !voting_settings_ids.is_empty() {
+            sqlx::query(
+                r#"
+                INSERT INTO proposal_action_voting_settings (
+                    action_id, quorum, fast_threshold, slow_threshold, duration
+                )
+                SELECT action_id, quorum, fast_threshold, slow_threshold, duration
+                FROM UNNEST($1::uuid[], $2::bigint[], $3::bigint[], $4::bigint[], $5::bigint[])
+                AS t(action_id, quorum, fast_threshold, slow_threshold, duration)
+                ON CONFLICT (action_id) DO NOTHING
+                "#,
+            )
+            .bind(&voting_settings_ids)
+            .bind(&voting_settings_quorums)
+            .bind(&voting_settings_fast_thresholds)
+            .bind(&voting_settings_slow_thresholds)
+            .bind(&voting_settings_durations)
+            .execute(&mut **tx)
+            .await?;
+        }
 
         Ok(())
     }
@@ -805,7 +916,6 @@ impl Storage {
             voter_ids.push(vote.voter_id);
             space_ids.push(vote.space_id);
             vote_options.push(match vote.vote {
-                VoteOption::None => "None",
                 VoteOption::Yes => "Yes",
                 VoteOption::No => "No",
                 VoteOption::Abstain => "Abstain",
