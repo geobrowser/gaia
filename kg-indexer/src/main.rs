@@ -69,11 +69,6 @@ impl BlockBuffer {
             .map(|(block, _)| *block)
             .collect()
     }
-
-    /// Number of blocks currently buffered.
-    fn buffered_block_count(&self) -> usize {
-        self.events.len()
-    }
 }
 
 #[tokio::main]
@@ -116,14 +111,24 @@ async fn main() -> Result<(), IndexerError> {
     });
 
     // Main processing loop
+    //
+    // Events are buffered by block number and processed together when `is_last=true`
+    // arrives, ensuring correct ordering within a block. However, we can't rely solely
+    // on `is_last` because:
+    //   1. It may arrive on a topic we don't subscribe to (e.g., curation.votes)
+    //   2. The producer may crash before sending it
+    //   3. Network issues may cause it to be lost
+    //
+    // To handle these cases, we use `tokio::select!` with a periodic tick that checks
+    // for stale blocks (buffered longer than `stale_timeout`). The tick runs independently
+    // of the Kafka stream, so even if no messages arrive, stale blocks get processed.
     let mut stream = consumer.stream();
     let stale_timeout = Duration::from_secs(stale_timeout_secs);
     let mut buffer = BlockBuffer::new(stale_timeout);
     let mut processed_count: u64 = 0;
     let mut error_count: u64 = 0;
     let mut blocks_processed: u64 = 0;
-    let mut last_stale_check = Instant::now();
-    let stale_check_interval = Duration::from_secs(10);
+    let mut stale_check_interval = tokio::time::interval(Duration::from_secs(1));
 
     info!(
         stale_timeout_secs = stale_timeout_secs,
@@ -136,6 +141,40 @@ async fn main() -> Result<(), IndexerError> {
                 info!("Shutting down...");
                 break;
             }
+
+            _ = stale_check_interval.tick() => {
+                // Periodically check for stale blocks and force-process them
+                for block_number in buffer.stale_blocks() {
+                    let events = buffer.take_block(block_number);
+                    let event_count = events.len();
+                    warn!(
+                        block_number = block_number,
+                        event_count = event_count,
+                        stale_timeout_secs = stale_timeout_secs,
+                        "Force-processing stale block"
+                    );
+                    match process_block(events, &storage, &consumer).await {
+                        Ok(count) => {
+                            processed_count += count as u64;
+                            blocks_processed += 1;
+                            info!(
+                                block_number = block_number,
+                                processed = count,
+                                "Force-processed stale block"
+                            );
+                        }
+                        Err(e) => {
+                            error_count += 1;
+                            error!(
+                                block_number = block_number,
+                                error = %e,
+                                "Failed to process stale block"
+                            );
+                        }
+                    }
+                }
+            }
+
             message = stream.next() => {
                 match message {
                     Some(Ok(msg)) => {
@@ -249,50 +288,6 @@ async fn main() -> Result<(), IndexerError> {
                         break;
                     }
                 }
-            }
-        }
-
-        // Periodically check for stale blocks and force-process them
-        // This handles cases where is_last is on a topic we don't subscribe to
-        if last_stale_check.elapsed() > stale_check_interval {
-            last_stale_check = Instant::now();
-            let stale = buffer.stale_blocks();
-            for block_number in stale {
-                let events = buffer.take_block(block_number);
-                let event_count = events.len();
-                warn!(
-                    block_number = block_number,
-                    event_count = event_count,
-                    stale_timeout_secs = stale_timeout_secs,
-                    "Force-processing stale block (is_last may be on unsubscribed topic)"
-                );
-                match process_block(events, &storage, &consumer).await {
-                    Ok(count) => {
-                        processed_count += count as u64;
-                        blocks_processed += 1;
-                        info!(
-                            block_number = block_number,
-                            processed = count,
-                            total_processed = processed_count,
-                            total_blocks = blocks_processed,
-                            "Force-processed stale block"
-                        );
-                    }
-                    Err(e) => {
-                        error_count += 1;
-                        error!(
-                            block_number = block_number,
-                            error = %e,
-                            "Failed to process stale block"
-                        );
-                    }
-                }
-            }
-            if buffer.buffered_block_count() > 0 {
-                debug!(
-                    buffered_blocks = buffer.buffered_block_count(),
-                    "Blocks waiting for is_last"
-                );
             }
         }
     }

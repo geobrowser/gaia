@@ -45,7 +45,7 @@ impl KafkaConsumer {
             .create()
             .map_err(|e| IndexerError::kafka(e.to_string()))?;
 
-        // Topics to consume
+        // Topics to consume (subset of what hermes-pipeline produces)
         let topics = vec![
             "knowledge.edits".to_string(),
             "space.creations".to_string(),
@@ -177,15 +177,13 @@ pub fn parse_message(
             // Use event-type header to determine message type
             match event_type {
                 Some("ROLE_GRANTED") => {
-                    let granted =
-                        hermes_schema::pb::membership::HermesRoleGranted::decode(payload)
-                            .map_err(|e| IndexerError::decode(format!("HermesRoleGranted: {}", e)))?;
+                    let granted = hermes_schema::pb::membership::HermesRoleGranted::decode(payload)
+                        .map_err(|e| IndexerError::decode(format!("HermesRoleGranted: {}", e)))?;
                     Ok(KgMessage::RoleGranted(granted))
                 }
                 Some("ROLE_REVOKED") => {
-                    let revoked =
-                        hermes_schema::pb::membership::HermesRoleRevoked::decode(payload)
-                            .map_err(|e| IndexerError::decode(format!("HermesRoleRevoked: {}", e)))?;
+                    let revoked = hermes_schema::pb::membership::HermesRoleRevoked::decode(payload)
+                        .map_err(|e| IndexerError::decode(format!("HermesRoleRevoked: {}", e)))?;
                     Ok(KgMessage::RoleRevoked(revoked))
                 }
                 _ => Err(IndexerError::decode(format!(
