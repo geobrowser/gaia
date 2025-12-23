@@ -4,6 +4,10 @@ use uuid::Uuid;
 use crate::error::IndexerError;
 use crate::models::{
     entities::EntityItem,
+    governance::{
+        ProposalActionItem, ProposalActionPayload, ProposalItem, ProposalVoteItem, VoteOption,
+        VotingMode,
+    },
     membership::{EditorItem, MemberItem},
     properties::{
         DataType, PropertyItem, DATA_TYPE_BOOLEAN, DATA_TYPE_NUMBER, DATA_TYPE_POINT,
@@ -262,13 +266,13 @@ impl Storage {
         );
 
         query_builder.push_values(relations, |mut b, relation| {
-            b.push_bind(&relation.id);
+            b.push_bind(relation.id);
             b.push_bind(&relation.from_space_id);
             b.push_bind(&relation.from_version_id);
             b.push_bind(&relation.to_space_id);
             b.push_bind(&relation.to_version_id);
             b.push_bind(&relation.position);
-            b.push_bind(&relation.verified);
+            b.push_bind(relation.verified);
         });
 
         query_builder.push(
@@ -303,7 +307,7 @@ impl Storage {
 
         query_builder.push_values(relations, |mut b, relation| {
             b.push("(");
-            b.push_bind(&relation.id);
+            b.push_bind(relation.id);
             b.push(", ");
             b.push_bind(relation.from_space_id.unwrap_or(false));
             b.push(", ");
@@ -587,6 +591,7 @@ impl Storage {
         Ok(())
     }
 
+    #[allow(dead_code)]
     pub async fn remove_subspaces(
         &self,
         subspaces: &[SubspaceItem],
@@ -616,8 +621,308 @@ impl Storage {
 
         Ok(())
     }
+
+    #[allow(dead_code)]
+    pub async fn insert_proposals(
+        &self,
+        proposals: &[ProposalItem],
+        tx: &mut sqlx::Transaction<'_, Postgres>,
+    ) -> Result<(), IndexerError> {
+        if proposals.is_empty() {
+            return Ok(());
+        }
+
+        let mut ids = Vec::with_capacity(proposals.len());
+        let mut space_ids = Vec::with_capacity(proposals.len());
+        let mut proposed_bys = Vec::with_capacity(proposals.len());
+        let mut voting_modes = Vec::with_capacity(proposals.len());
+        let mut start_times = Vec::with_capacity(proposals.len());
+        let mut end_times = Vec::with_capacity(proposals.len());
+        let mut quorums = Vec::with_capacity(proposals.len());
+        let mut thresholds = Vec::with_capacity(proposals.len());
+        let mut executed_ats: Vec<Option<i64>> = Vec::with_capacity(proposals.len());
+        let mut created_ats = Vec::with_capacity(proposals.len());
+        let mut created_at_blocks = Vec::with_capacity(proposals.len());
+
+        for proposal in proposals {
+            ids.push(proposal.id);
+            space_ids.push(proposal.space_id);
+            proposed_bys.push(proposal.proposed_by);
+            voting_modes.push(match proposal.voting_mode {
+                VotingMode::Fast => "Fast",
+                VotingMode::Slow => "Slow",
+            });
+            start_times.push(proposal.start_time);
+            end_times.push(proposal.end_time);
+            quorums.push(proposal.quorum);
+            thresholds.push(proposal.threshold);
+            executed_ats.push(proposal.executed_at);
+            created_ats.push(proposal.created_at.to_string());
+            created_at_blocks.push(proposal.created_at_block.to_string());
+        }
+
+        let query = r#"
+            INSERT INTO proposals (
+                id, space_id, proposed_by, voting_mode, start_time, end_time,
+                quorum, threshold, executed_at, created_at, created_at_block
+            )
+            SELECT id, space_id, proposed_by, voting_mode::"votingMode", start_time, end_time,
+                   quorum, threshold, executed_at, created_at, created_at_block
+            FROM UNNEST(
+                $1::uuid[], $2::uuid[], $3::uuid[], $4::text[], $5::bigint[], $6::bigint[],
+                $7::bigint[], $8::bigint[], $9::bigint[], $10::text[], $11::text[]
+            ) AS t(id, space_id, proposed_by, voting_mode, start_time, end_time,
+                   quorum, threshold, executed_at, created_at, created_at_block)
+            ON CONFLICT (id) DO UPDATE SET
+                executed_at = COALESCE(EXCLUDED.executed_at, proposals.executed_at)
+        "#;
+
+        sqlx::query(query)
+            .bind(&ids)
+            .bind(&space_ids)
+            .bind(&proposed_bys)
+            .bind(&voting_modes)
+            .bind(&start_times)
+            .bind(&end_times)
+            .bind(&quorums)
+            .bind(&thresholds)
+            .bind(&executed_ats)
+            .bind(&created_ats)
+            .bind(&created_at_blocks)
+            .execute(&mut **tx)
+            .await?;
+
+        Ok(())
+    }
+
+    #[allow(dead_code)]
+    pub async fn insert_proposal_actions(
+        &self,
+        actions: &[ProposalActionItem],
+        tx: &mut sqlx::Transaction<'_, Postgres>,
+    ) -> Result<(), IndexerError> {
+        if actions.is_empty() {
+            return Ok(());
+        }
+
+        let mut ids = Vec::with_capacity(actions.len());
+        let mut proposal_ids = Vec::with_capacity(actions.len());
+        let mut action_types = Vec::with_capacity(actions.len());
+        let mut target_addresses: Vec<Option<&str>> = Vec::with_capacity(actions.len());
+        let mut content_uris: Vec<Option<&str>> = Vec::with_capacity(actions.len());
+        let mut metadatas: Vec<Option<&[u8]>> = Vec::with_capacity(actions.len());
+        let mut content_ids: Vec<Option<&[u8]>> = Vec::with_capacity(actions.len());
+        let mut quorums: Vec<Option<i64>> = Vec::with_capacity(actions.len());
+        let mut fast_thresholds: Vec<Option<i64>> = Vec::with_capacity(actions.len());
+        let mut slow_thresholds: Vec<Option<i64>> = Vec::with_capacity(actions.len());
+        let mut durations: Vec<Option<i64>> = Vec::with_capacity(actions.len());
+
+        for action in actions {
+            ids.push(action.id);
+            proposal_ids.push(action.proposal_id);
+
+            let mut target_address: Option<&str> = None;
+            let mut content_uri: Option<&str> = None;
+            let mut metadata: Option<&[u8]> = None;
+            let mut content_id: Option<&[u8]> = None;
+            let mut quorum: Option<i64> = None;
+            let mut fast_threshold: Option<i64> = None;
+            let mut slow_threshold: Option<i64> = None;
+            let mut duration: Option<i64> = None;
+
+            let action_type = match &action.payload {
+                ProposalActionPayload::AddMember {
+                    target_address: addr,
+                } => {
+                    target_address = Some(addr.as_str());
+                    "AddMember"
+                }
+                ProposalActionPayload::RemoveMember {
+                    target_address: addr,
+                } => {
+                    target_address = Some(addr.as_str());
+                    "RemoveMember"
+                }
+                ProposalActionPayload::AddEditor {
+                    target_address: addr,
+                } => {
+                    target_address = Some(addr.as_str());
+                    "AddEditor"
+                }
+                ProposalActionPayload::RemoveEditor {
+                    target_address: addr,
+                } => {
+                    target_address = Some(addr.as_str());
+                    "RemoveEditor"
+                }
+                ProposalActionPayload::UnflagEditor {
+                    target_address: addr,
+                } => {
+                    target_address = Some(addr.as_str());
+                    "UnflagEditor"
+                }
+                ProposalActionPayload::Publish {
+                    content_uri: uri,
+                    metadata: meta,
+                } => {
+                    content_uri = Some(uri.as_str());
+                    if !meta.is_empty() {
+                        metadata = Some(meta.as_slice());
+                    }
+                    "Publish"
+                }
+                ProposalActionPayload::Flag { content_id: id } => {
+                    content_id = Some(id.as_slice());
+                    "Flag"
+                }
+                ProposalActionPayload::Unflag { content_id: id } => {
+                    content_id = Some(id.as_slice());
+                    "Unflag"
+                }
+                ProposalActionPayload::UpdateVotingSettings {
+                    quorum: q,
+                    fast_threshold: ft,
+                    slow_threshold: st,
+                    duration: d,
+                } => {
+                    quorum = Some(*q as i64);
+                    fast_threshold = Some(*ft as i64);
+                    slow_threshold = Some(*st as i64);
+                    duration = Some(*d as i64);
+                    "UpdateVotingSettings"
+                }
+                ProposalActionPayload::Unknown => "Unknown",
+            };
+
+            action_types.push(action_type);
+            target_addresses.push(target_address);
+            content_uris.push(content_uri);
+            metadatas.push(metadata);
+            content_ids.push(content_id);
+            quorums.push(quorum);
+            fast_thresholds.push(fast_threshold);
+            slow_thresholds.push(slow_threshold);
+            durations.push(duration);
+        }
+
+        let query = r#"
+            INSERT INTO proposal_actions (
+                id, proposal_id, action_type,
+                target_address, content_uri, metadata, content_id,
+                quorum, fast_threshold, slow_threshold, duration
+            )
+            SELECT id, proposal_id, action_type::"proposalActionType",
+                   target_address, content_uri, metadata, content_id,
+                   quorum, fast_threshold, slow_threshold, duration
+            FROM UNNEST(
+                $1::uuid[], $2::uuid[], $3::text[],
+                $4::text[], $5::text[], $6::bytea[], $7::bytea[],
+                $8::bigint[], $9::bigint[], $10::bigint[], $11::bigint[]
+            ) AS t(id, proposal_id, action_type,
+                   target_address, content_uri, metadata, content_id,
+                   quorum, fast_threshold, slow_threshold, duration)
+            ON CONFLICT (id) DO NOTHING
+        "#;
+
+        sqlx::query(query)
+            .bind(&ids)
+            .bind(&proposal_ids)
+            .bind(&action_types)
+            .bind(&target_addresses)
+            .bind(&content_uris)
+            .bind(&metadatas)
+            .bind(&content_ids)
+            .bind(&quorums)
+            .bind(&fast_thresholds)
+            .bind(&slow_thresholds)
+            .bind(&durations)
+            .execute(&mut **tx)
+            .await?;
+
+        Ok(())
+    }
+
+    #[allow(dead_code)]
+    pub async fn insert_proposal_votes(
+        &self,
+        votes: &[ProposalVoteItem],
+        tx: &mut sqlx::Transaction<'_, Postgres>,
+    ) -> Result<(), IndexerError> {
+        if votes.is_empty() {
+            return Ok(());
+        }
+
+        let mut proposal_ids = Vec::with_capacity(votes.len());
+        let mut voter_ids = Vec::with_capacity(votes.len());
+        let mut space_ids = Vec::with_capacity(votes.len());
+        let mut vote_options = Vec::with_capacity(votes.len());
+        let mut created_ats = Vec::with_capacity(votes.len());
+        let mut created_at_blocks = Vec::with_capacity(votes.len());
+
+        for vote in votes {
+            proposal_ids.push(vote.proposal_id);
+            voter_ids.push(vote.voter_id);
+            space_ids.push(vote.space_id);
+            vote_options.push(match vote.vote {
+                VoteOption::Yes => "Yes",
+                VoteOption::No => "No",
+                VoteOption::Abstain => "Abstain",
+            });
+            created_ats.push(vote.created_at.to_string());
+            created_at_blocks.push(vote.created_at_block.to_string());
+        }
+
+        let query = r#"
+            INSERT INTO proposal_votes (
+                proposal_id, voter_id, space_id, vote, created_at, created_at_block
+            )
+            SELECT proposal_id, voter_id, space_id, vote::"voteOption", created_at, created_at_block
+            FROM UNNEST(
+                $1::uuid[], $2::uuid[], $3::uuid[], $4::text[], $5::text[], $6::text[]
+            ) AS t(proposal_id, voter_id, space_id, vote, created_at, created_at_block)
+            ON CONFLICT (proposal_id, voter_id) DO UPDATE SET
+                vote = EXCLUDED.vote::"voteOption",
+                created_at = EXCLUDED.created_at,
+                created_at_block = EXCLUDED.created_at_block
+        "#;
+
+        sqlx::query(query)
+            .bind(&proposal_ids)
+            .bind(&voter_ids)
+            .bind(&space_ids)
+            .bind(&vote_options)
+            .bind(&created_ats)
+            .bind(&created_at_blocks)
+            .execute(&mut **tx)
+            .await?;
+
+        Ok(())
+    }
+
+    #[allow(dead_code)]
+    pub async fn update_proposal_executed(
+        &self,
+        proposal_id: Uuid,
+        executed_at: i64,
+        tx: &mut sqlx::Transaction<'_, Postgres>,
+    ) -> Result<(), IndexerError> {
+        sqlx::query(
+            r#"
+            UPDATE proposals
+            SET executed_at = $1
+            WHERE id = $2
+            "#,
+        )
+        .bind(executed_at)
+        .bind(proposal_id)
+        .execute(&mut **tx)
+        .await?;
+
+        Ok(())
+    }
 }
 
+#[allow(dead_code)]
 fn string_to_data_type(s: &str) -> Option<DataType> {
     match s {
         DATA_TYPE_STRING => Some(DataType::String),

@@ -60,8 +60,8 @@ message UnflagEditorAction {
 
 // Decoded action: publish content
 message PublishAction {
-  bytes content_uri = 1;  // Content URI (IPFS hash)
-  bytes metadata = 2;     // Edit metadata
+  string content_uri = 1;  // Content URI (IPFS hash)
+  bytes metadata = 2;      // Edit metadata
 }
 
 // Decoded action: flag content

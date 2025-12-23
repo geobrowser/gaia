@@ -2,8 +2,8 @@
 //!
 //! Transforms entity events into EntityDocument structures for indexing.
 
-use std::sync::Arc;
 use std::sync::atomic::Ordering;
+use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
 use tracing::{debug, error, instrument};

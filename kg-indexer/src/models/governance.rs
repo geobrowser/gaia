@@ -10,7 +10,6 @@ pub enum VotingMode {
 /// Vote option for governance proposals
 #[derive(Clone, Debug, PartialEq)]
 pub enum VoteOption {
-    None,
     Yes,
     No,
     Abstain,
@@ -30,7 +29,10 @@ pub enum ProposalActionPayload {
     /// Unflag an editor
     UnflagEditor { target_address: String },
     /// Publish content
-    Publish { content_uri: Vec<u8>, metadata: Vec<u8> },
+    Publish {
+        content_uri: String,
+        metadata: Vec<u8>,
+    },
     /// Flag content
     Flag { content_id: Vec<u8> },
     /// Unflag content
@@ -47,14 +49,15 @@ pub enum ProposalActionPayload {
 }
 
 /// A governance proposal
+#[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub struct ProposalItem {
     pub id: Uuid,
     pub space_id: Uuid,
-    pub proposer_id: Uuid,
+    pub proposed_by: Uuid,
     pub voting_mode: VotingMode,
-    pub start_date: i64,
-    pub end_date: i64,
+    pub start_time: i64,
+    pub end_time: i64,
     pub quorum: i64,
     pub threshold: i64,
     pub executed_at: Option<i64>,
@@ -62,18 +65,18 @@ pub struct ProposalItem {
     pub created_at_block: i64,
 }
 
-/// An action within a proposal
+/// An action within a proposal.
+/// ID is deterministic (derived from proposal_id + index).
+#[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub struct ProposalActionItem {
+    pub id: Uuid,
     pub proposal_id: Uuid,
-    pub index: i32,
-    pub to_address: String,
-    pub value: String,
-    pub data: Vec<u8>,
     pub payload: ProposalActionPayload,
 }
 
 /// A vote on a proposal
+#[allow(dead_code)]
 #[derive(Clone, Debug)]
 pub struct ProposalVoteItem {
     pub proposal_id: Uuid,

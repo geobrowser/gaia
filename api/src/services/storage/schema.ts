@@ -1,7 +1,7 @@
 import {
 	relations as drizzleRelations,
-	sql,
 	type InferSelectModel,
+	sql,
 } from "drizzle-orm";
 import {
 	bigint,
@@ -25,6 +25,21 @@ import {
 // Enable the pg_trgm extension for similarity searches (executed at runtime)
 // This comment signals that we want the trigram extension available
 // The actual extension creation is handled in migrations
+
+/**
+ * bytea
+ *
+ * This is a custom type for the bytea data type.
+ * It is used to store binary data in the database.
+ */
+export const bytea = customType<{
+	data: Buffer;
+	default: false;
+}>({
+	dataType() {
+		return "bytea";
+	},
+});
 
 export const ipfsCache = pgTable("ipfs_cache", {
 	id: serial(),
@@ -394,22 +409,158 @@ export type DbGlobalScore = InferSelectModel<typeof globalScores>;
 export type DbLocalScore = InferSelectModel<typeof localScores>;
 export type DbSpaceScore = InferSelectModel<typeof spaceScores>;
 
-/** Actions Schema definitions */
+/** Governance Schema definitions */
+
+export const votingModeEnum = pgEnum("votingMode", ["Fast", "Slow"]);
+
+export const voteOptionEnum = pgEnum("voteOption", ["Yes", "No", "Abstain"]);
+
+export const proposalActionTypeEnum = pgEnum("proposalActionType", [
+	"AddMember",
+	"RemoveMember",
+	"AddEditor",
+	"RemoveEditor",
+	"UnflagEditor",
+	"Publish",
+	"Flag",
+	"Unflag",
+	"UpdateVotingSettings",
+	"Unknown",
+]);
 
 /**
- * bytea
+ * proposals
  *
- * This is a custom type for the bytea data type.
- * It is used to store binary data in the database.
+ * Stores governance proposals for spaces.
  */
-export const bytea = customType<{
-	data: Buffer;
-	default: false;
-}>({
-	dataType() {
-		return "bytea";
+export const proposals = pgTable(
+	"proposals",
+	{
+		id: uuid().primaryKey(),
+		spaceId: uuid("space_id")
+			.notNull()
+			.references(() => spaces.id),
+		proposedBy: uuid("proposed_by").notNull(),
+		votingMode: votingModeEnum("voting_mode").notNull(),
+		startTime: bigint("start_time", { mode: "number" }).notNull(),
+		endTime: bigint("end_time", { mode: "number" }).notNull(),
+		quorum: bigint("quorum", { mode: "number" }).notNull(),
+		threshold: bigint("threshold", { mode: "number" }).notNull(),
+		executedAt: bigint("executed_at", { mode: "number" }),
+		createdAt: text("created_at").notNull(),
+		createdAtBlock: text("created_at_block").notNull(),
 	},
-});
+	(table) => [
+		index("proposals_space_id_idx").on(table.spaceId),
+		index("proposals_proposed_by_idx").on(table.proposedBy),
+		index("proposals_created_at_idx").on(table.createdAt),
+		index("proposals_end_time_idx").on(table.endTime),
+	],
+);
+
+/**
+ * proposal_actions
+ *
+ * Stores actions within a governance proposal.
+ * Each proposal can have multiple actions executed in sequence.
+ * ID is deterministic (derived from proposal_id + index).
+ * Payload fields are nullable - which fields are populated depends on action_type.
+ */
+export const proposalActions = pgTable(
+	"proposal_actions",
+	{
+		id: uuid().primaryKey(),
+		proposalId: uuid("proposal_id")
+			.notNull()
+			.references(() => proposals.id),
+		actionType: proposalActionTypeEnum("action_type").notNull(),
+		// Member/editor operations: AddMember, RemoveMember, AddEditor, RemoveEditor, UnflagEditor
+		targetAddress: text("target_address"),
+		// Publish action
+		contentUri: text("content_uri"),
+		metadata: bytea("metadata"),
+		// Flag/Unflag actions
+		contentId: bytea("content_id"),
+		// UpdateVotingSettings action
+		quorum: bigint("quorum", { mode: "number" }),
+		fastThreshold: bigint("fast_threshold", { mode: "number" }),
+		slowThreshold: bigint("slow_threshold", { mode: "number" }),
+		duration: bigint("duration", { mode: "number" }),
+	},
+	(table) => [
+		index("proposal_actions_proposal_id_idx").on(table.proposalId),
+		index("proposal_actions_action_type_idx").on(table.actionType),
+	],
+);
+
+/**
+ * proposal_votes
+ *
+ * Stores votes cast on governance proposals.
+ */
+export const proposalVotes = pgTable(
+	"proposal_votes",
+	{
+		proposalId: uuid("proposal_id")
+			.notNull()
+			.references(() => proposals.id),
+		voterId: uuid("voter_id").notNull(),
+		spaceId: uuid("space_id")
+			.notNull()
+			.references(() => spaces.id),
+		vote: voteOptionEnum("vote").notNull(),
+		createdAt: text("created_at").notNull(),
+		createdAtBlock: text("created_at_block").notNull(),
+	},
+	(table) => [
+		primaryKey({ columns: [table.proposalId, table.voterId] }),
+		index("proposal_votes_space_id_idx").on(table.spaceId),
+		index("proposal_votes_voter_id_idx").on(table.voterId),
+		index("proposal_votes_vote_idx").on(table.vote),
+	],
+);
+
+export const proposalsRelations = drizzleRelations(
+	proposals,
+	({ one, many }) => ({
+		space: one(spaces, {
+			fields: [proposals.spaceId],
+			references: [spaces.id],
+		}),
+		actions: many(proposalActions),
+		votes: many(proposalVotes),
+	}),
+);
+
+export const proposalActionsRelations = drizzleRelations(
+	proposalActions,
+	({ one }) => ({
+		proposal: one(proposals, {
+			fields: [proposalActions.proposalId],
+			references: [proposals.id],
+		}),
+	}),
+);
+
+export const proposalVotesRelations = drizzleRelations(
+	proposalVotes,
+	({ one }) => ({
+		proposal: one(proposals, {
+			fields: [proposalVotes.proposalId],
+			references: [proposals.id],
+		}),
+		space: one(spaces, {
+			fields: [proposalVotes.spaceId],
+			references: [spaces.id],
+		}),
+	}),
+);
+
+export type DbProposal = InferSelectModel<typeof proposals>;
+export type DbProposalAction = InferSelectModel<typeof proposalActions>;
+export type DbProposalVote = InferSelectModel<typeof proposalVotes>;
+
+/** Actions Schema definitions */
 
 /**
  * raw_actions
@@ -456,19 +607,13 @@ export const userVotes = pgTable(
 	(table) => {
 		return {
 			// UNIQUE(user_id, object_id, space_id)
-			uqUserEntityObjectTypeSpace: unique("user_votes_user_entity_object_type_space_unique").on(
-				table.userId,
-				table.objectId,
-				table.objectType,
-				table.spaceId,
-			),
+			uqUserEntityObjectTypeSpace: unique(
+				"user_votes_user_entity_object_type_space_unique",
+			).on(table.userId, table.objectId, table.objectType, table.spaceId),
 			// CREATE INDEX idx_user_votes_user_entity_space ON user_votes(user_id, object_id, space_id)
-			idxUserEntityObjectTypeSpace: index("idx_user_votes_user_entity_object_type_space").on(
-				table.userId,
-				table.objectId,
-				table.objectType,
-				table.spaceId,
-			),
+			idxUserEntityObjectTypeSpace: index(
+				"idx_user_votes_user_entity_object_type_space",
+			).on(table.userId, table.objectId, table.objectType, table.spaceId),
 		};
 	},
 );
@@ -489,19 +634,15 @@ export const votesCount = pgTable(
 	(table) => {
 		return {
 			// UNIQUE(object_id, object_type, space_id)
-			uqObjectObjectTypeSpace: unique("votes_count_object_object_type_space_unique").on(
-				table.objectId,
-				table.objectType,
-				table.spaceId,
-			),
+			uqObjectObjectTypeSpace: unique(
+				"votes_count_object_object_type_space_unique",
+			).on(table.objectId, table.objectType, table.spaceId),
 			// CREATE INDEX idx_votes_count_space ON votes_count(space_id)
 			idxSpace: index("idx_votes_count_space").on(table.spaceId),
 			// CREATE INDEX idx_votes_count_entity_space ON votes_count(object_id, object_type, space_id)
-			idxObjectObjectTypeSpace: index("idx_votes_count_object_object_type_space").on(
-				table.objectId,
-				table.objectType,
-				table.spaceId,
-			),
+			idxObjectObjectTypeSpace: index(
+				"idx_votes_count_object_object_type_space",
+			).on(table.objectId, table.objectType, table.spaceId),
 		};
 	},
 );
@@ -562,5 +703,3 @@ export const spaceScores = pgTable("space_scores", {
 		mode: "date",
 	}).notNull(),
 });
-
-

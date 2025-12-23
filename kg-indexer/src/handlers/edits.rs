@@ -12,7 +12,9 @@ use crate::error::HandlerError;
 use crate::models::{
     entities::EntityItem,
     properties::{DataType, PropertyItem},
-    relations::{DeleteRelationItem, RelationOp, SetRelationItem, UnsetRelationItem, UpdateRelationItem},
+    relations::{
+        DeleteRelationItem, RelationOp, SetRelationItem, UnsetRelationItem, UpdateRelationItem,
+    },
     values::{ValueChangeType, ValueOp},
 };
 
@@ -47,7 +49,7 @@ impl EditMetadata {
 
 /// Process a HermesEdit message and return the extracted data
 pub fn handle_edit(edit: &HermesEdit) -> Result<EditResult, HandlerError> {
-    let space_id = parse_space_id(&edit.space_id)?;
+    let space_id = parse_space_id(edit.space_id.as_slice())?;
     let meta = EditMetadata::from_edit(edit);
 
     // Extract all data from the edit
@@ -129,12 +131,36 @@ fn merge_relation_ops(existing: RelationOp, new: RelationOp) -> RelationOp {
             from_id: c.from_id,
             to_id: c.to_id,
             space_id: c.space_id,
-            from_space_id: if u.from_space_id == Some(true) { None } else { c.from_space_id },
-            from_version_id: if u.from_version_id == Some(true) { None } else { c.from_version_id },
-            to_space_id: if u.to_space_id == Some(true) { None } else { c.to_space_id },
-            to_version_id: if u.to_version_id == Some(true) { None } else { c.to_version_id },
-            position: if u.position == Some(true) { None } else { c.position },
-            verified: if u.verified == Some(true) { None } else { c.verified },
+            from_space_id: if u.from_space_id == Some(true) {
+                None
+            } else {
+                c.from_space_id
+            },
+            from_version_id: if u.from_version_id == Some(true) {
+                None
+            } else {
+                c.from_version_id
+            },
+            to_space_id: if u.to_space_id == Some(true) {
+                None
+            } else {
+                c.to_space_id
+            },
+            to_version_id: if u.to_version_id == Some(true) {
+                None
+            } else {
+                c.to_version_id
+            },
+            position: if u.position == Some(true) {
+                None
+            } else {
+                c.position
+            },
+            verified: if u.verified == Some(true) {
+                None
+            } else {
+                c.verified
+            },
         }),
 
         // update -> create: Create wins (overwrites)
@@ -159,12 +185,36 @@ fn merge_relation_ops(existing: RelationOp, new: RelationOp) -> RelationOp {
         (RelationOp::Update(e), RelationOp::Unset(u)) => RelationOp::Update(UpdateRelationItem {
             id: e.id,
             space_id: e.space_id,
-            from_space_id: if u.from_space_id == Some(true) { None } else { e.from_space_id },
-            from_version_id: if u.from_version_id == Some(true) { None } else { e.from_version_id },
-            to_space_id: if u.to_space_id == Some(true) { None } else { e.to_space_id },
-            to_version_id: if u.to_version_id == Some(true) { None } else { e.to_version_id },
-            position: if u.position == Some(true) { None } else { e.position },
-            verified: if u.verified == Some(true) { None } else { e.verified },
+            from_space_id: if u.from_space_id == Some(true) {
+                None
+            } else {
+                e.from_space_id
+            },
+            from_version_id: if u.from_version_id == Some(true) {
+                None
+            } else {
+                e.from_version_id
+            },
+            to_space_id: if u.to_space_id == Some(true) {
+                None
+            } else {
+                e.to_space_id
+            },
+            to_version_id: if u.to_version_id == Some(true) {
+                None
+            } else {
+                e.to_version_id
+            },
+            position: if u.position == Some(true) {
+                None
+            } else {
+                e.position
+            },
+            verified: if u.verified == Some(true) {
+                None
+            } else {
+                e.verified
+            },
         }),
 
         // delete -> anything: New op wins (recreation after delete)
@@ -193,23 +243,18 @@ fn merge_relation_ops(existing: RelationOp, new: RelationOp) -> RelationOp {
     }
 }
 
-fn parse_space_id(space_id_str: &str) -> Result<Uuid, HandlerError> {
-    // Handle hex-encoded UUID bytes (32 hex chars) or standard UUID format
-    if space_id_str.len() == 32 && space_id_str.chars().all(|c| c.is_ascii_hexdigit()) {
-        let uuid_str = format!(
-            "{}-{}-{}-{}-{}",
-            &space_id_str[0..8],
-            &space_id_str[8..12],
-            &space_id_str[12..16],
-            &space_id_str[16..20],
-            &space_id_str[20..32]
-        );
-        Uuid::parse_str(&uuid_str)
-            .map_err(|e| HandlerError::InvalidSpaceId(format!("hex: {}", e)))
-    } else {
-        Uuid::parse_str(space_id_str)
-            .map_err(|e| HandlerError::InvalidSpaceId(e.to_string()))
+fn parse_space_id(space_id_bytes: &[u8]) -> Result<Uuid, HandlerError> {
+    // Convert 16-byte UUID to UUID struct
+    if space_id_bytes.len() != 16 {
+        return Err(HandlerError::InvalidSpaceId(format!(
+            "Expected 16 bytes, got {}",
+            space_id_bytes.len()
+        )));
     }
+    let bytes: [u8; 16] = space_id_bytes.try_into().map_err(|_| {
+        HandlerError::InvalidSpaceId("Failed to convert bytes to array".to_string())
+    })?;
+    Ok(Uuid::from_bytes(bytes))
 }
 
 fn extract_entities(edit: &HermesEdit, meta: &EditMetadata) -> Vec<EntityItem> {
@@ -649,7 +694,11 @@ mod tests {
     #[test]
     fn test_squash_values_single_set() {
         let id = Uuid::new_v4();
-        let ops = vec![make_value_op(id, ValueChangeType::Set, Some("hello".into()))];
+        let ops = vec![make_value_op(
+            id,
+            ValueChangeType::Set,
+            Some("hello".into()),
+        )];
         let result = squash_values(&ops);
         assert_eq!(result.len(), 1);
         assert!(matches!(result[0].change_type, ValueChangeType::Set));

@@ -4,10 +4,10 @@
 
 use prost::Message;
 use rdkafka::{
-    TopicPartitionList,
     config::ClientConfig,
     consumer::{Consumer, StreamConsumer},
     message::Message as KafkaMessage,
+    TopicPartitionList,
 };
 use std::env;
 use std::time::Duration;
@@ -457,26 +457,16 @@ impl KafkaConsumer {
         let edit = HermesEdit::decode(payload)
             .map_err(|e| IngestError::parse(format!("Failed to decode HermesEdit: {}", e)))?;
 
-        // Parse space_id - it may be hex-encoded UUID bytes or standard UUID string format
-        let space_id_str = &edit.space_id;
-        let space_id = if space_id_str.len() == 32
-            && space_id_str.chars().all(|c: char| c.is_ascii_hexdigit())
-        {
-            // Hex-encoded UUID bytes (32 hex chars) - convert to UUID format
-            let uuid_str = format!(
-                "{}-{}-{}-{}-{}",
-                &space_id_str[0..8],
-                &space_id_str[8..12],
-                &space_id_str[12..16],
-                &space_id_str[16..20],
-                &space_id_str[20..32]
-            );
-            Uuid::parse_str(&uuid_str)
-                .map_err(|e| IngestError::parse(format!("Invalid hex-encoded space_id: {}", e)))?
+        // Parse space_id - it's a 16-byte UUID
+        let space_id = if edit.space_id.len() == 16 {
+            let bytes: [u8; 16] = edit.space_id.as_slice().try_into()
+                .map_err(|_| IngestError::parse("Failed to convert space_id bytes".to_string()))?;
+            Uuid::from_bytes(bytes)
         } else {
-            // Standard UUID string format
-            Uuid::parse_str(space_id_str)
-                .map_err(|e| IngestError::parse(format!("Invalid space_id: {}", e)))?
+            return Err(IngestError::parse(format!(
+                "Invalid space_id length: expected 16 bytes, got {}",
+                edit.space_id.len()
+            )));
         };
 
         let mut events = Vec::new();

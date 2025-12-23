@@ -38,8 +38,8 @@ pub struct UnflagEditorAction {
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct PublishAction {
     /// Content URI (IPFS hash)
-    #[prost(bytes = "vec", tag = "1")]
-    pub content_uri: ::prost::alloc::vec::Vec<u8>,
+    #[prost(string, tag = "1")]
+    pub content_uri: ::prost::alloc::string::String,
     /// Edit metadata
     #[prost(bytes = "vec", tag = "2")]
     pub metadata: ::prost::alloc::vec::Vec<u8>,

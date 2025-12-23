@@ -1,4 +1,6 @@
-use hermes_schema::pb::space::{hermes_space_trust_extension::Extension, HermesSpaceTrustExtension};
+use hermes_schema::pb::space::{
+    hermes_space_trust_extension::Extension, HermesSpaceTrustExtension,
+};
 use tracing::debug;
 use uuid::Uuid;
 

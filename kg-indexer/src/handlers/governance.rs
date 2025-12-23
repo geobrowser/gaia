@@ -1,23 +1,25 @@
 use hermes_schema::pb::governance::{
-    HermesProposalCreated, HermesProposalExecuted, HermesProposalVoted,
+    proposal_action::Action, HermesProposalCreated, HermesProposalExecuted, HermesProposalVoted,
     ProposalVoteOption, VotingMode as ProtoVotingMode,
-    proposal_action::Action,
 };
 use indexer_utils::checksum_address;
 use uuid::Uuid;
 
 use crate::error::HandlerError;
 use crate::models::governance::{
-    ProposalActionItem, ProposalActionPayload, ProposalItem, ProposalVoteItem, VoteOption, VotingMode,
+    ProposalActionItem, ProposalActionPayload, ProposalItem, ProposalVoteItem, VoteOption,
+    VotingMode,
 };
 
 /// Result of processing a proposal creation
+#[allow(dead_code)]
 pub struct ProposalResult {
     pub proposal: ProposalItem,
     pub actions: Vec<ProposalActionItem>,
 }
 
 /// Result of processing a proposal execution
+#[allow(dead_code)]
 pub struct ProposalExecutionResult {
     pub proposal_id: Uuid,
     pub space_id: Uuid,
@@ -25,7 +27,9 @@ pub struct ProposalExecutionResult {
 }
 
 /// Process a HermesProposalCreated message
-pub fn handle_proposal_created(msg: &HermesProposalCreated) -> Result<ProposalResult, HandlerError> {
+pub fn handle_proposal_created(
+    msg: &HermesProposalCreated,
+) -> Result<ProposalResult, HandlerError> {
     let proposal_id = Uuid::from_slice(&msg.proposal_id)?;
     let space_id = Uuid::from_slice(&msg.space_id)?;
     let proposer_id = Uuid::from_slice(&msg.proposer_id)?;
@@ -52,10 +56,10 @@ pub fn handle_proposal_created(msg: &HermesProposalCreated) -> Result<ProposalRe
     let proposal = ProposalItem {
         id: proposal_id,
         space_id,
-        proposer_id,
+        proposed_by: proposer_id,
         voting_mode,
-        start_date: settings.start_date as i64,
-        end_date: settings.last_date as i64,
+        start_time: settings.start_date as i64,
+        end_time: settings.last_date as i64,
         quorum: settings.quorum as i64,
         threshold,
         executed_at: None,
@@ -83,7 +87,8 @@ pub fn handle_proposal_voted(msg: &HermesProposalVoted) -> Result<ProposalVoteIt
         Ok(ProposalVoteOption::VoteOptionYes) => VoteOption::Yes,
         Ok(ProposalVoteOption::VoteOptionNo) => VoteOption::No,
         Ok(ProposalVoteOption::VoteOptionAbstain) => VoteOption::Abstain,
-        Ok(ProposalVoteOption::VoteOptionNone) | Err(_) => VoteOption::None,
+        // Default to Abstain for unknown vote types
+        Ok(ProposalVoteOption::VoteOptionNone) | Err(_) => VoteOption::Abstain,
     };
 
     let meta = msg.meta.as_ref();
@@ -108,11 +113,7 @@ pub fn handle_proposal_executed(
     let proposal_id = Uuid::from_slice(&msg.proposal_id)?;
     let space_id = Uuid::from_slice(&msg.space_id)?;
 
-    let executed_at = msg
-        .meta
-        .as_ref()
-        .map(|m| m.created_at as i64)
-        .unwrap_or(0);
+    let executed_at = msg.meta.as_ref().map(|m| m.created_at as i64).unwrap_or(0);
 
     Ok(ProposalExecutionResult {
         proposal_id,
@@ -121,13 +122,21 @@ pub fn handle_proposal_executed(
     })
 }
 
+/// Namespace UUID for generating deterministic action IDs
+const PROPOSAL_ACTION_NAMESPACE: Uuid = Uuid::from_bytes([
+    0x70, 0x72, 0x6f, 0x70, 0x6f, 0x73, 0x61, 0x6c, 0x5f, 0x61, 0x63, 0x74, 0x69, 0x6f, 0x6e, 0x73,
+]);
+
 fn map_proposal_action(
     proposal_id: Uuid,
     index: i32,
     action: &hermes_schema::pb::governance::ProposalAction,
 ) -> ProposalActionItem {
-    let to_address = checksum_address(format!("0x{}", hex::encode(&action.to)));
-    let value = format_u256(&action.value);
+    // Generate deterministic UUID from proposal_id + index
+    let id = Uuid::new_v5(
+        &PROPOSAL_ACTION_NAMESPACE,
+        format!("{}:{}", proposal_id, index).as_bytes(),
+    );
 
     let payload = match &action.action {
         Some(Action::AddMember(a)) => ProposalActionPayload::AddMember {
@@ -165,20 +174,8 @@ fn map_proposal_action(
     };
 
     ProposalActionItem {
+        id,
         proposal_id,
-        index,
-        to_address,
-        value,
-        data: action.data.clone(),
         payload,
     }
-}
-
-/// Format a big-endian bytes slice as a decimal string (for u256 values)
-fn format_u256(bytes: &[u8]) -> String {
-    if bytes.is_empty() || bytes.iter().all(|&b| b == 0) {
-        return "0".to_string();
-    }
-    // For simplicity, just hex encode - proper u256 decimal conversion would need a bigint library
-    format!("0x{}", hex::encode(bytes))
 }

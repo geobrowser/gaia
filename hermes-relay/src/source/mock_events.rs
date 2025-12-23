@@ -314,9 +314,34 @@ impl ProposalAction {
         }
     }
 
+    /// Create a removeMember action.
+    pub fn remove_member(member_address: [u8; 20]) -> Self {
+        let mut data = selectors::REMOVE_MEMBER.to_vec();
+        // ABI-encode address (padded to 32 bytes)
+        data.extend_from_slice(&[0u8; 12]);
+        data.extend_from_slice(&member_address);
+        Self {
+            to: [0u8; 20],
+            value: [0u8; 32],
+            data,
+        }
+    }
+
     /// Create an addEditor action.
     pub fn add_editor(editor_address: [u8; 20]) -> Self {
         let mut data = selectors::ADD_EDITOR.to_vec();
+        data.extend_from_slice(&[0u8; 12]);
+        data.extend_from_slice(&editor_address);
+        Self {
+            to: [0u8; 20],
+            value: [0u8; 32],
+            data,
+        }
+    }
+
+    /// Create a removeEditor action.
+    pub fn remove_editor(editor_address: [u8; 20]) -> Self {
+        let mut data = selectors::REMOVE_EDITOR.to_vec();
         data.extend_from_slice(&[0u8; 12]);
         data.extend_from_slice(&editor_address);
         Self {
@@ -333,6 +358,44 @@ impl ProposalAction {
         data.extend_from_slice(&topic);
         data.extend_from_slice(content_uri);
         data.extend_from_slice(metadata);
+        Self {
+            to: [0u8; 20],
+            value: [0u8; 32],
+            data,
+        }
+    }
+
+    /// Create a flag action.
+    pub fn flag(target: [u8; 32], content_uri: &[u8]) -> Self {
+        // ABI-encode (bytes32, bytes)
+        use alloy::primitives::{Bytes, FixedBytes};
+        type FlagArgsType = sol! { (bytes32, bytes) };
+        let encoded = FlagArgsType::abi_encode(&(
+            FixedBytes::<32>::from(target),
+            Bytes::copy_from_slice(content_uri),
+        ));
+
+        let mut data = selectors::FLAG.to_vec();
+        data.extend_from_slice(&encoded);
+        Self {
+            to: [0u8; 20],
+            value: [0u8; 32],
+            data,
+        }
+    }
+
+    /// Create an unflag action.
+    pub fn unflag(target: [u8; 32], content_uri: &[u8]) -> Self {
+        // ABI-encode (bytes32, bytes)
+        use alloy::primitives::{Bytes, FixedBytes};
+        type UnflagArgsType = sol! { (bytes32, bytes) };
+        let encoded = UnflagArgsType::abi_encode(&(
+            FixedBytes::<32>::from(target),
+            Bytes::copy_from_slice(content_uri),
+        ));
+
+        let mut data = selectors::UNFLAG.to_vec();
+        data.extend_from_slice(&encoded);
         Self {
             to: [0u8; 20],
             value: [0u8; 32],
@@ -868,6 +931,11 @@ pub mod test_topology {
     // Proposal IDs
     pub const PROPOSAL_1: ProposalId = make_proposal_id(0xA1);
     pub const PROPOSAL_2: ProposalId = make_proposal_id(0xA2);
+    pub const PROPOSAL_3: ProposalId = make_proposal_id(0xA3);
+    pub const PROPOSAL_4: ProposalId = make_proposal_id(0xA4);
+    pub const PROPOSAL_5: ProposalId = make_proposal_id(0xA5);
+    pub const PROPOSAL_6: ProposalId = make_proposal_id(0xA6);
+    pub const PROPOSAL_7: ProposalId = make_proposal_id(0xA7);
 
     // Object types for voting
     pub const OBJECT_TYPE_ENTITY: [u8; 4] = [0x00, 0x00, 0x00, 0x01];
@@ -960,8 +1028,9 @@ pub mod test_topology {
         actions.push(editor_flagged(SPACE_B, USER_1));
         actions.push(editor_unflagged(SPACE_B, USER_1));
 
-        // Phase 6: Proposals (fast path add member proposal)
-        // PROPOSAL_CREATED + PROPOSAL_SETTINGS_USED squashed by pipeline
+        // Phase 6: Proposals with various actions
+
+        // Proposal 1: Add member (PROPOSAL_CREATED + PROPOSAL_SETTINGS_USED squashed by pipeline)
         actions.push(proposal_created(
             SPACE_A,
             PROPOSAL_1,
@@ -987,11 +1056,219 @@ pub mod test_topology {
             VoteOption::Yes,
         ));
         actions.push(proposal_executed(SPACE_A, PROPOSAL_1));
-        // Proposal execution emits events from executed actions
-        // The proposal had add_member([0x11; 20]), so MEMBER_ADDED follows
         let mut proposed_member_address = [0u8; 32];
         proposed_member_address[12..32].copy_from_slice(&[0x11; 20]);
         actions.push(member_added(SPACE_A, proposed_member_address));
+
+        // Proposal 2: Remove member
+        actions.push(proposal_created(
+            SPACE_A,
+            PROPOSAL_2,
+            VotingMode::Slow,
+            vec![ProposalAction::remove_member([0x12; 20])],
+        ));
+        actions.push(proposal_settings_used(
+            SPACE_A, PROPOSAL_2, 3600,   // voting_delay (1 hour)
+            172800, // voting_period (2 days)
+            40,     // quorum (40%)
+            70,     // threshold (70%)
+        ));
+        actions.push(proposal_voted(
+            SPACE_B,
+            SPACE_A,
+            PROPOSAL_2,
+            VoteOption::Yes,
+        ));
+        actions.push(proposal_voted(
+            SPACE_C,
+            SPACE_A,
+            PROPOSAL_2,
+            VoteOption::Yes,
+        ));
+        actions.push(proposal_voted(SPACE_D, SPACE_A, PROPOSAL_2, VoteOption::No));
+        actions.push(proposal_executed(SPACE_A, PROPOSAL_2));
+        let mut removed_member_address = [0u8; 32];
+        removed_member_address[12..32].copy_from_slice(&[0x12; 20]);
+        actions.push(member_removed(SPACE_A, removed_member_address));
+
+        // Proposal 3: Add editor
+        actions.push(proposal_created(
+            SPACE_B,
+            PROPOSAL_3,
+            VotingMode::Fast,
+            vec![ProposalAction::add_editor([0x22; 20])],
+        ));
+        actions.push(proposal_settings_used(
+            SPACE_B, PROPOSAL_3, 0,     // voting_delay
+            86400, // voting_period (1 day)
+            50,    // quorum (50%)
+            60,    // threshold (60%)
+        ));
+        actions.push(proposal_voted(
+            SPACE_A,
+            SPACE_B,
+            PROPOSAL_3,
+            VoteOption::Yes,
+        ));
+        actions.push(proposal_voted(
+            SPACE_C,
+            SPACE_B,
+            PROPOSAL_3,
+            VoteOption::Yes,
+        ));
+        actions.push(proposal_voted(
+            SPACE_E,
+            SPACE_B,
+            PROPOSAL_3,
+            VoteOption::Abstain,
+        ));
+        actions.push(proposal_executed(SPACE_B, PROPOSAL_3));
+        let mut new_editor_address = [0u8; 32];
+        new_editor_address[12..32].copy_from_slice(&[0x22; 20]);
+        actions.push(editor_added(SPACE_B, new_editor_address));
+
+        // Proposal 4: Remove editor
+        actions.push(proposal_created(
+            SPACE_B,
+            PROPOSAL_4,
+            VotingMode::Slow,
+            vec![ProposalAction::remove_editor([0x23; 20])],
+        ));
+        actions.push(proposal_settings_used(
+            SPACE_B, PROPOSAL_4, 7200,   // voting_delay (2 hours)
+            172800, // voting_period (2 days)
+            45,     // quorum (45%)
+            75,     // threshold (75%)
+        ));
+        actions.push(proposal_voted(
+            SPACE_A,
+            SPACE_B,
+            PROPOSAL_4,
+            VoteOption::Yes,
+        ));
+        actions.push(proposal_voted(SPACE_C, SPACE_B, PROPOSAL_4, VoteOption::No));
+        actions.push(proposal_voted(
+            SPACE_D,
+            SPACE_B,
+            PROPOSAL_4,
+            VoteOption::Yes,
+        ));
+        actions.push(proposal_voted(
+            SPACE_F,
+            SPACE_B,
+            PROPOSAL_4,
+            VoteOption::Yes,
+        ));
+        actions.push(proposal_executed(SPACE_B, PROPOSAL_4));
+        let mut removed_editor_address = [0u8; 32];
+        removed_editor_address[12..32].copy_from_slice(&[0x23; 20]);
+        actions.push(editor_removed(SPACE_B, removed_editor_address));
+
+        // Proposal 5: Flag content
+        let mut flag_target = [0u8; 32];
+        flag_target[..16].copy_from_slice(&make_id(0xF5));
+        actions.push(proposal_created(
+            SPACE_C,
+            PROPOSAL_5,
+            VotingMode::Fast,
+            vec![ProposalAction::flag(
+                flag_target,
+                b"ipfs://QmFlaggedContent5",
+            )],
+        ));
+        actions.push(proposal_settings_used(
+            SPACE_C, PROPOSAL_5, 0,     // voting_delay
+            86400, // voting_period (1 day)
+            50,    // quorum (50%)
+            60,    // threshold (60%)
+        ));
+        actions.push(proposal_voted(
+            SPACE_A,
+            SPACE_C,
+            PROPOSAL_5,
+            VoteOption::Yes,
+        ));
+        actions.push(proposal_voted(
+            SPACE_B,
+            SPACE_C,
+            PROPOSAL_5,
+            VoteOption::Yes,
+        ));
+        actions.push(proposal_voted(SPACE_E, SPACE_C, PROPOSAL_5, VoteOption::No));
+        actions.push(proposal_executed(SPACE_C, PROPOSAL_5));
+
+        // Proposal 6: Unflag content
+        let mut unflag_target = [0u8; 32];
+        unflag_target[..16].copy_from_slice(&make_id(0xF6));
+        actions.push(proposal_created(
+            SPACE_C,
+            PROPOSAL_6,
+            VotingMode::Slow,
+            vec![ProposalAction::unflag(
+                unflag_target,
+                b"ipfs://QmFlaggedContent6",
+            )],
+        ));
+        actions.push(proposal_settings_used(
+            SPACE_C, PROPOSAL_6, 5400,   // voting_delay (1.5 hours)
+            172800, // voting_period (2 days)
+            50,     // quorum (50%)
+            65,     // threshold (65%)
+        ));
+        actions.push(proposal_voted(
+            SPACE_A,
+            SPACE_C,
+            PROPOSAL_6,
+            VoteOption::Yes,
+        ));
+        actions.push(proposal_voted(
+            SPACE_B,
+            SPACE_C,
+            PROPOSAL_6,
+            VoteOption::Yes,
+        ));
+        actions.push(proposal_voted(
+            SPACE_D,
+            SPACE_C,
+            PROPOSAL_6,
+            VoteOption::Abstain,
+        ));
+        actions.push(proposal_voted(SPACE_F, SPACE_C, PROPOSAL_6, VoteOption::No));
+        actions.push(proposal_executed(SPACE_C, PROPOSAL_6));
+
+        // Proposal 7: Publish edits (via proposal)
+        let publish_topic = make_id(0x77);
+        let mut publish_topic_array = [0u8; 32];
+        publish_topic_array[..16].copy_from_slice(&publish_topic);
+        actions.push(proposal_created(
+            SPACE_B,
+            PROPOSAL_7,
+            VotingMode::Fast,
+            vec![ProposalAction::publish(
+                publish_topic_array,
+                b"QmProposedEdits",
+                b"version=1",
+            )],
+        ));
+        actions.push(proposal_settings_used(
+            SPACE_B, PROPOSAL_7, 0,     // voting_delay
+            86400, // voting_period (1 day)
+            50,    // quorum (50%)
+            60,    // threshold (60%)
+        ));
+        actions.push(proposal_voted(
+            SPACE_A,
+            SPACE_B,
+            PROPOSAL_7,
+            VoteOption::Yes,
+        ));
+        actions.push(proposal_voted(
+            SPACE_C,
+            SPACE_B,
+            PROPOSAL_7,
+            VoteOption::Yes,
+        ));
+        actions.push(proposal_executed(SPACE_B, PROPOSAL_7));
 
         // Phase 7: Edits
         actions.push(edit_published(ROOT_SPACE_ID, "QmRootEdit1CreatePersons"));
@@ -1232,8 +1509,8 @@ mod tests {
         assert_eq!(topic_declared_count, 5);
         // 6 edits
         assert_eq!(edit_count, 6);
-        // 1 proposal with settings
-        assert_eq!(proposal_settings_count, 1);
+        // 7 proposals with settings (one for each proposal: add_member, remove_member, add_editor, remove_editor, flag, unflag, publish)
+        assert_eq!(proposal_settings_count, 7);
     }
 
     #[test]
@@ -1337,5 +1614,65 @@ mod tests {
         // Followed by padded address
         assert_eq!(&action.data[4..16], &[0u8; 12]);
         assert_eq!(&action.data[16..36], &member_address);
+    }
+
+    #[test]
+    fn test_proposal_action_remove_member() {
+        let member_address = [0xBB; 20];
+        let action = ProposalAction::remove_member(member_address);
+
+        // Calldata should start with REMOVE_MEMBER selector
+        assert_eq!(&action.data[0..4], &selectors::REMOVE_MEMBER);
+        // Followed by padded address
+        assert_eq!(&action.data[4..16], &[0u8; 12]);
+        assert_eq!(&action.data[16..36], &member_address);
+    }
+
+    #[test]
+    fn test_proposal_action_add_editor() {
+        let editor_address = [0xCC; 20];
+        let action = ProposalAction::add_editor(editor_address);
+
+        // Calldata should start with ADD_EDITOR selector
+        assert_eq!(&action.data[0..4], &selectors::ADD_EDITOR);
+        // Followed by padded address
+        assert_eq!(&action.data[4..16], &[0u8; 12]);
+        assert_eq!(&action.data[16..36], &editor_address);
+    }
+
+    #[test]
+    fn test_proposal_action_remove_editor() {
+        let editor_address = [0xDD; 20];
+        let action = ProposalAction::remove_editor(editor_address);
+
+        // Calldata should start with REMOVE_EDITOR selector
+        assert_eq!(&action.data[0..4], &selectors::REMOVE_EDITOR);
+        // Followed by padded address
+        assert_eq!(&action.data[4..16], &[0u8; 12]);
+        assert_eq!(&action.data[16..36], &editor_address);
+    }
+
+    #[test]
+    fn test_proposal_action_flag() {
+        let target = [0xAA; 32];
+        let content_uri = b"ipfs://QmTest";
+        let action = ProposalAction::flag(target, content_uri);
+
+        // Calldata should start with FLAG selector
+        assert_eq!(&action.data[0..4], &selectors::FLAG);
+        // Data should be non-empty (ABI-encoded (bytes32, bytes))
+        assert!(action.data.len() > 4);
+    }
+
+    #[test]
+    fn test_proposal_action_unflag() {
+        let target = [0xBB; 32];
+        let content_uri = b"ipfs://QmTest2";
+        let action = ProposalAction::unflag(target, content_uri);
+
+        // Calldata should start with UNFLAG selector
+        assert_eq!(&action.data[0..4], &selectors::UNFLAG);
+        // Data should be non-empty (ABI-encoded (bytes32, bytes))
+        assert!(action.data.len() > 4);
     }
 }

@@ -1,8 +1,9 @@
 use prost::Message;
 use rdkafka::{
-    TopicPartitionList,
     config::ClientConfig,
     consumer::{Consumer, DefaultConsumerContext, StreamConsumer},
+    message::Headers,
+    TopicPartitionList,
 };
 use std::env;
 use tracing::{debug, info};
@@ -50,8 +51,7 @@ impl KafkaConsumer {
             "space.creations".to_string(),
             "space.membership".to_string(),
             "space.trust.extensions".to_string(),
-            "governance.proposals".to_string(),
-            "governance.votes".to_string(),
+            "space.governance".to_string(),
         ];
 
         info!(
@@ -142,10 +142,25 @@ impl KgMessage {
     }
 }
 
-/// Parse a Kafka message based on its topic
+/// Get the event-type header value from Kafka headers
+pub fn get_event_type(headers: Option<&rdkafka::message::BorrowedHeaders>) -> Option<String> {
+    headers.and_then(|h| {
+        for header in h.iter() {
+            if header.key == "event-type" {
+                if let Some(value) = header.value {
+                    return String::from_utf8(value.to_vec()).ok();
+                }
+            }
+        }
+        None
+    })
+}
+
+/// Parse a Kafka message based on its topic and headers
 pub fn parse_message(
     topic: &str,
     payload: &[u8],
+    event_type: Option<&str>,
 ) -> Result<KgMessage, IndexerError> {
     match topic {
         "knowledge.edits" => {
@@ -159,34 +174,60 @@ pub fn parse_message(
             Ok(KgMessage::CreateSpace(space))
         }
         "space.membership" => {
-            // Try to decode as RoleGranted first, then RoleRevoked
-            if let Ok(granted) = hermes_schema::pb::membership::HermesRoleGranted::decode(payload) {
-                return Ok(KgMessage::RoleGranted(granted));
+            // Use event-type header to determine message type
+            match event_type {
+                Some("ROLE_GRANTED") => {
+                    let granted =
+                        hermes_schema::pb::membership::HermesRoleGranted::decode(payload)
+                            .map_err(|e| IndexerError::decode(format!("HermesRoleGranted: {}", e)))?;
+                    Ok(KgMessage::RoleGranted(granted))
+                }
+                Some("ROLE_REVOKED") => {
+                    let revoked =
+                        hermes_schema::pb::membership::HermesRoleRevoked::decode(payload)
+                            .map_err(|e| IndexerError::decode(format!("HermesRoleRevoked: {}", e)))?;
+                    Ok(KgMessage::RoleRevoked(revoked))
+                }
+                _ => Err(IndexerError::decode(format!(
+                    "unknown membership event type: {:?}",
+                    event_type
+                ))),
             }
-            if let Ok(revoked) = hermes_schema::pb::membership::HermesRoleRevoked::decode(payload) {
-                return Ok(KgMessage::RoleRevoked(revoked));
-            }
-            Err(IndexerError::decode("membership message"))
         }
         "space.trust.extensions" => {
             let extension = hermes_schema::pb::space::HermesSpaceTrustExtension::decode(payload)
                 .map_err(|e| IndexerError::decode(format!("HermesSpaceTrustExtension: {}", e)))?;
             Ok(KgMessage::TrustExtension(extension))
         }
-        "governance.proposals" => {
-            // Try to decode as ProposalCreated first, then ProposalExecuted
-            if let Ok(created) = hermes_schema::pb::governance::HermesProposalCreated::decode(payload) {
-                return Ok(KgMessage::ProposalCreated(created));
+        "space.governance" => {
+            // Use event-type header to determine message type
+            match event_type {
+                Some("PROPOSAL_CREATED") => {
+                    let created =
+                        hermes_schema::pb::governance::HermesProposalCreated::decode(payload)
+                            .map_err(|e| {
+                                IndexerError::decode(format!("HermesProposalCreated: {}", e))
+                            })?;
+                    Ok(KgMessage::ProposalCreated(created))
+                }
+                Some("PROPOSAL_VOTED") => {
+                    let voted = hermes_schema::pb::governance::HermesProposalVoted::decode(payload)
+                        .map_err(|e| IndexerError::decode(format!("HermesProposalVoted: {}", e)))?;
+                    Ok(KgMessage::ProposalVoted(voted))
+                }
+                Some("PROPOSAL_EXECUTED") => {
+                    let executed =
+                        hermes_schema::pb::governance::HermesProposalExecuted::decode(payload)
+                            .map_err(|e| {
+                                IndexerError::decode(format!("HermesProposalExecuted: {}", e))
+                            })?;
+                    Ok(KgMessage::ProposalExecuted(executed))
+                }
+                _ => Err(IndexerError::decode(format!(
+                    "unknown governance event type: {:?}",
+                    event_type
+                ))),
             }
-            if let Ok(executed) = hermes_schema::pb::governance::HermesProposalExecuted::decode(payload) {
-                return Ok(KgMessage::ProposalExecuted(executed));
-            }
-            Err(IndexerError::decode("governance.proposals message"))
-        }
-        "governance.votes" => {
-            let voted = hermes_schema::pb::governance::HermesProposalVoted::decode(payload)
-                .map_err(|e| IndexerError::decode(format!("HermesProposalVoted: {}", e)))?;
-            Ok(KgMessage::ProposalVoted(voted))
         }
         _ => Err(IndexerError::decode(format!("unknown topic: {}", topic))),
     }
