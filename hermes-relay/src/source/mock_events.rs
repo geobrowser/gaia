@@ -368,13 +368,13 @@ impl ProposalAction {
     /// Create a flag action.
     pub fn flag(target: [u8; 32], content_uri: &[u8]) -> Self {
         // ABI-encode (bytes32, bytes)
-        use alloy::primitives::{FixedBytes, Bytes};
+        use alloy::primitives::{Bytes, FixedBytes};
         type FlagArgsType = sol! { (bytes32, bytes) };
         let encoded = FlagArgsType::abi_encode(&(
             FixedBytes::<32>::from(target),
             Bytes::copy_from_slice(content_uri),
         ));
-        
+
         let mut data = selectors::FLAG.to_vec();
         data.extend_from_slice(&encoded);
         Self {
@@ -387,13 +387,13 @@ impl ProposalAction {
     /// Create an unflag action.
     pub fn unflag(target: [u8; 32], content_uri: &[u8]) -> Self {
         // ABI-encode (bytes32, bytes)
-        use alloy::primitives::{FixedBytes, Bytes};
+        use alloy::primitives::{Bytes, FixedBytes};
         type UnflagArgsType = sol! { (bytes32, bytes) };
         let encoded = UnflagArgsType::abi_encode(&(
             FixedBytes::<32>::from(target),
             Bytes::copy_from_slice(content_uri),
         ));
-        
+
         let mut data = selectors::UNFLAG.to_vec();
         data.extend_from_slice(&encoded);
         Self {
@@ -1029,7 +1029,7 @@ pub mod test_topology {
         actions.push(editor_unflagged(SPACE_B, USER_1));
 
         // Phase 6: Proposals with various actions
-        
+
         // Proposal 1: Add member (PROPOSAL_CREATED + PROPOSAL_SETTINGS_USED squashed by pipeline)
         actions.push(proposal_created(
             SPACE_A,
@@ -1043,8 +1043,18 @@ pub mod test_topology {
             50,    // quorum (50%)
             60,    // threshold (60%)
         ));
-        actions.push(proposal_voted(SPACE_B, SPACE_A, PROPOSAL_1, VoteOption::Yes));
-        actions.push(proposal_voted(SPACE_C, SPACE_A, PROPOSAL_1, VoteOption::Yes));
+        actions.push(proposal_voted(
+            SPACE_B,
+            SPACE_A,
+            PROPOSAL_1,
+            VoteOption::Yes,
+        ));
+        actions.push(proposal_voted(
+            SPACE_C,
+            SPACE_A,
+            PROPOSAL_1,
+            VoteOption::Yes,
+        ));
         actions.push(proposal_executed(SPACE_A, PROPOSAL_1));
         let mut proposed_member_address = [0u8; 32];
         proposed_member_address[12..32].copy_from_slice(&[0x11; 20]);
@@ -1060,11 +1070,21 @@ pub mod test_topology {
         actions.push(proposal_settings_used(
             SPACE_A, PROPOSAL_2, 3600,   // voting_delay (1 hour)
             172800, // voting_period (2 days)
-            40,    // quorum (40%)
-            70,    // threshold (70%)
+            40,     // quorum (40%)
+            70,     // threshold (70%)
         ));
-        actions.push(proposal_voted(SPACE_B, SPACE_A, PROPOSAL_2, VoteOption::Yes));
-        actions.push(proposal_voted(SPACE_C, SPACE_A, PROPOSAL_2, VoteOption::Yes));
+        actions.push(proposal_voted(
+            SPACE_B,
+            SPACE_A,
+            PROPOSAL_2,
+            VoteOption::Yes,
+        ));
+        actions.push(proposal_voted(
+            SPACE_C,
+            SPACE_A,
+            PROPOSAL_2,
+            VoteOption::Yes,
+        ));
         actions.push(proposal_voted(SPACE_D, SPACE_A, PROPOSAL_2, VoteOption::No));
         actions.push(proposal_executed(SPACE_A, PROPOSAL_2));
         let mut removed_member_address = [0u8; 32];
@@ -1079,14 +1099,29 @@ pub mod test_topology {
             vec![ProposalAction::add_editor([0x22; 20])],
         ));
         actions.push(proposal_settings_used(
-            SPACE_B, PROPOSAL_3, 0,      // voting_delay
+            SPACE_B, PROPOSAL_3, 0,     // voting_delay
             86400, // voting_period (1 day)
             50,    // quorum (50%)
             60,    // threshold (60%)
         ));
-        actions.push(proposal_voted(SPACE_A, SPACE_B, PROPOSAL_3, VoteOption::Yes));
-        actions.push(proposal_voted(SPACE_C, SPACE_B, PROPOSAL_3, VoteOption::Yes));
-        actions.push(proposal_voted(SPACE_E, SPACE_B, PROPOSAL_3, VoteOption::Abstain));
+        actions.push(proposal_voted(
+            SPACE_A,
+            SPACE_B,
+            PROPOSAL_3,
+            VoteOption::Yes,
+        ));
+        actions.push(proposal_voted(
+            SPACE_C,
+            SPACE_B,
+            PROPOSAL_3,
+            VoteOption::Yes,
+        ));
+        actions.push(proposal_voted(
+            SPACE_E,
+            SPACE_B,
+            PROPOSAL_3,
+            VoteOption::Abstain,
+        ));
         actions.push(proposal_executed(SPACE_B, PROPOSAL_3));
         let mut new_editor_address = [0u8; 32];
         new_editor_address[12..32].copy_from_slice(&[0x22; 20]);
@@ -1102,13 +1137,28 @@ pub mod test_topology {
         actions.push(proposal_settings_used(
             SPACE_B, PROPOSAL_4, 7200,   // voting_delay (2 hours)
             172800, // voting_period (2 days)
-            45,    // quorum (45%)
-            75,    // threshold (75%)
+            45,     // quorum (45%)
+            75,     // threshold (75%)
         ));
-        actions.push(proposal_voted(SPACE_A, SPACE_B, PROPOSAL_4, VoteOption::Yes));
+        actions.push(proposal_voted(
+            SPACE_A,
+            SPACE_B,
+            PROPOSAL_4,
+            VoteOption::Yes,
+        ));
         actions.push(proposal_voted(SPACE_C, SPACE_B, PROPOSAL_4, VoteOption::No));
-        actions.push(proposal_voted(SPACE_D, SPACE_B, PROPOSAL_4, VoteOption::Yes));
-        actions.push(proposal_voted(SPACE_F, SPACE_B, PROPOSAL_4, VoteOption::Yes));
+        actions.push(proposal_voted(
+            SPACE_D,
+            SPACE_B,
+            PROPOSAL_4,
+            VoteOption::Yes,
+        ));
+        actions.push(proposal_voted(
+            SPACE_F,
+            SPACE_B,
+            PROPOSAL_4,
+            VoteOption::Yes,
+        ));
         actions.push(proposal_executed(SPACE_B, PROPOSAL_4));
         let mut removed_editor_address = [0u8; 32];
         removed_editor_address[12..32].copy_from_slice(&[0x23; 20]);
@@ -1121,16 +1171,29 @@ pub mod test_topology {
             SPACE_C,
             PROPOSAL_5,
             VotingMode::Fast,
-            vec![ProposalAction::flag(flag_target, b"ipfs://QmFlaggedContent5")],
+            vec![ProposalAction::flag(
+                flag_target,
+                b"ipfs://QmFlaggedContent5",
+            )],
         ));
         actions.push(proposal_settings_used(
-            SPACE_C, PROPOSAL_5, 0,      // voting_delay
+            SPACE_C, PROPOSAL_5, 0,     // voting_delay
             86400, // voting_period (1 day)
             50,    // quorum (50%)
             60,    // threshold (60%)
         ));
-        actions.push(proposal_voted(SPACE_A, SPACE_C, PROPOSAL_5, VoteOption::Yes));
-        actions.push(proposal_voted(SPACE_B, SPACE_C, PROPOSAL_5, VoteOption::Yes));
+        actions.push(proposal_voted(
+            SPACE_A,
+            SPACE_C,
+            PROPOSAL_5,
+            VoteOption::Yes,
+        ));
+        actions.push(proposal_voted(
+            SPACE_B,
+            SPACE_C,
+            PROPOSAL_5,
+            VoteOption::Yes,
+        ));
         actions.push(proposal_voted(SPACE_E, SPACE_C, PROPOSAL_5, VoteOption::No));
         actions.push(proposal_executed(SPACE_C, PROPOSAL_5));
 
@@ -1141,17 +1204,35 @@ pub mod test_topology {
             SPACE_C,
             PROPOSAL_6,
             VotingMode::Slow,
-            vec![ProposalAction::unflag(unflag_target, b"ipfs://QmFlaggedContent6")],
+            vec![ProposalAction::unflag(
+                unflag_target,
+                b"ipfs://QmFlaggedContent6",
+            )],
         ));
         actions.push(proposal_settings_used(
             SPACE_C, PROPOSAL_6, 5400,   // voting_delay (1.5 hours)
             172800, // voting_period (2 days)
-            50,    // quorum (50%)
-            65,    // threshold (65%)
+            50,     // quorum (50%)
+            65,     // threshold (65%)
         ));
-        actions.push(proposal_voted(SPACE_A, SPACE_C, PROPOSAL_6, VoteOption::Yes));
-        actions.push(proposal_voted(SPACE_B, SPACE_C, PROPOSAL_6, VoteOption::Yes));
-        actions.push(proposal_voted(SPACE_D, SPACE_C, PROPOSAL_6, VoteOption::Abstain));
+        actions.push(proposal_voted(
+            SPACE_A,
+            SPACE_C,
+            PROPOSAL_6,
+            VoteOption::Yes,
+        ));
+        actions.push(proposal_voted(
+            SPACE_B,
+            SPACE_C,
+            PROPOSAL_6,
+            VoteOption::Yes,
+        ));
+        actions.push(proposal_voted(
+            SPACE_D,
+            SPACE_C,
+            PROPOSAL_6,
+            VoteOption::Abstain,
+        ));
         actions.push(proposal_voted(SPACE_F, SPACE_C, PROPOSAL_6, VoteOption::No));
         actions.push(proposal_executed(SPACE_C, PROPOSAL_6));
 
@@ -1163,16 +1244,30 @@ pub mod test_topology {
             SPACE_B,
             PROPOSAL_7,
             VotingMode::Fast,
-            vec![ProposalAction::publish(publish_topic_array, b"QmProposedEdits", b"version=1")],
+            vec![ProposalAction::publish(
+                publish_topic_array,
+                b"QmProposedEdits",
+                b"version=1",
+            )],
         ));
         actions.push(proposal_settings_used(
-            SPACE_B, PROPOSAL_7, 0,      // voting_delay
+            SPACE_B, PROPOSAL_7, 0,     // voting_delay
             86400, // voting_period (1 day)
             50,    // quorum (50%)
             60,    // threshold (60%)
         ));
-        actions.push(proposal_voted(SPACE_A, SPACE_B, PROPOSAL_7, VoteOption::Yes));
-        actions.push(proposal_voted(SPACE_C, SPACE_B, PROPOSAL_7, VoteOption::Yes));
+        actions.push(proposal_voted(
+            SPACE_A,
+            SPACE_B,
+            PROPOSAL_7,
+            VoteOption::Yes,
+        ));
+        actions.push(proposal_voted(
+            SPACE_C,
+            SPACE_B,
+            PROPOSAL_7,
+            VoteOption::Yes,
+        ));
         actions.push(proposal_executed(SPACE_B, PROPOSAL_7));
 
         // Phase 7: Edits
