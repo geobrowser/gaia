@@ -211,17 +211,19 @@ async fn test_proposal_1_details() {
     let space_a = uuid_from_bytes(expected::SPACE_A);
 
     // Verify proposal exists in SPACE_A with Fast voting mode
-    let proposal: Option<(Uuid, String)> = sqlx::query_as(
-        "SELECT space_id, voting_mode::text FROM proposals WHERE id = $1",
-    )
-    .bind(proposal_id)
-    .fetch_optional(&pool)
-    .await
-    .expect("Failed to query proposal");
+    let proposal: Option<(Uuid, String)> =
+        sqlx::query_as("SELECT space_id, voting_mode::text FROM proposals WHERE id = $1")
+            .bind(proposal_id)
+            .fetch_optional(&pool)
+            .await
+            .expect("Failed to query proposal");
 
     let (space_id, voting_mode) = proposal.expect("Proposal 1 should exist");
     assert_eq!(space_id, space_a, "Proposal 1 should be in SPACE_A");
-    assert_eq!(voting_mode, "Fast", "Proposal 1 should have Fast voting mode");
+    assert_eq!(
+        voting_mode, "Fast",
+        "Proposal 1 should have Fast voting mode"
+    );
 }
 
 #[tokio::test]
@@ -232,17 +234,19 @@ async fn test_proposal_2_details() {
     let space_a = uuid_from_bytes(expected::SPACE_A);
 
     // Verify proposal exists in SPACE_A with Slow voting mode
-    let proposal: Option<(Uuid, String)> = sqlx::query_as(
-        "SELECT space_id, voting_mode::text FROM proposals WHERE id = $1",
-    )
-    .bind(proposal_id)
-    .fetch_optional(&pool)
-    .await
-    .expect("Failed to query proposal");
+    let proposal: Option<(Uuid, String)> =
+        sqlx::query_as("SELECT space_id, voting_mode::text FROM proposals WHERE id = $1")
+            .bind(proposal_id)
+            .fetch_optional(&pool)
+            .await
+            .expect("Failed to query proposal");
 
     let (space_id, voting_mode) = proposal.expect("Proposal 2 should exist");
     assert_eq!(space_id, space_a, "Proposal 2 should be in SPACE_A");
-    assert_eq!(voting_mode, "Slow", "Proposal 2 should have Slow voting mode");
+    assert_eq!(
+        voting_mode, "Slow",
+        "Proposal 2 should have Slow voting mode"
+    );
 }
 
 #[tokio::test]
@@ -347,12 +351,11 @@ async fn test_executed_proposals() {
     let pool = get_pool().await;
 
     // All 7 proposals should be executed (have executed_at set)
-    let executed_count: (i64,) = sqlx::query_as(
-        "SELECT COUNT(*) FROM proposals WHERE executed_at IS NOT NULL",
-    )
-    .fetch_one(&pool)
-    .await
-    .expect("Failed to count executed proposals");
+    let executed_count: (i64,) =
+        sqlx::query_as("SELECT COUNT(*) FROM proposals WHERE executed_at IS NOT NULL")
+            .fetch_one(&pool)
+            .await
+            .expect("Failed to count executed proposals");
 
     assert_eq!(
         executed_count.0, 7,

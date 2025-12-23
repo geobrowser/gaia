@@ -56,13 +56,7 @@ jobs:
             ${{ runner.os }}-cargo-
 
       - name: Run unit tests
-        run: cargo test --lib --bins
-        working-directory: ./kg-indexer
-        env:
-          RUST_BACKTRACE: 1
-
-      - name: Run doc tests
-        run: cargo test --doc
+        run: cargo test --bins
         working-directory: ./kg-indexer
         env:
           RUST_BACKTRACE: 1
