@@ -1,7 +1,7 @@
 import {
 	relations as drizzleRelations,
-	sql,
 	type InferSelectModel,
+	sql,
 } from "drizzle-orm";
 import {
 	bigint,
@@ -25,6 +25,21 @@ import {
 // Enable the pg_trgm extension for similarity searches (executed at runtime)
 // This comment signals that we want the trigram extension available
 // The actual extension creation is handled in migrations
+
+/**
+ * bytea
+ *
+ * This is a custom type for the bytea data type.
+ * It is used to store binary data in the database.
+ */
+export const bytea = customType<{
+	data: Buffer;
+	default: false;
+}>({
+	dataType() {
+		return "bytea";
+	},
+});
 
 export const ipfsCache = pgTable("ipfs_cache", {
 	id: serial(),
@@ -505,53 +520,47 @@ export const proposalVotes = pgTable(
 	],
 );
 
-export const proposalsRelations = drizzleRelations(proposals, ({ one, many }) => ({
-	space: one(spaces, {
-		fields: [proposals.spaceId],
-		references: [spaces.id],
+export const proposalsRelations = drizzleRelations(
+	proposals,
+	({ one, many }) => ({
+		space: one(spaces, {
+			fields: [proposals.spaceId],
+			references: [spaces.id],
+		}),
+		actions: many(proposalActions),
+		votes: many(proposalVotes),
 	}),
-	actions: many(proposalActions),
-	votes: many(proposalVotes),
-}));
+);
 
-export const proposalActionsRelations = drizzleRelations(proposalActions, ({ one }) => ({
-	proposal: one(proposals, {
-		fields: [proposalActions.proposalId],
-		references: [proposals.id],
+export const proposalActionsRelations = drizzleRelations(
+	proposalActions,
+	({ one }) => ({
+		proposal: one(proposals, {
+			fields: [proposalActions.proposalId],
+			references: [proposals.id],
+		}),
 	}),
-}));
+);
 
-export const proposalVotesRelations = drizzleRelations(proposalVotes, ({ one }) => ({
-	proposal: one(proposals, {
-		fields: [proposalVotes.proposalId],
-		references: [proposals.id],
+export const proposalVotesRelations = drizzleRelations(
+	proposalVotes,
+	({ one }) => ({
+		proposal: one(proposals, {
+			fields: [proposalVotes.proposalId],
+			references: [proposals.id],
+		}),
+		space: one(spaces, {
+			fields: [proposalVotes.spaceId],
+			references: [spaces.id],
+		}),
 	}),
-	space: one(spaces, {
-		fields: [proposalVotes.spaceId],
-		references: [spaces.id],
-	}),
-}));
+);
 
 export type DbProposal = InferSelectModel<typeof proposals>;
 export type DbProposalAction = InferSelectModel<typeof proposalActions>;
 export type DbProposalVote = InferSelectModel<typeof proposalVotes>;
 
 /** Actions Schema definitions */
-
-/**
- * bytea
- *
- * This is a custom type for the bytea data type.
- * It is used to store binary data in the database.
- */
-export const bytea = customType<{
-	data: Buffer;
-	default: false;
-}>({
-	dataType() {
-		return "bytea";
-	},
-});
 
 /**
  * raw_actions
@@ -598,19 +607,13 @@ export const userVotes = pgTable(
 	(table) => {
 		return {
 			// UNIQUE(user_id, object_id, space_id)
-			uqUserEntityObjectTypeSpace: unique("user_votes_user_entity_object_type_space_unique").on(
-				table.userId,
-				table.objectId,
-				table.objectType,
-				table.spaceId,
-			),
+			uqUserEntityObjectTypeSpace: unique(
+				"user_votes_user_entity_object_type_space_unique",
+			).on(table.userId, table.objectId, table.objectType, table.spaceId),
 			// CREATE INDEX idx_user_votes_user_entity_space ON user_votes(user_id, object_id, space_id)
-			idxUserEntityObjectTypeSpace: index("idx_user_votes_user_entity_object_type_space").on(
-				table.userId,
-				table.objectId,
-				table.objectType,
-				table.spaceId,
-			),
+			idxUserEntityObjectTypeSpace: index(
+				"idx_user_votes_user_entity_object_type_space",
+			).on(table.userId, table.objectId, table.objectType, table.spaceId),
 		};
 	},
 );
@@ -631,19 +634,15 @@ export const votesCount = pgTable(
 	(table) => {
 		return {
 			// UNIQUE(object_id, object_type, space_id)
-			uqObjectObjectTypeSpace: unique("votes_count_object_object_type_space_unique").on(
-				table.objectId,
-				table.objectType,
-				table.spaceId,
-			),
+			uqObjectObjectTypeSpace: unique(
+				"votes_count_object_object_type_space_unique",
+			).on(table.objectId, table.objectType, table.spaceId),
 			// CREATE INDEX idx_votes_count_space ON votes_count(space_id)
 			idxSpace: index("idx_votes_count_space").on(table.spaceId),
 			// CREATE INDEX idx_votes_count_entity_space ON votes_count(object_id, object_type, space_id)
-			idxObjectObjectTypeSpace: index("idx_votes_count_object_object_type_space").on(
-				table.objectId,
-				table.objectType,
-				table.spaceId,
-			),
+			idxObjectObjectTypeSpace: index(
+				"idx_votes_count_object_object_type_space",
+			).on(table.objectId, table.objectType, table.spaceId),
 		};
 	},
 );
@@ -704,5 +703,3 @@ export const spaceScores = pgTable("space_scores", {
 		mode: "date",
 	}).notNull(),
 });
-
-
