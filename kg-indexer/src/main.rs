@@ -13,7 +13,7 @@ mod handlers;
 mod models;
 mod storage;
 
-use consumer::{parse_message, KafkaConsumer, KgMessage};
+use consumer::{get_event_type, parse_message, KafkaConsumer, KgMessage};
 use error::IndexerError;
 use storage::Storage;
 
@@ -96,7 +96,7 @@ async fn main() -> Result<(), IndexerError> {
     let stale_timeout_secs: u64 = env::var("BLOCK_STALE_TIMEOUT_SECS")
         .ok()
         .and_then(|s| s.parse().ok())
-        .unwrap_or(60);
+        .unwrap_or(1);
 
     // Initialize storage
     let storage = Storage::new(&database_url).await?;
@@ -144,7 +144,8 @@ async fn main() -> Result<(), IndexerError> {
                         let offset = msg.offset();
 
                         if let Some(payload) = msg.payload() {
-                            match parse_message(&topic, payload) {
+                            let event_type = get_event_type(msg.headers());
+                            match parse_message(&topic, payload, event_type.as_deref()) {
                                 Ok(kg_msg) => {
                                     // Get block number from metadata
                                     let block_number = match kg_msg.block_number() {
@@ -251,22 +252,41 @@ async fn main() -> Result<(), IndexerError> {
             }
         }
 
-        // Periodically check for stale blocks
+        // Periodically check for stale blocks and force-process them
+        // This handles cases where is_last is on a topic we don't subscribe to
         if last_stale_check.elapsed() > stale_check_interval {
             last_stale_check = Instant::now();
             let stale = buffer.stale_blocks();
             for block_number in stale {
-                let event_count = buffer
-                    .events
-                    .get(&block_number)
-                    .map(|e| e.len())
-                    .unwrap_or(0);
+                let events = buffer.take_block(block_number);
+                let event_count = events.len();
                 warn!(
                     block_number = block_number,
                     event_count = event_count,
                     stale_timeout_secs = stale_timeout_secs,
-                    "Block buffered too long without is_last, may indicate producer issue"
+                    "Force-processing stale block (is_last may be on unsubscribed topic)"
                 );
+                match process_block(events, &storage, &consumer).await {
+                    Ok(count) => {
+                        processed_count += count as u64;
+                        blocks_processed += 1;
+                        info!(
+                            block_number = block_number,
+                            processed = count,
+                            total_processed = processed_count,
+                            total_blocks = blocks_processed,
+                            "Force-processed stale block"
+                        );
+                    }
+                    Err(e) => {
+                        error_count += 1;
+                        error!(
+                            block_number = block_number,
+                            error = %e,
+                            "Failed to process stale block"
+                        );
+                    }
+                }
             }
             if buffer.buffered_block_count() > 0 {
                 debug!(
@@ -294,6 +314,9 @@ async fn process_message(msg: KgMessage, storage: &Storage) -> Result<usize, Ind
     use models::values::ValueChangeType;
 
     let mut tx = storage.pool.begin().await?;
+    sqlx::query("SET CONSTRAINTS ALL DEFERRED")
+        .execute(&mut *tx)
+        .await?;
 
     let ops = match msg {
         KgMessage::Edit(edit) => {
@@ -388,30 +411,42 @@ async fn process_message(msg: KgMessage, storage: &Storage) -> Result<usize, Ind
             }
         }
         KgMessage::ProposalCreated(event) => {
-            // Parse into DTOs - storage writes handled by gaia-i6e
-            let _result = handlers::governance::handle_proposal_created(&event)?;
+            let result = handlers::governance::handle_proposal_created(&event)?;
             debug!(
-                proposal_id = %hex::encode(&event.proposal_id),
-                actions = event.actions.len(),
-                "Parsed ProposalCreated (storage pending)"
+                proposal_id = %result.proposal.id,
+                actions = result.actions.len(),
+                "Processing ProposalCreated"
             );
-            0 // No DB ops yet
+            storage
+                .insert_proposals(&[result.proposal], &mut tx)
+                .await?;
+            if !result.actions.is_empty() {
+                storage
+                    .insert_proposal_actions(&result.actions, &mut tx)
+                    .await?;
+            }
+            1 + result.actions.len()
         }
         KgMessage::ProposalVoted(event) => {
-            let _vote = handlers::governance::handle_proposal_voted(&event)?;
+            let vote = handlers::governance::handle_proposal_voted(&event)?;
             debug!(
-                proposal_id = %hex::encode(&event.proposal_id),
-                "Parsed ProposalVoted (storage pending)"
+                proposal_id = %vote.proposal_id,
+                voter_id = %vote.voter_id,
+                "Processing ProposalVoted"
             );
-            0
+            storage.insert_proposal_votes(&[vote], &mut tx).await?;
+            1
         }
         KgMessage::ProposalExecuted(event) => {
-            let _execution = handlers::governance::handle_proposal_executed(&event)?;
+            let execution = handlers::governance::handle_proposal_executed(&event)?;
             debug!(
-                proposal_id = %hex::encode(&event.proposal_id),
-                "Parsed ProposalExecuted (storage pending)"
+                proposal_id = %execution.proposal_id,
+                "Processing ProposalExecuted"
             );
-            0
+            storage
+                .update_proposal_executed(execution.proposal_id, execution.executed_at, &mut tx)
+                .await?;
+            1
         }
     };
 
@@ -437,6 +472,9 @@ async fn process_block(
     }
 
     let mut tx = storage.pool.begin().await?;
+    sqlx::query("SET CONSTRAINTS ALL DEFERRED")
+        .execute(&mut *tx)
+        .await?;
     let mut total_ops = 0;
 
     // Process each message in sequence order
@@ -534,30 +572,42 @@ async fn process_block(
                 }
             }
             KgMessage::ProposalCreated(event) => {
-                // Parse into DTOs - storage writes handled by gaia-i6e
-                let _result = handlers::governance::handle_proposal_created(event)?;
+                let result = handlers::governance::handle_proposal_created(event)?;
                 debug!(
-                    proposal_id = %hex::encode(&event.proposal_id),
-                    actions = event.actions.len(),
-                    "Parsed ProposalCreated (storage pending)"
+                    proposal_id = %result.proposal.id,
+                    actions = result.actions.len(),
+                    "Processing ProposalCreated"
                 );
-                0
+                storage
+                    .insert_proposals(&[result.proposal], &mut tx)
+                    .await?;
+                if !result.actions.is_empty() {
+                    storage
+                        .insert_proposal_actions(&result.actions, &mut tx)
+                        .await?;
+                }
+                1 + result.actions.len()
             }
             KgMessage::ProposalVoted(event) => {
-                let _vote = handlers::governance::handle_proposal_voted(event)?;
+                let vote = handlers::governance::handle_proposal_voted(event)?;
                 debug!(
-                    proposal_id = %hex::encode(&event.proposal_id),
-                    "Parsed ProposalVoted (storage pending)"
+                    proposal_id = %vote.proposal_id,
+                    voter_id = %vote.voter_id,
+                    "Processing ProposalVoted"
                 );
-                0
+                storage.insert_proposal_votes(&[vote], &mut tx).await?;
+                1
             }
             KgMessage::ProposalExecuted(event) => {
-                let _execution = handlers::governance::handle_proposal_executed(event)?;
+                let execution = handlers::governance::handle_proposal_executed(event)?;
                 debug!(
-                    proposal_id = %hex::encode(&event.proposal_id),
-                    "Parsed ProposalExecuted (storage pending)"
+                    proposal_id = %execution.proposal_id,
+                    "Processing ProposalExecuted"
                 );
-                0
+                storage
+                    .update_proposal_executed(execution.proposal_id, execution.executed_at, &mut tx)
+                    .await?;
+                1
             }
         };
 

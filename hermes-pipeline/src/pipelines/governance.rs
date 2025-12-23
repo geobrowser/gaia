@@ -90,19 +90,19 @@ pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformRe
         } else if actions::matches(action_type, &actions::PROPOSAL_SETTINGS_USED) {
             if let Some(pending) = debug_span!(
                 "parse.governance.settings",
-                proposal_id = %hex::encode(&action.topic[16..32])
+                proposal_id = %hex::encode(&action.topic[..16])
             )
             .in_scope(|| parse_proposal_settings_used(action))
             {
-                // proposal_id is in topic field (bytes16 padded to 32)
-                let proposal_id = action.topic[16..32].to_vec();
+                // proposal_id is in topic field (bytes16 right-padded to 32, so first 16 bytes)
+                let proposal_id = action.topic[..16].to_vec();
                 settings_map.insert(proposal_id, pending);
             }
         } else if actions::matches(action_type, &actions::PROPOSAL_VOTED) {
             let event = debug_span!(
                 "convert.governance.voted",
                 voter_id = %hex::encode(&action.from_id),
-                proposal_id = %hex::encode(&action.topic[16..32])
+                proposal_id = %hex::encode(&action.topic[..16])
             )
             .in_scope(|| convert_proposal_voted(action, meta, sequence))?;
             result.proposals_voted.push(event);
@@ -110,7 +110,7 @@ pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformRe
             let event = debug_span!(
                 "convert.governance.executed",
                 space_id = %hex::encode(&action.from_id),
-                proposal_id = %hex::encode(&action.topic[16..32])
+                proposal_id = %hex::encode(&action.topic[..16])
             )
             .in_scope(|| convert_proposal_executed(action, meta, sequence))?;
             result.proposals_executed.push(event);
@@ -234,7 +234,7 @@ fn parse_proposal_created(action: &Action, sequence: u32) -> Option<ProposalCrea
         Err(e) => {
             warn!(
                 error = %e,
-                proposal_id = %hex::encode(&action.topic[16..32]),
+                proposal_id = %hex::encode(&action.topic[..16]),
                 "Failed to decode proposal created data"
             );
             return None;
@@ -293,7 +293,7 @@ fn parse_proposal_settings_used(action: &Action) -> Option<ProposalSettingsPendi
         Err(e) => {
             warn!(
                 error = %e,
-                proposal_id = %hex::encode(&action.topic[16..32]),
+                proposal_id = %hex::encode(&action.topic[..16]),
                 "Failed to decode proposal settings used data"
             );
             return None;
@@ -350,15 +350,15 @@ fn convert_proposal_voted(
         Err(e) => {
             warn!(
                 error = %e,
-                proposal_id = %hex::encode(&action.topic[16..32]),
+                proposal_id = %hex::encode(&action.topic[..16]),
                 "Failed to decode proposal voted data"
             );
             ProposalVoteOption::VoteOptionNone
         }
     };
 
-    // proposal_id is in topic field (bytes16 padded to 32)
-    let proposal_id = action.topic[16..32].to_vec();
+    // proposal_id is in topic field (bytes16 right-padded to 32, so it's in first 16 bytes)
+    let proposal_id = action.topic[..16].to_vec();
 
     Ok(HermesProposalVoted {
         voter_id: action.from_id.clone(),
@@ -381,8 +381,8 @@ fn convert_proposal_executed(
     meta: &BlockMetadata,
     sequence: u32,
 ) -> Result<HermesProposalExecuted> {
-    // proposal_id is in topic field (bytes16 padded to 32)
-    let proposal_id = action.topic[16..32].to_vec();
+    // proposal_id is in topic field (bytes16 right-padded to 32, so it's in first 16 bytes)
+    let proposal_id = action.topic[..16].to_vec();
 
     Ok(HermesProposalExecuted {
         space_id: action.from_id.clone(),
@@ -456,13 +456,15 @@ mod tests {
 
         let test_actions = vec![
             // PROPOSAL_CREATED
+            // Topic: proposal_id in first 16 bytes, zeros in last 16 (right-padded)
             Action {
                 from_id: proposer_id.clone(),
                 to_id: space_id.clone(),
                 action: actions::PROPOSAL_CREATED.to_vec(),
-                topic: vec![0; 16]
+                topic: proposal_id
+                    .to_vec()
                     .into_iter()
-                    .chain(proposal_id.to_vec())
+                    .chain(vec![0; 16])
                     .collect(),
                 data: encode_proposal_created_data(proposal_id, 0), // Fast path
             },
@@ -471,9 +473,10 @@ mod tests {
                 from_id: space_id.clone(),
                 to_id: space_id.clone(),
                 action: actions::PROPOSAL_SETTINGS_USED.to_vec(),
-                topic: vec![0; 16]
+                topic: proposal_id
+                    .to_vec()
                     .into_iter()
-                    .chain(proposal_id.to_vec())
+                    .chain(vec![0; 16])
                     .collect(),
                 data: encode_proposal_settings_data(1000, 2000, 0, 100, 50),
             },
@@ -503,13 +506,15 @@ mod tests {
 
         let test_actions = vec![
             // PROPOSAL_CREATED without matching PROPOSAL_SETTINGS_USED
+            // Topic: proposal_id in first 16 bytes, zeros in last 16 (right-padded)
             Action {
                 from_id: vec![1; 16],
                 to_id: vec![2; 16],
                 action: actions::PROPOSAL_CREATED.to_vec(),
-                topic: vec![0; 16]
+                topic: proposal_id
+                    .to_vec()
                     .into_iter()
-                    .chain(proposal_id.to_vec())
+                    .chain(vec![0; 16])
                     .collect(),
                 data: encode_proposal_created_data(proposal_id, 0),
             },
@@ -527,13 +532,15 @@ mod tests {
 
         let test_actions = vec![
             // PROPOSAL_SETTINGS_USED without matching PROPOSAL_CREATED
+            // Topic: proposal_id in first 16 bytes, zeros in last 16 (right-padded)
             Action {
                 from_id: vec![1; 16],
                 to_id: vec![1; 16],
                 action: actions::PROPOSAL_SETTINGS_USED.to_vec(),
-                topic: vec![0; 16]
+                topic: proposal_id
+                    .to_vec()
                     .into_iter()
-                    .chain(proposal_id.to_vec())
+                    .chain(vec![0; 16])
                     .collect(),
                 data: encode_proposal_settings_data(1000, 2000, 0, 100, 50),
             },
@@ -552,13 +559,15 @@ mod tests {
 
         let test_actions = vec![
             // PROPOSAL_CREATED with one ID
+            // Topic: proposal_id in first 16 bytes, zeros in last 16 (right-padded)
             Action {
                 from_id: vec![1; 16],
                 to_id: vec![2; 16],
                 action: actions::PROPOSAL_CREATED.to_vec(),
-                topic: vec![0; 16]
+                topic: proposal_id_1
+                    .to_vec()
                     .into_iter()
-                    .chain(proposal_id_1.to_vec())
+                    .chain(vec![0; 16])
                     .collect(),
                 data: encode_proposal_created_data(proposal_id_1, 0),
             },
@@ -567,9 +576,10 @@ mod tests {
                 from_id: vec![2; 16],
                 to_id: vec![2; 16],
                 action: actions::PROPOSAL_SETTINGS_USED.to_vec(),
-                topic: vec![0; 16]
+                topic: proposal_id_2
+                    .to_vec()
                     .into_iter()
-                    .chain(proposal_id_2.to_vec())
+                    .chain(vec![0; 16])
                     .collect(),
                 data: encode_proposal_settings_data(1000, 2000, 0, 100, 50),
             },
@@ -584,11 +594,12 @@ mod tests {
     #[test]
     fn test_convert_proposal_voted_empty_data() {
         // Empty data should default to None vote
+        // proposal_id in first 16 bytes (right-padded to 32)
         let action = Action {
             from_id: vec![1; 16],
             to_id: vec![2; 16],
             action: actions::PROPOSAL_VOTED.to_vec(),
-            topic: vec![0; 16].into_iter().chain(vec![3; 16]).collect(),
+            topic: vec![3; 16].into_iter().chain(vec![0; 16]).collect(),
             data: vec![],
         };
 
@@ -602,11 +613,12 @@ mod tests {
 
     #[test]
     fn test_convert_proposal_executed() {
+        // proposal_id in first 16 bytes (right-padded to 32)
         let action = Action {
             from_id: vec![1; 16],
             to_id: vec![1; 16],
             action: actions::PROPOSAL_EXECUTED.to_vec(),
-            topic: vec![0; 16].into_iter().chain(vec![2; 16]).collect(),
+            topic: vec![2; 16].into_iter().chain(vec![0; 16]).collect(),
             data: vec![],
         };
 
@@ -619,11 +631,12 @@ mod tests {
     fn test_transform_filters_actions() {
         let test_actions = vec![
             // PROPOSAL_VOTED
+            // Topic: proposal_id in first 16 bytes, zeros in last 16 (right-padded)
             Action {
                 from_id: vec![3; 16],
                 to_id: vec![4; 16],
                 action: actions::PROPOSAL_VOTED.to_vec(),
-                topic: vec![0; 16].into_iter().chain(vec![5; 16]).collect(),
+                topic: vec![5; 16].into_iter().chain(vec![0; 16]).collect(),
                 data: vec![],
             },
             // PROPOSAL_EXECUTED
@@ -631,7 +644,7 @@ mod tests {
                 from_id: vec![6; 16],
                 to_id: vec![6; 16],
                 action: actions::PROPOSAL_EXECUTED.to_vec(),
-                topic: vec![0; 16].into_iter().chain(vec![7; 16]).collect(),
+                topic: vec![7; 16].into_iter().chain(vec![0; 16]).collect(),
                 data: vec![],
             },
             // Should NOT be included (different action type)
