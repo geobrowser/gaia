@@ -298,7 +298,7 @@ mod tests {
         assert_eq!(result.id, vec![1; 16]);
         assert_eq!(result.name, "Test Edit");
         assert_eq!(result.ops.len(), 1);
-        assert_eq!(result.space_id, hex::encode(vec![0x01; 16]));
+        assert_eq!(result.space_id, vec![0x01; 16]);
         assert!(result.is_canonical);
     }
 
