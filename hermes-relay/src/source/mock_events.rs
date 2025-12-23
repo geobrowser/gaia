@@ -52,12 +52,15 @@ pub type ProposalId = [u8; 16];
 /// The space type is determined by a separate SPACE_TYPE_DECLARED event.
 ///
 /// - `space_id`: The 16-byte ID of the new space
-pub fn space_id_registered(space_id: SpaceId) -> Action {
+/// - `registrar`: The registrar's address as bytes32(bytes20(address))
+///   For EOA spaces: the owner's address
+///   For DAO spaces: the DAOSpace contract address
+pub fn space_id_registered(space_id: SpaceId, registrar: Address) -> Action {
     Action {
         from_id: vec![0u8; 16],      // zeros per new contract
         to_id: space_id.to_vec(),    // space_id goes here now
         action: actions::SPACE_REGISTERED.to_vec(),
-        topic: vec![0u8; 32],
+        topic: registrar.to_vec(),   // bytes32(bytes20(msg.sender))
         data: vec![],
     }
 }
@@ -80,11 +83,14 @@ pub fn space_type_declared(space_id: SpaceId, space_type: [u8; 32], version: &[u
 /// Create all events for a personal (EOA) space registration.
 ///
 /// Returns events in correct order:
-/// 1. SPACE_ID_REGISTERED (from_id=zeros, to_id=space_id)
+/// 1. SPACE_ID_REGISTERED (from_id=zeros, to_id=space_id, topic=owner)
 /// 2. SPACE_TYPE_DECLARED (type=EOA_SPACE)
-pub fn personal_space_registered(space_id: SpaceId) -> Vec<Action> {
+///
+/// - `space_id`: The 16-byte space ID
+/// - `owner`: The owner's address as bytes32(bytes20(address))
+pub fn personal_space_registered(space_id: SpaceId, owner: Address) -> Vec<Action> {
     vec![
-        space_id_registered(space_id),
+        space_id_registered(space_id, owner),
         space_type_declared(space_id, actions::SPACE_TYPE_EOA, &[]),
     ]
 }
@@ -92,19 +98,33 @@ pub fn personal_space_registered(space_id: SpaceId) -> Vec<Action> {
 /// Create all events for DAO space initialization.
 ///
 /// Returns events in correct order:
-/// 1. SPACE_ID_REGISTERED (from_id=zeros, to_id=space_id)
-/// 2. SPACE_TYPE_DECLARED (type=DAO_SPACE)
-/// 3. EDITOR_ADDED for each initial editor
-/// 4. MEMBER_ADDED for each initial member
+/// 1. SPACE_ID_REGISTERED (from_id=zeros, to_id=space_id, topic=dao_address)
+/// 2. SPACE_TYPE_DECLARED (type=DAO_SPACE, data=version)
+/// 3. EDITS_PUBLISHED (if initial_edits is Some)
+/// 4. EDITOR_ADDED for each initial editor
+/// 5. MEMBER_ADDED for each initial member
+///
+/// - `space_id`: The 16-byte space ID
+/// - `dao_address`: The DAOSpace contract address as bytes32(bytes20(address))
+/// - `initial_edits`: Optional IPFS hash for initial edits to publish
+/// - `initial_editors`: List of initial editor addresses (bytes20)
+/// - `initial_members`: List of initial member addresses (bytes20)
 pub fn dao_space_initialized(
     space_id: SpaceId,
+    dao_address: Address,
+    initial_edits: Option<&str>,
     initial_editors: &[[u8; 20]],
     initial_members: &[[u8; 20]],
 ) -> Vec<Action> {
     let mut actions = vec![
-        space_id_registered(space_id),
-        space_type_declared(space_id, actions::SPACE_TYPE_DAO, &[]),
+        space_id_registered(space_id, dao_address),
+        space_type_declared(space_id, actions::SPACE_TYPE_DAO, b"1.0.0"),
     ];
+
+    // Add EDITS_PUBLISHED if initial edits provided
+    if let Some(edits_hash) = initial_edits {
+        actions.push(edit_published(space_id, edits_hash));
+    }
 
     // Add EDITOR_ADDED for each initial editor
     for editor in initial_editors {
@@ -129,10 +149,10 @@ pub fn dao_space_initialized(
 /// correct event sequence (SPACE_ID_REGISTERED + SPACE_TYPE_DECLARED).
 ///
 /// - `space_id`: The 16-byte ID of the new space
-/// - `owner`: The 32-byte owner address (unused in new contract, kept for compatibility)
+/// - `owner`: The 32-byte owner address
 #[deprecated(note = "Use personal_space_registered() instead")]
-pub fn space_created(space_id: SpaceId, _owner: Address) -> Action {
-    space_id_registered(space_id)
+pub fn space_created(space_id: SpaceId, owner: Address) -> Action {
+    space_id_registered(space_id, owner)
 }
 
 
@@ -870,6 +890,9 @@ pub mod test_topology {
     // Editor address for initial DAO editors (USER_Q as bytes20)
     pub const EDITOR_Q: [u8; 20] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x31];
 
+    // DAOSpace contract address for SPACE_P (as bytes32(bytes20(address)))
+    pub const DAO_P_ADDRESS: Address = make_address(0xDA);
+
     /// Generate a comprehensive set of test events covering all action types.
     ///
     /// Returns actions for:
@@ -885,32 +908,32 @@ pub mod test_topology {
 
         // Phase 1: Create all spaces using new event sequence
         // Each personal_space_registered returns 2 events (SPACE_ID_REGISTERED + SPACE_TYPE_DECLARED)
-        actions.extend(personal_space_registered(ROOT_SPACE_ID));
-        actions.extend(personal_space_registered(SPACE_A));
-        actions.extend(personal_space_registered(SPACE_B));
-        actions.extend(personal_space_registered(SPACE_C));
-        actions.extend(personal_space_registered(SPACE_D));
-        actions.extend(personal_space_registered(SPACE_E));
-        actions.extend(personal_space_registered(SPACE_F));
-        actions.extend(personal_space_registered(SPACE_G));
-        actions.extend(personal_space_registered(SPACE_H));
-        actions.extend(personal_space_registered(SPACE_I));
-        actions.extend(personal_space_registered(SPACE_J));
+        actions.extend(personal_space_registered(ROOT_SPACE_ID, ROOT_OWNER));
+        actions.extend(personal_space_registered(SPACE_A, USER_1));
+        actions.extend(personal_space_registered(SPACE_B, USER_2));
+        actions.extend(personal_space_registered(SPACE_C, USER_1));
+        actions.extend(personal_space_registered(SPACE_D, USER_2));
+        actions.extend(personal_space_registered(SPACE_E, USER_3));
+        actions.extend(personal_space_registered(SPACE_F, USER_1));
+        actions.extend(personal_space_registered(SPACE_G, USER_2));
+        actions.extend(personal_space_registered(SPACE_H, USER_3));
+        actions.extend(personal_space_registered(SPACE_I, USER_1));
+        actions.extend(personal_space_registered(SPACE_J, USER_2));
 
         // Non-canonical - Island 1
-        actions.extend(personal_space_registered(SPACE_X));
-        actions.extend(personal_space_registered(SPACE_Y));
-        actions.extend(personal_space_registered(SPACE_Z));
-        actions.extend(personal_space_registered(SPACE_W));
+        actions.extend(personal_space_registered(SPACE_X, USER_1));
+        actions.extend(personal_space_registered(SPACE_Y, USER_2));
+        actions.extend(personal_space_registered(SPACE_Z, USER_3));
+        actions.extend(personal_space_registered(SPACE_W, USER_1));
 
         // Non-canonical - Island 2 (P is DAO with Q as initial editor)
         // Q must be created first as it's an initial editor
-        actions.extend(personal_space_registered(SPACE_Q));
+        actions.extend(personal_space_registered(SPACE_Q, USER_2));
         // DAO space P with SPACE_Q's address as initial editor
-        actions.extend(dao_space_initialized(SPACE_P, &[EDITOR_Q], &[]));
+        actions.extend(dao_space_initialized(SPACE_P, DAO_P_ADDRESS, None, &[EDITOR_Q], &[]));
 
         // Non-canonical - Island 3
-        actions.extend(personal_space_registered(SPACE_S));
+        actions.extend(personal_space_registered(SPACE_S, USER_3));
 
         // Phase 2: Subspace operations - verified
         actions.push(subspace_verified(ROOT_SPACE_ID, SPACE_A));
@@ -1027,11 +1050,13 @@ mod tests {
     #[test]
     fn test_space_id_registered_format() {
         let space_id = make_id(0x01);
-        let action = space_id_registered(space_id);
+        let owner = make_address(0xAA);
+        let action = space_id_registered(space_id, owner);
 
         assert_eq!(action.from_id, vec![0u8; 16]); // zeros
         assert_eq!(action.to_id, space_id.to_vec());
         assert_eq!(action.action, actions::SPACE_REGISTERED.to_vec());
+        assert_eq!(action.topic, owner.to_vec()); // registrar address
     }
 
     #[test]
@@ -1048,10 +1073,12 @@ mod tests {
     #[test]
     fn test_personal_space_registered_sequence() {
         let space_id = make_id(0x01);
-        let events = personal_space_registered(space_id);
+        let owner = make_address(0xAA);
+        let events = personal_space_registered(space_id, owner);
 
         assert_eq!(events.len(), 2);
         assert_eq!(events[0].action, actions::SPACE_REGISTERED.to_vec());
+        assert_eq!(events[0].topic, owner.to_vec()); // owner in topic
         assert_eq!(events[1].action, actions::SPACE_TYPE_DECLARED.to_vec());
         assert_eq!(events[1].topic, actions::SPACE_TYPE_EOA.to_vec());
     }
@@ -1059,16 +1086,32 @@ mod tests {
     #[test]
     fn test_dao_space_initialized_sequence() {
         let space_id = make_id(0x01);
+        let dao_address = make_address(0xDA);
         let editor1: [u8; 20] = [0xAA; 20];
         let member1: [u8; 20] = [0xBB; 20];
-        let events = dao_space_initialized(space_id, &[editor1], &[member1]);
+        let events = dao_space_initialized(space_id, dao_address, None, &[editor1], &[member1]);
 
         assert_eq!(events.len(), 4);
         assert_eq!(events[0].action, actions::SPACE_REGISTERED.to_vec());
+        assert_eq!(events[0].topic, dao_address.to_vec()); // DAO address in topic
         assert_eq!(events[1].action, actions::SPACE_TYPE_DECLARED.to_vec());
         assert_eq!(events[1].topic, actions::SPACE_TYPE_DAO.to_vec());
+        assert_eq!(events[1].data, b"1.0.0".to_vec()); // version in data
         assert_eq!(events[2].action, actions::EDITOR_ADDED.to_vec());
         assert_eq!(events[3].action, actions::MEMBER_ADDED.to_vec());
+    }
+
+    #[test]
+    fn test_dao_space_initialized_with_initial_edits() {
+        let space_id = make_id(0x01);
+        let dao_address = make_address(0xDA);
+        let events = dao_space_initialized(space_id, dao_address, Some("QmInitialEdits"), &[], &[]);
+
+        assert_eq!(events.len(), 3);
+        assert_eq!(events[0].action, actions::SPACE_REGISTERED.to_vec());
+        assert_eq!(events[1].action, actions::SPACE_TYPE_DECLARED.to_vec());
+        assert_eq!(events[2].action, actions::EDITS_PUBLISHED.to_vec());
+        assert_eq!(events[2].data, b"QmInitialEdits".to_vec());
     }
 
     #[test]
