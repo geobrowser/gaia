@@ -54,7 +54,11 @@ pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformRe
 }
 
 /// Find a SPACE_TYPE_DECLARED action for the given space_id, starting from start_index.
-fn find_space_type_declared(actions: &[Action], start_index: usize, space_id: &[u8]) -> Option<Vec<u8>> {
+fn find_space_type_declared(
+    actions: &[Action],
+    start_index: usize,
+    space_id: &[u8],
+) -> Option<Vec<u8>> {
     for action in actions.iter().skip(start_index) {
         if actions::matches(&action.action, &actions::SPACE_TYPE_DECLARED)
             && action.from_id == space_id
@@ -144,10 +148,10 @@ mod tests {
     #[test]
     fn test_convert_eoa_space_with_type() {
         let action = Action {
-            from_id: vec![0; 16],           // zeros for SPACE_ID_REGISTERED
-            to_id: vec![1; 16],             // space_id
+            from_id: vec![0; 16], // zeros for SPACE_ID_REGISTERED
+            to_id: vec![1; 16],   // space_id
             action: actions::SPACE_REGISTERED.to_vec(),
-            topic: vec![2; 32],             // owner address
+            topic: vec![2; 32], // owner address
             data: vec![],
         };
 
@@ -162,10 +166,10 @@ mod tests {
     #[test]
     fn test_convert_dao_space_with_type() {
         let action = Action {
-            from_id: vec![0; 16],           // zeros for SPACE_ID_REGISTERED
-            to_id: vec![1; 16],             // space_id
+            from_id: vec![0; 16], // zeros for SPACE_ID_REGISTERED
+            to_id: vec![1; 16],   // space_id
             action: actions::SPACE_REGISTERED.to_vec(),
-            topic: vec![2; 32],             // owner address
+            topic: vec![2; 32], // owner address
             data: vec![],
         };
 
@@ -203,7 +207,7 @@ mod tests {
                 from_id: vec![0; 16],
                 to_id: space_id.clone(),
                 action: actions::SPACE_REGISTERED.to_vec(),
-                topic: vec![2; 32],  // owner address
+                topic: vec![2; 32], // owner address
                 data: vec![],
             },
             // SPACE_TYPE_DECLARED (paired with above)

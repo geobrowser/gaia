@@ -56,10 +56,10 @@ pub type ProposalId = [u8; 16];
 ///   For DAO spaces: the DAOSpace contract address
 pub fn space_id_registered(space_id: SpaceId, registrar: Address) -> Action {
     Action {
-        from_id: vec![0u8; 16],      // zeros per new contract
-        to_id: space_id.to_vec(),    // space_id goes here now
+        from_id: vec![0u8; 16],   // zeros per new contract
+        to_id: space_id.to_vec(), // space_id goes here now
         action: actions::SPACE_REGISTERED.to_vec(),
-        topic: registrar.to_vec(),   // bytes32(bytes20(msg.sender))
+        topic: registrar.to_vec(), // bytes32(bytes20(msg.sender))
         data: vec![],
     }
 }
@@ -72,7 +72,7 @@ pub fn space_id_registered(space_id: SpaceId, registrar: Address) -> Action {
 pub fn space_type_declared(space_id: SpaceId, space_type: [u8; 32], version: &[u8]) -> Action {
     Action {
         from_id: space_id.to_vec(),
-        to_id: space_id.to_vec(),    // from_id == to_id for DAOSpace
+        to_id: space_id.to_vec(), // from_id == to_id for DAOSpace
         action: actions::SPACE_TYPE_DECLARED.to_vec(),
         topic: space_type.to_vec(),
         data: version.to_vec(),
@@ -430,7 +430,7 @@ pub fn proposal_created(
 
     Action {
         from_id: space_id.to_vec(),
-        to_id: space_id.to_vec(),    // from_id == to_id for DAOSpace actions
+        to_id: space_id.to_vec(), // from_id == to_id for DAOSpace actions
         action: actions::PROPOSAL_CREATED.to_vec(),
         topic: topic.to_vec(),
         data,
@@ -475,7 +475,7 @@ pub fn proposal_settings_used(
 
     Action {
         from_id: space_id.to_vec(),
-        to_id: space_id.to_vec(),    // from_id == to_id for DAOSpace actions
+        to_id: space_id.to_vec(), // from_id == to_id for DAOSpace actions
         action: actions::PROPOSAL_SETTINGS_USED.to_vec(),
         topic: topic.to_vec(),
         data,
@@ -520,7 +520,7 @@ pub fn proposal_executed(space_id: SpaceId, proposal_id: ProposalId) -> Action {
 
     Action {
         from_id: space_id.to_vec(),
-        to_id: space_id.to_vec(),    // from_id == to_id for DAOSpace actions
+        to_id: space_id.to_vec(), // from_id == to_id for DAOSpace actions
         action: actions::PROPOSAL_EXECUTED.to_vec(),
         topic: topic.to_vec(),
         data: vec![],
@@ -538,7 +538,7 @@ pub fn proposal_executed(space_id: SpaceId, proposal_id: ProposalId) -> Action {
 pub fn editor_added(space_id: SpaceId, editor_address: Address) -> Action {
     Action {
         from_id: space_id.to_vec(),
-        to_id: space_id.to_vec(),    // from_id == to_id for DAOSpace actions
+        to_id: space_id.to_vec(), // from_id == to_id for DAOSpace actions
         action: actions::EDITOR_ADDED.to_vec(),
         topic: editor_address.to_vec(),
         data: vec![],
@@ -552,7 +552,7 @@ pub fn editor_added(space_id: SpaceId, editor_address: Address) -> Action {
 pub fn editor_removed(space_id: SpaceId, editor_address: Address) -> Action {
     Action {
         from_id: space_id.to_vec(),
-        to_id: space_id.to_vec(),    // from_id == to_id for DAOSpace actions
+        to_id: space_id.to_vec(), // from_id == to_id for DAOSpace actions
         action: actions::EDITOR_REMOVED.to_vec(),
         topic: editor_address.to_vec(),
         data: vec![],
@@ -566,7 +566,7 @@ pub fn editor_removed(space_id: SpaceId, editor_address: Address) -> Action {
 pub fn member_added(space_id: SpaceId, member_address: Address) -> Action {
     Action {
         from_id: space_id.to_vec(),
-        to_id: space_id.to_vec(),    // from_id == to_id for DAOSpace actions
+        to_id: space_id.to_vec(), // from_id == to_id for DAOSpace actions
         action: actions::MEMBER_ADDED.to_vec(),
         topic: member_address.to_vec(),
         data: vec![],
@@ -580,7 +580,7 @@ pub fn member_added(space_id: SpaceId, member_address: Address) -> Action {
 pub fn member_removed(space_id: SpaceId, member_address: Address) -> Action {
     Action {
         from_id: space_id.to_vec(),
-        to_id: space_id.to_vec(),    // from_id == to_id for DAOSpace actions
+        to_id: space_id.to_vec(), // from_id == to_id for DAOSpace actions
         action: actions::MEMBER_REMOVED.to_vec(),
         topic: member_address.to_vec(),
         data: vec![],
@@ -594,7 +594,7 @@ pub fn member_removed(space_id: SpaceId, member_address: Address) -> Action {
 pub fn editor_flagged(space_id: SpaceId, editor_address: Address) -> Action {
     Action {
         from_id: space_id.to_vec(),
-        to_id: space_id.to_vec(),    // from_id == to_id for DAOSpace actions
+        to_id: space_id.to_vec(), // from_id == to_id for DAOSpace actions
         action: actions::EDITOR_FLAGGED.to_vec(),
         topic: editor_address.to_vec(),
         data: vec![],
@@ -608,7 +608,7 @@ pub fn editor_flagged(space_id: SpaceId, editor_address: Address) -> Action {
 pub fn editor_unflagged(space_id: SpaceId, editor_address: Address) -> Action {
     Action {
         from_id: space_id.to_vec(),
-        to_id: space_id.to_vec(),    // from_id == to_id for DAOSpace actions
+        to_id: space_id.to_vec(), // from_id == to_id for DAOSpace actions
         action: actions::EDITOR_UNFLAGGED.to_vec(),
         topic: editor_address.to_vec(),
         data: vec![],
@@ -874,7 +874,9 @@ pub mod test_topology {
     pub const OBJECT_TYPE_TRIPLE: [u8; 4] = [0x00, 0x00, 0x00, 0x02];
 
     // Editor address for initial DAO editors (USER_Q as bytes20)
-    pub const EDITOR_Q: [u8; 20] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x31];
+    pub const EDITOR_Q: [u8; 20] = [
+        0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0x31,
+    ];
 
     // DAOSpace contract address for SPACE_P (as bytes32(bytes20(address)))
     pub const DAO_P_ADDRESS: Address = make_address(0xDA);
@@ -916,7 +918,13 @@ pub mod test_topology {
         // Q must be created first as it's an initial editor
         actions.extend(personal_space_registered(SPACE_Q, USER_2));
         // DAO space P with SPACE_Q's address as initial editor
-        actions.extend(dao_space_initialized(SPACE_P, DAO_P_ADDRESS, None, &[EDITOR_Q], &[]));
+        actions.extend(dao_space_initialized(
+            SPACE_P,
+            DAO_P_ADDRESS,
+            None,
+            &[EDITOR_Q],
+            &[],
+        ));
 
         // Non-canonical - Island 3
         actions.extend(personal_space_registered(SPACE_S, USER_3));
@@ -961,12 +969,10 @@ pub mod test_topology {
             vec![ProposalAction::add_member([0x11; 20])],
         ));
         actions.push(proposal_settings_used(
-            SPACE_A,
-            PROPOSAL_1,
-            0,      // voting_delay
-            86400,  // voting_period (1 day)
-            50,     // quorum (50%)
-            60,     // threshold (60%)
+            SPACE_A, PROPOSAL_1, 0,     // voting_delay
+            86400, // voting_period (1 day)
+            50,    // quorum (50%)
+            60,    // threshold (60%)
         ));
         actions.push(proposal_voted(
             SPACE_B,

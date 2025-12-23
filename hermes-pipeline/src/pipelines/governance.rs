@@ -390,7 +390,10 @@ mod tests {
                 from_id: proposer_id.clone(),
                 to_id: space_id.clone(),
                 action: actions::PROPOSAL_CREATED.to_vec(),
-                topic: vec![0; 16].into_iter().chain(proposal_id.to_vec()).collect(),
+                topic: vec![0; 16]
+                    .into_iter()
+                    .chain(proposal_id.to_vec())
+                    .collect(),
                 data: encode_proposal_created_data(proposal_id, 0), // Fast path
             },
             // PROPOSAL_SETTINGS_USED (must have matching proposal_id)
@@ -398,7 +401,10 @@ mod tests {
                 from_id: space_id.clone(),
                 to_id: space_id.clone(),
                 action: actions::PROPOSAL_SETTINGS_USED.to_vec(),
-                topic: vec![0; 16].into_iter().chain(proposal_id.to_vec()).collect(),
+                topic: vec![0; 16]
+                    .into_iter()
+                    .chain(proposal_id.to_vec())
+                    .collect(),
                 data: encode_proposal_settings_data(1000, 2000, 0, 100, 50),
             },
         ];
@@ -431,7 +437,10 @@ mod tests {
                 from_id: vec![1; 16],
                 to_id: vec![2; 16],
                 action: actions::PROPOSAL_CREATED.to_vec(),
-                topic: vec![0; 16].into_iter().chain(proposal_id.to_vec()).collect(),
+                topic: vec![0; 16]
+                    .into_iter()
+                    .chain(proposal_id.to_vec())
+                    .collect(),
                 data: encode_proposal_created_data(proposal_id, 0),
             },
         ];
@@ -452,7 +461,10 @@ mod tests {
                 from_id: vec![1; 16],
                 to_id: vec![1; 16],
                 action: actions::PROPOSAL_SETTINGS_USED.to_vec(),
-                topic: vec![0; 16].into_iter().chain(proposal_id.to_vec()).collect(),
+                topic: vec![0; 16]
+                    .into_iter()
+                    .chain(proposal_id.to_vec())
+                    .collect(),
                 data: encode_proposal_settings_data(1000, 2000, 0, 100, 50),
             },
         ];
@@ -474,7 +486,10 @@ mod tests {
                 from_id: vec![1; 16],
                 to_id: vec![2; 16],
                 action: actions::PROPOSAL_CREATED.to_vec(),
-                topic: vec![0; 16].into_iter().chain(proposal_id_1.to_vec()).collect(),
+                topic: vec![0; 16]
+                    .into_iter()
+                    .chain(proposal_id_1.to_vec())
+                    .collect(),
                 data: encode_proposal_created_data(proposal_id_1, 0),
             },
             // PROPOSAL_SETTINGS_USED with different ID
@@ -482,7 +497,10 @@ mod tests {
                 from_id: vec![2; 16],
                 to_id: vec![2; 16],
                 action: actions::PROPOSAL_SETTINGS_USED.to_vec(),
-                topic: vec![0; 16].into_iter().chain(proposal_id_2.to_vec()).collect(),
+                topic: vec![0; 16]
+                    .into_iter()
+                    .chain(proposal_id_2.to_vec())
+                    .collect(),
                 data: encode_proposal_settings_data(1000, 2000, 0, 100, 50),
             },
         ];

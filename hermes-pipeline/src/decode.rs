@@ -89,23 +89,6 @@ impl ProposalActionType {
         }
     }
 
-    /// Convert to the proto enum value.
-    pub fn to_proto_value(self) -> i32 {
-        match self {
-            Self::Unknown => 0,
-            Self::AddMember => 1,
-            Self::RemoveMember => 2,
-            Self::AddEditor => 3,
-            Self::RemoveEditor => 4,
-            Self::Publish => 5,
-            Self::Flag => 6,
-            Self::Unflag => 7,
-            Self::UnflagEditor => 8,
-            Self::UpdateVotingSettings => 9,
-            Self::Ping => 10,
-        }
-    }
-
     /// Returns true if this action type takes an address argument.
     pub fn has_address_arg(&self) -> bool {
         matches!(
@@ -557,21 +540,6 @@ mod tests {
             ProposalActionType::from_calldata(&[]),
             ProposalActionType::Unknown
         );
-    }
-
-    #[test]
-    fn test_proposal_action_type_to_proto_value() {
-        assert_eq!(ProposalActionType::Unknown.to_proto_value(), 0);
-        assert_eq!(ProposalActionType::AddMember.to_proto_value(), 1);
-        assert_eq!(ProposalActionType::RemoveMember.to_proto_value(), 2);
-        assert_eq!(ProposalActionType::AddEditor.to_proto_value(), 3);
-        assert_eq!(ProposalActionType::RemoveEditor.to_proto_value(), 4);
-        assert_eq!(ProposalActionType::Publish.to_proto_value(), 5);
-        assert_eq!(ProposalActionType::Flag.to_proto_value(), 6);
-        assert_eq!(ProposalActionType::Unflag.to_proto_value(), 7);
-        assert_eq!(ProposalActionType::UnflagEditor.to_proto_value(), 8);
-        assert_eq!(ProposalActionType::UpdateVotingSettings.to_proto_value(), 9);
-        assert_eq!(ProposalActionType::Ping.to_proto_value(), 10);
     }
 
     #[test]
