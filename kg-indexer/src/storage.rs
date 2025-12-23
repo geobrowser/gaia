@@ -4,6 +4,7 @@ use uuid::Uuid;
 use crate::error::IndexerError;
 use crate::models::{
     entities::EntityItem,
+    governance::{ProposalActionItem, ProposalActionPayload, ProposalItem, ProposalVoteItem, VoteOption, VotingMode},
     membership::{EditorItem, MemberItem},
     properties::{
         DataType, PropertyItem, DATA_TYPE_BOOLEAN, DATA_TYPE_NUMBER, DATA_TYPE_POINT,
@@ -611,6 +612,250 @@ impl Storage {
             &subspace_ids,
             &parent_space_ids
         )
+        .execute(&mut **tx)
+        .await?;
+
+        Ok(())
+    }
+
+    pub async fn insert_proposals(
+        &self,
+        proposals: &[ProposalItem],
+        tx: &mut sqlx::Transaction<'_, Postgres>,
+    ) -> Result<(), IndexerError> {
+        if proposals.is_empty() {
+            return Ok(());
+        }
+
+        let mut ids = Vec::with_capacity(proposals.len());
+        let mut space_ids = Vec::with_capacity(proposals.len());
+        let mut proposer_ids = Vec::with_capacity(proposals.len());
+        let mut voting_modes = Vec::with_capacity(proposals.len());
+        let mut start_dates = Vec::with_capacity(proposals.len());
+        let mut end_dates = Vec::with_capacity(proposals.len());
+        let mut quorums = Vec::with_capacity(proposals.len());
+        let mut thresholds = Vec::with_capacity(proposals.len());
+        let mut executed_ats: Vec<Option<i64>> = Vec::with_capacity(proposals.len());
+        let mut created_ats = Vec::with_capacity(proposals.len());
+        let mut created_at_blocks = Vec::with_capacity(proposals.len());
+
+        for proposal in proposals {
+            ids.push(proposal.id);
+            space_ids.push(proposal.space_id);
+            proposer_ids.push(proposal.proposer_id);
+            voting_modes.push(match proposal.voting_mode {
+                VotingMode::Fast => "Fast",
+                VotingMode::Slow => "Slow",
+            });
+            start_dates.push(proposal.start_date);
+            end_dates.push(proposal.end_date);
+            quorums.push(proposal.quorum);
+            thresholds.push(proposal.threshold);
+            executed_ats.push(proposal.executed_at);
+            created_ats.push(proposal.created_at.to_string());
+            created_at_blocks.push(proposal.created_at_block.to_string());
+        }
+
+        let query = r#"
+            INSERT INTO proposals (
+                id, space_id, proposer_id, voting_mode, start_date, end_date,
+                quorum, threshold, executed_at, created_at, created_at_block
+            )
+            SELECT id, space_id, proposer_id, voting_mode::"votingMode", start_date, end_date,
+                   quorum, threshold, executed_at, created_at, created_at_block
+            FROM UNNEST(
+                $1::uuid[], $2::uuid[], $3::uuid[], $4::text[], $5::bigint[], $6::bigint[],
+                $7::bigint[], $8::bigint[], $9::bigint[], $10::text[], $11::text[]
+            ) AS t(id, space_id, proposer_id, voting_mode, start_date, end_date,
+                   quorum, threshold, executed_at, created_at, created_at_block)
+            ON CONFLICT (id) DO UPDATE SET
+                executed_at = COALESCE(EXCLUDED.executed_at, proposals.executed_at)
+        "#;
+
+        sqlx::query(query)
+            .bind(&ids)
+            .bind(&space_ids)
+            .bind(&proposer_ids)
+            .bind(&voting_modes)
+            .bind(&start_dates)
+            .bind(&end_dates)
+            .bind(&quorums)
+            .bind(&thresholds)
+            .bind(&executed_ats)
+            .bind(&created_ats)
+            .bind(&created_at_blocks)
+            .execute(&mut **tx)
+            .await?;
+
+        Ok(())
+    }
+
+    pub async fn insert_proposal_actions(
+        &self,
+        actions: &[ProposalActionItem],
+        tx: &mut sqlx::Transaction<'_, Postgres>,
+    ) -> Result<(), IndexerError> {
+        if actions.is_empty() {
+            return Ok(());
+        }
+
+        let mut proposal_ids = Vec::with_capacity(actions.len());
+        let mut indexes = Vec::with_capacity(actions.len());
+        let mut to_addresses = Vec::with_capacity(actions.len());
+        let mut values = Vec::with_capacity(actions.len());
+        let mut datas: Vec<&[u8]> = Vec::with_capacity(actions.len());
+        let mut payload_types = Vec::with_capacity(actions.len());
+        let mut payload_datas = Vec::with_capacity(actions.len());
+
+        for action in actions {
+            proposal_ids.push(action.proposal_id);
+            indexes.push(action.index as i16);
+            to_addresses.push(&action.to_address);
+            values.push(&action.value);
+            datas.push(&action.data);
+
+            let (payload_type, payload_data) = match &action.payload {
+                ProposalActionPayload::AddMember { target_address } => {
+                    ("AddMember", serde_json::json!({ "target_address": target_address }))
+                }
+                ProposalActionPayload::RemoveMember { target_address } => {
+                    ("RemoveMember", serde_json::json!({ "target_address": target_address }))
+                }
+                ProposalActionPayload::AddEditor { target_address } => {
+                    ("AddEditor", serde_json::json!({ "target_address": target_address }))
+                }
+                ProposalActionPayload::RemoveEditor { target_address } => {
+                    ("RemoveEditor", serde_json::json!({ "target_address": target_address }))
+                }
+                ProposalActionPayload::UnflagEditor { target_address } => {
+                    ("UnflagEditor", serde_json::json!({ "target_address": target_address }))
+                }
+                ProposalActionPayload::Publish { content_uri, metadata } => {
+                    ("Publish", serde_json::json!({
+                        "content_uri": hex::encode(content_uri),
+                        "metadata": hex::encode(metadata)
+                    }))
+                }
+                ProposalActionPayload::Flag { content_id } => {
+                    ("Flag", serde_json::json!({ "content_id": hex::encode(content_id) }))
+                }
+                ProposalActionPayload::Unflag { content_id } => {
+                    ("Unflag", serde_json::json!({ "content_id": hex::encode(content_id) }))
+                }
+                ProposalActionPayload::UpdateVotingSettings { quorum, fast_threshold, slow_threshold, duration } => {
+                    ("UpdateVotingSettings", serde_json::json!({
+                        "quorum": quorum,
+                        "fast_threshold": fast_threshold,
+                        "slow_threshold": slow_threshold,
+                        "duration": duration
+                    }))
+                }
+                ProposalActionPayload::Unknown => {
+                    ("Unknown", serde_json::json!({}))
+                }
+            };
+
+            payload_types.push(payload_type);
+            payload_datas.push(payload_data);
+        }
+
+        let query = r#"
+            INSERT INTO proposal_actions (
+                proposal_id, index, to_address, value, data, payload_type, payload_data
+            )
+            SELECT proposal_id, index, to_address, value, data, payload_type::"proposalActionType", payload_data
+            FROM UNNEST(
+                $1::uuid[], $2::smallint[], $3::text[], $4::text[], $5::bytea[], $6::text[], $7::jsonb[]
+            ) AS t(proposal_id, index, to_address, value, data, payload_type, payload_data)
+            ON CONFLICT (proposal_id, index) DO NOTHING
+        "#;
+
+        sqlx::query(query)
+            .bind(&proposal_ids)
+            .bind(&indexes)
+            .bind(&to_addresses)
+            .bind(&values)
+            .bind(&datas)
+            .bind(&payload_types)
+            .bind(&payload_datas)
+            .execute(&mut **tx)
+            .await?;
+
+        Ok(())
+    }
+
+    pub async fn insert_proposal_votes(
+        &self,
+        votes: &[ProposalVoteItem],
+        tx: &mut sqlx::Transaction<'_, Postgres>,
+    ) -> Result<(), IndexerError> {
+        if votes.is_empty() {
+            return Ok(());
+        }
+
+        let mut proposal_ids = Vec::with_capacity(votes.len());
+        let mut voter_ids = Vec::with_capacity(votes.len());
+        let mut space_ids = Vec::with_capacity(votes.len());
+        let mut vote_options = Vec::with_capacity(votes.len());
+        let mut created_ats = Vec::with_capacity(votes.len());
+        let mut created_at_blocks = Vec::with_capacity(votes.len());
+
+        for vote in votes {
+            proposal_ids.push(vote.proposal_id);
+            voter_ids.push(vote.voter_id);
+            space_ids.push(vote.space_id);
+            vote_options.push(match vote.vote {
+                VoteOption::None => "None",
+                VoteOption::Yes => "Yes",
+                VoteOption::No => "No",
+                VoteOption::Abstain => "Abstain",
+            });
+            created_ats.push(vote.created_at.to_string());
+            created_at_blocks.push(vote.created_at_block.to_string());
+        }
+
+        let query = r#"
+            INSERT INTO proposal_votes (
+                proposal_id, voter_id, space_id, vote, created_at, created_at_block
+            )
+            SELECT proposal_id, voter_id, space_id, vote::"voteOption", created_at, created_at_block
+            FROM UNNEST(
+                $1::uuid[], $2::uuid[], $3::uuid[], $4::text[], $5::text[], $6::text[]
+            ) AS t(proposal_id, voter_id, space_id, vote, created_at, created_at_block)
+            ON CONFLICT (proposal_id, voter_id) DO UPDATE SET
+                vote = EXCLUDED.vote::"voteOption",
+                created_at = EXCLUDED.created_at,
+                created_at_block = EXCLUDED.created_at_block
+        "#;
+
+        sqlx::query(query)
+            .bind(&proposal_ids)
+            .bind(&voter_ids)
+            .bind(&space_ids)
+            .bind(&vote_options)
+            .bind(&created_ats)
+            .bind(&created_at_blocks)
+            .execute(&mut **tx)
+            .await?;
+
+        Ok(())
+    }
+
+    pub async fn update_proposal_executed(
+        &self,
+        proposal_id: Uuid,
+        executed_at: i64,
+        tx: &mut sqlx::Transaction<'_, Postgres>,
+    ) -> Result<(), IndexerError> {
+        sqlx::query(
+            r#"
+            UPDATE proposals
+            SET executed_at = $1
+            WHERE id = $2
+            "#,
+        )
+        .bind(executed_at)
+        .bind(proposal_id)
         .execute(&mut **tx)
         .await?;
 

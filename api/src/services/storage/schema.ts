@@ -394,6 +394,138 @@ export type DbGlobalScore = InferSelectModel<typeof globalScores>;
 export type DbLocalScore = InferSelectModel<typeof localScores>;
 export type DbSpaceScore = InferSelectModel<typeof spaceScores>;
 
+/** Governance Schema definitions */
+
+export const votingModeEnum = pgEnum("votingMode", ["Fast", "Slow"]);
+
+export const voteOptionEnum = pgEnum("voteOption", ["None", "Yes", "No", "Abstain"]);
+
+export const proposalActionTypeEnum = pgEnum("proposalActionType", [
+	"AddMember",
+	"RemoveMember",
+	"AddEditor",
+	"RemoveEditor",
+	"UnflagEditor",
+	"Publish",
+	"Flag",
+	"Unflag",
+	"UpdateVotingSettings",
+	"Unknown",
+]);
+
+/**
+ * proposals
+ *
+ * Stores governance proposals for spaces.
+ */
+export const proposals = pgTable(
+	"proposals",
+	{
+		id: uuid().primaryKey(),
+		spaceId: uuid("space_id")
+			.notNull()
+			.references(() => spaces.id),
+		proposerId: uuid("proposer_id").notNull(),
+		votingMode: votingModeEnum("voting_mode").notNull(),
+		startDate: bigint("start_date", { mode: "number" }).notNull(),
+		endDate: bigint("end_date", { mode: "number" }).notNull(),
+		quorum: bigint("quorum", { mode: "number" }).notNull(),
+		threshold: bigint("threshold", { mode: "number" }).notNull(),
+		executedAt: bigint("executed_at", { mode: "number" }),
+		createdAt: text("created_at").notNull(),
+		createdAtBlock: text("created_at_block").notNull(),
+	},
+	(table) => [
+		index("proposals_space_id_idx").on(table.spaceId),
+		index("proposals_proposer_id_idx").on(table.proposerId),
+		index("proposals_created_at_idx").on(table.createdAt),
+		index("proposals_end_date_idx").on(table.endDate),
+	],
+);
+
+/**
+ * proposal_actions
+ *
+ * Stores actions within a governance proposal.
+ * Each proposal can have multiple actions executed in sequence.
+ */
+export const proposalActions = pgTable(
+	"proposal_actions",
+	{
+		proposalId: uuid("proposal_id")
+			.notNull()
+			.references(() => proposals.id),
+		index: smallint("index").notNull(),
+		toAddress: text("to_address").notNull(),
+		value: text("value").notNull(),
+		data: bytea("data"),
+		payloadType: proposalActionTypeEnum("payload_type").notNull(),
+		payloadData: jsonb("payload_data"),
+	},
+	(table) => [
+		primaryKey({ columns: [table.proposalId, table.index] }),
+		index("proposal_actions_payload_type_idx").on(table.payloadType),
+	],
+);
+
+/**
+ * proposal_votes
+ *
+ * Stores votes cast on governance proposals.
+ */
+export const proposalVotes = pgTable(
+	"proposal_votes",
+	{
+		proposalId: uuid("proposal_id")
+			.notNull()
+			.references(() => proposals.id),
+		voterId: uuid("voter_id").notNull(),
+		spaceId: uuid("space_id")
+			.notNull()
+			.references(() => spaces.id),
+		vote: voteOptionEnum("vote").notNull(),
+		createdAt: text("created_at").notNull(),
+		createdAtBlock: text("created_at_block").notNull(),
+	},
+	(table) => [
+		primaryKey({ columns: [table.proposalId, table.voterId] }),
+		index("proposal_votes_space_id_idx").on(table.spaceId),
+		index("proposal_votes_voter_id_idx").on(table.voterId),
+		index("proposal_votes_vote_idx").on(table.vote),
+	],
+);
+
+export const proposalsRelations = drizzleRelations(proposals, ({ one, many }) => ({
+	space: one(spaces, {
+		fields: [proposals.spaceId],
+		references: [spaces.id],
+	}),
+	actions: many(proposalActions),
+	votes: many(proposalVotes),
+}));
+
+export const proposalActionsRelations = drizzleRelations(proposalActions, ({ one }) => ({
+	proposal: one(proposals, {
+		fields: [proposalActions.proposalId],
+		references: [proposals.id],
+	}),
+}));
+
+export const proposalVotesRelations = drizzleRelations(proposalVotes, ({ one }) => ({
+	proposal: one(proposals, {
+		fields: [proposalVotes.proposalId],
+		references: [proposals.id],
+	}),
+	space: one(spaces, {
+		fields: [proposalVotes.spaceId],
+		references: [spaces.id],
+	}),
+}));
+
+export type DbProposal = InferSelectModel<typeof proposals>;
+export type DbProposalAction = InferSelectModel<typeof proposalActions>;
+export type DbProposalVote = InferSelectModel<typeof proposalVotes>;
+
 /** Actions Schema definitions */
 
 /**
