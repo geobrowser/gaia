@@ -935,6 +935,7 @@ pub mod test_topology {
     pub const PROPOSAL_4: ProposalId = make_proposal_id(0xA4);
     pub const PROPOSAL_5: ProposalId = make_proposal_id(0xA5);
     pub const PROPOSAL_6: ProposalId = make_proposal_id(0xA6);
+    pub const PROPOSAL_7: ProposalId = make_proposal_id(0xA7);
 
     // Object types for voting
     pub const OBJECT_TYPE_ENTITY: [u8; 4] = [0x00, 0x00, 0x00, 0x01];
@@ -1153,6 +1154,26 @@ pub mod test_topology {
         actions.push(proposal_voted(SPACE_D, SPACE_C, PROPOSAL_6, VoteOption::Abstain));
         actions.push(proposal_voted(SPACE_F, SPACE_C, PROPOSAL_6, VoteOption::No));
         actions.push(proposal_executed(SPACE_C, PROPOSAL_6));
+
+        // Proposal 7: Publish edits (via proposal)
+        let publish_topic = make_id(0x77);
+        let mut publish_topic_array = [0u8; 32];
+        publish_topic_array[..16].copy_from_slice(&publish_topic);
+        actions.push(proposal_created(
+            SPACE_B,
+            PROPOSAL_7,
+            VotingMode::Fast,
+            vec![ProposalAction::publish(publish_topic_array, b"QmProposedEdits", b"version=1")],
+        ));
+        actions.push(proposal_settings_used(
+            SPACE_B, PROPOSAL_7, 0,      // voting_delay
+            86400, // voting_period (1 day)
+            50,    // quorum (50%)
+            60,    // threshold (60%)
+        ));
+        actions.push(proposal_voted(SPACE_A, SPACE_B, PROPOSAL_7, VoteOption::Yes));
+        actions.push(proposal_voted(SPACE_C, SPACE_B, PROPOSAL_7, VoteOption::Yes));
+        actions.push(proposal_executed(SPACE_B, PROPOSAL_7));
 
         // Phase 7: Edits
         actions.push(edit_published(ROOT_SPACE_ID, "QmRootEdit1CreatePersons"));
@@ -1393,8 +1414,8 @@ mod tests {
         assert_eq!(topic_declared_count, 5);
         // 6 edits
         assert_eq!(edit_count, 6);
-        // 6 proposals with settings (one for each proposal: add_member, remove_member, add_editor, remove_editor, flag, unflag)
-        assert_eq!(proposal_settings_count, 6);
+        // 7 proposals with settings (one for each proposal: add_member, remove_member, add_editor, remove_editor, flag, unflag, publish)
+        assert_eq!(proposal_settings_count, 7);
     }
 
     #[test]
