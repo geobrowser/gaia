@@ -42,3 +42,4 @@ futures03 = { version = "0.3.1", package = "futures", features = ["compat"] }
 url = "2.5.7"
 alloy = "1.0.24"
 uuid = "1.18.0"
+rdkafka = { version = "0.36", features = ["cmake-build", "zstd", "ssl"] }
