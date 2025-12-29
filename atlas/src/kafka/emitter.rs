@@ -58,6 +58,8 @@ impl CanonicalGraphEmitter {
                 created_by: Vec::new(),
                 block_number: meta.block_number,
                 cursor: meta.cursor.clone(),
+                sequence: 0,
+                is_last: false,
             }),
         };
 

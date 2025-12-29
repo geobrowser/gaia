@@ -8,14 +8,13 @@
 //! use prost::Message;
 //!
 //! // Create with specific events
-//! let actions = Actions {
-//!     actions: vec![
-//!         mock_events::space_created([0x01; 16], [0xaa; 32]),
-//!         mock_events::trust_extended_verified([0x01; 16], [0x02; 16]),
-//!         mock_events::edit_published([0x01; 16], "QmYwAPJzv5CZsnA..."),
-//!     ],
-//! };
-//! let source = MockSource::builder(actions.encode_to_vec()).with_blocks(100, 105);
+//! let mut actions = Vec::new();
+//! actions.extend(mock_events::personal_space_registered([0x01; 16], [0xaa; 32]));
+//! actions.push(mock_events::subspace_verified([0x01; 16], [0x02; 16]));
+//! actions.push(mock_events::edit_published([0x01; 16], "QmYwAPJzv5CZsnA..."));
+//!
+//! let block = Actions { actions };
+//! let source = MockSource::builder(block.encode_to_vec()).with_blocks(100, 105);
 //!
 //! // Or use test_topology() for the full mock-substream test graph
 //! let source = MockSource::test_topology().with_blocks(100, 105);

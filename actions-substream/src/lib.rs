@@ -15,7 +15,12 @@ fn map_actions(blk: Block) -> Result<Actions, substreams::errors::Error> {
         if let Some(receipt) = &transaction.receipt {
             let tx_hash = format!("0x{}", hex::encode(&transaction.hash));
             let block_number = blk.number;
-            let block_timestamp = blk.header.as_ref().map(|h| h.timestamp.as_ref().map(|t| t.seconds as u64)).flatten().unwrap_or(0);
+            let block_timestamp = blk
+                .header
+                .as_ref()
+                .map(|h| h.timestamp.as_ref().map(|t| t.seconds as u64))
+                .flatten()
+                .unwrap_or(0);
 
             for log in &receipt.logs {
                 if is_address_in_contracts(&log.address) {
@@ -75,7 +80,7 @@ fn decode_action_log(log: &Log) -> Result<Option<EventData>, substreams::errors:
     let action_version = u16::from_be_bytes([word0[2], word0[3]]) as u64;
     let object_type = (word0[15] & 0x0F) as u64;
     let space_uuid_bytes = &word0[16..32];
-    
+
     let space_pov = format!(
         "{:02x}{:02x}{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}-{:02x}{:02x}{:02x}{:02x}{:02x}{:02x}",
         space_uuid_bytes[0], space_uuid_bytes[1], space_uuid_bytes[2], space_uuid_bytes[3],
@@ -114,13 +119,19 @@ fn decode_action_log(log: &Log) -> Result<Option<EventData>, substreams::errors:
         let payload_offset = u64::from_be_bytes([
             data[120], data[121], data[122], data[123], data[124], data[125], data[126], data[127],
         ]) as usize;
-        
+
         if payload_offset + 32 <= data.len() {
             let payload_length = u64::from_be_bytes([
-                data[payload_offset + 24], data[payload_offset + 25], data[payload_offset + 26], data[payload_offset + 27],
-                data[payload_offset + 28], data[payload_offset + 29], data[payload_offset + 30], data[payload_offset + 31],
+                data[payload_offset + 24],
+                data[payload_offset + 25],
+                data[payload_offset + 26],
+                data[payload_offset + 27],
+                data[payload_offset + 28],
+                data[payload_offset + 29],
+                data[payload_offset + 30],
+                data[payload_offset + 31],
             ]) as usize;
-            
+
             if payload_length > 0 && data.len() >= payload_offset + 32 + payload_length {
                 Some(data[payload_offset + 32..payload_offset + 32 + payload_length].to_vec())
             } else {
@@ -183,12 +194,14 @@ mod tests {
          0000000000000000000000000000000000000000000000000000000000000080
          0000000000000000000000000000000000000000000000000000000000000001
          0200000000000000000000000000000000000000000000000000000000000000", // Remove on relation
-         
     ];
 
     #[test]
     fn test_decode_action_log() {
-        let hex_string = TEST_CASES[0].chars().filter(|c| !c.is_whitespace()).collect::<String>();
+        let hex_string = TEST_CASES[0]
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect::<String>();
         let data = hex::decode(hex_string).unwrap();
         let log = log_with_data(data);
         let result = decode_action_log(&log);
@@ -205,7 +218,10 @@ mod tests {
 
     #[test]
     fn test_decode_action_log_relation() {
-        let hex_string = TEST_CASES[1].chars().filter(|c| !c.is_whitespace()).collect::<String>();
+        let hex_string = TEST_CASES[1]
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect::<String>();
         let data = hex::decode(hex_string).unwrap();
         let log = log_with_data(data);
         let result = decode_action_log(&log);
@@ -222,7 +238,10 @@ mod tests {
 
     #[test]
     fn test_decode_action_log_downvote() {
-        let hex_string = TEST_CASES[2].chars().filter(|c| !c.is_whitespace()).collect::<String>();
+        let hex_string = TEST_CASES[2]
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect::<String>();
         let data = hex::decode(hex_string).unwrap();
         let log = log_with_data(data);
         let result = decode_action_log(&log);
@@ -239,7 +258,10 @@ mod tests {
 
     #[test]
     fn test_decode_action_log_remove() {
-        let hex_string = TEST_CASES[3].chars().filter(|c| !c.is_whitespace()).collect::<String>();
+        let hex_string = TEST_CASES[3]
+            .chars()
+            .filter(|c| !c.is_whitespace())
+            .collect::<String>();
         let data = hex::decode(hex_string).unwrap();
         let log = log_with_data(data);
         let result = decode_action_log(&log);

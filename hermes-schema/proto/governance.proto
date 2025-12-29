@@ -4,27 +4,142 @@ package governance;
 
 import "blockchain_metadata.proto";
 
-// HermesProposalCreated - emitted when a new proposal is created in a space
+// Voting mode for proposals
+enum VotingMode {
+  VOTING_MODE_FAST = 0;   // Fast path - threshold-based, immediate execution
+  VOTING_MODE_SLOW = 1;   // Slow path - majority voting with voting window
+}
+
+// Vote option for governance proposals
+enum ProposalVoteOption {
+  VOTE_OPTION_NONE = 0;
+  VOTE_OPTION_YES = 1;
+  VOTE_OPTION_NO = 2;
+  VOTE_OPTION_ABSTAIN = 3;
+}
+
+// Type of action in a proposal, decoded from calldata function selector
+enum ProposalActionType {
+  PROPOSAL_ACTION_UNKNOWN = 0;
+  PROPOSAL_ACTION_ADD_MEMBER = 1;
+  PROPOSAL_ACTION_REMOVE_MEMBER = 2;
+  PROPOSAL_ACTION_ADD_EDITOR = 3;
+  PROPOSAL_ACTION_REMOVE_EDITOR = 4;
+  PROPOSAL_ACTION_PUBLISH = 5;
+  PROPOSAL_ACTION_FLAG = 6;
+  PROPOSAL_ACTION_UNFLAG = 7;
+  PROPOSAL_ACTION_UNFLAG_EDITOR = 8;
+  PROPOSAL_ACTION_UPDATE_VOTING_SETTINGS = 9;
+  PROPOSAL_ACTION_PING = 10;
+}
+
+// Decoded action: add a member to the space
+message AddMemberAction {
+  bytes target_address = 1;  // 20 bytes - address to add as member
+}
+
+// Decoded action: remove a member from the space
+message RemoveMemberAction {
+  bytes target_address = 1;  // 20 bytes - address to remove
+}
+
+// Decoded action: add an editor to the space
+message AddEditorAction {
+  bytes target_address = 1;  // 20 bytes - address to add as editor
+}
+
+// Decoded action: remove an editor from the space
+message RemoveEditorAction {
+  bytes target_address = 1;  // 20 bytes - address to remove
+}
+
+// Decoded action: unflag an editor
+message UnflagEditorAction {
+  bytes target_address = 1;  // 20 bytes - editor address to unflag
+}
+
+// Decoded action: publish content
+message PublishAction {
+  string content_uri = 1;  // Content URI (IPFS hash)
+  bytes metadata = 2;      // Edit metadata
+}
+
+// Decoded action: flag content
+message FlagAction {
+  bytes content_id = 1;  // Content identifier being flagged
+}
+
+// Decoded action: unflag content
+message UnflagAction {
+  bytes content_id = 1;  // Content identifier being unflagged
+}
+
+// Decoded action: update voting settings
+message UpdateVotingSettingsAction {
+  uint64 quorum = 1;            // Minimum total votes required
+  uint64 fast_threshold = 2;    // Fast path: absolute YES votes needed
+  uint64 slow_threshold = 3;    // Slow path: percentage of RATIO_BASE (10,000,000)
+  uint64 duration = 4;          // Voting duration
+}
+
+// Action to be executed when proposal passes
+message ProposalAction {
+  bytes to = 1;        // 20 bytes - target contract address
+  bytes value = 2;     // 32 bytes - uint256 ETH value to send
+  bytes data = 3;      // calldata (function selector + encoded args)
+
+  // Decoded action (based on function selector in calldata)
+  oneof action {
+    AddMemberAction add_member = 10;
+    RemoveMemberAction remove_member = 11;
+    AddEditorAction add_editor = 12;
+    RemoveEditorAction remove_editor = 13;
+    UnflagEditorAction unflag_editor = 14;
+    PublishAction publish = 15;
+    FlagAction flag = 16;
+    UnflagAction unflag = 17;
+    UpdateVotingSettingsAction update_voting_settings = 18;
+  }
+}
+
+// Voting settings for a proposal, from PROPOSAL_SETTINGS_USED event
+message ProposalSettings {
+  uint64 start_date = 1;              // Block timestamp when voting starts
+  uint64 last_date = 2;               // Block timestamp when voting ends
+  VotingMode voting_mode = 3;         // Slow (0) or Fast (1)
+  uint64 quorum = 4;                  // Minimum total votes for slow path
+  uint64 flat_threshold = 5;          // Fast path: absolute number of YES votes needed
+  uint64 percentage_threshold = 6;    // Slow path: percentage of RATIO_BASE (10,000,000)
+}
+
+// HermesProposalCreated - squashed from PROPOSAL_CREATED + PROPOSAL_SETTINGS_USED
+// Contains all actions in a single message with voting settings.
+// Data encoding: abi.encode(bytes16 proposalId, VotingMode, Action[])
+// Note: If PROPOSAL_SETTINGS_USED is missing, both events should be discarded with an error.
 message HermesProposalCreated {
-  bytes space_id = 1;       // 16 bytes - space creating the proposal
-  bytes proposal_id = 2;    // 32 bytes - unique proposal identifier (from topic field)
-  bytes data = 3;           // proposal metadata (title, description, voting period, etc.)
-  blockchain_metadata.BlockchainMetadata meta = 4;
+  bytes space_id = 1;                                   // 16 bytes - space owning the proposal (to_id)
+  bytes proposer_id = 2;                                // 16 bytes - space creating the proposal (from_id)
+  bytes proposal_id = 3;                                // 16 bytes - unique proposal identifier
+  VotingMode voting_mode = 4;                           // Fast or Slow path
+  repeated ProposalAction actions = 5;                  // All actions in the proposal
+  ProposalSettings settings = 6;                        // Voting settings (from PROPOSAL_SETTINGS_USED)
+  blockchain_metadata.BlockchainMetadata meta = 10;
 }
 
 // HermesProposalVoted - emitted when a vote is cast on a proposal
+// Data encoding: abi.encode(bytes16 proposalId, VoteOption)
 message HermesProposalVoted {
-  bytes voter_id = 1;       // 16 bytes - space casting the vote (from from_id)
-  bytes space_id = 2;       // 16 bytes - space that owns the proposal (from to_id)
-  bytes proposal_id = 3;    // 32 bytes - proposal being voted on (from topic field)
-  bytes data = 4;           // vote choice and any additional vote data
+  bytes voter_id = 1;                                   // 16 bytes - space casting the vote (from from_id)
+  bytes space_id = 2;                                   // 16 bytes - space that owns the proposal (from to_id)
+  bytes proposal_id = 3;                                // 16 bytes - proposal being voted on
+  ProposalVoteOption vote = 4;                          // The vote cast
   blockchain_metadata.BlockchainMetadata meta = 5;
 }
 
 // HermesProposalExecuted - emitted when a passed proposal is executed
+// Data encoding: abi.encode(bytes16 proposalId)
 message HermesProposalExecuted {
-  bytes space_id = 1;       // 16 bytes - space executing the proposal
-  bytes proposal_id = 2;    // 32 bytes - executed proposal identifier (from topic field)
-  bytes data = 3;           // execution result/details
-  blockchain_metadata.BlockchainMetadata meta = 4;
+  bytes space_id = 1;                                   // 16 bytes - space executing the proposal
+  bytes proposal_id = 2;                                // 16 bytes - executed proposal identifier
+  blockchain_metadata.BlockchainMetadata meta = 3;
 }

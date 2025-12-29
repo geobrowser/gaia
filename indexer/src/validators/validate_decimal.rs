@@ -1,5 +1,4 @@
 /// Functions for validating decimal numbers.
-
 use super::error::ValidationError;
 
 /// Validates if the input string represents a number with exactly two decimal places.
@@ -29,8 +28,8 @@ pub fn validate_two_decimal_places(input: &str) -> Result<f64, ValidationError> 
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use super::ValidationError;
+    use super::*;
 
     #[test]
     fn test_validate_two_decimal_places() {
@@ -38,15 +37,23 @@ mod tests {
         assert!(validate_two_decimal_places("12.34").is_ok());
         assert!(validate_two_decimal_places("0.99").is_ok());
         assert!(validate_two_decimal_places("100.00").is_ok());
-        
+
         // Invalid cases
-        assert_eq!(validate_two_decimal_places("5.6").err(), 
-                  Some(ValidationError::IncorrectDecimalPlaces(2, 1)));
-        assert_eq!(validate_two_decimal_places("7").err(), 
-                  Some(ValidationError::MissingDecimalPoint));
-        assert_eq!(validate_two_decimal_places("12.345").err(), 
-                  Some(ValidationError::IncorrectDecimalPlaces(2, 3)));
-        assert_eq!(validate_two_decimal_places("abc").err(), 
-                  Some(ValidationError::ParseFailure));
+        assert_eq!(
+            validate_two_decimal_places("5.6").err(),
+            Some(ValidationError::IncorrectDecimalPlaces(2, 1))
+        );
+        assert_eq!(
+            validate_two_decimal_places("7").err(),
+            Some(ValidationError::MissingDecimalPoint)
+        );
+        assert_eq!(
+            validate_two_decimal_places("12.345").err(),
+            Some(ValidationError::IncorrectDecimalPlaces(2, 3))
+        );
+        assert_eq!(
+            validate_two_decimal_places("abc").err(),
+            Some(ValidationError::ParseFailure)
+        );
     }
 }

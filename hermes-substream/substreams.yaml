@@ -185,6 +185,38 @@ modules:
     output:
       type: proto:hermes.SubspaceTopicDeclaredList
 
+  - name: map_space_types_declared
+    kind: map
+    initialBlock: 0
+    inputs:
+      - source: sf.ethereum.type.v2.Block
+    output:
+      type: proto:hermes.SpaceTypeDeclaredList
+
+  - name: map_spaces_cleared
+    kind: map
+    initialBlock: 0
+    inputs:
+      - source: sf.ethereum.type.v2.Block
+    output:
+      type: proto:hermes.SpaceClearedList
+
+  - name: map_proposal_settings_used
+    kind: map
+    initialBlock: 0
+    inputs:
+      - source: sf.ethereum.type.v2.Block
+    output:
+      type: proto:hermes.ProposalSettingsUsedList
+
+  - name: map_proposals_updated
+    kind: map
+    initialBlock: 0
+    inputs:
+      - source: sf.ethereum.type.v2.Block
+    output:
+      type: proto:hermes.ProposalUpdatedList
+
   # Permissionless events
   - name: map_objects_upvoted
     kind: map

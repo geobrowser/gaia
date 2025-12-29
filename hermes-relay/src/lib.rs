@@ -51,16 +51,14 @@
 //! use prost::Message;
 //!
 //! // Create mock actions
-//! let actions = Actions {
-//!     actions: vec![
-//!         mock_events::space_created([0x01; 16], [0xaa; 32]),
-//!         mock_events::trust_extended_verified([0x01; 16], [0x02; 16]),
-//!         mock_events::edit_published([0x01; 16], "QmYwAPJzv5CZsnA..."),
-//!     ],
-//! };
+//! let mut actions = Vec::new();
+//! actions.extend(mock_events::personal_space_registered([0x01; 16], [0xaa; 32]));
+//! actions.push(mock_events::subspace_verified([0x01; 16], [0x02; 16]));
+//! actions.push(mock_events::edit_published([0x01; 16], "QmYwAPJzv5CZsnA..."));
 //!
 //! // Iterate over mock blocks and process directly
-//! for block in MockSource::builder(actions.encode_to_vec()).with_blocks(100, 110) {
+//! let block = Actions { actions };
+//! for block in MockSource::builder(block.encode_to_vec()).with_blocks(100, 110) {
 //!     transformer.process_block_scoped_data(&block).await?;
 //! }
 //!

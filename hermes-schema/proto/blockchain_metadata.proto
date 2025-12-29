@@ -7,4 +7,6 @@ message BlockchainMetadata {
     bytes created_by = 2;   // address
     uint64 block_number = 3;
     string cursor = 4;
+    uint32 sequence = 5;    // Blockchain order within block (from action index)
+    bool is_last = 6;       // True for final event in block
 }

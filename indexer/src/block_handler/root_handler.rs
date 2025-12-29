@@ -37,8 +37,8 @@ where
     current_span.record("block_number", block_metadata.block_number);
     current_span.record("block_timestamp", &block_metadata.timestamp);
     let block_timestamp_seconds: i64 = block_metadata.timestamp.parse().unwrap_or(0);
-    let block_datetime = DateTime::from_timestamp(block_timestamp_seconds, 0)
-        .unwrap_or_else(|| Utc::now());
+    let block_datetime =
+        DateTime::from_timestamp(block_timestamp_seconds, 0).unwrap_or_else(|| Utc::now());
     let block_datetime_local = block_datetime.with_timezone(&Local);
     let drift_str = utils::format_drift(block_metadata);
 
@@ -58,8 +58,9 @@ where
         let block_number = block_metadata.block_number;
 
         tokio::spawn(
-            async move { space_handler::run(&spaces, &block_metadata, &storage).await }
-                .instrument(tracing::info_span!("space_task", block_number = block_number))
+            async move { space_handler::run(&spaces, &block_metadata, &storage).await }.instrument(
+                tracing::info_span!("space_task", block_number = block_number),
+            ),
         )
     };
 
@@ -70,7 +71,7 @@ where
         let edits = output.edits.clone();
         let block_number = block_metadata.block_number;
         let edit_count = edits.len();
-        
+
         tokio::spawn(
             async move {
                 edit_handler::run(&edits, &block_metadata, &storage, &properties_cache).await
@@ -89,7 +90,7 @@ where
         let block_number = block_metadata.block_number;
         let member_count = added_members.len() + removed_members.len();
         let editor_count = added_editors.len() + removed_editors.len();
-        
+
         tokio::spawn(
             async move {
                 membership_handler::run(
@@ -102,11 +103,12 @@ where
                 )
                 .await
             }
-            .instrument(tracing::info_span!("membership_task", 
+            .instrument(tracing::info_span!(
+                "membership_task",
                 block_number = block_number,
                 member_count = member_count,
                 editor_count = editor_count
-            ))
+            )),
         )
     };
 
@@ -117,7 +119,7 @@ where
         let removed_subspaces = output.removed_subspaces.clone();
         let block_number = block_metadata.block_number;
         let subspace_count = added_subspaces.len() + removed_subspaces.len();
-        
+
         tokio::spawn(
             async move {
                 subspace_handler::run(
@@ -128,10 +130,11 @@ where
                 )
                 .await
             }
-            .instrument(tracing::info_span!("subspace_task", 
+            .instrument(tracing::info_span!(
+                "subspace_task",
                 block_number = block_number,
                 subspace_count = subspace_count
-            ))
+            )),
         )
     };
 
@@ -147,6 +150,6 @@ where
         block_number = block_metadata.block_number,
         "Successfully processed block"
     );
-    
+
     Ok(())
 }

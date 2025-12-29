@@ -4,14 +4,15 @@ package space;
 
 import "blockchain_metadata.proto";
 
-message PersonalSpacePayload {
+message EoaSpacePayload {
     bytes owner = 1;
 }
 
-message DefaultDaoSpacePayload {
-    repeated bytes initial_editors = 1; // uuids
-    repeated bytes initial_members = 2; // uuids
-}
+// DefaultDaoSpacePayload is intentionally empty.
+// The contract emits individual EDITOR_ADDED/MEMBER_ADDED events for each
+// initial editor/member during initialization. These are handled by the
+// membership pipeline, not space creation.
+message DefaultDaoSpacePayload {}
 
 // UnknownSpacePayload provides a flexible fallback for new or experimental
 // space types without requiring schema changes. Consumers can look up known
@@ -27,7 +28,7 @@ message HermesCreateSpace {
     bytes topic_id = 2; // uuid
 
     oneof payload {
-        PersonalSpacePayload personal_space = 3;
+        EoaSpacePayload eoa_space = 3;
         DefaultDaoSpacePayload default_dao_space = 4;
         // We could have a generic space payload using a mapping
         // between string->bytes, where the key is the field and

@@ -10,6 +10,8 @@ import { Environment, EnvironmentLive, make as makeEnvironment } from "./src/ser
 import { uploadEdit, uploadFile, uploadFileAlternativeGateway } from "./src/services/ipfs"
 import { make as makeStorage, Storage } from "./src/services/storage/storage"
 import { getPublishEditCalldata } from "./src/utils/calldata"
+import { createSearchRouter } from "./src/search"
+import { OpenSearchClient } from "./src/services/search"
 
 /**
  * Currently hand-rolling a compression polyfill until Bun implements
@@ -35,6 +37,24 @@ app.use(
 )
 
 app.route("/health", health)
+
+// Initialize search client with dependency injection
+// Search is optional - if OPENSEARCH_URL is not set, search routes won't be added
+const opensearchUrl = process.env.OPENSEARCH_URL
+if (opensearchUrl) {
+	// Validate URL format
+	try {
+		new URL(opensearchUrl)
+	} catch (error) {
+		console.error(`[SEARCH] Invalid OPENSEARCH_URL: ${opensearchUrl}`)
+		throw error
+	}
+	const searchClient = new OpenSearchClient(opensearchUrl)
+	app.route("/search", createSearchRouter(searchClient))
+	console.log(`[SEARCH] Search routes enabled with OpenSearch at ${opensearchUrl}`)
+} else {
+	console.log("[SEARCH] Search routes disabled - OPENSEARCH_URL not set")
+}
 
 app.get("/", swaggerUI({url: "/openapi"}))
 

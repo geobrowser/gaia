@@ -49,23 +49,29 @@ Check schemas are valid:
 make validate
 ```
 
-### 3. Compile
+### 3. Regenerate Rust Code
 
-Generate code for all languages:
+After editing proto files, regenerate the Rust code:
 
-```bash
-make compile
-```
+1. **Uncomment the build.rs code:**
+   ```bash
+   # In hermes-schema/build.rs, uncomment the prost-build code
+   ```
 
-**Note:** The Rust producer uses `build.rs` with prost for compile-time code generation. After updating schemas here, rebuild the producer:
+2. **Build the crate:**
+   ```bash
+   cargo build -p hermes-schema
+   ```
 
-```bash
-cd ../producer
-cargo build
-```
+3. **Comment build.rs back:**
+   ```bash
+   # Re-comment the prost-build code to avoid rebuilding on every compile
+   ```
 
-TypeScript code generation can be added later:
-- TypeScript code → `consumer-ts/src/generated/` (if configured)
+4. **Commit the generated files:**
+   The generated Rust files in `src/pb/` should be committed to version control.
+
+**Why comment/uncomment?** The build.rs is commented out to avoid regenerating protos on every build. Proto generation only needs to happen when `.proto` files change.
 
 ### 4. Sync to Kubernetes
 

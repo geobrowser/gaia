@@ -19,8 +19,8 @@ message HermesEdit {
   repeated grc20.Op ops = 3;
   repeated bytes authors = 4;
   optional bytes language = 5;
-  // Space Topology metadata
-  string space_id = 6;
+  // Space Topology metadata - 16-byte UUID
+  bytes space_id = 6;
   bool is_canonical = 7;
 
   blockchain_metadata.BlockchainMetadata meta = 8;

@@ -7,7 +7,7 @@ use anyhow::Result;
 use hermes_instrumentation::debug_span;
 use prost::Message;
 
-use hermes_kafka::{BaseProducer, BaseRecord, Header, OwnedHeaders};
+use hermes_kafka::{BaseProducer, BaseRecord, Header, OwnedHeaders, Producer};
 use hermes_schema::pb::{
     governance::{HermesProposalCreated, HermesProposalExecuted, HermesProposalVoted},
     knowledge::HermesEdit,
@@ -71,7 +71,7 @@ impl KafkaEvent for HermesCreateSpace {
 
     fn headers(&self) -> OwnedHeaders {
         let space_type = match &self.payload {
-            Some(hermes_create_space::Payload::PersonalSpace(_)) => "PERSONAL",
+            Some(hermes_create_space::Payload::EoaSpace(_)) => "EOA",
             Some(hermes_create_space::Payload::DefaultDaoSpace(_)) => "DEFAULT_DAO",
             None => "UNKNOWN",
         };
@@ -109,7 +109,7 @@ impl KafkaEvent for HermesEdit {
     const TOPIC: &'static str = topics::EDITS;
 
     fn key(&self) -> Vec<u8> {
-        self.space_id.as_bytes().to_vec()
+        self.space_id.clone()
     }
 
     fn headers(&self) -> OwnedHeaders {
@@ -395,6 +395,14 @@ impl Emitter {
         }
         Ok(count)
     }
+
+    /// Flush all pending messages to Kafka.
+    ///
+    /// This should be called before shutting down the application to ensure
+    /// all queued messages are delivered to Kafka.
+    pub fn flush(&self, timeout: std::time::Duration) {
+        let _ = self.producer.flush(timeout);
+    }
 }
 
 #[cfg(test)]
@@ -451,10 +459,14 @@ mod tests {
 
     #[test]
     fn test_proposal_created_key() {
+        use hermes_schema::pb::governance::VotingMode;
         let event = HermesProposalCreated {
             space_id: vec![0xAB; 16],
-            proposal_id: vec![0xCD; 32],
-            data: vec![],
+            proposer_id: vec![0x11; 16],
+            proposal_id: vec![0xCD; 16],
+            voting_mode: VotingMode::Fast as i32,
+            actions: vec![],
+            settings: None,
             meta: None,
         };
         assert_eq!(event.key(), vec![0xAB; 16]);
@@ -462,11 +474,12 @@ mod tests {
 
     #[test]
     fn test_proposal_voted_key() {
+        use hermes_schema::pb::governance::ProposalVoteOption;
         let event = HermesProposalVoted {
             voter_id: vec![0x11; 16],
             space_id: vec![0xAB; 16],
-            proposal_id: vec![0xCD; 32],
-            data: vec![],
+            proposal_id: vec![0xCD; 16],
+            vote: ProposalVoteOption::VoteOptionYes as i32,
             meta: None,
         };
         // Should key by space_id, not voter_id
@@ -477,8 +490,7 @@ mod tests {
     fn test_proposal_executed_key() {
         let event = HermesProposalExecuted {
             space_id: vec![0xAB; 16],
-            proposal_id: vec![0xCD; 32],
-            data: vec![],
+            proposal_id: vec![0xCD; 16],
             meta: None,
         };
         assert_eq!(event.key(), vec![0xAB; 16]);
@@ -527,7 +539,9 @@ mod tests {
             object_type: vec![0x00, 0x00, 0x00, 0x01],
             object_id: vec![0xAB; 16],
             direction: VoteDirection::Up as i32,
-            data: vec![],
+            version: 1,
+            group_id: vec![0; 16],
+            space_pov: vec![0; 16],
             meta: None,
         };
         // Should key by object_id for partitioning

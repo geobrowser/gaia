@@ -1,0 +1,161 @@
+name: KG Indexer E2E Tests
+
+on:
+  push:
+    branches: [main, develop]
+    paths:
+      - 'kg-indexer/**'
+      - 'hermes-pipeline/**'
+      - 'hermes-relay/**'
+      - 'hermes-schema/**'
+      - 'hermes-kafka/**'
+      - 'wire/**'
+      - 'api/drizzle/**'
+  pull_request:
+    branches: [main, develop]
+    paths:
+      - 'kg-indexer/**'
+      - 'hermes-pipeline/**'
+      - 'hermes-relay/**'
+      - 'hermes-schema/**'
+      - 'hermes-kafka/**'
+      - 'wire/**'
+      - 'api/drizzle/**'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  DATABASE_URL: postgresql://test_user:test_password@localhost:5432/gaia_test
+  KAFKA_BROKER: localhost:9092
+
+jobs:
+  e2e-tests:
+    name: E2E Tests
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: test_user
+          POSTGRES_PASSWORD: test_password
+          POSTGRES_DB: gaia_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+      kafka:
+        image: apache/kafka:latest
+        env:
+          KAFKA_NODE_ID: 1
+          KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+          KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+          KAFKA_LISTENERS: CONTROLLER://0.0.0.0:9093,PLAINTEXT://0.0.0.0:9092
+          KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+          KAFKA_PROCESS_ROLES: broker,controller
+          KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+          KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+          KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+          KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+          KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+          CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+        ports:
+          - 9092:9092
+          - 9093:9093
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.82.0"
+
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get install -y \
+            cmake \
+            libclang-dev \
+            libssl-dev \
+            pkg-config
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            ./hermes-pipeline
+            ./kg-indexer
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: latest
+
+      - name: Install API dependencies
+        working-directory: ./api
+        run: bun install --frozen-lockfile
+
+      - name: Wait for PostgreSQL
+        run: |
+          until pg_isready -h localhost -p 5432 -U test_user; do
+            echo "Waiting for PostgreSQL..."
+            sleep 2
+          done
+        env:
+          PGPASSWORD: test_password
+
+      - name: Create pg_trgm extension
+        run: |
+          psql -h localhost -p 5432 -U test_user -d gaia_test -c "CREATE EXTENSION IF NOT EXISTS pg_trgm;"
+        env:
+          PGPASSWORD: test_password
+
+      - name: Run database migrations
+        working-directory: ./api
+        run: bun run db:migrate
+
+      - name: Wait for Kafka
+        run: |
+          echo "Waiting for Kafka to be ready..."
+          for i in {1..60}; do
+            if nc -z localhost 9092; then
+              echo "Kafka port 9092 is open, waiting for broker to be ready..."
+              sleep 5
+              echo "Kafka should be ready now"
+              break
+            fi
+            echo "Waiting for Kafka... ($i/60)"
+            sleep 2
+          done
+
+      - name: Build all binaries and tests
+        run: |
+          cargo build --package hermes-pipeline --release
+          cargo build --package kg-indexer --release
+          cargo test --package kg-indexer --test e2e --release --no-run
+
+      - name: Run hermes-pipeline (mock mode)
+        run: |
+          ./target/release/hermes-pipeline
+          echo "hermes-pipeline completed"
+
+      - name: Run kg-indexer
+        run: |
+          timeout 20 ./target/release/kg-indexer || true
+        env:
+          KAFKA_GROUP_ID: kg-indexer-e2e
+          BLOCK_STALE_TIMEOUT_SECS: 2
+          RUST_LOG: kg_indexer=debug
+
+      - name: Run E2E assertions
+        run: cargo test --package kg-indexer --test e2e --release
+        env:
+          RUST_BACKTRACE: 1

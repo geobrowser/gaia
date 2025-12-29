@@ -105,13 +105,13 @@
       {
         "indexed": true,
         "internalType": "bytes16",
-        "name": "fromId",
+        "name": "fromSpaceId",
         "type": "bytes16"
       },
       {
         "indexed": true,
         "internalType": "bytes16",
-        "name": "toId",
+        "name": "toSpaceId",
         "type": "bytes16"
       },
       {
@@ -200,6 +200,16 @@
         "internalType": "bytes16",
         "name": "_spaceId",
         "type": "bytes16"
+      },
+      {
+        "internalType": "bytes32",
+        "name": "_type",
+        "type": "bytes32"
+      },
+      {
+        "internalType": "bytes",
+        "name": "_version",
+        "type": "bytes"
       }
     ],
     "name": "acceptSpaceMigration",
@@ -227,15 +237,22 @@
     "type": "function"
   },
   {
+    "inputs": [],
+    "name": "clearSpaceId",
+    "outputs": [],
+    "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
     "inputs": [
       {
         "internalType": "address",
-        "name": "_from",
+        "name": "_fromSpace",
         "type": "address"
       },
       {
         "internalType": "address",
-        "name": "_to",
+        "name": "_toSpace",
         "type": "address"
       },
       {
@@ -291,14 +308,27 @@
   {
     "inputs": [
       {
-        "internalType": "address",
-        "name": "_owner",
-        "type": "address"
+        "internalType": "bytes",
+        "name": "_initializerData",
+        "type": "bytes"
       }
     ],
     "name": "initialize",
     "outputs": [],
     "stateMutability": "nonpayable",
+    "type": "function"
+  },
+  {
+    "inputs": [],
+    "name": "name",
+    "outputs": [
+      {
+        "internalType": "string",
+        "name": "_name",
+        "type": "string"
+      }
+    ],
+    "stateMutability": "pure",
     "type": "function"
   },
   {
@@ -360,7 +390,18 @@
     "type": "function"
   },
   {
-    "inputs": [],
+    "inputs": [
+      {
+        "internalType": "bytes32",
+        "name": "_type",
+        "type": "bytes32"
+      },
+      {
+        "internalType": "bytes",
+        "name": "_version",
+        "type": "bytes"
+      }
+    ],
     "name": "registerSpaceId",
     "outputs": [],
     "stateMutability": "nonpayable",
@@ -382,7 +423,7 @@
       },
       {
         "internalType": "bool",
-        "name": "_set",
+        "name": "_isPermissionless",
         "type": "bool"
       }
     ],

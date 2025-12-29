@@ -32,8 +32,9 @@ impl TransformResult {
 pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformResult> {
     let mut result = TransformResult::default();
 
-    for action in actions {
+    for (index, action) in actions.iter().enumerate() {
         let action_type = action.action.as_slice();
+        let sequence = index as u32;
 
         if actions::matches(action_type, &actions::EDITOR_ADDED) {
             let event = debug_span!(
@@ -41,7 +42,7 @@ pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformRe
                 space_id = %hex::encode(&action.from_id),
                 account = %hex::encode(&action.topic)
             )
-            .in_scope(|| convert_role_granted(action, meta, MembershipRole::Editor))?;
+            .in_scope(|| convert_role_granted(action, meta, MembershipRole::Editor, sequence))?;
             result.roles_granted.push(event);
         } else if actions::matches(action_type, &actions::EDITOR_REMOVED) {
             let event = debug_span!(
@@ -49,7 +50,7 @@ pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformRe
                 space_id = %hex::encode(&action.from_id),
                 account = %hex::encode(&action.topic)
             )
-            .in_scope(|| convert_role_revoked(action, meta, MembershipRole::Editor))?;
+            .in_scope(|| convert_role_revoked(action, meta, MembershipRole::Editor, sequence))?;
             result.roles_revoked.push(event);
         } else if actions::matches(action_type, &actions::MEMBER_ADDED) {
             let event = debug_span!(
@@ -57,7 +58,7 @@ pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformRe
                 space_id = %hex::encode(&action.from_id),
                 account = %hex::encode(&action.topic)
             )
-            .in_scope(|| convert_role_granted(action, meta, MembershipRole::Member))?;
+            .in_scope(|| convert_role_granted(action, meta, MembershipRole::Member, sequence))?;
             result.roles_granted.push(event);
         } else if actions::matches(action_type, &actions::MEMBER_REMOVED) {
             let event = debug_span!(
@@ -65,7 +66,7 @@ pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformRe
                 space_id = %hex::encode(&action.from_id),
                 account = %hex::encode(&action.topic)
             )
-            .in_scope(|| convert_role_revoked(action, meta, MembershipRole::Member))?;
+            .in_scope(|| convert_role_revoked(action, meta, MembershipRole::Member, sequence))?;
             result.roles_revoked.push(event);
         } else if actions::matches(action_type, &actions::SPACE_LEFT) {
             let event = debug_span!(
@@ -73,7 +74,7 @@ pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformRe
                 member_id = %hex::encode(&action.from_id),
                 space_id = %hex::encode(&action.to_id)
             )
-            .in_scope(|| convert_space_left(action, meta))?;
+            .in_scope(|| convert_space_left(action, meta, sequence))?;
             result.spaces_left.push(event);
         }
     }
@@ -90,6 +91,7 @@ fn convert_role_granted(
     action: &Action,
     meta: &BlockMetadata,
     role: MembershipRole,
+    sequence: u32,
 ) -> Result<HermesRoleGranted> {
     // Extract the 20-byte address from the 32-byte topic (last 20 bytes)
     let account = if action.topic.len() >= 20 {
@@ -102,7 +104,7 @@ fn convert_role_granted(
         space_id: action.from_id.clone(),
         account,
         role: role as i32,
-        meta: Some(meta.to_proto()),
+        meta: Some(meta.to_proto(sequence)),
     })
 }
 
@@ -115,6 +117,7 @@ fn convert_role_revoked(
     action: &Action,
     meta: &BlockMetadata,
     role: MembershipRole,
+    sequence: u32,
 ) -> Result<HermesRoleRevoked> {
     // Extract the 20-byte address from the 32-byte topic (last 20 bytes)
     let account = if action.topic.len() >= 20 {
@@ -127,7 +130,7 @@ fn convert_role_revoked(
         space_id: action.from_id.clone(),
         account,
         role: role as i32,
-        meta: Some(meta.to_proto()),
+        meta: Some(meta.to_proto(sequence)),
     })
 }
 
@@ -136,11 +139,15 @@ fn convert_role_revoked(
 /// The action structure:
 /// - from_id: member_id (16 bytes) - member leaving
 /// - to_id: space_id (16 bytes) - space being left
-fn convert_space_left(action: &Action, meta: &BlockMetadata) -> Result<HermesSpaceLeft> {
+fn convert_space_left(
+    action: &Action,
+    meta: &BlockMetadata,
+    sequence: u32,
+) -> Result<HermesSpaceLeft> {
     Ok(HermesSpaceLeft {
         member_id: action.from_id.clone(),
         space_id: action.to_id.clone(),
-        meta: Some(meta.to_proto()),
+        meta: Some(meta.to_proto(sequence)),
     })
 }
 
@@ -166,7 +173,8 @@ mod tests {
             data: vec![],
         };
 
-        let result = convert_role_granted(&action, &test_meta(), MembershipRole::Editor).unwrap();
+        let result =
+            convert_role_granted(&action, &test_meta(), MembershipRole::Editor, 0).unwrap();
         assert_eq!(result.space_id, vec![1; 16]);
         assert_eq!(result.account, vec![2; 20]);
         assert_eq!(result.role, MembershipRole::Editor as i32);
@@ -182,7 +190,8 @@ mod tests {
             data: vec![],
         };
 
-        let result = convert_role_revoked(&action, &test_meta(), MembershipRole::Member).unwrap();
+        let result =
+            convert_role_revoked(&action, &test_meta(), MembershipRole::Member, 0).unwrap();
         assert_eq!(result.space_id, vec![1; 16]);
         assert_eq!(result.account, vec![3; 20]);
         assert_eq!(result.role, MembershipRole::Member as i32);
@@ -198,7 +207,7 @@ mod tests {
             data: vec![],
         };
 
-        let result = convert_space_left(&action, &test_meta()).unwrap();
+        let result = convert_space_left(&action, &test_meta(), 0).unwrap();
         assert_eq!(result.member_id, vec![1; 16]);
         assert_eq!(result.space_id, vec![2; 16]);
     }

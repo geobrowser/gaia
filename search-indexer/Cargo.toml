@@ -1,0 +1,43 @@
+[package]
+name = "search-indexer"
+version = "0.1.0"
+edition = "2021"
+description = "Search indexer for the Geo Knowledge Graph - consumes events from Kafka and indexes into OpenSearch"
+
+[dependencies]
+# Workspace dependencies
+search-indexer-shared = { path = "../search-indexer-shared" }
+search-indexer-repository = { path = "../search-indexer-repository" }
+hermes-schema = { path = "../hermes-schema" }
+wire = { path = "../wire" }
+indexer_utils = { path = "../indexer_utils" }
+sdk = { path = "../sdk" }
+
+# Kafka
+rdkafka = { version = "0.38.0", features = ["cmake-build", "zstd", "ssl"] }
+
+# Async runtime
+tokio = { version = "1.42.0", features = ["macros", "rt-multi-thread", "sync", "time", "signal"] }
+tokio-stream = { version = "0.1.17", features = ["sync"] }
+futures = "0.3.31"
+async-trait = "0.1.88"
+
+# Serialization
+prost = "0.13.5"
+serde_json = "1.0.140"
+
+# Error handling
+thiserror = "2.0.17"
+
+# Utilities
+chrono = "0.4.41"
+uuid = { version = "1.17.0", features = ["v4"] }
+dotenv = "0.15.0"
+
+# Logging
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter", "json"] }
+axiom-rs = "0.11.4"
+
+[dev-dependencies]
+tokio = { version = "1.42.0", features = ["macros", "rt-multi-thread", "test-util"] }
