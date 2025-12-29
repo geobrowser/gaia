@@ -6,12 +6,14 @@
 //! Run with: `cargo test --test postgres_actions`
 
 use actions_indexer_repository::{ActionsRepository, PostgresActionsRepository};
-use actions_indexer_shared::types::{Action, ActionRaw, Vote, UserVote, VotesCount, VoteCriteria, VoteValue, ObjectType, ActionType};
-use alloy::primitives::TxHash;
+use actions_indexer_shared::types::{
+    Action, ActionRaw, ActionType, ObjectType, UserVote, Vote, VoteCriteria, VoteValue, VotesCount,
+};
 use alloy::hex::FromHex;
-use uuid::{Uuid, uuid};
+use alloy::primitives::TxHash;
 use sqlx::Row;
 use time::OffsetDateTime;
+use uuid::{Uuid, uuid};
 
 /// Creates a test action raw data with default values.
 fn make_raw_action() -> ActionRaw {
@@ -25,7 +27,10 @@ fn make_raw_action() -> ActionRaw {
         metadata: None,
         block_number: 1,
         block_timestamp: 1755182913,
-        tx_hash: TxHash::from_hex("0x5427daee8d03277f8a30ea881692c04861e692ce5f305b7a689b76248cae63c4").unwrap(),
+        tx_hash: TxHash::from_hex(
+            "0x5427daee8d03277f8a30ea881692c04861e692ce5f305b7a689b76248cae63c4",
+        )
+        .unwrap(),
         object_type: ObjectType::Entity,
     }
 }
@@ -71,10 +76,15 @@ async fn test_insert_raw_action(pool: sqlx::PgPool) {
     repository.insert_actions(&[action]).await.unwrap();
 
     let actions = sqlx::query("SELECT * FROM raw_actions")
-        .fetch_all(&pool).await.unwrap();
+        .fetch_all(&pool)
+        .await
+        .unwrap();
 
     assert_eq!(actions.len(), 1);
-    assert_eq!(actions[0].get::<String, _>("tx_hash"), raw_action.tx_hash.to_string());
+    assert_eq!(
+        actions[0].get::<String, _>("tx_hash"),
+        raw_action.tx_hash.to_string()
+    );
 }
 
 #[sqlx::test(migrations = "src/postgres/migrations")]
@@ -99,7 +109,9 @@ async fn test_insert_multiple_raw_actions(pool: sqlx::PgPool) {
     repository.insert_actions(&actions).await.unwrap();
 
     let actions = sqlx::query("SELECT * FROM raw_actions")
-        .fetch_all(&pool).await.unwrap();
+        .fetch_all(&pool)
+        .await
+        .unwrap();
 
     assert_eq!(actions.len(), 3);
 }
@@ -111,7 +123,9 @@ async fn test_insert_empty_actions(pool: sqlx::PgPool) {
     repository.insert_actions(&actions).await.unwrap();
 
     let actions_in_db = sqlx::query("SELECT * FROM raw_actions")
-        .fetch_all(&pool).await.unwrap();
+        .fetch_all(&pool)
+        .await
+        .unwrap();
 
     assert!(actions_in_db.is_empty());
 }
@@ -133,7 +147,9 @@ async fn test_insert_raw_action_with_metadata(pool: sqlx::PgPool) {
 
     let actions = sqlx::query("SELECT metadata FROM raw_actions WHERE tx_hash = $1")
         .bind(raw_action.tx_hash.to_string())
-        .fetch_all(&pool).await.unwrap();
+        .fetch_all(&pool)
+        .await
+        .unwrap();
 
     assert_eq!(actions.len(), 1);
     let metadata: Option<Vec<u8>> = actions[0].get("metadata");
@@ -151,7 +167,10 @@ async fn test_update_user_vote(pool: sqlx::PgPool) {
 
     let user_vote = make_user_vote();
 
-    repository.update_user_votes(&[user_vote.clone()]).await.unwrap();
+    repository
+        .update_user_votes(&[user_vote.clone()])
+        .await
+        .unwrap();
 
     let votes_in_db = sqlx::query(
         "SELECT user_id, object_id, space_id, vote_type, voted_at FROM user_votes WHERE user_id = $1 AND object_id = $2 AND space_id = $3",
@@ -167,7 +186,12 @@ async fn test_update_user_vote(pool: sqlx::PgPool) {
     assert_eq!(votes_in_db.get::<Uuid, _>("object_id"), user_vote.object_id);
     assert_eq!(votes_in_db.get::<Uuid, _>("space_id"), user_vote.space_id);
     assert_eq!(votes_in_db.get::<i16, _>("vote_type"), 0);
-    assert_eq!(votes_in_db.get::<OffsetDateTime, _>("voted_at").unix_timestamp() as u64, user_vote.voted_at);
+    assert_eq!(
+        votes_in_db
+            .get::<OffsetDateTime, _>("voted_at")
+            .unix_timestamp() as u64,
+        user_vote.voted_at
+    );
 
     // Test update
     let updated_user_vote = UserVote {
@@ -176,7 +200,10 @@ async fn test_update_user_vote(pool: sqlx::PgPool) {
         ..user_vote.clone()
     };
 
-    repository.update_user_votes(&[updated_user_vote.clone()]).await.unwrap();
+    repository
+        .update_user_votes(&[updated_user_vote.clone()])
+        .await
+        .unwrap();
 
     let updated_votes_in_db = sqlx::query(
         "SELECT user_id, object_id, space_id, vote_type, voted_at FROM user_votes WHERE user_id = $1 AND object_id = $2 AND space_id = $3",
@@ -189,7 +216,12 @@ async fn test_update_user_vote(pool: sqlx::PgPool) {
     .unwrap();
 
     assert_eq!(updated_votes_in_db.get::<i16, _>("vote_type"), 1);
-    assert_eq!(updated_votes_in_db.get::<OffsetDateTime, _>("voted_at").unix_timestamp() as u64, updated_user_vote.voted_at);
+    assert_eq!(
+        updated_votes_in_db
+            .get::<OffsetDateTime, _>("voted_at")
+            .unix_timestamp() as u64,
+        updated_user_vote.voted_at
+    );
 }
 
 #[sqlx::test(migrations = "src/postgres/migrations")]
@@ -242,7 +274,10 @@ async fn test_update_votes_count(pool: sqlx::PgPool) {
 
     let votes_count = make_votes_count();
 
-    repository.update_votes_counts(&[votes_count.clone()]).await.unwrap();
+    repository
+        .update_votes_counts(&[votes_count.clone()])
+        .await
+        .unwrap();
 
     let counts_in_db = sqlx::query(
         "SELECT object_id, space_id, upvotes, downvotes FROM votes_count WHERE object_id = $1 AND space_id = $2",
@@ -253,10 +288,19 @@ async fn test_update_votes_count(pool: sqlx::PgPool) {
     .await
     .unwrap();
 
-    assert_eq!(counts_in_db.get::<Uuid, _>("object_id"), votes_count.object_id);
-    assert_eq!(counts_in_db.get::<Uuid, _>("space_id"), votes_count.space_id);
+    assert_eq!(
+        counts_in_db.get::<Uuid, _>("object_id"),
+        votes_count.object_id
+    );
+    assert_eq!(
+        counts_in_db.get::<Uuid, _>("space_id"),
+        votes_count.space_id
+    );
     assert_eq!(counts_in_db.get::<i64, _>("upvotes"), votes_count.upvotes);
-    assert_eq!(counts_in_db.get::<i64, _>("downvotes"), votes_count.downvotes);
+    assert_eq!(
+        counts_in_db.get::<i64, _>("downvotes"),
+        votes_count.downvotes
+    );
 
     // Test update
     let updated_votes_count = VotesCount {
@@ -265,7 +309,10 @@ async fn test_update_votes_count(pool: sqlx::PgPool) {
         ..votes_count.clone()
     };
 
-    repository.update_votes_counts(&[updated_votes_count.clone()]).await.unwrap();
+    repository
+        .update_votes_counts(&[updated_votes_count.clone()])
+        .await
+        .unwrap();
 
     let updated_counts_in_db = sqlx::query(
         "SELECT object_id, space_id, upvotes, downvotes FROM votes_count WHERE object_id = $1 AND space_id = $2",
@@ -276,8 +323,14 @@ async fn test_update_votes_count(pool: sqlx::PgPool) {
     .await
     .unwrap();
 
-    assert_eq!(updated_counts_in_db.get::<i64, _>("upvotes"), updated_votes_count.upvotes);
-    assert_eq!(updated_counts_in_db.get::<i64, _>("downvotes"), updated_votes_count.downvotes);
+    assert_eq!(
+        updated_counts_in_db.get::<i64, _>("upvotes"),
+        updated_votes_count.upvotes
+    );
+    assert_eq!(
+        updated_counts_in_db.get::<i64, _>("downvotes"),
+        updated_votes_count.downvotes
+    );
 }
 
 #[sqlx::test(migrations = "src/postgres/migrations")]
@@ -346,9 +399,34 @@ async fn test_get_user_votes(pool: sqlx::PgPool) {
         voted_at: 1755182914,
     };
 
-    repository.update_user_votes(&[user_vote1.clone(), user_vote2.clone(), user_vote3.clone()]).await.unwrap();
+    repository
+        .update_user_votes(&[user_vote1.clone(), user_vote2.clone(), user_vote3.clone()])
+        .await
+        .unwrap();
 
-    let found_votes = repository.get_user_votes(&[(user_vote1.user_id, user_vote1.object_id, user_vote1.space_id, user_vote1.object_type), (user_vote2.user_id, user_vote2.object_id, user_vote2.space_id, user_vote2.object_type), (user_vote3.user_id, user_vote3.object_id, user_vote3.space_id, user_vote3.object_type)]).await.unwrap();
+    let found_votes = repository
+        .get_user_votes(&[
+            (
+                user_vote1.user_id,
+                user_vote1.object_id,
+                user_vote1.space_id,
+                user_vote1.object_type,
+            ),
+            (
+                user_vote2.user_id,
+                user_vote2.object_id,
+                user_vote2.space_id,
+                user_vote2.object_type,
+            ),
+            (
+                user_vote3.user_id,
+                user_vote3.object_id,
+                user_vote3.space_id,
+                user_vote3.object_type,
+            ),
+        ])
+        .await
+        .unwrap();
     assert_eq!(found_votes.len(), 3);
     assert!(found_votes.contains(&user_vote1));
     assert!(found_votes.contains(&user_vote2));
@@ -358,9 +436,12 @@ async fn test_get_user_votes(pool: sqlx::PgPool) {
 #[sqlx::test(migrations = "src/postgres/migrations")]
 async fn test_get_user_votes_empty_input(pool: sqlx::PgPool) {
     let repository = PostgresActionsRepository::new(pool.clone()).await.unwrap();
-    
+
     let empty_vote_criteria: &[VoteCriteria] = &[];
-    let result = repository.get_user_votes(empty_vote_criteria).await.unwrap();
+    let result = repository
+        .get_user_votes(empty_vote_criteria)
+        .await
+        .unwrap();
 
     assert!(result.is_empty());
 }
@@ -379,13 +460,26 @@ async fn test_get_user_votes_partial_matches(pool: sqlx::PgPool) {
         voted_at: 1755182913,
     };
 
-    repository.update_user_votes(&[user_vote1.clone()]).await.unwrap();
+    repository
+        .update_user_votes(&[user_vote1.clone()])
+        .await
+        .unwrap();
 
     let vote_criteria = [
-        (user_vote1.user_id, user_vote1.object_id, user_vote1.space_id, user_vote1.object_type),
-        (user_vote2.user_id, user_vote2.object_id, user_vote2.space_id, user_vote2.object_type),
+        (
+            user_vote1.user_id,
+            user_vote1.object_id,
+            user_vote1.space_id,
+            user_vote1.object_type,
+        ),
+        (
+            user_vote2.user_id,
+            user_vote2.object_id,
+            user_vote2.space_id,
+            user_vote2.object_type,
+        ),
     ];
-    
+
     let found_votes = repository.get_user_votes(&vote_criteria).await.unwrap();
     assert_eq!(found_votes.len(), 1);
     assert!(found_votes.contains(&user_vote1));
@@ -397,14 +491,32 @@ async fn test_get_user_votes_duplicate_vote_criteria(pool: sqlx::PgPool) {
     let repository = PostgresActionsRepository::new(pool.clone()).await.unwrap();
 
     let user_vote = make_user_vote();
-    repository.update_user_votes(&[user_vote.clone()]).await.unwrap();
+    repository
+        .update_user_votes(&[user_vote.clone()])
+        .await
+        .unwrap();
 
     let vote_criteria = [
-        (user_vote.user_id, user_vote.object_id, user_vote.space_id, user_vote.object_type),
-        (user_vote.user_id, user_vote.object_id, user_vote.space_id, user_vote.object_type),
-        (user_vote.user_id, user_vote.object_id, user_vote.space_id, user_vote.object_type),
+        (
+            user_vote.user_id,
+            user_vote.object_id,
+            user_vote.space_id,
+            user_vote.object_type,
+        ),
+        (
+            user_vote.user_id,
+            user_vote.object_id,
+            user_vote.space_id,
+            user_vote.object_type,
+        ),
+        (
+            user_vote.user_id,
+            user_vote.object_id,
+            user_vote.space_id,
+            user_vote.object_type,
+        ),
     ];
-    
+
     let found_votes = repository.get_user_votes(&vote_criteria).await.unwrap();
     assert_eq!(found_votes.len(), 1);
     assert_eq!(found_votes[0], user_vote);
@@ -415,10 +527,20 @@ async fn test_get_user_votes_nonexistent_data(pool: sqlx::PgPool) {
     let repository = PostgresActionsRepository::new(pool.clone()).await.unwrap();
 
     let vote_criteria = [
-        (uuid!("11111111-1111-1111-1111-111111111111"), Uuid::new_v4(), uuid!("f5d2fe0c-fb9d-4027-b227-54f59af20f19"), ObjectType::Entity),
-        (uuid!("33333333-3333-3333-3333-333333333333"), Uuid::new_v4(), uuid!("f5d2fe0c-fb9d-4027-b227-54f59af20f19"), ObjectType::Entity),
+        (
+            uuid!("11111111-1111-1111-1111-111111111111"),
+            Uuid::new_v4(),
+            uuid!("f5d2fe0c-fb9d-4027-b227-54f59af20f19"),
+            ObjectType::Entity,
+        ),
+        (
+            uuid!("33333333-3333-3333-3333-333333333333"),
+            Uuid::new_v4(),
+            uuid!("f5d2fe0c-fb9d-4027-b227-54f59af20f19"),
+            ObjectType::Entity,
+        ),
     ];
-    
+
     let found_votes = repository.get_user_votes(&vote_criteria).await.unwrap();
     assert!(found_votes.is_empty());
 }

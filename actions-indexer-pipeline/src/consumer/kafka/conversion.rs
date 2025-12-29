@@ -122,9 +122,9 @@ fn parse_vote_data(data: &[u8]) -> Result<(u64, Uuid, Uuid), ConsumerError> {
     }
 
     // Extract version from bytes 30-31 (uint16, big-endian in ABI encoding)
-    let version_bytes: [u8; 2] = data[30..32]
-        .try_into()
-        .map_err(|_| ConversionError::InvalidDataField("failed to read version bytes".to_string()))?;
+    let version_bytes: [u8; 2] = data[30..32].try_into().map_err(|_| {
+        ConversionError::InvalidDataField("failed to read version bytes".to_string())
+    })?;
     let action_version = u16::from_be_bytes(version_bytes) as u64;
 
     // Extract groupId from bytes 32-47 (bytes16, left-aligned)
@@ -180,20 +180,15 @@ fn parse_object_type(bytes: &[u8]) -> Result<ObjectType, ConsumerError> {
     }
 
     // Interpret as big-endian u32 (Solidity bytes4 encoding)
-    let type_id = u32::from_be_bytes(
-        bytes
-            .try_into()
-            .map_err(|_| ConversionError::InvalidObjectType("failed to convert bytes".to_string()))?,
-    );
+    let type_id =
+        u32::from_be_bytes(bytes.try_into().map_err(|_| {
+            ConversionError::InvalidObjectType("failed to convert bytes".to_string())
+        })?);
 
     match type_id {
         0 => Ok(ObjectType::Entity),
         1 => Ok(ObjectType::Relation),
-        _ => Err(ConversionError::InvalidObjectType(format!(
-            "unknown type: {}",
-            type_id
-        ))
-        .into()),
+        _ => Err(ConversionError::InvalidObjectType(format!("unknown type: {}", type_id)).into()),
     }
 }
 

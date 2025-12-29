@@ -1,10 +1,10 @@
 //! Error types for the orchestrator module of the Actions Indexer Pipeline.
 //! Defines specific errors that can occur during the orchestration process.
-use thiserror::Error;
 use crate::errors::consumer::ConsumerError;
+use crate::errors::loader::LoaderError;
 use actions_indexer_repository::errors::ActionsRepositoryError;
 use actions_indexer_repository::errors::CursorRepositoryError;
-use crate::errors::loader::LoaderError;
+use thiserror::Error;
 
 /// Represents errors that can occur within the action orchestrator.
 ///

@@ -17,15 +17,17 @@
 //! cargo test -p actions-indexer-pipeline --test kafka_integration -- --ignored
 //! ```
 
-use actions_indexer_pipeline::consumer::kafka::{ConsumerConfig, KafkaStreamProvider, hermes_vote_to_action_raw};
+use actions_indexer_pipeline::consumer::kafka::{
+    ConsumerConfig, KafkaStreamProvider, hermes_vote_to_action_raw,
+};
 use actions_indexer_pipeline::consumer::{ConsumeActionsStream, StreamMessage};
 use actions_indexer_shared::types::{ActionType, ObjectType};
 use hermes_schema::pb::blockchain_metadata::BlockchainMetadata;
 use hermes_schema::pb::voting::{HermesVoteCast, VoteDirection};
 use prost::Message;
 use tokio::sync::mpsc;
-use uuid::Uuid;
 use url::Url;
+use uuid::Uuid;
 
 /// Helper to create a valid HermesVoteCast message for testing.
 fn create_test_vote(
@@ -107,7 +109,7 @@ fn test_full_conversion_pipeline_upvote() {
     assert_eq!(action_raw.object_type, ObjectType::Entity);
     assert_eq!(action_raw.block_number, 12345);
     assert_eq!(action_raw.block_timestamp, 1700000000);
-    
+
     // Check vote direction in metadata
     let metadata = action_raw.metadata.as_ref().unwrap();
     assert_eq!(metadata[0], 0); // Up
@@ -134,7 +136,7 @@ fn test_full_conversion_pipeline_downvote() {
     let action_raw = hermes_vote_to_action_raw(&decoded_vote).unwrap();
 
     assert_eq!(action_raw.action_version, 2);
-    
+
     let metadata = action_raw.metadata.as_ref().unwrap();
     assert_eq!(metadata[0], 1); // Down
 }
@@ -255,8 +257,12 @@ fn test_conversion_error_missing_metadata() {
 
 #[test]
 fn test_consumer_config_creation() {
-    let config = ConsumerConfig::new(Url::parse("localhost:9092").unwrap(), "test-group", "test-topic");
-    
+    let config = ConsumerConfig::new(
+        Url::parse("localhost:9092").unwrap(),
+        "test-group",
+        "test-topic",
+    );
+
     assert_eq!(config.broker, Url::parse("localhost:9092").unwrap());
     assert_eq!(config.group_id, "test-group");
     assert_eq!(config.topic, "test-topic");
@@ -266,18 +272,26 @@ fn test_consumer_config_creation() {
 
 #[test]
 fn test_consumer_config_with_credentials() {
-    let config = ConsumerConfig::new(Url::parse("localhost:9092").unwrap(), "test-group", "test-topic")
-        .with_credentials("user".to_string(), "pass".to_string());
-    
+    let config = ConsumerConfig::new(
+        Url::parse("localhost:9092").unwrap(),
+        "test-group",
+        "test-topic",
+    )
+    .with_credentials("user".to_string(), "pass".to_string());
+
     assert_eq!(config.username, Some("user".to_string()));
     assert_eq!(config.password, Some("pass".to_string()));
 }
 
 #[test]
 fn test_kafka_stream_provider_creation() {
-    let config = ConsumerConfig::new(Url::parse("localhost:9092").unwrap(), "test-group", "test-topic");
+    let config = ConsumerConfig::new(
+        Url::parse("localhost:9092").unwrap(),
+        "test-group",
+        "test-topic",
+    );
     let provider = KafkaStreamProvider::new(config);
-    
+
     // Provider should be created without errors
     // We can't easily test internal state, but creation should succeed
     assert!(true);
@@ -289,39 +303,41 @@ fn test_kafka_stream_provider_creation() {
 // =============================================================================
 
 /// Integration test that requires a running Kafka broker.
-/// 
+///
 /// To run: `cargo test -p actions-indexer-pipeline --test kafka_integration test_kafka_connection -- --ignored`
-/// 
+///
 /// Prerequisites:
 /// - Kafka broker running at localhost:9092
 /// - Topic "test-votes" created
 #[tokio::test]
 #[ignore = "Requires running Kafka broker"]
 async fn test_kafka_connection() {
-    let config = ConsumerConfig::new(Url::parse("localhost:9092").unwrap(), "integration-test-group", "test-votes");
+    let config = ConsumerConfig::new(
+        Url::parse("localhost:9092").unwrap(),
+        "integration-test-group",
+        "test-votes",
+    );
     let provider = KafkaStreamProvider::new(config);
-    
+
     let (tx, _rx) = mpsc::channel::<StreamMessage>(100);
-    
+
     // Start the stream in a separate task
-    let handle = tokio::spawn(async move {
-        provider.stream_events(tx, None).await
-    });
-    
+    let handle = tokio::spawn(async move { provider.stream_events(tx, None).await });
+
     // Wait briefly for connection
     tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-    
+
     // Cancel the stream
     handle.abort();
-    
+
     // We should not have received StreamEnd yet (stream was aborted)
     // This test mainly verifies the connection doesn't panic
 }
 
 /// Integration test for end-to-end message consumption.
-/// 
+///
 /// To run: `cargo test -p actions-indexer-pipeline --test kafka_integration test_kafka_message_consumption -- --ignored`
-/// 
+///
 /// Prerequisites:
 /// - Kafka broker running at localhost:9092
 /// - Topic "test-votes" created
@@ -329,20 +345,22 @@ async fn test_kafka_connection() {
 #[tokio::test]
 #[ignore = "Requires running Kafka broker with test data"]
 async fn test_kafka_message_consumption() {
-    let config = ConsumerConfig::new(Url::parse("localhost:9092").unwrap(), "integration-test-consumer", "test-votes");
+    let config = ConsumerConfig::new(
+        Url::parse("localhost:9092").unwrap(),
+        "integration-test-consumer",
+        "test-votes",
+    );
     let provider = KafkaStreamProvider::new(config);
-    
+
     let (tx, mut rx) = mpsc::channel::<StreamMessage>(100);
-    
+
     // Start the stream
-    let handle = tokio::spawn(async move {
-        provider.stream_events(tx, None).await
-    });
-    
+    let handle = tokio::spawn(async move { provider.stream_events(tx, None).await });
+
     // Wait for messages (with timeout)
     let timeout = tokio::time::Duration::from_secs(10);
     let result = tokio::time::timeout(timeout, rx.recv()).await;
-    
+
     match result {
         Ok(Some(StreamMessage::BlockData(data))) => {
             // Successfully received a message
@@ -364,7 +382,7 @@ async fn test_kafka_message_consumption() {
         }
         _ => {}
     }
-    
+
     handle.abort();
 }
 
@@ -381,9 +399,13 @@ fn test_multiple_votes_conversion() {
                 Uuid::new_v4(),
                 Uuid::new_v4(),
                 Uuid::new_v4(),
-                if i % 3 == 0 { VoteDirection::Up } 
-                else if i % 3 == 1 { VoteDirection::Down } 
-                else { VoteDirection::None },
+                if i % 3 == 0 {
+                    VoteDirection::Up
+                } else if i % 3 == 1 {
+                    VoteDirection::Down
+                } else {
+                    VoteDirection::None
+                },
                 (i + 1) as u16,
             )
         })
@@ -399,10 +421,9 @@ fn test_multiple_votes_conversion() {
         .collect();
 
     assert_eq!(actions.len(), 10);
-    
+
     // Verify action versions
     for (i, action) in actions.iter().enumerate() {
         assert_eq!(action.action_version, (i + 1) as u64);
     }
 }
-

@@ -2,14 +2,16 @@
 //! action processing pipeline.
 //! It integrates the consumer, processor, and loader components to manage the
 //! flow of action events from ingestion to persistence.
-use crate::errors::OrchestratorError;
 use crate::consumer::{ActionsConsumer, StreamMessage};
-use crate::processor::{ActionsProcessor, ProcessActions};
+use crate::errors::OrchestratorError;
 use crate::loader::ActionsLoader;
-use actions_indexer_shared::types::{Action, Changeset, UserVote, Vote, VoteCriteria, VoteCountCriteria, VoteValue, VotesCount};
-use tokio::sync::mpsc;
-use std::collections::HashMap;
+use crate::processor::{ActionsProcessor, ProcessActions};
 use actions_indexer_repository::{ActionsRepository, CursorRepository};
+use actions_indexer_shared::types::{
+    Action, Changeset, UserVote, Vote, VoteCountCriteria, VoteCriteria, VoteValue, VotesCount,
+};
+use std::collections::HashMap;
+use tokio::sync::mpsc;
 
 /// `Orchestrator` is responsible for coordinating the consumption, processing,
 /// and loading of actions.
@@ -56,8 +58,8 @@ impl Orchestrator {
     /// A `Result` indicating success or an `OrchestratorError` if an error occurs
     /// during the orchestration process.
     pub async fn run(self) -> Result<(), OrchestratorError> {
-        let (tx, mut rx) = mpsc::channel(1000); 
-        
+        let (tx, mut rx) = mpsc::channel(1000);
+
         let consumer_tx = tx.clone();
         let consumer = self.actions_consumer;
         let processor = self.actions_processor;
@@ -73,14 +75,18 @@ impl Orchestrator {
         }
 
         // Get the cursor from the database
-        let cursor = loader.cursor_repository.get_cursor("actions_indexer").await.map_err(OrchestratorError::from)?;
-        
+        let cursor = loader
+            .cursor_repository
+            .get_cursor("actions_indexer")
+            .await
+            .map_err(OrchestratorError::from)?;
+
         tokio::spawn(async move {
             if let Err(e) = consumer.run(consumer_tx, cursor).await {
                 eprintln!("Consumer error: {:?}", e);
             }
         });
-        
+
         while let Some(message) = rx.recv().await {
             match message {
                 StreamMessage::BlockData(block_data) => {
@@ -90,22 +96,28 @@ impl Orchestrator {
 
                     if actions.len() > 0 {
                         let now = chrono::Utc::now();
-                        println!("{} - Processing {} actions", now.to_rfc3339(), actions.len());
-                        
+                        println!(
+                            "{} - Processing {} actions",
+                            now.to_rfc3339(),
+                            actions.len()
+                        );
+
                         let actions = processor.process(&actions);
-                        
+
                         let mut votes: Vec<Vote> = Vec::new();
                         for action in actions.clone() {
                             match action {
                                 Action::Vote(vote) => votes.push(vote),
                             }
                         }
-                        
-                        let user_votes = get_latest_user_votes(&votes);
-                        let votes_count = update_vote_counts(&user_votes, loader.actions_repository.as_ref()).await?;
 
-                        let changeset = Changeset { 
-                            actions: &actions,  
+                        let user_votes = get_latest_user_votes(&votes);
+                        let votes_count =
+                            update_vote_counts(&user_votes, loader.actions_repository.as_ref())
+                                .await?;
+
+                        let changeset = Changeset {
+                            actions: &actions,
                             user_votes: &user_votes,
                             votes_count: &votes_count,
                         };
@@ -113,14 +125,15 @@ impl Orchestrator {
                         if let Err(e) = loader.persist_changeset(&changeset).await {
                             eprintln!("Failed to persist changeset: {:?}", e);
                         } else {
-                            save_cursor(&cursor, &block_number, loader.cursor_repository.as_ref()).await?;
+                            save_cursor(&cursor, &block_number, loader.cursor_repository.as_ref())
+                                .await?;
                         }
                     } else {
                         if !cursor.is_empty() {
-                            save_cursor(&cursor, &block_number, loader.cursor_repository.as_ref()).await?;
+                            save_cursor(&cursor, &block_number, loader.cursor_repository.as_ref())
+                                .await?;
                         }
                     }
-
                 }
                 StreamMessage::UndoSignal(undo_signal) => {
                     println!("UndoSignal: {:?}", undo_signal);
@@ -131,7 +144,7 @@ impl Orchestrator {
                 StreamMessage::StreamEnd => {
                     println!("StreamEnd");
                 }
-            }   
+            }
         }
         Ok(())
     }
@@ -144,7 +157,7 @@ struct VotesDelta {
 }
 
 /// This method returns the latest vote for each user/entity/space combination
-/// 
+///
 /// It assumes that the votes are sorted by block_timestamp so it simply returns the last occurrence
 /// of each user/entity/space combination.
 ///
@@ -158,14 +171,19 @@ struct VotesDelta {
 ///
 fn get_latest_user_votes(votes: &[Vote]) -> Vec<UserVote> {
     let mut latest_votes: HashMap<VoteCriteria, &Vote> = HashMap::new();
-    
+
     for vote in votes {
-        let vote_criteria = (vote.raw.user_id, vote.raw.object_id, vote.raw.space_pov, vote.raw.object_type);
+        let vote_criteria = (
+            vote.raw.user_id,
+            vote.raw.object_id,
+            vote.raw.space_pov,
+            vote.raw.object_type,
+        );
         latest_votes.insert(vote_criteria, vote);
     }
 
     let mut user_votes = Vec::with_capacity(latest_votes.len());
-    
+
     for ((user_id, object_id, space_id, object_type), vote) in latest_votes {
         user_votes.push(UserVote {
             user_id,
@@ -176,7 +194,7 @@ fn get_latest_user_votes(votes: &[Vote]) -> Vec<UserVote> {
             voted_at: vote.raw.block_timestamp,
         });
     }
-    
+
     user_votes
 }
 
@@ -194,16 +212,28 @@ fn get_latest_user_votes(votes: &[Vote]) -> Vec<UserVote> {
 ///
 /// A vector of `VotesCount`s with the updated vote counts for each entity/space combination.
 ///
-async fn update_vote_counts(user_votes: &[UserVote], actions_repository: &dyn ActionsRepository) -> Result<Vec<VotesCount>, OrchestratorError> {
+async fn update_vote_counts(
+    user_votes: &[UserVote],
+    actions_repository: &dyn ActionsRepository,
+) -> Result<Vec<VotesCount>, OrchestratorError> {
     if user_votes.is_empty() {
         return Ok(Vec::new());
     }
 
-    let vote_criteria: Vec<VoteCriteria> = user_votes.iter()
-        .map(|vote| (vote.user_id, vote.object_id, vote.space_id, vote.object_type))
+    let vote_criteria: Vec<VoteCriteria> = user_votes
+        .iter()
+        .map(|vote| {
+            (
+                vote.user_id,
+                vote.object_id,
+                vote.space_id,
+                vote.object_type,
+            )
+        })
         .collect();
-        
-    let vote_count_criteria: Vec<VoteCountCriteria> = user_votes.iter()
+
+    let vote_count_criteria: Vec<VoteCountCriteria> = user_votes
+        .iter()
         .map(|vote| (vote.object_id, vote.space_id, vote.object_type))
         .collect();
 
@@ -214,7 +244,17 @@ async fn update_vote_counts(user_votes: &[UserVote], actions_repository: &dyn Ac
 
     let stored_user_votes_map: HashMap<VoteCriteria, UserVote> = stored_user_votes
         .into_iter()
-        .map(|vote| ((vote.user_id, vote.object_id, vote.space_id, vote.object_type), vote))
+        .map(|vote| {
+            (
+                (
+                    vote.user_id,
+                    vote.object_id,
+                    vote.space_id,
+                    vote.object_type,
+                ),
+                vote,
+            )
+        })
         .collect();
 
     let mut vote_counts_map: HashMap<VoteCountCriteria, VotesCount> = stored_vote_counts
@@ -223,20 +263,27 @@ async fn update_vote_counts(user_votes: &[UserVote], actions_repository: &dyn Ac
         .collect();
 
     for new_vote in user_votes {
-        let vote_criteria = (new_vote.user_id, new_vote.object_id, new_vote.space_id, new_vote.object_type);
+        let vote_criteria = (
+            new_vote.user_id,
+            new_vote.object_id,
+            new_vote.space_id,
+            new_vote.object_type,
+        );
         let count_criteria = (new_vote.object_id, new_vote.space_id, new_vote.object_type);
-        
+
         let stored_user_vote = stored_user_votes_map.get(&vote_criteria);
         let vote_delta = compute_vote_delta(&stored_user_vote, new_vote);
-        
-        let vote_count = vote_counts_map.entry(count_criteria).or_insert_with(|| VotesCount {
-            object_id: new_vote.object_id,
-            object_type: new_vote.object_type,
-            space_id: new_vote.space_id,
-            upvotes: 0,
-            downvotes: 0,
-        });
-        
+
+        let vote_count = vote_counts_map
+            .entry(count_criteria)
+            .or_insert_with(|| VotesCount {
+                object_id: new_vote.object_id,
+                object_type: new_vote.object_type,
+                space_id: new_vote.space_id,
+                upvotes: 0,
+                downvotes: 0,
+            });
+
         vote_count.upvotes += vote_delta.upvotes as i64;
         vote_count.downvotes += vote_delta.downvotes as i64;
     }
@@ -249,33 +296,40 @@ fn compute_vote_delta(saved_vote: &Option<&UserVote>, new_vote: &UserVote) -> Vo
     let new_vote_value = new_vote.vote_type.clone();
 
     let (upvotes, downvotes) = match (saved_vote_value, new_vote_value) {
-        (Some(VoteValue::Up), VoteValue::Down)          => (-1, 1),
-        (Some(VoteValue::Up), VoteValue::Remove)        => (-1, 0),
-        (Some(VoteValue::Down), VoteValue::Up)          => (1, -1),
-        (Some(VoteValue::Down), VoteValue::Remove)      => (0, -1),
-        (Some(VoteValue::Remove), VoteValue::Up)        => (1, 0),
-        (Some(VoteValue::Remove), VoteValue::Down)      => (0, 1),
-        (None, VoteValue::Up)                          => (1, 0),
-        (None, VoteValue::Down)                        => (0, 1),
-        (_, _) => (0, 0)
+        (Some(VoteValue::Up), VoteValue::Down) => (-1, 1),
+        (Some(VoteValue::Up), VoteValue::Remove) => (-1, 0),
+        (Some(VoteValue::Down), VoteValue::Up) => (1, -1),
+        (Some(VoteValue::Down), VoteValue::Remove) => (0, -1),
+        (Some(VoteValue::Remove), VoteValue::Up) => (1, 0),
+        (Some(VoteValue::Remove), VoteValue::Down) => (0, 1),
+        (None, VoteValue::Up) => (1, 0),
+        (None, VoteValue::Down) => (0, 1),
+        (_, _) => (0, 0),
     };
 
     VotesDelta { upvotes, downvotes }
 }
 
-async fn save_cursor(cursor: &str, block_number: &i64, cursor_repository: &dyn CursorRepository) -> Result<(), OrchestratorError> {
-    if let Err(e) = cursor_repository.save_cursor("actions_indexer", cursor, block_number).await {
+async fn save_cursor(
+    cursor: &str,
+    block_number: &i64,
+    cursor_repository: &dyn CursorRepository,
+) -> Result<(), OrchestratorError> {
+    if let Err(e) = cursor_repository
+        .save_cursor("actions_indexer", cursor, block_number)
+        .await
+    {
         eprintln!("Failed to save cursor to database: {:?}", e);
         return Err(OrchestratorError::from(e));
     }
     Ok(())
 }
 
-#[cfg(test)]    
+#[cfg(test)]
 mod tests {
-    use uuid::{uuid, Uuid};
     use super::*;
-    use actions_indexer_shared::types::{ObjectType, ActionType, UserId};
+    use actions_indexer_shared::types::{ActionType, ObjectType, UserId};
+    use uuid::{Uuid, uuid};
 
     /// Returns a test user ID (UUID)
     pub fn test_user_id() -> UserId {
@@ -292,7 +346,7 @@ mod tests {
             vote_type: VoteValue::Up,
             voted_at: 1713859200,
         };
-        
+
         let new_vote = UserVote {
             user_id: test_user_id(),
             object_id: uuid!("a7ef0016-a2f4-44fb-82ca-a4f5c61d2cf5"),
@@ -301,7 +355,7 @@ mod tests {
             vote_type: VoteValue::Down,
             voted_at: 1713859200,
         };
-        
+
         let votes_changes = compute_vote_delta(&Some(&prev_vote), &new_vote);
         assert_eq!(votes_changes.upvotes, -1);
         assert_eq!(votes_changes.downvotes, 1);
@@ -317,7 +371,7 @@ mod tests {
             vote_type: VoteValue::Up,
             voted_at: 1713859200,
         };
-        
+
         let new_vote = UserVote {
             user_id: test_user_id(),
             object_id: uuid!("a7ef0016-a2f4-44fb-82ca-a4f5c61d2cf5"),
@@ -326,7 +380,7 @@ mod tests {
             vote_type: VoteValue::Remove,
             voted_at: 1713859200,
         };
-        
+
         let votes_changes = compute_vote_delta(&Some(&prev_vote), &new_vote);
         assert_eq!(votes_changes.upvotes, -1);
         assert_eq!(votes_changes.downvotes, 0);
@@ -342,7 +396,7 @@ mod tests {
             vote_type: VoteValue::Down,
             voted_at: 1713859200,
         };
-        
+
         let new_vote = UserVote {
             user_id: test_user_id(),
             object_id: uuid!("a7ef0016-a2f4-44fb-82ca-a4f5c61d2cf5"),
@@ -351,7 +405,7 @@ mod tests {
             vote_type: VoteValue::Up,
             voted_at: 1713859200,
         };
-        
+
         let votes_changes = compute_vote_delta(&Some(&prev_vote), &new_vote);
         assert_eq!(votes_changes.upvotes, 1);
         assert_eq!(votes_changes.downvotes, -1);
@@ -391,7 +445,7 @@ mod tests {
         use actions_indexer_shared::types::{ActionRaw, Vote};
         use alloy::hex::FromHex;
         use alloy::primitives::TxHash;
-        
+
         let raw_action = ActionRaw {
             action_type: ActionType::Vote,
             action_version: 1,
@@ -402,7 +456,10 @@ mod tests {
             metadata: None,
             block_number: 1,
             block_timestamp: 1713859200,
-            tx_hash: TxHash::from_hex("0x5427daee8d03277f8a30ea881692c04861e692ce5f305b7a689b76248cae63c4").unwrap(),
+            tx_hash: TxHash::from_hex(
+                "0x5427daee8d03277f8a30ea881692c04861e692ce5f305b7a689b76248cae63c4",
+            )
+            .unwrap(),
             object_type: ObjectType::Entity,
         };
 
@@ -416,8 +473,14 @@ mod tests {
 
         assert_eq!(user_votes.len(), 1);
         assert_eq!(user_votes[0].user_id, test_user_id());
-        assert_eq!(user_votes[0].object_id, uuid!("a7ef0016-a2f4-44fb-82ca-a4f5c61d2cf5"));
-        assert_eq!(user_votes[0].space_id, uuid!("e50fe85c-108a-4d4a-97b9-376a1e5d318b"));
+        assert_eq!(
+            user_votes[0].object_id,
+            uuid!("a7ef0016-a2f4-44fb-82ca-a4f5c61d2cf5")
+        );
+        assert_eq!(
+            user_votes[0].space_id,
+            uuid!("e50fe85c-108a-4d4a-97b9-376a1e5d318b")
+        );
         assert_eq!(user_votes[0].vote_type, VoteValue::Up);
         assert_eq!(user_votes[0].voted_at, 1713859200);
     }
@@ -434,7 +497,7 @@ mod tests {
         use actions_indexer_shared::types::{ActionRaw, Vote};
         use alloy::hex::FromHex;
         use alloy::primitives::TxHash;
-        
+
         let base_raw = ActionRaw {
             action_type: ActionType::Vote,
             action_version: 1,
@@ -445,7 +508,10 @@ mod tests {
             metadata: None,
             block_number: 1,
             block_timestamp: 1713859200,
-            tx_hash: TxHash::from_hex("0x5427daee8d03277f8a30ea881692c04861e692ce5f305b7a689b76248cae63c4").unwrap(),
+            tx_hash: TxHash::from_hex(
+                "0x5427daee8d03277f8a30ea881692c04861e692ce5f305b7a689b76248cae63c4",
+            )
+            .unwrap(),
             object_type: ObjectType::Entity,
         };
 
@@ -462,7 +528,10 @@ mod tests {
         let vote2 = Vote {
             raw: ActionRaw {
                 block_timestamp: 1713859300,
-                tx_hash: TxHash::from_hex("0x6538dbff9d04388e9ac36264cf493b8c96e05421e59ead18b6e6547bc3d72fc5").unwrap(),
+                tx_hash: TxHash::from_hex(
+                    "0x6538dbff9d04388e9ac36264cf493b8c96e05421e59ead18b6e6547bc3d72fc5",
+                )
+                .unwrap(),
                 ..base_raw.clone()
             },
             vote: VoteValue::Down,
@@ -474,8 +543,14 @@ mod tests {
         // Should only return one vote (the latest one)
         assert_eq!(user_votes.len(), 1);
         assert_eq!(user_votes[0].user_id, test_user_id());
-        assert_eq!(user_votes[0].object_id, uuid!("a7ef0016-a2f4-44fb-82ca-a4f5c61d2cf5"));
-        assert_eq!(user_votes[0].space_id, uuid!("e50fe85c-108a-4d4a-97b9-376a1e5d318b"));
+        assert_eq!(
+            user_votes[0].object_id,
+            uuid!("a7ef0016-a2f4-44fb-82ca-a4f5c61d2cf5")
+        );
+        assert_eq!(
+            user_votes[0].space_id,
+            uuid!("e50fe85c-108a-4d4a-97b9-376a1e5d318b")
+        );
         assert_eq!(user_votes[0].vote_type, VoteValue::Down);
         assert_eq!(user_votes[0].voted_at, 1713859300);
     }
@@ -485,11 +560,11 @@ mod tests {
         use actions_indexer_shared::types::{ActionRaw, Vote};
         use alloy::hex::FromHex;
         use alloy::primitives::TxHash;
-        
+
         let user1 = test_user_id();
         let user2 = uuid!("12345678-9012-3456-7890-123456789012");
         let entity_id = uuid!("a7ef0016-a2f4-44fb-82ca-a4f5c61d2cf5");
-        
+
         let vote1 = Vote {
             raw: ActionRaw {
                 action_type: ActionType::Vote,
@@ -501,7 +576,10 @@ mod tests {
                 metadata: None,
                 block_number: 1,
                 block_timestamp: 1713859200,
-                tx_hash: TxHash::from_hex("0x5427daee8d03277f8a30ea881692c04861e692ce5f305b7a689b76248cae63c4").unwrap(),
+                tx_hash: TxHash::from_hex(
+                    "0x5427daee8d03277f8a30ea881692c04861e692ce5f305b7a689b76248cae63c4",
+                )
+                .unwrap(),
                 object_type: ObjectType::Entity,
             },
             vote: VoteValue::Up,
@@ -518,7 +596,10 @@ mod tests {
                 metadata: None,
                 block_number: 1,
                 block_timestamp: 1713859300,
-                tx_hash: TxHash::from_hex("0x6538dbff9d04388e9ac36264cf493b8c96e05421e59ead18b6e6547bc3d72fc5").unwrap(),
+                tx_hash: TxHash::from_hex(
+                    "0x6538dbff9d04388e9ac36264cf493b8c96e05421e59ead18b6e6547bc3d72fc5",
+                )
+                .unwrap(),
                 object_type: ObjectType::Entity,
             },
             vote: VoteValue::Down,
@@ -529,14 +610,14 @@ mod tests {
 
         // Should return both votes since they are from different users
         assert_eq!(user_votes.len(), 2);
-        
+
         // Find the vote from each user
         let user1_vote = user_votes.iter().find(|v| v.user_id == user1).unwrap();
         let user2_vote = user_votes.iter().find(|v| v.user_id == user2).unwrap();
-        
+
         assert_eq!(user1_vote.vote_type, VoteValue::Up);
         assert_eq!(user1_vote.voted_at, 1713859200);
-        
+
         assert_eq!(user2_vote.vote_type, VoteValue::Down);
         assert_eq!(user2_vote.voted_at, 1713859300);
     }
@@ -546,11 +627,11 @@ mod tests {
         use actions_indexer_shared::types::{ActionRaw, Vote};
         use alloy::hex::FromHex;
         use alloy::primitives::TxHash;
-        
+
         let user = test_user_id();
         let entity1 = uuid!("a7ef0016-a2f4-44fb-82ca-a4f5c61d2cf5");
         let entity2 = uuid!("b8f00127-b3f5-55fc-92db-b5f6c72e3cf6");
-        
+
         let vote1 = Vote {
             raw: ActionRaw {
                 action_type: ActionType::Vote,
@@ -562,7 +643,10 @@ mod tests {
                 metadata: None,
                 block_number: 1,
                 block_timestamp: 1713859200,
-                tx_hash: TxHash::from_hex("0x5427daee8d03277f8a30ea881692c04861e692ce5f305b7a689b76248cae63c4").unwrap(),
+                tx_hash: TxHash::from_hex(
+                    "0x5427daee8d03277f8a30ea881692c04861e692ce5f305b7a689b76248cae63c4",
+                )
+                .unwrap(),
                 object_type: ObjectType::Entity,
             },
             vote: VoteValue::Up,
@@ -579,7 +663,10 @@ mod tests {
                 metadata: None,
                 block_number: 1,
                 block_timestamp: 1713859300,
-                tx_hash: TxHash::from_hex("0x6538dbff9d04388e9ac36264cf493b8c96e05421e59ead18b6e6547bc3d72fc5").unwrap(),
+                tx_hash: TxHash::from_hex(
+                    "0x6538dbff9d04388e9ac36264cf493b8c96e05421e59ead18b6e6547bc3d72fc5",
+                )
+                .unwrap(),
                 object_type: ObjectType::Entity,
             },
             vote: VoteValue::Remove,
@@ -590,14 +677,14 @@ mod tests {
 
         // Should return both votes since they are for different entities
         assert_eq!(user_votes.len(), 2);
-        
+
         // Find the vote for each entity
         let entity1_vote = user_votes.iter().find(|v| v.object_id == entity1).unwrap();
         let entity2_vote = user_votes.iter().find(|v| v.object_id == entity2).unwrap();
-        
+
         assert_eq!(entity1_vote.vote_type, VoteValue::Up);
         assert_eq!(entity1_vote.voted_at, 1713859200);
-        
+
         assert_eq!(entity2_vote.vote_type, VoteValue::Remove);
         assert_eq!(entity2_vote.voted_at, 1713859300);
     }
@@ -607,12 +694,12 @@ mod tests {
         use actions_indexer_shared::types::{ActionRaw, Vote};
         use alloy::hex::FromHex;
         use alloy::primitives::TxHash;
-        
+
         let user1 = test_user_id();
         let user2 = uuid!("12345678-9012-3456-7890-123456789012");
         let user3 = uuid!("98765432-1098-7654-3210-987654321098");
         let entity_id = uuid!("a7ef0016-a2f4-44fb-82ca-a4f5c61d2cf5");
-        
+
         let upvote = Vote {
             raw: ActionRaw {
                 action_type: ActionType::Vote,
@@ -624,7 +711,10 @@ mod tests {
                 metadata: None,
                 block_number: 1,
                 block_timestamp: 1713859200,
-                tx_hash: TxHash::from_hex("0x5427daee8d03277f8a30ea881692c04861e692ce5f305b7a689b76248cae63c4").unwrap(),
+                tx_hash: TxHash::from_hex(
+                    "0x5427daee8d03277f8a30ea881692c04861e692ce5f305b7a689b76248cae63c4",
+                )
+                .unwrap(),
                 object_type: ObjectType::Entity,
             },
             vote: VoteValue::Up,
@@ -641,7 +731,10 @@ mod tests {
                 metadata: None,
                 block_number: 1,
                 block_timestamp: 1713859300,
-                tx_hash: TxHash::from_hex("0x6538dbff9d04388e9ac36264cf493b8c96e05421e59ead18b6e6547bc3d72fc5").unwrap(),
+                tx_hash: TxHash::from_hex(
+                    "0x6538dbff9d04388e9ac36264cf493b8c96e05421e59ead18b6e6547bc3d72fc5",
+                )
+                .unwrap(),
                 object_type: ObjectType::Entity,
             },
             vote: VoteValue::Down,
@@ -658,7 +751,10 @@ mod tests {
                 metadata: None,
                 block_number: 1,
                 block_timestamp: 1713859400,
-                tx_hash: TxHash::from_hex("0x7649ec009e05499f9bd47274ef4e73a6f7b24126f79ead19c6e6648cd4e83af6").unwrap(),
+                tx_hash: TxHash::from_hex(
+                    "0x7649ec009e05499f9bd47274ef4e73a6f7b24126f79ead19c6e6648cd4e83af6",
+                )
+                .unwrap(),
                 object_type: ObjectType::Entity,
             },
             vote: VoteValue::Remove,
@@ -669,12 +765,12 @@ mod tests {
 
         // Should return all three votes since they are from different users
         assert_eq!(user_votes.len(), 3);
-        
+
         // Verify each vote type is correctly preserved
         let user1_vote = user_votes.iter().find(|v| v.user_id == user1).unwrap();
         let user2_vote = user_votes.iter().find(|v| v.user_id == user2).unwrap();
         let user3_vote = user_votes.iter().find(|v| v.user_id == user3).unwrap();
-        
+
         assert_eq!(user1_vote.vote_type, VoteValue::Up);
         assert_eq!(user2_vote.vote_type, VoteValue::Down);
         assert_eq!(user3_vote.vote_type, VoteValue::Remove);
@@ -685,12 +781,12 @@ mod tests {
         use actions_indexer_shared::types::{ActionRaw, Vote};
         use alloy::hex::FromHex;
         use alloy::primitives::TxHash;
-        
+
         let user = test_user_id();
         let entity_id = uuid!("a7ef0016-a2f4-44fb-82ca-a4f5c61d2cf5");
         let space1 = uuid!("e50fe85c-108a-4d4a-97b9-376a1e5d318b");
         let space2 = uuid!("e50fe85c-108a-4d4a-97b9-376a1e5d318a");
-        
+
         let vote1 = Vote {
             raw: ActionRaw {
                 action_type: ActionType::Vote,
@@ -702,7 +798,10 @@ mod tests {
                 metadata: None,
                 block_number: 1,
                 block_timestamp: 1713859200,
-                tx_hash: TxHash::from_hex("0x5427daee8d03277f8a30ea881692c04861e692ce5f305b7a689b76248cae63c4").unwrap(),
+                tx_hash: TxHash::from_hex(
+                    "0x5427daee8d03277f8a30ea881692c04861e692ce5f305b7a689b76248cae63c4",
+                )
+                .unwrap(),
                 object_type: ObjectType::Entity,
             },
             vote: VoteValue::Up,
@@ -719,7 +818,10 @@ mod tests {
                 metadata: None,
                 block_number: 1,
                 block_timestamp: 1713859300,
-                tx_hash: TxHash::from_hex("0x6538dbff9d04388e9ac36264cf493b8c96e05421e59ead18b6e6547bc3d72fc5").unwrap(),
+                tx_hash: TxHash::from_hex(
+                    "0x6538dbff9d04388e9ac36264cf493b8c96e05421e59ead18b6e6547bc3d72fc5",
+                )
+                .unwrap(),
                 object_type: ObjectType::Entity,
             },
             vote: VoteValue::Down,
@@ -730,14 +832,14 @@ mod tests {
 
         // Should return both votes since they are for different spaces
         assert_eq!(user_votes.len(), 2);
-        
+
         // Find the vote for each space
         let space1_vote = user_votes.iter().find(|v| v.space_id == space1).unwrap();
         let space2_vote = user_votes.iter().find(|v| v.space_id == space2).unwrap();
-        
+
         assert_eq!(space1_vote.vote_type, VoteValue::Up);
         assert_eq!(space1_vote.voted_at, 1713859200);
-        
+
         assert_eq!(space2_vote.vote_type, VoteValue::Down);
         assert_eq!(space2_vote.voted_at, 1713859300);
     }
@@ -747,7 +849,7 @@ mod tests {
         use actions_indexer_shared::types::{ActionRaw, Vote};
         use alloy::hex::FromHex;
         use alloy::primitives::TxHash;
-        
+
         let user = test_user_id();
         let object = uuid!("a7ef0016-a2f4-44fb-82ca-a4f5c61d2cf5");
 
@@ -762,7 +864,10 @@ mod tests {
                 metadata: None,
                 block_number: 1,
                 block_timestamp: 1713859200,
-                tx_hash: TxHash::from_hex("0x5427daee8d03277f8a30ea881692c04861e692ce5f305b7a689b76248cae63c4").unwrap(),
+                tx_hash: TxHash::from_hex(
+                    "0x5427daee8d03277f8a30ea881692c04861e692ce5f305b7a689b76248cae63c4",
+                )
+                .unwrap(),
                 object_type: ObjectType::Entity,
             },
             vote: VoteValue::Up,
@@ -779,7 +884,10 @@ mod tests {
                 metadata: None,
                 block_number: 1,
                 block_timestamp: 1713859200,
-                tx_hash: TxHash::from_hex("0x5427daee8d03277f8a30ea881692c04861e692ce5f305b7a689b76248cae63c4").unwrap(),
+                tx_hash: TxHash::from_hex(
+                    "0x5427daee8d03277f8a30ea881692c04861e692ce5f305b7a689b76248cae63c4",
+                )
+                .unwrap(),
                 object_type: ObjectType::Relation, // Different object type
             },
             vote: VoteValue::Up,
@@ -790,15 +898,24 @@ mod tests {
 
         // Should return both votes since they are for different object types
         assert_eq!(user_votes.len(), 2);
-        
+
         // All votes have the same object_id and user_id
         assert_eq!(user_votes.iter().all(|v| v.object_id == object), true);
         assert_eq!(user_votes.iter().all(|v| v.user_id == user), true);
 
         // All votes have different object types
-        assert_eq!(user_votes.iter().any(|v| v.object_type == ObjectType::Entity), true);
-        assert_eq!(user_votes.iter().any(|v| v.object_type == ObjectType::Relation), true);
-        
+        assert_eq!(
+            user_votes
+                .iter()
+                .any(|v| v.object_type == ObjectType::Entity),
+            true
+        );
+        assert_eq!(
+            user_votes
+                .iter()
+                .any(|v| v.object_type == ObjectType::Relation),
+            true
+        );
     }
 
     // ============================================================================
@@ -812,31 +929,53 @@ mod tests {
 
     #[async_trait::async_trait]
     impl ActionsRepository for MockActionsRepository {
-        async fn insert_actions(&self, _actions: &[Action]) -> Result<(), actions_indexer_repository::errors::ActionsRepositoryError> {
+        async fn insert_actions(
+            &self,
+            _actions: &[Action],
+        ) -> Result<(), actions_indexer_repository::errors::ActionsRepositoryError> {
             unimplemented!()
         }
 
-        async fn update_user_votes(&self, _user_votes: &[UserVote]) -> Result<(), actions_indexer_repository::errors::ActionsRepositoryError> {
+        async fn update_user_votes(
+            &self,
+            _user_votes: &[UserVote],
+        ) -> Result<(), actions_indexer_repository::errors::ActionsRepositoryError> {
             unimplemented!()
         }
 
-        async fn update_votes_counts(&self, _votes_counts: &[VotesCount]) -> Result<(), actions_indexer_repository::errors::ActionsRepositoryError> {
+        async fn update_votes_counts(
+            &self,
+            _votes_counts: &[VotesCount],
+        ) -> Result<(), actions_indexer_repository::errors::ActionsRepositoryError> {
             unimplemented!()
         }
 
-        async fn persist_changeset(&self, _changeset: &Changeset<'_>) -> Result<(), actions_indexer_repository::errors::ActionsRepositoryError> {
+        async fn persist_changeset(
+            &self,
+            _changeset: &Changeset<'_>,
+        ) -> Result<(), actions_indexer_repository::errors::ActionsRepositoryError> {
             unimplemented!()
         }
 
-        async fn get_user_votes(&self, _vote_criteria: &[VoteCriteria]) -> Result<Vec<UserVote>, actions_indexer_repository::errors::ActionsRepositoryError> {
+        async fn get_user_votes(
+            &self,
+            _vote_criteria: &[VoteCriteria],
+        ) -> Result<Vec<UserVote>, actions_indexer_repository::errors::ActionsRepositoryError>
+        {
             Ok(self.stored_user_votes.clone())
         }
 
-        async fn get_vote_counts(&self, _vote_criteria: &[VoteCountCriteria]) -> Result<Vec<VotesCount>, actions_indexer_repository::errors::ActionsRepositoryError> {
+        async fn get_vote_counts(
+            &self,
+            _vote_criteria: &[VoteCountCriteria],
+        ) -> Result<Vec<VotesCount>, actions_indexer_repository::errors::ActionsRepositoryError>
+        {
             Ok(self.stored_vote_counts.clone())
         }
 
-        async fn check_tables_created(&self) -> Result<bool, actions_indexer_repository::errors::ActionsRepositoryError> {
+        async fn check_tables_created(
+            &self,
+        ) -> Result<bool, actions_indexer_repository::errors::ActionsRepositoryError> {
             unimplemented!()
         }
     }
@@ -1091,10 +1230,10 @@ mod tests {
         assert!(result.is_ok());
         let vote_counts = result.unwrap();
         assert_eq!(vote_counts.len(), 2);
-        
+
         let object1_count = vote_counts.iter().find(|v| v.object_id == object1).unwrap();
         let object2_count = vote_counts.iter().find(|v| v.object_id == object2).unwrap();
-        
+
         assert_eq!(object1_count.upvotes, 1);
         assert_eq!(object1_count.downvotes, 0);
         assert_eq!(object2_count.upvotes, 1);
@@ -1178,10 +1317,16 @@ mod tests {
         assert!(result.is_ok());
         let vote_counts = result.unwrap();
         assert_eq!(vote_counts.len(), 2);
-        
-        let entity_count = vote_counts.iter().find(|v| v.object_type == ObjectType::Entity).unwrap();
-        let relation_count = vote_counts.iter().find(|v| v.object_type == ObjectType::Relation).unwrap();
-        
+
+        let entity_count = vote_counts
+            .iter()
+            .find(|v| v.object_type == ObjectType::Entity)
+            .unwrap();
+        let relation_count = vote_counts
+            .iter()
+            .find(|v| v.object_type == ObjectType::Relation)
+            .unwrap();
+
         assert_eq!(entity_count.upvotes, 1);
         assert_eq!(entity_count.downvotes, 0);
         assert_eq!(relation_count.upvotes, 0);

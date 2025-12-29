@@ -1,21 +1,21 @@
-use anyhow::{anyhow, format_err, Context, Error};
+use anyhow::{Context, Error, anyhow, format_err};
 use futures03::StreamExt;
+use lazy_static::lazy_static;
 use regex::Regex;
 use semver::Version;
-use lazy_static::lazy_static;
 
 use actions_indexer_shared::types::{ActionRaw, ActionType, ObjectType};
 
+use super::pb::sf::actions::v1::{Action, Actions};
 use super::pb::sf::substreams::rpc::v2::{BlockScopedData, BlockUndoSignal};
 use super::pb::sf::substreams::v1::Package;
 use super::pb::sf::substreams::v1::module::input::{Input, Params};
-use super::pb::sf::actions::v1::{Action, Actions};
 use super::substreams::SubstreamsEndpoint;
 use super::substreams_stream::{BlockResponse, SubstreamsStream};
+use crate::consumer::{BlockDataMessage, ConsumeActionsStream, StreamMessage};
+use crate::errors::{ConfigError, ConsumerError, ConversionError, StreamError};
 use prost::Message;
 use std::sync::Arc;
-use crate::errors::{ConfigError, ConsumerError, ConversionError, StreamError};
-use crate::consumer::{ConsumeActionsStream, StreamMessage, BlockDataMessage};
 
 lazy_static! {
     static ref MODULE_NAME_REGEXP: Regex = Regex::new(r"^([a-zA-Z][a-zA-Z0-9_-]{0,63})$").unwrap();
@@ -57,12 +57,16 @@ impl SubstreamsStreamProvider {
         }
     }
 
-    pub fn process_block_scoped_data(&self, data: &BlockScopedData) -> Result<Vec<ActionRaw>, Error> {
+    pub fn process_block_scoped_data(
+        &self,
+        data: &BlockScopedData,
+    ) -> Result<Vec<ActionRaw>, Error> {
         let now = chrono::Utc::now();
         let block_number = data.clock.as_ref().unwrap().number;
         println!("{} - Processing block {}", now.to_rfc3339(), block_number);
 
-        let output = data.output
+        let output = data
+            .output
             .as_ref()
             .ok_or_else(|| ConversionError::MissingField("output".to_string()))?
             .map_output
@@ -78,8 +82,11 @@ impl SubstreamsStreamProvider {
 
         Ok(raw_actions)
     }
-    
-    pub fn process_block_undo_signal(&self, _undo_signal: &BlockUndoSignal) -> Result<(), anyhow::Error> {
+
+    pub fn process_block_undo_signal(
+        &self,
+        _undo_signal: &BlockUndoSignal,
+    ) -> Result<(), anyhow::Error> {
         // `BlockUndoSignal` must be treated as "delete every data that has been recorded after
         // block height specified by block in BlockUndoSignal". In the example above, this means
         // you must delete changes done by `Block #7b` and `Block #6b`. The exact details depends
@@ -90,7 +97,7 @@ impl SubstreamsStreamProvider {
             "you must implement some kind of block undo handling, or request only final blocks (tweak substreams_stream.rs)"
         )
     }
-    
+
     pub fn persist_cursor(&self, _cursor: String) -> Result<(), anyhow::Error> {
         // FIXME: Handling of the cursor is missing here. It should be saved each time
         // a full block has been correctly processed/persisted. The saving location
@@ -102,24 +109,33 @@ impl SubstreamsStreamProvider {
         // element.
         Ok(())
     }
-    
+
     pub fn load_persisted_cursor(&self) -> Result<Option<String>, anyhow::Error> {
         // FIXME: Handling of the cursor is missing here. It should be loaded from
         // somewhere (local file, database, cloud storage) and then `SubstreamStream` will
         // be able correctly resume from the right block.
         Ok(None)
     }
-    
 }
 
 #[async_trait::async_trait]
 impl ConsumeActionsStream for SubstreamsStreamProvider {
-    async fn stream_events(&self, sender: tokio::sync::mpsc::Sender<StreamMessage>, cursor: Option<String>) -> Result<(), ConsumerError> {
-        let package = read_package(&self.package_file, self.params.clone()).await.map_err(|e| ConfigError::ReadingPackage(e.to_string()))?;
-        let block_range = read_block_range(&package, &self.module_name, self.block_range.clone()).map_err(|e| ConfigError::ReadingBlockRange(e.to_string()))?;
+    async fn stream_events(
+        &self,
+        sender: tokio::sync::mpsc::Sender<StreamMessage>,
+        cursor: Option<String>,
+    ) -> Result<(), ConsumerError> {
+        let package = read_package(&self.package_file, self.params.clone())
+            .await
+            .map_err(|e| ConfigError::ReadingPackage(e.to_string()))?;
+        let block_range = read_block_range(&package, &self.module_name, self.block_range.clone())
+            .map_err(|e| ConfigError::ReadingBlockRange(e.to_string()))?;
 
-        let endpoint =
-            Arc::new(SubstreamsEndpoint::new(&self.endpoint_url, self.token.clone()).await.map_err(|e| ConfigError::ReadingEndpoint(e.to_string()))?);
+        let endpoint = Arc::new(
+            SubstreamsEndpoint::new(&self.endpoint_url, self.token.clone())
+                .await
+                .map_err(|e| ConfigError::ReadingEndpoint(e.to_string()))?,
+        );
 
         let mut stream = SubstreamsStream::new(
             endpoint,
@@ -127,31 +143,47 @@ impl ConsumeActionsStream for SubstreamsStreamProvider {
             package.modules,
             self.module_name.clone(),
             block_range.0,
-            block_range.1
+            block_range.1,
         );
 
         loop {
             match stream.next().await {
                 None => {
-                    sender.send(StreamMessage::StreamEnd).await.map_err(|e| StreamError::ChannelSend(e.to_string()))?;
+                    sender
+                        .send(StreamMessage::StreamEnd)
+                        .await
+                        .map_err(|e| StreamError::ChannelSend(e.to_string()))?;
                     break;
                 }
                 Some(Ok(BlockResponse::New(data))) => {
-                    let actions = self.process_block_scoped_data(&data).map_err(|e| StreamError::ProcessingBlockScopedData(e.to_string()))?;
-                    sender.send(StreamMessage::BlockData(BlockDataMessage {
-                        actions,
-                        cursor: data.cursor,
-                        block_number: data.clock.unwrap().number as i64,
-                    })).await.map_err(|e| StreamError::ChannelSend(e.to_string()))?;
+                    let actions = self
+                        .process_block_scoped_data(&data)
+                        .map_err(|e| StreamError::ProcessingBlockScopedData(e.to_string()))?;
+                    sender
+                        .send(StreamMessage::BlockData(BlockDataMessage {
+                            actions,
+                            cursor: data.cursor,
+                            block_number: data.clock.unwrap().number as i64,
+                        }))
+                        .await
+                        .map_err(|e| StreamError::ChannelSend(e.to_string()))?;
                 }
                 Some(Ok(BlockResponse::Undo(undo_signal))) => {
-                    sender.send(StreamMessage::UndoSignal(undo_signal)).await.map_err(|e| StreamError::ChannelSend(e.to_string()))?;
+                    sender
+                        .send(StreamMessage::UndoSignal(undo_signal))
+                        .await
+                        .map_err(|e| StreamError::ChannelSend(e.to_string()))?;
                 }
                 Some(Err(err)) => {
                     println!();
                     println!("Stream terminated with error");
                     println!("{:?}", err);
-                    sender.send(StreamMessage::Error(StreamError::Streaming(err.to_string()).into())).await.map_err(|e| StreamError::ChannelSend(e.to_string()))?;
+                    sender
+                        .send(StreamMessage::Error(
+                            StreamError::Streaming(err.to_string()).into(),
+                        ))
+                        .await
+                        .map_err(|e| StreamError::ChannelSend(e.to_string()))?;
                     break;
                 }
             }
@@ -160,7 +192,6 @@ impl ConsumeActionsStream for SubstreamsStreamProvider {
         Ok(())
     }
 }
-
 
 fn read_block_range(
     pkg: &Package,
@@ -356,32 +387,61 @@ impl TryFrom<&Action> for ActionRaw {
 
     fn try_from(action: &Action) -> Result<Self, Self::Error> {
         Ok(ActionRaw {
-            user_id: action.sender.parse()
+            user_id: action
+                .sender
+                .parse()
                 .map_err(|e| ConversionError::InvalidUuid(format!("user_id: {}", e)))?,
             action_type: match action.action_type {
                 0 => ActionType::Vote,
-                _ => return Err(ConversionError::InvalidActionType(format!("action_type: {}", action.action_type)).into()),
+                _ => {
+                    return Err(ConversionError::InvalidActionType(format!(
+                        "action_type: {}",
+                        action.action_type
+                    ))
+                    .into());
+                }
             },
             action_version: action.action_version,
-            space_pov: action.space_pov.parse()
+            space_pov: action
+                .space_pov
+                .parse()
                 .map_err(|e| ConversionError::InvalidUuid(format!("space_pov: {}", e)))?,
-            object_id: action.object_id.parse()
+            object_id: action
+                .object_id
+                .parse()
                 .map_err(|e| ConversionError::InvalidUuid(format!("entity: {}", e)))?,
             group_id: if action.group_id.is_some() {
-                Some(action.group_id.as_ref().unwrap().parse()
-                    .map_err(|e| ConversionError::InvalidUuid(format!("group_id: {}", e)))?)
+                Some(
+                    action
+                        .group_id
+                        .as_ref()
+                        .unwrap()
+                        .parse()
+                        .map_err(|e| ConversionError::InvalidUuid(format!("group_id: {}", e)))?,
+                )
             } else {
                 None
             },
-            metadata: action.metadata.as_ref().map(|metadata| metadata.to_vec().into()),
+            metadata: action
+                .metadata
+                .as_ref()
+                .map(|metadata| metadata.to_vec().into()),
             block_number: action.block_number.into(),
             block_timestamp: action.block_timestamp.into(),
-            tx_hash: action.tx_hash.parse()
+            tx_hash: action
+                .tx_hash
+                .parse()
                 .map_err(|e| ConversionError::InvalidTxHash(format!("tx_hash: {}", e)))?,
             object_type: match action.object_type {
                 0 => ObjectType::Entity,
                 1 => ObjectType::Relation,
-                _ => return Err(ConversionError::InvalidObjectType(format!("object_type: {}", action.object_type)).into()),
+                _ => {
+                    return Err(ConversionError::InvalidObjectType(format!(
+                        "object_type: {}",
+                        action.object_type
+                    ))
+                    .into());
+                }
             },
         })
     }

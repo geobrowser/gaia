@@ -27,5 +27,10 @@ pub trait CursorRepository: Send + Sync {
     /// # Returns
     ///
     /// A `Result` indicating success or failure.
-    async fn save_cursor(&self, id: &str, cursor: &str, block_number: &i64) -> Result<(), CursorRepositoryError>;
+    async fn save_cursor(
+        &self,
+        id: &str,
+        cursor: &str,
+        block_number: &i64,
+    ) -> Result<(), CursorRepositoryError>;
 }

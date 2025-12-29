@@ -1,6 +1,6 @@
 use actions_indexer::{Dependencies, IndexingError};
-use dotenv::dotenv;
 use actions_indexer_pipeline::orchestrator::Orchestrator;
+use dotenv::dotenv;
 
 /// Main entry point for the Actions Indexer application.
 ///

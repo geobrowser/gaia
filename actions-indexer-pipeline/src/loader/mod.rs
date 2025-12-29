@@ -1,10 +1,10 @@
 //! This module defines the `ActionsLoader` struct responsible for persisting
 //! processed action changesets to a repository.
 //! It acts as an interface between the processing pipeline and the data storage.
-pub use actions_indexer_repository::{ActionsRepository, CursorRepository};
-pub use actions_indexer_repository::PostgresActionsRepository;
-pub use actions_indexer_shared::types::Changeset;
 pub use crate::errors::LoaderError;
+pub use actions_indexer_repository::PostgresActionsRepository;
+pub use actions_indexer_repository::{ActionsRepository, CursorRepository};
+pub use actions_indexer_shared::types::Changeset;
 use std::sync::Arc;
 
 /// `ActionsLoader` is responsible for loading and persisting changesets of actions.
@@ -13,7 +13,7 @@ use std::sync::Arc;
 /// ensuring that processed action data is correctly stored.
 pub struct ActionsLoader {
     pub actions_repository: Arc<dyn ActionsRepository>,
-    pub cursor_repository: Arc<dyn CursorRepository>
+    pub cursor_repository: Arc<dyn CursorRepository>,
 }
 
 impl ActionsLoader {
@@ -29,8 +29,14 @@ impl ActionsLoader {
     /// # Returns
     ///
     /// A new `ActionsLoader` instance.
-    pub fn new(actions_repository: Arc<dyn ActionsRepository>, cursor_repository: Arc<dyn CursorRepository>) -> Self {
-        Self { actions_repository, cursor_repository }
+    pub fn new(
+        actions_repository: Arc<dyn ActionsRepository>,
+        cursor_repository: Arc<dyn CursorRepository>,
+    ) -> Self {
+        Self {
+            actions_repository,
+            cursor_repository,
+        }
     }
 
     /// Persists a given `Changeset` to the actions repository.
@@ -45,7 +51,10 @@ impl ActionsLoader {
     /// # Returns
     ///
     /// A `Result` indicating success or a `LoaderError` if the persistence fails.
-    pub async fn persist_changeset<'a>(&self, changeset: &'a Changeset<'a>) -> Result<(), LoaderError> {
+    pub async fn persist_changeset<'a>(
+        &self,
+        changeset: &'a Changeset<'a>,
+    ) -> Result<(), LoaderError> {
         self.actions_repository.persist_changeset(changeset).await?;
         Ok(())
     }
@@ -63,8 +72,16 @@ impl ActionsLoader {
     /// # Returns
     ///
     /// A `Result` indicating success or a `LoaderError` if the persistence fails.
-    pub async fn persist_latest_processed_block_number(&self, id: &str, cursor: &str, block_number: &i64) -> Result<(), LoaderError> {
-        self.cursor_repository.save_cursor(id, cursor, block_number).await.map_err(LoaderError::from)?;
+    pub async fn persist_latest_processed_block_number(
+        &self,
+        id: &str,
+        cursor: &str,
+        block_number: &i64,
+    ) -> Result<(), LoaderError> {
+        self.cursor_repository
+            .save_cursor(id, cursor, block_number)
+            .await
+            .map_err(LoaderError::from)?;
         Ok(())
     }
 }

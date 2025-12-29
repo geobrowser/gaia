@@ -1,5 +1,5 @@
+use crate::types::{ObjectId, ObjectType, SpaceId, UserId, VoteValue};
 use serde::{Deserialize, Serialize};
-use crate::types::{ObjectId, SpaceId, UserId, VoteValue, ObjectType};
 
 /// Represents a user's vote on an entity and space.
 ///

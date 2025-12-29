@@ -10,21 +10,21 @@
 //! - **Permanent errors** (malformed data, invalid protobuf): Log and skip the message
 //! - **Channel errors**: Fatal, propagate immediately
 
+use crate::errors::KafkaError;
+use crate::errors::{ConversionError, StreamError};
 use async_trait::async_trait;
 use futures03::StreamExt;
 use hermes_kafka::{Consumer, Message, StreamConsumer};
-use crate::errors::{ConversionError, StreamError};
 use hermes_schema::pb::voting::HermesVoteCast;
 use prost::Message as ProstMessage;
 use std::time::Duration;
 use tokio::sync::mpsc;
-use crate::errors::KafkaError;
 
 use crate::consumer::{BlockDataMessage, ConsumeActionsStream, StreamMessage};
 use crate::errors::ConsumerError;
 
-use super::conversion::hermes_vote_to_action_raw;
 use super::ConsumerConfig;
+use super::conversion::hermes_vote_to_action_raw;
 
 /// Maximum number of consecutive transient errors before giving up
 const MAX_CONSECUTIVE_ERRORS: u32 = 10;
@@ -144,27 +144,39 @@ impl ConsumeActionsStream for KafkaStreamProvider {
         _cursor: Option<String>,
     ) -> Result<(), ConsumerError> {
         let consumer = self.create_subscribed_consumer()?;
-        
+
         let now = chrono::Utc::now();
-        println!("{} - KafkaStreamProvider: Connected to broker at {}", now.to_rfc3339(), self.config.broker);
-        println!("{} - KafkaStreamProvider: Subscribed to topic '{}'", now.to_rfc3339(), self.config.topic);
-        println!("{} - KafkaStreamProvider: Consumer group '{}'", now.to_rfc3339(), self.config.group_id);
+        println!(
+            "{} - KafkaStreamProvider: Connected to broker at {}",
+            now.to_rfc3339(),
+            self.config.broker
+        );
+        println!(
+            "{} - KafkaStreamProvider: Subscribed to topic '{}'",
+            now.to_rfc3339(),
+            self.config.topic
+        );
+        println!(
+            "{} - KafkaStreamProvider: Consumer group '{}'",
+            now.to_rfc3339(),
+            self.config.group_id
+        );
 
         // Create the message stream from the consumer
         let mut message_stream = consumer.stream();
-        
+
         // Track consecutive transient errors for backoff
         let mut consecutive_errors: u32 = 0;
         let mut messages_processed: u64 = 0;
         let mut messages_skipped: u64 = 0;
-        
+
         // Consumption loop
         while let Some(message_result) = message_stream.next().await {
             match message_result {
                 Ok(borrowed_message) => {
                     // Reset consecutive error count on successful message receipt
                     consecutive_errors = 0;
-                    
+
                     // Get the message payload
                     let payload = match borrowed_message.payload() {
                         Some(payload) => payload,
@@ -177,7 +189,10 @@ impl ConsumeActionsStream for KafkaStreamProvider {
                             );
                             messages_skipped += 1;
                             // Commit to prevent redelivery of empty message
-                            let _ = consumer.commit_message(&borrowed_message, rdkafka::consumer::CommitMode::Async);
+                            let _ = consumer.commit_message(
+                                &borrowed_message,
+                                rdkafka::consumer::CommitMode::Async,
+                            );
                             continue;
                         }
                     };
@@ -195,15 +210,20 @@ impl ConsumeActionsStream for KafkaStreamProvider {
                             );
                             messages_skipped += 1;
                             // Send error notification but don't fail
-                            let _ = sender.send(StreamMessage::Error(
-                                ConsumerError::Conversion(ConversionError::InvalidDataField(format!(
-                                    "protobuf decode error at offset {}: {}",
-                                    borrowed_message.offset(),
-                                    e
+                            let _ = sender
+                                .send(StreamMessage::Error(ConsumerError::Conversion(
+                                    ConversionError::InvalidDataField(format!(
+                                        "protobuf decode error at offset {}: {}",
+                                        borrowed_message.offset(),
+                                        e
+                                    )),
                                 )))
-                            )).await;
+                                .await;
                             // Commit to prevent redelivery
-                            let _ = consumer.commit_message(&borrowed_message, rdkafka::consumer::CommitMode::Async);
+                            let _ = consumer.commit_message(
+                                &borrowed_message,
+                                rdkafka::consumer::CommitMode::Async,
+                            );
                             continue;
                         }
                     };
@@ -213,7 +233,7 @@ impl ConsumeActionsStream for KafkaStreamProvider {
                         Ok(action) => action,
                         Err(e) => {
                             let error_category = Self::categorize_consumer_error(&e);
-                            
+
                             if error_category == ErrorCategory::Permanent {
                                 // Permanent error - skip and commit
                                 eprintln!(
@@ -225,7 +245,10 @@ impl ConsumeActionsStream for KafkaStreamProvider {
                                 messages_skipped += 1;
                                 let _ = sender.send(StreamMessage::Error(e)).await;
                                 // Commit to prevent redelivery
-                                let _ = consumer.commit_message(&borrowed_message, rdkafka::consumer::CommitMode::Async);
+                                let _ = consumer.commit_message(
+                                    &borrowed_message,
+                                    rdkafka::consumer::CommitMode::Async,
+                                );
                             } else {
                                 // Transient error - don't commit, will be retried
                                 eprintln!(
@@ -256,16 +279,21 @@ impl ConsumeActionsStream for KafkaStreamProvider {
                     };
 
                     // Send the action through the channel
-                    sender.send(StreamMessage::BlockData(BlockDataMessage {
-                        actions: vec![action_raw],
-                        cursor,
-                        block_number,
-                    }))
-                    .await
-                    .map_err(|e| ConsumerError::Stream(StreamError::ChannelSend(e.to_string())))?;
+                    sender
+                        .send(StreamMessage::BlockData(BlockDataMessage {
+                            actions: vec![action_raw],
+                            cursor,
+                            block_number,
+                        }))
+                        .await
+                        .map_err(|e| {
+                            ConsumerError::Stream(StreamError::ChannelSend(e.to_string()))
+                        })?;
 
                     // Commit the offset after successful send (at-least-once delivery)
-                    if let Err(e) = consumer.commit_message(&borrowed_message, rdkafka::consumer::CommitMode::Async) {
+                    if let Err(e) = consumer
+                        .commit_message(&borrowed_message, rdkafka::consumer::CommitMode::Async)
+                    {
                         eprintln!(
                             "KafkaStreamProvider: Failed to commit offset at partition {} offset {}: {}",
                             borrowed_message.partition(),
@@ -274,9 +302,9 @@ impl ConsumeActionsStream for KafkaStreamProvider {
                         );
                         // Continue processing - worst case is duplicate on restart
                     }
-                    
+
                     messages_processed += 1;
-                    
+
                     // Log progress periodically
                     if messages_processed % 1000 == 0 {
                         let now = chrono::Utc::now();
@@ -291,19 +319,19 @@ impl ConsumeActionsStream for KafkaStreamProvider {
                 Err(e) => {
                     let error_category = Self::categorize_kafka_error(&e);
                     consecutive_errors += 1;
-                    
+
                     eprintln!(
                         "KafkaStreamProvider: Kafka consume error (attempt {}/{}): {}",
-                        consecutive_errors,
-                        MAX_CONSECUTIVE_ERRORS,
-                        e
+                        consecutive_errors, MAX_CONSECUTIVE_ERRORS, e
                     );
-                    
+
                     // Send error notification
-                    let _ = sender.send(StreamMessage::Error(
-                        ConsumerError::Kafka(KafkaError::Consume(e.to_string()))
-                    )).await;
-                    
+                    let _ = sender
+                        .send(StreamMessage::Error(ConsumerError::Kafka(
+                            KafkaError::Consume(e.to_string()),
+                        )))
+                        .await;
+
                     if error_category == ErrorCategory::Transient {
                         if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
                             eprintln!(
@@ -315,7 +343,7 @@ impl ConsumeActionsStream for KafkaStreamProvider {
                                 e
                             ))))?;
                         }
-                        
+
                         // Apply exponential backoff before next poll
                         let backoff = Self::calculate_backoff(consecutive_errors);
                         eprintln!(
@@ -337,8 +365,9 @@ impl ConsumeActionsStream for KafkaStreamProvider {
             messages_processed,
             messages_skipped
         );
-        
-        sender.send(StreamMessage::StreamEnd)
+
+        sender
+            .send(StreamMessage::StreamEnd)
             .await
             .map_err(|e| ConsumerError::Stream(StreamError::ChannelSend(e.to_string())))?;
 

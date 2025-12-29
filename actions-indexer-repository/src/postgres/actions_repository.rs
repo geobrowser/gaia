@@ -16,9 +16,12 @@
 //! - `raw_actions`: Processed blockchain actions
 //! - `user_votes`: Individual voting records with upsert support
 //! - `votes_count`: Aggregated vote tallies per entity/space
-use async_trait::async_trait;
-use actions_indexer_shared::types::{Action, Changeset, UserVote, VotesCount, ObjectId, VoteCriteria, VoteCountCriteria, VoteValue, ObjectType};
 use crate::{ActionsRepository, ActionsRepositoryError};
+use actions_indexer_shared::types::{
+    Action, Changeset, ObjectId, ObjectType, UserVote, VoteCountCriteria, VoteCriteria, VoteValue,
+    VotesCount,
+};
+use async_trait::async_trait;
 use hex;
 use time::OffsetDateTime;
 use uuid::Uuid;
@@ -68,32 +71,46 @@ impl PostgresActionsRepository {
     ///
     /// * `Ok(())` - All actions inserted successfully
     /// * `Err(ActionsRepositoryError)` - Database or encoding error
-    async fn insert_actions_tx(&self, actions: &[Action], tx: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Result<(), ActionsRepositoryError> {
+    async fn insert_actions_tx(
+        &self,
+        actions: &[Action],
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    ) -> Result<(), ActionsRepositoryError> {
         if actions.is_empty() {
             return Ok(());
         }
 
         let mut query_builder = sqlx::QueryBuilder::new(
-            "INSERT INTO raw_actions (action_type, action_version, user_id, object_id, group_id, space_pov, metadata, block_number, block_timestamp, tx_hash, object_type)"
+            "INSERT INTO raw_actions (action_type, action_version, user_id, object_id, group_id, space_pov, metadata, block_number, block_timestamp, tx_hash, object_type)",
         );
 
         query_builder.push_values(actions, |mut b, action| {
             match action {
                 Action::Vote(vote_action) => {
                     // TODO: extract to a helper function
-                    let voted_at = OffsetDateTime::from_unix_timestamp(vote_action.raw.block_timestamp as i64)
-                        .unwrap_or(OffsetDateTime::now_utc());
+                    let voted_at =
+                        OffsetDateTime::from_unix_timestamp(vote_action.raw.block_timestamp as i64)
+                            .unwrap_or(OffsetDateTime::now_utc());
                     b.push_bind(vote_action.raw.action_type as i64)
-                     .push_bind(vote_action.raw.action_version as i64)
-                     .push_bind(vote_action.raw.user_id)
-                     .push_bind(vote_action.raw.object_id.clone())
-                     .push_bind(vote_action.raw.group_id.clone())
-                     .push_bind(vote_action.raw.space_pov.clone())
-                     .push_bind(vote_action.raw.metadata.as_ref().map(|b| b.as_ref().to_vec()))
-                     .push_bind(vote_action.raw.block_number as i64)
-                     .push_bind(voted_at)
-                     .push_bind(format!("0x{}", hex::encode(vote_action.raw.tx_hash.as_slice())))
-                     .push_bind(vote_action.raw.object_type as i16);
+                        .push_bind(vote_action.raw.action_version as i64)
+                        .push_bind(vote_action.raw.user_id)
+                        .push_bind(vote_action.raw.object_id.clone())
+                        .push_bind(vote_action.raw.group_id.clone())
+                        .push_bind(vote_action.raw.space_pov.clone())
+                        .push_bind(
+                            vote_action
+                                .raw
+                                .metadata
+                                .as_ref()
+                                .map(|b| b.as_ref().to_vec()),
+                        )
+                        .push_bind(vote_action.raw.block_number as i64)
+                        .push_bind(voted_at)
+                        .push_bind(format!(
+                            "0x{}",
+                            hex::encode(vote_action.raw.tx_hash.as_slice())
+                        ))
+                        .push_bind(vote_action.raw.object_type as i16);
                 }
             }
         });
@@ -116,7 +133,11 @@ impl PostgresActionsRepository {
     ///
     /// * `Ok(())` - All votes processed successfully
     /// * `Err(ActionsRepositoryError)` - Database or encoding error
-    async fn update_user_votes_tx(&self, user_votes: &[UserVote], tx: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Result<(), ActionsRepositoryError> {
+    async fn update_user_votes_tx(
+        &self,
+        user_votes: &[UserVote],
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    ) -> Result<(), ActionsRepositoryError> {
         if user_votes.is_empty() {
             return Ok(());
         }
@@ -163,12 +184,16 @@ impl PostgresActionsRepository {
     ///
     /// * `Ok(())` - All counts updated successfully
     /// * `Err(ActionsRepositoryError)` - Database or encoding error
-    async fn update_votes_counts_tx(&self, votes_counts: &[VotesCount], tx: &mut sqlx::Transaction<'_, sqlx::Postgres>) -> Result<(), ActionsRepositoryError> {
+    async fn update_votes_counts_tx(
+        &self,
+        votes_counts: &[VotesCount],
+        tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    ) -> Result<(), ActionsRepositoryError> {
         if votes_counts.is_empty() {
             return Ok(());
         }
 
-        for count in votes_counts { 
+        for count in votes_counts {
             sqlx::query!(
                 r#"
                 INSERT INTO votes_count (object_id, object_type, space_id, upvotes, downvotes)
@@ -206,13 +231,16 @@ impl ActionsRepository for PostgresActionsRepository {
     ///
     /// * `Ok(())` - All actions inserted successfully
     /// * `Err(ActionsRepositoryError)` - Transaction or insertion failure
-    async fn insert_actions(
-        &self,
-        actions: &[Action],
-    ) -> Result<(), ActionsRepositoryError> {
-        let mut tx = self.pool.begin().await.map_err(|e| ActionsRepositoryError::DatabaseError(e))?;
+    async fn insert_actions(&self, actions: &[Action]) -> Result<(), ActionsRepositoryError> {
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| ActionsRepositoryError::DatabaseError(e))?;
         self.insert_actions_tx(actions, &mut tx).await?;
-        tx.commit().await.map_err(|e| ActionsRepositoryError::DatabaseError(e))?;
+        tx.commit()
+            .await
+            .map_err(|e| ActionsRepositoryError::DatabaseError(e))?;
         Ok(())
     }
 
@@ -233,9 +261,15 @@ impl ActionsRepository for PostgresActionsRepository {
         &self,
         user_votes: &[UserVote],
     ) -> Result<(), ActionsRepositoryError> {
-        let mut tx = self.pool.begin().await.map_err(|e| ActionsRepositoryError::DatabaseError(e))?;
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| ActionsRepositoryError::DatabaseError(e))?;
         self.update_user_votes_tx(user_votes, &mut tx).await?;
-        tx.commit().await.map_err(|e| ActionsRepositoryError::DatabaseError(e))?;
+        tx.commit()
+            .await
+            .map_err(|e| ActionsRepositoryError::DatabaseError(e))?;
         Ok(())
     }
 
@@ -256,9 +290,15 @@ impl ActionsRepository for PostgresActionsRepository {
         &self,
         votes_counts: &[VotesCount],
     ) -> Result<(), ActionsRepositoryError> {
-        let mut tx = self.pool.begin().await.map_err(|e| ActionsRepositoryError::DatabaseError(e))?;
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| ActionsRepositoryError::DatabaseError(e))?;
         self.update_votes_counts_tx(votes_counts, &mut tx).await?;
-        tx.commit().await.map_err(|e| ActionsRepositoryError::DatabaseError(e))?;
+        tx.commit()
+            .await
+            .map_err(|e| ActionsRepositoryError::DatabaseError(e))?;
         Ok(())
     }
 
@@ -279,11 +319,19 @@ impl ActionsRepository for PostgresActionsRepository {
         &self,
         changeset: &Changeset<'_>,
     ) -> Result<(), ActionsRepositoryError> {
-        let mut tx = self.pool.begin().await.map_err(|e| ActionsRepositoryError::DatabaseError(e))?;
+        let mut tx = self
+            .pool
+            .begin()
+            .await
+            .map_err(|e| ActionsRepositoryError::DatabaseError(e))?;
         self.insert_actions_tx(changeset.actions, &mut tx).await?;
-        self.update_user_votes_tx(changeset.user_votes, &mut tx).await?;
-        self.update_votes_counts_tx(changeset.votes_count, &mut tx).await?;
-        tx.commit().await.map_err(|e| ActionsRepositoryError::DatabaseError(e))?;
+        self.update_user_votes_tx(changeset.user_votes, &mut tx)
+            .await?;
+        self.update_votes_counts_tx(changeset.votes_count, &mut tx)
+            .await?;
+        tx.commit()
+            .await
+            .map_err(|e| ActionsRepositoryError::DatabaseError(e))?;
         Ok(())
     }
 
@@ -300,12 +348,18 @@ impl ActionsRepository for PostgresActionsRepository {
     ///
     /// * `Ok(Vec<UserVote>)` - Matching votes (empty if none found)
     /// * `Err(ActionsRepositoryError)` - Database query failure
-    async fn get_user_votes(&self, vote_criteria: &[VoteCriteria]) -> Result<Vec<UserVote>, ActionsRepositoryError> {
+    async fn get_user_votes(
+        &self,
+        vote_criteria: &[VoteCriteria],
+    ) -> Result<Vec<UserVote>, ActionsRepositoryError> {
         if vote_criteria.is_empty() {
             return Ok(Vec::new());
         }
 
-        let user_ids: Vec<String> = vote_criteria.iter().map(|(u, _, _, _)| u.to_string()).collect();
+        let user_ids: Vec<String> = vote_criteria
+            .iter()
+            .map(|(u, _, _, _)| u.to_string())
+            .collect();
         let object_ids: Vec<ObjectId> = vote_criteria.iter().map(|(_, o, _, _)| *o).collect();
         let space_ids: Vec<Uuid> = vote_criteria.iter().map(|(_, _, s, _)| *s).collect();
         let object_types: Vec<i16> = vote_criteria.iter().map(|(_, _, _, o)| *o as i16).collect();
@@ -333,7 +387,11 @@ impl ActionsRepository for PostgresActionsRepository {
                 object_type: match v.object_type {
                     0 => ObjectType::Entity,
                     1 => ObjectType::Relation,
-                    _ => return Err(ActionsRepositoryError::InvalidObjectType(v.object_type as i16)),
+                    _ => {
+                        return Err(ActionsRepositoryError::InvalidObjectType(
+                            v.object_type as i16,
+                        ));
+                    }
                 },
                 vote_type: match v.vote_type {
                     0 => VoteValue::Up,
@@ -361,15 +419,21 @@ impl ActionsRepository for PostgresActionsRepository {
     ///
     /// * `Ok(Vec<VotesCount>)` - Matching vote counts (empty if none found)
     /// * `Err(ActionsRepositoryError)` - Database query failure
-    async fn get_vote_counts(&self, vote_criteria: &[VoteCountCriteria]) -> Result<Vec<VotesCount>, ActionsRepositoryError> {
+    async fn get_vote_counts(
+        &self,
+        vote_criteria: &[VoteCountCriteria],
+    ) -> Result<Vec<VotesCount>, ActionsRepositoryError> {
         if vote_criteria.is_empty() {
             return Ok(Vec::new());
         }
 
         let object_ids: Vec<ObjectId> = vote_criteria.iter().map(|(e, _, _)| *e).collect();
         let space_ids: Vec<Uuid> = vote_criteria.iter().map(|(_, s, _)| *s).collect();
-        let object_types: Vec<i16> = vote_criteria.iter().map(|(_, _, o)| o.clone() as i16).collect();
-        
+        let object_types: Vec<i16> = vote_criteria
+            .iter()
+            .map(|(_, _, o)| o.clone() as i16)
+            .collect();
+
         let counts = sqlx::query!(
             r#"
             SELECT object_id, object_type, space_id, upvotes, downvotes
@@ -391,7 +455,11 @@ impl ActionsRepository for PostgresActionsRepository {
                 object_type: match c.object_type {
                     0 => ObjectType::Entity,
                     1 => ObjectType::Relation,
-                    _ => return Err(ActionsRepositoryError::InvalidObjectType(c.object_type as i16)),
+                    _ => {
+                        return Err(ActionsRepositoryError::InvalidObjectType(
+                            c.object_type as i16,
+                        ));
+                    }
                 },
                 upvotes: c.upvotes,
                 downvotes: c.downvotes,
