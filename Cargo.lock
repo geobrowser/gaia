@@ -16,6 +16,7 @@ dependencies = [
  "thiserror 2.0.17",
  "tokio",
  "tokio-test",
+ "url",
  "uuid",
 ]
 

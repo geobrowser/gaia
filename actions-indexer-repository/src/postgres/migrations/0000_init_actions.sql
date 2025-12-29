@@ -2,7 +2,7 @@ CREATE TABLE raw_actions (
     id              SERIAL PRIMARY KEY,
     action_type     BIGINT NOT NULL,
     action_version  BIGINT NOT NULL,
-    sender          VARCHAR(42) NOT NULL,
+    user_id         UUID NOT NULL,
     object_id       UUID NOT NULL,
     group_id        UUID,
     space_pov       UUID NOT NULL,
@@ -15,7 +15,7 @@ CREATE TABLE raw_actions (
 
 CREATE TABLE user_votes (
     id              SERIAL PRIMARY KEY,
-    user_id         VARCHAR(42) NOT NULL,
+    user_id         UUID NOT NULL,
     object_id       UUID NOT NULL,
     space_id        UUID NOT NULL,
     vote_type       SMALLINT NOT NULL,

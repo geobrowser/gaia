@@ -7,6 +7,7 @@ use crate::errors::ConsumerError;
 
 pub mod kafka;
 pub mod stream;
+pub use kafka::ConsumerConfig;
 
 use actions_indexer_shared::types::ActionRaw;
 use async_trait::async_trait;

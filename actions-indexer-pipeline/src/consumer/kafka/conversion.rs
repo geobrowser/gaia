@@ -179,11 +179,12 @@ fn parse_object_type(bytes: &[u8]) -> Result<ObjectType, ConsumerError> {
         .into());
     }
 
-    // Interpret as little-endian u32
-    let type_id =
-        u32::from_le_bytes(bytes.try_into().map_err(|_| {
-            ConversionError::InvalidObjectType("failed to convert bytes".to_string())
-        })?);
+    // Interpret as big-endian u32 (Solidity bytes4 encoding)
+    let type_id = u32::from_be_bytes(
+        bytes
+            .try_into()
+            .map_err(|_| ConversionError::InvalidObjectType("failed to convert bytes".to_string()))?,
+    );
 
     match type_id {
         0 => Ok(ObjectType::Entity),
@@ -234,7 +235,7 @@ mod tests {
         HermesVoteCast {
             voter_id: voter_id.to_vec(),
             object_id: object_id.to_vec(),
-            object_type: object_type.to_le_bytes().to_vec(),
+            object_type: object_type.to_be_bytes().to_vec(), // big-endian to match Solidity bytes4
             direction: direction as i32,
             data: create_abi_encoded_data(version, group_id, space_pov),
             meta: Some(BlockchainMetadata {
@@ -383,7 +384,7 @@ mod tests {
         let vote = HermesVoteCast {
             voter_id: vec![0; 16],
             object_id: vec![0; 16],
-            object_type: 99u32.to_le_bytes().to_vec(), // Invalid type
+            object_type: 99u32.to_be_bytes().to_vec(), // Invalid type (big-endian)
             direction: VoteDirection::Up as i32,
             data: create_abi_encoded_data(1, &group_uuid, &space_uuid),
             meta: Some(BlockchainMetadata {

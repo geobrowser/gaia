@@ -11,4 +11,6 @@ pub enum IndexingError {
     ActionsRepository(#[from] actions_indexer_repository::ActionsRepositoryError),
     #[error("Cursor repository error: {0}")]
     CursorRepository(#[from] actions_indexer_repository::CursorRepositoryError),
+    #[error("Invalid configuration: {0}")]
+    InvalidConfiguration(String),
 }

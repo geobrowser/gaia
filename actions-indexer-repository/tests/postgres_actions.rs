@@ -18,7 +18,7 @@ fn make_raw_action() -> ActionRaw {
     ActionRaw {
         action_type: ActionType::Vote,
         action_version: 1,
-        sender: uuid!("d8da6bf2-6964-af9d-7eed-9e03e53415d3"),
+        user_id: uuid!("d8da6bf2-6964-af9d-7eed-9e03e53415d3"),
         object_id: Uuid::new_v4(),
         group_id: None,
         space_pov: uuid!("f5d2fe0c-fb9d-4027-b227-54f59af20f19"),
@@ -156,14 +156,14 @@ async fn test_update_user_vote(pool: sqlx::PgPool) {
     let votes_in_db = sqlx::query(
         "SELECT user_id, object_id, space_id, vote_type, voted_at FROM user_votes WHERE user_id = $1 AND object_id = $2 AND space_id = $3",
     )
-    .bind(format!("0x{}", hex::encode(user_vote.user_id.as_slice())))
+    .bind(user_vote.user_id)
     .bind(user_vote.object_id)
     .bind(user_vote.space_id)
     .fetch_one(&pool)
     .await
     .unwrap();
 
-    assert_eq!(votes_in_db.get::<String, _>("user_id"), format!("0x{}", hex::encode(user_vote.user_id.as_slice())));
+    assert_eq!(votes_in_db.get::<Uuid, _>("user_id"), user_vote.user_id);
     assert_eq!(votes_in_db.get::<Uuid, _>("object_id"), user_vote.object_id);
     assert_eq!(votes_in_db.get::<Uuid, _>("space_id"), user_vote.space_id);
     assert_eq!(votes_in_db.get::<i16, _>("vote_type"), 0);
@@ -181,7 +181,7 @@ async fn test_update_user_vote(pool: sqlx::PgPool) {
     let updated_votes_in_db = sqlx::query(
         "SELECT user_id, object_id, space_id, vote_type, voted_at FROM user_votes WHERE user_id = $1 AND object_id = $2 AND space_id = $3",
     )
-    .bind(format!("0x{}", hex::encode(updated_user_vote.user_id.as_slice())))
+    .bind(updated_user_vote.user_id)
     .bind(updated_user_vote.object_id)
     .bind(updated_user_vote.space_id)
     .fetch_one(&pool)

@@ -5,7 +5,7 @@
     "columns": [],
     "parameters": {
       "Left": [
-        "Varchar",
+        "Uuid",
         "Uuid",
         "Int2",
         "Uuid",
