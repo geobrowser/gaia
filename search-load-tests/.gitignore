@@ -1,0 +1,11 @@
+# Results and output
+results/
+*.json
+*.csv
+
+# k6 binary (if built locally)
+k6
+
+# Node modules (if any)
+node_modules/
+
