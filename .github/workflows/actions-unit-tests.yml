@@ -2,20 +2,33 @@
 name: Actions Unit Tests
 
 on:
-    pull_request:
-        types: [opened, synchronize]
-        branches:
-            - dev
-            - main
-            - upstream-dev
-
-        paths:
-            - 'actions-indexer/**'
-            - 'actions-indexer-pipeline/**'
-            - 'actions-indexer-shared/**'
-            - 'actions-indexer-repository/**'
-            - 'actions-substream/**'
-            - '.github/workflows/actions-unit-tests.yml'
+  pull_request:
+      types: [opened, synchronize]
+      branches:
+        - main
+        - dev
+        - upstream-main
+        - upstream-dev
+      paths:
+        - 'actions-indexer/**'
+        - 'actions-indexer-pipeline/**'
+        - 'actions-indexer-shared/**'
+        - 'actions-indexer-repository/**'
+        - 'actions-substream/**'
+        - '.github/workflows/actions-unit-tests.yml'
+  push:
+      branches:
+        - main
+        - dev
+        - upstream-main
+        - upstream-dev
+      paths:
+        - 'actions-indexer/**'
+        - 'actions-indexer-pipeline/**'
+        - 'actions-indexer-shared/**'
+        - 'actions-indexer-repository/**'
+        - 'actions-substream/**'
+        - '.github/workflows/actions-unit-tests.yml'
 
 permissions:
   contents: read

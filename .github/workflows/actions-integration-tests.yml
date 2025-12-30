@@ -8,6 +8,7 @@ on:
       - dev
       - main
       - upstream-dev
+      - upstream-main
     paths:
       - "actions-indexer/**"
       - "actions-indexer-pipeline/**"
@@ -15,15 +16,26 @@ on:
       - "actions-indexer-repository/**"
       - "api/drizzle/**"
       - ".github/workflows/actions-integration-tests.yml"
+      - "hermes-schema/**"
+      - "hermes-kafka/**"
+      - "wire/**"
   push:
     branches:
       - dev
       - main
       - upstream-dev
+      - upstream-main
     paths:
+      - "actions-indexer/**"
+      - "actions-indexer-pipeline/**"
+      - "actions-indexer-shared/**"
       - "actions-indexer-repository/**"
       - "api/drizzle/**"
-
+      - ".github/workflows/actions-integration-tests.yml"
+      - "hermes-schema/**"
+      - "hermes-kafka/**"
+      - "wire/**"
+      
 permissions:
   contents: read
   pull-requests: read

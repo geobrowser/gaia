@@ -7,13 +7,6 @@ use uuid::Uuid;
 
 use crate::errors::{ConsumerError, ConversionError};
 
-/// ABI-encoded data field size: 96 bytes
-/// Format: abi.encode(uint16(version), bytes16(groupId), bytes16(spacePOV))
-/// - bytes 0-31: uint16 version (right-aligned, value in bytes 30-31)
-/// - bytes 32-63: bytes16 groupId (left-aligned, value in bytes 32-47)
-/// - bytes 64-95: bytes16 spacePOV (left-aligned, value in bytes 64-79)
-const ABI_ENCODED_DATA_SIZE: usize = 96;
-
 /// Converts a HermesVoteCast protobuf message to an ActionRaw struct.
 ///
 /// # Field Mappings
@@ -21,10 +14,9 @@ const ABI_ENCODED_DATA_SIZE: usize = 96;
 /// - `object_type` (4 bytes) → `object_type` (Entity/Relation discriminator)
 /// - `object_id` (16 bytes) → `object_id` (UUID)
 /// - `direction` → encoded in `metadata` (0=Up, 1=Down, 2=Remove)
-/// - `data` → ABI-encoded: abi.encode(uint16(version), bytes16(groupId), bytes16(spacePOV))
-///   - version → `action_version`
-///   - groupId → `group_id`
-///   - spacePOV → `space_pov`
+/// - `version` → `action_version`
+/// - `group_id` → `group_id`
+/// - `space_pov` → `space_pov`
 /// - `meta.block_number` → `block_number`
 /// - `meta.created_at` → `block_timestamp`
 /// - `meta.cursor` → used for offset tracking (not stored in ActionRaw)
@@ -57,9 +49,6 @@ pub fn hermes_vote_to_action_raw(vote: &HermesVoteCast) -> Result<ActionRaw, Con
         .as_ref()
         .ok_or_else(|| ConversionError::MissingField("meta".to_string()))?;
 
-    // Parse the ABI-encoded data field to extract version, groupId, and spacePOV
-    let (action_version, group_id, space_pov) = parse_vote_data(&vote.data)?;
-
     // Encode vote direction as first byte of metadata
     let vote_direction_byte = match VoteDirection::try_from(vote.direction) {
         Ok(VoteDirection::Up) => 0u8,
@@ -83,57 +72,17 @@ pub fn hermes_vote_to_action_raw(vote: &HermesVoteCast) -> Result<ActionRaw, Con
 
     Ok(ActionRaw {
         action_type: ActionType::Vote,
-        action_version,
+        action_version: vote.version as u64,
         user_id,
         object_id,
-        group_id: Some(group_id),
-        space_pov,
+        group_id: Some(bytes_to_uuid(&vote.group_id, "group_id")?),
+        space_pov: bytes_to_uuid(&vote.space_pov, "space_pov")?,
         metadata,
         block_number: meta.block_number,
         block_timestamp: meta.created_at,
         tx_hash,
         object_type,
     })
-}
-
-/// Parses the ABI-encoded data field from HermesVoteCast.
-///
-/// The data field is encoded as: abi.encode(uint16(version), bytes16(groupId), bytes16(spacePOV))
-///
-/// ABI encoding layout (96 bytes total):
-/// - bytes 0-31: uint16 version (right-aligned, value in bytes 30-31)
-/// - bytes 32-63: bytes16 groupId (left-aligned, value in bytes 32-47)  
-/// - bytes 64-95: bytes16 spacePOV (left-aligned, value in bytes 64-79)
-///
-/// # Arguments
-/// * `data` - The ABI-encoded data bytes
-///
-/// # Returns
-/// * `Ok((version, group_id, space_pov))` - Successfully parsed values
-/// * `Err(ConsumerError)` - Invalid data format
-fn parse_vote_data(data: &[u8]) -> Result<(u64, Uuid, Uuid), ConsumerError> {
-    if data.len() != ABI_ENCODED_DATA_SIZE {
-        return Err(ConversionError::InvalidDataField(format!(
-            "expected {} bytes for ABI-encoded data, got {}",
-            ABI_ENCODED_DATA_SIZE,
-            data.len()
-        ))
-        .into());
-    }
-
-    // Extract version from bytes 30-31 (uint16, big-endian in ABI encoding)
-    let version_bytes: [u8; 2] = data[30..32].try_into().map_err(|_| {
-        ConversionError::InvalidDataField("failed to read version bytes".to_string())
-    })?;
-    let action_version = u16::from_be_bytes(version_bytes) as u64;
-
-    // Extract groupId from bytes 32-47 (bytes16, left-aligned)
-    let group_id = bytes_to_uuid(&data[32..48], "groupId")?;
-
-    // Extract spacePOV from bytes 64-79 (bytes16, left-aligned)
-    let space_pov = bytes_to_uuid(&data[64..80], "spacePOV")?;
-
-    Ok((action_version, group_id, space_pov))
 }
 
 /// Converts a byte slice to a UUID.
@@ -232,12 +181,16 @@ mod tests {
             object_id: object_id.to_vec(),
             object_type: object_type.to_be_bytes().to_vec(), // big-endian to match Solidity bytes4
             direction: direction as i32,
-            data: create_abi_encoded_data(version, group_id, space_pov),
+            version: version as u32,
+            group_id: group_id.as_bytes().to_vec(),
+            space_pov: space_pov.as_bytes().to_vec(),
             meta: Some(BlockchainMetadata {
                 created_at: 1700000000,
                 created_by: vec![],
                 block_number: 12345,
                 cursor: "cursor123".to_string(),
+                is_last: false,
+                sequence: 0,
             }),
         }
     }
@@ -354,12 +307,16 @@ mod tests {
             object_id: vec![0; 16],
             object_type: vec![0; 4],
             direction: VoteDirection::Up as i32,
-            data: create_abi_encoded_data(1, &group_uuid, &space_uuid),
+            version: 1,
+            group_id: group_uuid.as_bytes().to_vec(),
+            space_pov: space_uuid.as_bytes().to_vec(),
             meta: Some(BlockchainMetadata {
                 created_at: 0,
                 created_by: vec![],
                 block_number: 0,
                 cursor: String::new(),
+                is_last: false,
+                sequence: 0,
             }),
         };
 
@@ -381,12 +338,16 @@ mod tests {
             object_id: vec![0; 16],
             object_type: 99u32.to_be_bytes().to_vec(), // Invalid type (big-endian)
             direction: VoteDirection::Up as i32,
-            data: create_abi_encoded_data(1, &group_uuid, &space_uuid),
+            version: 1,
+            group_id: group_uuid.as_bytes().to_vec(),
+            space_pov: space_uuid.as_bytes().to_vec(),
             meta: Some(BlockchainMetadata {
                 created_at: 0,
                 created_by: vec![],
                 block_number: 0,
                 cursor: String::new(),
+                is_last: false,
+                sequence: 0,
             }),
         };
 
@@ -408,7 +369,9 @@ mod tests {
             object_id: vec![0; 16],
             object_type: vec![0; 4],
             direction: VoteDirection::Up as i32,
-            data: create_abi_encoded_data(1, &group_uuid, &space_uuid),
+            version: 1,
+            group_id: group_uuid.as_bytes().to_vec(),
+            space_pov: space_uuid.as_bytes().to_vec(),
             meta: None, // Missing
         };
 
@@ -417,30 +380,6 @@ mod tests {
         assert!(matches!(
             result.unwrap_err(),
             ConsumerError::Conversion(ConversionError::MissingField(_))
-        ));
-    }
-
-    #[test]
-    fn test_invalid_data_field_length() {
-        let vote = HermesVoteCast {
-            voter_id: vec![0; 16],
-            object_id: vec![0; 16],
-            object_type: vec![0; 4],
-            direction: VoteDirection::Up as i32,
-            data: vec![0; 50], // Wrong size (should be 96)
-            meta: Some(BlockchainMetadata {
-                created_at: 0,
-                created_by: vec![],
-                block_number: 0,
-                cursor: String::new(),
-            }),
-        };
-
-        let result = hermes_vote_to_action_raw(&vote);
-        assert!(result.is_err());
-        assert!(matches!(
-            result.unwrap_err(),
-            ConsumerError::Conversion(ConversionError::InvalidDataField(_))
         ));
     }
 
@@ -454,25 +393,6 @@ mod tests {
     #[test]
     fn test_bytes_to_uuid_invalid_length() {
         let result = bytes_to_uuid(&[0; 8], "test");
-        assert!(result.is_err());
-    }
-
-    #[test]
-    fn test_parse_vote_data() {
-        let group_uuid = Uuid::new_v4();
-        let space_uuid = Uuid::new_v4();
-        let data = create_abi_encoded_data(123, &group_uuid, &space_uuid);
-
-        let (version, group_id, space_pov) = parse_vote_data(&data).unwrap();
-
-        assert_eq!(version, 123);
-        assert_eq!(group_id, group_uuid);
-        assert_eq!(space_pov, space_uuid);
-    }
-
-    #[test]
-    fn test_parse_vote_data_invalid_length() {
-        let result = parse_vote_data(&[0; 50]);
         assert!(result.is_err());
     }
 }

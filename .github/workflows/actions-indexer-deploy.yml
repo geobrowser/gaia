@@ -1,0 +1,73 @@
+name: Deploy Actions Indexer
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'actions-indexer/**'
+      - 'actions-indexer-pipeline/**'
+      - 'actions-indexer-repository/**'
+      - 'actions-indexer-shared/**'
+      - 'actions-indexer-deploy/k8s/**'
+      - 'hermes-schema/**'
+      - 'hermes-kafka/**'
+      - 'wire/**'
+      - '.github/workflows/actions-indexer-deploy.yml'
+
+env:
+  REGISTRY: registry.digitalocean.com/geo
+  IMAGE_NAME: actions-indexer
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install doctl
+        uses: digitalocean/action-doctl@v2
+        with:
+          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+
+      - name: Log in to DigitalOcean Container Registry
+        run: doctl registry login --expiry-seconds 1200
+
+      - name: Build and push Docker image
+        run: |
+          docker build -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
+                       -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest \
+                       -f actions-indexer/Dockerfile .
+          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v4
+
+      - name: Configure kubectl for DigitalOcean
+        run: |
+          doctl kubernetes cluster kubeconfig save ${{ secrets.DIGITALOCEAN_CLUSTER_NAME }}
+
+      - name: Deploy to Kubernetes
+        run: |
+          kubectl apply -f actions-indexer-deploy/k8s/namespace.yaml
+          # Update image tag to use SHA and apply
+          sed -i 's|image: registry.digitalocean.com/geo/actions-indexer:latest|image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}|g' actions-indexer-deploy/k8s/actions-indexer.yaml
+          kubectl apply -f actions-indexer-deploy/k8s/actions-indexer.yaml
+
+      - name: Wait for deployment to be ready
+        run: |
+          kubectl rollout status deployment/actions-indexer -n actions --timeout=120s
+
+      - name: Show deployment status
+        run: |
+          echo "=== Actions Indexer Deployment ==="
+          kubectl get deployment actions-indexer -n actions || echo "Deployment not found"
+          echo ""
+          echo "=== Actions Indexer Pods ==="
+          kubectl get pods -n actions -l app=actions-indexer
+          echo ""
+          echo "=== Recent Events ==="
+          kubectl get events -n actions --sort-by='.lastTimestamp' | tail -10
+

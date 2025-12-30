@@ -1,0 +1,30 @@
+services:
+  actions-indexer:
+    build:
+      context: ..
+      dockerfile: actions-indexer/Dockerfile
+    container_name: actions-indexer
+    user: "1000:1000"
+    environment:
+      # Data source configuration
+      - DATA_SOURCE=kafka
+      # Database connection
+      - DATABASE_URL
+      # Kafka connection - defaults to hermes kafka container name
+      # Override with KAFKA_BROKER env var if needed
+      - KAFKA_BROKER=${KAFKA_BROKER:-kafka:29092}
+      - KAFKA_CONSUMER_GROUP=actions-indexer
+      - KAFKA_TOPIC=${KAFKA_TOPIC:-curation.votes}
+      # Logging
+      - RUST_LOG=info,actions_indexer=debug,actions_indexer_pipeline=debug
+    # Connect to hermes network to access Kafka broker
+    networks:
+      - default
+      - hermes_default
+    restart: unless-stopped
+    mem_limit: 512m
+    mem_reservation: 256m
+
+networks:
+  hermes_default:
+    external: true

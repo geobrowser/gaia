@@ -37,7 +37,7 @@ dependencies = [
  "lazy_static",
  "prost 0.13.5",
  "prost-types 0.13.5",
- "rdkafka",
+ "rdkafka 0.36.2",
  "regex",
  "reqwest 0.11.27",
  "semver 1.0.27",

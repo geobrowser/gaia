@@ -53,12 +53,16 @@ fn create_test_vote(
         object_id: object_id.as_bytes().to_vec(),
         object_type: 0u32.to_be_bytes().to_vec(), // Entity (big-endian, Solidity bytes4)
         direction: direction as i32,
-        data,
+        version: version as u32,
+        group_id: group_id.as_bytes().to_vec(),
+        space_pov: space_pov.as_bytes().to_vec(),
         meta: Some(BlockchainMetadata {
             created_at: 1700000000,
             created_by: vec![],
             block_number: 12345,
             cursor: "test-cursor-123".to_string(),
+            is_last: false,
+            sequence: 0,
         }),
     }
 }
@@ -197,35 +201,16 @@ fn test_conversion_error_invalid_voter_id() {
         object_id: vec![0; 16],
         object_type: vec![0; 4],
         direction: VoteDirection::Up as i32,
-        data: vec![0; 96],
+        version: 1,
+        group_id: vec![0; 16],
+        space_pov: vec![0; 16],
         meta: Some(BlockchainMetadata {
             created_at: 0,
             created_by: vec![],
             block_number: 0,
             cursor: String::new(),
-        }),
-    };
-
-    let result = hermes_vote_to_action_raw(&vote);
-    assert!(result.is_err());
-}
-
-#[test]
-fn test_conversion_error_invalid_data_length() {
-    let voter_id = Uuid::new_v4();
-    let object_id = Uuid::new_v4();
-
-    let vote = HermesVoteCast {
-        voter_id: voter_id.as_bytes().to_vec(),
-        object_id: object_id.as_bytes().to_vec(),
-        object_type: 0u32.to_be_bytes().to_vec(),
-        direction: VoteDirection::Up as i32,
-        data: vec![0; 50], // Invalid: should be 96 bytes
-        meta: Some(BlockchainMetadata {
-            created_at: 0,
-            created_by: vec![],
-            block_number: 0,
-            cursor: String::new(),
+            is_last: false,
+            sequence: 0,
         }),
     };
 
@@ -243,7 +228,9 @@ fn test_conversion_error_missing_metadata() {
         object_id: object_id.as_bytes().to_vec(),
         object_type: 0u32.to_be_bytes().to_vec(),
         direction: VoteDirection::Up as i32,
-        data: vec![0; 96],
+        version: 1,
+        group_id: vec![0; 16],
+        space_pov: vec![0; 16],
         meta: None, // Missing metadata
     };
 
@@ -296,94 +283,6 @@ fn test_kafka_stream_provider_creation() {
     // We can't easily test internal state, but creation should succeed
     assert!(true);
     let _ = provider; // Use provider to avoid unused warning
-}
-
-// =============================================================================
-// INTEGRATION TESTS (Require running Kafka)
-// =============================================================================
-
-/// Integration test that requires a running Kafka broker.
-///
-/// To run: `cargo test -p actions-indexer-pipeline --test kafka_integration test_kafka_connection -- --ignored`
-///
-/// Prerequisites:
-/// - Kafka broker running at localhost:9092
-/// - Topic "test-votes" created
-#[tokio::test]
-#[ignore = "Requires running Kafka broker"]
-async fn test_kafka_connection() {
-    let config = ConsumerConfig::new(
-        Url::parse("localhost:9092").unwrap(),
-        "integration-test-group",
-        "test-votes",
-    );
-    let provider = KafkaStreamProvider::new(config);
-
-    let (tx, _rx) = mpsc::channel::<StreamMessage>(100);
-
-    // Start the stream in a separate task
-    let handle = tokio::spawn(async move { provider.stream_events(tx, None).await });
-
-    // Wait briefly for connection
-    tokio::time::sleep(tokio::time::Duration::from_secs(2)).await;
-
-    // Cancel the stream
-    handle.abort();
-
-    // We should not have received StreamEnd yet (stream was aborted)
-    // This test mainly verifies the connection doesn't panic
-}
-
-/// Integration test for end-to-end message consumption.
-///
-/// To run: `cargo test -p actions-indexer-pipeline --test kafka_integration test_kafka_message_consumption -- --ignored`
-///
-/// Prerequisites:
-/// - Kafka broker running at localhost:9092
-/// - Topic "test-votes" created
-/// - Test messages published to the topic
-#[tokio::test]
-#[ignore = "Requires running Kafka broker with test data"]
-async fn test_kafka_message_consumption() {
-    let config = ConsumerConfig::new(
-        Url::parse("localhost:9092").unwrap(),
-        "integration-test-consumer",
-        "test-votes",
-    );
-    let provider = KafkaStreamProvider::new(config);
-
-    let (tx, mut rx) = mpsc::channel::<StreamMessage>(100);
-
-    // Start the stream
-    let handle = tokio::spawn(async move { provider.stream_events(tx, None).await });
-
-    // Wait for messages (with timeout)
-    let timeout = tokio::time::Duration::from_secs(10);
-    let result = tokio::time::timeout(timeout, rx.recv()).await;
-
-    match result {
-        Ok(Some(StreamMessage::BlockData(data))) => {
-            // Successfully received a message
-            assert!(!data.actions.is_empty());
-            println!("Received {} actions", data.actions.len());
-        }
-        Ok(Some(StreamMessage::Error(e))) => {
-            // Error during consumption
-            println!("Received error: {:?}", e);
-        }
-        Ok(Some(StreamMessage::StreamEnd)) => {
-            println!("Stream ended");
-        }
-        Ok(None) => {
-            println!("Channel closed");
-        }
-        Err(_) => {
-            println!("Timeout waiting for messages");
-        }
-        _ => {}
-    }
-
-    handle.abort();
 }
 
 // =============================================================================
