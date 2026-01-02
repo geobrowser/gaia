@@ -1,16 +1,50 @@
 use crate::config::handlers::VoteHandler;
 use crate::errors::IndexingError;
 use actions_indexer_pipeline::consumer::ActionsConsumer;
+use actions_indexer_pipeline::consumer::ConsumerConfig;
+use actions_indexer_pipeline::consumer::kafka::KafkaStreamProvider;
 use actions_indexer_pipeline::consumer::stream::sink::SubstreamsStreamProvider;
 use actions_indexer_pipeline::loader::ActionsLoader;
 use actions_indexer_pipeline::processor::ActionsProcessor;
 use actions_indexer_repository::{PostgresActionsRepository, PostgresCursorRepository};
 use actions_indexer_shared::types::{ActionType, ObjectType};
 use std::sync::Arc;
+use url::Url;
 
 // Use CARGO_MANIFEST_DIR to get path relative to the crate
 const PKG_FILE: &str = concat!(env!("CARGO_MANIFEST_DIR"), "/geo-actions-v0.1.0.spkg");
 const MODULE_NAME: &str = "map_actions";
+
+/// Data source type for the actions consumer.
+///
+/// Determines which streaming backend to use for consuming action events.
+#[derive(Debug, Clone, PartialEq)]
+pub enum DataSource {
+    /// Use Substreams to consume directly from blockchain
+    Substreams,
+    /// Use Kafka to consume from the Hermes event stream
+    Kafka,
+}
+
+impl DataSource {
+    /// Parses the data source from an environment variable.
+    ///
+    /// # Environment Variable
+    ///
+    /// - `DATA_SOURCE` - Either "substreams" or "kafka" (case-insensitive)
+    ///
+    /// Defaults to `Substreams` if not set or invalid.
+    pub fn from_env() -> Self {
+        match std::env::var("DATA_SOURCE")
+            .unwrap_or_else(|_| "substreams".to_string())
+            .to_lowercase()
+            .as_str()
+        {
+            "kafka" => DataSource::Kafka,
+            _ => DataSource::Substreams,
+        }
+    }
+}
 
 /// `Dependencies` struct holds the necessary components for the action indexer.
 ///
@@ -28,32 +62,88 @@ impl Dependencies {
     /// This asynchronous function is responsible for initializing and wiring up
     /// all the external services and components required by the indexer.
     ///
+    /// ## Data Source Selection
+    ///
+    /// The data source is determined by the `DATA_SOURCE` environment variable:
+    /// - `kafka` - Uses `KafkaStreamProvider` to consume from Hermes Kafka stream
+    /// - `substreams` (default) - Uses `SubstreamsStreamProvider` to consume from blockchain
+    ///
+    /// ## Required Environment Variables
+    ///
+    /// **Always required:**
+    /// - `DATABASE_URL` - PostgreSQL connection string
+    ///
+    /// **For Substreams (DATA_SOURCE=substreams):**
+    /// - `SUBSTREAMS_ENDPOINT` - Substreams gRPC endpoint
+    /// - `SUBSTREAMS_API_TOKEN` - Authentication token
+    ///
+    /// **For Kafka (DATA_SOURCE=kafka):**
+    /// - `KAFKA_BROKER` - Kafka broker address (default: localhost:9092)
+    /// - `KAFKA_CONSUMER_GROUP` - Consumer group ID (default: actions-indexer)
+    /// - `KAFKA_TOPIC` - Topic to consume from (default: curation.votes)
+    /// - `KAFKA_USERNAME` - SASL username (optional, for managed Kafka)
+    /// - `KAFKA_PASSWORD` - SASL password (optional, for managed Kafka)
+    ///
     /// # Returns
     ///
     /// A `Result` which is `Ok(Self)` on successful initialization or an
     /// `IndexingError` if any dependency fails to initialize.
     pub async fn new() -> Result<Self, IndexingError> {
         let database_url = std::env::var("DATABASE_URL").expect("DATABASE_URL must be set");
-        let substreams_endpoint =
-            std::env::var("SUBSTREAMS_ENDPOINT").expect("SUBSTREAMS_ENDPOINT must be set");
-        let substreams_api_token =
-            std::env::var("SUBSTREAMS_API_TOKEN").expect("SUBSTREAMS_API_TOKEN must be set");
+        let data_source = DataSource::from_env();
 
-        let package_file = PKG_FILE.to_string();
-        let module_name = MODULE_NAME.to_string();
-        let block_range = None;
-        let params = vec![];
+        println!("Actions Indexer: Using data source: {:?}", data_source);
 
-        let substreams_stream_provider = SubstreamsStreamProvider::new(
-            substreams_endpoint,
-            package_file,
-            module_name,
-            block_range,
-            params,
-            Some(substreams_api_token),
-        );
+        // Create the appropriate stream provider based on data source
+        let actions_consumer = match data_source {
+            DataSource::Kafka => {
+                let kafka_broker = std::env::var("KAFKA_BROKER").expect("KAFKA_BROKER must be set");
+                let kafka_consumer_group = std::env::var("KAFKA_CONSUMER_GROUP")
+                    .expect("KAFKA_CONSUMER_GROUP must be set");
+                let kafka_topic = std::env::var("KAFKA_TOPIC").expect("KAFKA_TOPIC must be set");
+                let kafka_username = std::env::var("KAFKA_USERNAME").ok();
+                let kafka_password = std::env::var("KAFKA_PASSWORD").ok();
+                let kafka_ssl_ca_pem = std::env::var("KAFKA_SSL_CA_PEM").ok();
+                let mut consumer_config = ConsumerConfig::new(
+                    Url::parse(&kafka_broker).expect("KAFKA_BROKER must be a valid URL"),
+                    kafka_consumer_group,
+                    kafka_topic,
+                );
+                if kafka_username.is_some() && kafka_password.is_some() {
+                    consumer_config = consumer_config
+                        .with_credentials(kafka_username.unwrap(), kafka_password.unwrap());
+                } else if kafka_ssl_ca_pem.is_some() {
+                    consumer_config = consumer_config.with_ssl_ca(kafka_ssl_ca_pem.unwrap());
+                } else {
+                    println!("No credentials provided for Kafka, using plaintext authentication");
+                }
 
-        let actions_consumer = ActionsConsumer::new(Box::new(substreams_stream_provider));
+                let kafka_provider = KafkaStreamProvider::new(consumer_config);
+                ActionsConsumer::new(Box::new(kafka_provider))
+            }
+            DataSource::Substreams => {
+                let substreams_endpoint = std::env::var("SUBSTREAMS_ENDPOINT")
+                    .expect("SUBSTREAMS_ENDPOINT must be set when DATA_SOURCE=substreams");
+                let substreams_api_token = std::env::var("SUBSTREAMS_API_TOKEN")
+                    .expect("SUBSTREAMS_API_TOKEN must be set when DATA_SOURCE=substreams");
+
+                let package_file = PKG_FILE.to_string();
+                let module_name = MODULE_NAME.to_string();
+                let block_range = None;
+                let params = vec![];
+
+                let substreams_provider = SubstreamsStreamProvider::new(
+                    substreams_endpoint,
+                    package_file,
+                    module_name,
+                    block_range,
+                    params,
+                    Some(substreams_api_token),
+                );
+                ActionsConsumer::new(Box::new(substreams_provider))
+            }
+        };
+
         let mut actions_processor = ActionsProcessor::new();
         actions_processor.register_handler(
             1,
@@ -98,12 +188,11 @@ mod tests {
     use super::*;
     use serial_test::serial;
     use std::env;
-    use std::io::Write;
-    use tempfile::NamedTempFile;
 
-    // Helper function to set test environment variables
-    fn set_test_env_vars() {
+    // Helper function to set test environment variables for substreams
+    fn set_substreams_env_vars() {
         unsafe {
+            env::set_var("DATA_SOURCE", "substreams");
             env::set_var(
                 "DATABASE_URL",
                 "postgresql://test:test@localhost:5432/test_db",
@@ -113,24 +202,67 @@ mod tests {
         }
     }
 
-    // Helper function to clear environment variables
-    fn clear_env_vars() {
+    // Helper function to set test environment variables for kafka
+    fn set_kafka_env_vars() {
         unsafe {
-            env::remove_var("DATABASE_URL");
-            env::remove_var("SUBSTREAMS_ENDPOINT");
-            env::remove_var("SUBSTREAMS_API_TOKEN");
+            env::set_var("DATA_SOURCE", "kafka");
+            env::set_var(
+                "DATABASE_URL",
+                "postgresql://test:test@localhost:5432/test_db",
+            );
+            env::set_var("KAFKA_BROKER", "localhost:9092");
+            env::set_var("KAFKA_CONSUMER_GROUP", "test-group");
+            env::set_var("KAFKA_TOPIC", "test-topic");
         }
     }
 
-    // Helper function to create a test package file
-    fn create_test_package_file() -> NamedTempFile {
-        let mut temp_file = NamedTempFile::new().expect("Failed to create temp file");
-        // Write minimal valid protobuf data for a package
-        // This is a simplified approach - in a real scenario you'd want proper protobuf data
-        temp_file
-            .write_all(b"dummy package data")
-            .expect("Failed to write to temp file");
-        temp_file
+    // Helper function to clear environment variables
+    fn clear_env_vars() {
+        unsafe {
+            env::remove_var("DATA_SOURCE");
+            env::remove_var("DATABASE_URL");
+            env::remove_var("SUBSTREAMS_ENDPOINT");
+            env::remove_var("SUBSTREAMS_API_TOKEN");
+            env::remove_var("KAFKA_BROKER");
+            env::remove_var("KAFKA_CONSUMER_GROUP");
+            env::remove_var("KAFKA_TOPIC");
+            env::remove_var("KAFKA_USERNAME");
+            env::remove_var("KAFKA_PASSWORD");
+            env::remove_var("KAFKA_SSL_CA_PEM");
+        }
+    }
+
+    #[test]
+    fn test_data_source_from_env_defaults_to_substreams() {
+        clear_env_vars();
+        assert_eq!(DataSource::from_env(), DataSource::Substreams);
+    }
+
+    #[test]
+    #[serial]
+    fn test_data_source_from_env_kafka() {
+        clear_env_vars();
+        unsafe {
+            env::set_var("DATA_SOURCE", "kafka");
+        }
+        assert_eq!(DataSource::from_env(), DataSource::Kafka);
+        clear_env_vars();
+    }
+
+    #[test]
+    #[serial]
+    fn test_data_source_from_env_case_insensitive() {
+        clear_env_vars();
+        unsafe {
+            env::set_var("DATA_SOURCE", "KAFKA");
+        }
+        assert_eq!(DataSource::from_env(), DataSource::Kafka);
+
+        unsafe {
+            env::set_var("DATA_SOURCE", "Kafka");
+        }
+        assert_eq!(DataSource::from_env(), DataSource::Kafka);
+        clear_env_vars();
     }
 
     #[tokio::test]
@@ -148,10 +280,11 @@ mod tests {
 
     #[tokio::test]
     #[serial]
-    #[should_panic(expected = "SUBSTREAMS_ENDPOINT must be set")]
+    #[should_panic(expected = "SUBSTREAMS_ENDPOINT must be set when DATA_SOURCE=substreams")]
     async fn test_dependencies_new_missing_substreams_endpoint() {
         clear_env_vars();
         unsafe {
+            env::set_var("DATA_SOURCE", "substreams");
             env::set_var(
                 "DATABASE_URL",
                 "postgresql://test:test@localhost:5432/test_db",
@@ -164,10 +297,11 @@ mod tests {
 
     #[tokio::test]
     #[serial]
-    #[should_panic(expected = "SUBSTREAMS_API_TOKEN must be set")]
+    #[should_panic(expected = "SUBSTREAMS_API_TOKEN must be set when DATA_SOURCE=substreams")]
     async fn test_dependencies_new_missing_api_token() {
         clear_env_vars();
         unsafe {
+            env::set_var("DATA_SOURCE", "substreams");
             env::set_var(
                 "DATABASE_URL",
                 "postgresql://test:test@localhost:5432/test_db",
@@ -180,12 +314,11 @@ mod tests {
 
     #[tokio::test]
     #[serial]
-    async fn test_dependencies_new_invalid_database_url() {
+    async fn test_dependencies_new_invalid_database_url_substreams() {
         clear_env_vars();
+        set_substreams_env_vars();
         unsafe {
             env::set_var("DATABASE_URL", "invalid-database-url");
-            env::set_var("SUBSTREAMS_ENDPOINT", "https://test-endpoint.com");
-            env::set_var("SUBSTREAMS_API_TOKEN", "test-token");
         }
 
         let result = Dependencies::new().await;
@@ -195,6 +328,27 @@ mod tests {
             // Expected error type - test passes
         } else {
             panic!("Expected Database error");
+        }
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_dependencies_new_invalid_database_url_kafka() {
+        clear_env_vars();
+        set_kafka_env_vars();
+        unsafe {
+            env::set_var("DATABASE_URL", "invalid-database-url");
+            env::set_var("KAFKA_USERNAME", "test-user");
+            env::set_var("KAFKA_PASSWORD", "test-password");
+        }
+
+        let result = Dependencies::new().await;
+        assert!(result.is_err());
+
+        if let Err(IndexingError::Database(_)) = result {
+            // Expected error type - test passes
+        } else {
+            panic!("Expected Database error, got: {:?}", result.err());
         }
     }
 

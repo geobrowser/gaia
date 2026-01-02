@@ -16,6 +16,7 @@ dependencies = [
  "thiserror 2.0.17",
  "tokio",
  "tokio-test",
+ "url",
  "uuid",
 ]
 
@@ -31,9 +32,12 @@ dependencies = [
  "async-trait",
  "chrono",
  "futures 0.3.31",
+ "hermes-kafka",
+ "hermes-schema",
  "lazy_static",
  "prost 0.13.5",
  "prost-types 0.13.5",
+ "rdkafka 0.36.2",
  "regex",
  "reqwest 0.11.27",
  "semver 1.0.27",
@@ -43,6 +47,7 @@ dependencies = [
  "tokio-retry",
  "tokio-stream",
  "tonic 0.12.3",
+ "url",
  "uuid",
 ]
 

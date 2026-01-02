@@ -3,4 +3,4 @@
 mod dependencies;
 mod handlers;
 
-pub use dependencies::Dependencies;
+pub use dependencies::{DataSource, Dependencies};

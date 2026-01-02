@@ -1,0 +1,116 @@
+# =============================================================================
+# Actions Indexer Deployment
+# =============================================================================
+# Consumes action events from Hermes Kafka stream and indexes them to PostgreSQL
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: actions-indexer
+  namespace: actions
+  labels:
+    app: actions-indexer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: actions-indexer
+  template:
+    metadata:
+      labels:
+        app: actions-indexer
+    spec:
+      imagePullSecrets:
+        - name: regcred
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+        - name: actions-indexer
+          image: registry.digitalocean.com/geo/actions-indexer:latest
+          imagePullPolicy: Always
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          env:
+            # Data source configuration
+            - name: DATA_SOURCE
+              value: "kafka"
+            # Database connection
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: actions-indexer-secrets
+                  key: DATABASE_URL
+            # Kafka connection (managed Kafka with SSL)
+            - name: KAFKA_BROKER
+              valueFrom:
+                secretKeyRef:
+                  name: kafka-credentials
+                  key: KAFKA_BROKER
+            - name: KAFKA_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: kafka-credentials
+                  key: KAFKA_USERNAME
+            - name: KAFKA_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: kafka-credentials
+                  key: KAFKA_PASSWORD
+            - name: KAFKA_SSL_CA_PEM
+              valueFrom:
+                secretKeyRef:
+                  name: kafka-credentials
+                  key: KAFKA_SSL_CA_PEM
+            # Kafka consumer configuration
+            - name: KAFKA_CONSUMER_GROUP
+              value: "actions-indexer"
+            - name: KAFKA_TOPIC
+              value: "curation.votes"
+            # Logging
+            - name: RUST_LOG
+              value: "info"
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+          # Health check - indexer logs to stdout regularly, so we check if process is running
+          livenessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - "ps aux | grep actions-indexer | grep -v grep"
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          # Readiness check before traffic is routed to the pod
+          readinessProbe:
+            exec:
+              command:
+                - /bin/sh
+                - -c
+                - "ps aux | grep actions-indexer | grep -v grep"
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+      restartPolicy: Always
+---
+# Secret for sensitive configuration
+apiVersion: v1
+kind: Secret
+metadata:
+  name: actions-indexer-secrets
+  namespace: actions
+type: Opaque
+stringData:
+  DATABASE_URL: ""  # Set via kubectl or CI/CD
+---

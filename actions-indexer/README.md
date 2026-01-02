@@ -1,12 +1,12 @@
 # Actions Indexer
 
-This crate provides the main application for indexing actions from Substreams. It orchestrates the entire process of consuming action events from a Substreams endpoint, processing them through registered handlers, and persisting the results to a PostgreSQL database.
+This crate provides the main application for indexing actions. It orchestrates the entire process of consuming action events from either a Substreams endpoint or a Hermes Kafka stream, processing them through registered handlers, and persisting the results to a PostgreSQL database.
 
 ## Overview
 
 The `actions-indexer` application follows a consumer-processor-loader architecture and is responsible for:
 
-- **Consuming**: Reading action events from Substreams using a configured endpoint and package
+- **Consuming**: Reading action events from Substreams or Kafka (Hermes)
 - **Processing**: Handling actions through registered handlers (currently supports vote actions)
 - **Loading**: Persisting processed actions to a PostgreSQL database
 - **Orchestrating**: Coordinating the data flow through the entire pipeline
@@ -15,9 +15,18 @@ The `actions-indexer` application follows a consumer-processor-loader architectu
 
 The application is built on three main components:
 
-- **ActionsConsumer**: Consumes actions from Substreams using the `SubstreamsStreamProvider`
+- **ActionsConsumer**: Consumes actions using either `SubstreamsStreamProvider` or `KafkaStreamProvider`
 - **ActionsProcessor**: Processes actions through registered handlers (e.g., `VoteHandler` for vote actions)
 - **ActionsLoader**: Persists processed actions using the `PostgresActionsRepository`
+
+### Data Sources
+
+The indexer supports two data sources, configurable via the `DATA_SOURCE` environment variable:
+
+| Data Source | Description | Use Case |
+|-------------|-------------|----------|
+| `kafka` | Consumes from Hermes Kafka stream | Production (recommended) |
+| `substreams` | Consumes directly from blockchain via Substreams | Legacy/fallback |
 
 ## Supported Actions
 
@@ -84,26 +93,55 @@ payload: 0x00 (upvote)
 
 ### Environment Variables
 
-The following environment variables must be set before running the application:
+Copy `.env.example` to `.env` and configure the required variables.
+
+#### Required Variables
 
 | Variable | Description |
 |----------|-------------|
 | `DATABASE_URL` | PostgreSQL database connection string |
-| `SUBSTREAMS_ENDPOINT` | The Substreams API endpoint URL |
-| `SUBSTREAMS_API_TOKEN` | Authentication token for Substreams API access |
+| `DATA_SOURCE` | Data source selection: `kafka` (recommended) or `substreams` |
 
-You can set these variables in a `.env` file in the project root:
+#### Kafka Configuration (when `DATA_SOURCE=kafka`)
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `KAFKA_BROKER` | Yes | Kafka broker address (e.g., `localhost:9092`) |
+| `KAFKA_CONSUMER_GROUP` | Yes | Consumer group ID - must be stable across restarts |
+| `KAFKA_TOPIC` | Yes | Topic to consume vote events from (e.g., `curation.votes`) |
+| `KAFKA_USERNAME` | No | SASL username for managed Kafka (e.g., Confluent Cloud) |
+| `KAFKA_PASSWORD` | No | SASL password for managed Kafka |
+| `KAFKA_SSL_CA_PEM` | No | Custom CA certificate for SSL (PEM format) |
+
+#### Substreams Configuration (when `DATA_SOURCE=substreams`)
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `SUBSTREAMS_ENDPOINT` | Yes | The Substreams API endpoint URL |
+| `SUBSTREAMS_API_TOKEN` | Yes | Authentication token for Substreams API access |
+
+### Example Configuration
 
 ```bash
-DATABASE_URL= # Your database connection string
-SUBSTREAMS_ENDPOINT= # Substreams endpoint URL
-SUBSTREAMS_API_TOKEN= # Substream API token
+# Common
+DATABASE_URL=postgresql://user:password@localhost:5432/actions_indexer
+DATA_SOURCE=kafka
+
+# Kafka (recommended for production)
+KAFKA_BROKER=localhost:9092
+KAFKA_CONSUMER_GROUP=actions-indexer
+KAFKA_TOPIC=curation.votes
+
+# Or Substreams (legacy)
+# DATA_SOURCE=substreams
+# SUBSTREAMS_ENDPOINT=https://mainnet.eth.streamingfast.io:443
+# SUBSTREAMS_API_TOKEN=your-api-token
 ```
 
 ### Substreams Package
 
-The application uses a packaged Substreams module located at:
-- **Package**: `./src/package/geo-actions-v0.1.0.spkg`
+When using Substreams as the data source, the application uses a packaged Substreams module located at:
+- **Package**: `./geo-actions-v0.1.0.spkg`
 - **Module**: `map_actions`
 
 ## Database Setup

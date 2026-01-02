@@ -6,7 +6,7 @@ mod loader;
 mod orchestrator;
 mod processor;
 
-pub use consumer::ConsumerError;
+pub use consumer::{ConfigError, ConsumerError, ConversionError, KafkaError, StreamError};
 pub use loader::LoaderError;
 pub use orchestrator::OrchestratorError;
 pub use processor::ProcessorError;

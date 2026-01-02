@@ -1,4 +1,4 @@
-use crate::types::{ActionType, GroupId, ObjectId, ObjectType, SpaceId, UserAddress};
+use crate::types::{ActionType, GroupId, ObjectId, ObjectType, SpaceId, UserId};
 use alloy::primitives::{BlockNumber, BlockTimestamp, Bytes, TxHash};
 use serde::{Deserialize, Serialize};
 
@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 pub struct ActionRaw {
     pub action_type: ActionType,
     pub action_version: u64,
-    pub sender: UserAddress,
+    pub user_id: UserId,
     pub object_id: ObjectId,
     pub group_id: Option<GroupId>,
     pub space_pov: SpaceId,

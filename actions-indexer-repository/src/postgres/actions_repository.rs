@@ -21,7 +21,6 @@ use actions_indexer_shared::types::{
     Action, Changeset, ObjectId, ObjectType, UserVote, VoteCountCriteria, VoteCriteria, VoteValue,
     VotesCount,
 };
-use alloy::{hex::FromHex, primitives::Address};
 use async_trait::async_trait;
 use hex;
 use time::OffsetDateTime;
@@ -82,7 +81,7 @@ impl PostgresActionsRepository {
         }
 
         let mut query_builder = sqlx::QueryBuilder::new(
-            "INSERT INTO raw_actions (action_type, action_version, sender, object_id, group_id, space_pov, metadata, block_number, block_timestamp, tx_hash, object_type)",
+            "INSERT INTO raw_actions (action_type, action_version, user_id, object_id, group_id, space_pov, metadata, block_number, block_timestamp, tx_hash, object_type)",
         );
 
         query_builder.push_values(actions, |mut b, action| {
@@ -94,10 +93,7 @@ impl PostgresActionsRepository {
                             .unwrap_or(OffsetDateTime::now_utc());
                     b.push_bind(vote_action.raw.action_type as i64)
                         .push_bind(vote_action.raw.action_version as i64)
-                        .push_bind(format!(
-                            "0x{}",
-                            hex::encode(vote_action.raw.sender.as_slice())
-                        ))
+                        .push_bind(vote_action.raw.user_id)
                         .push_bind(vote_action.raw.object_id.clone())
                         .push_bind(vote_action.raw.group_id.clone())
                         .push_bind(vote_action.raw.space_pov.clone())
@@ -156,7 +152,7 @@ impl PostgresActionsRepository {
                     vote_type = EXCLUDED.vote_type,
                     voted_at = EXCLUDED.voted_at
                 "#,
-                format!("0x{}", hex::encode(vote.user_id.as_slice())),
+                vote.user_id,
                 vote.object_id.clone(),
                 vote.object_type as i16,
                 vote.space_id.clone(),
@@ -362,7 +358,7 @@ impl ActionsRepository for PostgresActionsRepository {
 
         let user_ids: Vec<String> = vote_criteria
             .iter()
-            .map(|(u, _, _, _)| format!("0x{}", hex::encode(u.as_slice())))
+            .map(|(u, _, _, _)| u.to_string())
             .collect();
         let object_ids: Vec<ObjectId> = vote_criteria.iter().map(|(_, o, _, _)| *o).collect();
         let space_ids: Vec<Uuid> = vote_criteria.iter().map(|(_, _, s, _)| *s).collect();
@@ -372,7 +368,7 @@ impl ActionsRepository for PostgresActionsRepository {
             r#"
             SELECT user_id, object_id, object_type, space_id, vote_type, voted_at
             FROM user_votes
-            WHERE (user_id, object_id, space_id, object_type) IN (SELECT * FROM UNNEST($1::text[], $2::uuid[], $3::uuid[], $4::smallint[]))
+            WHERE (user_id::text, object_id, space_id, object_type) IN (SELECT * FROM UNNEST($1::text[], $2::uuid[], $3::uuid[], $4::smallint[]))
             "#,
             &user_ids,
             &object_ids,
@@ -385,8 +381,7 @@ impl ActionsRepository for PostgresActionsRepository {
         let mut result_votes = Vec::with_capacity(votes.len());
         for v in votes {
             result_votes.push(UserVote {
-                user_id: Address::from_hex(&v.user_id)
-                    .map_err(|_| ActionsRepositoryError::InvalidAddress(v.user_id))?,
+                user_id: v.user_id,
                 object_id: v.object_id,
                 space_id: v.space_id,
                 object_type: match v.object_type {

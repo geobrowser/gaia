@@ -15,7 +15,9 @@ sqlx = { version = "0.8", features = [
 ] }
 thiserror = "2.0.12"
 actions-indexer-shared = { path = "../actions-indexer-shared" }
-actions-indexer-repository = { path = "../actions-indexer-repository" } 
+actions-indexer-repository = { path = "../actions-indexer-repository" }
+hermes-schema = { path = "../hermes-schema" }
+hermes-kafka = { path = "../hermes-kafka" }
 anyhow = "1"
 async-stream = "0.3"
 reqwest = "0.11"
@@ -37,8 +39,7 @@ regex = "1.11.1"
 lazy_static = "1.5.0"
 semver = "1.0.23"
 futures03 = { version = "0.3.1", package = "futures", features = ["compat"] }
-
-
-[dev-dependencies]
+url = "2.5.7"
 alloy = "1.0.24"
 uuid = "1.18.0"
+rdkafka = { version = "0.36", features = ["cmake-build", "zstd", "ssl"] }

@@ -1,11 +1,13 @@
 //! Consumer module for the actions indexer pipeline.
 //!
 //! Provides the `ConsumeActions` trait for consuming blockchain action events
-//! from data sources like substreams. Acts as the entry point for the pipeline,
+//! from data sources like substreams or Kafka. Acts as the entry point for the pipeline,
 //! feeding data to processing and loading components.
 use crate::errors::ConsumerError;
 
+pub mod kafka;
 pub mod stream;
+pub use kafka::ConsumerConfig;
 
 use actions_indexer_shared::types::ActionRaw;
 use async_trait::async_trait;

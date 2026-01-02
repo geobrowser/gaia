@@ -571,7 +571,7 @@ export const rawActions = pgTable(
 		id: serial("id").primaryKey(),
 		actionType: bigint("action_type", { mode: "number" }).notNull(),
 		actionVersion: bigint("action_version", { mode: "number" }).notNull(),
-		sender: varchar("sender", { length: 42 }).notNull(),
+		userId: uuid("user_id").notNull(),
 		objectId: uuid("object_id").notNull(),
 		groupId: uuid("group_id"),
 		spacePov: uuid("space_pov").notNull(),
@@ -594,7 +594,7 @@ export const userVotes = pgTable(
 	"user_votes",
 	{
 		id: serial("id").primaryKey(),
-		userId: varchar("user_id", { length: 42 }).notNull(),
+		userId: uuid("user_id").notNull(),
 		objectId: uuid("object_id").notNull(),
 		objectType: smallint("object_type").notNull(),
 		spaceId: uuid("space_id").notNull(),
