@@ -88,10 +88,10 @@ async fn main() -> Result<(), IndexerError> {
         env::var("DATABASE_URL").map_err(|_| IndexerError::config("DATABASE_URL not set"))?;
     let kafka_broker = env::var("KAFKA_BROKER").unwrap_or_else(|_| "localhost:9092".to_string());
     let kafka_group_id = env::var("KAFKA_GROUP_ID").unwrap_or_else(|_| "kg-indexer".to_string());
-    let stale_timeout_secs: u64 = env::var("BLOCK_STALE_TIMEOUT_SECS")
+    let stale_timeout_ms: u64 = env::var("BLOCK_STALE_TIMEOUT_MS")
         .ok()
         .and_then(|s| s.parse().ok())
-        .unwrap_or(1);
+        .unwrap_or(250);
 
     // Initialize storage
     let storage = Storage::new(&database_url).await?;
@@ -123,15 +123,15 @@ async fn main() -> Result<(), IndexerError> {
     // for stale blocks (buffered longer than `stale_timeout`). The tick runs independently
     // of the Kafka stream, so even if no messages arrive, stale blocks get processed.
     let mut stream = consumer.stream();
-    let stale_timeout = Duration::from_secs(stale_timeout_secs);
+    let stale_timeout = Duration::from_millis(stale_timeout_ms);
     let mut buffer = BlockBuffer::new(stale_timeout);
     let mut processed_count: u64 = 0;
     let mut error_count: u64 = 0;
     let mut blocks_processed: u64 = 0;
-    let mut stale_check_interval = tokio::time::interval(Duration::from_secs(1));
+    let mut stale_check_interval = tokio::time::interval(Duration::from_millis(100));
 
     info!(
-        stale_timeout_secs = stale_timeout_secs,
+        stale_timeout_ms = stale_timeout_ms,
         "Starting message processing loop"
     );
 
@@ -150,7 +150,7 @@ async fn main() -> Result<(), IndexerError> {
                     warn!(
                         block_number = block_number,
                         event_count = event_count,
-                        stale_timeout_secs = stale_timeout_secs,
+                        stale_timeout_ms = stale_timeout_ms,
                         "Force-processing stale block"
                     );
                     match process_block(events, &storage, &consumer).await {
