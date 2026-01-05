@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO editors (address, space_id)\n            SELECT address, space_id\n            FROM UNNEST($1::text[], $2::uuid[])\n            AS t(address, space_id)\n            ON CONFLICT (address, space_id) DO NOTHING\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "TextArray",
+        "UuidArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "930a4bd7a07a162ea7c3311f4822885ee43930eefdcc2064db17863f573f1a8d"
+}
