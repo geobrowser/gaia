@@ -3,6 +3,7 @@ pub mod governance;
 pub mod knowledge;
 pub mod membership;
 pub mod moderation;
+pub mod scoring;
 pub mod space;
 pub mod topics;
 pub mod topology;
