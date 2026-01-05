@@ -20,6 +20,7 @@ COPY kg-indexer ./kg-indexer
 
 # Build from the crate directory (standalone, not as workspace member)
 WORKDIR /app/kg-indexer
+ENV SQLX_OFFLINE=true
 RUN cargo build --release
 
 FROM debian:bookworm-slim
