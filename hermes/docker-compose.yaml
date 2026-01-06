@@ -58,10 +58,17 @@ services:
       kafka.clusters.0.serde.3.topicValuesPattern: "topology.canonical"
       kafka.clusters.0.serde.3.properties.protobufFilesDir: /proto/
       kafka.clusters.0.serde.3.properties.protobufMessageName: topology.CanonicalGraphUpdated
+      # Protobuf serde for curation.scores topic
+      kafka.clusters.0.serde.4.name: CurationScores
+      kafka.clusters.0.serde.4.className: com.provectus.kafka.ui.serdes.builtin.ProtobufFileSerde
+      kafka.clusters.0.serde.4.topicValuesPattern: "curation.scores"
+      kafka.clusters.0.serde.4.properties.protobufFilesDir: /proto/
+      kafka.clusters.0.serde.4.properties.protobufMessageName: scoring.HermesScoresBatch
     volumes:
       - ../wire/proto/grc20.proto:/proto/grc20.proto:ro
       - ../hermes-schema/proto/blockchain_metadata.proto:/proto/blockchain_metadata.proto:ro
       - ../hermes-schema/proto/knowledge.proto:/proto/knowledge.proto:ro
+      - ../hermes-schema/proto/scoring.proto:/proto/scoring.proto:ro
       - ../hermes-schema/proto/space.proto:/proto/space.proto:ro
       - ../hermes-schema/proto/topology.proto:/proto/topology.proto:ro
     depends_on:
