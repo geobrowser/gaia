@@ -18,19 +18,21 @@ Actions emitted from the Space Registry contract have the following structure:
 | Action | Kafka Topic | Proto Message |
 |--------|-------------|---------------|
 | PROPOSAL_CREATED | `space.governance` | `HermesProposalCreated` (one per action) |
+| PROPOSAL_SETTINGS_SELECTED | `space.governance` | Squashed with PROPOSAL_CREATED |
 | PROPOSAL_VOTED | `space.governance` | `HermesProposalVoted` |
 | PROPOSAL_EXECUTED | `space.governance` | `HermesProposalExecuted` |
+| MEMBERSHIP_REQUESTED | `space.governance` | Triggers PROPOSAL_CREATED + PROPOSAL_SETTINGS_SELECTED |
 
 #### PROPOSAL_CREATED
 
-**Onchain:**
+**Onchain (ZC16):**
 - Action: `keccak256('GOVERNANCE.PROPOSAL_CREATED')`
-- Topic: `bytes32(proposalId)` - counter-based proposal ID
-- Data: `abi.encode(VotingMode, Action[])`
+- Topic: `bytes32(proposalId)` - set by fetch()
+- Data: `abi.encode(bytes16 proposalId, VotingMode votingMode, Action[] actions)`
 
-**VotingMode:** `Fast (0)`, `Slow (1)`
-- Fast path: threshold-based, immediate execution, single action only
+**VotingMode:** `Slow (0)`, `Fast (1)`
 - Slow path: majority voting with voting window, multiple actions allowed
+- Fast path: threshold-based, immediate execution, single action only
 
 **Action struct:**
 | Field | Type |
@@ -64,7 +66,7 @@ One event is emitted **per action** in the proposal. For proposals with multiple
 | `target_address` | bytes (20) - decoded address argument (for address-taking actions) |
 
 The `target_address` field is populated for actions that take an address argument:
-`ADD_MEMBER`, `REMOVE_MEMBER`, `ADD_EDITOR`, `REMOVE_EDITOR`, `UNFLAG_EDITOR`
+`ADD_MEMBER`, `REMOVE_MEMBER`, `ADD_EDITOR`, `REMOVE_EDITOR`, `UNRESTRICT_SPACE`
 
 **ProposalActionType** (decoded from first 4 bytes of calldata):
 
@@ -78,18 +80,18 @@ The `target_address` field is populated for actions that take an address argumen
 | `PUBLISH` | `0x6b47f61a` | `publish(bytes32,bytes,bytes)` |
 | `FLAG` | `0xfe1e3042` | `flag(bytes32,bytes)` |
 | `UNFLAG` | `0xc696840f` | `unflag(bytes32,bytes)` |
-| `UNFLAG_EDITOR` | `0x08f0df71` | `unflagEditor(address)` |
+| `UNRESTRICT_SPACE` | `0x5e865873` | `unrestrictSpace(address)` |
 | `UPDATE_VOTING_SETTINGS` | `0xd21e8541` | `updateVotingSettings((uint256,uint256,uint256,uint256))` |
 | `PING` | `0xc70d8282` | `ping(bytes32,bytes32,bytes)` |
 
 #### PROPOSAL_VOTED
 
-**Onchain:**
+**Onchain (ZC16):**
 - Action: `keccak256('GOVERNANCE.PROPOSAL_VOTED')`
-- Topic: `bytes32(proposalId)`
-- Data: `abi.encode(uint256(proposalId), VoteOption)`
+- Topic: `bytes32(proposalId)` - set by fetch()
+- Data: `abi.encode(bytes16 proposalId, VoteOption voteOption)`
 
-**VoteOption:** `None (0)`, `Yes (1)`, `No (2)`, `Abstain (3)`
+**VoteOption:** `None (0)`, `Abstain (1)`, `Yes (2)`, `No (3)`
 
 **Proto Output:** `HermesProposalVoted`
 | Field | Source | Type |
@@ -101,16 +103,55 @@ The `target_address` field is populated for actions that take an address argumen
 
 #### PROPOSAL_EXECUTED
 
-**Onchain:**
+**Onchain (ZC16):**
 - Action: `keccak256('GOVERNANCE.PROPOSAL_EXECUTED')`
-- Topic: `bytes32(proposalId)`
-- Data: `abi.encode(uint256(proposalId))` (redundant)
+- Topic: `bytes32(proposalId)` - set by fetch()
+- Data: `abi.encode(bytes16 proposalId)`
 
 **Proto Output:** `HermesProposalExecuted`
 | Field | Source | Type |
 |-------|--------|------|
 | `space_id` | `from_id` | bytes (16) |
 | `proposal_id` | `topic` | bytes (32) |
+
+#### PROPOSAL_SETTINGS_SELECTED
+
+Emitted by the DAO (ping pattern) after a proposal is created or escalated.
+
+**Onchain (ZC16):**
+- Action: `keccak256('GOVERNANCE.PROPOSAL_SETTINGS_SELECTED')`
+- Topic: `bytes32(proposalId)`
+- Data: `abi.encode(uint256 startDate, uint256 lastDate, VotingMode votingMode, uint256 quorum, uint256 supportThreshold)`
+
+**Note:** This event is squashed with PROPOSAL_CREATED during pipeline processing.
+The voting settings are merged into the `HermesProposalCreated` message.
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `startDate` | uint256 | Voting period start timestamp |
+| `lastDate` | uint256 | Voting period end timestamp |
+| `votingMode` | uint8 | Slow (0) or Fast (1) |
+| `quorum` | uint256 | Minimum total votes required |
+| `supportThreshold` | uint256 | Flat threshold (fast) or percentage of RATIO_BASE (slow) |
+
+#### MEMBERSHIP_REQUESTED
+
+Emitted via `enter()` when a space requests to join a DAO as a member.
+This action triggers an internal `createProposal()` which emits PROPOSAL_CREATED + PROPOSAL_SETTINGS_SELECTED.
+
+**Onchain (ZC16):**
+- Action: `keccak256('GOVERNANCE.MEMBERSHIP_REQUESTED')`
+- Topic: `bytes32(proposalId)` - set by fetch()
+- Data: `abi.encode(bytes16 proposalId, address newMember)`
+
+**Proto Output:** Processed as part of the triggered PROPOSAL_CREATED flow
+
+| Field | Source | Type |
+|-------|--------|------|
+| `requester_id` | `from_id` | bytes (16) |
+| `space_id` | `to_id` | bytes (16) |
+| `proposal_id` | `topic` | bytes (32) |
+| `new_member` | Decoded from `data` | address (20 bytes) |
 
 ---
 
@@ -169,23 +210,36 @@ The `target_address` field is populated for actions that take an address argumen
 
 | Action | Kafka Topic | Proto Message |
 |--------|-------------|---------------|
-| EDITOR_FLAGGED | `space.moderation` | `HermesEditorFlagged` |
-| EDITOR_UNFLAGGED | `space.moderation` | `HermesEditorUnflagged` |
+| SPACE_FAST_PATH_RESTRICTED | `space.moderation` | `HermesEditorFlagged` |
+| SPACE_FAST_PATH_UNRESTRICTED | `space.moderation` | `HermesEditorUnflagged` |
 | FLAGGED | `space.moderation` | `HermesContentFlagged` |
 | UNFLAGGED | `space.moderation` | `HermesContentUnflagged` |
 
-#### EDITOR_FLAGGED / EDITOR_UNFLAGGED
+#### SPACE_FAST_PATH_RESTRICTED
 
-**Onchain:**
-- Action: `keccak256('GOVERNANCE.EDITOR_FLAGGED')` / `EDITOR_UNFLAGGED`
-- Topic: `bytes32(bytes20(editorAddress))`
-- Data: empty
+**Onchain (ZC16):**
+- Action: `keccak256('GOVERNANCE.SPACE_FAST_PATH_RESTRICTED')`
+- Topic: `bytes32(spaceId)` - restricted space's ID (set by fetch())
+- Data: `abi.encode(address)` - restricted space's address
 
-**Proto Output:** `HermesEditorFlagged` / `HermesEditorUnflagged`
+**Proto Output:** `HermesEditorFlagged`
 | Field | Source | Type |
 |-------|--------|------|
 | `space_id` | `from_id` | bytes (16) |
-| `editor_account` | `topic[12..32]` | bytes (20) |
+| `editor_account` | `data[12..32]` | bytes (20) |
+
+#### SPACE_FAST_PATH_UNRESTRICTED
+
+**Onchain (ZC16):**
+- Action: `keccak256('GOVERNANCE.SPACE_FAST_PATH_UNRESTRICTED')`
+- Topic: `bytes32(spaceId)` - unrestricted space's ID
+- Data: `abi.encode(address)` - unrestricted space's address
+
+**Proto Output:** `HermesEditorUnflagged`
+| Field | Source | Type |
+|-------|--------|------|
+| `space_id` | `from_id` | bytes (16) |
+| `editor_account` | `data[12..32]` | bytes (20) |
 
 #### FLAGGED / UNFLAGGED
 
@@ -216,38 +270,38 @@ The `target_address` field is populated for actions that take an address argumen
 
 #### EDITOR_ADDED / MEMBER_ADDED
 
-**Onchain:**
+**Onchain (ZC16):**
 - Action: `keccak256('GOVERNANCE.EDITOR_ADDED')` / `MEMBER_ADDED`
-- Topic: `bytes32(bytes20(accountAddress))`
-- Data: empty
+- Topic: `bytes32(spaceId)` - target space ID (zeros for self)
+- Data: `abi.encode(address)` - 32 bytes with address in last 20 bytes
 
 **Proto Output:** `HermesRoleGranted`
 | Field | Source | Type |
 |-------|--------|------|
 | `space_id` | `from_id` | bytes (16) |
-| `account` | `topic[12..32]` | bytes (20) |
+| `account` | `data[12..32]` | bytes (20) |
 | `role` | Action type | `MembershipRole` enum |
 
 #### EDITOR_REMOVED / MEMBER_REMOVED
 
-**Onchain:**
+**Onchain (ZC16):**
 - Action: `keccak256('GOVERNANCE.EDITOR_REMOVED')` / `MEMBER_REMOVED`
-- Topic: `bytes32(bytes20(accountAddress))`
-- Data: empty
+- Topic: `bytes32(spaceId)` - target space ID (zeros for self)
+- Data: `abi.encode(address)` - 32 bytes with address in last 20 bytes
 
 **Proto Output:** `HermesRoleRevoked`
 | Field | Source | Type |
 |-------|--------|------|
 | `space_id` | `from_id` | bytes (16) |
-| `account` | `topic[12..32]` | bytes (20) |
+| `account` | `data[12..32]` | bytes (20) |
 | `role` | Action type | `MembershipRole` enum |
 
 #### SPACE_LEFT
 
-**Onchain:**
+**Onchain (ZC16):**
 - Action: `keccak256('GOVERNANCE.SPACE_LEFT')`
-- Topic: `bytes32(keccak256('ROLE'))` e.g., `keccak256('EDITOR')`
-- Data: empty
+- Topic: `bytes32(keccak256('ROLE'))` - set by fetch() from data, e.g., `keccak256('EDITOR')` or `keccak256('MEMBER')`
+- Data: `abi.encode(bytes32 role)` - the role being left
 
 **Proto Output:** `HermesSpaceLeft`
 | Field | Source | Type |

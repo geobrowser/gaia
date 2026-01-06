@@ -125,31 +125,36 @@ fn make_downvote_action(voter_id: [u8; 16]) -> Action {
 }
 
 /// Generate an editor added action.
+///
+/// ZC16 format: topic is target space ID (zeros for self), data is ABI-encoded address.
 fn make_editor_added_action(space_id: [u8; 16]) -> Action {
-    // Topic contains padded address
-    let mut topic = vec![0u8; 32];
-    topic[12..32].copy_from_slice(&[0xFF; 20]); // address in last 20 bytes
+    // ZC16: Data contains ABI-encoded address (12 zeros + 20 byte address)
+    let mut data = vec![0u8; 32];
+    data[12..32].copy_from_slice(&[0xFF; 20]);
 
     Action {
         from_id: space_id.to_vec(),
         to_id: vec![],
         action: actions::EDITOR_ADDED.to_vec(),
-        topic,
-        data: vec![],
+        topic: vec![0u8; 32], // ZC16: topic is target space ID (zeros for self)
+        data,
     }
 }
 
 /// Generate a member added action.
+///
+/// ZC16 format: topic is target space ID (zeros for self), data is ABI-encoded address.
 fn make_member_added_action(space_id: [u8; 16]) -> Action {
-    let mut topic = vec![0u8; 32];
-    topic[12..32].copy_from_slice(&[0xEE; 20]);
+    // ZC16: Data contains ABI-encoded address (12 zeros + 20 byte address)
+    let mut data = vec![0u8; 32];
+    data[12..32].copy_from_slice(&[0xEE; 20]);
 
     Action {
         from_id: space_id.to_vec(),
         to_id: vec![],
         action: actions::MEMBER_ADDED.to_vec(),
-        topic,
-        data: vec![],
+        topic: vec![0u8; 32], // ZC16: topic is target space ID (zeros for self)
+        data,
     }
 }
 
