@@ -22,6 +22,37 @@ spec:
                     secretKeyRef:
                       name: scoring-service-credentials
                       key: DATABASE_URL
+                # Output mode: postgres, kafka, or all
+                - name: OUTPUT_MODE
+                  value: "all"
+                # Kafka configuration
+                - name: KAFKA_BROKER
+                  valueFrom:
+                    secretKeyRef:
+                      name: kafka-credentials
+                      key: KAFKA_BROKER
+                - name: KAFKA_USERNAME
+                  valueFrom:
+                    secretKeyRef:
+                      name: kafka-credentials
+                      key: username
+                      optional: true
+                - name: KAFKA_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: kafka-credentials
+                      key: password
+                      optional: true
+                - name: KAFKA_SSL_CA_PEM
+                  valueFrom:
+                    secretKeyRef:
+                      name: kafka-credentials
+                      key: ca-pem
+                      optional: true
+                - name: KAFKA_TOPIC
+                  value: "curation.scores"
+                - name: SCORE_BATCH_SIZE
+                  value: "1000"
               resources:
                 requests:
                   memory: "1024Mi"
