@@ -4,6 +4,7 @@ import {createYoga, useExecutionCancellation} from "graphql-yoga"
 import {Pool} from "pg"
 import {createPostGraphileSchema, withPostGraphileContext} from "postgraphile"
 import ConnectionFilterPlugin from "postgraphile-plugin-connection-filter"
+import UndashedUuidPlugin from "./uuidScalarPlugin"
 
 // Create PostgreSQL pool
 const pgPool = new Pool({
@@ -18,7 +19,7 @@ const postgraphileOptions = {
 	dynamicJson: true,
 	setofFunctionsContainNulls: false,
 	ignoreRBAC: false,
-	appendPlugins: [ConnectionFilterPlugin, SimplifyInflectionPlugin],
+	appendPlugins: [UndashedUuidPlugin, ConnectionFilterPlugin, SimplifyInflectionPlugin],
 	disableDefaultMutations: true,
 	simpleCollections: "both" as const,
 	graphileBuildOptions: {
