@@ -25,7 +25,7 @@ pub fn handle_create_space(space: &HermesCreateSpace) -> Result<SpaceItem, Handl
             }
         }
         Some(Payload::DefaultDaoSpace(_dao)) => {
-            let space_id_hex = hex::encode(&space.space_id);
+            let space_id_hex = format!("0x{}", hex::encode(&space.space_id));
 
             SpaceItem {
                 id: space_id,

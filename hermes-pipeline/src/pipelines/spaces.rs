@@ -85,7 +85,8 @@ fn convert(
     sequence: u32,
 ) -> Result<HermesCreateSpace> {
     let space_id = action.to_id.clone();
-    let owner_address = action.topic.clone();
+    // Extract 20-byte address from 32-byte topic (address is left-aligned, right-padded with zeros)
+    let owner_address = action.topic.get(0..20).map(|s| s.to_vec()).unwrap_or_default();
 
     // Determine payload based on space_type
     let payload = match space_type {
@@ -147,20 +148,32 @@ mod tests {
 
     #[test]
     fn test_convert_eoa_space_with_type() {
+        // Create a 32-byte topic with distinct address bytes (first 20) and padding (last 12)
+        let mut topic = vec![0u8; 32];
+        for i in 0..20 {
+            topic[i] = (i + 1) as u8; // Address bytes 1-20
+        }
+        // Last 12 bytes remain zero (padding)
+
         let action = Action {
             from_id: vec![0; 16], // zeros for SPACE_ID_REGISTERED
             to_id: vec![1; 16],   // space_id
             action: actions::SPACE_REGISTERED.to_vec(),
-            topic: vec![2; 32], // owner address
+            topic,
             data: vec![],
         };
 
         let result = convert(&action, Some(&actions::SPACE_TYPE_EOA), &test_meta(), 0).unwrap();
         assert_eq!(result.space_id, vec![1; 16]);
-        assert!(matches!(
-            result.payload,
-            Some(hermes_create_space::Payload::EoaSpace(_))
-        ));
+
+        // Verify owner is extracted as 20 bytes, not full 32 bytes
+        if let Some(hermes_create_space::Payload::EoaSpace(eoa)) = &result.payload {
+            assert_eq!(eoa.owner.len(), 20, "Owner should be 20 bytes, not 32");
+            let expected_owner: Vec<u8> = (1..=20).collect();
+            assert_eq!(eoa.owner, expected_owner);
+        } else {
+            panic!("Expected EoaSpace payload");
+        }
     }
 
     #[test]
