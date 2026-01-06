@@ -4,20 +4,22 @@ package moderation;
 
 import "blockchain_metadata.proto";
 
-// HermesEditorFlagged - editor flagged within a space
-// Data: empty
+// HermesEditorFlagged - editor restricted from fast path
+// ZC16: topic = bytes32(editorSpaceId), data = abi.encode(editorAddress)
 message HermesEditorFlagged {
-  bytes space_id = 1;           // 16 bytes - space containing editor
-  bytes editor_account = 2;     // 20 bytes - flagged editor address
+  bytes space_id = 1;              // 16 bytes - DAO space where action occurs (from_id)
+  bytes editor_account = 2;        // 20 bytes - editor's account address (from data)
   blockchain_metadata.BlockchainMetadata meta = 3;
+  bytes editor_space_id = 4;       // 16 bytes - editor's space ID (from topic)
 }
 
-// HermesEditorUnflagged - editor unflagged within a space
-// Data: empty
+// HermesEditorUnflagged - editor unrestricted from fast path
+// ZC16: topic = bytes32(editorSpaceId), data = abi.encode(editorAddress)
 message HermesEditorUnflagged {
-  bytes space_id = 1;           // 16 bytes - space containing editor
-  bytes editor_account = 2;     // 20 bytes - unflagged editor address
+  bytes space_id = 1;              // 16 bytes - DAO space where action occurs (from_id)
+  bytes editor_account = 2;        // 20 bytes - editor's account address (from data)
   blockchain_metadata.BlockchainMetadata meta = 3;
+  bytes editor_space_id = 4;       // 16 bytes - editor's space ID (from topic)
 }
 
 // HermesContentFlagged - content flagged by a space

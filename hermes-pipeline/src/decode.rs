@@ -262,7 +262,7 @@ type EditsPublishedDataType = sol! { (bytes, bytes) };
 pub struct ProposalCreatedData {
     /// Proposal ID (16 bytes).
     pub proposal_id: Vec<u8>,
-    /// Voting mode (0=Fast, 1=Slow).
+    /// Voting mode (0=Slow, 1=Fast).
     pub voting_mode: u8,
     /// Actions to execute if proposal passes.
     pub actions: Vec<ProposalAction>,
@@ -359,7 +359,7 @@ pub struct ProposalVotedData {
     /// Proposal ID (16 bytes).
     #[allow(dead_code)] // Available for callers who need it
     pub proposal_id: Vec<u8>,
-    /// Vote option (0=None, 1=Yes, 2=No, 3=Abstain).
+    /// Vote option (0=None, 1=Abstain, 2=Yes, 3=No).
     pub vote: u8,
 }
 

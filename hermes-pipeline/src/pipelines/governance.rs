@@ -242,9 +242,16 @@ fn parse_proposal_created(action: &Action, sequence: u32) -> Option<ProposalCrea
     };
 
     let voting_mode = match decoded.voting_mode {
-        0 => VotingMode::Fast,
-        1 => VotingMode::Slow,
-        _ => VotingMode::Fast,
+        0 => VotingMode::Slow,
+        1 => VotingMode::Fast,
+        _ => {
+            warn!(
+                voting_mode = decoded.voting_mode,
+                proposal_id = %hex::encode(&action.topic[..16]),
+                "Invalid voting mode in proposal created"
+            );
+            return None;
+        }
     };
 
     // Convert decoded actions to proto format
@@ -301,16 +308,24 @@ fn parse_proposal_settings_used(action: &Action) -> Option<ProposalSettingsPendi
     };
 
     // Determine threshold type based on voting mode
+    // Slow=0 uses percentage threshold, Fast=1 uses flat threshold
     let (flat_threshold, percentage_threshold) = match decoded.voting_mode {
-        0 => (decoded.support_threshold, 0), // Fast path uses flat threshold
-        1 => (0, decoded.support_threshold), // Slow path uses percentage threshold
-        _ => (decoded.support_threshold, 0),
+        0 => (0, decoded.support_threshold), // Slow path uses percentage threshold
+        1 => (decoded.support_threshold, 0), // Fast path uses flat threshold
+        _ => {
+            warn!(
+                voting_mode = decoded.voting_mode,
+                proposal_id = %hex::encode(&action.topic[..16]),
+                "Invalid voting mode in proposal settings"
+            );
+            return None;
+        }
     };
 
     let voting_mode = match decoded.voting_mode {
-        0 => VotingMode::Fast,
-        1 => VotingMode::Slow,
-        _ => VotingMode::Fast,
+        0 => VotingMode::Slow,
+        1 => VotingMode::Fast,
+        _ => unreachable!(), // Already handled above
     };
 
     Some(ProposalSettingsPending {
@@ -338,13 +353,13 @@ fn convert_proposal_voted(
     sequence: u32,
 ) -> Result<HermesProposalVoted> {
     // Decode the data field
-    // VoteOption enum: None=0, Yes=1, No=2, Abstain=3
+    // VoteOption enum: None=0, Abstain=1, Yes=2, No=3
     let vote = match decode::decode_proposal_voted(&action.data) {
         Ok(decoded) => match decoded.vote {
             0 => ProposalVoteOption::VoteOptionNone,
-            1 => ProposalVoteOption::VoteOptionYes,
-            2 => ProposalVoteOption::VoteOptionNo,
-            3 => ProposalVoteOption::VoteOptionAbstain,
+            1 => ProposalVoteOption::VoteOptionAbstain,
+            2 => ProposalVoteOption::VoteOptionYes,
+            3 => ProposalVoteOption::VoteOptionNo,
             _ => ProposalVoteOption::VoteOptionNone,
         },
         Err(e) => {
@@ -462,7 +477,7 @@ mod tests {
                 to_id: space_id.clone(),
                 action: actions::PROPOSAL_CREATED.to_vec(),
                 topic: proposal_id.iter().copied().chain(vec![0; 16]).collect(),
-                data: encode_proposal_created_data(proposal_id, 0), // Fast path
+                data: encode_proposal_created_data(proposal_id, 1), // Fast path (1)
             },
             // PROPOSAL_SETTINGS_SELECTED (must have matching proposal_id)
             Action {
@@ -470,7 +485,7 @@ mod tests {
                 to_id: space_id.clone(),
                 action: actions::PROPOSAL_SETTINGS_SELECTED.to_vec(),
                 topic: proposal_id.iter().copied().chain(vec![0; 16]).collect(),
-                data: encode_proposal_settings_data(1000, 2000, 0, 100, 50),
+                data: encode_proposal_settings_data(1000, 2000, 1, 100, 50),
             },
         ];
 
@@ -504,7 +519,7 @@ mod tests {
                 to_id: vec![2; 16],
                 action: actions::PROPOSAL_CREATED.to_vec(),
                 topic: proposal_id.iter().copied().chain(vec![0; 16]).collect(),
-                data: encode_proposal_created_data(proposal_id, 0),
+                data: encode_proposal_created_data(proposal_id, 0), // Slow path (0)
             },
         ];
 
@@ -526,7 +541,7 @@ mod tests {
                 to_id: vec![1; 16],
                 action: actions::PROPOSAL_SETTINGS_SELECTED.to_vec(),
                 topic: proposal_id.iter().copied().chain(vec![0; 16]).collect(),
-                data: encode_proposal_settings_data(1000, 2000, 0, 100, 50),
+                data: encode_proposal_settings_data(1000, 2000, 0, 100, 50), // Slow path (0)
             },
         ];
 

@@ -87,7 +87,7 @@ pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformRe
 ///
 /// ZC16 action structure:
 /// - from_id: space_id (16 bytes) - space granting role
-/// - topic: bytes32(spaceId) - target space ID (unused for address extraction)
+/// - topic: bytes32(memberSpaceId) - member's space ID (first 16 bytes)
 /// - data: abi.encode(address) - 32 bytes with address in last 20 bytes
 fn convert_role_granted(
     action: &Action,
@@ -99,11 +99,15 @@ fn convert_role_granted(
     let account = decode_address(&action.data)
         .context("Failed to decode account address from data field")?;
 
+    // ZC16: Extract the member's space ID from the first 16 bytes of topic
+    let member_space_id = action.topic.get(..16).unwrap_or_default().to_vec();
+
     Ok(HermesRoleGranted {
         space_id: action.from_id.clone(),
         account,
         role: role as i32,
         meta: Some(meta.to_proto(sequence)),
+        member_space_id,
     })
 }
 
@@ -111,7 +115,7 @@ fn convert_role_granted(
 ///
 /// ZC16 action structure:
 /// - from_id: space_id (16 bytes) - space revoking role
-/// - topic: bytes32(spaceId) - target space ID (unused for address extraction)
+/// - topic: bytes32(memberSpaceId) - member's space ID (first 16 bytes)
 /// - data: abi.encode(address) - 32 bytes with address in last 20 bytes
 fn convert_role_revoked(
     action: &Action,
@@ -123,11 +127,15 @@ fn convert_role_revoked(
     let account = decode_address(&action.data)
         .context("Failed to decode account address from data field")?;
 
+    // ZC16: Extract the member's space ID from the first 16 bytes of topic
+    let member_space_id = action.topic.get(..16).unwrap_or_default().to_vec();
+
     Ok(HermesRoleRevoked {
         space_id: action.from_id.clone(),
         account,
         role: role as i32,
         meta: Some(meta.to_proto(sequence)),
+        member_space_id,
     })
 }
 
@@ -162,12 +170,13 @@ mod tests {
 
     #[test]
     fn test_convert_editor_added() {
-        // ZC16 format: address is ABI-encoded in data field (12 bytes padding + 20 bytes address)
+        // ZC16 format: topic contains member's space ID, data contains ABI-encoded address
+        let member_space_id: Vec<u8> = vec![0xAB; 16];
         let action = Action {
             from_id: vec![1; 16],
             to_id: vec![],
             action: actions::EDITOR_ADDED.to_vec(),
-            topic: vec![0; 32], // topic now contains space ID (not used for address)
+            topic: member_space_id.iter().copied().chain(vec![0; 16]).collect(), // bytes32(memberSpaceId)
             data: vec![0; 12].into_iter().chain(vec![2; 20]).collect(), // ABI-encoded address
         };
 
@@ -176,16 +185,18 @@ mod tests {
         assert_eq!(result.space_id, vec![1; 16]);
         assert_eq!(result.account, vec![2; 20]);
         assert_eq!(result.role, MembershipRole::Editor as i32);
+        assert_eq!(result.member_space_id, member_space_id);
     }
 
     #[test]
     fn test_convert_member_removed() {
-        // ZC16 format: address is ABI-encoded in data field (12 bytes padding + 20 bytes address)
+        // ZC16 format: topic contains member's space ID, data contains ABI-encoded address
+        let member_space_id: Vec<u8> = vec![0xCD; 16];
         let action = Action {
             from_id: vec![1; 16],
             to_id: vec![],
             action: actions::MEMBER_REMOVED.to_vec(),
-            topic: vec![0; 32], // topic now contains space ID (not used for address)
+            topic: member_space_id.iter().copied().chain(vec![0; 16]).collect(), // bytes32(memberSpaceId)
             data: vec![0; 12].into_iter().chain(vec![3; 20]).collect(), // ABI-encoded address
         };
 
@@ -194,6 +205,7 @@ mod tests {
         assert_eq!(result.space_id, vec![1; 16]);
         assert_eq!(result.account, vec![3; 20]);
         assert_eq!(result.role, MembershipRole::Member as i32);
+        assert_eq!(result.member_space_id, member_space_id);
     }
 
     #[test]
@@ -213,20 +225,22 @@ mod tests {
 
     #[test]
     fn test_transform_filters_actions() {
-        // ZC16 format: address is ABI-encoded in data field
+        // ZC16 format: topic contains member's space ID, data contains ABI-encoded address
+        let editor_member_space_id: Vec<u8> = vec![0xAA; 16];
+        let member_member_space_id: Vec<u8> = vec![0xBB; 16];
         let actions = vec![
             Action {
                 from_id: vec![1; 16],
                 to_id: vec![],
                 action: actions::EDITOR_ADDED.to_vec(),
-                topic: vec![0; 32],
+                topic: editor_member_space_id.iter().copied().chain(vec![0; 16]).collect(),
                 data: vec![0; 12].into_iter().chain(vec![2; 20]).collect(), // ABI-encoded address
             },
             Action {
                 from_id: vec![3; 16],
                 to_id: vec![],
                 action: actions::MEMBER_ADDED.to_vec(),
-                topic: vec![0; 32],
+                topic: member_member_space_id.iter().copied().chain(vec![0; 16]).collect(),
                 data: vec![0; 12].into_iter().chain(vec![4; 20]).collect(), // ABI-encoded address
             },
             Action {
@@ -251,5 +265,9 @@ mod tests {
         assert_eq!(result.roles_revoked.len(), 0);
         assert_eq!(result.spaces_left.len(), 1);
         assert_eq!(result.total(), 3);
+
+        // Verify member_space_id is extracted correctly
+        assert_eq!(result.roles_granted[0].member_space_id, editor_member_space_id);
+        assert_eq!(result.roles_granted[1].member_space_id, member_member_space_id);
     }
 }

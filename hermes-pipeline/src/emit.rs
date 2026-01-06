@@ -528,6 +528,7 @@ mod tests {
             account: vec![0xCD; 20],
             role: MembershipRole::Editor as i32,
             meta: None,
+            member_space_id: vec![0xEF; 16],
         };
         assert_eq!(event.key(), vec![0xAB; 16]);
     }

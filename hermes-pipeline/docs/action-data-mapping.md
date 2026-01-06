@@ -80,7 +80,7 @@ The `target_address` field is populated for actions that take an address argumen
 | `PUBLISH` | `0x6b47f61a` | `publish(bytes32,bytes,bytes)` |
 | `FLAG` | `0xfe1e3042` | `flag(bytes32,bytes)` |
 | `UNFLAG` | `0xc696840f` | `unflag(bytes32,bytes)` |
-| `UNRESTRICT_SPACE` | `0x5e865873` | `unrestrictSpace(address)` |
+| `UNRESTRICT_SPACE` | `0xb2c436ba` | `unrestrictSpace(address)` |
 | `UPDATE_VOTING_SETTINGS` | `0xd21e8541` | `updateVotingSettings((uint256,uint256,uint256,uint256))` |
 | `PING` | `0xc70d8282` | `ping(bytes32,bytes32,bytes)` |
 
@@ -272,7 +272,7 @@ This action triggers an internal `createProposal()` which emits PROPOSAL_CREATED
 
 **Onchain (ZC16):**
 - Action: `keccak256('GOVERNANCE.EDITOR_ADDED')` / `MEMBER_ADDED`
-- Topic: `bytes32(spaceId)` - target space ID (zeros for self)
+- Topic: `bytes32(memberSpaceId)` - member's space ID (first 16 bytes)
 - Data: `abi.encode(address)` - 32 bytes with address in last 20 bytes
 
 **Proto Output:** `HermesRoleGranted`
@@ -281,12 +281,13 @@ This action triggers an internal `createProposal()` which emits PROPOSAL_CREATED
 | `space_id` | `from_id` | bytes (16) |
 | `account` | `data[12..32]` | bytes (20) |
 | `role` | Action type | `MembershipRole` enum |
+| `member_space_id` | `topic[0..16]` | bytes (16) |
 
 #### EDITOR_REMOVED / MEMBER_REMOVED
 
 **Onchain (ZC16):**
 - Action: `keccak256('GOVERNANCE.EDITOR_REMOVED')` / `MEMBER_REMOVED`
-- Topic: `bytes32(spaceId)` - target space ID (zeros for self)
+- Topic: `bytes32(memberSpaceId)` - member's space ID (first 16 bytes)
 - Data: `abi.encode(address)` - 32 bytes with address in last 20 bytes
 
 **Proto Output:** `HermesRoleRevoked`
@@ -295,6 +296,7 @@ This action triggers an internal `createProposal()` which emits PROPOSAL_CREATED
 | `space_id` | `from_id` | bytes (16) |
 | `account` | `data[12..32]` | bytes (20) |
 | `role` | Action type | `MembershipRole` enum |
+| `member_space_id` | `topic[0..16]` | bytes (16) |
 
 #### SPACE_LEFT
 

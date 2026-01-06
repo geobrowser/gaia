@@ -10,6 +10,8 @@ use hermes_schema::pb::moderation::{
     HermesContentFlagged, HermesContentUnflagged, HermesEditorFlagged, HermesEditorUnflagged,
 };
 
+use anyhow::Context;
+
 use crate::decode;
 
 use super::BlockMetadata;
@@ -82,49 +84,52 @@ pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformRe
 
 /// Convert a SPACE_FAST_PATH_RESTRICTED action to HermesEditorFlagged proto.
 ///
-/// The action structure:
-/// - from_id: space_id (16 bytes) - space containing editor
-/// - topic: editor address (32 bytes, padded from 20)
-/// - data: empty
+/// ZC16 action structure:
+/// - from_id: space_id (16 bytes) - DAO space where action occurs
+/// - topic: bytes32(editorSpaceId) - editor's space ID (first 16 bytes)
+/// - data: abi.encode(address) - editor's account address
 fn convert_editor_flagged(
     action: &Action,
     meta: &BlockMetadata,
     sequence: u32,
 ) -> Result<HermesEditorFlagged> {
-    // Extract the 20-byte address from the 32-byte topic (last 20 bytes)
-    let editor_account = if action.topic.len() >= 20 {
-        action.topic[action.topic.len() - 20..].to_vec()
-    } else {
-        action.topic.clone()
-    };
+    // ZC16: Extract the 20-byte address from the ABI-encoded data field
+    let editor_account = decode::decode_address(&action.data)
+        .context("Failed to decode editor address from data field")?;
+
+    // Extract editor's space ID from first 16 bytes of topic
+    let editor_space_id = action.topic[..16].to_vec();
 
     Ok(HermesEditorFlagged {
         space_id: action.from_id.clone(),
         editor_account,
+        editor_space_id,
         meta: Some(meta.to_proto(sequence)),
     })
 }
 
 /// Convert a SPACE_FAST_PATH_UNRESTRICTED action to HermesEditorUnflagged proto.
 ///
-/// The action structure:
-/// - from_id: space_id (16 bytes) - space containing editor
-/// - topic: editor address (32 bytes, padded from 20)
-/// - data: empty
+/// ZC16 action structure:
+/// - from_id: space_id (16 bytes) - DAO space where action occurs
+/// - topic: bytes32(editorSpaceId) - editor's space ID (first 16 bytes)
+/// - data: abi.encode(address) - editor's account address
 fn convert_editor_unflagged(
     action: &Action,
     meta: &BlockMetadata,
     sequence: u32,
 ) -> Result<HermesEditorUnflagged> {
-    let editor_account = if action.topic.len() >= 20 {
-        action.topic[action.topic.len() - 20..].to_vec()
-    } else {
-        action.topic.clone()
-    };
+    // ZC16: Extract the 20-byte address from the ABI-encoded data field
+    let editor_account = decode::decode_address(&action.data)
+        .context("Failed to decode editor address from data field")?;
+
+    // Extract editor's space ID from first 16 bytes of topic
+    let editor_space_id = action.topic[..16].to_vec();
 
     Ok(HermesEditorUnflagged {
         space_id: action.from_id.clone(),
         editor_account,
+        editor_space_id,
         meta: Some(meta.to_proto(sequence)),
     })
 }
@@ -211,17 +216,23 @@ mod tests {
 
     #[test]
     fn test_convert_editor_flagged() {
+        // ZC16 format: editor space ID in topic (first 16 bytes), address in data
+        let editor_space_id = vec![3; 16];
+        let mut topic = editor_space_id.clone();
+        topic.extend(vec![0; 16]); // Pad to 32 bytes
+
         let action = Action {
             from_id: vec![1; 16],
             to_id: vec![],
             action: actions::SPACE_FAST_PATH_RESTRICTED.to_vec(),
-            topic: vec![0; 12].into_iter().chain(vec![2; 20]).collect(),
-            data: vec![],
+            topic,
+            data: vec![0; 12].into_iter().chain(vec![2; 20]).collect(), // ABI-encoded address
         };
 
         let result = convert_editor_flagged(&action, &test_meta(), 0).unwrap();
         assert_eq!(result.space_id, vec![1; 16]);
         assert_eq!(result.editor_account, vec![2; 20]);
+        assert_eq!(result.editor_space_id, vec![3; 16]);
     }
 
     #[test]
@@ -260,12 +271,13 @@ mod tests {
     #[test]
     fn test_transform_filters_actions() {
         let actions = vec![
+            // ZC16 format: editor space ID in topic, address in data
             Action {
                 from_id: vec![1; 16],
                 to_id: vec![],
                 action: actions::SPACE_FAST_PATH_RESTRICTED.to_vec(),
-                topic: vec![2; 32],
-                data: vec![],
+                topic: vec![2; 16].into_iter().chain(vec![0; 16]).collect(),
+                data: vec![0; 12].into_iter().chain(vec![7; 20]).collect(), // ABI-encoded address
             },
             Action {
                 from_id: vec![3; 16],
