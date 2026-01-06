@@ -734,4 +734,3 @@ fn map_objects_unvoted(
 
     Ok(ObjectUnvotedList { votes })
 }
-

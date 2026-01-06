@@ -86,7 +86,11 @@ fn convert(
 ) -> Result<HermesCreateSpace> {
     let space_id = action.to_id.clone();
     // Extract 20-byte address from 32-byte topic (address is left-aligned, right-padded with zeros)
-    let owner_address = action.topic.get(0..20).map(|s| s.to_vec()).unwrap_or_default();
+    let owner_address = action
+        .topic
+        .get(0..20)
+        .map(|s| s.to_vec())
+        .unwrap_or_default();
 
     // Determine payload based on space_type
     let payload = match space_type {

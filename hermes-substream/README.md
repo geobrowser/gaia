@@ -127,10 +127,14 @@ Events are identified by keccak256 hashes of action name strings:
 
 ## Configuration
 
-The Space Registry contract address is configured in `src/lib.rs`:
+The Space Registry contract address is configured in `src/lib.rs` for the ZC16 testnet:
 
 ```rust
-const SPACE_REGISTRY_ADDRESS: [u8; 20] = [0u8; 20]; // TODO: Set actual address
+// Space Registry proxy contract address (ZC16 testnet)
+const SPACE_REGISTRY_ADDRESS: [u8; 20] = [
+    0x49, 0x2B, 0xFF, 0x74, 0xb1, 0x3A, 0xCF, 0x3C, 0xC2, 0x49, 0xA9, 0x8d, 0x07, 0x9F, 0x0a, 0x6F,
+    0x1d, 0x07, 0xDD, 0x2f,
+]; // 0x492BFF74b13ACF3cC249A98d079F0a6F1d07DD2f
 ```
 
 ## Development
