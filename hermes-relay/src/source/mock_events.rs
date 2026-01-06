@@ -258,10 +258,10 @@ pub fn subspace_topic_declared(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum VotingMode {
-    /// Fast path - threshold-based, immediate execution, single action only
-    Fast = 0,
     /// Slow path - majority voting with voting window, multiple actions allowed
-    Slow = 1,
+    Slow = 0,
+    /// Fast path - threshold-based, immediate execution, single action only
+    Fast = 1,
 }
 
 /// Vote option for proposals (matches DAOSpace contract).
@@ -269,9 +269,9 @@ pub enum VotingMode {
 #[repr(u8)]
 pub enum VoteOption {
     None = 0,
-    Yes = 1,
-    No = 2,
-    Abstain = 3,
+    Abstain = 1,
+    Yes = 2,
+    No = 3,
 }
 
 /// DAOSpace function selectors for proposal actions.
@@ -507,29 +507,30 @@ pub fn proposal_created(
 ///
 /// - `space_id`: The space with the proposal
 /// - `proposal_id`: The proposal ID (16 bytes)
-/// - `voting_delay`: Voting delay in seconds
-/// - `voting_period`: Voting period in seconds
-/// - `quorum`: Quorum percentage
-/// - `threshold`: Approval threshold percentage
+/// - `voting_mode`: Voting mode (Slow=0, Fast=1)
+/// - `start_date`: Block timestamp when voting starts
+/// - `end_date`: Block timestamp when voting ends
+/// - `quorum`: Minimum total votes for slow path
+/// - `support_threshold`: Support threshold (flat for fast, percentage for slow)
 pub fn proposal_settings_selected(
     space_id: SpaceId,
     proposal_id: ProposalId,
-    voting_delay: u32,
-    voting_period: u32,
-    quorum: u16,
-    threshold: u16,
+    voting_mode: VotingMode,
+    start_date: u64,
+    end_date: u64,
+    quorum: u64,
+    support_threshold: u64,
 ) -> Action {
-    // Encode settings as: (uint32 votingDelay, uint32 votingPeriod, uint16 quorum, uint16 threshold)
-    use alloy::primitives::FixedBytes;
+    // Encode settings as: (uint64 startDate, uint64 lastDate, uint8 votingMode, uint256 quorum, uint256 supportThreshold)
     use alloy::sol_types::SolType;
 
-    type SettingsType = sol! { (bytes16, uint32, uint32, uint16, uint16) };
+    type SettingsType = sol! { (uint64, uint64, uint8, uint256, uint256) };
     let data = SettingsType::abi_encode(&(
-        FixedBytes::<16>::from_slice(&proposal_id),
-        voting_delay,
-        voting_period,
-        quorum,
-        threshold,
+        start_date,
+        end_date,
+        voting_mode as u8,
+        U256::from(quorum),
+        U256::from(support_threshold),
     ));
 
     // Pad proposal_id to 32 bytes for topic field
@@ -1121,10 +1122,13 @@ pub mod test_topology {
             vec![ProposalAction::add_member([0x11; 20])],
         ));
         actions.push(proposal_settings_selected(
-            SPACE_A, PROPOSAL_1, 0,     // voting_delay
-            86400, // voting_period (1 day)
-            50,    // quorum (50%)
-            60,    // threshold (60%)
+            SPACE_A,
+            PROPOSAL_1,
+            VotingMode::Fast,
+            0,     // start_date
+            86400, // end_date (1 day)
+            50,    // quorum
+            60,    // support_threshold
         ));
         actions.push(proposal_voted(
             SPACE_B,
@@ -1151,10 +1155,13 @@ pub mod test_topology {
             vec![ProposalAction::remove_member([0x12; 20])],
         ));
         actions.push(proposal_settings_selected(
-            SPACE_A, PROPOSAL_2, 3600,   // voting_delay (1 hour)
-            172800, // voting_period (2 days)
-            40,     // quorum (40%)
-            70,     // threshold (70%)
+            SPACE_A,
+            PROPOSAL_2,
+            VotingMode::Slow,
+            3600,   // start_date (1 hour delay)
+            176400, // end_date (delay + 2 days)
+            40,     // quorum
+            70,     // support_threshold
         ));
         actions.push(proposal_voted(
             SPACE_B,
@@ -1182,10 +1189,13 @@ pub mod test_topology {
             vec![ProposalAction::add_editor([0x22; 20])],
         ));
         actions.push(proposal_settings_selected(
-            SPACE_B, PROPOSAL_3, 0,     // voting_delay
-            86400, // voting_period (1 day)
-            50,    // quorum (50%)
-            60,    // threshold (60%)
+            SPACE_B,
+            PROPOSAL_3,
+            VotingMode::Fast,
+            0,     // start_date
+            86400, // end_date (1 day)
+            50,    // quorum
+            60,    // support_threshold
         ));
         actions.push(proposal_voted(
             SPACE_A,
@@ -1218,10 +1228,13 @@ pub mod test_topology {
             vec![ProposalAction::remove_editor([0x23; 20])],
         ));
         actions.push(proposal_settings_selected(
-            SPACE_B, PROPOSAL_4, 7200,   // voting_delay (2 hours)
-            172800, // voting_period (2 days)
-            45,     // quorum (45%)
-            75,     // threshold (75%)
+            SPACE_B,
+            PROPOSAL_4,
+            VotingMode::Slow,
+            7200,   // start_date (2 hour delay)
+            180000, // end_date (delay + 2 days)
+            45,     // quorum
+            75,     // support_threshold
         ));
         actions.push(proposal_voted(
             SPACE_A,
@@ -1260,10 +1273,13 @@ pub mod test_topology {
             )],
         ));
         actions.push(proposal_settings_selected(
-            SPACE_C, PROPOSAL_5, 0,     // voting_delay
-            86400, // voting_period (1 day)
-            50,    // quorum (50%)
-            60,    // threshold (60%)
+            SPACE_C,
+            PROPOSAL_5,
+            VotingMode::Fast,
+            0,     // start_date
+            86400, // end_date (1 day)
+            50,    // quorum
+            60,    // support_threshold
         ));
         actions.push(proposal_voted(
             SPACE_A,
@@ -1293,10 +1309,13 @@ pub mod test_topology {
             )],
         ));
         actions.push(proposal_settings_selected(
-            SPACE_C, PROPOSAL_6, 5400,   // voting_delay (1.5 hours)
-            172800, // voting_period (2 days)
-            50,     // quorum (50%)
-            65,     // threshold (65%)
+            SPACE_C,
+            PROPOSAL_6,
+            VotingMode::Slow,
+            5400,   // start_date (1.5 hour delay)
+            178200, // end_date (delay + 2 days)
+            50,     // quorum
+            65,     // support_threshold
         ));
         actions.push(proposal_voted(
             SPACE_A,
@@ -1334,10 +1353,13 @@ pub mod test_topology {
             )],
         ));
         actions.push(proposal_settings_selected(
-            SPACE_B, PROPOSAL_7, 0,     // voting_delay
-            86400, // voting_period (1 day)
-            50,    // quorum (50%)
-            60,    // threshold (60%)
+            SPACE_B,
+            PROPOSAL_7,
+            VotingMode::Fast,
+            0,     // start_date
+            86400, // end_date (1 day)
+            50,    // quorum
+            60,    // support_threshold
         ));
         actions.push(proposal_voted(
             SPACE_A,
@@ -1641,7 +1663,8 @@ mod tests {
         let space_id = make_id(0x01);
         let proposal_id = make_proposal_id(0xA1);
 
-        let action = proposal_settings_selected(space_id, proposal_id, 0, 86400, 50, 60);
+        let action =
+            proposal_settings_selected(space_id, proposal_id, VotingMode::Fast, 0, 86400, 50, 60);
 
         assert_eq!(action.from_id, space_id.to_vec());
         assert_eq!(action.to_id, space_id.to_vec()); // from_id == to_id for DAOSpace
