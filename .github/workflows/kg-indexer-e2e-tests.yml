@@ -146,6 +146,8 @@ jobs:
         run: |
           ./target/release/hermes-pipeline
           echo "hermes-pipeline completed"
+        env:
+          USE_MOCK: "true"
 
       - name: Run kg-indexer
         run: |
