@@ -78,23 +78,24 @@ This transformer is part of the Hermes architecture (see `docs/hermes-architectu
 
 ## Configuration
 
-### Required Environment Variables
-
-| Variable | Description | Example |
-|----------|-------------|---------|
-| `SUBSTREAMS_ENDPOINT` | Substreams gRPC endpoint URL | `https://mainnet.eth.streamingfast.io` |
-
-### Optional Environment Variables
+### Data Source Environment Variables
 
 | Variable | Description | Default |
 |----------|-------------|---------|
+| `USE_MOCK` | Set to "false" or "0" to use live substreams | `true` |
+| `SUBSTREAMS_ENDPOINT` | Substreams gRPC endpoint URL | `geotest.substreams.pinax.network:443` |
 | `SUBSTREAMS_API_TOKEN` | Auth token for substreams | - |
+| `SUBSTREAMS_START_BLOCK` | Block number to start from | `0` |
+| `SUBSTREAMS_END_BLOCK` | Block number to stop at | `u64::MAX` (continuous) |
+
+### Kafka Environment Variables
+
+| Variable | Description | Default |
+|----------|-------------|---------|
 | `KAFKA_BROKER` | Kafka broker address | `localhost:9092` |
 | `KAFKA_USERNAME` | SASL username for managed Kafka | - |
 | `KAFKA_PASSWORD` | SASL password for managed Kafka | - |
 | `KAFKA_SSL_CA_PEM` | Custom CA cert for SSL (PEM format) | - |
-| `START_BLOCK` | Block number to start from | `0` |
-| `END_BLOCK` | Block number to stop at (0 = live streaming) | `0` |
 
 ### Telemetry Environment Variables
 
@@ -109,15 +110,24 @@ If `OTEL_URL` is set, telemetry is exported via OTLP HTTP. Otherwise, logs are w
 
 ## Usage
 
-### Local Development
+### Local Development (Mock Data)
 
 ```bash
 # Start local Kafka (see hermes/docker-compose.yaml)
 docker-compose -f hermes/docker-compose.yaml up -d
 
-# Run the transformer
-SUBSTREAMS_ENDPOINT=https://mainnet.eth.streamingfast.io \
+# Run with mock data (default)
+KAFKA_BROKER=localhost:9092 \
+cargo run --package hermes-pipeline
+```
+
+### Local Development (Live Data)
+
+```bash
+# Run with live substreams data
+USE_MOCK=false \
 SUBSTREAMS_API_TOKEN=your-token \
+SUBSTREAMS_START_BLOCK=81809 \
 KAFKA_BROKER=localhost:9092 \
 cargo run --package hermes-pipeline
 ```
@@ -128,9 +138,9 @@ cargo run --package hermes-pipeline
 # Build
 docker build -f hermes-pipeline/Dockerfile -t hermes-pipeline .
 
-# Run
+# Run with live data
 docker run \
-  -e SUBSTREAMS_ENDPOINT=https://mainnet.eth.streamingfast.io \
+  -e USE_MOCK=false \
   -e SUBSTREAMS_API_TOKEN=your-token \
   -e KAFKA_BROKER=localhost:9092 \
   hermes-pipeline
