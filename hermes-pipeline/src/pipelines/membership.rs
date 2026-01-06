@@ -96,8 +96,8 @@ fn convert_role_granted(
     sequence: u32,
 ) -> Result<HermesRoleGranted> {
     // ZC16: Extract the 20-byte address from the ABI-encoded data field
-    let account = decode_address(&action.data)
-        .context("Failed to decode account address from data field")?;
+    let account =
+        decode_address(&action.data).context("Failed to decode account address from data field")?;
 
     // ZC16: Extract the member's space ID from the first 16 bytes of topic
     let member_space_id = action.topic.get(..16).unwrap_or_default().to_vec();
@@ -124,8 +124,8 @@ fn convert_role_revoked(
     sequence: u32,
 ) -> Result<HermesRoleRevoked> {
     // ZC16: Extract the 20-byte address from the ABI-encoded data field
-    let account = decode_address(&action.data)
-        .context("Failed to decode account address from data field")?;
+    let account =
+        decode_address(&action.data).context("Failed to decode account address from data field")?;
 
     // ZC16: Extract the member's space ID from the first 16 bytes of topic
     let member_space_id = action.topic.get(..16).unwrap_or_default().to_vec();
@@ -233,14 +233,22 @@ mod tests {
                 from_id: vec![1; 16],
                 to_id: vec![],
                 action: actions::EDITOR_ADDED.to_vec(),
-                topic: editor_member_space_id.iter().copied().chain(vec![0; 16]).collect(),
+                topic: editor_member_space_id
+                    .iter()
+                    .copied()
+                    .chain(vec![0; 16])
+                    .collect(),
                 data: vec![0; 12].into_iter().chain(vec![2; 20]).collect(), // ABI-encoded address
             },
             Action {
                 from_id: vec![3; 16],
                 to_id: vec![],
                 action: actions::MEMBER_ADDED.to_vec(),
-                topic: member_member_space_id.iter().copied().chain(vec![0; 16]).collect(),
+                topic: member_member_space_id
+                    .iter()
+                    .copied()
+                    .chain(vec![0; 16])
+                    .collect(),
                 data: vec![0; 12].into_iter().chain(vec![4; 20]).collect(), // ABI-encoded address
             },
             Action {
@@ -267,7 +275,13 @@ mod tests {
         assert_eq!(result.total(), 3);
 
         // Verify member_space_id is extracted correctly
-        assert_eq!(result.roles_granted[0].member_space_id, editor_member_space_id);
-        assert_eq!(result.roles_granted[1].member_space_id, member_member_space_id);
+        assert_eq!(
+            result.roles_granted[0].member_space_id,
+            editor_member_space_id
+        );
+        assert_eq!(
+            result.roles_granted[1].member_space_id,
+            member_member_space_id
+        );
     }
 }
