@@ -82,7 +82,7 @@ This transformer is part of the Hermes architecture (see `docs/hermes-architectu
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `USE_MOCK` | Set to "false" or "0" to use live substreams | `true` |
+| `USE_MOCK` | Set to "true" or "1" to use mock data | `false` |
 | `SUBSTREAMS_ENDPOINT` | Substreams gRPC endpoint URL | `geotest.substreams.pinax.network:443` |
 | `SUBSTREAMS_API_TOKEN` | Auth token for substreams | - |
 | `SUBSTREAMS_START_BLOCK` | Block number to start from | `0` |
@@ -110,24 +110,24 @@ If `OTEL_URL` is set, telemetry is exported via OTLP HTTP. Otherwise, logs are w
 
 ## Usage
 
-### Local Development (Mock Data)
+### Local Development (Live Data)
 
 ```bash
 # Start local Kafka (see hermes/docker-compose.yaml)
 docker-compose -f hermes/docker-compose.yaml up -d
 
-# Run with mock data (default)
+# Run with live substreams data (default)
+SUBSTREAMS_API_TOKEN=your-token \
+SUBSTREAMS_START_BLOCK=81809 \
 KAFKA_BROKER=localhost:9092 \
 cargo run --package hermes-pipeline
 ```
 
-### Local Development (Live Data)
+### Local Development (Mock Data)
 
 ```bash
-# Run with live substreams data
-USE_MOCK=false \
-SUBSTREAMS_API_TOKEN=your-token \
-SUBSTREAMS_START_BLOCK=81809 \
+# Run with mock data for testing
+USE_MOCK=true \
 KAFKA_BROKER=localhost:9092 \
 cargo run --package hermes-pipeline
 ```
@@ -140,7 +140,6 @@ docker build -f hermes-pipeline/Dockerfile -t hermes-pipeline .
 
 # Run with live data
 docker run \
-  -e USE_MOCK=false \
   -e SUBSTREAMS_API_TOKEN=your-token \
   -e KAFKA_BROKER=localhost:9092 \
   hermes-pipeline

@@ -25,7 +25,7 @@
 //! ## Configuration
 //!
 //! Environment variables:
-//! - `USE_MOCK` - Set to "false" or "0" to use live substreams (default: true)
+//! - `USE_MOCK` - Set to "true" or "1" to use mock data (default: false)
 //! - `SUBSTREAMS_ENDPOINT` - Substreams endpoint URL (default: geotest.substreams.pinax.network:443)
 //! - `SUBSTREAMS_API_TOKEN` - API token for substreams authentication
 //! - `SUBSTREAMS_START_BLOCK` - First block to consume (default: 0)
@@ -607,10 +607,10 @@ async fn async_main() -> anyhow::Result<()> {
     // Create the pipeline
     let pipeline = Pipeline::new(emitter);
 
-    // Determine stream source: mock (default) or live
+    // Determine stream source: live (default) or mock
     let use_mock = env::var("USE_MOCK")
         .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
-        .unwrap_or(true);
+        .unwrap_or(false);
 
     let source = if use_mock {
         info!("Using mock data source");
