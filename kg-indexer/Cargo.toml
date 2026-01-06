@@ -11,7 +11,7 @@ wire = { path = "../wire" }
 indexer_utils = { path = "../indexer_utils" }
 
 # Kafka
-rdkafka = { version = "0.38.0", features = ["cmake-build", "zstd"] }
+rdkafka = { version = "0.38.0", features = ["cmake-build", "ssl", "zstd"] }
 
 # Async runtime
 tokio = { version = "1.42.0", features = ["macros", "rt-multi-thread", "sync", "time", "signal"] }
