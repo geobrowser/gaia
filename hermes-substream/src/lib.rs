@@ -208,9 +208,11 @@ fn parse_action(log: LogView) -> Option<Action> {
         return None;
     }
 
+    // ZC16: bytes16 values are LEFT-aligned (right-padded with zeros)
+    // So space IDs are in bytes 0..16, not 16..32
     Some(Action {
-        from_id: topics[0][16..32].to_vec(),
-        to_id: topics[1][16..32].to_vec(),
+        from_id: topics[0][0..16].to_vec(),
+        to_id: topics[1][0..16].to_vec(),
         action: topics[2].to_vec(),
         topic: topics[3].to_vec(),
         data: log.data().to_vec(),
@@ -242,7 +244,8 @@ fn map_spaces_registered(
         .filter(|action| action.action.as_slice() == ACTION_SPACE_ID_REGISTERED)
         .map(|action| SpaceRegistered {
             space_id: action.to_id,
-            space_address: action.topic[12..32].to_vec(),
+            // ZC16: address is LEFT-aligned (right-padded with zeros)
+            space_address: action.topic[0..20].to_vec(),
             data: action.data,
         })
         .collect();
@@ -260,7 +263,8 @@ fn map_spaces_migrated(
         .filter(|action| action.action.as_slice() == ACTION_SPACE_ID_MIGRATED)
         .map(|action| SpaceMigrated {
             space_id: action.from_id,
-            new_space_address: action.topic[12..32].to_vec(),
+            // ZC16: address is LEFT-aligned (right-padded with zeros)
+            new_space_address: action.topic[0..20].to_vec(),
             data: action.data,
         })
         .collect();
@@ -409,7 +413,8 @@ fn map_editors_flagged(
         .filter(|action| action.action.as_slice() == ACTION_SPACE_FAST_PATH_RESTRICTED)
         .map(|action| EditorFlagged {
             space_id: action.from_id,
-            editor_address: action.topic[12..32].to_vec(),
+            // ZC16: address is LEFT-aligned (right-padded with zeros)
+            editor_address: action.topic[0..20].to_vec(),
             data: action.data,
         })
         .collect();
@@ -427,7 +432,8 @@ fn map_editors_unflagged(
         .filter(|action| action.action.as_slice() == ACTION_SPACE_FAST_PATH_UNRESTRICTED)
         .map(|action| EditorUnflagged {
             space_id: action.from_id,
-            editor_address: action.topic[12..32].to_vec(),
+            // ZC16: address is LEFT-aligned (right-padded with zeros)
+            editor_address: action.topic[0..20].to_vec(),
             data: action.data,
         })
         .collect();
@@ -528,7 +534,8 @@ fn map_subspaces_removed(
         .filter(|action| action.action.as_slice() == ACTION_SUBSPACE_REMOVED)
         .map(|action| SubspaceRemoved {
             parent_space_id: action.from_id,
-            subspace_id: action.topic[16..32].to_vec(),
+            // ZC16: bytes16 is LEFT-aligned (right-padded with zeros)
+            subspace_id: action.topic[0..16].to_vec(),
             data: action.data,
         })
         .collect();
@@ -546,7 +553,8 @@ fn map_subspaces_verified(
         .filter(|action| action.action.as_slice() == ACTION_SUBSPACE_VERIFIED)
         .map(|action| SubspaceVerified {
             parent_space_id: action.from_id,
-            subspace_id: action.topic[16..32].to_vec(),
+            // ZC16: bytes16 is LEFT-aligned (right-padded with zeros)
+            subspace_id: action.topic[0..16].to_vec(),
             data: action.data,
         })
         .collect();
@@ -564,7 +572,8 @@ fn map_subspaces_related(
         .filter(|action| action.action.as_slice() == ACTION_SUBSPACE_RELATED)
         .map(|action| SubspaceRelated {
             parent_space_id: action.from_id,
-            subspace_id: action.topic[16..32].to_vec(),
+            // ZC16: bytes16 is LEFT-aligned (right-padded with zeros)
+            subspace_id: action.topic[0..16].to_vec(),
             data: action.data,
         })
         .collect();
@@ -619,7 +628,8 @@ fn map_spaces_cleared(
         .filter(|action| action.action.as_slice() == ACTION_SPACE_ID_CLEARED)
         .map(|action| SpaceCleared {
             space_id: action.from_id,
-            space_address: action.topic[12..32].to_vec(),
+            // ZC16: address is LEFT-aligned (right-padded with zeros)
+            space_address: action.topic[0..20].to_vec(),
         })
         .collect();
 
@@ -636,7 +646,8 @@ fn map_proposal_settings_used(
         .filter(|action| action.action.as_slice() == ACTION_PROPOSAL_SETTINGS_SELECTED)
         .map(|action| ProposalSettingsUsed {
             space_id: action.from_id,
-            proposal_id: action.topic[16..32].to_vec(),
+            // ZC16: bytes16 is LEFT-aligned (right-padded with zeros)
+            proposal_id: action.topic[0..16].to_vec(),
             data: action.data,
         })
         .collect();
@@ -654,7 +665,8 @@ fn map_proposals_updated(
         .filter(|action| action.action.as_slice() == ACTION_PROPOSAL_UPDATED)
         .map(|action| ProposalUpdated {
             space_id: action.from_id,
-            proposal_id: action.topic[16..32].to_vec(),
+            // ZC16: bytes16 is LEFT-aligned (right-padded with zeros)
+            proposal_id: action.topic[0..16].to_vec(),
             data: action.data,
         })
         .collect();
@@ -722,3 +734,4 @@ fn map_objects_unvoted(
 
     Ok(ObjectUnvotedList { votes })
 }
+
