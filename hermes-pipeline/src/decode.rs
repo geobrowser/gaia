@@ -41,8 +41,8 @@ pub mod selectors {
     pub const FLAG: [u8; 4] = [0xfe, 0x1e, 0x30, 0x42];
     /// unflag(bytes32,bytes)
     pub const UNFLAG: [u8; 4] = [0xc6, 0x96, 0x84, 0x0f];
-    /// unflagEditor(address)
-    pub const UNFLAG_EDITOR: [u8; 4] = [0x08, 0xf0, 0xdf, 0x71];
+    /// unrestrictSpace(address) - unrestricts a space from fast path
+    pub const UNRESTRICT_SPACE: [u8; 4] = [0xb2, 0xc4, 0x36, 0xba];
     /// updateVotingSettings((uint256,uint256,uint256,uint256))
     pub const UPDATE_VOTING_SETTINGS: [u8; 4] = [0xd2, 0x1e, 0x85, 0x41];
     /// ping(bytes32,bytes32,bytes)
@@ -60,7 +60,7 @@ pub enum ProposalActionType {
     Publish,
     Flag,
     Unflag,
-    UnflagEditor,
+    UnrestrictSpace,
     UpdateVotingSettings,
     Ping,
 }
@@ -82,7 +82,7 @@ impl ProposalActionType {
             selectors::PUBLISH => Self::Publish,
             selectors::FLAG => Self::Flag,
             selectors::UNFLAG => Self::Unflag,
-            selectors::UNFLAG_EDITOR => Self::UnflagEditor,
+            selectors::UNRESTRICT_SPACE => Self::UnrestrictSpace,
             selectors::UPDATE_VOTING_SETTINGS => Self::UpdateVotingSettings,
             selectors::PING => Self::Ping,
             _ => Self::Unknown,
@@ -613,8 +613,8 @@ mod tests {
             ProposalActionType::Unflag
         );
         assert_eq!(
-            ProposalActionType::from_calldata(&selectors::UNFLAG_EDITOR),
-            ProposalActionType::UnflagEditor
+            ProposalActionType::from_calldata(&selectors::UNRESTRICT_SPACE),
+            ProposalActionType::UnrestrictSpace
         );
         assert_eq!(
             ProposalActionType::from_calldata(&selectors::UPDATE_VOTING_SETTINGS),

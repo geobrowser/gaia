@@ -6,7 +6,7 @@
 //! - `edits`: EDITS_PUBLISHED → knowledge.edits
 //! - `governance`: PROPOSAL_CREATED/VOTED/EXECUTED → space.governance
 //! - `membership`: EDITOR/MEMBER ADDED/REMOVED, SPACE_LEFT → space.membership
-//! - `moderation`: EDITOR_FLAGGED/UNFLAGGED, FLAGGED/UNFLAGGED → space.moderation
+//! - `moderation`: SPACE_FAST_PATH_RESTRICTED/UNRESTRICTED, FLAGGED/UNFLAGGED → space.moderation
 //! - `topics`: TOPIC_DECLARED → space.topics
 //! - `voting`: UPVOTED/DOWNVOTED/UNVOTED → curation.votes
 

@@ -500,10 +500,10 @@ pub fn proposal_created(
     }
 }
 
-/// Create a PROPOSAL_SETTINGS_USED action.
+/// Create a PROPOSAL_SETTINGS_SELECTED action.
 ///
 /// This event is emitted after PROPOSAL_CREATED to convey the proposal settings.
-/// The pipeline squashes PROPOSAL_CREATED + PROPOSAL_SETTINGS_USED into a single event.
+/// The pipeline squashes PROPOSAL_CREATED + PROPOSAL_SETTINGS_SELECTED into a single event.
 ///
 /// - `space_id`: The space with the proposal
 /// - `proposal_id`: The proposal ID (16 bytes)
@@ -539,7 +539,7 @@ pub fn proposal_settings_used(
     Action {
         from_id: space_id.to_vec(),
         to_id: space_id.to_vec(), // from_id == to_id for DAOSpace actions
-        action: actions::PROPOSAL_SETTINGS_USED.to_vec(),
+        action: actions::PROPOSAL_SETTINGS_SELECTED.to_vec(),
         topic: topic.to_vec(),
         data,
     }
@@ -650,30 +650,30 @@ pub fn member_removed(space_id: SpaceId, member_address: Address) -> Action {
     }
 }
 
-/// Create an EDITOR_FLAGGED action.
+/// Create a SPACE_FAST_PATH_RESTRICTED action.
 ///
-/// - `space_id`: The space flagging the editor
-/// - `editor_address`: The flagged editor's address
-pub fn editor_flagged(space_id: SpaceId, editor_address: Address) -> Action {
+/// - `space_id`: The space restricting another space from fast path
+/// - `restricted_space_address`: The restricted space's address
+pub fn space_fast_path_restricted(space_id: SpaceId, restricted_space_address: Address) -> Action {
     Action {
         from_id: space_id.to_vec(),
         to_id: space_id.to_vec(), // from_id == to_id for DAOSpace actions
-        action: actions::EDITOR_FLAGGED.to_vec(),
-        topic: editor_address.to_vec(),
+        action: actions::SPACE_FAST_PATH_RESTRICTED.to_vec(),
+        topic: restricted_space_address.to_vec(),
         data: vec![],
     }
 }
 
-/// Create an EDITOR_UNFLAGGED action.
+/// Create a SPACE_FAST_PATH_UNRESTRICTED action.
 ///
-/// - `space_id`: The space unflagging the editor
-/// - `editor_address`: The unflagged editor's address
-pub fn editor_unflagged(space_id: SpaceId, editor_address: Address) -> Action {
+/// - `space_id`: The space unrestricting another space from fast path
+/// - `unrestricted_space_address`: The unrestricted space's address
+pub fn space_fast_path_unrestricted(space_id: SpaceId, unrestricted_space_address: Address) -> Action {
     Action {
         from_id: space_id.to_vec(),
         to_id: space_id.to_vec(), // from_id == to_id for DAOSpace actions
-        action: actions::EDITOR_UNFLAGGED.to_vec(),
-        topic: editor_address.to_vec(),
+        action: actions::SPACE_FAST_PATH_UNRESTRICTED.to_vec(),
+        topic: unrestricted_space_address.to_vec(),
         data: vec![],
     }
 }
@@ -1025,12 +1025,12 @@ pub mod test_topology {
         // Phase 5: Editor/member operations
         actions.push(editor_added(SPACE_A, USER_2));
         actions.push(member_added(SPACE_A, USER_3));
-        actions.push(editor_flagged(SPACE_B, USER_1));
-        actions.push(editor_unflagged(SPACE_B, USER_1));
+        actions.push(space_fast_path_restricted(SPACE_B, USER_1));
+        actions.push(space_fast_path_unrestricted(SPACE_B, USER_1));
 
         // Phase 6: Proposals with various actions
 
-        // Proposal 1: Add member (PROPOSAL_CREATED + PROPOSAL_SETTINGS_USED squashed by pipeline)
+        // Proposal 1: Add member (PROPOSAL_CREATED + PROPOSAL_SETTINGS_SELECTED squashed by pipeline)
         actions.push(proposal_created(
             SPACE_A,
             PROPOSAL_1,
@@ -1495,7 +1495,7 @@ mod tests {
             .count();
         let proposal_settings_count = actions
             .iter()
-            .filter(|a| a.action == actions::PROPOSAL_SETTINGS_USED.to_vec())
+            .filter(|a| a.action == actions::PROPOSAL_SETTINGS_SELECTED.to_vec())
             .count();
 
         // 18 spaces: 11 canonical + 7 non-canonical (each has SPACE_ID_REGISTERED + SPACE_TYPE_DECLARED)
@@ -1554,7 +1554,7 @@ mod tests {
     }
 
     #[test]
-    fn test_proposal_settings_used_format() {
+    fn test_proposal_settings_selected_format() {
         let space_id = make_id(0x01);
         let proposal_id = make_proposal_id(0xA1);
 
@@ -1562,7 +1562,7 @@ mod tests {
 
         assert_eq!(action.from_id, space_id.to_vec());
         assert_eq!(action.to_id, space_id.to_vec()); // from_id == to_id for DAOSpace
-        assert_eq!(action.action, actions::PROPOSAL_SETTINGS_USED.to_vec());
+        assert_eq!(action.action, actions::PROPOSAL_SETTINGS_SELECTED.to_vec());
         // Topic is proposal_id padded to 32 bytes
         assert_eq!(action.topic.len(), 32);
         assert_eq!(&action.topic[..16], &proposal_id);

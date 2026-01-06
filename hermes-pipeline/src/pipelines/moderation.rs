@@ -1,4 +1,4 @@
-//! Pipeline: EDITOR_FLAGGED, EDITOR_UNFLAGGED, FLAGGED, UNFLAGGED → space.moderation
+//! Pipeline: SPACE_FAST_PATH_RESTRICTED, SPACE_FAST_PATH_UNRESTRICTED, FLAGGED, UNFLAGGED → space.moderation
 //!
 //! Converts moderation actions to typed Hermes events with decoded data.
 
@@ -42,7 +42,7 @@ pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformRe
         let action_type = action.action.as_slice();
         let sequence = index as u32;
 
-        if actions::matches(action_type, &actions::EDITOR_FLAGGED) {
+        if actions::matches(action_type, &actions::SPACE_FAST_PATH_RESTRICTED) {
             let event = debug_span!(
                 "convert.moderation.editor_flagged",
                 space_id = %hex::encode(&action.from_id),
@@ -50,7 +50,7 @@ pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformRe
             )
             .in_scope(|| convert_editor_flagged(action, meta, sequence))?;
             result.editors_flagged.push(event);
-        } else if actions::matches(action_type, &actions::EDITOR_UNFLAGGED) {
+        } else if actions::matches(action_type, &actions::SPACE_FAST_PATH_UNRESTRICTED) {
             let event = debug_span!(
                 "convert.moderation.editor_unflagged",
                 space_id = %hex::encode(&action.from_id),
@@ -80,7 +80,7 @@ pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformRe
     Ok(result)
 }
 
-/// Convert an EDITOR_FLAGGED action to HermesEditorFlagged proto.
+/// Convert a SPACE_FAST_PATH_RESTRICTED action to HermesEditorFlagged proto.
 ///
 /// The action structure:
 /// - from_id: space_id (16 bytes) - space containing editor
@@ -105,7 +105,7 @@ fn convert_editor_flagged(
     })
 }
 
-/// Convert an EDITOR_UNFLAGGED action to HermesEditorUnflagged proto.
+/// Convert a SPACE_FAST_PATH_UNRESTRICTED action to HermesEditorUnflagged proto.
 ///
 /// The action structure:
 /// - from_id: space_id (16 bytes) - space containing editor
@@ -214,7 +214,7 @@ mod tests {
         let action = Action {
             from_id: vec![1; 16],
             to_id: vec![],
-            action: actions::EDITOR_FLAGGED.to_vec(),
+            action: actions::SPACE_FAST_PATH_RESTRICTED.to_vec(),
             topic: vec![0; 12].into_iter().chain(vec![2; 20]).collect(),
             data: vec![],
         };
@@ -263,7 +263,7 @@ mod tests {
             Action {
                 from_id: vec![1; 16],
                 to_id: vec![],
-                action: actions::EDITOR_FLAGGED.to_vec(),
+                action: actions::SPACE_FAST_PATH_RESTRICTED.to_vec(),
                 topic: vec![2; 32],
                 data: vec![],
             },

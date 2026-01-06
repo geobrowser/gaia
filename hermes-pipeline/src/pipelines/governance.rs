@@ -1,10 +1,10 @@
-//! Pipeline: PROPOSAL_CREATED + PROPOSAL_SETTINGS_USED → space.governance
+//! Pipeline: PROPOSAL_CREATED + PROPOSAL_SETTINGS_SELECTED → space.governance
 //!
 //! Squashes paired proposal events into single Kafka messages.
 //!
 //! The contract emits two events for each proposal:
 //! 1. PROPOSAL_CREATED: Contains proposer_id, space_id, proposal_id, voting_mode, actions
-//! 2. PROPOSAL_SETTINGS_USED: Contains proposal settings (start/end dates, thresholds)
+//! 2. PROPOSAL_SETTINGS_SELECTED: Contains proposal settings (start/end dates, thresholds)
 //!
 //! These are squashed into a single HermesProposalCreated. If either event is missing
 //! for a given proposal_id, both events are discarded with an error log.
@@ -53,20 +53,20 @@ struct ProposalCreatedPending {
     sequence: u32,
 }
 
-/// Intermediate data for a PROPOSAL_SETTINGS_USED event before squashing.
+/// Intermediate data for a PROPOSAL_SETTINGS_SELECTED event before squashing.
 struct ProposalSettingsPending {
     settings: ProposalSettings,
 }
 
 /// Transform all governance actions in a block.
 ///
-/// Squashes PROPOSAL_CREATED + PROPOSAL_SETTINGS_USED pairs into single events.
-/// For each PROPOSAL_CREATED, looks for a matching PROPOSAL_SETTINGS_USED
+/// Squashes PROPOSAL_CREATED + PROPOSAL_SETTINGS_SELECTED pairs into single events.
+/// For each PROPOSAL_CREATED, looks for a matching PROPOSAL_SETTINGS_SELECTED
 /// with the same proposal_id. If not found, both events are discarded.
 pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformResult> {
     let mut result = TransformResult::default();
 
-    // Collect PROPOSAL_CREATED and PROPOSAL_SETTINGS_USED by proposal_id
+    // Collect PROPOSAL_CREATED and PROPOSAL_SETTINGS_SELECTED by proposal_id
     let mut created_map: HashMap<Vec<u8>, ProposalCreatedPending> = HashMap::new();
     let mut settings_map: HashMap<Vec<u8>, ProposalSettingsPending> = HashMap::new();
 
@@ -87,7 +87,7 @@ pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformRe
                 let proposal_id = pending.proposal_id.clone();
                 created_map.insert(proposal_id, pending);
             }
-        } else if actions::matches(action_type, &actions::PROPOSAL_SETTINGS_USED) {
+        } else if actions::matches(action_type, &actions::PROPOSAL_SETTINGS_SELECTED) {
             if let Some(pending) = debug_span!(
                 "parse.governance.settings",
                 proposal_id = %hex::encode(&action.topic[..16])
@@ -117,7 +117,7 @@ pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformRe
         }
     }
 
-    // Squash PROPOSAL_CREATED with PROPOSAL_SETTINGS_USED
+    // Squash PROPOSAL_CREATED with PROPOSAL_SETTINGS_SELECTED
     for (proposal_id, created) in created_map {
         if let Some(settings_pending) = settings_map.remove(&proposal_id) {
             // Found matching pair - emit squashed event
@@ -132,19 +132,19 @@ pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformRe
             };
             result.proposals_created.push(event);
         } else {
-            // Missing PROPOSAL_SETTINGS_USED - log error and discard
+            // Missing PROPOSAL_SETTINGS_SELECTED - log error and discard
             warn!(
                 proposal_id = %hex::encode(&proposal_id),
-                "PROPOSAL_CREATED without matching PROPOSAL_SETTINGS_USED, discarding"
+                "PROPOSAL_CREATED without matching PROPOSAL_SETTINGS_SELECTED, discarding"
             );
         }
     }
 
-    // Log any orphaned PROPOSAL_SETTINGS_USED events
+    // Log any orphaned PROPOSAL_SETTINGS_SELECTED events
     for (proposal_id, _) in settings_map {
         warn!(
             proposal_id = %hex::encode(&proposal_id),
-            "PROPOSAL_SETTINGS_USED without matching PROPOSAL_CREATED, discarding"
+            "PROPOSAL_SETTINGS_SELECTED without matching PROPOSAL_CREATED, discarding"
         );
     }
 
@@ -181,7 +181,7 @@ fn decode_proposal_action(
                 target_address: addr,
             }))
         }
-        ProposalActionType::UnflagEditor => {
+        ProposalActionType::UnrestrictSpace => {
             let addr = decode_address_arg(calldata)?;
             Some(proposal_action::Action::UnflagEditor(UnflagEditorAction {
                 target_address: addr,
@@ -280,9 +280,9 @@ fn parse_proposal_created(action: &Action, sequence: u32) -> Option<ProposalCrea
     })
 }
 
-/// Parse a PROPOSAL_SETTINGS_USED action into pending data.
+/// Parse a PROPOSAL_SETTINGS_SELECTED action into pending data.
 ///
-/// The action structure for PROPOSAL_SETTINGS_USED:
+/// The action structure for PROPOSAL_SETTINGS_SELECTED:
 /// - from_id: space_id (16 bytes)
 /// - to_id: space_id (16 bytes, same as from_id)
 /// - topic: proposal_id (16 bytes, padded to 32)
@@ -430,7 +430,7 @@ mod tests {
         ))
     }
 
-    // Helper to create encoded PROPOSAL_SETTINGS_USED data
+    // Helper to create encoded PROPOSAL_SETTINGS_SELECTED data
     fn encode_proposal_settings_data(
         start_date: u64,
         last_date: u64,
@@ -464,11 +464,11 @@ mod tests {
                 topic: proposal_id.iter().copied().chain(vec![0; 16]).collect(),
                 data: encode_proposal_created_data(proposal_id, 0), // Fast path
             },
-            // PROPOSAL_SETTINGS_USED (must have matching proposal_id)
+            // PROPOSAL_SETTINGS_SELECTED (must have matching proposal_id)
             Action {
                 from_id: space_id.clone(),
                 to_id: space_id.clone(),
-                action: actions::PROPOSAL_SETTINGS_USED.to_vec(),
+                action: actions::PROPOSAL_SETTINGS_SELECTED.to_vec(),
                 topic: proposal_id.iter().copied().chain(vec![0; 16]).collect(),
                 data: encode_proposal_settings_data(1000, 2000, 0, 100, 50),
             },
@@ -497,7 +497,7 @@ mod tests {
         let proposal_id = [0xCD; 16];
 
         let test_actions = vec![
-            // PROPOSAL_CREATED without matching PROPOSAL_SETTINGS_USED
+            // PROPOSAL_CREATED without matching PROPOSAL_SETTINGS_SELECTED
             // Topic: proposal_id in first 16 bytes, zeros in last 16 (right-padded)
             Action {
                 from_id: vec![1; 16],
@@ -519,12 +519,12 @@ mod tests {
         let proposal_id = [0xEF; 16];
 
         let test_actions = vec![
-            // PROPOSAL_SETTINGS_USED without matching PROPOSAL_CREATED
+            // PROPOSAL_SETTINGS_SELECTED without matching PROPOSAL_CREATED
             // Topic: proposal_id in first 16 bytes, zeros in last 16 (right-padded)
             Action {
                 from_id: vec![1; 16],
                 to_id: vec![1; 16],
-                action: actions::PROPOSAL_SETTINGS_USED.to_vec(),
+                action: actions::PROPOSAL_SETTINGS_SELECTED.to_vec(),
                 topic: proposal_id.iter().copied().chain(vec![0; 16]).collect(),
                 data: encode_proposal_settings_data(1000, 2000, 0, 100, 50),
             },
@@ -551,11 +551,11 @@ mod tests {
                 topic: proposal_id_1.iter().copied().chain(vec![0; 16]).collect(),
                 data: encode_proposal_created_data(proposal_id_1, 0),
             },
-            // PROPOSAL_SETTINGS_USED with different ID
+            // PROPOSAL_SETTINGS_SELECTED with different ID
             Action {
                 from_id: vec![2; 16],
                 to_id: vec![2; 16],
-                action: actions::PROPOSAL_SETTINGS_USED.to_vec(),
+                action: actions::PROPOSAL_SETTINGS_SELECTED.to_vec(),
                 topic: proposal_id_2.iter().copied().chain(vec![0; 16]).collect(),
                 data: encode_proposal_settings_data(1000, 2000, 0, 100, 50),
             },

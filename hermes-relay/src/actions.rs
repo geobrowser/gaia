@@ -31,9 +31,10 @@
 // =============================================================================
 
 pub use hermes_substream::ACTION_EDITOR_ADDED as EDITOR_ADDED;
-pub use hermes_substream::ACTION_EDITOR_FLAGGED as EDITOR_FLAGGED;
+pub use hermes_substream::ACTION_MEMBERSHIP_REQUESTED as MEMBERSHIP_REQUESTED;
+pub use hermes_substream::ACTION_SPACE_FAST_PATH_RESTRICTED as SPACE_FAST_PATH_RESTRICTED;
 pub use hermes_substream::ACTION_EDITOR_REMOVED as EDITOR_REMOVED;
-pub use hermes_substream::ACTION_EDITOR_UNFLAGGED as EDITOR_UNFLAGGED;
+pub use hermes_substream::ACTION_SPACE_FAST_PATH_UNRESTRICTED as SPACE_FAST_PATH_UNRESTRICTED;
 pub use hermes_substream::ACTION_EDITS_PUBLISHED as EDITS_PUBLISHED;
 pub use hermes_substream::ACTION_FLAGGED as FLAGGED;
 pub use hermes_substream::ACTION_MEMBER_ADDED as MEMBER_ADDED;
@@ -42,7 +43,7 @@ pub use hermes_substream::ACTION_PERMISSIONLESS_ACTION_ADDED as PERMISSIONLESS_A
 pub use hermes_substream::ACTION_PERMISSIONLESS_ACTION_REMOVED as PERMISSIONLESS_ACTION_REMOVED;
 pub use hermes_substream::ACTION_PROPOSAL_CREATED as PROPOSAL_CREATED;
 pub use hermes_substream::ACTION_PROPOSAL_EXECUTED as PROPOSAL_EXECUTED;
-pub use hermes_substream::ACTION_PROPOSAL_SETTINGS_USED as PROPOSAL_SETTINGS_USED;
+pub use hermes_substream::ACTION_PROPOSAL_SETTINGS_SELECTED as PROPOSAL_SETTINGS_SELECTED;
 pub use hermes_substream::ACTION_PROPOSAL_UPDATED as PROPOSAL_UPDATED;
 pub use hermes_substream::ACTION_PROPOSAL_VOTED as PROPOSAL_VOTED;
 pub use hermes_substream::ACTION_SPACE_ID_CLEARED as SPACE_ID_CLEARED;
