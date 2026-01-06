@@ -123,7 +123,7 @@ fn bench_proposal_action_type_from_calldata(c: &mut Criterion) {
         selectors::PUBLISH,
         selectors::FLAG,
         selectors::UNFLAG,
-        selectors::UNFLAG_EDITOR,
+        selectors::UNRESTRICT_SPACE,
         selectors::UPDATE_VOTING_SETTINGS,
         selectors::PING,
     ];
