@@ -3,11 +3,13 @@
 import logging
 import os
 import sys
+from enum import Enum
 
 from dotenv import load_dotenv
 
 from src.algorithm.models import RankingConfig
 from src.algorithm.scoring import RankingEngine
+from src.scoring_data_emitter import ScoringDataEmitter
 from src.scoring_data_provider import ScoringDataProvider
 from src.scoring_data_provider.scoring_data_provider import ScoringData
 from src.scoring_data_writer import ScoringDataWriter
@@ -15,17 +17,69 @@ from src.scoring_data_writer import ScoringDataWriter
 logger = logging.getLogger(__name__)
 
 
-class ScoringPipeline:
-    """Scoring pipeline."""
+class OutputMode(Enum):
+    """Output mode for the scoring pipeline."""
 
-    def __init__(self, database_url: str, engine: RankingEngine):
+    POSTGRES = "postgres"  # Write to PostgreSQL only
+    KAFKA = "kafka"  # Publish to Kafka only
+    ALL = "all"  # Write to PostgreSQL AND publish to Kafka
+
+
+class ScoringPipeline:
+    """Scoring pipeline with configurable output modes."""
+
+    def __init__(
+        self,
+        database_url: str,
+        engine: RankingEngine,
+        output_mode: OutputMode = OutputMode.ALL,
+        kafka_broker: str | None = None,
+        kafka_topic: str = "curation.scores",
+        kafka_username: str | None = None,
+        kafka_password: str | None = None,
+        kafka_ssl_ca_pem: str | None = None,
+        score_batch_size: int = 1000,
+    ):
+        """Initialize the scoring pipeline.
+
+        Args:
+            database_url: PostgreSQL connection string.
+            engine: RankingEngine for score calculation.
+            output_mode: Where to output scores (postgres, kafka, or all).
+            kafka_broker: Kafka broker address (required if output_mode includes kafka).
+            kafka_topic: Kafka topic for scores.
+            kafka_username: SASL username for Kafka authentication.
+            kafka_password: SASL password for Kafka authentication.
+            kafka_ssl_ca_pem: Custom CA certificate for Kafka SSL.
+            score_batch_size: Maximum scores per Kafka message batch.
+        """
         self.engine = engine
         self.database_url = database_url
+        self.output_mode = output_mode
         self.scoring_data: ScoringData | None = None
+
+        # Initialize writer for postgres modes
+        self._writer: ScoringDataWriter | None = None
+        if output_mode in (OutputMode.POSTGRES, OutputMode.ALL):
+            self._writer = ScoringDataWriter(database_url)
+
+        # Initialize emitter for kafka modes
+        self._emitter: ScoringDataEmitter | None = None
+        if output_mode in (OutputMode.KAFKA, OutputMode.ALL):
+            if not kafka_broker:
+                raise ValueError("KAFKA_BROKER is required when OUTPUT_MODE includes kafka")
+            self._emitter = ScoringDataEmitter(
+                broker=kafka_broker,
+                topic=kafka_topic,
+                batch_size=score_batch_size,
+                username=kafka_username,
+                password=kafka_password,
+                ssl_ca_pem=kafka_ssl_ca_pem,
+            )
 
     def run(self) -> tuple[int, int]:
         """Run the full scoring pipeline."""
-        logger.info("Starting scoring pipeline")
+        logger.info("Starting scoring pipeline (output_mode=%s)", self.output_mode.value)
 
         self._fetch_data()
         self._rank_spaces()
@@ -76,11 +130,29 @@ class ScoringPipeline:
         logger.info("Ranked %d entities", len(self.scoring_data.entities))
 
     def _write_scores(self) -> None:
-        """Write scores to the database."""
-        logger.info("Writing scores to database")
-        writer = ScoringDataWriter(self.database_url)
-        writer.write_all(self.scoring_data.entities, self.scoring_data.spaces)
-        logger.info("Scores written successfully")
+        """Write/emit scores based on output mode."""
+        entities = self.scoring_data.entities
+        spaces = self.scoring_data.spaces
+
+        # Write to PostgreSQL if configured
+        if self._writer:
+            logger.info("Writing scores to PostgreSQL")
+            self._writer.write_all(entities, spaces)
+            logger.info("Scores written to PostgreSQL successfully")
+
+        # Emit to Kafka if configured
+        if self._emitter:
+            logger.info("Emitting scores to Kafka")
+            self._emitter.emit_all(entities, spaces)
+            remaining = self._emitter.flush()
+            if remaining > 0:
+                logger.warning("Some Kafka messages may not have been delivered: %d remaining", remaining)
+            else:
+                logger.info(
+                    "Scores emitted to Kafka successfully: %d messages, %d errors",
+                    self._emitter.messages_produced,
+                    self._emitter.delivery_errors,
+                )
 
 
 def main() -> None:
@@ -94,11 +166,29 @@ def main() -> None:
         handlers=[logging.StreamHandler(sys.stdout)],
     )
 
+    # Database configuration (required)
     database_url = os.environ.get("DATABASE_URL")
     if not database_url:
         logger.error("DATABASE_URL environment variable is required")
         sys.exit(1)
 
+    # Output mode configuration
+    output_mode_str = os.environ.get("OUTPUT_MODE", "all").lower()
+    try:
+        output_mode = OutputMode(output_mode_str)
+    except ValueError:
+        logger.error("Invalid OUTPUT_MODE: %s. Must be one of: postgres, kafka, all", output_mode_str)
+        sys.exit(1)
+
+    # Kafka configuration
+    kafka_broker = os.environ.get("KAFKA_BROKER", "localhost:9092")
+    kafka_topic = os.environ.get("KAFKA_TOPIC", "curation.scores")
+    kafka_username = os.environ.get("KAFKA_USERNAME")
+    kafka_password = os.environ.get("KAFKA_PASSWORD")
+    kafka_ssl_ca_pem = os.environ.get("KAFKA_SSL_CA_PEM")
+    score_batch_size = int(os.environ.get("SCORE_BATCH_SIZE", "1000"))
+
+    # Ranking engine configuration
     config = RankingConfig(
         use_contestation_score=os.environ.get("USE_CONTESTATION_SCORE", "False").lower() == "true",
         use_time_decay=os.environ.get("USE_TIME_DECAY", "False").lower() == "true",
@@ -116,7 +206,18 @@ def main() -> None:
     engine = RankingEngine(config)
 
     try:
-        ScoringPipeline(database_url, engine).run()
+        pipeline = ScoringPipeline(
+            database_url=database_url,
+            engine=engine,
+            output_mode=output_mode,
+            kafka_broker=kafka_broker,
+            kafka_topic=kafka_topic,
+            kafka_username=kafka_username,
+            kafka_password=kafka_password,
+            kafka_ssl_ca_pem=kafka_ssl_ca_pem,
+            score_batch_size=score_batch_size,
+        )
+        pipeline.run()
     except Exception:
         logger.exception("Scoring pipeline failed")
         sys.exit(1)
