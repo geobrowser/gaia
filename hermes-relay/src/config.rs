@@ -4,7 +4,7 @@
 //! use to subscribe to specific event types from hermes-substream.
 
 /// Path to the hermes-substream package file
-pub const HERMES_SPKG: &str = "hermes-substream.spkg";
+pub const HERMES_SPKG: &str = "hermes-substream/hermes-substream-v0.1.0.spkg";
 
 /// Available output modules in hermes-substream.
 ///

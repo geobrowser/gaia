@@ -25,6 +25,11 @@
 //! ## Configuration
 //!
 //! Environment variables:
+//! - `USE_MOCK` - Set to "false" or "0" to use live substreams (default: true)
+//! - `SUBSTREAMS_ENDPOINT` - Substreams endpoint URL (default: geotest.substreams.pinax.network:443)
+//! - `SUBSTREAMS_API_TOKEN` - API token for substreams authentication
+//! - `SUBSTREAMS_START_BLOCK` - First block to consume (default: 0)
+//! - `SUBSTREAMS_END_BLOCK` - Last block to consume (default: u64::MAX for continuous)
 //! - `KAFKA_BROKER` - Kafka broker address (default: localhost:9092)
 //! - `KAFKA_USERNAME` - SASL username for managed Kafka (optional)
 //! - `KAFKA_PASSWORD` - SASL password for managed Kafka (optional)
@@ -602,6 +607,36 @@ async fn async_main() -> anyhow::Result<()> {
     // Create the pipeline
     let pipeline = Pipeline::new(emitter);
 
+    // Determine stream source: mock (default) or live
+    let use_mock = env::var("USE_MOCK")
+        .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+        .unwrap_or(true);
+
+    let source = if use_mock {
+        info!("Using mock data source");
+        StreamSource::mock()
+    } else {
+        let endpoint = env::var("SUBSTREAMS_ENDPOINT")
+            .unwrap_or_else(|_| "geotest.substreams.pinax.network:443".to_string());
+        let start_block: i64 = env::var("SUBSTREAMS_START_BLOCK")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0);
+        let end_block: u64 = env::var("SUBSTREAMS_END_BLOCK")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(u64::MAX);
+
+        info!(
+            endpoint = %endpoint,
+            start_block = start_block,
+            end_block = end_block,
+            "Using live substreams source"
+        );
+
+        StreamSource::live(endpoint, HermesModule::Actions, start_block, end_block)
+    };
+
     info!(
         module = %HermesModule::Actions,
         topics.spaces = topics::SPACE_CREATIONS,
@@ -619,8 +654,8 @@ async fn async_main() -> anyhow::Result<()> {
         "Starting pipeline"
     );
 
-    // Run the pipeline with mock data
-    pipeline.run(StreamSource::mock()).await?;
+    // Run the pipeline
+    pipeline.run(source).await?;
 
     // Flush all pending messages to Kafka before exiting
     info!("Flushing Kafka producer");
