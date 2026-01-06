@@ -153,11 +153,8 @@ mod tests {
     #[test]
     fn test_convert_eoa_space_with_type() {
         // Create a 32-byte topic with distinct address bytes (first 20) and padding (last 12)
-        let mut topic = vec![0u8; 32];
-        for i in 0..20 {
-            topic[i] = (i + 1) as u8; // Address bytes 1-20
-        }
-        // Last 12 bytes remain zero (padding)
+        let mut topic: Vec<u8> = (1..=20).collect();
+        topic.resize(32, 0); // Pad to 32 bytes with zeros
 
         let action = Action {
             from_id: vec![0; 16], // zeros for SPACE_ID_REGISTERED
