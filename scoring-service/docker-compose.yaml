@@ -12,4 +12,14 @@ services:
       - PYTHONUNBUFFERED=1
       # Use copy mode for uv to avoid hardlink warnings in Docker volumes
       - UV_LINK_MODE=copy
+      # Kafka configuration
+      - OUTPUT_MODE=${OUTPUT_MODE:-postgres}
+      - KAFKA_BROKER=${KAFKA_BROKER:-kafka:29092}
+      - KAFKA_TOPIC=${KAFKA_TOPIC:-curation.scores}
+      - SCORE_BATCH_SIZE=${SCORE_BATCH_SIZE:-1000}
+    networks:
+      - hermes_default
 
+networks:
+  hermes_default:
+    external: true
