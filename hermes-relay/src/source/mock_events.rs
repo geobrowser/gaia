@@ -596,57 +596,69 @@ pub fn proposal_executed(space_id: SpaceId, proposal_id: ProposalId) -> Action {
 
 /// Create an EDITOR_ADDED action.
 ///
+/// ZC16 format:
 /// - `space_id`: The space adding the editor
 /// - `editor_address`: The editor's address (as bytes32(bytes20(address)))
+///   - topic: bytes32(spaceId) - target space ID
+///   - data: abi.encode(address) - 32 bytes with address
 pub fn editor_added(space_id: SpaceId, editor_address: Address) -> Action {
     Action {
         from_id: space_id.to_vec(),
         to_id: space_id.to_vec(), // from_id == to_id for DAOSpace actions
         action: actions::EDITOR_ADDED.to_vec(),
-        topic: editor_address.to_vec(),
-        data: vec![],
+        topic: vec![0u8; 32], // ZC16: topic is target space ID (can be zeros for self)
+        data: editor_address.to_vec(), // ZC16: address is ABI-encoded in data field
     }
 }
 
 /// Create an EDITOR_REMOVED action.
 ///
+/// ZC16 format:
 /// - `space_id`: The space removing the editor
 /// - `editor_address`: The editor's address (as bytes32(bytes20(address)))
+///   - topic: bytes32(spaceId) - target space ID
+///   - data: abi.encode(address) - 32 bytes with address
 pub fn editor_removed(space_id: SpaceId, editor_address: Address) -> Action {
     Action {
         from_id: space_id.to_vec(),
         to_id: space_id.to_vec(), // from_id == to_id for DAOSpace actions
         action: actions::EDITOR_REMOVED.to_vec(),
-        topic: editor_address.to_vec(),
-        data: vec![],
+        topic: vec![0u8; 32], // ZC16: topic is target space ID (can be zeros for self)
+        data: editor_address.to_vec(), // ZC16: address is ABI-encoded in data field
     }
 }
 
 /// Create a MEMBER_ADDED action.
 ///
+/// ZC16 format:
 /// - `space_id`: The space adding the member
 /// - `member_address`: The member's address (as bytes32(bytes20(address)))
+///   - topic: bytes32(spaceId) - target space ID
+///   - data: abi.encode(address) - 32 bytes with address
 pub fn member_added(space_id: SpaceId, member_address: Address) -> Action {
     Action {
         from_id: space_id.to_vec(),
         to_id: space_id.to_vec(), // from_id == to_id for DAOSpace actions
         action: actions::MEMBER_ADDED.to_vec(),
-        topic: member_address.to_vec(),
-        data: vec![],
+        topic: vec![0u8; 32], // ZC16: topic is target space ID (can be zeros for self)
+        data: member_address.to_vec(), // ZC16: address is ABI-encoded in data field
     }
 }
 
 /// Create a MEMBER_REMOVED action.
 ///
+/// ZC16 format:
 /// - `space_id`: The space removing the member
 /// - `member_address`: The member's address (as bytes32(bytes20(address)))
+///   - topic: bytes32(spaceId) - target space ID
+///   - data: abi.encode(address) - 32 bytes with address
 pub fn member_removed(space_id: SpaceId, member_address: Address) -> Action {
     Action {
         from_id: space_id.to_vec(),
         to_id: space_id.to_vec(), // from_id == to_id for DAOSpace actions
         action: actions::MEMBER_REMOVED.to_vec(),
-        topic: member_address.to_vec(),
-        data: vec![],
+        topic: vec![0u8; 32], // ZC16: topic is target space ID (can be zeros for self)
+        data: member_address.to_vec(), // ZC16: address is ABI-encoded in data field
     }
 }
 

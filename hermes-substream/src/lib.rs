@@ -329,9 +329,11 @@ fn map_editors_added(block: eth::v2::Block) -> Result<EditorAddedList, substream
         .logs()
         .filter_map(|log| parse_action(log))
         .filter(|action| action.action.as_slice() == ACTION_EDITOR_ADDED)
+        .filter(|action| action.data.len() >= 32) // ZC16: address in data field
         .map(|action| EditorAdded {
             space_id: action.from_id,
-            editor_address: action.topic[12..32].to_vec(),
+            // ZC16: address is ABI-encoded in data field (12 bytes padding + 20 bytes address)
+            editor_address: action.data[12..32].to_vec(),
             data: action.data,
         })
         .collect();
@@ -347,9 +349,11 @@ fn map_editors_removed(
         .logs()
         .filter_map(|log| parse_action(log))
         .filter(|action| action.action.as_slice() == ACTION_EDITOR_REMOVED)
+        .filter(|action| action.data.len() >= 32) // ZC16: address in data field
         .map(|action| EditorRemoved {
             space_id: action.from_id,
-            editor_address: action.topic[12..32].to_vec(),
+            // ZC16: address is ABI-encoded in data field (12 bytes padding + 20 bytes address)
+            editor_address: action.data[12..32].to_vec(),
             data: action.data,
         })
         .collect();
@@ -363,9 +367,11 @@ fn map_members_added(block: eth::v2::Block) -> Result<MemberAddedList, substream
         .logs()
         .filter_map(|log| parse_action(log))
         .filter(|action| action.action.as_slice() == ACTION_MEMBER_ADDED)
+        .filter(|action| action.data.len() >= 32) // ZC16: address in data field
         .map(|action| MemberAdded {
             space_id: action.from_id,
-            member_address: action.topic[12..32].to_vec(),
+            // ZC16: address is ABI-encoded in data field (12 bytes padding + 20 bytes address)
+            member_address: action.data[12..32].to_vec(),
             data: action.data,
         })
         .collect();
@@ -381,9 +387,11 @@ fn map_members_removed(
         .logs()
         .filter_map(|log| parse_action(log))
         .filter(|action| action.action.as_slice() == ACTION_MEMBER_REMOVED)
+        .filter(|action| action.data.len() >= 32) // ZC16: address in data field
         .map(|action| MemberRemoved {
             space_id: action.from_id,
-            member_address: action.topic[12..32].to_vec(),
+            // ZC16: address is ABI-encoded in data field (12 bytes padding + 20 bytes address)
+            member_address: action.data[12..32].to_vec(),
             data: action.data,
         })
         .collect();

@@ -2,7 +2,7 @@
 //!
 //! Converts membership actions to typed Hermes events.
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use hermes_instrumentation::debug_span;
 
 use hermes_relay::{Action, actions};
@@ -11,6 +11,7 @@ use hermes_schema::pb::membership::{
 };
 
 use super::BlockMetadata;
+use crate::decode::decode_address;
 
 /// Result of transforming membership actions.
 #[derive(Debug, Default)]
@@ -84,21 +85,19 @@ pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformRe
 
 /// Convert an EDITOR_ADDED or MEMBER_ADDED action to HermesRoleGranted proto.
 ///
-/// The action structure:
+/// ZC16 action structure:
 /// - from_id: space_id (16 bytes) - space granting role
-/// - topic: account address (32 bytes, padded from 20)
+/// - topic: bytes32(spaceId) - target space ID (unused for address extraction)
+/// - data: abi.encode(address) - 32 bytes with address in last 20 bytes
 fn convert_role_granted(
     action: &Action,
     meta: &BlockMetadata,
     role: MembershipRole,
     sequence: u32,
 ) -> Result<HermesRoleGranted> {
-    // Extract the 20-byte address from the 32-byte topic (last 20 bytes)
-    let account = if action.topic.len() >= 20 {
-        action.topic[action.topic.len() - 20..].to_vec()
-    } else {
-        action.topic.clone()
-    };
+    // ZC16: Extract the 20-byte address from the ABI-encoded data field
+    let account = decode_address(&action.data)
+        .context("Failed to decode account address from data field")?;
 
     Ok(HermesRoleGranted {
         space_id: action.from_id.clone(),
@@ -110,21 +109,19 @@ fn convert_role_granted(
 
 /// Convert an EDITOR_REMOVED or MEMBER_REMOVED action to HermesRoleRevoked proto.
 ///
-/// The action structure:
+/// ZC16 action structure:
 /// - from_id: space_id (16 bytes) - space revoking role
-/// - topic: account address (32 bytes, padded from 20)
+/// - topic: bytes32(spaceId) - target space ID (unused for address extraction)
+/// - data: abi.encode(address) - 32 bytes with address in last 20 bytes
 fn convert_role_revoked(
     action: &Action,
     meta: &BlockMetadata,
     role: MembershipRole,
     sequence: u32,
 ) -> Result<HermesRoleRevoked> {
-    // Extract the 20-byte address from the 32-byte topic (last 20 bytes)
-    let account = if action.topic.len() >= 20 {
-        action.topic[action.topic.len() - 20..].to_vec()
-    } else {
-        action.topic.clone()
-    };
+    // ZC16: Extract the 20-byte address from the ABI-encoded data field
+    let account = decode_address(&action.data)
+        .context("Failed to decode account address from data field")?;
 
     Ok(HermesRoleRevoked {
         space_id: action.from_id.clone(),
@@ -165,12 +162,13 @@ mod tests {
 
     #[test]
     fn test_convert_editor_added() {
+        // ZC16 format: address is ABI-encoded in data field (12 bytes padding + 20 bytes address)
         let action = Action {
             from_id: vec![1; 16],
             to_id: vec![],
             action: actions::EDITOR_ADDED.to_vec(),
-            topic: vec![0; 12].into_iter().chain(vec![2; 20]).collect(), // padded address
-            data: vec![],
+            topic: vec![0; 32], // topic now contains space ID (not used for address)
+            data: vec![0; 12].into_iter().chain(vec![2; 20]).collect(), // ABI-encoded address
         };
 
         let result =
@@ -182,12 +180,13 @@ mod tests {
 
     #[test]
     fn test_convert_member_removed() {
+        // ZC16 format: address is ABI-encoded in data field (12 bytes padding + 20 bytes address)
         let action = Action {
             from_id: vec![1; 16],
             to_id: vec![],
             action: actions::MEMBER_REMOVED.to_vec(),
-            topic: vec![0; 12].into_iter().chain(vec![3; 20]).collect(),
-            data: vec![],
+            topic: vec![0; 32], // topic now contains space ID (not used for address)
+            data: vec![0; 12].into_iter().chain(vec![3; 20]).collect(), // ABI-encoded address
         };
 
         let result =
@@ -214,20 +213,21 @@ mod tests {
 
     #[test]
     fn test_transform_filters_actions() {
+        // ZC16 format: address is ABI-encoded in data field
         let actions = vec![
             Action {
                 from_id: vec![1; 16],
                 to_id: vec![],
                 action: actions::EDITOR_ADDED.to_vec(),
-                topic: vec![2; 32],
-                data: vec![],
+                topic: vec![0; 32],
+                data: vec![0; 12].into_iter().chain(vec![2; 20]).collect(), // ABI-encoded address
             },
             Action {
                 from_id: vec![3; 16],
                 to_id: vec![],
                 action: actions::MEMBER_ADDED.to_vec(),
-                topic: vec![4; 32],
-                data: vec![],
+                topic: vec![0; 32],
+                data: vec![0; 12].into_iter().chain(vec![4; 20]).collect(), // ABI-encoded address
             },
             Action {
                 from_id: vec![5; 16],

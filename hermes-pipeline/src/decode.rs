@@ -421,6 +421,30 @@ pub fn decode_vote_data(data: &[u8]) -> Result<VoteData, DecodeError> {
 }
 
 // ============================================================================
+// Membership Decoding
+// ============================================================================
+
+/// Decode ABI-encoded address from data field.
+///
+/// ZC16 format for EDITOR_ADDED, EDITOR_REMOVED, MEMBER_ADDED, MEMBER_REMOVED:
+/// - topic: bytes32(spaceId) - target space ID (unused for address extraction)
+/// - data: abi.encode(address) - 32 bytes, address in last 20 bytes
+///
+/// Returns the 20-byte address.
+pub fn decode_address(data: &[u8]) -> Result<Vec<u8>, DecodeError> {
+    // ABI-encoded address is 32 bytes: 12 bytes padding + 20 bytes address
+    if data.len() < 32 {
+        return Err(DecodeError::DataTooShort {
+            expected: 32,
+            actual: data.len(),
+        });
+    }
+
+    // Extract the 20-byte address from the last 20 bytes
+    Ok(data[12..32].to_vec())
+}
+
+// ============================================================================
 // Content Decoding
 // ============================================================================
 
@@ -673,5 +697,22 @@ mod tests {
         let mut calldata = selectors::ADD_MEMBER.to_vec();
         calldata.extend_from_slice(&[0u8; 20]); // Only 24 bytes total
         assert!(decode_address_arg(&calldata).is_none());
+    }
+
+    #[test]
+    fn test_decode_address() {
+        // ABI-encoded address: 12 bytes padding + 20 bytes address
+        let mut data = vec![0u8; 12];
+        data.extend_from_slice(&[0xAA; 20]);
+
+        let result = decode_address(&data).unwrap();
+        assert_eq!(result, vec![0xAA; 20]);
+    }
+
+    #[test]
+    fn test_decode_address_too_short() {
+        let data = vec![0u8; 20]; // Too short
+        let result = decode_address(&data);
+        assert!(matches!(result, Err(DecodeError::DataTooShort { .. })));
     }
 }
