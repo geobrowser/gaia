@@ -85,7 +85,7 @@ This transformer is part of the Hermes architecture (see `docs/hermes-architectu
 | `USE_MOCK` | Set to "true" or "1" to use mock data | `false` |
 | `SUBSTREAMS_ENDPOINT` | Substreams gRPC endpoint URL | `geotest.substreams.pinax.network:443` |
 | `SUBSTREAMS_API_TOKEN` | Auth token for substreams | - |
-| `SUBSTREAMS_START_BLOCK` | Block number to start from | `0` |
+| `SUBSTREAMS_START_BLOCK` | Block number to start from | `88109` |
 | `SUBSTREAMS_END_BLOCK` | Block number to stop at | `u64::MAX` (continuous) |
 
 ### Kafka Environment Variables

@@ -28,7 +28,7 @@
 //! - `USE_MOCK` - Set to "true" or "1" to use mock data (default: false)
 //! - `SUBSTREAMS_ENDPOINT` - Substreams endpoint URL (default: geotest.substreams.pinax.network:443)
 //! - `SUBSTREAMS_API_TOKEN` - API token for substreams authentication
-//! - `SUBSTREAMS_START_BLOCK` - First block to consume (default: 0)
+//! - `SUBSTREAMS_START_BLOCK` - First block to consume (default: 88109)
 //! - `SUBSTREAMS_END_BLOCK` - Last block to consume (default: u64::MAX for continuous)
 //! - `KAFKA_BROKER` - Kafka broker address (default: localhost:9092)
 //! - `KAFKA_USERNAME` - SASL username for managed Kafka (optional)
@@ -621,7 +621,7 @@ async fn async_main() -> anyhow::Result<()> {
         let start_block: i64 = env::var("SUBSTREAMS_START_BLOCK")
             .ok()
             .and_then(|s| s.parse().ok())
-            .unwrap_or(0);
+            .unwrap_or(88109);
         let end_block: u64 = env::var("SUBSTREAMS_END_BLOCK")
             .ok()
             .and_then(|s| s.parse().ok())
