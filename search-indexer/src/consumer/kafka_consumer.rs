@@ -459,8 +459,10 @@ impl KafkaConsumer {
 
         // Parse space_id - it's a 16-byte UUID
         let space_id = if edit.space_id.len() == 16 {
-            let bytes: [u8; 16] = edit.space_id.as_slice().try_into()
-                .map_err(|_| IngestError::parse("Failed to convert space_id bytes".to_string()))?;
+            let bytes: [u8; 16] =
+                edit.space_id.as_slice().try_into().map_err(|_| {
+                    IngestError::parse("Failed to convert space_id bytes".to_string())
+                })?;
             Uuid::from_bytes(bytes)
         } else {
             return Err(IngestError::parse(format!(

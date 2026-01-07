@@ -9,10 +9,10 @@ pub mod pb;
 use pb::hermes::*;
 use substreams_ethereum::{block_view::LogView, pb::eth};
 
-// Space Registry proxy contract address (Base mainnet)
+// Space Registry proxy contract address (ZC16 testnet)
 const SPACE_REGISTRY_ADDRESS: [u8; 20] = [
-    0x6B, 0x9c, 0x88, 0x7C, 0x5D, 0x48, 0x29, 0x3e, 0x8a, 0xE3, 0x31, 0x3F, 0xC3, 0xE8, 0x56, 0xc0,
-    0x79, 0x85, 0xDD, 0x13,
+    0x49, 0x2B, 0xFF, 0x74, 0xb1, 0x3A, 0xCF, 0x3C, 0xC2, 0x49, 0xA9, 0x8d, 0x07, 0x9F, 0x0a, 0x6F,
+    0x1d, 0x07, 0xDD, 0x2f,
 ];
 
 // Action type hashes - keccak256 of action names.
@@ -66,15 +66,20 @@ pub const ACTION_MEMBER_REMOVED: [u8; 32] = [
     0xf2, 0x3a, 0xe2, 0x52, 0xd6, 0x11, 0x18, 0x59, 0x03, 0xbb, 0xe3, 0xe5, 0x22, 0x9e, 0x4e, 0x3e,
     0x2b, 0x1d, 0x74, 0x85, 0x40, 0x71, 0x67, 0x63, 0x47, 0x9e, 0xe2, 0xd7, 0x82, 0x43, 0xbb, 0xc7,
 ];
-// GOVERNANCE.EDITOR_FLAGGED
-pub const ACTION_EDITOR_FLAGGED: [u8; 32] = [
-    0xbb, 0x1a, 0x16, 0xb8, 0xbd, 0x0a, 0x30, 0xa1, 0x94, 0xf4, 0xd7, 0x24, 0x7a, 0x82, 0x76, 0x57,
-    0x32, 0xd2, 0xd7, 0x29, 0xd8, 0xa0, 0xa8, 0x23, 0x1d, 0x91, 0x68, 0xbd, 0x41, 0x2c, 0x6b, 0x0e,
+// GOVERNANCE.SPACE_FAST_PATH_RESTRICTED (previously EDITOR_FLAGGED)
+pub const ACTION_SPACE_FAST_PATH_RESTRICTED: [u8; 32] = [
+    0x9d, 0x04, 0xa4, 0x00, 0xd7, 0x71, 0xd1, 0xd5, 0x21, 0x1f, 0x97, 0xbd, 0x55, 0x7e, 0xdf, 0x5e,
+    0x7d, 0x77, 0x71, 0xcb, 0xe7, 0x78, 0x50, 0x34, 0x2f, 0xb8, 0x5e, 0x4f, 0x7b, 0xf9, 0x12, 0x05,
 ];
-// GOVERNANCE.EDITOR_UNFLAGGED
-pub const ACTION_EDITOR_UNFLAGGED: [u8; 32] = [
-    0xf2, 0xdb, 0x16, 0x7b, 0xcd, 0x11, 0xbc, 0x0a, 0xf7, 0xf7, 0x89, 0xd0, 0x25, 0x7d, 0x3c, 0x13,
-    0x19, 0x30, 0x2a, 0xab, 0xa8, 0x2e, 0xe2, 0xa2, 0xd8, 0x30, 0xf8, 0xa4, 0x84, 0xc6, 0x2d, 0x2f,
+// GOVERNANCE.SPACE_FAST_PATH_UNRESTRICTED (previously EDITOR_UNFLAGGED)
+pub const ACTION_SPACE_FAST_PATH_UNRESTRICTED: [u8; 32] = [
+    0xaf, 0x1c, 0xc7, 0xd5, 0x06, 0x6b, 0x7b, 0x2b, 0xc3, 0x30, 0xdb, 0xa1, 0x35, 0x7b, 0xda, 0x13,
+    0x96, 0x01, 0x51, 0x4b, 0xf8, 0x4c, 0x2c, 0x02, 0x69, 0xb8, 0xb9, 0x0f, 0xd8, 0x22, 0xe1, 0x95,
+];
+// GOVERNANCE.MEMBERSHIP_REQUESTED
+pub const ACTION_MEMBERSHIP_REQUESTED: [u8; 32] = [
+    0xe0, 0x48, 0xe0, 0xdc, 0x30, 0x1b, 0x1b, 0xb4, 0xe2, 0x44, 0x66, 0x08, 0xd8, 0x85, 0x8e, 0xcf,
+    0x95, 0xc3, 0x26, 0xd7, 0x24, 0x1c, 0x99, 0x43, 0xb1, 0x4f, 0x64, 0x7f, 0xd3, 0xa7, 0x8d, 0x9a,
 ];
 // GOVERNANCE.SPACE_LEFT
 pub const ACTION_SPACE_LEFT: [u8; 32] = [
@@ -161,10 +166,10 @@ pub const ACTION_PERMISSIONLESS_ACTION_REMOVED: [u8; 32] = [
     0x1d, 0x28, 0x31, 0xef, 0xb2, 0x9d, 0x30, 0x38, 0x9d, 0xf0, 0xd6, 0x33, 0xa2, 0x45, 0x1a, 0x89,
     0x74, 0xdd, 0x2b, 0xc4, 0x25, 0x37, 0xca, 0xb0, 0x8e, 0x95, 0xcf, 0x8b, 0x49, 0xcf, 0x78, 0x21,
 ];
-// GOVERNANCE.PROPOSAL_SETTINGS_USED
-pub const ACTION_PROPOSAL_SETTINGS_USED: [u8; 32] = [
-    0xb3, 0x93, 0x97, 0x4f, 0xe5, 0x15, 0x79, 0x10, 0x5d, 0x1b, 0x33, 0xc2, 0xc4, 0xa0, 0x8b, 0x55,
-    0xff, 0x29, 0x32, 0xd2, 0x37, 0x56, 0x3a, 0x74, 0x18, 0x86, 0x95, 0xd3, 0x73, 0xa6, 0xb1, 0xfb,
+// GOVERNANCE.PROPOSAL_SETTINGS_SELECTED (previously PROPOSAL_SETTINGS_USED)
+pub const ACTION_PROPOSAL_SETTINGS_SELECTED: [u8; 32] = [
+    0xb3, 0xb3, 0x3d, 0xe1, 0x8e, 0x86, 0x67, 0x15, 0xc2, 0xd6, 0x1e, 0x4d, 0x6f, 0x7a, 0xe2, 0x71,
+    0x9e, 0x54, 0x62, 0x1a, 0x74, 0x3e, 0x30, 0xe0, 0x0b, 0x3a, 0xf3, 0x42, 0x64, 0x3d, 0x43, 0x58,
 ];
 // GOVERNANCE.PROPOSAL_UPDATED
 pub const ACTION_PROPOSAL_UPDATED: [u8; 32] = [
@@ -203,9 +208,11 @@ fn parse_action(log: LogView) -> Option<Action> {
         return None;
     }
 
+    // ZC16: bytes16 values are LEFT-aligned (right-padded with zeros)
+    // So space IDs are in bytes 0..16, not 16..32
     Some(Action {
-        from_id: topics[0][16..32].to_vec(),
-        to_id: topics[1][16..32].to_vec(),
+        from_id: topics[0][0..16].to_vec(),
+        to_id: topics[1][0..16].to_vec(),
         action: topics[2].to_vec(),
         topic: topics[3].to_vec(),
         data: log.data().to_vec(),
@@ -237,7 +244,8 @@ fn map_spaces_registered(
         .filter(|action| action.action.as_slice() == ACTION_SPACE_ID_REGISTERED)
         .map(|action| SpaceRegistered {
             space_id: action.to_id,
-            space_address: action.topic[12..32].to_vec(),
+            // ZC16: address is LEFT-aligned (right-padded with zeros)
+            space_address: action.topic[0..20].to_vec(),
             data: action.data,
         })
         .collect();
@@ -255,7 +263,8 @@ fn map_spaces_migrated(
         .filter(|action| action.action.as_slice() == ACTION_SPACE_ID_MIGRATED)
         .map(|action| SpaceMigrated {
             space_id: action.from_id,
-            new_space_address: action.topic[12..32].to_vec(),
+            // ZC16: address is LEFT-aligned (right-padded with zeros)
+            new_space_address: action.topic[0..20].to_vec(),
             data: action.data,
         })
         .collect();
@@ -324,9 +333,11 @@ fn map_editors_added(block: eth::v2::Block) -> Result<EditorAddedList, substream
         .logs()
         .filter_map(|log| parse_action(log))
         .filter(|action| action.action.as_slice() == ACTION_EDITOR_ADDED)
+        .filter(|action| action.data.len() >= 32) // ZC16: address in data field
         .map(|action| EditorAdded {
             space_id: action.from_id,
-            editor_address: action.topic[12..32].to_vec(),
+            // ZC16: address is ABI-encoded in data field (12 bytes padding + 20 bytes address)
+            editor_address: action.data[12..32].to_vec(),
             data: action.data,
         })
         .collect();
@@ -342,9 +353,11 @@ fn map_editors_removed(
         .logs()
         .filter_map(|log| parse_action(log))
         .filter(|action| action.action.as_slice() == ACTION_EDITOR_REMOVED)
+        .filter(|action| action.data.len() >= 32) // ZC16: address in data field
         .map(|action| EditorRemoved {
             space_id: action.from_id,
-            editor_address: action.topic[12..32].to_vec(),
+            // ZC16: address is ABI-encoded in data field (12 bytes padding + 20 bytes address)
+            editor_address: action.data[12..32].to_vec(),
             data: action.data,
         })
         .collect();
@@ -358,9 +371,11 @@ fn map_members_added(block: eth::v2::Block) -> Result<MemberAddedList, substream
         .logs()
         .filter_map(|log| parse_action(log))
         .filter(|action| action.action.as_slice() == ACTION_MEMBER_ADDED)
+        .filter(|action| action.data.len() >= 32) // ZC16: address in data field
         .map(|action| MemberAdded {
             space_id: action.from_id,
-            member_address: action.topic[12..32].to_vec(),
+            // ZC16: address is ABI-encoded in data field (12 bytes padding + 20 bytes address)
+            member_address: action.data[12..32].to_vec(),
             data: action.data,
         })
         .collect();
@@ -376,9 +391,11 @@ fn map_members_removed(
         .logs()
         .filter_map(|log| parse_action(log))
         .filter(|action| action.action.as_slice() == ACTION_MEMBER_REMOVED)
+        .filter(|action| action.data.len() >= 32) // ZC16: address in data field
         .map(|action| MemberRemoved {
             space_id: action.from_id,
-            member_address: action.topic[12..32].to_vec(),
+            // ZC16: address is ABI-encoded in data field (12 bytes padding + 20 bytes address)
+            member_address: action.data[12..32].to_vec(),
             data: action.data,
         })
         .collect();
@@ -393,10 +410,11 @@ fn map_editors_flagged(
     let editors: Vec<EditorFlagged> = block
         .logs()
         .filter_map(|log| parse_action(log))
-        .filter(|action| action.action.as_slice() == ACTION_EDITOR_FLAGGED)
+        .filter(|action| action.action.as_slice() == ACTION_SPACE_FAST_PATH_RESTRICTED)
         .map(|action| EditorFlagged {
             space_id: action.from_id,
-            editor_address: action.topic[12..32].to_vec(),
+            // ZC16: address is LEFT-aligned (right-padded with zeros)
+            editor_address: action.topic[0..20].to_vec(),
             data: action.data,
         })
         .collect();
@@ -411,10 +429,11 @@ fn map_editors_unflagged(
     let editors: Vec<EditorUnflagged> = block
         .logs()
         .filter_map(|log| parse_action(log))
-        .filter(|action| action.action.as_slice() == ACTION_EDITOR_UNFLAGGED)
+        .filter(|action| action.action.as_slice() == ACTION_SPACE_FAST_PATH_UNRESTRICTED)
         .map(|action| EditorUnflagged {
             space_id: action.from_id,
-            editor_address: action.topic[12..32].to_vec(),
+            // ZC16: address is LEFT-aligned (right-padded with zeros)
+            editor_address: action.topic[0..20].to_vec(),
             data: action.data,
         })
         .collect();
@@ -515,7 +534,8 @@ fn map_subspaces_removed(
         .filter(|action| action.action.as_slice() == ACTION_SUBSPACE_REMOVED)
         .map(|action| SubspaceRemoved {
             parent_space_id: action.from_id,
-            subspace_id: action.topic[16..32].to_vec(),
+            // ZC16: bytes16 is LEFT-aligned (right-padded with zeros)
+            subspace_id: action.topic[0..16].to_vec(),
             data: action.data,
         })
         .collect();
@@ -533,7 +553,8 @@ fn map_subspaces_verified(
         .filter(|action| action.action.as_slice() == ACTION_SUBSPACE_VERIFIED)
         .map(|action| SubspaceVerified {
             parent_space_id: action.from_id,
-            subspace_id: action.topic[16..32].to_vec(),
+            // ZC16: bytes16 is LEFT-aligned (right-padded with zeros)
+            subspace_id: action.topic[0..16].to_vec(),
             data: action.data,
         })
         .collect();
@@ -551,7 +572,8 @@ fn map_subspaces_related(
         .filter(|action| action.action.as_slice() == ACTION_SUBSPACE_RELATED)
         .map(|action| SubspaceRelated {
             parent_space_id: action.from_id,
-            subspace_id: action.topic[16..32].to_vec(),
+            // ZC16: bytes16 is LEFT-aligned (right-padded with zeros)
+            subspace_id: action.topic[0..16].to_vec(),
             data: action.data,
         })
         .collect();
@@ -606,7 +628,8 @@ fn map_spaces_cleared(
         .filter(|action| action.action.as_slice() == ACTION_SPACE_ID_CLEARED)
         .map(|action| SpaceCleared {
             space_id: action.from_id,
-            space_address: action.topic[12..32].to_vec(),
+            // ZC16: address is LEFT-aligned (right-padded with zeros)
+            space_address: action.topic[0..20].to_vec(),
         })
         .collect();
 
@@ -620,10 +643,11 @@ fn map_proposal_settings_used(
     let settings: Vec<ProposalSettingsUsed> = block
         .logs()
         .filter_map(|log| parse_action(log))
-        .filter(|action| action.action.as_slice() == ACTION_PROPOSAL_SETTINGS_USED)
+        .filter(|action| action.action.as_slice() == ACTION_PROPOSAL_SETTINGS_SELECTED)
         .map(|action| ProposalSettingsUsed {
             space_id: action.from_id,
-            proposal_id: action.topic[16..32].to_vec(),
+            // ZC16: bytes16 is LEFT-aligned (right-padded with zeros)
+            proposal_id: action.topic[0..16].to_vec(),
             data: action.data,
         })
         .collect();
@@ -641,7 +665,8 @@ fn map_proposals_updated(
         .filter(|action| action.action.as_slice() == ACTION_PROPOSAL_UPDATED)
         .map(|action| ProposalUpdated {
             space_id: action.from_id,
-            proposal_id: action.topic[16..32].to_vec(),
+            // ZC16: bytes16 is LEFT-aligned (right-padded with zeros)
+            proposal_id: action.topic[0..16].to_vec(),
             data: action.data,
         })
         .collect();

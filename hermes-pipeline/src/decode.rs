@@ -41,8 +41,8 @@ pub mod selectors {
     pub const FLAG: [u8; 4] = [0xfe, 0x1e, 0x30, 0x42];
     /// unflag(bytes32,bytes)
     pub const UNFLAG: [u8; 4] = [0xc6, 0x96, 0x84, 0x0f];
-    /// unflagEditor(address)
-    pub const UNFLAG_EDITOR: [u8; 4] = [0x08, 0xf0, 0xdf, 0x71];
+    /// unrestrictSpace(address) - unrestricts a space from fast path
+    pub const UNRESTRICT_SPACE: [u8; 4] = [0xb2, 0xc4, 0x36, 0xba];
     /// updateVotingSettings((uint256,uint256,uint256,uint256))
     pub const UPDATE_VOTING_SETTINGS: [u8; 4] = [0xd2, 0x1e, 0x85, 0x41];
     /// ping(bytes32,bytes32,bytes)
@@ -60,7 +60,7 @@ pub enum ProposalActionType {
     Publish,
     Flag,
     Unflag,
-    UnflagEditor,
+    UnrestrictSpace,
     UpdateVotingSettings,
     Ping,
 }
@@ -82,7 +82,7 @@ impl ProposalActionType {
             selectors::PUBLISH => Self::Publish,
             selectors::FLAG => Self::Flag,
             selectors::UNFLAG => Self::Unflag,
-            selectors::UNFLAG_EDITOR => Self::UnflagEditor,
+            selectors::UNRESTRICT_SPACE => Self::UnrestrictSpace,
             selectors::UPDATE_VOTING_SETTINGS => Self::UpdateVotingSettings,
             selectors::PING => Self::Ping,
             _ => Self::Unknown,
@@ -262,7 +262,7 @@ type EditsPublishedDataType = sol! { (bytes, bytes) };
 pub struct ProposalCreatedData {
     /// Proposal ID (16 bytes).
     pub proposal_id: Vec<u8>,
-    /// Voting mode (0=Fast, 1=Slow).
+    /// Voting mode (0=Slow, 1=Fast).
     pub voting_mode: u8,
     /// Actions to execute if proposal passes.
     pub actions: Vec<ProposalAction>,
@@ -359,7 +359,7 @@ pub struct ProposalVotedData {
     /// Proposal ID (16 bytes).
     #[allow(dead_code)] // Available for callers who need it
     pub proposal_id: Vec<u8>,
-    /// Vote option (0=None, 1=Yes, 2=No, 3=Abstain).
+    /// Vote option (0=None, 1=Abstain, 2=Yes, 3=No).
     pub vote: u8,
 }
 
@@ -418,6 +418,30 @@ pub fn decode_vote_data(data: &[u8]) -> Result<VoteData, DecodeError> {
         group_id: group_id.to_vec(),
         space_pov: space_pov.to_vec(),
     })
+}
+
+// ============================================================================
+// Membership Decoding
+// ============================================================================
+
+/// Decode ABI-encoded address from data field.
+///
+/// ZC16 format for EDITOR_ADDED, EDITOR_REMOVED, MEMBER_ADDED, MEMBER_REMOVED:
+/// - topic: bytes32(spaceId) - target space ID (unused for address extraction)
+/// - data: abi.encode(address) - 32 bytes, address in last 20 bytes
+///
+/// Returns the 20-byte address.
+pub fn decode_address(data: &[u8]) -> Result<Vec<u8>, DecodeError> {
+    // ABI-encoded address is 32 bytes: 12 bytes padding + 20 bytes address
+    if data.len() < 32 {
+        return Err(DecodeError::DataTooShort {
+            expected: 32,
+            actual: data.len(),
+        });
+    }
+
+    // Extract the 20-byte address from the last 20 bytes
+    Ok(data[12..32].to_vec())
 }
 
 // ============================================================================
@@ -613,8 +637,8 @@ mod tests {
             ProposalActionType::Unflag
         );
         assert_eq!(
-            ProposalActionType::from_calldata(&selectors::UNFLAG_EDITOR),
-            ProposalActionType::UnflagEditor
+            ProposalActionType::from_calldata(&selectors::UNRESTRICT_SPACE),
+            ProposalActionType::UnrestrictSpace
         );
         assert_eq!(
             ProposalActionType::from_calldata(&selectors::UPDATE_VOTING_SETTINGS),
@@ -673,5 +697,22 @@ mod tests {
         let mut calldata = selectors::ADD_MEMBER.to_vec();
         calldata.extend_from_slice(&[0u8; 20]); // Only 24 bytes total
         assert!(decode_address_arg(&calldata).is_none());
+    }
+
+    #[test]
+    fn test_decode_address() {
+        // ABI-encoded address: 12 bytes padding + 20 bytes address
+        let mut data = vec![0u8; 12];
+        data.extend_from_slice(&[0xAA; 20]);
+
+        let result = decode_address(&data).unwrap();
+        assert_eq!(result, vec![0xAA; 20]);
+    }
+
+    #[test]
+    fn test_decode_address_too_short() {
+        let data = vec![0u8; 20]; // Too short
+        let result = decode_address(&data);
+        assert!(matches!(result, Err(DecodeError::DataTooShort { .. })));
     }
 }

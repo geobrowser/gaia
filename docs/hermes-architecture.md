@@ -392,8 +392,8 @@ All services run with mock data by default, processing a deterministic test topo
 # Restart hermes-pipeline (handles spaces, trust, and edits)
 kubectl rollout restart deployment/hermes-pipeline
 
-# Replay from specific block
-kubectl set env deployment/hermes-pipeline START_BLOCK=1000000
+# Replay from specific block (requires USE_MOCK=false for live data)
+kubectl set env deployment/hermes-pipeline USE_MOCK=false SUBSTREAMS_START_BLOCK=1000000
 kubectl rollout restart deployment/hermes-pipeline
 
 # atlas (topology) continues unaffected

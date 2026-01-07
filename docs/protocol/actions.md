@@ -36,7 +36,7 @@ All action identifiers are `keccak256` hashes of their string names.
 | Action | Hash | Emitted By |
 |--------|------|------------|
 | `PROPOSAL_CREATED` | `keccak256('GOVERNANCE.PROPOSAL_CREATED')` | via enter() |
-| `PROPOSAL_SETTINGS_USED` | `keccak256('GOVERNANCE.PROPOSAL_SETTINGS_USED')` | DAOSpace (ping) |
+| `PROPOSAL_SETTINGS_SELECTED` | `keccak256('GOVERNANCE.PROPOSAL_SETTINGS_SELECTED')` | DAOSpace (ping) |
 | `PROPOSAL_UPDATED` | `keccak256('GOVERNANCE.PROPOSAL_UPDATED')` | via enter() |
 | `PROPOSAL_VOTED` | `keccak256('GOVERNANCE.PROPOSAL_VOTED')` | via enter() |
 | `PROPOSAL_EXECUTED` | `keccak256('GOVERNANCE.PROPOSAL_EXECUTED')` | via enter() |
@@ -49,8 +49,9 @@ All action identifiers are `keccak256` hashes of their string names.
 | `EDITOR_REMOVED` | `keccak256('GOVERNANCE.EDITOR_REMOVED')` | DAOSpace (ping) |
 | `MEMBER_ADDED` | `keccak256('GOVERNANCE.MEMBER_ADDED')` | DAOSpace (ping) |
 | `MEMBER_REMOVED` | `keccak256('GOVERNANCE.MEMBER_REMOVED')` | DAOSpace (ping) |
-| `EDITOR_FLAGGED` | `keccak256('GOVERNANCE.EDITOR_FLAGGED')` | via enter() |
-| `EDITOR_UNFLAGGED` | `keccak256('GOVERNANCE.EDITOR_UNFLAGGED')` | DAOSpace (ping) |
+| `MEMBERSHIP_REQUESTED` | `keccak256('GOVERNANCE.MEMBERSHIP_REQUESTED')` | via enter() |
+| `SPACE_FAST_PATH_RESTRICTED` | `keccak256('GOVERNANCE.SPACE_FAST_PATH_RESTRICTED')` | via enter() |
+| `SPACE_FAST_PATH_UNRESTRICTED` | `keccak256('GOVERNANCE.SPACE_FAST_PATH_UNRESTRICTED')` | DAOSpace (ping) |
 | `SPACE_LEFT` | `keccak256('GOVERNANCE.SPACE_LEFT')` | via enter() |
 
 ### Content Actions
@@ -153,7 +154,7 @@ Emitted when a proposal is created via `enter()`.
 | topic | `bytes32(_proposalId)` - set by `fetch()` |
 | data | `abi.encode(bytes16 proposalId, VotingMode votingMode, Action[] actions)` |
 
-### PROPOSAL_SETTINGS_USED
+### PROPOSAL_SETTINGS_SELECTED
 
 Emitted by the DAO (ping) after proposal creation or escalation.
 
@@ -161,7 +162,7 @@ Emitted by the DAO (ping) after proposal creation or escalation.
 |-------|-------|
 | fromSpaceId | The DAO space ID |
 | toSpaceId | The DAO space ID (same - ping pattern) |
-| action | `PROPOSAL_SETTINGS_USED` |
+| action | `PROPOSAL_SETTINGS_SELECTED` |
 | topic | `bytes32(_proposalId)` |
 | data | `abi.encode(startDate, lastDate, votingMode, quorum, supportThreshold)` |
 
@@ -210,8 +211,8 @@ Emitted by the DAO (ping) when editor membership changes.
 | fromSpaceId | The DAO space ID |
 | toSpaceId | The DAO space ID (same - ping pattern) |
 | action | `EDITOR_ADDED` or `EDITOR_REMOVED` |
-| topic | `bytes32(bytes20(_editor))` - the editor's address |
-| data | `''` (empty) |
+| topic | `bytes32(spaceId)` - target space ID (zeros for self) |
+| data | `abi.encode(address)` - the editor's address |
 
 ### MEMBER_ADDED / REMOVED
 
@@ -222,31 +223,43 @@ Emitted by the DAO (ping) when member membership changes.
 | fromSpaceId | The DAO space ID |
 | toSpaceId | The DAO space ID (same - ping pattern) |
 | action | `MEMBER_ADDED` or `MEMBER_REMOVED` |
-| topic | `bytes32(bytes20(_member))` - the member's address |
-| data | `''` (empty) |
+| topic | `bytes32(spaceId)` - target space ID (zeros for self) |
+| data | `abi.encode(address)` - the member's address |
 
-### EDITOR_FLAGGED
+### SPACE_FAST_PATH_RESTRICTED
 
-Emitted via `enter()` when an editor flags another editor.
+Emitted via `enter()` when a space is restricted from the fast path.
 
 | Field | Value |
 |-------|-------|
-| fromSpaceId | The flagger's space ID |
+| fromSpaceId | The restricting space's ID |
 | toSpaceId | The DAO space ID |
-| action | `EDITOR_FLAGGED` |
-| topic | `bytes32(bytes20(_flaggedEditor))` - set by `fetch()` |
-| data | `abi.encode(address flaggedEditor)` |
+| action | `SPACE_FAST_PATH_RESTRICTED` |
+| topic | `bytes32(bytes20(_restrictedSpace))` - the restricted space's address |
+| data | `''` (empty) |
 
-### EDITOR_UNFLAGGED
+### SPACE_FAST_PATH_UNRESTRICTED
 
-Emitted by the DAO (ping) when an editor is unflagged.
+Emitted by the DAO (ping) when a space is unrestricted from the fast path.
 
 | Field | Value |
 |-------|-------|
 | fromSpaceId | The DAO space ID |
 | toSpaceId | The DAO space ID (same - ping pattern) |
-| action | `EDITOR_UNFLAGGED` |
-| topic | `bytes32(bytes20(_unflaggedEditor))` |
+| action | `SPACE_FAST_PATH_UNRESTRICTED` |
+| topic | `bytes32(bytes20(_unrestrictedSpace))` - the unrestricted space's address |
+| data | `''` (empty) |
+
+### MEMBERSHIP_REQUESTED
+
+Emitted via `enter()` when a space requests to join a DAO as a member.
+
+| Field | Value |
+|-------|-------|
+| fromSpaceId | The requesting space's ID |
+| toSpaceId | The DAO space ID |
+| action | `MEMBERSHIP_REQUESTED` |
+| topic | `bytes32(0)` |
 | data | `''` (empty) |
 
 ### SPACE_LEFT

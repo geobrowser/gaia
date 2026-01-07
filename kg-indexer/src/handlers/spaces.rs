@@ -25,13 +25,14 @@ pub fn handle_create_space(space: &HermesCreateSpace) -> Result<SpaceItem, Handl
             }
         }
         Some(Payload::DefaultDaoSpace(_dao)) => {
-            let space_id_hex = hex::encode(&space.space_id);
+            let dao_address = hex::encode(&space.topic_id);
+            let checksummed = checksum_address(format!("0x{}", dao_address));
 
             SpaceItem {
                 id: space_id,
                 space_type: SpaceType::Public,
-                dao_address: space_id_hex.clone(),
-                space_address: space_id_hex,
+                dao_address: checksummed.clone(),
+                space_address: checksummed,
                 voting_address: None,
                 membership_address: None,
                 personal_address: None,

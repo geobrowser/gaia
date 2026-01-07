@@ -258,10 +258,10 @@ pub fn subspace_topic_declared(
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u8)]
 pub enum VotingMode {
-    /// Fast path - threshold-based, immediate execution, single action only
-    Fast = 0,
     /// Slow path - majority voting with voting window, multiple actions allowed
-    Slow = 1,
+    Slow = 0,
+    /// Fast path - threshold-based, immediate execution, single action only
+    Fast = 1,
 }
 
 /// Vote option for proposals (matches DAOSpace contract).
@@ -269,9 +269,9 @@ pub enum VotingMode {
 #[repr(u8)]
 pub enum VoteOption {
     None = 0,
-    Yes = 1,
-    No = 2,
-    Abstain = 3,
+    Abstain = 1,
+    Yes = 2,
+    No = 3,
 }
 
 /// DAOSpace function selectors for proposal actions.
@@ -500,36 +500,37 @@ pub fn proposal_created(
     }
 }
 
-/// Create a PROPOSAL_SETTINGS_USED action.
+/// Create a PROPOSAL_SETTINGS_SELECTED action.
 ///
 /// This event is emitted after PROPOSAL_CREATED to convey the proposal settings.
-/// The pipeline squashes PROPOSAL_CREATED + PROPOSAL_SETTINGS_USED into a single event.
+/// The pipeline squashes PROPOSAL_CREATED + PROPOSAL_SETTINGS_SELECTED into a single event.
 ///
 /// - `space_id`: The space with the proposal
 /// - `proposal_id`: The proposal ID (16 bytes)
-/// - `voting_delay`: Voting delay in seconds
-/// - `voting_period`: Voting period in seconds
-/// - `quorum`: Quorum percentage
-/// - `threshold`: Approval threshold percentage
-pub fn proposal_settings_used(
+/// - `voting_mode`: Voting mode (Slow=0, Fast=1)
+/// - `start_date`: Block timestamp when voting starts
+/// - `end_date`: Block timestamp when voting ends
+/// - `quorum`: Minimum total votes for slow path
+/// - `support_threshold`: Support threshold (flat for fast, percentage for slow)
+pub fn proposal_settings_selected(
     space_id: SpaceId,
     proposal_id: ProposalId,
-    voting_delay: u32,
-    voting_period: u32,
-    quorum: u16,
-    threshold: u16,
+    voting_mode: VotingMode,
+    start_date: u64,
+    end_date: u64,
+    quorum: u64,
+    support_threshold: u64,
 ) -> Action {
-    // Encode settings as: (uint32 votingDelay, uint32 votingPeriod, uint16 quorum, uint16 threshold)
-    use alloy::primitives::FixedBytes;
+    // Encode settings as: (uint64 startDate, uint64 lastDate, uint8 votingMode, uint256 quorum, uint256 supportThreshold)
     use alloy::sol_types::SolType;
 
-    type SettingsType = sol! { (bytes16, uint32, uint32, uint16, uint16) };
+    type SettingsType = sol! { (uint64, uint64, uint8, uint256, uint256) };
     let data = SettingsType::abi_encode(&(
-        FixedBytes::<16>::from_slice(&proposal_id),
-        voting_delay,
-        voting_period,
-        quorum,
-        threshold,
+        start_date,
+        end_date,
+        voting_mode as u8,
+        U256::from(quorum),
+        U256::from(support_threshold),
     ));
 
     // Pad proposal_id to 32 bytes for topic field
@@ -539,7 +540,7 @@ pub fn proposal_settings_used(
     Action {
         from_id: space_id.to_vec(),
         to_id: space_id.to_vec(), // from_id == to_id for DAOSpace actions
-        action: actions::PROPOSAL_SETTINGS_USED.to_vec(),
+        action: actions::PROPOSAL_SETTINGS_SELECTED.to_vec(),
         topic: topic.to_vec(),
         data,
     }
@@ -596,85 +597,123 @@ pub fn proposal_executed(space_id: SpaceId, proposal_id: ProposalId) -> Action {
 
 /// Create an EDITOR_ADDED action.
 ///
+/// ZC16 format:
 /// - `space_id`: The space adding the editor
 /// - `editor_address`: The editor's address (as bytes32(bytes20(address)))
+///   - topic: bytes32(spaceId) - target space ID
+///   - data: abi.encode(address) - 32 bytes with address
 pub fn editor_added(space_id: SpaceId, editor_address: Address) -> Action {
     Action {
         from_id: space_id.to_vec(),
         to_id: space_id.to_vec(), // from_id == to_id for DAOSpace actions
         action: actions::EDITOR_ADDED.to_vec(),
-        topic: editor_address.to_vec(),
-        data: vec![],
+        topic: vec![0u8; 32], // ZC16: topic is target space ID (can be zeros for self)
+        data: editor_address.to_vec(), // ZC16: address is ABI-encoded in data field
     }
 }
 
 /// Create an EDITOR_REMOVED action.
 ///
+/// ZC16 format:
 /// - `space_id`: The space removing the editor
 /// - `editor_address`: The editor's address (as bytes32(bytes20(address)))
+///   - topic: bytes32(spaceId) - target space ID
+///   - data: abi.encode(address) - 32 bytes with address
 pub fn editor_removed(space_id: SpaceId, editor_address: Address) -> Action {
     Action {
         from_id: space_id.to_vec(),
         to_id: space_id.to_vec(), // from_id == to_id for DAOSpace actions
         action: actions::EDITOR_REMOVED.to_vec(),
-        topic: editor_address.to_vec(),
-        data: vec![],
+        topic: vec![0u8; 32], // ZC16: topic is target space ID (can be zeros for self)
+        data: editor_address.to_vec(), // ZC16: address is ABI-encoded in data field
     }
 }
 
 /// Create a MEMBER_ADDED action.
 ///
+/// ZC16 format:
 /// - `space_id`: The space adding the member
 /// - `member_address`: The member's address (as bytes32(bytes20(address)))
+///   - topic: bytes32(spaceId) - target space ID
+///   - data: abi.encode(address) - 32 bytes with address
 pub fn member_added(space_id: SpaceId, member_address: Address) -> Action {
     Action {
         from_id: space_id.to_vec(),
         to_id: space_id.to_vec(), // from_id == to_id for DAOSpace actions
         action: actions::MEMBER_ADDED.to_vec(),
-        topic: member_address.to_vec(),
-        data: vec![],
+        topic: vec![0u8; 32], // ZC16: topic is target space ID (can be zeros for self)
+        data: member_address.to_vec(), // ZC16: address is ABI-encoded in data field
     }
 }
 
 /// Create a MEMBER_REMOVED action.
 ///
+/// ZC16 format:
 /// - `space_id`: The space removing the member
 /// - `member_address`: The member's address (as bytes32(bytes20(address)))
+///   - topic: bytes32(spaceId) - target space ID
+///   - data: abi.encode(address) - 32 bytes with address
 pub fn member_removed(space_id: SpaceId, member_address: Address) -> Action {
     Action {
         from_id: space_id.to_vec(),
         to_id: space_id.to_vec(), // from_id == to_id for DAOSpace actions
         action: actions::MEMBER_REMOVED.to_vec(),
-        topic: member_address.to_vec(),
-        data: vec![],
+        topic: vec![0u8; 32], // ZC16: topic is target space ID (can be zeros for self)
+        data: member_address.to_vec(), // ZC16: address is ABI-encoded in data field
     }
 }
 
-/// Create an EDITOR_FLAGGED action.
+/// Create a SPACE_FAST_PATH_RESTRICTED action.
 ///
-/// - `space_id`: The space flagging the editor
-/// - `editor_address`: The flagged editor's address
-pub fn editor_flagged(space_id: SpaceId, editor_address: Address) -> Action {
+/// ZC16 format:
+/// - `space_id`: The DAO space restricting another space
+/// - `restricted_space_id`: The restricted space's ID (used in topic)
+/// - `restricted_address`: The restricted space's address (used in data)
+///
+/// topic: bytes32(restricted_space_id)
+/// data: abi.encode(address) - 32 bytes with address in last 20 bytes
+pub fn space_fast_path_restricted(
+    space_id: SpaceId,
+    restricted_space_id: SpaceId,
+    restricted_address: Address,
+) -> Action {
+    // Pad space_id to 32 bytes for topic
+    let mut topic = vec![0u8; 32];
+    topic[..16].copy_from_slice(&restricted_space_id);
+
     Action {
         from_id: space_id.to_vec(),
         to_id: space_id.to_vec(), // from_id == to_id for DAOSpace actions
-        action: actions::EDITOR_FLAGGED.to_vec(),
-        topic: editor_address.to_vec(),
-        data: vec![],
+        action: actions::SPACE_FAST_PATH_RESTRICTED.to_vec(),
+        topic,
+        data: restricted_address.to_vec(),
     }
 }
 
-/// Create an EDITOR_UNFLAGGED action.
+/// Create a SPACE_FAST_PATH_UNRESTRICTED action.
 ///
-/// - `space_id`: The space unflagging the editor
-/// - `editor_address`: The unflagged editor's address
-pub fn editor_unflagged(space_id: SpaceId, editor_address: Address) -> Action {
+/// ZC16 format:
+/// - `space_id`: The DAO space unrestricting another space
+/// - `unrestricted_space_id`: The unrestricted space's ID (used in topic)
+/// - `unrestricted_address`: The unrestricted space's address (used in data)
+///
+/// topic: bytes32(unrestricted_space_id)
+/// data: abi.encode(address) - 32 bytes with address in last 20 bytes
+pub fn space_fast_path_unrestricted(
+    space_id: SpaceId,
+    unrestricted_space_id: SpaceId,
+    unrestricted_address: Address,
+) -> Action {
+    // Pad space_id to 32 bytes for topic
+    let mut topic = vec![0u8; 32];
+    topic[..16].copy_from_slice(&unrestricted_space_id);
+
     Action {
         from_id: space_id.to_vec(),
         to_id: space_id.to_vec(), // from_id == to_id for DAOSpace actions
-        action: actions::EDITOR_UNFLAGGED.to_vec(),
-        topic: editor_address.to_vec(),
-        data: vec![],
+        action: actions::SPACE_FAST_PATH_UNRESTRICTED.to_vec(),
+        topic,
+        data: unrestricted_address.to_vec(),
     }
 }
 
@@ -690,6 +729,50 @@ pub fn space_left(member_id: SpaceId, space_id: SpaceId, role: [u8; 32]) -> Acti
         action: actions::SPACE_LEFT.to_vec(),
         topic: role.to_vec(),
         data: vec![],
+    }
+}
+
+/// Create a MEMBERSHIP_REQUESTED action.
+///
+/// Emitted when a space requests to join a DAO as a member.
+/// This action goes through enter() → write() → _requestMembership(),
+/// which creates a fast-path proposal for the membership.
+///
+/// ZC16 format:
+/// - `requester_id`: The space requesting to join
+/// - `space_id`: The DAO space being requested to join
+/// - `proposal_id`: The proposal ID for the membership request
+/// - `new_member_address`: The address of the new member (requester's address)
+///
+/// topic: bytes32(proposalId) - set by fetch()
+/// data: abi.encode(bytes16 proposalId, address newMember)
+pub fn membership_requested(
+    requester_id: SpaceId,
+    space_id: SpaceId,
+    proposal_id: ProposalId,
+    new_member_address: Address,
+) -> Action {
+    use alloy::primitives::{Address as AlloAddress, FixedBytes};
+    use alloy::sol_types::SolType;
+
+    // ABI-encode (bytes16 proposalId, address newMember)
+    type MembershipRequestDataType = sol! { (bytes16, address) };
+    let member_addr = AlloAddress::from_slice(&new_member_address[12..32]);
+    let data = MembershipRequestDataType::abi_encode(&(
+        FixedBytes::<16>::from_slice(&proposal_id),
+        member_addr,
+    ));
+
+    // Pad proposal_id to 32 bytes for topic
+    let mut topic = [0u8; 32];
+    topic[..16].copy_from_slice(&proposal_id);
+
+    Action {
+        from_id: requester_id.to_vec(),
+        to_id: space_id.to_vec(),
+        action: actions::MEMBERSHIP_REQUESTED.to_vec(),
+        topic: topic.to_vec(),
+        data,
     }
 }
 
@@ -1025,23 +1108,27 @@ pub mod test_topology {
         // Phase 5: Editor/member operations
         actions.push(editor_added(SPACE_A, USER_2));
         actions.push(member_added(SPACE_A, USER_3));
-        actions.push(editor_flagged(SPACE_B, USER_1));
-        actions.push(editor_unflagged(SPACE_B, USER_1));
+        // USER_1 owns SPACE_A, so when restricting USER_1, the restricted space ID is SPACE_A
+        actions.push(space_fast_path_restricted(SPACE_B, SPACE_A, USER_1));
+        actions.push(space_fast_path_unrestricted(SPACE_B, SPACE_A, USER_1));
 
         // Phase 6: Proposals with various actions
 
-        // Proposal 1: Add member (PROPOSAL_CREATED + PROPOSAL_SETTINGS_USED squashed by pipeline)
+        // Proposal 1: Add member (PROPOSAL_CREATED + PROPOSAL_SETTINGS_SELECTED squashed by pipeline)
         actions.push(proposal_created(
             SPACE_A,
             PROPOSAL_1,
             VotingMode::Fast,
             vec![ProposalAction::add_member([0x11; 20])],
         ));
-        actions.push(proposal_settings_used(
-            SPACE_A, PROPOSAL_1, 0,     // voting_delay
-            86400, // voting_period (1 day)
-            50,    // quorum (50%)
-            60,    // threshold (60%)
+        actions.push(proposal_settings_selected(
+            SPACE_A,
+            PROPOSAL_1,
+            VotingMode::Fast,
+            0,     // start_date
+            86400, // end_date (1 day)
+            50,    // quorum
+            60,    // support_threshold
         ));
         actions.push(proposal_voted(
             SPACE_B,
@@ -1067,11 +1154,14 @@ pub mod test_topology {
             VotingMode::Slow,
             vec![ProposalAction::remove_member([0x12; 20])],
         ));
-        actions.push(proposal_settings_used(
-            SPACE_A, PROPOSAL_2, 3600,   // voting_delay (1 hour)
-            172800, // voting_period (2 days)
-            40,     // quorum (40%)
-            70,     // threshold (70%)
+        actions.push(proposal_settings_selected(
+            SPACE_A,
+            PROPOSAL_2,
+            VotingMode::Slow,
+            3600,   // start_date (1 hour delay)
+            176400, // end_date (delay + 2 days)
+            40,     // quorum
+            70,     // support_threshold
         ));
         actions.push(proposal_voted(
             SPACE_B,
@@ -1098,11 +1188,14 @@ pub mod test_topology {
             VotingMode::Fast,
             vec![ProposalAction::add_editor([0x22; 20])],
         ));
-        actions.push(proposal_settings_used(
-            SPACE_B, PROPOSAL_3, 0,     // voting_delay
-            86400, // voting_period (1 day)
-            50,    // quorum (50%)
-            60,    // threshold (60%)
+        actions.push(proposal_settings_selected(
+            SPACE_B,
+            PROPOSAL_3,
+            VotingMode::Fast,
+            0,     // start_date
+            86400, // end_date (1 day)
+            50,    // quorum
+            60,    // support_threshold
         ));
         actions.push(proposal_voted(
             SPACE_A,
@@ -1134,11 +1227,14 @@ pub mod test_topology {
             VotingMode::Slow,
             vec![ProposalAction::remove_editor([0x23; 20])],
         ));
-        actions.push(proposal_settings_used(
-            SPACE_B, PROPOSAL_4, 7200,   // voting_delay (2 hours)
-            172800, // voting_period (2 days)
-            45,     // quorum (45%)
-            75,     // threshold (75%)
+        actions.push(proposal_settings_selected(
+            SPACE_B,
+            PROPOSAL_4,
+            VotingMode::Slow,
+            7200,   // start_date (2 hour delay)
+            180000, // end_date (delay + 2 days)
+            45,     // quorum
+            75,     // support_threshold
         ));
         actions.push(proposal_voted(
             SPACE_A,
@@ -1176,11 +1272,14 @@ pub mod test_topology {
                 b"ipfs://QmFlaggedContent5",
             )],
         ));
-        actions.push(proposal_settings_used(
-            SPACE_C, PROPOSAL_5, 0,     // voting_delay
-            86400, // voting_period (1 day)
-            50,    // quorum (50%)
-            60,    // threshold (60%)
+        actions.push(proposal_settings_selected(
+            SPACE_C,
+            PROPOSAL_5,
+            VotingMode::Fast,
+            0,     // start_date
+            86400, // end_date (1 day)
+            50,    // quorum
+            60,    // support_threshold
         ));
         actions.push(proposal_voted(
             SPACE_A,
@@ -1209,11 +1308,14 @@ pub mod test_topology {
                 b"ipfs://QmFlaggedContent6",
             )],
         ));
-        actions.push(proposal_settings_used(
-            SPACE_C, PROPOSAL_6, 5400,   // voting_delay (1.5 hours)
-            172800, // voting_period (2 days)
-            50,     // quorum (50%)
-            65,     // threshold (65%)
+        actions.push(proposal_settings_selected(
+            SPACE_C,
+            PROPOSAL_6,
+            VotingMode::Slow,
+            5400,   // start_date (1.5 hour delay)
+            178200, // end_date (delay + 2 days)
+            50,     // quorum
+            65,     // support_threshold
         ));
         actions.push(proposal_voted(
             SPACE_A,
@@ -1250,11 +1352,14 @@ pub mod test_topology {
                 b"version=1",
             )],
         ));
-        actions.push(proposal_settings_used(
-            SPACE_B, PROPOSAL_7, 0,     // voting_delay
-            86400, // voting_period (1 day)
-            50,    // quorum (50%)
-            60,    // threshold (60%)
+        actions.push(proposal_settings_selected(
+            SPACE_B,
+            PROPOSAL_7,
+            VotingMode::Fast,
+            0,     // start_date
+            86400, // end_date (1 day)
+            50,    // quorum
+            60,    // support_threshold
         ));
         actions.push(proposal_voted(
             SPACE_A,
@@ -1495,7 +1600,7 @@ mod tests {
             .count();
         let proposal_settings_count = actions
             .iter()
-            .filter(|a| a.action == actions::PROPOSAL_SETTINGS_USED.to_vec())
+            .filter(|a| a.action == actions::PROPOSAL_SETTINGS_SELECTED.to_vec())
             .count();
 
         // 18 spaces: 11 canonical + 7 non-canonical (each has SPACE_ID_REGISTERED + SPACE_TYPE_DECLARED)
@@ -1554,15 +1659,16 @@ mod tests {
     }
 
     #[test]
-    fn test_proposal_settings_used_format() {
+    fn test_proposal_settings_selected_format() {
         let space_id = make_id(0x01);
         let proposal_id = make_proposal_id(0xA1);
 
-        let action = proposal_settings_used(space_id, proposal_id, 0, 86400, 50, 60);
+        let action =
+            proposal_settings_selected(space_id, proposal_id, VotingMode::Fast, 0, 86400, 50, 60);
 
         assert_eq!(action.from_id, space_id.to_vec());
         assert_eq!(action.to_id, space_id.to_vec()); // from_id == to_id for DAOSpace
-        assert_eq!(action.action, actions::PROPOSAL_SETTINGS_USED.to_vec());
+        assert_eq!(action.action, actions::PROPOSAL_SETTINGS_SELECTED.to_vec());
         // Topic is proposal_id padded to 32 bytes
         assert_eq!(action.topic.len(), 32);
         assert_eq!(&action.topic[..16], &proposal_id);
@@ -1674,5 +1780,22 @@ mod tests {
         assert_eq!(&action.data[0..4], &selectors::UNFLAG);
         // Data should be non-empty (ABI-encoded (bytes32, bytes))
         assert!(action.data.len() > 4);
+    }
+
+    #[test]
+    fn test_membership_requested_format() {
+        let requester = make_id(0x01);
+        let dao = make_id(0x02);
+        let proposal_id = make_proposal_id(0xAB);
+        let member_address = make_address(0xCC);
+        let action = membership_requested(requester, dao, proposal_id, member_address);
+
+        assert_eq!(action.from_id, requester.to_vec());
+        assert_eq!(action.to_id, dao.to_vec());
+        assert_eq!(action.action, actions::MEMBERSHIP_REQUESTED.to_vec());
+        // Topic should be proposal_id padded to 32 bytes
+        assert_eq!(&action.topic[..16], &proposal_id);
+        // Data should be ABI-encoded (bytes16, address) - 64 bytes total
+        assert_eq!(action.data.len(), 64);
     }
 }
