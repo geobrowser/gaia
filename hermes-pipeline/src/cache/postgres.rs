@@ -44,12 +44,8 @@ impl IpfsCache for PostgresCache {
         match row {
             Some(row) => {
                 let is_errored: bool = row.get("is_errored");
-                let db_space_id: String = row.get::<String, _>("space");
-
-                // Parse UUID string and convert to bytes
-                let space_id_bytes = uuid::Uuid::parse_str(&db_space_id)
-                    .map(|u| u.as_bytes().to_vec())
-                    .unwrap_or_else(|_| space_id.to_vec());
+                let db_space_id: sqlx::types::Uuid = row.get("space");
+                let space_id_bytes = db_space_id.as_bytes().to_vec();
 
                 if is_errored {
                     return Ok(CachedEdit::errored(ipfs_hash.to_string(), space_id_bytes));
