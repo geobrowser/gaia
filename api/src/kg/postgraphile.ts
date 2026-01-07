@@ -41,6 +41,11 @@ const postgraphileOptions = {
 // PostGraphile options with uuidScalarPlugin for v2
 const postgraphileOptionsV2 = {
 	...postgraphileOptions,
+	// NOTE: Plugin order is intentional:
+	// - UndashedUuidPlugin patches the UUID scalar first so that all subsequent
+	//   plugins (including ConnectionFilterPlugin) build their types against the
+	//   undashed UUID behavior. This has been verified to work with both dashed
+	//   and undashed UUID inputs in filters.
 	appendPlugins: [UndashedUuidPlugin, ConnectionFilterPlugin, SimplifyInflectionPlugin],
 }
 
