@@ -23,12 +23,13 @@ ALTER TABLE "values" ADD CONSTRAINT "values_entity_id_entities_id_fk" FOREIGN KE
 ALTER TABLE "values" DROP CONSTRAINT IF EXISTS "values_space_id_spaces_id_fk";
 ALTER TABLE "values" ADD CONSTRAINT "values_space_id_spaces_id_fk" FOREIGN KEY ("space_id") REFERENCES "public"."spaces"("id") ON DELETE no action ON UPDATE no action NOT VALID;
 
--- Disable ALL triggers for every table so we can batch write data. We only add the FOREIGN
+-- Disable user triggers for every table so we can batch write data. We only add the FOREIGN
 -- key constraints so that postgraphile can pick up our relational schema.
-ALTER TABLE "spaces" DISABLE TRIGGER ALL;
-ALTER TABLE "entities" DISABLE TRIGGER ALL;
-ALTER TABLE "properties" DISABLE TRIGGER ALL;
-ALTER TABLE "values" DISABLE TRIGGER ALL;
-ALTER TABLE "relations" DISABLE TRIGGER ALL;
-ALTER TABLE "members" DISABLE TRIGGER ALL;
-ALTER TABLE "editors" DISABLE TRIGGER ALL;
+-- Note: Using USER instead of ALL because ALL requires superuser privileges on managed databases.
+ALTER TABLE "spaces" DISABLE TRIGGER USER;
+ALTER TABLE "entities" DISABLE TRIGGER USER;
+ALTER TABLE "properties" DISABLE TRIGGER USER;
+ALTER TABLE "values" DISABLE TRIGGER USER;
+ALTER TABLE "relations" DISABLE TRIGGER USER;
+ALTER TABLE "members" DISABLE TRIGGER USER;
+ALTER TABLE "editors" DISABLE TRIGGER USER;
