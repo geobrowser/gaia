@@ -31,5 +31,7 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app/hermes-ipfs-cache/target/release/hermes-ipfs-cache /usr/local/bin/hermes-ipfs-cache
+COPY --from=builder /app/hermes-substream/hermes-substream-v0.1.0.spkg /hermes-substream/hermes-substream-v0.1.0.spkg
 
+WORKDIR /
 CMD ["hermes-ipfs-cache"]
