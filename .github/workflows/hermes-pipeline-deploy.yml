@@ -52,26 +52,25 @@ jobs:
 
       - name: Delete existing job (jobs are immutable)
         run: |
-          kubectl delete job hermes-pipeline -n kafka --ignore-not-found=true
+          kubectl delete job hermes-pipeline -n knowledge --ignore-not-found=true
 
       - name: Deploy to Kubernetes
         run: |
-          kubectl apply -f hermes/k8s/namespace.yaml
           # Update image tag to use SHA and apply
           sed -i 's|image: registry.digitalocean.com/geo/hermes-pipeline:latest|image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}|g' hermes/k8s/hermes-pipeline.yaml
           kubectl apply -f hermes/k8s/hermes-pipeline.yaml
 
       - name: Wait for job to start
         run: |
-          kubectl wait --for=condition=ready pod -l app=hermes-pipeline -n kafka --timeout=60s || true
+          kubectl wait --for=condition=ready pod -l app=hermes-pipeline -n knowledge --timeout=60s || true
 
       - name: Show deployment status
         run: |
           echo "=== Hermes Pipeline Job ==="
-          kubectl get job hermes-pipeline -n kafka || echo "Job not found"
+          kubectl get job hermes-pipeline -n knowledge || echo "Job not found"
           echo ""
           echo "=== Hermes Pipeline Pods ==="
-          kubectl get pods -n kafka -l app=hermes-pipeline
+          kubectl get pods -n knowledge -l app=hermes-pipeline
           echo ""
           echo "=== Recent Events ==="
-          kubectl get events -n kafka --sort-by='.lastTimestamp' | tail -10
+          kubectl get events -n knowledge --sort-by='.lastTimestamp' | tail -10

@@ -18,7 +18,7 @@ use hermes_instrumentation::{Instrument, debug_span, info_span};
 use tokio_retry::Retry;
 use tokio_retry::strategy::{ExponentialBackoff, jitter};
 
-use hermes_relay::{Action, actions};
+use hermes_relay::{Action, actions, extract_ipfs_uri};
 use hermes_schema::pb::knowledge::HermesEdit;
 use wire::pb::grc20::Edit;
 
@@ -89,27 +89,28 @@ enum EditFetchResult {
 /// 2. Fetches all edits from cache in parallel with retries
 /// 3. Converts successful fetches to HermesEdit events
 /// 4. Returns events without sending to Kafka
-pub async fn transform<C: IpfsCache + 'static>(
+pub async fn transform(
     actions: &[Action],
     meta: &BlockMetadata,
-    cache: &Arc<C>,
+    cache: &Arc<dyn IpfsCache>,
     retry_config: &RetryConfig,
 ) -> Result<TransformResult> {
-    // Collect all edit requests
+    // Collect all edit requests, filtering out actions without valid IPFS URIs
     let requests: Vec<(EditRequest, Action)> = actions
         .iter()
         .enumerate()
         .filter(|(_, action)| actions::matches(&action.action, &actions::EDITS_PUBLISHED))
-        .map(|(index, action)| {
-            let ipfs_hash = String::from_utf8_lossy(&action.data).to_string();
-            (
+        .filter_map(|(index, action)| {
+            // Extract and validate IPFS URI from ABI-encoded action data
+            let ipfs_hash = extract_ipfs_uri(&action.data)?;
+            Some((
                 EditRequest {
                     ipfs_hash,
                     space_id: action.from_id.clone(),
                     sequence: index as u32,
                 },
                 action.clone(),
-            )
+            ))
         })
         .collect();
 
@@ -147,10 +148,10 @@ pub async fn transform<C: IpfsCache + 'static>(
 }
 
 /// Fetch all edits in parallel with retry logic.
-async fn fetch_edits_parallel<C: IpfsCache + 'static>(
+async fn fetch_edits_parallel(
     requests: Vec<(EditRequest, Action)>,
     meta: &BlockMetadata,
-    cache: &Arc<C>,
+    cache: &Arc<dyn IpfsCache>,
     retry_config: &RetryConfig,
 ) -> Vec<EditFetchResult> {
     let handles: Vec<_> = requests
@@ -163,7 +164,7 @@ async fn fetch_edits_parallel<C: IpfsCache + 'static>(
 
             tokio::spawn(
                 async move {
-                    fetch_edit_with_retry(req, &action, &meta, &cache, &retry_config).await
+                    fetch_edit_with_retry(req, &action, &meta, cache, &retry_config).await
                 }
                 .instrument(info_span!("fetch.edit", ipfs_hash = %ipfs_hash)),
             )
@@ -181,11 +182,11 @@ async fn fetch_edits_parallel<C: IpfsCache + 'static>(
 }
 
 /// Fetch a single edit with retry logic and convert to HermesEdit.
-async fn fetch_edit_with_retry<C: IpfsCache>(
+async fn fetch_edit_with_retry(
     req: EditRequest,
     action: &Action,
     meta: &BlockMetadata,
-    cache: &C,
+    cache: Arc<dyn IpfsCache>,
     config: &RetryConfig,
 ) -> EditFetchResult {
     let retry_strategy = ExponentialBackoff::from_millis(config.initial_delay_ms)
@@ -201,6 +202,7 @@ async fn fetch_edit_with_retry<C: IpfsCache>(
         let hash = ipfs_hash.clone();
         let hash_for_span = hash.clone();
         let space = space_id.clone();
+        let cache = Arc::clone(&cache);
         async move { cache.get(&hash, &space).await }
             .instrument(debug_span!("cache.get", ipfs_hash = %hash_for_span))
     })
@@ -289,7 +291,7 @@ mod tests {
             to_id: vec![0; 16],
             action: actions::EDITS_PUBLISHED.to_vec(),
             topic: vec![0; 32],
-            data: b"QmTestHash".to_vec(),
+            data: b"ipfs://QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG".to_vec(),
         };
 
         let edit = test_edit();

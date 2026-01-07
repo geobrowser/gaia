@@ -2,13 +2,25 @@
 //!
 //! The cache provides a way to look up edit content by IPFS hash.
 //! For mock mode, we use an in-memory cache with pre-populated test edits.
-//! For production, this would be replaced with a cache backed by the
-//! `hermes-ipfs-cache` PostgreSQL database.
+//! For production, we use PostgreSQL backed by `hermes-ipfs-cache`.
+//!
+//! ## Usage
+//!
+//! ```ignore
+//! use hermes_pipeline::cache::CacheSource;
+//!
+//! // Development: use in-memory cache with mock data
+//! let cache = CacheSource::mock().into_cache().await?;
+//!
+//! // Production: use PostgreSQL
+//! let cache = CacheSource::live("postgres://...").into_cache().await?;
+//! ```
 
 mod mock;
+mod postgres;
 
-#[allow(unused_imports)] // Re-exported for consumers (used in main.rs)
 pub use mock::MockIpfsCache;
+pub use postgres::PostgresCache;
 
 use std::sync::Arc;
 
@@ -142,5 +154,50 @@ impl<T: IpfsCache + ?Sized> IpfsCache for Arc<T> {
 
     async fn get_batch(&self, requests: &[(&str, &[u8])]) -> Vec<Result<CachedEdit, CacheError>> {
         (**self).get_batch(requests).await
+    }
+}
+
+// =============================================================================
+// CacheSource - Configuration for cache backends
+// =============================================================================
+
+/// Configuration for the IPFS cache backend.
+///
+/// Use this to choose between mock (in-memory) and live (PostgreSQL) storage,
+/// following the same pattern as `StreamSource`.
+#[derive(Debug, Clone)]
+pub enum CacheSource {
+    /// Use in-memory cache with mock data for testing/development.
+    Mock,
+
+    /// Use PostgreSQL storage backed by `hermes-ipfs-cache`.
+    Live {
+        /// PostgreSQL connection URL
+        database_url: String,
+    },
+}
+
+impl CacheSource {
+    /// Create a mock (in-memory) cache source.
+    pub fn mock() -> Self {
+        Self::Mock
+    }
+
+    /// Create a live cache source with the given PostgreSQL URL.
+    pub fn live(database_url: impl Into<String>) -> Self {
+        Self::Live {
+            database_url: database_url.into(),
+        }
+    }
+
+    /// Create the cache with the appropriate storage backend.
+    pub async fn into_cache(self) -> Result<Arc<dyn IpfsCache>, CacheError> {
+        match self {
+            Self::Mock => Ok(Arc::new(MockIpfsCache::new())),
+            Self::Live { database_url } => {
+                let cache = PostgresCache::new(&database_url).await?;
+                Ok(Arc::new(cache))
+            }
+        }
     }
 }

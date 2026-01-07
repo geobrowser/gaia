@@ -75,17 +75,47 @@ Operations:
 - `load_cursor(id)`: Load persisted cursor for restart
 - `persist_cursor(id, cursor, block)`: Save cursor position
 
+## IPFS URI Validation
+
+The protocol accepts arbitrary bytes for IPFS URIs, so validation is performed at the substream level.
+
+### Validation Logic
+
+The `extract_ipfs_uri` helper in `hermes-substream` extracts and validates IPFS URIs:
+
+1. Searches for `ipfs://` pattern in the raw ABI-encoded event data
+2. Extracts the CID (alphanumeric characters after the prefix)
+3. Validates the CID format:
+
+| CID Version | Prefix | Encoding | Length | Example |
+|-------------|--------|----------|--------|---------|
+| CIDv0 | `Qm` | Base58 | Exactly 46 chars | `QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG` |
+| CIDv1 | `b` (e.g., `bafy`) | Base32 | ≥50 chars | `bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3okuez3djvxfzq` |
+
+### Where Validation Happens
+
+- **hermes-substream**: Populates `content_uri` field in `EditsPublished` protobuf (empty if invalid)
+- **hermes-ipfs-cache**: Skips events with empty `content_uri`
+- **hermes-pipeline**: Uses `extract_ipfs_uri` helper when reading from raw `Actions` protobuf
+
+### Handling Invalid URIs
+
+Events with invalid IPFS URIs (inline text content, malformed CIDs, etc.) are:
+- **In substream**: `content_uri` set to empty string, raw `data` preserved for debugging
+- **In cache**: Skipped entirely (not cached)
+- **In pipeline**: Filtered out via `filter_map`
+
 ## Data Flow
 
 ### Block Processing
 
 1. `process_block_scoped_data` receives a block from hermes-substream
 2. Decode `EditsPublishedList` protobuf from block output
-3. Register block in `PendingFetches` with edit count
-4. For each edit, spawn an async task:
+3. Skip edits with empty `content_uri` (invalid IPFS URI)
+4. Register block in `PendingFetches` with valid edit count
+5. For each valid edit, spawn an async task:
    - Acquire semaphore permit (limits concurrency)
-   - Extract IPFS URI from edit data
-   - Fetch content from IPFS gateway
+   - Fetch content from IPFS gateway using validated `content_uri`
    - Decode into `Edit` protobuf
    - Store in cache (success or error entry)
    - Mark fetch complete in `PendingFetches`
@@ -188,9 +218,9 @@ drop(permit);  // Release for next fetch
 -- IPFS content cache
 CREATE TABLE ipfs_cache (
     uri TEXT PRIMARY KEY,
-    json JSONB,
+    data BYTEA,              -- Raw protobuf bytes (Edit message)
     block TEXT NOT NULL,
-    space_id TEXT NOT NULL,
+    space TEXT NOT NULL,     -- Space ID as UUID string
     is_errored BOOLEAN NOT NULL DEFAULT FALSE
 );
 
@@ -201,6 +231,10 @@ CREATE TABLE meta (
     block_number TEXT NOT NULL
 );
 ```
+
+The `data` column stores raw protobuf bytes rather than JSON. This allows:
+- Direct protobuf decode without JSON serialization overhead
+- Preservation of exact binary content from IPFS
 
 ## Testing
 

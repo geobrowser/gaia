@@ -2,7 +2,7 @@ apiVersion: batch/v1
 kind: Job
 metadata:
   name: hermes-pipeline
-  namespace: kafka
+  namespace: knowledge
 spec:
   template:
     metadata:
@@ -12,30 +12,62 @@ spec:
       restartPolicy: OnFailure
       imagePullSecrets:
         - name: regcred
+      volumes:
+        - name: ssl-certs
+          emptyDir: {}
+      initContainers:
+        - name: setup-certs
+          image: registry.digitalocean.com/geo/hermes-pipeline:latest
+          imagePullPolicy: Always
+          command:
+            - sh
+            - -c
+            - |
+              echo "$DATABASE_SSL_CA" > /ssl/ca.crt
+          env:
+            - name: DATABASE_SSL_CA
+              valueFrom:
+                secretKeyRef:
+                  name: api-secrets
+                  key: DATABASE_SSL_CA
+          volumeMounts:
+            - name: ssl-certs
+              mountPath: /ssl
       containers:
         - name: hermes-pipeline
           image: registry.digitalocean.com/geo/hermes-pipeline:latest
           imagePullPolicy: Always
+          volumeMounts:
+            - name: ssl-certs
+              mountPath: /ssl
+              readOnly: true
           env:
+            - name: PGSSLROOTCERT
+              value: /ssl/ca.crt
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: api-secrets
+                  key: DATABASE_URL
             - name: KAFKA_BROKER
               valueFrom:
                 secretKeyRef:
-                  name: kafka-credentials
+                  name: kg-indexer-secrets
                   key: KAFKA_BROKER
             - name: KAFKA_USERNAME
               valueFrom:
                 secretKeyRef:
-                  name: kafka-credentials
+                  name: kg-indexer-secrets
                   key: KAFKA_USERNAME
             - name: KAFKA_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: kafka-credentials
+                  name: kg-indexer-secrets
                   key: KAFKA_PASSWORD
             - name: KAFKA_SSL_CA_PEM
               valueFrom:
                 secretKeyRef:
-                  name: kafka-credentials
+                  name: kg-indexer-secrets
                   key: KAFKA_SSL_CA_PEM
             - name: OTEL_URL
               valueFrom:

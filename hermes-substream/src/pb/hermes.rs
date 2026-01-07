@@ -278,9 +278,12 @@ pub struct EditsPublished {
     /// 16 bytes
     #[prost(bytes="vec", tag="1")]
     pub space_id: ::prost::alloc::vec::Vec<u8>,
-    /// IPFS CID or edit content
+    /// Raw ABI-encoded data from event
     #[prost(bytes="vec", tag="2")]
     pub data: ::prost::alloc::vec::Vec<u8>,
+    /// Parsed IPFS URI (ipfs://Qm... or ipfs://bafy...), empty if invalid
+    #[prost(string, tag="3")]
+    pub content_uri: ::prost::alloc::string::String,
 }
 #[allow(clippy::derive_partial_eq_without_eq)]
 #[derive(Clone, PartialEq, ::prost::Message)]

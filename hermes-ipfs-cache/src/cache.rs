@@ -1,7 +1,7 @@
 //! IPFS cache storage implementation.
 //!
-//! Stores resolved IPFS content so that downstream consumers
-//! (like the edits transformer) don't need to block on network I/O.
+//! Stores raw protobuf bytes so that downstream consumers
+//! (like hermes-pipeline) don't need to block on network I/O.
 //!
 //! ## Usage
 //!
@@ -19,28 +19,24 @@ use std::collections::HashMap;
 use std::sync::RwLock;
 
 use thiserror::Error;
-use wire::pb::grc20::Edit;
 
 #[derive(Error, Debug)]
 pub enum CacheError {
     #[error("Database error: {0}")]
     Database(#[from] sqlx::Error),
-
-    #[error("Serialization error: {0}")]
-    SerializeError(#[from] serde_json::Error),
 }
 
 /// A cached IPFS content item.
 pub struct CacheItem {
     /// The IPFS URI (e.g., "ipfs://Qm...")
     pub uri: String,
-    /// Decoded edit content, if successfully fetched and decoded
-    pub json: Option<Edit>,
+    /// Raw protobuf bytes, if successfully fetched
+    pub data: Option<Vec<u8>>,
     /// Block timestamp when this was cached
     pub block: String,
     /// Space ID (16 bytes, hex-encoded)
     pub space_id: String,
-    /// Whether fetching/decoding failed
+    /// Whether fetching failed
     pub is_errored: bool,
 }
 
@@ -113,7 +109,7 @@ pub struct MockStorage {
 
 /// Internal representation of a stored cache item.
 struct StoredItem {
-    json: Option<Edit>,
+    data: Option<Vec<u8>>,
     block: String,
     space_id: String,
     is_errored: bool,
@@ -143,7 +139,7 @@ impl CacheStorage for MockStorage {
             items.insert(
                 item.uri.clone(),
                 StoredItem {
-                    json: item.json.clone(),
+                    data: item.data.clone(),
                     block: item.block.clone(),
                     space_id: item.space_id.clone(),
                     is_errored: item.is_errored,
@@ -157,7 +153,7 @@ impl CacheStorage for MockStorage {
         let items = self.items.read().unwrap();
         Ok(items.get(uri).map(|stored| CacheItem {
             uri: uri.to_string(),
-            json: stored.json.clone(),
+            data: stored.data.clone(),
             block: stored.block.clone(),
             space_id: stored.space_id.clone(),
             is_errored: stored.is_errored,
@@ -202,15 +198,13 @@ impl PostgresStorage {
 #[async_trait::async_trait]
 impl CacheStorage for PostgresStorage {
     async fn insert(&self, item: &CacheItem) -> Result<(), CacheError> {
-        let json_value = serde_json::to_value(&item.json)?;
-
         sqlx::query(
-            "INSERT INTO ipfs_cache (uri, json, block, space_id, is_errored) \
-             VALUES ($1, $2, $3, $4, $5) \
+            "INSERT INTO ipfs_cache (uri, data, block, space, is_errored) \
+             VALUES ($1, $2, $3, $4::uuid, $5) \
              ON CONFLICT (uri) DO NOTHING",
         )
         .bind(&item.uri)
-        .bind(&json_value)
+        .bind(&item.data)
         .bind(&item.block)
         .bind(&item.space_id)
         .bind(item.is_errored)
@@ -221,24 +215,20 @@ impl CacheStorage for PostgresStorage {
     }
 
     async fn get(&self, uri: &str) -> Result<Option<CacheItem>, CacheError> {
-        let row: Option<(serde_json::Value, String, String, bool)> = sqlx::query_as(
-            "SELECT json, block, space_id, is_errored FROM ipfs_cache WHERE uri = $1",
-        )
-        .bind(uri)
-        .fetch_optional(&self.connection)
-        .await?;
+        let row: Option<(Option<Vec<u8>>, String, String, bool)> =
+            sqlx::query_as("SELECT data, block, space, is_errored FROM ipfs_cache WHERE uri = $1")
+                .bind(uri)
+                .fetch_optional(&self.connection)
+                .await?;
 
         match row {
-            Some((json_value, block, space_id, is_errored)) => {
-                let json: Option<Edit> = serde_json::from_value(json_value)?;
-                Ok(Some(CacheItem {
-                    uri: uri.to_string(),
-                    json,
-                    block,
-                    space_id,
-                    is_errored,
-                }))
-            }
+            Some((data, block, space_id, is_errored)) => Ok(Some(CacheItem {
+                uri: uri.to_string(),
+                data,
+                block,
+                space_id,
+                is_errored,
+            })),
             None => Ok(None),
         }
     }
@@ -321,23 +311,13 @@ impl Cache {
 mod tests {
     use super::*;
 
-    fn test_edit(name: &str) -> Edit {
-        Edit {
-            id: vec![0x01, 0x02],
-            name: name.to_string(),
-            ops: vec![],
-            authors: vec![],
-            language: None,
-        }
-    }
-
     #[tokio::test]
     async fn test_mock_cache_put_and_get() {
         let cache = Cache::mock();
 
         let item = CacheItem {
             uri: "ipfs://QmTest123".to_string(),
-            json: Some(test_edit("Test Edit")),
+            data: Some(vec![0x01, 0x02, 0x03]),
             block: "12345".to_string(),
             space_id: "abc123".to_string(),
             is_errored: false,
@@ -350,7 +330,7 @@ mod tests {
 
         let retrieved = retrieved.unwrap();
         assert_eq!(retrieved.uri, "ipfs://QmTest123");
-        assert_eq!(retrieved.json.unwrap().name, "Test Edit");
+        assert_eq!(retrieved.data, Some(vec![0x01, 0x02, 0x03]));
         assert_eq!(retrieved.block, "12345");
         assert_eq!(retrieved.space_id, "abc123");
         assert!(!retrieved.is_errored);
@@ -362,7 +342,7 @@ mod tests {
 
         let item1 = CacheItem {
             uri: "ipfs://QmTest123".to_string(),
-            json: Some(test_edit("First")),
+            data: Some(vec![0x01]),
             block: "100".to_string(),
             space_id: "abc".to_string(),
             is_errored: false,
@@ -370,7 +350,7 @@ mod tests {
 
         let item2 = CacheItem {
             uri: "ipfs://QmTest123".to_string(),
-            json: Some(test_edit("Second")),
+            data: Some(vec![0x02]),
             block: "200".to_string(),
             space_id: "def".to_string(),
             is_errored: false,
@@ -381,7 +361,7 @@ mod tests {
 
         // Should still have the first item
         let retrieved = cache.get("ipfs://QmTest123").await.unwrap().unwrap();
-        assert_eq!(retrieved.json.unwrap().name, "First");
+        assert_eq!(retrieved.data, Some(vec![0x01]));
     }
 
     #[tokio::test]

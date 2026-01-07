@@ -3,7 +3,7 @@
 //! This module exports the core functionality of the Hermes Pipeline for use in
 //! integration tests and other consumers.
 
-mod cache;
+pub mod cache;
 pub mod decode;
 pub mod pipelines;
 

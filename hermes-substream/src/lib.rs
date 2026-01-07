@@ -6,6 +6,9 @@
 pub mod helpers;
 pub mod pb;
 
+// Re-export commonly used helpers
+pub use helpers::extract_ipfs_uri;
+
 use pb::hermes::*;
 use substreams_ethereum::{block_view::LogView, pb::eth};
 
@@ -483,9 +486,13 @@ fn map_edits_published(
         .logs()
         .filter_map(|log| parse_action(log))
         .filter(|action| action.action.as_slice() == ACTION_EDITS_PUBLISHED)
-        .map(|action| EditsPublished {
-            space_id: action.from_id,
-            data: action.data,
+        .map(|action| {
+            let content_uri = helpers::extract_ipfs_uri(&action.data).unwrap_or_default();
+            EditsPublished {
+                space_id: action.from_id,
+                data: action.data,
+                content_uri,
+            }
         })
         .collect();
 

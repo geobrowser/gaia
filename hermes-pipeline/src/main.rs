@@ -34,11 +34,9 @@
 //! - `KAFKA_USERNAME` - SASL username for managed Kafka (optional)
 //! - `KAFKA_PASSWORD` - SASL password for managed Kafka (optional)
 //! - `KAFKA_SSL_CA_PEM` - Custom CA cert for SSL (optional)
+//! - `DATABASE_URL` - PostgreSQL URL for IPFS cache (required when USE_MOCK=false)
 
-mod cache;
-mod decode;
 mod emit;
-mod pipelines;
 
 use std::env;
 use std::fmt;
@@ -52,12 +50,14 @@ use hermes_relay::stream::pb::sf::substreams::rpc::v2::BlockScopedData;
 use hermes_relay::stream::utils;
 use hermes_relay::{Actions, HermesModule, Sink, StreamSource};
 
-use cache::MockIpfsCache;
+use hermes_pipeline::cache::{CacheSource, IpfsCache};
+use hermes_pipeline::pipelines;
+use hermes_pipeline::pipelines::BlockMetadata;
+use hermes_pipeline::pipelines::edits::RetryConfig;
+use hermes_pipeline::pipelines::trust::get_extension_type;
+use hermes_pipeline::pipelines::voting::get_vote_direction;
+
 use emit::{Emitter, topics};
-use pipelines::BlockMetadata;
-use pipelines::edits::RetryConfig;
-use pipelines::trust::get_extension_type;
-use pipelines::voting::get_vote_direction;
 
 /// Error type for the pipeline that implements std::error::Error
 #[derive(Debug)]
@@ -103,25 +103,29 @@ impl From<prost::DecodeError> for PipelineError {
 /// in parallel with the sync transforms. All events are emitted to Kafka in order.
 pub struct Pipeline {
     emitter: Emitter,
-    cache: Arc<MockIpfsCache>,
+    cache: Arc<dyn IpfsCache>,
     retry_config: RetryConfig,
 }
 
 impl Pipeline {
-    pub fn new(emitter: Emitter) -> Self {
+    pub fn new(emitter: Emitter, cache: Arc<dyn IpfsCache>) -> Self {
         Self {
             emitter,
-            cache: Arc::new(MockIpfsCache::new()),
+            cache,
             retry_config: RetryConfig::default(),
         }
     }
 
     /// Create a pipeline with custom retry configuration.
     #[allow(dead_code)]
-    pub fn with_retry_config(emitter: Emitter, retry_config: RetryConfig) -> Self {
+    pub fn with_retry_config(
+        emitter: Emitter,
+        cache: Arc<dyn IpfsCache>,
+        retry_config: RetryConfig,
+    ) -> Self {
         Self {
             emitter,
-            cache: Arc::new(MockIpfsCache::new()),
+            cache,
             retry_config,
         }
     }
@@ -595,8 +599,13 @@ fn main() -> anyhow::Result<()> {
 async fn async_main() -> anyhow::Result<()> {
     info!("Hermes Pipeline starting");
 
+    // Determine if we're using mock data
+    let use_mock = env::var("USE_MOCK")
+        .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+        .unwrap_or(false);
+
     let broker = env::var("KAFKA_BROKER").unwrap_or_else(|_| "localhost:9092".to_string());
-    info!(kafka_broker = %broker, "Configuration loaded");
+    info!(kafka_broker = %broker, use_mock = use_mock, "Configuration loaded");
 
     // Create Kafka producer and wrap in Emitter
     debug!("Connecting to Kafka broker");
@@ -604,16 +613,23 @@ async fn async_main() -> anyhow::Result<()> {
     let emitter = Emitter::new(producer);
     info!("Connected to Kafka broker");
 
+    // Create the IPFS cache: mock for testing, PostgreSQL for production
+    let cache = if use_mock {
+        info!("Using mock IPFS cache");
+        CacheSource::mock().into_cache().await?
+    } else {
+        let database_url =
+            env::var("DATABASE_URL").expect("DATABASE_URL must be set when USE_MOCK is not true");
+        info!("Connecting to IPFS cache database");
+        CacheSource::live(&database_url).into_cache().await?
+    };
+    info!("IPFS cache initialized");
+
     // Create the pipeline
-    let pipeline = Pipeline::new(emitter);
+    let pipeline = Pipeline::new(emitter, cache);
 
-    // Determine stream source: live (default) or mock
-    let use_mock = env::var("USE_MOCK")
-        .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
-        .unwrap_or(false);
-
+    // Determine stream source: mock or live substreams
     let source = if use_mock {
-        info!("Using mock data source");
         StreamSource::mock()
     } else {
         let endpoint = env::var("SUBSTREAMS_ENDPOINT")

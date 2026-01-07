@@ -63,11 +63,17 @@ fn stream_blocks(
 
     try_stream! {
         loop {
-            println!("Blockstreams disconnected, connecting (endpoint {}, start block {}, stop block {}, cursor {})",
+            let module_names: Vec<_> = modules.as_ref()
+                .map(|m| m.modules.iter().map(|x| x.name.as_str()).collect())
+                .unwrap_or_default();
+
+            println!("Blockstreams disconnected, connecting (endpoint {}, start block {}, stop block {}, cursor {}, output: {}, modules: {:?})",
                 &endpoint,
                 start_block_num,
                 stop_block_num,
-                &latest_cursor
+                &latest_cursor,
+                &output_module_name,
+                module_names
             );
 
             let result = endpoint.clone().substreams(Request {
@@ -182,15 +188,26 @@ async fn process_substreams_response(
             BlockProcessedResult::BlockUndoSignal(block_undo_signal)
         }
         Some(Message::Progress(progress)) => {
-            if last_progress_report.elapsed() > Duration::from_secs(30) {
-                let processed_bytes = progress.processed_bytes.unwrap_or_default();
+            let processed_bytes = progress.processed_bytes.unwrap_or_default();
 
+            // Show module stats
+            let stats: Vec<_> = progress
+                .modules_stats
+                .iter()
+                .map(|m| format!("{}: {} blocks", m.name, m.total_processed_block_count))
+                .collect();
+
+            if last_progress_report.elapsed() > Duration::from_secs(5) || stats.is_empty() {
                 println!(
-                    "Latest progress message received (Stages: {}, Jobs: {}, Processed Bytes: [Read: {}, Written: {}])",
-                    progress.stages.len(),
+                    "Progress (Jobs: {}, Bytes: [R: {}, W: {}]) {}",
                     progress.running_jobs.len(),
                     processed_bytes.total_bytes_read,
                     processed_bytes.total_bytes_written,
+                    if stats.is_empty() {
+                        "initializing...".to_string()
+                    } else {
+                        stats.join(", ")
+                    }
                 );
                 *last_progress_report = Instant::now();
             }
