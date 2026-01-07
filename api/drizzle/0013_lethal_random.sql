@@ -1,0 +1,1 @@
+ALTER TABLE "ipfs_cache" RENAME COLUMN "json" TO "data";

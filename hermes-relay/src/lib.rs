@@ -100,5 +100,8 @@ pub use sink::{PreprocessedSink, Sink, StreamSource};
 // Re-export hermes-substream types for consumers
 pub use hermes_substream::pb::hermes::{Action, Actions};
 
+// Re-export IPFS URI extraction helper
+pub use hermes_substream::extract_ipfs_uri;
+
 // Re-export stream crate for consumers who need substreams types
 pub use stream;

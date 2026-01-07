@@ -155,7 +155,8 @@ message TopicDeclaredList {
 
 message EditsPublished {
     bytes space_id = 1;          // 16 bytes
-    bytes data = 2;              // IPFS CID or edit content
+    bytes data = 2;              // Raw ABI-encoded data from event
+    string content_uri = 3;      // Parsed IPFS URI (ipfs://Qm... or ipfs://bafy...), empty if invalid
 }
 
 message EditsPublishedList {

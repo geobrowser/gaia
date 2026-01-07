@@ -18,7 +18,7 @@ use hermes_instrumentation::{Instrument, debug_span, info_span};
 use tokio_retry::Retry;
 use tokio_retry::strategy::{ExponentialBackoff, jitter};
 
-use hermes_relay::{Action, actions};
+use hermes_relay::{Action, actions, extract_ipfs_uri};
 use hermes_schema::pb::knowledge::HermesEdit;
 use wire::pb::grc20::Edit;
 
@@ -95,21 +95,22 @@ pub async fn transform(
     cache: &Arc<dyn IpfsCache>,
     retry_config: &RetryConfig,
 ) -> Result<TransformResult> {
-    // Collect all edit requests
+    // Collect all edit requests, filtering out actions without valid IPFS URIs
     let requests: Vec<(EditRequest, Action)> = actions
         .iter()
         .enumerate()
         .filter(|(_, action)| actions::matches(&action.action, &actions::EDITS_PUBLISHED))
-        .map(|(index, action)| {
-            let ipfs_hash = String::from_utf8_lossy(&action.data).to_string();
-            (
+        .filter_map(|(index, action)| {
+            // Extract and validate IPFS URI from ABI-encoded action data
+            let ipfs_hash = extract_ipfs_uri(&action.data)?;
+            Some((
                 EditRequest {
                     ipfs_hash,
                     space_id: action.from_id.clone(),
                     sequence: index as u32,
                 },
                 action.clone(),
-            )
+            ))
         })
         .collect();
 
@@ -290,7 +291,7 @@ mod tests {
             to_id: vec![0; 16],
             action: actions::EDITS_PUBLISHED.to_vec(),
             topic: vec![0; 32],
-            data: b"QmTestHash".to_vec(),
+            data: b"ipfs://QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG".to_vec(),
         };
 
         let edit = test_edit();

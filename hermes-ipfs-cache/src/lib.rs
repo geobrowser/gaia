@@ -251,6 +251,9 @@ impl Sink for IpfsCacheSink {
 }
 
 /// Process a single edit event by fetching its IPFS content.
+///
+/// The `content_uri` field is pre-validated by hermes-substream.
+/// If empty, the edit contained no valid IPFS URI and is skipped.
 async fn process_edit_event(
     edit: EditsPublished,
     cache: &Arc<Mutex<Cache>>,
@@ -258,50 +261,36 @@ async fn process_edit_event(
     block_timestamp: &str,
     block_number: u64,
 ) -> Result<(), CacheError> {
-    // Extract the IPFS URI from the edit data
-    // The data field contains the IPFS CID as a UTF-8 string
-    let uri = String::from_utf8_lossy(&edit.data).to_string();
+    // content_uri is validated by hermes-substream - empty means no valid IPFS URI
+    if edit.content_uri.is_empty() {
+        debug!(block = block_number, "Skipping edit with no valid IPFS URI");
+        return Ok(());
+    }
 
-    // Convert space_id bytes to hex string
+    let uri = edit.content_uri;
     let space_id = hex::encode(&edit.space_id);
 
-    debug!(
-        uri = %uri,
-        space_id = %space_id,
-        block = block_number,
-        "Fetching IPFS content"
-    );
+    debug!(uri = %uri, space_id = %space_id, block = block_number, "Processing edit");
 
-    // Fetch and decode the IPFS content
-    let result = ipfs.get(&uri).await;
+    // Fetch the raw bytes from IPFS
+    let result = ipfs.get_bytes(&uri).await;
 
     let item = match result {
-        Ok(decoded_edit) => {
-            info!(
-                uri = %uri,
-                block = block_number,
-                "Successfully cached IPFS content"
-            );
+        Ok(bytes) => {
+            info!(uri = %uri, block = block_number, bytes = bytes.len(), "Cached IPFS content");
             CacheItem {
                 uri,
-                json: Some(decoded_edit),
+                data: Some(bytes),
                 block: block_timestamp.to_string(),
                 space_id,
                 is_errored: false,
             }
         }
         Err(error) => {
-            warn!(
-                uri = %uri,
-                block = block_number,
-                error = %error,
-                "Failed to fetch/decode IPFS content"
-            );
-            // Still cache an errored entry so consumers know the event exists
-            // but the content is invalid
+            warn!(uri = %uri, block = block_number, error = %error, "Failed to fetch IPFS content");
             CacheItem {
                 uri,
-                json: None,
+                data: None,
                 block: block_timestamp.to_string(),
                 space_id,
                 is_errored: true,
@@ -309,10 +298,7 @@ async fn process_edit_event(
         }
     };
 
-    // Store in cache (upsert - skips if URI already exists)
-    let cache_guard = cache.lock().await;
-    cache_guard.put(&item).await?;
-
+    cache.lock().await.put(&item).await?;
     Ok(())
 }
 

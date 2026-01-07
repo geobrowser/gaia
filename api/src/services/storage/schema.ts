@@ -43,7 +43,7 @@ export const bytea = customType<{
 
 export const ipfsCache = pgTable("ipfs_cache", {
 	id: serial(),
-	json: jsonb(),
+	data: bytea(),
 	uri: text().notNull().unique(),
 	/**
 	 * Sometimes an IPFS fetch can fail for multiple reasons. Primarily
