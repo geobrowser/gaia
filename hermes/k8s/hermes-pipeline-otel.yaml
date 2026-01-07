@@ -2,7 +2,7 @@
 #
 # To create the secret:
 #   kubectl create secret generic hermes-pipeline-otel \
-#     --namespace=kafka \
+#     --namespace=knowledge \
 #     --from-literal=OTEL_URL=<endpoint> \
 #     --from-literal=OTEL_TOKEN=<token> \
 #     --from-literal=OTEL_DATASET=hermes-pipeline
@@ -12,7 +12,7 @@ apiVersion: v1
 kind: Secret
 metadata:
   name: hermes-pipeline-otel
-  namespace: kafka
+  namespace: knowledge
 type: Opaque
 stringData:
   OTEL_URL: "<endpoint>"
