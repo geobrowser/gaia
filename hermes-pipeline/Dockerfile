@@ -33,8 +33,10 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app/hermes-pipeline/target/release/hermes-pipeline /usr/local/bin/hermes-pipeline
+COPY --from=builder /app/hermes-substream/hermes-substream-v0.1.0.spkg /hermes-substream/hermes-substream-v0.1.0.spkg
 
 # Default environment variables
 ENV KAFKA_BROKER=kafka-broker-0.broker.kafka.svc.cluster.local:29092
 
+WORKDIR /
 CMD ["hermes-pipeline"]
