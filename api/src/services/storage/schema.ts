@@ -130,15 +130,9 @@ export const values = pgTable(
 	"values",
 	{
 		id: text().primaryKey(),
-		propertyId: uuid()
-			.notNull()
-			.references(() => properties.id),
-		entityId: uuid()
-			.notNull()
-			.references(() => entities.id),
-		spaceId: uuid()
-			.notNull()
-			.references(() => spaces.id),
+		propertyId: uuid().notNull(),
+		entityId: uuid().notNull(),
+		spaceId: uuid().notNull(),
 		string: text(),
 		boolean: boolean(),
 		number: decimal(),
@@ -187,26 +181,16 @@ export const relations = pgTable(
 	"relations",
 	{
 		id: uuid().primaryKey(),
-		entityId: uuid()
-			.notNull()
-			.references(() => entities.id),
-		typeId: uuid()
-			.notNull()
-			.references(() => properties.id),
-		fromEntityId: uuid()
-			.notNull()
-			.references(() => entities.id),
-		fromSpaceId: uuid().references(() => spaces.id),
+		entityId: uuid().notNull(),
+		typeId: uuid().notNull(),
+		fromEntityId: uuid().notNull(),
+		fromSpaceId: uuid(),
 		fromVersionId: uuid(),
-		toEntityId: uuid()
-			.notNull()
-			.references(() => entities.id),
-		toSpaceId: uuid().references(() => spaces.id),
+		toEntityId: uuid().notNull(),
+		toSpaceId: uuid(),
 		toVersionId: uuid(),
 		position: text(),
-		spaceId: uuid()
-			.notNull()
-			.references(() => spaces.id),
+		spaceId: uuid().notNull(),
 		verified: boolean(),
 	},
 	(table) => [
@@ -248,9 +232,7 @@ export const members = pgTable(
 	"members",
 	{
 		address: text().notNull(),
-		spaceId: uuid()
-			.notNull()
-			.references(() => spaces.id),
+		spaceId: uuid().notNull(),
 	},
 	(table) => [
 		primaryKey({ columns: [table.address, table.spaceId] }),
@@ -262,9 +244,7 @@ export const editors = pgTable(
 	"editors",
 	{
 		address: text().notNull(),
-		spaceId: uuid()
-			.notNull()
-			.references(() => spaces.id),
+		spaceId: uuid().notNull(),
 	},
 	(table) => [
 		primaryKey({ columns: [table.address, table.spaceId] }),
@@ -275,12 +255,8 @@ export const editors = pgTable(
 export const subspaces = pgTable(
 	"subspaces",
 	{
-		parentSpaceId: uuid()
-			.notNull()
-			.references(() => spaces.id),
-		childSpaceId: uuid()
-			.notNull()
-			.references(() => spaces.id),
+		parentSpaceId: uuid().notNull(),
+		childSpaceId: uuid().notNull(),
 	},
 	(table) => [
 		primaryKey({ columns: [table.parentSpaceId, table.childSpaceId] }),
