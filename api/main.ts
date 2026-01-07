@@ -5,13 +5,13 @@ import { openAPISpecs } from "hono-openapi"
 import { compress } from "hono/compress"
 import { cors } from "hono/cors"
 import { health } from "./src/health"
-import { graphqlServer } from "./src/kg/postgraphile"
+import { graphqlServer, graphqlServerV2 } from "./src/kg/postgraphile"
+import { createSearchRouter } from "./src/search"
 import { Environment, EnvironmentLive, make as makeEnvironment } from "./src/services/environment"
 import { uploadEdit, uploadFile, uploadFileAlternativeGateway } from "./src/services/ipfs"
+import { OpenSearchClient } from "./src/services/search"
 import { make as makeStorage, Storage } from "./src/services/storage/storage"
 import { getPublishEditCalldata } from "./src/utils/calldata"
-import { createSearchRouter } from "./src/search"
-import { OpenSearchClient } from "./src/services/search"
 
 /**
  * Currently hand-rolling a compression polyfill until Bun implements
@@ -60,6 +60,10 @@ app.get("/", swaggerUI({url: "/openapi"}))
 
 app.use("/graphql", async (c) => {
 	return graphqlServer.fetch(c.req.raw)
+})
+
+app.use("/v2/graphql", async (c) => {
+	return graphqlServerV2.fetch(c.req.raw)
 })
 
 app.post("/ipfs/upload-edit", async (c) => {
