@@ -619,8 +619,8 @@ async fn async_main() -> anyhow::Result<()> {
         info!("Using mock IPFS cache");
         CacheSource::mock().into_cache().await?
     } else {
-        let database_url = env::var("DATABASE_URL")
-            .expect("DATABASE_URL must be set when USE_MOCK is not true");
+        let database_url =
+            env::var("DATABASE_URL").expect("DATABASE_URL must be set when USE_MOCK is not true");
         info!("Connecting to IPFS cache database");
         CacheSource::live(&database_url).into_cache().await?
     };

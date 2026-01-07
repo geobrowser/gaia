@@ -33,13 +33,11 @@ impl PostgresCache {
 #[async_trait]
 impl IpfsCache for PostgresCache {
     async fn get(&self, ipfs_hash: &str, space_id: &[u8]) -> Result<CachedEdit, CacheError> {
-        let row = sqlx::query(
-            "SELECT data, space, is_errored FROM ipfs_cache WHERE uri = $1",
-        )
-        .bind(ipfs_hash)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(|e| CacheError::Database(e.to_string()))?;
+        let row = sqlx::query("SELECT data, space, is_errored FROM ipfs_cache WHERE uri = $1")
+            .bind(ipfs_hash)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(|e| CacheError::Database(e.to_string()))?;
 
         match row {
             Some(row) => {
@@ -56,7 +54,11 @@ impl IpfsCache for PostgresCache {
                     Some(bytes) => {
                         let edit = Edit::decode(bytes.as_slice())
                             .map_err(|e| CacheError::DeserializeError(e.to_string()))?;
-                        Ok(CachedEdit::success(ipfs_hash.to_string(), edit, space_id_bytes))
+                        Ok(CachedEdit::success(
+                            ipfs_hash.to_string(),
+                            edit,
+                            space_id_bytes,
+                        ))
                     }
                     None => {
                         // Entry exists but no data - treat as errored

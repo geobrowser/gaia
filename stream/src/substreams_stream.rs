@@ -203,7 +203,11 @@ async fn process_substreams_response(
                     progress.running_jobs.len(),
                     processed_bytes.total_bytes_read,
                     processed_bytes.total_bytes_written,
-                    if stats.is_empty() { "initializing...".to_string() } else { stats.join(", ") }
+                    if stats.is_empty() {
+                        "initializing...".to_string()
+                    } else {
+                        stats.join(", ")
+                    }
                 );
                 *last_progress_report = Instant::now();
             }

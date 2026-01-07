@@ -61,14 +61,14 @@ fn is_valid_cid(cid: &str) -> bool {
 
 /// Check if string is valid base58 (no 0, O, I, l)
 fn is_base58(s: &str) -> bool {
-    s.chars().all(|c| {
-        c.is_ascii_alphanumeric() && c != '0' && c != 'O' && c != 'I' && c != 'l'
-    })
+    s.chars()
+        .all(|c| c.is_ascii_alphanumeric() && c != '0' && c != 'O' && c != 'I' && c != 'l')
 }
 
 /// Check if string is valid base32 lowercase (a-z, 2-7)
 fn is_base32_lower(s: &str) -> bool {
-    s.chars().all(|c| c.is_ascii_lowercase() || ('2'..='7').contains(&c))
+    s.chars()
+        .all(|c| c.is_ascii_lowercase() || ('2'..='7').contains(&c))
 }
 
 #[cfg(test)]
@@ -149,12 +149,16 @@ mod tests {
 
     #[test]
     fn test_is_valid_cid_v0() {
-        assert!(is_valid_cid("QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG"));
+        assert!(is_valid_cid(
+            "QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG"
+        ));
     }
 
     #[test]
     fn test_is_valid_cid_v1() {
-        assert!(is_valid_cid("bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3okuez3djvxfzq"));
+        assert!(is_valid_cid(
+            "bafybeigdyrzt5sfp7udm7hu76uh7y26nf3efuylqabf3okuez3djvxfzq"
+        ));
     }
 
     #[test]

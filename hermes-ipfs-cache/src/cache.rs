@@ -215,23 +215,20 @@ impl CacheStorage for PostgresStorage {
     }
 
     async fn get(&self, uri: &str) -> Result<Option<CacheItem>, CacheError> {
-        let row: Option<(Option<Vec<u8>>, String, String, bool)> = sqlx::query_as(
-            "SELECT data, block, space, is_errored FROM ipfs_cache WHERE uri = $1",
-        )
-        .bind(uri)
-        .fetch_optional(&self.connection)
-        .await?;
+        let row: Option<(Option<Vec<u8>>, String, String, bool)> =
+            sqlx::query_as("SELECT data, block, space, is_errored FROM ipfs_cache WHERE uri = $1")
+                .bind(uri)
+                .fetch_optional(&self.connection)
+                .await?;
 
         match row {
-            Some((data, block, space_id, is_errored)) => {
-                Ok(Some(CacheItem {
-                    uri: uri.to_string(),
-                    data,
-                    block,
-                    space_id,
-                    is_errored,
-                }))
-            }
+            Some((data, block, space_id, is_errored)) => Ok(Some(CacheItem {
+                uri: uri.to_string(),
+                data,
+                block,
+                space_id,
+                is_errored,
+            })),
             None => Ok(None),
         }
     }
