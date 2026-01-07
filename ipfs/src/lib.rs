@@ -111,24 +111,31 @@ impl IpfsClient {
 
 #[async_trait]
 impl IpfsFetcher for IpfsClient {
-    async fn get(&self, hash: &str) -> Result<Edit> {
-        // @TODO: Error handle
-        let cid = if let Some((_, maybe_cid)) = hash.split_once("://") {
-            maybe_cid
-        } else {
-            ""
-        };
-
-        // @TODO: Should retry this fetch
-        let bytes = self.get_bytes(cid).await?;
-
+    async fn get(&self, uri: &str) -> Result<Edit> {
+        // get_bytes handles ipfs:// prefix stripping
+        let bytes = self.get_bytes(uri).await?;
         let data = deserialize(&bytes)?;
         Ok(data)
     }
 
-    async fn get_bytes(&self, hash: &str) -> Result<Vec<u8>> {
-        let url = format!("{}{}", self.url, hash);
+    async fn get_bytes(&self, uri: &str) -> Result<Vec<u8>> {
+        // Strip ipfs:// prefix if present
+        let cid = uri.strip_prefix("ipfs://").unwrap_or(uri);
+
+        let url = format!("{}{}", self.url, cid);
         let res = self.client.get(&url).send().await?;
+
+        // Check for HTTP errors before returning bytes
+        if !res.status().is_success() {
+            let status = res.status();
+            let body = res.text().await.unwrap_or_default();
+            return Err(IpfsError::NetworkError(format!(
+                "HTTP {}: {}",
+                status,
+                body.trim()
+            )));
+        }
+
         let bytes = res.bytes().await?;
         Ok(bytes.to_vec())
     }
