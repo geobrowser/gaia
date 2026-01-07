@@ -79,7 +79,7 @@ spec:
                   name: hermes-ipfs-cache-secrets
                   key: SUBSTREAMS_API_TOKEN
             - name: SUBSTREAMS_START_BLOCK
-              value: "88109"
+              value: "81809"
             - name: IPFS_GATEWAY_URL
               valueFrom:
                 secretKeyRef:
