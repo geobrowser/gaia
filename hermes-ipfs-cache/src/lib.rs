@@ -179,6 +179,11 @@ impl Sink for IpfsCacheSink {
 
         let edit_count = edits_list.edits.len();
 
+        // Checkpoint log every 100 blocks
+        if block_number % 100 == 0 {
+            info!(block = block_number, "Checkpoint");
+        }
+
         if edit_count > 0 {
             info!(block = block_number, edits = edit_count, "Processing edits");
 
@@ -237,6 +242,10 @@ impl Sink for IpfsCacheSink {
 
     async fn load_persisted_cursor(&self) -> Result<Option<String>, Self::Error> {
         let cursor = self.cache.lock().await.load_cursor(INDEXER_ID).await?;
+        match &cursor {
+            Some(c) => info!(cursor = %c, "Resuming from persisted cursor"),
+            None => info!("No persisted cursor found, starting fresh"),
+        }
         Ok(cursor)
     }
 }

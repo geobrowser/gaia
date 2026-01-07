@@ -170,7 +170,7 @@ async fn async_main() -> anyhow::Result<()> {
         let start_block: i64 = env::var("SUBSTREAMS_START_BLOCK")
             .ok()
             .and_then(|s| s.parse().ok())
-            .unwrap_or(88109);
+            .unwrap_or(81809);
 
         let end_block: u64 = env::var("SUBSTREAMS_END_BLOCK")
             .ok()
