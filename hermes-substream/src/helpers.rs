@@ -51,9 +51,9 @@ fn is_valid_cid(cid: &str) -> bool {
 
     // CIDv1: starts with 'b' (base32) - typically "bafy" for dag-pb/blake3
     // Length varies but typically 59 chars for base32lower
-    if cid.starts_with('b') {
+    if let Some(rest) = cid.strip_prefix('b') {
         // Base32 uses a-z and 2-7
-        return cid.len() >= 50 && is_base32_lower(&cid[1..]);
+        return cid.len() >= 50 && is_base32_lower(rest);
     }
 
     false
