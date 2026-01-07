@@ -36,10 +36,7 @@
 //! - `KAFKA_SSL_CA_PEM` - Custom CA cert for SSL (optional)
 //! - `DATABASE_URL` - PostgreSQL URL for IPFS cache (required when USE_MOCK=false)
 
-mod cache;
-mod decode;
 mod emit;
-mod pipelines;
 
 use std::env;
 use std::fmt;
@@ -53,12 +50,14 @@ use hermes_relay::stream::pb::sf::substreams::rpc::v2::BlockScopedData;
 use hermes_relay::stream::utils;
 use hermes_relay::{Actions, HermesModule, Sink, StreamSource};
 
-use cache::{CacheSource, IpfsCache};
+use hermes_pipeline::cache::{CacheSource, IpfsCache};
+use hermes_pipeline::pipelines;
+use hermes_pipeline::pipelines::BlockMetadata;
+use hermes_pipeline::pipelines::edits::RetryConfig;
+use hermes_pipeline::pipelines::trust::get_extension_type;
+use hermes_pipeline::pipelines::voting::get_vote_direction;
+
 use emit::{Emitter, topics};
-use pipelines::BlockMetadata;
-use pipelines::edits::RetryConfig;
-use pipelines::trust::get_extension_type;
-use pipelines::voting::get_vote_direction;
 
 /// Error type for the pipeline that implements std::error::Error
 #[derive(Debug)]

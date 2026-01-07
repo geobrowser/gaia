@@ -180,7 +180,7 @@ impl Sink for IpfsCacheSink {
         let edit_count = edits_list.edits.len();
 
         // Checkpoint log every 100 blocks
-        if block_number % 100 == 0 {
+        if block_number.is_multiple_of(100) {
             info!(block = block_number, "Checkpoint");
         }
 
