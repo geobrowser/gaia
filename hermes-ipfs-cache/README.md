@@ -36,12 +36,13 @@ Environment variables:
 
 | Variable | Required | Description |
 |----------|----------|-------------|
-| `DATABASE_URL` | Yes | PostgreSQL connection string |
-| `IPFS_GATEWAY` | Yes | IPFS gateway URL (e.g., `https://gateway.ipfs.io/ipfs/`) |
-| `SUBSTREAMS_ENDPOINT` | Yes | Substreams endpoint URL |
-| `SUBSTREAMS_API_TOKEN` | No | API token for substreams authentication |
-| `START_BLOCK` | No | Block to start from (default: 0) |
-| `END_BLOCK` | No | Block to end at (default: 0 = stream forever) |
+| `USE_MOCK` | No | Set to "true" or "1" to use mock data (default: false) |
+| `DATABASE_URL` | Live mode | PostgreSQL connection string |
+| `IPFS_GATEWAY_URL` | Live mode | IPFS gateway URL (e.g., `https://ipfs.io/ipfs/`) |
+| `SUBSTREAMS_ENDPOINT` | Live mode | Substreams endpoint URL (e.g., `geotest.substreams.pinax.network:443`) |
+| `SUBSTREAMS_API_TOKEN` | Live mode | API token for substreams authentication |
+| `SUBSTREAMS_START_BLOCK` | No | Block to start from (default: 88109) |
+| `SUBSTREAMS_END_BLOCK` | No | Block to end at (default: u64::MAX = stream forever) |
 
 ## Database Schema
 
@@ -96,8 +97,8 @@ cd hermes && docker-compose up ipfs-cache-postgres
 
 # Run the service
 DATABASE_URL=postgres://postgres:postgres@localhost:5433/ipfs_cache \
-IPFS_GATEWAY=https://gateway.ipfs.io/ipfs/ \
-SUBSTREAMS_ENDPOINT=https://... \
+IPFS_GATEWAY_URL=https://ipfs.io/ipfs/ \
+SUBSTREAMS_ENDPOINT=geotest.substreams.pinax.network:443 \
 SUBSTREAMS_API_TOKEN=... \
 cargo run -p hermes-ipfs-cache
 ```
@@ -108,10 +109,10 @@ The service loads environment variables from a `.env` file in the working direct
 
 ```bash
 DATABASE_URL=postgres://postgres:postgres@localhost:5433/ipfs_cache
-IPFS_GATEWAY=https://gateway.ipfs.io/ipfs/
-SUBSTREAMS_ENDPOINT=https://...
+IPFS_GATEWAY_URL=https://ipfs.io/ipfs/
+SUBSTREAMS_ENDPOINT=geotest.substreams.pinax.network:443
 SUBSTREAMS_API_TOKEN=...
-START_BLOCK=0
+SUBSTREAMS_START_BLOCK=88109
 RUST_LOG=info,hermes_ipfs_cache=debug
 ```
 
