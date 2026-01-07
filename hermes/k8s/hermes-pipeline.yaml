@@ -89,6 +89,16 @@ spec:
                 secretKeyRef:
                   name: kg-indexer-secrets
                   key: KAFKA_SSL_CA_PEM
+            - name: SUBSTREAMS_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: hermes-ipfs-cache-secrets
+                  key: SUBSTREAMS_ENDPOINT
+            - name: SUBSTREAMS_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hermes-ipfs-cache-secrets
+                  key: SUBSTREAMS_API_TOKEN
             - name: OTEL_URL
               valueFrom:
                 secretKeyRef:
