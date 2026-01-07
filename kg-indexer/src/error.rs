@@ -9,6 +9,9 @@ pub enum HandlerError {
     #[error("Invalid UUID bytes: {0}")]
     InvalidUuidBytes(#[from] uuid::Error),
 
+    #[error("Invalid address: {0}")]
+    InvalidAddress(String),
+
     #[error("Missing payload in message")]
     MissingPayload,
 

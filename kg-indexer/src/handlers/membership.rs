@@ -16,6 +16,12 @@ pub enum MembershipChange {
 /// Process a HermesRoleGranted message and return the membership change
 pub fn handle_role_granted(event: &HermesRoleGranted) -> Result<MembershipChange, HandlerError> {
     let space_id = Uuid::from_slice(&event.space_id)?;
+    if event.account.len() != 20 {
+        return Err(HandlerError::InvalidAddress(format!(
+            "Expected 20 bytes, got {}",
+            event.account.len()
+        )));
+    }
     let account_address = checksum_address(format!("0x{}", hex::encode(&event.account)));
 
     match MembershipRole::try_from(event.role) {
@@ -34,6 +40,12 @@ pub fn handle_role_granted(event: &HermesRoleGranted) -> Result<MembershipChange
 /// Process a HermesRoleRevoked message and return the membership change
 pub fn handle_role_revoked(event: &HermesRoleRevoked) -> Result<MembershipChange, HandlerError> {
     let space_id = Uuid::from_slice(&event.space_id)?;
+    if event.account.len() != 20 {
+        return Err(HandlerError::InvalidAddress(format!(
+            "Expected 20 bytes, got {}",
+            event.account.len()
+        )));
+    }
     let account_address = checksum_address(format!("0x{}", hex::encode(&event.account)));
 
     match MembershipRole::try_from(event.role) {
