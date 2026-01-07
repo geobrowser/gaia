@@ -1,15 +1,25 @@
-apiVersion: batch/v1
-kind: Job
+apiVersion: apps/v1
+kind: Deployment
 metadata:
   name: hermes-pipeline
   namespace: knowledge
+  labels:
+    app: hermes-pipeline
 spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: hermes-pipeline
   template:
     metadata:
       labels:
         app: hermes-pipeline
     spec:
-      restartPolicy: OnFailure
+      restartPolicy: Always
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        fsGroup: 1001
       imagePullSecrets:
         - name: regcred
       volumes:
@@ -33,10 +43,20 @@ spec:
           volumeMounts:
             - name: ssl-certs
               mountPath: /ssl
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
       containers:
         - name: hermes-pipeline
           image: registry.digitalocean.com/geo/hermes-pipeline:latest
           imagePullPolicy: Always
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
           volumeMounts:
             - name: ssl-certs
               mountPath: /ssl
