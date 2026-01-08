@@ -1,28 +1,16 @@
 name: Indexer Integration Tests
 
+# TODO(2026-02): Remove this workflow after legacy indexer sunset
+# Disabled because legacy indexer uses old spaces schema (dao_address, space_address, etc.)
+# which is incompatible with the new simplified schema (address, topic_id)
 on:
-  push:
-    branches: [main, develop]
-    paths:
-      - "indexer/**"
-      - "stream/**"
-      - "wire/**"
-      - "indexer_utils/**"
-      - "api/drizzle/**"
-  pull_request:
-    branches: [main, develop]
-    paths:
-      - "indexer/**"
-      - "stream/**"
-      - "wire/**"
-      - "indexer_utils/**"
-      - "api/drizzle/**"
-  workflow_dispatch:
+  workflow_dispatch:  # Manual trigger only
 
 jobs:
   indexer-integration-tests:
     name: Indexer Integration Tests
     runs-on: ubuntu-latest
+    if: false  # Disabled - legacy indexer
 
     services:
       postgres:

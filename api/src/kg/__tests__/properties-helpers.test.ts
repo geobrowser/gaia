@@ -43,9 +43,8 @@ describe("property helper functions", () => {
 		// Insert test space first (required for values and relations)
 		await db.insert(spaces).values({
 			id: testSpaceId,
-			type: 'Public',
-			daoAddress: '0x123',
-			spaceAddress: '0x456'
+			type: 'DAO',
+			address: '0x123',
 		}).onConflictDoNothing()
 
 		// Insert test properties

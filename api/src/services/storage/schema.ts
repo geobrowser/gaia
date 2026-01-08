@@ -76,16 +76,13 @@ export const meta = pgTable("meta", {
 	blockNumber: text().notNull(),
 });
 
-export const spaceTypesEnum = pgEnum("spaceTypes", ["Personal", "Public"]);
+export const spaceTypesEnum = pgEnum("spaceTypes", ["DAO", "Personal"]);
 
 export const spaces = pgTable("spaces", {
 	id: uuid().primaryKey(),
 	type: spaceTypesEnum().notNull(),
-	daoAddress: text().notNull(),
-	spaceAddress: text().notNull(),
-	mainVotingAddress: text(),
-	membershipAddress: text(),
-	personalAddress: text(),
+	address: text().notNull(),
+	topicId: uuid(),
 });
 
 export const entities = pgTable(

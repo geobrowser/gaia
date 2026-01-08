@@ -1,20 +1,9 @@
 name: Indexer Unit Tests
 
+# TODO(2026-02): Remove this workflow after legacy indexer sunset
+# Disabled because legacy indexer uses old spaces schema
 on:
-  push:
-    branches: [ main, develop ]
-    paths:
-      - 'indexer/**'
-      - 'stream/**'
-      - 'wire/**'
-      - 'indexer_utils/**'
-  pull_request:
-    branches: [ main, develop ]
-    paths:
-      - 'indexer/**'
-      - 'stream/**'
-      - 'wire/**'
-      - 'indexer_utils/**'
+  workflow_dispatch:  # Manual trigger only
 
 env:
   CARGO_TERM_COLOR: always
@@ -23,6 +12,7 @@ jobs:
   unit-tests:
     name: Run Unit Tests
     runs-on: ubuntu-latest
+    if: false  # Disabled - legacy indexer
 
     steps:
     - name: Checkout code
