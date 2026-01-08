@@ -9,7 +9,7 @@ pub struct EntityScore {
     /// Normalized score
     #[prost(double, tag="2")]
     pub score: f64,
-    /// Unix timestamp
+    /// Unix timestamp in seconds
     #[prost(uint64, tag="3")]
     pub updated_at: u64,
 }
@@ -25,7 +25,7 @@ pub struct PerspectiveScore {
     /// Normalized score
     #[prost(double, tag="3")]
     pub score: f64,
-    /// Unix timestamp
+    /// Unix timestamp in seconds
     #[prost(uint64, tag="4")]
     pub updated_at: u64,
 }
@@ -38,7 +38,7 @@ pub struct SpaceScore {
     /// Space score
     #[prost(double, tag="2")]
     pub score: f64,
-    /// Unix timestamp
+    /// Unix timestamp in seconds
     #[prost(uint64, tag="3")]
     pub updated_at: u64,
 }
@@ -51,7 +51,7 @@ pub struct HermesScoresBatch {
     pub perspective_scores: ::prost::alloc::vec::Vec<PerspectiveScore>,
     #[prost(message, repeated, tag="3")]
     pub space_scores: ::prost::alloc::vec::Vec<SpaceScore>,
-    /// When scores were computed
+    /// When scores were computed - Unix timestamp in seconds
     #[prost(uint64, tag="4")]
     pub computed_at: u64,
     /// Sequence number within run
