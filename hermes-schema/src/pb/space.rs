@@ -4,20 +4,21 @@ pub struct EoaSpacePayload {
     #[prost(bytes = "vec", tag = "1")]
     pub owner: ::prost::alloc::vec::Vec<u8>,
 }
-/// DefaultDaoSpacePayload is intentionally empty.
+/// DefaultDaoSpacePayload contains the DAO contract address.
 /// The contract emits individual EDITOR_ADDED/MEMBER_ADDED events for each
 /// initial editor/member during initialization. These are handled by the
 /// membership pipeline, not space creation.
-#[derive(Clone, Copy, PartialEq, ::prost::Message)]
-pub struct DefaultDaoSpacePayload {}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct DefaultDaoSpacePayload {
+    /// 20-byte DAO contract address
+    #[prost(bytes = "vec", tag = "1")]
+    pub address: ::prost::alloc::vec::Vec<u8>,
+}
 #[derive(Clone, PartialEq, ::prost::Message)]
 pub struct HermesCreateSpace {
     /// uuid
     #[prost(bytes = "vec", tag = "1")]
     pub space_id: ::prost::alloc::vec::Vec<u8>,
-    /// uuid
-    #[prost(bytes = "vec", tag = "2")]
-    pub topic_id: ::prost::alloc::vec::Vec<u8>,
     #[prost(message, optional, tag = "5")]
     pub meta: ::core::option::Option<super::blockchain_metadata::BlockchainMetadata>,
     #[prost(oneof = "hermes_create_space::Payload", tags = "3, 4")]
