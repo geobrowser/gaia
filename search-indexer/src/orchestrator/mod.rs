@@ -206,10 +206,21 @@ impl Orchestrator {
         let mut prev_docs: u64 = 0;
         let mut prev_time = std::time::Instant::now();
 
+        // Track consumer result for shutdown
+        let mut consumer_result: Option<Result<Result<(), IngestError>, tokio::task::JoinError>> =
+            None;
+
         loop {
             tokio::select! {
                 _ = tokio::signal::ctrl_c() => {
                     info!("Received shutdown signal");
+                    let _ = shutdown_tx.send(());
+                    break;
+                }
+                result = &mut consumer_handle => {
+                    // Consumer task completed (either finished or errored)
+                    info!("Consumer completed, initiating shutdown");
+                    consumer_result = Some(result);
                     let _ = shutdown_tx.send(());
                     break;
                 }
@@ -267,8 +278,11 @@ impl Orchestrator {
         // Close ack channel (loader stops sending, signals consumer)
         drop(ack_tx);
 
-        // Wait for consumer to finish (it will exit when ack channel closes or on shutdown signal)
-        let _ = consumer_handle.await;
+        // Wait for consumer to finish (if we don't already have its result)
+        let consumer_final_result = match consumer_result {
+            Some(result) => result,
+            None => consumer_handle.await,
+        };
 
         let final_events = metrics.total_events_processed.load(Ordering::Relaxed);
         let final_docs = metrics.total_documents_indexed.load(Ordering::Relaxed);
@@ -277,7 +291,16 @@ impl Orchestrator {
             total_documents_indexed = final_docs,
             "Orchestrator shutdown complete"
         );
-        Ok(())
+
+        // Propagate consumer errors if any
+        match consumer_final_result {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(e)) => Err(e),
+            Err(join_error) => Err(IngestError::OrchestratorError(format!(
+                "Consumer task panicked: {}",
+                join_error
+            ))),
+        }
     }
 }
 

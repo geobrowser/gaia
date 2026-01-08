@@ -96,9 +96,10 @@ impl Consumer for MockConsumer {
                 match msg {
                     Some(StreamMessage::Acknowledgment { success, .. }) => {
                         *self.last_acknowledgment.lock().unwrap() = Some(success);
-                        if !success {
-                            return Err(IngestError::LoaderError("Processing failed".to_string()));
-                        }
+                        // For tests: we just record whether ACK or NACK was received.
+                        // The test can check get_last_acknowledgment() to verify.
+                        // We don't return an error on NACK since the mock's job is just
+                        // to record what happened, not to simulate real retry behavior.
                     }
                     Some(_) | None => {
                         // Channel closed or unexpected message, exit
@@ -1267,4 +1268,422 @@ async fn test_multiple_types_for_same_entity() {
     assert!(added_types.contains(&type_id_1.to_string()));
     assert!(added_types.contains(&type_id_2.to_string()));
     assert!(added_types.contains(&type_id_3.to_string()));
+}
+
+#[tokio::test]
+async fn test_create_relations_for_multiple_entities() {
+    // Test creating type relations for multiple different entities in a single batch
+    let entity_id_1 = Uuid::new_v4();
+    let entity_id_2 = Uuid::new_v4();
+    let entity_id_3 = Uuid::new_v4();
+    let space_id = Uuid::new_v4();
+    let type_id_1 = Uuid::new_v4();
+    let type_id_2 = Uuid::new_v4();
+    let type_id_3 = Uuid::new_v4();
+    let relation_type = Uuid::parse_str(TYPE_RELATION_TYPE_ID).unwrap();
+
+    let events = vec![
+        EntityEvent::create_relation(
+            Uuid::new_v4(),
+            relation_type,
+            entity_id_1,
+            type_id_1,
+            space_id,
+        ),
+        EntityEvent::create_relation(
+            Uuid::new_v4(),
+            relation_type,
+            entity_id_2,
+            type_id_2,
+            space_id,
+        ),
+        EntityEvent::create_relation(
+            Uuid::new_v4(),
+            relation_type,
+            entity_id_3,
+            type_id_3,
+            space_id,
+        ),
+    ];
+
+    let (orchestrator, mock_provider, mock_consumer) =
+        create_test_orchestrator_with_consumer(events);
+
+    // Run the orchestrator
+    let result = timeout(Duration::from_secs(5), orchestrator.run()).await;
+    assert!(result.is_ok(), "Orchestrator should complete");
+    assert!(result.unwrap().is_ok(), "Orchestrator should succeed");
+
+    // Verify ACK was sent
+    let last_ack = mock_consumer.get_last_acknowledgment();
+    assert_eq!(last_ack, Some(true), "Expected ACK");
+
+    // Should have 3 add_type_relation operations
+    let add_requests = mock_provider.get_add_type_relation_requests();
+    assert_eq!(
+        add_requests.len(),
+        3,
+        "Expected 3 add_type_relation requests"
+    );
+
+    // Verify each entity got its correct type
+    let entity_type_pairs: Vec<_> = add_requests
+        .iter()
+        .map(|r| {
+            (
+                r.entity_id.clone(),
+                r.add_type_relation
+                    .as_ref()
+                    .map(|rel| rel.entity_to_id.clone())
+                    .unwrap(),
+            )
+        })
+        .collect();
+
+    assert!(entity_type_pairs.contains(&(entity_id_1.to_string(), type_id_1.to_string())));
+    assert!(entity_type_pairs.contains(&(entity_id_2.to_string(), type_id_2.to_string())));
+    assert!(entity_type_pairs.contains(&(entity_id_3.to_string(), type_id_3.to_string())));
+}
+
+#[tokio::test]
+async fn test_delete_multiple_relations() {
+    // Test deleting multiple relations in a single batch
+    let relation_id_1 = Uuid::new_v4();
+    let relation_id_2 = Uuid::new_v4();
+    let relation_id_3 = Uuid::new_v4();
+
+    let events = vec![
+        EntityEvent::delete_relation(relation_id_1),
+        EntityEvent::delete_relation(relation_id_2),
+        EntityEvent::delete_relation(relation_id_3),
+    ];
+
+    let (orchestrator, mock_provider, mock_consumer) =
+        create_test_orchestrator_with_consumer(events);
+
+    // Run the orchestrator
+    let result = timeout(Duration::from_secs(5), orchestrator.run()).await;
+    assert!(result.is_ok(), "Orchestrator should complete");
+    assert!(result.unwrap().is_ok(), "Orchestrator should succeed");
+
+    // Verify ACK was sent
+    let last_ack = mock_consumer.get_last_acknowledgment();
+    assert_eq!(last_ack, Some(true), "Expected ACK");
+
+    // Verify all 3 RemoveTypeRelationById operations were processed
+    let removed_relation_ids = mock_provider.get_removed_relation_ids();
+    assert_eq!(
+        removed_relation_ids.len(),
+        3,
+        "Expected 3 RemoveTypeRelationById operations"
+    );
+
+    // Verify all relation IDs are present
+    assert!(removed_relation_ids.contains(&relation_id_1.to_string()));
+    assert!(removed_relation_ids.contains(&relation_id_2.to_string()));
+    assert!(removed_relation_ids.contains(&relation_id_3.to_string()));
+}
+
+#[tokio::test]
+async fn test_mixed_create_and_delete_relations_different_entities() {
+    // Test mixing create and delete relation operations across different entities
+    let entity_id_1 = Uuid::new_v4();
+    let entity_id_2 = Uuid::new_v4();
+    let space_id = Uuid::new_v4();
+    let type_id_1 = Uuid::new_v4();
+    let type_id_2 = Uuid::new_v4();
+    let relation_id_to_delete_1 = Uuid::new_v4();
+    let relation_id_to_delete_2 = Uuid::new_v4();
+    let relation_type = Uuid::parse_str(TYPE_RELATION_TYPE_ID).unwrap();
+
+    let events = vec![
+        // Create a type relation for entity 1
+        EntityEvent::create_relation(
+            Uuid::new_v4(),
+            relation_type,
+            entity_id_1,
+            type_id_1,
+            space_id,
+        ),
+        // Delete an unrelated relation
+        EntityEvent::delete_relation(relation_id_to_delete_1),
+        // Create a type relation for entity 2
+        EntityEvent::create_relation(
+            Uuid::new_v4(),
+            relation_type,
+            entity_id_2,
+            type_id_2,
+            space_id,
+        ),
+        // Delete another unrelated relation
+        EntityEvent::delete_relation(relation_id_to_delete_2),
+    ];
+
+    let (orchestrator, mock_provider, mock_consumer) =
+        create_test_orchestrator_with_consumer(events);
+
+    // Run the orchestrator
+    let result = timeout(Duration::from_secs(5), orchestrator.run()).await;
+    assert!(result.is_ok(), "Orchestrator should complete");
+    assert!(result.unwrap().is_ok(), "Orchestrator should succeed");
+
+    // Verify ACK was sent
+    let last_ack = mock_consumer.get_last_acknowledgment();
+    assert_eq!(last_ack, Some(true), "Expected ACK");
+
+    // Verify 2 add_type_relation operations
+    let add_requests = mock_provider.get_add_type_relation_requests();
+    assert_eq!(
+        add_requests.len(),
+        2,
+        "Expected 2 add_type_relation requests"
+    );
+
+    // Verify 2 RemoveTypeRelationById operations
+    let removed_relation_ids = mock_provider.get_removed_relation_ids();
+    assert_eq!(
+        removed_relation_ids.len(),
+        2,
+        "Expected 2 RemoveTypeRelationById operations"
+    );
+
+    // Verify correct relation IDs were removed
+    assert!(removed_relation_ids.contains(&relation_id_to_delete_1.to_string()));
+    assert!(removed_relation_ids.contains(&relation_id_to_delete_2.to_string()));
+
+    // Verify correct type relations were added
+    let added_entities: Vec<_> = add_requests.iter().map(|r| r.entity_id.clone()).collect();
+    assert!(added_entities.contains(&entity_id_1.to_string()));
+    assert!(added_entities.contains(&entity_id_2.to_string()));
+}
+
+#[tokio::test]
+async fn test_interleaved_entity_and_relation_operations() {
+    // Test a complex batch with entity upserts, deletes, and relation operations
+    let entity_id_1 = Uuid::new_v4();
+    let entity_id_2 = Uuid::new_v4();
+    let entity_id_3 = Uuid::new_v4();
+    let space_id = Uuid::new_v4();
+    let type_id = Uuid::new_v4();
+    let relation_id_1 = Uuid::new_v4();
+    let relation_id_2 = Uuid::new_v4();
+    let relation_type = Uuid::parse_str(TYPE_RELATION_TYPE_ID).unwrap();
+
+    let events = vec![
+        // Upsert entity 1
+        EntityEvent::upsert(
+            entity_id_1,
+            space_id,
+            Some("Entity One".to_string()),
+            Some("Description one".to_string()),
+            None,
+        ),
+        // Create type relation for entity 1
+        EntityEvent::create_relation(relation_id_1, relation_type, entity_id_1, type_id, space_id),
+        // Upsert entity 2
+        EntityEvent::upsert(
+            entity_id_2,
+            space_id,
+            Some("Entity Two".to_string()),
+            None,
+            None,
+        ),
+        // Delete entity 3
+        EntityEvent::delete(entity_id_3, space_id),
+        // Delete a relation
+        EntityEvent::delete_relation(relation_id_2),
+    ];
+
+    let (orchestrator, mock_provider, mock_consumer) =
+        create_test_orchestrator_with_consumer(events);
+
+    // Run the orchestrator
+    let result = timeout(Duration::from_secs(5), orchestrator.run()).await;
+    assert!(result.is_ok(), "Orchestrator should complete");
+    assert!(result.unwrap().is_ok(), "Orchestrator should succeed");
+
+    // Verify ACK was sent
+    let last_ack = mock_consumer.get_last_acknowledgment();
+    assert_eq!(last_ack, Some(true), "Expected ACK");
+
+    // Verify counts:
+    // - 2 entity upserts + 1 add_type_relation = 3 updates
+    // - 1 entity delete
+    // - 1 relation delete
+    assert_eq!(mock_provider.get_updated_count(), 3, "Expected 3 updates");
+    assert_eq!(mock_provider.get_deleted_count(), 1, "Expected 1 delete");
+
+    let removed_relation_ids = mock_provider.get_removed_relation_ids();
+    assert_eq!(
+        removed_relation_ids.len(),
+        1,
+        "Expected 1 RemoveTypeRelationById operation"
+    );
+    assert_eq!(removed_relation_ids[0], relation_id_2.to_string());
+
+    // Verify the add_type_relation was for entity 1
+    let add_requests = mock_provider.get_add_type_relation_requests();
+    assert_eq!(add_requests.len(), 1, "Expected 1 add_type_relation");
+    assert_eq!(add_requests[0].entity_id, entity_id_1.to_string());
+    assert_eq!(
+        add_requests[0]
+            .add_type_relation
+            .as_ref()
+            .unwrap()
+            .relation_id,
+        relation_id_1.to_string()
+    );
+}
+
+#[tokio::test]
+async fn test_relation_operations_preserve_order() {
+    // Test that relation operations are processed in the correct order
+    let entity_id = Uuid::new_v4();
+    let space_id = Uuid::new_v4();
+    let type_id_1 = Uuid::new_v4();
+    let type_id_2 = Uuid::new_v4();
+    let relation_id_1 = Uuid::new_v4();
+    let relation_id_2 = Uuid::new_v4();
+    let relation_id_3 = Uuid::new_v4();
+    let relation_type = Uuid::parse_str(TYPE_RELATION_TYPE_ID).unwrap();
+
+    let events = vec![
+        // Create relation 1
+        EntityEvent::create_relation(relation_id_1, relation_type, entity_id, type_id_1, space_id),
+        // Create relation 2
+        EntityEvent::create_relation(relation_id_2, relation_type, entity_id, type_id_2, space_id),
+        // Delete relation 1
+        EntityEvent::delete_relation(relation_id_1),
+        // Delete relation 3 (was never created, but should still process)
+        EntityEvent::delete_relation(relation_id_3),
+    ];
+
+    let (orchestrator, mock_provider, mock_consumer) =
+        create_test_orchestrator_with_consumer(events);
+
+    // Run the orchestrator
+    let result = timeout(Duration::from_secs(5), orchestrator.run()).await;
+    assert!(result.is_ok(), "Orchestrator should complete");
+    assert!(result.unwrap().is_ok(), "Orchestrator should succeed");
+
+    // Verify ACK was sent
+    let last_ack = mock_consumer.get_last_acknowledgment();
+    assert_eq!(last_ack, Some(true), "Expected ACK");
+
+    // Verify operations are in correct order
+    let all_ops = mock_provider.get_all_operations_in_order();
+    assert_eq!(all_ops.len(), 4, "Expected 4 operations");
+
+    // Operation 0: Create relation 1 (add type_id_1)
+    match &all_ops[0] {
+        EntityOperation::Update(req) => {
+            assert!(req.add_type_relation.is_some());
+            let rel = req.add_type_relation.as_ref().unwrap();
+            assert_eq!(rel.relation_id, relation_id_1.to_string());
+            assert_eq!(rel.entity_to_id, type_id_1.to_string());
+        }
+        _ => panic!("Expected Update operation at index 0, got {:?}", all_ops[0]),
+    }
+
+    // Operation 1: Create relation 2 (add type_id_2)
+    match &all_ops[1] {
+        EntityOperation::Update(req) => {
+            assert!(req.add_type_relation.is_some());
+            let rel = req.add_type_relation.as_ref().unwrap();
+            assert_eq!(rel.relation_id, relation_id_2.to_string());
+            assert_eq!(rel.entity_to_id, type_id_2.to_string());
+        }
+        _ => panic!("Expected Update operation at index 1, got {:?}", all_ops[1]),
+    }
+
+    // Operation 2: Delete relation 1
+    match &all_ops[2] {
+        EntityOperation::RemoveTypeRelationById(req) => {
+            assert_eq!(req.relation_id, relation_id_1.to_string());
+        }
+        _ => panic!(
+            "Expected RemoveTypeRelationById operation at index 2, got {:?}",
+            all_ops[2]
+        ),
+    }
+
+    // Operation 3: Delete relation 3
+    match &all_ops[3] {
+        EntityOperation::RemoveTypeRelationById(req) => {
+            assert_eq!(req.relation_id, relation_id_3.to_string());
+        }
+        _ => panic!(
+            "Expected RemoveTypeRelationById operation at index 3, got {:?}",
+            all_ops[3]
+        ),
+    }
+}
+
+#[tokio::test]
+async fn test_create_relation_with_upsert_for_same_entity() {
+    // Test that we can upsert an entity and add a type relation in the same batch
+    // Both operations should be processed for the same entity
+    let entity_id = Uuid::new_v4();
+    let space_id = Uuid::new_v4();
+    let type_id = Uuid::new_v4();
+    let relation_id = Uuid::new_v4();
+    let relation_type = Uuid::parse_str(TYPE_RELATION_TYPE_ID).unwrap();
+
+    let events = vec![
+        // Upsert the entity
+        EntityEvent::upsert(
+            entity_id,
+            space_id,
+            Some("My Entity".to_string()),
+            Some("A description".to_string()),
+            Some("https://example.com/avatar.png".to_string()),
+        ),
+        // Add a type to the same entity
+        EntityEvent::create_relation(relation_id, relation_type, entity_id, type_id, space_id),
+    ];
+
+    let (orchestrator, mock_provider, mock_consumer) =
+        create_test_orchestrator_with_consumer(events);
+
+    // Run the orchestrator
+    let result = timeout(Duration::from_secs(5), orchestrator.run()).await;
+    assert!(result.is_ok(), "Orchestrator should complete");
+    assert!(result.unwrap().is_ok(), "Orchestrator should succeed");
+
+    // Verify ACK was sent
+    let last_ack = mock_consumer.get_last_acknowledgment();
+    assert_eq!(last_ack, Some(true), "Expected ACK");
+
+    // Should have 2 update operations total
+    assert_eq!(mock_provider.get_updated_count(), 2, "Expected 2 updates");
+
+    // Verify both operations are for the same entity
+    let all_ops = mock_provider.get_all_operations_in_order();
+    assert_eq!(all_ops.len(), 2, "Expected 2 operations");
+
+    // First should be the entity upsert
+    match &all_ops[0] {
+        EntityOperation::Update(req) => {
+            assert_eq!(req.entity_id, entity_id.to_string());
+            assert_eq!(req.name, Some("My Entity".to_string()));
+            assert_eq!(req.description, Some("A description".to_string()));
+            assert!(
+                req.add_type_relation.is_none(),
+                "First update should not have add_type_relation"
+            );
+        }
+        _ => panic!("Expected Update operation at index 0, got {:?}", all_ops[0]),
+    }
+
+    // Second should be the type relation add
+    match &all_ops[1] {
+        EntityOperation::Update(req) => {
+            assert_eq!(req.entity_id, entity_id.to_string());
+            assert!(req.add_type_relation.is_some());
+            let rel = req.add_type_relation.as_ref().unwrap();
+            assert_eq!(rel.relation_id, relation_id.to_string());
+            assert_eq!(rel.entity_to_id, type_id.to_string());
+        }
+        _ => panic!("Expected Update operation at index 1, got {:?}", all_ops[1]),
+    }
 }

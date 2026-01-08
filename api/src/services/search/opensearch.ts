@@ -203,39 +203,56 @@ export class OpenSearchClient implements SearchClient {
 			term: {entity_id: uuid},
 		}
 
-		let queryObject: object
+		const typeFilter = this.buildTypeFilter(typeIds)
+		const filters: object[] = []
+		if (typeFilter) filters.push(typeFilter)
 
 		// Apply scope-specific filtering
 		switch (scope) {
 			case "GLOBAL":
 			case "GLOBAL_BY_SPACE_SCORE":
-				queryObject = {query: baseUuidQuery}
-				break
+				if (filters.length === 0) {
+					return {query: baseUuidQuery}
+				}
+				return {
+					query: {
+						bool: {
+							must: [baseUuidQuery],
+							filter: filters,
+						},
+					},
+				}
 
 			case "SPACE_SINGLE":
 			case "SPACE":
 				if (space_id) {
-					// For SPACE, we would need to expand to include subspaces
-					// For now, treat it as a single space query
-					queryObject = {
-						query: {
-							bool: {
-								must: [baseUuidQuery],
-								filter: [{term: {space_id}}],
-							},
-						},
-					}
-				} else {
-					queryObject = {query: baseUuidQuery}
+					filters.push({term: {space_id}})
 				}
-				break
+				if (filters.length === 0) {
+					return {query: baseUuidQuery}
+				}
+				return {
+					query: {
+						bool: {
+							must: [baseUuidQuery],
+							filter: filters,
+						},
+					},
+				}
 
 			default:
-				queryObject = {query: baseUuidQuery}
+				if (filters.length === 0) {
+					return {query: baseUuidQuery}
+				}
+				return {
+					query: {
+						bool: {
+							must: [baseUuidQuery],
+							filter: filters,
+						},
+					},
+				}
 		}
-
-		// Apply type filtering once at the end
-		return this.applyTypeFiltering(queryObject, typeIds)
 	}
 
 	/**
@@ -304,10 +321,12 @@ export class OpenSearchClient implements SearchClient {
 	 * Boosts results by entity_global_score using rank_feature.
 	 */
 	buildGlobalQuery(baseTextQuery: object, typeIds?: string[]): object {
-		const query = {
+		const typeFilter = this.buildTypeFilter(typeIds)
+		return {
 			query: {
 				bool: {
 					must: [baseTextQuery],
+					filter: typeFilter ? [typeFilter] : [],
 					should: [
 						{
 							rank_feature: {
@@ -319,7 +338,6 @@ export class OpenSearchClient implements SearchClient {
 				},
 			},
 		}
-		return this.applyTypeFiltering(query, typeIds)
 	}
 
 	/**
@@ -327,10 +345,12 @@ export class OpenSearchClient implements SearchClient {
 	 * Boosts results by space_score using rank_feature.
 	 */
 	buildGlobalBySpaceScoreQuery(baseTextQuery: object, typeIds?: string[]): object {
-		const query = {
+		const typeFilter = this.buildTypeFilter(typeIds)
+		return {
 			query: {
 				bool: {
 					must: [baseTextQuery],
+					filter: typeFilter ? [typeFilter] : [],
 					should: [
 						{
 							rank_feature: {
@@ -342,7 +362,6 @@ export class OpenSearchClient implements SearchClient {
 				},
 			},
 		}
-		return this.applyTypeFiltering(query, typeIds)
 	}
 
 	/**
@@ -350,11 +369,12 @@ export class OpenSearchClient implements SearchClient {
 	 * Filters by a single space_id and boosts by entity_space_score.
 	 */
 	buildSingleSpaceQuery(baseTextQuery: object, spaceId: string, typeIds?: string[]): object {
-		const query = {
+		const typeFilter = this.buildTypeFilter(typeIds)
+		return {
 			query: {
 				bool: {
 					must: [baseTextQuery],
-					filter: [{term: {space_id: spaceId}}],
+					filter: typeFilter ? [{term: {space_id: spaceId}}, typeFilter] : [{term: {space_id: spaceId}}],
 					should: [
 						{
 							rank_feature: {
@@ -366,54 +386,24 @@ export class OpenSearchClient implements SearchClient {
 				},
 			},
 		}
-		return this.applyTypeFiltering(query, typeIds)
 	}
 
 	/**
-	 * Apply type filtering to a query if typeIds are provided.
-	 * Uses a nested query on type_relations.entity_to_id to match documents
-	 * that have at least one type relation pointing to any of the specified type IDs.
+	 * Build a type filter for filtering by type relation IDs.
+	 * Returns null if no typeIds are provided.
 	 */
-	applyTypeFiltering(query: any, typeIds?: string[]): any {
+	buildTypeFilter(typeIds?: string[]): object | null {
 		if (!typeIds || typeIds.length === 0) {
-			return query
+			return null
 		}
 
-		// Nested query to filter by type_relations.entity_to_id
-		const typeFilter = {
+		return {
 			nested: {
 				path: "type_relations",
 				query: {
 					terms: {
 						"type_relations.entity_to_id": typeIds,
 					},
-				},
-			},
-		}
-
-		// If the query already has a bool structure, add type filtering to the filter array
-		if (query.query && query.query.bool) {
-			const boolQuery = query.query.bool
-			const existingFilters = boolQuery.filter || []
-
-			return {
-				...query,
-				query: {
-					...query.query,
-					bool: {
-						...boolQuery,
-						filter: [...existingFilters, typeFilter],
-					},
-				},
-			}
-		}
-
-		// For queries without bool structure (like simple term queries), wrap in bool
-		return {
-			query: {
-				bool: {
-					must: [query],
-					filter: [typeFilter],
 				},
 			},
 		}
