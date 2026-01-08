@@ -109,17 +109,24 @@ export class OpenSearchClient implements SearchClient {
 			_score: number
 		}>
 
-		const results: SearchResult[] = hits.map((hit) => ({
-			entityId: hit._source.entity_id as string,
-			spaceId: hit._source.space_id as string,
-			name: hit._source.name as string | undefined,
-			description: hit._source.description as string | undefined,
-			avatar: hit._source.avatar as string | undefined,
-			cover: hit._source.cover as string | undefined,
-			entityGlobalScore: hit._source.entity_global_score as number | undefined,
-			spaceScore: hit._source.space_score as number | undefined,
-			entitySpaceScore: hit._source.entity_space_score as number | undefined,
-		}))
+		const results: SearchResult[] = hits.map((hit) => {
+			// Extract typeIds from type_relations array
+			const typeRelations = hit._source.type_relations as Array<{entity_to_id: string}> | undefined
+			const typeIds = typeRelations?.map((rel) => rel.entity_to_id)
+
+			return {
+				entityId: hit._source.entity_id as string,
+				spaceId: hit._source.space_id as string,
+				name: hit._source.name as string | undefined,
+				description: hit._source.description as string | undefined,
+				avatar: hit._source.avatar as string | undefined,
+				cover: hit._source.cover as string | undefined,
+				typeIds: typeIds?.length ? typeIds : undefined,
+				entityGlobalScore: hit._source.entity_global_score as number | undefined,
+				spaceScore: hit._source.space_score as number | undefined,
+				entitySpaceScore: hit._source.entity_space_score as number | undefined,
+			}
+		})
 
 		return {
 			results,

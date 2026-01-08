@@ -15,6 +15,7 @@ describe("Search Router - Integration Tests", () => {
 				spaceId: "space-123",
 				name: "Test Entity",
 				description: "A test entity for search",
+				typeIds: ["type-id-1", "type-id-2"],
 				entityGlobalScore: 0.8,
 				spaceScore: 0.7,
 				entitySpaceScore: 0.9,

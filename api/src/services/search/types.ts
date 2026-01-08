@@ -53,6 +53,8 @@ export interface SearchResult {
 	avatar?: string
 	/** Optional cover image URL. */
 	cover?: string
+	/** Type IDs associated with this entity (extracted from type_relations). */
+	typeIds?: string[]
 	/** Global entity score. */
 	entityGlobalScore?: number
 	/** Space score. */

@@ -86,6 +86,19 @@ export function createSearchRouter(searchClient: SearchClient) {
 	 *
 	 * Response:
 	 * - 200: SearchResponse with results
+	 *   - results[]: Array of search results
+	 *     - entityId: The entity's unique identifier
+	 *     - spaceId: The space this entity belongs to
+	 *     - name?: Optional entity display name
+	 *     - description?: Optional description text
+	 *     - avatar?: Optional avatar image URL
+	 *     - cover?: Optional cover image URL
+	 *     - typeIds?: Array of type IDs associated with this entity (from type_relations)
+	 *     - entityGlobalScore?: Global entity score
+	 *     - spaceScore?: Space score
+	 *     - entitySpaceScore?: Entity-space score
+	 *   - total: Total number of matching documents
+	 *   - tookMs: Time taken to execute the search in milliseconds
 	 * - 400: Invalid request parameters
 	 * - 500: Search failed
 	 */
