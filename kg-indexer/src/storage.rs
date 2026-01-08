@@ -403,40 +403,31 @@ impl Storage {
 
         let mut ids: Vec<Uuid> = Vec::new();
         let mut types: Vec<String> = Vec::new();
-        let mut dao_addresses: Vec<String> = Vec::new();
-        let mut space_addresses: Vec<String> = Vec::new();
-        let mut main_voting_addresses: Vec<Option<String>> = Vec::new();
-        let mut membership_addresses: Vec<Option<String>> = Vec::new();
-        let mut personal_addresses: Vec<Option<String>> = Vec::new();
+        let mut addresses: Vec<String> = Vec::new();
+        let mut topic_ids: Vec<Option<Uuid>> = Vec::new();
 
         for space in spaces {
             ids.push(space.id);
             types.push(match space.space_type {
                 SpaceType::Personal => "Personal".to_string(),
-                SpaceType::Public => "Public".to_string(),
+                SpaceType::DAO => "DAO".to_string(),
             });
-            dao_addresses.push(space.dao_address.clone());
-            space_addresses.push(space.space_address.clone());
-            main_voting_addresses.push(space.voting_address.clone());
-            membership_addresses.push(space.membership_address.clone());
-            personal_addresses.push(space.personal_address.clone());
+            addresses.push(space.address.clone());
+            topic_ids.push(space.topic_id);
         }
 
         sqlx::query!(
             r#"
-            INSERT INTO spaces (id, type, dao_address, space_address, main_voting_address, membership_address, personal_address)
-            SELECT id, type::"spaceTypes", dao_address, space_address, main_voting_address, membership_address, personal_address
-            FROM UNNEST($1::uuid[], $2::text[], $3::text[], $4::text[], $5::text[], $6::text[], $7::text[])
-            AS t(id, type, dao_address, space_address, main_voting_address, membership_address, personal_address)
+            INSERT INTO spaces (id, type, address, topic_id)
+            SELECT id, type::"spaceTypes", address, topic_id
+            FROM UNNEST($1::uuid[], $2::text[], $3::text[], $4::uuid[])
+            AS t(id, type, address, topic_id)
             ON CONFLICT (id) DO NOTHING
             "#,
             &ids,
             &types,
-            &dao_addresses,
-            &space_addresses,
-            &main_voting_addresses as &[Option<String>],
-            &membership_addresses as &[Option<String>],
-            &personal_addresses as &[Option<String>]
+            &addresses,
+            &topic_ids as &[Option<Uuid>]
         )
         .execute(&mut **tx)
         .await?;

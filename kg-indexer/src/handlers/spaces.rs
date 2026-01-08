@@ -17,11 +17,8 @@ pub fn handle_create_space(space: &HermesCreateSpace) -> Result<SpaceItem, Handl
             SpaceItem {
                 id: space_id,
                 space_type: SpaceType::Personal,
-                dao_address: checksummed.clone(),
-                space_address: checksummed.clone(),
-                voting_address: None,
-                membership_address: None,
-                personal_address: Some(checksummed),
+                address: checksummed,
+                topic_id: None,
             }
         }
         Some(Payload::DefaultDaoSpace(dao)) => {
@@ -30,12 +27,9 @@ pub fn handle_create_space(space: &HermesCreateSpace) -> Result<SpaceItem, Handl
 
             SpaceItem {
                 id: space_id,
-                space_type: SpaceType::Public,
-                dao_address: checksummed.clone(),
-                space_address: checksummed,
-                voting_address: None,
-                membership_address: None,
-                personal_address: None,
+                space_type: SpaceType::DAO,
+                address: checksummed,
+                topic_id: None,
             }
         }
         None => {
