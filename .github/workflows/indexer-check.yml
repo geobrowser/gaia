@@ -1,12 +1,9 @@
 name: Indexer Check
 
+# TODO(2026-02): Remove this workflow after legacy indexer sunset
+# Disabled because legacy indexer uses old spaces schema
 on:
-  push:
-    branches: [main]
-    paths: [indexer/**, stream/**, wire/**, indexer_utils/**]
-  pull_request:
-    branches: [main]
-    paths: [indexer/**, stream/**, wire/**, indexer_utils/**]
+  workflow_dispatch:  # Manual trigger only
 
 env:
   CARGO_TERM_COLOR: always
@@ -14,6 +11,7 @@ env:
 jobs:
   build:
     name: Build
+    if: false  # Disabled - legacy indexer
     strategy:
       matrix:
         os: [ubuntu-latest]
