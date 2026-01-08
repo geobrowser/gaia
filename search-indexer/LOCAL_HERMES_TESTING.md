@@ -52,8 +52,9 @@ If you want search-indexer to pick up events as they're produced:
 
 2. **In one terminal, run hermes-pipeline:**
    ```bash
+   # locally with cargo (from repo root):
    cd hermes
-   docker-compose up hermes-pipeline
+   RUST_LOG=debug cargo run --bin hermes-pipeline
    ```
 
 3. **In another terminal, run search-indexer:**
@@ -61,6 +62,7 @@ If you want search-indexer to pick up events as they're produced:
    cd search-indexer
    KAFKA_BROKER=localhost:9092 \
    OPENSEARCH_URL=http://localhost:9200 \
+   RUST_LOG=debug \
    cargo run
    ```
 
@@ -108,15 +110,26 @@ Both addresses point to the same Kafka broker, just different network contexts.
 
 ### Mock Events Generated
 
-The hermes-pipeline generates 6 edit events from the test topology:
+The hermes-pipeline generates 9 edit events from the test topology:
 1. `QmRootEdit1CreatePersons` - Creates "Alice" and "Bob" entities
 2. `QmRootEdit2AddDescriptions` - Adds descriptions to persons
-3. `QmSpaceAEdit1CreateOrg` - Creates "Acme Corp" organization
-4. `QmSpaceAEdit2CreateRelations` - Creates relations between persons and org
-5. `QmSpaceBEdit1CreateDoc` - Creates "Project Alpha" and "Technical Specification"
-6. `QmSpaceCEdit1CreateTopic` - Creates "Blockchain Technology" topic
+3. `QmRootEdit3CreateTypes` - Creates type entities ("Person", "Organization", "Project")
+4. `QmRootEdit4CreateTypeRelations` - Creates type relations using `TYPE_RELATION_TYPE_ID`:
+   - Alice → Person type
+   - Bob → Person type
+   - Acme Corp → Organization type
+   - Project Alpha → Project type
+   - Project Alpha → Organization type (secondary, survives the delete)
+5. `QmRootEdit5DeleteTypeRelation` - Deletes the Project type from Project Alpha (Organization type remains)
+6. `QmSpaceAEdit1CreateOrg` - Creates "Acme Corp" organization
+7. `QmSpaceAEdit2CreateRelations` - Creates relations between persons and org (BELONGS_TO, not type relations)
+8. `QmSpaceBEdit1CreateDoc` - Creates "Project Alpha" and "Technical Specification"
+9. `QmSpaceCEdit1CreateTopic` - Creates "Blockchain Technology" topic
 
-These events contain entities with `name`, `description`, and `avatar` properties that the search-indexer will index.
+These events contain:
+- Entities with `name`, `description`, and `avatar` properties
+- Type relations (CreateRelation with `TYPE_RELATION_TYPE_ID`) that the search-indexer indexes into `type_relations`
+- A DeleteRelation operation to test type relation removal
 
 ### Verify entities are indexed:
 

@@ -459,6 +459,15 @@ impl KafkaConsumer {
         let edit = HermesEdit::decode(payload)
             .map_err(|e| IngestError::parse(format!("Failed to decode HermesEdit: {}", e)))?;
 
+        // Log the full message body for debugging
+        debug!(
+            topic = %msg.topic(),
+            partition = msg.partition(),
+            offset = msg.offset(),
+            edit = ?edit,
+            "Received knowledge.edits message"
+        );
+
         // Parse space_id - it's a 16-byte UUID
         let space_id = if edit.space_id.len() == 16 {
             let bytes: [u8; 16] =

@@ -6,6 +6,7 @@
 use async_trait::async_trait;
 use opensearch::{
     http::transport::{SingleNodeConnectionPool, TransportBuilder},
+    params::Conflicts,
     BulkOperation, DeleteParts, OpenSearch, UpdateByQueryParts, UpdateParts,
 };
 use serde_json::{json, Value};
@@ -366,12 +367,14 @@ impl SearchIndexProvider for OpenSearchProvider {
                         // Takes ownership of variables and resets them to an empty Vec
                         let batch_ops = std::mem::take(&mut bulk_ops);
                         let batch_metas = std::mem::take(&mut metas);
+                        // Use refresh=true so the update_by_query below sees the just-written data
                         let summary = execute_bulk(
                             &self.client,
                             &self.index_config.alias,
                             batch_ops,
                             &batch_metas,
                             BulkAction::Update,
+                            true, // refresh before update_by_query
                         )
                         .await?;
                         total_succeeded += summary.succeeded;
@@ -388,9 +391,13 @@ impl SearchIndexProvider for OpenSearchProvider {
                             ))
                         })?;
 
+                    // Use Conflicts::Proceed to ignore version conflicts - within a batch,
+                    // a relation can be created then deleted, and the bulk update changes the
+                    // document's seq_no before this update_by_query runs.
                     let response = self
                         .client
                         .update_by_query(UpdateByQueryParts::Index(&[&self.index_config.alias]))
+                        .conflicts(Conflicts::Proceed)
                         .body(json!({
                             "query": {
                                 "nested": {
@@ -569,6 +576,7 @@ impl SearchIndexProvider for OpenSearchProvider {
                 bulk_ops,
                 &metas,
                 BulkAction::Update,
+                false, // no need to refresh for final batch
             )
             .await?;
             total_succeeded += summary.succeeded;
