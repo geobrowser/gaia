@@ -51,8 +51,8 @@ describe("entities_ordered_by_property integration tests", () => {
 		// Create test space
 		testSpaceId = "550e8400-e29b-41d4-a716-446655440000"
 		await pool.query(`
-			INSERT INTO spaces (id, type, dao_address, space_address) 
-			VALUES ($1, 'Public', '0x1234567890123456789012345678901234567890', '0x0987654321098765432109876543210987654321')
+			INSERT INTO spaces (id, type, address)
+			VALUES ($1, 'DAO', '0x1234567890123456789012345678901234567890')
 			ON CONFLICT (id) DO NOTHING
 		`, [testSpaceId])
 

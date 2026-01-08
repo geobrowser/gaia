@@ -33,11 +33,13 @@ class WaitForSpaceToBeIndexedError extends Error {
 	readonly _tag = "WaitForSpaceToBeIndexedError"
 }
 
+// TODO(2026-02): Remove after legacy system sunset - this function uses old schema columns
 export function waitForSpaceToBeIndexed(daoAddress: string) {
 	const checkForSpace = Effect.gen(function* () {
 		const db = yield* Storage
 		const maybeSpace = yield* db.use(async (client) => {
 			const result = await client.query.spaces.findFirst({
+				// @ts-expect-error Legacy: daoAddress column exists in legacy DB but not new schema
 				where: (spaces, {eq}) => eq(spaces.daoAddress, getChecksumAddress(daoAddress)),
 			})
 
