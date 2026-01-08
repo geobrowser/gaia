@@ -13,6 +13,10 @@ pub enum EntityEventType {
     Delete,
     /// Properties were unset from an entity.
     UnsetProperties,
+    /// Relation was created, which may affect entity's type_relations.
+    CreateRelation,
+    /// Relation was deleted, which may affect entity's type_relations.
+    DeleteRelation,
 }
 
 /// An entity event received from Kafka.
@@ -34,6 +38,12 @@ pub struct EntityEvent {
     pub cover: Option<String>,
     /// Property keys to unset (for unset_properties events).
     pub unset_property_keys: Vec<String>,
+    /// Relation ID (for relation events).
+    pub relation_id: Option<Uuid>,
+    /// Relation type (for relation events).
+    pub relation_type: Option<Uuid>,
+    /// To entity ID (for relation events).
+    pub to_entity_id: Option<Uuid>,
 }
 
 impl EntityEvent {
@@ -54,6 +64,9 @@ impl EntityEvent {
             avatar,
             cover: None, // Cover will be used in the future
             unset_property_keys: Vec::new(),
+            relation_id: None,
+            relation_type: None,
+            to_entity_id: None,
         }
     }
 
@@ -68,6 +81,9 @@ impl EntityEvent {
             avatar: None,
             cover: None, // Cover will be used in the future
             unset_property_keys: Vec::new(),
+            relation_id: None,
+            relation_type: None,
+            to_entity_id: None,
         }
     }
 
@@ -82,6 +98,52 @@ impl EntityEvent {
             avatar: None,
             cover: None, // Cover will be used in the future
             unset_property_keys: property_keys,
+            relation_id: None,
+            relation_type: None,
+            to_entity_id: None,
+        }
+    }
+
+    /// Create a new create relation event.
+    pub fn create_relation(
+        relation_id: Uuid,
+        relation_type: Uuid,
+        entity_id: Uuid,
+        to_entity_id: Uuid,
+        space_id: Uuid,
+    ) -> Self {
+        Self {
+            event_type: EntityEventType::CreateRelation,
+            entity_id, // The entity whose type_relations may be affected
+            space_id,
+            name: None,
+            description: None,
+            avatar: None,
+            cover: None,
+            unset_property_keys: Vec::new(),
+            relation_id: Some(relation_id),
+            relation_type: Some(relation_type),
+            to_entity_id: Some(to_entity_id),
+        }
+    }
+
+    /// Create a new delete relation event.
+    ///
+    /// Only the relation_id is available when processing DeleteRelation Kafka messages.
+    pub fn delete_relation(relation_id: Uuid) -> Self {
+        Self {
+            event_type: EntityEventType::DeleteRelation,
+            // These fields are not used when only relation_id is available
+            entity_id: Uuid::nil(),
+            space_id: Uuid::nil(),
+            name: None,
+            description: None,
+            avatar: None,
+            cover: None,
+            unset_property_keys: Vec::new(),
+            relation_id: Some(relation_id),
+            relation_type: None, // No relation type info available
+            to_entity_id: None,  // No entity info available
         }
     }
 }

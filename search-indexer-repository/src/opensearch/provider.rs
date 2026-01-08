@@ -1,29 +1,28 @@
 //! OpenSearch provider implementation.
 //!
 //! This module provides the concrete implementation of `SearchIndexProvider`
-//! using the OpenSearch Rust crate.
+//! using the OpenSearch crate.
 
 use async_trait::async_trait;
 use opensearch::{
     http::transport::{SingleNodeConnectionPool, TransportBuilder},
-    indices::{IndicesCreateParts, IndicesExistsParts, IndicesGetAliasParts},
-    BulkOperation, DeleteParts, OpenSearch, UpdateParts,
+    BulkOperation, DeleteParts, OpenSearch, UpdateByQueryParts, UpdateParts,
 };
 use serde_json::{json, Value};
-use tracing::{debug, error, info, instrument, warn};
+use tracing::{debug, error, info, instrument};
 use url::Url;
 use uuid::Uuid;
 
 use crate::errors::SearchIndexError;
 use crate::interfaces::SearchIndexProvider;
-use crate::opensearch::bulk::{
-    execute_bulk, BulkAction, BulkOperationMeta, BulkScript, BulkScriptBody, BulkUpdateBody,
-};
-use crate::opensearch::index_config::{get_index_settings, get_versioned_index_name, IndexConfig};
+use crate::opensearch::bulk::{execute_bulk, BulkAction, BulkOperationMeta};
+use crate::opensearch::index_config::IndexConfig;
+use crate::opensearch::index_management;
+use crate::opensearch::scripts::{ADD_TYPE_RELATION_SCRIPT, REMOVE_TYPE_RELATION_SCRIPT};
 use crate::opensearch::unset_document_properties::create_unset_properties_script;
 use crate::types::{
-    BatchOperationResult, BatchOperationSummary, DeleteEntityRequest, UnsetEntityPropertiesRequest,
-    UpdateEntityRequest,
+    BatchOperationResult, BatchOperationSummary, DeleteEntityRequest, EntityOperation,
+    UnsetEntityPropertiesRequest, UpdateEntityRequest,
 };
 use crate::utils;
 
@@ -135,167 +134,7 @@ impl SearchIndexProvider for OpenSearchProvider {
     /// * `Err(SearchIndexError)` - If index or alias operations fail
     #[instrument(skip(self))]
     async fn ensure_index_exists(&self) -> Result<(), SearchIndexError> {
-        // Get the versioned index name (e.g., "entities_v0")
-        let versioned_index_name = get_versioned_index_name(Some(self.index_config.version));
-
-        // Step 1: Ensure the versioned index exists
-        let index_exists_response = self
-            .client
-            .indices()
-            .exists(IndicesExistsParts::Index(&[&versioned_index_name]))
-            .send()
-            .await
-            .map_err(|e| SearchIndexError::connection(e.to_string()))?;
-
-        if !index_exists_response.status_code().is_success() {
-            info!(index = %versioned_index_name, "Creating versioned index");
-
-            let settings = get_index_settings(Some(self.index_config.version));
-
-            let create_response = self
-                .client
-                .indices()
-                .create(IndicesCreateParts::Index(&versioned_index_name))
-                .body(settings)
-                .send()
-                .await
-                .map_err(|e| SearchIndexError::index_creation(e.to_string()))?;
-
-            let status = create_response.status_code();
-            if !status.is_success() {
-                let error_body = create_response.text().await.unwrap_or_default();
-                error!(status = %status, body = %error_body, "Index creation failed");
-                return Err(SearchIndexError::index_creation(format!(
-                    "Index creation failed with status {}: {}",
-                    status, error_body
-                )));
-            }
-
-            info!(index = %versioned_index_name, "Versioned index created successfully");
-        } else {
-            debug!(index = %versioned_index_name, "Versioned index already exists");
-        }
-
-        // Step 2: Check if alias exists and create/update it
-        // Use get_alias to check if alias exists and what it points to
-        let get_alias_response = self
-            .client
-            .indices()
-            .get_alias(IndicesGetAliasParts::Name(&[&self.index_config.alias]))
-            .send()
-            .await;
-
-        let alias_exists = get_alias_response.is_ok()
-            && get_alias_response
-                .as_ref()
-                .map(|resp| resp.status_code().is_success())
-                .unwrap_or(false);
-
-        if !alias_exists {
-            // Alias doesn't exist, create it
-            info!(alias = %self.index_config.alias, index = %versioned_index_name, "Creating alias");
-
-            let actions = json!({
-                "actions": [
-                    {
-                        "add": {
-                            "index": versioned_index_name,
-                            "alias": self.index_config.alias
-                        }
-                    }
-                ]
-            });
-
-            let update_response = self
-                .client
-                .indices()
-                .update_aliases()
-                .body(actions)
-                .send()
-                .await
-                .map_err(|e| SearchIndexError::index_creation(e.to_string()))?;
-
-            let status = update_response.status_code();
-            if !status.is_success() {
-                let error_body = update_response.text().await.unwrap_or_default();
-                error!(status = %status, body = %error_body, "Alias creation failed");
-                return Err(SearchIndexError::index_creation(format!(
-                    "Alias creation failed with status {}: {}",
-                    status, error_body
-                )));
-            }
-
-            info!(alias = %self.index_config.alias, index = %versioned_index_name, "Alias created successfully");
-        } else {
-            // Alias exists, check if it points to the correct index
-            let alias_body: Value = get_alias_response
-                .map_err(|e| {
-                    SearchIndexError::connection(format!("Failed to get alias response: {}", e))
-                })?
-                .json()
-                .await
-                .map_err(|e| SearchIndexError::parse(e.to_string()))?;
-
-            // Check if alias points to the versioned index
-            let points_to_correct_index = alias_body
-                .as_object()
-                .and_then(|obj| obj.get(&versioned_index_name))
-                .is_some();
-
-            if !points_to_correct_index {
-                // Update alias to point to the correct index
-                // First, remove alias from all indices it currently points to
-                warn!(
-                    alias = %self.index_config.alias,
-                    expected_index = %versioned_index_name,
-                    "Alias points to different index, updating"
-                );
-
-                let mut actions = Vec::new();
-                if let Some(indices) = alias_body.as_object() {
-                    for index_name in indices.keys() {
-                        actions.push(json!({
-                            "remove": {
-                                "index": index_name,
-                                "alias": self.index_config.alias
-                            }
-                        }));
-                    }
-                }
-                // Then add alias to the correct index
-                actions.push(json!({
-                    "add": {
-                        "index": versioned_index_name,
-                        "alias": self.index_config.alias
-                    }
-                }));
-
-                let update_response = self
-                    .client
-                    .indices()
-                    .update_aliases()
-                    .body(json!({ "actions": actions }))
-                    .send()
-                    .await
-                    .map_err(|e| SearchIndexError::index_creation(e.to_string()))?;
-
-                let status = update_response.status_code();
-                if !status.is_success() {
-                    let error_body = update_response.text().await.unwrap_or_default();
-                    error!(status = %status, body = %error_body, "Alias update failed");
-                    return Err(SearchIndexError::index_creation(format!(
-                        "Alias update failed with status {}: {}",
-                        status, error_body
-                    )));
-                }
-
-                info!(alias = %self.index_config.alias, index = %versioned_index_name, "Alias updated successfully");
-            } else {
-                debug!(alias = %self.index_config.alias, index = %versioned_index_name, "Alias already points to correct index");
-            }
-        }
-
-        Ok(())
+        index_management::ensure_index_exists(&self.client, &self.index_config).await
     }
 
     /// Update specific fields of a document, creating it if it doesn't exist (upsert).
@@ -304,12 +143,72 @@ impl SearchIndexProvider for OpenSearchProvider {
     /// `Some` in the request will be updated; if the document doesn't exist, it will be created
     /// with the provided fields. Fields that are `None` in the request will be left unchanged
     /// (for existing documents) or omitted (for new documents).
+    ///
+    /// Also supports atomic type relation addition via `add_type_relation` field.
     async fn update_document(&self, request: &UpdateEntityRequest) -> Result<(), SearchIndexError> {
         // Validate UUIDs
         let (entity_id, space_id) =
             utils::parse_entity_and_space_ids(&request.entity_id, &request.space_id)?;
 
         let doc_id = Self::document_id(&entity_id, &space_id);
+
+        // Handle add_type_relation - use script for atomic addition to type_relations array
+        if let Some(ref relation_data) = request.add_type_relation {
+            let relation_id = uuid::Uuid::parse_str(&relation_data.relation_id).map_err(|_| {
+                SearchIndexError::validation(format!(
+                    "Invalid relation_id: {}",
+                    relation_data.relation_id
+                ))
+            })?;
+            let entity_to_id =
+                uuid::Uuid::parse_str(&relation_data.entity_to_id).map_err(|_| {
+                    SearchIndexError::validation(format!(
+                        "Invalid entity_to_id: {}",
+                        relation_data.entity_to_id
+                    ))
+                })?;
+
+            let response = self
+                .client
+                .update(UpdateParts::IndexId(&self.index_config.alias, &doc_id))
+                .body(json!({
+                    "script": {
+                        "source": ADD_TYPE_RELATION_SCRIPT,
+                        "lang": "painless",
+                        "params": {
+                            "relation_id": relation_id.to_string(),
+                            "entity_to_id": entity_to_id.to_string()
+                        }
+                    },
+                    // If the document doesn't exist, create it with required fields
+                    "upsert": {
+                        "entity_id": entity_id.to_string(),
+                        "space_id": space_id.to_string(),
+                        "type_relations": [{
+                            "relation_id": relation_id.to_string(),
+                            "entity_to_id": entity_to_id.to_string()
+                        }]
+                    }
+                }))
+                .send()
+                .await
+                .map_err(|e| SearchIndexError::update(e.to_string()))?;
+
+            let status = response.status_code();
+            if !status.is_success() {
+                let error_body = response.text().await.unwrap_or_default();
+                error!(status = %status, body = %error_body, "Add type relation request failed");
+                return Err(SearchIndexError::update(format!(
+                    "Add type relation failed with status {}: {}",
+                    status, error_body
+                )));
+            }
+
+            debug!(doc_id = %doc_id, relation_id = %relation_id, "Type relation added");
+            return Ok(());
+        }
+
+        // Regular document update
         let doc = Self::build_update_doc(request);
 
         if doc.is_empty() {
@@ -377,118 +276,18 @@ impl SearchIndexProvider for OpenSearchProvider {
         Ok(())
     }
 
-    /// Update multiple documents in bulk using the OpenSearch bulk API.
-    #[instrument(skip(self, requests), fields(count = requests.len()))]
-    async fn bulk_update_documents(
-        &self,
-        requests: &[UpdateEntityRequest],
-    ) -> Result<BatchOperationSummary, SearchIndexError> {
-        // Validate all requests and build operations
-        let mut operations: Vec<BulkOperation<BulkUpdateBody>> = Vec::with_capacity(requests.len());
-        let mut metas: Vec<BulkOperationMeta> = Vec::with_capacity(requests.len());
-        let mut skipped_empty: Vec<BatchOperationResult> = Vec::new();
-
-        for request in requests {
-            // Fail fast on validation error
-            let (entity_id, space_id) =
-                utils::parse_entity_and_space_ids(&request.entity_id, &request.space_id)?;
-
-            let doc = Self::build_update_doc(request);
-
-            // Skip if no fields to update
-            if doc.is_empty() {
-                skipped_empty.push(BatchOperationResult {
-                    entity_id: request.entity_id.clone(),
-                    space_id: request.space_id.clone(),
-                    success: true,
-                    error: None,
-                });
-                continue;
-            }
-
-            let doc_id = Self::document_id(&entity_id, &space_id);
-            let body = BulkUpdateBody {
-                doc: Value::Object(doc),
-                doc_as_upsert: true,
-            };
-            operations.push(BulkOperation::update(doc_id, body).into());
-            metas.push(BulkOperationMeta {
-                entity_id: request.entity_id.clone(),
-                space_id: request.space_id.clone(),
-            });
-        }
-
-        // If no operations to execute, return early with skipped results
-        if operations.is_empty() {
-            return Ok(BatchOperationSummary {
-                total: requests.len(),
-                succeeded: skipped_empty.len(),
-                failed: 0,
-                results: skipped_empty,
-            });
-        }
-
-        let mut summary = execute_bulk(
-            &self.client,
-            &self.index_config.alias,
-            operations,
-            &metas,
-            BulkAction::Update,
-        )
-        .await?;
-
-        // Add skipped (empty) operations as successes
-        summary.succeeded += skipped_empty.len();
-        summary.total = requests.len();
-        summary.results.extend(skipped_empty);
-
-        Ok(summary)
-    }
-
-    /// Delete multiple documents in bulk using the OpenSearch bulk API.
-    ///
-    /// Note that documents not found are considered successful deletions.
-    #[instrument(skip(self, requests), fields(count = requests.len()))]
-    async fn bulk_delete_documents(
-        &self,
-        requests: &[DeleteEntityRequest],
-    ) -> Result<BatchOperationSummary, SearchIndexError> {
-        if requests.is_empty() {
-            return Ok(BatchOperationSummary::empty());
-        }
-
-        // Validate all requests and build operations
-        let mut operations: Vec<BulkOperation<()>> = Vec::with_capacity(requests.len());
-        let mut metas: Vec<BulkOperationMeta> = Vec::with_capacity(requests.len());
-
-        for request in requests {
-            // Fail fast on validation error
-            let (entity_id, space_id) =
-                utils::parse_entity_and_space_ids(&request.entity_id, &request.space_id)?;
-
-            let doc_id = Self::document_id(&entity_id, &space_id);
-            operations.push(BulkOperation::delete(doc_id).into());
-            metas.push(BulkOperationMeta {
-                entity_id: request.entity_id.clone(),
-                space_id: request.space_id.clone(),
-            });
-        }
-
-        execute_bulk(
-            &self.client,
-            &self.index_config.alias,
-            operations,
-            &metas,
-            BulkAction::Delete,
-        )
-        .await
-    }
-
     /// Unset (remove) specific properties from a document.
+    ///
+    /// Note: To remove type relations, use `EntityOperation::RemoveTypeRelationById` via `bulk_operations`.
     async fn unset_document_properties(
         &self,
         request: &UnsetEntityPropertiesRequest,
     ) -> Result<(), SearchIndexError> {
+        // Skip if no property keys to unset
+        if request.property_keys.is_empty() {
+            return Ok(());
+        }
+
         // Validate UUIDs
         let (entity_id, space_id) =
             utils::parse_entity_and_space_ids(&request.entity_id, &request.space_id)?;
@@ -532,44 +331,257 @@ impl SearchIndexProvider for OpenSearchProvider {
         Ok(())
     }
 
-    /// Unset properties from multiple documents in bulk using the OpenSearch bulk API.
-    #[instrument(skip(self, requests), fields(count = requests.len()))]
-    async fn bulk_unset_properties(
+    /// Execute multiple operations in bulk, processing them IN ORDER.
+    ///
+    /// This method handles all operation types (Update, Delete, Unset, RemoveTypeRelationById)
+    /// while maintaining the order of operations for consistency.
+    ///
+    /// For bulk-compatible operations (Update, Delete, Unset), we batch them together.
+    /// When we encounter a RemoveTypeRelationById (which requires update_by_query),
+    /// we first flush the pending batch, then execute the update_by_query, then continue.
+    /// This ensures ordering is preserved.
+    #[instrument(skip(self, operations), fields(count = operations.len()))]
+    async fn bulk_operations(
         &self,
-        requests: &[UnsetEntityPropertiesRequest],
+        operations: &[EntityOperation],
     ) -> Result<BatchOperationSummary, SearchIndexError> {
-        // Validate all requests and build operations
-        let mut operations: Vec<BulkOperation<BulkScriptBody>> = Vec::with_capacity(requests.len());
-        let mut metas: Vec<BulkOperationMeta> = Vec::with_capacity(requests.len());
-
-        for request in requests {
-            // Fail fast on validation errors
-            let (entity_id, space_id) =
-                utils::parse_entity_and_space_ids(&request.entity_id, &request.space_id)?;
-            let script_source = create_unset_properties_script(&request.property_keys)?;
-
-            let doc_id = Self::document_id(&entity_id, &space_id);
-            let body = BulkScriptBody {
-                script: BulkScript {
-                    source: script_source,
-                    lang: "painless",
-                },
-            };
-            operations.push(BulkOperation::update(doc_id, body).into());
-            metas.push(BulkOperationMeta {
-                entity_id: request.entity_id.clone(),
-                space_id: request.space_id.clone(),
-            });
+        if operations.is_empty() {
+            return Ok(BatchOperationSummary::empty());
         }
 
-        execute_bulk(
-            &self.client,
-            &self.index_config.alias,
-            operations,
-            &metas,
-            BulkAction::Update,
-        )
-        .await
+        // Accumulate results across all batches
+        let mut all_results: Vec<BatchOperationResult> = Vec::new();
+        let mut total_succeeded = 0usize;
+        let mut total_failed = 0usize;
+
+        // Current batch of bulk-compatible operations
+        let mut bulk_ops: Vec<BulkOperation<Value>> = Vec::new();
+        let mut metas: Vec<BulkOperationMeta> = Vec::new();
+
+        for op in operations {
+            match op {
+                EntityOperation::RemoveTypeRelationById(request) => {
+                    // Flush any pending bulk operations first to maintain order
+                    if !bulk_ops.is_empty() {
+                        // Takes ownership of variables and resets them to an empty Vec
+                        let batch_ops = std::mem::take(&mut bulk_ops);
+                        let batch_metas = std::mem::take(&mut metas);
+                        let summary = execute_bulk(
+                            &self.client,
+                            &self.index_config.alias,
+                            batch_ops,
+                            &batch_metas,
+                            BulkAction::Update,
+                        )
+                        .await?;
+                        total_succeeded += summary.succeeded;
+                        total_failed += summary.failed;
+                        all_results.extend(summary.results);
+                    }
+
+                    // Now execute the update_by_query
+                    let relation_uuid =
+                        uuid::Uuid::parse_str(&request.relation_id).map_err(|_| {
+                            SearchIndexError::validation(format!(
+                                "Invalid relation_id: {}",
+                                request.relation_id
+                            ))
+                        })?;
+
+                    let response = self
+                        .client
+                        .update_by_query(UpdateByQueryParts::Index(&[&self.index_config.alias]))
+                        .body(json!({
+                            "query": {
+                                "nested": {
+                                    "path": "type_relations",
+                                    "query": {
+                                        "term": {
+                                            "type_relations.relation_id": relation_uuid.to_string()
+                                        }
+                                    }
+                                }
+                            },
+                            "script": {
+                                "source": REMOVE_TYPE_RELATION_SCRIPT,
+                                "lang": "painless",
+                                "params": {
+                                    "relation_id": relation_uuid.to_string()
+                                }
+                            }
+                        }))
+                        .send()
+                        .await
+                        .map_err(|e| SearchIndexError::update(e.to_string()))?;
+
+                    let status = response.status_code();
+                    if status.is_success() {
+                        total_succeeded += 1;
+                        all_results.push(BatchOperationResult {
+                            entity_id: String::new(),
+                            space_id: String::new(),
+                            success: true,
+                            error: None,
+                        });
+                        debug!(
+                            relation_id = %relation_uuid,
+                            "Removed type relation by ID via update_by_query"
+                        );
+                    } else {
+                        let error_body = response.text().await.unwrap_or_default();
+                        error!(status = %status, body = %error_body, "Remove type relation by ID failed");
+                        total_failed += 1;
+                        all_results.push(BatchOperationResult {
+                            entity_id: String::new(),
+                            space_id: String::new(),
+                            success: false,
+                            error: Some(SearchIndexError::update(format!(
+                                "Remove type relation by ID failed: {}",
+                                error_body
+                            ))),
+                        });
+                    }
+                }
+                EntityOperation::Update(request) => {
+                    let (entity_id, space_id) =
+                        utils::parse_entity_and_space_ids(&request.entity_id, &request.space_id)?;
+                    let doc_id = Self::document_id(&entity_id, &space_id);
+                    let mut has_operation = false;
+
+                    // Handle add_relation
+                    if let Some(ref relation_data) = request.add_type_relation {
+                        let relation_id = uuid::Uuid::parse_str(&relation_data.relation_id)
+                            .map_err(|_| {
+                                SearchIndexError::validation(format!(
+                                    "Invalid relation_id: {}",
+                                    relation_data.relation_id
+                                ))
+                            })?;
+                        let entity_to_id = uuid::Uuid::parse_str(&relation_data.entity_to_id)
+                            .map_err(|_| {
+                                SearchIndexError::validation(format!(
+                                    "Invalid entity_to_id: {}",
+                                    relation_data.entity_to_id
+                                ))
+                            })?;
+
+                        let body = json!({
+                            "script": {
+                                "source": ADD_TYPE_RELATION_SCRIPT,
+                                "lang": "painless",
+                                "params": {
+                                    "relation_id": relation_id.to_string(),
+                                    "entity_to_id": entity_to_id.to_string()
+                                }
+                            },
+                            "upsert": {
+                                "entity_id": entity_id.to_string(),
+                                "space_id": space_id.to_string(),
+                                "type_relations": [{
+                                    "relation_id": relation_id.to_string(),
+                                    "entity_to_id": entity_to_id.to_string()
+                                }]
+                            }
+                        });
+                        bulk_ops.push(BulkOperation::update(doc_id.clone(), body).into());
+                        metas.push(BulkOperationMeta {
+                            entity_id: request.entity_id.clone(),
+                            space_id: request.space_id.clone(),
+                        });
+                        has_operation = true;
+                    }
+
+                    // Handle regular document properties
+                    let doc = Self::build_update_doc(request);
+                    if !doc.is_empty() {
+                        let body = json!({
+                            "doc": doc,
+                            "doc_as_upsert": true
+                        });
+                        bulk_ops.push(BulkOperation::update(doc_id, body).into());
+                        metas.push(BulkOperationMeta {
+                            entity_id: request.entity_id.clone(),
+                            space_id: request.space_id.clone(),
+                        });
+                        has_operation = true;
+                    }
+
+                    // If no operations, mark as skipped (success)
+                    if !has_operation {
+                        total_succeeded += 1;
+                        all_results.push(BatchOperationResult {
+                            entity_id: request.entity_id.clone(),
+                            space_id: request.space_id.clone(),
+                            success: true,
+                            error: None,
+                        });
+                    }
+                }
+                EntityOperation::Delete(request) => {
+                    let (entity_id, space_id) =
+                        utils::parse_entity_and_space_ids(&request.entity_id, &request.space_id)?;
+                    let doc_id = Self::document_id(&entity_id, &space_id);
+
+                    bulk_ops.push(BulkOperation::delete(doc_id).into());
+                    metas.push(BulkOperationMeta {
+                        entity_id: request.entity_id.clone(),
+                        space_id: request.space_id.clone(),
+                    });
+                }
+                EntityOperation::Unset(request) => {
+                    if request.property_keys.is_empty() {
+                        // Skip if nothing to do
+                        total_succeeded += 1;
+                        all_results.push(BatchOperationResult {
+                            entity_id: request.entity_id.clone(),
+                            space_id: request.space_id.clone(),
+                            success: true,
+                            error: None,
+                        });
+                        continue;
+                    }
+
+                    let (entity_id, space_id) =
+                        utils::parse_entity_and_space_ids(&request.entity_id, &request.space_id)?;
+                    let doc_id = Self::document_id(&entity_id, &space_id);
+
+                    let script_source = create_unset_properties_script(&request.property_keys)?;
+                    let body = json!({
+                        "script": {
+                            "source": script_source,
+                            "lang": "painless"
+                        }
+                    });
+                    bulk_ops.push(BulkOperation::update(doc_id, body).into());
+                    metas.push(BulkOperationMeta {
+                        entity_id: request.entity_id.clone(),
+                        space_id: request.space_id.clone(),
+                    });
+                }
+            }
+        }
+
+        // Flush any remaining bulk operations
+        if !bulk_ops.is_empty() {
+            let summary = execute_bulk(
+                &self.client,
+                &self.index_config.alias,
+                bulk_ops,
+                &metas,
+                BulkAction::Update,
+            )
+            .await?;
+            total_succeeded += summary.succeeded;
+            total_failed += summary.failed;
+            all_results.extend(summary.results);
+        }
+
+        Ok(BatchOperationSummary {
+            total: operations.len(),
+            succeeded: total_succeeded,
+            failed: total_failed,
+            results: all_results,
+        })
     }
 }
 
@@ -588,5 +600,76 @@ mod tests {
             doc_id,
             "550e8400-e29b-41d4-a716-446655440000_6ba7b810-9dad-11d1-80b4-00c04fd430c8"
         );
+    }
+
+    #[test]
+    fn test_build_update_doc_with_name_only() {
+        let request = UpdateEntityRequest {
+            entity_id: "entity-1".to_string(),
+            space_id: "space-1".to_string(),
+            name: Some("Test Name".to_string()),
+            description: None,
+            avatar: None,
+            cover: None,
+            add_type_relation: None,
+            entity_global_score: None,
+            space_score: None,
+            entity_space_score: None,
+        };
+
+        let doc = OpenSearchProvider::build_update_doc(&request);
+        assert!(!doc.is_empty());
+        assert_eq!(doc.get("name"), Some(&json!("Test Name")));
+        assert!(doc.get("description").is_none());
+    }
+
+    #[test]
+    fn test_build_update_doc_empty_when_no_properties() {
+        let request = UpdateEntityRequest {
+            entity_id: "entity-1".to_string(),
+            space_id: "space-1".to_string(),
+            name: None,
+            description: None,
+            avatar: None,
+            cover: None,
+            add_type_relation: None, // add_type_relation is handled separately, not by build_update_doc
+            entity_global_score: None,
+            space_score: None,
+            entity_space_score: None,
+        };
+
+        let doc = OpenSearchProvider::build_update_doc(&request);
+        // Doc should be empty since there are no regular properties to update
+        assert!(doc.is_empty());
+    }
+
+    #[test]
+    fn test_build_update_doc_ignores_add_type_relation() {
+        use crate::types::TypeRelationData;
+
+        // add_type_relation is handled separately via script, not included in doc
+        let request = UpdateEntityRequest {
+            entity_id: "entity-1".to_string(),
+            space_id: "space-1".to_string(),
+            name: Some("Test Name".to_string()),
+            description: None,
+            avatar: None,
+            cover: None,
+            add_type_relation: Some(TypeRelationData {
+                relation_id: "rel-1".to_string(),
+                entity_to_id: "type-id-1".to_string(),
+            }),
+            entity_global_score: None,
+            space_score: None,
+            entity_space_score: None,
+        };
+
+        let doc = OpenSearchProvider::build_update_doc(&request);
+        // Doc should contain name but NOT add_type_relation (that's handled via script)
+        assert!(!doc.is_empty());
+        assert_eq!(doc.get("name"), Some(&json!("Test Name")));
+        // add_type_relation should NOT be in the doc - it's handled separately
+        assert!(doc.get("add_type_relation").is_none());
+        assert!(doc.get("type_relations").is_none());
     }
 }

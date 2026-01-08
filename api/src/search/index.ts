@@ -45,6 +45,11 @@ const MAX_SPACE_ID_LENGTH = 36
 const MAX_OFFSET = 1000
 
 /**
+ * Maximum number of type IDs to prevent abuse.
+ */
+const MAX_TYPE_IDS = 10
+
+/**
  * Create the search router with dependency-injected search client.
  *
  * @param searchClient - The search client to use for queries
@@ -75,6 +80,7 @@ export function createSearchRouter(searchClient: SearchClient) {
 	 *   - SPACE_SINGLE: Search within a single specific space, boosted by entity_space_score
 	 *   - SPACE: Search within a space and its subspaces (currently implemented as single space)
 	 * - space_id: Space ID for space-scoped searches (required for SPACE_* scopes, max 36 chars)
+	 * - typeIds: Comma-separated list of type IDs to filter by (optional, max 10 IDs)
 	 * - limit: Maximum results (optional, default: 20, max: 100)
 	 * - offset: Pagination offset (optional, default: 0, max: 1000)
 	 *
@@ -88,6 +94,7 @@ export function createSearchRouter(searchClient: SearchClient) {
 		const query = c.req.query("query") ?? c.req.query("q")
 		const scopeParam = c.req.query("scope") ?? "GLOBAL"
 		const spaceId = c.req.query("space_id")
+		const typeIdsParam = c.req.query("typeIds")
 		const limitParam = c.req.query("limit")
 		const offsetParam = c.req.query("offset")
 
@@ -210,12 +217,42 @@ export function createSearchRouter(searchClient: SearchClient) {
 			offset = parsedOffset
 		}
 
+		// Parse and validate typeIds
+		let typeIds: string[] | undefined
+		if (typeIdsParam) {
+			typeIds = typeIdsParam.split(",").map(id => id.trim()).filter(id => id.length > 0)
+
+			if (typeIds.length > MAX_TYPE_IDS) {
+				return c.json(
+					{
+						error: "Invalid parameter",
+						message: `typeIds must not contain more than ${MAX_TYPE_IDS} IDs`,
+					},
+					400,
+				)
+			}
+
+			// Validate each type ID is a valid UUID
+			for (const typeId of typeIds) {
+				if (!isValidUuid(typeId)) {
+					return c.json(
+						{
+							error: "Invalid parameter",
+							message: `typeIds must contain valid UUIDs, got invalid ID: ${typeId}`,
+						},
+						400,
+					)
+				}
+			}
+		}
+
 		// Execute search
 		try {
 			const response = await searchClient.search({
 				query: trimmedQuery,
 				scope,
 				space_id: spaceId,
+				typeIds,
 				limit,
 				offset,
 			})

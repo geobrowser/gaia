@@ -122,7 +122,79 @@ describe("OpenSearchClient", () => {
 		})
 	})
 
-	describe("buildSearchBody", () => {
+	describe("applyTypeFiltering", () => {
+		it("should not apply filtering when typeIds is empty", () => {
+			const baseQuery = { query: { match_all: {} } }
+			const result = client.applyTypeFiltering(baseQuery, [])
+
+			expect(result).toEqual(baseQuery)
+		})
+
+		it("should not apply filtering when typeIds is undefined", () => {
+			const baseQuery = { query: { match_all: {} } }
+			const result = client.applyTypeFiltering(baseQuery, undefined)
+
+			expect(result).toEqual(baseQuery)
+		})
+
+		it("should add type filtering to existing bool query", () => {
+			const baseQuery = {
+				query: {
+					bool: {
+						must: [{ match: { name: "test" } }],
+						filter: [{ term: { space_id: "space-123" } }],
+					},
+				},
+			}
+			const typeIds = ["type-1", "type-2"]
+			const result = client.applyTypeFiltering(baseQuery, typeIds)
+
+			expect(result.query.bool.must).toEqual([{ match: { name: "test" } }])
+			expect(result.query.bool.filter).toEqual([
+				{ term: { space_id: "space-123" } },
+				{
+					nested: {
+						path: "type_relations",
+						query: { terms: { "type_relations.entity_to_id": typeIds } },
+					},
+				},
+			])
+		})
+
+		it("should wrap non-bool query in bool structure with type filtering", () => {
+			const baseQuery = { query: { term: { entity_id: "test-uuid" } } }
+			const typeIds = ["type-1"]
+			const result = client.applyTypeFiltering(baseQuery, typeIds)
+
+			expect(result.query.bool.must).toEqual([baseQuery])
+			expect(result.query.bool.filter).toEqual([
+				{
+					nested: {
+						path: "type_relations",
+						query: { terms: { "type_relations.entity_to_id": typeIds } },
+					},
+				},
+			])
+		})
+
+		it("should handle query without existing bool structure", () => {
+			const baseQuery = { term: { entity_id: "test-uuid" } }
+			const typeIds = ["type-1", "type-2", "type-3"]
+			const result = client.applyTypeFiltering(baseQuery, typeIds)
+
+			expect(result.query.bool.must).toEqual([baseQuery])
+			expect(result.query.bool.filter).toEqual([
+				{
+					nested: {
+						path: "type_relations",
+						query: { terms: { "type_relations.entity_to_id": typeIds } },
+					},
+				},
+			])
+		})
+	})
+
+	describe("buildSearchBody with typeIds filtering", () => {
 		it("should build UUID query when query is a UUID", () => {
 			const uuid = "123e4567-e89b-12d3-a456-426614174000"
 			const query = client.buildSearchBody({
@@ -133,6 +205,42 @@ describe("OpenSearchClient", () => {
 			const queryStr = JSON.stringify(query)
 			expect(queryStr).toContain(uuid)
 			expect(queryStr).toContain("entity_id")
+		})
+
+		it("should build UUID query with typeIds filtering for GLOBAL scope", () => {
+			const uuid = "123e4567-e89b-12d3-a456-426614174000"
+			const typeIds = ["type-1", "type-2"]
+			const query = client.buildSearchBody({
+				query: uuid,
+				scope: "GLOBAL",
+				typeIds,
+			})
+
+			const queryStr = JSON.stringify(query)
+			expect(queryStr).toContain(uuid)
+			expect(queryStr).toContain("entity_id")
+			expect(queryStr).toContain("type_relations.entity_to_id")
+			expect(queryStr).toContain("type-1")
+			expect(queryStr).toContain("type-2")
+		})
+
+		it("should build UUID query with typeIds and space filtering for SPACE_SINGLE scope", () => {
+			const uuid = "123e4567-e89b-12d3-a456-426614174000"
+			const spaceId = "space-123"
+			const typeIds = ["type-1"]
+			const query = client.buildSearchBody({
+				query: uuid,
+				scope: "SPACE_SINGLE",
+				space_id: spaceId,
+				typeIds,
+			})
+
+			const queryStr = JSON.stringify(query)
+			expect(queryStr).toContain(uuid)
+			expect(queryStr).toContain(spaceId)
+			expect(queryStr).toContain("entity_id")
+			expect(queryStr).toContain("type_relations.entity_to_id")
+			expect(queryStr).toContain("type-1")
 		})
 
 		it("should build global query for GLOBAL scope", () => {
@@ -146,6 +254,23 @@ describe("OpenSearchClient", () => {
 			expect(queryStr).toContain("blockchain")
 		})
 
+		it("should build global query with typeIds filtering", () => {
+			const typeIds = ["type-1", "type-2", "type-3"]
+			const query = client.buildSearchBody({
+				query: "blockchain",
+				scope: "GLOBAL",
+				typeIds,
+			})
+
+			const queryStr = JSON.stringify(query)
+			expect(queryStr).toContain("entity_global_score")
+			expect(queryStr).toContain("blockchain")
+			expect(queryStr).toContain("type_relations.entity_to_id")
+			typeIds.forEach(typeId => {
+				expect(queryStr).toContain(typeId)
+			})
+		})
+
 		it("should build global by space score query for GLOBAL_BY_SPACE_SCORE scope", () => {
 			const query = client.buildSearchBody({
 				query: "blockchain",
@@ -155,6 +280,21 @@ describe("OpenSearchClient", () => {
 			const queryStr = JSON.stringify(query)
 			expect(queryStr).toContain("space_score")
 			expect(queryStr).toContain("blockchain")
+		})
+
+		it("should build global by space score query with typeIds filtering", () => {
+			const typeIds = ["type-1"]
+			const query = client.buildSearchBody({
+				query: "blockchain",
+				scope: "GLOBAL_BY_SPACE_SCORE",
+				typeIds,
+			})
+
+			const queryStr = JSON.stringify(query)
+			expect(queryStr).toContain("space_score")
+			expect(queryStr).toContain("blockchain")
+			expect(queryStr).toContain("type_relations.entity_to_id")
+			expect(queryStr).toContain("type-1")
 		})
 
 		it("should build single space query for SPACE_SINGLE scope", () => {
@@ -170,6 +310,41 @@ describe("OpenSearchClient", () => {
 			expect(queryStr).toContain("blockchain")
 		})
 
+		it("should build single space query with typeIds filtering", () => {
+			const typeIds = ["type-1", "type-2"]
+			const query = client.buildSearchBody({
+				query: "blockchain",
+				scope: "SPACE_SINGLE",
+				space_id: "space-123",
+				typeIds,
+			})
+
+			const queryStr = JSON.stringify(query)
+			expect(queryStr).toContain("space-123")
+			expect(queryStr).toContain("entity_space_score")
+			expect(queryStr).toContain("blockchain")
+			expect(queryStr).toContain("type_relations.entity_to_id")
+			typeIds.forEach(typeId => {
+				expect(queryStr).toContain(typeId)
+			})
+		})
+
+		it("should build single space query for SPACE scope with typeIds filtering", () => {
+			const typeIds = ["type-1"]
+			const query = client.buildSearchBody({
+				query: "blockchain",
+				scope: "SPACE",
+				space_id: "space-456",
+				typeIds,
+			})
+
+			const queryStr = JSON.stringify(query)
+			expect(queryStr).toContain("space-456")
+			expect(queryStr).toContain("blockchain")
+			expect(queryStr).toContain("type_relations.entity_to_id")
+			expect(queryStr).toContain("type-1")
+		})
+
 		it("should throw error for SPACE_SINGLE scope without space_id", () => {
 			expect(() => {
 				client.buildSearchBody({
@@ -177,18 +352,6 @@ describe("OpenSearchClient", () => {
 					scope: "SPACE_SINGLE",
 				})
 			}).toThrow("SPACE_SINGLE scope requires space_id")
-		})
-
-		it("should build single space query for SPACE scope", () => {
-			const query = client.buildSearchBody({
-				query: "blockchain",
-				scope: "SPACE",
-				space_id: "space-456",
-			})
-
-			const queryStr = JSON.stringify(query)
-			expect(queryStr).toContain("space-456")
-			expect(queryStr).toContain("blockchain")
 		})
 
 		it("should throw error for SPACE scope without space_id", () => {

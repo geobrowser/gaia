@@ -24,11 +24,35 @@ pub struct BulkScriptBody {
     pub script: BulkScript,
 }
 
+/// Wrapper for bulk scripted update operations with upsert support.
+/// If the document doesn't exist, the upsert body is used to create it.
+#[allow(dead_code)]
+#[derive(Serialize)]
+pub struct BulkScriptUpsertBody {
+    pub script: BulkScriptWithParams,
+    pub upsert: serde_json::Value,
+    /// Controls behavior when the document doesn't exist:
+    /// - `false`: Create document using the `upsert` data directly (script is not run)
+    /// - `true`: Create an empty document, then run the script on it (upsert data ignored)
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub scripted_upsert: bool,
+}
+
 /// Script definition for bulk scripted updates.
 #[derive(Serialize)]
 pub struct BulkScript {
     pub source: String,
     pub lang: &'static str,
+}
+
+/// Script definition with parameters for bulk scripted updates.
+#[allow(dead_code)]
+#[derive(Serialize)]
+pub struct BulkScriptWithParams {
+    pub source: String,
+    pub lang: &'static str,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub params: Option<serde_json::Value>,
 }
 
 impl BatchOperationSummary {

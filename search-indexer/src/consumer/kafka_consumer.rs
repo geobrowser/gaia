@@ -21,8 +21,10 @@ use crate::orchestrator::ProcessingBatch;
 
 use hermes_schema::pb::knowledge::HermesEdit;
 use indexer_utils::id::transform_id_bytes;
-use sdk::core::ids::{AVATAR_PROPERTY_ID, DESCRIPTION_PROPERTY_ID, NAME_PROPERTY_ID};
-use wire::pb::grc20::op::Payload;
+use sdk::core::ids::{
+    AVATAR_PROPERTY_ID, DESCRIPTION_PROPERTY_ID, NAME_PROPERTY_ID, TYPE_RELATION_TYPE_ID,
+};
+use wire::pb::grc20::{op::Payload, Relation, RelationUpdate};
 
 /// Pending message information for batching.
 struct PendingMessage {
@@ -459,8 +461,10 @@ impl KafkaConsumer {
 
         // Parse space_id - it's a 16-byte UUID
         let space_id = if edit.space_id.len() == 16 {
-            let bytes: [u8; 16] = edit.space_id.as_slice().try_into()
-                .map_err(|_| IngestError::parse("Failed to convert space_id bytes".to_string()))?;
+            let bytes: [u8; 16] =
+                edit.space_id.as_slice().try_into().map_err(|_| {
+                    IngestError::parse("Failed to convert space_id bytes".to_string())
+                })?;
             Uuid::from_bytes(bytes)
         } else {
             return Err(IngestError::parse(format!(
@@ -539,10 +543,43 @@ impl KafkaConsumer {
                             );
                         }
                     }
-                    _ => {
-                        // Other operation types don't affect search index
-                        // (CreateRelation, UpdateRelation, DeleteRelation, CreateProperty, UnsetRelationFields)
-                        debug!("Skipped operation type (not relevant for search index)");
+                    Payload::CreateRelation(relation) => {
+                        if let Some(event) =
+                            self.process_create_relation(relation, space_id, &edit, msg)
+                        {
+                            events.push(event);
+                        } else {
+                            skipped_entities += 1;
+                        }
+                    }
+                    Payload::UpdateRelation(relation_update) => {
+                        if let Some(event) = self.process_update_relation_message(
+                            relation_update,
+                            space_id,
+                            &edit,
+                            msg,
+                        ) {
+                            events.push(event);
+                        } else {
+                            skipped_entities += 1;
+                        }
+                    }
+                    Payload::DeleteRelation(relation_id_bytes) => {
+                        if let Some(event) =
+                            self.process_delete_relation(&relation_id_bytes, space_id, &edit, msg)
+                        {
+                            events.push(event);
+                        } else {
+                            skipped_entities += 1;
+                        }
+                    }
+                    Payload::UnsetRelationFields(_) => {
+                        // Relation field unsets don't affect search index for now
+                        debug!("Skipped unset relation fields (not relevant for search index)");
+                    }
+                    Payload::CreateProperty(_) => {
+                        // Property creation doesn't affect search index
+                        debug!("Skipped create property (not relevant for search index)");
                     }
                 }
             }
@@ -641,6 +678,191 @@ impl KafkaConsumer {
             description,
             avatar,
         ))
+    }
+
+    /// Process a CreateRelation operation.
+    fn process_create_relation(
+        &self,
+        relation: &Relation,
+        space_id: Uuid,
+        edit: &HermesEdit,
+        msg: &rdkafka::message::BorrowedMessage<'_>,
+    ) -> Option<EntityEvent> {
+        let relation_id_bytes = match transform_id_bytes(relation.id.clone()) {
+            Ok(bytes) => bytes,
+            Err(_) => {
+                debug!(
+                    topic = %msg.topic(),
+                    partition = msg.partition(),
+                    offset = msg.offset(),
+                    relation_id_bytes = ?relation.id,
+                    edit_name = %edit.name,
+                    space_id = %space_id,
+                    "Skipped create relation (invalid relation ID)"
+                );
+                return None;
+            }
+        };
+        let relation_id = Uuid::from_bytes(relation_id_bytes);
+
+        let relation_type_bytes = match transform_id_bytes(relation.r#type.clone()) {
+            Ok(bytes) => bytes,
+            Err(_) => {
+                debug!(
+                    topic = %msg.topic(),
+                    partition = msg.partition(),
+                    offset = msg.offset(),
+                    relation_id = %relation_id,
+                    relation_type_bytes = ?relation.r#type,
+                    edit_name = %edit.name,
+                    space_id = %space_id,
+                    "Skipped create relation (invalid relation type)"
+                );
+                return None;
+            }
+        };
+        let relation_type = Uuid::from_bytes(relation_type_bytes);
+
+        // Only process "type" relations (where from_entity has type of to_entity)
+        if relation_type.to_string() != TYPE_RELATION_TYPE_ID {
+            debug!(
+                relation_id = %relation_id,
+                relation_type = %relation_type,
+                space_id = %space_id,
+                "Skipped relation (not a type relation)"
+            );
+            return None;
+        }
+
+        let entity_id_bytes = match transform_id_bytes(relation.from_entity.clone()) {
+            Ok(bytes) => bytes,
+            Err(_) => {
+                debug!(
+                    topic = %msg.topic(),
+                    partition = msg.partition(),
+                    offset = msg.offset(),
+                    relation_id = %relation_id,
+                    entity_bytes = ?relation.from_entity,
+                    edit_name = %edit.name,
+                    space_id = %space_id,
+                    "Skipped create relation (invalid entity ID)"
+                );
+                return None;
+            }
+        };
+        let entity_id = Uuid::from_bytes(entity_id_bytes);
+
+        let to_entity_id_bytes = match transform_id_bytes(relation.to_entity.clone()) {
+            Ok(bytes) => bytes,
+            Err(_) => {
+                debug!(
+                    topic = %msg.topic(),
+                    partition = msg.partition(),
+                    offset = msg.offset(),
+                    relation_id = %relation_id,
+                    to_entity_bytes = ?relation.to_entity,
+                    edit_name = %edit.name,
+                    space_id = %space_id,
+                    "Skipped create relation (invalid to entity ID)"
+                );
+                return None;
+            }
+        };
+        let to_entity_id = Uuid::from_bytes(to_entity_id_bytes);
+
+        // This is a "type" relation - the from_entity has a type of to_entity
+        // We need to update the from_entity's type_relations in the search index
+        debug!(
+            relation_id = %relation_id,
+            relation_type = %relation_type,
+            entity_id = %entity_id,
+            to_entity_id = %to_entity_id,
+            space_id = %space_id,
+            "Processing type relation upsert - entity will have type added"
+        );
+
+        Some(EntityEvent::create_relation(
+            relation_id,
+            relation_type,
+            entity_id,
+            to_entity_id,
+            space_id,
+        ))
+    }
+
+    /// Process an UpdateRelation GRC20 message.
+    ///
+    /// Note: Relation updates are not supported in the search indexer. This function
+    /// handles the protocol message but always returns None (skips the event).
+    fn process_update_relation_message(
+        &self,
+        relation_update: &RelationUpdate,
+        space_id: Uuid,
+        edit: &HermesEdit,
+        msg: &rdkafka::message::BorrowedMessage<'_>,
+    ) -> Option<EntityEvent> {
+        let relation_id_bytes = match transform_id_bytes(relation_update.id.clone()) {
+            Ok(bytes) => bytes,
+            Err(_) => {
+                debug!(
+                    topic = %msg.topic(),
+                    partition = msg.partition(),
+                    offset = msg.offset(),
+                    relation_id_bytes = ?relation_update.id,
+                    edit_name = %edit.name,
+                    space_id = %space_id,
+                    "Skipped UpdateRelation message (invalid relation ID)"
+                );
+                return None;
+            }
+        };
+        let relation_id = Uuid::from_bytes(relation_id_bytes);
+
+        // Relation updates are not supported - we only index type relations on create.
+        // Skip all UpdateRelation messages.
+        debug!(
+            relation_id = %relation_id,
+            space_id = %space_id,
+            "Skipped UpdateRelation message (relation updates not supported)"
+        );
+        None
+    }
+
+    /// Process a DeleteRelation operation.
+    ///
+    /// For delete relations, we only have the relation_id. The downstream processor
+    /// will handle finding and removing the relation from any affected entities.
+    fn process_delete_relation(
+        &self,
+        relation_id_bytes: &[u8],
+        space_id: Uuid,
+        edit: &HermesEdit,
+        msg: &rdkafka::message::BorrowedMessage<'_>,
+    ) -> Option<EntityEvent> {
+        let relation_id_bytes = match transform_id_bytes(relation_id_bytes.to_vec()) {
+            Ok(bytes) => bytes,
+            Err(_) => {
+                debug!(
+                    topic = %msg.topic(),
+                    partition = msg.partition(),
+                    offset = msg.offset(),
+                    relation_id_bytes = ?relation_id_bytes,
+                    edit_name = %edit.name,
+                    space_id = %space_id,
+                    "Skipped delete relation (invalid relation ID)"
+                );
+                return None;
+            }
+        };
+        let relation_id = Uuid::from_bytes(relation_id_bytes);
+
+        debug!(
+            relation_id = %relation_id,
+            space_id = %space_id,
+            "Processing delete relation"
+        );
+
+        Some(EntityEvent::delete_relation(relation_id))
     }
 }
 

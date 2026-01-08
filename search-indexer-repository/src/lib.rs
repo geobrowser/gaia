@@ -18,7 +18,7 @@ pub use interfaces::SearchIndexProvider;
 pub use opensearch::OpenSearchProvider;
 pub use service::SearchIndexService;
 pub use types::{
-    BatchOperationResult, BatchOperationSummary, DeleteEntityRequest, UnsetEntityPropertiesRequest,
-    UpdateEntityRequest,
+    BatchOperationResult, BatchOperationSummary, DeleteEntityRequest, EntityOperation,
+    RemoveTypeRelationData, TypeRelationData, UnsetEntityPropertiesRequest, UpdateEntityRequest,
 };
 pub use utils::parse_entity_and_space_ids;

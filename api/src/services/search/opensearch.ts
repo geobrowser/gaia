@@ -153,7 +153,7 @@ export class OpenSearchClient implements SearchClient {
 	buildSearchBody(query: SearchQuery): object {
 		// Check if the query is a UUID for direct ID lookup
 		if (UUID_PATTERN.test(query.query)) {
-			return this.buildUuidQuery(query.query, query.scope, query.space_id)
+			return this.buildUuidQuery(query.query, query.scope, query.space_id, query.typeIds)
 		}
 
 		// Build base text search query
@@ -162,16 +162,16 @@ export class OpenSearchClient implements SearchClient {
 		// Apply scope-specific query building
 		switch (query.scope) {
 			case "GLOBAL":
-				return this.buildGlobalQuery(baseTextQuery)
+				return this.buildGlobalQuery(baseTextQuery, query.typeIds)
 
 			case "GLOBAL_BY_SPACE_SCORE":
-				return this.buildGlobalBySpaceScoreQuery(baseTextQuery)
+				return this.buildGlobalBySpaceScoreQuery(baseTextQuery, query.typeIds)
 
 			case "SPACE_SINGLE": {
 				if (!query.space_id) {
 					throw SearchError.validationError("SPACE_SINGLE scope requires space_id")
 				}
-				return this.buildSingleSpaceQuery(baseTextQuery, query.space_id)
+				return this.buildSingleSpaceQuery(baseTextQuery, query.space_id, query.typeIds)
 			}
 
 			case "SPACE": {
@@ -181,11 +181,11 @@ export class OpenSearchClient implements SearchClient {
 				// SPACE scope: Search within a space and its subspaces
 				// Currently implemented as single space query - future enhancement
 				// will expand to include hierarchical space relationships
-				return this.buildSingleSpaceQuery(baseTextQuery, query.space_id)
+				return this.buildSingleSpaceQuery(baseTextQuery, query.space_id, query.typeIds)
 			}
 
 			default:
-				return this.buildGlobalQuery(baseTextQuery)
+				return this.buildGlobalQuery(baseTextQuery, query.typeIds)
 		}
 	}
 
@@ -197,40 +197,27 @@ export class OpenSearchClient implements SearchClient {
 	 * on keyword fields. The entity_id field is indexed as a keyword type
 	 * in the OpenSearch index mapping.
 	 */
-	buildUuidQuery(uuid: string, scope: SearchScope, space_id?: string): object {
+	buildUuidQuery(uuid: string, scope: SearchScope, space_id?: string, typeIds?: string[]): object {
 		// term query is correct for keyword fields - performs exact match lookup
 		const baseUuidQuery = {
 			term: {entity_id: uuid},
 		}
 
-		const baseUuidQueryObject = {
-			query: baseUuidQuery,
-		}
+		let queryObject: object
 
 		// Apply scope-specific filtering
 		switch (scope) {
 			case "GLOBAL":
 			case "GLOBAL_BY_SPACE_SCORE":
-				return baseUuidQueryObject
+				queryObject = {query: baseUuidQuery}
+				break
 
 			case "SPACE_SINGLE":
-				if (space_id) {
-					return {
-						query: {
-							bool: {
-								must: [baseUuidQuery],
-								filter: [{term: {space_id}}],
-							},
-						},
-					}
-				}
-				return baseUuidQueryObject
-
 			case "SPACE":
 				if (space_id) {
 					// For SPACE, we would need to expand to include subspaces
 					// For now, treat it as a single space query
-					return {
+					queryObject = {
 						query: {
 							bool: {
 								must: [baseUuidQuery],
@@ -238,12 +225,17 @@ export class OpenSearchClient implements SearchClient {
 							},
 						},
 					}
+				} else {
+					queryObject = {query: baseUuidQuery}
 				}
-				return baseUuidQueryObject
+				break
 
 			default:
-				return baseUuidQueryObject
+				queryObject = {query: baseUuidQuery}
 		}
+
+		// Apply type filtering once at the end
+		return this.applyTypeFiltering(queryObject, typeIds)
 	}
 
 	/**
@@ -311,8 +303,8 @@ export class OpenSearchClient implements SearchClient {
 	 * Build a global search query.
 	 * Boosts results by entity_global_score using rank_feature.
 	 */
-	buildGlobalQuery(baseTextQuery: object): object {
-		return {
+	buildGlobalQuery(baseTextQuery: object, typeIds?: string[]): object {
+		const query = {
 			query: {
 				bool: {
 					must: [baseTextQuery],
@@ -327,14 +319,15 @@ export class OpenSearchClient implements SearchClient {
 				},
 			},
 		}
+		return this.applyTypeFiltering(query, typeIds)
 	}
 
 	/**
 	 * Build a global search query ranked by space score.
 	 * Boosts results by space_score using rank_feature.
 	 */
-	buildGlobalBySpaceScoreQuery(baseTextQuery: object): object {
-		return {
+	buildGlobalBySpaceScoreQuery(baseTextQuery: object, typeIds?: string[]): object {
+		const query = {
 			query: {
 				bool: {
 					must: [baseTextQuery],
@@ -349,14 +342,15 @@ export class OpenSearchClient implements SearchClient {
 				},
 			},
 		}
+		return this.applyTypeFiltering(query, typeIds)
 	}
 
 	/**
 	 * Build a single-space filtered query.
 	 * Filters by a single space_id and boosts by entity_space_score.
 	 */
-	buildSingleSpaceQuery(baseTextQuery: object, spaceId: string): object {
-		return {
+	buildSingleSpaceQuery(baseTextQuery: object, spaceId: string, typeIds?: string[]): object {
+		const query = {
 			query: {
 				bool: {
 					must: [baseTextQuery],
@@ -369,6 +363,57 @@ export class OpenSearchClient implements SearchClient {
 							},
 						},
 					],
+				},
+			},
+		}
+		return this.applyTypeFiltering(query, typeIds)
+	}
+
+	/**
+	 * Apply type filtering to a query if typeIds are provided.
+	 * Uses a nested query on type_relations.entity_to_id to match documents
+	 * that have at least one type relation pointing to any of the specified type IDs.
+	 */
+	applyTypeFiltering(query: any, typeIds?: string[]): any {
+		if (!typeIds || typeIds.length === 0) {
+			return query
+		}
+
+		// Nested query to filter by type_relations.entity_to_id
+		const typeFilter = {
+			nested: {
+				path: "type_relations",
+				query: {
+					terms: {
+						"type_relations.entity_to_id": typeIds,
+					},
+				},
+			},
+		}
+
+		// If the query already has a bool structure, add type filtering to the filter array
+		if (query.query && query.query.bool) {
+			const boolQuery = query.query.bool
+			const existingFilters = boolQuery.filter || []
+
+			return {
+				...query,
+				query: {
+					...query.query,
+					bool: {
+						...boolQuery,
+						filter: [...existingFilters, typeFilter],
+					},
+				},
+			}
+		}
+
+		// For queries without bool structure (like simple term queries), wrap in bool
+		return {
+			query: {
+				bool: {
+					must: [query],
+					filter: [typeFilter],
 				},
 			},
 		}
