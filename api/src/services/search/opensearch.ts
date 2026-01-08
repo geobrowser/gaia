@@ -160,7 +160,7 @@ export class OpenSearchClient implements SearchClient {
 	buildSearchBody(query: SearchQuery): object {
 		// Check if the query is a UUID for direct ID lookup
 		if (UUID_PATTERN.test(query.query)) {
-			return this.buildUuidQuery(query.query, query.scope, query.space_id, query.typeIds)
+			return this.buildUuidQuery(query.query, query.scope, query.space_id, query.type_ids)
 		}
 
 		// Build base text search query
@@ -169,16 +169,16 @@ export class OpenSearchClient implements SearchClient {
 		// Apply scope-specific query building
 		switch (query.scope) {
 			case "GLOBAL":
-				return this.buildGlobalQuery(baseTextQuery, query.typeIds)
+				return this.buildGlobalQuery(baseTextQuery, query.type_ids)
 
 			case "GLOBAL_BY_SPACE_SCORE":
-				return this.buildGlobalBySpaceScoreQuery(baseTextQuery, query.typeIds)
+				return this.buildGlobalBySpaceScoreQuery(baseTextQuery, query.type_ids)
 
 			case "SPACE_SINGLE": {
 				if (!query.space_id) {
 					throw SearchError.validationError("SPACE_SINGLE scope requires space_id")
 				}
-				return this.buildSingleSpaceQuery(baseTextQuery, query.space_id, query.typeIds)
+				return this.buildSingleSpaceQuery(baseTextQuery, query.space_id, query.type_ids)
 			}
 
 			case "SPACE": {
@@ -188,11 +188,11 @@ export class OpenSearchClient implements SearchClient {
 				// SPACE scope: Search within a space and its subspaces
 				// Currently implemented as single space query - future enhancement
 				// will expand to include hierarchical space relationships
-				return this.buildSingleSpaceQuery(baseTextQuery, query.space_id, query.typeIds)
+				return this.buildSingleSpaceQuery(baseTextQuery, query.space_id, query.type_ids)
 			}
 
 			default:
-				return this.buildGlobalQuery(baseTextQuery, query.typeIds)
+				return this.buildGlobalQuery(baseTextQuery, query.type_ids)
 		}
 	}
 

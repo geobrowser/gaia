@@ -267,6 +267,27 @@ describe("Search Router - Integration Tests", () => {
 			expect(result.message).toContain("must not exceed 1000")
 		})
 
+		it("returns 400 for unrecognized query parameters", async () => {
+			const request = new Request("http://localhost/search?query=test&unknown_param=value")
+			const response = await app.fetch(request)
+			const result = await response.json()
+
+			expect(response.status).toBe(400)
+			expect(result.error).toBe("Unrecognized parameter")
+			expect(result.message).toContain("unknown_param")
+		})
+
+		it("returns 400 for multiple unrecognized query parameters", async () => {
+			const request = new Request("http://localhost/search?query=test&foo=1&bar=2")
+			const response = await app.fetch(request)
+			const result = await response.json()
+
+			expect(response.status).toBe(400)
+			expect(result.error).toBe("Unrecognized parameter")
+			expect(result.message).toContain("foo")
+			expect(result.message).toContain("bar")
+		})
+
 		it("returns 500 for search client errors", async () => {
 			mockSearchClient.search = vi.fn().mockRejectedValue(new Error("Search failed"))
 

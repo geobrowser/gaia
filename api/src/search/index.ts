@@ -50,6 +50,11 @@ const MAX_OFFSET = 1000
 const MAX_TYPE_IDS = 10
 
 /**
+ * Valid query parameter names for the search endpoint.
+ */
+const VALID_PARAMS: Set<string> = new Set(["query", "q", "scope", "space_id", "type_ids", "limit", "offset"])
+
+/**
  * Create the search router with dependency-injected search client.
  *
  * @param searchClient - The search client to use for queries
@@ -80,7 +85,7 @@ export function createSearchRouter(searchClient: SearchClient) {
 	 *   - SPACE_SINGLE: Search within a single specific space, boosted by entity_space_score
 	 *   - SPACE: Search within a space and its subspaces (currently implemented as single space)
 	 * - space_id: Space ID for space-scoped searches (required for SPACE_* scopes, max 36 chars)
-	 * - typeIds: Comma-separated list of type IDs to filter by (optional, max 10 IDs)
+	 * - type_ids: Comma-separated list of type IDs to filter by (optional, max 10 IDs)
 	 * - limit: Maximum results (optional, default: 20, max: 100)
 	 * - offset: Pagination offset (optional, default: 0, max: 1000)
 	 *
@@ -103,11 +108,24 @@ export function createSearchRouter(searchClient: SearchClient) {
 	 * - 500: Search failed
 	 */
 	router.get("/", async (c) => {
+		// Check for unrecognized query parameters
+		const allParams = Object.keys(c.req.query())
+		const unrecognizedParams = allParams.filter(param => !VALID_PARAMS.has(param))
+		if (unrecognizedParams.length > 0) {
+			return c.json(
+				{
+					error: "Unrecognized parameter",
+					message: `Unrecognized query parameter(s): ${unrecognizedParams.join(", ")}. Valid parameters are: ${Array.from(VALID_PARAMS).join(", ")}`,
+				},
+				400,
+			)
+		}
+
 		// Extract query parameters (accepts "query" first or "q" second)
 		const query = c.req.query("query") ?? c.req.query("q")
 		const scopeParam = c.req.query("scope") ?? "GLOBAL"
 		const spaceId = c.req.query("space_id")
-		const typeIdsParam = c.req.query("typeIds")
+		const typeIdsParam = c.req.query("type_ids")
 		const limitParam = c.req.query("limit")
 		const offsetParam = c.req.query("offset")
 
@@ -239,7 +257,7 @@ export function createSearchRouter(searchClient: SearchClient) {
 				return c.json(
 					{
 						error: "Invalid parameter",
-						message: `typeIds must not contain more than ${MAX_TYPE_IDS} IDs`,
+						message: `type_ids must not contain more than ${MAX_TYPE_IDS} IDs`,
 					},
 					400,
 				)
@@ -251,7 +269,7 @@ export function createSearchRouter(searchClient: SearchClient) {
 					return c.json(
 						{
 							error: "Invalid parameter",
-							message: `typeIds must contain valid UUIDs, got invalid ID: ${typeId}`,
+							message: `type_ids must contain valid UUIDs, got invalid ID: ${typeId}`,
 						},
 						400,
 					)
@@ -265,7 +283,7 @@ export function createSearchRouter(searchClient: SearchClient) {
 				query: trimmedQuery,
 				scope,
 				space_id: spaceId,
-				typeIds,
+				type_ids: typeIds,
 				limit,
 				offset,
 			})
