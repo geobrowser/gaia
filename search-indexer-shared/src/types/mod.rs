@@ -3,4 +3,4 @@
 
 pub mod entity_document;
 
-pub use entity_document::EntityDocument;
+pub use entity_document::{EntityDocument, TypeRelationEntry};

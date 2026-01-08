@@ -7,7 +7,8 @@ use async_trait::async_trait;
 
 use crate::errors::SearchIndexError;
 use crate::types::{
-    BatchOperationSummary, DeleteEntityRequest, UnsetEntityPropertiesRequest, UpdateEntityRequest,
+    BatchOperationSummary, DeleteEntityRequest, EntityOperation, UnsetEntityPropertiesRequest,
+    UpdateEntityRequest,
 };
 
 /// Abstracts the underlying search index implementation (OpenSearch, Elasticsearch, etc.).
@@ -72,60 +73,6 @@ pub trait SearchIndexProvider: Send + Sync {
     /// * `Err(SearchIndexError)` - If the deletion fails
     async fn delete_document(&self, request: &DeleteEntityRequest) -> Result<(), SearchIndexError>;
 
-    /// Update multiple documents in bulk and return a summary of successful and failed operations.
-    ///
-    /// Processes each update request individually and collects results. Returns a summary
-    /// indicating which updates succeeded and which failed.
-    ///
-    /// # Arguments
-    ///
-    /// * `requests` - Slice of update requests
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(BatchOperationSummary)` - Contains aggregate statistics and individual results
-    /// * `Err(SearchIndexError)` - If the bulk operation fails entirely
-    async fn bulk_update_documents(
-        &self,
-        requests: &[UpdateEntityRequest],
-    ) -> Result<BatchOperationSummary, SearchIndexError>;
-
-    /// Delete multiple documents in bulk and return a summary of successful and failed operations.
-    ///
-    /// Processes each delete request individually and collects results. Documents that don't
-    /// exist are considered successful deletions.
-    ///
-    /// # Arguments
-    ///
-    /// * `requests` - Slice of delete requests
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(BatchOperationSummary)` - Contains aggregate statistics and individual results
-    /// * `Err(SearchIndexError)` - If the bulk operation fails entirely
-    async fn bulk_delete_documents(
-        &self,
-        requests: &[DeleteEntityRequest],
-    ) -> Result<BatchOperationSummary, SearchIndexError>;
-
-    /// Unset (remove) specific properties from multiple documents in bulk and return a summary of successful and failed operations.
-    ///
-    /// Processes each unset request individually and collects results. Properties that don't
-    /// exist are safely ignored.
-    ///
-    /// # Arguments
-    ///
-    /// * `requests` - Slice of unset requests
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(BatchOperationSummary)` - Contains aggregate statistics and individual results
-    /// * `Err(SearchIndexError)` - If the bulk operation fails entirely
-    async fn bulk_unset_properties(
-        &self,
-        requests: &[UnsetEntityPropertiesRequest],
-    ) -> Result<BatchOperationSummary, SearchIndexError>;
-
     /// Unset (remove) specific properties from a document.
     ///
     /// This function removes the specified property keys from a document. If a property
@@ -143,4 +90,23 @@ pub trait SearchIndexProvider: Send + Sync {
         &self,
         request: &UnsetEntityPropertiesRequest,
     ) -> Result<(), SearchIndexError>;
+
+    /// Execute multiple operations in bulk, processing them IN ORDER.
+    ///
+    /// This is the preferred method for processing batches of mixed operations (updates, deletes,
+    /// unsets) as it maintains the order of operations, which is critical for consistency when
+    /// multiple operations affect the same entity.
+    ///
+    /// # Arguments
+    ///
+    /// * `operations` - Slice of operations to execute in order
+    ///
+    /// # Returns
+    ///
+    /// * `Ok(BatchOperationSummary)` - Contains aggregate statistics and individual results
+    /// * `Err(SearchIndexError)` - If the bulk operation fails entirely
+    async fn bulk_operations(
+        &self,
+        operations: &[EntityOperation],
+    ) -> Result<BatchOperationSummary, SearchIndexError>;
 }

@@ -109,17 +109,24 @@ export class OpenSearchClient implements SearchClient {
 			_score: number
 		}>
 
-		const results: SearchResult[] = hits.map((hit) => ({
-			entityId: hit._source.entity_id as string,
-			spaceId: hit._source.space_id as string,
-			name: hit._source.name as string | undefined,
-			description: hit._source.description as string | undefined,
-			avatar: hit._source.avatar as string | undefined,
-			cover: hit._source.cover as string | undefined,
-			entityGlobalScore: hit._source.entity_global_score as number | undefined,
-			spaceScore: hit._source.space_score as number | undefined,
-			entitySpaceScore: hit._source.entity_space_score as number | undefined,
-		}))
+		const results: SearchResult[] = hits.map((hit) => {
+			// Extract typeIds from type_relations array
+			const typeRelations = hit._source.type_relations as Array<{entity_to_id: string}> | undefined
+			const typeIds = typeRelations?.map((rel) => rel.entity_to_id)
+
+			return {
+				entityId: hit._source.entity_id as string,
+				spaceId: hit._source.space_id as string,
+				name: hit._source.name as string | undefined,
+				description: hit._source.description as string | undefined,
+				avatar: hit._source.avatar as string | undefined,
+				cover: hit._source.cover as string | undefined,
+				typeIds: typeIds?.length ? typeIds : undefined,
+				entityGlobalScore: hit._source.entity_global_score as number | undefined,
+				spaceScore: hit._source.space_score as number | undefined,
+				entitySpaceScore: hit._source.entity_space_score as number | undefined,
+			}
+		})
 
 		return {
 			results,
@@ -153,7 +160,7 @@ export class OpenSearchClient implements SearchClient {
 	buildSearchBody(query: SearchQuery): object {
 		// Check if the query is a UUID for direct ID lookup
 		if (UUID_PATTERN.test(query.query)) {
-			return this.buildUuidQuery(query.query, query.scope, query.space_id)
+			return this.buildUuidQuery(query.query, query.scope, query.space_id, query.type_ids)
 		}
 
 		// Build base text search query
@@ -162,16 +169,16 @@ export class OpenSearchClient implements SearchClient {
 		// Apply scope-specific query building
 		switch (query.scope) {
 			case "GLOBAL":
-				return this.buildGlobalQuery(baseTextQuery)
+				return this.buildGlobalQuery(baseTextQuery, query.type_ids)
 
 			case "GLOBAL_BY_SPACE_SCORE":
-				return this.buildGlobalBySpaceScoreQuery(baseTextQuery)
+				return this.buildGlobalBySpaceScoreQuery(baseTextQuery, query.type_ids)
 
 			case "SPACE_SINGLE": {
 				if (!query.space_id) {
 					throw SearchError.validationError("SPACE_SINGLE scope requires space_id")
 				}
-				return this.buildSingleSpaceQuery(baseTextQuery, query.space_id)
+				return this.buildSingleSpaceQuery(baseTextQuery, query.space_id, query.type_ids)
 			}
 
 			case "SPACE": {
@@ -181,11 +188,11 @@ export class OpenSearchClient implements SearchClient {
 				// SPACE scope: Search within a space and its subspaces
 				// Currently implemented as single space query - future enhancement
 				// will expand to include hierarchical space relationships
-				return this.buildSingleSpaceQuery(baseTextQuery, query.space_id)
+				return this.buildSingleSpaceQuery(baseTextQuery, query.space_id, query.type_ids)
 			}
 
 			default:
-				return this.buildGlobalQuery(baseTextQuery)
+				return this.buildGlobalQuery(baseTextQuery, query.type_ids)
 		}
 	}
 
@@ -197,52 +204,61 @@ export class OpenSearchClient implements SearchClient {
 	 * on keyword fields. The entity_id field is indexed as a keyword type
 	 * in the OpenSearch index mapping.
 	 */
-	buildUuidQuery(uuid: string, scope: SearchScope, space_id?: string): object {
+	buildUuidQuery(uuid: string, scope: SearchScope, space_id?: string, typeIds?: string[]): object {
 		// term query is correct for keyword fields - performs exact match lookup
 		const baseUuidQuery = {
 			term: {entity_id: uuid},
 		}
 
-		const baseUuidQueryObject = {
-			query: baseUuidQuery,
-		}
+		const typeFilter = this.buildTypeFilter(typeIds)
+		const filters: object[] = []
+		if (typeFilter) filters.push(typeFilter)
 
 		// Apply scope-specific filtering
 		switch (scope) {
 			case "GLOBAL":
 			case "GLOBAL_BY_SPACE_SCORE":
-				return baseUuidQueryObject
+				if (filters.length === 0) {
+					return {query: baseUuidQuery}
+				}
+				return {
+					query: {
+						bool: {
+							must: [baseUuidQuery],
+							filter: filters,
+						},
+					},
+				}
 
 			case "SPACE_SINGLE":
-				if (space_id) {
-					return {
-						query: {
-							bool: {
-								must: [baseUuidQuery],
-								filter: [{term: {space_id}}],
-							},
-						},
-					}
-				}
-				return baseUuidQueryObject
-
 			case "SPACE":
 				if (space_id) {
-					// For SPACE, we would need to expand to include subspaces
-					// For now, treat it as a single space query
-					return {
-						query: {
-							bool: {
-								must: [baseUuidQuery],
-								filter: [{term: {space_id}}],
-							},
-						},
-					}
+					filters.push({term: {space_id}})
 				}
-				return baseUuidQueryObject
+				if (filters.length === 0) {
+					return {query: baseUuidQuery}
+				}
+				return {
+					query: {
+						bool: {
+							must: [baseUuidQuery],
+							filter: filters,
+						},
+					},
+				}
 
 			default:
-				return baseUuidQueryObject
+				if (filters.length === 0) {
+					return {query: baseUuidQuery}
+				}
+				return {
+					query: {
+						bool: {
+							must: [baseUuidQuery],
+							filter: filters,
+						},
+					},
+				}
 		}
 	}
 
@@ -311,11 +327,13 @@ export class OpenSearchClient implements SearchClient {
 	 * Build a global search query.
 	 * Boosts results by entity_global_score using rank_feature.
 	 */
-	buildGlobalQuery(baseTextQuery: object): object {
+	buildGlobalQuery(baseTextQuery: object, typeIds?: string[]): object {
+		const typeFilter = this.buildTypeFilter(typeIds)
 		return {
 			query: {
 				bool: {
 					must: [baseTextQuery],
+					filter: typeFilter ? [typeFilter] : [],
 					should: [
 						{
 							rank_feature: {
@@ -333,11 +351,13 @@ export class OpenSearchClient implements SearchClient {
 	 * Build a global search query ranked by space score.
 	 * Boosts results by space_score using rank_feature.
 	 */
-	buildGlobalBySpaceScoreQuery(baseTextQuery: object): object {
+	buildGlobalBySpaceScoreQuery(baseTextQuery: object, typeIds?: string[]): object {
+		const typeFilter = this.buildTypeFilter(typeIds)
 		return {
 			query: {
 				bool: {
 					must: [baseTextQuery],
+					filter: typeFilter ? [typeFilter] : [],
 					should: [
 						{
 							rank_feature: {
@@ -355,12 +375,13 @@ export class OpenSearchClient implements SearchClient {
 	 * Build a single-space filtered query.
 	 * Filters by a single space_id and boosts by entity_space_score.
 	 */
-	buildSingleSpaceQuery(baseTextQuery: object, spaceId: string): object {
+	buildSingleSpaceQuery(baseTextQuery: object, spaceId: string, typeIds?: string[]): object {
+		const typeFilter = this.buildTypeFilter(typeIds)
 		return {
 			query: {
 				bool: {
 					must: [baseTextQuery],
-					filter: [{term: {space_id: spaceId}}],
+					filter: typeFilter ? [{term: {space_id: spaceId}}, typeFilter] : [{term: {space_id: spaceId}}],
 					should: [
 						{
 							rank_feature: {
@@ -369,6 +390,27 @@ export class OpenSearchClient implements SearchClient {
 							},
 						},
 					],
+				},
+			},
+		}
+	}
+
+	/**
+	 * Build a type filter for filtering by type relation IDs.
+	 * Returns null if no typeIds are provided.
+	 */
+	buildTypeFilter(typeIds?: string[]): object | null {
+		if (!typeIds || typeIds.length === 0) {
+			return null
+		}
+
+		return {
+			nested: {
+				path: "type_relations",
+				query: {
+					terms: {
+						"type_relations.entity_to_id": typeIds,
+					},
 				},
 			},
 		}

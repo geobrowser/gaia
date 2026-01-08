@@ -5,7 +5,9 @@
 
 mod bulk;
 mod index_config;
+mod index_management;
 mod provider;
+mod scripts;
 mod unset_document_properties;
 
 pub use bulk::{

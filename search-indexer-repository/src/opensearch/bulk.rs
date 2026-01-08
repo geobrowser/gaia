@@ -3,6 +3,7 @@
 //! This module provides functions for executing and parsing bulk operations
 //! with OpenSearch.
 
+use opensearch::params::Refresh;
 use opensearch::{BulkOperation, BulkParts, OpenSearch};
 use serde::Serialize;
 use serde_json::Value;
@@ -70,17 +71,24 @@ impl BulkAction {
 }
 
 /// Execute a bulk request and parse the response into a BatchOperationSummary.
+///
+/// If `refresh` is true, the index will be refreshed after the bulk operation,
+/// making all changes immediately visible for search. This is useful when
+/// a subsequent operation needs to query for the just-written data.
 pub async fn execute_bulk<B: Serialize>(
     client: &OpenSearch,
     alias: &str,
     operations: Vec<BulkOperation<B>>,
     metas: &[BulkOperationMeta],
     action: BulkAction,
+    refresh: bool,
 ) -> Result<BatchOperationSummary, SearchIndexError> {
     let action_str = action.as_str();
-    let response = client
-        .bulk(BulkParts::Index(alias))
-        .body(operations)
+    let mut bulk_request = client.bulk(BulkParts::Index(alias)).body(operations);
+    if refresh {
+        bulk_request = bulk_request.refresh(Refresh::True);
+    }
+    let response = bulk_request
         .send()
         .await
         .map_err(|e| SearchIndexError::bulk_index(e.to_string()))?;

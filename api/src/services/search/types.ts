@@ -29,6 +29,8 @@ export interface SearchQuery {
 	 * Required for SPACE_SINGLE and SPACE scopes.
 	 */
 	space_id?: string
+	/** Set of type IDs to filter results by. Results must have at least one of the specified type IDs. */
+	type_ids?: string[]
 	/** Maximum number of results to return (default: 20, max: 100). */
 	limit?: number
 	/** Offset for pagination (default: 0). */
@@ -51,6 +53,8 @@ export interface SearchResult {
 	avatar?: string
 	/** Optional cover image URL. */
 	cover?: string
+	/** Type IDs associated with this entity (extracted from type_relations). */
+	typeIds?: string[]
 	/** Global entity score. */
 	entityGlobalScore?: number
 	/** Space score. */

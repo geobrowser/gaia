@@ -5,4 +5,4 @@
 
 pub mod types;
 
-pub use types::entity_document::EntityDocument;
+pub use types::entity_document::{EntityDocument, TypeRelationEntry};
