@@ -9,9 +9,9 @@ export function getPublishEditCalldata(spaceId: string, cid: string) {
 		const db = yield* Storage
 
 		return yield* db.use(async (client) => {
+			// Legacy: cast to old schema shape - columns exist in legacy DB but not new schema
 			const maybeSpace = await client.query.spaces.findFirst({
 				where: (spaces, {eq}) => eq(spaces.id, spaceId),
-			// @ts-expect-error Legacy: columns exist in legacy DB but not new schema
 			}) as { id: string; type: string; spaceAddress: string; personalAddress: string | null; mainVotingAddress: string | null } | undefined
 
 			if (!maybeSpace) {
