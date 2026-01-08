@@ -27,7 +27,7 @@ pub fn handle_create_space(space: &HermesCreateSpace) -> Result<SpaceItem, Handl
 
             SpaceItem {
                 id: space_id,
-                space_type: SpaceType::DAO,
+                space_type: SpaceType::Dao,
                 address: checksummed,
                 topic_id: None,
             }

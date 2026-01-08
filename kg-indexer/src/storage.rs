@@ -410,7 +410,7 @@ impl Storage {
             ids.push(space.id);
             types.push(match space.space_type {
                 SpaceType::Personal => "Personal".to_string(),
-                SpaceType::DAO => "DAO".to_string(),
+                SpaceType::Dao => "DAO".to_string(),
             });
             addresses.push(space.address.clone());
             topic_ids.push(space.topic_id);

@@ -2,7 +2,7 @@ use uuid::Uuid;
 
 #[derive(Clone, Debug)]
 pub enum SpaceType {
-    DAO,
+    Dao,
     Personal,
 }
 
