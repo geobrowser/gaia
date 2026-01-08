@@ -331,9 +331,12 @@ This action triggers an internal `createProposal()` which emits PROPOSAL_CREATED
 **Proto Output:** `HermesCreateSpace`
 | Field | Source | Type |
 |-------|--------|------|
-| `space_id` | `from_id` | bytes (16) |
-| `topic_id` | `topic` | bytes (32) |
-| `payload` | Determined by space type | oneof `PersonalSpace` / `DefaultDaoSpace` |
+| `space_id` | `to_id` | bytes (16) |
+| `payload` | Determined by space type | oneof `EoaSpacePayload` / `DefaultDaoSpacePayload` |
+
+**Payload Types:**
+- `EoaSpacePayload`: `owner` (20 bytes) - owner's EOA address from `topic[0..20]`
+- `DefaultDaoSpacePayload`: `address` (20 bytes) - DAO contract address from `topic[0..20]`
 
 ---
 

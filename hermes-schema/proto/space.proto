@@ -8,11 +8,13 @@ message EoaSpacePayload {
     bytes owner = 1;
 }
 
-// DefaultDaoSpacePayload is intentionally empty.
+// DefaultDaoSpacePayload contains the DAO contract address.
 // The contract emits individual EDITOR_ADDED/MEMBER_ADDED events for each
 // initial editor/member during initialization. These are handled by the
 // membership pipeline, not space creation.
-message DefaultDaoSpacePayload {}
+message DefaultDaoSpacePayload {
+    bytes address = 1; // 20-byte DAO contract address
+}
 
 // UnknownSpacePayload provides a flexible fallback for new or experimental
 // space types without requiring schema changes. Consumers can look up known
@@ -25,7 +27,6 @@ message DefaultDaoSpacePayload {}
 
 message HermesCreateSpace {
     bytes space_id = 1; // uuid
-    bytes topic_id = 2; // uuid
 
     oneof payload {
         EoaSpacePayload eoa_space = 3;

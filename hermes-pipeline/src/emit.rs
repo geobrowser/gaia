@@ -428,7 +428,6 @@ mod tests {
     fn test_space_key() {
         let space = HermesCreateSpace {
             space_id: vec![0xAB; 16],
-            topic_id: vec![],
             payload: None,
             meta: None,
         };

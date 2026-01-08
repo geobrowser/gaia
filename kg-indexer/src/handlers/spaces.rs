@@ -24,8 +24,8 @@ pub fn handle_create_space(space: &HermesCreateSpace) -> Result<SpaceItem, Handl
                 personal_address: Some(checksummed),
             }
         }
-        Some(Payload::DefaultDaoSpace(_dao)) => {
-            let dao_address = hex::encode(&space.topic_id);
+        Some(Payload::DefaultDaoSpace(dao)) => {
+            let dao_address = hex::encode(&dao.address);
             let checksummed = checksum_address(format!("0x{}", dao_address));
 
             SpaceItem {

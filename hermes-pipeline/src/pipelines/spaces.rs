@@ -97,7 +97,9 @@ fn convert(
         Some(st) if st == actions::SPACE_TYPE_DAO => {
             // DAO space - editors/members come from separate events
             Some(hermes_create_space::Payload::DefaultDaoSpace(
-                DefaultDaoSpacePayload {},
+                DefaultDaoSpacePayload {
+                    address: owner_address.clone(),
+                },
             ))
         }
         Some(st) if st == actions::SPACE_TYPE_EOA => {
@@ -132,7 +134,6 @@ fn convert(
 
     Ok(HermesCreateSpace {
         space_id,
-        topic_id: owner_address,
         payload,
         meta: Some(meta.to_proto(sequence)),
     })
