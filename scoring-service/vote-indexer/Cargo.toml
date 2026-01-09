@@ -1,0 +1,21 @@
+[package]
+name = "vote-indexer"
+version = "0.1.0"
+edition = "2021"
+description = "Vote indexer that consumes curation.votes events from Kafka and indexes into PostgreSQL"
+
+[dependencies]
+hermes-schema = { path = "../../hermes-schema" }
+rdkafka = { version = "0.38.0", features = ["cmake-build", "ssl", "zstd"] }
+tokio = { version = "1.42.0", features = ["macros", "rt-multi-thread", "sync", "time", "signal"] }
+sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "uuid", "chrono", "tls-rustls"] }
+prost = "0.13.5"
+thiserror = "2.0.12"
+chrono = "0.4.41"
+uuid = { version = "1.17.0", features = ["v4"] }
+dotenv = "0.15.0"
+tracing = "0.1.41"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter", "json"] }
+
+[dev-dependencies]
+tokio = { version = "1.42.0", features = ["macros", "rt-multi-thread", "test-util"] }
