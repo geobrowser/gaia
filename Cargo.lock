@@ -3259,6 +3259,7 @@ dependencies = [
  "async-trait",
  "axiom-rs",
  "chrono",
+ "criterion 0.5.1",
  "dotenv",
  "futures 0.3.31",
  "hermes-schema",

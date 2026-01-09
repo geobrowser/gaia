@@ -4,6 +4,14 @@ version = "0.1.0"
 edition = "2021"
 description = "Knowledge Graph indexer that consumes events from Kafka and indexes into PostgreSQL"
 
+[lib]
+name = "kg_indexer"
+path = "src/lib.rs"
+
+[[bin]]
+name = "kg-indexer"
+path = "src/main.rs"
+
 [dependencies]
 # Workspace dependencies
 hermes-schema = { path = "../hermes-schema" }
@@ -42,7 +50,15 @@ axiom-rs = "0.11.4"
 
 [dev-dependencies]
 tokio = { version = "1.42.0", features = ["macros", "rt-multi-thread", "test-util"] }
+criterion = { version = "0.5", features = ["html_reports"] }
 
 [[test]]
 name = "e2e"
 path = "tests/e2e.rs"
+
+[[bench]]
+name = "handler_bench"
+harness = false
+
+[[example]]
+name = "postgres_bench"
