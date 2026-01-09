@@ -139,38 +139,32 @@ export const values = pgTable(
 		unit: text(),
 	},
 	(table) => [
-		// Foreign key indexes for join performance
+		// Essential indexes based on query benchmarks (see kg-indexer/QUERY_BENCHMARKS.md)
+		// These indexes provide 10-40x speedup for point lookups and value operator queries
+
+		// Single-column index for value operator queries (property=X AND string=Y)
 		index("values_property_id_idx").on(table.propertyId),
-		index("values_entity_id_idx").on(table.entityId),
-		index("values_space_id_idx").on(table.spaceId),
 
-		// Partial B-tree index for text searches (only indexes strings ≤2000 chars)
-		// Longer strings will use sequential scan, but won't cause index size errors
-		index("values_text_idx")
-			.on(table.string)
-			.where(sql`length(${table.string}) <= 2000`),
-		index("values_number_idx").on(table.number),
-		index("values_point_idx").on(table.point),
-		index("values_boolean_idx").on(table.boolean),
-		index("values_time_idx").on(table.time),
-		// GIN index creation is handled via migration
-
-		// Composite indexes for common query patterns
+		// Composite indexes for common query patterns (point lookups)
 		index("values_entity_property_idx").on(table.entityId, table.propertyId),
 		index("values_entity_space_idx").on(table.entityId, table.spaceId),
-		index("values_property_space_idx").on(table.propertyId, table.spaceId),
 		index("values_entity_property_space_idx").on(
 			table.entityId,
 			table.propertyId,
 			table.spaceId,
 		),
 
-		// Composite index for space-filtered searches
-		// index("values_space_text_idx").on(table.spaceId, table.string),
+		// GIN trigram index for fuzzy text search (created via migration 0004_functions.sql)
 
-		// Additional indexes for filtering
-		index("values_language_idx").on(table.language),
-		index("values_unit_idx").on(table.unit),
+		// REMOVED indexes (benchmarks showed no benefit or covered by composites):
+		// - values_entity_id_idx: covered by entity_property and entity_space composites
+		// - values_space_id_idx: covered by entity_space composite
+		// - values_property_space_idx: rarely used query pattern
+		// - values_number_idx: no benefit without (property_id, number) composite
+		// - values_time_idx: no benefit without (property_id, time) composite
+		// - values_point_idx, values_boolean_idx: rarely filtered
+		// - values_language_idx, values_unit_idx: rarely filtered
+		// - values_text_idx: GIN trigram handles text search
 	],
 );
 
@@ -191,19 +185,15 @@ export const relations = pgTable(
 		verified: boolean(),
 	},
 	(table) => [
-		// Foreign key indexes for join performance
+		// Essential indexes based on query benchmarks (see kg-indexer/QUERY_BENCHMARKS.md)
+		// These indexes provide 10-40x speedup for relation lookups
+
+		// Single-column indexes for entity lookups
 		index("relations_entity_id_idx").on(table.entityId),
-		index("relations_type_id_idx").on(table.typeId),
 		index("relations_from_entity_id_idx").on(table.fromEntityId),
 		index("relations_to_entity_id_idx").on(table.toEntityId),
-		index("relations_space_id_idx").on(table.spaceId),
 
 		// Composite indexes for common query patterns
-		index("relations_space_from_to_idx").on(
-			table.spaceId,
-			table.fromEntityId,
-			table.toEntityId,
-		),
 		index("relations_space_type_idx").on(table.spaceId, table.typeId),
 		index("relations_to_entity_space_idx").on(table.toEntityId, table.spaceId),
 		index("relations_from_entity_space_idx").on(
@@ -211,17 +201,12 @@ export const relations = pgTable(
 			table.spaceId,
 		),
 
-		// Additional composite indexes for complex queries
-		index("relations_entity_type_space_idx").on(
-			table.entityId,
-			table.typeId,
-			table.spaceId,
-		),
-		index("relations_type_from_to_idx").on(
-			table.typeId,
-			table.fromEntityId,
-			table.toEntityId,
-		),
+		// REMOVED indexes (benchmarks showed no benefit or covered by composites):
+		// - relations_type_id_idx: covered by space_type composite
+		// - relations_space_id_idx: covered by space_type, from_entity_space, to_entity_space
+		// - relations_space_from_to_idx: rarely used query pattern
+		// - relations_entity_type_space_idx: rarely used query pattern
+		// - relations_type_from_to_idx: rarely used query pattern
 	],
 );
 
