@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from main import ScoringPipeline
+from main import OutputMode, ScoringPipeline
 from src.algorithm.models import Entity, Space, User, Vote
 from src.scoring_data_provider.scoring_data_provider import ScoringData
 
@@ -27,7 +27,13 @@ class TestMain:
         )
 
         with (
-            patch.dict("os.environ", {"DATABASE_URL": "postgresql://test:test@localhost/test"}),
+            patch.dict(
+                "os.environ",
+                {
+                    "DATABASE_URL": "postgresql://test:test@localhost/test",
+                    "OUTPUT_MODE": "postgres",
+                },
+            ),
             patch("main.load_dotenv") as mock_load_dotenv,
             patch("main.ScoringDataProvider") as mock_provider_class,
             patch("main.RankingEngine") as mock_engine_class,
@@ -83,7 +89,13 @@ class TestMain:
         )
 
         with (
-            patch.dict("os.environ", {"DATABASE_URL": "postgresql://test:test@localhost/test"}),
+            patch.dict(
+                "os.environ",
+                {
+                    "DATABASE_URL": "postgresql://test:test@localhost/test",
+                    "OUTPUT_MODE": "postgres",
+                },
+            ),
             patch("main.load_dotenv"),
             patch("main.ScoringDataProvider") as mock_provider_class,
             patch("main.RankingEngine") as mock_engine_class,
@@ -141,7 +153,11 @@ class TestScoringPipeline:
             mock_writer = MagicMock()
             mock_writer_class.return_value = mock_writer
 
-            pipeline = ScoringPipeline("postgresql://test/db", mock_engine)
+            pipeline = ScoringPipeline(
+                "postgresql://test/db",
+                mock_engine,
+                output_mode=OutputMode.POSTGRES,
+            )
             entity_count, space_count = pipeline.run()
 
             assert entity_count == 2
@@ -175,7 +191,11 @@ class TestScoringPipeline:
             mock_writer = MagicMock()
             mock_writer_class.return_value = mock_writer
 
-            pipeline = ScoringPipeline("postgresql://test/db", mock_engine)
+            pipeline = ScoringPipeline(
+                "postgresql://test/db",
+                mock_engine,
+                output_mode=OutputMode.POSTGRES,
+            )
             pipeline.run()
 
             # Verify scoring_data was updated with ranked results
@@ -209,7 +229,11 @@ class TestScoringPipeline:
             mock_writer = MagicMock()
             mock_writer_class.return_value = mock_writer
 
-            pipeline = ScoringPipeline("postgresql://test/db", mock_engine)
+            pipeline = ScoringPipeline(
+                "postgresql://test/db",
+                mock_engine,
+                output_mode=OutputMode.POSTGRES,
+            )
             pipeline.run()
 
             # Verify rank_entities was called with ranked_spaces (from scoring_data after rank_spaces)
@@ -233,7 +257,11 @@ class TestScoringPipeline:
             mock_provider_class.return_value = mock_provider
 
             mock_engine = MagicMock()
-            pipeline = ScoringPipeline("postgresql://test/db", mock_engine)
+            pipeline = ScoringPipeline(
+                "postgresql://test/db",
+                mock_engine,
+                output_mode=OutputMode.POSTGRES,
+            )
             assert pipeline.scoring_data is None
 
             pipeline._fetch_data()
@@ -250,7 +278,11 @@ class TestScoringPipeline:
             mock_provider_class.return_value = mock_provider
 
             mock_engine = MagicMock()
-            pipeline = ScoringPipeline("postgresql://test/db", mock_engine)
+            pipeline = ScoringPipeline(
+                "postgresql://test/db",
+                mock_engine,
+                output_mode=OutputMode.POSTGRES,
+            )
 
             with pytest.raises(RuntimeError, match="Scoring data not initialized"):
                 pipeline._fetch_data()
@@ -265,7 +297,11 @@ class TestScoringPipeline:
             mock_writer_class.return_value = mock_writer
 
             mock_engine = MagicMock()
-            pipeline = ScoringPipeline("postgresql://test/db", mock_engine)
+            pipeline = ScoringPipeline(
+                "postgresql://test/db",
+                mock_engine,
+                output_mode=OutputMode.POSTGRES,
+            )
             pipeline.scoring_data = ScoringData(
                 entities=mock_entities,
                 votes=[],
@@ -275,4 +311,213 @@ class TestScoringPipeline:
             pipeline._write_scores()
 
             mock_writer_class.assert_called_once_with("postgresql://test/db")
+            mock_writer.write_all.assert_called_once_with(mock_entities, mock_spaces)
+
+
+class TestOutputModes:
+    """Tests for OUTPUT_MODE functionality."""
+
+    def test_postgres_mode_only_uses_writer(self) -> None:
+        """Test that postgres mode only initializes writer, not emitter."""
+        with patch("main.ScoringDataWriter") as mock_writer_class:
+            mock_writer = MagicMock()
+            mock_writer_class.return_value = mock_writer
+
+            mock_engine = MagicMock()
+            pipeline = ScoringPipeline(
+                "postgresql://test/db",
+                mock_engine,
+                output_mode=OutputMode.POSTGRES,
+            )
+
+            assert pipeline._writer is not None
+            assert pipeline._emitter is None
+            mock_writer_class.assert_called_once()
+
+    def test_kafka_mode_only_uses_emitter(self) -> None:
+        """Test that kafka mode only initializes emitter, not writer."""
+        with patch("main.ScoringDataEmitter") as mock_emitter_class:
+            mock_emitter = MagicMock()
+            mock_emitter_class.return_value = mock_emitter
+
+            mock_engine = MagicMock()
+            pipeline = ScoringPipeline(
+                "postgresql://test/db",
+                mock_engine,
+                output_mode=OutputMode.KAFKA,
+                kafka_broker="localhost:9092",
+            )
+
+            assert pipeline._writer is None
+            assert pipeline._emitter is not None
+            mock_emitter_class.assert_called_once()
+
+    def test_all_mode_uses_both_writer_and_emitter(self) -> None:
+        """Test that all mode initializes both writer and emitter."""
+        with (
+            patch("main.ScoringDataWriter") as mock_writer_class,
+            patch("main.ScoringDataEmitter") as mock_emitter_class,
+        ):
+            mock_writer = MagicMock()
+            mock_writer_class.return_value = mock_writer
+
+            mock_emitter = MagicMock()
+            mock_emitter_class.return_value = mock_emitter
+
+            mock_engine = MagicMock()
+            pipeline = ScoringPipeline(
+                "postgresql://test/db",
+                mock_engine,
+                output_mode=OutputMode.ALL,
+                kafka_broker="localhost:9092",
+            )
+
+            assert pipeline._writer is not None
+            assert pipeline._emitter is not None
+            mock_writer_class.assert_called_once()
+            mock_emitter_class.assert_called_once()
+
+    def test_kafka_mode_requires_broker(self) -> None:
+        """Test that kafka mode raises error when broker not provided."""
+        mock_engine = MagicMock()
+
+        with pytest.raises(ValueError, match="KAFKA_BROKER is required"):
+            ScoringPipeline(
+                "postgresql://test/db",
+                mock_engine,
+                output_mode=OutputMode.KAFKA,
+                kafka_broker=None,
+            )
+
+    def test_all_mode_requires_broker(self) -> None:
+        """Test that all mode raises error when broker not provided."""
+        mock_engine = MagicMock()
+
+        with pytest.raises(ValueError, match="KAFKA_BROKER is required"):
+            ScoringPipeline(
+                "postgresql://test/db",
+                mock_engine,
+                output_mode=OutputMode.ALL,
+                kafka_broker=None,
+            )
+
+    def test_emitter_receives_kafka_config(self) -> None:
+        """Test that emitter is initialized with all Kafka config options."""
+        with patch("main.ScoringDataEmitter") as mock_emitter_class:
+            mock_emitter = MagicMock()
+            mock_emitter_class.return_value = mock_emitter
+
+            mock_engine = MagicMock()
+            ScoringPipeline(
+                "postgresql://test/db",
+                mock_engine,
+                output_mode=OutputMode.KAFKA,
+                kafka_broker="kafka.example.com:9093",
+                kafka_topic="custom.scores",
+                kafka_username="user",
+                kafka_password="secret",
+                kafka_ssl_ca_pem="-----BEGIN CERTIFICATE-----",
+                score_batch_size=500,
+            )
+
+            mock_emitter_class.assert_called_once_with(
+                broker="kafka.example.com:9093",
+                topic="custom.scores",
+                batch_size=500,
+                username="user",
+                password="secret",
+                ssl_ca_pem="-----BEGIN CERTIFICATE-----",
+            )
+
+    def test_write_scores_calls_both_in_all_mode(self) -> None:
+        """Test that _write_scores calls both writer and emitter in all mode."""
+        mock_entities = [Entity(id="11111111111111111111111111111111", created_at=datetime.now())]
+        mock_spaces = [Space(id="22222222222222222222222222222222", created_at=datetime.now())]
+
+        with (
+            patch("main.ScoringDataWriter") as mock_writer_class,
+            patch("main.ScoringDataEmitter") as mock_emitter_class,
+        ):
+            mock_writer = MagicMock()
+            mock_writer_class.return_value = mock_writer
+
+            mock_emitter = MagicMock()
+            mock_emitter.flush.return_value = 0
+            mock_emitter.messages_produced = 1
+            mock_emitter.delivery_errors = 0
+            mock_emitter_class.return_value = mock_emitter
+
+            mock_engine = MagicMock()
+            pipeline = ScoringPipeline(
+                "postgresql://test/db",
+                mock_engine,
+                output_mode=OutputMode.ALL,
+                kafka_broker="localhost:9092",
+            )
+            pipeline.scoring_data = ScoringData(
+                entities=mock_entities,
+                votes=[],
+                users=[],
+                spaces=mock_spaces,
+            )
+            pipeline._write_scores()
+
+            # Both should be called
+            mock_writer.write_all.assert_called_once_with(mock_entities, mock_spaces)
+            mock_emitter.emit_all.assert_called_once_with(mock_entities, mock_spaces)
+            mock_emitter.flush.assert_called_once()
+
+    def test_write_scores_only_emitter_in_kafka_mode(self) -> None:
+        """Test that _write_scores only calls emitter in kafka mode."""
+        mock_entities = [Entity(id="11111111111111111111111111111111", created_at=datetime.now())]
+        mock_spaces = [Space(id="22222222222222222222222222222222", created_at=datetime.now())]
+
+        with patch("main.ScoringDataEmitter") as mock_emitter_class:
+            mock_emitter = MagicMock()
+            mock_emitter.flush.return_value = 0
+            mock_emitter.messages_produced = 1
+            mock_emitter.delivery_errors = 0
+            mock_emitter_class.return_value = mock_emitter
+
+            mock_engine = MagicMock()
+            pipeline = ScoringPipeline(
+                "postgresql://test/db",
+                mock_engine,
+                output_mode=OutputMode.KAFKA,
+                kafka_broker="localhost:9092",
+            )
+            pipeline.scoring_data = ScoringData(
+                entities=mock_entities,
+                votes=[],
+                users=[],
+                spaces=mock_spaces,
+            )
+            pipeline._write_scores()
+
+            mock_emitter.emit_all.assert_called_once()
+            mock_emitter.flush.assert_called_once()
+
+    def test_write_scores_only_writer_in_postgres_mode(self) -> None:
+        """Test that _write_scores only calls writer in postgres mode."""
+        mock_entities = [Entity(id="entity-1", created_at=datetime.now())]
+        mock_spaces = [Space(id="space-1", created_at=datetime.now())]
+
+        with patch("main.ScoringDataWriter") as mock_writer_class:
+            mock_writer = MagicMock()
+            mock_writer_class.return_value = mock_writer
+
+            mock_engine = MagicMock()
+            pipeline = ScoringPipeline(
+                "postgresql://test/db",
+                mock_engine,
+                output_mode=OutputMode.POSTGRES,
+            )
+            pipeline.scoring_data = ScoringData(
+                entities=mock_entities,
+                votes=[],
+                users=[],
+                spaces=mock_spaces,
+            )
+            pipeline._write_scores()
+
             mock_writer.write_all.assert_called_once_with(mock_entities, mock_spaces)
