@@ -40,6 +40,9 @@ pub enum IndexerError {
     #[error("decode error: {0}")]
     Decode(#[from] prost::DecodeError),
 
+    #[error("database error: {0}")]
+    Database(#[from] sqlx::Error),
+
     #[error("configuration error: {0}")]
     Config(String),
 }
