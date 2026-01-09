@@ -36,3 +36,33 @@ db-migrate:
 
 db-load-dump path:
     docker exec -i pg_scoring_service psql -U postgres -d postgres < {{path}}
+
+# Generate protobuf code from scoring.proto, protoc must be installed
+proto-gen:
+    protoc --proto_path=../hermes-schema/proto --python_out=src/pb ../hermes-schema/proto/scoring.proto
+
+# Start Kafka infrastructure (Kafka + Kafka UI)
+kafka-up:
+    cd ../hermes && docker compose up kafka kafka-ui -d
+    @echo "Waiting for Kafka to be healthy..."
+    @until docker compose -f ../hermes/docker-compose.yaml exec kafka /opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 > /dev/null 2>&1; do sleep 2; done
+    @echo "Kafka is ready!"
+    @echo "Kafka UI available at http://localhost:8080"
+
+# Stop Kafka infrastructure
+kafka-down:
+    cd ../hermes && docker compose down kafka kafka-ui
+
+# Run scoring service with Kafka output (requires DATABASE_URL)
+run-scoring-kafka:
+    OUTPUT_MODE=kafka \
+    KAFKA_BROKER=localhost:9092 \
+    KAFKA_TOPIC=curation.scores \
+    uv run python main.py
+
+# Run scoring service with both Postgres and Kafka output (requires DATABASE_URL)
+run-scoring-all:
+    OUTPUT_MODE=all \
+    KAFKA_BROKER=localhost:9092 \
+    KAFKA_TOPIC=curation.scores \
+    uv run python main.py

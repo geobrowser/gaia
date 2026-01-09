@@ -1,0 +1,36 @@
+syntax = "proto3";
+
+package scoring;
+
+// Score update for an entity (global score)
+message EntityScore {
+  bytes entity_id = 1;           // 16 bytes UUID
+  double score = 2;              // Normalized score
+  uint64 updated_at = 3;         // Unix timestamp in seconds
+}
+
+// Score update for a perspective (local score within a space)
+message PerspectiveScore {
+  bytes entity_id = 1;           // 16 bytes UUID
+  bytes space_id = 2;            // 16 bytes UUID
+  double score = 3;              // Normalized score
+  uint64 updated_at = 4;         // Unix timestamp in seconds
+}
+
+// Score update for a space
+message SpaceScore {
+  bytes space_id = 1;            // 16 bytes UUID
+  double score = 2;              // Space score
+  uint64 updated_at = 3;         // Unix timestamp in seconds
+}
+
+// Batch of score updates published by scoring service
+message HermesScoresBatch {
+  repeated EntityScore entity_scores = 1;
+  repeated PerspectiveScore perspective_scores = 2;
+  repeated SpaceScore space_scores = 3;
+  uint64 computed_at = 4;        // When scores were computed - Unix timestamp in seconds
+  uint32 batch_sequence = 5;     // Sequence number within run
+  bool is_final = 6;             // True for last batch in run
+}
+

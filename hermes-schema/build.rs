@@ -14,6 +14,7 @@ fn main() -> Result<()> {
     //     "proto/knowledge.proto",
     //     "proto/membership.proto",
     //     "proto/moderation.proto",
+    //     "proto/scoring.proto",
     //     "proto/space.proto",
     //     "proto/topics.proto",
     //     "proto/topology.proto",
@@ -30,7 +31,7 @@ fn main() -> Result<()> {
     //     .expect("Failed to compile protos");
 
     // // Create a mod.rs file that re-exports each generated file
-    // let mod_file = "pub mod blockchain_metadata;\npub mod governance;\npub mod knowledge;\npub mod membership;\npub mod moderation;\npub mod space;\npub mod topics;\npub mod topology;\npub mod voting;";
+    // let mod_file = "pub mod blockchain_metadata;\npub mod governance;\npub mod knowledge;\npub mod membership;\npub mod moderation;\npub mod scoring;\npub mod space;\npub mod topics;\npub mod topology;\npub mod voting;";
 
     // fs::write(out_dir.join("mod.rs"), mod_file).expect("Failed to write mod.rs");
     Ok(())
