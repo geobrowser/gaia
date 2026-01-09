@@ -8,6 +8,7 @@ description = "Vote indexer that consumes curation.votes events from Kafka and i
 hermes-schema = { path = "../../hermes-schema" }
 rdkafka = { version = "0.38.0", features = ["cmake-build", "ssl", "zstd"] }
 tokio = { version = "1.42.0", features = ["macros", "rt-multi-thread", "sync", "time", "signal"] }
+futures = "0.3.31"
 sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "uuid", "chrono", "tls-rustls"] }
 prost = "0.13.5"
 thiserror = "2.0.12"
