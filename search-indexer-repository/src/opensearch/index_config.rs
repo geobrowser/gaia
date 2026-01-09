@@ -93,6 +93,17 @@ pub fn get_index_settings(_version: Option<u32>) -> Value {
                     "type": "keyword",
                     "index": false
                 },
+                "type_relations": {
+                    "type": "nested",
+                    "properties": {
+                        "relation_id": {
+                            "type": "keyword"
+                        },
+                        "entity_to_id": {
+                            "type": "keyword"
+                        }
+                    }
+                },
                 "entity_global_score": {
                     "type": "rank_feature"
                 },
@@ -126,6 +137,7 @@ mod tests {
         assert!(settings["mappings"]["properties"]["entity_id"].is_object());
         assert!(settings["mappings"]["properties"]["name"].is_object());
         assert!(settings["mappings"]["properties"]["description"].is_object());
+        assert!(settings["mappings"]["properties"]["type_relations"].is_object());
 
         // Check search_as_you_type fields
         assert_eq!(
@@ -135,6 +147,22 @@ mod tests {
         assert_eq!(
             settings["mappings"]["properties"]["description"]["type"],
             "search_as_you_type"
+        );
+
+        // Check type_relations nested type
+        assert_eq!(
+            settings["mappings"]["properties"]["type_relations"]["type"],
+            "nested"
+        );
+        assert_eq!(
+            settings["mappings"]["properties"]["type_relations"]["properties"]["relation_id"]
+                ["type"],
+            "keyword"
+        );
+        assert_eq!(
+            settings["mappings"]["properties"]["type_relations"]["properties"]["entity_to_id"]
+                ["type"],
+            "keyword"
         );
 
         // Check rank_feature fields

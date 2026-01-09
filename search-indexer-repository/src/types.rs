@@ -2,6 +2,18 @@
 
 use crate::errors::SearchIndexError;
 
+/// Data for a type relation to be added to an entity document.
+///
+/// This struct contains all the information needed to add a type relation entry
+/// to an entity's `type_relations` array.
+#[derive(Debug, Clone, PartialEq)]
+pub struct TypeRelationData {
+    /// The relation's unique identifier.
+    pub relation_id: String,
+    /// The entity this relation points to (the "type" entity).
+    pub entity_to_id: String,
+}
+
 /// Request to update an existing entity document in the search index.
 ///
 /// This struct allows partial updates to an entity document. The `entity_id` and
@@ -21,6 +33,9 @@ pub struct UpdateEntityRequest {
     pub avatar: Option<String>,
     /// Optional cover image URL.
     pub cover: Option<String>,
+    /// Atomically add a type relation to the entity's type_relations array.
+    /// Does not overwrite existing data.
+    pub add_type_relation: Option<TypeRelationData>,
     /// Global entity score.
     pub entity_global_score: Option<f64>,
     /// Space score.
@@ -46,6 +61,8 @@ pub struct DeleteEntityRequest {
 /// This struct allows removing specific fields from a document. The `entity_id` and
 /// `space_id` are required to identify the document. The `property_keys` vector
 /// contains the names of the fields to remove (e.g., "name", "description", "avatar", "cover").
+///
+/// Note: To remove type relations, use `EntityOperation::RemoveTypeRelationById` instead.
 #[derive(Debug, Clone)]
 pub struct UnsetEntityPropertiesRequest {
     /// The entity's unique identifier.
@@ -54,6 +71,54 @@ pub struct UnsetEntityPropertiesRequest {
     pub space_id: String,
     /// The property keys to remove from the document.
     pub property_keys: Vec<String>,
+}
+
+/// Data for removing a type relation from an entity document by relation_id.
+#[derive(Debug, Clone, PartialEq)]
+pub struct RemoveTypeRelationData {
+    /// The relation's unique identifier to remove.
+    pub relation_id: String,
+}
+
+/// A single operation in a bulk request.
+///
+/// This enum represents any operation that can be performed on an entity document.
+/// Operations are processed in order, maintaining consistency for operations on the same entity.
+#[derive(Debug, Clone)]
+pub enum EntityOperation {
+    /// Update/upsert an entity document.
+    Update(UpdateEntityRequest),
+    /// Delete an entity document.
+    Delete(DeleteEntityRequest),
+    /// Unset specific properties from an entity document.
+    Unset(UnsetEntityPropertiesRequest),
+    /// Remove a type relation by relation_id (searches for documents containing it).
+    /// Used when only the relation_id is available (e.g., from DeleteRelation Kafka messages).
+    RemoveTypeRelationById(RemoveTypeRelationData),
+}
+
+impl EntityOperation {
+    /// Get the entity_id for this operation.
+    /// Returns an empty string for RemoveTypeRelationById since it searches by relation_id.
+    pub fn entity_id(&self) -> &str {
+        match self {
+            EntityOperation::Update(r) => &r.entity_id,
+            EntityOperation::Delete(r) => &r.entity_id,
+            EntityOperation::Unset(r) => &r.entity_id,
+            EntityOperation::RemoveTypeRelationById(_) => "",
+        }
+    }
+
+    /// Get the space_id for this operation.
+    /// Returns an empty string for RemoveTypeRelationById since it searches by relation_id.
+    pub fn space_id(&self) -> &str {
+        match self {
+            EntityOperation::Update(r) => &r.space_id,
+            EntityOperation::Delete(r) => &r.space_id,
+            EntityOperation::Unset(r) => &r.space_id,
+            EntityOperation::RemoveTypeRelationById(_) => "",
+        }
+    }
 }
 
 /// Result of a batch operation for a single item.

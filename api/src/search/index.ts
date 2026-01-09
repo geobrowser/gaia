@@ -45,6 +45,16 @@ const MAX_SPACE_ID_LENGTH = 36
 const MAX_OFFSET = 1000
 
 /**
+ * Maximum number of type IDs to prevent abuse.
+ */
+const MAX_TYPE_IDS = 10
+
+/**
+ * Valid query parameter names for the search endpoint.
+ */
+const VALID_PARAMS: Set<string> = new Set(["query", "q", "scope", "space_id", "type_ids", "limit", "offset"])
+
+/**
  * Create the search router with dependency-injected search client.
  *
  * @param searchClient - The search client to use for queries
@@ -75,19 +85,47 @@ export function createSearchRouter(searchClient: SearchClient) {
 	 *   - SPACE_SINGLE: Search within a single specific space, boosted by entity_space_score
 	 *   - SPACE: Search within a space and its subspaces (currently implemented as single space)
 	 * - space_id: Space ID for space-scoped searches (required for SPACE_* scopes, max 36 chars)
+	 * - type_ids: Comma-separated list of type IDs to filter by (optional, max 10 IDs)
 	 * - limit: Maximum results (optional, default: 20, max: 100)
 	 * - offset: Pagination offset (optional, default: 0, max: 1000)
 	 *
 	 * Response:
 	 * - 200: SearchResponse with results
+	 *   - results[]: Array of search results
+	 *     - entityId: The entity's unique identifier
+	 *     - spaceId: The space this entity belongs to
+	 *     - name?: Optional entity display name
+	 *     - description?: Optional description text
+	 *     - avatar?: Optional avatar image URL
+	 *     - cover?: Optional cover image URL
+	 *     - typeIds?: Array of type IDs associated with this entity (from type_relations)
+	 *     - entityGlobalScore?: Global entity score
+	 *     - spaceScore?: Space score
+	 *     - entitySpaceScore?: Entity-space score
+	 *   - total: Total number of matching documents
+	 *   - tookMs: Time taken to execute the search in milliseconds
 	 * - 400: Invalid request parameters
 	 * - 500: Search failed
 	 */
 	router.get("/", async (c) => {
+		// Check for unrecognized query parameters
+		const allParams = Object.keys(c.req.query())
+		const unrecognizedParams = allParams.filter((param) => !VALID_PARAMS.has(param))
+		if (unrecognizedParams.length > 0) {
+			return c.json(
+				{
+					error: "Unrecognized parameter",
+					message: `Unrecognized query parameter(s): ${unrecognizedParams.join(", ")}. Valid parameters are: ${Array.from(VALID_PARAMS).join(", ")}`,
+				},
+				400,
+			)
+		}
+
 		// Extract query parameters (accepts "query" first or "q" second)
 		const query = c.req.query("query") ?? c.req.query("q")
 		const scopeParam = c.req.query("scope") ?? "GLOBAL"
 		const spaceId = c.req.query("space_id")
+		const typeIdsParam = c.req.query("type_ids")
 		const limitParam = c.req.query("limit")
 		const offsetParam = c.req.query("offset")
 
@@ -210,12 +248,45 @@ export function createSearchRouter(searchClient: SearchClient) {
 			offset = parsedOffset
 		}
 
+		// Parse and validate typeIds
+		let typeIds: string[] | undefined
+		if (typeIdsParam) {
+			typeIds = typeIdsParam
+				.split(",")
+				.map((id) => id.trim())
+				.filter((id) => id.length > 0)
+
+			if (typeIds.length > MAX_TYPE_IDS) {
+				return c.json(
+					{
+						error: "Invalid parameter",
+						message: `type_ids must not contain more than ${MAX_TYPE_IDS} IDs`,
+					},
+					400,
+				)
+			}
+
+			// Validate each type ID is a valid UUID
+			for (const typeId of typeIds) {
+				if (!isValidUuid(typeId)) {
+					return c.json(
+						{
+							error: "Invalid parameter",
+							message: `type_ids must contain valid UUIDs, got invalid ID: ${typeId}`,
+						},
+						400,
+					)
+				}
+			}
+		}
+
 		// Execute search
 		try {
 			const response = await searchClient.search({
 				query: trimmedQuery,
 				scope,
 				space_id: spaceId,
+				type_ids: typeIds,
 				limit,
 				offset,
 			})

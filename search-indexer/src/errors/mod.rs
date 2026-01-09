@@ -20,6 +20,10 @@ pub enum IngestError {
     /// Channel communication error.
     #[error("Channel error: {0}")]
     ChannelError(String),
+
+    /// Error from the orchestrator component.
+    #[error("Orchestrator error: {0}")]
+    OrchestratorError(String),
 }
 
 impl IngestError {

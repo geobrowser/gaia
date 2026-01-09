@@ -13,7 +13,8 @@ use crate::config::SearchIndexServiceConfig;
 use crate::errors::SearchIndexError;
 use crate::interfaces::SearchIndexProvider;
 use crate::types::{
-    BatchOperationSummary, DeleteEntityRequest, UnsetEntityPropertiesRequest, UpdateEntityRequest,
+    BatchOperationSummary, DeleteEntityRequest, EntityOperation, UnsetEntityPropertiesRequest,
+    UpdateEntityRequest,
 };
 use uuid::Uuid;
 
@@ -49,6 +50,7 @@ use uuid::Uuid;
 ///     description: None,
 ///     avatar: None,
 ///     cover: None,
+///     add_type_relation: None,
 ///     entity_global_score: None,
 ///     space_score: None,
 ///     entity_space_score: None,
@@ -279,7 +281,11 @@ impl SearchIndexService {
             Self::validate_uuid("space_id", &request.space_id)?;
         }
 
-        self.provider.bulk_update_documents(&requests).await
+        // Convert to EntityOperations for bulk_operations
+        let operations: Vec<EntityOperation> =
+            requests.into_iter().map(EntityOperation::Update).collect();
+
+        self.provider.bulk_operations(&operations).await
     }
 
     /// Delete multiple entity documents in bulk and return a summary of successful and failed operations.
@@ -325,7 +331,11 @@ impl SearchIndexService {
             Self::validate_uuid("space_id", &request.space_id)?;
         }
 
-        self.provider.bulk_delete_documents(&requests).await
+        // Convert to EntityOperations for bulk_operations
+        let operations: Vec<EntityOperation> =
+            requests.into_iter().map(EntityOperation::Delete).collect();
+
+        self.provider.bulk_operations(&operations).await
     }
 
     /// Unset (remove) specific properties from multiple entity documents in bulk and return a summary of successful and failed operations.
@@ -375,14 +385,18 @@ impl SearchIndexService {
             }
         }
 
-        self.provider.bulk_unset_properties(&requests).await
+        // Convert to EntityOperations for bulk_operations
+        let operations: Vec<EntityOperation> =
+            requests.into_iter().map(EntityOperation::Unset).collect();
+
+        self.provider.bulk_operations(&operations).await
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::BatchOperationResult;
+    use crate::types::{BatchOperationResult, EntityOperation};
     use async_trait::async_trait;
     use std::sync::Arc;
     use tokio::sync::Mutex;
@@ -433,70 +447,6 @@ mod tests {
             Ok(())
         }
 
-        async fn bulk_update_documents(
-            &self,
-            requests: &[UpdateEntityRequest],
-        ) -> Result<BatchOperationSummary, SearchIndexError> {
-            if self.should_fail {
-                return Err(SearchIndexError::bulk_operation("Mock failure"));
-            }
-
-            let mut results = Vec::new();
-            let mut succeeded = 0;
-            let failed = 0;
-
-            for req in requests {
-                let result = BatchOperationResult {
-                    entity_id: req.entity_id.clone(),
-                    space_id: req.space_id.clone(),
-                    success: true,
-                    error: None,
-                };
-                results.push(result);
-                succeeded += 1;
-                self.update_requests.lock().await.push(req.clone());
-            }
-
-            Ok(BatchOperationSummary {
-                total: requests.len(),
-                succeeded,
-                failed,
-                results,
-            })
-        }
-
-        async fn bulk_delete_documents(
-            &self,
-            requests: &[DeleteEntityRequest],
-        ) -> Result<BatchOperationSummary, SearchIndexError> {
-            if self.should_fail {
-                return Err(SearchIndexError::bulk_operation("Mock failure"));
-            }
-
-            let mut results = Vec::new();
-            let mut succeeded = 0;
-            let failed = 0;
-
-            for req in requests {
-                let result = BatchOperationResult {
-                    entity_id: req.entity_id.clone(),
-                    space_id: req.space_id.clone(),
-                    success: true,
-                    error: None,
-                };
-                results.push(result);
-                succeeded += 1;
-                self.delete_requests.lock().await.push(req.clone());
-            }
-
-            Ok(BatchOperationSummary {
-                total: requests.len(),
-                succeeded,
-                failed,
-                results,
-            })
-        }
-
         async fn unset_document_properties(
             &self,
             _request: &UnsetEntityPropertiesRequest,
@@ -508,33 +458,28 @@ mod tests {
             Ok(())
         }
 
-        async fn bulk_unset_properties(
+        async fn bulk_operations(
             &self,
-            requests: &[UnsetEntityPropertiesRequest],
+            operations: &[EntityOperation],
         ) -> Result<BatchOperationSummary, SearchIndexError> {
             if self.should_fail {
                 return Err(SearchIndexError::bulk_operation("Mock failure"));
             }
 
-            let mut results = Vec::new();
-            let mut succeeded = 0;
-            let failed = 0;
-
-            for req in requests {
-                let result = BatchOperationResult {
-                    entity_id: req.entity_id.clone(),
-                    space_id: req.space_id.clone(),
+            let results: Vec<BatchOperationResult> = operations
+                .iter()
+                .map(|op| BatchOperationResult {
+                    entity_id: op.entity_id().to_string(),
+                    space_id: op.space_id().to_string(),
                     success: true,
                     error: None,
-                };
-                results.push(result);
-                succeeded += 1;
-            }
+                })
+                .collect();
 
             Ok(BatchOperationSummary {
-                total: requests.len(),
-                succeeded,
-                failed,
+                total: operations.len(),
+                succeeded: operations.len(),
+                failed: 0,
                 results,
             })
         }
@@ -548,6 +493,7 @@ mod tests {
             description: None,
             avatar: None,
             cover: None,
+            add_type_relation: None,
             entity_global_score: None,
             space_score: None,
             entity_space_score: None,
@@ -674,6 +620,7 @@ mod tests {
             description: None,
             avatar: None,
             cover: None,
+            add_type_relation: None,
             entity_global_score: None,
             space_score: None,
             entity_space_score: None,
@@ -688,6 +635,7 @@ mod tests {
             description: None,
             avatar: None,
             cover: None,
+            add_type_relation: None,
             entity_global_score: None,
             space_score: None,
             entity_space_score: None,
@@ -730,6 +678,7 @@ mod tests {
                 description: None,
                 avatar: None,
                 cover: None,
+                add_type_relation: None,
                 entity_global_score: None,
                 space_score: None,
                 entity_space_score: None,

@@ -13,7 +13,9 @@ use crate::consumer::{EntityEvent, EntityEventType};
 use crate::errors::IngestError;
 use crate::metrics::SearchIndexerMetrics;
 use crate::orchestrator::{ProcessedBatch, ProcessingBatch};
+use sdk::core::ids::TYPE_RELATION_TYPE_ID;
 use search_indexer_shared::EntityDocument;
+use uuid::Uuid;
 
 /// Processed result from the entity processor.
 #[derive(Debug)]
@@ -31,6 +33,16 @@ pub enum ProcessedEvent {
         space_id: uuid::Uuid,
         property_keys: Vec<String>,
     },
+    /// Add a type relation to an entity's type_relations array.
+    AddTypeRelation {
+        entity_id: uuid::Uuid,
+        space_id: uuid::Uuid,
+        relation_id: uuid::Uuid,
+        entity_to_id: uuid::Uuid,
+    },
+    /// Remove a type relation from any entity containing it, using only the relation_id.
+    /// Used when we don't know which entity contains the relation.
+    RemoveTypeRelationById { relation_id: uuid::Uuid },
 }
 
 /// Processor that transforms entity events into search documents.
@@ -47,6 +59,14 @@ impl EntityProcessor {
     /// Create a new entity processor.
     pub fn new() -> Self {
         Self {}
+    }
+
+    /// Check if a relation type represents an entity type relationship.
+    ///
+    /// Returns true if the relation type ID matches the "type" relation type ID,
+    /// which indicates that the from_entity has a type of to_entity.
+    fn is_type_relation(&self, relation_type: &Uuid) -> bool {
+        relation_type.to_string() == TYPE_RELATION_TYPE_ID
     }
 
     /// Process a batch of entity events.
@@ -188,6 +208,52 @@ impl EntityProcessor {
                     property_keys: event.unset_property_keys,
                 }))
             }
+            EntityEventType::CreateRelation => {
+                if let (Some(relation_id), Some(relation_type), Some(to_entity_id)) =
+                    (event.relation_id, event.relation_type, event.to_entity_id)
+                {
+                    if self.is_type_relation(&relation_type) {
+                        // This is a type relation - we need to add it to type_relations
+                        debug!(
+                            entity_id = %event.entity_id,
+                            relation_id = %relation_id,
+                            to_entity_id = %to_entity_id,
+                            space_id = %event.space_id,
+                            "Processing type relation upsert - adding to entity's type_relations"
+                        );
+
+                        Ok(Some(ProcessedEvent::AddTypeRelation {
+                            entity_id: event.entity_id,
+                            space_id: event.space_id,
+                            relation_id,
+                            entity_to_id: to_entity_id,
+                        }))
+                    } else {
+                        debug!(
+                            relation_type = %relation_type,
+                            "Skipped non-type relation upsert"
+                        );
+                        Ok(None)
+                    }
+                } else {
+                    debug!("Skipped create relation event with missing fields");
+                    Ok(None)
+                }
+            }
+            EntityEventType::DeleteRelation => {
+                // For delete relations, we may not know which entity contains the relation.
+                // We only need the relation_id to perform the removal.
+                if let Some(relation_id) = event.relation_id {
+                    debug!(
+                        relation_id = %relation_id,
+                        "Processing relation delete"
+                    );
+                    Ok(Some(ProcessedEvent::RemoveTypeRelationById { relation_id }))
+                } else {
+                    debug!("Skipped delete relation event with missing relation_id");
+                    Ok(None)
+                }
+            }
         }
     }
 }
@@ -201,6 +267,7 @@ impl Default for EntityProcessor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sdk::core::ids::TYPE_RELATION_TYPE_ID;
     use uuid::Uuid;
 
     #[test]
@@ -289,5 +356,105 @@ mod tests {
 
         let results = processor.process_batch(events).unwrap();
         assert_eq!(results.len(), 3);
+    }
+
+    #[test]
+    fn test_process_create_relation_non_type() {
+        let processor = EntityProcessor::new();
+
+        let relation_id = Uuid::new_v4();
+        let relation_type = Uuid::new_v4(); // Non-type relation
+        let entity_id = Uuid::new_v4();
+        let to_entity_id = Uuid::new_v4();
+        let space_id = Uuid::new_v4();
+
+        let event = EntityEvent::create_relation(
+            relation_id,
+            relation_type,
+            entity_id,
+            to_entity_id,
+            space_id,
+        );
+
+        let result = processor.process_event(event).unwrap();
+        // Non-type relations should be skipped
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_process_create_relation_type() {
+        let processor = EntityProcessor::new();
+
+        let relation_id = Uuid::new_v4();
+        // Use the actual type relation ID
+        let relation_type =
+            Uuid::parse_str(TYPE_RELATION_TYPE_ID).expect("TYPE_RELATION_TYPE_ID should be valid");
+        let entity_id = Uuid::new_v4();
+        let to_entity_id = Uuid::new_v4();
+        let space_id = Uuid::new_v4();
+
+        let event = EntityEvent::create_relation(
+            relation_id,
+            relation_type,
+            entity_id,
+            to_entity_id,
+            space_id,
+        );
+
+        // Since this is a type relation, it should return an AddTypeRelation event
+        let result = processor.process_event(event).unwrap();
+        assert!(result.is_some());
+        assert!(matches!(
+            result,
+            Some(ProcessedEvent::AddTypeRelation { .. })
+        ));
+
+        if let Some(ProcessedEvent::AddTypeRelation {
+            entity_id: eid,
+            space_id: sid,
+            relation_id: rid,
+            entity_to_id: etid,
+        }) = result
+        {
+            assert_eq!(eid, entity_id);
+            assert_eq!(sid, space_id);
+            assert_eq!(rid, relation_id);
+            assert_eq!(etid, to_entity_id);
+        }
+    }
+
+    #[test]
+    fn test_process_delete_type_relation() {
+        let processor = EntityProcessor::new();
+
+        let relation_id = Uuid::new_v4();
+
+        // delete_relation should produce RemoveTypeRelationById
+        let event = EntityEvent::delete_relation(relation_id);
+
+        let result = processor.process_event(event).unwrap();
+        assert!(result.is_some());
+        assert!(matches!(
+            result,
+            Some(ProcessedEvent::RemoveTypeRelationById { .. })
+        ));
+
+        if let Some(ProcessedEvent::RemoveTypeRelationById { relation_id: rid }) = result {
+            assert_eq!(rid, relation_id);
+        }
+    }
+
+    #[test]
+    fn test_is_type_relation() {
+        let processor = EntityProcessor::new();
+
+        // Random relation type should not be a type relation
+        let random_relation_type = Uuid::new_v4();
+        assert!(!processor.is_type_relation(&random_relation_type));
+
+        // The specific type relation ID should be recognized
+        let type_relation_id =
+            Uuid::parse_str(TYPE_RELATION_TYPE_ID).expect("TYPE_RELATION_TYPE_ID should be valid");
+        assert!(processor.is_type_relation(&type_relation_id));
     }
 }
