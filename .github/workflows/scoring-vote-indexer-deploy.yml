@@ -9,7 +9,7 @@ on:
       - 'scoring-service/deployment/vote-indexer.yaml'
       - 'hermes-schema/**'
       - 'wire/**'
-      - '.github/workflows/vote-indexer-deploy.yml'
+      - '.github/workflows/scoring-vote-indexer-deploy.yml'
 
 env:
   REGISTRY: registry.digitalocean.com/geo

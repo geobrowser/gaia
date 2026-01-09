@@ -7,12 +7,14 @@ on:
       - 'scoring-service/vote-indexer/**'
       - 'hermes-schema/**'
       - 'wire/**'
+      - '.github/workflows/scoring-vote-indexer-tests.yml'
   pull_request:
     branches: [main, develop]
     paths:
       - 'scoring-service/vote-indexer/**'
       - 'hermes-schema/**'
       - 'wire/**'
+      - '.github/workflows/scoring-vote-indexer-tests.yml'
 
 env:
   CARGO_TERM_COLOR: always

@@ -1,10 +1,10 @@
-name: Scoring Service Tests
+name: Scoring Cronjob Tests
 
 on:
   pull_request:
     paths:
-      - 'scoring-service/**'
-      - '.github/workflows/scoring-service-tests.yml'
+      - 'scoring-service/cronjob/**'
+      - '.github/workflows/scoring-cronjob-tests.yml'
 
 permissions:
   contents: read
@@ -19,7 +19,7 @@ jobs:
     runs-on: ubuntu-latest
     defaults:
       run:
-        working-directory: ./scoring-service
+        working-directory: ./scoring-service/cronjob
 
     steps:
       - name: Checkout code
@@ -36,4 +36,3 @@ jobs:
 
       - name: Run tests
         run: uv run pytest
-
