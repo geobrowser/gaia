@@ -51,6 +51,7 @@ axiom-rs = "0.11.4"
 [dev-dependencies]
 tokio = { version = "1.42.0", features = ["macros", "rt-multi-thread", "test-util"] }
 criterion = { version = "0.5", features = ["html_reports"] }
+rand = "0.8"
 
 [[test]]
 name = "e2e"
