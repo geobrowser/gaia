@@ -9,6 +9,9 @@ use tokio::sync::{broadcast, mpsc};
 use tokio::time::{interval, Duration};
 use tracing::{info, instrument};
 
+#[cfg(unix)]
+use tokio::signal::unix::{signal, SignalKind};
+
 use crate::consumer::{EntityEvent, KafkaConsumer, StreamMessage};
 use crate::errors::IngestError;
 use crate::loader::SearchLoader;
@@ -210,10 +213,30 @@ impl Orchestrator {
         let mut consumer_result: Option<Result<Result<(), IngestError>, tokio::task::JoinError>> =
             None;
 
+        // Set up signal handlers for graceful shutdown
+        // SIGTERM is what Kubernetes sends during pod termination
+        #[cfg(unix)]
+        let shutdown_signal = async {
+            let mut sigterm =
+                signal(SignalKind::terminate()).expect("Failed to register SIGTERM handler");
+            tokio::select! {
+                _ = tokio::signal::ctrl_c() => "SIGINT",
+                _ = sigterm.recv() => "SIGTERM",
+            }
+        };
+
+        #[cfg(not(unix))]
+        let shutdown_signal = async {
+            tokio::signal::ctrl_c().await.ok();
+            "SIGINT"
+        };
+
+        tokio::pin!(shutdown_signal);
+
         loop {
             tokio::select! {
-                _ = tokio::signal::ctrl_c() => {
-                    info!("Received shutdown signal");
+                signal_name = &mut shutdown_signal => {
+                    info!("Received {}, initiating graceful shutdown", signal_name);
                     let _ = shutdown_tx.send(());
                     break;
                 }
