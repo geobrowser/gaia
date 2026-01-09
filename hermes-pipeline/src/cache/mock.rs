@@ -6,9 +6,8 @@
 use std::collections::HashMap;
 
 use async_trait::async_trait;
-use hermes_instrumentation::debug;
 use uuid::uuid;
-use wire::pb::grc20::{Edit, Entity, Op, Relation, Value, op::Payload};
+use wire::pb::grc20::{Edit, Entity, Op, Relation, Value};
 
 use super::{CacheError, CachedEdit, IpfsCache};
 
@@ -89,75 +88,6 @@ const fn make_address(last_byte: u8) -> [u8; 32] {
         0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0,
         0, last_byte,
     ]
-}
-
-/// Helper to format a byte slice as a UUID string if it's 16 bytes.
-fn format_id(bytes: &[u8]) -> String {
-    if bytes.len() == 16 {
-        uuid::Uuid::from_slice(bytes)
-            .map(|u| u.to_string())
-            .unwrap_or_else(|_| hex::encode(bytes))
-    } else {
-        hex::encode(bytes)
-    }
-}
-
-/// Log details about an edit being fetched from the mock cache.
-fn log_edit_details(ipfs_hash: &str, edit: &Edit) {
-    debug!(
-        ipfs_hash = %ipfs_hash,
-        edit_name = %edit.name,
-        ops_count = edit.ops.len(),
-        "Mock cache: fetching edit"
-    );
-
-    for (i, op) in edit.ops.iter().enumerate() {
-        if let Some(ref payload) = op.payload {
-            match payload {
-                Payload::UpdateEntity(entity) => {
-                    let entity_id = format_id(&entity.id);
-                    let name_value = entity
-                        .values
-                        .iter()
-                        .find(|v| v.property == PROPERTY_NAME)
-                        .map(|v| v.value.as_str())
-                        .unwrap_or("<no name>");
-                    debug!(
-                        op_index = i,
-                        entity_id = %entity_id,
-                        name = %name_value,
-                        values_count = entity.values.len(),
-                        "  -> UpdateEntity"
-                    );
-                }
-                Payload::CreateRelation(relation) => {
-                    let relation_id = format_id(&relation.id);
-                    let relation_type = format_id(&relation.r#type);
-                    let from_entity = format_id(&relation.from_entity);
-                    let to_entity = format_id(&relation.to_entity);
-                    debug!(
-                        op_index = i,
-                        relation_id = %relation_id,
-                        relation_type = %relation_type,
-                        from_entity = %from_entity,
-                        to_entity = %to_entity,
-                        "  -> CreateRelation"
-                    );
-                }
-                Payload::DeleteRelation(relation_id) => {
-                    let id = format_id(relation_id);
-                    debug!(
-                        op_index = i,
-                        relation_id = %id,
-                        "  -> DeleteRelation"
-                    );
-                }
-                _ => {
-                    debug!(op_index = i, "  -> Other operation");
-                }
-            }
-        }
-    }
 }
 
 /// Mock IPFS cache with pre-populated test edits.
@@ -249,15 +179,11 @@ impl IpfsCache for MockIpfsCache {
 
         // Look up the edit
         match self.edits.get(ipfs_hash) {
-            Some(edit) => {
-                // Log the edit details
-                log_edit_details(ipfs_hash, edit);
-                Ok(CachedEdit::success(
-                    ipfs_hash.to_string(),
-                    edit.clone(),
-                    space_id.to_vec(),
-                ))
-            }
+            Some(edit) => Ok(CachedEdit::success(
+                ipfs_hash.to_string(),
+                edit.clone(),
+                space_id.to_vec(),
+            )),
             None => Err(CacheError::NotFound(ipfs_hash.to_string())),
         }
     }
