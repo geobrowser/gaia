@@ -11,23 +11,21 @@ enum MembershipRole {
 }
 
 // HermesRoleGranted - editor or member added to a space
-// ZC16: topic = bytes32(memberSpaceId), data = abi.encode(memberAddress)
+// topic = bytes32(memberSpaceId), data = empty
 message HermesRoleGranted {
   bytes space_id = 1;           // 16 bytes - space granting role (from_id)
-  bytes account = 2;            // 20 bytes - address receiving role (from data)
+  bytes member_space_id = 2;    // 16 bytes - member's space ID (from topic)
   MembershipRole role = 3;      // EDITOR or MEMBER
   blockchain_metadata.BlockchainMetadata meta = 4;
-  bytes member_space_id = 5;    // 16 bytes - member's space ID (from topic)
 }
 
 // HermesRoleRevoked - editor or member removed from a space
-// ZC16: topic = bytes32(memberSpaceId), data = abi.encode(memberAddress)
+// topic = bytes32(memberSpaceId), data = empty
 message HermesRoleRevoked {
   bytes space_id = 1;           // 16 bytes - space revoking role (from_id)
-  bytes account = 2;            // 20 bytes - address losing role (from data)
+  bytes member_space_id = 2;    // 16 bytes - member's space ID (from topic)
   MembershipRole role = 3;      // EDITOR or MEMBER
   blockchain_metadata.BlockchainMetadata meta = 4;
-  bytes member_space_id = 5;    // 16 bytes - member's space ID (from topic)
 }
 
 // HermesSpaceLeft - member voluntarily left a space

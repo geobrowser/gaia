@@ -444,18 +444,18 @@ impl Storage {
             return Ok(());
         }
 
-        let addresses: Vec<String> = members.iter().map(|m| m.address.clone()).collect();
+        let member_space_ids: Vec<Uuid> = members.iter().map(|m| m.member_space_id).collect();
         let space_ids: Vec<Uuid> = members.iter().map(|m| m.space_id).collect();
 
         sqlx::query!(
             r#"
-            INSERT INTO members (address, space_id)
-            SELECT address, space_id
-            FROM UNNEST($1::text[], $2::uuid[])
-            AS t(address, space_id)
-            ON CONFLICT (address, space_id) DO NOTHING
+            INSERT INTO members (member_space_id, space_id)
+            SELECT member_space_id, space_id
+            FROM UNNEST($1::uuid[], $2::uuid[])
+            AS t(member_space_id, space_id)
+            ON CONFLICT (member_space_id, space_id) DO NOTHING
             "#,
-            &addresses,
+            &member_space_ids,
             &space_ids
         )
         .execute(&mut **tx)
@@ -473,19 +473,19 @@ impl Storage {
             return Ok(());
         }
 
-        let addresses: Vec<String> = members.iter().map(|m| m.address.clone()).collect();
+        let member_space_ids: Vec<Uuid> = members.iter().map(|m| m.member_space_id).collect();
         let space_ids: Vec<Uuid> = members.iter().map(|m| m.space_id).collect();
 
         sqlx::query!(
             r#"
             DELETE FROM members
-            WHERE (address, space_id) IN (
-                SELECT address, space_id
-                FROM UNNEST($1::text[], $2::uuid[])
-                AS t(address, space_id)
+            WHERE (member_space_id, space_id) IN (
+                SELECT member_space_id, space_id
+                FROM UNNEST($1::uuid[], $2::uuid[])
+                AS t(member_space_id, space_id)
             )
             "#,
-            &addresses,
+            &member_space_ids,
             &space_ids
         )
         .execute(&mut **tx)
@@ -503,18 +503,18 @@ impl Storage {
             return Ok(());
         }
 
-        let addresses: Vec<String> = editors.iter().map(|e| e.address.clone()).collect();
+        let member_space_ids: Vec<Uuid> = editors.iter().map(|e| e.member_space_id).collect();
         let space_ids: Vec<Uuid> = editors.iter().map(|e| e.space_id).collect();
 
         sqlx::query!(
             r#"
-            INSERT INTO editors (address, space_id)
-            SELECT address, space_id
-            FROM UNNEST($1::text[], $2::uuid[])
-            AS t(address, space_id)
-            ON CONFLICT (address, space_id) DO NOTHING
+            INSERT INTO editors (member_space_id, space_id)
+            SELECT member_space_id, space_id
+            FROM UNNEST($1::uuid[], $2::uuid[])
+            AS t(member_space_id, space_id)
+            ON CONFLICT (member_space_id, space_id) DO NOTHING
             "#,
-            &addresses,
+            &member_space_ids,
             &space_ids
         )
         .execute(&mut **tx)
@@ -532,19 +532,19 @@ impl Storage {
             return Ok(());
         }
 
-        let addresses: Vec<String> = editors.iter().map(|e| e.address.clone()).collect();
+        let member_space_ids: Vec<Uuid> = editors.iter().map(|e| e.member_space_id).collect();
         let space_ids: Vec<Uuid> = editors.iter().map(|e| e.space_id).collect();
 
         sqlx::query!(
             r#"
             DELETE FROM editors
-            WHERE (address, space_id) IN (
-                SELECT address, space_id
-                FROM UNNEST($1::text[], $2::uuid[])
-                AS t(address, space_id)
+            WHERE (member_space_id, space_id) IN (
+                SELECT member_space_id, space_id
+                FROM UNNEST($1::uuid[], $2::uuid[])
+                AS t(member_space_id, space_id)
             )
             "#,
-            &addresses,
+            &member_space_ids,
             &space_ids
         )
         .execute(&mut **tx)

@@ -228,11 +228,11 @@ export const relations = pgTable(
 export const members = pgTable(
 	"members",
 	{
-		address: text().notNull(),
+		memberSpaceId: uuid().notNull(),
 		spaceId: uuid().notNull(),
 	},
 	(table) => [
-		primaryKey({ columns: [table.address, table.spaceId] }),
+		primaryKey({ columns: [table.memberSpaceId, table.spaceId] }),
 		index("members_space_id_idx").on(table.spaceId),
 	],
 );
@@ -240,11 +240,11 @@ export const members = pgTable(
 export const editors = pgTable(
 	"editors",
 	{
-		address: text().notNull(),
+		memberSpaceId: uuid().notNull(),
 		spaceId: uuid().notNull(),
 	},
 	(table) => [
-		primaryKey({ columns: [table.address, table.spaceId] }),
+		primaryKey({ columns: [table.memberSpaceId, table.spaceId] }),
 		index("editors_space_id_idx").on(table.spaceId),
 	],
 );
@@ -338,6 +338,12 @@ export const membersRelations = drizzleRelations(members, ({ one }) => ({
 	space: one(spaces, {
 		fields: [members.spaceId],
 		references: [spaces.id],
+		relationName: "memberOf",
+	}),
+	memberSpace: one(spaces, {
+		fields: [members.memberSpaceId],
+		references: [spaces.id],
+		relationName: "memberSpace",
 	}),
 }));
 
@@ -345,6 +351,12 @@ export const editorsRelations = drizzleRelations(editors, ({ one }) => ({
 	space: one(spaces, {
 		fields: [editors.spaceId],
 		references: [spaces.id],
+		relationName: "editorOf",
+	}),
+	memberSpace: one(spaces, {
+		fields: [editors.memberSpaceId],
+		references: [spaces.id],
+		relationName: "editorSpace",
 	}),
 }));
 

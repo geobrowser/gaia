@@ -91,7 +91,7 @@ The `target_address` field is populated for actions that take an address argumen
 - Topic: `bytes32(proposalId)` - set by fetch()
 - Data: `abi.encode(bytes16 proposalId, VoteOption voteOption)`
 
-**VoteOption:** `None (0)`, `Abstain (1)`, `Yes (2)`, `No (3)`
+**VoteOption:** `None (0)`, `Yes (1)`, `No (2)`, `Abstain (3)`
 
 **Proto Output:** `HermesProposalVoted`
 | Field | Source | Type |
@@ -270,33 +270,31 @@ This action triggers an internal `createProposal()` which emits PROPOSAL_CREATED
 
 #### EDITOR_ADDED / MEMBER_ADDED
 
-**Onchain (ZC16):**
+**Onchain:**
 - Action: `keccak256('GOVERNANCE.EDITOR_ADDED')` / `MEMBER_ADDED`
 - Topic: `bytes32(memberSpaceId)` - member's space ID (first 16 bytes)
-- Data: `abi.encode(address)` - 32 bytes with address in last 20 bytes
+- Data: empty
 
 **Proto Output:** `HermesRoleGranted`
 | Field | Source | Type |
 |-------|--------|------|
 | `space_id` | `from_id` | bytes (16) |
-| `account` | `data[12..32]` | bytes (20) |
-| `role` | Action type | `MembershipRole` enum |
 | `member_space_id` | `topic[0..16]` | bytes (16) |
+| `role` | Action type | `MembershipRole` enum |
 
 #### EDITOR_REMOVED / MEMBER_REMOVED
 
-**Onchain (ZC16):**
+**Onchain:**
 - Action: `keccak256('GOVERNANCE.EDITOR_REMOVED')` / `MEMBER_REMOVED`
 - Topic: `bytes32(memberSpaceId)` - member's space ID (first 16 bytes)
-- Data: `abi.encode(address)` - 32 bytes with address in last 20 bytes
+- Data: empty
 
 **Proto Output:** `HermesRoleRevoked`
 | Field | Source | Type |
 |-------|--------|------|
 | `space_id` | `from_id` | bytes (16) |
-| `account` | `data[12..32]` | bytes (20) |
-| `role` | Action type | `MembershipRole` enum |
 | `member_space_id` | `topic[0..16]` | bytes (16) |
+| `role` | Action type | `MembershipRole` enum |
 
 #### SPACE_LEFT
 

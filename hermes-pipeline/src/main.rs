@@ -264,7 +264,7 @@ impl Pipeline {
                     self.emitter.emit(event)?;
                     debug!(
                         space_id = %hex::encode(&event.space_id),
-                        account = %hex::encode(&event.account),
+                        member_space_id = %hex::encode(&event.member_space_id),
                         "Role granted"
                     );
                 }
@@ -272,7 +272,7 @@ impl Pipeline {
                     self.emitter.emit(event)?;
                     debug!(
                         space_id = %hex::encode(&event.space_id),
-                        account = %hex::encode(&event.account),
+                        member_space_id = %hex::encode(&event.member_space_id),
                         "Role revoked"
                     );
                 }

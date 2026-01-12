@@ -524,10 +524,9 @@ mod tests {
     fn test_role_granted_key() {
         let event = HermesRoleGranted {
             space_id: vec![0xAB; 16],
-            account: vec![0xCD; 20],
+            member_space_id: vec![0xEF; 16],
             role: MembershipRole::Editor as i32,
             meta: None,
-            member_space_id: vec![0xEF; 16],
         };
         assert_eq!(event.key(), vec![0xAB; 16]);
     }
