@@ -189,10 +189,10 @@ spec:
   ingressClassName: nginx
   tls:
     - hosts:
-        - api.geobrowser.io
-      secretName: api-tls
+        - testnet-api.geobrowser.io
+      secretName: testnet-api-tls
   rules:
-    - host: api.geobrowser.io
+    - host: testnet-api.geobrowser.io
       http:
         paths:
           - path: /
