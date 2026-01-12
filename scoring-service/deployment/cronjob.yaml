@@ -25,7 +25,7 @@ spec:
                 # Output mode: postgres, kafka, or all
                 - name: OUTPUT_MODE
                   value: "all"
-                # Kafka configuration
+                # Kafka configuration (uses kafka-credentials secret copied to scoring namespace)
                 - name: KAFKA_BROKER
                   valueFrom:
                     secretKeyRef:
@@ -35,20 +35,17 @@ spec:
                   valueFrom:
                     secretKeyRef:
                       name: kafka-credentials
-                      key: username
-                      optional: true
+                      key: KAFKA_USERNAME
                 - name: KAFKA_PASSWORD
                   valueFrom:
                     secretKeyRef:
                       name: kafka-credentials
-                      key: password
-                      optional: true
+                      key: KAFKA_PASSWORD
                 - name: KAFKA_SSL_CA_PEM
                   valueFrom:
                     secretKeyRef:
                       name: kafka-credentials
-                      key: ca-pem
-                      optional: true
+                      key: KAFKA_SSL_CA_PEM
                 - name: KAFKA_TOPIC
                   value: "curation.scores"
                 - name: SCORE_BATCH_SIZE
