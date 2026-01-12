@@ -7,7 +7,7 @@ use rdkafka::{
     TopicPartitionList,
 };
 use std::env;
-use tracing::{debug, info};
+use tracing::{debug, info, warn};
 
 use crate::error::IndexerError;
 
@@ -38,6 +38,8 @@ impl KafkaConsumer {
 
             if let Ok(password) = env::var("KAFKA_PASSWORD") {
                 config.set("sasl.password", &password);
+            } else {
+                warn!("KAFKA_PASSWORD is not set");
             }
         }
 
