@@ -6,9 +6,17 @@ import { createPostGraphileSchema, withPostGraphileContext } from "postgraphile"
 import ConnectionFilterPlugin from "postgraphile-plugin-connection-filter"
 import UndashedUuidPlugin from "./uuidScalarPlugin"
 
-// Create PostgreSQL pool
+// Create PostgreSQL pool with explicit configuration to prevent connection exhaustion
+// Note: Without PgBouncer, each pool connection = 1 Postgres connection.
+// Ensure max * num_replicas < Postgres max_connections (leaving room for admin/migrations).
 const pgPool = new Pool({
 	connectionString: process.env.DATABASE_URL || "postgres://user:pass@localhost/mydb",
+	// Pool size - conservative default leaves room for other connections
+	max: parseInt(process.env.PG_POOL_MAX || "15", 10),
+	// Fail fast if no connection available (default is 0 = wait forever, causing hangs)
+	connectionTimeoutMillis: parseInt(process.env.PG_CONNECTION_TIMEOUT_MS || "3000", 10),
+	// Close idle connections after 30 seconds to free up Postgres slots
+	idleTimeoutMillis: parseInt(process.env.PG_IDLE_TIMEOUT_MS || "30000", 10),
 })
 
 // Base PostGraphile options (without uuidScalarPlugin)
@@ -55,7 +63,7 @@ const postgraphileSchemaV2 = await createPostGraphileSchema(pgPool, ["public"], 
 
 // Helper to create context
 const createContext = async ({request}: {request: Request}) => {
-	const contextPromise = new Promise((resolve) => {
+	const contextPromise = new Promise((resolve, reject) => {
 		withPostGraphileContext(
 			{
 				pgPool,
@@ -70,7 +78,7 @@ const createContext = async ({request}: {request: Request}) => {
 				// The actual result will be handled by GraphQL execution
 				return {data: null}
 			},
-		)
+		).catch(reject) // Propagate connection errors (e.g., pool timeout)
 	})
 
 	return await contextPromise
