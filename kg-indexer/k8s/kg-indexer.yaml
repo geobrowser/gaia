@@ -90,6 +90,13 @@ spec:
                   key: KAFKA_SSL_CA_PEM
             - name: KAFKA_GROUP_ID
               value: "kg-indexer"
+            # KAFKA_OFFSET_RESET_MODE controls how offsets are handled on startup:
+            #   stored (default) - Use committed offsets from Kafka
+            #   earliest - Seek to beginning, reprocess all events
+            #   latest - Seek to end, only process new events
+            # Uncomment to override:
+            # - name: KAFKA_OFFSET_RESET_MODE
+            #   value: "stored"
             - name: BLOCK_STALE_TIMEOUT_MS
               value: "250"
             - name: RUST_LOG

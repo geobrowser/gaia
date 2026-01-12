@@ -13,7 +13,7 @@ mod handlers;
 mod models;
 mod storage;
 
-use consumer::{get_event_type, parse_message, KafkaConsumer, KgMessage};
+use consumer::{get_event_type, parse_message, KafkaConsumer, KgMessage, OffsetResetMode};
 use error::IndexerError;
 use storage::Storage;
 
@@ -92,6 +92,11 @@ async fn main() -> Result<(), IndexerError> {
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(250);
+    let offset_reset_mode: OffsetResetMode = env::var("KAFKA_OFFSET_RESET_MODE")
+        .ok()
+        .map(|s| s.parse())
+        .transpose()?
+        .unwrap_or_default();
 
     // Initialize storage
     let storage = Storage::new(&database_url).await?;
@@ -100,6 +105,19 @@ async fn main() -> Result<(), IndexerError> {
     // Initialize Kafka consumer
     let consumer = KafkaConsumer::new(&kafka_broker, &kafka_group_id)?;
     consumer.subscribe()?;
+
+    // Apply offset reset mode if not using stored offsets
+    match offset_reset_mode {
+        OffsetResetMode::Stored => {
+            info!("Using stored Kafka offsets");
+        }
+        OffsetResetMode::Earliest => {
+            consumer.seek_to_beginning().await?;
+        }
+        OffsetResetMode::Latest => {
+            consumer.seek_to_end().await?;
+        }
+    }
 
     // Set up shutdown signal
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::broadcast::channel::<()>(1);
