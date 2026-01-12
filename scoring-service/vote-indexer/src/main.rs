@@ -219,9 +219,13 @@ async fn process_vote_batch(votes: &[VoteItem], storage: &Storage) -> Result<usi
         .map(|v| (v.object_id, v.space_id, v.object_type))
         .collect();
 
-    // Fetch existing user votes and vote counts
-    let stored_user_votes = storage.get_user_votes(&user_vote_criteria).await?;
-    let stored_vote_counts = storage.get_votes_counts(&vote_count_criteria).await?;
+    // Start transaction before reads to ensure consistency.
+    // Reads use FOR UPDATE to lock rows and prevent concurrent modifications.
+    let mut tx = storage.pool().begin().await?;
+
+    // Fetch existing user votes and vote counts (with row locks)
+    let stored_user_votes = storage.get_user_votes_tx(&user_vote_criteria, &mut tx).await?;
+    let stored_vote_counts = storage.get_votes_counts_tx(&vote_count_criteria, &mut tx).await?;
 
     // Convert to HashMaps for lookup
     let stored_user_votes_map: HashMap<UserVoteCriteria, _> = stored_user_votes
@@ -237,9 +241,6 @@ async fn process_vote_batch(votes: &[VoteItem], storage: &Storage) -> Result<usi
     // Calculate updated vote counts
     let updated_vote_counts =
         calculate_vote_counts(&user_votes, &stored_user_votes_map, &stored_vote_counts_map);
-
-    // Execute all writes in a transaction
-    let mut tx = storage.pool().begin().await?;
 
     // Insert raw votes (audit log)
     storage.insert_votes(votes, &mut tx).await?;

@@ -188,12 +188,14 @@ impl Storage {
         Ok(())
     }
 
-    /// Get existing user votes for the given criteria.
+    /// Get existing user votes for the given criteria within a transaction.
     ///
     /// Used to calculate vote deltas when processing new votes.
-    pub async fn get_user_votes(
+    /// Uses FOR UPDATE to lock rows and prevent concurrent modifications.
+    pub async fn get_user_votes_tx(
         &self,
         criteria: &[UserVoteCriteria],
+        tx: &mut sqlx::Transaction<'_, Postgres>,
     ) -> Result<Vec<UserVoteItem>, StorageError> {
         if criteria.is_empty() {
             return Ok(Vec::new());
@@ -212,6 +214,7 @@ impl Storage {
                 FROM UNNEST($1::uuid[], $2::uuid[], $3::smallint[], $4::uuid[])
                 AS t(user_id, object_id, object_type, space_id)
             )
+            FOR UPDATE
         "#;
 
         let rows = sqlx::query(query)
@@ -219,7 +222,7 @@ impl Storage {
             .bind(&object_ids)
             .bind(&object_types)
             .bind(&space_ids)
-            .fetch_all(&self.pool)
+            .fetch_all(&mut **tx)
             .await?;
 
         let mut result = Vec::with_capacity(rows.len());
@@ -240,12 +243,14 @@ impl Storage {
         Ok(result)
     }
 
-    /// Get existing vote counts for the given criteria.
+    /// Get existing vote counts for the given criteria within a transaction.
     ///
     /// Used to calculate updated counts when processing new votes.
-    pub async fn get_votes_counts(
+    /// Uses FOR UPDATE to lock rows and prevent concurrent modifications.
+    pub async fn get_votes_counts_tx(
         &self,
         criteria: &[VoteCountCriteria],
+        tx: &mut sqlx::Transaction<'_, Postgres>,
     ) -> Result<Vec<VotesCountItem>, StorageError> {
         if criteria.is_empty() {
             return Ok(Vec::new());
@@ -263,13 +268,14 @@ impl Storage {
                 FROM UNNEST($1::uuid[], $2::smallint[], $3::uuid[])
                 AS t(object_id, object_type, space_id)
             )
+            FOR UPDATE
         "#;
 
         let rows = sqlx::query(query)
             .bind(&object_ids)
             .bind(&object_types)
             .bind(&space_ids)
-            .fetch_all(&self.pool)
+            .fetch_all(&mut **tx)
             .await?;
 
         let mut result = Vec::with_capacity(rows.len());
