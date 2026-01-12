@@ -12,7 +12,7 @@ import "blockchain_metadata.proto";
 // 1. Resolves the IPFS CID into the serialized edit representation
 // 2. Appends any blockchain metadata useful for downstream consumers
 // 3. Appends any community or space topology metadata useful for
-//    downstream consumers
+//   downstream consumers
 message HermesEdit {
   bytes id = 1;
   string name = 2;
