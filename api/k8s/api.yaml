@@ -168,15 +168,37 @@ metadata:
   namespace: api
   labels:
     app: api
-  annotations:
-    service.beta.kubernetes.io/do-loadbalancer-name: "geo-api-lb"
-    service.beta.kubernetes.io/do-loadbalancer-protocol: "http"
 spec:
-  type: LoadBalancer
+  type: ClusterIP
   ports:
     - name: http
-      port: 80
+      port: 3000
       targetPort: 3000
       protocol: TCP
   selector:
     app: api
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: api
+  namespace: api
+  annotations:
+    cert-manager.io/cluster-issuer: letsencrypt-prod
+spec:
+  ingressClassName: nginx
+  tls:
+    - hosts:
+        - api.geobrowser.io
+      secretName: api-tls
+  rules:
+    - host: api.geobrowser.io
+      http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: api
+                port:
+                  number: 3000
