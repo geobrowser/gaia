@@ -4,7 +4,6 @@
 
 use prost::Message;
 use rdkafka::{
-    config::ClientConfig,
     consumer::{Consumer, StreamConsumer},
     message::Message as KafkaMessage,
     TopicPartitionList,
@@ -17,7 +16,7 @@ use uuid::Uuid;
 
 use crate::consumer::messages::EntityEvent;
 use crate::errors::IngestError;
-use crate::orchestrator::ProcessingBatch;
+use crate::orchestrator::EntityProcessingBatch;
 
 use hermes_schema::pb::knowledge::HermesEdit;
 use indexer_utils::id::transform_id_bytes;
@@ -32,14 +31,14 @@ struct PendingMessage {
 }
 
 /// Kafka consumer for entity events.
-pub struct KafkaConsumer {
+pub struct EntitiesConsumer {
     consumer: StreamConsumer,
     topics: Vec<String>,
     batch_size: usize,
     batch_timeout: Duration,
 }
 
-impl KafkaConsumer {
+impl EntitiesConsumer {
     /// The Kafka topic for knowledge edits (configurable via KAFKA_TOPIC env var).
     const KNOWLEDGE_EDITS_TOPIC: &'static str = "knowledge.edits";
 
@@ -62,7 +61,7 @@ impl KafkaConsumer {
     ///
     /// # Returns
     ///
-    /// * `Ok(KafkaConsumer)` - A new consumer instance
+    /// * `Ok(EntitiesConsumer)` - A new consumer instance
     /// * `Err(IngestError)` - If consumer creation fails
     pub fn new(brokers: &str, group_id: &str) -> Result<Self, IngestError> {
         let topic =
@@ -93,7 +92,7 @@ impl KafkaConsumer {
     ///
     /// # Returns
     ///
-    /// * `Ok(KafkaConsumer)` - A new consumer instance
+    /// * `Ok(EntitiesConsumer)` - A new consumer instance
     /// * `Err(IngestError)` - If consumer creation fails
     pub fn with_batch_config(
         brokers: &str,
@@ -102,45 +101,16 @@ impl KafkaConsumer {
         batch_size: usize,
         batch_timeout_ms: u64,
     ) -> Result<Self, IngestError> {
-        let mut client_config = ClientConfig::new();
-
-        client_config
-            .set("bootstrap.servers", brokers)
-            .set("group.id", group_id)
-            .set("enable.auto.commit", "false") // Manual commit for at-least-once delivery
-            .set("auto.offset.reset", "earliest") // Start from beginning if no committed offset
-            .set("session.timeout.ms", "6000");
+        let client_config = super::kafka_config::create_client_config(brokers, group_id);
 
         info!(
             brokers = %brokers,
             group_id = %group_id,
+            topic = %topic,
             batch_size = batch_size,
             batch_timeout_ms = batch_timeout_ms,
-            "Created Kafka consumer with batching"
+            "Created entities consumer"
         );
-
-        // If SASL credentials are provided, enable SASL/SSL (for managed Kafka)
-        // Otherwise, use plaintext (for local development)
-        let username = env::var("KAFKA_USERNAME").ok();
-        let password = env::var("KAFKA_PASSWORD").ok();
-        let ssl_ca_pem = env::var("KAFKA_SSL_CA_PEM").ok();
-
-        if let (Some(username), Some(password)) = (&username, &password) {
-            client_config
-                .set("security.protocol", "SASL_SSL")
-                .set("sasl.mechanisms", "PLAIN")
-                .set("sasl.username", username)
-                .set("sasl.password", password);
-
-            // Use custom CA certificate if provided
-            if let Some(ca_pem) = &ssl_ca_pem {
-                client_config.set("ssl.ca.pem", ca_pem);
-            }
-
-            info!("Configured Kafka consumer with SSL authentication");
-        } else {
-            info!("Using plaintext Kafka connection");
-        }
 
         let consumer: StreamConsumer = client_config
             .create()
@@ -177,7 +147,7 @@ impl KafkaConsumer {
     #[instrument(skip(self, processor_tx, ack_receiver, shutdown))]
     pub async fn run(
         &self,
-        processor_tx: mpsc::Sender<ProcessingBatch>,
+        processor_tx: mpsc::Sender<EntityProcessingBatch>,
         mut ack_receiver: mpsc::Receiver<crate::consumer::messages::StreamMessage>,
         mut shutdown: tokio::sync::broadcast::Receiver<()>,
     ) -> Result<(), IngestError> {
@@ -341,7 +311,7 @@ impl KafkaConsumer {
         &self,
         batch: &[PendingMessage],
         offsets: &[(String, i32, i64)],
-        processor_tx: &mpsc::Sender<ProcessingBatch>,
+        processor_tx: &mpsc::Sender<EntityProcessingBatch>,
     ) -> Result<(), IngestError> {
         if batch.is_empty() {
             return Ok(());
@@ -362,7 +332,7 @@ impl KafkaConsumer {
                 "Sending batch of events to processor"
             );
             processor_tx
-                .send(ProcessingBatch {
+                .send(EntityProcessingBatch {
                     events: all_events,
                     offsets: offsets.to_vec(),
                     event_count,
@@ -881,8 +851,8 @@ mod tests {
 
     #[test]
     fn test_constants() {
-        assert_eq!(KafkaConsumer::KNOWLEDGE_EDITS_TOPIC, "knowledge.edits");
-        assert_eq!(KafkaConsumer::DEFAULT_BATCH_SIZE, 50);
-        assert_eq!(KafkaConsumer::DEFAULT_BATCH_TIMEOUT_MS, 1000);
+        assert_eq!(EntitiesConsumer::KNOWLEDGE_EDITS_TOPIC, "knowledge.edits");
+        assert_eq!(EntitiesConsumer::DEFAULT_BATCH_SIZE, 50);
+        assert_eq!(EntitiesConsumer::DEFAULT_BATCH_TIMEOUT_MS, 1000);
     }
 }
