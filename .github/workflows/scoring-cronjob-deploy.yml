@@ -1,12 +1,13 @@
-name: Deploy Scoring Service
+name: Deploy Scoring Cronjob
 
 on:
   push:
     branches:
       - main
     paths:
-      - 'scoring-service/**'
-      - '.github/workflows/scoring-service-deploy.yml'
+      - 'scoring-service/cronjob/**'
+      - 'scoring-service/deployment/cronjob.yaml'
+      - '.github/workflows/scoring-cronjob-deploy.yml'
 
 env:
   REGISTRY: registry.digitalocean.com/geo
@@ -31,7 +32,7 @@ jobs:
         run: |
           docker build -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
                        -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest \
-                       -f scoring-service/Dockerfile .
+                       -f scoring-service/cronjob/Dockerfile scoring-service/cronjob
           docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
           docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
 
