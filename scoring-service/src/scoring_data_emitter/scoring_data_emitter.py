@@ -44,6 +44,9 @@ class ScoringDataEmitter:
             "linger.ms": "100",
             "batch.num.messages": "10000",
             "queue.buffering.max.messages": "100000",
+            "socket.timeout.ms": "30000",
+            "message.timeout.ms": "60000",
+            "request.timeout.ms": "30000",
         }
 
         # Add SASL/SSL configuration if credentials provided

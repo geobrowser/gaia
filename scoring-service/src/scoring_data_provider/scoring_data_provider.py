@@ -35,7 +35,11 @@ class ScoringDataProvider:
         Returns:
             ScoringData containing entities, votes, users, and spaces.
         """
-        with psycopg.connect(self._connection_string) as conn:
+        with psycopg.connect(
+            self._connection_string,
+            connect_timeout=30,
+            options="-c statement_timeout=120000",
+        ) as conn:
             spaces = self._fetch_spaces(conn)
             users = self._fetch_users(conn)
             votes = self._fetch_votes(conn)

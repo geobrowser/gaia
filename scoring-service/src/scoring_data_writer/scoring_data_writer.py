@@ -31,7 +31,11 @@ class ScoringDataWriter:
             psycopg.Error: If any database operation fails (all changes are rolled back).
         """
         now = datetime.now()
-        with psycopg.connect(self._connection_string) as conn:
+        with psycopg.connect(
+            self._connection_string,
+            connect_timeout=30,
+            options="-c statement_timeout=300000",
+        ) as conn:
             with conn.transaction():
                 self._write_global_scores(conn, entities, now)
                 self._write_local_scores(conn, entities, now)
