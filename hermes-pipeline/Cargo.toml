@@ -16,6 +16,7 @@ stream = { path = "../stream" }
 wire = { path = "../wire" }
 prost = "0.13.5"
 opentelemetry = "0.31"
+opentelemetry_sdk = "0.31"
 tracing-opentelemetry = "0.32"
 tokio = { version = "1", features = ["full"] }
 tokio-retry = "0.3"

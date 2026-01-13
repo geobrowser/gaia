@@ -43,8 +43,9 @@ use std::fmt;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use hermes_instrumentation::{Instrument, debug, info, info_span, warn};
-use opentelemetry::propagation::TraceContextPropagator;
+use hermes_instrumentation::{Instrument, debug, error, info, info_span, warn};
+use opentelemetry_sdk::propagation::TraceContextPropagator;
+use std::sync::OnceLock;
 use prost::Message;
 
 use hermes_kafka::create_producer;
@@ -161,28 +162,115 @@ impl Pipeline {
 
         // Sync transforms - fast, no I/O, run while edits fetches from IPFS
         let mut spaces = info_span!("transform.spaces", action_count = actions.len())
-            .in_scope(|| pipelines::spaces::transform(actions, &meta))?;
+            .in_scope(|| pipelines::spaces::transform(actions, &meta))
+            .map_err(|e| {
+                error!(
+                    event = "hermes_pipeline.event_error",
+                    stage = "transform.spaces",
+                    block_number = meta.block_number,
+                    cursor = %meta.cursor,
+                    error = %e,
+                    "Transform failed"
+                );
+                e
+            })?;
 
         let mut membership = info_span!("transform.membership", action_count = actions.len())
-            .in_scope(|| pipelines::membership::transform(actions, &meta))?;
+            .in_scope(|| pipelines::membership::transform(actions, &meta))
+            .map_err(|e| {
+                error!(
+                    event = "hermes_pipeline.event_error",
+                    stage = "transform.membership",
+                    block_number = meta.block_number,
+                    cursor = %meta.cursor,
+                    error = %e,
+                    "Transform failed"
+                );
+                e
+            })?;
 
         let mut trust = info_span!("transform.trust", action_count = actions.len())
-            .in_scope(|| pipelines::trust::transform(actions, &meta))?;
+            .in_scope(|| pipelines::trust::transform(actions, &meta))
+            .map_err(|e| {
+                error!(
+                    event = "hermes_pipeline.event_error",
+                    stage = "transform.trust",
+                    block_number = meta.block_number,
+                    cursor = %meta.cursor,
+                    error = %e,
+                    "Transform failed"
+                );
+                e
+            })?;
 
         let mut moderation = info_span!("transform.moderation", action_count = actions.len())
-            .in_scope(|| pipelines::moderation::transform(actions, &meta))?;
+            .in_scope(|| pipelines::moderation::transform(actions, &meta))
+            .map_err(|e| {
+                error!(
+                    event = "hermes_pipeline.event_error",
+                    stage = "transform.moderation",
+                    block_number = meta.block_number,
+                    cursor = %meta.cursor,
+                    error = %e,
+                    "Transform failed"
+                );
+                e
+            })?;
 
         let mut topics = info_span!("transform.topics", action_count = actions.len())
-            .in_scope(|| pipelines::topics::transform(actions, &meta))?;
+            .in_scope(|| pipelines::topics::transform(actions, &meta))
+            .map_err(|e| {
+                error!(
+                    event = "hermes_pipeline.event_error",
+                    stage = "transform.topics",
+                    block_number = meta.block_number,
+                    cursor = %meta.cursor,
+                    error = %e,
+                    "Transform failed"
+                );
+                e
+            })?;
 
         let mut governance = info_span!("transform.governance", action_count = actions.len())
-            .in_scope(|| pipelines::governance::transform(actions, &meta))?;
+            .in_scope(|| pipelines::governance::transform(actions, &meta))
+            .map_err(|e| {
+                error!(
+                    event = "hermes_pipeline.event_error",
+                    stage = "transform.governance",
+                    block_number = meta.block_number,
+                    cursor = %meta.cursor,
+                    error = %e,
+                    "Transform failed"
+                );
+                e
+            })?;
 
         let mut voting = info_span!("transform.voting", action_count = actions.len())
-            .in_scope(|| pipelines::voting::transform(actions, &meta))?;
+            .in_scope(|| pipelines::voting::transform(actions, &meta))
+            .map_err(|e| {
+                error!(
+                    event = "hermes_pipeline.event_error",
+                    stage = "transform.voting",
+                    block_number = meta.block_number,
+                    cursor = %meta.cursor,
+                    error = %e,
+                    "Transform failed"
+                );
+                e
+            })?;
 
         // Now await the edits - IPFS fetch should have been happening in parallel
-        let mut edits = edits_future.await?;
+        let mut edits = edits_future.await.map_err(|e| {
+            error!(
+                event = "hermes_pipeline.event_error",
+                stage = "transform.edits",
+                block_number = meta.block_number,
+                cursor = %meta.cursor,
+                error = %e,
+                "Transform failed"
+            );
+            e
+        })?;
 
         // =========================================================================
         // Phase 1.5: Mark the last event in the block
@@ -496,16 +584,28 @@ impl Pipeline {
         }
 
         let emit_duration_ms = emit_start.elapsed().as_millis();
-        info!(
-            event = "hermes_pipeline.emit_end",
-            block_number = meta.block_number,
-            cursor = %meta.cursor,
-            total_events = total,
-            duration_ms = emit_duration_ms,
-            counts_by_topic = ?counts_by_topic,
-            counts_by_event_type = ?counts_by_event_type,
-            "Emit end"
-        );
+        if otel_enabled() {
+            info!(
+                event = "hermes_pipeline.emit_end",
+                block_number = meta.block_number,
+                cursor = %meta.cursor,
+                total_events = total,
+                counts_by_topic = ?counts_by_topic,
+                counts_by_event_type = ?counts_by_event_type,
+                "Emit end"
+            );
+        } else {
+            info!(
+                event = "hermes_pipeline.emit_end",
+                block_number = meta.block_number,
+                cursor = %meta.cursor,
+                total_events = total,
+                duration_ms = emit_duration_ms,
+                counts_by_topic = ?counts_by_topic,
+                counts_by_event_type = ?counts_by_event_type,
+                "Emit end"
+            );
+        }
 
         // Emit block summary for consumers
         let created_at = meta.timestamp.parse().unwrap_or(0);
@@ -641,6 +741,11 @@ fn build_telemetry_config() -> hermes_instrumentation::Config {
     Config::new("hermes-pipeline", backend)
 }
 
+fn otel_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| env::var("OTEL_URL").ok().is_some())
+}
+
 fn main() -> anyhow::Result<()> {
     // Load .env file if present (ignored in production)
     dotenv::dotenv().ok();
@@ -662,7 +767,7 @@ fn main() -> anyhow::Result<()> {
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?
-        .block_on(async_main())
+        .block_on(async_main().instrument(info_span!("hermes_pipeline.run")))
 }
 
 async fn async_main() -> anyhow::Result<()> {

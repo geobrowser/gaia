@@ -5,7 +5,9 @@ use std::time::{Duration, Instant};
 use futures::StreamExt;
 use rdkafka::Message;
 use hermes_instrumentation::{Instrument, debug, error, info, info_span, warn};
-use opentelemetry::propagation::{Extractor, TraceContextPropagator};
+use opentelemetry::propagation::Extractor;
+use opentelemetry_sdk::propagation::TraceContextPropagator;
+use rdkafka::message::Headers;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use hermes_schema::pb::blockchain_metadata::BlockchainMetadata;
 use std::sync::OnceLock;
@@ -80,8 +82,8 @@ impl BlockBuffer {
         self.summaries.remove(&block_number)
     }
 
-    fn summary(&self, block_number: u64) -> Option<&BlockSummaryInfo> {
-        self.summaries.get(&block_number)
+    fn summary(&self, block_number: u64) -> Option<BlockSummaryInfo> {
+        self.summaries.get(&block_number).cloned()
     }
 
     fn buffered_count(&self, block_number: u64) -> usize {
@@ -119,6 +121,7 @@ impl BlockBuffer {
     }
 }
 
+#[derive(Clone)]
 struct BlockSummaryInfo {
     summary: hermes_schema::pb::block_summary::HermesBlockSummary,
     received_at: Instant,
@@ -180,7 +183,7 @@ fn main() -> Result<(), IndexerError> {
         .enable_all()
         .build()
         .map_err(|e| IndexerError::config(format!("failed to build tokio runtime: {}", e)))?
-        .block_on(async_main())
+        .block_on(async_main().instrument(info_span!("kg_indexer.run")))
 }
 
 async fn async_main() -> Result<(), IndexerError> {
@@ -194,7 +197,7 @@ async fn async_main() -> Result<(), IndexerError> {
     let stale_timeout_ms: u64 = env::var("BLOCK_STALE_TIMEOUT_MS")
         .ok()
         .and_then(|s| s.parse().ok())
-        .unwrap_or(250);
+        .unwrap_or(1000);
 
     // Initialize storage
     let storage = Storage::new(&database_url).await?;
@@ -250,13 +253,17 @@ async fn async_main() -> Result<(), IndexerError> {
                 for block_number in buffer.stale_blocks() {
                     let events = buffer.take_block(block_number);
                     let event_count = events.len();
+                    if event_count == 0 {
+                        // Nothing buffered; don't emit noisy stale logs.
+                        continue;
+                    }
                     warn!(
                         block_number = block_number,
                         event_count = event_count,
                         stale_timeout_ms = stale_timeout_ms,
                         "Force-processing stale block"
                     );
-                    let summary = buffer.summary(block_number);
+                    let summary = buffer.take_summary(block_number);
                     let result = process_buffered_block(
                         events,
                         &storage,
@@ -265,7 +272,6 @@ async fn async_main() -> Result<(), IndexerError> {
                         BlockProcessReason::Stale,
                     )
                     .await;
-                    buffer.take_summary(block_number);
                     if let Some((processed, errors)) = result {
                         processed_count += processed;
                         error_count += errors;
@@ -294,9 +300,9 @@ async fn async_main() -> Result<(), IndexerError> {
                             block_number = tracing::field::Empty,
                             is_last = tracing::field::Empty
                         );
-                        span.set_parent(parent_cx);
+                        let _ = span.set_parent(parent_cx);
 
-                        async move {
+                        let fut = async {
                             if let Some(payload) = msg.payload() {
                                 match parse_message(&topic, payload, event_type.as_deref()) {
                                     Ok(kg_msg) => {
@@ -308,16 +314,18 @@ async fn async_main() -> Result<(), IndexerError> {
                                             let batch_id =
                                                 format!("{}:{}", summary_block_number, summary_cursor);
 
-                                            info!(
-                                                event = "kg_indexer.block_summary_received",
-                                                batch_id = %batch_id,
-                                                block_number = summary_block_number,
-                                                cursor = %summary_cursor,
-                                                expected_count = expected_count,
-                                                total_events = summary.total_events,
-                                                "Block summary received"
-                                            );
-                                            if log_event_ids_enabled() {
+                                            if expected_count > 0 {
+                                                info!(
+                                                    event = "kg_indexer.block_summary_received",
+                                                    batch_id = %batch_id,
+                                                    block_number = summary_block_number,
+                                                    cursor = %summary_cursor,
+                                                    expected_count = expected_count,
+                                                    total_events = summary.total_events,
+                                                    "Block summary received"
+                                                );
+                                            }
+                                            if log_event_ids_enabled() && expected_count > 0 {
                                                 info!(
                                                     event = "kg_indexer.event_id",
                                                     topic = %topic,
@@ -329,19 +337,6 @@ async fn async_main() -> Result<(), IndexerError> {
                                             }
 
                                             if expected_count == 0 {
-                                                info!(
-                                                    event = "kg_indexer.batch_end",
-                                                    batch_id = %batch_id,
-                                                    block_number = summary_block_number,
-                                                    cursor = %summary_cursor,
-                                                    total_events = 0,
-                                                    expected_events = 0,
-                                                    missing_event_types = ?Vec::<String>::new(),
-                                                    duration_ms = 0u64,
-                                                    db_ops_total = 0u64,
-                                                    commit_offsets_failed = 0u64,
-                                                    "No relevant events for this block"
-                                                );
                                                 return;
                                             }
 
@@ -355,7 +350,7 @@ async fn async_main() -> Result<(), IndexerError> {
                                                 >= expected_count
                                             {
                                                 let summary_info =
-                                                    buffer.summary(summary_block_number);
+                                                    buffer.take_summary(summary_block_number);
                                                 let events = buffer.take_block(summary_block_number);
                                                 let result = process_buffered_block(
                                                     events,
@@ -365,7 +360,6 @@ async fn async_main() -> Result<(), IndexerError> {
                                                     BlockProcessReason::Summary,
                                                 )
                                                 .await;
-                                                buffer.take_summary(summary_block_number);
                                                 if let Some((processed, errors)) = result {
                                                     processed_count += processed;
                                                     error_count += errors;
@@ -448,16 +442,16 @@ async fn async_main() -> Result<(), IndexerError> {
                                             if buffer.buffered_count(block_number)
                                                 >= summary.expected_count
                                             {
+                                                let summary_info = buffer.take_summary(block_number);
                                                 let events = buffer.take_block(block_number);
                                                 let result = process_buffered_block(
                                                     events,
                                                     &storage,
                                                     &consumer,
-                                                    Some(summary),
+                                                    summary_info,
                                                     BlockProcessReason::Summary,
                                                 )
                                                 .await;
-                                                buffer.take_summary(block_number);
                                                 if let Some((processed, errors)) = result {
                                                     processed_count += processed;
                                                     error_count += errors;
@@ -478,7 +472,7 @@ async fn async_main() -> Result<(), IndexerError> {
                                                 "Processing block"
                                             );
 
-                                            let summary = buffer.summary(block_number);
+                                            let summary = buffer.take_summary(block_number);
                                             let result = process_buffered_block(
                                                 events,
                                                 &storage,
@@ -487,7 +481,6 @@ async fn async_main() -> Result<(), IndexerError> {
                                                 BlockProcessReason::IsLast,
                                             )
                                             .await;
-                                            buffer.take_summary(block_number);
                                             if let Some((processed, errors)) = result {
                                                 processed_count += processed;
                                                 error_count += errors;
@@ -528,9 +521,8 @@ async fn async_main() -> Result<(), IndexerError> {
                                 }
                             }
                             }
-                        }
-                        .instrument(span)
-                        .await;
+                        };
+                        fut.instrument(span).await;
                     }
                     Some(Err(e)) => {
                         error!(error = %e, "Kafka error");
@@ -621,6 +613,11 @@ fn log_event_ids_enabled() -> bool {
     })
 }
 
+fn otel_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var("OTEL_URL").ok().is_some())
+}
+
 const INDEXER_TOPICS: &[&str] = &[
     "knowledge.edits",
     "space.creations",
@@ -670,7 +667,7 @@ fn event_type_label(event: &BufferedEvent) -> String {
         return event_type.clone();
     }
 
-    match event.msg {
+    match &event.msg {
         KgMessage::Edit(_) => "EDITS_PUBLISHED".to_string(),
         KgMessage::CreateSpace(_) => "SPACE_REGISTERED".to_string(),
         KgMessage::RoleGranted(_) => "ROLE_GRANTED".to_string(),
@@ -687,7 +684,7 @@ async fn process_buffered_block(
     events: Vec<BufferedEvent>,
     storage: &Storage,
     consumer: &KafkaConsumer,
-    summary_info: Option<&BlockSummaryInfo>,
+    summary_info: Option<BlockSummaryInfo>,
     reason: BlockProcessReason,
 ) -> Option<(u64, u64)> {
     if events.is_empty() {
@@ -719,17 +716,27 @@ async fn process_buffered_block(
     }
     partition_set.sort_unstable();
 
-    let expected_event_count = summary_info.map(|s| s.expected_count as u64).unwrap_or(0);
+    let expected_event_count = summary_info
+        .as_ref()
+        .map(|s| s.expected_count as u64)
+        .unwrap_or(0);
     let expected_counts_by_type: HashMap<String, u64> = summary_info
+        .as_ref()
         .map(|s| {
             EXPECTED_EVENT_TYPES
                 .iter()
-                .map(|name| (name.to_string(), *s.summary.counts_by_event_type.get(*name).unwrap_or(&0)))
+                .map(|name| {
+                    (
+                        name.to_string(),
+                        *s.summary.counts_by_event_type.get(*name).unwrap_or(&0),
+                    )
+                })
                 .collect()
         })
         .unwrap_or_default();
 
     let missing_event_types: Vec<String> = summary_info
+        .as_ref()
         .map(|s| {
             EXPECTED_EVENT_TYPES
                 .iter()
@@ -763,10 +770,11 @@ async fn process_buffered_block(
         "Batch start"
     );
 
+    let event_len = events.len();
     let span = info_span!(
         "kg_indexer.process_block",
         block_number = block_number,
-        event_count = events.len(),
+        event_count = event_len,
         reason = reason.as_str()
     );
     let start = Instant::now();
@@ -774,39 +782,70 @@ async fn process_buffered_block(
     match process_block(events, storage, consumer).instrument(span).await {
         Ok(result) => {
             let duration_ms = start.elapsed().as_millis();
-            info!(
-                event = "kg_indexer.batch_end",
-                batch_id = %batch_id,
-                block_number = block_number,
-                cursor = %cursor,
-                duration_ms = duration_ms,
-                db_tx_duration_ms = result.db_tx_duration_ms,
-                db_ops_total = result.ops as u64,
-                commit_offsets_failed = result.commit_failures,
-                counts_by_event_type = ?counts_by_event_type,
-                counts_by_topic = ?counts_by_topic,
-                expected_counts_by_type = ?expected_counts_by_type,
-                missing_event_types = ?missing_event_types,
-                "Batch end"
-            );
-            Some((events.len() as u64, 0))
+            if otel_enabled() {
+                info!(
+                    event = "kg_indexer.batch_end",
+                    batch_id = %batch_id,
+                    block_number = block_number,
+                    cursor = %cursor,
+                    db_ops_total = result.ops as u64,
+                    commit_offsets_failed = result.commit_failures,
+                    counts_by_event_type = ?counts_by_event_type,
+                    counts_by_topic = ?counts_by_topic,
+                    expected_counts_by_type = ?expected_counts_by_type,
+                    missing_event_types = ?missing_event_types,
+                    "Batch end"
+                );
+            } else {
+                info!(
+                    event = "kg_indexer.batch_end",
+                    batch_id = %batch_id,
+                    block_number = block_number,
+                    cursor = %cursor,
+                    duration_ms = duration_ms,
+                    db_tx_duration_ms = result.db_tx_duration_ms,
+                    db_ops_total = result.ops as u64,
+                    commit_offsets_failed = result.commit_failures,
+                    counts_by_event_type = ?counts_by_event_type,
+                    counts_by_topic = ?counts_by_topic,
+                    expected_counts_by_type = ?expected_counts_by_type,
+                    missing_event_types = ?missing_event_types,
+                    "Batch end"
+                );
+            }
+            Some((event_len as u64, 0))
         }
         Err(e) => {
             let duration_ms = start.elapsed().as_millis();
-            error!(
-                event = "kg_indexer.batch_end",
-                batch_id = %batch_id,
-                block_number = block_number,
-                cursor = %cursor,
-                duration_ms = duration_ms,
-                error = %e,
-                counts_by_event_type = ?counts_by_event_type,
-                counts_by_topic = ?counts_by_topic,
-                expected_counts_by_type = ?expected_counts_by_type,
-                missing_event_types = ?missing_event_types,
-                "Batch failed"
-            );
-            Some((0, events.len() as u64))
+            if otel_enabled() {
+                error!(
+                    event = "kg_indexer.batch_end",
+                    batch_id = %batch_id,
+                    block_number = block_number,
+                    cursor = %cursor,
+                    error = %e,
+                    counts_by_event_type = ?counts_by_event_type,
+                    counts_by_topic = ?counts_by_topic,
+                    expected_counts_by_type = ?expected_counts_by_type,
+                    missing_event_types = ?missing_event_types,
+                    "Batch failed"
+                );
+            } else {
+                error!(
+                    event = "kg_indexer.batch_end",
+                    batch_id = %batch_id,
+                    block_number = block_number,
+                    cursor = %cursor,
+                    duration_ms = duration_ms,
+                    error = %e,
+                    counts_by_event_type = ?counts_by_event_type,
+                    counts_by_topic = ?counts_by_topic,
+                    expected_counts_by_type = ?expected_counts_by_type,
+                    missing_event_types = ?missing_event_types,
+                    "Batch failed"
+                );
+            }
+            Some((0, event_len as u64))
         }
     }
 }
@@ -816,7 +855,7 @@ async fn process_buffered_block(
 async fn process_message(
     msg: KgMessage,
     storage: &Storage,
-    event_id: Option<&str>,
+    _event_id: Option<&str>,
 ) -> Result<usize, IndexerError> {
     use handlers::membership::MembershipChange;
     use models::relations::RelationOp;
@@ -828,6 +867,7 @@ async fn process_message(
         .await?;
 
     let ops = match msg {
+        KgMessage::BlockSummary(_) => 0,
         KgMessage::Edit(edit) => {
             let result = handlers::edits::handle_edit(&edit)?;
 
@@ -983,7 +1023,11 @@ async fn process_block(
     use models::values::ValueChangeType;
 
     if events.is_empty() {
-        return Ok(0);
+        return Ok(ProcessBlockResult {
+            ops: 0,
+            commit_failures: 0,
+            db_tx_duration_ms: 0,
+        });
     }
 
     let mut tx = storage.pool.begin().await?;
@@ -995,7 +1039,7 @@ async fn process_block(
 
     // Process each message in sequence order
     for event in &events {
-        let ops = (|| {
+        let ops = async {
             Ok::<usize, IndexerError>(match &event.msg {
             KgMessage::Edit(edit) => {
                 let result = handlers::edits::handle_edit(edit)?;
@@ -1128,7 +1172,8 @@ async fn process_block(
             }
             KgMessage::BlockSummary(_) => 0,
         })
-        })()
+        }
+        .await
         .map_err(|e| {
             error!(
                 event_id = event.event_id.as_deref().unwrap_or(""),

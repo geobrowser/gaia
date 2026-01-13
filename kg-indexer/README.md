@@ -22,7 +22,7 @@ Environment variables:
 - `DATABASE_URL` (required)
 - `KAFKA_BROKER` (default: `localhost:9092`)
 - `KAFKA_GROUP_ID` (default: `kg-indexer`)
-- `BLOCK_STALE_TIMEOUT_MS` (default: `250`)
+- `BLOCK_STALE_TIMEOUT_MS` (default: `1000`)
 - `KAFKA_USERNAME` / `KAFKA_PASSWORD` (optional SASL)
 - `KAFKA_SSL_CA_PEM` (optional)
 

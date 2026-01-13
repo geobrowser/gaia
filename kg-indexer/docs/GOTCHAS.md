@@ -4,7 +4,7 @@
 
 ### Stale blocks
 
-If hermes-pipeline crashes mid-block, the `is_last` event never arrives. kg-indexer will buffer events indefinitely until the stale timeout (default 60s, configurable via `BLOCK_STALE_TIMEOUT_SECS`). After timeout, warnings are logged but events remain buffered.
+If hermes-pipeline crashes mid-block, the `is_last` event never arrives. kg-indexer will buffer events until the stale timeout (default 1s, configurable via `BLOCK_STALE_TIMEOUT_MS`). After timeout, warnings are logged but events remain buffered.
 
 **Resolution**: Restart hermes-pipeline. It will re-emit the block from its cursor position.
 

@@ -4,7 +4,7 @@
 //! for any type that implements `KafkaEvent + prost::Message`.
 
 use anyhow::Result;
-use hermes_instrumentation::{debug_span, info};
+use hermes_instrumentation::{debug_span, error, info, Span};
 use opentelemetry::global;
 use opentelemetry::propagation::Injector;
 use prost::Message;
@@ -536,7 +536,7 @@ fn attach_event_id<T: HasMeta>(headers: OwnedHeaders, event: &T, topic: &str) ->
 }
 
 fn inject_trace_headers(headers: OwnedHeaders) -> OwnedHeaders {
-    let span = tracing::Span::current();
+    let span = Span::current();
     let context = span.context();
     let mut injector = HeaderInjector::new(headers);
     global::get_text_map_propagator(|prop| prop.inject_context(&context, &mut injector));
@@ -601,9 +601,23 @@ impl Emitter {
                 .payload(&payload)
                 .headers(headers);
 
-            self.producer
+            let result = self
+                .producer
                 .send(record)
-                .map_err(|(e, _)| anyhow::anyhow!(e))
+                .map_err(|(e, _)| anyhow::anyhow!(e));
+
+            if let Err(ref err) = result {
+                error!(
+                    event = "hermes_pipeline.event_error",
+                    stage = "kafka.send",
+                    topic = T::TOPIC,
+                    event_id = %event_id,
+                    error = %err,
+                    "Kafka send failed"
+                );
+            }
+
+            result
         })
     }
 
