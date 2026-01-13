@@ -144,6 +144,17 @@ impl Processor {
                     error!("EntityGlobalScore event missing entity_id");
                     IngestError::parse("EntityGlobalScore event missing entity_id".to_string())
                 })?;
+                if !event.score.is_finite() {
+                    error!(
+                        entity_id = %entity_id,
+                        score = event.score,
+                        "EntityGlobalScore event contains invalid score (NaN or infinite)"
+                    );
+                    return Err(IngestError::parse(format!(
+                        "invalid score: NaN or infinite (value: {})",
+                        event.score
+                    )));
+                }
                 Ok(ProcessedEvent::UpdateEntityGlobalScore {
                     entity_id,
                     score: event.score,
@@ -154,6 +165,17 @@ impl Processor {
                     error!("SpaceScore event missing space_id");
                     IngestError::parse("SpaceScore event missing space_id".to_string())
                 })?;
+                if !event.score.is_finite() {
+                    error!(
+                        space_id = %space_id,
+                        score = event.score,
+                        "SpaceScore event contains invalid score (NaN or infinite)"
+                    );
+                    return Err(IngestError::parse(format!(
+                        "invalid score: NaN or infinite (value: {})",
+                        event.score
+                    )));
+                }
                 Ok(ProcessedEvent::UpdateSpaceScore {
                     space_id,
                     score: event.score,
@@ -168,6 +190,18 @@ impl Processor {
                     error!("EntitySpaceScore event missing space_id");
                     IngestError::parse("EntitySpaceScore event missing space_id".to_string())
                 })?;
+                if !event.score.is_finite() {
+                    error!(
+                        entity_id = %entity_id,
+                        space_id = %space_id,
+                        score = event.score,
+                        "EntitySpaceScore event contains invalid score (NaN or infinite)"
+                    );
+                    return Err(IngestError::parse(format!(
+                        "invalid score: NaN or infinite (value: {})",
+                        event.score
+                    )));
+                }
                 Ok(ProcessedEvent::UpdateEntitySpaceScore {
                     entity_id,
                     space_id,
