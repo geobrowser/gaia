@@ -126,7 +126,7 @@ impl Processor {
         let mut processed = Vec::with_capacity(events.len());
 
         for event in events {
-            processed.push(self.process_score_event(event));
+            processed.push(self.process_score_event(event)?);
         }
 
         debug!(
@@ -137,34 +137,42 @@ impl Processor {
     }
 
     /// Process a single score event.
-    fn process_score_event(&self, event: ScoreEvent) -> ProcessedEvent {
+    fn process_score_event(&self, event: ScoreEvent) -> Result<ProcessedEvent, IngestError> {
         match event.event_type {
             ScoreEventType::EntityGlobalScore => {
-                let entity_id = event
-                    .entity_id
-                    .expect("EntityGlobalScore must have entity_id");
-                ProcessedEvent::UpdateEntityGlobalScore {
+                let entity_id = event.entity_id.ok_or_else(|| {
+                    error!("EntityGlobalScore event missing entity_id");
+                    IngestError::parse("EntityGlobalScore event missing entity_id".to_string())
+                })?;
+                Ok(ProcessedEvent::UpdateEntityGlobalScore {
                     entity_id,
                     score: event.score,
-                }
+                })
             }
             ScoreEventType::SpaceScore => {
-                let space_id = event.space_id.expect("SpaceScore must have space_id");
-                ProcessedEvent::UpdateSpaceScore {
+                let space_id = event.space_id.ok_or_else(|| {
+                    error!("SpaceScore event missing space_id");
+                    IngestError::parse("SpaceScore event missing space_id".to_string())
+                })?;
+                Ok(ProcessedEvent::UpdateSpaceScore {
                     space_id,
                     score: event.score,
-                }
+                })
             }
             ScoreEventType::EntitySpaceScore => {
-                let entity_id = event
-                    .entity_id
-                    .expect("EntitySpaceScore must have entity_id");
-                let space_id = event.space_id.expect("EntitySpaceScore must have space_id");
-                ProcessedEvent::UpdateEntitySpaceScore {
+                let entity_id = event.entity_id.ok_or_else(|| {
+                    error!("EntitySpaceScore event missing entity_id");
+                    IngestError::parse("EntitySpaceScore event missing entity_id".to_string())
+                })?;
+                let space_id = event.space_id.ok_or_else(|| {
+                    error!("EntitySpaceScore event missing space_id");
+                    IngestError::parse("EntitySpaceScore event missing space_id".to_string())
+                })?;
+                Ok(ProcessedEvent::UpdateEntitySpaceScore {
                     entity_id,
                     space_id,
                     score: event.score,
-                }
+                })
             }
         }
     }
