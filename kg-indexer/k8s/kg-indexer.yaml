@@ -92,6 +92,24 @@ spec:
               value: "kg-indexer"
             - name: BLOCK_STALE_TIMEOUT_MS
               value: "250"
+            - name: OTEL_URL
+              valueFrom:
+                secretKeyRef:
+                  name: kg-indexer-secrets
+                  key: OTEL_URL
+                  optional: true
+            - name: OTEL_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: kg-indexer-secrets
+                  key: OTEL_TOKEN
+                  optional: true
+            - name: OTEL_DATASET
+              valueFrom:
+                secretKeyRef:
+                  name: kg-indexer-secrets
+                  key: OTEL_DATASET
+                  optional: true
             - name: RUST_LOG
               value: "kg_indexer=info"
           resources:

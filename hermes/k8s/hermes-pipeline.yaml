@@ -72,22 +72,22 @@ spec:
             - name: KAFKA_BROKER
               valueFrom:
                 secretKeyRef:
-                  name: kg-indexer-secrets
+                  name: hermes-pipeline-secrets
                   key: KAFKA_BROKER
             - name: KAFKA_USERNAME
               valueFrom:
                 secretKeyRef:
-                  name: kg-indexer-secrets
+                  name: hermes-pipeline-secrets
                   key: KAFKA_USERNAME
             - name: KAFKA_PASSWORD
               valueFrom:
                 secretKeyRef:
-                  name: kg-indexer-secrets
+                  name: hermes-pipeline-secrets
                   key: KAFKA_PASSWORD
             - name: KAFKA_SSL_CA_PEM
               valueFrom:
                 secretKeyRef:
-                  name: kg-indexer-secrets
+                  name: hermes-pipeline-secrets
                   key: KAFKA_SSL_CA_PEM
             - name: SUBSTREAMS_ENDPOINT
               valueFrom:
@@ -102,19 +102,19 @@ spec:
             - name: OTEL_URL
               valueFrom:
                 secretKeyRef:
-                  name: hermes-pipeline-otel
+                  name: hermes-pipeline-secrets
                   key: OTEL_URL
                   optional: true
             - name: OTEL_TOKEN
               valueFrom:
                 secretKeyRef:
-                  name: hermes-pipeline-otel
+                  name: hermes-pipeline-secrets
                   key: OTEL_TOKEN
                   optional: true
             - name: OTEL_DATASET
               valueFrom:
                 secretKeyRef:
-                  name: hermes-pipeline-otel
+                  name: hermes-pipeline-secrets
                   key: OTEL_DATASET
                   optional: true
           resources:
