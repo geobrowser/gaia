@@ -35,11 +35,11 @@ spec:
               drop:
                 - ALL
           env:
-            # OpenSearch connection (same namespace, use simple service name)
+            # OpenSearch connection (managed DigitalOcean OpenSearch)
             - name: OPENSEARCH_URL
               valueFrom:
                 secretKeyRef:
-                  name: search-indexer-secrets
+                  name: opensearch-credentials
                   key: OPENSEARCH_URL
             # Index version (defaults to 0 if not set)
             - name: ENTITIES_INDEX_VERSION
@@ -125,5 +125,4 @@ metadata:
 type: Opaque
 stringData:
   AXIOM_TOKEN: ""  # Set via kubectl or CI/CD
-  OPENSEARCH_URL: ""  # Set via kubectl or CI/CD
 

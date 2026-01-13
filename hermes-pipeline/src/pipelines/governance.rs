@@ -353,13 +353,13 @@ fn convert_proposal_voted(
     sequence: u32,
 ) -> Result<HermesProposalVoted> {
     // Decode the data field
-    // VoteOption enum: None=0, Abstain=1, Yes=2, No=3
+    // VoteOption enum (IDAOSpace): None=0, Yes=1, No=2, Abstain=3
     let vote = match decode::decode_proposal_voted(&action.data) {
         Ok(decoded) => match decoded.vote {
             0 => ProposalVoteOption::VoteOptionNone,
-            1 => ProposalVoteOption::VoteOptionAbstain,
-            2 => ProposalVoteOption::VoteOptionYes,
-            3 => ProposalVoteOption::VoteOptionNo,
+            1 => ProposalVoteOption::VoteOptionYes,
+            2 => ProposalVoteOption::VoteOptionNo,
+            3 => ProposalVoteOption::VoteOptionAbstain,
             _ => ProposalVoteOption::VoteOptionNone,
         },
         Err(e) => {

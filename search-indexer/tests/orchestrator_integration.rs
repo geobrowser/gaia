@@ -1,7 +1,7 @@
 //! Integration tests for the search indexer orchestrator.
 //!
 //! These tests use the real Orchestrator but mock dependencies
-//! (KafkaConsumer and SearchIndexProvider) to ensure reliable testing.
+//! (consumers and SearchIndexProvider) to ensure reliable testing.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -12,8 +12,11 @@ use sdk::core::ids::TYPE_RELATION_TYPE_ID;
 use search_indexer::consumer::{EntityEvent, StreamMessage};
 use search_indexer::errors::IngestError;
 use search_indexer::loader::SearchLoader;
-use search_indexer::orchestrator::{Consumer, Orchestrator, OrchestratorConfig, ProcessingBatch};
-use search_indexer::processor::EntityProcessor;
+use search_indexer::orchestrator::{
+    EntitiesConsumerTrait, EntityProcessingBatch, Orchestrator, OrchestratorConfig,
+    ScoreProcessingBatch, ScoresConsumerTrait,
+};
+use search_indexer::processor::Processor;
 use search_indexer_repository::{
     BatchOperationResult, BatchOperationSummary, DeleteEntityRequest, EntityOperation,
     SearchIndexError, SearchIndexProvider, UnsetEntityPropertiesRequest, UpdateEntityRequest,
@@ -53,7 +56,7 @@ impl MockConsumer {
 }
 
 #[async_trait::async_trait]
-impl Consumer for MockConsumer {
+impl EntitiesConsumerTrait for MockConsumer {
     fn subscribe(&self) -> Result<(), IngestError> {
         // Mock subscription - succeeds unless error_on_subscribe is true
         if self.error_on_subscribe {
@@ -65,7 +68,7 @@ impl Consumer for MockConsumer {
 
     async fn run(
         &self,
-        processor_tx: mpsc::Sender<ProcessingBatch>,
+        processor_tx: mpsc::Sender<EntityProcessingBatch>,
         mut ack_receiver: mpsc::Receiver<StreamMessage>,
         mut shutdown: broadcast::Receiver<()>,
     ) -> Result<(), IngestError> {
@@ -74,13 +77,13 @@ impl Consumer for MockConsumer {
             return Err(IngestError::KafkaError("Mock consumer error".to_string()));
         }
 
-        // Convert events to ProcessingBatch
+        // Convert events to EntityProcessingBatch
         let events = self.events_to_send.clone();
         let offsets = vec![("test-topic".to_string(), 0, 1i64)]; // Mock offset
         let event_count = events.len();
 
         // Send events to processor
-        let batch = ProcessingBatch {
+        let batch = EntityProcessingBatch {
             events,
             offsets,
             event_count,
@@ -108,6 +111,27 @@ impl Consumer for MockConsumer {
             }
         }
 
+        Ok(())
+    }
+}
+
+// Mock Scores Consumer for testing - does nothing, just waits for shutdown
+struct MockScoresConsumer;
+
+#[async_trait::async_trait]
+impl ScoresConsumerTrait for MockScoresConsumer {
+    fn subscribe(&self) -> Result<(), IngestError> {
+        Ok(())
+    }
+
+    async fn run(
+        &self,
+        _processor_tx: mpsc::Sender<ScoreProcessingBatch>,
+        _ack_receiver: mpsc::Receiver<StreamMessage>,
+        mut shutdown: broadcast::Receiver<()>,
+    ) -> Result<(), IngestError> {
+        // Just wait for shutdown - no score events in these tests
+        let _ = shutdown.recv().await;
         Ok(())
     }
 }
@@ -249,6 +273,10 @@ impl SearchIndexProvider for MockSearchProvider {
                 EntityOperation::Delete(_) => self.fail_bulk_deletes && i >= operations.len() / 2,
                 EntityOperation::Unset(_) => self.fail_bulk_unsets && i >= operations.len() / 2,
                 EntityOperation::RemoveTypeRelationById(_) => false, // Never fails in mock
+                // Score operations never fail in mock
+                EntityOperation::UpdateEntityGlobalScore(_)
+                | EntityOperation::UpdateSpaceScore(_)
+                | EntityOperation::UpdateEntitySpaceScore(_) => false,
             };
 
             if should_fail {
@@ -279,6 +307,12 @@ impl SearchIndexProvider for MockSearchProvider {
                     EntityOperation::RemoveTypeRelationById(_) => {
                         // Tracked via all_operations
                     }
+                    // Score operations are tracked via all_operations only
+                    EntityOperation::UpdateEntityGlobalScore(_)
+                    | EntityOperation::UpdateSpaceScore(_)
+                    | EntityOperation::UpdateEntitySpaceScore(_) => {
+                        // Tracked via all_operations
+                    }
                 }
                 // Also track in all_operations to preserve ordering
                 self.all_operations.lock().unwrap().push(op.clone());
@@ -304,13 +338,14 @@ impl SearchIndexProvider for MockSearchProvider {
 
 /// Helper to create a test orchestrator with mocked dependencies
 fn create_test_orchestrator(events: Vec<EntityEvent>) -> (Orchestrator, Arc<MockSearchProvider>) {
-    let processor = EntityProcessor::new();
+    let processor = Processor::new();
     let mock_provider = Arc::new(MockSearchProvider::new());
     let loader = SearchLoader::new(mock_provider.clone());
 
     let mock_consumer = Arc::new(MockConsumer::new(events));
+    let mock_scores_consumer = Arc::new(MockScoresConsumer);
 
-    let orchestrator = Orchestrator::new(mock_consumer, processor, loader);
+    let orchestrator = Orchestrator::new(mock_consumer, mock_scores_consumer, processor, loader);
 
     (orchestrator, mock_provider)
 }
@@ -319,13 +354,19 @@ fn create_test_orchestrator(events: Vec<EntityEvent>) -> (Orchestrator, Arc<Mock
 fn create_test_orchestrator_with_consumer(
     events: Vec<EntityEvent>,
 ) -> (Orchestrator, Arc<MockSearchProvider>, Arc<MockConsumer>) {
-    let processor = EntityProcessor::new();
+    let processor = Processor::new();
     let mock_provider = Arc::new(MockSearchProvider::new());
     let loader = SearchLoader::new(mock_provider.clone());
 
     let mock_consumer = Arc::new(MockConsumer::new(events));
+    let mock_scores_consumer = Arc::new(MockScoresConsumer);
 
-    let orchestrator = Orchestrator::new(mock_consumer.clone(), processor, loader);
+    let orchestrator = Orchestrator::new(
+        mock_consumer.clone(),
+        mock_scores_consumer,
+        processor,
+        loader,
+    );
 
     (orchestrator, mock_provider, mock_consumer)
 }
@@ -334,13 +375,14 @@ fn create_test_orchestrator_with_consumer(
 fn create_error_test_orchestrator(
     events: Vec<EntityEvent>,
 ) -> (Orchestrator, Arc<MockSearchProvider>) {
-    let processor = EntityProcessor::new();
+    let processor = Processor::new();
     let mock_provider = Arc::new(MockSearchProvider::new());
     let loader = SearchLoader::new(mock_provider.clone());
 
     let mock_consumer = Arc::new(MockConsumer::with_subscribe_error(events));
+    let mock_scores_consumer = Arc::new(MockScoresConsumer);
 
-    let orchestrator = Orchestrator::new(mock_consumer, processor, loader);
+    let orchestrator = Orchestrator::new(mock_consumer, mock_scores_consumer, processor, loader);
 
     (orchestrator, mock_provider)
 }
@@ -349,13 +391,19 @@ fn create_error_test_orchestrator(
 fn create_bulk_update_failure_orchestrator(
     events: Vec<EntityEvent>,
 ) -> (Orchestrator, Arc<MockSearchProvider>, Arc<MockConsumer>) {
-    let processor = EntityProcessor::new();
+    let processor = Processor::new();
     let mock_provider = Arc::new(MockSearchProvider::with_bulk_update_failures());
     let loader = SearchLoader::new(mock_provider.clone());
 
     let mock_consumer = Arc::new(MockConsumer::new(events.clone()));
+    let mock_scores_consumer = Arc::new(MockScoresConsumer);
 
-    let orchestrator = Orchestrator::new(mock_consumer.clone(), processor, loader);
+    let orchestrator = Orchestrator::new(
+        mock_consumer.clone(),
+        mock_scores_consumer,
+        processor,
+        loader,
+    );
 
     (orchestrator, mock_provider, mock_consumer)
 }
@@ -364,13 +412,19 @@ fn create_bulk_update_failure_orchestrator(
 fn create_bulk_delete_failure_orchestrator(
     events: Vec<EntityEvent>,
 ) -> (Orchestrator, Arc<MockSearchProvider>, Arc<MockConsumer>) {
-    let processor = EntityProcessor::new();
+    let processor = Processor::new();
     let mock_provider = Arc::new(MockSearchProvider::with_bulk_delete_failures());
     let loader = SearchLoader::new(mock_provider.clone());
 
     let mock_consumer = Arc::new(MockConsumer::new(events.clone()));
+    let mock_scores_consumer = Arc::new(MockScoresConsumer);
 
-    let orchestrator = Orchestrator::new(mock_consumer.clone(), processor, loader);
+    let orchestrator = Orchestrator::new(
+        mock_consumer.clone(),
+        mock_scores_consumer,
+        processor,
+        loader,
+    );
 
     (orchestrator, mock_provider, mock_consumer)
 }
@@ -379,13 +433,19 @@ fn create_bulk_delete_failure_orchestrator(
 fn create_bulk_unset_failure_orchestrator(
     events: Vec<EntityEvent>,
 ) -> (Orchestrator, Arc<MockSearchProvider>, Arc<MockConsumer>) {
-    let processor = EntityProcessor::new();
+    let processor = Processor::new();
     let mock_provider = Arc::new(MockSearchProvider::with_bulk_unset_failures());
     let loader = SearchLoader::new(mock_provider.clone());
 
     let mock_consumer = Arc::new(MockConsumer::new(events.clone()));
+    let mock_scores_consumer = Arc::new(MockScoresConsumer);
 
-    let orchestrator = Orchestrator::new(mock_consumer.clone(), processor, loader);
+    let orchestrator = Orchestrator::new(
+        mock_consumer.clone(),
+        mock_scores_consumer,
+        processor,
+        loader,
+    );
 
     (orchestrator, mock_provider, mock_consumer)
 }
@@ -465,16 +525,23 @@ async fn test_orchestrator_with_unset_properties() {
 #[tokio::test]
 async fn test_orchestrator_configuration() {
     // Test that orchestrator can be created with custom configuration
-    let processor = EntityProcessor::new();
+    let processor = Processor::new();
     let mock_provider = Arc::new(MockSearchProvider::new());
     let loader = SearchLoader::new(mock_provider.clone());
     let mock_consumer = Arc::new(MockConsumer::new(vec![]));
+    let mock_scores_consumer = Arc::new(MockScoresConsumer);
 
     let config = OrchestratorConfig {
         channel_buffer_size: 2000,
     };
 
-    let _orchestrator = Orchestrator::with_config(mock_consumer, processor, loader, config);
+    let _orchestrator = Orchestrator::with_config(
+        mock_consumer,
+        mock_scores_consumer,
+        processor,
+        loader,
+        config,
+    );
 
     // Verify configuration was applied (we can't easily test this without exposing internals,
     // but at least verify it compiles and creates successfully)

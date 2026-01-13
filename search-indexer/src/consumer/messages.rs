@@ -4,6 +4,10 @@
 
 use uuid::Uuid;
 
+// ============================================================================
+// Entity Events - from knowledge.edits Kafka topic
+// ============================================================================
+
 /// Types of entity events that can be received.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum EntityEventType {
@@ -147,6 +151,80 @@ impl EntityEvent {
         }
     }
 }
+
+// ============================================================================
+// Score Events - from curation.scores Kafka topic
+// ============================================================================
+
+/// Score update event types.
+#[derive(Debug, Clone, PartialEq)]
+pub enum ScoreEventType {
+    /// Update an entity's global score.
+    EntityGlobalScore,
+    /// Update a space's score.
+    SpaceScore,
+    /// Update an entity's score within a specific space (perspective score).
+    EntitySpaceScore,
+}
+
+/// A score update event received from the curation.scores Kafka topic.
+#[derive(Debug, Clone)]
+pub struct ScoreEvent {
+    /// The type of score update.
+    pub event_type: ScoreEventType,
+    /// Entity ID (for EntityGlobalScore and EntitySpaceScore).
+    pub entity_id: Option<Uuid>,
+    /// Space ID (for SpaceScore and EntitySpaceScore).
+    pub space_id: Option<Uuid>,
+    /// The score value.
+    pub score: f64,
+    /// When the score was last updated (Unix timestamp in seconds).
+    pub updated_at: u64,
+}
+
+impl ScoreEvent {
+    /// Create a new entity global score event.
+    pub fn entity_global_score(entity_id: Uuid, score: f64, updated_at: u64) -> Self {
+        Self {
+            event_type: ScoreEventType::EntityGlobalScore,
+            entity_id: Some(entity_id),
+            space_id: None,
+            score,
+            updated_at,
+        }
+    }
+
+    /// Create a new space score event.
+    pub fn space_score(space_id: Uuid, score: f64, updated_at: u64) -> Self {
+        Self {
+            event_type: ScoreEventType::SpaceScore,
+            entity_id: None,
+            space_id: Some(space_id),
+            score,
+            updated_at,
+        }
+    }
+
+    /// Create a new entity space score (perspective) event.
+    pub fn entity_space_score(
+        entity_id: Uuid,
+        space_id: Uuid,
+        score: f64,
+        updated_at: u64,
+    ) -> Self {
+        Self {
+            event_type: ScoreEventType::EntitySpaceScore,
+            entity_id: Some(entity_id),
+            space_id: Some(space_id),
+            score,
+            updated_at,
+        }
+    }
+}
+
+// ============================================================================
+// Stream Messages - internal message passing
+// ============================================================================
 
 /// Messages that flow through the ingest.
 #[derive(Debug)]

@@ -15,7 +15,8 @@ use crate::orchestrator::ProcessedBatch;
 use crate::processor::ProcessedEvent;
 use search_indexer_repository::{
     DeleteEntityRequest, EntityOperation, RemoveTypeRelationData, SearchIndexProvider,
-    TypeRelationData, UnsetEntityPropertiesRequest, UpdateEntityRequest,
+    TypeRelationData, UnsetEntityPropertiesRequest, UpdateEntityGlobalScoreRequest,
+    UpdateEntityRequest, UpdateEntitySpaceScoreRequest, UpdateSpaceScoreRequest,
 };
 
 /// Loader that indexes documents into the search engine.
@@ -124,6 +125,36 @@ impl SearchLoader {
                             },
                         ));
                 }
+                ProcessedEvent::UpdateEntityGlobalScore { entity_id, score } => {
+                    self.pending_operations
+                        .push(EntityOperation::UpdateEntityGlobalScore(
+                            UpdateEntityGlobalScoreRequest {
+                                entity_id: entity_id.to_string(),
+                                score,
+                            },
+                        ));
+                }
+                ProcessedEvent::UpdateSpaceScore { space_id, score } => {
+                    self.pending_operations
+                        .push(EntityOperation::UpdateSpaceScore(UpdateSpaceScoreRequest {
+                            space_id: space_id.to_string(),
+                            score,
+                        }));
+                }
+                ProcessedEvent::UpdateEntitySpaceScore {
+                    entity_id,
+                    space_id,
+                    score,
+                } => {
+                    self.pending_operations
+                        .push(EntityOperation::UpdateEntitySpaceScore(
+                            UpdateEntitySpaceScoreRequest {
+                                entity_id: entity_id.to_string(),
+                                space_id: space_id.to_string(),
+                                score,
+                            },
+                        ));
+                }
             }
         }
 
@@ -179,16 +210,31 @@ impl SearchLoader {
     /// Run the loader task.
     ///
     /// Receives processed batches from the processor, loads them into the search index,
-    /// and sends acknowledgments back to the consumer.
+    /// and sends acknowledgments back to the appropriate consumer (entity or scores).
     /// Returns a tokio task handle.
+    ///
+    /// # Arguments
+    ///
+    /// * `loader_rx` - Channel to receive processed batches from the processor
+    /// * `entity_ack_tx` - Channel to send acknowledgments back to the entity consumer
+    /// * `scores_ack_tx` - Channel to send acknowledgments back to the scores consumer
+    /// * `metrics` - Metrics tracker
     pub fn run(
         mut self,
         mut loader_rx: mpsc::Receiver<ProcessedBatch>,
-        ack_tx: mpsc::Sender<StreamMessage>,
+        entity_ack_tx: mpsc::Sender<StreamMessage>,
+        scores_ack_tx: mpsc::Sender<StreamMessage>,
         metrics: Arc<SearchIndexerMetrics>,
     ) -> JoinHandle<()> {
         tokio::spawn(async move {
             while let Some(batch) = loader_rx.recv().await {
+                // Determine which ack channel to use based on batch type
+                let ack_tx = if batch.is_scores_batch {
+                    &scores_ack_tx
+                } else {
+                    &entity_ack_tx
+                };
+
                 match self.load(batch.events).await {
                     Ok(operation_summaries) => {
                         // Check if any operation had failures
@@ -369,6 +415,12 @@ mod tests {
                         ops.push(TrackedOperation::RemoveTypeRelationById {
                             relation_id: r.relation_id.clone(),
                         });
+                    }
+                    // Score updates are tracked but don't need detailed tracking in tests
+                    EntityOperation::UpdateEntityGlobalScore(_)
+                    | EntityOperation::UpdateSpaceScore(_)
+                    | EntityOperation::UpdateEntitySpaceScore(_) => {
+                        // Score updates pass through - no special tracking needed
                     }
                 }
             }

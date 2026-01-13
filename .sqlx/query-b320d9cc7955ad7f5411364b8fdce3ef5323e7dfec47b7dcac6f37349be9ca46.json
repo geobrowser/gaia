@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO spaces (id, type, address, topic_id)\n            SELECT id, type::\"spaceTypes\", address, topic_id\n            FROM UNNEST($1::uuid[], $2::text[], $3::text[], $4::uuid[])\n            AS t(id, type, address, topic_id)\n            ON CONFLICT (id) DO NOTHING\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "UuidArray",
+        "TextArray",
+        "TextArray",
+        "UuidArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b320d9cc7955ad7f5411364b8fdce3ef5323e7dfec47b7dcac6f37349be9ca46"
+}

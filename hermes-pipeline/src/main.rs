@@ -264,7 +264,7 @@ impl Pipeline {
                     self.emitter.emit(event)?;
                     debug!(
                         space_id = %hex::encode(&event.space_id),
-                        account = %hex::encode(&event.account),
+                        member_space_id = %hex::encode(&event.member_space_id),
                         "Role granted"
                     );
                 }
@@ -272,7 +272,7 @@ impl Pipeline {
                     self.emitter.emit(event)?;
                     debug!(
                         space_id = %hex::encode(&event.space_id),
-                        account = %hex::encode(&event.account),
+                        member_space_id = %hex::encode(&event.member_space_id),
                         "Role revoked"
                     );
                 }
@@ -637,7 +637,7 @@ async fn async_main() -> anyhow::Result<()> {
         let start_block: i64 = env::var("SUBSTREAMS_START_BLOCK")
             .ok()
             .and_then(|s| s.parse().ok())
-            .unwrap_or(81809);
+            .unwrap_or(82656);
         let end_block: u64 = env::var("SUBSTREAMS_END_BLOCK")
             .ok()
             .and_then(|s| s.parse().ok())
