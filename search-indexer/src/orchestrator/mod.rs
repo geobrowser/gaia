@@ -9,14 +9,10 @@ use tokio::sync::{broadcast, mpsc};
 use tokio::time::{interval, Duration};
 use tracing::{error, info, instrument};
 
-<<<<<<< HEAD
 #[cfg(unix)]
 use tokio::signal::unix::{signal, SignalKind};
 
-use crate::consumer::{EntityEvent, KafkaConsumer, StreamMessage};
-=======
 use crate::consumer::{EntitiesConsumer, EntityEvent, ScoresConsumer, StreamMessage};
->>>>>>> geomain
 use crate::errors::IngestError;
 use crate::loader::SearchLoader;
 use crate::metrics::SearchIndexerMetrics;
