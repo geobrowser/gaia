@@ -4,6 +4,7 @@ import {SupportedNetworks} from "@aragon/osx-commons-configs"
 
 import {getChecksumAddress} from "@graphprotocol/grc-20"
 import {MAINNET, TESTNET} from "@graphprotocol/grc-20/contracts"
+import {sql} from "drizzle-orm"
 import {Duration, Effect, Schedule} from "effect"
 import {ethers, providers} from "ethers"
 import {encodeAbiParameters, zeroAddress} from "viem"
@@ -37,17 +38,19 @@ class WaitForSpaceToBeIndexedError extends Error {
 export function waitForSpaceToBeIndexed(daoAddress: string) {
 	const checkForSpace = Effect.gen(function* () {
 		const db = yield* Storage
-		const maybeSpace = yield* db.use(async (client) => {
-			const result = await client.query.spaces.findFirst({
-				// @ts-expect-error Legacy: daoAddress column exists in legacy DB but not new schema
-				where: (spaces, {eq}) => eq(spaces.daoAddress, getChecksumAddress(daoAddress)),
-			})
+		const checksummedAddress = getChecksumAddress(daoAddress)
 
-			if (!result) {
+		const maybeSpace = yield* db.use(async (client) => {
+			// Use raw SQL to query old schema column that isn't in the new TypeScript schema
+			const result = await client.execute(sql`
+				SELECT id FROM spaces WHERE dao_address = ${checksummedAddress} LIMIT 1
+			`)
+
+			if (result.rows.length === 0) {
 				return null
 			}
 
-			return result.id
+			return (result.rows[0] as { id: string }).id
 		})
 
 		if (!maybeSpace) {
