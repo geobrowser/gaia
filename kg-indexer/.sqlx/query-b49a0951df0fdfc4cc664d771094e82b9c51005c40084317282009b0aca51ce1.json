@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            DELETE FROM editors\n            WHERE (member_space_id, space_id) IN (\n                SELECT member_space_id, space_id\n                FROM UNNEST($1::uuid[], $2::uuid[])\n                AS t(member_space_id, space_id)\n            )\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "UuidArray",
+        "UuidArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "b49a0951df0fdfc4cc664d771094e82b9c51005c40084317282009b0aca51ce1"
+}
