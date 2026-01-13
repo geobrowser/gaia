@@ -120,6 +120,20 @@
       "when": 1768247867660,
       "tag": "0016_flat_leopardon",
       "breakpoints": true
+    },
+    {
+      "idx": 17,
+      "version": "7",
+      "when": 1768337830357,
+      "tag": "0017_slow_zaran",
+      "breakpoints": true
+    },
+    {
+      "idx": 18,
+      "version": "7",
+      "when": 1768339207493,
+      "tag": "0018_amazing_mercury",
+      "breakpoints": true
     }
   ]
 }
