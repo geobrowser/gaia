@@ -1,0 +1,15 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            DELETE FROM subspaces\n            WHERE (child_space_id, parent_space_id) IN (\n                SELECT child_space_id, parent_space_id\n                FROM UNNEST($1::uuid[], $2::uuid[])\n                AS t(child_space_id, parent_space_id)\n            )\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "UuidArray",
+        "UuidArray"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "6e7ea25ee1a12813ed2a422cff1cf044b22532ba9af88ad063eb5a94fcc61b56"
+}
