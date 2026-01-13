@@ -4,14 +4,16 @@
 //! for any type that implements `KafkaEvent + prost::Message`.
 
 use anyhow::Result;
-use hermes_instrumentation::debug_span;
+use hermes_instrumentation::{debug_span, info};
 use opentelemetry::global;
 use opentelemetry::propagation::Injector;
 use prost::Message;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
+use std::sync::OnceLock;
 
 use hermes_kafka::{BaseProducer, BaseRecord, Header, OwnedHeaders, Producer};
 use hermes_schema::pb::{
+    block_summary::HermesBlockSummary,
     blockchain_metadata::BlockchainMetadata,
     governance::{HermesProposalCreated, HermesProposalExecuted, HermesProposalVoted},
     knowledge::HermesEdit,
@@ -33,6 +35,7 @@ use hermes_schema::pb::{
 
 /// Kafka topics for each event type.
 pub mod topics {
+    pub const BLOCK_SUMMARY: &str = "hermes.blocks";
     pub const SPACE_CREATIONS: &str = "space.creations";
     pub const TRUST_EXTENSIONS: &str = "space.trust.extensions";
     pub const MEMBERSHIP: &str = "space.membership";
@@ -64,6 +67,10 @@ pub trait KafkaEvent {
 
 pub trait HasMeta {
     fn meta(&self) -> Option<&BlockchainMetadata>;
+
+    fn event_id(&self, topic: &str) -> Option<String> {
+        self.meta().map(|meta| event_id_for(meta, topic))
+    }
 }
 
 // =============================================================================
@@ -88,6 +95,40 @@ impl KafkaEvent for HermesCreateSpace {
             key: "space-type",
             value: Some(space_type),
         })
+    }
+}
+
+impl KafkaEvent for HermesBlockSummary {
+    const TOPIC: &'static str = topics::BLOCK_SUMMARY;
+
+    fn key(&self) -> Vec<u8> {
+        self.block_number.to_be_bytes().to_vec()
+    }
+
+    fn headers(&self) -> OwnedHeaders {
+        let event_id = format!("block_summary:{}:{}", self.block_number, self.cursor);
+        OwnedHeaders::new()
+            .insert(Header {
+                key: "event-type",
+                value: Some("BLOCK_SUMMARY"),
+            })
+            .insert(Header {
+                key: "event-id",
+                value: Some(event_id.as_str()),
+            })
+    }
+}
+
+impl HasMeta for HermesBlockSummary {
+    fn meta(&self) -> Option<&BlockchainMetadata> {
+        None
+    }
+
+    fn event_id(&self, _topic: &str) -> Option<String> {
+        Some(format!(
+            "block_summary:{}:{}",
+            self.block_number, self.cursor
+        ))
     }
 }
 
@@ -502,6 +543,15 @@ fn inject_trace_headers(headers: OwnedHeaders) -> OwnedHeaders {
     injector.into_headers()
 }
 
+fn log_event_ids_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var("LOG_EVENT_IDS")
+            .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+            .unwrap_or(false)
+    })
+}
+
 // =============================================================================
 // Emitter
 // =============================================================================
@@ -526,9 +576,17 @@ impl Emitter {
         let headers = attach_event_id(headers, event, T::TOPIC);
         let headers = inject_trace_headers(headers);
         let event_id = event
-            .meta()
-            .map(|meta| event_id_for(meta, T::TOPIC))
+            .event_id(T::TOPIC)
             .unwrap_or_else(|| "unknown".to_string());
+
+        if log_event_ids_enabled() {
+            info!(
+                event = "hermes_pipeline.event_id",
+                topic = T::TOPIC,
+                event_id = %event_id,
+                "Emitting event"
+            );
+        }
 
         debug_span!(
             "kafka.send",

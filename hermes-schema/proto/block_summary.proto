@@ -1,0 +1,20 @@
+syntax = "proto3";
+
+package block_summary;
+
+// HermesBlockSummary - canonical per-block summary emitted by hermes-pipeline.
+//
+// This message is emitted to a dedicated topic for downstream consumers to
+// reconcile event completeness and close batches deterministically.
+message HermesBlockSummary {
+  uint64 block_number = 1;
+  string cursor = 2;
+  uint64 created_at = 3; // Unix timestamp in seconds
+  uint64 total_events = 4;
+
+  // Counts keyed by Kafka topic name.
+  map<string, uint64> counts_by_topic = 5;
+
+  // Counts keyed by event type (e.g., ROLE_GRANTED, PROPOSAL_CREATED).
+  map<string, uint64> counts_by_event_type = 6;
+}

@@ -8,6 +8,7 @@ use hermes_instrumentation::{Instrument, debug, error, info, info_span, warn};
 use opentelemetry::propagation::{Extractor, TraceContextPropagator};
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 use hermes_schema::pb::blockchain_metadata::BlockchainMetadata;
+use std::sync::OnceLock;
 
 mod consumer;
 mod error;
@@ -25,6 +26,8 @@ struct BufferedEvent {
     topic: String,
     partition: i32,
     offset: i64,
+    event_type: Option<String>,
+    event_id: Option<String>,
 }
 
 /// Buffer for events by block number.
@@ -33,6 +36,8 @@ struct BlockBuffer {
     events: HashMap<u64, Vec<BufferedEvent>>,
     /// When each block was first seen.
     first_seen: HashMap<u64, Instant>,
+    /// Block summaries keyed by block number.
+    summaries: HashMap<u64, BlockSummaryInfo>,
     /// Timeout for waiting for is_last event.
     stale_timeout: Duration,
 }
@@ -42,6 +47,7 @@ impl BlockBuffer {
         Self {
             events: HashMap::new(),
             first_seen: HashMap::new(),
+            summaries: HashMap::new(),
             stale_timeout,
         }
     }
@@ -52,6 +58,34 @@ impl BlockBuffer {
             .entry(block_number)
             .or_insert_with(Instant::now);
         self.events.entry(block_number).or_default().push(event);
+    }
+
+    fn insert_summary(
+        &mut self,
+        block_number: u64,
+        summary: hermes_schema::pb::block_summary::HermesBlockSummary,
+        expected_count: usize,
+    ) {
+        self.summaries.insert(
+            block_number,
+            BlockSummaryInfo {
+                summary,
+                received_at: Instant::now(),
+                expected_count,
+            },
+        );
+    }
+
+    fn take_summary(&mut self, block_number: u64) -> Option<BlockSummaryInfo> {
+        self.summaries.remove(&block_number)
+    }
+
+    fn summary(&self, block_number: u64) -> Option<&BlockSummaryInfo> {
+        self.summaries.get(&block_number)
+    }
+
+    fn buffered_count(&self, block_number: u64) -> usize {
+        self.events.get(&block_number).map(|e| e.len()).unwrap_or(0)
     }
 
     /// Remove and return all events for a block, sorted by sequence.
@@ -65,12 +99,30 @@ impl BlockBuffer {
     /// Get block numbers that have been buffered longer than the stale timeout.
     fn stale_blocks(&self) -> Vec<u64> {
         let now = Instant::now();
-        self.first_seen
-            .iter()
-            .filter(|(_, first_seen)| now.duration_since(**first_seen) > self.stale_timeout)
-            .map(|(block, _)| *block)
-            .collect()
+        let mut blocks = Vec::new();
+
+        for (block, first_seen) in &self.first_seen {
+            if now.duration_since(*first_seen) > self.stale_timeout {
+                blocks.push(*block);
+            }
+        }
+
+        for (block, summary) in &self.summaries {
+            if now.duration_since(summary.received_at) > self.stale_timeout {
+                blocks.push(*block);
+            }
+        }
+
+        blocks.sort();
+        blocks.dedup();
+        blocks
     }
+}
+
+struct BlockSummaryInfo {
+    summary: hermes_schema::pb::block_summary::HermesBlockSummary,
+    received_at: Instant,
+    expected_count: usize,
 }
 
 fn build_telemetry_config() -> hermes_instrumentation::Config {
@@ -204,24 +256,20 @@ async fn async_main() -> Result<(), IndexerError> {
                         stale_timeout_ms = stale_timeout_ms,
                         "Force-processing stale block"
                     );
-                    match process_block(events, &storage, &consumer).await {
-                        Ok(count) => {
-                            processed_count += count as u64;
-                            blocks_processed += 1;
-                            info!(
-                                block_number = block_number,
-                                processed = count,
-                                "Force-processed stale block"
-                            );
-                        }
-                        Err(e) => {
-                            error_count += 1;
-                            error!(
-                                block_number = block_number,
-                                error = %e,
-                                "Failed to process stale block"
-                            );
-                        }
+                    let summary = buffer.summary(block_number);
+                    let result = process_buffered_block(
+                        events,
+                        &storage,
+                        &consumer,
+                        summary,
+                        BlockProcessReason::Stale,
+                    )
+                    .await;
+                    buffer.take_summary(block_number);
+                    if let Some((processed, errors)) = result {
+                        processed_count += processed;
+                        error_count += errors;
+                        blocks_processed += 1;
                     }
                 }
             }
@@ -252,6 +300,82 @@ async fn async_main() -> Result<(), IndexerError> {
                             if let Some(payload) = msg.payload() {
                                 match parse_message(&topic, payload, event_type.as_deref()) {
                                     Ok(kg_msg) => {
+                                        if let KgMessage::BlockSummary(summary) = kg_msg {
+                                            let expected_count =
+                                                expected_count_for_indexer(&summary);
+                                            let summary_block_number = summary.block_number;
+                                            let summary_cursor = summary.cursor.clone();
+                                            let batch_id =
+                                                format!("{}:{}", summary_block_number, summary_cursor);
+
+                                            info!(
+                                                event = "kg_indexer.block_summary_received",
+                                                batch_id = %batch_id,
+                                                block_number = summary_block_number,
+                                                cursor = %summary_cursor,
+                                                expected_count = expected_count,
+                                                total_events = summary.total_events,
+                                                "Block summary received"
+                                            );
+                                            if log_event_ids_enabled() {
+                                                info!(
+                                                    event = "kg_indexer.event_id",
+                                                    topic = %topic,
+                                                    event_id = event_id_header.as_deref().unwrap_or(""),
+                                                    event_type = "BLOCK_SUMMARY",
+                                                    block_number = summary_block_number,
+                                                    "Received event"
+                                                );
+                                            }
+
+                                            if expected_count == 0 {
+                                                info!(
+                                                    event = "kg_indexer.batch_end",
+                                                    batch_id = %batch_id,
+                                                    block_number = summary_block_number,
+                                                    cursor = %summary_cursor,
+                                                    total_events = 0,
+                                                    expected_events = 0,
+                                                    missing_event_types = ?Vec::<String>::new(),
+                                                    duration_ms = 0u64,
+                                                    db_ops_total = 0u64,
+                                                    commit_offsets_failed = 0u64,
+                                                    "No relevant events for this block"
+                                                );
+                                                return;
+                                            }
+
+                                            buffer.insert_summary(
+                                                summary_block_number,
+                                                summary,
+                                                expected_count,
+                                            );
+
+                                            if buffer.buffered_count(summary_block_number)
+                                                >= expected_count
+                                            {
+                                                let summary_info =
+                                                    buffer.summary(summary_block_number);
+                                                let events = buffer.take_block(summary_block_number);
+                                                let result = process_buffered_block(
+                                                    events,
+                                                    &storage,
+                                                    &consumer,
+                                                    summary_info,
+                                                    BlockProcessReason::Summary,
+                                                )
+                                                .await;
+                                                buffer.take_summary(summary_block_number);
+                                                if let Some((processed, errors)) = result {
+                                                    processed_count += processed;
+                                                    error_count += errors;
+                                                    blocks_processed += 1;
+                                                }
+                                            }
+
+                                            return;
+                                        }
+
                                         let event_id = event_id_header.or_else(|| {
                                             kg_msg
                                                 .meta()
@@ -260,6 +384,17 @@ async fn async_main() -> Result<(), IndexerError> {
                                         if let Some(ref event_id) = event_id {
                                             tracing::Span::current()
                                                 .record("event_id", event_id.as_str());
+                                        }
+
+                                        if log_event_ids_enabled() {
+                                            info!(
+                                                event = "kg_indexer.event_id",
+                                                topic = %topic,
+                                                event_id = event_id.as_deref().unwrap_or(""),
+                                                event_type = event_type.as_deref().unwrap_or(""),
+                                                block_number = kg_msg.block_number().unwrap_or(0),
+                                                "Received event"
+                                            );
                                         }
 
                                         // Get block number from metadata
@@ -271,20 +406,28 @@ async fn async_main() -> Result<(), IndexerError> {
                                                     topic = %topic,
                                                     "Message has no block metadata, processing immediately"
                                                 );
-                                                match process_message(kg_msg, &storage).await {
-                                                    Ok(_) => {
-                                                        processed_count += 1;
-                                                    }
-                                                    Err(e) => {
-                                                        error!(error = %e, "Failed to process message");
-                                                        error_count += 1;
-                                                    }
+                                            match process_message(kg_msg, &storage, event_id.as_deref()).await {
+                                                Ok(_) => {
+                                                    processed_count += 1;
                                                 }
-                                                if let Err(e) = consumer.commit_message(&topic, partition, offset) {
-                                                    error!(error = %e, "Failed to commit offset");
+                                                Err(e) => {
+                                                    error!(
+                                                        event_id = event_id.as_deref().unwrap_or(""),
+                                                        error = %e,
+                                                        "Failed to process message"
+                                                    );
+                                                    error_count += 1;
                                                 }
-                                                return;
                                             }
+                                            if let Err(e) = consumer.commit_message(&topic, partition, offset) {
+                                                error!(
+                                                    event_id = event_id.as_deref().unwrap_or(""),
+                                                    error = %e,
+                                                    "Failed to commit offset"
+                                                );
+                                            }
+                                            return;
+                                        }
                                         };
 
                                         let is_last = kg_msg.is_last();
@@ -297,7 +440,32 @@ async fn async_main() -> Result<(), IndexerError> {
                                             topic,
                                             partition,
                                             offset,
+                                            event_type: event_type.clone(),
+                                            event_id: event_id.clone(),
                                         });
+
+                                        if let Some(summary) = buffer.summary(block_number) {
+                                            if buffer.buffered_count(block_number)
+                                                >= summary.expected_count
+                                            {
+                                                let events = buffer.take_block(block_number);
+                                                let result = process_buffered_block(
+                                                    events,
+                                                    &storage,
+                                                    &consumer,
+                                                    Some(summary),
+                                                    BlockProcessReason::Summary,
+                                                )
+                                                .await;
+                                                buffer.take_summary(block_number);
+                                                if let Some((processed, errors)) = result {
+                                                    processed_count += processed;
+                                                    error_count += errors;
+                                                    blocks_processed += 1;
+                                                }
+                                                return;
+                                            }
+                                        }
 
                                         // If this is the last event in the block, process all buffered events
                                         if is_last {
@@ -310,35 +478,25 @@ async fn async_main() -> Result<(), IndexerError> {
                                                 "Processing block"
                                             );
 
-                                            let span = info_span!(
-                                                "kg_indexer.process_block",
-                                                block_number = block_number,
-                                                event_count = event_count
-                                            );
-                                            match process_block(events, &storage, &consumer)
-                                                .instrument(span)
-                                                .await
-                                            {
-                                                Ok(ops) => {
-                                                    processed_count += event_count as u64;
-                                                    blocks_processed += 1;
-                                                    debug!(
-                                                        block_number = block_number,
-                                                        ops = ops,
-                                                        "Block processed"
-                                                    );
-                                                }
-                                                Err(e) => {
-                                                    error!(
-                                                        block_number = block_number,
-                                                        error = %e,
-                                                        "Failed to process block"
-                                                    );
-                                                    error_count += event_count as u64;
-                                                }
+                                            let summary = buffer.summary(block_number);
+                                            let result = process_buffered_block(
+                                                events,
+                                                &storage,
+                                                &consumer,
+                                                summary,
+                                                BlockProcessReason::IsLast,
+                                            )
+                                            .await;
+                                            buffer.take_summary(block_number);
+                                            if let Some((processed, errors)) = result {
+                                                processed_count += processed;
+                                                error_count += errors;
+                                                blocks_processed += 1;
                                             }
 
-                                            if blocks_processed.is_multiple_of(10) && blocks_processed > 0 {
+                                            if blocks_processed.is_multiple_of(10)
+                                                && blocks_processed > 0
+                                            {
                                                 info!(
                                                     blocks = blocks_processed,
                                                     messages = processed_count,
@@ -353,17 +511,22 @@ async fn async_main() -> Result<(), IndexerError> {
                                             topic = %topic,
                                             partition = partition,
                                             offset = offset,
+                                            event_id = event_id_header.as_deref().unwrap_or(""),
                                             error = %e,
                                             "Failed to parse message"
                                         );
                                         error_count += 1;
 
-                                        // Still commit to avoid getting stuck
-                                        if let Err(e) = consumer.commit_message(&topic, partition, offset) {
-                                            error!(error = %e, "Failed to commit offset");
-                                        }
+                                    // Still commit to avoid getting stuck
+                                    if let Err(e) = consumer.commit_message(&topic, partition, offset) {
+                                        error!(
+                                            event_id = event_id_header.as_deref().unwrap_or(""),
+                                            error = %e,
+                                            "Failed to commit offset"
+                                        );
                                     }
                                 }
+                            }
                             }
                         }
                         .instrument(span)
@@ -449,9 +612,212 @@ fn extract_parent_context(
     opentelemetry::global::get_text_map_propagator(|prop| prop.extract(&extractor))
 }
 
+fn log_event_ids_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var("LOG_EVENT_IDS")
+            .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+            .unwrap_or(false)
+    })
+}
+
+const INDEXER_TOPICS: &[&str] = &[
+    "knowledge.edits",
+    "space.creations",
+    "space.membership",
+    "space.trust.extensions",
+    "space.governance",
+];
+
+const EXPECTED_EVENT_TYPES: &[&str] = &[
+    "EDITS_PUBLISHED",
+    "SPACE_REGISTERED",
+    "ROLE_GRANTED",
+    "ROLE_REVOKED",
+    "TRUST_EXTENSION",
+    "PROPOSAL_CREATED",
+    "PROPOSAL_VOTED",
+    "PROPOSAL_EXECUTED",
+];
+
+fn expected_count_for_indexer(
+    summary: &hermes_schema::pb::block_summary::HermesBlockSummary,
+) -> usize {
+    INDEXER_TOPICS
+        .iter()
+        .map(|topic| summary.counts_by_topic.get(*topic).copied().unwrap_or(0))
+        .sum::<u64>() as usize
+}
+
+enum BlockProcessReason {
+    Summary,
+    IsLast,
+    Stale,
+}
+
+impl BlockProcessReason {
+    fn as_str(&self) -> &'static str {
+        match self {
+            BlockProcessReason::Summary => "summary",
+            BlockProcessReason::IsLast => "is_last",
+            BlockProcessReason::Stale => "stale",
+        }
+    }
+}
+
+fn event_type_label(event: &BufferedEvent) -> String {
+    if let Some(ref event_type) = event.event_type {
+        return event_type.clone();
+    }
+
+    match event.msg {
+        KgMessage::Edit(_) => "EDITS_PUBLISHED".to_string(),
+        KgMessage::CreateSpace(_) => "SPACE_REGISTERED".to_string(),
+        KgMessage::RoleGranted(_) => "ROLE_GRANTED".to_string(),
+        KgMessage::RoleRevoked(_) => "ROLE_REVOKED".to_string(),
+        KgMessage::TrustExtension(_) => "TRUST_EXTENSION".to_string(),
+        KgMessage::ProposalCreated(_) => "PROPOSAL_CREATED".to_string(),
+        KgMessage::ProposalVoted(_) => "PROPOSAL_VOTED".to_string(),
+        KgMessage::ProposalExecuted(_) => "PROPOSAL_EXECUTED".to_string(),
+        KgMessage::BlockSummary(_) => "BLOCK_SUMMARY".to_string(),
+    }
+}
+
+async fn process_buffered_block(
+    events: Vec<BufferedEvent>,
+    storage: &Storage,
+    consumer: &KafkaConsumer,
+    summary_info: Option<&BlockSummaryInfo>,
+    reason: BlockProcessReason,
+) -> Option<(u64, u64)> {
+    if events.is_empty() {
+        return None;
+    }
+
+    let block_number = events[0].msg.block_number().unwrap_or(0);
+    let cursor = events[0]
+        .msg
+        .meta()
+        .map(|meta| meta.cursor.clone())
+        .unwrap_or_default();
+    let batch_id = format!("{}:{}", block_number, cursor);
+
+    let mut counts_by_event_type: HashMap<String, u64> = HashMap::new();
+    let mut counts_by_topic: HashMap<String, u64> = HashMap::new();
+    let mut partition_set: Vec<i32> = Vec::new();
+    let mut offset_min = i64::MAX;
+    let mut offset_max = i64::MIN;
+
+    for event in &events {
+        *counts_by_event_type.entry(event_type_label(event)).or_insert(0) += 1;
+        *counts_by_topic.entry(event.topic.clone()).or_insert(0) += 1;
+        if !partition_set.contains(&event.partition) {
+            partition_set.push(event.partition);
+        }
+        offset_min = offset_min.min(event.offset);
+        offset_max = offset_max.max(event.offset);
+    }
+    partition_set.sort_unstable();
+
+    let expected_event_count = summary_info.map(|s| s.expected_count as u64).unwrap_or(0);
+    let expected_counts_by_type: HashMap<String, u64> = summary_info
+        .map(|s| {
+            EXPECTED_EVENT_TYPES
+                .iter()
+                .map(|name| (name.to_string(), *s.summary.counts_by_event_type.get(*name).unwrap_or(&0)))
+                .collect()
+        })
+        .unwrap_or_default();
+
+    let missing_event_types: Vec<String> = summary_info
+        .map(|s| {
+            EXPECTED_EVENT_TYPES
+                .iter()
+                .filter_map(|name| {
+                    let expected = s.summary.counts_by_event_type.get(*name).copied().unwrap_or(0);
+                    let actual = counts_by_event_type.get(*name).copied().unwrap_or(0);
+                    if expected > 0 && actual == 0 {
+                        Some((*name).to_string())
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        })
+        .unwrap_or_default();
+
+    info!(
+        event = "kg_indexer.batch_start",
+        batch_id = %batch_id,
+        block_number = block_number,
+        cursor = %cursor,
+        reason = reason.as_str(),
+        buffered_event_count = events.len(),
+        expected_event_count = expected_event_count,
+        counts_by_event_type = ?counts_by_event_type,
+        counts_by_topic = ?counts_by_topic,
+        expected_counts_by_type = ?expected_counts_by_type,
+        offset_min = offset_min,
+        offset_max = offset_max,
+        partitions = ?partition_set,
+        "Batch start"
+    );
+
+    let span = info_span!(
+        "kg_indexer.process_block",
+        block_number = block_number,
+        event_count = events.len(),
+        reason = reason.as_str()
+    );
+    let start = Instant::now();
+
+    match process_block(events, storage, consumer).instrument(span).await {
+        Ok(result) => {
+            let duration_ms = start.elapsed().as_millis();
+            info!(
+                event = "kg_indexer.batch_end",
+                batch_id = %batch_id,
+                block_number = block_number,
+                cursor = %cursor,
+                duration_ms = duration_ms,
+                db_tx_duration_ms = result.db_tx_duration_ms,
+                db_ops_total = result.ops as u64,
+                commit_offsets_failed = result.commit_failures,
+                counts_by_event_type = ?counts_by_event_type,
+                counts_by_topic = ?counts_by_topic,
+                expected_counts_by_type = ?expected_counts_by_type,
+                missing_event_types = ?missing_event_types,
+                "Batch end"
+            );
+            Some((events.len() as u64, 0))
+        }
+        Err(e) => {
+            let duration_ms = start.elapsed().as_millis();
+            error!(
+                event = "kg_indexer.batch_end",
+                batch_id = %batch_id,
+                block_number = block_number,
+                cursor = %cursor,
+                duration_ms = duration_ms,
+                error = %e,
+                counts_by_event_type = ?counts_by_event_type,
+                counts_by_topic = ?counts_by_topic,
+                expected_counts_by_type = ?expected_counts_by_type,
+                missing_event_types = ?missing_event_types,
+                "Batch failed"
+            );
+            Some((0, events.len() as u64))
+        }
+    }
+}
+
 /// Process a single Kafka message within its own transaction.
 /// Returns the number of database operations performed.
-async fn process_message(msg: KgMessage, storage: &Storage) -> Result<usize, IndexerError> {
+async fn process_message(
+    msg: KgMessage,
+    storage: &Storage,
+    event_id: Option<&str>,
+) -> Result<usize, IndexerError> {
     use handlers::membership::MembershipChange;
     use models::relations::RelationOp;
     use models::values::ValueChangeType;
@@ -601,11 +967,17 @@ async fn process_message(msg: KgMessage, storage: &Storage) -> Result<usize, Ind
 /// Process all events in a block within a single transaction.
 /// Events should already be sorted by sequence.
 /// Returns the total number of database operations performed.
+struct ProcessBlockResult {
+    ops: usize,
+    commit_failures: u64,
+    db_tx_duration_ms: u128,
+}
+
 async fn process_block(
     events: Vec<BufferedEvent>,
     storage: &Storage,
     consumer: &KafkaConsumer,
-) -> Result<usize, IndexerError> {
+) -> Result<ProcessBlockResult, IndexerError> {
     use handlers::membership::MembershipChange;
     use models::relations::RelationOp;
     use models::values::ValueChangeType;
@@ -619,10 +991,12 @@ async fn process_block(
         .execute(&mut *tx)
         .await?;
     let mut total_ops = 0;
+    let tx_start = Instant::now();
 
     // Process each message in sequence order
     for event in &events {
-        let ops = match &event.msg {
+        let ops = (|| {
+            Ok::<usize, IndexerError>(match &event.msg {
             KgMessage::Edit(edit) => {
                 let result = handlers::edits::handle_edit(edit)?;
 
@@ -752,26 +1126,44 @@ async fn process_block(
                     .await?;
                 1
             }
-        };
+            KgMessage::BlockSummary(_) => 0,
+        })
+        })()
+        .map_err(|e| {
+            error!(
+                event_id = event.event_id.as_deref().unwrap_or(""),
+                error = %e,
+                "Failed to process event in block"
+            );
+            e
+        })?;
 
         total_ops += ops;
     }
 
     // Commit the transaction
     tx.commit().await?;
+    let db_tx_duration_ms = tx_start.elapsed().as_millis();
 
     // Commit Kafka offsets for all processed messages
+    let mut commit_failures = 0;
     for event in events {
         if let Err(e) = consumer.commit_message(&event.topic, event.partition, event.offset) {
+            commit_failures += 1;
             error!(
                 topic = %event.topic,
                 partition = event.partition,
                 offset = event.offset,
+                event_id = event.event_id.as_deref().unwrap_or(""),
                 error = %e,
                 "Failed to commit offset"
             );
         }
     }
 
-    Ok(total_ops)
+    Ok(ProcessBlockResult {
+        ops: total_ops,
+        commit_failures,
+        db_tx_duration_ms,
+    })
 }

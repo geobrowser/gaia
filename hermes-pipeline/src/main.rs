@@ -40,6 +40,7 @@ mod emit;
 
 use std::env;
 use std::fmt;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use hermes_instrumentation::{Instrument, debug, info, info_span, warn};
@@ -243,6 +244,65 @@ impl Pipeline {
         // 7. Voting events (social layer)
         // 8. Edits come last as they may reference entities across trusted spaces
 
+        let space_count = spaces.events.len() as u64;
+        let membership_count = membership.total() as u64;
+        let trust_count = trust.total();
+        let moderation_count = moderation.total() as u64;
+        let topics_count = topics.total() as u64;
+        let governance_count = governance.total() as u64;
+        let voting_count = voting.total() as u64;
+        let edit_count = edits.events.len() as u64;
+        let total = space_count
+            + membership_count
+            + trust_count
+            + moderation_count
+            + topics_count
+            + governance_count
+            + voting_count
+            + edit_count;
+
+        let mut counts_by_topic: HashMap<String, u64> = HashMap::new();
+        counts_by_topic.insert(topics::SPACE_CREATIONS.to_string(), space_count);
+        counts_by_topic.insert(topics::MEMBERSHIP.to_string(), membership_count);
+        counts_by_topic.insert(topics::TRUST_EXTENSIONS.to_string(), trust_count as u64);
+        counts_by_topic.insert(topics::MODERATION.to_string(), moderation_count);
+        counts_by_topic.insert(topics::TOPICS.to_string(), topics_count);
+        counts_by_topic.insert(topics::GOVERNANCE.to_string(), governance_count);
+        counts_by_topic.insert(topics::VOTING.to_string(), voting_count);
+        counts_by_topic.insert(topics::EDITS.to_string(), edit_count);
+
+        let mut counts_by_event_type: HashMap<String, u64> = HashMap::new();
+        counts_by_event_type.insert("SPACE_REGISTERED".to_string(), space_count);
+        counts_by_event_type.insert("EDITS_PUBLISHED".to_string(), edit_count);
+        counts_by_event_type.insert("ROLE_GRANTED".to_string(), membership.roles_granted.len() as u64);
+        counts_by_event_type.insert("ROLE_REVOKED".to_string(), membership.roles_revoked.len() as u64);
+        counts_by_event_type.insert("SPACE_LEFT".to_string(), membership.spaces_left.len() as u64);
+        counts_by_event_type.insert("TRUST_EXTENSION".to_string(), trust_count as u64);
+        counts_by_event_type.insert("SUBSPACE_VERIFIED".to_string(), trust.verified as u64);
+        counts_by_event_type.insert("SUBSPACE_RELATED".to_string(), trust.related as u64);
+        counts_by_event_type.insert("SUBSPACE_TOPIC_DECLARED".to_string(), trust.topic_declared as u64);
+        counts_by_event_type.insert("SUBSPACE_REMOVED".to_string(), trust.removed as u64);
+        counts_by_event_type.insert("EDITOR_FLAGGED".to_string(), moderation.editors_flagged.len() as u64);
+        counts_by_event_type.insert("EDITOR_UNFLAGGED".to_string(), moderation.editors_unflagged.len() as u64);
+        counts_by_event_type.insert("CONTENT_FLAGGED".to_string(), moderation.content_flagged.len() as u64);
+        counts_by_event_type.insert("CONTENT_UNFLAGGED".to_string(), moderation.content_unflagged.len() as u64);
+        counts_by_event_type.insert("TOPIC_DECLARED".to_string(), topics.topics_declared.len() as u64);
+        counts_by_event_type.insert("PROPOSAL_CREATED".to_string(), governance.proposals_created.len() as u64);
+        counts_by_event_type.insert("PROPOSAL_VOTED".to_string(), governance.proposals_voted.len() as u64);
+        counts_by_event_type.insert("PROPOSAL_EXECUTED".to_string(), governance.proposals_executed.len() as u64);
+        counts_by_event_type.insert("VOTE_CAST".to_string(), voting.votes.len() as u64);
+
+        let emit_start = std::time::Instant::now();
+        info!(
+            event = "hermes_pipeline.emit_start",
+            block_number = meta.block_number,
+            cursor = %meta.cursor,
+            total_events = total,
+            counts_by_topic = ?counts_by_topic,
+            counts_by_event_type = ?counts_by_event_type,
+            "Emit start"
+        );
+
         {
             let _emit_span = info_span!("emit").entered();
 
@@ -435,24 +495,31 @@ impl Pipeline {
             warn!(count = edits.fetch_failures, "Edit fetch failures");
         }
 
-        // Log block summary
-        let space_count = spaces.events.len() as u64;
-        let membership_count = membership.total() as u64;
-        let trust_count = trust.total();
-        let moderation_count = moderation.total() as u64;
-        let topics_count = topics.total() as u64;
-        let governance_count = governance.total() as u64;
-        let voting_count = voting.total() as u64;
-        let edit_count = edits.events.len() as u64;
-        let total = space_count
-            + membership_count
-            + trust_count
-            + moderation_count
-            + topics_count
-            + governance_count
-            + voting_count
-            + edit_count;
+        let emit_duration_ms = emit_start.elapsed().as_millis();
+        info!(
+            event = "hermes_pipeline.emit_end",
+            block_number = meta.block_number,
+            cursor = %meta.cursor,
+            total_events = total,
+            duration_ms = emit_duration_ms,
+            counts_by_topic = ?counts_by_topic,
+            counts_by_event_type = ?counts_by_event_type,
+            "Emit end"
+        );
 
+        // Emit block summary for consumers
+        let created_at = meta.timestamp.parse().unwrap_or(0);
+        let summary = hermes_schema::pb::block_summary::HermesBlockSummary {
+            block_number: meta.block_number,
+            cursor: meta.cursor.clone(),
+            created_at,
+            total_events: total,
+            counts_by_topic,
+            counts_by_event_type,
+        };
+        self.emitter.emit(&summary)?;
+
+        // Log block summary
         if total > 0 || edits.cache_misses > 0 || edits.errored_entries > 0 {
             info!(
                 spaces = space_count,
