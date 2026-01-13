@@ -4,8 +4,10 @@ use std::time::{Duration, Instant};
 
 use futures::StreamExt;
 use rdkafka::Message;
-use tracing::{debug, error, info, warn};
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+use hermes_instrumentation::{Instrument, debug, error, info, info_span, warn};
+use opentelemetry::propagation::{Extractor, TraceContextPropagator};
+use tracing_opentelemetry::OpenTelemetrySpanExt;
+use hermes_schema::pb::blockchain_metadata::BlockchainMetadata;
 
 mod consumer;
 mod error;
@@ -71,16 +73,65 @@ impl BlockBuffer {
     }
 }
 
-#[tokio::main]
-async fn main() -> Result<(), IndexerError> {
+fn build_telemetry_config() -> hermes_instrumentation::Config {
+    use hermes_instrumentation::{Backend, Config};
+
+    let backend = match env::var("OTEL_URL") {
+        Ok(endpoint) => {
+            let mut headers = Vec::new();
+
+            if let Ok(token) = env::var("OTEL_TOKEN") {
+                headers.push(("Authorization".into(), format!("Bearer {}", token)));
+            }
+
+            let dataset = env::var("OTEL_DATASET").ok();
+            if let Some(ref dataset) = dataset {
+                headers.push(("X-Axiom-Dataset".into(), dataset.clone()));
+            }
+
+            let debug = env::var("OTEL_DEBUG")
+                .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+                .unwrap_or(false);
+
+            let has_auth = headers.iter().any(|(k, _)| k == "Authorization");
+            println!(
+                "Telemetry: OTLP HTTP -> {} (dataset: {}, auth: {}, debug: {})",
+                endpoint,
+                dataset.as_deref().unwrap_or("none"),
+                if has_auth { "yes" } else { "no" },
+                if debug { "yes" } else { "no" }
+            );
+
+            Backend::OtlpHttp {
+                endpoint,
+                headers,
+                debug,
+            }
+        }
+        _ => {
+            println!("Telemetry: Console (set OTEL_URL to enable OTLP export)");
+            Backend::Console
+        }
+    };
+
+    Config::new("kg-indexer", backend)
+}
+
+fn main() -> Result<(), IndexerError> {
     dotenv::dotenv().ok();
 
-    // Initialize tracing
-    tracing_subscriber::registry()
-        .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
-        .with(tracing_subscriber::fmt::layer())
-        .init();
+    let _telemetry = hermes_instrumentation::init(build_telemetry_config())
+        .map_err(|e| IndexerError::config(format!("telemetry init failed: {}", e)))?;
+    opentelemetry::global::set_text_map_propagator(TraceContextPropagator::new());
 
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .map_err(|e| IndexerError::config(format!("failed to build tokio runtime: {}", e)))?
+        .block_on(async_main())
+}
+
+async fn async_main() -> Result<(), IndexerError> {
     info!("Starting kg-indexer");
 
     // Load configuration from environment
@@ -181,104 +232,142 @@ async fn main() -> Result<(), IndexerError> {
                         let topic = msg.topic().to_string();
                         let partition = msg.partition();
                         let offset = msg.offset();
+                        let event_type = get_event_type(msg.headers());
+                        let event_id_header = get_header_value(msg.headers(), "event-id");
+                        let parent_cx = extract_parent_context(msg.headers());
 
-                        if let Some(payload) = msg.payload() {
-                            let event_type = get_event_type(msg.headers());
-                            match parse_message(&topic, payload, event_type.as_deref()) {
-                                Ok(kg_msg) => {
-                                    // Get block number from metadata
-                                    let block_number = match kg_msg.block_number() {
-                                        Some(bn) => bn,
-                                        None => {
-                                            // Fall back to immediate processing if no metadata
-                                            warn!(
-                                                topic = %topic,
-                                                "Message has no block metadata, processing immediately"
+                        let span = info_span!(
+                            "kg_indexer.poll",
+                            topic = %topic,
+                            partition = partition,
+                            offset = offset,
+                            event_type = event_type.as_deref().unwrap_or(""),
+                            event_id = tracing::field::Empty,
+                            block_number = tracing::field::Empty,
+                            is_last = tracing::field::Empty
+                        );
+                        span.set_parent(parent_cx);
+
+                        async move {
+                            if let Some(payload) = msg.payload() {
+                                match parse_message(&topic, payload, event_type.as_deref()) {
+                                    Ok(kg_msg) => {
+                                        let event_id = event_id_header.or_else(|| {
+                                            kg_msg
+                                                .meta()
+                                                .map(|meta| event_id_from_meta(meta, &topic))
+                                        });
+                                        if let Some(ref event_id) = event_id {
+                                            tracing::Span::current()
+                                                .record("event_id", event_id.as_str());
+                                        }
+
+                                        // Get block number from metadata
+                                        let block_number = match kg_msg.block_number() {
+                                            Some(bn) => bn,
+                                            None => {
+                                                // Fall back to immediate processing if no metadata
+                                                warn!(
+                                                    topic = %topic,
+                                                    "Message has no block metadata, processing immediately"
+                                                );
+                                                match process_message(kg_msg, &storage).await {
+                                                    Ok(_) => {
+                                                        processed_count += 1;
+                                                    }
+                                                    Err(e) => {
+                                                        error!(error = %e, "Failed to process message");
+                                                        error_count += 1;
+                                                    }
+                                                }
+                                                if let Err(e) = consumer.commit_message(&topic, partition, offset) {
+                                                    error!(error = %e, "Failed to commit offset");
+                                                }
+                                                return;
+                                            }
+                                        };
+
+                                        let is_last = kg_msg.is_last();
+                                        tracing::Span::current().record("block_number", block_number);
+                                        tracing::Span::current().record("is_last", is_last);
+
+                                        // Buffer the message
+                                        buffer.push(block_number, BufferedEvent {
+                                            msg: kg_msg,
+                                            topic,
+                                            partition,
+                                            offset,
+                                        });
+
+                                        // If this is the last event in the block, process all buffered events
+                                        if is_last {
+                                            let events = buffer.take_block(block_number);
+                                            let event_count = events.len();
+
+                                            debug!(
+                                                block_number = block_number,
+                                                event_count = event_count,
+                                                "Processing block"
                                             );
-                                            match process_message(kg_msg, &storage).await {
-                                                Ok(_) => {
-                                                    processed_count += 1;
+
+                                            let span = info_span!(
+                                                "kg_indexer.process_block",
+                                                block_number = block_number,
+                                                event_count = event_count
+                                            );
+                                            match process_block(events, &storage, &consumer)
+                                                .instrument(span)
+                                                .await
+                                            {
+                                                Ok(ops) => {
+                                                    processed_count += event_count as u64;
+                                                    blocks_processed += 1;
+                                                    debug!(
+                                                        block_number = block_number,
+                                                        ops = ops,
+                                                        "Block processed"
+                                                    );
                                                 }
                                                 Err(e) => {
-                                                    error!(error = %e, "Failed to process message");
-                                                    error_count += 1;
+                                                    error!(
+                                                        block_number = block_number,
+                                                        error = %e,
+                                                        "Failed to process block"
+                                                    );
+                                                    error_count += event_count as u64;
                                                 }
                                             }
-                                            if let Err(e) = consumer.commit_message(&topic, partition, offset) {
-                                                error!(error = %e, "Failed to commit offset");
-                                            }
-                                            continue;
-                                        }
-                                    };
 
-                                    let is_last = kg_msg.is_last();
-
-                                    // Buffer the message
-                                    buffer.push(block_number, BufferedEvent {
-                                        msg: kg_msg,
-                                        topic,
-                                        partition,
-                                        offset,
-                                    });
-
-                                    // If this is the last event in the block, process all buffered events
-                                    if is_last {
-                                        let events = buffer.take_block(block_number);
-                                        let event_count = events.len();
-
-                                        debug!(
-                                            block_number = block_number,
-                                            event_count = event_count,
-                                            "Processing block"
-                                        );
-
-                                        match process_block(events, &storage, &consumer).await {
-                                            Ok(ops) => {
-                                                processed_count += event_count as u64;
-                                                blocks_processed += 1;
-                                                debug!(
-                                                    block_number = block_number,
-                                                    ops = ops,
-                                                    "Block processed"
+                                            if blocks_processed.is_multiple_of(10) && blocks_processed > 0 {
+                                                info!(
+                                                    blocks = blocks_processed,
+                                                    messages = processed_count,
+                                                    errors = error_count,
+                                                    "Progress update"
                                                 );
                                             }
-                                            Err(e) => {
-                                                error!(
-                                                    block_number = block_number,
-                                                    error = %e,
-                                                    "Failed to process block"
-                                                );
-                                                error_count += event_count as u64;
-                                            }
-                                        }
-
-                                        if blocks_processed.is_multiple_of(10) && blocks_processed > 0 {
-                                            info!(
-                                                blocks = blocks_processed,
-                                                messages = processed_count,
-                                                errors = error_count,
-                                                "Progress update"
-                                            );
                                         }
                                     }
-                                }
-                                Err(e) => {
-                                    warn!(
-                                        topic = %topic,
-                                        partition = partition,
-                                        offset = offset,
-                                        error = %e,
-                                        "Failed to parse message"
-                                    );
-                                    error_count += 1;
+                                    Err(e) => {
+                                        warn!(
+                                            topic = %topic,
+                                            partition = partition,
+                                            offset = offset,
+                                            error = %e,
+                                            "Failed to parse message"
+                                        );
+                                        error_count += 1;
 
-                                    // Still commit to avoid getting stuck
-                                    if let Err(e) = consumer.commit_message(&topic, partition, offset) {
-                                        error!(error = %e, "Failed to commit offset");
+                                        // Still commit to avoid getting stuck
+                                        if let Err(e) = consumer.commit_message(&topic, partition, offset) {
+                                            error!(error = %e, "Failed to commit offset");
+                                        }
                                     }
                                 }
                             }
                         }
+                        .instrument(span)
+                        .await;
                     }
                     Some(Err(e)) => {
                         error!(error = %e, "Kafka error");
@@ -299,6 +388,65 @@ async fn main() -> Result<(), IndexerError> {
     );
 
     Ok(())
+}
+
+fn event_id_from_meta(meta: &BlockchainMetadata, topic: &str) -> String {
+    format!(
+        "{}:{}:{}:{}",
+        topic, meta.block_number, meta.sequence, meta.cursor
+    )
+}
+
+fn get_header_value(
+    headers: Option<&rdkafka::message::BorrowedHeaders>,
+    key: &str,
+) -> Option<String> {
+    headers.and_then(|h| {
+        for header in h.iter() {
+            if header.key.eq_ignore_ascii_case(key) {
+                if let Some(value) = header.value {
+                    if let Ok(value_str) = std::str::from_utf8(value) {
+                        return Some(value_str.to_string());
+                    }
+                }
+            }
+        }
+        None
+    })
+}
+
+struct KafkaHeadersExtractor<'a> {
+    headers: Option<&'a rdkafka::message::BorrowedHeaders>,
+}
+
+impl<'a> Extractor for KafkaHeadersExtractor<'a> {
+    fn get(&self, key: &str) -> Option<&str> {
+        self.headers.and_then(|headers| {
+            for header in headers.iter() {
+                if header.key.eq_ignore_ascii_case(key) {
+                    if let Some(value) = header.value {
+                        if let Ok(value_str) = std::str::from_utf8(value) {
+                            return Some(value_str);
+                        }
+                    }
+                }
+            }
+            None
+        })
+    }
+
+    fn keys(&self) -> Vec<&str> {
+        self.headers
+            .map(|headers| headers.iter().map(|header| header.key).collect())
+            .unwrap_or_default()
+    }
+}
+
+fn extract_parent_context(
+    headers: Option<&rdkafka::message::BorrowedHeaders>,
+) -> opentelemetry::Context {
+    let extractor = KafkaHeadersExtractor { headers };
+    opentelemetry::global::get_text_map_propagator(|prop| prop.extract(&extractor))
 }
 
 /// Process a single Kafka message within its own transaction.

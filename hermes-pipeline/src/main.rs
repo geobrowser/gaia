@@ -43,6 +43,7 @@ use std::fmt;
 use std::sync::Arc;
 
 use hermes_instrumentation::{Instrument, debug, info, info_span, warn};
+use opentelemetry::propagation::TraceContextPropagator;
 use prost::Message;
 
 use hermes_kafka::create_producer;
@@ -584,6 +585,7 @@ fn main() -> anyhow::Result<()> {
     //
     // Keep the guard alive until the end of main to ensure spans are flushed.
     let _telemetry = hermes_instrumentation::init(build_telemetry_config())?;
+    opentelemetry::global::set_text_map_propagator(TraceContextPropagator::new());
 
     // Create and run the tokio runtime manually (instead of #[tokio::main])
     // - new_multi_thread(): Uses a thread pool for parallel task execution,
