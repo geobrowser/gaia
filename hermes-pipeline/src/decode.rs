@@ -5,6 +5,7 @@
 
 use alloy::sol;
 use alloy::sol_types::{SolType, sol_data};
+use std::borrow::Cow;
 use thiserror::Error;
 
 /// Errors that can occur during ABI decoding.
@@ -246,12 +247,38 @@ sol! {
 // PROPOSAL_CREATED: abi.encode(bytes16 proposalId, VotingMode, Action[])
 type ProposalCreatedDataType = sol! { (bytes16, uint8, Action[]) };
 // PROPOSAL_SETTINGS_USED: abi.encode(startDate, lastDate, votingMode, quorum, supportThreshold)
-type ProposalSettingsUsedDataType = sol! { (uint64, uint64, uint8, uint256, uint256) };
+// Note: onchain start/last dates are uint256 timestamps.
+type ProposalSettingsUsedDataType = sol! { (uint256, uint256, uint8, uint256, uint256) };
 // PROPOSAL_VOTED: abi.encode(bytes16 proposalId, VoteOption)
 type ProposalVotedDataType = sol! { (bytes16, uint8) };
 type VoteDataType = sol! { (uint16, bytes16, bytes16) };
 #[allow(dead_code)] // Prepared for future EDITS_PUBLISHED decoding
 type EditsPublishedDataType = sol! { (bytes, bytes) };
+type WrappedBytesType = sol! { bytes };
+
+fn maybe_unwrap_bytes(data: &[u8]) -> Cow<'_, [u8]> {
+    if data.len() < 64 {
+        return Cow::Borrowed(data);
+    }
+
+    if data[0..24].iter().any(|b| *b != 0) || data[32..56].iter().any(|b| *b != 0) {
+        return Cow::Borrowed(data);
+    }
+
+    let offset = u64::from_be_bytes(data[24..32].try_into().unwrap());
+    if offset != 32 {
+        return Cow::Borrowed(data);
+    }
+
+    let len = u64::from_be_bytes(data[56..64].try_into().unwrap()) as usize;
+    let start = 64;
+    let end = start + len;
+    if end > data.len() {
+        return Cow::Borrowed(data);
+    }
+
+    Cow::Borrowed(&data[start..end])
+}
 
 // ============================================================================
 // Governance Decoding
@@ -306,8 +333,10 @@ pub fn decode_proposal_created(data: &[u8]) -> Result<ProposalCreatedData, Decod
         });
     }
 
-    let (proposal_id, voting_mode, actions) = ProposalCreatedDataType::abi_decode(data)
+    let data = maybe_unwrap_bytes(data);
+    let decoded = ProposalCreatedDataType::abi_decode(&data)
         .map_err(|e| DecodeError::AbiDecode(e.to_string()))?;
+    let (proposal_id, voting_mode, actions) = decoded;
 
     let actions = actions
         .into_iter()
@@ -336,17 +365,20 @@ pub fn decode_proposal_settings_used(data: &[u8]) -> Result<ProposalSettingsData
         });
     }
 
-    let (start_date, last_date, voting_mode, quorum, support_threshold) =
-        ProposalSettingsUsedDataType::abi_decode(data)
-            .map_err(|e| DecodeError::AbiDecode(e.to_string()))?;
+    let data = maybe_unwrap_bytes(data);
+    let decoded = ProposalSettingsUsedDataType::abi_decode(&data)
+        .map_err(|e| DecodeError::AbiDecode(e.to_string()))?;
+    let (start_date, last_date, voting_mode, quorum, support_threshold) = decoded;
 
     // Convert U256 to u64, saturating if too large
+    let start_date_u64 = start_date.try_into().unwrap_or(u64::MAX);
+    let last_date_u64 = last_date.try_into().unwrap_or(u64::MAX);
     let quorum_u64 = quorum.try_into().unwrap_or(u64::MAX);
     let threshold_u64 = support_threshold.try_into().unwrap_or(u64::MAX);
 
     Ok(ProposalSettingsData {
-        start_date,
-        last_date,
+        start_date: start_date_u64,
+        last_date: last_date_u64,
         voting_mode,
         quorum: quorum_u64,
         support_threshold: threshold_u64,

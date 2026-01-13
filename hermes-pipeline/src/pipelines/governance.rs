@@ -235,6 +235,8 @@ fn parse_proposal_created(action: &Action, sequence: u32) -> Option<ProposalCrea
             warn!(
                 error = %e,
                 proposal_id = %hex::encode(&action.topic[..16]),
+                data_len = action.data.len(),
+                data = %hex::encode(&action.data),
                 "Failed to decode proposal created data"
             );
             return None;
@@ -248,6 +250,8 @@ fn parse_proposal_created(action: &Action, sequence: u32) -> Option<ProposalCrea
             warn!(
                 voting_mode = decoded.voting_mode,
                 proposal_id = %hex::encode(&action.topic[..16]),
+                data_len = action.data.len(),
+                data = %hex::encode(&action.data),
                 "Invalid voting mode in proposal created"
             );
             return None;
@@ -301,6 +305,8 @@ fn parse_proposal_settings_used(action: &Action) -> Option<ProposalSettingsPendi
             warn!(
                 error = %e,
                 proposal_id = %hex::encode(&action.topic[..16]),
+                data_len = action.data.len(),
+                data = %hex::encode(&action.data),
                 "Failed to decode proposal settings used data"
             );
             return None;
@@ -316,6 +322,8 @@ fn parse_proposal_settings_used(action: &Action) -> Option<ProposalSettingsPendi
             warn!(
                 voting_mode = decoded.voting_mode,
                 proposal_id = %hex::encode(&action.topic[..16]),
+                data_len = action.data.len(),
+                data = %hex::encode(&action.data),
                 "Invalid voting mode in proposal settings"
             );
             return None;

@@ -3,14 +3,14 @@ use std::env;
 use std::time::{Duration, Instant};
 
 use futures::StreamExt;
-use rdkafka::Message;
-use hermes_instrumentation::{Instrument, debug, error, info, info_span, warn};
+use hermes_instrumentation::{debug, error, info, info_span, warn, Instrument};
+use hermes_schema::pb::blockchain_metadata::BlockchainMetadata;
 use opentelemetry::propagation::Extractor;
 use opentelemetry_sdk::propagation::TraceContextPropagator;
 use rdkafka::message::Headers;
-use tracing_opentelemetry::OpenTelemetrySpanExt;
-use hermes_schema::pb::blockchain_metadata::BlockchainMetadata;
+use rdkafka::Message;
 use std::sync::OnceLock;
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 mod consumer;
 mod error;
@@ -706,7 +706,9 @@ async fn process_buffered_block(
     let mut offset_max = i64::MIN;
 
     for event in &events {
-        *counts_by_event_type.entry(event_type_label(event)).or_insert(0) += 1;
+        *counts_by_event_type
+            .entry(event_type_label(event))
+            .or_insert(0) += 1;
         *counts_by_topic.entry(event.topic.clone()).or_insert(0) += 1;
         if !partition_set.contains(&event.partition) {
             partition_set.push(event.partition);
@@ -741,7 +743,12 @@ async fn process_buffered_block(
             EXPECTED_EVENT_TYPES
                 .iter()
                 .filter_map(|name| {
-                    let expected = s.summary.counts_by_event_type.get(*name).copied().unwrap_or(0);
+                    let expected = s
+                        .summary
+                        .counts_by_event_type
+                        .get(*name)
+                        .copied()
+                        .unwrap_or(0);
                     let actual = counts_by_event_type.get(*name).copied().unwrap_or(0);
                     if expected > 0 && actual == 0 {
                         Some((*name).to_string())
@@ -779,7 +786,10 @@ async fn process_buffered_block(
     );
     let start = Instant::now();
 
-    match process_block(events, storage, consumer).instrument(span).await {
+    match process_block(events, storage, consumer)
+        .instrument(span)
+        .await
+    {
         Ok(result) => {
             let duration_ms = start.elapsed().as_millis();
             if otel_enabled() {
@@ -1041,137 +1051,141 @@ async fn process_block(
     for event in &events {
         let ops = async {
             Ok::<usize, IndexerError>(match &event.msg {
-            KgMessage::Edit(edit) => {
-                let result = handlers::edits::handle_edit(edit)?;
+                KgMessage::Edit(edit) => {
+                    let result = handlers::edits::handle_edit(edit)?;
 
-                // Partition values into sets and deletes
-                let (set_values, delete_values): (Vec<_>, Vec<_>) = result
-                    .values
-                    .into_iter()
-                    .partition(|v| matches!(v.change_type, ValueChangeType::Set));
+                    // Partition values into sets and deletes
+                    let (set_values, delete_values): (Vec<_>, Vec<_>) = result
+                        .values
+                        .into_iter()
+                        .partition(|v| matches!(v.change_type, ValueChangeType::Set));
 
-                let delete_value_ids: Vec<_> = delete_values
-                    .into_iter()
-                    .map(|v| (v.id, v.space_id))
-                    .collect();
+                    let delete_value_ids: Vec<_> = delete_values
+                        .into_iter()
+                        .map(|v| (v.id, v.space_id))
+                        .collect();
 
-                // Partition relations by operation type
-                let mut set_relations = Vec::new();
-                let mut update_relations = Vec::new();
-                let mut unset_relations = Vec::new();
-                let mut delete_relations = Vec::new();
+                    // Partition relations by operation type
+                    let mut set_relations = Vec::new();
+                    let mut update_relations = Vec::new();
+                    let mut unset_relations = Vec::new();
+                    let mut delete_relations = Vec::new();
 
-                for op in result.relations {
-                    match op {
-                        RelationOp::Create(r) => set_relations.push(r),
-                        RelationOp::Update(r) => update_relations.push(r),
-                        RelationOp::Unset(r) => unset_relations.push(r),
-                        RelationOp::Delete(r) => delete_relations.push((r.id, r.space_id)),
+                    for op in result.relations {
+                        match op {
+                            RelationOp::Create(r) => set_relations.push(r),
+                            RelationOp::Update(r) => update_relations.push(r),
+                            RelationOp::Unset(r) => unset_relations.push(r),
+                            RelationOp::Delete(r) => delete_relations.push((r.id, r.space_id)),
+                        }
                     }
-                }
 
-                let ops = result.entities.len()
-                    + result.properties.len()
-                    + set_values.len()
-                    + delete_value_ids.len()
-                    + set_relations.len()
-                    + update_relations.len()
-                    + unset_relations.len()
-                    + delete_relations.len();
+                    let ops = result.entities.len()
+                        + result.properties.len()
+                        + set_values.len()
+                        + delete_value_ids.len()
+                        + set_relations.len()
+                        + update_relations.len()
+                        + unset_relations.len()
+                        + delete_relations.len();
 
-                // Bulk insert all operations
-                storage.insert_entities(&result.entities, &mut tx).await?;
-                storage
-                    .insert_properties(&result.properties, &mut tx)
-                    .await?;
-                storage.insert_values(&set_values, &mut tx).await?;
-                storage.delete_values(&delete_value_ids, &mut tx).await?;
-                storage.insert_relations(&set_relations, &mut tx).await?;
-                storage.update_relations(&update_relations, &mut tx).await?;
-                storage
-                    .unset_relation_fields(&unset_relations, &mut tx)
-                    .await?;
-                storage.delete_relations(&delete_relations, &mut tx).await?;
-
-                ops
-            }
-            KgMessage::CreateSpace(space) => {
-                let space_item = handlers::spaces::handle_create_space(space)?;
-                storage.insert_spaces(&[space_item], &mut tx).await?;
-                1
-            }
-            KgMessage::RoleGranted(event) => {
-                match handlers::membership::handle_role_granted(event)? {
-                    MembershipChange::AddEditor(e) => {
-                        storage.insert_editors(&[e], &mut tx).await?;
-                    }
-                    MembershipChange::AddMember(m) => {
-                        storage.insert_members(&[m], &mut tx).await?;
-                    }
-                    _ => {}
-                }
-                1
-            }
-            KgMessage::RoleRevoked(event) => {
-                match handlers::membership::handle_role_revoked(event)? {
-                    MembershipChange::RemoveEditor(e) => {
-                        storage.remove_editors(&[e], &mut tx).await?;
-                    }
-                    MembershipChange::RemoveMember(m) => {
-                        storage.remove_members(&[m], &mut tx).await?;
-                    }
-                    _ => {}
-                }
-                1
-            }
-            KgMessage::TrustExtension(event) => {
-                if let Some(subspace) = handlers::subspaces::handle_trust_extension(event)? {
-                    storage.insert_subspaces(&[subspace], &mut tx).await?;
-                    1
-                } else {
-                    0
-                }
-            }
-            KgMessage::ProposalCreated(event) => {
-                let result = handlers::governance::handle_proposal_created(event)?;
-                debug!(
-                    proposal_id = %result.proposal.id,
-                    actions = result.actions.len(),
-                    "Processing ProposalCreated"
-                );
-                storage
-                    .insert_proposals(&[result.proposal], &mut tx)
-                    .await?;
-                if !result.actions.is_empty() {
+                    // Bulk insert all operations
+                    storage.insert_entities(&result.entities, &mut tx).await?;
                     storage
-                        .insert_proposal_actions(&result.actions, &mut tx)
+                        .insert_properties(&result.properties, &mut tx)
                         .await?;
+                    storage.insert_values(&set_values, &mut tx).await?;
+                    storage.delete_values(&delete_value_ids, &mut tx).await?;
+                    storage.insert_relations(&set_relations, &mut tx).await?;
+                    storage.update_relations(&update_relations, &mut tx).await?;
+                    storage
+                        .unset_relation_fields(&unset_relations, &mut tx)
+                        .await?;
+                    storage.delete_relations(&delete_relations, &mut tx).await?;
+
+                    ops
                 }
-                1 + result.actions.len()
-            }
-            KgMessage::ProposalVoted(event) => {
-                let vote = handlers::governance::handle_proposal_voted(event)?;
-                debug!(
-                    proposal_id = %vote.proposal_id,
-                    voter_id = %vote.voter_id,
-                    "Processing ProposalVoted"
-                );
-                storage.insert_proposal_votes(&[vote], &mut tx).await?;
-                1
-            }
-            KgMessage::ProposalExecuted(event) => {
-                let execution = handlers::governance::handle_proposal_executed(event)?;
-                debug!(
-                    proposal_id = %execution.proposal_id,
-                    "Processing ProposalExecuted"
-                );
-                storage
-                    .update_proposal_executed(execution.proposal_id, execution.executed_at, &mut tx)
-                    .await?;
-                1
-            }
-            KgMessage::BlockSummary(_) => 0,
-        })
+                KgMessage::CreateSpace(space) => {
+                    let space_item = handlers::spaces::handle_create_space(space)?;
+                    storage.insert_spaces(&[space_item], &mut tx).await?;
+                    1
+                }
+                KgMessage::RoleGranted(event) => {
+                    match handlers::membership::handle_role_granted(event)? {
+                        MembershipChange::AddEditor(e) => {
+                            storage.insert_editors(&[e], &mut tx).await?;
+                        }
+                        MembershipChange::AddMember(m) => {
+                            storage.insert_members(&[m], &mut tx).await?;
+                        }
+                        _ => {}
+                    }
+                    1
+                }
+                KgMessage::RoleRevoked(event) => {
+                    match handlers::membership::handle_role_revoked(event)? {
+                        MembershipChange::RemoveEditor(e) => {
+                            storage.remove_editors(&[e], &mut tx).await?;
+                        }
+                        MembershipChange::RemoveMember(m) => {
+                            storage.remove_members(&[m], &mut tx).await?;
+                        }
+                        _ => {}
+                    }
+                    1
+                }
+                KgMessage::TrustExtension(event) => {
+                    if let Some(subspace) = handlers::subspaces::handle_trust_extension(event)? {
+                        storage.insert_subspaces(&[subspace], &mut tx).await?;
+                        1
+                    } else {
+                        0
+                    }
+                }
+                KgMessage::ProposalCreated(event) => {
+                    let result = handlers::governance::handle_proposal_created(event)?;
+                    debug!(
+                        proposal_id = %result.proposal.id,
+                        actions = result.actions.len(),
+                        "Processing ProposalCreated"
+                    );
+                    storage
+                        .insert_proposals(&[result.proposal], &mut tx)
+                        .await?;
+                    if !result.actions.is_empty() {
+                        storage
+                            .insert_proposal_actions(&result.actions, &mut tx)
+                            .await?;
+                    }
+                    1 + result.actions.len()
+                }
+                KgMessage::ProposalVoted(event) => {
+                    let vote = handlers::governance::handle_proposal_voted(event)?;
+                    debug!(
+                        proposal_id = %vote.proposal_id,
+                        voter_id = %vote.voter_id,
+                        "Processing ProposalVoted"
+                    );
+                    storage.insert_proposal_votes(&[vote], &mut tx).await?;
+                    1
+                }
+                KgMessage::ProposalExecuted(event) => {
+                    let execution = handlers::governance::handle_proposal_executed(event)?;
+                    debug!(
+                        proposal_id = %execution.proposal_id,
+                        "Processing ProposalExecuted"
+                    );
+                    storage
+                        .update_proposal_executed(
+                            execution.proposal_id,
+                            execution.executed_at,
+                            &mut tx,
+                        )
+                        .await?;
+                    1
+                }
+                KgMessage::BlockSummary(_) => 0,
+            })
         }
         .await
         .map_err(|e| {

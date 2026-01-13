@@ -4,12 +4,12 @@
 //! for any type that implements `KafkaEvent + prost::Message`.
 
 use anyhow::Result;
-use hermes_instrumentation::{debug_span, error, info, Span};
+use hermes_instrumentation::{Span, debug_span, error, info};
 use opentelemetry::global;
 use opentelemetry::propagation::Injector;
 use prost::Message;
-use tracing_opentelemetry::OpenTelemetrySpanExt;
 use std::sync::OnceLock;
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use hermes_kafka::{BaseProducer, BaseRecord, Header, OwnedHeaders, Producer};
 use hermes_schema::pb::{

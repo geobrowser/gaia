@@ -38,15 +38,15 @@
 
 mod emit;
 
+use std::collections::HashMap;
 use std::env;
 use std::fmt;
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use hermes_instrumentation::{Instrument, debug, error, info, info_span, warn};
 use opentelemetry_sdk::propagation::TraceContextPropagator;
-use std::sync::OnceLock;
 use prost::Message;
+use std::sync::OnceLock;
 
 use hermes_kafka::create_producer;
 use hermes_relay::stream::pb::sf::substreams::rpc::v2::BlockScopedData;
@@ -362,22 +362,58 @@ impl Pipeline {
         let mut counts_by_event_type: HashMap<String, u64> = HashMap::new();
         counts_by_event_type.insert("SPACE_REGISTERED".to_string(), space_count);
         counts_by_event_type.insert("EDITS_PUBLISHED".to_string(), edit_count);
-        counts_by_event_type.insert("ROLE_GRANTED".to_string(), membership.roles_granted.len() as u64);
-        counts_by_event_type.insert("ROLE_REVOKED".to_string(), membership.roles_revoked.len() as u64);
-        counts_by_event_type.insert("SPACE_LEFT".to_string(), membership.spaces_left.len() as u64);
+        counts_by_event_type.insert(
+            "ROLE_GRANTED".to_string(),
+            membership.roles_granted.len() as u64,
+        );
+        counts_by_event_type.insert(
+            "ROLE_REVOKED".to_string(),
+            membership.roles_revoked.len() as u64,
+        );
+        counts_by_event_type.insert(
+            "SPACE_LEFT".to_string(),
+            membership.spaces_left.len() as u64,
+        );
         counts_by_event_type.insert("TRUST_EXTENSION".to_string(), trust_count as u64);
         counts_by_event_type.insert("SUBSPACE_VERIFIED".to_string(), trust.verified as u64);
         counts_by_event_type.insert("SUBSPACE_RELATED".to_string(), trust.related as u64);
-        counts_by_event_type.insert("SUBSPACE_TOPIC_DECLARED".to_string(), trust.topic_declared as u64);
+        counts_by_event_type.insert(
+            "SUBSPACE_TOPIC_DECLARED".to_string(),
+            trust.topic_declared as u64,
+        );
         counts_by_event_type.insert("SUBSPACE_REMOVED".to_string(), trust.removed as u64);
-        counts_by_event_type.insert("EDITOR_FLAGGED".to_string(), moderation.editors_flagged.len() as u64);
-        counts_by_event_type.insert("EDITOR_UNFLAGGED".to_string(), moderation.editors_unflagged.len() as u64);
-        counts_by_event_type.insert("CONTENT_FLAGGED".to_string(), moderation.content_flagged.len() as u64);
-        counts_by_event_type.insert("CONTENT_UNFLAGGED".to_string(), moderation.content_unflagged.len() as u64);
-        counts_by_event_type.insert("TOPIC_DECLARED".to_string(), topics.topics_declared.len() as u64);
-        counts_by_event_type.insert("PROPOSAL_CREATED".to_string(), governance.proposals_created.len() as u64);
-        counts_by_event_type.insert("PROPOSAL_VOTED".to_string(), governance.proposals_voted.len() as u64);
-        counts_by_event_type.insert("PROPOSAL_EXECUTED".to_string(), governance.proposals_executed.len() as u64);
+        counts_by_event_type.insert(
+            "EDITOR_FLAGGED".to_string(),
+            moderation.editors_flagged.len() as u64,
+        );
+        counts_by_event_type.insert(
+            "EDITOR_UNFLAGGED".to_string(),
+            moderation.editors_unflagged.len() as u64,
+        );
+        counts_by_event_type.insert(
+            "CONTENT_FLAGGED".to_string(),
+            moderation.content_flagged.len() as u64,
+        );
+        counts_by_event_type.insert(
+            "CONTENT_UNFLAGGED".to_string(),
+            moderation.content_unflagged.len() as u64,
+        );
+        counts_by_event_type.insert(
+            "TOPIC_DECLARED".to_string(),
+            topics.topics_declared.len() as u64,
+        );
+        counts_by_event_type.insert(
+            "PROPOSAL_CREATED".to_string(),
+            governance.proposals_created.len() as u64,
+        );
+        counts_by_event_type.insert(
+            "PROPOSAL_VOTED".to_string(),
+            governance.proposals_voted.len() as u64,
+        );
+        counts_by_event_type.insert(
+            "PROPOSAL_EXECUTED".to_string(),
+            governance.proposals_executed.len() as u64,
+        );
         counts_by_event_type.insert("VOTE_CAST".to_string(), voting.votes.len() as u64);
 
         let emit_start = std::time::Instant::now();
