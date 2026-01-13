@@ -80,6 +80,44 @@ pub struct RemoveTypeRelationData {
     pub relation_id: String,
 }
 
+/// Request to update an entity's global score across all spaces.
+///
+/// This will update the `entity_global_score` field for ALL documents
+/// that have the given entity_id (one update per space the entity exists in).
+#[derive(Debug, Clone)]
+pub struct UpdateEntityGlobalScoreRequest {
+    /// The entity's unique identifier.
+    pub entity_id: String,
+    /// The new global score value.
+    pub score: f64,
+}
+
+/// Request to update a space's score across all entities in that space.
+///
+/// This will update the `space_score` field for ALL documents
+/// that have the given space_id.
+#[derive(Debug, Clone)]
+pub struct UpdateSpaceScoreRequest {
+    /// The space's unique identifier.
+    pub space_id: String,
+    /// The new space score value.
+    pub score: f64,
+}
+
+/// Request to update an entity's score within a specific space.
+///
+/// This is the most targeted score update - affects exactly one document
+/// identified by the entity_id + space_id combination.
+#[derive(Debug, Clone)]
+pub struct UpdateEntitySpaceScoreRequest {
+    /// The entity's unique identifier.
+    pub entity_id: String,
+    /// The space's unique identifier.
+    pub space_id: String,
+    /// The new entity-space score value.
+    pub score: f64,
+}
+
 /// A single operation in a bulk request.
 ///
 /// This enum represents any operation that can be performed on an entity document.
@@ -95,28 +133,43 @@ pub enum EntityOperation {
     /// Remove a type relation by relation_id (searches for documents containing it).
     /// Used when only the relation_id is available (e.g., from DeleteRelation Kafka messages).
     RemoveTypeRelationById(RemoveTypeRelationData),
+    /// Update an entity's global score across all spaces.
+    /// Uses update_by_query to update all documents with this entity_id.
+    UpdateEntityGlobalScore(UpdateEntityGlobalScoreRequest),
+    /// Update a space's score across all entities in that space.
+    /// Uses update_by_query to update all documents in this space.
+    UpdateSpaceScore(UpdateSpaceScoreRequest),
+    /// Update an entity's score within a specific space.
+    /// Uses a targeted update for the specific entity+space document.
+    UpdateEntitySpaceScore(UpdateEntitySpaceScoreRequest),
 }
 
 impl EntityOperation {
     /// Get the entity_id for this operation.
-    /// Returns an empty string for RemoveTypeRelationById since it searches by relation_id.
+    /// Returns an empty string for operations that don't target a specific entity.
     pub fn entity_id(&self) -> &str {
         match self {
             EntityOperation::Update(r) => &r.entity_id,
             EntityOperation::Delete(r) => &r.entity_id,
             EntityOperation::Unset(r) => &r.entity_id,
             EntityOperation::RemoveTypeRelationById(_) => "",
+            EntityOperation::UpdateEntityGlobalScore(r) => &r.entity_id,
+            EntityOperation::UpdateSpaceScore(_) => "",
+            EntityOperation::UpdateEntitySpaceScore(r) => &r.entity_id,
         }
     }
 
     /// Get the space_id for this operation.
-    /// Returns an empty string for RemoveTypeRelationById since it searches by relation_id.
+    /// Returns an empty string for operations that don't target a specific space.
     pub fn space_id(&self) -> &str {
         match self {
             EntityOperation::Update(r) => &r.space_id,
             EntityOperation::Delete(r) => &r.space_id,
             EntityOperation::Unset(r) => &r.space_id,
             EntityOperation::RemoveTypeRelationById(_) => "",
+            EntityOperation::UpdateEntityGlobalScore(_) => "",
+            EntityOperation::UpdateSpaceScore(r) => &r.space_id,
+            EntityOperation::UpdateEntitySpaceScore(r) => &r.space_id,
         }
     }
 }

@@ -6,10 +6,10 @@ use std::time::Duration;
 use tokio::time::sleep;
 use tracing::{info, warn};
 
-use crate::consumer::KafkaConsumer;
+use crate::consumer::{EntitiesConsumer, ScoresConsumer};
 use crate::loader::SearchLoader;
 use crate::orchestrator::Orchestrator;
-use crate::processor::EntityProcessor;
+use crate::processor::Processor;
 use crate::IndexingError;
 use search_indexer_repository::opensearch::IndexConfig;
 use search_indexer_repository::{OpenSearchProvider, SearchIndexProvider};
@@ -127,21 +127,34 @@ impl Dependencies {
             .await
             .map_err(|e| IndexingError::config(format!("Failed to ensure index exists: {}", e)))?;
 
-        // Initialize Kafka consumer
-        let consumer = KafkaConsumer::new(&kafka_broker, &kafka_group_id).map_err(|e| {
-            IndexingError::config(format!("Failed to create Kafka consumer: {}", e))
-        })?;
+        // Initialize Kafka consumer for entity events
+        let entities_consumer =
+            EntitiesConsumer::new(&kafka_broker, &kafka_group_id).map_err(|e| {
+                IndexingError::config(format!("Failed to create entities consumer: {}", e))
+            })?;
 
-        info!("Kafka consumer created");
+        info!("Entities consumer created");
 
         // Initialize processor
-        let processor = EntityProcessor::new();
+        let processor = Processor::new();
 
         // Initialize loader with search provider
         let loader = SearchLoader::new(Arc::new(search_provider));
 
-        // Create orchestrator
-        let orchestrator = Orchestrator::new(Arc::new(consumer), processor, loader);
+        // Initialize Kafka consumer for score updates
+        let scores_consumer = ScoresConsumer::new(&kafka_broker, &kafka_group_id).map_err(|e| {
+            IndexingError::config(format!("Failed to create scores consumer: {}", e))
+        })?;
+
+        info!("Scores consumer created");
+
+        // Create orchestrator with both consumers
+        let orchestrator = Orchestrator::new(
+            Arc::new(entities_consumer),
+            Arc::new(scores_consumer),
+            processor,
+            loader,
+        );
 
         Ok(Self { orchestrator })
     }

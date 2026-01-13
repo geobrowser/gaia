@@ -7,25 +7,41 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc};
 use tokio::time::{interval, Duration};
-use tracing::{info, instrument};
+use tracing::{error, info, instrument};
 
-use crate::consumer::{EntityEvent, KafkaConsumer, StreamMessage};
+use crate::consumer::{EntitiesConsumer, EntityEvent, ScoresConsumer, StreamMessage};
 use crate::errors::IngestError;
 use crate::loader::SearchLoader;
 use crate::metrics::SearchIndexerMetrics;
-use crate::processor::{EntityProcessor, ProcessedEvent};
+use crate::processor::{ProcessedEvent, Processor};
 
-/// Trait for event consumers used by the orchestrator.
+/// Trait for entity event consumers used by the orchestrator.
 /// This allows for dependency injection and testing with mock consumers.
 #[async_trait::async_trait]
-pub trait Consumer: Send + Sync {
+pub trait EntitiesConsumerTrait: Send + Sync {
     /// Subscribe to the configured topics/channels.
     fn subscribe(&self) -> Result<(), IngestError>;
 
     /// Run the consumer, sending events to processor and receiving acknowledgments from loader.
     async fn run(
         &self,
-        processor_tx: mpsc::Sender<ProcessingBatch>,
+        processor_tx: mpsc::Sender<EntityProcessingBatch>,
+        ack_receiver: mpsc::Receiver<StreamMessage>,
+        shutdown: tokio::sync::broadcast::Receiver<()>,
+    ) -> Result<(), IngestError>;
+}
+
+/// Trait for score event consumers used by the orchestrator.
+/// This allows for dependency injection and testing with mock consumers.
+#[async_trait::async_trait]
+pub trait ScoresConsumerTrait: Send + Sync {
+    /// Subscribe to the configured topics/channels.
+    fn subscribe(&self) -> Result<(), IngestError>;
+
+    /// Run the consumer, sending events to processor and receiving acknowledgments from loader.
+    async fn run(
+        &self,
+        processor_tx: mpsc::Sender<ScoreProcessingBatch>,
         ack_receiver: mpsc::Receiver<StreamMessage>,
         shutdown: tokio::sync::broadcast::Receiver<()>,
     ) -> Result<(), IngestError>;
@@ -44,12 +60,21 @@ pub struct ProcessedBatch {
     pub events: Vec<ProcessedEvent>,
     pub offsets: Vec<(String, i32, i64)>, // Kafka offsets for acknowledgment
     pub index_count: usize,               // Number of index operations for metrics
+    pub is_scores_batch: bool,            // True if this batch originated from scores consumer
 }
 
-/// Batch of events to be processed with their offsets.
+/// Batch of entity events to be processed with their offsets.
 #[derive(Debug, Clone)]
-pub struct ProcessingBatch {
+pub struct EntityProcessingBatch {
     pub events: Vec<EntityEvent>,
+    pub offsets: Vec<(String, i32, i64)>, // Kafka offsets for acknowledgment
+    pub event_count: usize,               // Number of events for metrics
+}
+
+/// Batch of score events to be processed with their offsets.
+#[derive(Debug, Clone)]
+pub struct ScoreProcessingBatch {
+    pub events: Vec<crate::consumer::ScoreEvent>,
     pub offsets: Vec<(String, i32, i64)>, // Kafka offsets for acknowledgment
     pub event_count: usize,               // Number of events for metrics
 }
@@ -68,21 +93,23 @@ impl Default for OrchestratorConfig {
 ///
 /// The orchestrator:
 /// - Sets up channels for direct component-to-component communication
-/// - Spawns all component tasks (consumer, processor, loader)
+/// - Spawns all component tasks (consumers, processor, loader)
 /// - Monitors for shutdown signals and component completion
 /// - Tracks and logs metrics
 ///
 /// Components communicate directly with each other:
-/// - Consumer → Processor (via ProcessingBatch channel)
+/// - EntitiesConsumer → Processor (via EntityProcessingBatch channel)
+/// - ScoresConsumer → Processor (via ScoreProcessingBatch channel)
 /// - Processor → Loader (via ProcessedBatch channel)
-/// - Loader → Consumer (via Acknowledgment channel)
+/// - Loader → Consumers (via Acknowledgment channels)
 ///
 /// Each component has a `run()` method that accepts its required channels
 /// and returns a tokio task handle, allowing the orchestrator to simply
 /// coordinate startup and shutdown without routing messages.
 pub struct Orchestrator {
-    consumer: Arc<dyn Consumer>,
-    processor: EntityProcessor,
+    entities_consumer: Arc<dyn EntitiesConsumerTrait>,
+    scores_consumer: Arc<dyn ScoresConsumerTrait>,
+    processor: Processor,
     loader: SearchLoader,
     config: OrchestratorConfig,
     shutdown_tx: broadcast::Sender<()>,
@@ -92,14 +119,16 @@ pub struct Orchestrator {
 impl Orchestrator {
     /// Create a new orchestrator with the given components.
     pub fn new(
-        consumer: Arc<dyn Consumer>,
-        processor: EntityProcessor,
+        entities_consumer: Arc<dyn EntitiesConsumerTrait>,
+        scores_consumer: Arc<dyn ScoresConsumerTrait>,
+        processor: Processor,
         loader: SearchLoader,
     ) -> Self {
         let (shutdown_tx, _) = broadcast::channel(1);
 
         Self {
-            consumer,
+            entities_consumer,
+            scores_consumer,
             processor,
             loader,
             config: OrchestratorConfig::default(),
@@ -110,15 +139,17 @@ impl Orchestrator {
 
     /// Create a new orchestrator with custom configuration.
     pub fn with_config(
-        consumer: Arc<dyn Consumer>,
-        processor: EntityProcessor,
+        entities_consumer: Arc<dyn EntitiesConsumerTrait>,
+        scores_consumer: Arc<dyn ScoresConsumerTrait>,
+        processor: Processor,
         loader: SearchLoader,
         config: OrchestratorConfig,
     ) -> Self {
         let (shutdown_tx, _) = broadcast::channel(1);
 
         Self {
-            consumer,
+            entities_consumer,
+            scores_consumer,
             processor,
             loader,
             config,
@@ -136,7 +167,8 @@ impl Orchestrator {
         info!("Starting search indexer orchestrator");
 
         // Take ownership of components to avoid partial moves
-        let consumer = self.consumer;
+        let entities_consumer = self.entities_consumer;
+        let scores_consumer = self.scores_consumer;
         let processor = self.processor;
         let loader = self.loader;
         let config = self.config;
@@ -147,52 +179,89 @@ impl Orchestrator {
         loader.check_ready().await?;
 
         // Subscribe to Kafka topics
-        consumer.subscribe()?;
+        entities_consumer.subscribe()?;
+        info!("Entities consumer subscribed");
+
+        scores_consumer.subscribe()?;
+        info!("Scores consumer subscribed");
 
         // Create channels for direct component-to-component communication:
         // Consumer -> Processor -> Loader -> Consumer (for acks)
 
-        // Channel from consumer to processor
-        let (processor_tx, processor_rx) =
-            mpsc::channel::<ProcessingBatch>(config.channel_buffer_size);
+        // Channel from entities consumer to processor
+        let (entities_processor_tx, entities_processor_rx) =
+            mpsc::channel::<EntityProcessingBatch>(config.channel_buffer_size);
 
-        // Channel from processor to loader
+        // Channel from processor to loader (shared by both entity and score events)
         let (loader_tx, loader_rx) = mpsc::channel::<ProcessedBatch>(config.channel_buffer_size);
 
-        // Channel from loader back to consumer (for acknowledgments)
-        let (ack_tx, ack_receiver) = mpsc::channel::<StreamMessage>(config.channel_buffer_size);
+        // Channel from loader back to entities consumer (for acknowledgments)
+        let (entities_ack_tx, entities_ack_rx) =
+            mpsc::channel::<StreamMessage>(config.channel_buffer_size);
+
+        // Channels from scores consumer to processor
+        let (scores_processor_tx, scores_processor_rx) =
+            mpsc::channel::<ScoreProcessingBatch>(config.channel_buffer_size);
+
+        // Channel from loader back to scores consumer (for acknowledgments)
+        let (scores_ack_tx, scores_ack_rx) =
+            mpsc::channel::<StreamMessage>(config.channel_buffer_size);
 
         // Clone senders for components that need them
-        let processor_tx_for_consumer = processor_tx.clone();
+        let entities_processor_tx_for_consumer = entities_processor_tx.clone();
         let loader_tx_for_processor = loader_tx.clone();
-        let ack_tx_for_processor = ack_tx.clone();
-        let ack_tx_for_loader = ack_tx.clone();
+        let entities_ack_tx_for_processor = entities_ack_tx.clone();
+        let entities_ack_tx_for_loader = entities_ack_tx.clone();
+        let scores_ack_tx_for_processor = scores_ack_tx.clone();
+        let scores_ack_tx_for_loader = scores_ack_tx.clone();
 
-        // Start processor task - receives from consumer, sends to loader
+        // Start processor task - receives from both consumers, sends to loader
         let processor_handle = processor.run(
-            processor_rx,
+            entities_processor_rx,
+            scores_processor_rx,
             loader_tx_for_processor,
-            ack_tx_for_processor,
+            entities_ack_tx_for_processor,
+            scores_ack_tx_for_processor,
             Arc::clone(&metrics),
         );
 
-        // Start consumer task - sends to processor, receives acks from loader
-        let consumer_clone = Arc::clone(&consumer);
+        // Start entities consumer task - sends to processor, receives acks from loader
+        let entities_consumer_clone = Arc::clone(&entities_consumer);
         let shutdown_rx = shutdown_tx.subscribe();
-        let consumer_handle = tokio::spawn(async move {
-            consumer_clone
-                .run(processor_tx_for_consumer, ack_receiver, shutdown_rx)
+        let entities_consumer_handle = tokio::spawn(async move {
+            entities_consumer_clone
+                .run(
+                    entities_processor_tx_for_consumer,
+                    entities_ack_rx,
+                    shutdown_rx,
+                )
                 .await
         });
         // So that we can await it later on shutdown
-        tokio::pin!(consumer_handle);
+        tokio::pin!(entities_consumer_handle);
 
-        // Start loader task - receives from processor, sends acks to consumer
-        let loader_handle = loader.run(loader_rx, ack_tx_for_loader, Arc::clone(&metrics));
+        // Start scores consumer task
+        let scores_consumer_clone = Arc::clone(&scores_consumer);
+        let shutdown_rx = shutdown_tx.subscribe();
+        let scores_consumer_handle = tokio::spawn(async move {
+            scores_consumer_clone
+                .run(scores_processor_tx, scores_ack_rx, shutdown_rx)
+                .await
+        });
+        // So that we can await it later on shutdown
+        tokio::pin!(scores_consumer_handle);
+
+        // Start loader task - receives from processor, sends acks to appropriate consumer
+        let loader_handle = loader.run(
+            loader_rx,
+            entities_ack_tx_for_loader,
+            scores_ack_tx_for_loader,
+            Arc::clone(&metrics),
+        );
 
         // Orchestrator now just monitors for shutdown and metrics
         // Components communicate directly with each other
-        info!("Ready to process events from Kafka - components communicating directly");
+        info!("Ready to process events from Kafka (entities + scores) - components communicating directly");
 
         // Set up progress logging timer (every 10 seconds)
         let metrics_ref = Arc::clone(&metrics);
@@ -206,9 +275,13 @@ impl Orchestrator {
         let mut prev_docs: u64 = 0;
         let mut prev_time = std::time::Instant::now();
 
-        // Track consumer result for shutdown
-        let mut consumer_result: Option<Result<Result<(), IngestError>, tokio::task::JoinError>> =
-            None;
+        // Track consumer results for shutdown
+        let mut entities_consumer_result: Option<
+            Result<Result<(), IngestError>, tokio::task::JoinError>,
+        > = None;
+        let mut scores_consumer_result: Option<
+            Result<Result<(), IngestError>, tokio::task::JoinError>,
+        > = None;
 
         loop {
             tokio::select! {
@@ -217,10 +290,17 @@ impl Orchestrator {
                     let _ = shutdown_tx.send(());
                     break;
                 }
-                result = &mut consumer_handle => {
-                    // Consumer task completed (either finished or errored)
-                    info!("Consumer completed, initiating shutdown");
-                    consumer_result = Some(result);
+                result = &mut entities_consumer_handle => {
+                    // Entities consumer task completed (either finished or errored)
+                    error!("Entities consumer completed unexpectedly, initiating shutdown");
+                    entities_consumer_result = Some(result);
+                    let _ = shutdown_tx.send(());
+                    break;
+                }
+                result = &mut scores_consumer_handle => {
+                    // Scores consumer task completed (either finished or errored)
+                    error!("Scores consumer completed unexpectedly, initiating shutdown");
+                    scores_consumer_result = Some(result);
                     let _ = shutdown_tx.send(());
                     break;
                 }
@@ -264,7 +344,7 @@ impl Orchestrator {
         // Order matters: close producer channels first, then wait for consumers
 
         // Close processor channel (consumer stops sending)
-        drop(processor_tx);
+        drop(entities_processor_tx);
 
         // Close loader channel (processor stops sending)
         drop(loader_tx);
@@ -275,14 +355,23 @@ impl Orchestrator {
         // Wait for loader to finish processing all batches and send final acks
         let _ = loader_handle.await;
 
-        // Close ack channel (loader stops sending, signals consumer)
-        drop(ack_tx);
+        // Close ack channels (loader stops sending, signals consumers)
+        drop(entities_ack_tx);
+        drop(scores_ack_tx);
 
-        // Wait for consumer to finish (if we don't already have its result)
-        let consumer_final_result = match consumer_result {
+        // Wait for scores consumer to finish (if we don't already have its result)
+        let scores_consumer_final_result = match scores_consumer_result {
             Some(result) => result,
-            None => consumer_handle.await,
+            None => scores_consumer_handle.await,
         };
+        info!("Scores consumer shutdown complete");
+
+        // Wait for entities consumer to finish (if we don't already have its result)
+        let entities_consumer_final_result = match entities_consumer_result {
+            Some(result) => result,
+            None => entities_consumer_handle.await,
+        };
+        info!("Entities consumer shutdown complete");
 
         let final_events = metrics.total_events_processed.load(Ordering::Relaxed);
         let final_docs = metrics.total_documents_indexed.load(Ordering::Relaxed);
@@ -292,12 +381,19 @@ impl Orchestrator {
             "Orchestrator shutdown complete"
         );
 
-        // Propagate consumer errors if any
-        match consumer_final_result {
-            Ok(Ok(())) => Ok(()),
+        // Propagate consumer errors if any (entities takes priority)
+        match entities_consumer_final_result {
+            Ok(Ok(())) => match scores_consumer_final_result {
+                Ok(Ok(())) => Ok(()),
+                Ok(Err(e)) => Err(e),
+                Err(join_error) => Err(IngestError::OrchestratorError(format!(
+                    "Scores consumer task panicked: {}",
+                    join_error
+                ))),
+            },
             Ok(Err(e)) => Err(e),
             Err(join_error) => Err(IngestError::OrchestratorError(format!(
-                "Consumer task panicked: {}",
+                "Entities consumer task panicked: {}",
                 join_error
             ))),
         }
@@ -305,14 +401,30 @@ impl Orchestrator {
 }
 
 #[async_trait]
-impl Consumer for KafkaConsumer {
+impl EntitiesConsumerTrait for EntitiesConsumer {
     fn subscribe(&self) -> Result<(), IngestError> {
         self.subscribe()
     }
 
     async fn run(
         &self,
-        processor_tx: mpsc::Sender<ProcessingBatch>,
+        processor_tx: mpsc::Sender<EntityProcessingBatch>,
+        ack_receiver: mpsc::Receiver<StreamMessage>,
+        shutdown: tokio::sync::broadcast::Receiver<()>,
+    ) -> Result<(), IngestError> {
+        self.run(processor_tx, ack_receiver, shutdown).await
+    }
+}
+
+#[async_trait]
+impl ScoresConsumerTrait for ScoresConsumer {
+    fn subscribe(&self) -> Result<(), IngestError> {
+        self.subscribe()
+    }
+
+    async fn run(
+        &self,
+        processor_tx: mpsc::Sender<ScoreProcessingBatch>,
         ack_receiver: mpsc::Receiver<StreamMessage>,
         shutdown: tokio::sync::broadcast::Receiver<()>,
     ) -> Result<(), IngestError> {
