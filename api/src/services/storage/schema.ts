@@ -545,93 +545,6 @@ export type DbProposal = InferSelectModel<typeof proposals>;
 export type DbProposalAction = InferSelectModel<typeof proposalActions>;
 export type DbProposalVote = InferSelectModel<typeof proposalVotes>;
 
-/** Actions Schema definitions */
-
-/**
- * raw_actions
- */
-export const rawActions = pgTable(
-	"raw_actions",
-	{
-		id: serial("id").primaryKey(),
-		actionType: bigint("action_type", { mode: "number" }).notNull(),
-		actionVersion: bigint("action_version", { mode: "number" }).notNull(),
-		sender: varchar("sender", { length: 42 }).notNull(),
-		objectId: uuid("object_id").notNull(),
-		groupId: uuid("group_id"),
-		spacePov: uuid("space_pov").notNull(),
-		metadata: bytea("metadata"),
-		blockNumber: bigint("block_number", { mode: "number" }).notNull(),
-		blockTimestamp: timestamp("block_timestamp", {
-			withTimezone: true,
-			mode: "date",
-		}).notNull(),
-		txHash: varchar("tx_hash", { length: 66 }).notNull(),
-		objectType: smallint("object_type").notNull(),
-	},
-	// no explicit indexes/uniques defined in SQL for this table
-);
-
-/**
- * user_votes
- */
-export const userVotes = pgTable(
-	"user_votes",
-	{
-		id: serial("id").primaryKey(),
-		userId: varchar("user_id", { length: 42 }).notNull(),
-		objectId: uuid("object_id").notNull(),
-		objectType: smallint("object_type").notNull(),
-		spaceId: uuid("space_id").notNull(),
-		voteType: smallint("vote_type").notNull(),
-		votedAt: timestamp("voted_at", {
-			withTimezone: true,
-			mode: "date",
-		}).notNull(),
-	},
-	(table) => {
-		return {
-			// UNIQUE(user_id, object_id, space_id)
-			uqUserEntityObjectTypeSpace: unique(
-				"user_votes_user_entity_object_type_space_unique",
-			).on(table.userId, table.objectId, table.objectType, table.spaceId),
-			// CREATE INDEX idx_user_votes_user_entity_space ON user_votes(user_id, object_id, space_id)
-			idxUserEntityObjectTypeSpace: index(
-				"idx_user_votes_user_entity_object_type_space",
-			).on(table.userId, table.objectId, table.objectType, table.spaceId),
-		};
-	},
-);
-
-/**
- * votes_count
- */
-export const votesCount = pgTable(
-	"votes_count",
-	{
-		id: serial("id").primaryKey(),
-		objectId: uuid("object_id").notNull(),
-		objectType: smallint("object_type").notNull(),
-		spaceId: uuid("space_id").notNull(),
-		upvotes: bigint("upvotes", { mode: "number" }).notNull().default(0),
-		downvotes: bigint("downvotes", { mode: "number" }).notNull().default(0),
-	},
-	(table) => {
-		return {
-			// UNIQUE(object_id, object_type, space_id)
-			uqObjectObjectTypeSpace: unique(
-				"votes_count_object_object_type_space_unique",
-			).on(table.objectId, table.objectType, table.spaceId),
-			// CREATE INDEX idx_votes_count_space ON votes_count(space_id)
-			idxSpace: index("idx_votes_count_space").on(table.spaceId),
-			// CREATE INDEX idx_votes_count_entity_space ON votes_count(object_id, object_type, space_id)
-			idxObjectObjectTypeSpace: index(
-				"idx_votes_count_object_object_type_space",
-			).on(table.objectId, table.objectType, table.spaceId),
-		};
-	},
-);
-
 /** Scoring Tables */
 
 /**
@@ -688,3 +601,82 @@ export const spaceScores = pgTable("space_scores", {
 		mode: "date",
 	}).notNull(),
 });
+
+/**
+ * votes
+ *
+ * Stores votes cast on entities and relations.
+ */
+export const votes = pgTable(
+	"votes", 
+	{
+		id: serial("id").primaryKey(),
+		voterId: uuid("voter_id").notNull(),
+		objectId: uuid("object_id").notNull(),
+		objectType: smallint("object_type").notNull(),
+		spaceId: uuid("space_id").notNull(),
+		vote: smallint("vote").notNull(),
+		blockNumber: bigint("block_number", { mode: "number" }).notNull(),
+		blockTimestamp: timestamp("block_timestamp", {
+			withTimezone: true,
+			mode: "date",
+		}).notNull(),
+		createdAt: timestamp("created_at", {
+			withTimezone: true,
+			mode: "date",
+		}).notNull().defaultNow(),
+	},
+	(table) => ({
+		voterIdIdx: index("idx_votes_voter_id").on(table.voterId),
+		objectTypeObjectIdSpaceIdIdx: index("idx_votes_object_type_object_id_space_id").on(table.objectType, table.objectId, table.spaceId),
+	}),
+);
+
+
+/**
+ * user_votes
+ *
+ * Tracks the most recent vote a user has cast on a specific object.
+ * This table is used to prevent users from casting multiple votes on the same object
+ * and to easily query a user's voting history.
+ */
+export const userVotes = pgTable(
+	"user_votes",
+	{
+		userId: uuid("user_id").notNull(),
+		objectId: uuid("object_id").notNull(),
+		objectType: smallint("object_type").notNull(),
+		spaceId: uuid("space_id").notNull(),
+		voteType: smallint("vote_type").notNull(),
+		votedAt: timestamp("voted_at", {
+			withTimezone: true,
+			mode: "date",
+		}).notNull(),
+	},
+	(table) => ({
+		uniqueConstraint: unique().on(table.userId, table.objectId, table.objectType, table.spaceId),
+		objectIdx: index("idx_user_votes_object").on(table.objectId, table.objectType, table.spaceId),
+	}),
+);
+
+/**
+ * votes_count
+ *
+ * An aggregate table that stores the total upvotes and downvotes for each object.
+ * This table is updated by the vote-indexer to provide fast access to vote counts
+ * without needing to aggregate from the raw `votes` table on every query.
+ */
+export const votesCount = pgTable(
+	"votes_count",
+	{
+		id: serial("id").primaryKey(),
+		objectId: uuid("object_id").notNull(),
+		objectType: smallint("object_type").notNull(),
+		spaceId: uuid("space_id").notNull(),
+		upvotes: bigint("upvotes", { mode: "number" }).notNull().default(0),
+		downvotes: bigint("downvotes", { mode: "number" }).notNull().default(0),
+	}, 
+	(table) => ({
+		uniqueConstraint: unique().on(table.objectId, table.objectType, table.spaceId),
+	}),
+);
