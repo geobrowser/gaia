@@ -146,7 +146,7 @@ class ScoringDataProvider:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT address, space_id
+                SELECT member_space_id, space_id
                 FROM members
                 """
             )
@@ -156,7 +156,7 @@ class ScoringDataProvider:
         with conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT address, space_id
+                SELECT member_space_id, space_id
                 FROM editors
                 """
             )
@@ -166,32 +166,32 @@ class ScoringDataProvider:
         user_members: dict[str, set[str]] = {}
         user_editors: dict[str, set[str]] = {}
 
-        for address, space_id in member_rows:
-            address_str = str(address).lower()
+        for member_space_id, space_id in member_rows:
+            member_space_id_str = str(member_space_id).lower()
             space_id_str = str(space_id)
 
-            if address_str not in user_members:
-                user_members[address_str] = set()
-            user_members[address_str].add(space_id_str)
+            if member_space_id_str not in user_members:
+                user_members[member_space_id_str] = set()
+            user_members[member_space_id_str].add(space_id_str)
 
-        for address, space_id in editor_rows:
-            address_str = str(address).lower()
+        for member_space_id, space_id in editor_rows:
+            member_space_id_str = str(member_space_id).lower()
             space_id_str = str(space_id)
 
-            if address_str not in user_editors:
-                user_editors[address_str] = set()
-            user_editors[address_str].add(space_id_str)
+            if member_space_id_str not in user_editors:
+                user_editors[member_space_id_str] = set()
+            user_editors[member_space_id_str].add(space_id_str)
 
-        # Build User objects for all unique addresses
-        all_addresses = set(user_members.keys()) | set(user_editors.keys())
+        # Build User objects for all unique member space IDs
+        all_member_space_ids = set(user_members.keys()) | set(user_editors.keys())
         users = []
 
-        for address in all_addresses:
+        for member_space_id in all_member_space_ids:
             users.append(
                 User(
-                    id=address,
-                    member_spaces=user_members.get(address, set()),
-                    editor_spaces=user_editors.get(address, set()),
+                    id=member_space_id,
+                    member_spaces=user_members.get(member_space_id, set()),
+                    editor_spaces=user_editors.get(member_space_id, set()),
                 )
             )
 
