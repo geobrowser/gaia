@@ -1,10 +1,10 @@
 services:
-  scoring-service:
+  scoring-cronjob:
     build:
-      context: ..
-      dockerfile: scoring-service/Dockerfile
+      context: ./cronjob
+      dockerfile: Dockerfile
     volumes:
-      - ./:/app/scoring-service
+      - ./cronjob:/app
     environment:
       # Database connection string (provided by deployment infrastructure)
       - DATABASE_URL
@@ -17,6 +17,20 @@ services:
       - KAFKA_BROKER=${KAFKA_BROKER:-kafka:29092}
       - KAFKA_TOPIC=${KAFKA_TOPIC:-curation.scores}
       - SCORE_BATCH_SIZE=${SCORE_BATCH_SIZE:-1000}
+    networks:
+      - hermes_default
+
+  vote-indexer:
+    build:
+      context: ..
+      dockerfile: scoring-service/vote-indexer/Dockerfile
+    environment:
+      - DATABASE_URL
+      - KAFKA_BROKER=${KAFKA_BROKER:-kafka:29092}
+      - KAFKA_GROUP_ID=${KAFKA_GROUP_ID:-vote-indexer}
+      - BATCH_SIZE=${BATCH_SIZE:-100}
+      - BATCH_TIMEOUT_MS=${BATCH_TIMEOUT_MS:-1000}
+      - RUST_LOG=${RUST_LOG:-info,vote_indexer=debug}
     networks:
       - hermes_default
 

@@ -6632,6 +6632,24 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6a02e4885ed3bc0f2de90ea6dd45ebcbb66dacffe03547fadbb0eeae2770887d"
 
 [[package]]
+name = "vote-indexer"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "dotenv",
+ "futures 0.3.31",
+ "hermes-schema",
+ "prost 0.13.5",
+ "rdkafka 0.38.0",
+ "sqlx",
+ "thiserror 2.0.17",
+ "tokio",
+ "tracing",
+ "tracing-subscriber",
+ "uuid",
+]
+
+[[package]]
 name = "wait-timeout"
 version = "0.2.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
