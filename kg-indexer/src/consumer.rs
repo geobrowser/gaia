@@ -3,12 +3,42 @@ use rdkafka::{
     config::ClientConfig,
     consumer::{Consumer, DefaultConsumerContext, StreamConsumer},
     message::Headers,
-    TopicPartitionList,
+    Offset, TopicPartitionList,
 };
 use std::env;
-use tracing::{debug, info};
+use std::str::FromStr;
+use std::time::Duration;
+use tracing::{debug, info, warn};
 
 use crate::error::IndexerError;
+
+/// Controls how the consumer handles Kafka offsets on startup.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum OffsetResetMode {
+    /// Use committed offsets from Kafka (default behavior).
+    #[default]
+    Stored,
+    /// Seek to beginning of all partitions, reprocess everything.
+    Earliest,
+    /// Seek to end of all partitions, only process new messages.
+    Latest,
+}
+
+impl FromStr for OffsetResetMode {
+    type Err = IndexerError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "stored" => Ok(OffsetResetMode::Stored),
+            "earliest" => Ok(OffsetResetMode::Earliest),
+            "latest" => Ok(OffsetResetMode::Latest),
+            _ => Err(IndexerError::config(format!(
+                "Invalid KAFKA_OFFSET_RESET_MODE '{}'. Valid values: stored, earliest, latest",
+                s
+            ))),
+        }
+    }
+}
 
 pub struct KafkaConsumer {
     consumer: StreamConsumer<DefaultConsumerContext>,
@@ -72,6 +102,107 @@ impl KafkaConsumer {
 
         info!(topics = ?self.topics, "Subscribed to Kafka topics");
         Ok(())
+    }
+
+    /// Seek all assigned partitions to the beginning.
+    /// Must be called after subscribe() and after partition assignment.
+    pub async fn seek_to_beginning(&self) -> Result<(), IndexerError> {
+        warn!("KAFKA_OFFSET_RESET_MODE=earliest: Seeking to beginning of all partitions");
+
+        // Wait for partition assignment with timeout
+        let assignment = self.wait_for_assignment().await?;
+
+        for elem in assignment.elements() {
+            self.consumer
+                .seek(elem.topic(), elem.partition(), Offset::Beginning, None)
+                .map_err(|e| {
+                    IndexerError::kafka(format!(
+                        "Failed to seek {} partition {} to beginning: {}",
+                        elem.topic(),
+                        elem.partition(),
+                        e
+                    ))
+                })?;
+
+            info!(
+                topic = %elem.topic(),
+                partition = elem.partition(),
+                "Seeked to beginning"
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Seek all assigned partitions to the end.
+    /// Must be called after subscribe() and after partition assignment.
+    pub async fn seek_to_end(&self) -> Result<(), IndexerError> {
+        warn!("KAFKA_OFFSET_RESET_MODE=latest: Seeking to end of all partitions");
+
+        // Wait for partition assignment with timeout
+        let assignment = self.wait_for_assignment().await?;
+
+        for elem in assignment.elements() {
+            self.consumer
+                .seek(elem.topic(), elem.partition(), Offset::End, None)
+                .map_err(|e| {
+                    IndexerError::kafka(format!(
+                        "Failed to seek {} partition {} to end: {}",
+                        elem.topic(),
+                        elem.partition(),
+                        e
+                    ))
+                })?;
+
+            info!(
+                topic = %elem.topic(),
+                partition = elem.partition(),
+                "Seeked to end"
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Wait for partition assignment after subscribe.
+    /// This is async since StreamConsumer requires async polling.
+    pub async fn wait_for_assignment(&self) -> Result<TopicPartitionList, IndexerError> {
+        let timeout = Duration::from_secs(30);
+        let start = std::time::Instant::now();
+
+        loop {
+            // Check if we have assignments yet
+            let assignment = self
+                .consumer
+                .assignment()
+                .map_err(|e| IndexerError::kafka(format!("Failed to get assignment: {}", e)))?;
+
+            if !assignment.elements().is_empty() {
+                info!(
+                    partitions = assignment.count(),
+                    "Partition assignment received"
+                );
+                return Ok(assignment);
+            }
+
+            if start.elapsed() > timeout {
+                return Err(IndexerError::kafka(
+                    "Timeout waiting for partition assignment".to_string(),
+                ));
+            }
+
+            // Poll with timeout to trigger rebalance
+            // Using tokio timeout + recv to drive the consumer
+            match tokio::time::timeout(Duration::from_millis(100), self.consumer.recv()).await {
+                Ok(Ok(_msg)) => {
+                    // Got a message, but we're just trying to get assignments
+                    // The message will be lost, but that's ok since we're seeking anyway
+                }
+                Ok(Err(_)) | Err(_) => {
+                    // Timeout or kafka error, continue polling
+                }
+            }
+        }
     }
 
     pub fn stream(&self) -> rdkafka::consumer::MessageStream<'_, DefaultConsumerContext> {
