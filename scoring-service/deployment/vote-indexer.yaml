@@ -47,19 +47,19 @@ spec:
               valueFrom:
                 secretKeyRef:
                   name: kafka-credentials
-                  key: username
+                  key: KAFKA_USERNAME
                   optional: true
             - name: KAFKA_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: kafka-credentials
-                  key: password
+                  key: KAFKA_PASSWORD
                   optional: true
             - name: KAFKA_SSL_CA_PEM
               valueFrom:
                 secretKeyRef:
                   name: kafka-credentials
-                  key: ca-pem
+                  key: KAFKA_SSL_CA_PEM
                   optional: true
             # Consumer configuration
             - name: KAFKA_GROUP_ID
