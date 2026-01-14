@@ -78,19 +78,3 @@ spec:
             limits:
               memory: "512Mi"
               cpu: "500m"
-          readinessProbe:
-            exec:
-              command:
-                - /bin/sh
-                - -c
-                - "ps aux | grep vote-indexer | grep -v grep"
-            initialDelaySeconds: 10
-            periodSeconds: 30
-          livenessProbe:
-            exec:
-              command:
-                - /bin/sh
-                - -c
-                - "ps aux | grep vote-indexer | grep -v grep"
-            initialDelaySeconds: 5
-            periodSeconds: 10
