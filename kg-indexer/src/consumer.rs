@@ -109,6 +109,7 @@ pub enum KgMessage {
     RoleRevoked(hermes_schema::pb::membership::HermesRoleRevoked),
     TrustExtension(hermes_schema::pb::space::HermesSpaceTrustExtension),
     ProposalCreated(hermes_schema::pb::governance::HermesProposalCreated),
+    ProposalUpdated(hermes_schema::pb::governance::HermesProposalUpdated),
     ProposalVoted(hermes_schema::pb::governance::HermesProposalVoted),
     ProposalExecuted(hermes_schema::pb::governance::HermesProposalExecuted),
 }
@@ -124,6 +125,7 @@ impl KgMessage {
             KgMessage::RoleRevoked(r) => r.meta.as_ref(),
             KgMessage::TrustExtension(t) => t.meta.as_ref(),
             KgMessage::ProposalCreated(p) => p.meta.as_ref(),
+            KgMessage::ProposalUpdated(p) => p.meta.as_ref(),
             KgMessage::ProposalVoted(v) => v.meta.as_ref(),
             KgMessage::ProposalExecuted(e) => e.meta.as_ref(),
         }
@@ -215,6 +217,14 @@ pub fn parse_message(
                                 IndexerError::decode(format!("HermesProposalCreated: {}", e))
                             })?;
                     Ok(KgMessage::ProposalCreated(created))
+                }
+                Some("PROPOSAL_UPDATED") => {
+                    let updated =
+                        hermes_schema::pb::governance::HermesProposalUpdated::decode(payload)
+                            .map_err(|e| {
+                                IndexerError::decode(format!("HermesProposalUpdated: {}", e))
+                            })?;
+                    Ok(KgMessage::ProposalUpdated(updated))
                 }
                 Some("PROPOSAL_VOTED") => {
                     let voted = hermes_schema::pb::governance::HermesProposalVoted::decode(payload)

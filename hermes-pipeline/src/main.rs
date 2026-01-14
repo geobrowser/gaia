@@ -292,6 +292,7 @@ impl Pipeline {
                 max_sequence(&moderation.content_unflagged),
                 max_sequence(&topics.topics_declared),
                 max_sequence(&governance.proposals_created),
+                max_sequence(&governance.proposals_updated),
                 max_sequence(&governance.proposals_voted),
                 max_sequence(&governance.proposals_executed),
                 max_sequence(&voting.votes),
@@ -313,6 +314,7 @@ impl Pipeline {
                 || mark_sequence_as_last(&mut moderation.content_unflagged, max_seq)
                 || mark_sequence_as_last(&mut topics.topics_declared, max_seq)
                 || mark_sequence_as_last(&mut governance.proposals_created, max_seq)
+                || mark_sequence_as_last(&mut governance.proposals_updated, max_seq)
                 || mark_sequence_as_last(&mut governance.proposals_voted, max_seq)
                 || mark_sequence_as_last(&mut governance.proposals_executed, max_seq)
                 || mark_sequence_as_last(&mut voting.votes, max_seq)
@@ -407,6 +409,10 @@ impl Pipeline {
             governance.proposals_created.len() as u64,
         );
         counts_by_event_type.insert(
+            "PROPOSAL_UPDATED".to_string(),
+            governance.proposals_updated.len() as u64,
+        );
+        counts_by_event_type.insert(
             "PROPOSAL_VOTED".to_string(),
             governance.proposals_voted.len() as u64,
         );
@@ -415,6 +421,16 @@ impl Pipeline {
             governance.proposals_executed.len() as u64,
         );
         counts_by_event_type.insert("VOTE_CAST".to_string(), voting.votes.len() as u64);
+
+        info!(
+            event = "hermes_pipeline.batch_summary",
+            block_number = meta.block_number,
+            cursor = %meta.cursor,
+            total_events = total,
+            counts_by_topic = ?counts_by_topic,
+            counts_by_event_type = ?counts_by_event_type,
+            "Batch summary"
+        );
 
         let emit_start = std::time::Instant::now();
         info!(
@@ -544,6 +560,14 @@ impl Pipeline {
                         space_id = %hex::encode(&event.space_id),
                         proposal_id = %hex::encode(&event.proposal_id),
                         "Proposal created"
+                    );
+                }
+                for event in &governance.proposals_updated {
+                    self.emitter.emit(event)?;
+                    debug!(
+                        space_id = %hex::encode(&event.space_id),
+                        proposal_id = %hex::encode(&event.proposal_id),
+                        "Proposal updated"
                     );
                 }
                 for event in &governance.proposals_voted {

@@ -5,6 +5,7 @@
 
 use alloy::sol;
 use alloy::sol_types::{SolType, sol_data};
+use ethabi::{ParamType, Token};
 use std::borrow::Cow;
 use thiserror::Error;
 
@@ -245,15 +246,18 @@ sol! {
 
 // Type aliases for ABI decoding
 // PROPOSAL_CREATED: abi.encode(bytes16 proposalId, VotingMode, Action[])
+#[allow(dead_code)] // Used in tests for encoding
 type ProposalCreatedDataType = sol! { (bytes16, uint8, Action[]) };
 // PROPOSAL_SETTINGS_USED: abi.encode(startDate, lastDate, votingMode, quorum, supportThreshold)
 // Note: onchain start/last dates are uint256 timestamps.
+#[allow(dead_code)] // Used in tests for encoding
 type ProposalSettingsUsedDataType = sol! { (uint256, uint256, uint8, uint256, uint256) };
 // PROPOSAL_VOTED: abi.encode(bytes16 proposalId, VoteOption)
 type ProposalVotedDataType = sol! { (bytes16, uint8) };
 type VoteDataType = sol! { (uint16, bytes16, bytes16) };
 #[allow(dead_code)] // Prepared for future EDITS_PUBLISHED decoding
 type EditsPublishedDataType = sol! { (bytes, bytes) };
+#[allow(dead_code)] // Reserved for future use
 type WrappedBytesType = sol! { bytes };
 
 fn maybe_unwrap_bytes(data: &[u8]) -> Cow<'_, [u8]> {
@@ -278,6 +282,48 @@ fn maybe_unwrap_bytes(data: &[u8]) -> Cow<'_, [u8]> {
     }
 
     Cow::Borrowed(&data[start..end])
+}
+
+fn unwrap_bytes_once(data: &[u8]) -> Option<Vec<u8>> {
+    if data.len() < 64 {
+        return None;
+    }
+
+    if data[0..24].iter().any(|b| *b != 0) || data[32..56].iter().any(|b| *b != 0) {
+        return None;
+    }
+
+    let offset = u64::from_be_bytes(data[24..32].try_into().ok()?) as usize;
+    if offset != 32 {
+        return None;
+    }
+
+    let len = u64::from_be_bytes(data[56..64].try_into().ok()?) as usize;
+    let start = 64;
+    let end = start + len;
+    if end > data.len() {
+        return None;
+    }
+
+    Some(data[start..end].to_vec())
+}
+
+pub fn unwrap_debug_chain(data: &[u8], max_levels: usize) -> Vec<Vec<u8>> {
+    let mut chain: Vec<Vec<u8>> = Vec::new();
+    chain.push(data.to_vec());
+
+    for _ in 0..max_levels {
+        let Some(current) = chain.last() else {
+            break;
+        };
+        let current = current.as_slice();
+        let Some(next) = unwrap_bytes_once(current) else {
+            break;
+        };
+        chain.push(next);
+    }
+
+    chain
 }
 
 // ============================================================================
@@ -324,34 +370,40 @@ pub struct ProposalSettingsData {
 /// Decode PROPOSAL_CREATED data.
 ///
 /// Encoding: `abi.encode(bytes16 proposalId, VotingMode, Action[])`
-pub fn decode_proposal_created(data: &[u8]) -> Result<ProposalCreatedData, DecodeError> {
+pub fn decode_proposal_created(data: &[u8]) -> Result<(ProposalCreatedData, u8), DecodeError> {
     if data.is_empty() {
-        return Ok(ProposalCreatedData {
-            proposal_id: vec![0; 16],
-            voting_mode: 0,
-            actions: vec![],
-        });
+        return Ok((
+            ProposalCreatedData {
+                proposal_id: vec![0; 16],
+                voting_mode: 0,
+                actions: vec![],
+            },
+            0,
+        ));
     }
 
-    let data = maybe_unwrap_bytes(data);
-    let decoded = ProposalCreatedDataType::abi_decode(&data)
-        .map_err(|e| DecodeError::AbiDecode(e.to_string()))?;
-    let (proposal_id, voting_mode, actions) = decoded;
+    let mut current = maybe_unwrap_bytes(data);
+    let mut unwrap_level = if current.len() != data.len() || current.as_ptr() != data.as_ptr() {
+        1
+    } else {
+        0
+    };
 
-    let actions = actions
-        .into_iter()
-        .map(|action| ProposalAction {
-            to: action.to.as_slice().to_vec(),
-            value: action.value.to_be_bytes_vec(),
-            data: action.data.to_vec(),
-        })
-        .collect();
+    for _ in 0..=1 {
+        if let Ok(decoded) = decode_proposal_created_inner(&current) {
+            return Ok((decoded, unwrap_level));
+        }
 
-    Ok(ProposalCreatedData {
-        proposal_id: proposal_id.to_vec(),
-        voting_mode,
-        actions,
-    })
+        let Some(unwrapped) = unwrap_bytes_once(current.as_ref()) else {
+            break;
+        };
+        current = Cow::Owned(unwrapped);
+        unwrap_level = unwrap_level.saturating_add(1);
+    }
+
+    Err(DecodeError::AbiDecode(
+        "Failed to decode proposal created data".to_string(),
+    ))
 }
 
 /// Decode PROPOSAL_SETTINGS_USED data.
@@ -365,24 +417,142 @@ pub fn decode_proposal_settings_used(data: &[u8]) -> Result<ProposalSettingsData
         });
     }
 
-    let data = maybe_unwrap_bytes(data);
-    let decoded = ProposalSettingsUsedDataType::abi_decode(&data)
-        .map_err(|e| DecodeError::AbiDecode(e.to_string()))?;
+    let current = maybe_unwrap_bytes(data);
+
+    let decoded = match decode_proposal_settings_used_inner(&current) {
+        Ok(decoded) => decoded,
+        Err(_) => {
+            let Some(unwrapped) = unwrap_bytes_once(current.as_ref()) else {
+                return Err(DecodeError::AbiDecode(
+                    "Failed to decode proposal settings used".to_string(),
+                ));
+            };
+            let current = Cow::Owned(unwrapped);
+            decode_proposal_settings_used_inner(&current).map_err(|_| {
+                DecodeError::AbiDecode("Failed to decode proposal settings used".to_string())
+            })?
+        }
+    };
+
     let (start_date, last_date, voting_mode, quorum, support_threshold) = decoded;
 
-    // Convert U256 to u64, saturating if too large
-    let start_date_u64 = start_date.try_into().unwrap_or(u64::MAX);
-    let last_date_u64 = last_date.try_into().unwrap_or(u64::MAX);
-    let quorum_u64 = quorum.try_into().unwrap_or(u64::MAX);
-    let threshold_u64 = support_threshold.try_into().unwrap_or(u64::MAX);
-
     Ok(ProposalSettingsData {
-        start_date: start_date_u64,
-        last_date: last_date_u64,
+        start_date,
+        last_date,
         voting_mode,
-        quorum: quorum_u64,
-        support_threshold: threshold_u64,
+        quorum,
+        support_threshold,
     })
+}
+
+fn decode_proposal_created_inner(data: &[u8]) -> Result<ProposalCreatedData, DecodeError> {
+    let params = [
+        ParamType::FixedBytes(16),
+        ParamType::Uint(8),
+        ParamType::Array(Box::new(ParamType::Tuple(vec![
+            ParamType::Address,
+            ParamType::Uint(256),
+            ParamType::Bytes,
+        ]))),
+    ];
+
+    let tokens =
+        ethabi::decode(&params, data).map_err(|e| DecodeError::AbiDecode(e.to_string()))?;
+
+    let proposal_id = match &tokens[0] {
+        Token::FixedBytes(bytes) if bytes.len() == 16 => bytes.clone(),
+        _ => return Err(DecodeError::AbiDecode("Invalid proposal_id".to_string())),
+    };
+
+    let voting_mode = match &tokens[1] {
+        Token::Uint(value) => {
+            let v = value.low_u32();
+            if v > u8::MAX as u32 {
+                return Err(DecodeError::AbiDecode("Invalid voting_mode".to_string()));
+            }
+            v as u8
+        }
+        _ => return Err(DecodeError::AbiDecode("Invalid voting_mode".to_string())),
+    };
+
+    let actions = match &tokens[2] {
+        Token::Array(items) => items
+            .iter()
+            .map(|item| match item {
+                Token::Tuple(fields) if fields.len() == 3 => {
+                    let to = match &fields[0] {
+                        Token::Address(addr) => addr.as_bytes().to_vec(),
+                        _ => return Err(DecodeError::AbiDecode("Invalid action.to".to_string())),
+                    };
+                    let value = match &fields[1] {
+                        Token::Uint(v) => {
+                            let mut buf = [0u8; 32];
+                            v.to_big_endian(&mut buf);
+                            buf.to_vec()
+                        }
+                        _ => {
+                            return Err(DecodeError::AbiDecode("Invalid action.value".to_string()));
+                        }
+                    };
+                    let data = match &fields[2] {
+                        Token::Bytes(bytes) => bytes.clone(),
+                        _ => return Err(DecodeError::AbiDecode("Invalid action.data".to_string())),
+                    };
+                    Ok(ProposalAction { to, value, data })
+                }
+                _ => Err(DecodeError::AbiDecode("Invalid action tuple".to_string())),
+            })
+            .collect::<Result<Vec<_>, _>>()?,
+        _ => return Err(DecodeError::AbiDecode("Invalid actions array".to_string())),
+    };
+
+    Ok(ProposalCreatedData {
+        proposal_id,
+        voting_mode,
+        actions,
+    })
+}
+
+fn decode_proposal_settings_used_inner(
+    data: &[u8],
+) -> Result<(u64, u64, u8, u64, u64), DecodeError> {
+    let params = [
+        ParamType::Uint(256),
+        ParamType::Uint(256),
+        ParamType::Uint(8),
+        ParamType::Uint(256),
+        ParamType::Uint(256),
+    ];
+
+    let tokens =
+        ethabi::decode(&params, data).map_err(|e| DecodeError::AbiDecode(e.to_string()))?;
+
+    let start = match &tokens[0] {
+        Token::Uint(v) => v.as_u64(),
+        _ => return Err(DecodeError::AbiDecode("Invalid start_date".to_string())),
+    };
+    let last = match &tokens[1] {
+        Token::Uint(v) => v.as_u64(),
+        _ => return Err(DecodeError::AbiDecode("Invalid last_date".to_string())),
+    };
+    let voting_mode = match &tokens[2] {
+        Token::Uint(v) => v.low_u32() as u8,
+        _ => return Err(DecodeError::AbiDecode("Invalid voting_mode".to_string())),
+    };
+    let quorum = match &tokens[3] {
+        Token::Uint(v) => v.as_u64(),
+        _ => return Err(DecodeError::AbiDecode("Invalid quorum".to_string())),
+    };
+    let support = match &tokens[4] {
+        Token::Uint(v) => v.as_u64(),
+        _ => {
+            return Err(DecodeError::AbiDecode(
+                "Invalid support_threshold".to_string(),
+            ));
+        }
+    };
+
+    Ok((start, last, voting_mode, quorum, support))
 }
 
 /// Decoded proposal vote data.
@@ -551,7 +721,8 @@ mod tests {
 
     #[test]
     fn test_decode_proposal_created_empty() {
-        let result = decode_proposal_created(&[]).unwrap();
+        let (result, unwrap_level) = decode_proposal_created(&[]).unwrap();
+        assert_eq!(unwrap_level, 0);
         assert!(result.actions.is_empty());
         assert_eq!(result.voting_mode, 0);
     }
@@ -568,7 +739,8 @@ mod tests {
         let voting_mode = 1u8; // Slow
         let encoded = ProposalCreatedDataType::abi_encode(&(proposal_id, voting_mode, actions));
 
-        let result = decode_proposal_created(&encoded).unwrap();
+        let (result, unwrap_level) = decode_proposal_created(&encoded).unwrap();
+        assert_eq!(unwrap_level, 0);
         assert_eq!(result.proposal_id, vec![0xAB; 16]);
         assert_eq!(result.actions.len(), 1);
         assert_eq!(result.actions[0].to, Address::ZERO.as_slice().to_vec());

@@ -15,7 +15,9 @@ use hermes_kafka::{BaseProducer, BaseRecord, Header, OwnedHeaders, Producer};
 use hermes_schema::pb::{
     block_summary::HermesBlockSummary,
     blockchain_metadata::BlockchainMetadata,
-    governance::{HermesProposalCreated, HermesProposalExecuted, HermesProposalVoted},
+    governance::{
+        HermesProposalCreated, HermesProposalExecuted, HermesProposalUpdated, HermesProposalVoted,
+    },
     knowledge::HermesEdit,
     membership::{HermesRoleGranted, HermesRoleRevoked, HermesSpaceLeft, MembershipRole},
     moderation::{
@@ -208,6 +210,27 @@ impl KafkaEvent for HermesProposalCreated {
 }
 
 impl HasMeta for HermesProposalCreated {
+    fn meta(&self) -> Option<&BlockchainMetadata> {
+        self.meta.as_ref()
+    }
+}
+
+impl KafkaEvent for HermesProposalUpdated {
+    const TOPIC: &'static str = topics::GOVERNANCE;
+
+    fn key(&self) -> Vec<u8> {
+        self.space_id.clone()
+    }
+
+    fn headers(&self) -> OwnedHeaders {
+        OwnedHeaders::new().insert(Header {
+            key: "event-type",
+            value: Some("PROPOSAL_UPDATED"),
+        })
+    }
+}
+
+impl HasMeta for HermesProposalUpdated {
     fn meta(&self) -> Option<&BlockchainMetadata> {
         self.meta.as_ref()
     }

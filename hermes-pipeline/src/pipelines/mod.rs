@@ -4,7 +4,7 @@
 //! - `spaces`: SPACE_REGISTERED → space.creations
 //! - `trust`: SUBSPACE_VERIFIED/RELATED/TOPIC_DECLARED/REMOVED → space.trust.extensions
 //! - `edits`: EDITS_PUBLISHED → knowledge.edits
-//! - `governance`: PROPOSAL_CREATED/VOTED/EXECUTED → space.governance
+//! - `governance`: PROPOSAL_CREATED/UPDATED/VOTED/EXECUTED → space.governance
 //! - `membership`: EDITOR/MEMBER ADDED/REMOVED, SPACE_LEFT → space.membership
 //! - `moderation`: SPACE_FAST_PATH_RESTRICTED/UNRESTRICTED, FLAGGED/UNFLAGGED → space.moderation
 //! - `topics`: TOPIC_DECLARED → space.topics
@@ -21,7 +21,7 @@ pub mod voting;
 
 use hermes_schema::pb::blockchain_metadata::BlockchainMetadata;
 use hermes_schema::pb::governance::{
-    HermesProposalCreated, HermesProposalExecuted, HermesProposalVoted,
+    HermesProposalCreated, HermesProposalExecuted, HermesProposalUpdated, HermesProposalVoted,
 };
 use hermes_schema::pb::knowledge::HermesEdit;
 use hermes_schema::pb::membership::{HermesRoleGranted, HermesRoleRevoked, HermesSpaceLeft};
@@ -65,6 +65,7 @@ impl_has_meta!(
     HermesContentUnflagged,
     HermesTopicDeclared,
     HermesProposalCreated,
+    HermesProposalUpdated,
     HermesProposalVoted,
     HermesProposalExecuted,
     HermesVoteCast,

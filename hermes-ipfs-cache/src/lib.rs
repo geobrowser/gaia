@@ -34,13 +34,15 @@ pub mod cache;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use hermes_instrumentation::{debug, error, info, warn};
+use hermes_instrumentation::{debug, error, info, info_span, warn};
 use hermes_relay::{HermesModule, Sink};
 use hermes_substream::pb::hermes::{EditsPublished, EditsPublishedList};
 use ipfs::{IpfsFetcher, IpfsSource};
 use prost::Message;
+use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, Semaphore};
 use tokio::task;
+use tracing::Instrument;
 
 use cache::{Cache, CacheError, CacheItem};
 
@@ -70,14 +72,15 @@ pub enum IpfsCacheError {
 #[derive(Default)]
 struct PendingFetches {
     /// Map of block number -> (cursor, pending count)
-    blocks: BTreeMap<u64, (String, usize)>,
+    blocks: BTreeMap<u64, (String, usize, usize, Instant)>,
 }
 
 impl PendingFetches {
     /// Register pending fetches for a block.
     fn add_block(&mut self, block: u64, cursor: String, count: usize) {
         if count > 0 {
-            self.blocks.insert(block, (cursor, count));
+            self.blocks
+                .insert(block, (cursor, count, count, Instant::now()));
         }
     }
 
@@ -85,12 +88,12 @@ impl PendingFetches {
     ///
     /// Returns `Some((block, cursor))` if this block is now fully complete
     /// AND it's the minimum block (safe to persist).
-    fn complete_one(&mut self, block: u64) -> Option<(u64, String)> {
+    fn complete_one(&mut self, block: u64) -> Option<(u64, String, usize, Duration)> {
         // First check if this block exists and decrement
-        let (is_complete, cursor) = match self.blocks.get_mut(&block) {
-            Some((cursor, count)) => {
-                *count = count.saturating_sub(1);
-                (*count == 0, cursor.clone())
+        let (is_complete, cursor, total, started_at) = match self.blocks.get_mut(&block) {
+            Some((cursor, remaining, total, started_at)) => {
+                *remaining = remaining.saturating_sub(1);
+                (*remaining == 0, cursor.clone(), *total, *started_at)
             }
             None => return None,
         };
@@ -103,7 +106,11 @@ impl PendingFetches {
         let is_min = self.blocks.first_key_value().map(|(b, _)| *b) == Some(block);
         self.blocks.remove(&block);
 
-        if is_min { Some((block, cursor)) } else { None }
+        if is_min {
+            Some((block, cursor, total, started_at.elapsed()))
+        } else {
+            None
+        }
     }
 }
 
@@ -185,6 +192,13 @@ impl Sink for IpfsCacheSink {
         }
 
         if edit_count > 0 {
+            info!(
+                event = "ipfs_cache.batch_start",
+                block_number = block_number,
+                cursor = %cursor,
+                edit_count = edit_count,
+                "Batch start"
+            );
             info!(block = block_number, edits = edit_count, "Processing edits");
 
             // Register all pending fetches for this block upfront
@@ -203,32 +217,58 @@ impl Sink for IpfsCacheSink {
             let block_ts = block_timestamp.clone();
             let block_num = block_number;
 
-            task::spawn(async move {
-                let result = process_edit_event(edit, &cache, &ipfs, &block_ts, block_num).await;
-                if let Err(e) = result {
-                    error!(error = %e, "Failed to process edit event");
-                }
-
-                // Mark this fetch as complete - persist cursor if block fully completed
-                let cursor_to_persist = pending.lock().await.complete_one(block_num);
-
-                if let Some((persist_block, persist_cursor)) = cursor_to_persist {
-                    debug!(
-                        block = persist_block,
-                        "Block fully cached, persisting cursor"
-                    );
-                    if let Err(e) = cache
-                        .lock()
-                        .await
-                        .persist_cursor(INDEXER_ID, &persist_cursor, persist_block)
-                        .await
-                    {
-                        error!(error = %e, "Failed to persist cursor");
+            let span = info_span!(
+                "ipfs_cache.fetch_edit",
+                block_number = block_num,
+                uri = %edit.content_uri
+            );
+            task::spawn(
+                async move {
+                    let uri = edit.content_uri.clone();
+                    let result =
+                        process_edit_event(edit, &cache, &ipfs, &block_ts, block_num).await;
+                    if let Err(e) = result {
+                        error!(
+                            event = "ipfs_cache.fetch_failed",
+                            block_number = block_num,
+                            uri = %uri,
+                            error = %e,
+                            "Failed to process edit event"
+                        );
                     }
-                }
 
-                drop(permit);
-            });
+                    // Mark this fetch as complete - persist cursor if block fully completed
+                    let cursor_to_persist = pending.lock().await.complete_one(block_num);
+
+                    if let Some((persist_block, persist_cursor, total, duration)) =
+                        cursor_to_persist
+                    {
+                        debug!(
+                            block = persist_block,
+                            "Block fully cached, persisting cursor"
+                        );
+                        info!(
+                            event = "ipfs_cache.batch_end",
+                            block_number = persist_block,
+                            cursor = %persist_cursor,
+                            edit_count = total,
+                            duration_ms = duration.as_millis(),
+                            "Batch end"
+                        );
+                        if let Err(e) = cache
+                            .lock()
+                            .await
+                            .persist_cursor(INDEXER_ID, &persist_cursor, persist_block)
+                            .await
+                        {
+                            error!(error = %e, "Failed to persist cursor");
+                        }
+                    }
+
+                    drop(permit);
+                }
+                .instrument(span),
+            );
         }
 
         Ok(())
@@ -314,7 +354,10 @@ mod tests {
 
         // Completing the only fetch should return the cursor
         let result = pending.complete_one(100);
-        assert_eq!(result, Some((100, "cursor_100".to_string())));
+        assert!(matches!(
+            result,
+            Some((100, ref cursor, 1, _)) if cursor == "cursor_100"
+        ));
 
         // No more pending
         assert!(pending.blocks.is_empty());
@@ -331,10 +374,10 @@ mod tests {
         assert_eq!(pending.complete_one(100), None);
 
         // Third completion should persist
-        assert_eq!(
+        assert!(matches!(
             pending.complete_one(100),
-            Some((100, "cursor_100".to_string()))
-        );
+            Some((100, ref cursor, 3, _)) if cursor == "cursor_100"
+        ));
 
         assert!(pending.blocks.is_empty());
     }
@@ -348,16 +391,16 @@ mod tests {
 
         // Complete block 100 first
         assert_eq!(pending.complete_one(100), None); // 1 remaining
-        assert_eq!(
+        assert!(matches!(
             pending.complete_one(100),
-            Some((100, "cursor_100".to_string()))
-        );
+            Some((100, ref cursor, 2, _)) if cursor == "cursor_100"
+        ));
 
         // Now complete block 101
-        assert_eq!(
+        assert!(matches!(
             pending.complete_one(101),
-            Some((101, "cursor_101".to_string()))
-        );
+            Some((101, ref cursor, 1, _)) if cursor == "cursor_101"
+        ));
 
         assert!(pending.blocks.is_empty());
     }
@@ -377,10 +420,10 @@ mod tests {
 
         // Complete block 100
         assert_eq!(pending.complete_one(100), None); // 1 remaining
-        assert_eq!(
+        assert!(matches!(
             pending.complete_one(100),
-            Some((100, "cursor_100".to_string()))
-        );
+            Some((100, ref cursor, 1, _)) if cursor == "cursor_100"
+        ));
 
         assert!(pending.blocks.is_empty());
     }
@@ -400,10 +443,10 @@ mod tests {
         assert_eq!(pending.complete_one(102), None);
 
         // Complete first block - should persist
-        assert_eq!(
+        assert!(matches!(
             pending.complete_one(100),
-            Some((100, "cursor_100".to_string()))
-        );
+            Some((100, ref cursor, 1, _)) if cursor == "cursor_100"
+        ));
 
         // 101 and 102 were already removed, nothing left
         assert!(pending.blocks.is_empty());
@@ -449,10 +492,10 @@ mod tests {
         assert!(!pending.blocks.contains_key(&101));
 
         // Complete 100 - persist cursor 100 (it's now the min and complete)
-        assert_eq!(
+        assert!(matches!(
             pending.complete_one(100),
-            Some((100, "cursor_100".to_string()))
-        );
+            Some((100, ref cursor, 1, _)) if cursor == "cursor_100"
+        ));
 
         // All blocks removed
         assert!(pending.blocks.is_empty());
@@ -470,10 +513,10 @@ mod tests {
         assert_eq!(pending.complete_one(101), None); // 101: 1 remaining
         assert_eq!(pending.complete_one(100), None); // 100: 1 remaining
         assert_eq!(pending.complete_one(101), None); // 101: 0 remaining, but 100 still pending
-        assert_eq!(
+        assert!(matches!(
             pending.complete_one(100),
-            Some((100, "cursor_100".to_string()))
-        ); // 100: 0 remaining
+            Some((100, ref cursor, 3, _)) if cursor == "cursor_100"
+        )); // 100: 0 remaining
 
         assert!(pending.blocks.is_empty());
     }

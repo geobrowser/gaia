@@ -126,6 +126,20 @@ message HermesProposalCreated {
   blockchain_metadata.BlockchainMetadata meta = 10;
 }
 
+// HermesProposalUpdated - squashed from PROPOSAL_UPDATED + PROPOSAL_SETTINGS_USED
+// Contains all actions in a single message with voting settings.
+// Data encoding: abi.encode(bytes16 proposalId, VotingMode, Action[])
+// Note: If PROPOSAL_SETTINGS_USED is missing, both events should be discarded with an error.
+message HermesProposalUpdated {
+  bytes space_id = 1;                                   // 16 bytes - space owning the proposal (to_id)
+  bytes proposer_id = 2;                                // 16 bytes - space updating the proposal (from_id)
+  bytes proposal_id = 3;                                // 16 bytes - unique proposal identifier
+  VotingMode voting_mode = 4;                           // Fast or Slow path
+  repeated ProposalAction actions = 5;                  // All actions in the proposal
+  ProposalSettings settings = 6;                        // Voting settings (from PROPOSAL_SETTINGS_USED)
+  blockchain_metadata.BlockchainMetadata meta = 10;
+}
+
 // HermesProposalVoted - emitted when a vote is cast on a proposal
 // Data encoding: abi.encode(bytes16 proposalId, VoteOption)
 message HermesProposalVoted {

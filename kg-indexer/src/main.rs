@@ -633,6 +633,7 @@ const EXPECTED_EVENT_TYPES: &[&str] = &[
     "ROLE_REVOKED",
     "TRUST_EXTENSION",
     "PROPOSAL_CREATED",
+    "PROPOSAL_UPDATED",
     "PROPOSAL_VOTED",
     "PROPOSAL_EXECUTED",
 ];
@@ -674,6 +675,7 @@ fn event_type_label(event: &BufferedEvent) -> String {
         KgMessage::RoleRevoked(_) => "ROLE_REVOKED".to_string(),
         KgMessage::TrustExtension(_) => "TRUST_EXTENSION".to_string(),
         KgMessage::ProposalCreated(_) => "PROPOSAL_CREATED".to_string(),
+        KgMessage::ProposalUpdated(_) => "PROPOSAL_UPDATED".to_string(),
         KgMessage::ProposalVoted(_) => "PROPOSAL_VOTED".to_string(),
         KgMessage::ProposalExecuted(_) => "PROPOSAL_EXECUTED".to_string(),
         KgMessage::BlockSummary(_) => "BLOCK_SUMMARY".to_string(),
@@ -986,6 +988,24 @@ async fn process_message(
             }
             1 + result.actions.len()
         }
+        KgMessage::ProposalUpdated(event) => {
+            let result = handlers::governance::handle_proposal_updated(&event)?;
+            debug!(
+                proposal_id = %result.proposal.id,
+                actions = result.actions.len(),
+                "Processing ProposalUpdated"
+            );
+            storage.update_proposal(&result.proposal, &mut tx).await?;
+            storage
+                .delete_proposal_actions(result.proposal.id, &mut tx)
+                .await?;
+            if !result.actions.is_empty() {
+                storage
+                    .insert_proposal_actions(&result.actions, &mut tx)
+                    .await?;
+            }
+            1 + result.actions.len()
+        }
         KgMessage::ProposalVoted(event) => {
             let vote = handlers::governance::handle_proposal_voted(&event)?;
             debug!(
@@ -1151,6 +1171,24 @@ async fn process_block(
                     );
                     storage
                         .insert_proposals(&[result.proposal], &mut tx)
+                        .await?;
+                    if !result.actions.is_empty() {
+                        storage
+                            .insert_proposal_actions(&result.actions, &mut tx)
+                            .await?;
+                    }
+                    1 + result.actions.len()
+                }
+                KgMessage::ProposalUpdated(event) => {
+                    let result = handlers::governance::handle_proposal_updated(event)?;
+                    debug!(
+                        proposal_id = %result.proposal.id,
+                        actions = result.actions.len(),
+                        "Processing ProposalUpdated"
+                    );
+                    storage.update_proposal(&result.proposal, &mut tx).await?;
+                    storage
+                        .delete_proposal_actions(result.proposal.id, &mut tx)
                         .await?;
                     if !result.actions.is_empty() {
                         storage

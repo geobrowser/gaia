@@ -687,6 +687,67 @@ impl Storage {
     }
 
     #[allow(dead_code)]
+    pub async fn update_proposal(
+        &self,
+        proposal: &ProposalItem,
+        tx: &mut sqlx::Transaction<'_, Postgres>,
+    ) -> Result<(), IndexerError> {
+        let voting_mode = match proposal.voting_mode {
+            VotingMode::Fast => "Fast",
+            VotingMode::Slow => "Slow",
+        };
+
+        let result = sqlx::query(
+            r#"
+            UPDATE proposals
+            SET space_id = $2,
+                proposed_by = $3,
+                voting_mode = $4::"votingMode",
+                start_time = $5,
+                end_time = $6,
+                quorum = $7,
+                threshold = $8
+            WHERE id = $1
+            "#,
+        )
+        .bind(proposal.id)
+        .bind(proposal.space_id)
+        .bind(proposal.proposed_by)
+        .bind(voting_mode)
+        .bind(proposal.start_time)
+        .bind(proposal.end_time)
+        .bind(proposal.quorum)
+        .bind(proposal.threshold)
+        .execute(&mut **tx)
+        .await?;
+
+        if result.rows_affected() == 0 {
+            self.insert_proposals(&[proposal.clone()], tx).await?;
+        }
+
+        Ok(())
+    }
+
+    #[allow(dead_code)]
+    pub async fn delete_proposal_actions(
+        &self,
+        proposal_id: Uuid,
+        tx: &mut sqlx::Transaction<'_, Postgres>,
+    ) -> Result<(), IndexerError> {
+        sqlx::query(
+            r#"
+            DELETE FROM proposal_actions
+            WHERE proposal_id = $1
+            "#,
+        )
+        .bind(proposal_id)
+        .execute(&mut **tx)
+        .await?;
+
+        Ok(())
+    }
+
+    #[allow(dead_code)]
     pub async fn insert_proposal_actions(
         &self,
         actions: &[ProposalActionItem],

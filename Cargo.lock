@@ -2552,6 +2552,7 @@ dependencies = [
  "sqlx",
  "thiserror 2.0.17",
  "tokio",
+ "tracing",
  "uuid",
  "wire",
 ]
@@ -2573,6 +2574,7 @@ dependencies = [
  "async-trait",
  "criterion 0.5.1",
  "dotenv",
+ "ethabi 18.0.0",
  "futures 0.3.31",
  "hermes-instrumentation",
  "hermes-kafka",

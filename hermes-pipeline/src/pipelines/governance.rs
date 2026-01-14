@@ -1,4 +1,4 @@
-//! Pipeline: PROPOSAL_CREATED + PROPOSAL_SETTINGS_SELECTED → space.governance
+//! Pipeline: PROPOSAL_CREATED/UPDATED + PROPOSAL_SETTINGS_SELECTED → space.governance
 //!
 //! Squashes paired proposal events into single Kafka messages.
 //!
@@ -6,7 +6,7 @@
 //! 1. PROPOSAL_CREATED: Contains proposer_id, space_id, proposal_id, voting_mode, actions
 //! 2. PROPOSAL_SETTINGS_SELECTED: Contains proposal settings (start/end dates, thresholds)
 //!
-//! These are squashed into a single HermesProposalCreated. If either event is missing
+//! These are squashed into a single HermesProposalCreated/HermesProposalUpdated. If either event is missing
 //! for a given proposal_id, both events are discarded with an error log.
 
 use std::collections::HashMap;
@@ -17,9 +17,9 @@ use hermes_instrumentation::{debug, debug_span, warn};
 use hermes_relay::{Action, actions};
 use hermes_schema::pb::governance::{
     AddEditorAction, AddMemberAction, FlagAction, HermesProposalCreated, HermesProposalExecuted,
-    HermesProposalVoted, ProposalAction, ProposalSettings, ProposalVoteOption, PublishAction,
-    RemoveEditorAction, RemoveMemberAction, UnflagAction, UnflagEditorAction,
-    UpdateVotingSettingsAction, VotingMode, proposal_action,
+    HermesProposalUpdated, HermesProposalVoted, ProposalAction, ProposalSettings,
+    ProposalVoteOption, PublishAction, RemoveEditorAction, RemoveMemberAction, UnflagAction,
+    UnflagEditorAction, UpdateVotingSettingsAction, VotingMode, proposal_action,
 };
 
 use crate::decode::{
@@ -33,13 +33,17 @@ use super::BlockMetadata;
 #[derive(Debug, Default)]
 pub struct TransformResult {
     pub proposals_created: Vec<HermesProposalCreated>,
+    pub proposals_updated: Vec<HermesProposalUpdated>,
     pub proposals_voted: Vec<HermesProposalVoted>,
     pub proposals_executed: Vec<HermesProposalExecuted>,
 }
 
 impl TransformResult {
     pub fn total(&self) -> usize {
-        self.proposals_created.len() + self.proposals_voted.len() + self.proposals_executed.len()
+        self.proposals_created.len()
+            + self.proposals_updated.len()
+            + self.proposals_voted.len()
+            + self.proposals_executed.len()
     }
 }
 
@@ -66,17 +70,16 @@ struct ProposalSettingsPending {
 pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformResult> {
     let mut result = TransformResult::default();
 
-    // Collect PROPOSAL_CREATED and PROPOSAL_SETTINGS_SELECTED by proposal_id
+    // Collect PROPOSAL_CREATED/UPDATED and PROPOSAL_SETTINGS_SELECTED by proposal_id
     let mut created_map: HashMap<Vec<u8>, ProposalCreatedPending> = HashMap::new();
+    let mut updated_map: HashMap<Vec<u8>, ProposalCreatedPending> = HashMap::new();
     let mut settings_map: HashMap<Vec<u8>, ProposalSettingsPending> = HashMap::new();
 
     for (index, action) in actions.iter().enumerate() {
         let action_type = action.action.as_slice();
         let sequence = index as u32;
 
-        if actions::matches(action_type, &actions::PROPOSAL_CREATED)
-            || actions::matches(action_type, &actions::PROPOSAL_UPDATED)
-        {
+        if actions::matches(action_type, &actions::PROPOSAL_CREATED) {
             if let Some(pending) = debug_span!(
                 "parse.governance.created",
                 proposer_id = %hex::encode(&action.from_id),
@@ -86,6 +89,17 @@ pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformRe
             {
                 let proposal_id = pending.proposal_id.clone();
                 created_map.insert(proposal_id, pending);
+            }
+        } else if actions::matches(action_type, &actions::PROPOSAL_UPDATED) {
+            if let Some(pending) = debug_span!(
+                "parse.governance.updated",
+                proposer_id = %hex::encode(&action.from_id),
+                space_id = %hex::encode(&action.to_id)
+            )
+            .in_scope(|| parse_proposal_created(action, sequence))
+            {
+                let proposal_id = pending.proposal_id.clone();
+                updated_map.insert(proposal_id, pending);
             }
         } else if actions::matches(action_type, &actions::PROPOSAL_SETTINGS_SELECTED) {
             if let Some(pending) = debug_span!(
@@ -140,11 +154,32 @@ pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformRe
         }
     }
 
+    // Squash PROPOSAL_UPDATED with PROPOSAL_SETTINGS_SELECTED
+    for (proposal_id, updated) in updated_map {
+        if let Some(settings_pending) = settings_map.remove(&proposal_id) {
+            let event = HermesProposalUpdated {
+                space_id: updated.space_id,
+                proposer_id: updated.proposer_id,
+                proposal_id: updated.proposal_id,
+                voting_mode: updated.voting_mode as i32,
+                actions: updated.actions,
+                settings: Some(settings_pending.settings),
+                meta: Some(meta.to_proto(updated.sequence)),
+            };
+            result.proposals_updated.push(event);
+        } else {
+            warn!(
+                proposal_id = %hex::encode(&proposal_id),
+                "PROPOSAL_UPDATED without matching PROPOSAL_SETTINGS_SELECTED, discarding"
+            );
+        }
+    }
+
     // Log any orphaned PROPOSAL_SETTINGS_SELECTED events
     for (proposal_id, _) in settings_map {
         warn!(
             proposal_id = %hex::encode(&proposal_id),
-            "PROPOSAL_SETTINGS_SELECTED without matching PROPOSAL_CREATED, discarding"
+            "PROPOSAL_SETTINGS_SELECTED without matching PROPOSAL_CREATED/UPDATED, discarding"
         );
     }
 
@@ -229,19 +264,34 @@ fn decode_proposal_action(
 /// - topic: proposal_id (16 bytes, padded to 32)
 /// - data: abi.encode(bytes16 proposalId, VotingMode, Action[])
 fn parse_proposal_created(action: &Action, sequence: u32) -> Option<ProposalCreatedPending> {
-    let decoded = match decode::decode_proposal_created(&action.data) {
+    let (decoded, unwrap_level) = match decode::decode_proposal_created(&action.data) {
         Ok(decoded) => decoded,
         Err(e) => {
+            let debug_chain = decode::unwrap_debug_chain(&action.data, 2);
+            let mut levels: Vec<String> = Vec::new();
+            for (idx, buf) in debug_chain.iter().enumerate() {
+                let prefix_len = buf.len().min(64);
+                let prefix = hex::encode(&buf[..prefix_len]);
+                levels.push(format!("L{idx}:len={} prefix={}", buf.len(), prefix));
+            }
             warn!(
                 error = %e,
                 proposal_id = %hex::encode(&action.topic[..16]),
                 data_len = action.data.len(),
                 data = %hex::encode(&action.data),
+                unwrap_chain = %levels.join(" | "),
                 "Failed to decode proposal created data"
             );
             return None;
         }
     };
+    if unwrap_level > 0 {
+        debug!(
+            unwrap_level,
+            proposal_id = %hex::encode(&action.topic[..16]),
+            "Unwrapped proposal created data"
+        );
+    }
 
     let voting_mode = match decoded.voting_mode {
         0 => VotingMode::Slow,
@@ -302,11 +352,19 @@ fn parse_proposal_settings_used(action: &Action) -> Option<ProposalSettingsPendi
     let decoded = match decode::decode_proposal_settings_used(&action.data) {
         Ok(decoded) => decoded,
         Err(e) => {
+            let debug_chain = decode::unwrap_debug_chain(&action.data, 2);
+            let mut levels: Vec<String> = Vec::new();
+            for (idx, buf) in debug_chain.iter().enumerate() {
+                let prefix_len = buf.len().min(64);
+                let prefix = hex::encode(&buf[..prefix_len]);
+                levels.push(format!("L{idx}:len={} prefix={}", buf.len(), prefix));
+            }
             warn!(
                 error = %e,
                 proposal_id = %hex::encode(&action.topic[..16]),
                 data_len = action.data.len(),
                 data = %hex::encode(&action.data),
+                unwrap_chain = %levels.join(" | "),
                 "Failed to decode proposal settings used data"
             );
             return None;
@@ -319,11 +377,19 @@ fn parse_proposal_settings_used(action: &Action) -> Option<ProposalSettingsPendi
         0 => (0, decoded.support_threshold), // Slow path uses percentage threshold
         1 => (decoded.support_threshold, 0), // Fast path uses flat threshold
         _ => {
+            let debug_chain = decode::unwrap_debug_chain(&action.data, 2);
+            let mut levels: Vec<String> = Vec::new();
+            for (idx, buf) in debug_chain.iter().enumerate() {
+                let prefix_len = buf.len().min(64);
+                let prefix = hex::encode(&buf[..prefix_len]);
+                levels.push(format!("L{idx}:len={} prefix={}", buf.len(), prefix));
+            }
             warn!(
                 voting_mode = decoded.voting_mode,
                 proposal_id = %hex::encode(&action.topic[..16]),
                 data_len = action.data.len(),
                 data = %hex::encode(&action.data),
+                unwrap_chain = %levels.join(" | "),
                 "Invalid voting mode in proposal settings"
             );
             return None;
