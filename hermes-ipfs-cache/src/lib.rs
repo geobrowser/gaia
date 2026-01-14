@@ -217,24 +217,43 @@ impl Sink for IpfsCacheSink {
             let block_ts = block_timestamp.clone();
             let block_num = block_number;
 
+            let ipfs_hash = edit
+                .content_uri
+                .strip_prefix("ipfs://")
+                .unwrap_or("")
+                .to_string();
             let span = info_span!(
                 "ipfs_cache.fetch_edit",
                 block_number = block_num,
-                uri = %edit.content_uri
+                uri = %edit.content_uri,
+                ipfs_hash = %ipfs_hash
             );
             task::spawn(
                 async move {
                     let uri = edit.content_uri.clone();
+                    let ipfs_hash_for_log = ipfs_hash.clone();
                     let result =
                         process_edit_event(edit, &cache, &ipfs, &block_ts, block_num).await;
                     if let Err(e) = result {
-                        error!(
-                            event = "ipfs_cache.fetch_failed",
-                            block_number = block_num,
-                            uri = %uri,
-                            error = %e,
-                            "Failed to process edit event"
-                        );
+                        if ipfs_hash_for_log.is_empty() {
+                            error!(
+                                event = "ipfs_cache.fetch_failed",
+                                block_number = block_num,
+                                uri = %uri,
+                                error = %e,
+                                "Failed to process edit event"
+                            );
+                        } else {
+                            error!(
+                                event = "ipfs_cache.fetch_failed",
+                                block_number = block_num,
+                                uri = %uri,
+                                ipfs_hash = %ipfs_hash_for_log,
+                                tags.ipfs_hash = %ipfs_hash_for_log,
+                                error = %e,
+                                "Failed to process edit event"
+                            );
+                        }
                     }
 
                     // Mark this fetch as complete - persist cursor if block fully completed
@@ -303,21 +322,44 @@ async fn process_edit_event(
 ) -> Result<(), CacheError> {
     // content_uri is validated by hermes-substream - empty means no valid IPFS URI
     if edit.content_uri.is_empty() {
-        debug!(block = block_number, "Skipping edit with no valid IPFS URI");
+        let space_id = hex::encode(&edit.space_id);
+        let data_prefix_len = edit.data.len().min(64);
+        let data_prefix = hex::encode(&edit.data[..data_prefix_len]);
+
+        warn!(
+            space_id = %space_id,
+            block = block_number,
+            data_len = edit.data.len(),
+            data_prefix = %data_prefix,
+            "Edit published with invalid or non-IPFS content URI"
+        );
         return Ok(());
     }
 
     let uri = edit.content_uri;
+    let ipfs_hash = uri.strip_prefix("ipfs://").unwrap_or("").to_string();
     let space_id = hex::encode(&edit.space_id);
 
-    debug!(uri = %uri, space_id = %space_id, block = block_number, "Processing edit");
+    debug!(
+        uri = %uri,
+        ipfs_hash = %ipfs_hash,
+        space_id = %space_id,
+        block = block_number,
+        "Processing edit"
+    );
 
     // Fetch the raw bytes from IPFS
     let result = ipfs.get_bytes(&uri).await;
 
     let item = match result {
         Ok(bytes) => {
-            info!(uri = %uri, block = block_number, bytes = bytes.len(), "Cached IPFS content");
+            info!(
+                uri = %uri,
+                ipfs_hash = %ipfs_hash,
+                block = block_number,
+                bytes = bytes.len(),
+                "Cached IPFS content"
+            );
             CacheItem {
                 uri,
                 data: Some(bytes),
@@ -327,7 +369,23 @@ async fn process_edit_event(
             }
         }
         Err(error) => {
-            warn!(uri = %uri, block = block_number, error = %error, "Failed to fetch IPFS content");
+            if ipfs_hash.is_empty() {
+                warn!(
+                    uri = %uri,
+                    block = block_number,
+                    error = %error,
+                    "Failed to fetch IPFS content"
+                );
+            } else {
+                warn!(
+                    uri = %uri,
+                    ipfs_hash = %ipfs_hash,
+                    tags.ipfs_hash = %ipfs_hash,
+                    block = block_number,
+                    error = %error,
+                    "Failed to fetch IPFS content"
+                );
+            }
             CacheItem {
                 uri,
                 data: None,

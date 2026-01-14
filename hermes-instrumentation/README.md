@@ -7,7 +7,7 @@ Unified telemetry for the Hermes ecosystem.
 This crate provides a single dependency for all observability needs across Hermes services. It wraps the `tracing` crate ecosystem and provides:
 
 - Automatic namespace prefixing for spans (e.g., `ipfs-cache.fetch_content`)
-- Console and OpenTelemetry (OTLP) backend support
+- Console and Sentry backend support (via OpenTelemetry spans)
 - Re-exported tracing macros for convenience
 
 ## Usage
@@ -51,7 +51,7 @@ async fn async_main() -> Result<(), Box<dyn std::error::Error>> {
 
 ### Important: Initialization Order with Async Runtimes
 
-When using the OTLP HTTP backend with tokio, you **must** initialize telemetry **before** creating the tokio runtime:
+Initialize telemetry **before** creating the tokio runtime so the global subscriber is set once and spans aren't missed:
 
 ```rust
 // ✅ Correct: Initialize before runtime
@@ -72,9 +72,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 }
 ```
 
-**Why?** The OTLP HTTP backend uses a `BatchSpanProcessor` that runs in a background thread. This processor uses a blocking HTTP client (`reqwest::blocking`) which creates its own internal tokio runtime. Tokio runtimes cannot be nested, so if you initialize telemetry inside `#[tokio::main]`, it will panic when the blocking client tries to create its nested runtime.
-
-The Console and OTLP gRPC backends do not have this restriction.
+**Why?** The global tracing subscriber can only be set once, and setting it before the runtime avoids subtle initialization order issues.
 
 ## Backends
 
@@ -86,34 +84,22 @@ Outputs formatted logs to stdout with namespace-prefixed spans:
 Backend::Console
 ```
 
-### OTLP (gRPC)
+### Sentry
 
-For local collectors that support gRPC (Jaeger, OpenTelemetry Collector):
+Export spans to Sentry using the Sentry OpenTelemetry integration:
 
 ```rust
-Backend::OtlpGrpc {
-    endpoint: "http://localhost:4317".into(),
-    headers: vec![],
+Backend::Sentry {
+    dsn: "https://...@o0.ingest.sentry.io/0".into(),
+    traces_sample_rate: 1.0,
+    send_default_pii: false,
+    environment: Some("production".into()),
+    release: Some("my-service@1.2.3".into()),
     debug: false,
 }
 ```
 
-### OTLP (HTTP)
-
-For cloud providers that require HTTP (Axiom, Grafana Cloud):
-
-```rust
-Backend::OtlpHttp {
-    endpoint: "https://api.axiom.co/v1/traces".into(),
-    headers: vec![
-        ("Authorization".into(), "Bearer API_TOKEN".into()),
-        ("X-Axiom-Dataset".into(), "my-dataset".into()),
-    ],
-    debug: false,
-}
-```
-
-Set `debug: true` to also emit OTEL spans to stdout, showing trace IDs, span IDs, timing, and all attributes.
+Set `debug: true` to also emit spans to stdout.
 
 ## Instrumentation
 
@@ -179,9 +165,6 @@ Run the examples to see telemetry in action:
 # Console output
 cargo run -p hermes-instrumentation --example console
 
-# OTLP over gRPC (for Jaeger, OTel Collector)
-cargo run -p hermes-instrumentation --example otlp_grpc
-
-# OTLP over HTTP (for Axiom, Grafana Cloud)
-cargo run -p hermes-instrumentation --example otlp_http
+# Sentry (requires SENTRY_DSN)
+cargo run -p hermes-instrumentation --example sentry
 ```

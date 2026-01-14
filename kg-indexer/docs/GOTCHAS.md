@@ -30,9 +30,9 @@ We also consume `hermes.blocks` (canonical block summaries) so batches can close
 
 Set `LOG_EVENT_IDS=true` to emit a per-event log line with the Kafka `event-id` header. This is off by default to keep log volume low.
 
-### OTEL tracing
+### Sentry tracing
 
-If `OTEL_URL` is set, traces are exported via OTLP (HTTP). Otherwise, logs go to stdout (console backend). `OTEL_DEBUG=true` mirrors spans to stdout when OTLP is enabled.
+If `SENTRY_DSN` is set, spans are exported to Sentry. Otherwise, logs go to stdout (console backend). `SENTRY_DEBUG=true` mirrors spans to stdout when Sentry is enabled.
 
 ## Sequence numbers
 

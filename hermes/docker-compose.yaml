@@ -81,10 +81,12 @@ services:
       dockerfile: hermes-pipeline/Dockerfile
     environment:
       KAFKA_BROKER: kafka:29092
-      OTEL_URL: ${OTEL_URL:-}
-      OTEL_TOKEN: ${OTEL_TOKEN:-}
-      OTEL_DATASET: ${OTEL_DATASET:-}
-      OTEL_DEBUG: ${OTEL_DEBUG:-false}
+      SENTRY_DSN: ${SENTRY_DSN:-}
+      SENTRY_TRACES_SAMPLE_RATE: ${SENTRY_TRACES_SAMPLE_RATE:-}
+      SENTRY_SEND_DEFAULT_PII: ${SENTRY_SEND_DEFAULT_PII:-}
+      SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-}
+      SENTRY_RELEASE: ${SENTRY_RELEASE:-}
+      SENTRY_DEBUG: ${SENTRY_DEBUG:-false}
     depends_on:
       kafka:
         condition: service_healthy
@@ -96,10 +98,12 @@ services:
     environment:
       KAFKA_BROKER: kafka:29092
       KAFKA_TOPIC: topology.canonical
-      OTEL_URL: ${OTEL_URL:-}
-      OTEL_TOKEN: ${OTEL_TOKEN:-}
-      OTEL_DATASET: ${OTEL_DATASET:-}
-      OTEL_DEBUG: ${OTEL_DEBUG:-false}
+      SENTRY_DSN: ${SENTRY_DSN:-}
+      SENTRY_TRACES_SAMPLE_RATE: ${SENTRY_TRACES_SAMPLE_RATE:-}
+      SENTRY_SEND_DEFAULT_PII: ${SENTRY_SEND_DEFAULT_PII:-}
+      SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-}
+      SENTRY_RELEASE: ${SENTRY_RELEASE:-}
+      SENTRY_DEBUG: ${SENTRY_DEBUG:-false}
     depends_on:
       kafka:
         condition: service_healthy
@@ -130,6 +134,12 @@ services:
       SUBSTREAMS_ENDPOINT: ${SUBSTREAMS_ENDPOINT}
       SUBSTREAMS_API_TOKEN: ${SUBSTREAMS_API_TOKEN}
       START_BLOCK: ${START_BLOCK:-0}
+      SENTRY_DSN: ${SENTRY_DSN:-}
+      SENTRY_TRACES_SAMPLE_RATE: ${SENTRY_TRACES_SAMPLE_RATE:-}
+      SENTRY_SEND_DEFAULT_PII: ${SENTRY_SEND_DEFAULT_PII:-}
+      SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-}
+      SENTRY_RELEASE: ${SENTRY_RELEASE:-}
+      SENTRY_DEBUG: ${SENTRY_DEBUG:-false}
       RUST_LOG: info,hermes_ipfs_cache=debug
     depends_on:
       ipfs-cache-postgres:

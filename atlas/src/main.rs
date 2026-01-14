@@ -9,10 +9,12 @@
 //! Environment variables:
 //! - `KAFKA_BROKER` - Kafka broker address (default: localhost:9092)
 //! - `KAFKA_TOPIC` - Output topic for canonical graph updates (default: topology.canonical)
-//! - `OTEL_URL` - OTLP HTTP endpoint (e.g., "https://api.axiom.co/v1/traces")
-//! - `OTEL_TOKEN` - Bearer token for authentication
-//! - `OTEL_DATASET` - Dataset name (sent as X-Axiom-Dataset header)
-//! - `OTEL_DEBUG` - Set to "true" to also emit spans to stdout
+//! - `SENTRY_DSN` - Sentry DSN/ingest URL
+//! - `SENTRY_TRACES_SAMPLE_RATE` - Sampling rate (0.0 - 1.0)
+//! - `SENTRY_SEND_DEFAULT_PII` - Set to "true" to include PII
+//! - `SENTRY_ENVIRONMENT` - Environment tag (e.g., "prod", "staging")
+//! - `SENTRY_RELEASE` - Release name (e.g., "service@1.2.3")
+//! - `SENTRY_DEBUG` - Set to "true" to also emit spans to stdout
 
 use std::env;
 use std::sync::Mutex;
@@ -174,49 +176,50 @@ impl AtlasSink {
 /// Build telemetry configuration from environment variables.
 ///
 /// Environment variables:
-/// - `OTEL_URL` - OTLP HTTP endpoint (e.g., "https://api.axiom.co/v1/traces")
-/// - `OTEL_TOKEN` - Bearer token for authentication
-/// - `OTEL_DATASET` - Dataset name (sent as X-Axiom-Dataset header)
-/// - `OTEL_DEBUG` - Set to "true" to also emit spans to stdout
+/// - `SENTRY_DSN` - Sentry DSN/ingest URL
+/// - `SENTRY_TRACES_SAMPLE_RATE` - Sampling rate (0.0 - 1.0)
+/// - `SENTRY_SEND_DEFAULT_PII` - Set to "true" to include PII
+/// - `SENTRY_ENVIRONMENT` - Environment tag (e.g., "prod", "staging")
+/// - `SENTRY_RELEASE` - Release name (e.g., "service@1.2.3")
+/// - `SENTRY_DEBUG` - Set to "true" to also emit spans to stdout
 ///
-/// If `OTEL_URL` is not set, falls back to Console backend.
+/// If `SENTRY_DSN` is not set, falls back to Console backend.
 fn build_telemetry_config() -> hermes_instrumentation::Config {
     use hermes_instrumentation::{Backend, Config};
 
-    let backend = match env::var("OTEL_URL") {
-        Ok(endpoint) => {
-            let mut headers = Vec::new();
-
-            if let Ok(token) = env::var("OTEL_TOKEN") {
-                headers.push(("Authorization".into(), format!("Bearer {}", token)));
-            }
-
-            let dataset = env::var("OTEL_DATASET").ok();
-            if let Some(ref dataset) = dataset {
-                headers.push(("X-Axiom-Dataset".into(), dataset.clone()));
-            }
-
-            let debug = env::var("OTEL_DEBUG")
+    let backend = match env::var("SENTRY_DSN") {
+        Ok(dsn) => {
+            let traces_sample_rate = env::var("SENTRY_TRACES_SAMPLE_RATE")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(1.0);
+            let send_default_pii = env::var("SENTRY_SEND_DEFAULT_PII")
+                .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+                .unwrap_or(false);
+            let environment = env::var("SENTRY_ENVIRONMENT").ok();
+            let release = env::var("SENTRY_RELEASE").ok();
+            let debug = env::var("SENTRY_DEBUG")
                 .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
                 .unwrap_or(false);
 
-            let has_auth = headers.iter().any(|(k, _)| k == "Authorization");
             println!(
-                "Telemetry: OTLP HTTP -> {} (dataset: {}, auth: {}, debug: {})",
-                endpoint,
-                dataset.as_deref().unwrap_or("none"),
-                if has_auth { "yes" } else { "no" },
+                "Telemetry: Sentry (env: {}, release: {}, debug: {})",
+                environment.as_deref().unwrap_or("none"),
+                release.as_deref().unwrap_or("none"),
                 if debug { "yes" } else { "no" }
             );
 
-            Backend::OtlpHttp {
-                endpoint,
-                headers,
+            Backend::Sentry {
+                dsn,
+                traces_sample_rate,
+                send_default_pii,
+                environment,
+                release,
                 debug,
             }
         }
         _ => {
-            println!("Telemetry: Console (set OTEL_URL to enable OTLP export)");
+            println!("Telemetry: Console (set SENTRY_DSN to enable Sentry)");
             Backend::Console
         }
     };
@@ -229,10 +232,6 @@ fn main() -> anyhow::Result<()> {
     dotenv::dotenv().ok();
 
     // Initialize telemetry BEFORE tokio runtime starts.
-    // The OTLP HTTP backend uses a blocking HTTP client that creates its own
-    // internal tokio runtime. Tokio runtimes cannot be nested, so we must
-    // initialize telemetry before creating our application's runtime.
-    //
     // Keep the guard alive until the end of main to ensure spans are flushed.
     let _telemetry = hermes_instrumentation::init(build_telemetry_config())?;
 

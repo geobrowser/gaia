@@ -38,11 +38,11 @@ Debug flag:
 
 - `LOG_EVENT_IDS=true` — emits per-event `event-id` logs (off by default)
 
-OTEL:
+Sentry:
 
-- If `OTEL_URL` is set, spans are exported via OTLP (HTTP)
+- If `SENTRY_DSN` is set, spans are exported to Sentry
 - Otherwise logs go to stdout (console backend)
-- `OTEL_DEBUG=true` mirrors spans to stdout when OTLP is enabled
+- `SENTRY_DEBUG=true` mirrors spans to stdout when Sentry is enabled
 
 ## Development
 

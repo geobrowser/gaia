@@ -13,12 +13,10 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 tracing-opentelemetry = "0.32"
 opentelemetry = "0.31"
 opentelemetry_sdk = { version = "0.31", features = ["rt-tokio"] }
-# Use reqwest-blocking-client for HTTP exports - the BatchSpanProcessor runs in a
-# background thread without a tokio runtime, so we need a blocking HTTP client
-opentelemetry-otlp = { version = "0.31", features = ["grpc-tonic", "http-proto", "reqwest-blocking-client"] }
 opentelemetry-stdout = { version = "0.31", features = ["trace"] }
-http = "1"
-reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
+
+# Sentry
+sentry = { version = "0.46", default-features = false, features = ["backtrace", "contexts", "opentelemetry", "panic", "reqwest", "rustls", "tracing"] }
 
 # Error handling
 thiserror = "2"

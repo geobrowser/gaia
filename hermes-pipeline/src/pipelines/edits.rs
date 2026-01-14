@@ -10,6 +10,7 @@
 //! - Graceful handling of errored cache entries
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::time::Duration;
 
 use anyhow::Result;
@@ -17,6 +18,7 @@ use futures::future::join_all;
 use hermes_instrumentation::{Instrument, debug_span, info_span};
 use tokio_retry::Retry;
 use tokio_retry::strategy::{ExponentialBackoff, jitter};
+use tracing::warn;
 
 use hermes_relay::{Action, actions, extract_ipfs_uri};
 use hermes_schema::pb::knowledge::HermesEdit;
@@ -102,15 +104,29 @@ pub async fn transform(
         .filter(|(_, action)| actions::matches(&action.action, &actions::EDITS_PUBLISHED))
         .filter_map(|(index, action)| {
             // Extract and validate IPFS URI from ABI-encoded action data
-            let ipfs_hash = extract_ipfs_uri(&action.data)?;
-            Some((
-                EditRequest {
-                    ipfs_hash,
-                    space_id: action.from_id.clone(),
-                    sequence: index as u32,
-                },
-                action.clone(),
-            ))
+            match extract_ipfs_uri(&action.data) {
+                Some(ipfs_hash) => Some((
+                    EditRequest {
+                        ipfs_hash,
+                        space_id: action.from_id.clone(),
+                        sequence: index as u32,
+                    },
+                    action.clone(),
+                )),
+                None => {
+                    let space_id = hex::encode(&action.from_id);
+                    let data_prefix_len = action.data.len().min(64);
+                    let data_prefix = hex::encode(&action.data[..data_prefix_len]);
+                    warn!(
+                        block = meta.block_number,
+                        space_id = %space_id,
+                        data_len = action.data.len(),
+                        data_prefix = %data_prefix,
+                        "EDITS_PUBLISHED missing valid IPFS URI, skipping"
+                    );
+                    None
+                }
+            }
         })
         .collect();
 
@@ -198,13 +214,27 @@ async fn fetch_edit_with_retry(
     let ipfs_hash = req.ipfs_hash.clone();
     let space_id = req.space_id.clone();
     let sequence = req.sequence;
+    let attempts = Arc::new(AtomicUsize::new(0));
     let result = Retry::spawn(retry_strategy, || {
         let hash = ipfs_hash.clone();
-        let hash_for_span = hash.clone();
         let space = space_id.clone();
         let cache = Arc::clone(&cache);
-        async move { cache.get(&hash, &space).await }
-            .instrument(debug_span!("cache.get", ipfs_hash = %hash_for_span))
+        let attempts = Arc::clone(&attempts);
+        let span = debug_span!("cache.get", ipfs_hash = %hash);
+        async move {
+            let result = cache.get(&hash, &space).await;
+            let attempt = attempts.fetch_add(1, Ordering::Relaxed) + 1;
+            if matches!(result, Err(CacheError::NotFound(_))) {
+                warn!(
+                    ipfs_hash = %hash,
+                    tags.ipfs_hash = %hash,
+                    attempt,
+                    "Edit cache miss, retrying"
+                );
+            }
+            result
+        }
+        .instrument(span)
     })
     .await;
 
@@ -222,7 +252,17 @@ async fn fetch_edit_with_retry(
                 EditFetchResult::Errored
             }
         }
-        Err(CacheError::NotFound(_)) => EditFetchResult::CacheMiss,
+        Err(CacheError::NotFound(_)) => {
+            let attempts = attempts.load(Ordering::Relaxed);
+            warn!(
+                ipfs_hash = %ipfs_hash,
+                tags.ipfs_hash = %ipfs_hash,
+                attempts,
+                max_retries = config.max_retries,
+                "Edit cache miss after retries exhausted"
+            );
+            EditFetchResult::CacheMiss
+        }
         Err(_) => EditFetchResult::FetchFailed,
     }
 }

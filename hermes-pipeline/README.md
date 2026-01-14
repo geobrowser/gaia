@@ -99,14 +99,16 @@ This transformer is part of the Hermes architecture (see `docs/hermes-architectu
 
 ### Telemetry Environment Variables
 
-If `OTEL_URL` is set, telemetry is exported via OTLP HTTP. Otherwise, logs are written to the console.
+If `SENTRY_DSN` is set, telemetry is exported to Sentry. Otherwise, logs are written to the console.
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `OTEL_URL` | OTLP HTTP endpoint | - |
-| `OTEL_TOKEN` | Bearer token for authentication | - |
-| `OTEL_DATASET` | Dataset name (sent as `X-Axiom-Dataset` header) | - |
-| `OTEL_DEBUG` | Also emit spans to stdout | `false` |
+| `SENTRY_DSN` | Sentry DSN / ingest URL | - |
+| `SENTRY_TRACES_SAMPLE_RATE` | Sampling rate (0.0 - 1.0) | `1.0` |
+| `SENTRY_SEND_DEFAULT_PII` | Include PII (IP, headers) | `false` |
+| `SENTRY_ENVIRONMENT` | Environment tag | - |
+| `SENTRY_RELEASE` | Release name | - |
+| `SENTRY_DEBUG` | Also emit spans to stdout | `false` |
 
 ## Usage
 

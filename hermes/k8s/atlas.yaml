@@ -39,23 +39,41 @@ spec:
                   key: KAFKA_SSL_CA_PEM
             - name: KAFKA_TOPIC
               value: "topology.canonical"
-            - name: OTEL_URL
+            - name: SENTRY_DSN
               valueFrom:
                 secretKeyRef:
                   name: atlas-otel
-                  key: OTEL_URL
+                  key: SENTRY_DSN
                   optional: true
-            - name: OTEL_TOKEN
+            - name: SENTRY_TRACES_SAMPLE_RATE
               valueFrom:
                 secretKeyRef:
                   name: atlas-otel
-                  key: OTEL_TOKEN
+                  key: SENTRY_TRACES_SAMPLE_RATE
                   optional: true
-            - name: OTEL_DATASET
+            - name: SENTRY_SEND_DEFAULT_PII
               valueFrom:
                 secretKeyRef:
                   name: atlas-otel
-                  key: OTEL_DATASET
+                  key: SENTRY_SEND_DEFAULT_PII
+                  optional: true
+            - name: SENTRY_ENVIRONMENT
+              valueFrom:
+                secretKeyRef:
+                  name: atlas-otel
+                  key: SENTRY_ENVIRONMENT
+                  optional: true
+            - name: SENTRY_RELEASE
+              valueFrom:
+                secretKeyRef:
+                  name: atlas-otel
+                  key: SENTRY_RELEASE
+                  optional: true
+            - name: SENTRY_DEBUG
+              valueFrom:
+                secretKeyRef:
+                  name: atlas-otel
+                  key: SENTRY_DEBUG
                   optional: true
           resources:
             requests:

@@ -6,7 +6,6 @@ use futures::StreamExt;
 use hermes_instrumentation::{debug, error, info, info_span, warn, Instrument};
 use hermes_schema::pb::blockchain_metadata::BlockchainMetadata;
 use opentelemetry::propagation::Extractor;
-use opentelemetry_sdk::propagation::TraceContextPropagator;
 use rdkafka::message::Headers;
 use rdkafka::Message;
 use std::sync::OnceLock;
@@ -131,40 +130,39 @@ struct BlockSummaryInfo {
 fn build_telemetry_config() -> hermes_instrumentation::Config {
     use hermes_instrumentation::{Backend, Config};
 
-    let backend = match env::var("OTEL_URL") {
-        Ok(endpoint) => {
-            let mut headers = Vec::new();
-
-            if let Ok(token) = env::var("OTEL_TOKEN") {
-                headers.push(("Authorization".into(), format!("Bearer {}", token)));
-            }
-
-            let dataset = env::var("OTEL_DATASET").ok();
-            if let Some(ref dataset) = dataset {
-                headers.push(("X-Axiom-Dataset".into(), dataset.clone()));
-            }
-
-            let debug = env::var("OTEL_DEBUG")
+    let backend = match env::var("SENTRY_DSN") {
+        Ok(dsn) => {
+            let traces_sample_rate = env::var("SENTRY_TRACES_SAMPLE_RATE")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(1.0);
+            let send_default_pii = env::var("SENTRY_SEND_DEFAULT_PII")
+                .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+                .unwrap_or(false);
+            let environment = env::var("SENTRY_ENVIRONMENT").ok();
+            let release = env::var("SENTRY_RELEASE").ok();
+            let debug = env::var("SENTRY_DEBUG")
                 .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
                 .unwrap_or(false);
 
-            let has_auth = headers.iter().any(|(k, _)| k == "Authorization");
             println!(
-                "Telemetry: OTLP HTTP -> {} (dataset: {}, auth: {}, debug: {})",
-                endpoint,
-                dataset.as_deref().unwrap_or("none"),
-                if has_auth { "yes" } else { "no" },
+                "Telemetry: Sentry (env: {}, release: {}, debug: {})",
+                environment.as_deref().unwrap_or("none"),
+                release.as_deref().unwrap_or("none"),
                 if debug { "yes" } else { "no" }
             );
 
-            Backend::OtlpHttp {
-                endpoint,
-                headers,
+            Backend::Sentry {
+                dsn,
+                traces_sample_rate,
+                send_default_pii,
+                environment,
+                release,
                 debug,
             }
         }
         _ => {
-            println!("Telemetry: Console (set OTEL_URL to enable OTLP export)");
+            println!("Telemetry: Console (set SENTRY_DSN to enable Sentry)");
             Backend::Console
         }
     };
@@ -177,7 +175,6 @@ fn main() -> Result<(), IndexerError> {
 
     let _telemetry = hermes_instrumentation::init(build_telemetry_config())
         .map_err(|e| IndexerError::config(format!("telemetry init failed: {}", e)))?;
-    opentelemetry::global::set_text_map_propagator(TraceContextPropagator::new());
 
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
@@ -613,9 +610,9 @@ fn log_event_ids_enabled() -> bool {
     })
 }
 
-fn otel_enabled() -> bool {
+fn sentry_enabled() -> bool {
     static ENABLED: OnceLock<bool> = OnceLock::new();
-    *ENABLED.get_or_init(|| std::env::var("OTEL_URL").ok().is_some())
+    *ENABLED.get_or_init(|| std::env::var("SENTRY_DSN").ok().is_some())
 }
 
 const INDEXER_TOPICS: &[&str] = &[
@@ -794,7 +791,7 @@ async fn process_buffered_block(
     {
         Ok(result) => {
             let duration_ms = start.elapsed().as_millis();
-            if otel_enabled() {
+            if sentry_enabled() {
                 info!(
                     event = "kg_indexer.batch_end",
                     batch_id = %batch_id,
@@ -829,7 +826,7 @@ async fn process_buffered_block(
         }
         Err(e) => {
             let duration_ms = start.elapsed().as_millis();
-            if otel_enabled() {
+            if sentry_enabled() {
                 error!(
                     event = "kg_indexer.batch_end",
                     batch_id = %batch_id,
