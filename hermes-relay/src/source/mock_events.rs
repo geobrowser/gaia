@@ -1373,6 +1373,16 @@ pub mod test_topology {
         // Phase 7: Edits
         actions.push(edit_published(ROOT_SPACE_ID, "QmRootEdit1CreatePersons"));
         actions.push(edit_published(ROOT_SPACE_ID, "QmRootEdit2AddDescriptions"));
+        // Type-related edits for search indexer testing
+        actions.push(edit_published(ROOT_SPACE_ID, "QmRootEdit3CreateTypes"));
+        actions.push(edit_published(
+            ROOT_SPACE_ID,
+            "QmRootEdit4CreateTypeRelations",
+        ));
+        actions.push(edit_published(
+            ROOT_SPACE_ID,
+            "QmRootEdit5DeleteTypeRelation",
+        ));
         actions.push(edit_published(SPACE_A, "QmSpaceAEdit1CreateOrg"));
         actions.push(edit_published(SPACE_A, "QmSpaceAEdit2CreateRelations"));
         actions.push(edit_published(SPACE_B, "QmSpaceBEdit1CreateDoc"));
@@ -1607,8 +1617,8 @@ mod tests {
         assert_eq!(related_count, 4);
         // 5 topic declarations
         assert_eq!(topic_declared_count, 5);
-        // 6 edits
-        assert_eq!(edit_count, 6);
+        // 9 edits (6 original + 3 type-related for search indexer testing)
+        assert_eq!(edit_count, 9);
         // 7 proposals with settings (one for each proposal: add_member, remove_member, add_editor, remove_editor, flag, unflag, publish)
         assert_eq!(proposal_settings_count, 7);
     }

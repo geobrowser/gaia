@@ -7,9 +7,56 @@ The `search-indexer` needs to consume events from the `knowledge.edits` Kafka to
 1. `hermes-pipeline` has run and published events to Kafka
 2. `search-indexer` is running to consume those events
 
+## Prerequisites
+
+### Clean up old OpenSearch indices (if needed)
+
+If you previously ran the search-indexer with an old index format, you may need to delete the existing indices:
+
+```bash
+# Delete the index and alias
+curl -X DELETE "http://localhost:9200/entities_v0"
+curl -X DELETE "http://localhost:9200/entities"
+
+# Verify deletion
+curl "http://localhost:9200/_cat/indices?v"
+```
+
 ## Solution
 
-### Option 1: Run search-indexer after hermes-pipeline (Recommended)
+### Option 1: Run with cargo (Recommended)
+
+1. **Start Kafka:**
+   ```bash
+   cd hermes
+   docker-compose up -d kafka kafka-ui
+   ```
+
+2. **In one terminal, run hermes-pipeline with mock data:**
+   ```bash
+   RUST_LOG=debug USE_MOCK=true cargo run --bin hermes-pipeline
+   ```
+   You should see logs like:
+   ```
+   Edit published name=Create Persons space_id=... ops_count=2
+   Block processed spaces=11 trust_added=14 trust_removed=0 governance=0 edits=9
+   ```
+
+3. **Verify events are in Kafka:**
+   - Open http://localhost:8080 (Kafka UI)
+   - Navigate to the `knowledge.edits` topic
+   - You should see 9 edit messages
+
+4. **In another terminal, run search-indexer:**
+   ```bash
+   KAFKA_BROKER=localhost:9092 \
+   OPENSEARCH_URL=http://localhost:9200 \
+   KAFKA_GROUP_ID=search-indexer-test-$(date +%s) \
+   RUST_LOG=debug,search_indexer=debug \
+   cargo run -p search-indexer
+   ```
+
+### Option 2: Run hermes-pipeline in Docker
 
 1. **Start Kafka and hermes-pipeline:**
    ```bash
@@ -21,47 +68,14 @@ The `search-indexer` needs to consume events from the `knowledge.edits` Kafka to
    ```bash
    docker-compose logs -f hermes-pipeline
    ```
-   You should see logs like:
-   ```
-   Edit published name=Create Persons space_id=... ops_count=2
-   Block processed spaces=11 trust_added=14 trust_removed=0 governance=0 edits=6
-   ```
 
-3. **Verify events are in Kafka:**
-   - Open http://localhost:8080 (Kafka UI)
-   - Navigate to the `knowledge.edits` topic
-   - You should see 6 edit messages
-
-4. **Run search-indexer** (outside Docker, or in a separate container):
+3. **Run search-indexer:**
    ```bash
-   cd ../search-indexer
    KAFKA_BROKER=localhost:9092 \
    OPENSEARCH_URL=http://localhost:9200 \
-   cargo run
-   ```
-
-### Option 2: Run search-indexer concurrently
-
-If you want search-indexer to pick up events as they're produced:
-
-1. **Start Kafka:**
-   ```bash
-   cd hermes
-   docker-compose up -d kafka kafka-ui
-   ```
-
-2. **In one terminal, run hermes-pipeline:**
-   ```bash
-   cd hermes
-   docker-compose up hermes-pipeline
-   ```
-
-3. **In another terminal, run search-indexer:**
-   ```bash
-   cd search-indexer
-   KAFKA_BROKER=localhost:9092 \
-   OPENSEARCH_URL=http://localhost:9200 \
-   cargo run
+   KAFKA_GROUP_ID=search-indexer-test-$(date +%s) \
+   RUST_LOG=debug,search_indexer=debug \
+   cargo run -p search-indexer
    ```
 
 ### Option 3: Run search-indexer in Docker
@@ -108,19 +122,95 @@ Both addresses point to the same Kafka broker, just different network contexts.
 
 ### Mock Events Generated
 
-The hermes-pipeline generates 6 edit events from the test topology:
+The hermes-pipeline generates 9 edit events from the test topology:
 1. `QmRootEdit1CreatePersons` - Creates "Alice" and "Bob" entities
 2. `QmRootEdit2AddDescriptions` - Adds descriptions to persons
-3. `QmSpaceAEdit1CreateOrg` - Creates "Acme Corp" organization
-4. `QmSpaceAEdit2CreateRelations` - Creates relations between persons and org
-5. `QmSpaceBEdit1CreateDoc` - Creates "Project Alpha" and "Technical Specification"
-6. `QmSpaceCEdit1CreateTopic` - Creates "Blockchain Technology" topic
+3. `QmRootEdit3CreateTypes` - Creates type entities ("Person", "Organization", "Project")
+4. `QmRootEdit4CreateTypeRelations` - Creates type relations using `TYPE_RELATION_TYPE_ID`:
+   - Alice -> Person type
+   - Alice -> Organization type (she is a founder, so has 2 types)
+   - Bob → Person type
+   - Acme Corp → Organization type
+   - Project Alpha → Project type (will be deleted)
+   - Project Alpha → Organization type (secondary, survives the delete)
+5. `QmRootEdit5DeleteTypeRelation` - Deletes the Project type from Project Alpha (Organization type remains)
+6. `QmSpaceAEdit1CreateOrg` - Creates "Acme Corp" organization
+7. `QmSpaceAEdit2CreateRelations` - Creates relations between persons and org (BELONGS_TO, not type relations)
+8. `QmSpaceBEdit1CreateDoc` - Creates "Project Alpha" and "Technical Specification"
+9. `QmSpaceCEdit1CreateTopic` - Creates "Blockchain Technology" topic
 
-These events contain entities with `name`, `description`, and `avatar` properties that the search-indexer will index.
+These events contain:
+- Entities with `name` and `description` properties
+- Type relations (CreateRelation with `TYPE_RELATION_TYPE_ID`) that the search-indexer indexes into `type_relations`
+- A DeleteRelation operation to test type relation removal
 
-### Verify entities are indexed:
+### Expected Entities After Processing
 
-   ```bash
-   curl "http://localhost:9200/entities/_search?q=entity"
-   ```
+After all 9 events are processed, the search index should contain **11 documents**. 
 
+Note: Documents are keyed by `(entity_id, space_id)`, so the same entity can have multiple documents if it's referenced in different spaces. Type relations created in the root space create separate documents from the entity properties created in other spaces.
+
+| Entity ID | Space | Name | Description | Type Relations |
+|-----------|-------|------|-------------|----------------|
+| `...f1` | Root (`...01`) | Alice | A software developer | -> Person (`...b1`), -> Organization (`...b2`) |
+| `...f2` | Root (`...01`) | Bob | A project manager | → Person (`...b1`) |
+| `...f3` | Root (`...01`) | - | - | → Organization (`...b2`) |
+| `...f3` | Space A (`...0a`) | Acme Corp | A technology company | - |
+| `...f4` | Root (`...01`) | - | - | → Organization (`...b2`) *(Project type was deleted)* |
+| `...f4` | Space B (`...0b`) | Project Alpha | A groundbreaking project | - |
+| `...f5` | Space B (`...0b`) | Technical Specification | - | - |
+| `...f6` | Space C (`...0c`) | Blockchain Technology | Distributed ledger technology | - |
+| `...b1` | Root (`...01`) | Person | A human being | - |
+| `...b2` | Root (`...01`) | Organization | A structured group of people | - |
+| `...b3` | Root (`...01`) | Project | A planned endeavor | - |
+
+### Verify entities are indexed
+
+List all indexed entities:
+```bash
+curl -s "http://localhost:9200/entities/_search?pretty" | jq '.hits.hits[]._source.name'
+```
+
+Search for a specific entity by name:
+```bash
+curl -s "http://localhost:9200/entities/_search?pretty" -H "Content-Type: application/json" -d '{
+  "query": { "match": { "name": "Alice" } }
+}'
+```
+
+### Verify Type Relations
+
+Type relations are stored on the entity document in the **root space** (where the type relation was created), not on the entity document in the space where properties were set.
+
+Check that "Project Alpha" (`f4`) in root space has Organization type but NOT Project type:
+```bash
+# Get Project Alpha's type relations from root space
+curl -s "http://localhost:9200/entities/_search?pretty" -H "Content-Type: application/json" -d '{
+  "query": {
+    "bool": {
+      "must": [
+        { "term": { "entity_id": "00000000-0000-0000-0000-0000000000f4" } },
+        { "term": { "space_id": "00000000-0000-4000-8000-000000000001" } }
+      ]
+    }
+  }
+}' | jq '.hits.hits[]._source.type_relations'
+```
+
+Expected result: Should show Organization type (`...b2`), NOT Project type (`...b3`).
+
+Verify Alice has 2 type relations (Person and Organization):
+```bash
+curl -s "http://localhost:9200/entities/_search?pretty" -H "Content-Type: application/json" -d '{
+  "query": { "match": { "name": "Alice" } }
+}' | jq '.hits.hits[]._source.type_relations'
+```
+
+Expected result: Should show 2 type relations - Person (`...b1`) and Organization (`...b2`).
+
+Get all entities with type relations:
+```bash
+curl -s "http://localhost:9200/entities/_search?pretty" -H "Content-Type: application/json" -d '{
+  "query": { "exists": { "field": "type_relations" } }
+}' | jq '.hits.hits[]._source | {name, entity_id, type_relations}'
+```

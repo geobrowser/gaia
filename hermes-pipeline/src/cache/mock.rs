@@ -6,6 +6,7 @@
 use std::collections::HashMap;
 
 use async_trait::async_trait;
+use uuid::uuid;
 use wire::pb::grc20::{Edit, Entity, Op, Relation, Value};
 
 use super::{CacheError, CachedEdit, IpfsCache};
@@ -22,9 +23,10 @@ const ENTITY_PROJECT_1: [u8; 16] = make_id(0xF4);
 const ENTITY_DOC_1: [u8; 16] = make_id(0xF5);
 const ENTITY_TOPIC_1: [u8; 16] = make_id(0xF6);
 
-// Property IDs
-const PROPERTY_NAME: [u8; 16] = make_id(0xD1);
-const PROPERTY_DESCRIPTION: [u8; 16] = make_id(0xD2);
+// Property IDs (from sdk/src/core/ids.rs)
+const PROPERTY_NAME: [u8; 16] = *uuid!("a126ca53-0c8e-48d5-b888-82c734c38935").as_bytes();
+const PROPERTY_DESCRIPTION: [u8; 16] = *uuid!("9b1f76ff-9711-404c-861e-59dc3fa7d037").as_bytes();
+
 #[allow(dead_code)]
 const PROPERTY_URL: [u8; 16] = make_id(0xD3);
 
@@ -33,9 +35,28 @@ const RELATION_TYPE_BELONGS_TO: [u8; 16] = make_id(0xC2);
 #[allow(dead_code)]
 const RELATION_TYPE_RELATED_TO: [u8; 16] = make_id(0xC3);
 
+/// The special "type" relation type ID that the search indexer processes.
+const TYPE_RELATION_TYPE_ID: [u8; 16] = *uuid!("8f151ba4-de20-4e3c-9cb4-99ddf96f48f1").as_bytes();
+
+// Type Entity IDs (entities that represent types)
+const TYPE_PERSON: [u8; 16] = make_id(0xB1);
+const TYPE_ORGANIZATION: [u8; 16] = make_id(0xB2);
+const TYPE_PROJECT: [u8; 16] = make_id(0xB3);
+
+// Type Relation IDs (for type relations that assign types to entities)
+const TYPE_RELATION_1: [u8; 16] = make_id(0xC4); // Person1 -> PersonType
+const TYPE_RELATION_2: [u8; 16] = make_id(0xC5); // Person2 -> PersonType
+const TYPE_RELATION_3: [u8; 16] = make_id(0xC6); // Org1 -> OrgType
+const TYPE_RELATION_4: [u8; 16] = make_id(0xC7); // Project1 -> ProjectType (will be deleted)
+const TYPE_RELATION_5: [u8; 16] = make_id(0xC8); // Project1 -> OrgType (secondary, survives delete)
+const TYPE_RELATION_6: [u8; 16] = make_id(0xC9); // Person1 -> OrgType (Alice is also an Organization founder)
+
 // Edit IDs
 const EDIT_ROOT_1: [u8; 16] = make_id(0xE1);
 const EDIT_ROOT_2: [u8; 16] = make_id(0xE2);
+const EDIT_ROOT_3: [u8; 16] = make_id(0xE3); // Create type entities
+const EDIT_ROOT_4: [u8; 16] = make_id(0xE4); // Create type relations
+const EDIT_ROOT_5: [u8; 16] = make_id(0xE5); // Delete type relation
 const EDIT_A_1: [u8; 16] = make_id(0xEA);
 const EDIT_A_2: [u8; 16] = make_id(0xEB);
 const EDIT_B_1: [u8; 16] = make_id(0xEC);
@@ -108,6 +129,17 @@ impl MockIpfsCache {
         self.edits.insert(
             "QmRootEdit2AddDescriptions".into(),
             create_descriptions_edit(),
+        );
+        // Type-related edits (for search indexer testing)
+        self.edits
+            .insert("QmRootEdit3CreateTypes".into(), create_types_edit());
+        self.edits.insert(
+            "QmRootEdit4CreateTypeRelations".into(),
+            create_type_relations_edit(),
+        );
+        self.edits.insert(
+            "QmRootEdit5DeleteTypeRelation".into(),
+            delete_type_relation_edit(),
         );
 
         // Space A edits
@@ -389,6 +421,210 @@ fn create_topic_edit() -> Edit {
     }
 }
 
+// =============================================================================
+// Type relation edits (for search indexer testing)
+// =============================================================================
+
+/// Creates type entities (Person, Organization, Project types).
+///
+/// Edit for: QmRootEdit3CreateTypes (root space)
+fn create_types_edit() -> Edit {
+    Edit {
+        id: EDIT_ROOT_3.to_vec(),
+        name: "Create Types".into(),
+        ops: vec![
+            // Create Person type
+            Op {
+                payload: Some(wire::pb::grc20::op::Payload::UpdateEntity(Entity {
+                    id: TYPE_PERSON.to_vec(),
+                    values: vec![
+                        Value {
+                            property: PROPERTY_NAME.to_vec(),
+                            value: "Person".into(),
+                            options: None,
+                        },
+                        Value {
+                            property: PROPERTY_DESCRIPTION.to_vec(),
+                            value: "A human being".into(),
+                            options: None,
+                        },
+                    ],
+                })),
+            },
+            // Create Organization type
+            Op {
+                payload: Some(wire::pb::grc20::op::Payload::UpdateEntity(Entity {
+                    id: TYPE_ORGANIZATION.to_vec(),
+                    values: vec![
+                        Value {
+                            property: PROPERTY_NAME.to_vec(),
+                            value: "Organization".into(),
+                            options: None,
+                        },
+                        Value {
+                            property: PROPERTY_DESCRIPTION.to_vec(),
+                            value: "A structured group of people".into(),
+                            options: None,
+                        },
+                    ],
+                })),
+            },
+            // Create Project type
+            Op {
+                payload: Some(wire::pb::grc20::op::Payload::UpdateEntity(Entity {
+                    id: TYPE_PROJECT.to_vec(),
+                    values: vec![
+                        Value {
+                            property: PROPERTY_NAME.to_vec(),
+                            value: "Project".into(),
+                            options: None,
+                        },
+                        Value {
+                            property: PROPERTY_DESCRIPTION.to_vec(),
+                            value: "A planned endeavor".into(),
+                            options: None,
+                        },
+                    ],
+                })),
+            },
+        ],
+        authors: vec![AUTHOR_1.to_vec()],
+        language: None,
+    }
+}
+
+/// Creates type relations using TYPE_RELATION_TYPE_ID.
+/// These relations assign types to entities and should be indexed by the search indexer.
+///
+/// Edit for: QmRootEdit4CreateTypeRelations (root space)
+fn create_type_relations_edit() -> Edit {
+    Edit {
+        id: EDIT_ROOT_4.to_vec(),
+        name: "Create Type Relations".into(),
+        ops: vec![
+            // Person 1 has type Person
+            Op {
+                payload: Some(wire::pb::grc20::op::Payload::CreateRelation(Relation {
+                    id: TYPE_RELATION_1.to_vec(),
+                    r#type: TYPE_RELATION_TYPE_ID.to_vec(),
+                    from_entity: ENTITY_PERSON_1.to_vec(),
+                    from_space: None,
+                    from_version: None,
+                    to_entity: TYPE_PERSON.to_vec(),
+                    to_space: None,
+                    to_version: None,
+                    entity: ENTITY_PERSON_1.to_vec(),
+                    position: Some("0".into()),
+                    verified: Some(true),
+                })),
+            },
+            // Person 2 has type Person
+            Op {
+                payload: Some(wire::pb::grc20::op::Payload::CreateRelation(Relation {
+                    id: TYPE_RELATION_2.to_vec(),
+                    r#type: TYPE_RELATION_TYPE_ID.to_vec(),
+                    from_entity: ENTITY_PERSON_2.to_vec(),
+                    from_space: None,
+                    from_version: None,
+                    to_entity: TYPE_PERSON.to_vec(),
+                    to_space: None,
+                    to_version: None,
+                    entity: ENTITY_PERSON_2.to_vec(),
+                    position: Some("0".into()),
+                    verified: Some(true),
+                })),
+            },
+            // Organization 1 has type Organization
+            Op {
+                payload: Some(wire::pb::grc20::op::Payload::CreateRelation(Relation {
+                    id: TYPE_RELATION_3.to_vec(),
+                    r#type: TYPE_RELATION_TYPE_ID.to_vec(),
+                    from_entity: ENTITY_ORG_1.to_vec(),
+                    from_space: None,
+                    from_version: None,
+                    to_entity: TYPE_ORGANIZATION.to_vec(),
+                    to_space: None,
+                    to_version: None,
+                    entity: ENTITY_ORG_1.to_vec(),
+                    position: Some("0".into()),
+                    verified: Some(true),
+                })),
+            },
+            // Project 1 has type Project (this will be deleted in a later edit)
+            Op {
+                payload: Some(wire::pb::grc20::op::Payload::CreateRelation(Relation {
+                    id: TYPE_RELATION_4.to_vec(),
+                    r#type: TYPE_RELATION_TYPE_ID.to_vec(),
+                    from_entity: ENTITY_PROJECT_1.to_vec(),
+                    from_space: None,
+                    from_version: None,
+                    to_entity: TYPE_PROJECT.to_vec(),
+                    to_space: None,
+                    to_version: None,
+                    entity: ENTITY_PROJECT_1.to_vec(),
+                    position: Some("0".into()),
+                    verified: Some(true),
+                })),
+            },
+            // Project 1 also has type Organization (secondary relation that survives the delete)
+            Op {
+                payload: Some(wire::pb::grc20::op::Payload::CreateRelation(Relation {
+                    id: TYPE_RELATION_5.to_vec(),
+                    r#type: TYPE_RELATION_TYPE_ID.to_vec(),
+                    from_entity: ENTITY_PROJECT_1.to_vec(),
+                    from_space: None,
+                    from_version: None,
+                    to_entity: TYPE_ORGANIZATION.to_vec(),
+                    to_space: None,
+                    to_version: None,
+                    entity: ENTITY_PROJECT_1.to_vec(),
+                    position: Some("1".into()),
+                    verified: Some(true),
+                })),
+            },
+            // Person 1 (Alice) also has type Organization (she's an org founder, so has 2 types)
+            Op {
+                payload: Some(wire::pb::grc20::op::Payload::CreateRelation(Relation {
+                    id: TYPE_RELATION_6.to_vec(),
+                    r#type: TYPE_RELATION_TYPE_ID.to_vec(),
+                    from_entity: ENTITY_PERSON_1.to_vec(),
+                    from_space: None,
+                    from_version: None,
+                    to_entity: TYPE_ORGANIZATION.to_vec(),
+                    to_space: None,
+                    to_version: None,
+                    entity: ENTITY_PERSON_1.to_vec(),
+                    position: Some("1".into()),
+                    verified: Some(true),
+                })),
+            },
+        ],
+        authors: vec![AUTHOR_1.to_vec()],
+        language: None,
+    }
+}
+
+/// Deletes a type relation (removes Project type from Project 1).
+/// This tests the DeleteRelation operation for type relations.
+///
+/// Edit for: QmRootEdit5DeleteTypeRelation (root space)
+fn delete_type_relation_edit() -> Edit {
+    Edit {
+        id: EDIT_ROOT_5.to_vec(),
+        name: "Delete Type Relation".into(),
+        ops: vec![
+            // Delete the Project type relation from Project 1
+            Op {
+                payload: Some(wire::pb::grc20::op::Payload::DeleteRelation(
+                    TYPE_RELATION_4.to_vec(),
+                )),
+            },
+        ],
+        authors: vec![AUTHOR_1.to_vec()],
+        language: None,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -398,7 +634,7 @@ mod tests {
         let cache = MockIpfsCache::new();
         let space_id = vec![0x01; 16];
 
-        // All 6 edits from mock_events.rs should be present
+        // All 9 edits from mock_events.rs should be present
         assert!(
             cache
                 .get("QmRootEdit1CreatePersons", &space_id)
@@ -408,6 +644,20 @@ mod tests {
         assert!(
             cache
                 .get("QmRootEdit2AddDescriptions", &space_id)
+                .await
+                .is_ok()
+        );
+        // Type-related edits for search indexer testing
+        assert!(cache.get("QmRootEdit3CreateTypes", &space_id).await.is_ok());
+        assert!(
+            cache
+                .get("QmRootEdit4CreateTypeRelations", &space_id)
+                .await
+                .is_ok()
+        );
+        assert!(
+            cache
+                .get("QmRootEdit5DeleteTypeRelation", &space_id)
                 .await
                 .is_ok()
         );
