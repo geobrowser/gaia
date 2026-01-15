@@ -2,7 +2,6 @@ use hermes_schema::pb::governance::{
     proposal_action::Action, HermesProposalCreated, HermesProposalExecuted, HermesProposalUpdated,
     HermesProposalVoted, ProposalSettings, ProposalVoteOption, VotingMode as ProtoVotingMode,
 };
-use indexer_utils::checksum_address;
 use uuid::Uuid;
 
 use crate::error::HandlerError;
@@ -170,21 +169,29 @@ fn map_proposal_action(
         format!("{}:{}", proposal_id, index).as_bytes(),
     );
 
+    // Helper to convert bytes16 space ID to UUID string
+    // The target_address field contains a 16-byte space ID (bytes16), not an Ethereum address
+    let space_id_to_string = |bytes: &[u8]| -> String {
+        Uuid::from_slice(bytes)
+            .map(|u| u.to_string())
+            .unwrap_or_else(|_| hex::encode(bytes))
+    };
+
     let payload = match &action.action {
         Some(Action::AddMember(a)) => ProposalActionPayload::AddMember {
-            target_address: checksum_address(format!("0x{}", hex::encode(&a.target_address))),
+            target_address: space_id_to_string(&a.target_address),
         },
         Some(Action::RemoveMember(a)) => ProposalActionPayload::RemoveMember {
-            target_address: checksum_address(format!("0x{}", hex::encode(&a.target_address))),
+            target_address: space_id_to_string(&a.target_address),
         },
         Some(Action::AddEditor(a)) => ProposalActionPayload::AddEditor {
-            target_address: checksum_address(format!("0x{}", hex::encode(&a.target_address))),
+            target_address: space_id_to_string(&a.target_address),
         },
         Some(Action::RemoveEditor(a)) => ProposalActionPayload::RemoveEditor {
-            target_address: checksum_address(format!("0x{}", hex::encode(&a.target_address))),
+            target_address: space_id_to_string(&a.target_address),
         },
         Some(Action::UnflagEditor(a)) => ProposalActionPayload::UnflagEditor {
-            target_address: checksum_address(format!("0x{}", hex::encode(&a.target_address))),
+            target_address: space_id_to_string(&a.target_address),
         },
         Some(Action::Publish(a)) => ProposalActionPayload::Publish {
             content_uri: a.content_uri.clone(),
