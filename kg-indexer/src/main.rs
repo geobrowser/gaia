@@ -200,6 +200,16 @@ async fn async_main() -> Result<(), IndexerError> {
     let storage = Storage::new(&database_url).await?;
     info!("Connected to database");
 
+    let mut property_types: HashMap<uuid::Uuid, models::properties::DataType> = HashMap::new();
+    let existing_properties = storage.get_all_properties().await?;
+    for property in existing_properties {
+        property_types.insert(property.id, property.data_type);
+    }
+    info!(
+        property_count = property_types.len(),
+        "Loaded property data types"
+    );
+
     // Initialize Kafka consumer
     let consumer = KafkaConsumer::new(&kafka_broker, &kafka_group_id)?;
     consumer.subscribe()?;
@@ -267,6 +277,7 @@ async fn async_main() -> Result<(), IndexerError> {
                         &consumer,
                         summary,
                         BlockProcessReason::Stale,
+                        &mut property_types,
                     )
                     .await;
                     if let Some((processed, errors)) = result {
@@ -355,6 +366,7 @@ async fn async_main() -> Result<(), IndexerError> {
                                                     &consumer,
                                                     summary_info,
                                                     BlockProcessReason::Summary,
+                                                    &mut property_types,
                                                 )
                                                 .await;
                                                 if let Some((processed, errors)) = result {
@@ -397,7 +409,14 @@ async fn async_main() -> Result<(), IndexerError> {
                                                     topic = %topic,
                                                     "Message has no block metadata, processing immediately"
                                                 );
-                                            match process_message(kg_msg, &storage, event_id.as_deref()).await {
+                                            match process_message(
+                                                kg_msg,
+                                                &storage,
+                                                event_id.as_deref(),
+                                                &mut property_types,
+                                            )
+                                            .await
+                                            {
                                                 Ok(_) => {
                                                     processed_count += 1;
                                                 }
@@ -447,6 +466,7 @@ async fn async_main() -> Result<(), IndexerError> {
                                                     &consumer,
                                                     summary_info,
                                                     BlockProcessReason::Summary,
+                                                    &mut property_types,
                                                 )
                                                 .await;
                                                 if let Some((processed, errors)) = result {
@@ -476,6 +496,7 @@ async fn async_main() -> Result<(), IndexerError> {
                                                 &consumer,
                                                 summary,
                                                 BlockProcessReason::IsLast,
+                                                &mut property_types,
                                             )
                                             .await;
                                             if let Some((processed, errors)) = result {
@@ -685,6 +706,7 @@ async fn process_buffered_block(
     consumer: &KafkaConsumer,
     summary_info: Option<BlockSummaryInfo>,
     reason: BlockProcessReason,
+    property_types: &mut HashMap<uuid::Uuid, models::properties::DataType>,
 ) -> Option<(u64, u64)> {
     if events.is_empty() {
         return None;
@@ -785,7 +807,7 @@ async fn process_buffered_block(
     );
     let start = Instant::now();
 
-    match process_block(events, storage, consumer)
+    match process_block(events, storage, consumer, property_types)
         .instrument(span)
         .await
     {
@@ -865,6 +887,7 @@ async fn process_message(
     msg: KgMessage,
     storage: &Storage,
     _event_id: Option<&str>,
+    property_types: &mut HashMap<uuid::Uuid, models::properties::DataType>,
 ) -> Result<usize, IndexerError> {
     use handlers::membership::MembershipChange;
     use models::relations::RelationOp;
@@ -878,7 +901,7 @@ async fn process_message(
     let ops = match msg {
         KgMessage::BlockSummary(_) => 0,
         KgMessage::Edit(edit) => {
-            let result = handlers::edits::handle_edit(&edit)?;
+            let result = handlers::edits::handle_edit(&edit, property_types)?;
 
             // Partition values into sets and deletes
             let (set_values, delete_values): (Vec<_>, Vec<_>) = result
@@ -1044,6 +1067,7 @@ async fn process_block(
     events: Vec<BufferedEvent>,
     storage: &Storage,
     consumer: &KafkaConsumer,
+    property_types: &mut HashMap<uuid::Uuid, models::properties::DataType>,
 ) -> Result<ProcessBlockResult, IndexerError> {
     use handlers::membership::MembershipChange;
     use models::relations::RelationOp;
@@ -1069,7 +1093,7 @@ async fn process_block(
         let ops = async {
             Ok::<usize, IndexerError>(match &event.msg {
                 KgMessage::Edit(edit) => {
-                    let result = handlers::edits::handle_edit(edit)?;
+                    let result = handlers::edits::handle_edit(edit, property_types)?;
 
                     // Partition values into sets and deletes
                     let (set_values, delete_values): (Vec<_>, Vec<_>) = result
