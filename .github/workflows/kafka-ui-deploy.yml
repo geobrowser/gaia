@@ -34,11 +34,13 @@ jobs:
           kubectl apply -f hermes/k8s/namespace.yaml
           kubectl create configmap protobuf-schemas \
             --from-file=grc20.proto=wire/proto/grc20.proto \
+            --from-file=block_summary.proto=hermes-schema/proto/block_summary.proto \
             --from-file=blockchain_metadata.proto=hermes-schema/proto/blockchain_metadata.proto \
             --from-file=governance.proto=hermes-schema/proto/governance.proto \
             --from-file=knowledge.proto=hermes-schema/proto/knowledge.proto \
             --from-file=membership.proto=hermes-schema/proto/membership.proto \
             --from-file=moderation.proto=hermes-schema/proto/moderation.proto \
+            --from-file=scoring.proto=hermes-schema/proto/scoring.proto \
             --from-file=space.proto=hermes-schema/proto/space.proto \
             --from-file=topics.proto=hermes-schema/proto/topics.proto \
             --from-file=topology.proto=hermes-schema/proto/topology.proto \
