@@ -89,7 +89,7 @@ spec:
                   name: kg-indexer-secrets
                   key: KAFKA_SSL_CA_PEM
             - name: KAFKA_GROUP_ID
-              value: "kg-indexer"
+              value: "kg-indexer-v2"
             - name: BLOCK_STALE_TIMEOUT_MS
               value: "1000"
             - name: SENTRY_DSN
