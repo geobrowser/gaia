@@ -180,7 +180,7 @@ fn main() -> Result<(), IndexerError> {
         .enable_all()
         .build()
         .map_err(|e| IndexerError::config(format!("failed to build tokio runtime: {}", e)))?
-        .block_on(async_main().instrument(info_span!("kg_indexer.run")))
+        .block_on(async_main())
 }
 
 async fn async_main() -> Result<(), IndexerError> {
