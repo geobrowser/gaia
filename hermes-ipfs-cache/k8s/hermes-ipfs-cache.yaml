@@ -87,6 +87,42 @@ spec:
                   key: IPFS_GATEWAY_URL
             - name: RUST_LOG
               value: "hermes_ipfs_cache=info"
+            - name: SENTRY_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: hermes-ipfs-cache-secrets
+                  key: SENTRY_DSN
+                  optional: true
+            - name: SENTRY_TRACES_SAMPLE_RATE
+              valueFrom:
+                secretKeyRef:
+                  name: hermes-ipfs-cache-secrets
+                  key: SENTRY_TRACES_SAMPLE_RATE
+                  optional: true
+            - name: SENTRY_SEND_DEFAULT_PII
+              valueFrom:
+                secretKeyRef:
+                  name: hermes-ipfs-cache-secrets
+                  key: SENTRY_SEND_DEFAULT_PII
+                  optional: true
+            - name: SENTRY_ENVIRONMENT
+              valueFrom:
+                secretKeyRef:
+                  name: hermes-ipfs-cache-secrets
+                  key: SENTRY_ENVIRONMENT
+                  optional: true
+            - name: SENTRY_RELEASE
+              valueFrom:
+                secretKeyRef:
+                  name: hermes-ipfs-cache-secrets
+                  key: SENTRY_RELEASE
+                  optional: true
+            - name: SENTRY_DEBUG
+              valueFrom:
+                secretKeyRef:
+                  name: hermes-ipfs-cache-secrets
+                  key: SENTRY_DEBUG
+                  optional: true
           resources:
             requests:
               memory: "256Mi"
