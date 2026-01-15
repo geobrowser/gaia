@@ -1,4 +1,4 @@
-use sqlx::{postgres::PgPoolOptions, Postgres, QueryBuilder};
+use sqlx::{postgres::PgPoolOptions, Postgres, QueryBuilder, Row};
 use uuid::Uuid;
 
 use crate::error::IndexerError;
@@ -71,6 +71,25 @@ impl Storage {
         .await?;
 
         Ok(())
+    }
+
+    pub async fn get_all_properties(&self) -> Result<Vec<PropertyItem>, IndexerError> {
+        let rows = sqlx::query("SELECT id, type::text as type FROM properties")
+            .fetch_all(&self.pool)
+            .await?;
+
+        let mut properties = Vec::with_capacity(rows.len());
+        for row in rows {
+            let id: Uuid = row.try_get("id")?;
+            let type_value: String = row.try_get("type")?;
+            let data_type = string_to_data_type(&type_value).ok_or_else(|| {
+                IndexerError::config(format!("Unknown data type in properties: {}", type_value))
+            })?;
+
+            properties.push(PropertyItem { id, data_type });
+        }
+
+        Ok(properties)
     }
 
     pub async fn insert_values(
