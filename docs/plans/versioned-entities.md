@@ -92,7 +92,28 @@ Compute diff between two snapshots:
 - Diff server-side (structured response).
 - Require `spaceId` and return fully hydrated value/relation payloads.
 
-Proposed diff response format (ordering not significant):
+Diff response format (ordering not significant):
+```json
+{
+  "entityId": "...",
+  "fromEditId": "...",
+  "toEditId": "...",
+  "spaceId": "...",
+  "values": {
+    "added": [FullValue],
+    "removed": [FullValue],
+    "changed": [
+      { "propertyId": "...", "spaceId": "...", "before": FullValue, "after": FullValue }
+    ]
+  },
+  "relations": {
+    "added": [FullRelation],
+    "removed": [FullRelation],
+    "changed": [
+      { "relationId": "...", "before": FullRelation, "after": FullRelation }
+    ]
+  }
+}
 ```
 
 ## Proposal Diffs (On-Demand)
@@ -106,6 +127,7 @@ Flow:
 3) Fetch current live state for those entities (space-filtered).
 4) Apply ops in memory to build a proposed snapshot.
 5) Diff live vs proposed and return the same diff shape as version diffs.
+
 Notes:
 - Assume one edit per proposal in v1.
 - Diff response format matches version diffs (fully hydrated).
@@ -114,7 +136,7 @@ Notes:
 Large edits can be too expensive to decode in the API. Alternative design:
 
 ### Storage
-```
+```sql
 proposal_diffs (
   proposal_id uuid,
   space_id uuid,
@@ -139,25 +161,6 @@ proposal_diffs (
 ### API behavior
 - If `proposal_diffs` exists, return it directly.
 - Otherwise fall back to on-demand diff (if edit size is small) or return a 202/placeholder indicating diff is being generated.
-{
-  "entityId": "...",
-  "fromEditId": "...",
-  "toEditId": "...",
-  "spaceId": "...",
-  "values": {
-    "added": [FullValue],
-    "removed": [FullValue],
-    "changed": [
-      { "propertyId": "...", "spaceId": "...", "before": FullValue, "after": FullValue }
-    ]
-  },
-  "relations": {
-    "added": [FullRelation],
-    "removed": [FullRelation],
-    "changed": [
-      { "relationId": "...", "before": FullRelation, "after": FullRelation }
-    ]
-  }
 }
 ```
 
@@ -182,23 +185,11 @@ Assumption: only entity-scoped version reads are supported (no direct versioned 
 - `(entity_id, valid_from_key)`
 - Partial `(relation_id)` where `valid_to_key IS NULL` for fast range closes
 
-## E2E Audit Checklist (Before Implementation)
-- Confirm Hermes edit metadata includes `block_number` and `sequence` on all edits.
-- Validate whether any edits are missing `sequence` and how to handle defaults.
-- Confirm property/type semantics match current derived fields (`name`, `description`, `types`).
-- Verify existing SQL helper functions that compute name/description/types and decide whether to replicate logic in REST queries.
-- Validate how "spaceIds" are computed (values-based or relation-based) in current schema.
-- Check how `relationsList.toEntity.valuesList` is restricted (fields and property filters).
-
-## Open Questions
-- Are `name` and `description` derived from specific property IDs? If yes, list them for REST logic.
-- Should `valuesList`/`relationsList` accept `spaceId` filter in REST as in GraphQL?
-- What is the expected behavior for entities that exist but have zero values/relations at a given edit?
-
-## Next Steps (after audit)
-- Draft SQL for endpoint #1 with batched queries.
-- Extend kg-indexer to populate `edit_versions` and temporal range tables.
-- Add REST handlers and tests for snapshot consistency.
+## Resolved Notes
+- `block_number` and `sequence` are present and ordered in `HermesEdit` metadata.
+- `name` and `description` are derived from system property IDs in `api/drizzle/0004_functions.sql`.
+- `types` and `spaceIds` are derived from `relations` and `values` per existing SQL helpers.
+- REST versioned queries should accept `spaceId` filters for `valuesList` and `relationsList`.
 
 ## Aggregation Mode (Spaces DAG)
 - REST query params:
