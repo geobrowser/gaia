@@ -33,7 +33,7 @@ Note: This plan assumes `(block_number, sequence)` is unique per edit, so no edi
 Validated: `sequence` reflects on-chain order for edits, so `(block_number, sequence)` is a stable, exact ordering key.
 
 ## Storage Model (Temporal Ranges)
-Note: These are **new tables**, added alongside existing `values`/`relations` to avoid breaking current queries. The existing tables remain the latest-state snapshot used by current APIs.
+Note: These are **new tables**, added alongside existing `values`/`relations` to avoid breaking current queries. The existing tables remain the latest-state snapshot used by current APIs. This is not the optimal long-term storage pattern; in the future we intend to rely only on temporal/versioned tables and derive “latest” from them.
 Add versioned tables that allow querying active rows at an edit:
 
 - `edit_versions`:
