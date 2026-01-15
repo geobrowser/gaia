@@ -2660,6 +2660,7 @@ dependencies = [
  "alloy",
  "anyhow",
  "async-trait",
+ "ethabi 18.0.0",
  "futures 0.3.31",
  "hermes-substream",
  "prost 0.13.5",

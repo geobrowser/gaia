@@ -400,40 +400,31 @@ impl ProposalAction {
     }
 }
 
-// Solidity type for proper ABI encoding
-sol! {
-    struct SolAction {
-        address to;
-        uint256 value;
-        bytes data;
-    }
-}
-
-// Type alias for encoding proposal data: (bytes16, uint8, Action[])
-type ProposalDataType = sol! { (bytes16, uint8, SolAction[]) };
-
 /// ABI-encode proposal data: (bytes16 proposalId, uint8 votingMode, Action[])
 fn encode_proposal_data(
     proposal_id: ProposalId,
     voting_mode: VotingMode,
     actions: &[ProposalAction],
 ) -> Vec<u8> {
-    use alloy::primitives::FixedBytes;
-    // Convert to Solidity types
-    let sol_actions: Vec<SolAction> = actions
+    use ethabi::{ethereum_types::U256 as EthU256, Token};
+
+    // Convert actions to ethabi tokens
+    let action_tokens: Vec<Token> = actions
         .iter()
-        .map(|a| SolAction {
-            to: alloy::primitives::Address::from_slice(&a.to),
-            value: U256::from_be_slice(&a.value),
-            data: a.data.clone().into(),
+        .map(|a| {
+            Token::Tuple(vec![
+                Token::Address(ethabi::Address::from_slice(&a.to)),
+                Token::Uint(EthU256::from_big_endian(&a.value)),
+                Token::Bytes(a.data.clone()),
+            ])
         })
         .collect();
 
-    ProposalDataType::abi_encode(&(
-        FixedBytes::<16>::from_slice(&proposal_id),
-        voting_mode as u8,
-        sol_actions,
-    ))
+    ethabi::encode(&[
+        Token::FixedBytes(proposal_id.to_vec()),
+        Token::Uint(EthU256::from(voting_mode as u8)),
+        Token::Array(action_tokens),
+    ])
 }
 
 // Type alias for encoding vote data: (bytes16, uint8)
@@ -517,13 +508,13 @@ pub fn proposal_settings_selected(
     quorum: u64,
     support_threshold: u64,
 ) -> Action {
-    // Encode settings as: (uint64 startDate, uint64 lastDate, uint8 votingMode, uint256 quorum, uint256 supportThreshold)
+    // Encode settings as: (uint256 startDate, uint256 lastDate, uint8 votingMode, uint256 quorum, uint256 supportThreshold)
     use alloy::sol_types::SolType;
 
-    type SettingsType = sol! { (uint64, uint64, uint8, uint256, uint256) };
+    type SettingsType = sol! { (uint256, uint256, uint8, uint256, uint256) };
     let data = SettingsType::abi_encode(&(
-        start_date,
-        end_date,
+        U256::from(start_date),
+        U256::from(end_date),
         voting_mode as u8,
         U256::from(quorum),
         U256::from(support_threshold),
