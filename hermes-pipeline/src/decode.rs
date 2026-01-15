@@ -834,7 +834,7 @@ mod tests {
     fn test_decode_publish_args_unwraps_content_uri() {
         let uri = b"ipfs://QmUgncZn6KFgv7tnpYcknMkPceSMNFhSYRY95GxX45MYyc".to_vec();
         let wrapped_uri = {
-            type WrappedBytesTuple = sol! { (bytes) };
+            type WrappedBytesTuple = sol! { (bytes,) };
             WrappedBytesTuple::abi_encode(&(PrimBytes::from(uri.clone()),))
         };
 
