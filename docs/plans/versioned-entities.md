@@ -154,3 +154,11 @@ Assumption: only entity-scoped version reads are supported (no direct versioned 
 - Draft SQL for endpoint #1 with batched queries.
 - Extend kg-indexer to populate `edit_versions` and temporal range tables.
 - Add REST handlers and tests for snapshot consistency.
+
+## Aggregation Mode (Spaces DAG)
+- REST query params:
+  - `spaceScope=local|transitive|canonical` (default `local`)
+  - `conflictPolicy=nearest` (default when `spaceScope` is not `local`)
+- `nearest` selects the value/relation from the closest descendant space in the transitive set.
+- If only local data is desired, callers should use `spaceScope=local` with a `spaceId`.
+Note: Voting/ranking signals exist per space; v1 will not use them for conflict resolution. Consider as a future enhancement.
