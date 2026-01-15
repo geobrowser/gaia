@@ -56,9 +56,14 @@ ROW_NUMBER() OVER (
 ```
 
 ## Notes
-- If only local data is desired, callers should use `spaceScope=local`.
+- If only local data is desired, callers should avoid aggregation and use the standard local query.
 - Voting/ranking signals exist per space; v1 will not use them for conflict resolution.
 - Cycles are handled by Atlas; reachability consumers can assume DAG semantics.
 - If multiple candidates have the same distance, use a stable tie-breaker (e.g., `space_id`).
 - Aggregation requires either `spaceId` or `spaceScope=canonical`.
 - Consider adding `distance` to Atlas emissions for reachability to avoid reifying tree shape downstream.
+
+## Aggregation Filters (v1)
+Aggregation queries should support the same filtering semantics as local queries, applied over the aggregated scope:
+- Property/value filters, e.g. `property_id = Y AND number > 5`
+- Relation filters, e.g. `relation_type = Y AND to_entity_id = Z`
