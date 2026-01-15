@@ -161,8 +161,6 @@ proposal_diffs (
 ### API behavior
 - If `proposal_diffs` exists, return it directly.
 - Otherwise fall back to on-demand diff (if edit size is small) or return a 202/placeholder indicating diff is being generated.
-}
-```
 
 ### 4) `GET /entities?editId=...`
 List entities at a specific edit with filtering:
