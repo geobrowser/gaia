@@ -1,6 +1,6 @@
 use hermes_schema::pb::governance::{
-    proposal_action::Action, HermesProposalCreated, HermesProposalExecuted, HermesProposalVoted,
-    ProposalVoteOption, VotingMode as ProtoVotingMode,
+    proposal_action::Action, HermesProposalCreated, HermesProposalExecuted, HermesProposalUpdated,
+    HermesProposalVoted, ProposalSettings, ProposalVoteOption, VotingMode as ProtoVotingMode,
 };
 use indexer_utils::checksum_address;
 use uuid::Uuid;
@@ -30,51 +30,30 @@ pub struct ProposalExecutionResult {
 pub fn handle_proposal_created(
     msg: &HermesProposalCreated,
 ) -> Result<ProposalResult, HandlerError> {
-    let proposal_id = Uuid::from_slice(&msg.proposal_id)?;
-    let space_id = Uuid::from_slice(&msg.space_id)?;
-    let proposer_id = Uuid::from_slice(&msg.proposer_id)?;
+    map_proposal_message(
+        &msg.proposal_id,
+        &msg.space_id,
+        &msg.proposer_id,
+        msg.voting_mode,
+        msg.settings.as_ref(),
+        &msg.actions,
+        msg.meta.as_ref(),
+    )
+}
 
-    let voting_mode = match ProtoVotingMode::try_from(msg.voting_mode) {
-        Ok(ProtoVotingMode::Fast) => VotingMode::Fast,
-        Ok(ProtoVotingMode::Slow) | Err(_) => VotingMode::Slow,
-    };
-
-    let settings = msg.settings.as_ref().ok_or(HandlerError::MissingPayload)?;
-    let meta = msg.meta.as_ref();
-
-    let (created_at, created_at_block) = meta
-        .map(|m| (m.created_at as i64, m.block_number as i64))
-        .unwrap_or((0, 0));
-
-    // For fast path, threshold is flat_threshold (absolute votes)
-    // For slow path, threshold is percentage_threshold
-    let threshold = match voting_mode {
-        VotingMode::Fast => settings.flat_threshold as i64,
-        VotingMode::Slow => settings.percentage_threshold as i64,
-    };
-
-    let proposal = ProposalItem {
-        id: proposal_id,
-        space_id,
-        proposed_by: proposer_id,
-        voting_mode,
-        start_time: settings.start_date as i64,
-        end_time: settings.last_date as i64,
-        quorum: settings.quorum as i64,
-        threshold,
-        executed_at: None,
-        created_at,
-        created_at_block,
-    };
-
-    let actions = msg
-        .actions
-        .iter()
-        .enumerate()
-        .map(|(index, action)| map_proposal_action(proposal_id, index as i32, action))
-        .collect();
-
-    Ok(ProposalResult { proposal, actions })
+/// Process a HermesProposalUpdated message
+pub fn handle_proposal_updated(
+    msg: &HermesProposalUpdated,
+) -> Result<ProposalResult, HandlerError> {
+    map_proposal_message(
+        &msg.proposal_id,
+        &msg.space_id,
+        &msg.proposer_id,
+        msg.voting_mode,
+        msg.settings.as_ref(),
+        &msg.actions,
+        msg.meta.as_ref(),
+    )
 }
 
 /// Process a HermesProposalVoted message
@@ -120,6 +99,59 @@ pub fn handle_proposal_executed(
         space_id,
         executed_at,
     })
+}
+
+fn map_proposal_message(
+    proposal_id: &[u8],
+    space_id: &[u8],
+    proposer_id: &[u8],
+    voting_mode: i32,
+    settings: Option<&ProposalSettings>,
+    actions: &[hermes_schema::pb::governance::ProposalAction],
+    meta: Option<&hermes_schema::pb::blockchain_metadata::BlockchainMetadata>,
+) -> Result<ProposalResult, HandlerError> {
+    let proposal_id = Uuid::from_slice(proposal_id)?;
+    let space_id = Uuid::from_slice(space_id)?;
+    let proposer_id = Uuid::from_slice(proposer_id)?;
+
+    let voting_mode = match ProtoVotingMode::try_from(voting_mode) {
+        Ok(ProtoVotingMode::Fast) => VotingMode::Fast,
+        Ok(ProtoVotingMode::Slow) | Err(_) => VotingMode::Slow,
+    };
+
+    let settings = settings.ok_or(HandlerError::MissingPayload)?;
+    let (created_at, created_at_block) = meta
+        .map(|m| (m.created_at as i64, m.block_number as i64))
+        .unwrap_or((0, 0));
+
+    // For fast path, threshold is flat_threshold (absolute votes)
+    // For slow path, threshold is percentage_threshold
+    let threshold = match voting_mode {
+        VotingMode::Fast => settings.flat_threshold as i64,
+        VotingMode::Slow => settings.percentage_threshold as i64,
+    };
+
+    let proposal = ProposalItem {
+        id: proposal_id,
+        space_id,
+        proposed_by: proposer_id,
+        voting_mode,
+        start_time: settings.start_date as i64,
+        end_time: settings.last_date as i64,
+        quorum: settings.quorum as i64,
+        threshold,
+        executed_at: None,
+        created_at,
+        created_at_block,
+    };
+
+    let actions = actions
+        .iter()
+        .enumerate()
+        .map(|(index, action)| map_proposal_action(proposal_id, index as i32, action))
+        .collect();
+
+    Ok(ProposalResult { proposal, actions })
 }
 
 /// Namespace UUID for generating deterministic action IDs

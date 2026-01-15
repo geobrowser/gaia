@@ -36,52 +36,35 @@ pub enum Backend {
     /// Useful for local development and debugging.
     Console,
 
-    /// Export telemetry via OpenTelemetry Protocol (OTLP) over gRPC.
-    ///
-    /// Best for local collectors that support gRPC:
-    /// - OpenTelemetry Collector
-    /// - Jaeger (with OTLP receiver)
+    /// Export telemetry to Sentry using OpenTelemetry spans.
     ///
     /// ```ignore
-    /// Backend::OtlpGrpc {
-    ///     endpoint: "http://localhost:4317".into(),
-    ///     headers: vec![],
+    /// Backend::Sentry {
+    ///     dsn: "https://...@o0.ingest.sentry.io/0".into(),
+    ///     traces_sample_rate: 1.0,
+    ///     send_default_pii: false,
+    ///     environment: Some("production".into()),
+    ///     release: Some("my-service@1.2.3".into()),
     ///     debug: false,
     /// }
     /// ```
-    OtlpGrpc {
-        /// OTLP gRPC endpoint (typically port 4317).
-        endpoint: String,
+    Sentry {
+        /// Sentry DSN / ingest URL.
+        dsn: String,
 
-        /// Optional headers/metadata for authentication.
-        headers: Vec<(String, String)>,
+        /// Sample rate for transactions (0.0 - 1.0).
+        traces_sample_rate: f32,
 
-        /// If true, also emit OTEL spans to stdout.
-        debug: bool,
-    },
+        /// Whether to send default PII (IP address, headers, etc.).
+        send_default_pii: bool,
 
-    /// Export telemetry via OpenTelemetry Protocol (OTLP) over HTTP.
-    ///
-    /// Required for cloud providers like Axiom that only support HTTP:
-    ///
-    /// ```ignore
-    /// Backend::OtlpHttp {
-    ///     endpoint: "https://api.axiom.co/v1/traces".into(),
-    ///     headers: vec![
-    ///         ("Authorization".into(), "Bearer API_TOKEN".into()),
-    ///         ("X-Axiom-Dataset".into(), "my-dataset".into()),
-    ///     ],
-    ///     debug: false,
-    /// }
-    /// ```
-    OtlpHttp {
-        /// OTLP HTTP endpoint (include full path, e.g., `/v1/traces`).
-        endpoint: String,
+        /// Optional environment tag (e.g., "prod", "staging").
+        environment: Option<String>,
 
-        /// Headers for authentication.
-        headers: Vec<(String, String)>,
+        /// Optional release name (e.g., "service@1.2.3").
+        release: Option<String>,
 
-        /// If true, also emit OTEL spans to stdout.
+        /// If true, also emit spans to stdout.
         debug: bool,
     },
 }

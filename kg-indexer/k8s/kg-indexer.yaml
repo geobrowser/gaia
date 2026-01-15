@@ -91,7 +91,43 @@ spec:
             - name: KAFKA_GROUP_ID
               value: "kg-indexer"
             - name: BLOCK_STALE_TIMEOUT_MS
-              value: "250"
+              value: "1000"
+            - name: SENTRY_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: kg-indexer-secrets
+                  key: SENTRY_DSN
+                  optional: true
+            - name: SENTRY_TRACES_SAMPLE_RATE
+              valueFrom:
+                secretKeyRef:
+                  name: kg-indexer-secrets
+                  key: SENTRY_TRACES_SAMPLE_RATE
+                  optional: true
+            - name: SENTRY_SEND_DEFAULT_PII
+              valueFrom:
+                secretKeyRef:
+                  name: kg-indexer-secrets
+                  key: SENTRY_SEND_DEFAULT_PII
+                  optional: true
+            - name: SENTRY_ENVIRONMENT
+              valueFrom:
+                secretKeyRef:
+                  name: kg-indexer-secrets
+                  key: SENTRY_ENVIRONMENT
+                  optional: true
+            - name: SENTRY_RELEASE
+              valueFrom:
+                secretKeyRef:
+                  name: kg-indexer-secrets
+                  key: SENTRY_RELEASE
+                  optional: true
+            - name: SENTRY_DEBUG
+              valueFrom:
+                secretKeyRef:
+                  name: kg-indexer-secrets
+                  key: SENTRY_DEBUG
+                  optional: true
             - name: RUST_LOG
               value: "kg_indexer=info"
           resources:

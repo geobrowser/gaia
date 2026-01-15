@@ -1,3 +1,4 @@
+pub mod block_summary;
 pub mod blockchain_metadata;
 pub mod governance;
 pub mod knowledge;

@@ -167,6 +167,33 @@ pub struct HermesProposalCreated {
     #[prost(message, optional, tag = "10")]
     pub meta: ::core::option::Option<super::blockchain_metadata::BlockchainMetadata>,
 }
+/// HermesProposalUpdated - squashed from PROPOSAL_UPDATED + PROPOSAL_SETTINGS_USED
+/// Contains all actions in a single message with voting settings.
+/// Data encoding: abi.encode(bytes16 proposalId, VotingMode, Action\[\])
+/// Note: If PROPOSAL_SETTINGS_USED is missing, both events should be discarded with an error.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct HermesProposalUpdated {
+    /// 16 bytes - space owning the proposal (to_id)
+    #[prost(bytes = "vec", tag = "1")]
+    pub space_id: ::prost::alloc::vec::Vec<u8>,
+    /// 16 bytes - space updating the proposal (from_id)
+    #[prost(bytes = "vec", tag = "2")]
+    pub proposer_id: ::prost::alloc::vec::Vec<u8>,
+    /// 16 bytes - unique proposal identifier
+    #[prost(bytes = "vec", tag = "3")]
+    pub proposal_id: ::prost::alloc::vec::Vec<u8>,
+    /// Fast or Slow path
+    #[prost(enumeration = "VotingMode", tag = "4")]
+    pub voting_mode: i32,
+    /// All actions in the proposal
+    #[prost(message, repeated, tag = "5")]
+    pub actions: ::prost::alloc::vec::Vec<ProposalAction>,
+    /// Voting settings (from PROPOSAL_SETTINGS_USED)
+    #[prost(message, optional, tag = "6")]
+    pub settings: ::core::option::Option<ProposalSettings>,
+    #[prost(message, optional, tag = "10")]
+    pub meta: ::core::option::Option<super::blockchain_metadata::BlockchainMetadata>,
+}
 /// HermesProposalVoted - emitted when a vote is cast on a proposal
 /// Data encoding: abi.encode(bytes16 proposalId, VoteOption)
 #[derive(Clone, PartialEq, ::prost::Message)]

@@ -4,7 +4,7 @@
 //! It wraps the `tracing` crate ecosystem and provides:
 //!
 //! - Automatic namespace prefixing for spans
-//! - Console and OpenTelemetry (OTLP) backend support
+//! - Console and Sentry backend support (via OpenTelemetry spans)
 //! - Re-exported tracing macros for convenience
 //!
 //! # Usage
@@ -28,14 +28,10 @@
 //! }
 //! ```
 //!
-//! # Important: OTLP HTTP and Async Runtimes
+//! # Important: Initialization Order
 //!
-//! When using the OTLP HTTP backend, you **must** initialize telemetry before creating
-//! a tokio runtime. The HTTP backend uses a blocking reqwest client internally (for the
-//! background batch processor), which creates its own internal runtime. Tokio runtimes
-//! cannot be nested, so initializing inside `#[tokio::main]` will panic.
-//!
-//! The Console and OTLP gRPC backends do not have this restriction.
+//! Initialize telemetry before creating the tokio runtime so the global subscriber is
+//! set once and spans aren't missed.
 
 mod config;
 mod init;

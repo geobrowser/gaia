@@ -28,7 +28,7 @@
 //! - `USE_MOCK` - Set to "true" or "1" to use mock data (default: false)
 //! - `SUBSTREAMS_ENDPOINT` - Substreams endpoint URL (default: geotest.substreams.pinax.network:443)
 //! - `SUBSTREAMS_API_TOKEN` - API token for substreams authentication
-//! - `SUBSTREAMS_START_BLOCK` - First block to consume (default: 88109)
+//! - `SUBSTREAMS_START_BLOCK` - First block to consume (default: 82655)
 //! - `SUBSTREAMS_END_BLOCK` - Last block to consume (default: u64::MAX for continuous)
 //! - `KAFKA_BROKER` - Kafka broker address (default: localhost:9092)
 //! - `KAFKA_USERNAME` - SASL username for managed Kafka (optional)
@@ -38,12 +38,14 @@
 
 mod emit;
 
+use std::collections::HashMap;
 use std::env;
 use std::fmt;
 use std::sync::Arc;
 
-use hermes_instrumentation::{Instrument, debug, info, info_span, warn};
+use hermes_instrumentation::{Instrument, debug, error, info, info_span, warn};
 use prost::Message;
+use std::sync::OnceLock;
 
 use hermes_kafka::create_producer;
 use hermes_relay::stream::pb::sf::substreams::rpc::v2::BlockScopedData;
@@ -159,28 +161,115 @@ impl Pipeline {
 
         // Sync transforms - fast, no I/O, run while edits fetches from IPFS
         let mut spaces = info_span!("transform.spaces", action_count = actions.len())
-            .in_scope(|| pipelines::spaces::transform(actions, &meta))?;
+            .in_scope(|| pipelines::spaces::transform(actions, &meta))
+            .map_err(|e| {
+                error!(
+                    event = "hermes_pipeline.event_error",
+                    stage = "transform.spaces",
+                    block_number = meta.block_number,
+                    cursor = %meta.cursor,
+                    error = %e,
+                    "Transform failed"
+                );
+                e
+            })?;
 
         let mut membership = info_span!("transform.membership", action_count = actions.len())
-            .in_scope(|| pipelines::membership::transform(actions, &meta))?;
+            .in_scope(|| pipelines::membership::transform(actions, &meta))
+            .map_err(|e| {
+                error!(
+                    event = "hermes_pipeline.event_error",
+                    stage = "transform.membership",
+                    block_number = meta.block_number,
+                    cursor = %meta.cursor,
+                    error = %e,
+                    "Transform failed"
+                );
+                e
+            })?;
 
         let mut trust = info_span!("transform.trust", action_count = actions.len())
-            .in_scope(|| pipelines::trust::transform(actions, &meta))?;
+            .in_scope(|| pipelines::trust::transform(actions, &meta))
+            .map_err(|e| {
+                error!(
+                    event = "hermes_pipeline.event_error",
+                    stage = "transform.trust",
+                    block_number = meta.block_number,
+                    cursor = %meta.cursor,
+                    error = %e,
+                    "Transform failed"
+                );
+                e
+            })?;
 
         let mut moderation = info_span!("transform.moderation", action_count = actions.len())
-            .in_scope(|| pipelines::moderation::transform(actions, &meta))?;
+            .in_scope(|| pipelines::moderation::transform(actions, &meta))
+            .map_err(|e| {
+                error!(
+                    event = "hermes_pipeline.event_error",
+                    stage = "transform.moderation",
+                    block_number = meta.block_number,
+                    cursor = %meta.cursor,
+                    error = %e,
+                    "Transform failed"
+                );
+                e
+            })?;
 
         let mut topics = info_span!("transform.topics", action_count = actions.len())
-            .in_scope(|| pipelines::topics::transform(actions, &meta))?;
+            .in_scope(|| pipelines::topics::transform(actions, &meta))
+            .map_err(|e| {
+                error!(
+                    event = "hermes_pipeline.event_error",
+                    stage = "transform.topics",
+                    block_number = meta.block_number,
+                    cursor = %meta.cursor,
+                    error = %e,
+                    "Transform failed"
+                );
+                e
+            })?;
 
         let mut governance = info_span!("transform.governance", action_count = actions.len())
-            .in_scope(|| pipelines::governance::transform(actions, &meta))?;
+            .in_scope(|| pipelines::governance::transform(actions, &meta))
+            .map_err(|e| {
+                error!(
+                    event = "hermes_pipeline.event_error",
+                    stage = "transform.governance",
+                    block_number = meta.block_number,
+                    cursor = %meta.cursor,
+                    error = %e,
+                    "Transform failed"
+                );
+                e
+            })?;
 
         let mut voting = info_span!("transform.voting", action_count = actions.len())
-            .in_scope(|| pipelines::voting::transform(actions, &meta))?;
+            .in_scope(|| pipelines::voting::transform(actions, &meta))
+            .map_err(|e| {
+                error!(
+                    event = "hermes_pipeline.event_error",
+                    stage = "transform.voting",
+                    block_number = meta.block_number,
+                    cursor = %meta.cursor,
+                    error = %e,
+                    "Transform failed"
+                );
+                e
+            })?;
 
         // Now await the edits - IPFS fetch should have been happening in parallel
-        let mut edits = edits_future.await?;
+        let mut edits = edits_future.await.map_err(|e| {
+            error!(
+                event = "hermes_pipeline.event_error",
+                stage = "transform.edits",
+                block_number = meta.block_number,
+                cursor = %meta.cursor,
+                error = %e,
+                "Transform failed"
+            );
+            e
+        })?;
 
         // =========================================================================
         // Phase 1.5: Mark the last event in the block
@@ -202,6 +291,7 @@ impl Pipeline {
                 max_sequence(&moderation.content_unflagged),
                 max_sequence(&topics.topics_declared),
                 max_sequence(&governance.proposals_created),
+                max_sequence(&governance.proposals_updated),
                 max_sequence(&governance.proposals_voted),
                 max_sequence(&governance.proposals_executed),
                 max_sequence(&voting.votes),
@@ -223,6 +313,7 @@ impl Pipeline {
                 || mark_sequence_as_last(&mut moderation.content_unflagged, max_seq)
                 || mark_sequence_as_last(&mut topics.topics_declared, max_seq)
                 || mark_sequence_as_last(&mut governance.proposals_created, max_seq)
+                || mark_sequence_as_last(&mut governance.proposals_updated, max_seq)
                 || mark_sequence_as_last(&mut governance.proposals_voted, max_seq)
                 || mark_sequence_as_last(&mut governance.proposals_executed, max_seq)
                 || mark_sequence_as_last(&mut voting.votes, max_seq)
@@ -241,6 +332,115 @@ impl Pipeline {
         // 6. Governance events (proposals reference spaces)
         // 7. Voting events (social layer)
         // 8. Edits come last as they may reference entities across trusted spaces
+
+        let space_count = spaces.events.len() as u64;
+        let membership_count = membership.total() as u64;
+        let trust_count = trust.total();
+        let moderation_count = moderation.total() as u64;
+        let topics_count = topics.total() as u64;
+        let governance_count = governance.total() as u64;
+        let voting_count = voting.total() as u64;
+        let edit_count = edits.events.len() as u64;
+        let total = space_count
+            + membership_count
+            + trust_count
+            + moderation_count
+            + topics_count
+            + governance_count
+            + voting_count
+            + edit_count;
+
+        let mut counts_by_topic: HashMap<String, u64> = HashMap::new();
+        counts_by_topic.insert(topics::SPACE_CREATIONS.to_string(), space_count);
+        counts_by_topic.insert(topics::MEMBERSHIP.to_string(), membership_count);
+        counts_by_topic.insert(topics::TRUST_EXTENSIONS.to_string(), trust_count as u64);
+        counts_by_topic.insert(topics::MODERATION.to_string(), moderation_count);
+        counts_by_topic.insert(topics::TOPICS.to_string(), topics_count);
+        counts_by_topic.insert(topics::GOVERNANCE.to_string(), governance_count);
+        counts_by_topic.insert(topics::VOTING.to_string(), voting_count);
+        counts_by_topic.insert(topics::EDITS.to_string(), edit_count);
+
+        let mut counts_by_event_type: HashMap<String, u64> = HashMap::new();
+        counts_by_event_type.insert("SPACE_REGISTERED".to_string(), space_count);
+        counts_by_event_type.insert("EDITS_PUBLISHED".to_string(), edit_count);
+        counts_by_event_type.insert(
+            "ROLE_GRANTED".to_string(),
+            membership.roles_granted.len() as u64,
+        );
+        counts_by_event_type.insert(
+            "ROLE_REVOKED".to_string(),
+            membership.roles_revoked.len() as u64,
+        );
+        counts_by_event_type.insert(
+            "SPACE_LEFT".to_string(),
+            membership.spaces_left.len() as u64,
+        );
+        counts_by_event_type.insert("TRUST_EXTENSION".to_string(), trust_count as u64);
+        counts_by_event_type.insert("SUBSPACE_VERIFIED".to_string(), trust.verified as u64);
+        counts_by_event_type.insert("SUBSPACE_RELATED".to_string(), trust.related as u64);
+        counts_by_event_type.insert(
+            "SUBSPACE_TOPIC_DECLARED".to_string(),
+            trust.topic_declared as u64,
+        );
+        counts_by_event_type.insert("SUBSPACE_REMOVED".to_string(), trust.removed as u64);
+        counts_by_event_type.insert(
+            "EDITOR_FLAGGED".to_string(),
+            moderation.editors_flagged.len() as u64,
+        );
+        counts_by_event_type.insert(
+            "EDITOR_UNFLAGGED".to_string(),
+            moderation.editors_unflagged.len() as u64,
+        );
+        counts_by_event_type.insert(
+            "CONTENT_FLAGGED".to_string(),
+            moderation.content_flagged.len() as u64,
+        );
+        counts_by_event_type.insert(
+            "CONTENT_UNFLAGGED".to_string(),
+            moderation.content_unflagged.len() as u64,
+        );
+        counts_by_event_type.insert(
+            "TOPIC_DECLARED".to_string(),
+            topics.topics_declared.len() as u64,
+        );
+        counts_by_event_type.insert(
+            "PROPOSAL_CREATED".to_string(),
+            governance.proposals_created.len() as u64,
+        );
+        counts_by_event_type.insert(
+            "PROPOSAL_UPDATED".to_string(),
+            governance.proposals_updated.len() as u64,
+        );
+        counts_by_event_type.insert(
+            "PROPOSAL_VOTED".to_string(),
+            governance.proposals_voted.len() as u64,
+        );
+        counts_by_event_type.insert(
+            "PROPOSAL_EXECUTED".to_string(),
+            governance.proposals_executed.len() as u64,
+        );
+        counts_by_event_type.insert("VOTE_CAST".to_string(), voting.votes.len() as u64);
+
+        info!(
+            event = "hermes_pipeline.batch_summary",
+            block_number = meta.block_number,
+            cursor = %meta.cursor,
+            total_events = total,
+            counts_by_topic = ?counts_by_topic,
+            counts_by_event_type = ?counts_by_event_type,
+            "Batch summary"
+        );
+
+        let emit_start = std::time::Instant::now();
+        info!(
+            event = "hermes_pipeline.emit_start",
+            block_number = meta.block_number,
+            cursor = %meta.cursor,
+            total_events = total,
+            counts_by_topic = ?counts_by_topic,
+            counts_by_event_type = ?counts_by_event_type,
+            "Emit start"
+        );
 
         {
             let _emit_span = info_span!("emit").entered();
@@ -361,6 +561,14 @@ impl Pipeline {
                         "Proposal created"
                     );
                 }
+                for event in &governance.proposals_updated {
+                    self.emitter.emit(event)?;
+                    debug!(
+                        space_id = %hex::encode(&event.space_id),
+                        proposal_id = %hex::encode(&event.proposal_id),
+                        "Proposal updated"
+                    );
+                }
                 for event in &governance.proposals_voted {
                     self.emitter.emit(event)?;
                     debug!(
@@ -434,24 +642,43 @@ impl Pipeline {
             warn!(count = edits.fetch_failures, "Edit fetch failures");
         }
 
-        // Log block summary
-        let space_count = spaces.events.len() as u64;
-        let membership_count = membership.total() as u64;
-        let trust_count = trust.total();
-        let moderation_count = moderation.total() as u64;
-        let topics_count = topics.total() as u64;
-        let governance_count = governance.total() as u64;
-        let voting_count = voting.total() as u64;
-        let edit_count = edits.events.len() as u64;
-        let total = space_count
-            + membership_count
-            + trust_count
-            + moderation_count
-            + topics_count
-            + governance_count
-            + voting_count
-            + edit_count;
+        let emit_duration_ms = emit_start.elapsed().as_millis();
+        if sentry_enabled() {
+            info!(
+                event = "hermes_pipeline.emit_end",
+                block_number = meta.block_number,
+                cursor = %meta.cursor,
+                total_events = total,
+                counts_by_topic = ?counts_by_topic,
+                counts_by_event_type = ?counts_by_event_type,
+                "Emit end"
+            );
+        } else {
+            info!(
+                event = "hermes_pipeline.emit_end",
+                block_number = meta.block_number,
+                cursor = %meta.cursor,
+                total_events = total,
+                duration_ms = emit_duration_ms,
+                counts_by_topic = ?counts_by_topic,
+                counts_by_event_type = ?counts_by_event_type,
+                "Emit end"
+            );
+        }
 
+        // Emit block summary for consumers
+        let created_at = meta.timestamp.parse().unwrap_or(0);
+        let summary = hermes_schema::pb::block_summary::HermesBlockSummary {
+            block_number: meta.block_number,
+            cursor: meta.cursor.clone(),
+            created_at,
+            total_events: total,
+            counts_by_topic,
+            counts_by_event_type,
+        };
+        self.emitter.emit(&summary)?;
+
+        // Log block summary
         if total > 0 || edits.cache_misses > 0 || edits.errored_entries > 0 {
             info!(
                 spaces = space_count,
@@ -523,49 +750,50 @@ impl Sink for Pipeline {
 /// Build telemetry configuration from environment variables.
 ///
 /// Environment variables:
-/// - `OTEL_URL` - OTLP HTTP endpoint (e.g., "https://api.axiom.co/v1/traces")
-/// - `OTEL_TOKEN` - Bearer token for authentication
-/// - `OTEL_DATASET` - Dataset name (sent as X-Axiom-Dataset header)
-/// - `OTEL_DEBUG` - Set to "true" to also emit spans to stdout
+/// - `SENTRY_DSN` - Sentry DSN/ingest URL
+/// - `SENTRY_TRACES_SAMPLE_RATE` - Sampling rate (0.0 - 1.0)
+/// - `SENTRY_SEND_DEFAULT_PII` - Set to "true" to include PII
+/// - `SENTRY_ENVIRONMENT` - Environment tag (e.g., "prod", "staging")
+/// - `SENTRY_RELEASE` - Release name (e.g., "service@1.2.3")
+/// - `SENTRY_DEBUG` - Set to "true" to also emit spans to stdout
 ///
-/// If `OTEL_URL` is not set, falls back to Console backend.
+/// If `SENTRY_DSN` is not set, falls back to Console backend.
 fn build_telemetry_config() -> hermes_instrumentation::Config {
     use hermes_instrumentation::{Backend, Config};
 
-    let backend = match env::var("OTEL_URL") {
-        Ok(endpoint) => {
-            let mut headers = Vec::new();
-
-            if let Ok(token) = env::var("OTEL_TOKEN") {
-                headers.push(("Authorization".into(), format!("Bearer {}", token)));
-            }
-
-            let dataset = env::var("OTEL_DATASET").ok();
-            if let Some(ref dataset) = dataset {
-                headers.push(("X-Axiom-Dataset".into(), dataset.clone()));
-            }
-
-            let debug = env::var("OTEL_DEBUG")
+    let backend = match env::var("SENTRY_DSN") {
+        Ok(dsn) => {
+            let traces_sample_rate = env::var("SENTRY_TRACES_SAMPLE_RATE")
+                .ok()
+                .and_then(|s| s.parse().ok())
+                .unwrap_or(1.0);
+            let send_default_pii = env::var("SENTRY_SEND_DEFAULT_PII")
+                .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+                .unwrap_or(false);
+            let environment = env::var("SENTRY_ENVIRONMENT").ok();
+            let release = env::var("SENTRY_RELEASE").ok();
+            let debug = env::var("SENTRY_DEBUG")
                 .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
                 .unwrap_or(false);
 
-            let has_auth = headers.iter().any(|(k, _)| k == "Authorization");
             println!(
-                "Telemetry: OTLP HTTP -> {} (dataset: {}, auth: {}, debug: {})",
-                endpoint,
-                dataset.as_deref().unwrap_or("none"),
-                if has_auth { "yes" } else { "no" },
+                "Telemetry: Sentry (env: {}, release: {}, debug: {})",
+                environment.as_deref().unwrap_or("none"),
+                release.as_deref().unwrap_or("none"),
                 if debug { "yes" } else { "no" }
             );
 
-            Backend::OtlpHttp {
-                endpoint,
-                headers,
+            Backend::Sentry {
+                dsn,
+                traces_sample_rate,
+                send_default_pii,
+                environment,
+                release,
                 debug,
             }
         }
         _ => {
-            println!("Telemetry: Console (set OTEL_URL to enable OTLP export)");
+            println!("Telemetry: Console (set SENTRY_DSN to enable Sentry)");
             Backend::Console
         }
     };
@@ -573,15 +801,16 @@ fn build_telemetry_config() -> hermes_instrumentation::Config {
     Config::new("hermes-pipeline", backend)
 }
 
+fn sentry_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| env::var("SENTRY_DSN").ok().is_some())
+}
+
 fn main() -> anyhow::Result<()> {
     // Load .env file if present (ignored in production)
     dotenv::dotenv().ok();
 
     // Initialize telemetry BEFORE tokio runtime starts.
-    // The OTLP HTTP backend uses a blocking HTTP client that creates its own
-    // internal tokio runtime. Tokio runtimes cannot be nested, so we must
-    // initialize telemetry before creating our application's runtime.
-    //
     // Keep the guard alive until the end of main to ensure spans are flushed.
     let _telemetry = hermes_instrumentation::init(build_telemetry_config())?;
 
@@ -593,7 +822,7 @@ fn main() -> anyhow::Result<()> {
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?
-        .block_on(async_main())
+        .block_on(async_main().instrument(info_span!("hermes_pipeline.run")))
 }
 
 async fn async_main() -> anyhow::Result<()> {
@@ -637,7 +866,7 @@ async fn async_main() -> anyhow::Result<()> {
         let start_block: i64 = env::var("SUBSTREAMS_START_BLOCK")
             .ok()
             .and_then(|s| s.parse().ok())
-            .unwrap_or(82656);
+            .unwrap_or(82655);
         let end_block: u64 = env::var("SUBSTREAMS_END_BLOCK")
             .ok()
             .and_then(|s| s.parse().ok())

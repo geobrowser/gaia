@@ -23,6 +23,7 @@ pub enum Error {
 /// it will flush any pending spans and shut down the tracer provider.
 pub struct TelemetryGuard {
     provider: Option<SdkTracerProvider>,
+    _sentry: Option<sentry::ClientInitGuard>,
 }
 
 impl Drop for TelemetryGuard {
@@ -44,8 +45,8 @@ impl Drop for TelemetryGuard {
 ///
 /// Must be called once at service startup, before any tracing occurs.
 ///
-/// **Important:** When using the OTLP HTTP backend with tokio, this must be called
-/// **before** the tokio runtime is created. See the crate-level docs for details.
+/// **Important:** This must be called **before** the tokio runtime is created.
+/// See the crate-level docs for details.
 ///
 /// # Example
 ///
@@ -78,26 +79,31 @@ pub fn init(config: Config) -> Result<TelemetryGuard, Error> {
     match config.backend {
         Backend::Console => {
             init_console(namespace)?;
-            Ok(TelemetryGuard { provider: None })
-        }
-        Backend::OtlpGrpc {
-            endpoint,
-            headers,
-            debug,
-        } => {
-            let provider = init_otlp_grpc(namespace, &endpoint, &headers, debug)?;
             Ok(TelemetryGuard {
-                provider: Some(provider),
+                provider: None,
+                _sentry: None,
             })
         }
-        Backend::OtlpHttp {
-            endpoint,
-            headers,
+        Backend::Sentry {
+            dsn,
+            traces_sample_rate,
+            send_default_pii,
+            environment,
+            release,
             debug,
         } => {
-            let provider = init_otlp_http(namespace, &endpoint, &headers, debug)?;
+            let (provider, sentry_guard) = init_sentry(
+                namespace,
+                &dsn,
+                traces_sample_rate,
+                send_default_pii,
+                environment.as_deref(),
+                release.as_deref(),
+                debug,
+            )?;
             Ok(TelemetryGuard {
                 provider: Some(provider),
+                _sentry: Some(sentry_guard),
             })
         }
     }
@@ -206,159 +212,61 @@ where
     }
 }
 
-fn init_otlp_grpc(
+fn init_sentry(
     namespace: &'static str,
-    endpoint: &str,
-    headers: &[(String, String)],
+    dsn: &str,
+    traces_sample_rate: f32,
+    send_default_pii: bool,
+    environment: Option<&str>,
+    release: Option<&str>,
     debug: bool,
-) -> Result<SdkTracerProvider, Error> {
+) -> Result<(SdkTracerProvider, sentry::ClientInitGuard), Error> {
     use opentelemetry::KeyValue;
     use opentelemetry::trace::TracerProvider as _;
-    use opentelemetry_otlp::tonic_types::metadata::MetadataMap;
-    use opentelemetry_otlp::{WithExportConfig, WithTonicConfig};
     use opentelemetry_sdk::Resource;
-    use opentelemetry_sdk::trace::BatchSpanProcessor;
+    use opentelemetry_sdk::propagation::TraceContextPropagator;
 
-    // Build metadata from headers using the underlying http::HeaderMap
-    let mut metadata = MetadataMap::default();
-    {
-        let header_map = metadata.as_mut();
-        for (key, value) in headers {
-            if let (Ok(key), Ok(value)) = (
-                key.parse::<http::header::HeaderName>(),
-                value.parse::<http::header::HeaderValue>(),
-            ) {
-                header_map.insert(key, value);
-            }
-        }
+    let mut options = sentry::ClientOptions {
+        traces_sample_rate,
+        send_default_pii,
+        ..Default::default()
+    };
+    if let Some(env) = environment {
+        options.environment = Some(env.to_string().into());
+    }
+    if let Some(rel) = release {
+        options.release = Some(rel.to_string().into());
     }
 
-    // Create OTLP gRPC exporter with headers
-    let otlp_exporter = opentelemetry_otlp::SpanExporter::builder()
-        .with_tonic()
-        .with_endpoint(endpoint)
-        .with_metadata(metadata)
-        .build()
-        .map_err(|e| Error::OpenTelemetry(e.to_string()))?;
+    let sentry_guard = sentry::init((dsn, options));
 
-    // Create tracer provider with service.name resource
+    opentelemetry::global::set_text_map_propagator(TraceContextPropagator::new());
+
     let resource = Resource::builder()
         .with_attribute(KeyValue::new("service.name", namespace))
         .build();
 
-    // Use batch processor for efficient export in production.
-    // Spans are buffered and exported periodically in batches.
-    let batch_processor = BatchSpanProcessor::builder(otlp_exporter).build();
+    let mut provider_builder = SdkTracerProvider::builder().with_resource(resource);
 
-    let mut provider_builder = SdkTracerProvider::builder()
-        .with_span_processor(batch_processor)
-        .with_resource(resource);
-
-    // Optionally add stdout exporter for debugging (simple is fine for sync stdout)
     if debug {
         let stdout_exporter = opentelemetry_stdout::SpanExporter::default();
         provider_builder = provider_builder.with_simple_exporter(stdout_exporter);
     }
 
     let provider = provider_builder.build();
-
-    // Get tracer from provider
     let tracer = provider.tracer(namespace);
 
-    // Create OpenTelemetry tracing layer with tracked inactivity for async spans
     let telemetry_layer = tracing_opentelemetry::layer()
         .with_tracer(tracer)
         .with_tracked_inactivity(true);
 
-    // Use LevelFilter for consistency with HTTP backend (prevents potential reentrancy)
+    let sentry_layer = sentry::integrations::tracing::layer();
+
     let level = std::env::var("RUST_LOG")
         .ok()
         .and_then(|s| s.parse().ok())
         .unwrap_or(LevelFilter::INFO);
 
-    tracing_subscriber::registry()
-        .with(level)
-        .with(telemetry_layer)
-        .init();
-
-    // Log startup to console
-    eprintln!(
-        "Telemetry initialized: service.name={} otlp.endpoint={} (gRPC)",
-        namespace, endpoint
-    );
-
-    Ok(provider)
-}
-
-fn init_otlp_http(
-    namespace: &'static str,
-    endpoint: &str,
-    headers: &[(String, String)],
-    debug: bool,
-) -> Result<SdkTracerProvider, Error> {
-    use opentelemetry::KeyValue;
-    use opentelemetry::trace::TracerProvider as _;
-    use opentelemetry_otlp::{WithExportConfig, WithHttpConfig};
-    use opentelemetry_sdk::Resource;
-    use opentelemetry_sdk::trace::BatchSpanProcessor;
-
-    // Build headers map
-    let header_map: std::collections::HashMap<String, String> = headers.iter().cloned().collect();
-
-    // Create blocking reqwest client - the BatchSpanProcessor runs in a background
-    // thread without a tokio runtime, so we need a blocking HTTP client
-    let http_client = reqwest::blocking::Client::new();
-
-    // Create OTLP HTTP exporter with headers
-    let otlp_exporter = opentelemetry_otlp::SpanExporter::builder()
-        .with_http()
-        .with_http_client(http_client)
-        .with_endpoint(endpoint)
-        .with_headers(header_map)
-        .build()
-        .map_err(|e| Error::OpenTelemetry(e.to_string()))?;
-
-    // Create tracer provider with service.name resource
-    let resource = Resource::builder()
-        .with_attribute(KeyValue::new("service.name", namespace))
-        .build();
-
-    // IMPORTANT: Use batch processor instead of simple exporter.
-    // Simple exporter tries to export synchronously when a span ends, which
-    // deadlocks when using an async HTTP client (reqwest) in a tokio runtime.
-    // Batch processor exports in a background task, avoiding the deadlock.
-    let batch_processor = BatchSpanProcessor::builder(otlp_exporter).build();
-
-    let mut provider_builder = SdkTracerProvider::builder()
-        .with_span_processor(batch_processor)
-        .with_resource(resource);
-
-    // Optionally add stdout exporter for debugging (simple is fine for sync stdout)
-    if debug {
-        let stdout_exporter = opentelemetry_stdout::SpanExporter::default();
-        provider_builder = provider_builder.with_simple_exporter(stdout_exporter);
-    }
-
-    let provider = provider_builder.build();
-
-    // Get tracer from provider
-    let tracer = provider.tracer(namespace);
-
-    // Create OpenTelemetry tracing layer with tracked inactivity for async spans
-    let telemetry_layer = tracing_opentelemetry::layer()
-        .with_tracer(tracer)
-        .with_tracked_inactivity(true);
-
-    // IMPORTANT: Use LevelFilter instead of EnvFilter to prevent reentrancy issues.
-    // When the reqwest HTTP client sends spans to OTLP, it may create its own tracing
-    // spans which would then get exported, causing issues. LevelFilter avoids this.
-    // See: https://github.com/tokio-rs/tracing-opentelemetry/issues/159
-    let level = std::env::var("RUST_LOG")
-        .ok()
-        .and_then(|s| s.parse().ok())
-        .unwrap_or(LevelFilter::INFO);
-
-    // Also add a fmt layer for console output when debug mode is enabled
     if debug {
         let fmt_layer = tracing_subscriber::fmt::layer()
             .with_target(true)
@@ -369,20 +277,18 @@ fn init_otlp_http(
         tracing_subscriber::registry()
             .with(level)
             .with(telemetry_layer)
+            .with(sentry_layer)
             .with(fmt_layer)
             .init();
     } else {
         tracing_subscriber::registry()
             .with(level)
             .with(telemetry_layer)
+            .with(sentry_layer)
             .init();
     }
 
-    // Log startup to console
-    eprintln!(
-        "Telemetry initialized: service.name={} otlp.endpoint={} (HTTP)",
-        namespace, endpoint
-    );
+    eprintln!("Telemetry initialized: service.name={} sentry", namespace);
 
-    Ok(provider)
+    Ok((provider, sentry_guard))
 }

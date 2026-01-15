@@ -4,12 +4,20 @@
 //! for any type that implements `KafkaEvent + prost::Message`.
 
 use anyhow::Result;
-use hermes_instrumentation::debug_span;
+use hermes_instrumentation::{Span, debug_span, error, info};
+use opentelemetry::global;
+use opentelemetry::propagation::Injector;
 use prost::Message;
+use std::sync::OnceLock;
+use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use hermes_kafka::{BaseProducer, BaseRecord, Header, OwnedHeaders, Producer};
 use hermes_schema::pb::{
-    governance::{HermesProposalCreated, HermesProposalExecuted, HermesProposalVoted},
+    block_summary::HermesBlockSummary,
+    blockchain_metadata::BlockchainMetadata,
+    governance::{
+        HermesProposalCreated, HermesProposalExecuted, HermesProposalUpdated, HermesProposalVoted,
+    },
     knowledge::HermesEdit,
     membership::{HermesRoleGranted, HermesRoleRevoked, HermesSpaceLeft, MembershipRole},
     moderation::{
@@ -29,6 +37,7 @@ use hermes_schema::pb::{
 
 /// Kafka topics for each event type.
 pub mod topics {
+    pub const BLOCK_SUMMARY: &str = "hermes.blocks";
     pub const SPACE_CREATIONS: &str = "space.creations";
     pub const TRUST_EXTENSIONS: &str = "space.trust.extensions";
     pub const MEMBERSHIP: &str = "space.membership";
@@ -58,6 +67,14 @@ pub trait KafkaEvent {
     fn headers(&self) -> OwnedHeaders;
 }
 
+pub trait HasMeta {
+    fn meta(&self) -> Option<&BlockchainMetadata>;
+
+    fn event_id(&self, topic: &str) -> Option<String> {
+        self.meta().map(|meta| event_id_for(meta, topic))
+    }
+}
+
 // =============================================================================
 // KafkaEvent implementations
 // =============================================================================
@@ -83,6 +100,46 @@ impl KafkaEvent for HermesCreateSpace {
     }
 }
 
+impl KafkaEvent for HermesBlockSummary {
+    const TOPIC: &'static str = topics::BLOCK_SUMMARY;
+
+    fn key(&self) -> Vec<u8> {
+        self.block_number.to_be_bytes().to_vec()
+    }
+
+    fn headers(&self) -> OwnedHeaders {
+        let event_id = format!("block_summary:{}:{}", self.block_number, self.cursor);
+        OwnedHeaders::new()
+            .insert(Header {
+                key: "event-type",
+                value: Some("BLOCK_SUMMARY"),
+            })
+            .insert(Header {
+                key: "event-id",
+                value: Some(event_id.as_str()),
+            })
+    }
+}
+
+impl HasMeta for HermesBlockSummary {
+    fn meta(&self) -> Option<&BlockchainMetadata> {
+        None
+    }
+
+    fn event_id(&self, _topic: &str) -> Option<String> {
+        Some(format!(
+            "block_summary:{}:{}",
+            self.block_number, self.cursor
+        ))
+    }
+}
+
+impl HasMeta for HermesCreateSpace {
+    fn meta(&self) -> Option<&BlockchainMetadata> {
+        self.meta.as_ref()
+    }
+}
+
 impl KafkaEvent for HermesSpaceTrustExtension {
     const TOPIC: &'static str = topics::TRUST_EXTENSIONS;
 
@@ -102,6 +159,12 @@ impl KafkaEvent for HermesSpaceTrustExtension {
             key: "extension-type",
             value: Some(extension_type),
         })
+    }
+}
+
+impl HasMeta for HermesSpaceTrustExtension {
+    fn meta(&self) -> Option<&BlockchainMetadata> {
+        self.meta.as_ref()
     }
 }
 
@@ -125,6 +188,12 @@ impl KafkaEvent for HermesEdit {
     }
 }
 
+impl HasMeta for HermesEdit {
+    fn meta(&self) -> Option<&BlockchainMetadata> {
+        self.meta.as_ref()
+    }
+}
+
 impl KafkaEvent for HermesProposalCreated {
     const TOPIC: &'static str = topics::GOVERNANCE;
 
@@ -137,6 +206,33 @@ impl KafkaEvent for HermesProposalCreated {
             key: "event-type",
             value: Some("PROPOSAL_CREATED"),
         })
+    }
+}
+
+impl HasMeta for HermesProposalCreated {
+    fn meta(&self) -> Option<&BlockchainMetadata> {
+        self.meta.as_ref()
+    }
+}
+
+impl KafkaEvent for HermesProposalUpdated {
+    const TOPIC: &'static str = topics::GOVERNANCE;
+
+    fn key(&self) -> Vec<u8> {
+        self.space_id.clone()
+    }
+
+    fn headers(&self) -> OwnedHeaders {
+        OwnedHeaders::new().insert(Header {
+            key: "event-type",
+            value: Some("PROPOSAL_UPDATED"),
+        })
+    }
+}
+
+impl HasMeta for HermesProposalUpdated {
+    fn meta(&self) -> Option<&BlockchainMetadata> {
+        self.meta.as_ref()
     }
 }
 
@@ -155,6 +251,12 @@ impl KafkaEvent for HermesProposalVoted {
     }
 }
 
+impl HasMeta for HermesProposalVoted {
+    fn meta(&self) -> Option<&BlockchainMetadata> {
+        self.meta.as_ref()
+    }
+}
+
 impl KafkaEvent for HermesProposalExecuted {
     const TOPIC: &'static str = topics::GOVERNANCE;
 
@@ -167,6 +269,12 @@ impl KafkaEvent for HermesProposalExecuted {
             key: "event-type",
             value: Some("PROPOSAL_EXECUTED"),
         })
+    }
+}
+
+impl HasMeta for HermesProposalExecuted {
+    fn meta(&self) -> Option<&BlockchainMetadata> {
+        self.meta.as_ref()
     }
 }
 
@@ -199,6 +307,12 @@ impl KafkaEvent for HermesRoleGranted {
     }
 }
 
+impl HasMeta for HermesRoleGranted {
+    fn meta(&self) -> Option<&BlockchainMetadata> {
+        self.meta.as_ref()
+    }
+}
+
 impl KafkaEvent for HermesRoleRevoked {
     const TOPIC: &'static str = topics::MEMBERSHIP;
 
@@ -224,6 +338,12 @@ impl KafkaEvent for HermesRoleRevoked {
     }
 }
 
+impl HasMeta for HermesRoleRevoked {
+    fn meta(&self) -> Option<&BlockchainMetadata> {
+        self.meta.as_ref()
+    }
+}
+
 impl KafkaEvent for HermesSpaceLeft {
     const TOPIC: &'static str = topics::MEMBERSHIP;
 
@@ -236,6 +356,12 @@ impl KafkaEvent for HermesSpaceLeft {
             key: "event-type",
             value: Some("SPACE_LEFT"),
         })
+    }
+}
+
+impl HasMeta for HermesSpaceLeft {
+    fn meta(&self) -> Option<&BlockchainMetadata> {
+        self.meta.as_ref()
     }
 }
 
@@ -258,6 +384,12 @@ impl KafkaEvent for HermesEditorFlagged {
     }
 }
 
+impl HasMeta for HermesEditorFlagged {
+    fn meta(&self) -> Option<&BlockchainMetadata> {
+        self.meta.as_ref()
+    }
+}
+
 impl KafkaEvent for HermesEditorUnflagged {
     const TOPIC: &'static str = topics::MODERATION;
 
@@ -270,6 +402,12 @@ impl KafkaEvent for HermesEditorUnflagged {
             key: "event-type",
             value: Some("EDITOR_UNFLAGGED"),
         })
+    }
+}
+
+impl HasMeta for HermesEditorUnflagged {
+    fn meta(&self) -> Option<&BlockchainMetadata> {
+        self.meta.as_ref()
     }
 }
 
@@ -288,6 +426,12 @@ impl KafkaEvent for HermesContentFlagged {
     }
 }
 
+impl HasMeta for HermesContentFlagged {
+    fn meta(&self) -> Option<&BlockchainMetadata> {
+        self.meta.as_ref()
+    }
+}
+
 impl KafkaEvent for HermesContentUnflagged {
     const TOPIC: &'static str = topics::MODERATION;
 
@@ -300,6 +444,12 @@ impl KafkaEvent for HermesContentUnflagged {
             key: "event-type",
             value: Some("CONTENT_UNFLAGGED"),
         })
+    }
+}
+
+impl HasMeta for HermesContentUnflagged {
+    fn meta(&self) -> Option<&BlockchainMetadata> {
+        self.meta.as_ref()
     }
 }
 
@@ -319,6 +469,12 @@ impl KafkaEvent for HermesTopicDeclared {
             key: "event-type",
             value: Some("TOPIC_DECLARED"),
         })
+    }
+}
+
+impl HasMeta for HermesTopicDeclared {
+    fn meta(&self) -> Option<&BlockchainMetadata> {
+        self.meta.as_ref()
     }
 }
 
@@ -353,6 +509,72 @@ impl KafkaEvent for HermesVoteCast {
     }
 }
 
+impl HasMeta for HermesVoteCast {
+    fn meta(&self) -> Option<&BlockchainMetadata> {
+        self.meta.as_ref()
+    }
+}
+
+struct HeaderInjector {
+    headers: OwnedHeaders,
+}
+
+impl HeaderInjector {
+    fn new(headers: OwnedHeaders) -> Self {
+        Self { headers }
+    }
+
+    fn into_headers(self) -> OwnedHeaders {
+        self.headers
+    }
+}
+
+impl Injector for HeaderInjector {
+    fn set(&mut self, key: &str, value: String) {
+        let headers = std::mem::take(&mut self.headers);
+        self.headers = headers.insert(Header {
+            key,
+            value: Some(value.as_str()),
+        });
+    }
+}
+
+fn event_id_for(meta: &BlockchainMetadata, topic: &str) -> String {
+    format!(
+        "{}:{}:{}:{}",
+        topic, meta.block_number, meta.sequence, meta.cursor
+    )
+}
+
+fn attach_event_id<T: HasMeta>(headers: OwnedHeaders, event: &T, topic: &str) -> OwnedHeaders {
+    if let Some(meta) = event.meta() {
+        let event_id = event_id_for(meta, topic);
+        headers.insert(Header {
+            key: "event-id",
+            value: Some(event_id.as_str()),
+        })
+    } else {
+        headers
+    }
+}
+
+fn inject_trace_headers(headers: OwnedHeaders) -> OwnedHeaders {
+    let span = Span::current();
+    let context = span.context();
+    let mut injector = HeaderInjector::new(headers);
+    global::get_text_map_propagator(|prop| prop.inject_context(&context, &mut injector));
+    injector.into_headers()
+}
+
+fn log_event_ids_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| {
+        std::env::var("LOG_EVENT_IDS")
+            .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+            .unwrap_or(false)
+    })
+}
+
 // =============================================================================
 // Emitter
 // =============================================================================
@@ -369,25 +591,61 @@ impl Emitter {
     }
 
     /// Emit any event that implements `KafkaEvent + Message`.
-    pub fn emit<T: KafkaEvent + Message>(&self, event: &T) -> Result<()> {
+    pub fn emit<T: KafkaEvent + Message + HasMeta>(&self, event: &T) -> Result<()> {
         let mut payload = Vec::new();
         event.encode(&mut payload)?;
 
-        debug_span!("kafka.send", topic = T::TOPIC, payload_size = payload.len()).in_scope(|| {
+        let headers = event.headers();
+        let headers = attach_event_id(headers, event, T::TOPIC);
+        let headers = inject_trace_headers(headers);
+        let event_id = event
+            .event_id(T::TOPIC)
+            .unwrap_or_else(|| "unknown".to_string());
+
+        if log_event_ids_enabled() {
+            info!(
+                event = "hermes_pipeline.event_id",
+                topic = T::TOPIC,
+                event_id = %event_id,
+                "Emitting event"
+            );
+        }
+
+        debug_span!(
+            "kafka.send",
+            topic = T::TOPIC,
+            payload_size = payload.len(),
+            event_id = %event_id
+        )
+        .in_scope(|| {
             let key = event.key();
             let record = BaseRecord::to(T::TOPIC)
                 .key(&key)
                 .payload(&payload)
-                .headers(event.headers());
+                .headers(headers);
 
-            self.producer
+            let result = self
+                .producer
                 .send(record)
-                .map_err(|(e, _)| anyhow::anyhow!(e))
+                .map_err(|(e, _)| anyhow::anyhow!(e));
+
+            if let Err(ref err) = result {
+                error!(
+                    event = "hermes_pipeline.event_error",
+                    stage = "kafka.send",
+                    topic = T::TOPIC,
+                    event_id = %event_id,
+                    error = %err,
+                    "Kafka send failed"
+                );
+            }
+
+            result
         })
     }
 
     /// Emit a batch of events.
-    pub fn emit_batch<T: KafkaEvent + Message>(&self, events: &[T]) -> Result<u64> {
+    pub fn emit_batch<T: KafkaEvent + Message + HasMeta>(&self, events: &[T]) -> Result<u64> {
         let mut count = 0;
         for event in events {
             self.emit(event)?;

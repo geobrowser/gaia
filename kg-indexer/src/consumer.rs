@@ -47,6 +47,7 @@ impl KafkaConsumer {
 
         // Topics to consume (subset of what hermes-pipeline produces)
         let topics = vec![
+            "hermes.blocks".to_string(),
             "knowledge.edits".to_string(),
             "space.creations".to_string(),
             "space.membership".to_string(),
@@ -101,12 +102,14 @@ use hermes_schema::pb::blockchain_metadata::BlockchainMetadata;
 
 /// Represents a message from any of the consumed topics
 pub enum KgMessage {
+    BlockSummary(hermes_schema::pb::block_summary::HermesBlockSummary),
     Edit(hermes_schema::pb::knowledge::HermesEdit),
     CreateSpace(hermes_schema::pb::space::HermesCreateSpace),
     RoleGranted(hermes_schema::pb::membership::HermesRoleGranted),
     RoleRevoked(hermes_schema::pb::membership::HermesRoleRevoked),
     TrustExtension(hermes_schema::pb::space::HermesSpaceTrustExtension),
     ProposalCreated(hermes_schema::pb::governance::HermesProposalCreated),
+    ProposalUpdated(hermes_schema::pb::governance::HermesProposalUpdated),
     ProposalVoted(hermes_schema::pb::governance::HermesProposalVoted),
     ProposalExecuted(hermes_schema::pb::governance::HermesProposalExecuted),
 }
@@ -115,12 +118,14 @@ impl KgMessage {
     /// Get the blockchain metadata from the message.
     pub fn meta(&self) -> Option<&BlockchainMetadata> {
         match self {
+            KgMessage::BlockSummary(_) => None,
             KgMessage::Edit(e) => e.meta.as_ref(),
             KgMessage::CreateSpace(s) => s.meta.as_ref(),
             KgMessage::RoleGranted(r) => r.meta.as_ref(),
             KgMessage::RoleRevoked(r) => r.meta.as_ref(),
             KgMessage::TrustExtension(t) => t.meta.as_ref(),
             KgMessage::ProposalCreated(p) => p.meta.as_ref(),
+            KgMessage::ProposalUpdated(p) => p.meta.as_ref(),
             KgMessage::ProposalVoted(v) => v.meta.as_ref(),
             KgMessage::ProposalExecuted(e) => e.meta.as_ref(),
         }
@@ -163,6 +168,11 @@ pub fn parse_message(
     event_type: Option<&str>,
 ) -> Result<KgMessage, IndexerError> {
     match topic {
+        "hermes.blocks" => {
+            let summary = hermes_schema::pb::block_summary::HermesBlockSummary::decode(payload)
+                .map_err(|e| IndexerError::decode(format!("HermesBlockSummary: {}", e)))?;
+            Ok(KgMessage::BlockSummary(summary))
+        }
         "knowledge.edits" => {
             let edit = hermes_schema::pb::knowledge::HermesEdit::decode(payload)
                 .map_err(|e| IndexerError::decode(format!("HermesEdit: {}", e)))?;
@@ -207,6 +217,14 @@ pub fn parse_message(
                                 IndexerError::decode(format!("HermesProposalCreated: {}", e))
                             })?;
                     Ok(KgMessage::ProposalCreated(created))
+                }
+                Some("PROPOSAL_UPDATED") => {
+                    let updated =
+                        hermes_schema::pb::governance::HermesProposalUpdated::decode(payload)
+                            .map_err(|e| {
+                                IndexerError::decode(format!("HermesProposalUpdated: {}", e))
+                            })?;
+                    Ok(KgMessage::ProposalUpdated(updated))
                 }
                 Some("PROPOSAL_VOTED") => {
                     let voted = hermes_schema::pb::governance::HermesProposalVoted::decode(payload)
