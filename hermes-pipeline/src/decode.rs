@@ -143,12 +143,25 @@ pub fn decode_publish_args(calldata: &[u8]) -> Result<PublishArgs, DecodeError> 
     let (_topic, content_uri, metadata) =
         PublishArgsType::abi_decode(data).map_err(|e| DecodeError::AbiDecode(e.to_string()))?;
 
-    let content_uri_str = String::from_utf8(content_uri.to_vec()).map_err(DecodeError::from)?;
+    let content_uri_str = decode_utf8_bytes(content_uri.to_vec())?;
 
     Ok(PublishArgs {
         content_uri: content_uri_str,
         metadata: metadata.to_vec(),
     })
+}
+
+fn decode_utf8_bytes(mut data: Vec<u8>) -> Result<String, DecodeError> {
+    for _ in 0..2 {
+        if let Some(unwrapped) = unwrap_bytes_once(&data) {
+            data = unwrapped;
+        } else {
+            break;
+        }
+    }
+
+    data.retain(|b| *b != 0);
+    String::from_utf8(data).map_err(DecodeError::from)
 }
 
 /// Decoded flag/unflag action arguments.
@@ -815,6 +828,29 @@ mod tests {
     fn test_decode_flag_data_empty() {
         let result = decode_flag_data(&[]).unwrap();
         assert_eq!(result, "");
+    }
+
+    #[test]
+    fn test_decode_publish_args_unwraps_content_uri() {
+        let uri = b"ipfs://QmUgncZn6KFgv7tnpYcknMkPceSMNFhSYRY95GxX45MYyc".to_vec();
+        let wrapped_uri = {
+            type WrappedBytesTuple = sol! { (bytes) };
+            WrappedBytesTuple::abi_encode(&(PrimBytes::from(uri.clone()),))
+        };
+
+        type PublishArgsType = sol! { (bytes32, bytes, bytes) };
+        let args = PublishArgsType::abi_encode(&(
+            [0u8; 32],
+            PrimBytes::from(wrapped_uri),
+            PrimBytes::default(),
+        ));
+
+        let mut calldata = Vec::with_capacity(4 + args.len());
+        calldata.extend_from_slice(&selectors::PUBLISH);
+        calldata.extend_from_slice(&args);
+
+        let decoded = decode_publish_args(&calldata).unwrap();
+        assert_eq!(decoded.content_uri, String::from_utf8(uri).unwrap());
     }
 
     #[test]
