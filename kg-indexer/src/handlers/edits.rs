@@ -494,21 +494,19 @@ fn populate_value_fields_by_datatype(
                 return None;
             }
         }
-        DataType::Boolean => {
-            match raw_value {
-                "0" => base_op.boolean = Some(false),
-                "1" => base_op.boolean = Some(true),
-                _ => {
-                    warn!(
-                        property_id = %base_op.property_id,
-                        entity_id = %base_op.entity_id,
-                        value = raw_value,
-                        "Unable to parse boolean value; skipping"
-                    );
-                    return None;
-                }
+        DataType::Boolean => match raw_value {
+            "0" => base_op.boolean = Some(false),
+            "1" => base_op.boolean = Some(true),
+            _ => {
+                warn!(
+                    property_id = %base_op.property_id,
+                    entity_id = %base_op.entity_id,
+                    value = raw_value,
+                    "Unable to parse boolean value; skipping"
+                );
+                return None;
             }
-        }
+        },
         DataType::Time => {
             base_op.time = Some(raw_value.to_string());
         }
