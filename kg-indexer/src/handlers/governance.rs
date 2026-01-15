@@ -169,29 +169,30 @@ fn map_proposal_action(
         format!("{}:{}", proposal_id, index).as_bytes(),
     );
 
-    // Helper to convert bytes16 space ID to UUID string
+    // Helper to convert bytes16 space ID to UUID
     // The target_address field contains a 16-byte space ID (bytes16), not an Ethereum address
-    let space_id_to_string = |bytes: &[u8]| -> String {
-        Uuid::from_slice(bytes)
-            .map(|u| u.to_string())
-            .unwrap_or_else(|_| hex::encode(bytes))
-    };
+    let bytes_to_uuid = |bytes: &[u8]| -> Option<Uuid> { Uuid::from_slice(bytes).ok() };
 
     let payload = match &action.action {
-        Some(Action::AddMember(a)) => ProposalActionPayload::AddMember {
-            target_address: space_id_to_string(&a.target_address),
+        Some(Action::AddMember(a)) => match bytes_to_uuid(&a.target_address) {
+            Some(target_id) => ProposalActionPayload::AddMember { target_id },
+            None => ProposalActionPayload::Unknown,
         },
-        Some(Action::RemoveMember(a)) => ProposalActionPayload::RemoveMember {
-            target_address: space_id_to_string(&a.target_address),
+        Some(Action::RemoveMember(a)) => match bytes_to_uuid(&a.target_address) {
+            Some(target_id) => ProposalActionPayload::RemoveMember { target_id },
+            None => ProposalActionPayload::Unknown,
         },
-        Some(Action::AddEditor(a)) => ProposalActionPayload::AddEditor {
-            target_address: space_id_to_string(&a.target_address),
+        Some(Action::AddEditor(a)) => match bytes_to_uuid(&a.target_address) {
+            Some(target_id) => ProposalActionPayload::AddEditor { target_id },
+            None => ProposalActionPayload::Unknown,
         },
-        Some(Action::RemoveEditor(a)) => ProposalActionPayload::RemoveEditor {
-            target_address: space_id_to_string(&a.target_address),
+        Some(Action::RemoveEditor(a)) => match bytes_to_uuid(&a.target_address) {
+            Some(target_id) => ProposalActionPayload::RemoveEditor { target_id },
+            None => ProposalActionPayload::Unknown,
         },
-        Some(Action::UnflagEditor(a)) => ProposalActionPayload::UnflagEditor {
-            target_address: space_id_to_string(&a.target_address),
+        Some(Action::UnflagEditor(a)) => match bytes_to_uuid(&a.target_address) {
+            Some(target_id) => ProposalActionPayload::UnflagEditor { target_id },
+            None => ProposalActionPayload::Unknown,
         },
         Some(Action::Publish(a)) => ProposalActionPayload::Publish {
             content_uri: a.content_uri.clone(),

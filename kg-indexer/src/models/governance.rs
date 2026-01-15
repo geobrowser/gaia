@@ -19,15 +19,15 @@ pub enum VoteOption {
 #[derive(Clone, Debug, PartialEq)]
 pub enum ProposalActionPayload {
     /// Add a member to the space
-    AddMember { target_address: String },
+    AddMember { target_id: Uuid },
     /// Remove a member from the space
-    RemoveMember { target_address: String },
+    RemoveMember { target_id: Uuid },
     /// Add an editor to the space
-    AddEditor { target_address: String },
+    AddEditor { target_id: Uuid },
     /// Remove an editor from the space
-    RemoveEditor { target_address: String },
-    /// Unflag an editor
-    UnflagEditor { target_address: String },
+    RemoveEditor { target_id: Uuid },
+    /// Unflag an editor (unrestrict fast path)
+    UnflagEditor { target_id: Uuid },
     /// Publish content
     Publish {
         content_uri: String,
