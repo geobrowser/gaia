@@ -8,8 +8,8 @@ use alloy::sol;
 use alloy::sol_types::SolType;
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use hermes_pipeline::decode::{
-    ProposalActionType, decode_space_id_arg, decode_flag_data, decode_proposal_created,
-    decode_proposal_voted, decode_topic_declared, decode_vote_data, selectors,
+    ProposalActionType, decode_flag_data, decode_proposal_created, decode_proposal_voted,
+    decode_space_id_arg, decode_topic_declared, decode_vote_data, selectors,
 };
 
 // Solidity type for encoding test data
