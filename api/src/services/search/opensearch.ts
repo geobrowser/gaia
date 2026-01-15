@@ -17,10 +17,27 @@ import {SearchError, type SearchQuery, type SearchResponse, type SearchResult, t
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 /**
+ * Minimum score threshold for search boosting.
+ * Any score below this threshold will be clamped to this value.
+ * Since z-scores typically fall within [-3, 3], a threshold of -10 provides
+ * ample headroom for outliers while preventing a negative result
+ * from script_score (opensearch requirement). Any entities with a score below -10
+ * will be equally deboosted.
+ */
+export const MIN_SCORE_THRESHOLD = -10.0
+
+/**
+ * Score shift value to ensure all scores are positive.
+ * Calculated as the absolute value of MIN_SCORE_THRESHOLD.
+ * This shifts the score range from [MIN_SCORE_THRESHOLD, ∞) to [0, ∞).
+ */
+export const SCORE_SHIFT = Math.abs(MIN_SCORE_THRESHOLD)
+
+/**
  * Score boost multiplier for score fields.
  * Applied to entity_global_score, space_score, and entity_space_score fields.
  * Note: Since scores can be zero or negative (from z-score normalization),
- * we use a function_score query instead of rank_feature.
+ * we clamp at MIN_SCORE_THRESHOLD and shift by SCORE_SHIFT to ensure positive values.
  */
 export const SCORE_BOOST = 1.3
 
@@ -327,16 +344,28 @@ export class OpenSearchClient implements SearchClient {
 
 	/**
 	 * Build a score boost function for float score fields.
-	 * Uses field_value_factor to boost by the specified field value.
-	 * Handles zero and negative scores gracefully.
+	 * Uses script_score with threshold clamping and linear shift to handle negative scores.
+	 *
+	 * Strategy:
+	 * 1. Clamp scores at MIN_SCORE_THRESHOLD (-10) to limit impact of extreme outliers
+	 * 2. Shift by SCORE_SHIFT (10) to ensure all values are positive: [MIN, ∞) → [0, ∞)
+	 * 3. Apply SCORE_BOOST multiplier
+	 *
+	 * This is simple, efficient, and handles the typical z-score range [-3, 3] while
+	 * providing headroom for outliers up to -10.
 	 */
 	buildScoreBoostFunction(scoreField: string): object {
 		return {
-			field_value_factor: {
-				field: scoreField,
-				factor: SCORE_BOOST,
-				modifier: "none",
-				missing: 0,
+			script_score: {
+				script: {
+					source: `
+						def scoreValue = doc.containsKey('${scoreField}') && !doc['${scoreField}'].empty
+							? doc['${scoreField}'].value
+							: 0.0;
+						def clampedScore = Math.max(scoreValue, ${MIN_SCORE_THRESHOLD});
+						return (clampedScore + ${SCORE_SHIFT}) * ${SCORE_BOOST};
+					`,
+				},
 			},
 		}
 	}
