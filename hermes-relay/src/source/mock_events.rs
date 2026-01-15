@@ -406,7 +406,7 @@ fn encode_proposal_data(
     voting_mode: VotingMode,
     actions: &[ProposalAction],
 ) -> Vec<u8> {
-    use ethabi::{ethereum_types::U256 as EthU256, Token};
+    use ethabi::{Token, ethereum_types::U256 as EthU256};
 
     // Convert actions to ethabi tokens
     let action_tokens: Vec<Token> = actions
