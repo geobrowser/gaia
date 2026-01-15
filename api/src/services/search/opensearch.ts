@@ -17,8 +17,10 @@ import {SearchError, type SearchQuery, type SearchResponse, type SearchResult, t
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 /**
- * Score boost value for rank_feature queries.
+ * Score boost multiplier for score fields.
  * Applied to entity_global_score, space_score, and entity_space_score fields.
+ * Note: Since scores can be zero or negative (from z-score normalization),
+ * we use a function_score query instead of rank_feature.
  */
 export const SCORE_BOOST = 1.3
 
@@ -151,7 +153,7 @@ export class OpenSearchClient implements SearchClient {
 	 * Build the OpenSearch query body based on search parameters.
 	 *
 	 * Boost Strategy Overview:
-	 * - rank_feature boosts use logarithmic saturation to prevent score inflation
+	 * - Score field boosts use field_value_factor to incorporate entity/space scores
 	 * - Field-level boosts prioritize name matches over description matches
 	 * - Prefix matching strongly indicates user intent (especially for names)
 	 * - Fuzzy matching is reduced to prevent false positives from typos
@@ -324,24 +326,39 @@ export class OpenSearchClient implements SearchClient {
 	}
 
 	/**
+	 * Build a score boost function for float score fields.
+	 * Uses field_value_factor to boost by the specified field value.
+	 * Handles zero and negative scores gracefully.
+	 */
+	buildScoreBoostFunction(scoreField: string): object {
+		return {
+			field_value_factor: {
+				field: scoreField,
+				factor: SCORE_BOOST,
+				modifier: "none",
+				missing: 0,
+			},
+		}
+	}
+
+	/**
 	 * Build a global search query.
-	 * Boosts results by entity_global_score using rank_feature.
+	 * Boosts results by entity_global_score using function_score.
 	 */
 	buildGlobalQuery(baseTextQuery: object, typeIds?: string[]): object {
 		const typeFilter = this.buildTypeFilter(typeIds)
 		return {
 			query: {
-				bool: {
-					must: [baseTextQuery],
-					filter: typeFilter ? [typeFilter] : [],
-					should: [
-						{
-							rank_feature: {
-								field: "entity_global_score",
-								boost: SCORE_BOOST,
-							},
+				function_score: {
+					query: {
+						bool: {
+							must: [baseTextQuery],
+							filter: typeFilter ? [typeFilter] : [],
 						},
-					],
+					},
+					functions: [this.buildScoreBoostFunction("entity_global_score")],
+					boost_mode: "sum",
+					score_mode: "sum",
 				},
 			},
 		}
@@ -349,23 +366,22 @@ export class OpenSearchClient implements SearchClient {
 
 	/**
 	 * Build a global search query ranked by space score.
-	 * Boosts results by space_score using rank_feature.
+	 * Boosts results by space_score using function_score.
 	 */
 	buildGlobalBySpaceScoreQuery(baseTextQuery: object, typeIds?: string[]): object {
 		const typeFilter = this.buildTypeFilter(typeIds)
 		return {
 			query: {
-				bool: {
-					must: [baseTextQuery],
-					filter: typeFilter ? [typeFilter] : [],
-					should: [
-						{
-							rank_feature: {
-								field: "space_score",
-								boost: SCORE_BOOST,
-							},
+				function_score: {
+					query: {
+						bool: {
+							must: [baseTextQuery],
+							filter: typeFilter ? [typeFilter] : [],
 						},
-					],
+					},
+					functions: [this.buildScoreBoostFunction("space_score")],
+					boost_mode: "sum",
+					score_mode: "sum",
 				},
 			},
 		}
@@ -379,17 +395,16 @@ export class OpenSearchClient implements SearchClient {
 		const typeFilter = this.buildTypeFilter(typeIds)
 		return {
 			query: {
-				bool: {
-					must: [baseTextQuery],
-					filter: typeFilter ? [{term: {space_id: spaceId}}, typeFilter] : [{term: {space_id: spaceId}}],
-					should: [
-						{
-							rank_feature: {
-								field: "entity_space_score",
-								boost: SCORE_BOOST,
-							},
+				function_score: {
+					query: {
+						bool: {
+							must: [baseTextQuery],
+							filter: typeFilter ? [{term: {space_id: spaceId}}, typeFilter] : [{term: {space_id: spaceId}}],
 						},
-					],
+					},
+					functions: [this.buildScoreBoostFunction("entity_space_score")],
+					boost_mode: "sum",
+					score_mode: "sum",
 				},
 			},
 		}

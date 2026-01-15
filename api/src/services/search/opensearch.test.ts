@@ -88,8 +88,9 @@ describe("OpenSearchClient", () => {
 			const queryStr = JSON.stringify(query)
 
 			expect(queryStr).toContain("entity_global_score")
-			expect(queryStr).toContain(`"boost":${SCORE_BOOST}`)
-			expect(queryStr).toContain("rank_feature")
+			expect(queryStr).toContain(`"factor":${SCORE_BOOST}`)
+			expect(queryStr).toContain("function_score")
+			expect(queryStr).toContain("field_value_factor")
 			expect(queryStr).toContain("test")
 		})
 	})
@@ -101,8 +102,9 @@ describe("OpenSearchClient", () => {
 			const queryStr = JSON.stringify(query)
 
 			expect(queryStr).toContain("space_score")
-			expect(queryStr).toContain(`"boost":${SCORE_BOOST}`)
-			expect(queryStr).toContain("rank_feature")
+			expect(queryStr).toContain(`"factor":${SCORE_BOOST}`)
+			expect(queryStr).toContain("function_score")
+			expect(queryStr).toContain("field_value_factor")
 			expect(queryStr).toContain("test")
 		})
 	})
