@@ -318,16 +318,11 @@ async fn async_main() -> Result<(), IndexerError> {
                                             let expected_count =
                                                 expected_count_for_indexer(&summary);
                                             let summary_block_number = summary.block_number;
-                                            let summary_cursor = summary.cursor.clone();
-                                            let batch_id =
-                                                format!("{}:{}", summary_block_number, summary_cursor);
 
                                             if expected_count > 0 {
                                                 info!(
                                                     event = "kg_indexer.block_summary_received",
-                                                    batch_id = %batch_id,
                                                     block_number = summary_block_number,
-                                                    cursor = %summary_cursor,
                                                     expected_count = expected_count,
                                                     total_events = summary.total_events,
                                                     "Block summary received"
@@ -713,12 +708,6 @@ async fn process_buffered_block(
     }
 
     let block_number = events[0].msg.block_number().unwrap_or(0);
-    let cursor = events[0]
-        .msg
-        .meta()
-        .map(|meta| meta.cursor.clone())
-        .unwrap_or_default();
-    let batch_id = format!("{}:{}", block_number, cursor);
 
     let mut counts_by_event_type: HashMap<String, u64> = HashMap::new();
     let mut counts_by_topic: HashMap<String, u64> = HashMap::new();
@@ -783,9 +772,7 @@ async fn process_buffered_block(
 
     info!(
         event = "kg_indexer.batch_start",
-        batch_id = %batch_id,
         block_number = block_number,
-        cursor = %cursor,
         reason = reason.as_str(),
         buffered_event_count = events.len(),
         expected_event_count = expected_event_count,
@@ -816,9 +803,7 @@ async fn process_buffered_block(
             if sentry_enabled() {
                 info!(
                     event = "kg_indexer.batch_end",
-                    batch_id = %batch_id,
                     block_number = block_number,
-                    cursor = %cursor,
                     db_ops_total = result.ops as u64,
                     commit_offsets_failed = result.commit_failures,
                     counts_by_event_type = ?counts_by_event_type,
@@ -830,9 +815,7 @@ async fn process_buffered_block(
             } else {
                 info!(
                     event = "kg_indexer.batch_end",
-                    batch_id = %batch_id,
                     block_number = block_number,
-                    cursor = %cursor,
                     duration_ms = duration_ms,
                     db_tx_duration_ms = result.db_tx_duration_ms,
                     db_ops_total = result.ops as u64,
@@ -851,9 +834,7 @@ async fn process_buffered_block(
             if sentry_enabled() {
                 error!(
                     event = "kg_indexer.batch_end",
-                    batch_id = %batch_id,
                     block_number = block_number,
-                    cursor = %cursor,
                     error = %e,
                     counts_by_event_type = ?counts_by_event_type,
                     counts_by_topic = ?counts_by_topic,
@@ -864,9 +845,7 @@ async fn process_buffered_block(
             } else {
                 error!(
                     event = "kg_indexer.batch_end",
-                    batch_id = %batch_id,
                     block_number = block_number,
-                    cursor = %cursor,
                     duration_ms = duration_ms,
                     error = %e,
                     counts_by_event_type = ?counts_by_event_type,
