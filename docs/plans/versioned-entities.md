@@ -94,6 +94,51 @@ Compute diff between two snapshots:
 
 Proposed diff response format (ordering not significant):
 ```
+
+## Proposal Diffs (On-Demand)
+- Do not store proposals as versions.
+- Compute proposal diffs by applying proposed edit ops to the current live snapshot and diffing.
+
+Flow:
+1) Load proposal + actions and extract edit ops.
+   - Proposed edit ops are stored in the IPFS cache (kg-indexer DB currently acts as the cache).
+2) Identify affected entities/relations from ops.
+3) Fetch current live state for those entities (space-filtered).
+4) Apply ops in memory to build a proposed snapshot.
+5) Diff live vs proposed and return the same diff shape as version diffs.
+Notes:
+- Assume one edit per proposal in v1.
+- Diff response format matches version diffs (fully hydrated).
+
+## Proposal Diffs (Precomputed Option)
+Large edits can be too expensive to decode in the API. Alternative design:
+
+### Storage
+```
+proposal_diffs (
+  proposal_id uuid,
+  space_id uuid,
+  diff_jsonb jsonb,
+  generated_at timestamptz
+)
+```
+
+`diff_jsonb` stores the fully computed diff payload (same shape as the API response).
+
+### Indexing options
+1) **Separate proposal-diff indexer**
+   - Consume proposal events or watch proposal table changes.
+   - Fetch edit blob from IPFS cache.
+   - Compute diff and write `proposal_diffs`.
+   - Async/throttled; does not block main kg-indexer writes.
+
+2) **Job queue + worker**
+   - Enqueue diff job when a proposal is created/updated.
+   - Worker fetches edit blob, computes diff, writes `proposal_diffs`.
+
+### API behavior
+- If `proposal_diffs` exists, return it directly.
+- Otherwise fall back to on-demand diff (if edit size is small) or return a 202/placeholder indicating diff is being generated.
 {
   "entityId": "...",
   "fromEditId": "...",
