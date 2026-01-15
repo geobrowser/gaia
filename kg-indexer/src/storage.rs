@@ -780,7 +780,7 @@ impl Storage {
         let mut ids = Vec::with_capacity(actions.len());
         let mut proposal_ids = Vec::with_capacity(actions.len());
         let mut action_types = Vec::with_capacity(actions.len());
-        let mut target_addresses: Vec<Option<&str>> = Vec::with_capacity(actions.len());
+        let mut target_ids: Vec<Option<Uuid>> = Vec::with_capacity(actions.len());
         let mut content_uris: Vec<Option<&str>> = Vec::with_capacity(actions.len());
         let mut metadatas: Vec<Option<&[u8]>> = Vec::with_capacity(actions.len());
         let mut content_ids: Vec<Option<&[u8]>> = Vec::with_capacity(actions.len());
@@ -793,7 +793,7 @@ impl Storage {
             ids.push(action.id);
             proposal_ids.push(action.proposal_id);
 
-            let mut target_address: Option<&str> = None;
+            let mut target_id: Option<Uuid> = None;
             let mut content_uri: Option<&str> = None;
             let mut metadata: Option<&[u8]> = None;
             let mut content_id: Option<&[u8]> = None;
@@ -803,34 +803,24 @@ impl Storage {
             let mut duration: Option<i64> = None;
 
             let action_type = match &action.payload {
-                ProposalActionPayload::AddMember {
-                    target_address: addr,
-                } => {
-                    target_address = Some(addr.as_str());
+                ProposalActionPayload::AddMember { target_id: id } => {
+                    target_id = Some(*id);
                     "AddMember"
                 }
-                ProposalActionPayload::RemoveMember {
-                    target_address: addr,
-                } => {
-                    target_address = Some(addr.as_str());
+                ProposalActionPayload::RemoveMember { target_id: id } => {
+                    target_id = Some(*id);
                     "RemoveMember"
                 }
-                ProposalActionPayload::AddEditor {
-                    target_address: addr,
-                } => {
-                    target_address = Some(addr.as_str());
+                ProposalActionPayload::AddEditor { target_id: id } => {
+                    target_id = Some(*id);
                     "AddEditor"
                 }
-                ProposalActionPayload::RemoveEditor {
-                    target_address: addr,
-                } => {
-                    target_address = Some(addr.as_str());
+                ProposalActionPayload::RemoveEditor { target_id: id } => {
+                    target_id = Some(*id);
                     "RemoveEditor"
                 }
-                ProposalActionPayload::UnflagEditor {
-                    target_address: addr,
-                } => {
-                    target_address = Some(addr.as_str());
+                ProposalActionPayload::UnflagEditor { target_id: id } => {
+                    target_id = Some(*id);
                     "UnflagEditor"
                 }
                 ProposalActionPayload::Publish {
@@ -867,7 +857,7 @@ impl Storage {
             };
 
             action_types.push(action_type);
-            target_addresses.push(target_address);
+            target_ids.push(target_id);
             content_uris.push(content_uri);
             metadatas.push(metadata);
             content_ids.push(content_id);
@@ -880,18 +870,18 @@ impl Storage {
         let query = r#"
             INSERT INTO proposal_actions (
                 id, proposal_id, action_type,
-                target_address, content_uri, metadata, content_id,
+                target_id, content_uri, metadata, content_id,
                 quorum, fast_threshold, slow_threshold, duration
             )
             SELECT id, proposal_id, action_type::"proposalActionType",
-                   target_address, content_uri, metadata, content_id,
+                   target_id, content_uri, metadata, content_id,
                    quorum, fast_threshold, slow_threshold, duration
             FROM UNNEST(
                 $1::uuid[], $2::uuid[], $3::text[],
-                $4::text[], $5::text[], $6::bytea[], $7::bytea[],
+                $4::uuid[], $5::text[], $6::bytea[], $7::bytea[],
                 $8::bigint[], $9::bigint[], $10::bigint[], $11::bigint[]
             ) AS t(id, proposal_id, action_type,
-                   target_address, content_uri, metadata, content_id,
+                   target_id, content_uri, metadata, content_id,
                    quorum, fast_threshold, slow_threshold, duration)
             ON CONFLICT (id) DO NOTHING
         "#;
@@ -900,7 +890,7 @@ impl Storage {
             .bind(&ids)
             .bind(&proposal_ids)
             .bind(&action_types)
-            .bind(&target_addresses)
+            .bind(&target_ids)
             .bind(&content_uris)
             .bind(&metadatas)
             .bind(&content_ids)

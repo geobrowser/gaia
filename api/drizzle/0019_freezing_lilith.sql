@@ -1,0 +1,1 @@
+ALTER TABLE "proposal_actions" RENAME COLUMN "target_address" TO "target_id";

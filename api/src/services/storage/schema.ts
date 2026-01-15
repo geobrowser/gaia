@@ -460,7 +460,7 @@ export const proposalActions = pgTable(
 			.references(() => proposals.id),
 		actionType: proposalActionTypeEnum("action_type").notNull(),
 		// Member/editor operations: AddMember, RemoveMember, AddEditor, RemoveEditor, UnflagEditor
-		targetAddress: text("target_address"),
+		targetId: uuid("target_id"),
 		// Publish action
 		contentUri: text("content_uri"),
 		metadata: bytea("metadata"),
@@ -608,7 +608,7 @@ export const spaceScores = pgTable("space_scores", {
  * Stores votes cast on entities and relations.
  */
 export const votes = pgTable(
-	"votes", 
+	"votes",
 	{
 		id: serial("id").primaryKey(),
 		voterId: uuid("voter_id").notNull(),
@@ -675,7 +675,7 @@ export const votesCount = pgTable(
 		spaceId: uuid("space_id").notNull(),
 		upvotes: bigint("upvotes", { mode: "number" }).notNull().default(0),
 		downvotes: bigint("downvotes", { mode: "number" }).notNull().default(0),
-	}, 
+	},
 	(table) => ({
 		uniqueConstraint: unique().on(table.objectId, table.objectType, table.spaceId),
 	}),

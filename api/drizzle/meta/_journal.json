@@ -134,6 +134,20 @@
       "when": 1768339207493,
       "tag": "0018_amazing_mercury",
       "breakpoints": true
+    },
+    {
+      "idx": 19,
+      "version": "7",
+      "when": 1768512124423,
+      "tag": "0019_freezing_lilith",
+      "breakpoints": true
+    },
+    {
+      "idx": 20,
+      "version": "7",
+      "when": 1768512148890,
+      "tag": "0020_wooden_iceman",
+      "breakpoints": true
     }
   ]
 }
