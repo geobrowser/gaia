@@ -97,7 +97,7 @@ fn bench_proposal_action_type_from_calldata(c: &mut Criterion) {
     let mut group = c.benchmark_group("proposal_action_type");
 
     // Benchmark with known selector
-    let known_calldata = generate_address_calldata();
+    let known_calldata = generate_space_id_calldata();
     group.bench_function("known_selector", |b| {
         b.iter(|| ProposalActionType::from_calldata(black_box(&known_calldata)))
     });
