@@ -28,23 +28,24 @@ pub enum DecodeError {
 
 /// Function selectors for DAOSpace contract actions.
 /// These are the first 4 bytes of keccak256(function_signature).
+/// Note: DAOSpace uses bytes16 for space IDs, not address.
 pub mod selectors {
-    /// addMember(address)
-    pub const ADD_MEMBER: [u8; 4] = [0xca, 0x6d, 0x56, 0xdc];
-    /// removeMember(address)
-    pub const REMOVE_MEMBER: [u8; 4] = [0x0b, 0x1c, 0xa4, 0x9a];
-    /// addEditor(address)
-    pub const ADD_EDITOR: [u8; 4] = [0xe5, 0x97, 0x5b, 0xdc];
-    /// removeEditor(address)
-    pub const REMOVE_EDITOR: [u8; 4] = [0x2d, 0x55, 0xfe, 0xaf];
+    /// addMember(bytes16)
+    pub const ADD_MEMBER: [u8; 4] = [0x2a, 0xfb, 0xe3, 0x50];
+    /// removeMember(bytes16)
+    pub const REMOVE_MEMBER: [u8; 4] = [0x35, 0xfa, 0x4f, 0x95];
+    /// addEditor(bytes16)
+    pub const ADD_EDITOR: [u8; 4] = [0x1c, 0xc8, 0xe1, 0x8a];
+    /// removeEditor(bytes16)
+    pub const REMOVE_EDITOR: [u8; 4] = [0x72, 0x3a, 0xe1, 0xe8];
     /// publish(bytes32,bytes,bytes)
     pub const PUBLISH: [u8; 4] = [0x6b, 0x47, 0xf6, 0x1a];
     /// flag(bytes32,bytes)
     pub const FLAG: [u8; 4] = [0xfe, 0x1e, 0x30, 0x42];
     /// unflag(bytes32,bytes)
     pub const UNFLAG: [u8; 4] = [0xc6, 0x96, 0x84, 0x0f];
-    /// unrestrictSpace(address) - unrestricts a space from fast path
-    pub const UNRESTRICT_SPACE: [u8; 4] = [0xb2, 0xc4, 0x36, 0xba];
+    /// unrestrictSpace(bytes16)
+    pub const UNRESTRICT_SPACE: [u8; 4] = [0xd6, 0xf8, 0x43, 0x2f];
     /// updateVotingSettings((uint256,uint256,uint256,uint256))
     pub const UPDATE_VOTING_SETTINGS: [u8; 4] = [0xd2, 0x1e, 0x85, 0x41];
     /// ping(bytes32,bytes32,bytes)
@@ -92,22 +93,22 @@ impl ProposalActionType {
     }
 }
 
-/// Decode an address argument from calldata.
+/// Decode a bytes16 (space ID) argument from calldata.
 ///
-/// For functions like addMember(address), the calldata is:
+/// For functions like addMember(bytes16), the calldata is:
 /// - 4 bytes: function selector
-/// - 32 bytes: ABI-encoded address (left-padded with zeros)
+/// - 32 bytes: ABI-encoded bytes16 (right-padded with zeros)
 ///
-/// Returns the 20-byte address.
-pub fn decode_address_arg(calldata: &[u8]) -> Option<Vec<u8>> {
-    // Need at least selector (4) + padded address (32) = 36 bytes
+/// Returns the 16-byte space ID.
+pub fn decode_space_id_arg(calldata: &[u8]) -> Option<Vec<u8>> {
+    // Need at least selector (4) + padded bytes16 (32) = 36 bytes
     if calldata.len() < 36 {
         return None;
     }
 
-    // ABI-encoded address is 32 bytes, with address in last 20 bytes
-    // bytes 4..16 are padding (zeros), bytes 16..36 are the address
-    Some(calldata[16..36].to_vec())
+    // ABI-encoded bytes16 is 32 bytes, with bytes16 in first 16 bytes
+    // bytes 4..20 are the bytes16, bytes 20..36 are padding (zeros)
+    Some(calldata[4..20].to_vec())
 }
 
 /// Decoded publish action arguments.
@@ -886,28 +887,28 @@ mod tests {
     }
 
     #[test]
-    fn test_decode_address_arg() {
-        // Create calldata for addMember(0x1111...1111)
+    fn test_decode_space_id_arg() {
+        // Create calldata for addMember(bytes16)
         let mut calldata = selectors::ADD_MEMBER.to_vec();
-        // ABI-encoded address: 12 bytes padding + 20 bytes address
-        calldata.extend_from_slice(&[0u8; 12]);
-        calldata.extend_from_slice(&[0x11u8; 20]);
+        // ABI-encoded bytes16: 16 bytes value + 16 bytes padding
+        calldata.extend_from_slice(&[0x11u8; 16]);
+        calldata.extend_from_slice(&[0u8; 16]);
 
-        let result = decode_address_arg(&calldata);
+        let result = decode_space_id_arg(&calldata);
         assert!(result.is_some());
-        assert_eq!(result.unwrap(), vec![0x11u8; 20]);
+        assert_eq!(result.unwrap(), vec![0x11u8; 16]);
     }
 
     #[test]
-    fn test_decode_address_arg_too_short() {
-        // Only selector, no address
+    fn test_decode_space_id_arg_too_short() {
+        // Only selector, no space id
         let calldata = selectors::ADD_MEMBER.to_vec();
-        assert!(decode_address_arg(&calldata).is_none());
+        assert!(decode_space_id_arg(&calldata).is_none());
 
         // Partially filled
         let mut calldata = selectors::ADD_MEMBER.to_vec();
         calldata.extend_from_slice(&[0u8; 20]); // Only 24 bytes total
-        assert!(decode_address_arg(&calldata).is_none());
+        assert!(decode_space_id_arg(&calldata).is_none());
     }
 
     #[test]

@@ -12,7 +12,7 @@
 use std::collections::HashMap;
 
 use anyhow::Result;
-use hermes_instrumentation::{debug, debug_span, warn};
+use hermes_instrumentation::{debug, debug_span, info, warn};
 
 use hermes_relay::{Action, actions};
 use hermes_schema::pb::governance::{
@@ -23,7 +23,7 @@ use hermes_schema::pb::governance::{
 };
 
 use crate::decode::{
-    self, ProposalActionType, decode_address_arg, decode_flag_args, decode_publish_args,
+    self, ProposalActionType, decode_flag_args, decode_publish_args, decode_space_id_arg,
     decode_voting_settings_args,
 };
 
@@ -134,6 +134,25 @@ pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformRe
     // Squash PROPOSAL_CREATED with PROPOSAL_SETTINGS_SELECTED
     for (proposal_id, created) in created_map {
         if let Some(settings_pending) = settings_map.remove(&proposal_id) {
+            // Log proposal with action types for debugging
+            let proposal_uuid = uuid::Uuid::from_slice(&proposal_id)
+                .map(|u| u.to_string())
+                .unwrap_or_else(|_| hex::encode(&proposal_id));
+            let action_types: Vec<String> = created
+                .actions
+                .iter()
+                .map(|a| {
+                    let action_type = crate::decode::ProposalActionType::from_calldata(&a.data);
+                    format!("{:?}", action_type)
+                })
+                .collect();
+            info!(
+                proposal_id = %proposal_uuid,
+                action_count = created.actions.len(),
+                action_types = ?action_types,
+                "Processing PROPOSAL_CREATED"
+            );
+
             // Found matching pair - emit squashed event
             let event = HermesProposalCreated {
                 space_id: created.space_id,
@@ -157,6 +176,25 @@ pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformRe
     // Squash PROPOSAL_UPDATED with PROPOSAL_SETTINGS_SELECTED
     for (proposal_id, updated) in updated_map {
         if let Some(settings_pending) = settings_map.remove(&proposal_id) {
+            // Log proposal with action types for debugging
+            let proposal_uuid = uuid::Uuid::from_slice(&proposal_id)
+                .map(|u| u.to_string())
+                .unwrap_or_else(|_| hex::encode(&proposal_id));
+            let action_types: Vec<String> = updated
+                .actions
+                .iter()
+                .map(|a| {
+                    let action_type = crate::decode::ProposalActionType::from_calldata(&a.data);
+                    format!("{:?}", action_type)
+                })
+                .collect();
+            info!(
+                proposal_id = %proposal_uuid,
+                action_count = updated.actions.len(),
+                action_types = ?action_types,
+                "Processing PROPOSAL_UPDATED"
+            );
+
             let event = HermesProposalUpdated {
                 space_id: updated.space_id,
                 proposer_id: updated.proposer_id,
@@ -193,33 +231,33 @@ fn decode_proposal_action(
 ) -> Option<proposal_action::Action> {
     match action_type {
         ProposalActionType::AddMember => {
-            let addr = decode_address_arg(calldata)?;
+            let space_id = decode_space_id_arg(calldata)?;
             Some(proposal_action::Action::AddMember(AddMemberAction {
-                target_address: addr,
+                target_address: space_id,
             }))
         }
         ProposalActionType::RemoveMember => {
-            let addr = decode_address_arg(calldata)?;
+            let space_id = decode_space_id_arg(calldata)?;
             Some(proposal_action::Action::RemoveMember(RemoveMemberAction {
-                target_address: addr,
+                target_address: space_id,
             }))
         }
         ProposalActionType::AddEditor => {
-            let addr = decode_address_arg(calldata)?;
+            let space_id = decode_space_id_arg(calldata)?;
             Some(proposal_action::Action::AddEditor(AddEditorAction {
-                target_address: addr,
+                target_address: space_id,
             }))
         }
         ProposalActionType::RemoveEditor => {
-            let addr = decode_address_arg(calldata)?;
+            let space_id = decode_space_id_arg(calldata)?;
             Some(proposal_action::Action::RemoveEditor(RemoveEditorAction {
-                target_address: addr,
+                target_address: space_id,
             }))
         }
         ProposalActionType::UnrestrictSpace => {
-            let addr = decode_address_arg(calldata)?;
+            let space_id = decode_space_id_arg(calldata)?;
             Some(proposal_action::Action::UnflagEditor(UnflagEditorAction {
-                target_address: addr,
+                target_address: space_id,
             }))
         }
         ProposalActionType::Publish => {
@@ -316,9 +354,17 @@ fn parse_proposal_created(action: &Action, sequence: u32) -> Option<ProposalCrea
             let action_type = ProposalActionType::from_calldata(&a.data);
             let decoded_action = decode_proposal_action(&action_type, &a.data);
 
-            debug!(
+            // Log action types with their selector for debugging
+            let selector = if a.data.len() >= 4 {
+                hex::encode(&a.data[0..4])
+            } else {
+                "too_short".to_string()
+            };
+            info!(
                 action_type = ?action_type,
+                selector = %selector,
                 target = %hex::encode(&a.to),
+                data_len = a.data.len(),
                 "Decoded proposal action"
             );
 
