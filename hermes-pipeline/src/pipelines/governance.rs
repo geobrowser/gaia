@@ -483,9 +483,6 @@ fn convert_proposal_executed(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloy::primitives::{Address, FixedBytes, U256};
-    use alloy::sol;
-    use alloy::sol_types::SolType;
 
     fn test_meta() -> BlockMetadata {
         BlockMetadata {
@@ -497,26 +494,19 @@ mod tests {
 
     // Helper to create encoded PROPOSAL_CREATED data
     fn encode_proposal_created_data(proposal_id: [u8; 16], voting_mode: u8) -> Vec<u8> {
-        sol! {
-            struct TestAction {
-                address to;
-                uint256 value;
-                bytes data;
-            }
-        }
-        type ProposalCreatedDataType = sol! { (bytes16, uint8, TestAction[]) };
+        use ethabi::{Token, ethereum_types::U256 as EthU256};
 
-        let action = TestAction {
-            to: Address::ZERO,
-            value: U256::ZERO,
-            data: vec![].into(),
-        };
+        let action_tuple = Token::Tuple(vec![
+            Token::Address(ethabi::Address::zero()),
+            Token::Uint(EthU256::zero()),
+            Token::Bytes(vec![]),
+        ]);
 
-        ProposalCreatedDataType::abi_encode(&(
-            FixedBytes::<16>::from_slice(&proposal_id),
-            voting_mode,
-            vec![action],
-        ))
+        ethabi::encode(&[
+            Token::FixedBytes(proposal_id.to_vec()),
+            Token::Uint(EthU256::from(voting_mode)),
+            Token::Array(vec![action_tuple]),
+        ])
     }
 
     // Helper to create encoded PROPOSAL_SETTINGS_SELECTED data
@@ -527,14 +517,15 @@ mod tests {
         quorum: u64,
         threshold: u64,
     ) -> Vec<u8> {
-        type SettingsDataType = sol! { (uint64, uint64, uint8, uint256, uint256) };
-        SettingsDataType::abi_encode(&(
-            start_date,
-            last_date,
-            voting_mode,
-            U256::from(quorum),
-            U256::from(threshold),
-        ))
+        use ethabi::{Token, ethereum_types::U256 as EthU256};
+
+        ethabi::encode(&[
+            Token::Uint(EthU256::from(start_date)),
+            Token::Uint(EthU256::from(last_date)),
+            Token::Uint(EthU256::from(voting_mode)),
+            Token::Uint(EthU256::from(quorum)),
+            Token::Uint(EthU256::from(threshold)),
+        ])
     }
 
     #[test]

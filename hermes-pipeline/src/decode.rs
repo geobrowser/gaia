@@ -717,7 +717,7 @@ pub fn decode_flag_data(data: &[u8]) -> Result<String, DecodeError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use alloy::primitives::{Address, Bytes as PrimBytes, FixedBytes, U256};
+    use alloy::primitives::{Bytes as PrimBytes, FixedBytes};
 
     #[test]
     fn test_decode_proposal_created_empty() {
@@ -729,21 +729,28 @@ mod tests {
 
     #[test]
     fn test_decode_proposal_created() {
-        // Create test data using the Action struct
-        let proposal_id = FixedBytes::<16>::from([0xAB; 16]);
-        let actions = vec![Action {
-            to: Address::ZERO,
-            value: U256::from(1000u64),
-            data: vec![1, 2, 3].into(),
-        }];
-        let voting_mode = 1u8; // Slow
-        let encoded = ProposalCreatedDataType::abi_encode(&(proposal_id, voting_mode, actions));
+        // Encode using ethabi to match the decoder
+        use ethabi::ethereum_types::U256 as EthU256;
+
+        let proposal_id = vec![0xAB_u8; 16];
+        let voting_mode = EthU256::from(1u8);
+        let action_tuple = Token::Tuple(vec![
+            Token::Address(ethabi::Address::zero()),
+            Token::Uint(EthU256::from(1000u64)),
+            Token::Bytes(vec![1, 2, 3]),
+        ]);
+
+        let encoded = ethabi::encode(&[
+            Token::FixedBytes(proposal_id.clone()),
+            Token::Uint(voting_mode),
+            Token::Array(vec![action_tuple]),
+        ]);
 
         let (result, unwrap_level) = decode_proposal_created(&encoded).unwrap();
         assert_eq!(unwrap_level, 0);
-        assert_eq!(result.proposal_id, vec![0xAB; 16]);
+        assert_eq!(result.proposal_id, proposal_id);
         assert_eq!(result.actions.len(), 1);
-        assert_eq!(result.actions[0].to, Address::ZERO.as_slice().to_vec());
+        assert_eq!(result.actions[0].to, vec![0u8; 20]);
         assert_eq!(result.voting_mode, 1);
     }
 

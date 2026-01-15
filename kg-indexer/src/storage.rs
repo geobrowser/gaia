@@ -722,7 +722,7 @@ impl Storage {
         .await?;
 
         if result.rows_affected() == 0 {
-            self.insert_proposals(&[proposal.clone()], tx).await?;
+            self.insert_proposals(std::slice::from_ref(proposal), tx).await?;
         }
 
         Ok(())

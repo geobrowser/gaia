@@ -480,7 +480,7 @@ mod tests {
         assert_eq!(pending.complete_one(100), None); // 1 remaining
         assert!(matches!(
             pending.complete_one(100),
-            Some((100, ref cursor, 1, _)) if cursor == "cursor_100"
+            Some((100, ref cursor, 2, _)) if cursor == "cursor_100"
         ));
 
         assert!(pending.blocks.is_empty());
