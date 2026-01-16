@@ -6,7 +6,6 @@ import {
 	ipfsCache,
 	members,
 	meta,
-	properties,
 	relations,
 	spaces,
 	values,
@@ -26,12 +25,11 @@ const reset = Effect.gen(function* () {
 			const r = await tx.delete(relations).execute()
 			const ed = await tx.delete(editors).execute()
 			const m = await tx.delete(members).execute()
-			const p = await tx.delete(properties).execute()
 			const e = await tx.delete(entities).execute()
 			const s = await tx.delete(spaces).execute()
 			const c = await tx.delete(meta).execute()
 
-			return {v, r, ed, m, p, e, s, c}
+			return {v, r, ed, m, e, s, c}
 		})
 
 		return result
