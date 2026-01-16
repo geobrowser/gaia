@@ -103,33 +103,6 @@ export const entities = pgTable(
 	],
 );
 
-export const dataTypesEnum = pgEnum("dataTypes", [
-	"Bool",
-	"Int64",
-	"Float64",
-	"Decimal",
-	"Text",
-	"Bytes",
-	"Date",
-	"Time",
-	"Datetime",
-	"Schedule",
-	"Point",
-	"Embedding",
-]);
-
-export const properties = pgTable(
-	"properties",
-	{
-		id: uuid().primaryKey(),
-		type: dataTypesEnum().notNull(),
-	},
-	(table) => [
-		// Index for filtering by data type
-		index("properties_type_idx").on(table.type),
-	],
-);
-
 export const values = pgTable(
 	"values",
 	{
@@ -285,12 +258,8 @@ export const subspaces = pgTable(
 
 export const entityForeignValues = drizzleRelations(
 	entities,
-	({ many, one }) => ({
+	({ many }) => ({
 		values: many(values),
-		property: one(properties, {
-			fields: [entities.id],
-			references: [properties.id],
-		}),
 		fromRelations: many(relations, {
 			relationName: "fromEntity",
 		}),
@@ -315,20 +284,6 @@ export const propertiesEntityRelations = drizzleRelations(
 	}),
 );
 
-export const propertiesRelations = drizzleRelations(
-	properties,
-	({ one, many }) => ({
-		entity: one(entities, {
-			fields: [properties.id],
-			references: [entities.id],
-		}),
-		// Relations where this property is used as the type
-		typeRelations: many(relations, {
-			relationName: "typeProperty",
-		}),
-	}),
-);
-
 export const relationsEntityRelations = drizzleRelations(
 	relations,
 	({ one }) => ({
@@ -342,10 +297,11 @@ export const relationsEntityRelations = drizzleRelations(
 			references: [entities.id],
 			relationName: "toEntity",
 		}),
-		typeProperty: one(properties, {
+		// Properties are now entities, so typeId references the entities table
+		typeEntity: one(entities, {
 			fields: [relations.typeId],
-			references: [properties.id],
-			relationName: "typeProperty",
+			references: [entities.id],
+			relationName: "typeEntity",
 		}),
 		relationEntity: one(entities, {
 			fields: [relations.entityId],
