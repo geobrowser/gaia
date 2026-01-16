@@ -1,0 +1,15 @@
+{
+  "name": "e2e-kafka-search-api-validation",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Validation scripts for E2E Kafka Search API test scenarios",
+  "type": "module",
+  "scripts": {
+    "validate": "tsx validate-search.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "tsx": "^4.7.0",
+    "typescript": "^5.3.3"
+  }
+}
