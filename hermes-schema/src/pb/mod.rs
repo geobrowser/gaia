@@ -1,5 +1,5 @@
-pub mod block_summary;
 pub mod blockchain_metadata;
+pub mod block_summary;
 pub mod governance;
 pub mod knowledge;
 pub mod membership;
