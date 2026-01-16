@@ -41,9 +41,23 @@ This is necessary because PostgreSQL enums can't have values removed while exist
 - Will be superseded by `kg-indexer` for knowledge graph indexing
 - No v2 migration planned
 
-### kg-indexer (in progress)
-- Being updated to decode `HermesEdit.payload` with `grc-20` crate
-- Task: ts-2da76d (storage layer for v2 columns)
+### kg-indexer: Op Types Not Yet Handled
+The kg-indexer decodes v2 payloads but doesn't yet handle all 9 op types:
+
+**Handled:**
+- CreateEntity
+- UpdateEntity
+- CreateRelation
+- UpdateRelation
+- DeleteRelation
+
+**Not handled (silently ignored):**
+- DeleteEntity - requires soft delete columns (see Deferred Schema Changes)
+- RestoreEntity - requires soft delete columns
+- RestoreRelation - requires soft delete columns
+- CreateValueRef - reified entity value references
+
+**Unblock by:** Task ts-46f76a (Apply v2 ops)
 
 ## Implemented
 
@@ -57,3 +71,9 @@ This is necessary because PostgreSQL enums can't have values removed while exist
 - `hermes-ipfs-cache` validates with `grc_20::decode_edit()` before storing
 - `hermes-pipeline` passes raw bytes through to Kafka
 - Mock infrastructure updated (`IpfsSource::mock_bytes`)
+
+### kg-indexer (ts-d1cfd3, ts-2da76d)
+- Decodes `HermesEdit.payload` with `grc_20::decode_edit()`
+- Storage layer writes to v2 value columns (integer, float, bytes, date, datetime, schedule, embedding)
+- Value types determined from `grc_20::Value` enum variant (no separate property type lookup)
+- Handles 5 of 9 op types (see Pending section for gaps)
