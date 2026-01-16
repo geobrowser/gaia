@@ -19,7 +19,7 @@ Query Input
          │
          ▼
 ┌─────────────────┐
-│ Scope Wrapper   │ ◀── Adds rank_feature boost + filters
+│ Scope Wrapper   │ ◀── Adds function_score boost + filters
 └────────┬────────┘
          │
          ▼
@@ -57,8 +57,8 @@ Four parallel matching strategies run inside a `bool.should` clause with `minimu
 
 ## 3. Scope-Specific Behavior
 
-| Scope | Filter | Rank Feature Field |
-|-------|--------|-------------------|
+| Scope | Filter | Score Field |
+|-------|--------|-------------|
 | `GLOBAL` | None | `entity_global_score` |
 | `GLOBAL_BY_SPACE_SCORE` | None | `space_score` |
 | `SPACE_SINGLE` / `SPACE` | `space_id` term filter | `entity_space_score` |
@@ -74,7 +74,7 @@ From highest to lowest impact:
 3. **Description prefix match** — `match_phrase_prefix` on description (1.5×)
 4. **Description n-gram matches** — no additional boost
 5. **Fuzzy matches** — 0.6× penalty (deliberately reduced)
-6. **+ Rank Feature** — multiplicative boost from score fields (1.3×)
+6. **+ Score Fields** — additive boost from score fields via `function_score` with `script_score` (clamped, shifted, then 1.3× multiplied)
 
 ---
 
@@ -82,7 +82,7 @@ From highest to lowest impact:
 
 | Constant | Value | Usage |
 |----------|-------|-------|
-| `SCORE_BOOST` | 1.3 | `rank_feature` multiplier for all score fields |
+| `SCORE_BOOST` | 1.3 | Multiplier applied inside `script_score` logic after clamping and shifting score fields (see `buildScoreBoostFunction` in opensearch.ts) |
 | `NAME_PREFIX_BOOST` | 2.0 | `match_phrase_prefix` on name |
 | `DESCRIPTION_PREFIX_BOOST` | 1.5 | `match_phrase_prefix` on description |
 | `NAME_FIELD_BOOST` | 1.5 | Field boost on name in `multi_match` |
@@ -95,6 +95,10 @@ From highest to lowest impact:
 - **Name prioritization**: Users typically search by name, so name matches are weighted higher than description matches.
 - **Prefix matching**: Strong prefix boosts indicate high user intent (typing the start of what they're looking for).
 - **Fuzzy penalty**: Fuzzy matches are useful for typo tolerance but should rank below exact/prefix matches to prevent false positives.
-- **Logarithmic saturation**: `rank_feature` uses logarithmic saturation by default to prevent score inflation from extremely high feature values.
+- **Score field normalization**: Score fields use `float` type to support positive, zero, and negative values from z-score normalization. Boosting is done via `function_score` with `script_score` (see `buildScoreBoostFunction` in opensearch.ts). The script applies:
+  1. **Clamping**: Scores below `MIN_SCORE_THRESHOLD` (-10.0) are clamped to -10.0 to prevent excessive penalties
+  2. **Shifting**: Scores are shifted by `SCORE_SHIFT` (10.0) to ensure all values are positive (OpenSearch requirement)
+  3. **Multiplier**: The shifted score is multiplied by `SCORE_BOOST` (1.3) for the final boost value
+  4. **Formula**: `(max(score, -10.0) + 10.0) * 1.3`
 - **Autocomplete support**: `search_as_you_type` field type with n-gram sub-fields enables smooth autocomplete UX.
 
