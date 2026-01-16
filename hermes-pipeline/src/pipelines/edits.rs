@@ -8,6 +8,10 @@
 //! - Parallel cache fetching for all edits in a block
 //! - Retry logic with exponential backoff for cache misses
 //! - Graceful handling of errored cache entries
+//!
+//! Note: As of v2, the cache returns raw GRC2/GRC2Z payload bytes.
+//! We decode the header to populate HermesEdit fields for observability,
+//! but the full payload is passed to kg-indexer for decoding.
 
 use std::sync::Arc;
 use std::sync::atomic::{AtomicUsize, Ordering};
@@ -15,6 +19,7 @@ use std::time::Duration;
 
 use anyhow::Result;
 use futures::future::join_all;
+use grc_20::decode_edit;
 use hermes_instrumentation::{Instrument, debug_span, info_span};
 use tokio_retry::Retry;
 use tokio_retry::strategy::{ExponentialBackoff, jitter};
@@ -22,7 +27,6 @@ use tracing::warn;
 
 use hermes_relay::{Action, actions, extract_ipfs_uri};
 use hermes_schema::pb::knowledge::HermesEdit;
-use wire::pb::grc20::Edit;
 
 use crate::cache::{CacheError, IpfsCache};
 
@@ -242,13 +246,13 @@ async fn fetch_edit_with_retry(
         Ok(cached_edit) => {
             if cached_edit.is_errored {
                 EditFetchResult::Errored
-            } else if let Some(edit) = cached_edit.edit {
-                debug_span!("convert").in_scope(|| match convert(action, &edit, meta, sequence) {
+            } else if let Some(payload) = cached_edit.payload {
+                debug_span!("convert").in_scope(|| match convert(action, &payload, meta, sequence) {
                     Ok(event) => EditFetchResult::Success(Box::new(event)),
                     Err(_) => EditFetchResult::FetchFailed,
                 })
             } else {
-                // Entry exists but no edit content
+                // Entry exists but no payload content
                 EditFetchResult::Errored
             }
         }
@@ -267,25 +271,34 @@ async fn fetch_edit_with_retry(
     }
 }
 
-/// Convert an EDITS_PUBLISHED action with cached edit to HermesEdit proto.
+/// Convert an EDITS_PUBLISHED action with cached payload to HermesEdit proto.
 ///
 /// The action structure for EDITS_PUBLISHED:
 /// - from_id: space_id (16 bytes) - the space publishing the edit
 /// - to_id: unused (zeros)
 /// - topic: unused (zeros)
 /// - data: IPFS hash as bytes
+///
+/// Note: We decode the GRC2/GRC2Z payload to extract header fields (id, name,
+/// authors) for observability, but the full payload bytes are passed through
+/// to kg-indexer for decoding.
 fn convert(
     action: &Action,
-    edit: &Edit,
+    payload: &[u8],
     meta: &BlockMetadata,
     sequence: u32,
 ) -> Result<HermesEdit> {
+    // Decode the edit to extract header fields
+    // This is validated by hermes-ipfs-cache, so decode should succeed
+    let edit = decode_edit(payload)
+        .map_err(|e| anyhow::anyhow!("Failed to decode GRC-20 payload: {}", e))?;
+
     Ok(HermesEdit {
-        id: edit.id.clone(),
-        name: edit.name.clone(),
-        ops: edit.ops.clone(),
-        authors: edit.authors.clone(),
-        language: edit.language.clone(),
+        id: edit.id.to_vec(),
+        name: edit.name.to_string(),
+        payload: payload.to_vec(),
+        authors: edit.authors.iter().map(|a| a.to_vec()).collect(),
+        language: None, // v2 doesn't have a language field at edit level
         space_id: action.from_id.clone(),
         is_canonical: true, // TODO: Determine from topology
         meta: Some(meta.to_proto(sequence)),
@@ -295,7 +308,9 @@ fn convert(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wire::pb::grc20::{Entity, Op, Value};
+    use std::borrow::Cow;
+    use grc_20::{encode_edit, Edit as Grc20Edit, Op, CreateEntity, PropertyValue, Value as Grc20Value};
+    use grc_20::genesis::properties;
 
     fn test_meta() -> BlockMetadata {
         BlockMetadata {
@@ -305,27 +320,30 @@ mod tests {
         }
     }
 
-    fn test_edit() -> Edit {
-        Edit {
-            id: vec![1; 16],
-            name: "Test Edit".into(),
-            ops: vec![Op {
-                payload: Some(wire::pb::grc20::op::Payload::UpdateEntity(Entity {
-                    id: vec![2; 16],
-                    values: vec![Value {
-                        property: vec![3; 16],
-                        value: "test".into(),
-                        options: None,
+    fn test_payload() -> Vec<u8> {
+        let edit = Grc20Edit {
+            id: [1u8; 16],
+            name: Cow::Borrowed("Test Edit"),
+            authors: vec![[4u8; 16]],
+            created_at: 1700000000,
+            ops: vec![
+                Op::CreateEntity(CreateEntity {
+                    id: [2u8; 16],
+                    values: vec![PropertyValue {
+                        property: properties::name(),
+                        value: Grc20Value::Text {
+                            value: Cow::Borrowed("test"),
+                            language: None,
+                        },
                     }],
-                })),
-            }],
-            authors: vec![vec![4; 32]],
-            language: None,
-        }
+                }),
+            ],
+        };
+        encode_edit(&edit).expect("Should encode test edit")
     }
 
     #[test]
-    fn test_convert_edit() {
+    fn test_convert_payload() {
         let action = Action {
             from_id: vec![0x01; 16],
             to_id: vec![0; 16],
@@ -334,12 +352,12 @@ mod tests {
             data: b"ipfs://QmYwAPJzv5CZsnA625s3Xf2nemtYgPpHdWEz79ojWnPbdG".to_vec(),
         };
 
-        let edit = test_edit();
-        let result = convert(&action, &edit, &test_meta(), 0).unwrap();
+        let payload = test_payload();
+        let result = convert(&action, &payload, &test_meta(), 0).unwrap();
 
-        assert_eq!(result.id, vec![1; 16]);
+        assert_eq!(result.id, vec![1u8; 16]);
         assert_eq!(result.name, "Test Edit");
-        assert_eq!(result.ops.len(), 1);
+        assert!(!result.payload.is_empty());
         assert_eq!(result.space_id, vec![0x01; 16]);
         assert!(result.is_canonical);
     }

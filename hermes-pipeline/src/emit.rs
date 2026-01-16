@@ -176,15 +176,10 @@ impl KafkaEvent for HermesEdit {
     }
 
     fn headers(&self) -> OwnedHeaders {
-        OwnedHeaders::new()
-            .insert(Header {
-                key: "edit-name",
-                value: Some(&self.name),
-            })
-            .insert(Header {
-                key: "ops-count",
-                value: Some(&self.ops.len().to_string()),
-            })
+        OwnedHeaders::new().insert(Header {
+            key: "edit-name",
+            value: Some(&self.name),
+        })
     }
 }
 
