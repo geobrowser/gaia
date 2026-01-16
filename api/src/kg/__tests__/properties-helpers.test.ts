@@ -48,9 +48,10 @@ describe("property helper functions", () => {
 		}).onConflictDoNothing()
 
 		// Insert test properties
+		// Note: v2 uses 'Text' instead of 'String', and 'Relation' is no longer a data type
 		await db.insert(properties).values([
-			{ id: testPropertyId, type: 'String' },
-			{ id: testRelationPropertyId, type: 'Relation' }
+			{ id: testPropertyId, type: 'Text' },
+			{ id: testRelationPropertyId, type: 'Text' }
 		]).onConflictDoNothing()
 
 		// Insert test entities

@@ -148,6 +148,13 @@
       "when": 1768512148890,
       "tag": "0020_wooden_iceman",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1768590628518,
+      "tag": "0021_sad_slapstick",
+      "breakpoints": true
     }
   ]
 }
