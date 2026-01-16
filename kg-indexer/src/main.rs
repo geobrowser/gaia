@@ -1285,11 +1285,9 @@ async fn process_block(
         "otel.status_code" = tracing::field::Empty,
         "otel.status_message" = tracing::field::Empty
     );
-    let db_commit_result = async {
-        tx.commit().await
-    }
-    .instrument(db_commit_span.clone())
-    .await;
+    let db_commit_result = async { tx.commit().await }
+        .instrument(db_commit_span.clone())
+        .await;
 
     let db_tx_duration_ms = tx_start.elapsed().as_millis();
 
