@@ -692,7 +692,7 @@ mod tests {
         let edit = HermesEdit {
             id: vec![],
             name: "".into(),
-            ops: vec![],
+            payload: vec![],
             authors: vec![],
             language: None,
             space_id: "my_space_id".into(),

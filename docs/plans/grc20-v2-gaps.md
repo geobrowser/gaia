@@ -27,9 +27,33 @@ This is necessary because PostgreSQL enums can't have values removed while exist
 
 **Why deferred:** Need to understand how this affects existing queries and the indexer before changing.
 
+## Pending: Indexer Updates
+
+### search-indexer
+- Consumes `HermesEdit` from Kafka, still references `.ops` field
+- Needs to decode `HermesEdit.payload` using `grc_20::decode_edit()`
+- Will need to map `grc_20::Op` types to search index updates
+
+**Unblock by:** Add `grc-20` dependency and update `entities_consumer.rs` to decode payload bytes.
+
+### indexer (legacy)
+- Uses v1 protobuf `wire::pb::grc20::Edit` directly
+- Will be superseded by `kg-indexer` for knowledge graph indexing
+- No v2 migration planned
+
+### kg-indexer (in progress)
+- Being updated to decode `HermesEdit.payload` with `grc-20` crate
+- Task: ts-2da76d (storage layer for v2 columns)
+
 ## Implemented
 
 ### Schema (ts-20e6b4)
 - `dataTypesEnum` updated to v2 types: `Bool`, `Int64`, `Float64`, `Decimal`, `Text`, `Bytes`, `Date`, `Time`, `Datetime`, `Schedule`, `Point`, `Embedding`
 - New value columns in `values` table: `integer`, `float`, `bytes`, `date`, `datetime`, `schedule`, `embedding`
 - Indexes for new searchable columns
+
+### Hermes Pipeline (ts-ad5c1e)
+- `HermesEdit` proto updated: `.ops` replaced with `.payload` (raw GRC2/GRC2Z bytes)
+- `hermes-ipfs-cache` validates with `grc_20::decode_edit()` before storing
+- `hermes-pipeline` passes raw bytes through to Kafka
+- Mock infrastructure updated (`IpfsSource::mock_bytes`)

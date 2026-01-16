@@ -17,55 +17,61 @@
 //! - `SUBSTREAMS_START_BLOCK` - First block to consume (default: 82655)
 //! - `SUBSTREAMS_END_BLOCK` - Last block to consume (default: u64::MAX for continuous)
 
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::env;
 
+use grc_20::{encode_edit, Edit as Grc20Edit};
 use hermes_instrumentation::{Backend, Config, info};
 use hermes_ipfs_cache::{IpfsCacheSink, cache::CacheSource};
 use hermes_relay::{HermesModule, Sink, StreamSource};
 use ipfs::IpfsSource;
-use wire::pb::grc20::Edit;
 
 /// Generate mock edits matching the test topology IPFS hashes.
 ///
 /// These correspond to the `edit_published` events in
 /// `hermes_relay::source::mock_events::test_topology::generate()`.
-fn test_topology_edits() -> HashMap<String, Edit> {
+///
+/// Returns CID → GRC-20 v2 encoded bytes.
+fn test_topology_edits() -> HashMap<String, Vec<u8>> {
     let mut edits = HashMap::new();
 
-    // Helper to create a simple edit
-    let make_edit = |name: &str| Edit {
-        id: name.as_bytes().to_vec(),
-        name: name.to_string(),
-        ops: vec![],
-        authors: vec![],
-        language: None,
+    // Helper to create a simple GRC-20 v2 edit
+    let make_edit = |id: [u8; 16], name: &str| -> Vec<u8> {
+        let edit = Grc20Edit {
+            id,
+            name: Cow::Owned(name.to_string()),
+            authors: vec![[0x01; 16]], // Mock author
+            created_at: 1700000000,
+            ops: vec![],
+        };
+        encode_edit(&edit).expect("Failed to encode test edit")
     };
 
     // These CIDs match the ones in mock_events::test_topology::generate()
     edits.insert(
         "QmRootEdit1CreatePersons".to_string(),
-        make_edit("Root Edit 1: Create Persons"),
+        make_edit([0xE1; 16], "Root Edit 1: Create Persons"),
     );
     edits.insert(
         "QmRootEdit2AddDescriptions".to_string(),
-        make_edit("Root Edit 2: Add Descriptions"),
+        make_edit([0xE2; 16], "Root Edit 2: Add Descriptions"),
     );
     edits.insert(
         "QmSpaceAEdit1CreateOrg".to_string(),
-        make_edit("Space A Edit 1: Create Org"),
+        make_edit([0xEA; 16], "Space A Edit 1: Create Org"),
     );
     edits.insert(
         "QmSpaceAEdit2CreateRelations".to_string(),
-        make_edit("Space A Edit 2: Create Relations"),
+        make_edit([0xEB; 16], "Space A Edit 2: Create Relations"),
     );
     edits.insert(
         "QmSpaceBEdit1CreateDoc".to_string(),
-        make_edit("Space B Edit 1: Create Doc"),
+        make_edit([0xEC; 16], "Space B Edit 1: Create Doc"),
     );
     edits.insert(
         "QmSpaceCEdit1CreateTopic".to_string(),
-        make_edit("Space C Edit 1: Create Topic"),
+        make_edit([0xED; 16], "Space C Edit 1: Create Topic"),
     );
 
     edits
@@ -151,8 +157,8 @@ async fn async_main() -> anyhow::Result<()> {
         // Create mock cache (in-memory)
         let cache = CacheSource::mock().into_cache().await?;
 
-        // Create mock IPFS source with test topology edits
-        let ipfs_source = IpfsSource::mock(test_topology_edits());
+        // Create mock IPFS source with GRC-20 v2 test topology edits
+        let ipfs_source = IpfsSource::mock_bytes(test_topology_edits());
 
         // Create and run the sink with mock data
         let sink = IpfsCacheSink::new(cache, ipfs_source);
