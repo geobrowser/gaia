@@ -6,7 +6,7 @@
 /// 1. Resolves the IPFS CID into the raw GRC2/GRC2Z payload bytes
 /// 2. Appends any blockchain metadata useful for downstream consumers
 /// 3. Appends any community or space topology metadata useful for
-///     downstream consumers
+///    downstream consumers
 ///
 /// Note: As of v2, the payload contains raw GRC2/GRC2Z bytes. Consumers
 /// (e.g., kg-indexer) must decode using the grc-20 crate.
