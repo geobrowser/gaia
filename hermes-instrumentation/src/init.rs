@@ -229,6 +229,7 @@ fn init_sentry(
     let mut options = sentry::ClientOptions {
         traces_sample_rate,
         send_default_pii,
+        enable_logs: true,
         ..Default::default()
     };
     if let Some(env) = environment {
@@ -260,7 +261,19 @@ fn init_sentry(
         .with_tracer(tracer)
         .with_tracked_inactivity(true);
 
-    let sentry_layer = sentry::integrations::tracing::layer();
+    use sentry::integrations::tracing::EventFilter;
+
+    // Configure which tracing events go to Sentry:
+    // - ERROR: Create Sentry Issue + Log + Breadcrumb
+    // - WARN/INFO: Create Log + Breadcrumb (breadcrumbs provide context for errors)
+    // - DEBUG/TRACE: Ignore
+    let sentry_layer = sentry::integrations::tracing::layer().event_filter(|metadata| {
+        match *metadata.level() {
+            tracing::Level::ERROR => EventFilter::Event | EventFilter::Log | EventFilter::Breadcrumb,
+            tracing::Level::WARN | tracing::Level::INFO => EventFilter::Log | EventFilter::Breadcrumb,
+            _ => EventFilter::Ignore,
+        }
+    });
 
     let level = std::env::var("RUST_LOG")
         .ok()

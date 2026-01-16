@@ -145,6 +145,22 @@ impl KgMessage {
     pub fn is_last(&self) -> bool {
         self.meta().map(|m| m.is_last).unwrap_or(false)
     }
+
+    /// Get the event type name for this message.
+    pub fn event_type_name(&self) -> &'static str {
+        match self {
+            KgMessage::BlockSummary(_) => "BLOCK_SUMMARY",
+            KgMessage::Edit(_) => "EDIT",
+            KgMessage::CreateSpace(_) => "CREATE_SPACE",
+            KgMessage::RoleGranted(_) => "ROLE_GRANTED",
+            KgMessage::RoleRevoked(_) => "ROLE_REVOKED",
+            KgMessage::TrustExtension(_) => "TRUST_EXTENSION",
+            KgMessage::ProposalCreated(_) => "PROPOSAL_CREATED",
+            KgMessage::ProposalUpdated(_) => "PROPOSAL_UPDATED",
+            KgMessage::ProposalVoted(_) => "PROPOSAL_VOTED",
+            KgMessage::ProposalExecuted(_) => "PROPOSAL_EXECUTED",
+        }
+    }
 }
 
 /// Get the event-type header value from Kafka headers
