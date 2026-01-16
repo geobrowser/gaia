@@ -52,11 +52,11 @@ spec:
           imagePullPolicy: Always
           command: ["bun", "run", "db:migrate"]
           env:
-            - name: DATABASE_URL
+            - name: DATABASE_URL_DIRECT
               valueFrom:
                 secretKeyRef:
                   name: api-secrets
-                  key: DATABASE_URL
+                  key: DATABASE_URL_DIRECT
             - name: NODE_EXTRA_CA_CERTS
               value: /ssl/ca.crt
           volumeMounts:
