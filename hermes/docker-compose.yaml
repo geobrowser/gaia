@@ -64,13 +64,95 @@ services:
       kafka.clusters.0.serde.4.topicValuesPattern: "curation.scores"
       kafka.clusters.0.serde.4.properties.protobufFilesDir: /proto/
       kafka.clusters.0.serde.4.properties.protobufMessageName: scoring.HermesScoresBatch
+      # Protobuf serde for hermes.blocks topic
+      kafka.clusters.0.serde.5.name: BlockSummary
+      kafka.clusters.0.serde.5.className: com.provectus.kafka.ui.serdes.builtin.ProtobufFileSerde
+      kafka.clusters.0.serde.5.topicValuesPattern: "hermes.blocks"
+      kafka.clusters.0.serde.5.properties.protobufFilesDir: /proto/
+      kafka.clusters.0.serde.5.properties.protobufMessageName: block_summary.HermesBlockSummary
+      # Protobuf serdes for space.membership topic
+      kafka.clusters.0.serde.6.name: SpaceMembershipRoleGranted
+      kafka.clusters.0.serde.6.className: com.provectus.kafka.ui.serdes.builtin.ProtobufFileSerde
+      kafka.clusters.0.serde.6.topicValuesPattern: "space.membership"
+      kafka.clusters.0.serde.6.properties.protobufFilesDir: /proto/
+      kafka.clusters.0.serde.6.properties.protobufMessageName: membership.HermesRoleGranted
+      kafka.clusters.0.serde.7.name: SpaceMembershipRoleRevoked
+      kafka.clusters.0.serde.7.className: com.provectus.kafka.ui.serdes.builtin.ProtobufFileSerde
+      kafka.clusters.0.serde.7.topicValuesPattern: "space.membership"
+      kafka.clusters.0.serde.7.properties.protobufFilesDir: /proto/
+      kafka.clusters.0.serde.7.properties.protobufMessageName: membership.HermesRoleRevoked
+      kafka.clusters.0.serde.8.name: SpaceMembershipSpaceLeft
+      kafka.clusters.0.serde.8.className: com.provectus.kafka.ui.serdes.builtin.ProtobufFileSerde
+      kafka.clusters.0.serde.8.topicValuesPattern: "space.membership"
+      kafka.clusters.0.serde.8.properties.protobufFilesDir: /proto/
+      kafka.clusters.0.serde.8.properties.protobufMessageName: membership.HermesSpaceLeft
+      # Protobuf serdes for space.moderation topic
+      kafka.clusters.0.serde.9.name: SpaceModerationEditorFlagged
+      kafka.clusters.0.serde.9.className: com.provectus.kafka.ui.serdes.builtin.ProtobufFileSerde
+      kafka.clusters.0.serde.9.topicValuesPattern: "space.moderation"
+      kafka.clusters.0.serde.9.properties.protobufFilesDir: /proto/
+      kafka.clusters.0.serde.9.properties.protobufMessageName: moderation.HermesEditorFlagged
+      kafka.clusters.0.serde.10.name: SpaceModerationEditorUnflagged
+      kafka.clusters.0.serde.10.className: com.provectus.kafka.ui.serdes.builtin.ProtobufFileSerde
+      kafka.clusters.0.serde.10.topicValuesPattern: "space.moderation"
+      kafka.clusters.0.serde.10.properties.protobufFilesDir: /proto/
+      kafka.clusters.0.serde.10.properties.protobufMessageName: moderation.HermesEditorUnflagged
+      kafka.clusters.0.serde.11.name: SpaceModerationContentFlagged
+      kafka.clusters.0.serde.11.className: com.provectus.kafka.ui.serdes.builtin.ProtobufFileSerde
+      kafka.clusters.0.serde.11.topicValuesPattern: "space.moderation"
+      kafka.clusters.0.serde.11.properties.protobufFilesDir: /proto/
+      kafka.clusters.0.serde.11.properties.protobufMessageName: moderation.HermesContentFlagged
+      kafka.clusters.0.serde.12.name: SpaceModerationContentUnflagged
+      kafka.clusters.0.serde.12.className: com.provectus.kafka.ui.serdes.builtin.ProtobufFileSerde
+      kafka.clusters.0.serde.12.topicValuesPattern: "space.moderation"
+      kafka.clusters.0.serde.12.properties.protobufFilesDir: /proto/
+      kafka.clusters.0.serde.12.properties.protobufMessageName: moderation.HermesContentUnflagged
+      # Protobuf serde for space.topics topic
+      kafka.clusters.0.serde.13.name: SpaceTopicsDeclared
+      kafka.clusters.0.serde.13.className: com.provectus.kafka.ui.serdes.builtin.ProtobufFileSerde
+      kafka.clusters.0.serde.13.topicValuesPattern: "space.topics"
+      kafka.clusters.0.serde.13.properties.protobufFilesDir: /proto/
+      kafka.clusters.0.serde.13.properties.protobufMessageName: topics.HermesTopicDeclared
+      # Protobuf serdes for space.governance topic
+      kafka.clusters.0.serde.14.name: GovernanceProposalCreated
+      kafka.clusters.0.serde.14.className: com.provectus.kafka.ui.serdes.builtin.ProtobufFileSerde
+      kafka.clusters.0.serde.14.topicValuesPattern: "space.governance"
+      kafka.clusters.0.serde.14.properties.protobufFilesDir: /proto/
+      kafka.clusters.0.serde.14.properties.protobufMessageName: governance.HermesProposalCreated
+      kafka.clusters.0.serde.15.name: GovernanceProposalUpdated
+      kafka.clusters.0.serde.15.className: com.provectus.kafka.ui.serdes.builtin.ProtobufFileSerde
+      kafka.clusters.0.serde.15.topicValuesPattern: "space.governance"
+      kafka.clusters.0.serde.15.properties.protobufFilesDir: /proto/
+      kafka.clusters.0.serde.15.properties.protobufMessageName: governance.HermesProposalUpdated
+      kafka.clusters.0.serde.16.name: GovernanceProposalVoted
+      kafka.clusters.0.serde.16.className: com.provectus.kafka.ui.serdes.builtin.ProtobufFileSerde
+      kafka.clusters.0.serde.16.topicValuesPattern: "space.governance"
+      kafka.clusters.0.serde.16.properties.protobufFilesDir: /proto/
+      kafka.clusters.0.serde.16.properties.protobufMessageName: governance.HermesProposalVoted
+      kafka.clusters.0.serde.17.name: GovernanceProposalExecuted
+      kafka.clusters.0.serde.17.className: com.provectus.kafka.ui.serdes.builtin.ProtobufFileSerde
+      kafka.clusters.0.serde.17.topicValuesPattern: "space.governance"
+      kafka.clusters.0.serde.17.properties.protobufFilesDir: /proto/
+      kafka.clusters.0.serde.17.properties.protobufMessageName: governance.HermesProposalExecuted
+      # Protobuf serde for curation.votes topic
+      kafka.clusters.0.serde.18.name: CurationVotes
+      kafka.clusters.0.serde.18.className: com.provectus.kafka.ui.serdes.builtin.ProtobufFileSerde
+      kafka.clusters.0.serde.18.topicValuesPattern: "curation.votes"
+      kafka.clusters.0.serde.18.properties.protobufFilesDir: /proto/
+      kafka.clusters.0.serde.18.properties.protobufMessageName: voting.HermesVoteCast
     volumes:
       - ../wire/proto/grc20.proto:/proto/grc20.proto:ro
+      - ../hermes-schema/proto/block_summary.proto:/proto/block_summary.proto:ro
       - ../hermes-schema/proto/blockchain_metadata.proto:/proto/blockchain_metadata.proto:ro
+      - ../hermes-schema/proto/governance.proto:/proto/governance.proto:ro
       - ../hermes-schema/proto/knowledge.proto:/proto/knowledge.proto:ro
+      - ../hermes-schema/proto/membership.proto:/proto/membership.proto:ro
+      - ../hermes-schema/proto/moderation.proto:/proto/moderation.proto:ro
       - ../hermes-schema/proto/scoring.proto:/proto/scoring.proto:ro
       - ../hermes-schema/proto/space.proto:/proto/space.proto:ro
+      - ../hermes-schema/proto/topics.proto:/proto/topics.proto:ro
       - ../hermes-schema/proto/topology.proto:/proto/topology.proto:ro
+      - ../hermes-schema/proto/voting.proto:/proto/voting.proto:ro
     depends_on:
       kafka:
         condition: service_healthy

@@ -16,7 +16,7 @@ opentelemetry_sdk = { version = "0.31", features = ["rt-tokio"] }
 opentelemetry-stdout = { version = "0.31", features = ["trace"] }
 
 # Sentry
-sentry = { version = "0.46", default-features = false, features = ["backtrace", "contexts", "opentelemetry", "panic", "reqwest", "rustls", "tracing"] }
+sentry = { version = "0.46", default-features = false, features = ["backtrace", "contexts", "logs", "opentelemetry", "panic", "reqwest", "rustls", "tracing"] }
 
 # Error handling
 thiserror = "2"

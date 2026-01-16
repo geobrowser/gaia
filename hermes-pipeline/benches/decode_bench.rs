@@ -8,8 +8,8 @@ use alloy::sol;
 use alloy::sol_types::SolType;
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use hermes_pipeline::decode::{
-    ProposalActionType, decode_address_arg, decode_flag_data, decode_proposal_created,
-    decode_proposal_voted, decode_topic_declared, decode_vote_data, selectors,
+    ProposalActionType, decode_flag_data, decode_proposal_created, decode_proposal_voted,
+    decode_space_id_arg, decode_topic_declared, decode_vote_data, selectors,
 };
 
 // Solidity type for encoding test data
@@ -38,9 +38,9 @@ fn generate_proposal_created_data(num_actions: usize) -> Vec<u8> {
             };
 
             let mut calldata = selector.to_vec();
-            // Add padded address argument
-            calldata.extend_from_slice(&[0u8; 12]);
-            calldata.extend_from_slice(&[(i % 256) as u8; 20]);
+            // Add bytes16 space ID argument (right-padded to 32 bytes)
+            calldata.extend_from_slice(&[(i % 256) as u8; 16]);
+            calldata.extend_from_slice(&[0u8; 16]);
 
             TestAction {
                 to: Address::ZERO,
@@ -69,11 +69,11 @@ fn generate_vote_data() -> Vec<u8> {
     VoteDataType::abi_encode(&(version, group_id, space_pov))
 }
 
-/// Generate calldata with function selector and address argument.
-fn generate_address_calldata() -> Vec<u8> {
+/// Generate calldata with function selector and bytes16 space ID argument.
+fn generate_space_id_calldata() -> Vec<u8> {
     let mut calldata = selectors::ADD_MEMBER.to_vec();
-    calldata.extend_from_slice(&[0u8; 12]); // padding
-    calldata.extend_from_slice(&[0x11u8; 20]); // address
+    calldata.extend_from_slice(&[0x11u8; 16]); // bytes16 space ID
+    calldata.extend_from_slice(&[0u8; 16]); // right-padding
     calldata
 }
 
@@ -97,7 +97,7 @@ fn bench_proposal_action_type_from_calldata(c: &mut Criterion) {
     let mut group = c.benchmark_group("proposal_action_type");
 
     // Benchmark with known selector
-    let known_calldata = generate_address_calldata();
+    let known_calldata = generate_space_id_calldata();
     group.bench_function("known_selector", |b| {
         b.iter(|| ProposalActionType::from_calldata(black_box(&known_calldata)))
     });
@@ -139,21 +139,21 @@ fn bench_proposal_action_type_from_calldata(c: &mut Criterion) {
 }
 
 // =============================================================================
-// Address Decoding Benchmarks
+// Space ID Decoding Benchmarks
 // =============================================================================
 
-fn bench_decode_address_arg(c: &mut Criterion) {
-    let mut group = c.benchmark_group("decode_address_arg");
+fn bench_decode_space_id_arg(c: &mut Criterion) {
+    let mut group = c.benchmark_group("decode_space_id_arg");
 
-    let valid_calldata = generate_address_calldata();
+    let valid_calldata = generate_space_id_calldata();
     group.bench_function("valid_calldata", |b| {
-        b.iter(|| decode_address_arg(black_box(&valid_calldata)))
+        b.iter(|| decode_space_id_arg(black_box(&valid_calldata)))
     });
 
     // Too short calldata
     let short_calldata = selectors::ADD_MEMBER.to_vec();
     group.bench_function("too_short", |b| {
-        b.iter(|| decode_address_arg(black_box(&short_calldata)))
+        b.iter(|| decode_space_id_arg(black_box(&short_calldata)))
     });
 
     group.finish();
@@ -326,7 +326,7 @@ fn bench_combined_decoding(c: &mut Criterion) {
 criterion_group!(
     benches,
     bench_proposal_action_type_from_calldata,
-    bench_decode_address_arg,
+    bench_decode_space_id_arg,
     bench_decode_proposal_created,
     bench_decode_proposal_voted,
     bench_decode_vote_data,

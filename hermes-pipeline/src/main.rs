@@ -822,7 +822,7 @@ fn main() -> anyhow::Result<()> {
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()?
-        .block_on(async_main().instrument(info_span!("hermes_pipeline.run")))
+        .block_on(async_main())
 }
 
 async fn async_main() -> anyhow::Result<()> {

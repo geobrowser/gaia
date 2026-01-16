@@ -2,6 +2,7 @@ use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 
+use hermes_instrumentation::warn;
 use hermes_schema::pb::knowledge::HermesEdit;
 use indexer_utils::id::transform_id_bytes;
 use uuid::Uuid;
@@ -48,14 +49,18 @@ impl EditMetadata {
 }
 
 /// Process a HermesEdit message and return the extracted data
-pub fn handle_edit(edit: &HermesEdit) -> Result<EditResult, HandlerError> {
+pub fn handle_edit(
+    edit: &HermesEdit,
+    property_types: &mut HashMap<Uuid, DataType>,
+) -> Result<EditResult, HandlerError> {
     let space_id = parse_space_id(edit.space_id.as_slice())?;
     let meta = EditMetadata::from_edit(edit);
 
     // Extract all data from the edit
     let entities = extract_entities(edit, &meta);
     let properties = extract_properties(edit);
-    let value_ops = extract_values(edit, &space_id);
+    update_property_types(property_types, &properties);
+    let value_ops = extract_values(edit, &space_id, property_types);
     let relation_ops = extract_relations(edit, &space_id);
 
     // Squash operations within this edit to resolve conflicts
@@ -350,7 +355,31 @@ fn extract_properties(edit: &HermesEdit) -> Vec<PropertyItem> {
     properties
 }
 
-fn extract_values(edit: &HermesEdit, space_id: &Uuid) -> Vec<ValueOp> {
+fn update_property_types(
+    property_types: &mut HashMap<Uuid, DataType>,
+    properties: &[PropertyItem],
+) {
+    for property in properties {
+        if let Some(existing) = property_types.get(&property.id) {
+            if *existing != property.data_type {
+                warn!(
+                    property_id = %property.id,
+                    existing_type = %existing,
+                    new_type = %property.data_type,
+                    "Attempted to change property data type; keeping existing"
+                );
+            }
+            continue;
+        }
+        property_types.insert(property.id, property.data_type);
+    }
+}
+
+fn extract_values(
+    edit: &HermesEdit,
+    space_id: &Uuid,
+    property_types: &HashMap<Uuid, DataType>,
+) -> Vec<ValueOp> {
     let mut value_ops = Vec::new();
 
     for op in &edit.ops {
@@ -371,7 +400,19 @@ fn extract_values(edit: &HermesEdit, space_id: &Uuid) -> Vec<ValueOp> {
                         let (language, unit) = extract_options(&value.options);
                         let value_id = derive_value_id(&entity_id, &property_id, space_id);
 
-                        value_ops.push(ValueOp {
+                        let data_type = match property_types.get(&property_id) {
+                            Some(data_type) => *data_type,
+                            None => {
+                                warn!(
+                                    property_id = %property_id,
+                                    entity_id = %entity_id,
+                                    "Property data type not found; skipping value"
+                                );
+                                continue;
+                            }
+                        };
+
+                        let base_op = ValueOp {
                             id: value_id,
                             change_type: ValueChangeType::Set,
                             entity_id,
@@ -379,12 +420,18 @@ fn extract_values(edit: &HermesEdit, space_id: &Uuid) -> Vec<ValueOp> {
                             space_id: *space_id,
                             language,
                             unit,
-                            string: Some(value.value.clone()),
+                            string: None,
                             number: None,
                             boolean: None,
                             time: None,
                             point: None,
-                        });
+                        };
+
+                        if let Some(populated) =
+                            populate_value_fields_by_datatype(base_op, data_type, &value.value)
+                        {
+                            value_ops.push(populated);
+                        }
                     }
                 }
                 Payload::UnsetEntityValues(entity) => {
@@ -423,6 +470,52 @@ fn extract_values(edit: &HermesEdit, space_id: &Uuid) -> Vec<ValueOp> {
     }
 
     value_ops
+}
+
+fn populate_value_fields_by_datatype(
+    mut base_op: ValueOp,
+    data_type: DataType,
+    raw_value: &str,
+) -> Option<ValueOp> {
+    match data_type {
+        DataType::String | DataType::Relation => {
+            base_op.string = Some(raw_value.to_string());
+        }
+        DataType::Number => {
+            if let Ok(num) = raw_value.parse::<f64>() {
+                base_op.number = Some(num);
+            } else {
+                warn!(
+                    property_id = %base_op.property_id,
+                    entity_id = %base_op.entity_id,
+                    value = raw_value,
+                    "Unable to parse number value; skipping"
+                );
+                return None;
+            }
+        }
+        DataType::Boolean => match raw_value {
+            "0" => base_op.boolean = Some(false),
+            "1" => base_op.boolean = Some(true),
+            _ => {
+                warn!(
+                    property_id = %base_op.property_id,
+                    entity_id = %base_op.entity_id,
+                    value = raw_value,
+                    "Unable to parse boolean value; skipping"
+                );
+                return None;
+            }
+        },
+        DataType::Time => {
+            base_op.time = Some(raw_value.to_string());
+        }
+        DataType::Point => {
+            base_op.point = Some(raw_value.to_string());
+        }
+    }
+
+    Some(base_op)
 }
 
 fn extract_relations(edit: &HermesEdit, space_id: &Uuid) -> Vec<RelationOp> {

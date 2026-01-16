@@ -271,15 +271,16 @@ pub enum VoteOption {
 }
 
 /// DAOSpace function selectors for proposal actions.
+/// Note: DAOSpace uses bytes16 for space IDs, not address.
 pub mod selectors {
-    /// addMember(address)
-    pub const ADD_MEMBER: [u8; 4] = [0xca, 0x6d, 0x56, 0xdc];
-    /// removeMember(address)
-    pub const REMOVE_MEMBER: [u8; 4] = [0x0b, 0x1c, 0xa4, 0x9a];
-    /// addEditor(address)
-    pub const ADD_EDITOR: [u8; 4] = [0xe5, 0x97, 0x5b, 0xdc];
-    /// removeEditor(address)
-    pub const REMOVE_EDITOR: [u8; 4] = [0x2d, 0x55, 0xfe, 0xaf];
+    /// addMember(bytes16)
+    pub const ADD_MEMBER: [u8; 4] = [0x2a, 0xfb, 0xe3, 0x50];
+    /// removeMember(bytes16)
+    pub const REMOVE_MEMBER: [u8; 4] = [0x35, 0xfa, 0x4f, 0x95];
+    /// addEditor(bytes16)
+    pub const ADD_EDITOR: [u8; 4] = [0x1c, 0xc8, 0xe1, 0x8a];
+    /// removeEditor(bytes16)
+    pub const REMOVE_EDITOR: [u8; 4] = [0x72, 0x3a, 0xe1, 0xe8];
     /// publish(bytes32,bytes,bytes)
     pub const PUBLISH: [u8; 4] = [0x6b, 0x47, 0xf6, 0x1a];
     /// flag(bytes32,bytes)
@@ -298,11 +299,12 @@ pub struct ProposalAction {
 
 impl ProposalAction {
     /// Create an addMember action.
-    pub fn add_member(member_address: [u8; 20]) -> Self {
+    /// Takes a space ID (bytes16), not an address.
+    pub fn add_member(member_space_id: SpaceId) -> Self {
         let mut data = selectors::ADD_MEMBER.to_vec();
-        // ABI-encode address (padded to 32 bytes)
-        data.extend_from_slice(&[0u8; 12]);
-        data.extend_from_slice(&member_address);
+        // ABI-encode bytes16 (right-padded to 32 bytes)
+        data.extend_from_slice(&member_space_id);
+        data.extend_from_slice(&[0u8; 16]);
         Self {
             to: [0u8; 20], // Target is the DAOSpace contract itself
             value: [0u8; 32],
@@ -311,11 +313,12 @@ impl ProposalAction {
     }
 
     /// Create a removeMember action.
-    pub fn remove_member(member_address: [u8; 20]) -> Self {
+    /// Takes a space ID (bytes16), not an address.
+    pub fn remove_member(member_space_id: SpaceId) -> Self {
         let mut data = selectors::REMOVE_MEMBER.to_vec();
-        // ABI-encode address (padded to 32 bytes)
-        data.extend_from_slice(&[0u8; 12]);
-        data.extend_from_slice(&member_address);
+        // ABI-encode bytes16 (right-padded to 32 bytes)
+        data.extend_from_slice(&member_space_id);
+        data.extend_from_slice(&[0u8; 16]);
         Self {
             to: [0u8; 20],
             value: [0u8; 32],
@@ -324,10 +327,12 @@ impl ProposalAction {
     }
 
     /// Create an addEditor action.
-    pub fn add_editor(editor_address: [u8; 20]) -> Self {
+    /// Takes a space ID (bytes16), not an address.
+    pub fn add_editor(editor_space_id: SpaceId) -> Self {
         let mut data = selectors::ADD_EDITOR.to_vec();
-        data.extend_from_slice(&[0u8; 12]);
-        data.extend_from_slice(&editor_address);
+        // ABI-encode bytes16 (right-padded to 32 bytes)
+        data.extend_from_slice(&editor_space_id);
+        data.extend_from_slice(&[0u8; 16]);
         Self {
             to: [0u8; 20],
             value: [0u8; 32],
@@ -336,10 +341,12 @@ impl ProposalAction {
     }
 
     /// Create a removeEditor action.
-    pub fn remove_editor(editor_address: [u8; 20]) -> Self {
+    /// Takes a space ID (bytes16), not an address.
+    pub fn remove_editor(editor_space_id: SpaceId) -> Self {
         let mut data = selectors::REMOVE_EDITOR.to_vec();
-        data.extend_from_slice(&[0u8; 12]);
-        data.extend_from_slice(&editor_address);
+        // ABI-encode bytes16 (right-padded to 32 bytes)
+        data.extend_from_slice(&editor_space_id);
+        data.extend_from_slice(&[0u8; 16]);
         Self {
             to: [0u8; 20],
             value: [0u8; 32],
@@ -1113,7 +1120,7 @@ pub mod test_topology {
             SPACE_A,
             PROPOSAL_1,
             VotingMode::Fast,
-            vec![ProposalAction::add_member([0x11; 20])],
+            vec![ProposalAction::add_member(make_id(0x11))],
         ));
         actions.push(proposal_settings_selected(
             SPACE_A,
@@ -1144,7 +1151,7 @@ pub mod test_topology {
             SPACE_A,
             PROPOSAL_2,
             VotingMode::Slow,
-            vec![ProposalAction::remove_member([0x12; 20])],
+            vec![ProposalAction::remove_member(make_id(0x12))],
         ));
         actions.push(proposal_settings_selected(
             SPACE_A,
@@ -1176,7 +1183,7 @@ pub mod test_topology {
             SPACE_B,
             PROPOSAL_3,
             VotingMode::Fast,
-            vec![ProposalAction::add_editor([0x22; 20])],
+            vec![ProposalAction::add_editor(make_id(0x22))],
         ));
         actions.push(proposal_settings_selected(
             SPACE_B,
@@ -1213,7 +1220,7 @@ pub mod test_topology {
             SPACE_B,
             PROPOSAL_4,
             VotingMode::Slow,
-            vec![ProposalAction::remove_editor([0x23; 20])],
+            vec![ProposalAction::remove_editor(make_id(0x23))],
         ));
         actions.push(proposal_settings_selected(
             SPACE_B,
@@ -1618,13 +1625,13 @@ mod tests {
     fn test_proposal_created_format() {
         let space_id = make_id(0x01);
         let proposal_id = make_proposal_id(0xA1);
-        let member_address = [0xBB; 20];
+        let member_space_id = make_id(0xBB);
 
         let action = proposal_created(
             space_id,
             proposal_id,
             VotingMode::Fast,
-            vec![ProposalAction::add_member(member_address)],
+            vec![ProposalAction::add_member(member_space_id)],
         );
 
         assert_eq!(action.from_id, space_id.to_vec());
@@ -1641,13 +1648,13 @@ mod tests {
     fn test_proposal_created_slow_path_format() {
         let space_id = make_id(0x01);
         let proposal_id = make_proposal_id(0xA2);
-        let member_address = [0xCC; 20];
+        let member_space_id = make_id(0xCC);
 
         let action = proposal_created(
             space_id,
             proposal_id,
             VotingMode::Slow,
-            vec![ProposalAction::add_member(member_address)],
+            vec![ProposalAction::add_member(member_space_id)],
         );
 
         assert!(!action.data.is_empty());
@@ -1708,50 +1715,50 @@ mod tests {
 
     #[test]
     fn test_proposal_action_add_member() {
-        let member_address = [0xAA; 20];
-        let action = ProposalAction::add_member(member_address);
+        let member_space_id = make_id(0xAA);
+        let action = ProposalAction::add_member(member_space_id);
 
         // Calldata should start with ADD_MEMBER selector
         assert_eq!(&action.data[0..4], &selectors::ADD_MEMBER);
-        // Followed by padded address
-        assert_eq!(&action.data[4..16], &[0u8; 12]);
-        assert_eq!(&action.data[16..36], &member_address);
+        // Followed by bytes16 right-padded to 32 bytes
+        assert_eq!(&action.data[4..20], &member_space_id);
+        assert_eq!(&action.data[20..36], &[0u8; 16]);
     }
 
     #[test]
     fn test_proposal_action_remove_member() {
-        let member_address = [0xBB; 20];
-        let action = ProposalAction::remove_member(member_address);
+        let member_space_id = make_id(0xBB);
+        let action = ProposalAction::remove_member(member_space_id);
 
         // Calldata should start with REMOVE_MEMBER selector
         assert_eq!(&action.data[0..4], &selectors::REMOVE_MEMBER);
-        // Followed by padded address
-        assert_eq!(&action.data[4..16], &[0u8; 12]);
-        assert_eq!(&action.data[16..36], &member_address);
+        // Followed by bytes16 right-padded to 32 bytes
+        assert_eq!(&action.data[4..20], &member_space_id);
+        assert_eq!(&action.data[20..36], &[0u8; 16]);
     }
 
     #[test]
     fn test_proposal_action_add_editor() {
-        let editor_address = [0xCC; 20];
-        let action = ProposalAction::add_editor(editor_address);
+        let editor_space_id = make_id(0xCC);
+        let action = ProposalAction::add_editor(editor_space_id);
 
         // Calldata should start with ADD_EDITOR selector
         assert_eq!(&action.data[0..4], &selectors::ADD_EDITOR);
-        // Followed by padded address
-        assert_eq!(&action.data[4..16], &[0u8; 12]);
-        assert_eq!(&action.data[16..36], &editor_address);
+        // Followed by bytes16 right-padded to 32 bytes
+        assert_eq!(&action.data[4..20], &editor_space_id);
+        assert_eq!(&action.data[20..36], &[0u8; 16]);
     }
 
     #[test]
     fn test_proposal_action_remove_editor() {
-        let editor_address = [0xDD; 20];
-        let action = ProposalAction::remove_editor(editor_address);
+        let editor_space_id = make_id(0xDD);
+        let action = ProposalAction::remove_editor(editor_space_id);
 
         // Calldata should start with REMOVE_EDITOR selector
         assert_eq!(&action.data[0..4], &selectors::REMOVE_EDITOR);
-        // Followed by padded address
-        assert_eq!(&action.data[4..16], &[0u8; 12]);
-        assert_eq!(&action.data[16..36], &editor_address);
+        // Followed by bytes16 right-padded to 32 bytes
+        assert_eq!(&action.data[4..20], &editor_space_id);
+        assert_eq!(&action.data[20..36], &[0u8; 16]);
     }
 
     #[test]
