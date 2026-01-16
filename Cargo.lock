@@ -2461,6 +2461,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0cc23270f6e1808e30a928bdc84dea0b9b4136a8bc82338574f23baf47bbd280"
 
 [[package]]
+name = "grc-20"
+version = "0.1.0"
+source = "git+https://github.com/geobrowser/grc-20#ab1b91c2c1c47ee48f534ce2dd7c3bdab5808eb8"
+dependencies = [
+ "lazy_static",
+ "rustc-hash",
+ "sha2",
+ "thiserror 2.0.17",
+ "uuid",
+ "zstd",
+]
+
+[[package]]
 name = "group"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3335,6 +3348,7 @@ dependencies = [
  "chrono",
  "dotenv",
  "futures 0.3.31",
+ "grc-20",
  "hermes-instrumentation",
  "hermes-schema",
  "hex",
