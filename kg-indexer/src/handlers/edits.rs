@@ -3,10 +3,8 @@ use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 
 use grc_20::{
-    decode_edit,
-    Edit as Grc20Edit, Op as Grc20Op,
-    PropertyValue, Value as Grc20Value, Id as Grc20Id,
-    UnsetRelationField,
+    decode_edit, Edit as Grc20Edit, Id as Grc20Id, Op as Grc20Op, PropertyValue,
+    UnsetRelationField, Value as Grc20Value,
 };
 use hermes_schema::pb::knowledge::HermesEdit;
 use uuid::Uuid;
@@ -58,7 +56,8 @@ fn decode_payload(payload: &[u8]) -> Result<Grc20Edit<'_>, HandlerError> {
         return Err(HandlerError::DecodeError("Empty payload".to_string()));
     }
 
-    decode_edit(payload).map_err(|e| HandlerError::DecodeError(format!("GRC-20 decode error: {:?}", e)))
+    decode_edit(payload)
+        .map_err(|e| HandlerError::DecodeError(format!("GRC-20 decode error: {:?}", e)))
 }
 
 /// Convert a grc_20::Id (16 bytes) to a Uuid
@@ -67,9 +66,7 @@ fn id_to_uuid(id: &Grc20Id) -> Uuid {
 }
 
 /// Process a HermesEdit message and return the extracted data
-pub fn handle_edit(
-    edit: &HermesEdit,
-) -> Result<EditResult, HandlerError> {
+pub fn handle_edit(edit: &HermesEdit) -> Result<EditResult, HandlerError> {
     let space_id = parse_space_id(edit.space_id.as_slice())?;
     let meta = EditMetadata::from_edit(edit);
 
@@ -336,11 +333,7 @@ fn extract_entities(edit: &Grc20Edit, _space_id: &Uuid, meta: &EditMetadata) -> 
 }
 
 /// Convert a grc_20::Value to a ValueOp with appropriate fields set
-fn value_to_value_op(
-    pv: &PropertyValue,
-    entity_id: Uuid,
-    space_id: Uuid,
-) -> Option<ValueOp> {
+fn value_to_value_op(pv: &PropertyValue, entity_id: Uuid, space_id: Uuid) -> Option<ValueOp> {
     let property_id = id_to_uuid(&pv.property);
     let value_id = derive_value_id(&entity_id, &property_id, &space_id);
 
@@ -382,7 +375,11 @@ fn value_to_value_op(
                 op.unit = Some(id_to_uuid(unit_id).to_string());
             }
         }
-        Grc20Value::Decimal { exponent, mantissa, unit } => {
+        Grc20Value::Decimal {
+            exponent,
+            mantissa,
+            unit,
+        } => {
             // Convert decimal to string representation for storage
             let decimal_str = format_decimal_mantissa(mantissa, *exponent);
             op.number = Some(decimal_str);
@@ -420,7 +417,11 @@ fn value_to_value_op(
             };
             op.point = Some(point_str);
         }
-        Grc20Value::Embedding { sub_type, dims, data } => {
+        Grc20Value::Embedding {
+            sub_type,
+            dims,
+            data,
+        } => {
             // Store embedding as JSON with metadata
             let embedding_json = serde_json::json!({
                 "sub_type": format!("{:?}", sub_type),
@@ -470,15 +471,17 @@ fn format_decimal_i64(mantissa: i64, exponent: i32) -> String {
         } else {
             // Insert decimal point within the number
             let decimal_pos = mantissa_str.len() - abs_exp;
-            format!("{}{}.{}", sign, &mantissa_str[..decimal_pos], &mantissa_str[decimal_pos..])
+            format!(
+                "{}{}.{}",
+                sign,
+                &mantissa_str[..decimal_pos],
+                &mantissa_str[decimal_pos..]
+            )
         }
     }
 }
 
-fn extract_values(
-    edit: &Grc20Edit,
-    space_id: &Uuid,
-) -> Vec<ValueOp> {
+fn extract_values(edit: &Grc20Edit, space_id: &Uuid) -> Vec<ValueOp> {
     let mut value_ops = Vec::new();
 
     for op in &edit.ops {
@@ -584,17 +587,37 @@ fn extract_relations(edit: &Grc20Edit, space_id: &Uuid) -> Vec<RelationOp> {
                     relation_ops.push(RelationOp::Unset(UnsetRelationItem {
                         id: relation_id,
                         space_id: *space_id,
-                        from_space_id: updated.unset.contains(&UnsetRelationField::FromSpace).then_some(true),
-                        from_version_id: updated.unset.contains(&UnsetRelationField::FromVersion).then_some(true),
-                        to_space_id: updated.unset.contains(&UnsetRelationField::ToSpace).then_some(true),
-                        to_version_id: updated.unset.contains(&UnsetRelationField::ToVersion).then_some(true),
-                        position: updated.unset.contains(&UnsetRelationField::Position).then_some(true),
+                        from_space_id: updated
+                            .unset
+                            .contains(&UnsetRelationField::FromSpace)
+                            .then_some(true),
+                        from_version_id: updated
+                            .unset
+                            .contains(&UnsetRelationField::FromVersion)
+                            .then_some(true),
+                        to_space_id: updated
+                            .unset
+                            .contains(&UnsetRelationField::ToSpace)
+                            .then_some(true),
+                        to_version_id: updated
+                            .unset
+                            .contains(&UnsetRelationField::ToVersion)
+                            .then_some(true),
+                        position: updated
+                            .unset
+                            .contains(&UnsetRelationField::Position)
+                            .then_some(true),
                         verified: None,
                     }));
                 }
 
                 // If there are any set fields, emit an Update op
-                if from_space.is_some() || from_version.is_some() || to_space.is_some() || to_version.is_some() || updated.position.is_some() {
+                if from_space.is_some()
+                    || from_version.is_some()
+                    || to_space.is_some()
+                    || to_version.is_some()
+                    || updated.position.is_some()
+                {
                     relation_ops.push(RelationOp::Update(UpdateRelationItem {
                         id: relation_id,
                         space_id: *space_id,
@@ -633,7 +656,6 @@ fn derive_value_id(entity_id: &Uuid, property_id: &Uuid, space_id: &Uuid) -> Uui
 
     Uuid::from_bytes(bytes)
 }
-
 
 #[cfg(test)]
 mod tests {

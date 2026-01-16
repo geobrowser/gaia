@@ -9,8 +9,8 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 
 use async_trait::async_trait;
-use grc_20::{encode_edit, Edit, Op, CreateEntity, PropertyValue, Value as Grc20Value};
 use grc_20::genesis::properties;
+use grc_20::{CreateEntity, Edit, Op, PropertyValue, Value as Grc20Value, encode_edit};
 
 use super::{CacheError, CachedEdit, IpfsCache};
 
@@ -77,7 +77,10 @@ impl MockIpfsCache {
         self.insert_edit("QmRootEdit1CreatePersons", create_persons_edit());
         self.insert_edit("QmRootEdit2AddDescriptions", create_descriptions_edit());
         self.insert_edit("QmRootEdit3CreateTypes", create_types_edit());
-        self.insert_edit("QmRootEdit4CreateTypeRelations", create_type_relations_edit());
+        self.insert_edit(
+            "QmRootEdit4CreateTypeRelations",
+            create_type_relations_edit(),
+        );
         self.insert_edit("QmRootEdit5DeleteTypeRelation", delete_type_relation_edit());
 
         // Space edits
@@ -104,7 +107,10 @@ impl Default for MockIpfsCache {
 impl IpfsCache for MockIpfsCache {
     async fn get(&self, ipfs_hash: &str, space_id: &[u8]) -> Result<CachedEdit, CacheError> {
         if self.errored_hashes.contains(ipfs_hash) {
-            return Ok(CachedEdit::errored(ipfs_hash.to_string(), space_id.to_vec()));
+            return Ok(CachedEdit::errored(
+                ipfs_hash.to_string(),
+                space_id.to_vec(),
+            ));
         }
 
         match self.payloads.get(ipfs_hash) {
@@ -168,7 +174,10 @@ fn create_descriptions_edit() -> Edit<'static> {
         ops: vec![
             Op::CreateEntity(CreateEntity {
                 id: ENTITY_PERSON_1,
-                values: vec![text_value(properties::description(), "A software developer")],
+                values: vec![text_value(
+                    properties::description(),
+                    "A software developer",
+                )],
             }),
             Op::CreateEntity(CreateEntity {
                 id: ENTITY_PERSON_2,
@@ -228,15 +237,13 @@ fn create_org_edit() -> Edit<'static> {
         name: Cow::Borrowed("Create Organization"),
         authors: vec![AUTHOR_1],
         created_at: 1700000005,
-        ops: vec![
-            Op::CreateEntity(CreateEntity {
-                id: ENTITY_ORG_1,
-                values: vec![
-                    text_value(properties::name(), "Acme Corp"),
-                    text_value(properties::description(), "A technology company"),
-                ],
-            }),
-        ],
+        ops: vec![Op::CreateEntity(CreateEntity {
+            id: ENTITY_ORG_1,
+            values: vec![
+                text_value(properties::name(), "Acme Corp"),
+                text_value(properties::description(), "A technology company"),
+            ],
+        })],
     }
 }
 
@@ -276,15 +283,13 @@ fn create_topic_edit() -> Edit<'static> {
         name: Cow::Borrowed("Create Topic"),
         authors: vec![AUTHOR_1],
         created_at: 1700000008,
-        ops: vec![
-            Op::CreateEntity(CreateEntity {
-                id: ENTITY_TOPIC_1,
-                values: vec![
-                    text_value(properties::name(), "Blockchain Technology"),
-                    text_value(properties::description(), "Distributed ledger technology"),
-                ],
-            }),
-        ],
+        ops: vec![Op::CreateEntity(CreateEntity {
+            id: ENTITY_TOPIC_1,
+            values: vec![
+                text_value(properties::name(), "Blockchain Technology"),
+                text_value(properties::description(), "Distributed ledger technology"),
+            ],
+        })],
     }
 }
 
@@ -299,12 +304,27 @@ mod tests {
         let space_id = vec![0x01; 16];
 
         // All edits should be present
-        assert!(cache.get("QmRootEdit1CreatePersons", &space_id).await.is_ok());
-        assert!(cache.get("QmRootEdit2AddDescriptions", &space_id).await.is_ok());
+        assert!(
+            cache
+                .get("QmRootEdit1CreatePersons", &space_id)
+                .await
+                .is_ok()
+        );
+        assert!(
+            cache
+                .get("QmRootEdit2AddDescriptions", &space_id)
+                .await
+                .is_ok()
+        );
         assert!(cache.get("QmRootEdit3CreateTypes", &space_id).await.is_ok());
         assert!(cache.get("QmSpaceAEdit1CreateOrg", &space_id).await.is_ok());
         assert!(cache.get("QmSpaceBEdit1CreateDoc", &space_id).await.is_ok());
-        assert!(cache.get("QmSpaceCEdit1CreateTopic", &space_id).await.is_ok());
+        assert!(
+            cache
+                .get("QmSpaceCEdit1CreateTopic", &space_id)
+                .await
+                .is_ok()
+        );
     }
 
     #[tokio::test]
@@ -321,7 +341,10 @@ mod tests {
         let cache = MockIpfsCache::new();
         let space_id = vec![0x01; 16];
 
-        let result = cache.get("QmRootEdit1CreatePersons", &space_id).await.unwrap();
+        let result = cache
+            .get("QmRootEdit1CreatePersons", &space_id)
+            .await
+            .unwrap();
         assert!(!result.is_errored);
         assert!(result.has_content());
 
@@ -337,7 +360,10 @@ mod tests {
         let cache = MockIpfsCache::with_errored_hashes(vec!["QmRootEdit1CreatePersons".into()]);
         let space_id = vec![0x01; 16];
 
-        let result = cache.get("QmRootEdit1CreatePersons", &space_id).await.unwrap();
+        let result = cache
+            .get("QmRootEdit1CreatePersons", &space_id)
+            .await
+            .unwrap();
         assert!(result.is_errored);
         assert!(!result.has_content());
         assert!(result.payload.is_none());

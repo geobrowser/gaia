@@ -247,9 +247,11 @@ async fn fetch_edit_with_retry(
             if cached_edit.is_errored {
                 EditFetchResult::Errored
             } else if let Some(payload) = cached_edit.payload {
-                debug_span!("convert").in_scope(|| match convert(action, &payload, meta, sequence) {
-                    Ok(event) => EditFetchResult::Success(Box::new(event)),
-                    Err(_) => EditFetchResult::FetchFailed,
+                debug_span!("convert").in_scope(|| {
+                    match convert(action, &payload, meta, sequence) {
+                        Ok(event) => EditFetchResult::Success(Box::new(event)),
+                        Err(_) => EditFetchResult::FetchFailed,
+                    }
                 })
             } else {
                 // Entry exists but no payload content
@@ -308,9 +310,11 @@ fn convert(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::borrow::Cow;
-    use grc_20::{encode_edit, Edit as Grc20Edit, Op, CreateEntity, PropertyValue, Value as Grc20Value};
     use grc_20::genesis::properties;
+    use grc_20::{
+        CreateEntity, Edit as Grc20Edit, Op, PropertyValue, Value as Grc20Value, encode_edit,
+    };
+    use std::borrow::Cow;
 
     fn test_meta() -> BlockMetadata {
         BlockMetadata {
@@ -326,18 +330,16 @@ mod tests {
             name: Cow::Borrowed("Test Edit"),
             authors: vec![[4u8; 16]],
             created_at: 1700000000,
-            ops: vec![
-                Op::CreateEntity(CreateEntity {
-                    id: [2u8; 16],
-                    values: vec![PropertyValue {
-                        property: properties::name(),
-                        value: Grc20Value::Text {
-                            value: Cow::Borrowed("test"),
-                            language: None,
-                        },
-                    }],
-                }),
-            ],
+            ops: vec![Op::CreateEntity(CreateEntity {
+                id: [2u8; 16],
+                values: vec![PropertyValue {
+                    property: properties::name(),
+                    value: Grc20Value::Text {
+                        value: Cow::Borrowed("test"),
+                        language: None,
+                    },
+                }],
+            })],
         };
         encode_edit(&edit).expect("Should encode test edit")
     }

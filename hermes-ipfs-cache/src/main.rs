@@ -21,7 +21,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::env;
 
-use grc_20::{encode_edit, Edit as Grc20Edit};
+use grc_20::{Edit as Grc20Edit, encode_edit};
 use hermes_instrumentation::{Backend, Config, info};
 use hermes_ipfs_cache::{IpfsCacheSink, cache::CacheSource};
 use hermes_relay::{HermesModule, Sink, StreamSource};

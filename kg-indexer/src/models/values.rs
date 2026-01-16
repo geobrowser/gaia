@@ -32,16 +32,16 @@ pub struct ValueOp {
     pub language: Option<String>,
     pub unit: Option<String>,
     // Value columns (one will be set based on DataType)
-    pub string: Option<String>,      // Text
-    pub number: Option<String>,      // Decimal (stored as string for precision)
-    pub boolean: Option<bool>,       // Bool
-    pub time: Option<String>,        // Time
-    pub point: Option<String>,       // Point
-    pub integer: Option<i64>,        // Int64
-    pub float: Option<f64>,          // Float64
-    pub bytes: Option<Vec<u8>>,      // Bytes
-    pub date: Option<String>,        // Date
-    pub datetime: Option<String>,    // Datetime
-    pub schedule: Option<JsonValue>, // Schedule
+    pub string: Option<String>,       // Text
+    pub number: Option<String>,       // Decimal (stored as string for precision)
+    pub boolean: Option<bool>,        // Bool
+    pub time: Option<String>,         // Time
+    pub point: Option<String>,        // Point
+    pub integer: Option<i64>,         // Int64
+    pub float: Option<f64>,           // Float64
+    pub bytes: Option<Vec<u8>>,       // Bytes
+    pub date: Option<String>,         // Date
+    pub datetime: Option<String>,     // Datetime
+    pub schedule: Option<JsonValue>,  // Schedule
     pub embedding: Option<JsonValue>, // Embedding
 }
