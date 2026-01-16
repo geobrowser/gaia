@@ -14,6 +14,9 @@ pub enum HandlerError {
 
     #[error("Unknown membership role: {0}")]
     UnknownRole(i32),
+
+    #[error("Decode error: {0}")]
+    DecodeError(String),
 }
 
 /// Top-level errors for the indexer
