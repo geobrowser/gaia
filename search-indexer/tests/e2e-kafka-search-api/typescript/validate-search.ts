@@ -307,7 +307,7 @@ class SearchValidator {
   }
 
   async test8_TypeIdsScenarios(): Promise<void> {
-    console.log(`\n${BLUE}Test 7: Verify typeIds field for different relation scenarios${NC}`);
+    console.log(`\n${BLUE}Test 8: Verify typeIds field for different relation scenarios${NC}`);
 
     const response = await this.search({
       query: 'alice',
@@ -315,7 +315,7 @@ class SearchValidator {
     });
 
     if (response.results.length < 3) {
-      this.addResult('test7_count', false, `Need at least 3 Alice entities for typeIds tests, got ${response.results.length}`);
+      this.addResult('test8_count', false, `Need at least 3 Alice entities for typeIds tests, got ${response.results.length}`);
       return;
     }
 
@@ -324,14 +324,14 @@ class SearchValidator {
 
     if (aliceHigh) {
       if (aliceHigh.typeIds?.length === 2) {
-        this.addResult('test7_alice_high_multiple', true,
+        this.addResult('test8_alice_high_multiple', true,
           `Alice High (${TEST_ENTITIES.ALICE_HIGH_ID}) has 2 types (multiple type relations work)`);
       } else {
-        this.addResult('test7_alice_high_multiple', false,
+        this.addResult('test8_alice_high_multiple', false,
           `Alice High (${TEST_ENTITIES.ALICE_HIGH_ID}) should have 2 types, got ${aliceHigh.typeIds?.length || 0}`);
       }
     } else {
-      this.addResult('test7_alice_high_multiple', false, `Could not find Alice High entity (${TEST_ENTITIES.ALICE_HIGH_ID})`);
+      this.addResult('test8_alice_high_multiple', false, `Could not find Alice High entity (${TEST_ENTITIES.ALICE_HIGH_ID})`);
     }
 
     // Find Alice Medium by specific entity ID (should have 2 types after create->delete->create)
@@ -339,14 +339,14 @@ class SearchValidator {
 
     if (aliceMedium) {
       if (aliceMedium.typeIds?.length === 2) {
-        this.addResult('test7_alice_medium_recreate', true,
+        this.addResult('test8_alice_medium_recreate', true,
           `Alice Medium (${TEST_ENTITIES.ALICE_MEDIUM_ID}) has 2 types (Create->Delete->Create pattern works, final create processed)`);
       } else {
-        this.addResult('test7_alice_medium_recreate', false,
+        this.addResult('test8_alice_medium_recreate', false,
           `Alice Medium (${TEST_ENTITIES.ALICE_MEDIUM_ID}) should have 2 types after recreate, got ${aliceMedium.typeIds?.length || 0}`);
       }
     } else {
-      this.addResult('test7_alice_medium_recreate', false, `Could not find Alice Medium entity (${TEST_ENTITIES.ALICE_MEDIUM_ID})`);
+      this.addResult('test8_alice_medium_recreate', false, `Could not find Alice Medium entity (${TEST_ENTITIES.ALICE_MEDIUM_ID})`);
     }
 
     // Find Alice Low by specific entity ID (should have 1 type after partial removal)
@@ -354,14 +354,14 @@ class SearchValidator {
 
     if (aliceLow) {
       if (aliceLow.typeIds?.length === 1) {
-        this.addResult('test7_alice_low_partial_removal', true,
+        this.addResult('test8_alice_low_partial_removal', true,
           `Alice Low (${TEST_ENTITIES.ALICE_LOW_ID}) has 1 type (partial removal works, kept Person after Org deleted)`);
       } else {
-        this.addResult('test7_alice_low_partial_removal', false,
+        this.addResult('test8_alice_low_partial_removal', false,
           `Alice Low (${TEST_ENTITIES.ALICE_LOW_ID}) should have 1 type after partial removal, got ${aliceLow.typeIds?.length || 0}`);
       }
     } else {
-      this.addResult('test7_alice_low_partial_removal', false, `Could not find Alice Low entity (${TEST_ENTITIES.ALICE_LOW_ID})`);
+      this.addResult('test8_alice_low_partial_removal', false, `Could not find Alice Low entity (${TEST_ENTITIES.ALICE_LOW_ID})`);
     }
 
     // Check that other Alice entities have 1 type (Person) by checking specific IDs
@@ -382,10 +382,10 @@ class SearchValidator {
     }
 
     if (allOthersHaveOneType) {
-      this.addResult('test7_others_single_type', true,
+      this.addResult('test8_others_single_type', true,
         `Other Alice entities have 1 type (Person) as expected`);
     } else {
-      this.addResult('test7_others_single_type', false,
+      this.addResult('test8_others_single_type', false,
         `Some other Alice entities don't have exactly 1 type`);
     }
   }
