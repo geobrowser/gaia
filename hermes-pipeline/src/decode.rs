@@ -20,6 +20,9 @@ pub enum DecodeError {
 
     #[error("Invalid UTF-8 in decoded string: {0}")]
     InvalidUtf8(#[from] std::string::FromUtf8Error),
+
+    #[error("Data too long: expected at most {expected} bytes, got {actual}")]
+    DataTooLong { expected: usize, actual: usize },
 }
 
 // ============================================================================
@@ -618,16 +621,19 @@ pub struct VoteData {
 ///
 /// Encoding: `abi.encode(uint16(version), bytes16(groupId), bytes16(spacePOV))`
 pub fn decode_vote_data(data: &[u8]) -> Result<VoteData, DecodeError> {
-    if data.is_empty() || data.len() < 160 {
-        return Err(DecodeError::DataTooShort {
+    let data = match data.len() {
+        0 => return Err(DecodeError::DataTooShort {
             expected: 160,
-            actual: data.len(),
-        });
-    }
-
-    // 32 bytes for offset, 32 bytes for length, then 96 with the actual data
-    // so we need to take the last 96 bytes
-    let data = &data[data.len() - 96..];
+            actual: 0,
+        }),
+        160 => &data[64..], // skip headers
+        _ => {
+            return Err(DecodeError::DataTooLong {
+                expected: 160,
+                actual: data.len(),
+            });
+        }
+    };
 
     let (version, group_id, space_pov) =
         VoteDataType::abi_decode(data).map_err(|e| DecodeError::AbiDecode(e.to_string()))?;
@@ -814,6 +820,14 @@ mod tests {
     fn test_decode_vote_data_empty() {
         let result = decode_vote_data(&[]).unwrap_err();
         assert!(matches!(result, DecodeError::DataTooShort { .. }));
+    }
+
+    #[test]
+    fn test_decode_vote_data_too_long() {
+        let data = vec![0u8; 160 + 1];
+
+        let result = decode_vote_data(&data).unwrap_err();
+        assert!(matches!(result, DecodeError::DataTooLong { .. }));
     }
 
     #[test]
