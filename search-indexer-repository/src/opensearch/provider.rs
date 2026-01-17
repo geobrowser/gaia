@@ -141,6 +141,9 @@ impl OpenSearchProvider {
         if let Some(entity_space_score) = request.entity_space_score {
             doc.insert("entity_space_score".to_string(), json!(entity_space_score));
         }
+        if let Some(deleted) = request.deleted {
+            doc.insert("deleted".to_string(), json!(deleted));
+        }
         doc
     }
 }
@@ -798,6 +801,7 @@ mod tests {
             entity_global_score: None,
             space_score: None,
             entity_space_score: None,
+            deleted: None,
         };
 
         let doc = OpenSearchProvider::build_update_doc(&request);
@@ -819,6 +823,7 @@ mod tests {
             entity_global_score: None,
             space_score: None,
             entity_space_score: None,
+            deleted: None,
         };
 
         let doc = OpenSearchProvider::build_update_doc(&request);
@@ -850,6 +855,7 @@ mod tests {
             entity_global_score: None,
             space_score: None,
             entity_space_score: None,
+            deleted: None,
         };
 
         let doc = OpenSearchProvider::build_update_doc(&request);

@@ -552,6 +552,26 @@ impl EntitiesConsumer {
                             skipped_entities += 1;
                         }
                     }
+                    Payload::DeleteEntity(entity_id_bytes) => {
+                        // Handle entity deletion (soft delete)
+                        if let Ok(id_bytes) = transform_id_bytes(entity_id_bytes.clone()) {
+                            let entity_id = Uuid::from_bytes(id_bytes);
+                            info!(
+                                entity_id = %entity_id,
+                                space_id = %space_id,
+                                edit_name = %edit.name,
+                                "Processing delete entity"
+                            );
+                            events.push(EntityEvent::delete(entity_id, space_id));
+                        } else {
+                            debug!(
+                                entity_id_bytes = ?entity_id_bytes,
+                                space_id = %space_id,
+                                edit_name = %edit.name,
+                                "Skipped delete entity (invalid entity ID)"
+                            );
+                        }
+                    }
                     Payload::UnsetRelationFields(_) => {
                         // Relation field unsets don't affect search index for now
                         debug!("Skipped unset relation fields (not relevant for search index)");

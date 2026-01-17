@@ -60,6 +60,7 @@ pub fn create_type_relation_with_id(
 }
 
 /// Generate a CreateRelation operation for a custom relation type
+#[allow(dead_code)]
 pub fn create_custom_relation(
     edit_name: &str,
     space_id: Uuid,

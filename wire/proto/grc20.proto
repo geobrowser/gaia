@@ -90,6 +90,7 @@ message Op {
     Property           create_property = 5;
     UnsetEntityValues        unset_entity_values = 6;
     UnsetRelationFields      unset_relation_fields = 7;
+    bytes              delete_entity = 8;
   }
 }
 

@@ -115,7 +115,7 @@ pub struct NumberOptions {
 }
 #[derive(serde::Serialize, serde::Deserialize, Clone, PartialEq, ::prost::Message)]
 pub struct Op {
-    #[prost(oneof = "op::Payload", tags = "1, 2, 3, 4, 5, 6, 7")]
+    #[prost(oneof = "op::Payload", tags = "1, 2, 3, 4, 5, 6, 7, 8")]
     pub payload: ::core::option::Option<op::Payload>,
 }
 /// Nested message and enum types in `Op`.
@@ -136,6 +136,8 @@ pub mod op {
         UnsetEntityValues(super::UnsetEntityValues),
         #[prost(message, tag = "7")]
         UnsetRelationFields(super::UnsetRelationFields),
+        #[prost(bytes, tag = "8")]
+        DeleteEntity(::prost::alloc::vec::Vec<u8>),
     }
 }
 #[derive(serde::Serialize, serde::Deserialize, Clone, PartialEq, ::prost::Message)]

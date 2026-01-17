@@ -42,6 +42,8 @@ pub struct UpdateEntityRequest {
     pub space_score: Option<f64>,
     /// Entity-space score.
     pub entity_space_score: Option<f64>,
+    /// Soft delete flag - None for active entities, Some(true) for deleted entities.
+    pub deleted: Option<bool>,
 }
 
 /// Request to delete an entity document from the search index.

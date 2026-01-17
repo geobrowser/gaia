@@ -424,10 +424,19 @@ impl Processor {
 
                 Ok(Some(ProcessedEvent::Index(doc)))
             }
-            EntityEventType::Delete => Ok(Some(ProcessedEvent::Delete {
-                entity_id: event.entity_id,
-                space_id: event.space_id,
-            })),
+            EntityEventType::Delete => {
+                // Soft delete: create a document with deleted=true
+                // The upsert will preserve existing fields and only update the deleted flag
+                let mut doc = EntityDocument::new(
+                    event.entity_id,
+                    event.space_id,
+                    None,  // Name not needed for delete
+                    None,  // Description not needed for delete
+                );
+                doc.deleted = Some(true);
+
+                Ok(Some(ProcessedEvent::Index(doc)))
+            }
             EntityEventType::UnsetProperties => {
                 if event.unset_property_keys.is_empty() {
                     // No properties to unset, skip
@@ -531,15 +540,14 @@ mod tests {
         let event = EntityEvent::delete(entity_id, space_id);
 
         let result = processor.process_event(event).unwrap();
-        assert!(matches!(result, Some(ProcessedEvent::Delete { .. })));
+        assert!(matches!(result, Some(ProcessedEvent::Index(_))));
 
-        if let Some(ProcessedEvent::Delete {
-            entity_id: eid,
-            space_id: sid,
-        }) = result
-        {
-            assert_eq!(eid, entity_id);
-            assert_eq!(sid, space_id);
+        if let Some(ProcessedEvent::Index(doc)) = result {
+            assert_eq!(doc.entity_id, entity_id);
+            assert_eq!(doc.space_id, space_id);
+            assert_eq!(doc.deleted, Some(true));
+            assert_eq!(doc.name, None);
+            assert_eq!(doc.description, None);
         }
     }
 

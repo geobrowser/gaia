@@ -14,9 +14,9 @@ use crate::metrics::SearchIndexerMetrics;
 use crate::orchestrator::ProcessedBatch;
 use crate::processor::ProcessedEvent;
 use search_indexer_repository::{
-    DeleteEntityRequest, EntityOperation, RemoveTypeRelationData, SearchIndexProvider,
-    TypeRelationData, UnsetEntityPropertiesRequest, UpdateEntityGlobalScoreRequest,
-    UpdateEntityRequest, UpdateEntitySpaceScoreRequest, UpdateSpaceScoreRequest,
+    EntityOperation, RemoveTypeRelationData, SearchIndexProvider, TypeRelationData,
+    UnsetEntityPropertiesRequest, UpdateEntityGlobalScoreRequest, UpdateEntityRequest,
+    UpdateEntitySpaceScoreRequest, UpdateSpaceScoreRequest,
 };
 
 /// Loader that indexes documents into the search engine.
@@ -69,17 +69,14 @@ impl SearchLoader {
                             entity_global_score: doc.entity_global_score,
                             space_score: doc.space_score,
                             entity_space_score: doc.entity_space_score,
+                            deleted: doc.deleted,
                         }));
                 }
-                ProcessedEvent::Delete {
-                    entity_id,
-                    space_id,
-                } => {
-                    self.pending_operations
-                        .push(EntityOperation::Delete(DeleteEntityRequest {
-                            entity_id: entity_id.to_string(),
-                            space_id: space_id.to_string(),
-                        }));
+                ProcessedEvent::Delete { .. } => {
+                    // Delete events are now handled as soft deletes (Index with deleted=true)
+                    // This case should never be reached in the new implementation
+                    error!("Unexpected ProcessedEvent::Delete - should be using soft delete (Index with deleted=true)");
+                    continue;
                 }
                 ProcessedEvent::UnsetProperties {
                     entity_id,
@@ -115,6 +112,7 @@ impl SearchLoader {
                             entity_global_score: None,
                             space_score: None,
                             entity_space_score: None,
+                            deleted: None,
                         }));
                 }
                 ProcessedEvent::RemoveTypeRelationById { relation_id } => {
@@ -475,16 +473,20 @@ mod tests {
         let provider = Arc::new(MockSearchProvider::new());
         let mut loader = SearchLoader::new(provider.clone());
 
-        let events = vec![ProcessedEvent::Delete {
-            entity_id: Uuid::new_v4(),
-            space_id: Uuid::new_v4(),
-        }];
+        let entity_id = Uuid::new_v4();
+        let space_id = Uuid::new_v4();
+
+        // Create a soft delete document (Index with deleted=true)
+        let mut doc = EntityDocument::new(entity_id, space_id, None, None);
+        doc.deleted = Some(true);
+
+        let events = vec![ProcessedEvent::Index(doc)];
 
         loader.load(events).await.unwrap();
 
         assert_eq!(provider.get_operation_count(), 1);
         let ops = provider.get_operation_order();
-        assert!(matches!(ops[0], TrackedOperation::Delete { .. }));
+        assert!(matches!(ops[0], TrackedOperation::Update { .. }));
     }
 
     #[tokio::test]
@@ -510,6 +512,14 @@ mod tests {
         let provider = Arc::new(MockSearchProvider::new());
         let mut loader = SearchLoader::new(provider.clone());
 
+        let mut delete_doc = EntityDocument::new(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            None,
+            None,
+        );
+        delete_doc.deleted = Some(true);
+
         let events = vec![
             ProcessedEvent::Index(EntityDocument::new(
                 Uuid::new_v4(),
@@ -517,10 +527,7 @@ mod tests {
                 Some("Entity 1".to_string()),
                 None,
             )),
-            ProcessedEvent::Delete {
-                entity_id: Uuid::new_v4(),
-                space_id: Uuid::new_v4(),
-            },
+            ProcessedEvent::Index(delete_doc), // Soft delete
             ProcessedEvent::Index(EntityDocument::new(
                 Uuid::new_v4(),
                 Uuid::new_v4(),
@@ -540,7 +547,7 @@ mod tests {
         assert_eq!(provider.get_operation_count(), 4);
         let ops = provider.get_operation_order();
         assert!(matches!(ops[0], TrackedOperation::Update { .. })); // Index
-        assert!(matches!(ops[1], TrackedOperation::Delete { .. }));
+        assert!(matches!(ops[1], TrackedOperation::Update { .. })); // Soft delete (now Update)
         assert!(matches!(ops[2], TrackedOperation::Update { .. })); // Index
         assert!(matches!(ops[3], TrackedOperation::Unset { .. }));
     }

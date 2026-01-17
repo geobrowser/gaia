@@ -60,6 +60,11 @@ async fn main() -> Result<()> {
     let bob_id = Uuid::parse_str("00000000-0000-0000-0000-000000000b0b").unwrap();
     let org_id = Uuid::parse_str("00000000-0000-0000-0000-0000000ac3ec").unwrap();
 
+    // Entities to be deleted (for soft delete testing)
+    let charlie_id = Uuid::parse_str("00000000-0000-0000-0000-000000000c01").unwrap();
+    let dana_id = Uuid::parse_str("00000000-0000-0000-0000-000000000d01").unwrap();
+    let eve_id = Uuid::parse_str("00000000-0000-0000-0000-000000000e01").unwrap();
+
     info!("Test Space ID: {}", test_space);
     info!("Person Type ID: {}", person_type_id);
     info!("Organization Type ID: {}", org_type_id);
@@ -86,6 +91,10 @@ async fn main() -> Result<()> {
     info!("\nOther entities:");
     info!("  Bob ID: {}", bob_id);
     info!("  Organization ID: {}", org_id);
+    info!("\nDeletion test entities:");
+    info!("  Charlie ID: {} (will be deleted)", charlie_id);
+    info!("  Dana ID: {} (will be deleted)", dana_id);
+    info!("  Eve ID: {} (will be deleted then updated)", eve_id);
 
     // 1. Create Person type entity
     info!("\n1. Creating Person type entity...");
@@ -373,12 +382,81 @@ async fn main() -> Result<()> {
         .send(SCORES_TOPIC, None, score_payload)
         .await?;
 
+    // 8. Create entities that will be soft deleted (for delete testing)
+    info!("8. Creating entities for deletion testing...");
+    let charlie_payload = edits::create_entity_edit(
+        "Create Charlie",
+        test_space,
+        charlie_id,
+        Some("Charlie"),
+        Some("This entity will be deleted"),
+        None,
+    )?;
+    producer.send(EDITS_TOPIC, None, charlie_payload).await?;
+
+    let dana_payload = edits::create_entity_edit(
+        "Create Dana",
+        test_space,
+        dana_id,
+        Some("Dana"),
+        Some("This entity will also be deleted"),
+        None,
+    )?;
+    producer.send(EDITS_TOPIC, None, dana_payload).await?;
+
+    let eve_payload = edits::create_entity_edit(
+        "Create Eve",
+        test_space,
+        eve_id,
+        Some("Eve"),
+        Some("This entity will be deleted then updated"),
+        None,
+    )?;
+    producer.send(EDITS_TOPIC, None, eve_payload).await?;
+
+    // 9. Delete the test entities (soft delete)
+    info!("9. Soft deleting Charlie, Dana, and Eve...");
+    let delete_charlie_payload = edits::delete_entity(
+        "Delete Charlie",
+        test_space,
+        charlie_id,
+    )?;
+    producer.send(EDITS_TOPIC, None, delete_charlie_payload).await?;
+
+    let delete_dana_payload = edits::delete_entity(
+        "Delete Dana",
+        test_space,
+        dana_id,
+    )?;
+    producer.send(EDITS_TOPIC, None, delete_dana_payload).await?;
+
+    let delete_eve_payload = edits::delete_entity(
+        "Delete Eve",
+        test_space,
+        eve_id,
+    )?;
+    producer.send(EDITS_TOPIC, None, delete_eve_payload).await?;
+
+    // 10. Update a deleted entity (Eve) - should remain deleted
+    info!("10. Updating Eve after deletion (testing delete-then-update behavior)...");
+    let update_eve_payload = edits::create_entity_edit(
+        "Update Eve After Delete",
+        test_space,
+        eve_id,
+        Some("Eve Updated"),
+        Some("This entity was updated after being deleted - should remain deleted"),
+        None,
+    )?;
+    producer.send(EDITS_TOPIC, None, update_eve_payload).await?;
+
     info!("\n✅ Test scenario complete!");
     info!("Created:");
-    info!("  - 11 entities");
+    info!("  - 14 entities (11 active + 3 deleted)");
     info!("    • 7 Alice variants (high, medium, low, zero, negative, at threshold, below threshold)");
     info!("    • Bob, Acme Corp");
     info!("    • Person type, Organization type");
+    info!("    • Charlie, Dana (soft deleted)");
+    info!("    • Eve (soft deleted, then updated - remains deleted)");
     info!("  - Type relation scenarios:");
     info!("    • Alice High: Multiple types (Person + Organization)");
     info!("    • Alice Medium: Create->Delete->Create pattern (Person + Organization recreated)");

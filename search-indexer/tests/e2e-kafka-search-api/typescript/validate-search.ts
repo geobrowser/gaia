@@ -30,6 +30,9 @@ const TEST_ENTITIES = {
   ALICE_BELOW_THRESHOLD_ID: '00000000-0000-0000-0000-0000000000f7',
   BOB_ID: '00000000-0000-0000-0000-000000000b0b',
   ORG_ID: '00000000-0000-0000-0000-0000000ac3ec',
+  CHARLIE_ID: '00000000-0000-0000-0000-000000000c01',
+  DANA_ID: '00000000-0000-0000-0000-000000000d01',
+  EVE_ID: '00000000-0000-0000-0000-000000000e01',
 };
 
 interface TestResult {
@@ -390,6 +393,109 @@ class SearchValidator {
     }
   }
 
+  async test9_DeletedEntitiesNotInResults(): Promise<void> {
+    console.log(`\n${BLUE}Test 9: Verify deleted entities (Charlie, Dana) do not appear in search results${NC}`);
+
+    // Search for Charlie by name
+    const charlieNameSearch = await this.search({
+      query: 'charlie',
+      scope: 'GLOBAL',
+    });
+
+    const charlieByName = charlieNameSearch.results.find(r => r.entityId === TEST_ENTITIES.CHARLIE_ID);
+    if (!charlieByName) {
+      this.addResult('test9_charlie_not_in_name_search', true,
+        `Charlie (${TEST_ENTITIES.CHARLIE_ID}) correctly excluded from name search (soft deleted)`);
+    } else {
+      this.addResult('test9_charlie_not_in_name_search', false,
+        `Charlie (${TEST_ENTITIES.CHARLIE_ID}) should not appear in search (was soft deleted)`);
+    }
+
+    // Search for Dana by name
+    const danaNameSearch = await this.search({
+      query: 'dana',
+      scope: 'GLOBAL',
+    });
+
+    const danaByName = danaNameSearch.results.find(r => r.entityId === TEST_ENTITIES.DANA_ID);
+    if (!danaByName) {
+      this.addResult('test9_dana_not_in_name_search', true,
+        `Dana (${TEST_ENTITIES.DANA_ID}) correctly excluded from name search (soft deleted)`);
+    } else {
+      this.addResult('test9_dana_not_in_name_search', false,
+        `Dana (${TEST_ENTITIES.DANA_ID}) should not appear in search (was soft deleted)`);
+    }
+
+    // Verify Charlie doesn't appear in broad search
+    const broadSearch = await this.search({
+      query: 'entity',
+      scope: 'GLOBAL',
+    });
+
+    const charlieInBroad = broadSearch.results.find(r => r.entityId === TEST_ENTITIES.CHARLIE_ID);
+    const danaInBroad = broadSearch.results.find(r => r.entityId === TEST_ENTITIES.DANA_ID);
+
+    if (!charlieInBroad && !danaInBroad) {
+      this.addResult('test9_deleted_not_in_broad_search', true,
+        `Deleted entities (Charlie, Dana) correctly excluded from broad search`);
+    } else {
+      const found = [];
+      if (charlieInBroad) found.push('Charlie');
+      if (danaInBroad) found.push('Dana');
+      this.addResult('test9_deleted_not_in_broad_search', false,
+        `Soft-deleted entities should not appear: ${found.join(', ')} found in results`);
+    }
+  }
+
+  async test10_DeletedThenUpdatedEntityNotInResults(): Promise<void> {
+    console.log(`\n${BLUE}Test 10: Verify entity deleted then updated (Eve) remains excluded from search${NC}`);
+
+    // Search for Eve by name - should not find it even though it was updated after deletion
+    const eveNameSearch = await this.search({
+      query: 'eve',
+      scope: 'GLOBAL',
+    });
+
+    const eveByName = eveNameSearch.results.find(r => r.entityId === TEST_ENTITIES.EVE_ID);
+    if (!eveByName) {
+      this.addResult('test10_eve_not_in_name_search', true,
+        `Eve (${TEST_ENTITIES.EVE_ID}) correctly excluded from name search (deleted then updated, remains deleted)`);
+    } else {
+      this.addResult('test10_eve_not_in_name_search', false,
+        `Eve (${TEST_ENTITIES.EVE_ID}) should not appear despite post-delete update`);
+    }
+
+    // Search for updated name "Eve Updated" - should also not find it
+    const eveUpdatedSearch = await this.search({
+      query: 'eve updated',
+      scope: 'GLOBAL',
+    });
+
+    const eveByUpdatedName = eveUpdatedSearch.results.find(r => r.entityId === TEST_ENTITIES.EVE_ID);
+    if (!eveByUpdatedName) {
+      this.addResult('test10_eve_updated_name_not_found', true,
+        `Eve with updated name correctly excluded (post-delete updates don't resurrect entity)`);
+    } else {
+      this.addResult('test10_eve_updated_name_not_found', false,
+        `Eve should not appear even when searching for updated name`);
+    }
+
+    // Verify Eve doesn't appear in broad search
+    const broadSearch = await this.search({
+      query: 'entity',
+      scope: 'GLOBAL',
+    });
+
+    const eveInBroad = broadSearch.results.find(r => r.entityId === TEST_ENTITIES.EVE_ID);
+    if (!eveInBroad) {
+      this.addResult('test10_eve_not_in_broad_search', true,
+        `Eve correctly excluded from broad search (delete-then-update behavior works)`);
+    } else {
+      this.addResult('test10_eve_not_in_broad_search', false,
+        `Eve should remain deleted despite subsequent update`);
+    }
+  }
+
   printSummary() {
     console.log(`\n${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}`);
 
@@ -458,6 +564,8 @@ async function main() {
     await validator.test6_ResponseMetadata();
     await validator.test7_ZeroAndNegativeScores();
     await validator.test8_TypeIdsScenarios();
+    await validator.test9_DeletedEntitiesNotInResults();
+    await validator.test10_DeletedThenUpdatedEntityNotInResults();
 
     const allPassed = validator.printSummary();
     process.exit(allPassed ? 0 : 1);

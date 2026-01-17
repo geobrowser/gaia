@@ -230,16 +230,14 @@ export class OpenSearchClient implements SearchClient {
 		}
 
 		const typeFilter = this.buildTypeFilter(typeIds)
-		const filters: object[] = []
+		const deletedFilter = this.buildDeletedFilter()
+		const filters: object[] = [deletedFilter]
 		if (typeFilter) filters.push(typeFilter)
 
 		// Apply scope-specific filtering
 		switch (scope) {
 			case "GLOBAL":
 			case "GLOBAL_BY_SPACE_SCORE":
-				if (filters.length === 0) {
-					return {query: baseUuidQuery}
-				}
 				return {
 					query: {
 						bool: {
@@ -254,9 +252,6 @@ export class OpenSearchClient implements SearchClient {
 				if (space_id) {
 					filters.push({term: {space_id}})
 				}
-				if (filters.length === 0) {
-					return {query: baseUuidQuery}
-				}
 				return {
 					query: {
 						bool: {
@@ -267,9 +262,6 @@ export class OpenSearchClient implements SearchClient {
 				}
 
 			default:
-				if (filters.length === 0) {
-					return {query: baseUuidQuery}
-				}
 				return {
 					query: {
 						bool: {
@@ -376,13 +368,17 @@ export class OpenSearchClient implements SearchClient {
 	 */
 	buildGlobalQuery(baseTextQuery: object, typeIds?: string[]): object {
 		const typeFilter = this.buildTypeFilter(typeIds)
+		const deletedFilter = this.buildDeletedFilter()
+		const filters: object[] = [deletedFilter]
+		if (typeFilter) filters.push(typeFilter)
+
 		return {
 			query: {
 				function_score: {
 					query: {
 						bool: {
 							must: [baseTextQuery],
-							filter: typeFilter ? [typeFilter] : [],
+							filter: filters,
 						},
 					},
 					functions: [this.buildScoreBoostFunction("entity_global_score")],
@@ -399,13 +395,17 @@ export class OpenSearchClient implements SearchClient {
 	 */
 	buildGlobalBySpaceScoreQuery(baseTextQuery: object, typeIds?: string[]): object {
 		const typeFilter = this.buildTypeFilter(typeIds)
+		const deletedFilter = this.buildDeletedFilter()
+		const filters: object[] = [deletedFilter]
+		if (typeFilter) filters.push(typeFilter)
+
 		return {
 			query: {
 				function_score: {
 					query: {
 						bool: {
 							must: [baseTextQuery],
-							filter: typeFilter ? [typeFilter] : [],
+							filter: filters,
 						},
 					},
 					functions: [this.buildScoreBoostFunction("space_score")],
@@ -422,13 +422,17 @@ export class OpenSearchClient implements SearchClient {
 	 */
 	buildSingleSpaceQuery(baseTextQuery: object, spaceId: string, typeIds?: string[]): object {
 		const typeFilter = this.buildTypeFilter(typeIds)
+		const deletedFilter = this.buildDeletedFilter()
+		const filters: object[] = [deletedFilter, {term: {space_id: spaceId}}]
+		if (typeFilter) filters.push(typeFilter)
+
 		return {
 			query: {
 				function_score: {
 					query: {
 						bool: {
 							must: [baseTextQuery],
-							filter: typeFilter ? [{term: {space_id: spaceId}}, typeFilter] : [{term: {space_id: spaceId}}],
+							filter: filters,
 						},
 					},
 					functions: [this.buildScoreBoostFunction("entity_space_score")],
@@ -456,6 +460,24 @@ export class OpenSearchClient implements SearchClient {
 						"type_relations.entity_to_id": typeIds,
 					},
 				},
+			},
+		}
+	}
+
+	/**
+	 * Build a filter to exclude soft-deleted entities.
+	 * Filters out documents where the deleted field exists (regardless of value).
+	 */
+	buildDeletedFilter(): object {
+		return {
+			bool: {
+				must_not: [
+					{
+						exists: {
+							field: "deleted",
+						},
+					},
+				],
 			},
 		}
 	}

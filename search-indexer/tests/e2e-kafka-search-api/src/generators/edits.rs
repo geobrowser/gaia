@@ -73,6 +73,7 @@ pub fn create_entity_edit(
 }
 
 /// Generate an edit that unsets entity properties
+#[allow(dead_code)]
 pub fn unset_entity_properties(
     edit_name: &str,
     space_id: Uuid,
@@ -91,6 +92,34 @@ pub fn unset_entity_properties(
 
     let op = Op {
         payload: Some(wire::pb::grc20::op::Payload::UnsetEntityValues(unset_values)),
+    };
+
+    let edit = HermesEdit {
+        id: Uuid::new_v4().as_bytes().to_vec(),
+        name: edit_name.to_string(),
+        ops: vec![op],
+        authors: vec![Uuid::new_v4().as_bytes().to_vec()],
+        language: None,
+        space_id: space_id.as_bytes().to_vec(),
+        is_canonical: true,
+        meta: None,
+    };
+
+    let mut buf = Vec::new();
+    edit.encode(&mut buf)?;
+    Ok(buf)
+}
+
+/// Generate a DeleteEntity operation
+pub fn delete_entity(
+    edit_name: &str,
+    space_id: Uuid,
+    entity_id: Uuid,
+) -> Result<Vec<u8>> {
+    let op = Op {
+        payload: Some(wire::pb::grc20::op::Payload::DeleteEntity(
+            entity_id.as_bytes().to_vec(),
+        )),
     };
 
     let edit = HermesEdit {
