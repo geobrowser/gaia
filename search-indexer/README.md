@@ -160,8 +160,15 @@ cargo build
 ### Testing
 
 ```bash
+# Unit tests
 cargo test
+
+# E2E tests with Kafka and Search API validation
+cd tests/e2e-kafka-search-api
+./run-test.sh
 ```
+
+See [TESTING.md](TESTING.md) for comprehensive end-to-end testing documentation.
 
 ### Running locally
 
@@ -184,11 +191,21 @@ curl "http://localhost:9200/_cluster/health?pretty"
 # Check if the entities index exists
 curl "http://localhost:9200/_cat/indices?v"
 
-# Query indexed documents
+# Query indexed documents directly in OpenSearch
 curl "http://localhost:9200/entities/_search?pretty" -H 'Content-Type: application/json' -d '{
   "query": { "match_all": {} },
   "size": 5
 }'
+
+# Query via the search API (requires API server running)
+# Basic search
+curl --compressed "http://localhost:3000/search?query=alice" | jq
+
+# Search within a specific space
+curl --compressed "http://localhost:3000/search?query=alice&scope=SPACE_SINGLE&space_id=00000000-0000-4000-8000-000000000001" | jq
+
+# Filter by entity types
+curl --compressed "http://localhost:3000/search?query=alice&type_ids=00000000-0000-0000-0000-000000000b01" | jq
 ```
 
 ## Monitoring
