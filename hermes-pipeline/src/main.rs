@@ -618,7 +618,7 @@ impl Pipeline {
                     debug!(
                         name = %event.name,
                         space_id = %space_id_display,
-                        ops_count = event.ops.len(),
+                        payload_bytes = event.payload.len(),
                         "Edit published"
                     );
                 }

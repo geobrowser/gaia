@@ -1,0 +1,7 @@
+-- Custom SQL migration file, put your code below! --
+-- Fix PostGraphile smart comments that reference the old 'properties' table
+-- Properties are now entities, so references should point to 'entities' table
+
+COMMENT ON TABLE "values" IS E'@foreignKey (property_id) references entities (id)|@fieldName property|@omit many\n@foreignKey (entity_id) references entities (id)|@fieldName entity|@foreignFieldName values|@foreignSimpleFieldName valuesList\n@foreignKey (space_id) references spaces (id)|@fieldName space';
+--> statement-breakpoint
+COMMENT ON TABLE "relations" IS E'@foreignKey (type_id) references entities (id)|@fieldName type|@omit many\n@foreignKey (entity_id) references entities (id)|@fieldName entity|@foreignFieldName relationsWhereEntity|@foreignSimpleFieldName relationsWhereEntityList\n@foreignKey (from_entity_id) references entities (id)|@fieldName fromEntity|@foreignFieldName relations|@foreignSimpleFieldName relationsList\n@foreignKey (to_entity_id) references entities (id)|@fieldName toEntity|@foreignFieldName backlinks|@foreignSimpleFieldName backlinksList\n@foreignKey (space_id) references spaces (id)|@fieldName space\n@foreignKey (from_space_id) references spaces (id)|@fieldName fromSpace\n@foreignKey (to_space_id) references spaces (id)|@fieldName toSpace';

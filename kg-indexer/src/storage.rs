@@ -1,4 +1,4 @@
-use sqlx::{postgres::PgPoolOptions, Postgres, QueryBuilder, Row};
+use sqlx::{postgres::PgPoolOptions, Postgres, QueryBuilder};
 use uuid::Uuid;
 
 use crate::error::IndexerError;
@@ -9,10 +9,6 @@ use crate::models::{
         VotingMode,
     },
     membership::{EditorItem, MemberItem},
-    properties::{
-        DataType, PropertyItem, DATA_TYPE_BOOLEAN, DATA_TYPE_NUMBER, DATA_TYPE_POINT,
-        DATA_TYPE_RELATION, DATA_TYPE_STRING, DATA_TYPE_TIME,
-    },
     relations::{SetRelationItem, UnsetRelationItem, UpdateRelationItem},
     spaces::{SpaceItem, SpaceType},
     subspaces::SubspaceItem,
@@ -73,25 +69,6 @@ impl Storage {
         Ok(())
     }
 
-    pub async fn get_all_properties(&self) -> Result<Vec<PropertyItem>, IndexerError> {
-        let rows = sqlx::query("SELECT id, type::text as type FROM properties")
-            .fetch_all(&self.pool)
-            .await?;
-
-        let mut properties = Vec::with_capacity(rows.len());
-        for row in rows {
-            let id: Uuid = row.try_get("id")?;
-            let type_value: String = row.try_get("type")?;
-            let data_type = string_to_data_type(&type_value).ok_or_else(|| {
-                IndexerError::config(format!("Unknown data type in properties: {}", type_value))
-            })?;
-
-            properties.push(PropertyItem { id, data_type });
-        }
-
-        Ok(properties)
-    }
-
     pub async fn insert_values(
         &self,
         values: &[ValueOp],
@@ -107,11 +84,19 @@ impl Storage {
         let mut space_ids = Vec::with_capacity(values.len());
         let mut languages = Vec::with_capacity(values.len());
         let mut units = Vec::with_capacity(values.len());
+        // Value columns
         let mut text_values = Vec::with_capacity(values.len());
         let mut number_values = Vec::with_capacity(values.len());
         let mut boolean_values = Vec::with_capacity(values.len());
         let mut time_values = Vec::with_capacity(values.len());
         let mut point_values = Vec::with_capacity(values.len());
+        let mut integer_values = Vec::with_capacity(values.len());
+        let mut float_values = Vec::with_capacity(values.len());
+        let mut bytes_values: Vec<Option<&[u8]>> = Vec::with_capacity(values.len());
+        let mut date_values = Vec::with_capacity(values.len());
+        let mut datetime_values = Vec::with_capacity(values.len());
+        let mut schedule_values = Vec::with_capacity(values.len());
+        let mut embedding_values = Vec::with_capacity(values.len());
 
         for prop in values {
             ids.push(prop.id.to_string());
@@ -121,16 +106,24 @@ impl Storage {
             languages.push(&prop.language);
             units.push(&prop.unit);
             text_values.push(prop.string.as_deref());
-            number_values.push(prop.number);
+            number_values.push(prop.number.as_deref());
             boolean_values.push(prop.boolean);
             time_values.push(prop.time.as_deref());
             point_values.push(prop.point.as_deref());
+            integer_values.push(prop.integer);
+            float_values.push(prop.float);
+            bytes_values.push(prop.bytes.as_deref());
+            date_values.push(prop.date.as_deref());
+            datetime_values.push(prop.datetime.as_deref());
+            schedule_values.push(&prop.schedule);
+            embedding_values.push(&prop.embedding);
         }
 
         let query = r#"
             INSERT INTO values (
                 id, entity_id, property_id, space_id, language, unit,
-                string, number, boolean, time, point
+                string, number, boolean, time, point,
+                integer, float, bytes, date, datetime, schedule, embedding
             )
             SELECT * FROM UNNEST(
                 $1::text[],
@@ -143,7 +136,14 @@ impl Storage {
                 $8::numeric[],
                 $9::boolean[],
                 $10::text[],
-                $11::text[]
+                $11::text[],
+                $12::bigint[],
+                $13::double precision[],
+                $14::bytea[],
+                $15::text[],
+                $16::text[],
+                $17::jsonb[],
+                $18::jsonb[]
             )
             ON CONFLICT (id) DO UPDATE SET
                 language = EXCLUDED.language,
@@ -152,7 +152,14 @@ impl Storage {
                 number = EXCLUDED.number,
                 boolean = EXCLUDED.boolean,
                 time = EXCLUDED.time,
-                point = EXCLUDED.point
+                point = EXCLUDED.point,
+                integer = EXCLUDED.integer,
+                float = EXCLUDED.float,
+                bytes = EXCLUDED.bytes,
+                date = EXCLUDED.date,
+                datetime = EXCLUDED.datetime,
+                schedule = EXCLUDED.schedule,
+                embedding = EXCLUDED.embedding
         "#;
 
         sqlx::query(query)
@@ -167,6 +174,13 @@ impl Storage {
             .bind(&boolean_values)
             .bind(&time_values)
             .bind(&point_values)
+            .bind(&integer_values)
+            .bind(&float_values)
+            .bind(&bytes_values)
+            .bind(&date_values)
+            .bind(&datetime_values)
+            .bind(&schedule_values)
+            .bind(&embedding_values)
             .execute(&mut **tx)
             .await?;
 
@@ -374,39 +388,6 @@ impl Storage {
         .bind(&space_ids)
         .execute(&mut **tx)
         .await?;
-
-        Ok(())
-    }
-
-    pub async fn insert_properties(
-        &self,
-        properties: &[PropertyItem],
-        tx: &mut sqlx::Transaction<'_, Postgres>,
-    ) -> Result<(), IndexerError> {
-        if properties.is_empty() {
-            return Ok(());
-        }
-
-        let mut ids = Vec::with_capacity(properties.len());
-        let mut types = Vec::with_capacity(properties.len());
-
-        for property in properties {
-            ids.push(&property.id);
-            types.push(property.data_type.as_ref());
-        }
-
-        let query = r#"
-            INSERT INTO properties (id, type)
-            SELECT id, type::"dataTypes"
-            FROM UNNEST($1::uuid[], $2::text[]) AS t(id, type)
-            ON CONFLICT (id) DO NOTHING
-        "#;
-
-        sqlx::query(query)
-            .bind(&ids)
-            .bind(&types)
-            .execute(&mut **tx)
-            .await?;
 
         Ok(())
     }
@@ -981,18 +962,5 @@ impl Storage {
         .await?;
 
         Ok(())
-    }
-}
-
-#[allow(dead_code)]
-fn string_to_data_type(s: &str) -> Option<DataType> {
-    match s {
-        DATA_TYPE_STRING => Some(DataType::String),
-        DATA_TYPE_NUMBER => Some(DataType::Number),
-        DATA_TYPE_BOOLEAN => Some(DataType::Boolean),
-        DATA_TYPE_TIME => Some(DataType::Time),
-        DATA_TYPE_POINT => Some(DataType::Point),
-        DATA_TYPE_RELATION => Some(DataType::Relation),
-        _ => None,
     }
 }

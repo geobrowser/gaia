@@ -8,6 +8,7 @@ import {
 	boolean,
 	customType,
 	decimal,
+	doublePrecision,
 	index,
 	jsonb,
 	pgEnum,
@@ -102,27 +103,6 @@ export const entities = pgTable(
 	],
 );
 
-export const dataTypesEnum = pgEnum("dataTypes", [
-	"String",
-	"Number",
-	"Boolean",
-	"Time",
-	"Point",
-	"Relation",
-]);
-
-export const properties = pgTable(
-	"properties",
-	{
-		id: uuid().primaryKey(),
-		type: dataTypesEnum().notNull(),
-	},
-	(table) => [
-		// Index for filtering by data type
-		index("properties_type_idx").on(table.type),
-	],
-);
-
 export const values = pgTable(
 	"values",
 	{
@@ -130,6 +110,7 @@ export const values = pgTable(
 		propertyId: uuid().notNull(),
 		entityId: uuid().notNull(),
 		spaceId: uuid().notNull(),
+		// v1 value columns (kept for compatibility)
 		string: text(),
 		boolean: boolean(),
 		number: decimal(),
@@ -137,6 +118,14 @@ export const values = pgTable(
 		time: text(),
 		language: text(),
 		unit: text(),
+		// v2 value columns
+		integer: bigint({ mode: "number" }),
+		float: doublePrecision(),
+		bytes: bytea(),
+		date: text(),
+		datetime: text(),
+		schedule: jsonb(),
+		embedding: jsonb(),
 	},
 	(table) => [
 		// Foreign key indexes for join performance
@@ -153,6 +142,11 @@ export const values = pgTable(
 		index("values_point_idx").on(table.point),
 		index("values_boolean_idx").on(table.boolean),
 		index("values_time_idx").on(table.time),
+		// v2 value column indexes
+		index("values_integer_idx").on(table.integer),
+		index("values_float_idx").on(table.float),
+		index("values_date_idx").on(table.date),
+		index("values_datetime_idx").on(table.datetime),
 		// GIN index creation is handled via migration
 
 		// Composite indexes for common query patterns
@@ -264,12 +258,8 @@ export const subspaces = pgTable(
 
 export const entityForeignValues = drizzleRelations(
 	entities,
-	({ many, one }) => ({
+	({ many }) => ({
 		values: many(values),
-		property: one(properties, {
-			fields: [entities.id],
-			references: [properties.id],
-		}),
 		fromRelations: many(relations, {
 			relationName: "fromEntity",
 		}),
@@ -294,20 +284,6 @@ export const propertiesEntityRelations = drizzleRelations(
 	}),
 );
 
-export const propertiesRelations = drizzleRelations(
-	properties,
-	({ one, many }) => ({
-		entity: one(entities, {
-			fields: [properties.id],
-			references: [entities.id],
-		}),
-		// Relations where this property is used as the type
-		typeRelations: many(relations, {
-			relationName: "typeProperty",
-		}),
-	}),
-);
-
 export const relationsEntityRelations = drizzleRelations(
 	relations,
 	({ one }) => ({
@@ -321,10 +297,11 @@ export const relationsEntityRelations = drizzleRelations(
 			references: [entities.id],
 			relationName: "toEntity",
 		}),
-		typeProperty: one(properties, {
+		// Properties are now entities, so typeId references the entities table
+		typeEntity: one(entities, {
 			fields: [relations.typeId],
-			references: [properties.id],
-			relationName: "typeProperty",
+			references: [entities.id],
+			relationName: "typeEntity",
 		}),
 		relationEntity: one(entities, {
 			fields: [relations.entityId],

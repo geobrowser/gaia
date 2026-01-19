@@ -11,6 +11,9 @@ hermes-instrumentation = { path = "../hermes-instrumentation" }
 wire = { path = "../wire" }
 indexer_utils = { path = "../indexer_utils" }
 
+# GRC-20 v2 binary format
+grc-20 = { git = "https://github.com/geobrowser/grc-20" }
+
 # Kafka
 rdkafka = { version = "0.38.0", features = ["cmake-build", "ssl", "zstd"] }
 
