@@ -20,6 +20,8 @@ use crate::models::{
 
 /// Result of processing an edit message
 pub struct EditResult {
+    /// The edit ID (from HermesEdit.id)
+    pub edit_id: Uuid,
     pub entities: Vec<EntityItem>,
     pub values: Vec<ValueOp>,
     pub relations: Vec<RelationOp>,
@@ -67,6 +69,7 @@ fn id_to_uuid(id: &Grc20Id) -> Uuid {
 
 /// Process a HermesEdit message and return the extracted data
 pub fn handle_edit(edit: &HermesEdit) -> Result<EditResult, HandlerError> {
+    let edit_id = parse_edit_id(&edit.id)?;
     let space_id = parse_space_id(edit.space_id.as_slice())?;
     let meta = EditMetadata::from_edit(edit);
 
@@ -83,10 +86,24 @@ pub fn handle_edit(edit: &HermesEdit) -> Result<EditResult, HandlerError> {
     let relations = squash_relations(&relation_ops);
 
     Ok(EditResult {
+        edit_id,
         entities,
         values,
         relations,
     })
+}
+
+fn parse_edit_id(id_bytes: &[u8]) -> Result<Uuid, HandlerError> {
+    if id_bytes.len() != 16 {
+        return Err(HandlerError::DecodeError(format!(
+            "Invalid edit ID: expected 16 bytes, got {}",
+            id_bytes.len()
+        )));
+    }
+    let bytes: [u8; 16] = id_bytes.try_into().map_err(|_| {
+        HandlerError::DecodeError("Failed to convert edit ID bytes to array".to_string())
+    })?;
+    Ok(Uuid::from_bytes(bytes))
 }
 
 /// Squash value operations - last operation for each value ID wins
