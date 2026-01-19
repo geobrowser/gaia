@@ -466,15 +466,15 @@ export class OpenSearchClient implements SearchClient {
 
 	/**
 	 * Build a filter to exclude soft-deleted entities.
-	 * Filters out documents where the deleted field exists (regardless of value).
+	 * Filters out documents where the deleted field is true.
 	 */
 	buildDeletedFilter(): object {
 		return {
 			bool: {
 				must_not: [
 					{
-						exists: {
-							field: "deleted",
+						term: {
+							deleted: true,
 						},
 					},
 				],
