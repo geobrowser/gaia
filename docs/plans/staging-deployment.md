@@ -2,11 +2,11 @@
 
 ## Status
 
-Proposed
+Implemented (GitFlow)
 
 ## Date
 
-2025-01-18
+2025-01-18 (proposed), 2025-01-19 (implemented)
 
 ## Context
 
@@ -95,13 +95,20 @@ Given our monorepo with independent services, **Trunk-Based with Manual Promotio
 
 ## Decision
 
-### Deployment Model: Trunk-Based with Manual Promotion
+### Deployment Model: GitFlow (Branch-Based Promotion)
 
 ```
-feature branches → main → staging (auto) → production (manual)
+feature branches → dev → main
+                    ↓      ↓
+                staging   prod
 ```
 
-This provides per-service control while avoiding branch synchronization overhead.
+After further consideration, GitFlow was chosen for simplicity:
+- One merge = promotion (no manual workflow triggers)
+- Services typically ship together in this monorepo
+- Simpler mental model for the team
+
+See `docs/runbooks/staging-production.md` for operational details.
 
 ### Namespace Strategy
 
@@ -157,117 +164,43 @@ on:
     paths: ['api/**']
 ```
 
-#### Proposed (Staging + Production)
+#### Implemented (GitFlow)
 
-**Staging Deploy** (auto on push to main):
+**Staging Deploy** (auto on push to dev):
 ```yaml
 # .github/workflows/api-deploy-staging.yml
 name: Deploy API (Staging)
 
 on:
   push:
-    branches: [main]
+    branches: [dev]
     paths:
       - 'api/**'
       - '.github/workflows/api-deploy-staging.yml'
 
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
-    environment: staging
-    steps:
-      - uses: actions/checkout@v4
-      
-      - name: Install doctl
-        uses: digitalocean/action-doctl@v2
-        with:
-          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
-
-      - name: Build and push image
-        run: |
-          doctl registry login --expiry-seconds 1200
-          docker build -t registry.digitalocean.com/geo/api:${{ github.sha }} -f api/Dockerfile ./api
-          docker push registry.digitalocean.com/geo/api:${{ github.sha }}
-
-      - name: Deploy to staging
-        run: |
-          doctl kubernetes cluster kubeconfig save ${{ secrets.DIGITALOCEAN_CLUSTER_NAME }}
-          kubectl apply -f api/k8s/staging/namespace.yaml
-          sed -i 's|image: registry.digitalocean.com/geo/api:.*|image: registry.digitalocean.com/geo/api:${{ github.sha }}|g' api/k8s/staging/api.yaml
-          kubectl apply -f api/k8s/staging/api.yaml
-          kubectl rollout status deployment/api -n api-staging --timeout=300s
-
-      - name: Record deployment
-        uses: actions/github-script@v7
-        with:
-          script: |
-            github.rest.repos.createDeployment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              ref: context.sha,
-              environment: 'api-staging',
-              auto_merge: false,
-              required_contexts: []
-            })
+concurrency:
+  group: api-staging
+  cancel-in-progress: true
 ```
 
-**Production Deploy** (manual trigger):
+**Production Deploy** (auto on push to main):
 ```yaml
-# .github/workflows/api-deploy-production.yml
+# .github/workflows/api-deploy.yml
 name: Deploy API (Production)
 
 on:
-  workflow_dispatch:
-    inputs:
-      sha:
-        description: 'Git SHA to deploy (leave empty for latest main)'
-        required: false
-        type: string
+  push:
+    branches: [main]
+    paths:
+      - 'api/**'
+      - '.github/workflows/api-deploy.yml'
 
-jobs:
-  deploy:
-    runs-on: ubuntu-latest
-    environment: production  # Requires approval if configured
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ inputs.sha || github.ref }}
-
-      - name: Get SHA
-        id: sha
-        run: echo "sha=${{ inputs.sha || github.sha }}" >> $GITHUB_OUTPUT
-
-      - name: Install doctl
-        uses: digitalocean/action-doctl@v2
-        with:
-          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
-
-      - name: Verify image exists
-        run: |
-          doctl registry login --expiry-seconds 1200
-          docker manifest inspect registry.digitalocean.com/geo/api:${{ steps.sha.outputs.sha }}
-
-      - name: Deploy to production
-        run: |
-          doctl kubernetes cluster kubeconfig save ${{ secrets.DIGITALOCEAN_CLUSTER_NAME }}
-          kubectl apply -f api/k8s/production/namespace.yaml
-          sed -i 's|image: registry.digitalocean.com/geo/api:.*|image: registry.digitalocean.com/geo/api:${{ steps.sha.outputs.sha }}|g' api/k8s/production/api.yaml
-          kubectl apply -f api/k8s/production/api.yaml
-          kubectl rollout status deployment/api -n api --timeout=300s
-
-      - name: Record deployment
-        uses: actions/github-script@v7
-        with:
-          script: |
-            github.rest.repos.createDeployment({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              ref: '${{ steps.sha.outputs.sha }}',
-              environment: 'api-production',
-              auto_merge: false,
-              required_contexts: []
-            })
+concurrency:
+  group: api-production
+  cancel-in-progress: true
 ```
+
+Both workflows build and push images, then deploy to the appropriate k8s namespace.
 
 ### Deployment Tracking
 
@@ -295,27 +228,23 @@ kubectl get deployment api -n api -o jsonpath='{.metadata.labels.git-sha}'
 
 For urgent production fixes that shouldn't include all staging changes:
 
-1. Create hotfix branch from the **currently deployed production SHA**
+1. Create hotfix branch from `main`
 2. Make the fix
-3. Use workflow_dispatch to deploy that specific SHA to production
-4. Merge hotfix to `main` (will auto-deploy to staging)
+3. Merge to `main` (auto-deploys to production)
+4. Merge `main` back into `dev` to keep branches synced
 
 ```bash
-# Get current production SHA
-PROD_SHA=$(kubectl get deployment api -n api -o jsonpath='{.metadata.labels.git-sha}')
-
-# Create hotfix branch
-git checkout -b hotfix/critical-fix $PROD_SHA
-
-# ... make fix, push ...
-
-# Deploy specific SHA to production via GitHub UI or:
-gh workflow run api-deploy-production.yml -f sha=<hotfix-sha>
-
-# Merge to main
+# Create hotfix branch from main
 git checkout main
-git merge hotfix/critical-fix
-git push  # Auto-deploys to staging
+git pull
+git checkout -b hotfix/critical-fix
+
+# ... make fix, push, create PR to main ...
+
+# After merge to main (auto-deploys to prod), sync dev:
+git checkout dev
+git merge main
+git push
 ```
 
 ### Feature Flags (Future)
@@ -331,28 +260,26 @@ Recommended tools: LaunchDarkly, Unleash, or simple env var flags.
 ## Implementation Steps
 
 ### Phase 1: Infrastructure Setup
-1. Create staging namespaces in cluster
-2. Create staging secrets (separate DB, Kafka consumer groups, etc.)
-3. Set up staging ingress hosts (DNS + TLS certs)
+- [x] Create staging namespaces in cluster
+- [x] Create staging secrets (separate DB, Kafka consumer groups, etc.)
+- [ ] Set up staging ingress hosts (DNS + TLS certs)
 
-### Phase 2: Manifest Duplication
-For each service:
-1. Create `k8s/staging/` and `k8s/production/` directories
-2. Move existing manifests to `k8s/production/`
-3. Copy and modify for `k8s/staging/` (namespace, resources, hosts, secrets)
+### Phase 2: Manifest Duplication (Done: c8f5a0f)
+- [x] Create `k8s/staging/` and `k8s/production/` directories
+- [x] Move existing manifests to `k8s/production/`
+- [x] Copy and modify for `k8s/staging/` (namespace, resources, hosts, secrets)
 
-### Phase 3: Workflow Updates
-For each service:
-1. Rename existing deploy workflow to `*-deploy-production.yml`
-2. Change trigger from push to `workflow_dispatch`
-3. Create new `*-deploy-staging.yml` with push trigger
-4. Add GitHub Deployments API calls
+### Phase 3: Workflow Updates (Done: c42d87a)
+- [x] Update existing deploy workflows to use production paths
+- [x] Create new `*-deploy-staging.yml` workflows triggering on `dev` branch
+- [x] Add concurrency groups to prevent parallel deploys
 
 ### Phase 4: Testing
-1. Push a change to `main`
-2. Verify staging auto-deploys
-3. Trigger production deploy manually
-4. Verify deployment tracking works
+- [ ] Create `dev` branch
+- [ ] Push a change to `dev`
+- [ ] Verify staging auto-deploys
+- [ ] Merge `dev` to `main`
+- [ ] Verify production auto-deploys
 
 ## Services to Update
 
@@ -372,21 +299,20 @@ For each service:
 
 ### Positive
 - Clear separation between staging and production
-- No branch synchronization overhead (unlike GitFlow)
-- Explicit control over production deploys
-- Easy hotfix path
-- Deployment tracking via GitHub API
+- Simple promotion: merge `dev` → `main`
+- No manual workflow triggers needed
+- Services ship together naturally (monorepo pattern)
 
 ### Negative
 - Manifest duplication (must update both staging and production)
-- More workflows to maintain
-- Staging infrastructure costs (additional pods, maybe separate DB)
-- Manual step for production deploys
+- More workflows to maintain (18 total, 2 per service)
+- Staging infrastructure costs (additional pods, separate DB)
+- Must keep `dev` synced with `main` after hotfixes
 
 ### Risks
 - Staging and production manifests drift apart
 - Staging DB/data may not reflect production issues
-- Team may forget to promote to production
+- `dev` and `main` branches diverging if not kept in sync
 
 ## Feature Flags
 
