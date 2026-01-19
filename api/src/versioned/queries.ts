@@ -220,8 +220,9 @@ export async function getEntityVersions(
 				block_number: string;
 				sequence: number;
 				created_at: Date;
+				version_key: string;
 		  }>(sql`
-				SELECT DISTINCT e.edit_id, e.block_number, e.sequence, e.created_at
+				SELECT DISTINCT e.edit_id, e.block_number, e.sequence, e.created_at, e.version_key
 				FROM edit_versions e
 				WHERE e.version_key IN (
 					SELECT DISTINCT valid_from_key FROM value_versions
@@ -238,8 +239,9 @@ export async function getEntityVersions(
 				block_number: string;
 				sequence: number;
 				created_at: Date;
+				version_key: string;
 		  }>(sql`
-				SELECT DISTINCT e.edit_id, e.block_number, e.sequence, e.created_at
+				SELECT DISTINCT e.edit_id, e.block_number, e.sequence, e.created_at, e.version_key
 				FROM edit_versions e
 				WHERE e.version_key IN (
 					SELECT DISTINCT valid_from_key FROM value_versions
@@ -256,6 +258,9 @@ export async function getEntityVersions(
 		editId: row.edit_id,
 		blockNumber: row.block_number.toString(),
 		sequence: row.sequence,
-		createdAt: row.created_at.toISOString(),
+		createdAt:
+			row.created_at instanceof Date
+				? row.created_at.toISOString()
+				: new Date(row.created_at).toISOString(),
 	}));
 }
