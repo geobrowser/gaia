@@ -1,0 +1,28 @@
+name: Check dev is synced with main
+
+on:
+  push:
+    branches: [dev]
+  pull_request:
+    branches: [dev]
+
+jobs:
+  check-sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Check if dev contains all main commits
+        run: |
+          git fetch origin main
+          BEHIND=$(git rev-list --count HEAD..origin/main)
+          if [ "$BEHIND" -gt 0 ]; then
+            echo "::error::dev is $BEHIND commits behind main. Merge main into dev first."
+            echo ""
+            echo "Commits on main missing from dev:"
+            git log --oneline HEAD..origin/main
+            exit 1
+          fi
+          echo "dev is up to date with main"
