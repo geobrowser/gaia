@@ -176,6 +176,13 @@
       "when": 1768836584916,
       "tag": "0024_fix-smart-comments",
       "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1768849775029,
+      "tag": "0025_pink_revanche",
+      "breakpoints": true
     }
   ]
 }

@@ -657,3 +657,119 @@ export const votesCount = pgTable(
 		uniqueConstraint: unique().on(table.objectId, table.objectType, table.spaceId),
 	}),
 );
+
+/** Versioned Entities Schema */
+
+/**
+ * edit_versions
+ *
+ * Lookup table to resolve edit_id -> version_key for temporal queries.
+ * version_key is a packed bigint: (block_number << 32) | sequence
+ */
+export const editVersions = pgTable(
+	"edit_versions",
+	{
+		editId: uuid("edit_id").primaryKey(),
+		blockNumber: bigint("block_number", { mode: "bigint" }).notNull(),
+		sequence: bigint("sequence", { mode: "number" }).notNull(),
+		versionKey: bigint("version_key", { mode: "bigint" }).notNull(),
+		createdAt: timestamp("created_at", { mode: "date" }).notNull(),
+	},
+	(table) => [
+		unique("edit_versions_block_sequence_unique").on(
+			table.blockNumber,
+			table.sequence,
+		),
+		index("edit_versions_version_key_idx").on(table.versionKey),
+	],
+);
+
+/**
+ * value_versions
+ *
+ * Temporal versioned values. Each row represents a value's state during a version range.
+ * When a value changes, the current row's valid_to_key is set and a new row is inserted.
+ */
+export const valueVersions = pgTable(
+	"value_versions",
+	{
+		id: uuid("id").primaryKey(),
+		entityId: uuid("entity_id").notNull(),
+		propertyId: uuid("property_id").notNull(),
+		spaceId: uuid("space_id").notNull(),
+		validFromKey: bigint("valid_from_key", { mode: "bigint" }).notNull(),
+		validToKey: bigint("valid_to_key", { mode: "bigint" }),
+		// Value data
+		language: text("language"),
+		unit: text("unit"),
+		// v1 value columns
+		string: text("string"),
+		boolean: boolean("boolean"),
+		number: decimal("number"),
+		time: text("time"),
+		point: text("point"),
+		// v2 value columns
+		integer: bigint("integer", { mode: "number" }),
+		float: doublePrecision("float"),
+		bytes: bytea("bytes"),
+		date: text("date"),
+		datetime: text("datetime"),
+		schedule: jsonb("schedule"),
+		embedding: jsonb("embedding"),
+	},
+	(table) => [
+		index("value_versions_entity_idx").on(table.entityId),
+		index("value_versions_lookup_idx").on(
+			table.entityId,
+			table.propertyId,
+			table.spaceId,
+		),
+		index("value_versions_open_idx")
+			.on(table.entityId, table.propertyId, table.spaceId)
+			.where(sql`${table.validToKey} IS NULL`),
+		index("value_versions_range_idx").on(
+			table.entityId,
+			table.validFromKey,
+		),
+	],
+);
+
+/**
+ * relation_versions
+ *
+ * Temporal versioned relations. Each row represents a relation's state during a version range.
+ * When a relation changes, the current row's valid_to_key is set and a new row is inserted.
+ */
+export const relationVersions = pgTable(
+	"relation_versions",
+	{
+		id: uuid("id").primaryKey(),
+		relationId: uuid("relation_id").notNull(),
+		entityId: uuid("entity_id").notNull(),
+		typeId: uuid("type_id").notNull(),
+		fromEntityId: uuid("from_entity_id").notNull(),
+		fromSpaceId: uuid("from_space_id"),
+		toEntityId: uuid("to_entity_id").notNull(),
+		toSpaceId: uuid("to_space_id"),
+		position: text("position"),
+		spaceId: uuid("space_id").notNull(),
+		verified: boolean("verified"),
+		validFromKey: bigint("valid_from_key", { mode: "bigint" }).notNull(),
+		validToKey: bigint("valid_to_key", { mode: "bigint" }),
+	},
+	(table) => [
+		index("relation_versions_relation_idx").on(table.relationId),
+		index("relation_versions_entity_idx").on(table.entityId),
+		index("relation_versions_open_idx")
+			.on(table.relationId)
+			.where(sql`${table.validToKey} IS NULL`),
+		index("relation_versions_range_idx").on(
+			table.entityId,
+			table.validFromKey,
+		),
+	],
+);
+
+export type DbEditVersion = InferSelectModel<typeof editVersions>;
+export type DbValueVersion = InferSelectModel<typeof valueVersions>;
+export type DbRelationVersion = InferSelectModel<typeof relationVersions>;
