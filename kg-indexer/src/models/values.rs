@@ -13,8 +13,8 @@ pub enum ValueChangeType {
 /// - Bool -> boolean
 /// - Int64 -> integer
 /// - Float64 -> float
-/// - Decimal -> number (as string for precision)
-/// - Text -> string
+/// - Decimal -> decimal (as string for precision)
+/// - Text -> text
 /// - Bytes -> bytes
 /// - Date -> date
 /// - Time -> time
@@ -32,8 +32,8 @@ pub struct ValueOp {
     pub language: Option<String>,
     pub unit: Option<String>,
     // Value columns (one will be set based on DataType)
-    pub string: Option<String>,       // Text
-    pub number: Option<String>,       // Decimal (stored as string for precision)
+    pub text: Option<String>,         // Text
+    pub decimal: Option<String>,      // Decimal (stored as string for precision)
     pub boolean: Option<bool>,        // Bool
     pub time: Option<String>,         // Time
     pub point: Option<String>,        // Point

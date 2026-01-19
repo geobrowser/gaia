@@ -110,22 +110,22 @@ export const values = pgTable(
 		propertyId: uuid().notNull(),
 		entityId: uuid().notNull(),
 		spaceId: uuid().notNull(),
-		// v1 value columns (kept for compatibility)
-		string: text(),
-		boolean: boolean(),
-		number: decimal(),
-		point: text(),
-		time: text(),
-		language: text(),
-		unit: text(),
-		// v2 value columns
-		integer: bigint({ mode: "number" }),
-		float: doublePrecision(),
-		bytes: bytea(),
-		date: text(),
-		datetime: text(),
-		schedule: jsonb(),
-		embedding: jsonb(),
+		// Value columns (GRC-20 v2 data types)
+		boolean: boolean(), // BOOL
+		integer: bigint({ mode: "number" }), // INT64
+		float: doublePrecision(), // FLOAT64
+		decimal: decimal(), // DECIMAL
+		text: text(), // TEXT
+		bytes: bytea(), // BYTES
+		date: text(), // DATE (ISO 8601)
+		time: text(), // TIME (ISO 8601)
+		datetime: text(), // DATETIME (ISO 8601)
+		schedule: jsonb(), // SCHEDULE (RFC 5545)
+		point: text(), // POINT (WGS84)
+		embedding: jsonb(), // EMBEDDING
+		// Metadata
+		language: text(), // For TEXT values only
+		unit: text(), // For numerical values (INT64, FLOAT64, DECIMAL)
 	},
 	(table) => [
 		// Foreign key indexes for join performance
@@ -133,21 +133,21 @@ export const values = pgTable(
 		index("values_entity_id_idx").on(table.entityId),
 		index("values_space_id_idx").on(table.spaceId),
 
-		// Partial B-tree index for text searches (only indexes strings ≤2000 chars)
-		// Longer strings will use sequential scan, but won't cause index size errors
-		index("values_text_idx")
-			.on(table.string)
-			.where(sql`length(${table.string}) <= 2000`),
-		index("values_number_idx").on(table.number),
-		index("values_point_idx").on(table.point),
+		// Value type indexes
 		index("values_boolean_idx").on(table.boolean),
-		index("values_time_idx").on(table.time),
-		// v2 value column indexes
 		index("values_integer_idx").on(table.integer),
 		index("values_float_idx").on(table.float),
+		index("values_decimal_idx").on(table.decimal),
+		// Partial B-tree index for text searches (only indexes text ≤2000 chars)
+		// Longer text will use sequential scan, but won't cause index size errors
+		index("values_text_idx")
+			.on(table.text)
+			.where(sql`length(${table.text}) <= 2000`),
 		index("values_date_idx").on(table.date),
+		index("values_time_idx").on(table.time),
 		index("values_datetime_idx").on(table.datetime),
-		// GIN index creation is handled via migration
+		index("values_point_idx").on(table.point),
+		// GIN index for schedule and embedding handled via migration
 
 		// Composite indexes for common query patterns
 		index("values_entity_property_idx").on(table.entityId, table.propertyId),
@@ -158,9 +158,6 @@ export const values = pgTable(
 			table.propertyId,
 			table.spaceId,
 		),
-
-		// Composite index for space-filtered searches
-		// index("values_space_text_idx").on(table.spaceId, table.string),
 
 		// Additional indexes for filtering
 		index("values_language_idx").on(table.language),
@@ -699,23 +696,22 @@ export const valueVersions = pgTable(
 		spaceId: uuid("space_id").notNull(),
 		validFromKey: bigint("valid_from_key", { mode: "bigint" }).notNull(),
 		validToKey: bigint("valid_to_key", { mode: "bigint" }),
-		// Value data
-		language: text("language"),
-		unit: text("unit"),
-		// v1 value columns
-		string: text("string"),
-		boolean: boolean("boolean"),
-		number: decimal("number"),
-		time: text("time"),
-		point: text("point"),
-		// v2 value columns
-		integer: bigint("integer", { mode: "number" }),
-		float: doublePrecision("float"),
-		bytes: bytea("bytes"),
-		date: text("date"),
-		datetime: text("datetime"),
-		schedule: jsonb("schedule"),
-		embedding: jsonb("embedding"),
+		// Value columns (GRC-20 v2 data types)
+		boolean: boolean("boolean"), // BOOL
+		integer: bigint("integer", { mode: "number" }), // INT64
+		float: doublePrecision("float"), // FLOAT64
+		decimal: decimal("decimal"), // DECIMAL
+		text: text("text"), // TEXT
+		bytes: bytea("bytes"), // BYTES
+		date: text("date"), // DATE (ISO 8601)
+		time: text("time"), // TIME (ISO 8601)
+		datetime: text("datetime"), // DATETIME (ISO 8601)
+		schedule: jsonb("schedule"), // SCHEDULE (RFC 5545)
+		point: text("point"), // POINT (WGS84)
+		embedding: jsonb("embedding"), // EMBEDDING
+		// Metadata
+		language: text("language"), // For TEXT values only
+		unit: text("unit"), // For numerical values (INT64, FLOAT64, DECIMAL)
 	},
 	(table) => [
 		index("value_versions_entity_idx").on(table.entityId),

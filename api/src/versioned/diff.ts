@@ -30,17 +30,17 @@ function valueKey(v: VersionedValue): string {
 }
 
 /**
- * Extract the string value from a VersionedValue for text diffing.
+ * Extract the text value from a VersionedValue for text diffing.
  */
-function getStringValue(v: VersionedValue): string {
-	return v.string ?? "";
+function getTextValue(v: VersionedValue): string {
+	return v.text ?? "";
 }
 
 /**
- * Determine if a value is a text type (has string content).
+ * Determine if a value is a text type (has text content).
  */
 function isTextValue(v: VersionedValue): boolean {
-	return v.string !== undefined && v.string !== null;
+	return v.text !== undefined && v.text !== null;
 }
 
 /**
@@ -49,38 +49,41 @@ function isTextValue(v: VersionedValue): boolean {
 function serializeValue(v: VersionedValue): string | null {
 	if (v.boolean !== undefined && v.boolean !== null)
 		return v.boolean.toString();
-	if (v.number !== undefined && v.number !== null) return v.number;
 	if (v.integer !== undefined && v.integer !== null)
 		return v.integer.toString();
 	if (v.float !== undefined && v.float !== null) return v.float.toString();
-	if (v.time !== undefined && v.time !== null) return v.time;
-	if (v.point !== undefined && v.point !== null) return v.point;
-	if (v.date !== undefined && v.date !== null) return v.date;
-	if (v.datetime !== undefined && v.datetime !== null) return v.datetime;
+	if (v.decimal !== undefined && v.decimal !== null) return v.decimal;
 	if (v.bytes !== undefined && v.bytes !== null) return v.bytes;
+	if (v.date !== undefined && v.date !== null) return v.date;
+	if (v.time !== undefined && v.time !== null) return v.time;
+	if (v.datetime !== undefined && v.datetime !== null) return v.datetime;
+	if (v.schedule !== undefined && v.schedule !== null)
+		return JSON.stringify(v.schedule);
+	if (v.point !== undefined && v.point !== null) return v.point;
+	if (v.embedding !== undefined && v.embedding !== null)
+		return JSON.stringify(v.embedding);
 	return null;
 }
 
 /**
  * Get the value type for a VersionedValue.
+ * Returns GRC-20 v2 data type names.
  */
 function getValueType(
 	v: VersionedValue
-): "TEXT" | "NUMBER" | "BOOLEAN" | "TIME" | "POINT" | "DATE" | "DATETIME" | "BYTES" {
-	if (v.string !== undefined && v.string !== null) return "TEXT";
-	if (v.boolean !== undefined && v.boolean !== null) return "BOOLEAN";
-	if (v.time !== undefined && v.time !== null) return "TIME";
-	if (v.point !== undefined && v.point !== null) return "POINT";
-	if (v.date !== undefined && v.date !== null) return "DATE";
-	if (v.datetime !== undefined && v.datetime !== null) return "DATETIME";
+): "TEXT" | "BOOL" | "INT64" | "FLOAT64" | "DECIMAL" | "BYTES" | "DATE" | "TIME" | "DATETIME" | "SCHEDULE" | "POINT" | "EMBEDDING" {
+	if (v.text !== undefined && v.text !== null) return "TEXT";
+	if (v.boolean !== undefined && v.boolean !== null) return "BOOL";
+	if (v.integer !== undefined && v.integer !== null) return "INT64";
+	if (v.float !== undefined && v.float !== null) return "FLOAT64";
+	if (v.decimal !== undefined && v.decimal !== null) return "DECIMAL";
 	if (v.bytes !== undefined && v.bytes !== null) return "BYTES";
-	// Check number types last - raw SQL returns null (not undefined) for empty columns
-	if (
-		(v.number !== undefined && v.number !== null) ||
-		(v.integer !== undefined && v.integer !== null) ||
-		(v.float !== undefined && v.float !== null)
-	)
-		return "NUMBER";
+	if (v.date !== undefined && v.date !== null) return "DATE";
+	if (v.time !== undefined && v.time !== null) return "TIME";
+	if (v.datetime !== undefined && v.datetime !== null) return "DATETIME";
+	if (v.schedule !== undefined && v.schedule !== null) return "SCHEDULE";
+	if (v.point !== undefined && v.point !== null) return "POINT";
+	if (v.embedding !== undefined && v.embedding !== null) return "EMBEDDING";
 	return "TEXT"; // Default fallback
 }
 
@@ -118,7 +121,7 @@ export function diffValues(
 					propertyId: toValue.propertyId,
 					spaceId: toValue.spaceId,
 					type: "TEXT",
-					diff: computeTextDiff("", getStringValue(toValue)),
+					diff: computeTextDiff("", getTextValue(toValue)),
 				});
 			} else {
 				changes.push({
@@ -132,10 +135,10 @@ export function diffValues(
 		} else {
 			// Check if changed
 			const fromStr = isTextValue(fromValue)
-				? getStringValue(fromValue)
+				? getTextValue(fromValue)
 				: serializeValue(fromValue);
 			const toStr = isTextValue(toValue)
-				? getStringValue(toValue)
+				? getTextValue(toValue)
 				: serializeValue(toValue);
 
 			if (fromStr !== toStr) {
@@ -167,7 +170,7 @@ export function diffValues(
 					propertyId: fromValue.propertyId,
 					spaceId: fromValue.spaceId,
 					type: "TEXT",
-					diff: computeTextDiff(getStringValue(fromValue), ""),
+					diff: computeTextDiff(getTextValue(fromValue), ""),
 				});
 			} else {
 				changes.push({
@@ -298,7 +301,7 @@ function getMarkdownContent(block: BlockSnapshot): string {
 	const markdownValue = block.values.find(
 		(v) => v.propertyId === SystemIds.MARKDOWN_CONTENT
 	);
-	return markdownValue?.string ?? "";
+	return markdownValue?.text ?? "";
 }
 
 /**
@@ -308,7 +311,7 @@ function getImageUrl(block: BlockSnapshot): string | null {
 	const imageValue = block.values.find(
 		(v) => v.propertyId === SystemIds.IMAGE_URL_PROPERTY
 	);
-	return imageValue?.string ?? null;
+	return imageValue?.text ?? null;
 }
 
 /**
@@ -318,7 +321,7 @@ function getBlockName(block: BlockSnapshot): string | null {
 	const nameValue = block.values.find(
 		(v) => v.propertyId === SystemIds.NAME_PROPERTY
 	);
-	return nameValue?.string ?? null;
+	return nameValue?.text ?? null;
 }
 
 /**
@@ -459,7 +462,7 @@ function getEntityName(snapshot: EntitySnapshot): string | null {
 	const nameValue = snapshot.values.find(
 		(v) => v.propertyId === SystemIds.NAME_PROPERTY
 	);
-	return nameValue?.string ?? null;
+	return nameValue?.text ?? null;
 }
 
 /**

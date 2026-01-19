@@ -36,11 +36,11 @@ describe("entity helper functions", () => {
 		it("should return name when entity has name property", async () => {
 			// Find an entity that has a name value
 			const result = await pool.query(`
-				SELECT DISTINCT v.entity_id, v.string as name
+				SELECT DISTINCT v.entity_id, v.text as name
 				FROM values v
 				WHERE v.property_id = 'a126ca53-0c8e-48d5-b888-82c734c38935'
-				  AND v.string IS NOT NULL
-				  AND trim(v.string) != ''
+				  AND v.text IS NOT NULL
+				  AND trim(v.text) != ''
 				LIMIT 1
 			`)
 
@@ -82,11 +82,11 @@ describe("entity helper functions", () => {
 		it("should return description when entity has description property", async () => {
 			// Find an entity that has a description value
 			const result = await pool.query(`
-				SELECT DISTINCT v.entity_id, v.string as description
+				SELECT DISTINCT v.entity_id, v.text as description
 				FROM values v
 				WHERE v.property_id = '9b1f76ff-9711-404c-861e-59dc3fa7d037'
-				  AND v.string IS NOT NULL
-				  AND trim(v.string) != ''
+				  AND v.text IS NOT NULL
+				  AND trim(v.text) != ''
 				LIMIT 1
 			`)
 
