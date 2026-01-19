@@ -1,22 +1,22 @@
-name: Deploy Search Indexer (Production)
+name: Deploy Search Indexer (Staging)
 
 on:
   push:
     branches:
-      - main
+      - dev
     paths:
       - 'search-indexer/**'
       - 'search-indexer-shared/**'
       - 'search-indexer-repository/**'
-      - 'search-indexer-deploy/k8s/production/**'
+      - 'search-indexer-deploy/k8s/staging/**'
       - 'sdk/**'
       - 'hermes-schema/**'
       - 'wire/**'
       - 'indexer_utils/**'
-      - '.github/workflows/search-indexer-deploy.yml'
+      - '.github/workflows/search-indexer-deploy-staging.yml'
 
 concurrency:
-  group: search-indexer-production
+  group: search-indexer-staging
   cancel-in-progress: true
 
 env:
@@ -41,10 +41,10 @@ jobs:
       - name: Build and push Docker image
         run: |
           docker build -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
-                       -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest \
+                       -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:staging \
                        -f search-indexer/Dockerfile .
           docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
-          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:staging
 
       - name: Set up kubectl
         uses: azure/setup-kubectl@v4
@@ -55,22 +55,22 @@ jobs:
 
       - name: Deploy to Kubernetes
         run: |
-          kubectl apply -f search-indexer-deploy/k8s/production/namespace.yaml
+          kubectl apply -f search-indexer-deploy/k8s/staging/namespace.yaml
           # Update image tag to use SHA and apply
-          sed -i 's|image: registry.digitalocean.com/geo/search-indexer:latest|image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}|g' search-indexer-deploy/k8s/production/search-indexer.yaml
-          kubectl apply -f search-indexer-deploy/k8s/production/search-indexer.yaml
+          sed -i 's|image: registry.digitalocean.com/geo/search-indexer:latest|image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}|g' search-indexer-deploy/k8s/staging/search-indexer.yaml
+          kubectl apply -f search-indexer-deploy/k8s/staging/search-indexer.yaml
 
       - name: Wait for deployment to be ready
         run: |
-          kubectl rollout status deployment/search-indexer -n search --timeout=120s
+          kubectl rollout status deployment/search-indexer -n search-staging --timeout=120s
 
       - name: Show deployment status
         run: |
           echo "=== Search Indexer Deployment ==="
-          kubectl get deployment search-indexer -n search || echo "Deployment not found"
+          kubectl get deployment search-indexer -n search-staging || echo "Deployment not found"
           echo ""
           echo "=== Search Indexer Pods ==="
-          kubectl get pods -n search -l app=search-indexer
+          kubectl get pods -n search-staging -l app=search-indexer
           echo ""
           echo "=== Recent Events ==="
-          kubectl get events -n search --sort-by='.lastTimestamp' | tail -10
+          kubectl get events -n search-staging --sort-by='.lastTimestamp' | tail -10

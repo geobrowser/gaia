@@ -1,17 +1,17 @@
-name: Deploy Kafka UI (Production)
+name: Deploy Kafka UI (Staging)
 
 on:
   push:
     branches:
-      - main
+      - dev
     paths:
-      - 'hermes/k8s/production/kafka-ui.yaml'
+      - 'hermes/k8s/staging/kafka-ui.yaml'
       - 'hermes-schema/proto/**'
       - 'wire/proto/grc20.proto'
-      - '.github/workflows/kafka-ui-deploy.yml'
+      - '.github/workflows/kafka-ui-deploy-staging.yml'
 
 concurrency:
-  group: kafka-ui-production
+  group: kafka-ui-staging
   cancel-in-progress: true
 
 jobs:
@@ -35,7 +35,7 @@ jobs:
 
       - name: Apply k8s manifests
         run: |
-          kubectl apply -f hermes/k8s/production/namespace.yaml
+          kubectl apply -f hermes/k8s/staging/namespace.yaml
           kubectl create configmap protobuf-schemas \
             --from-file=grc20.proto=wire/proto/grc20.proto \
             --from-file=block_summary.proto=hermes-schema/proto/block_summary.proto \
@@ -49,18 +49,18 @@ jobs:
             --from-file=topics.proto=hermes-schema/proto/topics.proto \
             --from-file=topology.proto=hermes-schema/proto/topology.proto \
             --from-file=voting.proto=hermes-schema/proto/voting.proto \
-            --namespace=kafka \
+            --namespace=kafka-staging \
             --dry-run=client -o yaml | kubectl apply -f -
-          kubectl apply -f hermes/k8s/production/kafka-ui.yaml
+          kubectl apply -f hermes/k8s/staging/kafka-ui.yaml
 
       - name: Wait for deployment to be ready
         run: |
-          kubectl rollout status deployment/kafka-ui -n kafka --timeout=120s
+          kubectl rollout status deployment/kafka-ui -n kafka-staging --timeout=120s
 
       - name: Show deployment status
         run: |
           echo "=== Kafka UI Deployment ==="
-          kubectl get deployment kafka-ui -n kafka
+          kubectl get deployment kafka-ui -n kafka-staging
           echo ""
           echo "=== Kafka UI Pods ==="
-          kubectl get pods -n kafka -l app=kafka-ui
+          kubectl get pods -n kafka-staging -l app=kafka-ui

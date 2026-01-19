@@ -49,7 +49,7 @@ pub fn get_versioned_index_name(version: Option<u32>) -> String {
 ///
 /// The configuration includes:
 /// - **search_as_you_type**: Built-in field type for autocomplete on name and description
-/// - **rank_feature**: Score fields optimized for relevance boosting
+/// - **float**: Score fields that support zero, negative, and positive values
 /// - **Keyword fields**: For filtering and exact ID lookups
 ///
 /// # Sharding Configuration
@@ -105,13 +105,13 @@ pub fn get_index_settings(_version: Option<u32>) -> Value {
                     }
                 },
                 "entity_global_score": {
-                    "type": "rank_feature"
+                    "type": "float"
                 },
                 "space_score": {
-                    "type": "rank_feature"
+                    "type": "float"
                 },
                 "entity_space_score": {
-                    "type": "rank_feature"
+                    "type": "float"
                 },
                 "indexed_at": {
                     "type": "date"
@@ -165,18 +165,18 @@ mod tests {
             "keyword"
         );
 
-        // Check rank_feature fields
+        // Check float score fields
         assert_eq!(
             settings["mappings"]["properties"]["entity_global_score"]["type"],
-            "rank_feature"
+            "float"
         );
         assert_eq!(
             settings["mappings"]["properties"]["space_score"]["type"],
-            "rank_feature"
+            "float"
         );
         assert_eq!(
             settings["mappings"]["properties"]["entity_space_score"]["type"],
-            "rank_feature"
+            "float"
         );
     }
 

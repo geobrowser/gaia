@@ -1,18 +1,18 @@
-name: Deploy Vote Indexer (Production)
+name: Deploy Vote Indexer (Staging)
 
 on:
   push:
     branches:
-      - main
+      - dev
     paths:
       - 'scoring-service/vote-indexer/**'
-      - 'scoring-service/deployment/production/vote-indexer.yaml'
+      - 'scoring-service/deployment/staging/vote-indexer.yaml'
       - 'hermes-schema/**'
       - 'wire/**'
-      - '.github/workflows/scoring-vote-indexer-deploy.yml'
+      - '.github/workflows/scoring-vote-indexer-deploy-staging.yml'
 
 concurrency:
-  group: vote-indexer-production
+  group: vote-indexer-staging
   cancel-in-progress: true
 
 env:
@@ -37,10 +37,10 @@ jobs:
       - name: Build and push Docker image
         run: |
           docker build -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
-                       -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest \
+                       -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:staging \
                        -f scoring-service/vote-indexer/Dockerfile .
           docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
-          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:staging
 
       - name: Set up kubectl
         uses: azure/setup-kubectl@v4
@@ -51,26 +51,26 @@ jobs:
 
       - name: Deploy to Kubernetes
         run: |
-          kubectl apply -f scoring-service/deployment/production/namespace.yaml
+          kubectl apply -f scoring-service/deployment/staging/namespace.yaml
           # Update image tag to use SHA and apply
-          sed -i 's|image: registry.digitalocean.com/geo/vote-indexer:latest|image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}|g' scoring-service/deployment/production/vote-indexer.yaml
-          kubectl apply -f scoring-service/deployment/production/vote-indexer.yaml
+          sed -i 's|image: registry.digitalocean.com/geo/vote-indexer:latest|image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}|g' scoring-service/deployment/staging/vote-indexer.yaml
+          kubectl apply -f scoring-service/deployment/staging/vote-indexer.yaml
 
       - name: Restart deployment to pick up new image
         run: |
-          kubectl rollout restart deployment/vote-indexer -n scoring
+          kubectl rollout restart deployment/vote-indexer -n scoring-staging
 
       - name: Wait for rollout
         run: |
-          kubectl rollout status deployment/vote-indexer -n scoring --timeout=120s
+          kubectl rollout status deployment/vote-indexer -n scoring-staging --timeout=120s
 
       - name: Show deployment status
         run: |
           echo "=== Vote Indexer Deployment ==="
-          kubectl get deployment vote-indexer -n scoring
+          kubectl get deployment vote-indexer -n scoring-staging
           echo ""
           echo "=== Vote Indexer Pods ==="
-          kubectl get pods -n scoring -l app=vote-indexer
+          kubectl get pods -n scoring-staging -l app=vote-indexer
           echo ""
           echo "=== Recent Events ==="
-          kubectl get events -n scoring --sort-by='.lastTimestamp' | grep vote-indexer | tail -10
+          kubectl get events -n scoring-staging --sort-by='.lastTimestamp' | grep vote-indexer | tail -10

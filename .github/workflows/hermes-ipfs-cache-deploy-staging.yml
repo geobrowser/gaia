@@ -1,9 +1,9 @@
-name: Deploy Hermes IPFS Cache (Production)
+name: Deploy Hermes IPFS Cache (Staging)
 
 on:
   push:
     branches:
-      - main
+      - dev
     paths:
       - 'hermes-ipfs-cache/**'
       - 'hermes-relay/**'
@@ -12,10 +12,10 @@ on:
       - 'stream/**'
       - 'wire/**'
       - 'ipfs/**'
-      - '.github/workflows/hermes-ipfs-cache-deploy.yml'
+      - '.github/workflows/hermes-ipfs-cache-deploy-staging.yml'
 
 concurrency:
-  group: hermes-ipfs-cache-production
+  group: hermes-ipfs-cache-staging
   cancel-in-progress: true
 
 env:
@@ -40,10 +40,10 @@ jobs:
       - name: Build and push Docker image
         run: |
           docker build -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
-                       -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest \
+                       -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:staging \
                        -f hermes-ipfs-cache/Dockerfile .
           docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
-          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:staging
 
       - name: Set up kubectl
         uses: azure/setup-kubectl@v4
@@ -54,26 +54,26 @@ jobs:
 
       - name: Deploy to Kubernetes
         run: |
-          kubectl apply -f hermes-ipfs-cache/k8s/production/namespace.yaml
+          kubectl apply -f hermes-ipfs-cache/k8s/staging/namespace.yaml
           # Update image tag to use SHA and apply
-          sed -i 's|image: registry.digitalocean.com/geo/hermes-ipfs-cache:latest|image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}|g' hermes-ipfs-cache/k8s/production/hermes-ipfs-cache.yaml
-          kubectl apply -f hermes-ipfs-cache/k8s/production/hermes-ipfs-cache.yaml
+          sed -i 's|image: registry.digitalocean.com/geo/hermes-ipfs-cache:latest|image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}|g' hermes-ipfs-cache/k8s/staging/hermes-ipfs-cache.yaml
+          kubectl apply -f hermes-ipfs-cache/k8s/staging/hermes-ipfs-cache.yaml
 
       - name: Restart deployment to pick up new image
         run: |
-          kubectl rollout restart deployment/hermes-ipfs-cache -n knowledge
+          kubectl rollout restart deployment/hermes-ipfs-cache -n knowledge-staging
 
       - name: Wait for rollout
         run: |
-          kubectl rollout status deployment/hermes-ipfs-cache -n knowledge --timeout=120s
+          kubectl rollout status deployment/hermes-ipfs-cache -n knowledge-staging --timeout=120s
 
       - name: Show deployment status
         run: |
           echo "=== Hermes IPFS Cache Deployment ==="
-          kubectl get deployment hermes-ipfs-cache -n knowledge
+          kubectl get deployment hermes-ipfs-cache -n knowledge-staging
           echo ""
           echo "=== Hermes IPFS Cache Pods ==="
-          kubectl get pods -n knowledge -l app=hermes-ipfs-cache
+          kubectl get pods -n knowledge-staging -l app=hermes-ipfs-cache
           echo ""
           echo "=== Recent Events ==="
-          kubectl get events -n knowledge --sort-by='.lastTimestamp' | grep hermes-ipfs-cache | tail -10
+          kubectl get events -n knowledge-staging --sort-by='.lastTimestamp' | grep hermes-ipfs-cache | tail -10
