@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: knowledge-staging
+  labels:
+    app.kubernetes.io/name: knowledge
+    app.kubernetes.io/part-of: geo
+    environment: staging
