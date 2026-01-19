@@ -1,18 +1,26 @@
 /**
  * Diff computation for versioned entities.
+ * Uses the `diff` package for word-level text diffs.
  */
 
+import { diffWords } from "diff";
+import { SystemIds } from "@graphprotocol/grc-20";
+
 import type {
+	DiffChunk,
 	VersionedValue,
 	VersionedRelation,
 	BlockSnapshot,
 	EntitySnapshot,
-	ValueChanges,
-	RelationChanges,
-	BlockChanges,
+	ValueChange,
+	RelationChange,
 	BlockChange,
 	EntityDiff,
 } from "./types";
+
+// ============================================================================
+// Value Diffing
+// ============================================================================
 
 /**
  * Create a unique key for a value (property + space).
@@ -22,25 +30,69 @@ function valueKey(v: VersionedValue): string {
 }
 
 /**
- * Check if two values are equal (same actual value data).
+ * Extract the string value from a VersionedValue for text diffing.
  */
-function valuesEqual(a: VersionedValue, b: VersionedValue): boolean {
-	return (
-		a.string === b.string &&
-		a.boolean === b.boolean &&
-		a.number === b.number &&
-		a.time === b.time &&
-		a.point === b.point &&
-		a.language === b.language &&
-		a.unit === b.unit &&
-		a.integer === b.integer &&
-		a.float === b.float &&
-		a.bytes === b.bytes &&
-		a.date === b.date &&
-		a.datetime === b.datetime &&
-		JSON.stringify(a.schedule) === JSON.stringify(b.schedule) &&
-		JSON.stringify(a.embedding) === JSON.stringify(b.embedding)
-	);
+function getStringValue(v: VersionedValue): string {
+	return v.string ?? "";
+}
+
+/**
+ * Determine if a value is a text type (has string content).
+ */
+function isTextValue(v: VersionedValue): boolean {
+	return v.string !== undefined && v.string !== null;
+}
+
+/**
+ * Serialize a non-text value to a string for comparison.
+ */
+function serializeValue(v: VersionedValue): string | null {
+	if (v.boolean !== undefined && v.boolean !== null)
+		return v.boolean.toString();
+	if (v.number !== undefined && v.number !== null) return v.number;
+	if (v.integer !== undefined && v.integer !== null)
+		return v.integer.toString();
+	if (v.float !== undefined && v.float !== null) return v.float.toString();
+	if (v.time !== undefined && v.time !== null) return v.time;
+	if (v.point !== undefined && v.point !== null) return v.point;
+	if (v.date !== undefined && v.date !== null) return v.date;
+	if (v.datetime !== undefined && v.datetime !== null) return v.datetime;
+	if (v.bytes !== undefined && v.bytes !== null) return v.bytes;
+	return null;
+}
+
+/**
+ * Get the value type for a VersionedValue.
+ */
+function getValueType(
+	v: VersionedValue
+): "TEXT" | "NUMBER" | "BOOLEAN" | "TIME" | "POINT" | "DATE" | "DATETIME" | "BYTES" {
+	if (v.string !== undefined && v.string !== null) return "TEXT";
+	if (v.boolean !== undefined && v.boolean !== null) return "BOOLEAN";
+	if (
+		v.number !== undefined ||
+		v.integer !== undefined ||
+		v.float !== undefined
+	)
+		return "NUMBER";
+	if (v.time !== undefined && v.time !== null) return "TIME";
+	if (v.point !== undefined && v.point !== null) return "POINT";
+	if (v.date !== undefined && v.date !== null) return "DATE";
+	if (v.datetime !== undefined && v.datetime !== null) return "DATETIME";
+	if (v.bytes !== undefined && v.bytes !== null) return "BYTES";
+	return "TEXT"; // Default fallback
+}
+
+/**
+ * Compute text diff using diffWords.
+ */
+function computeTextDiff(from: string, to: string): DiffChunk[] {
+	const changes = diffWords(from, to);
+	return changes.map((change) => ({
+		value: change.value,
+		...(change.added ? { added: true } : {}),
+		...(change.removed ? { removed: true } : {}),
+	}));
 }
 
 /**
@@ -49,54 +101,91 @@ function valuesEqual(a: VersionedValue, b: VersionedValue): boolean {
 export function diffValues(
 	fromValues: VersionedValue[],
 	toValues: VersionedValue[]
-): ValueChanges {
+): ValueChange[] {
 	const fromMap = new Map(fromValues.map((v) => [valueKey(v), v]));
 	const toMap = new Map(toValues.map((v) => [valueKey(v), v]));
+	const changes: ValueChange[] = [];
 
-	const added: VersionedValue[] = [];
-	const removed: VersionedValue[] = [];
-	const changed: ValueChanges["changed"] = [];
-
-	// Find added and changed
+	// Find added and changed values
 	for (const [key, toValue] of toMap) {
 		const fromValue = fromMap.get(key);
+
 		if (!fromValue) {
-			added.push(toValue);
-		} else if (!valuesEqual(fromValue, toValue)) {
-			changed.push({
-				propertyId: toValue.propertyId,
-				spaceId: toValue.spaceId,
-				from: fromValue,
-				to: toValue,
-			});
+			// Added value
+			if (isTextValue(toValue)) {
+				changes.push({
+					propertyId: toValue.propertyId,
+					spaceId: toValue.spaceId,
+					type: "TEXT",
+					diff: computeTextDiff("", getStringValue(toValue)),
+				});
+			} else {
+				changes.push({
+					propertyId: toValue.propertyId,
+					spaceId: toValue.spaceId,
+					type: getValueType(toValue) as Exclude<ReturnType<typeof getValueType>, "TEXT">,
+					from: null,
+					to: serializeValue(toValue),
+				});
+			}
+		} else {
+			// Check if changed
+			const fromStr = isTextValue(fromValue)
+				? getStringValue(fromValue)
+				: serializeValue(fromValue);
+			const toStr = isTextValue(toValue)
+				? getStringValue(toValue)
+				: serializeValue(toValue);
+
+			if (fromStr !== toStr) {
+				if (isTextValue(toValue) || isTextValue(fromValue)) {
+					changes.push({
+						propertyId: toValue.propertyId,
+						spaceId: toValue.spaceId,
+						type: "TEXT",
+						diff: computeTextDiff(fromStr ?? "", toStr ?? ""),
+					});
+				} else {
+					changes.push({
+						propertyId: toValue.propertyId,
+						spaceId: toValue.spaceId,
+						type: getValueType(toValue) as Exclude<ReturnType<typeof getValueType>, "TEXT">,
+						from: fromStr,
+						to: toStr,
+					});
+				}
+			}
 		}
 	}
 
-	// Find removed
+	// Find removed values
 	for (const [key, fromValue] of fromMap) {
 		if (!toMap.has(key)) {
-			removed.push(fromValue);
+			if (isTextValue(fromValue)) {
+				changes.push({
+					propertyId: fromValue.propertyId,
+					spaceId: fromValue.spaceId,
+					type: "TEXT",
+					diff: computeTextDiff(getStringValue(fromValue), ""),
+				});
+			} else {
+				changes.push({
+					propertyId: fromValue.propertyId,
+					spaceId: fromValue.spaceId,
+					type: getValueType(fromValue) as Exclude<ReturnType<typeof getValueType>, "TEXT">,
+					from: serializeValue(fromValue),
+					to: null,
+				});
+			}
 		}
 	}
 
-	return { added, removed, changed };
+	return changes;
 }
 
-/**
- * Check if two relations are equal.
- */
-function relationsEqual(a: VersionedRelation, b: VersionedRelation): boolean {
-	return (
-		a.typeId === b.typeId &&
-		a.fromEntityId === b.fromEntityId &&
-		a.fromSpaceId === b.fromSpaceId &&
-		a.toEntityId === b.toEntityId &&
-		a.toSpaceId === b.toSpaceId &&
-		a.position === b.position &&
-		a.spaceId === b.spaceId &&
-		a.verified === b.verified
-	);
-}
+// ============================================================================
+// Relation Diffing
+// ============================================================================
 
 /**
  * Compute diff between two sets of relations.
@@ -104,36 +193,131 @@ function relationsEqual(a: VersionedRelation, b: VersionedRelation): boolean {
 export function diffRelations(
 	fromRelations: VersionedRelation[],
 	toRelations: VersionedRelation[]
-): RelationChanges {
+): RelationChange[] {
 	const fromMap = new Map(fromRelations.map((r) => [r.relationId, r]));
 	const toMap = new Map(toRelations.map((r) => [r.relationId, r]));
+	const changes: RelationChange[] = [];
 
-	const added: VersionedRelation[] = [];
-	const removed: VersionedRelation[] = [];
-	const changed: RelationChanges["changed"] = [];
-
-	// Find added and changed
+	// Find added and changed relations
 	for (const [id, toRel] of toMap) {
 		const fromRel = fromMap.get(id);
+
 		if (!fromRel) {
-			added.push(toRel);
-		} else if (!relationsEqual(fromRel, toRel)) {
-			changed.push({
+			// Added
+			changes.push({
 				relationId: id,
-				from: fromRel,
-				to: toRel,
+				typeId: toRel.typeId,
+				spaceId: toRel.spaceId,
+				changeType: "ADD",
+				from: null,
+				to: {
+					toEntityId: toRel.toEntityId,
+					toSpaceId: toRel.toSpaceId,
+					position: toRel.position,
+				},
+			});
+		} else {
+			// Check if changed
+			const hasChanged =
+				fromRel.toEntityId !== toRel.toEntityId ||
+				fromRel.toSpaceId !== toRel.toSpaceId ||
+				fromRel.position !== toRel.position;
+
+			if (hasChanged) {
+				changes.push({
+					relationId: id,
+					typeId: toRel.typeId,
+					spaceId: toRel.spaceId,
+					changeType: "UPDATE",
+					from: {
+						toEntityId: fromRel.toEntityId,
+						toSpaceId: fromRel.toSpaceId,
+						position: fromRel.position,
+					},
+					to: {
+						toEntityId: toRel.toEntityId,
+						toSpaceId: toRel.toSpaceId,
+						position: toRel.position,
+					},
+				});
+			}
+		}
+	}
+
+	// Find removed relations
+	for (const [id, fromRel] of fromMap) {
+		if (!toMap.has(id)) {
+			changes.push({
+				relationId: id,
+				typeId: fromRel.typeId,
+				spaceId: fromRel.spaceId,
+				changeType: "REMOVE",
+				from: {
+					toEntityId: fromRel.toEntityId,
+					toSpaceId: fromRel.toSpaceId,
+					position: fromRel.position,
+				},
+				to: null,
 			});
 		}
 	}
 
-	// Find removed
-	for (const [id, fromRel] of fromMap) {
-		if (!toMap.has(id)) {
-			removed.push(fromRel);
+	return changes;
+}
+
+// ============================================================================
+// Block Diffing
+// ============================================================================
+
+/**
+ * Determine block type from its relations.
+ */
+function getBlockType(
+	block: BlockSnapshot
+): "textBlock" | "imageBlock" | "dataBlock" | null {
+	// Check relations for type indicators
+	for (const rel of block.relations) {
+		if (rel.typeId === SystemIds.TYPES_PROPERTY) {
+			if (rel.toEntityId === SystemIds.TEXT_BLOCK) return "textBlock";
+			if (
+				rel.toEntityId === SystemIds.IMAGE_BLOCK ||
+				rel.toEntityId === SystemIds.IMAGE
+			)
+				return "imageBlock";
+			if (rel.toEntityId === SystemIds.DATA_BLOCK) return "dataBlock";
 		}
 	}
+	return null;
+}
 
-	return { added, removed, changed };
+/**
+ * Extract markdown content from a text block.
+ */
+function getMarkdownContent(block: BlockSnapshot): string {
+	const markdownValue = block.values.find(
+		(v) => v.propertyId === SystemIds.MARKDOWN_CONTENT
+	);
+	return markdownValue?.string ?? "";
+}
+
+/**
+ * Extract image URL from an image block.
+ */
+function getImageUrl(block: BlockSnapshot): string | null {
+	const imageValue = block.values.find(
+		(v) => v.propertyId === SystemIds.IMAGE_URL_PROPERTY
+	);
+	return imageValue?.string ?? null;
+}
+
+/**
+ * Extract name from a data block.
+ */
+function getBlockName(block: BlockSnapshot): string | null {
+	const nameValue = block.values.find(
+		(v) => v.propertyId === SystemIds.NAME_PROPERTY
+	);
+	return nameValue?.string ?? null;
 }
 
 /**
@@ -142,50 +326,139 @@ export function diffRelations(
 export function diffBlocks(
 	fromBlocks: BlockSnapshot[],
 	toBlocks: BlockSnapshot[]
-): BlockChanges {
+): BlockChange[] {
 	const fromMap = new Map(fromBlocks.map((b) => [b.id, b]));
 	const toMap = new Map(toBlocks.map((b) => [b.id, b]));
+	const changes: BlockChange[] = [];
 
-	const added: BlockSnapshot[] = [];
-	const removed: string[] = [];
-	const changed: BlockChange[] = [];
-
-	// Find added and changed
+	// Find added and changed blocks
 	for (const [id, toBlock] of toMap) {
 		const fromBlock = fromMap.get(id);
+		const blockType = getBlockType(toBlock) ?? getBlockType(fromBlock ?? toBlock);
+
+		if (!blockType) continue; // Unknown block type
+
 		if (!fromBlock) {
-			added.push(toBlock);
+			// Added block
+			switch (blockType) {
+				case "textBlock":
+					changes.push({
+						id,
+						type: "textBlock",
+						diff: computeTextDiff("", getMarkdownContent(toBlock)),
+					});
+					break;
+				case "imageBlock":
+					changes.push({
+						id,
+						type: "imageBlock",
+						from: null,
+						to: getImageUrl(toBlock),
+					});
+					break;
+				case "dataBlock":
+					changes.push({
+						id,
+						type: "dataBlock",
+						from: null,
+						to: getBlockName(toBlock),
+					});
+					break;
+			}
 		} else {
-			// Check if block content changed
-			const valueDiff = diffValues(fromBlock.values, toBlock.values);
-			const relationDiff = diffRelations(fromBlock.relations, toBlock.relations);
-
-			const hasChanges =
-				valueDiff.added.length > 0 ||
-				valueDiff.removed.length > 0 ||
-				valueDiff.changed.length > 0 ||
-				relationDiff.added.length > 0 ||
-				relationDiff.removed.length > 0 ||
-				relationDiff.changed.length > 0;
-
-			if (hasChanges) {
-				changed.push({
-					id,
-					values: valueDiff,
-					relations: relationDiff,
-				});
+			// Check if changed
+			switch (blockType) {
+				case "textBlock": {
+					const fromContent = getMarkdownContent(fromBlock);
+					const toContent = getMarkdownContent(toBlock);
+					if (fromContent !== toContent) {
+						changes.push({
+							id,
+							type: "textBlock",
+							diff: computeTextDiff(fromContent, toContent),
+						});
+					}
+					break;
+				}
+				case "imageBlock": {
+					const fromUrl = getImageUrl(fromBlock);
+					const toUrl = getImageUrl(toBlock);
+					if (fromUrl !== toUrl) {
+						changes.push({
+							id,
+							type: "imageBlock",
+							from: fromUrl,
+							to: toUrl,
+						});
+					}
+					break;
+				}
+				case "dataBlock": {
+					const fromName = getBlockName(fromBlock);
+					const toName = getBlockName(toBlock);
+					if (fromName !== toName) {
+						changes.push({
+							id,
+							type: "dataBlock",
+							from: fromName,
+							to: toName,
+						});
+					}
+					break;
+				}
 			}
 		}
 	}
 
-	// Find removed
-	for (const [id] of fromMap) {
+	// Find removed blocks
+	for (const [id, fromBlock] of fromMap) {
 		if (!toMap.has(id)) {
-			removed.push(id);
+			const blockType = getBlockType(fromBlock);
+			if (!blockType) continue;
+
+			switch (blockType) {
+				case "textBlock":
+					changes.push({
+						id,
+						type: "textBlock",
+						diff: computeTextDiff(getMarkdownContent(fromBlock), ""),
+					});
+					break;
+				case "imageBlock":
+					changes.push({
+						id,
+						type: "imageBlock",
+						from: getImageUrl(fromBlock),
+						to: null,
+					});
+					break;
+				case "dataBlock":
+					changes.push({
+						id,
+						type: "dataBlock",
+						from: getBlockName(fromBlock),
+						to: null,
+					});
+					break;
+			}
 		}
 	}
 
-	return { added, removed, changed };
+	return changes;
+}
+
+// ============================================================================
+// Entity Diffing
+// ============================================================================
+
+/**
+ * Extract entity name from values.
+ */
+function getEntityName(snapshot: EntitySnapshot): string | null {
+	const nameValue = snapshot.values.find(
+		(v) => v.propertyId === SystemIds.NAME_PROPERTY
+	);
+	return nameValue?.string ?? null;
 }
 
 /**
@@ -198,6 +471,7 @@ export function diffEntitySnapshots(
 ): EntityDiff {
 	return {
 		entityId,
+		name: getEntityName(to) ?? getEntityName(from),
 		values: diffValues(from.values, to.values),
 		relations: diffRelations(from.relations, to.relations),
 		blocks: diffBlocks(from.blocks, to.blocks),
