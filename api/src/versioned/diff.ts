@@ -69,17 +69,18 @@ function getValueType(
 ): "TEXT" | "NUMBER" | "BOOLEAN" | "TIME" | "POINT" | "DATE" | "DATETIME" | "BYTES" {
 	if (v.string !== undefined && v.string !== null) return "TEXT";
 	if (v.boolean !== undefined && v.boolean !== null) return "BOOLEAN";
-	if (
-		v.number !== undefined ||
-		v.integer !== undefined ||
-		v.float !== undefined
-	)
-		return "NUMBER";
 	if (v.time !== undefined && v.time !== null) return "TIME";
 	if (v.point !== undefined && v.point !== null) return "POINT";
 	if (v.date !== undefined && v.date !== null) return "DATE";
 	if (v.datetime !== undefined && v.datetime !== null) return "DATETIME";
 	if (v.bytes !== undefined && v.bytes !== null) return "BYTES";
+	// Check number types last - raw SQL returns null (not undefined) for empty columns
+	if (
+		(v.number !== undefined && v.number !== null) ||
+		(v.integer !== undefined && v.integer !== null) ||
+		(v.float !== undefined && v.float !== null)
+	)
+		return "NUMBER";
 	return "TEXT"; // Default fallback
 }
 
