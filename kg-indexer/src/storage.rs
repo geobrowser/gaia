@@ -88,7 +88,7 @@ impl Storage {
         let mut units = Vec::with_capacity(values.len());
         // Value columns
         let mut text_values = Vec::with_capacity(values.len());
-        let mut number_values = Vec::with_capacity(values.len());
+        let mut decimal_values = Vec::with_capacity(values.len());
         let mut boolean_values = Vec::with_capacity(values.len());
         let mut time_values = Vec::with_capacity(values.len());
         let mut point_values = Vec::with_capacity(values.len());
@@ -107,8 +107,8 @@ impl Storage {
             space_ids.push(&prop.space_id);
             languages.push(&prop.language);
             units.push(&prop.unit);
-            text_values.push(prop.string.as_deref());
-            number_values.push(prop.number.as_deref());
+            text_values.push(prop.text.as_deref());
+            decimal_values.push(prop.decimal.as_deref());
             boolean_values.push(prop.boolean);
             time_values.push(prop.time.as_deref());
             point_values.push(prop.point.as_deref());
@@ -124,7 +124,7 @@ impl Storage {
         let query = r#"
             INSERT INTO values (
                 id, entity_id, property_id, space_id, language, unit,
-                string, number, boolean, time, point,
+                text, decimal, boolean, time, point,
                 integer, float, bytes, date, datetime, schedule, embedding
             )
             SELECT * FROM UNNEST(
@@ -150,8 +150,8 @@ impl Storage {
             ON CONFLICT (id) DO UPDATE SET
                 language = EXCLUDED.language,
                 unit = EXCLUDED.unit,
-                string = EXCLUDED.string,
-                number = EXCLUDED.number,
+                text = EXCLUDED.text,
+                decimal = EXCLUDED.decimal,
                 boolean = EXCLUDED.boolean,
                 time = EXCLUDED.time,
                 point = EXCLUDED.point,
@@ -172,7 +172,7 @@ impl Storage {
             .bind(&languages)
             .bind(&units)
             .bind(&text_values)
-            .bind(&number_values)
+            .bind(&decimal_values)
             .bind(&boolean_values)
             .bind(&time_values)
             .bind(&point_values)
@@ -1097,9 +1097,9 @@ impl Storage {
         let mut valid_from_keys = Vec::with_capacity(set_values.len());
         let mut languages = Vec::with_capacity(set_values.len());
         let mut units = Vec::with_capacity(set_values.len());
-        let mut strings = Vec::with_capacity(set_values.len());
+        let mut texts = Vec::with_capacity(set_values.len());
         let mut booleans = Vec::with_capacity(set_values.len());
-        let mut numbers = Vec::with_capacity(set_values.len());
+        let mut decimals = Vec::with_capacity(set_values.len());
         let mut times = Vec::with_capacity(set_values.len());
         let mut points = Vec::with_capacity(set_values.len());
         let mut integers = Vec::with_capacity(set_values.len());
@@ -1124,9 +1124,9 @@ impl Storage {
             valid_from_keys.push(version_key);
             languages.push(v.language.as_deref());
             units.push(v.unit.as_deref());
-            strings.push(v.string.as_deref());
+            texts.push(v.text.as_deref());
             booleans.push(v.boolean);
-            numbers.push(v.number.as_deref());
+            decimals.push(v.decimal.as_deref());
             times.push(v.time.as_deref());
             points.push(v.point.as_deref());
             integers.push(v.integer);
@@ -1142,7 +1142,7 @@ impl Storage {
             r#"
             INSERT INTO value_versions (
                 id, entity_id, property_id, space_id, valid_from_key,
-                language, unit, string, boolean, number, time, point,
+                language, unit, text, boolean, decimal, time, point,
                 integer, float, bytes, date, datetime, schedule, embedding
             )
             SELECT * FROM UNNEST(
@@ -1161,9 +1161,9 @@ impl Storage {
         .bind(&valid_from_keys)
         .bind(&languages)
         .bind(&units)
-        .bind(&strings)
+        .bind(&texts)
         .bind(&booleans)
-        .bind(&numbers)
+        .bind(&decimals)
         .bind(&times)
         .bind(&points)
         .bind(&integers)

@@ -25,23 +25,27 @@ export interface DiffChunk {
 
 /**
  * A value at a specific version (used in snapshots).
+ * Field names match GRC-20 v2 data types.
  */
 export interface VersionedValue {
 	propertyId: string;
 	spaceId: string;
-	// Value data - only one will be set
-	string?: string | null;
-	boolean?: boolean | null;
-	number?: string | null;
-	time?: string | null;
-	point?: string | null;
-	language?: string | null;
-	unit?: string | null;
-	integer?: number | null;
-	float?: number | null;
-	bytes?: string | null; // base64 encoded
-	date?: string | null;
-	datetime?: string | null;
+	// Value columns (GRC-20 v2 data types) - only one will be set
+	boolean?: boolean | null; // BOOL
+	integer?: number | null; // INT64
+	float?: number | null; // FLOAT64
+	decimal?: string | null; // DECIMAL
+	text?: string | null; // TEXT
+	bytes?: string | null; // BYTES (base64 encoded)
+	date?: string | null; // DATE (ISO 8601)
+	time?: string | null; // TIME (ISO 8601)
+	datetime?: string | null; // DATETIME (ISO 8601)
+	schedule?: unknown | null; // SCHEDULE (RFC 5545)
+	point?: string | null; // POINT (WGS84)
+	embedding?: unknown | null; // EMBEDDING
+	// Metadata
+	language?: string | null; // For TEXT values only
+	unit?: string | null; // For numerical values (INT64, FLOAT64, DECIMAL)
 }
 
 /**
@@ -53,13 +57,17 @@ export type TextValueType = "TEXT";
  * Value types that use simple before/after comparison.
  */
 export type SimpleValueType =
-	| "NUMBER"
-	| "BOOLEAN"
-	| "TIME"
-	| "POINT"
+	| "BOOL"
+	| "INT64"
+	| "FLOAT64"
+	| "DECIMAL"
+	| "BYTES"
 	| "DATE"
+	| "TIME"
 	| "DATETIME"
-	| "BYTES";
+	| "SCHEDULE"
+	| "POINT"
+	| "EMBEDDING";
 
 export type ValueType = TextValueType | SimpleValueType;
 

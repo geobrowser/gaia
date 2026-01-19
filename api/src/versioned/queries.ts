@@ -69,20 +69,22 @@ export async function getValuesAtVersion(
 	return result.rows.map((row) => ({
 		propertyId: row.property_id as string,
 		spaceId: row.space_id as string,
-		string: row.string as string | null,
+		// Value columns (GRC-20 v2 data types)
 		boolean: row.boolean as boolean | null,
-		number: row.number as string | null,
-		time: row.time as string | null,
-		point: row.point as string | null,
-		language: row.language as string | null,
-		unit: row.unit as string | null,
 		integer: row.integer as number | null,
 		float: row.float as number | null,
+		decimal: row.decimal as string | null,
+		text: row.text as string | null,
 		bytes: row.bytes ? Buffer.from(row.bytes as Buffer).toString("base64") : null,
 		date: row.date as string | null,
+		time: row.time as string | null,
 		datetime: row.datetime as string | null,
 		schedule: row.schedule as unknown | null,
+		point: row.point as string | null,
 		embedding: row.embedding as unknown | null,
+		// Metadata
+		language: row.language as string | null,
+		unit: row.unit as string | null,
 	}));
 }
 
