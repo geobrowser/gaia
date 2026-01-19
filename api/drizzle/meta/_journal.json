@@ -169,6 +169,13 @@
       "when": 1768595910270,
       "tag": "0023_cute_radioactive_man",
       "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1768836584916,
+      "tag": "0024_fix-smart-comments",
+      "breakpoints": true
     }
   ]
 }
