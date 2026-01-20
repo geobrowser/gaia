@@ -149,6 +149,31 @@ Dynamic keys reduce strict typing. Two possible approaches:
 - Maintain a known list of renderable relation type IDs in the UI.
 - Optionally add `groupKeys: string[]` to the response in the future for discovery.
 
+## Alternative: Named Group Keys
+Instead of using raw relation type IDs as dynamic keys, we could expose a stable set of
+named group keys (e.g. `blocks`) and map those to relation type IDs internally. This
+improves inspectability at the cost of an additional mapping layer.
+
+Example (named key):
+```json
+{
+  "entityId": "Byron",
+  "name": "Byron",
+  "values": [],
+  "relations": [],
+  "blocks": [
+    {
+      "id": "TextBlock_9",
+      "type": "textBlock",
+      "diff": [
+        { "value": "old ", "removed": true },
+        { "value": "new ", "added": true }
+      ]
+    }
+  ]
+}
+```
+
 ## Future Extensions
 - Support grouping for additional relation types (e.g., tables, rows, cells).
 - Persist edit-context metadata from GRC-20 edits in the indexer for UI grouping.
