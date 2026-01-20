@@ -146,6 +146,7 @@ See the `docs/` directory for detailed architecture documentation:
 - [Graph Concepts](docs/graph-concepts.md) - Core concepts and terminology
 - [Canonical Graph Implementation](docs/canonical-graph-implementation.md) - How canonical computation works
 - [Transitive Graph Implementation](docs/transitive-graph-implementation.md) - BFS traversal and caching
+- [Benchmarks](docs/benchmarks.md) - Performance benchmarks and memory usage
 
 ## Related Documents
 
