@@ -99,7 +99,15 @@ class ScoringPipeline:
 
         entity_count = len(self.scoring_data.entities)
         space_count = len(self.scoring_data.spaces)
-        logger.info("Scoring pipeline completed: %d entities, %d spaces", entity_count, space_count)
+        logger.info(
+            "Scoring pipeline completed: %d entities, %d spaces",
+            entity_count,
+            space_count,
+            extra={
+                "pipeline_entities_processed": entity_count,
+                "pipeline_spaces_processed": space_count,
+            },
+        )
 
         return entity_count, space_count
 
@@ -118,6 +126,12 @@ class ScoringPipeline:
             len(self.scoring_data.spaces),
             len(self.scoring_data.users),
             len(self.scoring_data.votes),
+            extra={
+                "entities_count": len(self.scoring_data.entities),
+                "spaces_count": len(self.scoring_data.spaces),
+                "users_count": len(self.scoring_data.users),
+                "votes_count": len(self.scoring_data.votes),
+            },
         )
 
     def _rank_spaces(self) -> None:
@@ -129,7 +143,11 @@ class ScoringPipeline:
             self.scoring_data.users,
         )
 
-        logger.info("Ranked %d spaces", len(self.scoring_data.spaces))
+        logger.info(
+            "Ranked %d spaces",
+            len(self.scoring_data.spaces),
+            extra={"spaces_ranked": len(self.scoring_data.spaces)},
+        )
 
     def _rank_entities(self) -> None:
         """Rank entities by their scores."""
@@ -141,7 +159,11 @@ class ScoringPipeline:
             self.scoring_data.spaces,
         )
 
-        logger.info("Ranked %d entities", len(self.scoring_data.entities))
+        logger.info(
+            "Ranked %d entities",
+            len(self.scoring_data.entities),
+            extra={"entities_ranked": len(self.scoring_data.entities)},
+        )
 
     def _write_scores(self) -> None:
         """Write/emit scores based on output mode."""
@@ -170,6 +192,10 @@ class ScoringPipeline:
                         "Scores emitted to Kafka successfully: %d messages, %d errors",
                         self._emitter.messages_produced,
                         self._emitter.delivery_errors,
+                        extra={
+                            "kafka_messages_produced": self._emitter.messages_produced,
+                            "kafka_delivery_errors": self._emitter.delivery_errors,
+                        },
                     )
 
 
@@ -193,6 +219,7 @@ def main() -> None:
                     event_level=logging.ERROR,  # Send errors as events
                 )
             ],
+            enable_logs=True
         )
         print(
             f"Sentry monitoring enabled (environment: {os.environ.get('SENTRY_ENVIRONMENT', 'production')})"
