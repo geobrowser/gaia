@@ -112,13 +112,6 @@ class ScoringPipeline:
             raise RuntimeError("Scoring data not initialized")
         self.scoring_data = scoring_data
 
-        # Add metrics to Sentry span
-        if sentry_sdk.Hub.current.scope.span:
-            sentry_sdk.Hub.current.scope.span.set_data("entities_count", len(self.scoring_data.entities))
-            sentry_sdk.Hub.current.scope.span.set_data("spaces_count", len(self.scoring_data.spaces))
-            sentry_sdk.Hub.current.scope.span.set_data("users_count", len(self.scoring_data.users))
-            sentry_sdk.Hub.current.scope.span.set_data("votes_count", len(self.scoring_data.votes))
-
         logger.info(
             "Fetched %d entities, %d spaces, %d users, %d votes",
             len(self.scoring_data.entities),
