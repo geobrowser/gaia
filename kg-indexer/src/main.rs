@@ -5,11 +5,9 @@ use std::time::{Duration, Instant};
 use futures::StreamExt;
 use hermes_instrumentation::{debug, error, info, info_span, warn, Instrument};
 use hermes_schema::pb::blockchain_metadata::BlockchainMetadata;
-use opentelemetry::propagation::Extractor;
 use rdkafka::message::Headers;
 use rdkafka::Message;
 use std::sync::OnceLock;
-use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 mod consumer;
 mod error;
@@ -286,7 +284,6 @@ async fn async_main() -> Result<(), IndexerError> {
                         let offset = msg.offset();
                         let event_type = get_event_type(msg.headers());
                         let event_id_header = get_header_value(msg.headers(), "event-id");
-                        let parent_cx = extract_parent_context(msg.headers());
 
                         // Parse message first to determine if we should create a span
                         let payload = match msg.payload() {
@@ -341,7 +338,6 @@ async fn async_main() -> Result<(), IndexerError> {
                             "otel.status_code" = tracing::field::Empty,
                             "otel.status_message" = tracing::field::Empty
                         );
-                        let _ = span.set_parent(parent_cx);
 
                         let fut = async {
                             if let KgMessage::BlockSummary(summary) = kg_msg {
@@ -575,40 +571,6 @@ fn get_header_value(
         }
         None
     })
-}
-
-struct KafkaHeadersExtractor<'a> {
-    headers: Option<&'a rdkafka::message::BorrowedHeaders>,
-}
-
-impl<'a> Extractor for KafkaHeadersExtractor<'a> {
-    fn get(&self, key: &str) -> Option<&str> {
-        self.headers.and_then(|headers| {
-            for header in headers.iter() {
-                if header.key.eq_ignore_ascii_case(key) {
-                    if let Some(value) = header.value {
-                        if let Ok(value_str) = std::str::from_utf8(value) {
-                            return Some(value_str);
-                        }
-                    }
-                }
-            }
-            None
-        })
-    }
-
-    fn keys(&self) -> Vec<&str> {
-        self.headers
-            .map(|headers| headers.iter().map(|header| header.key).collect())
-            .unwrap_or_default()
-    }
-}
-
-fn extract_parent_context(
-    headers: Option<&rdkafka::message::BorrowedHeaders>,
-) -> opentelemetry::Context {
-    let extractor = KafkaHeadersExtractor { headers };
-    opentelemetry::global::get_text_map_propagator(|prop| prop.extract(&extractor))
 }
 
 fn log_event_ids_enabled() -> bool {
