@@ -101,12 +101,17 @@ Example (blocks):
 
 ## Type Model
 ```ts
+export type GroupedChangeItem =
+  | TextBlockChange
+  | ImageBlockChange
+  | DataBlockChange;
+
 export type GroupedEntityDiff = {
   entityId: string;
   name: string | null;
   values: ValueChange[];
   relations: RelationChange[];
-} & Record<string, BlockChange[]>;
+} & Record<string, GroupedChangeItem[]>;
 ```
 
 ## Mapping Strategy
@@ -114,6 +119,7 @@ export type GroupedEntityDiff = {
 2) Emit the grouped root with the standard fields (`entityId`, `name`, `values`, `relations`).
 3) For each supported relation type grouping (initially `BLOCKS_ID`), map the grouped diff array onto `[relationTypeId]`.
 4) Keep other changes in the flat `values` and `relations` arrays.
+5) If a change is grouped under a relation-type key, do not emit it as a standalone root in proposal diffs.
 
 ## Context-Edge Grouping Algorithm (Concrete)
 When edit context metadata is available, use it to route changes into relation-type groupings.
@@ -146,8 +152,61 @@ Notes:
 
 ## Inspectability
 Dynamic keys reduce strict typing. Two possible approaches:
-- Maintain a known list of renderable relation type IDs in the UI.
-- Optionally add `groupKeys: string[]` to the response in the future for discovery.
+1) **Dynamic-only keys** (e.g. `BLOCKS_ID`):
+   - Include `groupKeys: string[]` so clients know which dynamic fields are present.
+2) **Hybrid keys**:
+   - Use static named keys for known groups (e.g. `blocks`).
+   - Allow additional dynamic keys for other relation types when needed.
+
+Example (dynamic-only + groupKeys):
+```json
+{
+  "entityId": "Byron",
+  "name": "Byron",
+  "values": [],
+  "relations": [],
+  "groupKeys": ["BLOCKS_ID"],
+  "BLOCKS_ID": [
+    {
+      "id": "TextBlock_9",
+      "type": "textBlock",
+      "diff": [
+        { "value": "old ", "removed": true },
+        { "value": "new ", "added": true }
+      ]
+    }
+  ]
+}
+```
+
+Example (hybrid keys):
+```json
+{
+  "entityId": "Byron",
+  "name": "Byron",
+  "values": [],
+  "relations": [],
+  "groupKeys": ["SOME_OTHER_KEY"],
+  "blocks": [
+    {
+      "id": "TextBlock_9",
+      "type": "textBlock",
+      "diff": [
+        { "value": "old ", "removed": true },
+        { "value": "new ", "added": true }
+      ]
+    }
+  ],
+  "SOME_OTHER_KEY": [
+    {
+      "id": "OtherChild_1",
+      "type": "dataBlock",
+      "before": "Old",
+      "after": "New"
+    }
+  ]
+}
+```
 
 ## Alternative: Named Group Keys
 Instead of using raw relation type IDs as dynamic keys, we could expose a stable set of
