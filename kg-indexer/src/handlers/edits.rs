@@ -20,6 +20,8 @@ use crate::models::{
 
 /// Result of processing an edit message
 pub struct EditResult {
+    /// The edit ID (from HermesEdit.id)
+    pub edit_id: Uuid,
     pub entities: Vec<EntityItem>,
     pub values: Vec<ValueOp>,
     pub relations: Vec<RelationOp>,
@@ -67,6 +69,7 @@ fn id_to_uuid(id: &Grc20Id) -> Uuid {
 
 /// Process a HermesEdit message and return the extracted data
 pub fn handle_edit(edit: &HermesEdit) -> Result<EditResult, HandlerError> {
+    let edit_id = parse_edit_id(&edit.id)?;
     let space_id = parse_space_id(edit.space_id.as_slice())?;
     let meta = EditMetadata::from_edit(edit);
 
@@ -83,10 +86,24 @@ pub fn handle_edit(edit: &HermesEdit) -> Result<EditResult, HandlerError> {
     let relations = squash_relations(&relation_ops);
 
     Ok(EditResult {
+        edit_id,
         entities,
         values,
         relations,
     })
+}
+
+fn parse_edit_id(id_bytes: &[u8]) -> Result<Uuid, HandlerError> {
+    if id_bytes.len() != 16 {
+        return Err(HandlerError::DecodeError(format!(
+            "Invalid edit ID: expected 16 bytes, got {}",
+            id_bytes.len()
+        )));
+    }
+    let bytes: [u8; 16] = id_bytes.try_into().map_err(|_| {
+        HandlerError::DecodeError("Failed to convert edit ID bytes to array".to_string())
+    })?;
+    Ok(Uuid::from_bytes(bytes))
 }
 
 /// Squash value operations - last operation for each value ID wins
@@ -345,8 +362,8 @@ fn value_to_value_op(pv: &PropertyValue, entity_id: Uuid, space_id: Uuid) -> Opt
         space_id,
         language: None,
         unit: None,
-        string: None,
-        number: None,
+        text: None,
+        decimal: None,
         boolean: None,
         time: None,
         point: None,
@@ -382,13 +399,13 @@ fn value_to_value_op(pv: &PropertyValue, entity_id: Uuid, space_id: Uuid) -> Opt
         } => {
             // Convert decimal to string representation for storage
             let decimal_str = format_decimal_mantissa(mantissa, *exponent);
-            op.number = Some(decimal_str);
+            op.decimal = Some(decimal_str);
             if let Some(unit_id) = unit {
                 op.unit = Some(id_to_uuid(unit_id).to_string());
             }
         }
         Grc20Value::Text { value, language } => {
-            op.string = Some(value.to_string());
+            op.text = Some(value.to_string());
             if let Some(lang_id) = language {
                 op.language = Some(id_to_uuid(lang_id).to_string());
             }
@@ -510,8 +527,8 @@ fn extract_values(edit: &Grc20Edit, space_id: &Uuid) -> Vec<ValueOp> {
                         space_id: *space_id,
                         language: None,
                         unit: None,
-                        string: None,
-                        number: None,
+                        text: None,
+                        decimal: None,
                         boolean: None,
                         time: None,
                         point: None,
@@ -670,8 +687,8 @@ mod tests {
             space_id: Uuid::new_v4(),
             language: None,
             unit: None,
-            string: value,
-            number: None,
+            text: value,
+            decimal: None,
             boolean: None,
             time: None,
             point: None,
@@ -778,7 +795,7 @@ mod tests {
         let result = squash_values(&ops);
         assert_eq!(result.len(), 1);
         assert!(matches!(result[0].change_type, ValueChangeType::Set));
-        assert_eq!(result[0].string, Some("recreated".into()));
+        assert_eq!(result[0].text, Some("recreated".into()));
     }
 
     #[test]
@@ -792,7 +809,7 @@ mod tests {
         let result = squash_values(&ops);
         assert_eq!(result.len(), 1);
         // Last one wins
-        assert_eq!(result[0].string, Some("third".into()));
+        assert_eq!(result[0].text, Some("third".into()));
     }
 
     #[test]
@@ -826,10 +843,10 @@ mod tests {
         assert!(matches!(id1_op.change_type, ValueChangeType::Delete));
 
         let id2_op = result.iter().find(|op| op.id == id2).unwrap();
-        assert_eq!(id2_op.string, Some("v2-updated".into()));
+        assert_eq!(id2_op.text, Some("v2-updated".into()));
 
         let id3_op = result.iter().find(|op| op.id == id3).unwrap();
-        assert_eq!(id3_op.string, Some("v3".into()));
+        assert_eq!(id3_op.text, Some("v3".into()));
     }
 
     // ===================

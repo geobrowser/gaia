@@ -110,22 +110,22 @@ export const values = pgTable(
 		propertyId: uuid().notNull(),
 		entityId: uuid().notNull(),
 		spaceId: uuid().notNull(),
-		// v1 value columns (kept for compatibility)
-		string: text(),
-		boolean: boolean(),
-		number: decimal(),
-		point: text(),
-		time: text(),
-		language: text(),
-		unit: text(),
-		// v2 value columns
-		integer: bigint({ mode: "number" }),
-		float: doublePrecision(),
-		bytes: bytea(),
-		date: text(),
-		datetime: text(),
-		schedule: jsonb(),
-		embedding: jsonb(),
+		// Value columns (GRC-20 v2 data types)
+		boolean: boolean(), // BOOL
+		integer: bigint({ mode: "number" }), // INT64
+		float: doublePrecision(), // FLOAT64
+		decimal: decimal(), // DECIMAL
+		text: text(), // TEXT
+		bytes: bytea(), // BYTES
+		date: text(), // DATE (ISO 8601)
+		time: text(), // TIME (ISO 8601)
+		datetime: text(), // DATETIME (ISO 8601)
+		schedule: jsonb(), // SCHEDULE (RFC 5545)
+		point: text(), // POINT (WGS84)
+		embedding: jsonb(), // EMBEDDING
+		// Metadata
+		language: text(), // For TEXT values only
+		unit: text(), // For numerical values (INT64, FLOAT64, DECIMAL)
 	},
 	(table) => [
 		// Foreign key indexes for join performance
@@ -133,21 +133,21 @@ export const values = pgTable(
 		index("values_entity_id_idx").on(table.entityId),
 		index("values_space_id_idx").on(table.spaceId),
 
-		// Partial B-tree index for text searches (only indexes strings ≤2000 chars)
-		// Longer strings will use sequential scan, but won't cause index size errors
-		index("values_text_idx")
-			.on(table.string)
-			.where(sql`length(${table.string}) <= 2000`),
-		index("values_number_idx").on(table.number),
-		index("values_point_idx").on(table.point),
+		// Value type indexes
 		index("values_boolean_idx").on(table.boolean),
-		index("values_time_idx").on(table.time),
-		// v2 value column indexes
 		index("values_integer_idx").on(table.integer),
 		index("values_float_idx").on(table.float),
+		index("values_decimal_idx").on(table.decimal),
+		// Partial B-tree index for text searches (only indexes text ≤2000 chars)
+		// Longer text will use sequential scan, but won't cause index size errors
+		index("values_text_idx")
+			.on(table.text)
+			.where(sql`length(${table.text}) <= 2000`),
 		index("values_date_idx").on(table.date),
+		index("values_time_idx").on(table.time),
 		index("values_datetime_idx").on(table.datetime),
-		// GIN index creation is handled via migration
+		index("values_point_idx").on(table.point),
+		// GIN index for schedule and embedding handled via migration
 
 		// Composite indexes for common query patterns
 		index("values_entity_property_idx").on(table.entityId, table.propertyId),
@@ -158,9 +158,6 @@ export const values = pgTable(
 			table.propertyId,
 			table.spaceId,
 		),
-
-		// Composite index for space-filtered searches
-		// index("values_space_text_idx").on(table.spaceId, table.string),
 
 		// Additional indexes for filtering
 		index("values_language_idx").on(table.language),
@@ -657,3 +654,118 @@ export const votesCount = pgTable(
 		uniqueConstraint: unique().on(table.objectId, table.objectType, table.spaceId),
 	}),
 );
+
+/** Versioned Entities Schema */
+
+/**
+ * edit_versions
+ *
+ * Lookup table to resolve edit_id -> version_key for temporal queries.
+ * version_key is a packed bigint: (block_number << 32) | sequence
+ */
+export const editVersions = pgTable(
+	"edit_versions",
+	{
+		editId: uuid("edit_id").primaryKey(),
+		blockNumber: bigint("block_number", { mode: "bigint" }).notNull(),
+		sequence: bigint("sequence", { mode: "number" }).notNull(),
+		versionKey: bigint("version_key", { mode: "bigint" }).notNull(),
+		createdAt: timestamp("created_at", { mode: "date" }).notNull(),
+	},
+	(table) => [
+		unique("edit_versions_block_sequence_unique").on(
+			table.blockNumber,
+			table.sequence,
+		),
+		index("edit_versions_version_key_idx").on(table.versionKey),
+	],
+);
+
+/**
+ * value_versions
+ *
+ * Temporal versioned values. Each row represents a value's state during a version range.
+ * When a value changes, the current row's valid_to_key is set and a new row is inserted.
+ */
+export const valueVersions = pgTable(
+	"value_versions",
+	{
+		id: uuid("id").primaryKey(),
+		entityId: uuid("entity_id").notNull(),
+		propertyId: uuid("property_id").notNull(),
+		spaceId: uuid("space_id").notNull(),
+		validFromKey: bigint("valid_from_key", { mode: "bigint" }).notNull(),
+		validToKey: bigint("valid_to_key", { mode: "bigint" }),
+		// Value columns (GRC-20 v2 data types)
+		boolean: boolean("boolean"), // BOOL
+		integer: bigint("integer", { mode: "number" }), // INT64
+		float: doublePrecision("float"), // FLOAT64
+		decimal: decimal("decimal"), // DECIMAL
+		text: text("text"), // TEXT
+		bytes: bytea("bytes"), // BYTES
+		date: text("date"), // DATE (ISO 8601)
+		time: text("time"), // TIME (ISO 8601)
+		datetime: text("datetime"), // DATETIME (ISO 8601)
+		schedule: jsonb("schedule"), // SCHEDULE (RFC 5545)
+		point: text("point"), // POINT (WGS84)
+		embedding: jsonb("embedding"), // EMBEDDING
+		// Metadata
+		language: text("language"), // For TEXT values only
+		unit: text("unit"), // For numerical values (INT64, FLOAT64, DECIMAL)
+	},
+	(table) => [
+		index("value_versions_entity_idx").on(table.entityId),
+		index("value_versions_lookup_idx").on(
+			table.entityId,
+			table.propertyId,
+			table.spaceId,
+		),
+		index("value_versions_open_idx")
+			.on(table.entityId, table.propertyId, table.spaceId)
+			.where(sql`${table.validToKey} IS NULL`),
+		index("value_versions_range_idx").on(
+			table.entityId,
+			table.validFromKey,
+		),
+	],
+);
+
+/**
+ * relation_versions
+ *
+ * Temporal versioned relations. Each row represents a relation's state during a version range.
+ * When a relation changes, the current row's valid_to_key is set and a new row is inserted.
+ */
+export const relationVersions = pgTable(
+	"relation_versions",
+	{
+		id: uuid("id").primaryKey(),
+		relationId: uuid("relation_id").notNull(),
+		entityId: uuid("entity_id").notNull(),
+		typeId: uuid("type_id").notNull(),
+		fromEntityId: uuid("from_entity_id").notNull(),
+		fromSpaceId: uuid("from_space_id"),
+		toEntityId: uuid("to_entity_id").notNull(),
+		toSpaceId: uuid("to_space_id"),
+		position: text("position"),
+		spaceId: uuid("space_id").notNull(),
+		verified: boolean("verified"),
+		validFromKey: bigint("valid_from_key", { mode: "bigint" }).notNull(),
+		validToKey: bigint("valid_to_key", { mode: "bigint" }),
+	},
+	(table) => [
+		index("relation_versions_relation_idx").on(table.relationId),
+		index("relation_versions_entity_idx").on(table.entityId),
+		index("relation_versions_open_idx")
+			.on(table.relationId)
+			.where(sql`${table.validToKey} IS NULL`),
+		index("relation_versions_range_idx").on(
+			table.entityId,
+			table.validFromKey,
+		),
+	],
+);
+
+export type DbEditVersion = InferSelectModel<typeof editVersions>;
+export type DbValueVersion = InferSelectModel<typeof valueVersions>;
+export type DbRelationVersion = InferSelectModel<typeof relationVersions>;

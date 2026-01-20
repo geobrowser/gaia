@@ -4,8 +4,8 @@ import { Pool } from "pg"
 describe("entities_ordered_by_property integration tests", () => {
 	let pool: Pool
 	let testPropertyIds: {
-		string: string
-		number: string
+		text: string
+		decimal: string
 		boolean: string
 		time: string
 		point: string
@@ -73,8 +73,8 @@ describe("entities_ordered_by_property integration tests", () => {
 
 		// Create test properties for different data types
 		testPropertyIds = {
-			string: "550e8400-e29b-41d4-a716-446655440010",
-			number: "550e8400-e29b-41d4-a716-446655440011", 
+			text: "550e8400-e29b-41d4-a716-446655440010",
+			decimal: "550e8400-e29b-41d4-a716-446655440011",
 			boolean: "550e8400-e29b-41d4-a716-446655440012",
 			time: "550e8400-e29b-41d4-a716-446655440013",
 			point: "550e8400-e29b-41d4-a716-446655440014",
@@ -82,8 +82,8 @@ describe("entities_ordered_by_property integration tests", () => {
 		}
 
 		const propertyTypes = [
-			{ id: testPropertyIds.string, type: 'String' },
-			{ id: testPropertyIds.number, type: 'Number' },
+			{ id: testPropertyIds.text, type: 'Text' },
+			{ id: testPropertyIds.decimal, type: 'Decimal' },
 			{ id: testPropertyIds.boolean, type: 'Boolean' },
 			{ id: testPropertyIds.time, type: 'Time' },
 			{ id: testPropertyIds.point, type: 'Point' },
@@ -100,33 +100,33 @@ describe("entities_ordered_by_property integration tests", () => {
 
 		// Insert test values for different data types
 		const testValues = [
-			// String values (alphabetically: Alpha, Beta, Charlie)
-			{ id: 'val1', property_id: testPropertyIds.string, entity_id: testEntityIds[0], space_id: testSpaceId, string: 'Charlie' },
-			{ id: 'val2', property_id: testPropertyIds.string, entity_id: testEntityIds[1], space_id: testSpaceId, string: 'Alpha' },
-			{ id: 'val3', property_id: testPropertyIds.string, entity_id: testEntityIds[2], space_id: testSpaceId, string: 'Beta' },
-			
-			// Number values (numerically: 10, 25, 100)
-			{ id: 'val4', property_id: testPropertyIds.number, entity_id: testEntityIds[0], space_id: testSpaceId, number: '100' },
-			{ id: 'val5', property_id: testPropertyIds.number, entity_id: testEntityIds[1], space_id: testSpaceId, number: '10' },
-			{ id: 'val6', property_id: testPropertyIds.number, entity_id: testEntityIds[2], space_id: testSpaceId, number: '25' },
-			
+			// Text values (alphabetically: Alpha, Beta, Charlie)
+			{ id: 'val1', property_id: testPropertyIds.text, entity_id: testEntityIds[0], space_id: testSpaceId, text: 'Charlie' },
+			{ id: 'val2', property_id: testPropertyIds.text, entity_id: testEntityIds[1], space_id: testSpaceId, text: 'Alpha' },
+			{ id: 'val3', property_id: testPropertyIds.text, entity_id: testEntityIds[2], space_id: testSpaceId, text: 'Beta' },
+
+			// Decimal values (numerically: 10, 25, 100)
+			{ id: 'val4', property_id: testPropertyIds.decimal, entity_id: testEntityIds[0], space_id: testSpaceId, decimal: '100' },
+			{ id: 'val5', property_id: testPropertyIds.decimal, entity_id: testEntityIds[1], space_id: testSpaceId, decimal: '10' },
+			{ id: 'val6', property_id: testPropertyIds.decimal, entity_id: testEntityIds[2], space_id: testSpaceId, decimal: '25' },
+
 			// Boolean values (false, true, false)
 			{ id: 'val7', property_id: testPropertyIds.boolean, entity_id: testEntityIds[0], space_id: testSpaceId, boolean: false },
 			{ id: 'val8', property_id: testPropertyIds.boolean, entity_id: testEntityIds[1], space_id: testSpaceId, boolean: true },
 			{ id: 'val9', property_id: testPropertyIds.boolean, entity_id: testEntityIds[2], space_id: testSpaceId, boolean: false },
-			
+
 			// Time values (chronologically: 2023, 2024, 2025)
 			{ id: 'val10', property_id: testPropertyIds.time, entity_id: testEntityIds[0], space_id: testSpaceId, time: '2025-01-01T00:00:00Z' },
 			{ id: 'val11', property_id: testPropertyIds.time, entity_id: testEntityIds[1], space_id: testSpaceId, time: '2023-01-01T00:00:00Z' },
 			{ id: 'val12', property_id: testPropertyIds.time, entity_id: testEntityIds[2], space_id: testSpaceId, time: '2024-01-01T00:00:00Z' },
-			
-			// Point values 
+
+			// Point values
 			{ id: 'val13', property_id: testPropertyIds.point, entity_id: testEntityIds[0], space_id: testSpaceId, point: 'POINT(3 3)' },
 			{ id: 'val14', property_id: testPropertyIds.point, entity_id: testEntityIds[1], space_id: testSpaceId, point: 'POINT(1 1)' },
 			{ id: 'val15', property_id: testPropertyIds.point, entity_id: testEntityIds[2], space_id: testSpaceId, point: 'POINT(2 2)' },
-			
+
 			// Relation values (should be excluded)
-			{ id: 'val16', property_id: testPropertyIds.relation, entity_id: testEntityIds[0], space_id: testSpaceId, string: 'relation-value' }
+			{ id: 'val16', property_id: testPropertyIds.relation, entity_id: testEntityIds[0], space_id: testSpaceId, text: 'relation-value' }
 		]
 
 		for (const value of testValues) {
@@ -134,14 +134,14 @@ describe("entities_ordered_by_property integration tests", () => {
 			const values = [value.id, value.property_id, value.entity_id, value.space_id]
 			const placeholders = ['$1', '$2', '$3', '$4']
 
-			if (value.string !== undefined) {
-				columns.push('string')
-				values.push(value.string)
+			if (value.text !== undefined) {
+				columns.push('text')
+				values.push(value.text)
 				placeholders.push(`$${values.length}`)
 			}
-			if (value.number !== undefined) {
-				columns.push('number')
-				values.push(value.number)
+			if (value.decimal !== undefined) {
+				columns.push('decimal')
+				values.push(value.decimal)
 				placeholders.push(`$${values.length}`)
 			}
 			if (value.boolean !== undefined) {
@@ -199,14 +199,14 @@ describe("entities_ordered_by_property integration tests", () => {
 		}
 	}
 
-	describe("String property ordering", () => {
-		it("should order string values in ascending order by default", async () => {
+	describe("Text property ordering", () => {
+		it("should order text values in ascending order by default", async () => {
 			const result = await pool.query(`
 				SELECT id FROM entities_ordered_by_property($1::uuid)
-			`, [testPropertyIds.string])
+			`, [testPropertyIds.text])
 
 			expect(result.rows).toHaveLength(3)
-			
+
 			// Should be ordered: Alpha, Beta, Charlie
 			const orderedEntityIds = result.rows.map(row => row.id)
 			expect(orderedEntityIds[0]).toBe(testEntityIds[1]) // Alpha
@@ -214,13 +214,13 @@ describe("entities_ordered_by_property integration tests", () => {
 			expect(orderedEntityIds[2]).toBe(testEntityIds[0]) // Charlie
 		})
 
-		it("should order string values in descending order", async () => {
+		it("should order text values in descending order", async () => {
 			const result = await pool.query(`
 				SELECT id FROM entities_ordered_by_property($1::uuid, NULL, 'DESC'::sort_order)
-			`, [testPropertyIds.string])
+			`, [testPropertyIds.text])
 
 			expect(result.rows).toHaveLength(3)
-			
+
 			// Should be ordered: Charlie, Beta, Alpha
 			const orderedEntityIds = result.rows.map(row => row.id)
 			expect(orderedEntityIds[0]).toBe(testEntityIds[0]) // Charlie
@@ -229,14 +229,14 @@ describe("entities_ordered_by_property integration tests", () => {
 		})
 	})
 
-	describe("Number property ordering", () => {
-		it("should order number values in ascending order", async () => {
+	describe("Decimal property ordering", () => {
+		it("should order decimal values in ascending order", async () => {
 			const result = await pool.query(`
 				SELECT id FROM entities_ordered_by_property($1::uuid, NULL, 'ASC'::sort_order)
-			`, [testPropertyIds.number])
+			`, [testPropertyIds.decimal])
 
 			expect(result.rows).toHaveLength(3)
-			
+
 			// Should be ordered numerically: 10, 25, 100
 			const orderedEntityIds = result.rows.map(row => row.id)
 			expect(orderedEntityIds[0]).toBe(testEntityIds[1]) // 10
@@ -244,13 +244,13 @@ describe("entities_ordered_by_property integration tests", () => {
 			expect(orderedEntityIds[2]).toBe(testEntityIds[0]) // 100
 		})
 
-		it("should order number values in descending order", async () => {
+		it("should order decimal values in descending order", async () => {
 			const result = await pool.query(`
 				SELECT id FROM entities_ordered_by_property($1::uuid, NULL, 'DESC'::sort_order)
-			`, [testPropertyIds.number])
+			`, [testPropertyIds.decimal])
 
 			expect(result.rows).toHaveLength(3)
-			
+
 			// Should be ordered numerically: 100, 25, 10
 			const orderedEntityIds = result.rows.map(row => row.id)
 			expect(orderedEntityIds[0]).toBe(testEntityIds[0]) // 100
@@ -319,7 +319,7 @@ describe("entities_ordered_by_property integration tests", () => {
 		it("should filter by space when space_id is provided", async () => {
 			const result = await pool.query(`
 				SELECT id FROM entities_ordered_by_property($1::uuid, $2::uuid)
-			`, [testPropertyIds.string, testSpaceId])
+			`, [testPropertyIds.text, testSpaceId])
 
 			expect(result.rows).toHaveLength(3)
 		})
@@ -328,7 +328,7 @@ describe("entities_ordered_by_property integration tests", () => {
 			const nonExistentSpaceId = "00000000-0000-0000-0000-000000000000"
 			const result = await pool.query(`
 				SELECT id FROM entities_ordered_by_property($1::uuid, $2::uuid)
-			`, [testPropertyIds.string, nonExistentSpaceId])
+			`, [testPropertyIds.text, nonExistentSpaceId])
 
 			expect(result.rows).toHaveLength(0)
 		})
@@ -345,7 +345,7 @@ describe("entities_ordered_by_property integration tests", () => {
 		})
 
 		it("should handle null values properly (exclude them)", async () => {
-			// Insert an entity with null string value
+			// Insert an entity with null text value
 			const nullEntityId = "550e8400-e29b-41d4-a716-446655440099"
 			await pool.query(`
 				INSERT INTO entities (id, created_at, created_at_block, updated_at, updated_at_block)
@@ -354,14 +354,14 @@ describe("entities_ordered_by_property integration tests", () => {
 			`, [nullEntityId])
 
 			await pool.query(`
-				INSERT INTO values (id, property_id, entity_id, space_id, string)
+				INSERT INTO values (id, property_id, entity_id, space_id, text)
 				VALUES ('null-val', $1, $2, $3, NULL)
 				ON CONFLICT (id) DO NOTHING
-			`, [testPropertyIds.string, nullEntityId, testSpaceId])
+			`, [testPropertyIds.text, nullEntityId, testSpaceId])
 
 			const result = await pool.query(`
 				SELECT id FROM entities_ordered_by_property($1::uuid)
-			`, [testPropertyIds.string])
+			`, [testPropertyIds.text])
 
 			// Should still only return 3 results (excluding the null value)
 			expect(result.rows).toHaveLength(3)
@@ -372,8 +372,8 @@ describe("entities_ordered_by_property integration tests", () => {
 			await pool.query('DELETE FROM entities WHERE id = $1', [nullEntityId])
 		})
 
-		it("should handle empty string values properly (exclude them)", async () => {
-			// Insert an entity with empty string value
+		it("should handle empty text values properly (exclude them)", async () => {
+			// Insert an entity with empty text value
 			const emptyEntityId = "550e8400-e29b-41d4-a716-446655440098"
 			await pool.query(`
 				INSERT INTO entities (id, created_at, created_at_block, updated_at, updated_at_block)
@@ -382,16 +382,16 @@ describe("entities_ordered_by_property integration tests", () => {
 			`, [emptyEntityId])
 
 			await pool.query(`
-				INSERT INTO values (id, property_id, entity_id, space_id, string)
+				INSERT INTO values (id, property_id, entity_id, space_id, text)
 				VALUES ('empty-val', $1, $2, $3, '')
 				ON CONFLICT (id) DO NOTHING
-			`, [testPropertyIds.string, emptyEntityId, testSpaceId])
+			`, [testPropertyIds.text, emptyEntityId, testSpaceId])
 
 			const result = await pool.query(`
 				SELECT id FROM entities_ordered_by_property($1::uuid)
-			`, [testPropertyIds.string])
+			`, [testPropertyIds.text])
 
-			// Should still only return 3 results (excluding the empty string value)
+			// Should still only return 3 results (excluding the empty text value)
 			expect(result.rows).toHaveLength(3)
 			expect(result.rows.map(row => row.id)).not.toContain(emptyEntityId)
 

@@ -16,6 +16,7 @@ mod error;
 mod handlers;
 mod models;
 mod storage;
+mod version_buffer;
 
 use consumer::{get_event_type, parse_message, KafkaConsumer, KgMessage};
 use error::IndexerError;
@@ -701,6 +702,7 @@ async fn process_buffered_block(
 
     let block_number = events[0].msg.block_number().unwrap_or(0);
 
+
     let mut counts_by_event_type: HashMap<String, u64> = HashMap::new();
     let mut counts_by_topic: HashMap<String, u64> = HashMap::new();
     let mut partition_set: Vec<i32> = Vec::new();
@@ -879,6 +881,10 @@ async fn process_message(
         KgMessage::Edit(edit) => {
             let result = handlers::edits::handle_edit(&edit)?;
 
+            // Keep copies for versioned writes before partitioning
+            let values_for_versioning = result.values.clone();
+            let relations_for_versioning = result.relations.clone();
+
             // Partition values into sets and deletes
             let (set_values, delete_values): (Vec<_>, Vec<_>) = result
                 .values
@@ -913,7 +919,7 @@ async fn process_message(
                 + unset_relations.len()
                 + delete_relations.len();
 
-            // Bulk insert all operations
+            // Bulk insert all operations (live tables)
             storage.insert_entities(&result.entities, &mut tx).await?;
             storage.insert_values(&set_values, &mut tx).await?;
             storage.delete_values(&delete_value_ids, &mut tx).await?;
@@ -923,6 +929,26 @@ async fn process_message(
                 .unset_relation_fields(&unset_relations, &mut tx)
                 .await?;
             storage.delete_relations(&delete_relations, &mut tx).await?;
+
+            // Versioned writes (temporal tables)
+            if let Some(meta) = edit.meta.as_ref() {
+                let version_key = storage
+                    .insert_edit_version(
+                        result.edit_id,
+                        meta.block_number as i64,
+                        meta.sequence as i64,
+                        meta.created_at as i64,
+                        &mut tx,
+                    )
+                    .await?;
+
+                storage
+                    .insert_value_versions(&values_for_versioning, version_key, &mut tx)
+                    .await?;
+                storage
+                    .insert_relation_versions(&relations_for_versioning, version_key, &mut tx)
+                    .await?;
+            }
 
             ops
         }
@@ -1088,6 +1114,10 @@ async fn process_block(
                 KgMessage::Edit(edit) => {
                     let result = handlers::edits::handle_edit(edit)?;
 
+                    // Keep copies for versioned writes before partitioning
+                    let values_for_versioning = result.values.clone();
+                    let relations_for_versioning = result.relations.clone();
+
                     // Partition values into sets and deletes
                     let (set_values, delete_values): (Vec<_>, Vec<_>) = result
                         .values
@@ -1122,7 +1152,7 @@ async fn process_block(
                         + unset_relations.len()
                         + delete_relations.len();
 
-                    // Bulk insert all operations
+                    // Bulk insert all operations (live tables)
                     storage.insert_entities(&result.entities, &mut tx).await?;
                     storage.insert_values(&set_values, &mut tx).await?;
                     storage.delete_values(&delete_value_ids, &mut tx).await?;
@@ -1132,6 +1162,30 @@ async fn process_block(
                         .unset_relation_fields(&unset_relations, &mut tx)
                         .await?;
                     storage.delete_relations(&delete_relations, &mut tx).await?;
+
+                    // Versioned writes (temporal tables)
+                    if let Some(meta) = edit.meta.as_ref() {
+                        let version_key = storage
+                            .insert_edit_version(
+                                result.edit_id,
+                                meta.block_number as i64,
+                                meta.sequence as i64,
+                                meta.created_at as i64,
+                                &mut tx,
+                            )
+                            .await?;
+
+                        storage
+                            .insert_value_versions(&values_for_versioning, version_key, &mut tx)
+                            .await?;
+                        storage
+                            .insert_relation_versions(
+                                &relations_for_versioning,
+                                version_key,
+                                &mut tx,
+                            )
+                            .await?;
+                    }
 
                     ops
                 }
