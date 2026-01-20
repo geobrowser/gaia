@@ -8,6 +8,7 @@
  */
 
 import type { SearchQuery, SearchResponse, SearchResult } from '../../../../api/src/services/search/types';
+import { DEFAULT_AVERAGE_SCORE } from '../../../../api/src/services/search/opensearch';
 
 // Colors for terminal output
 const GREEN = '\x1b[0;32m';
@@ -29,6 +30,7 @@ const TEST_ENTITIES = {
   ALICE_AT_THRESHOLD_ID: '00000000-0000-0000-0000-0000000000f6',
   ALICE_BELOW_THRESHOLD_ID: '00000000-0000-0000-0000-0000000000f7',
   BOB_ID: '00000000-0000-0000-0000-000000000b0b',
+  CHARLIE_ID: '00000000-0000-0000-0000-000000000c1c',
   ORG_ID: '00000000-0000-0000-0000-0000000ac3ec',
 };
 
@@ -225,8 +227,8 @@ class SearchValidator {
       // Check that scores are descending (camelCase as per API types)
       let scoresDescending = true;
       for (let i = 0; i < response.results.length - 1; i++) {
-        const currentScore = response.results[i].entityGlobalScore ?? 0;
-        const nextScore = response.results[i + 1].entityGlobalScore ?? 0;
+        const currentScore = response.results[i].entityGlobalScore ?? DEFAULT_AVERAGE_SCORE;
+        const nextScore = response.results[i + 1].entityGlobalScore ?? DEFAULT_AVERAGE_SCORE;
 
         if (currentScore < nextScore) {
           scoresDescending = false;
@@ -390,6 +392,105 @@ class SearchValidator {
     }
   }
 
+  async test9_EmptyQueryTopRanked(): Promise<void> {
+    console.log(`\n${BLUE}Test 9: Empty query returns top ranked results (no query parameter)${NC}`);
+
+    // Test with global scope
+    console.log(`  ${BLUE}→ Testing with GLOBAL scope${NC}`);
+    const globalResponse = await this.search({
+      scope: 'GLOBAL',
+    });
+
+    // Should return results
+    if (globalResponse.results.length > 0) {
+      this.addResult('test9_global_has_results', true, `Empty query (GLOBAL) returned ${globalResponse.results.length} results`);
+    } else {
+      this.addResult('test9_global_has_results', false, `Empty query (GLOBAL) should return results, got 0`);
+      return;
+    }
+
+    // First result should be the entity with highest global score (Alice High: 0.95)
+    const firstGlobalResult = globalResponse.results[0];
+    if (firstGlobalResult.entityId === TEST_ENTITIES.ALICE_HIGH_ID) {
+      this.addResult('test9_global_top_ranked', true,
+        `First result is Alice High (${TEST_ENTITIES.ALICE_HIGH_ID}) - highest global score (0.95)`);
+    } else {
+      this.addResult('test9_global_top_ranked', false,
+        `First result should be Alice High (${TEST_ENTITIES.ALICE_HIGH_ID}), got: ${firstGlobalResult.entityId}`);
+    }
+
+    // Verify results are ordered by global score (descending)
+    // Use DEFAULT_AVERAGE_SCORE for missing scores
+    let globalScoresDescending = true;
+    for (let i = 0; i < globalResponse.results.length - 1; i++) {
+      const currentScore = globalResponse.results[i].entityGlobalScore ?? DEFAULT_AVERAGE_SCORE;
+      const nextScore = globalResponse.results[i + 1].entityGlobalScore ?? DEFAULT_AVERAGE_SCORE;
+
+      if (currentScore < nextScore) {
+        globalScoresDescending = false;
+        break;
+      }
+    }
+
+    if (globalScoresDescending) {
+      this.addResult('test9_global_score_ordering', true,
+        `Empty query (GLOBAL) results ordered by global score (descending, missing scores default to ${DEFAULT_AVERAGE_SCORE})`);
+    } else {
+      this.addResult('test9_global_score_ordering', false,
+        `Empty query (GLOBAL) results not properly ordered by global score`);
+    }
+
+    // Check total count makes sense
+    if (typeof globalResponse.total === 'number' && globalResponse.total > 0) {
+      this.addResult('test9_global_total', true, `Response includes total count: ${globalResponse.total}`);
+    } else {
+      this.addResult('test9_global_total', false, `Response missing or invalid total count`);
+    }
+
+    // Test with space scope
+    console.log(`  ${BLUE}→ Testing with SPACE scope${NC}`);
+    const spaceResponse = await this.search({
+      scope: 'SPACE',
+      space_id: TEST_ENTITIES.SPACE_ID,
+    });
+
+    // Should return results
+    if (spaceResponse.results.length > 0) {
+      this.addResult('test9_space_has_results', true, `Empty query (SPACE) returned ${spaceResponse.results.length} results`);
+    } else {
+      this.addResult('test9_space_has_results', false, `Empty query (SPACE) should return results, got 0`);
+      return;
+    }
+
+    // Verify results are ordered by space score (descending)
+    // Use DEFAULT_AVERAGE_SCORE for missing scores
+    let spaceScoresDescending = true;
+    for (let i = 0; i < spaceResponse.results.length - 1; i++) {
+      const currentScore = spaceResponse.results[i].entitySpaceScore ?? DEFAULT_AVERAGE_SCORE;
+      const nextScore = spaceResponse.results[i + 1].entitySpaceScore ?? DEFAULT_AVERAGE_SCORE;
+
+      if (currentScore < nextScore) {
+        spaceScoresDescending = false;
+        break;
+      }
+    }
+
+    if (spaceScoresDescending) {
+      this.addResult('test9_space_score_ordering', true,
+        `Empty query (SPACE) results ordered by space score (descending, missing scores default to ${DEFAULT_AVERAGE_SCORE})`);
+    } else {
+      this.addResult('test9_space_score_ordering', false,
+        `Empty query (SPACE) results not properly ordered by space score`);
+    }
+
+    // Check total count makes sense
+    if (typeof spaceResponse.total === 'number' && spaceResponse.total > 0) {
+      this.addResult('test9_space_total', true, `Response includes total count: ${spaceResponse.total}`);
+    } else {
+      this.addResult('test9_space_total', false, `Response missing or invalid total count`);
+    }
+  }
+
   printSummary() {
     console.log(`\n${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}`);
 
@@ -458,6 +559,7 @@ async function main() {
     await validator.test6_ResponseMetadata();
     await validator.test7_ZeroAndNegativeScores();
     await validator.test8_TypeIdsScenarios();
+    await validator.test9_EmptyQueryTopRanked();
 
     const allPassed = validator.printSummary();
     process.exit(allPassed ? 0 : 1);

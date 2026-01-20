@@ -605,8 +605,7 @@ mod tests {
         let provider = Arc::new(MockSearchProvider::new());
         let _loader = SearchLoader::new(provider);
 
-        // Test that default config works
-        assert!(true);
+        // Test that default config works - if we get here, creation succeeded
     }
 
     #[tokio::test]

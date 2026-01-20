@@ -82,6 +82,10 @@ spec:
                   optional: true
             - name: AXIOM_DATASET
               value: "gaia.search-indexer"
+          ports:
+            - name: health
+              containerPort: 8080
+              protocol: TCP
           resources:
             requests:
               memory: "512Mi"
@@ -89,27 +93,22 @@ spec:
             limits:
               memory: "768Mi"
               cpu: "500m"
-          # Health check - indexer logs to stdout regularly, so we check if process is running
-          # For automatic restart
-          # Todo: these are weak probes just checking if logs are being written.
-          # We should add a more robust health check.
+          # Liveness probe - checks if the process is alive and can respond to HTTP requests
+          # Used by Kubernetes to restart the container if it becomes unresponsive
           livenessProbe:
-            exec:
-              command:
-                - /bin/sh
-                - -c
-                - "ps aux | grep search-indexer | grep -v grep"
+            httpGet:
+              path: /healthz
+              port: health
             initialDelaySeconds: 30
             periodSeconds: 30
             timeoutSeconds: 5
             failureThreshold: 3
-          # For readiness check before traffic is routed to the pod
+          # Readiness probe - checks if the service is ready to accept traffic
+          # Verifies healthy OpenSearch connectivity before routing traffic to the pod
           readinessProbe:
-            exec:
-              command:
-                - /bin/sh
-                - -c
-                - "ps aux | grep search-indexer | grep -v grep"
+            httpGet:
+              path: /readyz
+              port: health
             initialDelaySeconds: 10
             periodSeconds: 10
             timeoutSeconds: 5

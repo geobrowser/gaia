@@ -94,11 +94,8 @@ impl ScoresConsumerTrait for MockScoresConsumer {
         tokio::select! {
             _ = shutdown.recv() => {}
             msg = ack_receiver.recv() => {
-                match msg {
-                    Some(StreamMessage::Acknowledgment { success, .. }) => {
-                        *self.last_acknowledgment.lock().unwrap() = Some(success);
-                    }
-                    Some(_) | None => {}
+                if let Some(StreamMessage::Acknowledgment { success, .. }) = msg {
+                    *self.last_acknowledgment.lock().unwrap() = Some(success);
                 }
             }
         }

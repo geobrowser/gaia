@@ -58,6 +58,7 @@ async fn main() -> Result<()> {
 
     // Other entities
     let bob_id = Uuid::parse_str("00000000-0000-0000-0000-000000000b0b").unwrap();
+    let charlie_id = Uuid::parse_str("00000000-0000-0000-0000-000000000c1c").unwrap();
     let org_id = Uuid::parse_str("00000000-0000-0000-0000-0000000ac3ec").unwrap();
 
     info!("Test Space ID: {}", test_space);
@@ -85,6 +86,7 @@ async fn main() -> Result<()> {
     );
     info!("\nOther entities:");
     info!("  Bob ID: {}", bob_id);
+    info!("  Charlie ID: {} - will have NO global score", charlie_id);
     info!("  Organization ID: {}", org_id);
 
     // 1. Create Person type entity
@@ -214,8 +216,20 @@ async fn main() -> Result<()> {
     )?;
     producer.send(EDITS_TOPIC, None, bob_payload).await?;
 
-    // 5. Create Organization
-    info!("5. Creating Acme Corp organization...");
+    // 5. Create Charlie (no global score)
+    info!("5. Creating Charlie entity (will have NO global score)...");
+    let charlie_payload = edits::create_entity_edit(
+        "Create Charlie",
+        test_space,
+        charlie_id,
+        Some("Charlie"),
+        Some("A designer with no global score"),
+        None,
+    )?;
+    producer.send(EDITS_TOPIC, None, charlie_payload).await?;
+
+    // 6. Create Organization
+    info!("6. Creating Acme Corp organization...");
     let org_payload = edits::create_entity_edit(
         "Create Acme Corp",
         test_space,
@@ -226,8 +240,8 @@ async fn main() -> Result<()> {
     )?;
     producer.send(EDITS_TOPIC, None, org_payload).await?;
 
-    // 6. Create type relations for most Alice entities and others
-    info!("6. Creating type relations...");
+    // 7. Create type relations for most Alice entities and others
+    info!("7. Creating type relations...");
     for (name, entity_id) in [
         ("Alice High", alice_high_id),
         ("Alice Medium", alice_medium_id),
@@ -237,6 +251,7 @@ async fn main() -> Result<()> {
         ("Alice At Threshold", alice_at_threshold_id),
         ("Alice Below Threshold", alice_below_threshold_id),
         ("Bob", bob_id),
+        ("Charlie", charlie_id),
     ] {
         let type_rel_payload = relations::create_type_relation(
             &format!("{} -> Person Type", name),
@@ -259,8 +274,8 @@ async fn main() -> Result<()> {
         .send(EDITS_TOPIC, None, org_type_payload_rel)
         .await?;
 
-    // 6.1. TypeIds test scenarios using Alice entities
-    info!("6.1. Setting up typeIds test scenarios with Alice entities...");
+    // 7.1. TypeIds test scenarios using Alice entities
+    info!("7.1. Setting up typeIds test scenarios with Alice entities...");
 
     // Alice High: Multiple type relations (typeIds should have both Person and Organization)
     info!(
@@ -337,8 +352,8 @@ async fn main() -> Result<()> {
         .send(EDITS_TOPIC, None, alice_low_org_delete_payload)
         .await?;
 
-    // 7. Generate scores with varying values
-    info!("7. Generating scores with varying entity and space scores...");
+    // 8. Generate scores with varying values (Charlie intentionally excluded)
+    info!("8. Generating scores with varying entity and space scores (Charlie has no global score)...");
     let score_payload = scores::create_mixed_score_batch(
         vec![
             // Alice entities with different score profiles
@@ -375,18 +390,19 @@ async fn main() -> Result<()> {
 
     info!("\n✅ Test scenario complete!");
     info!("Created:");
-    info!("  - 11 entities");
+    info!("  - 12 entities");
     info!("    • 7 Alice variants (high, medium, low, zero, negative, at threshold, below threshold)");
-    info!("    • Bob, Acme Corp");
+    info!("    • Bob, Charlie, Acme Corp");
     info!("    • Person type, Organization type");
     info!("  - Type relation scenarios:");
     info!("    • Alice High: Multiple types (Person + Organization)");
     info!("    • Alice Medium: Create->Delete->Create pattern (Person + Organization recreated)");
     info!("    • Alice Low: Partial type removal (Person kept, Org added + deleted)");
-    info!("    • Other Alice entities, Bob: Single type (Person)");
+    info!("    • Other Alice entities, Bob, Charlie: Single type (Person)");
     info!("    • Acme Corp: Single type (Organization)");
-    info!("  - 14 type relation events (10 creates, 2 deletes, 1 recreate for testing typeIds)");
+    info!("  - 15 type relation events (11 creates, 2 deletes, 1 recreate for testing typeIds)");
     info!("  - 11 entity scores (including negative and zero)");
+    info!("  - Charlie has NO global score (tests default score behavior)");
     info!("  - 1 space score");
     info!("  - 7 perspective scores");
     info!("\nScore ranges:");
