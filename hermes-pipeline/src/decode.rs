@@ -20,6 +20,9 @@ pub enum DecodeError {
 
     #[error("Invalid UTF-8 in decoded string: {0}")]
     InvalidUtf8(#[from] std::string::FromUtf8Error),
+
+    #[error("Data too long: expected at most {expected} bytes, got {actual}")]
+    DataTooLong { expected: usize, actual: usize },
 }
 
 // ============================================================================
@@ -618,13 +621,21 @@ pub struct VoteData {
 ///
 /// Encoding: `abi.encode(uint16(version), bytes16(groupId), bytes16(spacePOV))`
 pub fn decode_vote_data(data: &[u8]) -> Result<VoteData, DecodeError> {
-    if data.is_empty() {
-        return Ok(VoteData {
-            version: 0,
-            group_id: vec![0; 16],
-            space_pov: vec![0; 16],
-        });
-    }
+    let data = match data.len() {
+        0 => {
+            return Err(DecodeError::DataTooShort {
+                expected: 160,
+                actual: 0,
+            });
+        }
+        160 => &data[64..], // skip headers
+        _ => {
+            return Err(DecodeError::DataTooLong {
+                expected: 160,
+                actual: data.len(),
+            });
+        }
+    };
 
     let (version, group_id, space_pov) =
         VoteDataType::abi_decode(data).map_err(|e| DecodeError::AbiDecode(e.to_string()))?;
@@ -780,24 +791,45 @@ mod tests {
     }
 
     #[test]
-    fn test_decode_vote_data() {
-        let version = 1u16;
-        let group_id = FixedBytes::<16>::from([2u8; 16]);
-        let space_pov = FixedBytes::<16>::from([3u8; 16]);
-        let encoded = VoteDataType::abi_encode(&(version, group_id, space_pov));
+    fn test_decode_vote_data_log() {
+        let hex_data = "0x00000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000060000000000000000000000000000000000000000000000000000000000000000091501554630a41359bee8699b10da8e1000000000000000000000000000000003126d78323f81eb48511bafa39e1200500000000000000000000000000000000";
+        let data = hex::decode(&hex_data[2..]).expect("Valid hex string");
 
-        let result = decode_vote_data(&encoded).unwrap();
-        assert_eq!(result.version, 1);
-        assert_eq!(result.group_id, vec![2u8; 16]);
-        assert_eq!(result.space_pov, vec![3u8; 16]);
+        let result = decode_vote_data(&data).unwrap();
+
+        let expected_group_id = hex::decode("91501554630a41359bee8699b10da8e1").unwrap();
+        let expected_space_pov = hex::decode("3126d78323f81eb48511bafa39e12005").unwrap();
+
+        assert_eq!(result.version, 0);
+        assert_eq!(result.group_id, expected_group_id);
+        assert_eq!(result.space_pov, expected_space_pov);
+    }
+
+    #[test]
+    fn test_decode_vote_data_log_empty_group_id() {
+        let hex_data = "0x00000000000000000000000000000000000000000000000000000000000000200000000000000000000000000000000000000000000000000000000000000060000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000003126d78323f81eb48511bafa39e1200500000000000000000000000000000000";
+        let data = hex::decode(&hex_data[2..]).expect("Valid hex string");
+
+        let result = decode_vote_data(&data).unwrap();
+
+        assert_eq!(result.version, 0);
+        assert_eq!(result.group_id, vec![0u8; 16]);
+        let expected_space_pov = hex::decode("3126d78323f81eb48511bafa39e12005").unwrap();
+        assert_eq!(result.space_pov, expected_space_pov);
     }
 
     #[test]
     fn test_decode_vote_data_empty() {
-        let result = decode_vote_data(&[]).unwrap();
-        assert_eq!(result.version, 0);
-        assert_eq!(result.group_id.len(), 16);
-        assert_eq!(result.space_pov.len(), 16);
+        let result = decode_vote_data(&[]).unwrap_err();
+        assert!(matches!(result, DecodeError::DataTooShort { .. }));
+    }
+
+    #[test]
+    fn test_decode_vote_data_too_long() {
+        let data = vec![0u8; 160 + 1];
+
+        let result = decode_vote_data(&data).unwrap_err();
+        assert!(matches!(result, DecodeError::DataTooLong { .. }));
     }
 
     #[test]
