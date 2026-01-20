@@ -86,8 +86,8 @@ Example (blocks):
     {
       "id": "ImageBlock_2",
       "type": "imageBlock",
-      "from": null,
-      "to": "https://..."
+      "before": null,
+      "after": "https://..."
     }
   ]
 }
@@ -175,8 +175,8 @@ Example (named key):
     {
       "id": "OtherChild_1",
       "type": "dataBlock",
-      "from": "Old",
-      "to": "New"
+      "before": "Old",
+      "after": "New"
     }
   ]
 }
