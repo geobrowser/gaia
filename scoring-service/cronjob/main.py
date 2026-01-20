@@ -212,6 +212,7 @@ def main() -> None:
             environment=os.environ.get("SENTRY_ENVIRONMENT", "production"),
             release=os.environ.get("SENTRY_RELEASE"),
             send_default_pii=os.environ.get("SENTRY_SEND_DEFAULT_PII", "").lower() == "true",
+            debug=os.environ.get("SENTRY_DEBUG", "").lower() == "true",
             integrations=[
                 LoggingIntegration(
                     level=logging.INFO,  # Capture info and above as breadcrumbs
