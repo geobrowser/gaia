@@ -15,6 +15,7 @@ import {
 	getEntityVersions,
 } from "./queries";
 import { diffEntitySnapshots } from "./diff";
+import { computeProposalDiff } from "./proposal-diff";
 
 type Database = NodePgDatabase<Record<string, unknown>>;
 
@@ -354,6 +355,111 @@ export function createVersionedRouter(db: Database) {
 			return c.json(diff);
 		} catch (error) {
 			console.error("[VERSIONED] Error computing entity diff:", error);
+			return c.json(
+				{
+					error: "Internal error",
+					message:
+						error instanceof Error ? error.message : "An unexpected error occurred",
+				},
+				500
+			);
+		}
+	});
+
+	/**
+	 * GET /versioned/proposals/:id/diff
+	 *
+	 * Compute diff between proposal's proposed changes and base state.
+	 * - Active proposals: compare against current live state
+	 * - Closed proposals: compare against versioned state at end_time
+	 *
+	 * Query Parameters:
+	 * - spaceId: Filter to specific space (required)
+	 * - cursor: Pagination cursor (optional)
+	 * - limit: Max entities per page (optional, default: 50, max: 100)
+	 *
+	 * Response:
+	 * - 200: PaginatedProposalDiff
+	 * - 400: Invalid parameters
+	 * - 404: Proposal not found or no Publish action
+	 */
+	router.get("/proposals/:id/diff", async (c) => {
+		const proposalId = c.req.param("id");
+		const spaceId = c.req.query("spaceId");
+		const cursor = c.req.query("cursor");
+		const limitParam = c.req.query("limit");
+
+		// Validate proposalId
+		if (!isValidUuid(proposalId)) {
+			return c.json(
+				{
+					error: "Invalid parameter",
+					message: "Proposal ID must be a valid UUID",
+				},
+				400
+			);
+		}
+
+		// Validate required spaceId
+		if (!spaceId) {
+			return c.json(
+				{
+					error: "Missing required parameter",
+					message: "spaceId query parameter is required",
+				},
+				400
+			);
+		}
+
+		if (!isValidUuid(spaceId)) {
+			return c.json(
+				{
+					error: "Invalid parameter",
+					message: "spaceId must be a valid UUID",
+				},
+				400
+			);
+		}
+
+		// Parse and validate limit
+		let limit = 50;
+		if (limitParam) {
+			const parsed = parseInt(limitParam, 10);
+			if (Number.isNaN(parsed) || parsed < 1) {
+				return c.json(
+					{
+						error: "Invalid parameter",
+						message: "limit must be a positive integer",
+					},
+					400
+				);
+			}
+			limit = Math.min(parsed, 100);
+		}
+
+		try {
+			const result = await computeProposalDiff(
+				db,
+				proposalId,
+				spaceId,
+				cursor,
+				limit
+			);
+
+			// Check if result is an error
+			if ("error" in result && "code" in result) {
+				return c.json(
+					{
+						error: result.code === 404 ? "Not found" : "Internal error",
+						message: result.error,
+					},
+					result.code as 404 | 500
+				);
+			}
+
+			return c.json(result);
+		} catch (error) {
+			console.error("[VERSIONED] Error computing proposal diff:", error);
 			return c.json(
 				{
 					error: "Internal error",

@@ -198,13 +198,8 @@ async fn async_main() -> anyhow::Result<()> {
         // Create live IPFS client
         let ipfs_source = IpfsSource::live(&ipfs_gateway);
 
-        // Create stream source for EditsPublished module
-        let source = StreamSource::live(
-            endpoint,
-            HermesModule::EditsPublished,
-            start_block,
-            end_block,
-        );
+        // Create stream source for IpfsUris module (combined edits + proposals)
+        let source = StreamSource::live(endpoint, HermesModule::IpfsUris, start_block, end_block);
 
         // Create and run the sink
         let sink = IpfsCacheSink::new(cache, ipfs_source);

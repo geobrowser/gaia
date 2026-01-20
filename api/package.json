@@ -21,6 +21,7 @@
     "@aragon/sdk-client": "^1.26.0",
     "@aragon/sdk-client-common": "^1.17.0",
     "@effect/opentelemetry": "^0.53.0",
+    "@geoprotocol/grc-20": "^0.1.7",
     "@graphile-contrib/pg-simplify-inflector": "^6.1.0",
     "@graphprotocol/grc-20": "^0.25.1",
     "@graphql-tools/schema": "^10.0.23",

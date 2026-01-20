@@ -215,3 +215,34 @@ export interface VersionEntry {
 	sequence: number;
 	createdAt: string;
 }
+
+// ============================================================================
+// Proposal Diffs
+// ============================================================================
+
+/**
+ * Pagination cursor for proposal diffs.
+ */
+export interface ProposalDiffCursor {
+	entityIndex: number; // Index into sorted entity list
+}
+
+/**
+ * Proposal status for diffing purposes.
+ */
+export type ProposalStatus = "active" | "closed" | "executed";
+
+/**
+ * Paginated response for proposal diffs.
+ */
+export interface PaginatedProposalDiff {
+	proposalId: string;
+	spaceId: string;
+	proposalStatus: ProposalStatus;
+	entities: EntityDiff[];
+	pagination: {
+		cursor: string | null; // Base64-encoded cursor for next page
+		hasMore: boolean;
+		totalEntities: number;
+	};
+}
