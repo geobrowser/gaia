@@ -25,11 +25,6 @@ const DEFAULT_LIMIT = 20
 const MAX_LIMIT = 100
 
 /**
- * Minimum length for search queries.
- */
-const MIN_QUERY_LENGTH = 2
-
-/**
  * Maximum length for search queries to prevent abuse.
  */
 const MAX_QUERY_LENGTH = 500
@@ -78,7 +73,8 @@ export function createSearchRouter(searchClient: SearchClient) {
 	 * Search for entities across the Knowledge Graph.
 	 *
 	 * Query Parameters:
-	 * - query or q: Search query string (required, 2-500 characters)
+	 * - query or q: Search query string (optional, max 500 characters)
+	 *   - If not provided or empty, returns top ranked results for the search scope
 	 * - scope: Search scope (optional, default: GLOBAL)
 	 *   - GLOBAL: Search across all spaces, boosted by entity_global_score
 	 *   - GLOBAL_BY_SPACE_SCORE: Search across all spaces, boosted by space_score
@@ -129,28 +125,8 @@ export function createSearchRouter(searchClient: SearchClient) {
 		const limitParam = c.req.query("limit")
 		const offsetParam = c.req.query("offset")
 
-		// Validate query
-		if (!query || query.trim().length === 0) {
-			return c.json(
-				{
-					error: "Missing required parameter",
-					message: "Query parameter 'query' or 'q' is required",
-				},
-				400,
-			)
-		}
-
-		// Validate query length
-		const trimmedQuery = query.trim()
-		if (trimmedQuery.length < MIN_QUERY_LENGTH) {
-			return c.json(
-				{
-					error: "Invalid parameter",
-					message: `Query must be at least ${MIN_QUERY_LENGTH} characters`,
-				},
-				400,
-			)
-		}
+		// Validate query length (if provided)
+		const trimmedQuery = query?.trim() ?? ""
 
 		if (trimmedQuery.length > MAX_QUERY_LENGTH) {
 			return c.json(
