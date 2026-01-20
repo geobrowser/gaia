@@ -1,5 +1,9 @@
 FROM rust:1.92-bookworm as builder
 
+# Build argument to enable auto_index_creation feature for local development
+# Default is empty (feature disabled) for production safety
+ARG CARGO_FEATURES=""
+
 # Install build dependencies for rdkafka
 RUN apt-get update && \
     apt-get install -y \
@@ -21,8 +25,10 @@ COPY indexer_utils ./indexer_utils
 COPY sdk ./sdk
 
 # Build from the crate directory (standalone, not as workspace member)
+# Note: auto_index_creation feature is disabled by default (production-safe)
+# For local dev, pass --build-arg CARGO_FEATURES="--features search-indexer-repository/auto_index_creation"
 WORKDIR /app/search-indexer
-RUN cargo build --release
+RUN cargo build --release ${CARGO_FEATURES}
 
 FROM debian:bookworm-slim
 

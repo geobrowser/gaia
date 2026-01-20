@@ -1,0 +1,60 @@
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: opensearch-delete-index
+  namespace: search
+  labels:
+    app: opensearch-admin
+    task: delete-index
+spec:
+  # Keep job history for debugging
+  ttlSecondsAfterFinished: 86400  # 24 hours
+  backoffLimit: 1
+  template:
+    metadata:
+      labels:
+        app: opensearch-admin
+        task: delete-index
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: delete-index
+        image: registry.digitalocean.com/geo/search-admin:latest  # Update with your registry
+        env:
+        - name: OPENSEARCH_URL
+          valueFrom:
+            secretKeyRef:
+              name: opensearch-credentials
+              key: OPENSEARCH_URL
+        - name: INDEX_ALIAS
+          value: "entities"  # Default alias name
+        - name: INDEX_VERSION
+          value: "2"  # CHANGE THIS: Set to the index version to DELETE
+        - name: CONFIRM_DELETE
+          value: "false"  # CHANGE THIS to "true" to actually delete (safety check)
+        - name: RUST_LOG
+          value: "info"
+        command:
+        - /bin/sh
+        - -c
+        - |
+          if [ "$CONFIRM_DELETE" = "true" ]; then
+            search-admin delete-index \
+              --version "$INDEX_VERSION" \
+              --confirm \
+              --yes
+          else
+            echo "⚠️  SAFETY CHECK FAILED"
+            echo ""
+            echo "This is a destructive operation."
+            echo "Set CONFIRM_DELETE to 'true' to proceed."
+            exit 1
+          fi
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"

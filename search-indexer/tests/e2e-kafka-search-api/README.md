@@ -76,8 +76,10 @@ KAFKA_BROKER=localhost:9092 \
 OPENSEARCH_URL=http://localhost:9200 \
 KAFKA_GROUP_ID=search-indexer-test-$(date +%s) \
 RUST_LOG=debug,search_indexer=debug \
-cargo run -p search-indexer
+cargo run -p search-indexer --features search-indexer-repository/auto_index_creation
 ```
+
+**Note:** The `--features search-indexer-repository/auto_index_creation` flag enables automatic OpenSearch index creation for local testing. This feature is disabled by default for production safety. In production deployments, indices must be created manually using the search-admin-cli tool.
 
 #### 4. (Optional) Run Validation Tests
 

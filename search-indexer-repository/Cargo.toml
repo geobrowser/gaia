@@ -4,6 +4,12 @@ version = "0.1.0"
 edition = "2021"
 description = "Repository interfaces and OpenSearch implementation for the search indexer"
 
+[features]
+# Enable automatic index creation for non-zero versions in any environment
+# WARNING: Only use in development! Production should create indices via search-admin-cli
+# This feature is DISABLED by default - must explicitly opt-in for local development
+auto_index_creation = []
+
 [dependencies]
 search-indexer-shared = { path = "../search-indexer-shared" }
 opensearch = "2.3.0"

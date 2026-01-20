@@ -8,11 +8,11 @@ Main binary for the Geo Knowledge Graph search indexer. Creates an orchestrator 
 # 1. Start Kafka
 cd ../hermes && docker-compose up -d kafka
 
-# 2. Run the indexer
+# 2. Run the indexer (with auto index creation for local dev)
 cd ../search-indexer
 OPENSEARCH_URL=http://localhost:9200 \
 KAFKA_BROKER=localhost:9092 \
-cargo run
+cargo run --features search-indexer-repository/auto_index_creation
 ```
 
 Or use the full docker-compose stack:
@@ -52,7 +52,22 @@ The indexer follows the Consumer-Processor-Loader pattern using tokio tasks for 
 
 ## Configuration
 
-Environment variables:
+### Index Management
+
+The `auto_index_creation` feature is **disabled by default** for production safety. Indices must be created manually using the `search-admin-cli` tool.
+
+**Local Development**: The feature can be enabled explicitly:
+- Via cargo: `cargo run --features search-indexer-repository/auto_index_creation`
+- Via docker-compose: Already enabled in `search-indexer-deploy/docker-compose.yaml`
+
+**Production**: The feature is disabled in:
+- Docker builds (no build arg passed)
+- Kubernetes deployments
+- Release binaries
+
+See the [search-admin-cli documentation](../search-admin-cli/README.md) for manual index creation.
+
+### Environment variables:
 
 | Variable | Description | Default |
 |----------|-------------|---------|
@@ -92,15 +107,18 @@ The search-indexer supports two connection modes for OpenSearch:
 ### Start the indexer
 
 ```bash
-# With environment variables
+# With environment variables (enable auto index creation for local dev)
 OPENSEARCH_URL=http://localhost:9200 \
 KAFKA_BROKER=localhost:9092 \
-cargo run --release
+cargo run --features search-indexer-repository/auto_index_creation
 
 # Or with .env file
 cp .env.example .env
 # Edit .env with your configuration
-cargo run --release
+cargo run --features search-indexer-repository/auto_index_creation
+
+# For production builds (no auto index creation - use search-admin-cli)
+cargo build --release
 ```
 
 ### Docker
@@ -176,8 +194,8 @@ See [TESTING.md](TESTING.md) for comprehensive end-to-end testing documentation.
 # Start dependencies
 docker-compose -f ../hermes/docker-compose.yml up -d
 
-# Run the indexer
-cargo run
+# Run the indexer (with auto index creation for local dev)
+cargo run --features search-indexer-repository/auto_index_creation
 ```
 
 ## Verifying the Indexer

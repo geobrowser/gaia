@@ -41,7 +41,7 @@ This is the fastest way to test search functionality end-to-end:
    OPENSEARCH_URL=http://localhost:9200 \
    KAFKA_GROUP_ID=search-indexer-test-$(date +%s) \
    RUST_LOG=debug,search_indexer=debug \
-   cargo run -p search-indexer
+   cargo run -p search-indexer --features search-indexer-repository/auto_index_creation
    ```
 
 4. **Run validation manually (if API is running):**
@@ -101,7 +101,7 @@ While e2e-kafka-search-api is recommended for search-indexer testing, you can al
    OPENSEARCH_URL=http://localhost:9200 \
    KAFKA_GROUP_ID=search-indexer-test-$(date +%s) \
    RUST_LOG=debug,search_indexer=debug \
-   cargo run -p search-indexer
+   cargo run -p search-indexer --features search-indexer-repository/auto_index_creation
    ```
 
 ### Option B: Run hermes-pipeline in Docker
@@ -123,7 +123,8 @@ While e2e-kafka-search-api is recommended for search-indexer testing, you can al
    OPENSEARCH_URL=http://localhost:9200 \
    KAFKA_GROUP_ID=search-indexer-test-$(date +%s) \
    RUST_LOG=debug,search_indexer=debug \
-   cargo run -p search-indexer
+   ENTITIES_INDEX_VERSION=0 \
+   cargo run -p search-indexer --features search-indexer-repository/auto_index_creation
    ```
 
 ### Hermes Pipeline Mock Events
@@ -218,12 +219,12 @@ Open http://localhost:8080 to inspect messages in the Kafka topics.
 For e2e-kafka-search-api:
 ```bash
 cd search-indexer/tests/e2e-kafka-search-api
-cargo run --release --debug
+cargo run
 ```
 
 For search-indexer:
 ```bash
-RUST_LOG=debug,search_indexer=trace cargo run -p search-indexer
+RUST_LOG=debug,search_indexer=trace cargo run -p search-indexer --features search-indexer-repository/auto_index_creation
 ```
 
 ## Related Documentation

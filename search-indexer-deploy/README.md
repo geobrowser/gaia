@@ -19,7 +19,7 @@ Services:
 
 Run the search indexer locally:
 ```bash
-OPENSEARCH_URL=http://localhost:9200 cargo run -p search-indexer
+OPENSEARCH_URL=http://localhost:9200 cargo run -p search-indexer --features search-indexer-repository/auto_index_creation
 ```
 
 Check cluster health:
