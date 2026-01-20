@@ -170,6 +170,14 @@ Example (named key):
         { "value": "new ", "added": true }
       ]
     }
+  ],
+  "SOME_OTHER_KEY": [
+    {
+      "id": "OtherChild_1",
+      "type": "dataBlock",
+      "from": "Old",
+      "to": "New"
+    }
   ]
 }
 ```
