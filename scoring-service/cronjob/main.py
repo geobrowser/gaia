@@ -5,7 +5,9 @@ import os
 import sys
 from enum import Enum
 
+import sentry_sdk
 from dotenv import load_dotenv
+from sentry_sdk.integrations.logging import LoggingIntegration
 
 from src.algorithm.models import RankingConfig
 from src.algorithm.scoring import RankingEngine
@@ -81,10 +83,19 @@ class ScoringPipeline:
         """Run the full scoring pipeline."""
         logger.info("Starting scoring pipeline (output_mode=%s)", self.output_mode.value)
 
-        self._fetch_data()
-        self._rank_spaces()
-        self._rank_entities()
-        self._write_scores()
+        # Create parent transaction for the entire pipeline
+        with sentry_sdk.start_transaction(op="pipeline.run", name="scoring_pipeline"):
+            with sentry_sdk.start_span(op="pipeline.fetch_data", description="Fetch scoring data"):
+                self._fetch_data()
+
+            with sentry_sdk.start_span(op="pipeline.rank_spaces", description="Rank spaces"):
+                self._rank_spaces()
+
+            with sentry_sdk.start_span(op="pipeline.rank_entities", description="Rank entities"):
+                self._rank_entities()
+
+            with sentry_sdk.start_span(op="pipeline.write_scores", description="Write scores"):
+                self._write_scores()
 
         entity_count = len(self.scoring_data.entities)
         space_count = len(self.scoring_data.spaces)
@@ -100,6 +111,14 @@ class ScoringPipeline:
         if scoring_data is None:
             raise RuntimeError("Scoring data not initialized")
         self.scoring_data = scoring_data
+
+        # Add metrics to Sentry span
+        if sentry_sdk.Hub.current.scope.span:
+            sentry_sdk.Hub.current.scope.span.set_data("entities_count", len(self.scoring_data.entities))
+            sentry_sdk.Hub.current.scope.span.set_data("spaces_count", len(self.scoring_data.spaces))
+            sentry_sdk.Hub.current.scope.span.set_data("users_count", len(self.scoring_data.users))
+            sentry_sdk.Hub.current.scope.span.set_data("votes_count", len(self.scoring_data.votes))
+
         logger.info(
             "Fetched %d entities, %d spaces, %d users, %d votes",
             len(self.scoring_data.entities),
@@ -116,6 +135,11 @@ class ScoringPipeline:
             self.scoring_data.entities,
             self.scoring_data.users,
         )
+
+        # Add metrics to Sentry span
+        if sentry_sdk.Hub.current.scope.span:
+            sentry_sdk.Hub.current.scope.span.set_data("spaces_ranked", len(self.scoring_data.spaces))
+
         logger.info("Ranked %d spaces", len(self.scoring_data.spaces))
 
     def _rank_entities(self) -> None:
@@ -127,6 +151,11 @@ class ScoringPipeline:
             self.scoring_data.users,
             self.scoring_data.spaces,
         )
+
+        # Add metrics to Sentry span
+        if sentry_sdk.Hub.current.scope.span:
+            sentry_sdk.Hub.current.scope.span.set_data("entities_ranked", len(self.scoring_data.entities))
+
         logger.info("Ranked %d entities", len(self.scoring_data.entities))
 
     def _write_scores(self) -> None:
@@ -136,28 +165,65 @@ class ScoringPipeline:
 
         # Write to PostgreSQL if configured
         if self._writer:
-            logger.info("Writing scores to PostgreSQL")
-            self._writer.write_all(entities, spaces)
-            logger.info("Scores written to PostgreSQL successfully")
+            with sentry_sdk.start_span(op="pipeline.write_postgres", description="Write to PostgreSQL"):
+                logger.info("Writing scores to PostgreSQL")
+                self._writer.write_all(entities, spaces)
+
+                # Add metrics to Sentry span
+                if sentry_sdk.Hub.current.scope.span:
+                    sentry_sdk.Hub.current.scope.span.set_data("entities_written", len(entities))
+                    sentry_sdk.Hub.current.scope.span.set_data("spaces_written", len(spaces))
+
+                logger.info("Scores written to PostgreSQL successfully")
 
         # Emit to Kafka if configured
         if self._emitter:
-            logger.info("Emitting scores to Kafka")
-            self._emitter.emit_all(entities, spaces)
-            remaining = self._emitter.flush()
-            if remaining > 0:
-                logger.warning("Some Kafka messages may not have been delivered: %d remaining", remaining)
-            else:
-                logger.info(
-                    "Scores emitted to Kafka successfully: %d messages, %d errors",
-                    self._emitter.messages_produced,
-                    self._emitter.delivery_errors,
-                )
+            with sentry_sdk.start_span(op="pipeline.emit_kafka", description="Emit to Kafka"):
+                logger.info("Emitting scores to Kafka")
+                self._emitter.emit_all(entities, spaces)
+                remaining = self._emitter.flush()
+
+                # Add metrics to Sentry span
+                if sentry_sdk.Hub.current.scope.span:
+                    sentry_sdk.Hub.current.scope.span.set_data("messages_produced", self._emitter.messages_produced)
+                    sentry_sdk.Hub.current.scope.span.set_data("delivery_errors", self._emitter.delivery_errors)
+                    sentry_sdk.Hub.current.scope.span.set_data("remaining_messages", remaining)
+
+                if remaining > 0:
+                    logger.warning("Some Kafka messages may not have been delivered: %d remaining", remaining)
+                else:
+                    logger.info(
+                        "Scores emitted to Kafka successfully: %d messages, %d errors",
+                        self._emitter.messages_produced,
+                        self._emitter.delivery_errors,
+                    )
 
 
 def main() -> None:
     """Run the scoring pipeline."""
     load_dotenv()
+
+    # Initialize Sentry (optional, for production monitoring)
+    sentry_dsn = os.environ.get("SENTRY_DSN")
+    if sentry_dsn:
+        sentry_sdk.init(
+            dsn=sentry_dsn,
+            traces_sample_rate=float(os.environ.get("SENTRY_TRACES_SAMPLE_RATE", "1.0")),
+            environment=os.environ.get("SENTRY_ENVIRONMENT", "production"),
+            release=os.environ.get("SENTRY_RELEASE"),
+            send_default_pii=os.environ.get("SENTRY_SEND_DEFAULT_PII", "").lower() == "true",
+            integrations=[
+                LoggingIntegration(
+                    level=logging.INFO,  # Capture info and above as breadcrumbs
+                    event_level=logging.ERROR,  # Send errors as events
+                )
+            ],
+        )
+        print(
+            f"Sentry monitoring enabled (environment: {os.environ.get('SENTRY_ENVIRONMENT', 'production')})"
+        )
+    else:
+        print("Sentry monitoring disabled (set SENTRY_DSN to enable)")
 
     log_level = os.environ.get("LOG_LEVEL", "INFO").upper()
     logging.basicConfig(
@@ -217,8 +283,22 @@ def main() -> None:
             kafka_ssl_ca_pem=kafka_ssl_ca_pem,
             score_batch_size=score_batch_size,
         )
-        pipeline.run()
+        entity_count, space_count = pipeline.run()
+
+        # Add success context to Sentry
+        sentry_sdk.set_tag("pipeline.status", "success")
+        sentry_sdk.set_tag("output_mode", output_mode.value)
+        sentry_sdk.set_context(
+            "pipeline.results",
+            {
+                "entity_count": entity_count,
+                "space_count": space_count,
+            },
+        )
     except Exception:
+        # Add error context to Sentry
+        sentry_sdk.set_tag("pipeline.status", "error")
+        sentry_sdk.set_tag("output_mode", output_mode.value)
         logger.exception("Scoring pipeline failed")
         sys.exit(1)
 
