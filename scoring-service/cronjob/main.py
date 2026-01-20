@@ -129,10 +129,6 @@ class ScoringPipeline:
             self.scoring_data.users,
         )
 
-        # Add metrics to Sentry span
-        if sentry_sdk.Hub.current.scope.span:
-            sentry_sdk.Hub.current.scope.span.set_data("spaces_ranked", len(self.scoring_data.spaces))
-
         logger.info("Ranked %d spaces", len(self.scoring_data.spaces))
 
     def _rank_entities(self) -> None:
@@ -144,10 +140,6 @@ class ScoringPipeline:
             self.scoring_data.users,
             self.scoring_data.spaces,
         )
-
-        # Add metrics to Sentry span
-        if sentry_sdk.Hub.current.scope.span:
-            sentry_sdk.Hub.current.scope.span.set_data("entities_ranked", len(self.scoring_data.entities))
 
         logger.info("Ranked %d entities", len(self.scoring_data.entities))
 
@@ -162,11 +154,6 @@ class ScoringPipeline:
                 logger.info("Writing scores to PostgreSQL")
                 self._writer.write_all(entities, spaces)
 
-                # Add metrics to Sentry span
-                if sentry_sdk.Hub.current.scope.span:
-                    sentry_sdk.Hub.current.scope.span.set_data("entities_written", len(entities))
-                    sentry_sdk.Hub.current.scope.span.set_data("spaces_written", len(spaces))
-
                 logger.info("Scores written to PostgreSQL successfully")
 
         # Emit to Kafka if configured
@@ -175,12 +162,6 @@ class ScoringPipeline:
                 logger.info("Emitting scores to Kafka")
                 self._emitter.emit_all(entities, spaces)
                 remaining = self._emitter.flush()
-
-                # Add metrics to Sentry span
-                if sentry_sdk.Hub.current.scope.span:
-                    sentry_sdk.Hub.current.scope.span.set_data("messages_produced", self._emitter.messages_produced)
-                    sentry_sdk.Hub.current.scope.span.set_data("delivery_errors", self._emitter.delivery_errors)
-                    sentry_sdk.Hub.current.scope.span.set_data("remaining_messages", remaining)
 
                 if remaining > 0:
                     logger.warning("Some Kafka messages may not have been delivered: %d remaining", remaining)
