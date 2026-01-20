@@ -190,6 +190,13 @@
       "when": 1768857620799,
       "tag": "0026_aspiring_banshee",
       "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1768924733212,
+      "tag": "0027_property-entity-functions",
+      "breakpoints": true
     }
   ]
 }
