@@ -622,10 +622,12 @@ pub struct VoteData {
 /// Encoding: `abi.encode(uint16(version), bytes16(groupId), bytes16(spacePOV))`
 pub fn decode_vote_data(data: &[u8]) -> Result<VoteData, DecodeError> {
     let data = match data.len() {
-        0 => return Err(DecodeError::DataTooShort {
-            expected: 160,
-            actual: 0,
-        }),
+        0 => {
+            return Err(DecodeError::DataTooShort {
+                expected: 160,
+                actual: 0,
+            });
+        }
         160 => &data[64..], // skip headers
         _ => {
             return Err(DecodeError::DataTooLong {
