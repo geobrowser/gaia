@@ -7,7 +7,7 @@ use alloy::primitives::{Address, Bytes as PrimBytes, FixedBytes, U256};
 use alloy::sol;
 use alloy::sol_types::SolType;
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
-use hermes_pipeline::decode::{
+use hermes_codec::{
     ProposalActionType, decode_flag_data, decode_proposal_created, decode_proposal_voted,
     decode_space_id_arg, decode_topic_declared, decode_vote_data, selectors,
 };

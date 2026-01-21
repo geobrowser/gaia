@@ -12,6 +12,8 @@ path = "src/main.rs"
 
 [dependencies]
 hermes-instrumentation = { path = "../hermes-instrumentation" }
+hermes-codec = { path = "../hermes-codec" }
+hermes-amp = { path = "../hermes-amp" }
 hermes-relay = { path = "../hermes-relay" }
 hermes-substream = { path = "../hermes-substream" }
 ipfs = { path = "../ipfs" }

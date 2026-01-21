@@ -21,6 +21,7 @@ members = [
 
     "hermes-kafka",
     "hermes-schema",
+    "hermes-codec",
     "hermes-relay",
     "hermes-pipeline",
     "hermes-ipfs-cache",

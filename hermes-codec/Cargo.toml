@@ -1,0 +1,9 @@
+[package]
+name = "hermes-codec"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+alloy = { version = "1.0.24", features = ["sol-types"] }
+ethabi = "18.0.0"
+thiserror = "2"

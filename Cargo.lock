@@ -2945,11 +2945,23 @@ checksum = "2304e00983f87ffb38b55b444b5e3b60a884b5d30c0fca7d82fe33449bbe55ea"
 name = "hermes-amp"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "arrow",
  "arrow-flight",
  "futures 0.3.31",
+ "hermes-instrumentation",
+ "hermes-relay",
  "reqwest 0.12.26",
  "tokio",
+]
+
+[[package]]
+name = "hermes-codec"
+version = "0.1.0"
+dependencies = [
+ "alloy",
+ "ethabi 18.0.0",
+ "thiserror 2.0.17",
 ]
 
 [[package]]
@@ -2976,6 +2988,8 @@ dependencies = [
  "chrono",
  "dotenv",
  "grc-20",
+ "hermes-amp",
+ "hermes-codec",
  "hermes-instrumentation",
  "hermes-relay",
  "hermes-substream",
@@ -3006,14 +3020,14 @@ version = "0.1.0"
 dependencies = [
  "alloy",
  "anyhow",
- "arrow",
- "arrow-flight",
  "async-trait",
  "criterion 0.5.1",
  "dotenv",
  "ethabi 18.0.0",
  "futures 0.3.31",
  "grc-20",
+ "hermes-amp",
+ "hermes-codec",
  "hermes-instrumentation",
  "hermes-kafka",
  "hermes-relay",

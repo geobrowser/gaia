@@ -9,6 +9,83 @@ use ethabi::{ParamType, Token};
 use std::borrow::Cow;
 use thiserror::Error;
 
+/// Extract and validate an IPFS URI from raw event data bytes.
+///
+/// Searches for "ipfs://" pattern in the data and validates the CID.
+/// Returns `Some(uri)` if a valid IPFS URI is found, `None` otherwise.
+///
+/// Supports:
+/// - CIDv0: `Qm` prefix, base58, exactly 46 characters
+/// - CIDv1: `b` prefix (e.g., `bafy`), base32, variable length
+pub fn extract_ipfs_uri(data: &[u8]) -> Option<String> {
+    let text = String::from_utf8_lossy(data);
+    let start = text.find("ipfs://")?;
+    let after_prefix = &text[start + 7..];
+
+    let cid: String = after_prefix
+        .chars()
+        .take_while(|c| c.is_ascii_alphanumeric())
+        .collect();
+
+    if is_valid_cid(&cid) {
+        Some(format!("ipfs://{}", cid))
+    } else {
+        None
+    }
+}
+
+fn is_valid_cid(cid: &str) -> bool {
+    if cid.is_empty() {
+        return false;
+    }
+
+    if cid.starts_with("Qm") {
+        return cid.len() == 46 && is_base58(cid);
+    }
+
+    if let Some(rest) = cid.strip_prefix('b') {
+        return cid.len() >= 50 && is_base32_lower(rest);
+    }
+
+    false
+}
+
+fn is_base58(s: &str) -> bool {
+    s.chars()
+        .all(|c| c.is_ascii_alphanumeric() && c != '0' && c != 'O' && c != 'I' && c != 'l')
+}
+
+fn is_base32_lower(s: &str) -> bool {
+    s.chars()
+        .all(|c| c.is_ascii_lowercase() || ('2'..='7').contains(&c))
+}
+
+/// Extract IPFS URIs from PROPOSAL_CREATED action data.
+///
+/// Decodes proposal actions and extracts IPFS URIs from Publish actions.
+pub fn extract_proposal_publish_uris(data: &[u8]) -> Vec<String> {
+    let mut uris = Vec::new();
+
+    let (decoded, _unwrap_level) = match decode_proposal_created(data) {
+        Ok(result) => result,
+        Err(_) => return uris,
+    };
+
+    for action in decoded.actions {
+        if ProposalActionType::from_calldata(&action.data) != ProposalActionType::Publish {
+            continue;
+        }
+
+        if let Ok(args) = decode_publish_args(&action.data) {
+            if let Some(uri) = extract_ipfs_uri(args.content_uri.as_bytes()) {
+                uris.push(uri);
+            }
+        }
+    }
+
+    uris
+}
+
 /// Errors that can occur during ABI decoding.
 #[derive(Debug, Error)]
 pub enum DecodeError {

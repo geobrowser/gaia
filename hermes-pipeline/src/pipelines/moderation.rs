@@ -12,7 +12,7 @@ use hermes_schema::pb::moderation::{
 
 use anyhow::Context;
 
-use crate::decode;
+use hermes_codec as decode;
 
 use super::BlockMetadata;
 

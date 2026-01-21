@@ -22,7 +22,7 @@ use hermes_schema::pb::governance::{
     UnflagEditorAction, UpdateVotingSettingsAction, VotingMode, proposal_action,
 };
 
-use crate::decode::{
+use hermes_codec::{
     self, ProposalActionType, decode_flag_args, decode_publish_args, decode_space_id_arg,
     decode_voting_settings_args,
 };
@@ -142,7 +142,7 @@ pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformRe
                 .actions
                 .iter()
                 .map(|a| {
-                    let action_type = crate::decode::ProposalActionType::from_calldata(&a.data);
+                    let action_type = hermes_codec::ProposalActionType::from_calldata(&a.data);
                     format!("{:?}", action_type)
                 })
                 .collect();
@@ -184,7 +184,7 @@ pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformRe
                 .actions
                 .iter()
                 .map(|a| {
-                    let action_type = crate::decode::ProposalActionType::from_calldata(&a.data);
+                    let action_type = hermes_codec::ProposalActionType::from_calldata(&a.data);
                     format!("{:?}", action_type)
                 })
                 .collect();

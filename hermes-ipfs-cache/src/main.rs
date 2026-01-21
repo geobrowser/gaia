@@ -23,6 +23,7 @@ use std::env;
 
 use grc_20::{Edit as Grc20Edit, encode_edit};
 use hermes_instrumentation::{Backend, Config, info};
+use hermes_amp::{AmpStreamConfig, stream_actions};
 use hermes_ipfs_cache::{IpfsCacheSink, cache::CacheSource};
 use hermes_relay::{HermesModule, Sink, StreamSource};
 use ipfs::IpfsSource;
@@ -151,6 +152,10 @@ async fn async_main() -> anyhow::Result<()> {
         .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
         .unwrap_or(false);
 
+    let use_amp = env::var("USE_AMP")
+        .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+        .unwrap_or(false);
+
     if use_mock {
         info!("Using mock data sources");
 
@@ -163,6 +168,40 @@ async fn async_main() -> anyhow::Result<()> {
         // Create and run the sink with mock data
         let sink = IpfsCacheSink::new(cache, ipfs_source);
         sink.run(StreamSource::mock()).await?;
+    } else if use_amp {
+        let database_url =
+            env::var("DATABASE_URL").expect("DATABASE_URL must be set for live mode");
+
+        let ipfs_gateway =
+            env::var("IPFS_GATEWAY_URL").expect("IPFS_GATEWAY_URL must be set for live mode");
+
+        let config = AmpStreamConfig::from_env();
+
+        info!(
+            dataset = %config.dataset,
+            start_block = config.start_block,
+            ipfs_gateway = %ipfs_gateway,
+            "Using Amp actions stream"
+        );
+
+        let cache = CacheSource::live(&database_url).into_cache().await?;
+        let ipfs_source = IpfsSource::live(&ipfs_gateway);
+        let sink = IpfsCacheSink::new(cache, ipfs_source);
+
+        stream_actions(config, move |block| {
+            let sink = &sink;
+            async move {
+                sink.process_actions_block(
+                    &block.actions,
+                    block.block_num,
+                    block.timestamp_secs,
+                    block.cursor,
+                )
+                .await
+                .map_err(anyhow::Error::from)
+            }
+        })
+        .await?;
     } else {
         // Live mode - connect to real substreams, IPFS, and database
         let database_url =

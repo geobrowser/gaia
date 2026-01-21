@@ -8,7 +8,7 @@ use hermes_instrumentation::{debug_span, warn};
 use hermes_relay::{Action, actions};
 use hermes_schema::pb::voting::{HermesVoteCast, VoteDirection};
 
-use crate::decode;
+use hermes_codec as decode;
 
 use super::BlockMetadata;
 

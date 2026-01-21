@@ -4,11 +4,10 @@
 //! integration tests and other consumers.
 
 pub mod cache;
-pub mod decode;
 pub mod pipelines;
 
 // Re-export commonly used types
-pub use decode::{
+pub use hermes_codec::{
     FlagArgs, ProposalActionType, PublishArgs, VotingSettingsArgs, decode_flag_args,
     decode_publish_args, decode_space_id_arg, decode_voting_settings_args,
 };

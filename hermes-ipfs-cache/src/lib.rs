@@ -36,7 +36,8 @@ use std::sync::Arc;
 
 use grc_20::decode_edit;
 use hermes_instrumentation::{debug, error, info, info_span, warn};
-use hermes_relay::{HermesModule, Sink};
+use hermes_codec::{extract_ipfs_uri, extract_proposal_publish_uris};
+use hermes_relay::{Action, HermesModule, Sink, actions};
 use hermes_substream::pb::hermes::{EditsPublished, EditsPublishedList};
 use ipfs::{IpfsFetcher, IpfsSource};
 use prost::Message;
@@ -153,41 +154,54 @@ impl IpfsCacheSink {
     pub fn module() -> HermesModule {
         HermesModule::EditsPublished
     }
-}
 
-impl Sink for IpfsCacheSink {
-    type Error = IpfsCacheError;
-
-    async fn process_block_scoped_data(
+    pub async fn process_actions_block(
         &self,
-        data: &hermes_relay::stream::pb::sf::substreams::rpc::v2::BlockScopedData,
-    ) -> Result<(), Self::Error> {
-        // Get the output from the block data
-        let output = data
-            .output
-            .as_ref()
-            .and_then(|o| o.map_output.as_ref())
-            .ok_or_else(|| {
-                std::io::Error::new(std::io::ErrorKind::InvalidData, "Missing map output")
-            })?;
+        actions: &[Action],
+        block_number: u64,
+        timestamp_secs: u64,
+        cursor: String,
+    ) -> Result<(), IpfsCacheError> {
+        let mut edits: Vec<EditsPublished> = Vec::new();
 
-        // Decode the EditsPublishedList from the output
-        let edits_list = EditsPublishedList::decode(output.value.as_slice())?;
+        for action in actions {
+            if actions::matches(&action.action, &actions::EDITS_PUBLISHED) {
+                if let Some(uri) = extract_ipfs_uri(&action.data) {
+                    edits.push(EditsPublished {
+                        space_id: action.from_id.clone(),
+                        data: action.data.clone(),
+                        content_uri: uri,
+                    });
+                }
+                continue;
+            }
 
-        // Get block metadata
-        let block_number = data.clock.as_ref().map(|c| c.number).unwrap_or(0);
-        let cursor = data.cursor.clone();
+            if actions::matches(&action.action, &actions::PROPOSAL_CREATED) {
+                for uri in extract_proposal_publish_uris(&action.data) {
+                    edits.push(EditsPublished {
+                        space_id: action.from_id.clone(),
+                        data: Vec::new(),
+                        content_uri: uri,
+                    });
+                }
+            }
+        }
 
-        let block_timestamp = data
-            .clock
-            .as_ref()
-            .and_then(|c| c.timestamp.as_ref())
-            .map(|t| t.seconds.to_string())
-            .unwrap_or_default();
+        let edits_list = EditsPublishedList { edits };
+        self.process_edits_list(edits_list, block_number, timestamp_secs, cursor)
+            .await
+    }
 
+    async fn process_edits_list(
+        &self,
+        edits_list: EditsPublishedList,
+        block_number: u64,
+        timestamp_secs: u64,
+        cursor: String,
+    ) -> Result<(), IpfsCacheError> {
+        let block_timestamp = timestamp_secs.to_string();
         let edit_count = edits_list.edits.len();
 
-        // Checkpoint log every 100 blocks
         if block_number.is_multiple_of(100) {
             info!(block = block_number, "Checkpoint");
         }
@@ -202,14 +216,12 @@ impl Sink for IpfsCacheSink {
             );
             info!(block = block_number, edits = edit_count, "Processing edits");
 
-            // Register all pending fetches for this block upfront
             self.pending
                 .lock()
                 .await
                 .add_block(block_number, cursor.clone(), edit_count);
         }
 
-        // Process each edit event
         for edit in edits_list.edits {
             let permit = self.semaphore.clone().acquire_owned().await.unwrap();
             let cache = self.cache.clone();
@@ -257,7 +269,6 @@ impl Sink for IpfsCacheSink {
                         }
                     }
 
-                    // Mark this fetch as complete - persist cursor if block fully completed
                     let cursor_to_persist = pending.lock().await.complete_one(block_num);
 
                     if let Some((persist_block, persist_cursor, total, duration)) =
@@ -292,6 +303,36 @@ impl Sink for IpfsCacheSink {
         }
 
         Ok(())
+    }
+}
+
+impl Sink for IpfsCacheSink {
+    type Error = IpfsCacheError;
+
+    async fn process_block_scoped_data(
+        &self,
+        data: &hermes_relay::stream::pb::sf::substreams::rpc::v2::BlockScopedData,
+    ) -> Result<(), Self::Error> {
+        let output = data
+            .output
+            .as_ref()
+            .and_then(|o| o.map_output.as_ref())
+            .ok_or_else(|| {
+                std::io::Error::new(std::io::ErrorKind::InvalidData, "Missing map output")
+            })?;
+
+        let edits_list = EditsPublishedList::decode(output.value.as_slice())?;
+        let block_number = data.clock.as_ref().map(|c| c.number).unwrap_or(0);
+        let cursor = data.cursor.clone();
+        let block_timestamp = data
+            .clock
+            .as_ref()
+            .and_then(|c| c.timestamp.as_ref())
+            .map(|t| t.seconds)
+            .unwrap_or_default();
+
+        self.process_edits_list(edits_list, block_number, block_timestamp, cursor)
+            .await
     }
 
     async fn persist_cursor(&self, _cursor: String, _block: u64) -> Result<(), Self::Error> {
