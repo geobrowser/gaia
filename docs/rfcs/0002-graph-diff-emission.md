@@ -1,10 +1,11 @@
 # Graph Diff Emission (RFC)
 
+| Summary | Emit incremental graph diffs for canonical and transitive graphs instead of full snapshots. This RFC defines the diff message shape, batching/ordering semantics, and the diff computation approach, including an explicit move encoding. |
+| --- | --- |
+| Date | 2026-01-21 |
+
 ## Summary
 Emit incremental graph diffs for canonical and transitive graphs instead of full snapshots. This RFC defines the diff message shape, batching/ordering semantics, and the diff computation approach, including an explicit move encoding.
-
-## Date
-2026-01-21
 
 ## Goals
 - Emit compact diffs for canonical and transitive graphs via Kafka.

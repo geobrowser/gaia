@@ -1,10 +1,11 @@
 # Canonical Graph Inputs (RFC)
 
+| Summary | Define which data inputs (events and derived edges) should include a space in the canonical graph, and which inputs should only add auxiliary connections. This RFC specifies the intended sources of explicit edges, topic edges, and topic membership that feed canonical computation. |
+| --- | --- |
+| Date | 2026-01-21 |
+
 ## Summary
 Define which data inputs (events and derived edges) should include a space in the canonical graph, and which inputs should only add auxiliary connections. This RFC specifies the intended sources of explicit edges, topic edges, and topic membership that feed canonical computation.
-
-## Date
-2026-01-21
 
 ## Goals
 - Define the event types that mutate the inputs to canonical graph computation.
