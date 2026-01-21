@@ -7,8 +7,19 @@
 //! ## Configuration
 //!
 //! Environment variables:
+//!
+//! ### Substream Configuration
+//! - `USE_MOCK` - Use mock data source instead of live substream (default: false)
+//! - `SUBSTREAMS_ENDPOINT` - Substream endpoint URL (default: geotest.substreams.pinax.network:443)
+//! - `SUBSTREAMS_START_BLOCK` - Start block number (default: 82655, Space Registry deployment)
+//! - `SUBSTREAMS_END_BLOCK` - End block number (default: u64::MAX for continuous streaming)
+//! - `SUBSTREAMS_API_TOKEN` - Optional API token for authenticated endpoints
+//!
+//! ### Kafka Configuration
 //! - `KAFKA_BROKER` - Kafka broker address (default: localhost:9092)
 //! - `KAFKA_TOPIC` - Output topic for canonical graph updates (default: topology.canonical)
+//!
+//! ### Telemetry Configuration
 //! - `SENTRY_DSN` - Sentry DSN/ingest URL
 //! - `SENTRY_TRACES_SAMPLE_RATE` - Sampling rate (0.0 - 1.0)
 //! - `SENTRY_SEND_DEFAULT_PII` - Set to "true" to include PII
