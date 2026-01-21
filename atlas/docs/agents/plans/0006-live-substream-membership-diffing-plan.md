@@ -135,7 +135,7 @@ Update `tree_node_to_proto()` to handle `EdgeType::Editor` and `EdgeType::Member
 
 **Goal:** Emit diffs (added/removed nodes) instead of full tree for both canonical and transitive states.
 
-**Documentation:** See [0002-graph-diff-emission-adr.md](../../../../docs/rfcs/0002-graph-diff-emission-adr.md) for full design details and examples.
+**Documentation:** See [0002-graph-diff-emission.md](../../../../docs/rfcs/0002-graph-diff-emission.md) for full design details and examples.
 
 ### Design Decisions
 
@@ -287,6 +287,6 @@ Export from `atlas/src/kafka/mod.rs`.
 
 ## Related Documentation
 
-- [Graph Diff Emission](../../../../docs/rfcs/0002-graph-diff-emission-adr.md) - Full diff design with examples
+- [Graph Diff Emission](../../../../docs/rfcs/0002-graph-diff-emission.md) - Full diff design with examples
 - [Algorithm Overview](../../algorithm-overview.md) - How transitive and canonical algorithms work
 - [Graph Concepts](../../graph-concepts.md) - Core graph concepts and edge types

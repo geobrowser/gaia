@@ -1,23 +1,41 @@
-# ADR 0001: Canonical Graph Inputs
+# Canonical Graph Inputs (RFC)
 
-## Status
-Proposed
+## Summary
+Define which data inputs (events and derived edges) should include a space in the canonical graph, and which inputs should only add auxiliary connections. This RFC specifies the intended sources of explicit edges, topic edges, and topic membership that feed canonical computation.
 
 ## Date
 2026-01-21
 
-## Context
-We need a shared definition of which inputs should be allowed to include a space in the canonical graph and which inputs should only add auxiliary connections. This ADR is forward-looking and defines the intended target state. The existing Atlas implementation is a proof of concept and is not actively used in the protocol at the time of this ADR.
+## Goals
+- Define the event types that mutate the inputs to canonical graph computation.
+- Make explicit which inputs can expand the canonical set vs. only add edges between canonical nodes.
+- Align the Rust pipeline with the behavior in `@atlas` (mock stream + storage semantics).
 
-## Decision
-### Canonical Root
+## Non-Goals
+- Changing the canonical graph algorithm.
+- Defining how changes to the canonical graph are emitted.
+- Describing Kafka schema details or storage/layout specifics.
+
+## Proposal Context
+This RFC is intentionally forward-looking: it specifies the desired canonical inputs and semantics as the target state for implementation and alignment.
+The existing Atlas implementation is a proof of concept and is not actively used in the protocol at the time of this RFC.
+
+## Definitions
+- **Canonical set**: The set of spaces reachable from the canonical root via explicit edges only.
+- **Explicit edges**: Edges that can grant canonical inclusion.
+- **Topic edges**: Edges from a space to a topic. These only connect already-canonical nodes.
+- **Topic membership**: The mapping from topic -> spaces that set that topic.
+
+## Inputs
+
+### 1) Canonical Root
 - A single configured root space ID seeds canonical traversal.
 - The root is always canonical and is included even if it has no edges.
 
-### Space Lifecycle (Spaces + Topic Setting)
+### 2) Space Lifecycle (Spaces + Topic Setting)
 **Source events**:
 - `SpaceCreated` (from `SPACE_REGISTERED` in substreams)
-- `TOPIC_SET` / `TOPIC_REMOVED`
+- `TOPIC_SET` / `TOPIC_REMOVED` (from `@atlas` mock stream)
 
 **Graph inputs**:
 - Adds the space to the graph.
@@ -27,7 +45,7 @@ We need a shared definition of which inputs should be allowed to include a space
 - Does **not** make the space canonical on its own.
 - Only affects canonical output when a canonical node has a topic edge to that topic.
 
-### Explicit Edges (Canonical-Granting)
+### 3) Explicit Edges (Canonical-Granting)
 **Source events**:
 - `TrustExtended::Verified` (from `SUBSPACE_VERIFIED`)
 - `TrustExtended::Related` (from `SUBSPACE_RELATED`)
@@ -43,7 +61,7 @@ We need a shared definition of which inputs should be allowed to include a space
 - Any space reachable from the root via explicit edges is canonical.
 - Removal of an explicit edge can remove spaces from the canonical set if they are no longer reachable via any explicit path.
 
-### Topic Edges (Non-Canonical-Granting)
+### 4) Topic Edges (Non-Canonical-Granting)
 **Source events**:
 - `TrustExtended::Subtopic` (from `SUBSPACE_TOPIC_DECLARED`)
 
@@ -54,15 +72,16 @@ We need a shared definition of which inputs should be allowed to include a space
 - Topic edges never expand the canonical set.
 - When the source space is canonical, topic edges attach only canonical members of that topic.
 
-### Canonical Inclusion Rules
+## Canonical Inclusion Rules
 A space is included in the canonical set **iff**:
 1) It is the root, or
-2) It is reachable from the root via one or more explicit edges (`Verified`, `Related`, `Editor`, `Member`).
+2) It is reachable from the root via one or more explicit edges
+   (`Verified`, `Related`, `Editor`, `Member`).
 
 Topic membership and topic edges **do not** grant canonical inclusion.
 They only add edges between already-canonical nodes.
 
-### Event-to-Input Mapping
+## Event-to-Input Mapping
 
 | Event/Input | Graph Mutation | Can Expand Canonical Set? |
 | --- | --- | --- |
@@ -75,12 +94,10 @@ They only add edges between already-canonical nodes.
 | DAO initial editors/members | Add explicit edges (Editor/Member) | Yes |
 | `TrustExtended::Subtopic` | Add topic edge | No |
 
-### Ordering
-- Event ordering for add/remove actions follows the log order within each block.
-
-## Consequences
+## Notes
 - Explicit edges are the only inputs that grant canonical reachability.
 - Topic membership updates can change which canonical members are attached via topic edges, but cannot introduce new canonical nodes.
+- Event ordering for add/remove actions follows the log order within each block.
 
 ## Open Questions
 None.
