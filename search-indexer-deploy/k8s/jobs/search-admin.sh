@@ -122,6 +122,9 @@ CLI Commands (runs via kubectl with CI/CD-built image)
     list-indices [--detailed]
         List all indices and aliases
 
+    update-alias --version <VERSION>
+        Update the alias to point to a new index version
+
     help
         Show search-admin CLI help
 
@@ -283,6 +286,21 @@ run_cli_command() {
             # Read-only operation - skip confirmation
             print_info "Running read-only operation: list-indices"
             ;;
+        update-alias)
+            local version=""
+            # Parse version from args
+            for i in "${!@}"; do
+                if [ "${!i}" = "--version" ]; then
+                    local next=$((i+1))
+                    version="${!next}"
+                    break
+                fi
+            done
+            details+=("Alias: entities")
+            details+=("New Target Index: entities_v${version}")
+            details+=("⚠️  This will switch the active index!")
+            confirm_operation "UPDATE ALIAS" "${details[@]}"
+            ;;
         *)
             # Unknown command - still confirm
             confirm_operation "RUN CLI COMMAND" "${details[@]}"
@@ -439,11 +457,12 @@ full_migration() {
         "Source Index: entities_v${source_version}"
         "Target Index: entities_v${target_version}"
         ""
-        "This will execute 4 steps:"
+        "This will execute 5 steps:"
         "  1. Create new index (entities_v${target_version})"
         "  2. Stop search-indexer deployment"
         "  3. Reindex all data (v${source_version} → v${target_version})"
-        "  4. Start search-indexer with new version"
+        "  4. Update alias to point to new index"
+        "  5. Start search-indexer with new version"
         ""
         "⚠️  Search indexing will be PAUSED during migration!"
         "⚠️  Old index (entities_v${source_version}) will NOT be auto-deleted"
@@ -532,8 +551,26 @@ full_migration() {
     print_success "Reindex complete"
     echo ""
 
-    # Step 4: Start indexer with new version
-    print_header "Step 4/4: Starting Search Indexer"
+    # Step 4: Update alias
+    print_header "Step 4/5: Updating Alias"
+    echo "  Updating entities alias to point to entities_v${target_version}..."
+    local pod_name="search-admin-alias-$(date +%s)"
+    kubectl_cmd run "$pod_name" \
+        --image="registry.digitalocean.com/geo/search-admin:latest" \
+        --restart=Never \
+        --rm \
+        -i \
+        --quiet \
+        --env="OPENSEARCH_URL=$OPENSEARCH_URL" \
+        --env="INDEX_ALIAS=entities" \
+        --env="RUST_LOG=${RUST_LOG:-info}" \
+        -n "$NAMESPACE" \
+        -- update-alias --version "$target_version"
+    print_success "Alias updated to entities_v${target_version}"
+    echo ""
+
+    # Step 5: Start indexer with new version
+    print_header "Step 5/5: Starting Search Indexer"
     echo "  Updating version to ${target_version}..."
     kubectl_cmd set env deployment/search-indexer ENTITIES_INDEX_VERSION="${target_version}" -n "$NAMESPACE"
     echo "  Scaling up search-indexer..."
@@ -604,7 +641,7 @@ case "${1}" in
         ;;
 
     # CLI commands (passthrough to kubectl)
-    create-index|reindex|monitor-reindex|delete-index|list-indices|help)
+    create-index|reindex|monitor-reindex|delete-index|list-indices|update-alias|help)
         run_cli_command "$@"
         ;;
 

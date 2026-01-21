@@ -8,7 +8,7 @@ mod opensearch_client;
 
 use commands::{
     create::CreateIndexCommand, delete::DeleteIndexCommand, list::ListIndicesCommand,
-    monitor::MonitorReindexCommand, reindex::ReindexCommand,
+    monitor::MonitorReindexCommand, reindex::ReindexCommand, update_alias::UpdateAliasCommand,
 };
 
 #[derive(Parser)]
@@ -47,6 +47,9 @@ enum Commands {
 
     /// List all indices and aliases
     ListIndices(ListIndicesCommand),
+
+    /// Update alias to point to a new index version
+    UpdateAlias(UpdateAliasCommand),
 }
 
 #[tokio::main]
@@ -78,6 +81,7 @@ async fn main() -> Result<()> {
         }
         Commands::MonitorReindex(cmd) => cmd.execute(&cli.opensearch_url).await,
         Commands::ListIndices(cmd) => cmd.execute(&cli.opensearch_url, &cli.index_alias).await,
+        Commands::UpdateAlias(cmd) => cmd.execute(&cli.opensearch_url, &cli.index_alias).await,
     };
 
     if let Err(ref e) = result {
