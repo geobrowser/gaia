@@ -61,6 +61,9 @@ use hermes_pipeline::pipelines::voting::get_vote_direction;
 
 use emit::{Emitter, topics};
 
+#[cfg(feature = "amp")]
+mod amp_stream;
+
 /// Error type for the pipeline that implements std::error::Error
 #[derive(Debug)]
 pub struct PipelineError(anyhow::Error);
@@ -705,6 +708,24 @@ impl Pipeline {
 
         Ok(())
     }
+
+    pub(crate) async fn process_actions_block(
+        &self,
+        actions: Actions,
+        block_number: u64,
+        timestamp_secs: u64,
+        cursor: String,
+    ) -> Result<(), PipelineError> {
+        let relay_meta = utils::BlockMetadata {
+            cursor,
+            block_number,
+            timestamp: timestamp_secs.to_string(),
+        };
+        let meta: BlockMetadata = relay_meta.clone().into();
+        let encoded = actions.encode_to_vec();
+        self.process_block_impl(encoded.as_slice(), relay_meta, meta)
+            .await
+    }
 }
 
 impl Sink for Pipeline {
@@ -857,6 +878,28 @@ async fn async_main() -> anyhow::Result<()> {
 
     // Create the pipeline
     let pipeline = Pipeline::new(emitter, cache);
+
+    let use_amp = env::var("USE_AMP")
+        .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+        .unwrap_or(false);
+
+    if use_amp {
+        #[cfg(feature = "amp")]
+        {
+            info!("Using Amp Flight stream source");
+            amp_stream::run_amp_stream(&pipeline).await?;
+            pipeline.flush(std::time::Duration::from_secs(30));
+            info!("Pipeline finished");
+            return Ok(());
+        }
+        #[cfg(not(feature = "amp"))]
+        {
+            return Err(anyhow::anyhow!(
+                "USE_AMP is set but the hermes-pipeline crate was built without the amp feature"
+            )
+            .into());
+        }
+    }
 
     // Determine stream source: mock or live substreams
     let source = if use_mock {

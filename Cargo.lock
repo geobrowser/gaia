@@ -3006,6 +3006,8 @@ version = "0.1.0"
 dependencies = [
  "alloy",
  "anyhow",
+ "arrow",
+ "arrow-flight",
  "async-trait",
  "criterion 0.5.1",
  "dotenv",
