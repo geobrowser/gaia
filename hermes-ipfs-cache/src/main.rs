@@ -19,7 +19,7 @@
 
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::env;
+use std::{env, sync::Arc};
 
 use grc_20::{Edit as Grc20Edit, encode_edit};
 use hermes_instrumentation::{Backend, Config, info};
@@ -186,10 +186,10 @@ async fn async_main() -> anyhow::Result<()> {
 
         let cache = CacheSource::live(&database_url).into_cache().await?;
         let ipfs_source = IpfsSource::live(&ipfs_gateway);
-        let sink = IpfsCacheSink::new(cache, ipfs_source);
+        let sink = Arc::new(IpfsCacheSink::new(cache, ipfs_source));
 
         stream_actions(config, move |block| {
-            let sink = &sink;
+            let sink = Arc::clone(&sink);
             async move {
                 sink.process_actions_block(
                     &block.actions,

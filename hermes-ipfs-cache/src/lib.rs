@@ -331,7 +331,9 @@ impl Sink for IpfsCacheSink {
             .map(|t| t.seconds)
             .unwrap_or_default();
 
-        self.process_edits_list(edits_list, block_number, block_timestamp, cursor)
+        let timestamp_secs = u64::try_from(block_timestamp).unwrap_or(0);
+
+        self.process_edits_list(edits_list, block_number, timestamp_secs, cursor)
             .await
     }
 

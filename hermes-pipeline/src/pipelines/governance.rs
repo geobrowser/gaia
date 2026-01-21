@@ -23,9 +23,10 @@ use hermes_schema::pb::governance::{
 };
 
 use hermes_codec::{
-    self, ProposalActionType, decode_flag_args, decode_publish_args, decode_space_id_arg,
+    ProposalActionType, decode_flag_args, decode_publish_args, decode_space_id_arg,
     decode_voting_settings_args,
 };
+use hermes_codec as decode;
 
 use super::BlockMetadata;
 
