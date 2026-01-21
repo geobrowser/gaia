@@ -104,13 +104,18 @@ Example (blocks):
 export type GroupedChangeItem =
   | TextBlockChange
   | ImageBlockChange
-  | DataBlockChange;
+  | DataBlockChange
+  | EntityDiff;
 
 export type GroupedEntityDiff = {
   entityId: string;
   name: string | null;
   values: ValueChange[];
   relations: RelationChange[];
+  // Optional discoverability for dynamic-only or hybrid keys
+  groupKeys?: string[];
+  // Optional static known keys (e.g. blocks) for hybrid mode
+  blocks?: GroupedChangeItem[];
 } & Record<string, GroupedChangeItem[]>;
 ```
 
