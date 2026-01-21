@@ -1,9 +1,0 @@
-warning: profiles for the non root package will be ignored, specify profiles at the workspace root:
-package:   /Users/byronguina/work/code/gaia/actions-substream/Cargo.toml
-workspace: /Users/byronguina/work/code/gaia/Cargo.toml
-warning: profiles for the non root package will be ignored, specify profiles at the workspace root:
-package:   /Users/byronguina/work/code/gaia/hermes-substream/Cargo.toml
-workspace: /Users/byronguina/work/code/gaia/Cargo.toml
-   Compiling hermes-amp v0.1.0 (/Users/byronguina/work/code/gaia/hermes-amp)
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 2.83s
-     Running `target/debug/amp_consumer`
