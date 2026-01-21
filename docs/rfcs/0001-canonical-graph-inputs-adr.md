@@ -1,4 +1,4 @@
-# ADR 0002: Canonical Graph Inputs
+# ADR 0001: Canonical Graph Inputs
 
 ## Status
 Proposed

@@ -1,4 +1,4 @@
-# ADR 0001: Graph Diff Emission
+# ADR 0002: Graph Diff Emission
 
 ## Status
 Proposed
