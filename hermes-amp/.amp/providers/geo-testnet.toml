@@ -1,0 +1,3 @@
+kind = "evm-rpc"
+network = "geo-testnet"
+url = "https://geotest.rpc.pinax.network/v1/3a7c6640ff969e23fda06b2e24d5b7cfce0fecf67b59bb01/"

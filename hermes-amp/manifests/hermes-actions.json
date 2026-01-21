@@ -1,0 +1,32 @@
+{
+  "kind": "manifest",
+  "start_block": 0,
+  "dependencies": {
+    "source": "change_me/eth_mainnet@1.0.0"
+  },
+  "tables": {
+    "actions": {
+      "network": "zc16",
+      "schema": {
+        "arrow": {
+          "fields": [
+            { "name": "_block_num", "type": "UInt64", "nullable": false },
+            { "name": "block_num", "type": "UInt64", "nullable": false },
+            { "name": "timestamp", "type": "Timestamp(Nanosecond, +00:00)", "nullable": false },
+            { "name": "tx_hash", "type": "FixedSizeBinary(32)", "nullable": false },
+            { "name": "log_index", "type": "UInt32", "nullable": false },
+            { "name": "address", "type": "FixedSizeBinary(20)", "nullable": false },
+            { "name": "from_id", "type": "FixedSizeBinary(32)", "nullable": false },
+            { "name": "to_id", "type": "FixedSizeBinary(32)", "nullable": false },
+            { "name": "action", "type": "FixedSizeBinary(32)", "nullable": false },
+            { "name": "topic", "type": "FixedSizeBinary(32)", "nullable": false },
+            { "name": "data", "type": "Binary", "nullable": false }
+          ]
+        }
+      },
+      "input": {
+        "sql": "SELECT _block_num, block_num, timestamp, tx_hash, log_index, address, topic0 AS from_id, topic1 AS to_id, topic2 AS action, topic3 AS topic, data FROM \"source\".logs WHERE address = evm_encode_hex('0xb01683b2f0d38d43fcd4d9aab980166988924132') AND topic0 IS NOT NULL AND topic1 IS NOT NULL AND topic2 IS NOT NULL AND topic3 IS NOT NULL"
+      }
+    }
+  }
+}

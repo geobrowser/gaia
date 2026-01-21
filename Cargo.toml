@@ -25,6 +25,7 @@ members = [
     "hermes-pipeline",
     "hermes-ipfs-cache",
     "hermes-instrumentation",
+    "hermes-amp",
 
     "atlas",
     "hermes-substream",

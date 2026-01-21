@@ -1,0 +1,6 @@
+data_dir = "/Users/byronguina/work/code/gaia/hermes-amp/.amp/data"
+providers_dir = "/Users/byronguina/work/code/gaia/hermes-amp/.amp/providers"
+manifests_dir = "/Users/byronguina/work/code/gaia/hermes-amp/.amp/manifests"
+
+[metadata_db]
+url = "postgresql://byronguina@localhost:5432/amp"
