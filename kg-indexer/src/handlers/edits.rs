@@ -417,11 +417,17 @@ fn value_to_value_op(pv: &PropertyValue, entity_id: Uuid, space_id: Uuid) -> Opt
             // Format: days since epoch with timezone offset
             op.date = Some(format!("{}:{}", days, offset_min));
         }
-        Grc20Value::Time { time_us, offset_min } => {
+        Grc20Value::Time {
+            time_us,
+            offset_min,
+        } => {
             // Format: microseconds since midnight with timezone offset
             op.time = Some(format!("{}:{}", time_us, offset_min));
         }
-        Grc20Value::Datetime { epoch_us, offset_min } => {
+        Grc20Value::Datetime {
+            epoch_us,
+            offset_min,
+        } => {
             // Format: microseconds since epoch with timezone offset
             op.datetime = Some(format!("{}:{}", epoch_us, offset_min));
         }
