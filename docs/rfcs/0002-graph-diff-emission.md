@@ -1,32 +1,35 @@
 # Graph Diff Emission (RFC)
 
-| Summary | Emit incremental graph diffs for canonical and transitive graphs instead of full snapshots. This RFC defines the diff message shape, batching/ordering semantics, and the diff computation approach, including an explicit move encoding. |
-| --- | --- |
-| Date | 2026-01-21 |
+*Date: 2026-01-21*
 
 ## Summary
-Emit incremental graph diffs for canonical and transitive graphs instead of full snapshots. This RFC defines the diff message shape, batching/ordering semantics, and the diff computation approach, including an explicit move encoding.
+
+Instead of emitting full graph snapshots every time something changes, we want to emit incremental diffs. This RFC defines the diff message format, how we batch and order changes, and the algorithm for computing diffs—including how we handle nodes that move within the graph.
 
 ## Goals
-- Emit compact diffs for canonical and transitive graphs via Kafka.
-- Support consumer replay to reconstruct the canonical tree and node membership.
-- Provide deterministic, stable output for testing and downstream processing.
-- Keep computation fast for 100k+ node graphs with small change rates.
+
+- Emit compact diffs for canonical and transitive graphs via Kafka
+- Let consumers replay diffs to reconstruct the canonical tree
+- Produce deterministic, stable output for testing and downstream processing
+- Keep it fast for 100k+ node graphs with small change rates
 
 ## Non-Goals
-- Changing how canonical and transitive graphs are computed.
-- Providing multiple edge paths to the same node (diffs remain tree-like and lossy).
-- Introducing incremental graph mutation in Atlas (tracking changes during traversal).
+
+- Changing how canonical and transitive graphs are computed
+- Emitting multiple edge paths to the same node (diffs stay tree-like and lossy)
+- Tracking changes incrementally during traversal (we compute full diffs after the fact)
 
 ## Current State
-Atlas emits full canonical trees on change detection. The canonical graph is computed via BFS and topic-edge attachments, and changes are detected using tree hashes. Diffs are described in:
+
+Today, Atlas emits full canonical trees whenever it detects a change. It computes the canonical graph via BFS with topic-edge attachments, and uses tree hashes to detect changes. Earlier exploration lives in:
 - `atlas/docs/graph-diff-emission.md`
 - `atlas/docs/graph-diff-algorithm-exploration.md`
 
-This RFC formalizes the emission format and algorithm choice.
+This RFC formalizes the format and algorithm we'll use going forward.
 
-## Proposed Diff Messages (Schema)
-We introduce canonical and transitive diff messages:
+## Diff Message Schema
+
+We introduce two diff message types—one for canonical graphs, one for transitive:
 
 ```
 message CanonicalGraphDiff {
@@ -73,54 +76,60 @@ enum ChangeType {
 ```
 
 ## Batching and Ordering
-- A diff event represents a complete batch of changes for a single graph update and should be applied atomically.
-- Changes are emitted in a deterministic order: sorted by `space_id`.
+
+Each diff event represents a complete batch of changes for a single graph update. Consumers should apply the whole batch atomically. Within a batch, changes are sorted by `space_id` for determinism.
 
 ## Move Encoding
-We will use an explicit `MOVED` change type for nodes whose position changes.
 
-### Rationale
-- Avoids ordering dependencies between add/remove.
-- Clear semantics for reparenting, distance changes, and edge-type changes.
-- Atlas currently has no external consumers, so we can choose the least error-prone model for future clients.
+When a node's position changes (new parent, different distance, different edge type), we emit an explicit `MOVED` change rather than a remove+add pair.
 
-### Behavior
-- `MOVED` carries the same payload as `ADDED` (new position).
-- `REMOVED` indicates the node left the canonical set.
-- `ADDED` indicates a node newly entered the canonical set.
+**Why?**
+- No ordering dependencies between operations
+- Clear semantics for reparenting, distance changes, and edge-type changes
+- Since Atlas has no external consumers yet, we can pick the cleanest model for future clients
+
+**The three change types:**
+- `ADDED`: Node newly entered the canonical set
+- `REMOVED`: Node left the canonical set
+- `MOVED`: Node stayed canonical but changed position (same payload as `ADDED`)
 
 ## Canonical Edge Semantics
-- Each node has exactly one canonical parent edge (first discovered by BFS at minimum distance).
-- Diffs are lossy: alternative edges or longer paths are not emitted.
-- Root is implicit and is not emitted in diffs.
-- Distance is authoritative for consumers that need hop counts.
+
+Each node has exactly one canonical parent edge—the first one discovered by BFS at minimum distance. This means diffs are lossy: we don't emit alternative edges or longer paths to the same node.
+
+The root node is implicit and never appears in diffs. Distance values are authoritative for consumers that need hop counts.
 
 ## Diff Computation Approach
-We will use **sorted vector merge** (Approach #2):
-1) Build a `Position` map for old and new graphs via BFS (first-seen per space_id).
-2) Convert to sorted vectors of `(space_id, position)`.
-3) Merge-join to emit added/removed/changed entries.
 
-Rationale:
-- Deterministic output.
-- Simple implementation and operational model.
-- Fast in practice for 100k nodes with small change rates.
+We'll use a **sorted vector merge**:
 
-Benchmark summary (mocked 100k nodes, ~1% add/remove/move):
+1. Build a `Position` map for old and new graphs via BFS (first-seen per space_id)
+2. Convert to sorted vectors of `(space_id, position)`
+3. Merge-join to emit added/removed/changed entries
+
+**Why this approach?**
+- Deterministic output
+- Simple to implement and operate
+- Fast enough in practice for 100k nodes with small change rates
+
+**Benchmark results** (mocked 100k nodes, ~1% add/remove/move):
 - Sorted merge diff-only: ~0.5–0.7ms
 - Build+diff (including data construction): ~70–90ms
-- Roaring/BTree are competitive but add complexity (UUID→integer mapping).
+- Roaring/BTree are competitive but add complexity (need UUID→integer mapping)
 
 ## Open Questions
-- Do we want to enforce a schema_version field or rely on topic versioning?
+
+- Do we want a schema_version field, or rely on topic versioning?
 - Should we publish a compatibility guarantee for consumer replays?
 
 ## Alternatives Considered
-- HashMap comparison: simple but slower due to random access.
-- RoaringTreemap with UUID→u64 mapping: competitive but adds persistent mapping complexity.
-- Event-driven diffs: faster in typical cases but higher implementation complexity.
 
-## Migration Plan (High-Level)
-- Add diff messages to schema (including MOVED).
-- Emit diffs to new Kafka topics (canonical and transitive).
-- Keep full snapshots during transition (optional).
+- **HashMap comparison**: Simple but slower due to random access patterns
+- **RoaringTreemap with UUID→u64 mapping**: Competitive performance but adds persistent mapping complexity
+- **Event-driven diffs**: Faster in typical cases but significantly more complex to implement
+
+## Migration Plan
+
+1. Add diff messages to schema (including `MOVED`)
+2. Emit diffs to new Kafka topics (canonical and transitive)
+3. Optionally keep full snapshots during transition
