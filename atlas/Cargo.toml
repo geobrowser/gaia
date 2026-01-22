@@ -17,6 +17,7 @@ harness = false
 
 [dependencies]
 hermes-instrumentation = { path = "../hermes-instrumentation" }
+hermes-codec = { path = "../hermes-codec" }
 hermes-relay = { path = "../hermes-relay" }
 hermes-schema = { path = "../hermes-schema" }
 hex = "0.4"

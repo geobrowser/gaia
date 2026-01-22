@@ -7,7 +7,7 @@ This crate captures a minimal mapping of Hermes action logs into Amp's derived d
 - `manifests/hermes-actions.json`: a derived dataset manifest with a single `actions` table.
 - `SPACE_REGISTRY_ADDRESS_HEX`: the ZC16 Space Registry proxy address used to filter logs.
 
-The `actions` table mirrors the anonymous `Action` event in `hermes-substream` by mapping:
+The `actions` table mirrors the anonymous `Action` event used in Hermes by mapping:
 
 - `topic0` -> `from_id`
 - `topic1` -> `to_id`
@@ -26,7 +26,7 @@ needed.
 
 ## Action hashes
 
-Action hash constants live in `hermes-substream/src/lib.rs` and can be used to filter `actions` by
+Action hash constants live in `hermes-codec/src/actions.rs` and can be used to filter `actions` by
 `action` (topic2). Add more derived tables if you want pre-filtered views per action.
 
 ## Test consumers

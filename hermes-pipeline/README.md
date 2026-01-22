@@ -230,7 +230,7 @@ The edits pipeline involves async IPFS fetching, which is the slowest operation.
 Amp streams raw action logs. Since the pipeline needs multiple event types, we:
 
 - Subscribe to the actions log
-- Filter client-side using action type constants from `hermes_relay::actions`
+- Filter client-side using action type constants from `hermes_codec::actions`
 
 ## Benchmarks
 

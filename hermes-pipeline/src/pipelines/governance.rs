@@ -14,7 +14,8 @@ use std::collections::HashMap;
 use anyhow::Result;
 use hermes_instrumentation::{debug, debug_span, info, warn};
 
-use hermes_relay::{Action, actions};
+use hermes_relay::Action;
+use hermes_codec::actions;
 use hermes_schema::pb::governance::{
     AddEditorAction, AddMemberAction, FlagAction, HermesProposalCreated, HermesProposalExecuted,
     HermesProposalUpdated, HermesProposalVoted, ProposalAction, ProposalSettings,

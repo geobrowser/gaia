@@ -8,7 +8,8 @@ use alloy::sol;
 use alloy::sol_types::SolType;
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
 use hermes_pipeline::pipelines::{self, BlockMetadata};
-use hermes_relay::{Action, actions};
+use hermes_relay::Action;
+use hermes_codec::actions;
 
 // Solidity type for encoding test data
 sol! {

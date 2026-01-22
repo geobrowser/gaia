@@ -25,7 +25,8 @@ use tokio_retry::Retry;
 use tokio_retry::strategy::{ExponentialBackoff, jitter};
 use tracing::warn;
 
-use hermes_relay::{Action, actions, extract_ipfs_uri};
+use hermes_relay::Action;
+use hermes_codec::{actions, extract_ipfs_uri};
 use hermes_schema::pb::knowledge::HermesEdit;
 
 use crate::cache::{CacheError, IpfsCache};

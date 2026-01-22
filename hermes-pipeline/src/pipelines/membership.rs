@@ -5,7 +5,8 @@
 use anyhow::Result;
 use hermes_instrumentation::debug_span;
 
-use hermes_relay::{Action, actions};
+use hermes_relay::Action;
+use hermes_codec::actions;
 use hermes_schema::pb::membership::{
     HermesRoleGranted, HermesRoleRevoked, HermesSpaceLeft, MembershipRole,
 };

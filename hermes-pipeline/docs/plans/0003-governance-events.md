@@ -12,9 +12,9 @@ This plan implements Phase 3 (Governance Events) from [0001-complete-action-supp
 
 | Action | Description | Source |
 |--------|-------------|--------|
-| `PROPOSAL_CREATED` | New governance proposal created in a space | `hermes-relay/src/actions.rs:36` |
-| `PROPOSAL_VOTED` | Vote cast on an existing proposal | `hermes-relay/src/actions.rs:42` |
-| `PROPOSAL_EXECUTED` | Proposal executed after passing | `hermes-relay/src/actions.rs:48` |
+| `PROPOSAL_CREATED` | New governance proposal created in a space | `hermes-codec/src/actions.rs` |
+| `PROPOSAL_VOTED` | Vote cast on an existing proposal | `hermes-codec/src/actions.rs` |
+| `PROPOSAL_EXECUTED` | Proposal executed after passing | `hermes-codec/src/actions.rs` |
 
 ### Action Field Mappings
 
@@ -341,5 +341,5 @@ Add unit tests for:
 
 - [0001-complete-action-support.md](./0001-complete-action-support.md) - Parent plan
 - `hermes-substream/proto/schema.proto` - Source event definitions (lines 45-74)
-- `hermes-relay/src/actions.rs` - Action type constants (lines 35-51)
+- `hermes-codec/src/actions.rs` - Action type constants
 - `hermes-pipeline/src/pipelines/spaces.rs` - Reference implementation pattern

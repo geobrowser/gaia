@@ -3,6 +3,8 @@
 //! This module provides functions to decode ABI-encoded data from blockchain actions
 //! into their typed representations.
 
+pub mod actions;
+
 use alloy::sol;
 use alloy::sol_types::{SolType, sol_data};
 use ethabi::{ParamType, Token};
