@@ -33,17 +33,17 @@ We introduce two diff message types—one for canonical graphs, one for transiti
 
 ```
 message CanonicalGraphDiff {
-  bytes root_id = 1;
-  repeated NodeChange changes = 2;
-  blockchain_metadata.BlockchainMetadata meta = 3;
-  uint32 schema_version = 4;
+  uint32 schema_version = 1;
+  bytes root_id = 2;
+  repeated NodeChange changes = 3;
+  blockchain_metadata.BlockchainMetadata meta = 4;
 }
 
 message TransitiveGraphDiff {
-  bytes root_id = 1;
-  repeated NodeChange changes = 2;
-  blockchain_metadata.BlockchainMetadata meta = 3;
-  uint32 schema_version = 4;
+  uint32 schema_version = 1;
+  bytes root_id = 2;
+  repeated NodeChange changes = 3;
+  blockchain_metadata.BlockchainMetadata meta = 4;
 }
 
 message NodeChange {
