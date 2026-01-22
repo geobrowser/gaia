@@ -15,7 +15,6 @@ hermes-instrumentation = { path = "../hermes-instrumentation" }
 hermes-codec = { path = "../hermes-codec" }
 hermes-amp = { path = "../hermes-amp" }
 hermes-relay = { path = "../hermes-relay" }
-hermes-substream = { path = "../hermes-substream" }
 ipfs = { path = "../ipfs" }
 wire = { path = "../wire" }
 grc-20 = { git = "https://github.com/geobrowser/grc-20" }
@@ -25,7 +24,6 @@ async-trait = "0.1"
 chrono = "0.4"
 dotenv = "0.15"
 hex = "0.4"
-prost = "0.13"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sqlx = { version = "0.8", features = [

@@ -1,13 +1,13 @@
 # Hermes Pipeline
 
-A transformer binary that consumes space-related events from `hermes-substream` via `hermes-relay` and publishes them to Kafka topics.
+A transformer binary that consumes space-related events from Amp and publishes them to Kafka topics.
 
 ## Overview
 
 This transformer is part of the Hermes architecture (see `docs/hermes-architecture.md`). It:
 
-1. Connects to the blockchain data source via `hermes-relay`
-2. Subscribes to `HermesModule::Actions` to receive all raw actions
+1. Connects to the Amp Flight SQL stream
+2. Subscribes to actions emitted by the Space Registry contract
 3. Filters client-side for space-related events
 4. Transforms events into Hermes protobuf messages
 5. Publishes to Kafka topics for downstream consumers
@@ -83,10 +83,12 @@ This transformer is part of the Hermes architecture (see `docs/hermes-architectu
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `USE_MOCK` | Set to "true" or "1" to use mock data | `false` |
-| `SUBSTREAMS_ENDPOINT` | Substreams gRPC endpoint URL | `geotest.substreams.pinax.network:443` |
-| `SUBSTREAMS_API_TOKEN` | Auth token for substreams | - |
-| `SUBSTREAMS_START_BLOCK` | Block number to start from | `88109` |
-| `SUBSTREAMS_END_BLOCK` | Block number to stop at | `u64::MAX` (continuous) |
+| `AMP_FLIGHT_URL` | Amp Flight SQL URL | `http://localhost:1602` |
+| `AMP_DATASET` | Amp dataset | `geo/actions` |
+| `AMP_START_BLOCK` | Block number to start from | `82655` |
+| `AMP_END_BLOCK` | Block number to stop at | - |
+| `AMP_ACTIONS_ADDRESS` | Actions contract address | `SPACE_REGISTRY_ADDRESS_HEX` |
+| `AMP_RECONNECT_DELAY_SECS` | Reconnect delay in seconds | `2` |
 
 ### Kafka Environment Variables
 
@@ -118,9 +120,9 @@ If `SENTRY_DSN` is set, telemetry is exported to Sentry. Otherwise, logs are wri
 # Start local Kafka (see hermes/docker-compose.yaml)
 docker-compose -f hermes/docker-compose.yaml up -d
 
-# Run with live substreams data (default)
-SUBSTREAMS_API_TOKEN=your-token \
-SUBSTREAMS_START_BLOCK=81809 \
+# Run with live Amp data (default)
+AMP_FLIGHT_URL=http://localhost:1602 \
+AMP_START_BLOCK=81809 \
 KAFKA_BROKER=localhost:9092 \
 cargo run --package hermes-pipeline
 ```
@@ -142,7 +144,7 @@ docker build -f hermes-pipeline/Dockerfile -t hermes-pipeline .
 
 # Run with live data
 docker run \
-  -e SUBSTREAMS_API_TOKEN=your-token \
+  -e AMP_FLIGHT_URL=http://localhost:1602 \
   -e KAFKA_BROKER=localhost:9092 \
   hermes-pipeline
 ```
@@ -150,10 +152,10 @@ docker run \
 ## Architecture
 
 ```
-┌─────────────────┐     ┌──────────────┐     ┌─────────────────┐
-│ hermes-substream│────▶│ hermes-relay │────▶│ hermes-pipeline │
-│  (blockchain)   │     │   (stream)   │     │  (transformer)  │
-└─────────────────┘     └──────────────┘     └────────┬────────┘
+┌─────────────────┐     ┌─────────────────┐
+│       Amp       │────▶│ hermes-pipeline │
+│  (actions log)  │     │  (transformer)  │
+└─────────────────┘     └────────┬────────┘
                                                       │
                                                       ▼
                                              ┌─────────────────┐
@@ -225,12 +227,10 @@ The edits pipeline involves async IPFS fetching, which is the slowest operation.
 
 ## Why Client-Side Filtering?
 
-The substreams protocol only supports consuming a single output module per stream in production mode. Since the pipeline needs multiple event types, we:
+Amp streams raw action logs. Since the pipeline needs multiple event types, we:
 
-- Subscribe to `map_actions` (all raw actions)
+- Subscribe to the actions log
 - Filter client-side using action type constants from `hermes_relay::actions`
-
-See `hermes-relay/docs/decisions/0001-multiple-substreams-modules-consumers.md` for more details.
 
 ## Benchmarks
 
@@ -290,7 +290,7 @@ cargo bench -p hermes-pipeline -- 'decode_proposal_created'
    - Mixed block (11 actions): ~2.1 µs
    - Large block (150 actions): ~19 µs
 
-The pipeline transform is not a bottleneck. Network I/O (substreams, Kafka, IPFS) dominates real-world latency.
+The pipeline transform is not a bottleneck. Network I/O (Amp, Kafka, IPFS) dominates real-world latency.
 
 ## Future Work
 

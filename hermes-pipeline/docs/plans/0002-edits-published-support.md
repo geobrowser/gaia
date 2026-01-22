@@ -53,7 +53,7 @@ The **edits pipeline** is the exception - it requires an external lookup to reso
 
 ### Ordering Requirements
 
-- **Space/Trust events**: Must preserve substream order
+- **Space/Trust events**: Must preserve Amp action order
 - **Edit events**: Must be ordered relative to other edits (edits are diffs)
 
 For now, we process all actions sequentially in one binary. The cache lookup for edits is blocking but fast (in-memory for mock, database query for live).

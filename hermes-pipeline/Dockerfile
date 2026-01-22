@@ -18,7 +18,6 @@ COPY hermes-kafka ./hermes-kafka
 COPY hermes-pipeline ./hermes-pipeline
 COPY hermes-relay ./hermes-relay
 COPY hermes-schema ./hermes-schema
-COPY hermes-substream ./hermes-substream
 COPY stream ./stream
 COPY wire ./wire
 
@@ -33,7 +32,6 @@ RUN apt-get update && \
     rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app/hermes-pipeline/target/release/hermes-pipeline /usr/local/bin/hermes-pipeline
-COPY --from=builder /app/hermes-substream/hermes-substream-v0.1.0.spkg /hermes-substream/hermes-substream-v0.1.0.spkg
 
 # Default environment variables
 ENV KAFKA_BROKER=kafka-broker-0.broker.kafka.svc.cluster.local:29092

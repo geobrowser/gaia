@@ -212,10 +212,9 @@ services:
       dockerfile: hermes-ipfs-cache/Dockerfile
     environment:
       DATABASE_URL: postgres://postgres:postgres@ipfs-cache-postgres:5432/ipfs_cache
-      IPFS_GATEWAY: https://gateway.ipfs.io/ipfs/
-      SUBSTREAMS_ENDPOINT: ${SUBSTREAMS_ENDPOINT}
-      SUBSTREAMS_API_TOKEN: ${SUBSTREAMS_API_TOKEN}
-      START_BLOCK: ${START_BLOCK:-0}
+      IPFS_GATEWAY_URL: https://gateway.ipfs.io/ipfs/
+      AMP_FLIGHT_URL: ${AMP_FLIGHT_URL}
+      AMP_START_BLOCK: ${AMP_START_BLOCK:-0}
       SENTRY_DSN: ${SENTRY_DSN:-}
       SENTRY_TRACES_SAMPLE_RATE: ${SENTRY_TRACES_SAMPLE_RATE:-}
       SENTRY_SEND_DEFAULT_PII: ${SENTRY_SEND_DEFAULT_PII:-}

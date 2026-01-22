@@ -91,16 +91,35 @@ spec:
                 secretKeyRef:
                   name: hermes-pipeline-secrets
                   key: KAFKA_SSL_CA_PEM
-            - name: SUBSTREAMS_ENDPOINT
+            - name: AMP_FLIGHT_URL
               valueFrom:
                 secretKeyRef:
                   name: hermes-ipfs-cache-secrets
-                  key: SUBSTREAMS_ENDPOINT
-            - name: SUBSTREAMS_API_TOKEN
+                  key: AMP_FLIGHT_URL
+            - name: AMP_DATASET
               valueFrom:
                 secretKeyRef:
                   name: hermes-ipfs-cache-secrets
-                  key: SUBSTREAMS_API_TOKEN
+                  key: AMP_DATASET
+                  optional: true
+            - name: AMP_START_BLOCK
+              valueFrom:
+                secretKeyRef:
+                  name: hermes-ipfs-cache-secrets
+                  key: AMP_START_BLOCK
+                  optional: true
+            - name: AMP_END_BLOCK
+              valueFrom:
+                secretKeyRef:
+                  name: hermes-ipfs-cache-secrets
+                  key: AMP_END_BLOCK
+                  optional: true
+            - name: AMP_ACTIONS_ADDRESS
+              valueFrom:
+                secretKeyRef:
+                  name: hermes-ipfs-cache-secrets
+                  key: AMP_ACTIONS_ADDRESS
+                  optional: true
             - name: SENTRY_DSN
               valueFrom:
                 secretKeyRef:

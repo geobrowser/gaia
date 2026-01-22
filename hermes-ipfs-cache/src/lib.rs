@@ -4,7 +4,7 @@
 //! doesn't block on network I/O.
 //!
 //! This service:
-//! 1. Connects to hermes-substream `map_edits_published` (parallelized, runs ahead)
+//! 1. Streams Hermes actions from Amp (parallelized, runs ahead)
 //! 2. For each edit event, fetches the IPFS content by CID
 //! 3. Stores resolved content in the cache
 //!
@@ -12,7 +12,7 @@
 //!
 //! ```ignore
 //! use hermes_ipfs_cache::{IpfsCacheSink, cache::CacheSource};
-//! use hermes_relay::{Sink, StreamSource};
+//! use hermes_amp::{AmpStreamConfig, stream_actions};
 //! use ipfs::IpfsSource;
 //! use std::collections::HashMap;
 //!
@@ -21,12 +21,17 @@
 //! let mut edits = HashMap::new();
 //! edits.insert("QmTestCid".to_string(), test_edit);
 //! let sink = IpfsCacheSink::new(cache, IpfsSource::mock(edits));
-//! sink.run(StreamSource::mock()).await?;
+//! sink.process_actions_block(&actions, 0, 0, "mock:0".to_string()).await?;
 //!
 //! // Production: use live sources
 //! let cache = CacheSource::live(&database_url).into_cache().await?;
 //! let sink = IpfsCacheSink::new(cache, IpfsSource::live(&gateway_url));
-//! sink.run(StreamSource::live(&endpoint, module, start, end)).await?;
+//! let config = AmpStreamConfig::from_env();
+//! stream_actions(config, |block| async move {
+//!     sink.process_actions_block(&block.actions, block.block_num, block.timestamp_secs, block.cursor)
+//!         .await
+//!         .map_err(anyhow::Error::from)
+//! }).await?;
 //! ```
 
 pub mod cache;
@@ -37,10 +42,8 @@ use std::sync::Arc;
 use grc_20::decode_edit;
 use hermes_instrumentation::{debug, error, info, info_span, warn};
 use hermes_codec::{extract_ipfs_uri, extract_proposal_publish_uris};
-use hermes_relay::{Action, HermesModule, Sink, actions};
-use hermes_substream::pb::hermes::{EditsPublished, EditsPublishedList};
+use hermes_relay::{Action, actions};
 use ipfs::{IpfsFetcher, IpfsSource};
-use prost::Message;
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, Semaphore};
 use tokio::task;
@@ -59,9 +62,6 @@ const MAX_CONCURRENT_FETCHES: usize = 20;
 pub enum IpfsCacheError {
     #[error("Cache error: {0}")]
     Cache(#[from] CacheError),
-
-    #[error("Protobuf decode error: {0}")]
-    Decode(#[from] prost::DecodeError),
 
     #[error("IO error: {0}")]
     Io(#[from] std::io::Error),
@@ -116,9 +116,16 @@ impl PendingFetches {
     }
 }
 
-/// IPFS cache sink that implements the hermes-relay Sink trait.
+#[derive(Debug, Clone)]
+struct EditPublish {
+    space_id: Vec<u8>,
+    data: Vec<u8>,
+    content_uri: String,
+}
+
+/// IPFS cache sink for processing action batches.
 ///
-/// Subscribes to `EditsPublished` events and pre-fetches IPFS content
+/// Subscribes to edit-related actions and pre-fetches IPFS content.
 /// to populate the cache for downstream consumers.
 pub struct IpfsCacheSink {
     cache: Arc<Mutex<Cache>>,
@@ -150,11 +157,6 @@ impl IpfsCacheSink {
         }
     }
 
-    /// Get the hermes module this sink subscribes to.
-    pub fn module() -> HermesModule {
-        HermesModule::EditsPublished
-    }
-
     pub async fn process_actions_block(
         &self,
         actions: &[Action],
@@ -162,12 +164,12 @@ impl IpfsCacheSink {
         timestamp_secs: u64,
         cursor: String,
     ) -> Result<(), IpfsCacheError> {
-        let mut edits: Vec<EditsPublished> = Vec::new();
+        let mut edits: Vec<EditPublish> = Vec::new();
 
         for action in actions {
             if actions::matches(&action.action, &actions::EDITS_PUBLISHED) {
                 if let Some(uri) = extract_ipfs_uri(&action.data) {
-                    edits.push(EditsPublished {
+                    edits.push(EditPublish {
                         space_id: action.from_id.clone(),
                         data: action.data.clone(),
                         content_uri: uri,
@@ -178,7 +180,7 @@ impl IpfsCacheSink {
 
             if actions::matches(&action.action, &actions::PROPOSAL_CREATED) {
                 for uri in extract_proposal_publish_uris(&action.data) {
-                    edits.push(EditsPublished {
+                    edits.push(EditPublish {
                         space_id: action.from_id.clone(),
                         data: Vec::new(),
                         content_uri: uri,
@@ -187,20 +189,19 @@ impl IpfsCacheSink {
             }
         }
 
-        let edits_list = EditsPublishedList { edits };
-        self.process_edits_list(edits_list, block_number, timestamp_secs, cursor)
+        self.process_edits_list(edits, block_number, timestamp_secs, cursor)
             .await
     }
 
     async fn process_edits_list(
         &self,
-        edits_list: EditsPublishedList,
+        edits: Vec<EditPublish>,
         block_number: u64,
         timestamp_secs: u64,
         cursor: String,
     ) -> Result<(), IpfsCacheError> {
         let block_timestamp = timestamp_secs.to_string();
-        let edit_count = edits_list.edits.len();
+        let edit_count = edits.len();
 
         if block_number.is_multiple_of(100) {
             info!(block = block_number, "Checkpoint");
@@ -222,7 +223,7 @@ impl IpfsCacheSink {
                 .add_block(block_number, cursor.clone(), edit_count);
         }
 
-        for edit in edits_list.edits {
+        for edit in edits {
             let permit = self.semaphore.clone().acquire_owned().await.unwrap();
             let cache = self.cache.clone();
             let ipfs = self.ipfs.clone();
@@ -306,65 +307,18 @@ impl IpfsCacheSink {
     }
 }
 
-impl Sink for IpfsCacheSink {
-    type Error = IpfsCacheError;
-
-    async fn process_block_scoped_data(
-        &self,
-        data: &hermes_relay::stream::pb::sf::substreams::rpc::v2::BlockScopedData,
-    ) -> Result<(), Self::Error> {
-        let output = data
-            .output
-            .as_ref()
-            .and_then(|o| o.map_output.as_ref())
-            .ok_or_else(|| {
-                std::io::Error::new(std::io::ErrorKind::InvalidData, "Missing map output")
-            })?;
-
-        let edits_list = EditsPublishedList::decode(output.value.as_slice())?;
-        let block_number = data.clock.as_ref().map(|c| c.number).unwrap_or(0);
-        let cursor = data.cursor.clone();
-        let block_timestamp = data
-            .clock
-            .as_ref()
-            .and_then(|c| c.timestamp.as_ref())
-            .map(|t| t.seconds)
-            .unwrap_or_default();
-
-        let timestamp_secs = u64::try_from(block_timestamp).unwrap_or(0);
-
-        self.process_edits_list(edits_list, block_number, timestamp_secs, cursor)
-            .await
-    }
-
-    async fn persist_cursor(&self, _cursor: String, _block: u64) -> Result<(), Self::Error> {
-        // No-op: cursor persistence is handled in the spawned tasks after each fetch completes.
-        // This ensures we only persist the cursor for the minimum pending block.
-        Ok(())
-    }
-
-    async fn load_persisted_cursor(&self) -> Result<Option<String>, Self::Error> {
-        let cursor = self.cache.lock().await.load_cursor(INDEXER_ID).await?;
-        match &cursor {
-            Some(c) => info!(cursor = %c, "Resuming from persisted cursor"),
-            None => info!("No persisted cursor found, starting fresh"),
-        }
-        Ok(cursor)
-    }
-}
-
 /// Process a single edit event by fetching its IPFS content.
 ///
-/// The `content_uri` field is pre-validated by hermes-substream.
+/// The `content_uri` field is pre-validated by `hermes-codec` extraction.
 /// If empty, the edit contained no valid IPFS URI and is skipped.
 async fn process_edit_event(
-    edit: EditsPublished,
+    edit: EditPublish,
     cache: &Arc<Mutex<Cache>>,
     ipfs: &Arc<dyn IpfsFetcher>,
     block_timestamp: &str,
     block_number: u64,
 ) -> Result<(), CacheError> {
-    // content_uri is validated by hermes-substream - empty means no valid IPFS URI
+    // content_uri is validated by hermes-codec - empty means no valid IPFS URI
     if edit.content_uri.is_empty() {
         let space_id = hex::encode(&edit.space_id);
         let data_prefix_len = edit.data.len().min(64);
