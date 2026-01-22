@@ -7072,6 +7072,7 @@ dependencies = [
  "chrono",
  "dotenv",
  "futures 0.3.31",
+ "hermes-instrumentation",
  "hermes-schema",
  "prost 0.13.5",
  "rdkafka 0.38.0",
@@ -7079,7 +7080,6 @@ dependencies = [
  "thiserror 2.0.17",
  "tokio",
  "tracing",
- "tracing-subscriber",
  "uuid",
 ]
 
