@@ -106,10 +106,10 @@ pub fn extract_proposal_publish_uris(data: &[u8]) -> Vec<String> {
         }
 
         // Decode publish args: (bytes32 topic, bytes contentUri, bytes metadata)
-        if let Some(uri) = decode_publish_content_uri(&action_data[4..]) {
-            if let Some(valid_uri) = extract_ipfs_uri(uri.as_bytes()) {
-                uris.push(valid_uri);
-            }
+        if let Some(uri) = decode_publish_content_uri(&action_data[4..])
+            && let Some(valid_uri) = extract_ipfs_uri(uri.as_bytes())
+        {
+            uris.push(valid_uri);
         }
     }
 
@@ -129,10 +129,10 @@ fn decode_proposal_actions(data: &[u8]) -> Option<Vec<Vec<u8>>> {
     }
 
     // Try unwrapping once and decoding
-    if let Some(unwrapped) = unwrap_bytes_once(data) {
-        if let Some(actions) = decode_proposal_actions_inner(&unwrapped) {
-            return Some(actions);
-        }
+    if let Some(unwrapped) = unwrap_bytes_once(data)
+        && let Some(actions) = decode_proposal_actions_inner(&unwrapped)
+    {
+        return Some(actions);
     }
 
     None
