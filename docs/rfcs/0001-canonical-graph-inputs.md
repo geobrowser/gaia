@@ -69,7 +69,7 @@ This is the key one—any space reachable from the root via explicit edges becom
 ### 4) Topic Edges (Non-Canonical-Granting)
 
 **Source events:**
-- `TrustExtended::Subtopic` (from `SUBSPACE_TOPIC_DECLARED`)
+- `TrustExtended::Subtopic` (from `SUBSPACE_TOPIC_ADDED/REMOVED`)
 
 **What happens:**
 These create an edge from a space to a topic ID.
