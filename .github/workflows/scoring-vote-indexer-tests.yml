@@ -2,14 +2,14 @@ name: Vote Indexer Unit Tests
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main, dev]
     paths:
       - 'scoring-service/vote-indexer/**'
       - 'hermes-schema/**'
       - 'wire/**'
       - '.github/workflows/scoring-vote-indexer-tests.yml'
   pull_request:
-    branches: [main, develop]
+    branches: [main, dev]
     paths:
       - 'scoring-service/vote-indexer/**'
       - 'hermes-schema/**'

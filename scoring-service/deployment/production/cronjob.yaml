@@ -50,6 +50,36 @@ spec:
                   value: "curation.scores"
                 - name: SCORE_BATCH_SIZE
                   value: "1000"
+                - name: SENTRY_DSN
+                  valueFrom:
+                    secretKeyRef:
+                      name: scoring-cronjob-secrets
+                      key: SENTRY_DSN
+                      optional: true
+                - name: SENTRY_TRACES_SAMPLE_RATE
+                  valueFrom:
+                    secretKeyRef:
+                      name: scoring-cronjob-secrets
+                      key: SENTRY_TRACES_SAMPLE_RATE
+                      optional: true
+                - name: SENTRY_SEND_DEFAULT_PII
+                  valueFrom:
+                    secretKeyRef:
+                      name: scoring-cronjob-secrets
+                      key: SENTRY_SEND_DEFAULT_PII
+                      optional: true
+                - name: SENTRY_ENVIRONMENT
+                  valueFrom:
+                    secretKeyRef:
+                      name: scoring-cronjob-secrets
+                      key: SENTRY_ENVIRONMENT
+                      optional: true
+                - name: SENTRY_RELEASE
+                  valueFrom:
+                    secretKeyRef:
+                      name: scoring-cronjob-secrets
+                      key: SENTRY_RELEASE
+                      optional: true
               resources:
                 requests:
                   memory: "1024Mi"
