@@ -2,11 +2,11 @@ name: Stream Check
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main, dev]
     paths:
       - 'stream/**'
   pull_request:
-    branches: [main, develop]
+    branches: [main, dev]
     paths:
       - 'stream/**'
 
