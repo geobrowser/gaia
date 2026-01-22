@@ -169,6 +169,10 @@ services:
       SENTRY_ENVIRONMENT: ${SENTRY_ENVIRONMENT:-}
       SENTRY_RELEASE: ${SENTRY_RELEASE:-}
       SENTRY_DEBUG: ${SENTRY_DEBUG:-false}
+      DATABASE_URL: ${DATABASE_URL:-postgresql://postgres:postgres@host.docker.internal:5432/postgres}
+      SUBSTREAMS_ENDPOINT: ${SUBSTREAMS_ENDPOINT:-http://host.docker.internal:9000}
+      SUBSTREAMS_START_BLOCK: ${SUBSTREAMS_START_BLOCK:-0}
+      SUBSTREAMS_END_BLOCK: ${SUBSTREAMS_END_BLOCK:-0}
     depends_on:
       kafka:
         condition: service_healthy

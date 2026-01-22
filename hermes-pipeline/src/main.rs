@@ -149,6 +149,11 @@ impl Pipeline {
         let actions_msg = Actions::decode(output_value)?;
         let actions = &actions_msg.actions;
 
+        println!("--------------------------------");
+        println!("Processing block: {:?}", meta.block_number);
+        println!("Actions: {:?}", actions.len());
+        println!("--------------------------------");
+
         // =========================================================================
         // Phase 1: Transform actions into events
         // =========================================================================

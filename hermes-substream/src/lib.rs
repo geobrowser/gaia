@@ -201,9 +201,9 @@ pub const SPACE_TYPE_EOA: [u8; 32] = [
 /// Parse Action event from log.
 /// Returns None if not a valid Action event from Space Registry.
 fn parse_action(log: LogView) -> Option<Action> {
-    if log.address() != SPACE_REGISTRY_ADDRESS {
-        return None;
-    }
+    // if log.address() != SPACE_REGISTRY_ADDRESS {
+    //     return None;
+    // }
 
     // The Action event is anonymous with 4 indexed fields
     let topics = log.topics();

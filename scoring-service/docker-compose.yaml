@@ -25,7 +25,7 @@ services:
       context: ..
       dockerfile: scoring-service/vote-indexer/Dockerfile
     environment:
-      - DATABASE_URL
+      - DATABASE_URL=${DATABASE_URL:-postgresql://postgres:postgres@host.docker.internal:5432/postgres}
       - KAFKA_BROKER=${KAFKA_BROKER:-kafka:29092}
       - KAFKA_GROUP_ID=${KAFKA_GROUP_ID:-vote-indexer}
       - BATCH_SIZE=${BATCH_SIZE:-100}

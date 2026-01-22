@@ -18,7 +18,7 @@ modules:
   # Raw actions - for consumers who want full control
   - name: map_actions
     kind: map
-    initialBlock: 81809
+    initialBlock: 0
     inputs:
       - source: sf.ethereum.type.v2.Block
     output:
@@ -27,7 +27,7 @@ modules:
   # Governance events - pre-filtered typed events
   - name: map_spaces_registered
     kind: map
-    initialBlock: 81809
+    initialBlock: 0
     inputs:
       - source: sf.ethereum.type.v2.Block
     output:
@@ -35,7 +35,7 @@ modules:
 
   - name: map_spaces_migrated
     kind: map
-    initialBlock: 81809
+    initialBlock: 0
     inputs:
       - source: sf.ethereum.type.v2.Block
     output:
@@ -43,7 +43,7 @@ modules:
 
   - name: map_proposals_created
     kind: map
-    initialBlock: 81809
+    initialBlock: 0
     inputs:
       - source: sf.ethereum.type.v2.Block
     output:
@@ -51,7 +51,7 @@ modules:
 
   - name: map_proposals_voted
     kind: map
-    initialBlock: 81809
+    initialBlock: 0
     inputs:
       - source: sf.ethereum.type.v2.Block
     output:
@@ -59,7 +59,7 @@ modules:
 
   - name: map_proposals_executed
     kind: map
-    initialBlock: 81809
+    initialBlock: 0
     inputs:
       - source: sf.ethereum.type.v2.Block
     output:
@@ -67,7 +67,7 @@ modules:
 
   - name: map_editors_added
     kind: map
-    initialBlock: 81809
+    initialBlock: 0
     inputs:
       - source: sf.ethereum.type.v2.Block
     output:
@@ -75,7 +75,7 @@ modules:
 
   - name: map_editors_removed
     kind: map
-    initialBlock: 81809
+    initialBlock: 0
     inputs:
       - source: sf.ethereum.type.v2.Block
     output:
@@ -83,7 +83,7 @@ modules:
 
   - name: map_members_added
     kind: map
-    initialBlock: 81809
+    initialBlock: 0
     inputs:
       - source: sf.ethereum.type.v2.Block
     output:
@@ -91,7 +91,7 @@ modules:
 
   - name: map_members_removed
     kind: map
-    initialBlock: 81809
+    initialBlock: 0
     inputs:
       - source: sf.ethereum.type.v2.Block
     output:
@@ -99,7 +99,7 @@ modules:
 
   - name: map_editors_flagged
     kind: map
-    initialBlock: 81809
+    initialBlock: 0
     inputs:
       - source: sf.ethereum.type.v2.Block
     output:
@@ -107,7 +107,7 @@ modules:
 
   - name: map_editors_unflagged
     kind: map
-    initialBlock: 81809
+    initialBlock: 0
     inputs:
       - source: sf.ethereum.type.v2.Block
     output:
@@ -115,7 +115,7 @@ modules:
 
   - name: map_spaces_left
     kind: map
-    initialBlock: 81809
+    initialBlock: 0
     inputs:
       - source: sf.ethereum.type.v2.Block
     output:
@@ -123,7 +123,7 @@ modules:
 
   - name: map_topics_declared
     kind: map
-    initialBlock: 81809
+    initialBlock: 0
     inputs:
       - source: sf.ethereum.type.v2.Block
     output:
@@ -131,7 +131,7 @@ modules:
 
   - name: map_edits_published
     kind: map
-    initialBlock: 81809
+    initialBlock: 0
     inputs:
       - source: sf.ethereum.type.v2.Block
     output:
@@ -139,7 +139,7 @@ modules:
 
   - name: map_flagged
     kind: map
-    initialBlock: 81809
+    initialBlock: 0
     inputs:
       - source: sf.ethereum.type.v2.Block
     output:
@@ -147,7 +147,7 @@ modules:
 
   - name: map_unflagged
     kind: map
-    initialBlock: 81809
+    initialBlock: 0
     inputs:
       - source: sf.ethereum.type.v2.Block
     output:
@@ -155,7 +155,7 @@ modules:
 
   - name: map_subspaces_removed
     kind: map
-    initialBlock: 81809
+    initialBlock: 0
     inputs:
       - source: sf.ethereum.type.v2.Block
     output:
@@ -163,7 +163,7 @@ modules:
 
   - name: map_subspaces_verified
     kind: map
-    initialBlock: 81809
+    initialBlock: 0
     inputs:
       - source: sf.ethereum.type.v2.Block
     output:
@@ -171,7 +171,7 @@ modules:
 
   - name: map_subspaces_related
     kind: map
-    initialBlock: 81809
+    initialBlock: 0
     inputs:
       - source: sf.ethereum.type.v2.Block
     output:
@@ -179,7 +179,7 @@ modules:
 
   - name: map_subspaces_topic_declared
     kind: map
-    initialBlock: 81809
+    initialBlock: 0
     inputs:
       - source: sf.ethereum.type.v2.Block
     output:
@@ -187,7 +187,7 @@ modules:
 
   - name: map_space_types_declared
     kind: map
-    initialBlock: 81809
+    initialBlock: 0
     inputs:
       - source: sf.ethereum.type.v2.Block
     output:
@@ -195,7 +195,7 @@ modules:
 
   - name: map_spaces_cleared
     kind: map
-    initialBlock: 81809
+    initialBlock: 0
     inputs:
       - source: sf.ethereum.type.v2.Block
     output:
@@ -203,7 +203,7 @@ modules:
 
   - name: map_proposal_settings_used
     kind: map
-    initialBlock: 81809
+    initialBlock: 0
     inputs:
       - source: sf.ethereum.type.v2.Block
     output:
@@ -211,7 +211,7 @@ modules:
 
   - name: map_proposals_updated
     kind: map
-    initialBlock: 81809
+    initialBlock: 0
     inputs:
       - source: sf.ethereum.type.v2.Block
     output:
@@ -220,7 +220,7 @@ modules:
   # Permissionless events
   - name: map_objects_upvoted
     kind: map
-    initialBlock: 81809
+    initialBlock: 0
     inputs:
       - source: sf.ethereum.type.v2.Block
     output:
@@ -228,7 +228,7 @@ modules:
 
   - name: map_objects_downvoted
     kind: map
-    initialBlock: 81809
+    initialBlock: 0
     inputs:
       - source: sf.ethereum.type.v2.Block
     output:
@@ -236,7 +236,7 @@ modules:
 
   - name: map_objects_unvoted
     kind: map
-    initialBlock: 81809
+    initialBlock: 0
     inputs:
       - source: sf.ethereum.type.v2.Block
     output:
