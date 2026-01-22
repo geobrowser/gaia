@@ -413,14 +413,17 @@ fn value_to_value_op(pv: &PropertyValue, entity_id: Uuid, space_id: Uuid) -> Opt
         Grc20Value::Bytes(v) => {
             op.bytes = Some(v.to_vec());
         }
-        Grc20Value::Date(v) => {
-            op.date = Some(v.to_string());
+        Grc20Value::Date { days, offset_min } => {
+            // Format: days since epoch with timezone offset
+            op.date = Some(format!("{}:{}", days, offset_min));
         }
-        Grc20Value::Time(v) => {
-            op.time = Some(v.to_string());
+        Grc20Value::Time { time_us, offset_min } => {
+            // Format: microseconds since midnight with timezone offset
+            op.time = Some(format!("{}:{}", time_us, offset_min));
         }
-        Grc20Value::Datetime(v) => {
-            op.datetime = Some(v.to_string());
+        Grc20Value::Datetime { epoch_us, offset_min } => {
+            // Format: microseconds since epoch with timezone offset
+            op.datetime = Some(format!("{}:{}", epoch_us, offset_min));
         }
         Grc20Value::Schedule(v) => {
             // Store as JSON string

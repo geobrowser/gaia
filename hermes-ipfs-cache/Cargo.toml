@@ -16,7 +16,7 @@ hermes-relay = { path = "../hermes-relay" }
 hermes-substream = { path = "../hermes-substream" }
 ipfs = { path = "../ipfs" }
 wire = { path = "../wire" }
-grc-20 = { git = "https://github.com/geobrowser/grc-20" }
+grc-20 = "0.2.0"
 
 anyhow = "1"
 async-trait = "0.1"
