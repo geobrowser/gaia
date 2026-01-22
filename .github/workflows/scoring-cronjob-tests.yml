@@ -2,6 +2,7 @@ name: Scoring Cronjob Tests
 
 on:
   pull_request:
+    branches: [main, dev]
     paths:
       - 'scoring-service/cronjob/**'
       - '.github/workflows/scoring-cronjob-tests.yml'

@@ -6,6 +6,7 @@ on:
       - 'api/**'
       - 'api/drizzle/**'
   pull_request:
+    branches: [main, dev]
     paths:
       - 'api/**'
       - 'api/drizzle/**'
