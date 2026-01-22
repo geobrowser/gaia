@@ -77,6 +77,8 @@ These create an edge from a space to a topic ID.
 **Canonical impact:**
 Topic edges never expand the canonical set. They only attach already-canonical members of that topic when the source space is itself canonical.
 
+**Note:** While topic edges don't affect canonical inclusion, they can cause nodes to be reordered in the tree. A node might be discovered at a shorter distance via a topic edge than its original explicit-edge path, changing its position (and parent) in the canonical tree.
+
 ## Canonical Inclusion Rules
 
 A space is canonical if and only if:
