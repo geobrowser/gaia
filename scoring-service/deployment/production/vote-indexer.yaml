@@ -71,6 +71,42 @@ spec:
             # Logging
             - name: RUST_LOG
               value: "info,vote_indexer=debug"
+            - name: SENTRY_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: vote-indexer-secrets
+                  key: SENTRY_DSN
+                  optional: true
+            - name: SENTRY_TRACES_SAMPLE_RATE
+              valueFrom:
+                secretKeyRef:
+                  name: vote-indexer-secrets
+                  key: SENTRY_TRACES_SAMPLE_RATE
+                  optional: true
+            - name: SENTRY_SEND_DEFAULT_PII
+              valueFrom:
+                secretKeyRef:
+                  name: vote-indexer-secrets
+                  key: SENTRY_SEND_DEFAULT_PII
+                  optional: true
+            - name: SENTRY_ENVIRONMENT
+              valueFrom:
+                secretKeyRef:
+                  name: vote-indexer-secrets
+                  key: SENTRY_ENVIRONMENT
+                  optional: true
+            - name: SENTRY_RELEASE
+              valueFrom:
+                secretKeyRef:
+                  name: vote-indexer-secrets
+                  key: SENTRY_RELEASE
+                  optional: true
+            - name: SENTRY_DEBUG
+              valueFrom:
+                secretKeyRef:
+                  name: vote-indexer-secrets
+                  key: SENTRY_DEBUG
+                  optional: true
           resources:
             requests:
               memory: "256Mi"
