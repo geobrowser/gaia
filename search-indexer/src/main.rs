@@ -78,11 +78,8 @@ async fn main() -> Result<(), IndexingError> {
         .ok()
         .and_then(|p| p.parse::<u16>().ok())
         .unwrap_or(8080);
-    let _health_handle = start_health_server(
-        deps.provider.clone(),
-        deps.kafka_admin.clone(),
-        health_port,
-    );
+    let _health_handle =
+        start_health_server(deps.provider.clone(), deps.kafka_admin.clone(), health_port);
     info!(port = health_port, "Health check server started");
 
     // Run the orchestrator

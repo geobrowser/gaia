@@ -11,8 +11,8 @@
 use anyhow::Result;
 use hermes_instrumentation::debug_span;
 
-use hermes_relay::Action;
 use hermes_codec::actions;
+use hermes_relay::Action;
 use hermes_schema::pb::space::{
     HermesSpaceTrustExtension, RelatedExtension, SubtopicExtension, VerifiedExtension,
     hermes_space_trust_extension,

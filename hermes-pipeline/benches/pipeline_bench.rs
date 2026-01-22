@@ -7,9 +7,9 @@ use alloy::primitives::{Address, FixedBytes, U256};
 use alloy::sol;
 use alloy::sol_types::SolType;
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use hermes_codec::actions;
 use hermes_pipeline::pipelines::{self, BlockMetadata};
 use hermes_relay::Action;
-use hermes_codec::actions;
 
 // Solidity type for encoding test data
 sol! {

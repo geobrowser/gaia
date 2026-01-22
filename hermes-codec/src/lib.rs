@@ -78,10 +78,10 @@ pub fn extract_proposal_publish_uris(data: &[u8]) -> Vec<String> {
             continue;
         }
 
-        if let Ok(args) = decode_publish_args(&action.data) {
-            if let Some(uri) = extract_ipfs_uri(args.content_uri.as_bytes()) {
-                uris.push(uri);
-            }
+        if let Ok(args) = decode_publish_args(&action.data)
+            && let Some(uri) = extract_ipfs_uri(args.content_uri.as_bytes())
+        {
+            uris.push(uri);
         }
     }
 

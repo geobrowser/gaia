@@ -39,11 +39,9 @@ impl AmpStreamConfig {
             .ok()
             .and_then(|v| v.parse().ok())
             .unwrap_or(DEFAULT_START_BLOCK);
-        let end_block = env::var("AMP_END_BLOCK")
-            .ok()
-            .and_then(|v| v.parse().ok());
-        let actions_address =
-            env::var("AMP_ACTIONS_ADDRESS").unwrap_or_else(|_| SPACE_REGISTRY_ADDRESS_HEX.to_string());
+        let end_block = env::var("AMP_END_BLOCK").ok().and_then(|v| v.parse().ok());
+        let actions_address = env::var("AMP_ACTIONS_ADDRESS")
+            .unwrap_or_else(|_| SPACE_REGISTRY_ADDRESS_HEX.to_string());
         let reconnect_delay = env::var("AMP_RECONNECT_DELAY_SECS")
             .ok()
             .and_then(|v| v.parse::<u64>().ok())
@@ -81,8 +79,7 @@ where
             if resume_from > end_block {
                 info!(
                     resume_from,
-                    end_block,
-                    "Amp stream reached configured end block"
+                    end_block, "Amp stream reached configured end block"
                 );
                 return Ok(());
             }
@@ -115,7 +112,10 @@ where
             .context("connect flight client")?;
         let mut client = FlightSqlServiceClient::new_from_inner(flight_client);
 
-        let mut info = client.execute(sql, None).await.context("execute flight sql")?;
+        let mut info = client
+            .execute(sql, None)
+            .await
+            .context("execute flight sql")?;
         let ticket = info.endpoint[0]
             .ticket
             .take()
@@ -228,9 +228,7 @@ where
         }
         warn!(
             resume_from,
-            batch_count,
-            row_count,
-            "Amp Flight stream ended, reconnecting after delay"
+            batch_count, row_count, "Amp Flight stream ended, reconnecting after delay"
         );
         tokio::time::sleep(config.reconnect_delay).await;
     }

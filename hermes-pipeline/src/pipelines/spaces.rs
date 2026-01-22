@@ -11,8 +11,8 @@
 use anyhow::Result;
 use hermes_instrumentation::{debug_span, warn};
 
-use hermes_relay::Action;
 use hermes_codec::actions;
+use hermes_relay::Action;
 use hermes_schema::pb::space::{
     DefaultDaoSpacePayload, EoaSpacePayload, HermesCreateSpace, hermes_create_space,
 };

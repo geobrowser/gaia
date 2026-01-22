@@ -40,10 +40,10 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use grc_20::decode_edit;
-use hermes_instrumentation::{debug, error, info, info_span, warn};
-use hermes_codec::{extract_ipfs_uri, extract_proposal_publish_uris};
-use hermes_relay::Action;
 use hermes_codec::actions;
+use hermes_codec::{extract_ipfs_uri, extract_proposal_publish_uris};
+use hermes_instrumentation::{debug, error, info, info_span, warn};
+use hermes_relay::Action;
 use ipfs::{IpfsFetcher, IpfsSource};
 use std::time::{Duration, Instant};
 use tokio::sync::{Mutex, Semaphore};

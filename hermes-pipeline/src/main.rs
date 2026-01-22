@@ -50,8 +50,8 @@ use prost::Message;
 use std::sync::OnceLock;
 
 use hermes_kafka::create_producer;
-use hermes_relay::stream::utils;
 use hermes_relay::Actions;
+use hermes_relay::stream::utils;
 
 use hermes_pipeline::cache::{CacheSource, IpfsCache};
 use hermes_pipeline::pipelines;

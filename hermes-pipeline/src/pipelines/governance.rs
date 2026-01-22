@@ -14,8 +14,8 @@ use std::collections::HashMap;
 use anyhow::Result;
 use hermes_instrumentation::{debug, debug_span, info, warn};
 
-use hermes_relay::Action;
 use hermes_codec::actions;
+use hermes_relay::Action;
 use hermes_schema::pb::governance::{
     AddEditorAction, AddMemberAction, FlagAction, HermesProposalCreated, HermesProposalExecuted,
     HermesProposalUpdated, HermesProposalVoted, ProposalAction, ProposalSettings,
@@ -23,11 +23,11 @@ use hermes_schema::pb::governance::{
     UnflagEditorAction, UpdateVotingSettingsAction, VotingMode, proposal_action,
 };
 
+use hermes_codec as decode;
 use hermes_codec::{
     ProposalActionType, decode_flag_args, decode_publish_args, decode_space_id_arg,
     decode_voting_settings_args,
 };
-use hermes_codec as decode;
 
 use super::BlockMetadata;
 

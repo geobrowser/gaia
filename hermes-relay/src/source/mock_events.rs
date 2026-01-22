@@ -29,7 +29,7 @@ use alloy::primitives::U256;
 use alloy::sol;
 use alloy::sol_types::SolType;
 
-use crate::actions;
+use hermes_codec::actions;
 use hermes_substream::pb::hermes::Action;
 
 // =============================================================================

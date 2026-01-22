@@ -22,8 +22,8 @@ use std::collections::HashMap;
 use std::{env, sync::Arc};
 
 use grc_20::{Edit as Grc20Edit, encode_edit};
-use hermes_instrumentation::{Backend, Config, info};
 use hermes_amp::{AmpStreamConfig, stream_actions};
+use hermes_instrumentation::{Backend, Config, info};
 use hermes_ipfs_cache::{IpfsCacheSink, cache::CacheSource};
 use ipfs::IpfsSource;
 

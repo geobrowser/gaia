@@ -3056,6 +3056,7 @@ dependencies = [
  "async-trait",
  "ethabi 18.0.0",
  "futures 0.3.31",
+ "hermes-codec",
  "hermes-substream",
  "prost 0.13.5",
  "prost-types 0.13.5",

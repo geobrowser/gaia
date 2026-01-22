@@ -23,7 +23,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     );
 
     let client = reqwest::blocking::Client::builder()
-        .timeout(if stream { None } else { Some(Duration::from_secs(30)) })
+        .timeout(if stream {
+            None
+        } else {
+            Some(Duration::from_secs(30))
+        })
         .build()?;
 
     let mut response = client.post(url).body(sql).send()?;
