@@ -1,7 +1,5 @@
-ALTER TABLE "properties" ALTER COLUMN "type" SET DATA TYPE text;--> statement-breakpoint
-DROP TYPE "public"."dataTypes";--> statement-breakpoint
-CREATE TYPE "public"."dataTypes" AS ENUM('Bool', 'Int64', 'Float64', 'Decimal', 'Text', 'Bytes', 'Date', 'Time', 'Datetime', 'Schedule', 'Point', 'Embedding');--> statement-breakpoint
-ALTER TABLE "properties" ALTER COLUMN "type" SET DATA TYPE "public"."dataTypes" USING "type"::"public"."dataTypes";--> statement-breakpoint
+-- Removed: enum recreation for properties.type - the properties table is dropped in migration 0023
+-- Original lines 1-4 removed because they fail when existing data contains 'Relation' type
 ALTER TABLE "values" ADD COLUMN "integer" bigint;--> statement-breakpoint
 ALTER TABLE "values" ADD COLUMN "float" double precision;--> statement-breakpoint
 ALTER TABLE "values" ADD COLUMN "bytes" "bytea";--> statement-breakpoint
