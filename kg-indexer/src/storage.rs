@@ -1245,7 +1245,11 @@ impl Storage {
 
         for r in &creates {
             // Derive deterministic ID for idempotency
-            ids.push(Self::derive_relation_version_id(&r.id, &r.space_id, version_key));
+            ids.push(Self::derive_relation_version_id(
+                &r.id,
+                &r.space_id,
+                version_key,
+            ));
             r_relation_ids.push(r.id);
             r_entity_ids.push(r.entity_id);
             r_type_ids.push(r.type_id);

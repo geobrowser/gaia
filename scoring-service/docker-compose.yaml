@@ -17,6 +17,12 @@ services:
       - KAFKA_BROKER=${KAFKA_BROKER:-kafka:29092}
       - KAFKA_TOPIC=${KAFKA_TOPIC:-curation.scores}
       - SCORE_BATCH_SIZE=${SCORE_BATCH_SIZE:-1000}
+      - SENTRY_DSN=${SENTRY_DSN:-}
+      - SENTRY_TRACES_SAMPLE_RATE=${SENTRY_TRACES_SAMPLE_RATE:-1.0}
+      - SENTRY_ENVIRONMENT=${SENTRY_ENVIRONMENT:-development}
+      - SENTRY_SEND_DEFAULT_PII=${SENTRY_SEND_DEFAULT_PII:-false}
+      - SENTRY_DEBUG=${SENTRY_DEBUG:-false}
+      - SENTRY_RELEASE=${SENTRY_RELEASE:-scoring-cronjob@1.0.0}
     networks:
       - hermes_default
 
@@ -31,6 +37,12 @@ services:
       - BATCH_SIZE=${BATCH_SIZE:-100}
       - BATCH_TIMEOUT_MS=${BATCH_TIMEOUT_MS:-1000}
       - RUST_LOG=${RUST_LOG:-info,vote_indexer=debug}
+      - SENTRY_DSN=${SENTRY_DSN:-}
+      - SENTRY_TRACES_SAMPLE_RATE=${SENTRY_TRACES_SAMPLE_RATE:-1.0}
+      - SENTRY_ENVIRONMENT=${SENTRY_ENVIRONMENT:-development}
+      - SENTRY_SEND_DEFAULT_PII=${SENTRY_SEND_DEFAULT_PII:-false}
+      - SENTRY_DEBUG=${SENTRY_DEBUG:-false}
+      - SENTRY_RELEASE=${SENTRY_RELEASE:-vote-indexer@1.0.0}
     networks:
       - hermes_default
 

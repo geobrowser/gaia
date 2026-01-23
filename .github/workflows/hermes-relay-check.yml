@@ -2,13 +2,13 @@ name: Hermes Relay Check
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main, dev]
     paths:
       - 'hermes-relay/**'
       - 'hermes-substream/**'
       - 'stream/**'
   pull_request:
-    branches: [main, develop]
+    branches: [main, dev]
     paths:
       - 'hermes-relay/**'
       - 'hermes-substream/**'
