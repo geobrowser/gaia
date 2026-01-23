@@ -15,7 +15,6 @@ hermes-instrumentation = { path = "../hermes-instrumentation" }
 hermes-relay = { path = "../hermes-relay" }
 hermes-substream = { path = "../hermes-substream" }
 ipfs = { path = "../ipfs" }
-wire = { path = "../wire" }
 grc-20 = "0.2.2"
 
 anyhow = "1"

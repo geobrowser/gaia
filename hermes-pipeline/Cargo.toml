@@ -13,7 +13,6 @@ hermes-kafka = { path = "../hermes-kafka" }
 hermes-relay = { path = "../hermes-relay" }
 hermes-schema = { path = "../hermes-schema" }
 stream = { path = "../stream" }
-wire = { path = "../wire" }
 grc-20 = "0.2.2"
 prost = "0.13.5"
 opentelemetry = "0.31"

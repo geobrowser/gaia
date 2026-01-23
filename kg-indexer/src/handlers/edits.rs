@@ -501,7 +501,6 @@ fn format_decimal_i64(mantissa: i64, exponent: i32) -> String {
     }
 }
 
-
 fn extract_values(edit: &Grc20Edit, space_id: &Uuid) -> Vec<ValueOp> {
     let mut value_ops = Vec::new();
 

@@ -2678,7 +2678,6 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
- "wire",
 ]
 
 [[package]]
@@ -2718,7 +2717,6 @@ dependencies = [
  "tracing",
  "tracing-opentelemetry",
  "uuid",
- "wire",
 ]
 
 [[package]]
@@ -3418,7 +3416,6 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
- "wire",
 ]
 
 [[package]]
