@@ -470,6 +470,5 @@ export function createVersionedRouter(db: Database) {
 			);
 		}
 	});
-
 	return router;
 }
