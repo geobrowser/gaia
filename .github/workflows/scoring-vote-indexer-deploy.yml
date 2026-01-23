@@ -1,4 +1,4 @@
-name: Deploy Vote Indexer
+name: Deploy Vote Indexer (Production)
 
 on:
   push:
@@ -6,10 +6,14 @@ on:
       - main
     paths:
       - 'scoring-service/vote-indexer/**'
-      - 'scoring-service/deployment/vote-indexer.yaml'
+      - 'scoring-service/deployment/production/vote-indexer.yaml'
       - 'hermes-schema/**'
       - 'wire/**'
       - '.github/workflows/scoring-vote-indexer-deploy.yml'
+
+concurrency:
+  group: vote-indexer-production
+  cancel-in-progress: true
 
 env:
   REGISTRY: registry.digitalocean.com/geo
@@ -47,10 +51,10 @@ jobs:
 
       - name: Deploy to Kubernetes
         run: |
-          kubectl apply -f scoring-service/deployment/namespace.yaml
+          kubectl apply -f scoring-service/deployment/production/namespace.yaml
           # Update image tag to use SHA and apply
-          sed -i 's|image: registry.digitalocean.com/geo/vote-indexer:latest|image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}|g' scoring-service/deployment/vote-indexer.yaml
-          kubectl apply -f scoring-service/deployment/vote-indexer.yaml
+          sed -i 's|image: registry.digitalocean.com/geo/vote-indexer:latest|image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}|g' scoring-service/deployment/production/vote-indexer.yaml
+          kubectl apply -f scoring-service/deployment/production/vote-indexer.yaml
 
       - name: Restart deployment to pick up new image
         run: |

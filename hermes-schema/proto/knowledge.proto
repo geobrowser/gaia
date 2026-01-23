@@ -2,21 +2,24 @@ syntax = "proto3";
 
 package knowledge;
 
-import "grc20.proto";
 import "blockchain_metadata.proto";
 
-// November 13, 2025
+// January 2026
 // A HermesEdit represents a GRC-20 Edit that has been enriched by the
 // Hermes event stream service. Hermes currently does a few things:
 //
-// 1. Resolves the IPFS CID into the serialized edit representation
+// 1. Resolves the IPFS CID into the raw GRC2/GRC2Z payload bytes
 // 2. Appends any blockchain metadata useful for downstream consumers
 // 3. Appends any community or space topology metadata useful for
-//   downstream consumers
+//    downstream consumers
+//
+// Note: As of v2, the payload contains raw GRC2/GRC2Z bytes. Consumers
+// (e.g., kg-indexer) must decode using the grc-20 crate.
 message HermesEdit {
   bytes id = 1;
   string name = 2;
-  repeated grc20.Op ops = 3;
+  // Raw GRC2 or GRC2Z payload bytes (replaces decoded ops)
+  bytes payload = 3;
   repeated bytes authors = 4;
   optional bytes language = 5;
   // Space Topology metadata - 16-byte UUID

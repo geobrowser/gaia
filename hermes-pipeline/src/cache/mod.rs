@@ -26,7 +26,6 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use thiserror::Error;
-use wire::pb::grc20::Edit;
 
 /// Errors that can occur when reading from the IPFS cache.
 #[derive(Error, Debug)]
@@ -38,34 +37,35 @@ pub enum CacheError {
 
     /// A database error occurred (for PostgreSQL backend).
     #[error("Database error: {0}")]
-    #[allow(dead_code)] // Used by PostgreSQL backend (not yet implemented)
+    #[allow(dead_code)] // Used by PostgreSQL backend
     Database(String),
-
-    /// Failed to deserialize the cached JSON into an Edit proto.
-    #[error("Deserialization error: {0}")]
-    #[allow(dead_code)] // Used by PostgreSQL backend (not yet implemented)
-    DeserializeError(String),
 }
 
 /// A cached edit entry with metadata.
 ///
 /// This struct captures the various states a cache entry can be in:
-/// - Successfully cached with edit content
-/// - Errored (IPFS fetch failed, invalid CID, etc.)
-/// - Missing edit content (entry exists but couldn't be decoded)
+/// - Successfully cached with validated GRC-20 v2 payload bytes
+/// - Errored (IPFS fetch failed, invalid CID, validation failed, etc.)
+/// - Missing payload (entry exists but no data)
+///
+/// Note: As of v2, the payload contains raw GRC2/GRC2Z bytes that have been
+/// validated by hermes-ipfs-cache. Consumers (e.g., kg-indexer) must decode
+/// using the grc-20 crate.
 #[derive(Clone, Debug)]
 pub struct CachedEdit {
     /// The IPFS CID/hash that was looked up.
     #[allow(dead_code)] // Part of public API for future use
     pub cid: String,
 
-    /// The deserialized edit content, if available.
-    /// Will be `None` if the entry is errored or couldn't be decoded.
-    pub edit: Option<Edit>,
+    /// Raw GRC2/GRC2Z payload bytes, if available.
+    /// These have been validated by hermes-ipfs-cache.
+    /// Will be `None` if the entry is errored or has no data.
+    pub payload: Option<Vec<u8>>,
 
     /// Whether the cache entry is marked as errored.
-    /// This happens when the IPFS cache service failed to fetch the content
-    /// (e.g., invalid CID, IPFS gateway timeout, content not available).
+    /// This happens when:
+    /// - IPFS fetch failed (invalid CID, gateway timeout, not available)
+    /// - GRC-20 v2 validation failed (invalid format)
     pub is_errored: bool,
 
     /// The space ID that published this edit (from the action).
@@ -74,11 +74,11 @@ pub struct CachedEdit {
 }
 
 impl CachedEdit {
-    /// Create a successful cache entry with edit content.
-    pub fn success(cid: String, edit: Edit, space_id: Vec<u8>) -> Self {
+    /// Create a successful cache entry with validated payload bytes.
+    pub fn success(cid: String, payload: Vec<u8>, space_id: Vec<u8>) -> Self {
         Self {
             cid,
-            edit: Some(edit),
+            payload: Some(payload),
             is_errored: false,
             space_id,
         }
@@ -88,16 +88,16 @@ impl CachedEdit {
     pub fn errored(cid: String, space_id: Vec<u8>) -> Self {
         Self {
             cid,
-            edit: None,
+            payload: None,
             is_errored: true,
             space_id,
         }
     }
 
-    /// Check if this entry has valid edit content.
+    /// Check if this entry has valid payload content.
     #[allow(dead_code)] // Used in tests and future use
     pub fn has_content(&self) -> bool {
-        !self.is_errored && self.edit.is_some()
+        !self.is_errored && self.payload.is_some()
     }
 }
 

@@ -27,7 +27,12 @@ const postgraphileOptions = {
 	dynamicJson: true,
 	setofFunctionsContainNulls: false,
 	ignoreRBAC: false,
-	appendPlugins: [ConnectionFilterPlugin, SimplifyInflectionPlugin],
+	// NOTE: Plugin order is intentional:
+	// - UndashedUuidPlugin patches the UUID scalar first so that all subsequent
+	//   plugins (including ConnectionFilterPlugin) build their types against the
+	//   undashed UUID behavior. This has been verified to work with both dashed
+	//   and undashed UUID inputs in filters.
+	appendPlugins: [UndashedUuidPlugin, ConnectionFilterPlugin, SimplifyInflectionPlugin],
 	disableDefaultMutations: true,
 	simpleCollections: "both" as const,
 	graphileBuildOptions: {
@@ -46,20 +51,10 @@ const postgraphileOptions = {
 	},
 }
 
-// PostGraphile options with uuidScalarPlugin for v2
-const postgraphileOptionsV2 = {
-	...postgraphileOptions,
-	// NOTE: Plugin order is intentional:
-	// - UndashedUuidPlugin patches the UUID scalar first so that all subsequent
-	//   plugins (including ConnectionFilterPlugin) build their types against the
-	//   undashed UUID behavior. This has been verified to work with both dashed
-	//   and undashed UUID inputs in filters.
-	appendPlugins: [UndashedUuidPlugin, ConnectionFilterPlugin, SimplifyInflectionPlugin],
-}
-
 // Create PostGraphile schemas
 const postgraphileSchema = await createPostGraphileSchema(pgPool, ["public"], postgraphileOptions)
-const postgraphileSchemaV2 = await createPostGraphileSchema(pgPool, ["public"], postgraphileOptionsV2)
+// We're supporting both the v1 and v2 APIs until consumers move to v1
+const postgraphileSchemaV2 = await createPostGraphileSchema(pgPool, ["public"], postgraphileOptions)
 
 // Helper to create context
 const createContext = async ({request}: {request: Request}) => {

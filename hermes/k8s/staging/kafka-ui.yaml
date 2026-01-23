@@ -1,0 +1,321 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: kafka-ui
+  namespace: kafka-staging
+spec:
+  type: ClusterIP
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+      protocol: TCP
+  selector:
+    app: kafka-ui
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: kafka-ui
+  namespace: kafka-staging
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: kafka-ui
+  template:
+    metadata:
+      labels:
+        app: kafka-ui
+    spec:
+      containers:
+        - name: kafka-ui
+          image: provectuslabs/kafka-ui:latest
+          ports:
+            - containerPort: 8080
+              name: http
+          env:
+            - name: KAFKA_CLUSTERS_0_NAME
+              value: "do-managed"
+            - name: KAFKA_CLUSTERS_0_BOOTSTRAPSERVERS
+              valueFrom:
+                secretKeyRef:
+                  name: kafka-credentials
+                  key: KAFKA_BROKER
+            - name: KAFKA_CLUSTERS_0_PROPERTIES_SECURITY_PROTOCOL
+              value: "SASL_SSL"
+            - name: KAFKA_CLUSTERS_0_PROPERTIES_SASL_MECHANISM
+              value: "PLAIN"
+            - name: KAFKA_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: kafka-credentials
+                  key: KAFKA_USERNAME
+            - name: KAFKA_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: kafka-credentials
+                  key: KAFKA_PASSWORD
+            - name: KAFKA_CLUSTERS_0_PROPERTIES_SASL_JAAS_CONFIG
+              value: "org.apache.kafka.common.security.plain.PlainLoginModule required username='$(KAFKA_USERNAME)' password='$(KAFKA_PASSWORD)';"
+            - name: KAFKA_CLUSTERS_0_SSL_TRUSTSTORELOCATION
+              value: "/etc/kafka/truststore.jks"
+            - name: KAFKA_CLUSTERS_0_SSL_TRUSTSTOREPASSWORD
+              value: "changeit"
+            # Protobuf serde for space.creations topic
+            - name: kafka.clusters.0.serde.0.name
+              value: "SpaceCreations"
+            - name: kafka.clusters.0.serde.0.className
+              value: "com.provectus.kafka.ui.serdes.builtin.ProtobufFileSerde"
+            - name: kafka.clusters.0.serde.0.topicValuesPattern
+              value: "space.creations"
+            - name: kafka.clusters.0.serde.0.properties.protobufFilesDir
+              value: "/proto/"
+            - name: kafka.clusters.0.serde.0.properties.protobufMessageName
+              value: "space.HermesCreateSpace"
+            # Protobuf serde for space.trust.extensions topic
+            - name: kafka.clusters.0.serde.1.name
+              value: "SpaceTrustExtensions"
+            - name: kafka.clusters.0.serde.1.className
+              value: "com.provectus.kafka.ui.serdes.builtin.ProtobufFileSerde"
+            - name: kafka.clusters.0.serde.1.topicValuesPattern
+              value: "space.trust.extensions"
+            - name: kafka.clusters.0.serde.1.properties.protobufFilesDir
+              value: "/proto/"
+            - name: kafka.clusters.0.serde.1.properties.protobufMessageName
+              value: "space.HermesSpaceTrustExtension"
+            # Protobuf serde for knowledge.edits topic
+            - name: kafka.clusters.0.serde.2.name
+              value: "KnowledgeEdits"
+            - name: kafka.clusters.0.serde.2.className
+              value: "com.provectus.kafka.ui.serdes.builtin.ProtobufFileSerde"
+            - name: kafka.clusters.0.serde.2.topicValuesPattern
+              value: "knowledge.edits"
+            - name: kafka.clusters.0.serde.2.properties.protobufFilesDir
+              value: "/proto/"
+            - name: kafka.clusters.0.serde.2.properties.protobufMessageName
+              value: "knowledge.HermesEdit"
+            # Protobuf serde for topology.canonical topic
+            - name: kafka.clusters.0.serde.3.name
+              value: "TopologyCanonical"
+            - name: kafka.clusters.0.serde.3.className
+              value: "com.provectus.kafka.ui.serdes.builtin.ProtobufFileSerde"
+            - name: kafka.clusters.0.serde.3.topicValuesPattern
+              value: "topology.canonical"
+            - name: kafka.clusters.0.serde.3.properties.protobufFilesDir
+              value: "/proto/"
+            - name: kafka.clusters.0.serde.3.properties.protobufMessageName
+              value: "topology.CanonicalGraphUpdated"
+            # Protobuf serde for curation.scores topic
+            - name: kafka.clusters.0.serde.4.name
+              value: "CurationScores"
+            - name: kafka.clusters.0.serde.4.className
+              value: "com.provectus.kafka.ui.serdes.builtin.ProtobufFileSerde"
+            - name: kafka.clusters.0.serde.4.topicValuesPattern
+              value: "curation.scores"
+            - name: kafka.clusters.0.serde.4.properties.protobufFilesDir
+              value: "/proto/"
+            - name: kafka.clusters.0.serde.4.properties.protobufMessageName
+              value: "scoring.HermesScoresBatch"
+            # Protobuf serde for hermes.blocks topic
+            - name: kafka.clusters.0.serde.5.name
+              value: "BlockSummary"
+            - name: kafka.clusters.0.serde.5.className
+              value: "com.provectus.kafka.ui.serdes.builtin.ProtobufFileSerde"
+            - name: kafka.clusters.0.serde.5.topicValuesPattern
+              value: "hermes.blocks"
+            - name: kafka.clusters.0.serde.5.properties.protobufFilesDir
+              value: "/proto/"
+            - name: kafka.clusters.0.serde.5.properties.protobufMessageName
+              value: "block_summary.HermesBlockSummary"
+            # Protobuf serdes for space.membership topic
+            - name: kafka.clusters.0.serde.6.name
+              value: "SpaceMembershipRoleGranted"
+            - name: kafka.clusters.0.serde.6.className
+              value: "com.provectus.kafka.ui.serdes.builtin.ProtobufFileSerde"
+            - name: kafka.clusters.0.serde.6.topicValuesPattern
+              value: "space.membership"
+            - name: kafka.clusters.0.serde.6.properties.protobufFilesDir
+              value: "/proto/"
+            - name: kafka.clusters.0.serde.6.properties.protobufMessageName
+              value: "membership.HermesRoleGranted"
+            - name: kafka.clusters.0.serde.7.name
+              value: "SpaceMembershipRoleRevoked"
+            - name: kafka.clusters.0.serde.7.className
+              value: "com.provectus.kafka.ui.serdes.builtin.ProtobufFileSerde"
+            - name: kafka.clusters.0.serde.7.topicValuesPattern
+              value: "space.membership"
+            - name: kafka.clusters.0.serde.7.properties.protobufFilesDir
+              value: "/proto/"
+            - name: kafka.clusters.0.serde.7.properties.protobufMessageName
+              value: "membership.HermesRoleRevoked"
+            - name: kafka.clusters.0.serde.8.name
+              value: "SpaceMembershipSpaceLeft"
+            - name: kafka.clusters.0.serde.8.className
+              value: "com.provectus.kafka.ui.serdes.builtin.ProtobufFileSerde"
+            - name: kafka.clusters.0.serde.8.topicValuesPattern
+              value: "space.membership"
+            - name: kafka.clusters.0.serde.8.properties.protobufFilesDir
+              value: "/proto/"
+            - name: kafka.clusters.0.serde.8.properties.protobufMessageName
+              value: "membership.HermesSpaceLeft"
+            # Protobuf serdes for space.moderation topic
+            - name: kafka.clusters.0.serde.9.name
+              value: "SpaceModerationEditorFlagged"
+            - name: kafka.clusters.0.serde.9.className
+              value: "com.provectus.kafka.ui.serdes.builtin.ProtobufFileSerde"
+            - name: kafka.clusters.0.serde.9.topicValuesPattern
+              value: "space.moderation"
+            - name: kafka.clusters.0.serde.9.properties.protobufFilesDir
+              value: "/proto/"
+            - name: kafka.clusters.0.serde.9.properties.protobufMessageName
+              value: "moderation.HermesEditorFlagged"
+            - name: kafka.clusters.0.serde.10.name
+              value: "SpaceModerationEditorUnflagged"
+            - name: kafka.clusters.0.serde.10.className
+              value: "com.provectus.kafka.ui.serdes.builtin.ProtobufFileSerde"
+            - name: kafka.clusters.0.serde.10.topicValuesPattern
+              value: "space.moderation"
+            - name: kafka.clusters.0.serde.10.properties.protobufFilesDir
+              value: "/proto/"
+            - name: kafka.clusters.0.serde.10.properties.protobufMessageName
+              value: "moderation.HermesEditorUnflagged"
+            - name: kafka.clusters.0.serde.11.name
+              value: "SpaceModerationContentFlagged"
+            - name: kafka.clusters.0.serde.11.className
+              value: "com.provectus.kafka.ui.serdes.builtin.ProtobufFileSerde"
+            - name: kafka.clusters.0.serde.11.topicValuesPattern
+              value: "space.moderation"
+            - name: kafka.clusters.0.serde.11.properties.protobufFilesDir
+              value: "/proto/"
+            - name: kafka.clusters.0.serde.11.properties.protobufMessageName
+              value: "moderation.HermesContentFlagged"
+            - name: kafka.clusters.0.serde.12.name
+              value: "SpaceModerationContentUnflagged"
+            - name: kafka.clusters.0.serde.12.className
+              value: "com.provectus.kafka.ui.serdes.builtin.ProtobufFileSerde"
+            - name: kafka.clusters.0.serde.12.topicValuesPattern
+              value: "space.moderation"
+            - name: kafka.clusters.0.serde.12.properties.protobufFilesDir
+              value: "/proto/"
+            - name: kafka.clusters.0.serde.12.properties.protobufMessageName
+              value: "moderation.HermesContentUnflagged"
+            # Protobuf serde for space.topics topic
+            - name: kafka.clusters.0.serde.13.name
+              value: "SpaceTopicsDeclared"
+            - name: kafka.clusters.0.serde.13.className
+              value: "com.provectus.kafka.ui.serdes.builtin.ProtobufFileSerde"
+            - name: kafka.clusters.0.serde.13.topicValuesPattern
+              value: "space.topics"
+            - name: kafka.clusters.0.serde.13.properties.protobufFilesDir
+              value: "/proto/"
+            - name: kafka.clusters.0.serde.13.properties.protobufMessageName
+              value: "topics.HermesTopicDeclared"
+            # Protobuf serdes for space.governance topic
+            - name: kafka.clusters.0.serde.14.name
+              value: "GovernanceProposalCreated"
+            - name: kafka.clusters.0.serde.14.className
+              value: "com.provectus.kafka.ui.serdes.builtin.ProtobufFileSerde"
+            - name: kafka.clusters.0.serde.14.topicValuesPattern
+              value: "space.governance"
+            - name: kafka.clusters.0.serde.14.properties.protobufFilesDir
+              value: "/proto/"
+            - name: kafka.clusters.0.serde.14.properties.protobufMessageName
+              value: "governance.HermesProposalCreated"
+            - name: kafka.clusters.0.serde.15.name
+              value: "GovernanceProposalUpdated"
+            - name: kafka.clusters.0.serde.15.className
+              value: "com.provectus.kafka.ui.serdes.builtin.ProtobufFileSerde"
+            - name: kafka.clusters.0.serde.15.topicValuesPattern
+              value: "space.governance"
+            - name: kafka.clusters.0.serde.15.properties.protobufFilesDir
+              value: "/proto/"
+            - name: kafka.clusters.0.serde.15.properties.protobufMessageName
+              value: "governance.HermesProposalUpdated"
+            - name: kafka.clusters.0.serde.16.name
+              value: "GovernanceProposalVoted"
+            - name: kafka.clusters.0.serde.16.className
+              value: "com.provectus.kafka.ui.serdes.builtin.ProtobufFileSerde"
+            - name: kafka.clusters.0.serde.16.topicValuesPattern
+              value: "space.governance"
+            - name: kafka.clusters.0.serde.16.properties.protobufFilesDir
+              value: "/proto/"
+            - name: kafka.clusters.0.serde.16.properties.protobufMessageName
+              value: "governance.HermesProposalVoted"
+            - name: kafka.clusters.0.serde.17.name
+              value: "GovernanceProposalExecuted"
+            - name: kafka.clusters.0.serde.17.className
+              value: "com.provectus.kafka.ui.serdes.builtin.ProtobufFileSerde"
+            - name: kafka.clusters.0.serde.17.topicValuesPattern
+              value: "space.governance"
+            - name: kafka.clusters.0.serde.17.properties.protobufFilesDir
+              value: "/proto/"
+            - name: kafka.clusters.0.serde.17.properties.protobufMessageName
+              value: "governance.HermesProposalExecuted"
+            # Protobuf serde for curation.votes topic
+            - name: kafka.clusters.0.serde.18.name
+              value: "CurationVotes"
+            - name: kafka.clusters.0.serde.18.className
+              value: "com.provectus.kafka.ui.serdes.builtin.ProtobufFileSerde"
+            - name: kafka.clusters.0.serde.18.topicValuesPattern
+              value: "curation.votes"
+            - name: kafka.clusters.0.serde.18.properties.protobufFilesDir
+              value: "/proto/"
+            - name: kafka.clusters.0.serde.18.properties.protobufMessageName
+              value: "voting.HermesVoteCast"
+          volumeMounts:
+            - name: truststore
+              mountPath: /etc/kafka
+              readOnly: true
+            - name: proto-files
+              mountPath: /proto
+              readOnly: true
+          resources:
+            requests:
+              memory: "256Mi"
+              cpu: "100m"
+            limits:
+              memory: "512Mi"
+              cpu: "500m"
+      initContainers:
+        - name: create-truststore
+          image: eclipse-temurin:17-jdk
+          command:
+            - /bin/sh
+            - -c
+            - |
+              echo "$KAFKA_SSL_CA_PEM" > /tmp/ca.crt
+              keytool -importcert -alias kafka-ca -file /tmp/ca.crt -keystore /truststore/truststore.jks -storepass changeit -noprompt
+          env:
+            - name: KAFKA_SSL_CA_PEM
+              valueFrom:
+                secretKeyRef:
+                  name: kafka-credentials
+                  key: KAFKA_SSL_CA_PEM
+          volumeMounts:
+            - name: truststore
+              mountPath: /truststore
+        - name: copy-proto-files
+          image: busybox:1.36
+          command:
+            - /bin/sh
+            - -c
+            - |
+              # Copy only the actual proto files, excluding Kubernetes symlink metadata
+              for f in /proto-configmap/*.proto; do
+                cp "$f" /proto/
+              done
+          volumeMounts:
+            - name: proto-configmap
+              mountPath: /proto-configmap
+              readOnly: true
+            - name: proto-files
+              mountPath: /proto
+      volumes:
+        - name: truststore
+          emptyDir: {}
+        - name: proto-files
+          emptyDir: {}
+        - name: proto-configmap
+          configMap:
+            name: protobuf-schemas

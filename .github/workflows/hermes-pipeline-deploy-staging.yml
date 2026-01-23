@@ -1,0 +1,80 @@
+name: Deploy Hermes Pipeline (Staging)
+
+on:
+  push:
+    branches:
+      - dev
+    paths:
+      - 'hermes-pipeline/**'
+      - 'hermes-instrumentation/**'
+      - 'hermes-relay/**'
+      - 'hermes-schema/**'
+      - 'hermes-substream/**'
+      - 'hermes-kafka/**'
+      - 'stream/**'
+      - 'wire/**'
+      - 'hermes/k8s/staging/hermes-pipeline.yaml'
+      - '.github/workflows/hermes-pipeline-deploy-staging.yml'
+
+concurrency:
+  group: hermes-pipeline-staging
+  cancel-in-progress: true
+
+env:
+  REGISTRY: registry.digitalocean.com/geo
+  IMAGE_NAME: hermes-pipeline
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install doctl
+        uses: digitalocean/action-doctl@v2
+        with:
+          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+
+      - name: Log in to DigitalOcean Container Registry
+        run: doctl registry login --expiry-seconds 1200
+
+      - name: Build and push Docker image
+        run: |
+          docker build -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
+                       -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:staging \
+                       -f hermes-pipeline/Dockerfile .
+          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:staging
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v4
+
+      - name: Configure kubectl for DigitalOcean
+        run: |
+          doctl kubernetes cluster kubeconfig save ${{ secrets.DIGITALOCEAN_CLUSTER_NAME }}
+
+      - name: Delete existing job (jobs are immutable)
+        run: |
+          kubectl delete job hermes-pipeline -n knowledge-staging --ignore-not-found=true
+
+      - name: Deploy to Kubernetes
+        run: |
+          # Update image tag to use SHA and apply
+          sed -i 's|image: registry.digitalocean.com/geo/hermes-pipeline:latest|image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}|g' hermes/k8s/staging/hermes-pipeline.yaml
+          kubectl apply -f hermes/k8s/staging/hermes-pipeline.yaml
+
+      - name: Wait for job to start
+        run: |
+          kubectl wait --for=condition=ready pod -l app=hermes-pipeline -n knowledge-staging --timeout=60s || true
+
+      - name: Show deployment status
+        run: |
+          echo "=== Hermes Pipeline Job ==="
+          kubectl get job hermes-pipeline -n knowledge-staging || echo "Job not found"
+          echo ""
+          echo "=== Hermes Pipeline Pods ==="
+          kubectl get pods -n knowledge-staging -l app=hermes-pipeline
+          echo ""
+          echo "=== Recent Events ==="
+          kubectl get events -n knowledge-staging --sort-by='.lastTimestamp' | tail -10

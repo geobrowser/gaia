@@ -5,17 +5,16 @@ use std::time::{Duration, Instant};
 use futures::StreamExt;
 use hermes_instrumentation::{debug, error, info, info_span, warn, Instrument};
 use hermes_schema::pb::blockchain_metadata::BlockchainMetadata;
-use opentelemetry::propagation::Extractor;
 use rdkafka::message::Headers;
 use rdkafka::Message;
 use std::sync::OnceLock;
-use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 mod consumer;
 mod error;
 mod handlers;
 mod models;
 mod storage;
+mod version_buffer;
 
 use consumer::{get_event_type, parse_message, KafkaConsumer, KgMessage};
 use error::IndexerError;
@@ -200,16 +199,6 @@ async fn async_main() -> Result<(), IndexerError> {
     let storage = Storage::new(&database_url).await?;
     info!("Connected to database");
 
-    let mut property_types: HashMap<uuid::Uuid, models::properties::DataType> = HashMap::new();
-    let existing_properties = storage.get_all_properties().await?;
-    for property in existing_properties {
-        property_types.insert(property.id, property.data_type);
-    }
-    info!(
-        property_count = property_types.len(),
-        "Loaded property data types"
-    );
-
     // Initialize Kafka consumer
     let consumer = KafkaConsumer::new(&kafka_broker, &kafka_group_id)?;
     consumer.subscribe()?;
@@ -277,7 +266,6 @@ async fn async_main() -> Result<(), IndexerError> {
                         &consumer,
                         summary,
                         BlockProcessReason::Stale,
-                        &mut property_types,
                     )
                     .await;
                     if let Some((processed, errors)) = result {
@@ -296,7 +284,6 @@ async fn async_main() -> Result<(), IndexerError> {
                         let offset = msg.offset();
                         let event_type = get_event_type(msg.headers());
                         let event_id_header = get_header_value(msg.headers(), "event-id");
-                        let parent_cx = extract_parent_context(msg.headers());
 
                         // Parse message first to determine if we should create a span
                         let payload = match msg.payload() {
@@ -351,7 +338,6 @@ async fn async_main() -> Result<(), IndexerError> {
                             "otel.status_code" = tracing::field::Empty,
                             "otel.status_message" = tracing::field::Empty
                         );
-                        let _ = span.set_parent(parent_cx);
 
                         let fut = async {
                             if let KgMessage::BlockSummary(summary) = kg_msg {
@@ -387,7 +373,6 @@ async fn async_main() -> Result<(), IndexerError> {
                                         &consumer,
                                         summary_info,
                                         BlockProcessReason::Summary,
-                                        &mut property_types,
                                     )
                                     .await;
                                     if let Some((processed, errors)) = result {
@@ -434,7 +419,6 @@ async fn async_main() -> Result<(), IndexerError> {
                                         kg_msg,
                                         &storage,
                                         event_id.as_deref(),
-                                        &mut property_types,
                                     )
                                     .await
                                     {
@@ -494,7 +478,6 @@ async fn async_main() -> Result<(), IndexerError> {
                                         &consumer,
                                         summary_info,
                                         BlockProcessReason::Summary,
-                                        &mut property_types,
                                     )
                                     .await;
                                     if let Some((processed, errors)) = result {
@@ -524,7 +507,6 @@ async fn async_main() -> Result<(), IndexerError> {
                                     &consumer,
                                     summary,
                                     BlockProcessReason::IsLast,
-                                    &mut property_types,
                                 )
                                 .await;
                                 if let Some((processed, errors)) = result {
@@ -589,40 +571,6 @@ fn get_header_value(
         }
         None
     })
-}
-
-struct KafkaHeadersExtractor<'a> {
-    headers: Option<&'a rdkafka::message::BorrowedHeaders>,
-}
-
-impl<'a> Extractor for KafkaHeadersExtractor<'a> {
-    fn get(&self, key: &str) -> Option<&str> {
-        self.headers.and_then(|headers| {
-            for header in headers.iter() {
-                if header.key.eq_ignore_ascii_case(key) {
-                    if let Some(value) = header.value {
-                        if let Ok(value_str) = std::str::from_utf8(value) {
-                            return Some(value_str);
-                        }
-                    }
-                }
-            }
-            None
-        })
-    }
-
-    fn keys(&self) -> Vec<&str> {
-        self.headers
-            .map(|headers| headers.iter().map(|header| header.key).collect())
-            .unwrap_or_default()
-    }
-}
-
-fn extract_parent_context(
-    headers: Option<&rdkafka::message::BorrowedHeaders>,
-) -> opentelemetry::Context {
-    let extractor = KafkaHeadersExtractor { headers };
-    opentelemetry::global::get_text_map_propagator(|prop| prop.extract(&extractor))
 }
 
 fn log_event_ids_enabled() -> bool {
@@ -709,13 +657,13 @@ async fn process_buffered_block(
     consumer: &KafkaConsumer,
     summary_info: Option<BlockSummaryInfo>,
     reason: BlockProcessReason,
-    property_types: &mut HashMap<uuid::Uuid, models::properties::DataType>,
 ) -> Option<(u64, u64)> {
     if events.is_empty() {
         return None;
     }
 
     let block_number = events[0].msg.block_number().unwrap_or(0);
+
 
     let mut counts_by_event_type: HashMap<String, u64> = HashMap::new();
     let mut counts_by_topic: HashMap<String, u64> = HashMap::new();
@@ -804,7 +752,7 @@ async fn process_buffered_block(
     );
     let start = Instant::now();
 
-    let result = process_block(events, storage, consumer, property_types)
+    let result = process_block(events, storage, consumer)
         .instrument(span.clone())
         .await;
 
@@ -880,7 +828,6 @@ async fn process_message(
     msg: KgMessage,
     storage: &Storage,
     _event_id: Option<&str>,
-    property_types: &mut HashMap<uuid::Uuid, models::properties::DataType>,
 ) -> Result<usize, IndexerError> {
     use handlers::membership::MembershipChange;
     use models::relations::RelationOp;
@@ -894,7 +841,11 @@ async fn process_message(
     let ops = match msg {
         KgMessage::BlockSummary(_) => 0,
         KgMessage::Edit(edit) => {
-            let result = handlers::edits::handle_edit(&edit, property_types)?;
+            let result = handlers::edits::handle_edit(&edit)?;
+
+            // Keep copies for versioned writes before partitioning
+            let values_for_versioning = result.values.clone();
+            let relations_for_versioning = result.relations.clone();
 
             // Partition values into sets and deletes
             let (set_values, delete_values): (Vec<_>, Vec<_>) = result
@@ -923,7 +874,6 @@ async fn process_message(
             }
 
             let ops = result.entities.len()
-                + result.properties.len()
                 + set_values.len()
                 + delete_value_ids.len()
                 + set_relations.len()
@@ -931,11 +881,8 @@ async fn process_message(
                 + unset_relations.len()
                 + delete_relations.len();
 
-            // Bulk insert all operations
+            // Bulk insert all operations (live tables)
             storage.insert_entities(&result.entities, &mut tx).await?;
-            storage
-                .insert_properties(&result.properties, &mut tx)
-                .await?;
             storage.insert_values(&set_values, &mut tx).await?;
             storage.delete_values(&delete_value_ids, &mut tx).await?;
             storage.insert_relations(&set_relations, &mut tx).await?;
@@ -944,6 +891,26 @@ async fn process_message(
                 .unset_relation_fields(&unset_relations, &mut tx)
                 .await?;
             storage.delete_relations(&delete_relations, &mut tx).await?;
+
+            // Versioned writes (temporal tables)
+            if let Some(meta) = edit.meta.as_ref() {
+                let version_key = storage
+                    .insert_edit_version(
+                        result.edit_id,
+                        meta.block_number as i64,
+                        meta.sequence as i64,
+                        meta.created_at as i64,
+                        &mut tx,
+                    )
+                    .await?;
+
+                storage
+                    .insert_value_versions(&values_for_versioning, version_key, &mut tx)
+                    .await?;
+                storage
+                    .insert_relation_versions(&relations_for_versioning, version_key, &mut tx)
+                    .await?;
+            }
 
             ops
         }
@@ -1060,7 +1027,6 @@ async fn process_block(
     events: Vec<BufferedEvent>,
     storage: &Storage,
     consumer: &KafkaConsumer,
-    property_types: &mut HashMap<uuid::Uuid, models::properties::DataType>,
 ) -> Result<ProcessBlockResult, IndexerError> {
     use handlers::membership::MembershipChange;
     use models::relations::RelationOp;
@@ -1108,7 +1074,11 @@ async fn process_block(
         let ops = async {
             Ok::<usize, IndexerError>(match &event.msg {
                 KgMessage::Edit(edit) => {
-                    let result = handlers::edits::handle_edit(edit, property_types)?;
+                    let result = handlers::edits::handle_edit(edit)?;
+
+                    // Keep copies for versioned writes before partitioning
+                    let values_for_versioning = result.values.clone();
+                    let relations_for_versioning = result.relations.clone();
 
                     // Partition values into sets and deletes
                     let (set_values, delete_values): (Vec<_>, Vec<_>) = result
@@ -1137,7 +1107,6 @@ async fn process_block(
                     }
 
                     let ops = result.entities.len()
-                        + result.properties.len()
                         + set_values.len()
                         + delete_value_ids.len()
                         + set_relations.len()
@@ -1145,11 +1114,8 @@ async fn process_block(
                         + unset_relations.len()
                         + delete_relations.len();
 
-                    // Bulk insert all operations
+                    // Bulk insert all operations (live tables)
                     storage.insert_entities(&result.entities, &mut tx).await?;
-                    storage
-                        .insert_properties(&result.properties, &mut tx)
-                        .await?;
                     storage.insert_values(&set_values, &mut tx).await?;
                     storage.delete_values(&delete_value_ids, &mut tx).await?;
                     storage.insert_relations(&set_relations, &mut tx).await?;
@@ -1158,6 +1124,30 @@ async fn process_block(
                         .unset_relation_fields(&unset_relations, &mut tx)
                         .await?;
                     storage.delete_relations(&delete_relations, &mut tx).await?;
+
+                    // Versioned writes (temporal tables)
+                    if let Some(meta) = edit.meta.as_ref() {
+                        let version_key = storage
+                            .insert_edit_version(
+                                result.edit_id,
+                                meta.block_number as i64,
+                                meta.sequence as i64,
+                                meta.created_at as i64,
+                                &mut tx,
+                            )
+                            .await?;
+
+                        storage
+                            .insert_value_versions(&values_for_versioning, version_key, &mut tx)
+                            .await?;
+                        storage
+                            .insert_relation_versions(
+                                &relations_for_versioning,
+                                version_key,
+                                &mut tx,
+                            )
+                            .await?;
+                    }
 
                     ops
                 }

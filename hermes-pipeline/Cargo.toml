@@ -14,6 +14,7 @@ hermes-relay = { path = "../hermes-relay" }
 hermes-schema = { path = "../hermes-schema" }
 stream = { path = "../stream" }
 wire = { path = "../wire" }
+grc-20 = { git = "https://github.com/geobrowser/grc-20" }
 prost = "0.13.5"
 opentelemetry = "0.31"
 opentelemetry_sdk = "0.31"

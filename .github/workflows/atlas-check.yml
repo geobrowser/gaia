@@ -2,7 +2,7 @@ name: Atlas Check
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main, dev]
     paths:
       - 'atlas/**'
       - 'hermes-instrumentation/**'
@@ -10,7 +10,7 @@ on:
       - 'hermes-substream/**'
       - 'stream/**'
   pull_request:
-    branches: [main, develop]
+    branches: [main, dev]
     paths:
       - 'atlas/**'
       - 'hermes-instrumentation/**'
