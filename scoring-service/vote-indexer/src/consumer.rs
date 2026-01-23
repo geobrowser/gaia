@@ -91,7 +91,9 @@ impl KafkaConsumer {
 }
 
 /// Parse a vote message from Kafka payload.
-pub fn parse_vote(payload: &[u8]) -> Result<hermes_schema::pb::voting::HermesVoteCast, IndexerError> {
+pub fn parse_vote(
+    payload: &[u8],
+) -> Result<hermes_schema::pb::voting::HermesVoteCast, IndexerError> {
     let vote = hermes_schema::pb::voting::HermesVoteCast::decode(payload)?;
     Ok(vote)
 }

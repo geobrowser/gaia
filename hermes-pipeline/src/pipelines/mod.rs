@@ -95,7 +95,7 @@ pub fn mark_sequence_as_last<T: HasMeta>(events: &mut [T], target_seq: u32) -> b
     false
 }
 
-/// Block metadata extracted from substream data.
+/// Block metadata extracted from Amp actions.
 ///
 /// Used by all pipelines for enriching events with blockchain context.
 #[derive(Debug, Clone)]

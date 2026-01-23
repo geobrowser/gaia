@@ -14,7 +14,6 @@ mod error;
 mod handlers;
 mod models;
 mod storage;
-mod version_buffer;
 
 use consumer::{get_event_type, parse_message, KafkaConsumer, KgMessage};
 use error::IndexerError;
@@ -663,7 +662,6 @@ async fn process_buffered_block(
     }
 
     let block_number = events[0].msg.block_number().unwrap_or(0);
-
 
     let mut counts_by_event_type: HashMap<String, u64> = HashMap::new();
     let mut counts_by_topic: HashMap<String, u64> = HashMap::new();

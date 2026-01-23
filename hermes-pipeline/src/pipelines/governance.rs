@@ -14,7 +14,8 @@ use std::collections::HashMap;
 use anyhow::Result;
 use hermes_instrumentation::{debug, debug_span, info, warn};
 
-use hermes_relay::{Action, actions};
+use hermes_codec::actions;
+use hermes_relay::Action;
 use hermes_schema::pb::governance::{
     AddEditorAction, AddMemberAction, FlagAction, HermesProposalCreated, HermesProposalExecuted,
     HermesProposalUpdated, HermesProposalVoted, ProposalAction, ProposalSettings,
@@ -22,8 +23,9 @@ use hermes_schema::pb::governance::{
     UnflagEditorAction, UpdateVotingSettingsAction, VotingMode, proposal_action,
 };
 
-use crate::decode::{
-    self, ProposalActionType, decode_flag_args, decode_publish_args, decode_space_id_arg,
+use hermes_codec as decode;
+use hermes_codec::{
+    ProposalActionType, decode_flag_args, decode_publish_args, decode_space_id_arg,
     decode_voting_settings_args,
 };
 
@@ -142,7 +144,7 @@ pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformRe
                 .actions
                 .iter()
                 .map(|a| {
-                    let action_type = crate::decode::ProposalActionType::from_calldata(&a.data);
+                    let action_type = hermes_codec::ProposalActionType::from_calldata(&a.data);
                     format!("{:?}", action_type)
                 })
                 .collect();
@@ -184,7 +186,7 @@ pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformRe
                 .actions
                 .iter()
                 .map(|a| {
-                    let action_type = crate::decode::ProposalActionType::from_calldata(&a.data);
+                    let action_type = hermes_codec::ProposalActionType::from_calldata(&a.data);
                     format!("{:?}", action_type)
                 })
                 .collect();

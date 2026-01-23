@@ -10,6 +10,7 @@ path = "src/main.rs"
 [dependencies]
 hermes-instrumentation = { path = "../hermes-instrumentation" }
 hermes-kafka = { path = "../hermes-kafka" }
+hermes-codec = { path = "../hermes-codec" }
 hermes-relay = { path = "../hermes-relay" }
 hermes-schema = { path = "../hermes-schema" }
 stream = { path = "../stream" }
@@ -33,6 +34,7 @@ alloy = { version = "1.0.24", features = ["sol-types"] }
 ethabi = "18.0.0"
 sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "json", "tls-rustls", "uuid"] }
 serde_json = "1"
+hermes-amp = { path = "../hermes-amp" }
 
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }

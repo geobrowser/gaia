@@ -172,4 +172,4 @@ Implemented in:
 
 - `docs/hermes-architecture.md` - Overall Hermes system design
 - `hermes-substream/proto/schema.proto` - Source event definitions
-- `hermes-relay/src/actions.rs` - Action type constants
+- `hermes-codec/src/actions.rs` - Action type constants

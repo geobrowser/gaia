@@ -128,4 +128,4 @@ hermes/
 - [K8s Secrets Isolation](../docs/k8s-secrets-isolation.md) - Secrets management for production
 - [Hermes Processor](../hermes-processor/README.md) - Event processor details
 - [Hermes Schema](../hermes-schema/README.md) - Protobuf schema management
-- [Hermes Substream](../hermes-substream/README.md) - Blockchain event filtering
+- [Hermes Amp](../hermes-amp/README.md) - Amp actions stream

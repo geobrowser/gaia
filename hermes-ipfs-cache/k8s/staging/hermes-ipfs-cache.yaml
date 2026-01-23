@@ -70,18 +70,31 @@ spec:
                 secretKeyRef:
                   name: api-secrets
                   key: DATABASE_URL
-            - name: SUBSTREAMS_ENDPOINT
+            - name: AMP_FLIGHT_URL
               valueFrom:
                 secretKeyRef:
                   name: hermes-ipfs-cache-secrets
-                  key: SUBSTREAMS_ENDPOINT
-            - name: SUBSTREAMS_API_TOKEN
+                  key: AMP_FLIGHT_URL
+            - name: AMP_DATASET
               valueFrom:
                 secretKeyRef:
                   name: hermes-ipfs-cache-secrets
-                  key: SUBSTREAMS_API_TOKEN
-            - name: SUBSTREAMS_START_BLOCK
+                  key: AMP_DATASET
+                  optional: true
+            - name: AMP_START_BLOCK
               value: "82656"
+            - name: AMP_END_BLOCK
+              valueFrom:
+                secretKeyRef:
+                  name: hermes-ipfs-cache-secrets
+                  key: AMP_END_BLOCK
+                  optional: true
+            - name: AMP_ACTIONS_ADDRESS
+              valueFrom:
+                secretKeyRef:
+                  name: hermes-ipfs-cache-secrets
+                  key: AMP_ACTIONS_ADDRESS
+                  optional: true
             - name: IPFS_GATEWAY_URL
               valueFrom:
                 secretKeyRef:

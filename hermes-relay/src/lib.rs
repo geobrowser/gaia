@@ -7,7 +7,6 @@
 //! - [`StreamSource`] config for explicitly choosing mock or live data sources
 //! - [`source::MockSource`] and [`source::mock_events`] for custom mock data
 //! - Hermes-specific configuration (module names, package paths)
-//! - Action type constants for filtering raw actions
 //!
 //! ## Usage
 //!
@@ -74,10 +73,10 @@
 //! (e.g., `HermesModule::EditsPublished`, `HermesModule::SpacesRegistered`).
 //!
 //! For transformers that need **multiple event types**, use `HermesModule::Actions`
-//! and filter client-side using the constants in the [`actions`] module:
+//! and filter client-side using the constants in `hermes-codec`:
 //!
 //! ```ignore
-//! use hermes_relay::{actions, HermesModule};
+//! use hermes_codec::actions;
 //!
 //! fn is_space_event(action_bytes: &[u8]) -> bool {
 //!     actions::matches(action_bytes, &actions::SPACE_REGISTERED)
@@ -86,7 +85,6 @@
 //! }
 //! ```
 
-pub mod actions;
 pub mod config;
 pub mod sink;
 pub mod source;
@@ -99,9 +97,6 @@ pub use sink::{PreprocessedSink, Sink, StreamSource};
 
 // Re-export hermes-substream types for consumers
 pub use hermes_substream::pb::hermes::{Action, Actions};
-
-// Re-export IPFS URI extraction helper
-pub use hermes_substream::extract_ipfs_uri;
 
 // Re-export stream crate for consumers who need substreams types
 pub use stream;

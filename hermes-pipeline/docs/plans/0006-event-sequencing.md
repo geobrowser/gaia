@@ -8,7 +8,7 @@ Kafka only guarantees ordering within a topic partition, not across topics. kg-i
 
 ## Solution
 
-Add explicit sequence numbers based on blockchain order (the order events appear in the block log from substreams). The consumer buffers events and processes them in sequence order once all events for a block are received.
+Add explicit sequence numbers based on blockchain order (the order events appear in the block log from Amp). The consumer buffers events and processes them in sequence order once all events for a block are received.
 
 ## Changes
 
@@ -28,7 +28,7 @@ message BlockchainMetadata {
 
 ### 2. Use action array index as sequence
 
-The `Actions.actions` repeated field from substreams is already in blockchain order. Use the array index as the sequence number:
+The `Actions.actions` repeated field from Amp is already in blockchain order. Use the array index as the sequence number:
 
 ```rust
 // hermes-pipeline/src/pipelines/spaces.rs
@@ -46,7 +46,7 @@ pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<SpacesOutpu
 }
 ```
 
-This is simpler than parsing the cursor and doesn't require changes to the substream proto.
+This is simpler than parsing the cursor and doesn't require changes to the action schema.
 
 ### 3. Propagate index through all pipelines
 

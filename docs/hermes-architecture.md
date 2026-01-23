@@ -393,7 +393,7 @@ All services run with mock data by default, processing a deterministic test topo
 kubectl rollout restart deployment/hermes-pipeline
 
 # Replay from specific block (requires USE_MOCK=false for live data)
-kubectl set env deployment/hermes-pipeline USE_MOCK=false SUBSTREAMS_START_BLOCK=1000000
+kubectl set env deployment/hermes-pipeline USE_MOCK=false AMP_START_BLOCK=1000000
 kubectl rollout restart deployment/hermes-pipeline
 
 # atlas (topology) continues unaffected
@@ -405,4 +405,4 @@ kubectl rollout restart deployment/atlas
 - [K8s Secrets Isolation](./k8s-secrets-isolation.md) - Secrets management for Hermes services
 - [Atlas Documentation](../atlas/docs/) - Canonical graph computation (topology consumer)
 - [Hermes Infrastructure](../hermes/README.md) - Local development and deployment
-- [Hermes Substream](../hermes-substream/README.md) - Event filtering from blockchain
+- [Hermes Amp](../hermes-amp/README.md) - Event stream for actions

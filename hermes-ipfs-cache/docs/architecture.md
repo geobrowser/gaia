@@ -4,15 +4,14 @@ This document describes the implementation details of the IPFS cache service.
 
 ## Overview
 
-The IPFS cache pre-fetches content for `EditsPublished` events from hermes-substream. It runs ahead of `hermes-pipeline`, storing resolved IPFS content in PostgreSQL so the edits pipeline doesn't block on network I/O.
+The IPFS cache pre-fetches content for edit-related actions from Amp. It runs ahead of `hermes-pipeline`, storing resolved IPFS content in PostgreSQL so the edits pipeline doesn't block on network I/O.
 
 ```
 ┌─────────────────┐     ┌─────────────────────┐     ┌─────────────────┐
-│ hermes-substream│────▶│  hermes-ipfs-cache  │────▶│   PostgreSQL    │
-│ (EditsPublished)│     │                     │     │  (ipfs_cache)   │
+│       Amp       │────▶│  hermes-ipfs-cache  │────▶│   PostgreSQL    │
+│ (actions log)   │     │                     │     │  (ipfs_cache)   │
 └─────────────────┘     │  ┌───────────────┐  │     └─────────────────┘
                         │  │ IpfsCacheSink │  │              │
-                        │  │  (Sink trait) │  │              │
                         │  └───────┬───────┘  │              │
                         │          │          │              ▼
                         │  ┌───────▼───────┐  │     ┌─────────────────┐
@@ -30,12 +29,12 @@ The IPFS cache pre-fetches content for `EditsPublished` events from hermes-subst
 
 ### IpfsCacheSink
 
-Implements `hermes_relay::Sink` to consume `EditsPublished` events.
+Processes action batches from the Amp stream.
 
 ```rust
 pub struct IpfsCacheSink {
     cache: Arc<Mutex<Cache>>,
-    ipfs: Arc<IpfsClient>,
+    ipfs: Arc<dyn IpfsFetcher>,
     semaphore: Arc<Semaphore>,
     pending: Arc<Mutex<PendingFetches>>,
 }
@@ -77,11 +76,11 @@ Operations:
 
 ## IPFS URI Validation
 
-The protocol accepts arbitrary bytes for IPFS URIs, so validation is performed at the substream level.
+The protocol accepts arbitrary bytes for IPFS URIs, so validation is performed during action decoding.
 
 ### Validation Logic
 
-The `extract_ipfs_uri` helper in `hermes-substream` extracts and validates IPFS URIs:
+The `extract_ipfs_uri` helper in `hermes-codec` extracts and validates IPFS URIs:
 
 1. Searches for `ipfs://` pattern in the raw ABI-encoded event data
 2. Extracts the CID (alphanumeric characters after the prefix)
@@ -94,14 +93,14 @@ The `extract_ipfs_uri` helper in `hermes-substream` extracts and validates IPFS 
 
 ### Where Validation Happens
 
-- **hermes-substream**: Populates `content_uri` field in `EditsPublished` protobuf (empty if invalid)
+- **hermes-codec**: Extracts the `content_uri` field (empty if invalid)
 - **hermes-ipfs-cache**: Skips events with empty `content_uri`
-- **hermes-pipeline**: Uses `extract_ipfs_uri` helper when reading from raw `Actions` protobuf
+- **hermes-pipeline**: Uses `extract_ipfs_uri` helper when reading from raw `Actions` data
 
 ### Handling Invalid URIs
 
 Events with invalid IPFS URIs (inline text content, malformed CIDs, etc.) are:
-- **In substream**: `content_uri` set to empty string, raw `data` preserved for debugging
+- **In extraction**: `content_uri` set to empty string, raw `data` preserved for debugging
 - **In cache**: Skipped entirely (not cached)
 - **In pipeline**: Filtered out via `filter_map`
 
@@ -109,8 +108,8 @@ Events with invalid IPFS URIs (inline text content, malformed CIDs, etc.) are:
 
 ### Block Processing
 
-1. `process_block_scoped_data` receives a block from hermes-substream
-2. Decode `EditsPublishedList` protobuf from block output
+1. `process_actions_block` receives a block of actions from Amp
+2. Extract `content_uri` values from edit-related actions
 3. Skip edits with empty `content_uri` (invalid IPFS URI)
 4. Register block in `PendingFetches` with valid edit count
 5. For each valid edit, spawn an async task:
@@ -206,11 +205,12 @@ drop(permit);  // Release for next fetch
 | Variable | Required | Default | Description |
 |----------|----------|---------|-------------|
 | `DATABASE_URL` | Yes | - | PostgreSQL connection string |
-| `IPFS_GATEWAY` | Yes | - | IPFS gateway base URL |
-| `SUBSTREAMS_ENDPOINT` | Yes | - | Substreams gRPC endpoint |
-| `SUBSTREAMS_API_TOKEN` | No | - | Auth token for substreams |
-| `START_BLOCK` | No | 0 | Starting block number |
-| `END_BLOCK` | No | 0 | Ending block (0 = stream forever) |
+| `IPFS_GATEWAY_URL` | Yes | - | IPFS gateway base URL |
+| `AMP_FLIGHT_URL` | Yes | - | Amp Flight SQL URL |
+| `AMP_DATASET` | No | `geo/actions` | Amp dataset |
+| `AMP_START_BLOCK` | No | 82655 | Starting block number |
+| `AMP_END_BLOCK` | No | - | Ending block (unset = stream forever) |
+| `AMP_ACTIONS_ADDRESS` | No | - | Actions contract address |
 
 ## Database Schema
 

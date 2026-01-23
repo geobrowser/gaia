@@ -1,6 +1,6 @@
 //! Hermes IPFS Cache binary
 //!
-//! Pre-fetches IPFS content for EditsPublished events from hermes-substream.
+//! Pre-fetches IPFS content for edit-related actions from Amp.
 //!
 //! ## Configuration
 //!
@@ -10,21 +10,21 @@
 //! Required in live mode:
 //! - `DATABASE_URL` - PostgreSQL connection URL for cache storage
 //! - `IPFS_GATEWAY_URL` - IPFS gateway URL (e.g., https://ipfs.io/ipfs/)
-//! - `SUBSTREAMS_ENDPOINT` - Substreams endpoint URL (e.g., geotest.substreams.pinax.network:443)
-//! - `SUBSTREAMS_API_TOKEN` - API token for substreams authentication
+//! - `AMP_FLIGHT_URL` - Amp Flight SQL URL (default: http://localhost:1602)
+//! - `AMP_DATASET` - Amp dataset (default: geo/actions)
+//! - `AMP_START_BLOCK` - First block to consume (default: 82655)
+//! - `AMP_END_BLOCK` - Last block to consume (optional)
+//! - `AMP_ACTIONS_ADDRESS` - Actions contract address (default: SPACE_REGISTRY_ADDRESS_HEX)
+//! - `AMP_RECONNECT_DELAY_SECS` - Delay before reconnecting (default: 2)
 //!
-//! Optional:
-//! - `SUBSTREAMS_START_BLOCK` - First block to consume (default: 82655)
-//! - `SUBSTREAMS_END_BLOCK` - Last block to consume (default: u64::MAX for continuous)
-
 use std::borrow::Cow;
 use std::collections::HashMap;
-use std::env;
+use std::{env, sync::Arc};
 
 use grc_20::{Edit as Grc20Edit, encode_edit};
+use hermes_amp::{AmpStreamConfig, stream_actions};
 use hermes_instrumentation::{Backend, Config, info};
 use hermes_ipfs_cache::{IpfsCacheSink, cache::CacheSource};
-use hermes_relay::{HermesModule, Sink, StreamSource};
 use ipfs::IpfsSource;
 
 /// Generate mock edits matching the test topology IPFS hashes.
@@ -162,53 +162,44 @@ async fn async_main() -> anyhow::Result<()> {
 
         // Create and run the sink with mock data
         let sink = IpfsCacheSink::new(cache, ipfs_source);
-        sink.run(StreamSource::mock()).await?;
+        let actions = hermes_relay::source::mock_events::test_topology::generate();
+        sink.process_actions_block(&actions, 0, 0, "mock:0".to_string())
+            .await?;
     } else {
-        // Live mode - connect to real substreams, IPFS, and database
+        // Live mode - connect to Amp, IPFS, and database
         let database_url =
             env::var("DATABASE_URL").expect("DATABASE_URL must be set for live mode");
 
         let ipfs_gateway =
             env::var("IPFS_GATEWAY_URL").expect("IPFS_GATEWAY_URL must be set for live mode");
 
-        let endpoint =
-            env::var("SUBSTREAMS_ENDPOINT").expect("SUBSTREAMS_ENDPOINT must be set for live mode");
-
-        let start_block: i64 = env::var("SUBSTREAMS_START_BLOCK")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(82655);
-
-        let end_block: u64 = env::var("SUBSTREAMS_END_BLOCK")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(u64::MAX);
+        let config = AmpStreamConfig::from_env();
 
         info!(
-            endpoint = %endpoint,
-            start_block = start_block,
-            end_block = end_block,
+            dataset = %config.dataset,
+            start_block = config.start_block,
             ipfs_gateway = %ipfs_gateway,
-            "Using live substreams source"
+            "Using Amp actions stream"
         );
 
-        // Create PostgreSQL-backed cache
         let cache = CacheSource::live(&database_url).into_cache().await?;
-
-        // Create live IPFS client
         let ipfs_source = IpfsSource::live(&ipfs_gateway);
+        let sink = Arc::new(IpfsCacheSink::new(cache, ipfs_source));
 
-        // Create stream source for EditsPublished module
-        let source = StreamSource::live(
-            endpoint,
-            HermesModule::EditsPublished,
-            start_block,
-            end_block,
-        );
-
-        // Create and run the sink
-        let sink = IpfsCacheSink::new(cache, ipfs_source);
-        sink.run(source).await?;
+        stream_actions(config, move |block| {
+            let sink = Arc::clone(&sink);
+            async move {
+                sink.process_actions_block(
+                    &block.actions,
+                    block.block_num,
+                    block.timestamp_secs,
+                    block.cursor,
+                )
+                .await
+                .map_err(anyhow::Error::from)
+            }
+        })
+        .await?;
     }
 
     info!("Hermes IPFS Cache finished");

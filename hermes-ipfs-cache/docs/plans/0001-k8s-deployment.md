@@ -9,7 +9,7 @@ In Progress
 The `hermes-ipfs-cache` service needs to be deployed to Kubernetes alongside other Hermes services. It requires:
 - PostgreSQL for cache storage
 - Access to IPFS gateway
-- Connection to hermes-substream via substreams endpoint
+- Connection to Amp via Flight SQL
 - Cursor persistence for restart recovery
 
 Current Hermes services are deployed as Jobs to the `kafka` namespace on DigitalOcean Kubernetes.
@@ -32,17 +32,15 @@ Added to `hermes/docker-compose.yaml`:
 cd hermes
 
 # Set required env vars
-export SUBSTREAMS_ENDPOINT=https://...
-export SUBSTREAMS_API_TOKEN=...
+export AMP_FLIGHT_URL=http://localhost:1602
 
 # Start postgres and the cache service
 docker-compose up ipfs-cache-postgres hermes-ipfs-cache
 
 # Or run service directly (requires local postgres with tables created)
 DATABASE_URL=postgres://postgres:postgres@localhost:5433/ipfs_cache \
-IPFS_GATEWAY=https://gateway.ipfs.io/ipfs/ \
-SUBSTREAMS_ENDPOINT=https://... \
-SUBSTREAMS_API_TOKEN=... \
+IPFS_GATEWAY_URL=https://gateway.ipfs.io/ipfs/ \
+AMP_FLIGHT_URL=http://localhost:1602 \
 cargo run -p hermes-ipfs-cache
 ```
 
@@ -60,15 +58,15 @@ kubectl create secret generic ipfs-cache-db-credentials \
   --from-literal=DATABASE_URL="postgres://user:pass@host:5432/dbname?sslmode=require"
 ```
 
-#### 3.2 Substreams Credentials Secret
+#### 3.2 Amp Credentials Secret
 
-Create secret for substreams API token (manual step, not in git):
+Create secret for Amp connection info (manual step, not in git):
 
 ```bash
-kubectl create secret generic substreams-credentials \
+kubectl create secret generic amp-credentials \
   --namespace=kafka \
-  --from-literal=SUBSTREAMS_API_TOKEN="<token>" \
-  --from-literal=SUBSTREAMS_ENDPOINT="https://mainnet.eth.streamingfast.io"
+  --from-literal=AMP_FLIGHT_URL="http://amp-flight:1602" \
+  --from-literal=AMP_DATASET="geo/actions"
 ```
 
 #### 3.3 Deployment Manifest
@@ -103,19 +101,19 @@ spec:
                 secretKeyRef:
                   name: ipfs-cache-db-credentials
                   key: DATABASE_URL
-            - name: SUBSTREAMS_ENDPOINT
+            - name: AMP_FLIGHT_URL
               valueFrom:
                 secretKeyRef:
-                  name: substreams-credentials
-                  key: SUBSTREAMS_ENDPOINT
-            - name: SUBSTREAMS_API_TOKEN
+                  name: amp-credentials
+                  key: AMP_FLIGHT_URL
+            - name: AMP_DATASET
               valueFrom:
                 secretKeyRef:
-                  name: substreams-credentials
-                  key: SUBSTREAMS_API_TOKEN
-            - name: IPFS_GATEWAY
+                  name: amp-credentials
+                  key: AMP_DATASET
+            - name: IPFS_GATEWAY_URL
               value: "https://gateway.ipfs.io/ipfs/"
-            - name: START_BLOCK
+            - name: AMP_START_BLOCK
               value: "0"
             - name: RUST_LOG
               value: "info,hermes_ipfs_cache=debug"
@@ -242,7 +240,7 @@ on:
     paths:
       - 'hermes-ipfs-cache/**'
       - 'hermes-relay/**'
-      - 'hermes-substream/**'
+      - 'hermes-amp/**'
       - 'stream/**'
       - 'wire/**'
       - 'ipfs/**'
@@ -288,7 +286,7 @@ jobs:
 | Secret | Keys | Description |
 |--------|------|-------------|
 | `ipfs-cache-db-credentials` | `DATABASE_URL` | PostgreSQL connection string |
-| `substreams-credentials` | `SUBSTREAMS_ENDPOINT`, `SUBSTREAMS_API_TOKEN` | Substreams access |
+| `amp-credentials` | `AMP_FLIGHT_URL`, `AMP_DATASET` | Amp access |
 | `regcred` | (existing) | Container registry credentials |
 
 ## Monitoring

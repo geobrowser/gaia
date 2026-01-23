@@ -4,7 +4,7 @@
 
 ### Sequence numbers
 
-The `sequence` field in BlockchainMetadata is the action's index in `Actions.actions` from substreams. It's per-block, not global. Two events in different blocks can have the same sequence number.
+The `sequence` field in BlockchainMetadata is the action's index in `Actions.actions` from Amp. It's per-block, not global. Two events in different blocks can have the same sequence number.
 
 ### is_last flag
 

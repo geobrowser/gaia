@@ -9,6 +9,7 @@ path = "src/lib.rs"
 [dependencies]
 stream = { path = "../stream" }
 hermes-substream = { path = "../hermes-substream" }
+hermes-codec = { path = "../hermes-codec" }
 alloy = { version = "1.0.24", features = ["sol-types"] }
 ethabi = "18.0.0"
 anyhow = "1"

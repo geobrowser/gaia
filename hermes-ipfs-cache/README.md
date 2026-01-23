@@ -1,15 +1,15 @@
 # hermes-ipfs-cache
 
-Pre-fetches IPFS content for `EditsPublished` events so `hermes-pipeline` doesn't block on network I/O when processing edits.
+Pre-fetches IPFS content for edit-related actions so `hermes-pipeline` doesn't block on network I/O when processing edits.
 
 ## Overview
 
-This service runs ahead of `hermes-pipeline`, subscribing to `EditsPublished` events from hermes-substream and fetching IPFS content by CID. The resolved content is stored in PostgreSQL so downstream consumers can read directly from the cache.
+This service runs ahead of `hermes-pipeline`, subscribing to Amp action logs and fetching IPFS content by CID. The resolved content is stored in PostgreSQL so downstream consumers can read directly from the cache.
 
 ```
                                     ┌─────────────────────┐
-hermes-substream ──────────────────▶│  hermes-ipfs-cache  │
-(EditsPublished)                    │                     │
+Amp actions log ───────────────────▶│  hermes-ipfs-cache  │
+                                    │                     │
                                     │  1. Fetch IPFS CID  │
                                     │  2. Decode content  │
                                     │  3. Store in cache  │
@@ -39,10 +39,12 @@ Environment variables:
 | `USE_MOCK` | No | Set to "true" or "1" to use mock data (default: false) |
 | `DATABASE_URL` | Live mode | PostgreSQL connection string |
 | `IPFS_GATEWAY_URL` | Live mode | IPFS gateway URL (e.g., `https://ipfs.io/ipfs/`) |
-| `SUBSTREAMS_ENDPOINT` | Live mode | Substreams endpoint URL (e.g., `geotest.substreams.pinax.network:443`) |
-| `SUBSTREAMS_API_TOKEN` | Live mode | API token for substreams authentication |
-| `SUBSTREAMS_START_BLOCK` | No | Block to start from (default: 88109) |
-| `SUBSTREAMS_END_BLOCK` | No | Block to end at (default: u64::MAX = stream forever) |
+| `AMP_FLIGHT_URL` | Live mode | Amp Flight SQL URL (default: `http://localhost:1602`) |
+| `AMP_DATASET` | No | Amp dataset (default: `geo/actions`) |
+| `AMP_START_BLOCK` | No | Block to start from (default: `82655`) |
+| `AMP_END_BLOCK` | No | Block to end at (default: stream forever) |
+| `AMP_ACTIONS_ADDRESS` | No | Actions contract address (default: `SPACE_REGISTRY_ADDRESS_HEX`) |
+| `AMP_RECONNECT_DELAY_SECS` | No | Reconnect delay (default: `2`) |
 
 ## Database Schema
 
@@ -74,8 +76,7 @@ The easiest way to run locally is with docker-compose from the `hermes/` directo
 cd hermes
 
 # Set required env vars (or use .env file)
-export SUBSTREAMS_ENDPOINT=https://...
-export SUBSTREAMS_API_TOKEN=...
+export AMP_FLIGHT_URL=http://localhost:1602
 
 # Start postgres and the cache service
 docker-compose up ipfs-cache-postgres hermes-ipfs-cache
@@ -98,8 +99,7 @@ cd hermes && docker-compose up ipfs-cache-postgres
 # Run the service
 DATABASE_URL=postgres://postgres:postgres@localhost:5433/ipfs_cache \
 IPFS_GATEWAY_URL=https://ipfs.io/ipfs/ \
-SUBSTREAMS_ENDPOINT=geotest.substreams.pinax.network:443 \
-SUBSTREAMS_API_TOKEN=... \
+AMP_FLIGHT_URL=http://localhost:1602 \
 cargo run -p hermes-ipfs-cache
 ```
 
@@ -110,9 +110,8 @@ The service loads environment variables from a `.env` file in the working direct
 ```bash
 DATABASE_URL=postgres://postgres:postgres@localhost:5433/ipfs_cache
 IPFS_GATEWAY_URL=https://ipfs.io/ipfs/
-SUBSTREAMS_ENDPOINT=geotest.substreams.pinax.network:443
-SUBSTREAMS_API_TOKEN=...
-SUBSTREAMS_START_BLOCK=88109
+AMP_FLIGHT_URL=http://localhost:1602
+AMP_START_BLOCK=88109
 RUST_LOG=info,hermes_ipfs_cache=debug
 ```
 
@@ -125,21 +124,21 @@ cargo run -p hermes-ipfs-cache
 ## Usage as a Library
 
 ```rust
+use hermes_amp::{AmpStreamConfig, stream_actions};
 use hermes_ipfs_cache::{IpfsCacheSink, cache::{Cache, Storage}};
-use hermes_relay::Sink;
 use ipfs::IpfsClient;
 
 let storage = Storage::new().await?;
 let cache = Cache::new(storage);
 let ipfs = IpfsClient::new(&ipfs_gateway);
 let sink = IpfsCacheSink::new(cache, ipfs);
+let config = AmpStreamConfig::from_env();
 
-sink.run(
-    &endpoint_url,
-    IpfsCacheSink::module(),
-    start_block,
-    end_block,
-).await?;
+stream_actions(config, |block| async {
+    sink.process_actions_block(&block.actions, block.block_num, block.timestamp_secs, block.cursor)
+        .await
+        .map_err(anyhow::Error::from)
+}).await?;
 ```
 
 ## Cursor Persistence

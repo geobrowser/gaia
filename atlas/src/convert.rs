@@ -25,7 +25,8 @@ use crate::events::{
     BlockMetadata, SpaceCreated, SpaceTopologyEvent, SpaceTopologyPayload, SpaceType,
     TrustExtended, TrustExtension,
 };
-use hermes_relay::{actions, Action};
+use hermes_codec::actions;
+use hermes_relay::Action;
 
 /// Convert a slice to a fixed-size array, returning None if length doesn't match.
 fn to_array<const N: usize>(slice: &[u8]) -> Option<[u8; N]> {

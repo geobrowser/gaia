@@ -5,10 +5,11 @@
 use anyhow::Result;
 use hermes_instrumentation::{debug_span, warn};
 
-use hermes_relay::{Action, actions};
+use hermes_codec::actions;
+use hermes_relay::Action;
 use hermes_schema::pb::topics::HermesTopicDeclared;
 
-use crate::decode;
+use hermes_codec as decode;
 
 use super::BlockMetadata;
 

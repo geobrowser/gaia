@@ -1,7 +1,7 @@
 //! Hermes Pipeline
 //!
-//! Consumes space-related events from hermes-substream via hermes-relay and
-//! transforms them into Hermes protobuf messages for publication to Kafka.
+//! Consumes space-related events from Amp and transforms them into
+//! Hermes protobuf messages for publication to Kafka.
 //!
 //! ## Event Types Handled
 //!
@@ -26,10 +26,12 @@
 //!
 //! Environment variables:
 //! - `USE_MOCK` - Set to "true" or "1" to use mock data (default: false)
-//! - `SUBSTREAMS_ENDPOINT` - Substreams endpoint URL (default: geotest.substreams.pinax.network:443)
-//! - `SUBSTREAMS_API_TOKEN` - API token for substreams authentication
-//! - `SUBSTREAMS_START_BLOCK` - First block to consume (default: 82655)
-//! - `SUBSTREAMS_END_BLOCK` - Last block to consume (default: u64::MAX for continuous)
+//! - `AMP_FLIGHT_URL` - Amp Flight SQL URL (default: http://localhost:1602)
+//! - `AMP_DATASET` - Amp dataset (default: geo/actions)
+//! - `AMP_START_BLOCK` - First block to consume (default: 82655)
+//! - `AMP_END_BLOCK` - Last block to consume (optional)
+//! - `AMP_ACTIONS_ADDRESS` - Actions contract address (default: SPACE_REGISTRY_ADDRESS_HEX)
+//! - `AMP_RECONNECT_DELAY_SECS` - Delay before reconnecting (default: 2)
 //! - `KAFKA_BROKER` - Kafka broker address (default: localhost:9092)
 //! - `KAFKA_USERNAME` - SASL username for managed Kafka (optional)
 //! - `KAFKA_PASSWORD` - SASL password for managed Kafka (optional)
@@ -48,9 +50,8 @@ use prost::Message;
 use std::sync::OnceLock;
 
 use hermes_kafka::create_producer;
-use hermes_relay::stream::pb::sf::substreams::rpc::v2::BlockScopedData;
+use hermes_relay::Actions;
 use hermes_relay::stream::utils;
-use hermes_relay::{Actions, HermesModule, Sink, StreamSource};
 
 use hermes_pipeline::cache::{CacheSource, IpfsCache};
 use hermes_pipeline::pipelines;
@@ -60,6 +61,8 @@ use hermes_pipeline::pipelines::trust::get_extension_type;
 use hermes_pipeline::pipelines::voting::get_vote_direction;
 
 use emit::{Emitter, topics};
+
+mod amp_stream;
 
 /// Error type for the pipeline that implements std::error::Error
 #[derive(Debug)]
@@ -705,46 +708,23 @@ impl Pipeline {
 
         Ok(())
     }
-}
 
-impl Sink for Pipeline {
-    type Error = PipelineError;
-
-    async fn process_block_scoped_data(&self, data: &BlockScopedData) -> Result<(), Self::Error> {
-        let output = utils::output(data);
-        let relay_meta = utils::block_metadata(data);
-        let meta: BlockMetadata = relay_meta.clone().into();
-
-        let span = info_span!(
-            "process_block",
-            block_number = meta.block_number,
-            cursor = %meta.cursor
-        );
-
-        self.process_block_impl(output.value.as_slice(), relay_meta, meta)
-            .instrument(span)
-            .await
-    }
-
-    fn process_block_undo_signal(
+    pub(crate) async fn process_actions_block(
         &self,
-        undo_signal: &hermes_relay::stream::pb::sf::substreams::rpc::v2::BlockUndoSignal,
-    ) -> std::result::Result<(), Self::Error> {
-        // For now, just log the undo signal
-        // In a production system, we would delete any data recorded after this block
-        let last_valid_block = undo_signal
-            .last_valid_block
-            .as_ref()
-            .map_or(0, |b| b.number);
-        warn!(
-            last_valid_block,
-            "Block undo signal received, rollback required"
-        );
-
-        // TODO: Implement actual rollback logic when cursor persistence is added
-        // This would involve deleting Kafka messages or updating state
-
-        Ok(())
+        actions: Actions,
+        block_number: u64,
+        timestamp_secs: u64,
+        cursor: String,
+    ) -> Result<(), PipelineError> {
+        let relay_meta = utils::BlockMetadata {
+            cursor,
+            block_number,
+            timestamp: timestamp_secs.to_string(),
+        };
+        let meta: BlockMetadata = relay_meta.clone().into();
+        let encoded = actions.encode_to_vec();
+        self.process_block_impl(encoded.as_slice(), relay_meta, meta)
+            .await
     }
 }
 
@@ -858,33 +838,7 @@ async fn async_main() -> anyhow::Result<()> {
     // Create the pipeline
     let pipeline = Pipeline::new(emitter, cache);
 
-    // Determine stream source: mock or live substreams
-    let source = if use_mock {
-        StreamSource::mock()
-    } else {
-        let endpoint = env::var("SUBSTREAMS_ENDPOINT")
-            .unwrap_or_else(|_| "geotest.substreams.pinax.network:443".to_string());
-        let start_block: i64 = env::var("SUBSTREAMS_START_BLOCK")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(82655);
-        let end_block: u64 = env::var("SUBSTREAMS_END_BLOCK")
-            .ok()
-            .and_then(|s| s.parse().ok())
-            .unwrap_or(u64::MAX);
-
-        info!(
-            endpoint = %endpoint,
-            start_block = start_block,
-            end_block = end_block,
-            "Using live substreams source"
-        );
-
-        StreamSource::live(endpoint, HermesModule::Actions, start_block, end_block)
-    };
-
     info!(
-        module = %HermesModule::Actions,
         topics.spaces = topics::SPACE_CREATIONS,
         topics.membership = topics::MEMBERSHIP,
         topics.trust = topics::TRUST_EXTENSIONS,
@@ -900,8 +854,17 @@ async fn async_main() -> anyhow::Result<()> {
         "Starting pipeline"
     );
 
-    // Run the pipeline
-    pipeline.run(source).await?;
+    if use_mock {
+        info!("Using mock actions");
+        let actions = hermes_relay::source::mock_events::test_topology::generate();
+        let actions = Actions { actions };
+        pipeline
+            .process_actions_block(actions, 0, 0, "mock:0".to_string())
+            .await?;
+    } else {
+        info!("Using Amp Flight stream source");
+        amp_stream::run_amp_stream(&pipeline).await?;
+    }
 
     // Flush all pending messages to Kafka before exiting
     info!("Flushing Kafka producer");

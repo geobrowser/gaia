@@ -19,7 +19,7 @@ const SPACE_REGISTRY_ADDRESS: [u8; 20] = [
 ];
 
 // Action type hashes - keccak256 of action names.
-// These are re-exported by `hermes-relay::actions` for consumer-side filtering.
+// These are mirrored in `hermes-codec::actions` for consumer-side filtering.
 //
 // Governance actions use 'GOVERNANCE.' prefix
 // Permissionless actions use 'PERMISSIONLESS.' prefix

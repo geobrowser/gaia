@@ -21,10 +21,12 @@ members = [
 
     "hermes-kafka",
     "hermes-schema",
+    "hermes-codec",
     "hermes-relay",
     "hermes-pipeline",
     "hermes-ipfs-cache",
     "hermes-instrumentation",
+    "hermes-amp",
 
     "atlas",
     "hermes-substream",
