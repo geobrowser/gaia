@@ -74,7 +74,7 @@ spec:
         - name: OPENSEARCH_URL
           valueFrom:
             secretKeyRef:
-              name: search-indexer-secrets
+              name: opensearch-credentials
               key: OPENSEARCH_URL
         - name: INDEX_ALIAS
           value: "entities"
@@ -151,20 +151,47 @@ kubectl get deployment search-indexer -n search -o jsonpath='{.spec.template.spe
 echo ""
 echo ""
 
-# List indices
-echo "=== Indices ==="
-kubectl port-forward -n search svc/opensearch 9200:9200 &
-PF_PID=$!
-sleep 3
+# List indices using the list-indices job
+echo "=== Indices and Aliases ==="
+kubectl delete job opensearch-list-indices -n search 2>/dev/null || true
 
-curl -s "http://localhost:9200/_cat/indices/entities*?v"
+kubectl apply -f - <<EOF
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: opensearch-list-indices
+  namespace: search
+spec:
+  ttlSecondsAfterFinished: 300
+  backoffLimit: 1
+  template:
+    spec:
+      restartPolicy: Never
+      containers:
+      - name: list-indices
+        image: search-admin:local
+        imagePullPolicy: Never
+        env:
+        - name: OPENSEARCH_URL
+          valueFrom:
+            secretKeyRef:
+              name: opensearch-credentials
+              key: OPENSEARCH_URL
+        - name: INDEX_ALIAS
+          value: "entities"
+        - name: RUST_LOG
+          value: "warn"
+        command:
+        - search-admin
+        - list-indices
+        - --detailed
+EOF
+
+# Wait for job to complete
+kubectl wait --for=condition=complete job/opensearch-list-indices -n search --timeout=30s 2>/dev/null || true
+kubectl logs -n search job/opensearch-list-indices
 echo ""
-
-echo "=== Aliases ==="
-curl -s "http://localhost:9200/_cat/aliases/entities?v"
-echo ""
-
-kill $PF_PID 2>/dev/null || true
 
 echo ""
 echo "==> ✓ Full migration test complete!"

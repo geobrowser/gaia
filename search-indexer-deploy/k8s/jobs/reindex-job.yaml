@@ -2,24 +2,24 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: opensearch-list-indices
+  name: opensearch-reindex
   namespace: search
   labels:
     app: opensearch-admin
-    task: list-indices
+    task: reindex
 spec:
   # Keep job history for debugging
   ttlSecondsAfterFinished: 86400  # 24 hours
-  backoffLimit: 1
+  backoffLimit: 1  # Don't retry automatically - reindex is expensive
   template:
     metadata:
       labels:
         app: opensearch-admin
-        task: list-indices
+        task: reindex
     spec:
       restartPolicy: Never
       containers:
-      - name: list-indices
+      - name: reindex
         image: registry.digitalocean.com/geo/search-admin:latest  # Update with your registry
         env:
         - name: OPENSEARCH_URL
@@ -29,23 +29,26 @@ spec:
               key: OPENSEARCH_URL
         - name: INDEX_ALIAS
           value: "entities"  # Default alias name
-        - name: SHOW_DETAILED
-          value: "true"  # Set to "false" for simple list
+        - name: SOURCE_VERSION
+          value: "2"  # CHANGE THIS: Source index version to copy from
+        - name: TARGET_VERSION
+          value: "3"  # CHANGE THIS: Target index version to copy to
+        - name: WAIT_FOR_COMPLETION
+          value: "true"  # Set to "false" for async mode (get task ID only)
         - name: RUST_LOG
           value: "info"
         command:
-        - /bin/sh
-        - -c
-        - |
-          if [ "$SHOW_DETAILED" = "true" ]; then
-            search-admin list-indices --detailed
-          else
-            search-admin list-indices
-          fi
+        - search-admin
+        - reindex
+        - --source-version
+        - "$(SOURCE_VERSION)"
+        - --target-version
+        - "$(TARGET_VERSION)"
+        - --wait-for-completion
         resources:
           requests:
-            memory: "128Mi"
-            cpu: "100m"
-          limits:
             memory: "256Mi"
             cpu: "200m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"

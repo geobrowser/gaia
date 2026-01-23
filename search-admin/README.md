@@ -1,6 +1,6 @@
 # search-admin
 
-A Rust CLI tool for managing OpenSearch indices. This tool provides commands for creating, reindexing, deleting, and monitoring OpenSearch indices used by the search-indexer. In production, this tool should be executed as Kubernetes Jobs by administrators (see search-indexer-deploy/k8s/jobs/).
+A Rust tool for managing OpenSearch indices. This tool provides commands for creating, reindexing, deleting, and monitoring OpenSearch indices used by the search-indexer. In production, this tool should be executed as Kubernetes Jobs by administrators (see search-indexer-deploy/k8s/jobs/).
 
 ## Features
 
@@ -12,7 +12,7 @@ A Rust CLI tool for managing OpenSearch indices. This tool provides commands for
 
 ## CI/CD Workflow
 
-The CLI is automatically built and deployed via GitHub Actions. No local Docker required!
+The tool is automatically built and deployed via GitHub Actions. No local Docker required!
 
 ```
 ┌─────────────────────┐
@@ -66,7 +66,11 @@ git push origin main
 
 # Run migrations using the CI/CD-built image as Kubernetes Jobs
 cd search-indexer-deploy/k8s/jobs
-./run-full-migration.sh 2 3  # Migrate from v2 to v3
+# Edit full-migration-job.yaml to set SOURCE_VERSION=2 and TARGET_VERSION=3
+kubectl delete job opensearch-full-migration -n search 2>/dev/null || true
+kubectl apply -f full-migration-job.yaml
+kubectl wait --for=condition=ready pod -l job-name=opensearch-full-migration -n search --timeout=300s
+kubectl logs -n search -f job/opensearch-full-migration
 ```
 
 ### Local Development
@@ -112,8 +116,12 @@ For production migrations, use the full-migration job:
 ```bash
 cd search-indexer-deploy/k8s/jobs
 
-# Run full migration (e.g., from v2 to v3)
-./run-full-migration.sh 2 3
+# Edit full-migration-job.yaml to set SOURCE_VERSION and TARGET_VERSION
+# Then run:
+kubectl delete job opensearch-full-migration -n search 2>/dev/null || true
+kubectl apply -f full-migration-job.yaml
+kubectl wait --for=condition=ready pod -l job-name=opensearch-full-migration -n search --timeout=300s
+kubectl logs -n search -f job/opensearch-full-migration
 ```
 
 **Prerequisites:** Contact your Kubernetes administrator for search admin credentials.
@@ -315,7 +323,7 @@ See [search-indexer-deploy/tests/README.md](../search-indexer-deploy/tests/READM
 # Port forward to OpenSearch (if running in Kubernetes)
 kubectl port-forward -n search svc/opensearch 9200:9200 &
 
-# Run the CLI
+# Run the tool
 export OPENSEARCH_URL="http://localhost:9200"
 cargo run --bin search-admin -- list-indices
 cargo run --bin search-admin -- create-index --version 3
@@ -337,7 +345,7 @@ docker build -f search-admin/Dockerfile -t search-admin:local .
 
 ## Architecture
 
-The CLI is built on top of the existing search-indexer infrastructure:
+The tool is built on top of the existing search-indexer infrastructure:
 
 ```
 search-admin
@@ -352,12 +360,12 @@ search-admin
 **Benefits:**
 - **Single source of truth**: Index configuration is defined once in `search-indexer-repository`
 - **Type safety**: Rust's type system ensures correctness
-- **Consistency**: CLI uses the same OpenSearch client as the indexer
-- **Maintainability**: Changes to index config automatically apply to CLI
+- **Consistency**: Uses the same OpenSearch client as the indexer
+- **Maintainability**: Changes to index config automatically apply to search-admin
 
 ## Local Kubernetes Testing
 
-You can test the search-admin CLI and kubernetes workflows locally using kind.
+You can test the search-admin tool and kubernetes workflows locally using kind.
 
 **See [LOCAL_TESTING.md](./LOCAL_TESTING.md) for the complete guide.**
 
@@ -431,7 +439,7 @@ Error: Failed to pull image "registry.digitalocean.com/geo/search-admin:latest"
 ```
 
 **Solution:**
-- Check GitHub Actions: Go to Actions tab, verify "Build Search Admin CLI" workflow succeeded
+- Check GitHub Actions: Go to Actions tab, verify "Build Search Admin" workflow succeeded
 - Verify build triggered: Changes to `search-admin/**` trigger the workflow
 - Wait for build: CI/CD takes ~5-10 minutes
 - Check logs: Click on the workflow run to see build logs

@@ -1,6 +1,6 @@
-# Local Testing Guide for Search Admin CLI
+# Local Testing Guide for Search Admin
 
-This guide walks through testing the complete search-admin CLI and full migration workflow using a local Kubernetes cluster with kind.
+This guide walks through testing the complete search-admin tool and full migration workflow using a local Kubernetes cluster with kind.
 
 ## Prerequisites
 
@@ -505,7 +505,7 @@ kubectl logs -n search -l app=opensearch
 
 ## Tips for Iterating
 
-When making changes to the CLI code:
+When making changes to the search-admin code:
 
 ### Fast iteration with cargo (recommended for development)
 

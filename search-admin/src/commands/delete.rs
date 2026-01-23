@@ -4,6 +4,7 @@ use tracing::info;
 
 use search_indexer_repository::opensearch::get_versioned_index_name;
 
+use crate::commands::get;
 use crate::opensearch_client;
 
 #[derive(Args)]
@@ -49,16 +50,7 @@ impl DeleteIndexCommand {
 
         // Verify index exists
         info!("Verifying index exists...");
-        let index_exists = client
-            .indices()
-            .exists(opensearch::indices::IndicesExistsParts::Index(&[
-                &versioned_index_name,
-            ]))
-            .send()
-            .await
-            .context("Failed to check if index exists")?
-            .status_code()
-            .is_success();
+        let index_exists = get::index_exists(&client, &versioned_index_name).await?;
 
         if !index_exists {
             anyhow::bail!("Index {} does not exist", versioned_index_name);
@@ -190,16 +182,9 @@ impl DeleteIndexCommand {
 
         // Verify index is gone
         info!("Verifying index deletion...");
-        let verify_response = client
-            .indices()
-            .exists(opensearch::indices::IndicesExistsParts::Index(&[
-                &versioned_index_name,
-            ]))
-            .send()
-            .await
-            .context("Failed to verify index deletion")?;
+        let index_still_exists = get::index_exists(&client, &versioned_index_name).await?;
 
-        if verify_response.status_code().as_u16() == 404 {
+        if !index_still_exists {
             info!("✓ Index confirmed deleted");
             println!("✓ Index confirmed deleted");
         } else {

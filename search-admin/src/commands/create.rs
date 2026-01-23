@@ -6,6 +6,7 @@ use search_indexer_repository::opensearch::{
     get_index_settings, get_versioned_index_name,
 };
 
+use crate::commands::get;
 use crate::opensearch_client;
 
 #[derive(Args)]
@@ -31,16 +32,7 @@ impl CreateIndexCommand {
         let versioned_index_name = get_versioned_index_name(Some(self.version));
 
         // Check if index exists
-        let index_exists = client
-            .indices()
-            .exists(opensearch::indices::IndicesExistsParts::Index(&[
-                &versioned_index_name,
-            ]))
-            .send()
-            .await
-            .context("Failed to check if index exists")?
-            .status_code()
-            .is_success();
+        let index_exists = get::index_exists(&client, &versioned_index_name).await?;
 
         if index_exists {
             if self.skip_if_exists {

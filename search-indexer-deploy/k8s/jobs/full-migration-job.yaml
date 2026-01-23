@@ -27,7 +27,7 @@ spec:
         - name: OPENSEARCH_URL
           valueFrom:
             secretKeyRef:
-              name: search-indexer-secrets
+              name: opensearch-credentials
               key: OPENSEARCH_URL
         - name: INDEX_ALIAS
           value: "entities"  # Default alias name

@@ -7,6 +7,7 @@ use tracing::info;
 
 use search_indexer_repository::opensearch::get_versioned_index_name;
 
+use crate::commands::get;
 use crate::opensearch_client;
 
 #[derive(Args)]
@@ -63,16 +64,7 @@ impl ReindexCommand {
 
         // Verify source index exists
         info!("Verifying source index exists...");
-        let source_exists = client
-            .indices()
-            .exists(opensearch::indices::IndicesExistsParts::Index(&[
-                &source_index,
-            ]))
-            .send()
-            .await
-            .context("Failed to check if source index exists")?
-            .status_code()
-            .is_success();
+        let source_exists = get::index_exists(&client, &source_index).await?;
 
         if !source_exists {
             anyhow::bail!(
@@ -84,16 +76,7 @@ impl ReindexCommand {
 
         // Verify target index exists
         info!("Verifying target index exists...");
-        let target_exists = client
-            .indices()
-            .exists(opensearch::indices::IndicesExistsParts::Index(&[
-                &target_index,
-            ]))
-            .send()
-            .await
-            .context("Failed to check if target index exists")?
-            .status_code()
-            .is_success();
+        let target_exists = get::index_exists(&client, &target_index).await?;
 
         if !target_exists {
             anyhow::bail!(

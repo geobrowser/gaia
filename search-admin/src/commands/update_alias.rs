@@ -3,6 +3,7 @@ use clap::Args;
 use serde_json::json;
 use tracing::{info, warn};
 
+use crate::commands::get;
 use crate::opensearch_client;
 
 #[derive(Args)]
@@ -33,16 +34,9 @@ impl UpdateAliasCommand {
         println!();
 
         // Check if the target index exists
-        let index_exists = client
-            .indices()
-            .exists(opensearch::indices::IndicesExistsParts::Index(&[
-                &versioned_index_name,
-            ]))
-            .send()
-            .await
-            .context("Failed to check if index exists")?;
+        let index_exists = get::index_exists(&client, &versioned_index_name).await?;
 
-        if !index_exists.status_code().is_success() {
+        if !index_exists {
             anyhow::bail!(
                 "Index {} does not exist. Create it first with create-index command.",
                 versioned_index_name

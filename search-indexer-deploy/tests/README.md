@@ -12,7 +12,7 @@ Automated end-to-end test script that sets up a complete local test environment 
 2. Creates a fresh local kind Kubernetes cluster
 3. Deploys OpenSearch in the cluster
 4. Creates necessary secrets
-5. Builds and loads the search-admin CLI Docker image
+5. Builds and loads the search-admin Docker image
 6. Creates test indices with sample data (5 test documents)
 7. Sets up a test search-indexer deployment
 8. Configures the alias to point to the initial index
@@ -34,10 +34,9 @@ After the script completes, you can test the full migration workflow:
 # Using the test script (recommended)
 ./search-indexer-deploy/tests/test-full-migration.sh 1 2
 
-# Or using the kubectl wrapper (interactive)
-cd search-admin
-./kubectl-search-admin.sh list-indices
-./kubectl-search-admin.sh full-migration 1 2
+# Or using the job YAML files directly
+kubectl apply -f search-indexer-deploy/k8s/jobs/list-indices-job.yaml
+kubectl logs -n search -f job/opensearch-list-indices
 ```
 
 ### Requirements
@@ -190,4 +189,4 @@ The script automatically deletes any existing `search-test` cluster at the start
 
 - [../k8s/jobs/README.md](../k8s/jobs/README.md) - Production deployment guide
 - [../../search-admin/LOCAL_TESTING.md](../../search-admin/LOCAL_TESTING.md) - Detailed local testing guide with manual steps
-- [../../search-admin/README.md](../../search-admin/README.md) - Search-admin CLI documentation
+- [../../search-admin/README.md](../../search-admin/README.md) - Search-admin tool documentation

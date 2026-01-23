@@ -1,52 +1,201 @@
 # OpenSearch Index Management
 
-Unified CLI tool for managing OpenSearch index migrations. Uses a Rust-based CLI (`search-admin`) built via CI/CD and executed through kubectl.
+Kubernetes Jobs for managing OpenSearch index migrations. Uses a Rust-based tool (`search-admin`) built via CI/CD.
 
 ## Prerequisites
 
 Contact your Kubernetes administrator to obtain search admin credentials with permissions to run migrations in the `search` namespace.
 
-## Quick Start
+## Kubeconfig Setup
 
+If using a custom kubeconfig file, either:
+
+**Option 1: Export it** (recommended - cleaner commands below)
 ```bash
-cd search-indexer-deploy/k8s/jobs
-
-# Run the full migration (e.g., from v2 to v3)
-./run-full-migration.sh 2 3
+export KUBECONFIG=/path/to/your/kubeconfig.yaml
 ```
 
-This will:
+**Option 2: Use --kubeconfig flag** with each kubectl command
+```bash
+kubectl ... --kubeconfig=/path/to/your/kubeconfig.yaml
+```
+
+All examples below assume you've exported `KUBECONFIG`.
+
+## Full Migration (Recommended)
+
+Run a complete migration workflow that orchestrates all steps automatically.
+
+### Step 1: Edit the job YAML to set versions
+
+Edit `full-migration-job.yaml` and update these environment variables:
+```yaml
+- name: SOURCE_VERSION
+  value: "2"  # Change to your source version
+- name: TARGET_VERSION
+  value: "3"  # Change to your target version
+```
+
+### Step 2: Run the migration
+
+```bash
+# Clean up any previous migration job
+kubectl delete job opensearch-full-migration -n search 2>/dev/null || true
+
+# Apply the job
+kubectl apply -f full-migration-job.yaml
+
+# Wait for the pod to be ready
+kubectl wait --for=condition=ready pod -l job-name=opensearch-full-migration -n search --timeout=300s
+
+# Follow the logs
+kubectl logs -n search -f job/opensearch-full-migration
+```
+
+### Step 3: Delete the old index (after verification)
+
+After 3-7 days of stable operation, or when you are confident that the old index is not needed, delete it to free up storage space.
+
+> **⚠️ WARNING**
+> Be very careful here! Make sure you are deleting the **OLD** index version, not the current one.
+> Double-check that `INDEX_VERSION` matches your **source** version from Step 1.
+
+Edit `delete-index-job.yaml` and set:
+```yaml
+- name: INDEX_VERSION
+  value: "2"  # IMPORTANT: This should be your OLD version (SOURCE_VERSION from Step 1)
+- name: CONFIRM_DELETE
+  value: "true"  # Required safety flag
+```
+
+Then run:
+```bash
+# Clean up any previous delete job
+kubectl delete job opensearch-delete-index -n search 2>/dev/null || true
+
+# Apply the delete job
+kubectl apply -f delete-index-job.yaml
+
+# Follow the logs
+kubectl logs -n search -f job/opensearch-delete-index
+```
+
+### What it does
+
+The full-migration job will:
 1. Create the new index (entities_v3)
-2. Stop the search-indexer (avoids overwriting the new index)
-3. Reindex all data (v2 → v3)
+2. Scale down the search-indexer to 0 replicas (stops indexing)
+3. Reindex all data from v2 → v3
 4. Update the alias to point to the new index
-5. Start the search-indexer with the new version
+5. Scale up the search-indexer with `ENTITIES_INDEX_VERSION=3`
 
-All steps are orchestrated automatically by the Rust CLI running in Kubernetes.
+### Verify the migration
 
-## Configuration Options
+```bash
+# Check the deployment version
+kubectl get deployment search-indexer -n search -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="ENTITIES_INDEX_VERSION")].value}'
+
+# List indices and aliases
+kubectl apply -f list-indices-job.yaml
+kubectl logs -n search -f job/opensearch-list-indices
+```
+
+## Individual Jobs
+
+For debugging or manual operations:
+
+### List Indices and Aliases
+
+```bash
+kubectl delete job opensearch-list-indices -n search 2>/dev/null || true
+kubectl apply -f list-indices-job.yaml
+kubectl logs -n search -f job/opensearch-list-indices
+```
+
+### Create an Index
+
+Edit `create-index-job.yaml` to set `INDEX_VERSION`, then:
+
+```bash
+kubectl delete job opensearch-create-index -n search 2>/dev/null || true
+kubectl apply -f create-index-job.yaml
+kubectl logs -n search -f job/opensearch-create-index
+```
+
+### Reindex Data
+
+Copy all documents from one index version to another.
+
+Edit `reindex-job.yaml` to set:
+- `SOURCE_VERSION` - version to copy from
+- `TARGET_VERSION` - version to copy to
+- `WAIT_FOR_COMPLETION` - "true" for synchronous (waits), "false" for async (returns task ID)
+
+Then:
+
+```bash
+kubectl delete job opensearch-reindex -n search 2>/dev/null || true
+kubectl apply -f reindex-job.yaml
+kubectl logs -n search -f job/opensearch-reindex
+```
+
+**Note**: For large indices (millions of documents), this can take significant time. Set `WAIT_FOR_COMPLETION=true` to monitor progress in real-time, or set it to `false` to get a task ID and monitor separately.
+
+### Update Alias
+
+Update the alias to point to a different index version.
+
+Edit `update-alias-job.yaml` to set `TARGET_VERSION`:
+
+```bash
+kubectl delete job opensearch-update-alias -n search 2>/dev/null || true
+kubectl apply -f update-alias-job.yaml
+kubectl logs -n search -f job/opensearch-update-alias
+```
+
+**Warning**: This switches which index is actively used by the search API. Ensure the target index exists and is properly populated before running this.
+
+### Delete an Index
+
+Edit `delete-index-job.yaml` to set:
+- `INDEX_VERSION` - version to delete
+- `CONFIRM_DELETE=true` - required safety flag
+
+Then:
+
+```bash
+kubectl delete job opensearch-delete-index -n search 2>/dev/null || true
+kubectl apply -f delete-index-job.yaml
+kubectl logs -n search -f job/opensearch-delete-index
+```
+
+## Configuration
 
 ### Environment Variables
 
-The full-migration job supports several environment variables:
+The jobs support these environment variables:
 
 | Variable | Description | Default |
 |----------|-------------|---------|
-| `OPENSEARCH_URL` | OpenSearch endpoint URL | Read from `search-indexer-secrets` secret |
+| `OPENSEARCH_URL` | OpenSearch endpoint URL | Read from `opensearch-credentials` secret |
 | `INDEX_ALIAS` | Index alias name | `entities` |
-| `SOURCE_VERSION` | Source index version | Required (set in job YAML) |
-| `TARGET_VERSION` | Target index version | Required (set in job YAML) |
+| `SOURCE_VERSION` | Source index version (full-migration only) | Required (set in job YAML) |
+| `TARGET_VERSION` | Target index version (full-migration only) | Required (set in job YAML) |
+| `INDEX_VERSION` | Index version (individual jobs) | Required (set in job YAML) |
 | `RUST_LOG` | Log level (debug, info, warn, error) | `info` |
 
-Examples:
-```bash
-# Get OpenSearch URL from the secret
-kubectl get secret search-indexer-secrets -n search -o jsonpath='{.data.OPENSEARCH_URL}' | base64 -d
+### Getting the OpenSearch URL
 
-# Enable debug logging by editing the job YAML
-# Add to env section:
-# - name: RUST_LOG
-#   value: "debug"
+```bash
+kubectl get secret opensearch-credentials -n search -o jsonpath='{.data.OPENSEARCH_URL}' | base64 -d
+```
+
+### Enabling Debug Logging
+
+Edit the job YAML and add to the env section:
+```yaml
+- name: RUST_LOG
+  value: "debug"
 ```
 
 ## How It Works
@@ -63,7 +212,7 @@ The migration jobs use a Docker image built and pushed by GitHub Actions:
 ### What's in the Image
 
 The Docker image contains:
-- `search-admin` Rust CLI binary with Kubernetes client
+- `search-admin` Rust binary with Kubernetes client
 - Index configuration from `search-indexer-repository/src/opensearch/index_config.rs`
 - OpenSearch client libraries
 - Kubernetes client (kube-rs) for deployment management
@@ -75,52 +224,6 @@ This ensures:
 - ✅ Consistent behavior across environments
 - ✅ Everyone uses the same CI/CD-built image
 - ✅ Self-contained migrations (no shell scripts required)
-
-## Available Commands
-
-### Full Migration (Recommended)
-
-Run the complete migration workflow as a Kubernetes Job:
-
-```bash
-# Run the migration (e.g., from v2 to v3)
-./run-full-migration.sh 2 3
-```
-
-The script will:
-- Clean up any previous migration job
-- Create a new job with the specified versions
-- Automatically follow the logs
-- Show verification commands when complete
-
-**Alternative: Edit and apply YAML directly**
-
-If you prefer to customize the job configuration:
-```bash
-# Edit full-migration-job.yaml to set SOURCE_VERSION and TARGET_VERSION
-kubectl apply -f full-migration-job.yaml
-kubectl logs -n search -f job/opensearch-full-migration
-```
-
-### Individual Commands
-
-For debugging or manual operations, individual commands are available as separate jobs:
-
-```bash
-# List all indices and aliases
-kubectl apply -f list-indices-job.yaml
-kubectl logs -n search -f job/opensearch-list-indices
-
-# Create a new index (for testing)
-# Edit create-index-job.yaml to set INDEX_VERSION
-kubectl apply -f create-index-job.yaml
-kubectl logs -n search -f job/opensearch-create-index
-
-# Delete old index (after verification)
-# Edit delete-index-job.yaml to set INDEX_VERSION and CONFIRM_DELETE=true
-kubectl apply -f delete-index-job.yaml
-kubectl logs -n search -f job/opensearch-delete-index
-```
 
 ## Troubleshooting
 
@@ -137,12 +240,12 @@ Error: Failed to pull image "registry.digitalocean.com/geo/search-admin:latest"
 ### Secret Not Found
 
 ```
-Error: secrets "search-indexer-secrets" not found
+Error: secrets "opensearch-credentials" not found
 ```
 
 **Solution**:
 ```bash
-kubectl create secret generic search-indexer-secrets \
+kubectl create secret generic opensearch-credentials \
   --from-literal=OPENSEARCH_URL=https://your-opensearch-url:9200 \
   -n search
 ```
@@ -154,7 +257,7 @@ If jobs hang or fail:
 **Check OpenSearch connectivity**:
 ```bash
 # Get the OpenSearch URL from the secret
-OPENSEARCH_URL=$(kubectl get secret search-indexer-secrets -n search -o jsonpath='{.data.OPENSEARCH_URL}' | base64 -d)
+OPENSEARCH_URL=$(kubectl get secret opensearch-credentials -n search -o jsonpath='{.data.OPENSEARCH_URL}' | base64 -d)
 echo $OPENSEARCH_URL
 
 # Test connectivity from within the cluster
@@ -167,7 +270,7 @@ kubectl run -it --rm debug --image=curlimages/curl --restart=Never -n search -- 
 kubectl get jobs -n search
 
 # View pods (including completed jobs)
-kubectl get pods -n search --show-all
+kubectl get pods -n search
 
 # Check job logs
 kubectl logs -n search job/<job-name>
@@ -176,18 +279,23 @@ kubectl logs -n search job/<job-name>
 kubectl describe pod <pod-name> -n search
 ```
 
+### Permission Errors
+
+If you get permission errors, verify with your Kubernetes administrator that:
+1. Your ServiceAccount has permissions to create/manage jobs
+2. The `search-admin` ServiceAccount exists with permissions to manage deployments
+
 ## Safety Features
 
 - ✅ **Pre-flight Checks**: Validates index existence and deployment status before migrations
 - ✅ **Detailed Logging**: All operations log progress and results with structured tracing
 - ✅ **Error Handling**: Clear error messages with suggested fixes
-- ✅ **Type Safety**: Rust CLI ensures type-safe operations and configuration reuse
+- ✅ **Type Safety**: Rust tool ensures type-safe operations and configuration reuse
 - ✅ **Kubernetes Jobs**: Declarative job definitions with automatic retry on failure
-
 
 ## Additional Documentation
 
 For more detailed information:
-- **CLI Tool**: See `search-admin/README.md` for command reference
+- **Search Admin Tool**: See `search-admin/README.md` for command reference
 - **CI/CD Pipeline**: See `.github/workflows/search-admin-build.yml`
 - **Index Config**: See `search-indexer-repository/src/opensearch/index_config.rs`

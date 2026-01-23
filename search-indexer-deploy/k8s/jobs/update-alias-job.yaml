@@ -2,24 +2,24 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: opensearch-list-indices
+  name: opensearch-update-alias
   namespace: search
   labels:
     app: opensearch-admin
-    task: list-indices
+    task: update-alias
 spec:
   # Keep job history for debugging
   ttlSecondsAfterFinished: 86400  # 24 hours
-  backoffLimit: 1
+  backoffLimit: 3
   template:
     metadata:
       labels:
         app: opensearch-admin
-        task: list-indices
+        task: update-alias
     spec:
-      restartPolicy: Never
+      restartPolicy: OnFailure
       containers:
-      - name: list-indices
+      - name: update-alias
         image: registry.digitalocean.com/geo/search-admin:latest  # Update with your registry
         env:
         - name: OPENSEARCH_URL
@@ -29,19 +29,15 @@ spec:
               key: OPENSEARCH_URL
         - name: INDEX_ALIAS
           value: "entities"  # Default alias name
-        - name: SHOW_DETAILED
-          value: "true"  # Set to "false" for simple list
+        - name: TARGET_VERSION
+          value: "3"  # CHANGE THIS: Index version to point the alias to
         - name: RUST_LOG
           value: "info"
         command:
-        - /bin/sh
-        - -c
-        - |
-          if [ "$SHOW_DETAILED" = "true" ]; then
-            search-admin list-indices --detailed
-          else
-            search-admin list-indices
-          fi
+        - search-admin
+        - update-alias
+        - --version
+        - "$(TARGET_VERSION)"
         resources:
           requests:
             memory: "128Mi"

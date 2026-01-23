@@ -83,23 +83,86 @@ done
 kubectl wait --for=condition=ready pod -l app=opensearch -n search --timeout=300s
 
 echo "==> Creating secret..."
-kubectl create secret generic search-indexer-secrets \
+kubectl create secret generic opensearch-credentials \
   --from-literal=OPENSEARCH_URL=http://opensearch.search.svc.cluster.local:9200 \
   -n search
+
+echo "==> Creating ServiceAccount and RBAC for search-admin..."
+kubectl apply -f - <<EOF
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: search-admin
+  namespace: search
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: search-admin-role
+  namespace: search
+rules:
+- apiGroups: ["apps"]
+  resources: ["deployments"]
+  verbs: ["get", "list", "patch", "update"]
+- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: search-admin-binding
+  namespace: search
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: search-admin-role
+subjects:
+- kind: ServiceAccount
+  name: search-admin
+  namespace: search
+EOF
 
 echo "==> Building and loading image..."
 docker build -f "$REPO_ROOT/search-admin/Dockerfile" -t search-admin:local "$REPO_ROOT"
 kind load docker-image search-admin:local --name search-test
 
-echo "==> Configuring for local image..."
-cd "$REPO_ROOT/search-indexer-deploy/k8s/jobs"
-
-# Set environment variables to use local image
-export SEARCH_ADMIN_IMAGE="search-admin:local"
-export SEARCH_ADMIN_IMAGE_PULL_POLICY="Never"
-
 echo "==> Creating initial index..."
-echo "yes" | "$REPO_ROOT/search-admin/kubectl-search-admin.sh" create-index --version 1
+kubectl apply -f - <<EOF
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: opensearch-create-index-v1
+  namespace: search
+spec:
+  ttlSecondsAfterFinished: 300
+  backoffLimit: 3
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: create-index
+        image: search-admin:local
+        imagePullPolicy: Never
+        env:
+        - name: OPENSEARCH_URL
+          value: "http://opensearch.search.svc.cluster.local:9200"
+        - name: INDEX_ALIAS
+          value: "entities"
+        - name: INDEX_VERSION
+          value: "1"
+        - name: RUST_LOG
+          value: "info"
+        command:
+        - search-admin
+        - create-index
+        - --version
+        - "1"
+        - --skip-if-exists
+EOF
+
+kubectl wait --for=condition=complete job/opensearch-create-index-v1 -n search --timeout=60s
+kubectl logs -n search job/opensearch-create-index-v1
 
 echo "==> Adding test data..."
 kubectl port-forward -n search svc/opensearch 9200:9200 &
@@ -128,7 +191,40 @@ echo ""
 kill $PF_PID 2>/dev/null || true
 
 echo "==> Updating alias..."
-echo "yes" | "$REPO_ROOT/search-admin/kubectl-search-admin.sh" update-alias --version 1
+kubectl apply -f - <<EOF
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: opensearch-update-alias-v1
+  namespace: search
+spec:
+  ttlSecondsAfterFinished: 300
+  backoffLimit: 3
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+      - name: update-alias
+        image: search-admin:local
+        imagePullPolicy: Never
+        env:
+        - name: OPENSEARCH_URL
+          value: "http://opensearch.search.svc.cluster.local:9200"
+        - name: INDEX_ALIAS
+          value: "entities"
+        - name: TARGET_VERSION
+          value: "1"
+        - name: RUST_LOG
+          value: "info"
+        command:
+        - search-admin
+        - update-alias
+        - --version
+        - "1"
+EOF
+
+kubectl wait --for=condition=complete job/opensearch-update-alias-v1 -n search --timeout=60s
+kubectl logs -n search job/opensearch-update-alias-v1
 
 echo "==> Deploying test indexer..."
 kubectl apply -f - <<EOF

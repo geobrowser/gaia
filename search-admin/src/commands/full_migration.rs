@@ -5,6 +5,7 @@ use kube::{
     api::{Api, Patch, PatchParams},
     Client,
 };
+use opensearch::OpenSearch;
 use serde_json::json;
 use std::time::Duration;
 use tokio::time::sleep;
@@ -12,6 +13,7 @@ use tracing::{info, warn};
 
 use search_indexer_repository::opensearch::{get_index_settings, get_versioned_index_name};
 
+use crate::commands::get;
 use crate::opensearch_client;
 
 #[derive(Args)]
@@ -54,6 +56,21 @@ impl FullMigrationCommand {
         println!("Target Index: {}", target_index);
         println!();
 
+        // Initialize OpenSearch client (used by all steps)
+        let client = opensearch_client::create_client(opensearch_url)?;
+
+        // Pre-flight check: Verify source index exists
+        println!("Verifying source index exists...");
+        let source_exists = get::index_exists(&client, &source_index).await?;
+
+        if !source_exists {
+            anyhow::bail!(
+                "Source index '{}' does not exist. Cannot proceed with migration.",
+                source_index
+            );
+        }
+        println!("✓ Source index exists\n");
+
         // Initialize Kubernetes client
         let k8s_client = Client::try_default()
             .await
@@ -62,17 +79,17 @@ impl FullMigrationCommand {
         let deployments: Api<Deployment> = Api::namespaced(k8s_client.clone(), &self.namespace);
 
         // Step 1: Create new index
-        self.step_create_index(opensearch_url, index_alias).await?;
+        self.step_create_index(&client, index_alias).await?;
 
         // Step 2: Stop search-indexer
         self.step_stop_indexer(&deployments).await?;
 
         // Step 3: Reindex data
-        self.step_reindex(opensearch_url, index_alias, &source_index, &target_index)
+        self.step_reindex(&client, index_alias, &source_index, &target_index)
             .await?;
 
         // Step 4: Update alias
-        self.step_update_alias(opensearch_url, index_alias).await?;
+        self.step_update_alias(&client, index_alias).await?;
 
         // Step 5: Start search-indexer with new version
         self.step_start_indexer(&deployments).await?;
@@ -89,13 +106,16 @@ impl FullMigrationCommand {
         println!("  2. Verify search functionality in your application");
         println!();
         println!("  3. After a few days of stable operation, delete the old index:");
-        println!("     search-admin delete-index --version {} --confirm --yes", self.source_version);
+        println!("     Edit delete-index-job.yaml (set INDEX_VERSION={}, CONFIRM_DELETE=true)", self.source_version);
+        println!("     kubectl delete job opensearch-delete-index -n {} 2>/dev/null || true", self.namespace);
+        println!("     kubectl apply -f delete-index-job.yaml");
+        println!("     kubectl logs -n {} -f job/opensearch-delete-index", self.namespace);
         println!();
 
         Ok(())
     }
 
-    async fn step_create_index(&self, opensearch_url: &str, _index_alias: &str) -> Result<()> {
+    async fn step_create_index(&self, client: &OpenSearch, _index_alias: &str) -> Result<()> {
         println!("────────────────────────────────────────────────");
         println!("Step 1/5: Creating New Index");
         println!("────────────────────────────────────────────────\n");
@@ -105,20 +125,10 @@ impl FullMigrationCommand {
             "Creating index"
         );
 
-        let client = opensearch_client::create_client(opensearch_url)?;
         let versioned_index_name = get_versioned_index_name(Some(self.target_version));
 
         // Check if index exists
-        let index_exists = client
-            .indices()
-            .exists(opensearch::indices::IndicesExistsParts::Index(&[
-                &versioned_index_name,
-            ]))
-            .send()
-            .await
-            .context("Failed to check if index exists")?
-            .status_code()
-            .is_success();
+        let index_exists = get::index_exists(client, &versioned_index_name).await?;
 
         if index_exists {
             info!(
@@ -197,7 +207,7 @@ impl FullMigrationCommand {
 
     async fn step_reindex(
         &self,
-        opensearch_url: &str,
+        client: &OpenSearch,
         _index_alias: &str,
         source_index: &str,
         target_index: &str,
@@ -212,32 +222,14 @@ impl FullMigrationCommand {
             "Starting reindex"
         );
 
-        let client = opensearch_client::create_client(opensearch_url)?;
-
         // Verify source index exists
-        let source_exists = client
-            .indices()
-            .exists(opensearch::indices::IndicesExistsParts::Index(&[source_index]))
-            .send()
-            .await
-            .context("Failed to check if source index exists")?
-            .status_code()
-            .is_success();
-
+        let source_exists = get::index_exists(client, source_index).await?;
         if !source_exists {
             anyhow::bail!("Source index {} does not exist", source_index);
         }
 
         // Verify target index exists
-        let target_exists = client
-            .indices()
-            .exists(opensearch::indices::IndicesExistsParts::Index(&[target_index]))
-            .send()
-            .await
-            .context("Failed to check if target index exists")?
-            .status_code()
-            .is_success();
-
+        let target_exists = get::index_exists(client, target_index).await?;
         if !target_exists {
             anyhow::bail!("Target index {} does not exist", target_index);
         }
@@ -422,7 +414,7 @@ impl FullMigrationCommand {
         Ok(())
     }
 
-    async fn step_update_alias(&self, opensearch_url: &str, index_alias: &str) -> Result<()> {
+    async fn step_update_alias(&self, client: &OpenSearch, index_alias: &str) -> Result<()> {
         println!("────────────────────────────────────────────────");
         println!("Step 4/5: Updating Alias");
         println!("────────────────────────────────────────────────\n");
@@ -433,7 +425,6 @@ impl FullMigrationCommand {
             "Updating alias"
         );
 
-        let client = opensearch_client::create_client(opensearch_url)?;
         let new_index = get_versioned_index_name(Some(self.target_version));
 
         // Get current alias target(s)
