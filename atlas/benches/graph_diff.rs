@@ -156,7 +156,7 @@ fn mutate_positions(
         );
     }
 
-    let mut movable: Vec<SpaceId> = new_ids.iter().copied().collect();
+    let mut movable: Vec<SpaceId> = new_ids.to_vec();
     movable.shuffle(rng);
     for id in movable.into_iter().take(move_count.min(new_ids.len())) {
         if let Some(pos) = positions.get_mut(&id) {
