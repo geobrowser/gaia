@@ -510,7 +510,7 @@ fn format_iso_date(days: i32, offset_min: i16) -> String {
         .and_then(|epoch| epoch.checked_add_signed(chrono::Duration::days(days as i64)))
         .expect("invalid date value");
     let offset = FixedOffset::east_opt(offset_min as i32 * 60).expect("invalid date offset");
-    format!("{}{}", date.format("%Y-%m-%d"), offset.to_string())
+    format!("{}{}", date.format("%Y-%m-%d"), offset)
 }
 
 fn format_iso_time(time_us: i64, offset_min: i16) -> String {
@@ -524,7 +524,7 @@ fn format_iso_time(time_us: i64, offset_min: i16) -> String {
     } else {
         time.format("%H:%M:%S%.6f").to_string()
     };
-    format!("{}{}", time_str, offset.to_string())
+    format!("{}{}", time_str, offset)
 }
 
 fn format_iso_datetime(epoch_us: i64, offset_min: i16) -> String {
