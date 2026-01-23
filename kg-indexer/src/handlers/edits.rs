@@ -2,11 +2,11 @@ use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 
+use chrono::{FixedOffset, NaiveDate, NaiveTime, SecondsFormat, TimeZone, Utc};
 use grc_20::{
     decode_edit, Edit as Grc20Edit, Id as Grc20Id, Op as Grc20Op, PropertyValue,
     UnsetRelationField, Value as Grc20Value,
 };
-use chrono::{FixedOffset, NaiveDate, NaiveTime, SecondsFormat, TimeZone, Utc};
 use hermes_schema::pb::knowledge::HermesEdit;
 use uuid::Uuid;
 
@@ -509,8 +509,7 @@ fn format_iso_date(days: i32, offset_min: i16) -> String {
     let date = NaiveDate::from_ymd_opt(1970, 1, 1)
         .and_then(|epoch| epoch.checked_add_signed(chrono::Duration::days(days as i64)))
         .expect("invalid date value");
-    let offset = FixedOffset::east_opt(offset_min as i32 * 60)
-        .expect("invalid date offset");
+    let offset = FixedOffset::east_opt(offset_min as i32 * 60).expect("invalid date offset");
     format!("{}{}", date.format("%Y-%m-%d"), offset.to_string())
 }
 
@@ -519,8 +518,7 @@ fn format_iso_time(time_us: i64, offset_min: i16) -> String {
     let micros = (time_us % 1_000_000) as u32;
     let time = NaiveTime::from_num_seconds_from_midnight_opt(secs, micros * 1000)
         .expect("invalid time value");
-    let offset = FixedOffset::east_opt(offset_min as i32 * 60)
-        .expect("invalid time offset");
+    let offset = FixedOffset::east_opt(offset_min as i32 * 60).expect("invalid time offset");
     let time_str = if micros == 0 {
         time.format("%H:%M:%S").to_string()
     } else {
@@ -536,8 +534,7 @@ fn format_iso_datetime(epoch_us: i64, offset_min: i16) -> String {
         .timestamp_opt(secs, micros * 1000)
         .single()
         .expect("invalid datetime value");
-    let offset = FixedOffset::east_opt(offset_min as i32 * 60)
-        .expect("invalid datetime offset");
+    let offset = FixedOffset::east_opt(offset_min as i32 * 60).expect("invalid datetime offset");
     utc.with_timezone(&offset)
         .to_rfc3339_opts(SecondsFormat::Micros, false)
 }
