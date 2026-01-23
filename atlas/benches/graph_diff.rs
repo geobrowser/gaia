@@ -242,25 +242,23 @@ fn diff_btree(old: &BTreeMap<SpaceId, Position>, new: &BTreeMap<SpaceId, Positio
                 }
                 break;
             }
-            (Some((old_id, old_pos)), Some((new_id, new_pos))) => {
-                match old_id.cmp(new_id) {
-                    Ordering::Equal => {
-                        if *old_pos != *new_pos {
-                            changes += 2;
-                        }
-                        old_iter.next();
-                        new_iter.next();
+            (Some((old_id, old_pos)), Some((new_id, new_pos))) => match old_id.cmp(new_id) {
+                Ordering::Equal => {
+                    if *old_pos != *new_pos {
+                        changes += 2;
                     }
-                    Ordering::Less => {
-                        changes += 1;
-                        old_iter.next();
-                    }
-                    Ordering::Greater => {
-                        changes += 1;
-                        new_iter.next();
-                    }
+                    old_iter.next();
+                    new_iter.next();
                 }
-            }
+                Ordering::Less => {
+                    changes += 1;
+                    old_iter.next();
+                }
+                Ordering::Greater => {
+                    changes += 1;
+                    new_iter.next();
+                }
+            },
         }
     }
 
@@ -307,29 +305,26 @@ fn build_bench_data_with_rate(
     pool.shuffle(&mut rng);
     let old_ids = pool.into_iter().take(size).collect::<Vec<_>>();
     let old_positions = build_positions(&old_ids, &mut rng);
-    let (_new_ids, new_positions) =
-        mutate_positions(&old_ids, &old_positions, &context.pool, change_rate, &mut rng);
+    let (_new_ids, new_positions) = mutate_positions(
+        &old_ids,
+        &old_positions,
+        &context.pool,
+        change_rate,
+        &mut rng,
+    );
 
-    let mut old_vec: Vec<(SpaceId, Position)> = old_positions
-        .iter()
-        .map(|(id, pos)| (*id, *pos))
-        .collect();
+    let mut old_vec: Vec<(SpaceId, Position)> =
+        old_positions.iter().map(|(id, pos)| (*id, *pos)).collect();
     old_vec.sort_unstable_by(|a, b| sort_by_space_id(&a.0, &b.0));
 
-    let mut new_vec: Vec<(SpaceId, Position)> = new_positions
-        .iter()
-        .map(|(id, pos)| (*id, *pos))
-        .collect();
+    let mut new_vec: Vec<(SpaceId, Position)> =
+        new_positions.iter().map(|(id, pos)| (*id, *pos)).collect();
     new_vec.sort_unstable_by(|a, b| sort_by_space_id(&a.0, &b.0));
 
-    let old_btree: BTreeMap<SpaceId, Position> = old_positions
-        .iter()
-        .map(|(id, pos)| (*id, *pos))
-        .collect();
-    let new_btree: BTreeMap<SpaceId, Position> = new_positions
-        .iter()
-        .map(|(id, pos)| (*id, *pos))
-        .collect();
+    let old_btree: BTreeMap<SpaceId, Position> =
+        old_positions.iter().map(|(id, pos)| (*id, *pos)).collect();
+    let new_btree: BTreeMap<SpaceId, Position> =
+        new_positions.iter().map(|(id, pos)| (*id, *pos)).collect();
 
     let id_mapping = &context.mapping;
     let next_id = id_mapping.len() as u64;
@@ -363,10 +358,7 @@ fn build_bench_data_with_rate(
 }
 
 fn build_sorted_vec(positions: &HashMap<SpaceId, Position>) -> Vec<(SpaceId, Position)> {
-    let mut vec: Vec<(SpaceId, Position)> = positions
-        .iter()
-        .map(|(id, pos)| (*id, *pos))
-        .collect();
+    let mut vec: Vec<(SpaceId, Position)> = positions.iter().map(|(id, pos)| (*id, *pos)).collect();
     vec.sort_unstable_by(|a, b| sort_by_space_id(&a.0, &b.0));
     vec
 }
@@ -429,8 +421,7 @@ fn bench_graph_diff(c: &mut Criterion) {
         let data = build_bench_data_with_rate(&context, size, rate, 42);
         group.bench_with_input(format!("{:.3}", rate), &data, |b, data| {
             b.iter(|| {
-                let changes =
-                    diff_sorted_merge(black_box(&data.old_vec), black_box(&data.new_vec));
+                let changes = diff_sorted_merge(black_box(&data.old_vec), black_box(&data.new_vec));
                 black_box(changes);
             })
         });
