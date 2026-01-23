@@ -79,7 +79,7 @@ RUST_LOG=debug,search_indexer=debug \
 cargo run -p search-indexer --features search-indexer-repository/auto_index_creation
 ```
 
-**Note:** The `--features search-indexer-repository/auto_index_creation` flag enables automatic OpenSearch index creation for local testing. This feature is disabled by default for production safety. In production deployments, indices must be created manually using the search-admin-cli tool.
+**Note:** The `--features search-indexer-repository/auto_index_creation` flag enables automatic OpenSearch index creation for local testing. This feature is disabled by default for production safety. In production deployments, indices must be created manually using the search-admin tool.
 
 #### 4. (Optional) Run Validation Tests
 

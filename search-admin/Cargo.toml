@@ -1,5 +1,5 @@
 [package]
-name = "search-admin-cli"
+name = "search-admin"
 version = "0.1.0"
 edition = "2021"
 description = "CLI tool for managing OpenSearch indices"
@@ -13,7 +13,12 @@ search-indexer-repository = { path = "../search-indexer-repository" }
 search-indexer-shared = { path = "../search-indexer-shared" }
 
 # OpenSearch
-opensearch = "2.3.0"
+# The experimental-apis feature is required for the Tasks API in 2.3.0
+opensearch = { version = "2.3.0", features = ["experimental-apis"] }
+
+# Kubernetes client
+kube = { version = "0.95", features = ["runtime", "derive"] }
+k8s-openapi = { version = "0.23", features = ["v1_30"] }
 
 # CLI
 clap = { version = "4.5", features = ["derive", "env"] }

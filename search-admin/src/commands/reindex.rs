@@ -1,9 +1,11 @@
 use anyhow::{Context, Result};
 use clap::Args;
 use serde_json::json;
+use std::time::Duration;
+use tokio::time::sleep;
 use tracing::info;
 
-use search_indexer_repository::opensearch::index_config::get_versioned_index_name;
+use search_indexer_repository::opensearch::get_versioned_index_name;
 
 use crate::opensearch_client;
 
@@ -31,7 +33,7 @@ pub struct ReindexCommand {
 }
 
 impl ReindexCommand {
-    pub async fn execute(&self, opensearch_url: &str, index_alias: &str) -> Result<()> {
+    pub async fn execute(&self, opensearch_url: &str, _index_alias: &str) -> Result<()> {
         info!(
             source_version = self.source_version,
             target_version = self.target_version,
@@ -143,9 +145,15 @@ impl ReindexCommand {
             "Starting reindex operation..."
         );
 
+        if self.wait_for_completion {
+            println!("Starting reindex operation...");
+            println!();
+        }
+
+        // Always start as async to get task ID, then poll if wait_for_completion is true
         let reindex_response = client
             .reindex()
-            .wait_for_completion(self.wait_for_completion)
+            .wait_for_completion(false) // Always start async to get task ID
             .body(reindex_body)
             .send()
             .await
@@ -162,40 +170,110 @@ impl ReindexCommand {
             .await
             .context("Failed to parse reindex response")?;
 
-        if self.wait_for_completion {
-            // Synchronous mode - reindex completed
-            println!("✓ Reindex completed successfully!");
-            println!();
-            println!("Reindex statistics:");
-            println!("  Total: {}", response_json["total"].as_u64().unwrap_or(0));
-            println!(
-                "  Created: {}",
-                response_json["created"].as_u64().unwrap_or(0)
-            );
-            println!(
-                "  Updated: {}",
-                response_json["updated"].as_u64().unwrap_or(0)
-            );
-            println!(
-                "  Deleted: {}",
-                response_json["deleted"].as_u64().unwrap_or(0)
-            );
+        let task_id = response_json["task"]
+            .as_str()
+            .context("Failed to get task ID from response")?;
 
-            if let Some(failures) = response_json["failures"].as_array() {
-                if !failures.is_empty() {
-                    println!("  Failures: {}", failures.len());
-                    println!();
-                    println!("⚠ Warning: Some documents failed to reindex:");
-                    for (i, failure) in failures.iter().enumerate().take(5) {
-                        println!("  {}. {}", i + 1, failure);
+        println!("Task ID: {}", task_id);
+        std::io::Write::flush(&mut std::io::stdout()).ok();
+        println!();
+
+        if self.wait_for_completion {
+            // Poll the task until completion
+            println!("⏳ Waiting for reindex to complete (this may take a few minutes)...");
+            std::io::Write::flush(&mut std::io::stdout()).ok();
+            println!();
+
+            let poll_interval = Duration::from_secs(2);
+            loop {
+                let task_response = client
+                    .tasks()
+                    .get(opensearch::tasks::TasksGetParts::TaskId(task_id))
+                    .send()
+                    .await;
+
+                match task_response {
+                    Ok(response) => {
+                        let status = response.status_code();
+
+                        if status.as_u16() == 404 {
+                            // Task completed and removed from tasks API
+                            // Task completed very quickly - already removed from active tasks
+                            println!("✓ Reindex completed successfully (task finished quickly)!");
+                            println!("  Task ID: {}", task_id);
+                            println!();
+                            break;
+                        }
+
+                        if !status.is_success() {
+                            let error_body = response.text().await.unwrap_or_default();
+                            anyhow::bail!(
+                                "Failed to get task status: {} - {}",
+                                status,
+                                error_body
+                            );
+                        }
+
+                        let task_json: serde_json::Value = response
+                            .json()
+                            .await
+                            .context("Failed to parse task response")?;
+
+                        let completed = task_json["completed"].as_bool().unwrap_or(false);
+
+                        if completed {
+                            // Get the final response from the task
+                            if let Some(response_data) = task_json.get("response") {
+                                println!("✓ Reindex completed successfully!");
+                                println!("  Task ID: {}", task_id);
+                                println!();
+                                println!("Reindex statistics:");
+                                println!("  Total: {}", response_data["total"].as_u64().unwrap_or(0));
+                                println!("  Created: {}", response_data["created"].as_u64().unwrap_or(0));
+                                println!("  Updated: {}", response_data["updated"].as_u64().unwrap_or(0));
+                                println!("  Deleted: {}", response_data["deleted"].as_u64().unwrap_or(0));
+
+                                if let Some(failures) = response_data["failures"].as_array() {
+                                    if !failures.is_empty() {
+                                        println!("  Failures: {}", failures.len());
+                                        println!();
+                                        println!("⚠ Warning: Some documents failed to reindex:");
+                                        for (i, failure) in failures.iter().enumerate().take(5) {
+                                            println!("  {}. {}", i + 1, failure);
+                                        }
+                                        if failures.len() > 5 {
+                                            println!("  ... and {} more", failures.len() - 5);
+                                        }
+                                    }
+                                }
+                            }
+                            break;
+                        }
+
+                        // Show progress if available
+                        if let Some(status) = task_json.get("task").and_then(|t| t.get("status")) {
+                            if let Some(created) = status.get("created").and_then(|v| v.as_u64()) {
+                                if let Some(total) = status.get("total").and_then(|v| v.as_u64()) {
+                                    if total > 0 {
+                                        let percentage = (created as f64 / total as f64) * 100.0;
+                                        print!("\r  Progress: {:.1}% ({}/{})", percentage, created, total);
+                                        std::io::Write::flush(&mut std::io::stdout()).ok();
+                                    }
+                                }
+                            }
+                        }
                     }
-                    if failures.len() > 5 {
-                        println!("  ... and {} more", failures.len() - 5);
+                    Err(e) => {
+                        println!("⚠ Error checking task: {}", e);
                     }
                 }
-            }
 
+                sleep(poll_interval).await;
+            }
             println!();
+            println!();
+
+            // Get final document count
             println!("Getting target index document count...");
             let target_count_response = client
                 .count(opensearch::CountParts::Index(&[&target_index]))
@@ -221,15 +299,7 @@ impl ReindexCommand {
                 );
             }
         } else {
-            // Asynchronous mode - task started
-            let task_id = response_json["task"]
-                .as_str()
-                .context("Failed to get task ID from response")?;
-
-            println!("✓ Reindex task started successfully!");
-            println!();
-            println!("Task ID: {}", task_id);
-            println!();
+            // Asynchronous mode - task started, don't wait
             println!("To monitor the reindex progress, run:");
             println!("  search-admin monitor-reindex --task-id {}", task_id);
             println!();

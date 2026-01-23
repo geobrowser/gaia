@@ -65,7 +65,7 @@ fn should_allow_index_creation(version: u32) -> bool {
 ///
 /// Note: Automatic index creation is only allowed for version 0 or when the
 /// `auto_index_creation` feature is enabled. In production, indices should be
-/// created using the search-admin-cli tool.
+/// created using the search-admin tool.
 async fn ensure_versioned_index_exists(
     client: &OpenSearch,
     versioned_index_name: &str,
@@ -85,12 +85,12 @@ async fn ensure_versioned_index_exists(
                 index = %versioned_index_name,
                 version = version,
                 "Index does not exist and automatic creation is disabled. \
-                 The index should be created using the search-admin-cli tool."
+                 The index should be created using the search-admin tool."
             );
             return Err(SearchIndexError::index_creation(format!(
                 "Index '{}' does not exist. Automatic index creation is only allowed for version 0 \
                  or when compiled with the 'auto_index_creation' feature. \
-                 The index should be created using the search-admin-cli tool.",
+                 The index should be created using the search-admin tool.",
                 versioned_index_name
             )));
         }

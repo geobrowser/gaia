@@ -4,7 +4,11 @@ kind: Kustomization
 # Required secrets in `search` namespace (create before deploying):
 #   - kafka-credentials: KAFKA_BROKER, KAFKA_USERNAME, KAFKA_PASSWORD, KAFKA_SSL_CA_PEM
 #   - grafana-credentials: ADMIN_USER, ADMIN_PASSWORD
-#   - search-indexer-secrets: AXIOM_TOKEN (optional)
+#   - search-indexer-secrets: OPENSEARCH_URL (required), AXIOM_TOKEN (optional)
+#
+# For search-admin jobs (index migrations):
+#   - Contact your Kubernetes administrator for search admin credentials
+#   - Then run: cd jobs && ./run-full-migration.sh <source> <target>
 #
 # See README.md for details.
 

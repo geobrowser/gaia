@@ -1,4 +1,4 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use clap::{Parser, Subcommand};
 use tracing::{error, info};
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
@@ -7,8 +7,9 @@ mod commands;
 mod opensearch_client;
 
 use commands::{
-    create::CreateIndexCommand, delete::DeleteIndexCommand, list::ListIndicesCommand,
-    monitor::MonitorReindexCommand, reindex::ReindexCommand, update_alias::UpdateAliasCommand,
+    create::CreateIndexCommand, delete::DeleteIndexCommand,
+    full_migration::FullMigrationCommand, list::ListIndicesCommand,
+    reindex::ReindexCommand, update_alias::UpdateAliasCommand,
 };
 
 #[derive(Parser)]
@@ -42,14 +43,14 @@ enum Commands {
     /// Delete an index version
     DeleteIndex(DeleteIndexCommand),
 
-    /// Monitor a reindex task
-    MonitorReindex(MonitorReindexCommand),
-
     /// List all indices and aliases
     ListIndices(ListIndicesCommand),
 
     /// Update alias to point to a new index version
     UpdateAlias(UpdateAliasCommand),
+
+    /// Run full migration workflow (create, stop, reindex, update alias, start)
+    FullMigration(FullMigrationCommand),
 }
 
 #[tokio::main]
@@ -79,9 +80,11 @@ async fn main() -> Result<()> {
         Commands::DeleteIndex(cmd) => {
             cmd.execute(&cli.opensearch_url, &cli.index_alias).await
         }
-        Commands::MonitorReindex(cmd) => cmd.execute(&cli.opensearch_url).await,
         Commands::ListIndices(cmd) => cmd.execute(&cli.opensearch_url, &cli.index_alias).await,
         Commands::UpdateAlias(cmd) => cmd.execute(&cli.opensearch_url, &cli.index_alias).await,
+        Commands::FullMigration(cmd) => {
+            cmd.execute(&cli.opensearch_url, &cli.index_alias).await
+        }
     };
 
     if let Err(ref e) = result {

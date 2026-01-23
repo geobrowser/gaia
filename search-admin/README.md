@@ -1,6 +1,6 @@
-# search-admin-cli
+# search-admin
 
-A Rust CLI tool for managing OpenSearch indices. This tool provides commands for creating, reindexing, deleting, and monitoring OpenSearch indices used by the search-indexer.
+A Rust CLI tool for managing OpenSearch indices. This tool provides commands for creating, reindexing, deleting, and monitoring OpenSearch indices used by the search-indexer. In production, this tool should be executed as Kubernetes Jobs by administrators (see search-indexer-deploy/k8s/jobs/).
 
 ## Features
 
@@ -49,8 +49,8 @@ The CLI is automatically built and deployed via GitHub Actions. No local Docker 
 └─────────────────────┘
 ```
 
-**GitHub Actions:** `.github/workflows/search-admin-deploy.yml`
-- Triggers on push to `main` when search-admin-cli files change
+**GitHub Actions:** `.github/workflows/search-admin-build.yml`
+- Triggers on push to `main` when search-admin files change
 - Builds and pushes: `registry.digitalocean.com/geo/search-admin:latest` and `:<git-sha>`
 - Build time: ~5-10 minutes
 
@@ -58,22 +58,21 @@ The CLI is automatically built and deployed via GitHub Actions. No local Docker 
 
 ```bash
 # Make changes, commit to main (via PR or direct push)
-git add search-admin-cli/
+git add search-admin/
 git commit -m "feat: improve command"
 git push origin main
 
 # Wait for CI/CD to build (~5-10 min)
 
-# Run commands using the CI/CD-built image (no Docker needed!)
+# Run migrations using the CI/CD-built image as Kubernetes Jobs
 cd search-indexer-deploy/k8s/jobs
-./search-admin.sh list-indices
-./search-admin.sh create-index --version 3
+./run-full-migration.sh 2 3  # Migrate from v2 to v3
 ```
 
 ### Local Development
 
 ```bash
-# Build and test locally (optional)
+# Build and test locally
 cargo build --release --bin search-admin
 export OPENSEARCH_URL="http://localhost:9200"
 ./target/release/search-admin list-indices
@@ -90,14 +89,8 @@ export OPENSEARCH_URL="http://localhost:9200"
 # Create a new index version
 search-admin create-index --version 3
 
-# Reindex from v2 to v3 (async)
-search-admin reindex --source-version 2 --target-version 3
-
-# Reindex synchronously (wait for completion)
+# Reindex from v2 to v3 (wait for completion)
 search-admin reindex --source-version 2 --target-version 3 --wait-for-completion
-
-# Monitor a reindex task
-search-admin monitor-reindex --task-id "oTUltX64Vrzdnr4Z0-jU2w:123"
 
 # List all indices
 search-admin list-indices
@@ -112,36 +105,33 @@ search-admin delete-index --version 2 --confirm
 search-admin delete-index --version 2 --confirm --yes
 ```
 
-### Via kubectl wrapper (Recommended)
+### Via Kubernetes Jobs (Recommended)
 
-The easiest way to run commands in production:
+For production migrations, use the full-migration job:
 
 ```bash
 cd search-indexer-deploy/k8s/jobs
 
-# All commands use CI/CD-built image automatically
-./search-admin.sh list-indices
-./search-admin.sh create-index --version 3
-./search-admin.sh reindex --source-version 2 --target-version 3
-./search-admin.sh delete-index --version 2 --confirm
-./search-admin.sh status  # Show deployment and indices
+# Run full migration (e.g., from v2 to v3)
+./run-full-migration.sh 2 3
 ```
 
-The script:
-- Retrieves OpenSearch URL from Kubernetes secrets
-- Creates temporary pod with the latest image
-- Streams output to your terminal
-- Auto-cleans up when done
+**Prerequisites:** Contact your Kubernetes administrator for search admin credentials.
 
-### Via Kubernetes Jobs
-
-For scheduled or long-running operations:
+For debugging or individual operations:
 
 ```bash
-# Apply job YAML files from search-indexer-deploy/k8s/jobs/
+# List indices
+kubectl apply -f list-indices-job.yaml
+kubectl logs -n search -f job/opensearch-list-indices
+
+# Create index (for testing)
 kubectl apply -f create-index-job.yaml
-kubectl apply -f reindex-job.yaml
-kubectl logs -n search job/opensearch-reindex -f
+kubectl logs -n search -f job/opensearch-create-index
+
+# Delete old index (after verification)
+kubectl apply -f delete-index-job.yaml
+kubectl logs -n search -f job/opensearch-delete-index
 ```
 
 ### Environment Variables
@@ -153,6 +143,41 @@ kubectl logs -n search job/opensearch-reindex -f
 | `RUST_LOG` | Log level (trace, debug, info, warn, error) | `info` |
 
 ## Commands
+
+### full-migration
+
+Run the complete migration workflow, orchestrating all steps including Kubernetes deployment management.
+
+```bash
+search-admin full-migration \
+  --source-version <SOURCE> \
+  --target-version <TARGET> \
+  [--namespace <NAMESPACE>] \
+  [--deployment-name <NAME>]
+```
+
+**Options:**
+- `--source-version, -s <VERSION>`: Source index version (required)
+- `--target-version, -t <VERSION>`: Target index version (required)
+- `--namespace <NAMESPACE>`: Kubernetes namespace (default: `search`)
+- `--deployment-name <NAME>`: Deployment name to manage (default: `search-indexer`)
+
+**Example:**
+```bash
+search-admin full-migration --source-version 2 --target-version 3
+```
+
+**What it does:**
+1. Creates the target index with proper mappings
+2. Scales down the search-indexer deployment to 0 replicas
+3. Reindexes all data from source to target (waits for completion)
+4. Updates the alias to point to the new index
+5. Scales up the search-indexer deployment with new `ENTITIES_INDEX_VERSION`
+
+**Requirements:**
+- Requires search admin credentials from your Kubernetes administrator
+
+**Note:** This command is designed to run as a Kubernetes Job. For manual migrations, use the individual commands or the shell script wrapper.
 
 ### create-index
 
@@ -199,48 +224,18 @@ search-admin reindex \
 
 **Example:**
 ```bash
-# Async reindex (recommended for large indices)
-search-admin reindex --source-version 2 --target-version 3
-
-# Sync reindex (recommended for small indices)
+# Synchronous reindex (waits for completion)
 search-admin reindex --source-version 2 --target-version 3 --wait-for-completion
 ```
+
+**Note:** The `full-migration` command uses synchronous reindexing to ensure all steps complete successfully.
 
 **What it does:**
 1. Verifies both source and target indices exist
 2. Gets document count from source index
 3. Starts reindex operation
-4. Returns task ID (async) or waits for completion (sync)
+4. Waits for completion (when --wait-for-completion is used)
 5. Prints next steps
-
-### monitor-reindex
-
-Monitor an asynchronous reindex task.
-
-```bash
-search-admin monitor-reindex \
-  --task-id <TASK_ID> \
-  [--poll-interval <SECONDS>] \
-  [--max-wait <SECONDS>] \
-  [--wait]
-```
-
-**Options:**
-- `--task-id, -t <TASK_ID>`: Task ID to monitor (required)
-- `--poll-interval <SECONDS>`: Poll interval in seconds (default: 10)
-- `--max-wait <SECONDS>`: Maximum wait time in seconds, 0 for unlimited (default: 3600)
-- `--wait`: Block until task completes using OpenSearch wait API
-
-**Example:**
-```bash
-search-admin monitor-reindex --task-id "oTUltX64Vrzdnr4Z0-jU2w:123" --wait
-```
-
-**What it does:**
-1. Polls the task status at the specified interval
-2. Shows progress (documents created, updated, etc.)
-3. Prints final statistics when complete
-4. Checks completed tasks if task ID not found in active tasks
 
 ### list-indices
 
@@ -304,11 +299,15 @@ search-admin delete-index --version 2 --confirm --yes
 
 ## Development
 
-### Running tests
+### Running unit tests
 
 ```bash
-cargo test -p search-admin-cli
+cargo test -p search-admin
 ```
+
+### Running integration tests
+
+See [search-indexer-deploy/tests/README.md](../search-indexer-deploy/tests/README.md) for end-to-end testing with kind.
 
 ### Running locally
 
@@ -329,12 +328,19 @@ cargo build --release --bin search-admin
 strip target/release/search-admin  # Reduce binary size
 ```
 
+### Building Docker image
+
+```bash
+# From repository root
+docker build -f search-admin/Dockerfile -t search-admin:local .
+```
+
 ## Architecture
 
 The CLI is built on top of the existing search-indexer infrastructure:
 
 ```
-search-admin-cli
+search-admin
     ├── Uses: search-indexer-repository
     │   ├── opensearch::index_config (index settings)
     │   ├── opensearch::index_management (index operations)
@@ -348,6 +354,30 @@ search-admin-cli
 - **Type safety**: Rust's type system ensures correctness
 - **Consistency**: CLI uses the same OpenSearch client as the indexer
 - **Maintainability**: Changes to index config automatically apply to CLI
+
+## Local Kubernetes Testing
+
+You can test the search-admin CLI and kubernetes workflows locally using kind.
+
+**See [LOCAL_TESTING.md](./LOCAL_TESTING.md) for the complete guide.**
+
+Quick start:
+
+```bash
+# Run the automated setup script
+./search-indexer-deploy/tests/setup-test-environment.sh
+
+# Test the full migration
+./search-indexer-deploy/tests/test-full-migration.sh 1 2
+```
+
+The local testing guide includes:
+- Setting up a local kind cluster
+- Deploying OpenSearch
+- Building and loading the search-admin image
+- Adding test data
+- Running the full migration workflow
+- Troubleshooting common issues
 
 ## Troubleshooting
 
@@ -401,16 +431,18 @@ Error: Failed to pull image "registry.digitalocean.com/geo/search-admin:latest"
 ```
 
 **Solution:**
-- Check GitHub Actions: Go to Actions tab, verify "Deploy Search Admin CLI" workflow succeeded
-- Verify build triggered: Changes to `search-admin-cli/**` trigger the workflow
+- Check GitHub Actions: Go to Actions tab, verify "Build Search Admin CLI" workflow succeeded
+- Verify build triggered: Changes to `search-admin/**` trigger the workflow
 - Wait for build: CI/CD takes ~5-10 minutes
 - Check logs: Click on the workflow run to see build logs
 
 ### Testing with debug logging
 
 ```bash
-# For kubectl wrapper
-RUST_LOG=debug ./search-admin.sh list-indices
+# For Kubernetes Jobs, edit the job YAML to add:
+# env:
+#   - name: RUST_LOG
+#     value: "debug"
 
 # For local binary
 RUST_LOG=debug ./target/release/search-admin list-indices

@@ -16,7 +16,7 @@ members = [
     "search-indexer",
     "search-indexer-shared",
     "search-indexer-repository",
-    "search-admin-cli",
+    "search-admin",
 
     "sdk",
 

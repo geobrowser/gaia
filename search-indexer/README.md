@@ -54,7 +54,7 @@ The indexer follows the Consumer-Processor-Loader pattern using tokio tasks for 
 
 ### Index Management
 
-The `auto_index_creation` feature is **disabled by default** for production safety. Indices must be created manually using the `search-admin-cli` tool.
+The `auto_index_creation` feature is **disabled by default** for production safety. Indices must be created manually using the `search-admin` tool.
 
 **Local Development**: The feature can be enabled explicitly:
 - Via cargo: `cargo run --features search-indexer-repository/auto_index_creation`
@@ -65,7 +65,7 @@ The `auto_index_creation` feature is **disabled by default** for production safe
 - Kubernetes deployments
 - Release binaries
 
-See the [search-admin-cli documentation](../search-admin-cli/README.md) for manual index creation.
+See the [search-admin documentation](../search-admin/README.md) for manual index creation.
 
 ### Environment variables:
 
@@ -117,7 +117,7 @@ cp .env.example .env
 # Edit .env with your configuration
 cargo run --features search-indexer-repository/auto_index_creation
 
-# For production builds (no auto index creation - use search-admin-cli)
+# For production builds (no auto index creation - use search-admin)
 cargo build --release
 ```
 

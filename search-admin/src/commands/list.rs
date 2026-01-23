@@ -27,16 +27,13 @@ impl ListIndicesCommand {
         println!();
 
         // Get all indices matching the pattern
-        let pattern = self
-            .pattern
-            .as_deref()
-            .unwrap_or(&format!("{}*", index_alias));
+        let default_pattern = format!("{}*", index_alias);
+        let pattern = self.pattern.as_deref().unwrap_or(&default_pattern);
 
         // Get indices with stats
         let cat_response = client
             .cat()
-            .indices()
-            .index(&[pattern])
+            .indices(opensearch::cat::CatIndicesParts::Index(&[pattern]))
             .v(true)
             .h(&["index", "health", "status", "pri", "rep", "docs.count", "store.size"])
             .send()
@@ -100,7 +97,6 @@ impl ListIndicesCommand {
             let stats_response = client
                 .indices()
                 .stats(opensearch::indices::IndicesStatsParts::Index(&[pattern]))
-                .metric(&["docs", "store"])
                 .send()
                 .await
                 .context("Failed to get index statistics")?;

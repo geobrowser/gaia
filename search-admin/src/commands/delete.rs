@@ -2,7 +2,7 @@ use anyhow::{Context, Result};
 use clap::Args;
 use tracing::info;
 
-use search_indexer_repository::opensearch::index_config::get_versioned_index_name;
+use search_indexer_repository::opensearch::get_versioned_index_name;
 
 use crate::opensearch_client;
 
@@ -74,7 +74,6 @@ impl DeleteIndexCommand {
             .stats(opensearch::indices::IndicesStatsParts::Index(&[
                 &versioned_index_name,
             ]))
-            .metric(&["docs", "store"])
             .send()
             .await
             .context("Failed to get index statistics")?;

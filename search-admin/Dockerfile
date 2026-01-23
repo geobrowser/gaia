@@ -1,5 +1,5 @@
 # Multi-stage build for search-admin CLI tool
-FROM rust:1.83-slim-bookworm AS builder
+FROM rust:1.84-slim-bookworm AS builder
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y \
@@ -9,13 +9,25 @@ RUN apt-get update && apt-get install -y \
 
 WORKDIR /build
 
-# Copy workspace files
-COPY Cargo.toml Cargo.lock ./
-
-# Copy all workspace members (needed for local path dependencies)
-COPY search-admin-cli ./search-admin-cli
+# Copy only the workspace members we need
+COPY search-admin ./search-admin
 COPY search-indexer-repository ./search-indexer-repository
 COPY search-indexer-shared ./search-indexer-shared
+
+# Copy Cargo.lock for dependency resolution
+COPY Cargo.lock ./
+
+# Create a minimal workspace Cargo.toml with only the members we copied
+RUN echo '[workspace]' > Cargo.toml && \
+    echo 'members = [' >> Cargo.toml && \
+    echo '    "search-admin",' >> Cargo.toml && \
+    echo '    "search-indexer-repository",' >> Cargo.toml && \
+    echo '    "search-indexer-shared",' >> Cargo.toml && \
+    echo ']' >> Cargo.toml && \
+    echo 'resolver = "2"' >> Cargo.toml
+
+# Downgrade home crate to avoid edition 2024 requirement before building
+RUN cargo update -p home --precise 0.5.11
 
 # Build the CLI tool in release mode
 RUN cargo build --release --bin search-admin

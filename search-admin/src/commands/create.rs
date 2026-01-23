@@ -3,8 +3,7 @@ use clap::Args;
 use tracing::info;
 
 use search_indexer_repository::opensearch::{
-    index_config::{get_index_settings, get_versioned_index_name, IndexConfig},
-    index_management,
+    get_index_settings, get_versioned_index_name,
 };
 
 use crate::opensearch_client;
@@ -21,7 +20,7 @@ pub struct CreateIndexCommand {
 }
 
 impl CreateIndexCommand {
-    pub async fn execute(&self, opensearch_url: &str, index_alias: &str) -> Result<()> {
+    pub async fn execute(&self, opensearch_url: &str, _index_alias: &str) -> Result<()> {
         info!(
             version = self.version,
             skip_if_exists = self.skip_if_exists,
@@ -29,7 +28,6 @@ impl CreateIndexCommand {
         );
 
         let client = opensearch_client::create_client(opensearch_url)?;
-        let index_config = IndexConfig::new(index_alias, self.version);
         let versioned_index_name = get_versioned_index_name(Some(self.version));
 
         // Check if index exists
