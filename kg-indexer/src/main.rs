@@ -14,7 +14,6 @@ mod error;
 mod handlers;
 mod models;
 mod storage;
-mod version_buffer;
 
 use consumer::{get_event_type, parse_message, KafkaConsumer, KgMessage};
 use error::IndexerError;
