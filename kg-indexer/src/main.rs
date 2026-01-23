@@ -664,7 +664,6 @@ async fn process_buffered_block(
 
     let block_number = events[0].msg.block_number().unwrap_or(0);
 
-
     let mut counts_by_event_type: HashMap<String, u64> = HashMap::new();
     let mut counts_by_topic: HashMap<String, u64> = HashMap::new();
     let mut partition_set: Vec<i32> = Vec::new();

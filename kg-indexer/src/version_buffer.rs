@@ -98,7 +98,9 @@ impl VersionBuffer {
                 relations = op.relations.len(),
             );
 
-            let result = Self::process_op(&storage, &consumer, op).instrument(span).await;
+            let result = Self::process_op(&storage, &consumer, op)
+                .instrument(span)
+                .await;
 
             if let Err(e) = result {
                 error!(error = %e, "Failed to process versioned write");
@@ -121,7 +123,13 @@ impl VersionBuffer {
 
         // Compute version_key
         let version_key = storage
-            .insert_edit_version(op.edit_id, op.block_number, op.sequence, op.created_at, &mut tx)
+            .insert_edit_version(
+                op.edit_id,
+                op.block_number,
+                op.sequence,
+                op.created_at,
+                &mut tx,
+            )
             .await?;
 
         debug!(
