@@ -36,9 +36,6 @@ pub enum IndexerError {
 
     #[error("Config error: {0}")]
     Config(String),
-
-    #[error("Internal error: {0}")]
-    Internal(String),
 }
 
 impl IndexerError {
@@ -52,9 +49,5 @@ impl IndexerError {
 
     pub fn config(msg: impl Into<String>) -> Self {
         IndexerError::Config(msg.into())
-    }
-
-    pub fn internal(msg: impl Into<String>) -> Self {
-        IndexerError::Internal(msg.into())
     }
 }
