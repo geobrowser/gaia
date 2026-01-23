@@ -2514,8 +2514,9 @@ checksum = "0cc23270f6e1808e30a928bdc84dea0b9b4136a8bc82338574f23baf47bbd280"
 
 [[package]]
 name = "grc-20"
-version = "0.1.0"
-source = "git+https://github.com/geobrowser/grc-20#ab1b91c2c1c47ee48f534ce2dd7c3bdab5808eb8"
+version = "0.1.6"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c31e4859be4cb13548c056d82c4e1b6f6a2086ff7c4f24cf2c3a743ac0370411"
 dependencies = [
  "lazy_static",
  "rustc-hash",
