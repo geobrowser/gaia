@@ -6,6 +6,7 @@ use grc_20::{
     decode_edit, Edit as Grc20Edit, Id as Grc20Id, Op as Grc20Op, PropertyValue,
     UnsetRelationField, Value as Grc20Value,
 };
+use chrono::{FixedOffset, NaiveDate, NaiveTime, SecondsFormat, TimeZone, Utc};
 use hermes_schema::pb::knowledge::HermesEdit;
 use uuid::Uuid;
 
@@ -414,22 +415,19 @@ fn value_to_value_op(pv: &PropertyValue, entity_id: Uuid, space_id: Uuid) -> Opt
             op.bytes = Some(v.to_vec());
         }
         Grc20Value::Date { days, offset_min } => {
-            // Format: days since epoch with timezone offset
-            op.date = Some(format!("{}:{}", days, offset_min));
+            op.date = Some(format_iso_date(*days, *offset_min));
         }
         Grc20Value::Time {
             time_us,
             offset_min,
         } => {
-            // Format: microseconds since midnight with timezone offset
-            op.time = Some(format!("{}:{}", time_us, offset_min));
+            op.time = Some(format_iso_time(*time_us, *offset_min));
         }
         Grc20Value::Datetime {
             epoch_us,
             offset_min,
         } => {
-            // Format: microseconds since epoch with timezone offset
-            op.datetime = Some(format!("{}:{}", epoch_us, offset_min));
+            op.datetime = Some(format_iso_datetime(*epoch_us, *offset_min));
         }
         Grc20Value::Schedule(v) => {
             // Store as JSON string
@@ -505,6 +503,43 @@ fn format_decimal_i64(mantissa: i64, exponent: i32) -> String {
             )
         }
     }
+}
+
+fn format_iso_date(days: i32, offset_min: i16) -> String {
+    let date = NaiveDate::from_ymd_opt(1970, 1, 1)
+        .and_then(|epoch| epoch.checked_add_signed(chrono::Duration::days(days as i64)))
+        .expect("invalid date value");
+    let offset = FixedOffset::east_opt(offset_min as i32 * 60)
+        .expect("invalid date offset");
+    format!("{}{}", date.format("%Y-%m-%d"), offset.to_string())
+}
+
+fn format_iso_time(time_us: i64, offset_min: i16) -> String {
+    let secs = (time_us / 1_000_000) as u32;
+    let micros = (time_us % 1_000_000) as u32;
+    let time = NaiveTime::from_num_seconds_from_midnight_opt(secs, micros * 1000)
+        .expect("invalid time value");
+    let offset = FixedOffset::east_opt(offset_min as i32 * 60)
+        .expect("invalid time offset");
+    let time_str = if micros == 0 {
+        time.format("%H:%M:%S").to_string()
+    } else {
+        time.format("%H:%M:%S%.6f").to_string()
+    };
+    format!("{}{}", time_str, offset.to_string())
+}
+
+fn format_iso_datetime(epoch_us: i64, offset_min: i16) -> String {
+    let secs = epoch_us.div_euclid(1_000_000);
+    let micros = epoch_us.rem_euclid(1_000_000) as u32;
+    let utc = Utc
+        .timestamp_opt(secs, micros * 1000)
+        .single()
+        .expect("invalid datetime value");
+    let offset = FixedOffset::east_opt(offset_min as i32 * 60)
+        .expect("invalid datetime offset");
+    utc.with_timezone(&offset)
+        .to_rfc3339_opts(SecondsFormat::Micros, false)
 }
 
 fn extract_values(edit: &Grc20Edit, space_id: &Uuid) -> Vec<ValueOp> {
@@ -756,6 +791,35 @@ mod tests {
 
     fn make_delete_relation(id: Uuid, space_id: Uuid) -> DeleteRelationItem {
         DeleteRelationItem { id, space_id }
+    }
+
+    #[test]
+    fn test_format_iso_date() {
+        // 2024-03-15 UTC from spec example
+        assert_eq!(format_iso_date(19797, 0), "2024-03-15+00:00");
+        // 2024-03-15 in +05:30 from spec example
+        assert_eq!(format_iso_date(19797, 330), "2024-03-15+05:30");
+    }
+
+    #[test]
+    fn test_format_iso_time() {
+        assert_eq!(format_iso_time(52_200_000_000, 0), "14:30:00+00:00");
+        assert_eq!(
+            format_iso_time(52_200_500_000, 330),
+            "14:30:00.500000+05:30"
+        );
+    }
+
+    #[test]
+    fn test_format_iso_datetime() {
+        assert_eq!(
+            format_iso_datetime(1_710_513_000_000_000, 0),
+            "2024-03-15T14:30:00.000000+00:00"
+        );
+        assert_eq!(
+            format_iso_datetime(1_710_493_200_000_000, 330),
+            "2024-03-15T14:30:00.000000+05:30"
+        );
     }
 
     // ===================
