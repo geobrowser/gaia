@@ -152,7 +152,12 @@ impl IpfsFetcher for IpfsClient {
 /// use ipfs::IpfsSource;
 /// use std::collections::HashMap;
 ///
-/// // Development/testing: use mock data
+/// // Development/testing with GRC-20 v2 bytes (recommended)
+/// let mut data = HashMap::new();
+/// data.insert("QmTestCid1".to_string(), grc20_bytes);
+/// let fetcher = IpfsSource::mock_bytes(data).into_fetcher();
+///
+/// // Legacy: mock with v1 protobuf Edit (deprecated)
 /// let mut edits = HashMap::new();
 /// edits.insert("QmTestCid1".to_string(), edit1);
 /// let fetcher = IpfsSource::mock(edits).into_fetcher();
@@ -164,8 +169,16 @@ impl IpfsFetcher for IpfsClient {
 pub enum IpfsSource {
     /// Use mock IPFS client with pre-configured CID → Edit mappings.
     ///
+    /// **Deprecated**: Use `MockBytes` with GRC-20 v2 encoded bytes instead.
+    ///
     /// The map keys are CIDs (with or without `ipfs://` prefix).
     Mock(HashMap<String, Edit>),
+
+    /// Use mock IPFS client with pre-configured CID → raw bytes mappings.
+    ///
+    /// Use this with GRC-20 v2 encoded bytes (`grc_20::encode_edit`).
+    /// The map keys are CIDs (with or without `ipfs://` prefix).
+    MockBytes(HashMap<String, Vec<u8>>),
 
     /// Connect to a live IPFS gateway.
     Live {
@@ -177,6 +190,8 @@ pub enum IpfsSource {
 impl IpfsSource {
     /// Create a mock IPFS source with the given CID → Edit mappings.
     ///
+    /// **Deprecated**: Use `mock_bytes` with GRC-20 v2 encoded bytes instead.
+    ///
     /// # Example
     ///
     /// ```ignore
@@ -187,6 +202,33 @@ impl IpfsSource {
     /// ```
     pub fn mock(edits: HashMap<String, Edit>) -> Self {
         Self::Mock(edits)
+    }
+
+    /// Create a mock IPFS source with the given CID → raw bytes mappings.
+    ///
+    /// Use this with GRC-20 v2 encoded bytes (`grc_20::encode_edit`).
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use grc_20::{encode_edit, Edit};
+    /// use std::borrow::Cow;
+    ///
+    /// let edit = Edit {
+    ///     id: [0x01; 16],
+    ///     name: Cow::Borrowed("Test Edit"),
+    ///     authors: vec![],
+    ///     created_at: 1700000000,
+    ///     ops: vec![],
+    /// };
+    /// let bytes = encode_edit(&edit).unwrap();
+    ///
+    /// let mut data = HashMap::new();
+    /// data.insert("QmTestCid1".to_string(), bytes);
+    /// let source = IpfsSource::mock_bytes(data);
+    /// ```
+    pub fn mock_bytes(data: HashMap<String, Vec<u8>>) -> Self {
+        Self::MockBytes(data)
     }
 
     /// Create a live IPFS source with the given gateway URL.
@@ -208,6 +250,7 @@ impl IpfsSource {
     pub fn into_fetcher(self) -> Box<dyn IpfsFetcher> {
         match self {
             Self::Mock(edits) => Box::new(MockIpfsClient::with_edits(edits)),
+            Self::MockBytes(data) => Box::new(MockIpfsClient::with_bytes(data)),
             Self::Live { gateway_url } => Box::new(IpfsClient::new(&gateway_url)),
         }
     }

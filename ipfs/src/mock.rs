@@ -1,15 +1,37 @@
 //! Mock IPFS client for testing and local development.
 //!
-//! The `MockIpfsClient` can be pre-populated with CID → Edit mappings,
+//! The `MockIpfsClient` can be pre-populated with CID → bytes mappings,
 //! allowing tests to run without network access.
 //!
-//! # Example
+//! # Example (GRC-20 v2)
+//!
+//! ```ignore
+//! use ipfs::{MockIpfsClient, IpfsFetcher};
+//! use grc_20::{encode_edit, Edit, Op, CreateEntity, PropertyValue, Value};
+//! use std::borrow::Cow;
+//!
+//! // Create GRC-20 v2 edit bytes
+//! let edit = Edit {
+//!     id: [0x01; 16],
+//!     name: Cow::Borrowed("Test Edit"),
+//!     authors: vec![[0x02; 16]],
+//!     created_at: 1700000000,
+//!     ops: vec![],
+//! };
+//! let bytes = encode_edit(&edit).unwrap();
+//!
+//! let client = MockIpfsClient::new();
+//! client.register_bytes("QmTestCid123", bytes);
+//! let fetched = client.get_bytes("ipfs://QmTestCid123").await?;
+//! ```
+//!
+//! # Legacy Example (v1 protobuf)
 //!
 //! ```ignore
 //! use ipfs::{MockIpfsClient, IpfsFetcher};
 //! use wire::pb::grc20::Edit;
 //!
-//! // Create a mock client with pre-populated edits
+//! // Legacy v1 protobuf Edit (deprecated, use GRC-20 v2)
 //! let edits = vec![
 //!     ("QmTestCid123".to_string(), Edit {
 //!         id: vec![0x01],
@@ -51,6 +73,8 @@ impl MockIpfsClient {
 
     /// Create a mock client pre-populated with the given CID → Edit mappings.
     ///
+    /// **Deprecated**: Use `with_bytes` with GRC-20 v2 encoded bytes instead.
+    ///
     /// # Example
     ///
     /// ```ignore
@@ -67,12 +91,54 @@ impl MockIpfsClient {
         client
     }
 
-    /// Register an edit to be returned for a given CID.
+    /// Create a mock client pre-populated with the given CID → bytes mappings.
+    ///
+    /// Use this with GRC-20 v2 encoded bytes (`grc_20::encode_edit`).
+    ///
+    /// # Example
+    ///
+    /// ```ignore
+    /// use grc_20::{encode_edit, Edit};
+    /// use std::borrow::Cow;
+    ///
+    /// let edit = Edit {
+    ///     id: [0x01; 16],
+    ///     name: Cow::Borrowed("Test Edit"),
+    ///     authors: vec![],
+    ///     created_at: 1700000000,
+    ///     ops: vec![],
+    /// };
+    /// let bytes = encode_edit(&edit).unwrap();
+    ///
+    /// let mut data = HashMap::new();
+    /// data.insert("QmCid1".to_string(), bytes);
+    /// let client = MockIpfsClient::with_bytes(data);
+    /// ```
+    pub fn with_bytes(data: HashMap<String, Vec<u8>>) -> Self {
+        let client = Self::new();
+        for (cid, bytes) in data {
+            client.register_bytes(&cid, bytes);
+        }
+        client
+    }
+
+    /// Register an edit to be returned for a given CID (legacy v1 protobuf).
     ///
     /// The CID can be provided with or without the `ipfs://` prefix.
+    ///
+    /// **Deprecated**: Use `register_bytes` with GRC-20 v2 encoded bytes instead.
     pub fn register_edit(&self, cid: &str, edit: Edit) {
         let normalized_cid = normalize_cid(cid);
         let bytes = edit.encode_to_vec();
+        self.edits.write().unwrap().insert(normalized_cid, bytes);
+    }
+
+    /// Register raw bytes to be returned for a given CID.
+    ///
+    /// Use this with GRC-20 v2 encoded bytes (`grc_20::encode_edit`).
+    /// The CID can be provided with or without the `ipfs://` prefix.
+    pub fn register_bytes(&self, cid: &str, bytes: Vec<u8>) {
+        let normalized_cid = normalize_cid(cid);
         self.edits.write().unwrap().insert(normalized_cid, bytes);
     }
 

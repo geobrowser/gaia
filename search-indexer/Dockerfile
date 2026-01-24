@@ -48,6 +48,10 @@ ENV OPENSEARCH_URL=http://opensearch:9200
 ENV KAFKA_BROKER=kafka:29092
 ENV KAFKA_GROUP_ID=search-indexer
 ENV OPENSEARCH_CONNECTION_MODE=retry
+ENV HEALTH_PORT=8080
+
+# Expose health check port
+EXPOSE 8080
 
 # Run as non-root user
 USER appuser

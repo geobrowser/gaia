@@ -1,0 +1,66 @@
+name: Deploy Scoring Cronjob (Staging)
+
+on:
+  push:
+    branches:
+      - dev
+    paths:
+      - 'scoring-service/cronjob/**'
+      - 'scoring-service/deployment/staging/cronjob.yaml'
+      - '.github/workflows/scoring-cronjob-deploy-staging.yml'
+
+concurrency:
+  group: scoring-cronjob-staging
+  cancel-in-progress: true
+
+env:
+  REGISTRY: registry.digitalocean.com/geo
+  IMAGE_NAME: scoring-service
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6.0.1
+
+      - name: Install doctl
+        uses: digitalocean/action-doctl@v2.5.1
+        with:
+          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+
+      - name: Log in to DigitalOcean Container Registry
+        run: doctl registry login --expiry-seconds 1200
+
+      - name: Build and push Docker image
+        run: |
+          docker build -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
+                       -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:staging \
+                       -f scoring-service/cronjob/Dockerfile scoring-service/cronjob
+          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:staging
+
+      - name: Set up kubectl
+        uses: Azure/setup-kubectl@v4.0.1
+
+      - name: Configure kubectl for DigitalOcean
+        run: |
+          doctl kubernetes cluster kubeconfig save ${{ secrets.DIGITALOCEAN_CLUSTER_NAME }}
+
+      - name: Deploy to Kubernetes
+        run: |
+          kubectl apply -f scoring-service/deployment/staging/namespace.yaml
+          # Update image tag to use SHA and apply
+          sed -i 's|image: registry.digitalocean.com/geo/scoring-service:latest|image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}|g' scoring-service/deployment/staging/cronjob.yaml
+          kubectl apply -f scoring-service/deployment/staging/cronjob.yaml
+
+      - name: Show deployment status
+        run: |
+          echo "=== Scoring Service CronJob ==="
+          kubectl get cronjob scoring-service -n scoring-staging || echo "CronJob not found"
+          echo ""
+          echo "=== Recent Jobs ==="
+          kubectl get jobs -n scoring-staging --sort-by='.metadata.creationTimestamp' | tail -5
+          echo ""
+          echo "=== Recent Events ==="
+          kubectl get events -n scoring-staging --sort-by='.lastTimestamp' | tail -10

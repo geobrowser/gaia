@@ -34,6 +34,7 @@ pub mod cache;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use grc_20::decode_edit;
 use hermes_instrumentation::{debug, error, info, info_span, warn};
 use hermes_relay::{HermesModule, Sink};
 use hermes_substream::pb::hermes::{EditsPublished, EditsPublishedList};
@@ -353,19 +354,44 @@ async fn process_edit_event(
 
     let item = match result {
         Ok(bytes) => {
-            info!(
-                uri = %uri,
-                ipfs_hash = %ipfs_hash,
-                block = block_number,
-                bytes = bytes.len(),
-                "Cached IPFS content"
-            );
-            CacheItem {
-                uri,
-                data: Some(bytes),
-                block: block_timestamp.to_string(),
-                space_id,
-                is_errored: false,
+            // Validate by decoding with grc-20 (supports GRC2 and GRC2Z formats)
+            match decode_edit(&bytes) {
+                Ok(_edit) => {
+                    // Valid GRC-20 v2 format - store raw bytes
+                    info!(
+                        uri = %uri,
+                        ipfs_hash = %ipfs_hash,
+                        block = block_number,
+                        bytes = bytes.len(),
+                        "Cached IPFS content (GRC-20 v2 validated)"
+                    );
+                    CacheItem {
+                        uri,
+                        data: Some(bytes),
+                        block: block_timestamp.to_string(),
+                        space_id,
+                        is_errored: false,
+                    }
+                }
+                Err(decode_error) => {
+                    // Invalid GRC-20 format - mark as errored
+                    warn!(
+                        uri = %uri,
+                        ipfs_hash = %ipfs_hash,
+                        tags.ipfs_hash = %ipfs_hash,
+                        block = block_number,
+                        bytes = bytes.len(),
+                        error = %decode_error,
+                        "Invalid GRC-20 v2 format"
+                    );
+                    CacheItem {
+                        uri,
+                        data: None,
+                        block: block_timestamp.to_string(),
+                        space_id,
+                        is_errored: true,
+                    }
+                }
             }
         }
         Err(error) => {

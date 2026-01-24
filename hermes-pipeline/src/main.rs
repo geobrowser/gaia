@@ -431,22 +431,23 @@ impl Pipeline {
             "Batch summary"
         );
 
-        let emit_start = std::time::Instant::now();
-        info!(
-            event = "hermes_pipeline.emit_start",
-            block_number = meta.block_number,
-            cursor = %meta.cursor,
-            total_events = total,
-            counts_by_topic = ?counts_by_topic,
-            counts_by_event_type = ?counts_by_event_type,
-            "Emit start"
-        );
+        // Only emit and create spans if there's actual data
+        if total > 0 {
+            let emit_start = std::time::Instant::now();
+            info!(
+                event = "hermes_pipeline.emit_start",
+                block_number = meta.block_number,
+                cursor = %meta.cursor,
+                total_events = total,
+                counts_by_topic = ?counts_by_topic,
+                counts_by_event_type = ?counts_by_event_type,
+                "Emit start"
+            );
 
-        {
-            let _emit_span = info_span!("emit").entered();
+            let _emit_span = info_span!("emit", total_events = total).entered();
 
             // 1. Emit spaces
-            {
+            if !spaces.events.is_empty() {
                 let _span = info_span!("emit.spaces", count = spaces.events.len()).entered();
                 for event in &spaces.events {
                     self.emitter.emit(event)?;
@@ -458,7 +459,7 @@ impl Pipeline {
             }
 
             // 2. Emit membership events
-            {
+            if membership.total() > 0 {
                 let _span = info_span!("emit.membership", count = membership.total()).entered();
                 for event in &membership.roles_granted {
                     self.emitter.emit(event)?;
@@ -487,7 +488,7 @@ impl Pipeline {
             }
 
             // 3. Emit trust events
-            {
+            if trust.total() > 0 {
                 let _span = info_span!("emit.trust", count = trust.total()).entered();
                 for trust_event in &trust.events {
                     self.emitter.emit(&trust_event.event)?;
@@ -501,7 +502,7 @@ impl Pipeline {
             }
 
             // 4. Emit moderation events
-            {
+            if moderation.total() > 0 {
                 let _span = info_span!("emit.moderation", count = moderation.total()).entered();
                 for event in &moderation.editors_flagged {
                     self.emitter.emit(event)?;
@@ -538,7 +539,7 @@ impl Pipeline {
             }
 
             // 5. Emit topic declarations
-            {
+            if topics.total() > 0 {
                 let _span = info_span!("emit.topics", count = topics.total()).entered();
                 for event in &topics.topics_declared {
                     self.emitter.emit(event)?;
@@ -551,7 +552,7 @@ impl Pipeline {
             }
 
             // 6. Emit governance events
-            {
+            if governance.total() > 0 {
                 let _span = info_span!("emit.governance", count = governance.total()).entered();
                 for event in &governance.proposals_created {
                     self.emitter.emit(event)?;
@@ -589,7 +590,7 @@ impl Pipeline {
             }
 
             // 7. Emit voting events
-            {
+            if voting.total() > 0 {
                 let _span = info_span!("emit.voting", count = voting.total()).entered();
                 for event in &voting.votes {
                     self.emitter.emit(event)?;
@@ -603,7 +604,7 @@ impl Pipeline {
             }
 
             // 8. Emit edits
-            {
+            if !edits.events.is_empty() {
                 let _span = info_span!("emit.edits", count = edits.events.len()).entered();
                 for event in &edits.events {
                     self.emitter.emit(event)?;
@@ -618,10 +619,34 @@ impl Pipeline {
                     debug!(
                         name = %event.name,
                         space_id = %space_id_display,
-                        ops_count = event.ops.len(),
+                        payload_bytes = event.payload.len(),
                         "Edit published"
                     );
                 }
+            }
+
+            let emit_duration_ms = emit_start.elapsed().as_millis();
+            if sentry_enabled() {
+                info!(
+                    event = "hermes_pipeline.emit_end",
+                    block_number = meta.block_number,
+                    cursor = %meta.cursor,
+                    total_events = total,
+                    counts_by_topic = ?counts_by_topic,
+                    counts_by_event_type = ?counts_by_event_type,
+                    "Emit end"
+                );
+            } else {
+                info!(
+                    event = "hermes_pipeline.emit_end",
+                    block_number = meta.block_number,
+                    cursor = %meta.cursor,
+                    total_events = total,
+                    duration_ms = emit_duration_ms,
+                    counts_by_topic = ?counts_by_topic,
+                    counts_by_event_type = ?counts_by_event_type,
+                    "Emit end"
+                );
             }
         }
 
@@ -640,30 +665,6 @@ impl Pipeline {
         }
         if edits.fetch_failures > 0 {
             warn!(count = edits.fetch_failures, "Edit fetch failures");
-        }
-
-        let emit_duration_ms = emit_start.elapsed().as_millis();
-        if sentry_enabled() {
-            info!(
-                event = "hermes_pipeline.emit_end",
-                block_number = meta.block_number,
-                cursor = %meta.cursor,
-                total_events = total,
-                counts_by_topic = ?counts_by_topic,
-                counts_by_event_type = ?counts_by_event_type,
-                "Emit end"
-            );
-        } else {
-            info!(
-                event = "hermes_pipeline.emit_end",
-                block_number = meta.block_number,
-                cursor = %meta.cursor,
-                total_events = total,
-                duration_ms = emit_duration_ms,
-                counts_by_topic = ?counts_by_topic,
-                counts_by_event_type = ?counts_by_event_type,
-                "Emit end"
-            );
         }
 
         // Emit block summary for consumers

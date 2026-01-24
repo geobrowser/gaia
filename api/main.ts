@@ -7,6 +7,8 @@ import { cors } from "hono/cors"
 import { health } from "./src/health"
 import { graphqlServer, graphqlServerV2 } from "./src/kg/postgraphile"
 import { createSearchRouter } from "./src/search"
+import { createVersionedRouter } from "./src/versioned"
+import { db } from "./src/services/storage/storage"
 import { Environment, EnvironmentLive, make as makeEnvironment } from "./src/services/environment"
 import { uploadEdit, uploadFile, uploadFileAlternativeGateway } from "./src/services/ipfs"
 import { OpenSearchClient } from "./src/services/search"
@@ -55,6 +57,10 @@ if (opensearchUrl) {
 } else {
 	console.log("[SEARCH] Search routes disabled - OPENSEARCH_URL not set")
 }
+
+// Mount versioned entities router
+app.route("/versioned", createVersionedRouter(db))
+console.log("[VERSIONED] Versioned entity routes enabled")
 
 app.get("/", swaggerUI({url: "/openapi"}))
 

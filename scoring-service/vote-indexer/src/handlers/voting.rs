@@ -12,8 +12,8 @@ use crate::models::voting::{
 };
 
 /// Object type discriminator values (big-endian 4-byte encoding)
-const OBJECT_TYPE_ENTITY: [u8; 4] = [0x00, 0x00, 0x00, 0x01];
-const OBJECT_TYPE_RELATION: [u8; 4] = [0x00, 0x00, 0x00, 0x02];
+const OBJECT_TYPE_ENTITY: [u8; 4] = [0x00, 0x00, 0x00, 0x00];
+const OBJECT_TYPE_RELATION: [u8; 4] = [0x00, 0x00, 0x00, 0x01];
 
 /// Parse object type from 4-byte discriminator
 fn parse_object_type(bytes: &[u8]) -> Result<VoteObjectType, HandlerError> {

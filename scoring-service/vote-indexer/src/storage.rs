@@ -1,5 +1,6 @@
 //! Storage layer for vote data.
 
+use hermes_instrumentation::instrument;
 use sqlx::{PgPool, Postgres, Row};
 use uuid::Uuid;
 
@@ -33,6 +34,7 @@ impl Storage {
     ///
     /// Stores every vote event.
     /// Each vote creates a new row.
+    #[instrument(name = "vote_indexer.storage.insert_votes", skip(self, votes, tx), fields(count = votes.len()))]
     pub async fn insert_votes(
         &self,
         votes: &[VoteItem],
@@ -86,6 +88,7 @@ impl Storage {
     ///
     /// Updates the user's current vote for each object/space combination.
     /// Uses ON CONFLICT to update existing votes.
+    #[instrument(name = "vote_indexer.storage.upsert_user_votes", skip(self, votes, tx), fields(count = votes.len()))]
     pub async fn upsert_user_votes(
         &self,
         votes: &[UserVoteItem],
@@ -141,6 +144,7 @@ impl Storage {
     ///
     /// Updates the total upvotes/downvotes for each object/space combination.
     /// Uses ON CONFLICT to update existing counts.
+    #[instrument(name = "vote_indexer.storage.upsert_votes_counts", skip(self, counts, tx), fields(count = counts.len()))]
     pub async fn upsert_votes_counts(
         &self,
         counts: &[VotesCountItem],
@@ -192,6 +196,7 @@ impl Storage {
     ///
     /// Used to calculate vote deltas when processing new votes.
     /// Uses FOR UPDATE to lock rows and prevent concurrent modifications.
+    #[instrument(name = "vote_indexer.storage.get_user_votes_tx", skip(self, criteria, tx), fields(criteria_count = criteria.len()))]
     pub async fn get_user_votes_tx(
         &self,
         criteria: &[UserVoteCriteria],
@@ -247,6 +252,7 @@ impl Storage {
     ///
     /// Used to calculate updated counts when processing new votes.
     /// Uses FOR UPDATE to lock rows and prevent concurrent modifications.
+    #[instrument(name = "vote_indexer.storage.get_votes_counts_tx", skip(self, criteria, tx), fields(criteria_count = criteria.len()))]
     pub async fn get_votes_counts_tx(
         &self,
         criteria: &[VoteCountCriteria],

@@ -16,6 +16,7 @@ hermes-relay = { path = "../hermes-relay" }
 hermes-substream = { path = "../hermes-substream" }
 ipfs = { path = "../ipfs" }
 wire = { path = "../wire" }
+grc-20 = "0.1.6"
 
 anyhow = "1"
 async-trait = "0.1"

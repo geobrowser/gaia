@@ -1,0 +1,76 @@
+name: Deploy KG Indexer (Staging)
+
+on:
+  push:
+    branches:
+      - dev
+    paths:
+      - 'kg-indexer/**'
+      - 'hermes-schema/**'
+      - 'wire/**'
+      - 'indexer_utils/**'
+      - '.github/workflows/kg-indexer-deploy-staging.yml'
+
+concurrency:
+  group: kg-indexer-staging
+  cancel-in-progress: true
+
+env:
+  REGISTRY: registry.digitalocean.com/geo
+  IMAGE_NAME: kg-indexer
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install doctl
+        uses: digitalocean/action-doctl@v2
+        with:
+          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+
+      - name: Log in to DigitalOcean Container Registry
+        run: doctl registry login --expiry-seconds 1200
+
+      - name: Build and push Docker image
+        run: |
+          docker build -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
+                       -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:staging \
+                       -f kg-indexer/Dockerfile .
+          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:staging
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@v4
+
+      - name: Configure kubectl for DigitalOcean
+        run: |
+          doctl kubernetes cluster kubeconfig save ${{ secrets.DIGITALOCEAN_CLUSTER_NAME }}
+
+      - name: Deploy to Kubernetes
+        run: |
+          kubectl apply -f kg-indexer/k8s/staging/namespace.yaml
+          # Update image tag to use SHA and apply
+          sed -i 's|image: registry.digitalocean.com/geo/kg-indexer:latest|image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}|g' kg-indexer/k8s/staging/kg-indexer.yaml
+          kubectl apply -f kg-indexer/k8s/staging/kg-indexer.yaml
+
+      - name: Restart deployment to pick up new image
+        run: |
+          kubectl rollout restart deployment/kg-indexer -n knowledge-staging
+
+      - name: Wait for rollout
+        run: |
+          kubectl rollout status deployment/kg-indexer -n knowledge-staging --timeout=120s
+
+      - name: Show deployment status
+        run: |
+          echo "=== KG Indexer Deployment ==="
+          kubectl get deployment kg-indexer -n knowledge-staging
+          echo ""
+          echo "=== KG Indexer Pods ==="
+          kubectl get pods -n knowledge-staging -l app=kg-indexer
+          echo ""
+          echo "=== Recent Events ==="
+          kubectl get events -n knowledge-staging --sort-by='.lastTimestamp' | grep kg-indexer | tail -10
