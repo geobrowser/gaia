@@ -1,5 +1,5 @@
 # Multi-stage build for search-admin CLI tool
-FROM rust:1.84-slim-bookworm AS builder
+FROM rust:1.92-slim-bookworm AS builder
 
 # Install build dependencies
 RUN apt-get update && apt-get install -y \
@@ -26,10 +26,9 @@ RUN echo '[workspace]' > Cargo.toml && \
     echo ']' >> Cargo.toml && \
     echo 'resolver = "2"' >> Cargo.toml
 
-# Downgrade home crate to avoid edition 2024 requirement before building
-RUN cargo update -p home --precise 0.5.11
-
 # Build the CLI tool in release mode
+# Note: We copy Cargo.lock but don't use --locked because the workspace
+# structure here differs from the full repo (only 3 members vs all members)
 RUN cargo build --release --bin search-admin
 
 # Runtime stage

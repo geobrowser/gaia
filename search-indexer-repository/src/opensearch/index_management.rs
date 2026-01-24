@@ -78,46 +78,64 @@ async fn ensure_versioned_index_exists(
         .await
         .map_err(|e| SearchIndexError::connection(e.to_string()))?;
 
-    if !index_exists_response.status_code().is_success() {
-        // Index doesn't exist - check if we should create it automatically
-        if !should_allow_index_creation(version) {
+    let status = index_exists_response.status_code();
+
+    if !status.is_success() {
+        // Check if this is specifically a 404 (index not found)
+        if status.as_u16() == 404 {
+            // Index doesn't exist - check if we should create it automatically
+            if !should_allow_index_creation(version) {
+                error!(
+                    index = %versioned_index_name,
+                    version = version,
+                    "Index does not exist and automatic creation is disabled. \
+                     The index should be created using the search-admin tool."
+                );
+                return Err(SearchIndexError::index_creation(format!(
+                    "Index '{}' does not exist. Automatic index creation is only allowed for version 0 \
+                     or when compiled with the 'auto_index_creation' feature. \
+                     The index should be created using the search-admin tool.",
+                    versioned_index_name
+                )));
+            }
+
+            info!(index = %versioned_index_name, version = version, "Creating versioned index");
+
+            let settings = get_index_settings(Some(version));
+
+            let create_response = client
+                .indices()
+                .create(IndicesCreateParts::Index(versioned_index_name))
+                .body(settings)
+                .send()
+                .await
+                .map_err(|e| SearchIndexError::index_creation(e.to_string()))?;
+
+            let create_status = create_response.status_code();
+            if !create_status.is_success() {
+                let error_body = create_response.text().await.unwrap_or_default();
+                error!(status = %create_status, body = %error_body, "Index creation failed");
+                return Err(SearchIndexError::index_creation(format!(
+                    "Index creation failed with status {}: {}",
+                    create_status, error_body
+                )));
+            }
+
+            info!(index = %versioned_index_name, "Versioned index created successfully");
+        } else {
+            // Non-404 error (e.g., 401, 403, 500) - fail with error
+            let error_body = index_exists_response.text().await.unwrap_or_default();
             error!(
                 index = %versioned_index_name,
-                version = version,
-                "Index does not exist and automatic creation is disabled. \
-                 The index should be created using the search-admin tool."
+                status = %status,
+                body = %error_body,
+                "Failed to check if index exists"
             );
             return Err(SearchIndexError::index_creation(format!(
-                "Index '{}' does not exist. Automatic index creation is only allowed for version 0 \
-                 or when compiled with the 'auto_index_creation' feature. \
-                 The index should be created using the search-admin tool.",
-                versioned_index_name
+                "Failed to check if index '{}' exists: status {} - {}",
+                versioned_index_name, status, error_body
             )));
         }
-
-        info!(index = %versioned_index_name, version = version, "Creating versioned index");
-
-        let settings = get_index_settings(Some(version));
-
-        let create_response = client
-            .indices()
-            .create(IndicesCreateParts::Index(versioned_index_name))
-            .body(settings)
-            .send()
-            .await
-            .map_err(|e| SearchIndexError::index_creation(e.to_string()))?;
-
-        let status = create_response.status_code();
-        if !status.is_success() {
-            let error_body = create_response.text().await.unwrap_or_default();
-            error!(status = %status, body = %error_body, "Index creation failed");
-            return Err(SearchIndexError::index_creation(format!(
-                "Index creation failed with status {}: {}",
-                status, error_body
-            )));
-        }
-
-        info!(index = %versioned_index_name, "Versioned index created successfully");
     } else {
         debug!(index = %versioned_index_name, "Versioned index already exists");
     }

@@ -97,6 +97,7 @@ impl DeleteIndexCommand {
         }
 
         // Check if index is currently active (pointed to by alias)
+        // Fail closed: if we can't determine the index is NOT active, block deletion
         info!("Checking if index is currently active...");
         let alias_response = client
             .indices()
@@ -104,30 +105,47 @@ impl DeleteIndexCommand {
                 index_alias,
             ]))
             .send()
-            .await;
+            .await
+            .context("Failed to check alias (network or auth error)")?;
 
-        if let Ok(response) = alias_response {
-            if response.status_code().is_success() {
-                let alias_json: serde_json::Value = response
-                    .json()
-                    .await
-                    .context("Failed to parse alias response")?;
+        let status = alias_response.status_code();
 
-                if alias_json
-                    .as_object()
-                    .and_then(|obj| obj.get(&versioned_index_name))
-                    .is_some()
-                {
-                    println!("❌ ERROR: Index {} is currently ACTIVE!", versioned_index_name);
-                    println!("The alias '{}' is pointing to this index.", index_alias);
-                    println!();
-                    println!("You must switch the alias to a different index before deleting.");
-                    println!("Update ENTITIES_INDEX_VERSION and restart search-indexer first.");
-                    println!();
-                    anyhow::bail!("Cannot delete active index");
-                }
+        if status.is_success() {
+            // 2xx response - check if the index is in the alias
+            let alias_json: serde_json::Value = alias_response
+                .json()
+                .await
+                .context("Failed to parse alias response")?;
+
+            if alias_json
+                .as_object()
+                .and_then(|obj| obj.get(&versioned_index_name))
+                .is_some()
+            {
+                println!("❌ ERROR: Index {} is currently ACTIVE!", versioned_index_name);
+                println!("The alias '{}' is pointing to this index.", index_alias);
+                println!();
+                println!("You must switch the alias to a different index before deleting.");
+                println!("Update ENTITIES_INDEX_VERSION and restart search-indexer first.");
+                println!();
+                anyhow::bail!("Cannot delete active index");
             }
+            // Index not in alias - safe to proceed
+        } else if status.as_u16() == 404 {
+            // 404 means alias doesn't exist - safe to proceed
+            info!("Alias '{}' not found (404) - index is not active", index_alias);
+        } else {
+            // Any other non-2xx status is ambiguous - fail closed
+            let error_body = alias_response.text().await.unwrap_or_default();
+            anyhow::bail!(
+                "Cannot verify if index is active: alias check returned status {} ({}). \
+                Refusing to delete {} until alias status can be confirmed.",
+                status,
+                error_body,
+                versioned_index_name
+            );
         }
+
         println!("✓ Index is not currently active");
         println!();
 

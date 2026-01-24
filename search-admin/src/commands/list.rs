@@ -55,35 +55,45 @@ impl ListIndicesCommand {
                 index_alias,
             ]))
             .send()
-            .await;
+            .await
+            .context("Failed to send alias query")?;
 
-        match alias_response {
-            Ok(response) if response.status_code().is_success() => {
-                let alias_json: serde_json::Value = response
-                    .json()
-                    .await
-                    .context("Failed to parse alias response")?;
+        let status = alias_response.status_code();
 
-                println!();
-                println!("Aliases:");
-                if let Some(indices) = alias_json.as_object() {
-                    for (index_name, aliases_obj) in indices {
-                        if let Some(aliases) = aliases_obj.get("aliases").and_then(|a| a.as_object())
-                        {
-                            for alias_name in aliases.keys() {
-                                println!("  {} → {}", alias_name, index_name);
-                            }
+        if status.is_success() {
+            // 2xx - parse and display aliases
+            let alias_json: serde_json::Value = alias_response
+                .json()
+                .await
+                .context("Failed to parse alias response")?;
+
+            println!();
+            println!("Aliases:");
+            if let Some(indices) = alias_json.as_object() {
+                for (index_name, aliases_obj) in indices {
+                    if let Some(aliases) = aliases_obj.get("aliases").and_then(|a| a.as_object())
+                    {
+                        for alias_name in aliases.keys() {
+                            println!("  {} → {}", alias_name, index_name);
                         }
                     }
-                } else {
-                    println!("  No aliases found for pattern '{}'", index_alias);
                 }
-            }
-            _ => {
-                println!();
-                println!("Aliases:");
+            } else {
                 println!("  No aliases found for pattern '{}'", index_alias);
             }
+        } else if status.as_u16() == 404 {
+            // 404 - alias not found
+            println!();
+            println!("Aliases:");
+            println!("  No aliases found for pattern '{}'", index_alias);
+        } else {
+            // Any other non-2xx status - surface the error
+            let error_body = alias_response.text().await.unwrap_or_default();
+            anyhow::bail!(
+                "Failed to get aliases: status {} - {}",
+                status,
+                error_body
+            );
         }
 
         if self.detailed {

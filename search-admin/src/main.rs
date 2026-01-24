@@ -66,8 +66,20 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
 
+    // Sanitize OpenSearch URL to avoid logging credentials
+    let sanitized_url = if let Ok(parsed) = url::Url::parse(&cli.opensearch_url) {
+        // Create URL without userinfo (username:password)
+        let mut sanitized = parsed.clone();
+        sanitized.set_username("").ok();
+        sanitized.set_password(None).ok();
+        sanitized.to_string()
+    } else {
+        // If parsing fails, just log a placeholder
+        "[invalid-url]".to_string()
+    };
+
     info!(
-        opensearch_url = %cli.opensearch_url,
+        opensearch_url = %sanitized_url,
         index_alias = %cli.index_alias,
         "Starting search-admin CLI"
     );

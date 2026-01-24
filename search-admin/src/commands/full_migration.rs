@@ -193,12 +193,49 @@ impl FullMigrationCommand {
 
         println!("✓ Scaled down {} to 0 replicas", self.deployment_name);
 
-        // Wait for pods to terminate
+        // Wait for pods to terminate by polling deployment status
         info!("Waiting for pods to terminate...");
         println!("  Waiting for pods to terminate...");
 
-        // Give it a few seconds for pods to start terminating
-        sleep(Duration::from_secs(5)).await;
+        let timeout = Duration::from_secs(120);
+        let start = std::time::Instant::now();
+        let mut poll_interval = Duration::from_secs(1);
+        let max_poll_interval = Duration::from_secs(5);
+
+        loop {
+            if start.elapsed() > timeout {
+                anyhow::bail!(
+                    "Timeout waiting for {} deployment to scale down to 0 replicas after {} seconds",
+                    self.deployment_name,
+                    timeout.as_secs()
+                );
+            }
+
+            // Get current deployment status
+            let deployment = deployments
+                .get(&self.deployment_name)
+                .await
+                .context("Failed to get deployment status")?;
+
+            if let Some(status) = deployment.status {
+                let ready_replicas = status.ready_replicas.or(status.available_replicas).unwrap_or(0);
+
+                if ready_replicas == 0 {
+                    info!("All replicas terminated");
+                    break;
+                }
+
+                info!(
+                    ready_replicas = ready_replicas,
+                    elapsed_secs = start.elapsed().as_secs(),
+                    "Still waiting for replicas to terminate"
+                );
+            }
+
+            // Sleep with exponential backoff
+            sleep(poll_interval).await;
+            poll_interval = std::cmp::min(poll_interval * 2, max_poll_interval);
+        }
 
         println!("✓ Search indexer stopped\n");
 
