@@ -51,8 +51,6 @@ spec:
           value: "2"  # CHANGE THIS: Source index version to copy from
         - name: TARGET_VERSION
           value: "3"  # CHANGE THIS: Target index version to copy to
-        - name: WAIT_FOR_COMPLETION
-          value: "true"  # Set to "false" for async mode (get task ID only)
         - name: RUST_LOG
           value: "info"
         command:

@@ -574,8 +574,42 @@ impl FullMigrationCommand {
         println!();
         println!("⏳ Waiting for pod to be ready...");
 
-        // Wait a bit for pod to start
-        sleep(Duration::from_secs(10)).await;
+        let timeout = Duration::from_secs(120);
+        let start = std::time::Instant::now();
+        let mut poll_interval = Duration::from_secs(2);
+        let max_poll_interval = Duration::from_secs(10);
+
+        loop {
+            if start.elapsed() > timeout {
+                anyhow::bail!(
+                    "Timeout waiting for {} deployment to become ready after {} seconds",
+                    self.deployment_name,
+                    timeout.as_secs()
+                );
+            }
+
+            let deployment = deployments
+                .get(&self.deployment_name)
+                .await
+                .context("Failed to get deployment status")?;
+
+            if let Some(status) = deployment.status {
+                let ready_replicas = status.ready_replicas.unwrap_or(0);
+                if ready_replicas >= 1 {
+                    info!("Search indexer is ready");
+                    break;
+                }
+
+                info!(
+                    ready_replicas = ready_replicas,
+                    elapsed_secs = start.elapsed().as_secs(),
+                    "Waiting for pod to become ready"
+                );
+            }
+
+            sleep(poll_interval).await;
+            poll_interval = std::cmp::min(poll_interval * 2, max_poll_interval);
+        }
 
         println!("✓ Search indexer started\n");
 
