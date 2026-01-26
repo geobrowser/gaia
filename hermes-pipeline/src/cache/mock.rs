@@ -156,10 +156,12 @@ fn create_persons_edit() -> Edit<'static> {
             Op::CreateEntity(CreateEntity {
                 id: ENTITY_PERSON_1,
                 values: vec![text_value(properties::name(), "Alice")],
+                context: None,
             }),
             Op::CreateEntity(CreateEntity {
                 id: ENTITY_PERSON_2,
                 values: vec![text_value(properties::name(), "Bob")],
+                context: None,
             }),
         ],
     }
@@ -178,10 +180,12 @@ fn create_descriptions_edit() -> Edit<'static> {
                     properties::description(),
                     "A software developer",
                 )],
+                context: None,
             }),
             Op::CreateEntity(CreateEntity {
                 id: ENTITY_PERSON_2,
                 values: vec![text_value(properties::description(), "A project manager")],
+                context: None,
             }),
         ],
     }
@@ -197,14 +201,17 @@ fn create_types_edit() -> Edit<'static> {
             Op::CreateEntity(CreateEntity {
                 id: TYPE_PERSON,
                 values: vec![text_value(properties::name(), "Person")],
+                context: None,
             }),
             Op::CreateEntity(CreateEntity {
                 id: TYPE_ORGANIZATION,
                 values: vec![text_value(properties::name(), "Organization")],
+                context: None,
             }),
             Op::CreateEntity(CreateEntity {
                 id: TYPE_PROJECT,
                 values: vec![text_value(properties::name(), "Project")],
+                context: None,
             }),
         ],
     }
@@ -243,6 +250,7 @@ fn create_org_edit() -> Edit<'static> {
                 text_value(properties::name(), "Acme Corp"),
                 text_value(properties::description(), "A technology company"),
             ],
+            context: None,
         })],
     }
 }
@@ -268,10 +276,12 @@ fn create_doc_edit() -> Edit<'static> {
             Op::CreateEntity(CreateEntity {
                 id: ENTITY_PROJECT_1,
                 values: vec![text_value(properties::name(), "Project Alpha")],
+                context: None,
             }),
             Op::CreateEntity(CreateEntity {
                 id: ENTITY_DOC_1,
                 values: vec![text_value(properties::name(), "Technical Specification")],
+                context: None,
             }),
         ],
     }
@@ -289,6 +299,7 @@ fn create_topic_edit() -> Edit<'static> {
                 text_value(properties::name(), "Blockchain Technology"),
                 text_value(properties::description(), "Distributed ledger technology"),
             ],
+            context: None,
         })],
     }
 }

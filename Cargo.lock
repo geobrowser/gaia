@@ -1239,7 +1239,7 @@ dependencies = [
  "bitflags 2.10.0",
  "cexpr",
  "clang-sys",
- "itertools 0.13.0",
+ "itertools 0.10.5",
  "proc-macro2",
  "quote",
  "regex",
@@ -2514,9 +2514,9 @@ checksum = "0cc23270f6e1808e30a928bdc84dea0b9b4136a8bc82338574f23baf47bbd280"
 
 [[package]]
 name = "grc-20"
-version = "0.1.6"
+version = "0.2.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c31e4859be4cb13548c056d82c4e1b6f6a2086ff7c4f24cf2c3a743ac0370411"
+checksum = "3589c02507a66e2ee3167d094553035aeb06e590330e3bbf0d281c0bd3b61620"
 dependencies = [
  "lazy_static",
  "rustc-hash",
@@ -2678,7 +2678,6 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
- "wire",
 ]
 
 [[package]]
@@ -2718,7 +2717,6 @@ dependencies = [
  "tracing",
  "tracing-opentelemetry",
  "uuid",
- "wire",
 ]
 
 [[package]]
@@ -3418,7 +3416,6 @@ dependencies = [
  "tracing",
  "tracing-subscriber",
  "uuid",
- "wire",
 ]
 
 [[package]]

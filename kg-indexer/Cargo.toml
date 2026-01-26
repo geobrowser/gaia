@@ -8,11 +8,10 @@ description = "Knowledge Graph indexer that consumes events from Kafka and index
 # Workspace dependencies
 hermes-schema = { path = "../hermes-schema" }
 hermes-instrumentation = { path = "../hermes-instrumentation" }
-wire = { path = "../wire" }
 indexer_utils = { path = "../indexer_utils" }
 
 # GRC-20 v2 binary format
-grc-20 = "0.1.6"
+grc-20 = "0.2.2"
 
 # Kafka
 rdkafka = { version = "0.38.0", features = ["cmake-build", "ssl", "zstd"] }
