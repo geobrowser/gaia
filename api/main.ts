@@ -1,5 +1,5 @@
 import { swaggerUI } from "@hono/swagger-ui"
-import { Duration, Effect, Either, Layer, Schedule, Schema } from "effect"
+import { Duration, Effect, Either, Schedule, Schema } from "effect"
 import { Hono } from "hono"
 import { openAPISpecs } from "hono-openapi"
 import { compress } from "hono/compress"
@@ -9,11 +9,12 @@ import { graphqlServer, graphqlServerV2 } from "./src/kg/postgraphile"
 import { createSearchRouter } from "./src/search"
 import { createVersionedRouter } from "./src/versioned"
 import { db } from "./src/services/storage/storage"
-import { Environment, EnvironmentLive, make as makeEnvironment } from "./src/services/environment"
+import { EnvironmentLive } from "./src/services/environment"
 import { uploadEdit, uploadFile, uploadFileAlternativeGateway } from "./src/services/ipfs"
 import { OpenSearchClient } from "./src/services/search"
-import { make as makeStorage, Storage } from "./src/services/storage/storage"
 import { getPublishEditCalldata } from "./src/utils/calldata"
+import { runtime } from "./src/services/runtime"
+import { requestId, canonicalRequestLogging } from "./src/middleware/requestLogging"
 
 /**
  * Currently hand-rolling a compression polyfill until Bun implements
@@ -21,16 +22,22 @@ import { getPublishEditCalldata } from "./src/utils/calldata"
  * https://github.com/oven-sh/bun/issues/1723
  */
 import "./src/compression-polyfill"
-import { NodeSdkLive } from "./src/services/telemetry"
+import { log } from "./src/services/telemetry"
 import { deployPersonalSpace } from "./src/space/deploy-personal-space"
 import { deployPublicSpace } from "./src/space/deploy-public-space"
 
-const EnvironmentLayer = Layer.effect(Environment, makeEnvironment)
-const StorageLayer = Layer.effect(Storage, makeStorage).pipe(Layer.provide(EnvironmentLayer))
-const layers = Layer.mergeAll(EnvironmentLayer, StorageLayer)
-const provideDeps = Effect.provide(layers)
+type AppEnv = {
+	Variables: {
+		requestId: string
+	}
+}
 
-const app = new Hono()
+const app = new Hono<AppEnv>()
+
+// Request ID and canonical logging middleware (before other middleware)
+app.use("*", requestId())
+app.use("*", canonicalRequestLogging())
+
 app.use("*", cors())
 app.use(
 	compress({
@@ -48,19 +55,19 @@ if (opensearchUrl) {
 	try {
 		new URL(opensearchUrl)
 	} catch (error) {
-		console.error(`[SEARCH] Invalid OPENSEARCH_URL: ${opensearchUrl}`)
+		log.error("Invalid OPENSEARCH_URL", {url: opensearchUrl})
 		throw error
 	}
 	const searchClient = new OpenSearchClient(opensearchUrl)
-	app.route("/search", createSearchRouter(searchClient))
-	console.log(`[SEARCH] Search routes enabled with OpenSearch at ${opensearchUrl}`)
+	app.route("/search", createSearchRouter(searchClient, runtime))
+	log.info("Search routes enabled", {url: opensearchUrl})
 } else {
-	console.log("[SEARCH] Search routes disabled - OPENSEARCH_URL not set")
+	log.info("Search routes disabled - OPENSEARCH_URL not set")
 }
 
 // Mount versioned entities router
-app.route("/versioned", createVersionedRouter(db))
-console.log("[VERSIONED] Versioned entity routes enabled")
+app.route("/versioned", createVersionedRouter(db, runtime))
+log.info("Versioned entity routes enabled")
 
 app.get("/", swaggerUI({url: "/openapi"}))
 
@@ -75,79 +82,88 @@ app.use("/v2/graphql", async (c) => {
 app.post("/ipfs/upload-edit", async (c) => {
 	const formData = await c.req.formData()
 	const file = formData.get("file") as File | undefined
+	const requestId = c.get("requestId") ?? "unknown"
 
-	if (!file) {
-		return new Response("No file provided", {status: 400})
-	}
+	const program = Effect.gen(function* () {
+		if (!file) {
+			yield* Effect.logWarning("No file provided")
+			return yield* Effect.fail({_tag: "ValidationError" as const, status: 400, message: "No file provided"})
+		}
 
-	const result = await Effect.runPromise(
-		Effect.either(uploadEdit(file)).pipe(
-			Effect.withSpan("/ipfs/upload-edit.uploadEdit"),
-			Effect.provide(EnvironmentLayer),
-			Effect.provide(NodeSdkLive),
-		),
+		const result = yield* uploadEdit(file).pipe(
+			Effect.mapError((error) => ({_tag: "UploadError" as const, status: 500, message: error.message})),
+		)
+
+		return result
+	}).pipe(
+		Effect.withSpan("/ipfs/upload-edit"),
+		Effect.annotateLogs({requestId, fileName: file?.name, fileSize: file?.size}),
 	)
 
-	if (Either.isLeft(result)) {
-		// @TODO: Logging/tracing
-		return new Response("Failed to upload file", {status: 500})
-	}
+	const result = await runtime.runPromise(Effect.either(program))
 
-	const cid = result.right.cid
-
-	return c.json({cid})
+	return Either.match(result, {
+		onLeft: (error) => new Response(error.message, {status: error.status}),
+		onRight: (data) => c.json({cid: data.cid}),
+	})
 })
 
 app.post("/ipfs/upload-file", async (c) => {
 	const formData = await c.req.formData()
 	const file = formData.get("file") as File | undefined
+	const requestId = c.get("requestId")
 
-	if (!file) {
-		return new Response("No file provided", {status: 400})
-	}
+	const program = Effect.gen(function* () {
+		if (!file) {
+			yield* Effect.logWarning("No file provided")
+			return yield* Effect.fail({_tag: "ValidationError" as const, status: 400, message: "No file provided"})
+		}
 
-	const result = await Effect.runPromise(
-		Effect.either(uploadFile(file)).pipe(
-			Effect.withSpan("/ipfs/upload-file.uploadFile"),
-			Effect.provide(EnvironmentLayer),
-			Effect.provide(NodeSdkLive),
-		),
+		const result = yield* uploadFile(file).pipe(
+			Effect.mapError((error) => ({_tag: "UploadError" as const, status: 500, message: error.message})),
+		)
+
+		return result
+	}).pipe(
+		Effect.withSpan("/ipfs/upload-file"),
+		Effect.annotateLogs({requestId, fileName: file?.name, fileSize: file?.size}),
 	)
 
-	if (Either.isLeft(result)) {
-		// @TODO: Logging/tracing
-		return new Response("Failed to upload file", {status: 500})
-	}
+	const result = await runtime.runPromise(Effect.either(program))
 
-	const cid = result.right.cid
-
-	return c.json({cid})
+	return Either.match(result, {
+		onLeft: (error) => new Response(error.message, {status: error.status}),
+		onRight: (data) => c.json({cid: data.cid}),
+	})
 })
 
 app.post("/ipfs/upload-file-alternative-gateway", async (c) => {
 	const formData = await c.req.formData()
 	const file = formData.get("file") as File | undefined
+	const requestId = c.get("requestId")
 
-	if (!file) {
-		return new Response("No file provided", {status: 400})
-	}
+	const program = Effect.gen(function* () {
+		if (!file) {
+			yield* Effect.logWarning("No file provided")
+			return yield* Effect.fail({_tag: "ValidationError" as const, status: 400, message: "No file provided"})
+		}
 
-	const result = await Effect.runPromise(
-		Effect.either(uploadFileAlternativeGateway(file)).pipe(
-			Effect.withSpan("/ipfs/upload-file-alternative-gateway.uploadFile"),
-			Effect.provide(EnvironmentLayer),
-			Effect.provide(NodeSdkLive),
-		),
+		const result = yield* uploadFileAlternativeGateway(file).pipe(
+			Effect.mapError((error) => ({_tag: "UploadError" as const, status: 500, message: error.message})),
+		)
+
+		return result
+	}).pipe(
+		Effect.withSpan("/ipfs/upload-file-alternative-gateway"),
+		Effect.annotateLogs({requestId, fileName: file?.name, fileSize: file?.size}),
 	)
 
-	if (Either.isLeft(result)) {
-		// @TODO: Logging/tracing
-		return new Response("Failed to upload file", {status: 500})
-	}
+	const result = await runtime.runPromise(Effect.either(program))
 
-	const cid = result.right.cid
-
-	return c.json({cid})
+	return Either.match(result, {
+		onLeft: (error) => new Response(error.message, {status: error.status}),
+		onRight: (data) => c.json({cid: data.cid}),
+	})
 })
 
 // const DeployParametersSchema = Schema.Struct({
@@ -164,191 +180,133 @@ app.post("/ipfs/upload-file-alternative-gateway", async (c) => {
 
 app.post("deploy/personal", async (c) => {
 	const {initialEditorAddress, spaceName, spaceEntityId, ops} = await c.req.json()
+	const requestId = c.get("requestId") ?? "unknown"
 
-	if (initialEditorAddress === null || spaceName === null) {
-		console.error(
-			`[SPACE][deploy] Missing required parameters to deploy a space ${JSON.stringify({initialEditorAddress, spaceName})}`,
-		)
-
-		return new Response(
-			JSON.stringify({
-				error: "Missing required parameters",
-				reason: "An initial editor account and space name are required to deploy a space.",
-			}),
-			{
+	const program = Effect.gen(function* () {
+		if (initialEditorAddress === null || spaceName === null) {
+			yield* Effect.logWarning("Missing required parameters")
+			return yield* Effect.fail({
+				_tag: "ValidationError" as const,
 				status: 400,
-			},
-		)
-	}
+				message: "Missing required parameters",
+				reason: "An initial editor account and space name are required to deploy a space.",
+			})
+		}
 
-	const deployWithRetry = Effect.retry(
-		deployPersonalSpace({
-			initialEditorAddress,
-			spaceName,
-			spaceEntityId,
-			ops,
-		}).pipe(
-			Effect.withSpan("/deploy/personal.deploySpace"),
-			Effect.annotateSpans({
+		const spaceId = yield* Effect.retry(
+			deployPersonalSpace({
 				initialEditorAddress,
 				spaceName,
 				spaceEntityId,
-			}),
-			Effect.provide(NodeSdkLive),
-			Effect.provide(EnvironmentLayer),
-		),
-		{
-			schedule: Schedule.exponential(Duration.millis(100)).pipe(
-				Schedule.jittered,
-				Schedule.compose(Schedule.elapsed),
-				Schedule.whileOutput(Duration.lessThanOrEqualTo(Duration.minutes(1))),
+				ops,
+			}).pipe(
+				Effect.withSpan("/deploy/personal.deploySpace"),
+				Effect.annotateSpans({
+					initialEditorAddress,
+					spaceName,
+					spaceEntityId,
+				}),
 			),
-			while: (error) => error._tag !== "WaitForSpaceToBeIndexedError",
-		},
+			{
+				schedule: Schedule.exponential(Duration.millis(100)).pipe(
+					Schedule.jittered,
+					Schedule.compose(Schedule.elapsed),
+					Schedule.whileOutput(Duration.lessThanOrEqualTo(Duration.minutes(1))),
+				),
+				while: (error) => error._tag !== "WaitForSpaceToBeIndexedError",
+			},
+		).pipe(
+			Effect.mapError((error) => ({
+				_tag: "DeployError" as const,
+				status: 500,
+				message: error.message,
+				reason: `Failed to deploy space. message: ${error.message} – cause: ${error.cause}`,
+			})),
+		)
+
+		return spaceId
+	}).pipe(
+		Effect.withSpan("/deploy/personal"),
+		Effect.annotateLogs({requestId, editor: initialEditorAddress, spaceName}),
 	)
 
-	const providedDeploy = deployWithRetry.pipe(provideDeps)
-
-	const result = await Effect.runPromise(
-		Effect.either(providedDeploy).pipe(Effect.annotateLogs({editor: initialEditorAddress, spaceName})),
-	)
+	const result = await runtime.runPromise(Effect.either(program))
 
 	return Either.match(result, {
-		onLeft: (error) => {
-			switch (error._tag) {
-				case "ConfigError":
-					console.error("[SPACE][deploy] Invalid server config")
-					return new Response(
-						JSON.stringify({
-							message: "Invalid server config. Please notify the server administrator.",
-							reason: "Invalid server config. Please notify the server administrator.",
-						}),
-						{
-							status: 500,
-						},
-					)
-				default:
-					console.error(
-						`[SPACE][deploy] Failed to deploy space. message: ${error.message} – cause: ${error.cause}`,
-					)
-
-					return new Response(
-						JSON.stringify({
-							message: `Failed to deploy space. message: ${error.message} – cause: ${error.cause}`,
-							reason: error.message,
-						}),
-						{
-							status: 500,
-						},
-					)
-			}
-		},
-		onRight: (spaceId) => {
-			return Response.json({spaceId})
-		},
+		onLeft: (error) =>
+			new Response(JSON.stringify({error: error.message, reason: error.reason}), {status: error.status}),
+		onRight: (spaceId) => Response.json({spaceId}),
 	})
 })
 
 app.post("deploy/public", async (c) => {
 	const {initialEditorAddresses, spaceName, spaceEntityId, ops} = await c.req.json()
+	const requestId = c.get("requestId") ?? "unknown"
 
-	if (initialEditorAddresses === null || spaceName === null) {
-		console.error(
-			`[SPACE][deploy] Missing required parameters to deploy a space ${JSON.stringify({initialEditorAddresses, spaceName})}`,
-		)
-
-		return new Response(
-			JSON.stringify({
-				error: "Missing required parameters",
+	const program = Effect.gen(function* () {
+		if (initialEditorAddresses === null || spaceName === null) {
+			yield* Effect.logWarning("Missing required parameters")
+			return yield* Effect.fail({
+				_tag: "ValidationError" as const,
+				status: 400,
+				message: "Missing required parameters",
 				reason: "An initial editor account and space name are required to deploy a space.",
-			}),
-			{
+			})
+		}
+
+		if (initialEditorAddresses.length === 0) {
+			yield* Effect.logWarning("Invalid parameter initialEditorAddresses")
+			return yield* Effect.fail({
+				_tag: "ValidationError" as const,
 				status: 400,
-			},
-		)
-	}
+				message: "Invalid parameter initialEditorAddresses",
+				reason: "At least one valid account address is required to deploy a space.",
+			})
+		}
 
-	if (initialEditorAddresses.length === 0) {
-		console.error(
-			"[SPACE][deploy] Invalid parameter initialEditorAddresses. At least one valid account address is required to deploy a space.",
-		)
-
-		return new Response(
-			JSON.stringify({
-				error: "Invalid parameter initialEditorAddresses",
-				reason: "Invalid parameter initialEditorAddresses. At least one valid account address is required to deploy a space.",
-			}),
-			{
-				status: 400,
-			},
-		)
-	}
-
-	const deployWithRetry = Effect.retry(
-		deployPublicSpace({
-			initialEditorAddresses,
-			spaceName,
-			spaceEntityId,
-			ops,
-		}).pipe(
-			Effect.withSpan("/deploy/public.deploySpace"),
-			Effect.annotateSpans({
+		const spaceId = yield* Effect.retry(
+			deployPublicSpace({
 				initialEditorAddresses,
 				spaceName,
 				spaceEntityId,
-			}),
-			Effect.provide(NodeSdkLive),
-			Effect.provide(EnvironmentLayer),
-		),
-		{
-			schedule: Schedule.exponential(Duration.millis(100)).pipe(
-				Schedule.jittered,
-				Schedule.compose(Schedule.elapsed),
-				Schedule.whileOutput(Duration.lessThanOrEqualTo(Duration.minutes(1))),
+				ops,
+			}).pipe(
+				Effect.withSpan("/deploy/public.deploySpace"),
+				Effect.annotateSpans({
+					initialEditorAddresses,
+					spaceName,
+					spaceEntityId,
+				}),
 			),
-			while: (error) => error._tag !== "WaitForSpaceToBeIndexedError",
-		},
+			{
+				schedule: Schedule.exponential(Duration.millis(100)).pipe(
+					Schedule.jittered,
+					Schedule.compose(Schedule.elapsed),
+					Schedule.whileOutput(Duration.lessThanOrEqualTo(Duration.minutes(1))),
+				),
+				while: (error) => error._tag !== "WaitForSpaceToBeIndexedError",
+			},
+		).pipe(
+			Effect.mapError((error) => ({
+				_tag: "DeployError" as const,
+				status: 500,
+				message: error.message,
+				reason: `Failed to deploy space. message: ${error.message} – cause: ${error.cause}`,
+			})),
+		)
+
+		return spaceId
+	}).pipe(
+		Effect.withSpan("/deploy/public"),
+		Effect.annotateLogs({requestId, editors: initialEditorAddresses, spaceName}),
 	)
 
-	const providedDeploy = deployWithRetry.pipe(provideDeps)
-
-	const result = await Effect.runPromise(
-		Effect.either(providedDeploy).pipe(Effect.annotateLogs({editor: initialEditorAddresses, spaceName})),
-	)
+	const result = await runtime.runPromise(Effect.either(program))
 
 	return Either.match(result, {
-		onLeft: (error) => {
-			switch (error._tag) {
-				case "ConfigError":
-					console.error("[SPACE][deploy] Invalid server config")
-					return new Response(
-						JSON.stringify({
-							message: "Invalid server config. Please notify the server administrator.",
-							reason: "Invalid server config. Please notify the server administrator.",
-						}),
-						{
-							status: 500,
-						},
-					)
-				default:
-					console.error(
-						`[SPACE][deploy] Failed to deploy space. message: ${error.message} – cause: ${error.cause}`,
-					)
-
-					return new Response(
-						JSON.stringify({
-							message: `Failed to deploy space. message: ${error.message} – cause: ${error.cause}`,
-							reason: error.message,
-						}),
-						{
-							status: 500,
-						},
-					)
-			}
-		},
-		onRight: (spaceId) => {
-			return Response.json({spaceId})
-		},
+		onLeft: (error) =>
+			new Response(JSON.stringify({error: error.message, reason: error.reason}), {status: error.status}),
+		onRight: (spaceId) => Response.json({spaceId}),
 	})
 })
 
@@ -356,53 +314,22 @@ app.post("deploy/public", async (c) => {
  * The /deploy route is a legacy route for deploying PERSONAL spaces. Leaving it for
  * now until we're ready to deprecate it.
  */
-app.post(
-	"deploy",
-	// describeRoute({
-	// 	validateResponse: true,
-	// 	description: "Deploys a space with the provided parameters",
-	// requestBody: {
-	// 	required: true,
-	// 	content: {
-	// 		"application/json": {
-	// 			schema: DeployParametersSchema,
-	// 		},
-	// 	},
-	// },
-	// 	responses: {
-	// 		200: {
-	// 			description: "Successful space deployment",
-	// 			content: {
-	// 				"application/json": {schema: resolver(DeployResponseSchema)},
-	// 			},
-	// 		},
-	// 		400: {
-	// 			description:
-	// 				"Missing required parameters. An initial editor account and space name are required to deploy a space.",
-	// 		},
-	// 	},
-	// }),
-	// effectValidator("json", DeployParametersSchema),
-	async (c) => {
-		const {initialEditorAddress, spaceName, spaceEntityId, ops} = await c.req.json()
+app.post("deploy", async (c) => {
+	const {initialEditorAddress, spaceName, spaceEntityId, ops} = await c.req.json()
+	const requestId = c.get("requestId") ?? "unknown"
 
+	const program = Effect.gen(function* () {
 		if (initialEditorAddress === null || spaceName === null) {
-			console.error(
-				`[SPACE][deploy] Missing required parameters to deploy a space ${JSON.stringify({initialEditorAddress, spaceName})}`,
-			)
-
-			return new Response(
-				JSON.stringify({
-					error: "Missing required parameters",
-					reason: "An initial editor account and space name are required to deploy a space.",
-				}),
-				{
-					status: 400,
-				},
-			)
+			yield* Effect.logWarning("Missing required parameters")
+			return yield* Effect.fail({
+				_tag: "ValidationError" as const,
+				status: 400,
+				message: "Missing required parameters",
+				reason: "An initial editor account and space name are required to deploy a space.",
+			})
 		}
 
-		const deployWithRetry = Effect.retry(
+		const spaceId = yield* Effect.retry(
 			deployPersonalSpace({
 				initialEditorAddress,
 				spaceName,
@@ -415,8 +342,6 @@ app.post(
 					spaceName,
 					spaceEntityId,
 				}),
-				Effect.provide(NodeSdkLive),
-				Effect.provide(EnvironmentLayer),
 			),
 			{
 				schedule: Schedule.exponential(Duration.millis(100)).pipe(
@@ -426,50 +351,29 @@ app.post(
 				),
 				while: (error) => error._tag !== "WaitForSpaceToBeIndexedError",
 			},
+		).pipe(
+			Effect.mapError((error) => ({
+				_tag: "DeployError" as const,
+				status: 500,
+				message: error.message,
+				reason: `Failed to deploy space. message: ${error.message} – cause: ${error.cause}`,
+			})),
 		)
 
-		const providedDeploy = deployWithRetry.pipe(provideDeps)
+		return spaceId
+	}).pipe(
+		Effect.withSpan("/deploy"),
+		Effect.annotateLogs({requestId, editor: initialEditorAddress, spaceName}),
+	)
 
-		const result = await Effect.runPromise(
-			Effect.either(providedDeploy).pipe(Effect.annotateLogs({editor: initialEditorAddress, spaceName})),
-		)
+	const result = await runtime.runPromise(Effect.either(program))
 
-		return Either.match(result, {
-			onLeft: (error) => {
-				switch (error._tag) {
-					case "ConfigError":
-						console.error("[SPACE][deploy] Invalid server config")
-						return new Response(
-							JSON.stringify({
-								message: "Invalid server config. Please notify the server administrator.",
-								reason: "Invalid server config. Please notify the server administrator.",
-							}),
-							{
-								status: 500,
-							},
-						)
-					default:
-						console.error(
-							`[SPACE][deploy] Failed to deploy space. message: ${error.message} – cause: ${error.cause}`,
-						)
-
-						return new Response(
-							JSON.stringify({
-								message: `Failed to deploy space. message: ${error.message} – cause: ${error.cause}`,
-								reason: error.message,
-							}),
-							{
-								status: 500,
-							},
-						)
-				}
-			},
-			onRight: (spaceId) => {
-				return Response.json({spaceId})
-			},
-		})
-	},
-)
+	return Either.match(result, {
+		onLeft: (error) =>
+			new Response(JSON.stringify({error: error.message, reason: error.reason}), {status: error.status}),
+		onRight: (spaceId) => Response.json({spaceId}),
+	})
+})
 
 const CalldataRequestSchema = Schema.Struct({
 	cid: Schema.String,
@@ -478,92 +382,65 @@ const CalldataRequestSchema = Schema.Struct({
 app.post("/space/:spaceId/edit/calldata", async (c) => {
 	const {spaceId} = c.req.param()
 	const maybeRequestJson = await c.req.json()
+	const requestId = c.get("requestId") ?? "unknown"
 
-	const parsedRequestJsonResult = Schema.decodeUnknownEither(CalldataRequestSchema)(maybeRequestJson)
+	const program = Effect.gen(function* () {
+		const parsedRequestJsonResult = Schema.decodeUnknownEither(CalldataRequestSchema)(maybeRequestJson)
 
-	if (Either.isLeft(parsedRequestJsonResult)) {
-		console.error(`[SPACE][calldata] Invalid request json. ${maybeRequestJson}`)
-
-		return new Response(
-			JSON.stringify({
-				error: "Missing required parameters",
-				reason: "An IPFS CID prefixed with 'ipfs://' is required. e.g., ipfs://bafkreigkka6xfe3hb2tzcfqgm5clszs7oy7mct2awawivoxddcq6v3g5oi",
-			}),
-			{
+		if (Either.isLeft(parsedRequestJsonResult)) {
+			yield* Effect.logWarning("Invalid request json")
+			return yield* Effect.fail({
+				_tag: "ValidationError" as const,
 				status: 400,
-			},
-		)
-	}
-
-	const cid = parsedRequestJsonResult.right.cid
-
-	if (!cid || !cid.startsWith("ipfs://")) {
-		console.error(`[SPACE][calldata] Invalid CID ${cid}`)
-		return new Response(
-			JSON.stringify({
-				error: "Missing required parameters",
+				message: "Missing required parameters",
 				reason: "An IPFS CID prefixed with 'ipfs://' is required. e.g., ipfs://bafkreigkka6xfe3hb2tzcfqgm5clszs7oy7mct2awawivoxddcq6v3g5oi",
-			}),
-			{
-				status: 400,
-			},
-		)
-	}
-
-	const getCalldata = Effect.gen(function* () {
-		return yield* getPublishEditCalldata(spaceId, cid as string)
-	})
-
-	const calldata = await Effect.runPromise(Effect.either(getCalldata.pipe(provideDeps)))
-
-	if (Either.isLeft(calldata)) {
-		const error = calldata.left
-
-		switch (error._tag) {
-			case "ConfigError":
-				console.error("[SPACE][calldata] Invalid server config")
-				return new Response(
-					JSON.stringify({
-						message: "Invalid server config. Please notify the server administrator.",
-						reason: "Invalid server config. Please notify the server administrator.",
-					}),
-					{
-						status: 500,
-					},
-				)
-
-			default:
-				console.error(
-					`[SPACE][calldata] Failed to generate calldata for edit. message: ${error.message} – cause: ${error.cause}`,
-				)
-
-				return new Response(
-					JSON.stringify({
-						message: `Failed to deploy space. message: ${error.message} – cause: ${error.cause}`,
-						reason: error.message,
-					}),
-					{
-						status: 500,
-					},
-				)
+			})
 		}
-	}
 
-	if (calldata.right === null) {
-		console.error(`Failed to generate calldata. Could not find space with id ${spaceId}.`)
+		const cid = parsedRequestJsonResult.right.cid
 
-		return new Response(
-			JSON.stringify({
-				error: "Failed to generate calldata",
-				reason: `Could not find space with id ${spaceId}. Ensure the space exists and that it's on the correct network. This API is associated with chain id ${EnvironmentLive.chainId}`,
-			}),
-			{
-				status: 404,
-			},
+		if (!cid || !cid.startsWith("ipfs://")) {
+			yield* Effect.logWarning("Invalid CID format")
+			return yield* Effect.fail({
+				_tag: "ValidationError" as const,
+				status: 400,
+				message: "Missing required parameters",
+				reason: "An IPFS CID prefixed with 'ipfs://' is required. e.g., ipfs://bafkreigkka6xfe3hb2tzcfqgm5clszs7oy7mct2awawivoxddcq6v3g5oi",
+			})
+		}
+
+		const calldata = yield* getPublishEditCalldata(spaceId, cid).pipe(
+			Effect.mapError((error) => ({
+				_tag: "CalldataError" as const,
+				status: 500,
+				message: error.message,
+				reason: `Failed to generate calldata. message: ${error.message} – cause: ${error.cause}`,
+			})),
 		)
-	}
 
-	return Response.json(calldata.right)
+		if (calldata === null) {
+			yield* Effect.logWarning("Space not found")
+			return yield* Effect.fail({
+				_tag: "NotFoundError" as const,
+				status: 404,
+				message: "Failed to generate calldata",
+				reason: `Could not find space with id ${spaceId}. Ensure the space exists and that it's on the correct network. This API is associated with chain id ${EnvironmentLive.chainId}`,
+			})
+		}
+
+		return calldata
+	}).pipe(
+		Effect.withSpan("/space/:spaceId/edit/calldata"),
+		Effect.annotateLogs({requestId, spaceId}),
+	)
+
+	const result = await runtime.runPromise(Effect.either(program))
+
+	return Either.match(result, {
+		onLeft: (error) =>
+			new Response(JSON.stringify({error: error.message, reason: error.reason}), {status: error.status}),
+		onRight: (calldata) => Response.json(calldata),
+	})
 })
 
 app.get(

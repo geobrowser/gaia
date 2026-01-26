@@ -5,6 +5,7 @@ import { Pool } from "pg"
 import { createPostGraphileSchema, withPostGraphileContext } from "postgraphile"
 import ConnectionFilterPlugin from "postgraphile-plugin-connection-filter"
 import EntitySpaceFilterPlugin from "./entitySpaceFilterPlugin"
+import { useGraphQLInstrumentation } from "./instrumentationPlugin"
 import UndashedUuidPlugin from "./uuidScalarPlugin"
 
 // Create PostgreSQL pool with explicit configuration to prevent connection exhaustion
@@ -92,6 +93,7 @@ const sharedPlugins = [
 		session: () => null,
 		ttl: 10_000, // 10 seconds
 	}),
+	useGraphQLInstrumentation(),
 ]
 
 // GraphQL server without uuidScalarPlugin
