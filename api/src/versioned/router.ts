@@ -10,6 +10,12 @@ import {Hono} from "hono"
 import type {NodePgDatabase} from "drizzle-orm/node-postgres"
 
 import type {AppRuntime} from "../services/runtime"
+
+type AppEnv = {
+	Variables: {
+		requestId: string
+	}
+}
 import {isValidUuid} from "../utils/uuid"
 import {resolveVersionKey, getEntitySnapshotAtVersion, getEntityVersions} from "./queries"
 import {diffEntitySnapshots} from "./diff"
@@ -40,7 +46,7 @@ type VersionedError = ValidationError | NotFoundError | InternalError
  * @returns Configured Hono router
  */
 export function createVersionedRouter(db: Database, runtime: AppRuntime) {
-	const router = new Hono()
+	const router = new Hono<AppEnv>()
 
 	/**
 	 * GET /versioned/entities/:id
@@ -51,6 +57,7 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 		const entityId = c.req.param("id")
 		const editId = c.req.query("editId")
 		const spaceId = c.req.query("spaceId")
+		const requestId = c.get("requestId") ?? "unknown"
 
 		const program = Effect.gen(function* () {
 			// Validate entityId
@@ -91,7 +98,7 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 			return snapshot
 		}).pipe(
 			Effect.withSpan("GET /versioned/entities/:id"),
-			Effect.annotateLogs({entityId, editId}),
+			Effect.annotateLogs({requestId, entityId, editId}),
 		)
 
 		const result = await runtime.runPromise(Effect.either(program))
@@ -121,6 +128,7 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 		const spaceId = c.req.query("spaceId")
 		const limitParam = c.req.query("limit")
 		const offsetParam = c.req.query("offset")
+		const requestId = c.get("requestId") ?? "unknown"
 
 		const program = Effect.gen(function* () {
 			// Validate entityId
@@ -162,7 +170,7 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 			return versions
 		}).pipe(
 			Effect.withSpan("GET /versioned/entities/:id/versions"),
-			Effect.annotateLogs({entityId}),
+			Effect.annotateLogs({requestId, entityId}),
 		)
 
 		const result = await runtime.runPromise(Effect.either(program))
@@ -192,6 +200,7 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 		const fromEditId = c.req.query("fromEditId")
 		const toEditId = c.req.query("toEditId")
 		const spaceId = c.req.query("spaceId")
+		const requestId = c.get("requestId") ?? "unknown"
 
 		const program = Effect.gen(function* () {
 			// Validate entityId
@@ -255,7 +264,7 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 			return diff
 		}).pipe(
 			Effect.withSpan("GET /versioned/entities/:id/diff"),
-			Effect.annotateLogs({entityId, fromEditId, toEditId}),
+			Effect.annotateLogs({requestId, entityId, fromEditId, toEditId}),
 		)
 
 		const result = await runtime.runPromise(Effect.either(program))

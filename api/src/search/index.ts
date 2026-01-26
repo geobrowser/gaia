@@ -8,6 +8,12 @@ import {Data, Effect, Either} from "effect"
 import {Hono} from "hono"
 
 import type {AppRuntime} from "../services/runtime"
+
+type AppEnv = {
+	Variables: {
+		requestId: string
+	}
+}
 import type {SearchClient, SearchResponse, SearchScope} from "../services/search"
 import {isValidUuid} from "../utils/uuid"
 
@@ -72,7 +78,7 @@ type SearchError = SearchValidationError | SearchExecutionError
  * @returns Configured Hono router
  */
 export function createSearchRouter(searchClient: SearchClient, runtime: AppRuntime) {
-	const router = new Hono()
+	const router = new Hono<AppEnv>()
 
 	/**
 	 * GET /search
@@ -80,6 +86,8 @@ export function createSearchRouter(searchClient: SearchClient, runtime: AppRunti
 	 * Search for entities across the Knowledge Graph.
 	 */
 	router.get("/", async (c) => {
+		const requestId = c.get("requestId") ?? "unknown"
+
 		const program = Effect.gen(function* () {
 			// Check for unrecognized query parameters
 			const allParams = Object.keys(c.req.query())
@@ -241,7 +249,7 @@ export function createSearchRouter(searchClient: SearchClient, runtime: AppRunti
 			return response
 		}).pipe(
 			Effect.withSpan("GET /search"),
-			Effect.annotateLogs({route: "/search"}),
+			Effect.annotateLogs({requestId, route: "/search"}),
 		)
 
 		const result = await runtime.runPromise(Effect.either(program))
@@ -263,6 +271,8 @@ export function createSearchRouter(searchClient: SearchClient, runtime: AppRunti
 	 * Check the health of the search service.
 	 */
 	router.get("/health", async (c) => {
+		const requestId = c.get("requestId") ?? "unknown"
+
 		const program = Effect.gen(function* () {
 			const healthy = yield* Effect.tryPromise({
 				try: () => searchClient.healthCheck(),
@@ -270,7 +280,10 @@ export function createSearchRouter(searchClient: SearchClient, runtime: AppRunti
 			}).pipe(Effect.withSpan("search.healthCheck"))
 
 			return healthy
-		}).pipe(Effect.withSpan("GET /search/health"))
+		}).pipe(
+			Effect.withSpan("GET /search/health"),
+			Effect.annotateLogs({requestId}),
+		)
 
 		const result = await runtime.runPromise(Effect.either(program))
 
