@@ -140,6 +140,36 @@ spec:
                   name: api-secrets
                   key: TELEMETRY_TOKEN
                   optional: true
+            - name: SENTRY_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: api-sentry
+                  key: SENTRY_DSN
+                  optional: true
+            - name: SENTRY_TRACES_SAMPLE_RATE
+              valueFrom:
+                secretKeyRef:
+                  name: api-sentry
+                  key: SENTRY_TRACES_SAMPLE_RATE
+                  optional: true
+            - name: SENTRY_ENVIRONMENT
+              valueFrom:
+                secretKeyRef:
+                  name: api-sentry
+                  key: SENTRY_ENVIRONMENT
+                  optional: true
+            - name: SENTRY_RELEASE
+              valueFrom:
+                secretKeyRef:
+                  name: api-sentry
+                  key: SENTRY_RELEASE
+                  optional: true
+            - name: SENTRY_DEBUG
+              valueFrom:
+                secretKeyRef:
+                  name: api-sentry
+                  key: SENTRY_DEBUG
+                  optional: true
           resources:
             requests:
               memory: "512Mi"
