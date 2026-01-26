@@ -11,6 +11,7 @@ import {id} from "@ethersproject/hash"
 import {getChecksumAddress} from "@graphprotocol/grc-20"
 import {Effect} from "effect"
 import {encodeFunctionData, stringToHex, zeroAddress} from "viem"
+import {log} from "../services/telemetry"
 import type {OmitStrict} from "../types"
 import {abi as DaoFactoryAbi} from "./abi"
 import {getPublicClient, getWalletClient} from "./client"
@@ -42,7 +43,7 @@ export function deployAndValidateDao(params: CreateGeoDaoParams) {
 				return {dao, pluginAddresses}
 			},
 			catch: (e) => {
-				console.error(`[SPACE][deploy] Failed creating DAO: ${e}`)
+				log.error("Failed creating DAO", {error: String(e)})
 				return new DeployDaoError(`Failed creating DAO: ${e}`)
 			},
 		}).pipe(Effect.withSpan("deploySpace.createDao"), Effect.annotateSpans({...params}))
@@ -181,13 +182,13 @@ export async function* createDao(params: CreateGeoDaoParams, context: ContextPar
 	})
 
 	const daoFactoryInterface = DAORegistry__factory.createInterface()
-	const log = receipt.logs.find((l) => {
+	const daoLog = receipt.logs.find((l) => {
 		const expectedId = daoFactoryInterface.getEventTopic("DAORegistered")
 		return l.topics[0] === expectedId
 	})
 
-	if (!log) {
-		console.error(`Failed to create DAO. Tx hash ${hash}`)
+	if (!daoLog) {
+		log.error("Failed to create DAO", {txHash: hash})
 		throw new DaoCreationError()
 	}
 
@@ -198,15 +199,15 @@ export async function* createDao(params: CreateGeoDaoParams, context: ContextPar
 	)
 
 	// DAO logs
-	const parsedLog = daoFactoryInterface.parseLog(log)
+	const parsedLog = daoFactoryInterface.parseLog(daoLog)
 	if (!parsedLog.args["dao"]) {
-		console.error(`Could not find DAO log. Tx hash ${hash}`)
+		log.error("Could not find DAO log", {txHash: hash})
 		throw new DaoCreationError()
 	}
 
 	yield {
 		key: DaoCreationSteps.DONE,
 		address: parsedLog.args["dao"],
-		pluginAddresses: installedLogs.map((log) => pspInterface.parseLog(log).args[1]),
+		pluginAddresses: installedLogs.map((installedLog) => pspInterface.parseLog(installedLog).args[1]),
 	}
 }

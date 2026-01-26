@@ -3,6 +3,7 @@ import {Context, Data, Effect, Redacted} from "effect"
 import {Pool} from "pg"
 
 import {EnvironmentLive} from "../environment"
+import {log} from "../telemetry"
 import {
 	editors,
 	editorsRelations,
@@ -36,7 +37,7 @@ const _pool = new Pool({
 
 // Add basic error handling for the pool
 _pool.on("error", (err) => {
-	console.error("PostgreSQL pool error:", err)
+	log.error("PostgreSQL pool error", {error: String(err)})
 })
 
 const schemaDefinition = {
