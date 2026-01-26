@@ -192,6 +192,11 @@ impl Sink for IpfsCacheSink {
             info!(block = block_number, "Checkpoint");
         }
 
+        // Skip empty blocks entirely - no span created
+        if edit_count == 0 {
+            return Ok(());
+        }
+
         // Create root span for this block - this becomes the transaction in Sentry.
         // Child spans created while this span is entered will have it as their parent.
         let block_span = info_span!(
@@ -203,22 +208,20 @@ impl Sink for IpfsCacheSink {
         );
         let _block_guard = block_span.enter();
 
-        if edit_count > 0 {
-            info!(
-                event = "ipfs_cache.batch_start",
-                block_number = block_number,
-                cursor = %cursor,
-                edit_count = edit_count,
-                "Batch start"
-            );
-            info!(block = block_number, edits = edit_count, "Processing edits");
+        info!(
+            event = "ipfs_cache.batch_start",
+            block_number = block_number,
+            cursor = %cursor,
+            edit_count = edit_count,
+            "Batch start"
+        );
+        info!(block = block_number, edits = edit_count, "Processing edits");
 
-            // Register all pending fetches for this block upfront
-            self.pending
-                .lock()
-                .await
-                .add_block(block_number, cursor.clone(), edit_count);
-        }
+        // Register all pending fetches for this block upfront
+        self.pending
+            .lock()
+            .await
+            .add_block(block_number, cursor.clone(), edit_count);
 
         // Process each edit event
         for edit in edits_list.edits {

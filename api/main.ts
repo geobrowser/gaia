@@ -34,9 +34,8 @@ type AppEnv = {
 
 const app = new Hono<AppEnv>()
 
-// Request ID and canonical logging middleware (before other middleware)
+// Request ID middleware (cheap, needed everywhere for correlation)
 app.use("*", requestId())
-app.use("*", canonicalRequestLogging())
 
 app.use("*", cors())
 app.use(
@@ -45,7 +44,19 @@ app.use(
 	}),
 )
 
+// Health routes - no tracing (high frequency, low value)
 app.route("/health", health)
+
+// Apply canonical logging/tracing to API routes (not health)
+// Health checks are high-frequency noise with low observability value
+app.use("/ipfs/*", canonicalRequestLogging())
+app.use("/deploy", canonicalRequestLogging())
+app.use("/deploy/*", canonicalRequestLogging())
+app.use("/space/*", canonicalRequestLogging())
+app.use("/search/*", canonicalRequestLogging())
+app.use("/versioned/*", canonicalRequestLogging())
+app.use("/graphql", canonicalRequestLogging())
+app.use("/v2/graphql", canonicalRequestLogging())
 
 // Initialize search client with dependency injection
 // Search is optional - if OPENSEARCH_URL is not set, search routes won't be added
