@@ -13,6 +13,16 @@ feature branches → dev → main
 - **Push to `dev`**: Auto-deploys changed services to staging
 - **Merge `dev` → `main`**: Auto-deploys changed services to production
 
+## Merge Strategy
+
+| Target | Method | Why |
+|--------|--------|-----|
+| `dev` | **Squash merge only** | Clean single commit per feature |
+| `main` | **Regular merge** from `dev` | Preserves commit SHAs for rebasing |
+| `main` | Squash merge for hotfixes | Hotfixes bypass dev |
+
+**Why this matters:** Squash merging destroys commit identity. If we squash dev→main, feature branches can't cleanly rebase onto dev because Git doesn't recognize "already applied" commits. Regular merge preserves SHAs so rebasing works.
+
 ## Service & Namespace Mapping
 
 | Service | Production NS | Staging NS | Workflow Files |
@@ -64,15 +74,36 @@ Monitor: [GitHub Actions](https://github.com/geo-web-project/gaia/actions)
 
 ### Promote to Production
 
-Merge `dev` into `main`:
+Create a PR from `dev` → `main` and use **regular merge** (not squash):
 
 ```bash
+# Via GitHub CLI
+gh pr create --base main --head dev --title "Release: promote dev to main"
+# Then merge with regular merge (not squash) in the GitHub UI
+```
+
+Or via command line:
+```bash
 git checkout main
-git merge dev
+git pull origin main
+git merge dev --no-ff
 git push origin main
 ```
 
-Or create a PR from `dev` → `main` for review.
+**Important:** Always use regular merge for dev→main to preserve commit identity. See [Merge Strategy](#merge-strategy).
+
+### Reset dev After Release
+
+After promoting dev→main, reset dev to match main:
+
+```bash
+git checkout dev
+git fetch origin
+git reset --hard origin/main
+git push --force-with-lease origin dev
+```
+
+This keeps dev as a clean staging branch and prevents divergent history that causes rebase conflicts on feature branches.
 
 ### Check What's Deployed
 
@@ -277,7 +308,8 @@ diff <service>/k8s/staging/<file>.yaml <service>/k8s/production/<file>.yaml
 | Task | Command |
 |------|---------|
 | Deploy to staging | `git push origin dev` |
-| Promote to prod | `git checkout main && git merge dev && git push` |
+| Promote to prod | `gh pr create --base main --head dev` then **regular merge** |
+| Reset dev after release | `git checkout dev && git reset --hard origin/main && git push --force-with-lease` |
 | Check deployed image | `kubectl get deploy <name> -n <ns> -o jsonpath='{.spec.template.spec.containers[0].image}'` |
 | View logs | `kubectl logs -f deploy/<name> -n <ns>` |
 | Restart | `kubectl rollout restart deploy/<name> -n <ns>` |
