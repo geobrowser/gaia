@@ -5276,11 +5276,11 @@ name = "search-indexer"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "axiom-rs",
  "axum 0.8.8",
  "chrono",
  "dotenv",
  "futures 0.3.31",
+ "hermes-instrumentation",
  "hermes-schema",
  "indexer_utils",
  "prost 0.13.5",
@@ -5293,7 +5293,6 @@ dependencies = [
  "tokio",
  "tokio-stream",
  "tracing",
- "tracing-subscriber",
  "uuid",
  "wire",
 ]

@@ -15,7 +15,7 @@ use rdkafka::client::DefaultClientContext;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::task::JoinHandle;
-use tracing::{error, info};
+use hermes_instrumentation::{error, info};
 
 use search_indexer_repository::SearchIndexProvider;
 

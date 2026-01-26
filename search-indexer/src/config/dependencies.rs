@@ -4,7 +4,7 @@ use std::env;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::sleep;
-use tracing::{info, warn};
+use hermes_instrumentation::{info, warn};
 
 use rdkafka::admin::AdminClient;
 use rdkafka::client::DefaultClientContext;

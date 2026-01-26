@@ -75,15 +75,23 @@ spec:
             # Logging
             - name: RUST_LOG
               value: "info"
-            # Optional: Axiom for centralized logging
-            - name: AXIOM_TOKEN
+            # Sentry telemetry and monitoring
+            - name: SENTRY_DSN
               valueFrom:
                 secretKeyRef:
                   name: search-indexer-secrets
-                  key: AXIOM_TOKEN
+                  key: SENTRY_DSN
                   optional: true
-            - name: AXIOM_DATASET
-              value: "gaia.search-indexer-staging"
+            - name: SENTRY_ENVIRONMENT
+              value: "staging"
+            - name: SENTRY_RELEASE
+              value: "search-indexer@1.0.0"
+            - name: SENTRY_TRACES_SAMPLE_RATE
+              value: "0.5"
+            - name: SENTRY_SEND_DEFAULT_PII
+              value: "false"
+            - name: SENTRY_DEBUG
+              value: "false"
           resources:
             requests:
               memory: "512Mi"

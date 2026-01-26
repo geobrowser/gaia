@@ -73,15 +73,23 @@ spec:
             # Logging
             - name: RUST_LOG
               value: "info"
-            # Optional: Axiom for centralized logging
-            - name: AXIOM_TOKEN
+            # Sentry telemetry and monitoring
+            - name: SENTRY_DSN
               valueFrom:
                 secretKeyRef:
                   name: search-indexer-secrets
-                  key: AXIOM_TOKEN
+                  key: SENTRY_DSN
                   optional: true
-            - name: AXIOM_DATASET
-              value: "gaia.search-indexer"
+            - name: SENTRY_ENVIRONMENT
+              value: "production"
+            - name: SENTRY_RELEASE
+              value: "search-indexer@1.0.0"
+            - name: SENTRY_TRACES_SAMPLE_RATE
+              value: "0.1"
+            - name: SENTRY_SEND_DEFAULT_PII
+              value: "false"
+            - name: SENTRY_DEBUG
+              value: "false"
           ports:
             - name: health
               containerPort: 8080
@@ -116,6 +124,9 @@ spec:
       restartPolicy: Always
 ---
 # Optional: Secret for sensitive configuration
+# Create with: kubectl create secret generic search-indexer-secrets \
+#   --from-literal=SENTRY_DSN='https://...@o0.ingest.sentry.io/...' \
+#   --namespace=search
 apiVersion: v1
 kind: Secret
 metadata:
@@ -123,5 +134,5 @@ metadata:
   namespace: search
 type: Opaque
 stringData:
-  AXIOM_TOKEN: ""  # Set via kubectl or CI/CD
+  SENTRY_DSN: ""  # Set via kubectl or CI/CD
 

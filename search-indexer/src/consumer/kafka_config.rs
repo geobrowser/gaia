@@ -4,7 +4,7 @@
 
 use rdkafka::config::ClientConfig;
 use std::env;
-use tracing::info;
+use hermes_instrumentation::info;
 
 /// Create a base Kafka client configuration with common settings.
 ///

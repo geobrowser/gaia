@@ -69,9 +69,18 @@ Environment variables:
 | `KAFKA_SSL_CA_PEM` | Custom CA certificate in PEM format (optional) | - |
 | `OPENSEARCH_CONNECTION_MODE` | Connection mode: `fail-fast` or `retry` | `retry` |
 | `OPENSEARCH_RETRY_INTERVAL_SECS` | Retry interval in seconds (retry mode only) | `15` |
-| `AXIOM_TOKEN` | Axiom API token (optional) | - |
-| `AXIOM_DATASET` | Axiom dataset name | `gaia.search-indexer` |
-| `RUST_LOG` | Log level filter | `search_indexer=info` |
+| `HEALTH_PORT` | HTTP port for health check endpoints | `8080` |
+
+### Telemetry Configuration
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `SENTRY_DSN` | Sentry project DSN (enables Sentry when set) | - |
+| `SENTRY_TRACES_SAMPLE_RATE` | Trace sampling rate 0.0-1.0 | `1.0` |
+| `SENTRY_SEND_DEFAULT_PII` | Include PII in events (`true` or `false`) | `false` |
+| `SENTRY_ENVIRONMENT` | Environment tag (e.g., "staging", "production") | - |
+| `SENTRY_RELEASE` | Release version (e.g., "search-indexer@1.2.3") | - |
+| `SENTRY_DEBUG` | Enable debug mode (logs spans to stdout) | `false` |
 
 ### Connection Modes
 
@@ -80,6 +89,101 @@ The search-indexer supports two connection modes for OpenSearch:
 - **`retry`** (default): Continuously retries connecting to OpenSearch every 15 seconds (configurable via `OPENSEARCH_RETRY_INTERVAL_SECS`) until successful. This is useful when OpenSearch may not be immediately available (e.g., during container startup).
 
 - **`fail-fast`**: Immediately fails if unable to connect to OpenSearch. Useful when you want the container to crash if OpenSearch is unavailable, allowing orchestration systems (like Kubernetes) to handle restarts.
+
+## Telemetry and Monitoring
+
+The search-indexer uses the unified `hermes-instrumentation` telemetry crate for observability, supporting both local development (Console backend) and production monitoring (Sentry backend).
+
+### Telemetry Backends
+
+#### Console Backend (Default)
+
+When `SENTRY_DSN` is not set, telemetry uses the Console backend:
+- Outputs structured logs to stdout
+- Suitable for local development and simple deployments
+- No external dependencies required
+
+```bash
+# Console backend is used automatically when SENTRY_DSN is not set
+cargo run
+# Output: Telemetry: Console (set SENTRY_DSN to enable Sentry)
+```
+
+#### Sentry Backend
+
+When `SENTRY_DSN` is set, telemetry switches to the Sentry backend:
+- Distributed tracing with performance monitoring
+- Error tracking with full context and stack traces
+- Automatic span instrumentation for batch processing
+- View traces in Sentry's Performance dashboard
+
+```bash
+# Enable Sentry backend
+export SENTRY_DSN="https://examplePublicKey@o0.ingest.sentry.io/0"
+export SENTRY_ENVIRONMENT="production"
+export SENTRY_TRACES_SAMPLE_RATE="0.1"
+cargo run
+# Output: Telemetry: Sentry (env: production, sample_rate: 0.1)
+```
+
+### Instrumented Spans
+
+The search-indexer automatically creates performance spans for key operations:
+
+- **`search_indexer.consume_entities_batch`**: Entity event batch consumption
+  - Fields: `batch_size`, `event_count`, `offset_start`, `offset_end`
+- **`search_indexer.consume_scores_batch`**: Score event batch consumption
+  - Fields: `batch_size`, `event_count`, `offset_start`, `offset_end`
+- **`search_indexer.process_entity_batch`**: Entity event processing
+  - Fields: `event_count`
+- **`search_indexer.process_score_batch`**: Score event processing
+  - Fields: `event_count`
+- **`search_indexer.bulk_operations`**: OpenSearch bulk indexing
+  - Fields: `operation_count`
+
+### Sampling Strategy
+
+Trace sampling controls what percentage of transactions are sent to Sentry. For high-volume Kafka processing, proper sampling is critical:
+
+| Environment | Recommended Rate | Reasoning |
+|-------------|-----------------|-----------|
+| Development | `1.0` (100%) | Capture everything for debugging |
+| Staging | `0.5` (50%) | Balance coverage and volume |
+| Production | `0.1` (10%) | Sufficient for monitoring at scale |
+
+**Example configurations:**
+
+```bash
+# Development - capture all traces
+SENTRY_TRACES_SAMPLE_RATE=1.0
+
+# Production - 10% sampling for high-volume processing
+SENTRY_TRACES_SAMPLE_RATE=0.1
+```
+
+### Environment Configuration
+
+See [.env.example](.env.example) for a complete configuration reference with all Sentry variables and recommended values.
+
+### Key Metrics to Monitor
+
+Whether using Console or Sentry backend, monitor these key metrics:
+
+- **Throughput**: Events processed per second, documents indexed per second
+- **Latency**: Time spent in each processing stage (consume → process → load)
+- **Kafka Consumer Lag**: Difference between latest offset and committed offset
+- **Error Rates**: Failed batch processing, OpenSearch indexing errors
+- **Span Performance**: Identify slow operations via distributed traces (Sentry only)
+
+### Viewing Traces in Sentry
+
+When Sentry backend is enabled:
+
+1. Navigate to your Sentry project's Performance dashboard
+2. Filter by `transaction:"search_indexer.*"` to see all indexer spans
+3. View span hierarchies: `consume_batch` → `process_batch` → `bulk_operations`
+4. Analyze slow traces to identify performance bottlenecks
+5. Errors automatically link to their corresponding traces for full context
 
 ## Running
 
@@ -208,16 +312,6 @@ curl --compressed "http://localhost:3000/search?query=alice&scope=SPACE_SINGLE&s
 curl --compressed "http://localhost:3000/search?query=alice&type_ids=00000000-0000-0000-0000-000000000b01" | jq
 ```
 
-## Monitoring
-
-The indexer logs to stdout in JSON format. When `AXIOM_TOKEN` is set, logs are
-also sent to Axiom for centralized monitoring.
-
-Key metrics to monitor:
-- Documents indexed per second
-- Index latency (ms)
-- Kafka consumer lag
-- Error rates
 
 ## Troubleshooting
 
