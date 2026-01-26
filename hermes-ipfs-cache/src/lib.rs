@@ -192,6 +192,17 @@ impl Sink for IpfsCacheSink {
             info!(block = block_number, "Checkpoint");
         }
 
+        // Create root span for this block - this becomes the transaction in Sentry.
+        // Child spans created while this span is entered will have it as their parent.
+        let block_span = info_span!(
+            "ipfs_cache.process_block",
+            block_number = block_number,
+            edit_count = edit_count,
+            "otel.status_code" = tracing::field::Empty,
+            "otel.status_message" = tracing::field::Empty
+        );
+        let _block_guard = block_span.enter();
+
         if edit_count > 0 {
             info!(
                 event = "ipfs_cache.batch_start",
@@ -223,9 +234,11 @@ impl Sink for IpfsCacheSink {
                 .strip_prefix("ipfs://")
                 .unwrap_or("")
                 .to_string();
+            let space_id = hex::encode(&edit.space_id);
             let span = info_span!(
                 "ipfs_cache.fetch_edit",
                 block_number = block_num,
+                space_id = %space_id,
                 uri = %edit.content_uri,
                 ipfs_hash = %ipfs_hash
             );
@@ -240,6 +253,7 @@ impl Sink for IpfsCacheSink {
                             error!(
                                 event = "ipfs_cache.fetch_failed",
                                 block_number = block_num,
+                                space_id = %space_id,
                                 uri = %uri,
                                 error = %e,
                                 "Failed to process edit event"
@@ -248,6 +262,7 @@ impl Sink for IpfsCacheSink {
                             error!(
                                 event = "ipfs_cache.fetch_failed",
                                 block_number = block_num,
+                                space_id = %space_id,
                                 uri = %uri,
                                 ipfs_hash = %ipfs_hash_for_log,
                                 tags.ipfs_hash = %ipfs_hash_for_log,
@@ -379,6 +394,7 @@ async fn process_edit_event(
                         uri = %uri,
                         ipfs_hash = %ipfs_hash,
                         tags.ipfs_hash = %ipfs_hash,
+                        space_id = %space_id,
                         block = block_number,
                         bytes = bytes.len(),
                         error = %decode_error,
@@ -398,6 +414,7 @@ async fn process_edit_event(
             if ipfs_hash.is_empty() {
                 warn!(
                     uri = %uri,
+                    space_id = %space_id,
                     block = block_number,
                     error = %error,
                     "Failed to fetch IPFS content"
@@ -407,6 +424,7 @@ async fn process_edit_event(
                     uri = %uri,
                     ipfs_hash = %ipfs_hash,
                     tags.ipfs_hash = %ipfs_hash,
+                    space_id = %space_id,
                     block = block_number,
                     error = %error,
                     "Failed to fetch IPFS content"
