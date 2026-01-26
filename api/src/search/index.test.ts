@@ -197,7 +197,7 @@ describe("Search Router - Integration Tests", () => {
 			const result = await response.json()
 
 			expect(response.status).toBe(400)
-			expect(result.error).toBe("Missing required parameter")
+			expect(result.error).toBe("Invalid parameter")
 			expect(result.message).toContain("space_id is required")
 		})
 
@@ -207,7 +207,7 @@ describe("Search Router - Integration Tests", () => {
 			const result = await response.json()
 
 			expect(response.status).toBe(400)
-			expect(result.error).toBe("Missing required parameter")
+			expect(result.error).toBe("Invalid parameter")
 			expect(result.message).toContain("space_id is required")
 		})
 
@@ -291,7 +291,7 @@ describe("Search Router - Integration Tests", () => {
 			const result = await response.json()
 
 			expect(response.status).toBe(400)
-			expect(result.error).toBe("Unrecognized parameter")
+			expect(result.error).toBe("Invalid parameter")
 			expect(result.message).toContain("unknown_param")
 		})
 
@@ -301,7 +301,7 @@ describe("Search Router - Integration Tests", () => {
 			const result = await response.json()
 
 			expect(response.status).toBe(400)
-			expect(result.error).toBe("Unrecognized parameter")
+			expect(result.error).toBe("Invalid parameter")
 			expect(result.message).toContain("foo")
 			expect(result.message).toContain("bar")
 		})
