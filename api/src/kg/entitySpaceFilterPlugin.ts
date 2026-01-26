@@ -1,24 +1,41 @@
 /**
- * Custom PostGraphile plugin that adds efficient space filtering to the entities connection.
+ * Custom PostGraphile plugin that adds efficient space and type filtering to the entities connection.
  *
- * Instead of using the computed `entities_space_ids` function (which runs 2 queries per entity),
- * this uses EXISTS subqueries with indexed lookups:
+ * Instead of using computed functions (which run queries per entity),
+ * this uses EXISTS subqueries with indexed lookups.
  *
- * Before (slow - O(n) function calls):
- *   WHERE entities_space_ids(e) @> array['space-uuid']
+ * Space filtering:
+ *   Before (slow - O(n) function calls):
+ *     WHERE entities_space_ids(e) @> array['space-uuid']
+ *   After (fast - O(1) indexed EXISTS):
+ *     WHERE EXISTS (SELECT 1 FROM values WHERE entity_id = e.id AND space_id = 'space-uuid' LIMIT 1)
+ *        OR EXISTS (SELECT 1 FROM relations WHERE from_entity_id = e.id AND space_id = 'space-uuid' LIMIT 1)
  *
- * After (fast - O(1) indexed EXISTS):
- *   WHERE EXISTS (SELECT 1 FROM values WHERE entity_id = e.id AND space_id = 'space-uuid' LIMIT 1)
- *      OR EXISTS (SELECT 1 FROM relations WHERE from_entity_id = e.id AND space_id = 'space-uuid' LIMIT 1)
+ * Type filtering:
+ *   Before (slow - O(n) function calls):
+ *     WHERE entities_type_ids(e) @> array['type-uuid']
+ *   After (fast - O(1) indexed EXISTS):
+ *     WHERE EXISTS (SELECT 1 FROM relations WHERE from_entity_id = e.id
+ *                   AND type_id = 'SystemIds.Types' AND to_entity_id = 'type-uuid' LIMIT 1)
  *
  * Usage in GraphQL:
- *   entities(spaceId: "e252f9e1-...", first: 100) { ... }              # single space
+ *   entities(spaceId: "uuid", first: 100) { ... }              # single space
  *   entities(spaceIds: { in: ["uuid1", "uuid2"] }, first: 100) { ... } # multiple spaces (OR)
+ *   entities(typeId: "uuid", first: 100) { ... }               # single type
+ *   entities(typeIds: { in: ["uuid1", "uuid2"] }, first: 100) { ... }  # multiple types (OR)
  *
  * Requires indexes (already exist):
  *   - values(entity_id, space_id)
  *   - relations(from_entity_id, space_id)
+ *   - relations(from_entity_id, type_id, to_entity_id)
  */
+
+// SystemIds.Types - the relation type that defines an entity's type
+const SYSTEM_IDS_TYPES = "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+
+// ============================================================================
+// Space filter helpers
+// ============================================================================
 
 // Helper to build the EXISTS condition for a single space ID
 const buildSingleSpaceCondition = (sql: any, tableAlias: any, spaceId: string) => {
@@ -74,11 +91,51 @@ const buildHasAnySpaceCondition = (sql: any, tableAlias: any) => {
 	)`
 }
 
+// ============================================================================
+// Type filter helpers
+// ============================================================================
+
+// Helper to build the EXISTS condition for a single type ID
+const buildSingleTypeCondition = (sql: any, tableAlias: any, typeId: string) => {
+	return sql.fragment`EXISTS (
+		SELECT 1 FROM public.relations r
+		WHERE r.from_entity_id = ${tableAlias}.id
+		AND r.type_id = ${sql.value(SYSTEM_IDS_TYPES)}::uuid
+		AND r.to_entity_id = ${sql.value(typeId)}::uuid
+		LIMIT 1
+	)`
+}
+
+// Helper to build the EXISTS condition for multiple type IDs
+const buildMultiTypeCondition = (sql: any, tableAlias: any, typeIds: string[]) => {
+	return sql.fragment`EXISTS (
+		SELECT 1 FROM public.relations r
+		WHERE r.from_entity_id = ${tableAlias}.id
+		AND r.type_id = ${sql.value(SYSTEM_IDS_TYPES)}::uuid
+		AND r.to_entity_id = ANY(${sql.value(typeIds)}::uuid[])
+		LIMIT 1
+	)`
+}
+
+// Helper to build condition for checking if entity has any type
+const buildHasAnyTypeCondition = (sql: any, tableAlias: any) => {
+	return sql.fragment`EXISTS (
+		SELECT 1 FROM public.relations r
+		WHERE r.from_entity_id = ${tableAlias}.id
+		AND r.type_id = ${sql.value(SYSTEM_IDS_TYPES)}::uuid
+		LIMIT 1
+	)`
+}
+
+// ============================================================================
+// Plugin
+// ============================================================================
+
 export const EntitySpaceFilterPlugin = (builder: any) => {
-	// Add spaceId/spaceIds arguments and register data generators
+	// Add spaceId/spaceIds/typeId/typeIds arguments and register data generators
 	builder.hook("GraphQLObjectType:fields:field:args", (args: any, build: any, context: any) => {
 		const {
-			scope: { fieldName, isPgFieldConnection, isPgFieldSimpleCollection, pgFieldIntrospection },
+			scope: { isPgFieldConnection, isPgFieldSimpleCollection, pgFieldIntrospection },
 			addArgDataGenerator,
 		} = context
 
@@ -94,6 +151,10 @@ export const EntitySpaceFilterPlugin = (builder: any) => {
 		const { pgSql: sql } = build
 		const UUIDType = build.getTypeByName("UUID")
 		const UUIDFilterType = build.getTypeByName("UUIDFilter")
+
+		// ========================================================================
+		// Space filter data generators
+		// ========================================================================
 
 		// Register the data generator for spaceId argument
 		addArgDataGenerator(({ spaceId }: { spaceId?: string }) => {
@@ -113,38 +174,75 @@ export const EntitySpaceFilterPlugin = (builder: any) => {
 				pgQuery: (queryBuilder: any) => {
 					const tableAlias = queryBuilder.getTableAlias()
 
-					// Handle `is` operator (single value equality)
 					if (spaceIds.is) {
 						queryBuilder.where(buildSingleSpaceCondition(sql, tableAlias, spaceIds.is))
 					}
-
-					// Handle `isNot` operator (single value inequality)
 					if (spaceIds.isNot) {
 						queryBuilder.where(sql.fragment`NOT ${buildSingleSpaceCondition(sql, tableAlias, spaceIds.isNot)}`)
 					}
-
-					// Handle `in` operator (any of multiple values)
 					if (spaceIds.in && spaceIds.in.length > 0) {
 						queryBuilder.where(buildMultiSpaceCondition(sql, tableAlias, spaceIds.in))
 					}
-
-					// Handle `notIn` operator (none of multiple values)
 					if (spaceIds.notIn && spaceIds.notIn.length > 0) {
 						queryBuilder.where(sql.fragment`NOT ${buildMultiSpaceCondition(sql, tableAlias, spaceIds.notIn)}`)
 					}
-
-					// Handle `isNull` operator
 					if (spaceIds.isNull === true) {
-						// Entity has no space associations
 						queryBuilder.where(sql.fragment`NOT ${buildHasAnySpaceCondition(sql, tableAlias)}`)
 					}
 					if (spaceIds.isNull === false) {
-						// Entity has at least one space association
 						queryBuilder.where(buildHasAnySpaceCondition(sql, tableAlias))
 					}
 				},
 			}
 		})
+
+		// ========================================================================
+		// Type filter data generators
+		// ========================================================================
+
+		// Register the data generator for typeId argument
+		addArgDataGenerator(({ typeId }: { typeId?: string }) => {
+			if (!typeId) return {}
+			return {
+				pgQuery: (queryBuilder: any) => {
+					queryBuilder.where(buildSingleTypeCondition(sql, queryBuilder.getTableAlias(), typeId))
+				},
+			}
+		})
+
+		// Register the data generator for typeIds argument
+		addArgDataGenerator(({ typeIds }: { typeIds?: any }) => {
+			if (!typeIds) return {}
+
+			return {
+				pgQuery: (queryBuilder: any) => {
+					const tableAlias = queryBuilder.getTableAlias()
+
+					if (typeIds.is) {
+						queryBuilder.where(buildSingleTypeCondition(sql, tableAlias, typeIds.is))
+					}
+					if (typeIds.isNot) {
+						queryBuilder.where(sql.fragment`NOT ${buildSingleTypeCondition(sql, tableAlias, typeIds.isNot)}`)
+					}
+					if (typeIds.in && typeIds.in.length > 0) {
+						queryBuilder.where(buildMultiTypeCondition(sql, tableAlias, typeIds.in))
+					}
+					if (typeIds.notIn && typeIds.notIn.length > 0) {
+						queryBuilder.where(sql.fragment`NOT ${buildMultiTypeCondition(sql, tableAlias, typeIds.notIn)}`)
+					}
+					if (typeIds.isNull === true) {
+						queryBuilder.where(sql.fragment`NOT ${buildHasAnyTypeCondition(sql, tableAlias)}`)
+					}
+					if (typeIds.isNull === false) {
+						queryBuilder.where(buildHasAnyTypeCondition(sql, tableAlias))
+					}
+				},
+			}
+		})
+
+		// ========================================================================
+		// Add arguments to schema
+		// ========================================================================
 
 		return build.extend(args, {
 			spaceId: {
@@ -153,6 +251,14 @@ export const EntitySpaceFilterPlugin = (builder: any) => {
 			},
 			spaceIds: {
 				description: "Filter entities by space with operators (in, notIn, is, isNot, etc.)",
+				type: UUIDFilterType,
+			},
+			typeId: {
+				description: "Filter entities that have this type (efficient indexed lookup)",
+				type: UUIDType,
+			},
+			typeIds: {
+				description: "Filter entities by type with operators (in, notIn, is, isNot, etc.)",
 				type: UUIDFilterType,
 			},
 		})
