@@ -19,7 +19,7 @@ health.get("/", async (c) => {
 				})
 
 				return result
-			}).pipe(Effect.withSpan("health.check")),
+			}),
 		)
 
 		if (healthCheck) {
@@ -89,7 +89,7 @@ health.get("/detailed", async (c) => {
 					recommendations: getHealthRecommendations(poolStats, utilizationPercent),
 					timestamp: new Date().toISOString(),
 				}
-			}).pipe(Effect.withSpan("health.detailed")),
+			}),
 		)
 
 		const statusCode = healthData.status === "healthy" ? 200 : healthData.status === "degraded" ? 206 : 503
@@ -124,7 +124,7 @@ health.get("/pool", async (c) => {
 					status: utilizationPercent > 85 ? "critical" : utilizationPercent > 70 ? "warning" : "ok",
 					timestamp: new Date().toISOString(),
 				}
-			}).pipe(Effect.withSpan("health.pool")),
+			}),
 		)
 
 		return c.json(poolData)

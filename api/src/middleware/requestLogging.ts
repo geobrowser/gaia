@@ -13,9 +13,10 @@ import type {Context, Next} from "hono"
 import {log} from "../services/telemetry"
 
 /**
- * Paths to skip canonical logging (they have their own instrumentation).
+ * Paths to skip canonical logging.
+ * Note: GraphQL no longer skipped - needs HTTP transaction as parent for operation spans.
  */
-const SKIP_PATHS = new Set(["/graphql", "/v2/graphql"])
+const SKIP_PATHS = new Set<string>([])
 
 /**
  * Extract or generate a request ID.
