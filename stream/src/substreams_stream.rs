@@ -83,11 +83,10 @@ fn stream_blocks(
                 final_blocks_only: false,
                 modules: modules.clone(),
                 output_module: output_module_name.clone(),
-                // There is usually no good reason for you to consume the stream development mode (so switching `true`
-                // to `false`). If you do switch it, be aware that more than one output module will be send back to you,
-                // and the current code in `process_block_scoped_data` (within your 'main.rs' file) expects a single
-                // module.
-                production_mode: true,
+                // Production mode processes blocks in parallel on the server side, which can cause
+                // "initializing..." delays while the backend builds up state. Development mode
+                // processes blocks sequentially, which is slower but more predictable.
+                production_mode: false,
                 debug_initial_store_snapshot_for_modules: vec![],
                 noop_mode: false,
 
