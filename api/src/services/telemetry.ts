@@ -67,20 +67,23 @@ export const log = {
 	},
 	info: (message: string, data?: LogData) => {
 		if (sentryInitialized) {
-			Sentry.captureMessage(message, {level: "info", extra: data})
+			// Breadcrumb only - provides context for subsequent errors without creating issues
+			Sentry.addBreadcrumb({message, data, level: "info", category: "log"})
 		} else {
 			console.info(formatConsoleLog("info", message, data))
 		}
 	},
 	warn: (message: string, data?: LogData) => {
 		if (sentryInitialized) {
-			Sentry.captureMessage(message, {level: "warning", extra: data})
+			// Breadcrumb only - provides context for subsequent errors without creating issues
+			Sentry.addBreadcrumb({message, data, level: "warning", category: "log"})
 		} else {
 			console.warn(formatConsoleLog("warn", message, data))
 		}
 	},
 	error: (message: string, data?: LogData) => {
 		if (sentryInitialized) {
+			// Only errors create Sentry issues
 			Sentry.captureMessage(message, {level: "error", extra: data})
 		} else {
 			console.error(formatConsoleLog("error", message, data))
@@ -89,18 +92,20 @@ export const log = {
 }
 
 // Effect Logger that routes to Sentry
+// - DEBUG/TRACE/INFO/WARN: breadcrumbs (context for errors, no issues created)
+// - ERROR/FATAL: captureMessage (creates Sentry issues)
 const SentryLogger = Logger.make(({logLevel, message}) => {
 	const messageStr = String(message)
 
 	if (sentryInitialized) {
-		if (logLevel === LogLevel.Debug || logLevel === LogLevel.Trace) {
-			Sentry.addBreadcrumb({message: messageStr, level: "debug", category: "effect"})
-		} else if (logLevel === LogLevel.Info) {
-			Sentry.captureMessage(messageStr, {level: "info"})
-		} else if (logLevel === LogLevel.Warning) {
-			Sentry.captureMessage(messageStr, {level: "warning"})
-		} else if (logLevel === LogLevel.Error || logLevel === LogLevel.Fatal) {
+		if (logLevel === LogLevel.Error || logLevel === LogLevel.Fatal) {
 			Sentry.captureMessage(messageStr, {level: "error"})
+		} else if (logLevel === LogLevel.Warning) {
+			Sentry.addBreadcrumb({message: messageStr, level: "warning", category: "effect"})
+		} else if (logLevel === LogLevel.Info) {
+			Sentry.addBreadcrumb({message: messageStr, level: "info", category: "effect"})
+		} else {
+			Sentry.addBreadcrumb({message: messageStr, level: "debug", category: "effect"})
 		}
 	} else {
 		if (logLevel === LogLevel.Debug || logLevel === LogLevel.Trace) {
@@ -120,5 +125,3 @@ export const SentryLoggerLive = Logger.replace(Logger.defaultLogger, SentryLogge
 
 // Combined telemetry layer: spans + logging
 export const TelemetryLive = Layer.merge(NodeSdkLive, SentryLoggerLive)
-
-export {Sentry}

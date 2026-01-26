@@ -1,5 +1,5 @@
 import { swaggerUI } from "@hono/swagger-ui"
-import { Duration, Effect, Either, Layer, Schedule, Schema } from "effect"
+import { Duration, Effect, Either, Schedule, Schema } from "effect"
 import { Hono } from "hono"
 import { openAPISpecs } from "hono-openapi"
 import { compress } from "hono/compress"
@@ -9,11 +9,11 @@ import { graphqlServer, graphqlServerV2 } from "./src/kg/postgraphile"
 import { createSearchRouter } from "./src/search"
 import { createVersionedRouter } from "./src/versioned"
 import { db } from "./src/services/storage/storage"
-import { Environment, EnvironmentLive, make as makeEnvironment } from "./src/services/environment"
+import { EnvironmentLive } from "./src/services/environment"
 import { uploadEdit, uploadFile, uploadFileAlternativeGateway } from "./src/services/ipfs"
 import { OpenSearchClient } from "./src/services/search"
-import { make as makeStorage, Storage } from "./src/services/storage/storage"
 import { getPublishEditCalldata } from "./src/utils/calldata"
+import { runtime } from "./src/services/runtime"
 
 /**
  * Currently hand-rolling a compression polyfill until Bun implements
@@ -21,14 +21,9 @@ import { getPublishEditCalldata } from "./src/utils/calldata"
  * https://github.com/oven-sh/bun/issues/1723
  */
 import "./src/compression-polyfill"
-import { log, TelemetryLive } from "./src/services/telemetry"
+import { log } from "./src/services/telemetry"
 import { deployPersonalSpace } from "./src/space/deploy-personal-space"
 import { deployPublicSpace } from "./src/space/deploy-public-space"
-
-const EnvironmentLayer = Layer.effect(Environment, makeEnvironment)
-const StorageLayer = Layer.effect(Storage, makeStorage).pipe(Layer.provide(EnvironmentLayer))
-const layers = Layer.mergeAll(EnvironmentLayer, StorageLayer)
-const provideDeps = Effect.provide(layers)
 
 const app = new Hono()
 app.use("*", cors())
@@ -52,14 +47,14 @@ if (opensearchUrl) {
 		throw error
 	}
 	const searchClient = new OpenSearchClient(opensearchUrl)
-	app.route("/search", createSearchRouter(searchClient))
+	app.route("/search", createSearchRouter(searchClient, runtime))
 	log.info("Search routes enabled", {url: opensearchUrl})
 } else {
 	log.info("Search routes disabled - OPENSEARCH_URL not set")
 }
 
 // Mount versioned entities router
-app.route("/versioned", createVersionedRouter(db))
+app.route("/versioned", createVersionedRouter(db, runtime))
 log.info("Versioned entity routes enabled")
 
 app.get("/", swaggerUI({url: "/openapi"}))
@@ -80,13 +75,8 @@ app.post("/ipfs/upload-edit", async (c) => {
 		return new Response("No file provided", {status: 400})
 	}
 
-	const result = await Effect.runPromise(
-		Effect.either(uploadEdit(file)).pipe(
-			Effect.withSpan("/ipfs/upload-edit.uploadEdit"),
-			Effect.provide(EnvironmentLayer),
-			Effect.provide(TelemetryLive),
-		),
-	)
+	const program = uploadEdit(file).pipe(Effect.withSpan("/ipfs/upload-edit.uploadEdit"))
+	const result = await runtime.runPromise(Effect.either(program))
 
 	if (Either.isLeft(result)) {
 		// @TODO: Logging/tracing
@@ -106,13 +96,8 @@ app.post("/ipfs/upload-file", async (c) => {
 		return new Response("No file provided", {status: 400})
 	}
 
-	const result = await Effect.runPromise(
-		Effect.either(uploadFile(file)).pipe(
-			Effect.withSpan("/ipfs/upload-file.uploadFile"),
-			Effect.provide(EnvironmentLayer),
-			Effect.provide(TelemetryLive),
-		),
-	)
+	const program = uploadFile(file).pipe(Effect.withSpan("/ipfs/upload-file.uploadFile"))
+	const result = await runtime.runPromise(Effect.either(program))
 
 	if (Either.isLeft(result)) {
 		// @TODO: Logging/tracing
@@ -132,13 +117,10 @@ app.post("/ipfs/upload-file-alternative-gateway", async (c) => {
 		return new Response("No file provided", {status: 400})
 	}
 
-	const result = await Effect.runPromise(
-		Effect.either(uploadFileAlternativeGateway(file)).pipe(
-			Effect.withSpan("/ipfs/upload-file-alternative-gateway.uploadFile"),
-			Effect.provide(EnvironmentLayer),
-			Effect.provide(TelemetryLive),
-		),
+	const program = uploadFileAlternativeGateway(file).pipe(
+		Effect.withSpan("/ipfs/upload-file-alternative-gateway.uploadFile"),
 	)
+	const result = await runtime.runPromise(Effect.either(program))
 
 	if (Either.isLeft(result)) {
 		// @TODO: Logging/tracing
@@ -179,7 +161,7 @@ app.post("deploy/personal", async (c) => {
 		)
 	}
 
-	const deployWithRetry = Effect.retry(
+	const program = Effect.retry(
 		deployPersonalSpace({
 			initialEditorAddress,
 			spaceName,
@@ -192,8 +174,6 @@ app.post("deploy/personal", async (c) => {
 				spaceName,
 				spaceEntityId,
 			}),
-			Effect.provide(TelemetryLive),
-			Effect.provide(EnvironmentLayer),
 		),
 		{
 			schedule: Schedule.exponential(Duration.millis(100)).pipe(
@@ -203,45 +183,27 @@ app.post("deploy/personal", async (c) => {
 			),
 			while: (error) => error._tag !== "WaitForSpaceToBeIndexedError",
 		},
-	)
+	).pipe(Effect.annotateLogs({editor: initialEditorAddress, spaceName}))
 
-	const providedDeploy = deployWithRetry.pipe(provideDeps)
-
-	const result = await Effect.runPromise(
-		Effect.either(providedDeploy).pipe(Effect.annotateLogs({editor: initialEditorAddress, spaceName})),
-	)
+	const result = await runtime.runPromise(Effect.either(program))
 
 	return Either.match(result, {
 		onLeft: (error) => {
-			switch (error._tag) {
-				case "ConfigError":
-					log.error("Invalid server config", {route: "/deploy/personal"})
-					return new Response(
-						JSON.stringify({
-							message: "Invalid server config. Please notify the server administrator.",
-							reason: "Invalid server config. Please notify the server administrator.",
-						}),
-						{
-							status: 500,
-						},
-					)
-				default:
-					log.error("Failed to deploy space", {
-						route: "/deploy/personal",
-						message: error.message,
-						cause: String(error.cause),
-					})
+			log.error("Failed to deploy space", {
+				route: "/deploy/personal",
+				message: error.message,
+				cause: String(error.cause),
+			})
 
-					return new Response(
-						JSON.stringify({
-							message: `Failed to deploy space. message: ${error.message} – cause: ${error.cause}`,
-							reason: error.message,
-						}),
-						{
-							status: 500,
-						},
-					)
-			}
+			return new Response(
+				JSON.stringify({
+					message: `Failed to deploy space. message: ${error.message} – cause: ${error.cause}`,
+					reason: error.message,
+				}),
+				{
+					status: 500,
+				},
+			)
 		},
 		onRight: (spaceId) => {
 			return Response.json({spaceId})
@@ -282,7 +244,7 @@ app.post("deploy/public", async (c) => {
 		)
 	}
 
-	const deployWithRetry = Effect.retry(
+	const program = Effect.retry(
 		deployPublicSpace({
 			initialEditorAddresses,
 			spaceName,
@@ -295,8 +257,6 @@ app.post("deploy/public", async (c) => {
 				spaceName,
 				spaceEntityId,
 			}),
-			Effect.provide(TelemetryLive),
-			Effect.provide(EnvironmentLayer),
 		),
 		{
 			schedule: Schedule.exponential(Duration.millis(100)).pipe(
@@ -306,45 +266,27 @@ app.post("deploy/public", async (c) => {
 			),
 			while: (error) => error._tag !== "WaitForSpaceToBeIndexedError",
 		},
-	)
+	).pipe(Effect.annotateLogs({editor: initialEditorAddresses, spaceName}))
 
-	const providedDeploy = deployWithRetry.pipe(provideDeps)
-
-	const result = await Effect.runPromise(
-		Effect.either(providedDeploy).pipe(Effect.annotateLogs({editor: initialEditorAddresses, spaceName})),
-	)
+	const result = await runtime.runPromise(Effect.either(program))
 
 	return Either.match(result, {
 		onLeft: (error) => {
-			switch (error._tag) {
-				case "ConfigError":
-					log.error("Invalid server config", {route: "/deploy/public"})
-					return new Response(
-						JSON.stringify({
-							message: "Invalid server config. Please notify the server administrator.",
-							reason: "Invalid server config. Please notify the server administrator.",
-						}),
-						{
-							status: 500,
-						},
-					)
-				default:
-					log.error("Failed to deploy space", {
-						route: "/deploy/public",
-						message: error.message,
-						cause: String(error.cause),
-					})
+			log.error("Failed to deploy space", {
+				route: "/deploy/public",
+				message: error.message,
+				cause: String(error.cause),
+			})
 
-					return new Response(
-						JSON.stringify({
-							message: `Failed to deploy space. message: ${error.message} – cause: ${error.cause}`,
-							reason: error.message,
-						}),
-						{
-							status: 500,
-						},
-					)
-			}
+			return new Response(
+				JSON.stringify({
+					message: `Failed to deploy space. message: ${error.message} – cause: ${error.cause}`,
+					reason: error.message,
+				}),
+				{
+					status: 500,
+				},
+			)
 		},
 		onRight: (spaceId) => {
 			return Response.json({spaceId})
@@ -356,120 +298,72 @@ app.post("deploy/public", async (c) => {
  * The /deploy route is a legacy route for deploying PERSONAL spaces. Leaving it for
  * now until we're ready to deprecate it.
  */
-app.post(
-	"deploy",
-	// describeRoute({
-	// 	validateResponse: true,
-	// 	description: "Deploys a space with the provided parameters",
-	// requestBody: {
-	// 	required: true,
-	// 	content: {
-	// 		"application/json": {
-	// 			schema: DeployParametersSchema,
-	// 		},
-	// 	},
-	// },
-	// 	responses: {
-	// 		200: {
-	// 			description: "Successful space deployment",
-	// 			content: {
-	// 				"application/json": {schema: resolver(DeployResponseSchema)},
-	// 			},
-	// 		},
-	// 		400: {
-	// 			description:
-	// 				"Missing required parameters. An initial editor account and space name are required to deploy a space.",
-	// 		},
-	// 	},
-	// }),
-	// effectValidator("json", DeployParametersSchema),
-	async (c) => {
-		const {initialEditorAddress, spaceName, spaceEntityId, ops} = await c.req.json()
+app.post("deploy", async (c) => {
+	const {initialEditorAddress, spaceName, spaceEntityId, ops} = await c.req.json()
 
-		if (initialEditorAddress === null || spaceName === null) {
-			log.error("Missing required parameters to deploy a space", {initialEditorAddress, spaceName})
+	if (initialEditorAddress === null || spaceName === null) {
+		log.error("Missing required parameters to deploy a space", {initialEditorAddress, spaceName})
 
-			return new Response(
-				JSON.stringify({
-					error: "Missing required parameters",
-					reason: "An initial editor account and space name are required to deploy a space.",
-				}),
-				{
-					status: 400,
-				},
-			)
-		}
+		return new Response(
+			JSON.stringify({
+				error: "Missing required parameters",
+				reason: "An initial editor account and space name are required to deploy a space.",
+			}),
+			{
+				status: 400,
+			},
+		)
+	}
 
-		const deployWithRetry = Effect.retry(
-			deployPersonalSpace({
+	const program = Effect.retry(
+		deployPersonalSpace({
+			initialEditorAddress,
+			spaceName,
+			spaceEntityId,
+			ops,
+		}).pipe(
+			Effect.withSpan("/deploy.deploySpace"),
+			Effect.annotateSpans({
 				initialEditorAddress,
 				spaceName,
 				spaceEntityId,
-				ops,
-			}).pipe(
-				Effect.withSpan("/deploy.deploySpace"),
-				Effect.annotateSpans({
-					initialEditorAddress,
-					spaceName,
-					spaceEntityId,
-				}),
-				Effect.provide(TelemetryLive),
-				Effect.provide(EnvironmentLayer),
+			}),
+		),
+		{
+			schedule: Schedule.exponential(Duration.millis(100)).pipe(
+				Schedule.jittered,
+				Schedule.compose(Schedule.elapsed),
+				Schedule.whileOutput(Duration.lessThanOrEqualTo(Duration.minutes(1))),
 			),
-			{
-				schedule: Schedule.exponential(Duration.millis(100)).pipe(
-					Schedule.jittered,
-					Schedule.compose(Schedule.elapsed),
-					Schedule.whileOutput(Duration.lessThanOrEqualTo(Duration.minutes(1))),
-				),
-				while: (error) => error._tag !== "WaitForSpaceToBeIndexedError",
-			},
-		)
+			while: (error) => error._tag !== "WaitForSpaceToBeIndexedError",
+		},
+	).pipe(Effect.annotateLogs({editor: initialEditorAddress, spaceName}))
 
-		const providedDeploy = deployWithRetry.pipe(provideDeps)
+	const result = await runtime.runPromise(Effect.either(program))
 
-		const result = await Effect.runPromise(
-			Effect.either(providedDeploy).pipe(Effect.annotateLogs({editor: initialEditorAddress, spaceName})),
-		)
+	return Either.match(result, {
+		onLeft: (error) => {
+			log.error("Failed to deploy space", {
+				route: "/deploy",
+				message: error.message,
+				cause: String(error.cause),
+			})
 
-		return Either.match(result, {
-			onLeft: (error) => {
-				switch (error._tag) {
-					case "ConfigError":
-						log.error("Invalid server config", {route: "/deploy"})
-						return new Response(
-							JSON.stringify({
-								message: "Invalid server config. Please notify the server administrator.",
-								reason: "Invalid server config. Please notify the server administrator.",
-							}),
-							{
-								status: 500,
-							},
-						)
-					default:
-						log.error("Failed to deploy space", {
-							route: "/deploy",
-							message: error.message,
-							cause: String(error.cause),
-						})
-
-						return new Response(
-							JSON.stringify({
-								message: `Failed to deploy space. message: ${error.message} – cause: ${error.cause}`,
-								reason: error.message,
-							}),
-							{
-								status: 500,
-							},
-						)
-				}
-			},
-			onRight: (spaceId) => {
-				return Response.json({spaceId})
-			},
-		})
-	},
-)
+			return new Response(
+				JSON.stringify({
+					message: `Failed to deploy space. message: ${error.message} – cause: ${error.cause}`,
+					reason: error.message,
+				}),
+				{
+					status: 500,
+				},
+			)
+		},
+		onRight: (spaceId) => {
+			return Response.json({spaceId})
+		},
+	})
+})
 
 const CalldataRequestSchema = Schema.Struct({
 	cid: Schema.String,
@@ -510,45 +404,30 @@ app.post("/space/:spaceId/edit/calldata", async (c) => {
 		)
 	}
 
-	const getCalldata = Effect.gen(function* () {
-		return yield* getPublishEditCalldata(spaceId, cid as string)
-	})
+	const program = getPublishEditCalldata(spaceId, cid as string).pipe(
+		Effect.withSpan("/space/:spaceId/edit/calldata.getCalldata"),
+	)
 
-	const calldata = await Effect.runPromise(Effect.either(getCalldata.pipe(provideDeps)))
+	const calldata = await runtime.runPromise(Effect.either(program))
 
 	if (Either.isLeft(calldata)) {
 		const error = calldata.left
 
-		switch (error._tag) {
-			case "ConfigError":
-				log.error("Invalid server config", {route: "/space/:spaceId/edit/calldata"})
-				return new Response(
-					JSON.stringify({
-						message: "Invalid server config. Please notify the server administrator.",
-						reason: "Invalid server config. Please notify the server administrator.",
-					}),
-					{
-						status: 500,
-					},
-				)
+		log.error("Failed to generate calldata for edit", {
+			route: "/space/:spaceId/edit/calldata",
+			message: error.message,
+			cause: String(error.cause),
+		})
 
-			default:
-				log.error("Failed to generate calldata for edit", {
-					route: "/space/:spaceId/edit/calldata",
-					message: error.message,
-					cause: String(error.cause),
-				})
-
-				return new Response(
-					JSON.stringify({
-						message: `Failed to deploy space. message: ${error.message} – cause: ${error.cause}`,
-						reason: error.message,
-					}),
-					{
-						status: 500,
-					},
-				)
-		}
+		return new Response(
+			JSON.stringify({
+				message: `Failed to generate calldata. message: ${error.message} – cause: ${error.cause}`,
+				reason: error.message,
+			}),
+			{
+				status: 500,
+			},
+		)
 	}
 
 	if (calldata.right === null) {

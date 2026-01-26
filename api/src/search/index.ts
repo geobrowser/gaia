@@ -4,10 +4,11 @@
  * Provides HTTP endpoints for full-text search across the Knowledge Graph.
  */
 
+import {Data, Effect, Either} from "effect"
 import {Hono} from "hono"
 
-import type {SearchClient, SearchScope} from "../services/search"
-import {log} from "../services/telemetry"
+import type {AppRuntime} from "../services/runtime"
+import type {SearchClient, SearchResponse, SearchScope} from "../services/search"
 import {isValidUuid} from "../utils/uuid"
 
 /**
@@ -50,257 +51,233 @@ const MAX_TYPE_IDS = 10
  */
 const VALID_PARAMS: Set<string> = new Set(["query", "q", "scope", "space_id", "type_ids", "limit", "offset"])
 
+// Error types for search operations
+class SearchValidationError extends Data.TaggedError("SearchValidationError")<{
+	message: string
+	status: 400
+}> {}
+
+class SearchExecutionError extends Data.TaggedError("SearchExecutionError")<{
+	message: string
+	status: 500
+}> {}
+
+type SearchError = SearchValidationError | SearchExecutionError
+
 /**
  * Create the search router with dependency-injected search client.
  *
  * @param searchClient - The search client to use for queries
+ * @param runtime - Effect runtime with telemetry and other services
  * @returns Configured Hono router
- *
- * @example
- * ```typescript
- * import { createSearchRouter } from "./src/search";
- * import { OpenSearchClient } from "./src/services/search";
- *
- * const searchClient = new OpenSearchClient("http://localhost:9200");
- * app.route("/search", createSearchRouter(searchClient));
- * ```
  */
-export function createSearchRouter(searchClient: SearchClient) {
+export function createSearchRouter(searchClient: SearchClient, runtime: AppRuntime) {
 	const router = new Hono()
 
 	/**
 	 * GET /search
 	 *
 	 * Search for entities across the Knowledge Graph.
-	 *
-	 * Query Parameters:
-	 * - query or q: Search query string (optional, max 500 characters)
-	 *   - If not provided or empty, returns top ranked results for the search scope
-	 * - scope: Search scope (optional, default: GLOBAL)
-	 *   - GLOBAL: Search across all spaces, boosted by entity_global_score
-	 *   - GLOBAL_BY_SPACE_SCORE: Search across all spaces, boosted by space_score
-	 *   - SPACE_SINGLE: Search within a single specific space, boosted by entity_space_score
-	 *   - SPACE: Search within a space and its subspaces (currently implemented as single space)
-	 * - space_id: Space ID for space-scoped searches (required for SPACE_* scopes, max 36 chars)
-	 * - type_ids: Comma-separated list of type IDs to filter by (optional, max 10 IDs)
-	 * - limit: Maximum results (optional, default: 20, max: 100)
-	 * - offset: Pagination offset (optional, default: 0, max: 1000)
-	 *
-	 * Response:
-	 * - 200: SearchResponse with results
-	 *   - results[]: Array of search results
-	 *     - entityId: The entity's unique identifier
-	 *     - spaceId: The space this entity belongs to
-	 *     - name?: Optional entity display name
-	 *     - description?: Optional description text
-	 *     - avatar?: Optional avatar image URL
-	 *     - cover?: Optional cover image URL
-	 *     - typeIds?: Array of type IDs associated with this entity (from type_relations)
-	 *     - entityGlobalScore?: Global entity score
-	 *     - spaceScore?: Space score
-	 *     - entitySpaceScore?: Entity-space score
-	 *   - total: Total number of matching documents
-	 *   - tookMs: Time taken to execute the search in milliseconds
-	 * - 400: Invalid request parameters
-	 * - 500: Search failed
 	 */
 	router.get("/", async (c) => {
-		// Check for unrecognized query parameters
-		const allParams = Object.keys(c.req.query())
-		const unrecognizedParams = allParams.filter((param) => !VALID_PARAMS.has(param))
-		if (unrecognizedParams.length > 0) {
-			return c.json(
-				{
-					error: "Unrecognized parameter",
-					message: `Unrecognized query parameter(s): ${unrecognizedParams.join(", ")}. Valid parameters are: ${Array.from(VALID_PARAMS).join(", ")}`,
-				},
-				400,
-			)
-		}
-
-		// Extract query parameters (accepts "query" first or "q" second)
-		const query = c.req.query("query") ?? c.req.query("q")
-		const scopeParam = c.req.query("scope") ?? "GLOBAL"
-		const spaceId = c.req.query("space_id")
-		const typeIdsParam = c.req.query("type_ids")
-		const limitParam = c.req.query("limit")
-		const offsetParam = c.req.query("offset")
-
-		// Validate query length (if provided)
-		const trimmedQuery = query?.trim() ?? ""
-
-		if (trimmedQuery.length > MAX_QUERY_LENGTH) {
-			return c.json(
-				{
-					error: "Invalid parameter",
-					message: `Query must not exceed ${MAX_QUERY_LENGTH} characters`,
-				},
-				400,
-			)
-		}
-
-		// Validate scope
-		if (!VALID_SCOPES.has(scopeParam as SearchScope)) {
-			return c.json(
-				{
-					error: "Invalid parameter",
-					message: `Invalid scope '${scopeParam}'. Valid values: ${Array.from(VALID_SCOPES).join(", ")}`,
-				},
-				400,
-			)
-		}
-		const scope = scopeParam as SearchScope
-
-		// Validate space_id for space-scoped searches
-		if (scope === "SPACE_SINGLE" || scope === "SPACE") {
-			if (!spaceId) {
-				return c.json(
-					{
-						error: "Missing required parameter",
-						message: `space_id is required for ${scope} scope`,
-					},
-					400,
+		const program = Effect.gen(function* () {
+			// Check for unrecognized query parameters
+			const allParams = Object.keys(c.req.query())
+			const unrecognizedParams = allParams.filter((param) => !VALID_PARAMS.has(param))
+			if (unrecognizedParams.length > 0) {
+				return yield* Effect.fail(
+					new SearchValidationError({
+						message: `Unrecognized query parameter(s): ${unrecognizedParams.join(", ")}. Valid parameters are: ${Array.from(VALID_PARAMS).join(", ")}`,
+						status: 400,
+					}),
 				)
 			}
 
-			if (spaceId.length > MAX_SPACE_ID_LENGTH) {
-				return c.json(
-					{
-						error: "Invalid parameter",
-						message: `space_id must not exceed ${MAX_SPACE_ID_LENGTH} characters`,
-					},
-					400,
+			// Extract query parameters
+			const query = c.req.query("query") ?? c.req.query("q")
+			const scopeParam = c.req.query("scope") ?? "GLOBAL"
+			const spaceId = c.req.query("space_id")
+			const typeIdsParam = c.req.query("type_ids")
+			const limitParam = c.req.query("limit")
+			const offsetParam = c.req.query("offset")
+
+			// Validate query length
+			const trimmedQuery = query?.trim() ?? ""
+			if (trimmedQuery.length > MAX_QUERY_LENGTH) {
+				return yield* Effect.fail(
+					new SearchValidationError({
+						message: `Query must not exceed ${MAX_QUERY_LENGTH} characters`,
+						status: 400,
+					}),
 				)
 			}
 
-			if (!isValidUuid(spaceId)) {
-				return c.json(
-					{
-						error: "Invalid parameter",
-						message: "space_id must be a valid UUID",
-					},
-					400,
+			// Validate scope
+			if (!VALID_SCOPES.has(scopeParam as SearchScope)) {
+				return yield* Effect.fail(
+					new SearchValidationError({
+						message: `Invalid scope '${scopeParam}'. Valid values: ${Array.from(VALID_SCOPES).join(", ")}`,
+						status: 400,
+					}),
 				)
 			}
-		}
+			const scope = scopeParam as SearchScope
 
-		// Parse and validate limit
-		let limit = DEFAULT_LIMIT
-		if (limitParam) {
-			const parsedLimit = parseInt(limitParam, 10)
-			if (Number.isNaN(parsedLimit) || parsedLimit < 1) {
-				return c.json(
-					{
-						error: "Invalid parameter",
-						message: "limit must be a positive integer",
-					},
-					400,
-				)
-			}
-			limit = Math.min(parsedLimit, MAX_LIMIT)
-		}
+			// Validate space_id for space-scoped searches
+			if (scope === "SPACE_SINGLE" || scope === "SPACE") {
+				if (!spaceId) {
+					return yield* Effect.fail(
+						new SearchValidationError({
+							message: `space_id is required for ${scope} scope`,
+							status: 400,
+						}),
+					)
+				}
 
-		// Parse and validate offset
-		let offset = 0
-		if (offsetParam) {
-			const parsedOffset = parseInt(offsetParam, 10)
-			if (Number.isNaN(parsedOffset) || parsedOffset < 0) {
-				return c.json(
-					{
-						error: "Invalid parameter",
-						message: "offset must be a non-negative integer",
-					},
-					400,
-				)
-			}
-			if (parsedOffset > MAX_OFFSET) {
-				return c.json(
-					{
-						error: "Invalid parameter",
-						message: `offset must not exceed ${MAX_OFFSET}`,
-					},
-					400,
-				)
-			}
-			offset = parsedOffset
-		}
+				if (spaceId.length > MAX_SPACE_ID_LENGTH) {
+					return yield* Effect.fail(
+						new SearchValidationError({
+							message: `space_id must not exceed ${MAX_SPACE_ID_LENGTH} characters`,
+							status: 400,
+						}),
+					)
+				}
 
-		// Parse and validate typeIds
-		let typeIds: string[] | undefined
-		if (typeIdsParam) {
-			typeIds = typeIdsParam
-				.split(",")
-				.map((id) => id.trim())
-				.filter((id) => id.length > 0)
-
-			if (typeIds.length > MAX_TYPE_IDS) {
-				return c.json(
-					{
-						error: "Invalid parameter",
-						message: `type_ids must not contain more than ${MAX_TYPE_IDS} IDs`,
-					},
-					400,
-				)
-			}
-
-			// Validate each type ID is a valid UUID
-			for (const typeId of typeIds) {
-				if (!isValidUuid(typeId)) {
-					return c.json(
-						{
-							error: "Invalid parameter",
-							message: `type_ids must contain valid UUIDs, got invalid ID: ${typeId}`,
-						},
-						400,
+				if (!isValidUuid(spaceId)) {
+					return yield* Effect.fail(
+						new SearchValidationError({
+							message: "space_id must be a valid UUID",
+							status: 400,
+						}),
 					)
 				}
 			}
-		}
 
-		// Execute search
-		try {
-			const response = await searchClient.search({
-				query: trimmedQuery,
-				scope,
-				space_id: spaceId,
-				type_ids: typeIds,
-				limit,
-				offset,
-			})
+			// Parse and validate limit
+			let limit = DEFAULT_LIMIT
+			if (limitParam) {
+				const parsedLimit = parseInt(limitParam, 10)
+				if (Number.isNaN(parsedLimit) || parsedLimit < 1) {
+					return yield* Effect.fail(
+						new SearchValidationError({
+							message: "limit must be a positive integer",
+							status: 400,
+						}),
+					)
+				}
+				limit = Math.min(parsedLimit, MAX_LIMIT)
+			}
 
-			return c.json(response)
-		} catch (error) {
-			log.error("Search error", {error: error instanceof Error ? error.message : String(error)})
-			return c.json(
-				{
-					error: "Search failed",
-					message: error instanceof Error ? error.message : "An unexpected error occurred",
-				},
-				500,
-			)
-		}
+			// Parse and validate offset
+			let offset = 0
+			if (offsetParam) {
+				const parsedOffset = parseInt(offsetParam, 10)
+				if (Number.isNaN(parsedOffset) || parsedOffset < 0) {
+					return yield* Effect.fail(
+						new SearchValidationError({
+							message: "offset must be a non-negative integer",
+							status: 400,
+						}),
+					)
+				}
+				if (parsedOffset > MAX_OFFSET) {
+					return yield* Effect.fail(
+						new SearchValidationError({
+							message: `offset must not exceed ${MAX_OFFSET}`,
+							status: 400,
+						}),
+					)
+				}
+				offset = parsedOffset
+			}
+
+			// Parse and validate typeIds
+			let typeIds: string[] | undefined
+			if (typeIdsParam) {
+				typeIds = typeIdsParam
+					.split(",")
+					.map((id) => id.trim())
+					.filter((id) => id.length > 0)
+
+				if (typeIds.length > MAX_TYPE_IDS) {
+					return yield* Effect.fail(
+						new SearchValidationError({
+							message: `type_ids must not contain more than ${MAX_TYPE_IDS} IDs`,
+							status: 400,
+						}),
+					)
+				}
+
+				for (const typeId of typeIds) {
+					if (!isValidUuid(typeId)) {
+						return yield* Effect.fail(
+							new SearchValidationError({
+								message: `type_ids must contain valid UUIDs, got invalid ID: ${typeId}`,
+								status: 400,
+							}),
+						)
+					}
+				}
+			}
+
+			// Execute search
+			const response = yield* Effect.tryPromise({
+				try: () =>
+					searchClient.search({
+						query: trimmedQuery,
+						scope,
+						space_id: spaceId,
+						type_ids: typeIds,
+						limit,
+						offset,
+					}),
+				catch: (error) =>
+					new SearchExecutionError({
+						message: error instanceof Error ? error.message : "An unexpected error occurred",
+						status: 500,
+					}),
+			}).pipe(Effect.withSpan("search.execute"))
+
+			return response
+		}).pipe(
+			Effect.withSpan("GET /search"),
+			Effect.annotateLogs({route: "/search"}),
+		)
+
+		const result = await runtime.runPromise(Effect.either(program))
+
+		return Either.match(result, {
+			onLeft: (error: SearchError) => {
+				if (error._tag === "SearchValidationError") {
+					return c.json({error: "Invalid parameter", message: error.message}, 400)
+				}
+				return c.json({error: "Search failed", message: error.message}, 500)
+			},
+			onRight: (response: SearchResponse) => c.json(response),
+		})
 	})
 
 	/**
 	 * GET /search/health
 	 *
 	 * Check the health of the search service.
-	 *
-	 * Response:
-	 * - 200: { status: "healthy" }
-	 * - 503: { status: "unhealthy" }
 	 */
 	router.get("/health", async (c) => {
-		try {
-			const healthy = await searchClient.healthCheck()
-			if (healthy) {
-				return c.json({status: "healthy"})
-			}
-			return c.json({status: "unhealthy"}, 503)
-		} catch (error) {
-			log.error("Health check error", {error: error instanceof Error ? error.message : String(error)})
-			return c.json({status: "unhealthy"}, 503)
-		}
+		const program = Effect.gen(function* () {
+			const healthy = yield* Effect.tryPromise({
+				try: () => searchClient.healthCheck(),
+				catch: () => new SearchExecutionError({message: "Health check failed", status: 500}),
+			}).pipe(Effect.withSpan("search.healthCheck"))
+
+			return healthy
+		}).pipe(Effect.withSpan("GET /search/health"))
+
+		const result = await runtime.runPromise(Effect.either(program))
+
+		return Either.match(result, {
+			onLeft: () => c.json({status: "unhealthy"}, 503),
+			onRight: (healthy) => (healthy ? c.json({status: "healthy"}) : c.json({status: "unhealthy"}, 503)),
+		})
 	})
 
 	return router

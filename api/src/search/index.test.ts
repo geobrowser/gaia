@@ -1,6 +1,7 @@
 import {Hono} from "hono"
 import {beforeEach, describe, expect, it, vi} from "vitest"
 import type {SearchClient, SearchResponse} from "../services/search"
+import {runtime} from "../services/runtime"
 
 import {createSearchRouter} from "./index"
 
@@ -31,7 +32,7 @@ describe("Search Router - Integration Tests", () => {
 			healthCheck: vi.fn().mockResolvedValue(true),
 		}
 		app = new Hono()
-		app.route("/search", createSearchRouter(mockSearchClient))
+		app.route("/search", createSearchRouter(mockSearchClient, runtime))
 	})
 
 	describe("GET /search", () => {
