@@ -21,7 +21,7 @@ import { getPublishEditCalldata } from "./src/utils/calldata"
  * https://github.com/oven-sh/bun/issues/1723
  */
 import "./src/compression-polyfill"
-import { NodeSdkLive } from "./src/services/telemetry"
+import { log, TelemetryLive } from "./src/services/telemetry"
 import { deployPersonalSpace } from "./src/space/deploy-personal-space"
 import { deployPublicSpace } from "./src/space/deploy-public-space"
 
@@ -48,19 +48,19 @@ if (opensearchUrl) {
 	try {
 		new URL(opensearchUrl)
 	} catch (error) {
-		console.error(`[SEARCH] Invalid OPENSEARCH_URL: ${opensearchUrl}`)
+		log.error("Invalid OPENSEARCH_URL", {url: opensearchUrl})
 		throw error
 	}
 	const searchClient = new OpenSearchClient(opensearchUrl)
 	app.route("/search", createSearchRouter(searchClient))
-	console.log(`[SEARCH] Search routes enabled with OpenSearch at ${opensearchUrl}`)
+	log.info("Search routes enabled", {url: opensearchUrl})
 } else {
-	console.log("[SEARCH] Search routes disabled - OPENSEARCH_URL not set")
+	log.info("Search routes disabled - OPENSEARCH_URL not set")
 }
 
 // Mount versioned entities router
 app.route("/versioned", createVersionedRouter(db))
-console.log("[VERSIONED] Versioned entity routes enabled")
+log.info("Versioned entity routes enabled")
 
 app.get("/", swaggerUI({url: "/openapi"}))
 
@@ -84,7 +84,7 @@ app.post("/ipfs/upload-edit", async (c) => {
 		Effect.either(uploadEdit(file)).pipe(
 			Effect.withSpan("/ipfs/upload-edit.uploadEdit"),
 			Effect.provide(EnvironmentLayer),
-			Effect.provide(NodeSdkLive),
+			Effect.provide(TelemetryLive),
 		),
 	)
 
@@ -110,7 +110,7 @@ app.post("/ipfs/upload-file", async (c) => {
 		Effect.either(uploadFile(file)).pipe(
 			Effect.withSpan("/ipfs/upload-file.uploadFile"),
 			Effect.provide(EnvironmentLayer),
-			Effect.provide(NodeSdkLive),
+			Effect.provide(TelemetryLive),
 		),
 	)
 
@@ -136,7 +136,7 @@ app.post("/ipfs/upload-file-alternative-gateway", async (c) => {
 		Effect.either(uploadFileAlternativeGateway(file)).pipe(
 			Effect.withSpan("/ipfs/upload-file-alternative-gateway.uploadFile"),
 			Effect.provide(EnvironmentLayer),
-			Effect.provide(NodeSdkLive),
+			Effect.provide(TelemetryLive),
 		),
 	)
 
@@ -166,9 +166,7 @@ app.post("deploy/personal", async (c) => {
 	const {initialEditorAddress, spaceName, spaceEntityId, ops} = await c.req.json()
 
 	if (initialEditorAddress === null || spaceName === null) {
-		console.error(
-			`[SPACE][deploy] Missing required parameters to deploy a space ${JSON.stringify({initialEditorAddress, spaceName})}`,
-		)
+		log.error("Missing required parameters to deploy a space", {initialEditorAddress, spaceName})
 
 		return new Response(
 			JSON.stringify({
@@ -194,7 +192,7 @@ app.post("deploy/personal", async (c) => {
 				spaceName,
 				spaceEntityId,
 			}),
-			Effect.provide(NodeSdkLive),
+			Effect.provide(TelemetryLive),
 			Effect.provide(EnvironmentLayer),
 		),
 		{
@@ -217,7 +215,7 @@ app.post("deploy/personal", async (c) => {
 		onLeft: (error) => {
 			switch (error._tag) {
 				case "ConfigError":
-					console.error("[SPACE][deploy] Invalid server config")
+					log.error("Invalid server config", {route: "/deploy/personal"})
 					return new Response(
 						JSON.stringify({
 							message: "Invalid server config. Please notify the server administrator.",
@@ -228,9 +226,11 @@ app.post("deploy/personal", async (c) => {
 						},
 					)
 				default:
-					console.error(
-						`[SPACE][deploy] Failed to deploy space. message: ${error.message} – cause: ${error.cause}`,
-					)
+					log.error("Failed to deploy space", {
+						route: "/deploy/personal",
+						message: error.message,
+						cause: String(error.cause),
+					})
 
 					return new Response(
 						JSON.stringify({
@@ -253,9 +253,7 @@ app.post("deploy/public", async (c) => {
 	const {initialEditorAddresses, spaceName, spaceEntityId, ops} = await c.req.json()
 
 	if (initialEditorAddresses === null || spaceName === null) {
-		console.error(
-			`[SPACE][deploy] Missing required parameters to deploy a space ${JSON.stringify({initialEditorAddresses, spaceName})}`,
-		)
+		log.error("Missing required parameters to deploy a space", {initialEditorAddresses, spaceName})
 
 		return new Response(
 			JSON.stringify({
@@ -269,9 +267,9 @@ app.post("deploy/public", async (c) => {
 	}
 
 	if (initialEditorAddresses.length === 0) {
-		console.error(
-			"[SPACE][deploy] Invalid parameter initialEditorAddresses. At least one valid account address is required to deploy a space.",
-		)
+		log.error("Invalid parameter initialEditorAddresses", {
+			reason: "At least one valid account address is required to deploy a space",
+		})
 
 		return new Response(
 			JSON.stringify({
@@ -297,7 +295,7 @@ app.post("deploy/public", async (c) => {
 				spaceName,
 				spaceEntityId,
 			}),
-			Effect.provide(NodeSdkLive),
+			Effect.provide(TelemetryLive),
 			Effect.provide(EnvironmentLayer),
 		),
 		{
@@ -320,7 +318,7 @@ app.post("deploy/public", async (c) => {
 		onLeft: (error) => {
 			switch (error._tag) {
 				case "ConfigError":
-					console.error("[SPACE][deploy] Invalid server config")
+					log.error("Invalid server config", {route: "/deploy/public"})
 					return new Response(
 						JSON.stringify({
 							message: "Invalid server config. Please notify the server administrator.",
@@ -331,9 +329,11 @@ app.post("deploy/public", async (c) => {
 						},
 					)
 				default:
-					console.error(
-						`[SPACE][deploy] Failed to deploy space. message: ${error.message} – cause: ${error.cause}`,
-					)
+					log.error("Failed to deploy space", {
+						route: "/deploy/public",
+						message: error.message,
+						cause: String(error.cause),
+					})
 
 					return new Response(
 						JSON.stringify({
@@ -387,9 +387,7 @@ app.post(
 		const {initialEditorAddress, spaceName, spaceEntityId, ops} = await c.req.json()
 
 		if (initialEditorAddress === null || spaceName === null) {
-			console.error(
-				`[SPACE][deploy] Missing required parameters to deploy a space ${JSON.stringify({initialEditorAddress, spaceName})}`,
-			)
+			log.error("Missing required parameters to deploy a space", {initialEditorAddress, spaceName})
 
 			return new Response(
 				JSON.stringify({
@@ -415,7 +413,7 @@ app.post(
 					spaceName,
 					spaceEntityId,
 				}),
-				Effect.provide(NodeSdkLive),
+				Effect.provide(TelemetryLive),
 				Effect.provide(EnvironmentLayer),
 			),
 			{
@@ -438,7 +436,7 @@ app.post(
 			onLeft: (error) => {
 				switch (error._tag) {
 					case "ConfigError":
-						console.error("[SPACE][deploy] Invalid server config")
+						log.error("Invalid server config", {route: "/deploy"})
 						return new Response(
 							JSON.stringify({
 								message: "Invalid server config. Please notify the server administrator.",
@@ -449,9 +447,11 @@ app.post(
 							},
 						)
 					default:
-						console.error(
-							`[SPACE][deploy] Failed to deploy space. message: ${error.message} – cause: ${error.cause}`,
-						)
+						log.error("Failed to deploy space", {
+							route: "/deploy",
+							message: error.message,
+							cause: String(error.cause),
+						})
 
 						return new Response(
 							JSON.stringify({
@@ -482,7 +482,7 @@ app.post("/space/:spaceId/edit/calldata", async (c) => {
 	const parsedRequestJsonResult = Schema.decodeUnknownEither(CalldataRequestSchema)(maybeRequestJson)
 
 	if (Either.isLeft(parsedRequestJsonResult)) {
-		console.error(`[SPACE][calldata] Invalid request json. ${maybeRequestJson}`)
+		log.error("Invalid request json", {route: "/space/:spaceId/edit/calldata", body: maybeRequestJson})
 
 		return new Response(
 			JSON.stringify({
@@ -498,7 +498,7 @@ app.post("/space/:spaceId/edit/calldata", async (c) => {
 	const cid = parsedRequestJsonResult.right.cid
 
 	if (!cid || !cid.startsWith("ipfs://")) {
-		console.error(`[SPACE][calldata] Invalid CID ${cid}`)
+		log.error("Invalid CID", {route: "/space/:spaceId/edit/calldata", cid})
 		return new Response(
 			JSON.stringify({
 				error: "Missing required parameters",
@@ -521,7 +521,7 @@ app.post("/space/:spaceId/edit/calldata", async (c) => {
 
 		switch (error._tag) {
 			case "ConfigError":
-				console.error("[SPACE][calldata] Invalid server config")
+				log.error("Invalid server config", {route: "/space/:spaceId/edit/calldata"})
 				return new Response(
 					JSON.stringify({
 						message: "Invalid server config. Please notify the server administrator.",
@@ -533,9 +533,11 @@ app.post("/space/:spaceId/edit/calldata", async (c) => {
 				)
 
 			default:
-				console.error(
-					`[SPACE][calldata] Failed to generate calldata for edit. message: ${error.message} – cause: ${error.cause}`,
-				)
+				log.error("Failed to generate calldata for edit", {
+					route: "/space/:spaceId/edit/calldata",
+					message: error.message,
+					cause: String(error.cause),
+				})
 
 				return new Response(
 					JSON.stringify({
@@ -550,7 +552,7 @@ app.post("/space/:spaceId/edit/calldata", async (c) => {
 	}
 
 	if (calldata.right === null) {
-		console.error(`Failed to generate calldata. Could not find space with id ${spaceId}.`)
+		log.error("Failed to generate calldata", {spaceId, reason: "Could not find space"})
 
 		return new Response(
 			JSON.stringify({

@@ -8,6 +8,7 @@
 import { Hono } from "hono";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 
+import { log } from "../services/telemetry";
 import { isValidUuid } from "../utils/uuid";
 import {
 	resolveVersionKey,
@@ -112,7 +113,11 @@ export function createVersionedRouter(db: Database) {
 
 			return c.json(snapshot);
 		} catch (error) {
-			console.error("[VERSIONED] Error getting entity snapshot:", error);
+			log.error("Error getting entity snapshot", {
+				entityId,
+				editId,
+				error: error instanceof Error ? error.message : String(error),
+			});
 			return c.json(
 				{
 					error: "Internal error",
@@ -209,7 +214,10 @@ export function createVersionedRouter(db: Database) {
 
 			return c.json({ versions });
 		} catch (error) {
-			console.error("[VERSIONED] Error getting entity versions:", error);
+			log.error("Error getting entity versions", {
+				entityId,
+				error: error instanceof Error ? error.message : String(error),
+			});
 			return c.json(
 				{
 					error: "Internal error",
@@ -353,7 +361,12 @@ export function createVersionedRouter(db: Database) {
 
 			return c.json(diff);
 		} catch (error) {
-			console.error("[VERSIONED] Error computing entity diff:", error);
+			log.error("Error computing entity diff", {
+				entityId,
+				fromEditId,
+				toEditId,
+				error: error instanceof Error ? error.message : String(error),
+			});
 			return c.json(
 				{
 					error: "Internal error",

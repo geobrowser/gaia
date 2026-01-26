@@ -7,6 +7,7 @@
 import {Hono} from "hono"
 
 import type {SearchClient, SearchScope} from "../services/search"
+import {log} from "../services/telemetry"
 import {isValidUuid} from "../utils/uuid"
 
 /**
@@ -269,7 +270,7 @@ export function createSearchRouter(searchClient: SearchClient) {
 
 			return c.json(response)
 		} catch (error) {
-			console.error("[SEARCH] Search error:", error)
+			log.error("Search error", {error: error instanceof Error ? error.message : String(error)})
 			return c.json(
 				{
 					error: "Search failed",
@@ -297,7 +298,7 @@ export function createSearchRouter(searchClient: SearchClient) {
 			}
 			return c.json({status: "unhealthy"}, 503)
 		} catch (error) {
-			console.error("[SEARCH] Health check error:", error)
+			log.error("Health check error", {error: error instanceof Error ? error.message : String(error)})
 			return c.json({status: "unhealthy"}, 503)
 		}
 	})
