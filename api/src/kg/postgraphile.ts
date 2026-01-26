@@ -4,6 +4,7 @@ import { createYoga, useExecutionCancellation } from "graphql-yoga"
 import { Pool } from "pg"
 import { createPostGraphileSchema, withPostGraphileContext } from "postgraphile"
 import ConnectionFilterPlugin from "postgraphile-plugin-connection-filter"
+import EntitySpaceFilterPlugin from "./entitySpaceFilterPlugin"
 import UndashedUuidPlugin from "./uuidScalarPlugin"
 
 // Create PostgreSQL pool with explicit configuration to prevent connection exhaustion
@@ -36,7 +37,8 @@ const postgraphileOptions = {
 	//   plugins (including ConnectionFilterPlugin) build their types against the
 	//   undashed UUID behavior. This has been verified to work with both dashed
 	//   and undashed UUID inputs in filters.
-	appendPlugins: [UndashedUuidPlugin, ConnectionFilterPlugin, SimplifyInflectionPlugin],
+	// - EntitySpaceFilterPlugin adds efficient spaceId filter using EXISTS instead of computed column
+	appendPlugins: [UndashedUuidPlugin, ConnectionFilterPlugin, SimplifyInflectionPlugin, EntitySpaceFilterPlugin],
 	disableDefaultMutations: true,
 	simpleCollections: "both" as const,
 	graphileBuildOptions: {
