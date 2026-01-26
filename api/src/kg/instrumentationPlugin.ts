@@ -1,9 +1,7 @@
 import * as Sentry from "@sentry/node"
-import {SpanStatusCode, context, trace} from "@opentelemetry/api"
+import {SpanStatusCode, trace} from "@opentelemetry/api"
 import {print} from "graphql"
 import type {Plugin} from "graphql-yoga"
-
-const tracer = trace.getTracer("gaia.api.graphql")
 
 /**
  * Extract request ID from context.
@@ -32,7 +30,8 @@ export function useGraphQLInstrumentation(): Plugin {
 			const query = print(args.document)
 			const requestId = getRequestId(args.contextValue)
 
-			// Create OTEL span (flows through SentrySpanProcessor)
+			// Get tracer lazily at request time (not module load) to ensure OTEL SDK is initialized
+			const tracer = trace.getTracer("gaia.api.graphql")
 			const span = tracer.startSpan(`graphql ${operationName}`, {
 				attributes: {
 					"graphql.operation_name": operationName,
