@@ -11,12 +11,16 @@ import UndashedUuidPlugin from "./uuidScalarPlugin"
 // Ensure max * num_replicas < Postgres max_connections (leaving room for admin/migrations).
 const pgPool = new Pool({
 	connectionString: process.env.DATABASE_URL || "postgres://user:pass@localhost/mydb",
-	// Pool size - conservative default leaves room for other connections
-	max: parseInt(process.env.PG_POOL_MAX || "15", 10),
+	// Pool size - PgBouncer handles multiplexing, so we can be generous here.
+	// The real PostgreSQL connection limit is managed by PgBouncer's pool_size.
+	// With 2 replicas at 50 each = 100 connections, well under PgBouncer's 200 max_client_conn.
+	max: parseInt(process.env.PG_POOL_MAX || "50", 10),
 	// Fail fast if no connection available (default is 0 = wait forever, causing hangs)
 	connectionTimeoutMillis: parseInt(process.env.PG_CONNECTION_TIMEOUT_MS || "3000", 10),
-	// Close idle connections after 30 seconds to free up Postgres slots
+	// Close idle connections after 30 seconds to free up PgBouncer slots
 	idleTimeoutMillis: parseInt(process.env.PG_IDLE_TIMEOUT_MS || "30000", 10),
+	// Allow process to exit cleanly when pool is idle (for graceful shutdown)
+	allowExitOnIdle: true,
 })
 
 // Base PostGraphile options (without uuidScalarPlugin)
@@ -79,19 +83,22 @@ const createContext = async ({request}: {request: Request}) => {
 	return await contextPromise
 }
 
+// Shared plugins for both API versions
+const sharedPlugins = [
+	useExecutionCancellation(),
+	useResponseCache({
+		session: () => null,
+		ttl: 10_000, // 10 seconds
+	}),
+]
+
 // GraphQL server without uuidScalarPlugin
 export const graphqlServer = createYoga({
 	schema: postgraphileSchema,
 	graphiql: {
 		title: "Geo API",
 	},
-	plugins: [
-		useExecutionCancellation(),
-		useResponseCache({
-			session: () => null,
-			ttl: 10_000, // 10 seconds
-		}),
-	],
+	plugins: sharedPlugins,
 	context: createContext,
 })
 
@@ -101,12 +108,6 @@ export const graphqlServerV2 = createYoga({
 	graphiql: {
 		title: "Geo API v2",
 	},
-	plugins: [
-		useExecutionCancellation(),
-		useResponseCache({
-			session: () => null,
-			ttl: 10_000, // 10 seconds
-		}),
-	],
+	plugins: sharedPlugins,
 	context: createContext,
 })
