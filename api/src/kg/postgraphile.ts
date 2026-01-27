@@ -8,6 +8,15 @@ import EntitySpaceFilterPlugin from "./entitySpaceFilterPlugin"
 import { useGraphQLInstrumentation } from "./instrumentationPlugin"
 import UndashedUuidPlugin from "./uuidScalarPlugin"
 
+// Server context passed from HTTP middleware
+export type GraphQLServerContext = {
+	traceContext?: {
+		traceId: string
+		spanId: string
+		traceFlags: number
+	}
+}
+
 // Create PostgreSQL pool with explicit configuration to prevent connection exhaustion
 // Note: Without PgBouncer, each pool connection = 1 Postgres connection.
 // Ensure max * num_replicas < Postgres max_connections (leaving room for admin/migrations).
@@ -97,7 +106,7 @@ const sharedPlugins = [
 ]
 
 // GraphQL server without uuidScalarPlugin
-export const graphqlServer = createYoga({
+export const graphqlServer = createYoga<GraphQLServerContext>({
 	schema: postgraphileSchema,
 	graphiql: {
 		title: "Geo API",
@@ -107,7 +116,7 @@ export const graphqlServer = createYoga({
 })
 
 // GraphQL server with uuidScalarPlugin (v2)
-export const graphqlServerV2 = createYoga({
+export const graphqlServerV2 = createYoga<GraphQLServerContext>({
 	schema: postgraphileSchemaV2,
 	graphiql: {
 		title: "Geo API v2",

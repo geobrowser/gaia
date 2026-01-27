@@ -29,6 +29,11 @@ import { deployPublicSpace } from "./src/space/deploy-public-space"
 type AppEnv = {
 	Variables: {
 		requestId: string
+		traceContext?: {
+			traceId: string
+			spanId: string
+			traceFlags: number
+		}
 	}
 }
 
@@ -83,11 +88,11 @@ log.info("Versioned entity routes enabled")
 app.get("/", swaggerUI({url: "/openapi"}))
 
 app.use("/graphql", async (c) => {
-	return graphqlServer.fetch(c.req.raw)
+	return graphqlServer.fetch(c.req.raw, {traceContext: c.get("traceContext")})
 })
 
 app.use("/v2/graphql", async (c) => {
-	return graphqlServerV2.fetch(c.req.raw)
+	return graphqlServerV2.fetch(c.req.raw, {traceContext: c.get("traceContext")})
 })
 
 app.post("/ipfs/upload-edit", async (c) => {

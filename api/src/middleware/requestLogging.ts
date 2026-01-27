@@ -12,6 +12,7 @@ import {SpanStatusCode, trace, context} from "@opentelemetry/api"
 import type {Context, Next} from "hono"
 import {log} from "../services/telemetry"
 
+
 /**
  * Extract or generate a request ID.
  * Checks common headers, falls back to generating a UUID.
@@ -71,11 +72,15 @@ export function canonicalRequestLogging() {
 			},
 		})
 
+		// Store span context for GraphQL plugin (OTEL context doesn't propagate through graphql-yoga)
+		c.set("traceContext", {
+			traceId: span.spanContext().traceId,
+			spanId: span.spanContext().spanId,
+			traceFlags: span.spanContext().traceFlags,
+		})
+
 		try {
-			// Set the span as active context so child spans (GraphQL) are properly parented
-			await context.with(trace.setSpan(context.active(), span), async () => {
-				await next()
-			})
+			await next()
 
 			const status = c.res.status
 			const duration = Date.now() - startTime
