@@ -117,9 +117,8 @@ export const entities = pgTable(
  * representation while enabling efficient time-based queries and comparisons.
  *
  * UTC normalization: The *_utc columns are STORED generated columns that cast the original
- * time/datetime strings to timestamptz/timetz. PostgreSQL normalizes to UTC internally on
- * insert. A PostGraphile plugin (UtcColumnsPlugin) ensures these columns are always
- * serialized as UTC (with Z suffix) in the GraphQL response.
+ * time/datetime strings to timestamptz/time. PostgreSQL normalizes to UTC internally.
+ * The _utc suffix indicates the value is always in UTC (Zulu time).
  */
 export const values = pgTable(
 	"values",
