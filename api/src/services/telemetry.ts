@@ -1,9 +1,13 @@
 import {NodeSdk} from "@effect/opentelemetry"
 import {trace} from "@opentelemetry/api"
+import {resourceFromAttributes} from "@opentelemetry/resources"
+import {ATTR_SERVICE_NAME} from "@opentelemetry/semantic-conventions"
 import {BasicTracerProvider} from "@opentelemetry/sdk-trace-base"
 import * as Sentry from "@sentry/node"
 import {SentrySpanProcessor} from "@sentry/opentelemetry"
 import {Config, Effect, Layer, Logger, LogLevel, Option} from "effect"
+
+const SERVICE_NAME = "gaia-api"
 
 // Track whether Sentry is initialized
 let sentryInitialized = false
@@ -16,7 +20,7 @@ const makeTelemetryConfig = Effect.gen(function* () {
 	if (!dsn) {
 		console.log("[TELEMETRY] Sentry disabled (SENTRY_DSN not set)")
 		return {
-			resource: {serviceName: "gaia.api"},
+			resource: {serviceName: SERVICE_NAME},
 			spanProcessor: undefined,
 		}
 	}
@@ -44,6 +48,9 @@ const makeTelemetryConfig = Effect.gen(function* () {
 	// We intentionally skip SentryContextManager to avoid conflicts with Effect's Fiber-based context.
 	// Effect has its own scoped provider; this global provider is only for trace.getTracer() calls.
 	const globalProvider = new BasicTracerProvider({
+		resource: resourceFromAttributes({
+			[ATTR_SERVICE_NAME]: SERVICE_NAME,
+		}),
 		spanProcessors: [new SentrySpanProcessor()],
 	})
 	trace.setGlobalTracerProvider(globalProvider)
@@ -52,7 +59,7 @@ const makeTelemetryConfig = Effect.gen(function* () {
 	console.log(`[TELEMETRY] Sentry enabled (env: ${environment})`)
 
 	return {
-		resource: {serviceName: "gaia.api"},
+		resource: {serviceName: SERVICE_NAME},
 		spanProcessor: new SentrySpanProcessor(),
 	}
 })

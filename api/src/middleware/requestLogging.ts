@@ -8,7 +8,7 @@
  * - OTEL span wrapping for HTTP request context (flows through SentrySpanProcessor)
  */
 
-import {SpanStatusCode, trace} from "@opentelemetry/api"
+import {SpanStatusCode, trace, context} from "@opentelemetry/api"
 import type {Context, Next} from "hono"
 import {log} from "../services/telemetry"
 
@@ -62,7 +62,7 @@ export function canonicalRequestLogging() {
 		})
 
 		// Get tracer lazily at request time (not module load) to ensure OTEL SDK is initialized
-		const tracer = trace.getTracer("gaia.api")
+		const tracer = trace.getTracer("gaia-api-http")
 		const span = tracer.startSpan(`${method} ${path}`, {
 			attributes: {
 				"http.method": method,
@@ -72,7 +72,10 @@ export function canonicalRequestLogging() {
 		})
 
 		try {
-			await next()
+			// Set the span as active context so child spans (GraphQL) are properly parented
+			await context.with(trace.setSpan(context.active(), span), async () => {
+				await next()
+			})
 
 			const status = c.res.status
 			const duration = Date.now() - startTime
