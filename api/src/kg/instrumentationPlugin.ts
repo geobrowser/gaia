@@ -1,5 +1,5 @@
 import * as Sentry from "@sentry/node"
-import {SpanStatusCode, trace} from "@opentelemetry/api"
+import {SpanStatusCode, trace, context} from "@opentelemetry/api"
 import {Kind, print, type OperationDefinitionNode, type FieldNode} from "graphql"
 import type {Plugin} from "graphql-yoga"
 
@@ -68,16 +68,26 @@ export function useGraphQLInstrumentation(): Plugin {
 
 			const operationLabel = getOperationLabel(args)
 			const query = print(args.document)
+			const variables = args.variableValues
+				? JSON.stringify(args.variableValues).slice(0, 2000)
+				: undefined
 
 			// Get tracer lazily at request time (not module load) to ensure OTEL SDK is initialized
+			// Explicitly capture the active context to ensure proper parent-child linking
 			const tracer = trace.getTracer("gaia-api-graphql")
-			const span = tracer.startSpan(`graphql ${operationLabel}`, {
-				attributes: {
-					"graphql.operation_name": operationLabel,
-					"graphql.document": query.slice(0, 2000),
-					"http.request_id": requestId,
+			const parentContext = context.active()
+			const span = tracer.startSpan(
+				`graphql ${operationLabel}`,
+				{
+					attributes: {
+						"graphql.operation_name": operationLabel,
+						"graphql.document": query.slice(0, 2000),
+						...(variables && {"graphql.variables": variables}),
+						"http.request_id": requestId,
+					},
 				},
-			})
+				parentContext,
+			)
 
 			return {
 				onExecuteDone({result}) {
@@ -96,6 +106,7 @@ export function useGraphQLInstrumentation(): Plugin {
 								},
 								extra: {
 									query: query.slice(0, 2000),
+									variables: args.variableValues,
 									path: error.path,
 									requestId,
 								},
