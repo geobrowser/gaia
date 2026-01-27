@@ -5,7 +5,7 @@ import { openAPISpecs } from "hono-openapi"
 import { compress } from "hono/compress"
 import { cors } from "hono/cors"
 import { health } from "./src/health"
-import { graphqlServer, graphqlServerV2 } from "./src/kg/postgraphile"
+import { graphqlServer } from "./src/kg/postgraphile"
 import { createSearchRouter } from "./src/search"
 import { createVersionedRouter } from "./src/versioned"
 import { db } from "./src/services/storage/storage"
@@ -61,7 +61,6 @@ app.use("/space/*", canonicalRequestLogging())
 app.use("/search/*", canonicalRequestLogging())
 app.use("/versioned/*", canonicalRequestLogging())
 app.use("/graphql", canonicalRequestLogging())
-app.use("/v2/graphql", canonicalRequestLogging())
 
 // Initialize search client with dependency injection
 // Search is optional - if OPENSEARCH_URL is not set, search routes won't be added
@@ -89,10 +88,6 @@ app.get("/", swaggerUI({url: "/openapi"}))
 
 app.use("/graphql", async (c) => {
 	return graphqlServer.fetch(c.req.raw, {traceContext: c.get("traceContext")})
-})
-
-app.use("/v2/graphql", async (c) => {
-	return graphqlServerV2.fetch(c.req.raw, {traceContext: c.get("traceContext")})
 })
 
 app.post("/ipfs/upload-edit", async (c) => {
