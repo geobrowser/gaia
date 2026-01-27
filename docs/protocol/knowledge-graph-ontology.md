@@ -2,6 +2,10 @@
 
 **Status:** Draft **Version:** 0.1.0
 
+This document describes the in-knowledge-graph ontology: the canonical entities, relations, and conventions used to represent schemas and content inside the graph. It complements the serialization specification, which defines how knowledge graph data is encoded and transmitted. This spec focuses on *what* we model in-graph; the serialization spec focuses on *how* that model is stored and exchanged.
+
+Serialization spec: https://github.com/geobrowser/grc-20/blob/main/spec.md
+
 ## 1. Types, Properties, and Schemas
 
 The knowledge graph is schema-less by default. Instead, schemas are represented as entities in-graph and act as conventions or hints for how data should be modeled. These typed representations of knowledge are often called "Ontologies."
