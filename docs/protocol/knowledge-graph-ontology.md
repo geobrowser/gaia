@@ -75,21 +75,10 @@ Renderable types are UI representations of underlying data types or entities. Th
 
 ## 2. Blocks (as Relations)
 
+### 2.1 Overview
+
 Blocks are rich content units for an entity. Each block is itself an entity; blocks are attached to a parent via the Blocks relation and can be attached to multiple parents (transclusion). The relation type id for Blocks is the Blocks property entity: `beaba5cba67741a8b35377030613fc70`.
 
-### 2.1 Block Ordering
-
-Blocks are ordered using the `position` field on the Blocks relation (see [GRC-20 spec](https://github.com/geobrowser/grc-20/blob/main/spec.md)).
-
-### 2.2 Block Types
-
-| Block Type | UUID |
-|---|---|
-| Text Block | `76474f2f00894e77a0410b39fb17d0bf` |
-| Data Block | `b8803a8665de412bbb357e0c84adf473` |
-| Image | `ba4e41460010499da0a3caaa7f579d0e` |
-
-### 2.3 Block Example
 
 ```
 [Page] --BLOCKS{position=a}--> [Text Block]
@@ -97,13 +86,27 @@ Blocks are ordered using the `position` field on the Blocks relation (see [GRC-2
 [Page] --BLOCKS{position=b}--> [Image]
 ```
 
-### 2.4 Text Block Requirements
+### 2.2 Ordering
+
+Blocks are ordered using the `position` field on the Blocks relation (see [GRC-20 spec](https://github.com/geobrowser/grc-20/blob/main/spec.md)).
+
+### 2.3 Block Types
+
+| Block Type | UUID |
+|---|---|
+| Text Block | `76474f2f00894e77a0410b39fb17d0bf` |
+| Data Block | `b8803a8665de412bbb357e0c84adf473` |
+| Image | `ba4e41460010499da0a3caaa7f579d0e` |
+
+### 2.4 Requirements
+
+#### 2.4.1 Text Block Requirements
 
 | Property | UUID | Description | Target |
 |---|---|---|---|
 | Markdown content | `e3e363d1dd294ccb8e6ff3b76d99bc33` | Markdown body for the text block. | TEXT value |
 
-### 2.5 Data Block Requirements
+#### 2.4.2 Data Block Requirements
 
 | Property | UUID | Description | Target |
 |---|---|---|---|
@@ -119,7 +122,11 @@ Query data block: defines a live, declarative graph query evaluated at render ti
 
 Collection data block: enumerates a fixed, ordered set of entities via Collection item relations.
 
-### 2.6 Data Block Views
+#### 2.4.3 Image Requirements
+
+See Section 3 for Image entity properties.
+
+### 2.5 Data Block Views
 
 Data block view types are defined on the `BLOCKS` relation pointing to the block using the View property `1907fd1c81114a3ca378b1f353425b65`. View is optional; Table view is the default when no view is specified.
 
@@ -129,10 +136,6 @@ Data block view types are defined on the `BLOCKS` relation pointing to the block
 | List view | `7d497dba09c249b8968f716bcf520473` |
 | Bulleted list view | `0aaac6f7c916403eaf6d2e086dc92ada` |
 | Table view | `cba271cef7c140339047614d174c69f1` |
-
-### 2.7 Image Requirements
-
-See Section 3 for Image entity properties.
 
 ## 3. Images (Entities + Relations)
 
@@ -150,16 +153,10 @@ Images are entities. The Image entity type is `ba4e41460010499da0a3caaa7f579d0e`
 
 Images can specify a file type using the File type relation `515f346fe0fb40c78ea95339787eecc1`, which points to a file type entity (not yet specified).
 
-## 4. Topics and Representing a Space
-
-Spaces can set a topic that represents what the space is about and is used to determine the space’s front page. The topic is an arbitrary entity in the knowledge graph; there is no canonical Topic type or UUID yet. There are no topic relations in the knowledge graph. The topic value is set onchain, not via a knowledge-graph relation.
-
-Setting the topic is done onchain via the `SET_TOPIC` action in the protocol.
 
 ## 5. System Properties
 
 ### 5.1 System Entity Registry
-
 System entities defined in this spec are listed below.
 
 The registry is alphabetized by name for easier lookup.
@@ -214,3 +211,13 @@ The registry is alphabetized by name for easier lookup.
 | Video | `0fb6bbf022044db49f70fa82c41570a4` | Renderable type. |
 | View | `1907fd1c81114a3ca378b1f353425b65` | Sets the preferred rendering mode for a data block relation. |
 | Width | `f7b33e08b76d4190aadacadaa9f561e1` | Image width. |
+
+## 6. Topics and Representing a Space
+
+Spaces can set a topic that represents what the space is about and is used to determine the space’s front page. The topic is an arbitrary entity in the knowledge graph; there is no canonical Topic type or UUID yet. There are no topic relations in the knowledge graph. The topic value is set onchain, not via a knowledge-graph relation.
+
+Setting the topic is done onchain via the `SET_TOPIC` action in the protocol.
+
+## 7. Actors and Profiles (WIP)
+
+This section will describe how actors/participants are modeled in the knowledge graph and how their profile entities are structured. Details are pending.
