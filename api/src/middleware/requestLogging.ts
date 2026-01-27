@@ -6,11 +6,15 @@
  * - Start log with immutable context (method, path, request ID)
  * - End log with outcome (status, duration, error)
  * - OTEL span wrapping for HTTP request context (flows through SentrySpanProcessor)
+ * - Distributed tracing via W3C traceparent and Sentry trace headers
  */
 
-import {SpanStatusCode, trace, context} from "@opentelemetry/api"
+import {SpanStatusCode, trace, context, SpanKind} from "@opentelemetry/api"
+import {W3CTraceContextPropagator} from "@opentelemetry/core"
 import type {Context, Next} from "hono"
 import {log} from "../services/telemetry"
+
+const propagator = new W3CTraceContextPropagator()
 
 
 /**
@@ -39,6 +43,40 @@ export function requestId() {
 }
 
 /**
+ * Carrier to extract trace context from Hono request headers.
+ */
+function createHeaderCarrier(c: Context) {
+	return {
+		get(key: string): string | undefined {
+			return c.req.header(key) ?? undefined
+		},
+		keys(): string[] {
+			return [...c.req.raw.headers.keys()]
+		},
+	}
+}
+
+/**
+ * Parse sentry-trace header into W3C traceparent format.
+ * sentry-trace format: <trace_id>-<span_id>-<sampled>
+ * traceparent format: 00-<trace_id>-<span_id>-<flags>
+ */
+function sentryTraceToTraceparent(sentryTrace: string): string | null {
+	const parts = sentryTrace.split("-")
+	if (parts.length < 2) return null
+
+	const [traceId, spanId, sampled] = parts
+	// Ensure trace ID is 32 chars (pad if necessary)
+	const normalizedTraceId = traceId.padStart(32, "0")
+	// Ensure span ID is 16 chars
+	const normalizedSpanId = spanId.padStart(16, "0")
+	// Convert sampled to flags (01 = sampled, 00 = not sampled)
+	const flags = sampled === "1" ? "01" : "00"
+
+	return `00-${normalizedTraceId}-${normalizedSpanId}-${flags}`
+}
+
+/**
  * Middleware that provides canonical request logging.
  *
  * Logs:
@@ -46,6 +84,7 @@ export function requestId() {
  * - END: status, duration, error (if any)
  *
  * Wraps request in OTEL span for HTTP context (flows through SentrySpanProcessor).
+ * Supports distributed tracing via W3C traceparent or Sentry trace headers.
  */
 export function canonicalRequestLogging() {
 	return async (c: Context, next: Next) => {
@@ -62,15 +101,50 @@ export function canonicalRequestLogging() {
 			query: c.req.query(),
 		})
 
+		// Extract parent trace context from incoming headers
+		// First try W3C traceparent, then fall back to sentry-trace
+		let parentContext = context.active()
+		const traceparent = c.req.header("traceparent")
+		const sentryTrace = c.req.header("sentry-trace")
+
+		if (traceparent) {
+			// Use W3C propagator to extract context
+			const carrier = createHeaderCarrier(c)
+			parentContext = propagator.extract(context.active(), carrier, {
+				get: (carrier, key) => carrier.get(key),
+				keys: (carrier) => carrier.keys(),
+			})
+		} else if (sentryTrace) {
+			// Convert sentry-trace to traceparent and extract
+			const convertedTraceparent = sentryTraceToTraceparent(sentryTrace)
+			if (convertedTraceparent) {
+				const syntheticCarrier = {
+					get: (key: string) => (key === "traceparent" ? convertedTraceparent : undefined),
+					keys: () => ["traceparent"],
+				}
+				parentContext = propagator.extract(context.active(), syntheticCarrier, {
+					get: (carrier, key) => carrier.get(key),
+					keys: (carrier) => carrier.keys(),
+				})
+			}
+		}
+
 		// Get tracer lazily at request time (not module load) to ensure OTEL SDK is initialized
 		const tracer = trace.getTracer("gaia-api-http")
-		const span = tracer.startSpan(`${method} ${path}`, {
-			attributes: {
-				"http.method": method,
-				"http.route": path,
-				"http.request_id": requestId,
+
+		// Start span as a child of the extracted parent context
+		const span = tracer.startSpan(
+			`${method} ${path}`,
+			{
+				kind: SpanKind.SERVER,
+				attributes: {
+					"http.method": method,
+					"http.route": path,
+					"http.request_id": requestId,
+				},
 			},
-		})
+			parentContext,
+		)
 
 		// Store span context for GraphQL plugin (OTEL context doesn't propagate through graphql-yoga)
 		c.set("traceContext", {
