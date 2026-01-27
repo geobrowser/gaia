@@ -92,21 +92,6 @@ spec:
                 secretKeyRef:
                   name: api-secrets
                   key: DATABASE_URL
-            - name: RPC_ENDPOINT
-              valueFrom:
-                secretKeyRef:
-                  name: api-secrets
-                  key: RPC_ENDPOINT
-            - name: CHAIN_ID
-              valueFrom:
-                secretKeyRef:
-                  name: api-secrets
-                  key: CHAIN_ID
-            - name: DEPLOYER_PK
-              valueFrom:
-                secretKeyRef:
-                  name: api-secrets
-                  key: DEPLOYER_PK
             - name: IPFS_KEY
               valueFrom:
                 secretKeyRef:
@@ -132,12 +117,6 @@ spec:
                 secretKeyRef:
                   name: api-secrets
                   key: OPENSEARCH_URL
-            - name: TELEMETRY_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: api-secrets
-                  key: TELEMETRY_TOKEN
-                  optional: true
             - name: SENTRY_DSN
               valueFrom:
                 secretKeyRef:

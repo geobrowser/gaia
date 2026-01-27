@@ -19,7 +19,7 @@ Services:
 
 Run the search indexer locally:
 ```bash
-OPENSEARCH_URL=http://localhost:9200 cargo run -p search-indexer
+OPENSEARCH_URL=http://localhost:9200 cargo run -p search-indexer --features search-indexer-repository/auto_index_creation
 ```
 
 Check cluster health:
@@ -40,6 +40,7 @@ Before deploying, create the required secrets in the `search` namespace:
 | Secret | Keys | Description |
 |--------|------|-------------|
 | `kafka-credentials` | `KAFKA_BROKER`, `KAFKA_USERNAME`, `KAFKA_PASSWORD`, `KAFKA_SSL_CA_PEM` | Managed Kafka connection (see [hermes README](../hermes/README.md) for details) |
+| `opensearch-credentials` | `OPENSEARCH_URL` | OpenSearch connection URL |
 | `grafana-credentials` | `ADMIN_USER`, `ADMIN_PASSWORD` | Grafana admin login |
 | `search-indexer-secrets` | `AXIOM_TOKEN` | Optional, for Axiom logging |
 
@@ -86,8 +87,24 @@ search-indexer-deploy/
     ├── kustomization.yaml
     ├── namespace.yaml
     ├── search-indexer.yaml  # Search Indexer Deployment
-    └── monitoring.yaml      # Prometheus + Grafana + OpenSearch Exporter
+    ├── monitoring.yaml      # Prometheus + Grafana + OpenSearch Exporter
+    └── jobs/               # Index migration jobs (see jobs/README.md)
+        ├── README.md
+        ├── create-index-job.yaml
+        ├── delete-index-job.yaml
+        ├── full-migration-job.yaml
+        └── list-indices-job.yaml
 ```
+
+## Index Migrations
+
+OpenSearch index migrations are managed using the [search-admin](../search-admin/) tool, which runs as Kubernetes Jobs in production.
+
+**For full migration workflows and step-by-step instructions, see:**
+- **[k8s/jobs/README.md](k8s/jobs/README.md)** - Complete guide for running index migrations
+- **[search-admin/README.md](../search-admin/README.md)** - CLI tool documentation and commands
+
+The jobs automate the entire migration process including creating indices, stopping the indexer, reindexing data, updating aliases, and restarting with the new version.
 
 ## Resource Configuration
 
