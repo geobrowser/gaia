@@ -62,11 +62,12 @@ cargo run --release
 ```
 
 This creates:
-- 11 entities (7 Alice variants with different scores, Bob, Acme Corp, Person type, Organization type)
-- 14 type relation events (including creates, deletes, and recreates for testing typeIds)
+- 14 entities (7 Alice variants with different scores, Bob, Charlie, Acme Corp, Person type, Organization type, 2 unset test entities)
+- 15 type relation events (including creates, deletes, and recreates for testing typeIds)
 - 11 entity scores (including negative and zero values)
 - 1 space score
 - 7 perspective scores
+- 2 unset property test cases
 
 #### 3. Start the Search Indexer
 
@@ -167,6 +168,10 @@ This script:
   - Test 4: Entity field validation (entityId, name, description, typeIds, scoring)
   - Test 5: Score-based ordering (high scores first, descending order)
   - Test 6: Response metadata (total count, execution time)
+  - Test 7: Zero and negative score entities
+  - Test 8: TypeIds field for different relation scenarios
+  - Test 9: Empty query returns top ranked results
+  - Test 10: Unset properties functionality (validates unset_values in UpdateEntity)
 - Provides color-coded pass/fail reporting
 - Exits with appropriate status codes for CI/CD integration
 
@@ -269,6 +274,44 @@ The tool generates a comprehensive test scenario with the following test data:
 - 7 perspective scores (entity-space combinations)
 
 All entities use fixed UUIDs for repeatable validation testing.
+
+### Unset Properties Test Cases
+
+Two dedicated test entities verify the `unset_values` functionality in UpdateEntity operations:
+
+**Test Case 1** - Unset Single Property (ID: `00000000-0000-0000-0000-000000001111`):
+- Creates entity with name and description
+- Unsets the name property
+- Expected result: name should be undefined/null, description should remain
+
+**Test Case 2** - Unset Multiple Properties (ID: `00000000-0000-0000-0000-000000002222`):
+- Creates entity with name, description, and avatar
+- Unsets name and description properties
+- Expected result: name and description should be undefined/null, avatar should remain
+
+#### Verifying Unset Properties
+
+The TypeScript validation script (Test 10) automatically verifies that properties were correctly unset:
+
+**Test Case 1 Validation** (Entity: `00000000-0000-0000-0000-000000001111`):
+- ✓ Verifies name is undefined/null
+- ✓ Verifies description is still present
+
+**Test Case 2 Validation** (Entity: `00000000-0000-0000-0000-000000002222`):
+- ✓ Verifies name is undefined/null
+- ✓ Verifies description is undefined/null
+- ✓ Verifies avatar is still present
+
+Run the validation script to test:
+```bash
+cd typescript
+npm run validate
+```
+
+The unset properties functionality is handled by the search-indexer's `process_update_entity` function, which:
+1. Detects UpdateEntity operations with empty `set_properties` and non-empty `unset_values`
+2. Creates an `EntityEvent::unset_properties` event with the property IDs to unset
+3. The processor then removes those fields from the OpenSearch document
 
 ## Troubleshooting
 

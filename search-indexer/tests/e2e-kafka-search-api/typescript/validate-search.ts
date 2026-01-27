@@ -32,6 +32,8 @@ const TEST_ENTITIES = {
   BOB_ID: '00000000-0000-0000-0000-000000000b0b',
   CHARLIE_ID: '00000000-0000-0000-0000-000000000c1c',
   ORG_ID: '00000000-0000-0000-0000-0000000ac3ec',
+  UNSET_TEST_1_ID: '00000000-0000-0000-0000-000000001111',
+  UNSET_TEST_2_ID: '00000000-0000-0000-0000-000000002222',
 };
 
 interface TestResult {
@@ -69,7 +71,7 @@ class SearchValidator {
       throw new Error(`API returned ${response.status}: ${await response.text()}`);
     }
 
-    return response.json();
+    return response.json() as Promise<SearchResponse>;
   }
 
   private addResult(name: string, passed: boolean, message: string) {
@@ -491,6 +493,83 @@ class SearchValidator {
     }
   }
 
+  async test10_UnsetProperties(): Promise<void> {
+    console.log(`\n${BLUE}Test 10: Verify unset_properties functionality (UpdateEntity with unset_values)${NC}`);
+
+    // Test Case 1: Unset 1 property (name)
+    console.log(`  ${BLUE}→ Test Case 1: Unset single property (name)${NC}`);
+    const response1 = await this.search({
+      query: TEST_ENTITIES.UNSET_TEST_1_ID,
+      scope: 'GLOBAL',
+    });
+
+    const entity1 = response1.results.find(r => r.entityId === TEST_ENTITIES.UNSET_TEST_1_ID);
+
+    if (entity1) {
+      // Check that name is undefined/null
+      if (entity1.name === undefined || entity1.name === null) {
+        this.addResult('test10_case1_name_unset', true,
+          `Test Case 1 (${TEST_ENTITIES.UNSET_TEST_1_ID}): name is correctly unset (undefined/null)`);
+      } else {
+        this.addResult('test10_case1_name_unset', false,
+          `Test Case 1 (${TEST_ENTITIES.UNSET_TEST_1_ID}): name should be unset, but got: '${entity1.name}'`);
+      }
+
+      // Check that description is still present
+      if (entity1.description && entity1.description.includes('name unset')) {
+        this.addResult('test10_case1_description_present', true,
+          `Test Case 1 (${TEST_ENTITIES.UNSET_TEST_1_ID}): description is correctly preserved`);
+      } else {
+        this.addResult('test10_case1_description_present', false,
+          `Test Case 1 (${TEST_ENTITIES.UNSET_TEST_1_ID}): description should be present, got: '${entity1.description}'`);
+      }
+    } else {
+      this.addResult('test10_case1_not_found', false,
+        `Test Case 1 entity (${TEST_ENTITIES.UNSET_TEST_1_ID}) not found`);
+    }
+
+    // Test Case 2: Unset 2 properties (name and description)
+    console.log(`  ${BLUE}→ Test Case 2: Unset multiple properties (name and description)${NC}`);
+    const response2 = await this.search({
+      query: TEST_ENTITIES.UNSET_TEST_2_ID,
+      scope: 'GLOBAL',
+    });
+
+    const entity2 = response2.results.find(r => r.entityId === TEST_ENTITIES.UNSET_TEST_2_ID);
+
+    if (entity2) {
+      // Check that name is undefined/null
+      if (entity2.name === undefined || entity2.name === null) {
+        this.addResult('test10_case2_name_unset', true,
+          `Test Case 2 (${TEST_ENTITIES.UNSET_TEST_2_ID}): name is correctly unset (undefined/null)`);
+      } else {
+        this.addResult('test10_case2_name_unset', false,
+          `Test Case 2 (${TEST_ENTITIES.UNSET_TEST_2_ID}): name should be unset, but got: '${entity2.name}'`);
+      }
+
+      // Check that description is undefined/null
+      if (entity2.description === undefined || entity2.description === null) {
+        this.addResult('test10_case2_description_unset', true,
+          `Test Case 2 (${TEST_ENTITIES.UNSET_TEST_2_ID}): description is correctly unset (undefined/null)`);
+      } else {
+        this.addResult('test10_case2_description_unset', false,
+          `Test Case 2 (${TEST_ENTITIES.UNSET_TEST_2_ID}): description should be unset, but got: '${entity2.description}'`);
+      }
+
+      // Check that avatar is still present
+      if (entity2.avatar && entity2.avatar === 'https://example.com/avatar.png') {
+        this.addResult('test10_case2_avatar_present', true,
+          `Test Case 2 (${TEST_ENTITIES.UNSET_TEST_2_ID}): avatar is correctly preserved`);
+      } else {
+        this.addResult('test10_case2_avatar_present', false,
+          `Test Case 2 (${TEST_ENTITIES.UNSET_TEST_2_ID}): avatar should be 'https://example.com/avatar.png', got: '${entity2.avatar}'`);
+      }
+    } else {
+      this.addResult('test10_case2_not_found', false,
+        `Test Case 2 entity (${TEST_ENTITIES.UNSET_TEST_2_ID}) not found`);
+    }
+  }
+
   printSummary() {
     console.log(`\n${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}`);
 
@@ -560,6 +639,7 @@ async function main() {
     await validator.test7_ZeroAndNegativeScores();
     await validator.test8_TypeIdsScenarios();
     await validator.test9_EmptyQueryTopRanked();
+    await validator.test10_UnsetProperties();
 
     const allPassed = validator.printSummary();
     process.exit(allPassed ? 0 : 1);

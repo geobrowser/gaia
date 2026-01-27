@@ -13,6 +13,9 @@ wire = { path = "../wire" }
 indexer_utils = { path = "../indexer_utils" }
 sdk = { path = "../sdk" }
 
+# GRC-20 decoding
+grc-20 = "0.1.6"
+
 # Kafka
 rdkafka = { version = "0.38.0", features = ["cmake-build", "zstd", "ssl"] }
 

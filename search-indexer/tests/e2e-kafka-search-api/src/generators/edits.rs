@@ -3,7 +3,7 @@ use prost::Message;
 use uuid::Uuid;
 
 use hermes_schema::pb::knowledge::HermesEdit;
-use wire::pb::grc20::{Entity, Op, Value};
+use grc_20::{encode_edit, Edit as Grc20Edit, Op as Grc20Op, PropertyValue, UnsetLanguage, UnsetValue, UpdateEntity, Value as Grc20Value};
 
 use sdk::core::ids::{AVATAR_PROPERTY_ID, DESCRIPTION_PROPERTY_ID, NAME_PROPERTY_ID};
 
@@ -16,50 +16,62 @@ pub fn create_entity_edit(
     description: Option<&str>,
     avatar: Option<&str>,
 ) -> Result<Vec<u8>> {
-    let mut values = Vec::new();
+    let mut set_properties = Vec::new();
 
     // Add name if provided
     if let Some(name_value) = name {
-        values.push(Value {
-            property: Uuid::parse_str(NAME_PROPERTY_ID)?.as_bytes().to_vec(),
-            value: name_value.to_string(),
-            options: None,
+        set_properties.push(PropertyValue {
+            property: *Uuid::parse_str(NAME_PROPERTY_ID)?.as_bytes(),
+            value: Grc20Value::Text {
+                value: name_value.into(),
+                language: None,
+            },
         });
     }
 
     // Add description if provided
     if let Some(desc_value) = description {
-        values.push(Value {
-            property: Uuid::parse_str(DESCRIPTION_PROPERTY_ID)?
-                .as_bytes()
-                .to_vec(),
-            value: desc_value.to_string(),
-            options: None,
+        set_properties.push(PropertyValue {
+            property: *Uuid::parse_str(DESCRIPTION_PROPERTY_ID)?.as_bytes(),
+            value: Grc20Value::Text {
+                value: desc_value.into(),
+                language: None,
+            },
         });
     }
 
     // Add avatar if provided
     if let Some(avatar_value) = avatar {
-        values.push(Value {
-            property: Uuid::parse_str(AVATAR_PROPERTY_ID)?.as_bytes().to_vec(),
-            value: avatar_value.to_string(),
-            options: None,
+        set_properties.push(PropertyValue {
+            property: *Uuid::parse_str(AVATAR_PROPERTY_ID)?.as_bytes(),
+            value: Grc20Value::Text {
+                value: avatar_value.into(),
+                language: None,
+            },
         });
     }
 
-    let entity = Entity {
-        id: entity_id.as_bytes().to_vec(),
-        values,
+    let update_entity = UpdateEntity {
+        id: *entity_id.as_bytes(),
+        set_properties,
+        unset_values: vec![],
     };
 
-    let op = Op {
-        payload: Some(wire::pb::grc20::op::Payload::UpdateEntity(entity)),
+    let grc20_edit = Grc20Edit {
+        id: *Uuid::new_v4().as_bytes(),
+        name: edit_name.into(),
+        authors: vec![*Uuid::new_v4().as_bytes()],
+        created_at: 0,
+        ops: vec![Grc20Op::UpdateEntity(update_entity)],
     };
+
+    // Encode the GRC-20 edit into bytes
+    let payload = encode_edit(&grc20_edit)?;
 
     let edit = HermesEdit {
-        id: Uuid::new_v4().as_bytes().to_vec(),
+        id: grc20_edit.id.to_vec(),
         name: edit_name.to_string(),
-        ops: vec![op],
+        payload,
         authors: vec![Uuid::new_v4().as_bytes().to_vec()],
         language: None,
         space_id: space_id.as_bytes().to_vec(),
@@ -79,24 +91,37 @@ pub fn unset_entity_properties(
     entity_id: Uuid,
     property_ids: Vec<&str>,
 ) -> Result<Vec<u8>> {
-    let properties: Result<Vec<_>> = property_ids
+    let unset_values: Result<Vec<_>> = property_ids
         .into_iter()
-        .map(|id| Ok(Uuid::parse_str(id)?.as_bytes().to_vec()))
+        .map(|id| {
+            Ok(UnsetValue {
+                property: *Uuid::parse_str(id)?.as_bytes(),
+                language: UnsetLanguage::All,
+            })
+        })
         .collect();
 
-    let unset_values = wire::pb::grc20::UnsetEntityValues {
-        id: entity_id.as_bytes().to_vec(),
-        properties: properties?,
+    let update_entity = UpdateEntity {
+        id: *entity_id.as_bytes(),
+        set_properties: vec![],
+        unset_values: unset_values?,
     };
 
-    let op = Op {
-        payload: Some(wire::pb::grc20::op::Payload::UnsetEntityValues(unset_values)),
+    let grc20_edit = Grc20Edit {
+        id: *Uuid::new_v4().as_bytes(),
+        name: edit_name.into(),
+        authors: vec![*Uuid::new_v4().as_bytes()],
+        created_at: 0,
+        ops: vec![Grc20Op::UpdateEntity(update_entity)],
     };
+
+    // Encode the GRC-20 edit into bytes
+    let payload = encode_edit(&grc20_edit)?;
 
     let edit = HermesEdit {
-        id: Uuid::new_v4().as_bytes().to_vec(),
+        id: grc20_edit.id.to_vec(),
         name: edit_name.to_string(),
-        ops: vec![op],
+        payload,
         authors: vec![Uuid::new_v4().as_bytes().to_vec()],
         language: None,
         space_id: space_id.as_bytes().to_vec(),
@@ -136,7 +161,7 @@ mod tests {
         assert!(decoded.is_ok());
         let edit = decoded.unwrap();
         assert_eq!(edit.name, "Test Edit");
-        assert_eq!(edit.ops.len(), 1);
+        assert!(!edit.payload.is_empty());
     }
 
     #[test]

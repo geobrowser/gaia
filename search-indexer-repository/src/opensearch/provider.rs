@@ -563,6 +563,17 @@ impl SearchIndexProvider for OpenSearchProvider {
                         continue;
                     }
 
+                    // Flush pending bulk operations before unset to ensure the document exists
+                    // Scripts cannot use doc_as_upsert, so we need the document to exist first
+                    flush_pending_bulk!(
+                        self,
+                        bulk_ops,
+                        metas,
+                        total_succeeded,
+                        total_failed,
+                        all_results
+                    );
+
                     let (entity_id, space_id) =
                         utils::parse_entity_and_space_ids(&request.entity_id, &request.space_id)?;
                     let doc_id = Self::document_id(&entity_id, &space_id);
