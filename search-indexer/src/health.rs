@@ -3,13 +3,7 @@
 //! This module provides a simple HTTP server that exposes health check endpoints
 //! for Kubernetes to monitor the search-indexer service.
 
-use axum::{
-    extract::State,
-    http::StatusCode,
-    response::IntoResponse,
-    routing::get,
-    Router,
-};
+use axum::{extract::State, http::StatusCode, response::IntoResponse, routing::get, Router};
 use rdkafka::admin::AdminClient;
 use rdkafka::client::DefaultClientContext;
 use std::sync::Arc;
@@ -66,7 +60,11 @@ async fn readiness(State(state): State<HealthState>) -> impl IntoResponse {
     // Check Kafka broker connectivity by fetching metadata
     match tokio::task::spawn_blocking({
         let kafka_admin = state.kafka_admin.clone();
-        move || kafka_admin.inner().fetch_metadata(None, Duration::from_secs(5))
+        move || {
+            kafka_admin
+                .inner()
+                .fetch_metadata(None, Duration::from_secs(5))
+        }
     })
     .await
     {
