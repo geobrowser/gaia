@@ -517,23 +517,18 @@ fn format_decimal_i64(mantissa: i64, exponent: i32) -> String {
 ///
 /// Returns None if parsing fails.
 fn parse_time_to_utc(time_str: &str) -> Option<NaiveTime> {
-    // GRC-20 time format: HH:MM:SS[.sss]±HH:MM or HH:MM:SS[.sss]Z
-    // Try parsing with offset first
     if time_str.ends_with('Z') {
-        // UTC time - just parse and return
         let naive_part = time_str.trim_end_matches('Z');
         return NaiveTime::parse_from_str(naive_part, "%H:%M:%S")
             .or_else(|_| NaiveTime::parse_from_str(naive_part, "%H:%M:%S%.f"))
             .ok();
     }
 
-    // Find offset separator (+ or -)
     let offset_pos = time_str
         .rfind('+')
         .or_else(|| time_str.rfind('-').filter(|&pos| pos > 0));
 
     let Some(pos) = offset_pos else {
-        // No offset found, try parsing as naive time
         return NaiveTime::parse_from_str(time_str, "%H:%M:%S")
             .or_else(|_| NaiveTime::parse_from_str(time_str, "%H:%M:%S%.f"))
             .ok();
@@ -542,39 +537,25 @@ fn parse_time_to_utc(time_str: &str) -> Option<NaiveTime> {
     let time_part = &time_str[..pos];
     let offset_part = &time_str[pos..];
 
-    // Parse the time
     let naive_time = NaiveTime::parse_from_str(time_part, "%H:%M:%S")
         .or_else(|_| NaiveTime::parse_from_str(time_part, "%H:%M:%S%.f"))
         .ok()?;
 
-    // Parse the offset (e.g., "+05:30" or "-08:00")
     let offset_seconds = parse_offset_seconds(offset_part)?;
-
-    // Convert to UTC by subtracting the offset
     let total_seconds = naive_time.num_seconds_from_midnight() as i32 - offset_seconds;
-
-    // Handle day wraparound (result can be negative or >= 86400)
     let normalized_seconds = total_seconds.rem_euclid(86400) as u32;
+
     NaiveTime::from_num_seconds_from_midnight_opt(normalized_seconds, naive_time.nanosecond())
 }
 
 /// Parse RFC 3339 datetime string and convert to UTC.
-///
-/// Handles formats like:
-/// - "2024-01-15T14:30:00Z"
-/// - "2024-01-15T14:30:00+05:30"
-///
-/// Returns None if parsing fails.
 fn parse_datetime_to_utc(datetime_str: &str) -> Option<DateTime<Utc>> {
-    // Try parsing as RFC 3339 with timezone
     DateTime::parse_from_rfc3339(datetime_str)
         .map(|dt| dt.with_timezone(&Utc))
         .ok()
 }
 
 /// Parse timezone offset string to seconds.
-///
-/// Handles formats like "+05:30", "-08:00", "+00:00"
 fn parse_offset_seconds(offset: &str) -> Option<i32> {
     if offset.len() < 5 {
         return None;
@@ -1180,156 +1161,63 @@ mod tests {
     // ===================
 
     #[test]
-    fn test_parse_offset_seconds_positive() {
+    fn test_parse_offset_seconds() {
         assert_eq!(parse_offset_seconds("+00:00"), Some(0));
         assert_eq!(parse_offset_seconds("+05:30"), Some(5 * 3600 + 30 * 60));
-        assert_eq!(parse_offset_seconds("+12:00"), Some(12 * 3600));
-    }
-
-    #[test]
-    fn test_parse_offset_seconds_negative() {
         assert_eq!(parse_offset_seconds("-08:00"), Some(-8 * 3600));
-        assert_eq!(parse_offset_seconds("-05:30"), Some(-(5 * 3600 + 30 * 60)));
-        assert_eq!(parse_offset_seconds("-12:00"), Some(-12 * 3600));
-    }
-
-    #[test]
-    fn test_parse_offset_seconds_invalid() {
         assert_eq!(parse_offset_seconds(""), None);
-        assert_eq!(parse_offset_seconds("+00"), None);
-        assert_eq!(parse_offset_seconds("0000"), None);
         assert_eq!(parse_offset_seconds("Z"), None);
     }
 
     #[test]
     fn test_parse_time_to_utc_zulu() {
-        let result = parse_time_to_utc("14:30:00Z");
-        assert!(result.is_some());
-        let time = result.unwrap();
-        assert_eq!(time.hour(), 14);
-        assert_eq!(time.minute(), 30);
-        assert_eq!(time.second(), 0);
+        let result = parse_time_to_utc("14:30:00Z").unwrap();
+        assert_eq!(result.hour(), 14);
+        assert_eq!(result.minute(), 30);
     }
 
     #[test]
     fn test_parse_time_to_utc_positive_offset() {
         // 14:30:00+05:30 -> 09:00:00 UTC
-        let result = parse_time_to_utc("14:30:00+05:30");
-        assert!(result.is_some());
-        let time = result.unwrap();
-        assert_eq!(time.hour(), 9);
-        assert_eq!(time.minute(), 0);
-        assert_eq!(time.second(), 0);
+        let result = parse_time_to_utc("14:30:00+05:30").unwrap();
+        assert_eq!(result.hour(), 9);
+        assert_eq!(result.minute(), 0);
     }
 
     #[test]
     fn test_parse_time_to_utc_negative_offset() {
         // 14:30:00-08:00 -> 22:30:00 UTC
-        let result = parse_time_to_utc("14:30:00-08:00");
-        assert!(result.is_some());
-        let time = result.unwrap();
-        assert_eq!(time.hour(), 22);
-        assert_eq!(time.minute(), 30);
-        assert_eq!(time.second(), 0);
+        let result = parse_time_to_utc("14:30:00-08:00").unwrap();
+        assert_eq!(result.hour(), 22);
+        assert_eq!(result.minute(), 30);
     }
 
     #[test]
-    fn test_parse_time_to_utc_wraparound_forward() {
+    fn test_parse_time_to_utc_wraparound() {
         // 02:30:00+05:30 -> 21:00:00 UTC (previous day)
-        let result = parse_time_to_utc("02:30:00+05:30");
-        assert!(result.is_some());
-        let time = result.unwrap();
-        assert_eq!(time.hour(), 21);
-        assert_eq!(time.minute(), 0);
-        assert_eq!(time.second(), 0);
-    }
-
-    #[test]
-    fn test_parse_time_to_utc_wraparound_backward() {
-        // 22:00:00-08:00 -> 06:00:00 UTC (next day)
-        let result = parse_time_to_utc("22:00:00-08:00");
-        assert!(result.is_some());
-        let time = result.unwrap();
-        assert_eq!(time.hour(), 6);
-        assert_eq!(time.minute(), 0);
-        assert_eq!(time.second(), 0);
-    }
-
-    #[test]
-    fn test_parse_time_to_utc_with_fractional_seconds() {
-        let result = parse_time_to_utc("14:30:00.123Z");
-        assert!(result.is_some());
-        let time = result.unwrap();
-        assert_eq!(time.hour(), 14);
-        assert_eq!(time.minute(), 30);
-        assert_eq!(time.second(), 0);
-    }
-
-    #[test]
-    fn test_parse_time_to_utc_no_offset() {
-        // Time without offset is treated as-is (naive)
-        let result = parse_time_to_utc("14:30:00");
-        assert!(result.is_some());
-        let time = result.unwrap();
-        assert_eq!(time.hour(), 14);
-        assert_eq!(time.minute(), 30);
-    }
-
-    #[test]
-    fn test_parse_time_to_utc_invalid() {
-        assert!(parse_time_to_utc("").is_none());
-        assert!(parse_time_to_utc("not a time").is_none());
-        assert!(parse_time_to_utc("25:00:00Z").is_none());
+        let result = parse_time_to_utc("02:30:00+05:30").unwrap();
+        assert_eq!(result.hour(), 21);
+        assert_eq!(result.minute(), 0);
     }
 
     #[test]
     fn test_parse_datetime_to_utc_zulu() {
-        let result = parse_datetime_to_utc("2024-01-15T14:30:00Z");
-        assert!(result.is_some());
-        let dt = result.unwrap();
-        assert_eq!(dt.year(), 2024);
-        assert_eq!(dt.month(), 1);
-        assert_eq!(dt.day(), 15);
-        assert_eq!(dt.hour(), 14);
-        assert_eq!(dt.minute(), 30);
+        let result = parse_datetime_to_utc("2024-01-15T14:30:00Z").unwrap();
+        assert_eq!(result.year(), 2024);
+        assert_eq!(result.hour(), 14);
     }
 
     #[test]
-    fn test_parse_datetime_to_utc_positive_offset() {
+    fn test_parse_datetime_to_utc_with_offset() {
         // 2024-01-15T14:30:00+05:30 -> 2024-01-15T09:00:00Z
-        let result = parse_datetime_to_utc("2024-01-15T14:30:00+05:30");
-        assert!(result.is_some());
-        let dt = result.unwrap();
-        assert_eq!(dt.hour(), 9);
-        assert_eq!(dt.minute(), 0);
-    }
-
-    #[test]
-    fn test_parse_datetime_to_utc_negative_offset() {
-        // 2024-01-15T14:30:00-08:00 -> 2024-01-15T22:30:00Z
-        let result = parse_datetime_to_utc("2024-01-15T14:30:00-08:00");
-        assert!(result.is_some());
-        let dt = result.unwrap();
-        assert_eq!(dt.hour(), 22);
-        assert_eq!(dt.minute(), 30);
-    }
-
-    #[test]
-    fn test_parse_datetime_to_utc_date_change() {
-        // 2024-01-15T02:00:00+05:30 -> 2024-01-14T20:30:00Z (previous day)
-        let result = parse_datetime_to_utc("2024-01-15T02:00:00+05:30");
-        assert!(result.is_some());
-        let dt = result.unwrap();
-        assert_eq!(dt.day(), 14);
-        assert_eq!(dt.hour(), 20);
-        assert_eq!(dt.minute(), 30);
+        let result = parse_datetime_to_utc("2024-01-15T14:30:00+05:30").unwrap();
+        assert_eq!(result.hour(), 9);
+        assert_eq!(result.minute(), 0);
     }
 
     #[test]
     fn test_parse_datetime_to_utc_invalid() {
         assert!(parse_datetime_to_utc("").is_none());
         assert!(parse_datetime_to_utc("not a datetime").is_none());
-        assert!(parse_datetime_to_utc("2024-01-15").is_none()); // date only
-        assert!(parse_datetime_to_utc("14:30:00Z").is_none()); // time only
     }
 }

@@ -45,7 +45,7 @@ pub struct ValueOp {
     pub datetime: Option<String>,     // Datetime
     pub schedule: Option<JsonValue>,  // Schedule
     pub embedding: Option<JsonValue>, // Embedding
-    // UTC-normalized time columns
+    // UTC-normalized time columns (Rust converts, stored as timestamp without timezone)
     pub time_utc: Option<NaiveTime>,         // Time normalized to UTC
     pub datetime_utc: Option<DateTime<Utc>>, // Datetime normalized to UTC
 }

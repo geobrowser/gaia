@@ -153,7 +153,7 @@ impl Storage {
                 $17::jsonb[],
                 $18::jsonb[],
                 $19::time[],
-                $20::timestamptz[]
+                $20::timestamp[]
             )
             ON CONFLICT (id) DO UPDATE SET
                 language = EXCLUDED.language,
@@ -1167,7 +1167,7 @@ impl Storage {
                 $6::text[], $7::text[], $8::text[], $9::boolean[], $10::numeric[],
                 $11::text[], $12::text[], $13::bigint[], $14::double precision[],
                 $15::bytea[], $16::text[], $17::text[], $18::jsonb[], $19::jsonb[],
-                $20::time[], $21::timestamptz[]
+                $20::time[], $21::timestamp[]
             )
             ON CONFLICT (id) DO NOTHING
             "#,
