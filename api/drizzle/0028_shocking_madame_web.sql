@@ -1,4 +1,8 @@
--- Set database timezone to UTC so timestamptz values are returned in UTC
+-- Set database timezone to UTC.
+-- PostgreSQL stores timestamptz as UTC internally but displays in session timezone.
+-- By setting the database default to UTC, all connections return UTC without
+-- needing per-connection configuration. This ensures the *_utc columns return
+-- normalized UTC values for consistent querying and sorting.
 DO $$
 BEGIN
   EXECUTE format('ALTER DATABASE %I SET timezone = %L', current_database(), 'UTC');
