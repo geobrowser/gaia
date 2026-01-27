@@ -7,8 +7,6 @@ export type IEnvironment = Readonly<{
 	ipfsGatewayWrite: string
 	ipfsAlternativeGatewayKey: string
 	ipfsAlternativeGatewayWrite: string
-	rpcEndpoint: string
-	chainId: "80451" | "19411"
 }>
 
 export const make = Effect.gen(function* (_) {
@@ -18,12 +16,6 @@ export const make = Effect.gen(function* (_) {
 	const ipfsGatewayWrite = yield* Config.string("IPFS_GATEWAY_WRITE")
 	const ipfsAlternativeGatewayKey = yield* Config.string("IPFS_ALTERNATIVE_GATEWAY_KEY")
 	const ipfsAlternativeGatewayWrite = yield* Config.string("IPFS_ALTERNATIVE_GATEWAY_WRITE")
-	const rpcEndpoint = yield* Config.string("RPC_ENDPOINT")
-	const chainId = yield* Config.string("CHAIN_ID")
-
-	if (chainId !== "19411" && chainId !== "80451") {
-		throw new Error(`Invalid configuration for chain id. Expected 19411 or 80451. Got ${chainId}`)
-	}
 
 	const debug = Option.match(maybeDebug, {
 		onSome: (o) => o,
@@ -31,14 +23,12 @@ export const make = Effect.gen(function* (_) {
 	})
 
 	return {
-		chainId,
 		databaseUrl: databaseUrl,
 		debug,
 		ipfsKey: ipfsKey,
 		ipfsGatewayWrite: ipfsGatewayWrite,
 		ipfsAlternativeGatewayKey: ipfsAlternativeGatewayKey,
 		ipfsAlternativeGatewayWrite: ipfsAlternativeGatewayWrite,
-		rpcEndpoint: rpcEndpoint,
 	} as const
 })
 

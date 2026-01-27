@@ -17,9 +17,6 @@
   "license": "ISC",
   "description": "",
   "dependencies": {
-    "@aragon/osx-ethers": "^1.4.0",
-    "@aragon/sdk-client": "^1.26.0",
-    "@aragon/sdk-client-common": "^1.17.0",
     "@effect/opentelemetry": "^0.53.0",
     "@graphile-contrib/pg-simplify-inflector": "^6.1.0",
     "@graphprotocol/grc-20": "^0.25.1",
@@ -48,7 +45,6 @@
     "postgraphile": "^4.14.1",
     "postgraphile-plugin-connection-filter": "^2.3.0",
     "uuid": "^11.1.0",
-    "viem": "^2.30.6",
     "vite-tsconfig-paths": "^5.1.4"
   },
   "devDependencies": {
