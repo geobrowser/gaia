@@ -12,8 +12,6 @@ import {SpanStatusCode, trace} from "@opentelemetry/api"
 import type {Context, Next} from "hono"
 import {log} from "../services/telemetry"
 
-const tracer = trace.getTracer("gaia.api")
-
 /**
  * Extract or generate a request ID.
  * Checks common headers, falls back to generating a UUID.
@@ -63,6 +61,8 @@ export function canonicalRequestLogging() {
 			query: c.req.query(),
 		})
 
+		// Get tracer lazily at request time (not module load) to ensure OTEL SDK is initialized
+		const tracer = trace.getTracer("gaia.api")
 		const span = tracer.startSpan(`${method} ${path}`, {
 			attributes: {
 				"http.method": method,

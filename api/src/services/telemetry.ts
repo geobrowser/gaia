@@ -1,4 +1,6 @@
 import {NodeSdk} from "@effect/opentelemetry"
+import {trace} from "@opentelemetry/api"
+import {BasicTracerProvider} from "@opentelemetry/sdk-trace-base"
 import * as Sentry from "@sentry/node"
 import {SentrySpanProcessor} from "@sentry/opentelemetry"
 import {Config, Effect, Layer, Logger, LogLevel, Option} from "effect"
@@ -34,9 +36,17 @@ const makeTelemetryConfig = Effect.gen(function* () {
 		environment,
 		release,
 		tracesSampleRate,
-		skipOpenTelemetrySetup: true, // We use Effect's OTEL layer
+		skipOpenTelemetrySetup: true, // We manage OTEL setup ourselves
 		debug,
 	})
+
+	// Set up a minimal global TracerProvider for non-Effect code (GraphQL, HTTP middleware).
+	// We intentionally skip SentryContextManager to avoid conflicts with Effect's Fiber-based context.
+	// Effect has its own scoped provider; this global provider is only for trace.getTracer() calls.
+	const globalProvider = new BasicTracerProvider({
+		spanProcessors: [new SentrySpanProcessor()],
+	})
+	trace.setGlobalTracerProvider(globalProvider)
 
 	sentryInitialized = true
 	console.log(`[TELEMETRY] Sentry enabled (env: ${environment})`)
