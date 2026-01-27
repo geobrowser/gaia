@@ -29,12 +29,14 @@ const makeTelemetryConfig = Effect.gen(function* () {
 	const tracesSampleRate = parseFloat(Option.getOrElse(maybeSampleRate, () => "1.0"))
 	const debug = Option.getOrElse(maybeDebug, () => false)
 
+	// Let Sentry set up global OTEL infrastructure (context manager, sampler, propagator, span processor).
+	// Effect's NodeSdk.layer creates its own scoped provider for Effect code, while non-Effect code
+	// (like GraphQL instrumentation) uses Sentry's global provider. Both paths send spans to Sentry.
 	Sentry.init({
 		dsn,
 		environment,
 		release,
 		tracesSampleRate,
-		skipOpenTelemetrySetup: true, // We use Effect's OTEL layer
 		debug,
 	})
 
