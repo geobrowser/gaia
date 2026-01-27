@@ -1,0 +1,79 @@
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: opensearch-full-migration
+  namespace: search
+  labels:
+    app: opensearch-admin
+    task: full-migration
+spec:
+  # Keep job history for debugging
+  ttlSecondsAfterFinished: 86400  # 24 hours
+  backoffLimit: 1  # Don't retry automatically - migrations are sensitive
+  template:
+    metadata:
+      labels:
+        app: opensearch-admin
+        task: full-migration
+    spec:
+      # Use ServiceAccount with permissions to manage deployments
+      serviceAccountName: search-admin
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: full-migration
+        image: registry.digitalocean.com/geo/search-admin:latest  # Update with your registry
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+          seccompProfile:
+            type: RuntimeDefault
+        env:
+        - name: OPENSEARCH_URL
+          valueFrom:
+            secretKeyRef:
+              name: opensearch-credentials
+              key: OPENSEARCH_URL
+        - name: INDEX_ALIAS
+          value: "entities"  # Default alias name
+        - name: SOURCE_VERSION
+          value: "2"  # CHANGE THIS: Current/source index version
+        - name: TARGET_VERSION
+          value: "3"  # CHANGE THIS: New/target index version
+        - name: NAMESPACE
+          value: "search"  # Kubernetes namespace
+        - name: DEPLOYMENT_NAME
+          value: "search-indexer"  # Deployment to manage
+        - name: RUST_LOG
+          value: "info"
+        command:
+        - search-admin
+        - full-migration
+        - --source-version
+        - "$(SOURCE_VERSION)"
+        - --target-version
+        - "$(TARGET_VERSION)"
+        - --namespace
+        - "$(NAMESPACE)"
+        - --deployment-name
+        - "$(DEPLOYMENT_NAME)"
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "200m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"

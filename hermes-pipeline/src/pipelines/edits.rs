@@ -339,6 +339,7 @@ mod tests {
                         language: None,
                     },
                 }],
+                context: None,
             })],
         };
         encode_edit(&edit).expect("Should encode test edit")

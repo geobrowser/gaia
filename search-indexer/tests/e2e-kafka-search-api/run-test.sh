@@ -61,7 +61,7 @@ else
     echo "   OPENSEARCH_URL=http://localhost:9200 \\"
     echo "   KAFKA_GROUP_ID=search-indexer-test-\$(date +%s) \\"
     echo "   RUST_LOG=debug,search_indexer=debug \\"
-    echo "   cargo run -p search-indexer"
+    echo "   cargo run -p search-indexer --features search-indexer-repository/auto_index_creation"
     echo ""
     echo "2. Start the search API:"
     echo "   cd api && cargo run"

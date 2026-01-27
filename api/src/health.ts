@@ -1,19 +1,14 @@
-import {Effect, Layer} from "effect"
+import {Effect} from "effect"
 import {Hono} from "hono"
-import {Environment, make as makeEnvironment} from "./services/environment"
-import {make as makeStorage, Storage} from "./services/storage/storage"
-
-const EnvironmentLayer = Layer.effect(Environment, makeEnvironment)
-const StorageLayer = Layer.effect(Storage, makeStorage).pipe(Layer.provide(EnvironmentLayer))
-const layers = Layer.mergeAll(EnvironmentLayer, StorageLayer)
-const provideDeps = Effect.provide(layers)
+import {runtime} from "./services/runtime"
+import {Storage} from "./services/storage/storage"
 
 const health = new Hono()
 
 // Simple health check - returns 200 if database is accessible
 health.get("/", async (c) => {
 	try {
-		const healthCheck = await Effect.runPromise(
+		const healthCheck = await runtime.runPromise(
 			Effect.gen(function* () {
 				const storage = yield* Storage
 
@@ -24,7 +19,7 @@ health.get("/", async (c) => {
 				})
 
 				return result
-			}).pipe(provideDeps),
+			}),
 		)
 
 		if (healthCheck) {
@@ -56,7 +51,7 @@ health.get("/", async (c) => {
 // Detailed health check with pool statistics
 health.get("/detailed", async (c) => {
 	try {
-		const healthData = await Effect.runPromise(
+		const healthData = await runtime.runPromise(
 			Effect.gen(function* () {
 				const storage = yield* Storage
 
@@ -94,7 +89,7 @@ health.get("/detailed", async (c) => {
 					recommendations: getHealthRecommendations(poolStats, utilizationPercent),
 					timestamp: new Date().toISOString(),
 				}
-			}).pipe(provideDeps),
+			}),
 		)
 
 		const statusCode = healthData.status === "healthy" ? 200 : healthData.status === "degraded" ? 206 : 503
@@ -115,7 +110,7 @@ health.get("/detailed", async (c) => {
 // Pool-specific metrics endpoint
 health.get("/pool", async (c) => {
 	try {
-		const poolData = await Effect.runPromise(
+		const poolData = await runtime.runPromise(
 			Effect.gen(function* () {
 				const storage = yield* Storage
 				const poolStats = yield* storage.getPoolStats()
@@ -129,7 +124,7 @@ health.get("/pool", async (c) => {
 					status: utilizationPercent > 85 ? "critical" : utilizationPercent > 70 ? "warning" : "ok",
 					timestamp: new Date().toISOString(),
 				}
-			}).pipe(provideDeps),
+			}),
 		)
 
 		return c.json(poolData)

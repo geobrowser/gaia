@@ -413,14 +413,14 @@ fn value_to_value_op(pv: &PropertyValue, entity_id: Uuid, space_id: Uuid) -> Opt
         Grc20Value::Bytes(v) => {
             op.bytes = Some(v.to_vec());
         }
-        Grc20Value::Date(v) => {
-            op.date = Some(v.to_string());
+        Grc20Value::Date(value) => {
+            op.date = Some(value.to_string());
         }
-        Grc20Value::Time(v) => {
-            op.time = Some(v.to_string());
+        Grc20Value::Time(value) => {
+            op.time = Some(value.to_string());
         }
-        Grc20Value::Datetime(v) => {
-            op.datetime = Some(v.to_string());
+        Grc20Value::Datetime(value) => {
+            op.datetime = Some(value.to_string());
         }
         Grc20Value::Schedule(v) => {
             // Store as JSON string
@@ -433,6 +433,9 @@ fn value_to_value_op(pv: &PropertyValue, entity_id: Uuid, space_id: Uuid) -> Opt
                 None => format!("{},{}", lon, lat),
             };
             op.point = Some(point_str);
+        }
+        Grc20Value::Rect { .. } => {
+            // Rect is not stored in kg-indexer yet.
         }
         Grc20Value::Embedding {
             sub_type,
