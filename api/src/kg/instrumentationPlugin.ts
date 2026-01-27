@@ -68,6 +68,9 @@ export function useGraphQLInstrumentation(): Plugin {
 
 			const operationLabel = getOperationLabel(args)
 			const query = print(args.document)
+			const variables = args.variableValues
+				? JSON.stringify(args.variableValues).slice(0, 2000)
+				: undefined
 
 			// Get tracer lazily at request time (not module load) to ensure OTEL SDK is initialized
 			const tracer = trace.getTracer("gaia-api-graphql")
@@ -75,6 +78,7 @@ export function useGraphQLInstrumentation(): Plugin {
 				attributes: {
 					"graphql.operation_name": operationLabel,
 					"graphql.document": query.slice(0, 2000),
+					...(variables && {"graphql.variables": variables}),
 					"http.request_id": requestId,
 				},
 			})
@@ -96,6 +100,7 @@ export function useGraphQLInstrumentation(): Plugin {
 								},
 								extra: {
 									query: query.slice(0, 2000),
+									variables: args.variableValues,
 									path: error.path,
 									requestId,
 								},
