@@ -1,7 +1,13 @@
 import * as Sentry from "@sentry/node"
-import {SpanStatusCode, trace, context} from "@opentelemetry/api"
+import {SpanStatusCode, trace, ROOT_CONTEXT} from "@opentelemetry/api"
 import {Kind, print, type OperationDefinitionNode, type FieldNode} from "graphql"
 import type {Plugin} from "graphql-yoga"
+
+type TraceContext = {
+	traceId: string
+	spanId: string
+	traceFlags: number
+}
 
 /**
  * Extract request ID from context.
@@ -21,6 +27,14 @@ function getRequestId(ctx: unknown): string {
 		request.headers.get("traceparent")?.split("-")[1] ||
 		crypto.randomUUID()
 	)
+}
+
+/**
+ * Extract trace context passed from HTTP middleware.
+ */
+function getTraceContext(ctx: unknown): TraceContext | undefined {
+	const c = ctx as {traceContext?: TraceContext}
+	return c?.traceContext
 }
 
 /**
@@ -73,9 +87,21 @@ export function useGraphQLInstrumentation(): Plugin {
 				: undefined
 
 			// Get tracer lazily at request time (not module load) to ensure OTEL SDK is initialized
-			// Explicitly capture the active context to ensure proper parent-child linking
 			const tracer = trace.getTracer("gaia-api-graphql")
-			const parentContext = context.active()
+
+			// Build parent context from trace context passed by HTTP middleware
+			// (OTEL async context doesn't propagate through graphql-yoga)
+			const traceCtx = getTraceContext(args.contextValue)
+			let parentContext = ROOT_CONTEXT
+			if (traceCtx) {
+				parentContext = trace.setSpanContext(ROOT_CONTEXT, {
+					traceId: traceCtx.traceId,
+					spanId: traceCtx.spanId,
+					traceFlags: traceCtx.traceFlags,
+					isRemote: false,
+				})
+			}
+
 			const span = tracer.startSpan(
 				`graphql ${operationLabel}`,
 				{
