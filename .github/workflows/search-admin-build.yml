@@ -1,0 +1,38 @@
+name: Build Search Admin CLI
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - 'search-admin/**'
+      - 'search-indexer-repository/**'
+      - 'search-indexer-shared/**'
+      - '.github/workflows/search-admin-build.yml'
+
+env:
+  REGISTRY: registry.digitalocean.com/geo
+  IMAGE_NAME: search-admin
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install doctl
+        uses: digitalocean/action-doctl@v2
+        with:
+          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+
+      - name: Log in to DigitalOcean Container Registry
+        run: doctl registry login --expiry-seconds 1200
+
+      - name: Build and push Docker image
+        run: |
+          docker build -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
+                       -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest \
+                       -f search-admin/Dockerfile .
+          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
