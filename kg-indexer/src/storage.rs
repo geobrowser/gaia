@@ -99,6 +99,8 @@ impl Storage {
         let mut datetime_values = Vec::with_capacity(values.len());
         let mut schedule_values = Vec::with_capacity(values.len());
         let mut embedding_values = Vec::with_capacity(values.len());
+        let mut time_utc_values = Vec::with_capacity(values.len());
+        let mut datetime_utc_values = Vec::with_capacity(values.len());
 
         for prop in values {
             ids.push(prop.id.to_string());
@@ -119,13 +121,16 @@ impl Storage {
             datetime_values.push(prop.datetime.as_deref());
             schedule_values.push(&prop.schedule);
             embedding_values.push(&prop.embedding);
+            time_utc_values.push(prop.time_utc.as_deref());
+            datetime_utc_values.push(prop.datetime_utc.as_deref());
         }
 
         let query = r#"
             INSERT INTO values (
                 id, entity_id, property_id, space_id, language, unit,
                 text, decimal, boolean, time, point,
-                integer, float, bytes, date, datetime, schedule, embedding
+                integer, float, bytes, date, datetime, schedule, embedding,
+                time_utc, datetime_utc
             )
             SELECT * FROM UNNEST(
                 $1::text[],
@@ -145,7 +150,9 @@ impl Storage {
                 $15::text[],
                 $16::text[],
                 $17::jsonb[],
-                $18::jsonb[]
+                $18::jsonb[],
+                $19::timetz[],
+                $20::timestamptz[]
             )
             ON CONFLICT (id) DO UPDATE SET
                 language = EXCLUDED.language,
@@ -161,7 +168,9 @@ impl Storage {
                 date = EXCLUDED.date,
                 datetime = EXCLUDED.datetime,
                 schedule = EXCLUDED.schedule,
-                embedding = EXCLUDED.embedding
+                embedding = EXCLUDED.embedding,
+                time_utc = EXCLUDED.time_utc,
+                datetime_utc = EXCLUDED.datetime_utc
         "#;
 
         sqlx::query(query)
@@ -183,6 +192,8 @@ impl Storage {
             .bind(&datetime_values)
             .bind(&schedule_values)
             .bind(&embedding_values)
+            .bind(&time_utc_values)
+            .bind(&datetime_utc_values)
             .execute(&mut **tx)
             .await?;
 
@@ -1109,6 +1120,8 @@ impl Storage {
         let mut datetimes = Vec::with_capacity(set_values.len());
         let mut schedules = Vec::with_capacity(set_values.len());
         let mut embeddings = Vec::with_capacity(set_values.len());
+        let mut time_utcs = Vec::with_capacity(set_values.len());
+        let mut datetime_utcs = Vec::with_capacity(set_values.len());
 
         for v in &set_values {
             // Derive deterministic ID for idempotency
@@ -1136,6 +1149,8 @@ impl Storage {
             datetimes.push(v.datetime.as_deref());
             schedules.push(&v.schedule);
             embeddings.push(&v.embedding);
+            time_utcs.push(v.time_utc.as_deref());
+            datetime_utcs.push(v.datetime_utc.as_deref());
         }
 
         sqlx::query(
@@ -1143,13 +1158,15 @@ impl Storage {
             INSERT INTO value_versions (
                 id, entity_id, property_id, space_id, valid_from_key,
                 language, unit, text, boolean, decimal, time, point,
-                integer, float, bytes, date, datetime, schedule, embedding
+                integer, float, bytes, date, datetime, schedule, embedding,
+                time_utc, datetime_utc
             )
             SELECT * FROM UNNEST(
                 $1::uuid[], $2::uuid[], $3::uuid[], $4::uuid[], $5::bigint[],
                 $6::text[], $7::text[], $8::text[], $9::boolean[], $10::numeric[],
                 $11::text[], $12::text[], $13::bigint[], $14::double precision[],
-                $15::bytea[], $16::text[], $17::text[], $18::jsonb[], $19::jsonb[]
+                $15::bytea[], $16::text[], $17::text[], $18::jsonb[], $19::jsonb[],
+                $20::timetz[], $21::timestamptz[]
             )
             ON CONFLICT (id) DO NOTHING
             "#,
@@ -1173,6 +1190,8 @@ impl Storage {
         .bind(&datetimes)
         .bind(&schedules)
         .bind(&embeddings)
+        .bind(&time_utcs)
+        .bind(&datetime_utcs)
         .execute(&mut **tx)
         .await?;
 

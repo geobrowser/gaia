@@ -12,7 +12,9 @@ use rdkafka::message::Message;
 
 use vote_indexer::consumer::{parse_vote, KafkaConsumer};
 use vote_indexer::error::IndexerError;
-use vote_indexer::handlers::voting::{calculate_vote_counts, get_latest_user_votes, handle_vote_cast};
+use vote_indexer::handlers::voting::{
+    calculate_vote_counts, get_latest_user_votes, handle_vote_cast,
+};
 use vote_indexer::models::voting::{UserVoteCriteria, VoteCountCriteria, VoteItem};
 use vote_indexer::storage::Storage;
 
@@ -75,10 +77,9 @@ fn build_telemetry_config() -> hermes_instrumentation::Config {
 }
 
 async fn async_main() -> Result<(), IndexerError> {
-
     // Load configuration from environment
-    let database_url =
-        env::var("DATABASE_URL").map_err(|_| IndexerError::Config("DATABASE_URL not set".into()))?;
+    let database_url = env::var("DATABASE_URL")
+        .map_err(|_| IndexerError::Config("DATABASE_URL not set".into()))?;
     let kafka_broker = env::var("KAFKA_BROKER").unwrap_or_else(|_| "localhost:9092".to_string());
     let kafka_group_id = env::var("KAFKA_GROUP_ID").unwrap_or_else(|_| "vote-indexer".to_string());
     let batch_size: usize = env::var("BATCH_SIZE")
@@ -111,7 +112,8 @@ async fn async_main() -> Result<(), IndexerError> {
     let mut stream = consumer.stream();
     let mut vote_buffer: Vec<VoteItem> = Vec::with_capacity(batch_size);
     let mut commit_info: Vec<(String, i32, i64)> = Vec::with_capacity(batch_size);
-    let mut batch_timer = tokio::time::interval(tokio::time::Duration::from_millis(batch_timeout_ms));
+    let mut batch_timer =
+        tokio::time::interval(tokio::time::Duration::from_millis(batch_timeout_ms));
     let mut processed_count: u64 = 0;
     let mut error_count: u64 = 0;
 
@@ -279,8 +281,12 @@ async fn process_vote_batch(votes: &[VoteItem], storage: &Storage) -> Result<usi
         let mut tx = storage.pool().begin().await?;
 
         // Fetch existing user votes and vote counts (with row locks)
-        let stored_user_votes = storage.get_user_votes_tx(&user_vote_criteria, &mut tx).await?;
-        let stored_vote_counts = storage.get_votes_counts_tx(&vote_count_criteria, &mut tx).await?;
+        let stored_user_votes = storage
+            .get_user_votes_tx(&user_vote_criteria, &mut tx)
+            .await?;
+        let stored_vote_counts = storage
+            .get_votes_counts_tx(&vote_count_criteria, &mut tx)
+            .await?;
 
         // Convert to HashMaps for lookup
         let stored_user_votes_map: HashMap<UserVoteCriteria, _> = stored_user_votes
@@ -309,7 +315,9 @@ async fn process_vote_batch(votes: &[VoteItem], storage: &Storage) -> Result<usi
         storage.upsert_user_votes(&user_votes, &mut tx).await?;
 
         // Upsert vote counts (aggregates)
-        storage.upsert_votes_counts(&updated_vote_counts, &mut tx).await?;
+        storage
+            .upsert_votes_counts(&updated_vote_counts, &mut tx)
+            .await?;
 
         tx.commit().await?;
 

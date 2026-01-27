@@ -374,6 +374,8 @@ fn value_to_value_op(pv: &PropertyValue, entity_id: Uuid, space_id: Uuid) -> Opt
         datetime: None,
         schedule: None,
         embedding: None,
+        time_utc: None,
+        datetime_utc: None,
     };
 
     match &pv.value {
@@ -417,10 +419,14 @@ fn value_to_value_op(pv: &PropertyValue, entity_id: Uuid, space_id: Uuid) -> Opt
             op.date = Some(value.to_string());
         }
         Grc20Value::Time(value) => {
-            op.time = Some(value.to_string());
+            let time_str = value.to_string();
+            op.time = Some(time_str.clone());
+            op.time_utc = Some(time_str);
         }
         Grc20Value::Datetime(value) => {
-            op.datetime = Some(value.to_string());
+            let datetime_str = value.to_string();
+            op.datetime = Some(datetime_str.clone());
+            op.datetime_utc = Some(datetime_str);
         }
         Grc20Value::Schedule(v) => {
             // Store as JSON string
@@ -542,6 +548,8 @@ fn extract_values(edit: &Grc20Edit, space_id: &Uuid) -> Vec<ValueOp> {
                         datetime: None,
                         schedule: None,
                         embedding: None,
+                        time_utc: None,
+                        datetime_utc: None,
                     });
                 }
 
@@ -702,6 +710,8 @@ mod tests {
             datetime: None,
             schedule: None,
             embedding: None,
+            time_utc: None,
+            datetime_utc: None,
         }
     }
 
