@@ -11,7 +11,7 @@ hermes-instrumentation = { path = "../hermes-instrumentation" }
 indexer_utils = { path = "../indexer_utils" }
 
 # GRC-20 v2 binary format
-grc-20 = "0.2.2"
+grc-20 = "0.3.0"
 
 # Kafka
 rdkafka = { version = "0.38.0", features = ["cmake-build", "ssl", "zstd"] }

@@ -1308,7 +1308,7 @@ dependencies = [
  "bitflags 2.10.0",
  "cexpr",
  "clang-sys",
- "itertools 0.10.5",
+ "itertools 0.13.0",
  "proc-macro2",
  "quote",
  "regex",
@@ -2658,9 +2658,9 @@ checksum = "0cc23270f6e1808e30a928bdc84dea0b9b4136a8bc82338574f23baf47bbd280"
 
 [[package]]
 name = "grc-20"
-version = "0.2.2"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3589c02507a66e2ee3167d094553035aeb06e590330e3bbf0d281c0bd3b61620"
+checksum = "e228dc10e29083c94c5b4b4ebcebda8cafb8f49d4fd8c5aac4349756906ab63a"
 dependencies = [
  "lazy_static",
  "rustc-hash",
