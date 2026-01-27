@@ -15,7 +15,7 @@ hermes-instrumentation = { path = "../hermes-instrumentation" }
 hermes-relay = { path = "../hermes-relay" }
 hermes-substream = { path = "../hermes-substream" }
 ipfs = { path = "../ipfs" }
-grc-20 = "0.2.2"
+grc-20 = "0.3.0"
 
 anyhow = "1"
 async-trait = "0.1"
