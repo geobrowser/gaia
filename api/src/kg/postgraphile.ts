@@ -109,7 +109,7 @@ const createContext = async ({ request }: { request: Request }) => {
 	return await contextPromise;
 };
 
-// Shared plugins for both API versions
+// Shared plugins for GraphQL server
 const sharedPlugins = [
 	useExecutionCancellation(),
 	useResponseCache({
