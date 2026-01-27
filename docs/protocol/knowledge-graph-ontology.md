@@ -26,8 +26,8 @@ Types can define a schema (e.g. Name, Description, Avatar, Birthdate). Each prop
 
 Each property may optionally define:
 
-- A **Data Type** (as an entity)
-- A **Renderable Type** (e.g. URL)
+- A **Data Type** (as an entity) via the Data Type property `6d29d57849bb4959baf72cc696b1671a`
+- A **Renderable Type** (e.g. URL) via the Renderable Type property `5338cc2897044e96b5477dfc58da6fc7`
 
 Depending on the data type or renderable type, a property may include extra metadata such as **Format** or **Unit**. These are modeled as properties themselves.
 
@@ -121,7 +121,7 @@ Collection data block: enumerates a fixed, ordered set of entities via Collectio
 
 ### 2.6 Data Block Views
 
-Data block view types are defined on the `BLOCKS` relation pointing to the block using the View property `1907fd1c81114a3ca378b1f353425b65`.
+Data block view types are defined on the `BLOCKS` relation pointing to the block using the View property `1907fd1c81114a3ca378b1f353425b65`. View is optional; Table view is the default when no view is specified.
 
 | View Type | UUID |
 |---|---|
@@ -143,8 +143,8 @@ Images are entities. The Image entity type is `ba4e41460010499da0a3caaa7f579d0e`
 | Property | UUID | Description | Target |
 |---|---|---|---|
 | URL | `8a743832c0944a62b6650c3cc2f9c7bc` | Source URL for the image. | TEXT value |
-| Width | `f7b33e08b76d4190aadacadaa9f561e1` | Image width. | FLOAT64 value |
-| Height | `7f6ad0433e214257a6d48bdad36b1d84` | Image height. | FLOAT64 value |
+| Width (optional) | `f7b33e08b76d4190aadacadaa9f561e1` | Image width. | FLOAT64 value |
+| Height (optional) | `7f6ad0433e214257a6d48bdad36b1d84` | Image height. | FLOAT64 value |
 
 ### 3.2 File Type Relation
 
@@ -152,7 +152,7 @@ Images can specify a file type using the File type relation `515f346fe0fb40c78ea
 
 ## 4. Topics and Representing a Space
 
-Spaces can set a topic that represents what the space is about and is used to determine the space’s front page. The topic is an arbitrary entity in the knowledge graph; there is no canonical Topic type or UUID yet. The topic value is set onchain, not via a knowledge-graph relation.
+Spaces can set a topic that represents what the space is about and is used to determine the space’s front page. The topic is an arbitrary entity in the knowledge graph; there is no canonical Topic type or UUID yet. There are no topic relations in the knowledge graph. The topic value is set onchain, not via a knowledge-graph relation.
 
 Setting the topic is done onchain via the `SET_TOPIC` action in the protocol.
 
@@ -176,6 +176,7 @@ The registry is alphabetized by name for easier lookup.
 | Cover | `34f535072e6b42c5a84443981a77cfa2` | Banner-style image for the entity. |
 | Data Block | `b8803a8665de412bbb357e0c84adf473` | Block entity that renders query/collection results. |
 | Data source type | `1f69cc9880d444abad493df6a7b15ee4` | Declares whether a data block is query-based or collection-based. |
+| Data Type | `6d29d57849bb4959baf72cc696b1671a` | Property that points to a data type entity. |
 | Date | `31cc314f1c168c1cb49e6396b7510ed8` | Data type entity for dates. |
 | Datetime | `ef3ccb2d52bb8a31b4802b0e6305ac1e` | Data type entity for timestamps. |
 | Decimal | `ced1a1c416628b57b3df543ec8ed47b8` | Data type entity for decimals. |
@@ -199,6 +200,7 @@ The registry is alphabetized by name for easier lookup.
 | Property | `808a04ceb21c4d888ad12e240613e5ca` | Type entity used to mark property definitions. |
 | Query data source | `3b069b04adbe4728917d1283fd4ac27e` | Marker entity for live, declarative queries. |
 | Rect | `eb924b1b07ed818984c3596a979113b9` | Data type entity for bounding boxes. |
+| Renderable Type | `5338cc2897044e96b5477dfc58da6fc7` | Property that points to a renderable type entity. |
 | Schedule | `28df8e42d6f389828d0156c20a9ee183` | Data type entity for schedules. |
 | Table view | `cba271cef7c140339047614d174c69f1` | Render results as a table. |
 | Text | `db22a933c151866ca01a4d9e471d5797` | Data type entity for text values. |
