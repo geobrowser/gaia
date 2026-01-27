@@ -2,6 +2,7 @@ import {
 	relations as drizzleRelations,
 	type InferSelectModel,
 	sql,
+	type SQL,
 } from "drizzle-orm";
 import {
 	bigint,
@@ -112,15 +113,13 @@ export const entities = pgTable(
  *
  * Design: We optimize for normalization, user intent preservation, and query performance
  * over storage efficiency. For example, time/datetime values store both the original string
- * (with timezone offset) and a UTC-normalized native column. This preserves the original
+ * (with timezone offset) and a UTC-normalized generated column. This preserves the original
  * representation while enabling efficient time-based queries and comparisons.
  *
- * UTC normalization: We use Rust (chrono) to parse and normalize time/datetime values to UTC
- * before insertion, rather than relying on PostgreSQL's timestamptz/timetz types. PostgreSQL's
- * timestamp with timezone types normalize to UTC on insert but display in the session's timezone
- * on read, which requires database-level or connection-level timezone configuration to ensure
- * consistent UTC output. By normalizing in Rust and storing in `timestamp` (without timezone),
- * we get predictable UTC behavior without any database configuration requirements.
+ * UTC normalization: The *_utc columns are STORED generated columns that cast the original
+ * time/datetime strings to timestamptz/timetz. PostgreSQL normalizes to UTC internally on
+ * insert. A PostGraphile plugin (UtcColumnsPlugin) ensures these columns are always
+ * serialized as UTC (with Z suffix) in the GraphQL response.
  */
 export const values = pgTable(
 	"values",
@@ -145,9 +144,14 @@ export const values = pgTable(
 		// Metadata
 		language: text(), // For TEXT values only
 		unit: text(), // For numerical values (INT64, FLOAT64, DECIMAL)
-		// UTC-normalized time columns (Rust converts to UTC before insert)
-		timeUtc: time("time_utc"), // Time normalized to UTC
-		datetimeUtc: timestamp("datetime_utc", { mode: "date" }), // Datetime normalized to UTC
+		// UTC-normalized generated columns (computed from time/datetime, stored for indexing)
+		timeUtc: time("time_utc").generatedAlwaysAs(
+			(): SQL => sql`(${values.time}::timetz AT TIME ZONE 'UTC')::time`,
+		),
+		datetimeUtc: timestamp("datetime_utc", {
+			withTimezone: true,
+			mode: "date",
+		}).generatedAlwaysAs((): SQL => sql`${values.datetime}::timestamptz`),
 	},
 	(table) => [
 		// Foreign key indexes for join performance
@@ -737,9 +741,16 @@ export const valueVersions = pgTable(
 		// Metadata
 		language: text("language"), // For TEXT values only
 		unit: text("unit"), // For numerical values (INT64, FLOAT64, DECIMAL)
-		// UTC-normalized time columns (Rust converts to UTC before insert)
-		timeUtc: time("time_utc"), // Time normalized to UTC
-		datetimeUtc: timestamp("datetime_utc", { mode: "date" }), // Datetime normalized to UTC
+		// UTC-normalized generated columns (computed from time/datetime, stored for indexing)
+		timeUtc: time("time_utc").generatedAlwaysAs(
+			(): SQL => sql`(${valueVersions.time}::timetz AT TIME ZONE 'UTC')::time`,
+		),
+		datetimeUtc: timestamp("datetime_utc", {
+			withTimezone: true,
+			mode: "date",
+		}).generatedAlwaysAs(
+			(): SQL => sql`${valueVersions.datetime}::timestamptz`,
+		),
 	},
 	(table) => [
 		index("value_versions_entity_idx").on(table.entityId),

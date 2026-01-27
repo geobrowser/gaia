@@ -10,6 +10,7 @@ import ConnectionFilterPlugin from "postgraphile-plugin-connection-filter";
 import EntitySpaceFilterPlugin from "./entitySpaceFilterPlugin";
 import { useGraphQLInstrumentation } from "./instrumentationPlugin";
 import UndashedUuidPlugin from "./uuidScalarPlugin";
+import UtcColumnsPlugin from "./utcColumnsPlugin";
 
 // Server context passed from HTTP middleware
 export type GraphQLServerContext = {
@@ -60,6 +61,7 @@ const postgraphileOptions = {
 		ConnectionFilterPlugin,
 		SimplifyInflectionPlugin,
 		EntitySpaceFilterPlugin,
+		UtcColumnsPlugin,
 	],
 	disableDefaultMutations: true,
 	simpleCollections: "both" as const,

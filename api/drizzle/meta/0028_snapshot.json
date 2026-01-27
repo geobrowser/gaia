@@ -1,5 +1,5 @@
 {
-  "id": "5a72a362-e33d-4d0d-9fdd-107eba14bd9c",
+  "id": "233f7f96-2ce6-4e0e-b3a1-d21453667599",
   "prevId": "43114eef-30f9-4314-9898-ade0747b90c8",
   "version": "7",
   "dialect": "postgresql",
@@ -1670,13 +1670,21 @@
           "name": "time_utc",
           "type": "time",
           "primaryKey": false,
-          "notNull": false
+          "notNull": false,
+          "generated": {
+            "as": "(\"value_versions\".\"time\"::timetz AT TIME ZONE 'UTC')::time",
+            "type": "stored"
+          }
         },
         "datetime_utc": {
           "name": "datetime_utc",
           "type": "timestamp with time zone",
           "primaryKey": false,
-          "notNull": false
+          "notNull": false,
+          "generated": {
+            "as": "\"value_versions\".\"datetime\"::timestamptz",
+            "type": "stored"
+          }
         }
       },
       "indexes": {
@@ -1895,13 +1903,21 @@
           "name": "time_utc",
           "type": "time",
           "primaryKey": false,
-          "notNull": false
+          "notNull": false,
+          "generated": {
+            "as": "(\"values\".\"time\"::timetz AT TIME ZONE 'UTC')::time",
+            "type": "stored"
+          }
         },
         "datetime_utc": {
           "name": "datetime_utc",
           "type": "timestamp with time zone",
           "primaryKey": false,
-          "notNull": false
+          "notNull": false,
+          "generated": {
+            "as": "\"values\".\"datetime\"::timestamptz",
+            "type": "stored"
+          }
         }
       },
       "indexes": {

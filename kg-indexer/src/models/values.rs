@@ -1,4 +1,3 @@
-use chrono::{DateTime, NaiveTime, Utc};
 use serde_json::Value as JsonValue;
 use uuid::Uuid;
 
@@ -45,7 +44,6 @@ pub struct ValueOp {
     pub datetime: Option<String>,     // Datetime
     pub schedule: Option<JsonValue>,  // Schedule
     pub embedding: Option<JsonValue>, // Embedding
-    // UTC-normalized time columns (Rust converts, stored as timestamp without timezone)
-    pub time_utc: Option<NaiveTime>,         // Time normalized to UTC
-    pub datetime_utc: Option<DateTime<Utc>>, // Datetime normalized to UTC
+    // Note: time_utc and datetime_utc are generated columns in PostgreSQL,
+    // computed from time and datetime respectively. No need to populate here.
 }

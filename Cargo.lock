@@ -3398,7 +3398,6 @@ name = "kg-indexer"
 version = "0.1.0"
 dependencies = [
  "async-trait",
- "chrono",
  "dotenv",
  "futures 0.3.31",
  "grc-20",

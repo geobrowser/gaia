@@ -201,15 +201,8 @@
     {
       "idx": 28,
       "version": "7",
-      "when": 1769535411554,
-      "tag": "0028_lumpy_norman_osborn",
-      "breakpoints": true
-    },
-    {
-      "idx": 29,
-      "version": "7",
-      "when": 1769542473775,
-      "tag": "0029_remarkable_loki",
+      "when": 1769544300976,
+      "tag": "0028_shocking_madame_web",
       "breakpoints": true
     }
   ]
