@@ -119,12 +119,6 @@ spec:
                 secretKeyRef:
                   name: api-secrets
                   key: OPENSEARCH_URL
-            - name: TELEMETRY_TOKEN
-              valueFrom:
-                secretKeyRef:
-                  name: api-secrets
-                  key: TELEMETRY_TOKEN
-                  optional: true
             - name: SENTRY_DSN
               valueFrom:
                 secretKeyRef:
