@@ -166,49 +166,49 @@ All IDs defined in this spec are system entities.
 
 | Name | UUID | Notes |
 |---|---|---|
-| Type | `e7d737c536764c609fa16aa64a8c90ad` | Type entity used to denote schemas (i.e., Types: Type). |
-| Property | `808a04ceb21c4d888ad12e240613e5ca` | Type entity used to mark property definitions. |
-| Types | `8f151ba4de204e3c9cb499ddf96f48f1` | Relation type id for type membership. |
-| Properties | `01412f8381894ab1836565c7fd358cc1` | Relation used to attach properties to a schema/type. |
-| Name | `a126ca530c8e48d5b88882c734c38935` | Human-readable name for the entity. |
-| Description | `9b1f76ff9711404c861e59dc3fa7d037` | Short description used in previews and summaries. |
-| Cover | `34f535072e6b42c5a84443981a77cfa2` | Banner-style image for the entity. |
+| Address | `e95864bfde0f4453914a0ab67ec41ad2` | Renderable type. |
 | Blocks | `beaba5cba67741a8b35377030613fc70` | Rich content blocks attached to the entity. |
 | Bool | `37a13ac05b6887ab83e772d4ece101ab` | Data type entity for boolean values. |
-| Int64 | `4258025c2fa481c3a7acc4cbde4b82c2` | Data type entity for 64-bit integers. |
-| Float64 | `d1f0423c3165808d942ff929bf9fc4ce` | Data type entity for floating point values. |
-| Decimal | `ced1a1c416628b57b3df543ec8ed47b8` | Data type entity for decimals. |
-| Text | `db22a933c151866ca01a4d9e471d5797` | Data type entity for text values. |
-| Bytes | `cf14d6bcd4c683f19139ce65552e99e0` | Data type entity for byte arrays. |
-| Date | `31cc314f1c168c1cb49e6396b7510ed8` | Data type entity for dates. |
-| Time | `eef2373859108a4ba8251ad145fdc2f7` | Data type entity for times. |
-| Datetime | `ef3ccb2d52bb8a31b4802b0e6305ac1e` | Data type entity for timestamps. |
-| Schedule | `28df8e42d6f389828d0156c20a9ee183` | Data type entity for schedules. |
-| Point | `799dd1cff0068f7db65245cc6ace96ab` | Data type entity for geographic points. |
-| Rect | `eb924b1b07ed818984c3596a979113b9` | Data type entity for bounding boxes. |
-| Embedding | `128a4a5c75a48d2da3255ac7d25a1e11` | Data type entity for embeddings. |
-| Time interval | `ba71f735d8e444f79535ea98981fde22` | Renderable type. |
-| Video | `0fb6bbf022044db49f70fa82c41570a4` | Renderable type. |
-| Image (renderable) | `f3f790c4c74e4d23a0a91e8ef84e30d9` | Renderable type. |
-| Place | `edc4b62157e94ccc9f60f38903edb720` | Renderable type. |
-| URL (renderable) | `283127c96142468492ed90b0ebc7f29a` | Renderable type. |
-| Address | `e95864bfde0f4453914a0ab67ec41ad2` | Renderable type. |
-| Geo location | `9cf5c1b015dc451cbfd297db64806aff` | Renderable type. |
-| Data source type | `1f69cc9880d444abad493df6a7b15ee4` | Declares whether a data block is query-based or collection-based. |
-| Query data source | `3b069b04adbe4728917d1283fd4ac27e` | Marker entity for live, declarative queries. |
-| Collection data source | `1295037a5d9c4d09b27c5502654b9177` | Marker entity for fixed, enumerated entity sets. |
-| Filters | `14a46854bfd14b1882152785c2dab9f3` | JSON-encoded query/filter data (spec TBD). |
-| Collection item | `a99f9ce12ffa4dac8c61f6310d46064a` | Points to an entity in a collection. |
-| Markdown content | `e3e363d1dd294ccb8e6ff3b76d99bc33` | Markdown body for a text block. |
-| Text Block | `76474f2f00894e77a0410b39fb17d0bf` | Block entity containing markdown content. |
-| Data Block | `b8803a8665de412bbb357e0c84adf473` | Block entity that renders query/collection results. |
-| Image | `ba4e41460010499da0a3caaa7f579d0e` | Image entity for media with URL and dimensions. |
-| URL | `8a743832c0944a62b6650c3cc2f9c7bc` | Source URL for an image. |
-| Width | `f7b33e08b76d4190aadacadaa9f561e1` | Image width. |
-| Height | `7f6ad0433e214257a6d48bdad36b1d84` | Image height. |
-| View | `1907fd1c81114a3ca378b1f353425b65` | Sets the preferred rendering mode for a data block relation. |
-| Gallery view | `ccb70fc917f04a54b86e3b4d20cc7130` | Render results as a gallery/grid. |
-| List view | `7d497dba09c249b8968f716bcf520473` | Render results as a list. |
 | Bulleted list view | `0aaac6f7c916403eaf6d2e086dc92ada` | Render results as a bulleted list. |
-| Table view | `cba271cef7c140339047614d174c69f1` | Render results as a table. |
+| Bytes | `cf14d6bcd4c683f19139ce65552e99e0` | Data type entity for byte arrays. |
+| Collection data source | `1295037a5d9c4d09b27c5502654b9177` | Marker entity for fixed, enumerated entity sets. |
+| Collection item | `a99f9ce12ffa4dac8c61f6310d46064a` | Points to an entity in a collection. |
+| Cover | `34f535072e6b42c5a84443981a77cfa2` | Banner-style image for the entity. |
+| Data Block | `b8803a8665de412bbb357e0c84adf473` | Block entity that renders query/collection results. |
+| Data source type | `1f69cc9880d444abad493df6a7b15ee4` | Declares whether a data block is query-based or collection-based. |
+| Date | `31cc314f1c168c1cb49e6396b7510ed8` | Data type entity for dates. |
+| Datetime | `ef3ccb2d52bb8a31b4802b0e6305ac1e` | Data type entity for timestamps. |
+| Decimal | `ced1a1c416628b57b3df543ec8ed47b8` | Data type entity for decimals. |
+| Description | `9b1f76ff9711404c861e59dc3fa7d037` | Short description used in previews and summaries. |
+| Embedding | `128a4a5c75a48d2da3255ac7d25a1e11` | Data type entity for embeddings. |
 | File type | `515f346fe0fb40c78ea95339787eecc1` | Points to a file type entity (not yet specified). |
+| Filters | `14a46854bfd14b1882152785c2dab9f3` | JSON-encoded query/filter data (spec TBD). |
+| Float64 | `d1f0423c3165808d942ff929bf9fc4ce` | Data type entity for floating point values. |
+| Gallery view | `ccb70fc917f04a54b86e3b4d20cc7130` | Render results as a gallery/grid. |
+| Geo location | `9cf5c1b015dc451cbfd297db64806aff` | Renderable type. |
+| Height | `7f6ad0433e214257a6d48bdad36b1d84` | Image height. |
+| Image | `ba4e41460010499da0a3caaa7f579d0e` | Image entity for media with URL and dimensions. |
+| Image (renderable) | `f3f790c4c74e4d23a0a91e8ef84e30d9` | Renderable type. |
+| Int64 | `4258025c2fa481c3a7acc4cbde4b82c2` | Data type entity for 64-bit integers. |
+| List view | `7d497dba09c249b8968f716bcf520473` | Render results as a list. |
+| Markdown content | `e3e363d1dd294ccb8e6ff3b76d99bc33` | Markdown body for a text block. |
+| Name | `a126ca530c8e48d5b88882c734c38935` | Human-readable name for the entity. |
+| Place | `edc4b62157e94ccc9f60f38903edb720` | Renderable type. |
+| Point | `799dd1cff0068f7db65245cc6ace96ab` | Data type entity for geographic points. |
+| Properties | `01412f8381894ab1836565c7fd358cc1` | Relation used to attach properties to a schema/type. |
+| Property | `808a04ceb21c4d888ad12e240613e5ca` | Type entity used to mark property definitions. |
+| Query data source | `3b069b04adbe4728917d1283fd4ac27e` | Marker entity for live, declarative queries. |
+| Rect | `eb924b1b07ed818984c3596a979113b9` | Data type entity for bounding boxes. |
+| Schedule | `28df8e42d6f389828d0156c20a9ee183` | Data type entity for schedules. |
+| Table view | `cba271cef7c140339047614d174c69f1` | Render results as a table. |
+| Text | `db22a933c151866ca01a4d9e471d5797` | Data type entity for text values. |
+| Text Block | `76474f2f00894e77a0410b39fb17d0bf` | Block entity containing markdown content. |
+| Time | `eef2373859108a4ba8251ad145fdc2f7` | Data type entity for times. |
+| Time interval | `ba71f735d8e444f79535ea98981fde22` | Renderable type. |
+| Type | `e7d737c536764c609fa16aa64a8c90ad` | Type entity used to denote schemas (i.e., Types: Type). |
+| Types | `8f151ba4de204e3c9cb499ddf96f48f1` | Relation type id for type membership. |
+| URL | `8a743832c0944a62b6650c3cc2f9c7bc` | Source URL for an image. |
+| URL (renderable) | `283127c96142468492ed90b0ebc7f29a` | Renderable type. |
+| Video | `0fb6bbf022044db49f70fa82c41570a4` | Renderable type. |
+| View | `1907fd1c81114a3ca378b1f353425b65` | Sets the preferred rendering mode for a data block relation. |
+| Width | `f7b33e08b76d4190aadacadaa9f561e1` | Image width. |
