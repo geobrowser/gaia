@@ -98,6 +98,18 @@ Blocks are ordered using the `position` field on the Blocks relation (see [GRC-2
 | Data Block | `b8803a8665de412bbb357e0c84adf473` |
 | Image | `ba4e41460010499da0a3caaa7f579d0e` |
 
+#### Text Block: `76474f2f00894e77a0410b39fb17d0bf`
+
+Text blocks contain markdown content and are intended for rich text.
+
+#### Data Block: `b8803a8665de412bbb357e0c84adf473`
+
+Data blocks render query or collection results. Query data source `3b069b04adbe4728917d1283fd4ac27e` defines a live, declarative query evaluated at render time. Collection data source `1295037a5d9c4d09b27c5502654b9177` enumerates a fixed, ordered set of entities.
+
+#### Image: `ba4e41460010499da0a3caaa7f579d0e`
+
+Image blocks render image media and point to an Image entity.
+
 ### 2.4 Requirements
 
 #### 2.4.1 Text Block Requirements
@@ -114,13 +126,6 @@ Blocks are ordered using the `position` field on the Blocks relation (see [GRC-2
 | Filters | `14a46854bfd14b1882152785c2dab9f3` | JSON-encoded filters applied to the data source. | JSON value (filter spec TBD) |
 | Collection item | `a99f9ce12ffa4dac8c61f6310d46064a` | Entity included in a collection data source. | Any entity |
 
-Data source types:
-- Query data source `3b069b04adbe4728917d1283fd4ac27e`
-- Collection data source `1295037a5d9c4d09b27c5502654b9177`
-
-Query data block: defines a live, declarative graph query evaluated at render time.
-
-Collection data block: enumerates a fixed, ordered set of entities via Collection item relations.
 
 #### 2.4.3 Image Requirements
 
