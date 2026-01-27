@@ -22,7 +22,7 @@ futures = "0.3.31"
 async-trait = "0.1.88"
 
 # Database
-sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "json", "uuid", "tls-rustls"] }
+sqlx = { version = "0.8", features = ["runtime-tokio", "postgres", "json", "uuid", "tls-rustls", "chrono"] }
 
 # Serialization
 prost = "0.13.5"

@@ -197,6 +197,13 @@
       "when": 1768924733212,
       "tag": "0027_property-entity-functions",
       "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1769535411554,
+      "tag": "0028_lumpy_norman_osborn",
+      "breakpoints": true
     }
   ]
 }

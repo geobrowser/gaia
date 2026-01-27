@@ -17,6 +17,7 @@ import {
 	serial,
 	smallint,
 	text,
+	time,
 	timestamp,
 	unique,
 	uuid,
@@ -103,6 +104,17 @@ export const entities = pgTable(
 	],
 );
 
+/**
+ * values
+ *
+ * Stores property values for entities. Each value has a type-specific column populated
+ * based on its GRC-20 data type (boolean, integer, text, datetime, etc.).
+ *
+ * Design: We optimize for normalization, user intent preservation, and query performance
+ * over storage efficiency. For example, time/datetime values store both the original string
+ * (with timezone offset) and a UTC-normalized native column. This preserves the original
+ * representation while enabling efficient time-based queries and comparisons.
+ */
 export const values = pgTable(
 	"values",
 	{
@@ -126,6 +138,9 @@ export const values = pgTable(
 		// Metadata
 		language: text(), // For TEXT values only
 		unit: text(), // For numerical values (INT64, FLOAT64, DECIMAL)
+		// UTC-normalized time columns
+		timeUtc: time("time_utc"), // Time normalized to UTC
+		datetimeUtc: timestamp("datetime_utc", { withTimezone: true, mode: "date" }), // Datetime normalized to UTC
 	},
 	(table) => [
 		// Foreign key indexes for join performance
@@ -162,6 +177,9 @@ export const values = pgTable(
 		// Additional indexes for filtering
 		index("values_language_idx").on(table.language),
 		index("values_unit_idx").on(table.unit),
+		// UTC time column indexes
+		index("values_time_utc_idx").on(table.timeUtc),
+		index("values_datetime_utc_idx").on(table.datetimeUtc),
 	],
 );
 
@@ -712,6 +730,9 @@ export const valueVersions = pgTable(
 		// Metadata
 		language: text("language"), // For TEXT values only
 		unit: text("unit"), // For numerical values (INT64, FLOAT64, DECIMAL)
+		// UTC-normalized time columns
+		timeUtc: time("time_utc"), // Time normalized to UTC
+		datetimeUtc: timestamp("datetime_utc", { withTimezone: true, mode: "date" }), // Datetime normalized to UTC
 	},
 	(table) => [
 		index("value_versions_entity_idx").on(table.entityId),
