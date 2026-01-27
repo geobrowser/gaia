@@ -1239,7 +1239,7 @@ dependencies = [
  "bitflags 2.10.0",
  "cexpr",
  "clang-sys",
- "itertools 0.10.5",
+ "itertools 0.13.0",
  "proc-macro2",
  "quote",
  "regex",
@@ -2527,6 +2527,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "grc-20"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e228dc10e29083c94c5b4b4ebcebda8cafb8f49d4fd8c5aac4349756906ab63a"
+dependencies = [
+ "lazy_static",
+ "rustc-hash",
+ "sha2",
+ "thiserror 2.0.17",
+ "uuid",
+ "zstd",
+]
+
+[[package]]
 name = "group"
 version = "0.13.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2664,7 +2678,7 @@ dependencies = [
  "async-trait",
  "chrono",
  "dotenv",
- "grc-20",
+ "grc-20 0.2.2",
  "hermes-instrumentation",
  "hermes-relay",
  "hermes-substream",
@@ -2699,7 +2713,7 @@ dependencies = [
  "dotenv",
  "ethabi 18.0.0",
  "futures 0.3.31",
- "grc-20",
+ "grc-20 0.2.2",
  "hermes-instrumentation",
  "hermes-kafka",
  "hermes-relay",
@@ -3401,7 +3415,7 @@ dependencies = [
  "chrono",
  "dotenv",
  "futures 0.3.31",
- "grc-20",
+ "grc-20 0.2.2",
  "hermes-instrumentation",
  "hermes-schema",
  "hex",
@@ -5278,6 +5292,7 @@ dependencies = [
  "chrono",
  "dotenv",
  "futures 0.3.31",
+ "grc-20 0.3.0",
  "hermes-schema",
  "indexer_utils",
  "prost 0.13.5",

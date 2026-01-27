@@ -38,6 +38,7 @@ pub fn create_type_relation_with_id(
         to_space: None,
         to_version: None,
         position: None,
+        context: None,
     };
 
     let grc20_edit = Grc20Edit {
@@ -68,6 +69,7 @@ pub fn create_type_relation_with_id(
 }
 
 /// Generate a CreateRelation operation for a custom relation type
+#[allow(dead_code)]
 pub fn create_custom_relation(
     edit_name: &str,
     space_id: Uuid,
@@ -89,6 +91,7 @@ pub fn create_custom_relation(
         to_space: None,
         to_version: None,
         position: None,
+        context: None,
     };
 
     let grc20_edit = Grc20Edit {
@@ -126,6 +129,7 @@ pub fn delete_relation(
 ) -> Result<Vec<u8>> {
     let delete = DeleteRelation {
         id: *relation_id.as_bytes(),
+        context: None,
     };
 
     let grc20_edit = Grc20Edit {

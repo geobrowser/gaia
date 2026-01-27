@@ -782,6 +782,7 @@ mod tests {
                 property: *Uuid::parse_str(NAME_PROPERTY_ID).unwrap().as_bytes(),
                 language: UnsetLanguage::All,
             }],
+            context: None,
         };
 
         let edit = HermesEdit {
@@ -829,6 +830,7 @@ mod tests {
                     language: UnsetLanguage::All,
                 },
             ],
+            context: None,
         };
 
         let edit = HermesEdit {
@@ -873,6 +875,7 @@ mod tests {
                 property: *unknown_property_id.as_bytes(),
                 language: UnsetLanguage::All,
             }],
+            context: None,
         };
 
         let edit = HermesEdit {
@@ -917,6 +920,7 @@ mod tests {
                     .as_bytes(),
                 language: UnsetLanguage::All,
             }],
+            context: None,
         };
 
         let edit = HermesEdit {
@@ -954,6 +958,7 @@ mod tests {
             id: *entity_id.as_bytes(),
             set_properties: vec![],
             unset_values: vec![],
+            context: None,
         };
 
         let edit = HermesEdit {
@@ -993,6 +998,7 @@ mod tests {
                 property: *Uuid::parse_str(AVATAR_PROPERTY_ID).unwrap().as_bytes(),
                 language: UnsetLanguage::All,
             }],
+            context: None,
         };
 
         let edit = HermesEdit {
@@ -1044,6 +1050,7 @@ mod tests {
                     language: UnsetLanguage::All,
                 },
             ],
+            context: None,
         };
 
         let edit = HermesEdit {

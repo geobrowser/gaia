@@ -55,6 +55,7 @@ pub fn create_entity_edit(
         id: *entity_id.as_bytes(),
         set_properties,
         unset_values: vec![],
+        context: None,
     };
 
     let grc20_edit = Grc20Edit {
@@ -105,6 +106,7 @@ pub fn unset_entity_properties(
         id: *entity_id.as_bytes(),
         set_properties: vec![],
         unset_values: unset_values?,
+        context: None,
     };
 
     let grc20_edit = Grc20Edit {

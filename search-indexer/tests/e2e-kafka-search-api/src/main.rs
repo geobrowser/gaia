@@ -505,11 +505,6 @@ async fn main() -> Result<()> {
     info!("  • Negative: -0.75");
     info!("  • At Threshold: 0.50");
     info!("  • Below Threshold: 0.25");
-    info!("\nTo verify unset properties, query the Search API:");
-    info!("  curl 'http://localhost:3000/search?query={}'", unset_test_1_id);
-    info!("    Expected: name should be undefined/null, description should be present");
-    info!("  curl 'http://localhost:3000/search?query={}'", unset_test_2_id);
-    info!("    Expected: name and description should be undefined/null, avatar should be present");
 
     Ok(())
 }

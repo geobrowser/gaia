@@ -41,6 +41,8 @@ This is the fastest way to test search functionality end-to-end:
    OPENSEARCH_URL=http://localhost:9200 \
    KAFKA_GROUP_ID=search-indexer-test-$(date +%s) \
    RUST_LOG=debug,search_indexer=debug \
+   INDEX_CREATION_ENABLED=true \
+   ENTITIES_INDEX_VERSION=0 \
    cargo run -p search-indexer
    ```
 
@@ -125,6 +127,8 @@ While e2e-kafka-search-api is recommended for search-indexer testing, you can al
    OPENSEARCH_URL=http://localhost:9200 \
    KAFKA_GROUP_ID=search-indexer-test-$(date +%s) \
    RUST_LOG=debug,search_indexer=debug \
+   INDEX_CREATION_ENABLED=true \
+   ENTITIES_INDEX_VERSION=0 \
    cargo run -p search-indexer
    ```
 
@@ -220,7 +224,7 @@ Open http://localhost:8080 to inspect messages in the Kafka topics.
 For e2e-kafka-search-api:
 ```bash
 cd search-indexer/tests/e2e-kafka-search-api
-cargo run --debug
+cargo run
 ```
 
 For search-indexer:
