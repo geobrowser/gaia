@@ -92,42 +92,36 @@ Blocks are ordered using the `position` field on the Blocks relation (see [GRC-2
 
 ### 2.3 Block Types
 
-| Block Type | UUID |
-|---|---|
-| Text Block | `76474f2f00894e77a0410b39fb17d0bf` |
-| Data Block | `b8803a8665de412bbb357e0c84adf473` |
-| Image | `ba4e41460010499da0a3caaa7f579d0e` |
+| Block Type | UUID | Description |
+|---|---|---|
+| Text Block | `76474f2f00894e77a0410b39fb17d0bf` | Text blocks contain markdown content and are intended for rich text. |
+| Data Block | `b8803a8665de412bbb357e0c84adf473` | Data blocks render query or collection results. Query data source `3b069b04adbe4728917d1283fd4ac27e` defines a live, declarative query evaluated at render time. Collection data source `1295037a5d9c4d09b27c5502654b9177` enumerates a fixed, ordered set of entities. |
+| Image | `ba4e41460010499da0a3caaa7f579d0e` | Image blocks render image media and point to an Image entity. |
 
-#### Text Block: `76474f2f00894e77a0410b39fb17d0bf`
+### 2.4 Block Schemas
 
-Text blocks contain markdown content and are intended for rich text.
-
-#### Data Block: `b8803a8665de412bbb357e0c84adf473`
-
-Data blocks render query or collection results. Query data source `3b069b04adbe4728917d1283fd4ac27e` defines a live, declarative query evaluated at render time. Collection data source `1295037a5d9c4d09b27c5502654b9177` enumerates a fixed, ordered set of entities.
-
-#### Image: `ba4e41460010499da0a3caaa7f579d0e`
-
-Image blocks render image media and point to an Image entity.
-
-### 2.4 Requirements
-
-#### 2.4.1 Text Block Requirements
+#### 2.4.1 Text Block Schema
 
 | Property | UUID | Description | Target |
 |---|---|---|---|
+| Types | `8f151ba4de204e3c9cb499ddf96f48f1` | Type membership for the block. | Text Block `76474f2f00894e77a0410b39fb17d0bf` |
 | Markdown content | `e3e363d1dd294ccb8e6ff3b76d99bc33` | Markdown body for the text block. | TEXT value |
 
-#### 2.4.2 Data Block Requirements
+#### 2.4.2 Data Block Schema
 
 | Property | UUID | Description | Target |
 |---|---|---|---|
+| Types | `8f151ba4de204e3c9cb499ddf96f48f1` | Type membership for the block. | Data Block `b8803a8665de412bbb357e0c84adf473` |
 | Data source type | `1f69cc9880d444abad493df6a7b15ee4` | Declares whether the data source is a query or a collection. | Query data source `3b069b04adbe4728917d1283fd4ac27e` or Collection data source `1295037a5d9c4d09b27c5502654b9177` |
 | Filters | `14a46854bfd14b1882152785c2dab9f3` | JSON-encoded filters applied to the data source. | JSON value (filter spec TBD) |
 | Collection item | `a99f9ce12ffa4dac8c61f6310d46064a` | Entity included in a collection data source. | Any entity |
 
 
-#### 2.4.3 Image Requirements
+#### 2.4.3 Image Schema
+
+| Property | UUID | Description | Target |
+|---|---|---|---|
+| Types | `8f151ba4de204e3c9cb499ddf96f48f1` | Type membership for the block. | Image `ba4e41460010499da0a3caaa7f579d0e` |
 
 See Section 3 for Image entity properties.
 
