@@ -8,14 +8,14 @@ The knowledge graph is schema-less by default. Instead, schemas are represented 
 
 ### 1.1 Schemas as Entities
 
-All schema components are entities. Entities can have Types, and Types are themselves entities that have the Type: `Type`. Type membership is expressed as a relation whose relation type id is `TYPES_ID`.
+All schema components are entities. Entities can have Types, and Types are themselves entities that have the Type: `Type`. Type membership is expressed as a relation whose relation type id is the Types property `8f151ba4de204e3c9cb499ddf96f48f1`.
 
-Types can define a schema (e.g. Name, Description, Avatar, Birthdate). Each property in a schema is itself an entity with Type: `Property`.
+Types can define a schema (e.g. Name, Description, Avatar, Birthdate). Each property in a schema is itself an entity with Type: `Property` (`808a04ceb21c4d888ad12e240613e5ca`).
 
 ```
-[Person] --TYPES_ID--> [Type]
+[Person] --TYPES--> [Type]
 [Type]   --PROPERTY--> [Name]
-[Name]   --TYPES_ID--> [Property]
+[Name]   --TYPES--> [Property]
 ```
 
 ### 1.2 Property Metadata
@@ -41,15 +41,15 @@ Renderable types are UI representations of underlying data types or entities. Th
 
 ### 2.1 Known Renderable Types
 
-| Renderable Type | UUID | Underlying Data Type |
-|---|---|
-| Time interval | `ba71f735d8e444f79535ea98981fde22` | DATETIME |
-| Video | `0fb6bbf022044db49f70fa82c41570a4` | RELATION |
-| Image | `f3f790c4c74e4d23a0a91e8ef84e30d9` | RELATION |
-| Place | `edc4b62157e94ccc9f60f38903edb720` | RELATION |
-| URL | `283127c96142468492ed90b0ebc7f29a` | TEXT |
-| Address | `e95864bfde0f4453914a0ab67ec41ad2` | RELATION |
-| Geo location | `9cf5c1b015dc451cbfd297db64806aff` | RELATION |
+| Renderable Type | UUID | Description |
+|---|---|---|
+| Time interval | `ba71f735d8e444f79535ea98981fde22` | Render time spans or moments. |
+| Video | `0fb6bbf022044db49f70fa82c41570a4` | Render linked video media. |
+| Image | `f3f790c4c74e4d23a0a91e8ef84e30d9` | Render linked image media. |
+| Place | `edc4b62157e94ccc9f60f38903edb720` | Render a place entity with location context. |
+| URL | `283127c96142468492ed90b0ebc7f29a` | Render a URL with link-specific UI. |
+| Address | `e95864bfde0f4453914a0ab67ec41ad2` | Render a postal or physical address. |
+| Geo location | `9cf5c1b015dc451cbfd297db64806aff` | Render a geographic point or area. |
 
 ## 3. Blocks (as Relations)
 
@@ -135,3 +135,45 @@ Images can specify a file type using the File type relation `515f346fe0fb40c78ea
 Spaces can set a topic that represents what the space is about and is used to determine the space’s front page. The topic is an arbitrary entity in the knowledge graph; there is no canonical Topic type or UUID yet.
 
 Setting the topic is done onchain via the `SET_TOPIC` action in the protocol, not via a knowledge-graph relation.
+
+## 6. System Properties
+
+### 6.1 System Entity Registry
+
+All IDs defined in this spec are system entities.
+
+| Name | UUID | Notes |
+|---|---|---|
+| Type | `e7d737c536764c609fa16aa64a8c90ad` | Type entity used to denote schemas (i.e., Types: Type). |
+| Property | `808a04ceb21c4d888ad12e240613e5ca` | Type entity used to mark property definitions. |
+| Types | `8f151ba4de204e3c9cb499ddf96f48f1` | Relation type id for type membership. |
+| Properties | `01412f8381894ab1836565c7fd358cc1` | Relation used to attach properties to a schema/type. |
+| Name | `a126ca530c8e48d5b88882c734c38935` | Human-readable name for the entity. |
+| Description | `9b1f76ff9711404c861e59dc3fa7d037` | Short description used in previews and summaries. |
+| Cover | `34f535072e6b42c5a84443981a77cfa2` | Banner-style image for the entity. |
+| Blocks | `beaba5cba67741a8b35377030613fc70` | Rich content blocks attached to the entity. |
+| Time interval | `ba71f735d8e444f79535ea98981fde22` | Renderable type. |
+| Video | `0fb6bbf022044db49f70fa82c41570a4` | Renderable type. |
+| Image (renderable) | `f3f790c4c74e4d23a0a91e8ef84e30d9` | Renderable type. |
+| Place | `edc4b62157e94ccc9f60f38903edb720` | Renderable type. |
+| URL (renderable) | `283127c96142468492ed90b0ebc7f29a` | Renderable type. |
+| Address | `e95864bfde0f4453914a0ab67ec41ad2` | Renderable type. |
+| Geo location | `9cf5c1b015dc451cbfd297db64806aff` | Renderable type. |
+| Data source type | `1f69cc9880d444abad493df6a7b15ee4` | Declares whether a data block is query-based or collection-based. |
+| Query data source | `3b069b04adbe4728917d1283fd4ac27e` | Marker entity for live, declarative queries. |
+| Collection data source | `1295037a5d9c4d09b27c5502654b9177` | Marker entity for fixed, enumerated entity sets. |
+| Filters | `14a46854bfd14b1882152785c2dab9f3` | JSON-encoded query/filter data (spec TBD). |
+| Collection item | `a99f9ce12ffa4dac8c61f6310d46064a` | Points to an entity in a collection. |
+| Markdown content | `e3e363d1dd294ccb8e6ff3b76d99bc33` | Markdown body for a text block. |
+| Text Block | `76474f2f00894e77a0410b39fb17d0bf` | Block entity containing markdown content. |
+| Data Block | `b8803a8665de412bbb357e0c84adf473` | Block entity that renders query/collection results. |
+| Image | `ba4e41460010499da0a3caaa7f579d0e` | Image entity for media with URL and dimensions. |
+| URL | `8a743832c0944a62b6650c3cc2f9c7bc` | Source URL for an image. |
+| Width | `f7b33e08b76d4190aadacadaa9f561e1` | Image width. |
+| Height | `7f6ad0433e214257a6d48bdad36b1d84` | Image height. |
+| View | `1907fd1c81114a3ca378b1f353425b65` | Sets the preferred rendering mode for a data block relation. |
+| Gallery view | `ccb70fc917f04a54b86e3b4d20cc7130` | Render results as a gallery/grid. |
+| List view | `7d497dba09c249b8968f716bcf520473` | Render results as a list. |
+| Bulleted list view | `0aaac6f7c916403eaf6d2e086dc92ada` | Render results as a bulleted list. |
+| Table view | `cba271cef7c140339047614d174c69f1` | Render results as a table. |
+| File type | `515f346fe0fb40c78ea95339787eecc1` | Points to a file type entity (not yet specified). |
