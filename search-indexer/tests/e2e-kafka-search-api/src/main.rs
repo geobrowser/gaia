@@ -476,9 +476,55 @@ async fn main() -> Result<()> {
         .send(EDITS_TOPIC, None, unset_name_desc_payload)
         .await?;
 
+    // Test Case 3: Mixed set/unset + LWW (Last-Writer-Wins) test
+    let lww_test_id = Uuid::parse_str("00000000-0000-0000-0000-000000003333").unwrap();
+    info!("  Test Case 3: Mixed set/unset in one operation + LWW with multiple sets");
+    info!("    Entity ID: {}", lww_test_id);
+
+    let lww_test_create = edits::create_entity_edit(
+        "Create Entity for LWW Test",
+        test_space,
+        lww_test_id,
+        Some("Initial Name"),
+        Some("Initial Description"),
+        Some("https://example.com/lww-avatar.png"),
+    )?;
+    producer
+        .send(EDITS_TOPIC, None, lww_test_create)
+        .await?;
+
+    info!("    Step 1: Mixed operation - set name='First Update', unset description (different properties)...");
+    let lww_mixed = edits::update_entity_with_set_and_unset(
+        "LWW Mixed Set and Unset",
+        test_space,
+        lww_test_id,
+        Some("First Update"),     // Set name to first value
+        None,                      // Don't set description
+        None,                      // Don't set avatar
+        vec![
+            sdk::core::ids::DESCRIPTION_PROPERTY_ID, // Unset description (no overlap with set)
+        ],
+    )?;
+    producer
+        .send(EDITS_TOPIC, None, lww_mixed)
+        .await?;
+
+    info!("    Step 2: Set name again to 'Second Update' (LWW: this should win)...");
+    let lww_second_set = edits::create_entity_edit(
+        "LWW Second Set",
+        test_space,
+        lww_test_id,
+        Some("Second Update"),    // Set name again - last write should win
+        None,                      // Don't set description (remains unset)
+        None,                      // Don't set avatar (keep existing)
+    )?;
+    producer
+        .send(EDITS_TOPIC, None, lww_second_set)
+        .await?;
+
     info!("\n✅ Test scenario complete!");
     info!("Created:");
-    info!("  - 14 entities (12 from before + 2 unset test entities)");
+    info!("  - 15 entities (12 from before + 3 property operation test entities)");
     info!("    • 7 Alice variants (high, medium, low, zero, negative, at threshold, below threshold)");
     info!("    • Bob, Charlie, Acme Corp");
     info!("    • Person type, Organization type");
@@ -494,9 +540,10 @@ async fn main() -> Result<()> {
     info!("  - Charlie has NO global score (tests default score behavior)");
     info!("  - 1 space score");
     info!("  - 7 perspective scores");
-    info!("  - 2 unset property test cases:");
+    info!("  - 3 property operation test cases:");
     info!("    • Test 1 ({}): name unset, description remains", unset_test_1_id);
     info!("    • Test 2 ({}): name and description unset, avatar remains", unset_test_2_id);
+    info!("    • Test 3 ({}): mixed set/unset + LWW test (name='Second Update' wins, description unset)", lww_test_id);
     info!("\nScore ranges:");
     info!("  • High: 0.95");
     info!("  • Medium: 0.65");

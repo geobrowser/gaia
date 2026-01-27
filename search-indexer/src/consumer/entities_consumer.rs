@@ -483,32 +483,26 @@ impl EntitiesConsumer {
         for op in &grc20_edit.ops {
             match op {
                 grc_20::Op::UpdateEntity(entity) => {
-                    if let Some(event) =
-                        self.process_update_entity(entity, space_id, &edit, msg)
-                    {
-                        events.push(event);
-                    } else {
+                    let entity_events = self.process_update_entity(entity, space_id);
+                    if entity_events.is_empty() {
                         skipped_entities += 1;
+                    } else {
+                        events.extend(entity_events);
                     }
                 }
                 // Note: UnsetEntityFields not available in grc-20 0.1.6
                 // Handle unset fields via UpdateEntity with unset_properties
                 grc_20::Op::CreateRelation(relation) => {
-                    if let Some(event) =
-                        self.process_create_relation(relation, space_id, &edit, msg)
-                    {
+                    if let Some(event) = self.process_create_relation(relation, space_id) {
                         events.push(event);
                     } else {
                         skipped_entities += 1;
                     }
                 }
                 grc_20::Op::UpdateRelation(relation_update) => {
-                    if let Some(event) = self.process_update_relation_message(
-                        relation_update,
-                        space_id,
-                        &edit,
-                        msg,
-                    ) {
+                    if let Some(event) =
+                        self.process_update_relation_message(relation_update, space_id)
+                    {
                         events.push(event);
                     } else {
                         skipped_entities += 1;
@@ -516,9 +510,7 @@ impl EntitiesConsumer {
                 }
                 grc_20::Op::DeleteRelation(del) => {
                     let relation_id = Self::id_to_uuid(&del.id);
-                    if let Some(event) =
-                        self.process_delete_relation(&relation_id, space_id, &edit, msg)
-                    {
+                    if let Some(event) = self.process_delete_relation(&relation_id, space_id) {
                         events.push(event);
                     } else {
                         skipped_entities += 1;
@@ -542,18 +534,24 @@ impl EntitiesConsumer {
     }
 
     /// Process an UpdateEntity operation.
+    ///
+    /// According to GRC-20 v2 spec, UpdateEntity can contain both set_properties and unset_values.
+    /// The GRC-20 library validates that a property cannot appear in both set_properties and
+    /// unset_values in the same operation (invalid at wire format level).
+    ///
+    /// This may return multiple events when both set and unset are present (for different properties):
+    /// - UnsetProperties event for properties to clear
+    /// - Upsert event for properties to set
     fn process_update_entity(
         &self,
         entity: &grc_20::UpdateEntity,
         space_id: Uuid,
-        _edit: &HermesEdit,
-        _msg: &rdkafka::message::BorrowedMessage<'_>,
-    ) -> Option<EntityEvent> {
+    ) -> Vec<EntityEvent> {
         let entity_id = Self::id_to_uuid(&entity.id);
+        let mut events = Vec::new();
 
-        // Check if this is an unset operation (no set_properties, only unset_values)
-        if entity.set_properties.is_empty() && !entity.unset_values.is_empty() {
-            // Map property UUIDs to field names
+        // Handle unset_values
+        if !entity.unset_values.is_empty() {
             let mut property_keys: Vec<String> = Vec::new();
 
             for unset_val in &entity.unset_values {
@@ -583,28 +581,21 @@ impl EntitiesConsumer {
                 }
             }
 
-            if property_keys.is_empty() {
+            if !property_keys.is_empty() {
                 debug!(
                     entity_id = %entity_id,
                     space_id = %space_id,
-                    "No recognized properties to unset, skipping"
+                    property_count = property_keys.len(),
+                    properties = ?property_keys,
+                    "Unset properties operation detected"
                 );
-                return None;
+
+                events.push(EntityEvent::unset_properties(
+                    entity_id,
+                    space_id,
+                    property_keys,
+                ));
             }
-
-            debug!(
-                entity_id = %entity_id,
-                space_id = %space_id,
-                property_count = property_keys.len(),
-                properties = ?property_keys,
-                "Unset properties operation detected"
-            );
-
-            return Some(EntityEvent::unset_properties(
-                entity_id,
-                space_id,
-                property_keys,
-            ));
         }
 
         // Extract name, description, and avatar from set_properties
@@ -652,13 +643,19 @@ impl EntitiesConsumer {
             }
         }
 
-        Some(EntityEvent::upsert(
-            entity_id,
-            space_id,
-            name,
-            description,
-            avatar,
-        ))
+        // Always create an upsert event if there are set_properties
+        // This handles both pure upserts and mixed set/unset operations
+        if !entity.set_properties.is_empty() {
+            events.push(EntityEvent::upsert(
+                entity_id,
+                space_id,
+                name,
+                description,
+                avatar,
+            ));
+        }
+
+        events
     }
 
     /// Process a CreateRelation operation.
@@ -666,8 +663,6 @@ impl EntitiesConsumer {
         &self,
         relation: &grc_20::CreateRelation,
         space_id: Uuid,
-        _edit: &HermesEdit,
-        _msg: &rdkafka::message::BorrowedMessage<'_>,
     ) -> Option<EntityEvent> {
         let relation_id = Self::id_to_uuid(&relation.id);
         let relation_type = Self::id_to_uuid(&relation.relation_type);
@@ -714,8 +709,6 @@ impl EntitiesConsumer {
         &self,
         relation_update: &grc_20::UpdateRelation,
         space_id: Uuid,
-        _edit: &HermesEdit,
-        _msg: &rdkafka::message::BorrowedMessage<'_>,
     ) -> Option<EntityEvent> {
         let relation_id = Self::id_to_uuid(&relation_update.id);
 
@@ -737,8 +730,6 @@ impl EntitiesConsumer {
         &self,
         relation_id: &Uuid,
         space_id: Uuid,
-        _edit: &HermesEdit,
-        _msg: &rdkafka::message::BorrowedMessage<'_>,
     ) -> Option<EntityEvent> {
         debug!(
             relation_id = %relation_id,
@@ -764,10 +755,6 @@ mod tests {
     }
 
     // Helper to create a dummy message reference (unused in process_update_entity)
-    unsafe fn dummy_message() -> &'static rdkafka::message::BorrowedMessage<'static> {
-        std::mem::transmute(std::ptr::NonNull::<u8>::dangling().as_ptr())
-    }
-
     #[tokio::test]
     async fn test_process_update_entity_unset_single_property() {
         let consumer = EntitiesConsumer::new("localhost:9092", "test-group").unwrap();
@@ -785,7 +772,7 @@ mod tests {
             context: None,
         };
 
-        let edit = HermesEdit {
+        let _edit = HermesEdit {
             id: Uuid::new_v4().as_bytes().to_vec(),
             name: "Test Unset".to_string(),
             payload: vec![],
@@ -796,12 +783,10 @@ mod tests {
             meta: None,
         };
 
-        let result = unsafe {
-            consumer.process_update_entity(&update_entity, space_id, &edit, dummy_message())
-        };
+        let result = consumer.process_update_entity(&update_entity, space_id);
 
-        assert!(result.is_some());
-        let event = result.unwrap();
+        assert_eq!(result.len(), 1);
+        let event = &result[0];
         assert_eq!(event.entity_id, entity_id);
         assert_eq!(event.space_id, space_id);
         assert_eq!(event.event_type, EntityEventType::UnsetProperties);
@@ -833,7 +818,7 @@ mod tests {
             context: None,
         };
 
-        let edit = HermesEdit {
+        let _edit = HermesEdit {
             id: Uuid::new_v4().as_bytes().to_vec(),
             name: "Test Unset Multiple".to_string(),
             payload: vec![],
@@ -844,12 +829,10 @@ mod tests {
             meta: None,
         };
 
-        let result = unsafe {
-            consumer.process_update_entity(&update_entity, space_id, &edit, dummy_message())
-        };
+        let result = consumer.process_update_entity(&update_entity, space_id);
 
-        assert!(result.is_some());
-        let event = result.unwrap();
+        assert_eq!(result.len(), 1);
+        let event = &result[0];
         assert_eq!(event.entity_id, entity_id);
         assert_eq!(event.space_id, space_id);
         assert_eq!(event.event_type, EntityEventType::UnsetProperties);
@@ -878,7 +861,7 @@ mod tests {
             context: None,
         };
 
-        let edit = HermesEdit {
+        let _edit = HermesEdit {
             id: Uuid::new_v4().as_bytes().to_vec(),
             name: "Test Unset Unknown".to_string(),
             payload: vec![],
@@ -889,12 +872,10 @@ mod tests {
             meta: None,
         };
 
-        let result = unsafe {
-            consumer.process_update_entity(&update_entity, space_id, &edit, dummy_message())
-        };
+        let result = consumer.process_update_entity(&update_entity, space_id);
 
-        // Should return None because no recognized properties to unset
-        assert!(result.is_none());
+        // Should return empty vec because no recognized properties to unset
+        assert!(result.is_empty());
     }
 
     #[tokio::test]
@@ -923,7 +904,7 @@ mod tests {
             context: None,
         };
 
-        let edit = HermesEdit {
+        let _edit = HermesEdit {
             id: Uuid::new_v4().as_bytes().to_vec(),
             name: "Test Mixed Operation".to_string(),
             payload: vec![],
@@ -934,17 +915,24 @@ mod tests {
             meta: None,
         };
 
-        let result = unsafe {
-            consumer.process_update_entity(&update_entity, space_id, &edit, dummy_message())
-        };
+        let result = consumer.process_update_entity(&update_entity, space_id);
 
-        assert!(result.is_some());
-        let event = result.unwrap();
-        assert_eq!(event.entity_id, entity_id);
-        assert_eq!(event.space_id, space_id);
-        // Should be Upsert, not UnsetProperties
-        assert_eq!(event.event_type, EntityEventType::Upsert);
-        assert_eq!(event.name, Some("New Name".to_string()));
+        // Should return 2 events: UnsetProperties for description, then Upsert for name
+        assert_eq!(result.len(), 2);
+
+        // First event: Unset description
+        let unset_event = &result[0];
+        assert_eq!(unset_event.entity_id, entity_id);
+        assert_eq!(unset_event.space_id, space_id);
+        assert_eq!(unset_event.event_type, EntityEventType::UnsetProperties);
+        assert_eq!(unset_event.unset_property_keys, vec!["description"]);
+
+        // Second event: Upsert with name
+        let upsert_event = &result[1];
+        assert_eq!(upsert_event.entity_id, entity_id);
+        assert_eq!(upsert_event.space_id, space_id);
+        assert_eq!(upsert_event.event_type, EntityEventType::Upsert);
+        assert_eq!(upsert_event.name, Some("New Name".to_string()));
     }
 
     #[tokio::test]
@@ -961,7 +949,7 @@ mod tests {
             context: None,
         };
 
-        let edit = HermesEdit {
+        let _edit = HermesEdit {
             id: Uuid::new_v4().as_bytes().to_vec(),
             name: "Test Empty Unset".to_string(),
             payload: vec![],
@@ -972,16 +960,10 @@ mod tests {
             meta: None,
         };
 
-        let result = unsafe {
-            consumer.process_update_entity(&update_entity, space_id, &edit, dummy_message())
-        };
+        let result = consumer.process_update_entity(&update_entity, space_id);
 
-        // Should be an Upsert with no properties set
-        assert!(result.is_some());
-        let event = result.unwrap();
-        assert_eq!(event.event_type, EntityEventType::Upsert);
-        assert!(event.name.is_none());
-        assert!(event.description.is_none());
+        // Should return empty vec (no set_properties, no unset_values to process)
+        assert!(result.is_empty());
     }
 
     #[tokio::test]
@@ -1001,7 +983,7 @@ mod tests {
             context: None,
         };
 
-        let edit = HermesEdit {
+        let _edit = HermesEdit {
             id: Uuid::new_v4().as_bytes().to_vec(),
             name: "Test Unset Avatar".to_string(),
             payload: vec![],
@@ -1012,12 +994,10 @@ mod tests {
             meta: None,
         };
 
-        let result = unsafe {
-            consumer.process_update_entity(&update_entity, space_id, &edit, dummy_message())
-        };
+        let result = consumer.process_update_entity(&update_entity, space_id);
 
-        assert!(result.is_some());
-        let event = result.unwrap();
+        assert_eq!(result.len(), 1);
+        let event = &result[0];
         assert_eq!(event.entity_id, entity_id);
         assert_eq!(event.space_id, space_id);
         assert_eq!(event.event_type, EntityEventType::UnsetProperties);
@@ -1053,7 +1033,7 @@ mod tests {
             context: None,
         };
 
-        let edit = HermesEdit {
+        let _edit = HermesEdit {
             id: Uuid::new_v4().as_bytes().to_vec(),
             name: "Test Unset All".to_string(),
             payload: vec![],
@@ -1064,12 +1044,10 @@ mod tests {
             meta: None,
         };
 
-        let result = unsafe {
-            consumer.process_update_entity(&update_entity, space_id, &edit, dummy_message())
-        };
+        let result = consumer.process_update_entity(&update_entity, space_id);
 
-        assert!(result.is_some());
-        let event = result.unwrap();
+        assert_eq!(result.len(), 1);
+        let event = &result[0];
         assert_eq!(event.entity_id, entity_id);
         assert_eq!(event.space_id, space_id);
         assert_eq!(event.event_type, EntityEventType::UnsetProperties);
@@ -1080,4 +1058,5 @@ mod tests {
             .contains(&"description".to_string()));
         assert!(event.unset_property_keys.contains(&"avatar".to_string()));
     }
+
 }

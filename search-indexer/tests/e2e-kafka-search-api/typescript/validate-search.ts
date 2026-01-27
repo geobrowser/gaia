@@ -34,6 +34,7 @@ const TEST_ENTITIES = {
   ORG_ID: '00000000-0000-0000-0000-0000000ac3ec',
   UNSET_TEST_1_ID: '00000000-0000-0000-0000-000000001111',
   UNSET_TEST_2_ID: '00000000-0000-0000-0000-000000002222',
+  LWW_TEST_ID: '00000000-0000-0000-0000-000000003333',
 };
 
 interface TestResult {
@@ -570,6 +571,51 @@ class SearchValidator {
     }
   }
 
+  async test11_LWWBehavior(): Promise<void> {
+    console.log(`\n${BLUE}Test 11: Verify mixed set/unset + Last-Writer-Wins (LWW) behavior${NC}`);
+    console.log(`  ${BLUE}→ Test 1: UpdateEntity with both set and unset (different properties)${NC}`);
+    console.log(`  ${BLUE}→ Test 2: Multiple sequential sets on same property (last write wins)${NC}`);
+
+    const response = await this.search({
+      query: TEST_ENTITIES.LWW_TEST_ID,
+      scope: 'GLOBAL',
+    });
+
+    const entity = response.results.find(r => r.entityId === TEST_ENTITIES.LWW_TEST_ID);
+
+    if (entity) {
+      // Check that name is "Second Update" (last write wins over "First Update")
+      if (entity.name === 'Second Update') {
+        this.addResult('test11_lww_last_write_wins', true,
+          `LWW Test (${TEST_ENTITIES.LWW_TEST_ID}): name is 'Second Update' - last write won over 'First Update' (LWW correct)`);
+      } else {
+        this.addResult('test11_lww_last_write_wins', false,
+          `LWW Test (${TEST_ENTITIES.LWW_TEST_ID}): name should be 'Second Update' (last write wins), but got: '${entity.name}'`);
+      }
+
+      // Check that description was UNSET (in mixed operation's unset_values)
+      if (entity.description === undefined || entity.description === null) {
+        this.addResult('test11_lww_description_unset', true,
+          `LWW Test (${TEST_ENTITIES.LWW_TEST_ID}): description is correctly unset (mixed set/unset operation worked)`);
+      } else {
+        this.addResult('test11_lww_description_unset', false,
+          `LWW Test (${TEST_ENTITIES.LWW_TEST_ID}): description should be unset, but got: '${entity.description}'`);
+      }
+
+      // Check that avatar was PRESERVED (not touched in any operation)
+      if (entity.avatar && entity.avatar === 'https://example.com/lww-avatar.png') {
+        this.addResult('test11_lww_avatar_preserved', true,
+          `LWW Test (${TEST_ENTITIES.LWW_TEST_ID}): avatar is correctly preserved across operations`);
+      } else {
+        this.addResult('test11_lww_avatar_preserved', false,
+          `LWW Test (${TEST_ENTITIES.LWW_TEST_ID}): avatar should be 'https://example.com/lww-avatar.png', got: '${entity.avatar}'`);
+      }
+    } else {
+      this.addResult('test11_lww_not_found', false,
+        `LWW Test entity (${TEST_ENTITIES.LWW_TEST_ID}) not found`);
+    }
+  }
+
   printSummary() {
     console.log(`\n${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}`);
 
@@ -640,6 +686,7 @@ async function main() {
     await validator.test8_TypeIdsScenarios();
     await validator.test9_EmptyQueryTopRanked();
     await validator.test10_UnsetProperties();
+    await validator.test11_LWWBehavior();
 
     const allPassed = validator.printSummary();
     process.exit(allPassed ? 0 : 1);

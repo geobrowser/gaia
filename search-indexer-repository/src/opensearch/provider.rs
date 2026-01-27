@@ -590,6 +590,18 @@ impl SearchIndexProvider for OpenSearchProvider {
                         entity_id: request.entity_id.clone(),
                         space_id: request.space_id.clone(),
                     });
+
+                    // Flush immediately after unset to ensure it's processed before any subsequent
+                    // updates to the same document. Multiple updates to the same document in one
+                    // bulk request can have undefined behavior in OpenSearch.
+                    flush_pending_bulk!(
+                        self,
+                        bulk_ops,
+                        metas,
+                        total_succeeded,
+                        total_failed,
+                        all_results
+                    );
                 }
                 EntityOperation::UpdateEntityGlobalScore(request) => {
                     // Flush before executing the update_by_query to maintain ordering
