@@ -1,0 +1,114 @@
+# Helm values for kube-prometheus-stack
+# Used to generate manifests via: helm template
+
+# Grafana configuration
+grafana:
+  enabled: true
+  adminUser: admin
+  # Password will be auto-generated and stored in a Secret
+  # Retrieve with: kubectl get secret kube-prometheus-stack-grafana -n monitoring -o jsonpath="{.data.admin-password}" | base64 -d
+
+  service:
+    type: ClusterIP
+    port: 80
+
+  # Ingress disabled for now - use port-forward to test:
+  # kubectl port-forward svc/kube-prometheus-stack-grafana 3000:80 -n monitoring
+  ingress:
+    enabled: false
+    # Uncomment to enable:
+    # enabled: true
+    # ingressClassName: nginx
+    # hosts:
+    #   - grafana.yourdomain.com
+    # tls:
+    #   - secretName: grafana-tls
+    #     hosts:
+    #       - grafana.yourdomain.com
+
+  persistence:
+    enabled: false  # Dashboards are provisioned via ConfigMaps
+
+  resources:
+    requests:
+      cpu: 100m
+      memory: 256Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+# Prometheus configuration
+prometheus:
+  prometheusSpec:
+    retention: 10d
+    resources:
+      requests:
+        cpu: 200m
+        memory: 512Mi
+      limits:
+        cpu: 1000m
+        memory: 2Gi
+
+    # Storage - using emptyDir for now (data lost on pod restart)
+    # For production, enable persistent storage:
+    # storageSpec:
+    #   volumeClaimTemplate:
+    #     spec:
+    #       accessModes: ["ReadWriteOnce"]
+    #       resources:
+    #         requests:
+    #           storage: 50Gi
+
+# Alertmanager configuration
+alertmanager:
+  enabled: true
+  alertmanagerSpec:
+    resources:
+      requests:
+        cpu: 50m
+        memory: 64Mi
+      limits:
+        cpu: 200m
+        memory: 256Mi
+
+# Node exporter - runs on every node
+nodeExporter:
+  enabled: true
+  resources:
+    requests:
+      cpu: 50m
+      memory: 32Mi
+    limits:
+      cpu: 200m
+      memory: 64Mi
+
+# Kube-state-metrics
+kube-state-metrics:
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      cpu: 200m
+      memory: 256Mi
+
+# Prometheus Operator
+prometheusOperator:
+  resources:
+    requests:
+      cpu: 100m
+      memory: 128Mi
+    limits:
+      cpu: 500m
+      memory: 512Mi
+
+# Disable components we don't need for DigitalOcean managed K8s
+# (DO manages these internally)
+kubeEtcd:
+  enabled: false
+kubeControllerManager:
+  enabled: false
+kubeScheduler:
+  enabled: false
+kubeProxy:
+  enabled: false

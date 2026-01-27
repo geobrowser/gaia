@@ -108,6 +108,10 @@ services:
     build:
       context: ..
       dockerfile: search-indexer/Dockerfile
+      args:
+        # Enable auto_index_creation for local development
+        # Production Kubernetes deployments DO NOT set this arg (feature disabled)
+        CARGO_FEATURES: "--features search-indexer-repository/auto_index_creation"
     container_name: search-indexer
     user: "1000:1000"
     environment:

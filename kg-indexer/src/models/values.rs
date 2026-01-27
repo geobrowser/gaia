@@ -44,4 +44,7 @@ pub struct ValueOp {
     pub datetime: Option<String>,     // Datetime
     pub schedule: Option<JsonValue>,  // Schedule
     pub embedding: Option<JsonValue>, // Embedding
+    // UTC-normalized columns (same value as time/datetime, PostgreSQL casts to UTC)
+    pub time_utc: Option<String>, // Time with timezone (stored as UTC)
+    pub datetime_utc: Option<String>, // Timestamp with timezone (stored as UTC)
 }

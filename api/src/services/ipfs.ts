@@ -43,7 +43,7 @@ export function uploadEdit(file: File) {
 		schedule: Schedule.exponential("100 millis").pipe(
 			Schedule.jittered,
 			Schedule.compose(Schedule.elapsed),
-			Schedule.tapInput(() => Effect.succeed(console.log("[IPFS][upload] Retrying"))),
+			Schedule.tapInput(() => Effect.logInfo("[IPFS][upload] Retrying")),
 			Schedule.whileOutput(Duration.lessThanOrEqualTo(Duration.seconds(30))),
 		),
 	})
@@ -69,7 +69,7 @@ export function uploadFile(file: File) {
 		schedule: Schedule.exponential("100 millis").pipe(
 			Schedule.jittered,
 			Schedule.compose(Schedule.elapsed),
-			Schedule.tapInput(() => Effect.succeed(console.log("[IPFS][upload] Retrying"))),
+			Schedule.tapInput(() => Effect.logInfo("[IPFS][upload] Retrying")),
 			Schedule.whileOutput(Duration.lessThanOrEqualTo(Duration.seconds(30))),
 		),
 	})
@@ -96,7 +96,7 @@ export function uploadFileAlternativeGateway(file: File) {
 		schedule: Schedule.exponential("100 millis").pipe(
 			Schedule.jittered,
 			Schedule.compose(Schedule.elapsed),
-			Schedule.tapInput(() => Effect.succeed(console.log("[IPFS][upload-alternative-gateway] Retrying"))),
+			Schedule.tapInput(() => Effect.logInfo("[IPFS][upload-alternative-gateway] Retrying")),
 			Schedule.whileOutput(Duration.lessThanOrEqualTo(Duration.seconds(30))),
 		),
 	})

@@ -92,6 +92,10 @@ spec:
               value: "false"
             - name: SENTRY_DEBUG
               value: "false"
+          ports:
+            - name: health
+              containerPort: 8080
+              protocol: TCP
           resources:
             requests:
               memory: "512Mi"
@@ -100,21 +104,17 @@ spec:
               memory: "768Mi"
               cpu: "500m"
           livenessProbe:
-            exec:
-              command:
-                - /bin/sh
-                - -c
-                - "ps aux | grep search-indexer | grep -v grep"
+            httpGet:
+              path: /healthz
+              port: health
             initialDelaySeconds: 30
             periodSeconds: 30
             timeoutSeconds: 5
             failureThreshold: 3
           readinessProbe:
-            exec:
-              command:
-                - /bin/sh
-                - -c
-                - "ps aux | grep search-indexer | grep -v grep"
+            httpGet:
+              path: /readyz
+              port: health
             initialDelaySeconds: 10
             periodSeconds: 10
             timeoutSeconds: 5

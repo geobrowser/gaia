@@ -1,0 +1,24 @@
+# Sentry credentials for API (staging)
+#
+# To create the secret:
+#   kubectl create secret generic api-sentry \
+#     --namespace=api-staging \
+#     --from-literal=SENTRY_DSN=https://1a38e0e1ae7120452be7f11b9ab9f7ec@o4510426526908417.ingest.us.sentry.io/4510778951925760 \
+#     --from-literal=SENTRY_TRACES_SAMPLE_RATE=1.0 \
+#     --from-literal=SENTRY_ENVIRONMENT=staging \
+#     --from-literal=SENTRY_RELEASE=api@<version> \
+#     --from-literal=SENTRY_DEBUG=false
+#
+# DO NOT commit actual credentials to version control.
+apiVersion: v1
+kind: Secret
+metadata:
+  name: api-sentry
+  namespace: api-staging
+type: Opaque
+stringData:
+  SENTRY_DSN: "<dsn>"
+  SENTRY_TRACES_SAMPLE_RATE: "1.0"
+  SENTRY_ENVIRONMENT: "staging"
+  SENTRY_RELEASE: "api@<version>"
+  SENTRY_DEBUG: "false"

@@ -197,6 +197,13 @@
       "when": 1768924733212,
       "tag": "0027_property-entity-functions",
       "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1769544300976,
+      "tag": "0028_shocking_madame_web",
+      "breakpoints": true
     }
   ]
 }

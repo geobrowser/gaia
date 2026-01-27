@@ -44,7 +44,28 @@ pub async fn ensure_index_exists(
     Ok(())
 }
 
+/// Check if automatic index creation is allowed.
+/// Index creation is only allowed if:
+/// - version is 0 (default development version), OR
+/// - the `auto_index_creation` feature is enabled at compile time
+fn should_allow_index_creation(version: u32) -> bool {
+    if version == 0 {
+        return true;
+    }
+
+    // Check if the auto_index_creation feature is enabled
+    #[cfg(feature = "auto_index_creation")]
+    return true;
+
+    #[cfg(not(feature = "auto_index_creation"))]
+    false
+}
+
 /// Ensure the versioned index exists, creating it if necessary.
+///
+/// Note: Automatic index creation is only allowed for version 0 or when the
+/// `auto_index_creation` feature is enabled. In production, indices should be
+/// created using the search-admin tool.
 async fn ensure_versioned_index_exists(
     client: &OpenSearch,
     versioned_index_name: &str,
@@ -57,30 +78,64 @@ async fn ensure_versioned_index_exists(
         .await
         .map_err(|e| SearchIndexError::connection(e.to_string()))?;
 
-    if !index_exists_response.status_code().is_success() {
-        info!(index = %versioned_index_name, "Creating versioned index");
+    let status = index_exists_response.status_code();
 
-        let settings = get_index_settings(Some(version));
+    if !status.is_success() {
+        // Check if this is specifically a 404 (index not found)
+        if status.as_u16() == 404 {
+            // Index doesn't exist - check if we should create it automatically
+            if !should_allow_index_creation(version) {
+                error!(
+                    index = %versioned_index_name,
+                    version = version,
+                    "Index does not exist and automatic creation is disabled. \
+                     The index should be created using the search-admin tool."
+                );
+                return Err(SearchIndexError::index_creation(format!(
+                    "Index '{}' does not exist. Automatic index creation is only allowed for version 0 \
+                     or when compiled with the 'auto_index_creation' feature. \
+                     The index should be created using the search-admin tool.",
+                    versioned_index_name
+                )));
+            }
 
-        let create_response = client
-            .indices()
-            .create(IndicesCreateParts::Index(versioned_index_name))
-            .body(settings)
-            .send()
-            .await
-            .map_err(|e| SearchIndexError::index_creation(e.to_string()))?;
+            info!(index = %versioned_index_name, version = version, "Creating versioned index");
 
-        let status = create_response.status_code();
-        if !status.is_success() {
-            let error_body = create_response.text().await.unwrap_or_default();
-            error!(status = %status, body = %error_body, "Index creation failed");
+            let settings = get_index_settings(Some(version));
+
+            let create_response = client
+                .indices()
+                .create(IndicesCreateParts::Index(versioned_index_name))
+                .body(settings)
+                .send()
+                .await
+                .map_err(|e| SearchIndexError::index_creation(e.to_string()))?;
+
+            let create_status = create_response.status_code();
+            if !create_status.is_success() {
+                let error_body = create_response.text().await.unwrap_or_default();
+                error!(status = %create_status, body = %error_body, "Index creation failed");
+                return Err(SearchIndexError::index_creation(format!(
+                    "Index creation failed with status {}: {}",
+                    create_status, error_body
+                )));
+            }
+
+            info!(index = %versioned_index_name, "Versioned index created successfully");
+        } else {
+            // Non-404 error (e.g., 401, 403, 500) - fail with error
+            let error_body = index_exists_response.text().await.unwrap_or_default();
+            error!(
+                index = %versioned_index_name,
+                status = %status,
+                body = %error_body,
+                "Failed to check if index exists"
+            );
             return Err(SearchIndexError::index_creation(format!(
-                "Index creation failed with status {}: {}",
-                status, error_body
+                "Failed to check if index '{}' exists: status {} - {}",
+                versioned_index_name, status, error_body
             )));
         }
-
-        info!(index = %versioned_index_name, "Versioned index created successfully");
     } else {
         debug!(index = %versioned_index_name, "Versioned index already exists");
     }
@@ -229,4 +284,31 @@ async fn update_alias_to_correct_index(
 
     info!(alias = %alias, index = %versioned_index_name, "Alias updated successfully");
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_should_allow_index_creation_version_0() {
+        // Version 0 should always allow creation regardless of feature flags
+        assert!(should_allow_index_creation(0));
+    }
+
+    #[test]
+    #[cfg(feature = "auto_index_creation")]
+    fn test_should_allow_index_creation_with_feature() {
+        // When feature is enabled, version > 0 should allow creation
+        assert!(should_allow_index_creation(1));
+        assert!(should_allow_index_creation(100));
+    }
+
+    #[test]
+    #[cfg(not(feature = "auto_index_creation"))]
+    fn test_should_disallow_index_creation_without_feature() {
+        // When feature is disabled (default), version > 0 should not allow creation
+        assert!(!should_allow_index_creation(1));
+        assert!(!should_allow_index_creation(100));
+    }
 }
