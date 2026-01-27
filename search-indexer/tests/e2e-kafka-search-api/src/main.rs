@@ -422,6 +422,7 @@ async fn main() -> Result<()> {
     info!("  Test Case 1: Create entity with name and description, then unset name");
     info!("    Entity ID: {}", unset_test_1_id);
 
+    let unset_test_1_key = unset_test_1_id.to_string();
     let unset_test_1_create = edits::create_entity_edit(
         "Create Entity for Unset Test 1",
         test_space,
@@ -431,7 +432,7 @@ async fn main() -> Result<()> {
         None,
     )?;
     producer
-        .send(EDITS_TOPIC, None, unset_test_1_create)
+        .send(EDITS_TOPIC, Some(&unset_test_1_key), unset_test_1_create)
         .await?;
 
     info!("    Unsetting name property...");
@@ -442,7 +443,7 @@ async fn main() -> Result<()> {
         vec![sdk::core::ids::NAME_PROPERTY_ID],
     )?;
     producer
-        .send(EDITS_TOPIC, None, unset_name_payload)
+        .send(EDITS_TOPIC, Some(&unset_test_1_key), unset_name_payload)
         .await?;
 
     // Test Case 2: Unset 2 properties (name and description)
@@ -450,6 +451,7 @@ async fn main() -> Result<()> {
     info!("  Test Case 2: Create entity with name, description, and avatar, then unset name and description");
     info!("    Entity ID: {}", unset_test_2_id);
 
+    let unset_test_2_key = unset_test_2_id.to_string();
     let unset_test_2_create = edits::create_entity_edit(
         "Create Entity for Unset Test 2",
         test_space,
@@ -459,7 +461,7 @@ async fn main() -> Result<()> {
         Some("https://example.com/avatar.png"),
     )?;
     producer
-        .send(EDITS_TOPIC, None, unset_test_2_create)
+        .send(EDITS_TOPIC, Some(&unset_test_2_key), unset_test_2_create)
         .await?;
 
     info!("    Unsetting name and description properties...");
@@ -473,7 +475,7 @@ async fn main() -> Result<()> {
         ],
     )?;
     producer
-        .send(EDITS_TOPIC, None, unset_name_desc_payload)
+        .send(EDITS_TOPIC, Some(&unset_test_2_key), unset_name_desc_payload)
         .await?;
 
     // Test Case 3: Mixed set/unset + LWW (Last-Writer-Wins) test
@@ -481,6 +483,7 @@ async fn main() -> Result<()> {
     info!("  Test Case 3: Mixed set/unset in one operation + LWW with multiple sets");
     info!("    Entity ID: {}", lww_test_id);
 
+    let lww_test_key = lww_test_id.to_string();
     let lww_test_create = edits::create_entity_edit(
         "Create Entity for LWW Test",
         test_space,
@@ -490,7 +493,7 @@ async fn main() -> Result<()> {
         Some("https://example.com/lww-avatar.png"),
     )?;
     producer
-        .send(EDITS_TOPIC, None, lww_test_create)
+        .send(EDITS_TOPIC, Some(&lww_test_key), lww_test_create)
         .await?;
 
     info!("    Step 1: Mixed operation - set name='First Update', unset description (different properties)...");
@@ -506,7 +509,7 @@ async fn main() -> Result<()> {
         ],
     )?;
     producer
-        .send(EDITS_TOPIC, None, lww_mixed)
+        .send(EDITS_TOPIC, Some(&lww_test_key), lww_mixed)
         .await?;
 
     info!("    Step 2: Set name again to 'Second Update' (LWW: this should win)...");
@@ -519,7 +522,7 @@ async fn main() -> Result<()> {
         None,                      // Don't set avatar (keep existing)
     )?;
     producer
-        .send(EDITS_TOPIC, None, lww_second_set)
+        .send(EDITS_TOPIC, Some(&lww_test_key), lww_second_set)
         .await?;
 
     info!("\n✅ Test scenario complete!");
