@@ -8,7 +8,7 @@ Serialization spec: https://github.com/geobrowser/grc-20/blob/main/spec.md
 
 ## 1. Types, Properties, and Schemas
 
-The knowledge graph is schema-less by default. Instead, schemas are represented as entities in-graph and act as conventions or hints for how data should be modeled. These typed representations of knowledge are often called "Ontologies."
+The knowledge graph is schema-less by default. Instead, schemas are represented as entities in-graph and act as conventions or hints for how data should be modeled. These typed representations of knowledge are commonly referred to as ontologies.
 
 ### 1.1 Schemas as Entities
 
@@ -18,7 +18,7 @@ Types can define a schema (e.g. Name, Description, Avatar, Birthdate). Each prop
 
 ```
 [Person] --TYPES--> [Type]
-[Type]   --PROPERTY--> [Name]
+[Type]   --PROPERTIES--> [Name]
 [Name]   --TYPES--> [Property]
 ```
 
@@ -41,7 +41,7 @@ Depending on the data type or renderable type, a property may include extra meta
 
 ### 1.3 Data Types
 
-Data types are entities that describe the underlying storage type for a property.
+Data types are entities that describe the underlying storage type for a property, and map directly to the data types defined in the serialization spec.
 
 | Data Type | UUID | Description |
 |---|---|---|
@@ -61,7 +61,7 @@ Data types are entities that describe the underlying storage type for a property
 
 ### 1.4 Renderable Types
 
-Renderable types are UI representations of underlying data types or entities. They are hints for clients on how to display the underlying data model. For example, a URL is stored as text but can be rendered with specialized UI. Videos, Images, Places, Addresses, and similar entities may also have specific presentation patterns.
+Renderable types are UI representations of underlying data types or entities. They are hints for clients on how to display the underlying data model. For example, a URL is stored as text but can be rendered with specialized UI. Videos, Images, Places, Addresses, and similar entities may also have specific presentation patterns. Renderable types are optional hints; they do not change the underlying stored values.
 
 | Renderable Type | UUID | Description |
 |---|---|---|
@@ -75,11 +75,11 @@ Renderable types are UI representations of underlying data types or entities. Th
 
 ## 2. Blocks (as Relations)
 
-Blocks are rich content for an entity. Each block is itself an entity, and blocks are attached to a parent via the Blocks relation. Because blocks are entities, they can be attached to multiple parents, which enables transclusion. The relation type id for Blocks is the Blocks property entity: `beaba5cba67741a8b35377030613fc70`.
+Blocks are rich content units for an entity. Each block is itself an entity; blocks are attached to a parent via the Blocks relation and can be attached to multiple parents (transclusion). The relation type id for Blocks is the Blocks property entity: `beaba5cba67741a8b35377030613fc70`.
 
 ### 2.1 Block Ordering
 
-Blocks are ordered using the `position` field on the Blocks relation. Positions are fractional-index position-strings over the alphabet `0-9A-Za-z`, ordered lexicographically, with a maximum length of 64 characters (see [GRC-20 spec](https://github.com/geobrowser/grc-20/blob/main/spec.md)).
+Blocks are ordered using the `position` field on the Blocks relation (see [GRC-20 spec](https://github.com/geobrowser/grc-20/blob/main/spec.md)).
 
 ### 2.2 Block Types
 
@@ -115,13 +115,13 @@ Data source types:
 - Query data source `3b069b04adbe4728917d1283fd4ac27e`
 - Collection data source `1295037a5d9c4d09b27c5502654b9177`
 
-Query data block: uses the Query data source type and defines a declarative graph query that is evaluated live. The query is stored on the block using the Filters property as JSON-encoded query data (spec pending).
+Query data block: defines a live, declarative graph query evaluated at render time.
 
-Collection data block: uses the Collection data source type and enumerates a fixed, ordered set of entities via Collection item relations. Ordering is expressed via the position on each Collection item relation. Filters can also be applied to collections using the Filters property.
+Collection data block: enumerates a fixed, ordered set of entities via Collection item relations.
 
 ### 2.6 Data Block Views
 
-Data block view types are defined on the relation pointing to the block using the View property `1907fd1c81114a3ca378b1f353425b65`.
+Data block view types are defined on the `BLOCKS` relation pointing to the block using the View property `1907fd1c81114a3ca378b1f353425b65`.
 
 | View Type | UUID |
 |---|---|
@@ -132,9 +132,7 @@ Data block view types are defined on the relation pointing to the block using th
 
 ### 2.7 Image Requirements
 
-| Property | UUID | Description | Target |
-|---|---|---|---|
-| URL | `8a743832c0944a62b6650c3cc2f9c7bc` | Source URL for the image. | TEXT value |
+See Section 3 for Image entity properties.
 
 ## 3. Images (Entities + Relations)
 
@@ -154,15 +152,17 @@ Images can specify a file type using the File type relation `515f346fe0fb40c78ea
 
 ## 4. Topics and Representing a Space
 
-Spaces can set a topic that represents what the space is about and is used to determine the space’s front page. The topic is an arbitrary entity in the knowledge graph; there is no canonical Topic type or UUID yet.
+Spaces can set a topic that represents what the space is about and is used to determine the space’s front page. The topic is an arbitrary entity in the knowledge graph; there is no canonical Topic type or UUID yet. The topic value is set onchain, not via a knowledge-graph relation.
 
-Setting the topic is done onchain via the `SET_TOPIC` action in the protocol, not via a knowledge-graph relation.
+Setting the topic is done onchain via the `SET_TOPIC` action in the protocol.
 
 ## 5. System Properties
 
 ### 5.1 System Entity Registry
 
-All IDs defined in this spec are system entities.
+System entities defined in this spec are listed below.
+
+The registry is alphabetized by name for easier lookup.
 
 | Name | UUID | Notes |
 |---|---|---|
