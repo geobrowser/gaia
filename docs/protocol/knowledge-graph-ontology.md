@@ -107,17 +107,25 @@ Blocks are ordered using the `position` field on the Blocks relation (see [GRC-2
 | Types | `8f151ba4de204e3c9cb499ddf96f48f1` | Type membership for the block. | Text Block `76474f2f00894e77a0410b39fb17d0bf` |
 | Markdown content | `e3e363d1dd294ccb8e6ff3b76d99bc33` | Markdown body for the text block. | TEXT value |
 
-#### 2.4.2 Data Block Schema
+#### 2.4.2 Query Data Block Schema
 
 | Property | UUID | Description | Target |
 |---|---|---|---|
 | Types | `8f151ba4de204e3c9cb499ddf96f48f1` | Type membership for the block. | Data Block `b8803a8665de412bbb357e0c84adf473` |
 | Data source type | `1f69cc9880d444abad493df6a7b15ee4` | Declares whether the data source is a query or a collection. | Query data source `3b069b04adbe4728917d1283fd4ac27e` or Collection data source `1295037a5d9c4d09b27c5502654b9177` |
-| Filters | `14a46854bfd14b1882152785c2dab9f3` | JSON-encoded filters applied to the data source. | JSON value (filter spec TBD) |
+| Filter | `14a46854bfd14b1882152785c2dab9f3` | JSON-encoded filter/query applied to the data source. | JSON value (filter spec TBD) |
+
+#### 2.4.3 Collection Data Block Schema
+
+| Property | UUID | Description | Target |
+|---|---|---|---|
+| Types | `8f151ba4de204e3c9cb499ddf96f48f1` | Type membership for the block. | Data Block `b8803a8665de412bbb357e0c84adf473` |
+| Data source type | `1f69cc9880d444abad493df6a7b15ee4` | Declares whether the data source is a query or a collection. | Query data source `3b069b04adbe4728917d1283fd4ac27e` or Collection data source `1295037a5d9c4d09b27c5502654b9177` |
+| Filter | `14a46854bfd14b1882152785c2dab9f3` | JSON-encoded filter applied to the data source. | JSON value (filter spec TBD) |
 | Collection item | `a99f9ce12ffa4dac8c61f6310d46064a` | Entity included in a collection data source. | Any entity |
 
 
-#### 2.4.3 Image Schema
+#### 2.4.4 Image Schema
 
 | Property | UUID | Description | Target |
 |---|---|---|---|
@@ -155,7 +163,6 @@ Images can specify a file type using the File type relation `515f346fe0fb40c78ea
 
 ## 5. System Properties
 
-### 5.1 System Entity Registry
 System entities defined in this spec are listed below.
 
 The registry is alphabetized by name for easier lookup.
