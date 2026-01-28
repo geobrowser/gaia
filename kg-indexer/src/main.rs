@@ -891,8 +891,9 @@ async fn process_message(
             storage.delete_relations(&delete_relations, &mut tx).await?;
 
             // Versioned writes (temporal tables)
+            // Only write versions if this edit hasn't been processed before (idempotency)
             if let Some(meta) = edit.meta.as_ref() {
-                let version_key = storage
+                if let Some(version_key) = storage
                     .insert_edit_version(
                         result.edit_id,
                         meta.block_number as i64,
@@ -900,14 +901,15 @@ async fn process_message(
                         meta.created_at as i64,
                         &mut tx,
                     )
-                    .await?;
-
-                storage
-                    .insert_value_versions(&values_for_versioning, version_key, &mut tx)
-                    .await?;
-                storage
-                    .insert_relation_versions(&relations_for_versioning, version_key, &mut tx)
-                    .await?;
+                    .await?
+                {
+                    storage
+                        .insert_value_versions(&values_for_versioning, version_key, &mut tx)
+                        .await?;
+                    storage
+                        .insert_relation_versions(&relations_for_versioning, version_key, &mut tx)
+                        .await?;
+                }
             }
 
             ops
@@ -1124,8 +1126,9 @@ async fn process_block(
                     storage.delete_relations(&delete_relations, &mut tx).await?;
 
                     // Versioned writes (temporal tables)
+                    // Only write versions if this edit hasn't been processed before (idempotency)
                     if let Some(meta) = edit.meta.as_ref() {
-                        let version_key = storage
+                        if let Some(version_key) = storage
                             .insert_edit_version(
                                 result.edit_id,
                                 meta.block_number as i64,
@@ -1133,18 +1136,19 @@ async fn process_block(
                                 meta.created_at as i64,
                                 &mut tx,
                             )
-                            .await?;
-
-                        storage
-                            .insert_value_versions(&values_for_versioning, version_key, &mut tx)
-                            .await?;
-                        storage
-                            .insert_relation_versions(
-                                &relations_for_versioning,
-                                version_key,
-                                &mut tx,
-                            )
-                            .await?;
+                            .await?
+                        {
+                            storage
+                                .insert_value_versions(&values_for_versioning, version_key, &mut tx)
+                                .await?;
+                            storage
+                                .insert_relation_versions(
+                                    &relations_for_versioning,
+                                    version_key,
+                                    &mut tx,
+                                )
+                                .await?;
+                        }
                     }
 
                     ops

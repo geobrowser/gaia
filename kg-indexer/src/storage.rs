@@ -1023,6 +1023,20 @@ impl Storage {
 
     /// Insert an edit version record and return the computed version_key.
     /// version_key = (block_number << 32) | sequence
+    ///
+    /// Returns `Some(version_key)` if the edit was inserted, `None` if it already existed.
+    ///
+    /// # Idempotency
+    ///
+    /// Callers MUST skip `insert_value_versions` and `insert_relation_versions` when this
+    /// returns `None`. Re-processing an edit would otherwise corrupt temporal data:
+    ///
+    /// 1. First processing: inserts value_version with valid_from_key=X, valid_to_key=NULL
+    /// 2. Re-processing: close query sets valid_to_key=X on that row, then inserts duplicate
+    /// 3. Result: original row has valid_from_key=X, valid_to_key=X (zero-length interval)
+    ///
+    /// The ON CONFLICT on edit_versions detects re-processing, but value_versions has no
+    /// such protection - it relies on callers checking this return value.
     pub async fn insert_edit_version(
         &self,
         edit_id: Uuid,
@@ -1030,10 +1044,10 @@ impl Storage {
         sequence: i64,
         created_at: i64,
         tx: &mut sqlx::Transaction<'_, Postgres>,
-    ) -> Result<i64, IndexerError> {
+    ) -> Result<Option<i64>, IndexerError> {
         let version_key = (block_number << 32) | sequence;
 
-        sqlx::query(
+        let result = sqlx::query(
             r#"
             INSERT INTO edit_versions (edit_id, block_number, sequence, version_key, created_at)
             VALUES ($1, $2, $3, $4, to_timestamp($5))
@@ -1048,7 +1062,11 @@ impl Storage {
         .execute(&mut **tx)
         .await?;
 
-        Ok(version_key)
+        if result.rows_affected() == 0 {
+            Ok(None)
+        } else {
+            Ok(Some(version_key))
+        }
     }
 
     /// Insert versioned value records with temporal range tracking.
