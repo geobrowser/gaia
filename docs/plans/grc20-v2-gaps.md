@@ -29,13 +29,6 @@ This is necessary because PostgreSQL enums can't have values removed while exist
 
 ## Pending: Indexer Updates
 
-### search-indexer
-- Consumes `HermesEdit` from Kafka, still references `.ops` field
-- Needs to decode `HermesEdit.payload` using `grc_20::decode_edit()`
-- Will need to map `grc_20::Op` types to search index updates
-
-**Unblock by:** Add `grc-20` dependency and update `entities_consumer.rs` to decode payload bytes.
-
 ### indexer (legacy)
 - Uses v1 protobuf `wire::pb::grc20::Edit` directly
 - Will be superseded by `kg-indexer` for knowledge graph indexing
@@ -60,6 +53,17 @@ The kg-indexer decodes v2 payloads but doesn't yet handle all 9 op types:
 **Unblock by:** Task ts-46f76a (Apply v2 ops)
 
 ## Implemented
+
+### search-indexer (feat/search-delete-entity)
+- Decodes `HermesEdit.payload` with `grc_20::decode_edit()`
+- Handles the following operations:
+  - `UpdateEntity` - Extracts name, description, avatar; handles unset_values
+  - `CreateRelation` - Processes type relations only (TYPE_RELATION_TYPE_ID)
+  - `DeleteRelation` - Removes type relations from entities
+  - `DeleteEntity` - Soft delete (marks entities as deleted in OpenSearch)
+- Operations intentionally skipped (not relevant for search):
+  - `CreateEntity`, `RestoreEntity`, `RestoreRelation`, `UpdateRelation`, `CreateValueRef`
+- E2E tests added for delete entity and unset properties functionality
 
 ### Schema (ts-20e6b4)
 - `dataTypesEnum` updated to v2 types: `Bool`, `Int64`, `Float64`, `Decimal`, `Text`, `Bytes`, `Date`, `Time`, `Datetime`, `Schedule`, `Point`, `Embedding`
