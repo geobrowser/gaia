@@ -12,8 +12,15 @@ import type {
 	VersionedRelation,
 	BlockSnapshot,
 	EntitySnapshot,
+	GroupedEntitySnapshot,
 	VersionEntry,
 } from "./types";
+import {
+	groupEntitiesByContext,
+	mergeDiscoveryResults,
+	type DiscoveredEntity,
+	type GroupedEntities,
+} from "./grouping";
 
 // The BLOCKS relation type ID from GRC-20
 const BLOCKS_TYPE_ID = SystemIds.BLOCKS;
@@ -134,14 +141,145 @@ export async function getRelationsAtVersion(
 }
 
 /**
+ * Query entities discovered via context metadata.
+ * Returns ALL entities where context_root_id = entityId, regardless of edge type.
+ */
+async function queryContextEntities(
+	db: Database,
+	entityId: string,
+	versionKey: bigint,
+	spaceId?: string
+): Promise<DiscoveredEntity[]> {
+	const versionKeyStr = versionKey.toString();
+
+	const result = spaceId
+		? await db.execute<{
+				entity_id: string;
+				context_edge_type_id: string | null;
+		  }>(sql`
+				SELECT DISTINCT entity_id, context_edge_type_id FROM (
+					-- Context-based discovery from values
+					SELECT DISTINCT v.entity_id, v.context_edge_type_id
+					FROM value_versions v
+					WHERE v.context_root_id = ${entityId}
+						AND v.context_edge_type_id IS NOT NULL
+						AND v.valid_from_key <= ${versionKeyStr}::bigint
+						AND (v.valid_to_key IS NULL OR v.valid_to_key > ${versionKeyStr}::bigint)
+						AND v.space_id = ${spaceId}
+					UNION
+					-- Context-based discovery from relations
+					SELECT DISTINCT r.entity_id, r.context_edge_type_id
+					FROM relation_versions r
+					WHERE r.context_root_id = ${entityId}
+						AND r.context_edge_type_id IS NOT NULL
+						AND r.valid_from_key <= ${versionKeyStr}::bigint
+						AND (r.valid_to_key IS NULL OR r.valid_to_key > ${versionKeyStr}::bigint)
+						AND r.space_id = ${spaceId}
+				) context_entities
+			`)
+		: await db.execute<{
+				entity_id: string;
+				context_edge_type_id: string | null;
+		  }>(sql`
+				SELECT DISTINCT entity_id, context_edge_type_id FROM (
+					-- Context-based discovery from values
+					SELECT DISTINCT v.entity_id, v.context_edge_type_id
+					FROM value_versions v
+					WHERE v.context_root_id = ${entityId}
+						AND v.context_edge_type_id IS NOT NULL
+						AND v.valid_from_key <= ${versionKeyStr}::bigint
+						AND (v.valid_to_key IS NULL OR v.valid_to_key > ${versionKeyStr}::bigint)
+					UNION
+					-- Context-based discovery from relations
+					SELECT DISTINCT r.entity_id, r.context_edge_type_id
+					FROM relation_versions r
+					WHERE r.context_root_id = ${entityId}
+						AND r.context_edge_type_id IS NOT NULL
+						AND r.valid_from_key <= ${versionKeyStr}::bigint
+						AND (r.valid_to_key IS NULL OR r.valid_to_key > ${versionKeyStr}::bigint)
+				) context_entities
+			`);
+
+	return result.rows.map((row) => ({
+		entityId: row.entity_id,
+		contextEdgeTypeId: row.context_edge_type_id,
+		position: null, // Context-based discovery doesn't have position
+	}));
+}
+
+/**
+ * Query entities discovered via BLOCKS relation (fallback for data without context).
+ */
+async function queryBlocksRelationEntities(
+	db: Database,
+	entityId: string,
+	versionKey: bigint,
+	spaceId?: string
+): Promise<Array<{ entityId: string; position: string | null }>> {
+	const versionKeyStr = versionKey.toString();
+
+	const result = spaceId
+		? await db.execute<{ entity_id: string; position: string | null }>(sql`
+				SELECT r.to_entity_id AS entity_id, r.position
+				FROM relation_versions r
+				WHERE r.from_entity_id = ${entityId}
+					AND r.type_id = ${BLOCKS_TYPE_ID}
+					AND r.valid_from_key <= ${versionKeyStr}::bigint
+					AND (r.valid_to_key IS NULL OR r.valid_to_key > ${versionKeyStr}::bigint)
+					AND r.space_id = ${spaceId}
+			`)
+		: await db.execute<{ entity_id: string; position: string | null }>(sql`
+				SELECT r.to_entity_id AS entity_id, r.position
+				FROM relation_versions r
+				WHERE r.from_entity_id = ${entityId}
+					AND r.type_id = ${BLOCKS_TYPE_ID}
+					AND r.valid_from_key <= ${versionKeyStr}::bigint
+					AND (r.valid_to_key IS NULL OR r.valid_to_key > ${versionKeyStr}::bigint)
+			`);
+
+	return result.rows.map((row) => ({
+		entityId: row.entity_id,
+		position: row.position,
+	}));
+}
+
+/**
+ * Get grouped entity IDs for an entity at a specific version.
+ *
+ * Supports hybrid mode:
+ * - Static `blocks` array for BLOCKS relation type
+ * - Dynamic groups for other relation types discovered via context
+ * - `groupKeys` array for discoverability of dynamic keys
+ *
+ * Uses context metadata to discover entities when available, with
+ * BLOCKS relation lookup as fallback for backward compatibility.
+ */
+export async function getGroupedEntityIdsAtVersion(
+	db: Database,
+	entityId: string,
+	versionKey: bigint,
+	spaceId?: string
+): Promise<GroupedEntities> {
+	const [contextEntities, relationEntities] = await Promise.all([
+		queryContextEntities(db, entityId, versionKey, spaceId),
+		queryBlocksRelationEntities(db, entityId, versionKey, spaceId),
+	]);
+
+	// Merge and group using pure function
+	const merged = mergeDiscoveryResults(
+		contextEntities,
+		relationEntities,
+		BLOCKS_TYPE_ID
+	);
+
+	return groupEntitiesByContext(merged, BLOCKS_TYPE_ID);
+}
+
+/**
  * Get block IDs for an entity at a specific version.
  *
- * Uses context metadata to discover blocks when available:
- * - If context_root_id = entityId and context_edge_type_id = BLOCKS_TYPE_ID,
- *   the entity is a block of the parent entity
- *
- * Falls back to BLOCKS relation lookup for backward compatibility when
- * context metadata is NULL.
+ * This is a convenience wrapper around getGroupedEntityIdsAtVersion
+ * that returns only the blocks array for backward compatibility.
  */
 async function getBlockIdsAtVersion(
 	db: Database,
@@ -149,75 +287,13 @@ async function getBlockIdsAtVersion(
 	versionKey: bigint,
 	spaceId?: string
 ): Promise<string[]> {
-	const versionKeyStr = versionKey.toString();
-
-	// Strategy: Use UNION to combine both discovery methods
-	// 1. Context-based: Find entities with context_root_id = entityId AND context_edge_type_id = BLOCKS
-	// 2. Relation-based (fallback): Find BLOCKS relations from this entity
-	//
-	// The DISTINCT ensures we don't duplicate if both methods find the same block
-	const result = spaceId
-		? await db.execute<{ block_id: string; position: string | null }>(sql`
-				SELECT DISTINCT block_id, position FROM (
-					-- Context-based discovery: find values where this entity is the context root
-					SELECT DISTINCT v.entity_id AS block_id, NULL AS position
-					FROM value_versions v
-					WHERE v.context_root_id = ${entityId}
-						AND v.context_edge_type_id = ${BLOCKS_TYPE_ID}
-						AND v.valid_from_key <= ${versionKeyStr}::bigint
-						AND (v.valid_to_key IS NULL OR v.valid_to_key > ${versionKeyStr}::bigint)
-						AND v.space_id = ${spaceId}
-					UNION
-					-- Context-based discovery: find relations where this entity is the context root
-					SELECT DISTINCT r.entity_id AS block_id, NULL AS position
-					FROM relation_versions r
-					WHERE r.context_root_id = ${entityId}
-						AND r.context_edge_type_id = ${BLOCKS_TYPE_ID}
-						AND r.valid_from_key <= ${versionKeyStr}::bigint
-						AND (r.valid_to_key IS NULL OR r.valid_to_key > ${versionKeyStr}::bigint)
-						AND r.space_id = ${spaceId}
-					UNION
-					-- Fallback: BLOCKS relation lookup (for data without context metadata)
-					SELECT r.to_entity_id AS block_id, r.position
-					FROM relation_versions r
-					WHERE r.from_entity_id = ${entityId}
-						AND r.type_id = ${BLOCKS_TYPE_ID}
-						AND r.valid_from_key <= ${versionKeyStr}::bigint
-						AND (r.valid_to_key IS NULL OR r.valid_to_key > ${versionKeyStr}::bigint)
-						AND r.space_id = ${spaceId}
-				) blocks
-				ORDER BY position NULLS LAST
-			`)
-		: await db.execute<{ block_id: string; position: string | null }>(sql`
-				SELECT DISTINCT block_id, position FROM (
-					-- Context-based discovery: find values where this entity is the context root
-					SELECT DISTINCT v.entity_id AS block_id, NULL AS position
-					FROM value_versions v
-					WHERE v.context_root_id = ${entityId}
-						AND v.context_edge_type_id = ${BLOCKS_TYPE_ID}
-						AND v.valid_from_key <= ${versionKeyStr}::bigint
-						AND (v.valid_to_key IS NULL OR v.valid_to_key > ${versionKeyStr}::bigint)
-					UNION
-					-- Context-based discovery: find relations where this entity is the context root
-					SELECT DISTINCT r.entity_id AS block_id, NULL AS position
-					FROM relation_versions r
-					WHERE r.context_root_id = ${entityId}
-						AND r.context_edge_type_id = ${BLOCKS_TYPE_ID}
-						AND r.valid_from_key <= ${versionKeyStr}::bigint
-						AND (r.valid_to_key IS NULL OR r.valid_to_key > ${versionKeyStr}::bigint)
-					UNION
-					-- Fallback: BLOCKS relation lookup (for data without context metadata)
-					SELECT r.to_entity_id AS block_id, r.position
-					FROM relation_versions r
-					WHERE r.from_entity_id = ${entityId}
-						AND r.type_id = ${BLOCKS_TYPE_ID}
-						AND r.valid_from_key <= ${versionKeyStr}::bigint
-						AND (r.valid_to_key IS NULL OR r.valid_to_key > ${versionKeyStr}::bigint)
-				) blocks
-				ORDER BY position NULLS LAST
-			`);
-
-	return result.rows.map((row) => row.block_id);
+	const grouped = await getGroupedEntityIdsAtVersion(
+		db,
+		entityId,
+		versionKey,
+		spaceId
+	);
+	return grouped.blocks;
 }
 
 /**
@@ -264,6 +340,57 @@ export async function getEntitySnapshotAtVersion(
 	);
 
 	return { id: entityId, values, relations, blocks };
+}
+
+/**
+ * Get a grouped entity snapshot at a specific version.
+ *
+ * Returns hybrid mode response with:
+ * - Static `blocks` array for BLOCKS relation type
+ * - Dynamic `groups` map for other relation types
+ * - `groupKeys` for discoverability of dynamic groups
+ */
+export async function getGroupedEntitySnapshotAtVersion(
+	db: Database,
+	entityId: string,
+	versionKey: bigint,
+	spaceId?: string
+): Promise<GroupedEntitySnapshot> {
+	const [values, allRelations, grouped] = await Promise.all([
+		getValuesAtVersion(db, entityId, versionKey, spaceId),
+		getRelationsAtVersion(db, entityId, versionKey, spaceId),
+		getGroupedEntityIdsAtVersion(db, entityId, versionKey, spaceId),
+	]);
+
+	// Filter out relations that are used for grouping (BLOCKS + dynamic types)
+	const groupedTypeIds = new Set([BLOCKS_TYPE_ID, ...grouped.groupKeys]);
+	const relations = allRelations.filter((r) => !groupedTypeIds.has(r.typeId));
+
+	// Fetch block snapshots (static key)
+	const blocks = await Promise.all(
+		grouped.blocks.map((id) =>
+			getBlockSnapshotAtVersion(db, id, versionKey, spaceId)
+		)
+	);
+
+	// Fetch dynamic group snapshots
+	const groups: Record<string, BlockSnapshot[]> = {};
+	for (const [typeId, entityIds] of grouped.dynamicGroups) {
+		groups[typeId] = await Promise.all(
+			entityIds.map((id) =>
+				getBlockSnapshotAtVersion(db, id, versionKey, spaceId)
+			)
+		);
+	}
+
+	return {
+		id: entityId,
+		values,
+		relations,
+		blocks,
+		groupKeys: grouped.groupKeys,
+		groups,
+	};
 }
 
 /**

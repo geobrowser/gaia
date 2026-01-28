@@ -208,6 +208,39 @@ export interface EntityDiff {
 	blocks: BlockChange[]
 }
 
+/**
+ * A grouped entity snapshot with hybrid mode support.
+ *
+ * - `blocks` is the static key for BLOCKS relation type
+ * - `groupKeys` lists dynamic group keys present (for discoverability)
+ * - Dynamic keys (e.g., relation type IDs) map to arrays of child snapshots
+ */
+export interface GroupedEntitySnapshot {
+	id: string
+	values: VersionedValue[]
+	relations: VersionedRelation[] // Excludes grouped relations
+	blocks: BlockSnapshot[] // Static key for BLOCKS
+	groupKeys: string[] // Dynamic keys present (excluding "blocks")
+	groups: Record<string, BlockSnapshot[]> // Dynamic groups by relation type ID
+}
+
+/**
+ * A grouped entity diff with hybrid mode support.
+ *
+ * - `blocks` is the static key for BLOCKS relation type changes
+ * - `groupKeys` lists dynamic group keys present (for discoverability)
+ * - Dynamic keys map to arrays of child changes
+ */
+export interface GroupedEntityDiff {
+	entityId: string
+	name: string | null
+	values: ValueChange[]
+	relations: RelationChange[]
+	blocks: BlockChange[] // Static key for BLOCKS
+	groupKeys: string[] // Dynamic keys present (excluding "blocks")
+	groups: Record<string, BlockChange[]> // Dynamic groups by relation type ID
+}
+
 // ============================================================================
 // Version History
 // ============================================================================

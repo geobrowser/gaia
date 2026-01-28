@@ -4,7 +4,7 @@ use std::hash::{Hash, Hasher};
 
 use grc_20::{
     decode_edit, Edit as Grc20Edit, Id as Grc20Id, Op as Grc20Op, PropertyValue,
-    UnsetRelationField, Value as Grc20Value, model::Context,
+    UnsetRelationField, Value as Grc20Value, model::{Context, ContextEdge},
 };
 use hermes_schema::pb::knowledge::HermesEdit;
 use uuid::Uuid;
@@ -1126,5 +1126,77 @@ mod tests {
         // id2 should be Delete
         let id2_op = result.iter().find(|op| op.id() == id2).unwrap();
         assert!(matches!(id2_op, RelationOp::Delete(_)));
+    }
+
+    // ===================
+    // Context extraction tests
+    // ===================
+
+    #[test]
+    fn test_extract_context_none() {
+        let (root_id, edge_type_id) = extract_context(&None);
+        assert!(root_id.is_none());
+        assert!(edge_type_id.is_none());
+    }
+
+    #[test]
+    fn test_extract_context_with_edges() {
+        let root_id: [u8; 16] = [1; 16];
+        let edge_type_id: [u8; 16] = [2; 16];
+        let to_entity_id: [u8; 16] = [3; 16];
+
+        let context = Context {
+            root_id,
+            edges: vec![ContextEdge {
+                type_id: edge_type_id,
+                to_entity_id,
+            }],
+        };
+
+        let (extracted_root, extracted_edge_type) = extract_context(&Some(context));
+
+        assert_eq!(extracted_root, Some(Uuid::from_bytes(root_id)));
+        assert_eq!(extracted_edge_type, Some(Uuid::from_bytes(edge_type_id)));
+    }
+
+    #[test]
+    fn test_extract_context_empty_edges() {
+        let root_id: [u8; 16] = [1; 16];
+
+        let context = Context {
+            root_id,
+            edges: vec![],
+        };
+
+        let (extracted_root, extracted_edge_type) = extract_context(&Some(context));
+
+        assert_eq!(extracted_root, Some(Uuid::from_bytes(root_id)));
+        assert!(extracted_edge_type.is_none());
+    }
+
+    #[test]
+    fn test_extract_context_multiple_edges_uses_first() {
+        let root_id: [u8; 16] = [1; 16];
+        let first_edge_type: [u8; 16] = [2; 16];
+        let second_edge_type: [u8; 16] = [3; 16];
+
+        let context = Context {
+            root_id,
+            edges: vec![
+                ContextEdge {
+                    type_id: first_edge_type,
+                    to_entity_id: [4; 16],
+                },
+                ContextEdge {
+                    type_id: second_edge_type,
+                    to_entity_id: [5; 16],
+                },
+            ],
+        };
+
+        let (_, extracted_edge_type) = extract_context(&Some(context));
+
+        // Should use first edge's type_id
+        assert_eq!(extracted_edge_type, Some(Uuid::from_bytes(first_edge_type)));
     }
 }

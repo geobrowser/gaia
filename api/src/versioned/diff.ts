@@ -12,10 +12,12 @@ import type {
 	VersionedRelation,
 	BlockSnapshot,
 	EntitySnapshot,
+	GroupedEntitySnapshot,
 	ValueChange,
 	RelationChange,
 	BlockChange,
 	EntityDiff,
+	GroupedEntityDiff,
 } from "./types";
 
 // ============================================================================
@@ -479,5 +481,61 @@ export function diffEntitySnapshots(
 		values: diffValues(from.values, to.values),
 		relations: diffRelations(from.relations, to.relations),
 		blocks: diffBlocks(from.blocks, to.blocks),
+	};
+}
+
+/**
+ * Get the name from a grouped entity snapshot.
+ */
+function getGroupedEntityName(snapshot: GroupedEntitySnapshot): string | null {
+	const nameValue = snapshot.values.find(
+		(v) => v.propertyId === SystemIds.NAME_PROPERTY
+	);
+	return nameValue?.text ?? null;
+}
+
+/**
+ * Compute a grouped entity diff between two snapshots.
+ *
+ * Returns hybrid mode response with:
+ * - Static `blocks` array for BLOCKS relation type changes
+ * - Dynamic `groups` map for other relation type changes
+ * - `groupKeys` for discoverability (union of keys from both snapshots)
+ */
+export function diffGroupedEntitySnapshots(
+	entityId: string,
+	from: GroupedEntitySnapshot,
+	to: GroupedEntitySnapshot
+): GroupedEntityDiff {
+	// Compute block diffs (static key)
+	const blocks = diffBlocks(from.blocks, to.blocks);
+
+	// Compute dynamic group diffs
+	// Collect all group keys from both snapshots
+	const allGroupKeys = new Set([...from.groupKeys, ...to.groupKeys]);
+	const groups: Record<string, BlockChange[]> = {};
+
+	for (const key of allGroupKeys) {
+		const fromGroup = from.groups[key] ?? [];
+		const toGroup = to.groups[key] ?? [];
+		const groupDiff = diffBlocks(fromGroup, toGroup);
+
+		// Only include non-empty diffs
+		if (groupDiff.length > 0) {
+			groups[key] = groupDiff;
+		}
+	}
+
+	// groupKeys includes all keys that have changes
+	const groupKeys = Object.keys(groups).sort();
+
+	return {
+		entityId,
+		name: getGroupedEntityName(to) ?? getGroupedEntityName(from),
+		values: diffValues(from.values, to.values),
+		relations: diffRelations(from.relations, to.relations),
+		blocks,
+		groupKeys,
+		groups,
 	};
 }
