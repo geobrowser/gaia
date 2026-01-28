@@ -17,9 +17,9 @@ type AppEnv = {
 	}
 }
 import {isValidUuid} from "../utils/uuid"
-import {resolveVersionKey, getEntitySnapshotAtVersion, getEntityVersions, QueryError} from "./queries"
-import {diffEntitySnapshots} from "./diff"
-import type {EntityDiff, EntitySnapshot, VersionEntry} from "./types"
+import {resolveVersionKey, getEntitySnapshotAtVersion, getGroupedEntitySnapshotAtVersion, getEntityVersions, QueryError} from "./queries"
+import {diffEntitySnapshots, diffGroupedEntitySnapshots} from "./diff"
+import type {EntityDiff, EntitySnapshot, GroupedEntityDiff, VersionEntry} from "./types"
 
 type Database = NodePgDatabase<Record<string, unknown>>
 
@@ -247,14 +247,14 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 				return yield* Effect.fail(new NotFoundError({message: `Edit '${toEditId}' not found`}))
 			}
 
-			// Get snapshots at both versions
+			// Get grouped snapshots at both versions
 			const [fromSnapshot, toSnapshot] = yield* Effect.all([
-				getEntitySnapshotAtVersion(db, entityId, fromVersionKey, spaceId),
-				getEntitySnapshotAtVersion(db, entityId, toVersionKey, spaceId),
+				getGroupedEntitySnapshotAtVersion(db, entityId, fromVersionKey, spaceId),
+				getGroupedEntitySnapshotAtVersion(db, entityId, toVersionKey, spaceId),
 			])
 
-			// Compute diff
-			const diff = yield* diffEntitySnapshots(entityId, fromSnapshot, toSnapshot)
+			// Compute grouped diff
+			const diff = yield* diffGroupedEntitySnapshots(entityId, fromSnapshot, toSnapshot)
 
 			return diff
 		}).pipe(
@@ -281,7 +281,11 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 						return c.json({error: "Internal server error", message: "An unexpected error occurred"}, 500)
 				}
 			},
-			onRight: (diff: EntityDiff) => c.json(diff),
+			onRight: (diff: GroupedEntityDiff) => {
+				// Spread dynamic groups at root level per spec
+				const {groups, ...rest} = diff
+				return c.json({...rest, ...groups})
+			},
 		})
 	})
 
