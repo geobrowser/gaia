@@ -67,3 +67,9 @@ impl IndexingError {
         Self::ConfigError(msg.into())
     }
 }
+
+impl From<hermes_instrumentation::Error> for IndexingError {
+    fn from(err: hermes_instrumentation::Error) -> Self {
+        Self::ConfigError(err.to_string())
+    }
+}

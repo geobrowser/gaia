@@ -6,7 +6,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
-use tracing::{debug, error, instrument, warn};
+use hermes_instrumentation::{debug, error, instrument, warn};
 
 use crate::consumer::StreamMessage;
 use crate::consumer::{EntityEvent, EntityEventType, ScoreEvent, ScoreEventType};
@@ -277,6 +277,7 @@ impl Processor {
     }
 
     /// Handle a batch of entity events.
+    #[instrument(skip(self, batch, loader_tx, ack_tx, metrics), fields(event_count = batch.event_count))]
     async fn handle_entity_batch(
         &self,
         batch: EntityProcessingBatch,
@@ -344,6 +345,7 @@ impl Processor {
     }
 
     /// Handle a batch of score events.
+    #[instrument(skip(self, batch, loader_tx, ack_tx, metrics), fields(event_count = batch.event_count))]
     async fn handle_score_batch(
         &self,
         batch: ScoreProcessingBatch,

@@ -11,7 +11,7 @@ use rdkafka::{
 use std::env;
 use std::time::Duration;
 use tokio::sync::mpsc;
-use tracing::{debug, error, info, instrument, warn};
+use hermes_instrumentation::{debug, error, info, info_span, instrument, warn, Instrument};
 use uuid::Uuid;
 
 use crate::consumer::messages::{ScoreEvent, StreamMessage};
@@ -260,19 +260,32 @@ impl ScoresConsumer {
 
         if !all_events.is_empty() {
             let event_count = all_events.len();
-            info!(
+            let first_offset = offsets.first().map(|(_, _, o)| *o).unwrap_or(0);
+            let last_offset = offsets.last().map(|(_, _, o)| *o).unwrap_or(0);
+
+            async {
+                info!(
+                    event_count = event_count,
+                    message_count = batch.len(),
+                    "Sending batch of score events to processor"
+                );
+                processor_tx
+                    .send(ScoreProcessingBatch {
+                        events: all_events,
+                        offsets: offsets.to_vec(),
+                        event_count,
+                    })
+                    .await
+                    .map_err(|e| IngestError::ChannelError(e.to_string()))
+            }
+            .instrument(info_span!(
+                "search_indexer.consume_scores_batch",
+                batch_size = batch.len(),
                 event_count = event_count,
-                message_count = batch.len(),
-                "Sending batch of score events to processor"
-            );
-            processor_tx
-                .send(ScoreProcessingBatch {
-                    events: all_events,
-                    offsets: offsets.to_vec(),
-                    event_count,
-                })
-                .await
-                .map_err(|e| IngestError::ChannelError(e.to_string()))?;
+                offset_start = first_offset,
+                offset_end = last_offset
+            ))
+            .await?;
         }
 
         Ok(())
