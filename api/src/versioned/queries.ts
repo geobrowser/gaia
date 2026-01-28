@@ -403,19 +403,21 @@ function batchGetBlockSnapshotsAtVersion(
 	return Effect.tryPromise({
 		try: async () => {
 			const versionKeyStr = versionKey.toString();
+			// Cast to PostgreSQL array type for ANY() operator
+			const blockIdsArray = `{${blockIds.join(",")}}`;
 
 			// Query 1: All values for all blocks
 			const valuesResult = spaceId
 				? await db.execute<Record<string, unknown>>(sql`
 						SELECT * FROM value_versions
-						WHERE entity_id = ANY(${blockIds})
+						WHERE entity_id = ANY(${blockIdsArray}::uuid[])
 							AND valid_from_key <= ${versionKeyStr}::bigint
 							AND (valid_to_key IS NULL OR valid_to_key > ${versionKeyStr}::bigint)
 							AND space_id = ${spaceId}
 					`)
 				: await db.execute<Record<string, unknown>>(sql`
 						SELECT * FROM value_versions
-						WHERE entity_id = ANY(${blockIds})
+						WHERE entity_id = ANY(${blockIdsArray}::uuid[])
 							AND valid_from_key <= ${versionKeyStr}::bigint
 							AND (valid_to_key IS NULL OR valid_to_key > ${versionKeyStr}::bigint)
 					`);
@@ -424,7 +426,7 @@ function batchGetBlockSnapshotsAtVersion(
 			const relationsResult = spaceId
 				? await db.execute<Record<string, unknown>>(sql`
 						SELECT * FROM relation_versions
-						WHERE from_entity_id = ANY(${blockIds})
+						WHERE from_entity_id = ANY(${blockIdsArray}::uuid[])
 							AND type_id != ${BLOCKS_TYPE_ID}
 							AND valid_from_key <= ${versionKeyStr}::bigint
 							AND (valid_to_key IS NULL OR valid_to_key > ${versionKeyStr}::bigint)
@@ -432,7 +434,7 @@ function batchGetBlockSnapshotsAtVersion(
 					`)
 				: await db.execute<Record<string, unknown>>(sql`
 						SELECT * FROM relation_versions
-						WHERE from_entity_id = ANY(${blockIds})
+						WHERE from_entity_id = ANY(${blockIdsArray}::uuid[])
 							AND type_id != ${BLOCKS_TYPE_ID}
 							AND valid_from_key <= ${versionKeyStr}::bigint
 							AND (valid_to_key IS NULL OR valid_to_key > ${versionKeyStr}::bigint)

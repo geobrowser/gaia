@@ -89,7 +89,7 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 		}).pipe(
 			Effect.tapError((error) => {
 				if (error._tag === "QueryError") {
-					return Effect.logError("Database error", {operation: error.operation, cause: String(error.cause)})
+					return Effect.logError(`Database error: operation=${error.operation}, cause=${String(error.cause)}`)
 				}
 				return Effect.void
 			}),
@@ -164,7 +164,7 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 		}).pipe(
 			Effect.tapError((error) => {
 				if (error._tag === "QueryError") {
-					return Effect.logError("Database error", {operation: error.operation, cause: String(error.cause)})
+					return Effect.logError(`Database error: operation=${error.operation}, cause=${String(error.cause)}`)
 				}
 				return Effect.void
 			}),
@@ -260,7 +260,7 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 		}).pipe(
 			Effect.tapError((error) => {
 				if (error._tag === "QueryError") {
-					return Effect.logError("Database error", {operation: error.operation, cause: String(error.cause)})
+					return Effect.logError(`Database error: operation=${error.operation}, cause=${String(error.cause)}`)
 				}
 				return Effect.void
 			}),
