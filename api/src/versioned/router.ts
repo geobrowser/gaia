@@ -32,11 +32,7 @@ class NotFoundError extends Data.TaggedError("NotFoundError")<{
 	message: string
 }> {}
 
-class InternalError extends Data.TaggedError("InternalError")<{
-	message: string
-}> {}
-
-type VersionedError = ValidationError | NotFoundError | InternalError | QueryError
+type VersionedError = ValidationError | NotFoundError | QueryError
 
 /**
  * Create the versioned entities router.
@@ -95,9 +91,6 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 				if (error._tag === "QueryError") {
 					return Effect.logError("Database error", {operation: error.operation, cause: String(error.cause)})
 				}
-				if (error._tag === "InternalError") {
-					return Effect.logError("Internal error", {error: error.message})
-				}
 				return Effect.void
 			}),
 			Effect.withSpan("GET /versioned/entities/:id"),
@@ -113,7 +106,6 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 						return c.json({error: "Invalid parameter", message: error.message}, 400)
 					case "NotFoundError":
 						return c.json({error: "Not found", message: error.message}, 404)
-					case "InternalError":
 					case "QueryError":
 						return c.json({error: "Internal server error", message: "An unexpected error occurred"}, 500)
 				}
@@ -174,9 +166,6 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 				if (error._tag === "QueryError") {
 					return Effect.logError("Database error", {operation: error.operation, cause: String(error.cause)})
 				}
-				if (error._tag === "InternalError") {
-					return Effect.logError("Internal error", {error: error.message})
-				}
 				return Effect.void
 			}),
 			Effect.withSpan("GET /versioned/entities/:id/versions"),
@@ -192,7 +181,6 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 						return c.json({error: "Invalid parameter", message: error.message}, 400)
 					case "NotFoundError":
 						return c.json({error: "Not found", message: error.message}, 404)
-					case "InternalError":
 					case "QueryError":
 						return c.json({error: "Internal server error", message: "An unexpected error occurred"}, 500)
 				}
@@ -274,9 +262,6 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 				if (error._tag === "QueryError") {
 					return Effect.logError("Database error", {operation: error.operation, cause: String(error.cause)})
 				}
-				if (error._tag === "InternalError") {
-					return Effect.logError("Internal error", {error: error.message})
-				}
 				return Effect.void
 			}),
 			Effect.withSpan("GET /versioned/entities/:id/diff"),
@@ -292,7 +277,6 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 						return c.json({error: "Invalid parameter", message: error.message}, 400)
 					case "NotFoundError":
 						return c.json({error: "Not found", message: error.message}, 404)
-					case "InternalError":
 					case "QueryError":
 						return c.json({error: "Internal server error", message: "An unexpected error occurred"}, 500)
 				}
