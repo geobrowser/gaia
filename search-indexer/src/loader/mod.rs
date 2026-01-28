@@ -6,7 +6,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
-use tracing::{debug, error, instrument, warn};
+use hermes_instrumentation::{debug, error, info_span, instrument, warn, Instrument};
 
 use crate::consumer::StreamMessage;
 use crate::errors::IngestError;
@@ -164,7 +164,16 @@ impl SearchLoader {
 
         debug!(count = count, "Processing operations in order");
 
-        match self.provider.bulk_operations(&operations).await {
+        let result = async {
+            self.provider.bulk_operations(&operations).await
+        }
+        .instrument(info_span!(
+            "search_indexer.bulk_operations",
+            operation_count = count
+        ))
+        .await;
+
+        match result {
             Ok(summary) => {
                 if summary.failed > 0 {
                     warn!(
