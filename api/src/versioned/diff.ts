@@ -3,6 +3,7 @@
  * Uses the `diff` package for word-level text diffs.
  */
 
+import { Effect } from "effect";
 import { diffWords } from "diff";
 import { SystemIds } from "@graphprotocol/grc-20";
 
@@ -92,8 +93,8 @@ function getValueType(
 /**
  * Compute text diff using diffWords.
  */
-function computeTextDiff(from: string, to: string): DiffChunk[] {
-	const changes = diffWords(from, to);
+function computeTextDiff(before: string, after: string): DiffChunk[] {
+	const changes = diffWords(before, after);
 	return changes.map((change) => ({
 		value: change.value,
 		...(change.added ? { added: true } : {}),
@@ -107,94 +108,103 @@ function computeTextDiff(from: string, to: string): DiffChunk[] {
 export function diffValues(
 	fromValues: VersionedValue[],
 	toValues: VersionedValue[]
-): ValueChange[] {
-	const fromMap = new Map(fromValues.map((v) => [valueKey(v), v]));
-	const toMap = new Map(toValues.map((v) => [valueKey(v), v]));
-	const changes: ValueChange[] = [];
+): Effect.Effect<ValueChange[], never, never> {
+	return Effect.sync(() => {
+		const fromMap = new Map(fromValues.map((v) => [valueKey(v), v]));
+		const toMap = new Map(toValues.map((v) => [valueKey(v), v]));
+		const changes: ValueChange[] = [];
 
-	// Find added and changed values
-	for (const [key, toValue] of toMap) {
-		const fromValue = fromMap.get(key);
+		// Find added and changed values
+		for (const [key, toValue] of toMap) {
+			const fromValue = fromMap.get(key);
 
-		if (!fromValue) {
-			// Added value
-			if (isTextValue(toValue)) {
-				const afterText = getTextValue(toValue);
-				changes.push({
-					propertyId: toValue.propertyId,
-					spaceId: toValue.spaceId,
-					type: "TEXT",
-					before: null,
-					after: afterText,
-					diff: computeTextDiff("", afterText),
-				});
-			} else {
-				changes.push({
-					propertyId: toValue.propertyId,
-					spaceId: toValue.spaceId,
-					type: getValueType(toValue) as Exclude<ReturnType<typeof getValueType>, "TEXT">,
-					before: null,
-					after: serializeValue(toValue),
-				});
-			}
-		} else {
-			// Check if changed
-			const fromStr = isTextValue(fromValue)
-				? getTextValue(fromValue)
-				: serializeValue(fromValue);
-			const toStr = isTextValue(toValue)
-				? getTextValue(toValue)
-				: serializeValue(toValue);
-
-			if (fromStr !== toStr) {
-				if (isTextValue(toValue) || isTextValue(fromValue)) {
+			if (!fromValue) {
+				// Added value
+				if (isTextValue(toValue)) {
+					const afterText = getTextValue(toValue);
 					changes.push({
 						propertyId: toValue.propertyId,
 						spaceId: toValue.spaceId,
 						type: "TEXT",
-						before: fromStr,
-						after: toStr,
-						diff: computeTextDiff(fromStr ?? "", toStr ?? ""),
+						before: null,
+						after: afterText,
+						diff: computeTextDiff("", afterText),
 					});
 				} else {
 					changes.push({
 						propertyId: toValue.propertyId,
 						spaceId: toValue.spaceId,
 						type: getValueType(toValue) as Exclude<ReturnType<typeof getValueType>, "TEXT">,
-						before: fromStr,
-						after: toStr,
+						before: null,
+						after: serializeValue(toValue),
+					});
+				}
+			} else {
+				// Check if changed
+				const fromStr = isTextValue(fromValue)
+					? getTextValue(fromValue)
+					: serializeValue(fromValue);
+				const toStr = isTextValue(toValue)
+					? getTextValue(toValue)
+					: serializeValue(toValue);
+
+				if (fromStr !== toStr) {
+					if (isTextValue(toValue) || isTextValue(fromValue)) {
+						changes.push({
+							propertyId: toValue.propertyId,
+							spaceId: toValue.spaceId,
+							type: "TEXT",
+							before: fromStr,
+							after: toStr,
+							diff: computeTextDiff(fromStr ?? "", toStr ?? ""),
+						});
+					} else {
+						changes.push({
+							propertyId: toValue.propertyId,
+							spaceId: toValue.spaceId,
+							type: getValueType(toValue) as Exclude<ReturnType<typeof getValueType>, "TEXT">,
+							before: fromStr,
+							after: toStr,
+						});
+					}
+				}
+			}
+		}
+
+		// Find removed values
+		for (const [key, fromValue] of fromMap) {
+			if (!toMap.has(key)) {
+				if (isTextValue(fromValue)) {
+					const beforeText = getTextValue(fromValue);
+					changes.push({
+						propertyId: fromValue.propertyId,
+						spaceId: fromValue.spaceId,
+						type: "TEXT",
+						before: beforeText,
+						after: null,
+						diff: computeTextDiff(beforeText, ""),
+					});
+				} else {
+					changes.push({
+						propertyId: fromValue.propertyId,
+						spaceId: fromValue.spaceId,
+						type: getValueType(fromValue) as Exclude<ReturnType<typeof getValueType>, "TEXT">,
+						before: serializeValue(fromValue),
+						after: null,
 					});
 				}
 			}
 		}
-	}
 
-	// Find removed values
-	for (const [key, fromValue] of fromMap) {
-		if (!toMap.has(key)) {
-			if (isTextValue(fromValue)) {
-				const beforeText = getTextValue(fromValue);
-				changes.push({
-					propertyId: fromValue.propertyId,
-					spaceId: fromValue.spaceId,
-					type: "TEXT",
-					before: beforeText,
-					after: null,
-					diff: computeTextDiff(beforeText, ""),
-				});
-			} else {
-				changes.push({
-					propertyId: fromValue.propertyId,
-					spaceId: fromValue.spaceId,
-					type: getValueType(fromValue) as Exclude<ReturnType<typeof getValueType>, "TEXT">,
-					before: serializeValue(fromValue),
-					after: null,
-				});
-			}
-		}
-	}
-
-	return changes;
+		return changes;
+	}).pipe(
+		Effect.withSpan("diff.diffValues", {
+			attributes: {
+				"diff.from_count": fromValues.length,
+				"diff.to_count": toValues.length,
+			},
+		})
+	);
 }
 
 // ============================================================================
@@ -207,76 +217,85 @@ export function diffValues(
 export function diffRelations(
 	fromRelations: VersionedRelation[],
 	toRelations: VersionedRelation[]
-): RelationChange[] {
-	const fromMap = new Map(fromRelations.map((r) => [r.relationId, r]));
-	const toMap = new Map(toRelations.map((r) => [r.relationId, r]));
-	const changes: RelationChange[] = [];
+): Effect.Effect<RelationChange[], never, never> {
+	return Effect.sync(() => {
+		const fromMap = new Map(fromRelations.map((r) => [r.relationId, r]));
+		const toMap = new Map(toRelations.map((r) => [r.relationId, r]));
+		const changes: RelationChange[] = [];
 
-	// Find added and changed relations
-	for (const [id, toRel] of toMap) {
-		const fromRel = fromMap.get(id);
+		// Find added and changed relations
+		for (const [id, toRel] of toMap) {
+			const fromRel = fromMap.get(id);
 
-		if (!fromRel) {
-			// Added
-			changes.push({
-				relationId: id,
-				typeId: toRel.typeId,
-				spaceId: toRel.spaceId,
-				changeType: "ADD",
-				before: null,
-				after: {
-					toEntityId: toRel.toEntityId,
-					toSpaceId: toRel.toSpaceId,
-					position: toRel.position,
-				},
-			});
-		} else {
-			// Check if changed
-			const hasChanged =
-				fromRel.toEntityId !== toRel.toEntityId ||
-				fromRel.toSpaceId !== toRel.toSpaceId ||
-				fromRel.position !== toRel.position;
-
-			if (hasChanged) {
+			if (!fromRel) {
+				// Added
 				changes.push({
 					relationId: id,
 					typeId: toRel.typeId,
 					spaceId: toRel.spaceId,
-					changeType: "UPDATE",
-					before: {
-						toEntityId: fromRel.toEntityId,
-						toSpaceId: fromRel.toSpaceId,
-						position: fromRel.position,
-					},
+					changeType: "ADD",
+					before: null,
 					after: {
 						toEntityId: toRel.toEntityId,
 						toSpaceId: toRel.toSpaceId,
 						position: toRel.position,
 					},
 				});
+			} else {
+				// Check if changed
+				const hasChanged =
+					fromRel.toEntityId !== toRel.toEntityId ||
+					fromRel.toSpaceId !== toRel.toSpaceId ||
+					fromRel.position !== toRel.position;
+
+				if (hasChanged) {
+					changes.push({
+						relationId: id,
+						typeId: toRel.typeId,
+						spaceId: toRel.spaceId,
+						changeType: "UPDATE",
+						before: {
+							toEntityId: fromRel.toEntityId,
+							toSpaceId: fromRel.toSpaceId,
+							position: fromRel.position,
+						},
+						after: {
+							toEntityId: toRel.toEntityId,
+							toSpaceId: toRel.toSpaceId,
+							position: toRel.position,
+						},
+					});
+				}
 			}
 		}
-	}
 
-	// Find removed relations
-	for (const [id, fromRel] of fromMap) {
-		if (!toMap.has(id)) {
-			changes.push({
-				relationId: id,
-				typeId: fromRel.typeId,
-				spaceId: fromRel.spaceId,
-				changeType: "REMOVE",
-				before: {
-					toEntityId: fromRel.toEntityId,
-					toSpaceId: fromRel.toSpaceId,
-					position: fromRel.position,
-				},
-				after: null,
-			});
+		// Find removed relations
+		for (const [id, fromRel] of fromMap) {
+			if (!toMap.has(id)) {
+				changes.push({
+					relationId: id,
+					typeId: fromRel.typeId,
+					spaceId: fromRel.spaceId,
+					changeType: "REMOVE",
+					before: {
+						toEntityId: fromRel.toEntityId,
+						toSpaceId: fromRel.toSpaceId,
+						position: fromRel.position,
+					},
+					after: null,
+				});
+			}
 		}
-	}
 
-	return changes;
+		return changes;
+	}).pipe(
+		Effect.withSpan("diff.diffRelations", {
+			attributes: {
+				"diff.from_count": fromRelations.length,
+				"diff.to_count": toRelations.length,
+			},
+		})
+	);
 }
 
 // ============================================================================
@@ -340,135 +359,144 @@ function getBlockName(block: BlockSnapshot): string | null {
 export function diffBlocks(
 	fromBlocks: BlockSnapshot[],
 	toBlocks: BlockSnapshot[]
-): BlockChange[] {
-	const fromMap = new Map(fromBlocks.map((b) => [b.id, b]));
-	const toMap = new Map(toBlocks.map((b) => [b.id, b]));
-	const changes: BlockChange[] = [];
+): Effect.Effect<BlockChange[], never, never> {
+	return Effect.sync(() => {
+		const fromMap = new Map(fromBlocks.map((b) => [b.id, b]));
+		const toMap = new Map(toBlocks.map((b) => [b.id, b]));
+		const changes: BlockChange[] = [];
 
-	// Find added and changed blocks
-	for (const [id, toBlock] of toMap) {
-		const fromBlock = fromMap.get(id);
-		const blockType = getBlockType(toBlock) ?? getBlockType(fromBlock ?? toBlock);
+		// Find added and changed blocks
+		for (const [id, toBlock] of toMap) {
+			const fromBlock = fromMap.get(id);
+			const blockType = getBlockType(toBlock) ?? getBlockType(fromBlock ?? toBlock);
 
-		if (!blockType) continue; // Unknown block type
+			if (!blockType) continue; // Unknown block type
 
-		if (!fromBlock) {
-			// Added block
-			switch (blockType) {
-				case "textBlock": {
-					const afterContent = getMarkdownContent(toBlock);
-					changes.push({
-						id,
-						type: "textBlock",
-						before: null,
-						after: afterContent,
-						diff: computeTextDiff("", afterContent),
-					});
-					break;
-				}
-				case "imageBlock":
-					changes.push({
-						id,
-						type: "imageBlock",
-						before: null,
-						after: getImageUrl(toBlock),
-					});
-					break;
-				case "dataBlock":
-					changes.push({
-						id,
-						type: "dataBlock",
-						before: null,
-						after: getBlockName(toBlock),
-					});
-					break;
-			}
-		} else {
-			// Check if changed
-			switch (blockType) {
-				case "textBlock": {
-					const fromContent = getMarkdownContent(fromBlock);
-					const toContent = getMarkdownContent(toBlock);
-					if (fromContent !== toContent) {
+			if (!fromBlock) {
+				// Added block
+				switch (blockType) {
+					case "textBlock": {
+						const afterContent = getMarkdownContent(toBlock);
 						changes.push({
 							id,
 							type: "textBlock",
-							before: fromContent,
-							after: toContent,
-							diff: computeTextDiff(fromContent, toContent),
+							before: null,
+							after: afterContent,
+							diff: computeTextDiff("", afterContent),
 						});
+						break;
 					}
-					break;
-				}
-				case "imageBlock": {
-					const fromUrl = getImageUrl(fromBlock);
-					const toUrl = getImageUrl(toBlock);
-					if (fromUrl !== toUrl) {
+					case "imageBlock":
 						changes.push({
 							id,
 							type: "imageBlock",
-							before: fromUrl,
-							after: toUrl,
+							before: null,
+							after: getImageUrl(toBlock),
 						});
-					}
-					break;
-				}
-				case "dataBlock": {
-					const fromName = getBlockName(fromBlock);
-					const toName = getBlockName(toBlock);
-					if (fromName !== toName) {
+						break;
+					case "dataBlock":
 						changes.push({
 							id,
 							type: "dataBlock",
-							before: fromName,
-							after: toName,
+							before: null,
+							after: getBlockName(toBlock),
 						});
+						break;
+				}
+			} else {
+				// Check if changed
+				switch (blockType) {
+					case "textBlock": {
+						const fromContent = getMarkdownContent(fromBlock);
+						const toContent = getMarkdownContent(toBlock);
+						if (fromContent !== toContent) {
+							changes.push({
+								id,
+								type: "textBlock",
+								before: fromContent,
+								after: toContent,
+								diff: computeTextDiff(fromContent, toContent),
+							});
+						}
+						break;
 					}
-					break;
+					case "imageBlock": {
+						const fromUrl = getImageUrl(fromBlock);
+						const toUrl = getImageUrl(toBlock);
+						if (fromUrl !== toUrl) {
+							changes.push({
+								id,
+								type: "imageBlock",
+								before: fromUrl,
+								after: toUrl,
+							});
+						}
+						break;
+					}
+					case "dataBlock": {
+						const fromName = getBlockName(fromBlock);
+						const toName = getBlockName(toBlock);
+						if (fromName !== toName) {
+							changes.push({
+								id,
+								type: "dataBlock",
+								before: fromName,
+								after: toName,
+							});
+						}
+						break;
+					}
 				}
 			}
 		}
-	}
 
-	// Find removed blocks
-	for (const [id, fromBlock] of fromMap) {
-		if (!toMap.has(id)) {
-			const blockType = getBlockType(fromBlock);
-			if (!blockType) continue;
+		// Find removed blocks
+		for (const [id, fromBlock] of fromMap) {
+			if (!toMap.has(id)) {
+				const blockType = getBlockType(fromBlock);
+				if (!blockType) continue;
 
-			switch (blockType) {
-				case "textBlock": {
-					const beforeContent = getMarkdownContent(fromBlock);
-					changes.push({
-						id,
-						type: "textBlock",
-						before: beforeContent,
-						after: null,
-						diff: computeTextDiff(beforeContent, ""),
-					});
-					break;
+				switch (blockType) {
+					case "textBlock": {
+						const beforeContent = getMarkdownContent(fromBlock);
+						changes.push({
+							id,
+							type: "textBlock",
+							before: beforeContent,
+							after: null,
+							diff: computeTextDiff(beforeContent, ""),
+						});
+						break;
+					}
+					case "imageBlock":
+						changes.push({
+							id,
+							type: "imageBlock",
+							before: getImageUrl(fromBlock),
+							after: null,
+						});
+						break;
+					case "dataBlock":
+						changes.push({
+							id,
+							type: "dataBlock",
+							before: getBlockName(fromBlock),
+							after: null,
+						});
+						break;
 				}
-				case "imageBlock":
-					changes.push({
-						id,
-						type: "imageBlock",
-						before: getImageUrl(fromBlock),
-						after: null,
-					});
-					break;
-				case "dataBlock":
-					changes.push({
-						id,
-						type: "dataBlock",
-						before: getBlockName(fromBlock),
-						after: null,
-					});
-					break;
 			}
 		}
-	}
 
-	return changes;
+		return changes;
+	}).pipe(
+		Effect.withSpan("diff.diffBlocks", {
+			attributes: {
+				"diff.from_count": fromBlocks.length,
+				"diff.to_count": toBlocks.length,
+			},
+		})
+	);
 }
 
 // ============================================================================
@@ -478,7 +506,7 @@ export function diffBlocks(
 /**
  * Extract entity name from values.
  */
-function getEntityName(snapshot: EntitySnapshot): string | null {
+function getEntityName(snapshot: EntitySnapshot | GroupedEntitySnapshot): string | null {
 	const nameValue = snapshot.values.find(
 		(v) => v.propertyId === SystemIds.NAME_PROPERTY
 	);
@@ -492,24 +520,26 @@ export function diffEntitySnapshots(
 	entityId: string,
 	from: EntitySnapshot,
 	to: EntitySnapshot
-): EntityDiff {
-	return {
-		entityId,
-		name: getEntityName(to) ?? getEntityName(from),
-		values: diffValues(from.values, to.values),
-		relations: diffRelations(from.relations, to.relations),
-		blocks: diffBlocks(from.blocks, to.blocks),
-	};
-}
+): Effect.Effect<EntityDiff, never, never> {
+	return Effect.gen(function* () {
+		const [values, relations, blocks] = yield* Effect.all([
+			diffValues(from.values, to.values),
+			diffRelations(from.relations, to.relations),
+			diffBlocks(from.blocks, to.blocks),
+		]);
 
-/**
- * Get the name from a grouped entity snapshot.
- */
-function getGroupedEntityName(snapshot: GroupedEntitySnapshot): string | null {
-	const nameValue = snapshot.values.find(
-		(v) => v.propertyId === SystemIds.NAME_PROPERTY
+		return {
+			entityId,
+			name: getEntityName(to) ?? getEntityName(from),
+			values,
+			relations,
+			blocks,
+		};
+	}).pipe(
+		Effect.withSpan("diff.diffEntitySnapshots", {
+			attributes: { "diff.entity_id": entityId },
+		})
 	);
-	return nameValue?.text ?? null;
 }
 
 /**
@@ -524,36 +554,49 @@ export function diffGroupedEntitySnapshots(
 	entityId: string,
 	from: GroupedEntitySnapshot,
 	to: GroupedEntitySnapshot
-): GroupedEntityDiff {
-	// Compute block diffs (static key)
-	const blocks = diffBlocks(from.blocks, to.blocks);
+): Effect.Effect<GroupedEntityDiff, never, never> {
+	return Effect.gen(function* () {
+		// Compute base diffs
+		const [values, relations, blocks] = yield* Effect.all([
+			diffValues(from.values, to.values),
+			diffRelations(from.relations, to.relations),
+			diffBlocks(from.blocks, to.blocks),
+		]);
 
-	// Compute dynamic group diffs
-	// Collect all group keys from both snapshots
-	const allGroupKeys = new Set([...from.groupKeys, ...to.groupKeys]);
-	const groups: Record<string, BlockChange[]> = {};
+		// Compute dynamic group diffs
+		// Collect all group keys from both snapshots
+		const allGroupKeys = new Set([...from.groupKeys, ...to.groupKeys]);
+		const groups: Record<string, BlockChange[]> = {};
 
-	for (const key of allGroupKeys) {
-		const fromGroup = from.groups[key] ?? [];
-		const toGroup = to.groups[key] ?? [];
-		const groupDiff = diffBlocks(fromGroup, toGroup);
+		for (const key of allGroupKeys) {
+			const fromGroup = from.groups[key] ?? [];
+			const toGroup = to.groups[key] ?? [];
+			const groupDiff = yield* diffBlocks(fromGroup, toGroup);
 
-		// Only include non-empty diffs
-		if (groupDiff.length > 0) {
-			groups[key] = groupDiff;
+			// Only include non-empty diffs
+			if (groupDiff.length > 0) {
+				groups[key] = groupDiff;
+			}
 		}
-	}
 
-	// groupKeys includes all keys that have changes
-	const groupKeys = Object.keys(groups).sort();
+		// groupKeys includes all keys that have changes
+		const groupKeys = Object.keys(groups).sort();
 
-	return {
-		entityId,
-		name: getGroupedEntityName(to) ?? getGroupedEntityName(from),
-		values: diffValues(from.values, to.values),
-		relations: diffRelations(from.relations, to.relations),
-		blocks,
-		groupKeys,
-		groups,
-	};
+		return {
+			entityId,
+			name: getEntityName(to) ?? getEntityName(from),
+			values,
+			relations,
+			blocks,
+			groupKeys,
+			groups,
+		};
+	}).pipe(
+		Effect.withSpan("diff.diffGroupedEntitySnapshots", {
+			attributes: {
+				"diff.entity_id": entityId,
+				"diff.group_count": from.groupKeys.length + to.groupKeys.length,
+			},
+		})
+	);
 }

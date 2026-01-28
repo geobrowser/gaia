@@ -1,3 +1,4 @@
+import { Effect } from "effect";
 import { describe, expect, it } from "vitest";
 import {
 	diffValues,
@@ -20,6 +21,10 @@ import { SystemIds } from "@graphprotocol/grc-20";
 // =============================================================================
 // Test Helpers
 // =============================================================================
+
+/** Run an Effect synchronously for testing */
+const run = <A>(effect: Effect.Effect<A, never, never>): A =>
+	Effect.runSync(effect);
 
 function makeTextValue(
 	propertyId: string,
@@ -103,13 +108,13 @@ function makeDataBlock(id: string, name: string | null): BlockSnapshot {
 
 describe("diffValues", () => {
 	it("returns empty array when both inputs are empty", () => {
-		const result = diffValues([], []);
+		const result = run(diffValues([], []));
 		expect(result).toEqual([]);
 	});
 
 	it("returns empty array when values are identical", () => {
 		const values = [makeTextValue("prop-1", "hello")];
-		const result = diffValues(values, values);
+		const result = run(diffValues(values, values));
 		expect(result).toEqual([]);
 	});
 
@@ -117,7 +122,7 @@ describe("diffValues", () => {
 		const from: VersionedValue[] = [];
 		const to = [makeTextValue("prop-1", "new text")];
 
-		const result = diffValues(from, to);
+		const result = run(diffValues(from, to));
 
 		expect(result).toHaveLength(1);
 		const change = result[0] as TextValueChange;
@@ -132,7 +137,7 @@ describe("diffValues", () => {
 		const from = [makeTextValue("prop-1", "old text")];
 		const to: VersionedValue[] = [];
 
-		const result = diffValues(from, to);
+		const result = run(diffValues(from, to));
 
 		expect(result).toHaveLength(1);
 		const change = result[0] as TextValueChange;
@@ -147,7 +152,7 @@ describe("diffValues", () => {
 		const from = [makeTextValue("prop-1", "hello world")];
 		const to = [makeTextValue("prop-1", "hello universe")];
 
-		const result = diffValues(from, to);
+		const result = run(diffValues(from, to));
 
 		expect(result).toHaveLength(1);
 		const change = result[0] as TextValueChange;
@@ -162,7 +167,7 @@ describe("diffValues", () => {
 		const from: VersionedValue[] = [];
 		const to = [makeIntegerValue("prop-1", 42)];
 
-		const result = diffValues(from, to);
+		const result = run(diffValues(from, to));
 
 		expect(result).toHaveLength(1);
 		const change = result[0] as SimpleValueChange;
@@ -175,7 +180,7 @@ describe("diffValues", () => {
 		const from = [makeIntegerValue("prop-1", 10)];
 		const to = [makeIntegerValue("prop-1", 20)];
 
-		const result = diffValues(from, to);
+		const result = run(diffValues(from, to));
 
 		expect(result).toHaveLength(1);
 		const change = result[0] as SimpleValueChange;
@@ -188,7 +193,7 @@ describe("diffValues", () => {
 		const from = [makeBooleanValue("prop-1", false)];
 		const to = [makeBooleanValue("prop-1", true)];
 
-		const result = diffValues(from, to);
+		const result = run(diffValues(from, to));
 
 		expect(result).toHaveLength(1);
 		const change = result[0] as SimpleValueChange;
@@ -207,7 +212,7 @@ describe("diffValues", () => {
 			makeTextValue("prop-3", "added"),
 		];
 
-		const result = diffValues(from, to);
+		const result = run(diffValues(from, to));
 
 		expect(result).toHaveLength(3); // changed, removed, added
 	});
@@ -219,7 +224,7 @@ describe("diffValues", () => {
 			makeTextValue("prop-1", "space-b-value", "space-b"),
 		];
 
-		const result = diffValues(from, to);
+		const result = run(diffValues(from, to));
 
 		// Should only show space-b as added
 		expect(result).toHaveLength(1);
@@ -234,13 +239,13 @@ describe("diffValues", () => {
 
 describe("diffRelations", () => {
 	it("returns empty array when both inputs are empty", () => {
-		const result = diffRelations([], []);
+		const result = run(diffRelations([], []));
 		expect(result).toEqual([]);
 	});
 
 	it("returns empty array when relations are identical", () => {
 		const relations = [makeRelation("rel-1", "type-1", "to-1")];
-		const result = diffRelations(relations, relations);
+		const result = run(diffRelations(relations, relations));
 		expect(result).toEqual([]);
 	});
 
@@ -248,7 +253,7 @@ describe("diffRelations", () => {
 		const from: VersionedRelation[] = [];
 		const to = [makeRelation("rel-1", "type-1", "to-1")];
 
-		const result = diffRelations(from, to);
+		const result = run(diffRelations(from, to));
 
 		expect(result).toHaveLength(1);
 		const change = result[0]!;
@@ -262,7 +267,7 @@ describe("diffRelations", () => {
 		const from = [makeRelation("rel-1", "type-1", "to-1")];
 		const to: VersionedRelation[] = [];
 
-		const result = diffRelations(from, to);
+		const result = run(diffRelations(from, to));
 
 		expect(result).toHaveLength(1);
 		const change = result[0]!;
@@ -276,7 +281,7 @@ describe("diffRelations", () => {
 		const from = [makeRelation("rel-1", "type-1", "old-target")];
 		const to = [makeRelation("rel-1", "type-1", "new-target")];
 
-		const result = diffRelations(from, to);
+		const result = run(diffRelations(from, to));
 
 		expect(result).toHaveLength(1);
 		const change = result[0]!;
@@ -289,7 +294,7 @@ describe("diffRelations", () => {
 		const from = [makeRelation("rel-1", "type-1", "to-1", { position: "a" })];
 		const to = [makeRelation("rel-1", "type-1", "to-1", { position: "b" })];
 
-		const result = diffRelations(from, to);
+		const result = run(diffRelations(from, to));
 
 		expect(result).toHaveLength(1);
 		const change = result[0]!;
@@ -308,7 +313,7 @@ describe("diffRelations", () => {
 			makeRelation("rel-3", "type-1", "to-3"),
 		];
 
-		const result = diffRelations(from, to);
+		const result = run(diffRelations(from, to));
 
 		expect(result).toHaveLength(3); // updated, removed, added
 	});
@@ -320,13 +325,13 @@ describe("diffRelations", () => {
 
 describe("diffBlocks", () => {
 	it("returns empty array when both inputs are empty", () => {
-		const result = diffBlocks([], []);
+		const result = run(diffBlocks([], []));
 		expect(result).toEqual([]);
 	});
 
 	it("returns empty array when blocks are identical", () => {
 		const blocks = [makeTextBlock("block-1", "content")];
-		const result = diffBlocks(blocks, blocks);
+		const result = run(diffBlocks(blocks, blocks));
 		expect(result).toEqual([]);
 	});
 
@@ -334,7 +339,7 @@ describe("diffBlocks", () => {
 		const from: BlockSnapshot[] = [];
 		const to = [makeTextBlock("block-1", "new content")];
 
-		const result = diffBlocks(from, to);
+		const result = run(diffBlocks(from, to));
 
 		expect(result).toHaveLength(1);
 		const change = result[0]!;
@@ -351,7 +356,7 @@ describe("diffBlocks", () => {
 		const from = [makeTextBlock("block-1", "old content")];
 		const to: BlockSnapshot[] = [];
 
-		const result = diffBlocks(from, to);
+		const result = run(diffBlocks(from, to));
 
 		expect(result).toHaveLength(1);
 		const change = result[0]!;
@@ -367,7 +372,7 @@ describe("diffBlocks", () => {
 		const from = [makeTextBlock("block-1", "old content")];
 		const to = [makeTextBlock("block-1", "new content")];
 
-		const result = diffBlocks(from, to);
+		const result = run(diffBlocks(from, to));
 
 		expect(result).toHaveLength(1);
 		const change = result[0]!;
@@ -384,7 +389,7 @@ describe("diffBlocks", () => {
 		const from: BlockSnapshot[] = [];
 		const to = [makeImageBlock("block-1", "https://example.com/image.png")];
 
-		const result = diffBlocks(from, to);
+		const result = run(diffBlocks(from, to));
 
 		expect(result).toHaveLength(1);
 		const change = result[0]!;
@@ -399,7 +404,7 @@ describe("diffBlocks", () => {
 		const from = [makeImageBlock("block-1", "https://old.com/image.png")];
 		const to = [makeImageBlock("block-1", "https://new.com/image.png")];
 
-		const result = diffBlocks(from, to);
+		const result = run(diffBlocks(from, to));
 
 		expect(result).toHaveLength(1);
 		const change = result[0]!;
@@ -414,7 +419,7 @@ describe("diffBlocks", () => {
 		const from: BlockSnapshot[] = [];
 		const to = [makeDataBlock("block-1", "My Data Block")];
 
-		const result = diffBlocks(from, to);
+		const result = run(diffBlocks(from, to));
 
 		expect(result).toHaveLength(1);
 		const change = result[0]!;
@@ -435,7 +440,7 @@ describe("diffBlocks", () => {
 			makeDataBlock("data-1", "New Data"),
 		];
 
-		const result = diffBlocks(from, to);
+		const result = run(diffBlocks(from, to));
 
 		expect(result).toHaveLength(3); // text changed, image removed, data added
 	});
@@ -460,7 +465,7 @@ describe("diffEntitySnapshots", () => {
 			blocks: [],
 		};
 
-		const result = diffEntitySnapshots("entity-1", from, to);
+		const result = run(diffEntitySnapshots("entity-1", from, to));
 
 		expect(result.entityId).toBe("entity-1");
 		expect(result.name).toBe("New Name");
@@ -480,7 +485,7 @@ describe("diffEntitySnapshots", () => {
 			blocks: [makeTextBlock("block-1", "new block")],
 		};
 
-		const result = diffEntitySnapshots("entity-1", from, to);
+		const result = run(diffEntitySnapshots("entity-1", from, to));
 
 		expect(result.values).toHaveLength(1);
 		expect(result.relations).toHaveLength(1);
@@ -501,7 +506,7 @@ describe("diffEntitySnapshots", () => {
 			blocks: [],
 		};
 
-		const result = diffEntitySnapshots("entity-1", from, to);
+		const result = run(diffEntitySnapshots("entity-1", from, to));
 
 		expect(result.name).toBe("From Name");
 	});
@@ -531,7 +536,7 @@ describe("diffGroupedEntitySnapshots", () => {
 		const from = makeGroupedSnapshot("entity-1");
 		const to = makeGroupedSnapshot("entity-1");
 
-		const result = diffGroupedEntitySnapshots("entity-1", from, to);
+		const result = run(diffGroupedEntitySnapshots("entity-1", from, to));
 
 		// Verify response shape
 		expect(result).toHaveProperty("entityId");
@@ -548,7 +553,7 @@ describe("diffGroupedEntitySnapshots", () => {
 			blocks: [makeTextBlock("block-1", "content")],
 		});
 
-		const result = diffGroupedEntitySnapshots("entity-1", snapshot, snapshot);
+		const result = run(diffGroupedEntitySnapshots("entity-1", snapshot, snapshot));
 
 		expect(result.values).toEqual([]);
 		expect(result.relations).toEqual([]);
@@ -565,7 +570,7 @@ describe("diffGroupedEntitySnapshots", () => {
 			blocks: [makeTextBlock("block-1", "new content")],
 		});
 
-		const result = diffGroupedEntitySnapshots("entity-1", from, to);
+		const result = run(diffGroupedEntitySnapshots("entity-1", from, to));
 
 		expect(result.blocks).toHaveLength(1);
 		expect(result.blocks[0]!.type).toBe("textBlock");
@@ -586,7 +591,7 @@ describe("diffGroupedEntitySnapshots", () => {
 			},
 		});
 
-		const result = diffGroupedEntitySnapshots("entity-1", from, to);
+		const result = run(diffGroupedEntitySnapshots("entity-1", from, to));
 
 		expect(result.groupKeys).toContain(customType);
 		expect(result.groups[customType]).toHaveLength(1);
@@ -610,7 +615,7 @@ describe("diffGroupedEntitySnapshots", () => {
 			},
 		});
 
-		const result = diffGroupedEntitySnapshots("entity-1", from, to);
+		const result = run(diffGroupedEntitySnapshots("entity-1", from, to));
 
 		// Only typeB has changes
 		expect(result.groupKeys).toEqual([typeB]);
@@ -628,7 +633,7 @@ describe("diffGroupedEntitySnapshots", () => {
 			},
 		});
 
-		const result = diffGroupedEntitySnapshots("entity-1", from, to);
+		const result = run(diffGroupedEntitySnapshots("entity-1", from, to));
 
 		expect(result.groupKeys).toContain(customType);
 		expect(result.groups[customType]).toHaveLength(1);
@@ -644,7 +649,7 @@ describe("diffGroupedEntitySnapshots", () => {
 		});
 		const to = makeGroupedSnapshot("entity-1");
 
-		const result = diffGroupedEntitySnapshots("entity-1", from, to);
+		const result = run(diffGroupedEntitySnapshots("entity-1", from, to));
 
 		expect(result.groupKeys).toContain(customType);
 		expect(result.groups[customType]).toHaveLength(1);
@@ -667,7 +672,7 @@ describe("diffGroupedEntitySnapshots", () => {
 			},
 		});
 
-		const result = diffGroupedEntitySnapshots("entity-1", from, to);
+		const result = run(diffGroupedEntitySnapshots("entity-1", from, to));
 
 		// Both blocks and dynamic groups have changes
 		expect(result.blocks).toHaveLength(1);
@@ -691,7 +696,7 @@ describe("diffGroupedEntitySnapshots", () => {
 			},
 		});
 
-		const result = diffGroupedEntitySnapshots("entity-1", from, to);
+		const result = run(diffGroupedEntitySnapshots("entity-1", from, to));
 
 		expect(result.groupKeys).toEqual(["aaa-type", "zzz-type"]);
 	});
@@ -702,7 +707,7 @@ describe("diffGroupedEntitySnapshots", () => {
 		});
 		const to = makeGroupedSnapshot("entity-1");
 
-		const result = diffGroupedEntitySnapshots("entity-1", from, to);
+		const result = run(diffGroupedEntitySnapshots("entity-1", from, to));
 
 		expect(result.name).toBe("From Name");
 	});

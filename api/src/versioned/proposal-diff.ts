@@ -6,6 +6,7 @@
  * - Closed proposals: compare against versioned state at end_time
  */
 
+import { Effect } from "effect";
 import { sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { SystemIds } from "@graphprotocol/grc-20";
@@ -13,6 +14,7 @@ import { decodeEditAuto, type Op, type Id } from "@geoprotocol/grc-20";
 
 import type {
 	EntitySnapshot,
+	EntityDiff,
 	VersionedValue,
 	VersionedRelation,
 	BlockSnapshot,
@@ -21,6 +23,25 @@ import type {
 	PaginatedProposalDiff,
 } from "./types";
 import { diffEntitySnapshots } from "./diff";
+import { QueryError } from "./queries";
+
+// Error types for proposal diff operations
+export class ProposalNotFoundError {
+	readonly _tag = "ProposalNotFoundError";
+	constructor(readonly proposalId: string) {}
+}
+
+export class EditBlobNotCachedError {
+	readonly _tag = "EditBlobNotCachedError";
+	constructor(readonly uri: string) {}
+}
+
+export class EditDecodeError {
+	readonly _tag = "EditDecodeError";
+	constructor(readonly cause: unknown) {}
+}
+
+export type ProposalDiffError = QueryError | ProposalNotFoundError | EditBlobNotCachedError | EditDecodeError;
 
 type Database = NodePgDatabase<Record<string, unknown>>;
 
@@ -45,61 +66,79 @@ interface ProposalWithAction {
 /**
  * Get proposal with its Publish action (if any) in a single query.
  */
-async function getProposalWithPublishAction(
+function getProposalWithPublishAction(
 	db: Database,
 	proposalId: string
-): Promise<ProposalWithAction | null> {
-	const result = await db.execute<{
-		proposal_id: string;
-		space_id: string;
-		start_time: string;
-		end_time: string;
-		executed_at: string | null;
-		content_uri: string | null;
-	}>(sql`
-		SELECT
-			p.id as proposal_id,
-			p.space_id,
-			p.start_time,
-			p.end_time,
-			p.executed_at,
-			pa.content_uri
-		FROM proposals p
-		LEFT JOIN proposal_actions pa ON pa.proposal_id = p.id AND pa.action_type = 'Publish'
-		WHERE p.id = ${proposalId}
-		LIMIT 1
-	`);
+): Effect.Effect<ProposalWithAction | null, QueryError> {
+	return Effect.tryPromise({
+		try: async () => {
+			const result = await db.execute<{
+				proposal_id: string;
+				space_id: string;
+				start_time: string;
+				end_time: string;
+				executed_at: string | null;
+				content_uri: string | null;
+			}>(sql`
+				SELECT
+					p.id as proposal_id,
+					p.space_id,
+					p.start_time,
+					p.end_time,
+					p.executed_at,
+					pa.content_uri
+				FROM proposals p
+				LEFT JOIN proposal_actions pa ON pa.proposal_id = p.id AND pa.action_type = 'Publish'
+				WHERE p.id = ${proposalId}
+				LIMIT 1
+			`);
 
-	const row = result.rows[0];
-	if (!row) {
-		return null;
-	}
+			const row = result.rows[0];
+			if (!row) {
+				return null;
+			}
 
-	return {
-		proposal: {
-			id: row.proposal_id,
-			spaceId: row.space_id,
-			startTime: BigInt(row.start_time),
-			endTime: BigInt(row.end_time),
-			executedAt: row.executed_at ? BigInt(row.executed_at) : null,
+			return {
+				proposal: {
+					id: row.proposal_id,
+					spaceId: row.space_id,
+					startTime: BigInt(row.start_time),
+					endTime: BigInt(row.end_time),
+					executedAt: row.executed_at ? BigInt(row.executed_at) : null,
+				},
+				contentUri: row.content_uri,
+			};
 		},
-		contentUri: row.content_uri,
-	};
+		catch: (error) => new QueryError("getProposalWithPublishAction", error),
+	}).pipe(
+		Effect.withSpan("proposal-diff.getProposalWithPublishAction", {
+			attributes: { proposalId },
+		})
+	);
 }
 
 /**
  * Get edit blob from IPFS cache.
  */
-async function getIpfsCacheData(
+function getIpfsCacheData(
 	db: Database,
 	uri: string
-): Promise<Buffer | null> {
-	const result = await db.execute<{ data: Buffer | null }>(sql`
-		SELECT data FROM ipfs_cache WHERE uri = ${uri} LIMIT 1
-	`);
+): Effect.Effect<Buffer | null, QueryError> {
+	return Effect.tryPromise({
+		try: async () => {
+			const result = await db.execute<{ data: Buffer | null }>(sql`
+				SELECT data FROM ipfs_cache WHERE uri = ${uri} LIMIT 1
+			`);
 
-	const row = result.rows[0];
-	return row?.data ?? null;
+			const row = result.rows[0];
+			return row?.data ?? null;
+		},
+		catch: (error) => new QueryError("getIpfsCacheData", error),
+	}).pipe(
+		Effect.withSpan("proposal-diff.getIpfsCacheData", {
+			attributes: { uri },
+		})
+	);
 }
 
 /**
@@ -119,24 +158,33 @@ function getProposalStatus(proposal: ProposalWithAction["proposal"]): ProposalSt
 /**
  * Resolve end_time to a version key for closed proposals.
  */
-async function resolveVersionKeyAtTimestamp(
+function resolveVersionKeyAtTimestamp(
 	db: Database,
 	timestamp: bigint
-): Promise<bigint | null> {
-	// Find the latest edit before or at the timestamp
-	const result = await db.execute<{ version_key: string }>(sql`
-		SELECT version_key FROM edit_versions
-		WHERE created_at <= to_timestamp(${timestamp.toString()}::bigint)
-		ORDER BY version_key DESC
-		LIMIT 1
-	`);
+): Effect.Effect<bigint | null, QueryError> {
+	return Effect.tryPromise({
+		try: async () => {
+			// Find the latest edit before or at the timestamp
+			const result = await db.execute<{ version_key: string }>(sql`
+				SELECT version_key FROM edit_versions
+				WHERE created_at <= to_timestamp(${timestamp.toString()}::bigint)
+				ORDER BY version_key DESC
+				LIMIT 1
+			`);
 
-	const row = result.rows[0];
-	if (!row) {
-		return null;
-	}
+			const row = result.rows[0];
+			if (!row) {
+				return null;
+			}
 
-	return BigInt(row.version_key);
+			return BigInt(row.version_key);
+		},
+		catch: (error) => new QueryError("resolveVersionKeyAtTimestamp", error),
+	}).pipe(
+		Effect.withSpan("proposal-diff.resolveVersionKeyAtTimestamp", {
+			attributes: { timestamp: timestamp.toString() },
+		})
+	);
 }
 
 // ============================================================================
@@ -147,66 +195,84 @@ async function resolveVersionKeyAtTimestamp(
  * Batch fetch live snapshots for multiple entities.
  * Uses 2 queries total (values + relations), not 2N.
  */
-async function batchGetLiveSnapshots(
+function batchGetLiveSnapshots(
 	db: Database,
 	entityIds: string[],
 	spaceId: string
-): Promise<Map<string, EntitySnapshot>> {
+): Effect.Effect<Map<string, EntitySnapshot>, QueryError> {
 	if (entityIds.length === 0) {
-		return new Map();
+		return Effect.succeed(new Map());
 	}
 
-	// Query 1: All values for all entities
-	const valuesResult = await db.execute<Record<string, unknown>>(sql`
-		SELECT * FROM "values"
-		WHERE entity_id = ANY(${entityIds})
-		AND space_id = ${spaceId}
-	`);
+	return Effect.tryPromise({
+		try: async () => {
+			// Query 1: All values for all entities
+			const valuesResult = await db.execute<Record<string, unknown>>(sql`
+				SELECT * FROM "values"
+				WHERE entity_id = ANY(${entityIds})
+				AND space_id = ${spaceId}
+			`);
 
-	// Query 2: All relations for all entities
-	const relationsResult = await db.execute<Record<string, unknown>>(sql`
-		SELECT * FROM relations
-		WHERE from_entity_id = ANY(${entityIds})
-		AND space_id = ${spaceId}
-	`);
+			// Query 2: All relations for all entities
+			const relationsResult = await db.execute<Record<string, unknown>>(sql`
+				SELECT * FROM relations
+				WHERE from_entity_id = ANY(${entityIds})
+				AND space_id = ${spaceId}
+			`);
 
-	return groupByEntityId(entityIds, valuesResult.rows, relationsResult.rows);
+			return groupByEntityId(entityIds, valuesResult.rows, relationsResult.rows);
+		},
+		catch: (error) => new QueryError("batchGetLiveSnapshots", error),
+	}).pipe(
+		Effect.withSpan("proposal-diff.batchGetLiveSnapshots", {
+			attributes: { entityCount: entityIds.length, spaceId },
+		})
+	);
 }
 
 /**
  * Batch fetch versioned snapshots for multiple entities at a specific version.
  */
-async function batchGetVersionedSnapshots(
+function batchGetVersionedSnapshots(
 	db: Database,
 	entityIds: string[],
 	spaceId: string,
 	versionKey: bigint
-): Promise<Map<string, EntitySnapshot>> {
+): Effect.Effect<Map<string, EntitySnapshot>, QueryError> {
 	if (entityIds.length === 0) {
-		return new Map();
+		return Effect.succeed(new Map());
 	}
 
-	const versionKeyStr = versionKey.toString();
+	return Effect.tryPromise({
+		try: async () => {
+			const versionKeyStr = versionKey.toString();
 
-	// Query 1: All values at version
-	const valuesResult = await db.execute<Record<string, unknown>>(sql`
-		SELECT * FROM value_versions
-		WHERE entity_id = ANY(${entityIds})
-		AND space_id = ${spaceId}
-		AND valid_from_key <= ${versionKeyStr}::bigint
-		AND (valid_to_key IS NULL OR valid_to_key > ${versionKeyStr}::bigint)
-	`);
+			// Query 1: All values at version
+			const valuesResult = await db.execute<Record<string, unknown>>(sql`
+				SELECT * FROM value_versions
+				WHERE entity_id = ANY(${entityIds})
+				AND space_id = ${spaceId}
+				AND valid_from_key <= ${versionKeyStr}::bigint
+				AND (valid_to_key IS NULL OR valid_to_key > ${versionKeyStr}::bigint)
+			`);
 
-	// Query 2: All relations at version
-	const relationsResult = await db.execute<Record<string, unknown>>(sql`
-		SELECT * FROM relation_versions
-		WHERE from_entity_id = ANY(${entityIds})
-		AND space_id = ${spaceId}
-		AND valid_from_key <= ${versionKeyStr}::bigint
-		AND (valid_to_key IS NULL OR valid_to_key > ${versionKeyStr}::bigint)
-	`);
+			// Query 2: All relations at version
+			const relationsResult = await db.execute<Record<string, unknown>>(sql`
+				SELECT * FROM relation_versions
+				WHERE from_entity_id = ANY(${entityIds})
+				AND space_id = ${spaceId}
+				AND valid_from_key <= ${versionKeyStr}::bigint
+				AND (valid_to_key IS NULL OR valid_to_key > ${versionKeyStr}::bigint)
+			`);
 
-	return groupByEntityId(entityIds, valuesResult.rows, relationsResult.rows);
+			return groupByEntityId(entityIds, valuesResult.rows, relationsResult.rows);
+		},
+		catch: (error) => new QueryError("batchGetVersionedSnapshots", error),
+	}).pipe(
+		Effect.withSpan("proposal-diff.batchGetVersionedSnapshots", {
+			attributes: { entityCount: entityIds.length, spaceId, versionKey: versionKey.toString() },
+		})
+	);
 }
 
 /**
@@ -498,9 +564,7 @@ function applyOpsToSnapshot(
 /**
  * Check if an entity diff is empty (no changes).
  */
-function isDiffEmpty(
-	diff: ReturnType<typeof diffEntitySnapshots>
-): boolean {
+function isDiffEmpty(diff: EntityDiff): boolean {
 	return (
 		diff.values.length === 0 &&
 		diff.relations.length === 0 &&
@@ -544,115 +608,115 @@ function decodeCursor(encoded: string): ProposalDiffCursor | null {
  * @param spaceId - Space ID to filter values/relations
  * @param cursorStr - Optional pagination cursor
  * @param limit - Max entities per page (default 50)
- * @returns Paginated proposal diff
+ * @returns Effect that yields paginated proposal diff
  */
-export async function computeProposalDiff(
+export function computeProposalDiff(
 	db: Database,
 	proposalId: string,
 	spaceId: string,
 	cursorStr?: string,
 	limit = 50
-): Promise<PaginatedProposalDiff | { error: string; code: number }> {
-	// 1. Get proposal with publish action
-	const data = await getProposalWithPublishAction(db, proposalId);
-	if (!data) {
-		return { error: `Proposal '${proposalId}' not found`, code: 404 };
-	}
+): Effect.Effect<PaginatedProposalDiff, ProposalDiffError> {
+	return Effect.gen(function* () {
+		// 1. Get proposal with publish action
+		const data = yield* getProposalWithPublishAction(db, proposalId);
+		if (!data) {
+			return yield* Effect.fail(new ProposalNotFoundError(proposalId));
+		}
 
-	const { proposal, contentUri } = data;
-	const status = getProposalStatus(proposal);
+		const { proposal, contentUri } = data;
+		const status = getProposalStatus(proposal);
 
-	// 2. If no publish action, return empty diff
-	if (!contentUri) {
+		// 2. If no publish action, return empty diff
+		if (!contentUri) {
+			return {
+				proposalId,
+				spaceId,
+				proposalStatus: status,
+				entities: [],
+				pagination: {
+					cursor: null,
+					hasMore: false,
+					totalEntities: 0,
+				},
+			};
+		}
+
+		// 3. Fetch edit blob from IPFS cache
+		const blob = yield* getIpfsCacheData(db, contentUri);
+		if (!blob) {
+			return yield* Effect.fail(new EditBlobNotCachedError(contentUri));
+		}
+
+		// 4. Decode using @geoprotocol/grc-20
+		const ops = yield* Effect.tryPromise({
+			try: async () => {
+				const edit = await decodeEditAuto(blob);
+				return edit.ops;
+			},
+			catch: (error) => new EditDecodeError(error),
+		});
+
+		// 5. Extract affected entity IDs (sorted for stable pagination)
+		const entityIds = extractAffectedEntities(ops).sort();
+
+		// 6. Parse cursor
+		const cursor = cursorStr ? decodeCursor(cursorStr) : null;
+		const startIndex = cursor?.entityIndex ?? 0;
+		const pageEntityIds = entityIds.slice(startIndex, startIndex + limit);
+
+		// 7. Batch fetch base states
+		let baseStates: Map<string, EntitySnapshot>;
+		if (status === "active") {
+			baseStates = yield* batchGetLiveSnapshots(db, pageEntityIds, spaceId);
+		} else {
+			// For closed/executed proposals, use versioned state at end_time
+			const versionKey = yield* resolveVersionKeyAtTimestamp(db, proposal.endTime);
+			if (versionKey === null) {
+				// No edits existed at that time - use empty snapshots
+				baseStates = new Map();
+				for (const id of pageEntityIds) {
+					baseStates.set(id, emptySnapshot(id));
+				}
+			} else {
+				baseStates = yield* batchGetVersionedSnapshots(
+					db,
+					pageEntityIds,
+					spaceId,
+					versionKey
+				);
+			}
+		}
+
+		// 8. Compute diffs (in-memory, no DB calls)
+		const diffs: EntityDiff[] = [];
+		for (const entityId of pageEntityIds) {
+			const baseState = baseStates.get(entityId) ?? emptySnapshot(entityId);
+			const proposedState = applyOpsToSnapshot(baseState, ops, entityId, spaceId);
+			const diff = yield* diffEntitySnapshots(entityId, baseState, proposedState);
+			if (!isDiffEmpty(diff)) {
+				diffs.push(diff);
+			}
+		}
+
+		// 9. Build pagination info
+		const nextIndex = startIndex + limit;
+		const hasMore = nextIndex < entityIds.length;
+
 		return {
 			proposalId,
 			spaceId,
 			proposalStatus: status,
-			entities: [],
+			entities: diffs,
 			pagination: {
-				cursor: null,
-				hasMore: false,
-				totalEntities: 0,
+				cursor: hasMore ? encodeCursor({ entityIndex: nextIndex }) : null,
+				hasMore,
+				totalEntities: entityIds.length,
 			},
 		};
-	}
-
-	// 3. Fetch edit blob from IPFS cache
-	const blob = await getIpfsCacheData(db, contentUri);
-	if (!blob) {
-		return {
-			error: `Edit blob not cached for URI: ${contentUri}`,
-			code: 404,
-		};
-	}
-
-	// 4. Decode using @geoprotocol/grc-20
-	let ops: Op[];
-	try {
-		const edit = await decodeEditAuto(blob);
-		ops = edit.ops;
-	} catch (e) {
-		return {
-			error: `Failed to decode edit blob: ${e instanceof Error ? e.message : String(e)}`,
-			code: 500,
-		};
-	}
-
-	// 5. Extract affected entity IDs (sorted for stable pagination)
-	const entityIds = extractAffectedEntities(ops).sort();
-
-	// 6. Parse cursor
-	const cursor = cursorStr ? decodeCursor(cursorStr) : null;
-	const startIndex = cursor?.entityIndex ?? 0;
-	const pageEntityIds = entityIds.slice(startIndex, startIndex + limit);
-
-	// 7. Batch fetch base states
-	let baseStates: Map<string, EntitySnapshot>;
-	if (status === "active") {
-		baseStates = await batchGetLiveSnapshots(db, pageEntityIds, spaceId);
-	} else {
-		// For closed/executed proposals, use versioned state at end_time
-		const versionKey = await resolveVersionKeyAtTimestamp(db, proposal.endTime);
-		if (versionKey === null) {
-			// No edits existed at that time - use empty snapshots
-			baseStates = new Map();
-			for (const id of pageEntityIds) {
-				baseStates.set(id, emptySnapshot(id));
-			}
-		} else {
-			baseStates = await batchGetVersionedSnapshots(
-				db,
-				pageEntityIds,
-				spaceId,
-				versionKey
-			);
-		}
-	}
-
-	// 8. Compute diffs (in-memory, no DB calls)
-	const diffs: PaginatedProposalDiff["entities"] = [];
-	for (const entityId of pageEntityIds) {
-		const baseState = baseStates.get(entityId) ?? emptySnapshot(entityId);
-		const proposedState = applyOpsToSnapshot(baseState, ops, entityId, spaceId);
-		const diff = diffEntitySnapshots(entityId, baseState, proposedState);
-		if (!isDiffEmpty(diff)) {
-			diffs.push(diff);
-		}
-	}
-
-	// 9. Build pagination info
-	const nextIndex = startIndex + limit;
-	const hasMore = nextIndex < entityIds.length;
-
-	return {
-		proposalId,
-		spaceId,
-		proposalStatus: status,
-		entities: diffs,
-		pagination: {
-			cursor: hasMore ? encodeCursor({ entityIndex: nextIndex }) : null,
-			hasMore,
-			totalEntities: entityIds.length,
-		},
-	};
+	}).pipe(
+		Effect.withSpan("proposal-diff.computeProposalDiff", {
+			attributes: { proposalId, spaceId, limit },
+		})
+	);
 }

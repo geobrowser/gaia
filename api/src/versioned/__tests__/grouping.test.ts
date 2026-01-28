@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { Effect } from "effect";
 import { SystemIds } from "@graphprotocol/grc-20";
 import {
 	groupEntitiesByContext,
@@ -9,6 +10,12 @@ import {
 // =============================================================================
 // Test Helpers
 // =============================================================================
+
+/**
+ * Helper to run Effects synchronously in tests.
+ */
+const run = <A>(effect: Effect.Effect<A, never, never>): A =>
+	Effect.runSync(effect);
 
 function makeEntity(
 	entityId: string,
@@ -25,7 +32,7 @@ function makeEntity(
 describe("groupEntitiesByContext", () => {
 	describe("empty input", () => {
 		it("returns empty results for empty input", () => {
-			const result = groupEntitiesByContext([]);
+			const result = run(groupEntitiesByContext([]));
 
 			expect(result.blocks).toEqual([]);
 			expect(result.dynamicGroups.size).toBe(0);
@@ -40,7 +47,7 @@ describe("groupEntitiesByContext", () => {
 				makeEntity("block-2", SystemIds.BLOCKS),
 			];
 
-			const result = groupEntitiesByContext(entities);
+			const result = run(groupEntitiesByContext(entities));
 
 			expect(result.blocks).toEqual(["block-1", "block-2"]);
 			expect(result.dynamicGroups.size).toBe(0);
@@ -53,7 +60,7 @@ describe("groupEntitiesByContext", () => {
 				makeEntity("block-2", null),
 			];
 
-			const result = groupEntitiesByContext(entities);
+			const result = run(groupEntitiesByContext(entities));
 
 			expect(result.blocks).toEqual(["block-1", "block-2"]);
 			expect(result.dynamicGroups.size).toBe(0);
@@ -63,7 +70,7 @@ describe("groupEntitiesByContext", () => {
 			const customType = "custom-type-id";
 			const entities = [makeEntity("entity-1", null)];
 
-			const result = groupEntitiesByContext(entities, customType);
+			const result = run(groupEntitiesByContext(entities, customType));
 
 			// Should go into dynamic groups, not blocks
 			expect(result.blocks).toEqual([]);
@@ -82,7 +89,7 @@ describe("groupEntitiesByContext", () => {
 				makeEntity("entity-3", customTypeA),
 			];
 
-			const result = groupEntitiesByContext(entities);
+			const result = run(groupEntitiesByContext(entities));
 
 			expect(result.blocks).toEqual([]);
 			expect(result.dynamicGroups.get(customTypeA)).toEqual([
@@ -100,7 +107,7 @@ describe("groupEntitiesByContext", () => {
 				makeEntity("e3", "mmm-type"),
 			];
 
-			const result = groupEntitiesByContext(entities);
+			const result = run(groupEntitiesByContext(entities));
 
 			expect(result.groupKeys).toEqual(["aaa-type", "mmm-type", "zzz-type"]);
 		});
@@ -116,7 +123,7 @@ describe("groupEntitiesByContext", () => {
 				makeEntity("custom-2", customType),
 			];
 
-			const result = groupEntitiesByContext(entities);
+			const result = run(groupEntitiesByContext(entities));
 
 			expect(result.blocks).toEqual(["block-1", "block-2"]);
 			expect(result.dynamicGroups.get(customType)).toEqual([
@@ -134,7 +141,7 @@ describe("groupEntitiesByContext", () => {
 				makeEntity("custom-1", customType),
 			];
 
-			const result = groupEntitiesByContext(entities);
+			const result = run(groupEntitiesByContext(entities));
 
 			expect(result.blocks).toContain("block-context");
 			expect(result.blocks).toContain("block-fallback");
@@ -150,7 +157,7 @@ describe("groupEntitiesByContext", () => {
 				makeEntity("entity-1", null), // duplicate via fallback
 			];
 
-			const result = groupEntitiesByContext(entities);
+			const result = run(groupEntitiesByContext(entities));
 
 			expect(result.blocks).toEqual(["entity-1"]);
 		});
@@ -162,7 +169,7 @@ describe("groupEntitiesByContext", () => {
 				makeEntity("entity-1", customType, "b"), // same ID, different type
 			];
 
-			const result = groupEntitiesByContext(entities);
+			const result = run(groupEntitiesByContext(entities));
 
 			// First occurrence wins (BLOCKS)
 			expect(result.blocks).toEqual(["entity-1"]);
@@ -178,7 +185,7 @@ describe("groupEntitiesByContext", () => {
 				makeEntity("block-b", SystemIds.BLOCKS, "b"),
 			];
 
-			const result = groupEntitiesByContext(entities);
+			const result = run(groupEntitiesByContext(entities));
 
 			expect(result.blocks).toEqual(["block-a", "block-b", "block-c"]);
 		});
@@ -190,7 +197,7 @@ describe("groupEntitiesByContext", () => {
 				makeEntity("block-b", SystemIds.BLOCKS, "b"),
 			];
 
-			const result = groupEntitiesByContext(entities);
+			const result = run(groupEntitiesByContext(entities));
 
 			expect(result.blocks).toEqual(["block-a", "block-b", "block-null"]);
 		});
@@ -203,7 +210,7 @@ describe("groupEntitiesByContext", () => {
 				makeEntity("e-b", customType, "b"),
 			];
 
-			const result = groupEntitiesByContext(entities);
+			const result = run(groupEntitiesByContext(entities));
 
 			expect(result.dynamicGroups.get(customType)).toEqual([
 				"e-a",
@@ -220,7 +227,7 @@ describe("groupEntitiesByContext", () => {
 
 describe("mergeDiscoveryResults", () => {
 	it("returns empty array for empty inputs", () => {
-		const result = mergeDiscoveryResults([], [], SystemIds.BLOCKS);
+		const result = run(mergeDiscoveryResults([], [], SystemIds.BLOCKS));
 		expect(result).toEqual([]);
 	});
 
@@ -230,7 +237,7 @@ describe("mergeDiscoveryResults", () => {
 			makeEntity("e2", "type-b", "pos-2"),
 		];
 
-		const result = mergeDiscoveryResults(contextEntities, [], SystemIds.BLOCKS);
+		const result = run(mergeDiscoveryResults(contextEntities, [], SystemIds.BLOCKS));
 
 		expect(result).toEqual(contextEntities);
 	});
@@ -241,7 +248,7 @@ describe("mergeDiscoveryResults", () => {
 			{ entityId: "e2", position: null },
 		];
 
-		const result = mergeDiscoveryResults([], relationEntities, SystemIds.BLOCKS);
+		const result = run(mergeDiscoveryResults([], relationEntities, SystemIds.BLOCKS));
 
 		expect(result).toEqual([
 			{ entityId: "e1", contextEdgeTypeId: null, position: "pos-1" },
@@ -253,11 +260,11 @@ describe("mergeDiscoveryResults", () => {
 		const contextEntities = [makeEntity("context-1", "type-a")];
 		const relationEntities = [{ entityId: "relation-1", position: "pos-1" }];
 
-		const result = mergeDiscoveryResults(
+		const result = run(mergeDiscoveryResults(
 			contextEntities,
 			relationEntities,
 			SystemIds.BLOCKS
-		);
+		));
 
 		expect(result).toHaveLength(2);
 		expect(result[0]).toEqual(contextEntities[0]);

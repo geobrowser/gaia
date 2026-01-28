@@ -17,7 +17,7 @@ type AppEnv = {
 	}
 }
 import {isValidUuid} from "../utils/uuid"
-import {resolveVersionKey, getEntitySnapshotAtVersion, getEntityVersions} from "./queries"
+import {resolveVersionKey, getEntitySnapshotAtVersion, getEntityVersions, QueryError} from "./queries"
 import {diffEntitySnapshots} from "./diff"
 import type {EntityDiff, EntitySnapshot, VersionEntry} from "./types"
 
@@ -36,7 +36,7 @@ class InternalError extends Data.TaggedError("InternalError")<{
 	message: string
 }> {}
 
-type VersionedError = ValidationError | NotFoundError | InternalError
+type VersionedError = ValidationError | NotFoundError | InternalError | QueryError
 
 /**
  * Create the versioned entities router.
@@ -80,25 +80,28 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 			}
 
 			// Resolve edit to version key
-			const versionKey = yield* Effect.tryPromise({
-				try: () => resolveVersionKey(db, editId),
-				catch: (error) => new InternalError({message: String(error)}),
-			}).pipe(Effect.withSpan("resolveVersionKey"))
+			const versionKey = yield* resolveVersionKey(db, editId)
 
 			if (versionKey === null) {
 				return yield* Effect.fail(new NotFoundError({message: `Edit '${editId}' not found`}))
 			}
 
 			// Get entity snapshot at version
-			const snapshot = yield* Effect.tryPromise({
-				try: () => getEntitySnapshotAtVersion(db, entityId, versionKey, spaceId),
-				catch: (error) => new InternalError({message: String(error)}),
-			}).pipe(Effect.withSpan("getEntitySnapshotAtVersion"))
+			const snapshot = yield* getEntitySnapshotAtVersion(db, entityId, versionKey, spaceId)
 
 			return snapshot
 		}).pipe(
+			Effect.tapError((error) => {
+				if (error._tag === "QueryError") {
+					return Effect.logError("Database error", {operation: error.operation, cause: String(error.cause)})
+				}
+				if (error._tag === "InternalError") {
+					return Effect.logError("Internal error", {error: error.message})
+				}
+				return Effect.void
+			}),
 			Effect.withSpan("GET /versioned/entities/:id"),
-			Effect.annotateLogs({requestId, entityId, editId}),
+			Effect.annotateSpans({requestId, entityId, editId, spaceId}),
 		)
 
 		const result = await runtime.runPromise(Effect.either(program))
@@ -111,7 +114,8 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 					case "NotFoundError":
 						return c.json({error: "Not found", message: error.message}, 404)
 					case "InternalError":
-						return c.json({error: "Internal error", message: error.message}, 500)
+					case "QueryError":
+						return c.json({error: "Internal server error", message: "An unexpected error occurred"}, 500)
 				}
 			},
 			onRight: (snapshot: EntitySnapshot) => c.json(snapshot),
@@ -162,15 +166,21 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 			}
 
 			// Get entity versions
-			const versions = yield* Effect.tryPromise({
-				try: () => getEntityVersions(db, entityId, spaceId, limit, offset),
-				catch: (error) => new InternalError({message: String(error)}),
-			}).pipe(Effect.withSpan("getEntityVersions"))
+			const versions = yield* getEntityVersions(db, entityId, spaceId, limit, offset)
 
 			return versions
 		}).pipe(
+			Effect.tapError((error) => {
+				if (error._tag === "QueryError") {
+					return Effect.logError("Database error", {operation: error.operation, cause: String(error.cause)})
+				}
+				if (error._tag === "InternalError") {
+					return Effect.logError("Internal error", {error: error.message})
+				}
+				return Effect.void
+			}),
 			Effect.withSpan("GET /versioned/entities/:id/versions"),
-			Effect.annotateLogs({requestId, entityId}),
+			Effect.annotateSpans({requestId, entityId, spaceId}),
 		)
 
 		const result = await runtime.runPromise(Effect.either(program))
@@ -183,7 +193,8 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 					case "NotFoundError":
 						return c.json({error: "Not found", message: error.message}, 404)
 					case "InternalError":
-						return c.json({error: "Internal error", message: error.message}, 500)
+					case "QueryError":
+						return c.json({error: "Internal server error", message: "An unexpected error occurred"}, 500)
 				}
 			},
 			onRight: (versions: VersionEntry[]) => c.json({versions}),
@@ -235,10 +246,10 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 			}
 
 			// Resolve both edits to version keys
-			const [fromVersionKey, toVersionKey] = yield* Effect.tryPromise({
-				try: () => Promise.all([resolveVersionKey(db, fromEditId), resolveVersionKey(db, toEditId)]),
-				catch: (error) => new InternalError({message: String(error)}),
-			}).pipe(Effect.withSpan("resolveVersionKeys"))
+			const [fromVersionKey, toVersionKey] = yield* Effect.all([
+				resolveVersionKey(db, fromEditId),
+				resolveVersionKey(db, toEditId),
+			])
 
 			if (fromVersionKey === null) {
 				return yield* Effect.fail(new NotFoundError({message: `Edit '${fromEditId}' not found`}))
@@ -249,22 +260,27 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 			}
 
 			// Get snapshots at both versions
-			const [fromSnapshot, toSnapshot] = yield* Effect.tryPromise({
-				try: () =>
-					Promise.all([
-						getEntitySnapshotAtVersion(db, entityId, fromVersionKey, spaceId),
-						getEntitySnapshotAtVersion(db, entityId, toVersionKey, spaceId),
-					]),
-				catch: (error) => new InternalError({message: String(error)}),
-			}).pipe(Effect.withSpan("getEntitySnapshots"))
+			const [fromSnapshot, toSnapshot] = yield* Effect.all([
+				getEntitySnapshotAtVersion(db, entityId, fromVersionKey, spaceId),
+				getEntitySnapshotAtVersion(db, entityId, toVersionKey, spaceId),
+			])
 
 			// Compute diff
-			const diff = diffEntitySnapshots(entityId, fromSnapshot, toSnapshot)
+			const diff = yield* diffEntitySnapshots(entityId, fromSnapshot, toSnapshot)
 
 			return diff
 		}).pipe(
+			Effect.tapError((error) => {
+				if (error._tag === "QueryError") {
+					return Effect.logError("Database error", {operation: error.operation, cause: String(error.cause)})
+				}
+				if (error._tag === "InternalError") {
+					return Effect.logError("Internal error", {error: error.message})
+				}
+				return Effect.void
+			}),
 			Effect.withSpan("GET /versioned/entities/:id/diff"),
-			Effect.annotateLogs({requestId, entityId, fromEditId, toEditId}),
+			Effect.annotateSpans({requestId, entityId, fromEditId, toEditId, spaceId}),
 		)
 
 		const result = await runtime.runPromise(Effect.either(program))
@@ -277,7 +293,8 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 					case "NotFoundError":
 						return c.json({error: "Not found", message: error.message}, 404)
 					case "InternalError":
-						return c.json({error: "Internal error", message: error.message}, 500)
+					case "QueryError":
+						return c.json({error: "Internal server error", message: "An unexpected error occurred"}, 500)
 				}
 			},
 			onRight: (diff: EntityDiff) => c.json(diff),
