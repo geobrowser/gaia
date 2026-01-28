@@ -55,7 +55,6 @@ The kg-indexer decodes v2 payloads but doesn't yet handle all 9 op types:
 ## Implemented
 
 ### search-indexer (feat/search-delete-entity)
-- Decodes `HermesEdit.payload` with `grc_20::decode_edit()`
 - Handles the following operations:
   - `UpdateEntity` - Extracts name, description, avatar; handles unset_values
   - `CreateRelation` - Processes type relations only (TYPE_RELATION_TYPE_ID)
@@ -63,7 +62,6 @@ The kg-indexer decodes v2 payloads but doesn't yet handle all 9 op types:
   - `DeleteEntity` - Soft delete (marks entities as deleted in OpenSearch)
 - Operations not yet implemented:
   - `CreateEntity`, `RestoreEntity`, `RestoreRelation`, `UpdateRelation`, `CreateValueRef`
-- E2E tests added for delete entity and unset properties functionality
 
 ### Schema (ts-20e6b4)
 - `dataTypesEnum` updated to v2 types: `Bool`, `Int64`, `Float64`, `Decimal`, `Text`, `Bytes`, `Date`, `Time`, `Datetime`, `Schedule`, `Point`, `Embedding`
