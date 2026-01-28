@@ -92,21 +92,7 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 					content: {
 						"application/json": {
 							schema: {
-								type: "object",
-								properties: {
-									id: {type: "string", format: "uuid"},
-									name: {type: "string", nullable: true},
-									description: {type: "string", nullable: true},
-									types: {
-										type: "array",
-										items: {type: "string", format: "uuid"},
-									},
-									attributes: {
-										type: "object",
-										additionalProperties: true,
-									},
-								},
-								required: ["id", "types", "attributes"],
+								$ref: "#/components/schemas/EntitySnapshot",
 							},
 						},
 					},
@@ -278,13 +264,7 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 									versions: {
 										type: "array",
 										items: {
-											type: "object",
-											properties: {
-												editId: {type: "string", format: "uuid"},
-												createdAt: {type: "string", format: "date-time"},
-												createdById: {type: "string", format: "uuid", nullable: true},
-											},
-											required: ["editId", "createdAt"],
+											$ref: "#/components/schemas/VersionEntry",
 										},
 									},
 								},
@@ -444,40 +424,11 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 			],
 			responses: {
 				200: {
-					description: "Entity diff",
+					description: "Entity diff with dynamic group keys spread at root level",
 					content: {
 						"application/json": {
 							schema: {
-								type: "object",
-								properties: {
-									entityId: {type: "string", format: "uuid"},
-									fromEditId: {type: "string", format: "uuid"},
-									toEditId: {type: "string", format: "uuid"},
-									name: {
-										type: "object",
-										properties: {
-											type: {type: "string", enum: ["added", "removed", "changed", "unchanged"]},
-											before: {type: "string", nullable: true},
-											after: {type: "string", nullable: true},
-										},
-									},
-									description: {
-										type: "object",
-										properties: {
-											type: {type: "string", enum: ["added", "removed", "changed", "unchanged"]},
-											before: {type: "string", nullable: true},
-											after: {type: "string", nullable: true},
-										},
-									},
-									types: {
-										type: "object",
-										properties: {
-											added: {type: "array", items: {type: "string", format: "uuid"}},
-											removed: {type: "array", items: {type: "string", format: "uuid"}},
-										},
-									},
-								},
-								required: ["entityId", "fromEditId", "toEditId"],
+								$ref: "#/components/schemas/GroupedEntityDiffResponse",
 							},
 						},
 					},
