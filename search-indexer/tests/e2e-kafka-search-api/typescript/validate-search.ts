@@ -86,6 +86,7 @@ class SearchValidator {
     console.log(`${icon} ${message}`);
   }
 
+  /** Verifies 'Alice' search returns 7 entities ordered by score. */
   async test1_BasicAliceSearch(): Promise<void> {
     console.log(`\n${BLUE}Test 1: Basic search for 'Alice' (should return 7 entities ordered by score)${NC}`);
 
@@ -121,6 +122,7 @@ class SearchValidator {
     }
   }
 
+  /** Verifies 'Bob' search returns 1 entity with correct name and description. */
   async test2_BobSearch(): Promise<void> {
     console.log(`\n${BLUE}Test 2: Search for 'Bob' (should return 1 entity)${NC}`);
 
@@ -150,6 +152,7 @@ class SearchValidator {
     }
   }
 
+  /** Verifies 'Acme' search returns the Acme Corp organization entity. */
   async test3_OrganizationSearch(): Promise<void> {
     console.log(`\n${BLUE}Test 3: Search for 'Acme' (should return 1 organization)${NC}`);
 
@@ -172,6 +175,7 @@ class SearchValidator {
     }
   }
 
+  /** Verifies entities have required fields: entityId, name, description, typeIds, scores. */
   async test4_EntityFields(): Promise<void> {
     console.log(`\n${BLUE}Test 4: Verify entity fields (entityId, name, description, typeIds)${NC}`);
 
@@ -208,6 +212,7 @@ class SearchValidator {
     }
   }
 
+  /** Verifies results are ordered by entityGlobalScore in descending order. */
   async test5_ScoreOrdering(): Promise<void> {
     console.log(`\n${BLUE}Test 5: Verify score-based ordering${NC}`);
 
@@ -252,6 +257,7 @@ class SearchValidator {
     }
   }
 
+  /** Verifies response includes total count and execution time (tookMs). */
   async test6_ResponseMetadata(): Promise<void> {
     console.log(`\n${BLUE}Test 6: Verify response metadata${NC}`);
 
@@ -275,6 +281,7 @@ class SearchValidator {
     }
   }
 
+  /** Verifies entities with zero (0.0) and negative (-0.75) scores are returned. */
   async test7_ZeroAndNegativeScores(): Promise<void> {
     console.log(`\n${BLUE}Test 7: Verify zero and negative score entities are returned${NC}`);
 
@@ -316,6 +323,7 @@ class SearchValidator {
     }
   }
 
+  /** Verifies typeIds reflect type relation create/delete scenarios. */
   async test8_TypeIdsScenarios(): Promise<void> {
     console.log(`\n${BLUE}Test 8: Verify typeIds field for different relation scenarios${NC}`);
 
@@ -400,6 +408,7 @@ class SearchValidator {
     }
   }
 
+  /** Verifies soft-deleted entities (Delete Charlie, Delete Dana) are excluded from search. */
   async test9_DeletedEntitiesNotInResults(): Promise<void> {
     console.log(`\n${BLUE}Test 9: Verify deleted entities (Delete Charlie, Delete Dana) do not appear in search results${NC}`);
 
@@ -454,6 +463,7 @@ class SearchValidator {
     }
   }
 
+  /** Verifies entity deleted then updated (Delete Eve) remains excluded from search. */
   async test10_DeletedThenUpdatedEntityNotInResults(): Promise<void> {
     console.log(`\n${BLUE}Test 10: Verify entity deleted then updated (Delete Eve) remains excluded from search${NC}`);
 
@@ -503,6 +513,7 @@ class SearchValidator {
     }
   }
 
+  /** Verifies empty query returns top-ranked results ordered by score. */
   async test11_EmptyQueryTopRanked(): Promise<void> {
     console.log(`\n${BLUE}Test 11: Empty query returns top ranked results (no query parameter)${NC}`);
 
@@ -602,6 +613,7 @@ class SearchValidator {
     }
   }
 
+  /** Verifies unset_properties clears name/description while preserving other fields. */
   async test12_UnsetProperties(): Promise<void> {
     console.log(`\n${BLUE}Test 12: Verify unset_properties functionality (UpdateEntity with unset_values)${NC}`);
 
@@ -679,6 +691,7 @@ class SearchValidator {
     }
   }
 
+  /** Verifies Last-Writer-Wins: sequential updates result in final value persisting. */
   async test13_LWWBehavior(): Promise<void> {
     console.log(`\n${BLUE}Test 13: Verify mixed set/unset + Last-Writer-Wins (LWW) behavior${NC}`);
     console.log(`  ${BLUE}→ Test 1: UpdateEntity with both set and unset (different properties)${NC}`);

@@ -397,8 +397,8 @@ async fn main() -> Result<()> {
         .send(SCORES_TOPIC, None, score_payload)
         .await?;
 
-    // 8. Create entities that will be soft deleted (for delete testing)
-    info!("8. Creating entities for deletion testing...");
+    // 9. Create entities that will be soft deleted (for delete testing)
+    info!("9. Creating entities for deletion testing...");
     let delete_charlie_payload_create = edits::create_entity_edit(
         "Create Delete Charlie",
         test_space,
@@ -429,8 +429,8 @@ async fn main() -> Result<()> {
     )?;
     producer.send(EDITS_TOPIC, None, delete_eve_payload_create).await?;
 
-    // 9. Delete the test entities (soft delete)
-    info!("9. Soft deleting Delete Charlie, Delete Dana, and Delete Eve...");
+    // 10. Delete the test entities (soft delete)
+    info!("10. Soft deleting Delete Charlie, Delete Dana, and Delete Eve...");
     let delete_charlie_payload = edits::delete_entity(
         "Delete Delete Charlie",
         test_space,
@@ -452,8 +452,8 @@ async fn main() -> Result<()> {
     )?;
     producer.send(EDITS_TOPIC, None, delete_eve_payload).await?;
 
-    // 10. Update a deleted entity (Delete Eve) - should remain deleted
-    info!("10. Updating Delete Eve after deletion (testing delete-then-update behavior)...");
+    // 11. Update a deleted entity (Delete Eve) - should remain deleted
+    info!("11. Updating Delete Eve after deletion (testing delete-then-update behavior)...");
     let update_eve_payload = edits::create_entity_edit(
         "Update Delete Eve After Delete",
         test_space,
@@ -493,8 +493,8 @@ async fn main() -> Result<()> {
     info!("  • At Threshold: 0.50");
     info!("  • Below Threshold: 0.25");
 
-    // 9. Test unset_properties functionality
-    info!("\n9. Testing unset_properties functionality...");
+    // 12. Test unset_properties functionality
+    info!("\n12. Testing unset_properties functionality...");
 
     // Test Case 1: Unset 1 property (name)
     let unset_test_1_id = Uuid::parse_str("00000000-0000-0000-0000-000000001111").unwrap();

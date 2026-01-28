@@ -311,7 +311,8 @@ mod tests {
     use super::*;
     use async_trait::async_trait;
     use search_indexer_repository::{
-        BatchOperationResult, BatchOperationSummary, SearchIndexError, UnsetEntityPropertiesRequest,
+        BatchOperationResult, BatchOperationSummary, DeleteEntityRequest, SearchIndexError,
+        UnsetEntityPropertiesRequest,
     };
     use search_indexer_shared::EntityDocument;
     use std::sync::atomic::{AtomicUsize, Ordering};
