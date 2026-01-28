@@ -378,6 +378,210 @@ app.get(
 				{url: "http://localhost:3000", description: "Local Server"},
 				{url: "https://api-testnet.geobrowser.io", description: "Testnet Geo API"},
 			],
+			components: {
+				schemas: {
+					// Value types
+					VersionedValue: {
+						type: "object",
+						description: "A value at a specific version. Only one value field will be set.",
+						properties: {
+							propertyId: {type: "string", format: "uuid"},
+							spaceId: {type: "string", format: "uuid"},
+							// Value columns (GRC-20 v2 data types) - only one will be set
+							boolean: {type: "boolean", nullable: true},
+							integer: {type: "integer", nullable: true},
+							float: {type: "number", nullable: true},
+							decimal: {type: "string", nullable: true},
+							text: {type: "string", nullable: true},
+							bytes: {type: "string", nullable: true, description: "Base64 encoded"},
+							date: {type: "string", format: "date", nullable: true},
+							time: {type: "string", nullable: true, description: "ISO 8601 time"},
+							datetime: {type: "string", format: "date-time", nullable: true},
+							schedule: {type: "object", nullable: true, description: "RFC 5545 schedule"},
+							point: {type: "string", nullable: true, description: "WGS84 point"},
+							embedding: {type: "object", nullable: true},
+							// Metadata
+							language: {type: "string", nullable: true},
+							unit: {type: "string", nullable: true},
+							// Context metadata
+							contextRootId: {type: "string", format: "uuid", nullable: true},
+							contextEdgeTypeId: {type: "string", format: "uuid", nullable: true},
+						},
+						required: ["propertyId", "spaceId"],
+					},
+					VersionedRelation: {
+						type: "object",
+						description: "A relation at a specific version (excluding block relations)",
+						properties: {
+							relationId: {type: "string", format: "uuid"},
+							typeId: {type: "string", format: "uuid"},
+							fromEntityId: {type: "string", format: "uuid"},
+							fromSpaceId: {type: "string", format: "uuid", nullable: true},
+							toEntityId: {type: "string", format: "uuid"},
+							toSpaceId: {type: "string", format: "uuid", nullable: true},
+							position: {type: "string", nullable: true},
+							spaceId: {type: "string", format: "uuid"},
+							verified: {type: "boolean", nullable: true},
+							contextRootId: {type: "string", format: "uuid", nullable: true},
+							contextEdgeTypeId: {type: "string", format: "uuid", nullable: true},
+						},
+						required: ["relationId", "typeId", "fromEntityId", "toEntityId", "spaceId"],
+					},
+					BlockSnapshot: {
+						type: "object",
+						description: "A block snapshot - an entity linked via BLOCKS relation",
+						properties: {
+							id: {type: "string", format: "uuid"},
+							values: {type: "array", items: {$ref: "#/components/schemas/VersionedValue"}},
+							relations: {type: "array", items: {$ref: "#/components/schemas/VersionedRelation"}},
+						},
+						required: ["id", "values", "relations"],
+					},
+					EntitySnapshot: {
+						type: "object",
+						description: "An entity snapshot at a specific version",
+						properties: {
+							id: {type: "string", format: "uuid"},
+							values: {type: "array", items: {$ref: "#/components/schemas/VersionedValue"}},
+							relations: {
+								type: "array",
+								items: {$ref: "#/components/schemas/VersionedRelation"},
+								description: "Excludes block relations",
+							},
+							blocks: {type: "array", items: {$ref: "#/components/schemas/BlockSnapshot"}},
+						},
+						required: ["id", "values", "relations", "blocks"],
+					},
+					VersionEntry: {
+						type: "object",
+						description: "A version entry for listing versions",
+						properties: {
+							editId: {type: "string", format: "uuid"},
+							blockNumber: {type: "string"},
+							createdAt: {type: "string", format: "date-time"},
+						},
+						required: ["editId", "blockNumber", "createdAt"],
+					},
+					// Diff types
+					DiffChunk: {
+						type: "object",
+						description: "A single chunk in a text diff",
+						properties: {
+							value: {type: "string"},
+							added: {type: "boolean"},
+							removed: {type: "boolean"},
+						},
+						required: ["value"],
+					},
+					ValueChange: {
+						type: "object",
+						description: "A value change with before/after values",
+						properties: {
+							propertyId: {type: "string", format: "uuid"},
+							spaceId: {type: "string", format: "uuid"},
+							type: {
+								type: "string",
+								enum: [
+									"TEXT",
+									"BOOL",
+									"INT64",
+									"FLOAT64",
+									"DECIMAL",
+									"BYTES",
+									"DATE",
+									"TIME",
+									"DATETIME",
+									"SCHEDULE",
+									"POINT",
+									"EMBEDDING",
+								],
+							},
+							before: {type: "string", nullable: true},
+							after: {type: "string", nullable: true},
+							diff: {
+								type: "array",
+								items: {$ref: "#/components/schemas/DiffChunk"},
+								description: "Only present for TEXT type",
+							},
+						},
+						required: ["propertyId", "spaceId", "type"],
+					},
+					RelationChange: {
+						type: "object",
+						description: "A relation change",
+						properties: {
+							relationId: {type: "string", format: "uuid"},
+							typeId: {type: "string", format: "uuid"},
+							spaceId: {type: "string", format: "uuid"},
+							changeType: {type: "string", enum: ["ADD", "REMOVE", "UPDATE"]},
+							before: {
+								type: "object",
+								nullable: true,
+								properties: {
+									toEntityId: {type: "string", format: "uuid"},
+									toSpaceId: {type: "string", format: "uuid", nullable: true},
+									position: {type: "string", nullable: true},
+								},
+								required: ["toEntityId"],
+							},
+							after: {
+								type: "object",
+								nullable: true,
+								properties: {
+									toEntityId: {type: "string", format: "uuid"},
+									toSpaceId: {type: "string", format: "uuid", nullable: true},
+									position: {type: "string", nullable: true},
+								},
+								required: ["toEntityId"],
+							},
+						},
+						required: ["relationId", "typeId", "spaceId", "changeType"],
+					},
+					BlockChange: {
+						type: "object",
+						description: "A block change (text, image, or data block)",
+						properties: {
+							id: {type: "string", format: "uuid"},
+							type: {type: "string", enum: ["textBlock", "imageBlock", "dataBlock"]},
+							before: {type: "string", nullable: true},
+							after: {type: "string", nullable: true},
+							diff: {
+								type: "array",
+								items: {$ref: "#/components/schemas/DiffChunk"},
+								description: "Only present for textBlock type",
+							},
+						},
+						required: ["id", "type"],
+					},
+					GroupedEntityDiffResponse: {
+						type: "object",
+						description:
+							"A grouped entity diff response. Dynamic group keys from the 'groups' object are spread at the root level.",
+						properties: {
+							entityId: {type: "string", format: "uuid"},
+							name: {type: "string", nullable: true},
+							values: {type: "array", items: {$ref: "#/components/schemas/ValueChange"}},
+							relations: {type: "array", items: {$ref: "#/components/schemas/RelationChange"}},
+							blocks: {
+								type: "array",
+								items: {$ref: "#/components/schemas/BlockChange"},
+								description: "Static key for BLOCKS relation type changes",
+							},
+							groupKeys: {
+								type: "array",
+								items: {type: "string"},
+								description: "Dynamic group keys present (excluding 'blocks')",
+							},
+						},
+						additionalProperties: {
+							type: "array",
+							items: {$ref: "#/components/schemas/BlockChange"},
+							description: "Dynamic groups by relation type ID",
+						},
+						required: ["entityId", "values", "relations", "blocks", "groupKeys"],
+					},
+				},
+			},
 		},
 	}),
 )
