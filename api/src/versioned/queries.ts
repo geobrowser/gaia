@@ -223,20 +223,20 @@ function queryContextEntities(
 							-- Context-based discovery from values
 							SELECT DISTINCT v.entity_id, v.context_edge_type_id
 							FROM value_versions v
-							WHERE v.context_root_id = ${entityId}
+							WHERE v.context_root_id = ${entityId}::uuid
 								AND v.context_edge_type_id IS NOT NULL
 								AND v.valid_from_key <= ${versionKeyStr}::bigint
 								AND (v.valid_to_key IS NULL OR v.valid_to_key > ${versionKeyStr}::bigint)
-								AND v.space_id = ${spaceId}
+								AND v.space_id = ${spaceId}::uuid
 							UNION
-							-- Context-based discovery from relations
-							SELECT DISTINCT r.entity_id, r.context_edge_type_id
+							-- Context-based discovery from relations (to_entity_id is the child)
+							SELECT DISTINCT r.to_entity_id AS entity_id, r.context_edge_type_id
 							FROM relation_versions r
-							WHERE r.context_root_id = ${entityId}
+							WHERE r.context_root_id = ${entityId}::uuid
 								AND r.context_edge_type_id IS NOT NULL
 								AND r.valid_from_key <= ${versionKeyStr}::bigint
 								AND (r.valid_to_key IS NULL OR r.valid_to_key > ${versionKeyStr}::bigint)
-								AND r.space_id = ${spaceId}
+								AND r.space_id = ${spaceId}::uuid
 						) context_entities
 					`)
 				: await db.execute<{
@@ -247,15 +247,15 @@ function queryContextEntities(
 							-- Context-based discovery from values
 							SELECT DISTINCT v.entity_id, v.context_edge_type_id
 							FROM value_versions v
-							WHERE v.context_root_id = ${entityId}
+							WHERE v.context_root_id = ${entityId}::uuid
 								AND v.context_edge_type_id IS NOT NULL
 								AND v.valid_from_key <= ${versionKeyStr}::bigint
 								AND (v.valid_to_key IS NULL OR v.valid_to_key > ${versionKeyStr}::bigint)
 							UNION
-							-- Context-based discovery from relations
-							SELECT DISTINCT r.entity_id, r.context_edge_type_id
+							-- Context-based discovery from relations (to_entity_id is the child)
+							SELECT DISTINCT r.to_entity_id AS entity_id, r.context_edge_type_id
 							FROM relation_versions r
-							WHERE r.context_root_id = ${entityId}
+							WHERE r.context_root_id = ${entityId}::uuid
 								AND r.context_edge_type_id IS NOT NULL
 								AND r.valid_from_key <= ${versionKeyStr}::bigint
 								AND (r.valid_to_key IS NULL OR r.valid_to_key > ${versionKeyStr}::bigint)

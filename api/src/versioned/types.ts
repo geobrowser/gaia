@@ -213,6 +213,11 @@ export interface EntityDiff {
 }
 
 /**
+ * Items in dynamic groups - can be block changes or full entity diffs.
+ */
+export type DynamicGroupItem = BlockChange | EntityDiff
+
+/**
  * A grouped entity snapshot with hybrid mode support.
  *
  * - `blocks` is the static key for BLOCKS relation type
@@ -242,7 +247,7 @@ export interface GroupedEntityDiff {
 	relations: RelationChange[]
 	blocks: BlockChange[] // Static key for BLOCKS
 	groupKeys: string[] // Dynamic keys present (excluding "blocks")
-	groups: Record<string, BlockChange[]> // Dynamic groups by relation type ID
+	groups: Record<string, DynamicGroupItem[]> // Dynamic groups by relation type ID
 }
 
 // ============================================================================

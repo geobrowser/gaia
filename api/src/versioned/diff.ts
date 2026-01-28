@@ -17,6 +17,7 @@ import type {
 	ValueChange,
 	RelationChange,
 	BlockChange,
+	DynamicGroupItem,
 	EntityDiff,
 	GroupedEntityDiff,
 } from "./types";
@@ -500,6 +501,220 @@ export function diffBlocks(
 }
 
 // ============================================================================
+// Dynamic Group Diffing
+// ============================================================================
+
+/**
+ * Extract name from a block snapshot.
+ */
+function getSnapshotName(snapshot: BlockSnapshot): string | null {
+	const nameValue = snapshot.values.find(
+		(v) => v.propertyId === SystemIds.NAME_PROPERTY
+	);
+	return nameValue?.text ?? null;
+}
+
+/**
+ * Create an empty BlockSnapshot for diffing against when entity is added/removed.
+ */
+function emptySnapshot(id: string): BlockSnapshot {
+	return { id, values: [], relations: [] };
+}
+
+/**
+ * Compute a full EntityDiff for a non-block entity.
+ */
+function diffEntitySnapshot(
+	id: string,
+	from: BlockSnapshot,
+	to: BlockSnapshot
+): Effect.Effect<EntityDiff, never, never> {
+	return Effect.gen(function* () {
+		const [values, relations] = yield* Effect.all([
+			diffValues(from.values, to.values),
+			diffRelations(from.relations, to.relations),
+		]);
+
+		// BlockSnapshots don't have nested blocks, so blocks diff is empty
+		const blocks: BlockChange[] = [];
+
+		return {
+			entityId: id,
+			name: getSnapshotName(to) ?? getSnapshotName(from),
+			values,
+			relations,
+			blocks,
+		};
+	});
+}
+
+/**
+ * Compute diff for a dynamic group.
+ *
+ * For known block types (textBlock, imageBlock, dataBlock), returns BlockChange.
+ * For other entities, returns full EntityDiff with values/relations changes.
+ */
+export function diffDynamicGroup(
+	fromEntities: BlockSnapshot[],
+	toEntities: BlockSnapshot[]
+): Effect.Effect<DynamicGroupItem[], never, never> {
+	return Effect.gen(function* () {
+		const fromMap = new Map(fromEntities.map((e) => [e.id, e]));
+		const toMap = new Map(toEntities.map((e) => [e.id, e]));
+		const changes: DynamicGroupItem[] = [];
+
+		// Find added and changed entities
+		for (const [id, toEntity] of toMap) {
+			const fromEntity = fromMap.get(id);
+			const blockType = getBlockType(toEntity) ?? (fromEntity ? getBlockType(fromEntity) : null);
+
+			if (blockType) {
+				// Handle as known block type
+				if (!fromEntity) {
+					switch (blockType) {
+						case "textBlock": {
+							const afterContent = getMarkdownContent(toEntity);
+							changes.push({
+								id,
+								type: "textBlock",
+								before: null,
+								after: afterContent,
+								diff: computeTextDiff("", afterContent),
+							});
+							break;
+						}
+						case "imageBlock":
+							changes.push({
+								id,
+								type: "imageBlock",
+								before: null,
+								after: getImageUrl(toEntity),
+							});
+							break;
+						case "dataBlock":
+							changes.push({
+								id,
+								type: "dataBlock",
+								before: null,
+								after: getBlockName(toEntity),
+							});
+							break;
+					}
+				} else {
+					switch (blockType) {
+						case "textBlock": {
+							const fromContent = getMarkdownContent(fromEntity);
+							const toContent = getMarkdownContent(toEntity);
+							if (fromContent !== toContent) {
+								changes.push({
+									id,
+									type: "textBlock",
+									before: fromContent,
+									after: toContent,
+									diff: computeTextDiff(fromContent, toContent),
+								});
+							}
+							break;
+						}
+						case "imageBlock": {
+							const fromUrl = getImageUrl(fromEntity);
+							const toUrl = getImageUrl(toEntity);
+							if (fromUrl !== toUrl) {
+								changes.push({
+									id,
+									type: "imageBlock",
+									before: fromUrl,
+									after: toUrl,
+								});
+							}
+							break;
+						}
+						case "dataBlock": {
+							const fromName = getBlockName(fromEntity);
+							const toName = getBlockName(toEntity);
+							if (fromName !== toName) {
+								changes.push({
+									id,
+									type: "dataBlock",
+									before: fromName,
+									after: toName,
+								});
+							}
+							break;
+						}
+					}
+				}
+			} else {
+				// Handle as generic entity - compute full EntityDiff
+				const from = fromEntity ?? emptySnapshot(id);
+				const entityDiff = yield* diffEntitySnapshot(id, from, toEntity);
+
+				// Only include if there are actual changes
+				if (entityDiff.values.length > 0 || entityDiff.relations.length > 0 || entityDiff.blocks.length > 0) {
+					changes.push(entityDiff);
+				}
+			}
+		}
+
+		// Find removed entities
+		for (const [id, fromEntity] of fromMap) {
+			if (!toMap.has(id)) {
+				const blockType = getBlockType(fromEntity);
+
+				if (blockType) {
+					switch (blockType) {
+						case "textBlock": {
+							const beforeContent = getMarkdownContent(fromEntity);
+							changes.push({
+								id,
+								type: "textBlock",
+								before: beforeContent,
+								after: null,
+								diff: computeTextDiff(beforeContent, ""),
+							});
+							break;
+						}
+						case "imageBlock":
+							changes.push({
+								id,
+								type: "imageBlock",
+								before: getImageUrl(fromEntity),
+								after: null,
+							});
+							break;
+						case "dataBlock":
+							changes.push({
+								id,
+								type: "dataBlock",
+								before: getBlockName(fromEntity),
+								after: null,
+							});
+							break;
+					}
+				} else {
+					// Removed entity - diff against empty snapshot
+					const entityDiff = yield* diffEntitySnapshot(id, fromEntity, emptySnapshot(id));
+
+					// Removed entities always have changes (the removal itself)
+					if (entityDiff.values.length > 0 || entityDiff.relations.length > 0 || entityDiff.blocks.length > 0) {
+						changes.push(entityDiff);
+					}
+				}
+			}
+		}
+
+		return changes;
+	}).pipe(
+		Effect.withSpan("diff.diffDynamicGroup", {
+			attributes: {
+				"diff.from_count": fromEntities.length,
+				"diff.to_count": toEntities.length,
+			},
+		})
+	);
+}
+
+// ============================================================================
 // Entity Diffing
 // ============================================================================
 
@@ -566,12 +781,12 @@ export function diffGroupedEntitySnapshots(
 		// Compute dynamic group diffs
 		// Collect all group keys from both snapshots
 		const allGroupKeys = new Set([...from.groupKeys, ...to.groupKeys]);
-		const groups: Record<string, BlockChange[]> = {};
+		const groups: Record<string, DynamicGroupItem[]> = {};
 
 		for (const key of allGroupKeys) {
 			const fromGroup = from.groups[key] ?? [];
 			const toGroup = to.groups[key] ?? [];
-			const groupDiff = yield* diffBlocks(fromGroup, toGroup);
+			const groupDiff = yield* diffDynamicGroup(fromGroup, toGroup);
 
 			// Only include non-empty diffs
 			if (groupDiff.length > 0) {
