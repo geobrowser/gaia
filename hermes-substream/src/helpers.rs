@@ -1,9 +1,13 @@
+use ethabi::{ParamType, Token};
 use substreams::Hex;
 
 /// Returns the hex representation of the address in lowercase with 0x prefix
 pub fn format_hex(address: &[u8]) -> String {
     format!("0x{}", Hex(address).to_string())
 }
+
+/// Function selector for publish(bytes32, bytes, bytes)
+const PUBLISH_SELECTOR: [u8; 4] = [0x6b, 0x47, 0xf6, 0x1a];
 
 /// Extract and validate an IPFS URI from raw event data bytes.
 ///
@@ -69,6 +73,171 @@ fn is_base58(s: &str) -> bool {
 fn is_base32_lower(s: &str) -> bool {
     s.chars()
         .all(|c| c.is_ascii_lowercase() || ('2'..='7').contains(&c))
+}
+
+/// Extract IPFS URIs from PROPOSAL_CREATED action data.
+///
+/// The data is ABI-encoded as: `(bytes16 proposalId, uint8 votingMode, Action[])`
+/// where each Action is `(address to, uint256 value, bytes data)`.
+///
+/// For Publish actions (selector 0x6b47f61a), the data contains:
+/// `publish(bytes32 topic, bytes contentUri, bytes metadata)`
+///
+/// Returns a list of valid IPFS URIs found in Publish actions.
+pub fn extract_proposal_publish_uris(data: &[u8]) -> Vec<String> {
+    let mut uris = Vec::new();
+
+    // Try to decode the proposal data
+    let actions = match decode_proposal_actions(data) {
+        Some(actions) => actions,
+        None => return uris,
+    };
+
+    // For each action, check if it's a Publish action
+    for action_data in actions {
+        if action_data.len() < 4 {
+            continue;
+        }
+
+        // Check if this is a Publish action
+        let selector: [u8; 4] = action_data[0..4].try_into().unwrap_or([0; 4]);
+        if selector != PUBLISH_SELECTOR {
+            continue;
+        }
+
+        // Decode publish args: (bytes32 topic, bytes contentUri, bytes metadata)
+        if let Some(uri) = decode_publish_content_uri(&action_data[4..])
+            && let Some(valid_uri) = extract_ipfs_uri(uri.as_bytes())
+        {
+            uris.push(valid_uri);
+        }
+    }
+
+    uris
+}
+
+/// Decode proposal actions from PROPOSAL_CREATED data.
+/// Returns the action calldata bytes for each action.
+fn decode_proposal_actions(data: &[u8]) -> Option<Vec<Vec<u8>>> {
+    if data.is_empty() {
+        return None;
+    }
+
+    // Try decoding with possible bytes wrapping
+    if let Some(actions) = decode_proposal_actions_inner(data) {
+        return Some(actions);
+    }
+
+    // Try unwrapping once and decoding
+    if let Some(unwrapped) = unwrap_bytes_once(data)
+        && let Some(actions) = decode_proposal_actions_inner(&unwrapped)
+    {
+        return Some(actions);
+    }
+
+    None
+}
+
+/// Inner decode function for proposal actions.
+fn decode_proposal_actions_inner(data: &[u8]) -> Option<Vec<Vec<u8>>> {
+    // ABI schema: (bytes16 proposalId, uint8 votingMode, Action[])
+    // where Action is (address to, uint256 value, bytes data)
+    let params = [
+        ParamType::FixedBytes(16),
+        ParamType::Uint(8),
+        ParamType::Array(Box::new(ParamType::Tuple(vec![
+            ParamType::Address,
+            ParamType::Uint(256),
+            ParamType::Bytes,
+        ]))),
+    ];
+
+    let tokens = ethabi::decode(&params, data).ok()?;
+
+    // Extract action calldata from the actions array
+    let actions = match &tokens.get(2)? {
+        Token::Array(items) => items
+            .iter()
+            .filter_map(|item| match item {
+                Token::Tuple(fields) if fields.len() == 3 => match &fields[2] {
+                    Token::Bytes(bytes) => Some(bytes.clone()),
+                    _ => None,
+                },
+                _ => None,
+            })
+            .collect(),
+        _ => return None,
+    };
+
+    Some(actions)
+}
+
+/// Decode the content_uri from publish action calldata (after selector).
+///
+/// Publish args: (bytes32 topic, bytes contentUri, bytes metadata)
+fn decode_publish_content_uri(data: &[u8]) -> Option<String> {
+    // Decode (bytes32, bytes, bytes)
+    let params = [
+        ParamType::FixedBytes(32),
+        ParamType::Bytes,
+        ParamType::Bytes,
+    ];
+
+    let tokens = ethabi::decode(&params, data).ok()?;
+
+    // Get the contentUri (second element)
+    let content_uri_bytes = match &tokens.get(1)? {
+        Token::Bytes(bytes) => bytes.clone(),
+        _ => return None,
+    };
+
+    // Try to unwrap if wrapped in another bytes encoding
+    let content_uri_bytes = unwrap_bytes_if_needed(&content_uri_bytes);
+
+    // Convert to UTF-8 string, stripping null bytes
+    let cleaned: Vec<u8> = content_uri_bytes.into_iter().filter(|b| *b != 0).collect();
+    String::from_utf8(cleaned).ok()
+}
+
+/// Unwrap bytes if they appear to be ABI-encoded bytes wrapper.
+fn unwrap_bytes_if_needed(data: &[u8]) -> Vec<u8> {
+    if let Some(unwrapped) = unwrap_bytes_once(data) {
+        // Try one more level
+        if let Some(double_unwrapped) = unwrap_bytes_once(&unwrapped) {
+            return double_unwrapped;
+        }
+        return unwrapped;
+    }
+    data.to_vec()
+}
+
+/// Try to unwrap ABI-encoded bytes (offset + length + data).
+fn unwrap_bytes_once(data: &[u8]) -> Option<Vec<u8>> {
+    if data.len() < 64 {
+        return None;
+    }
+
+    // Check for ABI bytes encoding: first 24 bytes should be zero (offset padding)
+    // bytes 24-32: offset (should be 32)
+    // bytes 32-56: should be zero (length padding)
+    // bytes 56-64: length
+    if data[0..24].iter().any(|b| *b != 0) || data[32..56].iter().any(|b| *b != 0) {
+        return None;
+    }
+
+    let offset = u64::from_be_bytes(data[24..32].try_into().ok()?) as usize;
+    if offset != 32 {
+        return None;
+    }
+
+    let len = u64::from_be_bytes(data[56..64].try_into().ok()?) as usize;
+    let start = 64;
+    let end = start + len;
+    if end > data.len() {
+        return None;
+    }
+
+    Some(data[start..end].to_vec())
 }
 
 #[cfg(test)]

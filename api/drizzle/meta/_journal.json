@@ -204,6 +204,13 @@
       "when": 1769544300976,
       "tag": "0028_shocking_madame_web",
       "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1769556236352,
+      "tag": "0029_abandoned_nova",
+      "breakpoints": true
     }
   ]
 }

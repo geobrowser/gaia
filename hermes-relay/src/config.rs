@@ -49,6 +49,9 @@ pub enum HermesModule {
     EditsPublished,
     ContentFlagged,
 
+    // Combined IPFS URI extraction (edits + proposals)
+    IpfsUris,
+
     // Subspace events
     SubspacesAdded,
     SubspacesRemoved,
@@ -84,6 +87,7 @@ impl HermesModule {
 
             HermesModule::EditsPublished => "map_edits_published",
             HermesModule::ContentFlagged => "map_content_flagged",
+            HermesModule::IpfsUris => "map_ipfs_uris",
 
             HermesModule::SubspacesAdded => "map_subspaces_added",
             HermesModule::SubspacesRemoved => "map_subspaces_removed",

@@ -514,4 +514,29 @@ pub struct ObjectUnvotedList {
     #[prost(message, repeated, tag="1")]
     pub votes: ::prost::alloc::vec::Vec<ObjectVoted>,
 }
+// =============================================================================
+// IPFS URI Extraction - combined from multiple sources
+// =============================================================================
+
+/// An IPFS URI extracted from blockchain events.
+/// Used by hermes-ipfs-cache to pre-fetch content.
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct IpfsUri {
+    /// Full IPFS URI (ipfs://Qm... or ipfs://bafy...)
+    #[prost(string, tag="1")]
+    pub uri: ::prost::alloc::string::String,
+    /// 16 bytes - space context
+    #[prost(bytes="vec", tag="2")]
+    pub space_id: ::prost::alloc::vec::Vec<u8>,
+    /// Source type: "edit" or "proposal"
+    #[prost(string, tag="3")]
+    pub source: ::prost::alloc::string::String,
+}
+#[allow(clippy::derive_partial_eq_without_eq)]
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct IpfsUriList {
+    #[prost(message, repeated, tag="1")]
+    pub uris: ::prost::alloc::vec::Vec<IpfsUri>,
+}
 // @@protoc_insertion_point(module)
