@@ -123,6 +123,8 @@ describe("diffValues", () => {
 		const change = result[0] as TextValueChange;
 		expect(change.propertyId).toBe("prop-1");
 		expect(change.type).toBe("TEXT");
+		expect(change.before).toBeNull();
+		expect(change.after).toBe("new text");
 		expect(change.diff).toContainEqual({ value: "new text", added: true });
 	});
 
@@ -136,6 +138,8 @@ describe("diffValues", () => {
 		const change = result[0] as TextValueChange;
 		expect(change.propertyId).toBe("prop-1");
 		expect(change.type).toBe("TEXT");
+		expect(change.before).toBe("old text");
+		expect(change.after).toBeNull();
 		expect(change.diff).toContainEqual({ value: "old text", removed: true });
 	});
 
@@ -148,6 +152,8 @@ describe("diffValues", () => {
 		expect(result).toHaveLength(1);
 		const change = result[0] as TextValueChange;
 		expect(change.type).toBe("TEXT");
+		expect(change.before).toBe("hello world");
+		expect(change.after).toBe("hello universe");
 		expect(change.diff).toContainEqual({ value: "world", removed: true });
 		expect(change.diff).toContainEqual({ value: "universe", added: true });
 	});
@@ -161,8 +167,8 @@ describe("diffValues", () => {
 		expect(result).toHaveLength(1);
 		const change = result[0] as SimpleValueChange;
 		expect(change.type).toBe("INT64");
-		expect(change.from).toBeNull();
-		expect(change.to).toBe("42");
+		expect(change.before).toBeNull();
+		expect(change.after).toBe("42");
 	});
 
 	it("detects changed integer value", () => {
@@ -174,8 +180,8 @@ describe("diffValues", () => {
 		expect(result).toHaveLength(1);
 		const change = result[0] as SimpleValueChange;
 		expect(change.type).toBe("INT64");
-		expect(change.from).toBe("10");
-		expect(change.to).toBe("20");
+		expect(change.before).toBe("10");
+		expect(change.after).toBe("20");
 	});
 
 	it("detects changed boolean value", () => {
@@ -187,8 +193,8 @@ describe("diffValues", () => {
 		expect(result).toHaveLength(1);
 		const change = result[0] as SimpleValueChange;
 		expect(change.type).toBe("BOOL");
-		expect(change.from).toBe("false");
-		expect(change.to).toBe("true");
+		expect(change.before).toBe("false");
+		expect(change.after).toBe("true");
 	});
 
 	it("handles multiple changes in single diff", () => {
@@ -248,8 +254,8 @@ describe("diffRelations", () => {
 		const change = result[0]!;
 		expect(change.relationId).toBe("rel-1");
 		expect(change.changeType).toBe("ADD");
-		expect(change.from).toBeNull();
-		expect(change.to?.toEntityId).toBe("to-1");
+		expect(change.before).toBeNull();
+		expect(change.after?.toEntityId).toBe("to-1");
 	});
 
 	it("detects removed relation", () => {
@@ -262,8 +268,8 @@ describe("diffRelations", () => {
 		const change = result[0]!;
 		expect(change.relationId).toBe("rel-1");
 		expect(change.changeType).toBe("REMOVE");
-		expect(change.from?.toEntityId).toBe("to-1");
-		expect(change.to).toBeNull();
+		expect(change.before?.toEntityId).toBe("to-1");
+		expect(change.after).toBeNull();
 	});
 
 	it("detects changed relation target", () => {
@@ -275,8 +281,8 @@ describe("diffRelations", () => {
 		expect(result).toHaveLength(1);
 		const change = result[0]!;
 		expect(change.changeType).toBe("UPDATE");
-		expect(change.from?.toEntityId).toBe("old-target");
-		expect(change.to?.toEntityId).toBe("new-target");
+		expect(change.before?.toEntityId).toBe("old-target");
+		expect(change.after?.toEntityId).toBe("new-target");
 	});
 
 	it("detects changed relation position", () => {
@@ -288,8 +294,8 @@ describe("diffRelations", () => {
 		expect(result).toHaveLength(1);
 		const change = result[0]!;
 		expect(change.changeType).toBe("UPDATE");
-		expect(change.from?.position).toBe("a");
-		expect(change.to?.position).toBe("b");
+		expect(change.before?.position).toBe("a");
+		expect(change.after?.position).toBe("b");
 	});
 
 	it("handles multiple relation changes", () => {
@@ -335,6 +341,8 @@ describe("diffBlocks", () => {
 		expect(change.id).toBe("block-1");
 		expect(change.type).toBe("textBlock");
 		if (change.type === "textBlock") {
+			expect(change.before).toBeNull();
+			expect(change.after).toBe("new content");
 			expect(change.diff).toContainEqual({ value: "new content", added: true });
 		}
 	});
@@ -349,6 +357,8 @@ describe("diffBlocks", () => {
 		const change = result[0]!;
 		expect(change.type).toBe("textBlock");
 		if (change.type === "textBlock") {
+			expect(change.before).toBe("old content");
+			expect(change.after).toBeNull();
 			expect(change.diff).toContainEqual({ value: "old content", removed: true });
 		}
 	});
@@ -363,6 +373,8 @@ describe("diffBlocks", () => {
 		const change = result[0]!;
 		expect(change.type).toBe("textBlock");
 		if (change.type === "textBlock") {
+			expect(change.before).toBe("old content");
+			expect(change.after).toBe("new content");
 			expect(change.diff).toContainEqual({ value: "old", removed: true });
 			expect(change.diff).toContainEqual({ value: "new", added: true });
 		}
@@ -378,8 +390,8 @@ describe("diffBlocks", () => {
 		const change = result[0]!;
 		expect(change.type).toBe("imageBlock");
 		if (change.type === "imageBlock") {
-			expect(change.from).toBeNull();
-			expect(change.to).toBe("https://example.com/image.png");
+			expect(change.before).toBeNull();
+			expect(change.after).toBe("https://example.com/image.png");
 		}
 	});
 
@@ -393,8 +405,8 @@ describe("diffBlocks", () => {
 		const change = result[0]!;
 		expect(change.type).toBe("imageBlock");
 		if (change.type === "imageBlock") {
-			expect(change.from).toBe("https://old.com/image.png");
-			expect(change.to).toBe("https://new.com/image.png");
+			expect(change.before).toBe("https://old.com/image.png");
+			expect(change.after).toBe("https://new.com/image.png");
 		}
 	});
 
@@ -408,8 +420,8 @@ describe("diffBlocks", () => {
 		const change = result[0]!;
 		expect(change.type).toBe("dataBlock");
 		if (change.type === "dataBlock") {
-			expect(change.from).toBeNull();
-			expect(change.to).toBe("My Data Block");
+			expect(change.before).toBeNull();
+			expect(change.after).toBe("My Data Block");
 		}
 	});
 

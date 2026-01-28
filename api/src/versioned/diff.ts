@@ -119,19 +119,22 @@ export function diffValues(
 		if (!fromValue) {
 			// Added value
 			if (isTextValue(toValue)) {
+				const afterText = getTextValue(toValue);
 				changes.push({
 					propertyId: toValue.propertyId,
 					spaceId: toValue.spaceId,
 					type: "TEXT",
-					diff: computeTextDiff("", getTextValue(toValue)),
+					before: null,
+					after: afterText,
+					diff: computeTextDiff("", afterText),
 				});
 			} else {
 				changes.push({
 					propertyId: toValue.propertyId,
 					spaceId: toValue.spaceId,
 					type: getValueType(toValue) as Exclude<ReturnType<typeof getValueType>, "TEXT">,
-					from: null,
-					to: serializeValue(toValue),
+					before: null,
+					after: serializeValue(toValue),
 				});
 			}
 		} else {
@@ -149,6 +152,8 @@ export function diffValues(
 						propertyId: toValue.propertyId,
 						spaceId: toValue.spaceId,
 						type: "TEXT",
+						before: fromStr,
+						after: toStr,
 						diff: computeTextDiff(fromStr ?? "", toStr ?? ""),
 					});
 				} else {
@@ -156,8 +161,8 @@ export function diffValues(
 						propertyId: toValue.propertyId,
 						spaceId: toValue.spaceId,
 						type: getValueType(toValue) as Exclude<ReturnType<typeof getValueType>, "TEXT">,
-						from: fromStr,
-						to: toStr,
+						before: fromStr,
+						after: toStr,
 					});
 				}
 			}
@@ -168,19 +173,22 @@ export function diffValues(
 	for (const [key, fromValue] of fromMap) {
 		if (!toMap.has(key)) {
 			if (isTextValue(fromValue)) {
+				const beforeText = getTextValue(fromValue);
 				changes.push({
 					propertyId: fromValue.propertyId,
 					spaceId: fromValue.spaceId,
 					type: "TEXT",
-					diff: computeTextDiff(getTextValue(fromValue), ""),
+					before: beforeText,
+					after: null,
+					diff: computeTextDiff(beforeText, ""),
 				});
 			} else {
 				changes.push({
 					propertyId: fromValue.propertyId,
 					spaceId: fromValue.spaceId,
 					type: getValueType(fromValue) as Exclude<ReturnType<typeof getValueType>, "TEXT">,
-					from: serializeValue(fromValue),
-					to: null,
+					before: serializeValue(fromValue),
+					after: null,
 				});
 			}
 		}
@@ -215,8 +223,8 @@ export function diffRelations(
 				typeId: toRel.typeId,
 				spaceId: toRel.spaceId,
 				changeType: "ADD",
-				from: null,
-				to: {
+				before: null,
+				after: {
 					toEntityId: toRel.toEntityId,
 					toSpaceId: toRel.toSpaceId,
 					position: toRel.position,
@@ -235,12 +243,12 @@ export function diffRelations(
 					typeId: toRel.typeId,
 					spaceId: toRel.spaceId,
 					changeType: "UPDATE",
-					from: {
+					before: {
 						toEntityId: fromRel.toEntityId,
 						toSpaceId: fromRel.toSpaceId,
 						position: fromRel.position,
 					},
-					to: {
+					after: {
 						toEntityId: toRel.toEntityId,
 						toSpaceId: toRel.toSpaceId,
 						position: toRel.position,
@@ -258,12 +266,12 @@ export function diffRelations(
 				typeId: fromRel.typeId,
 				spaceId: fromRel.spaceId,
 				changeType: "REMOVE",
-				from: {
+				before: {
 					toEntityId: fromRel.toEntityId,
 					toSpaceId: fromRel.toSpaceId,
 					position: fromRel.position,
 				},
-				to: null,
+				after: null,
 			});
 		}
 	}
@@ -347,27 +355,31 @@ export function diffBlocks(
 		if (!fromBlock) {
 			// Added block
 			switch (blockType) {
-				case "textBlock":
+				case "textBlock": {
+					const afterContent = getMarkdownContent(toBlock);
 					changes.push({
 						id,
 						type: "textBlock",
-						diff: computeTextDiff("", getMarkdownContent(toBlock)),
+						before: null,
+						after: afterContent,
+						diff: computeTextDiff("", afterContent),
 					});
 					break;
+				}
 				case "imageBlock":
 					changes.push({
 						id,
 						type: "imageBlock",
-						from: null,
-						to: getImageUrl(toBlock),
+						before: null,
+						after: getImageUrl(toBlock),
 					});
 					break;
 				case "dataBlock":
 					changes.push({
 						id,
 						type: "dataBlock",
-						from: null,
-						to: getBlockName(toBlock),
+						before: null,
+						after: getBlockName(toBlock),
 					});
 					break;
 			}
@@ -381,6 +393,8 @@ export function diffBlocks(
 						changes.push({
 							id,
 							type: "textBlock",
+							before: fromContent,
+							after: toContent,
 							diff: computeTextDiff(fromContent, toContent),
 						});
 					}
@@ -393,8 +407,8 @@ export function diffBlocks(
 						changes.push({
 							id,
 							type: "imageBlock",
-							from: fromUrl,
-							to: toUrl,
+							before: fromUrl,
+							after: toUrl,
 						});
 					}
 					break;
@@ -406,8 +420,8 @@ export function diffBlocks(
 						changes.push({
 							id,
 							type: "dataBlock",
-							from: fromName,
-							to: toName,
+							before: fromName,
+							after: toName,
 						});
 					}
 					break;
@@ -423,27 +437,31 @@ export function diffBlocks(
 			if (!blockType) continue;
 
 			switch (blockType) {
-				case "textBlock":
+				case "textBlock": {
+					const beforeContent = getMarkdownContent(fromBlock);
 					changes.push({
 						id,
 						type: "textBlock",
-						diff: computeTextDiff(getMarkdownContent(fromBlock), ""),
+						before: beforeContent,
+						after: null,
+						diff: computeTextDiff(beforeContent, ""),
 					});
 					break;
+				}
 				case "imageBlock":
 					changes.push({
 						id,
 						type: "imageBlock",
-						from: getImageUrl(fromBlock),
-						to: null,
+						before: getImageUrl(fromBlock),
+						after: null,
 					});
 					break;
 				case "dataBlock":
 					changes.push({
 						id,
 						type: "dataBlock",
-						from: getBlockName(fromBlock),
-						to: null,
+						before: getBlockName(fromBlock),
+						after: null,
 					});
 					break;
 			}

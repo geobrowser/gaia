@@ -81,6 +81,8 @@ export interface TextValueChange {
 	propertyId: string
 	spaceId: string
 	type: TextValueType
+	before: string | null
+	after: string | null
 	diff: DiffChunk[]
 }
 
@@ -91,8 +93,8 @@ export interface SimpleValueChange {
 	propertyId: string
 	spaceId: string
 	type: SimpleValueType
-	from: string | null
-	to: string | null
+	before: string | null
+	after: string | null
 }
 
 export type ValueChange = TextValueChange | SimpleValueChange
@@ -127,12 +129,12 @@ export interface RelationChange {
 	typeId: string
 	spaceId: string
 	changeType: "ADD" | "REMOVE" | "UPDATE"
-	from?: {
+	before?: {
 		toEntityId: string
 		toSpaceId?: string | null
 		position?: string | null
 	} | null
-	to?: {
+	after?: {
 		toEntityId: string
 		toSpaceId?: string | null
 		position?: string | null
@@ -158,6 +160,8 @@ export interface BlockSnapshot {
 export interface TextBlockChange {
 	id: string
 	type: "textBlock"
+	before: string | null
+	after: string | null
 	diff: DiffChunk[]
 }
 
@@ -167,8 +171,8 @@ export interface TextBlockChange {
 export interface ImageBlockChange {
 	id: string
 	type: "imageBlock"
-	from: string | null
-	to: string | null
+	before: string | null
+	after: string | null
 }
 
 /**
@@ -177,8 +181,8 @@ export interface ImageBlockChange {
 export interface DataBlockChange {
 	id: string
 	type: "dataBlock"
-	from: string | null
-	to: string | null
+	before: string | null
+	after: string | null
 }
 
 export type BlockChange = TextBlockChange | ImageBlockChange | DataBlockChange
