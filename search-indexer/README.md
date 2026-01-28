@@ -149,7 +149,7 @@ The search-indexer automatically creates performance spans for key operations:
   - Fields: `batch_size`, `event_count`, `offset_start`, `offset_end`
 - **`search_indexer.consume_scores_batch`**: Score event batch consumption
   - Fields: `batch_size`, `event_count`, `offset_start`, `offset_end`
-- **`search_indexer.process_entity_batch`**: Entity event processing
+- **`search_indexer.handle_entity_batch`**: Entity event processing
   - Fields: `event_count`
 - **`search_indexer.process_score_batch`**: Score event processing
   - Fields: `event_count`
