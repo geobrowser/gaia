@@ -41,6 +41,7 @@ This is the fastest way to test search functionality end-to-end:
    OPENSEARCH_URL=http://localhost:9200 \
    KAFKA_GROUP_ID=search-indexer-test-$(date +%s) \
    RUST_LOG=debug,search_indexer=debug \
+   ENTITIES_INDEX_VERSION=0 \
    cargo run -p search-indexer --features search-indexer-repository/auto_index_creation
    ```
 
@@ -101,6 +102,7 @@ While e2e-kafka-search-api is recommended for search-indexer testing, you can al
    OPENSEARCH_URL=http://localhost:9200 \
    KAFKA_GROUP_ID=search-indexer-test-$(date +%s) \
    RUST_LOG=debug,search_indexer=debug \
+   ENTITIES_INDEX_VERSION=0 \
    cargo run -p search-indexer --features search-indexer-repository/auto_index_creation
    ```
 

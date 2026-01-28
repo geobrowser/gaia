@@ -50,7 +50,7 @@ pub fn create_unset_properties_script(
             )
         })
         .collect::<Vec<_>>()
-        .join("; "))
+        .join("\n"))
 }
 
 #[cfg(test)]
@@ -176,8 +176,8 @@ mod tests {
         assert!(script.contains("avatar"));
         assert!(script.contains("containsKey"));
         assert!(script.contains("remove"));
-        // Should have semicolons separating the statements
-        assert_eq!(script.matches(';').count(), 2);
+        // Should have newlines separating the statements
+        assert_eq!(script.matches('\n').count(), 2);
     }
 
     #[test]
@@ -191,8 +191,8 @@ mod tests {
         ];
         let script = create_unset_properties_script(&keys).unwrap();
 
-        // Verify exact script format
-        let expected_script = "if (ctx._source.containsKey(\"name\")) { ctx._source.remove(\"name\") }; if (ctx._source.containsKey(\"description\")) { ctx._source.remove(\"description\") }; if (ctx._source.containsKey(\"avatar\")) { ctx._source.remove(\"avatar\") }; if (ctx._source.containsKey(\"cover\")) { ctx._source.remove(\"cover\") }; if (ctx._source.containsKey(\"entity_global_score\")) { ctx._source.remove(\"entity_global_score\") }";
+        // Verify exact script format (newlines instead of semicolons for Painless compatibility)
+        let expected_script = "if (ctx._source.containsKey(\"name\")) { ctx._source.remove(\"name\") }\nif (ctx._source.containsKey(\"description\")) { ctx._source.remove(\"description\") }\nif (ctx._source.containsKey(\"avatar\")) { ctx._source.remove(\"avatar\") }\nif (ctx._source.containsKey(\"cover\")) { ctx._source.remove(\"cover\") }\nif (ctx._source.containsKey(\"entity_global_score\")) { ctx._source.remove(\"entity_global_score\") }";
         assert_eq!(script, expected_script);
     }
 

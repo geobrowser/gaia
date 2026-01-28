@@ -6,6 +6,7 @@ use uuid::Uuid;
 use hermes_schema::pb::scoring::{EntityScore, HermesScoresBatch, PerspectiveScore, SpaceScore};
 
 /// Generate a batch of entity global scores
+#[allow(dead_code)]
 pub fn create_entity_scores(scores: Vec<(Uuid, f64)>) -> Result<Vec<u8>> {
     let timestamp = Utc::now().timestamp() as u64;
 
@@ -33,6 +34,7 @@ pub fn create_entity_scores(scores: Vec<(Uuid, f64)>) -> Result<Vec<u8>> {
 }
 
 /// Generate a batch of space scores
+#[allow(dead_code)]
 pub fn create_space_scores(scores: Vec<(Uuid, f64)>) -> Result<Vec<u8>> {
     let timestamp = Utc::now().timestamp() as u64;
 
@@ -60,6 +62,7 @@ pub fn create_space_scores(scores: Vec<(Uuid, f64)>) -> Result<Vec<u8>> {
 }
 
 /// Generate a batch of perspective scores (entity-space combinations)
+#[allow(dead_code)]
 pub fn create_perspective_scores(scores: Vec<(Uuid, Uuid, f64)>) -> Result<Vec<u8>> {
     let timestamp = Utc::now().timestamp() as u64;
 
