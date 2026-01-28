@@ -1122,6 +1122,8 @@ impl Storage {
         let mut embeddings = Vec::with_capacity(set_values.len());
         let mut time_utcs = Vec::with_capacity(set_values.len());
         let mut datetime_utcs = Vec::with_capacity(set_values.len());
+        let mut context_root_ids = Vec::with_capacity(set_values.len());
+        let mut context_edge_type_ids = Vec::with_capacity(set_values.len());
 
         for v in &set_values {
             // Derive deterministic ID for idempotency
@@ -1151,6 +1153,8 @@ impl Storage {
             embeddings.push(&v.embedding);
             time_utcs.push(v.time_utc.as_deref());
             datetime_utcs.push(v.datetime_utc.as_deref());
+            context_root_ids.push(v.context_root_id);
+            context_edge_type_ids.push(v.context_edge_type_id);
         }
 
         sqlx::query(
@@ -1159,14 +1163,14 @@ impl Storage {
                 id, entity_id, property_id, space_id, valid_from_key,
                 language, unit, text, boolean, decimal, time, point,
                 integer, float, bytes, date, datetime, schedule, embedding,
-                time_utc, datetime_utc
+                time_utc, datetime_utc, context_root_id, context_edge_type_id
             )
             SELECT * FROM UNNEST(
                 $1::uuid[], $2::uuid[], $3::uuid[], $4::uuid[], $5::bigint[],
                 $6::text[], $7::text[], $8::text[], $9::boolean[], $10::numeric[],
                 $11::text[], $12::text[], $13::bigint[], $14::double precision[],
                 $15::bytea[], $16::text[], $17::text[], $18::jsonb[], $19::jsonb[],
-                $20::timetz[], $21::timestamptz[]
+                $20::timetz[], $21::timestamptz[], $22::uuid[], $23::uuid[]
             )
             ON CONFLICT (id) DO NOTHING
             "#,
@@ -1192,6 +1196,8 @@ impl Storage {
         .bind(&embeddings)
         .bind(&time_utcs)
         .bind(&datetime_utcs)
+        .bind(&context_root_ids)
+        .bind(&context_edge_type_ids)
         .execute(&mut **tx)
         .await?;
 
@@ -1261,6 +1267,8 @@ impl Storage {
         let mut r_space_ids = Vec::with_capacity(creates.len());
         let mut r_verified = Vec::with_capacity(creates.len());
         let mut valid_from_keys = Vec::with_capacity(creates.len());
+        let mut context_root_ids = Vec::with_capacity(creates.len());
+        let mut context_edge_type_ids = Vec::with_capacity(creates.len());
 
         for r in &creates {
             // Derive deterministic ID for idempotency
@@ -1280,17 +1288,21 @@ impl Storage {
             r_space_ids.push(r.space_id);
             r_verified.push(r.verified);
             valid_from_keys.push(version_key);
+            context_root_ids.push(r.context_root_id);
+            context_edge_type_ids.push(r.context_edge_type_id);
         }
 
         sqlx::query(
             r#"
             INSERT INTO relation_versions (
                 id, relation_id, entity_id, type_id, from_entity_id, from_space_id,
-                to_entity_id, to_space_id, position, space_id, verified, valid_from_key
+                to_entity_id, to_space_id, position, space_id, verified, valid_from_key,
+                context_root_id, context_edge_type_id
             )
             SELECT * FROM UNNEST(
                 $1::uuid[], $2::uuid[], $3::uuid[], $4::uuid[], $5::uuid[], $6::uuid[],
-                $7::uuid[], $8::uuid[], $9::text[], $10::uuid[], $11::boolean[], $12::bigint[]
+                $7::uuid[], $8::uuid[], $9::text[], $10::uuid[], $11::boolean[], $12::bigint[],
+                $13::uuid[], $14::uuid[]
             )
             ON CONFLICT (id) DO NOTHING
             "#,
@@ -1307,6 +1319,8 @@ impl Storage {
         .bind(&r_space_ids)
         .bind(&r_verified)
         .bind(&valid_from_keys)
+        .bind(&context_root_ids)
+        .bind(&context_edge_type_ids)
         .execute(&mut **tx)
         .await?;
 

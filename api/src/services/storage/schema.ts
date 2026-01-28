@@ -738,6 +738,9 @@ export const valueVersions = pgTable(
 		// UTC-normalized columns (Rust writes, PostgreSQL casts to UTC, DB timezone=UTC ensures UTC output)
 		timeUtc: time("time_utc", { withTimezone: true }),
 		datetimeUtc: timestamp("datetime_utc", { withTimezone: true, mode: "date" }),
+		// GRC-20 edit context (for context-aware diff grouping)
+		contextRootId: uuid("context_root_id"), // Parent entity in edit context
+		contextEdgeTypeId: uuid("context_edge_type_id"), // Relation type from context edge
 	},
 	(table) => [
 		index("value_versions_entity_idx").on(table.entityId),
@@ -778,6 +781,9 @@ export const relationVersions = pgTable(
 		verified: boolean("verified"),
 		validFromKey: bigint("valid_from_key", { mode: "bigint" }).notNull(),
 		validToKey: bigint("valid_to_key", { mode: "bigint" }),
+		// GRC-20 edit context (for context-aware diff grouping)
+		contextRootId: uuid("context_root_id"), // Parent entity in edit context
+		contextEdgeTypeId: uuid("context_edge_type_id"), // Relation type from context edge
 	},
 	(table) => [
 		index("relation_versions_relation_idx").on(table.relationId),

@@ -85,6 +85,9 @@ export async function getValuesAtVersion(
 		// Metadata
 		language: row.language as string | null,
 		unit: row.unit as string | null,
+		// Context metadata (for block grouping)
+		contextRootId: row.context_root_id as string | null,
+		contextEdgeTypeId: row.context_edge_type_id as string | null,
 	}));
 }
 
@@ -124,11 +127,21 @@ export async function getRelationsAtVersion(
 		position: row.position as string | null,
 		spaceId: row.space_id as string,
 		verified: row.verified as boolean | null,
+		// Context metadata (for block grouping)
+		contextRootId: row.context_root_id as string | null,
+		contextEdgeTypeId: row.context_edge_type_id as string | null,
 	}));
 }
 
 /**
  * Get block IDs for an entity at a specific version.
+ *
+ * Uses context metadata to discover blocks when available:
+ * - If context_root_id = entityId and context_edge_type_id = BLOCKS_TYPE_ID,
+ *   the entity is a block of the parent entity
+ *
+ * Falls back to BLOCKS relation lookup for backward compatibility when
+ * context metadata is NULL.
  */
 async function getBlockIdsAtVersion(
 	db: Database,
@@ -138,26 +151,73 @@ async function getBlockIdsAtVersion(
 ): Promise<string[]> {
 	const versionKeyStr = versionKey.toString();
 
+	// Strategy: Use UNION to combine both discovery methods
+	// 1. Context-based: Find entities with context_root_id = entityId AND context_edge_type_id = BLOCKS
+	// 2. Relation-based (fallback): Find BLOCKS relations from this entity
+	//
+	// The DISTINCT ensures we don't duplicate if both methods find the same block
 	const result = spaceId
-		? await db.execute<{ to_entity_id: string }>(sql`
-				SELECT to_entity_id FROM relation_versions
-				WHERE from_entity_id = ${entityId}
-					AND type_id = ${BLOCKS_TYPE_ID}
-					AND valid_from_key <= ${versionKeyStr}::bigint
-					AND (valid_to_key IS NULL OR valid_to_key > ${versionKeyStr}::bigint)
-					AND space_id = ${spaceId}
-				ORDER BY position
+		? await db.execute<{ block_id: string; position: string | null }>(sql`
+				SELECT DISTINCT block_id, position FROM (
+					-- Context-based discovery: find values where this entity is the context root
+					SELECT DISTINCT v.entity_id AS block_id, NULL AS position
+					FROM value_versions v
+					WHERE v.context_root_id = ${entityId}
+						AND v.context_edge_type_id = ${BLOCKS_TYPE_ID}
+						AND v.valid_from_key <= ${versionKeyStr}::bigint
+						AND (v.valid_to_key IS NULL OR v.valid_to_key > ${versionKeyStr}::bigint)
+						AND v.space_id = ${spaceId}
+					UNION
+					-- Context-based discovery: find relations where this entity is the context root
+					SELECT DISTINCT r.entity_id AS block_id, NULL AS position
+					FROM relation_versions r
+					WHERE r.context_root_id = ${entityId}
+						AND r.context_edge_type_id = ${BLOCKS_TYPE_ID}
+						AND r.valid_from_key <= ${versionKeyStr}::bigint
+						AND (r.valid_to_key IS NULL OR r.valid_to_key > ${versionKeyStr}::bigint)
+						AND r.space_id = ${spaceId}
+					UNION
+					-- Fallback: BLOCKS relation lookup (for data without context metadata)
+					SELECT r.to_entity_id AS block_id, r.position
+					FROM relation_versions r
+					WHERE r.from_entity_id = ${entityId}
+						AND r.type_id = ${BLOCKS_TYPE_ID}
+						AND r.valid_from_key <= ${versionKeyStr}::bigint
+						AND (r.valid_to_key IS NULL OR r.valid_to_key > ${versionKeyStr}::bigint)
+						AND r.space_id = ${spaceId}
+				) blocks
+				ORDER BY position NULLS LAST
 			`)
-		: await db.execute<{ to_entity_id: string }>(sql`
-				SELECT to_entity_id FROM relation_versions
-				WHERE from_entity_id = ${entityId}
-					AND type_id = ${BLOCKS_TYPE_ID}
-					AND valid_from_key <= ${versionKeyStr}::bigint
-					AND (valid_to_key IS NULL OR valid_to_key > ${versionKeyStr}::bigint)
-				ORDER BY position
+		: await db.execute<{ block_id: string; position: string | null }>(sql`
+				SELECT DISTINCT block_id, position FROM (
+					-- Context-based discovery: find values where this entity is the context root
+					SELECT DISTINCT v.entity_id AS block_id, NULL AS position
+					FROM value_versions v
+					WHERE v.context_root_id = ${entityId}
+						AND v.context_edge_type_id = ${BLOCKS_TYPE_ID}
+						AND v.valid_from_key <= ${versionKeyStr}::bigint
+						AND (v.valid_to_key IS NULL OR v.valid_to_key > ${versionKeyStr}::bigint)
+					UNION
+					-- Context-based discovery: find relations where this entity is the context root
+					SELECT DISTINCT r.entity_id AS block_id, NULL AS position
+					FROM relation_versions r
+					WHERE r.context_root_id = ${entityId}
+						AND r.context_edge_type_id = ${BLOCKS_TYPE_ID}
+						AND r.valid_from_key <= ${versionKeyStr}::bigint
+						AND (r.valid_to_key IS NULL OR r.valid_to_key > ${versionKeyStr}::bigint)
+					UNION
+					-- Fallback: BLOCKS relation lookup (for data without context metadata)
+					SELECT r.to_entity_id AS block_id, r.position
+					FROM relation_versions r
+					WHERE r.from_entity_id = ${entityId}
+						AND r.type_id = ${BLOCKS_TYPE_ID}
+						AND r.valid_from_key <= ${versionKeyStr}::bigint
+						AND (r.valid_to_key IS NULL OR r.valid_to_key > ${versionKeyStr}::bigint)
+				) blocks
+				ORDER BY position NULLS LAST
 			`);
 
-	return result.rows.map((row) => row.to_entity_id);
+	return result.rows.map((row) => row.block_id);
 }
 
 /**
