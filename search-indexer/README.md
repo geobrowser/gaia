@@ -331,6 +331,57 @@ curl --compressed "http://localhost:3000/search?query=alice&type_ids=00000000-00
 ```
 
 
+## GRC-20 Support
+
+The search indexer consumes `HermesEdit` messages from Kafka and decodes the GRC-20 v2 payload using the `grc-20` crate (v0.3.0). Only operations relevant to search indexing are processed.
+
+### Handled Operations
+
+| Operation | Handling | Notes |
+|-----------|----------|-------|
+| `UpdateEntity` | ✓ Indexed | Extracts `name`, `description`, `avatar` properties. Handles `unset_values` to clear properties. |
+| `CreateRelation` | ✓ Indexed | Only processes **type relations** (where `relation_type == TYPE_RELATION_TYPE_ID`). Adds type IDs to entities for type filtering. |
+| `DeleteRelation` | ✓ Indexed | Removes type relations from entities. |
+| `DeleteEntity` | ✓ Indexed | Soft delete - sets `deleted=true` on the entity document. Deleted entities are excluded from search results. |
+
+### Skipped Operations (Not Relevant for Search)
+
+| Operation | Reason |
+|-----------|--------|
+| `CreateEntity` | Search index only needs entity metadata from `UpdateEntity`. Empty entities aren't searchable. |
+| `RestoreEntity` | Not yet implemented. Would need to set `deleted=false` to un-delete entities. |
+| `UpdateRelation` | Non-type relations don't affect search. Type relation updates not supported. |
+| `RestoreRelation` | Not yet implemented. Would need to restore deleted type relations. |
+| `CreateValueRef` | Value references don't affect searchable content. |
+
+### Soft Delete Behavior
+
+When a `DeleteEntity` operation is processed:
+1. The entity document is updated with `deleted=true`
+2. The OpenSearch query filters exclude `deleted=true` documents
+3. Subsequent updates to a deleted entity will still be indexed (no tombstone dominance enforcement in search indexer)
+
+**Note:** `RestoreEntity` is not currently handled. If you need to un-delete an entity, you would need to manually update the OpenSearch document or re-index.
+
+### Message Format
+
+The indexer expects `HermesEdit` protobuf messages on the `knowledge.edits` Kafka topic:
+
+```protobuf
+message HermesEdit {
+  bytes id = 1;           // Edit UUID (16 bytes)
+  string name = 2;        // Human-readable edit name
+  bytes payload = 3;      // GRC-20 v2 encoded bytes (GRC2 or GRC2Z)
+  repeated bytes authors = 4;
+  bytes language = 5;     // Optional
+  bytes space_id = 6;     // Space UUID (16 bytes)
+  bool is_canonical = 7;
+  BlockchainMetadata meta = 8;
+}
+```
+
+The `payload` field contains GRC-20 v2 wire format bytes, decoded using `grc_20::decode_edit()`.
+
 ## Troubleshooting
 
 ### Common issues
