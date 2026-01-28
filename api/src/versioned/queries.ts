@@ -612,11 +612,10 @@ export function getEntityVersions(
 				? await db.execute<{
 						edit_id: string;
 						block_number: string;
-						sequence: number;
 						created_at: Date;
 						version_key: string;
 				  }>(sql`
-						SELECT DISTINCT e.edit_id, e.block_number, e.sequence, e.created_at, e.version_key
+						SELECT DISTINCT e.edit_id, e.block_number, e.created_at, e.version_key
 						FROM edit_versions e
 						WHERE e.version_key IN (
 							SELECT DISTINCT valid_from_key FROM value_versions
@@ -631,11 +630,10 @@ export function getEntityVersions(
 				: await db.execute<{
 						edit_id: string;
 						block_number: string;
-						sequence: number;
 						created_at: Date;
 						version_key: string;
 				  }>(sql`
-						SELECT DISTINCT e.edit_id, e.block_number, e.sequence, e.created_at, e.version_key
+						SELECT DISTINCT e.edit_id, e.block_number, e.created_at, e.version_key
 						FROM edit_versions e
 						WHERE e.version_key IN (
 							SELECT DISTINCT valid_from_key FROM value_versions
@@ -651,7 +649,6 @@ export function getEntityVersions(
 			return result.rows.map((row) => ({
 				editId: row.edit_id,
 				blockNumber: row.block_number.toString(),
-				sequence: row.sequence,
 				createdAt:
 					row.created_at instanceof Date
 						? row.created_at.toISOString()

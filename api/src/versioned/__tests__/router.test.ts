@@ -237,13 +237,11 @@ describe("GET /versioned/entities/:id/versions", () => {
 					{
 						edit_id: "edit-1",
 						block_number: "100",
-						sequence: 1,
 						created_at: "2024-01-01T00:00:00Z",
 					},
 					{
 						edit_id: "edit-2",
 						block_number: "200",
-						sequence: 2,
 						created_at: "2024-01-02T00:00:00Z",
 					},
 				],
@@ -269,7 +267,6 @@ describe("GET /versioned/entities/:id/versions", () => {
 					{
 						edit_id: "edit-1",
 						block_number: "100",
-						sequence: 1,
 						created_at: "2024-01-01T00:00:00Z",
 					},
 				],

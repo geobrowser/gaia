@@ -260,7 +260,6 @@ export interface GroupedEntityDiff {
 export interface VersionEntry {
 	editId: string
 	blockNumber: string
-	sequence: number
 	createdAt: string
 }
 
