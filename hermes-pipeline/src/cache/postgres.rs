@@ -1,18 +1,22 @@
 //! PostgreSQL-backed IPFS cache implementation.
 //!
 //! Reads from the `ipfs_cache` table populated by `hermes-ipfs-cache`.
+//!
+//! Note: As of v2, the cache stores raw GRC2/GRC2Z payload bytes that have
+//! been validated by hermes-ipfs-cache. No decoding is performed here.
 
 use async_trait::async_trait;
-use prost::Message;
 use sqlx::{Postgres, Row, postgres::PgPoolOptions};
-use wire::pb::grc20::Edit;
 
 use super::{CacheError, CachedEdit, IpfsCache};
 
 /// PostgreSQL-backed IPFS cache.
 ///
 /// Connects to the same database as `hermes-ipfs-cache` to read pre-fetched
-/// IPFS content. The cache is keyed by IPFS URI (e.g., "ipfs://Qm...").
+/// and validated IPFS content. The cache is keyed by IPFS URI (e.g., "ipfs://Qm...").
+///
+/// The stored bytes are raw GRC2/GRC2Z format, already validated by hermes-ipfs-cache.
+/// Consumers (e.g., kg-indexer) must decode using the grc-20 crate.
 pub struct PostgresCache {
     pool: sqlx::Pool<Postgres>,
 }
@@ -51,12 +55,11 @@ impl IpfsCache for PostgresCache {
 
                 let data: Option<Vec<u8>> = row.get("data");
                 match data {
-                    Some(bytes) => {
-                        let edit = Edit::decode(bytes.as_slice())
-                            .map_err(|e| CacheError::DeserializeError(e.to_string()))?;
+                    Some(payload) => {
+                        // Return raw bytes - already validated by hermes-ipfs-cache
                         Ok(CachedEdit::success(
                             ipfs_hash.to_string(),
-                            edit,
+                            payload,
                             space_id_bytes,
                         ))
                     }

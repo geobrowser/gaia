@@ -17,6 +17,12 @@ import {SearchError, type SearchQuery, type SearchResponse, type SearchResult, t
 const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 /**
+ * Default average score for entities without a specific score.
+ * When an entity has no score value (missing or empty), this default is used.
+ */
+export const DEFAULT_AVERAGE_SCORE = 0.0
+
+/**
  * Minimum score threshold for search boosting.
  * Any score below this threshold will be clamped to this value.
  * Since z-scores typically fall within [-3, 3], a threshold of -10 provides
@@ -175,15 +181,23 @@ export class OpenSearchClient implements SearchClient {
 	 * - Prefix matching strongly indicates user intent (especially for names)
 	 * - Fuzzy matching is reduced to prevent false positives from typos
 	 * - Score hierarchy: exact name > name prefix > description prefix > fuzzy > scored fields
+	 * - Empty queries return top ranked results based on scope-specific score fields
 	 */
 	buildSearchBody(query: SearchQuery): object {
+		// Check if the query is empty or whitespace-only
+		const trimmedQuery = query.query.trim()
+		if (trimmedQuery.length === 0) {
+			// For empty queries, return top ranked results based on scope
+			return this.buildTopRankedQuery(query.scope, query.space_id, query.type_ids)
+		}
+
 		// Check if the query is a UUID for direct ID lookup
-		if (UUID_PATTERN.test(query.query)) {
-			return this.buildUuidQuery(query.query, query.scope, query.space_id, query.type_ids)
+		if (UUID_PATTERN.test(trimmedQuery)) {
+			return this.buildUuidQuery(trimmedQuery, query.scope, query.space_id, query.type_ids)
 		}
 
 		// Build base text search query
-		const baseTextQuery = this.buildBaseTextQuery(query.query)
+		const baseTextQuery = this.buildBaseTextQuery(trimmedQuery)
 
 		// Apply scope-specific query building
 		switch (query.scope) {
@@ -274,6 +288,91 @@ export class OpenSearchClient implements SearchClient {
 	}
 
 	/**
+	 * Build a query for returning top ranked results without text matching.
+	 * Used when no search query is provided - returns results ranked by scope-specific score fields.
+	 */
+	buildTopRankedQuery(scope: SearchScope, space_id?: string, typeIds?: string[]): object {
+		const typeFilter = this.buildTypeFilter(typeIds)
+		const filters: object[] = []
+		if (typeFilter) filters.push(typeFilter)
+
+		// Apply scope-specific filtering and sorting
+		switch (scope) {
+			case "GLOBAL":
+				return {
+					query: {
+						function_score: {
+							query: {
+								bool: {
+									must: [{match_all: {}}],
+									filter: filters,
+								},
+							},
+							functions: [this.buildScoreBoostFunction("entity_global_score")],
+							boost_mode: "replace",
+							score_mode: "sum",
+						},
+					},
+				}
+
+			case "GLOBAL_BY_SPACE_SCORE":
+				return {
+					query: {
+						function_score: {
+							query: {
+								bool: {
+									must: [{match_all: {}}],
+									filter: filters,
+								},
+							},
+							functions: [this.buildScoreBoostFunction("space_score")],
+							boost_mode: "replace",
+							score_mode: "sum",
+						},
+					},
+				}
+
+			case "SPACE_SINGLE":
+			case "SPACE":
+				if (space_id) {
+					filters.push({term: {space_id}})
+				}
+				return {
+					query: {
+						function_score: {
+							query: {
+								bool: {
+									must: [{match_all: {}}],
+									filter: filters,
+								},
+							},
+							functions: [this.buildScoreBoostFunction("entity_space_score")],
+							boost_mode: "replace",
+							score_mode: "sum",
+						},
+					},
+				}
+
+			default:
+				return {
+					query: {
+						function_score: {
+							query: {
+								bool: {
+									must: [{match_all: {}}],
+									filter: filters,
+								},
+							},
+							functions: [this.buildScoreBoostFunction("entity_global_score")],
+							boost_mode: "replace",
+							score_mode: "sum",
+						},
+					},
+				}
+		}
+	}
+
+	/**
 	 * Build the base text search query used across all scopes.
 	 *
 	 * Uses:
@@ -353,7 +452,7 @@ export class OpenSearchClient implements SearchClient {
 					source: `
 						def scoreValue = doc.containsKey('${scoreField}') && !doc['${scoreField}'].empty
 							? doc['${scoreField}'].value
-							: 0.0;
+							: ${DEFAULT_AVERAGE_SCORE};
 						def clampedScore = Math.max(scoreValue, ${MIN_SCORE_THRESHOLD});
 						return (clampedScore + ${SCORE_SHIFT}) * ${SCORE_BOOST};
 					`,

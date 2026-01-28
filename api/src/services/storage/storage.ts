@@ -3,6 +3,7 @@ import {Context, Data, Effect, Redacted} from "effect"
 import {Pool} from "pg"
 
 import {EnvironmentLive} from "../environment"
+import {log} from "../telemetry"
 import {
 	editors,
 	editorsRelations,
@@ -12,9 +13,7 @@ import {
 	members,
 	membersRelations,
 	meta,
-	properties,
 	propertiesEntityRelations,
-	propertiesRelations,
 	relations,
 	relationsEntityRelations,
 	spaces,
@@ -38,13 +37,12 @@ const _pool = new Pool({
 
 // Add basic error handling for the pool
 _pool.on("error", (err) => {
-	console.error("PostgreSQL pool error:", err)
+	log.error("PostgreSQL pool error", {error: String(err)})
 })
 
 const schemaDefinition = {
 	ipfsCache,
 	entities,
-	properties: properties,
 	values: values,
 	relations: relations,
 	spaces,
@@ -55,7 +53,6 @@ const schemaDefinition = {
 	entityForeignProperties: entityForeignValues,
 	propertiesEntityRelations,
 	relationsEntityRelations,
-	propertiesRelations,
 	membersRelations,
 	editorsRelations,
 	spacesRelations,

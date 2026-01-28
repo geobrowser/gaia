@@ -58,12 +58,13 @@ async fn main() -> Result<()> {
 
     // Other entities
     let bob_id = Uuid::parse_str("00000000-0000-0000-0000-000000000b0b").unwrap();
+    let charlie_id = Uuid::parse_str("00000000-0000-0000-0000-000000000c1c").unwrap();
     let org_id = Uuid::parse_str("00000000-0000-0000-0000-0000000ac3ec").unwrap();
 
     // Entities to be deleted (for soft delete testing)
-    let charlie_id = Uuid::parse_str("00000000-0000-0000-0000-000000000c01").unwrap();
-    let dana_id = Uuid::parse_str("00000000-0000-0000-0000-000000000d01").unwrap();
-    let eve_id = Uuid::parse_str("00000000-0000-0000-0000-000000000e01").unwrap();
+    let delete_charlie_id = Uuid::parse_str("00000000-0000-0000-0000-000000000c01").unwrap();
+    let delete_dana_id = Uuid::parse_str("00000000-0000-0000-0000-000000000d01").unwrap();
+    let delete_eve_id = Uuid::parse_str("00000000-0000-0000-0000-000000000e01").unwrap();
 
     info!("Test Space ID: {}", test_space);
     info!("Person Type ID: {}", person_type_id);
@@ -90,11 +91,12 @@ async fn main() -> Result<()> {
     );
     info!("\nOther entities:");
     info!("  Bob ID: {}", bob_id);
+    info!("  Charlie ID: {} - will have NO global score", charlie_id);
     info!("  Organization ID: {}", org_id);
     info!("\nDeletion test entities:");
-    info!("  Charlie ID: {} (will be deleted)", charlie_id);
-    info!("  Dana ID: {} (will be deleted)", dana_id);
-    info!("  Eve ID: {} (will be deleted then updated)", eve_id);
+    info!("  Delete Charlie ID: {} (will be deleted)", delete_charlie_id);
+    info!("  Delete Dana ID: {} (will be deleted)", delete_dana_id);
+    info!("  Delete Eve ID: {} (will be deleted then updated)", delete_eve_id);
 
     // 1. Create Person type entity
     info!("\n1. Creating Person type entity...");
@@ -223,8 +225,20 @@ async fn main() -> Result<()> {
     )?;
     producer.send(EDITS_TOPIC, None, bob_payload).await?;
 
-    // 5. Create Organization
-    info!("5. Creating Acme Corp organization...");
+    // 5. Create Charlie (no global score)
+    info!("5. Creating Charlie entity (will have NO global score)...");
+    let charlie_payload = edits::create_entity_edit(
+        "Create Charlie",
+        test_space,
+        charlie_id,
+        Some("Charlie"),
+        Some("A designer with no global score"),
+        None,
+    )?;
+    producer.send(EDITS_TOPIC, None, charlie_payload).await?;
+
+    // 6. Create Organization
+    info!("6. Creating Acme Corp organization...");
     let org_payload = edits::create_entity_edit(
         "Create Acme Corp",
         test_space,
@@ -235,8 +249,8 @@ async fn main() -> Result<()> {
     )?;
     producer.send(EDITS_TOPIC, None, org_payload).await?;
 
-    // 6. Create type relations for most Alice entities and others
-    info!("6. Creating type relations...");
+    // 7. Create type relations for most Alice entities and others
+    info!("7. Creating type relations...");
     for (name, entity_id) in [
         ("Alice High", alice_high_id),
         ("Alice Medium", alice_medium_id),
@@ -246,6 +260,7 @@ async fn main() -> Result<()> {
         ("Alice At Threshold", alice_at_threshold_id),
         ("Alice Below Threshold", alice_below_threshold_id),
         ("Bob", bob_id),
+        ("Charlie", charlie_id),
     ] {
         let type_rel_payload = relations::create_type_relation(
             &format!("{} -> Person Type", name),
@@ -268,8 +283,8 @@ async fn main() -> Result<()> {
         .send(EDITS_TOPIC, None, org_type_payload_rel)
         .await?;
 
-    // 6.1. TypeIds test scenarios using Alice entities
-    info!("6.1. Setting up typeIds test scenarios with Alice entities...");
+    // 7.1. TypeIds test scenarios using Alice entities
+    info!("7.1. Setting up typeIds test scenarios with Alice entities...");
 
     // Alice High: Multiple type relations (typeIds should have both Person and Organization)
     info!(
@@ -346,8 +361,8 @@ async fn main() -> Result<()> {
         .send(EDITS_TOPIC, None, alice_low_org_delete_payload)
         .await?;
 
-    // 7. Generate scores with varying values
-    info!("7. Generating scores with varying entity and space scores...");
+    // 8. Generate scores with varying values (Charlie intentionally excluded)
+    info!("8. Generating scores with varying entity and space scores (Charlie has no global score)...");
     let score_payload = scores::create_mixed_score_batch(
         vec![
             // Alice entities with different score profiles
@@ -384,66 +399,66 @@ async fn main() -> Result<()> {
 
     // 8. Create entities that will be soft deleted (for delete testing)
     info!("8. Creating entities for deletion testing...");
-    let charlie_payload = edits::create_entity_edit(
-        "Create Charlie",
+    let delete_charlie_payload_create = edits::create_entity_edit(
+        "Create Delete Charlie",
         test_space,
-        charlie_id,
-        Some("Charlie"),
+        delete_charlie_id,
+        Some("Delete Charlie"),
         Some("This entity will be deleted"),
         None,
     )?;
-    producer.send(EDITS_TOPIC, None, charlie_payload).await?;
+    producer.send(EDITS_TOPIC, None, delete_charlie_payload_create).await?;
 
-    let dana_payload = edits::create_entity_edit(
-        "Create Dana",
+    let delete_dana_payload_create = edits::create_entity_edit(
+        "Create Delete Dana",
         test_space,
-        dana_id,
-        Some("Dana"),
+        delete_dana_id,
+        Some("Delete Dana"),
         Some("This entity will also be deleted"),
         None,
     )?;
-    producer.send(EDITS_TOPIC, None, dana_payload).await?;
+    producer.send(EDITS_TOPIC, None, delete_dana_payload_create).await?;
 
-    let eve_payload = edits::create_entity_edit(
-        "Create Eve",
+    let delete_eve_payload_create = edits::create_entity_edit(
+        "Create Delete Eve",
         test_space,
-        eve_id,
-        Some("Eve"),
+        delete_eve_id,
+        Some("Delete Eve"),
         Some("This entity will be deleted then updated"),
         None,
     )?;
-    producer.send(EDITS_TOPIC, None, eve_payload).await?;
+    producer.send(EDITS_TOPIC, None, delete_eve_payload_create).await?;
 
     // 9. Delete the test entities (soft delete)
-    info!("9. Soft deleting Charlie, Dana, and Eve...");
+    info!("9. Soft deleting Delete Charlie, Delete Dana, and Delete Eve...");
     let delete_charlie_payload = edits::delete_entity(
-        "Delete Charlie",
+        "Delete Delete Charlie",
         test_space,
-        charlie_id,
+        delete_charlie_id,
     )?;
     producer.send(EDITS_TOPIC, None, delete_charlie_payload).await?;
 
     let delete_dana_payload = edits::delete_entity(
-        "Delete Dana",
+        "Delete Delete Dana",
         test_space,
-        dana_id,
+        delete_dana_id,
     )?;
     producer.send(EDITS_TOPIC, None, delete_dana_payload).await?;
 
     let delete_eve_payload = edits::delete_entity(
-        "Delete Eve",
+        "Delete Delete Eve",
         test_space,
-        eve_id,
+        delete_eve_id,
     )?;
     producer.send(EDITS_TOPIC, None, delete_eve_payload).await?;
 
-    // 10. Update a deleted entity (Eve) - should remain deleted
-    info!("10. Updating Eve after deletion (testing delete-then-update behavior)...");
+    // 10. Update a deleted entity (Delete Eve) - should remain deleted
+    info!("10. Updating Delete Eve after deletion (testing delete-then-update behavior)...");
     let update_eve_payload = edits::create_entity_edit(
-        "Update Eve After Delete",
+        "Update Delete Eve After Delete",
         test_space,
-        eve_id,
-        Some("Eve Updated"),
+        delete_eve_id,
+        Some("Delete Eve Updated"),
         Some("This entity was updated after being deleted - should remain deleted"),
         None,
     )?;
@@ -451,22 +466,166 @@ async fn main() -> Result<()> {
 
     info!("\n✅ Test scenario complete!");
     info!("Created:");
-    info!("  - 14 entities (11 active + 3 deleted)");
+    info!("  - 17 entities (11 active + 3 deleted + 3 unset test entities)");
     info!("    • 7 Alice variants (high, medium, low, zero, negative, at threshold, below threshold)");
-    info!("    • Bob, Acme Corp");
+    info!("    • Bob, Charlie, Acme Corp");
     info!("    • Person type, Organization type");
     info!("    • Charlie, Dana (soft deleted)");
     info!("    • Eve (soft deleted, then updated - remains deleted)");
+    info!("    • 3 unset property test entities");
     info!("  - Type relation scenarios:");
     info!("    • Alice High: Multiple types (Person + Organization)");
     info!("    • Alice Medium: Create->Delete->Create pattern (Person + Organization recreated)");
     info!("    • Alice Low: Partial type removal (Person kept, Org added + deleted)");
-    info!("    • Other Alice entities, Bob: Single type (Person)");
+    info!("    • Other Alice entities, Bob, Charlie: Single type (Person)");
     info!("    • Acme Corp: Single type (Organization)");
-    info!("  - 14 type relation events (10 creates, 2 deletes, 1 recreate for testing typeIds)");
+    info!("  - 15 type relation events (11 creates, 2 deletes, 1 recreate for testing typeIds)");
     info!("  - 11 entity scores (including negative and zero)");
+    info!("  - Charlie has NO global score (tests default score behavior)");
     info!("  - 1 space score");
     info!("  - 7 perspective scores");
+    info!("\nScore ranges:");
+    info!("  • High: 0.95");
+    info!("  • Medium: 0.65");
+    info!("  • Low: 0.15");
+    info!("  • Zero: 0.0");
+    info!("  • Negative: -0.75");
+    info!("  • At Threshold: 0.50");
+    info!("  • Below Threshold: 0.25");
+
+    // 9. Test unset_properties functionality
+    info!("\n9. Testing unset_properties functionality...");
+
+    // Test Case 1: Unset 1 property (name)
+    let unset_test_1_id = Uuid::parse_str("00000000-0000-0000-0000-000000001111").unwrap();
+    info!("  Test Case 1: Create entity with name and description, then unset name");
+    info!("    Entity ID: {}", unset_test_1_id);
+
+    let unset_test_1_key = unset_test_1_id.to_string();
+    let unset_test_1_create = edits::create_entity_edit(
+        "Create Entity for Unset Test 1",
+        test_space,
+        unset_test_1_id,
+        Some("Entity With Name To Unset"),
+        Some("This entity will have its name unset"),
+        None,
+    )?;
+    producer
+        .send(EDITS_TOPIC, Some(&unset_test_1_key), unset_test_1_create)
+        .await?;
+
+    info!("    Unsetting name property...");
+    let unset_name_payload = edits::unset_entity_properties(
+        "Unset Name Property",
+        test_space,
+        unset_test_1_id,
+        vec![sdk::core::ids::NAME_PROPERTY_ID],
+    )?;
+    producer
+        .send(EDITS_TOPIC, Some(&unset_test_1_key), unset_name_payload)
+        .await?;
+
+    // Test Case 2: Unset 2 properties (name and description)
+    let unset_test_2_id = Uuid::parse_str("00000000-0000-0000-0000-000000002222").unwrap();
+    info!("  Test Case 2: Create entity with name, description, and avatar, then unset name and description");
+    info!("    Entity ID: {}", unset_test_2_id);
+
+    let unset_test_2_key = unset_test_2_id.to_string();
+    let unset_test_2_create = edits::create_entity_edit(
+        "Create Entity for Unset Test 2",
+        test_space,
+        unset_test_2_id,
+        Some("Entity With Name And Description To Unset"),
+        Some("This entity will have its name and description unset"),
+        Some("https://example.com/avatar.png"),
+    )?;
+    producer
+        .send(EDITS_TOPIC, Some(&unset_test_2_key), unset_test_2_create)
+        .await?;
+
+    info!("    Unsetting name and description properties...");
+    let unset_name_desc_payload = edits::unset_entity_properties(
+        "Unset Name and Description Properties",
+        test_space,
+        unset_test_2_id,
+        vec![
+            sdk::core::ids::NAME_PROPERTY_ID,
+            sdk::core::ids::DESCRIPTION_PROPERTY_ID,
+        ],
+    )?;
+    producer
+        .send(EDITS_TOPIC, Some(&unset_test_2_key), unset_name_desc_payload)
+        .await?;
+
+    // Test Case 3: Mixed set/unset + LWW (Last-Writer-Wins) test
+    let lww_test_id = Uuid::parse_str("00000000-0000-0000-0000-000000003333").unwrap();
+    info!("  Test Case 3: Mixed set/unset in one operation + LWW with multiple sets");
+    info!("    Entity ID: {}", lww_test_id);
+
+    let lww_test_key = lww_test_id.to_string();
+    let lww_test_create = edits::create_entity_edit(
+        "Create Entity for LWW Test",
+        test_space,
+        lww_test_id,
+        Some("Initial Name"),
+        Some("Initial Description"),
+        Some("https://example.com/lww-avatar.png"),
+    )?;
+    producer
+        .send(EDITS_TOPIC, Some(&lww_test_key), lww_test_create)
+        .await?;
+
+    info!("    Step 1: Mixed operation - set name='First Update', unset description (different properties)...");
+    let lww_mixed = edits::update_entity_with_set_and_unset(
+        "LWW Mixed Set and Unset",
+        test_space,
+        lww_test_id,
+        Some("First Update"),     // Set name to first value
+        None,                      // Don't set description
+        None,                      // Don't set avatar
+        vec![
+            sdk::core::ids::DESCRIPTION_PROPERTY_ID, // Unset description (no overlap with set)
+        ],
+    )?;
+    producer
+        .send(EDITS_TOPIC, Some(&lww_test_key), lww_mixed)
+        .await?;
+
+    info!("    Step 2: Set name again to 'Second Update' (LWW: this should win)...");
+    let lww_second_set = edits::create_entity_edit(
+        "LWW Second Set",
+        test_space,
+        lww_test_id,
+        Some("Second Update"),    // Set name again - last write should win
+        None,                      // Don't set description (remains unset)
+        None,                      // Don't set avatar (keep existing)
+    )?;
+    producer
+        .send(EDITS_TOPIC, Some(&lww_test_key), lww_second_set)
+        .await?;
+
+    info!("\n✅ Test scenario complete!");
+    info!("Created:");
+    info!("  - 15 entities (12 from before + 3 property operation test entities)");
+    info!("    • 7 Alice variants (high, medium, low, zero, negative, at threshold, below threshold)");
+    info!("    • Bob, Charlie, Acme Corp");
+    info!("    • Person type, Organization type");
+    info!("    • 2 entities for unset property testing");
+    info!("  - Type relation scenarios:");
+    info!("    • Alice High: Multiple types (Person + Organization)");
+    info!("    • Alice Medium: Create->Delete->Create pattern (Person + Organization recreated)");
+    info!("    • Alice Low: Partial type removal (Person kept, Org added + deleted)");
+    info!("    • Other Alice entities, Bob, Charlie: Single type (Person)");
+    info!("    • Acme Corp: Single type (Organization)");
+    info!("  - 15 type relation events (11 creates, 2 deletes, 1 recreate for testing typeIds)");
+    info!("  - 11 entity scores (including negative and zero)");
+    info!("  - Charlie has NO global score (tests default score behavior)");
+    info!("  - 1 space score");
+    info!("  - 7 perspective scores");
+    info!("  - 3 property operation test cases:");
+    info!("    • Test 1 ({}): name unset, description remains", unset_test_1_id);
+    info!("    • Test 2 ({}): name and description unset, avatar remains", unset_test_2_id);
+    info!("    • Test 3 ({}): mixed set/unset + LWW test (name='Second Update' wins, description unset)", lww_test_id);
     info!("\nScore ranges:");
     info!("  • High: 0.95");
     info!("  • Medium: 0.65");

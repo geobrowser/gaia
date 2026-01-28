@@ -2,12 +2,14 @@ import {
 	relations as drizzleRelations,
 	type InferSelectModel,
 	sql,
+	type SQL,
 } from "drizzle-orm";
 import {
 	bigint,
 	boolean,
 	customType,
 	decimal,
+	doublePrecision,
 	index,
 	jsonb,
 	pgEnum,
@@ -16,6 +18,7 @@ import {
 	serial,
 	smallint,
 	text,
+	time,
 	timestamp,
 	unique,
 	uuid,
@@ -102,27 +105,21 @@ export const entities = pgTable(
 	],
 );
 
-export const dataTypesEnum = pgEnum("dataTypes", [
-	"String",
-	"Number",
-	"Boolean",
-	"Time",
-	"Point",
-	"Relation",
-]);
-
-export const properties = pgTable(
-	"properties",
-	{
-		id: uuid().primaryKey(),
-		type: dataTypesEnum().notNull(),
-	},
-	(table) => [
-		// Index for filtering by data type
-		index("properties_type_idx").on(table.type),
-	],
-);
-
+/**
+ * values
+ *
+ * Stores property values for entities. Each value has a type-specific column populated
+ * based on its GRC-20 data type (boolean, integer, text, datetime, etc.).
+ *
+ * Design: We optimize for normalization, user intent preservation, and query performance
+ * over storage efficiency. For example, time/datetime values store both the original string
+ * (with timezone offset) and a UTC-normalized column. This preserves the original
+ * representation while enabling efficient time-based queries and comparisons.
+ *
+ * UTC normalization: The *_utc columns store UTC-normalized values. Rust writes the same
+ * string to both columns, PostgreSQL casts to timestamptz/timetz (normalizing to UTC),
+ * and the database timezone is set to UTC so reads return UTC.
+ */
 export const values = pgTable(
 	"values",
 	{
@@ -130,13 +127,25 @@ export const values = pgTable(
 		propertyId: uuid().notNull(),
 		entityId: uuid().notNull(),
 		spaceId: uuid().notNull(),
-		string: text(),
-		boolean: boolean(),
-		number: decimal(),
-		point: text(),
-		time: text(),
-		language: text(),
-		unit: text(),
+		// Value columns (GRC-20 v2 data types)
+		boolean: boolean(), // BOOL
+		integer: bigint({ mode: "number" }), // INT64
+		float: doublePrecision(), // FLOAT64
+		decimal: decimal(), // DECIMAL
+		text: text(), // TEXT
+		bytes: bytea(), // BYTES
+		date: text(), // DATE (ISO 8601)
+		time: text(), // TIME (ISO 8601)
+		datetime: text(), // DATETIME (ISO 8601)
+		schedule: jsonb(), // SCHEDULE (RFC 5545)
+		point: text(), // POINT (WGS84)
+		embedding: jsonb(), // EMBEDDING
+		// Metadata
+		language: text(), // For TEXT values only
+		unit: text(), // For numerical values (INT64, FLOAT64, DECIMAL)
+		// UTC-normalized columns (Rust writes, PostgreSQL casts to UTC, DB timezone=UTC ensures UTC output)
+		timeUtc: time("time_utc", { withTimezone: true }),
+		datetimeUtc: timestamp("datetime_utc", { withTimezone: true, mode: "date" }),
 	},
 	(table) => [
 		// Foreign key indexes for join performance
@@ -144,16 +153,21 @@ export const values = pgTable(
 		index("values_entity_id_idx").on(table.entityId),
 		index("values_space_id_idx").on(table.spaceId),
 
-		// Partial B-tree index for text searches (only indexes strings ≤2000 chars)
-		// Longer strings will use sequential scan, but won't cause index size errors
-		index("values_text_idx")
-			.on(table.string)
-			.where(sql`length(${table.string}) <= 2000`),
-		index("values_number_idx").on(table.number),
-		index("values_point_idx").on(table.point),
+		// Value type indexes
 		index("values_boolean_idx").on(table.boolean),
+		index("values_integer_idx").on(table.integer),
+		index("values_float_idx").on(table.float),
+		index("values_decimal_idx").on(table.decimal),
+		// Partial B-tree index for text searches (only indexes text ≤2000 chars)
+		// Longer text will use sequential scan, but won't cause index size errors
+		index("values_text_idx")
+			.on(table.text)
+			.where(sql`length(${table.text}) <= 2000`),
+		index("values_date_idx").on(table.date),
 		index("values_time_idx").on(table.time),
-		// GIN index creation is handled via migration
+		index("values_datetime_idx").on(table.datetime),
+		index("values_point_idx").on(table.point),
+		// GIN index for schedule and embedding handled via migration
 
 		// Composite indexes for common query patterns
 		index("values_entity_property_idx").on(table.entityId, table.propertyId),
@@ -165,12 +179,12 @@ export const values = pgTable(
 			table.spaceId,
 		),
 
-		// Composite index for space-filtered searches
-		// index("values_space_text_idx").on(table.spaceId, table.string),
-
 		// Additional indexes for filtering
 		index("values_language_idx").on(table.language),
 		index("values_unit_idx").on(table.unit),
+		// UTC time column indexes
+		index("values_time_utc_idx").on(table.timeUtc),
+		index("values_datetime_utc_idx").on(table.datetimeUtc),
 	],
 );
 
@@ -264,12 +278,8 @@ export const subspaces = pgTable(
 
 export const entityForeignValues = drizzleRelations(
 	entities,
-	({ many, one }) => ({
+	({ many }) => ({
 		values: many(values),
-		property: one(properties, {
-			fields: [entities.id],
-			references: [properties.id],
-		}),
 		fromRelations: many(relations, {
 			relationName: "fromEntity",
 		}),
@@ -294,20 +304,6 @@ export const propertiesEntityRelations = drizzleRelations(
 	}),
 );
 
-export const propertiesRelations = drizzleRelations(
-	properties,
-	({ one, many }) => ({
-		entity: one(entities, {
-			fields: [properties.id],
-			references: [entities.id],
-		}),
-		// Relations where this property is used as the type
-		typeRelations: many(relations, {
-			relationName: "typeProperty",
-		}),
-	}),
-);
-
 export const relationsEntityRelations = drizzleRelations(
 	relations,
 	({ one }) => ({
@@ -321,10 +317,11 @@ export const relationsEntityRelations = drizzleRelations(
 			references: [entities.id],
 			relationName: "toEntity",
 		}),
-		typeProperty: one(properties, {
+		// Properties are now entities, so typeId references the entities table
+		typeEntity: one(entities, {
 			fields: [relations.typeId],
-			references: [properties.id],
-			relationName: "typeProperty",
+			references: [entities.id],
+			relationName: "typeEntity",
 		}),
 		relationEntity: one(entities, {
 			fields: [relations.entityId],
@@ -680,3 +677,121 @@ export const votesCount = pgTable(
 		uniqueConstraint: unique().on(table.objectId, table.objectType, table.spaceId),
 	}),
 );
+
+/** Versioned Entities Schema */
+
+/**
+ * edit_versions
+ *
+ * Lookup table to resolve edit_id -> version_key for temporal queries.
+ * version_key is a packed bigint: (block_number << 32) | sequence
+ */
+export const editVersions = pgTable(
+	"edit_versions",
+	{
+		editId: uuid("edit_id").primaryKey(),
+		blockNumber: bigint("block_number", { mode: "bigint" }).notNull(),
+		sequence: bigint("sequence", { mode: "number" }).notNull(),
+		versionKey: bigint("version_key", { mode: "bigint" }).notNull(),
+		createdAt: timestamp("created_at", { mode: "date" }).notNull(),
+	},
+	(table) => [
+		unique("edit_versions_block_sequence_unique").on(
+			table.blockNumber,
+			table.sequence,
+		),
+		index("edit_versions_version_key_idx").on(table.versionKey),
+	],
+);
+
+/**
+ * value_versions
+ *
+ * Temporal versioned values. Each row represents a value's state during a version range.
+ * When a value changes, the current row's valid_to_key is set and a new row is inserted.
+ */
+export const valueVersions = pgTable(
+	"value_versions",
+	{
+		id: uuid("id").primaryKey(),
+		entityId: uuid("entity_id").notNull(),
+		propertyId: uuid("property_id").notNull(),
+		spaceId: uuid("space_id").notNull(),
+		validFromKey: bigint("valid_from_key", { mode: "bigint" }).notNull(),
+		validToKey: bigint("valid_to_key", { mode: "bigint" }),
+		// Value columns (GRC-20 v2 data types)
+		boolean: boolean("boolean"), // BOOL
+		integer: bigint("integer", { mode: "number" }), // INT64
+		float: doublePrecision("float"), // FLOAT64
+		decimal: decimal("decimal"), // DECIMAL
+		text: text("text"), // TEXT
+		bytes: bytea("bytes"), // BYTES
+		date: text("date"), // DATE (ISO 8601)
+		time: text("time"), // TIME (ISO 8601)
+		datetime: text("datetime"), // DATETIME (ISO 8601)
+		schedule: jsonb("schedule"), // SCHEDULE (RFC 5545)
+		point: text("point"), // POINT (WGS84)
+		embedding: jsonb("embedding"), // EMBEDDING
+		// Metadata
+		language: text("language"), // For TEXT values only
+		unit: text("unit"), // For numerical values (INT64, FLOAT64, DECIMAL)
+		// UTC-normalized columns (Rust writes, PostgreSQL casts to UTC, DB timezone=UTC ensures UTC output)
+		timeUtc: time("time_utc", { withTimezone: true }),
+		datetimeUtc: timestamp("datetime_utc", { withTimezone: true, mode: "date" }),
+	},
+	(table) => [
+		index("value_versions_entity_idx").on(table.entityId),
+		index("value_versions_lookup_idx").on(
+			table.entityId,
+			table.propertyId,
+			table.spaceId,
+		),
+		index("value_versions_open_idx")
+			.on(table.entityId, table.propertyId, table.spaceId)
+			.where(sql`${table.validToKey} IS NULL`),
+		index("value_versions_range_idx").on(
+			table.entityId,
+			table.validFromKey,
+		),
+	],
+);
+
+/**
+ * relation_versions
+ *
+ * Temporal versioned relations. Each row represents a relation's state during a version range.
+ * When a relation changes, the current row's valid_to_key is set and a new row is inserted.
+ */
+export const relationVersions = pgTable(
+	"relation_versions",
+	{
+		id: uuid("id").primaryKey(),
+		relationId: uuid("relation_id").notNull(),
+		entityId: uuid("entity_id").notNull(),
+		typeId: uuid("type_id").notNull(),
+		fromEntityId: uuid("from_entity_id").notNull(),
+		fromSpaceId: uuid("from_space_id"),
+		toEntityId: uuid("to_entity_id").notNull(),
+		toSpaceId: uuid("to_space_id"),
+		position: text("position"),
+		spaceId: uuid("space_id").notNull(),
+		verified: boolean("verified"),
+		validFromKey: bigint("valid_from_key", { mode: "bigint" }).notNull(),
+		validToKey: bigint("valid_to_key", { mode: "bigint" }),
+	},
+	(table) => [
+		index("relation_versions_relation_idx").on(table.relationId),
+		index("relation_versions_entity_idx").on(table.entityId),
+		index("relation_versions_open_idx")
+			.on(table.relationId)
+			.where(sql`${table.validToKey} IS NULL`),
+		index("relation_versions_range_idx").on(
+			table.entityId,
+			table.validFromKey,
+		),
+	],
+);
+
+export type DbEditVersion = InferSelectModel<typeof editVersions>;
+export type DbValueVersion = InferSelectModel<typeof valueVersions>;
+export type DbRelationVersion = InferSelectModel<typeof relationVersions>;

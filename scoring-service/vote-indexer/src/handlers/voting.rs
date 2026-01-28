@@ -12,8 +12,8 @@ use crate::models::voting::{
 };
 
 /// Object type discriminator values (big-endian 4-byte encoding)
-const OBJECT_TYPE_ENTITY: [u8; 4] = [0x00, 0x00, 0x00, 0x01];
-const OBJECT_TYPE_RELATION: [u8; 4] = [0x00, 0x00, 0x00, 0x02];
+const OBJECT_TYPE_ENTITY: [u8; 4] = [0x00, 0x00, 0x00, 0x00];
+const OBJECT_TYPE_RELATION: [u8; 4] = [0x00, 0x00, 0x00, 0x01];
 
 /// Parse object type from 4-byte discriminator
 fn parse_object_type(bytes: &[u8]) -> Result<VoteObjectType, HandlerError> {
@@ -72,27 +72,37 @@ pub fn get_latest_user_votes(votes: &[VoteItem]) -> Vec<UserVoteItem> {
     let mut latest_votes: HashMap<UserVoteCriteria, &VoteItem> = HashMap::new();
 
     for vote in votes {
-        let vote_criteria = (vote.voter_id, vote.object_id, vote.space_id, vote.object_type);
+        let vote_criteria = (
+            vote.voter_id,
+            vote.object_id,
+            vote.space_id,
+            vote.object_type,
+        );
         latest_votes.insert(vote_criteria, vote);
     }
 
     latest_votes
         .into_iter()
-        .map(|((voter_id, object_id, space_id, object_type), vote)| UserVoteItem {
-            voter_id,
-            object_id,
-            object_type,
-            space_id,
-            vote_type: vote.vote.clone(),
-            voted_at: vote.block_timestamp,
-        })
+        .map(
+            |((voter_id, object_id, space_id, object_type), vote)| UserVoteItem {
+                voter_id,
+                object_id,
+                object_type,
+                space_id,
+                vote_type: vote.vote.clone(),
+                voted_at: vote.block_timestamp,
+            },
+        )
         .collect()
 }
 
 /// Compute the delta in upvotes/downvotes when a vote changes.
 ///
 /// Returns the change that should be applied to the aggregate counts.
-pub fn compute_vote_delta(saved_vote: Option<&UserVoteItem>, new_vote: &UserVoteItem) -> VotesDelta {
+pub fn compute_vote_delta(
+    saved_vote: Option<&UserVoteItem>,
+    new_vote: &UserVoteItem,
+) -> VotesDelta {
     let saved_vote_value = saved_vote.map(|vote| vote.vote_type.clone());
     let new_vote_value = new_vote.vote_type.clone();
 
@@ -125,7 +135,8 @@ pub fn calculate_vote_counts(
     stored_user_votes: &HashMap<UserVoteCriteria, UserVoteItem>,
     stored_vote_counts: &HashMap<VoteCountCriteria, VotesCountItem>,
 ) -> Vec<VotesCountItem> {
-    let mut vote_counts_map: HashMap<VoteCountCriteria, VotesCountItem> = stored_vote_counts.clone();
+    let mut vote_counts_map: HashMap<VoteCountCriteria, VotesCountItem> =
+        stored_vote_counts.clone();
 
     for new_vote in user_votes {
         let vote_criteria = (
@@ -321,7 +332,14 @@ mod tests {
         let object = Uuid::from_bytes([2u8; 16]);
         let space = Uuid::from_bytes([3u8; 16]);
 
-        let vote = make_vote_item(voter, object, space, VoteObjectType::Entity, VoteValue::Up, 1000);
+        let vote = make_vote_item(
+            voter,
+            object,
+            space,
+            VoteObjectType::Entity,
+            VoteValue::Up,
+            1000,
+        );
         let votes = vec![vote];
 
         let user_votes = get_latest_user_votes(&votes);
@@ -346,8 +364,22 @@ mod tests {
         let object = Uuid::from_bytes([2u8; 16]);
         let space = Uuid::from_bytes([3u8; 16]);
 
-        let vote1 = make_vote_item(voter, object, space, VoteObjectType::Entity, VoteValue::Up, 1000);
-        let vote2 = make_vote_item(voter, object, space, VoteObjectType::Entity, VoteValue::Down, 2000);
+        let vote1 = make_vote_item(
+            voter,
+            object,
+            space,
+            VoteObjectType::Entity,
+            VoteValue::Up,
+            1000,
+        );
+        let vote2 = make_vote_item(
+            voter,
+            object,
+            space,
+            VoteObjectType::Entity,
+            VoteValue::Down,
+            2000,
+        );
 
         let votes = vec![vote1, vote2];
         let user_votes = get_latest_user_votes(&votes);
@@ -365,8 +397,22 @@ mod tests {
         let object = Uuid::from_bytes([3u8; 16]);
         let space = Uuid::from_bytes([4u8; 16]);
 
-        let vote1 = make_vote_item(voter1, object, space, VoteObjectType::Entity, VoteValue::Up, 1000);
-        let vote2 = make_vote_item(voter2, object, space, VoteObjectType::Entity, VoteValue::Down, 2000);
+        let vote1 = make_vote_item(
+            voter1,
+            object,
+            space,
+            VoteObjectType::Entity,
+            VoteValue::Up,
+            1000,
+        );
+        let vote2 = make_vote_item(
+            voter2,
+            object,
+            space,
+            VoteObjectType::Entity,
+            VoteValue::Down,
+            2000,
+        );
 
         let votes = vec![vote1, vote2];
         let user_votes = get_latest_user_votes(&votes);
@@ -381,8 +427,22 @@ mod tests {
         let object = Uuid::from_bytes([2u8; 16]);
         let space = Uuid::from_bytes([3u8; 16]);
 
-        let vote1 = make_vote_item(voter, object, space, VoteObjectType::Entity, VoteValue::Up, 1000);
-        let vote2 = make_vote_item(voter, object, space, VoteObjectType::Relation, VoteValue::Down, 2000);
+        let vote1 = make_vote_item(
+            voter,
+            object,
+            space,
+            VoteObjectType::Entity,
+            VoteValue::Up,
+            1000,
+        );
+        let vote2 = make_vote_item(
+            voter,
+            object,
+            space,
+            VoteObjectType::Relation,
+            VoteValue::Down,
+            2000,
+        );
 
         let votes = vec![vote1, vote2];
         let user_votes = get_latest_user_votes(&votes);
@@ -413,7 +473,13 @@ mod tests {
 
         let delta = compute_vote_delta(Some(&prev), &new);
 
-        assert_eq!(delta, VotesDelta { upvotes: -1, downvotes: 1 });
+        assert_eq!(
+            delta,
+            VotesDelta {
+                upvotes: -1,
+                downvotes: 1
+            }
+        );
     }
 
     #[test]
@@ -423,7 +489,13 @@ mod tests {
 
         let delta = compute_vote_delta(Some(&prev), &new);
 
-        assert_eq!(delta, VotesDelta { upvotes: -1, downvotes: 0 });
+        assert_eq!(
+            delta,
+            VotesDelta {
+                upvotes: -1,
+                downvotes: 0
+            }
+        );
     }
 
     #[test]
@@ -433,7 +505,13 @@ mod tests {
 
         let delta = compute_vote_delta(Some(&prev), &new);
 
-        assert_eq!(delta, VotesDelta { upvotes: 1, downvotes: -1 });
+        assert_eq!(
+            delta,
+            VotesDelta {
+                upvotes: 1,
+                downvotes: -1
+            }
+        );
     }
 
     #[test]
@@ -443,7 +521,13 @@ mod tests {
 
         let delta = compute_vote_delta(Some(&prev), &new);
 
-        assert_eq!(delta, VotesDelta { upvotes: 0, downvotes: -1 });
+        assert_eq!(
+            delta,
+            VotesDelta {
+                upvotes: 0,
+                downvotes: -1
+            }
+        );
     }
 
     #[test]
@@ -452,7 +536,13 @@ mod tests {
 
         let delta = compute_vote_delta(None, &new);
 
-        assert_eq!(delta, VotesDelta { upvotes: 1, downvotes: 0 });
+        assert_eq!(
+            delta,
+            VotesDelta {
+                upvotes: 1,
+                downvotes: 0
+            }
+        );
     }
 
     #[test]
@@ -461,7 +551,13 @@ mod tests {
 
         let delta = compute_vote_delta(None, &new);
 
-        assert_eq!(delta, VotesDelta { upvotes: 0, downvotes: 1 });
+        assert_eq!(
+            delta,
+            VotesDelta {
+                upvotes: 0,
+                downvotes: 1
+            }
+        );
     }
 
     #[test]
@@ -471,7 +567,13 @@ mod tests {
 
         let delta = compute_vote_delta(Some(&prev), &new);
 
-        assert_eq!(delta, VotesDelta { upvotes: 0, downvotes: 0 });
+        assert_eq!(
+            delta,
+            VotesDelta {
+                upvotes: 0,
+                downvotes: 0
+            }
+        );
     }
 
     // ============================================================================
@@ -586,4 +688,3 @@ mod tests {
         assert_eq!(counts[0].downvotes, 1);
     }
 }
-

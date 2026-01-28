@@ -8,6 +8,7 @@
  */
 
 import type { SearchQuery, SearchResponse, SearchResult } from '../../../../api/src/services/search/types';
+import { DEFAULT_AVERAGE_SCORE } from '../../../../api/src/services/search/opensearch';
 
 // Colors for terminal output
 const GREEN = '\x1b[0;32m';
@@ -29,10 +30,16 @@ const TEST_ENTITIES = {
   ALICE_AT_THRESHOLD_ID: '00000000-0000-0000-0000-0000000000f6',
   ALICE_BELOW_THRESHOLD_ID: '00000000-0000-0000-0000-0000000000f7',
   BOB_ID: '00000000-0000-0000-0000-000000000b0b',
+  CHARLIE_ID: '00000000-0000-0000-0000-000000000c1c',
   ORG_ID: '00000000-0000-0000-0000-0000000ac3ec',
-  CHARLIE_ID: '00000000-0000-0000-0000-000000000c01',
-  DANA_ID: '00000000-0000-0000-0000-000000000d01',
-  EVE_ID: '00000000-0000-0000-0000-000000000e01',
+  // Entities for soft delete testing
+  DELETE_CHARLIE_ID: '00000000-0000-0000-0000-000000000c01',
+  DELETE_DANA_ID: '00000000-0000-0000-0000-000000000d01',
+  DELETE_EVE_ID: '00000000-0000-0000-0000-000000000e01',
+  // Entities for unset property testing
+  UNSET_TEST_1_ID: '00000000-0000-0000-0000-000000001111',
+  UNSET_TEST_2_ID: '00000000-0000-0000-0000-000000002222',
+  LWW_TEST_ID: '00000000-0000-0000-0000-000000003333',
 };
 
 interface TestResult {
@@ -70,7 +77,7 @@ class SearchValidator {
       throw new Error(`API returned ${response.status}: ${await response.text()}`);
     }
 
-    return response.json();
+    return response.json() as Promise<SearchResponse>;
   }
 
   private addResult(name: string, passed: boolean, message: string) {
@@ -228,8 +235,8 @@ class SearchValidator {
       // Check that scores are descending (camelCase as per API types)
       let scoresDescending = true;
       for (let i = 0; i < response.results.length - 1; i++) {
-        const currentScore = response.results[i].entityGlobalScore ?? 0;
-        const nextScore = response.results[i + 1].entityGlobalScore ?? 0;
+        const currentScore = response.results[i].entityGlobalScore ?? DEFAULT_AVERAGE_SCORE;
+        const nextScore = response.results[i + 1].entityGlobalScore ?? DEFAULT_AVERAGE_SCORE;
 
         if (currentScore < nextScore) {
           scoresDescending = false;
@@ -394,105 +401,326 @@ class SearchValidator {
   }
 
   async test9_DeletedEntitiesNotInResults(): Promise<void> {
-    console.log(`\n${BLUE}Test 9: Verify deleted entities (Charlie, Dana) do not appear in search results${NC}`);
+    console.log(`\n${BLUE}Test 9: Verify deleted entities (Delete Charlie, Delete Dana) do not appear in search results${NC}`);
 
-    // Search for Charlie by name
+    // Search for Delete Charlie by name
     const charlieNameSearch = await this.search({
-      query: 'charlie',
+      query: 'delete charlie',
       scope: 'GLOBAL',
     });
 
-    const charlieByName = charlieNameSearch.results.find(r => r.entityId === TEST_ENTITIES.CHARLIE_ID);
+    const charlieByName = charlieNameSearch.results.find(r => r.entityId === TEST_ENTITIES.DELETE_CHARLIE_ID);
     if (!charlieByName) {
       this.addResult('test9_charlie_not_in_name_search', true,
-        `Charlie (${TEST_ENTITIES.CHARLIE_ID}) correctly excluded from name search (soft deleted)`);
+        `Delete Charlie (${TEST_ENTITIES.DELETE_CHARLIE_ID}) correctly excluded from name search (soft deleted)`);
     } else {
       this.addResult('test9_charlie_not_in_name_search', false,
-        `Charlie (${TEST_ENTITIES.CHARLIE_ID}) should not appear in search (was soft deleted)`);
+        `Delete Charlie (${TEST_ENTITIES.DELETE_CHARLIE_ID}) should not appear in search (was soft deleted)`);
     }
 
-    // Search for Dana by name
+    // Search for Delete Dana by name
     const danaNameSearch = await this.search({
-      query: 'dana',
+      query: 'delete dana',
       scope: 'GLOBAL',
     });
 
-    const danaByName = danaNameSearch.results.find(r => r.entityId === TEST_ENTITIES.DANA_ID);
+    const danaByName = danaNameSearch.results.find(r => r.entityId === TEST_ENTITIES.DELETE_DANA_ID);
     if (!danaByName) {
       this.addResult('test9_dana_not_in_name_search', true,
-        `Dana (${TEST_ENTITIES.DANA_ID}) correctly excluded from name search (soft deleted)`);
+        `Delete Dana (${TEST_ENTITIES.DELETE_DANA_ID}) correctly excluded from name search (soft deleted)`);
     } else {
       this.addResult('test9_dana_not_in_name_search', false,
-        `Dana (${TEST_ENTITIES.DANA_ID}) should not appear in search (was soft deleted)`);
+        `Delete Dana (${TEST_ENTITIES.DELETE_DANA_ID}) should not appear in search (was soft deleted)`);
     }
 
-    // Verify Charlie doesn't appear in broad search
+    // Verify Delete Charlie doesn't appear in broad search
     const broadSearch = await this.search({
       query: 'entity',
       scope: 'GLOBAL',
     });
 
-    const charlieInBroad = broadSearch.results.find(r => r.entityId === TEST_ENTITIES.CHARLIE_ID);
-    const danaInBroad = broadSearch.results.find(r => r.entityId === TEST_ENTITIES.DANA_ID);
+    const charlieInBroad = broadSearch.results.find(r => r.entityId === TEST_ENTITIES.DELETE_CHARLIE_ID);
+    const danaInBroad = broadSearch.results.find(r => r.entityId === TEST_ENTITIES.DELETE_DANA_ID);
 
     if (!charlieInBroad && !danaInBroad) {
       this.addResult('test9_deleted_not_in_broad_search', true,
-        `Deleted entities (Charlie, Dana) correctly excluded from broad search`);
+        `Deleted entities (Delete Charlie, Delete Dana) correctly excluded from broad search`);
     } else {
       const found = [];
-      if (charlieInBroad) found.push('Charlie');
-      if (danaInBroad) found.push('Dana');
+      if (charlieInBroad) found.push('Delete Charlie');
+      if (danaInBroad) found.push('Delete Dana');
       this.addResult('test9_deleted_not_in_broad_search', false,
         `Soft-deleted entities should not appear: ${found.join(', ')} found in results`);
     }
   }
 
   async test10_DeletedThenUpdatedEntityNotInResults(): Promise<void> {
-    console.log(`\n${BLUE}Test 10: Verify entity deleted then updated (Eve) remains excluded from search${NC}`);
+    console.log(`\n${BLUE}Test 10: Verify entity deleted then updated (Delete Eve) remains excluded from search${NC}`);
 
-    // Search for Eve by name - should not find it even though it was updated after deletion
+    // Search for Delete Eve by name - should not find it even though it was updated after deletion
     const eveNameSearch = await this.search({
-      query: 'eve',
+      query: 'delete eve',
       scope: 'GLOBAL',
     });
 
-    const eveByName = eveNameSearch.results.find(r => r.entityId === TEST_ENTITIES.EVE_ID);
+    const eveByName = eveNameSearch.results.find(r => r.entityId === TEST_ENTITIES.DELETE_EVE_ID);
     if (!eveByName) {
       this.addResult('test10_eve_not_in_name_search', true,
-        `Eve (${TEST_ENTITIES.EVE_ID}) correctly excluded from name search (deleted then updated, remains deleted)`);
+        `Delete Eve (${TEST_ENTITIES.DELETE_EVE_ID}) correctly excluded from name search (deleted then updated, remains deleted)`);
     } else {
       this.addResult('test10_eve_not_in_name_search', false,
-        `Eve (${TEST_ENTITIES.EVE_ID}) should not appear despite post-delete update`);
+        `Delete Eve (${TEST_ENTITIES.DELETE_EVE_ID}) should not appear despite post-delete update`);
     }
 
-    // Search for updated name "Eve Updated" - should also not find it
+    // Search for updated name "Delete Eve Updated" - should also not find it
     const eveUpdatedSearch = await this.search({
-      query: 'eve updated',
+      query: 'delete eve updated',
       scope: 'GLOBAL',
     });
 
-    const eveByUpdatedName = eveUpdatedSearch.results.find(r => r.entityId === TEST_ENTITIES.EVE_ID);
+    const eveByUpdatedName = eveUpdatedSearch.results.find(r => r.entityId === TEST_ENTITIES.DELETE_EVE_ID);
     if (!eveByUpdatedName) {
       this.addResult('test10_eve_updated_name_not_found', true,
-        `Eve with updated name correctly excluded (post-delete updates don't resurrect entity)`);
+        `Delete Eve with updated name correctly excluded (post-delete updates don't resurrect entity)`);
     } else {
       this.addResult('test10_eve_updated_name_not_found', false,
-        `Eve should not appear even when searching for updated name`);
+        `Delete Eve should not appear even when searching for updated name`);
     }
 
-    // Verify Eve doesn't appear in broad search
+    // Verify Delete Eve doesn't appear in broad search
     const broadSearch = await this.search({
       query: 'entity',
       scope: 'GLOBAL',
     });
 
-    const eveInBroad = broadSearch.results.find(r => r.entityId === TEST_ENTITIES.EVE_ID);
+    const eveInBroad = broadSearch.results.find(r => r.entityId === TEST_ENTITIES.DELETE_EVE_ID);
     if (!eveInBroad) {
       this.addResult('test10_eve_not_in_broad_search', true,
-        `Eve correctly excluded from broad search (delete-then-update behavior works)`);
+        `Delete Eve correctly excluded from broad search (delete-then-update behavior works)`);
     } else {
       this.addResult('test10_eve_not_in_broad_search', false,
-        `Eve should remain deleted despite subsequent update`);
+        `Delete Eve should remain deleted despite subsequent update`);
+    }
+  }
+
+  async test11_EmptyQueryTopRanked(): Promise<void> {
+    console.log(`\n${BLUE}Test 11: Empty query returns top ranked results (no query parameter)${NC}`);
+
+    // Test with global scope
+    console.log(`  ${BLUE}→ Testing with GLOBAL scope${NC}`);
+    const globalResponse = await this.search({
+      scope: 'GLOBAL',
+    });
+
+    // Should return results
+    if (globalResponse.results.length > 0) {
+      this.addResult('test11_global_has_results', true, `Empty query (GLOBAL) returned ${globalResponse.results.length} results`);
+    } else {
+      this.addResult('test11_global_has_results', false, `Empty query (GLOBAL) should return results, got 0`);
+      return;
+    }
+
+    // First result should be the entity with highest global score (Alice High: 0.95)
+    const firstGlobalResult = globalResponse.results[0];
+    if (firstGlobalResult.entityId === TEST_ENTITIES.ALICE_HIGH_ID) {
+      this.addResult('test11_global_top_ranked', true,
+        `First result is Alice High (${TEST_ENTITIES.ALICE_HIGH_ID}) - highest global score (0.95)`);
+    } else {
+      this.addResult('test11_global_top_ranked', false,
+        `First result should be Alice High (${TEST_ENTITIES.ALICE_HIGH_ID}), got: ${firstGlobalResult.entityId}`);
+    }
+
+    // Verify results are ordered by global score (descending)
+    // Use DEFAULT_AVERAGE_SCORE for missing scores
+    let globalScoresDescending = true;
+    for (let i = 0; i < globalResponse.results.length - 1; i++) {
+      const currentScore = globalResponse.results[i].entityGlobalScore ?? DEFAULT_AVERAGE_SCORE;
+      const nextScore = globalResponse.results[i + 1].entityGlobalScore ?? DEFAULT_AVERAGE_SCORE;
+
+      if (currentScore < nextScore) {
+        globalScoresDescending = false;
+        break;
+      }
+    }
+
+    if (globalScoresDescending) {
+      this.addResult('test11_global_score_ordering', true,
+        `Empty query (GLOBAL) results ordered by global score (descending, missing scores default to ${DEFAULT_AVERAGE_SCORE})`);
+    } else {
+      this.addResult('test11_global_score_ordering', false,
+        `Empty query (GLOBAL) results not properly ordered by global score`);
+    }
+
+    // Check total count makes sense
+    if (typeof globalResponse.total === 'number' && globalResponse.total > 0) {
+      this.addResult('test11_global_total', true, `Response includes total count: ${globalResponse.total}`);
+    } else {
+      this.addResult('test11_global_total', false, `Response missing or invalid total count`);
+    }
+
+    // Test with space scope
+    console.log(`  ${BLUE}→ Testing with SPACE scope${NC}`);
+    const spaceResponse = await this.search({
+      scope: 'SPACE',
+      space_id: TEST_ENTITIES.SPACE_ID,
+    });
+
+    // Should return results
+    if (spaceResponse.results.length > 0) {
+      this.addResult('test11_space_has_results', true, `Empty query (SPACE) returned ${spaceResponse.results.length} results`);
+    } else {
+      this.addResult('test11_space_has_results', false, `Empty query (SPACE) should return results, got 0`);
+      return;
+    }
+
+    // Verify results are ordered by space score (descending)
+    // Use DEFAULT_AVERAGE_SCORE for missing scores
+    let spaceScoresDescending = true;
+    for (let i = 0; i < spaceResponse.results.length - 1; i++) {
+      const currentScore = spaceResponse.results[i].entitySpaceScore ?? DEFAULT_AVERAGE_SCORE;
+      const nextScore = spaceResponse.results[i + 1].entitySpaceScore ?? DEFAULT_AVERAGE_SCORE;
+
+      if (currentScore < nextScore) {
+        spaceScoresDescending = false;
+        break;
+      }
+    }
+
+    if (spaceScoresDescending) {
+      this.addResult('test11_space_score_ordering', true,
+        `Empty query (SPACE) results ordered by space score (descending, missing scores default to ${DEFAULT_AVERAGE_SCORE})`);
+    } else {
+      this.addResult('test11_space_score_ordering', false,
+        `Empty query (SPACE) results not properly ordered by space score`);
+    }
+
+    // Check total count makes sense
+    if (typeof spaceResponse.total === 'number' && spaceResponse.total > 0) {
+      this.addResult('test11_space_total', true, `Response includes total count: ${spaceResponse.total}`);
+    } else {
+      this.addResult('test11_space_total', false, `Response missing or invalid total count`);
+    }
+  }
+
+  async test12_UnsetProperties(): Promise<void> {
+    console.log(`\n${BLUE}Test 12: Verify unset_properties functionality (UpdateEntity with unset_values)${NC}`);
+
+    // Test Case 1: Unset 1 property (name)
+    console.log(`  ${BLUE}→ Test Case 1: Unset single property (name)${NC}`);
+    const response1 = await this.search({
+      query: TEST_ENTITIES.UNSET_TEST_1_ID,
+      scope: 'GLOBAL',
+    });
+
+    const entity1 = response1.results.find(r => r.entityId === TEST_ENTITIES.UNSET_TEST_1_ID);
+
+    if (entity1) {
+      // Check that name is undefined/null
+      if (entity1.name === undefined || entity1.name === null) {
+        this.addResult('test12_case1_name_unset', true,
+          `Test Case 1 (${TEST_ENTITIES.UNSET_TEST_1_ID}): name is correctly unset (undefined/null)`);
+      } else {
+        this.addResult('test12_case1_name_unset', false,
+          `Test Case 1 (${TEST_ENTITIES.UNSET_TEST_1_ID}): name should be unset, but got: '${entity1.name}'`);
+      }
+
+      // Check that description is still present
+      if (entity1.description && entity1.description.includes('name unset')) {
+        this.addResult('test12_case1_description_present', true,
+          `Test Case 1 (${TEST_ENTITIES.UNSET_TEST_1_ID}): description is correctly preserved`);
+      } else {
+        this.addResult('test12_case1_description_present', false,
+          `Test Case 1 (${TEST_ENTITIES.UNSET_TEST_1_ID}): description should be present, got: '${entity1.description}'`);
+      }
+    } else {
+      this.addResult('test12_case1_not_found', false,
+        `Test Case 1 entity (${TEST_ENTITIES.UNSET_TEST_1_ID}) not found`);
+    }
+
+    // Test Case 2: Unset 2 properties (name and description)
+    console.log(`  ${BLUE}→ Test Case 2: Unset multiple properties (name and description)${NC}`);
+    const response2 = await this.search({
+      query: TEST_ENTITIES.UNSET_TEST_2_ID,
+      scope: 'GLOBAL',
+    });
+
+    const entity2 = response2.results.find(r => r.entityId === TEST_ENTITIES.UNSET_TEST_2_ID);
+
+    if (entity2) {
+      // Check that name is undefined/null
+      if (entity2.name === undefined || entity2.name === null) {
+        this.addResult('test12_case2_name_unset', true,
+          `Test Case 2 (${TEST_ENTITIES.UNSET_TEST_2_ID}): name is correctly unset (undefined/null)`);
+      } else {
+        this.addResult('test12_case2_name_unset', false,
+          `Test Case 2 (${TEST_ENTITIES.UNSET_TEST_2_ID}): name should be unset, but got: '${entity2.name}'`);
+      }
+
+      // Check that description is undefined/null
+      if (entity2.description === undefined || entity2.description === null) {
+        this.addResult('test12_case2_description_unset', true,
+          `Test Case 2 (${TEST_ENTITIES.UNSET_TEST_2_ID}): description is correctly unset (undefined/null)`);
+      } else {
+        this.addResult('test12_case2_description_unset', false,
+          `Test Case 2 (${TEST_ENTITIES.UNSET_TEST_2_ID}): description should be unset, but got: '${entity2.description}'`);
+      }
+
+      // Check that avatar is still present
+      if (entity2.avatar && entity2.avatar === 'https://example.com/avatar.png') {
+        this.addResult('test12_case2_avatar_present', true,
+          `Test Case 2 (${TEST_ENTITIES.UNSET_TEST_2_ID}): avatar is correctly preserved`);
+      } else {
+        this.addResult('test12_case2_avatar_present', false,
+          `Test Case 2 (${TEST_ENTITIES.UNSET_TEST_2_ID}): avatar should be 'https://example.com/avatar.png', got: '${entity2.avatar}'`);
+      }
+    } else {
+      this.addResult('test12_case2_not_found', false,
+        `Test Case 2 entity (${TEST_ENTITIES.UNSET_TEST_2_ID}) not found`);
+    }
+  }
+
+  async test13_LWWBehavior(): Promise<void> {
+    console.log(`\n${BLUE}Test 13: Verify mixed set/unset + Last-Writer-Wins (LWW) behavior${NC}`);
+    console.log(`  ${BLUE}→ Test 1: UpdateEntity with both set and unset (different properties)${NC}`);
+    console.log(`  ${BLUE}→ Test 2: Multiple sequential sets on same property (last write wins)${NC}`);
+
+    const response = await this.search({
+      query: TEST_ENTITIES.LWW_TEST_ID,
+      scope: 'GLOBAL',
+    });
+
+    const entity = response.results.find(r => r.entityId === TEST_ENTITIES.LWW_TEST_ID);
+
+    if (entity) {
+      // Check that name is "Second Update" (last write wins over "First Update")
+      if (entity.name === 'Second Update') {
+        this.addResult('test13_lww_last_write_wins', true,
+          `LWW Test (${TEST_ENTITIES.LWW_TEST_ID}): name is 'Second Update' - last write won over 'First Update' (LWW correct)`);
+      } else {
+        this.addResult('test13_lww_last_write_wins', false,
+          `LWW Test (${TEST_ENTITIES.LWW_TEST_ID}): name should be 'Second Update' (last write wins), but got: '${entity.name}'`);
+      }
+
+      // Check that description was UNSET (in mixed operation's unset_values)
+      if (entity.description === undefined || entity.description === null) {
+        this.addResult('test13_lww_description_unset', true,
+          `LWW Test (${TEST_ENTITIES.LWW_TEST_ID}): description is correctly unset (mixed set/unset operation worked)`);
+      } else {
+        this.addResult('test13_lww_description_unset', false,
+          `LWW Test (${TEST_ENTITIES.LWW_TEST_ID}): description should be unset, but got: '${entity.description}'`);
+      }
+
+      // Check that avatar was PRESERVED (not touched in any operation)
+      if (entity.avatar && entity.avatar === 'https://example.com/lww-avatar.png') {
+        this.addResult('test13_lww_avatar_preserved', true,
+          `LWW Test (${TEST_ENTITIES.LWW_TEST_ID}): avatar is correctly preserved across operations`);
+      } else {
+        this.addResult('test13_lww_avatar_preserved', false,
+          `LWW Test (${TEST_ENTITIES.LWW_TEST_ID}): avatar should be 'https://example.com/lww-avatar.png', got: '${entity.avatar}'`);
+      }
+    } else {
+      this.addResult('test13_lww_not_found', false,
+        `LWW Test entity (${TEST_ENTITIES.LWW_TEST_ID}) not found`);
     }
   }
 
@@ -566,6 +794,9 @@ async function main() {
     await validator.test8_TypeIdsScenarios();
     await validator.test9_DeletedEntitiesNotInResults();
     await validator.test10_DeletedThenUpdatedEntityNotInResults();
+    await validator.test11_EmptyQueryTopRanked();
+    await validator.test12_UnsetProperties();
+    await validator.test13_LWWBehavior();
 
     const allPassed = validator.printSummary();
     process.exit(allPassed ? 0 : 1);

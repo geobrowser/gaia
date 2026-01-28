@@ -1,6 +1,7 @@
 import {Hono} from "hono"
 import {beforeEach, describe, expect, it, vi} from "vitest"
 import type {SearchClient, SearchResponse} from "../services/search"
+import {runtime} from "../services/runtime"
 
 import {createSearchRouter} from "./index"
 
@@ -31,7 +32,7 @@ describe("Search Router - Integration Tests", () => {
 			healthCheck: vi.fn().mockResolvedValue(true),
 		}
 		app = new Hono()
-		app.route("/search", createSearchRouter(mockSearchClient))
+		app.route("/search", createSearchRouter(mockSearchClient, runtime))
 	})
 
 	describe("GET /search", () => {
@@ -122,36 +123,53 @@ describe("Search Router - Integration Tests", () => {
 			})
 		})
 
-		// Error cases
-		it("returns 400 for missing query parameter", async () => {
+		// Top ranked results for empty queries
+		it("returns top ranked results for missing query parameter", async () => {
 			const request = new Request("http://localhost/search")
 			const response = await app.fetch(request)
 			const result = await response.json()
 
-			expect(response.status).toBe(400)
-			expect(result.error).toBe("Missing required parameter")
-			expect(result.message).toContain("required")
+			expect(response.status).toBe(200)
+			expect(result).toEqual(mockSearchResponse)
+			expect(mockSearchClient.search).toHaveBeenCalledWith({
+				query: "",
+				scope: "GLOBAL",
+				limit: 20,
+				offset: 0,
+			})
 		})
 
-		it("returns 400 for empty query parameter", async () => {
+		it("returns top ranked results for empty query parameter", async () => {
 			const request = new Request("http://localhost/search?query=")
 			const response = await app.fetch(request)
 			const result = await response.json()
 
-			expect(response.status).toBe(400)
-			expect(result.error).toBe("Missing required parameter")
+			expect(response.status).toBe(200)
+			expect(result).toEqual(mockSearchResponse)
+			expect(mockSearchClient.search).toHaveBeenCalledWith({
+				query: "",
+				scope: "GLOBAL",
+				limit: 20,
+				offset: 0,
+			})
 		})
 
-		it("returns 400 for query shorter than minimum length", async () => {
-			const request = new Request("http://localhost/search?query=a")
+		it("returns top ranked results for whitespace-only query", async () => {
+			const request = new Request("http://localhost/search?query=%20%20")
 			const response = await app.fetch(request)
 			const result = await response.json()
 
-			expect(response.status).toBe(400)
-			expect(result.error).toBe("Invalid parameter")
-			expect(result.message).toContain("at least 2 characters")
+			expect(response.status).toBe(200)
+			expect(result).toEqual(mockSearchResponse)
+			expect(mockSearchClient.search).toHaveBeenCalledWith({
+				query: "",
+				scope: "GLOBAL",
+				limit: 20,
+				offset: 0,
+			})
 		})
 
+		// Error cases
 		it("returns 400 for query longer than maximum length", async () => {
 			const longQuery = "a".repeat(501)
 			const request = new Request(`http://localhost/search?query=${longQuery}`)
@@ -179,7 +197,7 @@ describe("Search Router - Integration Tests", () => {
 			const result = await response.json()
 
 			expect(response.status).toBe(400)
-			expect(result.error).toBe("Missing required parameter")
+			expect(result.error).toBe("Invalid parameter")
 			expect(result.message).toContain("space_id is required")
 		})
 
@@ -189,7 +207,7 @@ describe("Search Router - Integration Tests", () => {
 			const result = await response.json()
 
 			expect(response.status).toBe(400)
-			expect(result.error).toBe("Missing required parameter")
+			expect(result.error).toBe("Invalid parameter")
 			expect(result.message).toContain("space_id is required")
 		})
 
@@ -273,7 +291,7 @@ describe("Search Router - Integration Tests", () => {
 			const result = await response.json()
 
 			expect(response.status).toBe(400)
-			expect(result.error).toBe("Unrecognized parameter")
+			expect(result.error).toBe("Invalid parameter")
 			expect(result.message).toContain("unknown_param")
 		})
 
@@ -283,7 +301,7 @@ describe("Search Router - Integration Tests", () => {
 			const result = await response.json()
 
 			expect(response.status).toBe(400)
-			expect(result.error).toBe("Unrecognized parameter")
+			expect(result.error).toBe("Invalid parameter")
 			expect(result.message).toContain("foo")
 			expect(result.message).toContain("bar")
 		})

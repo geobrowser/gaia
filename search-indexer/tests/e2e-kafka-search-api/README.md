@@ -4,7 +4,7 @@ A command-line tool for generating test events that the search-indexer consumes 
 
 ## Features
 
-- Generates a comprehensive test scenario with 11 entities, relations, and scores
+- Generates a comprehensive test scenario with 15 entities, relations, and scores
 - Creates entities with varying score profiles (positive, negative, zero, at/below thresholds)
 - Tests type relation scenarios (multiple types, create/delete/recreate patterns)
 - Produces entity, space, and perspective scores
@@ -40,7 +40,7 @@ cd search-indexer/tests/e2e-kafka-search-api
 
 This script will:
 1. Build the event generator
-2. Generate comprehensive test data (11 entities, relations, and scores)
+2. Generate comprehensive test data (15 entities, relations, and scores)
 3. Automatically run TypeScript validation tests if the search API is running
 
 ### Option 2: Manual Setup
@@ -62,11 +62,12 @@ cargo run --release
 ```
 
 This creates:
-- 11 entities (7 Alice variants with different scores, Bob, Acme Corp, Person type, Organization type)
-- 14 type relation events (including creates, deletes, and recreates for testing typeIds)
+- 15 entities (7 Alice variants with different scores, Bob, Charlie, Acme Corp, Person type, Organization type, 3 property test entities)
+- 15 type relation events (including creates, deletes, and recreates for testing typeIds)
 - 11 entity scores (including negative and zero values)
 - 1 space score
 - 7 perspective scores
+- 3 property operation test cases (2 unset tests, 1 mixed set/unset + LWW test)
 
 #### 3. Start the Search Indexer
 
@@ -76,8 +77,10 @@ KAFKA_BROKER=localhost:9092 \
 OPENSEARCH_URL=http://localhost:9200 \
 KAFKA_GROUP_ID=search-indexer-test-$(date +%s) \
 RUST_LOG=debug,search_indexer=debug \
-cargo run -p search-indexer
+cargo run -p search-indexer --features search-indexer-repository/auto_index_creation
 ```
+
+**Note:** The `--features search-indexer-repository/auto_index_creation` flag enables automatic OpenSearch index creation for local testing. This feature is disabled by default for production safety. In production deployments, indices must be created manually using the search-admin tool.
 
 #### 4. (Optional) Run Validation Tests
 
@@ -167,6 +170,11 @@ This script:
   - Test 4: Entity field validation (entityId, name, description, typeIds, scoring)
   - Test 5: Score-based ordering (high scores first, descending order)
   - Test 6: Response metadata (total count, execution time)
+  - Test 7: Zero and negative score entities
+  - Test 8: TypeIds field for different relation scenarios
+  - Test 9: Empty query returns top ranked results
+  - Test 10: Unset properties functionality (validates unset_values in UpdateEntity)
+  - Test 11: Mixed set/unset + LWW behavior (validates Last-Writer-Wins semantics)
 - Provides color-coded pass/fail reporting
 - Exits with appropriate status codes for CI/CD integration
 
@@ -250,13 +258,14 @@ The tool generates a comprehensive test scenario with the following test data:
 
 **Other Entities**:
 - Bob (score: 0.75) - Basic entity with single type
+- Charlie (no score) - Tests default score behavior when entity has no global score
 - Acme Corp (score: 0.90) - Organization entity
 - Person Type (score: 0.70) - Type definition entity
 - Organization Type (score: 0.65) - Type definition entity
 
 ### Type Relations
 
-- All Alice variants and Bob have Person type
+- All Alice variants, Bob, and Charlie have Person type
 - Acme Corp has Organization type
 - Alice High additionally has Organization type (multiple types test)
 - Alice Medium has Organization type added, deleted, then recreated (relation lifecycle test)
@@ -269,6 +278,54 @@ The tool generates a comprehensive test scenario with the following test data:
 - 7 perspective scores (entity-space combinations)
 
 All entities use fixed UUIDs for repeatable validation testing.
+
+### Property Operation Test Cases
+
+Three dedicated test entities verify property operations in UpdateEntity:
+
+**Test Case 1** - Unset Single Property (ID: `00000000-0000-0000-0000-000000001111`):
+- Creates entity with name and description
+- Unsets the name property
+- Expected result: name should be undefined/null, description should remain
+
+**Test Case 2** - Unset Multiple Properties (ID: `00000000-0000-0000-0000-000000002222`):
+- Creates entity with name, description, and avatar
+- Unsets name and description properties
+- Expected result: name and description should be undefined/null, avatar should remain
+
+**Test Case 3** - Mixed Set/Unset + LWW (ID: `00000000-0000-0000-0000-000000003333`):
+- Creates entity with initial name, description, and avatar
+- Sends mixed operation: sets name="First Update", unsets description
+- Sends second set: name="Second Update"
+- Expected result: name="Second Update" (last write wins), description unset, avatar preserved
+- Tests both mixed operations (set and unset different properties) and Last-Writer-Wins semantics
+
+#### Verifying Property Operations
+
+The TypeScript validation script automatically verifies property operations:
+
+**Test 10** - Unset Properties (Test Cases 1 & 2):
+- ✓ Verifies name is undefined/null for Test Case 1
+- ✓ Verifies description is still present for Test Case 1
+- ✓ Verifies name and description are undefined/null for Test Case 2
+- ✓ Verifies avatar is still present for Test Case 2
+
+**Test 11** - Mixed Set/Unset + LWW (Test Case 3):
+- ✓ Verifies name equals "Second Update" (last write wins)
+- ✓ Verifies description is unset (from mixed operation)
+- ✓ Verifies avatar is preserved across operations
+
+Run the validation script to test:
+```bash
+cd typescript
+npm run validate
+```
+
+The property operations are handled by the search-indexer's `process_update_entity` function, which:
+1. Processes UpdateEntity operations with both `set_properties` and `unset_values` (for different properties)
+2. Creates separate `EntityEvent::unset_properties` and `EntityEvent::upsert` events
+3. The OpenSearch provider flushes unset operations immediately to ensure proper ordering
+4. Last-Writer-Wins semantics are achieved through sequential operations
 
 ## Troubleshooting
 

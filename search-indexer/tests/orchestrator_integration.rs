@@ -545,7 +545,7 @@ async fn test_orchestrator_configuration() {
 
     // Verify configuration was applied (we can't easily test this without exposing internals,
     // but at least verify it compiles and creates successfully)
-    assert!(true); // If we get here, creation succeeded
+    // If we get here, creation succeeded
 }
 
 #[tokio::test]

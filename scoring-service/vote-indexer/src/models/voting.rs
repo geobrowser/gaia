@@ -109,4 +109,3 @@ pub type UserVoteCriteria = (Uuid, Uuid, Uuid, VoteObjectType);
 
 /// Criteria for querying vote counts: (object_id, space_id, object_type)
 pub type VoteCountCriteria = (Uuid, Uuid, VoteObjectType);
-

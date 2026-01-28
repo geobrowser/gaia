@@ -94,11 +94,8 @@ impl ScoresConsumerTrait for MockScoresConsumer {
         tokio::select! {
             _ = shutdown.recv() => {}
             msg = ack_receiver.recv() => {
-                match msg {
-                    Some(StreamMessage::Acknowledgment { success, .. }) => {
-                        *self.last_acknowledgment.lock().unwrap() = Some(success);
-                    }
-                    Some(_) | None => {}
+                if let Some(StreamMessage::Acknowledgment { success, .. }) = msg {
+                    *self.last_acknowledgment.lock().unwrap() = Some(success);
                 }
             }
         }
@@ -178,11 +175,17 @@ impl SearchIndexProvider for MockSearchProvider {
         Ok(())
     }
 
-    async fn update_document(&self, _request: &UpdateEntityRequest) -> Result<(), SearchIndexError> {
+    async fn update_document(
+        &self,
+        _request: &UpdateEntityRequest,
+    ) -> Result<(), SearchIndexError> {
         Ok(())
     }
 
-    async fn delete_document(&self, _request: &DeleteEntityRequest) -> Result<(), SearchIndexError> {
+    async fn delete_document(
+        &self,
+        _request: &DeleteEntityRequest,
+    ) -> Result<(), SearchIndexError> {
         Ok(())
     }
 
@@ -230,7 +233,11 @@ impl SearchIndexProvider for MockSearchProvider {
 
 fn create_scores_test_orchestrator(
     events: Vec<ScoreEvent>,
-) -> (Orchestrator, Arc<MockSearchProvider>, Arc<MockScoresConsumer>) {
+) -> (
+    Orchestrator,
+    Arc<MockSearchProvider>,
+    Arc<MockScoresConsumer>,
+) {
     let processor = Processor::new();
     let mock_provider = Arc::new(MockSearchProvider::new());
     let loader = SearchLoader::new(mock_provider.clone());
@@ -356,7 +363,11 @@ async fn test_negative_space_score() {
     assert!(result.unwrap().is_ok());
 
     let last_ack = mock_consumer.get_last_acknowledgment();
-    assert_eq!(last_ack, Some(true), "Expected ACK for negative space score");
+    assert_eq!(
+        last_ack,
+        Some(true),
+        "Expected ACK for negative space score"
+    );
 
     let updates = mock_provider.get_space_score_updates();
     assert_eq!(updates.len(), 1);
@@ -434,11 +445,11 @@ async fn test_mixed_positive_zero_negative_scores() {
     let space_id_2 = Uuid::new_v4();
 
     let events = vec![
-        ScoreEvent::entity_global_score(entity_id_1, 2.5, 1000),  // positive
-        ScoreEvent::entity_global_score(entity_id_2, 0.0, 1000),  // zero
+        ScoreEvent::entity_global_score(entity_id_1, 2.5, 1000), // positive
+        ScoreEvent::entity_global_score(entity_id_2, 0.0, 1000), // zero
         ScoreEvent::entity_global_score(entity_id_3, -1.8, 1000), // negative
-        ScoreEvent::space_score(space_id_1, 0.0, 1000),           // zero
-        ScoreEvent::space_score(space_id_2, -0.5, 1000),          // negative
+        ScoreEvent::space_score(space_id_1, 0.0, 1000),          // zero
+        ScoreEvent::space_score(space_id_2, -0.5, 1000),         // negative
         ScoreEvent::entity_space_score(entity_id_1, space_id_1, 1.2, 1000), // positive
         ScoreEvent::entity_space_score(entity_id_2, space_id_2, 0.0, 1000), // zero
         ScoreEvent::entity_space_score(entity_id_3, space_id_1, -0.9, 1000), // negative
@@ -451,11 +462,7 @@ async fn test_mixed_positive_zero_negative_scores() {
     assert!(result.unwrap().is_ok(), "Orchestrator should succeed");
 
     let last_ack = mock_consumer.get_last_acknowledgment();
-    assert_eq!(
-        last_ack,
-        Some(true),
-        "Expected ACK for mixed score batch"
-    );
+    assert_eq!(last_ack, Some(true), "Expected ACK for mixed score batch");
 
     // Verify entity global scores
     let entity_global_updates = mock_provider.get_entity_global_score_updates();
@@ -473,16 +480,8 @@ async fn test_mixed_positive_zero_negative_scores() {
     // Verify entity-space scores
     let entity_space_updates = mock_provider.get_entity_space_score_updates();
     assert_eq!(entity_space_updates.len(), 3);
-    assert!(entity_space_updates.contains(&(
-        entity_id_1.to_string(),
-        space_id_1.to_string(),
-        1.2
-    )));
-    assert!(entity_space_updates.contains(&(
-        entity_id_2.to_string(),
-        space_id_2.to_string(),
-        0.0
-    )));
+    assert!(entity_space_updates.contains(&(entity_id_1.to_string(), space_id_1.to_string(), 1.2)));
+    assert!(entity_space_updates.contains(&(entity_id_2.to_string(), space_id_2.to_string(), 0.0)));
     assert!(entity_space_updates.contains(&(
         entity_id_3.to_string(),
         space_id_1.to_string(),

@@ -1,14 +1,18 @@
-name: Deploy Kafka UI
+name: Deploy Kafka UI (Production)
 
 on:
   push:
     branches:
       - main
     paths:
-      - 'hermes/k8s/kafka-ui.yaml'
+      - 'hermes/k8s/production/kafka-ui.yaml'
       - 'hermes-schema/proto/**'
       - 'wire/proto/grc20.proto'
       - '.github/workflows/kafka-ui-deploy.yml'
+
+concurrency:
+  group: kafka-ui-production
+  cancel-in-progress: true
 
 jobs:
   deploy:
@@ -31,7 +35,7 @@ jobs:
 
       - name: Apply k8s manifests
         run: |
-          kubectl apply -f hermes/k8s/namespace.yaml
+          kubectl apply -f hermes/k8s/production/namespace.yaml
           kubectl create configmap protobuf-schemas \
             --from-file=grc20.proto=wire/proto/grc20.proto \
             --from-file=block_summary.proto=hermes-schema/proto/block_summary.proto \
@@ -47,7 +51,7 @@ jobs:
             --from-file=voting.proto=hermes-schema/proto/voting.proto \
             --namespace=kafka \
             --dry-run=client -o yaml | kubectl apply -f -
-          kubectl apply -f hermes/k8s/kafka-ui.yaml
+          kubectl apply -f hermes/k8s/production/kafka-ui.yaml
 
       - name: Wait for deployment to be ready
         run: |

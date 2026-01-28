@@ -43,6 +43,9 @@ pub enum IndexerError {
     #[error("database error: {0}")]
     Database(#[from] sqlx::Error),
 
+    #[error("telemetry error: {0}")]
+    Telemetry(#[from] hermes_instrumentation::Error),
+
     #[error("configuration error: {0}")]
     Config(String),
 }

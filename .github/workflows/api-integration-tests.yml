@@ -2,13 +2,13 @@ name: API Integration Tests
 
 on:
   push:
-    branches: [ main, develop ]
+    branches: [main, dev]
     paths:
       - 'api/**'
       - 'api/drizzle/**'
       - '.github/workflows/api-integration-tests.yml'
   pull_request:
-    branches: [ main, develop ]
+    branches: [main, dev]
     paths:
       - 'api/**'
       - 'api/drizzle/**'

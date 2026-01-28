@@ -5,6 +5,91 @@ use uuid::Uuid;
 
 use hermes_schema::pb::scoring::{EntityScore, HermesScoresBatch, PerspectiveScore, SpaceScore};
 
+/// Generate a batch of entity global scores
+#[allow(dead_code)]
+pub fn create_entity_scores(scores: Vec<(Uuid, f64)>) -> Result<Vec<u8>> {
+    let timestamp = Utc::now().timestamp() as u64;
+
+    let entity_scores: Vec<EntityScore> = scores
+        .into_iter()
+        .map(|(entity_id, score)| EntityScore {
+            entity_id: entity_id.as_bytes().to_vec(),
+            score,
+            updated_at: timestamp,
+        })
+        .collect();
+
+    let batch = HermesScoresBatch {
+        entity_scores,
+        perspective_scores: vec![],
+        space_scores: vec![],
+        computed_at: timestamp,
+        batch_sequence: 1,
+        is_final: true,
+    };
+
+    let mut buf = Vec::new();
+    batch.encode(&mut buf)?;
+    Ok(buf)
+}
+
+/// Generate a batch of space scores
+#[allow(dead_code)]
+pub fn create_space_scores(scores: Vec<(Uuid, f64)>) -> Result<Vec<u8>> {
+    let timestamp = Utc::now().timestamp() as u64;
+
+    let space_scores: Vec<SpaceScore> = scores
+        .into_iter()
+        .map(|(space_id, score)| SpaceScore {
+            space_id: space_id.as_bytes().to_vec(),
+            score,
+            updated_at: timestamp,
+        })
+        .collect();
+
+    let batch = HermesScoresBatch {
+        entity_scores: vec![],
+        perspective_scores: vec![],
+        space_scores,
+        computed_at: timestamp,
+        batch_sequence: 1,
+        is_final: true,
+    };
+
+    let mut buf = Vec::new();
+    batch.encode(&mut buf)?;
+    Ok(buf)
+}
+
+/// Generate a batch of perspective scores (entity-space combinations)
+#[allow(dead_code)]
+pub fn create_perspective_scores(scores: Vec<(Uuid, Uuid, f64)>) -> Result<Vec<u8>> {
+    let timestamp = Utc::now().timestamp() as u64;
+
+    let perspective_scores: Vec<PerspectiveScore> = scores
+        .into_iter()
+        .map(|(entity_id, space_id, score)| PerspectiveScore {
+            entity_id: entity_id.as_bytes().to_vec(),
+            space_id: space_id.as_bytes().to_vec(),
+            score,
+            updated_at: timestamp,
+        })
+        .collect();
+
+    let batch = HermesScoresBatch {
+        entity_scores: vec![],
+        perspective_scores,
+        space_scores: vec![],
+        computed_at: timestamp,
+        batch_sequence: 1,
+        is_final: true,
+    };
+
+    let mut buf = Vec::new();
+    batch.encode(&mut buf)?;
+    Ok(buf)
+}
+
 /// Generate a comprehensive batch with all score types
 pub fn create_mixed_score_batch(
     entity_scores: Vec<(Uuid, f64)>,

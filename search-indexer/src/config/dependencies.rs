@@ -4,8 +4,12 @@ use std::env;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::sleep;
-use tracing::{info, warn};
+use hermes_instrumentation::{info, warn};
 
+use rdkafka::admin::AdminClient;
+use rdkafka::client::DefaultClientContext;
+
+use crate::consumer::kafka_config::create_client_config;
 use crate::consumer::{EntitiesConsumer, ScoresConsumer};
 use crate::loader::SearchLoader;
 use crate::orchestrator::Orchestrator;
@@ -39,6 +43,10 @@ pub enum ConnectionMode {
 pub struct Dependencies {
     /// The configured orchestrator ready to run.
     pub orchestrator: Orchestrator,
+    /// The search index provider (for health checks).
+    pub provider: Arc<dyn SearchIndexProvider>,
+    /// Kafka admin client (for health checks).
+    pub kafka_admin: Arc<AdminClient<DefaultClientContext>>,
 }
 
 impl ConnectionMode {
@@ -127,6 +135,16 @@ impl Dependencies {
             .await
             .map_err(|e| IndexingError::config(format!("Failed to ensure index exists: {}", e)))?;
 
+        // Create Kafka admin client for health checks
+        let kafka_admin_config = create_client_config(&kafka_broker, &kafka_group_id);
+        let kafka_admin: AdminClient<DefaultClientContext> =
+            kafka_admin_config.create().map_err(|e| {
+                IndexingError::config(format!("Failed to create Kafka admin client: {}", e))
+            })?;
+        let kafka_admin = Arc::new(kafka_admin);
+
+        info!("Kafka admin client created");
+
         // Initialize Kafka consumer for entity events
         let entities_consumer =
             EntitiesConsumer::new(&kafka_broker, &kafka_group_id).map_err(|e| {
@@ -138,8 +156,11 @@ impl Dependencies {
         // Initialize processor
         let processor = Processor::new();
 
+        // Wrap provider in Arc for sharing between loader and health checks
+        let provider = Arc::new(search_provider);
+
         // Initialize loader with search provider
-        let loader = SearchLoader::new(Arc::new(search_provider));
+        let loader = SearchLoader::new(provider.clone());
 
         // Initialize Kafka consumer for score updates
         let scores_consumer = ScoresConsumer::new(&kafka_broker, &kafka_group_id).map_err(|e| {
@@ -156,7 +177,11 @@ impl Dependencies {
             loader,
         );
 
-        Ok(Self { orchestrator })
+        Ok(Self {
+            orchestrator,
+            provider,
+            kafka_admin,
+        })
     }
 
     /// Connect to OpenSearch with retry logic based on connection mode.

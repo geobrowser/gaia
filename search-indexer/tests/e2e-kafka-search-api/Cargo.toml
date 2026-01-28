@@ -19,6 +19,9 @@ prost = "0.13.5"
 hermes-schema = { path = "../../../hermes-schema" }
 wire = { path = "../../../wire" }
 
+# GRC-20 encoding
+grc-20 = "0.3.0"
+
 # Core dependencies
 tokio = { version = "1.44", features = ["full"] }
 uuid = { version = "1.11", features = ["v4"] }

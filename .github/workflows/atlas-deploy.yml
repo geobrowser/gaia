@@ -1,4 +1,4 @@
-name: Deploy Atlas
+name: Deploy Atlas (Production)
 
 on:
   push:
@@ -12,8 +12,12 @@ on:
       - 'hermes-substream/**'
       - 'stream/**'
       - 'wire/**'
-      - 'hermes/k8s/atlas.yaml'
+      - 'hermes/k8s/production/atlas.yaml'
       - '.github/workflows/atlas-deploy.yml'
+
+concurrency:
+  group: atlas-production
+  cancel-in-progress: true
 
 env:
   REGISTRY: registry.digitalocean.com/geo
@@ -55,10 +59,10 @@ jobs:
 
       - name: Deploy to Kubernetes
         run: |
-          kubectl apply -f hermes/k8s/namespace.yaml
+          kubectl apply -f hermes/k8s/production/namespace.yaml
           # Update image tag to use SHA and apply
-          sed -i 's|image: registry.digitalocean.com/geo/atlas:latest|image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}|g' hermes/k8s/atlas.yaml
-          kubectl apply -f hermes/k8s/atlas.yaml
+          sed -i 's|image: registry.digitalocean.com/geo/atlas:latest|image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}|g' hermes/k8s/production/atlas.yaml
+          kubectl apply -f hermes/k8s/production/atlas.yaml
 
       - name: Wait for job to start
         run: |
