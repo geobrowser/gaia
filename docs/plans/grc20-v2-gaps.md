@@ -61,7 +61,7 @@ The kg-indexer decodes v2 payloads but doesn't yet handle all 9 op types:
   - `CreateRelation` - Processes type relations only (TYPE_RELATION_TYPE_ID)
   - `DeleteRelation` - Removes type relations from entities
   - `DeleteEntity` - Soft delete (marks entities as deleted in OpenSearch)
-- Operations intentionally skipped (not relevant for search):
+- Operations not yet implemented:
   - `CreateEntity`, `RestoreEntity`, `RestoreRelation`, `UpdateRelation`, `CreateValueRef`
 - E2E tests added for delete entity and unset properties functionality
 

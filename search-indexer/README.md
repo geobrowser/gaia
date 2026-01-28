@@ -344,15 +344,15 @@ The search indexer consumes `HermesEdit` messages from Kafka and decodes the GRC
 | `DeleteRelation` | ✓ Indexed | Removes type relations from entities. |
 | `DeleteEntity` | ✓ Indexed | Soft delete - sets `deleted=true` on the entity document. Deleted entities are excluded from search results. |
 
-### Skipped Operations (Not Relevant for Search)
+### Not Yet Implemented
 
-| Operation | Reason |
-|-----------|--------|
-| `CreateEntity` | Search index only needs entity metadata from `UpdateEntity`. Empty entities aren't searchable. |
-| `RestoreEntity` | Not yet implemented. Would need to set `deleted=false` to un-delete entities. |
-| `UpdateRelation` | Non-type relations don't affect search. Type relation updates not supported. |
-| `RestoreRelation` | Not yet implemented. Would need to restore deleted type relations. |
-| `CreateValueRef` | Value references don't affect searchable content. |
+| Operation | Notes |
+|-----------|-------|
+| `CreateEntity` | Could be used to pre-create entity documents before properties are set. |
+| `RestoreEntity` | Would set `deleted=false` to un-delete entities. |
+| `UpdateRelation` | Could support updating type relations. |
+| `RestoreRelation` | Would restore deleted type relations. |
+| `CreateValueRef` | Could index value reference metadata. |
 
 ### Soft Delete Behavior
 

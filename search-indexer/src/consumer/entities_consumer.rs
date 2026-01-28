@@ -541,8 +541,8 @@ impl EntitiesConsumer {
                     events.push(EntityEvent::delete(entity_id, space_id));
                 }
                 _ => {
-                    // Other operations (CreateEntity, RestoreEntity, RestoreRelation, CreateValueRef) don't affect search index
-                    debug!("Skipped operation (not relevant for search index)");
+                    // Other operations (CreateEntity, RestoreEntity, RestoreRelation, CreateValueRef) not yet implemented
+                    debug!("Skipped operation (not yet implemented)");
                 }
             }
         }
