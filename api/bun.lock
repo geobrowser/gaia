@@ -5,7 +5,7 @@
       "name": "api",
       "dependencies": {
         "@effect/opentelemetry": "^0.53.0",
-        "@geoprotocol/grc-20": "^0.1.7",
+        "@geoprotocol/grc-20": "^0.3.0",
         "@graphile-contrib/pg-simplify-inflector": "^6.1.0",
         "@graphprotocol/grc-20": "^0.25.1",
         "@graphql-tools/schema": "^10.0.23",
@@ -191,7 +191,7 @@
 
     "@fastify/busboy": ["@fastify/busboy@3.1.1", "", {}, "sha512-5DGmA8FTdB2XbDeEwc/5ZXBl6UbBAyBOOLlPuBnZ/N1SwdH9Ii+cOX3tBROlDgcTXxjOYnLMVoKk9+FXAw0CJw=="],
 
-    "@geoprotocol/grc-20": ["@geoprotocol/grc-20@0.1.7", "", { "dependencies": { "@bokuweb/zstd-wasm": "^0.0.27" } }, "sha512-BJGUwG6exJnLkoRzCwzohybxgtwsYwuzEcnyJ2YPQQ1WwDXp7o8oNwLVUjzwEqjEabw1oIRpSnDNrH/LqSEaYA=="],
+    "@geoprotocol/grc-20": ["@geoprotocol/grc-20@0.3.0", "", { "dependencies": { "@bokuweb/zstd-wasm": "^0.0.27" } }, "sha512-Nd8lge6lAZxOeNYxmMzoTC8cYCEwN1RDaLod3IQO1DQnMzu7Qhv7F/x9ZnbZryO1wkbSSRQ4Z62CL6xf+BNrVQ=="],
 
     "@graphile-contrib/pg-simplify-inflector": ["@graphile-contrib/pg-simplify-inflector@6.1.0", "", {}, "sha512-3eI2FP4ulu/fxwkJBNXhR6XEzqVz4wJWFr4LfeyUNNArUtLFx0DpP6YdcARCYgwLExFcIQNE8fnul3JKiciYIw=="],
 

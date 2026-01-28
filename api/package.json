@@ -18,7 +18,7 @@
   "description": "",
   "dependencies": {
     "@effect/opentelemetry": "^0.53.0",
-    "@geoprotocol/grc-20": "^0.1.7",
+    "@geoprotocol/grc-20": "^0.3.0",
     "@graphile-contrib/pg-simplify-inflector": "^6.1.0",
     "@graphprotocol/grc-20": "^0.25.1",
     "@graphql-tools/schema": "^10.0.23",
