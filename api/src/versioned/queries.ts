@@ -39,6 +39,55 @@ const BLOCKS_TYPE_ID = SystemIds.BLOCKS;
 // Generic database type
 type Database = NodePgDatabase<Record<string, unknown>>;
 
+// =============================================================================
+// Row Mapping Helpers
+// =============================================================================
+
+/**
+ * Map a database row to a VersionedValue.
+ */
+function mapValueRow(row: Record<string, unknown>): VersionedValue {
+	return {
+		propertyId: row.property_id as string,
+		spaceId: row.space_id as string,
+		boolean: row.boolean as boolean | null,
+		integer: row.integer as number | null,
+		float: row.float as number | null,
+		decimal: row.decimal as string | null,
+		text: row.text as string | null,
+		bytes: row.bytes ? Buffer.from(row.bytes as Buffer).toString("base64") : null,
+		date: row.date as string | null,
+		time: row.time as string | null,
+		datetime: row.datetime as string | null,
+		schedule: row.schedule as unknown | null,
+		point: row.point as string | null,
+		embedding: row.embedding as unknown | null,
+		language: row.language as string | null,
+		unit: row.unit as string | null,
+		contextRootId: row.context_root_id as string | null,
+		contextEdgeTypeId: row.context_edge_type_id as string | null,
+	};
+}
+
+/**
+ * Map a database row to a VersionedRelation.
+ */
+function mapRelationRow(row: Record<string, unknown>): VersionedRelation {
+	return {
+		relationId: row.relation_id as string,
+		typeId: row.type_id as string,
+		fromEntityId: row.from_entity_id as string,
+		fromSpaceId: row.from_space_id as string | null,
+		toEntityId: row.to_entity_id as string,
+		toSpaceId: row.to_space_id as string | null,
+		position: row.position as string | null,
+		spaceId: row.space_id as string,
+		verified: row.verified as boolean | null,
+		contextRootId: row.context_root_id as string | null,
+		contextEdgeTypeId: row.context_edge_type_id as string | null,
+	};
+}
+
 /**
  * Resolve an edit ID to its version key.
  */
@@ -95,29 +144,7 @@ export function getValuesAtVersion(
 							AND (valid_to_key IS NULL OR valid_to_key > ${versionKeyStr}::bigint)
 					`);
 
-			return result.rows.map((row) => ({
-				propertyId: row.property_id as string,
-				spaceId: row.space_id as string,
-				// Value columns (GRC-20 v2 data types)
-				boolean: row.boolean as boolean | null,
-				integer: row.integer as number | null,
-				float: row.float as number | null,
-				decimal: row.decimal as string | null,
-				text: row.text as string | null,
-				bytes: row.bytes ? Buffer.from(row.bytes as Buffer).toString("base64") : null,
-				date: row.date as string | null,
-				time: row.time as string | null,
-				datetime: row.datetime as string | null,
-				schedule: row.schedule as unknown | null,
-				point: row.point as string | null,
-				embedding: row.embedding as unknown | null,
-				// Metadata
-				language: row.language as string | null,
-				unit: row.unit as string | null,
-				// Context metadata (for block grouping)
-				contextRootId: row.context_root_id as string | null,
-				contextEdgeTypeId: row.context_edge_type_id as string | null,
-			}));
+			return result.rows.map(mapValueRow);
 		},
 		catch: (error) => new QueryError("getValuesAtVersion", error),
 	}).pipe(
@@ -159,20 +186,7 @@ export function getRelationsAtVersion(
 							AND (valid_to_key IS NULL OR valid_to_key > ${versionKeyStr}::bigint)
 					`);
 
-			return result.rows.map((row) => ({
-				relationId: row.relation_id as string,
-				typeId: row.type_id as string,
-				fromEntityId: row.from_entity_id as string,
-				fromSpaceId: row.from_space_id as string | null,
-				toEntityId: row.to_entity_id as string,
-				toSpaceId: row.to_space_id as string | null,
-				position: row.position as string | null,
-				spaceId: row.space_id as string,
-				verified: row.verified as boolean | null,
-				// Context metadata (for block grouping)
-				contextRootId: row.context_root_id as string | null,
-				contextEdgeTypeId: row.context_edge_type_id as string | null,
-			}));
+			return result.rows.map(mapRelationRow);
 		},
 		catch: (error) => new QueryError("getRelationsAtVersion", error),
 	}).pipe(
@@ -373,28 +387,88 @@ function getBlockIdsAtVersion(
 }
 
 /**
- * Get a block snapshot at a specific version.
+ * Batch fetch block snapshots at a specific version.
+ * Uses 2 queries total (values + relations) instead of 2N queries.
  */
-function getBlockSnapshotAtVersion(
+function batchGetBlockSnapshotsAtVersion(
 	db: Database,
-	blockId: string,
+	blockIds: string[],
 	versionKey: bigint,
 	spaceId?: string
-): Effect.Effect<BlockSnapshot, QueryError> {
-	return Effect.gen(function* () {
-		const [values, allRelations] = yield* Effect.all([
-			getValuesAtVersion(db, blockId, versionKey, spaceId),
-			getRelationsAtVersion(db, blockId, versionKey, spaceId),
-		]);
+): Effect.Effect<BlockSnapshot[], QueryError> {
+	if (blockIds.length === 0) {
+		return Effect.succeed([]);
+	}
 
-		// Filter out block relations
-		const relations = allRelations.filter((r) => r.typeId !== BLOCKS_TYPE_ID);
+	return Effect.tryPromise({
+		try: async () => {
+			const versionKeyStr = versionKey.toString();
 
-		return { id: blockId, values, relations };
+			// Query 1: All values for all blocks
+			const valuesResult = spaceId
+				? await db.execute<Record<string, unknown>>(sql`
+						SELECT * FROM value_versions
+						WHERE entity_id = ANY(${blockIds})
+							AND valid_from_key <= ${versionKeyStr}::bigint
+							AND (valid_to_key IS NULL OR valid_to_key > ${versionKeyStr}::bigint)
+							AND space_id = ${spaceId}
+					`)
+				: await db.execute<Record<string, unknown>>(sql`
+						SELECT * FROM value_versions
+						WHERE entity_id = ANY(${blockIds})
+							AND valid_from_key <= ${versionKeyStr}::bigint
+							AND (valid_to_key IS NULL OR valid_to_key > ${versionKeyStr}::bigint)
+					`);
+
+			// Query 2: All relations for all blocks (excluding BLOCKS type)
+			const relationsResult = spaceId
+				? await db.execute<Record<string, unknown>>(sql`
+						SELECT * FROM relation_versions
+						WHERE from_entity_id = ANY(${blockIds})
+							AND type_id != ${BLOCKS_TYPE_ID}
+							AND valid_from_key <= ${versionKeyStr}::bigint
+							AND (valid_to_key IS NULL OR valid_to_key > ${versionKeyStr}::bigint)
+							AND space_id = ${spaceId}
+					`)
+				: await db.execute<Record<string, unknown>>(sql`
+						SELECT * FROM relation_versions
+						WHERE from_entity_id = ANY(${blockIds})
+							AND type_id != ${BLOCKS_TYPE_ID}
+							AND valid_from_key <= ${versionKeyStr}::bigint
+							AND (valid_to_key IS NULL OR valid_to_key > ${versionKeyStr}::bigint)
+					`);
+
+			// Group by entity ID
+			const valuesMap = new Map<string, VersionedValue[]>();
+			const relationsMap = new Map<string, VersionedRelation[]>();
+
+			for (const id of blockIds) {
+				valuesMap.set(id, []);
+				relationsMap.set(id, []);
+			}
+
+			for (const row of valuesResult.rows) {
+				const entityId = row.entity_id as string;
+				valuesMap.get(entityId)?.push(mapValueRow(row));
+			}
+
+			for (const row of relationsResult.rows) {
+				const entityId = row.from_entity_id as string;
+				relationsMap.get(entityId)?.push(mapRelationRow(row));
+			}
+
+			// Build snapshots in order
+			return blockIds.map((id) => ({
+				id,
+				values: valuesMap.get(id) ?? [],
+				relations: relationsMap.get(id) ?? [],
+			}));
+		},
+		catch: (error) => new QueryError("batchGetBlockSnapshotsAtVersion", error),
 	}).pipe(
-		Effect.withSpan("queries.getBlockSnapshotAtVersion", {
+		Effect.withSpan("queries.batchGetBlockSnapshotsAtVersion", {
 			attributes: {
-				"query.block_id": blockId,
+				"query.block_count": blockIds.length,
 				"query.version_key": versionKey.toString(),
 			},
 		})
@@ -403,6 +477,13 @@ function getBlockSnapshotAtVersion(
 
 /**
  * Get a full entity snapshot at a specific version, including blocks.
+ *
+ * Query count: 4 + 2 = 6 queries total (regardless of block count)
+ * - 1 for entity values
+ * - 1 for entity relations
+ * - 2 for block discovery (context + relation fallback)
+ * - 1 for all block values (batched)
+ * - 1 for all block relations (batched)
  */
 export function getEntitySnapshotAtVersion(
 	db: Database,
@@ -420,10 +501,8 @@ export function getEntitySnapshotAtVersion(
 		// Filter out block relations
 		const relations = allRelations.filter((r) => r.typeId !== BLOCKS_TYPE_ID);
 
-		// Fetch block snapshots
-		const blocks = yield* Effect.all(
-			blockIds.map((id) => getBlockSnapshotAtVersion(db, id, versionKey, spaceId))
-		);
+		// Batch fetch all block snapshots (2 queries instead of 2N)
+		const blocks = yield* batchGetBlockSnapshotsAtVersion(db, blockIds, versionKey, spaceId);
 
 		return { id: entityId, values, relations, blocks };
 	}).pipe(
@@ -443,6 +522,13 @@ export function getEntitySnapshotAtVersion(
  * - Static `blocks` array for BLOCKS relation type
  * - Dynamic `groups` map for other relation types
  * - `groupKeys` for discoverability of dynamic groups
+ *
+ * Query count: 4 + 2 = 6 queries total (regardless of block/group count)
+ * - 1 for entity values
+ * - 1 for entity relations
+ * - 2 for block discovery (context + relation fallback)
+ * - 1 for all child values (batched across blocks + dynamic groups)
+ * - 1 for all child relations (batched across blocks + dynamic groups)
  */
 export function getGroupedEntitySnapshotAtVersion(
 	db: Database,
@@ -461,21 +547,33 @@ export function getGroupedEntitySnapshotAtVersion(
 		const groupedTypeIds = new Set([BLOCKS_TYPE_ID, ...grouped.groupKeys]);
 		const relations = allRelations.filter((r) => !groupedTypeIds.has(r.typeId));
 
-		// Fetch block snapshots (static key)
-		const blocks = yield* Effect.all(
-			grouped.blocks.map((id) =>
-				getBlockSnapshotAtVersion(db, id, versionKey, spaceId)
-			)
+		// Collect all child entity IDs for batch fetching
+		const allChildIds = [
+			...grouped.blocks,
+			...Array.from(grouped.dynamicGroups.values()).flat(),
+		];
+
+		// Batch fetch all child snapshots (2 queries instead of 2N)
+		const childSnapshots = yield* batchGetBlockSnapshotsAtVersion(
+			db,
+			allChildIds,
+			versionKey,
+			spaceId
 		);
 
-		// Fetch dynamic group snapshots
+		// Build a map for quick lookup
+		const snapshotMap = new Map<string, BlockSnapshot>();
+		for (const snapshot of childSnapshots) {
+			snapshotMap.set(snapshot.id, snapshot);
+		}
+
+		// Extract blocks (preserving order)
+		const blocks = grouped.blocks.map((id) => snapshotMap.get(id)!);
+
+		// Extract dynamic groups (preserving order within each group)
 		const groups: Record<string, BlockSnapshot[]> = {};
 		for (const [typeId, entityIds] of grouped.dynamicGroups) {
-			groups[typeId] = yield* Effect.all(
-				entityIds.map((id) =>
-					getBlockSnapshotAtVersion(db, id, versionKey, spaceId)
-				)
-			);
+			groups[typeId] = entityIds.map((id) => snapshotMap.get(id)!);
 		}
 
 		return {
