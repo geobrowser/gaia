@@ -2,9 +2,11 @@ use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 
+#[cfg(test)]
+use grc_20::model::ContextEdge;
 use grc_20::{
-    decode_edit, Edit as Grc20Edit, Id as Grc20Id, Op as Grc20Op, PropertyValue,
-    UnsetRelationField, Value as Grc20Value, model::{Context, ContextEdge},
+    decode_edit, model::Context, Edit as Grc20Edit, Id as Grc20Id, Op as Grc20Op, PropertyValue,
+    UnsetRelationField, Value as Grc20Value,
 };
 use hermes_schema::pb::knowledge::HermesEdit;
 use uuid::Uuid;
