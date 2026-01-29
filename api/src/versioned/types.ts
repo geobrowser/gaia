@@ -42,6 +42,7 @@ export interface VersionedValue {
 	datetime?: string | null // DATETIME (ISO 8601)
 	schedule?: unknown | null // SCHEDULE (RFC 5545)
 	point?: string | null // POINT (WGS84)
+	rect?: string | null // RECT (bounding box)
 	embedding?: unknown | null // EMBEDDING
 	// Metadata
 	language?: string | null // For TEXT values only
@@ -70,6 +71,7 @@ export type SimpleValueType =
 	| "DATETIME"
 	| "SCHEDULE"
 	| "POINT"
+	| "RECT"
 	| "EMBEDDING"
 
 export type ValueType = TextValueType | SimpleValueType

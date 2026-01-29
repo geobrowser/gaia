@@ -211,6 +211,13 @@
       "when": 1769556236352,
       "tag": "0029_abandoned_nova",
       "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1769718051629,
+      "tag": "0030_perpetual_jackpot",
+      "breakpoints": true
     }
   ]
 }

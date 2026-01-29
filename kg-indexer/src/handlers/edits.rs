@@ -392,6 +392,7 @@ fn value_to_value_op(
         boolean: None,
         time: None,
         point: None,
+        rect: None,
         integer: None,
         float: None,
         bytes: None,
@@ -467,8 +468,15 @@ fn value_to_value_op(
             };
             op.point = Some(point_str);
         }
-        Grc20Value::Rect { .. } => {
-            // Rect is not stored in kg-indexer yet.
+        Grc20Value::Rect {
+            min_lat,
+            min_lon,
+            max_lat,
+            max_lon,
+        } => {
+            // Format as "min_lat,min_lon,max_lat,max_lon" (southwest corner, then northeast corner)
+            let rect_str = format!("{},{},{},{}", min_lat, min_lon, max_lat, max_lon);
+            op.rect = Some(rect_str);
         }
         Grc20Value::Embedding {
             sub_type,
@@ -571,6 +579,7 @@ fn extract_values(edit: &Grc20Edit, space_id: &Uuid) -> Vec<ValueOp> {
                         boolean: None,
                         time: None,
                         point: None,
+                        rect: None,
                         integer: None,
                         float: None,
                         bytes: None,
@@ -740,6 +749,7 @@ mod tests {
             boolean: None,
             time: None,
             point: None,
+            rect: None,
             integer: None,
             float: None,
             bytes: None,
