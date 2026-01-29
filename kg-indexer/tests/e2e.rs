@@ -55,6 +55,26 @@ mod expected {
     pub const PROPOSAL_6: [u8; 16] = make_id(0xA6);
     pub const PROPOSAL_7: [u8; 16] = make_id(0xA7);
 
+    pub const ENTITY_PERSON_2: [u8; 16] = make_id(0xF2);
+    pub const ENTITY_ORG_1: [u8; 16] = make_id(0xF3);
+    pub const ENTITY_PROJECT_1: [u8; 16] = make_id(0xF4);
+    pub const ENTITY_DOC_1: [u8; 16] = make_id(0xF5);
+    pub const ENTITY_TOPIC_1: [u8; 16] = make_id(0xF6);
+    pub const ENTITY_SQUASH: [u8; 16] = make_id(0xF7);
+
+    pub const PROPERTY_NAME: [u8; 16] = make_id(0xD1);
+    pub const PROPERTY_DESCRIPTION: [u8; 16] = make_id(0xD2);
+
+    pub const RELATION_1: [u8; 16] = make_id(0xA1);
+    pub const RELATION_2: [u8; 16] = make_id(0xA2);
+    pub const RELATION_3: [u8; 16] = make_id(0xA3);
+
+    pub const EDIT_ROOT_2: [u8; 16] = make_id(0xE2);
+    pub const EDIT_A_1: [u8; 16] = make_id(0xEA);
+
+    pub const CONTEXT_ROOT_ID: [u8; 16] = ENTITY_ORG_1;
+    pub const CONTEXT_EDGE_TYPE_ID: [u8; 16] = make_id(0xC2);
+
     /// All 18 space IDs that should be created
     pub fn all_space_ids() -> Vec<Uuid> {
         vec![
@@ -362,4 +382,280 @@ async fn test_executed_proposals() {
         "All 7 proposals should be executed, found {} executed",
         executed_count.0
     );
+}
+
+#[tokio::test]
+async fn test_values_written_from_edits() {
+    let pool = get_pool().await;
+
+    let entity_org = uuid_from_bytes(expected::ENTITY_ORG_1);
+    let entity_project = uuid_from_bytes(expected::ENTITY_PROJECT_1);
+    let entity_doc = uuid_from_bytes(expected::ENTITY_DOC_1);
+    let entity_topic = uuid_from_bytes(expected::ENTITY_TOPIC_1);
+    let property_name = uuid_from_bytes(expected::PROPERTY_NAME);
+    let property_description = uuid_from_bytes(expected::PROPERTY_DESCRIPTION);
+
+    let count: (i64,) = sqlx::query_as(
+        "SELECT COUNT(*) FROM values WHERE entity_id IN ($1, $2, $3, $4)",
+    )
+    .bind(entity_org)
+    .bind(entity_project)
+    .bind(entity_doc)
+    .bind(entity_topic)
+    .fetch_one(&pool)
+    .await
+    .expect("Failed to count values for edit entities");
+
+    assert!(
+        count.0 >= 4,
+        "Expected values for edit entities, found {}",
+        count.0
+    );
+
+    let has_name: (bool,) = sqlx::query_as(
+        "SELECT EXISTS(SELECT 1 FROM values WHERE property_id = $1)",
+    )
+    .bind(property_name)
+    .fetch_one(&pool)
+    .await
+    .expect("Failed to query name values");
+
+    assert!(has_name.0, "Expected name values to be present");
+
+    let has_description: (bool,) = sqlx::query_as(
+        "SELECT EXISTS(SELECT 1 FROM values WHERE property_id = $1)",
+    )
+    .bind(property_description)
+    .fetch_one(&pool)
+    .await
+    .expect("Failed to query description values");
+
+    assert!(has_description.0, "Expected description values to be present");
+}
+
+#[tokio::test]
+async fn test_relations_written_from_edits() {
+    let pool = get_pool().await;
+
+    let relation_1 = uuid_from_bytes(expected::RELATION_1);
+    let relation_2 = uuid_from_bytes(expected::RELATION_2);
+
+    let exists_1: (bool,) =
+        sqlx::query_as("SELECT EXISTS(SELECT 1 FROM relations WHERE id = $1)")
+            .bind(relation_1)
+            .fetch_one(&pool)
+            .await
+            .expect("Failed to query relation 1");
+
+    let exists_2: (bool,) =
+        sqlx::query_as("SELECT EXISTS(SELECT 1 FROM relations WHERE id = $1)")
+            .bind(relation_2)
+            .fetch_one(&pool)
+            .await
+            .expect("Failed to query relation 2");
+
+    assert!(exists_1.0, "Expected relation 1 to exist");
+    assert!(exists_2.0, "Expected relation 2 to exist");
+}
+
+#[tokio::test]
+async fn test_relation_metadata_updated() {
+    let pool = get_pool().await;
+
+    let relation_1 = uuid_from_bytes(expected::RELATION_1);
+    let space_b = uuid_from_bytes(expected::SPACE_B);
+    let space_a = uuid_from_bytes(expected::SPACE_A);
+    let edit_root_2 = uuid_from_bytes(expected::EDIT_ROOT_2);
+    let edit_a_1 = uuid_from_bytes(expected::EDIT_A_1);
+
+    let row: Option<(Uuid, Uuid, Uuid, Uuid, Option<String>, Option<bool>)> = sqlx::query_as(
+        "SELECT from_space_id, to_space_id, from_version_id, to_version_id, position, verified FROM relations WHERE id = $1",
+    )
+    .bind(relation_1)
+    .fetch_optional(&pool)
+    .await
+    .expect("Failed to query relation metadata");
+
+    let (from_space_id, to_space_id, from_version_id, to_version_id, position, verified) =
+        row.expect("Relation 1 should exist");
+
+    assert_eq!(from_space_id, space_b);
+    assert_eq!(to_space_id, space_a);
+    assert_eq!(from_version_id, edit_root_2);
+    assert_eq!(to_version_id, edit_a_1);
+    assert_eq!(position.as_deref(), Some("2"));
+    assert_eq!(verified, Some(false));
+}
+
+#[tokio::test]
+async fn test_relation_unset_fields() {
+    let pool = get_pool().await;
+
+    let relation_2 = uuid_from_bytes(expected::RELATION_2);
+
+    let row: Option<(
+        Option<Uuid>,
+        Option<Uuid>,
+        Option<Uuid>,
+        Option<Uuid>,
+        Option<String>,
+        Option<bool>,
+    )> = sqlx::query_as(
+        "SELECT from_space_id, to_space_id, from_version_id, to_version_id, position, verified FROM relations WHERE id = $1",
+    )
+    .bind(relation_2)
+    .fetch_optional(&pool)
+    .await
+    .expect("Failed to query relation 2 metadata");
+
+    let (from_space_id, to_space_id, from_version_id, to_version_id, position, verified) =
+        row.expect("Relation 2 should exist");
+
+    assert!(from_space_id.is_none());
+    assert!(to_space_id.is_none());
+    assert!(from_version_id.is_none());
+    assert!(to_version_id.is_none());
+    assert!(position.is_none());
+    assert!(verified.is_none());
+}
+
+#[tokio::test]
+async fn test_relation_delete() {
+    let pool = get_pool().await;
+
+    let relation_3 = uuid_from_bytes(expected::RELATION_3);
+
+    let exists: (bool,) =
+        sqlx::query_as("SELECT EXISTS(SELECT 1 FROM relations WHERE id = $1)")
+            .bind(relation_3)
+            .fetch_one(&pool)
+            .await
+            .expect("Failed to query relation 3");
+
+    assert!(!exists.0, "Relation 3 should be deleted");
+}
+
+#[tokio::test]
+async fn test_value_squashing_last_write_wins() {
+    let pool = get_pool().await;
+
+    let entity = uuid_from_bytes(expected::ENTITY_SQUASH);
+    let property = uuid_from_bytes(expected::PROPERTY_NAME);
+
+    let row: Option<(Option<String>,)> = sqlx::query_as(
+        "SELECT string FROM values WHERE entity_id = $1 AND property_id = $2",
+    )
+    .bind(entity)
+    .bind(property)
+    .fetch_optional(&pool)
+    .await
+    .expect("Failed to query squashed value");
+
+    let (value,) = row.expect("Squashed value should exist");
+    assert_eq!(value.as_deref(), Some("Final"));
+}
+
+#[tokio::test]
+async fn test_value_delete_via_unset() {
+    let pool = get_pool().await;
+
+    let entity = uuid_from_bytes(expected::ENTITY_PERSON_2);
+    let property = uuid_from_bytes(expected::PROPERTY_NAME);
+
+    let exists: (bool,) = sqlx::query_as(
+        "SELECT EXISTS(SELECT 1 FROM values WHERE entity_id = $1 AND property_id = $2)",
+    )
+    .bind(entity)
+    .bind(property)
+    .fetch_one(&pool)
+    .await
+    .expect("Failed to query deleted value");
+
+    assert!(!exists.0, "Person 2 name should have been deleted");
+}
+
+#[tokio::test]
+async fn test_edit_versions_written() {
+    let pool = get_pool().await;
+
+    let edit_id = uuid_from_bytes(expected::EDIT_A_1);
+
+    let row: Option<(i64, i64, i64)> = sqlx::query_as(
+        "SELECT block_number, sequence, version_key FROM edit_versions WHERE edit_id = $1",
+    )
+    .bind(edit_id)
+    .fetch_optional(&pool)
+    .await
+    .expect("Failed to query edit_versions");
+
+    let (block_number, sequence, version_key) = row.expect("Edit version should exist");
+    assert_eq!(block_number, 0);
+    assert_eq!(version_key, (block_number << 32) | sequence);
+}
+
+#[tokio::test]
+async fn test_value_versions_written() {
+    let pool = get_pool().await;
+
+    let entity = uuid_from_bytes(expected::ENTITY_ORG_1);
+    let property = uuid_from_bytes(expected::PROPERTY_NAME);
+    let space = uuid_from_bytes(expected::SPACE_A);
+
+    let row: Option<(i64, Option<i64>)> = sqlx::query_as(
+        "SELECT valid_from_key, valid_to_key FROM value_versions WHERE entity_id = $1 AND property_id = $2 AND space_id = $3",
+    )
+    .bind(entity)
+    .bind(property)
+    .bind(space)
+    .fetch_optional(&pool)
+    .await
+    .expect("Failed to query value_versions");
+
+    let (valid_from_key, valid_to_key) = row.expect("Value version should exist");
+    assert_eq!(valid_to_key, None);
+    assert!(valid_from_key >= 0);
+}
+
+#[tokio::test]
+async fn test_relation_versions_written() {
+    let pool = get_pool().await;
+
+    let relation_id = uuid_from_bytes(expected::RELATION_1);
+
+    let row: Option<(i64, Option<i64>)> = sqlx::query_as(
+        "SELECT valid_from_key, valid_to_key FROM relation_versions WHERE relation_id = $1",
+    )
+    .bind(relation_id)
+    .fetch_optional(&pool)
+    .await
+    .expect("Failed to query relation_versions");
+
+    let (valid_from_key, valid_to_key) = row.expect("Relation version should exist");
+    assert_eq!(valid_to_key, None);
+    assert!(valid_from_key >= 0);
+}
+
+#[tokio::test]
+async fn test_context_metadata_written() {
+    let pool = get_pool().await;
+
+    let entity = uuid_from_bytes(expected::ENTITY_ORG_1);
+    let property = uuid_from_bytes(expected::PROPERTY_NAME);
+    let space = uuid_from_bytes(expected::SPACE_A);
+    let context_root = uuid_from_bytes(expected::CONTEXT_ROOT_ID);
+    let context_edge = uuid_from_bytes(expected::CONTEXT_EDGE_TYPE_ID);
+
+    let row: Option<(Option<Uuid>, Option<Uuid>)> = sqlx::query_as(
+        "SELECT context_root_id, context_edge_type_id FROM value_versions WHERE entity_id = $1 AND property_id = $2 AND space_id = $3 ORDER BY valid_from_key DESC LIMIT 1",
+    )
+    .bind(entity)
+    .bind(property)
+    .bind(space)
+    .fetch_optional(&pool)
+    .await
+    .expect("Failed to query value_versions context metadata");
+
+    let (context_root_id, context_edge_type_id) = row.expect("Context metadata should exist");
+    assert_eq!(context_root_id, Some(context_root));
+    assert_eq!(context_edge_type_id, Some(context_edge));
 }
