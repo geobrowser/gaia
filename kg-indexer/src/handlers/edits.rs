@@ -460,10 +460,10 @@ fn value_to_value_op(
             op.schedule = Some(serde_json::Value::String(v.to_string()));
         }
         Grc20Value::Point { lon, lat, alt } => {
-            // Format as "lon,lat" or "lon,lat,alt"
+            // Format as "lat,lon" or "lat,lon,alt"
             let point_str = match alt {
-                Some(a) => format!("{},{},{}", lon, lat, a),
-                None => format!("{},{}", lon, lat),
+                Some(a) => format!("{},{},{}", lat, lon, a),
+                None => format!("{},{}", lat, lon),
             };
             op.point = Some(point_str);
         }
