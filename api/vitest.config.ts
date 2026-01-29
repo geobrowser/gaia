@@ -14,8 +14,6 @@ export default defineConfig({
 			DATABASE_URL: process.env.DATABASE_URL || "postgresql://localhost:5432/gaia",
 			IPFS_KEY: "test-key",
 			IPFS_GATEWAY_WRITE: "https://ipfs.io",
-			IPFS_ALTERNATIVE_GATEWAY_KEY: "test-key",
-			IPFS_ALTERNATIVE_GATEWAY_WRITE: "https://ipfs.io",
 			RPC_ENDPOINT: "https://rpc.testnet.example.com",
 			CHAIN_ID: "80451",
 			DEPLOYER_PK: "0x1234567890abcdef1234567890abcdef1234567890abcdef1234567890abcdef",

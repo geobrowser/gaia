@@ -8,7 +8,7 @@ import {health} from "./src/health"
 import {graphqlServer} from "./src/kg/postgraphile"
 import {canonicalRequestLogging, requestId} from "./src/middleware/requestLogging"
 import {createSearchRouter} from "./src/search"
-import {uploadEdit, uploadFile, uploadFileAlternativeGateway} from "./src/services/ipfs"
+import {uploadEdit, uploadFile} from "./src/services/ipfs"
 import {runtime} from "./src/services/runtime"
 import {OpenSearchClient} from "./src/services/search"
 import {db} from "./src/services/storage/storage"
@@ -259,100 +259,6 @@ app.post(
 			return result
 		}).pipe(
 			Effect.withSpan("/ipfs/upload-file"),
-			Effect.annotateLogs({requestId, fileName: file?.name, fileSize: file?.size}),
-		)
-
-		const result = await runtime.runPromise(Effect.either(program))
-
-		return Either.match(result, {
-			onLeft: (error) => new Response(error.message, {status: error.status}),
-			onRight: (data) => c.json({cid: data.cid}),
-		})
-	},
-)
-
-app.post(
-	"/ipfs/upload-file-alternative-gateway",
-	describeRoute({
-		tags: ["IPFS"],
-		summary: "Upload a file to IPFS via alternative gateway",
-		description: "Uploads a file to IPFS using an alternative gateway and returns the content identifier (CID)",
-		requestBody: {
-			content: {
-				"multipart/form-data": {
-					schema: {
-						type: "object",
-						properties: {
-							file: {
-								type: "string",
-								format: "binary",
-								description: "The file to upload",
-							},
-						},
-						required: ["file"],
-					},
-				},
-			},
-		},
-		responses: {
-			200: {
-				description: "File successfully uploaded to IPFS",
-				content: {
-					"application/json": {
-						schema: {
-							type: "object",
-							properties: {
-								cid: {
-									type: "string",
-									description: "The IPFS content identifier (CID) of the uploaded file",
-								},
-							},
-							required: ["cid"],
-						},
-					},
-				},
-			},
-			400: {
-				description: "No file provided",
-				content: {
-					"text/plain": {
-						schema: {
-							type: "string",
-							example: "No file provided",
-						},
-					},
-				},
-			},
-			500: {
-				description: "Upload failed",
-				content: {
-					"text/plain": {
-						schema: {
-							type: "string",
-						},
-					},
-				},
-			},
-		},
-	}),
-	async (c) => {
-		const formData = await c.req.formData()
-		const file = formData.get("file") as File | undefined
-		const requestId = c.get("requestId")
-
-		const program = Effect.gen(function* () {
-			if (!file) {
-				yield* Effect.logWarning("No file provided")
-				return yield* Effect.fail({_tag: "ValidationError" as const, status: 400, message: "No file provided"})
-			}
-
-			const result = yield* uploadFileAlternativeGateway(file).pipe(
-				Effect.mapError((error) => ({_tag: "UploadError" as const, status: 500, message: error.message})),
-			)
-
-			return result
-		}).pipe(
-			Effect.withSpan("/ipfs/upload-file-alternative-gateway"),
 			Effect.annotateLogs({requestId, fileName: file?.name, fileSize: file?.size}),
 		)
 
