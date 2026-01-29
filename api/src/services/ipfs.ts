@@ -1,4 +1,4 @@
-import { Duration, Effect, Schedule } from "effect"
+import { Duration, Effect, Schedule, Ref } from "effect"
 import { Environment } from "./environment"
 
 class CidValidateError extends Error {
@@ -21,86 +21,113 @@ function validateCid(cid: string) {
 }
 
 export function uploadEdit(file: File) {
-	const run = Effect.gen(function* () {
+	return Effect.gen(function* () {
 		const config = yield* Environment
+		const attemptRef = yield* Ref.make(0)
+		const startTime = Date.now()
 
-		const blob = new Blob([file], {type: "application/octet-stream"})
-		const formData = new FormData()
-		formData.append("file", blob)
+		const run = Effect.gen(function* () {
+			yield* Ref.update(attemptRef, (n) => n + 1)
 
-		yield* Effect.logInfo("[IPFS][binary] Uploading content...")
-		const hash = yield* upload(formData, config.ipfsGatewayWrite).pipe(Effect.withSpan("ipfs.uploadEdit.upload"))
-		yield* Effect.logInfo("[IPFS][binary] Validating CID")
-		yield* validateCid(hash)
-		yield* Effect.logInfo("[IPFS][binary] Uploaded to IPFS successfully")
+			const blob = new Blob([file], {type: "application/octet-stream"})
+			const formData = new FormData()
+			formData.append("network", "public")
+			formData.append("file", blob, file.name || "edit.bin")
 
-		return {
-			cid: hash as `ipfs://${string}`,
-		}
-	})
+			const hash = yield* upload(formData, config.ipfsGatewayWrite)
+			yield* validateCid(hash)
 
-	return Effect.retry(run, {
-		schedule: Schedule.exponential("100 millis").pipe(
-			Schedule.jittered,
-			Schedule.compose(Schedule.elapsed),
-			Schedule.tapInput(() => Effect.logInfo("[IPFS][upload] Retrying")),
-			Schedule.whileOutput(Duration.lessThanOrEqualTo(Duration.seconds(30))),
-		),
-	})
+			return hash as `ipfs://${string}`
+		})
+
+		const cid = yield* Effect.retry(run, {
+			schedule: Schedule.exponential("100 millis").pipe(
+				Schedule.jittered,
+				Schedule.compose(Schedule.elapsed),
+				Schedule.whileOutput(Duration.lessThanOrEqualTo(Duration.seconds(30))),
+			),
+		}).pipe(
+			Effect.tapError((error) =>
+				Effect.gen(function* () {
+					const attempts = yield* Ref.get(attemptRef)
+					yield* Effect.logError("[IPFS] uploadEdit failed", {
+						cause: error,
+						fileName: file.name,
+						fileSize: file.size,
+						attempts,
+						durationMs: Date.now() - startTime,
+					})
+				}),
+			),
+		)
+
+		const attempts = yield* Ref.get(attemptRef)
+
+		// Canonical end log with full context
+		yield* Effect.logInfo("[IPFS] uploadEdit completed", {
+			fileName: file.name,
+			fileSize: file.size,
+			cid,
+			attempts,
+			durationMs: Date.now() - startTime,
+		})
+
+		return { cid }
+	}).pipe(Effect.withSpan("ipfs.uploadEdit"))
 }
 
 export function uploadFile(file: File) {
-	const run = Effect.gen(function* () {
+	return Effect.gen(function* () {
 		const config = yield* Environment
+		const attemptRef = yield* Ref.make(0)
+		const startTime = Date.now()
 
-		const formData = new FormData()
-		formData.append("file", file)
+		const run = Effect.gen(function* () {
+			yield* Ref.update(attemptRef, (n) => n + 1)
 
-		yield* Effect.logInfo("[IPFS][upload] Uploading content...")
-		const hash = yield* upload(formData, config.ipfsGatewayWrite).pipe(Effect.withSpan("ipfs.uploadFile.upload"))
-		yield* Effect.logInfo("[IPFS][upload] Uploaded to IPFS successfully")
+			const formData = new FormData()
+			formData.append("network", "public")
+			formData.append("file", file)
 
-		return {
-			cid: hash,
-		}
-	})
+			return yield* upload(formData, config.ipfsGatewayWrite)
+		})
 
-	return Effect.retry(run, {
-		schedule: Schedule.exponential("100 millis").pipe(
-			Schedule.jittered,
-			Schedule.compose(Schedule.elapsed),
-			Schedule.tapInput(() => Effect.logInfo("[IPFS][upload] Retrying")),
-			Schedule.whileOutput(Duration.lessThanOrEqualTo(Duration.seconds(30))),
-		),
-	})
+		const cid = yield* Effect.retry(run, {
+			schedule: Schedule.exponential("100 millis").pipe(
+				Schedule.jittered,
+				Schedule.compose(Schedule.elapsed),
+				Schedule.whileOutput(Duration.lessThanOrEqualTo(Duration.seconds(30))),
+			),
+		}).pipe(
+			Effect.tapError((error) =>
+				Effect.gen(function* () {
+					const attempts = yield* Ref.get(attemptRef)
+					yield* Effect.logError("[IPFS] uploadFile failed", {
+						cause: error,
+						fileName: file.name,
+						fileSize: file.size,
+						attempts,
+						durationMs: Date.now() - startTime,
+					})
+				}),
+			),
+		)
+
+		const attempts = yield* Ref.get(attemptRef)
+
+		// Canonical end log with full context
+		yield* Effect.logInfo("[IPFS] uploadFile completed", {
+			fileName: file.name,
+			fileSize: file.size,
+			cid,
+			attempts,
+			durationMs: Date.now() - startTime,
+		})
+
+		return { cid }
+	}).pipe(Effect.withSpan("ipfs.uploadFile"))
 }
 
-export function uploadFileAlternativeGateway(file: File) {
-	const run = Effect.gen(function* () {
-		const config = yield* Environment
-
-		const formData = new FormData()
-		formData.append("network", "public")
-		formData.append("file", file)
-
-		yield* Effect.logInfo("[IPFS][upload-alternative-gateway] Uploading content...")
-		const hash = yield* uploadAlternativeGateway(formData, config.ipfsAlternativeGatewayWrite).pipe(Effect.withSpan("ipfs.uploadFileAlternativeGateway.upload"))
-		yield* Effect.logInfo("[IPFS][upload-alternative-gateway] Uploaded to IPFS successfully")
-
-		return {
-			cid: hash,
-		}
-	})
-
-	return Effect.retry(run, {
-		schedule: Schedule.exponential("100 millis").pipe(
-			Schedule.jittered,
-			Schedule.compose(Schedule.elapsed),
-			Schedule.tapInput(() => Effect.logInfo("[IPFS][upload-alternative-gateway] Retrying")),
-			Schedule.whileOutput(Duration.lessThanOrEqualTo(Duration.seconds(30))),
-		),
-	})
-}
 class IpfsUploadError extends Error {
 	readonly _tag = "IpfsUploadError"
 }
@@ -111,7 +138,6 @@ class IpfsParseResponseError extends Error {
 
 export function upload(formData: FormData, url: string) {
 	return Effect.gen(function* () {
-		yield* Effect.logInfo("[IPFS] Posting IPFS content")
 		const config = yield* Environment
 
 		const response = yield* Effect.tryPromise({
@@ -123,48 +149,27 @@ export function upload(formData: FormData, url: string) {
 						Authorization: `Bearer ${config.ipfsKey}`,
 					},
 				}),
-			catch: (error) => new IpfsUploadError(`IPFS upload failed: ${error}`),
-		}).pipe(Effect.withSpan("ipfs.upload"))
+			catch: (error) => new IpfsUploadError(`IPFS fetch failed: ${error}`),
+		})
 
-		const {Hash} = yield* Effect.tryPromise({
+		const responseJson = yield* Effect.tryPromise({
 			try: () => response.json(),
 			catch: (error) => new IpfsParseResponseError(`Could not parse IPFS JSON response: ${error}`),
 		})
 
-		return `ipfs://${Hash}` as const
-	})
-}
-
-export function uploadAlternativeGateway(formData: FormData, url: string) {
-	return Effect.gen(function* () {
-		yield* Effect.logInfo("[IPFS] Posting IPFS alternative gateway content")
-		const config = yield* Environment
-
-		const response = yield* Effect.tryPromise({
-			try: () =>
-				fetch(url, {
-					method: "POST",
-					body: formData,
-					headers: {
-						Authorization: `Bearer ${config.ipfsAlternativeGatewayKey}`,
-					},
-				}),
-			catch: (error) => new IpfsUploadError(`IPFS alternative gateway upload failed: ${error}`),
-		}).pipe(Effect.withSpan("ipfs.uploadAlternativeGateway"))
-
-		const responseJson = yield* Effect.tryPromise({
-			try: () => response.json(),
-			catch: (error) => new IpfsParseResponseError(`Could not parse IPFS alternative gateway JSON response: ${error}`),
-		})
-
+		// Handle error responses from gateway
 		if (responseJson.error) {
-			yield* Effect.fail(new IpfsUploadError(`IPFS alternative gateway upload failed: ${responseJson.error}`))
+			const errorMsg = typeof responseJson.error === "object"
+				? responseJson.error.message || JSON.stringify(responseJson.error)
+				: String(responseJson.error)
+			yield* Effect.fail(new IpfsUploadError(`IPFS gateway error: ${errorMsg}`))
 		}
 
-		if (!responseJson.data || !responseJson.data.cid) {
-			yield* Effect.fail(new IpfsUploadError(`IPFS alternative gateway upload failed: No data.cid in response`))
+		if (!responseJson.data?.cid) {
+			yield* Effect.fail(new IpfsUploadError("IPFS gateway returned no CID"))
 		}
 
 		return `ipfs://${responseJson.data.cid}` as const
-	})
+	}).pipe(Effect.withSpan("ipfs.upload"))
 }
+

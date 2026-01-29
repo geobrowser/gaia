@@ -8,7 +8,7 @@ import {health} from "./src/health"
 import {graphqlServer} from "./src/kg/postgraphile"
 import {canonicalRequestLogging, requestId} from "./src/middleware/requestLogging"
 import {createSearchRouter} from "./src/search"
-import {uploadEdit, uploadFile, uploadFileAlternativeGateway} from "./src/services/ipfs"
+import {uploadEdit, uploadFile} from "./src/services/ipfs"
 import {runtime} from "./src/services/runtime"
 import {OpenSearchClient} from "./src/services/search"
 import {db} from "./src/services/storage/storage"
@@ -271,12 +271,14 @@ app.post(
 	},
 )
 
+// Backwards compatibility alias - uses same implementation as /ipfs/upload-file
 app.post(
 	"/ipfs/upload-file-alternative-gateway",
 	describeRoute({
 		tags: ["IPFS"],
-		summary: "Upload a file to IPFS via alternative gateway",
-		description: "Uploads a file to IPFS using an alternative gateway and returns the content identifier (CID)",
+		summary: "Upload a file to IPFS (deprecated)",
+		description: "Deprecated: Use /ipfs/upload-file instead. This endpoint is maintained for backwards compatibility.",
+		deprecated: true,
 		requestBody: {
 			content: {
 				"multipart/form-data": {
@@ -346,7 +348,7 @@ app.post(
 				return yield* Effect.fail({_tag: "ValidationError" as const, status: 400, message: "No file provided"})
 			}
 
-			const result = yield* uploadFileAlternativeGateway(file).pipe(
+			const result = yield* uploadFile(file).pipe(
 				Effect.mapError((error) => ({_tag: "UploadError" as const, status: 500, message: error.message})),
 			)
 
