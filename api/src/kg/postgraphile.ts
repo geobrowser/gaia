@@ -8,9 +8,9 @@ import {
 } from "postgraphile";
 import ConnectionFilterPlugin from "postgraphile-plugin-connection-filter";
 import EntitySpaceFilterPlugin from "./entitySpaceFilterPlugin";
-import GeoScalarPlugin from "./geoScalarPlugin";
 import { useGraphQLInstrumentation } from "./instrumentationPlugin";
 import UndashedUuidPlugin from "./uuidScalarPlugin";
+import ValueScalarsPlugin from "./valueScalarsPlugin";
 
 // Server context passed from HTTP middleware
 export type GraphQLServerContext = {
@@ -55,11 +55,12 @@ const postgraphileOptions = {
 	//   plugins (including ConnectionFilterPlugin) build their types against the
 	//   undashed UUID behavior. This has been verified to work with both dashed
 	//   and undashed UUID inputs in filters.
-	// - GeoScalarPlugin registers GeoPoint/GeoRect scalars and remaps point/rect fields
+	// - ValueScalarsPlugin registers custom scalars (GeoPoint, GeoRect, Date, etc.)
+	//   and remaps Value fields to use them for self-documenting schema
 	// - EntitySpaceFilterPlugin adds efficient spaceId filter using EXISTS instead of computed column
 	appendPlugins: [
 		UndashedUuidPlugin,
-		GeoScalarPlugin,
+		ValueScalarsPlugin,
 		ConnectionFilterPlugin,
 		SimplifyInflectionPlugin,
 		EntitySpaceFilterPlugin,
