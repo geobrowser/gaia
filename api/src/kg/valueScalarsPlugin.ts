@@ -10,7 +10,26 @@ interface ScalarDef {
 	description: string;
 }
 
-const SCALAR_DEFS: Record<string, ScalarDef> = {
+const SCALAR_FIELD_NAMES = [
+	"point",
+	"rect",
+	"date",
+	"datetime",
+	"time",
+	"bytes",
+	"language",
+] as const;
+
+type ScalarFieldName = (typeof SCALAR_FIELD_NAMES)[number];
+
+function isScalarFieldName(value: unknown): value is ScalarFieldName {
+	return (
+		typeof value === "string" &&
+		SCALAR_FIELD_NAMES.includes(value as ScalarFieldName)
+	);
+}
+
+const SCALAR_DEFS: Record<ScalarFieldName, ScalarDef> = {
 	// Geo scalars
 	point: {
 		name: "GeoPoint",
@@ -65,7 +84,7 @@ const SCALAR_DEFS: Record<string, ScalarDef> = {
  */
 export default function ValueScalarsPlugin(builder: any) {
 	// Store scalar instances created during build phase
-	let scalarInstances: Record<string, GraphQLScalarType> = {};
+	let scalarInstances: Record<ScalarFieldName, GraphQLScalarType> | null = null;
 
 	// Register all scalar types in the build phase
 	builder.hook("build", (build: any) => {
@@ -73,8 +92,11 @@ export default function ValueScalarsPlugin(builder: any) {
 			graphql: { GraphQLScalarType, Kind },
 		} = build;
 
+		const instances = {} as Record<ScalarFieldName, GraphQLScalarType>;
+
 		// Create scalars using PostGraphile's graphql instance
-		for (const [fieldName, def] of Object.entries(SCALAR_DEFS)) {
+		for (const fieldName of SCALAR_FIELD_NAMES) {
+			const def = SCALAR_DEFS[fieldName];
 			const scalar = new GraphQLScalarType({
 				name: def.name,
 				description: def.description,
@@ -92,10 +114,11 @@ export default function ValueScalarsPlugin(builder: any) {
 					return ast.value;
 				},
 			});
-			scalarInstances[fieldName] = scalar;
+			instances[fieldName] = scalar;
 			build.addType(scalar, "ValueScalarsPlugin");
 		}
 
+		scalarInstances = instances;
 		return build;
 	});
 
@@ -107,12 +130,13 @@ export default function ValueScalarsPlugin(builder: any) {
 				graphql: { GraphQLNonNull, getNamedType, isNonNullType },
 			} = build;
 
-			const fieldName = context.scope?.fieldName;
-			const scalar = scalarInstances[fieldName];
+			const fieldName: unknown = context.scope?.fieldName;
 
-			if (!scalar) {
+			if (!isScalarFieldName(fieldName) || !scalarInstances) {
 				return field;
 			}
+
+			const scalar = scalarInstances[fieldName];
 
 			// Check if field's underlying type is String
 			const namedType: GraphQLNamedType | undefined = getNamedType(field.type);
@@ -158,10 +182,10 @@ function createTestScalar(def: ScalarDef): GraphQLScalarType {
 }
 
 // Test-only scalar instances (use local graphql module)
-export const GeoPointScalar = createTestScalar(SCALAR_DEFS.point!);
-export const GeoRectScalar = createTestScalar(SCALAR_DEFS.rect!);
-export const DateStringScalar = createTestScalar(SCALAR_DEFS.date!);
-export const DateTimeStringScalar = createTestScalar(SCALAR_DEFS.datetime!);
-export const TimeStringScalar = createTestScalar(SCALAR_DEFS.time!);
-export const BytesScalar = createTestScalar(SCALAR_DEFS.bytes!);
-export const LanguageTagScalar = createTestScalar(SCALAR_DEFS.language!);
+export const GeoPointScalar = createTestScalar(SCALAR_DEFS.point);
+export const GeoRectScalar = createTestScalar(SCALAR_DEFS.rect);
+export const DateStringScalar = createTestScalar(SCALAR_DEFS.date);
+export const DateTimeStringScalar = createTestScalar(SCALAR_DEFS.datetime);
+export const TimeStringScalar = createTestScalar(SCALAR_DEFS.time);
+export const BytesScalar = createTestScalar(SCALAR_DEFS.bytes);
+export const LanguageTagScalar = createTestScalar(SCALAR_DEFS.language);
