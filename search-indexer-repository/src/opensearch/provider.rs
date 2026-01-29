@@ -19,7 +19,9 @@ use crate::interfaces::SearchIndexProvider;
 use crate::opensearch::bulk::{execute_bulk, BulkAction, BulkOperationMeta};
 use crate::opensearch::index_config::IndexConfig;
 use crate::opensearch::index_management;
-use crate::opensearch::scripts::{ADD_TYPE_RELATION_SCRIPT, REMOVE_TYPE_RELATION_SCRIPT};
+use crate::opensearch::scripts::{
+    ADD_TYPE_RELATION_SCRIPT, REMOVE_TYPE_RELATION_SCRIPT, UPDATE_WITH_TOMBSTONE_CHECK_SCRIPT,
+};
 use crate::opensearch::unset_document_properties::create_unset_properties_script;
 use crate::types::{
     BatchOperationResult, BatchOperationSummary, DeleteEntityRequest, EntityOperation,
@@ -516,12 +518,26 @@ impl SearchIndexProvider for OpenSearchProvider {
                         has_operation = true;
                     }
 
-                    // Handle regular document properties
+                    // Handle regular document properties with tombstone dominance
                     let doc = Self::build_update_doc(request);
                     if !doc.is_empty() {
+                        // Use script with upsert for tombstone dominance:
+                        // - If document doesn't exist: create it with upsert values
+                        // - If document exists but is deleted: noop (unless this update sets deleted=true)
+                        // - If document exists and is not deleted: merge the doc fields
+                        let mut upsert_doc = doc.clone();
+                        upsert_doc.insert("entity_id".to_string(), json!(entity_id.to_string()));
+                        upsert_doc.insert("space_id".to_string(), json!(space_id.to_string()));
+
                         let body = json!({
-                            "doc": doc,
-                            "doc_as_upsert": true
+                            "script": {
+                                "source": UPDATE_WITH_TOMBSTONE_CHECK_SCRIPT,
+                                "lang": "painless",
+                                "params": {
+                                    "doc": doc
+                                }
+                            },
+                            "upsert": upsert_doc
                         });
                         bulk_ops.push(BulkOperation::update(doc_id, body).into());
                         metas.push(BulkOperationMeta {

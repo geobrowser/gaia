@@ -35,6 +35,8 @@ export interface SearchQuery {
 	limit?: number
 	/** Offset for pagination (default: 0). */
 	offset?: number
+	/** Include soft-deleted entities in results (default: false). */
+	include_deleted?: boolean
 }
 
 /**

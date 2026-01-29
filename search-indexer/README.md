@@ -358,8 +358,10 @@ The search indexer consumes `HermesEdit` messages from Kafka and decodes the GRC
 
 When a `DeleteEntity` operation is processed:
 1. The entity document is updated with `deleted=true`
-2. The OpenSearch query filters exclude `deleted=true` documents
-3. Subsequent updates to a deleted entity will still be indexed (no tombstone dominance enforcement in search indexer)
+2. The OpenSearch query filters exclude `deleted=true` documents from search results
+3. Subsequent updates to the deleted entity are ignored (tombstone dominance)
+
+**Tombstone dominance:** Per the GRC-20 spec, updates to deleted entities are ignored. This is enforced at the OpenSearch level using Painless scripts that check the `deleted` status before applying updates. Type relation additions/removals are also skipped for deleted entities.
 
 **Note:** `RestoreEntity` is not currently handled. If you need to un-delete an entity, you would need to manually update the OpenSearch document or re-index.
 

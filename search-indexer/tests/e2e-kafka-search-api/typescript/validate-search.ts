@@ -65,6 +65,7 @@ class SearchValidator {
     if (query.type_ids) query.type_ids.forEach(id => params.append('type_ids', id));
     if (query.limit) params.append('limit', query.limit.toString());
     if (query.offset) params.append('offset', query.offset.toString());
+    if (query.include_deleted) params.append('include_deleted', 'true');
 
     const url = `${this.baseUrl}/search?${params.toString()}`;
     const response = await fetch(url, {
@@ -737,6 +738,88 @@ class SearchValidator {
     }
   }
 
+  /** Verifies include_deleted flag returns soft-deleted entities when set to true. */
+  async test14_IncludeDeletedFlag(): Promise<void> {
+    console.log(`\n${BLUE}Test 14: Verify include_deleted flag returns deleted entities${NC}`);
+
+    // Search for Delete Charlie WITHOUT include_deleted (should NOT find)
+    const normalSearch = await this.search({
+      query: 'delete charlie',
+      scope: 'GLOBAL',
+    });
+
+    const charlieInNormal = normalSearch.results.find(r => r.entityId === TEST_ENTITIES.DELETE_CHARLIE_ID);
+    if (!charlieInNormal) {
+      this.addResult('test14_excluded_without_flag', true,
+        `Delete Charlie (${TEST_ENTITIES.DELETE_CHARLIE_ID}) excluded from normal search (expected)`);
+    } else {
+      this.addResult('test14_excluded_without_flag', false,
+        `Delete Charlie should be excluded without include_deleted flag`);
+    }
+
+    // Search for Delete Charlie WITH include_deleted=true (should find)
+    const includeDeletedSearch = await this.search({
+      query: 'delete charlie',
+      scope: 'GLOBAL',
+      include_deleted: true,
+    });
+
+    const charlieInIncludeDeleted = includeDeletedSearch.results.find(r => r.entityId === TEST_ENTITIES.DELETE_CHARLIE_ID);
+    if (charlieInIncludeDeleted) {
+      this.addResult('test14_included_with_flag', true,
+        `Delete Charlie (${TEST_ENTITIES.DELETE_CHARLIE_ID}) returned with include_deleted=true`);
+    } else {
+      this.addResult('test14_included_with_flag', false,
+        `Delete Charlie should be returned when include_deleted=true`);
+    }
+
+    // Also verify Delete Dana is returned with include_deleted=true
+    const danaSearch = await this.search({
+      query: 'delete dana',
+      scope: 'GLOBAL',
+      include_deleted: true,
+    });
+
+    const danaInIncludeDeleted = danaSearch.results.find(r => r.entityId === TEST_ENTITIES.DELETE_DANA_ID);
+    if (danaInIncludeDeleted) {
+      this.addResult('test14_dana_included_with_flag', true,
+        `Delete Dana (${TEST_ENTITIES.DELETE_DANA_ID}) returned with include_deleted=true`);
+    } else {
+      this.addResult('test14_dana_included_with_flag', false,
+        `Delete Dana should be returned when include_deleted=true`);
+    }
+
+    // Verify Delete Eve (deleted then updated) is also returned with include_deleted=true
+    const eveSearch = await this.search({
+      query: 'delete eve',
+      scope: 'GLOBAL',
+      include_deleted: true,
+    });
+
+    const eveInIncludeDeleted = eveSearch.results.find(r => r.entityId === TEST_ENTITIES.DELETE_EVE_ID);
+    if (eveInIncludeDeleted) {
+      this.addResult('test14_eve_included_with_flag', true,
+        `Delete Eve (${TEST_ENTITIES.DELETE_EVE_ID}) returned with include_deleted=true (tombstone preserved)`);
+
+      // Verify tombstone dominance: the post-delete update should NOT have been applied
+      // Eve was created with name "Delete Eve", deleted, then updated to "Delete Eve Updated"
+      // If tombstone dominance works, name should still be "Delete Eve"
+      if (eveInIncludeDeleted.name === 'Delete Eve') {
+        this.addResult('test14_eve_tombstone_dominance', true,
+          `Delete Eve name is 'Delete Eve' - tombstone dominance enforced (post-delete update ignored)`);
+      } else if (eveInIncludeDeleted.name === 'Delete Eve Updated') {
+        this.addResult('test14_eve_tombstone_dominance', false,
+          `Delete Eve name is 'Delete Eve Updated' - tombstone dominance NOT enforced (post-delete update was applied)`);
+      } else {
+        this.addResult('test14_eve_tombstone_dominance', false,
+          `Delete Eve has unexpected name: '${eveInIncludeDeleted.name}'`);
+      }
+    } else {
+      this.addResult('test14_eve_included_with_flag', false,
+        `Delete Eve should be returned when include_deleted=true`);
+    }
+  }
+
   printSummary() {
     console.log(`\n${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}`);
 
@@ -810,6 +893,7 @@ async function main() {
     await validator.test11_EmptyQueryTopRanked();
     await validator.test12_UnsetProperties();
     await validator.test13_LWWBehavior();
+    await validator.test14_IncludeDeletedFlag();
 
     const allPassed = validator.printSummary();
     process.exit(allPassed ? 0 : 1);

@@ -55,7 +55,16 @@ const MAX_TYPE_IDS = 10
 /**
  * Valid query parameter names for the search endpoint.
  */
-const VALID_PARAMS: Set<string> = new Set(["query", "q", "scope", "space_id", "type_ids", "limit", "offset"])
+const VALID_PARAMS: Set<string> = new Set([
+	"query",
+	"q",
+	"scope",
+	"space_id",
+	"type_ids",
+	"limit",
+	"offset",
+	"include_deleted",
+])
 
 // Error types for search operations
 class SearchValidationError extends Data.TaggedError("SearchValidationError")<{
@@ -108,6 +117,7 @@ export function createSearchRouter(searchClient: SearchClient, runtime: AppRunti
 			const typeIdsParam = c.req.query("type_ids")
 			const limitParam = c.req.query("limit")
 			const offsetParam = c.req.query("offset")
+			const includeDeletedParam = c.req.query("include_deleted")
 
 			// Validate query length
 			const trimmedQuery = query?.trim() ?? ""
@@ -228,6 +238,9 @@ export function createSearchRouter(searchClient: SearchClient, runtime: AppRunti
 				}
 			}
 
+			// Parse include_deleted flag (default: false)
+			const includeDeleted = includeDeletedParam === "true"
+
 			// Execute search
 			const response = yield* Effect.tryPromise({
 				try: () =>
@@ -238,6 +251,7 @@ export function createSearchRouter(searchClient: SearchClient, runtime: AppRunti
 						type_ids: typeIds,
 						limit,
 						offset,
+						include_deleted: includeDeleted,
 					}),
 				catch: (error) =>
 					new SearchExecutionError({
