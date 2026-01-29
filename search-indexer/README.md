@@ -339,6 +339,7 @@ The search indexer consumes `HermesEdit` messages from Kafka and decodes the GRC
 
 | Operation | Handling | Notes |
 |-----------|----------|-------|
+| `CreateEntity` | ✓ Indexed | Creates entity document with `name`, `description`, `avatar` properties from initial values. |
 | `UpdateEntity` | ✓ Indexed | Extracts `name`, `description`, `avatar` properties. Handles `unset_values` to clear properties. |
 | `CreateRelation` | ✓ Indexed | Only processes **type relations** (where `relation_type == TYPE_RELATION_TYPE_ID`). Adds type IDs to entities for type filtering. |
 | `DeleteRelation` | ✓ Indexed | Removes type relations from entities. |
@@ -348,7 +349,6 @@ The search indexer consumes `HermesEdit` messages from Kafka and decodes the GRC
 
 | Operation | Notes |
 |-----------|-------|
-| `CreateEntity` | Could be used to pre-create entity documents before properties are set. |
 | `RestoreEntity` | Would set `deleted=false` to un-delete entities. |
 | `UpdateRelation` | Could support updating type relations. |
 | `RestoreRelation` | Would restore deleted type relations. |

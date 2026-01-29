@@ -66,6 +66,9 @@ async fn main() -> Result<()> {
     let delete_dana_id = Uuid::parse_str("00000000-0000-0000-0000-000000000d01").unwrap();
     let delete_eve_id = Uuid::parse_str("00000000-0000-0000-0000-000000000e01").unwrap();
 
+    // Entity created via CreateEntity op (for testing CreateEntity handling)
+    let create_entity_test_id = Uuid::parse_str("00000000-0000-0000-0000-000000000ce01").unwrap();
+
     info!("Test Space ID: {}", test_space);
     info!("Person Type ID: {}", person_type_id);
     info!("Organization Type ID: {}", org_type_id);
@@ -97,6 +100,8 @@ async fn main() -> Result<()> {
     info!("  Delete Charlie ID: {} (will be deleted)", delete_charlie_id);
     info!("  Delete Dana ID: {} (will be deleted)", delete_dana_id);
     info!("  Delete Eve ID: {} (will be deleted then updated)", delete_eve_id);
+    info!("\nCreateEntity test:");
+    info!("  CreateEntity Test ID: {} (created via CreateEntity op)", create_entity_test_id);
 
     // 1. Create Person type entity
     info!("\n1. Creating Person type entity...");
@@ -464,12 +469,25 @@ async fn main() -> Result<()> {
     )?;
     producer.send(EDITS_TOPIC, None, update_eve_payload).await?;
 
+    // 12. Test CreateEntity GRC-20 operation
+    info!("12. Testing CreateEntity GRC-20 operation...");
+    let create_entity_payload = edits::create_entity_grc20_op(
+        "Create Entity via CreateEntity Op",
+        test_space,
+        create_entity_test_id,
+        Some("CreateEntity Test"),
+        Some("Entity created using the GRC-20 CreateEntity operation"),
+        Some("https://example.com/create-entity-avatar.png"),
+    )?;
+    producer.send(EDITS_TOPIC, None, create_entity_payload).await?;
+
     info!("\n✅ Test scenario complete!");
     info!("Created:");
-    info!("  - 17 entities (11 active + 3 deleted + 3 unset test entities)");
+    info!("  - 18 entities (12 active + 3 deleted + 3 unset test entities)");
     info!("    • 7 Alice variants (high, medium, low, zero, negative, at threshold, below threshold)");
     info!("    • Bob, Charlie, Acme Corp");
     info!("    • Person type, Organization type");
+    info!("    • CreateEntity test entity (created via CreateEntity GRC-20 op)");
     info!("    • Charlie, Dana (soft deleted)");
     info!("    • Eve (soft deleted, then updated - remains deleted)");
     info!("    • 3 unset property test entities");
@@ -493,8 +511,8 @@ async fn main() -> Result<()> {
     info!("  • At Threshold: 0.50");
     info!("  • Below Threshold: 0.25");
 
-    // 12. Test unset_properties functionality
-    info!("\n12. Testing unset_properties functionality...");
+    // 13. Test unset_properties functionality
+    info!("\n13. Testing unset_properties functionality...");
 
     // Test Case 1: Unset 1 property (name)
     let unset_test_1_id = Uuid::parse_str("00000000-0000-0000-0000-000000001111").unwrap();
