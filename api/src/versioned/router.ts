@@ -5,9 +5,10 @@
  * and computing diffs between versions.
  */
 
+import type {NodePgDatabase} from "drizzle-orm/node-postgres"
 import {Data, Effect, Either} from "effect"
 import {Hono} from "hono"
-import type {NodePgDatabase} from "drizzle-orm/node-postgres"
+import {describeRoute} from "hono-openapi"
 
 import type {AppRuntime} from "../services/runtime"
 
@@ -16,10 +17,17 @@ type AppEnv = {
 		requestId: string
 	}
 }
+
 import {isValidUuid} from "../utils/uuid"
-import {resolveVersionKey, getEntitySnapshotAtVersion, getEntityVersions} from "./queries"
-import {diffEntitySnapshots} from "./diff"
-import type {EntityDiff, EntitySnapshot, VersionEntry} from "./types"
+import {diffEntitySnapshots, diffGroupedEntitySnapshots} from "./diff"
+import {
+	getEntitySnapshotAtVersion,
+	getEntityVersions,
+	getGroupedEntitySnapshotAtVersion,
+	type QueryError,
+	resolveVersionKey,
+} from "./queries"
+import type {EntityDiff, EntitySnapshot, GroupedEntityDiff, VersionEntry} from "./types"
 
 type Database = NodePgDatabase<Record<string, unknown>>
 
@@ -32,11 +40,7 @@ class NotFoundError extends Data.TaggedError("NotFoundError")<{
 	message: string
 }> {}
 
-class InternalError extends Data.TaggedError("InternalError")<{
-	message: string
-}> {}
-
-type VersionedError = ValidationError | NotFoundError | InternalError
+type VersionedError = ValidationError | NotFoundError | QueryError
 
 /**
  * Create the versioned entities router.
@@ -53,236 +57,528 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 	 *
 	 * Get an entity snapshot at a specific version.
 	 */
-	router.get("/entities/:id", async (c) => {
-		const entityId = c.req.param("id")
-		const editId = c.req.query("editId")
-		const spaceId = c.req.query("spaceId")
-		const requestId = c.get("requestId") ?? "unknown"
-
-		const program = Effect.gen(function* () {
-			// Validate entityId
-			if (!isValidUuid(entityId)) {
-				return yield* Effect.fail(new ValidationError({message: "Entity ID must be a valid UUID"}))
-			}
-
-			// Validate editId is provided
-			if (!editId) {
-				return yield* Effect.fail(new ValidationError({message: "editId query parameter is required"}))
-			}
-
-			if (!isValidUuid(editId)) {
-				return yield* Effect.fail(new ValidationError({message: "editId must be a valid UUID"}))
-			}
-
-			// Validate spaceId if provided
-			if (spaceId && !isValidUuid(spaceId)) {
-				return yield* Effect.fail(new ValidationError({message: "spaceId must be a valid UUID"}))
-			}
-
-			// Resolve edit to version key
-			const versionKey = yield* Effect.tryPromise({
-				try: () => resolveVersionKey(db, editId),
-				catch: (error) => new InternalError({message: String(error)}),
-			}).pipe(Effect.withSpan("resolveVersionKey"))
-
-			if (versionKey === null) {
-				return yield* Effect.fail(new NotFoundError({message: `Edit '${editId}' not found`}))
-			}
-
-			// Get entity snapshot at version
-			const snapshot = yield* Effect.tryPromise({
-				try: () => getEntitySnapshotAtVersion(db, entityId, versionKey, spaceId),
-				catch: (error) => new InternalError({message: String(error)}),
-			}).pipe(Effect.withSpan("getEntitySnapshotAtVersion"))
-
-			return snapshot
-		}).pipe(
-			Effect.withSpan("GET /versioned/entities/:id"),
-			Effect.annotateLogs({requestId, entityId, editId}),
-		)
-
-		const result = await runtime.runPromise(Effect.either(program))
-
-		return Either.match(result, {
-			onLeft: (error: VersionedError) => {
-				switch (error._tag) {
-					case "ValidationError":
-						return c.json({error: "Invalid parameter", message: error.message}, 400)
-					case "NotFoundError":
-						return c.json({error: "Not found", message: error.message}, 404)
-					case "InternalError":
-						return c.json({error: "Internal error", message: error.message}, 500)
-				}
+	router.get(
+		"/entities/:id",
+		describeRoute({
+			tags: ["Versioned Entities"],
+			summary: "Get entity snapshot at version",
+			description: "Returns the state of an entity at a specific version (edit)",
+			parameters: [
+				{
+					name: "id",
+					in: "path",
+					description: "Entity UUID",
+					required: true,
+					schema: {type: "string", format: "uuid"},
+				},
+				{
+					name: "editId",
+					in: "query",
+					description: "Edit UUID to retrieve entity state at",
+					required: true,
+					schema: {type: "string", format: "uuid"},
+				},
+				{
+					name: "spaceId",
+					in: "query",
+					description: "Space UUID to scope the query to",
+					required: false,
+					schema: {type: "string", format: "uuid"},
+				},
+			],
+			responses: {
+				200: {
+					description: "Entity snapshot",
+					content: {
+						"application/json": {
+							schema: {
+								$ref: "#/components/schemas/EntitySnapshot",
+							},
+						},
+					},
+				},
+				400: {
+					description: "Invalid parameter",
+					content: {
+						"application/json": {
+							schema: {
+								type: "object",
+								properties: {
+									error: {type: "string"},
+									message: {type: "string"},
+								},
+							},
+						},
+					},
+				},
+				404: {
+					description: "Entity or edit not found",
+					content: {
+						"application/json": {
+							schema: {
+								type: "object",
+								properties: {
+									error: {type: "string"},
+									message: {type: "string"},
+								},
+							},
+						},
+					},
+				},
+				500: {
+					description: "Internal server error",
+					content: {
+						"application/json": {
+							schema: {
+								type: "object",
+								properties: {
+									error: {type: "string"},
+									message: {type: "string"},
+								},
+							},
+						},
+					},
+				},
 			},
-			onRight: (snapshot: EntitySnapshot) => c.json(snapshot),
-		})
-	})
+		}),
+		async (c) => {
+			const entityId = c.req.param("id")
+			const editId = c.req.query("editId")
+			const spaceId = c.req.query("spaceId")
+			const requestId = c.get("requestId") ?? "unknown"
+
+			const program = Effect.gen(function* () {
+				// Validate entityId
+				if (!isValidUuid(entityId)) {
+					return yield* Effect.fail(new ValidationError({message: "Entity ID must be a valid UUID"}))
+				}
+
+				// Validate editId is provided
+				if (!editId) {
+					return yield* Effect.fail(new ValidationError({message: "editId query parameter is required"}))
+				}
+
+				if (!isValidUuid(editId)) {
+					return yield* Effect.fail(new ValidationError({message: "editId must be a valid UUID"}))
+				}
+
+				// Validate spaceId if provided
+				if (spaceId && !isValidUuid(spaceId)) {
+					return yield* Effect.fail(new ValidationError({message: "spaceId must be a valid UUID"}))
+				}
+
+				// Resolve edit to version key
+				const versionKey = yield* resolveVersionKey(db, editId)
+
+				if (versionKey === null) {
+					return yield* Effect.fail(new NotFoundError({message: `Edit '${editId}' not found`}))
+				}
+
+				// Get entity snapshot at version
+				const snapshot = yield* getEntitySnapshotAtVersion(db, entityId, versionKey, spaceId)
+
+				return snapshot
+			}).pipe(
+				Effect.tapError((error) => {
+					if (error._tag === "QueryError") {
+						return Effect.logError(
+							`Database error: operation=${error.operation}, cause=${String(error.cause)}`,
+						)
+					}
+					return Effect.void
+				}),
+				Effect.withSpan("GET /versioned/entities/:id"),
+				Effect.annotateSpans({requestId, entityId, editId, spaceId}),
+			)
+
+			const result = await runtime.runPromise(Effect.either(program))
+
+			return Either.match(result, {
+				onLeft: (error: VersionedError) => {
+					switch (error._tag) {
+						case "ValidationError":
+							return c.json({error: "Invalid parameter", message: error.message}, 400)
+						case "NotFoundError":
+							return c.json({error: "Not found", message: error.message}, 404)
+						case "QueryError":
+							return c.json(
+								{error: "Internal server error", message: "An unexpected error occurred"},
+								500,
+							)
+					}
+				},
+				onRight: (snapshot: EntitySnapshot) => c.json(snapshot),
+			})
+		},
+	)
 
 	/**
 	 * GET /versioned/entities/:id/versions
 	 *
 	 * List versions (edits) that affected an entity.
 	 */
-	router.get("/entities/:id/versions", async (c) => {
-		const entityId = c.req.param("id")
-		const spaceId = c.req.query("spaceId")
-		const limitParam = c.req.query("limit")
-		const offsetParam = c.req.query("offset")
-		const requestId = c.get("requestId") ?? "unknown"
-
-		const program = Effect.gen(function* () {
-			// Validate entityId
-			if (!isValidUuid(entityId)) {
-				return yield* Effect.fail(new ValidationError({message: "Entity ID must be a valid UUID"}))
-			}
-
-			// Validate spaceId if provided
-			if (spaceId && !isValidUuid(spaceId)) {
-				return yield* Effect.fail(new ValidationError({message: "spaceId must be a valid UUID"}))
-			}
-
-			// Parse and validate limit
-			let limit = 50
-			if (limitParam) {
-				const parsed = parseInt(limitParam, 10)
-				if (Number.isNaN(parsed) || parsed < 1) {
-					return yield* Effect.fail(new ValidationError({message: "limit must be a positive integer"}))
-				}
-				limit = Math.min(parsed, 100)
-			}
-
-			// Parse and validate offset
-			let offset = 0
-			if (offsetParam) {
-				const parsed = parseInt(offsetParam, 10)
-				if (Number.isNaN(parsed) || parsed < 0) {
-					return yield* Effect.fail(new ValidationError({message: "offset must be a non-negative integer"}))
-				}
-				offset = parsed
-			}
-
-			// Get entity versions
-			const versions = yield* Effect.tryPromise({
-				try: () => getEntityVersions(db, entityId, spaceId, limit, offset),
-				catch: (error) => new InternalError({message: String(error)}),
-			}).pipe(Effect.withSpan("getEntityVersions"))
-
-			return versions
-		}).pipe(
-			Effect.withSpan("GET /versioned/entities/:id/versions"),
-			Effect.annotateLogs({requestId, entityId}),
-		)
-
-		const result = await runtime.runPromise(Effect.either(program))
-
-		return Either.match(result, {
-			onLeft: (error: VersionedError) => {
-				switch (error._tag) {
-					case "ValidationError":
-						return c.json({error: "Invalid parameter", message: error.message}, 400)
-					case "NotFoundError":
-						return c.json({error: "Not found", message: error.message}, 404)
-					case "InternalError":
-						return c.json({error: "Internal error", message: error.message}, 500)
-				}
+	router.get(
+		"/entities/:id/versions",
+		describeRoute({
+			tags: ["Versioned Entities"],
+			summary: "List entity versions",
+			description: "Returns a list of edits that affected an entity",
+			parameters: [
+				{
+					name: "id",
+					in: "path",
+					description: "Entity UUID",
+					required: true,
+					schema: {type: "string", format: "uuid"},
+				},
+				{
+					name: "spaceId",
+					in: "query",
+					description: "Space UUID to scope the query to",
+					required: false,
+					schema: {type: "string", format: "uuid"},
+				},
+				{
+					name: "limit",
+					in: "query",
+					description: "Maximum number of versions to return",
+					required: false,
+					schema: {type: "integer", minimum: 1, maximum: 100, default: 50},
+				},
+				{
+					name: "offset",
+					in: "query",
+					description: "Number of versions to skip for pagination",
+					required: false,
+					schema: {type: "integer", minimum: 0, default: 0},
+				},
+			],
+			responses: {
+				200: {
+					description: "List of versions",
+					content: {
+						"application/json": {
+							schema: {
+								type: "object",
+								properties: {
+									versions: {
+										type: "array",
+										items: {
+											$ref: "#/components/schemas/VersionEntry",
+										},
+									},
+								},
+								required: ["versions"],
+							},
+						},
+					},
+				},
+				400: {
+					description: "Invalid parameter",
+					content: {
+						"application/json": {
+							schema: {
+								type: "object",
+								properties: {
+									error: {type: "string"},
+									message: {type: "string"},
+								},
+							},
+						},
+					},
+				},
+				500: {
+					description: "Internal server error",
+					content: {
+						"application/json": {
+							schema: {
+								type: "object",
+								properties: {
+									error: {type: "string"},
+									message: {type: "string"},
+								},
+							},
+						},
+					},
+				},
 			},
-			onRight: (versions: VersionEntry[]) => c.json({versions}),
-		})
-	})
+		}),
+		async (c) => {
+			const entityId = c.req.param("id")
+			const spaceId = c.req.query("spaceId")
+			const limitParam = c.req.query("limit")
+			const offsetParam = c.req.query("offset")
+			const requestId = c.get("requestId") ?? "unknown"
+
+			const program = Effect.gen(function* () {
+				// Validate entityId
+				if (!isValidUuid(entityId)) {
+					return yield* Effect.fail(new ValidationError({message: "Entity ID must be a valid UUID"}))
+				}
+
+				// Validate spaceId if provided
+				if (spaceId && !isValidUuid(spaceId)) {
+					return yield* Effect.fail(new ValidationError({message: "spaceId must be a valid UUID"}))
+				}
+
+				// Parse and validate limit
+				let limit = 50
+				if (limitParam) {
+					const parsed = parseInt(limitParam, 10)
+					if (Number.isNaN(parsed) || parsed < 1) {
+						return yield* Effect.fail(new ValidationError({message: "limit must be a positive integer"}))
+					}
+					limit = Math.min(parsed, 100)
+				}
+
+				// Parse and validate offset
+				let offset = 0
+				if (offsetParam) {
+					const parsed = parseInt(offsetParam, 10)
+					if (Number.isNaN(parsed) || parsed < 0) {
+						return yield* Effect.fail(
+							new ValidationError({message: "offset must be a non-negative integer"}),
+						)
+					}
+					offset = parsed
+				}
+
+				// Get entity versions
+				const versions = yield* getEntityVersions(db, entityId, spaceId, limit, offset)
+
+				return versions
+			}).pipe(
+				Effect.tapError((error) => {
+					if (error._tag === "QueryError") {
+						return Effect.logError(
+							`Database error: operation=${error.operation}, cause=${String(error.cause)}`,
+						)
+					}
+					return Effect.void
+				}),
+				Effect.withSpan("GET /versioned/entities/:id/versions"),
+				Effect.annotateSpans({requestId, entityId, spaceId}),
+			)
+
+			const result = await runtime.runPromise(Effect.either(program))
+
+			return Either.match(result, {
+				onLeft: (error: VersionedError) => {
+					switch (error._tag) {
+						case "ValidationError":
+							return c.json({error: "Invalid parameter", message: error.message}, 400)
+						case "NotFoundError":
+							return c.json({error: "Not found", message: error.message}, 404)
+						case "QueryError":
+							return c.json(
+								{error: "Internal server error", message: "An unexpected error occurred"},
+								500,
+							)
+					}
+				},
+				onRight: (versions: VersionEntry[]) => c.json({versions}),
+			})
+		},
+	)
 
 	/**
 	 * GET /versioned/entities/:id/diff
 	 *
 	 * Compute a diff between two versions of an entity.
 	 */
-	router.get("/entities/:id/diff", async (c) => {
-		const entityId = c.req.param("id")
-		const fromEditId = c.req.query("fromEditId")
-		const toEditId = c.req.query("toEditId")
-		const spaceId = c.req.query("spaceId")
-		const requestId = c.get("requestId") ?? "unknown"
-
-		const program = Effect.gen(function* () {
-			// Validate entityId
-			if (!isValidUuid(entityId)) {
-				return yield* Effect.fail(new ValidationError({message: "Entity ID must be a valid UUID"}))
-			}
-
-			// Validate required parameters
-			if (!fromEditId) {
-				return yield* Effect.fail(new ValidationError({message: "fromEditId query parameter is required"}))
-			}
-
-			if (!toEditId) {
-				return yield* Effect.fail(new ValidationError({message: "toEditId query parameter is required"}))
-			}
-
-			if (!spaceId) {
-				return yield* Effect.fail(new ValidationError({message: "spaceId query parameter is required for diffs"}))
-			}
-
-			// Validate UUIDs
-			if (!isValidUuid(fromEditId)) {
-				return yield* Effect.fail(new ValidationError({message: "fromEditId must be a valid UUID"}))
-			}
-
-			if (!isValidUuid(toEditId)) {
-				return yield* Effect.fail(new ValidationError({message: "toEditId must be a valid UUID"}))
-			}
-
-			if (!isValidUuid(spaceId)) {
-				return yield* Effect.fail(new ValidationError({message: "spaceId must be a valid UUID"}))
-			}
-
-			// Resolve both edits to version keys
-			const [fromVersionKey, toVersionKey] = yield* Effect.tryPromise({
-				try: () => Promise.all([resolveVersionKey(db, fromEditId), resolveVersionKey(db, toEditId)]),
-				catch: (error) => new InternalError({message: String(error)}),
-			}).pipe(Effect.withSpan("resolveVersionKeys"))
-
-			if (fromVersionKey === null) {
-				return yield* Effect.fail(new NotFoundError({message: `Edit '${fromEditId}' not found`}))
-			}
-
-			if (toVersionKey === null) {
-				return yield* Effect.fail(new NotFoundError({message: `Edit '${toEditId}' not found`}))
-			}
-
-			// Get snapshots at both versions
-			const [fromSnapshot, toSnapshot] = yield* Effect.tryPromise({
-				try: () =>
-					Promise.all([
-						getEntitySnapshotAtVersion(db, entityId, fromVersionKey, spaceId),
-						getEntitySnapshotAtVersion(db, entityId, toVersionKey, spaceId),
-					]),
-				catch: (error) => new InternalError({message: String(error)}),
-			}).pipe(Effect.withSpan("getEntitySnapshots"))
-
-			// Compute diff
-			const diff = diffEntitySnapshots(entityId, fromSnapshot, toSnapshot)
-
-			return diff
-		}).pipe(
-			Effect.withSpan("GET /versioned/entities/:id/diff"),
-			Effect.annotateLogs({requestId, entityId, fromEditId, toEditId}),
-		)
-
-		const result = await runtime.runPromise(Effect.either(program))
-
-		return Either.match(result, {
-			onLeft: (error: VersionedError) => {
-				switch (error._tag) {
-					case "ValidationError":
-						return c.json({error: "Invalid parameter", message: error.message}, 400)
-					case "NotFoundError":
-						return c.json({error: "Not found", message: error.message}, 404)
-					case "InternalError":
-						return c.json({error: "Internal error", message: error.message}, 500)
-				}
+	router.get(
+		"/entities/:id/diff",
+		describeRoute({
+			tags: ["Versioned Entities"],
+			summary: "Compute entity diff between versions",
+			description: "Computes the difference between two versions of an entity",
+			parameters: [
+				{
+					name: "id",
+					in: "path",
+					description: "Entity UUID",
+					required: true,
+					schema: {type: "string", format: "uuid"},
+				},
+				{
+					name: "fromEditId",
+					in: "query",
+					description: "Starting edit UUID for the diff",
+					required: true,
+					schema: {type: "string", format: "uuid"},
+				},
+				{
+					name: "toEditId",
+					in: "query",
+					description: "Ending edit UUID for the diff",
+					required: true,
+					schema: {type: "string", format: "uuid"},
+				},
+				{
+					name: "spaceId",
+					in: "query",
+					description: "Space UUID (required for diffs)",
+					required: true,
+					schema: {type: "string", format: "uuid"},
+				},
+			],
+			responses: {
+				200: {
+					description: "Entity diff with dynamic group keys spread at root level",
+					content: {
+						"application/json": {
+							schema: {
+								$ref: "#/components/schemas/GroupedEntityDiffResponse",
+							},
+						},
+					},
+				},
+				400: {
+					description: "Invalid parameter",
+					content: {
+						"application/json": {
+							schema: {
+								type: "object",
+								properties: {
+									error: {type: "string"},
+									message: {type: "string"},
+								},
+							},
+						},
+					},
+				},
+				404: {
+					description: "Entity or edit not found",
+					content: {
+						"application/json": {
+							schema: {
+								type: "object",
+								properties: {
+									error: {type: "string"},
+									message: {type: "string"},
+								},
+							},
+						},
+					},
+				},
+				500: {
+					description: "Internal server error",
+					content: {
+						"application/json": {
+							schema: {
+								type: "object",
+								properties: {
+									error: {type: "string"},
+									message: {type: "string"},
+								},
+							},
+						},
+					},
+				},
 			},
-			onRight: (diff: EntityDiff) => c.json(diff),
-		})
-	})
+		}),
+		async (c) => {
+			const entityId = c.req.param("id")
+			const fromEditId = c.req.query("fromEditId")
+			const toEditId = c.req.query("toEditId")
+			const spaceId = c.req.query("spaceId")
+			const requestId = c.get("requestId") ?? "unknown"
+
+			const program = Effect.gen(function* () {
+				// Validate entityId
+				if (!isValidUuid(entityId)) {
+					return yield* Effect.fail(new ValidationError({message: "Entity ID must be a valid UUID"}))
+				}
+
+				// Validate required parameters
+				if (!fromEditId) {
+					return yield* Effect.fail(new ValidationError({message: "fromEditId query parameter is required"}))
+				}
+
+				if (!toEditId) {
+					return yield* Effect.fail(new ValidationError({message: "toEditId query parameter is required"}))
+				}
+
+				if (!spaceId) {
+					return yield* Effect.fail(
+						new ValidationError({message: "spaceId query parameter is required for diffs"}),
+					)
+				}
+
+				// Validate UUIDs
+				if (!isValidUuid(fromEditId)) {
+					return yield* Effect.fail(new ValidationError({message: "fromEditId must be a valid UUID"}))
+				}
+
+				if (!isValidUuid(toEditId)) {
+					return yield* Effect.fail(new ValidationError({message: "toEditId must be a valid UUID"}))
+				}
+
+				if (!isValidUuid(spaceId)) {
+					return yield* Effect.fail(new ValidationError({message: "spaceId must be a valid UUID"}))
+				}
+
+				// Resolve both edits to version keys
+				const [fromVersionKey, toVersionKey] = yield* Effect.all([
+					resolveVersionKey(db, fromEditId),
+					resolveVersionKey(db, toEditId),
+				])
+
+				if (fromVersionKey === null) {
+					return yield* Effect.fail(new NotFoundError({message: `Edit '${fromEditId}' not found`}))
+				}
+
+				if (toVersionKey === null) {
+					return yield* Effect.fail(new NotFoundError({message: `Edit '${toEditId}' not found`}))
+				}
+
+				// Get grouped snapshots at both versions
+				const [fromSnapshot, toSnapshot] = yield* Effect.all([
+					getGroupedEntitySnapshotAtVersion(db, entityId, fromVersionKey, spaceId),
+					getGroupedEntitySnapshotAtVersion(db, entityId, toVersionKey, spaceId),
+				])
+
+				// Compute grouped diff
+				const diff = yield* diffGroupedEntitySnapshots(entityId, fromSnapshot, toSnapshot)
+
+				return diff
+			}).pipe(
+				Effect.tapError((error) => {
+					if (error._tag === "QueryError") {
+						return Effect.logError(
+							`Database error: operation=${error.operation}, cause=${String(error.cause)}`,
+						)
+					}
+					return Effect.void
+				}),
+				Effect.withSpan("GET /versioned/entities/:id/diff"),
+				Effect.annotateSpans({requestId, entityId, fromEditId, toEditId, spaceId}),
+			)
+
+			const result = await runtime.runPromise(Effect.either(program))
+
+			return Either.match(result, {
+				onLeft: (error: VersionedError) => {
+					switch (error._tag) {
+						case "ValidationError":
+							return c.json({error: "Invalid parameter", message: error.message}, 400)
+						case "NotFoundError":
+							return c.json({error: "Not found", message: error.message}, 404)
+						case "QueryError":
+							return c.json(
+								{error: "Internal server error", message: "An unexpected error occurred"},
+								500,
+							)
+					}
+				},
+				onRight: (diff: GroupedEntityDiff) => {
+					// Spread dynamic groups at root level per spec
+					const {groups, ...rest} = diff
+					return c.json({...rest, ...groups})
+				},
+			})
+		},
+	)
 
 	return router
 }

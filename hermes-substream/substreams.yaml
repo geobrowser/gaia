@@ -137,6 +137,15 @@ modules:
     output:
       type: proto:hermes.EditsPublishedList
 
+  # Combined IPFS URI extraction - for hermes-ipfs-cache
+  - name: map_ipfs_uris
+    kind: map
+    initialBlock: 81809
+    inputs:
+      - source: sf.ethereum.type.v2.Block
+    output:
+      type: proto:hermes.IpfsUriList
+
   - name: map_flagged
     kind: map
     initialBlock: 81809

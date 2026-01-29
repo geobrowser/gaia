@@ -5,8 +5,6 @@ export type IEnvironment = Readonly<{
 	debug: boolean | null
 	ipfsKey: string
 	ipfsGatewayWrite: string
-	ipfsAlternativeGatewayKey: string
-	ipfsAlternativeGatewayWrite: string
 }>
 
 export const make = Effect.gen(function* (_) {
@@ -14,8 +12,6 @@ export const make = Effect.gen(function* (_) {
 	const maybeDebug = yield* _(Config.option(Config.boolean("DEBUG")))
 	const ipfsKey = yield* Config.string("IPFS_KEY")
 	const ipfsGatewayWrite = yield* Config.string("IPFS_GATEWAY_WRITE")
-	const ipfsAlternativeGatewayKey = yield* Config.string("IPFS_ALTERNATIVE_GATEWAY_KEY")
-	const ipfsAlternativeGatewayWrite = yield* Config.string("IPFS_ALTERNATIVE_GATEWAY_WRITE")
 
 	const debug = Option.match(maybeDebug, {
 		onSome: (o) => o,
@@ -27,8 +23,6 @@ export const make = Effect.gen(function* (_) {
 		debug,
 		ipfsKey: ipfsKey,
 		ipfsGatewayWrite: ipfsGatewayWrite,
-		ipfsAlternativeGatewayKey: ipfsAlternativeGatewayKey,
-		ipfsAlternativeGatewayWrite: ipfsAlternativeGatewayWrite,
 	} as const
 })
 

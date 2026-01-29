@@ -2,8 +2,10 @@ use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 
+#[cfg(test)]
+use grc_20::model::ContextEdge;
 use grc_20::{
-    decode_edit, Edit as Grc20Edit, Id as Grc20Id, Op as Grc20Op, PropertyValue,
+    decode_edit, model::Context, Edit as Grc20Edit, Id as Grc20Id, Op as Grc20Op, PropertyValue,
     UnsetRelationField, Value as Grc20Value,
 };
 use hermes_schema::pb::knowledge::HermesEdit;
@@ -65,6 +67,19 @@ fn decode_payload(payload: &[u8]) -> Result<Grc20Edit<'_>, HandlerError> {
 /// Convert a grc_20::Id (16 bytes) to a Uuid
 fn id_to_uuid(id: &Grc20Id) -> Uuid {
     Uuid::from_bytes(*id)
+}
+
+/// Extract context metadata for grouping changes (GRC-20 Section 4.5).
+/// Returns (root_id, first_edge_type_id) from the context.
+fn extract_context(ctx: &Option<Context>) -> (Option<Uuid>, Option<Uuid>) {
+    match ctx {
+        Some(c) => {
+            let root_id = id_to_uuid(&c.root_id);
+            let edge_type_id = c.edges.first().map(|e| id_to_uuid(&e.type_id));
+            (Some(root_id), edge_type_id)
+        }
+        None => (None, None),
+    }
 }
 
 /// Process a HermesEdit message and return the extracted data
@@ -154,6 +169,8 @@ fn merge_relation_ops(existing: RelationOp, new: RelationOp) -> RelationOp {
             to_version_id: u.to_version_id.or(c.to_version_id),
             position: u.position.or(c.position),
             verified: u.verified.or(c.verified),
+            context_root_id: c.context_root_id,
+            context_edge_type_id: c.context_edge_type_id,
         }),
 
         // create -> delete: Delete wins
@@ -197,6 +214,8 @@ fn merge_relation_ops(existing: RelationOp, new: RelationOp) -> RelationOp {
             } else {
                 c.verified
             },
+            context_root_id: c.context_root_id,
+            context_edge_type_id: c.context_edge_type_id,
         }),
 
         // update -> create: Create wins (overwrites)
@@ -350,9 +369,15 @@ fn extract_entities(edit: &Grc20Edit, _space_id: &Uuid, meta: &EditMetadata) -> 
 }
 
 /// Convert a grc_20::Value to a ValueOp with appropriate fields set
-fn value_to_value_op(pv: &PropertyValue, entity_id: Uuid, space_id: Uuid) -> Option<ValueOp> {
+fn value_to_value_op(
+    pv: &PropertyValue,
+    entity_id: Uuid,
+    space_id: Uuid,
+    context: &Option<Context>,
+) -> Option<ValueOp> {
     let property_id = id_to_uuid(&pv.property);
     let value_id = derive_value_id(&entity_id, &property_id, &space_id);
+    let (context_root_id, context_edge_type_id) = extract_context(context);
 
     let mut op = ValueOp {
         id: value_id,
@@ -376,6 +401,8 @@ fn value_to_value_op(pv: &PropertyValue, entity_id: Uuid, space_id: Uuid) -> Opt
         embedding: None,
         time_utc: None,
         datetime_utc: None,
+        context_root_id,
+        context_edge_type_id,
     };
 
     match &pv.value {
@@ -515,13 +542,16 @@ fn extract_values(edit: &Grc20Edit, space_id: &Uuid) -> Vec<ValueOp> {
             Grc20Op::CreateEntity(entity) => {
                 let entity_id = id_to_uuid(&entity.id);
                 for pv in &entity.values {
-                    if let Some(value_op) = value_to_value_op(pv, entity_id, *space_id) {
+                    if let Some(value_op) =
+                        value_to_value_op(pv, entity_id, *space_id, &entity.context)
+                    {
                         value_ops.push(value_op);
                     }
                 }
             }
             Grc20Op::UpdateEntity(entity) => {
                 let entity_id = id_to_uuid(&entity.id);
+                let (context_root_id, context_edge_type_id) = extract_context(&entity.context);
 
                 // Handle unset values first
                 for unset in &entity.unset_values {
@@ -550,12 +580,16 @@ fn extract_values(edit: &Grc20Edit, space_id: &Uuid) -> Vec<ValueOp> {
                         embedding: None,
                         time_utc: None,
                         datetime_utc: None,
+                        context_root_id,
+                        context_edge_type_id,
                     });
                 }
 
                 // Handle set values
                 for pv in &entity.set_properties {
-                    if let Some(value_op) = value_to_value_op(pv, entity_id, *space_id) {
+                    if let Some(value_op) =
+                        value_to_value_op(pv, entity_id, *space_id, &entity.context)
+                    {
                         value_ops.push(value_op);
                     }
                 }
@@ -583,6 +617,7 @@ fn extract_relations(edit: &Grc20Edit, space_id: &Uuid) -> Vec<RelationOp> {
                 let from_version = relation.from_version.map(|id| id_to_uuid(&id).to_string());
                 let to_space = relation.to_space.map(|id| id_to_uuid(&id).to_string());
                 let to_version = relation.to_version.map(|id| id_to_uuid(&id).to_string());
+                let (context_root_id, context_edge_type_id) = extract_context(&relation.context);
 
                 relation_ops.push(RelationOp::Create(SetRelationItem {
                     id: relation_id,
@@ -597,6 +632,8 @@ fn extract_relations(edit: &Grc20Edit, space_id: &Uuid) -> Vec<RelationOp> {
                     to_space_id: to_space,
                     to_version_id: to_version,
                     verified: None, // v2 doesn't have verified field on CreateRelation
+                    context_root_id,
+                    context_edge_type_id,
                 }));
             }
             Grc20Op::UpdateRelation(updated) => {
@@ -712,6 +749,8 @@ mod tests {
             embedding: None,
             time_utc: None,
             datetime_utc: None,
+            context_root_id: None,
+            context_edge_type_id: None,
         }
     }
 
@@ -729,6 +768,8 @@ mod tests {
             to_version_id: None,
             position: None,
             verified: None,
+            context_root_id: None,
+            context_edge_type_id: None,
         }
     }
 
@@ -1087,5 +1128,77 @@ mod tests {
         // id2 should be Delete
         let id2_op = result.iter().find(|op| op.id() == id2).unwrap();
         assert!(matches!(id2_op, RelationOp::Delete(_)));
+    }
+
+    // ===================
+    // Context extraction tests
+    // ===================
+
+    #[test]
+    fn test_extract_context_none() {
+        let (root_id, edge_type_id) = extract_context(&None);
+        assert!(root_id.is_none());
+        assert!(edge_type_id.is_none());
+    }
+
+    #[test]
+    fn test_extract_context_with_edges() {
+        let root_id: [u8; 16] = [1; 16];
+        let edge_type_id: [u8; 16] = [2; 16];
+        let to_entity_id: [u8; 16] = [3; 16];
+
+        let context = Context {
+            root_id,
+            edges: vec![ContextEdge {
+                type_id: edge_type_id,
+                to_entity_id,
+            }],
+        };
+
+        let (extracted_root, extracted_edge_type) = extract_context(&Some(context));
+
+        assert_eq!(extracted_root, Some(Uuid::from_bytes(root_id)));
+        assert_eq!(extracted_edge_type, Some(Uuid::from_bytes(edge_type_id)));
+    }
+
+    #[test]
+    fn test_extract_context_empty_edges() {
+        let root_id: [u8; 16] = [1; 16];
+
+        let context = Context {
+            root_id,
+            edges: vec![],
+        };
+
+        let (extracted_root, extracted_edge_type) = extract_context(&Some(context));
+
+        assert_eq!(extracted_root, Some(Uuid::from_bytes(root_id)));
+        assert!(extracted_edge_type.is_none());
+    }
+
+    #[test]
+    fn test_extract_context_multiple_edges_uses_first() {
+        let root_id: [u8; 16] = [1; 16];
+        let first_edge_type: [u8; 16] = [2; 16];
+        let second_edge_type: [u8; 16] = [3; 16];
+
+        let context = Context {
+            root_id,
+            edges: vec![
+                ContextEdge {
+                    type_id: first_edge_type,
+                    to_entity_id: [4; 16],
+                },
+                ContextEdge {
+                    type_id: second_edge_type,
+                    to_entity_id: [5; 16],
+                },
+            ],
+        };
+
+        let (_, extracted_edge_type) = extract_context(&Some(context));
+
+        // Should use first edge's type_id
+        assert_eq!(extracted_edge_type, Some(Uuid::from_bytes(first_edge_type)));
     }
 }

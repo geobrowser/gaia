@@ -47,4 +47,7 @@ pub struct ValueOp {
     // UTC-normalized columns (same value as time/datetime, PostgreSQL casts to UTC)
     pub time_utc: Option<String>, // Time with timezone (stored as UTC)
     pub datetime_utc: Option<String>, // Timestamp with timezone (stored as UTC)
+    // Context columns for grouping changes (GRC-20 Section 4.5)
+    pub context_root_id: Option<Uuid>,
+    pub context_edge_type_id: Option<Uuid>,
 }
