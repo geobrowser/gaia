@@ -87,7 +87,8 @@ export function uploadFile(file: File) {
 
 			const formData = new FormData()
 			formData.append("network", "public")
-			formData.append("file", file)
+			// Always provide filename - Bun hangs indefinitely without it
+			formData.append("file", file, file.name || "file.bin")
 
 			return yield* upload(formData, config.ipfsGatewayWrite)
 		})
