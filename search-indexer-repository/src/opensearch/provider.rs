@@ -239,7 +239,7 @@ impl SearchIndexProvider for OpenSearchProvider {
             return Ok(());
         }
 
-        // Regular document update
+        // Regular document update with tombstone dominance
         let doc = Self::build_update_doc(request);
 
         if doc.is_empty() {
@@ -247,14 +247,26 @@ impl SearchIndexProvider for OpenSearchProvider {
             return Ok(());
         }
 
-        // Use upsert to create document if it doesn't exist
-        // API reference: https://docs.opensearch.org/latest/api-reference/document-apis/update-document/#using-the-upsert-operation
+        // Use script with upsert for tombstone dominance:
+        // - If document doesn't exist: create it with upsert values
+        // - If document exists but is deleted: noop (unless this update sets deleted=true)
+        // - If document exists and is not deleted: merge the doc fields
+        let mut upsert_doc = doc.clone();
+        upsert_doc.insert("entity_id".to_string(), json!(entity_id.to_string()));
+        upsert_doc.insert("space_id".to_string(), json!(space_id.to_string()));
+
         let response = self
             .client
             .update(UpdateParts::IndexId(&self.index_config.alias, &doc_id))
             .body(json!({
-                "doc": doc,
-                "doc_as_upsert": true
+                "script": {
+                    "source": UPDATE_WITH_TOMBSTONE_CHECK_SCRIPT,
+                    "lang": "painless",
+                    "params": {
+                        "doc": doc
+                    }
+                },
+                "upsert": upsert_doc
             }))
             .send()
             .await

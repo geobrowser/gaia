@@ -14,6 +14,7 @@ type AppEnv = {
 		requestId: string
 	}
 }
+
 import type {SearchClient, SearchResponse, SearchScope} from "../services/search"
 import {isValidUuid} from "../utils/uuid"
 
@@ -241,18 +242,19 @@ export function createSearchRouter(searchClient: SearchClient, runtime: AppRunti
 			// Parse include_deleted flag (default: false)
 			const includeDeleted = includeDeletedParam === "true"
 
-			// Execute search
+			// Execute search - only include optional params when defined
+			const searchQuery = {
+				query: trimmedQuery,
+				scope,
+				limit,
+				offset,
+				...(spaceId && {space_id: spaceId}),
+				...(typeIds && {type_ids: typeIds}),
+				...(includeDeleted && {include_deleted: true}),
+			}
+
 			const response = yield* Effect.tryPromise({
-				try: () =>
-					searchClient.search({
-						query: trimmedQuery,
-						scope,
-						space_id: spaceId,
-						type_ids: typeIds,
-						limit,
-						offset,
-						include_deleted: includeDeleted,
-					}),
+				try: () => searchClient.search(searchQuery),
 				catch: (error) =>
 					new SearchExecutionError({
 						message: error instanceof Error ? error.message : "An unexpected error occurred",
@@ -261,10 +263,7 @@ export function createSearchRouter(searchClient: SearchClient, runtime: AppRunti
 			}).pipe(Effect.withSpan("search.execute"))
 
 			return response
-		}).pipe(
-			Effect.withSpan("GET /search"),
-			Effect.annotateLogs({requestId, route: "/search"}),
-		)
+		}).pipe(Effect.withSpan("GET /search"), Effect.annotateLogs({requestId, route: "/search"}))
 
 		const result = await runtime.runPromise(Effect.either(program))
 
@@ -294,10 +293,7 @@ export function createSearchRouter(searchClient: SearchClient, runtime: AppRunti
 			}).pipe(Effect.withSpan("search.healthCheck"))
 
 			return healthy
-		}).pipe(
-			Effect.withSpan("GET /search/health"),
-			Effect.annotateLogs({requestId}),
-		)
+		}).pipe(Effect.withSpan("GET /search/health"), Effect.annotateLogs({requestId}))
 
 		const result = await runtime.runPromise(Effect.either(program))
 

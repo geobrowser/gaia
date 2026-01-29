@@ -1,7 +1,7 @@
 import {Hono} from "hono"
 import {beforeEach, describe, expect, it, vi} from "vitest"
-import type {SearchClient, SearchResponse} from "../services/search"
 import {runtime} from "../services/runtime"
+import type {SearchClient, SearchResponse} from "../services/search"
 
 import {createSearchRouter} from "./index"
 
@@ -89,9 +89,9 @@ describe("Search Router - Integration Tests", () => {
 			expect(mockSearchClient.search).toHaveBeenCalledWith({
 				query: "test",
 				scope: "SPACE_SINGLE",
-				space_id: spaceId,
 				limit: 20,
 				offset: 0,
+				space_id: spaceId,
 			})
 		})
 
@@ -104,9 +104,9 @@ describe("Search Router - Integration Tests", () => {
 			expect(mockSearchClient.search).toHaveBeenCalledWith({
 				query: "test",
 				scope: "SPACE",
-				space_id: spaceId,
 				limit: 20,
 				offset: 0,
+				space_id: spaceId,
 			})
 		})
 

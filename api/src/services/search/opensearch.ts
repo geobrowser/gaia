@@ -506,11 +506,7 @@ export class OpenSearchClient implements SearchClient {
 	 * Build a global search query ranked by space score.
 	 * Boosts results by space_score using function_score.
 	 */
-	buildGlobalBySpaceScoreQuery(
-		baseTextQuery: object,
-		typeIds?: string[],
-		includeDeleted: boolean = false,
-	): object {
+	buildGlobalBySpaceScoreQuery(baseTextQuery: object, typeIds?: string[], includeDeleted: boolean = false): object {
 		const typeFilter = this.buildTypeFilter(typeIds)
 		const filters: object[] = []
 		if (!includeDeleted) filters.push(this.buildDeletedFilter())
