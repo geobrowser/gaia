@@ -19,6 +19,72 @@ use consumer::{get_event_type, parse_message, KafkaConsumer, KgMessage};
 use error::IndexerError;
 use storage::Storage;
 
+/// Configuration for block-based filtering of events.
+/// Different event types can have different start blocks.
+struct BlockConfig {
+    /// Start block for knowledge.edits (and versioned writes).
+    /// Events from blocks before this are skipped.
+    edit_start_block: Option<u64>,
+}
+
+impl BlockConfig {
+    fn from_env() -> Self {
+        let edit_start_block = env::var("EDIT_START_BLOCK")
+            .ok()
+            .and_then(|s| s.parse().ok());
+
+        Self { edit_start_block }
+    }
+
+    /// Check if an edit event should be processed based on its block number.
+    fn should_process_edit(&self, block_number: u64) -> bool {
+        match self.edit_start_block {
+            Some(start) => block_number >= start,
+            None => true,
+        }
+    }
+}
+
+#[cfg(test)]
+mod block_config_tests {
+    use super::*;
+
+    #[test]
+    fn test_should_process_edit_no_start_block() {
+        let config = BlockConfig {
+            edit_start_block: None,
+        };
+        assert!(config.should_process_edit(0));
+        assert!(config.should_process_edit(1000));
+        assert!(config.should_process_edit(u64::MAX));
+    }
+
+    #[test]
+    fn test_should_process_edit_with_start_block() {
+        let config = BlockConfig {
+            edit_start_block: Some(100),
+        };
+        // Before start block - should skip
+        assert!(!config.should_process_edit(0));
+        assert!(!config.should_process_edit(99));
+        // At start block - should process
+        assert!(config.should_process_edit(100));
+        // After start block - should process
+        assert!(config.should_process_edit(101));
+        assert!(config.should_process_edit(1000));
+    }
+
+    #[test]
+    fn test_should_process_edit_at_boundary() {
+        let config = BlockConfig {
+            edit_start_block: Some(0),
+        };
+        // Start block of 0 means process everything
+        assert!(config.should_process_edit(0));
+        assert!(config.should_process_edit(1));
+    }
+}
+
 /// A buffered event with its Kafka metadata for later commit.
 struct BufferedEvent {
     msg: KgMessage,
@@ -194,6 +260,15 @@ async fn async_main() -> Result<(), IndexerError> {
         .and_then(|s| s.parse().ok())
         .unwrap_or(1000);
 
+    // Load block filtering config
+    let block_config = BlockConfig::from_env();
+    if let Some(edit_start) = block_config.edit_start_block {
+        info!(
+            edit_start_block = edit_start,
+            "Edit start block configured - edits before this block will be skipped"
+        );
+    }
+
     // Initialize storage
     let storage = Storage::new(&database_url).await?;
     info!("Connected to database");
@@ -265,6 +340,7 @@ async fn async_main() -> Result<(), IndexerError> {
                         &consumer,
                         summary,
                         BlockProcessReason::Stale,
+                        &block_config,
                     )
                     .await;
                     if let Some((processed, errors)) = result {
@@ -372,6 +448,7 @@ async fn async_main() -> Result<(), IndexerError> {
                                         &consumer,
                                         summary_info,
                                         BlockProcessReason::Summary,
+                                        &block_config,
                                     )
                                     .await;
                                     if let Some((processed, errors)) = result {
@@ -477,6 +554,7 @@ async fn async_main() -> Result<(), IndexerError> {
                                         &consumer,
                                         summary_info,
                                         BlockProcessReason::Summary,
+                                        &block_config,
                                     )
                                     .await;
                                     if let Some((processed, errors)) = result {
@@ -506,6 +584,7 @@ async fn async_main() -> Result<(), IndexerError> {
                                     &consumer,
                                     summary,
                                     BlockProcessReason::IsLast,
+                                    &block_config,
                                 )
                                 .await;
                                 if let Some((processed, errors)) = result {
@@ -656,12 +735,54 @@ async fn process_buffered_block(
     consumer: &KafkaConsumer,
     summary_info: Option<BlockSummaryInfo>,
     reason: BlockProcessReason,
+    block_config: &BlockConfig,
 ) -> Option<(u64, u64)> {
     if events.is_empty() {
         return None;
     }
 
     let block_number = events[0].msg.block_number().unwrap_or(0);
+
+    // Filter out edit events if block is before edit_start_block
+    let (events, skipped_edits) = if !block_config.should_process_edit(block_number) {
+        let mut filtered = Vec::with_capacity(events.len());
+        let mut skipped = 0u64;
+        for event in events {
+            if matches!(event.msg, KgMessage::Edit(_)) {
+                skipped += 1;
+                // Still need to commit the offset for skipped events
+                if let Err(e) = consumer.commit_message(&event.topic, event.partition, event.offset)
+                {
+                    warn!(
+                        topic = %event.topic,
+                        partition = event.partition,
+                        offset = event.offset,
+                        error = %e,
+                        "Failed to commit offset for skipped edit"
+                    );
+                }
+            } else {
+                filtered.push(event);
+            }
+        }
+        (filtered, skipped)
+    } else {
+        (events, 0)
+    };
+
+    if skipped_edits > 0 {
+        info!(
+            block_number = block_number,
+            skipped_edits = skipped_edits,
+            edit_start_block = block_config.edit_start_block,
+            "Skipped edits before edit_start_block"
+        );
+    }
+
+    // After filtering, if no events remain, return early
+    if events.is_empty() {
+        return Some((0, 0));
+    }
 
     let mut counts_by_event_type: HashMap<String, u64> = HashMap::new();
     let mut counts_by_topic: HashMap<String, u64> = HashMap::new();
