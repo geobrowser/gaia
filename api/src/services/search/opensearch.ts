@@ -253,7 +253,7 @@ export class OpenSearchClient implements SearchClient {
 
 		const typeFilter = this.buildTypeFilter(typeIds)
 		const filters: object[] = []
-		if (!includeDeleted) filters.push(this.buildDeletedFilter())
+		if (!includeDeleted) filters.push(this.buildNonDeletedFilter())
 		if (typeFilter) filters.push(typeFilter)
 
 		// Apply scope-specific filtering
@@ -307,7 +307,7 @@ export class OpenSearchClient implements SearchClient {
 	): object {
 		const typeFilter = this.buildTypeFilter(typeIds)
 		const filters: object[] = []
-		if (!includeDeleted) filters.push(this.buildDeletedFilter())
+		if (!includeDeleted) filters.push(this.buildNonDeletedFilter())
 		if (typeFilter) filters.push(typeFilter)
 
 		// Apply scope-specific filtering and sorting
@@ -482,7 +482,7 @@ export class OpenSearchClient implements SearchClient {
 	buildGlobalQuery(baseTextQuery: object, typeIds?: string[], includeDeleted: boolean = false): object {
 		const typeFilter = this.buildTypeFilter(typeIds)
 		const filters: object[] = []
-		if (!includeDeleted) filters.push(this.buildDeletedFilter())
+		if (!includeDeleted) filters.push(this.buildNonDeletedFilter())
 		if (typeFilter) filters.push(typeFilter)
 
 		return {
@@ -509,7 +509,7 @@ export class OpenSearchClient implements SearchClient {
 	buildGlobalBySpaceScoreQuery(baseTextQuery: object, typeIds?: string[], includeDeleted: boolean = false): object {
 		const typeFilter = this.buildTypeFilter(typeIds)
 		const filters: object[] = []
-		if (!includeDeleted) filters.push(this.buildDeletedFilter())
+		if (!includeDeleted) filters.push(this.buildNonDeletedFilter())
 		if (typeFilter) filters.push(typeFilter)
 
 		return {
@@ -541,7 +541,7 @@ export class OpenSearchClient implements SearchClient {
 	): object {
 		const typeFilter = this.buildTypeFilter(typeIds)
 		const filters: object[] = [{term: {space_id: spaceId}}]
-		if (!includeDeleted) filters.push(this.buildDeletedFilter())
+		if (!includeDeleted) filters.push(this.buildNonDeletedFilter())
 		if (typeFilter) filters.push(typeFilter)
 
 		return {
@@ -583,19 +583,17 @@ export class OpenSearchClient implements SearchClient {
 	}
 
 	/**
-	 * Build a filter to exclude soft-deleted entities.
-	 * Filters out documents where the deleted field is true.
+	 * Build a filter to select non-deleted entities.
+	 * Matches documents where deleted is false or the deleted field doesn't exist.
 	 */
-	buildDeletedFilter(): object {
+	buildNonDeletedFilter(): object {
 		return {
 			bool: {
-				must_not: [
-					{
-						term: {
-							deleted: true,
-						},
-					},
+				should: [
+					{term: {deleted: false}},
+					{bool: {must_not: [{exists: {field: "deleted"}}]}},
 				],
+				minimum_should_match: 1,
 			},
 		}
 	}
