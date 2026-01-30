@@ -1,4 +1,6 @@
-use sqlx::{postgres::PgPoolOptions, Postgres, QueryBuilder, Row};
+use sqlx::{postgres::PgPoolOptions, Postgres, QueryBuilder};
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use uuid::Uuid;
 
 use crate::error::IndexerError;
@@ -9,14 +11,10 @@ use crate::models::{
         VotingMode,
     },
     membership::{EditorItem, MemberItem},
-    properties::{
-        DataType, PropertyItem, DATA_TYPE_BOOLEAN, DATA_TYPE_NUMBER, DATA_TYPE_POINT,
-        DATA_TYPE_RELATION, DATA_TYPE_STRING, DATA_TYPE_TIME,
-    },
-    relations::{SetRelationItem, UnsetRelationItem, UpdateRelationItem},
+    relations::{RelationOp, SetRelationItem, UnsetRelationItem, UpdateRelationItem},
     spaces::{SpaceItem, SpaceType},
     subspaces::SubspaceItem,
-    values::ValueOp,
+    values::{ValueChangeType, ValueOp},
 };
 
 pub struct Storage {
@@ -73,25 +71,6 @@ impl Storage {
         Ok(())
     }
 
-    pub async fn get_all_properties(&self) -> Result<Vec<PropertyItem>, IndexerError> {
-        let rows = sqlx::query("SELECT id, type::text as type FROM properties")
-            .fetch_all(&self.pool)
-            .await?;
-
-        let mut properties = Vec::with_capacity(rows.len());
-        for row in rows {
-            let id: Uuid = row.try_get("id")?;
-            let type_value: String = row.try_get("type")?;
-            let data_type = string_to_data_type(&type_value).ok_or_else(|| {
-                IndexerError::config(format!("Unknown data type in properties: {}", type_value))
-            })?;
-
-            properties.push(PropertyItem { id, data_type });
-        }
-
-        Ok(properties)
-    }
-
     pub async fn insert_values(
         &self,
         values: &[ValueOp],
@@ -107,11 +86,21 @@ impl Storage {
         let mut space_ids = Vec::with_capacity(values.len());
         let mut languages = Vec::with_capacity(values.len());
         let mut units = Vec::with_capacity(values.len());
+        // Value columns
         let mut text_values = Vec::with_capacity(values.len());
-        let mut number_values = Vec::with_capacity(values.len());
+        let mut decimal_values = Vec::with_capacity(values.len());
         let mut boolean_values = Vec::with_capacity(values.len());
         let mut time_values = Vec::with_capacity(values.len());
         let mut point_values = Vec::with_capacity(values.len());
+        let mut integer_values = Vec::with_capacity(values.len());
+        let mut float_values = Vec::with_capacity(values.len());
+        let mut bytes_values: Vec<Option<&[u8]>> = Vec::with_capacity(values.len());
+        let mut date_values = Vec::with_capacity(values.len());
+        let mut datetime_values = Vec::with_capacity(values.len());
+        let mut schedule_values = Vec::with_capacity(values.len());
+        let mut embedding_values = Vec::with_capacity(values.len());
+        let mut time_utc_values = Vec::with_capacity(values.len());
+        let mut datetime_utc_values = Vec::with_capacity(values.len());
 
         for prop in values {
             ids.push(prop.id.to_string());
@@ -120,17 +109,28 @@ impl Storage {
             space_ids.push(&prop.space_id);
             languages.push(&prop.language);
             units.push(&prop.unit);
-            text_values.push(prop.string.as_deref());
-            number_values.push(prop.number);
+            text_values.push(prop.text.as_deref());
+            decimal_values.push(prop.decimal.as_deref());
             boolean_values.push(prop.boolean);
             time_values.push(prop.time.as_deref());
             point_values.push(prop.point.as_deref());
+            integer_values.push(prop.integer);
+            float_values.push(prop.float);
+            bytes_values.push(prop.bytes.as_deref());
+            date_values.push(prop.date.as_deref());
+            datetime_values.push(prop.datetime.as_deref());
+            schedule_values.push(&prop.schedule);
+            embedding_values.push(&prop.embedding);
+            time_utc_values.push(prop.time_utc.as_deref());
+            datetime_utc_values.push(prop.datetime_utc.as_deref());
         }
 
         let query = r#"
             INSERT INTO values (
                 id, entity_id, property_id, space_id, language, unit,
-                string, number, boolean, time, point
+                text, decimal, boolean, time, point,
+                integer, float, bytes, date, datetime, schedule, embedding,
+                time_utc, datetime_utc
             )
             SELECT * FROM UNNEST(
                 $1::text[],
@@ -143,16 +143,34 @@ impl Storage {
                 $8::numeric[],
                 $9::boolean[],
                 $10::text[],
-                $11::text[]
+                $11::text[],
+                $12::bigint[],
+                $13::double precision[],
+                $14::bytea[],
+                $15::text[],
+                $16::text[],
+                $17::jsonb[],
+                $18::jsonb[],
+                $19::timetz[],
+                $20::timestamptz[]
             )
             ON CONFLICT (id) DO UPDATE SET
                 language = EXCLUDED.language,
                 unit = EXCLUDED.unit,
-                string = EXCLUDED.string,
-                number = EXCLUDED.number,
+                text = EXCLUDED.text,
+                decimal = EXCLUDED.decimal,
                 boolean = EXCLUDED.boolean,
                 time = EXCLUDED.time,
-                point = EXCLUDED.point
+                point = EXCLUDED.point,
+                integer = EXCLUDED.integer,
+                float = EXCLUDED.float,
+                bytes = EXCLUDED.bytes,
+                date = EXCLUDED.date,
+                datetime = EXCLUDED.datetime,
+                schedule = EXCLUDED.schedule,
+                embedding = EXCLUDED.embedding,
+                time_utc = EXCLUDED.time_utc,
+                datetime_utc = EXCLUDED.datetime_utc
         "#;
 
         sqlx::query(query)
@@ -163,10 +181,19 @@ impl Storage {
             .bind(&languages)
             .bind(&units)
             .bind(&text_values)
-            .bind(&number_values)
+            .bind(&decimal_values)
             .bind(&boolean_values)
             .bind(&time_values)
             .bind(&point_values)
+            .bind(&integer_values)
+            .bind(&float_values)
+            .bind(&bytes_values)
+            .bind(&date_values)
+            .bind(&datetime_values)
+            .bind(&schedule_values)
+            .bind(&embedding_values)
+            .bind(&time_utc_values)
+            .bind(&datetime_utc_values)
             .execute(&mut **tx)
             .await?;
 
@@ -374,39 +401,6 @@ impl Storage {
         .bind(&space_ids)
         .execute(&mut **tx)
         .await?;
-
-        Ok(())
-    }
-
-    pub async fn insert_properties(
-        &self,
-        properties: &[PropertyItem],
-        tx: &mut sqlx::Transaction<'_, Postgres>,
-    ) -> Result<(), IndexerError> {
-        if properties.is_empty() {
-            return Ok(());
-        }
-
-        let mut ids = Vec::with_capacity(properties.len());
-        let mut types = Vec::with_capacity(properties.len());
-
-        for property in properties {
-            ids.push(&property.id);
-            types.push(property.data_type.as_ref());
-        }
-
-        let query = r#"
-            INSERT INTO properties (id, type)
-            SELECT id, type::"dataTypes"
-            FROM UNNEST($1::uuid[], $2::text[]) AS t(id, type)
-            ON CONFLICT (id) DO NOTHING
-        "#;
-
-        sqlx::query(query)
-            .bind(&ids)
-            .bind(&types)
-            .execute(&mut **tx)
-            .await?;
 
         Ok(())
     }
@@ -982,17 +976,372 @@ impl Storage {
 
         Ok(())
     }
-}
 
-#[allow(dead_code)]
-fn string_to_data_type(s: &str) -> Option<DataType> {
-    match s {
-        DATA_TYPE_STRING => Some(DataType::String),
-        DATA_TYPE_NUMBER => Some(DataType::Number),
-        DATA_TYPE_BOOLEAN => Some(DataType::Boolean),
-        DATA_TYPE_TIME => Some(DataType::Time),
-        DATA_TYPE_POINT => Some(DataType::Point),
-        DATA_TYPE_RELATION => Some(DataType::Relation),
-        _ => None,
+    // ==================== Versioned writes ====================
+
+    /// Derive a deterministic version ID from entity, property, space, and version_key.
+    /// This ensures idempotency - the same inputs always produce the same ID.
+    fn derive_value_version_id(
+        entity_id: &Uuid,
+        property_id: &Uuid,
+        space_id: &Uuid,
+        version_key: i64,
+    ) -> Uuid {
+        let mut hasher = DefaultHasher::new();
+        entity_id.hash(&mut hasher);
+        property_id.hash(&mut hasher);
+        space_id.hash(&mut hasher);
+        version_key.hash(&mut hasher);
+        let hash_value = hasher.finish();
+
+        let mut bytes = [0u8; 16];
+        bytes[0..8].copy_from_slice(&hash_value.to_be_bytes());
+        // Use a different seed for the second half to avoid patterns
+        let mut hasher2 = DefaultHasher::new();
+        hash_value.hash(&mut hasher2);
+        bytes[8..16].copy_from_slice(&hasher2.finish().to_be_bytes());
+
+        Uuid::from_bytes(bytes)
+    }
+
+    /// Derive a deterministic version ID for relation versions.
+    fn derive_relation_version_id(relation_id: &Uuid, space_id: &Uuid, version_key: i64) -> Uuid {
+        let mut hasher = DefaultHasher::new();
+        relation_id.hash(&mut hasher);
+        space_id.hash(&mut hasher);
+        version_key.hash(&mut hasher);
+        let hash_value = hasher.finish();
+
+        let mut bytes = [0u8; 16];
+        bytes[0..8].copy_from_slice(&hash_value.to_be_bytes());
+        let mut hasher2 = DefaultHasher::new();
+        hash_value.hash(&mut hasher2);
+        bytes[8..16].copy_from_slice(&hasher2.finish().to_be_bytes());
+
+        Uuid::from_bytes(bytes)
+    }
+
+    /// Insert an edit version record and return the computed version_key.
+    /// version_key = (block_number << 32) | sequence
+    ///
+    /// Returns `Some(version_key)` if the edit was inserted, `None` if it already existed.
+    ///
+    /// # Idempotency
+    ///
+    /// Callers MUST skip `insert_value_versions` and `insert_relation_versions` when this
+    /// returns `None`. Re-processing an edit would otherwise corrupt temporal data:
+    ///
+    /// 1. First processing: inserts value_version with valid_from_key=X, valid_to_key=NULL
+    /// 2. Re-processing: close query sets valid_to_key=X on that row, then inserts duplicate
+    /// 3. Result: original row has valid_from_key=X, valid_to_key=X (zero-length interval)
+    ///
+    /// The ON CONFLICT on edit_versions detects re-processing, but value_versions has no
+    /// such protection - it relies on callers checking this return value.
+    pub async fn insert_edit_version(
+        &self,
+        edit_id: Uuid,
+        block_number: i64,
+        sequence: i64,
+        created_at: i64,
+        tx: &mut sqlx::Transaction<'_, Postgres>,
+    ) -> Result<Option<i64>, IndexerError> {
+        let version_key = (block_number << 32) | sequence;
+
+        let result = sqlx::query(
+            r#"
+            INSERT INTO edit_versions (edit_id, block_number, sequence, version_key, created_at)
+            VALUES ($1, $2, $3, $4, to_timestamp($5))
+            ON CONFLICT (edit_id) DO NOTHING
+            "#,
+        )
+        .bind(edit_id)
+        .bind(block_number)
+        .bind(sequence)
+        .bind(version_key)
+        .bind(created_at as f64)
+        .execute(&mut **tx)
+        .await?;
+
+        if result.rows_affected() == 0 {
+            Ok(None)
+        } else {
+            Ok(Some(version_key))
+        }
+    }
+
+    /// Insert versioned value records with temporal range tracking.
+    /// For each value:
+    /// 1. Close any open version (SET valid_to_key WHERE valid_to_key IS NULL)
+    /// 2. Insert new version row (only for SET operations, not DELETE)
+    pub async fn insert_value_versions(
+        &self,
+        values: &[ValueOp],
+        version_key: i64,
+        tx: &mut sqlx::Transaction<'_, Postgres>,
+    ) -> Result<(), IndexerError> {
+        if values.is_empty() {
+            return Ok(());
+        }
+
+        // Collect keys for closing open versions
+        let entity_ids: Vec<Uuid> = values.iter().map(|v| v.entity_id).collect();
+        let property_ids: Vec<Uuid> = values.iter().map(|v| v.property_id).collect();
+        let space_ids: Vec<Uuid> = values.iter().map(|v| v.space_id).collect();
+
+        // Close all open versions for these (entity, property, space) tuples
+        sqlx::query(
+            r#"
+            UPDATE value_versions
+            SET valid_to_key = $1
+            WHERE valid_to_key IS NULL
+              AND (entity_id, property_id, space_id) IN (
+                SELECT entity_id, property_id, space_id
+                FROM UNNEST($2::uuid[], $3::uuid[], $4::uuid[])
+                AS t(entity_id, property_id, space_id)
+              )
+            "#,
+        )
+        .bind(version_key)
+        .bind(&entity_ids)
+        .bind(&property_ids)
+        .bind(&space_ids)
+        .execute(&mut **tx)
+        .await?;
+
+        // Filter to only SET operations for inserting new versions
+        let set_values: Vec<&ValueOp> = values
+            .iter()
+            .filter(|v| matches!(v.change_type, ValueChangeType::Set))
+            .collect();
+
+        if set_values.is_empty() {
+            return Ok(());
+        }
+
+        // Prepare arrays for bulk insert
+        let mut ids = Vec::with_capacity(set_values.len());
+        let mut v_entity_ids = Vec::with_capacity(set_values.len());
+        let mut v_property_ids = Vec::with_capacity(set_values.len());
+        let mut v_space_ids = Vec::with_capacity(set_values.len());
+        let mut valid_from_keys = Vec::with_capacity(set_values.len());
+        let mut languages = Vec::with_capacity(set_values.len());
+        let mut units = Vec::with_capacity(set_values.len());
+        let mut texts = Vec::with_capacity(set_values.len());
+        let mut booleans = Vec::with_capacity(set_values.len());
+        let mut decimals = Vec::with_capacity(set_values.len());
+        let mut times = Vec::with_capacity(set_values.len());
+        let mut points = Vec::with_capacity(set_values.len());
+        let mut integers = Vec::with_capacity(set_values.len());
+        let mut floats = Vec::with_capacity(set_values.len());
+        let mut bytes_values: Vec<Option<&[u8]>> = Vec::with_capacity(set_values.len());
+        let mut dates = Vec::with_capacity(set_values.len());
+        let mut datetimes = Vec::with_capacity(set_values.len());
+        let mut schedules = Vec::with_capacity(set_values.len());
+        let mut embeddings = Vec::with_capacity(set_values.len());
+        let mut time_utcs = Vec::with_capacity(set_values.len());
+        let mut datetime_utcs = Vec::with_capacity(set_values.len());
+        let mut context_root_ids = Vec::with_capacity(set_values.len());
+        let mut context_edge_type_ids = Vec::with_capacity(set_values.len());
+
+        for v in &set_values {
+            // Derive deterministic ID for idempotency
+            ids.push(Self::derive_value_version_id(
+                &v.entity_id,
+                &v.property_id,
+                &v.space_id,
+                version_key,
+            ));
+            v_entity_ids.push(v.entity_id);
+            v_property_ids.push(v.property_id);
+            v_space_ids.push(v.space_id);
+            valid_from_keys.push(version_key);
+            languages.push(v.language.as_deref());
+            units.push(v.unit.as_deref());
+            texts.push(v.text.as_deref());
+            booleans.push(v.boolean);
+            decimals.push(v.decimal.as_deref());
+            times.push(v.time.as_deref());
+            points.push(v.point.as_deref());
+            integers.push(v.integer);
+            floats.push(v.float);
+            bytes_values.push(v.bytes.as_deref());
+            dates.push(v.date.as_deref());
+            datetimes.push(v.datetime.as_deref());
+            schedules.push(&v.schedule);
+            embeddings.push(&v.embedding);
+            time_utcs.push(v.time_utc.as_deref());
+            datetime_utcs.push(v.datetime_utc.as_deref());
+            context_root_ids.push(v.context_root_id);
+            context_edge_type_ids.push(v.context_edge_type_id);
+        }
+
+        sqlx::query(
+            r#"
+            INSERT INTO value_versions (
+                id, entity_id, property_id, space_id, valid_from_key,
+                language, unit, text, boolean, decimal, time, point,
+                integer, float, bytes, date, datetime, schedule, embedding,
+                time_utc, datetime_utc, context_root_id, context_edge_type_id
+            )
+            SELECT * FROM UNNEST(
+                $1::uuid[], $2::uuid[], $3::uuid[], $4::uuid[], $5::bigint[],
+                $6::text[], $7::text[], $8::text[], $9::boolean[], $10::numeric[],
+                $11::text[], $12::text[], $13::bigint[], $14::double precision[],
+                $15::bytea[], $16::text[], $17::text[], $18::jsonb[], $19::jsonb[],
+                $20::timetz[], $21::timestamptz[], $22::uuid[], $23::uuid[]
+            )
+            ON CONFLICT (id) DO NOTHING
+            "#,
+        )
+        .bind(&ids)
+        .bind(&v_entity_ids)
+        .bind(&v_property_ids)
+        .bind(&v_space_ids)
+        .bind(&valid_from_keys)
+        .bind(&languages)
+        .bind(&units)
+        .bind(&texts)
+        .bind(&booleans)
+        .bind(&decimals)
+        .bind(&times)
+        .bind(&points)
+        .bind(&integers)
+        .bind(&floats)
+        .bind(&bytes_values)
+        .bind(&dates)
+        .bind(&datetimes)
+        .bind(&schedules)
+        .bind(&embeddings)
+        .bind(&time_utcs)
+        .bind(&datetime_utcs)
+        .bind(&context_root_ids)
+        .bind(&context_edge_type_ids)
+        .execute(&mut **tx)
+        .await?;
+
+        Ok(())
+    }
+
+    /// Insert versioned relation records with temporal range tracking.
+    /// For each relation operation:
+    /// 1. Close any open version (SET valid_to_key WHERE valid_to_key IS NULL)
+    /// 2. Insert new version row (only for Create operations)
+    pub async fn insert_relation_versions(
+        &self,
+        relations: &[RelationOp],
+        version_key: i64,
+        tx: &mut sqlx::Transaction<'_, Postgres>,
+    ) -> Result<(), IndexerError> {
+        if relations.is_empty() {
+            return Ok(());
+        }
+
+        // Collect relation IDs and space IDs for closing open versions
+        let relation_ids: Vec<Uuid> = relations.iter().map(|r| r.id()).collect();
+        let space_ids: Vec<Uuid> = relations.iter().map(|r| r.space_id()).collect();
+
+        // Close all open versions for these relations
+        sqlx::query(
+            r#"
+            UPDATE relation_versions
+            SET valid_to_key = $1
+            WHERE valid_to_key IS NULL
+              AND (relation_id, space_id) IN (
+                SELECT relation_id, space_id
+                FROM UNNEST($2::uuid[], $3::uuid[])
+                AS t(relation_id, space_id)
+              )
+            "#,
+        )
+        .bind(version_key)
+        .bind(&relation_ids)
+        .bind(&space_ids)
+        .execute(&mut **tx)
+        .await?;
+
+        // Filter to only Create operations for inserting new versions
+        let creates: Vec<&SetRelationItem> = relations
+            .iter()
+            .filter_map(|r| match r {
+                RelationOp::Create(item) => Some(item),
+                _ => None,
+            })
+            .collect();
+
+        if creates.is_empty() {
+            return Ok(());
+        }
+
+        // Prepare arrays for bulk insert
+        let mut ids = Vec::with_capacity(creates.len());
+        let mut r_relation_ids = Vec::with_capacity(creates.len());
+        let mut r_entity_ids = Vec::with_capacity(creates.len());
+        let mut r_type_ids = Vec::with_capacity(creates.len());
+        let mut r_from_entity_ids = Vec::with_capacity(creates.len());
+        let mut r_from_space_ids: Vec<Option<Uuid>> = Vec::with_capacity(creates.len());
+        let mut r_to_entity_ids = Vec::with_capacity(creates.len());
+        let mut r_to_space_ids: Vec<Option<Uuid>> = Vec::with_capacity(creates.len());
+        let mut r_positions = Vec::with_capacity(creates.len());
+        let mut r_space_ids = Vec::with_capacity(creates.len());
+        let mut r_verified = Vec::with_capacity(creates.len());
+        let mut valid_from_keys = Vec::with_capacity(creates.len());
+        let mut context_root_ids = Vec::with_capacity(creates.len());
+        let mut context_edge_type_ids = Vec::with_capacity(creates.len());
+
+        for r in &creates {
+            // Derive deterministic ID for idempotency
+            ids.push(Self::derive_relation_version_id(
+                &r.id,
+                &r.space_id,
+                version_key,
+            ));
+            r_relation_ids.push(r.id);
+            r_entity_ids.push(r.entity_id);
+            r_type_ids.push(r.type_id);
+            r_from_entity_ids.push(r.from_id);
+            r_from_space_ids.push(r.from_space_id.as_ref().and_then(|s| s.parse().ok()));
+            r_to_entity_ids.push(r.to_id);
+            r_to_space_ids.push(r.to_space_id.as_ref().and_then(|s| s.parse().ok()));
+            r_positions.push(r.position.as_deref());
+            r_space_ids.push(r.space_id);
+            r_verified.push(r.verified);
+            valid_from_keys.push(version_key);
+            context_root_ids.push(r.context_root_id);
+            context_edge_type_ids.push(r.context_edge_type_id);
+        }
+
+        sqlx::query(
+            r#"
+            INSERT INTO relation_versions (
+                id, relation_id, entity_id, type_id, from_entity_id, from_space_id,
+                to_entity_id, to_space_id, position, space_id, verified, valid_from_key,
+                context_root_id, context_edge_type_id
+            )
+            SELECT * FROM UNNEST(
+                $1::uuid[], $2::uuid[], $3::uuid[], $4::uuid[], $5::uuid[], $6::uuid[],
+                $7::uuid[], $8::uuid[], $9::text[], $10::uuid[], $11::boolean[], $12::bigint[],
+                $13::uuid[], $14::uuid[]
+            )
+            ON CONFLICT (id) DO NOTHING
+            "#,
+        )
+        .bind(&ids)
+        .bind(&r_relation_ids)
+        .bind(&r_entity_ids)
+        .bind(&r_type_ids)
+        .bind(&r_from_entity_ids)
+        .bind(&r_from_space_ids)
+        .bind(&r_to_entity_ids)
+        .bind(&r_to_space_ids)
+        .bind(&r_positions)
+        .bind(&r_space_ids)
+        .bind(&r_verified)
+        .bind(&valid_from_keys)
+        .bind(&context_root_ids)
+        .bind(&context_edge_type_ids)
+        .execute(&mut **tx)
+        .await?;
+
+        Ok(())
     }
 }

@@ -11,6 +11,26 @@ cd search-indexer-deploy
 docker-compose up
 ```
 
+### Optional: Enable Sentry Telemetry
+
+To test Sentry integration locally, create a `.env` file in the `search-indexer-deploy` directory:
+
+```bash
+# .env file for docker-compose
+SENTRY_DSN=https://...@o0.ingest.sentry.io/...
+SENTRY_ENVIRONMENT=local-docker
+SENTRY_TRACES_SAMPLE_RATE=1.0
+SENTRY_DEBUG=true
+```
+
+Then start the services:
+
+```bash
+docker-compose up
+```
+
+Without a `.env` file or `SENTRY_DSN`, the indexer defaults to Console backend (stdout logging).
+
 Services:
 - **OpenSearch REST API**: `http://localhost:9200`
 - **Grafana**: `http://localhost:4040` (admin/admin)
@@ -19,7 +39,7 @@ Services:
 
 Run the search indexer locally:
 ```bash
-OPENSEARCH_URL=http://localhost:9200 cargo run -p search-indexer
+OPENSEARCH_URL=http://localhost:9200 cargo run -p search-indexer --features search-indexer-repository/auto_index_creation
 ```
 
 Check cluster health:
@@ -40,8 +60,16 @@ Before deploying, create the required secrets in the `search` namespace:
 | Secret | Keys | Description |
 |--------|------|-------------|
 | `kafka-credentials` | `KAFKA_BROKER`, `KAFKA_USERNAME`, `KAFKA_PASSWORD`, `KAFKA_SSL_CA_PEM` | Managed Kafka connection (see [hermes README](../hermes/README.md) for details) |
+| `opensearch-credentials` | `OPENSEARCH_URL` | OpenSearch connection URL |
 | `grafana-credentials` | `ADMIN_USER`, `ADMIN_PASSWORD` | Grafana admin login |
-| `search-indexer-secrets` | `AXIOM_TOKEN` | Optional, for Axiom logging |
+| `search-indexer-secrets` | `SENTRY_DSN` | Optional, for Sentry telemetry and error tracking |
+
+Create the Sentry secret:
+```bash
+kubectl create secret generic search-indexer-secrets \
+  --from-literal=SENTRY_DSN='https://...@o0.ingest.sentry.io/...' \
+  --namespace=search
+```
 
 See [k8s-secrets-isolation.md](../docs/k8s-secrets-isolation.md) for the secrets strategy.
 
@@ -86,8 +114,24 @@ search-indexer-deploy/
     ├── kustomization.yaml
     ├── namespace.yaml
     ├── search-indexer.yaml  # Search Indexer Deployment
-    └── monitoring.yaml      # Prometheus + Grafana + OpenSearch Exporter
+    ├── monitoring.yaml      # Prometheus + Grafana + OpenSearch Exporter
+    └── jobs/               # Index migration jobs (see jobs/README.md)
+        ├── README.md
+        ├── create-index-job.yaml
+        ├── delete-index-job.yaml
+        ├── full-migration-job.yaml
+        └── list-indices-job.yaml
 ```
+
+## Index Migrations
+
+OpenSearch index migrations are managed using the [search-admin](../search-admin/) tool, which runs as Kubernetes Jobs in production.
+
+**For full migration workflows and step-by-step instructions, see:**
+- **[k8s/jobs/README.md](k8s/jobs/README.md)** - Complete guide for running index migrations
+- **[search-admin/README.md](../search-admin/README.md)** - CLI tool documentation and commands
+
+The jobs automate the entire migration process including creating indices, stopping the indexer, reindexing data, updating aliases, and restarting with the new version.
 
 ## Resource Configuration
 
@@ -125,17 +169,32 @@ The monitoring stack includes:
 
 The search-indexer binary uses these environment variables:
 
+### Core Configuration
+
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `OPENSEARCH_URL` | OpenSearch REST endpoint | `http://localhost:9200` |
+| `INDEX_ALIAS` | Index alias name | `entities` |
+| `ENTITIES_INDEX_VERSION` | Index version number | `0` |
 | `KAFKA_BROKER` | Kafka broker address | `localhost:9092` |
+| `KAFKA_GROUP_ID` | Consumer group ID | `search-indexer` |
 | `KAFKA_USERNAME` | Kafka SASL username (required for managed Kafka) | - |
 | `KAFKA_PASSWORD` | Kafka SASL password (required for managed Kafka) | - |
 | `KAFKA_SSL_CA_PEM` | Kafka CA certificate PEM (required for managed Kafka with SSL) | - |
-| `KAFKA_GROUP_ID` | Consumer group ID | `search-indexer` |
 | `RUST_LOG` | Log level | `search_indexer=info` |
-| `AXIOM_TOKEN` | Axiom API token (optional) | - |
-| `AXIOM_DATASET` | Axiom dataset name | `gaia.search-indexer` |
+
+### Telemetry (Sentry)
+
+| Variable | Description | Default |
+|----------|-------------|---------|
+| `SENTRY_DSN` | Sentry project DSN (enables Sentry when set) | - |
+| `SENTRY_ENVIRONMENT` | Environment tag (e.g., "staging", "production") | - |
+| `SENTRY_RELEASE` | Release version (e.g., "search-indexer@1.0.0") | - |
+| `SENTRY_TRACES_SAMPLE_RATE` | Trace sampling rate 0.0-1.0 | `1.0` |
+| `SENTRY_SEND_DEFAULT_PII` | Include PII in events | `false` |
+| `SENTRY_DEBUG` | Enable debug mode (logs spans to stdout) | `false` |
+
+See the main [search-indexer README](../search-indexer/README.md) for detailed telemetry documentation.
 
 ## Security Notes
 

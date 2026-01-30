@@ -8,6 +8,7 @@ pub mod pb;
 
 // Re-export commonly used helpers
 pub use helpers::extract_ipfs_uri;
+pub use helpers::extract_proposal_publish_uris;
 
 use pb::hermes::*;
 use substreams_ethereum::{block_view::LogView, pb::eth};
@@ -497,6 +498,47 @@ fn map_edits_published(
         .collect();
 
     Ok(EditsPublishedList { edits })
+}
+
+// =============================================================================
+// Combined IPFS URI Extraction
+// =============================================================================
+
+/// Extract IPFS URIs from both EDITS_PUBLISHED and PROPOSAL_CREATED events.
+///
+/// This module is used by hermes-ipfs-cache to pre-fetch all IPFS content
+/// that will be needed for proposal diff computation.
+#[substreams::handlers::map]
+fn map_ipfs_uris(block: eth::v2::Block) -> Result<IpfsUriList, substreams::errors::Error> {
+    let mut uris = Vec::new();
+
+    for action in block.logs().filter_map(parse_action) {
+        match action.action.as_slice() {
+            // Extract from EDITS_PUBLISHED
+            x if x == ACTION_EDITS_PUBLISHED => {
+                if let Some(uri) = helpers::extract_ipfs_uri(&action.data) {
+                    uris.push(IpfsUri {
+                        uri,
+                        space_id: action.from_id,
+                        source: "edit".to_string(),
+                    });
+                }
+            }
+            // Extract from PROPOSAL_CREATED (Publish actions)
+            x if x == ACTION_PROPOSAL_CREATED => {
+                for uri in helpers::extract_proposal_publish_uris(&action.data) {
+                    uris.push(IpfsUri {
+                        uri,
+                        space_id: action.from_id.clone(),
+                        source: "proposal".to_string(),
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+
+    Ok(IpfsUriList { uris })
 }
 
 #[substreams::handlers::map]

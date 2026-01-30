@@ -38,6 +38,7 @@ pub struct TypeRelationEntry {
 /// - `space_score`: Space-level score (None until scoring service)
 /// - `entity_space_score`: Entity's score within the space (None until scoring service)
 /// - `indexed_at`: Timestamp when the document was indexed
+/// - `deleted`: Optional soft delete flag (None or Some(true) when deleted)
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct EntityDocument {
     pub entity_id: Uuid,
@@ -63,6 +64,9 @@ pub struct EntityDocument {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub entity_space_score: Option<f64>,
     pub indexed_at: DateTime<Utc>,
+    /// Soft delete flag - None for active entities, Some(true) for deleted entities
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub deleted: Option<bool>,
 }
 
 impl EntityDocument {
@@ -106,6 +110,7 @@ impl EntityDocument {
             space_score: None,
             entity_space_score: None,
             indexed_at: Utc::now(),
+            deleted: None,
         }
     }
 
@@ -140,6 +145,7 @@ impl EntityDocument {
             space_score: None,
             entity_space_score: None,
             indexed_at: Utc::now(),
+            deleted: None,
         }
     }
 

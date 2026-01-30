@@ -184,16 +184,18 @@ export class OpenSearchClient implements SearchClient {
 	 * - Empty queries return top ranked results based on scope-specific score fields
 	 */
 	buildSearchBody(query: SearchQuery): object {
+		const includeDeleted = query.include_deleted ?? false
+
 		// Check if the query is empty or whitespace-only
 		const trimmedQuery = query.query.trim()
 		if (trimmedQuery.length === 0) {
 			// For empty queries, return top ranked results based on scope
-			return this.buildTopRankedQuery(query.scope, query.space_id, query.type_ids)
+			return this.buildTopRankedQuery(query.scope, query.space_id, query.type_ids, includeDeleted)
 		}
 
 		// Check if the query is a UUID for direct ID lookup
 		if (UUID_PATTERN.test(trimmedQuery)) {
-			return this.buildUuidQuery(trimmedQuery, query.scope, query.space_id, query.type_ids)
+			return this.buildUuidQuery(trimmedQuery, query.scope, query.space_id, query.type_ids, includeDeleted)
 		}
 
 		// Build base text search query
@@ -202,16 +204,16 @@ export class OpenSearchClient implements SearchClient {
 		// Apply scope-specific query building
 		switch (query.scope) {
 			case "GLOBAL":
-				return this.buildGlobalQuery(baseTextQuery, query.type_ids)
+				return this.buildGlobalQuery(baseTextQuery, query.type_ids, includeDeleted)
 
 			case "GLOBAL_BY_SPACE_SCORE":
-				return this.buildGlobalBySpaceScoreQuery(baseTextQuery, query.type_ids)
+				return this.buildGlobalBySpaceScoreQuery(baseTextQuery, query.type_ids, includeDeleted)
 
 			case "SPACE_SINGLE": {
 				if (!query.space_id) {
 					throw SearchError.validationError("SPACE_SINGLE scope requires space_id")
 				}
-				return this.buildSingleSpaceQuery(baseTextQuery, query.space_id, query.type_ids)
+				return this.buildSingleSpaceQuery(baseTextQuery, query.space_id, query.type_ids, includeDeleted)
 			}
 
 			case "SPACE": {
@@ -221,11 +223,11 @@ export class OpenSearchClient implements SearchClient {
 				// SPACE scope: Search within a space and its subspaces
 				// Currently implemented as single space query - future enhancement
 				// will expand to include hierarchical space relationships
-				return this.buildSingleSpaceQuery(baseTextQuery, query.space_id, query.type_ids)
+				return this.buildSingleSpaceQuery(baseTextQuery, query.space_id, query.type_ids, includeDeleted)
 			}
 
 			default:
-				return this.buildGlobalQuery(baseTextQuery, query.type_ids)
+				return this.buildGlobalQuery(baseTextQuery, query.type_ids, includeDeleted)
 		}
 	}
 
@@ -237,7 +239,13 @@ export class OpenSearchClient implements SearchClient {
 	 * on keyword fields. The entity_id field is indexed as a keyword type
 	 * in the OpenSearch index mapping.
 	 */
-	buildUuidQuery(uuid: string, scope: SearchScope, space_id?: string, typeIds?: string[]): object {
+	buildUuidQuery(
+		uuid: string,
+		scope: SearchScope,
+		space_id?: string,
+		typeIds?: string[],
+		includeDeleted: boolean = false,
+	): object {
 		// term query is correct for keyword fields - performs exact match lookup
 		const baseUuidQuery = {
 			term: {entity_id: uuid},
@@ -245,15 +253,13 @@ export class OpenSearchClient implements SearchClient {
 
 		const typeFilter = this.buildTypeFilter(typeIds)
 		const filters: object[] = []
+		if (!includeDeleted) filters.push(this.buildNonDeletedFilter())
 		if (typeFilter) filters.push(typeFilter)
 
 		// Apply scope-specific filtering
 		switch (scope) {
 			case "GLOBAL":
 			case "GLOBAL_BY_SPACE_SCORE":
-				if (filters.length === 0) {
-					return {query: baseUuidQuery}
-				}
 				return {
 					query: {
 						bool: {
@@ -268,9 +274,6 @@ export class OpenSearchClient implements SearchClient {
 				if (space_id) {
 					filters.push({term: {space_id}})
 				}
-				if (filters.length === 0) {
-					return {query: baseUuidQuery}
-				}
 				return {
 					query: {
 						bool: {
@@ -281,9 +284,6 @@ export class OpenSearchClient implements SearchClient {
 				}
 
 			default:
-				if (filters.length === 0) {
-					return {query: baseUuidQuery}
-				}
 				return {
 					query: {
 						bool: {
@@ -299,9 +299,15 @@ export class OpenSearchClient implements SearchClient {
 	 * Build a query for returning top ranked results without text matching.
 	 * Used when no search query is provided - returns results ranked by scope-specific score fields.
 	 */
-	buildTopRankedQuery(scope: SearchScope, space_id?: string, typeIds?: string[]): object {
+	buildTopRankedQuery(
+		scope: SearchScope,
+		space_id?: string,
+		typeIds?: string[],
+		includeDeleted: boolean = false,
+	): object {
 		const typeFilter = this.buildTypeFilter(typeIds)
 		const filters: object[] = []
+		if (!includeDeleted) filters.push(this.buildNonDeletedFilter())
 		if (typeFilter) filters.push(typeFilter)
 
 		// Apply scope-specific filtering and sorting
@@ -473,15 +479,19 @@ export class OpenSearchClient implements SearchClient {
 	 * Build a global search query.
 	 * Boosts results by entity_global_score using function_score.
 	 */
-	buildGlobalQuery(baseTextQuery: object, typeIds?: string[]): object {
+	buildGlobalQuery(baseTextQuery: object, typeIds?: string[], includeDeleted: boolean = false): object {
 		const typeFilter = this.buildTypeFilter(typeIds)
+		const filters: object[] = []
+		if (!includeDeleted) filters.push(this.buildNonDeletedFilter())
+		if (typeFilter) filters.push(typeFilter)
+
 		return {
 			query: {
 				function_score: {
 					query: {
 						bool: {
 							must: [baseTextQuery],
-							filter: typeFilter ? [typeFilter] : [],
+							filter: filters,
 						},
 					},
 					functions: [this.buildScoreBoostFunction("entity_global_score")],
@@ -496,15 +506,19 @@ export class OpenSearchClient implements SearchClient {
 	 * Build a global search query ranked by space score.
 	 * Boosts results by space_score using function_score.
 	 */
-	buildGlobalBySpaceScoreQuery(baseTextQuery: object, typeIds?: string[]): object {
+	buildGlobalBySpaceScoreQuery(baseTextQuery: object, typeIds?: string[], includeDeleted: boolean = false): object {
 		const typeFilter = this.buildTypeFilter(typeIds)
+		const filters: object[] = []
+		if (!includeDeleted) filters.push(this.buildNonDeletedFilter())
+		if (typeFilter) filters.push(typeFilter)
+
 		return {
 			query: {
 				function_score: {
 					query: {
 						bool: {
 							must: [baseTextQuery],
-							filter: typeFilter ? [typeFilter] : [],
+							filter: filters,
 						},
 					},
 					functions: [this.buildScoreBoostFunction("space_score")],
@@ -519,15 +533,24 @@ export class OpenSearchClient implements SearchClient {
 	 * Build a single-space filtered query.
 	 * Filters by a single space_id and boosts by entity_space_score.
 	 */
-	buildSingleSpaceQuery(baseTextQuery: object, spaceId: string, typeIds?: string[]): object {
+	buildSingleSpaceQuery(
+		baseTextQuery: object,
+		spaceId: string,
+		typeIds?: string[],
+		includeDeleted: boolean = false,
+	): object {
 		const typeFilter = this.buildTypeFilter(typeIds)
+		const filters: object[] = [{term: {space_id: spaceId}}]
+		if (!includeDeleted) filters.push(this.buildNonDeletedFilter())
+		if (typeFilter) filters.push(typeFilter)
+
 		return {
 			query: {
 				function_score: {
 					query: {
 						bool: {
 							must: [baseTextQuery],
-							filter: typeFilter ? [{term: {space_id: spaceId}}, typeFilter] : [{term: {space_id: spaceId}}],
+							filter: filters,
 						},
 					},
 					functions: [this.buildScoreBoostFunction("entity_space_score")],
@@ -555,6 +578,22 @@ export class OpenSearchClient implements SearchClient {
 						"type_relations.entity_to_id": typeIds,
 					},
 				},
+			},
+		}
+	}
+
+	/**
+	 * Build a filter to select non-deleted entities.
+	 * Matches documents where deleted is false or the deleted field doesn't exist.
+	 */
+	buildNonDeletedFilter(): object {
+		return {
+			bool: {
+				should: [
+					{term: {deleted: false}},
+					{bool: {must_not: [{exists: {field: "deleted"}}]}},
+				],
+				minimum_should_match: 1,
 			},
 		}
 	}

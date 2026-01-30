@@ -267,13 +267,16 @@ fn init_sentry(
     // - ERROR: Create Sentry Issue + Log + Breadcrumb
     // - WARN/INFO: Create Log + Breadcrumb (breadcrumbs provide context for errors)
     // - DEBUG/TRACE: Ignore
-    let sentry_layer = sentry::integrations::tracing::layer().event_filter(|metadata| {
-        match *metadata.level() {
-            tracing::Level::ERROR => EventFilter::Event | EventFilter::Log | EventFilter::Breadcrumb,
-            tracing::Level::WARN | tracing::Level::INFO => EventFilter::Log | EventFilter::Breadcrumb,
+    let sentry_layer =
+        sentry::integrations::tracing::layer().event_filter(|metadata| match *metadata.level() {
+            tracing::Level::ERROR => {
+                EventFilter::Event | EventFilter::Log | EventFilter::Breadcrumb
+            }
+            tracing::Level::WARN | tracing::Level::INFO => {
+                EventFilter::Log | EventFilter::Breadcrumb
+            }
             _ => EventFilter::Ignore,
-        }
-    });
+        });
 
     let level = std::env::var("RUST_LOG")
         .ok()

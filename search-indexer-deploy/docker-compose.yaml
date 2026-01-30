@@ -108,21 +108,32 @@ services:
     build:
       context: ..
       dockerfile: search-indexer/Dockerfile
+      args:
+        # Enable auto_index_creation for local development
+        # Production Kubernetes deployments DO NOT set this arg (feature disabled)
+        CARGO_FEATURES: "--features search-indexer-repository/auto_index_creation"
     container_name: search-indexer
     user: "1000:1000"
     environment:
+      # OpenSearch configuration
       - OPENSEARCH_URL=http://opensearch:9200
-      # Index alias (defaults to "entities" if not set)
       - INDEX_ALIAS=${INDEX_ALIAS:-entities}
-      # Index version (defaults to 0 if not set)
       - ENTITIES_INDEX_VERSION=${ENTITIES_INDEX_VERSION:-0}
-      # Connect to Kafka broker - defaults to hermes kafka container name
-      # Override with KAFKA_BROKER env var if needed
-      - KAFKA_BROKER=${KAFKA_BROKER:-kafka:29092}
-      - KAFKA_GROUP_ID=search-indexer
       - OPENSEARCH_CONNECTION_MODE=retry
       - OPENSEARCH_RETRY_INTERVAL_SECS=15
+      # Kafka configuration
+      - KAFKA_BROKER=${KAFKA_BROKER:-kafka:29092}
+      - KAFKA_GROUP_ID=search-indexer
+      # Logging
       - RUST_LOG=debug
+      # Sentry telemetry (optional - set in .env file to enable)
+      # Example: SENTRY_DSN=https://...@o0.ingest.sentry.io/...
+      - SENTRY_DSN=${SENTRY_DSN:-}
+      - SENTRY_ENVIRONMENT=${SENTRY_ENVIRONMENT:-local-docker}
+      - SENTRY_RELEASE=${SENTRY_RELEASE:-search-indexer@dev}
+      - SENTRY_TRACES_SAMPLE_RATE=${SENTRY_TRACES_SAMPLE_RATE:-1.0}
+      - SENTRY_SEND_DEFAULT_PII=${SENTRY_SEND_DEFAULT_PII:-false}
+      - SENTRY_DEBUG=${SENTRY_DEBUG:-false}
     depends_on:
       opensearch:
         condition: service_healthy

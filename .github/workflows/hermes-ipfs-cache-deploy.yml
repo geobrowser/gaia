@@ -1,4 +1,4 @@
-name: Deploy Hermes IPFS Cache
+name: Deploy Hermes IPFS Cache (Production)
 
 on:
   push:
@@ -13,6 +13,10 @@ on:
       - 'wire/**'
       - 'ipfs/**'
       - '.github/workflows/hermes-ipfs-cache-deploy.yml'
+
+concurrency:
+  group: hermes-ipfs-cache-production
+  cancel-in-progress: true
 
 env:
   REGISTRY: registry.digitalocean.com/geo
@@ -50,10 +54,10 @@ jobs:
 
       - name: Deploy to Kubernetes
         run: |
-          kubectl apply -f hermes-ipfs-cache/k8s/namespace.yaml
+          kubectl apply -f hermes-ipfs-cache/k8s/production/namespace.yaml
           # Update image tag to use SHA and apply
-          sed -i 's|image: registry.digitalocean.com/geo/hermes-ipfs-cache:latest|image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}|g' hermes-ipfs-cache/k8s/hermes-ipfs-cache.yaml
-          kubectl apply -f hermes-ipfs-cache/k8s/hermes-ipfs-cache.yaml
+          sed -i 's|image: registry.digitalocean.com/geo/hermes-ipfs-cache:latest|image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}|g' hermes-ipfs-cache/k8s/production/hermes-ipfs-cache.yaml
+          kubectl apply -f hermes-ipfs-cache/k8s/production/hermes-ipfs-cache.yaml
 
       - name: Restart deployment to pick up new image
         run: |

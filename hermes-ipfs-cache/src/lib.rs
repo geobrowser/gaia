@@ -34,9 +34,10 @@ pub mod cache;
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use grc_20::decode_edit;
 use hermes_instrumentation::{debug, error, info, info_span, warn};
 use hermes_relay::{HermesModule, Sink};
-use hermes_substream::pb::hermes::{EditsPublished, EditsPublishedList};
+use hermes_substream::pb::hermes::{IpfsUri, IpfsUriList};
 use ipfs::{IpfsFetcher, IpfsSource};
 use prost::Message;
 use std::time::{Duration, Instant};
@@ -150,7 +151,7 @@ impl IpfsCacheSink {
 
     /// Get the hermes module this sink subscribes to.
     pub fn module() -> HermesModule {
-        HermesModule::EditsPublished
+        HermesModule::IpfsUris
     }
 }
 
@@ -170,75 +171,84 @@ impl Sink for IpfsCacheSink {
                 std::io::Error::new(std::io::ErrorKind::InvalidData, "Missing map output")
             })?;
 
-        // Decode the EditsPublishedList from the output
-        let edits_list = EditsPublishedList::decode(output.value.as_slice())?;
+        // Decode the IpfsUriList from the output
+        let uri_list = IpfsUriList::decode(output.value.as_slice())?;
 
         // Get block metadata
         let block_number = data.clock.as_ref().map(|c| c.number).unwrap_or(0);
         let cursor = data.cursor.clone();
-
-        let block_timestamp = data
-            .clock
-            .as_ref()
-            .and_then(|c| c.timestamp.as_ref())
-            .map(|t| t.seconds.to_string())
-            .unwrap_or_default();
-
-        let edit_count = edits_list.edits.len();
+        let edit_count = uri_list.uris.len();
 
         // Checkpoint log every 100 blocks
         if block_number.is_multiple_of(100) {
             info!(block = block_number, "Checkpoint");
         }
 
-        if edit_count > 0 {
-            info!(
-                event = "ipfs_cache.batch_start",
-                block_number = block_number,
-                cursor = %cursor,
-                edit_count = edit_count,
-                "Batch start"
-            );
-            info!(block = block_number, edits = edit_count, "Processing edits");
-
-            // Register all pending fetches for this block upfront
-            self.pending
-                .lock()
-                .await
-                .add_block(block_number, cursor.clone(), edit_count);
+        // Skip empty blocks entirely - no span created
+        if edit_count == 0 {
+            return Ok(());
         }
 
-        // Process each edit event
-        for edit in edits_list.edits {
+        // Create root span for this block - this becomes the transaction in Sentry.
+        // Child spans created while this span is entered will have it as their parent.
+        let block_span = info_span!(
+            "ipfs_cache.process_block",
+            block_number = block_number,
+            edit_count = edit_count,
+            "otel.status_code" = tracing::field::Empty,
+            "otel.status_message" = tracing::field::Empty
+        );
+        let _block_guard = block_span.enter();
+
+        info!(
+            event = "ipfs_cache.batch_start",
+            block_number = block_number,
+            edit_count = edit_count,
+            "Batch start"
+        );
+        info!(block = block_number, edits = edit_count, "Processing edits");
+
+        // Register all pending fetches for this block upfront
+        self.pending
+            .lock()
+            .await
+            .add_block(block_number, cursor.clone(), edit_count);
+
+        // Process each IPFS URI
+        for ipfs_uri in uri_list.uris {
             let permit = self.semaphore.clone().acquire_owned().await.unwrap();
             let cache = self.cache.clone();
             let ipfs = self.ipfs.clone();
             let pending = self.pending.clone();
-            let block_ts = block_timestamp.clone();
+            let block_str = block_number.to_string();
             let block_num = block_number;
 
-            let ipfs_hash = edit
-                .content_uri
+            let ipfs_hash = ipfs_uri
+                .uri
                 .strip_prefix("ipfs://")
                 .unwrap_or("")
                 .to_string();
+            let space_id = hex::encode(&ipfs_uri.space_id);
             let span = info_span!(
-                "ipfs_cache.fetch_edit",
+                "ipfs_cache.fetch_uri",
                 block_number = block_num,
-                uri = %edit.content_uri,
-                ipfs_hash = %ipfs_hash
+                space_id = %space_id,
+                uri = %ipfs_uri.uri,
+                ipfs_hash = %ipfs_hash,
+                source = %ipfs_uri.source
             );
             task::spawn(
                 async move {
-                    let uri = edit.content_uri.clone();
+                    let uri = ipfs_uri.uri.clone();
                     let ipfs_hash_for_log = ipfs_hash.clone();
                     let result =
-                        process_edit_event(edit, &cache, &ipfs, &block_ts, block_num).await;
+                        process_ipfs_uri(ipfs_uri, &cache, &ipfs, &block_str, block_num).await;
                     if let Err(e) = result {
                         if ipfs_hash_for_log.is_empty() {
                             error!(
                                 event = "ipfs_cache.fetch_failed",
                                 block_number = block_num,
+                                space_id = %space_id,
                                 uri = %uri,
                                 error = %e,
                                 "Failed to process edit event"
@@ -247,6 +257,7 @@ impl Sink for IpfsCacheSink {
                             error!(
                                 event = "ipfs_cache.fetch_failed",
                                 block_number = block_num,
+                                space_id = %space_id,
                                 uri = %uri,
                                 ipfs_hash = %ipfs_hash_for_log,
                                 tags.ipfs_hash = %ipfs_hash_for_log,
@@ -269,7 +280,6 @@ impl Sink for IpfsCacheSink {
                         info!(
                             event = "ipfs_cache.batch_end",
                             block_number = persist_block,
-                            cursor = %persist_cursor,
                             edit_count = total,
                             duration_ms = duration.as_millis(),
                             "Batch end"
@@ -309,36 +319,19 @@ impl Sink for IpfsCacheSink {
     }
 }
 
-/// Process a single edit event by fetching its IPFS content.
+/// Process a single IPFS URI by fetching its content.
 ///
-/// The `content_uri` field is pre-validated by hermes-substream.
-/// If empty, the edit contained no valid IPFS URI and is skipped.
-async fn process_edit_event(
-    edit: EditsPublished,
+/// The URI is pre-validated by hermes-substream (only valid IPFS URIs are included).
+async fn process_ipfs_uri(
+    ipfs_uri: IpfsUri,
     cache: &Arc<Mutex<Cache>>,
     ipfs: &Arc<dyn IpfsFetcher>,
-    block_timestamp: &str,
+    block_str: &str,
     block_number: u64,
 ) -> Result<(), CacheError> {
-    // content_uri is validated by hermes-substream - empty means no valid IPFS URI
-    if edit.content_uri.is_empty() {
-        let space_id = hex::encode(&edit.space_id);
-        let data_prefix_len = edit.data.len().min(64);
-        let data_prefix = hex::encode(&edit.data[..data_prefix_len]);
-
-        warn!(
-            space_id = %space_id,
-            block = block_number,
-            data_len = edit.data.len(),
-            data_prefix = %data_prefix,
-            "Edit published with invalid or non-IPFS content URI"
-        );
-        return Ok(());
-    }
-
-    let uri = edit.content_uri;
+    let uri = ipfs_uri.uri;
     let ipfs_hash = uri.strip_prefix("ipfs://").unwrap_or("").to_string();
-    let space_id = hex::encode(&edit.space_id);
+    let space_id = hex::encode(&ipfs_uri.space_id);
 
     debug!(
         uri = %uri,
@@ -353,25 +346,52 @@ async fn process_edit_event(
 
     let item = match result {
         Ok(bytes) => {
-            info!(
-                uri = %uri,
-                ipfs_hash = %ipfs_hash,
-                block = block_number,
-                bytes = bytes.len(),
-                "Cached IPFS content"
-            );
-            CacheItem {
-                uri,
-                data: Some(bytes),
-                block: block_timestamp.to_string(),
-                space_id,
-                is_errored: false,
+            // Validate by decoding with grc-20 (supports GRC2 and GRC2Z formats)
+            match decode_edit(&bytes) {
+                Ok(_edit) => {
+                    // Valid GRC-20 v2 format - store raw bytes
+                    info!(
+                        uri = %uri,
+                        ipfs_hash = %ipfs_hash,
+                        block = block_number,
+                        bytes = bytes.len(),
+                        "Cached IPFS content (GRC-20 v2 validated)"
+                    );
+                    CacheItem {
+                        uri,
+                        data: Some(bytes),
+                        block: block_str.to_string(),
+                        space_id,
+                        is_errored: false,
+                    }
+                }
+                Err(decode_error) => {
+                    // Invalid GRC-20 format - mark as errored
+                    warn!(
+                        uri = %uri,
+                        ipfs_hash = %ipfs_hash,
+                        tags.ipfs_hash = %ipfs_hash,
+                        space_id = %space_id,
+                        block = block_number,
+                        bytes = bytes.len(),
+                        error = %decode_error,
+                        "Invalid GRC-20 v2 format"
+                    );
+                    CacheItem {
+                        uri,
+                        data: None,
+                        block: block_str.to_string(),
+                        space_id,
+                        is_errored: true,
+                    }
+                }
             }
         }
         Err(error) => {
             if ipfs_hash.is_empty() {
                 warn!(
                     uri = %uri,
+                    space_id = %space_id,
                     block = block_number,
                     error = %error,
                     "Failed to fetch IPFS content"
@@ -381,6 +401,7 @@ async fn process_edit_event(
                     uri = %uri,
                     ipfs_hash = %ipfs_hash,
                     tags.ipfs_hash = %ipfs_hash,
+                    space_id = %space_id,
                     block = block_number,
                     error = %error,
                     "Failed to fetch IPFS content"
@@ -389,7 +410,7 @@ async fn process_edit_event(
             CacheItem {
                 uri,
                 data: None,
-                block: block_timestamp.to_string(),
+                block: block_str.to_string(),
                 space_id,
                 is_errored: true,
             }

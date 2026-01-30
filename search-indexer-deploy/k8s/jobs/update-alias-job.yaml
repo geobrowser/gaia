@@ -1,0 +1,67 @@
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: opensearch-update-alias
+  namespace: search
+  labels:
+    app: opensearch-admin
+    task: update-alias
+spec:
+  # Keep job history for debugging
+  ttlSecondsAfterFinished: 86400  # 24 hours
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+        app: opensearch-admin
+        task: update-alias
+    spec:
+      imagePullSecrets:
+      - name: regcred
+      restartPolicy: OnFailure
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: update-alias
+        image: registry.digitalocean.com/geo/search-admin:latest  # Update with your registry
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+          seccompProfile:
+            type: RuntimeDefault
+        env:
+        - name: OPENSEARCH_URL
+          valueFrom:
+            secretKeyRef:
+              name: opensearch-credentials
+              key: OPENSEARCH_URL
+        - name: INDEX_ALIAS
+          value: "entities"  # Default alias name
+        - name: TARGET_VERSION
+          value: "3"  # CHANGE THIS: Index version to point the alias to
+        - name: RUST_LOG
+          value: "info"
+        command:
+        - search-admin
+        - update-alias
+        - --version
+        - "$(TARGET_VERSION)"
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"

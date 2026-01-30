@@ -2,17 +2,18 @@ use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 
-use hermes_instrumentation::warn;
+#[cfg(test)]
+use grc_20::model::ContextEdge;
+use grc_20::{
+    decode_edit, model::Context, Edit as Grc20Edit, Id as Grc20Id, Op as Grc20Op, PropertyValue,
+    UnsetRelationField, Value as Grc20Value,
+};
 use hermes_schema::pb::knowledge::HermesEdit;
-use indexer_utils::id::transform_id_bytes;
 use uuid::Uuid;
-use wire::pb::grc20::op::Payload;
-use wire::pb::grc20::options;
 
 use crate::error::HandlerError;
 use crate::models::{
     entities::EntityItem,
-    properties::{DataType, PropertyItem},
     relations::{
         DeleteRelationItem, RelationOp, SetRelationItem, UnsetRelationItem, UpdateRelationItem,
     },
@@ -21,8 +22,9 @@ use crate::models::{
 
 /// Result of processing an edit message
 pub struct EditResult {
+    /// The edit ID (from HermesEdit.id)
+    pub edit_id: Uuid,
     pub entities: Vec<EntityItem>,
-    pub properties: Vec<PropertyItem>,
     pub values: Vec<ValueOp>,
     pub relations: Vec<RelationOp>,
 }
@@ -48,31 +50,75 @@ impl EditMetadata {
     }
 }
 
+/// Decode GRC2/GRC2Z payload bytes into a grc_20::Edit
+///
+/// The grc_20::decode_edit function handles both compressed (GRC2Z) and
+/// uncompressed (GRC2) formats internally. For compressed data, it returns
+/// owned strings; for uncompressed, it borrows from the input.
+fn decode_payload(payload: &[u8]) -> Result<Grc20Edit<'_>, HandlerError> {
+    if payload.is_empty() {
+        return Err(HandlerError::DecodeError("Empty payload".to_string()));
+    }
+
+    decode_edit(payload)
+        .map_err(|e| HandlerError::DecodeError(format!("GRC-20 decode error: {:?}", e)))
+}
+
+/// Convert a grc_20::Id (16 bytes) to a Uuid
+fn id_to_uuid(id: &Grc20Id) -> Uuid {
+    Uuid::from_bytes(*id)
+}
+
+/// Extract context metadata for grouping changes (GRC-20 Section 4.5).
+/// Returns (root_id, first_edge_type_id) from the context.
+fn extract_context(ctx: &Option<Context>) -> (Option<Uuid>, Option<Uuid>) {
+    match ctx {
+        Some(c) => {
+            let root_id = id_to_uuid(&c.root_id);
+            let edge_type_id = c.edges.first().map(|e| id_to_uuid(&e.type_id));
+            (Some(root_id), edge_type_id)
+        }
+        None => (None, None),
+    }
+}
+
 /// Process a HermesEdit message and return the extracted data
-pub fn handle_edit(
-    edit: &HermesEdit,
-    property_types: &mut HashMap<Uuid, DataType>,
-) -> Result<EditResult, HandlerError> {
+pub fn handle_edit(edit: &HermesEdit) -> Result<EditResult, HandlerError> {
+    let edit_id = parse_edit_id(&edit.id)?;
     let space_id = parse_space_id(edit.space_id.as_slice())?;
     let meta = EditMetadata::from_edit(edit);
 
-    // Extract all data from the edit
-    let entities = extract_entities(edit, &meta);
-    let properties = extract_properties(edit);
-    update_property_types(property_types, &properties);
-    let value_ops = extract_values(edit, &space_id, property_types);
-    let relation_ops = extract_relations(edit, &space_id);
+    // Decode the v2 payload bytes
+    let grc20_edit = decode_payload(&edit.payload)?;
+
+    // Extract all data from the decoded edit
+    let entities = extract_entities(&grc20_edit, &space_id, &meta);
+    let value_ops = extract_values(&grc20_edit, &space_id);
+    let relation_ops = extract_relations(&grc20_edit, &space_id);
 
     // Squash operations within this edit to resolve conflicts
     let values = squash_values(&value_ops);
     let relations = squash_relations(&relation_ops);
 
     Ok(EditResult {
+        edit_id,
         entities,
-        properties,
         values,
         relations,
     })
+}
+
+fn parse_edit_id(id_bytes: &[u8]) -> Result<Uuid, HandlerError> {
+    if id_bytes.len() != 16 {
+        return Err(HandlerError::DecodeError(format!(
+            "Invalid edit ID: expected 16 bytes, got {}",
+            id_bytes.len()
+        )));
+    }
+    let bytes: [u8; 16] = id_bytes.try_into().map_err(|_| {
+        HandlerError::DecodeError("Failed to convert edit ID bytes to array".to_string())
+    })?;
+    Ok(Uuid::from_bytes(bytes))
 }
 
 /// Squash value operations - last operation for each value ID wins
@@ -123,6 +169,8 @@ fn merge_relation_ops(existing: RelationOp, new: RelationOp) -> RelationOp {
             to_version_id: u.to_version_id.or(c.to_version_id),
             position: u.position.or(c.position),
             verified: u.verified.or(c.verified),
+            context_root_id: c.context_root_id,
+            context_edge_type_id: c.context_edge_type_id,
         }),
 
         // create -> delete: Delete wins
@@ -166,6 +214,8 @@ fn merge_relation_ops(existing: RelationOp, new: RelationOp) -> RelationOp {
             } else {
                 c.verified
             },
+            context_root_id: c.context_root_id,
+            context_edge_type_id: c.context_edge_type_id,
         }),
 
         // update -> create: Create wins (overwrites)
@@ -262,73 +312,55 @@ fn parse_space_id(space_id_bytes: &[u8]) -> Result<Uuid, HandlerError> {
     Ok(Uuid::from_bytes(bytes))
 }
 
-fn extract_entities(edit: &HermesEdit, meta: &EditMetadata) -> Vec<EntityItem> {
+fn extract_entities(edit: &Grc20Edit, _space_id: &Uuid, meta: &EditMetadata) -> Vec<EntityItem> {
     let mut entities = Vec::new();
     let mut seen = HashSet::new();
 
     for op in &edit.ops {
-        if let Some(payload) = &op.payload {
-            let ids_to_add: Vec<Uuid> = match payload {
-                Payload::UpdateEntity(entity) => {
-                    let mut ids = Vec::new();
-                    if let Ok(bytes) = transform_id_bytes(entity.id.clone()) {
-                        ids.push(Uuid::from_bytes(bytes));
-                    }
-                    for value in &entity.values {
-                        if let Ok(bytes) = transform_id_bytes(value.property.clone()) {
-                            ids.push(Uuid::from_bytes(bytes));
-                        }
-                    }
-                    ids
+        let ids_to_add: Vec<Uuid> = match op {
+            Grc20Op::CreateEntity(entity) => {
+                let mut ids = vec![id_to_uuid(&entity.id)];
+                // Add property IDs as entities
+                for pv in &entity.values {
+                    ids.push(id_to_uuid(&pv.property));
                 }
-                Payload::UnsetEntityValues(entity) => {
-                    let mut ids = Vec::new();
-                    if let Ok(bytes) = transform_id_bytes(entity.id.clone()) {
-                        ids.push(Uuid::from_bytes(bytes));
-                    }
-                    for prop in &entity.properties {
-                        if let Ok(bytes) = transform_id_bytes(prop.clone()) {
-                            ids.push(Uuid::from_bytes(bytes));
-                        }
-                    }
-                    ids
+                ids
+            }
+            Grc20Op::UpdateEntity(entity) => {
+                let mut ids = vec![id_to_uuid(&entity.id)];
+                // Add property IDs from set values
+                for pv in &entity.set_properties {
+                    ids.push(id_to_uuid(&pv.property));
                 }
-                Payload::CreateRelation(relation) => {
-                    let mut ids = Vec::new();
-                    for bytes_vec in [
-                        &relation.id,
-                        &relation.entity,
-                        &relation.r#type,
-                        &relation.from_entity,
-                        &relation.to_entity,
-                    ] {
-                        if let Ok(bytes) = transform_id_bytes(bytes_vec.clone()) {
-                            ids.push(Uuid::from_bytes(bytes));
-                        }
-                    }
-                    ids
-                }
-                Payload::DeleteRelation(relation_id) => {
-                    if let Ok(bytes) = transform_id_bytes(relation_id.clone()) {
-                        vec![Uuid::from_bytes(bytes)]
-                    } else {
-                        vec![]
-                    }
-                }
-                _ => vec![],
-            };
+                ids
+            }
+            Grc20Op::CreateRelation(relation) => {
+                let mut ids = vec![
+                    id_to_uuid(&relation.id),
+                    id_to_uuid(&relation.relation_type),
+                    id_to_uuid(&relation.from),
+                    id_to_uuid(&relation.to),
+                ];
+                // Add the reified entity ID
+                ids.push(id_to_uuid(&relation.entity_id()));
+                ids
+            }
+            Grc20Op::DeleteRelation(del) => {
+                vec![id_to_uuid(&del.id)]
+            }
+            _ => vec![],
+        };
 
-            for id in ids_to_add {
-                if !seen.contains(&id) {
-                    entities.push(EntityItem {
-                        id,
-                        created_at: meta.timestamp.clone(),
-                        created_at_block: meta.block_number.clone(),
-                        updated_at: meta.timestamp.clone(),
-                        updated_at_block: meta.block_number.clone(),
-                    });
-                    seen.insert(id);
-                }
+        for id in ids_to_add {
+            if !seen.contains(&id) {
+                entities.push(EntityItem {
+                    id,
+                    created_at: meta.timestamp.clone(),
+                    created_at_block: meta.block_number.clone(),
+                    updated_at: meta.timestamp.clone(),
+                    updated_at_block: meta.block_number.clone(),
+                });
+                seen.insert(id);
             }
         }
     }
@@ -336,323 +368,340 @@ fn extract_entities(edit: &HermesEdit, meta: &EditMetadata) -> Vec<EntityItem> {
     entities
 }
 
-fn extract_properties(edit: &HermesEdit) -> Vec<PropertyItem> {
-    let mut properties = Vec::new();
-    let mut seen = HashMap::new();
+/// Convert a grc_20::Value to a ValueOp with appropriate fields set
+fn value_to_value_op(
+    pv: &PropertyValue,
+    entity_id: Uuid,
+    space_id: Uuid,
+    context: &Option<Context>,
+) -> Option<ValueOp> {
+    let property_id = id_to_uuid(&pv.property);
+    let value_id = derive_value_id(&entity_id, &property_id, &space_id);
+    let (context_root_id, context_edge_type_id) = extract_context(context);
 
-    for op in &edit.ops {
-        if let Some(Payload::CreateProperty(property)) = &op.payload {
-            if let Ok(bytes) = transform_id_bytes(property.id.clone()) {
-                let id = Uuid::from_bytes(bytes);
-                if let Ok(data_type) = DataType::try_from(property.data_type) {
-                    seen.insert(id, PropertyItem { id, data_type });
-                }
+    let mut op = ValueOp {
+        id: value_id,
+        change_type: ValueChangeType::Set,
+        entity_id,
+        property_id,
+        space_id,
+        language: None,
+        unit: None,
+        text: None,
+        decimal: None,
+        boolean: None,
+        time: None,
+        point: None,
+        integer: None,
+        float: None,
+        bytes: None,
+        date: None,
+        datetime: None,
+        schedule: None,
+        embedding: None,
+        time_utc: None,
+        datetime_utc: None,
+        context_root_id,
+        context_edge_type_id,
+    };
+
+    match &pv.value {
+        Grc20Value::Bool(v) => {
+            op.boolean = Some(*v);
+        }
+        Grc20Value::Int64 { value, unit } => {
+            op.integer = Some(*value);
+            if let Some(unit_id) = unit {
+                op.unit = Some(id_to_uuid(unit_id).to_string());
             }
+        }
+        Grc20Value::Float64 { value, unit } => {
+            op.float = Some(*value);
+            if let Some(unit_id) = unit {
+                op.unit = Some(id_to_uuid(unit_id).to_string());
+            }
+        }
+        Grc20Value::Decimal {
+            exponent,
+            mantissa,
+            unit,
+        } => {
+            // Convert decimal to string representation for storage
+            let decimal_str = format_decimal_mantissa(mantissa, *exponent);
+            op.decimal = Some(decimal_str);
+            if let Some(unit_id) = unit {
+                op.unit = Some(id_to_uuid(unit_id).to_string());
+            }
+        }
+        Grc20Value::Text { value, language } => {
+            op.text = Some(value.to_string());
+            if let Some(lang_id) = language {
+                op.language = Some(id_to_uuid(lang_id).to_string());
+            }
+        }
+        Grc20Value::Bytes(v) => {
+            op.bytes = Some(v.to_vec());
+        }
+        Grc20Value::Date(value) => {
+            op.date = Some(value.to_string());
+        }
+        Grc20Value::Time(value) => {
+            let time_str = value.to_string();
+            op.time = Some(time_str.clone());
+            op.time_utc = Some(time_str);
+        }
+        Grc20Value::Datetime(value) => {
+            let datetime_str = value.to_string();
+            op.datetime = Some(datetime_str.clone());
+            op.datetime_utc = Some(datetime_str);
+        }
+        Grc20Value::Schedule(v) => {
+            // Store as JSON string
+            op.schedule = Some(serde_json::Value::String(v.to_string()));
+        }
+        Grc20Value::Point { lon, lat, alt } => {
+            // Format as "lon,lat" or "lon,lat,alt"
+            let point_str = match alt {
+                Some(a) => format!("{},{},{}", lon, lat, a),
+                None => format!("{},{}", lon, lat),
+            };
+            op.point = Some(point_str);
+        }
+        Grc20Value::Rect { .. } => {
+            // Rect is not stored in kg-indexer yet.
+        }
+        Grc20Value::Embedding {
+            sub_type,
+            dims,
+            data,
+        } => {
+            // Store embedding as JSON with metadata
+            let embedding_json = serde_json::json!({
+                "sub_type": format!("{:?}", sub_type),
+                "dims": dims,
+                "data": hex::encode(data.as_ref()),
+            });
+            op.embedding = Some(embedding_json);
         }
     }
 
-    properties.extend(seen.into_values());
-    properties
+    Some(op)
 }
 
-fn update_property_types(
-    property_types: &mut HashMap<Uuid, DataType>,
-    properties: &[PropertyItem],
-) {
-    for property in properties {
-        if let Some(existing) = property_types.get(&property.id) {
-            if *existing != property.data_type {
-                warn!(
-                    property_id = %property.id,
-                    existing_type = %existing,
-                    new_type = %property.data_type,
-                    "Attempted to change property data type; keeping existing"
-                );
-            }
-            continue;
+/// Format a DecimalMantissa with exponent as a decimal string
+fn format_decimal_mantissa(mantissa: &grc_20::DecimalMantissa, exponent: i32) -> String {
+    use grc_20::DecimalMantissa;
+
+    match mantissa {
+        DecimalMantissa::I64(val) => format_decimal_i64(*val, exponent),
+        DecimalMantissa::Big(bytes) => {
+            // For big integers, just store as hex for now
+            // TODO: Convert big-endian two's complement to decimal string
+            format!("0x{}", hex::encode(bytes.as_ref()))
         }
-        property_types.insert(property.id, property.data_type);
     }
 }
 
-fn extract_values(
-    edit: &HermesEdit,
-    space_id: &Uuid,
-    property_types: &HashMap<Uuid, DataType>,
-) -> Vec<ValueOp> {
+/// Format an i64 mantissa with exponent as a decimal string
+fn format_decimal_i64(mantissa: i64, exponent: i32) -> String {
+    if exponent >= 0 {
+        // Positive exponent: multiply by 10^exponent
+        let multiplier = 10i64.pow(exponent as u32);
+        match mantissa.checked_mul(multiplier) {
+            Some(result) => result.to_string(),
+            None => format!("{}e{}", mantissa, exponent), // Fallback to scientific notation
+        }
+    } else {
+        // Negative exponent: divide by 10^|exponent|
+        let abs_exp = (-exponent) as usize;
+        let mantissa_str = mantissa.abs().to_string();
+        let sign = if mantissa < 0 { "-" } else { "" };
+
+        if abs_exp >= mantissa_str.len() {
+            // Need leading zeros after decimal point
+            let zeros = abs_exp - mantissa_str.len();
+            format!("{}0.{}{}", sign, "0".repeat(zeros), mantissa_str)
+        } else {
+            // Insert decimal point within the number
+            let decimal_pos = mantissa_str.len() - abs_exp;
+            format!(
+                "{}{}.{}",
+                sign,
+                &mantissa_str[..decimal_pos],
+                &mantissa_str[decimal_pos..]
+            )
+        }
+    }
+}
+
+fn extract_values(edit: &Grc20Edit, space_id: &Uuid) -> Vec<ValueOp> {
     let mut value_ops = Vec::new();
 
     for op in &edit.ops {
-        if let Some(payload) = &op.payload {
-            match payload {
-                Payload::UpdateEntity(entity) => {
-                    let entity_id = match transform_id_bytes(entity.id.clone()) {
-                        Ok(bytes) => Uuid::from_bytes(bytes),
-                        Err(_) => continue,
-                    };
-
-                    for value in &entity.values {
-                        let property_id = match transform_id_bytes(value.property.clone()) {
-                            Ok(bytes) => Uuid::from_bytes(bytes),
-                            Err(_) => continue,
-                        };
-
-                        let (language, unit) = extract_options(&value.options);
-                        let value_id = derive_value_id(&entity_id, &property_id, space_id);
-
-                        let data_type = match property_types.get(&property_id) {
-                            Some(data_type) => *data_type,
-                            None => {
-                                warn!(
-                                    property_id = %property_id,
-                                    entity_id = %entity_id,
-                                    "Property data type not found; skipping value"
-                                );
-                                continue;
-                            }
-                        };
-
-                        let base_op = ValueOp {
-                            id: value_id,
-                            change_type: ValueChangeType::Set,
-                            entity_id,
-                            property_id,
-                            space_id: *space_id,
-                            language,
-                            unit,
-                            string: None,
-                            number: None,
-                            boolean: None,
-                            time: None,
-                            point: None,
-                        };
-
-                        if let Some(populated) =
-                            populate_value_fields_by_datatype(base_op, data_type, &value.value)
-                        {
-                            value_ops.push(populated);
-                        }
+        match op {
+            Grc20Op::CreateEntity(entity) => {
+                let entity_id = id_to_uuid(&entity.id);
+                for pv in &entity.values {
+                    if let Some(value_op) =
+                        value_to_value_op(pv, entity_id, *space_id, &entity.context)
+                    {
+                        value_ops.push(value_op);
                     }
                 }
-                Payload::UnsetEntityValues(entity) => {
-                    let entity_id = match transform_id_bytes(entity.id.clone()) {
-                        Ok(bytes) => Uuid::from_bytes(bytes),
-                        Err(_) => continue,
-                    };
-
-                    for prop in &entity.properties {
-                        let property_id = match transform_id_bytes(prop.clone()) {
-                            Ok(bytes) => Uuid::from_bytes(bytes),
-                            Err(_) => continue,
-                        };
-
-                        let value_id = derive_value_id(&entity_id, &property_id, space_id);
-
-                        value_ops.push(ValueOp {
-                            id: value_id,
-                            change_type: ValueChangeType::Delete,
-                            entity_id,
-                            property_id,
-                            space_id: *space_id,
-                            language: None,
-                            unit: None,
-                            string: None,
-                            number: None,
-                            boolean: None,
-                            time: None,
-                            point: None,
-                        });
-                    }
-                }
-                _ => {}
             }
+            Grc20Op::UpdateEntity(entity) => {
+                let entity_id = id_to_uuid(&entity.id);
+                let (context_root_id, context_edge_type_id) = extract_context(&entity.context);
+
+                // Handle unset values first
+                for unset in &entity.unset_values {
+                    let property_id = id_to_uuid(&unset.property);
+                    let value_id = derive_value_id(&entity_id, &property_id, space_id);
+
+                    value_ops.push(ValueOp {
+                        id: value_id,
+                        change_type: ValueChangeType::Delete,
+                        entity_id,
+                        property_id,
+                        space_id: *space_id,
+                        language: None,
+                        unit: None,
+                        text: None,
+                        decimal: None,
+                        boolean: None,
+                        time: None,
+                        point: None,
+                        integer: None,
+                        float: None,
+                        bytes: None,
+                        date: None,
+                        datetime: None,
+                        schedule: None,
+                        embedding: None,
+                        time_utc: None,
+                        datetime_utc: None,
+                        context_root_id,
+                        context_edge_type_id,
+                    });
+                }
+
+                // Handle set values
+                for pv in &entity.set_properties {
+                    if let Some(value_op) =
+                        value_to_value_op(pv, entity_id, *space_id, &entity.context)
+                    {
+                        value_ops.push(value_op);
+                    }
+                }
+            }
+            _ => {}
         }
     }
 
     value_ops
 }
 
-fn populate_value_fields_by_datatype(
-    mut base_op: ValueOp,
-    data_type: DataType,
-    raw_value: &str,
-) -> Option<ValueOp> {
-    match data_type {
-        DataType::String | DataType::Relation => {
-            base_op.string = Some(raw_value.to_string());
-        }
-        DataType::Number => {
-            if let Ok(num) = raw_value.parse::<f64>() {
-                base_op.number = Some(num);
-            } else {
-                warn!(
-                    property_id = %base_op.property_id,
-                    entity_id = %base_op.entity_id,
-                    value = raw_value,
-                    "Unable to parse number value; skipping"
-                );
-                return None;
-            }
-        }
-        DataType::Boolean => match raw_value {
-            "0" => base_op.boolean = Some(false),
-            "1" => base_op.boolean = Some(true),
-            _ => {
-                warn!(
-                    property_id = %base_op.property_id,
-                    entity_id = %base_op.entity_id,
-                    value = raw_value,
-                    "Unable to parse boolean value; skipping"
-                );
-                return None;
-            }
-        },
-        DataType::Time => {
-            base_op.time = Some(raw_value.to_string());
-        }
-        DataType::Point => {
-            base_op.point = Some(raw_value.to_string());
-        }
-    }
-
-    Some(base_op)
-}
-
-fn extract_relations(edit: &HermesEdit, space_id: &Uuid) -> Vec<RelationOp> {
+fn extract_relations(edit: &Grc20Edit, space_id: &Uuid) -> Vec<RelationOp> {
     let mut relation_ops = Vec::new();
 
     for op in &edit.ops {
-        if let Some(payload) = &op.payload {
-            match payload {
-                Payload::CreateRelation(relation) => {
-                    let relation_id = match transform_id_bytes(relation.id.clone()) {
-                        Ok(bytes) => Uuid::from_bytes(bytes),
-                        Err(_) => continue,
-                    };
-                    let entity_id = match transform_id_bytes(relation.entity.clone()) {
-                        Ok(bytes) => Uuid::from_bytes(bytes),
-                        Err(_) => continue,
-                    };
-                    let type_id = match transform_id_bytes(relation.r#type.clone()) {
-                        Ok(bytes) => Uuid::from_bytes(bytes),
-                        Err(_) => continue,
-                    };
-                    let from_id = match transform_id_bytes(relation.from_entity.clone()) {
-                        Ok(bytes) => Uuid::from_bytes(bytes),
-                        Err(_) => continue,
-                    };
-                    let to_id = match transform_id_bytes(relation.to_entity.clone()) {
-                        Ok(bytes) => Uuid::from_bytes(bytes),
-                        Err(_) => continue,
-                    };
+        match op {
+            Grc20Op::CreateRelation(relation) => {
+                let relation_id = id_to_uuid(&relation.id);
+                let entity_id = id_to_uuid(&relation.entity_id());
+                let type_id = id_to_uuid(&relation.relation_type);
+                let from_id = id_to_uuid(&relation.from);
+                let to_id = id_to_uuid(&relation.to);
 
-                    let to_space = relation
-                        .to_space
-                        .clone()
-                        .and_then(|s| transform_id_bytes(s).ok())
-                        .map(|s| Uuid::from_bytes(s).to_string());
+                let from_space = relation.from_space.map(|id| id_to_uuid(&id).to_string());
+                let from_version = relation.from_version.map(|id| id_to_uuid(&id).to_string());
+                let to_space = relation.to_space.map(|id| id_to_uuid(&id).to_string());
+                let to_version = relation.to_version.map(|id| id_to_uuid(&id).to_string());
+                let (context_root_id, context_edge_type_id) = extract_context(&relation.context);
 
-                    let from_space = relation
-                        .from_space
-                        .clone()
-                        .and_then(|s| transform_id_bytes(s).ok())
-                        .map(|s| Uuid::from_bytes(s).to_string());
+                relation_ops.push(RelationOp::Create(SetRelationItem {
+                    id: relation_id,
+                    entity_id,
+                    space_id: *space_id,
+                    position: relation.position.as_ref().map(|s| s.to_string()),
+                    type_id,
+                    from_id,
+                    from_space_id: from_space,
+                    from_version_id: from_version,
+                    to_id,
+                    to_space_id: to_space,
+                    to_version_id: to_version,
+                    verified: None, // v2 doesn't have verified field on CreateRelation
+                    context_root_id,
+                    context_edge_type_id,
+                }));
+            }
+            Grc20Op::UpdateRelation(updated) => {
+                let relation_id = id_to_uuid(&updated.id);
 
-                    let from_version = relation
-                        .from_version
-                        .clone()
-                        .and_then(|s| transform_id_bytes(s).ok())
-                        .map(|s| Uuid::from_bytes(s).to_string());
+                let from_space = updated.from_space.map(|id| id_to_uuid(&id).to_string());
+                let from_version = updated.from_version.map(|id| id_to_uuid(&id).to_string());
+                let to_space = updated.to_space.map(|id| id_to_uuid(&id).to_string());
+                let to_version = updated.to_version.map(|id| id_to_uuid(&id).to_string());
 
-                    let to_version = relation
-                        .to_version
-                        .clone()
-                        .and_then(|s| transform_id_bytes(s).ok())
-                        .map(|s| Uuid::from_bytes(s).to_string());
+                // Check if any fields are being unset
+                let has_unset = !updated.unset.is_empty();
 
-                    relation_ops.push(RelationOp::Create(SetRelationItem {
-                        id: relation_id,
-                        entity_id,
-                        space_id: *space_id,
-                        position: relation.position.clone(),
-                        type_id,
-                        from_id,
-                        from_space_id: from_space,
-                        from_version_id: from_version,
-                        to_id,
-                        to_space_id: to_space,
-                        to_version_id: to_version,
-                        verified: relation.verified,
-                    }));
-                }
-                Payload::UpdateRelation(updated) => {
-                    let relation_id = match transform_id_bytes(updated.id.clone()) {
-                        Ok(bytes) => Uuid::from_bytes(bytes),
-                        Err(_) => continue,
-                    };
-
-                    let to_space = updated
-                        .to_space
-                        .clone()
-                        .and_then(|s| transform_id_bytes(s).ok())
-                        .map(|s| Uuid::from_bytes(s).to_string());
-
-                    let from_space = updated
-                        .from_space
-                        .clone()
-                        .and_then(|s| transform_id_bytes(s).ok())
-                        .map(|s| Uuid::from_bytes(s).to_string());
-
-                    let from_version = updated
-                        .from_version
-                        .clone()
-                        .and_then(|s| transform_id_bytes(s).ok())
-                        .map(|s| Uuid::from_bytes(s).to_string());
-
-                    let to_version = updated
-                        .to_version
-                        .clone()
-                        .and_then(|s| transform_id_bytes(s).ok())
-                        .map(|s| Uuid::from_bytes(s).to_string());
-
-                    relation_ops.push(RelationOp::Update(UpdateRelationItem {
-                        id: relation_id,
-                        space_id: *space_id,
-                        position: updated.position.clone(),
-                        verified: updated.verified,
-                        to_space_id: to_space,
-                        from_space_id: from_space,
-                        from_version_id: from_version,
-                        to_version_id: to_version,
-                    }));
-                }
-                Payload::UnsetRelationFields(unset) => {
-                    let relation_id = match transform_id_bytes(unset.id.clone()) {
-                        Ok(bytes) => Uuid::from_bytes(bytes),
-                        Err(_) => continue,
-                    };
-
+                if has_unset {
+                    // Convert unset fields to our UnsetRelationItem
                     relation_ops.push(RelationOp::Unset(UnsetRelationItem {
                         id: relation_id,
                         space_id: *space_id,
-                        from_space_id: unset.from_space,
-                        from_version_id: unset.from_version,
-                        to_space_id: unset.to_space,
-                        to_version_id: unset.to_version,
-                        position: unset.position,
-                        verified: unset.verified,
+                        from_space_id: updated
+                            .unset
+                            .contains(&UnsetRelationField::FromSpace)
+                            .then_some(true),
+                        from_version_id: updated
+                            .unset
+                            .contains(&UnsetRelationField::FromVersion)
+                            .then_some(true),
+                        to_space_id: updated
+                            .unset
+                            .contains(&UnsetRelationField::ToSpace)
+                            .then_some(true),
+                        to_version_id: updated
+                            .unset
+                            .contains(&UnsetRelationField::ToVersion)
+                            .then_some(true),
+                        position: updated
+                            .unset
+                            .contains(&UnsetRelationField::Position)
+                            .then_some(true),
+                        verified: None,
                     }));
                 }
-                Payload::DeleteRelation(relation_id_bytes) => {
-                    if let Ok(bytes) = transform_id_bytes(relation_id_bytes.clone()) {
-                        relation_ops.push(RelationOp::Delete(DeleteRelationItem {
-                            id: Uuid::from_bytes(bytes),
-                            space_id: *space_id,
-                        }));
-                    }
+
+                // If there are any set fields, emit an Update op
+                if from_space.is_some()
+                    || from_version.is_some()
+                    || to_space.is_some()
+                    || to_version.is_some()
+                    || updated.position.is_some()
+                {
+                    relation_ops.push(RelationOp::Update(UpdateRelationItem {
+                        id: relation_id,
+                        space_id: *space_id,
+                        position: updated.position.as_ref().map(|s| s.to_string()),
+                        verified: None,
+                        to_space_id: to_space,
+                        from_space_id: from_space,
+                        from_version_id: from_version,
+                        to_version_id: to_version,
+                    }));
                 }
-                _ => {}
             }
+            Grc20Op::DeleteRelation(del) => {
+                relation_ops.push(RelationOp::Delete(DeleteRelationItem {
+                    id: id_to_uuid(&del.id),
+                    space_id: *space_id,
+                }));
+            }
+            _ => {}
         }
     }
 
@@ -673,38 +722,6 @@ fn derive_value_id(entity_id: &Uuid, property_id: &Uuid, space_id: &Uuid) -> Uui
     Uuid::from_bytes(bytes)
 }
 
-fn extract_options(options: &Option<wire::pb::grc20::Options>) -> (Option<String>, Option<String>) {
-    if let Some(opts) = options {
-        if let Some(value) = &opts.value {
-            match value {
-                options::Value::Text(text_opts) => {
-                    let language = text_opts
-                        .language
-                        .as_ref()
-                        .and_then(|lang| String::from_utf8(lang.clone()).ok());
-                    (language, None)
-                }
-                options::Value::Number(number_opts) => {
-                    let unit = number_opts.unit.as_ref().and_then(|unit_bytes| {
-                        match transform_id_bytes(unit_bytes.clone()) {
-                            Ok(uuid_bytes) => {
-                                let uuid = Uuid::from_bytes(uuid_bytes);
-                                Some(uuid.to_string())
-                            }
-                            Err(_) => None,
-                        }
-                    });
-                    (None, unit)
-                }
-            }
-        } else {
-            (None, None)
-        }
-    } else {
-        (None, None)
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -718,11 +735,22 @@ mod tests {
             space_id: Uuid::new_v4(),
             language: None,
             unit: None,
-            string: value,
-            number: None,
+            text: value,
+            decimal: None,
             boolean: None,
             time: None,
             point: None,
+            integer: None,
+            float: None,
+            bytes: None,
+            date: None,
+            datetime: None,
+            schedule: None,
+            embedding: None,
+            time_utc: None,
+            datetime_utc: None,
+            context_root_id: None,
+            context_edge_type_id: None,
         }
     }
 
@@ -740,6 +768,8 @@ mod tests {
             to_version_id: None,
             position: None,
             verified: None,
+            context_root_id: None,
+            context_edge_type_id: None,
         }
     }
 
@@ -819,7 +849,7 @@ mod tests {
         let result = squash_values(&ops);
         assert_eq!(result.len(), 1);
         assert!(matches!(result[0].change_type, ValueChangeType::Set));
-        assert_eq!(result[0].string, Some("recreated".into()));
+        assert_eq!(result[0].text, Some("recreated".into()));
     }
 
     #[test]
@@ -833,7 +863,7 @@ mod tests {
         let result = squash_values(&ops);
         assert_eq!(result.len(), 1);
         // Last one wins
-        assert_eq!(result[0].string, Some("third".into()));
+        assert_eq!(result[0].text, Some("third".into()));
     }
 
     #[test]
@@ -867,10 +897,10 @@ mod tests {
         assert!(matches!(id1_op.change_type, ValueChangeType::Delete));
 
         let id2_op = result.iter().find(|op| op.id == id2).unwrap();
-        assert_eq!(id2_op.string, Some("v2-updated".into()));
+        assert_eq!(id2_op.text, Some("v2-updated".into()));
 
         let id3_op = result.iter().find(|op| op.id == id3).unwrap();
-        assert_eq!(id3_op.string, Some("v3".into()));
+        assert_eq!(id3_op.text, Some("v3".into()));
     }
 
     // ===================
@@ -1098,5 +1128,77 @@ mod tests {
         // id2 should be Delete
         let id2_op = result.iter().find(|op| op.id() == id2).unwrap();
         assert!(matches!(id2_op, RelationOp::Delete(_)));
+    }
+
+    // ===================
+    // Context extraction tests
+    // ===================
+
+    #[test]
+    fn test_extract_context_none() {
+        let (root_id, edge_type_id) = extract_context(&None);
+        assert!(root_id.is_none());
+        assert!(edge_type_id.is_none());
+    }
+
+    #[test]
+    fn test_extract_context_with_edges() {
+        let root_id: [u8; 16] = [1; 16];
+        let edge_type_id: [u8; 16] = [2; 16];
+        let to_entity_id: [u8; 16] = [3; 16];
+
+        let context = Context {
+            root_id,
+            edges: vec![ContextEdge {
+                type_id: edge_type_id,
+                to_entity_id,
+            }],
+        };
+
+        let (extracted_root, extracted_edge_type) = extract_context(&Some(context));
+
+        assert_eq!(extracted_root, Some(Uuid::from_bytes(root_id)));
+        assert_eq!(extracted_edge_type, Some(Uuid::from_bytes(edge_type_id)));
+    }
+
+    #[test]
+    fn test_extract_context_empty_edges() {
+        let root_id: [u8; 16] = [1; 16];
+
+        let context = Context {
+            root_id,
+            edges: vec![],
+        };
+
+        let (extracted_root, extracted_edge_type) = extract_context(&Some(context));
+
+        assert_eq!(extracted_root, Some(Uuid::from_bytes(root_id)));
+        assert!(extracted_edge_type.is_none());
+    }
+
+    #[test]
+    fn test_extract_context_multiple_edges_uses_first() {
+        let root_id: [u8; 16] = [1; 16];
+        let first_edge_type: [u8; 16] = [2; 16];
+        let second_edge_type: [u8; 16] = [3; 16];
+
+        let context = Context {
+            root_id,
+            edges: vec![
+                ContextEdge {
+                    type_id: first_edge_type,
+                    to_entity_id: [4; 16],
+                },
+                ContextEdge {
+                    type_id: second_edge_type,
+                    to_entity_id: [5; 16],
+                },
+            ],
+        };
+
+        let (_, extracted_edge_type) = extract_context(&Some(context));
+
+        // Should use first edge's type_id
+        assert_eq!(extracted_edge_type, Some(Uuid::from_bytes(first_edge_type)));
     }
 }

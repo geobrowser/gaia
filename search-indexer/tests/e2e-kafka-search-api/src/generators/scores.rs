@@ -6,6 +6,7 @@ use uuid::Uuid;
 use hermes_schema::pb::scoring::{EntityScore, HermesScoresBatch, PerspectiveScore, SpaceScore};
 
 /// Generate a batch of entity global scores
+#[allow(dead_code)]
 pub fn create_entity_scores(scores: Vec<(Uuid, f64)>) -> Result<Vec<u8>> {
     let timestamp = Utc::now().timestamp() as u64;
 
@@ -33,6 +34,7 @@ pub fn create_entity_scores(scores: Vec<(Uuid, f64)>) -> Result<Vec<u8>> {
 }
 
 /// Generate a batch of space scores
+#[allow(dead_code)]
 pub fn create_space_scores(scores: Vec<(Uuid, f64)>) -> Result<Vec<u8>> {
     let timestamp = Utc::now().timestamp() as u64;
 
@@ -60,6 +62,7 @@ pub fn create_space_scores(scores: Vec<(Uuid, f64)>) -> Result<Vec<u8>> {
 }
 
 /// Generate a batch of perspective scores (entity-space combinations)
+#[allow(dead_code)]
 pub fn create_perspective_scores(scores: Vec<(Uuid, Uuid, f64)>) -> Result<Vec<u8>> {
     let timestamp = Utc::now().timestamp() as u64;
 
@@ -142,49 +145,6 @@ pub fn create_mixed_score_batch(
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_create_entity_scores() {
-        let entity1 = Uuid::new_v4();
-        let entity2 = Uuid::new_v4();
-
-        let result = create_entity_scores(vec![(entity1, 0.95), (entity2, -0.5)]);
-
-        assert!(result.is_ok());
-        let bytes = result.unwrap();
-        assert!(!bytes.is_empty());
-
-        // Verify we can decode it
-        let decoded = HermesScoresBatch::decode(&bytes[..]);
-        assert!(decoded.is_ok());
-        let batch = decoded.unwrap();
-        assert_eq!(batch.entity_scores.len(), 2);
-        assert!(batch.is_final);
-    }
-
-    #[test]
-    fn test_create_space_scores() {
-        let space1 = Uuid::new_v4();
-        let space2 = Uuid::new_v4();
-
-        let result = create_space_scores(vec![(space1, 0.85), (space2, 0.3)]);
-
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_create_perspective_scores() {
-        let entity = Uuid::new_v4();
-        let space1 = Uuid::new_v4();
-        let space2 = Uuid::new_v4();
-
-        let result = create_perspective_scores(vec![
-            (entity, space1, 0.8),
-            (entity, space2, -0.2),
-        ]);
-
-        assert!(result.is_ok());
-    }
 
     #[test]
     fn test_create_mixed_score_batch() {

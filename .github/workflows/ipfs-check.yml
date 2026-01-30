@@ -2,11 +2,11 @@ name: IPFS Check
 
 on:
   push:
-    branches: [main, develop]
+    branches: [main, dev]
     paths:
       - 'ipfs/**'
   pull_request:
-    branches: [main, develop]
+    branches: [main, dev]
     paths:
       - 'ipfs/**'
 

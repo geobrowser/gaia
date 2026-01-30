@@ -1,0 +1,138 @@
+# =============================================================================
+# Search Indexer Deployment
+# =============================================================================
+# Consumes messages from Kafka and indexes them into OpenSearch
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: search-indexer
+  namespace: search
+  labels:
+    app: search-indexer
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: search-indexer
+  template:
+    metadata:
+      labels:
+        app: search-indexer
+    spec:
+      imagePullSecrets:
+        - name: regcred
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        fsGroup: 1000
+      containers:
+        - name: search-indexer
+          image: registry.digitalocean.com/geo/search-indexer:latest
+          imagePullPolicy: Always
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop:
+                - ALL
+          env:
+            # OpenSearch connection (managed DigitalOcean OpenSearch)
+            - name: OPENSEARCH_URL
+              valueFrom:
+                secretKeyRef:
+                  name: opensearch-credentials
+                  key: OPENSEARCH_URL
+            # Index version (defaults to 0 if not set)
+            - name: ENTITIES_INDEX_VERSION
+              value: "2"
+            # Kafka connection (managed Kafka with SSL)
+            - name: KAFKA_BROKER
+              valueFrom:
+                secretKeyRef:
+                  name: kafka-credentials
+                  key: KAFKA_BROKER
+            - name: KAFKA_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: kafka-credentials
+                  key: KAFKA_USERNAME
+            - name: KAFKA_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: kafka-credentials
+                  key: KAFKA_PASSWORD
+            - name: KAFKA_SSL_CA_PEM
+              valueFrom:
+                secretKeyRef:
+                  name: kafka-credentials
+                  key: KAFKA_SSL_CA_PEM
+            # Kafka consumer configuration
+            - name: KAFKA_BATCH_SIZE
+              value: "50"
+            - name: KAFKA_BATCH_TIMEOUT_MS
+              value: "1000"
+            # Logging
+            - name: RUST_LOG
+              value: "info"
+            # Sentry telemetry and monitoring
+            - name: SENTRY_DSN
+              valueFrom:
+                secretKeyRef:
+                  name: search-indexer-secrets
+                  key: SENTRY_DSN
+                  optional: true
+            - name: SENTRY_ENVIRONMENT
+              value: "production"
+            - name: SENTRY_RELEASE
+              value: "search-indexer@1.0.0"
+            - name: SENTRY_TRACES_SAMPLE_RATE
+              value: "0.1"
+            - name: SENTRY_SEND_DEFAULT_PII
+              value: "false"
+            - name: SENTRY_DEBUG
+              value: "false"
+          ports:
+            - name: health
+              containerPort: 8080
+              protocol: TCP
+          resources:
+            requests:
+              memory: "512Mi"
+              cpu: "100m"
+            limits:
+              memory: "768Mi"
+              cpu: "500m"
+          # Liveness probe - checks if the process is alive and can respond to HTTP requests
+          # Used by Kubernetes to restart the container if it becomes unresponsive
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: health
+            initialDelaySeconds: 30
+            periodSeconds: 30
+            timeoutSeconds: 5
+            failureThreshold: 3
+          # Readiness probe - checks if the service is ready to accept traffic
+          # Verifies healthy OpenSearch connectivity before routing traffic to the pod
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: health
+            initialDelaySeconds: 10
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+      restartPolicy: Always
+---
+# Optional: Secret for sensitive configuration
+# Create with: kubectl create secret generic search-indexer-secrets \
+#   --from-literal=SENTRY_DSN='https://...@o0.ingest.sentry.io/...' \
+#   --namespace=search
+apiVersion: v1
+kind: Secret
+metadata:
+  name: search-indexer-secrets
+  namespace: search
+type: Opaque
+stringData:
+  SENTRY_DSN: ""  # Set via kubectl or CI/CD
+

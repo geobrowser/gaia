@@ -1,17 +1,18 @@
-import { swaggerUI } from "@hono/swagger-ui"
-import { Duration, Effect, Either, Layer, Schedule, Schema } from "effect"
-import { Hono } from "hono"
-import { openAPISpecs } from "hono-openapi"
-import { compress } from "hono/compress"
-import { cors } from "hono/cors"
-import { health } from "./src/health"
-import { graphqlServer, graphqlServerV2 } from "./src/kg/postgraphile"
-import { createSearchRouter } from "./src/search"
-import { Environment, EnvironmentLive, make as makeEnvironment } from "./src/services/environment"
-import { uploadEdit, uploadFile, uploadFileAlternativeGateway } from "./src/services/ipfs"
-import { OpenSearchClient } from "./src/services/search"
-import { make as makeStorage, Storage } from "./src/services/storage/storage"
-import { getPublishEditCalldata } from "./src/utils/calldata"
+import {swaggerUI} from "@hono/swagger-ui"
+import {Effect, Either} from "effect"
+import {Hono} from "hono"
+import {compress} from "hono/compress"
+import {cors} from "hono/cors"
+import {describeRoute, openAPISpecs} from "hono-openapi"
+import {health} from "./src/health"
+import {graphqlServer} from "./src/kg/postgraphile"
+import {canonicalRequestLogging, requestId} from "./src/middleware/requestLogging"
+import {createSearchRouter} from "./src/search"
+import {uploadEdit, uploadFile} from "./src/services/ipfs"
+import {runtime} from "./src/services/runtime"
+import {OpenSearchClient} from "./src/services/search"
+import {db} from "./src/services/storage/storage"
+import {createVersionedRouter} from "./src/versioned"
 
 /**
  * Currently hand-rolling a compression polyfill until Bun implements
@@ -19,16 +20,24 @@ import { getPublishEditCalldata } from "./src/utils/calldata"
  * https://github.com/oven-sh/bun/issues/1723
  */
 import "./src/compression-polyfill"
-import { NodeSdkLive } from "./src/services/telemetry"
-import { deployPersonalSpace } from "./src/space/deploy-personal-space"
-import { deployPublicSpace } from "./src/space/deploy-public-space"
+import {log} from "./src/services/telemetry"
 
-const EnvironmentLayer = Layer.effect(Environment, makeEnvironment)
-const StorageLayer = Layer.effect(Storage, makeStorage).pipe(Layer.provide(EnvironmentLayer))
-const layers = Layer.mergeAll(EnvironmentLayer, StorageLayer)
-const provideDeps = Effect.provide(layers)
+type AppEnv = {
+	Variables: {
+		requestId: string
+		traceContext?: {
+			traceId: string
+			spanId: string
+			traceFlags: number
+		}
+	}
+}
 
-const app = new Hono()
+const app = new Hono<AppEnv>()
+
+// Request ID middleware (cheap, needed everywhere for correlation)
+app.use("*", requestId())
+
 app.use("*", cors())
 app.use(
 	compress({
@@ -36,7 +45,15 @@ app.use(
 	}),
 )
 
+// Health routes - no tracing (high frequency, low value)
 app.route("/health", health)
+
+// Apply canonical logging/tracing to API routes (not health)
+// Health checks are high-frequency noise with low observability value
+app.use("/ipfs/*", canonicalRequestLogging())
+app.use("/search/*", canonicalRequestLogging())
+app.use("/versioned/*", canonicalRequestLogging())
+app.use("/graphql", canonicalRequestLogging())
 
 // Initialize search client with dependency injection
 // Search is optional - if OPENSEARCH_URL is not set, search routes won't be added
@@ -46,519 +63,309 @@ if (opensearchUrl) {
 	try {
 		new URL(opensearchUrl)
 	} catch (error) {
-		console.error(`[SEARCH] Invalid OPENSEARCH_URL: ${opensearchUrl}`)
+		log.error("Invalid OPENSEARCH_URL", {url: opensearchUrl})
 		throw error
 	}
 	const searchClient = new OpenSearchClient(opensearchUrl)
-	app.route("/search", createSearchRouter(searchClient))
-	console.log(`[SEARCH] Search routes enabled with OpenSearch at ${opensearchUrl}`)
+	app.route("/search", createSearchRouter(searchClient, runtime))
+	log.info("Search routes enabled", {url: opensearchUrl})
 } else {
-	console.log("[SEARCH] Search routes disabled - OPENSEARCH_URL not set")
+	log.info("Search routes disabled - OPENSEARCH_URL not set")
 }
+
+// Mount versioned entities router
+app.route("/versioned", createVersionedRouter(db, runtime))
+log.info("Versioned entity routes enabled")
 
 app.get("/", swaggerUI({url: "/openapi"}))
 
 app.use("/graphql", async (c) => {
-	return graphqlServer.fetch(c.req.raw)
+	return graphqlServer.fetch(c.req.raw, {traceContext: c.get("traceContext")})
 })
 
-app.use("/v2/graphql", async (c) => {
-	return graphqlServerV2.fetch(c.req.raw)
-})
-
-app.post("/ipfs/upload-edit", async (c) => {
-	const formData = await c.req.formData()
-	const file = formData.get("file") as File | undefined
-
-	if (!file) {
-		return new Response("No file provided", {status: 400})
-	}
-
-	const result = await Effect.runPromise(
-		Effect.either(uploadEdit(file)).pipe(
-			Effect.withSpan("/ipfs/upload-edit.uploadEdit"),
-			Effect.provide(EnvironmentLayer),
-			Effect.provide(NodeSdkLive),
-		),
-	)
-
-	if (Either.isLeft(result)) {
-		// @TODO: Logging/tracing
-		return new Response("Failed to upload file", {status: 500})
-	}
-
-	const cid = result.right.cid
-
-	return c.json({cid})
-})
-
-app.post("/ipfs/upload-file", async (c) => {
-	const formData = await c.req.formData()
-	const file = formData.get("file") as File | undefined
-
-	if (!file) {
-		return new Response("No file provided", {status: 400})
-	}
-
-	const result = await Effect.runPromise(
-		Effect.either(uploadFile(file)).pipe(
-			Effect.withSpan("/ipfs/upload-file.uploadFile"),
-			Effect.provide(EnvironmentLayer),
-			Effect.provide(NodeSdkLive),
-		),
-	)
-
-	if (Either.isLeft(result)) {
-		// @TODO: Logging/tracing
-		return new Response("Failed to upload file", {status: 500})
-	}
-
-	const cid = result.right.cid
-
-	return c.json({cid})
-})
-
-app.post("/ipfs/upload-file-alternative-gateway", async (c) => {
-	const formData = await c.req.formData()
-	const file = formData.get("file") as File | undefined
-
-	if (!file) {
-		return new Response("No file provided", {status: 400})
-	}
-
-	const result = await Effect.runPromise(
-		Effect.either(uploadFileAlternativeGateway(file)).pipe(
-			Effect.withSpan("/ipfs/upload-file-alternative-gateway.uploadFile"),
-			Effect.provide(EnvironmentLayer),
-			Effect.provide(NodeSdkLive),
-		),
-	)
-
-	if (Either.isLeft(result)) {
-		// @TODO: Logging/tracing
-		return new Response("Failed to upload file", {status: 500})
-	}
-
-	const cid = result.right.cid
-
-	return c.json({cid})
-})
-
-// const DeployParametersSchema = Schema.Struct({
-// 	initialEditorAddresses: Schema.Array(Schema.StringFromHex),
-// 	spaceName: Schema.String,
-// 	ops: Schema.Array(Schema.Any),
-// 	spaceEntityId: Schema.NullOr(Schema.String),
-// 	governanceType: Schema.Union(Schema.Literal("PERSONAL"), Schema.Literal("PUBLIC")),
-// })
-
-// const DeployResponseSchema = Schema.Struct({
-// 	spaceId: Schema.String,
-// })
-
-app.post("deploy/personal", async (c) => {
-	const {initialEditorAddress, spaceName, spaceEntityId, ops} = await c.req.json()
-
-	if (initialEditorAddress === null || spaceName === null) {
-		console.error(
-			`[SPACE][deploy] Missing required parameters to deploy a space ${JSON.stringify({initialEditorAddress, spaceName})}`,
-		)
-
-		return new Response(
-			JSON.stringify({
-				error: "Missing required parameters",
-				reason: "An initial editor account and space name are required to deploy a space.",
-			}),
-			{
-				status: 400,
-			},
-		)
-	}
-
-	const deployWithRetry = Effect.retry(
-		deployPersonalSpace({
-			initialEditorAddress,
-			spaceName,
-			spaceEntityId,
-			ops,
-		}).pipe(
-			Effect.withSpan("/deploy/personal.deploySpace"),
-			Effect.annotateSpans({
-				initialEditorAddress,
-				spaceName,
-				spaceEntityId,
-			}),
-			Effect.provide(NodeSdkLive),
-			Effect.provide(EnvironmentLayer),
-		),
-		{
-			schedule: Schedule.exponential(Duration.millis(100)).pipe(
-				Schedule.jittered,
-				Schedule.compose(Schedule.elapsed),
-				Schedule.whileOutput(Duration.lessThanOrEqualTo(Duration.minutes(1))),
-			),
-			while: (error) => error._tag !== "WaitForSpaceToBeIndexedError",
-		},
-	)
-
-	const providedDeploy = deployWithRetry.pipe(provideDeps)
-
-	const result = await Effect.runPromise(
-		Effect.either(providedDeploy).pipe(Effect.annotateLogs({editor: initialEditorAddress, spaceName})),
-	)
-
-	return Either.match(result, {
-		onLeft: (error) => {
-			switch (error._tag) {
-				case "ConfigError":
-					console.error("[SPACE][deploy] Invalid server config")
-					return new Response(
-						JSON.stringify({
-							message: "Invalid server config. Please notify the server administrator.",
-							reason: "Invalid server config. Please notify the server administrator.",
-						}),
-						{
-							status: 500,
-						},
-					)
-				default:
-					console.error(
-						`[SPACE][deploy] Failed to deploy space. message: ${error.message} – cause: ${error.cause}`,
-					)
-
-					return new Response(
-						JSON.stringify({
-							message: `Failed to deploy space. message: ${error.message} – cause: ${error.cause}`,
-							reason: error.message,
-						}),
-						{
-							status: 500,
-						},
-					)
-			}
-		},
-		onRight: (spaceId) => {
-			return Response.json({spaceId})
-		},
-	})
-})
-
-app.post("deploy/public", async (c) => {
-	const {initialEditorAddresses, spaceName, spaceEntityId, ops} = await c.req.json()
-
-	if (initialEditorAddresses === null || spaceName === null) {
-		console.error(
-			`[SPACE][deploy] Missing required parameters to deploy a space ${JSON.stringify({initialEditorAddresses, spaceName})}`,
-		)
-
-		return new Response(
-			JSON.stringify({
-				error: "Missing required parameters",
-				reason: "An initial editor account and space name are required to deploy a space.",
-			}),
-			{
-				status: 400,
-			},
-		)
-	}
-
-	if (initialEditorAddresses.length === 0) {
-		console.error(
-			"[SPACE][deploy] Invalid parameter initialEditorAddresses. At least one valid account address is required to deploy a space.",
-		)
-
-		return new Response(
-			JSON.stringify({
-				error: "Invalid parameter initialEditorAddresses",
-				reason: "Invalid parameter initialEditorAddresses. At least one valid account address is required to deploy a space.",
-			}),
-			{
-				status: 400,
-			},
-		)
-	}
-
-	const deployWithRetry = Effect.retry(
-		deployPublicSpace({
-			initialEditorAddresses,
-			spaceName,
-			spaceEntityId,
-			ops,
-		}).pipe(
-			Effect.withSpan("/deploy/public.deploySpace"),
-			Effect.annotateSpans({
-				initialEditorAddresses,
-				spaceName,
-				spaceEntityId,
-			}),
-			Effect.provide(NodeSdkLive),
-			Effect.provide(EnvironmentLayer),
-		),
-		{
-			schedule: Schedule.exponential(Duration.millis(100)).pipe(
-				Schedule.jittered,
-				Schedule.compose(Schedule.elapsed),
-				Schedule.whileOutput(Duration.lessThanOrEqualTo(Duration.minutes(1))),
-			),
-			while: (error) => error._tag !== "WaitForSpaceToBeIndexedError",
-		},
-	)
-
-	const providedDeploy = deployWithRetry.pipe(provideDeps)
-
-	const result = await Effect.runPromise(
-		Effect.either(providedDeploy).pipe(Effect.annotateLogs({editor: initialEditorAddresses, spaceName})),
-	)
-
-	return Either.match(result, {
-		onLeft: (error) => {
-			switch (error._tag) {
-				case "ConfigError":
-					console.error("[SPACE][deploy] Invalid server config")
-					return new Response(
-						JSON.stringify({
-							message: "Invalid server config. Please notify the server administrator.",
-							reason: "Invalid server config. Please notify the server administrator.",
-						}),
-						{
-							status: 500,
-						},
-					)
-				default:
-					console.error(
-						`[SPACE][deploy] Failed to deploy space. message: ${error.message} – cause: ${error.cause}`,
-					)
-
-					return new Response(
-						JSON.stringify({
-							message: `Failed to deploy space. message: ${error.message} – cause: ${error.cause}`,
-							reason: error.message,
-						}),
-						{
-							status: 500,
-						},
-					)
-			}
-		},
-		onRight: (spaceId) => {
-			return Response.json({spaceId})
-		},
-	})
-})
-
-/**
- * The /deploy route is a legacy route for deploying PERSONAL spaces. Leaving it for
- * now until we're ready to deprecate it.
- */
 app.post(
-	"deploy",
-	// describeRoute({
-	// 	validateResponse: true,
-	// 	description: "Deploys a space with the provided parameters",
-	// requestBody: {
-	// 	required: true,
-	// 	content: {
-	// 		"application/json": {
-	// 			schema: DeployParametersSchema,
-	// 		},
-	// 	},
-	// },
-	// 	responses: {
-	// 		200: {
-	// 			description: "Successful space deployment",
-	// 			content: {
-	// 				"application/json": {schema: resolver(DeployResponseSchema)},
-	// 			},
-	// 		},
-	// 		400: {
-	// 			description:
-	// 				"Missing required parameters. An initial editor account and space name are required to deploy a space.",
-	// 		},
-	// 	},
-	// }),
-	// effectValidator("json", DeployParametersSchema),
-	async (c) => {
-		const {initialEditorAddress, spaceName, spaceEntityId, ops} = await c.req.json()
-
-		if (initialEditorAddress === null || spaceName === null) {
-			console.error(
-				`[SPACE][deploy] Missing required parameters to deploy a space ${JSON.stringify({initialEditorAddress, spaceName})}`,
-			)
-
-			return new Response(
-				JSON.stringify({
-					error: "Missing required parameters",
-					reason: "An initial editor account and space name are required to deploy a space.",
-				}),
-				{
-					status: 400,
+	"/ipfs/upload-edit",
+	describeRoute({
+		tags: ["IPFS"],
+		summary: "Upload an edit to IPFS",
+		description: "Uploads an edit file to IPFS and returns the content identifier (CID)",
+		requestBody: {
+			content: {
+				"multipart/form-data": {
+					schema: {
+						type: "object",
+						properties: {
+							file: {
+								type: "string",
+								format: "binary",
+								description: "The edit file to upload",
+							},
+						},
+						required: ["file"],
+					},
 				},
-			)
-		}
-
-		const deployWithRetry = Effect.retry(
-			deployPersonalSpace({
-				initialEditorAddress,
-				spaceName,
-				spaceEntityId,
-				ops,
-			}).pipe(
-				Effect.withSpan("/deploy.deploySpace"),
-				Effect.annotateSpans({
-					initialEditorAddress,
-					spaceName,
-					spaceEntityId,
-				}),
-				Effect.provide(NodeSdkLive),
-				Effect.provide(EnvironmentLayer),
-			),
-			{
-				schedule: Schedule.exponential(Duration.millis(100)).pipe(
-					Schedule.jittered,
-					Schedule.compose(Schedule.elapsed),
-					Schedule.whileOutput(Duration.lessThanOrEqualTo(Duration.minutes(1))),
-				),
-				while: (error) => error._tag !== "WaitForSpaceToBeIndexedError",
 			},
+		},
+		responses: {
+			200: {
+				description: "File successfully uploaded to IPFS",
+				content: {
+					"application/json": {
+						schema: {
+							type: "object",
+							properties: {
+								cid: {
+									type: "string",
+									description: "The IPFS content identifier (CID) of the uploaded file",
+								},
+							},
+							required: ["cid"],
+						},
+					},
+				},
+			},
+			400: {
+				description: "No file provided",
+				content: {
+					"text/plain": {
+						schema: {
+							type: "string",
+							example: "No file provided",
+						},
+					},
+				},
+			},
+			500: {
+				description: "Upload failed",
+				content: {
+					"text/plain": {
+						schema: {
+							type: "string",
+						},
+					},
+				},
+			},
+		},
+	}),
+	async (c) => {
+		const formData = await c.req.formData()
+		const file = formData.get("file") as File | undefined
+		const requestId = c.get("requestId") ?? "unknown"
+
+		const program = Effect.gen(function* () {
+			if (!file) {
+				yield* Effect.logWarning("No file provided")
+				return yield* Effect.fail({_tag: "ValidationError" as const, status: 400, message: "No file provided"})
+			}
+
+			const result = yield* uploadEdit(file).pipe(
+				Effect.mapError((error) => ({_tag: "UploadError" as const, status: 500, message: error.message})),
+			)
+
+			return result
+		}).pipe(
+			Effect.withSpan("/ipfs/upload-edit"),
+			Effect.annotateLogs({requestId, fileName: file?.name, fileSize: file?.size}),
 		)
 
-		const providedDeploy = deployWithRetry.pipe(provideDeps)
-
-		const result = await Effect.runPromise(
-			Effect.either(providedDeploy).pipe(Effect.annotateLogs({editor: initialEditorAddress, spaceName})),
-		)
+		const result = await runtime.runPromise(Effect.either(program))
 
 		return Either.match(result, {
-			onLeft: (error) => {
-				switch (error._tag) {
-					case "ConfigError":
-						console.error("[SPACE][deploy] Invalid server config")
-						return new Response(
-							JSON.stringify({
-								message: "Invalid server config. Please notify the server administrator.",
-								reason: "Invalid server config. Please notify the server administrator.",
-							}),
-							{
-								status: 500,
-							},
-						)
-					default:
-						console.error(
-							`[SPACE][deploy] Failed to deploy space. message: ${error.message} – cause: ${error.cause}`,
-						)
-
-						return new Response(
-							JSON.stringify({
-								message: `Failed to deploy space. message: ${error.message} – cause: ${error.cause}`,
-								reason: error.message,
-							}),
-							{
-								status: 500,
-							},
-						)
-				}
-			},
-			onRight: (spaceId) => {
-				return Response.json({spaceId})
-			},
+			onLeft: (error) => new Response(error.message, {status: error.status}),
+			onRight: (data) => c.json({cid: data.cid}),
 		})
 	},
 )
 
-const CalldataRequestSchema = Schema.Struct({
-	cid: Schema.String,
-})
-
-app.post("/space/:spaceId/edit/calldata", async (c) => {
-	const {spaceId} = c.req.param()
-	const maybeRequestJson = await c.req.json()
-
-	const parsedRequestJsonResult = Schema.decodeUnknownEither(CalldataRequestSchema)(maybeRequestJson)
-
-	if (Either.isLeft(parsedRequestJsonResult)) {
-		console.error(`[SPACE][calldata] Invalid request json. ${maybeRequestJson}`)
-
-		return new Response(
-			JSON.stringify({
-				error: "Missing required parameters",
-				reason: "An IPFS CID prefixed with 'ipfs://' is required. e.g., ipfs://bafkreigkka6xfe3hb2tzcfqgm5clszs7oy7mct2awawivoxddcq6v3g5oi",
-			}),
-			{
-				status: 400,
-			},
-		)
-	}
-
-	const cid = parsedRequestJsonResult.right.cid
-
-	if (!cid || !cid.startsWith("ipfs://")) {
-		console.error(`[SPACE][calldata] Invalid CID ${cid}`)
-		return new Response(
-			JSON.stringify({
-				error: "Missing required parameters",
-				reason: "An IPFS CID prefixed with 'ipfs://' is required. e.g., ipfs://bafkreigkka6xfe3hb2tzcfqgm5clszs7oy7mct2awawivoxddcq6v3g5oi",
-			}),
-			{
-				status: 400,
-			},
-		)
-	}
-
-	const getCalldata = Effect.gen(function* () {
-		return yield* getPublishEditCalldata(spaceId, cid as string)
-	})
-
-	const calldata = await Effect.runPromise(Effect.either(getCalldata.pipe(provideDeps)))
-
-	if (Either.isLeft(calldata)) {
-		const error = calldata.left
-
-		switch (error._tag) {
-			case "ConfigError":
-				console.error("[SPACE][calldata] Invalid server config")
-				return new Response(
-					JSON.stringify({
-						message: "Invalid server config. Please notify the server administrator.",
-						reason: "Invalid server config. Please notify the server administrator.",
-					}),
-					{
-						status: 500,
+app.post(
+	"/ipfs/upload-file",
+	describeRoute({
+		tags: ["IPFS"],
+		summary: "Upload a file to IPFS",
+		description: "Uploads a file to IPFS and returns the content identifier (CID)",
+		requestBody: {
+			content: {
+				"multipart/form-data": {
+					schema: {
+						type: "object",
+						properties: {
+							file: {
+								type: "string",
+								format: "binary",
+								description: "The file to upload",
+							},
+						},
+						required: ["file"],
 					},
-				)
-
-			default:
-				console.error(
-					`[SPACE][calldata] Failed to generate calldata for edit. message: ${error.message} – cause: ${error.cause}`,
-				)
-
-				return new Response(
-					JSON.stringify({
-						message: `Failed to deploy space. message: ${error.message} – cause: ${error.cause}`,
-						reason: error.message,
-					}),
-					{
-						status: 500,
-					},
-				)
-		}
-	}
-
-	if (calldata.right === null) {
-		console.error(`Failed to generate calldata. Could not find space with id ${spaceId}.`)
-
-		return new Response(
-			JSON.stringify({
-				error: "Failed to generate calldata",
-				reason: `Could not find space with id ${spaceId}. Ensure the space exists and that it's on the correct network. This API is associated with chain id ${EnvironmentLive.chainId}`,
-			}),
-			{
-				status: 404,
+				},
 			},
-		)
-	}
+		},
+		responses: {
+			200: {
+				description: "File successfully uploaded to IPFS",
+				content: {
+					"application/json": {
+						schema: {
+							type: "object",
+							properties: {
+								cid: {
+									type: "string",
+									description: "The IPFS content identifier (CID) of the uploaded file",
+								},
+							},
+							required: ["cid"],
+						},
+					},
+				},
+			},
+			400: {
+				description: "No file provided",
+				content: {
+					"text/plain": {
+						schema: {
+							type: "string",
+							example: "No file provided",
+						},
+					},
+				},
+			},
+			500: {
+				description: "Upload failed",
+				content: {
+					"text/plain": {
+						schema: {
+							type: "string",
+						},
+					},
+				},
+			},
+		},
+	}),
+	async (c) => {
+		const formData = await c.req.formData()
+		const file = formData.get("file") as File | undefined
+		const requestId = c.get("requestId")
 
-	return Response.json(calldata.right)
-})
+		const program = Effect.gen(function* () {
+			if (!file) {
+				yield* Effect.logWarning("No file provided")
+				return yield* Effect.fail({_tag: "ValidationError" as const, status: 400, message: "No file provided"})
+			}
+
+			const result = yield* uploadFile(file).pipe(
+				Effect.mapError((error) => ({_tag: "UploadError" as const, status: 500, message: error.message})),
+			)
+
+			return result
+		}).pipe(
+			Effect.withSpan("/ipfs/upload-file"),
+			Effect.annotateLogs({requestId, fileName: file?.name, fileSize: file?.size}),
+		)
+
+		const result = await runtime.runPromise(Effect.either(program))
+
+		return Either.match(result, {
+			onLeft: (error) => new Response(error.message, {status: error.status}),
+			onRight: (data) => c.json({cid: data.cid}),
+		})
+	},
+)
+
+// Backwards compatibility alias - uses same implementation as /ipfs/upload-file
+app.post(
+	"/ipfs/upload-file-alternative-gateway",
+	describeRoute({
+		tags: ["IPFS"],
+		summary: "Upload a file to IPFS (deprecated)",
+		description: "Deprecated: Use /ipfs/upload-file instead. This endpoint is maintained for backwards compatibility.",
+		deprecated: true,
+		requestBody: {
+			content: {
+				"multipart/form-data": {
+					schema: {
+						type: "object",
+						properties: {
+							file: {
+								type: "string",
+								format: "binary",
+								description: "The file to upload",
+							},
+						},
+						required: ["file"],
+					},
+				},
+			},
+		},
+		responses: {
+			200: {
+				description: "File successfully uploaded to IPFS",
+				content: {
+					"application/json": {
+						schema: {
+							type: "object",
+							properties: {
+								cid: {
+									type: "string",
+									description: "The IPFS content identifier (CID) of the uploaded file",
+								},
+							},
+							required: ["cid"],
+						},
+					},
+				},
+			},
+			400: {
+				description: "No file provided",
+				content: {
+					"text/plain": {
+						schema: {
+							type: "string",
+							example: "No file provided",
+						},
+					},
+				},
+			},
+			500: {
+				description: "Upload failed",
+				content: {
+					"text/plain": {
+						schema: {
+							type: "string",
+						},
+					},
+				},
+			},
+		},
+	}),
+	async (c) => {
+		const formData = await c.req.formData()
+		const file = formData.get("file") as File | undefined
+		const requestId = c.get("requestId")
+
+		const program = Effect.gen(function* () {
+			if (!file) {
+				yield* Effect.logWarning("No file provided")
+				return yield* Effect.fail({_tag: "ValidationError" as const, status: 400, message: "No file provided"})
+			}
+
+			const result = yield* uploadFile(file).pipe(
+				Effect.mapError((error) => ({_tag: "UploadError" as const, status: 500, message: error.message})),
+			)
+
+			return result
+		}).pipe(
+			Effect.withSpan("/ipfs/upload-file-alternative-gateway"),
+			Effect.annotateLogs({requestId, fileName: file?.name, fileSize: file?.size}),
+		)
+
+		const result = await runtime.runPromise(Effect.either(program))
+
+		return Either.match(result, {
+			onLeft: (error) => new Response(error.message, {status: error.status}),
+			onRight: (data) => c.json({cid: data.cid}),
+		})
+	},
+)
 
 app.get(
 	"/openapi",
@@ -573,6 +380,210 @@ app.get(
 				{url: "http://localhost:3000", description: "Local Server"},
 				{url: "https://api-testnet.geobrowser.io", description: "Testnet Geo API"},
 			],
+			components: {
+				schemas: {
+					// Value types
+					VersionedValue: {
+						type: "object",
+						description: "A value at a specific version. Only one value field will be set.",
+						properties: {
+							propertyId: {type: "string", format: "uuid"},
+							spaceId: {type: "string", format: "uuid"},
+							// Value columns (GRC-20 v2 data types) - only one will be set
+							boolean: {type: "boolean", nullable: true},
+							integer: {type: "integer", nullable: true},
+							float: {type: "number", nullable: true},
+							decimal: {type: "string", nullable: true},
+							text: {type: "string", nullable: true},
+							bytes: {type: "string", nullable: true, description: "Base64 encoded"},
+							date: {type: "string", format: "date", nullable: true},
+							time: {type: "string", nullable: true, description: "ISO 8601 time"},
+							datetime: {type: "string", format: "date-time", nullable: true},
+							schedule: {type: "object", nullable: true, description: "RFC 5545 schedule"},
+							point: {type: "string", nullable: true, description: "WGS84 point"},
+							embedding: {type: "object", nullable: true},
+							// Metadata
+							language: {type: "string", nullable: true},
+							unit: {type: "string", nullable: true},
+							// Context metadata
+							contextRootId: {type: "string", format: "uuid", nullable: true},
+							contextEdgeTypeId: {type: "string", format: "uuid", nullable: true},
+						},
+						required: ["propertyId", "spaceId"],
+					},
+					VersionedRelation: {
+						type: "object",
+						description: "A relation at a specific version (excluding block relations)",
+						properties: {
+							relationId: {type: "string", format: "uuid"},
+							typeId: {type: "string", format: "uuid"},
+							fromEntityId: {type: "string", format: "uuid"},
+							fromSpaceId: {type: "string", format: "uuid", nullable: true},
+							toEntityId: {type: "string", format: "uuid"},
+							toSpaceId: {type: "string", format: "uuid", nullable: true},
+							position: {type: "string", nullable: true},
+							spaceId: {type: "string", format: "uuid"},
+							verified: {type: "boolean", nullable: true},
+							contextRootId: {type: "string", format: "uuid", nullable: true},
+							contextEdgeTypeId: {type: "string", format: "uuid", nullable: true},
+						},
+						required: ["relationId", "typeId", "fromEntityId", "toEntityId", "spaceId"],
+					},
+					BlockSnapshot: {
+						type: "object",
+						description: "A block snapshot - an entity linked via BLOCKS relation",
+						properties: {
+							id: {type: "string", format: "uuid"},
+							values: {type: "array", items: {$ref: "#/components/schemas/VersionedValue"}},
+							relations: {type: "array", items: {$ref: "#/components/schemas/VersionedRelation"}},
+						},
+						required: ["id", "values", "relations"],
+					},
+					EntitySnapshot: {
+						type: "object",
+						description: "An entity snapshot at a specific version",
+						properties: {
+							id: {type: "string", format: "uuid"},
+							values: {type: "array", items: {$ref: "#/components/schemas/VersionedValue"}},
+							relations: {
+								type: "array",
+								items: {$ref: "#/components/schemas/VersionedRelation"},
+								description: "Excludes block relations",
+							},
+							blocks: {type: "array", items: {$ref: "#/components/schemas/BlockSnapshot"}},
+						},
+						required: ["id", "values", "relations", "blocks"],
+					},
+					VersionEntry: {
+						type: "object",
+						description: "A version entry for listing versions",
+						properties: {
+							editId: {type: "string", format: "uuid"},
+							blockNumber: {type: "string"},
+							createdAt: {type: "string", format: "date-time"},
+						},
+						required: ["editId", "blockNumber", "createdAt"],
+					},
+					// Diff types
+					DiffChunk: {
+						type: "object",
+						description: "A single chunk in a text diff",
+						properties: {
+							value: {type: "string"},
+							added: {type: "boolean"},
+							removed: {type: "boolean"},
+						},
+						required: ["value"],
+					},
+					ValueChange: {
+						type: "object",
+						description: "A value change with before/after values",
+						properties: {
+							propertyId: {type: "string", format: "uuid"},
+							spaceId: {type: "string", format: "uuid"},
+							type: {
+								type: "string",
+								enum: [
+									"TEXT",
+									"BOOL",
+									"INT64",
+									"FLOAT64",
+									"DECIMAL",
+									"BYTES",
+									"DATE",
+									"TIME",
+									"DATETIME",
+									"SCHEDULE",
+									"POINT",
+									"EMBEDDING",
+								],
+							},
+							before: {type: "string", nullable: true},
+							after: {type: "string", nullable: true},
+							diff: {
+								type: "array",
+								items: {$ref: "#/components/schemas/DiffChunk"},
+								description: "Only present for TEXT type",
+							},
+						},
+						required: ["propertyId", "spaceId", "type"],
+					},
+					RelationChange: {
+						type: "object",
+						description: "A relation change",
+						properties: {
+							relationId: {type: "string", format: "uuid"},
+							typeId: {type: "string", format: "uuid"},
+							spaceId: {type: "string", format: "uuid"},
+							changeType: {type: "string", enum: ["ADD", "REMOVE", "UPDATE"]},
+							before: {
+								type: "object",
+								nullable: true,
+								properties: {
+									toEntityId: {type: "string", format: "uuid"},
+									toSpaceId: {type: "string", format: "uuid", nullable: true},
+									position: {type: "string", nullable: true},
+								},
+								required: ["toEntityId"],
+							},
+							after: {
+								type: "object",
+								nullable: true,
+								properties: {
+									toEntityId: {type: "string", format: "uuid"},
+									toSpaceId: {type: "string", format: "uuid", nullable: true},
+									position: {type: "string", nullable: true},
+								},
+								required: ["toEntityId"],
+							},
+						},
+						required: ["relationId", "typeId", "spaceId", "changeType"],
+					},
+					BlockChange: {
+						type: "object",
+						description: "A block change (text, image, or data block)",
+						properties: {
+							id: {type: "string", format: "uuid"},
+							type: {type: "string", enum: ["textBlock", "imageBlock", "dataBlock"]},
+							before: {type: "string", nullable: true},
+							after: {type: "string", nullable: true},
+							diff: {
+								type: "array",
+								items: {$ref: "#/components/schemas/DiffChunk"},
+								description: "Only present for textBlock type",
+							},
+						},
+						required: ["id", "type"],
+					},
+					GroupedEntityDiffResponse: {
+						type: "object",
+						description:
+							"A grouped entity diff response. Dynamic group keys from the 'groups' object are spread at the root level.",
+						properties: {
+							entityId: {type: "string", format: "uuid"},
+							name: {type: "string", nullable: true},
+							values: {type: "array", items: {$ref: "#/components/schemas/ValueChange"}},
+							relations: {type: "array", items: {$ref: "#/components/schemas/RelationChange"}},
+							blocks: {
+								type: "array",
+								items: {$ref: "#/components/schemas/BlockChange"},
+								description: "Static key for BLOCKS relation type changes",
+							},
+							groupKeys: {
+								type: "array",
+								items: {type: "string"},
+								description: "Dynamic group keys present (excluding 'blocks')",
+							},
+						},
+						additionalProperties: {
+							type: "array",
+							items: {$ref: "#/components/schemas/BlockChange"},
+							description: "Dynamic groups by relation type ID",
+						},
+						required: ["entityId", "values", "relations", "blocks", "groupKeys"],
+					},
+				},
+			},
 		},
 	}),
 )

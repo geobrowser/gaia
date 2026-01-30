@@ -1,4 +1,4 @@
-name: Deploy KG Indexer
+name: Deploy KG Indexer (Production)
 
 on:
   push:
@@ -10,6 +10,10 @@ on:
       - 'wire/**'
       - 'indexer_utils/**'
       - '.github/workflows/kg-indexer-deploy.yml'
+
+concurrency:
+  group: kg-indexer-production
+  cancel-in-progress: true
 
 env:
   REGISTRY: registry.digitalocean.com/geo
@@ -47,10 +51,10 @@ jobs:
 
       - name: Deploy to Kubernetes
         run: |
-          kubectl apply -f kg-indexer/k8s/namespace.yaml
+          kubectl apply -f kg-indexer/k8s/production/namespace.yaml
           # Update image tag to use SHA and apply
-          sed -i 's|image: registry.digitalocean.com/geo/kg-indexer:latest|image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}|g' kg-indexer/k8s/kg-indexer.yaml
-          kubectl apply -f kg-indexer/k8s/kg-indexer.yaml
+          sed -i 's|image: registry.digitalocean.com/geo/kg-indexer:latest|image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}|g' kg-indexer/k8s/production/kg-indexer.yaml
+          kubectl apply -f kg-indexer/k8s/production/kg-indexer.yaml
 
       - name: Restart deployment to pick up new image
         run: |

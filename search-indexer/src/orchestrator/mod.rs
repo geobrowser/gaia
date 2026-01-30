@@ -7,7 +7,7 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc};
 use tokio::time::{interval, Duration};
-use tracing::{error, info, instrument};
+use hermes_instrumentation::{error, info, instrument};
 
 #[cfg(unix)]
 use tokio::signal::unix::{signal, SignalKind};

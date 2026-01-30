@@ -19,7 +19,9 @@ use crate::interfaces::SearchIndexProvider;
 use crate::opensearch::bulk::{execute_bulk, BulkAction, BulkOperationMeta};
 use crate::opensearch::index_config::IndexConfig;
 use crate::opensearch::index_management;
-use crate::opensearch::scripts::{ADD_TYPE_RELATION_SCRIPT, REMOVE_TYPE_RELATION_SCRIPT};
+use crate::opensearch::scripts::{
+    ADD_TYPE_RELATION_SCRIPT, REMOVE_TYPE_RELATION_SCRIPT, UPDATE_WITH_TOMBSTONE_CHECK_SCRIPT,
+};
 use crate::opensearch::unset_document_properties::create_unset_properties_script;
 use crate::types::{
     BatchOperationResult, BatchOperationSummary, DeleteEntityRequest, EntityOperation,
@@ -141,6 +143,9 @@ impl OpenSearchProvider {
         if let Some(entity_space_score) = request.entity_space_score {
             doc.insert("entity_space_score".to_string(), json!(entity_space_score));
         }
+        if let Some(deleted) = request.deleted {
+            doc.insert("deleted".to_string(), json!(deleted));
+        }
         doc
     }
 }
@@ -234,7 +239,7 @@ impl SearchIndexProvider for OpenSearchProvider {
             return Ok(());
         }
 
-        // Regular document update
+        // Regular document update with tombstone dominance
         let doc = Self::build_update_doc(request);
 
         if doc.is_empty() {
@@ -242,14 +247,26 @@ impl SearchIndexProvider for OpenSearchProvider {
             return Ok(());
         }
 
-        // Use upsert to create document if it doesn't exist
-        // API reference: https://docs.opensearch.org/latest/api-reference/document-apis/update-document/#using-the-upsert-operation
+        // Use script with upsert for tombstone dominance:
+        // - If document doesn't exist: create it with upsert values
+        // - If document exists but is deleted: noop (unless this update sets deleted=true)
+        // - If document exists and is not deleted: merge the doc fields
+        let mut upsert_doc = doc.clone();
+        upsert_doc.insert("entity_id".to_string(), json!(entity_id.to_string()));
+        upsert_doc.insert("space_id".to_string(), json!(space_id.to_string()));
+
         let response = self
             .client
             .update(UpdateParts::IndexId(&self.index_config.alias, &doc_id))
             .body(json!({
-                "doc": doc,
-                "doc_as_upsert": true
+                "script": {
+                    "source": UPDATE_WITH_TOMBSTONE_CHECK_SCRIPT,
+                    "lang": "painless",
+                    "params": {
+                        "doc": doc
+                    }
+                },
+                "upsert": upsert_doc
             }))
             .send()
             .await
@@ -513,12 +530,26 @@ impl SearchIndexProvider for OpenSearchProvider {
                         has_operation = true;
                     }
 
-                    // Handle regular document properties
+                    // Handle regular document properties with tombstone dominance
                     let doc = Self::build_update_doc(request);
                     if !doc.is_empty() {
+                        // Use script with upsert for tombstone dominance:
+                        // - If document doesn't exist: create it with upsert values
+                        // - If document exists but is deleted: noop (unless this update sets deleted=true)
+                        // - If document exists and is not deleted: merge the doc fields
+                        let mut upsert_doc = doc.clone();
+                        upsert_doc.insert("entity_id".to_string(), json!(entity_id.to_string()));
+                        upsert_doc.insert("space_id".to_string(), json!(space_id.to_string()));
+
                         let body = json!({
-                            "doc": doc,
-                            "doc_as_upsert": true
+                            "script": {
+                                "source": UPDATE_WITH_TOMBSTONE_CHECK_SCRIPT,
+                                "lang": "painless",
+                                "params": {
+                                    "doc": doc
+                                }
+                            },
+                            "upsert": upsert_doc
                         });
                         bulk_ops.push(BulkOperation::update(doc_id, body).into());
                         metas.push(BulkOperationMeta {
@@ -563,6 +594,17 @@ impl SearchIndexProvider for OpenSearchProvider {
                         continue;
                     }
 
+                    // Flush pending bulk operations before unset to ensure the document exists
+                    // Scripts cannot use doc_as_upsert, so we need the document to exist first
+                    flush_pending_bulk!(
+                        self,
+                        bulk_ops,
+                        metas,
+                        total_succeeded,
+                        total_failed,
+                        all_results
+                    );
+
                     let (entity_id, space_id) =
                         utils::parse_entity_and_space_ids(&request.entity_id, &request.space_id)?;
                     let doc_id = Self::document_id(&entity_id, &space_id);
@@ -579,6 +621,18 @@ impl SearchIndexProvider for OpenSearchProvider {
                         entity_id: request.entity_id.clone(),
                         space_id: request.space_id.clone(),
                     });
+
+                    // Flush immediately after unset to ensure it's processed before any subsequent
+                    // updates to the same document. Multiple updates to the same document in one
+                    // bulk request can have undefined behavior in OpenSearch.
+                    flush_pending_bulk!(
+                        self,
+                        bulk_ops,
+                        metas,
+                        total_succeeded,
+                        total_failed,
+                        all_results
+                    );
                 }
                 EntityOperation::UpdateEntityGlobalScore(request) => {
                     // Flush before executing the update_by_query to maintain ordering
@@ -798,6 +852,7 @@ mod tests {
             entity_global_score: None,
             space_score: None,
             entity_space_score: None,
+            deleted: None,
         };
 
         let doc = OpenSearchProvider::build_update_doc(&request);
@@ -819,6 +874,7 @@ mod tests {
             entity_global_score: None,
             space_score: None,
             entity_space_score: None,
+            deleted: None,
         };
 
         let doc = OpenSearchProvider::build_update_doc(&request);
@@ -850,6 +906,7 @@ mod tests {
             entity_global_score: None,
             space_score: None,
             entity_space_score: None,
+            deleted: None,
         };
 
         let doc = OpenSearchProvider::build_update_doc(&request);

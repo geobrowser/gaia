@@ -9,9 +9,13 @@ description = "Search indexer for the Geo Knowledge Graph - consumes events from
 search-indexer-shared = { path = "../search-indexer-shared" }
 search-indexer-repository = { path = "../search-indexer-repository" }
 hermes-schema = { path = "../hermes-schema" }
+hermes-instrumentation = { path = "../hermes-instrumentation" }
 wire = { path = "../wire" }
 indexer_utils = { path = "../indexer_utils" }
 sdk = { path = "../sdk" }
+
+# GRC-20 decoding
+grc-20 = "0.3.0"
 
 # Kafka
 rdkafka = { version = "0.38.0", features = ["cmake-build", "zstd", "ssl"] }
@@ -37,10 +41,8 @@ chrono = "0.4.41"
 uuid = { version = "1.17.0", features = ["v4"] }
 dotenv = "0.15.0"
 
-# Logging
+# Tracing (required for #[instrument] macro)
 tracing = "0.1.41"
-tracing-subscriber = { version = "0.3.19", features = ["env-filter", "json"] }
-axiom-rs = "0.11.4"
 
 [dev-dependencies]
 tokio = { version = "1.42.0", features = ["macros", "rt-multi-thread", "test-util"] }

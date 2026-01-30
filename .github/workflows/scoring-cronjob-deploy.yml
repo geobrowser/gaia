@@ -1,4 +1,4 @@
-name: Deploy Scoring Cronjob
+name: Deploy Scoring Cronjob (Production)
 
 on:
   push:
@@ -6,8 +6,12 @@ on:
       - main
     paths:
       - 'scoring-service/cronjob/**'
-      - 'scoring-service/deployment/cronjob.yaml'
+      - 'scoring-service/deployment/production/cronjob.yaml'
       - '.github/workflows/scoring-cronjob-deploy.yml'
+
+concurrency:
+  group: scoring-cronjob-production
+  cancel-in-progress: true
 
 env:
   REGISTRY: registry.digitalocean.com/geo
@@ -45,10 +49,10 @@ jobs:
 
       - name: Deploy to Kubernetes
         run: |
-          kubectl apply -f scoring-service/deployment/namespace.yaml
+          kubectl apply -f scoring-service/deployment/production/namespace.yaml
           # Update image tag to use SHA and apply
-          sed -i 's|image: registry.digitalocean.com/geo/scoring-service:latest|image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}|g' scoring-service/deployment/cronjob.yaml
-          kubectl apply -f scoring-service/deployment/cronjob.yaml
+          sed -i 's|image: registry.digitalocean.com/geo/scoring-service:latest|image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}|g' scoring-service/deployment/production/cronjob.yaml
+          kubectl apply -f scoring-service/deployment/production/cronjob.yaml
 
       - name: Show deployment status
         run: |

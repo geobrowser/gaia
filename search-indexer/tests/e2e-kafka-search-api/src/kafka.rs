@@ -51,6 +51,7 @@ impl KafkaProducer {
     }
 
     /// Send multiple messages to a Kafka topic
+    #[allow(dead_code)]
     pub async fn send_batch(
         &self,
         topic: &str,

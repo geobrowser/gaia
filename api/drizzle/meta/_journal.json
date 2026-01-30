@@ -148,6 +148,76 @@
       "when": 1768512148890,
       "tag": "0020_wooden_iceman",
       "breakpoints": true
+    },
+    {
+      "idx": 21,
+      "version": "7",
+      "when": 1768590628518,
+      "tag": "0021_sad_slapstick",
+      "breakpoints": true
+    },
+    {
+      "idx": 22,
+      "version": "7",
+      "when": 1768594940592,
+      "tag": "0022_derive_properties_procedure",
+      "breakpoints": true
+    },
+    {
+      "idx": 23,
+      "version": "7",
+      "when": 1768595910270,
+      "tag": "0023_cute_radioactive_man",
+      "breakpoints": true
+    },
+    {
+      "idx": 24,
+      "version": "7",
+      "when": 1768836584916,
+      "tag": "0024_fix-smart-comments",
+      "breakpoints": true
+    },
+    {
+      "idx": 25,
+      "version": "7",
+      "when": 1768849775029,
+      "tag": "0025_pink_revanche",
+      "breakpoints": true
+    },
+    {
+      "idx": 26,
+      "version": "7",
+      "when": 1768857620799,
+      "tag": "0026_aspiring_banshee",
+      "breakpoints": true
+    },
+    {
+      "idx": 27,
+      "version": "7",
+      "when": 1768924733212,
+      "tag": "0027_property-entity-functions",
+      "breakpoints": true
+    },
+    {
+      "idx": 28,
+      "version": "7",
+      "when": 1769544300976,
+      "tag": "0028_shocking_madame_web",
+      "breakpoints": true
+    },
+    {
+      "idx": 29,
+      "version": "7",
+      "when": 1769556236352,
+      "tag": "0029_abandoned_nova",
+      "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1769753397003,
+      "tag": "0030_fix-property-function-type-check",
+      "breakpoints": true
     }
   ]
 }

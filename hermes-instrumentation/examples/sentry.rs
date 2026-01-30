@@ -3,7 +3,7 @@
 //! Usage:
 //!   SENTRY_DSN=... cargo run -p hermes-instrumentation --example sentry
 
-use hermes_instrumentation::{info, info_span, Config, Instrument, Backend};
+use hermes_instrumentation::{Backend, Config, Instrument, info, info_span};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let dsn = std::env::var("SENTRY_DSN").expect("SENTRY_DSN must be set");

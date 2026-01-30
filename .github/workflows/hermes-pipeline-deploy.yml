@@ -1,4 +1,4 @@
-name: Deploy Hermes Pipeline
+name: Deploy Hermes Pipeline (Production)
 
 on:
   push:
@@ -13,8 +13,12 @@ on:
       - 'hermes-kafka/**'
       - 'stream/**'
       - 'wire/**'
-      - 'hermes/k8s/hermes-pipeline.yaml'
+      - 'hermes/k8s/production/hermes-pipeline.yaml'
       - '.github/workflows/hermes-pipeline-deploy.yml'
+
+concurrency:
+  group: hermes-pipeline-production
+  cancel-in-progress: true
 
 env:
   REGISTRY: registry.digitalocean.com/geo
@@ -57,8 +61,8 @@ jobs:
       - name: Deploy to Kubernetes
         run: |
           # Update image tag to use SHA and apply
-          sed -i 's|image: registry.digitalocean.com/geo/hermes-pipeline:latest|image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}|g' hermes/k8s/hermes-pipeline.yaml
-          kubectl apply -f hermes/k8s/hermes-pipeline.yaml
+          sed -i 's|image: registry.digitalocean.com/geo/hermes-pipeline:latest|image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}|g' hermes/k8s/production/hermes-pipeline.yaml
+          kubectl apply -f hermes/k8s/production/hermes-pipeline.yaml
 
       - name: Wait for job to start
         run: |
