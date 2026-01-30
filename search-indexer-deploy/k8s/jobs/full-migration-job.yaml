@@ -17,6 +17,8 @@ spec:
         app: opensearch-admin
         task: full-migration
     spec:
+      imagePullSecrets:
+      - name: regcred
       # Use ServiceAccount with permissions to manage deployments
       serviceAccountName: search-admin
       restartPolicy: Never
