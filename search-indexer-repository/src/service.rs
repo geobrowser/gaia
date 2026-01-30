@@ -54,6 +54,7 @@ use uuid::Uuid;
 ///     entity_global_score: None,
 ///     space_score: None,
 ///     entity_space_score: None,
+///     deleted: None,
 /// };
 ///
 /// // This will create the document if it doesn't exist, or update it if it does

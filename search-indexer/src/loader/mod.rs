@@ -72,12 +72,6 @@ impl SearchLoader {
                             deleted: doc.deleted,
                         }));
                 }
-                ProcessedEvent::Delete { .. } => {
-                    // Delete events are now handled as soft deletes (Index with deleted=true)
-                    // This case should never be reached in the new implementation
-                    error!("Unexpected ProcessedEvent::Delete - should be using soft delete (Index with deleted=true)");
-                    continue;
-                }
                 ProcessedEvent::UnsetProperties {
                     entity_id,
                     space_id,
