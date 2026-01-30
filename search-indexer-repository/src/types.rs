@@ -174,6 +174,19 @@ impl EntityOperation {
             EntityOperation::UpdateEntitySpaceScore(r) => &r.space_id,
         }
     }
+
+    /// Get the operation type name.
+    pub fn operation_type(&self) -> &'static str {
+        match self {
+            EntityOperation::Update(_) => "Update",
+            EntityOperation::Delete(_) => "Delete",
+            EntityOperation::Unset(_) => "Unset",
+            EntityOperation::RemoveTypeRelationById(_) => "RemoveTypeRelationById",
+            EntityOperation::UpdateEntityGlobalScore(_) => "UpdateEntityGlobalScore",
+            EntityOperation::UpdateSpaceScore(_) => "UpdateSpaceScore",
+            EntityOperation::UpdateEntitySpaceScore(_) => "UpdateEntitySpaceScore",
+        }
+    }
 }
 
 /// Result of a batch operation for a single item.
@@ -187,6 +200,9 @@ pub struct BatchOperationResult {
     pub entity_id: String,
     /// The space this entity belongs to.
     pub space_id: String,
+    /// The type of operation (e.g., "Update", "Unset", "Delete", "AddTypeRelation").
+    /// Used for debugging failed operations.
+    pub operation_type: String,
     /// Whether the operation succeeded.
     pub success: bool,
     /// Error if the operation failed.
