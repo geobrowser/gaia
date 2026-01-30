@@ -1,4 +1,7 @@
-# Data Block Filter Spec
+# RFC: Data Block Filter Spec
+
+**Status:** Draft  
+**Version:** 1.0
 
 ## Summary
 Defines the JSON filter language stored in data blocks for querying the Knowledge Graph API. Filters are stringified JSON and use property UUIDs as keys. The spec also defines how relation filters and logical operators work, and how data types are selected when property values are heterogeneous.
@@ -26,13 +29,13 @@ Data blocks store a stringified JSON object with the following shape:
 {
   "spaceId": { "in": ["space-a-uuid", "space-b-uuid"] },
   "filter": { ... },
-  "types": { "PROPERTY_UUID": "TEXT" }
+  "properties": { "PROPERTY_UUID": "TEXT" }
 }
 ```
 
 - `spaceId` (optional): scopes results to one or more spaces.
 - `filter` (required): the filter expression.
-- `types` (optional): per-property data type overrides using GRC-20 DataType enum values (see Section 5).
+- `properties` (optional): per-property data type overrides using GRC-20 DataType enum values (see Section 5).
 
 ### 1.2 Property predicates
 Each predicate is keyed by a property UUID and contains an operator object.
@@ -102,13 +105,13 @@ Property data types are mutable and can vary across spaces; the protocol does no
    - If multiple data types exist for a property, the API may choose a default or require an explicit type.
 
 2) **Explicit type selection**
-   - Callers may specify a data type override per property via `types` using GRC-20 DataType enum values.
+   - Callers may specify a data type override per property via `properties` using GRC-20 DataType enum values.
    - Allowed values: `BOOL | INT64 | FLOAT64 | DECIMAL | TEXT | BYTES | DATE | TIME | DATETIME | SCHEDULE | POINT | RECT | EMBEDDING`.
    - The specified type controls which operator set is valid and how values are parsed.
 
 ```json
 {
-  "types": {
+  "properties": {
     "NAME_UUID": "TEXT",
     "PRICE_UUID": "DECIMAL",
     "START_DATE_UUID": "DATE",
@@ -127,6 +130,9 @@ Property data types are mutable and can vary across spaces; the protocol does no
 }
 ```
 
+#### Data type representation (open question)
+By default, data types are specified using the textual GRC-20 enum names (e.g., `TEXT`, `INT64`). **Question:** should we also allow numeric enum values as a compact representation? If introduced, numeric values MUST be gated by the filter `version` and clearly documented to avoid ambiguity.
+
 ### 1.6 Value representations
 - `DATE`, `TIME`, and `DATETIME` are filtered as ISO-8601 strings.
 - `BYTES` and `POINT` are filtered as strings (encoding specified by the API).
@@ -141,6 +147,21 @@ Property data types are mutable and can vary across spaces; the protocol does no
 - `_relation` only allows `entity`, `fromEntity`, `toEntity`.
 - Operator must be valid for the selected data type.
 - Explicit negated operators are not supported; use `NOT` instead.
+
+### 1.8 Versioning
+Filters MAY include a `version` field at the top level.
+
+- If `version` is omitted, the filter MUST be interpreted as version `1`.
+- Future versions MUST increment the version number and define any schema changes explicitly.
+
+```json
+{
+  "version": 1,
+  "filter": {
+    "NAME_UUID": { "is": "Mercury" }
+  }
+}
+```
 
 ## 2. Appendix
 
