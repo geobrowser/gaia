@@ -211,6 +211,13 @@
       "when": 1769556236352,
       "tag": "0029_abandoned_nova",
       "breakpoints": true
+    },
+    {
+      "idx": 30,
+      "version": "7",
+      "when": 1769753397003,
+      "tag": "0030_fix-property-function-type-check",
+      "breakpoints": true
     }
   ]
 }
