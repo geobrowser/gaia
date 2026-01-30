@@ -35,7 +35,7 @@ Data blocks store a stringified JSON object with the following shape:
 
 - `spaceId` (optional): scopes results to one or more spaces.
 - `filter` (required): the filter expression.
-- `properties` (optional): per-property data type overrides using GRC-20 DataType enum values (see Section 5).
+- `properties` (optional): per-property data type disambiguations using GRC-20 DataType enum values, mirroring the GRC-20 properties dictionary pattern (see Section 5).
 
 ### 1.2 Property predicates
 Each predicate is keyed by a property UUID and contains an operator object.
@@ -62,6 +62,36 @@ At any object level, logical operators can be combined with property predicates.
     "OR": [
       { "NOT": { "NAME_UUID": { "is": "Jane Doe" } } },
       { "NOT": { "NAME_UUID": { "is": "John Doe" } } }
+    ]
+  }
+}
+```
+
+Example with multi-level nesting:
+
+```json
+{
+  "filter": {
+    "STATUS_UUID": { "is": "Active" },
+    "OR": [
+      {
+        "NOT": {
+          "OR": [
+            { "NAME_UUID": { "is": "Jane Doe" } },
+            { "NAME_UUID": { "is": "John Doe" } }
+          ]
+        }
+      },
+      {
+        "OR": [
+          { "ROLE_UUID": { "is": "Admin" } },
+          {
+            "NOT": {
+              "AGE_UUID": { "lessThan": 18 }
+            }
+          }
+        ]
+      }
     ]
   }
 }
@@ -105,7 +135,7 @@ Property data types are mutable and can vary across spaces; the protocol does no
    - If multiple data types exist for a property, the API may choose a default or require an explicit type.
 
 2) **Explicit type selection**
-   - Callers may specify a data type override per property via `properties` using GRC-20 DataType enum values.
+   - Callers may specify a data type disambiguation per property via `properties` using GRC-20 DataType enum values. This mirrors the GRC-20 properties dictionary pattern.
    - Allowed values: `BOOL | INT64 | FLOAT64 | DECIMAL | TEXT | BYTES | DATE | TIME | DATETIME | SCHEDULE | POINT | RECT | EMBEDDING`.
    - The specified type controls which operator set is valid and how values are parsed.
 
@@ -169,51 +199,18 @@ Filters MAY include a `version` field at the top level.
 
 Operator sets are defined per data type. The spec allows only non-negated operators; all negation is expressed via the `NOT` logical operator.
 
-#### BOOL
-- `isNull`, `is`, `distinctFrom`, `in`, `lessThan`, `lessThanOrEqualTo`, `greaterThan`, `greaterThanOrEqualTo`
-
-#### INT64
-- `isNull`, `is`, `distinctFrom`, `in`, `lessThan`, `lessThanOrEqualTo`, `greaterThan`, `greaterThanOrEqualTo`
-
-#### FLOAT64
-- `isNull`, `is`, `distinctFrom`, `in`, `lessThan`, `lessThanOrEqualTo`, `greaterThan`, `greaterThanOrEqualTo`
-
-#### DECIMAL
-- `isNull`, `is`, `distinctFrom`, `in`, `lessThan`, `lessThanOrEqualTo`, `greaterThan`, `greaterThanOrEqualTo`
-
-#### TEXT
-- `isNull`, `is`, `distinctFrom`, `in`
-- `lessThan`, `lessThanOrEqualTo`, `greaterThan`, `greaterThanOrEqualTo`
-- `includes`, `includesInsensitive`
-- `startsWith`, `startsWithInsensitive`
-- `endsWith`, `endsWithInsensitive`
-- `like`, `likeInsensitive`
-- `isInsensitive`, `distinctFromInsensitive`
-- `inInsensitive`, `lessThanInsensitive`, `lessThanOrEqualToInsensitive`
-- `greaterThanInsensitive`, `greaterThanOrEqualToInsensitive`
-
-#### BYTES
-- same as TEXT
-
-#### DATE
-- same as TEXT
-
-#### TIME
-- same as TEXT
-
-#### DATETIME
-- same as TEXT
-
-#### POINT
-- same as TEXT
-
-#### RECT
-- same as TEXT
-
-#### SCHEDULE
-- `isNull`, `is`, `distinctFrom`, `in`
-- `lessThan`, `lessThanOrEqualTo`, `greaterThan`, `greaterThanOrEqualTo`
-- `containsKey`, `containsAllKeys`, `containsAnyKeys`, `containedBy`
-
-#### EMBEDDING
-- same as SCHEDULE
+| Data type | Operators |
+| --- | --- |
+| BOOL | `isNull`, `is`, `distinctFrom`, `in`, `lessThan`, `lessThanOrEqualTo`, `greaterThan`, `greaterThanOrEqualTo` |
+| INT64 | `isNull`, `is`, `distinctFrom`, `in`, `lessThan`, `lessThanOrEqualTo`, `greaterThan`, `greaterThanOrEqualTo` |
+| FLOAT64 | `isNull`, `is`, `distinctFrom`, `in`, `lessThan`, `lessThanOrEqualTo`, `greaterThan`, `greaterThanOrEqualTo` |
+| DECIMAL | `isNull`, `is`, `distinctFrom`, `in`, `lessThan`, `lessThanOrEqualTo`, `greaterThan`, `greaterThanOrEqualTo` |
+| TEXT | `isNull`, `is`, `distinctFrom`, `in`, `lessThan`, `lessThanOrEqualTo`, `greaterThan`, `greaterThanOrEqualTo`, `includes`, `includesInsensitive`, `startsWith`, `startsWithInsensitive`, `endsWith`, `endsWithInsensitive`, `like`, `likeInsensitive`, `isInsensitive`, `distinctFromInsensitive`, `inInsensitive`, `lessThanInsensitive`, `lessThanOrEqualToInsensitive`, `greaterThanInsensitive`, `greaterThanOrEqualToInsensitive` |
+| BYTES | same as TEXT |
+| DATE | same as TEXT |
+| TIME | same as TEXT |
+| DATETIME | same as TEXT |
+| POINT | same as TEXT |
+| RECT | same as TEXT |
+| SCHEDULE | `isNull`, `is`, `distinctFrom`, `in`, `lessThan`, `lessThanOrEqualTo`, `greaterThan`, `greaterThanOrEqualTo`, `containsKey`, `containsAllKeys`, `containsAnyKeys`, `containedBy` |
+| EMBEDDING | same as SCHEDULE |
