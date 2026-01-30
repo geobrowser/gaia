@@ -132,7 +132,7 @@ Property data types are mutable and can vary across spaces; the protocol does no
 
 1) **Implicit type selection** (default)
    - The caller or API selects a data type to interpret the filter value.
-   - If multiple data types exist for a property, the API may choose a default or require an explicit type.
+   - If multiple data types exist for a property, the caller can choose an explicit type, or the API may choose a default based on the canonical representation of the property for that space.
 
 2) **Explicit type selection**
    - Callers may specify a data type disambiguation per property via `properties` using GRC-20 DataType enum values. This mirrors the GRC-20 properties dictionary pattern.
