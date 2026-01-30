@@ -331,6 +331,59 @@ curl --compressed "http://localhost:3000/search?query=alice&type_ids=00000000-00
 ```
 
 
+## GRC-20 Support
+
+The search indexer consumes `HermesEdit` messages from Kafka and decodes the GRC-20 v2 payload using the `grc-20` crate (v0.3.0). Only operations relevant to search indexing are processed.
+
+### Handled Operations
+
+| Operation | Handling | Notes |
+|-----------|----------|-------|
+| `UpdateEntity` | ✓ Indexed | Extracts `name`, `description`, `avatar` properties. Handles `unset_values` to clear properties. |
+| `CreateRelation` | ✓ Indexed | Only processes **type relations** (where `relation_type == TYPE_RELATION_TYPE_ID`). Adds type IDs to entities for type filtering. |
+| `DeleteRelation` | ✓ Indexed | Removes type relations from entities. |
+| `DeleteEntity` | ✓ Indexed | Soft delete - sets `deleted=true` on the entity document. Deleted entities are excluded from search results. |
+
+### Not Yet Implemented
+
+| Operation | Notes |
+|-----------|-------|
+| `CreateEntity` | Could be used to pre-create entity documents before properties are set. |
+| `RestoreEntity` | Would set `deleted=false` to un-delete entities. |
+| `UpdateRelation` | Could support updating type relations. |
+| `RestoreRelation` | Would restore deleted type relations. |
+| `CreateValueRef` | Could index value reference metadata. |
+
+### Soft Delete Behavior
+
+When a `DeleteEntity` operation is processed:
+1. The entity document is updated with `deleted=true`
+2. The OpenSearch query filters exclude `deleted=true` documents from search results
+3. Subsequent updates to the deleted entity are ignored (tombstone dominance)
+
+**Tombstone dominance:** Per the GRC-20 spec, updates to deleted entities are ignored. This is enforced at the OpenSearch level using Painless scripts that check the `deleted` status before applying updates. Type relation additions/removals are also skipped for deleted entities.
+
+**Note:** `RestoreEntity` is not currently handled. If you need to un-delete an entity, you would need to manually update the OpenSearch document or re-index.
+
+### Message Format
+
+The indexer expects `HermesEdit` protobuf messages on the `knowledge.edits` Kafka topic:
+
+```protobuf
+message HermesEdit {
+  bytes id = 1;           // Edit UUID (16 bytes)
+  string name = 2;        // Human-readable edit name
+  bytes payload = 3;      // GRC-20 v2 encoded bytes (GRC2 or GRC2Z)
+  repeated bytes authors = 4;
+  bytes language = 5;     // Optional
+  bytes space_id = 6;     // Space UUID (16 bytes)
+  bool is_canonical = 7;
+  BlockchainMetadata meta = 8;
+}
+```
+
+The `payload` field contains GRC-20 v2 wire format bytes, decoded using `grc_20::decode_edit()`.
+
 ## Troubleshooting
 
 ### Common issues

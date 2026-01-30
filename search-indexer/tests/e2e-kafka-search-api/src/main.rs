@@ -61,6 +61,11 @@ async fn main() -> Result<()> {
     let charlie_id = Uuid::parse_str("00000000-0000-0000-0000-000000000c1c").unwrap();
     let org_id = Uuid::parse_str("00000000-0000-0000-0000-0000000ac3ec").unwrap();
 
+    // Entities to be deleted (for soft delete testing)
+    let delete_charlie_id = Uuid::parse_str("00000000-0000-0000-0000-000000000c01").unwrap();
+    let delete_dana_id = Uuid::parse_str("00000000-0000-0000-0000-000000000d01").unwrap();
+    let delete_eve_id = Uuid::parse_str("00000000-0000-0000-0000-000000000e01").unwrap();
+
     info!("Test Space ID: {}", test_space);
     info!("Person Type ID: {}", person_type_id);
     info!("Organization Type ID: {}", org_type_id);
@@ -88,6 +93,10 @@ async fn main() -> Result<()> {
     info!("  Bob ID: {}", bob_id);
     info!("  Charlie ID: {} - will have NO global score", charlie_id);
     info!("  Organization ID: {}", org_id);
+    info!("\nDeletion test entities:");
+    info!("  Delete Charlie ID: {} (will be deleted)", delete_charlie_id);
+    info!("  Delete Dana ID: {} (will be deleted)", delete_dana_id);
+    info!("  Delete Eve ID: {} (will be deleted then updated)", delete_eve_id);
 
     // 1. Create Person type entity
     info!("\n1. Creating Person type entity...");
@@ -388,12 +397,82 @@ async fn main() -> Result<()> {
         .send(SCORES_TOPIC, None, score_payload)
         .await?;
 
+    // 9. Create entities that will be soft deleted (for delete testing)
+    info!("9. Creating entities for deletion testing...");
+    let delete_charlie_payload_create = edits::create_entity_edit(
+        "Create Delete Charlie",
+        test_space,
+        delete_charlie_id,
+        Some("Delete Charlie"),
+        Some("This entity will be deleted"),
+        None,
+    )?;
+    producer.send(EDITS_TOPIC, None, delete_charlie_payload_create).await?;
+
+    let delete_dana_payload_create = edits::create_entity_edit(
+        "Create Delete Dana",
+        test_space,
+        delete_dana_id,
+        Some("Delete Dana"),
+        Some("This entity will also be deleted"),
+        None,
+    )?;
+    producer.send(EDITS_TOPIC, None, delete_dana_payload_create).await?;
+
+    let delete_eve_payload_create = edits::create_entity_edit(
+        "Create Delete Eve",
+        test_space,
+        delete_eve_id,
+        Some("Delete Eve"),
+        Some("This entity will be deleted then updated"),
+        None,
+    )?;
+    producer.send(EDITS_TOPIC, None, delete_eve_payload_create).await?;
+
+    // 10. Delete the test entities (soft delete)
+    info!("10. Soft deleting Delete Charlie, Delete Dana, and Delete Eve...");
+    let delete_charlie_payload = edits::delete_entity(
+        "Delete Delete Charlie",
+        test_space,
+        delete_charlie_id,
+    )?;
+    producer.send(EDITS_TOPIC, None, delete_charlie_payload).await?;
+
+    let delete_dana_payload = edits::delete_entity(
+        "Delete Delete Dana",
+        test_space,
+        delete_dana_id,
+    )?;
+    producer.send(EDITS_TOPIC, None, delete_dana_payload).await?;
+
+    let delete_eve_payload = edits::delete_entity(
+        "Delete Delete Eve",
+        test_space,
+        delete_eve_id,
+    )?;
+    producer.send(EDITS_TOPIC, None, delete_eve_payload).await?;
+
+    // 11. Update a deleted entity (Delete Eve) - should remain deleted
+    info!("11. Updating Delete Eve after deletion (testing delete-then-update behavior)...");
+    let update_eve_payload = edits::create_entity_edit(
+        "Update Delete Eve After Delete",
+        test_space,
+        delete_eve_id,
+        Some("Delete Eve Updated"),
+        Some("This entity was updated after being deleted - should remain deleted"),
+        None,
+    )?;
+    producer.send(EDITS_TOPIC, None, update_eve_payload).await?;
+
     info!("\n✅ Test scenario complete!");
     info!("Created:");
-    info!("  - 12 entities");
+    info!("  - 17 entities (11 active + 3 deleted + 3 unset test entities)");
     info!("    • 7 Alice variants (high, medium, low, zero, negative, at threshold, below threshold)");
     info!("    • Bob, Charlie, Acme Corp");
     info!("    • Person type, Organization type");
+    info!("    • Charlie, Dana (soft deleted)");
+    info!("    • Eve (soft deleted, then updated - remains deleted)");
+    info!("    • 3 unset property test entities");
     info!("  - Type relation scenarios:");
     info!("    • Alice High: Multiple types (Person + Organization)");
     info!("    • Alice Medium: Create->Delete->Create pattern (Person + Organization recreated)");
@@ -414,8 +493,8 @@ async fn main() -> Result<()> {
     info!("  • At Threshold: 0.50");
     info!("  • Below Threshold: 0.25");
 
-    // 9. Test unset_properties functionality
-    info!("\n9. Testing unset_properties functionality...");
+    // 12. Test unset_properties functionality
+    info!("\n12. Testing unset_properties functionality...");
 
     // Test Case 1: Unset 1 property (name)
     let unset_test_1_id = Uuid::parse_str("00000000-0000-0000-0000-000000001111").unwrap();

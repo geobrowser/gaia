@@ -497,6 +497,7 @@ mod tests {
             entity_global_score: None,
             space_score: None,
             entity_space_score: None,
+            deleted: None,
         }
     }
 
@@ -624,6 +625,7 @@ mod tests {
             entity_global_score: None,
             space_score: None,
             entity_space_score: None,
+            deleted: None,
         };
         assert!(service.update(request).await.is_err());
 
@@ -639,6 +641,7 @@ mod tests {
             entity_global_score: None,
             space_score: None,
             entity_space_score: None,
+            deleted: None,
         };
         assert!(service.update(request).await.is_err());
     }
@@ -682,6 +685,7 @@ mod tests {
                 entity_global_score: None,
                 space_score: None,
                 entity_space_score: None,
+                deleted: None,
             })
             .collect();
 
