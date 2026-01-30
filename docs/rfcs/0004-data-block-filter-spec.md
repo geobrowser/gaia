@@ -35,7 +35,7 @@ Data blocks store a stringified JSON object with the following shape:
 
 - `spaceId` (optional): scopes results to one or more spaces.
 - `filter` (required): the filter expression.
-- `properties` (optional): per-property data type disambiguations using GRC-20 DataType enum values, mirroring the GRC-20 properties dictionary pattern (see Section 5).
+- `properties` (optional): per-property data type disambiguations using [GRC-20 v2 spec][grc20] DataType enum values, mirroring the [GRC-20 v2 spec][grc20] properties dictionary pattern (see Section 5).
 
 ### 1.2 Property predicates
 Each predicate is keyed by a property UUID and contains an operator object.
@@ -135,7 +135,7 @@ Property data types are mutable and can vary across spaces; the protocol does no
    - If multiple data types exist for a property, the caller can choose an explicit type, or the API may choose a default based on the canonical representation of the property for that space.
 
 2) **Explicit type selection**
-   - Callers may specify a data type disambiguation per property via `properties` using GRC-20 DataType enum values. This mirrors the GRC-20 properties dictionary pattern.
+   - Callers may specify a data type disambiguation per property via `properties` using [GRC-20 v2 spec][grc20] DataType enum values. This mirrors the [GRC-20 v2 spec][grc20] properties dictionary pattern.
    - Allowed values: `BOOL | INT64 | FLOAT64 | DECIMAL | TEXT | BYTES | DATE | TIME | DATETIME | SCHEDULE | POINT | RECT | EMBEDDING`.
    - The specified type controls which operator set is valid and how values are parsed.
 
@@ -161,7 +161,7 @@ Property data types are mutable and can vary across spaces; the protocol does no
 ```
 
 #### Data type representation (open question)
-By default, data types are specified using the textual GRC-20 enum names (e.g., `TEXT`, `INT64`). **Question:** should we also allow numeric enum values as a compact representation? If introduced, numeric values MUST be gated by the filter `version` and clearly documented to avoid ambiguity.
+By default, data types are specified using the textual [GRC-20 v2 spec][grc20] enum names (e.g., `TEXT`, `INT64`). **Question:** should we also allow numeric enum values as a compact representation? If introduced, numeric values MUST be gated by the filter `version` and clearly documented to avoid ambiguity.
 
 ### 1.6 Value representations
 - `DATE`, `TIME`, and `DATETIME` are filtered as ISO-8601 strings.
@@ -214,3 +214,5 @@ Operator sets are defined per data type. The spec allows only non-negated operat
 | RECT | same as TEXT |
 | SCHEDULE | `isNull`, `is`, `distinctFrom`, `in`, `lessThan`, `lessThanOrEqualTo`, `greaterThan`, `greaterThanOrEqualTo`, `containsKey`, `containsAllKeys`, `containsAnyKeys`, `containedBy` |
 | EMBEDDING | same as SCHEDULE |
+
+[grc20]: https://github.com/geobrowser/geobrowser-grc-20/blob/main/spec.md
