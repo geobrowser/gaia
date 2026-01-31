@@ -1,0 +1,223 @@
+name: Search Indexer E2E Tests
+
+on:
+  push:
+    branches: [main, dev]
+    paths:
+      - 'search-indexer/**'
+      - 'search-indexer-repository/**'
+      - 'hermes-schema/**'
+      - 'hermes-kafka/**'
+      - 'wire/**'
+      - 'api/**'
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - 'search-indexer/**'
+      - 'search-indexer-repository/**'
+      - 'hermes-schema/**'
+      - 'hermes-kafka/**'
+      - 'wire/**'
+      - 'api/**'
+  workflow_dispatch:
+
+env:
+  CARGO_TERM_COLOR: always
+  DATABASE_URL: postgresql://test_user:test_password@localhost:5432/gaia_test
+  KAFKA_BROKER: localhost:9092
+  OPENSEARCH_URL: http://localhost:9200
+
+jobs:
+  e2e-tests:
+    name: E2E Tests
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:18
+        env:
+          POSTGRES_USER: test_user
+          POSTGRES_PASSWORD: test_password
+          POSTGRES_DB: gaia_test
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+      kafka:
+        image: apache/kafka:latest
+        env:
+          KAFKA_NODE_ID: 1
+          KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+          KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+          KAFKA_LISTENERS: CONTROLLER://0.0.0.0:9093,PLAINTEXT://0.0.0.0:9092
+          KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+          KAFKA_PROCESS_ROLES: broker,controller
+          KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+          KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+          KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+          KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+          KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+          CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
+        ports:
+          - 9092:9092
+          - 9093:9093
+
+      opensearch:
+        image: opensearchproject/opensearch:2.11.0
+        env:
+          discovery.type: single-node
+          plugins.security.disabled: "true"
+          OPENSEARCH_INITIAL_ADMIN_PASSWORD: admin123!
+        options: >-
+          --health-cmd "curl -s http://localhost:9200/_cluster/health || exit 1"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 10
+        ports:
+          - 9200:9200
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.82.0"
+
+      - name: Install protoc
+        run: sudo apt-get update && sudo apt-get install -y protobuf-compiler
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get install -y \
+            cmake \
+            libclang-dev \
+            libssl-dev \
+            pkg-config
+
+      - name: Cache Rust dependencies
+        uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: |
+            ./search-indexer
+            ./search-indexer-repository
+
+      - name: Setup Bun
+        uses: oven-sh/setup-bun@v1
+        with:
+          bun-version: latest
+
+      - name: Install API dependencies
+        working-directory: ./api
+        run: bun install --frozen-lockfile
+
+      - name: Wait for PostgreSQL
+        run: |
+          until pg_isready -h localhost -p 5432 -U test_user; do
+            echo "Waiting for PostgreSQL..."
+            sleep 2
+          done
+        env:
+          PGPASSWORD: test_password
+
+      - name: Create pg_trgm extension
+        run: |
+          psql -h localhost -p 5432 -U test_user -d gaia_test -c "CREATE EXTENSION IF NOT EXISTS pg_trgm;"
+        env:
+          PGPASSWORD: test_password
+
+      - name: Run database migrations
+        working-directory: ./api
+        run: bun run db:migrate
+
+      - name: Wait for Kafka
+        run: |
+          echo "Waiting for Kafka to be ready..."
+          for i in {1..60}; do
+            if nc -z localhost 9092; then
+              echo "Kafka port 9092 is open, waiting for broker to be ready..."
+              sleep 5
+              echo "Kafka should be ready now"
+              break
+            fi
+            echo "Waiting for Kafka... ($i/60)"
+            sleep 2
+          done
+
+      - name: Wait for OpenSearch
+        run: |
+          echo "Waiting for OpenSearch to be ready..."
+          for i in {1..60}; do
+            if curl -s http://localhost:9200/_cluster/health | grep -q '"status":"green"\|"status":"yellow"'; then
+              echo "OpenSearch is ready"
+              break
+            fi
+            echo "Waiting for OpenSearch... ($i/60)"
+            sleep 2
+          done
+
+      - name: Build search-indexer
+        run: cargo build --package search-indexer --release --features search-indexer-repository/auto_index_creation
+
+      - name: Setup Rust nightly for e2e test generator
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Start Search API
+        working-directory: ./api
+        run: |
+          bun run main.ts &
+          echo $! > /tmp/api.pid
+          # Wait for API to be ready
+          for i in {1..30}; do
+            if curl -s http://localhost:3000/search/health > /dev/null 2>&1; then
+              echo "Search API is ready"
+              break
+            fi
+            echo "Waiting for Search API... ($i/30)"
+            sleep 2
+          done
+        env:
+          DATABASE_URL: postgresql://test_user:test_password@localhost:5432/gaia_test
+          OPENSEARCH_URL: http://localhost:9200
+
+      - name: Run search-indexer in background
+        run: |
+          KAFKA_BROKER=localhost:9092 \
+          OPENSEARCH_URL=http://localhost:9200 \
+          KAFKA_GROUP_ID=search-indexer-e2e \
+          RUST_LOG=search_indexer=info \
+          ./target/release/search-indexer &
+          echo $! > /tmp/search-indexer.pid
+          sleep 5
+
+      - name: Run E2E tests
+        working-directory: ./search-indexer/tests/e2e-kafka-search-api
+        run: |
+          # Set nightly as default for this crate (uses edition 2024)
+          rustup default nightly
+          ./run-test.sh
+        env:
+          KAFKA_BROKER: localhost:9092
+          SEARCH_API_URL: http://localhost:3000
+
+      - name: Cleanup
+        if: always()
+        run: |
+          if [ -f /tmp/api.pid ]; then
+            kill $(cat /tmp/api.pid) 2>/dev/null || true
+          fi
+          if [ -f /tmp/search-indexer.pid ]; then
+            kill $(cat /tmp/search-indexer.pid) 2>/dev/null || true
+          fi
