@@ -192,6 +192,8 @@ jobs:
         env:
           DATABASE_URL: postgresql://test_user:test_password@localhost:5432/gaia_test
           OPENSEARCH_URL: http://localhost:9200
+          IPFS_KEY: dummy-key-for-e2e-tests
+          IPFS_GATEWAY_WRITE: http://localhost:5001
 
       - name: Run search-indexer in background
         run: |
