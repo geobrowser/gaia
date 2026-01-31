@@ -99,6 +99,7 @@ jobs:
             libclang-dev \
             libssl-dev \
             libcurl4-openssl-dev \
+            libsasl2-dev \
             pkg-config
 
       - name: Cache Rust dependencies
