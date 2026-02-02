@@ -43,10 +43,33 @@ impl ScoresConsumer {
     /// Default batch timeout in milliseconds.
     const DEFAULT_BATCH_TIMEOUT_MS: u64 = 1000;
 
+    /// Get the topic prefix based on the ENVIRONMENT variable.
+    ///
+    /// - `ENVIRONMENT=staging` → returns `"staging."`
+    /// - `ENVIRONMENT=production` → returns `""`
+    ///
+    /// # Panics
+    ///
+    /// Panics if `ENVIRONMENT` is not set or has an unexpected value.
+    fn get_topic_prefix() -> String {
+        let environment = env::var("ENVIRONMENT").expect(
+            "ENVIRONMENT variable must be set to 'staging' or 'production'"
+        );
+        match environment.as_str() {
+            "staging" => "staging.".to_string(),
+            "production" => String::new(),
+            other => panic!(
+                "ENVIRONMENT must be 'staging' or 'production', got '{}'",
+                other
+            ),
+        }
+    }
+
     /// Create a new scores consumer.
     ///
     /// Configuration is read from environment variables:
-    /// - SCORES_KAFKA_TOPIC: Topic name (default: "curation.scores")
+    /// - TOPIC_PREFIX: Prefix for environment isolation (default: "" for production)
+    /// - SCORES_KAFKA_TOPIC: Base topic name (default: "curation.scores")
     /// - SCORES_BATCH_SIZE: Batch size (default: 50)
     /// - SCORES_BATCH_TIMEOUT_MS: Batch timeout in milliseconds (default: 1000)
     ///
@@ -55,8 +78,10 @@ impl ScoresConsumer {
     /// * `brokers` - Kafka broker addresses (comma-separated)
     /// * `group_id` - Consumer group ID (will append "-scores" suffix)
     pub fn new(brokers: &str, group_id: &str) -> Result<Self, IngestError> {
-        let topic =
+        let prefix = Self::get_topic_prefix();
+        let base_topic =
             env::var("SCORES_KAFKA_TOPIC").unwrap_or_else(|_| Self::SCORES_TOPIC.to_string());
+        let topic = format!("{}{}", prefix, base_topic);
 
         let batch_size = env::var("SCORES_BATCH_SIZE")
             .ok()

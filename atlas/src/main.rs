@@ -242,12 +242,36 @@ fn main() -> anyhow::Result<()> {
         .block_on(async_main())
 }
 
+/// Get the topic prefix based on the ENVIRONMENT variable.
+///
+/// - `ENVIRONMENT=staging` → returns `"staging."`
+/// - `ENVIRONMENT=production` → returns `""`
+///
+/// # Panics
+///
+/// Panics if `ENVIRONMENT` is not set or has an unexpected value.
+fn get_topic_prefix() -> String {
+    let environment = env::var("ENVIRONMENT").expect(
+        "ENVIRONMENT variable must be set to 'staging' or 'production'"
+    );
+    match environment.as_str() {
+        "staging" => "staging.".to_string(),
+        "production" => String::new(),
+        other => panic!(
+            "ENVIRONMENT must be 'staging' or 'production', got '{}'",
+            other
+        ),
+    }
+}
+
 async fn async_main() -> anyhow::Result<()> {
     let broker = env::var("KAFKA_BROKER").unwrap_or_else(|_| "localhost:9092".to_string());
-    let topic = env::var("KAFKA_TOPIC").unwrap_or_else(|_| "topology.canonical".to_string());
+    let topic_prefix = get_topic_prefix();
+    let base_topic = env::var("KAFKA_TOPIC").unwrap_or_else(|_| "topology.canonical".to_string());
+    let topic = format!("{}{}", topic_prefix, base_topic);
 
     info!("Atlas Topology Processor starting");
-    info!(kafka_broker = %broker, kafka_topic = %topic, "Configuration loaded");
+    info!(kafka_broker = %broker, kafka_topic = %topic, topic_prefix = %topic_prefix, "Configuration loaded");
 
     // Set up Kafka producer
     debug!("Connecting to Kafka broker");

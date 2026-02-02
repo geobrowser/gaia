@@ -10,6 +10,27 @@ use tracing::{debug, info};
 
 use crate::error::IndexerError;
 
+/// Get the topic prefix based on the ENVIRONMENT variable.
+///
+/// - `ENVIRONMENT=staging` → returns `"staging."`
+/// - `ENVIRONMENT=production` → returns `""`
+///
+/// # Panics
+///
+/// Panics if `ENVIRONMENT` is not set or has an unexpected value.
+fn get_topic_prefix() -> String {
+    let environment = env::var("ENVIRONMENT")
+        .expect("ENVIRONMENT variable must be set to 'staging' or 'production'");
+    match environment.as_str() {
+        "staging" => "staging.".to_string(),
+        "production" => String::new(),
+        other => panic!(
+            "ENVIRONMENT must be 'staging' or 'production', got '{}'",
+            other
+        ),
+    }
+}
+
 pub struct KafkaConsumer {
     consumer: StreamConsumer<DefaultConsumerContext>,
     topics: Vec<String>,
@@ -45,19 +66,23 @@ impl KafkaConsumer {
             .create()
             .map_err(|e| IndexerError::kafka(e.to_string()))?;
 
+        // Topic prefix for environment isolation (e.g., "staging." or empty for production)
+        let prefix = get_topic_prefix();
+
         // Topics to consume (subset of what hermes-pipeline produces)
         let topics = vec![
-            "hermes.blocks".to_string(),
-            "knowledge.edits".to_string(),
-            "space.creations".to_string(),
-            "space.membership".to_string(),
-            "space.trust.extensions".to_string(),
-            "space.governance".to_string(),
+            format!("{}hermes.blocks", prefix),
+            format!("{}knowledge.edits", prefix),
+            format!("{}space.creations", prefix),
+            format!("{}space.membership", prefix),
+            format!("{}space.trust.extensions", prefix),
+            format!("{}space.governance", prefix),
         ];
 
         info!(
             brokers = %brokers,
             group_id = %group_id,
+            topic_prefix = %prefix,
             topics = ?topics,
             "Created Kafka consumer"
         );

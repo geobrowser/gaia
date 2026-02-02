@@ -4,7 +4,7 @@
 //! for any type that implements `KafkaEvent + prost::Message`.
 
 use anyhow::Result;
-use hermes_instrumentation::{Span, debug_span, error, info};
+use hermes_instrumentation::{debug_span, error, info, Span};
 use opentelemetry::global;
 use opentelemetry::propagation::Injector;
 use prost::Message;
@@ -24,8 +24,8 @@ use hermes_schema::pb::{
         HermesContentFlagged, HermesContentUnflagged, HermesEditorFlagged, HermesEditorUnflagged,
     },
     space::{
-        HermesCreateSpace, HermesSpaceTrustExtension, hermes_create_space,
-        hermes_space_trust_extension,
+        hermes_create_space, hermes_space_trust_extension, HermesCreateSpace,
+        HermesSpaceTrustExtension,
     },
     topics::HermesTopicDeclared,
     voting::{HermesVoteCast, VoteDirection},
@@ -571,18 +571,62 @@ fn log_event_ids_enabled() -> bool {
 }
 
 // =============================================================================
+// Topic Prefix
+// =============================================================================
+
+/// Get the topic prefix based on the ENVIRONMENT variable.
+///
+/// - `ENVIRONMENT=staging` → returns `"staging."`
+/// - `ENVIRONMENT=production` → returns `""`
+///
+/// # Panics
+///
+/// Panics if `ENVIRONMENT` is not set or has an unexpected value.
+fn get_topic_prefix() -> String {
+    let env = std::env::var("ENVIRONMENT")
+        .expect("ENVIRONMENT variable must be set to 'staging' or 'production'");
+    match env.as_str() {
+        "staging" => "staging.".to_string(),
+        "production" => String::new(),
+        other => panic!(
+            "ENVIRONMENT must be 'staging' or 'production', got '{}'",
+            other
+        ),
+    }
+}
+
+/// Apply prefix to a base topic name.
+fn prefixed_topic(prefix: &str, base: &str) -> String {
+    format!("{}{}", prefix, base)
+}
+
+// =============================================================================
 // Emitter
 // =============================================================================
 
 /// Emitter wraps a Kafka producer and provides generic event emission.
 pub struct Emitter {
     producer: BaseProducer,
+    topic_prefix: String,
 }
 
 impl Emitter {
     /// Create a new emitter wrapping the given Kafka producer.
+    ///
+    /// Reads `TOPIC_PREFIX` from environment to support environment isolation.
+    /// If set (e.g., "staging."), all topics will be prefixed.
     pub fn new(producer: BaseProducer) -> Self {
-        Self { producer }
+        let topic_prefix = get_topic_prefix();
+        if !topic_prefix.is_empty() {
+            info!(
+                topic_prefix = %topic_prefix,
+                "Kafka topic prefix configured"
+            );
+        }
+        Self {
+            producer,
+            topic_prefix,
+        }
     }
 
     /// Emit any event that implements `KafkaEvent + Message`.
@@ -590,17 +634,20 @@ impl Emitter {
         let mut payload = Vec::new();
         event.encode(&mut payload)?;
 
+        // Apply topic prefix for environment isolation
+        let topic = prefixed_topic(&self.topic_prefix, T::TOPIC);
+
         let headers = event.headers();
-        let headers = attach_event_id(headers, event, T::TOPIC);
+        let headers = attach_event_id(headers, event, &topic);
         let headers = inject_trace_headers(headers);
         let event_id = event
-            .event_id(T::TOPIC)
+            .event_id(&topic)
             .unwrap_or_else(|| "unknown".to_string());
 
         if log_event_ids_enabled() {
             info!(
                 event = "hermes_pipeline.event_id",
-                topic = T::TOPIC,
+                topic = %topic,
                 event_id = %event_id,
                 "Emitting event"
             );
@@ -608,13 +655,13 @@ impl Emitter {
 
         debug_span!(
             "kafka.send",
-            topic = T::TOPIC,
+            topic = %topic,
             payload_size = payload.len(),
             event_id = %event_id
         )
         .in_scope(|| {
             let key = event.key();
-            let record = BaseRecord::to(T::TOPIC)
+            let record = BaseRecord::to(&topic)
                 .key(&key)
                 .payload(&payload)
                 .headers(headers);
@@ -628,7 +675,7 @@ impl Emitter {
                 error!(
                     event = "hermes_pipeline.event_error",
                     stage = "kafka.send",
-                    topic = T::TOPIC,
+                    topic = %topic,
                     event_id = %event_id,
                     error = %err,
                     "Kafka send failed"
@@ -798,5 +845,39 @@ mod tests {
         };
         // Should key by object_id for partitioning
         assert_eq!(event.key(), vec![0xAB; 16]);
+    }
+
+    // =============================================================================
+    // Topic prefix tests
+    // =============================================================================
+
+    #[test]
+    fn test_prefixed_topic_empty_prefix() {
+        assert_eq!(prefixed_topic("", "knowledge.edits"), "knowledge.edits");
+    }
+
+    #[test]
+    fn test_prefixed_topic_with_prefix() {
+        assert_eq!(
+            prefixed_topic("staging.", "knowledge.edits"),
+            "staging.knowledge.edits"
+        );
+    }
+
+    #[test]
+    fn test_prefixed_topic_preserves_base() {
+        // Verify all topics can be prefixed
+        assert_eq!(
+            prefixed_topic("staging.", topics::BLOCK_SUMMARY),
+            "staging.hermes.blocks"
+        );
+        assert_eq!(
+            prefixed_topic("staging.", topics::EDITS),
+            "staging.knowledge.edits"
+        );
+        assert_eq!(
+            prefixed_topic("staging.", topics::VOTING),
+            "staging.curation.votes"
+        );
     }
 }

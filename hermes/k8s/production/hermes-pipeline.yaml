@@ -69,6 +69,8 @@ spec:
                 secretKeyRef:
                   name: api-secrets
                   key: DATABASE_URL
+            - name: ENVIRONMENT
+              value: "production"
             - name: KAFKA_BROKER
               valueFrom:
                 secretKeyRef:

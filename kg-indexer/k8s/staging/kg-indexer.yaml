@@ -90,6 +90,8 @@ spec:
                 secretKeyRef:
                   name: kg-indexer-secrets
                   key: KAFKA_SSL_CA_PEM
+            - name: ENVIRONMENT
+              value: "staging"
             - name: KAFKA_GROUP_ID
               value: "kg-indexer-v4-staging"
             - name: BLOCK_STALE_TIMEOUT_MS
