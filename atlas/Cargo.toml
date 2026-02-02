@@ -17,6 +17,7 @@ harness = false
 
 [dependencies]
 hermes-instrumentation = { path = "../hermes-instrumentation" }
+hermes-kafka = { path = "../hermes-kafka" }
 hermes-relay = { path = "../hermes-relay" }
 hermes-schema = { path = "../hermes-schema" }
 hex = "0.4"

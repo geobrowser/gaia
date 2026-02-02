@@ -10,6 +10,7 @@ search-indexer-shared = { path = "../search-indexer-shared" }
 search-indexer-repository = { path = "../search-indexer-repository" }
 hermes-schema = { path = "../hermes-schema" }
 hermes-instrumentation = { path = "../hermes-instrumentation" }
+hermes-kafka = { path = "../hermes-kafka" }
 wire = { path = "../wire" }
 indexer_utils = { path = "../indexer_utils" }
 sdk = { path = "../sdk" }

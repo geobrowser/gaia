@@ -1,5 +1,6 @@
 //! Kafka consumer for the curation.votes topic.
 
+use hermes_kafka::get_topic_prefix;
 use prost::Message;
 use rdkafka::{
     config::ClientConfig,
@@ -13,27 +14,6 @@ use crate::error::IndexerError;
 
 /// Base topic for curation votes
 const VOTES_TOPIC: &str = "curation.votes";
-
-/// Get the topic prefix based on the ENVIRONMENT variable.
-///
-/// - `ENVIRONMENT=staging` → returns `"staging."`
-/// - `ENVIRONMENT=production` → returns `""`
-///
-/// # Panics
-///
-/// Panics if `ENVIRONMENT` is not set or has an unexpected value.
-fn get_topic_prefix() -> String {
-    let environment = env::var("ENVIRONMENT")
-        .expect("ENVIRONMENT variable must be set to 'staging' or 'production'");
-    match environment.as_str() {
-        "staging" => "staging.".to_string(),
-        "production" => String::new(),
-        other => panic!(
-            "ENVIRONMENT must be 'staging' or 'production', got '{}'",
-            other
-        ),
-    }
-}
 
 /// Kafka consumer for vote events.
 pub struct KafkaConsumer {

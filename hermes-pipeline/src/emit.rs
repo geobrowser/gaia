@@ -570,35 +570,8 @@ fn log_event_ids_enabled() -> bool {
     })
 }
 
-// =============================================================================
-// Topic Prefix
-// =============================================================================
-
-/// Get the topic prefix based on the ENVIRONMENT variable.
-///
-/// - `ENVIRONMENT=staging` → returns `"staging."`
-/// - `ENVIRONMENT=production` → returns `""`
-///
-/// # Panics
-///
-/// Panics if `ENVIRONMENT` is not set or has an unexpected value.
-fn get_topic_prefix() -> String {
-    let env = std::env::var("ENVIRONMENT")
-        .expect("ENVIRONMENT variable must be set to 'staging' or 'production'");
-    match env.as_str() {
-        "staging" => "staging.".to_string(),
-        "production" => String::new(),
-        other => panic!(
-            "ENVIRONMENT must be 'staging' or 'production', got '{}'",
-            other
-        ),
-    }
-}
-
-/// Apply prefix to a base topic name.
-fn prefixed_topic(prefix: &str, base: &str) -> String {
-    format!("{}{}", prefix, base)
-}
+// Re-export topic utilities from hermes-kafka
+use hermes_kafka::{get_topic_prefix, prefixed_topic};
 
 // =============================================================================
 // Emitter
@@ -607,22 +580,20 @@ fn prefixed_topic(prefix: &str, base: &str) -> String {
 /// Emitter wraps a Kafka producer and provides generic event emission.
 pub struct Emitter {
     producer: BaseProducer,
-    topic_prefix: String,
+    topic_prefix: &'static str,
 }
 
 impl Emitter {
     /// Create a new emitter wrapping the given Kafka producer.
     ///
-    /// Reads `TOPIC_PREFIX` from environment to support environment isolation.
-    /// If set (e.g., "staging."), all topics will be prefixed.
+    /// Reads `ENVIRONMENT` from environment to support environment isolation.
+    /// If set to "staging", all topics will be prefixed with "staging.".
     pub fn new(producer: BaseProducer) -> Self {
         let topic_prefix = get_topic_prefix();
-        if !topic_prefix.is_empty() {
-            info!(
-                topic_prefix = %topic_prefix,
-                "Kafka topic prefix configured"
-            );
-        }
+        info!(
+            topic_prefix = %topic_prefix,
+            "Kafka topic prefix configured"
+        );
         Self {
             producer,
             topic_prefix,
@@ -847,37 +818,5 @@ mod tests {
         assert_eq!(event.key(), vec![0xAB; 16]);
     }
 
-    // =============================================================================
-    // Topic prefix tests
-    // =============================================================================
-
-    #[test]
-    fn test_prefixed_topic_empty_prefix() {
-        assert_eq!(prefixed_topic("", "knowledge.edits"), "knowledge.edits");
-    }
-
-    #[test]
-    fn test_prefixed_topic_with_prefix() {
-        assert_eq!(
-            prefixed_topic("staging.", "knowledge.edits"),
-            "staging.knowledge.edits"
-        );
-    }
-
-    #[test]
-    fn test_prefixed_topic_preserves_base() {
-        // Verify all topics can be prefixed
-        assert_eq!(
-            prefixed_topic("staging.", topics::BLOCK_SUMMARY),
-            "staging.hermes.blocks"
-        );
-        assert_eq!(
-            prefixed_topic("staging.", topics::EDITS),
-            "staging.knowledge.edits"
-        );
-        assert_eq!(
-            prefixed_topic("staging.", topics::VOTING),
-            "staging.curation.votes"
-        );
-    }
+    // Topic prefix tests are in hermes-kafka crate
 }

@@ -1,3 +1,4 @@
+use hermes_kafka::{get_topic_prefix, strip_topic_prefix};
 use prost::Message;
 use rdkafka::{
     config::ClientConfig,
@@ -9,27 +10,6 @@ use std::env;
 use tracing::{debug, info};
 
 use crate::error::IndexerError;
-
-/// Get the topic prefix based on the ENVIRONMENT variable.
-///
-/// - `ENVIRONMENT=staging` → returns `"staging."`
-/// - `ENVIRONMENT=production` → returns `""`
-///
-/// # Panics
-///
-/// Panics if `ENVIRONMENT` is not set or has an unexpected value.
-fn get_topic_prefix() -> String {
-    let environment = env::var("ENVIRONMENT")
-        .expect("ENVIRONMENT variable must be set to 'staging' or 'production'");
-    match environment.as_str() {
-        "staging" => "staging.".to_string(),
-        "production" => String::new(),
-        other => panic!(
-            "ENVIRONMENT must be 'staging' or 'production', got '{}'",
-            other
-        ),
-    }
-}
 
 pub struct KafkaConsumer {
     consumer: StreamConsumer<DefaultConsumerContext>,
@@ -208,7 +188,7 @@ pub fn parse_message(
     payload: &[u8],
     event_type: Option<&str>,
 ) -> Result<KgMessage, IndexerError> {
-    match topic {
+    match strip_topic_prefix(topic) {
         "hermes.blocks" => {
             let summary = hermes_schema::pb::block_summary::HermesBlockSummary::decode(payload)
                 .map_err(|e| IndexerError::decode(format!("HermesBlockSummary: {}", e)))?;

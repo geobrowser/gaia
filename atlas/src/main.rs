@@ -242,27 +242,8 @@ fn main() -> anyhow::Result<()> {
         .block_on(async_main())
 }
 
-/// Get the topic prefix based on the ENVIRONMENT variable.
-///
-/// - `ENVIRONMENT=staging` → returns `"staging."`
-/// - `ENVIRONMENT=production` → returns `""`
-///
-/// # Panics
-///
-/// Panics if `ENVIRONMENT` is not set or has an unexpected value.
-fn get_topic_prefix() -> String {
-    let environment = env::var("ENVIRONMENT").expect(
-        "ENVIRONMENT variable must be set to 'staging' or 'production'"
-    );
-    match environment.as_str() {
-        "staging" => "staging.".to_string(),
-        "production" => String::new(),
-        other => panic!(
-            "ENVIRONMENT must be 'staging' or 'production', got '{}'",
-            other
-        ),
-    }
-}
+// Re-export get_topic_prefix from hermes-kafka
+use hermes_kafka::get_topic_prefix;
 
 async fn async_main() -> anyhow::Result<()> {
     let broker = env::var("KAFKA_BROKER").unwrap_or_else(|_| "localhost:9092".to_string());
