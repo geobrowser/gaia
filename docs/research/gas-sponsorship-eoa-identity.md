@@ -185,15 +185,16 @@ await openfort.transactionIntents.create({
 
 ### Customization & Extensibility
 
-| Aspect                   | Privy                                          | Openfort                                         |
-| ------------------------ | ---------------------------------------------- | ------------------------------------------------ |
-| **UI Components**        | Pre-built, customizable via CSS                | Pre-built (ConnectKit-based), themeable          |
-| **Custom UI**            | Build your own with hooks                      | Build your own with hooks                        |
-| **Auth Methods**         | Email, SMS, social, passkeys, external wallets | Email, social, passkeys, guest, external wallets |
-| **Third-party Auth**     | ✅ Bring your own auth                         | ✅ Bring your own auth                           |
-| **Session Keys**         | ✅ Via signers + policies                      | ✅ Native (EIP-7715)                             |
-| **Transaction Policies** | ✅ Rich policy engine                          | ✅ Gas policies + contract rules                 |
-| **Key Export**           | ✅                                             | ✅                                               |
+| Aspect                   | Privy                                           | Openfort                                         |
+| ------------------------ | ----------------------------------------------- | ------------------------------------------------ |
+| **UI Components**        | Pre-built, customizable via CSS                 | Pre-built (ConnectKit-based), themeable          |
+| **Custom UI**            | Build your own with hooks                       | Build your own with hooks                        |
+| **Whitelabel**           | ✅ Full (see [Branding](#branding--whitelabel)) | ✅ Full (see [Branding](#branding--whitelabel))  |
+| **Auth Methods**         | Email, SMS, social, passkeys, external wallets  | Email, social, passkeys, guest, external wallets |
+| **Third-party Auth**     | ✅ Bring your own auth                          | ✅ Bring your own auth                           |
+| **Session Keys**         | ✅ Via signers + policies                       | ✅ Native (EIP-7715)                             |
+| **Transaction Policies** | ✅ Rich policy engine                           | ✅ Gas policies + contract rules                 |
+| **Key Export**           | ✅                                              | ✅                                               |
 
 #### Policy Engine Comparison
 
@@ -258,6 +259,78 @@ const result = await grantPermissions({
   },
 });
 ```
+
+### Branding & Whitelabel
+
+| Aspect                       | Privy                                   | Openfort                                 |
+| ---------------------------- | --------------------------------------- | ---------------------------------------- |
+| **Remove provider branding** | ✅ Full whitelabel                      | ✅ Full whitelabel                       |
+| **Headless mode**            | ✅ Build your own UI with hooks         | ✅ Build your own UI with hooks          |
+| **Pre-built UI theming**     | CSS variables, light/dark/custom themes | ConnectKit themes (7 options) + CSS vars |
+| **Custom logo**              | ✅ Or remove entirely with `logo: ''`   | ✅ Via ConnectKit theming                |
+| **Custom pages**             | Build from scratch with hooks           | ✅ Replace specific modal pages          |
+
+#### Privy Whitelabel Options
+
+**Fully headless** - build your own UI using hooks:
+
+```typescript
+// Complete control - no Privy UI at all
+import { useLoginWithEmail, useLoginWithSocial } from "@privy-io/react-auth";
+
+const { sendCode, loginWithCode } = useLoginWithEmail();
+const { initOAuth } = useLoginWithSocial();
+
+// Build your own login form, call these functions
+await sendCode({ email: "user@example.com" });
+await loginWithCode({ code: "123456" });
+```
+
+**Or customize their modal** via config:
+
+```typescript
+<PrivyProvider
+  config={{
+    appearance: {
+      logo: '', // Empty string = no logo
+      landingHeader: 'Welcome to Your App',
+      theme: '#1a1a2e', // Custom hex color
+    },
+    embeddedWallets: {
+      showWalletUIs: false, // Hide wallet UIs entirely
+    },
+  }}
+>
+```
+
+- [Whitelabel docs](https://docs.privy.io/recipes/react/whitelabel)
+- [Whitelabel starter repo](https://github.com/privy-io/examples/tree/main/privy-react-whitelabel-starter)
+- [Live whitelabel demo](https://whitelabel.privy.io)
+
+#### Openfort Whitelabel Options
+
+**Fully headless** - use [authentication hooks](https://www.openfort.io/docs/products/embedded-wallet/react/auth) to build custom UI.
+
+**Or customize their modal** (ConnectKit-based):
+
+```typescript
+<OpenfortProvider
+  uiConfig={{
+    theme: 'midnight', // or: soft, retro, minimal, web95, rounded, nouns
+    mode: 'dark',
+    customTheme: {
+      '--ck-font-family': 'Inter, sans-serif',
+      '--ck-color-background': '#0a0a0a',
+    },
+    // Replace specific pages with your own components
+    customPageComponents: {
+      connected: <YourCustomProfilePage />,
+    },
+  }}
+>
+```
+
+- [UI Customization docs](https://www.openfort.io/docs/products/embedded-wallet/react/ui/customization)
 
 ### Custom L3 Support
 
