@@ -284,6 +284,7 @@ impl SearchIndexProvider for MockSearchProvider {
                 results.push(BatchOperationResult {
                     entity_id,
                     space_id,
+                    operation_type: op.operation_type().to_string(),
                     success: false,
                     error: Some(SearchIndexError::bulk_operation(
                         "Simulated failure".to_string(),
@@ -321,6 +322,7 @@ impl SearchIndexProvider for MockSearchProvider {
                 results.push(BatchOperationResult {
                     entity_id,
                     space_id,
+                    operation_type: op.operation_type().to_string(),
                     success: true,
                     error: None,
                 });

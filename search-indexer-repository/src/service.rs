@@ -471,6 +471,7 @@ mod tests {
                 .map(|op| BatchOperationResult {
                     entity_id: op.entity_id().to_string(),
                     space_id: op.space_id().to_string(),
+                    operation_type: op.operation_type().to_string(),
                     success: true,
                     error: None,
                 })
