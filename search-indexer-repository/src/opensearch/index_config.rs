@@ -115,6 +115,9 @@ pub fn get_index_settings(_version: Option<u32>) -> Value {
                 },
                 "indexed_at": {
                     "type": "date"
+                },
+                "deleted": {
+                    "type": "boolean"
                 }
             }
         }

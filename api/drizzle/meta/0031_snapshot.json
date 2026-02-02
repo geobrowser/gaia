@@ -1,6 +1,6 @@
 {
-  "id": "1400b6c8-225f-4cba-9d84-7772cb9dc646",
-  "prevId": "540b00cc-2b4c-4cff-b2ef-7dcd0a51494e",
+  "id": "afb5f089-6569-49c4-ad2e-97885b8bcd76",
+  "prevId": "1400b6c8-225f-4cba-9d84-7772cb9dc646",
   "version": "7",
   "dialect": "postgresql",
   "tables": {
@@ -51,9 +51,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         }
       },
       "foreignKeys": {},
@@ -61,11 +61,11 @@
       "uniqueConstraints": {
         "edit_versions_block_sequence_unique": {
           "name": "edit_versions_block_sequence_unique",
+          "nullsNotDistinct": false,
           "columns": [
             "block_number",
             "sequence"
-          ],
-          "nullsNotDistinct": false
+          ]
         }
       },
       "policies": {},
@@ -101,9 +101,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         }
       },
       "foreignKeys": {},
@@ -168,9 +168,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "entities_updated_at_id_idx": {
           "name": "entities_updated_at_id_idx",
@@ -189,9 +189,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         }
       },
       "foreignKeys": {},
@@ -280,10 +280,10 @@
       "uniqueConstraints": {
         "ipfs_cache_uri_unique": {
           "name": "ipfs_cache_uri_unique",
+          "nullsNotDistinct": false,
           "columns": [
             "uri"
-          ],
-          "nullsNotDistinct": false
+          ]
         }
       },
       "policies": {},
@@ -331,9 +331,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "idx_local_scores_entity_id": {
           "name": "idx_local_scores_entity_id",
@@ -346,9 +346,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         }
       },
       "foreignKeys": {},
@@ -395,9 +395,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         }
       },
       "foreignKeys": {},
@@ -530,9 +530,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "proposal_actions_action_type_idx": {
           "name": "proposal_actions_action_type_idx",
@@ -545,24 +545,24 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         }
       },
       "foreignKeys": {
         "proposal_actions_proposal_id_proposals_id_fk": {
           "name": "proposal_actions_proposal_id_proposals_id_fk",
           "tableFrom": "proposal_actions",
+          "tableTo": "proposals",
           "columnsFrom": [
             "proposal_id"
           ],
-          "tableTo": "proposals",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "no action"
+          "onDelete": "no action",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -625,9 +625,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "proposal_votes_voter_id_idx": {
           "name": "proposal_votes_voter_id_idx",
@@ -640,9 +640,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "proposal_votes_vote_idx": {
           "name": "proposal_votes_vote_idx",
@@ -655,37 +655,37 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         }
       },
       "foreignKeys": {
         "proposal_votes_proposal_id_proposals_id_fk": {
           "name": "proposal_votes_proposal_id_proposals_id_fk",
           "tableFrom": "proposal_votes",
+          "tableTo": "proposals",
           "columnsFrom": [
             "proposal_id"
           ],
-          "tableTo": "proposals",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "no action"
+          "onDelete": "no action",
+          "onUpdate": "no action"
         },
         "proposal_votes_space_id_spaces_id_fk": {
           "name": "proposal_votes_space_id_spaces_id_fk",
           "tableFrom": "proposal_votes",
+          "tableTo": "spaces",
           "columnsFrom": [
             "space_id"
           ],
-          "tableTo": "spaces",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "no action"
+          "onDelete": "no action",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {
@@ -786,9 +786,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "proposals_proposed_by_idx": {
           "name": "proposals_proposed_by_idx",
@@ -801,9 +801,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "proposals_created_at_idx": {
           "name": "proposals_created_at_idx",
@@ -816,9 +816,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "proposals_end_time_idx": {
           "name": "proposals_end_time_idx",
@@ -831,24 +831,24 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         }
       },
       "foreignKeys": {
         "proposals_space_id_spaces_id_fk": {
           "name": "proposals_space_id_spaces_id_fk",
           "tableFrom": "proposals",
+          "tableTo": "spaces",
           "columnsFrom": [
             "space_id"
           ],
-          "tableTo": "spaces",
           "columnsTo": [
             "id"
           ],
-          "onUpdate": "no action",
-          "onDelete": "no action"
+          "onDelete": "no action",
+          "onUpdate": "no action"
         }
       },
       "compositePrimaryKeys": {},
@@ -964,9 +964,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "relation_versions_entity_idx": {
           "name": "relation_versions_entity_idx",
@@ -979,9 +979,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "relation_versions_open_idx": {
           "name": "relation_versions_open_idx",
@@ -994,10 +994,10 @@
             }
           ],
           "isUnique": false,
-          "with": {},
-          "method": "btree",
           "where": "\"relation_versions\".\"valid_to_key\" IS NULL",
-          "concurrently": false
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         },
         "relation_versions_range_idx": {
           "name": "relation_versions_range_idx",
@@ -1016,9 +1016,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         }
       },
       "foreignKeys": {},
@@ -1117,9 +1117,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "relations_type_id_idx": {
           "name": "relations_type_id_idx",
@@ -1132,9 +1132,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "relations_from_entity_id_idx": {
           "name": "relations_from_entity_id_idx",
@@ -1147,9 +1147,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "relations_to_entity_id_idx": {
           "name": "relations_to_entity_id_idx",
@@ -1162,9 +1162,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "relations_space_id_idx": {
           "name": "relations_space_id_idx",
@@ -1177,9 +1177,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "relations_space_from_to_idx": {
           "name": "relations_space_from_to_idx",
@@ -1204,9 +1204,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "relations_space_type_idx": {
           "name": "relations_space_type_idx",
@@ -1225,9 +1225,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "relations_to_entity_space_idx": {
           "name": "relations_to_entity_space_idx",
@@ -1246,9 +1246,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "relations_from_entity_space_idx": {
           "name": "relations_from_entity_space_idx",
@@ -1267,9 +1267,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "relations_entity_type_space_idx": {
           "name": "relations_entity_type_space_idx",
@@ -1294,9 +1294,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "relations_type_from_to_idx": {
           "name": "relations_type_from_to_idx",
@@ -1321,9 +1321,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         }
       },
       "foreignKeys": {},
@@ -1431,9 +1431,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "subspaces_child_space_id_idx": {
           "name": "subspaces_child_space_id_idx",
@@ -1446,9 +1446,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         }
       },
       "foreignKeys": {},
@@ -1531,9 +1531,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         }
       },
       "foreignKeys": {},
@@ -1541,13 +1541,13 @@
       "uniqueConstraints": {
         "user_votes_user_id_object_id_object_type_space_id_unique": {
           "name": "user_votes_user_id_object_id_object_type_space_id_unique",
+          "nullsNotDistinct": false,
           "columns": [
             "user_id",
             "object_id",
             "object_type",
             "space_id"
-          ],
-          "nullsNotDistinct": false
+          ]
         }
       },
       "policies": {},
@@ -1660,6 +1660,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "rect": {
+          "name": "rect",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "embedding": {
           "name": "embedding",
           "type": "jsonb",
@@ -1715,9 +1721,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "value_versions_lookup_idx": {
           "name": "value_versions_lookup_idx",
@@ -1742,9 +1748,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "value_versions_open_idx": {
           "name": "value_versions_open_idx",
@@ -1769,10 +1775,10 @@
             }
           ],
           "isUnique": false,
-          "with": {},
-          "method": "btree",
           "where": "\"value_versions\".\"valid_to_key\" IS NULL",
-          "concurrently": false
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         },
         "value_versions_range_idx": {
           "name": "value_versions_range_idx",
@@ -1791,9 +1797,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         }
       },
       "foreignKeys": {},
@@ -1897,6 +1903,12 @@
           "primaryKey": false,
           "notNull": false
         },
+        "rect": {
+          "name": "rect",
+          "type": "text",
+          "primaryKey": false,
+          "notNull": false
+        },
         "embedding": {
           "name": "embedding",
           "type": "jsonb",
@@ -1940,9 +1952,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "values_entity_id_idx": {
           "name": "values_entity_id_idx",
@@ -1955,9 +1967,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "values_space_id_idx": {
           "name": "values_space_id_idx",
@@ -1970,9 +1982,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "values_boolean_idx": {
           "name": "values_boolean_idx",
@@ -1985,9 +1997,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "values_integer_idx": {
           "name": "values_integer_idx",
@@ -2000,9 +2012,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "values_float_idx": {
           "name": "values_float_idx",
@@ -2015,9 +2027,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "values_decimal_idx": {
           "name": "values_decimal_idx",
@@ -2030,9 +2042,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "values_text_idx": {
           "name": "values_text_idx",
@@ -2045,10 +2057,10 @@
             }
           ],
           "isUnique": false,
-          "with": {},
-          "method": "btree",
           "where": "length(\"values\".\"text\") <= 2000",
-          "concurrently": false
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         },
         "values_date_idx": {
           "name": "values_date_idx",
@@ -2061,9 +2073,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "values_time_idx": {
           "name": "values_time_idx",
@@ -2076,9 +2088,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "values_datetime_idx": {
           "name": "values_datetime_idx",
@@ -2091,9 +2103,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "values_point_idx": {
           "name": "values_point_idx",
@@ -2106,9 +2118,24 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
+        },
+        "values_rect_idx": {
+          "name": "values_rect_idx",
+          "columns": [
+            {
+              "expression": "rect",
+              "isExpression": false,
+              "asc": true,
+              "nulls": "last"
+            }
+          ],
+          "isUnique": false,
+          "concurrently": false,
+          "method": "btree",
+          "with": {}
         },
         "values_entity_property_idx": {
           "name": "values_entity_property_idx",
@@ -2127,9 +2154,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "values_entity_space_idx": {
           "name": "values_entity_space_idx",
@@ -2148,9 +2175,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "values_property_space_idx": {
           "name": "values_property_space_idx",
@@ -2169,9 +2196,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "values_entity_property_space_idx": {
           "name": "values_entity_property_space_idx",
@@ -2196,9 +2223,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "values_language_idx": {
           "name": "values_language_idx",
@@ -2211,9 +2238,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "values_unit_idx": {
           "name": "values_unit_idx",
@@ -2226,9 +2253,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "values_time_utc_idx": {
           "name": "values_time_utc_idx",
@@ -2241,9 +2268,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "values_datetime_utc_idx": {
           "name": "values_datetime_utc_idx",
@@ -2256,9 +2283,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         }
       },
       "foreignKeys": {},
@@ -2340,9 +2367,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         },
         "idx_votes_object_type_object_id_space_id": {
           "name": "idx_votes_object_type_object_id_space_id",
@@ -2367,9 +2394,9 @@
             }
           ],
           "isUnique": false,
-          "with": {},
+          "concurrently": false,
           "method": "btree",
-          "concurrently": false
+          "with": {}
         }
       },
       "foreignKeys": {},
@@ -2428,12 +2455,12 @@
       "uniqueConstraints": {
         "votes_count_object_id_object_type_space_id_unique": {
           "name": "votes_count_object_id_object_type_space_id_unique",
+          "nullsNotDistinct": false,
           "columns": [
             "object_id",
             "object_type",
             "space_id"
-          ],
-          "nullsNotDistinct": false
+          ]
         }
       },
       "policies": {},
@@ -2485,10 +2512,10 @@
     }
   },
   "schemas": {},
-  "views": {},
   "sequences": {},
   "roles": {},
   "policies": {},
+  "views": {},
   "_meta": {
     "columns": {},
     "schemas": {},

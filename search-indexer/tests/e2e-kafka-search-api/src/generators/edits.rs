@@ -3,7 +3,7 @@ use prost::Message;
 use uuid::Uuid;
 
 use hermes_schema::pb::knowledge::HermesEdit;
-use grc_20::{encode_edit, Edit as Grc20Edit, Op as Grc20Op, PropertyValue, UnsetLanguage, UnsetValue, UpdateEntity, Value as Grc20Value};
+use grc_20::{encode_edit, DeleteEntity, Edit as Grc20Edit, Op as Grc20Op, PropertyValue, UnsetLanguage, UnsetValue, UpdateEntity, Value as Grc20Value};
 
 use sdk::core::ids::{AVATAR_PROPERTY_ID, DESCRIPTION_PROPERTY_ID, NAME_PROPERTY_ID};
 
@@ -86,6 +86,7 @@ pub fn create_entity_edit(
 }
 
 /// Generate an edit that unsets entity properties
+#[allow(dead_code)]
 pub fn unset_entity_properties(
     edit_name: &str,
     space_id: Uuid,
@@ -208,6 +209,44 @@ pub fn update_entity_with_set_and_unset(
         authors: vec![*Uuid::new_v4().as_bytes()],
         created_at: 0,
         ops: vec![Grc20Op::UpdateEntity(update_entity)],
+    };
+
+    // Encode the GRC-20 edit into bytes
+    let payload = encode_edit(&grc20_edit)?;
+
+    let edit = HermesEdit {
+        id: grc20_edit.id.to_vec(),
+        name: edit_name.to_string(),
+        payload,
+        authors: vec![Uuid::new_v4().as_bytes().to_vec()],
+        language: None,
+        space_id: space_id.as_bytes().to_vec(),
+        is_canonical: true,
+        meta: None,
+    };
+
+    let mut buf = Vec::new();
+    edit.encode(&mut buf)?;
+    Ok(buf)
+}
+
+/// Generate a DeleteEntity operation
+pub fn delete_entity(
+    edit_name: &str,
+    space_id: Uuid,
+    entity_id: Uuid,
+) -> Result<Vec<u8>> {
+    let delete_entity = DeleteEntity {
+        id: *entity_id.as_bytes(),
+        context: None,
+    };
+
+    let grc20_edit = Grc20Edit {
+        id: *Uuid::new_v4().as_bytes(),
+        name: edit_name.into(),
+        authors: vec![*Uuid::new_v4().as_bytes()],
+        created_at: 0,
+        ops: vec![Grc20Op::DeleteEntity(delete_entity)],
     };
 
     // Encode the GRC-20 edit into bytes

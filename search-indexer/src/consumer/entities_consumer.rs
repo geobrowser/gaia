@@ -529,9 +529,20 @@ impl EntitiesConsumer {
                         skipped_entities += 1;
                     }
                 }
+                grc_20::Op::DeleteEntity(del) => {
+                    // Handle entity deletion (soft delete)
+                    let entity_id = Self::id_to_uuid(&del.id);
+                    info!(
+                        entity_id = %entity_id,
+                        space_id = %space_id,
+                        edit_name = %edit.name,
+                        "Processing delete entity"
+                    );
+                    events.push(EntityEvent::delete(entity_id, space_id));
+                }
                 _ => {
-                    // Other operations (CreateEntity, DeleteEntity, UnsetRelationFields, etc.) don't affect search index
-                    debug!("Skipped operation (not relevant for search index)");
+                    // Other operations (CreateEntity, RestoreEntity, RestoreRelation, CreateValueRef) not yet implemented
+                    debug!("Skipped operation (not yet implemented)");
                 }
             }
         }
