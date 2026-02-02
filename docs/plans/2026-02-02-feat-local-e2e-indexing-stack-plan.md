@@ -3,57 +3,67 @@ title: "feat: Local E2E Development Environment for Indexing Stack"
 type: feat
 date: 2026-02-02
 status: proposed
-revision: 2
+revision: 3
 ---
 
 # Local E2E Development Environment for Indexing Stack
 
 ## Overview
 
-Create a minimal local development environment that allows developers to iterate on `hermes-pipeline` and `hermes-ipfs-cache` without depending on external Substreams endpoints. The MVP focuses on the **indexing pipeline only**—Anvil + fireeth + existing Kafka/PostgreSQL—tested with simple EOA transactions.
+Create a local development environment that allows developers to iterate on the full stack—from UserOperation submission through block production to Kafka message consumption—without depending on external blockchain, bundler, or Substreams services.
 
-**Key Insight**: Indexing doesn't care *how* transactions were submitted. The pipeline sees blocks with events, not UserOperations or Safe accounts. We can test the full indexing path with `cast send` and defer the ERC-4337 stack to a separate effort.
+**Components:**
+- **Anvil** — Local EVM chain
+- **Alto bundler + Mock Paymaster** — ERC-4337 account abstraction
+- **fireeth** — Block indexing via RPC Poller
+- **Existing Kafka/PostgreSQL** — Message streaming and storage
 
 ## Problem Statement
 
 ### Current Pain Points
 
-1. **External Dependencies**: Developers must connect to Pinax Substreams endpoints, introducing network latency and rate limits
-2. **Debugging Complexity**: When indexing fails, it's hard to isolate whether it's local code, network, or external service
+1. **External Dependencies**: Developers must connect to Pinax Substreams endpoints and testnet bundlers, introducing network latency and rate limits
+2. **Debugging Complexity**: When something fails, it's hard to isolate whether it's local code, network, or external service
 3. **Limited Control**: Can't replay transactions, reset chain state, or control block timing
-4. **Mock Mode Limitations**: `USE_MOCK=true` simulates events but doesn't test the actual Substreams WASM modules
-
-### Why MVP Scope
-
-The original plan bundled two independent problems:
-1. **Local indexing pipeline** (fireeth + Substreams) — for testing block indexing
-2. **Local ERC-4337 stack** (Alto, Safe, Paymaster) — for testing transaction submission
-
-These are separate concerns. A developer debugging `hermes-pipeline` doesn't need a working bundler—they need blocks with the right events. **This plan focuses on #1 only.**
+4. **Mock Mode Limitations**: `USE_MOCK=true` simulates events but doesn't test the actual Substreams WASM modules or 4337 flow
 
 ## Proposed Solution
 
-Add Anvil and fireeth to the existing docker-compose stack. Test with simple EOA transactions via `cast send`.
+Extend `hermes/docker-compose.yaml` with local blockchain and ERC-4337 services:
 
 ```
-┌─────────────────────────────────────────────────────────────────────┐
-│                         LOCAL (docker-compose)                       │
-│                                                                      │
-│  ┌─────────┐     ┌─────────┐     ┌─────────────────┐   ┌─────────┐ │
-│  │  Anvil  │────▶│ fireeth │────▶│ hermes-pipeline │──▶│  Kafka  │ │
-│  │  (EVM)  │     │ (Poller)│     │                 │   │         │ │
-│  └─────────┘     └─────────┘     └─────────────────┘   └────┬────┘ │
-│       ▲                                                      │      │
-│       │                                                      ▼      │
-│  cast send                                          ┌───────────────┐│
-│  (test txs)                                         │hermes-ipfs-   ││
-│                                                     │cache          ││
-│  Space Registry                                     └───────┬───────┘│
-│  (deployed on startup)                                      ▼       │
-│                                                     ┌────────────────┐
-│                                                     │   PostgreSQL   │
-│                                                     └────────────────┘
-└─────────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────────────────┐
+│                              LOCAL (docker-compose)                          │
+│                                                                              │
+│  ┌────────────────────────────────────────────────────────────────────┐    │
+│  │                    ERC-4337 / Account Abstraction                   │    │
+│  │                                                                     │    │
+│  │  ┌─────────┐  ┌─────────┐  ┌──────────────┐  ┌───────────────┐    │    │
+│  │  │  Anvil  │◄─│  Alto   │◄─│  EntryPoint  │◄─│ Safe Factory  │    │    │
+│  │  │  (EVM)  │  │(Bundler)│  │   (v0.7)     │  │  + Singleton  │    │    │
+│  │  └────┬────┘  └─────────┘  └──────────────┘  └───────────────┘    │    │
+│  │       │            ▲              ▲                                │    │
+│  │       │            │       ┌──────┴──────┐  ┌────────────────┐    │    │
+│  │       │            │       │    Mock     │  │ Space Registry │    │    │
+│  │       │            │       │  Paymaster  │  │  + Geo Proto   │    │    │
+│  │       │            │       └─────────────┘  └────────────────┘    │    │
+│  └───────┼────────────┼───────────────────────────────────────────────┘    │
+│          │ RPC Polling                                                      │
+│          ▼                                                                  │
+│  ┌──────────────────────────────────────────────────────────────────────┐  │
+│  │                         Indexing Pipeline                             │  │
+│  │                                                                       │  │
+│  │  ┌─────────┐  ┌─────────────────┐  ┌─────────┐  ┌─────────────────┐ │  │
+│  │  │ fireeth │─▶│ hermes-pipeline │─▶│  Kafka  │─▶│ hermes-ipfs-    │ │  │
+│  │  │ (Poller)│  │                 │  │         │  │ cache           │ │  │
+│  │  └─────────┘  └─────────────────┘  └─────────┘  └────────┬────────┘ │  │
+│  │                                                           │          │  │
+│  │                                                           ▼          │  │
+│  │                                                    ┌────────────────┐│  │
+│  │                                                    │   PostgreSQL   ││  │
+│  │                                                    └────────────────┘│  │
+│  └──────────────────────────────────────────────────────────────────────┘  │
+└─────────────────────────────────────────────────────────────────────────────┘
 ```
 
 ## Technical Approach
@@ -63,10 +73,11 @@ Add Anvil and fireeth to the existing docker-compose stack. Test with simple EOA
 | Decision | Choice | Rationale |
 |----------|--------|-----------|
 | Local EVM | Anvil (Foundry) | Fast, widely used, good fireeth compatibility |
+| ERC-4337 Bundler | Alto (Pimlico) | Open-source, has localhost config, Docker images |
+| Paymaster | Mock Verifying Paymaster | Sponsors all UserOps, no signature verification |
+| Contract Deployment | Pimlico mock-contract-deployer | Deploys EntryPoint, Safe contracts automatically |
 | Block Indexing | fireeth RPC Poller | Uses same tooling as production |
-| Transaction Submission | Simple EOA via `cast` | Indexing doesn't care about 4337 |
-| Contract Deployment | Foundry `cast` + shell script | Simple, no extra tooling |
-| ERC-4337 Stack | Deferred | Separate plan if/when needed |
+| Geo Contracts | Foundry script | Space Registry + Geo protocol |
 
 ### Critical Technical Issue: Space Registry Address
 
@@ -82,9 +93,9 @@ Local Anvil will deploy the Space Registry at a **different address**.
 
 **Solution Options** (pick one during implementation):
 
-1. **Deterministic CREATE2 deployment** — Deploy Space Registry to the same address on Anvil using CREATE2 with a known salt. Requires deploying a CREATE2 factory first.
+1. **Deterministic CREATE2 deployment** — Deploy Space Registry to the same address on Anvil using CREATE2 with a known salt.
 
-2. **Substreams params** — Make the address configurable via Substreams module parameters (not environment variables—WASM modules don't have env access).
+2. **Substreams params** — Make the address configurable via Substreams module parameters (WASM modules don't have env access).
 
 3. **Foundry fork mode** — Fork testnet state into Anvil so contracts are at the same addresses. Simplest but requires network access on startup.
 
@@ -92,22 +103,17 @@ Local Anvil will deploy the Space Registry at a **different address**.
 
 ## Implementation Plan
 
-### Phase 1: Minimal Local Indexing (5-7 days)
+### Phase 1: Blockchain + ERC-4337 Stack (4-5 days)
 
-**Objective**: Get transactions from Anvil into Kafka via the Substreams pipeline.
+**Objective**: Get a local blockchain with working account abstraction.
 
 **Tasks:**
 
-1. **Resolve Space Registry address problem**
-   - Decide on CREATE2 vs fork approach
-   - If CREATE2: Create deployment script with deterministic address
-   - If fork: Configure Anvil to fork from testnet
-
-2. **Add Anvil service to docker-compose**
+1. **Add Anvil service**
    ```yaml
    anvil:
      image: ghcr.io/foundry-rs/foundry:nightly
-     ports: ["127.0.0.1:8545:8545"]  # Localhost only
+     ports: ["127.0.0.1:8545:8545"]
      entrypoint: ["anvil", "--host", "0.0.0.0", "--block-time", "1", "--chain-id", "31337"]
      healthcheck:
        test: ["CMD-SHELL", "curl -sf http://localhost:8545 -X POST -H 'Content-Type: application/json' -d '{\"jsonrpc\":\"2.0\",\"method\":\"eth_chainId\",\"params\":[],\"id\":1}'"]
@@ -116,29 +122,98 @@ Local Anvil will deploy the Space Registry at a **different address**.
        retries: 10
    ```
 
-3. **Add fireeth RPC Poller service**
-   - Verify correct command syntax (research needed—see Open Questions)
-   - Add gRPC healthcheck
+2. **Add ERC-4337 contract deployer**
    ```yaml
-   fireeth:
-     image: ghcr.io/streamingfast/firehose-ethereum:latest
-     command: [TBD - verify syntax]
+   contract-deployer:
+     image: ghcr.io/pimlicolabs/mock-contract-deployer:main
+     environment:
+       - ANVIL_RPC=http://anvil:8545
      depends_on:
        anvil:
          condition: service_healthy
+   ```
+   This deploys: EntryPoint v0.6/v0.7/v0.8, Safe contracts (Factory, Singleton, 4337Module), simulation contracts.
+
+3. **Add Alto bundler**
+   ```yaml
+   alto:
+     image: ghcr.io/pimlicolabs/alto:latest
+     ports: ["127.0.0.1:4337:4337"]
+     environment:
+       - ALTO_RPC_URL=http://anvil:8545
+       - ALTO_ENTRYPOINTS=0x5ff137d4b0fdcd49dca30c7cf57e578a026d2789,0x0000000071727De22E5E9d8BAf0edAc6f37da032
+       - ALTO_EXECUTOR_PRIVATE_KEY=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
+       - ALTO_UTILITY_PRIVATE_KEY=0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d
+       - ALTO_MIN_BALANCE=0
+       - ALTO_SAFE_MODE=false
+     depends_on:
+       contract-deployer:
+         condition: service_completed_successfully
+   ```
+   Note: Private keys are Anvil's default test accounts—safe to commit.
+
+4. **Add Mock Paymaster**
+   ```yaml
+   mock-paymaster:
+     image: ghcr.io/pimlicolabs/mock-verifying-paymaster:main
+     ports: ["127.0.0.1:3000:3000"]
+     environment:
+       - ALTO_RPC=http://alto:4337
+       - ANVIL_RPC=http://anvil:8545
+     depends_on:
+       alto:
+         condition: service_started
+   ```
+
+5. **Deploy Geo protocol contracts**
+   - Create `hermes/scripts/deploy-geo-contracts.sh`
+   - Deploy Space Registry (with deterministic address or fork)
+   - Deploy other Geo protocol contracts
+   - Output addresses for verification
+
+**Deliverables:**
+- [ ] Anvil, contract-deployer, alto, mock-paymaster services in docker-compose
+- [ ] `hermes/scripts/deploy-geo-contracts.sh`
+- [ ] Smoke test: UserOp submission → transaction on Anvil
+
+**Success Criteria:**
+- All 4337 services start and report healthy
+- Can submit UserOperation via Alto
+- Mock Paymaster sponsors the transaction
+- Transaction executes on Anvil
+
+### Phase 2: Indexing Pipeline (4-5 days)
+
+**Objective**: Index blocks from Anvil through fireeth into Kafka.
+
+**Tasks:**
+
+1. **Resolve Space Registry address problem**
+   - Implement CREATE2 deterministic deployment OR fork mode
+   - Verify hermes-substream can filter events at the deployed address
+
+2. **Add fireeth RPC Poller service**
+   ```yaml
+   fireeth:
+     image: ghcr.io/streamingfast/firehose-ethereum:latest
+     command: >
+       start rpc-poller
+       --rpc-endpoint=http://anvil:8545
+       --first-streamable-block=0
+     depends_on:
+       anvil:
+         condition: service_healthy
+     ports:
+       - "9000:9000"
      healthcheck:
        test: ["CMD-SHELL", "grpc_health_probe -addr=localhost:9000 || exit 1"]
        interval: 5s
        timeout: 5s
        retries: 10
    ```
+   Note: Exact command syntax needs verification—see Open Questions.
 
-4. **Deploy Space Registry to Anvil**
-   - Create `hermes/scripts/deploy-contracts.sh`
-   - Use `cast` for deployment
-   - Output deployed address for verification
-
-5. **Update hermes-pipeline environment**
+3. **Update hermes-pipeline for local mode**
    ```yaml
    hermes-pipeline:
      environment:
@@ -151,33 +226,32 @@ Local Anvil will deploy the Space Registry at a **different address**.
          condition: service_healthy
    ```
 
-6. **Create smoke test script**
-   - `hermes/scripts/smoke-test.sh`
-   - Submit test transaction via `cast send`
-   - Verify event appears in Kafka
-   - Return pass/fail
+4. **End-to-end test**
+   - Submit UserOperation via Alto
+   - Verify transaction indexed by fireeth
+   - Verify event processed by Substreams
+   - Verify message in Kafka
+   - Verify hermes-ipfs-cache writes to PostgreSQL
 
 **Deliverables:**
-- [ ] `hermes/docker-compose.local.yaml` (override file)
-- [ ] `hermes/scripts/deploy-contracts.sh`
-- [ ] `hermes/scripts/smoke-test.sh`
-- [ ] Updated `hermes/README.md` with local dev section
-- [ ] Makefile target: `make local`
+- [ ] fireeth service in docker-compose
+- [ ] Updated hermes-pipeline environment config
+- [ ] End-to-end smoke test script
 
 **Success Criteria:**
-- `docker-compose -f docker-compose.yaml -f docker-compose.local.yaml up` starts stack
-- `cast send <space-registry> "createSpace(...)"` produces Kafka message
-- Smoke test passes
+- UserOp submission → Kafka message in < 10 seconds
+- Space Registry events correctly filtered
+- hermes-ipfs-cache processes messages
 
-### Phase 2: Developer Experience (3-4 days)
+### Phase 3: Developer Experience (2-3 days)
 
-**Objective**: Make the local stack pleasant to use.
+**Objective**: Make the local stack easy to use.
 
 **Tasks:**
 
 1. **Test data generation**
    - `hermes/scripts/seed-test-data.sh`
-   - Create sample spaces, edits, votes
+   - Create sample spaces, edits, votes via UserOperations
    - Use addresses from `mock_events.rs` for consistency
 
 2. **Makefile targets**
@@ -191,12 +265,12 @@ Local Anvil will deploy the Space Registry at a **different address**.
 3. **Documentation**
    - Add "Local Development" section to `hermes/README.md`
    - Include: setup, common commands, troubleshooting
-   - Keep it to one file, not four
+   - Document bundler/paymaster endpoints for frontend configuration
 
 4. **Troubleshooting guide** (inline in README)
+   - "Bundler returns AA21 didn't pay prefund" → Check executor account balance
    - "fireeth stuck at block 0" → Check Anvil block production
    - "Kafka messages not appearing" → Check topic auto-creation
-   - "Substreams connection failed" → Check gRPC port
 
 **Deliverables:**
 - [ ] `hermes/scripts/seed-test-data.sh`
@@ -204,63 +278,39 @@ Local Anvil will deploy the Space Registry at a **different address**.
 - [ ] Updated `hermes/README.md`
 
 **Success Criteria:**
-- New developer can start stack in < 5 minutes (following README)
+- New developer can start stack in < 5 minutes
 - `make local-test` passes
-- `make local-reset` cleanly restarts
-
-## What's NOT In Scope (Deferred)
-
-These are explicitly out of scope for this plan. Create separate plans if needed:
-
-| Item | Reason for Deferral |
-|------|---------------------|
-| Alto bundler | Not needed for indexing tests |
-| Mock Paymaster | Not needed for indexing tests |
-| Safe Smart Accounts | Not needed for indexing tests |
-| ERC-4337 EntryPoint | Not needed for indexing tests |
-| Privy integration | Use `cast` with test accounts |
-| Loki + Grafana | `docker-compose logs` is sufficient |
-| CI integration | Get it working locally first |
-| State persistence | Just restart fresh |
-| Hot reload | Rebuild containers as needed |
+- Documentation covers common issues
 
 ## Open Questions
 
-These must be resolved before or during implementation:
-
 | Question | Impact | When to Resolve |
 |----------|--------|-----------------|
-| fireeth RPC Poller exact command syntax | Blocks fireeth service | Start of Phase 1 |
-| CREATE2 vs fork for deterministic addresses | Blocks contract deployment | Start of Phase 1 |
-| Does fireeth need Substreams tier services, or is it all-in-one in `--dev` mode? | Affects docker-compose | Start of Phase 1 |
-| What block time works best with fireeth polling? | May need tuning | During Phase 1 |
+| fireeth RPC Poller exact command syntax | Blocks fireeth service | Start of Phase 2 |
+| CREATE2 vs fork for deterministic addresses | Blocks Geo contract deployment | Start of Phase 2 |
+| Does fireeth need Substreams tier services, or is it all-in-one? | Affects docker-compose complexity | Start of Phase 2 |
+| Alto config: env vars vs config file? | Minor—affects docker-compose | Phase 1 |
+| Frontend config for local bundler/paymaster | Needed for full E2E testing | Phase 3 |
 
 ## Acceptance Criteria
 
-### Must Have (MVP)
+### Must Have
 
-- [ ] Stack starts with `docker-compose up`
-- [ ] Transactions on Anvil produce Kafka messages
-- [ ] Space Registry events are correctly filtered by Substreams
-- [ ] hermes-pipeline and hermes-ipfs-cache work with local stack
+- [ ] All services start with `docker-compose up`
+- [ ] UserOperations submitted to Alto execute on Anvil
+- [ ] Mock Paymaster sponsors transactions
+- [ ] fireeth indexes blocks from Anvil
+- [ ] hermes-pipeline produces Kafka messages
+- [ ] hermes-ipfs-cache writes to PostgreSQL
 - [ ] Smoke test script passes
 
 ### Nice to Have
 
 - [ ] Test data generation script
-- [ ] Makefile targets for common operations
+- [ ] Makefile targets
 - [ ] README documentation
 
-### Explicitly Not Required
-
-- [ ] ERC-4337 support
-- [ ] Production-like performance
-- [ ] Offline operation
-- [ ] Resource usage optimization
-
-## Dependencies
-
-### Service Startup Order
+## Service Startup Order
 
 ```
 Kafka + PostgreSQL (existing, healthy)
@@ -269,7 +319,13 @@ Kafka + PostgreSQL (existing, healthy)
       Anvil (healthy)
          │
          ▼
-  Contract Deployment (completes)
+  Contract Deployer (completes) ──────────┐
+         │                                 │
+         ▼                                 ▼
+      Alto ◄────────────────────── Mock Paymaster
+         │
+         ▼
+  Geo Contract Deployment (completes)
          │
          ▼
       fireeth (healthy)
@@ -281,30 +337,30 @@ Kafka + PostgreSQL (existing, healthy)
    hermes-ipfs-cache
 ```
 
-### Required Tools
+## Required Tools
 
 | Tool | Required | Notes |
 |------|----------|-------|
-| Docker & Docker Compose | Yes | v2.0+ |
-| Foundry (`cast`) | Yes | For deploying contracts and testing |
-| 4GB+ RAM | Yes | Reduced from original 8GB |
+| Docker & Docker Compose | Yes | v2.0+ with health checks |
+| Foundry (`cast`, `forge`) | Yes | For Geo contract deployment and testing |
+| 6GB+ RAM | Yes | For running all services |
 
 ## Risk Analysis
 
 | Risk | Likelihood | Impact | Mitigation |
 |------|------------|--------|------------|
-| fireeth doesn't work with Anvil | Medium | High | Test in first 2 days; fallback to fork mode |
-| Space Registry address mismatch | High | High | Resolve in Phase 1 Task 1 before proceeding |
-| Substreams WASM module incompatible with local fireeth | Medium | Medium | May need to rebuild `.spkg` with different params |
+| fireeth doesn't work with Anvil | Medium | High | Test in first 2 days of Phase 2; fallback to fork mode |
+| Space Registry address mismatch | High | High | Resolve before Phase 2 proceeds |
+| Alto/Paymaster Docker images have breaking changes | Low | Medium | Pin to specific image tags |
+| Substreams WASM incompatible with local fireeth | Medium | Medium | May need to rebuild `.spkg` |
 
 ## Effort Estimate
 
 | Phase | Effort | Total |
 |-------|--------|-------|
-| Phase 1: Minimal Local Indexing | 5-7 days | 5-7 days |
-| Phase 2: Developer Experience | 3-4 days | 8-11 days |
-
-**Compare to original plan**: 11-17 days → 8-11 days (30-35% reduction)
+| Phase 1: Blockchain + ERC-4337 | 4-5 days | 4-5 days |
+| Phase 2: Indexing Pipeline | 4-5 days | 8-10 days |
+| Phase 3: Developer Experience | 2-3 days | 10-13 days |
 
 ## References
 
@@ -318,16 +374,20 @@ Kafka + PostgreSQL (existing, healthy)
 ### External
 
 - fireeth documentation: https://firehose.streamingfast.io/firehose-setup/ethereum
+- Alto bundler: https://docs.pimlico.io/infra/bundler
+- Pimlico Docker testing: https://docs.pimlico.io/guides/how-to/testing/docker
 - Foundry Book (Anvil): https://book.getfoundry.sh/anvil/
 
 ---
 
-## Appendix: Docker Compose Services (MVP)
+## Appendix: Docker Compose Services
 
 ```yaml
 # hermes/docker-compose.local.yaml
 
 services:
+  # === Blockchain Layer ===
+  
   anvil:
     image: ghcr.io/foundry-rs/foundry:nightly
     ports: ["127.0.0.1:8545:8545"]
@@ -338,8 +398,41 @@ services:
       timeout: 3s
       retries: 10
 
-  # Note: Contract deployment runs as a one-shot script, not a service
-  # Use: ./scripts/deploy-contracts.sh after anvil is healthy
+  # === ERC-4337 Layer ===
+
+  contract-deployer:
+    image: ghcr.io/pimlicolabs/mock-contract-deployer:main
+    environment:
+      - ANVIL_RPC=http://anvil:8545
+    depends_on:
+      anvil:
+        condition: service_healthy
+
+  alto:
+    image: ghcr.io/pimlicolabs/alto:latest
+    ports: ["127.0.0.1:4337:4337"]
+    environment:
+      - ALTO_RPC_URL=http://anvil:8545
+      - ALTO_ENTRYPOINTS=0x5ff137d4b0fdcd49dca30c7cf57e578a026d2789,0x0000000071727De22E5E9d8BAf0edAc6f37da032
+      - ALTO_EXECUTOR_PRIVATE_KEY=0xac0974bec39a17e36ba4a6b4d238ff944bacb478cbed5efcae784d7bf4f2ff80
+      - ALTO_UTILITY_PRIVATE_KEY=0x59c6995e998f97a5a0044966f0945389dc9e86dae88c7a8412f4603b6b78690d
+      - ALTO_MIN_BALANCE=0
+      - ALTO_SAFE_MODE=false
+    depends_on:
+      contract-deployer:
+        condition: service_completed_successfully
+
+  mock-paymaster:
+    image: ghcr.io/pimlicolabs/mock-verifying-paymaster:main
+    ports: ["127.0.0.1:3000:3000"]
+    environment:
+      - ALTO_RPC=http://alto:4337
+      - ANVIL_RPC=http://anvil:8545
+    depends_on:
+      alto:
+        condition: service_started
+
+  # === Indexing Layer ===
 
   fireeth:
     image: ghcr.io/streamingfast/firehose-ethereum:latest
@@ -377,14 +470,14 @@ services:
         condition: service_healthy
 ```
 
-## Appendix: Future Work (Separate Plans)
+## Appendix: Endpoint Reference
 
-If ERC-4337 local testing is needed, create a separate plan covering:
-
-- Alto bundler service
-- Mock Paymaster service
-- ERC-4337 EntryPoint deployment
-- Safe contract deployment (Factory, Singleton, 4337Module)
-- Privy + local chain integration
-
-This keeps concerns separated and allows teams to adopt what they need.
+| Service | URL | Purpose |
+|---------|-----|---------|
+| Anvil | http://localhost:8545 | Ethereum JSON-RPC |
+| Alto Bundler | http://localhost:4337 | ERC-4337 Bundler RPC |
+| Mock Paymaster | http://localhost:3000 | Paymaster + Bundler proxy |
+| fireeth gRPC | localhost:9000 | Firehose streaming |
+| Kafka | localhost:9092 | Message queue |
+| Kafka UI | http://localhost:8080 | Kafka management |
+| PostgreSQL | localhost:5432 | IPFS cache database |
