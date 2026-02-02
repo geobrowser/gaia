@@ -17,6 +17,8 @@ spec:
         app: opensearch-admin
         task: update-alias
     spec:
+      imagePullSecrets:
+      - name: regcred
       restartPolicy: OnFailure
       securityContext:
         runAsNonRoot: true

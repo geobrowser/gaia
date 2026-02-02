@@ -285,3 +285,19 @@ message ObjectDownvotedList {
 message ObjectUnvotedList {
     repeated ObjectVoted votes = 1;
 }
+
+// =============================================================================
+// IPFS URI Extraction - combined from multiple sources
+// =============================================================================
+
+// An IPFS URI extracted from blockchain events.
+// Used by hermes-ipfs-cache to pre-fetch content.
+message IpfsUri {
+    string uri = 1;           // Full IPFS URI (ipfs://Qm... or ipfs://bafy...)
+    bytes space_id = 2;       // 16 bytes - space context
+    string source = 3;        // Source type: "edit" or "proposal"
+}
+
+message IpfsUriList {
+    repeated IpfsUri uris = 1;
+}

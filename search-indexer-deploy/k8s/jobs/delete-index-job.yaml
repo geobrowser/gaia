@@ -17,6 +17,8 @@ spec:
         app: opensearch-admin
         task: delete-index
     spec:
+      imagePullSecrets:
+      - name: regcred
       restartPolicy: Never
       securityContext:
         runAsNonRoot: true

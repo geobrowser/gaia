@@ -5,7 +5,7 @@ import {ATTR_SERVICE_NAME} from "@opentelemetry/semantic-conventions"
 import {BasicTracerProvider} from "@opentelemetry/sdk-trace-base"
 import * as Sentry from "@sentry/node"
 import {SentrySpanProcessor} from "@sentry/opentelemetry"
-import {Effect, Layer, Logger, LogLevel} from "effect"
+import {Effect, HashMap, Layer, Logger, LogLevel} from "effect"
 
 const SERVICE_NAME = "gaia-api"
 
@@ -106,31 +106,79 @@ export const log = {
 	},
 }
 
+// Serialize a value for logging, with special handling for errors
+function serializeValue(value: unknown): unknown {
+	if (value instanceof Error) {
+		return {name: value.name, message: value.message, stack: value.stack}
+	}
+	if (typeof value === "object" && value !== null) {
+		if (Array.isArray(value)) {
+			return value.map(serializeValue)
+		}
+		const result: Record<string, unknown> = {}
+		for (const [k, v] of Object.entries(value)) {
+			result[k] = serializeValue(v)
+		}
+		return result
+	}
+	return value
+}
+
+// Parse Effect's log message format and extract structured data
+// Effect's log functions like logError("msg", {data}) produce a tuple [string, object]
+// We extract the string as message and merge the object into annotations
+function parseLogMessage(message: unknown): {messageStr: string; inlineData?: LogData} {
+	// Effect wraps log args in an array: ["message", {data}] or just "message"
+	if (Array.isArray(message)) {
+		const [first, second] = message
+		const messageStr = typeof first === "string" ? first : String(first)
+		if (second && typeof second === "object" && !Array.isArray(second)) {
+			// Serialize inline data, handling errors and nested objects
+			return {messageStr, inlineData: serializeValue(second) as LogData}
+		}
+		return {messageStr}
+	}
+	return {messageStr: typeof message === "string" ? message : String(message)}
+}
+
+// Extract annotations from Effect logger context into a plain object
+function extractAnnotations(annotations: HashMap.HashMap<string, unknown>): LogData | undefined {
+	if (HashMap.isEmpty(annotations)) return undefined
+	const data: LogData = {}
+	for (const [key, value] of annotations) {
+		data[key] = serializeValue(value)
+	}
+	return data
+}
+
 // Effect Logger that routes to Sentry
 // - DEBUG/TRACE/INFO/WARN: breadcrumbs (context for errors, no issues created)
 // - ERROR/FATAL: captureMessage (creates Sentry issues)
-const SentryLogger = Logger.make(({logLevel, message}) => {
-	const messageStr = String(message)
+const SentryLogger = Logger.make(({logLevel, message, annotations}) => {
+	const {messageStr, inlineData} = parseLogMessage(message)
+	const contextData = extractAnnotations(annotations)
+	// Merge inline data (from log call) with context annotations (from annotateLogs)
+	const data = inlineData || contextData ? {...inlineData, ...contextData} : undefined
 
 	if (sentryInitialized) {
 		if (logLevel === LogLevel.Error || logLevel === LogLevel.Fatal) {
-			Sentry.captureMessage(messageStr, {level: "error"})
+			Sentry.captureMessage(messageStr, {level: "error", extra: data})
 		} else if (logLevel === LogLevel.Warning) {
-			Sentry.addBreadcrumb({message: messageStr, level: "warning", category: "effect"})
+			Sentry.addBreadcrumb({message: messageStr, data, level: "warning", category: "effect"})
 		} else if (logLevel === LogLevel.Info) {
-			Sentry.addBreadcrumb({message: messageStr, level: "info", category: "effect"})
+			Sentry.addBreadcrumb({message: messageStr, data, level: "info", category: "effect"})
 		} else {
-			Sentry.addBreadcrumb({message: messageStr, level: "debug", category: "effect"})
+			Sentry.addBreadcrumb({message: messageStr, data, level: "debug", category: "effect"})
 		}
 	} else {
 		if (logLevel === LogLevel.Debug || logLevel === LogLevel.Trace) {
-			console.debug(formatConsoleLog("debug", messageStr))
+			console.debug(formatConsoleLog("debug", messageStr, data))
 		} else if (logLevel === LogLevel.Info) {
-			console.info(formatConsoleLog("info", messageStr))
+			console.info(formatConsoleLog("info", messageStr, data))
 		} else if (logLevel === LogLevel.Warning) {
-			console.warn(formatConsoleLog("warn", messageStr))
+			console.warn(formatConsoleLog("warn", messageStr, data))
 		} else {
-			console.error(formatConsoleLog("error", messageStr))
+			console.error(formatConsoleLog("error", messageStr, data))
 		}
 	}
 })

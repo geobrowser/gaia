@@ -5,6 +5,7 @@
       "name": "api",
       "dependencies": {
         "@effect/opentelemetry": "^0.53.0",
+        "@geoprotocol/grc-20": "^0.3.0",
         "@graphile-contrib/pg-simplify-inflector": "^6.1.0",
         "@graphprotocol/grc-20": "^0.25.1",
         "@graphql-tools/schema": "^10.0.23",
@@ -116,6 +117,8 @@
 
     "@biomejs/cli-win32-x64": ["@biomejs/cli-win32-x64@2.0.0", "", { "os": "win32", "cpu": "x64" }, "sha512-2USVQ0hklNsph/KIR72ZdeptyXNnQ3JdzPn3NbjI4Sna34CnxeiYAaZcZzXPDl5PYNFBivV4xmvT3Z3rTmyDBg=="],
 
+    "@bokuweb/zstd-wasm": ["@bokuweb/zstd-wasm@0.0.27", "", {}, "sha512-GDm2uOTK3ESjnYmSeLQifJnBsRCWajKLvN32D2ZcQaaCIJI/Hse9s74f7APXjHit95S10UImsRGkTsbwHmrtmg=="],
+
     "@bufbuild/protobuf": ["@bufbuild/protobuf@1.10.1", "", {}, "sha512-wJ8ReQbHxsAfXhrf9ixl0aYbZorRuOWpBNzm8pL8ftmSxQx/wnJD5Eg861NwJU/czy2VXFIebCeZnZrI9rktIQ=="],
 
     "@drizzle-team/brocli": ["@drizzle-team/brocli@0.10.2", "", {}, "sha512-z33Il7l5dKjUgGULTqBsQBQwckHh5AbIuxhdsIxDDiZAzBOrZO6q9ogcWC65kU382AfynTfgNumVcNIjuIua6w=="],
@@ -187,6 +190,8 @@
     "@esbuild/win32-x64": ["@esbuild/win32-x64@0.25.4", "", { "os": "win32", "cpu": "x64" }, "sha512-nOT2vZNw6hJ+z43oP1SPea/G/6AbN6X+bGNhNuq8NtRHy4wsMhw765IKLNmnjek7GvjWBYQ8Q5VBoYTFg9y1UQ=="],
 
     "@fastify/busboy": ["@fastify/busboy@3.1.1", "", {}, "sha512-5DGmA8FTdB2XbDeEwc/5ZXBl6UbBAyBOOLlPuBnZ/N1SwdH9Ii+cOX3tBROlDgcTXxjOYnLMVoKk9+FXAw0CJw=="],
+
+    "@geoprotocol/grc-20": ["@geoprotocol/grc-20@0.3.0", "", { "dependencies": { "@bokuweb/zstd-wasm": "^0.0.27" } }, "sha512-Nd8lge6lAZxOeNYxmMzoTC8cYCEwN1RDaLod3IQO1DQnMzu7Qhv7F/x9ZnbZryO1wkbSSRQ4Z62CL6xf+BNrVQ=="],
 
     "@graphile-contrib/pg-simplify-inflector": ["@graphile-contrib/pg-simplify-inflector@6.1.0", "", {}, "sha512-3eI2FP4ulu/fxwkJBNXhR6XEzqVz4wJWFr4LfeyUNNArUtLFx0DpP6YdcARCYgwLExFcIQNE8fnul3JKiciYIw=="],
 

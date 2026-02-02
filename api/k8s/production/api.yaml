@@ -102,16 +102,6 @@ spec:
                 secretKeyRef:
                   name: api-secrets
                   key: IPFS_GATEWAY_WRITE
-            - name: IPFS_ALTERNATIVE_GATEWAY_KEY
-              valueFrom:
-                secretKeyRef:
-                  name: api-secrets
-                  key: IPFS_ALTERNATIVE_GATEWAY_KEY
-            - name: IPFS_ALTERNATIVE_GATEWAY_WRITE
-              valueFrom:
-                secretKeyRef:
-                  name: api-secrets
-                  key: IPFS_ALTERNATIVE_GATEWAY_WRITE
             - name: OPENSEARCH_URL
               valueFrom:
                 secretKeyRef:
@@ -194,6 +184,7 @@ metadata:
   namespace: api
   annotations:
     cert-manager.io/cluster-issuer: letsencrypt-prod
+    nginx.ingress.kubernetes.io/proxy-body-size: "100m"
 spec:
   ingressClassName: nginx
   tls:

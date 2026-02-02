@@ -167,7 +167,6 @@ impl Pipeline {
                     event = "hermes_pipeline.event_error",
                     stage = "transform.spaces",
                     block_number = meta.block_number,
-                    cursor = %meta.cursor,
                     error = %e,
                     "Transform failed"
                 );
@@ -181,7 +180,6 @@ impl Pipeline {
                     event = "hermes_pipeline.event_error",
                     stage = "transform.membership",
                     block_number = meta.block_number,
-                    cursor = %meta.cursor,
                     error = %e,
                     "Transform failed"
                 );
@@ -195,7 +193,6 @@ impl Pipeline {
                     event = "hermes_pipeline.event_error",
                     stage = "transform.trust",
                     block_number = meta.block_number,
-                    cursor = %meta.cursor,
                     error = %e,
                     "Transform failed"
                 );
@@ -209,7 +206,6 @@ impl Pipeline {
                     event = "hermes_pipeline.event_error",
                     stage = "transform.moderation",
                     block_number = meta.block_number,
-                    cursor = %meta.cursor,
                     error = %e,
                     "Transform failed"
                 );
@@ -223,7 +219,6 @@ impl Pipeline {
                     event = "hermes_pipeline.event_error",
                     stage = "transform.topics",
                     block_number = meta.block_number,
-                    cursor = %meta.cursor,
                     error = %e,
                     "Transform failed"
                 );
@@ -237,7 +232,6 @@ impl Pipeline {
                     event = "hermes_pipeline.event_error",
                     stage = "transform.governance",
                     block_number = meta.block_number,
-                    cursor = %meta.cursor,
                     error = %e,
                     "Transform failed"
                 );
@@ -251,7 +245,6 @@ impl Pipeline {
                     event = "hermes_pipeline.event_error",
                     stage = "transform.voting",
                     block_number = meta.block_number,
-                    cursor = %meta.cursor,
                     error = %e,
                     "Transform failed"
                 );
@@ -264,7 +257,6 @@ impl Pipeline {
                 event = "hermes_pipeline.event_error",
                 stage = "transform.edits",
                 block_number = meta.block_number,
-                cursor = %meta.cursor,
                 error = %e,
                 "Transform failed"
             );
@@ -424,7 +416,6 @@ impl Pipeline {
         info!(
             event = "hermes_pipeline.batch_summary",
             block_number = meta.block_number,
-            cursor = %meta.cursor,
             total_events = total,
             counts_by_topic = ?counts_by_topic,
             counts_by_event_type = ?counts_by_event_type,
@@ -437,7 +428,6 @@ impl Pipeline {
             info!(
                 event = "hermes_pipeline.emit_start",
                 block_number = meta.block_number,
-                cursor = %meta.cursor,
                 total_events = total,
                 counts_by_topic = ?counts_by_topic,
                 counts_by_event_type = ?counts_by_event_type,
@@ -630,7 +620,6 @@ impl Pipeline {
                 info!(
                     event = "hermes_pipeline.emit_end",
                     block_number = meta.block_number,
-                    cursor = %meta.cursor,
                     total_events = total,
                     counts_by_topic = ?counts_by_topic,
                     counts_by_event_type = ?counts_by_event_type,
@@ -640,7 +629,6 @@ impl Pipeline {
                 info!(
                     event = "hermes_pipeline.emit_end",
                     block_number = meta.block_number,
-                    cursor = %meta.cursor,
                     total_events = total,
                     duration_ms = emit_duration_ms,
                     counts_by_topic = ?counts_by_topic,
@@ -715,11 +703,7 @@ impl Sink for Pipeline {
         let relay_meta = utils::block_metadata(data);
         let meta: BlockMetadata = relay_meta.clone().into();
 
-        let span = info_span!(
-            "process_block",
-            block_number = meta.block_number,
-            cursor = %meta.cursor
-        );
+        let span = info_span!("process_block", block_number = meta.block_number);
 
         self.process_block_impl(output.value.as_slice(), relay_meta, meta)
             .instrument(span)
