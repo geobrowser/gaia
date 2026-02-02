@@ -2,11 +2,11 @@
 //!
 //! Loads processed documents into the search index using UpdateEntityRequest.
 
+use hermes_instrumentation::{debug, error, info_span, instrument, Instrument};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
-use hermes_instrumentation::{debug, error, info_span, instrument, warn, Instrument};
 
 use crate::consumer::StreamMessage;
 use crate::errors::IngestError;
@@ -156,19 +156,17 @@ impl SearchLoader {
 
         debug!(count = count, "Processing operations in order");
 
-        let result = async {
-            self.provider.bulk_operations(&operations).await
-        }
-        .instrument(info_span!(
-            "search_indexer.bulk_operations",
-            operation_count = count
-        ))
-        .await;
+        let result = async { self.provider.bulk_operations(&operations).await }
+            .instrument(info_span!(
+                "search_indexer.bulk_operations",
+                operation_count = count
+            ))
+            .await;
 
         match result {
             Ok(summary) => {
                 if summary.failed > 0 {
-                    warn!(
+                    error!(
                         succeeded = summary.succeeded,
                         failed = summary.failed,
                         "Bulk operations completed with some failures"
@@ -177,6 +175,8 @@ impl SearchLoader {
                         if let Some(ref err) = result.error {
                             error!(
                                 entity_id = %result.entity_id,
+                                space_id = %result.space_id,
+                                operation_type = %result.operation_type,
                                 error = %err,
                                 "Failed operation"
                             );
@@ -244,6 +244,7 @@ impl SearchLoader {
                         if total_failed > 0 {
                             // At least one indexing operation failed, send NACK
                             error!(
+                                offsets = ?batch.offsets,
                                 "Bulk operations completed with {} failures across {} operations",
                                 total_failed,
                                 operation_summaries.len()
@@ -433,6 +434,7 @@ mod tests {
                 .map(|op| BatchOperationResult {
                     entity_id: op.entity_id().to_string(),
                     space_id: op.space_id().to_string(),
+                    operation_type: op.operation_type().to_string(),
                     success: true,
                     error: None,
                 })
@@ -516,12 +518,7 @@ mod tests {
         let provider = Arc::new(MockSearchProvider::new());
         let mut loader = SearchLoader::new(provider.clone());
 
-        let mut delete_doc = EntityDocument::new(
-            Uuid::new_v4(),
-            Uuid::new_v4(),
-            None,
-            None,
-        );
+        let mut delete_doc = EntityDocument::new(Uuid::new_v4(), Uuid::new_v4(), None, None);
         delete_doc.deleted = Some(true);
 
         let events = vec![
