@@ -67,7 +67,7 @@ jobs:
           - 9093:9093
 
       opensearch:
-        image: opensearchproject/opensearch:2.11.0
+        image: opensearchproject/opensearch:2.17.1
         env:
           discovery.type: single-node
           plugins.security.disabled: "true"
@@ -120,10 +120,17 @@ jobs:
 
       - name: Wait for PostgreSQL
         run: |
-          until pg_isready -h localhost -p 5432 -U test_user; do
-            echo "Waiting for PostgreSQL..."
+          echo "Waiting for PostgreSQL to be ready..."
+          for i in {1..30}; do
+            if pg_isready -h localhost -p 5432 -U test_user; then
+              echo "PostgreSQL is ready"
+              exit 0
+            fi
+            echo "Waiting for PostgreSQL... ($i/30)"
             sleep 2
           done
+          echo "ERROR: PostgreSQL failed to become ready within 60 seconds"
+          exit 1
         env:
           PGPASSWORD: test_password
 
@@ -144,12 +151,14 @@ jobs:
             if nc -z localhost 9092; then
               echo "Kafka port 9092 is open, waiting for broker to be ready..."
               sleep 5
-              echo "Kafka should be ready now"
-              break
+              echo "Kafka is ready"
+              exit 0
             fi
             echo "Waiting for Kafka... ($i/60)"
             sleep 2
           done
+          echo "ERROR: Kafka failed to become ready within 120 seconds"
+          exit 1
 
       - name: Wait for OpenSearch
         run: |
@@ -157,11 +166,14 @@ jobs:
           for i in {1..60}; do
             if curl -s http://localhost:9200/_cluster/health | grep -q '"status":"green"\|"status":"yellow"'; then
               echo "OpenSearch is ready"
-              break
+              exit 0
             fi
             echo "Waiting for OpenSearch... ($i/60)"
             sleep 2
           done
+          echo "ERROR: OpenSearch failed to become ready within 120 seconds"
+          curl -s http://localhost:9200/_cluster/health || true
+          exit 1
 
       - name: Build search-indexer
         run: cargo build --package search-indexer --release --features search-indexer-repository/auto_index_creation
@@ -189,6 +201,11 @@ jobs:
             fi
             echo "Waiting for Search API... ($i/30)"
             sleep 2
+            if [ $i -eq 30 ]; then
+              echo "ERROR: Search API failed to become ready within 60 seconds"
+              curl -s http://localhost:3000/search/health || true
+              exit 1
+            fi
           done
         env:
           DATABASE_URL: postgresql://test_user:test_password@localhost:5432/gaia_test
@@ -201,10 +218,29 @@ jobs:
           KAFKA_BROKER=localhost:9092 \
           OPENSEARCH_URL=http://localhost:9200 \
           KAFKA_GROUP_ID=search-indexer-e2e \
+          HEALTH_PORT=8080 \
           RUST_LOG=search_indexer=info \
           ./target/release/search-indexer &
           echo $! > /tmp/search-indexer.pid
-          sleep 5
+
+          echo "Waiting for search-indexer to be ready..."
+          for i in {1..30}; do
+            # Check if process is still running
+            if ! kill -0 $(cat /tmp/search-indexer.pid) 2>/dev/null; then
+              echo "ERROR: search-indexer process exited unexpectedly"
+              exit 1
+            fi
+            # Check readiness endpoint
+            if curl -s http://localhost:8080/readyz | grep -q "ready"; then
+              echo "search-indexer is ready"
+              exit 0
+            fi
+            echo "Waiting for search-indexer... ($i/30)"
+            sleep 2
+          done
+          echo "ERROR: search-indexer failed to become ready within 60 seconds"
+          curl -s http://localhost:8080/readyz || true
+          exit 1
 
       - name: Run E2E tests
         working-directory: ./search-indexer/tests/e2e-kafka-search-api
