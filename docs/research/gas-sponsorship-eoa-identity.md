@@ -183,6 +183,82 @@ await openfort.transactionIntents.create({
 
 **Openfort documentation gap**: Their 7702 contracts implement `IAccount` and should work with their native paymaster (`pm_sponsorUserOperation`), but all examples use Pimlico instead. This is a documentation gap, not a capability gap.
 
+### Customization & Extensibility
+
+| Aspect                   | Privy                                          | Openfort                                         |
+| ------------------------ | ---------------------------------------------- | ------------------------------------------------ |
+| **UI Components**        | Pre-built, customizable via CSS                | Pre-built (ConnectKit-based), themeable          |
+| **Custom UI**            | Build your own with hooks                      | Build your own with hooks                        |
+| **Auth Methods**         | Email, SMS, social, passkeys, external wallets | Email, social, passkeys, guest, external wallets |
+| **Third-party Auth**     | ✅ Bring your own auth                         | ✅ Bring your own auth                           |
+| **Session Keys**         | ✅ Via signers + policies                      | ✅ Native (EIP-7715)                             |
+| **Transaction Policies** | ✅ Rich policy engine                          | ✅ Gas policies + contract rules                 |
+| **Key Export**           | ✅                                             | ✅                                               |
+
+#### Policy Engine Comparison
+
+**Privy** has a sophisticated policy engine with:
+
+- Transfer limits (amount caps)
+- Allowlists/denylists for recipients, contracts, networks
+- Time-bound signers
+- Calldata constraints (specific function parameters)
+- EIP-712 typed data restrictions
+- Multi-chain support (EVM, Solana, Tron, Sui)
+
+```typescript
+// Privy policy example - restrict to specific contract + function
+{
+  rules: [{
+    method: 'eth_sendTransaction',
+    conditions: [
+      { field_source: 'ethereum_transaction', field: 'to', operator: 'eq', value: '0x...' },
+      { field_source: 'ethereum_calldata', field: 'function_name', operator: 'eq', value: 'mint', abi: [...] }
+    ],
+    action: 'ALLOW'
+  }]
+}
+```
+
+**Openfort** has gas policies with:
+
+- Sponsored transactions (pay for user)
+- ERC-20 gas payment (dynamic or fixed rate)
+- Contract function allowlists
+- Rate limits (gas per interval, per tx, count per interval)
+- Wildcard/catch-all sponsorship
+
+```typescript
+// Openfort policy - sponsor specific contract functions
+curl https://api.openfort.io/v1/policy_rules \
+  -d type="contract_functions" \
+  -d functionName="mint" \
+  -d "contract=con_..."
+```
+
+#### Session Keys Comparison
+
+**Privy**: Uses "signers" - authorization keys that can take actions within scoped policies. Signers never see the private key; signing happens in secure enclaves.
+
+**Openfort**: Native EIP-7715 session keys with `useGrantPermissions` hook. Supports contract-call permissions, expiry times, and custom policies.
+
+```typescript
+// Openfort session key example
+const result = await grantPermissions({
+  request: {
+    signer: { type: "account", data: { id: sessionAccount.address } },
+    expiry: 60 * 60 * 24, // 24 hours
+    permissions: [
+      {
+        type: "contract-call",
+        data: { address: "0x...", calls: [] },
+        policies: [],
+      },
+    ],
+  },
+});
+```
+
 ### Custom L3 Support
 
 | Aspect                   | Privy                   | Openfort                                                            | ZeroDev                                                    |
