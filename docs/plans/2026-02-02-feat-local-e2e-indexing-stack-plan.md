@@ -103,7 +103,7 @@ Local Anvil will deploy the Space Registry at a **different address**.
 
 ## Implementation Plan
 
-### Phase 1: Blockchain + ERC-4337 Stack (4-5 days)
+### Phase 1: Blockchain + ERC-4337 Stack
 
 **Objective**: Get a local blockchain with working account abstraction.
 
@@ -182,7 +182,7 @@ Local Anvil will deploy the Space Registry at a **different address**.
 - Mock Paymaster sponsors the transaction
 - Transaction executes on Anvil
 
-### Phase 2: Indexing Pipeline (4-5 days)
+### Phase 2: Indexing Pipeline
 
 **Objective**: Index blocks from Anvil through fireeth into Kafka.
 
@@ -243,7 +243,7 @@ Local Anvil will deploy the Space Registry at a **different address**.
 - Space Registry events correctly filtered
 - hermes-ipfs-cache processes messages
 
-### Phase 3: Developer Experience (2-3 days)
+### Phase 3: Developer Experience
 
 **Objective**: Make the local stack easy to use.
 
@@ -353,14 +353,6 @@ Kafka + PostgreSQL (existing, healthy)
 | Space Registry address mismatch | High | High | Resolve before Phase 2 proceeds |
 | Alto/Paymaster Docker images have breaking changes | Low | Medium | Pin to specific image tags |
 | Substreams WASM incompatible with local fireeth | Medium | Medium | May need to rebuild `.spkg` |
-
-## Effort Estimate
-
-| Phase | Effort | Total |
-|-------|--------|-------|
-| Phase 1: Blockchain + ERC-4337 | 4-5 days | 4-5 days |
-| Phase 2: Indexing Pipeline | 4-5 days | 8-10 days |
-| Phase 3: Developer Experience | 2-3 days | 10-13 days |
 
 ## References
 
