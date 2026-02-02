@@ -332,6 +332,312 @@ await loginWithCode({ code: "123456" });
 
 - [UI Customization docs](https://www.openfort.io/docs/products/embedded-wallet/react/ui/customization)
 
+### Server/Backend Wallets
+
+Both Privy and Openfort offer **two distinct wallet types** with different control models:
+
+| Wallet Type         | Control                    | Use Case                           | Frontend Required? |
+| ------------------- | -------------------------- | ---------------------------------- | ------------------ |
+| **Embedded Wallet** | User-controlled (via auth) | User transactions, DeFi, gaming    | ✅ Yes (for auth)  |
+| **Backend Wallet**  | Developer-controlled (API) | Treasury, bots, automation, agents | ❌ No              |
+
+#### Backend Wallet Comparison
+
+| Capability                    | Privy                      | Openfort                              |
+| ----------------------------- | -------------------------- | ------------------------------------- |
+| **Create wallet from server** | ✅                         | ✅                                    |
+| **Sign without user**         | ✅                         | ✅                                    |
+| **Multi-chain**               | ✅ EVM, Solana, 10+ chains | ✅ EVM, Solana                        |
+| **Key custody**               | Privy secure enclaves      | Openfort TEE (GCP Confidential Space) |
+| **Import existing keys**      | ✅                         | ✅                                    |
+| **Export keys**               | ✅                         | ✅                                    |
+| **m-of-n key quorums**        | ✅ Native                  | ❌                                    |
+| **Transaction policies**      | ✅ Rich policy engine      | ✅ Gas policies                       |
+| **Gas sponsorship**           | ✅ `sponsor: true`         | ✅ Via policy                         |
+
+#### Privy Backend Wallet Example
+
+```typescript
+import { PrivyClient } from "@privy-io/node";
+
+const privy = new PrivyClient({
+  appId: process.env.PRIVY_APP_ID,
+  appSecret: process.env.PRIVY_APP_SECRET,
+});
+
+// Create a server-controlled wallet
+const wallet = await privy.wallets().create({
+  chainType: "ethereum",
+  owner: { publicKey: process.env.AUTH_KEY_PUBLIC }, // Your P-256 key
+});
+
+// Sign and send (no user involved)
+const tx = await privy
+  .wallets()
+  .ethereum()
+  .sendTransaction(wallet.id, {
+    caip2: "eip155:8453",
+    params: { transaction: { to: "0x...", value: "0x..." } },
+    sponsor: true,
+  });
+```
+
+#### Openfort Backend Wallet Example
+
+```typescript
+import Openfort from "@openfort/openfort-node";
+
+const openfort = new Openfort(process.env.OPENFORT_SECRET_KEY, {
+  walletSecret: process.env.WALLET_SECRET,
+});
+
+// Create a server-controlled wallet
+const account = await openfort.accounts.evm.backend.create({
+  name: "Treasury",
+});
+
+// Sign message
+const signature = await account.signMessage({ message: "Hello" });
+
+// List all backend wallets
+const wallets = await openfort.accounts.evm.backend.list({ limit: 10 });
+```
+
+#### Security Architecture
+
+**Privy** uses secure enclaves with Shamir secret sharing:
+
+- Key shares split between API and enclave
+- Neither Privy engineers nor attackers can reconstruct keys alone
+- Attestation-verified enclave code
+
+**Openfort** uses TEE (Trusted Execution Environment):
+
+- GCP Confidential Space with AMD SEV-SNP memory encryption
+- Envelope encryption: KEK (Cloud KMS) → DEK → Private Key
+- Private keys only exist in plaintext inside TEE memory during operations
+
+#### Using User Wallets from Backend
+
+Both providers allow backend access to **user's embedded wallets**, but require user consent:
+
+| Approach         | Privy                        | Openfort                              |
+| ---------------- | ---------------------------- | ------------------------------------- |
+| **Mechanism**    | Signers (authorization keys) | Encryption sessions                   |
+| **User consent** | Explicit: `addSigners()`     | Implicit: automatic recovery mode     |
+| **Revocation**   | User calls `removeSigners()` | Change auth / rotate encryption share |
+| **Policy scope** | Per-signer policies          | Per-transaction gas policies          |
+
+**Privy: Add a Signer**
+
+```typescript
+// Frontend (one-time): User grants server access
+import { useSigners } from "@privy-io/react-auth";
+
+const { addSigners } = useSigners();
+await addSigners({
+  address: wallet.address,
+  signers: [
+    {
+      signerId: "YOUR_SERVER_AUTH_KEY_ID",
+      policyIds: ["pol_xxx"], // Optional: restrict what server can do
+    },
+  ],
+});
+
+// Backend: Sign on user's behalf (no user interaction needed)
+const tx = await privy
+  .wallets()
+  .ethereum()
+  .sendTransaction(
+    userWalletId,
+    {
+      caip2: "eip155:8453",
+      params: { transaction: { to: "0x...", data: "0x..." } },
+      sponsor: true,
+    },
+    { authorizationKey: process.env.SERVER_AUTH_KEY },
+  );
+```
+
+**Openfort: Encryption Sessions**
+
+```typescript
+// Backend: Create encryption session
+const session = await openfort.createEncryptionSession(
+  process.env.SHIELD_PUBLISHABLE_KEY,
+  process.env.SHIELD_SECRET_KEY,
+  process.env.SHIELD_ENCRYPTION_SHARE, // You store this securely
+);
+
+// Backend: Sign for user (requires user's auth token)
+await openfort.transactionIntents.create({
+  account: userAccountId,
+  chainId: 8453,
+  policy: "pol_xxx",
+  encryptionSession: session,
+  interactions: [
+    { contract: "con_...", functionName: "mint", functionArgs: [] },
+  ],
+});
+```
+
+**Key difference**: Privy requires explicit user consent via `addSigners()`. Openfort's automatic recovery mode grants implicit access when you have the encryption share + user's auth token.
+
+### Cross-App Wallet Sharing
+
+A critical question: **Can users access the same wallet from multiple apps** (e.g., web app + CLI tool)?
+
+#### The Constraint
+
+Embedded wallets are **non-custodial by design**. The private key is reconstructed client-side using:
+
+1. User's recovery share (decrypted via auth)
+2. Provider's encryption share
+
+This reconstruction uses **browser crypto APIs** and happens in the client. Server SDKs (Node.js) don't support embedded wallet signing - only backend wallets.
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    WALLET TYPE CAPABILITIES                     │
+├─────────────────────────────────────────────────────────────────┤
+│                                                                 │
+│  EMBEDDED WALLETS                                               │
+│  ├── Browser JS SDK: ✅ Full signing capability                 │
+│  ├── React Native:   ✅ Full signing capability                 │
+│  ├── Node.js SDK:    ❌ Cannot sign (no key reconstruction)     │
+│  └── CLI:            ❌ Cannot sign directly                    │
+│                                                                 │
+│  BACKEND WALLETS                                                │
+│  ├── Browser:        ⚠️ Via API call to your server             │
+│  ├── Node.js SDK:    ✅ Full signing capability                 │
+│  └── CLI:            ✅ Full signing capability                 │
+│                                                                 │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+#### Options for Cross-App Access
+
+| Approach                           | Same Address?     | Non-custodial?   | No Frontend Action? | Complexity |
+| ---------------------------------- | ----------------- | ---------------- | ------------------- | ---------- |
+| **Backend wallet only**            | ✅                | ❌ (you control) | ✅                  | Low        |
+| **Export private key**             | ✅                | ❌ (key exposed) | ❌                  | Low        |
+| **Session keys**                   | ✅ (smart wallet) | ✅               | ❌ (grant once)     | Medium     |
+| **Signers** (Privy)                | ✅                | ✅               | ❌ (add once)       | Medium     |
+| **Encryption sessions** (Openfort) | ✅                | ⚠️               | ❌ (auth token)     | Medium     |
+
+#### Implementation: CLI + Web with Same Wallet
+
+**Option 1: Backend Wallet (simplest, but custodial)**
+
+Use a backend wallet for both web and CLI - same address everywhere, but YOU control it, not the user.
+
+```typescript
+// Shared backend wallet - works everywhere
+// Web app calls your API, CLI uses SDK directly
+
+// CLI
+const account = await openfort.accounts.evm.backend.get({ id: "acc_xxx" });
+await account.signMessage({ message: "hello" });
+
+// Web (via your API)
+const response = await fetch("/api/sign", {
+  method: "POST",
+  body: JSON.stringify({ message: "hello" }),
+});
+```
+
+**Option 2: Session Keys (non-custodial, requires one-time grant)**
+
+User grants a session key from the web app, CLI uses that session key.
+
+```typescript
+// Web app: User grants session key (one-time)
+const sessionPrivateKey = generatePrivateKey();
+const sessionAccount = privateKeyToAccount(sessionPrivateKey);
+
+await grantPermissions({
+  request: {
+    signer: { type: "account", data: { id: sessionAccount.address } },
+    expiry: 60 * 60 * 24 * 30, // 30 days
+    permissions: [
+      {
+        type: "contract-call",
+        data: { address: "0xYourContract", calls: [] },
+        policies: [],
+      },
+    ],
+  },
+});
+
+// Save sessionPrivateKey securely (e.g., encrypted in user's config)
+
+// CLI: Use session key to sign
+const sessionWallet = new ethers.Wallet(sessionPrivateKey);
+// Transactions go through user's smart wallet, authorized by session key
+```
+
+**Option 3: Privy Signers (non-custodial, requires one-time grant)**
+
+```typescript
+// Web app: User adds your CLI's auth key as a signer (one-time)
+await addSigners({
+  address: userWallet.address,
+  signers: [
+    {
+      signerId: "cli-signer-key-id",
+      policyIds: ["pol_cli_permissions"],
+    },
+  ],
+});
+
+// CLI: Sign using the signer key
+const privy = new PrivyClient({ appId, appSecret });
+await privy.wallets().ethereum().sendTransaction(walletId, txParams, {
+  authorizationKey: process.env.CLI_AUTH_KEY,
+});
+```
+
+**Option 4: Openfort with Custom Auth (closest to seamless)**
+
+If you control the auth provider, you can issue tokens from CLI:
+
+```typescript
+// Your auth system issues JWTs
+// Configure Openfort with your custom OIDC provider
+
+// CLI: User logs in via your auth
+const token = await yourAuthSystem.login(email, password);
+
+// CLI: Use token to access user's wallet
+const session = await openfort.createEncryptionSession(
+  shieldPubKey,
+  shieldSecretKey,
+  encryptionShare,
+);
+
+// The token proves user identity, encryption share proves you're the app
+// Combined = access to user's embedded wallet
+```
+
+**Limitation**: This still requires the user to authenticate (enter password in CLI). The auth token must come from somewhere.
+
+#### Recommendation for Cross-App Wallets
+
+| Scenario                    | Recommended Approach                         |
+| --------------------------- | -------------------------------------------- |
+| **Treasury / automation**   | Backend wallet (you control it)              |
+| **User wallet + CLI**       | Session keys or Signers (one-time web grant) |
+| **Same user, pure backend** | Not possible without user auth action        |
+| **Agentic (AI) wallets**    | Backend wallet with policies                 |
+
+**Key insight**: True non-custodial wallets require user authentication. If you want CLI access to a user's wallet without them ever touching a browser, you need either:
+
+1. A custodial (backend) wallet
+2. The user to export their private key (defeats the purpose)
+
+This is a fundamental security property, not a limitation of these providers.
+
 ### Custom L3 Support
 
 | Aspect                   | Privy                   | Openfort                                                            | ZeroDev                                                    |
@@ -441,10 +747,24 @@ Since you need **EOA identity preservation + gas sponsorship + open source prefe
      - Privy's `sponsor: true` (does Privy automatically support chains ZeroDev supports?)
      - Or ZeroDev's SDK directly with Privy just as the signer/auth layer?
 
+### Cross-App / CLI Access
+
+9. **Openfort: Can the Node SDK sign with embedded wallets?**
+   - Currently only backend wallets are supported in Node SDK
+   - Is there a path to CLI signing for user embedded wallets beyond session keys?
+
+10. **Privy: Can signers be added without frontend?**
+    - If a user has never used the web app, can they add a signer via API?
+    - Or must the first `addSigners()` call always come from a frontend SDK?
+
+11. **Both: What's the recommended pattern for CLI + Web same wallet?**
+    - Session keys seem like the best option, but require one-time web grant
+    - Is there a better approach we're missing?
+
 ### General
 
-8. **Is "pure" 7702 gas sponsorship possible without 4337?**
-   - Or is 4337 infrastructure required for paymaster-based sponsorship?
+12. **Is "pure" 7702 gas sponsorship possible without 4337?**
+    - Or is 4337 infrastructure required for paymaster-based sponsorship?
 
 ---
 
@@ -454,6 +774,13 @@ Since you need **EOA identity preservation + gas sponsorship + open source prefe
 
 - [Gas Sponsorship Overview](https://docs.privy.io/wallets/gas-and-asset-management/gas/overview)
 - [Gas Sponsorship Setup](https://docs.privy.io/wallets/gas-and-asset-management/gas/setup)
+- [Server Wallets - Create](https://docs.privy.io/wallets/wallets/create/create-a-wallet)
+- [Server Wallets - Treasury Recipe](https://docs.privy.io/recipes/wallets/treasury-wallets)
+- [Server Wallets - Agentic Recipe](https://docs.privy.io/recipes/wallets/agentic-wallets)
+- [Signers Overview](https://docs.privy.io/wallets/using-wallets/signers/overview)
+- [Add Signers](https://docs.privy.io/wallets/using-wallets/signers/add-signers)
+- [Secure Enclaves](https://docs.privy.io/security/wallet-infrastructure/secure-enclaves)
+- [Whitelabel](https://docs.privy.io/recipes/react/whitelabel)
 
 ### Openfort
 
@@ -462,6 +789,14 @@ Since you need **EOA identity preservation + gas sponsorship + open source prefe
 - [7702 Wallets](https://www.openfort.io/docs/products/embedded-wallet/javascript/wallets#eoas--erc-7702-upgrading-the-basic-wallet)
 - [7702 Recipe (uses Pimlico)](https://www.openfort.io/docs/recipes/7702)
 - [7702 Contracts](https://github.com/openfort-xyz/openfort-7702-account)
+- [Backend Wallets Overview](https://www.openfort.io/docs/products/server)
+- [Backend Wallets Usage](https://www.openfort.io/docs/products/server/usage)
+- [Backend Wallets Security (TEE)](https://www.openfort.io/docs/products/server/security)
+- [Shield (Recovery Share)](https://github.com/openfort-xyz/shield)
+- [Automatic Recovery Sessions](https://www.openfort.io/docs/products/embedded-wallet/server/automatic-recovery-session)
+- [Session Keys (EIP-7715)](https://www.openfort.io/docs/products/embedded-wallet/react/wallet/session-keys)
+- [Third-Party Auth](https://www.openfort.io/docs/products/embedded-wallet/javascript/auth/external-auth)
+- [Custom Auth Token](https://www.openfort.io/docs/configuration/custom-auth/auth-token)
 - [Supported Chains](https://www.openfort.io/docs/configuration/chains)
 - [Entity Addresses (deployed contracts)](https://www.openfort.io/docs/configuration/addresses)
 - [Self-Hosted (OpenSigner)](https://www.opensigner.dev)
