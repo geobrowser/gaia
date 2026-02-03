@@ -137,46 +137,43 @@ pub async fn prefetch_block(
         tracing::info!("Prefetching {} IPFS URIs", request_count);
     });
 
-    // Fetch all with retry
+    // Fetch all in parallel with retry
+    let fetch_futures = requests.iter().map(|request| {
+        let cache = Arc::clone(cache);
+        let config = config.clone();
+        let uri = request.uri.clone();
+        let space_id = request.space_id.clone();
+
+        async move {
+            let space_id_hex = hex::encode(&space_id);
+            let request = FetchRequest { uri: uri.clone(), space_id: space_id.clone() };
+            let fetch_result = debug_span!("prefetch.fetch", uri = %uri, space_id = %space_id_hex)
+                .in_scope(|| fetch_with_retry(&request, &cache, &config))
+                .await;
+            (uri, fetch_result)
+        }
+    });
+
+    let fetch_results = futures::future::join_all(fetch_futures).await;
+
+    // Collect results
     let mut result = PrefetchResult::default();
-
-    for request in requests {
-        let space_id_hex = hex::encode(&request.space_id);
-        let fetch_result = debug_span!("prefetch.fetch", uri = %request.uri, space_id = %space_id_hex)
-            .in_scope(|| fetch_with_retry(&request, cache, config))
-            .await;
-
+    for (uri, fetch_result) in fetch_results {
         match fetch_result {
             FetchResult::Success(cached_edit) => {
-                tracing::debug!(
-                    uri = %request.uri,
-                    space_id = %space_id_hex,
-                    "Prefetch success"
-                );
-                result.cache.insert(request.uri, cached_edit);
+                tracing::debug!(uri = %uri, "Prefetch success");
+                result.cache.insert(uri, cached_edit);
             }
             FetchResult::CacheMiss => {
-                tracing::warn!(
-                    uri = %request.uri,
-                    space_id = %space_id_hex,
-                    "Prefetch cache miss after retries"
-                );
+                tracing::warn!(uri = %uri, "Prefetch cache miss after retries");
                 result.cache_misses += 1;
             }
             FetchResult::Errored => {
-                tracing::warn!(
-                    uri = %request.uri,
-                    space_id = %space_id_hex,
-                    "Prefetch found errored entry in cache"
-                );
+                tracing::warn!(uri = %uri, "Prefetch found errored entry in cache");
                 result.errored_entries += 1;
             }
             FetchResult::FetchFailed => {
-                tracing::error!(
-                    uri = %request.uri,
-                    space_id = %space_id_hex,
-                    "Prefetch database error"
-                );
+                tracing::error!(uri = %uri, "Prefetch database error");
                 result.fetch_failures += 1;
             }
         }
