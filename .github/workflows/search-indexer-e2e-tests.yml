@@ -217,6 +217,7 @@ jobs:
 
       - name: Run search-indexer in background
         run: |
+          ENVIRONMENT=staging \
           KAFKA_BROKER=localhost:9092 \
           OPENSEARCH_URL=http://localhost:9200 \
           KAFKA_GROUP_ID=search-indexer-e2e \
@@ -251,6 +252,7 @@ jobs:
           rustup default nightly
           ./run-test.sh
         env:
+          ENVIRONMENT: staging
           KAFKA_BROKER: localhost:9092
           SEARCH_API_URL: http://localhost:3000
 

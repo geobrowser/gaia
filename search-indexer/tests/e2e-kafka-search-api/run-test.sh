@@ -5,10 +5,20 @@
 
 set -e
 
+# Default to staging if ENVIRONMENT is not set
+export ENVIRONMENT="${ENVIRONMENT:-staging}"
+
 echo "🚀 Starting E2E Kafka Search API Quick Test"
 echo ""
+echo "Environment: $ENVIRONMENT"
 echo "This will generate test events in your local Kafka broker at localhost:9092"
-echo "Topics: knowledge.edits and curation.scores"
+
+# Show prefixed topic names based on environment
+if [ "$ENVIRONMENT" = "staging" ]; then
+    echo "Topics: staging.knowledge.edits and staging.curation.scores"
+else
+    echo "Topics: knowledge.edits and curation.scores"
+fi
 echo ""
 
 # Check if Kafka is accessible
@@ -57,6 +67,7 @@ else
     echo "To run validation tests, start the search API and search-indexer:"
     echo ""
     echo "1. Start the search-indexer:"
+    echo "   ENVIRONMENT=staging \\"
     echo "   KAFKA_BROKER=localhost:9092 \\"
     echo "   OPENSEARCH_URL=http://localhost:9200 \\"
     echo "   KAFKA_GROUP_ID=search-indexer-test-\$(date +%s) \\"

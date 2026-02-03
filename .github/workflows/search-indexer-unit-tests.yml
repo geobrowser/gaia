@@ -64,6 +64,7 @@ jobs:
       - name: Run search-indexer unit tests
         run: cargo test -p search-indexer -p search-indexer-repository
         env:
+          ENVIRONMENT: staging
           RUST_BACKTRACE: 1
 
       - name: Run clippy
