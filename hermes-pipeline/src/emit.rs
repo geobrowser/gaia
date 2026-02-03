@@ -606,7 +606,7 @@ impl Emitter {
         event.encode(&mut payload)?;
 
         // Apply topic prefix for environment isolation
-        let topic = prefixed_topic(&self.topic_prefix, T::TOPIC);
+        let topic = prefixed_topic(self.topic_prefix, T::TOPIC);
 
         let headers = event.headers();
         let headers = attach_event_id(headers, event, &topic);
