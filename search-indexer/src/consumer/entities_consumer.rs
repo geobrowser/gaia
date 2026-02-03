@@ -2,6 +2,7 @@
 //!
 //! Consumes entity events from Kafka topics and forwards them to the ingest.
 
+use hermes_kafka::get_topic_prefix;
 use prost::Message;
 use rdkafka::{
     consumer::{Consumer, StreamConsumer},
@@ -46,10 +47,12 @@ impl EntitiesConsumer {
 
     /// Default batch timeout in milliseconds (configurable via KAFKA_BATCH_TIMEOUT_MS env var).
     const DEFAULT_BATCH_TIMEOUT_MS: u64 = 1000;
+
     /// Create a new Kafka consumer.
     ///
     /// Configuration is read from environment variables with fallbacks to defaults:
-    /// - KAFKA_TOPIC: Topic name (default: "knowledge.edits")
+    /// - ENVIRONMENT: Environment name for topic prefix ("staging" or "production")
+    /// - KAFKA_TOPIC: Base topic name (default: "knowledge.edits")
     /// - KAFKA_BATCH_SIZE: Batch size (default: 50)
     /// - KAFKA_BATCH_TIMEOUT_MS: Batch timeout in milliseconds (default: 1000)
     ///
@@ -63,8 +66,10 @@ impl EntitiesConsumer {
     /// * `Ok(EntitiesConsumer)` - A new consumer instance
     /// * `Err(IngestError)` - If consumer creation fails
     pub fn new(brokers: &str, group_id: &str) -> Result<Self, IngestError> {
-        let topic =
+        let prefix = get_topic_prefix();
+        let base_topic =
             env::var("KAFKA_TOPIC").unwrap_or_else(|_| Self::KNOWLEDGE_EDITS_TOPIC.to_string());
+        let topic = format!("{}{}", prefix, base_topic);
 
         let batch_size = env::var("KAFKA_BATCH_SIZE")
             .ok()

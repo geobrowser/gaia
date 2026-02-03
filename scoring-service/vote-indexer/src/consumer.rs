@@ -1,5 +1,6 @@
 //! Kafka consumer for the curation.votes topic.
 
+use hermes_kafka::get_topic_prefix;
 use prost::Message;
 use rdkafka::{
     config::ClientConfig,
@@ -11,12 +12,13 @@ use tracing::{debug, info, warn};
 
 use crate::error::IndexerError;
 
-/// Topic for curation votes
+/// Base topic for curation votes
 const VOTES_TOPIC: &str = "curation.votes";
 
 /// Kafka consumer for vote events.
 pub struct KafkaConsumer {
     consumer: StreamConsumer<DefaultConsumerContext>,
+    topic: String,
 }
 
 impl KafkaConsumer {
@@ -50,20 +52,25 @@ impl KafkaConsumer {
 
         let consumer: StreamConsumer = config.create()?;
 
+        // Topic prefix for environment isolation (e.g., "staging." or empty for production)
+        let prefix = get_topic_prefix();
+        let topic = format!("{}{}", prefix, VOTES_TOPIC);
+
         info!(
             brokers = %brokers,
             group_id = %group_id,
-            topic = %VOTES_TOPIC,
+            topic_prefix = %prefix,
+            topic = %topic,
             "Created Kafka consumer"
         );
 
-        Ok(Self { consumer })
+        Ok(Self { consumer, topic })
     }
 
-    /// Subscribe to the curation.votes topic.
+    /// Subscribe to the curation.votes topic (with environment prefix if configured).
     pub fn subscribe(&self) -> Result<(), IndexerError> {
-        self.consumer.subscribe(&[VOTES_TOPIC])?;
-        info!(topic = %VOTES_TOPIC, "Subscribed to Kafka topic");
+        self.consumer.subscribe(&[&self.topic])?;
+        info!(topic = %self.topic, "Subscribed to Kafka topic");
         Ok(())
     }
 

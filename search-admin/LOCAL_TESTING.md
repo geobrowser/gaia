@@ -124,7 +124,7 @@ spec:
     spec:
       containers:
       - name: opensearch
-        image: opensearchproject/opensearch:2.11.0
+        image: opensearchproject/opensearch:2.17.1
         env:
         - name: discovery.type
           value: single-node

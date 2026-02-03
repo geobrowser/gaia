@@ -92,6 +92,7 @@ impl Storage {
         let mut boolean_values = Vec::with_capacity(values.len());
         let mut time_values = Vec::with_capacity(values.len());
         let mut point_values = Vec::with_capacity(values.len());
+        let mut rect_values = Vec::with_capacity(values.len());
         let mut integer_values = Vec::with_capacity(values.len());
         let mut float_values = Vec::with_capacity(values.len());
         let mut bytes_values: Vec<Option<&[u8]>> = Vec::with_capacity(values.len());
@@ -114,6 +115,7 @@ impl Storage {
             boolean_values.push(prop.boolean);
             time_values.push(prop.time.as_deref());
             point_values.push(prop.point.as_deref());
+            rect_values.push(prop.rect.as_deref());
             integer_values.push(prop.integer);
             float_values.push(prop.float);
             bytes_values.push(prop.bytes.as_deref());
@@ -128,7 +130,7 @@ impl Storage {
         let query = r#"
             INSERT INTO values (
                 id, entity_id, property_id, space_id, language, unit,
-                text, decimal, boolean, time, point,
+                text, decimal, boolean, time, point, rect,
                 integer, float, bytes, date, datetime, schedule, embedding,
                 time_utc, datetime_utc
             )
@@ -144,15 +146,16 @@ impl Storage {
                 $9::boolean[],
                 $10::text[],
                 $11::text[],
-                $12::bigint[],
-                $13::double precision[],
-                $14::bytea[],
-                $15::text[],
+                $12::text[],
+                $13::bigint[],
+                $14::double precision[],
+                $15::bytea[],
                 $16::text[],
-                $17::jsonb[],
+                $17::text[],
                 $18::jsonb[],
-                $19::timetz[],
-                $20::timestamptz[]
+                $19::jsonb[],
+                $20::timetz[],
+                $21::timestamptz[]
             )
             ON CONFLICT (id) DO UPDATE SET
                 language = EXCLUDED.language,
@@ -162,6 +165,7 @@ impl Storage {
                 boolean = EXCLUDED.boolean,
                 time = EXCLUDED.time,
                 point = EXCLUDED.point,
+                rect = EXCLUDED.rect,
                 integer = EXCLUDED.integer,
                 float = EXCLUDED.float,
                 bytes = EXCLUDED.bytes,
@@ -185,6 +189,7 @@ impl Storage {
             .bind(&boolean_values)
             .bind(&time_values)
             .bind(&point_values)
+            .bind(&rect_values)
             .bind(&integer_values)
             .bind(&float_values)
             .bind(&bytes_values)
@@ -1131,6 +1136,7 @@ impl Storage {
         let mut decimals = Vec::with_capacity(set_values.len());
         let mut times = Vec::with_capacity(set_values.len());
         let mut points = Vec::with_capacity(set_values.len());
+        let mut rects = Vec::with_capacity(set_values.len());
         let mut integers = Vec::with_capacity(set_values.len());
         let mut floats = Vec::with_capacity(set_values.len());
         let mut bytes_values: Vec<Option<&[u8]>> = Vec::with_capacity(set_values.len());
@@ -1162,6 +1168,7 @@ impl Storage {
             decimals.push(v.decimal.as_deref());
             times.push(v.time.as_deref());
             points.push(v.point.as_deref());
+            rects.push(v.rect.as_deref());
             integers.push(v.integer);
             floats.push(v.float);
             bytes_values.push(v.bytes.as_deref());
@@ -1179,16 +1186,16 @@ impl Storage {
             r#"
             INSERT INTO value_versions (
                 id, entity_id, property_id, space_id, valid_from_key,
-                language, unit, text, boolean, decimal, time, point,
+                language, unit, text, boolean, decimal, time, point, rect,
                 integer, float, bytes, date, datetime, schedule, embedding,
                 time_utc, datetime_utc, context_root_id, context_edge_type_id
             )
             SELECT * FROM UNNEST(
                 $1::uuid[], $2::uuid[], $3::uuid[], $4::uuid[], $5::bigint[],
                 $6::text[], $7::text[], $8::text[], $9::boolean[], $10::numeric[],
-                $11::text[], $12::text[], $13::bigint[], $14::double precision[],
-                $15::bytea[], $16::text[], $17::text[], $18::jsonb[], $19::jsonb[],
-                $20::timetz[], $21::timestamptz[], $22::uuid[], $23::uuid[]
+                $11::text[], $12::text[], $13::text[], $14::bigint[], $15::double precision[],
+                $16::bytea[], $17::text[], $18::text[], $19::jsonb[], $20::jsonb[],
+                $21::timetz[], $22::timestamptz[], $23::uuid[], $24::uuid[]
             )
             ON CONFLICT (id) DO NOTHING
             "#,
@@ -1205,6 +1212,7 @@ impl Storage {
         .bind(&decimals)
         .bind(&times)
         .bind(&points)
+        .bind(&rects)
         .bind(&integers)
         .bind(&floats)
         .bind(&bytes_values)
