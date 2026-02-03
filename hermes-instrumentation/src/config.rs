@@ -9,7 +9,7 @@ pub struct AxiomConfig {
     /// Axiom API token (from `AXIOM_TOKEN` env var).
     pub token: String,
 
-    /// Dataset name for traces (from `AXIOM_DATASET` env var, default: "gaia-traces").
+    /// Dataset name for traces (from `AXIOM_DATASET` env var, default: "hermes-pipeline").
     pub dataset: String,
 }
 
@@ -36,7 +36,8 @@ impl AxiomConfig {
         if token.is_empty() {
             panic!("AXIOM_TOKEN is set but empty - this is a configuration error");
         }
-        let dataset = std::env::var("AXIOM_DATASET").unwrap_or_else(|_| "gaia-traces".to_string());
+        let dataset =
+            std::env::var("AXIOM_DATASET").unwrap_or_else(|_| "hermes-pipeline".to_string());
         if dataset.is_empty() {
             panic!("AXIOM_DATASET is set but empty - this is a configuration error");
         }

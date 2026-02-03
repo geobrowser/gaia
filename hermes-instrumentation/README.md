@@ -115,7 +115,7 @@ Backend::Sentry {
 }
 ```
 
-Set `AXIOM_TOKEN` to enable. Dataset defaults to `gaia-traces` if `AXIOM_DATASET` is not set.
+Set `AXIOM_TOKEN` to enable. Dataset defaults to `hermes-pipeline` if `AXIOM_DATASET` is not set.
 
 ## Instrumentation
 
