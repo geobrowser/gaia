@@ -911,7 +911,7 @@ mod tests {
             make_cached_edit(Some("My Edit Name")),
         );
 
-        enrich_publish_action_names(&mut proposals, &mut vec![], &prefetched);
+        enrich_publish_action_names(&mut proposals, &mut [], &prefetched);
 
         let action = &proposals[0].actions[0];
         if let Some(proposal_action::Action::Publish(publish)) = &action.action {
@@ -926,7 +926,7 @@ mod tests {
         let mut proposals = vec![make_proposal_with_publish("ipfs://Qmnotfound")];
         let prefetched = HashMap::new(); // empty cache
 
-        enrich_publish_action_names(&mut proposals, &mut vec![], &prefetched);
+        enrich_publish_action_names(&mut proposals, &mut [], &prefetched);
 
         let action = &proposals[0].actions[0];
         if let Some(proposal_action::Action::Publish(publish)) = &action.action {
@@ -945,7 +945,7 @@ mod tests {
             make_cached_edit(None), // no name in cache
         );
 
-        enrich_publish_action_names(&mut proposals, &mut vec![], &prefetched);
+        enrich_publish_action_names(&mut proposals, &mut [], &prefetched);
 
         let action = &proposals[0].actions[0];
         if let Some(proposal_action::Action::Publish(publish)) = &action.action {
@@ -991,7 +991,7 @@ mod tests {
             make_cached_edit(Some("Updated Edit")),
         );
 
-        enrich_publish_action_names(&mut vec![], &mut proposals_updated, &prefetched);
+        enrich_publish_action_names(&mut [], &mut proposals_updated, &prefetched);
 
         let action = &proposals_updated[0].actions[0];
         if let Some(proposal_action::Action::Publish(publish)) = &action.action {

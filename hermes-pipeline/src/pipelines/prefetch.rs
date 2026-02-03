@@ -82,30 +82,29 @@ fn collect_uris(actions: &[Action]) -> Vec<FetchRequest> {
         let action_type = action.action.as_slice();
 
         // EDITS_PUBLISHED: extract IPFS URI from action data
-        if actions::matches(action_type, &actions::EDITS_PUBLISHED) {
-            if let Some(ipfs_uri) = extract_ipfs_uri(&action.data) {
-                requests.push(FetchRequest {
-                    uri: ipfs_uri,
-                    space_id: action.from_id.clone(),
-                });
-            }
+        if actions::matches(action_type, &actions::EDITS_PUBLISHED)
+            && let Some(ipfs_uri) = extract_ipfs_uri(&action.data)
+        {
+            requests.push(FetchRequest {
+                uri: ipfs_uri,
+                space_id: action.from_id.clone(),
+            });
         }
 
         // PROPOSAL_CREATED/UPDATED: extract Publish action content URIs
-        if actions::matches(action_type, &actions::PROPOSAL_CREATED)
-            || actions::matches(action_type, &actions::PROPOSAL_UPDATED)
+        if (actions::matches(action_type, &actions::PROPOSAL_CREATED)
+            || actions::matches(action_type, &actions::PROPOSAL_UPDATED))
+            && let Ok((decoded, _)) = decode_proposal_created(&action.data)
         {
-            if let Ok((decoded, _)) = decode_proposal_created(&action.data) {
-                for proposal_action in decoded.actions {
-                    let action_type = ProposalActionType::from_calldata(&proposal_action.data);
-                    if matches!(action_type, ProposalActionType::Publish) {
-                        if let Ok(args) = decode_publish_args(&proposal_action.data) {
-                            requests.push(FetchRequest {
-                                uri: args.content_uri,
-                                space_id: action.to_id.clone(), // space owning the proposal
-                            });
-                        }
-                    }
+            for proposal_action in decoded.actions {
+                let action_type = ProposalActionType::from_calldata(&proposal_action.data);
+                if matches!(action_type, ProposalActionType::Publish)
+                    && let Ok(args) = decode_publish_args(&proposal_action.data)
+                {
+                    requests.push(FetchRequest {
+                        uri: args.content_uri,
+                        space_id: action.to_id.clone(), // space owning the proposal
+                    });
                 }
             }
         }
