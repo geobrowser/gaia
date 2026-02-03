@@ -5,6 +5,7 @@ use std::time::{Duration, Instant};
 use futures::StreamExt;
 use hermes_instrumentation::{debug, error, info, info_span, warn, Instrument};
 use hermes_schema::pb::blockchain_metadata::BlockchainMetadata;
+use hermes_schema::pb::space::hermes_space_trust_extension::Extension as TrustExtensionType;
 use rdkafka::message::Headers;
 use rdkafka::Message;
 use std::sync::OnceLock;
@@ -1067,6 +1068,18 @@ async fn process_block(
             "kg_indexer.handle_event",
             event_type = event_type_str,
             event_id = event.event_id.as_deref().unwrap_or(""),
+            // Context fields (recorded based on event type)
+            edit_id = tracing::field::Empty,
+            space_id = tracing::field::Empty,
+            space_address = tracing::field::Empty,
+            account = tracing::field::Empty,
+            role = tracing::field::Empty,
+            proposal_id = tracing::field::Empty,
+            voter_id = tracing::field::Empty,
+            parent_space_id = tracing::field::Empty,
+            child_space_id = tracing::field::Empty,
+            extension_type = tracing::field::Empty,
+            // OTEL status
             "otel.status_code" = tracing::field::Empty,
             "otel.status_message" = tracing::field::Empty
         );
@@ -1076,6 +1089,12 @@ async fn process_block(
             Ok::<usize, IndexerError>(match &event.msg {
                 KgMessage::Edit(edit) => {
                     let result = handlers::edits::handle_edit(edit)?;
+
+                    // Record trace context
+                    event_span.record("edit_id", result.edit_id.to_string().as_str());
+                    if let Ok(space_id) = uuid::Uuid::from_slice(&edit.space_id) {
+                        event_span.record("space_id", space_id.to_string().as_str());
+                    }
 
                     // Keep copies for versioned writes before partitioning
                     let values_for_versioning = result.values.clone();
@@ -1156,11 +1175,27 @@ async fn process_block(
                 }
                 KgMessage::CreateSpace(space) => {
                     let space_item = handlers::spaces::handle_create_space(space)?;
+
+                    // Record trace context
+                    event_span.record("space_id", space_item.id.to_string().as_str());
+                    event_span.record("space_address", space_item.address.as_str());
+
                     storage.insert_spaces(&[space_item], &mut tx).await?;
                     1
                 }
-                KgMessage::RoleGranted(event) => {
-                    match handlers::membership::handle_role_granted(event)? {
+                KgMessage::RoleGranted(role_event) => {
+                    // Record trace context
+                    if let Ok(space_id) = uuid::Uuid::from_slice(&role_event.space_id) {
+                        event_span.record("space_id", space_id.to_string().as_str());
+                    }
+                    if let Ok(member_id) = uuid::Uuid::from_slice(&role_event.member_space_id) {
+                        event_span.record("account", member_id.to_string().as_str());
+                    }
+                    if let Ok(role) = hermes_schema::pb::membership::MembershipRole::try_from(role_event.role) {
+                        event_span.record("role", role.as_str_name());
+                    }
+
+                    match handlers::membership::handle_role_granted(role_event)? {
                         MembershipChange::AddEditor(e) => {
                             storage.insert_editors(&[e], &mut tx).await?;
                         }
@@ -1171,8 +1206,19 @@ async fn process_block(
                     }
                     1
                 }
-                KgMessage::RoleRevoked(event) => {
-                    match handlers::membership::handle_role_revoked(event)? {
+                KgMessage::RoleRevoked(role_event) => {
+                    // Record trace context
+                    if let Ok(space_id) = uuid::Uuid::from_slice(&role_event.space_id) {
+                        event_span.record("space_id", space_id.to_string().as_str());
+                    }
+                    if let Ok(member_id) = uuid::Uuid::from_slice(&role_event.member_space_id) {
+                        event_span.record("account", member_id.to_string().as_str());
+                    }
+                    if let Ok(role) = hermes_schema::pb::membership::MembershipRole::try_from(role_event.role) {
+                        event_span.record("role", role.as_str_name());
+                    }
+
+                    match handlers::membership::handle_role_revoked(role_event)? {
                         MembershipChange::RemoveEditor(e) => {
                             storage.remove_editors(&[e], &mut tx).await?;
                         }
@@ -1183,21 +1229,33 @@ async fn process_block(
                     }
                     1
                 }
-                KgMessage::TrustExtension(event) => {
-                    if let Some(subspace) = handlers::subspaces::handle_trust_extension(event)? {
+                KgMessage::TrustExtension(trust_event) => {
+                    // Record trace context
+                    let extension_type = match &trust_event.extension {
+                        Some(TrustExtensionType::Verified(_)) => "verified",
+                        Some(TrustExtensionType::Related(_)) => "related",
+                        Some(TrustExtensionType::Subtopic(_)) => "subtopic",
+                        None => "unknown",
+                    };
+                    event_span.record("extension_type", extension_type);
+
+                    if let Some(subspace) = handlers::subspaces::handle_trust_extension(trust_event)?
+                    {
+                        event_span.record("parent_space_id", subspace.parent_space_id.to_string().as_str());
+                        event_span.record("child_space_id", subspace.subspace_id.to_string().as_str());
                         storage.insert_subspaces(&[subspace], &mut tx).await?;
                         1
                     } else {
                         0
                     }
                 }
-                KgMessage::ProposalCreated(event) => {
-                    let result = handlers::governance::handle_proposal_created(event)?;
-                    debug!(
-                        proposal_id = %result.proposal.id,
-                        actions = result.actions.len(),
-                        "Processing ProposalCreated"
-                    );
+                KgMessage::ProposalCreated(proposal_event) => {
+                    let result = handlers::governance::handle_proposal_created(proposal_event)?;
+
+                    // Record trace context
+                    event_span.record("proposal_id", result.proposal.id.to_string().as_str());
+                    event_span.record("space_id", result.proposal.space_id.to_string().as_str());
+
                     storage
                         .insert_proposals(&[result.proposal], &mut tx)
                         .await?;
@@ -1208,13 +1266,13 @@ async fn process_block(
                     }
                     1 + result.actions.len()
                 }
-                KgMessage::ProposalUpdated(event) => {
-                    let result = handlers::governance::handle_proposal_updated(event)?;
-                    debug!(
-                        proposal_id = %result.proposal.id,
-                        actions = result.actions.len(),
-                        "Processing ProposalUpdated"
-                    );
+                KgMessage::ProposalUpdated(proposal_event) => {
+                    let result = handlers::governance::handle_proposal_updated(proposal_event)?;
+
+                    // Record trace context
+                    event_span.record("proposal_id", result.proposal.id.to_string().as_str());
+                    event_span.record("space_id", result.proposal.space_id.to_string().as_str());
+
                     storage.update_proposal(&result.proposal, &mut tx).await?;
                     storage
                         .delete_proposal_actions(result.proposal.id, &mut tx)
@@ -1226,22 +1284,22 @@ async fn process_block(
                     }
                     1 + result.actions.len()
                 }
-                KgMessage::ProposalVoted(event) => {
-                    let vote = handlers::governance::handle_proposal_voted(event)?;
-                    debug!(
-                        proposal_id = %vote.proposal_id,
-                        voter_id = %vote.voter_id,
-                        "Processing ProposalVoted"
-                    );
+                KgMessage::ProposalVoted(vote_event) => {
+                    let vote = handlers::governance::handle_proposal_voted(vote_event)?;
+
+                    // Record trace context
+                    event_span.record("proposal_id", vote.proposal_id.to_string().as_str());
+                    event_span.record("voter_id", vote.voter_id.to_string().as_str());
+
                     storage.insert_proposal_votes(&[vote], &mut tx).await?;
                     1
                 }
-                KgMessage::ProposalExecuted(event) => {
-                    let execution = handlers::governance::handle_proposal_executed(event)?;
-                    debug!(
-                        proposal_id = %execution.proposal_id,
-                        "Processing ProposalExecuted"
-                    );
+                KgMessage::ProposalExecuted(exec_event) => {
+                    let execution = handlers::governance::handle_proposal_executed(exec_event)?;
+
+                    // Record trace context
+                    event_span.record("proposal_id", execution.proposal_id.to_string().as_str());
+
                     storage
                         .update_proposal_executed(
                             execution.proposal_id,
