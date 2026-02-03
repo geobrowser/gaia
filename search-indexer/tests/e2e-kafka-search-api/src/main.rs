@@ -96,7 +96,7 @@ async fn main() -> Result<()> {
     let delete_eve_id = Uuid::parse_str("00000000-0000-0000-0000-000000000e01").unwrap();
 
     // Entity created via CreateEntity op (for testing CreateEntity handling)
-    let create_entity_test_id = Uuid::parse_str("00000000-0000-0000-0000-000000000ce01").unwrap();
+    let create_entity_test_id = Uuid::parse_str("00000000-0000-0000-0000-00000000ce01").unwrap();
 
     info!("Test Space ID: {}", test_space);
     info!("Person Type ID: {}", person_type_id);
