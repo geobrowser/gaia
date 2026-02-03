@@ -652,6 +652,7 @@ impl Storage {
         let mut executed_ats: Vec<Option<i64>> = Vec::with_capacity(proposals.len());
         let mut created_ats = Vec::with_capacity(proposals.len());
         let mut created_at_blocks = Vec::with_capacity(proposals.len());
+        let mut names: Vec<Option<String>> = Vec::with_capacity(proposals.len());
 
         for proposal in proposals {
             ids.push(proposal.id);
@@ -668,22 +669,24 @@ impl Storage {
             executed_ats.push(proposal.executed_at);
             created_ats.push(proposal.created_at.to_string());
             created_at_blocks.push(proposal.created_at_block.to_string());
+            names.push(proposal.name.clone());
         }
 
         let query = r#"
             INSERT INTO proposals (
                 id, space_id, proposed_by, voting_mode, start_time, end_time,
-                quorum, threshold, executed_at, created_at, created_at_block
+                quorum, threshold, executed_at, created_at, created_at_block, name
             )
             SELECT id, space_id, proposed_by, voting_mode::"votingMode", start_time, end_time,
-                   quorum, threshold, executed_at, created_at, created_at_block
+                   quorum, threshold, executed_at, created_at, created_at_block, name
             FROM UNNEST(
                 $1::uuid[], $2::uuid[], $3::uuid[], $4::text[], $5::bigint[], $6::bigint[],
-                $7::bigint[], $8::bigint[], $9::bigint[], $10::text[], $11::text[]
+                $7::bigint[], $8::bigint[], $9::bigint[], $10::text[], $11::text[], $12::text[]
             ) AS t(id, space_id, proposed_by, voting_mode, start_time, end_time,
-                   quorum, threshold, executed_at, created_at, created_at_block)
+                   quorum, threshold, executed_at, created_at, created_at_block, name)
             ON CONFLICT (id) DO UPDATE SET
-                executed_at = COALESCE(EXCLUDED.executed_at, proposals.executed_at)
+                executed_at = COALESCE(EXCLUDED.executed_at, proposals.executed_at),
+                name = COALESCE(EXCLUDED.name, proposals.name)
         "#;
 
         sqlx::query(query)
@@ -698,6 +701,7 @@ impl Storage {
             .bind(&executed_ats)
             .bind(&created_ats)
             .bind(&created_at_blocks)
+            .bind(&names)
             .execute(&mut **tx)
             .await?;
 

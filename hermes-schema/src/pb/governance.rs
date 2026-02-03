@@ -43,6 +43,9 @@ pub struct PublishAction {
     /// Edit metadata
     #[prost(bytes = "vec", tag = "2")]
     pub metadata: ::prost::alloc::vec::Vec<u8>,
+    /// Edit name (extracted from IPFS cache)
+    #[prost(string, tag = "3")]
+    pub name: ::prost::alloc::string::String,
 }
 /// Decoded action: flag content
 #[derive(Clone, PartialEq, ::prost::Message)]

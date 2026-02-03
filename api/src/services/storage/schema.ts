@@ -57,6 +57,11 @@ export const ipfsCache = pgTable("ipfs_cache", {
 	isErrored: boolean().notNull().default(false),
 	block: text().notNull(),
 	space: uuid().notNull(),
+	/**
+	 * The edit name extracted from the GRC-20 payload.
+	 * Used by hermes-pipeline to populate proposal names for Publish actions.
+	 */
+	name: text(),
 });
 
 /**
@@ -433,6 +438,12 @@ export const proposals = pgTable(
 		executedAt: bigint("executed_at", { mode: "number" }),
 		createdAt: text("created_at").notNull(),
 		createdAtBlock: text("created_at_block").notNull(),
+		/**
+		 * Human-readable name derived from the proposal's actions.
+		 * For Publish actions, uses the edit name; for others, uses the action type.
+		 * Multiple actions are concatenated with ", " separator.
+		 */
+		name: text(),
 	},
 	(table) => [
 		index("proposals_space_id_idx").on(table.spaceId),

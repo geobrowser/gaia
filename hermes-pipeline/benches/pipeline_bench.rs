@@ -3,12 +3,20 @@
 //! These benchmarks measure the performance of transforming raw blockchain actions
 //! into typed Hermes protobuf events ready for Kafka.
 
+use std::collections::HashMap;
+
 use alloy::primitives::{Address, FixedBytes, U256};
 use alloy::sol;
 use alloy::sol_types::SolType;
 use criterion::{Criterion, black_box, criterion_group, criterion_main};
+use hermes_pipeline::cache::CachedEdit;
 use hermes_pipeline::pipelines::{self, BlockMetadata};
 use hermes_relay::{Action, actions};
+
+/// Create an empty prefetch cache for benchmarks
+fn empty_prefetch() -> HashMap<String, CachedEdit> {
+    HashMap::new()
+}
 
 // Solidity type for encoding test data
 sol! {
@@ -199,23 +207,37 @@ fn bench_governance_transform(c: &mut Criterion) {
     let mut group = c.benchmark_group("governance_transform");
     let meta = test_meta();
 
+    let prefetch = empty_prefetch();
+
     // Empty actions
     let empty_actions: Vec<Action> = vec![];
     group.bench_function("empty", |b| {
-        b.iter(|| pipelines::governance::transform(black_box(&empty_actions), black_box(&meta)))
+        b.iter(|| {
+            pipelines::governance::transform(black_box(&empty_actions), black_box(&meta), &prefetch)
+        })
     });
 
     // Single proposal created with 1 action
     let single_proposal = vec![make_proposal_created_action([0x01; 16], 1)];
     group.bench_function("single_proposal_1_action", |b| {
-        b.iter(|| pipelines::governance::transform(black_box(&single_proposal), black_box(&meta)))
+        b.iter(|| {
+            pipelines::governance::transform(
+                black_box(&single_proposal),
+                black_box(&meta),
+                &prefetch,
+            )
+        })
     });
 
     // Single proposal created with 5 actions
     let proposal_5_actions = vec![make_proposal_created_action([0x01; 16], 5)];
     group.bench_function("single_proposal_5_actions", |b| {
         b.iter(|| {
-            pipelines::governance::transform(black_box(&proposal_5_actions), black_box(&meta))
+            pipelines::governance::transform(
+                black_box(&proposal_5_actions),
+                black_box(&meta),
+                &prefetch,
+            )
         })
     });
 
@@ -224,7 +246,7 @@ fn bench_governance_transform(c: &mut Criterion) {
         .map(|i| make_proposal_voted_action([i as u8; 16], [0x01; 16]))
         .collect();
     group.bench_function("ten_votes", |b| {
-        b.iter(|| pipelines::governance::transform(black_box(&votes), black_box(&meta)))
+        b.iter(|| pipelines::governance::transform(black_box(&votes), black_box(&meta), &prefetch))
     });
 
     // Mixed governance actions (typical block)
@@ -236,7 +258,9 @@ fn bench_governance_transform(c: &mut Criterion) {
         make_proposal_executed_action([0x01; 16]),
     ];
     group.bench_function("mixed_governance_block", |b| {
-        b.iter(|| pipelines::governance::transform(black_box(&mixed_actions), black_box(&meta)))
+        b.iter(|| {
+            pipelines::governance::transform(black_box(&mixed_actions), black_box(&meta), &prefetch)
+        })
     });
 
     // Large block with many proposals
@@ -249,7 +273,9 @@ fn bench_governance_transform(c: &mut Criterion) {
         })
         .collect();
     group.bench_function("large_block_40_actions", |b| {
-        b.iter(|| pipelines::governance::transform(black_box(&large_block), black_box(&meta)))
+        b.iter(|| {
+            pipelines::governance::transform(black_box(&large_block), black_box(&meta), &prefetch)
+        })
     });
 
     group.finish();
@@ -445,9 +471,14 @@ fn bench_all_pipelines(c: &mut Criterion) {
         make_space_registered_action([0x0A; 16]),
     ];
 
+    let prefetch = empty_prefetch();
     group.bench_function("realistic_mixed_block", |b| {
         b.iter(|| {
-            let _ = pipelines::governance::transform(black_box(&mixed_block), black_box(&meta));
+            let _ = pipelines::governance::transform(
+                black_box(&mixed_block),
+                black_box(&meta),
+                &prefetch,
+            );
             let _ = pipelines::voting::transform(black_box(&mixed_block), black_box(&meta));
             let _ = pipelines::membership::transform(black_box(&mixed_block), black_box(&meta));
             let _ = pipelines::trust::transform(black_box(&mixed_block), black_box(&meta));
@@ -468,8 +499,11 @@ fn bench_all_pipelines(c: &mut Criterion) {
 
     group.bench_function("large_mixed_block_150_actions", |b| {
         b.iter(|| {
-            let _ =
-                pipelines::governance::transform(black_box(&large_mixed_block), black_box(&meta));
+            let _ = pipelines::governance::transform(
+                black_box(&large_mixed_block),
+                black_box(&meta),
+                &prefetch,
+            );
             let _ = pipelines::voting::transform(black_box(&large_mixed_block), black_box(&meta));
             let _ =
                 pipelines::membership::transform(black_box(&large_mixed_block), black_box(&meta));
