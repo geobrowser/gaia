@@ -5,14 +5,42 @@
 - **All providers (Privy, Openfort, ZeroDev) use EIP-7702 + ERC-4337** to enable gas sponsorship while preserving your EOA address
 - **Two wallet types exist**: Embedded (user-controlled, non-custodial) and Backend (developer-controlled, custodial)
 - **Embedded wallets require client-side auth** - you cannot use them from pure server/CLI without the user authenticating on a client first
-- **Cross-app access** (web + CLI with same wallet) requires either: (a) a backend wallet, or (b) user grants permission once via browser
+- **3rd party app access** requires either: (a) export private key, or (b) user grants session key via browser auth flow
 - **Privy** has the simplest DX (`sponsor: true`), **Openfort** is fully open source and self-hostable
+- **Both support full whitelabeling** - remove provider branding, customize UI, or go fully headless
 
 ---
 
-## Key Concepts
+## How Gas Sponsorship Works
 
-### Wallet Types: Embedded vs Backend
+All providers use the same architecture pattern:
+
+```
+EOA ──signs 7702 auth──▶ EOA delegates to smart contract
+                              │
+                              ▼
+                    EOA now implements IAccount (4337)
+                              │
+                              ▼
+            UserOperation ──▶ Bundler ──▶ EntryPoint
+                              │
+                         Paymaster sponsors gas
+```
+
+**Your EOA address is preserved** - no new contract address is created. The user's original address remains their identity in the protocol.
+
+### Why This Matters
+
+Some account abstraction approaches create a new smart contract wallet address, which:
+- Changes the user's on-chain identity
+- Requires asset migration
+- Breaks existing integrations expecting an EOA
+
+EIP-7702 avoids this by allowing EOAs to temporarily delegate to a smart contract while keeping their address.
+
+---
+
+## Wallet Types
 
 This is the most important distinction to understand:
 
@@ -56,24 +84,6 @@ The key is **only reconstructed in the client** (browser, mobile app). This is i
 
 **Bottom line**: You cannot spin up a server-side version of an embedded wallet. Users must authenticate on a client at least once.
 
-### Gas Sponsorship Architecture
-
-All providers use the same pattern:
-
-```
-EOA ──signs 7702 auth──▶ EOA delegates to smart contract
-                              │
-                              ▼
-                    EOA now implements IAccount (4337)
-                              │
-                              ▼
-            UserOperation ──▶ Bundler ──▶ EntryPoint
-                              │
-                         Paymaster sponsors gas
-```
-
-**Your EOA address is preserved** - no new contract address is created.
-
 ---
 
 ## Provider Comparison
@@ -85,14 +95,25 @@ EOA ──signs 7702 auth──▶ EOA delegates to smart contract
 | **EOA Address Preserved** | ✅                     | ✅                  | ✅             |
 | **Gas Sponsorship DX**    | ⭐⭐⭐ `sponsor: true` | ⭐⭐ More explicit  | ⭐ Most manual |
 | **Delegation Contract**   | Kernel (ZeroDev's)     | OPF7702 (their own) | Kernel         |
-| **Open Source SDK**       | ❌                     | ✅                  | Partial        |
-| **Open Source Contracts** | ❌                     | ✅                  | ✅             |
-| **Self-Hostable**         | ❌                     | ✅                  | ❌             |
 | **Embedded Wallets**      | ✅                     | ✅                  | ❌ (auth only) |
 | **Backend Wallets**       | ✅                     | ✅                  | ❌             |
 | **Custom Auth (BYOA)**    | ✅                     | ✅                  | N/A            |
+| **Session Keys**          | ✅ "Signers" with policies | ✅ EIP-7715 native | ✅             |
+| **Policy Engine**         | Rich (limits, allowlists, calldata) | Gas policies, rate limits | Basic |
+| **Whitelabel**            | ✅ CSS variables       | ✅ ConnectKit + CSS | N/A            |
 
-### Frontend DX
+### Openness & Self-Hosting
+
+| Aspect                | Privy | Openfort          | ZeroDev |
+| --------------------- | ----- | ----------------- | ------- |
+| **Open Source SDK**   | ❌    | ✅                | Partial |
+| **Open Source Contracts** | ❌ | ✅               | ✅      |
+| **Self-Hostable**     | ❌    | ✅ (OpenSigner)   | ❌      |
+| **Standards-Based**   | ✅ EIP-7702/4337 | ✅ EIP-7702/4337/7715 | ✅ EIP-7702/4337 |
+
+**Key insight**: Openfort is the only provider offering full self-hosting capability via [OpenSigner](https://www.opensigner.dev). This eliminates vendor lock-in for infrastructure, though you still depend on their SDK patterns.
+
+### Gas Sponsorship DX (Frontend)
 
 **Privy** - Simplest
 
@@ -133,9 +154,9 @@ const kernelClient = createKernelAccountClient({
 await kernelClient.sendTransaction({ calls, authorization });
 ```
 
-### Backend Wallet DX (Server-Controlled Wallets)
+### Backend / Server Wallets
 
-These are wallets **you control** - no user authentication needed.
+These are wallets **you control** - no user authentication needed. Use for treasury, bots, automation, and agents.
 
 **Privy**
 
@@ -181,9 +202,95 @@ await account.signMessage({ message: "Hello" });
 
 ---
 
-## Cross-App Wallet Access
+## Whitelabeling & Customization
 
-### Apps You Control (Easy)
+### Branding & UI
+
+| Capability              | Privy                      | Openfort                  | ZeroDev |
+| ----------------------- | -------------------------- | ------------------------- | ------- |
+| **Remove branding**     | ✅                         | ✅                        | N/A     |
+| **Headless mode**       | ✅ Build with hooks        | ✅ Build with hooks       | N/A     |
+| **Pre-built UI**        | ✅ Login modal             | ✅ ConnectKit integration | N/A     |
+| **CSS customization**   | ✅ CSS variables           | ✅ CSS + ConnectKit themes| N/A     |
+| **Custom login methods**| ✅ Email, social, wallet   | ✅ Email, social, wallet  | N/A     |
+
+Both Privy and Openfort allow **full whitelabeling** - users never see "Powered by Privy" or similar branding if you don't want it.
+
+**Headless mode** means you can build your own UI entirely using their React hooks, with zero pre-built components.
+
+### Policy & Behavior Customization
+
+**Privy** offers rich policy controls:
+- Transfer limits (per-tx, daily, etc.)
+- Contract/address allowlists
+- Calldata constraints (restrict which functions can be called)
+- Time-bound signers (session keys expire automatically)
+
+```typescript
+// Privy policy example
+const policy = {
+  allowedContracts: ["0x..."],
+  maxTransferValue: "1000000000000000000", // 1 ETH
+  allowedMethods: ["transfer", "approve"],
+  expiresAt: Date.now() + 3600000, // 1 hour
+};
+```
+
+**Openfort** offers gas-focused policies:
+- Rate limits (requests per time window)
+- Contract function allowlists
+- ERC-20 gas payment (users pay gas in stablecoins)
+- Spending limits
+
+```typescript
+// Openfort policy configured in dashboard or API
+// Policy ID referenced in provider config
+<OpenfortProvider
+  walletConfig={{
+    ethereumProviderPolicyId: { [chainId]: 'pol_...' },
+  }}
+>
+```
+
+### Session Keys
+
+Both providers support session keys for delegated signing with scoped permissions:
+
+| Feature                | Privy ("Signers")          | Openfort (EIP-7715)        |
+| ---------------------- | -------------------------- | -------------------------- |
+| **Standard**           | Proprietary                | EIP-7715 native            |
+| **Scoped permissions** | ✅ Via policies            | ✅ Via `useGrantPermissions` |
+| **Time-bound**         | ✅                         | ✅                         |
+| **Revocable**          | ✅                         | ✅                         |
+
+**Privy session keys:**
+
+```typescript
+import { useSignerSessions } from "@privy-io/react-auth";
+
+const { createSignerSession } = useSignerSessions();
+const session = await createSignerSession({
+  policy: { allowedContracts: ["0x..."], expiresAt: ... },
+});
+```
+
+**Openfort session keys:**
+
+```typescript
+import { useGrantPermissions } from "@openfort/react";
+
+const { grantPermissions } = useGrantPermissions();
+await grantPermissions({
+  permissions: [{ type: "contract-call", address: "0x...", functions: ["mint"] }],
+  expiry: Math.floor(Date.now() / 1000) + 3600,
+});
+```
+
+---
+
+## 3rd Party & Cross-App Access
+
+### Apps You Control
 
 If you control multiple apps (web, mobile, etc.), just implement the Privy/Openfort provider in each app. **Same user = same wallet address** across all your apps automatically.
 
@@ -201,18 +308,27 @@ If you control multiple apps (web, mobile, etc.), just implement the Privy/Openf
 
 No special setup needed - embedded wallets are tied to the user's identity, not the specific app instance.
 
-### Leaving the Client (Hard)
+### External 3rd Party Apps
 
-The problem arises when you need to access an embedded wallet **outside a client environment** - like a CLI tool, server script, or third-party app you don't control.
+For apps you **don't control** (external dApps, games, DeFi protocols), users have two options:
+
+| Approach | Same Address | User Experience |
+| -------- | ------------ | --------------- |
+| **Export private key** | ✅ Yes | User exports key, imports into MetaMask/Rainbow, connects to dApp normally |
+| **Session key via auth flow** | ✅ Yes | User authenticates on a frontend you control, grants session key that 3rd party can use |
+
+**There is no way for external apps to directly access an embedded wallet** - this is by design (non-custodial). The user must either export their key or explicitly grant access via an auth flow.
+
+### Your Own Server / CLI Access
+
+The problem arises when you need to access an embedded wallet **outside a client environment** - like a CLI tool or server script.
 
 | Wallet Type  | Client Apps    | Server / CLI                             |
 | ------------ | -------------- | ---------------------------------------- |
 | **Embedded** | ✅ Full access | ❌ No access (keys only exist in client) |
 | **Backend**  | ✅ Via API     | ✅ Full access                           |
 
-Embedded wallet keys are reconstructed client-side only. A server or CLI can't access the wallet at all - the keys simply don't exist outside the client.
-
-### Solutions for Server/CLI Access
+**Solutions:**
 
 | Approach                   | Same Address | Non-custodial    | Client Required  |
 | -------------------------- | ------------ | ---------------- | ---------------- |
@@ -221,13 +337,9 @@ Embedded wallet keys are reconstructed client-side only. A server or CLI can't a
 | **Unified login portal**   | ✅           | ✅               | Once per device  |
 | **Export private key**     | ✅           | ❌ (key exposed) | Once (to export) |
 
-### Unified Login Portal (for access outside web apps we control)
+### Unified Login Portal Pattern
 
-Both Privy and Openfort support **custom auth / bring-your-own-auth**. You can:
-
-1. Build a thin login portal using Privy/Openfort's auth UI
-2. User logs in via browser → gets session token
-3. CLI uses that token for wallet operations
+For CLI tools that need to access user embedded wallets:
 
 ```
 CLI                         Login Portal                  Privy/Openfort
@@ -288,7 +400,7 @@ export default function CLILogin() {
 }
 ```
 
-**CLI usage after login (accessing user's embedded wallet from server)**
+**CLI usage after login**
 
 ```typescript
 // Privy - use token in authorization context
@@ -302,32 +414,6 @@ await privy
 ```
 
 Note: Openfort's server-side access to user embedded wallets requires encryption sessions - see their [automatic recovery session docs](https://www.openfort.io/docs/products/embedded-wallet/server/automatic-recovery-session).
-
----
-
-## Customization
-
-### Whitelabel / Branding
-
-Both providers allow full whitelabel - remove all provider branding:
-
-| Capability          | Privy               | Openfort                |
-| ------------------- | ------------------- | ----------------------- |
-| **Remove branding** | ✅                  | ✅                      |
-| **Headless mode**   | ✅ Build with hooks | ✅ Build with hooks     |
-| **Custom themes**   | CSS variables       | ConnectKit themes + CSS |
-
-### Policy Engines
-
-**Privy**: Rich rule-based policies - transfer limits, allowlists, calldata constraints, time-bound signers
-
-**Openfort**: Gas policies - rate limits, contract function allowlists, ERC-20 gas payment
-
-### Session Keys
-
-**Privy**: "Signers" - authorization keys that sign within scoped policies
-
-**Openfort**: Native EIP-7715 session keys with `useGrantPermissions`
 
 ---
 
