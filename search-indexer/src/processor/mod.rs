@@ -21,12 +21,8 @@ use uuid::Uuid;
 #[derive(Debug)]
 pub enum ProcessedEvent {
     /// Document to be indexed (create or update).
+    /// For soft deletes, the document will have `deleted=Some(true)`.
     Index(EntityDocument),
-    /// Document to be deleted.
-    Delete {
-        entity_id: uuid::Uuid,
-        space_id: uuid::Uuid,
-    },
     /// Properties to be unset from a document.
     UnsetProperties {
         entity_id: uuid::Uuid,

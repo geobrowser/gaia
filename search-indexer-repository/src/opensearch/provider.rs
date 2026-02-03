@@ -459,6 +459,7 @@ impl SearchIndexProvider for OpenSearchProvider {
                         all_results.push(BatchOperationResult {
                             entity_id: String::new(),
                             space_id: String::new(),
+                            operation_type: "RemoveTypeRelation".to_string(),
                             success: true,
                             error: None,
                         });
@@ -473,6 +474,7 @@ impl SearchIndexProvider for OpenSearchProvider {
                         all_results.push(BatchOperationResult {
                             entity_id: String::new(),
                             space_id: String::new(),
+                            operation_type: "RemoveTypeRelation".to_string(),
                             success: false,
                             error: Some(SearchIndexError::update(format!(
                                 "Remove type relation by ID failed: {}",
@@ -526,6 +528,7 @@ impl SearchIndexProvider for OpenSearchProvider {
                         metas.push(BulkOperationMeta {
                             entity_id: request.entity_id.clone(),
                             space_id: request.space_id.clone(),
+                            operation_type: "AddTypeRelation".to_string(),
                         });
                         has_operation = true;
                     }
@@ -555,6 +558,7 @@ impl SearchIndexProvider for OpenSearchProvider {
                         metas.push(BulkOperationMeta {
                             entity_id: request.entity_id.clone(),
                             space_id: request.space_id.clone(),
+                            operation_type: "Update".to_string(),
                         });
                         has_operation = true;
                     }
@@ -565,6 +569,7 @@ impl SearchIndexProvider for OpenSearchProvider {
                         all_results.push(BatchOperationResult {
                             entity_id: request.entity_id.clone(),
                             space_id: request.space_id.clone(),
+                            operation_type: "Update".to_string(),
                             success: true,
                             error: None,
                         });
@@ -579,6 +584,7 @@ impl SearchIndexProvider for OpenSearchProvider {
                     metas.push(BulkOperationMeta {
                         entity_id: request.entity_id.clone(),
                         space_id: request.space_id.clone(),
+                        operation_type: "Delete".to_string(),
                     });
                 }
                 EntityOperation::Unset(request) => {
@@ -588,14 +594,14 @@ impl SearchIndexProvider for OpenSearchProvider {
                         all_results.push(BatchOperationResult {
                             entity_id: request.entity_id.clone(),
                             space_id: request.space_id.clone(),
+                            operation_type: "Unset".to_string(),
                             success: true,
                             error: None,
                         });
                         continue;
                     }
 
-                    // Flush pending bulk operations before unset to ensure the document exists
-                    // Scripts cannot use doc_as_upsert, so we need the document to exist first
+                    // Flush pending bulk operations before unset to maintain ordering
                     flush_pending_bulk!(
                         self,
                         bulk_ops,
@@ -610,16 +616,23 @@ impl SearchIndexProvider for OpenSearchProvider {
                     let doc_id = Self::document_id(&entity_id, &space_id);
 
                     let script_source = create_unset_properties_script(&request.property_keys)?;
+                    // Use upsert to handle case where document doesn't exist yet
+                    // (can happen when replaying from offset 0 with different batch groupings)
                     let body = json!({
                         "script": {
                             "source": script_source,
                             "lang": "painless"
+                        },
+                        "upsert": {
+                            "entity_id": entity_id.to_string(),
+                            "space_id": space_id.to_string()
                         }
                     });
                     bulk_ops.push(BulkOperation::update(doc_id, body).into());
                     metas.push(BulkOperationMeta {
                         entity_id: request.entity_id.clone(),
                         space_id: request.space_id.clone(),
+                        operation_type: "Unset".to_string(),
                     });
 
                     // Flush immediately after unset to ensure it's processed before any subsequent
@@ -681,6 +694,7 @@ impl SearchIndexProvider for OpenSearchProvider {
                         all_results.push(BatchOperationResult {
                             entity_id: request.entity_id.clone(),
                             space_id: String::new(),
+                            operation_type: "UpdateEntityGlobalScore".to_string(),
                             success: true,
                             error: None,
                         });
@@ -696,6 +710,7 @@ impl SearchIndexProvider for OpenSearchProvider {
                         all_results.push(BatchOperationResult {
                             entity_id: request.entity_id.clone(),
                             space_id: String::new(),
+                            operation_type: "UpdateEntityGlobalScore".to_string(),
                             success: false,
                             error: Some(SearchIndexError::update(format!(
                                 "Update entity global score failed: {}",
@@ -751,6 +766,7 @@ impl SearchIndexProvider for OpenSearchProvider {
                         all_results.push(BatchOperationResult {
                             entity_id: String::new(),
                             space_id: request.space_id.clone(),
+                            operation_type: "UpdateSpaceScore".to_string(),
                             success: true,
                             error: None,
                         });
@@ -766,6 +782,7 @@ impl SearchIndexProvider for OpenSearchProvider {
                         all_results.push(BatchOperationResult {
                             entity_id: String::new(),
                             space_id: request.space_id.clone(),
+                            operation_type: "UpdateSpaceScore".to_string(),
                             success: false,
                             error: Some(SearchIndexError::update(format!(
                                 "Update space score failed: {}",
@@ -792,6 +809,7 @@ impl SearchIndexProvider for OpenSearchProvider {
                     metas.push(BulkOperationMeta {
                         entity_id: request.entity_id.clone(),
                         space_id: request.space_id.clone(),
+                        operation_type: "UpdateEntitySpaceScore".to_string(),
                     });
                 }
             }

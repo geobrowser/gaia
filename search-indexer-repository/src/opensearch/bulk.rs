@@ -49,6 +49,7 @@ impl BatchOperationSummary {
 pub struct BulkOperationMeta {
     pub entity_id: String,
     pub space_id: String,
+    pub operation_type: String,
 }
 
 /// Bulk operation action type supported by OpenSearch bulk API.
@@ -184,6 +185,7 @@ pub fn parse_bulk_response(
         results.push(BatchOperationResult {
             entity_id: meta.entity_id.clone(),
             space_id: meta.space_id.clone(),
+            operation_type: meta.operation_type.clone(),
             success,
             error,
         });
