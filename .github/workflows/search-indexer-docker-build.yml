@@ -60,10 +60,8 @@ jobs:
 
       - name: Check search-indexer health endpoint
         run: |
-          # Get the container IP for health check
-          CONTAINER_IP=$(docker inspect -f '{{range.NetworkSettings.Networks}}{{.IPAddress}}{{end}}' search-indexer | head -1)
-          echo "Search indexer IP: $CONTAINER_IP"
-          curl -f http://$CONTAINER_IP:8080/healthz || (echo "Health check failed" && exit 1)
+          docker run --rm --network search-indexer-deploy_default curlimages/curl:latest \
+            curl -sf http://search-indexer:8080/healthz || (echo "Health check failed" && exit 1)
           echo "Health check passed"
 
       - name: Verify search-indexer stays healthy for 30 seconds
