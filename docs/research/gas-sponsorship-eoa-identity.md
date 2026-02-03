@@ -551,6 +551,244 @@ CLI                         Login Portal                  Privy/Openfort
  │  Uses token ────────────────────────────────────────────────►
 ```
 
+#### Identity Tokens vs. Scoped Permissions
+
+**These are two separate concepts:**
+
+| Concept | What it proves | What it grants | Who controls scope |
+| ------- | -------------- | -------------- | ------------------ |
+| **Access Token** (identity) | "This is user X" | Ability to act as the user | The app issues it after auth |
+| **Session Key** (permissions) | "User X approved these actions" | Specific scoped actions only | The **user** approves the scope |
+
+The unified login portal pattern returns an **identity token**. This proves who the user is, but by itself grants broad access to act on their behalf (within your app's API key permissions).
+
+**Scoped permissions require an additional grant flow** where the user explicitly approves a specific set of permissions. The requesting app defines what permissions it *wants*, but the user sees and approves what they're granting.
+
+#### Security Model
+
+```
+                    App requests permissions
+                              │
+                              ▼
+                    ┌─────────────────────┐
+                    │   User sees scope   │
+                    │   - Contracts: X, Y │
+                    │   - Methods: mint   │
+                    │   - Expires: 1 hour │
+                    └─────────────────────┘
+                              │
+                    User approves or rejects
+                              │
+              ┌───────────────┴───────────────┐
+              ▼                               ▼
+         Approved                         Rejected
+              │                               │
+              ▼                               ▼
+    Session key created              No access granted
+    with EXACTLY the scope
+    user approved
+```
+
+**Key security properties:**
+
+1. **Apps define the request, users approve the grant.** A malicious app can request broad permissions, but the user must approve them.
+
+2. **Users cannot grant MORE than requested.** If an app requests only `mint`, the user can't add `transfer` to the grant.
+
+3. **Users can refuse or close the page.** No approval = no session key.
+
+4. **Permissions are enforced server-side.** Even if a client is compromised, the session key can only perform approved actions.
+
+#### Can a malicious client modify permissions?
+
+**No.** The permission grant flow works like this:
+
+1. Your app (the login portal) calls `createSignerSession()` or `grantPermissions()` with a specific policy
+2. The user sees the requested permissions and approves
+3. The provider creates a session key with exactly those permissions
+4. Permissions are enforced by the provider's infrastructure, not the client
+
+A malicious client could:
+- ❌ NOT modify the permissions after user approval (enforced server-side)
+- ❌ NOT grant itself more permissions than requested
+- ✅ Request overly broad permissions (but user must approve)
+- ✅ Trick users into approving (social engineering)
+
+**Mitigation:** Build clear permission UIs that show exactly what's being granted. Don't request more permissions than needed.
+
+#### Combined Flow: Login + Permission Grant
+
+For 3rd party apps, you typically want to combine identity verification with scoped permission grants in a single flow:
+
+```
+CLI/3rd Party               Your Login Portal              Provider
+     │                              │                          │
+     │  Opens browser with          │                          │
+     │  requested permissions ──────►                          │
+     │                              │                          │
+     │                    User logs in ────────────────────────►
+     │                              │                          │
+     │                    Show permission request              │
+     │                    "Game X wants to:"                   │
+     │                    - Call mint() on 0x1234              │
+     │                    - For 24 hours                       │
+     │                              │                          │
+     │                    User approves ───────────────────────►
+     │                              │                          │
+     │                    Session key created ◄────────────────│
+     │                              │                          │
+     │  Session ID returned ◄───────│                          │
+     │                              │                          │
+     │  Uses session for scoped signing ───────────────────────►
+```
+
+**Login Portal with Permission Grant (Privy)**
+
+```typescript
+import { usePrivy, useSignerSessions } from '@privy-io/react-auth';
+
+export default function CLILoginWithPermissions() {
+  const { ready, authenticated } = usePrivy();
+  const { createSignerSession } = useSignerSessions();
+  const router = useRouter();
+  
+  // 3rd party passes requested permissions in URL
+  const { 
+    redirect_uri, 
+    state,
+    signer_public_key,
+    contracts,      // comma-separated contract addresses
+    methods,        // comma-separated method names
+    expires_in,     // seconds until expiration
+  } = router.query;
+
+  const [status, setStatus] = useState<'login' | 'approve' | 'done'>('login');
+  const [sessionId, setSessionId] = useState<string>();
+
+  // Parse requested permissions from URL
+  const requestedPermissions = {
+    contracts: (contracts as string)?.split(',') || [],
+    methods: (methods as string)?.split(',') || [],
+    expiresAt: Date.now() + (parseInt(expires_in as string) || 3600) * 1000,
+  };
+
+  async function handleApprove() {
+    const session = await createSignerSession({
+      signerPublicKey: signer_public_key as string,
+      policy: {
+        allowedContracts: requestedPermissions.contracts,
+        allowedMethods: requestedPermissions.methods,
+        expiresAt: requestedPermissions.expiresAt,
+        allowNativeTransfers: false,
+      },
+    });
+    
+    setSessionId(session.id);
+    setStatus('done');
+    
+    // Redirect back with session ID
+    window.location.href = `${redirect_uri}?session_id=${session.id}&state=${state}`;
+  }
+
+  if (!ready) return <div>Loading...</div>;
+  
+  if (!authenticated) {
+    return <PrivyLogin />;  // Show login UI
+  }
+
+  if (status === 'approve') {
+    return (
+      <div>
+        <h2>Grant Access</h2>
+        <p>An app wants permission to:</p>
+        <ul>
+          <li>Call contracts: {requestedPermissions.contracts.join(', ')}</li>
+          <li>Methods: {requestedPermissions.methods.join(', ')}</li>
+          <li>Expires: {new Date(requestedPermissions.expiresAt).toLocaleString()}</li>
+        </ul>
+        <button onClick={handleApprove}>Approve</button>
+        <button onClick={() => window.close()}>Reject</button>
+      </div>
+    );
+  }
+
+  return <div>Redirecting...</div>;
+}
+```
+
+**Login Portal with Permission Grant (Openfort)**
+
+```typescript
+import { useOpenfort, useGrantPermissions } from '@openfort/react';
+
+export default function CLILoginWithPermissions() {
+  const { user, isLoading } = useOpenfort();
+  const { grantPermissions } = useGrantPermissions();
+  const router = useRouter();
+  
+  const { 
+    redirect_uri, 
+    state,
+    signer_address,
+    contracts,
+    methods,
+    expires_in,
+  } = router.query;
+
+  const [status, setStatus] = useState<'login' | 'approve' | 'done'>('login');
+
+  // Parse requested permissions
+  const requestedContracts = (contracts as string)?.split(',') || [];
+  const requestedMethods = (methods as string)?.split(',') || [];
+  const expiry = Math.floor(Date.now() / 1000) + (parseInt(expires_in as string) || 3600);
+
+  async function handleApprove() {
+    const permissionContext = await grantPermissions({
+      expiry,
+      signer: {
+        type: "account",
+        data: { id: signer_address as string },
+      },
+      permissions: requestedContracts.map(contract => ({
+        type: "contract-call",
+        data: {
+          address: contract,
+          calls: requestedMethods.map(fn => ({ function: fn })),
+        },
+      })),
+    });
+    
+    // Redirect back with permission context
+    const encoded = encodeURIComponent(JSON.stringify(permissionContext));
+    window.location.href = `${redirect_uri}?permission_context=${encoded}&state=${state}`;
+  }
+
+  if (isLoading) return <div>Loading...</div>;
+  
+  if (!user) {
+    return <OpenfortLogin />;
+  }
+
+  return (
+    <div>
+      <h2>Grant Access</h2>
+      <p>An app wants permission to:</p>
+      <ul>
+        <li>Contracts: {requestedContracts.join(', ')}</li>
+        <li>Methods: {requestedMethods.join(', ')}</li>
+        <li>Expires: {new Date(expiry * 1000).toLocaleString()}</li>
+      </ul>
+      <button onClick={handleApprove}>Approve</button>
+      <button onClick={() => window.close()}>Reject</button>
+    </div>
+  );
+}
+```
+
+#### Simple Login Portal (Identity Only)
+
+If you just need identity verification without scoped permissions (e.g., for your own trusted CLI that already has appropriate API access):
+
 **Login Portal (Privy)**
 
 ```typescript
