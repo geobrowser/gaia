@@ -1059,30 +1059,44 @@ async fn process_block(
     let _handle_events_guard = handle_events_span.enter();
 
     for event in &events {
-        let event_type_str = event
-            .event_type
-            .as_deref()
-            .unwrap_or_else(|| event.msg.event_type_name());
+        let event_id = event.event_id.as_deref().unwrap_or("");
 
-        let event_span = info_span!(
-            "kg_indexer.handle_event",
-            event_type = event_type_str,
-            event_id = event.event_id.as_deref().unwrap_or(""),
-            // Context fields (recorded based on event type)
-            edit_id = tracing::field::Empty,
-            space_id = tracing::field::Empty,
-            space_address = tracing::field::Empty,
-            account = tracing::field::Empty,
-            role = tracing::field::Empty,
-            proposal_id = tracing::field::Empty,
-            voter_id = tracing::field::Empty,
-            parent_space_id = tracing::field::Empty,
-            child_space_id = tracing::field::Empty,
-            extension_type = tracing::field::Empty,
-            // OTEL status
-            "otel.status_code" = tracing::field::Empty,
-            "otel.status_message" = tracing::field::Empty
-        );
+        // Create span with event-specific name for better trace readability
+        macro_rules! event_span {
+            ($name:expr) => {
+                info_span!(
+                    $name,
+                    event_id = event_id,
+                    // Context fields (recorded based on event type)
+                    edit_id = tracing::field::Empty,
+                    space_id = tracing::field::Empty,
+                    space_address = tracing::field::Empty,
+                    account = tracing::field::Empty,
+                    role = tracing::field::Empty,
+                    proposal_id = tracing::field::Empty,
+                    voter_id = tracing::field::Empty,
+                    parent_space_id = tracing::field::Empty,
+                    child_space_id = tracing::field::Empty,
+                    extension_type = tracing::field::Empty,
+                    // OTEL status
+                    "otel.status_code" = tracing::field::Empty,
+                    "otel.status_message" = tracing::field::Empty
+                )
+            };
+        }
+
+        let event_span = match &event.msg {
+            KgMessage::Edit(_) => event_span!("kg_indexer.handle_edit"),
+            KgMessage::CreateSpace(_) => event_span!("kg_indexer.handle_create_space"),
+            KgMessage::RoleGranted(_) => event_span!("kg_indexer.handle_role_granted"),
+            KgMessage::RoleRevoked(_) => event_span!("kg_indexer.handle_role_revoked"),
+            KgMessage::TrustExtension(_) => event_span!("kg_indexer.handle_trust_extension"),
+            KgMessage::ProposalCreated(_) => event_span!("kg_indexer.handle_proposal_created"),
+            KgMessage::ProposalUpdated(_) => event_span!("kg_indexer.handle_proposal_updated"),
+            KgMessage::ProposalVoted(_) => event_span!("kg_indexer.handle_proposal_voted"),
+            KgMessage::ProposalExecuted(_) => event_span!("kg_indexer.handle_proposal_executed"),
+            KgMessage::BlockSummary(_) => event_span!("kg_indexer.handle_block_summary"),
+        };
         let _event_guard = event_span.enter();
 
         let ops = async {
