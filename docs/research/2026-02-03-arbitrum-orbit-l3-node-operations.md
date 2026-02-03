@@ -34,79 +34,76 @@ This document covers the operational requirements for running your own node infr
 └─────────────────────────────────────────────────────────────────┘
 ```
 
-## Node Types
+## What You Need (and Don't Need)
 
-### 1. Full Node (Reader Node)
+### You Need: Full Node (Reader Node)
 
-A full node syncs the chain and serves RPC requests. This is what you need to replace Conduit's managed RPCs.
+A full node syncs the chain and serves RPC requests. **This is what you need to replace Conduit's managed RPCs.**
 
-**Purpose:**
-- Serve RPC requests without rate limits
-- Validate chain state independently
-- Provide redundancy/backup
+**What it does:**
+- Connects to Conduit's sequencer via WebSocket feed
+- Syncs and validates chain state
+- Serves unlimited RPC requests
+- Forwards write transactions to the sequencer
 
-### 2. Archive Node
+**What it doesn't do:**
+- Order transactions (that's the sequencer's job)
+- Post batches to the parent chain (sequencer does this)
+- Require any special privileges or keys
 
-Same as a full node but retains all historical state (doesn't prune).
+### You DON'T Need: Sequencer Node
 
-**Purpose:**
-- Historical queries (trace calls, old state lookups)
-- Block explorers
-- Analytics
+Conduit operates the sequencer for your chain. You cannot and don't need to run your own sequencer. Your full node simply follows the sequencer's feed.
 
-### 3. Sequencer Node
+### Optional: Archive Node
 
-The sequencer orders transactions and produces batches. Conduit runs this for managed chains.
+Same as a full node but retains all historical state (doesn't prune). Only needed if you require:
+- Historical trace calls
+- Old state lookups  
+- Block explorer backends
+- Analytics on historical data
 
-**Purpose:**
-- Transaction ordering
-- Batch posting to parent chain
-- Only one active sequencer per chain
+### Optional: Validator Node
 
-### 4. Validator/Staker Node
-
-Validates chain assertions and can challenge invalid state roots.
-
-**Purpose:**
-- Security (fraud proofs)
-- Watchtower mode (default) logs disagreements
-- Active staker mode participates in challenges
+Runs in "watchtower mode" by default on full nodes - validates assertions and logs disagreements. Active staking/challenging requires additional setup and is typically not needed for RPC infrastructure.
 
 ---
 
 ## Hardware Requirements
 
+The official Arbitrum docs list 64 GB RAM as "recommended" - but that's for high-traffic public chains like Arbitrum One. For a custom L3, requirements scale with your actual traffic.
+
 ### Full Node (Non-Archive)
 
-| Resource | Minimum | Recommended |
-|----------|---------|-------------|
-| RAM | 16 GB | 64 GB |
-| CPU | 4 cores | 8 cores (fast single-core performance critical) |
-| Storage | 500 GB NVMe SSD | 1+ TB NVMe SSD |
-| Network | 100 Mbps | 1 Gbps |
+| Traffic Level | RAM | CPU | Storage | Use Case |
+|---------------|-----|-----|---------|----------|
+| **Low** | 8 GB | 2 cores | 100-200 GB NVMe | Dev/testing, light internal use |
+| **Medium** | 16 GB | 4 cores | 200-500 GB NVMe | Production app backend, moderate RPC |
+| **High** | 32-64 GB | 8 cores | 500 GB+ NVMe | Heavy RPC traffic, multiple consumers |
 
-**Notes:**
-- Single-core performance matters most. If falling behind and one core is at 100%, upgrade CPU.
-- Storage grows with chain traffic over time.
-- NVMe SSDs with locally attached drives strongly recommended.
-- For high RPC traffic, increase RAM and CPU cores proportionally.
+**Key considerations:**
+- **Single-core performance matters most.** If node falls behind and one core is at 100%, upgrade to faster CPU (not more cores).
+- **Storage grows over time** with chain activity. Start with headroom.
+- **NVMe SSDs required** - spinning disks won't keep up.
+- **Network:** 100 Mbps minimum, 1 Gbps recommended for high traffic.
 
 ### Archive Node
 
-Same as full node but significantly more storage:
+Same compute as full node, but significantly more storage:
 - Storage scales with full chain history
-- Plan for 2-4 TB+ depending on chain activity
+- Plan for 500 GB - 2 TB+ depending on chain age and activity
+- Consider S3/cloud storage for cost efficiency on older data
 
 ### Data Availability Server (DAS) - AnyTrust Only
 
-| Resource | Minimum |
-|----------|---------|
+| Resource | Requirement |
+|----------|-------------|
 | CPU | 1 core |
 | RAM | 1 GB |
 | Storage | Scales with retention policy |
 
 **Notes:**
-- DAS is lightweight; most work is storage I/O
+- DAS is very lightweight; most work is storage I/O
 - CDN (Cloudflare, Fastly, CloudFront) is **mandatory** for public REST endpoints
 - Without CDN, you're exposed to DoS attacks
 
@@ -413,18 +410,23 @@ By default, nodes run in watchtower mode:
 
 ### Self-Hosted (Estimates)
 
-| Component | Monthly Cost |
-|-----------|-------------|
-| Cloud VM (8 core, 64GB RAM) | $200-400 |
-| NVMe Storage (1TB) | $50-100 |
-| Network egress | Variable |
-| Base RPC (if not self-hosted) | $50-200 |
+| Setup | VM Specs | Monthly Cost |
+|-------|----------|--------------|
+| **Light** | 2 core, 8 GB RAM, 200 GB NVMe | $40-80 |
+| **Medium** | 4 core, 16 GB RAM, 500 GB NVMe | $100-200 |
+| **Heavy** | 8 core, 64 GB RAM, 1 TB NVMe | $300-500 |
+
+Plus:
+- Base RPC provider (if not self-hosted): $50-200/mo
+- Network egress: Variable
 
 **Break-even:** Self-hosting makes sense when:
 - You're hitting rate limits frequently
 - Need guaranteed uptime/latency
 - Want full control over infrastructure
 - Running multiple services that share the node
+
+For light-to-medium usage, a **$100-150/mo VM** can handle your L3 RPC needs without rate limits.
 
 ---
 
