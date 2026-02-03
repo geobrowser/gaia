@@ -104,10 +104,13 @@ impl MockIpfsCache {
             Some(edit.name.to_string())
         };
         if let Ok(bytes) = encode_edit(&edit) {
-            self.entries.insert(hash.to_string(), MockCacheEntry {
-                payload: bytes,
-                name,
-            });
+            self.entries.insert(
+                hash.to_string(),
+                MockCacheEntry {
+                    payload: bytes,
+                    name,
+                },
+            );
         }
     }
 }

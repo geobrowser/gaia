@@ -146,7 +146,10 @@ pub async fn prefetch_block(
 
         async move {
             let space_id_hex = hex::encode(&space_id);
-            let request = FetchRequest { uri: uri.clone(), space_id: space_id.clone() };
+            let request = FetchRequest {
+                uri: uri.clone(),
+                space_id: space_id.clone(),
+            };
             let fetch_result = debug_span!("prefetch.fetch", uri = %uri, space_id = %space_id_hex)
                 .in_scope(|| fetch_with_retry(&request, &cache, &config))
                 .await;

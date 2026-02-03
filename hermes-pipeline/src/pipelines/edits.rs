@@ -13,7 +13,7 @@ use anyhow::Result;
 use grc_20::decode_edit;
 use hermes_instrumentation::warn;
 
-use hermes_relay::{actions, extract_ipfs_uri, Action};
+use hermes_relay::{Action, actions, extract_ipfs_uri};
 use hermes_schema::pb::knowledge::HermesEdit;
 
 use crate::cache::CachedEdit;
@@ -141,7 +141,7 @@ mod tests {
     use crate::pipelines::prefetch::RetryConfig;
     use grc_20::genesis::properties;
     use grc_20::{
-        encode_edit, CreateEntity, Edit as Grc20Edit, Op, PropertyValue, Value as Grc20Value,
+        CreateEntity, Edit as Grc20Edit, Op, PropertyValue, Value as Grc20Value, encode_edit,
     };
     use std::borrow::Cow;
     use std::time::Duration;

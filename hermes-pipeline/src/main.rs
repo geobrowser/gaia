@@ -655,10 +655,7 @@ impl Pipeline {
             );
         }
         if total_errored_entries > 0 {
-            warn!(
-                count = total_errored_entries,
-                "Errored entries in cache"
-            );
+            warn!(count = total_errored_entries, "Errored entries in cache");
         }
         if total_fetch_failures > 0 {
             warn!(count = total_fetch_failures, "Cache fetch failures");
