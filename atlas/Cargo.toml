@@ -31,3 +31,8 @@ thiserror = "1"
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
 rand = "0.8"
+roaring = "0.10"
+
+[[bench]]
+name = "graph_diff"
+harness = false
