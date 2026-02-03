@@ -17,6 +17,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             environment: std::env::var("SENTRY_ENVIRONMENT").ok(),
             release: std::env::var("SENTRY_RELEASE").ok(),
             debug: true,
+            axiom: hermes_instrumentation::AxiomConfig::from_env(),
         },
     );
 

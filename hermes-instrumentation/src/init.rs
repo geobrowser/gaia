@@ -1,9 +1,12 @@
 //! Telemetry initialization.
 
-use crate::config::{Backend, Config};
+use std::collections::HashMap;
+
+use crate::config::{AxiomConfig, Backend, Config};
+use opentelemetry_otlp::{SpanExporter, WithExportConfig, WithHttpConfig};
 use opentelemetry_sdk::trace::SdkTracerProvider;
 use tracing_subscriber::filter::LevelFilter;
-use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 /// Errors that can occur during telemetry initialization.
 #[derive(Debug, thiserror::Error)]
@@ -91,8 +94,9 @@ pub fn init(config: Config) -> Result<TelemetryGuard, Error> {
             environment,
             release,
             debug,
+            axiom,
         } => {
-            let (provider, sentry_guard) = init_sentry(
+            let (provider, sentry_guard) = init_instrumentation(
                 namespace,
                 &dsn,
                 traces_sample_rate,
@@ -100,6 +104,7 @@ pub fn init(config: Config) -> Result<TelemetryGuard, Error> {
                 environment.as_deref(),
                 release.as_deref(),
                 debug,
+                axiom.as_ref(),
             )?;
             Ok(TelemetryGuard {
                 provider: Some(provider),
@@ -212,7 +217,8 @@ where
     }
 }
 
-fn init_sentry(
+#[allow(clippy::too_many_arguments)]
+fn init_instrumentation(
     namespace: &'static str,
     dsn: &str,
     traces_sample_rate: f32,
@@ -220,11 +226,12 @@ fn init_sentry(
     environment: Option<&str>,
     release: Option<&str>,
     debug: bool,
+    axiom: Option<&AxiomConfig>,
 ) -> Result<(SdkTracerProvider, sentry::ClientInitGuard), Error> {
-    use opentelemetry::KeyValue;
     use opentelemetry::trace::TracerProvider as _;
-    use opentelemetry_sdk::Resource;
+    use opentelemetry::KeyValue;
     use opentelemetry_sdk::propagation::TraceContextPropagator;
+    use opentelemetry_sdk::Resource;
 
     let mut options = sentry::ClientOptions {
         traces_sample_rate,
@@ -243,15 +250,49 @@ fn init_sentry(
 
     opentelemetry::global::set_text_map_propagator(TraceContextPropagator::new());
 
-    let resource = Resource::builder()
-        .with_attribute(KeyValue::new("service.name", namespace))
-        .build();
+    let mut resource_builder =
+        Resource::builder().with_attribute(KeyValue::new("service.name", namespace));
+
+    // Add environment and release to resource attributes for Axiom
+    if let Some(env) = environment {
+        resource_builder = resource_builder
+            .with_attribute(KeyValue::new("deployment.environment", env.to_string()));
+    }
+    if let Some(rel) = release {
+        resource_builder =
+            resource_builder.with_attribute(KeyValue::new("service.version", rel.to_string()));
+    }
+
+    let resource = resource_builder.build();
 
     let mut provider_builder = SdkTracerProvider::builder().with_resource(resource);
 
     if debug {
         let stdout_exporter = opentelemetry_stdout::SpanExporter::default();
         provider_builder = provider_builder.with_simple_exporter(stdout_exporter);
+    }
+
+    // Add Axiom OTLP exporter if configured
+    if let Some(axiom_config) = axiom {
+        let mut headers = HashMap::new();
+        headers.insert(
+            "Authorization".to_string(),
+            format!("Bearer {}", axiom_config.token),
+        );
+        headers.insert("X-Axiom-Dataset".to_string(), axiom_config.dataset.clone());
+
+        let axiom_exporter = SpanExporter::builder()
+            .with_http()
+            .with_endpoint("https://api.axiom.co/v1/traces")
+            .with_headers(headers)
+            .build()
+            .map_err(|e| Error::OpenTelemetry(format!("Failed to create Axiom exporter: {}", e)))?;
+
+        provider_builder = provider_builder.with_batch_exporter(axiom_exporter);
+        eprintln!(
+            "Axiom OTLP exporter created: dataset={}",
+            axiom_config.dataset
+        );
     }
 
     let provider = provider_builder.build();
@@ -304,7 +345,17 @@ fn init_sentry(
             .init();
     }
 
-    eprintln!("Telemetry initialized: service.name={} sentry", namespace);
+    if let Some(axiom_config) = axiom {
+        eprintln!(
+            "Telemetry initialized: service.name={} sentry(sample_rate={}) axiom={}",
+            namespace, traces_sample_rate, axiom_config.dataset
+        );
+    } else {
+        eprintln!(
+            "Telemetry initialized: service.name={} sentry(sample_rate={})",
+            namespace, traces_sample_rate
+        );
+    }
 
     Ok((provider, sentry_guard))
 }
