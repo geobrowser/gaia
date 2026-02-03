@@ -510,14 +510,24 @@ async fn main() -> Result<()> {
     )?;
     producer.send(&edits_topic, None, create_entity_payload).await?;
 
+    // 11.1. Restore Delete Dana (testing restore after delete)
+    info!("11.1. Restoring Delete Dana after deletion (testing restore behavior)...");
+    let restore_dana_payload = edits::restore_entity(
+        "Restore Delete Dana",
+        test_space,
+        delete_dana_id,
+    )?;
+    producer.send(&edits_topic, None, restore_dana_payload).await?;
+
     info!("\n✅ Test scenario complete!");
     info!("Created:");
-    info!("  - 18 entities (12 active + 3 deleted + 3 unset test entities)");
+    info!("  - 18 entities (13 active + 2 deleted + 3 unset test entities)");
     info!("    • 7 Alice variants (high, medium, low, zero, negative, at threshold, below threshold)");
     info!("    • Bob, Charlie, Acme Corp");
     info!("    • Person type, Organization type");
     info!("    • CreateEntity test entity (created via CreateEntity GRC-20 op)");
-    info!("    • Charlie, Dana (soft deleted)");
+    info!("    • Charlie (soft deleted)");
+    info!("    • Dana (soft deleted, then restored - active again)");
     info!("    • Eve (soft deleted, then updated - remains deleted)");
     info!("    • 3 unset property test entities");
     info!("  - Type relation scenarios:");

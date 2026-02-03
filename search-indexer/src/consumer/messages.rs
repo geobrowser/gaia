@@ -15,6 +15,8 @@ pub enum EntityEventType {
     Upsert,
     /// Entity was deleted.
     Delete,
+    /// Entity was restored (un-deleted).
+    Restore,
     /// Properties were unset from an entity.
     UnsetProperties,
     /// Relation was created, which may affect entity's type_relations.
@@ -84,6 +86,23 @@ impl EntityEvent {
             description: None,
             avatar: None,
             cover: None, // Cover will be used in the future
+            unset_property_keys: Vec::new(),
+            relation_id: None,
+            relation_type: None,
+            to_entity_id: None,
+        }
+    }
+
+    /// Create a new restore event (un-delete).
+    pub fn restore(entity_id: Uuid, space_id: Uuid) -> Self {
+        Self {
+            event_type: EntityEventType::Restore,
+            entity_id,
+            space_id,
+            name: None,
+            description: None,
+            avatar: None,
+            cover: None,
             unset_property_keys: Vec::new(),
             relation_id: None,
             relation_type: None,
