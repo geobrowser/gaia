@@ -100,6 +100,60 @@ pub fn handle_proposal_executed(
     })
 }
 
+/// Maximum length for proposal names (truncated with "..." if exceeded)
+const MAX_PROPOSAL_NAME_LENGTH: usize = 500;
+
+/// Derive a human-readable name for a proposal from its proto actions.
+///
+/// - Publish actions: use the name from IPFS cache (or "Publish" if empty)
+/// - Other actions: use a human-readable label based on action type
+/// - Multiple actions: concatenate with ", "
+/// - Truncate to MAX_PROPOSAL_NAME_LENGTH with "..." if too long
+fn derive_proposal_name(
+    actions: &[hermes_schema::pb::governance::ProposalAction],
+) -> Option<String> {
+    if actions.is_empty() {
+        return None;
+    }
+
+    let names: Vec<&str> = actions
+        .iter()
+        .map(|a| match &a.action {
+            Some(Action::AddMember(_)) => "Add Member",
+            Some(Action::RemoveMember(_)) => "Remove Member",
+            Some(Action::AddEditor(_)) => "Add Editor",
+            Some(Action::RemoveEditor(_)) => "Remove Editor",
+            Some(Action::UnflagEditor(_)) => "Unflag Editor",
+            Some(Action::Publish(p)) => {
+                if p.name.is_empty() {
+                    "Publish"
+                } else {
+                    p.name.as_str()
+                }
+            }
+            Some(Action::Flag(_)) => "Flag",
+            Some(Action::Unflag(_)) => "Unflag",
+            Some(Action::UpdateVotingSettings(_)) => "Update Voting Settings",
+            None => "Unknown Action",
+        })
+        .collect();
+
+    let joined = names.join(", ");
+
+    if joined.len() <= MAX_PROPOSAL_NAME_LENGTH {
+        Some(joined)
+    } else {
+        // Truncate and add ellipsis
+        let truncated = &joined[..MAX_PROPOSAL_NAME_LENGTH - 3];
+        // Find last comma to avoid cutting mid-name
+        if let Some(last_comma) = truncated.rfind(", ") {
+            Some(format!("{}...", &truncated[..last_comma]))
+        } else {
+            Some(format!("{}...", truncated))
+        }
+    }
+}
+
 fn map_proposal_message(
     proposal_id: &[u8],
     space_id: &[u8],
@@ -130,6 +184,16 @@ fn map_proposal_message(
         VotingMode::Slow => settings.percentage_threshold as i64,
     };
 
+    // Derive name from proto actions (before mapping to internal types)
+    let name = derive_proposal_name(actions);
+
+    // Map proto actions to internal types
+    let actions: Vec<ProposalActionItem> = actions
+        .iter()
+        .enumerate()
+        .map(|(index, action)| map_proposal_action(proposal_id, index as i32, action))
+        .collect();
+
     let proposal = ProposalItem {
         id: proposal_id,
         space_id,
@@ -142,13 +206,8 @@ fn map_proposal_message(
         executed_at: None,
         created_at,
         created_at_block,
+        name,
     };
-
-    let actions = actions
-        .iter()
-        .enumerate()
-        .map(|(index, action)| map_proposal_action(proposal_id, index as i32, action))
-        .collect();
 
     Ok(ProposalResult { proposal, actions })
 }

@@ -14,17 +14,18 @@ use std::collections::HashMap;
 use anyhow::Result;
 use hermes_instrumentation::{debug, debug_span, info, warn};
 
-use hermes_relay::{Action, actions};
-use hermes_schema::pb::governance::{
-    AddEditorAction, AddMemberAction, FlagAction, HermesProposalCreated, HermesProposalExecuted,
-    HermesProposalUpdated, HermesProposalVoted, ProposalAction, ProposalSettings,
-    ProposalVoteOption, PublishAction, RemoveEditorAction, RemoveMemberAction, UnflagAction,
-    UnflagEditorAction, UpdateVotingSettingsAction, VotingMode, proposal_action,
+use crate::cache::CachedEdit;
+use crate::decode::{
+    self, decode_flag_args, decode_publish_args, decode_space_id_arg, decode_voting_settings_args,
+    ProposalActionType,
 };
 
-use crate::decode::{
-    self, ProposalActionType, decode_flag_args, decode_publish_args, decode_space_id_arg,
-    decode_voting_settings_args,
+use hermes_relay::{actions, Action};
+use hermes_schema::pb::governance::{
+    proposal_action, AddEditorAction, AddMemberAction, FlagAction, HermesProposalCreated,
+    HermesProposalExecuted, HermesProposalUpdated, HermesProposalVoted, ProposalAction,
+    ProposalSettings, ProposalVoteOption, PublishAction, RemoveEditorAction, RemoveMemberAction,
+    UnflagAction, UnflagEditorAction, UpdateVotingSettingsAction, VotingMode,
 };
 
 use super::BlockMetadata;
@@ -67,7 +68,13 @@ struct ProposalSettingsPending {
 /// Squashes PROPOSAL_CREATED + PROPOSAL_SETTINGS_SELECTED pairs into single events.
 /// For each PROPOSAL_CREATED, looks for a matching PROPOSAL_SETTINGS_SELECTED
 /// with the same proposal_id. If not found, both events are discarded.
-pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformResult> {
+///
+/// For Publish actions, looks up the edit name from the prefetched IPFS cache.
+pub fn transform(
+    actions: &[Action],
+    meta: &BlockMetadata,
+    prefetched: &HashMap<String, CachedEdit>,
+) -> Result<TransformResult> {
     let mut result = TransformResult::default();
 
     // Collect PROPOSAL_CREATED/UPDATED and PROPOSAL_SETTINGS_SELECTED by proposal_id
@@ -221,6 +228,13 @@ pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformRe
         );
     }
 
+    // Enrich all Publish actions with edit names from the prefetched cache
+    enrich_publish_action_names(
+        &mut result.proposals_created,
+        &mut result.proposals_updated,
+        prefetched,
+    );
+
     Ok(result)
 }
 
@@ -262,9 +276,11 @@ fn decode_proposal_action(
         }
         ProposalActionType::Publish => {
             let args = decode_publish_args(calldata).ok()?;
+            // Note: name is populated later by enrich_publish_action_names
             Some(proposal_action::Action::Publish(PublishAction {
                 content_uri: args.content_uri,
                 metadata: args.metadata,
+                name: String::new(),
             }))
         }
         ProposalActionType::Flag => {
@@ -291,6 +307,35 @@ fn decode_proposal_action(
             ))
         }
         ProposalActionType::Ping | ProposalActionType::Unknown => None,
+    }
+}
+
+/// Enrich Publish actions across all proposals with edit names from the prefetched cache.
+fn enrich_publish_action_names(
+    proposals_created: &mut [HermesProposalCreated],
+    proposals_updated: &mut [HermesProposalUpdated],
+    prefetched: &HashMap<String, CachedEdit>,
+) {
+    // Enrich proposals_created
+    for proposal in proposals_created.iter_mut() {
+        for action in proposal.actions.iter_mut() {
+            if let Some(proposal_action::Action::Publish(publish)) = &mut action.action {
+                if let Some(cached_edit) = prefetched.get(&publish.content_uri) {
+                    publish.name = cached_edit.name.clone().unwrap_or_default();
+                }
+            }
+        }
+    }
+
+    // Enrich proposals_updated
+    for proposal in proposals_updated.iter_mut() {
+        for action in proposal.actions.iter_mut() {
+            if let Some(proposal_action::Action::Publish(publish)) = &mut action.action {
+                if let Some(cached_edit) = prefetched.get(&publish.content_uri) {
+                    publish.name = cached_edit.name.clone().unwrap_or_default();
+                }
+            }
+        }
     }
 }
 
@@ -538,9 +583,13 @@ mod tests {
         }
     }
 
+    fn empty_prefetch() -> HashMap<String, CachedEdit> {
+        HashMap::new()
+    }
+
     // Helper to create encoded PROPOSAL_CREATED data
     fn encode_proposal_created_data(proposal_id: [u8; 16], voting_mode: u8) -> Vec<u8> {
-        use ethabi::{Token, ethereum_types::U256 as EthU256};
+        use ethabi::{ethereum_types::U256 as EthU256, Token};
 
         let action_tuple = Token::Tuple(vec![
             Token::Address(ethabi::Address::zero()),
@@ -563,7 +612,7 @@ mod tests {
         quorum: u64,
         threshold: u64,
     ) -> Vec<u8> {
-        use ethabi::{Token, ethereum_types::U256 as EthU256};
+        use ethabi::{ethereum_types::U256 as EthU256, Token};
 
         ethabi::encode(&[
             Token::Uint(EthU256::from(start_date)),
@@ -600,7 +649,7 @@ mod tests {
             },
         ];
 
-        let result = transform(&test_actions, &test_meta()).unwrap();
+        let result = transform(&test_actions, &test_meta(), &empty_prefetch()).unwrap();
 
         // Should have 1 squashed event
         assert_eq!(result.proposals_created.len(), 1);
@@ -634,7 +683,7 @@ mod tests {
             },
         ];
 
-        let result = transform(&test_actions, &test_meta()).unwrap();
+        let result = transform(&test_actions, &test_meta(), &empty_prefetch()).unwrap();
 
         // Should be discarded - no matching settings
         assert_eq!(result.proposals_created.len(), 0);
@@ -656,7 +705,7 @@ mod tests {
             },
         ];
 
-        let result = transform(&test_actions, &test_meta()).unwrap();
+        let result = transform(&test_actions, &test_meta(), &empty_prefetch()).unwrap();
 
         // Should be discarded - no matching created
         assert_eq!(result.proposals_created.len(), 0);
@@ -687,7 +736,7 @@ mod tests {
             },
         ];
 
-        let result = transform(&test_actions, &test_meta()).unwrap();
+        let result = transform(&test_actions, &test_meta(), &empty_prefetch()).unwrap();
 
         // Both should be discarded - IDs don't match
         assert_eq!(result.proposals_created.len(), 0);
@@ -759,7 +808,7 @@ mod tests {
             },
         ];
 
-        let result = transform(&test_actions, &test_meta()).unwrap();
+        let result = transform(&test_actions, &test_meta(), &empty_prefetch()).unwrap();
         // No PROPOSAL_CREATED events without matching PROPOSAL_SETTINGS_USED
         assert_eq!(result.proposals_created.len(), 0);
         assert_eq!(result.proposals_voted.len(), 1);

@@ -71,16 +71,21 @@ pub struct CachedEdit {
     /// The space ID that published this edit (from the action).
     #[allow(dead_code)] // Part of public API for future use
     pub space_id: Vec<u8>,
+
+    /// The edit name extracted from the GRC-20 payload.
+    /// Used for populating human-readable proposal names.
+    pub name: Option<String>,
 }
 
 impl CachedEdit {
     /// Create a successful cache entry with validated payload bytes.
-    pub fn success(cid: String, payload: Vec<u8>, space_id: Vec<u8>) -> Self {
+    pub fn success(cid: String, payload: Vec<u8>, space_id: Vec<u8>, name: Option<String>) -> Self {
         Self {
             cid,
             payload: Some(payload),
             is_errored: false,
             space_id,
+            name,
         }
     }
 
@@ -91,6 +96,7 @@ impl CachedEdit {
             payload: None,
             is_errored: true,
             space_id,
+            name: None,
         }
     }
 

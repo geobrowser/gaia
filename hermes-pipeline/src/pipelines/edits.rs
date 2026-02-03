@@ -1,276 +1,104 @@
 //! Pipeline: EDITS_PUBLISHED → knowledge.edits
 //!
 //! Converts edit published actions to HermesEdit events.
-//! Unlike other pipelines, this requires an external cache lookup
-//! to resolve IPFS hash → Edit content.
-//!
-//! Features:
-//! - Parallel cache fetching for all edits in a block
-//! - Retry logic with exponential backoff for cache misses
-//! - Graceful handling of errored cache entries
+//! Uses prefetched IPFS cache data to resolve content.
 //!
 //! Note: As of v2, the cache returns raw GRC2/GRC2Z payload bytes.
 //! We decode the header to populate HermesEdit fields for observability,
 //! but the full payload is passed to kg-indexer for decoding.
 
-use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
-use std::time::Duration;
+use std::collections::HashMap;
 
 use anyhow::Result;
-use futures::future::join_all;
 use grc_20::decode_edit;
-use hermes_instrumentation::{Instrument, debug_span, info_span};
-use tokio_retry::Retry;
-use tokio_retry::strategy::{ExponentialBackoff, jitter};
-use tracing::warn;
+use hermes_instrumentation::warn;
 
-use hermes_relay::{Action, actions, extract_ipfs_uri};
+use hermes_relay::{actions, extract_ipfs_uri, Action};
 use hermes_schema::pb::knowledge::HermesEdit;
 
-use crate::cache::{CacheError, IpfsCache};
+use crate::cache::CachedEdit;
 
 use super::BlockMetadata;
-
-/// Configuration for cache retry behavior.
-#[derive(Debug, Clone)]
-pub struct RetryConfig {
-    /// Initial delay between retries (default: 10ms)
-    pub initial_delay_ms: u64,
-    /// Multiplier for each subsequent retry (default: 2)
-    pub factor: u64,
-    /// Maximum delay between retries (default: 5s)
-    pub max_delay: Duration,
-    /// Maximum number of retries (default: 10)
-    pub max_retries: usize,
-}
-
-impl Default for RetryConfig {
-    fn default() -> Self {
-        Self {
-            initial_delay_ms: 10,
-            factor: 2,
-            max_delay: Duration::from_secs(5),
-            max_retries: 10,
-        }
-    }
-}
 
 /// Result of transforming edit actions.
 #[derive(Debug, Default)]
 pub struct TransformResult {
     /// Transformed edit events ready for emission.
     pub events: Vec<HermesEdit>,
-    /// Number of cache misses (after all retries exhausted).
+    /// Number of cache misses.
     pub cache_misses: u64,
     /// Number of errored entries (cache marked them as failed).
     pub errored_entries: u64,
-    /// Number of fetch failures (database errors, etc.).
-    pub fetch_failures: u64,
 }
 
-/// Request for fetching an edit from the cache.
-struct EditRequest {
-    ipfs_hash: String,
-    space_id: Vec<u8>,
-    sequence: u32,
-}
-
-/// Result of fetching an edit from the cache.
-enum EditFetchResult {
-    /// Successfully fetched and converted to HermesEdit.
-    Success(Box<HermesEdit>),
-    /// Cache miss after all retries.
-    CacheMiss,
-    /// Entry exists but is marked as errored.
-    Errored,
-    /// Fetch failed due to database/network error.
-    FetchFailed,
-}
-
-/// Transform all EDITS_PUBLISHED actions in a block.
+/// Transform all EDITS_PUBLISHED actions in a block using prefetched cache data.
 ///
 /// This function:
 /// 1. Filters actions for EDITS_PUBLISHED
-/// 2. Fetches all edits from cache in parallel with retries
-/// 3. Converts successful fetches to HermesEdit events
-/// 4. Returns events without sending to Kafka
-pub async fn transform(
+/// 2. Looks up edit content from the prefetched cache
+/// 3. Converts successful lookups to HermesEdit events
+pub fn transform(
     actions: &[Action],
     meta: &BlockMetadata,
-    cache: &Arc<dyn IpfsCache>,
-    retry_config: &RetryConfig,
+    prefetched: &HashMap<String, CachedEdit>,
 ) -> Result<TransformResult> {
-    // Collect all edit requests, filtering out actions without valid IPFS URIs
-    let requests: Vec<(EditRequest, Action)> = actions
-        .iter()
-        .enumerate()
-        .filter(|(_, action)| actions::matches(&action.action, &actions::EDITS_PUBLISHED))
-        .filter_map(|(index, action)| {
-            // Extract and validate IPFS URI from ABI-encoded action data
-            match extract_ipfs_uri(&action.data) {
-                Some(ipfs_hash) => Some((
-                    EditRequest {
-                        ipfs_hash,
-                        space_id: action.from_id.clone(),
-                        sequence: index as u32,
-                    },
-                    action.clone(),
-                )),
-                None => {
-                    let space_id = hex::encode(&action.from_id);
-                    let data_prefix_len = action.data.len().min(64);
-                    let data_prefix = hex::encode(&action.data[..data_prefix_len]);
-                    warn!(
-                        block = meta.block_number,
-                        space_id = %space_id,
-                        data_len = action.data.len(),
-                        data_prefix = %data_prefix,
-                        "EDITS_PUBLISHED missing valid IPFS URI, skipping"
-                    );
-                    None
-                }
-            }
-        })
-        .collect();
-
-    if requests.is_empty() {
-        return Ok(TransformResult::default());
-    }
-
-    // Fetch all edits in parallel
-    let request_count = requests.len();
-    let fetch_results = fetch_edits_parallel(requests, meta, cache, retry_config)
-        .instrument(info_span!("fetch.batch", count = request_count))
-        .await;
-
-    // Collect results
     let mut result = TransformResult::default();
 
-    for fetch_result in fetch_results {
-        match fetch_result {
-            EditFetchResult::Success(event) => {
-                result.events.push(*event);
+    for (index, action) in actions.iter().enumerate() {
+        if !actions::matches(&action.action, &actions::EDITS_PUBLISHED) {
+            continue;
+        }
+
+        // Extract IPFS URI from action data
+        let ipfs_uri = match extract_ipfs_uri(&action.data) {
+            Some(uri) => uri,
+            None => {
+                let space_id = hex::encode(&action.from_id);
+                let data_prefix_len = action.data.len().min(64);
+                let data_prefix = hex::encode(&action.data[..data_prefix_len]);
+                warn!(
+                    block = meta.block_number,
+                    space_id = %space_id,
+                    data_len = action.data.len(),
+                    data_prefix = %data_prefix,
+                    "EDITS_PUBLISHED missing valid IPFS URI, skipping"
+                );
+                continue;
             }
-            EditFetchResult::CacheMiss => {
+        };
+
+        // Look up from prefetched cache
+        match prefetched.get(&ipfs_uri) {
+            Some(cached_edit) => {
+                if cached_edit.is_errored {
+                    result.errored_entries += 1;
+                } else if let Some(payload) = &cached_edit.payload {
+                    match convert(action, payload, meta, index as u32) {
+                        Ok(event) => result.events.push(event),
+                        Err(e) => {
+                            warn!(
+                                ipfs_uri = %ipfs_uri,
+                                error = %e,
+                                "Failed to convert edit payload"
+                            );
+                        }
+                    }
+                } else {
+                    result.errored_entries += 1;
+                }
+            }
+            None => {
+                // Cache miss - this shouldn't happen if prefetch worked correctly
+                warn!(
+                    ipfs_uri = %ipfs_uri,
+                    "Edit not found in prefetched cache"
+                );
                 result.cache_misses += 1;
-            }
-            EditFetchResult::Errored => {
-                result.errored_entries += 1;
-            }
-            EditFetchResult::FetchFailed => {
-                result.fetch_failures += 1;
             }
         }
     }
 
     Ok(result)
-}
-
-/// Fetch all edits in parallel with retry logic.
-async fn fetch_edits_parallel(
-    requests: Vec<(EditRequest, Action)>,
-    meta: &BlockMetadata,
-    cache: &Arc<dyn IpfsCache>,
-    retry_config: &RetryConfig,
-) -> Vec<EditFetchResult> {
-    let handles: Vec<_> = requests
-        .into_iter()
-        .map(|(req, action)| {
-            let cache = Arc::clone(cache);
-            let retry_config = retry_config.clone();
-            let meta = meta.clone();
-            let ipfs_hash = req.ipfs_hash.clone();
-
-            tokio::spawn(
-                async move {
-                    fetch_edit_with_retry(req, &action, &meta, cache, &retry_config).await
-                }
-                .instrument(info_span!("fetch.edit", ipfs_hash = %ipfs_hash)),
-            )
-        })
-        .collect();
-
-    // Wait for all fetches to complete
-    let results = join_all(handles).await;
-
-    // Unwrap the JoinHandle results
-    results
-        .into_iter()
-        .map(|r| r.unwrap_or(EditFetchResult::FetchFailed))
-        .collect()
-}
-
-/// Fetch a single edit with retry logic and convert to HermesEdit.
-async fn fetch_edit_with_retry(
-    req: EditRequest,
-    action: &Action,
-    meta: &BlockMetadata,
-    cache: Arc<dyn IpfsCache>,
-    config: &RetryConfig,
-) -> EditFetchResult {
-    let retry_strategy = ExponentialBackoff::from_millis(config.initial_delay_ms)
-        .factor(config.factor)
-        .max_delay(config.max_delay)
-        .map(jitter)
-        .take(config.max_retries);
-
-    let ipfs_hash = req.ipfs_hash.clone();
-    let space_id = req.space_id.clone();
-    let sequence = req.sequence;
-    let attempts = Arc::new(AtomicUsize::new(0));
-    let result = Retry::spawn(retry_strategy, || {
-        let hash = ipfs_hash.clone();
-        let space = space_id.clone();
-        let cache = Arc::clone(&cache);
-        let attempts = Arc::clone(&attempts);
-        let span = debug_span!("cache.get", ipfs_hash = %hash);
-        async move {
-            let result = cache.get(&hash, &space).await;
-            let attempt = attempts.fetch_add(1, Ordering::Relaxed) + 1;
-            if matches!(result, Err(CacheError::NotFound(_))) {
-                warn!(
-                    ipfs_hash = %hash,
-                    tags.ipfs_hash = %hash,
-                    attempt,
-                    "Edit cache miss, retrying"
-                );
-            }
-            result
-        }
-        .instrument(span)
-    })
-    .await;
-
-    match result {
-        Ok(cached_edit) => {
-            if cached_edit.is_errored {
-                EditFetchResult::Errored
-            } else if let Some(payload) = cached_edit.payload {
-                debug_span!("convert").in_scope(|| {
-                    match convert(action, &payload, meta, sequence) {
-                        Ok(event) => EditFetchResult::Success(Box::new(event)),
-                        Err(_) => EditFetchResult::FetchFailed,
-                    }
-                })
-            } else {
-                // Entry exists but no payload content
-                EditFetchResult::Errored
-            }
-        }
-        Err(CacheError::NotFound(_)) => {
-            let attempts = attempts.load(Ordering::Relaxed);
-            warn!(
-                ipfs_hash = %ipfs_hash,
-                tags.ipfs_hash = %ipfs_hash,
-                attempts,
-                max_retries = config.max_retries,
-                "Edit cache miss after retries exhausted"
-            );
-            EditFetchResult::CacheMiss
-        }
-        Err(_) => EditFetchResult::FetchFailed,
-    }
 }
 
 /// Convert an EDITS_PUBLISHED action with cached payload to HermesEdit proto.
@@ -310,11 +138,13 @@ fn convert(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::pipelines::prefetch::RetryConfig;
     use grc_20::genesis::properties;
     use grc_20::{
-        CreateEntity, Edit as Grc20Edit, Op, PropertyValue, Value as Grc20Value, encode_edit,
+        encode_edit, CreateEntity, Edit as Grc20Edit, Op, PropertyValue, Value as Grc20Value,
     };
     use std::borrow::Cow;
+    use std::time::Duration;
 
     fn test_meta() -> BlockMetadata {
         BlockMetadata {

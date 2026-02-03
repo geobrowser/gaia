@@ -43,6 +43,9 @@ pub struct PublishAction {
     /// Edit metadata
     #[prost(bytes = "vec", tag = "2")]
     pub metadata: ::prost::alloc::vec::Vec<u8>,
+    /// Edit name (extracted from IPFS cache)
+    #[prost(string, tag = "3")]
+    pub name: ::prost::alloc::string::String,
 }
 /// Decoded action: flag content
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -320,7 +323,9 @@ impl ProposalActionType {
             Self::ProposalActionFlag => "PROPOSAL_ACTION_FLAG",
             Self::ProposalActionUnflag => "PROPOSAL_ACTION_UNFLAG",
             Self::ProposalActionUnflagEditor => "PROPOSAL_ACTION_UNFLAG_EDITOR",
-            Self::ProposalActionUpdateVotingSettings => "PROPOSAL_ACTION_UPDATE_VOTING_SETTINGS",
+            Self::ProposalActionUpdateVotingSettings => {
+                "PROPOSAL_ACTION_UPDATE_VOTING_SETTINGS"
+            }
             Self::ProposalActionPing => "PROPOSAL_ACTION_PING",
         }
     }

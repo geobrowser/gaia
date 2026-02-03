@@ -62,6 +62,7 @@ message UnflagEditorAction {
 message PublishAction {
   string content_uri = 1;  // Content URI (IPFS hash)
   bytes metadata = 2;      // Edit metadata
+  string name = 3;         // Edit name (extracted from IPFS cache)
 }
 
 // Decoded action: flag content

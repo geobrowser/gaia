@@ -38,6 +38,8 @@ pub struct CacheItem {
     pub space_id: String,
     /// Whether fetching failed
     pub is_errored: bool,
+    /// Edit name extracted from the GRC-20 payload (if valid)
+    pub name: Option<String>,
 }
 
 /// Configuration for the cache storage backend.
@@ -113,6 +115,7 @@ struct StoredItem {
     block: String,
     space_id: String,
     is_errored: bool,
+    name: Option<String>,
 }
 
 impl MockStorage {
@@ -143,6 +146,7 @@ impl CacheStorage for MockStorage {
                     block: item.block.clone(),
                     space_id: item.space_id.clone(),
                     is_errored: item.is_errored,
+                    name: item.name.clone(),
                 },
             );
         }
@@ -157,6 +161,7 @@ impl CacheStorage for MockStorage {
             block: stored.block.clone(),
             space_id: stored.space_id.clone(),
             is_errored: stored.is_errored,
+            name: stored.name.clone(),
         }))
     }
 
@@ -199,8 +204,8 @@ impl PostgresStorage {
 impl CacheStorage for PostgresStorage {
     async fn insert(&self, item: &CacheItem) -> Result<(), CacheError> {
         sqlx::query(
-            "INSERT INTO ipfs_cache (uri, data, block, space, is_errored) \
-             VALUES ($1, $2, $3, $4::uuid, $5) \
+            "INSERT INTO ipfs_cache (uri, data, block, space, is_errored, name) \
+             VALUES ($1, $2, $3, $4::uuid, $5, $6) \
              ON CONFLICT (uri) DO NOTHING",
         )
         .bind(&item.uri)
@@ -208,6 +213,7 @@ impl CacheStorage for PostgresStorage {
         .bind(&item.block)
         .bind(&item.space_id)
         .bind(item.is_errored)
+        .bind(&item.name)
         .execute(&self.connection)
         .await?;
 
@@ -215,19 +221,20 @@ impl CacheStorage for PostgresStorage {
     }
 
     async fn get(&self, uri: &str) -> Result<Option<CacheItem>, CacheError> {
-        let row: Option<(Option<Vec<u8>>, String, String, bool)> =
-            sqlx::query_as("SELECT data, block, space, is_errored FROM ipfs_cache WHERE uri = $1")
+        let row: Option<(Option<Vec<u8>>, String, String, bool, Option<String>)> =
+            sqlx::query_as("SELECT data, block, space, is_errored, name FROM ipfs_cache WHERE uri = $1")
                 .bind(uri)
                 .fetch_optional(&self.connection)
                 .await?;
 
         match row {
-            Some((data, block, space_id, is_errored)) => Ok(Some(CacheItem {
+            Some((data, block, space_id, is_errored, name)) => Ok(Some(CacheItem {
                 uri: uri.to_string(),
                 data,
                 block,
                 space_id,
                 is_errored,
+                name,
             })),
             None => Ok(None),
         }
@@ -321,6 +328,7 @@ mod tests {
             block: "12345".to_string(),
             space_id: "abc123".to_string(),
             is_errored: false,
+            name: Some("Test Edit".to_string()),
         };
 
         cache.put(&item).await.unwrap();
@@ -334,6 +342,7 @@ mod tests {
         assert_eq!(retrieved.block, "12345");
         assert_eq!(retrieved.space_id, "abc123");
         assert!(!retrieved.is_errored);
+        assert_eq!(retrieved.name, Some("Test Edit".to_string()));
     }
 
     #[tokio::test]
@@ -346,6 +355,7 @@ mod tests {
             block: "100".to_string(),
             space_id: "abc".to_string(),
             is_errored: false,
+            name: Some("First Edit".to_string()),
         };
 
         let item2 = CacheItem {
@@ -354,6 +364,7 @@ mod tests {
             block: "200".to_string(),
             space_id: "def".to_string(),
             is_errored: false,
+            name: Some("Second Edit".to_string()),
         };
 
         cache.put(&item1).await.unwrap();
@@ -362,6 +373,7 @@ mod tests {
         // Should still have the first item
         let retrieved = cache.get("ipfs://QmTest123").await.unwrap().unwrap();
         assert_eq!(retrieved.data, Some(vec![0x01]));
+        assert_eq!(retrieved.name, Some("First Edit".to_string()));
     }
 
     #[tokio::test]
