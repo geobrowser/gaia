@@ -4,12 +4,12 @@ use std::time::{Duration, Instant};
 
 use futures::StreamExt;
 use hermes_instrumentation::{debug, error, info, info_span, warn, Instrument};
-use tracing::field::display;
 use hermes_schema::pb::blockchain_metadata::BlockchainMetadata;
 use hermes_schema::pb::space::hermes_space_trust_extension::Extension as TrustExtensionType;
 use rdkafka::message::Headers;
 use rdkafka::Message;
 use std::sync::OnceLock;
+use tracing::field::display;
 
 mod consumer;
 mod error;
@@ -1228,7 +1228,9 @@ async fn process_block(
                     if let Ok(member_id) = uuid::Uuid::from_slice(&role_event.member_space_id) {
                         event_span.record("account", display(member_id));
                     }
-                    if let Ok(role) = hermes_schema::pb::membership::MembershipRole::try_from(role_event.role) {
+                    if let Ok(role) =
+                        hermes_schema::pb::membership::MembershipRole::try_from(role_event.role)
+                    {
                         event_span.record("role", role.as_str_name());
                     }
 
@@ -1251,7 +1253,9 @@ async fn process_block(
                     if let Ok(member_id) = uuid::Uuid::from_slice(&role_event.member_space_id) {
                         event_span.record("account", display(member_id));
                     }
-                    if let Ok(role) = hermes_schema::pb::membership::MembershipRole::try_from(role_event.role) {
+                    if let Ok(role) =
+                        hermes_schema::pb::membership::MembershipRole::try_from(role_event.role)
+                    {
                         event_span.record("role", role.as_str_name());
                     }
 
@@ -1276,7 +1280,8 @@ async fn process_block(
                     };
                     event_span.record("extension_type", extension_type);
 
-                    if let Some(subspace) = handlers::subspaces::handle_trust_extension(trust_event)?
+                    if let Some(subspace) =
+                        handlers::subspaces::handle_trust_extension(trust_event)?
                     {
                         event_span.record("parent_space_id", display(subspace.parent_space_id));
                         event_span.record("child_space_id", display(subspace.subspace_id));
