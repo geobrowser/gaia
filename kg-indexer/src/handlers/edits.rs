@@ -9,6 +9,7 @@ use grc_20::{
     UnsetRelationField, Value as Grc20Value,
 };
 use hermes_schema::pb::knowledge::HermesEdit;
+use tracing::info_span;
 use uuid::Uuid;
 
 use crate::error::HandlerError;
@@ -89,12 +90,20 @@ pub fn handle_edit(edit: &HermesEdit) -> Result<EditResult, HandlerError> {
     let meta = EditMetadata::from_edit(edit);
 
     // Decode the v2 payload bytes
-    let grc20_edit = decode_payload(&edit.payload)?;
+    let grc20_edit = {
+        let _span =
+            info_span!("kg_indexer.decode_grc20", payload_size = edit.payload.len()).entered();
+        decode_payload(&edit.payload)?
+    };
 
     // Extract all data from the decoded edit
-    let entities = extract_entities(&grc20_edit, &space_id, &meta);
-    let value_ops = extract_values(&grc20_edit, &space_id);
-    let relation_ops = extract_relations(&grc20_edit, &space_id);
+    let (entities, value_ops, relation_ops) = {
+        let _span = info_span!("kg_indexer.extract_ops", op_count = grc20_edit.ops.len()).entered();
+        let entities = extract_entities(&grc20_edit, &space_id, &meta);
+        let value_ops = extract_values(&grc20_edit, &space_id);
+        let relation_ops = extract_relations(&grc20_edit, &space_id);
+        (entities, value_ops, relation_ops)
+    };
 
     // Squash operations within this edit to resolve conflicts
     let values = squash_values(&value_ops);

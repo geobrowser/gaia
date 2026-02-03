@@ -38,6 +38,8 @@ struct BlockBuffer {
     first_seen: HashMap<u64, Instant>,
     /// Block summaries keyed by block number.
     summaries: HashMap<u64, BlockSummaryInfo>,
+    /// Seen event IDs for deduplication (cleared when block is taken).
+    seen_event_ids: HashMap<u64, std::collections::HashSet<String>>,
     /// Timeout for waiting for is_last event.
     stale_timeout: Duration,
 }
@@ -48,6 +50,7 @@ impl BlockBuffer {
             events: HashMap::new(),
             first_seen: HashMap::new(),
             summaries: HashMap::new(),
+            seen_event_ids: HashMap::new(),
             stale_timeout,
         }
     }
@@ -1050,14 +1053,6 @@ async fn process_block(
     let tx_start = Instant::now();
 
     // Process each message in sequence order
-    let handle_events_span = info_span!(
-        "kg_indexer.handle_events",
-        event_count = events.len(),
-        "otel.status_code" = tracing::field::Empty,
-        "otel.status_message" = tracing::field::Empty
-    );
-    let _handle_events_guard = handle_events_span.enter();
-
     for event in &events {
         let event_id = event.event_id.as_deref().unwrap_or("");
 
@@ -1341,9 +1336,6 @@ async fn process_block(
 
         total_ops += ops;
     }
-
-    // Drop the handle_events span before starting db_commit (sibling spans)
-    drop(_handle_events_guard);
 
     // Commit the transaction
     let db_commit_span = info_span!(
