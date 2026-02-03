@@ -392,6 +392,28 @@ message HermesEdit {
 
 The `payload` field contains GRC-20 v2 wire format bytes, decoded using `grc_20::decode_edit()`.
 
+## Error Recovery
+
+### Reprocessing All Events
+
+If you need to reprocess all events from the beginning (e.g., after fixing a bug, schema changes, or data corruption), change the `KAFKA_GROUP_ID` to a new value:
+
+```bash
+# Use a new consumer group ID to reprocess from the beginning
+KAFKA_GROUP_ID=search-indexer-v2 \
+ENVIRONMENT=staging \
+OPENSEARCH_URL=http://localhost:9200 \
+KAFKA_BROKER=localhost:9092 \
+cargo run --features search-indexer-repository/auto_index_creation
+```
+
+**Warning:** This will reprocess ALL events from the very first Kafka message. For large topics, this may take significant time.
+
+**Notes:**
+- A new consumer group has no committed offsets, so `auto.offset.reset=earliest` starts from offset 0
+- Update `KAFKA_GROUP_ID` once (e.g., `search-indexer` → `search-indexer-v2`), then keep using that value
+- Consider incrementing `ENTITIES_INDEX_VERSION` to index into a fresh index (use `search-admin` to create the new index first)
+
 ## Troubleshooting
 
 ### Common issues
