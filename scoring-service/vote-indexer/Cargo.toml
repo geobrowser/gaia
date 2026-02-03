@@ -7,6 +7,7 @@ description = "Vote indexer that consumes curation.votes events from Kafka and i
 [dependencies]
 hermes-schema = { path = "../../hermes-schema" }
 hermes-instrumentation = { path = "../../hermes-instrumentation" }
+hermes-kafka = { path = "../../hermes-kafka" }
 rdkafka = { version = "0.38.0", features = ["cmake-build", "ssl", "zstd"] }
 tokio = { version = "1.42.0", features = ["macros", "rt-multi-thread", "sync", "time", "signal"] }
 futures = "0.3.31"

@@ -155,3 +155,129 @@ pub fn create_producer(broker: &str, client_id: &str) -> Result<rdkafka::produce
 // Re-export commonly used rdkafka types for convenience
 pub use rdkafka::message::{Header, OwnedHeaders};
 pub use rdkafka::producer::{BaseProducer, BaseRecord, Producer};
+
+// =============================================================================
+// Topic Prefix (Environment Isolation)
+// =============================================================================
+
+use std::sync::OnceLock;
+
+/// Cached topic prefix, computed once on first access.
+static TOPIC_PREFIX: OnceLock<&'static str> = OnceLock::new();
+
+/// Get the topic prefix based on the `ENVIRONMENT` variable.
+///
+/// Uses `OnceLock` to compute the prefix once and cache it for the lifetime
+/// of the process. Returns a `&'static str` for zero-allocation usage.
+///
+/// - `ENVIRONMENT=staging` → returns `"staging."`
+/// - `ENVIRONMENT=production` → returns `""`
+///
+/// # Panics
+///
+/// Panics if `ENVIRONMENT` is not set or has an unexpected value.
+///
+/// # Example
+///
+/// ```ignore
+/// use hermes_kafka::get_topic_prefix;
+///
+/// let prefix = get_topic_prefix();
+/// let topic = format!("{}knowledge.edits", prefix);
+/// ```
+pub fn get_topic_prefix() -> &'static str {
+    TOPIC_PREFIX.get_or_init(|| {
+        let environment = env::var("ENVIRONMENT")
+            .expect("ENVIRONMENT variable must be set to 'staging' or 'production'");
+        match environment.as_str() {
+            "staging" => "staging.",
+            "production" => "",
+            other => panic!(
+                "ENVIRONMENT must be 'staging' or 'production', got '{}'",
+                other
+            ),
+        }
+    })
+}
+
+/// Apply prefix to a base topic name.
+///
+/// # Example
+///
+/// ```ignore
+/// use hermes_kafka::prefixed_topic;
+///
+/// assert_eq!(prefixed_topic("staging.", "knowledge.edits"), "staging.knowledge.edits");
+/// assert_eq!(prefixed_topic("", "knowledge.edits"), "knowledge.edits");
+/// ```
+pub fn prefixed_topic(prefix: &str, base: &str) -> String {
+    format!("{}{}", prefix, base)
+}
+
+/// Strip the environment prefix from a topic name.
+///
+/// In staging, topics are prefixed with "staging." (e.g., "staging.hermes.blocks").
+/// This function strips that prefix so consumers can match on canonical topic names.
+///
+/// # Example
+///
+/// ```
+/// use hermes_kafka::strip_topic_prefix;
+///
+/// assert_eq!(strip_topic_prefix("staging.hermes.blocks"), "hermes.blocks");
+/// assert_eq!(strip_topic_prefix("hermes.blocks"), "hermes.blocks");
+/// ```
+pub fn strip_topic_prefix(topic: &str) -> &str {
+    topic.strip_prefix("staging.").unwrap_or(topic)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_prefixed_topic_empty_prefix() {
+        assert_eq!(prefixed_topic("", "knowledge.edits"), "knowledge.edits");
+    }
+
+    #[test]
+    fn test_prefixed_topic_with_prefix() {
+        assert_eq!(
+            prefixed_topic("staging.", "knowledge.edits"),
+            "staging.knowledge.edits"
+        );
+    }
+
+    #[test]
+    fn test_prefixed_topic_preserves_nested_dots() {
+        assert_eq!(
+            prefixed_topic("staging.", "space.trust.extensions"),
+            "staging.space.trust.extensions"
+        );
+    }
+
+    #[test]
+    fn test_strip_topic_prefix_with_staging() {
+        assert_eq!(strip_topic_prefix("staging.hermes.blocks"), "hermes.blocks");
+        assert_eq!(
+            strip_topic_prefix("staging.knowledge.edits"),
+            "knowledge.edits"
+        );
+        assert_eq!(
+            strip_topic_prefix("staging.space.trust.extensions"),
+            "space.trust.extensions"
+        );
+    }
+
+    #[test]
+    fn test_strip_topic_prefix_without_staging() {
+        assert_eq!(strip_topic_prefix("hermes.blocks"), "hermes.blocks");
+        assert_eq!(strip_topic_prefix("knowledge.edits"), "knowledge.edits");
+    }
+
+    #[test]
+    fn test_strip_topic_prefix_partial_match() {
+        // Should NOT strip if "staging" is not a prefix
+        assert_eq!(strip_topic_prefix("my.staging.topic"), "my.staging.topic");
+    }
+}

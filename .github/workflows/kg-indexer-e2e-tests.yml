@@ -27,6 +27,7 @@ env:
   CARGO_TERM_COLOR: always
   DATABASE_URL: postgresql://test_user:test_password@localhost:5432/gaia_test
   KAFKA_BROKER: localhost:9092
+  ENVIRONMENT: staging
 
 jobs:
   e2e-tests:
