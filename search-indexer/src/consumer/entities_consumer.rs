@@ -540,8 +540,19 @@ impl EntitiesConsumer {
                     );
                     events.push(EntityEvent::delete(entity_id, space_id));
                 }
+                grc_20::Op::RestoreEntity(restore) => {
+                    // Handle entity restore (un-delete)
+                    let entity_id = Self::id_to_uuid(&restore.id);
+                    info!(
+                        entity_id = %entity_id,
+                        space_id = %space_id,
+                        edit_name = %edit.name,
+                        "Processing restore entity"
+                    );
+                    events.push(EntityEvent::restore(entity_id, space_id));
+                }
                 _ => {
-                    // Other operations (CreateEntity, RestoreEntity, RestoreRelation, CreateValueRef) not yet implemented
+                    // Other operations (CreateEntity, RestoreRelation, CreateValueRef) not yet implemented
                     debug!("Skipped operation (not yet implemented)");
                 }
             }

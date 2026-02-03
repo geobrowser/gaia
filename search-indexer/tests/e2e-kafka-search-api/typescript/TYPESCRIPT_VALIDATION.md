@@ -15,7 +15,7 @@ Instead of using bash/curl for API validation, we now use a type-safe TypeScript
 
 All TypeScript validation files are located in the `typescript/` subdirectory:
 
-- **validate-search.ts** - Main validation script with 6 comprehensive tests
+- **validate-search.ts** - Main validation script with 14 comprehensive tests
 - **package.json** - Node.js dependencies (tsx for TypeScript execution)
 - **tsconfig.json** - TypeScript configuration
 - **TYPESCRIPT_VALIDATION.md** - This documentation file
@@ -89,6 +89,47 @@ npx tsx validate-search.ts
 ### Test 6: Response Metadata
 - Validates `total` count is present
 - Validates `tookMs` execution time is present
+
+### Test 7: Zero and Negative Scores
+- Validates entities with zero (0.0) score are returned
+- Validates entities with negative (-0.75) score are returned
+
+### Test 8: TypeIds Scenarios
+- Validates typeIds reflect type relation create/delete scenarios
+- Alice High: Multiple types (Person + Organization)
+- Alice Medium: Create->Delete->Create pattern works
+- Alice Low: Partial type removal (Person kept after Org deleted)
+
+### Test 9a: Deleted Entity Not In Results
+- Verifies soft-deleted entity (Delete Charlie) is excluded from search
+- Checks exclusion from both name search and broad search
+
+### Test 9b: Restored Entity In Results
+- Verifies restored entity (Delete Dana) appears in search results
+- Dana was deleted then restored - should be visible
+- Validates name and description are preserved after restore
+
+### Test 10: Deleted Then Updated Entity
+- Verifies entity deleted then updated (Delete Eve) remains excluded
+- Post-delete updates should not resurrect the entity
+
+### Test 11: Empty Query Top Ranked
+- Validates empty query returns top-ranked results ordered by score
+- Tests both GLOBAL and SPACE scopes
+
+### Test 12: Unset Properties
+- Validates unset_properties clears name/description while preserving other fields
+- Test Case 1: Unset single property (name)
+- Test Case 2: Unset multiple properties (name and description)
+
+### Test 13: LWW Behavior
+- Validates Last-Writer-Wins: sequential updates result in final value persisting
+- Mixed set/unset operations on different properties
+
+### Test 14: Include Deleted Flag
+- Verifies `include_deleted` flag returns soft-deleted entities
+- Charlie appears with flag set, data preserved
+- Eve appears with flag set, tombstone dominance verified
 
 ## Type Safety Benefits
 
