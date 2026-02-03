@@ -401,6 +401,7 @@ app.get(
 							datetime: {type: "string", format: "date-time", nullable: true},
 							schedule: {type: "object", nullable: true, description: "RFC 5545 schedule"},
 							point: {type: "string", nullable: true, description: "WGS84 point"},
+							rect: {type: "string", nullable: true, description: "WGS84 bounding box"},
 							embedding: {type: "object", nullable: true},
 							// Metadata
 							language: {type: "string", nullable: true},
@@ -495,6 +496,7 @@ app.get(
 									"DATETIME",
 									"SCHEDULE",
 									"POINT",
+									"RECT",
 									"EMBEDDING",
 								],
 							},

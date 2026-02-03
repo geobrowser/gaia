@@ -218,6 +218,13 @@
       "when": 1769753397003,
       "tag": "0030_fix-property-function-type-check",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1769718051629,
+      "tag": "0031_perpetual_jackpot",
+      "breakpoints": true
     }
   ]
 }

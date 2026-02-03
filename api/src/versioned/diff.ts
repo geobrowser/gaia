@@ -64,6 +64,7 @@ function serializeValue(v: VersionedValue): string | null {
 	if (v.schedule !== undefined && v.schedule !== null)
 		return JSON.stringify(v.schedule);
 	if (v.point !== undefined && v.point !== null) return v.point;
+	if (v.rect !== undefined && v.rect !== null) return v.rect;
 	if (v.embedding !== undefined && v.embedding !== null)
 		return JSON.stringify(v.embedding);
 	return null;
@@ -75,7 +76,7 @@ function serializeValue(v: VersionedValue): string | null {
  */
 function getValueType(
 	v: VersionedValue
-): "TEXT" | "BOOL" | "INT64" | "FLOAT64" | "DECIMAL" | "BYTES" | "DATE" | "TIME" | "DATETIME" | "SCHEDULE" | "POINT" | "EMBEDDING" {
+): "TEXT" | "BOOL" | "INT64" | "FLOAT64" | "DECIMAL" | "BYTES" | "DATE" | "TIME" | "DATETIME" | "SCHEDULE" | "POINT" | "RECT" | "EMBEDDING" {
 	if (v.text !== undefined && v.text !== null) return "TEXT";
 	if (v.boolean !== undefined && v.boolean !== null) return "BOOL";
 	if (v.integer !== undefined && v.integer !== null) return "INT64";
@@ -87,6 +88,7 @@ function getValueType(
 	if (v.datetime !== undefined && v.datetime !== null) return "DATETIME";
 	if (v.schedule !== undefined && v.schedule !== null) return "SCHEDULE";
 	if (v.point !== undefined && v.point !== null) return "POINT";
+	if (v.rect !== undefined && v.rect !== null) return "RECT";
 	if (v.embedding !== undefined && v.embedding !== null) return "EMBEDDING";
 	return "TEXT"; // Default fallback
 }

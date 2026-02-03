@@ -139,6 +139,7 @@ export const values = pgTable(
 		datetime: text(), // DATETIME (ISO 8601)
 		schedule: jsonb(), // SCHEDULE (RFC 5545)
 		point: text(), // POINT (WGS84)
+		rect: text(), // RECT (bounding box)
 		embedding: jsonb(), // EMBEDDING
 		// Metadata
 		language: text(), // For TEXT values only
@@ -167,6 +168,7 @@ export const values = pgTable(
 		index("values_time_idx").on(table.time),
 		index("values_datetime_idx").on(table.datetime),
 		index("values_point_idx").on(table.point),
+		index("values_rect_idx").on(table.rect),
 		// GIN index for schedule and embedding handled via migration
 
 		// Composite indexes for common query patterns
@@ -731,6 +733,7 @@ export const valueVersions = pgTable(
 		datetime: text("datetime"), // DATETIME (ISO 8601)
 		schedule: jsonb("schedule"), // SCHEDULE (RFC 5545)
 		point: text("point"), // POINT (WGS84)
+		rect: text("rect"), // RECT (bounding box)
 		embedding: jsonb("embedding"), // EMBEDDING
 		// Metadata
 		language: text("language"), // For TEXT values only
