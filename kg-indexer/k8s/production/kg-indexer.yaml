@@ -130,6 +130,18 @@ spec:
                   name: kg-indexer-secrets
                   key: SENTRY_DEBUG
                   optional: true
+            - name: AXIOM_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: kg-indexer-secrets
+                  key: AXIOM_TOKEN
+                  optional: true
+            - name: AXIOM_DATASET
+              valueFrom:
+                secretKeyRef:
+                  name: kg-indexer-secrets
+                  key: AXIOM_DATASET
+                  optional: true
             - name: RUST_LOG
               value: "kg_indexer=info"
           resources:

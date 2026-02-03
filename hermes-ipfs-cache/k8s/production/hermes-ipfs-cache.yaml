@@ -123,6 +123,18 @@ spec:
                   name: hermes-ipfs-cache-secrets
                   key: SENTRY_DEBUG
                   optional: true
+            - name: AXIOM_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hermes-ipfs-cache-secrets
+                  key: AXIOM_TOKEN
+                  optional: true
+            - name: AXIOM_DATASET
+              valueFrom:
+                secretKeyRef:
+                  name: hermes-ipfs-cache-secrets
+                  key: AXIOM_DATASET
+                  optional: true
           resources:
             requests:
               memory: "256Mi"
