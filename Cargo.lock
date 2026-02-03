@@ -1080,12 +1080,14 @@ dependencies = [
  "criterion 0.5.1",
  "dotenv",
  "hermes-instrumentation",
+ "hermes-kafka",
  "hermes-relay",
  "hermes-schema",
  "hex",
  "prost 0.13.5",
  "rand 0.8.5",
  "rdkafka 0.36.2",
+ "roaring",
  "thiserror 1.0.69",
  "tokio",
 ]
@@ -1472,6 +1474,12 @@ name = "byte-slice-cast"
 version = "1.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7575182f7272186991736b70173b0ea045398f984bf5ebbb3804736ce1330c9d"
+
+[[package]]
+name = "bytemuck"
+version = "1.24.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1fbdf580320f38b612e485521afda1ee26d10cc9884efaaa750d383e13e3c5f4"
 
 [[package]]
 name = "byteorder"
@@ -3679,6 +3687,7 @@ dependencies = [
  "futures 0.3.31",
  "grc-20",
  "hermes-instrumentation",
+ "hermes-kafka",
  "hermes-schema",
  "hex",
  "indexer_utils",
@@ -5422,6 +5431,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "roaring"
+version = "0.10.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "19e8d2cfa184d94d0726d650a9f4a1be7f9b76ac9fdb954219878dc00c1c1e7b"
+dependencies = [
+ "bytemuck",
+ "byteorder",
+]
+
+[[package]]
 name = "rsa"
 version = "0.9.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -5764,6 +5783,7 @@ dependencies = [
  "futures 0.3.31",
  "grc-20",
  "hermes-instrumentation",
+ "hermes-kafka",
  "hermes-schema",
  "indexer_utils",
  "prost 0.13.5",
@@ -7631,6 +7651,7 @@ dependencies = [
  "dotenv",
  "futures 0.3.31",
  "hermes-instrumentation",
+ "hermes-kafka",
  "hermes-schema",
  "prost 0.13.5",
  "rdkafka 0.38.0",
