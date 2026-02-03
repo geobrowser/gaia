@@ -2852,9 +2852,11 @@ name = "hermes-instrumentation"
 version = "0.1.0"
 dependencies = [
  "opentelemetry 0.31.0",
+ "opentelemetry-http",
  "opentelemetry-otlp",
  "opentelemetry-stdout",
  "opentelemetry_sdk 0.31.0",
+ "reqwest 0.12.28",
  "sentry",
  "thiserror 2.0.18",
  "tokio",

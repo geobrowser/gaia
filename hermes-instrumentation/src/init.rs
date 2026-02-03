@@ -281,8 +281,13 @@ fn init_instrumentation(
         );
         headers.insert("X-Axiom-Dataset".to_string(), axiom_config.dataset.clone());
 
+        // Use blocking reqwest client - the batch exporter runs on a dedicated thread
+        // outside the Tokio runtime, so we need a blocking client
+        let http_client = reqwest::blocking::Client::new();
+
         let axiom_exporter = SpanExporter::builder()
             .with_http()
+            .with_http_client(http_client)
             .with_endpoint("https://api.axiom.co/v1/traces")
             .with_headers(headers)
             .build()
