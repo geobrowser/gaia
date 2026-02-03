@@ -11,8 +11,29 @@ use generators::{edits, relations, scores};
 use kafka::KafkaProducer;
 
 const DEFAULT_KAFKA_BROKER: &str = "localhost:9092";
-const EDITS_TOPIC: &str = "knowledge.edits";
-const SCORES_TOPIC: &str = "curation.scores";
+
+/// Returns the topic prefix based on the ENVIRONMENT variable.
+/// - ENVIRONMENT=staging -> "staging."
+/// - ENVIRONMENT=production -> ""
+/// - ENVIRONMENT not set -> panics (fail-safe)
+fn get_topic_prefix() -> &'static str {
+    match std::env::var("ENVIRONMENT").as_deref() {
+        Ok("staging") => "staging.",
+        Ok("production") => "",
+        Ok(other) => panic!(
+            "ENVIRONMENT variable must be set to 'staging' or 'production', got: '{}'",
+            other
+        ),
+        Err(_) => panic!(
+            "ENVIRONMENT variable must be set to 'staging' or 'production': NotPresent"
+        ),
+    }
+}
+
+/// Returns the prefixed topic name based on the ENVIRONMENT variable.
+fn prefixed_topic(topic: &str) -> String {
+    format!("{}{}", get_topic_prefix(), topic)
+}
 
 #[derive(Parser)]
 #[command(name = "e2e-kafka-search-api")]
@@ -35,6 +56,14 @@ async fn main() -> Result<()> {
     let log_level = if cli.debug { Level::DEBUG } else { Level::INFO };
     let subscriber = FmtSubscriber::builder().with_max_level(log_level).finish();
     tracing::subscriber::set_global_default(subscriber)?;
+
+    // Get prefixed topic names based on ENVIRONMENT variable
+    let edits_topic = prefixed_topic("knowledge.edits");
+    let scores_topic = prefixed_topic("curation.scores");
+    let topic_prefix = get_topic_prefix();
+
+    info!("Topic prefix: '{}'", topic_prefix);
+    info!("Using topics: edits={}, scores={}", edits_topic, scores_topic);
 
     // Create Kafka producer
     let producer = KafkaProducer::new(&cli.broker)?;
@@ -114,7 +143,7 @@ async fn main() -> Result<()> {
         None,
     )?;
     producer
-        .send(EDITS_TOPIC, None, person_type_payload)
+        .send(&edits_topic, None, person_type_payload)
         .await?;
 
     // 2. Create Organization type entity
@@ -128,7 +157,7 @@ async fn main() -> Result<()> {
         None,
     )?;
     producer
-        .send(EDITS_TOPIC, None, org_type_payload)
+        .send(&edits_topic, None, org_type_payload)
         .await?;
 
     // 3. Create multiple Alice entities with different score profiles
@@ -143,7 +172,7 @@ async fn main() -> Result<()> {
         None,
     )?;
     producer
-        .send(EDITS_TOPIC, None, alice_high_payload)
+        .send(&edits_topic, None, alice_high_payload)
         .await?;
 
     let alice_medium_payload = edits::create_entity_edit(
@@ -155,7 +184,7 @@ async fn main() -> Result<()> {
         None,
     )?;
     producer
-        .send(EDITS_TOPIC, None, alice_medium_payload)
+        .send(&edits_topic, None, alice_medium_payload)
         .await?;
 
     let alice_low_payload = edits::create_entity_edit(
@@ -167,7 +196,7 @@ async fn main() -> Result<()> {
         None,
     )?;
     producer
-        .send(EDITS_TOPIC, None, alice_low_payload)
+        .send(&edits_topic, None, alice_low_payload)
         .await?;
 
     let alice_zero_payload = edits::create_entity_edit(
@@ -179,7 +208,7 @@ async fn main() -> Result<()> {
         None,
     )?;
     producer
-        .send(EDITS_TOPIC, None, alice_zero_payload)
+        .send(&edits_topic, None, alice_zero_payload)
         .await?;
 
     let alice_negative_payload = edits::create_entity_edit(
@@ -191,7 +220,7 @@ async fn main() -> Result<()> {
         None,
     )?;
     producer
-        .send(EDITS_TOPIC, None, alice_negative_payload)
+        .send(&edits_topic, None, alice_negative_payload)
         .await?;
 
     let alice_at_threshold_payload = edits::create_entity_edit(
@@ -203,7 +232,7 @@ async fn main() -> Result<()> {
         None,
     )?;
     producer
-        .send(EDITS_TOPIC, None, alice_at_threshold_payload)
+        .send(&edits_topic, None, alice_at_threshold_payload)
         .await?;
 
     let alice_below_threshold_payload = edits::create_entity_edit(
@@ -215,7 +244,7 @@ async fn main() -> Result<()> {
         None,
     )?;
     producer
-        .send(EDITS_TOPIC, None, alice_below_threshold_payload)
+        .send(&edits_topic, None, alice_below_threshold_payload)
         .await?;
 
     // 4. Create Bob
@@ -228,7 +257,7 @@ async fn main() -> Result<()> {
         Some("A project manager"),
         None,
     )?;
-    producer.send(EDITS_TOPIC, None, bob_payload).await?;
+    producer.send(&edits_topic, None, bob_payload).await?;
 
     // 5. Create Charlie (no global score)
     info!("5. Creating Charlie entity (will have NO global score)...");
@@ -240,7 +269,7 @@ async fn main() -> Result<()> {
         Some("A designer with no global score"),
         None,
     )?;
-    producer.send(EDITS_TOPIC, None, charlie_payload).await?;
+    producer.send(&edits_topic, None, charlie_payload).await?;
 
     // 6. Create Organization
     info!("6. Creating Acme Corp organization...");
@@ -252,7 +281,7 @@ async fn main() -> Result<()> {
         Some("A technology company"),
         None,
     )?;
-    producer.send(EDITS_TOPIC, None, org_payload).await?;
+    producer.send(&edits_topic, None, org_payload).await?;
 
     // 7. Create type relations for most Alice entities and others
     info!("7. Creating type relations...");
@@ -274,7 +303,7 @@ async fn main() -> Result<()> {
             person_type_id,
         )?;
         producer
-            .send(EDITS_TOPIC, None, type_rel_payload)
+            .send(&edits_topic, None, type_rel_payload)
             .await?;
     }
 
@@ -285,7 +314,7 @@ async fn main() -> Result<()> {
         org_type_id,
     )?;
     producer
-        .send(EDITS_TOPIC, None, org_type_payload_rel)
+        .send(&edits_topic, None, org_type_payload_rel)
         .await?;
 
     // 7.1. TypeIds test scenarios using Alice entities
@@ -302,7 +331,7 @@ async fn main() -> Result<()> {
         org_type_id,
     )?;
     producer
-        .send(EDITS_TOPIC, None, alice_high_org_payload)
+        .send(&edits_topic, None, alice_high_org_payload)
         .await?;
 
     // Alice Medium: Create -> Delete -> Create pattern (tests relation recreation)
@@ -316,7 +345,7 @@ async fn main() -> Result<()> {
         org_type_id,
     )?;
     producer
-        .send(EDITS_TOPIC, None, alice_medium_org_create_1_payload)
+        .send(&edits_topic, None, alice_medium_org_create_1_payload)
         .await?;
 
     info!("  - Alice Medium: Removing Organization type relation...");
@@ -326,7 +355,7 @@ async fn main() -> Result<()> {
         alice_medium_org_rel_id_1,
     )?;
     producer
-        .send(EDITS_TOPIC, None, alice_medium_org_delete_payload)
+        .send(&edits_topic, None, alice_medium_org_delete_payload)
         .await?;
 
     info!("  - Alice Medium: Re-adding Organization type relation (second time, should be final state)...");
@@ -339,7 +368,7 @@ async fn main() -> Result<()> {
         org_type_id,
     )?;
     producer
-        .send(EDITS_TOPIC, None, alice_medium_org_create_2_payload)
+        .send(&edits_topic, None, alice_medium_org_create_2_payload)
         .await?;
 
     // Alice Low: Two type relations, one removed (typeIds should only have Person)
@@ -353,7 +382,7 @@ async fn main() -> Result<()> {
         org_type_id,
     )?;
     producer
-        .send(EDITS_TOPIC, None, alice_low_org_create_payload)
+        .send(&edits_topic, None, alice_low_org_create_payload)
         .await?;
 
     info!("  - Alice Low: Removing Organization type relation...");
@@ -363,7 +392,7 @@ async fn main() -> Result<()> {
         alice_low_org_rel_id,
     )?;
     producer
-        .send(EDITS_TOPIC, None, alice_low_org_delete_payload)
+        .send(&edits_topic, None, alice_low_org_delete_payload)
         .await?;
 
     // 8. Generate scores with varying values (Charlie intentionally excluded)
@@ -399,7 +428,7 @@ async fn main() -> Result<()> {
         true,
     )?;
     producer
-        .send(SCORES_TOPIC, None, score_payload)
+        .send(&scores_topic, None, score_payload)
         .await?;
 
     // 9. Create entities that will be soft deleted (for delete testing)
@@ -412,7 +441,7 @@ async fn main() -> Result<()> {
         Some("This entity will be deleted"),
         None,
     )?;
-    producer.send(EDITS_TOPIC, None, delete_charlie_payload_create).await?;
+    producer.send(&edits_topic, None, delete_charlie_payload_create).await?;
 
     let delete_dana_payload_create = edits::create_entity_edit(
         "Create Delete Dana",
@@ -422,7 +451,7 @@ async fn main() -> Result<()> {
         Some("This entity will also be deleted"),
         None,
     )?;
-    producer.send(EDITS_TOPIC, None, delete_dana_payload_create).await?;
+    producer.send(&edits_topic, None, delete_dana_payload_create).await?;
 
     let delete_eve_payload_create = edits::create_entity_edit(
         "Create Delete Eve",
@@ -432,7 +461,7 @@ async fn main() -> Result<()> {
         Some("This entity will be deleted then updated"),
         None,
     )?;
-    producer.send(EDITS_TOPIC, None, delete_eve_payload_create).await?;
+    producer.send(&edits_topic, None, delete_eve_payload_create).await?;
 
     // 10. Delete the test entities (soft delete)
     info!("10. Soft deleting Delete Charlie, Delete Dana, and Delete Eve...");
@@ -441,21 +470,21 @@ async fn main() -> Result<()> {
         test_space,
         delete_charlie_id,
     )?;
-    producer.send(EDITS_TOPIC, None, delete_charlie_payload).await?;
+    producer.send(&edits_topic, None, delete_charlie_payload).await?;
 
     let delete_dana_payload = edits::delete_entity(
         "Delete Delete Dana",
         test_space,
         delete_dana_id,
     )?;
-    producer.send(EDITS_TOPIC, None, delete_dana_payload).await?;
+    producer.send(&edits_topic, None, delete_dana_payload).await?;
 
     let delete_eve_payload = edits::delete_entity(
         "Delete Delete Eve",
         test_space,
         delete_eve_id,
     )?;
-    producer.send(EDITS_TOPIC, None, delete_eve_payload).await?;
+    producer.send(&edits_topic, None, delete_eve_payload).await?;
 
     // 11. Update a deleted entity (Delete Eve) - should remain deleted
     info!("11. Updating Delete Eve after deletion (testing delete-then-update behavior)...");
@@ -467,7 +496,7 @@ async fn main() -> Result<()> {
         Some("This entity was updated after being deleted - should remain deleted"),
         None,
     )?;
-    producer.send(EDITS_TOPIC, None, update_eve_payload).await?;
+    producer.send(&edits_topic, None, update_eve_payload).await?;
 
     // 12. Test CreateEntity GRC-20 operation
     info!("12. Testing CreateEntity GRC-20 operation...");
@@ -479,7 +508,7 @@ async fn main() -> Result<()> {
         Some("Entity created using the GRC-20 CreateEntity operation"),
         Some("https://example.com/create-entity-avatar.png"),
     )?;
-    producer.send(EDITS_TOPIC, None, create_entity_payload).await?;
+    producer.send(&edits_topic, None, create_entity_payload).await?;
 
     info!("\n✅ Test scenario complete!");
     info!("Created:");
@@ -529,7 +558,7 @@ async fn main() -> Result<()> {
         None,
     )?;
     producer
-        .send(EDITS_TOPIC, Some(&unset_test_1_key), unset_test_1_create)
+        .send(&edits_topic, Some(&unset_test_1_key), unset_test_1_create)
         .await?;
 
     info!("    Unsetting name property...");
@@ -540,7 +569,7 @@ async fn main() -> Result<()> {
         vec![sdk::core::ids::NAME_PROPERTY_ID],
     )?;
     producer
-        .send(EDITS_TOPIC, Some(&unset_test_1_key), unset_name_payload)
+        .send(&edits_topic, Some(&unset_test_1_key), unset_name_payload)
         .await?;
 
     // Test Case 2: Unset 2 properties (name and description)
@@ -558,7 +587,7 @@ async fn main() -> Result<()> {
         Some("https://example.com/avatar.png"),
     )?;
     producer
-        .send(EDITS_TOPIC, Some(&unset_test_2_key), unset_test_2_create)
+        .send(&edits_topic, Some(&unset_test_2_key), unset_test_2_create)
         .await?;
 
     info!("    Unsetting name and description properties...");
@@ -572,7 +601,7 @@ async fn main() -> Result<()> {
         ],
     )?;
     producer
-        .send(EDITS_TOPIC, Some(&unset_test_2_key), unset_name_desc_payload)
+        .send(&edits_topic, Some(&unset_test_2_key), unset_name_desc_payload)
         .await?;
 
     // Test Case 3: Mixed set/unset + LWW (Last-Writer-Wins) test
@@ -590,7 +619,7 @@ async fn main() -> Result<()> {
         Some("https://example.com/lww-avatar.png"),
     )?;
     producer
-        .send(EDITS_TOPIC, Some(&lww_test_key), lww_test_create)
+        .send(&edits_topic, Some(&lww_test_key), lww_test_create)
         .await?;
 
     info!("    Step 1: Mixed operation - set name='First Update', unset description (different properties)...");
@@ -606,7 +635,7 @@ async fn main() -> Result<()> {
         ],
     )?;
     producer
-        .send(EDITS_TOPIC, Some(&lww_test_key), lww_mixed)
+        .send(&edits_topic, Some(&lww_test_key), lww_mixed)
         .await?;
 
     info!("    Step 2: Set name again to 'Second Update' (LWW: this should win)...");
@@ -619,7 +648,7 @@ async fn main() -> Result<()> {
         None,                      // Don't set avatar (keep existing)
     )?;
     producer
-        .send(EDITS_TOPIC, Some(&lww_test_key), lww_second_set)
+        .send(&edits_topic, Some(&lww_test_key), lww_second_set)
         .await?;
 
     info!("\n✅ Test scenario complete!");

@@ -10,6 +10,7 @@ cd ../hermes && docker-compose up -d kafka
 
 # 2. Run the indexer (with auto index creation for local dev)
 cd ../search-indexer
+ENVIRONMENT=staging \
 OPENSEARCH_URL=http://localhost:9200 \
 KAFKA_BROKER=localhost:9092 \
 cargo run --features search-indexer-repository/auto_index_creation
@@ -71,6 +72,7 @@ See the [search-admin documentation](../search-admin/README.md) for manual index
 
 | Variable | Description | Default |
 |----------|-------------|---------|
+| `ENVIRONMENT` | **Required.** `staging` or `production`. Controls Kafka topic prefix. | - |
 | `OPENSEARCH_URL` | OpenSearch server URL | `http://localhost:9200` |
 | `INDEX_ALIAS` | Index alias name | `entities` |
 | `ENTITIES_INDEX_VERSION` | Index version number | `0` |
@@ -212,13 +214,14 @@ When Sentry backend is enabled:
 
 ```bash
 # With environment variables (enable auto index creation for local dev)
+ENVIRONMENT=staging \
 OPENSEARCH_URL=http://localhost:9200 \
 KAFKA_BROKER=localhost:9092 \
 cargo run --features search-indexer-repository/auto_index_creation
 
 # Or with .env file
 cp .env.example .env
-# Edit .env with your configuration
+# Edit .env with your configuration (must include ENVIRONMENT=staging or ENVIRONMENT=production)
 cargo run --features search-indexer-repository/auto_index_creation
 
 # For production builds (no auto index creation - use search-admin)
@@ -258,14 +261,16 @@ docker-compose up -d kafka
 #### Running standalone
 
 ```bash
-# With retry mode (default)
-docker run -e OPENSEARCH_URL=http://opensearch:9200 \
+# With retry mode (default) - staging environment
+docker run -e ENVIRONMENT=staging \
+           -e OPENSEARCH_URL=http://opensearch:9200 \
            -e KAFKA_BROKER=kafka:29092 \
            -e OPENSEARCH_CONNECTION_MODE=retry \
            search-indexer
 
-# With fail-fast mode
-docker run -e OPENSEARCH_URL=http://opensearch:9200 \
+# With fail-fast mode - production environment
+docker run -e ENVIRONMENT=production \
+           -e OPENSEARCH_URL=http://opensearch:9200 \
            -e KAFKA_BROKER=kafka:29092 \
            -e OPENSEARCH_CONNECTION_MODE=fail-fast \
            search-indexer
@@ -299,7 +304,7 @@ See [TESTING.md](TESTING.md) for comprehensive end-to-end testing documentation.
 docker-compose -f ../hermes/docker-compose.yml up -d
 
 # Run the indexer (with auto index creation for local dev)
-cargo run --features search-indexer-repository/auto_index_creation
+ENVIRONMENT=staging cargo run --features search-indexer-repository/auto_index_creation
 ```
 
 ## Verifying the Indexer

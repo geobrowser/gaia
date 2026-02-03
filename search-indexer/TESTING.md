@@ -37,6 +37,7 @@ This is the fastest way to test search functionality end-to-end:
 3. **Start the search-indexer:**
    ```bash
    cd ../../..  # Back to repo root
+   ENVIRONMENT=staging \
    KAFKA_BROKER=localhost:9092 \
    OPENSEARCH_URL=http://localhost:9200 \
    KAFKA_GROUP_ID=search-indexer-test-$(date +%s) \
@@ -98,6 +99,7 @@ While e2e-kafka-search-api is recommended for search-indexer testing, you can al
 
 3. **Run search-indexer:**
    ```bash
+   ENVIRONMENT=staging \
    KAFKA_BROKER=localhost:9092 \
    OPENSEARCH_URL=http://localhost:9200 \
    KAFKA_GROUP_ID=search-indexer-test-$(date +%s) \
@@ -121,6 +123,7 @@ While e2e-kafka-search-api is recommended for search-indexer testing, you can al
 
 3. **Run search-indexer:**
    ```bash
+   ENVIRONMENT=staging \
    KAFKA_BROKER=localhost:9092 \
    OPENSEARCH_URL=http://localhost:9200 \
    KAFKA_GROUP_ID=search-indexer-test-$(date +%s) \
@@ -226,7 +229,7 @@ cargo run
 
 For search-indexer:
 ```bash
-RUST_LOG=debug,search_indexer=trace cargo run -p search-indexer --features search-indexer-repository/auto_index_creation
+ENVIRONMENT=staging RUST_LOG=debug,search_indexer=trace cargo run -p search-indexer --features search-indexer-repository/auto_index_creation
 ```
 
 ## Related Documentation
