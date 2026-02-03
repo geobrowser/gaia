@@ -140,7 +140,7 @@ modules:
   # Combined IPFS URI extraction - for hermes-ipfs-cache
   - name: map_ipfs_uris
     kind: map
-    initialBlock: 81809
+    initialBlock: 0
     inputs:
       - source: sf.ethereum.type.v2.Block
     output:
