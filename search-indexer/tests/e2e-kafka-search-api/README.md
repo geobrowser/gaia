@@ -182,9 +182,13 @@ This script:
   - Test 6: Response metadata (total count, execution time)
   - Test 7: Zero and negative score entities
   - Test 8: TypeIds field for different relation scenarios
-  - Test 9: Empty query returns top ranked results
-  - Test 10: Unset properties functionality (validates unset_values in UpdateEntity)
-  - Test 11: Mixed set/unset + LWW behavior (validates Last-Writer-Wins semantics)
+  - Test 9a: Deleted entity excluded from results (Charlie soft deleted)
+  - Test 9b: Restored entity appears in results (Dana restored after deletion)
+  - Test 10: Deleted then updated entity remains excluded (Eve)
+  - Test 11: Empty query returns top ranked results
+  - Test 12: Unset properties functionality (validates unset_values in UpdateEntity)
+  - Test 13: Mixed set/unset + LWW behavior (validates Last-Writer-Wins semantics)
+  - Test 14: Include deleted flag returns soft-deleted entities
 - Provides color-coded pass/fail reporting
 - Exits with appropriate status codes for CI/CD integration
 

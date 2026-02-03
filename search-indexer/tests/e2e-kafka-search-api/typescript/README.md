@@ -16,14 +16,15 @@ npm run validate
 
 This validation script:
 - Imports actual types from `api/src/services/search/types.ts`
-- Runs 6 comprehensive validation tests
+- Runs 16 comprehensive validation tests
 - Validates entity counts, ordering, fields, and scores
+- Tests soft delete, restore, and include_deleted flag behavior
 - Provides color-coded test results
 - Exits with proper status codes for CI/CD
 
 ## Files
 
-- **validate-search.ts** - Main validation script (272 lines)
+- **validate-search.ts** - Main validation script
 - **package.json** - Node.js dependencies
 - **tsconfig.json** - TypeScript configuration
 - **TYPESCRIPT_VALIDATION.md** - Detailed documentation
@@ -36,6 +37,16 @@ This validation script:
 4. **Entity Fields** - Checks required fields (entityId, name, description, typeIds, scores)
 5. **Score Ordering** - Validates descending score order
 6. **Response Metadata** - Checks total count and execution time
+7. **Zero and Negative Scores** - Validates zero and negative score entities are returned
+8. **TypeIds Scenarios** - Validates type relation create/delete patterns
+9a. **Deleted Entity Not In Results** - Verifies soft-deleted Charlie is excluded
+9b. **Restored Entity In Results** - Verifies restored Dana appears in results
+10. **Deleted Then Updated Entity** - Verifies Eve remains deleted after post-delete update
+11. **Empty Query Top Ranked** - Validates empty query returns top-ranked results
+12. **Unset Properties** - Validates unset_properties functionality
+13. **LWW Behavior** - Validates Last-Writer-Wins semantics
+14. **Include Deleted Flag** - Verifies include_deleted returns soft-deleted entities
+15. **CreateEntity Op** - Verifies entity created via CreateEntity GRC-20 op is searchable
 
 ## Environment Variables
 
