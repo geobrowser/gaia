@@ -40,6 +40,8 @@ const TEST_ENTITIES = {
   UNSET_TEST_1_ID: '00000000-0000-0000-0000-000000001111',
   UNSET_TEST_2_ID: '00000000-0000-0000-0000-000000002222',
   LWW_TEST_ID: '00000000-0000-0000-0000-000000003333',
+  // Entity created via CreateEntity GRC-20 op
+  CREATE_ENTITY_TEST_ID: '00000000-0000-0000-0000-00000000ce01',
 };
 
 interface TestResult {
@@ -841,6 +843,53 @@ class SearchValidator {
     }
   }
 
+  /** Verifies entity created via CreateEntity GRC-20 op is searchable. */
+  async test15_CreateEntityOp(): Promise<void> {
+    console.log(`\n${BLUE}Test 15: Verify entity created via CreateEntity GRC-20 op${NC}`);
+
+    const response = await this.search({
+      query: 'CreateEntity Test',
+      scope: 'GLOBAL',
+    });
+
+    const entity = response.results.find(r => r.entityId === TEST_ENTITIES.CREATE_ENTITY_TEST_ID);
+
+    if (entity) {
+      this.addResult('test15_create_entity_found', true,
+        `CreateEntity test entity (${TEST_ENTITIES.CREATE_ENTITY_TEST_ID}) found in search results`);
+
+      // Verify name
+      if (entity.name === 'CreateEntity Test') {
+        this.addResult('test15_create_entity_name', true,
+          `CreateEntity test entity has correct name: 'CreateEntity Test'`);
+      } else {
+        this.addResult('test15_create_entity_name', false,
+          `CreateEntity test entity has wrong name: expected 'CreateEntity Test', got '${entity.name}'`);
+      }
+
+      // Verify description
+      if (entity.description === 'Entity created using the GRC-20 CreateEntity operation') {
+        this.addResult('test15_create_entity_description', true,
+          `CreateEntity test entity has correct description`);
+      } else {
+        this.addResult('test15_create_entity_description', false,
+          `CreateEntity test entity has wrong description: '${entity.description}'`);
+      }
+
+      // Verify avatar
+      if (entity.avatar === 'https://example.com/create-entity-avatar.png') {
+        this.addResult('test15_create_entity_avatar', true,
+          `CreateEntity test entity has correct avatar URL`);
+      } else {
+        this.addResult('test15_create_entity_avatar', false,
+          `CreateEntity test entity has wrong avatar: '${entity.avatar}'`);
+      }
+    } else {
+      this.addResult('test15_create_entity_found', false,
+        `CreateEntity test entity (${TEST_ENTITIES.CREATE_ENTITY_TEST_ID}) NOT found in search results`);
+    }
+  }
+
   printSummary() {
     console.log(`\n${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}`);
 
@@ -916,6 +965,7 @@ async function main() {
     await validator.test12_UnsetProperties();
     await validator.test13_LWWBehavior();
     await validator.test14_IncludeDeletedFlag();
+    await validator.test15_CreateEntityOp();
 
     const allPassed = validator.printSummary();
     process.exit(allPassed ? 0 : 1);

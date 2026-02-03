@@ -15,7 +15,7 @@ Instead of using bash/curl for API validation, we now use a type-safe TypeScript
 
 All TypeScript validation files are located in the `typescript/` subdirectory:
 
-- **validate-search.ts** - Main validation script with 14 comprehensive tests
+- **validate-search.ts** - Main validation script with 16 comprehensive tests
 - **package.json** - Node.js dependencies (tsx for TypeScript execution)
 - **tsconfig.json** - TypeScript configuration
 - **TYPESCRIPT_VALIDATION.md** - This documentation file
@@ -130,6 +130,10 @@ npx tsx validate-search.ts
 - Verifies `include_deleted` flag returns soft-deleted entities
 - Charlie appears with flag set, data preserved
 - Eve appears with flag set, tombstone dominance verified
+
+### Test 15: CreateEntity Op
+- Verifies entity created via CreateEntity GRC-20 operation is searchable
+- Checks name, description, and avatar are correctly indexed
 
 ## Type Safety Benefits
 

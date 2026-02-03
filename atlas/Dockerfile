@@ -15,6 +15,7 @@ WORKDIR /app
 # Copy only required crates (no workspace Cargo.toml - build standalone)
 COPY atlas ./atlas
 COPY hermes-instrumentation ./hermes-instrumentation
+COPY hermes-kafka ./hermes-kafka
 COPY hermes-relay ./hermes-relay
 COPY hermes-schema ./hermes-schema
 COPY hermes-substream ./hermes-substream

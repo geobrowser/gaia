@@ -16,7 +16,7 @@ npm run validate
 
 This validation script:
 - Imports actual types from `api/src/services/search/types.ts`
-- Runs 14 comprehensive validation tests
+- Runs 16 comprehensive validation tests
 - Validates entity counts, ordering, fields, and scores
 - Tests soft delete, restore, and include_deleted flag behavior
 - Provides color-coded test results
@@ -46,6 +46,7 @@ This validation script:
 12. **Unset Properties** - Validates unset_properties functionality
 13. **LWW Behavior** - Validates Last-Writer-Wins semantics
 14. **Include Deleted Flag** - Verifies include_deleted returns soft-deleted entities
+15. **CreateEntity Op** - Verifies entity created via CreateEntity GRC-20 op is searchable
 
 ## Environment Variables
 
