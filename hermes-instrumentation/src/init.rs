@@ -330,6 +330,7 @@ fn init_instrumentation(
         .unwrap_or(LevelFilter::INFO);
 
     if debug {
+        // Human-readable format for local development
         let fmt_layer = tracing_subscriber::fmt::layer()
             .with_target(true)
             .with_thread_ids(false)
@@ -343,10 +344,20 @@ fn init_instrumentation(
             .with(fmt_layer)
             .init();
     } else {
+        // JSON format for production (K8s) - includes trace context
+        let json_layer = tracing_subscriber::fmt::layer()
+            .json()
+            .with_current_span(true)
+            .with_span_list(false)
+            .flatten_event(true)
+            .with_file(false)
+            .with_line_number(false);
+
         tracing_subscriber::registry()
             .with(level)
             .with(telemetry_layer)
             .with(sentry_layer)
+            .with(json_layer)
             .init();
     }
 
