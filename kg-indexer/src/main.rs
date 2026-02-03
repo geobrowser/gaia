@@ -1097,8 +1097,8 @@ async fn process_block(
             KgMessage::ProposalExecuted(_) => event_span!("kg_indexer.handle_proposal_executed"),
             KgMessage::BlockSummary(_) => event_span!("kg_indexer.handle_block_summary"),
         };
-        let _event_guard = event_span.enter();
 
+        // Use instrument() instead of enter() for async code to properly track span across await points
         let ops = async {
             Ok::<usize, IndexerError>(match &event.msg {
                 KgMessage::Edit(edit) => {
@@ -1326,6 +1326,7 @@ async fn process_block(
                 KgMessage::BlockSummary(_) => 0,
             })
         }
+        .instrument(event_span.clone())
         .await
         .map_err(|e| {
             event_span.record("otel.status_code", "ERROR");
