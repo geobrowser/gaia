@@ -77,22 +77,56 @@ The official Arbitrum docs list 64 GB RAM as "recommended" - but that's for high
 
 | Traffic Level | RAM | CPU | Storage | Use Case |
 |---------------|-----|-----|---------|----------|
-| **Low** | 8 GB | 2 cores | 100-200 GB NVMe | Dev/testing, light internal use |
-| **Medium** | 16 GB | 4 cores | 200-500 GB NVMe | Production app backend, moderate RPC |
-| **High** | 32-64 GB | 8 cores | 500 GB+ NVMe | Heavy RPC traffic, multiple consumers |
+| **Low** | 8 GB | 2 cores | 200 GB NVMe | Dev/testing, light internal use |
+| **Medium** | 16 GB | 4 cores | 500 GB NVMe | Production app backend, moderate RPC |
+| **High** | 32-64 GB | 8 cores | 1 TB NVMe | Heavy RPC traffic, multiple consumers |
 
 **Key considerations:**
 - **Single-core performance matters most.** If node falls behind and one core is at 100%, upgrade to faster CPU (not more cores).
-- **Storage grows over time** with chain activity. Start with headroom.
+- **Storage grows over time** with chain activity. See storage analysis below.
 - **NVMe SSDs required** - spinning disks won't keep up.
 - **Network:** 100 Mbps minimum, 1 Gbps recommended for high traffic.
+
+### Storage Deep Dive
+
+Arbitrum Orbit chains have a **block gas limit of 32M** and produce blocks every **~250ms** (4 blocks/second), giving a theoretical max throughput of **128M gas/sec (~1,280 TPS)**.
+
+#### What a Full Node Stores
+
+| Component | Description |
+|-----------|-------------|
+| Block headers | Small, negligible |
+| Transaction data | Calldata for all txs |
+| State trie | Account balances, contract storage (pruned to recent) |
+| Receipts/logs | Event logs from contract execution |
+
+#### Storage Estimates by Chain Activity
+
+**Fully saturated** = running at max capacity (rare in practice)
+
+| Activity Level | % of Max | 1 Year (Pruned) | 1 Year (Archive) |
+|----------------|----------|-----------------|------------------|
+| **Light** | ~5% | 50-100 GB | 200-500 GB |
+| **Moderate** | ~25% | 150-400 GB | 1-3 TB |
+| **Heavy** | ~50% | 300-800 GB | 3-8 TB |
+| **Saturated** | 100% | 500 GB - 1.5 TB | 5-15 TB |
+
+**Reference:** Arbitrum One (heavily used L2, ~3 years old) has pruned snapshots of ~500-600 GB and archive snapshots of 2-4 TB - and it's typically at 10-30% capacity.
+
+#### Recommendations
+
+- **Full node (pruned):** Start with **500 GB - 1 TB** for a production L3
+- **Archive node:** Plan for **2-5 TB** and expect linear growth
+- **Monitor and expand:** Storage grows linearly with time and activity
+- Storage is cheap - when in doubt, overprovision
 
 ### Archive Node
 
 Same compute as full node, but significantly more storage:
-- Storage scales with full chain history
-- Plan for 500 GB - 2 TB+ depending on chain age and activity
-- Consider S3/cloud storage for cost efficiency on older data
+- Retains all historical state (no pruning)
+- Required for: historical trace calls, old state queries, block explorers
+- Plan for **2-5 TB** in year one, growing linearly
+- Consider tiered storage (fast NVMe for recent, slower/cheaper for old)
 
 ### Data Availability Server (DAS) - AnyTrust Only
 
