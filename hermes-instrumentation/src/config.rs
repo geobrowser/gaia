@@ -9,7 +9,7 @@ pub struct AxiomConfig {
     /// Axiom API token (from `AXIOM_TOKEN` env var).
     pub token: String,
 
-    /// Dataset name for traces (from `AXIOM_DATASET` env var, default: "hermes-pipeline").
+    /// Dataset name for traces (from `AXIOM_DATASET` env var, required when token is set).
     pub dataset: String,
 }
 
@@ -29,18 +29,21 @@ impl AxiomConfig {
     ///
     /// # Panics
     ///
-    /// Panics if `AXIOM_TOKEN` or `AXIOM_DATASET` is set but empty (configuration error).
+    /// Panics if:
+    /// - `AXIOM_TOKEN` is set but empty
+    /// - `AXIOM_TOKEN` is set but `AXIOM_DATASET` is not set or empty
     #[must_use]
     pub fn from_env() -> Option<Self> {
         let token = std::env::var("AXIOM_TOKEN").ok()?;
         if token.is_empty() {
             panic!("AXIOM_TOKEN is set but empty - this is a configuration error");
         }
-        let dataset =
-            std::env::var("AXIOM_DATASET").unwrap_or_else(|_| "hermes-pipeline".to_string());
-        if dataset.is_empty() {
-            panic!("AXIOM_DATASET is set but empty - this is a configuration error");
-        }
+        let dataset = std::env::var("AXIOM_DATASET").ok();
+        let dataset = match dataset {
+            Some(d) if !d.is_empty() => d,
+            Some(_) => panic!("AXIOM_DATASET is set but empty - this is a configuration error"),
+            None => panic!("AXIOM_TOKEN is set but AXIOM_DATASET is not - both are required"),
+        };
         Some(Self { token, dataset })
     }
 }

@@ -4,6 +4,7 @@ use std::time::{Duration, Instant};
 
 use futures::StreamExt;
 use hermes_instrumentation::{debug, error, info, info_span, warn, Instrument};
+use tracing::field::display;
 use hermes_schema::pb::blockchain_metadata::BlockchainMetadata;
 use hermes_schema::pb::space::hermes_space_trust_extension::Extension as TrustExtensionType;
 use rdkafka::message::Headers;
@@ -38,8 +39,6 @@ struct BlockBuffer {
     first_seen: HashMap<u64, Instant>,
     /// Block summaries keyed by block number.
     summaries: HashMap<u64, BlockSummaryInfo>,
-    /// Seen event IDs for deduplication (cleared when block is taken).
-    seen_event_ids: HashMap<u64, std::collections::HashSet<String>>,
     /// Timeout for waiting for is_last event.
     stale_timeout: Duration,
 }
@@ -50,7 +49,6 @@ impl BlockBuffer {
             events: HashMap::new(),
             first_seen: HashMap::new(),
             summaries: HashMap::new(),
-            seen_event_ids: HashMap::new(),
             stale_timeout,
         }
     }
@@ -1056,41 +1054,71 @@ async fn process_block(
     for event in &events {
         let event_id = event.event_id.as_deref().unwrap_or("");
 
-        // Create span with event-specific name for better trace readability
-        macro_rules! event_span {
-            ($name:expr) => {
-                info_span!(
-                    $name,
-                    event_id = event_id,
-                    // Context fields (recorded based on event type)
-                    edit_id = tracing::field::Empty,
-                    space_id = tracing::field::Empty,
-                    space_address = tracing::field::Empty,
-                    account = tracing::field::Empty,
-                    role = tracing::field::Empty,
-                    proposal_id = tracing::field::Empty,
-                    voter_id = tracing::field::Empty,
-                    parent_space_id = tracing::field::Empty,
-                    child_space_id = tracing::field::Empty,
-                    extension_type = tracing::field::Empty,
-                    // OTEL status
-                    "otel.status_code" = tracing::field::Empty,
-                    "otel.status_message" = tracing::field::Empty
-                )
-            };
-        }
-
+        // Create event-specific span with only the fields each event type needs
         let event_span = match &event.msg {
-            KgMessage::Edit(_) => event_span!("kg_indexer.handle_edit"),
-            KgMessage::CreateSpace(_) => event_span!("kg_indexer.handle_create_space"),
-            KgMessage::RoleGranted(_) => event_span!("kg_indexer.handle_role_granted"),
-            KgMessage::RoleRevoked(_) => event_span!("kg_indexer.handle_role_revoked"),
-            KgMessage::TrustExtension(_) => event_span!("kg_indexer.handle_trust_extension"),
-            KgMessage::ProposalCreated(_) => event_span!("kg_indexer.handle_proposal_created"),
-            KgMessage::ProposalUpdated(_) => event_span!("kg_indexer.handle_proposal_updated"),
-            KgMessage::ProposalVoted(_) => event_span!("kg_indexer.handle_proposal_voted"),
-            KgMessage::ProposalExecuted(_) => event_span!("kg_indexer.handle_proposal_executed"),
-            KgMessage::BlockSummary(_) => event_span!("kg_indexer.handle_block_summary"),
+            KgMessage::Edit(_) => info_span!(
+                "kg_indexer.handle_edit",
+                event_id = event_id,
+                edit_id = tracing::field::Empty,
+                space_id = tracing::field::Empty,
+                "otel.status_code" = tracing::field::Empty,
+                "otel.status_message" = tracing::field::Empty
+            ),
+            KgMessage::CreateSpace(_) => info_span!(
+                "kg_indexer.handle_create_space",
+                event_id = event_id,
+                space_id = tracing::field::Empty,
+                space_address = tracing::field::Empty,
+                "otel.status_code" = tracing::field::Empty,
+                "otel.status_message" = tracing::field::Empty
+            ),
+            KgMessage::RoleGranted(_) | KgMessage::RoleRevoked(_) => info_span!(
+                "kg_indexer.handle_role_change",
+                event_id = event_id,
+                space_id = tracing::field::Empty,
+                account = tracing::field::Empty,
+                role = tracing::field::Empty,
+                "otel.status_code" = tracing::field::Empty,
+                "otel.status_message" = tracing::field::Empty
+            ),
+            KgMessage::TrustExtension(_) => info_span!(
+                "kg_indexer.handle_trust_extension",
+                event_id = event_id,
+                extension_type = tracing::field::Empty,
+                parent_space_id = tracing::field::Empty,
+                child_space_id = tracing::field::Empty,
+                "otel.status_code" = tracing::field::Empty,
+                "otel.status_message" = tracing::field::Empty
+            ),
+            KgMessage::ProposalCreated(_) | KgMessage::ProposalUpdated(_) => info_span!(
+                "kg_indexer.handle_proposal",
+                event_id = event_id,
+                proposal_id = tracing::field::Empty,
+                space_id = tracing::field::Empty,
+                "otel.status_code" = tracing::field::Empty,
+                "otel.status_message" = tracing::field::Empty
+            ),
+            KgMessage::ProposalVoted(_) => info_span!(
+                "kg_indexer.handle_proposal_voted",
+                event_id = event_id,
+                proposal_id = tracing::field::Empty,
+                voter_id = tracing::field::Empty,
+                "otel.status_code" = tracing::field::Empty,
+                "otel.status_message" = tracing::field::Empty
+            ),
+            KgMessage::ProposalExecuted(_) => info_span!(
+                "kg_indexer.handle_proposal_executed",
+                event_id = event_id,
+                proposal_id = tracing::field::Empty,
+                "otel.status_code" = tracing::field::Empty,
+                "otel.status_message" = tracing::field::Empty
+            ),
+            KgMessage::BlockSummary(_) => info_span!(
+                "kg_indexer.handle_block_summary",
+                event_id = event_id,
+                "otel.status_code" = tracing::field::Empty,
+                "otel.status_message" = tracing::field::Empty
+            ),
         };
 
         // Use instrument() instead of enter() for async code to properly track span across await points
@@ -1100,9 +1128,9 @@ async fn process_block(
                     let result = handlers::edits::handle_edit(edit)?;
 
                     // Record trace context
-                    event_span.record("edit_id", result.edit_id.to_string().as_str());
+                    event_span.record("edit_id", display(result.edit_id));
                     if let Ok(space_id) = uuid::Uuid::from_slice(&edit.space_id) {
-                        event_span.record("space_id", space_id.to_string().as_str());
+                        event_span.record("space_id", display(space_id));
                     }
 
                     // Keep copies for versioned writes before partitioning
@@ -1186,7 +1214,7 @@ async fn process_block(
                     let space_item = handlers::spaces::handle_create_space(space)?;
 
                     // Record trace context
-                    event_span.record("space_id", space_item.id.to_string().as_str());
+                    event_span.record("space_id", display(space_item.id));
                     event_span.record("space_address", space_item.address.as_str());
 
                     storage.insert_spaces(&[space_item], &mut tx).await?;
@@ -1195,10 +1223,10 @@ async fn process_block(
                 KgMessage::RoleGranted(role_event) => {
                     // Record trace context
                     if let Ok(space_id) = uuid::Uuid::from_slice(&role_event.space_id) {
-                        event_span.record("space_id", space_id.to_string().as_str());
+                        event_span.record("space_id", display(space_id));
                     }
                     if let Ok(member_id) = uuid::Uuid::from_slice(&role_event.member_space_id) {
-                        event_span.record("account", member_id.to_string().as_str());
+                        event_span.record("account", display(member_id));
                     }
                     if let Ok(role) = hermes_schema::pb::membership::MembershipRole::try_from(role_event.role) {
                         event_span.record("role", role.as_str_name());
@@ -1218,10 +1246,10 @@ async fn process_block(
                 KgMessage::RoleRevoked(role_event) => {
                     // Record trace context
                     if let Ok(space_id) = uuid::Uuid::from_slice(&role_event.space_id) {
-                        event_span.record("space_id", space_id.to_string().as_str());
+                        event_span.record("space_id", display(space_id));
                     }
                     if let Ok(member_id) = uuid::Uuid::from_slice(&role_event.member_space_id) {
-                        event_span.record("account", member_id.to_string().as_str());
+                        event_span.record("account", display(member_id));
                     }
                     if let Ok(role) = hermes_schema::pb::membership::MembershipRole::try_from(role_event.role) {
                         event_span.record("role", role.as_str_name());
@@ -1250,8 +1278,8 @@ async fn process_block(
 
                     if let Some(subspace) = handlers::subspaces::handle_trust_extension(trust_event)?
                     {
-                        event_span.record("parent_space_id", subspace.parent_space_id.to_string().as_str());
-                        event_span.record("child_space_id", subspace.subspace_id.to_string().as_str());
+                        event_span.record("parent_space_id", display(subspace.parent_space_id));
+                        event_span.record("child_space_id", display(subspace.subspace_id));
                         storage.insert_subspaces(&[subspace], &mut tx).await?;
                         1
                     } else {
@@ -1262,8 +1290,8 @@ async fn process_block(
                     let result = handlers::governance::handle_proposal_created(proposal_event)?;
 
                     // Record trace context
-                    event_span.record("proposal_id", result.proposal.id.to_string().as_str());
-                    event_span.record("space_id", result.proposal.space_id.to_string().as_str());
+                    event_span.record("proposal_id", display(result.proposal.id));
+                    event_span.record("space_id", display(result.proposal.space_id));
 
                     storage
                         .insert_proposals(&[result.proposal], &mut tx)
@@ -1279,8 +1307,8 @@ async fn process_block(
                     let result = handlers::governance::handle_proposal_updated(proposal_event)?;
 
                     // Record trace context
-                    event_span.record("proposal_id", result.proposal.id.to_string().as_str());
-                    event_span.record("space_id", result.proposal.space_id.to_string().as_str());
+                    event_span.record("proposal_id", display(result.proposal.id));
+                    event_span.record("space_id", display(result.proposal.space_id));
 
                     storage.update_proposal(&result.proposal, &mut tx).await?;
                     storage
@@ -1297,8 +1325,8 @@ async fn process_block(
                     let vote = handlers::governance::handle_proposal_voted(vote_event)?;
 
                     // Record trace context
-                    event_span.record("proposal_id", vote.proposal_id.to_string().as_str());
-                    event_span.record("voter_id", vote.voter_id.to_string().as_str());
+                    event_span.record("proposal_id", display(vote.proposal_id));
+                    event_span.record("voter_id", display(vote.voter_id));
 
                     storage.insert_proposal_votes(&[vote], &mut tx).await?;
                     1
@@ -1307,7 +1335,7 @@ async fn process_block(
                     let execution = handlers::governance::handle_proposal_executed(exec_event)?;
 
                     // Record trace context
-                    event_span.record("proposal_id", execution.proposal_id.to_string().as_str());
+                    event_span.record("proposal_id", display(execution.proposal_id));
 
                     storage
                         .update_proposal_executed(

@@ -1,10 +1,11 @@
 //! Telemetry initialization.
 
 use std::collections::HashMap;
+use std::time::Duration;
 
 use crate::config::{AxiomConfig, Backend, Config};
 use opentelemetry_otlp::{SpanExporter, WithExportConfig, WithHttpConfig};
-use opentelemetry_sdk::trace::SdkTracerProvider;
+use opentelemetry_sdk::trace::{BatchConfigBuilder, BatchSpanProcessor, SdkTracerProvider};
 use tracing_subscriber::filter::LevelFilter;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
@@ -281,9 +282,14 @@ fn init_instrumentation(
         );
         headers.insert("X-Axiom-Dataset".to_string(), axiom_config.dataset.clone());
 
-        // Use blocking reqwest client - the batch exporter runs on a dedicated thread
-        // outside the Tokio runtime, so we need a blocking client
-        let http_client = reqwest::blocking::Client::new();
+        // Use blocking reqwest client with explicit timeouts - the batch exporter runs on
+        // a dedicated thread outside the Tokio runtime, so we need a blocking client
+        let http_client = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(10))
+            .connect_timeout(Duration::from_secs(5))
+            .pool_max_idle_per_host(2)
+            .build()
+            .map_err(|e| Error::OpenTelemetry(format!("Failed to build HTTP client: {}", e)))?;
 
         let axiom_exporter = SpanExporter::builder()
             .with_http()
@@ -293,11 +299,22 @@ fn init_instrumentation(
             .build()
             .map_err(|e| Error::OpenTelemetry(format!("Failed to create Axiom exporter: {}", e)))?;
 
-        provider_builder = provider_builder.with_batch_exporter(axiom_exporter);
-        eprintln!(
-            "Axiom OTLP exporter created: dataset={}",
-            axiom_config.dataset
-        );
+        // Configure batch exporter with explicit settings for high-volume workloads:
+        // - Larger queue to handle bursts (4x default)
+        // - Larger batches for fewer HTTP calls
+        // - More frequent exports to reduce memory pressure
+        // Note: Export timeout is controlled by the HTTP client (10s) configured above
+        let batch_config = BatchConfigBuilder::default()
+            .with_max_queue_size(8192)
+            .with_max_export_batch_size(1024)
+            .with_scheduled_delay(Duration::from_millis(1000))
+            .build();
+
+        let batch_processor = BatchSpanProcessor::builder(axiom_exporter)
+            .with_batch_config(batch_config)
+            .build();
+
+        provider_builder = provider_builder.with_span_processor(batch_processor);
     }
 
     let provider = provider_builder.build();

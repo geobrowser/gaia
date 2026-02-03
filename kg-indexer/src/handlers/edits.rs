@@ -9,7 +9,7 @@ use grc_20::{
     UnsetRelationField, Value as Grc20Value,
 };
 use hermes_schema::pb::knowledge::HermesEdit;
-use tracing::info_span;
+use tracing::{debug_span, warn};
 use uuid::Uuid;
 
 use crate::error::HandlerError;
@@ -58,11 +58,21 @@ impl EditMetadata {
 /// owned strings; for uncompressed, it borrows from the input.
 fn decode_payload(payload: &[u8]) -> Result<Grc20Edit<'_>, HandlerError> {
     if payload.is_empty() {
+        warn!("decode_payload called with empty payload");
         return Err(HandlerError::DecodeError("Empty payload".to_string()));
     }
 
-    decode_edit(payload)
-        .map_err(|e| HandlerError::DecodeError(format!("GRC-20 decode error: {:?}", e)))
+    decode_edit(payload).map_err(|e| {
+        // Log with context to help debug decode failures
+        let first_bytes = &payload[..payload.len().min(32)];
+        warn!(
+            payload_size = payload.len(),
+            first_bytes = ?first_bytes,
+            error = ?e,
+            "GRC-20 decode failed"
+        );
+        HandlerError::DecodeError(format!("GRC-20 decode error: {:?}", e))
+    })
 }
 
 /// Convert a grc_20::Id (16 bytes) to a Uuid
@@ -89,16 +99,17 @@ pub fn handle_edit(edit: &HermesEdit) -> Result<EditResult, HandlerError> {
     let space_id = parse_space_id(edit.space_id.as_slice())?;
     let meta = EditMetadata::from_edit(edit);
 
-    // Decode the v2 payload bytes
+    // Decode the v2 payload bytes (DEBUG level - only visible when RUST_LOG=debug)
     let grc20_edit = {
         let _span =
-            info_span!("kg_indexer.decode_grc20", payload_size = edit.payload.len()).entered();
+            debug_span!("kg_indexer.decode_grc20", payload_size = edit.payload.len()).entered();
         decode_payload(&edit.payload)?
     };
 
-    // Extract all data from the decoded edit
+    // Extract all data from the decoded edit (DEBUG level)
     let (entities, value_ops, relation_ops) = {
-        let _span = info_span!("kg_indexer.extract_ops", op_count = grc20_edit.ops.len()).entered();
+        let _span =
+            debug_span!("kg_indexer.extract_ops", op_count = grc20_edit.ops.len()).entered();
         let entities = extract_entities(&grc20_edit, &space_id, &meta);
         let value_ops = extract_values(&grc20_edit, &space_id);
         let relation_ops = extract_relations(&grc20_edit, &space_id);
