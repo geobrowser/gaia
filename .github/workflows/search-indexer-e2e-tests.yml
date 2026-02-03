@@ -73,7 +73,7 @@ jobs:
         env:
           discovery.type: single-node
           plugins.security.disabled: "true"
-          OPENSEARCH_INITIAL_ADMIN_PASSWORD: Admin123!
+          OPENSEARCH_INITIAL_ADMIN_PASSWORD: E2eTest@SecurePass789!
         options: >-
           --health-cmd "curl -s http://localhost:9200/_cluster/health || exit 1"
           --health-interval 10s
