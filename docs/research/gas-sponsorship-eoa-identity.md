@@ -319,6 +319,199 @@ For apps you **don't control** (external dApps, games, DeFi protocols), users ha
 
 **There is no way for external apps to directly access an embedded wallet** - this is by design (non-custodial). The user must either export their key or explicitly grant access via an auth flow.
 
+### Scoped Permissions for 3rd Party Signers
+
+When granting wallet access to external apps or services, you can constrain what actions they're allowed to perform. This prevents a compromised or malicious 3rd party from draining funds or calling arbitrary contracts.
+
+#### Permission Types
+
+| Permission Type | Description | Use Case |
+| --------------- | ----------- | -------- |
+| **Contract allowlist** | Only interact with specific contract addresses | Gaming: only your game contracts |
+| **Function allowlist** | Only call specific functions on allowed contracts | DeFi: only `stake()` and `unstake()`, not `transfer()` |
+| **Transfer limits** | Cap value per transaction or per time period | Spending: max 0.1 ETH per day |
+| **Time bounds** | Session expires after duration | Temporary access: 1-hour gaming session |
+| **Native transfer restrictions** | Block or limit ETH/native token transfers | Prevent fund extraction |
+
+#### Privy: Scoped Signers
+
+Privy uses "Signers" with policy objects to scope permissions:
+
+```typescript
+import { useSignerSessions } from "@privy-io/react-auth";
+
+const { createSignerSession } = useSignerSessions();
+
+// Grant a 3rd party signer with scoped permissions
+const session = await createSignerSession({
+  // The 3rd party's public key (they generate this)
+  signerPublicKey: "0x04abc123...",
+  
+  policy: {
+    // Only these contracts can be called
+    allowedContracts: [
+      "0x1234...GameContract",
+      "0x5678...InventoryContract",
+    ],
+    
+    // Only these methods on allowed contracts
+    allowedMethods: ["mint", "transfer", "equip"],
+    
+    // Max value per transaction (in wei)
+    maxTransactionValue: "100000000000000000", // 0.1 ETH
+    
+    // Daily spending limit (in wei)  
+    dailySpendingLimit: "500000000000000000", // 0.5 ETH
+    
+    // Session expiration
+    expiresAt: Date.now() + (24 * 60 * 60 * 1000), // 24 hours
+    
+    // Block native token transfers entirely
+    allowNativeTransfers: false,
+  },
+});
+
+// Return session.id to the 3rd party - they use this to sign
+console.log("Session granted:", session.id);
+```
+
+The 3rd party then uses the session to sign transactions within the allowed scope:
+
+```typescript
+// 3rd party server code
+import { PrivyClient } from "@privy-io/node";
+
+const privy = new PrivyClient({ appId, appSecret });
+
+// This will succeed - calling allowed contract + method
+await privy.wallets().ethereum().sendTransaction(walletId, {
+  params: {
+    transaction: {
+      to: "0x1234...GameContract",
+      data: encodeFunctionData({ abi: gameAbi, functionName: "mint", args: [tokenId] }),
+    },
+  },
+  signer_session_id: sessionId,
+});
+
+// This will FAIL - contract not in allowlist
+await privy.wallets().ethereum().sendTransaction(walletId, {
+  params: {
+    transaction: {
+      to: "0xAAAA...SomeOtherContract", // Not allowed!
+      data: "...",
+    },
+  },
+  signer_session_id: sessionId,
+});
+```
+
+#### Openfort: EIP-7715 Permissions
+
+Openfort implements the [EIP-7715 standard](https://eips.ethereum.org/EIPS/eip-7715) for wallet permissions:
+
+```typescript
+import { useGrantPermissions, useOpenfort } from "@openfort/react";
+
+const { grantPermissions } = useGrantPermissions();
+
+// Grant scoped permissions to a 3rd party
+const permissionContext = await grantPermissions({
+  // Expiration timestamp (Unix seconds)
+  expiry: Math.floor(Date.now() / 1000) + (24 * 60 * 60), // 24 hours
+  
+  // The 3rd party's signer address
+  signer: {
+    type: "account",
+    data: { id: "0xThirdPartySignerAddress" },
+  },
+  
+  permissions: [
+    // Permission 1: Call specific functions on a game contract
+    {
+      type: "contract-call",
+      data: {
+        address: "0x1234...GameContract",
+        // Only these functions
+        calls: [
+          { function: "mint(uint256)" },
+          { function: "transfer(address,uint256)" },
+          { function: "equip(uint256,uint256)" },
+        ],
+      },
+    },
+    
+    // Permission 2: Interact with inventory contract
+    {
+      type: "contract-call", 
+      data: {
+        address: "0x5678...InventoryContract",
+        calls: [
+          { function: "craft(uint256[])" },
+        ],
+      },
+    },
+    
+    // Permission 3: Spending limit for native transfers
+    {
+      type: "native-token-transfer",
+      data: {
+        allowance: "100000000000000000", // 0.1 ETH max
+      },
+    },
+  ],
+});
+
+// Return permissionContext to the 3rd party
+console.log("Permission context:", permissionContext);
+```
+
+The 3rd party uses the permission context to send transactions:
+
+```typescript
+// 3rd party server code
+import Openfort from "@openfort/openfort-node";
+
+const openfort = new Openfort(secretKey);
+
+// Send a transaction using the granted permissions
+await openfort.transactions.create({
+  account: userAccountId,
+  permissionContext: permissionContext,
+  interactions: [
+    {
+      contract: "0x1234...GameContract",
+      functionName: "mint",
+      args: [tokenId],
+    },
+  ],
+});
+```
+
+#### Comparison
+
+| Capability | Privy | Openfort |
+| ---------- | ----- | -------- |
+| **Contract allowlist** | ✅ `allowedContracts` | ✅ `contract-call` permission |
+| **Function allowlist** | ✅ `allowedMethods` | ✅ `calls` array with function signatures |
+| **Per-tx value limit** | ✅ `maxTransactionValue` | ✅ Via `native-token-transfer` allowance |
+| **Daily/periodic limits** | ✅ `dailySpendingLimit` | ⚠️ Via policy rules |
+| **Time expiration** | ✅ `expiresAt` | ✅ `expiry` |
+| **Revocation** | ✅ `revokeSignerSession()` | ✅ `revokePermissions()` |
+| **Standard** | Proprietary | EIP-7715 |
+
+#### Security Considerations
+
+1. **Principle of least privilege**: Grant only the minimum permissions needed. If a 3rd party only needs to mint NFTs, don't allow transfers.
+
+2. **Short expiration times**: Use the shortest practical session duration. A 1-hour gaming session is safer than a 30-day session.
+
+3. **Monitor usage**: Both providers offer dashboards and APIs to monitor signer activity. Set up alerts for unusual patterns.
+
+4. **Revocation flow**: Build a UI for users to view and revoke active sessions. Users should be able to cut off access immediately.
+
+5. **Audit 3rd parties**: Even with scoped permissions, only grant access to apps you trust. A malicious app could still abuse allowed actions.
+
 ### Your Own Server / CLI Access
 
 The problem arises when you need to access an embedded wallet **outside a client environment** - like a CLI tool or server script.
@@ -487,6 +680,7 @@ For migrations to Openfort, plan for users to transfer assets from old wallets t
 - [Gas Sponsorship](https://docs.privy.io/wallets/gas-and-asset-management/gas/overview)
 - [Server Wallets](https://docs.privy.io/wallets/wallets/create/create-a-wallet)
 - [Signers](https://docs.privy.io/wallets/using-wallets/signers/overview)
+- [Signer Policies](https://docs.privy.io/wallets/using-wallets/signers/policies)
 - [Custom Auth (JWT)](https://docs.privy.io/authentication/user-authentication/jwt-based-auth/overview)
 - [Access Tokens](https://docs.privy.io/authentication/user-authentication/access-tokens)
 - [Whitelabel](https://docs.privy.io/recipes/react/whitelabel)
@@ -496,6 +690,7 @@ For migrations to Openfort, plan for users to transfer assets from old wallets t
 - [7702 Wallets](https://www.openfort.io/docs/products/embedded-wallet/javascript/wallets)
 - [Backend Wallets](https://www.openfort.io/docs/products/server)
 - [Session Keys](https://www.openfort.io/docs/products/embedded-wallet/react/wallet/session-keys)
+- [EIP-7715 Permissions](https://www.openfort.io/docs/products/embedded-wallet/react/wallet/permissions)
 - [Shield (Key Splitting)](https://github.com/openfort-xyz/shield)
 - [Custom Auth](https://www.openfort.io/docs/configuration/custom-auth/auth-token)
 - [Self-Hosted (OpenSigner)](https://www.opensigner.dev)
