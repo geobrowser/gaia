@@ -413,7 +413,7 @@ fn encode_proposal_data(
     voting_mode: VotingMode,
     actions: &[ProposalAction],
 ) -> Vec<u8> {
-    use ethabi::{Token, ethereum_types::U256 as EthU256};
+    use ethabi::{ethereum_types::U256 as EthU256, Token};
 
     // Convert actions to ethabi tokens
     let action_tokens: Vec<Token> = actions
@@ -1179,11 +1179,12 @@ pub mod test_topology {
         actions.push(member_removed(SPACE_A, make_id(0x12)));
 
         // Proposal 3: Add editor
+        // Note: Using 0x50 to avoid collision with SPACE_Z (0x22) which is in the non-canonical island
         actions.push(proposal_created(
             SPACE_B,
             PROPOSAL_3,
             VotingMode::Fast,
-            vec![ProposalAction::add_editor(make_id(0x22))],
+            vec![ProposalAction::add_editor(make_id(0x50))],
         ));
         actions.push(proposal_settings_selected(
             SPACE_B,
@@ -1213,14 +1214,15 @@ pub mod test_topology {
             VoteOption::Abstain,
         ));
         actions.push(proposal_executed(SPACE_B, PROPOSAL_3));
-        actions.push(editor_added(SPACE_B, make_id(0x22)));
+        actions.push(editor_added(SPACE_B, make_id(0x50)));
 
         // Proposal 4: Remove editor
+        // Note: Using 0x51 to avoid collision with SPACE_W (0x23) which is in the non-canonical island
         actions.push(proposal_created(
             SPACE_B,
             PROPOSAL_4,
             VotingMode::Slow,
-            vec![ProposalAction::remove_editor(make_id(0x23))],
+            vec![ProposalAction::remove_editor(make_id(0x51))],
         ));
         actions.push(proposal_settings_selected(
             SPACE_B,
@@ -1251,7 +1253,7 @@ pub mod test_topology {
             VoteOption::Yes,
         ));
         actions.push(proposal_executed(SPACE_B, PROPOSAL_4));
-        actions.push(editor_removed(SPACE_B, make_id(0x23)));
+        actions.push(editor_removed(SPACE_B, make_id(0x51)));
 
         // Proposal 5: Flag content
         let mut flag_target = [0u8; 32];
