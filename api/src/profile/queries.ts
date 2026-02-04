@@ -18,7 +18,7 @@ import {ContentIds, SystemIds} from "@graphprotocol/grc-20"
 import {sql} from "drizzle-orm"
 import type {NodePgDatabase} from "drizzle-orm/node-postgres"
 import {Data, Effect} from "effect"
-
+import {normalizeUuid} from "../utils/uuid"
 import type {Profile} from "./types"
 
 /**
@@ -50,10 +50,11 @@ type RawProfileRow = {
 
 /**
  * Map a database row to a Profile.
+ * Normalizes space_id to undashed format for consistent API responses.
  */
 function mapProfileRow(row: RawProfileRow): Profile {
 	return {
-		spaceId: row.space_id,
+		spaceId: normalizeUuid(row.space_id),
 		name: row.entity_name,
 		avatarUrl: row.avatar_url,
 		address: row.space_address,
@@ -212,10 +213,10 @@ export function getProfilesBySpaceIds(
 				WHERE s.id = ANY(ARRAY[${spaceIdParams}])
 			`)
 
-			// Build map for O(1) lookup
+			// Build map for O(1) lookup (keyed by undashed UUID for consistent lookups)
 			const profileMap = new Map<string, Profile>()
 			for (const row of result.rows) {
-				profileMap.set(row.space_id, mapProfileRow(row))
+				profileMap.set(normalizeUuid(row.space_id), mapProfileRow(row))
 			}
 
 			return profileMap
