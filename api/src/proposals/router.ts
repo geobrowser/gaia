@@ -24,10 +24,10 @@ import {computeProposalStatus, getCurrentTimeSeconds} from "./status"
 import {
 	type ActionResponse,
 	PROPOSAL_ACTION_TYPES,
+	PROPOSAL_STATUSES,
 	type ProposalActionType,
 	type ProposalStatus,
 	type ProposalStatusResponse,
-	PROPOSAL_STATUSES,
 	type ProposalWithVotes,
 	RATIO_BASE,
 	type Vote,
