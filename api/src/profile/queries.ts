@@ -72,9 +72,14 @@ export function defaultProfile(address: string, spaceId?: string): Profile {
 	}
 }
 
+// SystemIds for finding space front page entity
+const TYPES_RELATION = "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
+const SPACE_TYPE = "362c1dbd-dc64-44bb-a3c4-652f38a642d7"
+
 /**
  * SQL fragment for selecting profile fields from a space.
- * All lookups are constrained to the profile's own space to avoid cross-space data leakage.
+ * Finds the front page entity (entity with Types relation to SPACE_TYPE),
+ * then gets name and avatar from that entity.
  */
 function profileSelectFields() {
 	return sql`
@@ -83,7 +88,14 @@ function profileSelectFields() {
 		(
 			SELECT v.text
 			FROM "values" v
-			WHERE v.entity_id = s.id
+			WHERE v.entity_id = (
+				SELECT r.from_entity_id
+				FROM relations r
+				WHERE r.space_id = s.id
+				  AND r.type_id = ${TYPES_RELATION}::uuid
+				  AND r.to_entity_id = ${SPACE_TYPE}::uuid
+				LIMIT 1
+			)
 			  AND v.property_id = ${NAME_PROPERTY}::uuid
 			  AND v.space_id = s.id
 			LIMIT 1
@@ -94,7 +106,14 @@ function profileSelectFields() {
 			JOIN "values" img_val ON img_val.entity_id = r.to_entity_id
 			  AND img_val.property_id = ${IMAGE_URL_PROPERTY}::uuid
 			  AND img_val.space_id = s.id
-			WHERE r.from_entity_id = s.id
+			WHERE r.from_entity_id = (
+				SELECT r2.from_entity_id
+				FROM relations r2
+				WHERE r2.space_id = s.id
+				  AND r2.type_id = ${TYPES_RELATION}::uuid
+				  AND r2.to_entity_id = ${SPACE_TYPE}::uuid
+				LIMIT 1
+			)
 			  AND r.type_id = ${AVATAR_PROPERTY}::uuid
 			  AND r.space_id = s.id
 			LIMIT 1
