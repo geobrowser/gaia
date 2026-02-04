@@ -10,7 +10,7 @@
  *
  * Profiles are derived from personal spaces - each user's wallet address
  * is mapped to a personal space, and the space's entity contains the
- * profile data (name, avatar, cover).
+ * profile data (name, avatar).
  */
 export type Profile = {
 	/** The user's personal space ID */
@@ -19,10 +19,6 @@ export type Profile = {
 	name: string | null
 	/** Avatar image URL from the AVATAR_PROPERTY relation */
 	avatarUrl: string | null
-	/** Cover image URL from the COVER_PROPERTY relation */
-	coverUrl: string | null
 	/** The user's wallet address (0x prefixed) */
 	address: string
-	/** Link to the user's space */
-	profileLink: string
 }

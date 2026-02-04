@@ -3,7 +3,7 @@
  *
  * Profiles are derived from personal spaces:
  * 1. Look up the space by wallet address or space ID
- * 2. Fetch the space entity's name (from values) and avatar/cover (from relations)
+ * 2. Fetch the space entity's name (from values) and avatar (from relations)
  *
  * Uses raw SQL for complex correlated subqueries that would be inefficient
  * or verbose with the ORM query builder.
@@ -35,7 +35,6 @@ type Database = NodePgDatabase<Record<string, unknown>>
 
 // GRC-20 system property IDs
 const NAME_PROPERTY = SystemIds.NAME_PROPERTY
-const COVER_PROPERTY = SystemIds.COVER_PROPERTY
 const AVATAR_PROPERTY = ContentIds.AVATAR_PROPERTY
 const IMAGE_URL_PROPERTY = SystemIds.IMAGE_URL_PROPERTY
 
@@ -47,7 +46,6 @@ type RawProfileRow = {
 	space_address: string
 	entity_name: string | null
 	avatar_url: string | null
-	cover_url: string | null
 }
 
 /**
@@ -58,9 +56,7 @@ function mapProfileRow(row: RawProfileRow): Profile {
 		spaceId: row.space_id,
 		name: row.entity_name,
 		avatarUrl: row.avatar_url,
-		coverUrl: row.cover_url,
 		address: row.space_address,
-		profileLink: `/space/${row.space_id}`,
 	}
 }
 
@@ -72,9 +68,7 @@ export function defaultProfile(address: string, spaceId?: string): Profile {
 		spaceId: spaceId ?? address,
 		name: null,
 		avatarUrl: null,
-		coverUrl: null,
 		address,
-		profileLink: spaceId ? `/space/${spaceId}` : "",
 	}
 }
 
@@ -109,20 +103,7 @@ function profileSelectFields() {
 			  AND r.space_id = s.id
 			ORDER BY r.id
 			LIMIT 1
-		) AS avatar_url,
-		-- Get cover URL from relations (constrain by space_id for data integrity)
-		(
-			SELECT img_val.text
-			FROM relations r
-			JOIN "values" img_val ON img_val.entity_id = r.to_entity_id
-			  AND img_val.property_id = ${IMAGE_URL_PROPERTY}::uuid
-			  AND img_val.space_id = COALESCE(r.to_space_id, s.id)
-			WHERE r.from_entity_id = s.id
-			  AND r.type_id = ${COVER_PROPERTY}::uuid
-			  AND r.space_id = s.id
-			ORDER BY r.id
-			LIMIT 1
-		) AS cover_url
+		) AS avatar_url
 	`
 }
 
@@ -130,7 +111,7 @@ function profileSelectFields() {
  * Fetch a profile by wallet address.
  *
  * Looks up the user's personal space by address, then fetches the space entity's
- * name, avatar, and cover.
+ * name and avatar.
  */
 export function getProfileByAddress(db: Database, address: string): Effect.Effect<Profile | null, QueryError> {
 	return Effect.tryPromise({
@@ -161,7 +142,7 @@ export function getProfileByAddress(db: Database, address: string): Effect.Effec
 /**
  * Fetch a profile by space ID.
  *
- * Directly looks up the space and fetches its entity's name, avatar, and cover.
+ * Directly looks up the space and fetches its entity's name and avatar.
  */
 export function getProfileBySpaceId(db: Database, spaceId: string): Effect.Effect<Profile | null, QueryError> {
 	return Effect.tryPromise({

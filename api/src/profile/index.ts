@@ -3,7 +3,7 @@
  *
  * Provides HTTP endpoints for fetching user profiles from the Knowledge Graph.
  * Profiles are derived from personal spaces - each user's wallet address maps
- * to a personal space whose entity contains profile data (name, avatar, cover).
+ * to a personal space whose entity contains profile data (name, avatar).
  */
 
 import type {NodePgDatabase} from "drizzle-orm/node-postgres"

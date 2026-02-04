@@ -456,21 +456,12 @@ app.get(
 								nullable: true,
 								description: "Avatar image URL from the AVATAR_PROPERTY relation",
 							},
-							coverUrl: {
-								type: "string",
-								nullable: true,
-								description: "Cover image URL from the COVER_PROPERTY relation",
-							},
 							address: {
 								type: "string",
 								description: "The user's wallet address (0x prefixed)",
 							},
-							profileLink: {
-								type: "string",
-								description: "Link to the user's space",
-							},
 						},
-						required: ["spaceId", "address", "profileLink"],
+						required: ["spaceId", "address"],
 					},
 					// Value types
 					VersionedValue: {
