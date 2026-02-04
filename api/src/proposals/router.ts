@@ -20,10 +20,13 @@ import { computeProposalStatus, getCurrentTimeSeconds } from "./status";
 import {
   PROPOSAL_ACTION_TYPES,
   RATIO_BASE,
+  type ActionResponse,
   type ProposalActionType,
   type ProposalListResponse,
   type ProposalStatusResponse,
   type ProposalWithVotes,
+  type VoteOption,
+  type VoteResponse,
 } from "./types";
 
 type Database = NodePgDatabase<Record<string, unknown>>;
@@ -46,11 +49,25 @@ type ProposalStatusError = ValidationError | NotFoundError | QueryError;
 type ProposalListError = ValidationError | QueryError;
 
 /**
+ * Converts an action type to SCREAMING_CASE for API response.
+ * e.g., "AddMember" -> "ADD_MEMBER"
+ */
+function actionTypeToScreamingCase(actionType: string): string {
+  // Insert underscore before uppercase letters (except at start), then uppercase all
+  return actionType.replace(/([a-z])([A-Z])/g, "$1_$2").toUpperCase();
+}
+
+/**
  * Builds a ProposalStatusResponse from a proposal and current time.
+ *
+ * @param proposal - The proposal with vote counts, votes, and actions
+ * @param nowSeconds - Current time in seconds
+ * @param voterId - Optional voter ID to find user's vote
  */
 function buildProposalResponse(
   proposal: ProposalWithVotes,
   nowSeconds: bigint,
+  voterId?: string,
 ): ProposalStatusResponse {
   const { status, isQuorumReached, isThresholdReached } = computeProposalStatus(
     proposal,
@@ -99,18 +116,45 @@ function buildProposalResponse(
     }
   }
 
+  // Build voters list for response
+  const voters: VoteResponse[] = proposal.votes.map((v) => ({
+    voterId: normalizeUuid(v.voterId),
+    vote: v.vote,
+  }));
+
+  // Find user's vote if voterId provided
+  let userVote: VoteOption | null = null;
+  if (voterId) {
+    const normalizedVoterId = normalizeUuid(voterId);
+    const userVoteRecord = proposal.votes.find(
+      (v) => normalizeUuid(v.voterId) === normalizedVoterId,
+    );
+    userVote = userVoteRecord?.vote ?? null;
+  }
+
+  // Build actions list for response
+  const actions: ActionResponse[] = proposal.actions.map((a) => ({
+    actionType: actionTypeToScreamingCase(a.actionType),
+    targetId: a.targetId ? normalizeUuid(a.targetId) : null,
+    contentUri: a.contentUri,
+  }));
+
   return {
     proposalId: normalizeUuid(proposal.id),
     spaceId: normalizeUuid(proposal.spaceId),
     name: proposal.name,
+    proposedBy: normalizeUuid(proposal.proposedBy),
     status,
     votingMode: proposal.votingMode.toUpperCase() as "FAST" | "SLOW",
+    actions,
     votes: {
       yes: Number(proposal.yesCount),
       no: Number(proposal.noCount),
       abstain: Number(proposal.abstainCount),
       total: Number(totalVotes),
+      voters,
     },
+    userVote,
     quorum: {
       required: quorumRequired,
       current: quorumCurrent,
@@ -173,6 +217,12 @@ export function createProposalsRouter(db: Database, runtime: AppRuntime) {
           required: true,
           schema: { type: "string", format: "uuid" },
         },
+        {
+          name: "voterId",
+          in: "query",
+          description: "UUID of the voter to check for their vote",
+          schema: { type: "string", format: "uuid" },
+        },
       ],
       responses: {
         200: {
@@ -190,15 +240,27 @@ export function createProposalsRouter(db: Database, runtime: AppRuntime) {
     }),
     async (c) => {
       const proposalId = c.req.param("id");
+      const voterId = c.req.query("voterId");
       const requestId = c.get("requestId") ?? "unknown";
 
       const program = Effect.gen(function* () {
-        yield* Effect.logInfo("GetProposalStatus started", { proposalId });
+        yield* Effect.logInfo("GetProposalStatus started", {
+          proposalId,
+          voterId,
+        });
 
         if (!isValidUuid(proposalId)) {
           return yield* Effect.fail(
             new ValidationError({
               message: "Proposal ID must be a valid UUID",
+            }),
+          );
+        }
+
+        if (voterId && !isValidUuid(voterId)) {
+          return yield* Effect.fail(
+            new ValidationError({
+              message: "Voter ID must be a valid UUID",
             }),
           );
         }
@@ -214,7 +276,7 @@ export function createProposalsRouter(db: Database, runtime: AppRuntime) {
         }
 
         const nowSeconds = getCurrentTimeSeconds();
-        return buildProposalResponse(proposal, nowSeconds);
+        return buildProposalResponse(proposal, nowSeconds, voterId);
       }).pipe(
         Effect.tapError((error) => {
           switch (error._tag) {
@@ -304,6 +366,13 @@ export function createProposalsRouter(db: Database, runtime: AppRuntime) {
           description: "Exclude these action types",
           schema: { type: "string" },
         },
+        {
+          name: "voterId",
+          in: "query",
+          description:
+            "UUID of the voter to check for their vote on each proposal",
+          schema: { type: "string", format: "uuid" },
+        },
       ],
       responses: {
         200: {
@@ -325,6 +394,7 @@ export function createProposalsRouter(db: Database, runtime: AppRuntime) {
       const cursor = c.req.query("cursor");
       const actionTypesParam = c.req.query("actionTypes");
       const excludeActionTypesParam = c.req.query("excludeActionTypes");
+      const voterId = c.req.query("voterId");
 
       const program = Effect.gen(function* () {
         yield* Effect.logInfo("ListProposalStatuses started", {
@@ -333,11 +403,18 @@ export function createProposalsRouter(db: Database, runtime: AppRuntime) {
           cursor,
           actionTypes: actionTypesParam,
           excludeActionTypes: excludeActionTypesParam,
+          voterId,
         });
 
         if (!isValidUuid(spaceId)) {
           return yield* Effect.fail(
             new ValidationError({ message: "Space ID must be a valid UUID" }),
+          );
+        }
+
+        if (voterId && !isValidUuid(voterId)) {
+          return yield* Effect.fail(
+            new ValidationError({ message: "Voter ID must be a valid UUID" }),
           );
         }
 
@@ -369,7 +446,7 @@ export function createProposalsRouter(db: Database, runtime: AppRuntime) {
 
         const nowSeconds = getCurrentTimeSeconds();
         const proposalResponses = proposals.map((p) =>
-          buildProposalResponse(p, nowSeconds),
+          buildProposalResponse(p, nowSeconds, voterId),
         );
 
         return {

@@ -34,6 +34,8 @@ function makeProposal(
     yesCount: 0n,
     noCount: 0n,
     abstainCount: 0n,
+    votes: [],
+    actions: [],
     ...overrides,
   };
 }

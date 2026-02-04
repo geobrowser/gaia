@@ -8,8 +8,11 @@ import { Data, Effect } from "effect";
 import { sql } from "drizzle-orm";
 import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import type {
+  ProposalAction,
   ProposalActionType,
   ProposalWithVotes,
+  Vote,
+  VoteOption,
   VotingMode,
 } from "./types";
 
@@ -29,12 +32,12 @@ export class QueryError extends Data.TaggedError("QueryError")<{
 }
 
 /**
- * Fetches a proposal with aggregated vote counts in a single query.
- * Uses bigint for all numeric values to match contract precision.
+ * Fetches a proposal with aggregated vote counts, individual votes, and actions.
+ * Uses JSON aggregation to fetch everything in a single round trip.
  *
  * @param db - Drizzle database instance
  * @param proposalId - UUID of the proposal to fetch
- * @returns The proposal with vote counts, or null if not found
+ * @returns The proposal with vote counts, votes, and actions, or null if not found
  */
 export function getProposalWithVotes(
   db: Database,
@@ -43,6 +46,7 @@ export function getProposalWithVotes(
   return Effect.tryPromise({
     try: async () => {
       // PostgreSQL returns bigint columns as strings to preserve precision
+      // Use JSON aggregation to get votes and actions in a single query
       const result = await db.execute<{
         id: string;
         space_id: string;
@@ -57,29 +61,78 @@ export function getProposalWithVotes(
         yes_count: string;
         no_count: string;
         abstain_count: string;
+        votes_json: { voter_id: string; vote: string }[] | null;
+        actions_json:
+          | {
+              action_type: string;
+              target_id: string | null;
+              content_uri: string | null;
+            }[]
+          | null;
       }>(sql`
-				SELECT 
-					p.id,
-					p.space_id,
-					p.name,
-					p.proposed_by,
-					p.voting_mode,
-					p.start_time,
-					p.end_time,
-					p.quorum,
-					p.threshold,
-					p.executed_at,
-					COALESCE(COUNT(*) FILTER (WHERE pv.vote = 'Yes'), 0) as yes_count,
-					COALESCE(COUNT(*) FILTER (WHERE pv.vote = 'No'), 0) as no_count,
-					COALESCE(COUNT(*) FILTER (WHERE pv.vote = 'Abstain'), 0) as abstain_count
-				FROM proposals p
-				LEFT JOIN proposal_votes pv ON pv.proposal_id = p.id
-				WHERE p.id = ${proposalId}::uuid
-				GROUP BY p.id
-			`);
+        SELECT 
+          p.id,
+          p.space_id,
+          p.name,
+          p.proposed_by,
+          p.voting_mode,
+          p.start_time,
+          p.end_time,
+          p.quorum,
+          p.threshold,
+          p.executed_at,
+          COALESCE(vc.yes_count, 0) as yes_count,
+          COALESCE(vc.no_count, 0) as no_count,
+          COALESCE(vc.abstain_count, 0) as abstain_count,
+          v.votes_json,
+          a.actions_json
+        FROM proposals p
+        LEFT JOIN LATERAL (
+          SELECT
+            COUNT(*) FILTER (WHERE vote = 'Yes') as yes_count,
+            COUNT(*) FILTER (WHERE vote = 'No') as no_count,
+            COUNT(*) FILTER (WHERE vote = 'Abstain') as abstain_count
+          FROM proposal_votes
+          WHERE proposal_id = p.id
+        ) vc ON true
+        LEFT JOIN LATERAL (
+          SELECT COALESCE(json_agg(json_build_object(
+            'voter_id', voter_id,
+            'vote', vote
+          )), '[]'::json) as votes_json
+          FROM proposal_votes
+          WHERE proposal_id = p.id
+        ) v ON true
+        LEFT JOIN LATERAL (
+          SELECT COALESCE(json_agg(json_build_object(
+            'action_type', action_type,
+            'target_id', target_id,
+            'content_uri', content_uri
+          )), '[]'::json) as actions_json
+          FROM proposal_actions
+          WHERE proposal_id = p.id
+        ) a ON true
+        WHERE p.id = ${proposalId}::uuid
+      `);
 
       const row = result.rows[0];
       if (!row) return null;
+
+      // Parse the JSON arrays
+      const votesJson = row.votes_json ?? [];
+      const actionsJson = row.actions_json ?? [];
+
+      // Map vote values from DB format (Yes/No/Abstain) to API format (YES/NO/ABSTAIN)
+      const votes: Vote[] = votesJson.map((v) => ({
+        voterId: v.voter_id,
+        vote: v.vote.toUpperCase() as VoteOption,
+      }));
+
+      const actions: ProposalAction[] = actionsJson.map((a) => ({
+        actionType: a.action_type as ProposalActionType,
+        targetId: a.target_id,
+        contentUri: a.content_uri,
+      }));
 
       // Convert PostgreSQL bigint strings to JavaScript bigint
       return {
@@ -96,6 +149,8 @@ export function getProposalWithVotes(
         yesCount: BigInt(row.yes_count),
         noCount: BigInt(row.no_count),
         abstainCount: BigInt(row.abstain_count),
+        votes,
+        actions,
       };
     },
     catch: (error) =>
@@ -134,10 +189,11 @@ export interface ListProposalsResult {
 /**
  * Lists proposals in a space with optional filtering by action type.
  * Uses cursor-based pagination ordered by created_at DESC.
+ * Includes individual votes and actions via JSON aggregation.
  *
  * @param db - Drizzle database instance
  * @param options - Query options (spaceId, limit, cursor, actionType)
- * @returns Paginated list of proposals with vote counts
+ * @returns Paginated list of proposals with vote counts, votes, and actions
  */
 export function listProposalsInSpace(
   db: Database,
@@ -187,6 +243,14 @@ export function listProposalsInSpace(
         yes_count: string;
         no_count: string;
         abstain_count: string;
+        votes_json: { voter_id: string; vote: string }[] | null;
+        actions_json:
+          | {
+              action_type: string;
+              target_id: string | null;
+              content_uri: string | null;
+            }[]
+          | null;
       }>(sql`
         SELECT DISTINCT ON (p.id)
           p.id,
@@ -202,7 +266,9 @@ export function listProposalsInSpace(
           p.created_at,
           COALESCE(vote_counts.yes_count, 0) as yes_count,
           COALESCE(vote_counts.no_count, 0) as no_count,
-          COALESCE(vote_counts.abstain_count, 0) as abstain_count
+          COALESCE(vote_counts.abstain_count, 0) as abstain_count,
+          votes_agg.votes_json,
+          actions_agg.actions_json
         FROM proposals p
         ${actionTypeJoin}
         LEFT JOIN LATERAL (
@@ -213,6 +279,23 @@ export function listProposalsInSpace(
           FROM proposal_votes
           WHERE proposal_id = p.id
         ) vote_counts ON true
+        LEFT JOIN LATERAL (
+          SELECT COALESCE(json_agg(json_build_object(
+            'voter_id', voter_id,
+            'vote', vote
+          )), '[]'::json) as votes_json
+          FROM proposal_votes
+          WHERE proposal_id = p.id
+        ) votes_agg ON true
+        LEFT JOIN LATERAL (
+          SELECT COALESCE(json_agg(json_build_object(
+            'action_type', action_type,
+            'target_id', target_id,
+            'content_uri', content_uri
+          )), '[]'::json) as actions_json
+          FROM proposal_actions
+          WHERE proposal_id = p.id
+        ) actions_agg ON true
         WHERE p.space_id = ${spaceId}::uuid
         ${cursorCondition}
         ${excludeCondition}
@@ -224,21 +307,41 @@ export function listProposalsInSpace(
       const hasMore = rows.length > limit;
       const proposalRows = hasMore ? rows.slice(0, limit) : rows;
 
-      const proposals: ProposalWithVotes[] = proposalRows.map((row) => ({
-        id: row.id,
-        spaceId: row.space_id,
-        name: row.name,
-        proposedBy: row.proposed_by,
-        votingMode: row.voting_mode as VotingMode,
-        startTime: BigInt(row.start_time),
-        endTime: BigInt(row.end_time),
-        quorum: BigInt(row.quorum),
-        threshold: BigInt(row.threshold),
-        executedAt: row.executed_at ? BigInt(row.executed_at) : null,
-        yesCount: BigInt(row.yes_count),
-        noCount: BigInt(row.no_count),
-        abstainCount: BigInt(row.abstain_count),
-      }));
+      const proposals: ProposalWithVotes[] = proposalRows.map((row) => {
+        // Parse the JSON arrays
+        const votesJson = row.votes_json ?? [];
+        const actionsJson = row.actions_json ?? [];
+
+        // Map vote values from DB format (Yes/No/Abstain) to API format (YES/NO/ABSTAIN)
+        const votes: Vote[] = votesJson.map((v) => ({
+          voterId: v.voter_id,
+          vote: v.vote.toUpperCase() as VoteOption,
+        }));
+
+        const actions: ProposalAction[] = actionsJson.map((a) => ({
+          actionType: a.action_type as ProposalActionType,
+          targetId: a.target_id,
+          contentUri: a.content_uri,
+        }));
+
+        return {
+          id: row.id,
+          spaceId: row.space_id,
+          name: row.name,
+          proposedBy: row.proposed_by,
+          votingMode: row.voting_mode as VotingMode,
+          startTime: BigInt(row.start_time),
+          endTime: BigInt(row.end_time),
+          quorum: BigInt(row.quorum),
+          threshold: BigInt(row.threshold),
+          executedAt: row.executed_at ? BigInt(row.executed_at) : null,
+          yesCount: BigInt(row.yes_count),
+          noCount: BigInt(row.no_count),
+          abstainCount: BigInt(row.abstain_count),
+          votes,
+          actions,
+        };
+      });
 
       // Next cursor is the created_at of the last item
       const lastRow = proposalRows[proposalRows.length - 1];

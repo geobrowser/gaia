@@ -48,6 +48,30 @@ export const VOTING_MODES = ["Fast", "Slow"] as const;
 export type VotingMode = (typeof VOTING_MODES)[number];
 
 /**
+ * Vote option values matching the database enum.
+ */
+export const VOTE_OPTIONS = ["YES", "NO", "ABSTAIN"] as const;
+export type VoteOption = (typeof VOTE_OPTIONS)[number];
+
+/**
+ * Individual vote from a voter.
+ */
+export interface Vote {
+  voterId: string;
+  vote: VoteOption;
+}
+
+/**
+ * Proposal action with its type and optional payload.
+ */
+export interface ProposalAction {
+  actionType: ProposalActionType;
+  /** Target entity ID (e.g., member being added/removed) */
+  targetId: string | null;
+  contentUri: string | null;
+}
+
+/**
  * Domain type for a proposal with aggregated vote counts.
  * Uses bigint for contract values to prevent overflow.
  */
@@ -56,6 +80,7 @@ export interface ProposalWithVotes {
   spaceId: string;
   /** Human-readable name derived from proposal actions */
   name: string | null;
+  /** Member space ID of the proposer */
   proposedBy: string;
   votingMode: VotingMode;
   /** Unix timestamp in seconds when voting starts */
@@ -74,6 +99,10 @@ export interface ProposalWithVotes {
   noCount: bigint;
   /** Number of abstain votes */
   abstainCount: bigint;
+  /** Individual votes from voters */
+  votes: Vote[];
+  /** Actions in this proposal */
+  actions: ProposalAction[];
 }
 
 /**
@@ -87,6 +116,24 @@ export interface StatusComputationResult {
 }
 
 /**
+ * Vote in API response format.
+ */
+export interface VoteResponse {
+  voterId: string;
+  vote: VoteOption;
+}
+
+/**
+ * Action in API response format.
+ */
+export interface ActionResponse {
+  actionType: string; // SCREAMING_CASE
+  /** Target entity ID (e.g., member being added/removed) */
+  targetId: string | null;
+  contentUri: string | null;
+}
+
+/**
  * API response for proposal status endpoint.
  * All bigint values are serialized appropriately for JSON.
  */
@@ -94,14 +141,22 @@ export interface ProposalStatusResponse {
   proposalId: string;
   spaceId: string;
   name: string | null;
+  /** Member space ID of the proposer (dashless UUID) */
+  proposedBy: string;
   status: ProposalStatus;
   votingMode: "FAST" | "SLOW";
+  /** Actions in this proposal */
+  actions: ActionResponse[];
   votes: {
     yes: number;
     no: number;
     abstain: number;
     total: number;
+    /** Individual votes from voters */
+    voters: VoteResponse[];
   };
+  /** Current user's vote if voterId query param was provided */
+  userVote: VoteOption | null;
   quorum: {
     /** Required votes for quorum */
     required: number;
