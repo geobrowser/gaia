@@ -67,6 +67,11 @@ export function getProposalWithVotes(
               action_type: string;
               target_id: string | null;
               content_uri: string | null;
+              content_id: string | null;
+              quorum: number | null;
+              fast_threshold: number | null;
+              slow_threshold: number | null;
+              duration: number | null;
             }[]
           | null;
       }>(sql`
@@ -107,7 +112,12 @@ export function getProposalWithVotes(
           SELECT COALESCE(json_agg(json_build_object(
             'action_type', action_type,
             'target_id', target_id,
-            'content_uri', content_uri
+            'content_uri', content_uri,
+            'content_id', encode(content_id, 'hex'),
+            'quorum', quorum,
+            'fast_threshold', fast_threshold,
+            'slow_threshold', slow_threshold,
+            'duration', duration
           )), '[]'::json) as actions_json
           FROM proposal_actions
           WHERE proposal_id = p.id
@@ -132,6 +142,11 @@ export function getProposalWithVotes(
         actionType: a.action_type as ProposalActionType,
         targetId: a.target_id,
         contentUri: a.content_uri,
+        contentId: a.content_id,
+        quorum: a.quorum,
+        fastThreshold: a.fast_threshold,
+        slowThreshold: a.slow_threshold,
+        duration: a.duration,
       }));
 
       // Convert PostgreSQL bigint strings to JavaScript bigint
@@ -249,6 +264,11 @@ export function listProposalsInSpace(
               action_type: string;
               target_id: string | null;
               content_uri: string | null;
+              content_id: string | null;
+              quorum: number | null;
+              fast_threshold: number | null;
+              slow_threshold: number | null;
+              duration: number | null;
             }[]
           | null;
       }>(sql`
@@ -291,7 +311,12 @@ export function listProposalsInSpace(
           SELECT COALESCE(json_agg(json_build_object(
             'action_type', action_type,
             'target_id', target_id,
-            'content_uri', content_uri
+            'content_uri', content_uri,
+            'content_id', encode(content_id, 'hex'),
+            'quorum', quorum,
+            'fast_threshold', fast_threshold,
+            'slow_threshold', slow_threshold,
+            'duration', duration
           )), '[]'::json) as actions_json
           FROM proposal_actions
           WHERE proposal_id = p.id
@@ -322,6 +347,11 @@ export function listProposalsInSpace(
           actionType: a.action_type as ProposalActionType,
           targetId: a.target_id,
           contentUri: a.content_uri,
+          contentId: a.content_id,
+          quorum: a.quorum,
+          fastThreshold: a.fast_threshold,
+          slowThreshold: a.slow_threshold,
+          duration: a.duration,
         }));
 
         return {

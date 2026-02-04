@@ -49,12 +49,65 @@ type ProposalStatusError = ValidationError | NotFoundError | QueryError;
 type ProposalListError = ValidationError | QueryError;
 
 /**
- * Converts an action type to SCREAMING_CASE for API response.
- * e.g., "AddMember" -> "ADD_MEMBER"
+ * Maps an internal ProposalAction to the discriminated union ActionResponse.
+ * Each action type has its own shape with only the relevant fields.
  */
-function actionTypeToScreamingCase(actionType: string): string {
-  // Insert underscore before uppercase letters (except at start), then uppercase all
-  return actionType.replace(/([a-z])([A-Z])/g, "$1_$2").toUpperCase();
+function mapToActionResponse(
+  action: ProposalWithVotes["actions"][number],
+): ActionResponse {
+  switch (action.actionType) {
+    case "AddMember":
+      return {
+        actionType: "ADD_MEMBER",
+        targetId: normalizeUuid(action.targetId!),
+      };
+    case "RemoveMember":
+      return {
+        actionType: "REMOVE_MEMBER",
+        targetId: normalizeUuid(action.targetId!),
+      };
+    case "AddEditor":
+      return {
+        actionType: "ADD_EDITOR",
+        targetId: normalizeUuid(action.targetId!),
+      };
+    case "RemoveEditor":
+      return {
+        actionType: "REMOVE_EDITOR",
+        targetId: normalizeUuid(action.targetId!),
+      };
+    case "UnflagEditor":
+      return {
+        actionType: "UNFLAG_EDITOR",
+        targetId: normalizeUuid(action.targetId!),
+      };
+    case "Publish":
+      return {
+        actionType: "PUBLISH",
+        contentUri: action.contentUri!,
+      };
+    case "Flag":
+      return {
+        actionType: "FLAG",
+        contentId: action.contentId!,
+      };
+    case "Unflag":
+      return {
+        actionType: "UNFLAG",
+        contentId: action.contentId!,
+      };
+    case "UpdateVotingSettings":
+      return {
+        actionType: "UPDATE_VOTING_SETTINGS",
+        quorum: action.quorum!,
+        fastThreshold: action.fastThreshold!,
+        slowThreshold: action.slowThreshold!,
+        duration: action.duration!,
+      };
+    case "Unknown":
+    default:
+      return { actionType: "UNKNOWN" };
+  }
 }
 
 /**
@@ -132,12 +185,8 @@ function buildProposalResponse(
     userVote = userVoteRecord?.vote ?? null;
   }
 
-  // Build actions list for response
-  const actions: ActionResponse[] = proposal.actions.map((a) => ({
-    actionType: actionTypeToScreamingCase(a.actionType),
-    targetId: a.targetId ? normalizeUuid(a.targetId) : null,
-    contentUri: a.contentUri,
-  }));
+  // Build actions list for response (discriminated union)
+  const actions: ActionResponse[] = proposal.actions.map(mapToActionResponse);
 
   return {
     proposalId: normalizeUuid(proposal.id),

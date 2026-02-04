@@ -63,12 +63,24 @@ export interface Vote {
 
 /**
  * Proposal action with its type and optional payload.
+ * Internal type that includes all possible fields from the database.
  */
 export interface ProposalAction {
   actionType: ProposalActionType;
   /** Target entity ID (e.g., member being added/removed) */
   targetId: string | null;
+  /** IPFS URI for publish actions */
   contentUri: string | null;
+  /** Content ID for flag/unflag actions (hex-encoded bytes) */
+  contentId: string | null;
+  /** New quorum for UpdateVotingSettings */
+  quorum: number | null;
+  /** New fast threshold for UpdateVotingSettings */
+  fastThreshold: number | null;
+  /** New slow threshold for UpdateVotingSettings */
+  slowThreshold: number | null;
+  /** New duration for UpdateVotingSettings */
+  duration: number | null;
 }
 
 /**
@@ -123,15 +135,134 @@ export interface VoteResponse {
   vote: VoteOption;
 }
 
+// =============================================================================
+// Action Response Types (Discriminated Union)
+// =============================================================================
+
 /**
- * Action in API response format.
+ * Action to add a member to the space.
  */
-export interface ActionResponse {
-  actionType: string; // SCREAMING_CASE
-  /** Target entity ID (e.g., member being added/removed) */
-  targetId: string | null;
-  contentUri: string | null;
+export interface AddMemberAction {
+  actionType: "ADD_MEMBER";
+  /** Member space ID of the user being added */
+  targetId: string;
 }
+
+/**
+ * Action to remove a member from the space.
+ */
+export interface RemoveMemberAction {
+  actionType: "REMOVE_MEMBER";
+  /** Member space ID of the user being removed */
+  targetId: string;
+}
+
+/**
+ * Action to add an editor to the space.
+ */
+export interface AddEditorAction {
+  actionType: "ADD_EDITOR";
+  /** Member space ID of the user being granted editor role */
+  targetId: string;
+}
+
+/**
+ * Action to remove an editor from the space.
+ */
+export interface RemoveEditorAction {
+  actionType: "REMOVE_EDITOR";
+  /** Member space ID of the user having editor role revoked */
+  targetId: string;
+}
+
+/**
+ * Action to unflag an editor (restore their editing privileges after being flagged).
+ */
+export interface UnflagEditorAction {
+  actionType: "UNFLAG_EDITOR";
+  /** Member space ID of the editor being unflagged */
+  targetId: string;
+}
+
+/**
+ * Action to publish content to the space.
+ */
+export interface PublishAction {
+  actionType: "PUBLISH";
+  /** IPFS URI of the content being published */
+  contentUri: string;
+}
+
+/**
+ * Action to flag content for review/removal.
+ */
+export interface FlagAction {
+  actionType: "FLAG";
+  /** Content ID being flagged (hex-encoded bytes) */
+  contentId: string;
+}
+
+/**
+ * Action to unflag previously flagged content.
+ */
+export interface UnflagAction {
+  actionType: "UNFLAG";
+  /** Content ID being unflagged (hex-encoded bytes) */
+  contentId: string;
+}
+
+/**
+ * Action to update the space's voting settings.
+ */
+export interface UpdateVotingSettingsAction {
+  actionType: "UPDATE_VOTING_SETTINGS";
+  /** New minimum total votes required for slow path */
+  quorum: number;
+  /** New threshold for fast path (absolute yes votes needed) */
+  fastThreshold: number;
+  /** New threshold for slow path (percentage as RATIO_BASE fraction) */
+  slowThreshold: number;
+  /** New voting duration in seconds */
+  duration: number;
+}
+
+/**
+ * Unknown action type - used for forward compatibility.
+ */
+export interface UnknownAction {
+  actionType: "UNKNOWN";
+}
+
+/**
+ * Discriminated union of all possible proposal actions.
+ * Use the `actionType` field to narrow the type.
+ *
+ * @example
+ * ```typescript
+ * function handleAction(action: ActionResponse) {
+ *   switch (action.actionType) {
+ *     case "ADD_MEMBER":
+ *       console.log(`Adding member: ${action.targetId}`);
+ *       break;
+ *     case "PUBLISH":
+ *       console.log(`Publishing: ${action.contentUri}`);
+ *       break;
+ *     // ... handle other action types
+ *   }
+ * }
+ * ```
+ */
+export type ActionResponse =
+  | AddMemberAction
+  | RemoveMemberAction
+  | AddEditorAction
+  | RemoveEditorAction
+  | UnflagEditorAction
+  | PublishAction
+  | FlagAction
+  | UnflagAction
+  | UpdateVotingSettingsAction
+  | UnknownAction;
 
 /**
  * API response for proposal status endpoint.
