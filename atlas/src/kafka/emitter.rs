@@ -29,8 +29,8 @@ use crate::kafka::{AtlasProducer, ProducerError};
 use hermes_instrumentation::debug_span;
 use hermes_schema::pb::blockchain_metadata::BlockchainMetadata as ProtoBlockchainMetadata;
 use hermes_schema::pb::topology::{
-    canonical_tree_node::Edge, CanonicalGraphUpdated, CanonicalTreeNode, RelatedEdge, RootEdge,
-    TopicEdge, VerifiedEdge,
+    canonical_tree_node::Edge, CanonicalGraphUpdated, CanonicalTreeNode, EditorEdge, MemberEdge,
+    RelatedEdge, RootEdge, TopicEdge, VerifiedEdge,
 };
 use prost::Message;
 
@@ -88,6 +88,8 @@ fn tree_node_to_proto(node: &TreeNode) -> CanonicalTreeNode {
                 .expect("Topic edge must have topic_id")
                 .to_vec(),
         }),
+        EdgeType::Editor => Edge::Editor(EditorEdge {}),
+        EdgeType::Member => Edge::Member(MemberEdge {}),
     };
 
     CanonicalTreeNode {

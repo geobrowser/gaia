@@ -44,6 +44,12 @@ message CanonicalTreeNode {
 
     // Topic-based membership (resolved from SubtopicExtension)
     TopicEdge topic = 5;
+
+    // Editor membership in a DAO (canonical-granting)
+    EditorEdge editor = 7;
+
+    // Member membership in a DAO (canonical-granting)
+    MemberEdge member = 8;
   }
 
   // Children of this node in the traversal
@@ -64,3 +70,9 @@ message TopicEdge {
   // The topic through which this space was reached
   bytes topic_id = 1;
 }
+
+// Editor membership edge - no additional data needed
+message EditorEdge {}
+
+// Member membership edge - no additional data needed
+message MemberEdge {}

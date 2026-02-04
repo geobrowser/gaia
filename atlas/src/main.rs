@@ -36,7 +36,7 @@ use atlas::graph::{CanonicalProcessor, GraphState, TransitiveProcessor};
 use atlas::kafka::{AtlasProducer, CanonicalGraphEmitter};
 use hermes_instrumentation::{debug, info, info_span, Instrument};
 use hermes_relay::source::mock_events::test_topology::ROOT_SPACE_ID;
-use hermes_relay::{Actions, Sink, StreamSource};
+use hermes_relay::{Actions, HermesModule, Sink, StreamSource};
 use prost::Message;
 
 /// Atlas topology processor that implements the hermes-relay Sink trait.
@@ -258,13 +258,35 @@ fn main() -> anyhow::Result<()> {
 use hermes_kafka::get_topic_prefix;
 
 async fn async_main() -> anyhow::Result<()> {
+    // Kafka configuration
     let broker = env::var("KAFKA_BROKER").unwrap_or_else(|_| "localhost:9092".to_string());
     let topic_prefix = get_topic_prefix();
     let base_topic = env::var("KAFKA_TOPIC").unwrap_or_else(|_| "topology.canonical".to_string());
     let topic = format!("{}{}", topic_prefix, base_topic);
 
+    // Substream configuration
+    let use_mock = env::var("USE_MOCK")
+        .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+        .unwrap_or(false);
+    let endpoint = env::var("SUBSTREAMS_ENDPOINT")
+        .unwrap_or_else(|_| "geotest.substreams.pinax.network:443".to_string());
+    let start_block: i64 = env::var("SUBSTREAMS_START_BLOCK")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(82655); // Space Registry deployment block
+    let end_block: u64 = env::var("SUBSTREAMS_END_BLOCK")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(u64::MAX);
+
     info!("Atlas Topology Processor starting");
-    info!(kafka_broker = %broker, kafka_topic = %topic, topic_prefix = %topic_prefix, "Configuration loaded");
+    info!(
+        kafka_broker = %broker,
+        kafka_topic = %topic,
+        topic_prefix = %topic_prefix,
+        use_mock,
+        "Configuration loaded"
+    );
 
     // Set up Kafka producer
     debug!("Connecting to Kafka broker");
@@ -277,9 +299,21 @@ async fn async_main() -> anyhow::Result<()> {
 
     info!("Starting event processing");
 
-    // Run with mock data source (all events in a single block)
-    // In production, this would be StreamSource::live(endpoint_url, module, start_block, end_block)
-    sink.run(StreamSource::mock()).await?;
+    // Create stream source based on configuration
+    let source = if use_mock {
+        info!("Using mock data source");
+        StreamSource::mock()
+    } else {
+        info!(
+            endpoint = %endpoint,
+            start_block,
+            end_block,
+            "Using live substream"
+        );
+        StreamSource::live(endpoint, HermesModule::Actions, start_block, end_block)
+    };
+
+    sink.run(source).await?;
 
     sink.summary();
 
@@ -364,6 +398,27 @@ fn log_event(index: usize, event: &SpaceTopologyEvent) {
                 }
                 atlas::events::TrustExtension::Subtopic { target_topic_id } => {
                     ("topic", format_topic_id(target_topic_id))
+                }
+                atlas::events::TrustExtension::EditorAdded { member_space_id } => {
+                    ("editor_added", format_space_id(*member_space_id))
+                }
+                atlas::events::TrustExtension::MemberAdded { member_space_id } => {
+                    ("member_added", format_space_id(*member_space_id))
+                }
+                atlas::events::TrustExtension::VerifiedRemoved { target_space_id } => {
+                    ("verified_removed", format_space_id(*target_space_id))
+                }
+                atlas::events::TrustExtension::RelatedRemoved { target_space_id } => {
+                    ("related_removed", format_space_id(*target_space_id))
+                }
+                atlas::events::TrustExtension::EditorRemoved { member_space_id } => {
+                    ("editor_removed", format_space_id(*member_space_id))
+                }
+                atlas::events::TrustExtension::MemberRemoved { member_space_id } => {
+                    ("member_removed", format_space_id(*member_space_id))
+                }
+                atlas::events::TrustExtension::SubtopicRemoved { target_topic_id } => {
+                    ("topic_removed", format_topic_id(target_topic_id))
                 }
             };
             debug!(

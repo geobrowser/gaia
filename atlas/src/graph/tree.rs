@@ -16,6 +16,10 @@ pub enum EdgeType {
     Related,
     /// Topic-based membership
     Topic,
+    /// Editor membership (canonical-granting)
+    Editor,
+    /// Member membership (canonical-granting)
+    Member,
 }
 
 /// A node in the traversal tree

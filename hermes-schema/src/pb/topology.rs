@@ -32,7 +32,7 @@ pub struct CanonicalTreeNode {
     pub children: ::prost::alloc::vec::Vec<CanonicalTreeNode>,
     /// How this node was reached from its parent.
     /// Uses oneof to enforce that topic_id is only present for topic edges.
-    #[prost(oneof = "canonical_tree_node::Edge", tags = "2, 3, 4, 5")]
+    #[prost(oneof = "canonical_tree_node::Edge", tags = "2, 3, 4, 5, 7, 8")]
     pub edge: ::core::option::Option<canonical_tree_node::Edge>,
 }
 /// Nested message and enum types in `CanonicalTreeNode`.
@@ -53,6 +53,12 @@ pub mod canonical_tree_node {
         /// Topic-based membership (resolved from SubtopicExtension)
         #[prost(message, tag = "5")]
         Topic(super::TopicEdge),
+        /// Editor membership in a DAO (canonical-granting)
+        #[prost(message, tag = "7")]
+        Editor(super::EditorEdge),
+        /// Member membership in a DAO (canonical-granting)
+        #[prost(message, tag = "8")]
+        Member(super::MemberEdge),
     }
 }
 /// Root node edge - no additional data needed
@@ -71,3 +77,9 @@ pub struct TopicEdge {
     #[prost(bytes = "vec", tag = "1")]
     pub topic_id: ::prost::alloc::vec::Vec<u8>,
 }
+/// Editor membership edge - no additional data needed
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+pub struct EditorEdge {}
+/// Member membership edge - no additional data needed
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+pub struct MemberEdge {}

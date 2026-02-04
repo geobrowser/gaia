@@ -233,12 +233,25 @@ impl TransitiveProcessor {
                 self.cache.invalidate(&extended.source_space_id);
 
                 match &extended.extension {
+                    // Explicit edges: invalidate target
                     TrustExtension::Verified { target_space_id }
-                    | TrustExtension::Related { target_space_id } => {
+                    | TrustExtension::Related { target_space_id }
+                    | TrustExtension::VerifiedRemoved { target_space_id }
+                    | TrustExtension::RelatedRemoved { target_space_id } => {
                         self.cache.invalidate(target_space_id);
                     }
-                    TrustExtension::Subtopic { target_topic_id } => {
-                        // Invalidate all spaces that announced this topic
+
+                    // Membership edges: invalidate member space
+                    TrustExtension::EditorAdded { member_space_id }
+                    | TrustExtension::MemberAdded { member_space_id }
+                    | TrustExtension::EditorRemoved { member_space_id }
+                    | TrustExtension::MemberRemoved { member_space_id } => {
+                        self.cache.invalidate(member_space_id);
+                    }
+
+                    // Topic edges: invalidate all spaces that announced this topic
+                    TrustExtension::Subtopic { target_topic_id }
+                    | TrustExtension::SubtopicRemoved { target_topic_id } => {
                         if let Some(members) = state.get_topic_members(target_topic_id) {
                             for member in members {
                                 self.cache.invalidate(member);

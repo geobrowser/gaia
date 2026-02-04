@@ -72,30 +72,77 @@ impl GraphState {
         let source = event.source_space_id;
 
         match &event.extension {
+            // --- Edge Additions ---
             TrustExtension::Verified { target_space_id } => {
-                self.explicit_edges
-                    .entry(source)
-                    .or_default()
-                    .push((*target_space_id, EdgeType::Verified));
+                self.add_explicit_edge(source, *target_space_id, EdgeType::Verified);
             }
             TrustExtension::Related { target_space_id } => {
-                self.explicit_edges
-                    .entry(source)
-                    .or_default()
-                    .push((*target_space_id, EdgeType::Related));
+                self.add_explicit_edge(source, *target_space_id, EdgeType::Related);
             }
             TrustExtension::Subtopic { target_topic_id } => {
-                self.topic_edges
-                    .entry(source)
-                    .or_default()
-                    .insert(*target_topic_id);
-
-                // Maintain reverse index for O(1) lookup
-                self.topic_edge_sources
-                    .entry(*target_topic_id)
-                    .or_default()
-                    .insert(source);
+                self.add_topic_edge(source, *target_topic_id);
             }
+            TrustExtension::EditorAdded { member_space_id } => {
+                self.add_explicit_edge(source, *member_space_id, EdgeType::Editor);
+            }
+            TrustExtension::MemberAdded { member_space_id } => {
+                self.add_explicit_edge(source, *member_space_id, EdgeType::Member);
+            }
+
+            // --- Edge Removals ---
+            TrustExtension::VerifiedRemoved { target_space_id } => {
+                self.remove_explicit_edge(source, *target_space_id, EdgeType::Verified);
+            }
+            TrustExtension::RelatedRemoved { target_space_id } => {
+                self.remove_explicit_edge(source, *target_space_id, EdgeType::Related);
+            }
+            TrustExtension::EditorRemoved { member_space_id } => {
+                self.remove_explicit_edge(source, *member_space_id, EdgeType::Editor);
+            }
+            TrustExtension::MemberRemoved { member_space_id } => {
+                self.remove_explicit_edge(source, *member_space_id, EdgeType::Member);
+            }
+            TrustExtension::SubtopicRemoved { target_topic_id } => {
+                self.remove_topic_edge(source, *target_topic_id);
+            }
+        }
+    }
+
+    /// Add an explicit edge (Verified, Related, Editor, Member)
+    fn add_explicit_edge(&mut self, source: SpaceId, target: SpaceId, edge_type: EdgeType) {
+        self.explicit_edges
+            .entry(source)
+            .or_default()
+            .push((target, edge_type));
+    }
+
+    /// Remove an explicit edge
+    fn remove_explicit_edge(&mut self, source: SpaceId, target: SpaceId, edge_type: EdgeType) {
+        if let Some(edges) = self.explicit_edges.get_mut(&source) {
+            edges.retain(|(t, et)| !(*t == target && *et == edge_type));
+        }
+    }
+
+    /// Add a topic edge
+    fn add_topic_edge(&mut self, source: SpaceId, topic_id: TopicId) {
+        self.topic_edges.entry(source).or_default().insert(topic_id);
+
+        // Maintain reverse index for O(1) lookup
+        self.topic_edge_sources
+            .entry(topic_id)
+            .or_default()
+            .insert(source);
+    }
+
+    /// Remove a topic edge (with reverse index cleanup)
+    fn remove_topic_edge(&mut self, source: SpaceId, topic_id: TopicId) {
+        // Remove from forward index
+        if let Some(topics) = self.topic_edges.get_mut(&source) {
+            topics.remove(&topic_id);
+        }
+        // Remove from reverse index
+        if let Some(sources) = self.topic_edge_sources.get_mut(&topic_id) {
+            sources.remove(&source);
         }
     }
 

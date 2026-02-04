@@ -39,19 +39,45 @@ fn to_array<const N: usize>(slice: &[u8]) -> Option<[u8; N]> {
 /// - `SUBSPACE_VERIFIED` actions → TrustExtended (Verified)
 /// - `SUBSPACE_RELATED` actions → TrustExtended (Related)
 /// - `SUBSPACE_TOPIC_DECLARED` actions → TrustExtended (Subtopic)
+/// - `EDITOR_ADDED` actions → TrustExtended (EditorAdded)
+/// - `MEMBER_ADDED` actions → TrustExtended (MemberAdded)
+/// - `SUBSPACE_UNVERIFIED` actions → TrustExtended (VerifiedRemoved)
+/// - `SUBSPACE_UNRELATED` actions → TrustExtended (RelatedRemoved)
+/// - `EDITOR_REMOVED` actions → TrustExtended (EditorRemoved)
+/// - `MEMBER_REMOVED` actions → TrustExtended (MemberRemoved)
+/// - `SUBSPACE_TOPIC_REMOVED` actions → TrustExtended (SubtopicRemoved)
 ///
 /// Returns `None` for other action types (edits, proposals, etc.)
 pub fn convert_action(action: &Action, meta: &BlockMetadata) -> Option<SpaceTopologyEvent> {
     let action_type = action.action.as_slice();
 
+    // Space creation
     if actions::matches(action_type, &actions::SPACE_REGISTERED) {
         convert_space_registered(action, meta)
-    } else if actions::matches(action_type, &actions::SUBSPACE_VERIFIED) {
+    }
+    // Edge additions
+    else if actions::matches(action_type, &actions::SUBSPACE_VERIFIED) {
         convert_subspace_verified(action, meta)
     } else if actions::matches(action_type, &actions::SUBSPACE_RELATED) {
         convert_subspace_related(action, meta)
     } else if actions::matches(action_type, &actions::SUBSPACE_TOPIC_DECLARED) {
         convert_subspace_topic_declared(action, meta)
+    } else if actions::matches(action_type, &actions::EDITOR_ADDED) {
+        convert_editor_added(action, meta)
+    } else if actions::matches(action_type, &actions::MEMBER_ADDED) {
+        convert_member_added(action, meta)
+    }
+    // Edge removals
+    else if actions::matches(action_type, &actions::SUBSPACE_UNVERIFIED) {
+        convert_subspace_unverified(action, meta)
+    } else if actions::matches(action_type, &actions::SUBSPACE_UNRELATED) {
+        convert_subspace_unrelated(action, meta)
+    } else if actions::matches(action_type, &actions::EDITOR_REMOVED) {
+        convert_editor_removed(action, meta)
+    } else if actions::matches(action_type, &actions::MEMBER_REMOVED) {
+        convert_member_removed(action, meta)
+    } else if actions::matches(action_type, &actions::SUBSPACE_TOPIC_REMOVED) {
+        convert_subspace_topic_removed(action, meta)
     } else {
         None
     }
@@ -159,6 +185,170 @@ fn convert_subspace_topic_declared(
         payload: SpaceTopologyPayload::TrustExtended(TrustExtended {
             source_space_id,
             extension: TrustExtension::Subtopic { target_topic_id },
+        }),
+    })
+}
+
+/// Convert an EDITOR_ADDED action to TrustExtended event.
+///
+/// Action format:
+/// - `from_id`: dao_space_id (16 bytes) - the DAO space
+/// - `topic[0..16]`: member_space_id (16 bytes) - the space being added as editor
+fn convert_editor_added(action: &Action, meta: &BlockMetadata) -> Option<SpaceTopologyEvent> {
+    let source_space_id = to_array::<16>(&action.from_id)?;
+
+    if action.topic.len() < 16 {
+        return None;
+    }
+    let member_space_id = to_array::<16>(&action.topic[0..16])?;
+
+    Some(SpaceTopologyEvent {
+        meta: meta.clone(),
+        payload: SpaceTopologyPayload::TrustExtended(TrustExtended {
+            source_space_id,
+            extension: TrustExtension::EditorAdded { member_space_id },
+        }),
+    })
+}
+
+/// Convert a MEMBER_ADDED action to TrustExtended event.
+///
+/// Action format:
+/// - `from_id`: dao_space_id (16 bytes) - the DAO space
+/// - `topic[0..16]`: member_space_id (16 bytes) - the space being added as member
+fn convert_member_added(action: &Action, meta: &BlockMetadata) -> Option<SpaceTopologyEvent> {
+    let source_space_id = to_array::<16>(&action.from_id)?;
+
+    if action.topic.len() < 16 {
+        return None;
+    }
+    let member_space_id = to_array::<16>(&action.topic[0..16])?;
+
+    Some(SpaceTopologyEvent {
+        meta: meta.clone(),
+        payload: SpaceTopologyPayload::TrustExtended(TrustExtended {
+            source_space_id,
+            extension: TrustExtension::MemberAdded { member_space_id },
+        }),
+    })
+}
+
+/// Convert a SUBSPACE_UNVERIFIED action to TrustExtended event (edge removal).
+///
+/// Action format:
+/// - `from_id`: source_space_id (16 bytes)
+/// - `topic[0..16]`: padding (zeros)
+/// - `topic[16..32]`: target_space_id (16 bytes)
+fn convert_subspace_unverified(
+    action: &Action,
+    meta: &BlockMetadata,
+) -> Option<SpaceTopologyEvent> {
+    let source_space_id = to_array::<16>(&action.from_id)?;
+
+    if action.topic.len() < 32 {
+        return None;
+    }
+    let target_space_id = to_array::<16>(&action.topic[16..32])?;
+
+    Some(SpaceTopologyEvent {
+        meta: meta.clone(),
+        payload: SpaceTopologyPayload::TrustExtended(TrustExtended {
+            source_space_id,
+            extension: TrustExtension::VerifiedRemoved { target_space_id },
+        }),
+    })
+}
+
+/// Convert a SUBSPACE_UNRELATED action to TrustExtended event (edge removal).
+///
+/// Action format:
+/// - `from_id`: source_space_id (16 bytes)
+/// - `topic[0..16]`: padding (zeros)
+/// - `topic[16..32]`: target_space_id (16 bytes)
+fn convert_subspace_unrelated(action: &Action, meta: &BlockMetadata) -> Option<SpaceTopologyEvent> {
+    let source_space_id = to_array::<16>(&action.from_id)?;
+
+    if action.topic.len() < 32 {
+        return None;
+    }
+    let target_space_id = to_array::<16>(&action.topic[16..32])?;
+
+    Some(SpaceTopologyEvent {
+        meta: meta.clone(),
+        payload: SpaceTopologyPayload::TrustExtended(TrustExtended {
+            source_space_id,
+            extension: TrustExtension::RelatedRemoved { target_space_id },
+        }),
+    })
+}
+
+/// Convert an EDITOR_REMOVED action to TrustExtended event (edge removal).
+///
+/// Action format:
+/// - `from_id`: dao_space_id (16 bytes) - the DAO space
+/// - `topic[0..16]`: member_space_id (16 bytes) - the space being removed as editor
+fn convert_editor_removed(action: &Action, meta: &BlockMetadata) -> Option<SpaceTopologyEvent> {
+    let source_space_id = to_array::<16>(&action.from_id)?;
+
+    if action.topic.len() < 16 {
+        return None;
+    }
+    let member_space_id = to_array::<16>(&action.topic[0..16])?;
+
+    Some(SpaceTopologyEvent {
+        meta: meta.clone(),
+        payload: SpaceTopologyPayload::TrustExtended(TrustExtended {
+            source_space_id,
+            extension: TrustExtension::EditorRemoved { member_space_id },
+        }),
+    })
+}
+
+/// Convert a MEMBER_REMOVED action to TrustExtended event (edge removal).
+///
+/// Action format:
+/// - `from_id`: dao_space_id (16 bytes) - the DAO space
+/// - `topic[0..16]`: member_space_id (16 bytes) - the space being removed as member
+fn convert_member_removed(action: &Action, meta: &BlockMetadata) -> Option<SpaceTopologyEvent> {
+    let source_space_id = to_array::<16>(&action.from_id)?;
+
+    if action.topic.len() < 16 {
+        return None;
+    }
+    let member_space_id = to_array::<16>(&action.topic[0..16])?;
+
+    Some(SpaceTopologyEvent {
+        meta: meta.clone(),
+        payload: SpaceTopologyPayload::TrustExtended(TrustExtended {
+            source_space_id,
+            extension: TrustExtension::MemberRemoved { member_space_id },
+        }),
+    })
+}
+
+/// Convert a SUBSPACE_TOPIC_REMOVED action to TrustExtended event (edge removal).
+///
+/// Action format:
+/// - `from_id`: source_space_id (16 bytes)
+/// - `topic[0..16]`: subspace_id (16 bytes)
+/// - `topic[16..32]`: topic_id (16 bytes)
+fn convert_subspace_topic_removed(
+    action: &Action,
+    meta: &BlockMetadata,
+) -> Option<SpaceTopologyEvent> {
+    let source_space_id = to_array::<16>(&action.from_id)?;
+
+    if action.topic.len() < 32 {
+        return None;
+    }
+    // Topic ID is in the last 16 bytes
+    let target_topic_id = to_array::<16>(&action.topic[16..32])?;
+
+    Some(SpaceTopologyEvent {
+        meta: meta.clone(),
+        payload: SpaceTopologyPayload::TrustExtended(TrustExtended {
+            source_space_id,
+            extension: TrustExtension::SubtopicRemoved { target_topic_id },
         }),
     })
 }
@@ -292,9 +482,10 @@ mod tests {
 
         // 18 spaces: 11 canonical + 7 non-canonical
         assert_eq!(space_count, 18);
-        // 10 verified + 4 related + 5 topic declarations = 19 trust extensions
-        assert_eq!(trust_count, 19);
+        // 10 verified + 4 related + 5 topic declarations + 3 editor_added + 2 member_added
+        // + 1 editor_removed + 1 member_removed = 26 trust extensions
+        assert_eq!(trust_count, 26);
         // Total topology events (edits, proposals, flagging, voting filtered out)
-        assert_eq!(events.len(), 37);
+        assert_eq!(events.len(), 44);
     }
 }
