@@ -1,12 +1,12 @@
-import { describe, expect, it, beforeAll, afterAll } from "vitest"
-import { Pool } from "pg"
+import {Pool} from "pg"
+import {afterAll, beforeAll, describe, expect, it} from "vitest"
 
 describe("search function", () => {
 	let pool: Pool
 
 	beforeAll(async () => {
 		pool = new Pool({
-			connectionString: process.env.DATABASE_URL
+			connectionString: process.env.DATABASE_URL,
 		})
 	})
 
@@ -22,9 +22,9 @@ describe("search function", () => {
 		// Should be callable without error and return entity-like structure
 		expect(result.rows).toBeDefined()
 		if (result.rows.length > 0) {
-			expect(result.rows[0]).toHaveProperty('id')
-			expect(result.rows[0]).toHaveProperty('created_at')
-			expect(result.rows[0]).toHaveProperty('updated_at')
+			expect(result.rows[0]).toHaveProperty("id")
+			expect(result.rows[0]).toHaveProperty("created_at")
+			expect(result.rows[0]).toHaveProperty("updated_at")
 		}
 	})
 
@@ -62,9 +62,12 @@ describe("search function", () => {
 
 		if (spaceResult.rows.length > 0) {
 			const spaceId = spaceResult.rows[0].id
-			const result = await pool.query(`
+			const result = await pool.query(
+				`
 				SELECT * FROM search('test', $1::uuid) LIMIT 5
-			`, [spaceId])
+			`,
+				[spaceId],
+			)
 
 			// Should be callable without error
 			expect(result.rows).toBeDefined()

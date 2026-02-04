@@ -1,23 +1,23 @@
-import { Kind } from "graphql/language"
-import { describe, expect, it } from "vitest"
+import {Kind} from "graphql/language"
+import {describe, expect, it} from "vitest"
+import {graphqlServer} from "../postgraphile"
 import {
-	GeoPointScalar,
-	GeoRectScalar,
+	BytesScalar,
 	DateStringScalar,
 	DateTimeStringScalar,
-	TimeStringScalar,
-	BytesScalar,
+	GeoPointScalar,
+	GeoRectScalar,
 	LanguageTagScalar,
+	TimeStringScalar,
 } from "../valueScalarsPlugin"
-import { graphqlServer } from "../postgraphile"
 
 // Helper to execute GraphQL queries against the yoga server
 async function executeGraphQL(query: string, variables?: Record<string, unknown>) {
 	const response = await graphqlServer.fetch(
 		new Request("http://localhost/graphql", {
 			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ query, variables }),
+			headers: {"Content-Type": "application/json"},
+			body: JSON.stringify({query, variables}),
 		}),
 		{},
 	)
@@ -46,19 +46,15 @@ describe("GeoPointScalar", () => {
 
 	it("rejects non-string values", () => {
 		expect(() => GeoPointScalar.parseValue(123)).toThrow("GeoPoint must be a string")
-		expect(() => GeoPointScalar.parseValue({ lat: 40, lon: -74 })).toThrow(
-			"GeoPoint must be a string",
-		)
+		expect(() => GeoPointScalar.parseValue({lat: 40, lon: -74})).toThrow("GeoPoint must be a string")
 	})
 
 	it("parses string literals", () => {
-		expect(GeoPointScalar.parseLiteral({ kind: Kind.STRING, value: "40.7128,-74.0060" })).toBe(
-			"40.7128,-74.0060",
-		)
+		expect(GeoPointScalar.parseLiteral({kind: Kind.STRING, value: "40.7128,-74.0060"})).toBe("40.7128,-74.0060")
 	})
 
 	it("rejects non-string literals", () => {
-		expect(() => GeoPointScalar.parseLiteral({ kind: Kind.INT, value: "123" } as any)).toThrow(
+		expect(() => GeoPointScalar.parseLiteral({kind: Kind.INT, value: "123"} as any)).toThrow(
 			"GeoPoint must be a string",
 		)
 	})
@@ -82,19 +78,19 @@ describe("GeoRectScalar", () => {
 
 	it("rejects non-string values", () => {
 		expect(() => GeoRectScalar.parseValue(123)).toThrow("GeoRect must be a string")
-		expect(() =>
-			GeoRectScalar.parseValue({ minLat: 24.5, minLon: -125, maxLat: 49.4, maxLon: -66.9 }),
-		).toThrow("GeoRect must be a string")
+		expect(() => GeoRectScalar.parseValue({minLat: 24.5, minLon: -125, maxLat: 49.4, maxLon: -66.9})).toThrow(
+			"GeoRect must be a string",
+		)
 	})
 
 	it("parses string literals", () => {
-		expect(
-			GeoRectScalar.parseLiteral({ kind: Kind.STRING, value: "24.5,-125.0,49.4,-66.9" }),
-		).toBe("24.5,-125.0,49.4,-66.9")
+		expect(GeoRectScalar.parseLiteral({kind: Kind.STRING, value: "24.5,-125.0,49.4,-66.9"})).toBe(
+			"24.5,-125.0,49.4,-66.9",
+		)
 	})
 
 	it("rejects non-string literals", () => {
-		expect(() => GeoRectScalar.parseLiteral({ kind: Kind.INT, value: "123" } as any)).toThrow(
+		expect(() => GeoRectScalar.parseLiteral({kind: Kind.INT, value: "123"} as any)).toThrow(
 			"GeoRect must be a string",
 		)
 	})
@@ -125,15 +121,11 @@ describe("DateTimeStringScalar", () => {
 
 	it("parses and serializes string values", () => {
 		expect(DateTimeStringScalar.parseValue("2024-01-15T14:30:00")).toBe("2024-01-15T14:30:00")
-		expect(DateTimeStringScalar.parseValue("2024-01-15T14:30:00+05:30")).toBe(
-			"2024-01-15T14:30:00+05:30",
-		)
+		expect(DateTimeStringScalar.parseValue("2024-01-15T14:30:00+05:30")).toBe("2024-01-15T14:30:00+05:30")
 	})
 
 	it("rejects non-string values", () => {
-		expect(() => DateTimeStringScalar.parseValue(new Date())).toThrow(
-			"DateTimeString must be a string",
-		)
+		expect(() => DateTimeStringScalar.parseValue(new Date())).toThrow("DateTimeString must be a string")
 	})
 })
 
@@ -181,9 +173,7 @@ describe("LanguageTagScalar", () => {
 	})
 
 	it("rejects non-string values", () => {
-		expect(() => LanguageTagScalar.parseValue({ lang: "en" })).toThrow(
-			"LanguageTag must be a string",
-		)
+		expect(() => LanguageTagScalar.parseValue({lang: "en"})).toThrow("LanguageTag must be a string")
 	})
 })
 
@@ -206,13 +196,13 @@ describe("ValueScalarsPlugin schema integration", () => {
 		`)
 
 		expect(result.errors).toBeUndefined()
-		expect(result.data.geoPoint).toEqual({ name: "GeoPoint", kind: "SCALAR" })
-		expect(result.data.geoRect).toEqual({ name: "GeoRect", kind: "SCALAR" })
-		expect(result.data.dateString).toEqual({ name: "DateString", kind: "SCALAR" })
-		expect(result.data.dateTimeString).toEqual({ name: "DateTimeString", kind: "SCALAR" })
-		expect(result.data.timeString).toEqual({ name: "TimeString", kind: "SCALAR" })
-		expect(result.data.bytes).toEqual({ name: "Bytes", kind: "SCALAR" })
-		expect(result.data.languageTag).toEqual({ name: "LanguageTag", kind: "SCALAR" })
+		expect(result.data.geoPoint).toEqual({name: "GeoPoint", kind: "SCALAR"})
+		expect(result.data.geoRect).toEqual({name: "GeoRect", kind: "SCALAR"})
+		expect(result.data.dateString).toEqual({name: "DateString", kind: "SCALAR"})
+		expect(result.data.dateTimeString).toEqual({name: "DateTimeString", kind: "SCALAR"})
+		expect(result.data.timeString).toEqual({name: "TimeString", kind: "SCALAR"})
+		expect(result.data.bytes).toEqual({name: "Bytes", kind: "SCALAR"})
+		expect(result.data.languageTag).toEqual({name: "LanguageTag", kind: "SCALAR"})
 	})
 
 	it("should use custom scalars for Value type fields", async () => {
@@ -234,7 +224,7 @@ describe("ValueScalarsPlugin schema integration", () => {
 		expect(result.errors).toBeUndefined()
 
 		const getFieldType = (name: string) => {
-			const field = result.data.__type?.fields?.find((f: { name: string }) => f.name === name)
+			const field = result.data.__type?.fields?.find((f: {name: string}) => f.name === name)
 			return field?.type.name || field?.type.ofType?.name
 		}
 
@@ -266,7 +256,7 @@ describe("ValueScalarsPlugin schema integration", () => {
 		expect(result.errors).toBeUndefined()
 
 		const getFieldType = (name: string) => {
-			const field = result.data.__type?.fields?.find((f: { name: string }) => f.name === name)
+			const field = result.data.__type?.fields?.find((f: {name: string}) => f.name === name)
 			return field?.type.name || field?.type.ofType?.name
 		}
 

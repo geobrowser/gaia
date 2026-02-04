@@ -7,16 +7,16 @@
  * - `groupKeys` array for discoverability of dynamic keys
  */
 
-import { Effect } from "effect";
-import { SystemIds } from "@graphprotocol/grc-20";
+import {SystemIds} from "@graphprotocol/grc-20"
+import {Effect} from "effect"
 
 /**
  * Entity discovered via context metadata or relation lookup.
  */
 export interface DiscoveredEntity {
-	entityId: string;
-	contextEdgeTypeId: string | null;
-	position: string | null;
+	entityId: string
+	contextEdgeTypeId: string | null
+	position: string | null
 }
 
 /**
@@ -24,11 +24,11 @@ export interface DiscoveredEntity {
  */
 export interface GroupedEntities {
 	/** Entities grouped under the static BLOCKS key */
-	blocks: string[];
+	blocks: string[]
 	/** Entities grouped under dynamic keys (key = relation type ID) */
-	dynamicGroups: Map<string, string[]>;
+	dynamicGroups: Map<string, string[]>
 	/** List of dynamic group keys present (for discoverability) */
-	groupKeys: string[];
+	groupKeys: string[]
 }
 
 /**
@@ -46,48 +46,48 @@ export interface GroupedEntities {
  */
 export function groupEntitiesByContext(
 	entities: DiscoveredEntity[],
-	fallbackTypeId: string = SystemIds.BLOCKS
+	fallbackTypeId: string = SystemIds.BLOCKS,
 ): Effect.Effect<GroupedEntities, never, never> {
 	return Effect.sync(() => {
-		const blocks: string[] = [];
-		const dynamicGroups = new Map<string, string[]>();
-		const seen = new Set<string>();
+		const blocks: string[] = []
+		const dynamicGroups = new Map<string, string[]>()
+		const seen = new Set<string>()
 
 		// Sort by position (nulls last) to maintain ordering
 		const sorted = [...entities].sort((a, b) => {
-			if (a.position === null && b.position === null) return 0;
-			if (a.position === null) return 1;
-			if (b.position === null) return -1;
-			return a.position.localeCompare(b.position);
-		});
+			if (a.position === null && b.position === null) return 0
+			if (a.position === null) return 1
+			if (b.position === null) return -1
+			return a.position.localeCompare(b.position)
+		})
 
 		for (const entity of sorted) {
 			// Skip duplicates
-			if (seen.has(entity.entityId)) continue;
-			seen.add(entity.entityId);
+			if (seen.has(entity.entityId)) continue
+			seen.add(entity.entityId)
 
 			// Determine the effective type ID
 			// null contextEdgeTypeId means it came from relation fallback
-			const typeId = entity.contextEdgeTypeId ?? fallbackTypeId;
+			const typeId = entity.contextEdgeTypeId ?? fallbackTypeId
 
 			if (typeId === SystemIds.BLOCKS) {
-				blocks.push(entity.entityId);
+				blocks.push(entity.entityId)
 			} else {
-				const group = dynamicGroups.get(typeId) ?? [];
-				group.push(entity.entityId);
-				dynamicGroups.set(typeId, group);
+				const group = dynamicGroups.get(typeId) ?? []
+				group.push(entity.entityId)
+				dynamicGroups.set(typeId, group)
 			}
 		}
 
 		// Build groupKeys for discoverability
-		const groupKeys = Array.from(dynamicGroups.keys()).sort();
+		const groupKeys = Array.from(dynamicGroups.keys()).sort()
 
-		return { blocks, dynamicGroups, groupKeys };
+		return {blocks, dynamicGroups, groupKeys}
 	}).pipe(
 		Effect.withSpan("grouping.groupEntitiesByContext", {
-			attributes: { "grouping.entity_count": entities.length },
-		})
-	);
+			attributes: {"grouping.entity_count": entities.length},
+		}),
+	)
 }
 
 /**
@@ -103,12 +103,12 @@ export function groupEntitiesByContext(
  */
 export function mergeDiscoveryResults(
 	contextEntities: DiscoveredEntity[],
-	relationEntities: Array<{ entityId: string; position: string | null }>,
-	relationTypeId: string
+	relationEntities: Array<{entityId: string; position: string | null}>,
+	_relationTypeId: string,
 ): Effect.Effect<DiscoveredEntity[], never, never> {
 	return Effect.sync(() => {
 		// Context entities already have contextEdgeTypeId
-		const merged: DiscoveredEntity[] = [...contextEntities];
+		const merged: DiscoveredEntity[] = [...contextEntities]
 
 		// Relation entities get null contextEdgeTypeId (will use fallback)
 		for (const rel of relationEntities) {
@@ -116,16 +116,16 @@ export function mergeDiscoveryResults(
 				entityId: rel.entityId,
 				contextEdgeTypeId: null,
 				position: rel.position,
-			});
+			})
 		}
 
-		return merged;
+		return merged
 	}).pipe(
 		Effect.withSpan("grouping.mergeDiscoveryResults", {
 			attributes: {
 				"grouping.context_count": contextEntities.length,
 				"grouping.relation_count": relationEntities.length,
 			},
-		})
-	);
+		}),
+	)
 }
