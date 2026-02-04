@@ -13,7 +13,7 @@ import {Hono} from "hono"
 import {describeRoute} from "hono-openapi"
 
 import type {AppRuntime} from "../services/runtime"
-import {isValidUuid} from "../utils/uuid"
+import {isValidUuid, normalizeUuid, toDashedUuid} from "../utils/uuid"
 import {
 	defaultProfile,
 	getProfileByAddress,
@@ -222,14 +222,18 @@ export function createProfileRouter(db: Database, runtime: AppRuntime) {
 					return yield* Effect.fail(new ValidationError({message: "Space ID must be a valid UUID"}))
 				}
 
-				// Fetch profile
-				const profile = yield* getProfileBySpaceId(db, spaceId)
+				// Normalize: dashed for DB query, undashed for API response
+				const dashedSpaceId = toDashedUuid(spaceId)
+				const undashedSpaceId = normalizeUuid(spaceId)
 
-				const result = profile ?? defaultProfile(spaceId, spaceId)
+				// Fetch profile
+				const profile = yield* getProfileBySpaceId(db, dashedSpaceId)
+
+				const result = profile ?? defaultProfile(undashedSpaceId, undashedSpaceId)
 				const found = profile !== null
 
 				yield* Effect.logInfo("Profile fetched by space ID", {
-					spaceId,
+					spaceId: undashedSpaceId,
 					found,
 					hasName: result.name !== null,
 					hasAvatar: result.avatarUrl !== null,
@@ -358,13 +362,15 @@ export function createProfileRouter(db: Database, runtime: AppRuntime) {
 					return yield* Effect.fail(new ValidationError({message: "Invalid space ID format in request"}))
 				}
 
-				const validSpaceIds = spaceIds as string[]
+				// Normalize UUIDs: dashed for DB query, undashed for Map lookup and API response
+				const dashedSpaceIds = (spaceIds as string[]).map(toDashedUuid)
+				const undashedSpaceIds = (spaceIds as string[]).map(normalizeUuid)
 
-				// Fetch profiles
-				const profileMap = yield* getProfilesBySpaceIds(db, validSpaceIds)
+				// Fetch profiles (Map keys will be undashed from mapProfileRow)
+				const profileMap = yield* getProfilesBySpaceIds(db, dashedSpaceIds)
 
 				// Return profiles in the same order as input, with defaults for missing
-				const profiles = validSpaceIds.map((id) => profileMap.get(id) ?? defaultProfile(id, id))
+				const profiles = undashedSpaceIds.map((id) => profileMap.get(id) ?? defaultProfile(id, id))
 				const foundCount = profileMap.size
 
 				yield* Effect.logInfo("Batch profile fetch completed", {
