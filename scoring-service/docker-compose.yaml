@@ -15,6 +15,7 @@ services:
       # Kafka configuration
       - OUTPUT_MODE=${OUTPUT_MODE:-all}
       - KAFKA_BROKER=${KAFKA_BROKER:-kafka:29092}
+      - ENVIRONMENT=${ENVIRONMENT:-}
       - KAFKA_TOPIC=${KAFKA_TOPIC:-curation.scores}
       - SCORE_BATCH_SIZE=${SCORE_BATCH_SIZE:-1000}
       - SENTRY_DSN=${SENTRY_DSN:-}
