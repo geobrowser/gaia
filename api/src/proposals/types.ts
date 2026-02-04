@@ -12,6 +12,23 @@
 export const RATIO_BASE = 10_000_000n;
 
 /**
+ * Proposal action types matching the database enum.
+ */
+export const PROPOSAL_ACTION_TYPES = [
+  "AddMember",
+  "RemoveMember",
+  "AddEditor",
+  "RemoveEditor",
+  "UnflagEditor",
+  "Publish",
+  "Flag",
+  "Unflag",
+  "UpdateVotingSettings",
+  "Unknown",
+] as const;
+export type ProposalActionType = (typeof PROPOSAL_ACTION_TYPES)[number];
+
+/**
  * Proposal status values matching the governance contract states.
  */
 export const PROPOSAL_STATUSES = [
@@ -37,6 +54,8 @@ export type VotingMode = (typeof VOTING_MODES)[number];
 export interface ProposalWithVotes {
   id: string;
   spaceId: string;
+  /** Human-readable name derived from proposal actions */
+  name: string | null;
   proposedBy: string;
   votingMode: VotingMode;
   /** Unix timestamp in seconds when voting starts */
@@ -73,19 +92,36 @@ export interface StatusComputationResult {
  */
 export interface ProposalStatusResponse {
   proposalId: string;
+  spaceId: string;
+  name: string | null;
   status: ProposalStatus;
-  votingMode: VotingMode;
+  votingMode: "FAST" | "SLOW";
   votes: {
     yes: number;
     no: number;
     abstain: number;
     total: number;
   };
-  thresholds: {
-    /** Serialized as string to preserve bigint precision */
-    quorum: string;
-    /** Serialized as string to preserve bigint precision */
-    threshold: string;
+  quorum: {
+    /** Required votes for quorum */
+    required: number;
+    /** Current total votes (yes + no + abstain) */
+    current: number;
+    /** Progress as decimal (0.0 to 1.0+), capped at 1.0 for display */
+    progress: number;
+    reached: boolean;
+  };
+  threshold: {
+    /** Required threshold value (interpretation depends on votingMode) */
+    required: string;
+    /**
+     * For Fast path: current yes votes
+     * For Slow path: effective yes percentage accounting for the formula
+     */
+    current: number;
+    /** Progress as decimal (0.0 to 1.0+), capped at 1.0 for display */
+    progress: number;
+    reached: boolean;
   };
   timing: {
     startTime: number;
@@ -93,7 +129,13 @@ export interface ProposalStatusResponse {
     timeRemaining: number | null;
     isVotingEnded: boolean;
   };
-  isQuorumReached: boolean;
-  isThresholdReached: boolean;
   canExecute: boolean;
+}
+
+/**
+ * API response for listing proposals in a space.
+ */
+export interface ProposalListResponse {
+  proposals: ProposalStatusResponse[];
+  nextCursor: string | null;
 }

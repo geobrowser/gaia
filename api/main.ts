@@ -711,6 +711,12 @@ app.get(
               "Computed proposal status with vote counts and timing info",
             properties: {
               proposalId: { type: "string", format: "uuid" },
+              spaceId: { type: "string", format: "uuid" },
+              name: {
+                type: "string",
+                nullable: true,
+                description: "Human-readable proposal name",
+              },
               status: {
                 type: "string",
                 enum: ["PROPOSED", "EXECUTABLE", "ACCEPTED", "REJECTED"],
@@ -718,7 +724,7 @@ app.get(
               },
               votingMode: {
                 type: "string",
-                enum: ["Fast", "Slow"],
+                enum: ["FAST", "SLOW"],
                 description: "Voting mode determines threshold calculation",
               },
               votes: {
@@ -731,19 +737,45 @@ app.get(
                 },
                 required: ["yes", "no", "abstain", "total"],
               },
-              thresholds: {
+              quorum: {
                 type: "object",
+                description: "Quorum progress information",
                 properties: {
-                  quorum: {
-                    type: "string",
-                    description: "Minimum votes required (bigint as string)",
+                  required: {
+                    type: "integer",
+                    description: "Required votes for quorum",
                   },
-                  threshold: {
-                    type: "string",
-                    description: "Support threshold (bigint as string)",
+                  current: {
+                    type: "integer",
+                    description: "Current total votes",
                   },
+                  progress: {
+                    type: "number",
+                    description: "Progress as decimal (0.0 to 1.0)",
+                  },
+                  reached: { type: "boolean" },
                 },
-                required: ["quorum", "threshold"],
+                required: ["required", "current", "progress", "reached"],
+              },
+              threshold: {
+                type: "object",
+                description: "Threshold progress information",
+                properties: {
+                  required: {
+                    type: "string",
+                    description: "Required threshold (bigint as string)",
+                  },
+                  current: {
+                    type: "integer",
+                    description: "Current yes votes",
+                  },
+                  progress: {
+                    type: "number",
+                    description: "Progress as decimal (0.0 to 1.0)",
+                  },
+                  reached: { type: "boolean" },
+                },
+                required: ["required", "current", "progress", "reached"],
               },
               timing: {
                 type: "object",
@@ -770,14 +802,6 @@ app.get(
                   "isVotingEnded",
                 ],
               },
-              isQuorumReached: {
-                type: "boolean",
-                description: "Whether quorum has been reached",
-              },
-              isThresholdReached: {
-                type: "boolean",
-                description: "Whether support threshold has been reached",
-              },
               canExecute: {
                 type: "boolean",
                 description: "True if proposal can be executed on-chain",
@@ -785,15 +809,32 @@ app.get(
             },
             required: [
               "proposalId",
+              "spaceId",
+              "name",
               "status",
               "votingMode",
               "votes",
-              "thresholds",
+              "quorum",
+              "threshold",
               "timing",
-              "isQuorumReached",
-              "isThresholdReached",
               "canExecute",
             ],
+          },
+          ProposalListResponse: {
+            type: "object",
+            description: "Paginated list of proposal statuses",
+            properties: {
+              proposals: {
+                type: "array",
+                items: { $ref: "#/components/schemas/ProposalStatusResponse" },
+              },
+              nextCursor: {
+                type: "string",
+                nullable: true,
+                description: "Cursor for next page, null if no more results",
+              },
+            },
+            required: ["proposals", "nextCursor"],
           },
         },
       },

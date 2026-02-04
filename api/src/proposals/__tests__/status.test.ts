@@ -23,6 +23,7 @@ function makeProposal(
   return {
     id: "test-proposal-id",
     spaceId: "test-space-id",
+    name: "Test Proposal",
     proposedBy: "test-proposer-id",
     votingMode: "Fast",
     startTime: now - 3600n, // Started 1 hour ago

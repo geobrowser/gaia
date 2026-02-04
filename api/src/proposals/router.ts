@@ -10,10 +10,21 @@ import { Hono } from "hono";
 import { describeRoute } from "hono-openapi";
 
 import type { AppRuntime } from "../services/runtime";
-import { isValidUuid } from "../utils/uuid";
-import { getProposalWithVotes, QueryError } from "./queries";
+import { isValidUuid, normalizeUuid } from "../utils/uuid";
+import {
+  getProposalWithVotes,
+  listProposalsInSpace,
+  QueryError,
+} from "./queries";
 import { computeProposalStatus, getCurrentTimeSeconds } from "./status";
-import type { ProposalStatusResponse } from "./types";
+import {
+  PROPOSAL_ACTION_TYPES,
+  RATIO_BASE,
+  type ProposalActionType,
+  type ProposalListResponse,
+  type ProposalStatusResponse,
+  type ProposalWithVotes,
+} from "./types";
 
 type Database = NodePgDatabase<Record<string, unknown>>;
 
@@ -32,42 +43,133 @@ class NotFoundError extends Data.TaggedError("NotFoundError")<{
 }> {}
 
 type ProposalStatusError = ValidationError | NotFoundError | QueryError;
+type ProposalListError = ValidationError | QueryError;
+
+/**
+ * Builds a ProposalStatusResponse from a proposal and current time.
+ */
+function buildProposalResponse(
+  proposal: ProposalWithVotes,
+  nowSeconds: bigint,
+): ProposalStatusResponse {
+  const { status, isQuorumReached, isThresholdReached } = computeProposalStatus(
+    proposal,
+    nowSeconds,
+  );
+
+  const now = Number(nowSeconds);
+  const endTime = Number(proposal.endTime);
+  const isVotingEnded = now > endTime;
+  const timeRemaining = isVotingEnded ? null : endTime - now;
+
+  const totalVotes =
+    proposal.yesCount + proposal.noCount + proposal.abstainCount;
+  const quorumRequired = Number(proposal.quorum);
+  const quorumCurrent = Number(totalVotes);
+  const quorumProgress =
+    quorumRequired > 0 ? Math.min(quorumCurrent / quorumRequired, 1) : 1;
+
+  const thresholdRequired = proposal.threshold;
+  let thresholdCurrent: number;
+  let thresholdProgress: number;
+
+  if (proposal.votingMode === "Fast") {
+    const effectiveThreshold =
+      thresholdRequired === 0n ? 0n : thresholdRequired - 1n;
+    thresholdCurrent = Number(proposal.yesCount);
+    thresholdProgress =
+      effectiveThreshold > 0n
+        ? Math.min(thresholdCurrent / Number(effectiveThreshold), 1)
+        : 1;
+  } else {
+    const yesVotes = Number(proposal.yesCount);
+    const noVotes = Number(proposal.noCount);
+    thresholdCurrent = yesVotes;
+
+    if (yesVotes + noVotes === 0) {
+      thresholdProgress = 0;
+    } else {
+      const requiredYesRatio =
+        1 - Number(thresholdRequired) / Number(RATIO_BASE);
+      const actualYesRatio = yesVotes / (yesVotes + noVotes);
+      thresholdProgress =
+        requiredYesRatio > 0
+          ? Math.min(actualYesRatio / requiredYesRatio, 1)
+          : 1;
+    }
+  }
+
+  return {
+    proposalId: normalizeUuid(proposal.id),
+    spaceId: normalizeUuid(proposal.spaceId),
+    name: proposal.name,
+    status,
+    votingMode: proposal.votingMode.toUpperCase() as "FAST" | "SLOW",
+    votes: {
+      yes: Number(proposal.yesCount),
+      no: Number(proposal.noCount),
+      abstain: Number(proposal.abstainCount),
+      total: Number(totalVotes),
+    },
+    quorum: {
+      required: quorumRequired,
+      current: quorumCurrent,
+      progress: quorumProgress,
+      reached: isQuorumReached,
+    },
+    threshold: {
+      required: thresholdRequired.toString(),
+      current: thresholdCurrent,
+      progress: thresholdProgress,
+      reached: isThresholdReached,
+    },
+    timing: {
+      startTime: Number(proposal.startTime),
+      endTime,
+      timeRemaining,
+      isVotingEnded,
+    },
+    canExecute: status === "EXECUTABLE",
+  };
+}
+
+/**
+ * Parse and validate a comma-separated list of action types.
+ */
+function parseActionTypes(
+  param: string | undefined,
+): ProposalActionType[] | undefined {
+  if (!param) return undefined;
+  const types = param.split(",").map((t) => t.trim());
+  const invalid = types.filter(
+    (t) => !PROPOSAL_ACTION_TYPES.includes(t as ProposalActionType),
+  );
+  if (invalid.length > 0) {
+    throw new Error(
+      `Invalid action types: ${invalid.join(", ")}. Valid: ${PROPOSAL_ACTION_TYPES.join(", ")}`,
+    );
+  }
+  return types as ProposalActionType[];
+}
 
 /**
  * Create the proposals router.
- *
- * @param db - Drizzle database instance
- * @param runtime - Effect runtime with telemetry and other services
- * @returns Configured Hono router
  */
 export function createProposalsRouter(db: Database, runtime: AppRuntime) {
   const router = new Hono<AppEnv>();
 
-  /**
-   * GET /proposals/:id/status
-   *
-   * Get the computed status of a proposal.
-   */
+  // GET /proposals/:id/status - Single proposal status
   router.get(
     "/:id/status",
     describeRoute({
       tags: ["Proposals"],
       summary: "Get proposal status",
-      description: `
-Computes the current status of a proposal based on votes and time remaining.
-Status computation matches the smart contract's \`isSupportThresholdReached()\` logic.
-
-**Status Values:**
-- \`PROPOSED\`: Voting is active, threshold not yet reached
-- \`EXECUTABLE\`: Threshold reached, can be executed on-chain
-- \`ACCEPTED\`: Proposal has been executed
-- \`REJECTED\`: Voting ended without reaching threshold/quorum
-			`.trim(),
+      description:
+        "Computes proposal status matching the smart contract's isSupportThresholdReached() logic.",
       parameters: [
         {
           name: "id",
           in: "path",
-          description: "Proposal UUID",
           required: true,
           schema: { type: "string", format: "uuid" },
         },
@@ -81,48 +183,9 @@ Status computation matches the smart contract's \`isSupportThresholdReached()\` 
             },
           },
         },
-        400: {
-          description: "Invalid parameter",
-          content: {
-            "application/json": {
-              schema: {
-                type: "object",
-                properties: {
-                  error: { type: "string" },
-                  message: { type: "string" },
-                },
-              },
-            },
-          },
-        },
-        404: {
-          description: "Proposal not found",
-          content: {
-            "application/json": {
-              schema: {
-                type: "object",
-                properties: {
-                  error: { type: "string" },
-                  message: { type: "string" },
-                },
-              },
-            },
-          },
-        },
-        500: {
-          description: "Internal server error",
-          content: {
-            "application/json": {
-              schema: {
-                type: "object",
-                properties: {
-                  error: { type: "string" },
-                  message: { type: "string" },
-                },
-              },
-            },
-          },
-        },
+        400: { description: "Invalid parameter" },
+        404: { description: "Proposal not found" },
+        500: { description: "Internal server error" },
       },
     }),
     async (c) => {
@@ -130,7 +193,8 @@ Status computation matches the smart contract's \`isSupportThresholdReached()\` 
       const requestId = c.get("requestId") ?? "unknown";
 
       const program = Effect.gen(function* () {
-        // Validate proposalId
+        yield* Effect.logInfo("GetProposalStatus started", { proposalId });
+
         if (!isValidUuid(proposalId)) {
           return yield* Effect.fail(
             new ValidationError({
@@ -139,7 +203,6 @@ Status computation matches the smart contract's \`isSupportThresholdReached()\` 
           );
         }
 
-        // Fetch proposal with vote counts
         const proposal = yield* getProposalWithVotes(db, proposalId);
 
         if (!proposal) {
@@ -150,56 +213,31 @@ Status computation matches the smart contract's \`isSupportThresholdReached()\` 
           );
         }
 
-        // Compute status using pure function
         const nowSeconds = getCurrentTimeSeconds();
-        const { status, isQuorumReached, isThresholdReached } =
-          computeProposalStatus(proposal, nowSeconds);
-
-        // Compute timing info
-        const now = Number(nowSeconds);
-        const endTime = Number(proposal.endTime);
-        const isVotingEnded = now > endTime;
-        const timeRemaining = isVotingEnded ? null : endTime - now;
-
-        // Build response with proper serialization
-        const response: ProposalStatusResponse = {
-          proposalId: proposal.id,
-          status,
-          votingMode: proposal.votingMode,
-          votes: {
-            yes: Number(proposal.yesCount),
-            no: Number(proposal.noCount),
-            abstain: Number(proposal.abstainCount),
-            total: Number(
-              proposal.yesCount + proposal.noCount + proposal.abstainCount,
-            ),
-          },
-          thresholds: {
-            quorum: proposal.quorum.toString(),
-            threshold: proposal.threshold.toString(),
-          },
-          timing: {
-            startTime: Number(proposal.startTime),
-            endTime,
-            timeRemaining,
-            isVotingEnded,
-          },
-          isQuorumReached,
-          isThresholdReached,
-          canExecute: status === "EXECUTABLE",
-        };
-
-        return response;
+        return buildProposalResponse(proposal, nowSeconds);
       }).pipe(
         Effect.tapError((error) => {
-          if (error._tag === "QueryError") {
-            return Effect.logError(
-              `Database error: operation=${error.operation}, cause=${String(error.cause)}`,
-            );
+          switch (error._tag) {
+            case "QueryError":
+              return Effect.logError("GetProposalStatus failed", {
+                errorType: "database_error",
+                operation: error.operation,
+                message: error.cause.message,
+              });
+            case "ValidationError":
+              return Effect.logWarning("GetProposalStatus failed", {
+                errorType: "validation_error",
+                message: error.message,
+              });
+            case "NotFoundError":
+              return Effect.logInfo("GetProposalStatus failed", {
+                errorType: "not_found",
+                message: error.message,
+              });
           }
-          return Effect.void;
         }),
         Effect.withSpan("GET /proposals/:id/status"),
+        Effect.annotateLogs({ requestId, proposalId }),
         Effect.annotateSpans({ requestId, proposalId }),
       );
 
@@ -217,6 +255,157 @@ Status computation matches the smart contract's \`isSupportThresholdReached()\` 
               return c.json(
                 { error: "Not found", message: error.message },
                 404,
+              );
+            case "QueryError":
+              return c.json(
+                {
+                  error: "Internal server error",
+                  message: "An unexpected error occurred",
+                },
+                500,
+              );
+          }
+        },
+        onRight: (response) => c.json(response),
+      });
+    },
+  );
+
+  // GET /proposals/space/:spaceId/status - List proposals in a space
+  router.get(
+    "/space/:spaceId/status",
+    describeRoute({
+      tags: ["Proposals"],
+      summary: "List proposal statuses in a space",
+      description:
+        "Lists proposals with cursor pagination. Filter with actionTypes or excludeActionTypes (comma-separated).",
+      parameters: [
+        {
+          name: "spaceId",
+          in: "path",
+          required: true,
+          schema: { type: "string", format: "uuid" },
+        },
+        {
+          name: "limit",
+          in: "query",
+          schema: { type: "integer", minimum: 1, maximum: 100, default: 20 },
+        },
+        { name: "cursor", in: "query", schema: { type: "string" } },
+        {
+          name: "actionTypes",
+          in: "query",
+          description: "Include only these action types",
+          schema: { type: "string" },
+        },
+        {
+          name: "excludeActionTypes",
+          in: "query",
+          description: "Exclude these action types",
+          schema: { type: "string" },
+        },
+      ],
+      responses: {
+        200: {
+          description: "List of proposal statuses",
+          content: {
+            "application/json": {
+              schema: { $ref: "#/components/schemas/ProposalListResponse" },
+            },
+          },
+        },
+        400: { description: "Invalid parameter" },
+        500: { description: "Internal server error" },
+      },
+    }),
+    async (c) => {
+      const spaceId = c.req.param("spaceId");
+      const requestId = c.get("requestId") ?? "unknown";
+      const limitParam = c.req.query("limit");
+      const cursor = c.req.query("cursor");
+      const actionTypesParam = c.req.query("actionTypes");
+      const excludeActionTypesParam = c.req.query("excludeActionTypes");
+
+      const program = Effect.gen(function* () {
+        yield* Effect.logInfo("ListProposalStatuses started", {
+          spaceId,
+          limit: limitParam,
+          cursor,
+          actionTypes: actionTypesParam,
+          excludeActionTypes: excludeActionTypesParam,
+        });
+
+        if (!isValidUuid(spaceId)) {
+          return yield* Effect.fail(
+            new ValidationError({ message: "Space ID must be a valid UUID" }),
+          );
+        }
+
+        const limit = limitParam ? parseInt(limitParam, 10) : 20;
+        if (isNaN(limit) || limit < 1 || limit > 100) {
+          return yield* Effect.fail(
+            new ValidationError({ message: "Limit must be between 1 and 100" }),
+          );
+        }
+
+        let actionTypes: ProposalActionType[] | undefined;
+        let excludeActionTypes: ProposalActionType[] | undefined;
+        try {
+          actionTypes = parseActionTypes(actionTypesParam);
+          excludeActionTypes = parseActionTypes(excludeActionTypesParam);
+        } catch (e) {
+          return yield* Effect.fail(
+            new ValidationError({ message: (e as Error).message }),
+          );
+        }
+
+        const { proposals, nextCursor } = yield* listProposalsInSpace(db, {
+          spaceId,
+          limit,
+          cursor,
+          actionTypes,
+          excludeActionTypes,
+        });
+
+        const nowSeconds = getCurrentTimeSeconds();
+        const proposalResponses = proposals.map((p) =>
+          buildProposalResponse(p, nowSeconds),
+        );
+
+        return {
+          proposals: proposalResponses,
+          nextCursor,
+        };
+      }).pipe(
+        Effect.tapError((error) => {
+          switch (error._tag) {
+            case "QueryError":
+              return Effect.logError("ListProposalStatuses failed", {
+                errorType: "database_error",
+                operation: error.operation,
+                message: error.cause.message,
+              });
+            case "ValidationError":
+              return Effect.logWarning("ListProposalStatuses failed", {
+                errorType: "validation_error",
+                message: error.message,
+              });
+          }
+        }),
+        Effect.withSpan("GET /proposals/space/:spaceId/status"),
+        Effect.annotateLogs({ requestId, spaceId }),
+        Effect.annotateSpans({ requestId, spaceId }),
+      );
+
+      const result = await runtime.runPromise(Effect.either(program));
+
+      return Either.match(result, {
+        onLeft: (error: ProposalListError) => {
+          switch (error._tag) {
+            case "ValidationError":
+              return c.json(
+                { error: "Invalid parameter", message: error.message },
+                400,
               );
             case "QueryError":
               return c.json(
