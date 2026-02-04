@@ -12,6 +12,7 @@ import {uploadEdit, uploadFile} from "./src/services/ipfs"
 import {runtime} from "./src/services/runtime"
 import {OpenSearchClient} from "./src/services/search"
 import {db} from "./src/services/storage/storage"
+import {createProfileRouter} from "./src/profile"
 import {createVersionedRouter} from "./src/versioned"
 
 /**
@@ -51,6 +52,7 @@ app.route("/health", health)
 // Apply canonical logging/tracing to API routes (not health)
 // Health checks are high-frequency noise with low observability value
 app.use("/ipfs/*", canonicalRequestLogging())
+app.use("/profile/*", canonicalRequestLogging())
 app.use("/search/*", canonicalRequestLogging())
 app.use("/versioned/*", canonicalRequestLogging())
 app.use("/graphql", canonicalRequestLogging())
@@ -76,6 +78,10 @@ if (opensearchUrl) {
 // Mount versioned entities router
 app.route("/versioned", createVersionedRouter(db, runtime))
 log.info("Versioned entity routes enabled")
+
+// Mount profile router
+app.route("/profile", createProfileRouter(db, runtime))
+log.info("Profile routes enabled")
 
 app.get("/", swaggerUI({url: "/openapi"}))
 
@@ -382,6 +388,21 @@ app.get(
 			],
 			components: {
 				schemas: {
+					// Profile types
+					Profile: {
+						type: "object",
+						description: "A user profile derived from their personal space",
+						properties: {
+							id: {type: "string", format: "uuid", description: "The profile entity ID (same as the space entity ID)"},
+							spaceId: {type: "string", format: "uuid", description: "The user's personal space ID"},
+							name: {type: "string", nullable: true, description: "Display name from the NAME_PROPERTY value"},
+							avatarUrl: {type: "string", nullable: true, description: "Avatar image URL from the AVATAR_PROPERTY relation"},
+							coverUrl: {type: "string", nullable: true, description: "Cover image URL from the COVER_PROPERTY relation"},
+							address: {type: "string", description: "The user's wallet address (0x prefixed)"},
+							profileLink: {type: "string", description: "Link to the user's space"},
+						},
+						required: ["id", "spaceId", "address", "profileLink"],
+					},
 					// Value types
 					VersionedValue: {
 						type: "object",
