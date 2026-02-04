@@ -74,7 +74,7 @@ export function defaultProfile(address: string, spaceId?: string): Profile {
 
 /**
  * SQL fragment for selecting profile fields from a space.
- * Constrains image lookups by space_id to avoid cross-space data leakage.
+ * All lookups are constrained to the profile's own space to avoid cross-space data leakage.
  */
 function profileSelectFields() {
 	return sql`
@@ -93,7 +93,7 @@ function profileSelectFields() {
 			FROM relations r
 			JOIN "values" img_val ON img_val.entity_id = r.to_entity_id
 			  AND img_val.property_id = ${IMAGE_URL_PROPERTY}::uuid
-			  AND img_val.space_id = COALESCE(r.to_space_id, s.id)
+			  AND img_val.space_id = s.id
 			WHERE r.from_entity_id = s.id
 			  AND r.type_id = ${AVATAR_PROPERTY}::uuid
 			  AND r.space_id = s.id
