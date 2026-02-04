@@ -269,7 +269,7 @@ async fn async_main() -> Result<(), IndexerError> {
                     }
 
                     // Periodically log queue depth for monitoring
-                    if tick_count % depth_log_interval == 0 {
+                    if tick_count.is_multiple_of(depth_log_interval) {
                         match tally_storage.get_tally_queue_depth().await {
                             Ok(depth) => {
                                 if depth > 0 {
