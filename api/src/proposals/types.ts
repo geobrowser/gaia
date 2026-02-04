@@ -127,14 +127,6 @@ export interface StatusComputationResult {
   isThresholdReached: boolean;
 }
 
-/**
- * Vote in API response format.
- */
-export interface VoteResponse {
-  voterId: string;
-  vote: VoteOption;
-}
-
 // =============================================================================
 // Action Response Types (Discriminated Union)
 // =============================================================================
@@ -284,7 +276,7 @@ export interface ProposalStatusResponse {
     abstain: number;
     total: number;
     /** Individual votes from voters */
-    voters: VoteResponse[];
+    voters: Vote[];
   };
   /** Current user's vote if voterId query param was provided */
   userVote: VoteOption | null;

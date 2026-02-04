@@ -22,11 +22,10 @@ import {
   RATIO_BASE,
   type ActionResponse,
   type ProposalActionType,
-  type ProposalListResponse,
   type ProposalStatusResponse,
   type ProposalWithVotes,
+  type Vote,
   type VoteOption,
-  type VoteResponse,
 } from "./types";
 
 type Database = NodePgDatabase<Record<string, unknown>>;
@@ -51,58 +50,75 @@ type ProposalListError = ValidationError | QueryError;
 /**
  * Maps an internal ProposalAction to the discriminated union ActionResponse.
  * Each action type has its own shape with only the relevant fields.
+ * Returns UNKNOWN if required fields are missing (defensive against bad DB data).
  */
 function mapToActionResponse(
   action: ProposalWithVotes["actions"][number],
 ): ActionResponse {
   switch (action.actionType) {
     case "AddMember":
+      if (!action.targetId) return { actionType: "UNKNOWN" };
       return {
         actionType: "ADD_MEMBER",
-        targetId: normalizeUuid(action.targetId!),
+        targetId: normalizeUuid(action.targetId),
       };
     case "RemoveMember":
+      if (!action.targetId) return { actionType: "UNKNOWN" };
       return {
         actionType: "REMOVE_MEMBER",
-        targetId: normalizeUuid(action.targetId!),
+        targetId: normalizeUuid(action.targetId),
       };
     case "AddEditor":
+      if (!action.targetId) return { actionType: "UNKNOWN" };
       return {
         actionType: "ADD_EDITOR",
-        targetId: normalizeUuid(action.targetId!),
+        targetId: normalizeUuid(action.targetId),
       };
     case "RemoveEditor":
+      if (!action.targetId) return { actionType: "UNKNOWN" };
       return {
         actionType: "REMOVE_EDITOR",
-        targetId: normalizeUuid(action.targetId!),
+        targetId: normalizeUuid(action.targetId),
       };
     case "UnflagEditor":
+      if (!action.targetId) return { actionType: "UNKNOWN" };
       return {
         actionType: "UNFLAG_EDITOR",
-        targetId: normalizeUuid(action.targetId!),
+        targetId: normalizeUuid(action.targetId),
       };
     case "Publish":
+      if (!action.contentUri) return { actionType: "UNKNOWN" };
       return {
         actionType: "PUBLISH",
-        contentUri: action.contentUri!,
+        contentUri: action.contentUri,
       };
     case "Flag":
+      if (!action.contentId) return { actionType: "UNKNOWN" };
       return {
         actionType: "FLAG",
-        contentId: action.contentId!,
+        contentId: action.contentId,
       };
     case "Unflag":
+      if (!action.contentId) return { actionType: "UNKNOWN" };
       return {
         actionType: "UNFLAG",
-        contentId: action.contentId!,
+        contentId: action.contentId,
       };
     case "UpdateVotingSettings":
+      if (
+        action.quorum == null ||
+        action.fastThreshold == null ||
+        action.slowThreshold == null ||
+        action.duration == null
+      ) {
+        return { actionType: "UNKNOWN" };
+      }
       return {
         actionType: "UPDATE_VOTING_SETTINGS",
-        quorum: action.quorum!,
-        fastThreshold: action.fastThreshold!,
-        slowThreshold: action.slowThreshold!,
-        duration: action.duration!,
+        quorum: action.quorum,
+        fastThreshold: action.fastThreshold,
+        slowThreshold: action.slowThreshold,
+        duration: action.duration,
       };
     case "Unknown":
     default:
@@ -144,12 +160,12 @@ function buildProposalResponse(
   let thresholdProgress: number;
 
   if (proposal.votingMode === "Fast") {
-    const effectiveThreshold =
-      thresholdRequired === 0n ? 0n : thresholdRequired - 1n;
+    // Fast path: absolute yes votes needed
+    // Progress is measured against the full threshold for UI display
     thresholdCurrent = Number(proposal.yesCount);
     thresholdProgress =
-      effectiveThreshold > 0n
-        ? Math.min(thresholdCurrent / Number(effectiveThreshold), 1)
+      thresholdRequired > 0n
+        ? Math.min(thresholdCurrent / Number(thresholdRequired), 1)
         : 1;
   } else {
     const yesVotes = Number(proposal.yesCount);
@@ -170,7 +186,7 @@ function buildProposalResponse(
   }
 
   // Build voters list for response
-  const voters: VoteResponse[] = proposal.votes.map((v) => ({
+  const voters: Vote[] = proposal.votes.map((v) => ({
     voterId: normalizeUuid(v.voterId),
     vote: v.vote,
   }));
@@ -228,21 +244,24 @@ function buildProposalResponse(
 
 /**
  * Parse and validate a comma-separated list of action types.
+ * Returns an Effect that fails with ValidationError on invalid input.
  */
 function parseActionTypes(
   param: string | undefined,
-): ProposalActionType[] | undefined {
-  if (!param) return undefined;
+): Effect.Effect<ProposalActionType[] | undefined, ValidationError> {
+  if (!param) return Effect.succeed(undefined);
   const types = param.split(",").map((t) => t.trim());
   const invalid = types.filter(
     (t) => !PROPOSAL_ACTION_TYPES.includes(t as ProposalActionType),
   );
   if (invalid.length > 0) {
-    throw new Error(
-      `Invalid action types: ${invalid.join(", ")}. Valid: ${PROPOSAL_ACTION_TYPES.join(", ")}`,
+    return Effect.fail(
+      new ValidationError({
+        message: `Invalid action types: ${invalid.join(", ")}. Valid: ${PROPOSAL_ACTION_TYPES.join(", ")}`,
+      }),
     );
   }
-  return types as ProposalActionType[];
+  return Effect.succeed(types as ProposalActionType[]);
 }
 
 /**
@@ -474,16 +493,10 @@ export function createProposalsRouter(db: Database, runtime: AppRuntime) {
           );
         }
 
-        let actionTypes: ProposalActionType[] | undefined;
-        let excludeActionTypes: ProposalActionType[] | undefined;
-        try {
-          actionTypes = parseActionTypes(actionTypesParam);
-          excludeActionTypes = parseActionTypes(excludeActionTypesParam);
-        } catch (e) {
-          return yield* Effect.fail(
-            new ValidationError({ message: (e as Error).message }),
-          );
-        }
+        const actionTypes = yield* parseActionTypes(actionTypesParam);
+        const excludeActionTypes = yield* parseActionTypes(
+          excludeActionTypesParam,
+        );
 
         const { proposals, nextCursor } = yield* listProposalsInSpace(db, {
           spaceId,
