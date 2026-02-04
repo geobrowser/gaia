@@ -153,6 +153,7 @@ export function getProposalWithVotes(
 		try: async () => {
 			// PostgreSQL returns bigint columns as strings to preserve precision
 			// Use JSON aggregation to get votes and actions in a single query
+			// Vote counts use denormalized columns; individual votes fetched via LATERAL
 			const result = await db.execute<BaseProposalRow & {votes_json: VoteJsonRow[] | null}>(sql`
         SELECT 
           p.id,
@@ -165,20 +166,12 @@ export function getProposalWithVotes(
           p.quorum,
           p.threshold,
           p.executed_at,
-          COALESCE(vc.yes_count, 0) as yes_count,
-          COALESCE(vc.no_count, 0) as no_count,
-          COALESCE(vc.abstain_count, 0) as abstain_count,
+          p.yes_count,
+          p.no_count,
+          p.abstain_count,
           v.votes_json,
           a.actions_json
         FROM proposals p
-        LEFT JOIN LATERAL (
-          SELECT
-            COUNT(*) FILTER (WHERE vote = 'Yes') as yes_count,
-            COUNT(*) FILTER (WHERE vote = 'No') as no_count,
-            COUNT(*) FILTER (WHERE vote = 'Abstain') as abstain_count
-          FROM proposal_votes
-          WHERE proposal_id = p.id
-        ) vc ON true
         LEFT JOIN LATERAL (
           SELECT COALESCE(json_agg(json_build_object(
             'voter_id', voter_id,
