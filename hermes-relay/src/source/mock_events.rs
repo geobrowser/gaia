@@ -28,6 +28,8 @@
 use alloy::primitives::U256;
 use alloy::sol;
 use alloy::sol_types::SolType;
+use ethabi::Token;
+use ethabi::ethereum_types::U256 as EthU256;
 
 use crate::actions;
 use hermes_substream::pb::hermes::Action;
@@ -447,8 +449,6 @@ fn encode_proposal_data(
     voting_mode: VotingMode,
     actions: &[ProposalAction],
 ) -> Vec<u8> {
-    use ethabi::{ethereum_types::U256 as EthU256, Token};
-
     // Convert actions to ethabi tokens
     let action_tokens: Vec<Token> = actions
         .iter()
