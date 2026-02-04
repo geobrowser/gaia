@@ -451,14 +451,14 @@ export function listProposalsInSpace(
 			}
 
 			// Build status filter condition
-			// Status is computed in SQL to match computeProposalStatus logic
+			// Status is computed in SQL using denormalized vote counts on the proposals table
+			// This matches the logic in status.ts computeProposalStatus
 			let statusCondition = sql``
 			if (status && status.length > 0) {
-				// Build status computation in SQL
-				// This matches the logic in status.ts computeProposalStatus
 				const nowSeconds = BigInt(Math.floor(Date.now() / 1000))
 
 				// Build OR conditions for each requested status
+				// Uses denormalized p.yes_count, p.no_count, p.abstain_count for efficient filtering
 				const statusChecks = status.map((s) => {
 					switch (s) {
 						case "ACCEPTED":
@@ -473,12 +473,12 @@ export function listProposalsInSpace(
 							return sql`(
                 p.executed_at IS NULL
                 AND (
-                  (p.voting_mode = 'Fast' AND COALESCE(vote_counts.yes_count, 0) > GREATEST(p.threshold - 1, 0))
+                  (p.voting_mode = 'Fast' AND p.yes_count > GREATEST(p.threshold - 1, 0))
                   OR (
                     p.voting_mode = 'Slow'
                     AND ${nowSeconds}::bigint > p.end_time
-                    AND (COALESCE(vote_counts.yes_count, 0) + COALESCE(vote_counts.no_count, 0) + COALESCE(vote_counts.abstain_count, 0)) >= p.quorum
-						AND (${RATIO_BASE}::numeric - p.threshold::numeric) * COALESCE(vote_counts.yes_count, 0)::numeric > p.threshold::numeric * COALESCE(vote_counts.no_count, 0)::numeric
+                    AND (p.yes_count + p.no_count + p.abstain_count) >= p.quorum
+                    AND (${RATIO_BASE}::numeric - p.threshold::numeric) * p.yes_count::numeric > p.threshold::numeric * p.no_count::numeric
                   )
                 )
               )`
@@ -490,12 +490,12 @@ export function listProposalsInSpace(
                 p.executed_at IS NULL
                 AND ${nowSeconds}::bigint > p.end_time
                 AND (
-                  (p.voting_mode = 'Fast' AND COALESCE(vote_counts.yes_count, 0) <= GREATEST(p.threshold - 1, 0))
+                  (p.voting_mode = 'Fast' AND p.yes_count <= GREATEST(p.threshold - 1, 0))
                   OR (
                     p.voting_mode = 'Slow'
                     AND (
-                      (COALESCE(vote_counts.yes_count, 0) + COALESCE(vote_counts.no_count, 0) + COALESCE(vote_counts.abstain_count, 0)) < p.quorum
-							OR (${RATIO_BASE}::numeric - p.threshold::numeric) * COALESCE(vote_counts.yes_count, 0)::numeric <= p.threshold::numeric * COALESCE(vote_counts.no_count, 0)::numeric
+                      (p.yes_count + p.no_count + p.abstain_count) < p.quorum
+                      OR (${RATIO_BASE}::numeric - p.threshold::numeric) * p.yes_count::numeric <= p.threshold::numeric * p.no_count::numeric
                     )
                   )
                 )
@@ -509,7 +509,7 @@ export function listProposalsInSpace(
                 AND ${nowSeconds}::bigint <= p.end_time
                 AND (
                   p.voting_mode = 'Slow'
-                  OR (p.voting_mode = 'Fast' AND COALESCE(vote_counts.yes_count, 0) <= GREATEST(p.threshold - 1, 0))
+                  OR (p.voting_mode = 'Fast' AND p.yes_count <= GREATEST(p.threshold - 1, 0))
                 )
               )`
 
@@ -526,6 +526,7 @@ export function listProposalsInSpace(
 			}
 
 			// Note: votes_json omitted for performance - use single proposal endpoint for voters
+			// Vote counts are now denormalized on the proposals table, eliminating the LATERAL join
 			const result = await db.execute<BaseProposalRow & {created_at: string}>(
 				sql`
         SELECT 
@@ -540,19 +541,11 @@ export function listProposalsInSpace(
           p.threshold,
           p.executed_at,
           p.created_at,
-          COALESCE(vote_counts.yes_count, 0) as yes_count,
-          COALESCE(vote_counts.no_count, 0) as no_count,
-          COALESCE(vote_counts.abstain_count, 0) as abstain_count,
+          p.yes_count,
+          p.no_count,
+          p.abstain_count,
           actions_agg.actions_json
         FROM proposals p
-        LEFT JOIN LATERAL (
-          SELECT
-            COUNT(*) FILTER (WHERE vote = 'Yes') as yes_count,
-            COUNT(*) FILTER (WHERE vote = 'No') as no_count,
-            COUNT(*) FILTER (WHERE vote = 'Abstain') as abstain_count
-          FROM proposal_votes
-          WHERE proposal_id = p.id
-        ) vote_counts ON true
         LEFT JOIN LATERAL (
           SELECT COALESCE(json_agg(json_build_object(
             'action_type', action_type,
