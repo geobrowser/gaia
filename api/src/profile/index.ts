@@ -6,15 +6,21 @@
  * to a personal space whose entity contains profile data (name, avatar, cover).
  */
 
-import type {Context} from "hono"
 import type {NodePgDatabase} from "drizzle-orm/node-postgres"
 import {Data, Effect, Either} from "effect"
+import type {Context} from "hono"
 import {Hono} from "hono"
 import {describeRoute} from "hono-openapi"
 
 import type {AppRuntime} from "../services/runtime"
 import {isValidUuid} from "../utils/uuid"
-import {defaultProfile, getProfileByAddress, getProfileBySpaceId, getProfilesBySpaceIds, QueryError} from "./queries"
+import {
+	defaultProfile,
+	getProfileByAddress,
+	getProfileBySpaceId,
+	getProfilesBySpaceIds,
+	type QueryError,
+} from "./queries"
 import type {Profile} from "./types"
 
 type AppEnv = {
@@ -123,7 +129,9 @@ export function createProfileRouter(db: Database, runtime: AppRuntime) {
 				if (!isValidAddress(address)) {
 					yield* Effect.logWarning("Invalid address format", {address: address.slice(0, 10) + "..."})
 					return yield* Effect.fail(
-						new ValidationError({message: "Invalid Ethereum address format. Expected 0x-prefixed 40 hex characters."}),
+						new ValidationError({
+							message: "Invalid Ethereum address format. Expected 0x-prefixed 40 hex characters.",
+						}),
 					)
 				}
 
@@ -393,4 +401,4 @@ export function createProfileRouter(db: Database, runtime: AppRuntime) {
 	return router
 }
 
-export {type Profile} from "./types"
+export type {Profile} from "./types"

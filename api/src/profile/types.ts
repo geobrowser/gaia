@@ -26,5 +26,3 @@ export type Profile = {
 	/** Link to the user's space */
 	profileLink: string
 }
-
-

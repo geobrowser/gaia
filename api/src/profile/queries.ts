@@ -14,10 +14,10 @@
  * - spaces(address, type) WHERE type = 'Personal'
  */
 
-import {Data, Effect} from "effect"
+import {ContentIds, SystemIds} from "@graphprotocol/grc-20"
 import {sql} from "drizzle-orm"
 import type {NodePgDatabase} from "drizzle-orm/node-postgres"
-import {ContentIds, SystemIds} from "@graphprotocol/grc-20"
+import {Data, Effect} from "effect"
 
 import type {Profile} from "./types"
 

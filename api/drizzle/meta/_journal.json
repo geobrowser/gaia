@@ -232,6 +232,13 @@
       "when": 1770154888085,
       "tag": "0032_tranquil_imperial_guard",
       "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1770225552690,
+      "tag": "0033_windy_stingray",
+      "breakpoints": true
     }
   ]
 }

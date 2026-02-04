@@ -7,12 +7,13 @@ import {describeRoute, openAPISpecs} from "hono-openapi"
 import {health} from "./src/health"
 import {graphqlServer} from "./src/kg/postgraphile"
 import {canonicalRequestLogging, requestId} from "./src/middleware/requestLogging"
+import {createProfileRouter} from "./src/profile"
+import {createProposalsRouter} from "./src/proposals"
 import {createSearchRouter} from "./src/search"
 import {uploadEdit, uploadFile} from "./src/services/ipfs"
 import {runtime} from "./src/services/runtime"
 import {OpenSearchClient} from "./src/services/search"
 import {db} from "./src/services/storage/storage"
-import {createProfileRouter} from "./src/profile"
 import {createVersionedRouter} from "./src/versioned"
 
 /**
@@ -55,6 +56,7 @@ app.use("/ipfs/*", canonicalRequestLogging())
 app.use("/profile/*", canonicalRequestLogging())
 app.use("/search/*", canonicalRequestLogging())
 app.use("/versioned/*", canonicalRequestLogging())
+app.use("/proposals/*", canonicalRequestLogging())
 app.use("/graphql", canonicalRequestLogging())
 
 // Initialize search client with dependency injection
@@ -83,10 +85,16 @@ log.info("Versioned entity routes enabled")
 app.route("/profile", createProfileRouter(db, runtime))
 log.info("Profile routes enabled")
 
+// Mount proposals router
+app.route("/proposals", createProposalsRouter(db, runtime))
+log.info("Proposals routes enabled")
+
 app.get("/", swaggerUI({url: "/openapi"}))
 
 app.use("/graphql", async (c) => {
-	return graphqlServer.fetch(c.req.raw, {traceContext: c.get("traceContext")})
+	return graphqlServer.fetch(c.req.raw, {
+		traceContext: c.get("traceContext"),
+	})
 })
 
 app.post(
@@ -161,17 +169,29 @@ app.post(
 		const program = Effect.gen(function* () {
 			if (!file) {
 				yield* Effect.logWarning("No file provided")
-				return yield* Effect.fail({_tag: "ValidationError" as const, status: 400, message: "No file provided"})
+				return yield* Effect.fail({
+					_tag: "ValidationError" as const,
+					status: 400,
+					message: "No file provided",
+				})
 			}
 
 			const result = yield* uploadEdit(file).pipe(
-				Effect.mapError((error) => ({_tag: "UploadError" as const, status: 500, message: error.message})),
+				Effect.mapError((error) => ({
+					_tag: "UploadError" as const,
+					status: 500,
+					message: error.message,
+				})),
 			)
 
 			return result
 		}).pipe(
 			Effect.withSpan("/ipfs/upload-edit"),
-			Effect.annotateLogs({requestId, fileName: file?.name, fileSize: file?.size}),
+			Effect.annotateLogs({
+				requestId,
+				fileName: file?.name,
+				fileSize: file?.size,
+			}),
 		)
 
 		const result = await runtime.runPromise(Effect.either(program))
@@ -255,17 +275,29 @@ app.post(
 		const program = Effect.gen(function* () {
 			if (!file) {
 				yield* Effect.logWarning("No file provided")
-				return yield* Effect.fail({_tag: "ValidationError" as const, status: 400, message: "No file provided"})
+				return yield* Effect.fail({
+					_tag: "ValidationError" as const,
+					status: 400,
+					message: "No file provided",
+				})
 			}
 
 			const result = yield* uploadFile(file).pipe(
-				Effect.mapError((error) => ({_tag: "UploadError" as const, status: 500, message: error.message})),
+				Effect.mapError((error) => ({
+					_tag: "UploadError" as const,
+					status: 500,
+					message: error.message,
+				})),
 			)
 
 			return result
 		}).pipe(
 			Effect.withSpan("/ipfs/upload-file"),
-			Effect.annotateLogs({requestId, fileName: file?.name, fileSize: file?.size}),
+			Effect.annotateLogs({
+				requestId,
+				fileName: file?.name,
+				fileSize: file?.size,
+			}),
 		)
 
 		const result = await runtime.runPromise(Effect.either(program))
@@ -283,7 +315,8 @@ app.post(
 	describeRoute({
 		tags: ["IPFS"],
 		summary: "Upload a file to IPFS (deprecated)",
-		description: "Deprecated: Use /ipfs/upload-file instead. This endpoint is maintained for backwards compatibility.",
+		description:
+			"Deprecated: Use /ipfs/upload-file instead. This endpoint is maintained for backwards compatibility.",
 		deprecated: true,
 		requestBody: {
 			content: {
@@ -351,17 +384,29 @@ app.post(
 		const program = Effect.gen(function* () {
 			if (!file) {
 				yield* Effect.logWarning("No file provided")
-				return yield* Effect.fail({_tag: "ValidationError" as const, status: 400, message: "No file provided"})
+				return yield* Effect.fail({
+					_tag: "ValidationError" as const,
+					status: 400,
+					message: "No file provided",
+				})
 			}
 
 			const result = yield* uploadFile(file).pipe(
-				Effect.mapError((error) => ({_tag: "UploadError" as const, status: 500, message: error.message})),
+				Effect.mapError((error) => ({
+					_tag: "UploadError" as const,
+					status: 500,
+					message: error.message,
+				})),
 			)
 
 			return result
 		}).pipe(
 			Effect.withSpan("/ipfs/upload-file-alternative-gateway"),
-			Effect.annotateLogs({requestId, fileName: file?.name, fileSize: file?.size}),
+			Effect.annotateLogs({
+				requestId,
+				fileName: file?.name,
+				fileSize: file?.size,
+			}),
 		)
 
 		const result = await runtime.runPromise(Effect.either(program))
@@ -384,7 +429,10 @@ app.get(
 			},
 			servers: [
 				{url: "http://localhost:3000", description: "Local Server"},
-				{url: "https://api-testnet.geobrowser.io", description: "Testnet Geo API"},
+				{
+					url: "https://api-testnet.geobrowser.io",
+					description: "Testnet Geo API",
+				},
 			],
 			components: {
 				schemas: {
@@ -393,12 +441,34 @@ app.get(
 						type: "object",
 						description: "A user profile derived from their personal space",
 						properties: {
-							spaceId: {type: "string", format: "uuid", description: "The user's personal space ID"},
-							name: {type: "string", nullable: true, description: "Display name from the NAME_PROPERTY value"},
-							avatarUrl: {type: "string", nullable: true, description: "Avatar image URL from the AVATAR_PROPERTY relation"},
-							coverUrl: {type: "string", nullable: true, description: "Cover image URL from the COVER_PROPERTY relation"},
-							address: {type: "string", description: "The user's wallet address (0x prefixed)"},
-							profileLink: {type: "string", description: "Link to the user's space"},
+							spaceId: {
+								type: "string",
+								format: "uuid",
+								description: "The user's personal space ID",
+							},
+							name: {
+								type: "string",
+								nullable: true,
+								description: "Display name from the NAME_PROPERTY value",
+							},
+							avatarUrl: {
+								type: "string",
+								nullable: true,
+								description: "Avatar image URL from the AVATAR_PROPERTY relation",
+							},
+							coverUrl: {
+								type: "string",
+								nullable: true,
+								description: "Cover image URL from the COVER_PROPERTY relation",
+							},
+							address: {
+								type: "string",
+								description: "The user's wallet address (0x prefixed)",
+							},
+							profileLink: {
+								type: "string",
+								description: "Link to the user's space",
+							},
 						},
 						required: ["spaceId", "address", "profileLink"],
 					},
@@ -415,20 +485,44 @@ app.get(
 							float: {type: "number", nullable: true},
 							decimal: {type: "string", nullable: true},
 							text: {type: "string", nullable: true},
-							bytes: {type: "string", nullable: true, description: "Base64 encoded"},
+							bytes: {
+								type: "string",
+								nullable: true,
+								description: "Base64 encoded",
+							},
 							date: {type: "string", format: "date", nullable: true},
-							time: {type: "string", nullable: true, description: "ISO 8601 time"},
+							time: {
+								type: "string",
+								nullable: true,
+								description: "ISO 8601 time",
+							},
 							datetime: {type: "string", format: "date-time", nullable: true},
-							schedule: {type: "object", nullable: true, description: "RFC 5545 schedule"},
-							point: {type: "string", nullable: true, description: "WGS84 point"},
-							rect: {type: "string", nullable: true, description: "WGS84 bounding box"},
+							schedule: {
+								type: "object",
+								nullable: true,
+								description: "RFC 5545 schedule",
+							},
+							point: {
+								type: "string",
+								nullable: true,
+								description: "WGS84 point",
+							},
+							rect: {
+								type: "string",
+								nullable: true,
+								description: "WGS84 bounding box",
+							},
 							embedding: {type: "object", nullable: true},
 							// Metadata
 							language: {type: "string", nullable: true},
 							unit: {type: "string", nullable: true},
 							// Context metadata
 							contextRootId: {type: "string", format: "uuid", nullable: true},
-							contextEdgeTypeId: {type: "string", format: "uuid", nullable: true},
+							contextEdgeTypeId: {
+								type: "string",
+								format: "uuid",
+								nullable: true,
+							},
 						},
 						required: ["propertyId", "spaceId"],
 					},
@@ -446,7 +540,11 @@ app.get(
 							spaceId: {type: "string", format: "uuid"},
 							verified: {type: "boolean", nullable: true},
 							contextRootId: {type: "string", format: "uuid", nullable: true},
-							contextEdgeTypeId: {type: "string", format: "uuid", nullable: true},
+							contextEdgeTypeId: {
+								type: "string",
+								format: "uuid",
+								nullable: true,
+							},
 						},
 						required: ["relationId", "typeId", "fromEntityId", "toEntityId", "spaceId"],
 					},
@@ -455,8 +553,14 @@ app.get(
 						description: "A block snapshot - an entity linked via BLOCKS relation",
 						properties: {
 							id: {type: "string", format: "uuid"},
-							values: {type: "array", items: {$ref: "#/components/schemas/VersionedValue"}},
-							relations: {type: "array", items: {$ref: "#/components/schemas/VersionedRelation"}},
+							values: {
+								type: "array",
+								items: {$ref: "#/components/schemas/VersionedValue"},
+							},
+							relations: {
+								type: "array",
+								items: {$ref: "#/components/schemas/VersionedRelation"},
+							},
 						},
 						required: ["id", "values", "relations"],
 					},
@@ -465,13 +569,19 @@ app.get(
 						description: "An entity snapshot at a specific version",
 						properties: {
 							id: {type: "string", format: "uuid"},
-							values: {type: "array", items: {$ref: "#/components/schemas/VersionedValue"}},
+							values: {
+								type: "array",
+								items: {$ref: "#/components/schemas/VersionedValue"},
+							},
 							relations: {
 								type: "array",
 								items: {$ref: "#/components/schemas/VersionedRelation"},
 								description: "Excludes block relations",
 							},
-							blocks: {type: "array", items: {$ref: "#/components/schemas/BlockSnapshot"}},
+							blocks: {
+								type: "array",
+								items: {$ref: "#/components/schemas/BlockSnapshot"},
+							},
 						},
 						required: ["id", "values", "relations", "blocks"],
 					},
@@ -566,7 +676,10 @@ app.get(
 						description: "A block change (text, image, or data block)",
 						properties: {
 							id: {type: "string", format: "uuid"},
-							type: {type: "string", enum: ["textBlock", "imageBlock", "dataBlock"]},
+							type: {
+								type: "string",
+								enum: ["textBlock", "imageBlock", "dataBlock"],
+							},
 							before: {type: "string", nullable: true},
 							after: {type: "string", nullable: true},
 							diff: {
@@ -584,8 +697,14 @@ app.get(
 						properties: {
 							entityId: {type: "string", format: "uuid"},
 							name: {type: "string", nullable: true},
-							values: {type: "array", items: {$ref: "#/components/schemas/ValueChange"}},
-							relations: {type: "array", items: {$ref: "#/components/schemas/RelationChange"}},
+							values: {
+								type: "array",
+								items: {$ref: "#/components/schemas/ValueChange"},
+							},
+							relations: {
+								type: "array",
+								items: {$ref: "#/components/schemas/RelationChange"},
+							},
 							blocks: {
 								type: "array",
 								items: {$ref: "#/components/schemas/BlockChange"},
@@ -603,6 +722,132 @@ app.get(
 							description: "Dynamic groups by relation type ID",
 						},
 						required: ["entityId", "values", "relations", "blocks", "groupKeys"],
+					},
+					// Proposal status types
+					ProposalStatusResponse: {
+						type: "object",
+						description: "Computed proposal status with vote counts and timing info",
+						properties: {
+							proposalId: {type: "string", format: "uuid"},
+							spaceId: {type: "string", format: "uuid"},
+							name: {
+								type: "string",
+								nullable: true,
+								description: "Human-readable proposal name",
+							},
+							status: {
+								type: "string",
+								enum: ["PROPOSED", "EXECUTABLE", "ACCEPTED", "REJECTED"],
+								description: "Current status of the proposal",
+							},
+							votingMode: {
+								type: "string",
+								enum: ["FAST", "SLOW"],
+								description: "Voting mode determines threshold calculation",
+							},
+							votes: {
+								type: "object",
+								properties: {
+									yes: {type: "integer", minimum: 0},
+									no: {type: "integer", minimum: 0},
+									abstain: {type: "integer", minimum: 0},
+									total: {type: "integer", minimum: 0},
+								},
+								required: ["yes", "no", "abstain", "total"],
+							},
+							quorum: {
+								type: "object",
+								description: "Quorum progress information",
+								properties: {
+									required: {
+										type: "integer",
+										description: "Required votes for quorum",
+									},
+									current: {
+										type: "integer",
+										description: "Current total votes",
+									},
+									progress: {
+										type: "number",
+										description: "Progress as decimal (0.0 to 1.0)",
+									},
+									reached: {type: "boolean"},
+								},
+								required: ["required", "current", "progress", "reached"],
+							},
+							threshold: {
+								type: "object",
+								description: "Threshold progress information",
+								properties: {
+									required: {
+										type: "string",
+										description: "Required threshold (bigint as string)",
+									},
+									current: {
+										type: "integer",
+										description: "Current yes votes",
+									},
+									progress: {
+										type: "number",
+										description: "Progress as decimal (0.0 to 1.0)",
+									},
+									reached: {type: "boolean"},
+								},
+								required: ["required", "current", "progress", "reached"],
+							},
+							timing: {
+								type: "object",
+								properties: {
+									startTime: {
+										type: "integer",
+										description: "Unix timestamp when voting starts",
+									},
+									endTime: {
+										type: "integer",
+										description: "Unix timestamp when voting ends",
+									},
+									timeRemaining: {
+										type: "integer",
+										nullable: true,
+										description: "Seconds until voting ends, null if ended",
+									},
+									isVotingEnded: {type: "boolean"},
+								},
+								required: ["startTime", "endTime", "timeRemaining", "isVotingEnded"],
+							},
+							canExecute: {
+								type: "boolean",
+								description: "True if proposal can be executed on-chain",
+							},
+						},
+						required: [
+							"proposalId",
+							"spaceId",
+							"name",
+							"status",
+							"votingMode",
+							"votes",
+							"quorum",
+							"threshold",
+							"timing",
+							"canExecute",
+						],
+					},
+					ProposalListResponse: {
+						type: "object",
+						description: "Paginated list of proposal statuses",
+						properties: {
+							proposals: {
+								type: "array",
+								items: {$ref: "#/components/schemas/ProposalStatusResponse"},
+							},
+							nextCursor: {
+								type: "string",
+								nullable: true,
+								description: "Cursor for next page, null if no more results",
+							},
+						},
+						required: ["proposals", "nextCursor"],
 					},
 				},
 			},
