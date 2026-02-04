@@ -224,6 +224,40 @@ pub fn subspace_related(parent_space_id: SpaceId, subspace_id: SpaceId) -> Actio
     }
 }
 
+/// Create a SUBSPACE_UNVERIFIED action (removes a verified edge).
+///
+/// - `parent_space_id`: The space removing verification
+/// - `subspace_id`: The subspace being unverified
+pub fn subspace_unverified(parent_space_id: SpaceId, subspace_id: SpaceId) -> Action {
+    let mut topic = vec![0u8; 16];
+    topic.extend_from_slice(&subspace_id);
+
+    Action {
+        from_id: parent_space_id.to_vec(),
+        to_id: vec![0u8; 16],
+        action: actions::SUBSPACE_UNVERIFIED.to_vec(),
+        topic,
+        data: vec![],
+    }
+}
+
+/// Create a SUBSPACE_UNRELATED action (removes a related edge).
+///
+/// - `parent_space_id`: The space removing the related link
+/// - `subspace_id`: The subspace being unrelated
+pub fn subspace_unrelated(parent_space_id: SpaceId, subspace_id: SpaceId) -> Action {
+    let mut topic = vec![0u8; 16];
+    topic.extend_from_slice(&subspace_id);
+
+    Action {
+        from_id: parent_space_id.to_vec(),
+        to_id: vec![0u8; 16],
+        action: actions::SUBSPACE_UNRELATED.to_vec(),
+        topic,
+        data: vec![],
+    }
+}
+
 /// Create a SUBSPACE_TOPIC_DECLARED action.
 ///
 /// - `parent_space_id`: The parent space declaring the topic
