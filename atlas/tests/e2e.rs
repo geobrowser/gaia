@@ -1425,6 +1425,7 @@ fn test_e2e_diff_tracker_with_capacity() {
     let mut canonical = CanonicalProcessor::new(ROOT_SPACE_ID);
     let mut diff_tracker = DiffTracker::with_capacity(100); // Pre-allocate
 
+    let mut diff_count = 0;
     for (i, action) in actions.iter().enumerate() {
         let meta = make_meta(i as u64);
         if let Some(event) = convert_action(action, &meta) {
@@ -1432,13 +1433,19 @@ fn test_e2e_diff_tracker_with_capacity() {
             state.apply_event(&event);
 
             if let Some(graph) = canonical.compute(&state, &mut transitive) {
-                let _diff = diff_tracker.track(&graph);
+                let diff = diff_tracker.track(&graph);
+                if !diff.is_empty() {
+                    diff_count += 1;
+                }
             }
         }
     }
 
-    // Should complete without issues
-    assert!(true);
+    // Should have produced at least one diff (bootstrap)
+    assert!(
+        diff_count > 0,
+        "DiffTracker with pre-allocated capacity should still produce diffs"
+    );
 }
 
 #[test]
