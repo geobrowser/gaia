@@ -1088,11 +1088,9 @@ impl Storage {
     /// Get the current depth of the proposal tally queue.
     /// Useful for monitoring worker health and detecting backlogs.
     pub async fn get_tally_queue_depth(&self) -> Result<i64, IndexerError> {
-        let result: (i64,) = sqlx::query_as(
-            r#"SELECT COUNT(*) FROM proposal_tally_queue"#,
-        )
-        .fetch_one(&self.pool)
-        .await?;
+        let result: (i64,) = sqlx::query_as(r#"SELECT COUNT(*) FROM proposal_tally_queue"#)
+            .fetch_one(&self.pool)
+            .await?;
 
         Ok(result.0)
     }

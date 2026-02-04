@@ -300,10 +300,7 @@ const BIGINT_PATTERN = /^-?\d+$/
  * Validates the cursor format and returns parsed components.
  * Returns null if cursor is invalid.
  */
-function parseCursor(
-	cursor: string,
-	orderBy: ProposalOrderBy,
-): {orderValue: string; cursorId: string} | null {
+function parseCursor(cursor: string, orderBy: ProposalOrderBy): {orderValue: string; cursorId: string} | null {
 	const parts = cursor.split("|")
 	if (parts.length !== 2) return null
 
@@ -340,7 +337,9 @@ function buildCursorCondition(
 	const parsed = parseCursor(cursor, orderBy)
 	if (!parsed) {
 		// Log warning for debugging - invalid cursor format causes pagination to restart from beginning
-		console.warn(`[queries] Invalid cursor format ignored, restarting pagination: cursor=${cursor}, orderBy=${orderBy}`)
+		console.warn(
+			`[queries] Invalid cursor format ignored, restarting pagination: cursor=${cursor}, orderBy=${orderBy}`,
+		)
 		return sql``
 	}
 

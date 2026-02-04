@@ -469,7 +469,8 @@ export function createProposalsRouter(db: Database, runtime: AppRuntime) {
 				{
 					name: "status",
 					in: "query",
-					description: "Filter by proposal status (comma-separated): PROPOSED, EXECUTABLE, ACCEPTED, REJECTED",
+					description:
+						"Filter by proposal status (comma-separated): PROPOSED, EXECUTABLE, ACCEPTED, REJECTED",
 					schema: {type: "string"},
 				},
 				{
