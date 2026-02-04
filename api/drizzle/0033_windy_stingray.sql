@@ -1,0 +1,1 @@
+CREATE INDEX "proposals_space_created_at_idx" ON "proposals" USING btree ("space_id","created_at");
