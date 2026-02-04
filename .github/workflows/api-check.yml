@@ -2,14 +2,13 @@ name: API Check
 
 on:
   push:
+    branches: [main, dev]
     paths:
       - 'api/**'
-      - 'api/drizzle/**'
   pull_request:
     branches: [main, dev]
     paths:
       - 'api/**'
-      - 'api/drizzle/**'
 
 jobs:
   check:

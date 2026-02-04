@@ -10,7 +10,9 @@ import {Data, Effect} from "effect"
 import {
 	type ProposalAction,
 	type ProposalActionType,
+	type ProposalStatus,
 	type ProposalWithVotes,
+	RATIO_BASE,
 	VOTE_OPTIONS,
 	type Vote,
 	type VoteOption,
@@ -151,6 +153,7 @@ export function getProposalWithVotes(
 		try: async () => {
 			// PostgreSQL returns bigint columns as strings to preserve precision
 			// Use JSON aggregation to get votes and actions in a single query
+			// Vote counts use denormalized columns; individual votes fetched via LATERAL
 			const result = await db.execute<BaseProposalRow & {votes_json: VoteJsonRow[] | null}>(sql`
         SELECT 
           p.id,
@@ -163,20 +166,12 @@ export function getProposalWithVotes(
           p.quorum,
           p.threshold,
           p.executed_at,
-          COALESCE(vc.yes_count, 0) as yes_count,
-          COALESCE(vc.no_count, 0) as no_count,
-          COALESCE(vc.abstain_count, 0) as abstain_count,
+          p.yes_count,
+          p.no_count,
+          p.abstain_count,
           v.votes_json,
           a.actions_json
         FROM proposals p
-        LEFT JOIN LATERAL (
-          SELECT
-            COUNT(*) FILTER (WHERE vote = 'Yes') as yes_count,
-            COUNT(*) FILTER (WHERE vote = 'No') as no_count,
-            COUNT(*) FILTER (WHERE vote = 'Abstain') as abstain_count
-          FROM proposal_votes
-          WHERE proposal_id = p.id
-        ) vc ON true
         LEFT JOIN LATERAL (
           SELECT COALESCE(json_agg(json_build_object(
             'voter_id', voter_id,
@@ -221,6 +216,15 @@ export function getProposalWithVotes(
 }
 
 /**
+ * Sort order options for listing proposals.
+ */
+export const PROPOSAL_ORDER_BY = ["created_at", "end_time", "start_time"] as const
+export type ProposalOrderBy = (typeof PROPOSAL_ORDER_BY)[number]
+
+export const PROPOSAL_ORDER_DIRECTION = ["asc", "desc"] as const
+export type ProposalOrderDirection = (typeof PROPOSAL_ORDER_DIRECTION)[number]
+
+/**
  * Options for listing proposals in a space.
  */
 export interface ListProposalsOptions {
@@ -231,6 +235,12 @@ export interface ListProposalsOptions {
 	actionTypes?: ProposalActionType[]
 	/** Exclude proposals with these action types */
 	excludeActionTypes?: ProposalActionType[]
+	/** Filter by computed proposal status */
+	status?: ProposalStatus[]
+	/** Field to order by (default: created_at) */
+	orderBy?: ProposalOrderBy
+	/** Sort direction (default: desc) */
+	orderDirection?: ProposalOrderDirection
 }
 
 /**
@@ -242,25 +252,171 @@ export interface ListProposalsResult {
 }
 
 /**
- * Lists proposals in a space with optional filtering by action type.
- * Uses cursor-based pagination ordered by created_at DESC.
+ * WARNING: Status computation logic in SQL below MUST match computeProposalStatus() in status.ts.
+ * Any changes to status computation must be made in BOTH places.
+ * Run tests in __tests__/queries.test.ts to verify implementations match.
+ */
+
+/**
+ * Builds the SQL ORDER BY clause based on orderBy and orderDirection options.
+ * Returns the appropriate SQL fragment for ordering.
+ */
+function buildOrderClause(
+	orderBy: ProposalOrderBy = "created_at",
+	orderDirection: ProposalOrderDirection = "desc",
+): ReturnType<typeof sql> {
+	// Map orderBy to actual column and build ORDER BY
+	// Using explicit branches to avoid SQL injection - we control the column names
+	if (orderDirection === "asc") {
+		switch (orderBy) {
+			case "end_time":
+				return sql`ORDER BY p.end_time ASC, p.id ASC`
+			case "start_time":
+				return sql`ORDER BY p.start_time ASC, p.id ASC`
+			case "created_at":
+			default:
+				return sql`ORDER BY p.created_at ASC, p.id ASC`
+		}
+	} else {
+		switch (orderBy) {
+			case "end_time":
+				return sql`ORDER BY p.end_time DESC, p.id DESC`
+			case "start_time":
+				return sql`ORDER BY p.start_time DESC, p.id DESC`
+			case "created_at":
+			default:
+				return sql`ORDER BY p.created_at DESC, p.id DESC`
+		}
+	}
+}
+
+/** UUID pattern for cursor validation */
+const UUID_PATTERN = /^[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}$/i
+
+/** Numeric pattern for bigint cursor values */
+const BIGINT_PATTERN = /^-?\d+$/
+
+/**
+ * Validates the cursor format and returns parsed components.
+ * Returns null if cursor is invalid.
+ */
+function parseCursor(cursor: string, orderBy: ProposalOrderBy): {orderValue: string; cursorId: string} | null {
+	const parts = cursor.split("|")
+	if (parts.length !== 2) return null
+
+	const [orderValue, cursorId] = parts
+	if (!orderValue || !cursorId) return null
+
+	// Validate cursorId is a valid UUID
+	if (!UUID_PATTERN.test(cursorId)) return null
+
+	// Validate orderValue format based on orderBy type
+	if (orderBy === "created_at") {
+		// Should be ISO timestamp - basic format check
+		if (!/^\d{4}-\d{2}-\d{2}/.test(orderValue)) return null
+	} else {
+		// Should be bigint for end_time/start_time
+		if (!BIGINT_PATTERN.test(orderValue)) return null
+	}
+
+	return {orderValue, cursorId}
+}
+
+/**
+ * Builds the cursor condition for pagination based on orderBy and direction.
+ * Uses (order_column, id) tuple comparison for stable pagination.
+ * Returns empty SQL fragment if cursor is missing or invalid.
+ */
+function buildCursorCondition(
+	cursor: string | undefined,
+	orderBy: ProposalOrderBy = "created_at",
+	orderDirection: ProposalOrderDirection = "desc",
+): ReturnType<typeof sql> {
+	if (!cursor) return sql``
+
+	const parsed = parseCursor(cursor, orderBy)
+	if (!parsed) {
+		// Log warning for debugging - invalid cursor format causes pagination to restart from beginning
+		console.warn(
+			`[queries] Invalid cursor format ignored, restarting pagination: cursor=${cursor}, orderBy=${orderBy}`,
+		)
+		return sql``
+	}
+
+	const {orderValue, cursorId} = parsed
+
+	// Build comparison based on direction (< for DESC, > for ASC)
+	// Using tuple comparison for stable pagination with ties
+	if (orderDirection === "asc") {
+		switch (orderBy) {
+			case "end_time":
+				return sql`AND (p.end_time, p.id) > (${orderValue}::bigint, ${cursorId}::uuid)`
+			case "start_time":
+				return sql`AND (p.start_time, p.id) > (${orderValue}::bigint, ${cursorId}::uuid)`
+			case "created_at":
+			default:
+				return sql`AND (p.created_at, p.id) > (${orderValue}::timestamptz, ${cursorId}::uuid)`
+		}
+	} else {
+		switch (orderBy) {
+			case "end_time":
+				return sql`AND (p.end_time, p.id) < (${orderValue}::bigint, ${cursorId}::uuid)`
+			case "start_time":
+				return sql`AND (p.start_time, p.id) < (${orderValue}::bigint, ${cursorId}::uuid)`
+			case "created_at":
+			default:
+				return sql`AND (p.created_at, p.id) < (${orderValue}::timestamptz, ${cursorId}::uuid)`
+		}
+	}
+}
+
+/**
+ * Extracts the cursor value from a row based on orderBy field.
+ * Returns format "order_value|id" for stable pagination.
+ */
+function extractCursorValue(
+	row: BaseProposalRow & {created_at: string},
+	orderBy: ProposalOrderBy = "created_at",
+): string {
+	switch (orderBy) {
+		case "end_time":
+			return `${row.end_time}|${row.id}`
+		case "start_time":
+			return `${row.start_time}|${row.id}`
+		case "created_at":
+		default:
+			return `${row.created_at}|${row.id}`
+	}
+}
+
+/**
+ * Lists proposals in a space with optional filtering by action type and status.
+ * Uses cursor-based pagination with configurable ordering.
  * Returns vote counts only (not individual voters) for performance.
  *
+ * Status filtering is computed in SQL using the same logic as computeProposalStatus:
+ * - ACCEPTED: executed_at IS NOT NULL
+ * - Fast path EXECUTABLE: yes_count >= threshold
+ * - Fast path REJECTED: voting ended and threshold not met
+ * - Slow path EXECUTABLE: voting ended, quorum met, and (RATIO_BASE - threshold) * yes > threshold * no
+ * - Slow path REJECTED: voting ended and (quorum not met OR threshold not met)
+ * - PROPOSED: voting not ended and not yet executable
+ *
  * @param db - Drizzle database instance
- * @param options - Query options (spaceId, limit, cursor, actionType)
+ * @param options - Query options (spaceId, limit, cursor, actionType, status, orderBy)
  * @returns Paginated list of proposals with vote counts and actions
  */
 export function listProposalsInSpace(
 	db: Database,
 	options: ListProposalsOptions,
 ): Effect.Effect<ListProposalsResult, QueryError> {
-	const {spaceId, limit, cursor, actionTypes, excludeActionTypes} = options
+	const {spaceId, limit, cursor, actionTypes, excludeActionTypes, status, orderBy, orderDirection} = options
 
 	return Effect.tryPromise({
 		try: async () => {
-			// Build the query dynamically based on filters
-			// Cursor is the created_at timestamp for stable pagination
-			const cursorCondition = cursor ? sql`AND p.created_at < ${cursor}` : sql``
+			// Build dynamic query conditions
+			const cursorCondition = buildCursorCondition(cursor, orderBy, orderDirection)
+			const orderClause = buildOrderClause(orderBy, orderDirection)
 
 			// Build action type filter conditions
 			// Use EXISTS subquery instead of JOIN to avoid SQL injection and cartesian products
@@ -286,7 +442,83 @@ export function listProposalsInSpace(
         )`
 			}
 
+			// Build status filter condition
+			// Status is computed in SQL using denormalized vote counts on the proposals table
+			// This matches the logic in status.ts computeProposalStatus
+			let statusCondition = sql``
+			if (status && status.length > 0) {
+				const nowSeconds = BigInt(Math.floor(Date.now() / 1000))
+
+				// Build OR conditions for each requested status
+				// Uses denormalized p.yes_count, p.no_count, p.abstain_count for efficient filtering
+				const statusChecks = status.map((s) => {
+					switch (s) {
+						case "ACCEPTED":
+							// Already executed
+							return sql`(p.executed_at IS NOT NULL)`
+
+						case "EXECUTABLE":
+							// Not executed AND meets threshold conditions
+							// Fast path: yes > (threshold - 1), equivalent to yes >= threshold for threshold > 0
+							//            For threshold = 0, this means yes > 0 (needs at least 1 yes vote)
+							// Slow path: voting ended AND quorum met AND (RATIO_BASE - threshold) * yes > threshold * no
+							return sql`(
+                p.executed_at IS NULL
+                AND (
+                  (p.voting_mode = 'Fast' AND p.yes_count > GREATEST(p.threshold - 1, 0))
+                  OR (
+                    p.voting_mode = 'Slow'
+                    AND ${nowSeconds}::bigint > p.end_time
+                    AND (p.yes_count + p.no_count + p.abstain_count) >= p.quorum
+                    AND (${RATIO_BASE}::numeric - p.threshold::numeric) * p.yes_count::numeric > p.threshold::numeric * p.no_count::numeric
+                  )
+                )
+              )`
+
+						case "REJECTED":
+							// Not executed AND voting ended AND threshold/quorum not met
+							// Fast path: yes <= (threshold - 1), i.e., NOT (yes > threshold - 1)
+							return sql`(
+                p.executed_at IS NULL
+                AND ${nowSeconds}::bigint > p.end_time
+                AND (
+                  (p.voting_mode = 'Fast' AND p.yes_count <= GREATEST(p.threshold - 1, 0))
+                  OR (
+                    p.voting_mode = 'Slow'
+                    AND (
+                      (p.yes_count + p.no_count + p.abstain_count) < p.quorum
+                      OR (${RATIO_BASE}::numeric - p.threshold::numeric) * p.yes_count::numeric <= p.threshold::numeric * p.no_count::numeric
+                    )
+                  )
+                )
+              )`
+
+						case "PROPOSED":
+							// Not executed AND voting not ended AND (fast path: threshold not yet met)
+							// Fast path: yes <= (threshold - 1), i.e., NOT yet executable
+							return sql`(
+                p.executed_at IS NULL
+                AND ${nowSeconds}::bigint <= p.end_time
+                AND (
+                  p.voting_mode = 'Slow'
+                  OR (p.voting_mode = 'Fast' AND p.yes_count <= GREATEST(p.threshold - 1, 0))
+                )
+              )`
+
+						default: {
+							// Exhaustiveness check - TypeScript will error if a new status is added
+							const _exhaustive: never = s
+							return sql`FALSE`
+						}
+					}
+				})
+
+				const statusOr = statusChecks.reduce((acc, check) => sql`${acc} OR ${check}`)
+				statusCondition = sql`AND (${statusOr})`
+			}
+
 			// Note: votes_json omitted for performance - use single proposal endpoint for voters
+			// Vote counts are now denormalized on the proposals table, eliminating the LATERAL join
 			const result = await db.execute<BaseProposalRow & {created_at: string}>(
 				sql`
         SELECT 
@@ -301,19 +533,11 @@ export function listProposalsInSpace(
           p.threshold,
           p.executed_at,
           p.created_at,
-          COALESCE(vote_counts.yes_count, 0) as yes_count,
-          COALESCE(vote_counts.no_count, 0) as no_count,
-          COALESCE(vote_counts.abstain_count, 0) as abstain_count,
+          p.yes_count,
+          p.no_count,
+          p.abstain_count,
           actions_agg.actions_json
         FROM proposals p
-        LEFT JOIN LATERAL (
-          SELECT
-            COUNT(*) FILTER (WHERE vote = 'Yes') as yes_count,
-            COUNT(*) FILTER (WHERE vote = 'No') as no_count,
-            COUNT(*) FILTER (WHERE vote = 'Abstain') as abstain_count
-          FROM proposal_votes
-          WHERE proposal_id = p.id
-        ) vote_counts ON true
         LEFT JOIN LATERAL (
           SELECT COALESCE(json_agg(json_build_object(
             'action_type', action_type,
@@ -331,7 +555,8 @@ export function listProposalsInSpace(
         WHERE p.space_id = ${spaceId}::uuid
         ${cursorCondition}
         ${actionTypeCondition}
-        ORDER BY p.created_at DESC
+        ${statusCondition}
+        ${orderClause}
         LIMIT ${limit + 1}
       `,
 			)
@@ -343,9 +568,9 @@ export function listProposalsInSpace(
 			// Map rows to domain objects with empty votes (use single endpoint for voters)
 			const proposals = proposalRows.map((row) => mapRowToProposal(row, []))
 
-			// Next cursor is the created_at of the last item
+			// Next cursor is the order value + id of the last item
 			const lastRow = proposalRows[proposalRows.length - 1]
-			const nextCursor = hasMore && lastRow ? lastRow.created_at : null
+			const nextCursor = hasMore && lastRow ? extractCursorValue(lastRow, orderBy) : null
 
 			return {proposals, nextCursor}
 		},
@@ -362,6 +587,9 @@ export function listProposalsInSpace(
 				"query.cursor": cursor ?? "none",
 				"query.action_types": actionTypes?.join(",") ?? "all",
 				"query.exclude_action_types": excludeActionTypes?.join(",") ?? "none",
+				"query.status": status?.join(",") ?? "all",
+				"query.order_by": orderBy ?? "created_at",
+				"query.order_direction": orderDirection ?? "desc",
 			},
 		}),
 	)

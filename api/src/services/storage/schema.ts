@@ -410,12 +410,23 @@ export const proposals = pgTable(
 		 * Multiple actions are concatenated with ", " separator.
 		 */
 		name: text(),
+		/**
+		 * Denormalized vote counts for efficient status filtering.
+		 * Updated asynchronously by a background worker via proposal_tally_queue.
+		 */
+		yesCount: bigint("yes_count", {mode: "number"}).notNull().default(0),
+		noCount: bigint("no_count", {mode: "number"}).notNull().default(0),
+		abstainCount: bigint("abstain_count", {mode: "number"}).notNull().default(0),
 	},
 	(table) => [
 		index("proposals_space_id_idx").on(table.spaceId),
 		index("proposals_proposed_by_idx").on(table.proposedBy),
 		index("proposals_created_at_idx").on(table.createdAt),
-		index("proposals_end_time_idx").on(table.endTime),
+		// Composite indexes for list query ordering with pagination
+		// Note: Single-column end_time index removed as it's redundant with composite index
+		index("proposals_space_created_at_idx").on(table.spaceId, table.createdAt),
+		index("proposals_space_end_time_idx").on(table.spaceId, table.endTime),
+		index("proposals_space_start_time_idx").on(table.spaceId, table.startTime),
 	],
 )
 
@@ -511,6 +522,21 @@ export const proposalVotesRelations = drizzleRelations(proposalVotes, ({one}) =>
 export type DbProposal = InferSelectModel<typeof proposals>
 export type DbProposalAction = InferSelectModel<typeof proposalActions>
 export type DbProposalVote = InferSelectModel<typeof proposalVotes>
+
+/**
+ * proposal_tally_queue
+ *
+ * Queue for proposals that need their vote tallies updated.
+ * When a vote is cast, the proposal_id is added to this queue (inside the same transaction).
+ * A background worker processes this queue and updates the denormalized vote counts on proposals.
+ * This decouples the vote write path from the tally computation for better performance.
+ */
+export const proposalTallyQueue = pgTable("proposal_tally_queue", {
+	proposalId: uuid("proposal_id")
+		.primaryKey()
+		.references(() => proposals.id, {onDelete: "cascade"}),
+	queuedAt: timestamp("queued_at", {withTimezone: true, mode: "date"}).notNull().defaultNow(),
+})
 
 /** Scoring Tables */
 
