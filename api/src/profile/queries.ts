@@ -74,24 +74,20 @@ export function defaultProfile(address: string, spaceId?: string): Profile {
 
 /**
  * SQL fragment for selecting profile fields from a space.
- * Uses ORDER BY id for deterministic results when multiple values exist.
  * Constrains image lookups by space_id to avoid cross-space data leakage.
  */
 function profileSelectFields() {
 	return sql`
 		s.id AS space_id,
 		s.address AS space_address,
-		-- Get name from values (ORDER BY for deterministic results)
 		(
 			SELECT v.text
 			FROM "values" v
 			WHERE v.entity_id = s.id
 			  AND v.property_id = ${NAME_PROPERTY}::uuid
 			  AND v.space_id = s.id
-			ORDER BY v.id
 			LIMIT 1
 		) AS entity_name,
-		-- Get avatar URL from relations (constrain by space_id for data integrity)
 		(
 			SELECT img_val.text
 			FROM relations r
@@ -101,7 +97,6 @@ function profileSelectFields() {
 			WHERE r.from_entity_id = s.id
 			  AND r.type_id = ${AVATAR_PROPERTY}::uuid
 			  AND r.space_id = s.id
-			ORDER BY r.id
 			LIMIT 1
 		) AS avatar_url
 	`
