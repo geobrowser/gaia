@@ -11,13 +11,23 @@ import {describeRoute} from "hono-openapi"
 
 import type {AppRuntime} from "../services/runtime"
 import {isValidUuid, normalizeUuid} from "../utils/uuid"
-import {getProposalWithVotes, listProposalsInSpace, type QueryError} from "./queries"
+import {
+	getProposalWithVotes,
+	listProposalsInSpace,
+	PROPOSAL_ORDER_BY,
+	PROPOSAL_ORDER_DIRECTION,
+	type ProposalOrderBy,
+	type ProposalOrderDirection,
+	type QueryError,
+} from "./queries"
 import {computeProposalStatus, getCurrentTimeSeconds} from "./status"
 import {
 	type ActionResponse,
 	PROPOSAL_ACTION_TYPES,
 	type ProposalActionType,
+	type ProposalStatus,
 	type ProposalStatusResponse,
+	PROPOSAL_STATUSES,
 	type ProposalWithVotes,
 	RATIO_BASE,
 	type Vote,
@@ -240,6 +250,60 @@ function parseActionTypes(param: string | undefined): Effect.Effect<ProposalActi
 }
 
 /**
+ * Parse and validate a comma-separated list of proposal statuses.
+ * Returns an Effect that fails with ValidationError on invalid input.
+ */
+function parseStatuses(param: string | undefined): Effect.Effect<ProposalStatus[] | undefined, ValidationError> {
+	if (!param) return Effect.succeed(undefined)
+	const statuses = param.split(",").map((s) => s.trim().toUpperCase())
+	const invalid = statuses.filter((s) => !PROPOSAL_STATUSES.includes(s as ProposalStatus))
+	if (invalid.length > 0) {
+		return Effect.fail(
+			new ValidationError({
+				message: `Invalid statuses: ${invalid.join(", ")}. Valid: ${PROPOSAL_STATUSES.join(", ")}`,
+			}),
+		)
+	}
+	return Effect.succeed(statuses as ProposalStatus[])
+}
+
+/**
+ * Parse and validate orderBy parameter.
+ * Returns an Effect that fails with ValidationError on invalid input.
+ */
+function parseOrderBy(param: string | undefined): Effect.Effect<ProposalOrderBy | undefined, ValidationError> {
+	if (!param) return Effect.succeed(undefined)
+	const orderBy = param.trim().toLowerCase()
+	if (!PROPOSAL_ORDER_BY.includes(orderBy as ProposalOrderBy)) {
+		return Effect.fail(
+			new ValidationError({
+				message: `Invalid orderBy: ${param}. Valid: ${PROPOSAL_ORDER_BY.join(", ")}`,
+			}),
+		)
+	}
+	return Effect.succeed(orderBy as ProposalOrderBy)
+}
+
+/**
+ * Parse and validate orderDirection parameter.
+ * Returns an Effect that fails with ValidationError on invalid input.
+ */
+function parseOrderDirection(
+	param: string | undefined,
+): Effect.Effect<ProposalOrderDirection | undefined, ValidationError> {
+	if (!param) return Effect.succeed(undefined)
+	const direction = param.trim().toLowerCase()
+	if (!PROPOSAL_ORDER_DIRECTION.includes(direction as ProposalOrderDirection)) {
+		return Effect.fail(
+			new ValidationError({
+				message: `Invalid orderDirection: ${param}. Valid: ${PROPOSAL_ORDER_DIRECTION.join(", ")}`,
+			}),
+		)
+	}
+	return Effect.succeed(direction as ProposalOrderDirection)
+}
+
+/**
  * Create the proposals router.
  */
 export function createProposalsRouter(db: Database, runtime: AppRuntime) {
@@ -376,7 +440,7 @@ export function createProposalsRouter(db: Database, runtime: AppRuntime) {
 			tags: ["Proposals"],
 			summary: "List proposal statuses in a space",
 			description:
-				"Lists proposals with cursor pagination. Filter with actionTypes or excludeActionTypes (comma-separated).",
+				"Lists proposals with cursor pagination. Filter with actionTypes, excludeActionTypes, or status (comma-separated). Sort with orderBy and orderDirection.",
 			parameters: [
 				{
 					name: "spaceId",
@@ -393,14 +457,32 @@ export function createProposalsRouter(db: Database, runtime: AppRuntime) {
 				{
 					name: "actionTypes",
 					in: "query",
-					description: "Include only these action types",
+					description: "Include only these action types (comma-separated)",
 					schema: {type: "string"},
 				},
 				{
 					name: "excludeActionTypes",
 					in: "query",
-					description: "Exclude these action types",
+					description: "Exclude these action types (comma-separated)",
 					schema: {type: "string"},
+				},
+				{
+					name: "status",
+					in: "query",
+					description: "Filter by proposal status (comma-separated): PROPOSED, EXECUTABLE, ACCEPTED, REJECTED",
+					schema: {type: "string"},
+				},
+				{
+					name: "orderBy",
+					in: "query",
+					description: "Field to order by: created_at (default), end_time, start_time",
+					schema: {type: "string", enum: ["created_at", "end_time", "start_time"]},
+				},
+				{
+					name: "orderDirection",
+					in: "query",
+					description: "Sort direction: desc (default), asc",
+					schema: {type: "string", enum: ["asc", "desc"]},
 				},
 				{
 					name: "voterId",
@@ -429,6 +511,9 @@ export function createProposalsRouter(db: Database, runtime: AppRuntime) {
 			const cursor = c.req.query("cursor")
 			const actionTypesParam = c.req.query("actionTypes")
 			const excludeActionTypesParam = c.req.query("excludeActionTypes")
+			const statusParam = c.req.query("status")
+			const orderByParam = c.req.query("orderBy")
+			const orderDirectionParam = c.req.query("orderDirection")
 			const voterId = c.req.query("voterId")
 
 			const program = Effect.gen(function* () {
@@ -438,6 +523,9 @@ export function createProposalsRouter(db: Database, runtime: AppRuntime) {
 					cursor,
 					actionTypes: actionTypesParam,
 					excludeActionTypes: excludeActionTypesParam,
+					status: statusParam,
+					orderBy: orderByParam,
+					orderDirection: orderDirectionParam,
 					voterId,
 				})
 
@@ -456,6 +544,9 @@ export function createProposalsRouter(db: Database, runtime: AppRuntime) {
 
 				const actionTypes = yield* parseActionTypes(actionTypesParam)
 				const excludeActionTypes = yield* parseActionTypes(excludeActionTypesParam)
+				const status = yield* parseStatuses(statusParam)
+				const orderBy = yield* parseOrderBy(orderByParam)
+				const orderDirection = yield* parseOrderDirection(orderDirectionParam)
 
 				const {proposals, nextCursor} = yield* listProposalsInSpace(db, {
 					spaceId,
@@ -463,6 +554,9 @@ export function createProposalsRouter(db: Database, runtime: AppRuntime) {
 					cursor,
 					actionTypes,
 					excludeActionTypes,
+					status,
+					orderBy,
+					orderDirection,
 				})
 
 				const nowSeconds = getCurrentTimeSeconds()

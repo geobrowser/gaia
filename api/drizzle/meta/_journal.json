@@ -239,6 +239,13 @@
       "when": 1770225552690,
       "tag": "0033_windy_stingray",
       "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1770231435716,
+      "tag": "0034_daffy_mulholland_black",
+      "breakpoints": true
     }
   ]
 }
