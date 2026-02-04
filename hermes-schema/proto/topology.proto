@@ -76,3 +76,58 @@ message EditorEdge {}
 
 // Member membership edge - no additional data needed
 message MemberEdge {}
+
+// =============================================================================
+// Graph Diff Messages (RFC 0002)
+// =============================================================================
+
+// Incremental diff for canonical graph changes.
+// Replaces full CanonicalGraphUpdated snapshots with efficient diffs.
+message CanonicalGraphDiff {
+  // Root space this diff applies to
+  bytes root_id = 1;
+
+  // List of node changes (ADDED, REMOVED, MOVED)
+  repeated NodeChange changes = 2;
+
+  // Block metadata from the event that triggered this diff
+  blockchain_metadata.BlockchainMetadata meta = 3;
+}
+
+// A single node change in a diff
+message NodeChange {
+  // The space that changed
+  bytes space_id = 1;
+
+  // Type of change
+  ChangeType change_type = 2;
+
+  // Distance from root (present for ADDED/MOVED)
+  optional uint32 distance = 3;
+
+  // Information about the edge used to reach this node (present for ADDED/MOVED)
+  optional EdgeInfo parent_edge = 4;
+}
+
+// Information about the edge connecting a node to its parent
+message EdgeInfo {
+  // Parent node's space_id
+  bytes parent_id = 1;
+
+  // Type of edge used to reach the node
+  oneof edge_type {
+    VerifiedEdge verified = 2;
+    RelatedEdge related = 3;
+    TopicEdge topic = 4;
+    EditorEdge editor = 5;
+    MemberEdge member = 6;
+  }
+}
+
+// Type of change in a diff
+enum ChangeType {
+  CHANGE_TYPE_UNSPECIFIED = 0;
+  CHANGE_TYPE_ADDED = 1;
+  CHANGE_TYPE_REMOVED = 2;
+  CHANGE_TYPE_MOVED = 3;
+}

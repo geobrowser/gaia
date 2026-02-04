@@ -32,7 +32,7 @@ use std::sync::Mutex;
 
 use atlas::convert::convert_action;
 use atlas::events::{BlockMetadata, SpaceId, SpaceTopologyEvent, SpaceTopologyPayload};
-use atlas::graph::{CanonicalProcessor, GraphState, TransitiveProcessor};
+use atlas::graph::{CanonicalProcessor, DiffTracker, GraphState, TransitiveProcessor};
 use atlas::kafka::{AtlasProducer, CanonicalGraphEmitter};
 use hermes_instrumentation::{debug, info, info_span, Instrument};
 use hermes_relay::source::mock_events::test_topology::ROOT_SPACE_ID;
@@ -47,11 +47,13 @@ struct AtlasSink {
     transitive: Mutex<TransitiveProcessor>,
     /// Canonical graph processor
     canonical_processor: Mutex<CanonicalProcessor>,
+    /// Diff tracker for computing incremental graph changes
+    diff_tracker: Mutex<DiffTracker>,
     /// Kafka emitter for canonical graph updates
     emitter: CanonicalGraphEmitter,
     /// Event counter for logging
     event_count: Mutex<usize>,
-    /// Emit counter for summary
+    /// Emit counter for summary (counts non-empty diffs emitted)
     emit_count: Mutex<usize>,
 }
 
@@ -61,6 +63,7 @@ impl AtlasSink {
             state: Mutex::new(GraphState::new()),
             transitive: Mutex::new(TransitiveProcessor::new()),
             canonical_processor: Mutex::new(CanonicalProcessor::new(root_space)),
+            diff_tracker: Mutex::new(DiffTracker::new()),
             emitter,
             event_count: Mutex::new(0),
             emit_count: Mutex::new(0),
@@ -157,6 +160,7 @@ impl AtlasSink {
         let mut state = self.state.lock().unwrap();
         let mut transitive = self.transitive.lock().unwrap();
         let mut canonical_processor = self.canonical_processor.lock().unwrap();
+        let mut diff_tracker = self.diff_tracker.lock().unwrap();
         let mut event_count = self.event_count.lock().unwrap();
         let mut emit_count = self.emit_count.lock().unwrap();
 
@@ -170,14 +174,22 @@ impl AtlasSink {
         // Apply event to graph state
         state.apply_event(event);
 
-        // Compute canonical graph and emit if changed
+        // Compute canonical graph and emit diff if changed
         if let Some(graph) = canonical_processor.compute(&state, &mut transitive) {
-            let node_count = graph.len();
-            self.emitter
-                .emit(&graph, &event.meta)
-                .map_err(|e| AtlasError::KafkaError(e.to_string()))?;
-            *emit_count += 1;
-            info!(node_count, "Emitted canonical graph update");
+            let diff = diff_tracker.track(&graph);
+
+            if !diff.is_empty() {
+                let change_count = diff.len();
+                self.emitter
+                    .emit_diff(&graph.root, &diff, &event.meta)
+                    .map_err(|e| AtlasError::KafkaError(e.to_string()))?;
+                *emit_count += 1;
+                info!(
+                    change_count,
+                    node_count = graph.len(),
+                    "Emitted canonical graph diff"
+                );
+            }
         }
 
         Ok(())
