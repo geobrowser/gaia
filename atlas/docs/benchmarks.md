@@ -188,3 +188,57 @@ Cache memory grows linearly with both graph count and size.
 
 - **Hash-based**: Tree hashing enables fast no-change detection
 - **~9x speedup**: When graph hasn't changed, recomputation is avoided
+
+## Graph Diff Benchmarks (`benches/graph_diff.rs`)
+
+Measures incremental diff computation performance.
+
+### Benchmark Suites
+
+| Benchmark | Description |
+|-----------|-------------|
+| `diff_tracker_track/bootstrap` | First track() call - all nodes ADDED |
+| `diff_tracker_track/no_change` | Subsequent call with no changes (empty diff) |
+| `diff_tracker_change_rates` | Diff with varying change rates (0.1% - 10%) |
+| `diff_tracker_allocation_reuse` | Comparing allocation strategies |
+| `graph_diff_rates_sorted_merge` | Algorithm comparison at different change rates |
+| `graph_diff_build_structures` | Data structure construction overhead |
+
+### Performance Characteristics
+
+The `DiffTracker` uses a sorted Vec with buffer reuse for optimal performance:
+
+- **Time complexity**: O(n log n) per diff (dominated by sort)
+- **Space complexity**: O(n) for position storage
+- **Allocations**: Near-zero after warmup (buffers are reused via swap)
+- **Cache locality**: Excellent (contiguous sorted vectors for merge scan)
+
+### Benchmark Results (Apple Silicon)
+
+| Nodes | Bootstrap | No Change | Throughput |
+|------:|----------:|----------:|-----------:|
+| 1,000 | 37 µs | 33 µs | ~27-31 M nodes/s |
+| 10,000 | 479 µs | 484 µs | ~20-21 M nodes/s |
+| 50,000 | 3.2 ms | 3.1 ms | ~15-17 M nodes/s |
+| 100,000 | 8.3 ms | 7.0 ms | ~12-14 M nodes/s |
+
+### Change Rate Impact (100K nodes)
+
+| Change Rate | Time |
+|------------:|-----:|
+| 0.1% | 7.3 ms |
+| 1.0% | 6.2 ms |
+| 5.0% | 5.4 ms |
+| 10.0% | 6.3 ms |
+
+Performance is dominated by tree traversal and sort, not the merge-join diff itself.
+
+### Memory Usage
+
+| Nodes | Storage (per DiffTracker) |
+|------:|-------------------------:|
+| 10K | ~560 KB |
+| 100K | ~5.6 MB |
+| 1M | ~56 MB |
+
+After warmup, subsequent `track()` calls allocate only for the `changes` Vec in the returned diff (and only when there are actual changes).
