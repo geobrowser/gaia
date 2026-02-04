@@ -45,7 +45,6 @@ const IMAGE_URL_PROPERTY = SystemIds.IMAGE_URL_PROPERTY
 type RawProfileRow = {
 	space_id: string
 	space_address: string
-	space_type: string
 	entity_name: string | null
 	avatar_url: string | null
 	cover_url: string | null
@@ -56,7 +55,6 @@ type RawProfileRow = {
  */
 function mapProfileRow(row: RawProfileRow): Profile {
 	return {
-		id: row.space_id,
 		spaceId: row.space_id,
 		name: row.entity_name,
 		avatarUrl: row.avatar_url,
@@ -71,7 +69,6 @@ function mapProfileRow(row: RawProfileRow): Profile {
  */
 export function defaultProfile(address: string, spaceId?: string): Profile {
 	return {
-		id: address,
 		spaceId: spaceId ?? address,
 		name: null,
 		avatarUrl: null,
@@ -90,7 +87,6 @@ function profileSelectFields() {
 	return sql`
 		s.id AS space_id,
 		s.address AS space_address,
-		s.type AS space_type,
 		-- Get name from values (ORDER BY for deterministic results)
 		(
 			SELECT v.text

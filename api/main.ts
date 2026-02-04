@@ -393,7 +393,6 @@ app.get(
 						type: "object",
 						description: "A user profile derived from their personal space",
 						properties: {
-							id: {type: "string", format: "uuid", description: "The profile entity ID (same as the space entity ID)"},
 							spaceId: {type: "string", format: "uuid", description: "The user's personal space ID"},
 							name: {type: "string", nullable: true, description: "Display name from the NAME_PROPERTY value"},
 							avatarUrl: {type: "string", nullable: true, description: "Avatar image URL from the AVATAR_PROPERTY relation"},
@@ -401,7 +400,7 @@ app.get(
 							address: {type: "string", description: "The user's wallet address (0x prefixed)"},
 							profileLink: {type: "string", description: "Link to the user's space"},
 						},
-						required: ["id", "spaceId", "address", "profileLink"],
+						required: ["spaceId", "address", "profileLink"],
 					},
 					// Value types
 					VersionedValue: {
