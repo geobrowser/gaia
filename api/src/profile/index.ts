@@ -6,6 +6,7 @@
  * to a personal space whose entity contains profile data (name, avatar, cover).
  */
 
+import type {Context} from "hono"
 import type {NodePgDatabase} from "drizzle-orm/node-postgres"
 import {Data, Effect, Either} from "effect"
 import {Hono} from "hono"
@@ -24,16 +25,12 @@ type AppEnv = {
 
 type Database = NodePgDatabase<Record<string, unknown>>
 
-// Error types for profile operations
+// Error type for profile validation failures
 class ValidationError extends Data.TaggedError("ValidationError")<{
 	message: string
 }> {}
 
-class NotFoundError extends Data.TaggedError("NotFoundError")<{
-	message: string
-}> {}
-
-type ProfileError = ValidationError | NotFoundError | QueryError
+type ProfileError = ValidationError | QueryError
 
 /**
  * Maximum number of space IDs for batch profile requests.
@@ -45,6 +42,30 @@ const MAX_BATCH_SIZE = 100
  */
 function isValidAddress(address: string): boolean {
 	return /^0x[a-fA-F0-9]{40}$/.test(address)
+}
+
+/**
+ * Common OpenAPI error response schema.
+ */
+const errorResponseSchema = {
+	type: "object" as const,
+	properties: {
+		error: {type: "string" as const},
+		message: {type: "string" as const},
+	},
+}
+
+/**
+ * Map a ProfileError to an HTTP response.
+ * Centralizes error handling to avoid duplication across routes.
+ */
+function handleProfileError(c: Context, error: ProfileError) {
+	switch (error._tag) {
+		case "ValidationError":
+			return c.json({error: "Invalid parameter", message: error.message}, 400)
+		case "QueryError":
+			return c.json({error: "Internal server error", message: "An unexpected error occurred"}, 500)
+	}
 }
 
 /**
@@ -67,7 +88,8 @@ export function createProfileRouter(db: Database, runtime: AppRuntime) {
 		describeRoute({
 			tags: ["Profile"],
 			summary: "Get profile by wallet address",
-			description: "Returns a user profile for the given wallet address. The profile is derived from their personal space.",
+			description:
+				"Returns a user profile for the given wallet address. The profile is derived from their personal space.",
 			parameters: [
 				{
 					name: "address",
@@ -80,55 +102,15 @@ export function createProfileRouter(db: Database, runtime: AppRuntime) {
 			responses: {
 				200: {
 					description: "Profile found",
-					content: {
-						"application/json": {
-							schema: {
-								$ref: "#/components/schemas/Profile",
-							},
-						},
-					},
+					content: {"application/json": {schema: {$ref: "#/components/schemas/Profile"}}},
 				},
 				400: {
 					description: "Invalid address format",
-					content: {
-						"application/json": {
-							schema: {
-								type: "object",
-								properties: {
-									error: {type: "string"},
-									message: {type: "string"},
-								},
-							},
-						},
-					},
-				},
-				404: {
-					description: "No profile found for this address",
-					content: {
-						"application/json": {
-							schema: {
-								type: "object",
-								properties: {
-									error: {type: "string"},
-									message: {type: "string"},
-								},
-							},
-						},
-					},
+					content: {"application/json": {schema: errorResponseSchema}},
 				},
 				500: {
 					description: "Internal server error",
-					content: {
-						"application/json": {
-							schema: {
-								type: "object",
-								properties: {
-									error: {type: "string"},
-									message: {type: "string"},
-								},
-							},
-						},
-					},
+					content: {"application/json": {schema: errorResponseSchema}},
 				},
 			},
 		}),
@@ -139,6 +121,7 @@ export function createProfileRouter(db: Database, runtime: AppRuntime) {
 			const program = Effect.gen(function* () {
 				// Validate address format
 				if (!isValidAddress(address)) {
+					yield* Effect.logWarning("Invalid address format", {address: address.slice(0, 10) + "..."})
 					return yield* Effect.fail(
 						new ValidationError({message: "Invalid Ethereum address format. Expected 0x-prefixed 40 hex characters."}),
 					)
@@ -150,36 +133,36 @@ export function createProfileRouter(db: Database, runtime: AppRuntime) {
 				// Fetch profile
 				const profile = yield* getProfileByAddress(db, normalizedAddress)
 
-				if (!profile) {
-					// Return a default profile instead of 404 for better UX
-					return defaultProfile(normalizedAddress)
-				}
+				const result = profile ?? defaultProfile(normalizedAddress)
+				const found = profile !== null
 
-				return profile
+				yield* Effect.logInfo("Profile fetched by address", {
+					address: normalizedAddress,
+					found,
+					hasName: result.name !== null,
+					hasAvatar: result.avatarUrl !== null,
+				})
+
+				return result
 			}).pipe(
 				Effect.tapError((error) => {
 					if (error._tag === "QueryError") {
-						return Effect.logError(`Database error: operation=${error.operation}, cause=${String(error.cause)}`)
+						return Effect.logError("Database error fetching profile by address", {
+							operation: error.operation,
+							cause: String(error.cause),
+						})
 					}
 					return Effect.void
 				}),
 				Effect.withSpan("GET /profile/address/:address"),
 				Effect.annotateSpans({requestId, address}),
+				Effect.annotateLogs({requestId}),
 			)
 
 			const result = await runtime.runPromise(Effect.either(program))
 
 			return Either.match(result, {
-				onLeft: (error: ProfileError) => {
-					switch (error._tag) {
-						case "ValidationError":
-							return c.json({error: "Invalid parameter", message: error.message}, 400)
-						case "NotFoundError":
-							return c.json({error: "Not found", message: error.message}, 404)
-						case "QueryError":
-							return c.json({error: "Internal server error", message: "An unexpected error occurred"}, 500)
-					}
-				},
+				onLeft: (error) => handleProfileError(c, error),
 				onRight: (profile: Profile) => c.json(profile),
 			})
 		},
@@ -208,55 +191,15 @@ export function createProfileRouter(db: Database, runtime: AppRuntime) {
 			responses: {
 				200: {
 					description: "Profile found",
-					content: {
-						"application/json": {
-							schema: {
-								$ref: "#/components/schemas/Profile",
-							},
-						},
-					},
+					content: {"application/json": {schema: {$ref: "#/components/schemas/Profile"}}},
 				},
 				400: {
 					description: "Invalid space ID format",
-					content: {
-						"application/json": {
-							schema: {
-								type: "object",
-								properties: {
-									error: {type: "string"},
-									message: {type: "string"},
-								},
-							},
-						},
-					},
-				},
-				404: {
-					description: "Space not found",
-					content: {
-						"application/json": {
-							schema: {
-								type: "object",
-								properties: {
-									error: {type: "string"},
-									message: {type: "string"},
-								},
-							},
-						},
-					},
+					content: {"application/json": {schema: errorResponseSchema}},
 				},
 				500: {
 					description: "Internal server error",
-					content: {
-						"application/json": {
-							schema: {
-								type: "object",
-								properties: {
-									error: {type: "string"},
-									message: {type: "string"},
-								},
-							},
-						},
-					},
+					content: {"application/json": {schema: errorResponseSchema}},
 				},
 			},
 		}),
@@ -265,44 +208,45 @@ export function createProfileRouter(db: Database, runtime: AppRuntime) {
 			const requestId = c.get("requestId") ?? "unknown"
 
 			const program = Effect.gen(function* () {
-				// Validate space ID format
+				// Validate space ID format (don't echo user input in error message)
 				if (!isValidUuid(spaceId)) {
+					yield* Effect.logWarning("Invalid space ID format")
 					return yield* Effect.fail(new ValidationError({message: "Space ID must be a valid UUID"}))
 				}
 
 				// Fetch profile
 				const profile = yield* getProfileBySpaceId(db, spaceId)
 
-				if (!profile) {
-					// Return a default profile instead of 404 for better UX
-					return defaultProfile(spaceId, spaceId)
-				}
+				const result = profile ?? defaultProfile(spaceId, spaceId)
+				const found = profile !== null
 
-				return profile
+				yield* Effect.logInfo("Profile fetched by space ID", {
+					spaceId,
+					found,
+					hasName: result.name !== null,
+					hasAvatar: result.avatarUrl !== null,
+				})
+
+				return result
 			}).pipe(
 				Effect.tapError((error) => {
 					if (error._tag === "QueryError") {
-						return Effect.logError(`Database error: operation=${error.operation}, cause=${String(error.cause)}`)
+						return Effect.logError("Database error fetching profile by space ID", {
+							operation: error.operation,
+							cause: String(error.cause),
+						})
 					}
 					return Effect.void
 				}),
 				Effect.withSpan("GET /profile/space/:spaceId"),
 				Effect.annotateSpans({requestId, spaceId}),
+				Effect.annotateLogs({requestId}),
 			)
 
 			const result = await runtime.runPromise(Effect.either(program))
 
 			return Either.match(result, {
-				onLeft: (error: ProfileError) => {
-					switch (error._tag) {
-						case "ValidationError":
-							return c.json({error: "Invalid parameter", message: error.message}, 400)
-						case "NotFoundError":
-							return c.json({error: "Not found", message: error.message}, 404)
-						case "QueryError":
-							return c.json({error: "Internal server error", message: "An unexpected error occurred"}, 500)
-					}
-				},
+				onLeft: (error) => handleProfileError(c, error),
 				onRight: (profile: Profile) => c.json(profile),
 			})
 		},
@@ -358,31 +302,11 @@ export function createProfileRouter(db: Database, runtime: AppRuntime) {
 				},
 				400: {
 					description: "Invalid request",
-					content: {
-						"application/json": {
-							schema: {
-								type: "object",
-								properties: {
-									error: {type: "string"},
-									message: {type: "string"},
-								},
-							},
-						},
-					},
+					content: {"application/json": {schema: errorResponseSchema}},
 				},
 				500: {
 					description: "Internal server error",
-					content: {
-						"application/json": {
-							schema: {
-								type: "object",
-								properties: {
-									error: {type: "string"},
-									message: {type: "string"},
-								},
-							},
-						},
-					},
+					content: {"application/json": {schema: errorResponseSchema}},
 				},
 			},
 		}),
@@ -396,28 +320,34 @@ export function createProfileRouter(db: Database, runtime: AppRuntime) {
 					catch: () => new ValidationError({message: "Invalid JSON body"}),
 				})
 
-				// Validate spaceIds
+				// Validate spaceIds array
 				if (!body.spaceIds || !Array.isArray(body.spaceIds)) {
+					yield* Effect.logWarning("Invalid batch request: spaceIds must be an array")
 					return yield* Effect.fail(new ValidationError({message: "spaceIds must be an array"}))
 				}
 
 				const spaceIds = body.spaceIds as unknown[]
+				const batchSize = spaceIds.length
 
-				if (spaceIds.length === 0) {
+				// Handle empty array
+				if (batchSize === 0) {
+					yield* Effect.logInfo("Batch profile fetch completed", {batchSize: 0, found: 0})
 					return {profiles: []}
 				}
 
-				if (spaceIds.length > MAX_BATCH_SIZE) {
+				// Check batch size limit
+				if (batchSize > MAX_BATCH_SIZE) {
+					yield* Effect.logWarning("Batch size exceeded limit", {batchSize, maxBatchSize: MAX_BATCH_SIZE})
 					return yield* Effect.fail(
 						new ValidationError({message: `Maximum ${MAX_BATCH_SIZE} space IDs allowed per request`}),
 					)
 				}
 
-				// Validate each space ID
-				for (const id of spaceIds) {
-					if (typeof id !== "string" || !isValidUuid(id)) {
-						return yield* Effect.fail(new ValidationError({message: `Invalid space ID: ${id}`}))
-					}
+				// Validate each space ID (don't echo user input in error message)
+				const invalidIndex = spaceIds.findIndex((id) => typeof id !== "string" || !isValidUuid(id))
+				if (invalidIndex !== -1) {
+					yield* Effect.logWarning("Invalid space ID in batch", {index: invalidIndex})
+					return yield* Effect.fail(new ValidationError({message: "Invalid space ID format in request"}))
 				}
 
 				const validSpaceIds = spaceIds as string[]
@@ -427,32 +357,34 @@ export function createProfileRouter(db: Database, runtime: AppRuntime) {
 
 				// Return profiles in the same order as input, with defaults for missing
 				const profiles = validSpaceIds.map((id) => profileMap.get(id) ?? defaultProfile(id, id))
+				const foundCount = profileMap.size
+
+				yield* Effect.logInfo("Batch profile fetch completed", {
+					batchSize,
+					found: foundCount,
+					missing: batchSize - foundCount,
+				})
 
 				return {profiles}
 			}).pipe(
 				Effect.tapError((error) => {
 					if (error._tag === "QueryError") {
-						return Effect.logError(`Database error: operation=${error.operation}, cause=${String(error.cause)}`)
+						return Effect.logError("Database error in batch profile fetch", {
+							operation: error.operation,
+							cause: String(error.cause),
+						})
 					}
 					return Effect.void
 				}),
 				Effect.withSpan("POST /profile/batch"),
 				Effect.annotateSpans({requestId}),
+				Effect.annotateLogs({requestId}),
 			)
 
 			const result = await runtime.runPromise(Effect.either(program))
 
 			return Either.match(result, {
-				onLeft: (error: ProfileError) => {
-					switch (error._tag) {
-						case "ValidationError":
-							return c.json({error: "Invalid request", message: error.message}, 400)
-						case "NotFoundError":
-							return c.json({error: "Not found", message: error.message}, 404)
-						case "QueryError":
-							return c.json({error: "Internal server error", message: "An unexpected error occurred"}, 500)
-					}
-				},
+				onLeft: (error) => handleProfileError(c, error),
 				onRight: (response) => c.json(response),
 			})
 		},

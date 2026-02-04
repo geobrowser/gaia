@@ -4,23 +4,31 @@
  * Profiles are derived from personal spaces:
  * 1. Look up the space by wallet address or space ID
  * 2. Fetch the space entity's name (from values) and avatar/cover (from relations)
+ *
+ * Uses raw SQL for complex correlated subqueries that would be inefficient
+ * or verbose with the ORM query builder.
+ *
+ * Expected indexes for optimal performance:
+ * - values(entity_id, property_id, space_id) INCLUDE (text)
+ * - relations(from_entity_id, type_id, space_id) INCLUDE (to_entity_id)
+ * - spaces(address, type) WHERE type = 'Personal'
  */
 
-import {Effect} from "effect"
+import {Data, Effect} from "effect"
 import {sql} from "drizzle-orm"
 import type {NodePgDatabase} from "drizzle-orm/node-postgres"
 import {ContentIds, SystemIds} from "@graphprotocol/grc-20"
 
 import type {Profile} from "./types"
 
-// Error type for database query failures
-export class QueryError {
-	readonly _tag = "QueryError"
-	constructor(
-		readonly operation: string,
-		readonly cause: unknown,
-	) {}
-}
+/**
+ * Error type for database query failures.
+ * Uses Data.TaggedError for consistency with other Effect errors in the codebase.
+ */
+export class QueryError extends Data.TaggedError("QueryError")<{
+	operation: string
+	cause: unknown
+}> {}
 
 // Generic database type
 type Database = NodePgDatabase<Record<string, unknown>>
@@ -29,6 +37,7 @@ type Database = NodePgDatabase<Record<string, unknown>>
 const NAME_PROPERTY = SystemIds.NAME_PROPERTY
 const COVER_PROPERTY = SystemIds.COVER_PROPERTY
 const AVATAR_PROPERTY = ContentIds.AVATAR_PROPERTY
+const IMAGE_URL_PROPERTY = SystemIds.IMAGE_URL_PROPERTY
 
 /**
  * Raw profile data from database query.
@@ -73,6 +82,55 @@ export function defaultProfile(address: string, spaceId?: string): Profile {
 }
 
 /**
+ * SQL fragment for selecting profile fields from a space.
+ * Uses ORDER BY id for deterministic results when multiple values exist.
+ * Constrains image lookups by space_id to avoid cross-space data leakage.
+ */
+function profileSelectFields() {
+	return sql`
+		s.id AS space_id,
+		s.address AS space_address,
+		s.type AS space_type,
+		-- Get name from values (ORDER BY for deterministic results)
+		(
+			SELECT v.text
+			FROM "values" v
+			WHERE v.entity_id = s.id
+			  AND v.property_id = ${NAME_PROPERTY}::uuid
+			  AND v.space_id = s.id
+			ORDER BY v.id
+			LIMIT 1
+		) AS entity_name,
+		-- Get avatar URL from relations (constrain by space_id for data integrity)
+		(
+			SELECT img_val.text
+			FROM relations r
+			JOIN "values" img_val ON img_val.entity_id = r.to_entity_id
+			  AND img_val.property_id = ${IMAGE_URL_PROPERTY}::uuid
+			  AND img_val.space_id = COALESCE(r.to_space_id, s.id)
+			WHERE r.from_entity_id = s.id
+			  AND r.type_id = ${AVATAR_PROPERTY}::uuid
+			  AND r.space_id = s.id
+			ORDER BY r.id
+			LIMIT 1
+		) AS avatar_url,
+		-- Get cover URL from relations (constrain by space_id for data integrity)
+		(
+			SELECT img_val.text
+			FROM relations r
+			JOIN "values" img_val ON img_val.entity_id = r.to_entity_id
+			  AND img_val.property_id = ${IMAGE_URL_PROPERTY}::uuid
+			  AND img_val.space_id = COALESCE(r.to_space_id, s.id)
+			WHERE r.from_entity_id = s.id
+			  AND r.type_id = ${COVER_PROPERTY}::uuid
+			  AND r.space_id = s.id
+			ORDER BY r.id
+			LIMIT 1
+		) AS cover_url
+	`
+}
+
+/**
  * Fetch a profile by wallet address.
  *
  * Looks up the user's personal space by address, then fetches the space entity's
@@ -82,41 +140,7 @@ export function getProfileByAddress(db: Database, address: string): Effect.Effec
 	return Effect.tryPromise({
 		try: async () => {
 			const result = await db.execute<RawProfileRow>(sql`
-				SELECT
-					s.id AS space_id,
-					s.address AS space_address,
-					s.type AS space_type,
-					-- Get name from values
-					(
-						SELECT v.text
-						FROM "values" v
-						WHERE v.entity_id = s.id
-						  AND v.property_id = ${NAME_PROPERTY}::uuid
-						  AND v.space_id = s.id
-						LIMIT 1
-					) AS entity_name,
-					-- Get avatar URL from relations (AVATAR_PROPERTY relation -> to_entity's IMAGE_URL_PROPERTY value)
-					(
-						SELECT img_val.text
-						FROM relations r
-						JOIN "values" img_val ON img_val.entity_id = r.to_entity_id
-						  AND img_val.property_id = ${SystemIds.IMAGE_URL_PROPERTY}::uuid
-						WHERE r.from_entity_id = s.id
-						  AND r.type_id = ${AVATAR_PROPERTY}::uuid
-						  AND r.space_id = s.id
-						LIMIT 1
-					) AS avatar_url,
-					-- Get cover URL from relations (COVER_PROPERTY relation -> to_entity's IMAGE_URL_PROPERTY value)
-					(
-						SELECT img_val.text
-						FROM relations r
-						JOIN "values" img_val ON img_val.entity_id = r.to_entity_id
-						  AND img_val.property_id = ${SystemIds.IMAGE_URL_PROPERTY}::uuid
-						WHERE r.from_entity_id = s.id
-						  AND r.type_id = ${COVER_PROPERTY}::uuid
-						  AND r.space_id = s.id
-						LIMIT 1
-					) AS cover_url
+				SELECT ${profileSelectFields()}
 				FROM spaces s
 				WHERE s.address = ${address}
 				  AND s.type = 'Personal'
@@ -130,7 +154,7 @@ export function getProfileByAddress(db: Database, address: string): Effect.Effec
 
 			return mapProfileRow(row)
 		},
-		catch: (error) => new QueryError("getProfileByAddress", error),
+		catch: (error) => new QueryError({operation: "getProfileByAddress", cause: error}),
 	}).pipe(
 		Effect.withSpan("queries.getProfileByAddress", {
 			attributes: {"query.address": address},
@@ -147,41 +171,7 @@ export function getProfileBySpaceId(db: Database, spaceId: string): Effect.Effec
 	return Effect.tryPromise({
 		try: async () => {
 			const result = await db.execute<RawProfileRow>(sql`
-				SELECT
-					s.id AS space_id,
-					s.address AS space_address,
-					s.type AS space_type,
-					-- Get name from values
-					(
-						SELECT v.text
-						FROM "values" v
-						WHERE v.entity_id = s.id
-						  AND v.property_id = ${NAME_PROPERTY}::uuid
-						  AND v.space_id = s.id
-						LIMIT 1
-					) AS entity_name,
-					-- Get avatar URL from relations
-					(
-						SELECT img_val.text
-						FROM relations r
-						JOIN "values" img_val ON img_val.entity_id = r.to_entity_id
-						  AND img_val.property_id = ${SystemIds.IMAGE_URL_PROPERTY}::uuid
-						WHERE r.from_entity_id = s.id
-						  AND r.type_id = ${AVATAR_PROPERTY}::uuid
-						  AND r.space_id = s.id
-						LIMIT 1
-					) AS avatar_url,
-					-- Get cover URL from relations
-					(
-						SELECT img_val.text
-						FROM relations r
-						JOIN "values" img_val ON img_val.entity_id = r.to_entity_id
-						  AND img_val.property_id = ${SystemIds.IMAGE_URL_PROPERTY}::uuid
-						WHERE r.from_entity_id = s.id
-						  AND r.type_id = ${COVER_PROPERTY}::uuid
-						  AND r.space_id = s.id
-						LIMIT 1
-					) AS cover_url
+				SELECT ${profileSelectFields()}
 				FROM spaces s
 				WHERE s.id = ${spaceId}::uuid
 				LIMIT 1
@@ -194,7 +184,7 @@ export function getProfileBySpaceId(db: Database, spaceId: string): Effect.Effec
 
 			return mapProfileRow(row)
 		},
-		catch: (error) => new QueryError("getProfileBySpaceId", error),
+		catch: (error) => new QueryError({operation: "getProfileBySpaceId", cause: error}),
 	}).pipe(
 		Effect.withSpan("queries.getProfileBySpaceId", {
 			attributes: {"query.space_id": spaceId},
@@ -205,8 +195,8 @@ export function getProfileBySpaceId(db: Database, spaceId: string): Effect.Effec
 /**
  * Batch fetch profiles by space IDs.
  *
- * Efficiently fetches multiple profiles in a single query.
- * Returns profiles in the same order as the input array.
+ * Efficiently fetches multiple profiles in a single query using proper
+ * parameterization (not string concatenation) to prevent SQL injection.
  */
 export function getProfilesBySpaceIds(
 	db: Database,
@@ -218,47 +208,17 @@ export function getProfilesBySpaceIds(
 
 	return Effect.tryPromise({
 		try: async () => {
-			// Build array literal for PostgreSQL
-			const spaceIdsArray = `{${spaceIds.join(",")}}`
+			// Use proper parameterization via sql.join instead of string concatenation
+			// This prevents SQL injection even if UUID validation is bypassed
+			const spaceIdParams = sql.join(
+				spaceIds.map((id) => sql`${id}::uuid`),
+				sql`, `,
+			)
 
 			const result = await db.execute<RawProfileRow>(sql`
-				SELECT
-					s.id AS space_id,
-					s.address AS space_address,
-					s.type AS space_type,
-					-- Get name from values
-					(
-						SELECT v.text
-						FROM "values" v
-						WHERE v.entity_id = s.id
-						  AND v.property_id = ${NAME_PROPERTY}::uuid
-						  AND v.space_id = s.id
-						LIMIT 1
-					) AS entity_name,
-					-- Get avatar URL from relations
-					(
-						SELECT img_val.text
-						FROM relations r
-						JOIN "values" img_val ON img_val.entity_id = r.to_entity_id
-						  AND img_val.property_id = ${SystemIds.IMAGE_URL_PROPERTY}::uuid
-						WHERE r.from_entity_id = s.id
-						  AND r.type_id = ${AVATAR_PROPERTY}::uuid
-						  AND r.space_id = s.id
-						LIMIT 1
-					) AS avatar_url,
-					-- Get cover URL from relations
-					(
-						SELECT img_val.text
-						FROM relations r
-						JOIN "values" img_val ON img_val.entity_id = r.to_entity_id
-						  AND img_val.property_id = ${SystemIds.IMAGE_URL_PROPERTY}::uuid
-						WHERE r.from_entity_id = s.id
-						  AND r.type_id = ${COVER_PROPERTY}::uuid
-						  AND r.space_id = s.id
-						LIMIT 1
-					) AS cover_url
+				SELECT ${profileSelectFields()}
 				FROM spaces s
-				WHERE s.id = ANY(${spaceIdsArray}::uuid[])
+				WHERE s.id = ANY(ARRAY[${spaceIdParams}])
 			`)
 
 			// Build map for O(1) lookup
@@ -269,7 +229,7 @@ export function getProfilesBySpaceIds(
 
 			return profileMap
 		},
-		catch: (error) => new QueryError("getProfilesBySpaceIds", error),
+		catch: (error) => new QueryError({operation: "getProfilesBySpaceIds", cause: error}),
 	}).pipe(
 		Effect.withSpan("queries.getProfilesBySpaceIds", {
 			attributes: {"query.space_ids_count": spaceIds.length},

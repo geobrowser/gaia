@@ -29,9 +29,4 @@ export type Profile = {
 	profileLink: string
 }
 
-/**
- * Response for fetching multiple profiles.
- */
-export type ProfilesResponse = {
-	profiles: Profile[]
-}
+
