@@ -589,10 +589,7 @@ export class OpenSearchClient implements SearchClient {
 	buildNonDeletedFilter(): object {
 		return {
 			bool: {
-				should: [
-					{term: {deleted: false}},
-					{bool: {must_not: [{exists: {field: "deleted"}}]}},
-				],
+				should: [{term: {deleted: false}}, {bool: {must_not: [{exists: {field: "deleted"}}]}}],
 				minimum_should_match: 1,
 			},
 		}

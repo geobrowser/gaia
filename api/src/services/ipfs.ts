@@ -1,5 +1,5 @@
-import { Duration, Effect, Schedule, Ref } from "effect"
-import { Environment } from "./environment"
+import {Duration, Effect, Ref, Schedule} from "effect"
+import {Environment} from "./environment"
 
 class CidValidateError extends Error {
 	readonly _tag = "CidValidateError"
@@ -72,7 +72,7 @@ export function uploadEdit(file: File) {
 			durationMs: Date.now() - startTime,
 		})
 
-		return { cid }
+		return {cid}
 	}).pipe(Effect.withSpan("ipfs.uploadEdit"))
 }
 
@@ -125,7 +125,7 @@ export function uploadFile(file: File) {
 			durationMs: Date.now() - startTime,
 		})
 
-		return { cid }
+		return {cid}
 	}).pipe(Effect.withSpan("ipfs.uploadFile"))
 }
 
@@ -160,9 +160,10 @@ export function upload(formData: FormData, url: string) {
 
 		// Handle error responses from gateway
 		if (responseJson.error) {
-			const errorMsg = typeof responseJson.error === "object"
-				? responseJson.error.message || JSON.stringify(responseJson.error)
-				: String(responseJson.error)
+			const errorMsg =
+				typeof responseJson.error === "object"
+					? responseJson.error.message || JSON.stringify(responseJson.error)
+					: String(responseJson.error)
 			yield* Effect.fail(new IpfsUploadError(`IPFS gateway error: ${errorMsg}`))
 		}
 
@@ -173,4 +174,3 @@ export function upload(formData: FormData, url: string) {
 		return `ipfs://${responseJson.data.cid}` as const
 	}).pipe(Effect.withSpan("ipfs.upload"))
 }
-

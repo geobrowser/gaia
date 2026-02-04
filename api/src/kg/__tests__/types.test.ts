@@ -1,12 +1,12 @@
-import { describe, expect, it, beforeAll, afterAll } from "vitest"
-import { Pool } from "pg"
+import {Pool} from "pg"
+import {afterAll, beforeAll, describe, expect, it} from "vitest"
 
 describe("types and type functions", () => {
 	let pool: Pool
 
 	beforeAll(async () => {
 		pool = new Pool({
-			connectionString: process.env.DATABASE_URL
+			connectionString: process.env.DATABASE_URL,
 		})
 	})
 
@@ -23,9 +23,9 @@ describe("types and type functions", () => {
 			// Should return entities that are types
 			expect(result.rows).toBeDefined()
 			if (result.rows.length > 0) {
-				expect(result.rows[0]).toHaveProperty('id')
-				expect(result.rows[0]).toHaveProperty('created_at')
-				expect(result.rows[0]).toHaveProperty('updated_at')
+				expect(result.rows[0]).toHaveProperty("id")
+				expect(result.rows[0]).toHaveProperty("created_at")
+				expect(result.rows[0]).toHaveProperty("updated_at")
 			}
 		})
 
@@ -46,9 +46,12 @@ describe("types and type functions", () => {
 
 			if (spaceResult.rows.length > 0) {
 				const spaceId = spaceResult.rows[0].id
-				const result = await pool.query(`
+				const result = await pool.query(
+					`
 					SELECT * FROM types($1::uuid) LIMIT 5
-				`, [spaceId])
+				`,
+					[spaceId],
+				)
 
 				expect(result.rows).toBeDefined()
 			}
@@ -74,12 +77,15 @@ describe("types and type functions", () => {
 
 			if (typesResult.rows.length > 0) {
 				const typeId = typesResult.rows[0].id
-				const result = await pool.query(`
+				const result = await pool.query(
+					`
 					SELECT * FROM type($1::uuid)
-				`, [typeId])
+				`,
+					[typeId],
+				)
 
 				if (result.rows.length > 0) {
-					expect(result.rows[0]).toHaveProperty('id')
+					expect(result.rows[0]).toHaveProperty("id")
 					expect(result.rows[0].id).toBe(typeId)
 				}
 			}
@@ -93,9 +99,12 @@ describe("types and type functions", () => {
 
 			if (entityResult.rows.length > 0) {
 				const entityId = entityResult.rows[0].id
-				const result = await pool.query(`
+				const result = await pool.query(
+					`
 					SELECT * FROM type($1::uuid)
-				`, [entityId])
+				`,
+					[entityId],
+				)
 
 				// Should be callable without error and return at most one result
 				expect(result.rows).toBeDefined()

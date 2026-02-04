@@ -2,6 +2,6 @@
  * Proposals module exports.
  */
 
-export { createProposalsRouter } from "./router";
-export * from "./types";
-export * from "./status";
+export {createProposalsRouter} from "./router"
+export * from "./status"
+export * from "./types"

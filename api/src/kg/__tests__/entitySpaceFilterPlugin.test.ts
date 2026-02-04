@@ -1,16 +1,16 @@
-import { describe, expect, it, beforeAll, afterAll } from "vitest"
-import { Pool } from "pg"
-import { graphqlServer } from "../postgraphile"
+import {Pool} from "pg"
+import {afterAll, beforeAll, describe, expect, it} from "vitest"
+import {graphqlServer} from "../postgraphile"
 
 // Helper to execute GraphQL queries against the yoga server
 async function executeGraphQL(query: string, variables?: Record<string, unknown>) {
 	const response = await graphqlServer.fetch(
 		new Request("http://localhost/graphql", {
 			method: "POST",
-			headers: { "Content-Type": "application/json" },
-			body: JSON.stringify({ query, variables }),
+			headers: {"Content-Type": "application/json"},
+			body: JSON.stringify({query, variables}),
 		}),
-		{}
+		{},
 	)
 	return response.json()
 }
@@ -67,14 +67,17 @@ describe("EntitySpaceFilterPlugin", () => {
 				return
 			}
 
-			const result = await executeGraphQL(`
+			const result = await executeGraphQL(
+				`
 				query TestSpaceFilter($spaceId: UUID!) {
 					entities(spaceId: $spaceId, first: 5) {
 						id
 						spaceIds
 					}
 				}
-			`, { spaceId: testSpaceId })
+			`,
+				{spaceId: testSpaceId},
+			)
 
 			expect(result.errors).toBeUndefined()
 			expect(result.data.entities).toBeDefined()
@@ -89,13 +92,16 @@ describe("EntitySpaceFilterPlugin", () => {
 		it("should return empty array for non-existent space ID", async () => {
 			const fakeSpaceId = "00000000000000000000000000000000"
 
-			const result = await executeGraphQL(`
+			const result = await executeGraphQL(
+				`
 				query TestSpaceFilter($spaceId: UUID!) {
 					entities(spaceId: $spaceId, first: 5) {
 						id
 					}
 				}
-			`, { spaceId: fakeSpaceId })
+			`,
+				{spaceId: fakeSpaceId},
+			)
 
 			expect(result.errors).toBeUndefined()
 			expect(result.data.entities).toEqual([])
@@ -109,14 +115,17 @@ describe("EntitySpaceFilterPlugin", () => {
 				return
 			}
 
-			const result = await executeGraphQL(`
+			const result = await executeGraphQL(
+				`
 				query TestSpaceFilter($spaceId: UUID!) {
 					entities(spaceIds: { is: $spaceId }, first: 5) {
 						id
 						spaceIds
 					}
 				}
-			`, { spaceId: testSpaceId })
+			`,
+				{spaceId: testSpaceId},
+			)
 
 			expect(result.errors).toBeUndefined()
 			expect(result.data.entities).toBeDefined()
@@ -132,14 +141,17 @@ describe("EntitySpaceFilterPlugin", () => {
 				return
 			}
 
-			const result = await executeGraphQL(`
+			const result = await executeGraphQL(
+				`
 				query TestSpaceFilter($spaceIds: [UUID!]!) {
 					entities(spaceIds: { in: $spaceIds }, first: 5) {
 						id
 						spaceIds
 					}
 				}
-			`, { spaceIds: [testSpaceId] })
+			`,
+				{spaceIds: [testSpaceId]},
+			)
 
 			expect(result.errors).toBeUndefined()
 			expect(result.data.entities).toBeDefined()
@@ -155,14 +167,17 @@ describe("EntitySpaceFilterPlugin", () => {
 				return
 			}
 
-			const result = await executeGraphQL(`
+			const result = await executeGraphQL(
+				`
 				query TestSpaceFilter($spaceId: UUID!) {
 					entities(spaceIds: { isNot: $spaceId }, first: 5) {
 						id
 						spaceIds
 					}
 				}
-			`, { spaceId: testSpaceId })
+			`,
+				{spaceId: testSpaceId},
+			)
 
 			expect(result.errors).toBeUndefined()
 			expect(result.data.entities).toBeDefined()
@@ -179,14 +194,17 @@ describe("EntitySpaceFilterPlugin", () => {
 				return
 			}
 
-			const result = await executeGraphQL(`
+			const result = await executeGraphQL(
+				`
 				query TestSpaceFilter($spaceIds: [UUID!]!) {
 					entities(spaceIds: { notIn: $spaceIds }, first: 5) {
 						id
 						spaceIds
 					}
 				}
-			`, { spaceIds: [testSpaceId] })
+			`,
+				{spaceIds: [testSpaceId]},
+			)
 
 			expect(result.errors).toBeUndefined()
 			expect(result.data.entities).toBeDefined()
@@ -246,14 +264,17 @@ describe("EntitySpaceFilterPlugin", () => {
 				return
 			}
 
-			const result = await executeGraphQL(`
+			const result = await executeGraphQL(
+				`
 				query TestTypeFilter($typeId: UUID!) {
 					entities(typeId: $typeId, first: 5) {
 						id
 						typeIds
 					}
 				}
-			`, { typeId: testTypeId })
+			`,
+				{typeId: testTypeId},
+			)
 
 			expect(result.errors).toBeUndefined()
 			expect(result.data.entities).toBeDefined()
@@ -268,13 +289,16 @@ describe("EntitySpaceFilterPlugin", () => {
 		it("should return empty array for non-existent type ID", async () => {
 			const fakeTypeId = "00000000000000000000000000000000"
 
-			const result = await executeGraphQL(`
+			const result = await executeGraphQL(
+				`
 				query TestTypeFilter($typeId: UUID!) {
 					entities(typeId: $typeId, first: 5) {
 						id
 					}
 				}
-			`, { typeId: fakeTypeId })
+			`,
+				{typeId: fakeTypeId},
+			)
 
 			expect(result.errors).toBeUndefined()
 			expect(result.data.entities).toEqual([])
@@ -288,14 +312,17 @@ describe("EntitySpaceFilterPlugin", () => {
 				return
 			}
 
-			const result = await executeGraphQL(`
+			const result = await executeGraphQL(
+				`
 				query TestTypeFilter($typeId: UUID!) {
 					entities(typeIds: { is: $typeId }, first: 5) {
 						id
 						typeIds
 					}
 				}
-			`, { typeId: testTypeId })
+			`,
+				{typeId: testTypeId},
+			)
 
 			expect(result.errors).toBeUndefined()
 			expect(result.data.entities).toBeDefined()
@@ -311,14 +338,17 @@ describe("EntitySpaceFilterPlugin", () => {
 				return
 			}
 
-			const result = await executeGraphQL(`
+			const result = await executeGraphQL(
+				`
 				query TestTypeFilter($typeIds: [UUID!]!) {
 					entities(typeIds: { in: $typeIds }, first: 5) {
 						id
 						typeIds
 					}
 				}
-			`, { typeIds: [testTypeId] })
+			`,
+				{typeIds: [testTypeId]},
+			)
 
 			expect(result.errors).toBeUndefined()
 			expect(result.data.entities).toBeDefined()
@@ -334,14 +364,17 @@ describe("EntitySpaceFilterPlugin", () => {
 				return
 			}
 
-			const result = await executeGraphQL(`
+			const result = await executeGraphQL(
+				`
 				query TestTypeFilter($typeId: UUID!) {
 					entities(typeIds: { isNot: $typeId }, first: 5) {
 						id
 						typeIds
 					}
 				}
-			`, { typeId: testTypeId })
+			`,
+				{typeId: testTypeId},
+			)
 
 			expect(result.errors).toBeUndefined()
 			expect(result.data.entities).toBeDefined()
@@ -358,14 +391,17 @@ describe("EntitySpaceFilterPlugin", () => {
 				return
 			}
 
-			const result = await executeGraphQL(`
+			const result = await executeGraphQL(
+				`
 				query TestTypeFilter($typeIds: [UUID!]!) {
 					entities(typeIds: { notIn: $typeIds }, first: 5) {
 						id
 						typeIds
 					}
 				}
-			`, { typeIds: [testTypeId] })
+			`,
+				{typeIds: [testTypeId]},
+			)
 
 			expect(result.errors).toBeUndefined()
 			expect(result.data.entities).toBeDefined()
@@ -425,7 +461,8 @@ describe("EntitySpaceFilterPlugin", () => {
 				return
 			}
 
-			const result = await executeGraphQL(`
+			const result = await executeGraphQL(
+				`
 				query TestCombinedFilter($spaceId: UUID!, $typeId: UUID!) {
 					entities(spaceId: $spaceId, typeId: $typeId, first: 5) {
 						id
@@ -433,7 +470,9 @@ describe("EntitySpaceFilterPlugin", () => {
 						typeIds
 					}
 				}
-			`, { spaceId: testSpaceId, typeId: testTypeId })
+			`,
+				{spaceId: testSpaceId, typeId: testTypeId},
+			)
 
 			expect(result.errors).toBeUndefined()
 			expect(result.data.entities).toBeDefined()
@@ -468,14 +507,10 @@ describe("EntitySpaceFilterPlugin", () => {
 
 			expect(result.errors).toBeUndefined()
 
-			const entitiesField = result.data.__type.fields.find(
-				(f: { name: string }) => f.name === "entities"
-			)
+			const entitiesField = result.data.__type.fields.find((f: {name: string}) => f.name === "entities")
 			expect(entitiesField).toBeDefined()
 
-			const spaceIdArg = entitiesField.args.find(
-				(a: { name: string }) => a.name === "spaceId"
-			)
+			const spaceIdArg = entitiesField.args.find((a: {name: string}) => a.name === "spaceId")
 			expect(spaceIdArg).toBeDefined()
 			expect(spaceIdArg.type.name).toBe("UUID")
 		})
@@ -497,14 +532,10 @@ describe("EntitySpaceFilterPlugin", () => {
 
 			expect(result.errors).toBeUndefined()
 
-			const entitiesField = result.data.__type.fields.find(
-				(f: { name: string }) => f.name === "entities"
-			)
+			const entitiesField = result.data.__type.fields.find((f: {name: string}) => f.name === "entities")
 			expect(entitiesField).toBeDefined()
 
-			const spaceIdsArg = entitiesField.args.find(
-				(a: { name: string }) => a.name === "spaceIds"
-			)
+			const spaceIdsArg = entitiesField.args.find((a: {name: string}) => a.name === "spaceIds")
 			expect(spaceIdsArg).toBeDefined()
 			expect(spaceIdsArg.type.name).toBe("UUIDFilter")
 		})
@@ -526,14 +557,10 @@ describe("EntitySpaceFilterPlugin", () => {
 
 			expect(result.errors).toBeUndefined()
 
-			const entitiesField = result.data.__type.fields.find(
-				(f: { name: string }) => f.name === "entities"
-			)
+			const entitiesField = result.data.__type.fields.find((f: {name: string}) => f.name === "entities")
 			expect(entitiesField).toBeDefined()
 
-			const typeIdArg = entitiesField.args.find(
-				(a: { name: string }) => a.name === "typeId"
-			)
+			const typeIdArg = entitiesField.args.find((a: {name: string}) => a.name === "typeId")
 			expect(typeIdArg).toBeDefined()
 			expect(typeIdArg.type.name).toBe("UUID")
 		})
@@ -555,14 +582,10 @@ describe("EntitySpaceFilterPlugin", () => {
 
 			expect(result.errors).toBeUndefined()
 
-			const entitiesField = result.data.__type.fields.find(
-				(f: { name: string }) => f.name === "entities"
-			)
+			const entitiesField = result.data.__type.fields.find((f: {name: string}) => f.name === "entities")
 			expect(entitiesField).toBeDefined()
 
-			const typeIdsArg = entitiesField.args.find(
-				(a: { name: string }) => a.name === "typeIds"
-			)
+			const typeIdsArg = entitiesField.args.find((a: {name: string}) => a.name === "typeIds")
 			expect(typeIdsArg).toBeDefined()
 			expect(typeIdsArg.type.name).toBe("UUIDFilter")
 		})

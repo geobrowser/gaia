@@ -1,6 +1,6 @@
-import { Kind } from "graphql/language"
-import type { GraphQLScalarType } from "graphql/type/definition"
-import { normalizeUuid } from "../utils/uuid"
+import {Kind} from "graphql/language"
+import type {GraphQLScalarType} from "graphql/type/definition"
+import {normalizeUuid} from "../utils/uuid"
 
 export function patchUuidScalar(uuidScalar: GraphQLScalarType): void {
 	// Mutate the existing scalar instance so all references across the schema
@@ -41,5 +41,3 @@ export default function UndashedUuidPlugin(builder: any) {
 		return schema
 	})
 }
-
-

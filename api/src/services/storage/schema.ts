@@ -1,9 +1,4 @@
-import {
-	relations as drizzleRelations,
-	type InferSelectModel,
-	sql,
-	type SQL,
-} from "drizzle-orm";
+import {relations as drizzleRelations, type InferSelectModel, sql} from "drizzle-orm"
 import {
 	bigint,
 	boolean,
@@ -22,8 +17,7 @@ import {
 	timestamp,
 	unique,
 	uuid,
-	varchar,
-} from "drizzle-orm/pg-core";
+} from "drizzle-orm/pg-core"
 
 // Enable the pg_trgm extension for similarity searches (executed at runtime)
 // This comment signals that we want the trigram extension available
@@ -36,13 +30,13 @@ import {
  * It is used to store binary data in the database.
  */
 export const bytea = customType<{
-	data: Buffer;
-	default: false;
+	data: Buffer
+	default: false
 }>({
 	dataType() {
-		return "bytea";
+		return "bytea"
 	},
-});
+})
 
 export const ipfsCache = pgTable("ipfs_cache", {
 	id: serial(),
@@ -62,7 +56,7 @@ export const ipfsCache = pgTable("ipfs_cache", {
 	 * Used by hermes-pipeline to populate proposal names for Publish actions.
 	 */
 	name: text(),
-});
+})
 
 /**
  * Cursors store the latest indexed block log. Indexers store their latest
@@ -82,16 +76,16 @@ export const meta = pgTable("meta", {
 	id: text().primaryKey(),
 	cursor: text().notNull(),
 	blockNumber: text().notNull(),
-});
+})
 
-export const spaceTypesEnum = pgEnum("spaceTypes", ["DAO", "Personal"]);
+export const spaceTypesEnum = pgEnum("spaceTypes", ["DAO", "Personal"])
 
 export const spaces = pgTable("spaces", {
 	id: uuid().primaryKey(),
 	type: spaceTypesEnum().notNull(),
 	address: text().notNull(),
 	topicId: uuid(),
-});
+})
 
 export const entities = pgTable(
 	"entities",
@@ -108,7 +102,7 @@ export const entities = pgTable(
 		// Composite index for ordering with id for stable pagination
 		index("entities_updated_at_id_idx").on(table.updatedAt, table.id),
 	],
-);
+)
 
 /**
  * values
@@ -134,7 +128,7 @@ export const values = pgTable(
 		spaceId: uuid().notNull(),
 		// Value columns (GRC-20 v2 data types)
 		boolean: boolean(), // BOOL
-		integer: bigint({ mode: "number" }), // INT64
+		integer: bigint({mode: "number"}), // INT64
 		float: doublePrecision(), // FLOAT64
 		decimal: decimal(), // DECIMAL
 		text: text(), // TEXT
@@ -150,8 +144,8 @@ export const values = pgTable(
 		language: text(), // For TEXT values only
 		unit: text(), // For numerical values (INT64, FLOAT64, DECIMAL)
 		// UTC-normalized columns (Rust writes, PostgreSQL casts to UTC, DB timezone=UTC ensures UTC output)
-		timeUtc: time("time_utc", { withTimezone: true }),
-		datetimeUtc: timestamp("datetime_utc", { withTimezone: true, mode: "date" }),
+		timeUtc: time("time_utc", {withTimezone: true}),
+		datetimeUtc: timestamp("datetime_utc", {withTimezone: true, mode: "date"}),
 	},
 	(table) => [
 		// Foreign key indexes for join performance
@@ -180,11 +174,7 @@ export const values = pgTable(
 		index("values_entity_property_idx").on(table.entityId, table.propertyId),
 		index("values_entity_space_idx").on(table.entityId, table.spaceId),
 		index("values_property_space_idx").on(table.propertyId, table.spaceId),
-		index("values_entity_property_space_idx").on(
-			table.entityId,
-			table.propertyId,
-			table.spaceId,
-		),
+		index("values_entity_property_space_idx").on(table.entityId, table.propertyId, table.spaceId),
 
 		// Additional indexes for filtering
 		index("values_language_idx").on(table.language),
@@ -193,7 +183,7 @@ export const values = pgTable(
 		index("values_time_utc_idx").on(table.timeUtc),
 		index("values_datetime_utc_idx").on(table.datetimeUtc),
 	],
-);
+)
 
 export const relations = pgTable(
 	"relations",
@@ -220,31 +210,16 @@ export const relations = pgTable(
 		index("relations_space_id_idx").on(table.spaceId),
 
 		// Composite indexes for common query patterns
-		index("relations_space_from_to_idx").on(
-			table.spaceId,
-			table.fromEntityId,
-			table.toEntityId,
-		),
+		index("relations_space_from_to_idx").on(table.spaceId, table.fromEntityId, table.toEntityId),
 		index("relations_space_type_idx").on(table.spaceId, table.typeId),
 		index("relations_to_entity_space_idx").on(table.toEntityId, table.spaceId),
-		index("relations_from_entity_space_idx").on(
-			table.fromEntityId,
-			table.spaceId,
-		),
+		index("relations_from_entity_space_idx").on(table.fromEntityId, table.spaceId),
 
 		// Additional composite indexes for complex queries
-		index("relations_entity_type_space_idx").on(
-			table.entityId,
-			table.typeId,
-			table.spaceId,
-		),
-		index("relations_type_from_to_idx").on(
-			table.typeId,
-			table.fromEntityId,
-			table.toEntityId,
-		),
+		index("relations_entity_type_space_idx").on(table.entityId, table.typeId, table.spaceId),
+		index("relations_type_from_to_idx").on(table.typeId, table.fromEntityId, table.toEntityId),
 	],
-);
+)
 
 export const members = pgTable(
 	"members",
@@ -253,10 +228,10 @@ export const members = pgTable(
 		spaceId: uuid().notNull(),
 	},
 	(table) => [
-		primaryKey({ columns: [table.memberSpaceId, table.spaceId] }),
+		primaryKey({columns: [table.memberSpaceId, table.spaceId]}),
 		index("members_space_id_idx").on(table.spaceId),
 	],
-);
+)
 
 export const editors = pgTable(
 	"editors",
@@ -265,10 +240,10 @@ export const editors = pgTable(
 		spaceId: uuid().notNull(),
 	},
 	(table) => [
-		primaryKey({ columns: [table.memberSpaceId, table.spaceId] }),
+		primaryKey({columns: [table.memberSpaceId, table.spaceId]}),
 		index("editors_space_id_idx").on(table.spaceId),
 	],
-);
+)
 
 export const subspaces = pgTable(
 	"subspaces",
@@ -277,68 +252,59 @@ export const subspaces = pgTable(
 		childSpaceId: uuid().notNull(),
 	},
 	(table) => [
-		primaryKey({ columns: [table.parentSpaceId, table.childSpaceId] }),
+		primaryKey({columns: [table.parentSpaceId, table.childSpaceId]}),
 		index("subspaces_parent_space_id_idx").on(table.parentSpaceId),
 		index("subspaces_child_space_id_idx").on(table.childSpaceId),
 	],
-);
+)
 
-export const entityForeignValues = drizzleRelations(
-	entities,
-	({ many }) => ({
-		values: many(values),
-		fromRelations: many(relations, {
-			relationName: "fromEntity",
-		}),
-		// If an entity is the object (i.e. toEntity)
-		toRelations: many(relations, {
-			relationName: "toEntity",
-		}),
-		// If an entity is directly linked (e.g. as owning the relation row)
-		relationEntityRelations: many(relations, {
-			relationName: "entity",
-		}),
+export const entityForeignValues = drizzleRelations(entities, ({many}) => ({
+	values: many(values),
+	fromRelations: many(relations, {
+		relationName: "fromEntity",
 	}),
-);
-
-export const propertiesEntityRelations = drizzleRelations(
-	values,
-	({ one }) => ({
-		entity: one(entities, {
-			fields: [values.entityId],
-			references: [entities.id],
-		}),
+	// If an entity is the object (i.e. toEntity)
+	toRelations: many(relations, {
+		relationName: "toEntity",
 	}),
-);
-
-export const relationsEntityRelations = drizzleRelations(
-	relations,
-	({ one }) => ({
-		fromEntity: one(entities, {
-			fields: [relations.fromEntityId],
-			references: [entities.id],
-			relationName: "fromEntity",
-		}),
-		toEntity: one(entities, {
-			fields: [relations.toEntityId],
-			references: [entities.id],
-			relationName: "toEntity",
-		}),
-		// Properties are now entities, so typeId references the entities table
-		typeEntity: one(entities, {
-			fields: [relations.typeId],
-			references: [entities.id],
-			relationName: "typeEntity",
-		}),
-		relationEntity: one(entities, {
-			fields: [relations.entityId],
-			references: [entities.id],
-			relationName: "relationEntity",
-		}),
+	// If an entity is directly linked (e.g. as owning the relation row)
+	relationEntityRelations: many(relations, {
+		relationName: "entity",
 	}),
-);
+}))
 
-export const membersRelations = drizzleRelations(members, ({ one }) => ({
+export const propertiesEntityRelations = drizzleRelations(values, ({one}) => ({
+	entity: one(entities, {
+		fields: [values.entityId],
+		references: [entities.id],
+	}),
+}))
+
+export const relationsEntityRelations = drizzleRelations(relations, ({one}) => ({
+	fromEntity: one(entities, {
+		fields: [relations.fromEntityId],
+		references: [entities.id],
+		relationName: "fromEntity",
+	}),
+	toEntity: one(entities, {
+		fields: [relations.toEntityId],
+		references: [entities.id],
+		relationName: "toEntity",
+	}),
+	// Properties are now entities, so typeId references the entities table
+	typeEntity: one(entities, {
+		fields: [relations.typeId],
+		references: [entities.id],
+		relationName: "typeEntity",
+	}),
+	relationEntity: one(entities, {
+		fields: [relations.entityId],
+		references: [entities.id],
+		relationName: "relationEntity",
+	}),
+}))
+
+export const membersRelations = drizzleRelations(members, ({one}) => ({
 	space: one(spaces, {
 		fields: [members.spaceId],
 		references: [spaces.id],
@@ -349,9 +315,9 @@ export const membersRelations = drizzleRelations(members, ({ one }) => ({
 		references: [spaces.id],
 		relationName: "memberSpace",
 	}),
-}));
+}))
 
-export const editorsRelations = drizzleRelations(editors, ({ one }) => ({
+export const editorsRelations = drizzleRelations(editors, ({one}) => ({
 	space: one(spaces, {
 		fields: [editors.spaceId],
 		references: [spaces.id],
@@ -362,9 +328,9 @@ export const editorsRelations = drizzleRelations(editors, ({ one }) => ({
 		references: [spaces.id],
 		relationName: "editorSpace",
 	}),
-}));
+}))
 
-export const subspacesRelations = drizzleRelations(subspaces, ({ one }) => ({
+export const subspacesRelations = drizzleRelations(subspaces, ({one}) => ({
 	parentSpace: one(spaces, {
 		fields: [subspaces.parentSpaceId],
 		references: [spaces.id],
@@ -375,9 +341,9 @@ export const subspacesRelations = drizzleRelations(subspaces, ({ one }) => ({
 		references: [spaces.id],
 		relationName: "childSpace",
 	}),
-}));
+}))
 
-export const spacesRelations = drizzleRelations(spaces, ({ many }) => ({
+export const spacesRelations = drizzleRelations(spaces, ({many}) => ({
 	members: many(members),
 	editors: many(editors),
 	parentSpaces: many(subspaces, {
@@ -386,23 +352,23 @@ export const spacesRelations = drizzleRelations(spaces, ({ many }) => ({
 	childSpaces: many(subspaces, {
 		relationName: "parentSpace",
 	}),
-}));
+}))
 
-export type IpfsCacheItem = InferSelectModel<typeof ipfsCache>;
-export type DbEntity = InferSelectModel<typeof entities>;
-export type DbProperty = InferSelectModel<typeof values>;
-export type DbRelations = InferSelectModel<typeof relations>;
-export type DbMember = InferSelectModel<typeof members>;
-export type DbEditor = InferSelectModel<typeof editors>;
-export type DbGlobalScore = InferSelectModel<typeof globalScores>;
-export type DbLocalScore = InferSelectModel<typeof localScores>;
-export type DbSpaceScore = InferSelectModel<typeof spaceScores>;
+export type IpfsCacheItem = InferSelectModel<typeof ipfsCache>
+export type DbEntity = InferSelectModel<typeof entities>
+export type DbProperty = InferSelectModel<typeof values>
+export type DbRelations = InferSelectModel<typeof relations>
+export type DbMember = InferSelectModel<typeof members>
+export type DbEditor = InferSelectModel<typeof editors>
+export type DbGlobalScore = InferSelectModel<typeof globalScores>
+export type DbLocalScore = InferSelectModel<typeof localScores>
+export type DbSpaceScore = InferSelectModel<typeof spaceScores>
 
 /** Governance Schema definitions */
 
-export const votingModeEnum = pgEnum("votingMode", ["Fast", "Slow"]);
+export const votingModeEnum = pgEnum("votingMode", ["Fast", "Slow"])
 
-export const voteOptionEnum = pgEnum("voteOption", ["Yes", "No", "Abstain"]);
+export const voteOptionEnum = pgEnum("voteOption", ["Yes", "No", "Abstain"])
 
 export const proposalActionTypeEnum = pgEnum("proposalActionType", [
 	"AddMember",
@@ -415,7 +381,7 @@ export const proposalActionTypeEnum = pgEnum("proposalActionType", [
 	"Unflag",
 	"UpdateVotingSettings",
 	"Unknown",
-]);
+])
 
 /**
  * proposals
@@ -431,11 +397,11 @@ export const proposals = pgTable(
 			.references(() => spaces.id),
 		proposedBy: uuid("proposed_by").notNull(),
 		votingMode: votingModeEnum("voting_mode").notNull(),
-		startTime: bigint("start_time", { mode: "number" }).notNull(),
-		endTime: bigint("end_time", { mode: "number" }).notNull(),
-		quorum: bigint("quorum", { mode: "number" }).notNull(),
-		threshold: bigint("threshold", { mode: "number" }).notNull(),
-		executedAt: bigint("executed_at", { mode: "number" }),
+		startTime: bigint("start_time", {mode: "number"}).notNull(),
+		endTime: bigint("end_time", {mode: "number"}).notNull(),
+		quorum: bigint("quorum", {mode: "number"}).notNull(),
+		threshold: bigint("threshold", {mode: "number"}).notNull(),
+		executedAt: bigint("executed_at", {mode: "number"}),
 		createdAt: text("created_at").notNull(),
 		createdAtBlock: text("created_at_block").notNull(),
 		/**
@@ -451,7 +417,7 @@ export const proposals = pgTable(
 		index("proposals_created_at_idx").on(table.createdAt),
 		index("proposals_end_time_idx").on(table.endTime),
 	],
-);
+)
 
 /**
  * proposal_actions
@@ -477,16 +443,16 @@ export const proposalActions = pgTable(
 		// Flag/Unflag actions
 		contentId: bytea("content_id"),
 		// UpdateVotingSettings action
-		quorum: bigint("quorum", { mode: "number" }),
-		fastThreshold: bigint("fast_threshold", { mode: "number" }),
-		slowThreshold: bigint("slow_threshold", { mode: "number" }),
-		duration: bigint("duration", { mode: "number" }),
+		quorum: bigint("quorum", {mode: "number"}),
+		fastThreshold: bigint("fast_threshold", {mode: "number"}),
+		slowThreshold: bigint("slow_threshold", {mode: "number"}),
+		duration: bigint("duration", {mode: "number"}),
 	},
 	(table) => [
 		index("proposal_actions_proposal_id_idx").on(table.proposalId),
 		index("proposal_actions_action_type_idx").on(table.actionType),
 	],
-);
+)
 
 /**
  * proposal_votes
@@ -508,52 +474,43 @@ export const proposalVotes = pgTable(
 		createdAtBlock: text("created_at_block").notNull(),
 	},
 	(table) => [
-		primaryKey({ columns: [table.proposalId, table.voterId] }),
+		primaryKey({columns: [table.proposalId, table.voterId]}),
 		index("proposal_votes_space_id_idx").on(table.spaceId),
 		index("proposal_votes_voter_id_idx").on(table.voterId),
 		index("proposal_votes_vote_idx").on(table.vote),
 	],
-);
+)
 
-export const proposalsRelations = drizzleRelations(
-	proposals,
-	({ one, many }) => ({
-		space: one(spaces, {
-			fields: [proposals.spaceId],
-			references: [spaces.id],
-		}),
-		actions: many(proposalActions),
-		votes: many(proposalVotes),
+export const proposalsRelations = drizzleRelations(proposals, ({one, many}) => ({
+	space: one(spaces, {
+		fields: [proposals.spaceId],
+		references: [spaces.id],
 	}),
-);
+	actions: many(proposalActions),
+	votes: many(proposalVotes),
+}))
 
-export const proposalActionsRelations = drizzleRelations(
-	proposalActions,
-	({ one }) => ({
-		proposal: one(proposals, {
-			fields: [proposalActions.proposalId],
-			references: [proposals.id],
-		}),
+export const proposalActionsRelations = drizzleRelations(proposalActions, ({one}) => ({
+	proposal: one(proposals, {
+		fields: [proposalActions.proposalId],
+		references: [proposals.id],
 	}),
-);
+}))
 
-export const proposalVotesRelations = drizzleRelations(
-	proposalVotes,
-	({ one }) => ({
-		proposal: one(proposals, {
-			fields: [proposalVotes.proposalId],
-			references: [proposals.id],
-		}),
-		space: one(spaces, {
-			fields: [proposalVotes.spaceId],
-			references: [spaces.id],
-		}),
+export const proposalVotesRelations = drizzleRelations(proposalVotes, ({one}) => ({
+	proposal: one(proposals, {
+		fields: [proposalVotes.proposalId],
+		references: [proposals.id],
 	}),
-);
+	space: one(spaces, {
+		fields: [proposalVotes.spaceId],
+		references: [spaces.id],
+	}),
+}))
 
-export type DbProposal = InferSelectModel<typeof proposals>;
-export type DbProposalAction = InferSelectModel<typeof proposalActions>;
-export type DbProposalVote = InferSelectModel<typeof proposalVotes>;
+export type DbProposal = InferSelectModel<typeof proposals>
+export type DbProposalAction = InferSelectModel<typeof proposalActions>
+export type DbProposalVote = InferSelectModel<typeof proposalVotes>
 
 /** Scoring Tables */
 
@@ -570,7 +527,7 @@ export const globalScores = pgTable("global_scores", {
 		withTimezone: true,
 		mode: "date",
 	}).notNull(),
-});
+})
 
 /**
  * local_scores
@@ -590,12 +547,12 @@ export const localScores = pgTable(
 	},
 	(table) => {
 		return {
-			pk: primaryKey({ columns: [table.entityId, table.spaceId] }),
+			pk: primaryKey({columns: [table.entityId, table.spaceId]}),
 			idxSpaceId: index("idx_local_scores_space_id").on(table.spaceId),
 			idxEntityId: index("idx_local_scores_entity_id").on(table.entityId),
-		};
+		}
 	},
-);
+)
 
 /**
  * space_scores
@@ -610,7 +567,7 @@ export const spaceScores = pgTable("space_scores", {
 		withTimezone: true,
 		mode: "date",
 	}).notNull(),
-});
+})
 
 /**
  * votes
@@ -626,7 +583,7 @@ export const votes = pgTable(
 		objectType: smallint("object_type").notNull(),
 		spaceId: uuid("space_id").notNull(),
 		vote: smallint("vote").notNull(),
-		blockNumber: bigint("block_number", { mode: "number" }).notNull(),
+		blockNumber: bigint("block_number", {mode: "number"}).notNull(),
 		blockTimestamp: timestamp("block_timestamp", {
 			withTimezone: true,
 			mode: "date",
@@ -634,14 +591,19 @@ export const votes = pgTable(
 		createdAt: timestamp("created_at", {
 			withTimezone: true,
 			mode: "date",
-		}).notNull().defaultNow(),
+		})
+			.notNull()
+			.defaultNow(),
 	},
 	(table) => ({
 		voterIdIdx: index("idx_votes_voter_id").on(table.voterId),
-		objectTypeObjectIdSpaceIdIdx: index("idx_votes_object_type_object_id_space_id").on(table.objectType, table.objectId, table.spaceId),
+		objectTypeObjectIdSpaceIdIdx: index("idx_votes_object_type_object_id_space_id").on(
+			table.objectType,
+			table.objectId,
+			table.spaceId,
+		),
 	}),
-);
-
+)
 
 /**
  * user_votes
@@ -667,7 +629,7 @@ export const userVotes = pgTable(
 		uniqueConstraint: unique().on(table.userId, table.objectId, table.objectType, table.spaceId),
 		objectIdx: index("idx_user_votes_object").on(table.objectId, table.objectType, table.spaceId),
 	}),
-);
+)
 
 /**
  * votes_count
@@ -683,13 +645,13 @@ export const votesCount = pgTable(
 		objectId: uuid("object_id").notNull(),
 		objectType: smallint("object_type").notNull(),
 		spaceId: uuid("space_id").notNull(),
-		upvotes: bigint("upvotes", { mode: "number" }).notNull().default(0),
-		downvotes: bigint("downvotes", { mode: "number" }).notNull().default(0),
+		upvotes: bigint("upvotes", {mode: "number"}).notNull().default(0),
+		downvotes: bigint("downvotes", {mode: "number"}).notNull().default(0),
 	},
 	(table) => ({
 		uniqueConstraint: unique().on(table.objectId, table.objectType, table.spaceId),
 	}),
-);
+)
 
 /** Versioned Entities Schema */
 
@@ -703,19 +665,16 @@ export const editVersions = pgTable(
 	"edit_versions",
 	{
 		editId: uuid("edit_id").primaryKey(),
-		blockNumber: bigint("block_number", { mode: "bigint" }).notNull(),
-		sequence: bigint("sequence", { mode: "number" }).notNull(),
-		versionKey: bigint("version_key", { mode: "bigint" }).notNull(),
-		createdAt: timestamp("created_at", { mode: "date" }).notNull(),
+		blockNumber: bigint("block_number", {mode: "bigint"}).notNull(),
+		sequence: bigint("sequence", {mode: "number"}).notNull(),
+		versionKey: bigint("version_key", {mode: "bigint"}).notNull(),
+		createdAt: timestamp("created_at", {mode: "date"}).notNull(),
 	},
 	(table) => [
-		unique("edit_versions_block_sequence_unique").on(
-			table.blockNumber,
-			table.sequence,
-		),
+		unique("edit_versions_block_sequence_unique").on(table.blockNumber, table.sequence),
 		index("edit_versions_version_key_idx").on(table.versionKey),
 	],
-);
+)
 
 /**
  * value_versions
@@ -730,11 +689,11 @@ export const valueVersions = pgTable(
 		entityId: uuid("entity_id").notNull(),
 		propertyId: uuid("property_id").notNull(),
 		spaceId: uuid("space_id").notNull(),
-		validFromKey: bigint("valid_from_key", { mode: "bigint" }).notNull(),
-		validToKey: bigint("valid_to_key", { mode: "bigint" }),
+		validFromKey: bigint("valid_from_key", {mode: "bigint"}).notNull(),
+		validToKey: bigint("valid_to_key", {mode: "bigint"}),
 		// Value columns (GRC-20 v2 data types)
 		boolean: boolean("boolean"), // BOOL
-		integer: bigint("integer", { mode: "number" }), // INT64
+		integer: bigint("integer", {mode: "number"}), // INT64
 		float: doublePrecision("float"), // FLOAT64
 		decimal: decimal("decimal"), // DECIMAL
 		text: text("text"), // TEXT
@@ -750,28 +709,21 @@ export const valueVersions = pgTable(
 		language: text("language"), // For TEXT values only
 		unit: text("unit"), // For numerical values (INT64, FLOAT64, DECIMAL)
 		// UTC-normalized columns (Rust writes, PostgreSQL casts to UTC, DB timezone=UTC ensures UTC output)
-		timeUtc: time("time_utc", { withTimezone: true }),
-		datetimeUtc: timestamp("datetime_utc", { withTimezone: true, mode: "date" }),
+		timeUtc: time("time_utc", {withTimezone: true}),
+		datetimeUtc: timestamp("datetime_utc", {withTimezone: true, mode: "date"}),
 		// GRC-20 edit context (for context-aware diff grouping)
 		contextRootId: uuid("context_root_id"), // Parent entity in edit context
 		contextEdgeTypeId: uuid("context_edge_type_id"), // Relation type from context edge
 	},
 	(table) => [
 		index("value_versions_entity_idx").on(table.entityId),
-		index("value_versions_lookup_idx").on(
-			table.entityId,
-			table.propertyId,
-			table.spaceId,
-		),
+		index("value_versions_lookup_idx").on(table.entityId, table.propertyId, table.spaceId),
 		index("value_versions_open_idx")
 			.on(table.entityId, table.propertyId, table.spaceId)
 			.where(sql`${table.validToKey} IS NULL`),
-		index("value_versions_range_idx").on(
-			table.entityId,
-			table.validFromKey,
-		),
+		index("value_versions_range_idx").on(table.entityId, table.validFromKey),
 	],
-);
+)
 
 /**
  * relation_versions
@@ -793,8 +745,8 @@ export const relationVersions = pgTable(
 		position: text("position"),
 		spaceId: uuid("space_id").notNull(),
 		verified: boolean("verified"),
-		validFromKey: bigint("valid_from_key", { mode: "bigint" }).notNull(),
-		validToKey: bigint("valid_to_key", { mode: "bigint" }),
+		validFromKey: bigint("valid_from_key", {mode: "bigint"}).notNull(),
+		validToKey: bigint("valid_to_key", {mode: "bigint"}),
 		// GRC-20 edit context (for context-aware diff grouping)
 		contextRootId: uuid("context_root_id"), // Parent entity in edit context
 		contextEdgeTypeId: uuid("context_edge_type_id"), // Relation type from context edge
@@ -802,16 +754,11 @@ export const relationVersions = pgTable(
 	(table) => [
 		index("relation_versions_relation_idx").on(table.relationId),
 		index("relation_versions_entity_idx").on(table.entityId),
-		index("relation_versions_open_idx")
-			.on(table.relationId)
-			.where(sql`${table.validToKey} IS NULL`),
-		index("relation_versions_range_idx").on(
-			table.entityId,
-			table.validFromKey,
-		),
+		index("relation_versions_open_idx").on(table.relationId).where(sql`${table.validToKey} IS NULL`),
+		index("relation_versions_range_idx").on(table.entityId, table.validFromKey),
 	],
-);
+)
 
-export type DbEditVersion = InferSelectModel<typeof editVersions>;
-export type DbValueVersion = InferSelectModel<typeof valueVersions>;
-export type DbRelationVersion = InferSelectModel<typeof relationVersions>;
+export type DbEditVersion = InferSelectModel<typeof editVersions>
+export type DbValueVersion = InferSelectModel<typeof valueVersions>
+export type DbRelationVersion = InferSelectModel<typeof relationVersions>
