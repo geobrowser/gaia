@@ -544,6 +544,16 @@ export function createProposalsRouter(db: Database, runtime: AppRuntime) {
 
 				const actionTypes = yield* parseActionTypes(actionTypesParam)
 				const excludeActionTypes = yield* parseActionTypes(excludeActionTypesParam)
+
+				// Validate that actionTypes and excludeActionTypes are mutually exclusive
+				if (actionTypes && excludeActionTypes) {
+					return yield* Effect.fail(
+						new ValidationError({
+							message: "Cannot specify both actionTypes and excludeActionTypes. Use one or the other.",
+						}),
+					)
+				}
+
 				const status = yield* parseStatuses(statusParam)
 				const orderBy = yield* parseOrderBy(orderByParam)
 				const orderDirection = yield* parseOrderDirection(orderDirectionParam)

@@ -1,5 +1,5 @@
 {
-  "id": "3fc78731-c678-447e-8a6e-3a9b710b0e03",
+  "id": "e2400e1f-534e-4065-9bdf-b47f51225b21",
   "prevId": "4c6b70ac-caee-49b0-a00d-068e7d882af5",
   "version": "7",
   "dialect": "postgresql",
@@ -822,21 +822,6 @@
           "columns": [
             {
               "expression": "created_at",
-              "isExpression": false,
-              "asc": true,
-              "nulls": "last"
-            }
-          ],
-          "isUnique": false,
-          "concurrently": false,
-          "method": "btree",
-          "with": {}
-        },
-        "proposals_end_time_idx": {
-          "name": "proposals_end_time_idx",
-          "columns": [
-            {
-              "expression": "end_time",
               "isExpression": false,
               "asc": true,
               "nulls": "last"

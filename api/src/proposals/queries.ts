@@ -345,7 +345,11 @@ function buildCursorCondition(
 	if (!cursor) return sql``
 
 	const parsed = parseCursor(cursor, orderBy)
-	if (!parsed) return sql``
+	if (!parsed) {
+		// Log warning for debugging - invalid cursor format causes pagination to restart from beginning
+		console.warn(`[queries] Invalid cursor format ignored, restarting pagination: cursor=${cursor}, orderBy=${orderBy}`)
+		return sql``
+	}
 
 	const {orderValue, cursorId} = parsed
 
@@ -463,12 +467,13 @@ export function listProposalsInSpace(
 
 						case "EXECUTABLE":
 							// Not executed AND meets threshold conditions
-							// Fast path: yes >= threshold (contract uses yes > threshold - 1)
+							// Fast path: yes > (threshold - 1), equivalent to yes >= threshold for threshold > 0
+							//            For threshold = 0, this means yes > 0 (needs at least 1 yes vote)
 							// Slow path: voting ended AND quorum met AND (RATIO_BASE - threshold) * yes > threshold * no
 							return sql`(
                 p.executed_at IS NULL
                 AND (
-                  (p.voting_mode = 'Fast' AND COALESCE(vote_counts.yes_count, 0) >= p.threshold)
+                  (p.voting_mode = 'Fast' AND COALESCE(vote_counts.yes_count, 0) > GREATEST(p.threshold - 1, 0))
                   OR (
                     p.voting_mode = 'Slow'
                     AND ${nowSeconds}::bigint > p.end_time
@@ -480,11 +485,12 @@ export function listProposalsInSpace(
 
 						case "REJECTED":
 							// Not executed AND voting ended AND threshold/quorum not met
+							// Fast path: yes <= (threshold - 1), i.e., NOT (yes > threshold - 1)
 							return sql`(
                 p.executed_at IS NULL
                 AND ${nowSeconds}::bigint > p.end_time
                 AND (
-                  (p.voting_mode = 'Fast' AND COALESCE(vote_counts.yes_count, 0) < p.threshold)
+                  (p.voting_mode = 'Fast' AND COALESCE(vote_counts.yes_count, 0) <= GREATEST(p.threshold - 1, 0))
                   OR (
                     p.voting_mode = 'Slow'
                     AND (
@@ -496,13 +502,14 @@ export function listProposalsInSpace(
               )`
 
 						case "PROPOSED":
-							// Not executed AND voting not ended AND (fast path: threshold not met)
+							// Not executed AND voting not ended AND (fast path: threshold not yet met)
+							// Fast path: yes <= (threshold - 1), i.e., NOT yet executable
 							return sql`(
                 p.executed_at IS NULL
                 AND ${nowSeconds}::bigint <= p.end_time
                 AND (
                   p.voting_mode = 'Slow'
-                  OR (p.voting_mode = 'Fast' AND COALESCE(vote_counts.yes_count, 0) < p.threshold)
+                  OR (p.voting_mode = 'Fast' AND COALESCE(vote_counts.yes_count, 0) <= GREATEST(p.threshold - 1, 0))
                 )
               )`
 

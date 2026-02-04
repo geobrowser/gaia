@@ -415,8 +415,8 @@ export const proposals = pgTable(
 		index("proposals_space_id_idx").on(table.spaceId),
 		index("proposals_proposed_by_idx").on(table.proposedBy),
 		index("proposals_created_at_idx").on(table.createdAt),
-		index("proposals_end_time_idx").on(table.endTime),
 		// Composite indexes for list query ordering with pagination
+		// Note: Single-column end_time index removed as it's redundant with composite index
 		index("proposals_space_created_at_idx").on(table.spaceId, table.createdAt),
 		index("proposals_space_end_time_idx").on(table.spaceId, table.endTime),
 		index("proposals_space_start_time_idx").on(table.spaceId, table.startTime),

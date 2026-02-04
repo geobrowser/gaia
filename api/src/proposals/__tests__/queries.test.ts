@@ -321,6 +321,51 @@ describe("GET /proposals/space/:spaceId/status", () => {
 			expect(body.message).not.toContain("Connection refused")
 		})
 	})
+
+	describe("combined filters", () => {
+		it("accepts status filter with orderBy and orderDirection", async () => {
+			db.execute.mockResolvedValueOnce({rows: []})
+
+			const res = await app.request(
+				"/proposals/space/660e8400-e29b-41d4-a716-446655440000/status?status=PROPOSED,EXECUTABLE&orderBy=end_time&orderDirection=asc",
+			)
+
+			expect(res.status).toBe(200)
+			expect(db.execute).toHaveBeenCalled()
+		})
+
+		it("accepts actionTypes filter with status filter", async () => {
+			db.execute.mockResolvedValueOnce({rows: []})
+
+			const res = await app.request(
+				"/proposals/space/660e8400-e29b-41d4-a716-446655440000/status?actionTypes=Publish,AddMember&status=EXECUTABLE",
+			)
+
+			expect(res.status).toBe(200)
+			expect(db.execute).toHaveBeenCalled()
+		})
+
+		it("accepts all filters combined", async () => {
+			db.execute.mockResolvedValueOnce({rows: []})
+
+			const res = await app.request(
+				"/proposals/space/660e8400-e29b-41d4-a716-446655440000/status?status=PROPOSED&actionTypes=Publish&orderBy=start_time&orderDirection=desc&limit=50",
+			)
+
+			expect(res.status).toBe(200)
+			expect(db.execute).toHaveBeenCalled()
+		})
+
+		it("returns 400 when both actionTypes and excludeActionTypes are provided", async () => {
+			const res = await app.request(
+				"/proposals/space/660e8400-e29b-41d4-a716-446655440000/status?actionTypes=Publish&excludeActionTypes=AddMember",
+			)
+
+			expect(res.status).toBe(400)
+			const body = await res.json()
+			expect(body.message).toContain("Cannot specify both")
+		})
+	})
 })
 
 // =============================================================================
@@ -474,7 +519,7 @@ describe("SQL/TypeScript status parity", () => {
 	})
 
 	describe("edge cases", () => {
-		it("handles zero threshold (Fast path always executable with any yes vote)", () => {
+		it("handles zero threshold (Fast path executable with any yes vote)", () => {
 			const proposal = makeProposal({
 				votingMode: "Fast",
 				threshold: 0n,
@@ -482,6 +527,54 @@ describe("SQL/TypeScript status parity", () => {
 			})
 			const result = computeProposalStatus(proposal, now)
 			expect(result.status).toBe("EXECUTABLE")
+		})
+
+		it("handles zero threshold with zero yes votes (Fast path NOT executable)", () => {
+			// This is the edge case: threshold=0 means we need yes > -1, which means yes >= 0
+			// But the contract logic uses yes > (threshold - 1), with threshold - 1 = 0 when threshold = 0
+			// So we need yes > 0, meaning at least 1 yes vote
+			const proposal = makeProposal({
+				votingMode: "Fast",
+				threshold: 0n,
+				yesCount: 0n,
+				endTime: now + 3600n, // voting not ended
+			})
+			const result = computeProposalStatus(proposal, now)
+			// With threshold=0 and yesCount=0, threshold formula is yes > max(threshold-1, 0) = yes > 0
+			// 0 > 0 is false, so NOT executable yet
+			expect(result.status).toBe("PROPOSED")
+		})
+
+		it("handles zero threshold with zero yes votes after voting ends (REJECTED)", () => {
+			const proposal = makeProposal({
+				votingMode: "Fast",
+				threshold: 0n,
+				yesCount: 0n,
+				endTime: now - 100n, // voting ended
+			})
+			const result = computeProposalStatus(proposal, now)
+			expect(result.status).toBe("REJECTED")
+		})
+
+		it("handles threshold=1 exactly met", () => {
+			const proposal = makeProposal({
+				votingMode: "Fast",
+				threshold: 1n,
+				yesCount: 1n,
+			})
+			const result = computeProposalStatus(proposal, now)
+			expect(result.status).toBe("EXECUTABLE")
+		})
+
+		it("handles threshold=1 not met", () => {
+			const proposal = makeProposal({
+				votingMode: "Fast",
+				threshold: 1n,
+				yesCount: 0n,
+				endTime: now + 3600n,
+			})
+			const result = computeProposalStatus(proposal, now)
+			expect(result.status).toBe("PROPOSED")
 		})
 
 		it("handles zero votes", () => {
@@ -497,6 +590,28 @@ describe("SQL/TypeScript status parity", () => {
 			const result = computeProposalStatus(proposal, now)
 			expect(result.status).toBe("REJECTED")
 			expect(result.isQuorumReached).toBe(false)
+		})
+
+		it("boundary: exactly at threshold (Fast path)", () => {
+			// yes >= threshold should be executable
+			const proposal = makeProposal({
+				votingMode: "Fast",
+				threshold: 5n,
+				yesCount: 5n,
+			})
+			const result = computeProposalStatus(proposal, now)
+			expect(result.status).toBe("EXECUTABLE")
+		})
+
+		it("boundary: one below threshold (Fast path)", () => {
+			const proposal = makeProposal({
+				votingMode: "Fast",
+				threshold: 5n,
+				yesCount: 4n,
+				endTime: now + 3600n,
+			})
+			const result = computeProposalStatus(proposal, now)
+			expect(result.status).toBe("PROPOSED")
 		})
 	})
 })
