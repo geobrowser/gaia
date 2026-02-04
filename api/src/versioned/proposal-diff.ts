@@ -6,47 +6,45 @@
  * - Closed proposals: compare against versioned state at end_time
  */
 
-import { Effect } from "effect";
-import { sql } from "drizzle-orm";
-import type { NodePgDatabase } from "drizzle-orm/node-postgres";
-import { SystemIds } from "@graphprotocol/grc-20";
-import { decodeEditAuto, type Op, type Id } from "@geoprotocol/grc-20";
-
+import {decodeEditAuto, type Id, type Op} from "@geoprotocol/grc-20"
+import {SystemIds} from "@graphprotocol/grc-20"
+import {sql} from "drizzle-orm"
+import type {NodePgDatabase} from "drizzle-orm/node-postgres"
+import {Effect} from "effect"
+import {diffEntitySnapshots} from "./diff"
+import {QueryError} from "./queries"
 import type {
-	EntitySnapshot,
 	EntityDiff,
-	VersionedValue,
-	VersionedRelation,
-	BlockSnapshot,
+	EntitySnapshot,
+	PaginatedProposalDiff,
 	ProposalDiffCursor,
 	ProposalStatus,
-	PaginatedProposalDiff,
-} from "./types";
-import { diffEntitySnapshots } from "./diff";
-import { QueryError } from "./queries";
+	VersionedRelation,
+	VersionedValue,
+} from "./types"
 
 // Error types for proposal diff operations
 export class ProposalNotFoundError {
-	readonly _tag = "ProposalNotFoundError";
+	readonly _tag = "ProposalNotFoundError"
 	constructor(readonly proposalId: string) {}
 }
 
 export class EditBlobNotCachedError {
-	readonly _tag = "EditBlobNotCachedError";
+	readonly _tag = "EditBlobNotCachedError"
 	constructor(readonly uri: string) {}
 }
 
 export class EditDecodeError {
-	readonly _tag = "EditDecodeError";
+	readonly _tag = "EditDecodeError"
 	constructor(readonly cause: unknown) {}
 }
 
-export type ProposalDiffError = QueryError | ProposalNotFoundError | EditBlobNotCachedError | EditDecodeError;
+export type ProposalDiffError = QueryError | ProposalNotFoundError | EditBlobNotCachedError | EditDecodeError
 
-type Database = NodePgDatabase<Record<string, unknown>>;
+type Database = NodePgDatabase<Record<string, unknown>>
 
 // The BLOCKS relation type ID from GRC-20
-const BLOCKS_TYPE_ID = SystemIds.BLOCKS;
+const BLOCKS_TYPE_ID = SystemIds.BLOCKS
 
 // ============================================================================
 // Database Queries
@@ -54,13 +52,13 @@ const BLOCKS_TYPE_ID = SystemIds.BLOCKS;
 
 interface ProposalWithAction {
 	proposal: {
-		id: string;
-		spaceId: string;
-		startTime: bigint;
-		endTime: bigint;
-		executedAt: bigint | null;
-	};
-	contentUri: string | null;
+		id: string
+		spaceId: string
+		startTime: bigint
+		endTime: bigint
+		executedAt: bigint | null
+	}
+	contentUri: string | null
 }
 
 /**
@@ -68,17 +66,17 @@ interface ProposalWithAction {
  */
 function getProposalWithPublishAction(
 	db: Database,
-	proposalId: string
+	proposalId: string,
 ): Effect.Effect<ProposalWithAction | null, QueryError> {
 	return Effect.tryPromise({
 		try: async () => {
 			const result = await db.execute<{
-				proposal_id: string;
-				space_id: string;
-				start_time: string;
-				end_time: string;
-				executed_at: string | null;
-				content_uri: string | null;
+				proposal_id: string
+				space_id: string
+				start_time: string
+				end_time: string
+				executed_at: string | null
+				content_uri: string | null
 			}>(sql`
 				SELECT
 					p.id as proposal_id,
@@ -91,11 +89,11 @@ function getProposalWithPublishAction(
 				LEFT JOIN proposal_actions pa ON pa.proposal_id = p.id AND pa.action_type = 'Publish'
 				WHERE p.id = ${proposalId}
 				LIMIT 1
-			`);
+			`)
 
-			const row = result.rows[0];
+			const row = result.rows[0]
 			if (!row) {
-				return null;
+				return null
 			}
 
 			return {
@@ -107,38 +105,35 @@ function getProposalWithPublishAction(
 					executedAt: row.executed_at ? BigInt(row.executed_at) : null,
 				},
 				contentUri: row.content_uri,
-			};
+			}
 		},
 		catch: (error) => new QueryError("getProposalWithPublishAction", error),
 	}).pipe(
 		Effect.withSpan("proposal-diff.getProposalWithPublishAction", {
-			attributes: { proposalId },
-		})
-	);
+			attributes: {proposalId},
+		}),
+	)
 }
 
 /**
  * Get edit blob from IPFS cache.
  */
-function getIpfsCacheData(
-	db: Database,
-	uri: string
-): Effect.Effect<Buffer | null, QueryError> {
+function getIpfsCacheData(db: Database, uri: string): Effect.Effect<Buffer | null, QueryError> {
 	return Effect.tryPromise({
 		try: async () => {
-			const result = await db.execute<{ data: Buffer | null }>(sql`
+			const result = await db.execute<{data: Buffer | null}>(sql`
 				SELECT data FROM ipfs_cache WHERE uri = ${uri} LIMIT 1
-			`);
+			`)
 
-			const row = result.rows[0];
-			return row?.data ?? null;
+			const row = result.rows[0]
+			return row?.data ?? null
 		},
 		catch: (error) => new QueryError("getIpfsCacheData", error),
 	}).pipe(
 		Effect.withSpan("proposal-diff.getIpfsCacheData", {
-			attributes: { uri },
-		})
-	);
+			attributes: {uri},
+		}),
+	)
 }
 
 /**
@@ -146,45 +141,42 @@ function getIpfsCacheData(
  */
 function getProposalStatus(proposal: ProposalWithAction["proposal"]): ProposalStatus {
 	if (proposal.executedAt !== null) {
-		return "executed";
+		return "executed"
 	}
-	const now = BigInt(Math.floor(Date.now() / 1000));
+	const now = BigInt(Math.floor(Date.now() / 1000))
 	if (now < proposal.endTime) {
-		return "active";
+		return "active"
 	}
-	return "closed";
+	return "closed"
 }
 
 /**
  * Resolve end_time to a version key for closed proposals.
  */
-function resolveVersionKeyAtTimestamp(
-	db: Database,
-	timestamp: bigint
-): Effect.Effect<bigint | null, QueryError> {
+function resolveVersionKeyAtTimestamp(db: Database, timestamp: bigint): Effect.Effect<bigint | null, QueryError> {
 	return Effect.tryPromise({
 		try: async () => {
 			// Find the latest edit before or at the timestamp
-			const result = await db.execute<{ version_key: string }>(sql`
+			const result = await db.execute<{version_key: string}>(sql`
 				SELECT version_key FROM edit_versions
 				WHERE created_at <= to_timestamp(${timestamp.toString()}::bigint)
 				ORDER BY version_key DESC
 				LIMIT 1
-			`);
+			`)
 
-			const row = result.rows[0];
+			const row = result.rows[0]
 			if (!row) {
-				return null;
+				return null
 			}
 
-			return BigInt(row.version_key);
+			return BigInt(row.version_key)
 		},
 		catch: (error) => new QueryError("resolveVersionKeyAtTimestamp", error),
 	}).pipe(
 		Effect.withSpan("proposal-diff.resolveVersionKeyAtTimestamp", {
-			attributes: { timestamp: timestamp.toString() },
-		})
-	);
+			attributes: {timestamp: timestamp.toString()},
+		}),
+	)
 }
 
 // ============================================================================
@@ -198,10 +190,10 @@ function resolveVersionKeyAtTimestamp(
 function batchGetLiveSnapshots(
 	db: Database,
 	entityIds: string[],
-	spaceId: string
+	spaceId: string,
 ): Effect.Effect<Map<string, EntitySnapshot>, QueryError> {
 	if (entityIds.length === 0) {
-		return Effect.succeed(new Map());
+		return Effect.succeed(new Map())
 	}
 
 	return Effect.tryPromise({
@@ -211,23 +203,23 @@ function batchGetLiveSnapshots(
 				SELECT * FROM "values"
 				WHERE entity_id = ANY(${entityIds})
 				AND space_id = ${spaceId}
-			`);
+			`)
 
 			// Query 2: All relations for all entities
 			const relationsResult = await db.execute<Record<string, unknown>>(sql`
 				SELECT * FROM relations
 				WHERE from_entity_id = ANY(${entityIds})
 				AND space_id = ${spaceId}
-			`);
+			`)
 
-			return groupByEntityId(entityIds, valuesResult.rows, relationsResult.rows);
+			return groupByEntityId(entityIds, valuesResult.rows, relationsResult.rows)
 		},
 		catch: (error) => new QueryError("batchGetLiveSnapshots", error),
 	}).pipe(
 		Effect.withSpan("proposal-diff.batchGetLiveSnapshots", {
-			attributes: { entityCount: entityIds.length, spaceId },
-		})
-	);
+			attributes: {entityCount: entityIds.length, spaceId},
+		}),
+	)
 }
 
 /**
@@ -237,15 +229,15 @@ function batchGetVersionedSnapshots(
 	db: Database,
 	entityIds: string[],
 	spaceId: string,
-	versionKey: bigint
+	versionKey: bigint,
 ): Effect.Effect<Map<string, EntitySnapshot>, QueryError> {
 	if (entityIds.length === 0) {
-		return Effect.succeed(new Map());
+		return Effect.succeed(new Map())
 	}
 
 	return Effect.tryPromise({
 		try: async () => {
-			const versionKeyStr = versionKey.toString();
+			const versionKeyStr = versionKey.toString()
 
 			// Query 1: All values at version
 			const valuesResult = await db.execute<Record<string, unknown>>(sql`
@@ -254,7 +246,7 @@ function batchGetVersionedSnapshots(
 				AND space_id = ${spaceId}
 				AND valid_from_key <= ${versionKeyStr}::bigint
 				AND (valid_to_key IS NULL OR valid_to_key > ${versionKeyStr}::bigint)
-			`);
+			`)
 
 			// Query 2: All relations at version
 			const relationsResult = await db.execute<Record<string, unknown>>(sql`
@@ -263,16 +255,16 @@ function batchGetVersionedSnapshots(
 				AND space_id = ${spaceId}
 				AND valid_from_key <= ${versionKeyStr}::bigint
 				AND (valid_to_key IS NULL OR valid_to_key > ${versionKeyStr}::bigint)
-			`);
+			`)
 
-			return groupByEntityId(entityIds, valuesResult.rows, relationsResult.rows);
+			return groupByEntityId(entityIds, valuesResult.rows, relationsResult.rows)
 		},
 		catch: (error) => new QueryError("batchGetVersionedSnapshots", error),
 	}).pipe(
 		Effect.withSpan("proposal-diff.batchGetVersionedSnapshots", {
-			attributes: { entityCount: entityIds.length, spaceId, versionKey: versionKey.toString() },
-		})
-	);
+			attributes: {entityCount: entityIds.length, spaceId, versionKey: versionKey.toString()},
+		}),
+	)
 }
 
 /**
@@ -281,19 +273,19 @@ function batchGetVersionedSnapshots(
 function groupByEntityId(
 	entityIds: string[],
 	valueRows: Record<string, unknown>[],
-	relationRows: Record<string, unknown>[]
+	relationRows: Record<string, unknown>[],
 ): Map<string, EntitySnapshot> {
-	const result = new Map<string, EntitySnapshot>();
+	const result = new Map<string, EntitySnapshot>()
 
 	// Initialize empty snapshots for all entities
 	for (const id of entityIds) {
-		result.set(id, { id, values: [], relations: [], blocks: [] });
+		result.set(id, {id, values: [], relations: [], blocks: []})
 	}
 
 	// Group values by entity
 	for (const row of valueRows) {
-		const entityId = row.entity_id as string;
-		const snapshot = result.get(entityId);
+		const entityId = row.entity_id as string
+		const snapshot = result.get(entityId)
 		if (snapshot) {
 			snapshot.values.push({
 				propertyId: row.property_id as string,
@@ -303,9 +295,7 @@ function groupByEntityId(
 				float: row.float as number | null,
 				decimal: row.decimal as string | null,
 				text: row.text as string | null,
-				bytes: row.bytes
-					? Buffer.from(row.bytes as Buffer).toString("base64")
-					: null,
+				bytes: row.bytes ? Buffer.from(row.bytes as Buffer).toString("base64") : null,
 				date: row.date as string | null,
 				time: row.time as string | null,
 				datetime: row.datetime as string | null,
@@ -314,15 +304,15 @@ function groupByEntityId(
 				embedding: row.embedding as unknown | null,
 				language: row.language as string | null,
 				unit: row.unit as string | null,
-			});
+			})
 		}
 	}
 
 	// Group relations by entity (excluding block relations)
 	for (const row of relationRows) {
-		const entityId = row.from_entity_id as string;
-		const typeId = row.type_id as string;
-		const snapshot = result.get(entityId);
+		const entityId = row.from_entity_id as string
+		const typeId = row.type_id as string
+		const snapshot = result.get(entityId)
 		if (snapshot && typeId !== BLOCKS_TYPE_ID) {
 			snapshot.relations.push({
 				relationId: row.relation_id as string,
@@ -334,11 +324,11 @@ function groupByEntityId(
 				position: row.position as string | null,
 				spaceId: row.space_id as string,
 				verified: row.verified as boolean | null,
-			});
+			})
 		}
 	}
 
-	return result;
+	return result
 }
 
 // ============================================================================
@@ -352,15 +342,15 @@ function idToUuid(id: Id): string {
 	// Id is a 16-byte Uint8Array, convert to UUID format
 	const hex = Array.from(id)
 		.map((b) => b.toString(16).padStart(2, "0"))
-		.join("");
-	return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
+		.join("")
+	return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`
 }
 
 /**
  * Extract affected entity IDs from ops.
  */
 function extractAffectedEntities(ops: Op[]): string[] {
-	const entityIds = new Set<string>();
+	const entityIds = new Set<string>()
 
 	for (const op of ops) {
 		switch (op.type) {
@@ -368,95 +358,87 @@ function extractAffectedEntities(ops: Op[]): string[] {
 			case "updateEntity":
 			case "deleteEntity":
 			case "restoreEntity":
-				entityIds.add(idToUuid(op.id));
-				break;
+				entityIds.add(idToUuid(op.id))
+				break
 			case "createRelation":
 				// Relations affect the "from" entity
-				entityIds.add(idToUuid(op.from));
-				break;
+				entityIds.add(idToUuid(op.from))
+				break
 			case "updateRelation":
 			case "deleteRelation":
 			case "restoreRelation":
 				// These only have the relation id, we'd need to look up the from entity
 				// For now, skip - the entity changes are captured by entity ops
-				break;
+				break
 			case "createValueRef":
-				entityIds.add(idToUuid(op.entity));
-				break;
+				entityIds.add(idToUuid(op.entity))
+				break
 		}
 	}
 
-	return Array.from(entityIds);
+	return Array.from(entityIds)
 }
 
 /**
  * Extract value from PropertyValue based on data type.
  */
-function propertyValueToVersionedValue(
-	pv: { property: Id; value: unknown },
-	spaceId: string
-): VersionedValue {
-	const propertyId = idToUuid(pv.property);
-	const value = pv.value as Record<string, unknown>;
+function propertyValueToVersionedValue(pv: {property: Id; value: unknown}, spaceId: string): VersionedValue {
+	const propertyId = idToUuid(pv.property)
+	const value = pv.value as Record<string, unknown>
 
 	// The value object has a single key indicating the data type
-	const result: VersionedValue = { propertyId, spaceId };
+	const result: VersionedValue = {propertyId, spaceId}
 
 	if ("text" in value) {
-		result.text = value.text as string;
+		result.text = value.text as string
 	} else if ("boolean" in value) {
-		result.boolean = value.boolean as boolean;
+		result.boolean = value.boolean as boolean
 	} else if ("integer" in value) {
-		result.integer = Number(value.integer);
+		result.integer = Number(value.integer)
 	} else if ("float" in value) {
-		result.float = value.float as number;
+		result.float = value.float as number
 	} else if ("decimal" in value) {
-		const dec = value.decimal as { mantissa: bigint; scale: number };
-		result.decimal = (Number(dec.mantissa) / Math.pow(10, dec.scale)).toString();
+		const dec = value.decimal as {mantissa: bigint; scale: number}
+		result.decimal = (Number(dec.mantissa) / 10 ** dec.scale).toString()
 	} else if ("bytes" in value) {
-		result.bytes = Buffer.from(value.bytes as Uint8Array).toString("base64");
+		result.bytes = Buffer.from(value.bytes as Uint8Array).toString("base64")
 	} else if ("date" in value) {
-		result.date = value.date as string;
+		result.date = value.date as string
 	} else if ("time" in value) {
-		result.time = value.time as string;
+		result.time = value.time as string
 	} else if ("datetime" in value) {
-		result.datetime = value.datetime as string;
+		result.datetime = value.datetime as string
 	}
 
-	return result;
+	return result
 }
 
 /**
  * Apply ops to a base snapshot to get the proposed state.
  * Returns a new snapshot (does not mutate the input).
  */
-function applyOpsToSnapshot(
-	base: EntitySnapshot,
-	ops: Op[],
-	entityId: string,
-	spaceId: string
-): EntitySnapshot {
+function applyOpsToSnapshot(base: EntitySnapshot, ops: Op[], entityId: string, spaceId: string): EntitySnapshot {
 	// Deep copy the base snapshot
 	const proposed: EntitySnapshot = {
 		id: entityId,
-		values: base.values.map((v) => ({ ...v })),
-		relations: base.relations.map((r) => ({ ...r })),
+		values: base.values.map((v) => ({...v})),
+		relations: base.relations.map((r) => ({...r})),
 		blocks: base.blocks.map((b) => ({
 			...b,
-			values: b.values.map((v) => ({ ...v })),
-			relations: b.relations.map((r) => ({ ...r })),
+			values: b.values.map((v) => ({...v})),
+			relations: b.relations.map((r) => ({...r})),
 		})),
-	};
-
-	// Create maps for efficient lookups
-	const valuesMap = new Map<string, VersionedValue>();
-	for (const v of proposed.values) {
-		valuesMap.set(`${v.propertyId}:${v.spaceId}`, v);
 	}
 
-	const relationsMap = new Map<string, VersionedRelation>();
+	// Create maps for efficient lookups
+	const valuesMap = new Map<string, VersionedValue>()
+	for (const v of proposed.values) {
+		valuesMap.set(`${v.propertyId}:${v.spaceId}`, v)
+	}
+
+	const relationsMap = new Map<string, VersionedRelation>()
 	for (const r of proposed.relations) {
-		relationsMap.set(r.relationId, r);
+		relationsMap.set(r.relationId, r)
 	}
 
 	// Apply ops that affect this entity
@@ -466,42 +448,42 @@ function applyOpsToSnapshot(
 				if (idToUuid(op.id) === entityId) {
 					// Set values from the create op
 					for (const pv of op.values) {
-						const newValue = propertyValueToVersionedValue(pv, spaceId);
-						valuesMap.set(`${newValue.propertyId}:${spaceId}`, newValue);
+						const newValue = propertyValueToVersionedValue(pv, spaceId)
+						valuesMap.set(`${newValue.propertyId}:${spaceId}`, newValue)
 					}
 				}
-				break;
+				break
 
 			case "updateEntity":
 				if (idToUuid(op.id) === entityId) {
 					// First unset values
 					for (const unset of op.unset) {
-						const propertyId = idToUuid(unset.property);
-						valuesMap.delete(`${propertyId}:${spaceId}`);
+						const propertyId = idToUuid(unset.property)
+						valuesMap.delete(`${propertyId}:${spaceId}`)
 					}
 					// Then set values
 					for (const pv of op.set) {
-						const newValue = propertyValueToVersionedValue(pv, spaceId);
-						valuesMap.set(`${newValue.propertyId}:${spaceId}`, newValue);
+						const newValue = propertyValueToVersionedValue(pv, spaceId)
+						valuesMap.set(`${newValue.propertyId}:${spaceId}`, newValue)
 					}
 				}
-				break;
+				break
 
 			case "deleteEntity":
 				if (idToUuid(op.id) === entityId) {
 					// Clear all values and relations
-					valuesMap.clear();
-					relationsMap.clear();
+					valuesMap.clear()
+					relationsMap.clear()
 				}
-				break;
+				break
 
 			case "restoreEntity":
 				// Restore doesn't add values back - they need to be re-set
-				break;
+				break
 
 			case "createRelation":
 				if (idToUuid(op.from) === entityId) {
-					const relationId = idToUuid(op.id);
+					const relationId = idToUuid(op.id)
 					const relation: VersionedRelation = {
 						relationId,
 						typeId: idToUuid(op.relationType),
@@ -512,71 +494,67 @@ function applyOpsToSnapshot(
 						position: op.position ?? null,
 						spaceId,
 						verified: null,
-					};
-					relationsMap.set(relationId, relation);
+					}
+					relationsMap.set(relationId, relation)
 				}
-				break;
+				break
 
 			case "updateRelation": {
-				const relationId = idToUuid(op.id);
-				const existing = relationsMap.get(relationId);
+				const relationId = idToUuid(op.id)
+				const existing = relationsMap.get(relationId)
 				if (existing && existing.fromEntityId === entityId) {
 					// Apply unsets first
 					for (const field of op.unset) {
-						if (field === "position") existing.position = null;
-						if (field === "fromSpace") existing.fromSpaceId = null;
-						if (field === "toSpace") existing.toSpaceId = null;
+						if (field === "position") existing.position = null
+						if (field === "fromSpace") existing.fromSpaceId = null
+						if (field === "toSpace") existing.toSpaceId = null
 					}
 					// Then apply sets
-					if (op.position !== undefined) existing.position = op.position;
-					if (op.fromSpace) existing.fromSpaceId = idToUuid(op.fromSpace);
-					if (op.toSpace) existing.toSpaceId = idToUuid(op.toSpace);
+					if (op.position !== undefined) existing.position = op.position
+					if (op.fromSpace) existing.fromSpaceId = idToUuid(op.fromSpace)
+					if (op.toSpace) existing.toSpaceId = idToUuid(op.toSpace)
 				}
-				break;
+				break
 			}
 
 			case "deleteRelation": {
-				const relationId = idToUuid(op.id);
-				const existing = relationsMap.get(relationId);
+				const relationId = idToUuid(op.id)
+				const existing = relationsMap.get(relationId)
 				if (existing && existing.fromEntityId === entityId) {
-					relationsMap.delete(relationId);
+					relationsMap.delete(relationId)
 				}
-				break;
+				break
 			}
 
 			case "restoreRelation":
 				// Would need the original relation data to restore
-				break;
+				break
 
 			case "createValueRef":
 				// Value refs don't directly modify values/relations
-				break;
+				break
 		}
 	}
 
 	// Rebuild arrays from maps
-	proposed.values = Array.from(valuesMap.values());
-	proposed.relations = Array.from(relationsMap.values());
+	proposed.values = Array.from(valuesMap.values())
+	proposed.relations = Array.from(relationsMap.values())
 
-	return proposed;
+	return proposed
 }
 
 /**
  * Check if an entity diff is empty (no changes).
  */
 function isDiffEmpty(diff: EntityDiff): boolean {
-	return (
-		diff.values.length === 0 &&
-		diff.relations.length === 0 &&
-		diff.blocks.length === 0
-	);
+	return diff.values.length === 0 && diff.relations.length === 0 && diff.blocks.length === 0
 }
 
 /**
  * Create an empty snapshot for a new entity.
  */
 function emptySnapshot(entityId: string): EntitySnapshot {
-	return { id: entityId, values: [], relations: [], blocks: [] };
+	return {id: entityId, values: [], relations: [], blocks: []}
 }
 
 // ============================================================================
@@ -584,15 +562,15 @@ function emptySnapshot(entityId: string): EntitySnapshot {
 // ============================================================================
 
 function encodeCursor(cursor: ProposalDiffCursor): string {
-	return Buffer.from(JSON.stringify(cursor)).toString("base64");
+	return Buffer.from(JSON.stringify(cursor)).toString("base64")
 }
 
 function decodeCursor(encoded: string): ProposalDiffCursor | null {
 	try {
-		const json = Buffer.from(encoded, "base64").toString("utf-8");
-		return JSON.parse(json) as ProposalDiffCursor;
+		const json = Buffer.from(encoded, "base64").toString("utf-8")
+		return JSON.parse(json) as ProposalDiffCursor
 	} catch {
-		return null;
+		return null
 	}
 }
 
@@ -615,17 +593,17 @@ export function computeProposalDiff(
 	proposalId: string,
 	spaceId: string,
 	cursorStr?: string,
-	limit = 50
+	limit = 50,
 ): Effect.Effect<PaginatedProposalDiff, ProposalDiffError> {
 	return Effect.gen(function* () {
 		// 1. Get proposal with publish action
-		const data = yield* getProposalWithPublishAction(db, proposalId);
+		const data = yield* getProposalWithPublishAction(db, proposalId)
 		if (!data) {
-			return yield* Effect.fail(new ProposalNotFoundError(proposalId));
+			return yield* Effect.fail(new ProposalNotFoundError(proposalId))
 		}
 
-		const { proposal, contentUri } = data;
-		const status = getProposalStatus(proposal);
+		const {proposal, contentUri} = data
+		const status = getProposalStatus(proposal)
 
 		// 2. If no publish action, return empty diff
 		if (!contentUri) {
@@ -639,69 +617,64 @@ export function computeProposalDiff(
 					hasMore: false,
 					totalEntities: 0,
 				},
-			};
+			}
 		}
 
 		// 3. Fetch edit blob from IPFS cache
-		const blob = yield* getIpfsCacheData(db, contentUri);
+		const blob = yield* getIpfsCacheData(db, contentUri)
 		if (!blob) {
-			return yield* Effect.fail(new EditBlobNotCachedError(contentUri));
+			return yield* Effect.fail(new EditBlobNotCachedError(contentUri))
 		}
 
 		// 4. Decode using @geoprotocol/grc-20
 		const ops = yield* Effect.tryPromise({
 			try: async () => {
-				const edit = await decodeEditAuto(blob);
-				return edit.ops;
+				const edit = await decodeEditAuto(blob)
+				return edit.ops
 			},
 			catch: (error) => new EditDecodeError(error),
-		});
+		})
 
 		// 5. Extract affected entity IDs (sorted for stable pagination)
-		const entityIds = extractAffectedEntities(ops).sort();
+		const entityIds = extractAffectedEntities(ops).sort()
 
 		// 6. Parse cursor
-		const cursor = cursorStr ? decodeCursor(cursorStr) : null;
-		const startIndex = cursor?.entityIndex ?? 0;
-		const pageEntityIds = entityIds.slice(startIndex, startIndex + limit);
+		const cursor = cursorStr ? decodeCursor(cursorStr) : null
+		const startIndex = cursor?.entityIndex ?? 0
+		const pageEntityIds = entityIds.slice(startIndex, startIndex + limit)
 
 		// 7. Batch fetch base states
-		let baseStates: Map<string, EntitySnapshot>;
+		let baseStates: Map<string, EntitySnapshot>
 		if (status === "active") {
-			baseStates = yield* batchGetLiveSnapshots(db, pageEntityIds, spaceId);
+			baseStates = yield* batchGetLiveSnapshots(db, pageEntityIds, spaceId)
 		} else {
 			// For closed/executed proposals, use versioned state at end_time
-			const versionKey = yield* resolveVersionKeyAtTimestamp(db, proposal.endTime);
+			const versionKey = yield* resolveVersionKeyAtTimestamp(db, proposal.endTime)
 			if (versionKey === null) {
 				// No edits existed at that time - use empty snapshots
-				baseStates = new Map();
+				baseStates = new Map()
 				for (const id of pageEntityIds) {
-					baseStates.set(id, emptySnapshot(id));
+					baseStates.set(id, emptySnapshot(id))
 				}
 			} else {
-				baseStates = yield* batchGetVersionedSnapshots(
-					db,
-					pageEntityIds,
-					spaceId,
-					versionKey
-				);
+				baseStates = yield* batchGetVersionedSnapshots(db, pageEntityIds, spaceId, versionKey)
 			}
 		}
 
 		// 8. Compute diffs (in-memory, no DB calls)
-		const diffs: EntityDiff[] = [];
+		const diffs: EntityDiff[] = []
 		for (const entityId of pageEntityIds) {
-			const baseState = baseStates.get(entityId) ?? emptySnapshot(entityId);
-			const proposedState = applyOpsToSnapshot(baseState, ops, entityId, spaceId);
-			const diff = yield* diffEntitySnapshots(entityId, baseState, proposedState);
+			const baseState = baseStates.get(entityId) ?? emptySnapshot(entityId)
+			const proposedState = applyOpsToSnapshot(baseState, ops, entityId, spaceId)
+			const diff = yield* diffEntitySnapshots(entityId, baseState, proposedState)
 			if (!isDiffEmpty(diff)) {
-				diffs.push(diff);
+				diffs.push(diff)
 			}
 		}
 
 		// 9. Build pagination info
-		const nextIndex = startIndex + limit;
-		const hasMore = nextIndex < entityIds.length;
+		const nextIndex = startIndex + limit
+		const hasMore = nextIndex < entityIds.length
 
 		return {
 			proposalId,
@@ -709,14 +682,14 @@ export function computeProposalDiff(
 			proposalStatus: status,
 			entities: diffs,
 			pagination: {
-				cursor: hasMore ? encodeCursor({ entityIndex: nextIndex }) : null,
+				cursor: hasMore ? encodeCursor({entityIndex: nextIndex}) : null,
 				hasMore,
 				totalEntities: entityIds.length,
 			},
-		};
+		}
 	}).pipe(
 		Effect.withSpan("proposal-diff.computeProposalDiff", {
-			attributes: { proposalId, spaceId, limit },
-		})
-	);
+			attributes: {proposalId, spaceId, limit},
+		}),
+	)
 }

@@ -63,6 +63,8 @@ pub struct ProposalItem {
     pub executed_at: Option<i64>,
     pub created_at: i64,
     pub created_at_block: i64,
+    /// Human-readable name derived from proposal actions
+    pub name: Option<String>,
 }
 
 /// An action within a proposal.

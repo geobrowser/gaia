@@ -43,7 +43,7 @@ spec:
                   key: OPENSEARCH_URL
             # Index version (defaults to 0 if not set)
             - name: ENTITIES_INDEX_VERSION
-              value: "2"
+              value: "3"
             # Kafka connection (managed Kafka with SSL)
             - name: KAFKA_BROKER
               valueFrom:
@@ -66,6 +66,8 @@ spec:
                   name: kafka-credentials
                   key: KAFKA_SSL_CA_PEM
             # Kafka consumer configuration
+            - name: ENVIRONMENT
+              value: "production"
             - name: KAFKA_BATCH_SIZE
               value: "50"
             - name: KAFKA_BATCH_TIMEOUT_MS

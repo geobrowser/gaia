@@ -7,13 +7,16 @@ description = "Unified telemetry for the Hermes ecosystem"
 [dependencies]
 # Tracing core
 tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
 
 # OpenTelemetry
 tracing-opentelemetry = "0.32"
 opentelemetry = "0.31"
 opentelemetry_sdk = { version = "0.31", features = ["rt-tokio"] }
 opentelemetry-stdout = { version = "0.31", features = ["trace"] }
+opentelemetry-otlp = { version = "0.31", features = ["http-proto", "reqwest-blocking-client"] }
+opentelemetry-http = "0.31"
+reqwest = { version = "0.12", default-features = false, features = ["blocking", "rustls-tls"] }
 
 # Sentry
 sentry = { version = "0.46", default-features = false, features = ["backtrace", "contexts", "logs", "opentelemetry", "panic", "reqwest", "rustls", "tracing"] }

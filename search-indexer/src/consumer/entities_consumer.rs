@@ -2,6 +2,7 @@
 //!
 //! Consumes entity events from Kafka topics and forwards them to the ingest.
 
+use hermes_kafka::get_topic_prefix;
 use prost::Message;
 use rdkafka::{
     consumer::{Consumer, StreamConsumer},
@@ -46,10 +47,12 @@ impl EntitiesConsumer {
 
     /// Default batch timeout in milliseconds (configurable via KAFKA_BATCH_TIMEOUT_MS env var).
     const DEFAULT_BATCH_TIMEOUT_MS: u64 = 1000;
+
     /// Create a new Kafka consumer.
     ///
     /// Configuration is read from environment variables with fallbacks to defaults:
-    /// - KAFKA_TOPIC: Topic name (default: "knowledge.edits")
+    /// - ENVIRONMENT: Environment name for topic prefix ("staging" or "production")
+    /// - KAFKA_TOPIC: Base topic name (default: "knowledge.edits")
     /// - KAFKA_BATCH_SIZE: Batch size (default: 50)
     /// - KAFKA_BATCH_TIMEOUT_MS: Batch timeout in milliseconds (default: 1000)
     ///
@@ -63,8 +66,10 @@ impl EntitiesConsumer {
     /// * `Ok(EntitiesConsumer)` - A new consumer instance
     /// * `Err(IngestError)` - If consumer creation fails
     pub fn new(brokers: &str, group_id: &str) -> Result<Self, IngestError> {
-        let topic =
+        let prefix = get_topic_prefix();
+        let base_topic =
             env::var("KAFKA_TOPIC").unwrap_or_else(|_| Self::KNOWLEDGE_EDITS_TOPIC.to_string());
+        let topic = format!("{}{}", prefix, base_topic);
 
         let batch_size = env::var("KAFKA_BATCH_SIZE")
             .ok()
@@ -495,6 +500,13 @@ impl EntitiesConsumer {
         // Process each operation in the edit
         for op in &grc20_edit.ops {
             match op {
+                grc_20::Op::CreateEntity(entity) => {
+                    if let Some(event) = self.process_create_entity(entity, space_id) {
+                        events.push(event);
+                    } else {
+                        skipped_entities += 1;
+                    }
+                }
                 grc_20::Op::UpdateEntity(entity) => {
                     let entity_events = self.process_update_entity(entity, space_id);
                     if entity_events.is_empty() {
@@ -540,8 +552,19 @@ impl EntitiesConsumer {
                     );
                     events.push(EntityEvent::delete(entity_id, space_id));
                 }
+                grc_20::Op::RestoreEntity(restore) => {
+                    // Handle entity restore (un-delete)
+                    let entity_id = Self::id_to_uuid(&restore.id);
+                    info!(
+                        entity_id = %entity_id,
+                        space_id = %space_id,
+                        edit_name = %edit.name,
+                        "Processing restore entity"
+                    );
+                    events.push(EntityEvent::restore(entity_id, space_id));
+                }
                 _ => {
-                    // Other operations (CreateEntity, RestoreEntity, RestoreRelation, CreateValueRef) not yet implemented
+                    // Other operations (RestoreRelation, CreateValueRef, UpdateRelation) not yet implemented
                     debug!("Skipped operation (not yet implemented)");
                 }
             }
@@ -555,6 +578,82 @@ impl EntitiesConsumer {
         }
 
         Ok(events)
+    }
+
+    /// Process a CreateEntity operation.
+    ///
+    /// CreateEntity initializes a new entity with optional property values.
+    /// We extract name, description, and avatar from the values and create an upsert event.
+    fn process_create_entity(
+        &self,
+        entity: &grc_20::CreateEntity,
+        space_id: Uuid,
+    ) -> Option<EntityEvent> {
+        let entity_id = Self::id_to_uuid(&entity.id);
+
+        // Extract name, description, and avatar from values
+        let mut name: Option<String> = None;
+        let mut description: Option<String> = None;
+        let mut avatar: Option<String> = None;
+
+        for prop_value in &entity.values {
+            let property_id = Self::id_to_uuid(&prop_value.property);
+            let property_id_str = property_id.to_string();
+
+            // Extract the string value from the grc_20::Value enum
+            let value_str = match &prop_value.value {
+                grc_20::Value::Text { value, .. } => value.as_ref(),
+                _ => continue, // Skip non-string values
+            };
+
+            if property_id_str == NAME_PROPERTY_ID {
+                name = Some(value_str.to_string());
+                debug!(
+                    entity_id = %entity_id,
+                    space_id = %space_id,
+                    property_id = %property_id_str,
+                    name_value = %value_str,
+                    "name property detected in CreateEntity"
+                );
+            } else if property_id_str == DESCRIPTION_PROPERTY_ID {
+                description = Some(value_str.to_string());
+                debug!(
+                    entity_id = %entity_id,
+                    space_id = %space_id,
+                    property_id = %property_id_str,
+                    description_value = %value_str,
+                    "description property detected in CreateEntity"
+                );
+            } else if property_id_str == AVATAR_PROPERTY_ID {
+                avatar = Some(value_str.to_string());
+                debug!(
+                    entity_id = %entity_id,
+                    space_id = %space_id,
+                    property_id = %property_id_str,
+                    avatar_value = %value_str,
+                    "avatar property detected in CreateEntity"
+                );
+            }
+        }
+
+        info!(
+            entity_id = %entity_id,
+            space_id = %space_id,
+            has_name = name.is_some(),
+            has_description = description.is_some(),
+            has_avatar = avatar.is_some(),
+            "Processing CreateEntity"
+        );
+
+        // Always create an upsert event for CreateEntity - even without properties,
+        // we want to create the entity document with entity_id and space_id
+        Some(EntityEvent::upsert(
+            entity_id,
+            space_id,
+            name,
+            description,
+            avatar,
+        ))
     }
 
     /// Process an UpdateEntity operation.
@@ -769,7 +868,7 @@ impl EntitiesConsumer {
 mod tests {
     use super::*;
     use crate::consumer::EntityEventType;
-    use grc_20::{PropertyValue, UnsetLanguage, UnsetValue};
+    use grc_20::{CreateEntity, PropertyValue, UnsetLanguage, UnsetValue};
 
     #[test]
     fn test_constants() {
@@ -1081,6 +1180,142 @@ mod tests {
             .unset_property_keys
             .contains(&"description".to_string()));
         assert!(event.unset_property_keys.contains(&"avatar".to_string()));
+    }
+
+    // ==================== CreateEntity Tests ====================
+
+    #[tokio::test]
+    async fn test_process_create_entity_with_name() {
+        let consumer = EntitiesConsumer::new("localhost:9092", "test-group").unwrap();
+        let entity_id = Uuid::new_v4();
+        let space_id = Uuid::new_v4();
+
+        let create_entity = CreateEntity {
+            id: *entity_id.as_bytes(),
+            values: vec![PropertyValue {
+                property: *Uuid::parse_str(NAME_PROPERTY_ID).unwrap().as_bytes(),
+                value: grc_20::Value::Text {
+                    value: "Test Entity".into(),
+                    language: None,
+                },
+            }],
+            context: None,
+        };
+
+        let result = consumer.process_create_entity(&create_entity, space_id);
+
+        assert!(result.is_some());
+        let event = result.unwrap();
+        assert_eq!(event.entity_id, entity_id);
+        assert_eq!(event.space_id, space_id);
+        assert_eq!(event.event_type, EntityEventType::Upsert);
+        assert_eq!(event.name, Some("Test Entity".to_string()));
+        assert_eq!(event.description, None);
+        assert_eq!(event.avatar, None);
+    }
+
+    #[tokio::test]
+    async fn test_process_create_entity_with_all_properties() {
+        let consumer = EntitiesConsumer::new("localhost:9092", "test-group").unwrap();
+        let entity_id = Uuid::new_v4();
+        let space_id = Uuid::new_v4();
+
+        let create_entity = CreateEntity {
+            id: *entity_id.as_bytes(),
+            values: vec![
+                PropertyValue {
+                    property: *Uuid::parse_str(NAME_PROPERTY_ID).unwrap().as_bytes(),
+                    value: grc_20::Value::Text {
+                        value: "Test Entity".into(),
+                        language: None,
+                    },
+                },
+                PropertyValue {
+                    property: *Uuid::parse_str(DESCRIPTION_PROPERTY_ID).unwrap().as_bytes(),
+                    value: grc_20::Value::Text {
+                        value: "A test description".into(),
+                        language: None,
+                    },
+                },
+                PropertyValue {
+                    property: *Uuid::parse_str(AVATAR_PROPERTY_ID).unwrap().as_bytes(),
+                    value: grc_20::Value::Text {
+                        value: "https://example.com/avatar.png".into(),
+                        language: None,
+                    },
+                },
+            ],
+            context: None,
+        };
+
+        let result = consumer.process_create_entity(&create_entity, space_id);
+
+        assert!(result.is_some());
+        let event = result.unwrap();
+        assert_eq!(event.entity_id, entity_id);
+        assert_eq!(event.space_id, space_id);
+        assert_eq!(event.event_type, EntityEventType::Upsert);
+        assert_eq!(event.name, Some("Test Entity".to_string()));
+        assert_eq!(event.description, Some("A test description".to_string()));
+        assert_eq!(event.avatar, Some("https://example.com/avatar.png".to_string()));
+    }
+
+    #[tokio::test]
+    async fn test_process_create_entity_empty_values() {
+        let consumer = EntitiesConsumer::new("localhost:9092", "test-group").unwrap();
+        let entity_id = Uuid::new_v4();
+        let space_id = Uuid::new_v4();
+
+        // CreateEntity with no property values - should still create the entity
+        let create_entity = CreateEntity {
+            id: *entity_id.as_bytes(),
+            values: vec![],
+            context: None,
+        };
+
+        let result = consumer.process_create_entity(&create_entity, space_id);
+
+        assert!(result.is_some());
+        let event = result.unwrap();
+        assert_eq!(event.entity_id, entity_id);
+        assert_eq!(event.space_id, space_id);
+        assert_eq!(event.event_type, EntityEventType::Upsert);
+        assert_eq!(event.name, None);
+        assert_eq!(event.description, None);
+        assert_eq!(event.avatar, None);
+    }
+
+    #[tokio::test]
+    async fn test_process_create_entity_unknown_properties() {
+        let consumer = EntitiesConsumer::new("localhost:9092", "test-group").unwrap();
+        let entity_id = Uuid::new_v4();
+        let space_id = Uuid::new_v4();
+        let unknown_property_id = Uuid::new_v4();
+
+        // CreateEntity with unknown property - should create entity but ignore unknown property
+        let create_entity = CreateEntity {
+            id: *entity_id.as_bytes(),
+            values: vec![PropertyValue {
+                property: *unknown_property_id.as_bytes(),
+                value: grc_20::Value::Text {
+                    value: "Unknown Value".into(),
+                    language: None,
+                },
+            }],
+            context: None,
+        };
+
+        let result = consumer.process_create_entity(&create_entity, space_id);
+
+        assert!(result.is_some());
+        let event = result.unwrap();
+        assert_eq!(event.entity_id, entity_id);
+        assert_eq!(event.space_id, space_id);
+        assert_eq!(event.event_type, EntityEventType::Upsert);
+        // Unknown properties are ignored, so no name/description/avatar
+        assert_eq!(event.name, None);
+        assert_eq!(event.description, None);
+        assert_eq!(event.avatar, None);
     }
 
 }

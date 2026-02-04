@@ -9,6 +9,7 @@ use grc_20::{
     UnsetRelationField, Value as Grc20Value,
 };
 use hermes_schema::pb::knowledge::HermesEdit;
+use tracing::{debug_span, warn};
 use uuid::Uuid;
 
 use crate::error::HandlerError;
@@ -57,11 +58,21 @@ impl EditMetadata {
 /// owned strings; for uncompressed, it borrows from the input.
 fn decode_payload(payload: &[u8]) -> Result<Grc20Edit<'_>, HandlerError> {
     if payload.is_empty() {
+        warn!("decode_payload called with empty payload");
         return Err(HandlerError::DecodeError("Empty payload".to_string()));
     }
 
-    decode_edit(payload)
-        .map_err(|e| HandlerError::DecodeError(format!("GRC-20 decode error: {:?}", e)))
+    decode_edit(payload).map_err(|e| {
+        // Log with context to help debug decode failures
+        let first_bytes = &payload[..payload.len().min(32)];
+        warn!(
+            payload_size = payload.len(),
+            first_bytes = ?first_bytes,
+            error = ?e,
+            "GRC-20 decode failed"
+        );
+        HandlerError::DecodeError(format!("GRC-20 decode error: {:?}", e))
+    })
 }
 
 /// Convert a grc_20::Id (16 bytes) to a Uuid
@@ -88,13 +99,22 @@ pub fn handle_edit(edit: &HermesEdit) -> Result<EditResult, HandlerError> {
     let space_id = parse_space_id(edit.space_id.as_slice())?;
     let meta = EditMetadata::from_edit(edit);
 
-    // Decode the v2 payload bytes
-    let grc20_edit = decode_payload(&edit.payload)?;
+    // Decode the v2 payload bytes (DEBUG level - only visible when RUST_LOG=debug)
+    let grc20_edit = {
+        let _span =
+            debug_span!("kg_indexer.decode_grc20", payload_size = edit.payload.len()).entered();
+        decode_payload(&edit.payload)?
+    };
 
-    // Extract all data from the decoded edit
-    let entities = extract_entities(&grc20_edit, &space_id, &meta);
-    let value_ops = extract_values(&grc20_edit, &space_id);
-    let relation_ops = extract_relations(&grc20_edit, &space_id);
+    // Extract all data from the decoded edit (DEBUG level)
+    let (entities, value_ops, relation_ops) = {
+        let _span =
+            debug_span!("kg_indexer.extract_ops", op_count = grc20_edit.ops.len()).entered();
+        let entities = extract_entities(&grc20_edit, &space_id, &meta);
+        let value_ops = extract_values(&grc20_edit, &space_id);
+        let relation_ops = extract_relations(&grc20_edit, &space_id);
+        (entities, value_ops, relation_ops)
+    };
 
     // Squash operations within this edit to resolve conflicts
     let values = squash_values(&value_ops);
@@ -392,6 +412,7 @@ fn value_to_value_op(
         boolean: None,
         time: None,
         point: None,
+        rect: None,
         integer: None,
         float: None,
         bytes: None,
@@ -460,15 +481,22 @@ fn value_to_value_op(
             op.schedule = Some(serde_json::Value::String(v.to_string()));
         }
         Grc20Value::Point { lon, lat, alt } => {
-            // Format as "lon,lat" or "lon,lat,alt"
+            // Format as "lat,lon" or "lat,lon,alt"
             let point_str = match alt {
-                Some(a) => format!("{},{},{}", lon, lat, a),
-                None => format!("{},{}", lon, lat),
+                Some(a) => format!("{},{},{}", lat, lon, a),
+                None => format!("{},{}", lat, lon),
             };
             op.point = Some(point_str);
         }
-        Grc20Value::Rect { .. } => {
-            // Rect is not stored in kg-indexer yet.
+        Grc20Value::Rect {
+            min_lat,
+            min_lon,
+            max_lat,
+            max_lon,
+        } => {
+            // Format as "min_lat,min_lon,max_lat,max_lon" (southwest corner, then northeast corner)
+            let rect_str = format!("{},{},{},{}", min_lat, min_lon, max_lat, max_lon);
+            op.rect = Some(rect_str);
         }
         Grc20Value::Embedding {
             sub_type,
@@ -571,6 +599,7 @@ fn extract_values(edit: &Grc20Edit, space_id: &Uuid) -> Vec<ValueOp> {
                         boolean: None,
                         time: None,
                         point: None,
+                        rect: None,
                         integer: None,
                         float: None,
                         bytes: None,
@@ -740,6 +769,7 @@ mod tests {
             boolean: None,
             time: None,
             point: None,
+            rect: None,
             integer: None,
             float: None,
             bytes: None,

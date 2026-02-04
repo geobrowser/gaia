@@ -1,12 +1,12 @@
-import { describe, expect, it, beforeAll, afterAll } from "vitest"
-import { Pool } from "pg"
+import {Pool} from "pg"
+import {afterAll, beforeAll, describe, expect, it} from "vitest"
 
 describe("space helper functions", () => {
 	let pool: Pool
 
 	beforeAll(async () => {
 		pool = new Pool({
-			connectionString: process.env.DATABASE_URL
+			connectionString: process.env.DATABASE_URL,
 		})
 	})
 
@@ -19,18 +19,21 @@ describe("space helper functions", () => {
 			const spaceResult = await pool.query(`
 				SELECT id FROM spaces LIMIT 1
 			`)
-			
+
 			if (spaceResult.rows.length > 0) {
 				const spaceId = spaceResult.rows[0].id
-				const result = await pool.query(`
+				const result = await pool.query(
+					`
 					SELECT spaces_page(s) as page
 					FROM spaces s 
 					WHERE id = $1
-				`, [spaceId])
+				`,
+					[spaceId],
+				)
 
 				expect(result.rows).toHaveLength(1)
 				// Should be callable without error - the function can return null or an entity
-				expect(result.rows[0]).toHaveProperty('page')
+				expect(result.rows[0]).toHaveProperty("page")
 			}
 		})
 
@@ -49,16 +52,19 @@ describe("space helper functions", () => {
 			if (result.rows.length > 0) {
 				const spaceId = result.rows[0].space_id
 				const expectedEntityId = result.rows[0].entity_id
-				
-				const pageResult = await pool.query(`
+
+				const pageResult = await pool.query(
+					`
 					SELECT spaces_page(s) as page
 					FROM spaces s 
 					WHERE id = $1
-				`, [spaceId])
+				`,
+					[spaceId],
+				)
 
 				expect(pageResult.rows).toHaveLength(1)
 				const page = pageResult.rows[0].page
-				if (page && typeof page === 'object' && 'id' in page) {
+				if (page && typeof page === "object" && "id" in page) {
 					expect(page.id).toBe(expectedEntityId)
 				}
 			}
@@ -80,12 +86,15 @@ describe("space helper functions", () => {
 
 			if (result.rows.length > 0) {
 				const spaceId = result.rows[0].space_id
-				
-				const pageResult = await pool.query(`
+
+				const pageResult = await pool.query(
+					`
 					SELECT spaces_page(s) as page
 					FROM spaces s 
 					WHERE id = $1
-				`, [spaceId])
+				`,
+					[spaceId],
+				)
 
 				expect(pageResult.rows).toHaveLength(1)
 				expect(pageResult.rows[0].page).toBeNull()

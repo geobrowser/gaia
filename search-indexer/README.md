@@ -10,6 +10,7 @@ cd ../hermes && docker-compose up -d kafka
 
 # 2. Run the indexer (with auto index creation for local dev)
 cd ../search-indexer
+ENVIRONMENT=staging \
 OPENSEARCH_URL=http://localhost:9200 \
 KAFKA_BROKER=localhost:9092 \
 cargo run --features search-indexer-repository/auto_index_creation
@@ -71,6 +72,7 @@ See the [search-admin documentation](../search-admin/README.md) for manual index
 
 | Variable | Description | Default |
 |----------|-------------|---------|
+| `ENVIRONMENT` | **Required.** `staging` or `production`. Controls Kafka topic prefix. | - |
 | `OPENSEARCH_URL` | OpenSearch server URL | `http://localhost:9200` |
 | `INDEX_ALIAS` | Index alias name | `entities` |
 | `ENTITIES_INDEX_VERSION` | Index version number | `0` |
@@ -212,13 +214,14 @@ When Sentry backend is enabled:
 
 ```bash
 # With environment variables (enable auto index creation for local dev)
+ENVIRONMENT=staging \
 OPENSEARCH_URL=http://localhost:9200 \
 KAFKA_BROKER=localhost:9092 \
 cargo run --features search-indexer-repository/auto_index_creation
 
 # Or with .env file
 cp .env.example .env
-# Edit .env with your configuration
+# Edit .env with your configuration (must include ENVIRONMENT=staging or ENVIRONMENT=production)
 cargo run --features search-indexer-repository/auto_index_creation
 
 # For production builds (no auto index creation - use search-admin)
@@ -258,14 +261,16 @@ docker-compose up -d kafka
 #### Running standalone
 
 ```bash
-# With retry mode (default)
-docker run -e OPENSEARCH_URL=http://opensearch:9200 \
+# With retry mode (default) - staging environment
+docker run -e ENVIRONMENT=staging \
+           -e OPENSEARCH_URL=http://opensearch:9200 \
            -e KAFKA_BROKER=kafka:29092 \
            -e OPENSEARCH_CONNECTION_MODE=retry \
            search-indexer
 
-# With fail-fast mode
-docker run -e OPENSEARCH_URL=http://opensearch:9200 \
+# With fail-fast mode - production environment
+docker run -e ENVIRONMENT=production \
+           -e OPENSEARCH_URL=http://opensearch:9200 \
            -e KAFKA_BROKER=kafka:29092 \
            -e OPENSEARCH_CONNECTION_MODE=fail-fast \
            search-indexer
@@ -299,7 +304,7 @@ See [TESTING.md](TESTING.md) for comprehensive end-to-end testing documentation.
 docker-compose -f ../hermes/docker-compose.yml up -d
 
 # Run the indexer (with auto index creation for local dev)
-cargo run --features search-indexer-repository/auto_index_creation
+ENVIRONMENT=staging cargo run --features search-indexer-repository/auto_index_creation
 ```
 
 ## Verifying the Indexer
@@ -339,31 +344,34 @@ The search indexer consumes `HermesEdit` messages from Kafka and decodes the GRC
 
 | Operation | Handling | Notes |
 |-----------|----------|-------|
+| `CreateEntity` | ✓ Indexed | Creates entity document with `name`, `description`, `avatar` properties from initial values. |
 | `UpdateEntity` | ✓ Indexed | Extracts `name`, `description`, `avatar` properties. Handles `unset_values` to clear properties. |
 | `CreateRelation` | ✓ Indexed | Only processes **type relations** (where `relation_type == TYPE_RELATION_TYPE_ID`). Adds type IDs to entities for type filtering. |
 | `DeleteRelation` | ✓ Indexed | Removes type relations from entities. |
 | `DeleteEntity` | ✓ Indexed | Soft delete - sets `deleted=true` on the entity document. Deleted entities are excluded from search results. |
+| `RestoreEntity` | ✓ Indexed | Restores a soft-deleted entity by setting `deleted=false`. The entity will reappear in search results. |
 
 ### Not Yet Implemented
 
 | Operation | Notes |
 |-----------|-------|
-| `CreateEntity` | Could be used to pre-create entity documents before properties are set. |
-| `RestoreEntity` | Would set `deleted=false` to un-delete entities. |
 | `UpdateRelation` | Could support updating type relations. |
 | `RestoreRelation` | Would restore deleted type relations. |
 | `CreateValueRef` | Could index value reference metadata. |
 
-### Soft Delete Behavior
+### Soft Delete and Restore Behavior
 
 When a `DeleteEntity` operation is processed:
 1. The entity document is updated with `deleted=true`
 2. The OpenSearch query filters exclude `deleted=true` documents from search results
 3. Subsequent updates to the deleted entity are ignored (tombstone dominance)
 
-**Tombstone dominance:** Per the GRC-20 spec, updates to deleted entities are ignored. This is enforced at the OpenSearch level using Painless scripts that check the `deleted` status before applying updates. Type relation additions/removals are also skipped for deleted entities.
+When a `RestoreEntity` operation is processed:
+1. The entity document is updated with `deleted=false`
+2. The entity will reappear in search results
+3. Subsequent updates to the entity will be applied normally
 
-**Note:** `RestoreEntity` is not currently handled. If you need to un-delete an entity, you would need to manually update the OpenSearch document or re-index.
+**Tombstone dominance:** Per the GRC-20 spec, updates to deleted entities are ignored. This is enforced at the OpenSearch level using Painless scripts that check the `deleted` status before applying updates. Type relation additions/removals are also skipped for deleted entities. Only explicit delete (`deleted=true`) or restore (`deleted=false`) operations can modify deleted entities.
 
 ### Message Format
 
@@ -383,6 +391,28 @@ message HermesEdit {
 ```
 
 The `payload` field contains GRC-20 v2 wire format bytes, decoded using `grc_20::decode_edit()`.
+
+## Error Recovery
+
+### Reprocessing All Events
+
+If you need to reprocess all events from the beginning (e.g., after fixing a bug, schema changes, or data corruption), change the `KAFKA_GROUP_ID` to a new value:
+
+```bash
+# Use a new consumer group ID to reprocess from the beginning
+KAFKA_GROUP_ID=search-indexer-v2 \
+ENVIRONMENT=staging \
+OPENSEARCH_URL=http://localhost:9200 \
+KAFKA_BROKER=localhost:9092 \
+cargo run --features search-indexer-repository/auto_index_creation
+```
+
+**Warning:** This will reprocess ALL events from the very first Kafka message. For large topics, this may take significant time.
+
+**Notes:**
+- A new consumer group has no committed offsets, so `auto.offset.reset=earliest` starts from offset 0
+- Update `KAFKA_GROUP_ID` once (e.g., `search-indexer` → `search-indexer-v2`), then keep using that value
+- Consider incrementing `ENTITIES_INDEX_VERSION` to index into a fresh index (use `search-admin` to create the new index first)
 
 ## Troubleshooting
 

@@ -45,3 +45,22 @@ export function isValidUuid(value: string): boolean {
 		return false
 	}
 }
+
+/**
+ * Converts a UUID to dashed format (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx).
+ * PostgreSQL returns UUIDs in dashed format, so this is useful for consistent comparisons.
+ *
+ * @param value - A valid UUID string (dashed or undashed)
+ * @returns The UUID in dashed lowercase format
+ * @throws if the input is not a valid UUID
+ *
+ * @example
+ * ```typescript
+ * toDashedUuid("550e8400e29b41d4a716446655440000"); // "550e8400-e29b-41d4-a716-446655440000"
+ * toDashedUuid("550e8400-e29b-41d4-a716-446655440000"); // "550e8400-e29b-41d4-a716-446655440000"
+ * ```
+ */
+export function toDashedUuid(value: string): string {
+	const normalized = normalizeUuid(value)
+	return `${normalized.slice(0, 8)}-${normalized.slice(8, 12)}-${normalized.slice(12, 16)}-${normalized.slice(16, 20)}-${normalized.slice(20)}`
+}

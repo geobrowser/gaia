@@ -19,7 +19,7 @@ type AppEnv = {
 }
 
 import {isValidUuid} from "../utils/uuid"
-import {diffEntitySnapshots, diffGroupedEntitySnapshots} from "./diff"
+import {diffGroupedEntitySnapshots} from "./diff"
 import {
 	getEntitySnapshotAtVersion,
 	getEntityVersions,
@@ -27,7 +27,7 @@ import {
 	type QueryError,
 	resolveVersionKey,
 } from "./queries"
-import type {EntityDiff, EntitySnapshot, GroupedEntityDiff, VersionEntry} from "./types"
+import type {EntitySnapshot, GroupedEntityDiff, VersionEntry} from "./types"
 
 type Database = NodePgDatabase<Record<string, unknown>>
 

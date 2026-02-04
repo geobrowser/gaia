@@ -36,10 +36,11 @@ pub const REMOVE_TYPE_RELATION_SCRIPT: &str = r#"
 "#;
 
 /// Script for updating document fields with tombstone dominance.
-/// If entity is deleted, the update is ignored (noop) unless the update is setting deleted=true.
+/// If entity is deleted, the update is ignored (noop) unless the update explicitly sets the deleted field
+/// (either to true for re-delete or false for restore).
 /// If entity is not deleted, fields from params.doc are merged into _source.
 pub const UPDATE_WITH_TOMBSTONE_CHECK_SCRIPT: &str = r#"
-    if (ctx._source.containsKey('deleted') && ctx._source.deleted == true && params.doc.deleted != true) {
+    if (ctx._source.containsKey('deleted') && ctx._source.deleted == true && !params.doc.containsKey('deleted')) {
         ctx.op = 'noop';
     } else {
         for (entry in params.doc.entrySet()) {

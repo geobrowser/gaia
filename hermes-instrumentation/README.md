@@ -96,10 +96,26 @@ Backend::Sentry {
     environment: Some("production".into()),
     release: Some("my-service@1.2.3".into()),
     debug: false,
+    axiom: None, // Or use AxiomConfig::from_env() for Axiom export
 }
 ```
 
 Set `debug: true` to also emit spans to stdout.
+
+### Axiom (Optional)
+
+Export traces to Axiom for 100% trace storage (Sentry uses server-side sampling):
+
+```rust
+use hermes_instrumentation::AxiomConfig;
+
+Backend::Sentry {
+    // ... other fields ...
+    axiom: AxiomConfig::from_env(), // Reads AXIOM_TOKEN and AXIOM_DATASET
+}
+```
+
+Set `AXIOM_TOKEN` to enable. Dataset defaults to `hermes-pipeline` if `AXIOM_DATASET` is not set.
 
 ## Instrumentation
 

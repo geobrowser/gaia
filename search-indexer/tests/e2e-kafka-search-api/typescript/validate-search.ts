@@ -40,6 +40,8 @@ const TEST_ENTITIES = {
   UNSET_TEST_1_ID: '00000000-0000-0000-0000-000000001111',
   UNSET_TEST_2_ID: '00000000-0000-0000-0000-000000002222',
   LWW_TEST_ID: '00000000-0000-0000-0000-000000003333',
+  // Entity created via CreateEntity GRC-20 op
+  CREATE_ENTITY_TEST_ID: '00000000-0000-0000-0000-00000000ce01',
 };
 
 interface TestResult {
@@ -409,9 +411,9 @@ class SearchValidator {
     }
   }
 
-  /** Verifies soft-deleted entities (Delete Charlie, Delete Dana) are excluded from search. */
-  async test9_DeletedEntitiesNotInResults(): Promise<void> {
-    console.log(`\n${BLUE}Test 9: Verify deleted entities (Delete Charlie, Delete Dana) do not appear in search results${NC}`);
+  /** Verifies soft-deleted entity (Delete Charlie) is excluded from search. */
+  async test9a_DeletedEntityNotInResults(): Promise<void> {
+    console.log(`\n${BLUE}Test 9a: Verify deleted entity (Delete Charlie) does not appear in search results${NC}`);
 
     // Search for Delete Charlie by name
     const charlieNameSearch = await this.search({
@@ -428,21 +430,6 @@ class SearchValidator {
         `Delete Charlie (${TEST_ENTITIES.DELETE_CHARLIE_ID}) should not appear in search (was soft deleted)`);
     }
 
-    // Search for Delete Dana by name
-    const danaNameSearch = await this.search({
-      query: 'delete dana',
-      scope: 'GLOBAL',
-    });
-
-    const danaByName = danaNameSearch.results.find(r => r.entityId === TEST_ENTITIES.DELETE_DANA_ID);
-    if (!danaByName) {
-      this.addResult('test9_dana_not_in_name_search', true,
-        `Delete Dana (${TEST_ENTITIES.DELETE_DANA_ID}) correctly excluded from name search (soft deleted)`);
-    } else {
-      this.addResult('test9_dana_not_in_name_search', false,
-        `Delete Dana (${TEST_ENTITIES.DELETE_DANA_ID}) should not appear in search (was soft deleted)`);
-    }
-
     // Verify Delete Charlie doesn't appear in broad search
     const broadSearch = await this.search({
       query: 'entity',
@@ -450,17 +437,67 @@ class SearchValidator {
     });
 
     const charlieInBroad = broadSearch.results.find(r => r.entityId === TEST_ENTITIES.DELETE_CHARLIE_ID);
-    const danaInBroad = broadSearch.results.find(r => r.entityId === TEST_ENTITIES.DELETE_DANA_ID);
 
-    if (!charlieInBroad && !danaInBroad) {
-      this.addResult('test9_deleted_not_in_broad_search', true,
-        `Deleted entities (Delete Charlie, Delete Dana) correctly excluded from broad search`);
+    if (!charlieInBroad) {
+      this.addResult('test9_charlie_not_in_broad_search', true,
+        `Delete Charlie correctly excluded from broad search`);
     } else {
-      const found = [];
-      if (charlieInBroad) found.push('Delete Charlie');
-      if (danaInBroad) found.push('Delete Dana');
-      this.addResult('test9_deleted_not_in_broad_search', false,
-        `Soft-deleted entities should not appear: ${found.join(', ')} found in results`);
+      this.addResult('test9_charlie_not_in_broad_search', false,
+        `Delete Charlie should not appear in broad search (was soft deleted)`);
+    }
+  }
+
+  /** Verifies restored entity (Delete Dana) appears in search results after restoration. */
+  async test9b_RestoredEntityInResults(): Promise<void> {
+    console.log(`\n${BLUE}Test 9b: Verify restored entity (Delete Dana) appears in search results${NC}`);
+
+    // Search for Delete Dana by name - should be found because she was restored
+    const danaNameSearch = await this.search({
+      query: 'delete dana',
+      scope: 'GLOBAL',
+    });
+
+    const danaByName = danaNameSearch.results.find(r => r.entityId === TEST_ENTITIES.DELETE_DANA_ID);
+    if (danaByName) {
+      this.addResult('test9b_dana_in_name_search', true,
+        `Delete Dana (${TEST_ENTITIES.DELETE_DANA_ID}) correctly appears in search (was restored after deletion)`);
+    } else {
+      this.addResult('test9b_dana_in_name_search', false,
+        `Delete Dana (${TEST_ENTITIES.DELETE_DANA_ID}) should appear in search (was restored after deletion)`);
+    }
+
+    // Verify Dana's data is intact after restore
+    if (danaByName) {
+      if (danaByName.name === 'Delete Dana') {
+        this.addResult('test9b_dana_name_preserved', true,
+          `Delete Dana has correct name after restore`);
+      } else {
+        this.addResult('test9b_dana_name_preserved', false,
+          `Delete Dana should have name 'Delete Dana', got '${danaByName.name}'`);
+      }
+
+      if (danaByName.description?.includes('also be deleted')) {
+        this.addResult('test9b_dana_description_preserved', true,
+          `Delete Dana has correct description after restore`);
+      } else {
+        this.addResult('test9b_dana_description_preserved', false,
+          `Delete Dana description unexpected: ${danaByName.description}`);
+      }
+    }
+
+    // Verify Dana appears in broad search
+    const broadSearch = await this.search({
+      query: 'dana',
+      scope: 'GLOBAL',
+    });
+
+    const danaInBroad = broadSearch.results.find(r => r.entityId === TEST_ENTITIES.DELETE_DANA_ID);
+    if (danaInBroad) {
+      this.addResult('test9b_dana_in_broad_search', true,
+        `Delete Dana correctly appears in broad search after restore`);
+    } else {
+      this.addResult('test9b_dana_in_broad_search', false,
+        `Delete Dana should appear in broad search (was restored)`);
     }
   }
 
@@ -742,21 +779,6 @@ class SearchValidator {
   async test14_IncludeDeletedFlag(): Promise<void> {
     console.log(`\n${BLUE}Test 14: Verify include_deleted flag returns deleted entities${NC}`);
 
-    // Search for Delete Charlie WITHOUT include_deleted (should NOT find)
-    const normalSearch = await this.search({
-      query: 'delete charlie',
-      scope: 'GLOBAL',
-    });
-
-    const charlieInNormal = normalSearch.results.find(r => r.entityId === TEST_ENTITIES.DELETE_CHARLIE_ID);
-    if (!charlieInNormal) {
-      this.addResult('test14_excluded_without_flag', true,
-        `Delete Charlie (${TEST_ENTITIES.DELETE_CHARLIE_ID}) excluded from normal search (expected)`);
-    } else {
-      this.addResult('test14_excluded_without_flag', false,
-        `Delete Charlie should be excluded without include_deleted flag`);
-    }
-
     // Search for Delete Charlie WITH include_deleted=true (should find)
     const includeDeletedSearch = await this.search({
       query: 'delete charlie',
@@ -766,27 +788,28 @@ class SearchValidator {
 
     const charlieInIncludeDeleted = includeDeletedSearch.results.find(r => r.entityId === TEST_ENTITIES.DELETE_CHARLIE_ID);
     if (charlieInIncludeDeleted) {
-      this.addResult('test14_included_with_flag', true,
+      this.addResult('test14_charlie_included_with_flag', true,
         `Delete Charlie (${TEST_ENTITIES.DELETE_CHARLIE_ID}) returned with include_deleted=true`);
-    } else {
-      this.addResult('test14_included_with_flag', false,
-        `Delete Charlie should be returned when include_deleted=true`);
-    }
 
-    // Also verify Delete Dana is returned with include_deleted=true
-    const danaSearch = await this.search({
-      query: 'delete dana',
-      scope: 'GLOBAL',
-      include_deleted: true,
-    });
+      // Verify Charlie's data is intact (confirms soft delete preserves data)
+      if (charlieInIncludeDeleted.name === 'Delete Charlie') {
+        this.addResult('test14_charlie_name_preserved', true,
+          `Delete Charlie has correct name preserved after soft delete`);
+      } else {
+        this.addResult('test14_charlie_name_preserved', false,
+          `Delete Charlie should have name 'Delete Charlie', got '${charlieInIncludeDeleted.name}'`);
+      }
 
-    const danaInIncludeDeleted = danaSearch.results.find(r => r.entityId === TEST_ENTITIES.DELETE_DANA_ID);
-    if (danaInIncludeDeleted) {
-      this.addResult('test14_dana_included_with_flag', true,
-        `Delete Dana (${TEST_ENTITIES.DELETE_DANA_ID}) returned with include_deleted=true`);
+      if (charlieInIncludeDeleted.description?.includes('will be deleted')) {
+        this.addResult('test14_charlie_description_preserved', true,
+          `Delete Charlie has correct description preserved after soft delete`);
+      } else {
+        this.addResult('test14_charlie_description_preserved', false,
+          `Delete Charlie description unexpected: ${charlieInIncludeDeleted.description}`);
+      }
     } else {
-      this.addResult('test14_dana_included_with_flag', false,
-        `Delete Dana should be returned when include_deleted=true`);
+      this.addResult('test14_charlie_included_with_flag', false,
+        `Delete Charlie should be returned when include_deleted=true (confirms entity is soft deleted, not hard deleted)`);
     }
 
     // Verify Delete Eve (deleted then updated) is also returned with include_deleted=true
@@ -817,6 +840,53 @@ class SearchValidator {
     } else {
       this.addResult('test14_eve_included_with_flag', false,
         `Delete Eve should be returned when include_deleted=true`);
+    }
+  }
+
+  /** Verifies entity created via CreateEntity GRC-20 op is searchable. */
+  async test15_CreateEntityOp(): Promise<void> {
+    console.log(`\n${BLUE}Test 15: Verify entity created via CreateEntity GRC-20 op${NC}`);
+
+    const response = await this.search({
+      query: 'CreateEntity Test',
+      scope: 'GLOBAL',
+    });
+
+    const entity = response.results.find(r => r.entityId === TEST_ENTITIES.CREATE_ENTITY_TEST_ID);
+
+    if (entity) {
+      this.addResult('test15_create_entity_found', true,
+        `CreateEntity test entity (${TEST_ENTITIES.CREATE_ENTITY_TEST_ID}) found in search results`);
+
+      // Verify name
+      if (entity.name === 'CreateEntity Test') {
+        this.addResult('test15_create_entity_name', true,
+          `CreateEntity test entity has correct name: 'CreateEntity Test'`);
+      } else {
+        this.addResult('test15_create_entity_name', false,
+          `CreateEntity test entity has wrong name: expected 'CreateEntity Test', got '${entity.name}'`);
+      }
+
+      // Verify description
+      if (entity.description === 'Entity created using the GRC-20 CreateEntity operation') {
+        this.addResult('test15_create_entity_description', true,
+          `CreateEntity test entity has correct description`);
+      } else {
+        this.addResult('test15_create_entity_description', false,
+          `CreateEntity test entity has wrong description: '${entity.description}'`);
+      }
+
+      // Verify avatar
+      if (entity.avatar === 'https://example.com/create-entity-avatar.png') {
+        this.addResult('test15_create_entity_avatar', true,
+          `CreateEntity test entity has correct avatar URL`);
+      } else {
+        this.addResult('test15_create_entity_avatar', false,
+          `CreateEntity test entity has wrong avatar: '${entity.avatar}'`);
+      }
+    } else {
+      this.addResult('test15_create_entity_found', false,
+        `CreateEntity test entity (${TEST_ENTITIES.CREATE_ENTITY_TEST_ID}) NOT found in search results`);
     }
   }
 
@@ -888,12 +958,14 @@ async function main() {
     await validator.test6_ResponseMetadata();
     await validator.test7_ZeroAndNegativeScores();
     await validator.test8_TypeIdsScenarios();
-    await validator.test9_DeletedEntitiesNotInResults();
+    await validator.test9a_DeletedEntityNotInResults();
+    await validator.test9b_RestoredEntityInResults();
     await validator.test10_DeletedThenUpdatedEntityNotInResults();
     await validator.test11_EmptyQueryTopRanked();
     await validator.test12_UnsetProperties();
     await validator.test13_LWWBehavior();
     await validator.test14_IncludeDeletedFlag();
+    await validator.test15_CreateEntityOp();
 
     const allPassed = validator.printSummary();
     process.exit(allPassed ? 0 : 1);

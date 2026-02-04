@@ -8,10 +8,9 @@
  * - OTEL span wrapping for HTTP request context (flows through SentrySpanProcessor)
  */
 
-import {SpanStatusCode, trace, context} from "@opentelemetry/api"
+import {SpanStatusCode, trace} from "@opentelemetry/api"
 import type {Context, Next} from "hono"
 import {log} from "../services/telemetry"
-
 
 /**
  * Extract or generate a request ID.

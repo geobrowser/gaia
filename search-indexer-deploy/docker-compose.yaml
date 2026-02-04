@@ -124,6 +124,7 @@ services:
       # Kafka configuration
       - KAFKA_BROKER=${KAFKA_BROKER:-kafka:29092}
       - KAFKA_GROUP_ID=search-indexer
+      - ENVIRONMENT=${ENVIRONMENT:-staging}
       # Logging
       - RUST_LOG=debug
       # Sentry telemetry (optional - set in .env file to enable)

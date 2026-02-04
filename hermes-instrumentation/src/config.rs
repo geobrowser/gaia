@@ -1,5 +1,53 @@
 //! Configuration types for telemetry initialization.
 
+/// Optional Axiom configuration for real-time trace export.
+///
+/// When configured, traces are exported to both Sentry (for error correlation)
+/// and Axiom (for 100% trace storage without server-side sampling).
+#[derive(Clone)]
+pub struct AxiomConfig {
+    /// Axiom API token (from `AXIOM_TOKEN` env var).
+    pub token: String,
+
+    /// Dataset name for traces (from `AXIOM_DATASET` env var, required when token is set).
+    pub dataset: String,
+}
+
+// Custom Debug implementation to prevent token leakage in logs
+impl std::fmt::Debug for AxiomConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("AxiomConfig")
+            .field("dataset", &self.dataset)
+            .finish_non_exhaustive()
+    }
+}
+
+impl AxiomConfig {
+    /// Create from environment variables if `AXIOM_TOKEN` is set.
+    ///
+    /// Returns `None` if `AXIOM_TOKEN` is not set.
+    ///
+    /// # Panics
+    ///
+    /// Panics if:
+    /// - `AXIOM_TOKEN` is set but empty
+    /// - `AXIOM_TOKEN` is set but `AXIOM_DATASET` is not set or empty
+    #[must_use]
+    pub fn from_env() -> Option<Self> {
+        let token = std::env::var("AXIOM_TOKEN").ok()?;
+        if token.is_empty() {
+            panic!("AXIOM_TOKEN is set but empty - this is a configuration error");
+        }
+        let dataset = std::env::var("AXIOM_DATASET").ok();
+        let dataset = match dataset {
+            Some(d) if !d.is_empty() => d,
+            Some(_) => panic!("AXIOM_DATASET is set but empty - this is a configuration error"),
+            None => panic!("AXIOM_TOKEN is set but AXIOM_DATASET is not - both are required"),
+        };
+        Some(Self { token, dataset })
+    }
+}
+
 /// Configuration for telemetry initialization.
 #[derive(Debug, Clone)]
 pub struct Config {
@@ -66,5 +114,11 @@ pub enum Backend {
 
         /// If true, also emit spans to stdout.
         debug: bool,
+
+        /// Optional Axiom export for 100% trace storage.
+        ///
+        /// When set, traces are exported to both Sentry and Axiom via OTLP.
+        /// Use [`AxiomConfig::from_env()`] to configure from environment variables.
+        axiom: Option<AxiomConfig>,
     },
 }

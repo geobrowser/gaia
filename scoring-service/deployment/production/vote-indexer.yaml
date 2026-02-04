@@ -62,6 +62,8 @@ spec:
                   key: KAFKA_SSL_CA_PEM
                   optional: true
             # Consumer configuration
+            - name: ENVIRONMENT
+              value: "production"
             - name: KAFKA_GROUP_ID
               value: "vote-indexer"
             - name: BATCH_SIZE

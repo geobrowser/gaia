@@ -14,6 +14,7 @@ pub mod edits;
 pub mod governance;
 pub mod membership;
 pub mod moderation;
+pub mod prefetch;
 pub mod spaces;
 pub mod topics;
 pub mod trust;

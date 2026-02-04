@@ -1,15 +1,6 @@
 import {Effect} from "effect"
 
-import {
-	editors,
-	entities,
-	ipfsCache,
-	members,
-	meta,
-	relations,
-	spaces,
-	values,
-} from "../../services/storage/schema"
+import {editors, entities, members, meta, relations, spaces, values} from "../../services/storage/schema"
 import {make, Storage} from "../../services/storage/storage"
 import {Environment, make as makeEnvironment} from "../environment"
 

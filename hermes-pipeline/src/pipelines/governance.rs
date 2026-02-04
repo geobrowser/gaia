@@ -14,17 +14,18 @@ use std::collections::HashMap;
 use anyhow::Result;
 use hermes_instrumentation::{debug, debug_span, info, warn};
 
+use crate::cache::CachedEdit;
+use crate::decode::{
+    self, ProposalActionType, decode_flag_args, decode_publish_args, decode_space_id_arg,
+    decode_voting_settings_args,
+};
+
 use hermes_relay::{Action, actions};
 use hermes_schema::pb::governance::{
     AddEditorAction, AddMemberAction, FlagAction, HermesProposalCreated, HermesProposalExecuted,
     HermesProposalUpdated, HermesProposalVoted, ProposalAction, ProposalSettings,
     ProposalVoteOption, PublishAction, RemoveEditorAction, RemoveMemberAction, UnflagAction,
     UnflagEditorAction, UpdateVotingSettingsAction, VotingMode, proposal_action,
-};
-
-use crate::decode::{
-    self, ProposalActionType, decode_flag_args, decode_publish_args, decode_space_id_arg,
-    decode_voting_settings_args,
 };
 
 use super::BlockMetadata;
@@ -67,7 +68,13 @@ struct ProposalSettingsPending {
 /// Squashes PROPOSAL_CREATED + PROPOSAL_SETTINGS_SELECTED pairs into single events.
 /// For each PROPOSAL_CREATED, looks for a matching PROPOSAL_SETTINGS_SELECTED
 /// with the same proposal_id. If not found, both events are discarded.
-pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformResult> {
+///
+/// For Publish actions, looks up the edit name from the prefetched IPFS cache.
+pub fn transform(
+    actions: &[Action],
+    meta: &BlockMetadata,
+    prefetched: &HashMap<String, CachedEdit>,
+) -> Result<TransformResult> {
     let mut result = TransformResult::default();
 
     // Collect PROPOSAL_CREATED/UPDATED and PROPOSAL_SETTINGS_SELECTED by proposal_id
@@ -221,6 +228,13 @@ pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformRe
         );
     }
 
+    // Enrich all Publish actions with edit names from the prefetched cache
+    enrich_publish_action_names(
+        &mut result.proposals_created,
+        &mut result.proposals_updated,
+        prefetched,
+    );
+
     Ok(result)
 }
 
@@ -262,9 +276,11 @@ fn decode_proposal_action(
         }
         ProposalActionType::Publish => {
             let args = decode_publish_args(calldata).ok()?;
+            // Note: name is populated later by enrich_publish_action_names
             Some(proposal_action::Action::Publish(PublishAction {
                 content_uri: args.content_uri,
                 metadata: args.metadata,
+                name: String::new(),
             }))
         }
         ProposalActionType::Flag => {
@@ -291,6 +307,80 @@ fn decode_proposal_action(
             ))
         }
         ProposalActionType::Ping | ProposalActionType::Unknown => None,
+    }
+}
+
+/// Enrich Publish actions across all proposals with edit names from the prefetched cache.
+fn enrich_publish_action_names(
+    proposals_created: &mut [HermesProposalCreated],
+    proposals_updated: &mut [HermesProposalUpdated],
+    prefetched: &HashMap<String, CachedEdit>,
+) {
+    let mut enriched_count = 0u32;
+    let mut cache_miss_count = 0u32;
+
+    // Enrich proposals_created
+    for proposal in proposals_created.iter_mut() {
+        let proposal_id_hex = hex::encode(&proposal.proposal_id);
+        for action in proposal.actions.iter_mut() {
+            if let Some(proposal_action::Action::Publish(publish)) = &mut action.action {
+                if let Some(cached_edit) = prefetched.get(&publish.content_uri) {
+                    if let Some(name) = &cached_edit.name {
+                        debug!(
+                            proposal_id = %proposal_id_hex,
+                            content_uri = %publish.content_uri,
+                            name = %name,
+                            "Enriched publish action with edit name"
+                        );
+                        publish.name = name.clone();
+                        enriched_count += 1;
+                    }
+                } else {
+                    debug!(
+                        proposal_id = %proposal_id_hex,
+                        content_uri = %publish.content_uri,
+                        "Cache miss for publish action content URI"
+                    );
+                    cache_miss_count += 1;
+                }
+            }
+        }
+    }
+
+    // Enrich proposals_updated
+    for proposal in proposals_updated.iter_mut() {
+        let proposal_id_hex = hex::encode(&proposal.proposal_id);
+        for action in proposal.actions.iter_mut() {
+            if let Some(proposal_action::Action::Publish(publish)) = &mut action.action {
+                if let Some(cached_edit) = prefetched.get(&publish.content_uri) {
+                    if let Some(name) = &cached_edit.name {
+                        debug!(
+                            proposal_id = %proposal_id_hex,
+                            content_uri = %publish.content_uri,
+                            name = %name,
+                            "Enriched publish action with edit name"
+                        );
+                        publish.name = name.clone();
+                        enriched_count += 1;
+                    }
+                } else {
+                    debug!(
+                        proposal_id = %proposal_id_hex,
+                        content_uri = %publish.content_uri,
+                        "Cache miss for publish action content URI"
+                    );
+                    cache_miss_count += 1;
+                }
+            }
+        }
+    }
+
+    if enriched_count > 0 || cache_miss_count > 0 {
+        info!(
+            enriched = enriched_count,
+            cache_misses = cache_miss_count,
+            "Enriched publish action names"
+        );
     }
 }
 
@@ -538,6 +628,10 @@ mod tests {
         }
     }
 
+    fn empty_prefetch() -> HashMap<String, CachedEdit> {
+        HashMap::new()
+    }
+
     // Helper to create encoded PROPOSAL_CREATED data
     fn encode_proposal_created_data(proposal_id: [u8; 16], voting_mode: u8) -> Vec<u8> {
         use ethabi::{Token, ethereum_types::U256 as EthU256};
@@ -600,7 +694,7 @@ mod tests {
             },
         ];
 
-        let result = transform(&test_actions, &test_meta()).unwrap();
+        let result = transform(&test_actions, &test_meta(), &empty_prefetch()).unwrap();
 
         // Should have 1 squashed event
         assert_eq!(result.proposals_created.len(), 1);
@@ -634,7 +728,7 @@ mod tests {
             },
         ];
 
-        let result = transform(&test_actions, &test_meta()).unwrap();
+        let result = transform(&test_actions, &test_meta(), &empty_prefetch()).unwrap();
 
         // Should be discarded - no matching settings
         assert_eq!(result.proposals_created.len(), 0);
@@ -656,7 +750,7 @@ mod tests {
             },
         ];
 
-        let result = transform(&test_actions, &test_meta()).unwrap();
+        let result = transform(&test_actions, &test_meta(), &empty_prefetch()).unwrap();
 
         // Should be discarded - no matching created
         assert_eq!(result.proposals_created.len(), 0);
@@ -687,7 +781,7 @@ mod tests {
             },
         ];
 
-        let result = transform(&test_actions, &test_meta()).unwrap();
+        let result = transform(&test_actions, &test_meta(), &empty_prefetch()).unwrap();
 
         // Both should be discarded - IDs don't match
         assert_eq!(result.proposals_created.len(), 0);
@@ -759,10 +853,151 @@ mod tests {
             },
         ];
 
-        let result = transform(&test_actions, &test_meta()).unwrap();
+        let result = transform(&test_actions, &test_meta(), &empty_prefetch()).unwrap();
         // No PROPOSAL_CREATED events without matching PROPOSAL_SETTINGS_USED
         assert_eq!(result.proposals_created.len(), 0);
         assert_eq!(result.proposals_voted.len(), 1);
         assert_eq!(result.proposals_executed.len(), 1);
+    }
+
+    // Tests for enrich_publish_action_names
+
+    fn make_proposal_with_publish(content_uri: &str) -> HermesProposalCreated {
+        use hermes_schema::pb::governance::{ProposalAction, ProposalSettings, PublishAction};
+
+        HermesProposalCreated {
+            space_id: vec![1u8; 16],
+            proposer_id: vec![2u8; 16],
+            proposal_id: vec![3u8; 16],
+            voting_mode: 0,
+            actions: vec![ProposalAction {
+                to: vec![],
+                value: vec![],
+                data: vec![],
+                action: Some(proposal_action::Action::Publish(PublishAction {
+                    content_uri: content_uri.to_string(),
+                    metadata: vec![],
+                    name: String::new(), // starts empty
+                })),
+            }],
+            settings: Some(ProposalSettings {
+                start_date: 0,
+                last_date: 0,
+                voting_mode: 0,
+                quorum: 0,
+                percentage_threshold: 0,
+                flat_threshold: 0,
+            }),
+            meta: None,
+        }
+    }
+
+    fn make_cached_edit(name: Option<&str>) -> CachedEdit {
+        CachedEdit {
+            cid: "Qmtest".to_string(),
+            payload: Some(vec![]),
+            is_errored: false,
+            space_id: vec![1u8; 16],
+            name: name.map(|s| s.to_string()),
+        }
+    }
+
+    #[test]
+    fn test_enrich_publish_action_names_with_cached_name() {
+        let mut proposals = vec![make_proposal_with_publish("ipfs://Qmtest123")];
+        let mut prefetched = HashMap::new();
+        prefetched.insert(
+            "ipfs://Qmtest123".to_string(),
+            make_cached_edit(Some("My Edit Name")),
+        );
+
+        enrich_publish_action_names(&mut proposals, &mut [], &prefetched);
+
+        let action = &proposals[0].actions[0];
+        if let Some(proposal_action::Action::Publish(publish)) = &action.action {
+            assert_eq!(publish.name, "My Edit Name");
+        } else {
+            panic!("Expected Publish action");
+        }
+    }
+
+    #[test]
+    fn test_enrich_publish_action_names_cache_miss() {
+        let mut proposals = vec![make_proposal_with_publish("ipfs://Qmnotfound")];
+        let prefetched = HashMap::new(); // empty cache
+
+        enrich_publish_action_names(&mut proposals, &mut [], &prefetched);
+
+        let action = &proposals[0].actions[0];
+        if let Some(proposal_action::Action::Publish(publish)) = &action.action {
+            assert_eq!(publish.name, ""); // unchanged
+        } else {
+            panic!("Expected Publish action");
+        }
+    }
+
+    #[test]
+    fn test_enrich_publish_action_names_with_none_name() {
+        let mut proposals = vec![make_proposal_with_publish("ipfs://Qmtest456")];
+        let mut prefetched = HashMap::new();
+        prefetched.insert(
+            "ipfs://Qmtest456".to_string(),
+            make_cached_edit(None), // no name in cache
+        );
+
+        enrich_publish_action_names(&mut proposals, &mut [], &prefetched);
+
+        let action = &proposals[0].actions[0];
+        if let Some(proposal_action::Action::Publish(publish)) = &action.action {
+            assert_eq!(publish.name, ""); // defaults to empty string
+        } else {
+            panic!("Expected Publish action");
+        }
+    }
+
+    #[test]
+    fn test_enrich_publish_action_names_proposals_updated() {
+        use hermes_schema::pb::governance::{ProposalAction, ProposalSettings, PublishAction};
+
+        let mut proposals_updated = vec![HermesProposalUpdated {
+            space_id: vec![1u8; 16],
+            proposer_id: vec![2u8; 16],
+            proposal_id: vec![3u8; 16],
+            voting_mode: VotingMode::Fast as i32,
+            actions: vec![ProposalAction {
+                to: vec![],
+                value: vec![],
+                data: vec![],
+                action: Some(proposal_action::Action::Publish(PublishAction {
+                    content_uri: "ipfs://Qmupdated".to_string(),
+                    metadata: vec![],
+                    name: String::new(),
+                })),
+            }],
+            settings: Some(ProposalSettings {
+                start_date: 0,
+                last_date: 0,
+                voting_mode: 0,
+                quorum: 0,
+                percentage_threshold: 0,
+                flat_threshold: 0,
+            }),
+            meta: None,
+        }];
+
+        let mut prefetched = HashMap::new();
+        prefetched.insert(
+            "ipfs://Qmupdated".to_string(),
+            make_cached_edit(Some("Updated Edit")),
+        );
+
+        enrich_publish_action_names(&mut [], &mut proposals_updated, &prefetched);
+
+        let action = &proposals_updated[0].actions[0];
+        if let Some(proposal_action::Action::Publish(publish)) = &action.action {
+            assert_eq!(publish.name, "Updated Edit");
+        } else {
+            panic!("Expected Publish action");
+        }
     }
 }

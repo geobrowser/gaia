@@ -37,11 +37,12 @@ impl PostgresCache {
 #[async_trait]
 impl IpfsCache for PostgresCache {
     async fn get(&self, ipfs_hash: &str, _space_id: &[u8]) -> Result<CachedEdit, CacheError> {
-        let row = sqlx::query("SELECT data, space, is_errored FROM ipfs_cache WHERE uri = $1")
-            .bind(ipfs_hash)
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(|e| CacheError::Database(e.to_string()))?;
+        let row =
+            sqlx::query("SELECT data, space, is_errored, name FROM ipfs_cache WHERE uri = $1")
+                .bind(ipfs_hash)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(|e| CacheError::Database(e.to_string()))?;
 
         match row {
             Some(row) => {
@@ -54,6 +55,7 @@ impl IpfsCache for PostgresCache {
                 }
 
                 let data: Option<Vec<u8>> = row.get("data");
+                let name: Option<String> = row.get("name");
                 match data {
                     Some(payload) => {
                         // Return raw bytes - already validated by hermes-ipfs-cache
@@ -61,6 +63,7 @@ impl IpfsCache for PostgresCache {
                             ipfs_hash.to_string(),
                             payload,
                             space_id_bytes,
+                            name,
                         ))
                     }
                     None => {
