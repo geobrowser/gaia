@@ -840,6 +840,65 @@ app.get(
 						},
 						required: ["proposals", "nextCursor"],
 					},
+					// Proposal diff types
+					EntityDiff: {
+						type: "object",
+						description: "A diff between two versions of an entity",
+						properties: {
+							entityId: {type: "string", format: "uuid"},
+							name: {type: "string", nullable: true},
+							values: {
+								type: "array",
+								items: {$ref: "#/components/schemas/ValueChange"},
+							},
+							relations: {
+								type: "array",
+								items: {$ref: "#/components/schemas/RelationChange"},
+							},
+							blocks: {
+								type: "array",
+								items: {$ref: "#/components/schemas/BlockChange"},
+							},
+						},
+						required: ["entityId", "values", "relations", "blocks"],
+					},
+					PaginatedProposalDiff: {
+						type: "object",
+						description:
+							"Paginated response for proposal diffs. Compares proposed changes against base state.",
+						properties: {
+							proposalId: {type: "string", format: "uuid"},
+							spaceId: {type: "string", format: "uuid"},
+							proposalStatus: {
+								type: "string",
+								enum: ["active", "closed", "executed"],
+								description:
+									"Proposal status: active (compare vs live), closed/executed (compare vs versioned at end_time)",
+							},
+							entities: {
+								type: "array",
+								items: {$ref: "#/components/schemas/EntityDiff"},
+								description: "Entity diffs for this page",
+							},
+							pagination: {
+								type: "object",
+								properties: {
+									cursor: {
+										type: "string",
+										nullable: true,
+										description: "Base64-encoded cursor for next page",
+									},
+									hasMore: {type: "boolean"},
+									totalEntities: {
+										type: "integer",
+										description: "Total number of affected entities",
+									},
+								},
+								required: ["cursor", "hasMore", "totalEntities"],
+							},
+						},
+						required: ["proposalId", "spaceId", "proposalStatus", "entities", "pagination"],
+					},
 				},
 			},
 		},

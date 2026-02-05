@@ -4,6 +4,24 @@
  * Computes diffs between a proposal's proposed changes and the base state.
  * - Active proposals: compare against current live state
  * - Closed proposals: compare against versioned state at end_time
+ *
+ * KNOWN LIMITATIONS:
+ * The following op types are not fully supported for diff computation:
+ *
+ * - restoreEntity: The op only contains the entity ID, not the values/relations
+ *   to restore. We'd need to fetch historical state to show what's being restored.
+ *
+ * - deleteEntity: Currently shows removal of all current values/relations, but
+ *   doesn't account for the entity potentially being in a deleted state already.
+ *
+ * - restoreRelation: The op only contains the relation ID. Since the relation
+ *   doesn't exist in the live table (it was deleted), we can't look up which
+ *   entity is affected. These ops are silently skipped.
+ *
+ * To properly support these ops, we'd need to restructure the code to:
+ * 1. Pass version context into entity extraction
+ * 2. Fetch historical state for restore ops
+ * 3. Track entity/relation deletion state
  */
 
 import {decodeEditAuto, type Id, type Op} from "@geoprotocol/grc-20"
@@ -12,7 +30,7 @@ import {sql} from "drizzle-orm"
 import type {NodePgDatabase} from "drizzle-orm/node-postgres"
 import {Effect} from "effect"
 import {diffEntitySnapshots} from "./diff"
-import {QueryError} from "./queries"
+import {mapRelationRow, mapValueRow, QueryError} from "./queries"
 import type {
 	EntityDiff,
 	EntitySnapshot,
@@ -39,7 +57,26 @@ export class EditDecodeError {
 	constructor(readonly cause: unknown) {}
 }
 
-export type ProposalDiffError = QueryError | ProposalNotFoundError | EditBlobNotCachedError | EditDecodeError
+export class SpaceMismatchError {
+	readonly _tag = "SpaceMismatchError"
+	constructor(
+		readonly expectedSpaceId: string,
+		readonly actualSpaceId: string,
+	) {}
+}
+
+export class InvalidCursorError {
+	readonly _tag = "InvalidCursorError"
+	constructor(readonly cursor: string) {}
+}
+
+export type ProposalDiffError =
+	| QueryError
+	| ProposalNotFoundError
+	| EditBlobNotCachedError
+	| EditDecodeError
+	| SpaceMismatchError
+	| InvalidCursorError
 
 type Database = NodePgDatabase<Record<string, unknown>>
 
@@ -180,8 +217,61 @@ function resolveVersionKeyAtTimestamp(db: Database, timestamp: bigint): Effect.E
 }
 
 // ============================================================================
+// Relation Lookup
+// ============================================================================
+
+/**
+ * Batch lookup from_entity_id for multiple relation IDs.
+ * Used to find which entities are affected by updateRelation/deleteRelation/restoreRelation ops.
+ * Returns a map from relation ID to from_entity_id.
+ */
+function batchLookupRelationEntities(
+	db: Database,
+	relationIds: string[],
+): Effect.Effect<Map<string, string>, QueryError> {
+	if (relationIds.length === 0) {
+		return Effect.succeed(new Map())
+	}
+
+	return Effect.tryPromise({
+		try: async () => {
+			// Note: relationIds are derived from idToUuid() which converts Uint8Array bytes to hex.
+			// This can only produce [0-9a-f-] characters, making SQL injection impossible.
+			const relationIdsArray = `{${relationIds.join(",")}}`
+
+			// Look up relations in the live table only.
+			// This works for deleteRelation and updateRelation ops where the relation exists.
+			// Note: restoreRelation ops won't find their relation here (it's deleted),
+			// so those entities won't be included in the diff. See KNOWN_LIMITATIONS below.
+			const liveResult = await db.execute<{id: string; from_entity_id: string}>(sql`
+				SELECT id, from_entity_id FROM relations
+				WHERE id = ANY(${relationIdsArray}::uuid[])
+			`)
+
+			const result = new Map<string, string>()
+			for (const row of liveResult.rows) {
+				result.set(row.id, row.from_entity_id)
+			}
+
+			return result
+		},
+		catch: (error) => new QueryError("batchLookupRelationEntities", error),
+	}).pipe(
+		Effect.withSpan("proposal-diff.batchLookupRelationEntities", {
+			attributes: {relationCount: relationIds.length},
+		}),
+	)
+}
+
+// ============================================================================
 // Batch State Fetching
 // ============================================================================
+
+// Note on SQL array construction safety:
+// All entity IDs used in these functions come from extractAffectedEntities(),
+// which derives them from idToUuid(). The idToUuid() function converts Uint8Array
+// bytes to hex, producing only [0-9a-f-] characters. This makes SQL injection
+// impossible when constructing PostgreSQL array literals like `{uuid1,uuid2}`.
 
 /**
  * Batch fetch live snapshots for multiple entities.
@@ -198,17 +288,27 @@ function batchGetLiveSnapshots(
 
 	return Effect.tryPromise({
 		try: async () => {
+			// Convert to array literal for PostgreSQL ANY()
+			const entityIdsArray = `{${entityIds.join(",")}}`
+
 			// Query 1: All values for all entities
+			// Explicitly list columns to avoid fetching large 'embedding' column
 			const valuesResult = await db.execute<Record<string, unknown>>(sql`
-				SELECT * FROM "values"
-				WHERE entity_id = ANY(${entityIds})
+				SELECT entity_id, property_id, space_id, text, language, unit, boolean,
+				       decimal, point, time, integer, float, bytes, date, datetime, 
+				       schedule, rect
+				FROM "values"
+				WHERE entity_id = ANY(${entityIdsArray}::uuid[])
 				AND space_id = ${spaceId}
 			`)
 
 			// Query 2: All relations for all entities
+			// Note: Live table uses `id` but versioned uses `relation_id` - alias for consistency
 			const relationsResult = await db.execute<Record<string, unknown>>(sql`
-				SELECT * FROM relations
-				WHERE from_entity_id = ANY(${entityIds})
+				SELECT id AS relation_id, entity_id, type_id, from_entity_id, from_space_id, 
+				       to_entity_id, to_space_id, position, space_id, verified
+				FROM relations
+				WHERE from_entity_id = ANY(${entityIdsArray}::uuid[])
 				AND space_id = ${spaceId}
 			`)
 
@@ -238,11 +338,17 @@ function batchGetVersionedSnapshots(
 	return Effect.tryPromise({
 		try: async () => {
 			const versionKeyStr = versionKey.toString()
+			// Convert to array literal for PostgreSQL ANY()
+			const entityIdsArray = `{${entityIds.join(",")}}`
 
 			// Query 1: All values at version
+			// Explicitly list columns to avoid fetching large 'embedding' column
 			const valuesResult = await db.execute<Record<string, unknown>>(sql`
-				SELECT * FROM value_versions
-				WHERE entity_id = ANY(${entityIds})
+				SELECT entity_id, property_id, space_id, text, language, unit, boolean,
+				       decimal, point, time, integer, float, bytes, date, datetime,
+				       schedule, rect, context_root_id, context_edge_type_id
+				FROM value_versions
+				WHERE entity_id = ANY(${entityIdsArray}::uuid[])
 				AND space_id = ${spaceId}
 				AND valid_from_key <= ${versionKeyStr}::bigint
 				AND (valid_to_key IS NULL OR valid_to_key > ${versionKeyStr}::bigint)
@@ -250,8 +356,11 @@ function batchGetVersionedSnapshots(
 
 			// Query 2: All relations at version
 			const relationsResult = await db.execute<Record<string, unknown>>(sql`
-				SELECT * FROM relation_versions
-				WHERE from_entity_id = ANY(${entityIds})
+				SELECT relation_id, entity_id, type_id, from_entity_id, from_space_id,
+				       to_entity_id, to_space_id, position, space_id, verified,
+				       context_root_id, context_edge_type_id
+				FROM relation_versions
+				WHERE from_entity_id = ANY(${entityIdsArray}::uuid[])
 				AND space_id = ${spaceId}
 				AND valid_from_key <= ${versionKeyStr}::bigint
 				AND (valid_to_key IS NULL OR valid_to_key > ${versionKeyStr}::bigint)
@@ -269,6 +378,7 @@ function batchGetVersionedSnapshots(
 
 /**
  * Group query results by entity ID.
+ * Uses shared mapValueRow and mapRelationRow functions from queries.ts.
  */
 function groupByEntityId(
 	entityIds: string[],
@@ -287,24 +397,7 @@ function groupByEntityId(
 		const entityId = row.entity_id as string
 		const snapshot = result.get(entityId)
 		if (snapshot) {
-			snapshot.values.push({
-				propertyId: row.property_id as string,
-				spaceId: row.space_id as string,
-				boolean: row.boolean as boolean | null,
-				integer: row.integer as number | null,
-				float: row.float as number | null,
-				decimal: row.decimal as string | null,
-				text: row.text as string | null,
-				bytes: row.bytes ? Buffer.from(row.bytes as Buffer).toString("base64") : null,
-				date: row.date as string | null,
-				time: row.time as string | null,
-				datetime: row.datetime as string | null,
-				schedule: row.schedule as unknown | null,
-				point: row.point as string | null,
-				embedding: row.embedding as unknown | null,
-				language: row.language as string | null,
-				unit: row.unit as string | null,
-			})
+			snapshot.values.push(mapValueRow(row))
 		}
 	}
 
@@ -314,17 +407,7 @@ function groupByEntityId(
 		const typeId = row.type_id as string
 		const snapshot = result.get(entityId)
 		if (snapshot && typeId !== BLOCKS_TYPE_ID) {
-			snapshot.relations.push({
-				relationId: row.relation_id as string,
-				typeId,
-				fromEntityId: entityId,
-				fromSpaceId: row.from_space_id as string | null,
-				toEntityId: row.to_entity_id as string,
-				toSpaceId: row.to_space_id as string | null,
-				position: row.position as string | null,
-				spaceId: row.space_id as string,
-				verified: row.verified as boolean | null,
-			})
+			snapshot.relations.push(mapRelationRow(row))
 		}
 	}
 
@@ -348,9 +431,14 @@ function idToUuid(id: Id): string {
 
 /**
  * Extract affected entity IDs from ops.
+ * Returns both directly-extractable entity IDs and relation IDs that need lookup.
  */
-function extractAffectedEntities(ops: Op[]): string[] {
+function extractAffectedEntitiesAndRelations(ops: Op[]): {
+	entityIds: Set<string>
+	relationIdsNeedingLookup: string[]
+} {
 	const entityIds = new Set<string>()
+	const relationIdsNeedingLookup: string[] = []
 
 	for (const op of ops) {
 		switch (op.type) {
@@ -367,8 +455,8 @@ function extractAffectedEntities(ops: Op[]): string[] {
 			case "updateRelation":
 			case "deleteRelation":
 			case "restoreRelation":
-				// These only have the relation id, we'd need to look up the from entity
-				// For now, skip - the entity changes are captured by entity ops
+				// These ops only have the relation ID - we need to look up the from_entity_id
+				relationIdsNeedingLookup.push(idToUuid(op.id))
 				break
 			case "createValueRef":
 				entityIds.add(idToUuid(op.entity))
@@ -376,38 +464,112 @@ function extractAffectedEntities(ops: Op[]): string[] {
 		}
 	}
 
-	return Array.from(entityIds)
+	return {entityIds, relationIdsNeedingLookup}
+}
+
+/**
+ * Extract all affected entity IDs from ops, including those requiring relation lookups.
+ */
+function extractAffectedEntities(db: Database, ops: Op[]): Effect.Effect<string[], QueryError> {
+	return Effect.gen(function* () {
+		const {entityIds, relationIdsNeedingLookup} = extractAffectedEntitiesAndRelations(ops)
+
+		// If we have relation ops that need lookup, fetch the from_entity_id for each
+		if (relationIdsNeedingLookup.length > 0) {
+			const relationEntityMap = yield* batchLookupRelationEntities(db, relationIdsNeedingLookup)
+			for (const [_relationId, fromEntityId] of relationEntityMap) {
+				entityIds.add(fromEntityId)
+			}
+		}
+
+		return Array.from(entityIds)
+	}).pipe(
+		Effect.withSpan("proposal-diff.extractAffectedEntities", {
+			attributes: {opCount: ops.length},
+		}),
+	)
 }
 
 /**
  * Extract value from PropertyValue based on data type.
+ *
+ * GRC-20 v2 decoded values have the format: {type: "text", value: "..."}
+ * We need to convert this to our VersionedValue format.
  */
 function propertyValueToVersionedValue(pv: {property: Id; value: unknown}, spaceId: string): VersionedValue {
 	const propertyId = idToUuid(pv.property)
-	const value = pv.value as Record<string, unknown>
+	const value = pv.value as {type: string; value: unknown}
 
-	// The value object has a single key indicating the data type
 	const result: VersionedValue = {propertyId, spaceId}
 
-	if ("text" in value) {
-		result.text = value.text as string
-	} else if ("boolean" in value) {
-		result.boolean = value.boolean as boolean
-	} else if ("integer" in value) {
-		result.integer = Number(value.integer)
-	} else if ("float" in value) {
-		result.float = value.float as number
-	} else if ("decimal" in value) {
-		const dec = value.decimal as {mantissa: bigint; scale: number}
-		result.decimal = (Number(dec.mantissa) / 10 ** dec.scale).toString()
-	} else if ("bytes" in value) {
-		result.bytes = Buffer.from(value.bytes as Uint8Array).toString("base64")
-	} else if ("date" in value) {
-		result.date = value.date as string
-	} else if ("time" in value) {
-		result.time = value.time as string
-	} else if ("datetime" in value) {
-		result.datetime = value.datetime as string
+	// GRC-20 v2 value types are lowercase
+	switch (value.type) {
+		case "text":
+			result.text = value.value as string
+			break
+		case "bool":
+			result.boolean = value.value as boolean
+			break
+		case "int64":
+			result.integer = Number(value.value as bigint)
+			break
+		case "float64":
+			result.float = value.value as number
+			break
+		case "decimal": {
+			// Decimal has exponent and mantissa fields at the top level
+			// Use string manipulation to preserve precision for large numbers (> 2^53)
+			const dec = value as unknown as {exponent: number; mantissa: {type: string; value: bigint}}
+			const mantissaStr = dec.mantissa.value.toString()
+			const exp = dec.exponent
+			if (exp >= 0) {
+				// Positive exponent: append zeros
+				result.decimal = mantissaStr + "0".repeat(exp)
+			} else {
+				// Negative exponent: insert decimal point
+				const decimalPlaces = -exp
+				if (mantissaStr.length <= decimalPlaces) {
+					// Need leading zeros after decimal point
+					result.decimal = "0." + "0".repeat(decimalPlaces - mantissaStr.length) + mantissaStr
+				} else {
+					// Insert decimal point within the string
+					const insertPos = mantissaStr.length - decimalPlaces
+					result.decimal = mantissaStr.slice(0, insertPos) + "." + mantissaStr.slice(insertPos)
+				}
+			}
+			break
+		}
+		case "bytes":
+			result.bytes = Buffer.from(value.value as Uint8Array).toString("base64")
+			break
+		case "date":
+			result.date = value.value as string
+			break
+		case "time":
+			result.time = value.value as string
+			break
+		case "datetime":
+			result.datetime = value.value as string
+			break
+		case "schedule":
+			result.schedule = value.value
+			break
+		case "point": {
+			const pt = value.value as {lon: number; lat: number; alt?: number}
+			result.point = pt.alt !== undefined ? `${pt.lat},${pt.lon},${pt.alt}` : `${pt.lat},${pt.lon}`
+			break
+		}
+		case "rect": {
+			const rect = value.value as {minLon: number; minLat: number; maxLon: number; maxLat: number}
+			result.rect = `${rect.minLon},${rect.minLat},${rect.maxLon},${rect.maxLat}`
+			break
+		}
+		case "embedding":
+			result.embedding = value.value
+			break
+		default:
+			// Unknown type - log warning and skip
+			console.warn(`Unknown value type in GRC-20 edit: ${value.type}`)
 	}
 
 	return result
@@ -478,7 +640,8 @@ function applyOpsToSnapshot(base: EntitySnapshot, ops: Op[], entityId: string, s
 				break
 
 			case "restoreEntity":
-				// Restore doesn't add values back - they need to be re-set
+				// NOT IMPLEMENTED: See KNOWN LIMITATIONS at top of file.
+				// Would need historical state to know what values/relations to restore.
 				break
 
 			case "createRelation":
@@ -527,7 +690,9 @@ function applyOpsToSnapshot(base: EntitySnapshot, ops: Op[], entityId: string, s
 			}
 
 			case "restoreRelation":
-				// Would need the original relation data to restore
+				// NOT IMPLEMENTED: See KNOWN LIMITATIONS at top of file.
+				// The relation doesn't exist in live state (it was deleted), so we can't
+				// look up its from_entity_id, and we don't have the relation data to restore.
 				break
 
 			case "createValueRef":
@@ -596,16 +761,30 @@ export function computeProposalDiff(
 	limit = 50,
 ): Effect.Effect<PaginatedProposalDiff, ProposalDiffError> {
 	return Effect.gen(function* () {
+		yield* Effect.logDebug("ComputeProposalDiff started").pipe(
+			Effect.annotateLogs({proposalId, spaceId, limit, hasCursor: !!cursorStr}),
+		)
+
 		// 1. Get proposal with publish action
 		const data = yield* getProposalWithPublishAction(db, proposalId)
 		if (!data) {
+			yield* Effect.logInfo("Proposal not found").pipe(Effect.annotateLogs({proposalId}))
 			return yield* Effect.fail(new ProposalNotFoundError(proposalId))
 		}
 
 		const {proposal, contentUri} = data
 		const status = getProposalStatus(proposal)
 
-		// 2. If no publish action, return empty diff
+		yield* Effect.logDebug("Proposal loaded").pipe(
+			Effect.annotateLogs({proposalId, status, hasContentUri: !!contentUri}),
+		)
+
+		// 2. Validate spaceId matches the proposal's space
+		if (proposal.spaceId !== spaceId) {
+			return yield* Effect.fail(new SpaceMismatchError(proposal.spaceId, spaceId))
+		}
+
+		// 3. If no publish action, return empty diff
 		if (!contentUri) {
 			return {
 				proposalId,
@@ -620,13 +799,25 @@ export function computeProposalDiff(
 			}
 		}
 
-		// 3. Fetch edit blob from IPFS cache
+		// 4. Validate cursor format early (before expensive operations)
+		let startIndex = 0
+		let expectedTotalEntities: number | undefined
+		if (cursorStr) {
+			const cursor = decodeCursor(cursorStr)
+			if (cursor === null) {
+				return yield* Effect.fail(new InvalidCursorError(cursorStr))
+			}
+			startIndex = cursor.entityIndex
+			expectedTotalEntities = cursor.totalEntities
+		}
+
+		// 5. Fetch edit blob from IPFS cache
 		const blob = yield* getIpfsCacheData(db, contentUri)
 		if (!blob) {
 			return yield* Effect.fail(new EditBlobNotCachedError(contentUri))
 		}
 
-		// 4. Decode using @geoprotocol/grc-20
+		// 5. Decode using @geoprotocol/grc-20
 		const ops = yield* Effect.tryPromise({
 			try: async () => {
 				const edit = await decodeEditAuto(blob)
@@ -635,15 +826,30 @@ export function computeProposalDiff(
 			catch: (error) => new EditDecodeError(error),
 		})
 
-		// 5. Extract affected entity IDs (sorted for stable pagination)
-		const entityIds = extractAffectedEntities(ops).sort()
+		// 6. Extract affected entity IDs (sorted for stable pagination)
+		// This includes looking up from_entity_id for updateRelation/deleteRelation/restoreRelation ops
+		const entityIds = (yield* extractAffectedEntities(db, ops)).sort()
 
-		// 6. Parse cursor
-		const cursor = cursorStr ? decodeCursor(cursorStr) : null
-		const startIndex = cursor?.entityIndex ?? 0
+		yield* Effect.logDebug("Entities extracted").pipe(
+			Effect.annotateLogs({proposalId, opCount: ops.length, entityCount: entityIds.length}),
+		)
+
+		// 7. Validate cursor consistency (entity count shouldn't change between pages)
+		if (expectedTotalEntities !== undefined && expectedTotalEntities !== entityIds.length) {
+			yield* Effect.logWarning("Entity count changed between pages").pipe(
+				Effect.annotateLogs({proposalId, expected: expectedTotalEntities, actual: entityIds.length}),
+			)
+			// Don't fail - just log the inconsistency. The proposal may have been updated.
+		}
+
+		// 8. Paginate using the already-validated cursor
 		const pageEntityIds = entityIds.slice(startIndex, startIndex + limit)
 
-		// 7. Batch fetch base states
+		// 8. Batch fetch base states (values and relations for affected entities)
+		// Note: For active proposals, we fetch current live state. There's a potential race
+		// condition if live state changes between fetching the proposal and fetching values/relations,
+		// but this is acceptable - the diff represents "what would change if executed right now"
+		// rather than "what would change relative to a fixed point in time".
 		let baseStates: Map<string, EntitySnapshot>
 		if (status === "active") {
 			baseStates = yield* batchGetLiveSnapshots(db, pageEntityIds, spaceId)
@@ -661,7 +867,7 @@ export function computeProposalDiff(
 			}
 		}
 
-		// 8. Compute diffs (in-memory, no DB calls)
+		// 9. Compute diffs (in-memory, no DB calls)
 		const diffs: EntityDiff[] = []
 		for (const entityId of pageEntityIds) {
 			const baseState = baseStates.get(entityId) ?? emptySnapshot(entityId)
@@ -672,9 +878,24 @@ export function computeProposalDiff(
 			}
 		}
 
-		// 9. Build pagination info
+		yield* Effect.logDebug("Diffs computed").pipe(
+			Effect.annotateLogs({proposalId, pageSize: pageEntityIds.length, diffCount: diffs.length}),
+		)
+
+		// 10. Build pagination info
 		const nextIndex = startIndex + limit
 		const hasMore = nextIndex < entityIds.length
+
+		yield* Effect.logInfo("ComputeProposalDiff completed").pipe(
+			Effect.annotateLogs({
+				proposalId,
+				status,
+				totalEntities: entityIds.length,
+				pageEntities: pageEntityIds.length,
+				diffsReturned: diffs.length,
+				hasMore,
+			}),
+		)
 
 		return {
 			proposalId,
@@ -682,7 +903,7 @@ export function computeProposalDiff(
 			proposalStatus: status,
 			entities: diffs,
 			pagination: {
-				cursor: hasMore ? encodeCursor({entityIndex: nextIndex}) : null,
+				cursor: hasMore ? encodeCursor({entityIndex: nextIndex, totalEntities: entityIds.length}) : null,
 				hasMore,
 				totalEntities: entityIds.length,
 			},

@@ -402,3 +402,368 @@ describe("GET /versioned/entities/:id/diff", () => {
 		})
 	})
 })
+
+// =============================================================================
+// GET /versioned/proposals/:id/diff Tests
+// =============================================================================
+
+describe("GET /versioned/proposals/:id/diff", () => {
+	let app: Hono
+	let db: ReturnType<typeof createMockDb>
+
+	beforeEach(() => {
+		const setup = setupTestApp()
+		app = setup.app
+		db = setup.db
+	})
+
+	describe("validation errors", () => {
+		it("returns 400 when proposalId is not a valid UUID", async () => {
+			const res = await app.request(
+				"/versioned/proposals/not-a-uuid/diff?spaceId=00000000-0000-0000-0000-000000000001",
+			)
+
+			expect(res.status).toBe(400)
+			const body = await res.json()
+			expect(body.error).toBe("Invalid parameter")
+			expect(body.message).toContain("UUID")
+		})
+
+		it("returns 400 when spaceId is missing", async () => {
+			const res = await app.request("/versioned/proposals/00000000-0000-0000-0000-000000000001/diff")
+
+			expect(res.status).toBe(400)
+			const body = await res.json()
+			expect(body.error).toBe("Invalid parameter")
+			expect(body.message).toContain("spaceId")
+		})
+
+		it("returns 400 when spaceId is not a valid UUID", async () => {
+			const res = await app.request(
+				"/versioned/proposals/00000000-0000-0000-0000-000000000001/diff?spaceId=invalid",
+			)
+
+			expect(res.status).toBe(400)
+			const body = await res.json()
+			expect(body.error).toBe("Invalid parameter")
+			expect(body.message).toContain("spaceId")
+		})
+
+		it("returns 400 when limit is invalid", async () => {
+			const res = await app.request(
+				"/versioned/proposals/00000000-0000-0000-0000-000000000001/diff?spaceId=00000000-0000-0000-0000-000000000002&limit=-1",
+			)
+
+			expect(res.status).toBe(400)
+			const body = await res.json()
+			expect(body.message).toContain("limit")
+		})
+
+		it("returns 400 when limit is not a number", async () => {
+			const res = await app.request(
+				"/versioned/proposals/00000000-0000-0000-0000-000000000001/diff?spaceId=00000000-0000-0000-0000-000000000002&limit=abc",
+			)
+
+			expect(res.status).toBe(400)
+			const body = await res.json()
+			expect(body.message).toContain("limit")
+		})
+	})
+
+	describe("not found errors", () => {
+		it("returns 404 when proposal is not found", async () => {
+			// Mock: getProposalWithPublishAction returns no rows
+			db.execute.mockResolvedValueOnce({rows: []})
+
+			const res = await app.request(
+				"/versioned/proposals/00000000-0000-0000-0000-000000000001/diff?spaceId=00000000-0000-0000-0000-000000000002",
+			)
+
+			expect(res.status).toBe(404)
+			const body = await res.json()
+			expect(body.error).toBe("Not found")
+			expect(body.message).toContain("Proposal")
+		})
+
+		it("returns 404 when edit blob is not cached (without leaking URI)", async () => {
+			const proposalId = "00000000-0000-0000-0000-000000000001"
+			const spaceId = "00000000-0000-0000-0000-000000000002"
+			const now = Math.floor(Date.now() / 1000)
+
+			// Mock: getProposalWithPublishAction returns proposal with content_uri
+			db.execute.mockResolvedValueOnce({
+				rows: [
+					{
+						proposal_id: proposalId,
+						space_id: spaceId,
+						start_time: (now - 1000).toString(),
+						end_time: (now + 1000).toString(), // Active proposal
+						executed_at: null,
+						content_uri: "ipfs://QmTest123SensitiveUri",
+					},
+				],
+			})
+
+			// Mock: getIpfsCacheData returns no data
+			db.execute.mockResolvedValueOnce({rows: []})
+
+			const res = await app.request(`/versioned/proposals/${proposalId}/diff?spaceId=${spaceId}`)
+
+			expect(res.status).toBe(404)
+			const body = await res.json()
+			expect(body.error).toBe("Not found")
+			expect(body.message).toContain("Edit blob not cached")
+			// Verify IPFS URI is NOT leaked in the error message
+			expect(body.message).not.toContain("ipfs://")
+			expect(body.message).not.toContain("QmTest123")
+		})
+
+		it("returns 400 when spaceId does not match proposal's space", async () => {
+			const proposalId = "00000000-0000-0000-0000-000000000001"
+			const proposalSpaceId = "00000000-0000-0000-0000-000000000002"
+			const wrongSpaceId = "00000000-0000-0000-0000-000000000099" // Different from proposal's space
+			const now = Math.floor(Date.now() / 1000)
+
+			// Mock: getProposalWithPublishAction returns proposal with different space_id
+			db.execute.mockResolvedValueOnce({
+				rows: [
+					{
+						proposal_id: proposalId,
+						space_id: proposalSpaceId, // Proposal belongs to this space
+						start_time: (now - 1000).toString(),
+						end_time: (now + 1000).toString(),
+						executed_at: null,
+						content_uri: null,
+					},
+				],
+			})
+
+			// Request with wrong spaceId
+			const res = await app.request(`/versioned/proposals/${proposalId}/diff?spaceId=${wrongSpaceId}`)
+
+			expect(res.status).toBe(400)
+			const body = await res.json()
+			expect(body.error).toBe("Invalid parameter")
+			expect(body.message).toContain("spaceId does not match")
+		})
+
+		it("returns 400 when cursor is malformed", async () => {
+			const proposalId = "00000000-0000-0000-0000-000000000001"
+			const spaceId = "00000000-0000-0000-0000-000000000002"
+			const now = Math.floor(Date.now() / 1000)
+			const invalidCursor = "not-a-valid-base64-cursor!!!"
+
+			// Mock: getProposalWithPublishAction returns proposal with content_uri
+			db.execute.mockResolvedValueOnce({
+				rows: [
+					{
+						proposal_id: proposalId,
+						space_id: spaceId,
+						start_time: (now - 1000).toString(),
+						end_time: (now + 1000).toString(),
+						executed_at: null,
+						content_uri: "ipfs://QmTest123",
+					},
+				],
+			})
+
+			// Mock: getIpfsCacheData returns valid blob
+			// Create a minimal valid edit blob that decodes to empty ops
+			const mockEditBlob = Buffer.from('{"version":1,"ops":[]}')
+			db.execute.mockResolvedValueOnce({rows: [{data: mockEditBlob}]})
+
+			const res = await app.request(
+				`/versioned/proposals/${proposalId}/diff?spaceId=${spaceId}&cursor=${invalidCursor}`,
+			)
+
+			expect(res.status).toBe(400)
+			const body = await res.json()
+			expect(body.error).toBe("Invalid parameter")
+			expect(body.message).toContain("Invalid pagination cursor")
+		})
+	})
+
+	describe("successful responses", () => {
+		it("returns empty diff when proposal has no publish action", async () => {
+			const proposalId = "00000000-0000-0000-0000-000000000001"
+			const spaceId = "00000000-0000-0000-0000-000000000002"
+			const now = Math.floor(Date.now() / 1000)
+
+			// Mock: getProposalWithPublishAction returns proposal without content_uri
+			db.execute.mockResolvedValueOnce({
+				rows: [
+					{
+						proposal_id: proposalId,
+						space_id: spaceId,
+						start_time: (now - 1000).toString(),
+						end_time: (now + 1000).toString(),
+						executed_at: null,
+						content_uri: null, // No publish action
+					},
+				],
+			})
+
+			const res = await app.request(`/versioned/proposals/${proposalId}/diff?spaceId=${spaceId}`)
+
+			expect(res.status).toBe(200)
+			const body = await res.json()
+			expect(body.proposalId).toBe(proposalId)
+			expect(body.spaceId).toBe(spaceId)
+			expect(body.proposalStatus).toBe("active")
+			expect(body.entities).toEqual([])
+			expect(body.pagination).toEqual({
+				cursor: null,
+				hasMore: false,
+				totalEntities: 0,
+			})
+		})
+
+		it("returns proposal status as active when end_time is in future", async () => {
+			const proposalId = "00000000-0000-0000-0000-000000000001"
+			const spaceId = "00000000-0000-0000-0000-000000000002"
+			const now = Math.floor(Date.now() / 1000)
+
+			// Mock: proposal with end_time in future
+			db.execute.mockResolvedValueOnce({
+				rows: [
+					{
+						proposal_id: proposalId,
+						space_id: spaceId,
+						start_time: (now - 1000).toString(),
+						end_time: (now + 1000).toString(), // Future
+						executed_at: null,
+						content_uri: null,
+					},
+				],
+			})
+
+			const res = await app.request(`/versioned/proposals/${proposalId}/diff?spaceId=${spaceId}`)
+
+			expect(res.status).toBe(200)
+			const body = await res.json()
+			expect(body.proposalStatus).toBe("active")
+		})
+
+		it("returns proposal status as closed when end_time is in past", async () => {
+			const proposalId = "00000000-0000-0000-0000-000000000001"
+			const spaceId = "00000000-0000-0000-0000-000000000002"
+			const now = Math.floor(Date.now() / 1000)
+
+			// Mock: proposal with end_time in past
+			db.execute.mockResolvedValueOnce({
+				rows: [
+					{
+						proposal_id: proposalId,
+						space_id: spaceId,
+						start_time: (now - 2000).toString(),
+						end_time: (now - 1000).toString(), // Past
+						executed_at: null,
+						content_uri: null,
+					},
+				],
+			})
+
+			const res = await app.request(`/versioned/proposals/${proposalId}/diff?spaceId=${spaceId}`)
+
+			expect(res.status).toBe(200)
+			const body = await res.json()
+			expect(body.proposalStatus).toBe("closed")
+		})
+
+		it("returns proposal status as executed when executed_at is set", async () => {
+			const proposalId = "00000000-0000-0000-0000-000000000001"
+			const spaceId = "00000000-0000-0000-0000-000000000002"
+			const now = Math.floor(Date.now() / 1000)
+
+			// Mock: executed proposal
+			db.execute.mockResolvedValueOnce({
+				rows: [
+					{
+						proposal_id: proposalId,
+						space_id: spaceId,
+						start_time: (now - 2000).toString(),
+						end_time: (now - 1000).toString(),
+						executed_at: (now - 500).toString(), // Executed
+						content_uri: null,
+					},
+				],
+			})
+
+			const res = await app.request(`/versioned/proposals/${proposalId}/diff?spaceId=${spaceId}`)
+
+			expect(res.status).toBe(200)
+			const body = await res.json()
+			expect(body.proposalStatus).toBe("executed")
+		})
+
+		it("respects limit parameter", async () => {
+			const proposalId = "00000000-0000-0000-0000-000000000001"
+			const spaceId = "00000000-0000-0000-0000-000000000002"
+			const now = Math.floor(Date.now() / 1000)
+
+			// Mock: proposal without content_uri (simplest path)
+			db.execute.mockResolvedValueOnce({
+				rows: [
+					{
+						proposal_id: proposalId,
+						space_id: spaceId,
+						start_time: (now - 1000).toString(),
+						end_time: (now + 1000).toString(),
+						executed_at: null,
+						content_uri: null,
+					},
+				],
+			})
+
+			const res = await app.request(`/versioned/proposals/${proposalId}/diff?spaceId=${spaceId}&limit=10`)
+
+			expect(res.status).toBe(200)
+			// Verify the query was called (limit would be applied during processing)
+			expect(db.execute).toHaveBeenCalled()
+		})
+
+		it("accepts cursor parameter for pagination", async () => {
+			const proposalId = "00000000-0000-0000-0000-000000000001"
+			const spaceId = "00000000-0000-0000-0000-000000000002"
+			const now = Math.floor(Date.now() / 1000)
+			// Base64 encoded cursor: {"entityIndex":10}
+			const cursor = Buffer.from(JSON.stringify({entityIndex: 10})).toString("base64")
+
+			// Mock: proposal without content_uri
+			db.execute.mockResolvedValueOnce({
+				rows: [
+					{
+						proposal_id: proposalId,
+						space_id: spaceId,
+						start_time: (now - 1000).toString(),
+						end_time: (now + 1000).toString(),
+						executed_at: null,
+						content_uri: null,
+					},
+				],
+			})
+
+			const res = await app.request(`/versioned/proposals/${proposalId}/diff?spaceId=${spaceId}&cursor=${cursor}`)
+
+			// Should accept the cursor without error (even if no entities to paginate)
+			expect(res.status).toBe(200)
+		})
+	})
+
+	describe("database errors", () => {
+		it("returns 500 for database errors without leaking details", async () => {
+			// Mock: database throws an error
+			db.execute.mockRejectedValueOnce(new Error("Connection refused"))
+
+			const res = await app.request(
+				"/versioned/proposals/00000000-0000-0000-0000-000000000001/diff?spaceId=00000000-0000-0000-0000-000000000002",
+			)
+
+			expect(res.status).toBe(500)
+			const body = await res.json()
+			expect(body.error).toBe("Internal server error")
+			expect(body.message).toBe("An unexpected error occurred")
+			expect(body.message).not.toContain("Connection refused")
+		})
+	})
+})

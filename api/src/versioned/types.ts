@@ -274,6 +274,7 @@ export interface VersionEntry {
  */
 export interface ProposalDiffCursor {
 	entityIndex: number // Index into sorted entity list
+	totalEntities: number // Total entity count for consistency check
 }
 
 /**
