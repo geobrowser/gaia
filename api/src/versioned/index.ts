@@ -4,9 +4,9 @@ export {
 	EditBlobNotCachedError,
 	EditDecodeError,
 	InvalidCursorError,
+	type ProposalDiffError,
 	ProposalNotFoundError,
 	SpaceMismatchError,
-	type ProposalDiffError,
 } from "./proposal-diff"
 export {createVersionedRouter} from "./router"
 export * from "./types"

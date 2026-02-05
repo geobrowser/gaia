@@ -24,12 +24,12 @@
 
 import {EditBuilder, encodeEdit, formatId, randomId} from "@geoprotocol/grc-20"
 import {SystemIds} from "@graphprotocol/grc-20"
+import {drizzle} from "drizzle-orm/node-postgres"
 import {Hono} from "hono"
 import {Pool} from "pg"
 import {afterAll, beforeAll, describe, expect, it} from "vitest"
-import {drizzle} from "drizzle-orm/node-postgres"
-import {createVersionedRouter} from "../router"
 import {runtime} from "../../services/runtime"
+import {createVersionedRouter} from "../router"
 
 // Skip integration tests if DATABASE_URL is not set
 const DATABASE_URL = process.env.DATABASE_URL

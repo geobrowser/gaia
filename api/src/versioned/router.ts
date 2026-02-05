@@ -20,14 +20,14 @@ type AppEnv = {
 
 import {isValidUuid} from "../utils/uuid"
 import {diffGroupedEntitySnapshots} from "./diff"
-import {
-	computeProposalDiff,
+import type {
 	EditBlobNotCachedError,
 	EditDecodeError,
 	InvalidCursorError,
 	ProposalNotFoundError,
 	SpaceMismatchError,
 } from "./proposal-diff"
+import {computeProposalDiff} from "./proposal-diff"
 import {
 	getEntitySnapshotAtVersion,
 	getEntityVersions,
