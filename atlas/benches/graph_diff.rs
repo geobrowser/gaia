@@ -13,7 +13,6 @@ struct Position {
     distance: u32,
     parent: SpaceId,
     edge_type: EdgeType,
-    topic_id: Option<TopicId>,
 }
 
 struct BenchData {
@@ -66,7 +65,9 @@ fn random_edge_type(rng: &mut StdRng) -> EdgeType {
     match rng.gen_range(0..3) {
         0 => EdgeType::Verified,
         1 => EdgeType::Related,
-        _ => EdgeType::Topic,
+        _ => EdgeType::Topic {
+            topic_id: random_topic_id(rng),
+        },
     }
 }
 
@@ -75,11 +76,6 @@ fn build_positions(ids: &[SpaceId], rng: &mut StdRng) -> HashMap<SpaceId, Positi
     for id in ids {
         let parent = ids[rng.gen_range(0..ids.len())];
         let edge_type = random_edge_type(rng);
-        let topic_id = if edge_type == EdgeType::Topic {
-            Some(random_topic_id(rng))
-        } else {
-            None
-        };
         let distance = rng.gen_range(1..=6);
         positions.insert(
             *id,
@@ -87,7 +83,6 @@ fn build_positions(ids: &[SpaceId], rng: &mut StdRng) -> HashMap<SpaceId, Positi
                 distance,
                 parent,
                 edge_type,
-                topic_id,
             },
         );
     }
@@ -139,11 +134,6 @@ fn mutate_positions(
     for id in &added_ids {
         let parent = new_ids[rng.gen_range(0..new_ids.len())];
         let edge_type = random_edge_type(rng);
-        let topic_id = if edge_type == EdgeType::Topic {
-            Some(random_topic_id(rng))
-        } else {
-            None
-        };
         let distance = rng.gen_range(1..=6);
         positions.insert(
             *id,
@@ -151,7 +141,6 @@ fn mutate_positions(
                 distance,
                 parent,
                 edge_type,
-                topic_id,
             },
         );
     }
@@ -166,12 +155,6 @@ fn mutate_positions(
                 EdgeType::Verified => EdgeType::Related,
                 _ => EdgeType::Verified,
             };
-            if pos.edge_type == EdgeType::Topic && pos.topic_id.is_none() {
-                pos.topic_id = Some(random_topic_id(rng));
-            }
-            if pos.edge_type != EdgeType::Topic {
-                pos.topic_id = None;
-            }
         }
     }
 

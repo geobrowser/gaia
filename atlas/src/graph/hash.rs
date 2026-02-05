@@ -34,7 +34,6 @@ impl TreeHasher for DefaultTreeHasher {
 fn hash_node_recursive<H: Hasher>(node: &TreeNode, hasher: &mut H) {
     node.space_id.hash(hasher);
     node.edge_type.hash(hasher);
-    node.topic_id.hash(hasher);
     node.children.len().hash(hasher);
     for child in &node.children {
         hash_node_recursive(child, hasher);

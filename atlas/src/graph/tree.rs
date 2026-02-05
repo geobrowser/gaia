@@ -14,8 +14,8 @@ pub enum EdgeType {
     Verified,
     /// Related trust relationship
     Related,
-    /// Topic-based membership
-    Topic,
+    /// Topic-based membership — carries the topic that created this edge
+    Topic { topic_id: TopicId },
     /// Editor membership (canonical-granting)
     Editor,
     /// Member membership (canonical-granting)
@@ -31,9 +31,6 @@ pub struct TreeNode {
     /// How this node was reached from its parent
     pub edge_type: EdgeType,
 
-    /// If reached via topic edge, which topic
-    pub topic_id: Option<TopicId>,
-
     /// Children of this node in the traversal
     pub children: Vec<TreeNode>,
 }
@@ -44,7 +41,6 @@ impl TreeNode {
         Self {
             space_id,
             edge_type: EdgeType::Root,
-            topic_id: None,
             children: Vec::new(),
         }
     }
@@ -54,7 +50,6 @@ impl TreeNode {
         Self {
             space_id,
             edge_type,
-            topic_id: None,
             children: Vec::new(),
         }
     }
@@ -63,8 +58,7 @@ impl TreeNode {
     pub fn new_with_topic(space_id: SpaceId, topic_id: TopicId) -> Self {
         Self {
             space_id,
-            edge_type: EdgeType::Topic,
-            topic_id: Some(topic_id),
+            edge_type: EdgeType::Topic { topic_id },
             children: Vec::new(),
         }
     }
@@ -103,7 +97,6 @@ mod tests {
 
         assert_eq!(node.space_id, space);
         assert_eq!(node.edge_type, EdgeType::Root);
-        assert!(node.topic_id.is_none());
         assert!(node.children.is_empty());
     }
 
@@ -114,8 +107,7 @@ mod tests {
         let node = TreeNode::new_with_topic(space, topic);
 
         assert_eq!(node.space_id, space);
-        assert_eq!(node.edge_type, EdgeType::Topic);
-        assert_eq!(node.topic_id, Some(topic));
+        assert_eq!(node.edge_type, EdgeType::Topic { topic_id: topic });
     }
 
     #[test]

@@ -273,20 +273,19 @@ impl TransitiveProcessor {
         let mut visited: HashSet<SpaceId> = HashSet::new();
         let mut queue: VecDeque<SpaceId> = VecDeque::new();
 
-        // Track node metadata (edge_type, topic_id) - no TreeNode allocation yet
-        let mut node_metadata: HashMap<SpaceId, (EdgeType, Option<crate::events::TopicId>)> =
-            HashMap::new();
+        // Track node metadata (edge_type) - no TreeNode allocation yet
+        let mut node_metadata: HashMap<SpaceId, EdgeType> = HashMap::new();
 
         // Build children index directly: parent -> [children] (O(1) lookup)
         let mut children_index: HashMap<SpaceId, Vec<SpaceId>> = HashMap::new();
 
         // Reusable edge buffer to avoid allocations in the loop
-        let mut edges: Vec<(SpaceId, EdgeType, Option<crate::events::TopicId>)> = Vec::new();
+        let mut edges: Vec<(SpaceId, EdgeType)> = Vec::new();
 
         // Initialize with root
         visited.insert(root);
         queue.push_back(root);
-        node_metadata.insert(root, (EdgeType::Root, None));
+        node_metadata.insert(root, EdgeType::Root);
 
         while let Some(current) = queue.pop_front() {
             // Clear and reuse the edges buffer
@@ -295,7 +294,7 @@ impl TransitiveProcessor {
             // Collect explicit edges
             if let Some(explicit) = state.get_explicit_edges(&current) {
                 for (target, edge_type) in explicit {
-                    edges.push((*target, *edge_type, None));
+                    edges.push((*target, *edge_type));
                 }
             }
 
@@ -305,7 +304,12 @@ impl TransitiveProcessor {
                     for topic_id in topics {
                         if let Some(members) = state.get_topic_members(topic_id) {
                             for member in members {
-                                edges.push((*member, EdgeType::Topic, Some(*topic_id)));
+                                edges.push((
+                                    *member,
+                                    EdgeType::Topic {
+                                        topic_id: *topic_id,
+                                    },
+                                ));
                             }
                         }
                     }
@@ -313,13 +317,13 @@ impl TransitiveProcessor {
             }
 
             // Sort for deterministic ordering
-            edges.sort_unstable_by_key(|(id, _, _)| *id);
+            edges.sort_unstable_by_key(|(id, _)| *id);
 
             // Process edges and build children index
-            for (target, edge_type, topic_id) in &edges {
+            for (target, edge_type) in &edges {
                 if visited.insert(*target) {
                     queue.push_back(*target);
-                    node_metadata.insert(*target, (*edge_type, *topic_id));
+                    node_metadata.insert(*target, *edge_type);
 
                     // Add to children index (O(1) amortized)
                     children_index.entry(current).or_default().push(*target);
@@ -330,16 +334,11 @@ impl TransitiveProcessor {
         // Build tree structure using children index (O(n) total)
         fn build_tree(
             node_id: SpaceId,
-            node_metadata: &HashMap<SpaceId, (EdgeType, Option<crate::events::TopicId>)>,
+            node_metadata: &HashMap<SpaceId, EdgeType>,
             children_index: &HashMap<SpaceId, Vec<SpaceId>>,
         ) -> TreeNode {
-            let (edge_type, topic_id) = node_metadata.get(&node_id).copied().unwrap();
-
-            let mut node = match topic_id {
-                Some(tid) => TreeNode::new_with_topic(node_id, tid),
-                None if edge_type == EdgeType::Root => TreeNode::new_root(node_id),
-                None => TreeNode::new(node_id, edge_type),
-            };
+            let edge_type = node_metadata.get(&node_id).copied().unwrap();
+            let mut node = TreeNode::new(node_id, edge_type);
 
             // Children are already collected - just iterate (O(1) lookup)
             if let Some(children) = children_index.get(&node_id) {

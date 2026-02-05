@@ -247,7 +247,6 @@ impl CanonicalProcessor {
 /// since we're not at the root of the topic edge attachment.
 fn filter_child_recursive(node: &TreeNode, canonical_set: &HashSet<SpaceId>) -> TreeNode {
     let mut filtered = TreeNode::new(node.space_id, node.edge_type);
-    filtered.topic_id = node.topic_id;
 
     for child in &node.children {
         if canonical_set.contains(&child.space_id) {

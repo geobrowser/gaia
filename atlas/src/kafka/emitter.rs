@@ -117,11 +117,8 @@ fn tree_node_to_proto(node: &TreeNode) -> CanonicalTreeNode {
         EdgeType::Root => Edge::Root(RootEdge {}),
         EdgeType::Verified => Edge::Verified(VerifiedEdge {}),
         EdgeType::Related => Edge::Related(RelatedEdge {}),
-        EdgeType::Topic => Edge::Topic(TopicEdge {
-            topic_id: node
-                .topic_id
-                .expect("Topic edge must have topic_id")
-                .to_vec(),
+        EdgeType::Topic { topic_id } => Edge::Topic(TopicEdge {
+            topic_id: topic_id.to_vec(),
         }),
         EdgeType::Editor => Edge::Editor(EditorEdge {}),
         EdgeType::Member => Edge::Member(MemberEdge {}),
@@ -162,8 +159,8 @@ fn position_to_edge_info(pos: &Position) -> Option<EdgeInfo> {
     let edge_type = match pos.edge_type {
         EdgeType::Verified => edge_info::EdgeType::Verified(VerifiedEdge {}),
         EdgeType::Related => edge_info::EdgeType::Related(RelatedEdge {}),
-        EdgeType::Topic => edge_info::EdgeType::Topic(TopicEdge {
-            topic_id: pos.topic_id.map(|t| t.to_vec()).unwrap_or_default(),
+        EdgeType::Topic { topic_id } => edge_info::EdgeType::Topic(TopicEdge {
+            topic_id: topic_id.to_vec(),
         }),
         EdgeType::Editor => edge_info::EdgeType::Editor(EditorEdge {}),
         EdgeType::Member => edge_info::EdgeType::Member(MemberEdge {}),

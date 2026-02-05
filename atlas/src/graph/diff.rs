@@ -12,7 +12,7 @@
 //! - **Cache locality**: Excellent (contiguous sorted vectors for merge scan)
 
 use super::{CanonicalGraph, EdgeType, TreeNode};
-use crate::events::{SpaceId, TopicId};
+use crate::events::SpaceId;
 
 /// A position in the canonical tree.
 /// Stores the minimal information needed to detect changes.
@@ -22,10 +22,8 @@ pub struct Position {
     pub distance: u32,
     /// Parent node's space_id
     pub parent: SpaceId,
-    /// Type of edge connecting to parent
+    /// Type of edge connecting to parent (includes topic_id for Topic edges)
     pub edge_type: EdgeType,
-    /// Topic ID if this is a topic edge
-    pub topic_id: Option<TopicId>,
 }
 
 /// A single change in a graph diff
@@ -180,7 +178,6 @@ fn build_position_vec_recursive(
                 distance,
                 parent,
                 edge_type: node.edge_type,
-                topic_id: node.topic_id,
             },
         ));
     }
@@ -272,6 +269,7 @@ fn compute_diff(old: &[(SpaceId, Position)], new: &[(SpaceId, Position)]) -> Gra
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::events::TopicId;
 
     fn make_space_id(n: u8) -> SpaceId {
         let mut id = [0u8; 16];
@@ -517,8 +515,12 @@ mod tests {
             .map(|(_, p)| p)
             .unwrap();
 
-        assert_eq!(pos.edge_type, EdgeType::Topic);
-        assert_eq!(pos.topic_id, Some(make_topic_id(0x8A)));
+        assert_eq!(
+            pos.edge_type,
+            EdgeType::Topic {
+                topic_id: make_topic_id(0x8A)
+            }
+        );
     }
 
     #[test]
