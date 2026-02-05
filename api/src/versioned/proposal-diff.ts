@@ -217,17 +217,20 @@ function batchGetLiveSnapshots(
 
 	return Effect.tryPromise({
 		try: async () => {
+			// Convert to array literal for PostgreSQL ANY()
+			const entityIdsArray = `{${entityIds.join(",")}}`
+
 			// Query 1: All values for all entities
 			const valuesResult = await db.execute<Record<string, unknown>>(sql`
 				SELECT * FROM "values"
-				WHERE entity_id = ANY(${entityIds})
+				WHERE entity_id = ANY(${entityIdsArray}::uuid[])
 				AND space_id = ${spaceId}
 			`)
 
 			// Query 2: All relations for all entities
 			const relationsResult = await db.execute<Record<string, unknown>>(sql`
 				SELECT * FROM relations
-				WHERE from_entity_id = ANY(${entityIds})
+				WHERE from_entity_id = ANY(${entityIdsArray}::uuid[])
 				AND space_id = ${spaceId}
 			`)
 
@@ -257,11 +260,13 @@ function batchGetVersionedSnapshots(
 	return Effect.tryPromise({
 		try: async () => {
 			const versionKeyStr = versionKey.toString()
+			// Convert to array literal for PostgreSQL ANY()
+			const entityIdsArray = `{${entityIds.join(",")}}`
 
 			// Query 1: All values at version
 			const valuesResult = await db.execute<Record<string, unknown>>(sql`
 				SELECT * FROM value_versions
-				WHERE entity_id = ANY(${entityIds})
+				WHERE entity_id = ANY(${entityIdsArray}::uuid[])
 				AND space_id = ${spaceId}
 				AND valid_from_key <= ${versionKeyStr}::bigint
 				AND (valid_to_key IS NULL OR valid_to_key > ${versionKeyStr}::bigint)
@@ -270,7 +275,7 @@ function batchGetVersionedSnapshots(
 			// Query 2: All relations at version
 			const relationsResult = await db.execute<Record<string, unknown>>(sql`
 				SELECT * FROM relation_versions
-				WHERE from_entity_id = ANY(${entityIds})
+				WHERE from_entity_id = ANY(${entityIdsArray}::uuid[])
 				AND space_id = ${spaceId}
 				AND valid_from_key <= ${versionKeyStr}::bigint
 				AND (valid_to_key IS NULL OR valid_to_key > ${versionKeyStr}::bigint)
@@ -400,33 +405,70 @@ function extractAffectedEntities(ops: Op[]): string[] {
 
 /**
  * Extract value from PropertyValue based on data type.
+ *
+ * GRC-20 v2 decoded values have the format: {type: "text", value: "..."}
+ * We need to convert this to our VersionedValue format.
  */
 function propertyValueToVersionedValue(pv: {property: Id; value: unknown}, spaceId: string): VersionedValue {
 	const propertyId = idToUuid(pv.property)
-	const value = pv.value as Record<string, unknown>
+	const value = pv.value as {type: string; value: unknown}
 
-	// The value object has a single key indicating the data type
 	const result: VersionedValue = {propertyId, spaceId}
 
-	if ("text" in value) {
-		result.text = value.text as string
-	} else if ("boolean" in value) {
-		result.boolean = value.boolean as boolean
-	} else if ("integer" in value) {
-		result.integer = Number(value.integer)
-	} else if ("float" in value) {
-		result.float = value.float as number
-	} else if ("decimal" in value) {
-		const dec = value.decimal as {mantissa: bigint; scale: number}
-		result.decimal = (Number(dec.mantissa) / 10 ** dec.scale).toString()
-	} else if ("bytes" in value) {
-		result.bytes = Buffer.from(value.bytes as Uint8Array).toString("base64")
-	} else if ("date" in value) {
-		result.date = value.date as string
-	} else if ("time" in value) {
-		result.time = value.time as string
-	} else if ("datetime" in value) {
-		result.datetime = value.datetime as string
+	// GRC-20 v2 value types are lowercase
+	switch (value.type) {
+		case "text":
+			result.text = value.value as string
+			break
+		case "bool":
+			result.boolean = value.value as boolean
+			break
+		case "int64":
+			result.integer = Number(value.value as bigint)
+			break
+		case "float64":
+			result.float = value.value as number
+			break
+		case "decimal": {
+			// Decimal has exponent and mantissa fields at the top level
+			const dec = value as unknown as {exponent: number; mantissa: {type: string; value: bigint}}
+			const mantissaValue = dec.mantissa.value
+			result.decimal = (Number(mantissaValue) / 10 ** (-dec.exponent)).toString()
+			break
+		}
+		case "bytes":
+			result.bytes = Buffer.from(value.value as Uint8Array).toString("base64")
+			break
+		case "date":
+			result.date = value.value as string
+			break
+		case "time":
+			result.time = value.value as string
+			break
+		case "datetime":
+			result.datetime = value.value as string
+			break
+		case "schedule":
+			result.schedule = value.value
+			break
+		case "point": {
+			const pt = value.value as {lon: number; lat: number; alt?: number}
+			result.point = pt.alt !== undefined
+				? `${pt.lat},${pt.lon},${pt.alt}`
+				: `${pt.lat},${pt.lon}`
+			break
+		}
+		case "rect": {
+			const rect = value.value as {minLon: number; minLat: number; maxLon: number; maxLat: number}
+			result.rect = `${rect.minLon},${rect.minLat},${rect.maxLon},${rect.maxLat}`
+			break
+		}
+		case "embedding":
+			result.embedding = value.value
+			break
+		default:
+			// Unknown type - log warning and skip
+			console.warn(`Unknown value type in GRC-20 edit: ${value.type}`)
 	}
 
 	return result
