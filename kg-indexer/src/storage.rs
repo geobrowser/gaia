@@ -17,6 +17,7 @@ use crate::models::{
     values::{ValueChangeType, ValueOp},
 };
 
+#[derive(Clone)]
 pub struct Storage {
     pub pool: sqlx::Pool<Postgres>,
 }
@@ -984,6 +985,114 @@ impl Storage {
         .await?;
 
         Ok(())
+    }
+
+    /// Queue a proposal for vote tally update.
+    /// Uses INSERT ON CONFLICT DO NOTHING to avoid duplicate entries.
+    /// The background worker will process the queue and update denormalized vote counts.
+    #[allow(dead_code)]
+    pub async fn queue_tally_update(
+        &self,
+        proposal_id: Uuid,
+        tx: &mut sqlx::Transaction<'_, Postgres>,
+    ) -> Result<(), IndexerError> {
+        sqlx::query(
+            r#"
+            INSERT INTO proposal_tally_queue (proposal_id)
+            VALUES ($1)
+            ON CONFLICT (proposal_id) DO NOTHING
+            "#,
+        )
+        .bind(proposal_id)
+        .execute(&mut **tx)
+        .await?;
+
+        Ok(())
+    }
+
+    /// Process the proposal tally queue: fetch queued proposal IDs, update their
+    /// denormalized vote counts, and remove them from the queue.
+    /// Returns the number of proposals processed.
+    pub async fn process_tally_queue(&self, batch_size: i64) -> Result<usize, IndexerError> {
+        // Use a transaction to atomically:
+        // 1. Grab and lock a batch of queued proposals
+        // 2. Update their vote counts
+        // 3. Remove them from the queue
+        let mut tx = self.pool.begin().await?;
+
+        // Grab a batch of proposal IDs from the queue with FOR UPDATE SKIP LOCKED
+        // This allows multiple workers to process concurrently without conflicts
+        let queued: Vec<(Uuid,)> = sqlx::query_as(
+            r#"
+            SELECT proposal_id
+            FROM proposal_tally_queue
+            ORDER BY queued_at ASC
+            LIMIT $1
+            FOR UPDATE SKIP LOCKED
+            "#,
+        )
+        .bind(batch_size)
+        .fetch_all(&mut *tx)
+        .await?;
+
+        if queued.is_empty() {
+            return Ok(0);
+        }
+
+        let proposal_ids: Vec<Uuid> = queued.into_iter().map(|(id,)| id).collect();
+        let count = proposal_ids.len();
+
+        // Update vote counts for these proposals by computing from proposal_votes.
+        // Use LEFT JOIN to handle proposals with zero votes (all votes deleted).
+        sqlx::query(
+            r#"
+            UPDATE proposals p
+            SET
+                yes_count = COALESCE(vc.yes_count, 0),
+                no_count = COALESCE(vc.no_count, 0),
+                abstain_count = COALESCE(vc.abstain_count, 0)
+            FROM UNNEST($1::uuid[]) AS queued(proposal_id)
+            LEFT JOIN (
+                SELECT
+                    proposal_id,
+                    COUNT(*) FILTER (WHERE vote = 'Yes') as yes_count,
+                    COUNT(*) FILTER (WHERE vote = 'No') as no_count,
+                    COUNT(*) FILTER (WHERE vote = 'Abstain') as abstain_count
+                FROM proposal_votes
+                WHERE proposal_id = ANY($1)
+                GROUP BY proposal_id
+            ) vc ON queued.proposal_id = vc.proposal_id
+            WHERE p.id = queued.proposal_id
+            "#,
+        )
+        .bind(&proposal_ids)
+        .execute(&mut *tx)
+        .await?;
+
+        // Remove processed proposals from the queue
+        sqlx::query(
+            r#"
+            DELETE FROM proposal_tally_queue
+            WHERE proposal_id = ANY($1)
+            "#,
+        )
+        .bind(&proposal_ids)
+        .execute(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+
+        Ok(count)
+    }
+
+    /// Get the current depth of the proposal tally queue.
+    /// Useful for monitoring worker health and detecting backlogs.
+    pub async fn get_tally_queue_depth(&self) -> Result<i64, IndexerError> {
+        let result: (i64,) = sqlx::query_as(r#"SELECT COUNT(*) FROM proposal_tally_queue"#)
+            .fetch_one(&self.pool)
+            .await?;
+
+        Ok(result.0)
     }
 
     // ==================== Versioned writes ====================

@@ -207,11 +207,89 @@ async fn async_main() -> Result<(), IndexerError> {
 
     // Set up shutdown signal
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::broadcast::channel::<()>(1);
+    let mut tally_shutdown_rx = shutdown_tx.subscribe();
 
     tokio::spawn(async move {
         tokio::signal::ctrl_c().await.ok();
         info!("Shutdown signal received");
         shutdown_tx.send(()).ok();
+    });
+
+    // Spawn background worker to process proposal vote tally updates
+    // This decouples the vote write path from tally computation for better performance
+    let tally_storage = storage.clone();
+    let tally_interval_ms: u64 = env::var("TALLY_WORKER_INTERVAL_MS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(5000); // Default: 5 seconds
+    let tally_batch_size: i64 = env::var("TALLY_WORKER_BATCH_SIZE")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(100); // Default: 100 proposals per batch
+
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_millis(tally_interval_ms));
+        // Skip missed ticks to avoid thundering herd after pause/delay
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        info!(
+            interval_ms = tally_interval_ms,
+            batch_size = tally_batch_size,
+            "Starting proposal tally worker"
+        );
+
+        // Log queue depth every N ticks (roughly every minute at default 5s interval)
+        let mut tick_count: u64 = 0;
+        let depth_log_interval: u64 = 12; // Log depth every ~60 seconds
+
+        loop {
+            tokio::select! {
+                _ = tally_shutdown_rx.recv() => {
+                    info!("Tally worker shutting down");
+                    break;
+                }
+                _ = interval.tick() => {
+                    tick_count += 1;
+
+                    match tally_storage.process_tally_queue(tally_batch_size).await {
+                        Ok(0) => {
+                            // No proposals to process, nothing to log
+                        }
+                        Ok(count) => {
+                            debug!(
+                                count = count,
+                                "Processed proposal tally updates"
+                            );
+                        }
+                        Err(e) => {
+                            error!(
+                                error = %e,
+                                "Failed to process proposal tally queue"
+                            );
+                        }
+                    }
+
+                    // Periodically log queue depth for monitoring
+                    if tick_count.is_multiple_of(depth_log_interval) {
+                        match tally_storage.get_tally_queue_depth().await {
+                            Ok(depth) => {
+                                if depth > 0 {
+                                    info!(
+                                        queue_depth = depth,
+                                        "Proposal tally queue depth"
+                                    );
+                                }
+                            }
+                            Err(e) => {
+                                warn!(
+                                    error = %e,
+                                    "Failed to get tally queue depth"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
     });
 
     // Main processing loop
@@ -991,12 +1069,15 @@ async fn process_message(
         }
         KgMessage::ProposalVoted(event) => {
             let vote = handlers::governance::handle_proposal_voted(&event)?;
+            let proposal_id = vote.proposal_id;
             debug!(
                 proposal_id = %vote.proposal_id,
                 voter_id = %vote.voter_id,
                 "Processing ProposalVoted"
             );
             storage.insert_proposal_votes(&[vote], &mut tx).await?;
+            // Queue proposal for tally update (processed by background worker)
+            storage.queue_tally_update(proposal_id, &mut tx).await?;
             1
         }
         KgMessage::ProposalExecuted(event) => {
@@ -1328,12 +1409,15 @@ async fn process_block(
                 }
                 KgMessage::ProposalVoted(vote_event) => {
                     let vote = handlers::governance::handle_proposal_voted(vote_event)?;
+                    let proposal_id = vote.proposal_id;
 
                     // Record trace context
                     event_span.record("proposal_id", display(vote.proposal_id));
                     event_span.record("voter_id", display(vote.voter_id));
 
                     storage.insert_proposal_votes(&[vote], &mut tx).await?;
+                    // Queue proposal for tally update (processed by background worker)
+                    storage.queue_tally_update(proposal_id, &mut tx).await?;
                     1
                 }
                 KgMessage::ProposalExecuted(exec_event) => {
