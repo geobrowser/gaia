@@ -4,6 +4,24 @@
  * Computes diffs between a proposal's proposed changes and the base state.
  * - Active proposals: compare against current live state
  * - Closed proposals: compare against versioned state at end_time
+ *
+ * KNOWN LIMITATIONS:
+ * The following op types are not fully supported for diff computation:
+ *
+ * - restoreEntity: The op only contains the entity ID, not the values/relations
+ *   to restore. We'd need to fetch historical state to show what's being restored.
+ *
+ * - deleteEntity: Currently shows removal of all current values/relations, but
+ *   doesn't account for the entity potentially being in a deleted state already.
+ *
+ * - restoreRelation: The op only contains the relation ID. Since the relation
+ *   doesn't exist in the live table (it was deleted), we can't look up which
+ *   entity is affected. These ops are silently skipped.
+ *
+ * To properly support these ops, we'd need to restructure the code to:
+ * 1. Pass version context into entity extraction
+ * 2. Fetch historical state for restore ops
+ * 3. Track entity/relation deletion state
  */
 
 import {decodeEditAuto, type Id, type Op} from "@geoprotocol/grc-20"
@@ -199,8 +217,61 @@ function resolveVersionKeyAtTimestamp(db: Database, timestamp: bigint): Effect.E
 }
 
 // ============================================================================
+// Relation Lookup
+// ============================================================================
+
+/**
+ * Batch lookup from_entity_id for multiple relation IDs.
+ * Used to find which entities are affected by updateRelation/deleteRelation/restoreRelation ops.
+ * Returns a map from relation ID to from_entity_id.
+ */
+function batchLookupRelationEntities(
+	db: Database,
+	relationIds: string[],
+): Effect.Effect<Map<string, string>, QueryError> {
+	if (relationIds.length === 0) {
+		return Effect.succeed(new Map())
+	}
+
+	return Effect.tryPromise({
+		try: async () => {
+			// Note: relationIds are derived from idToUuid() which converts Uint8Array bytes to hex.
+			// This can only produce [0-9a-f-] characters, making SQL injection impossible.
+			const relationIdsArray = `{${relationIds.join(",")}}`
+
+			// Look up relations in the live table only.
+			// This works for deleteRelation and updateRelation ops where the relation exists.
+			// Note: restoreRelation ops won't find their relation here (it's deleted),
+			// so those entities won't be included in the diff. See KNOWN_LIMITATIONS below.
+			const liveResult = await db.execute<{id: string; from_entity_id: string}>(sql`
+				SELECT id, from_entity_id FROM relations
+				WHERE id = ANY(${relationIdsArray}::uuid[])
+			`)
+
+			const result = new Map<string, string>()
+			for (const row of liveResult.rows) {
+				result.set(row.id, row.from_entity_id)
+			}
+
+			return result
+		},
+		catch: (error) => new QueryError("batchLookupRelationEntities", error),
+	}).pipe(
+		Effect.withSpan("proposal-diff.batchLookupRelationEntities", {
+			attributes: {relationCount: relationIds.length},
+		}),
+	)
+}
+
+// ============================================================================
 // Batch State Fetching
 // ============================================================================
+
+// Note on SQL array construction safety:
+// All entity IDs used in these functions come from extractAffectedEntities(),
+// which derives them from idToUuid(). The idToUuid() function converts Uint8Array
+// bytes to hex, producing only [0-9a-f-] characters. This makes SQL injection
+// impossible when constructing PostgreSQL array literals like `{uuid1,uuid2}`.
 
 /**
  * Batch fetch live snapshots for multiple entities.
@@ -228,8 +299,11 @@ function batchGetLiveSnapshots(
 			`)
 
 			// Query 2: All relations for all entities
+			// Note: Live table uses `id` but versioned uses `relation_id` - alias for consistency
 			const relationsResult = await db.execute<Record<string, unknown>>(sql`
-				SELECT * FROM relations
+				SELECT id AS relation_id, entity_id, type_id, from_entity_id, from_space_id, 
+				       to_entity_id, to_space_id, position, space_id, verified
+				FROM relations
 				WHERE from_entity_id = ANY(${entityIdsArray}::uuid[])
 				AND space_id = ${spaceId}
 			`)
@@ -372,9 +446,14 @@ function idToUuid(id: Id): string {
 
 /**
  * Extract affected entity IDs from ops.
+ * Returns both directly-extractable entity IDs and relation IDs that need lookup.
  */
-function extractAffectedEntities(ops: Op[]): string[] {
+function extractAffectedEntitiesAndRelations(ops: Op[]): {
+	entityIds: Set<string>
+	relationIdsNeedingLookup: string[]
+} {
 	const entityIds = new Set<string>()
+	const relationIdsNeedingLookup: string[] = []
 
 	for (const op of ops) {
 		switch (op.type) {
@@ -391,8 +470,8 @@ function extractAffectedEntities(ops: Op[]): string[] {
 			case "updateRelation":
 			case "deleteRelation":
 			case "restoreRelation":
-				// These only have the relation id, we'd need to look up the from entity
-				// For now, skip - the entity changes are captured by entity ops
+				// These ops only have the relation ID - we need to look up the from_entity_id
+				relationIdsNeedingLookup.push(idToUuid(op.id))
 				break
 			case "createValueRef":
 				entityIds.add(idToUuid(op.entity))
@@ -400,7 +479,33 @@ function extractAffectedEntities(ops: Op[]): string[] {
 		}
 	}
 
-	return Array.from(entityIds)
+	return {entityIds, relationIdsNeedingLookup}
+}
+
+/**
+ * Extract all affected entity IDs from ops, including those requiring relation lookups.
+ */
+function extractAffectedEntities(
+	db: Database,
+	ops: Op[],
+): Effect.Effect<string[], QueryError> {
+	return Effect.gen(function* () {
+		const {entityIds, relationIdsNeedingLookup} = extractAffectedEntitiesAndRelations(ops)
+
+		// If we have relation ops that need lookup, fetch the from_entity_id for each
+		if (relationIdsNeedingLookup.length > 0) {
+			const relationEntityMap = yield* batchLookupRelationEntities(db, relationIdsNeedingLookup)
+			for (const [_relationId, fromEntityId] of relationEntityMap) {
+				entityIds.add(fromEntityId)
+			}
+		}
+
+		return Array.from(entityIds)
+	}).pipe(
+		Effect.withSpan("proposal-diff.extractAffectedEntities", {
+			attributes: {opCount: ops.length},
+		}),
+	)
 }
 
 /**
@@ -539,7 +644,8 @@ function applyOpsToSnapshot(base: EntitySnapshot, ops: Op[], entityId: string, s
 				break
 
 			case "restoreEntity":
-				// Restore doesn't add values back - they need to be re-set
+				// NOT IMPLEMENTED: See KNOWN LIMITATIONS at top of file.
+				// Would need historical state to know what values/relations to restore.
 				break
 
 			case "createRelation":
@@ -588,7 +694,9 @@ function applyOpsToSnapshot(base: EntitySnapshot, ops: Op[], entityId: string, s
 			}
 
 			case "restoreRelation":
-				// Would need the original relation data to restore
+				// NOT IMPLEMENTED: See KNOWN LIMITATIONS at top of file.
+				// The relation doesn't exist in live state (it was deleted), so we can't
+				// look up its from_entity_id, and we don't have the relation data to restore.
 				break
 
 			case "createValueRef":
@@ -712,12 +820,17 @@ export function computeProposalDiff(
 		})
 
 		// 6. Extract affected entity IDs (sorted for stable pagination)
-		const entityIds = extractAffectedEntities(ops).sort()
+		// This includes looking up from_entity_id for updateRelation/deleteRelation/restoreRelation ops
+		const entityIds = (yield* extractAffectedEntities(db, ops)).sort()
 
 		// 7. Paginate using the already-validated cursor
 		const pageEntityIds = entityIds.slice(startIndex, startIndex + limit)
 
 		// 8. Batch fetch base states (values and relations for affected entities)
+		// Note: For active proposals, we fetch current live state. There's a potential race
+		// condition if live state changes between fetching the proposal and fetching values/relations,
+		// but this is acceptable - the diff represents "what would change if executed right now"
+		// rather than "what would change relative to a fixed point in time".
 		let baseStates: Map<string, EntitySnapshot>
 		if (status === "active") {
 			baseStates = yield* batchGetLiveSnapshots(db, pageEntityIds, spaceId)

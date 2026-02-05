@@ -67,6 +67,8 @@ const uuid = {
 	// Relations (for existing data)
 	rel1: "20000000-0006-4000-8000-000000000001",
 	rel2: "20000000-0006-4000-8000-000000000002",
+	relToDelete: "20000000-0006-4000-8000-000000000003",
+	relToUpdate: "20000000-0006-4000-8000-000000000004",
 
 	// Edit IDs (versions)
 	edit1: "20000000-0007-4000-8000-000000000001",
@@ -79,6 +81,8 @@ const uuid = {
 	proposalMultipleOps: "20000000-0008-4000-8000-000000000005",
 	proposalAllValueTypes: "20000000-0008-4000-8000-000000000006",
 	proposalClosed: "20000000-0008-4000-8000-000000000007",
+	proposalDeleteRelation: "20000000-0008-4000-8000-000000000008",
+	proposalUpdateRelation: "20000000-0008-4000-8000-000000000009",
 
 	// Proposal actions
 	actionCreateEntity: "20000000-000a-4000-8000-000000000001",
@@ -88,6 +92,8 @@ const uuid = {
 	actionMultipleOps: "20000000-000a-4000-8000-000000000005",
 	actionAllValueTypes: "20000000-000a-4000-8000-000000000006",
 	actionClosed: "20000000-000a-4000-8000-000000000007",
+	actionDeleteRelation: "20000000-000a-4000-8000-000000000008",
+	actionUpdateRelation: "20000000-000a-4000-8000-000000000009",
 
 	// Value IDs (for value_versions)
 	val: (n: number) => `20000000-0009-4000-8000-${n.toString().padStart(12, "0")}`,
@@ -327,7 +333,74 @@ describe.skipIf(SKIP_INTEGRATION)("Proposal Diff - Full GRC-20 Edit Flow", () =>
 	})
 
 	// ==========================================================================
-	// 5. Multiple Operations Tests
+	// 5. DeleteRelation Op Tests
+	// ==========================================================================
+
+	describe("DeleteRelation Op", () => {
+		it("returns REMOVE relation diff for deleted relation (requires relation lookup)", async () => {
+			// This test verifies the new batchLookupRelationEntities() function.
+			// A deleteRelation op only contains the relation ID, not the from_entity_id.
+			// The proposal-diff code must look up the from_entity_id to know which
+			// entity is affected by the relation deletion.
+			const res = await app.request(
+				`/versioned/proposals/${uuid.proposalDeleteRelation}/diff?spaceId=${uuid.space1}`,
+			)
+			expect(res.status).toBe(200)
+
+			const body = await res.json()
+
+			// The diff should contain the entity that has the relation being deleted
+			const entityDiff = body.entities.find(
+				(d: any) => d.entityId === uuid.entityExistingWithRelations,
+			)
+			expect(entityDiff).toBeDefined()
+
+			// Should have REMOVE for the deleted relation
+			const relationDiff = entityDiff.relations.find(
+				(r: any) => r.relationId === uuid.relToDelete,
+			)
+			expect(relationDiff).toBeDefined()
+			expect(relationDiff.changeType).toBe("REMOVE")
+			expect(relationDiff.before).not.toBeNull()
+			expect(relationDiff.before?.toEntityId).toBe(uuid.entityExisting1)
+			expect(relationDiff.after).toBeNull()
+		})
+	})
+
+	// ==========================================================================
+	// 6. UpdateRelation Op Tests
+	// ==========================================================================
+
+	describe("UpdateRelation Op", () => {
+		it("returns UPDATE relation diff for modified relation (requires relation lookup)", async () => {
+			// This test verifies that updateRelation ops correctly look up the from_entity_id
+			// and show the position change in the diff.
+			const res = await app.request(
+				`/versioned/proposals/${uuid.proposalUpdateRelation}/diff?spaceId=${uuid.space1}`,
+			)
+			expect(res.status).toBe(200)
+
+			const body = await res.json()
+
+			// The diff should contain the entity that has the relation being updated
+			const entityDiff = body.entities.find(
+				(d: any) => d.entityId === uuid.entityExistingWithRelations,
+			)
+			expect(entityDiff).toBeDefined()
+
+			// Should have UPDATE for the modified relation
+			const relationDiff = entityDiff.relations.find(
+				(r: any) => r.relationId === uuid.relToUpdate,
+			)
+			expect(relationDiff).toBeDefined()
+			expect(relationDiff.changeType).toBe("UPDATE")
+			expect(relationDiff.before?.position).toBe("b0")
+			expect(relationDiff.after?.position).toBe("z9") // New position set in the proposal
+		})
+	})
+
+	// ==========================================================================
+	// 7. Multiple Operations Tests
 	// ==========================================================================
 
 	describe("Multiple Operations", () => {
@@ -357,7 +430,7 @@ describe.skipIf(SKIP_INTEGRATION)("Proposal Diff - Full GRC-20 Edit Flow", () =>
 	})
 
 	// ==========================================================================
-	// 6. Closed Proposal Tests
+	// 8. Closed Proposal Tests
 	// ==========================================================================
 
 	describe("Closed Proposal", () => {
@@ -375,7 +448,7 @@ describe.skipIf(SKIP_INTEGRATION)("Proposal Diff - Full GRC-20 Edit Flow", () =>
 	})
 
 	// ==========================================================================
-	// 7. Error Cases
+	// 9. Error Cases
 	// ==========================================================================
 
 	describe("Error Cases", () => {
@@ -467,6 +540,32 @@ async function setupTestData(pool: Pool): Promise<void> {
 			`INSERT INTO value_versions (id, entity_id, property_id, space_id, valid_from_key, valid_to_key, text)
 			 VALUES ($1, $2, $3, $4, $5, NULL, 'Entity with relations') ON CONFLICT DO NOTHING`,
 			[uuid.val(valIdx++), uuid.entityExistingWithRelations, uuid.propText, uuid.space1, versionKey1],
+		)
+
+		// Create an existing relation that will be deleted by a proposal
+		// This relation goes from entityExistingWithRelations -> entityExisting1
+		await client.query(
+			`INSERT INTO relations (id, entity_id, from_entity_id, to_entity_id, type_id, space_id, position)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT DO NOTHING`,
+			[uuid.relToDelete, uuid.entityExistingWithRelations, uuid.entityExistingWithRelations, uuid.entityExisting1, uuid.relTypeGeneric, uuid.space1, "a0"],
+		)
+		await client.query(
+			`INSERT INTO relation_versions (id, relation_id, entity_id, from_entity_id, to_entity_id, type_id, space_id, valid_from_key, valid_to_key, position)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL, $9) ON CONFLICT DO NOTHING`,
+			[uuid.rel1, uuid.relToDelete, uuid.entityExistingWithRelations, uuid.entityExistingWithRelations, uuid.entityExisting1, uuid.relTypeGeneric, uuid.space1, versionKey1, "a0"],
+		)
+
+		// Create another relation that will be updated (position changed) by a proposal
+		// This relation also goes from entityExistingWithRelations -> entityExisting2
+		await client.query(
+			`INSERT INTO relations (id, entity_id, from_entity_id, to_entity_id, type_id, space_id, position)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT DO NOTHING`,
+			[uuid.relToUpdate, uuid.entityExistingWithRelations, uuid.entityExistingWithRelations, uuid.entityExisting2, uuid.relTypeGeneric, uuid.space1, "b0"],
+		)
+		await client.query(
+			`INSERT INTO relation_versions (id, relation_id, entity_id, from_entity_id, to_entity_id, type_id, space_id, valid_from_key, valid_to_key, position)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL, $9) ON CONFLICT DO NOTHING`,
+			[uuid.rel2, uuid.relToUpdate, uuid.entityExistingWithRelations, uuid.entityExistingWithRelations, uuid.entityExisting2, uuid.relTypeGeneric, uuid.space1, versionKey1, "b0"],
 		)
 
 		// Entity to delete (live state)
@@ -626,6 +725,46 @@ async function setupTestData(pool: Pool): Promise<void> {
 			contentUri: generateTestUri("closed-proposal"),
 		})
 
+		// Proposal 8: DeleteRelation
+		// This tests that deleteRelation ops correctly look up the from_entity_id
+		// to include the affected entity in the diff
+		await createProposalWithEdit(client, {
+			proposalId: uuid.proposalDeleteRelation,
+			actionId: uuid.actionDeleteRelation,
+			spaceId: uuid.space1,
+			startTime: now - 1000,
+			endTime: now + 86400,
+			editBuilder: (editId) => {
+				const builder = new EditBuilder(editId)
+					.setName("Delete Relation")
+					.setCreatedNow()
+					.deleteRelation(uuidToId(uuid.relToDelete))
+				return builder.build()
+			},
+			contentUri: generateTestUri("delete-relation"),
+		})
+
+		// Proposal 9: UpdateRelation
+		// This tests that updateRelation ops correctly look up the from_entity_id
+		// and that the position change is reflected in the diff
+		await createProposalWithEdit(client, {
+			proposalId: uuid.proposalUpdateRelation,
+			actionId: uuid.actionUpdateRelation,
+			spaceId: uuid.space1,
+			startTime: now - 1000,
+			endTime: now + 86400,
+			editBuilder: (editId) => {
+				const builder = new EditBuilder(editId)
+					.setName("Update Relation")
+					.setCreatedNow()
+					.updateRelation(uuidToId(uuid.relToUpdate), (r) =>
+						r.setPosition("z9"),
+					)
+				return builder.build()
+			},
+			contentUri: generateTestUri("update-relation"),
+		})
+
 		await client.query("COMMIT")
 	} catch (error) {
 		await client.query("ROLLBACK")
@@ -710,7 +849,7 @@ async function cleanupTestData(pool: Pool): Promise<void> {
 		await client.query(`DELETE FROM proposal_actions WHERE proposal_id::text LIKE '20000000-%'`)
 		await client.query(`DELETE FROM proposals WHERE id::text LIKE '20000000-%'`)
 		await client.query(`DELETE FROM relations WHERE from_entity_id::text LIKE '20000000-%'`)
-		await client.query(`DELETE FROM relation_versions WHERE entity_id::text LIKE '20000000-%'`)
+		await client.query(`DELETE FROM relation_versions WHERE from_entity_id::text LIKE '20000000-%'`)
 		await client.query(`DELETE FROM "values" WHERE entity_id::text LIKE '20000000-%'`)
 		await client.query(`DELETE FROM value_versions WHERE entity_id::text LIKE '20000000-%'`)
 		await client.query(`DELETE FROM edit_versions WHERE edit_id::text LIKE '20000000-%'`)
