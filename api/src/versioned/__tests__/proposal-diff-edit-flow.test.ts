@@ -22,7 +22,7 @@
  * - Migrations applied (bun run db:migrate)
  */
 
-import {EditBuilder, encodeEdit, formatId, randomId} from "@geoprotocol/grc-20"
+import {EditBuilder, encodeEdit, type Id, parseId, randomId} from "@geoprotocol/grc-20"
 import {SystemIds} from "@graphprotocol/grc-20"
 import {drizzle} from "drizzle-orm/node-postgres"
 import {Hono} from "hono"
@@ -102,14 +102,13 @@ const uuid = {
 // Version key: (block_number << 32) | sequence
 const versionKey1 = (BigInt(2000) << BigInt(32)).toString()
 
-// Helper to convert UUID string to Id (16-byte Uint8Array)
-function uuidToId(uuidStr: string): Uint8Array {
-	const hex = uuidStr.replace(/-/g, "")
-	const bytes = new Uint8Array(16)
-	for (let i = 0; i < 16; i++) {
-		bytes[i] = parseInt(hex.substring(i * 2, i * 2 + 2), 16)
+// Helper to convert UUID string to Id (branded 16-byte Uint8Array)
+function uuidToId(uuidStr: string): Id {
+	const id = parseId(uuidStr)
+	if (!id) {
+		throw new Error(`Invalid UUID: ${uuidStr}`)
 	}
-	return bytes
+	return id
 }
 
 // Helper to generate IPFS-like URI
@@ -766,7 +765,7 @@ interface CreateProposalOptions {
 	spaceId: string
 	startTime: number
 	endTime: number
-	editBuilder: (editId: Uint8Array) => ReturnType<EditBuilder["build"]>
+	editBuilder: (editId: Id) => ReturnType<EditBuilder["build"]>
 	contentUri: string
 	executedAt?: number
 }
