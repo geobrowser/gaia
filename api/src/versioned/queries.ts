@@ -55,6 +55,7 @@ function mapValueRow(row: Record<string, unknown>): VersionedValue {
 		datetime: row.datetime as string | null,
 		schedule: row.schedule as unknown | null,
 		point: row.point as string | null,
+		rect: row.rect as string | null,
 		embedding: row.embedding as unknown | null,
 		language: row.language as string | null,
 		unit: row.unit as string | null,
