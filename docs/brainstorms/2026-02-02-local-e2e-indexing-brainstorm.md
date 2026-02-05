@@ -75,6 +75,45 @@ A fully local end-to-end development environment for the indexing stack, allowin
 
 9. **Keep Privy external**: Users authenticate via production Privy. The EOA from Privy is used to derive/own Safe accounts on local Anvil. This avoids mocking auth complexity.
 
+10. **Start block 0 for local indexers**: Local Anvil chain starts at block 0, so all indexing services must be configured to start from block 0 rather than production start blocks. This requires environment-aware configuration for:
+    - `hermes-substream` module parameters
+    - `hermes-pipeline` start block config
+    - Any other indexers (kg-indexer, search, vote-indexer, scoring) when added
+
+## Local Start Block Configuration
+
+When running against the local Anvil chain, all indexers must start from block 0 since that's where the chain begins. Production indexers typically start from a specific block where contracts were deployed (e.g., block 1234567 on Base).
+
+### Services Requiring Start Block Configuration
+
+| Service | Config Location | Production Value | Local Value |
+|---------|----------------|------------------|-------------|
+| hermes-substream | Module params / manifest | Chain-specific deploy block | `0` |
+| hermes-pipeline | Environment variable or config | Chain-specific deploy block | `0` |
+| fireeth | Start block flag | N/A (uses firehose) | `0` |
+
+### Implementation Approach
+
+1. **Environment variable**: Use `START_BLOCK` env var that defaults to production value but can be overridden to `0` for local development.
+
+2. **Docker Compose override**: Local `docker-compose.override.yaml` sets `START_BLOCK=0` for all indexing services.
+
+3. **Substreams module params**: Pass start block as a module parameter when running `substreams run` or via the sink configuration.
+
+### Example Configuration
+
+```yaml
+# docker-compose.override.yaml (local dev)
+services:
+  hermes-pipeline:
+    environment:
+      - START_BLOCK=0
+  
+  fireeth:
+    command: >
+      start ... --start-block=0
+```
+
 ## Open Questions
 
 1. **fireeth RPC Poller configuration**: Need to research exact flags/config for running fireeth in RPC Poller mode against Anvil.
