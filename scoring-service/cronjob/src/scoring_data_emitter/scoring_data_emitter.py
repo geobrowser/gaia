@@ -18,7 +18,7 @@ class ScoringDataEmitter:
     def __init__(
         self,
         broker: str,
-        topic: str = "staging.curation.scores",
+        topic: str = "curation.scores",
         batch_size: int = 1000,
         username: str | None = None,
         password: str | None = None,
