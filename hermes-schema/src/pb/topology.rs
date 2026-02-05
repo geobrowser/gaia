@@ -28,11 +28,11 @@ pub struct CanonicalTreeNode {
     #[prost(bytes = "vec", tag = "1")]
     pub space_id: ::prost::alloc::vec::Vec<u8>,
     /// Children of this node in the traversal
-    #[prost(message, repeated, tag = "6")]
+    #[prost(message, repeated, tag = "8")]
     pub children: ::prost::alloc::vec::Vec<CanonicalTreeNode>,
     /// How this node was reached from its parent.
     /// Uses oneof to enforce that topic_id is only present for topic edges.
-    #[prost(oneof = "canonical_tree_node::Edge", tags = "2, 3, 4, 5, 7, 8")]
+    #[prost(oneof = "canonical_tree_node::Edge", tags = "2, 3, 4, 5, 6, 7")]
     pub edge: ::core::option::Option<canonical_tree_node::Edge>,
 }
 /// Nested message and enum types in `CanonicalTreeNode`.
@@ -54,10 +54,10 @@ pub mod canonical_tree_node {
         #[prost(message, tag = "5")]
         Topic(super::TopicEdge),
         /// Editor membership in a DAO (canonical-granting)
-        #[prost(message, tag = "7")]
+        #[prost(message, tag = "6")]
         Editor(super::EditorEdge),
         /// Member membership in a DAO (canonical-granting)
-        #[prost(message, tag = "8")]
+        #[prost(message, tag = "7")]
         Member(super::MemberEdge),
     }
 }

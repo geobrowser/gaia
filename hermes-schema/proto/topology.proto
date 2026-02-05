@@ -46,14 +46,14 @@ message CanonicalTreeNode {
     TopicEdge topic = 5;
 
     // Editor membership in a DAO (canonical-granting)
-    EditorEdge editor = 7;
+    EditorEdge editor = 6;
 
     // Member membership in a DAO (canonical-granting)
-    MemberEdge member = 8;
+    MemberEdge member = 7;
   }
 
   // Children of this node in the traversal
-  repeated CanonicalTreeNode children = 6;
+  repeated CanonicalTreeNode children = 8;
 }
 
 // Root node edge - no additional data needed
