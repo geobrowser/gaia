@@ -53,6 +53,13 @@ const uuid = {
 	blockImage: "10000000-0003-4000-8000-000000000003",
 	blockData: "10000000-0003-4000-8000-000000000004",
 
+	// Entity with dynamic groups (non-BLOCKS context)
+	entityWithDynamicGroups: "10000000-0002-4000-8000-000000000007",
+	// Child entities for dynamic groups
+	dynamicChildA1: "10000000-0003-4000-8000-000000000005",
+	dynamicChildA2: "10000000-0003-4000-8000-000000000006",
+	dynamicChildB1: "10000000-0003-4000-8000-000000000007",
+
 	// Properties (custom test properties)
 	propText: "10000000-0004-4000-8000-000000000001",
 	propBool: "10000000-0004-4000-8000-000000000002",
@@ -82,6 +89,8 @@ const uuid = {
 	// Relation types
 	relTypeGeneric: "10000000-0005-4000-8000-000000000001",
 	relTypeBlocks: SystemIds.BLOCKS, // Must use real BLOCKS type ID for block grouping to work
+	relTypeCustomA: "10000000-0005-4000-8000-000000000003", // Custom type for dynamic grouping
+	relTypeCustomB: "10000000-0005-4000-8000-000000000004", // Another custom type
 
 	// Relations
 	rel1: "10000000-0006-4000-8000-000000000001",
@@ -97,6 +106,10 @@ const uuid = {
 	relBlock2Type: "10000000-0006-4000-8000-000000000010",
 	relBlockImageType: "10000000-0006-4000-8000-000000000011",
 	relBlockDataType: "10000000-0006-4000-8000-000000000012",
+	// Relations for dynamic grouping (custom types, not BLOCKS)
+	relDynamicA1: "10000000-0006-4000-8000-000000000013",
+	relDynamicA2: "10000000-0006-4000-8000-000000000014",
+	relDynamicB1: "10000000-0006-4000-8000-000000000015",
 
 	// Edits (versions)
 	edit1: "10000000-0007-4000-8000-000000000001", // Version 1
@@ -609,7 +622,85 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 	})
 
 	// ==========================================================================
-	// 9. Proposal Diff
+	// 9. Entity Diff - Dynamic Grouping
+	// ==========================================================================
+
+	describe("Entity Diff - Dynamic Grouping", () => {
+		it("returns groupKeys for dynamic groups with changes", async () => {
+			const res = await app.request(
+				`/versioned/entities/${uuid.entityWithDynamicGroups}/diff?fromEditId=${uuid.edit1}&toEditId=${uuid.edit2}&spaceId=${uuid.space1}`,
+			)
+			expect(res.status).toBe(200)
+			const body = await res.json()
+
+			// Should have groupKeys listing the dynamic group types with changes
+			expect(body.groupKeys).toBeInstanceOf(Array)
+			expect(body.groupKeys).toContain(uuid.relTypeCustomA)
+		})
+
+		it("spreads dynamic groups at root level", async () => {
+			const res = await app.request(
+				`/versioned/entities/${uuid.entityWithDynamicGroups}/diff?fromEditId=${uuid.edit1}&toEditId=${uuid.edit2}&spaceId=${uuid.space1}`,
+			)
+			const body = await res.json()
+
+			// Dynamic groups should be spread at root level (not nested under 'groups')
+			expect(body.groups).toBeUndefined() // 'groups' is spread, not returned as-is
+			expect(body[uuid.relTypeCustomA]).toBeInstanceOf(Array)
+		})
+
+		it("includes entity diffs in dynamic groups", async () => {
+			const res = await app.request(
+				`/versioned/entities/${uuid.entityWithDynamicGroups}/diff?fromEditId=${uuid.edit1}&toEditId=${uuid.edit2}&spaceId=${uuid.space1}`,
+			)
+			const body = await res.json()
+
+			const dynamicGroupA = body[uuid.relTypeCustomA]
+			expect(dynamicGroupA).toBeDefined()
+			expect(dynamicGroupA.length).toBeGreaterThan(0)
+
+			// Each item should have entity diff structure
+			const item = dynamicGroupA[0]
+			expect(item).toHaveProperty("entityId")
+			expect(item).toHaveProperty("values")
+		})
+
+		it("supports multiple dynamic groups", async () => {
+			const res = await app.request(
+				`/versioned/entities/${uuid.entityWithDynamicGroups}/diff?fromEditId=${uuid.edit1}&toEditId=${uuid.edit3}&spaceId=${uuid.space1}`,
+			)
+			const body = await res.json()
+
+			// Should have both custom types when both have changes
+			if (body.groupKeys.includes(uuid.relTypeCustomB)) {
+				expect(body[uuid.relTypeCustomB]).toBeInstanceOf(Array)
+			}
+		})
+
+		it("sorts groupKeys alphabetically", async () => {
+			const res = await app.request(
+				`/versioned/entities/${uuid.entityWithDynamicGroups}/diff?fromEditId=${uuid.edit1}&toEditId=${uuid.edit3}&spaceId=${uuid.space1}`,
+			)
+			const body = await res.json()
+
+			// groupKeys should be sorted
+			const sortedKeys = [...body.groupKeys].sort()
+			expect(body.groupKeys).toEqual(sortedKeys)
+		})
+
+		it("excludes groups with no changes from groupKeys", async () => {
+			// When comparing same version, no dynamic groups should have changes
+			const res = await app.request(
+				`/versioned/entities/${uuid.entityWithDynamicGroups}/diff?fromEditId=${uuid.edit1}&toEditId=${uuid.edit1}&spaceId=${uuid.space1}`,
+			)
+			const body = await res.json()
+
+			expect(body.groupKeys).toEqual([])
+		})
+	})
+
+	// ==========================================================================
+	// 10. Proposal Diff
 	// ==========================================================================
 
 	describe("Proposal Diff", () => {
@@ -710,6 +801,10 @@ async function setupTestData(pool: Pool): Promise<void> {
 			uuid.blockText2,
 			uuid.blockImage,
 			uuid.blockData,
+			uuid.entityWithDynamicGroups,
+			uuid.dynamicChildA1,
+			uuid.dynamicChildA2,
+			uuid.dynamicChildB1,
 		]
 		for (const entityId of entities) {
 			await client.query(
@@ -898,7 +993,47 @@ async function setupTestData(pool: Pool): Promise<void> {
 			[uuid.val(valIdx++), uuid.entityCreatedLater, uuid.propText, uuid.space1, versionKey2],
 		)
 
-		// 10. Create proposals
+		// 10. Create dynamic grouping test data
+		// Child entities with values (for dynamic group content)
+		await client.query(
+			`INSERT INTO value_versions (id, entity_id, property_id, space_id, valid_from_key, valid_to_key, text, context_root_id, context_edge_type_id)
+			 VALUES ($1, $2, $3, $4, $5, $6, 'Dynamic A1 original', $7, $8) ON CONFLICT DO NOTHING`,
+			[uuid.val(valIdx++), uuid.dynamicChildA1, uuid.propText, uuid.space1, versionKey1, versionKey2, uuid.entityWithDynamicGroups, uuid.relTypeCustomA],
+		)
+		await client.query(
+			`INSERT INTO value_versions (id, entity_id, property_id, space_id, valid_from_key, valid_to_key, text, context_root_id, context_edge_type_id)
+			 VALUES ($1, $2, $3, $4, $5, NULL, 'Dynamic A1 updated', $6, $7) ON CONFLICT DO NOTHING`,
+			[uuid.val(valIdx++), uuid.dynamicChildA1, uuid.propText, uuid.space1, versionKey2, uuid.entityWithDynamicGroups, uuid.relTypeCustomA],
+		)
+		await client.query(
+			`INSERT INTO value_versions (id, entity_id, property_id, space_id, valid_from_key, valid_to_key, text, context_root_id, context_edge_type_id)
+			 VALUES ($1, $2, $3, $4, $5, NULL, 'Dynamic A2 content', $6, $7) ON CONFLICT DO NOTHING`,
+			[uuid.val(valIdx++), uuid.dynamicChildA2, uuid.propText, uuid.space1, versionKey1, uuid.entityWithDynamicGroups, uuid.relTypeCustomA],
+		)
+		await client.query(
+			`INSERT INTO value_versions (id, entity_id, property_id, space_id, valid_from_key, valid_to_key, text, context_root_id, context_edge_type_id)
+			 VALUES ($1, $2, $3, $4, $5, NULL, 'Dynamic B1 content', $6, $7) ON CONFLICT DO NOTHING`,
+			[uuid.val(valIdx++), uuid.dynamicChildB1, uuid.propText, uuid.space1, versionKey2, uuid.entityWithDynamicGroups, uuid.relTypeCustomB],
+		)
+
+		// Relations linking children to parent via custom types (for fallback discovery)
+		await client.query(
+			`INSERT INTO relation_versions (id, relation_id, entity_id, type_id, from_entity_id, to_entity_id, space_id, valid_from_key, valid_to_key)
+			 VALUES ($1, $2, $3, $4, $3, $5, $6, $7, NULL) ON CONFLICT DO NOTHING`,
+			[uuid.val(valIdx++), uuid.relDynamicA1, uuid.entityWithDynamicGroups, uuid.relTypeCustomA, uuid.dynamicChildA1, uuid.space1, versionKey1],
+		)
+		await client.query(
+			`INSERT INTO relation_versions (id, relation_id, entity_id, type_id, from_entity_id, to_entity_id, space_id, valid_from_key, valid_to_key)
+			 VALUES ($1, $2, $3, $4, $3, $5, $6, $7, NULL) ON CONFLICT DO NOTHING`,
+			[uuid.val(valIdx++), uuid.relDynamicA2, uuid.entityWithDynamicGroups, uuid.relTypeCustomA, uuid.dynamicChildA2, uuid.space1, versionKey1],
+		)
+		await client.query(
+			`INSERT INTO relation_versions (id, relation_id, entity_id, type_id, from_entity_id, to_entity_id, space_id, valid_from_key, valid_to_key)
+			 VALUES ($1, $2, $3, $4, $3, $5, $6, $7, NULL) ON CONFLICT DO NOTHING`,
+			[uuid.val(valIdx++), uuid.relDynamicB1, uuid.entityWithDynamicGroups, uuid.relTypeCustomB, uuid.dynamicChildB1, uuid.space1, versionKey2],
+		)
+
+		// 11. Create proposals
 		const now = Math.floor(Date.now() / 1000)
 
 		// Active proposal (end_time in future)

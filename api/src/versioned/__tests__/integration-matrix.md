@@ -126,6 +126,21 @@ This document defines the comprehensive test matrix for versioned entity and pro
 | Entity created between versions | All values as ADDs |
 | Entity deleted between versions | All values as REMOVEs |
 
+### Dynamic Grouping
+
+The entity diff endpoint supports dynamic grouping where child entities are grouped by their `contextEdgeTypeId`:
+
+| Scenario | Expected |
+|----------|----------|
+| No dynamic groups | `groupKeys: []` |
+| Single custom type | `groupKeys: ["type-id"]`, type-id array at root |
+| Multiple custom types | `groupKeys: ["type-a", "type-b"]` sorted alphabetically |
+| Groups spread at root | Dynamic groups appear as `body[typeId]` not `body.groups[typeId]` |
+| No changes in group | Group excluded from `groupKeys` |
+| Child entity changes | EntityDiff in corresponding group array |
+
+**Note:** BLOCKS type uses static `blocks` key, custom types use dynamic keys.
+
 ---
 
 ## 4. Proposal Diff (`GET /versioned/proposals/:id/diff`)
