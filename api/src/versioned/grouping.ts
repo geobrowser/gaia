@@ -9,13 +9,14 @@
 
 import {SystemIds} from "@graphprotocol/grc-20"
 import {Effect} from "effect"
+import {type NormalizedUuid, normalizeUuid} from "../utils/uuid"
 
 /**
  * Entity discovered via context metadata or relation lookup.
  */
 export interface DiscoveredEntity {
-	entityId: string
-	contextEdgeTypeId: string | null
+	entityId: NormalizedUuid
+	contextEdgeTypeId: NormalizedUuid | null
 	position: string | null
 }
 
@@ -24,11 +25,11 @@ export interface DiscoveredEntity {
  */
 export interface GroupedEntities {
 	/** Entities grouped under the static BLOCKS key */
-	blocks: string[]
+	blocks: NormalizedUuid[]
 	/** Entities grouped under dynamic keys (key = relation type ID) */
-	dynamicGroups: Map<string, string[]>
+	dynamicGroups: Map<NormalizedUuid, NormalizedUuid[]>
 	/** List of dynamic group keys present (for discoverability) */
-	groupKeys: string[]
+	groupKeys: NormalizedUuid[]
 }
 
 /**
@@ -46,12 +47,12 @@ export interface GroupedEntities {
  */
 export function groupEntitiesByContext(
 	entities: DiscoveredEntity[],
-	fallbackTypeId: string = SystemIds.BLOCKS,
+	blocksTypeId: NormalizedUuid = normalizeUuid(SystemIds.BLOCKS),
 ): Effect.Effect<GroupedEntities, never, never> {
 	return Effect.sync(() => {
-		const blocks: string[] = []
-		const dynamicGroups = new Map<string, string[]>()
-		const seen = new Set<string>()
+		const blocks: NormalizedUuid[] = []
+		const dynamicGroups = new Map<NormalizedUuid, NormalizedUuid[]>()
+		const seen = new Set<NormalizedUuid>()
 
 		// Sort by position (nulls last) to maintain ordering
 		const sorted = [...entities].sort((a, b) => {
@@ -68,9 +69,9 @@ export function groupEntitiesByContext(
 
 			// Determine the effective type ID
 			// null contextEdgeTypeId means it came from relation fallback
-			const typeId = entity.contextEdgeTypeId ?? fallbackTypeId
+			const typeId = entity.contextEdgeTypeId ?? blocksTypeId
 
-			if (typeId === SystemIds.BLOCKS) {
+			if (typeId === blocksTypeId) {
 				blocks.push(entity.entityId)
 			} else {
 				const group = dynamicGroups.get(typeId) ?? []
@@ -103,8 +104,8 @@ export function groupEntitiesByContext(
  */
 export function mergeDiscoveryResults(
 	contextEntities: DiscoveredEntity[],
-	relationEntities: Array<{entityId: string; position: string | null}>,
-	_relationTypeId: string,
+	relationEntities: Array<{entityId: NormalizedUuid; position: string | null}>,
+	_relationTypeId: NormalizedUuid,
 ): Effect.Effect<DiscoveredEntity[], never, never> {
 	return Effect.sync(() => {
 		// Context entities already have contextEdgeTypeId

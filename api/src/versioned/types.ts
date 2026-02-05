@@ -3,7 +3,12 @@
  *
  * Entities are returned with their values, relations (excluding block relations),
  * and blocks (entities linked via BLOCKS relation type) grouped together.
+ *
+ * All UUID fields use the `NormalizedUuid` branded type to guarantee dashless
+ * lowercase hex format at compile time. See `utils/uuid.ts` for details.
  */
+
+import type {NormalizedUuid} from "../utils/uuid"
 
 // ============================================================================
 // Diff Chunks
@@ -28,8 +33,8 @@ export interface DiffChunk {
  * Field names match GRC-20 v2 data types.
  */
 export interface VersionedValue {
-	propertyId: string
-	spaceId: string
+	propertyId: NormalizedUuid
+	spaceId: NormalizedUuid
 	// Value columns (GRC-20 v2 data types) - only one will be set
 	boolean?: boolean | null // BOOL
 	integer?: number | null // INT64
@@ -48,8 +53,8 @@ export interface VersionedValue {
 	language?: string | null // For TEXT values only
 	unit?: string | null // For numerical values (INT64, FLOAT64, DECIMAL)
 	// Context metadata (for block grouping)
-	contextRootId?: string | null // Parent entity in edit context
-	contextEdgeTypeId?: string | null // Relation type from context edge
+	contextRootId?: NormalizedUuid | null // Parent entity in edit context
+	contextEdgeTypeId?: NormalizedUuid | null // Relation type from context edge
 }
 
 /**
@@ -80,8 +85,8 @@ export type ValueType = TextValueType | SimpleValueType
  * A text value change with pre-computed word diff.
  */
 export interface TextValueChange {
-	propertyId: string
-	spaceId: string
+	propertyId: NormalizedUuid
+	spaceId: NormalizedUuid
 	type: TextValueType
 	before: string | null
 	after: string | null
@@ -92,8 +97,8 @@ export interface TextValueChange {
  * A simple value change with before/after values.
  */
 export interface SimpleValueChange {
-	propertyId: string
-	spaceId: string
+	propertyId: NormalizedUuid
+	spaceId: NormalizedUuid
 	type: SimpleValueType
 	before: string | null
 	after: string | null
@@ -109,36 +114,36 @@ export type ValueChange = TextValueChange | SimpleValueChange
  * A relation at a specific version (excluding block relations).
  */
 export interface VersionedRelation {
-	relationId: string
-	typeId: string
-	fromEntityId: string
-	fromSpaceId?: string | null
-	toEntityId: string
-	toSpaceId?: string | null
+	relationId: NormalizedUuid
+	typeId: NormalizedUuid
+	fromEntityId: NormalizedUuid
+	fromSpaceId?: NormalizedUuid | null
+	toEntityId: NormalizedUuid
+	toSpaceId?: NormalizedUuid | null
 	position?: string | null
-	spaceId: string
+	spaceId: NormalizedUuid
 	verified?: boolean | null
 	// Context metadata (for block grouping)
-	contextRootId?: string | null // Parent entity in edit context
-	contextEdgeTypeId?: string | null // Relation type from context edge
+	contextRootId?: NormalizedUuid | null // Parent entity in edit context
+	contextEdgeTypeId?: NormalizedUuid | null // Relation type from context edge
 }
 
 /**
  * A relation change.
  */
 export interface RelationChange {
-	relationId: string
-	typeId: string
-	spaceId: string
+	relationId: NormalizedUuid
+	typeId: NormalizedUuid
+	spaceId: NormalizedUuid
 	changeType: "ADD" | "REMOVE" | "UPDATE"
 	before?: {
-		toEntityId: string
-		toSpaceId?: string | null
+		toEntityId: NormalizedUuid
+		toSpaceId?: NormalizedUuid | null
 		position?: string | null
 	} | null
 	after?: {
-		toEntityId: string
-		toSpaceId?: string | null
+		toEntityId: NormalizedUuid
+		toSpaceId?: NormalizedUuid | null
 		position?: string | null
 	} | null
 }
@@ -151,7 +156,7 @@ export interface RelationChange {
  * A block snapshot - an entity linked via BLOCKS relation.
  */
 export interface BlockSnapshot {
-	id: string
+	id: NormalizedUuid
 	values: VersionedValue[]
 	relations: VersionedRelation[]
 }
@@ -160,7 +165,7 @@ export interface BlockSnapshot {
  * A text block change with pre-computed diff.
  */
 export interface TextBlockChange {
-	id: string
+	id: NormalizedUuid
 	type: "textBlock"
 	before: string | null
 	after: string | null
@@ -171,7 +176,7 @@ export interface TextBlockChange {
  * An image block change with before/after URLs.
  */
 export interface ImageBlockChange {
-	id: string
+	id: NormalizedUuid
 	type: "imageBlock"
 	before: string | null
 	after: string | null
@@ -181,7 +186,7 @@ export interface ImageBlockChange {
  * A data block change with before/after names.
  */
 export interface DataBlockChange {
-	id: string
+	id: NormalizedUuid
 	type: "dataBlock"
 	before: string | null
 	after: string | null
@@ -197,7 +202,7 @@ export type BlockChange = TextBlockChange | ImageBlockChange | DataBlockChange
  * An entity snapshot at a specific version.
  */
 export interface EntitySnapshot {
-	id: string
+	id: NormalizedUuid
 	values: VersionedValue[]
 	relations: VersionedRelation[] // Excludes block relations
 	blocks: BlockSnapshot[]
@@ -207,7 +212,7 @@ export interface EntitySnapshot {
  * A diff between two versions of an entity.
  */
 export interface EntityDiff {
-	entityId: string
+	entityId: NormalizedUuid
 	name: string | null
 	values: ValueChange[]
 	relations: RelationChange[]
@@ -227,12 +232,12 @@ export type DynamicGroupItem = BlockChange | EntityDiff
  * - Dynamic keys (e.g., relation type IDs) map to arrays of child snapshots
  */
 export interface GroupedEntitySnapshot {
-	id: string
+	id: NormalizedUuid
 	values: VersionedValue[]
 	relations: VersionedRelation[] // Excludes grouped relations
 	blocks: BlockSnapshot[] // Static key for BLOCKS
-	groupKeys: string[] // Dynamic keys present (excluding "blocks")
-	groups: Record<string, BlockSnapshot[]> // Dynamic groups by relation type ID
+	groupKeys: NormalizedUuid[] // Dynamic keys present (excluding "blocks")
+	groups: Record<NormalizedUuid, BlockSnapshot[]> // Dynamic groups by relation type ID
 }
 
 /**
@@ -243,13 +248,13 @@ export interface GroupedEntitySnapshot {
  * - Dynamic keys map to arrays of child changes
  */
 export interface GroupedEntityDiff {
-	entityId: string
+	entityId: NormalizedUuid
 	name: string | null
 	values: ValueChange[]
 	relations: RelationChange[]
 	blocks: BlockChange[] // Static key for BLOCKS
-	groupKeys: string[] // Dynamic keys present (excluding "blocks")
-	groups: Record<string, DynamicGroupItem[]> // Dynamic groups by relation type ID
+	groupKeys: NormalizedUuid[] // Dynamic keys present (excluding "blocks")
+	groups: Record<NormalizedUuid, DynamicGroupItem[]> // Dynamic groups by relation type ID
 }
 
 // ============================================================================
@@ -260,7 +265,7 @@ export interface GroupedEntityDiff {
  * A version entry for listing versions.
  */
 export interface VersionEntry {
-	editId: string
+	editId: NormalizedUuid
 	blockNumber: string
 	createdAt: string
 }
@@ -286,8 +291,8 @@ export type ProposalStatus = "active" | "closed" | "executed"
  * Paginated response for proposal diffs.
  */
 export interface PaginatedProposalDiff {
-	proposalId: string
-	spaceId: string
+	proposalId: NormalizedUuid
+	spaceId: NormalizedUuid
 	proposalStatus: ProposalStatus
 	entities: EntityDiff[]
 	pagination: {

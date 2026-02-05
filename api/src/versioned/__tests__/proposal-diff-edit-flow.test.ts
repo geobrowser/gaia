@@ -29,7 +29,11 @@ import {Hono} from "hono"
 import {Pool} from "pg"
 import {afterAll, beforeAll, describe, expect, it} from "vitest"
 import {runtime} from "../../services/runtime"
+import {normalizeUuid} from "../../utils/uuid"
 import {createVersionedRouter} from "../router"
+
+/** Shorthand to normalize a UUID for response-body assertions. */
+const n = normalizeUuid
 
 // Skip integration tests if DATABASE_URL is not set
 const DATABASE_URL = process.env.DATABASE_URL
@@ -159,11 +163,11 @@ describe.skipIf(SKIP_INTEGRATION)("Proposal Diff - Full GRC-20 Edit Flow", () =>
 			expect(body.entities.length).toBeGreaterThan(0)
 
 			// Find the diff for our new entity
-			const entityDiff = body.entities.find((d: any) => d.entityId === uuid.entityNew1)
+			const entityDiff = body.entities.find((d: any) => d.entityId === n(uuid.entityNew1))
 			expect(entityDiff).toBeDefined()
 
 			// Should have ADD for the text value (before=null, after has value)
-			const textValueDiff = entityDiff.values.find((v: any) => v.propertyId === uuid.propText)
+			const textValueDiff = entityDiff.values.find((v: any) => v.propertyId === n(uuid.propText))
 			expect(textValueDiff).toBeDefined()
 			expect(textValueDiff.type).toBe("TEXT")
 			expect(textValueDiff.before).toBeNull()
@@ -177,32 +181,32 @@ describe.skipIf(SKIP_INTEGRATION)("Proposal Diff - Full GRC-20 Edit Flow", () =>
 			expect(res.status).toBe(200)
 
 			const body = await res.json()
-			const entityDiff = body.entities.find((d: any) => d.entityId === uuid.entityNew2)
+			const entityDiff = body.entities.find((d: any) => d.entityId === n(uuid.entityNew2))
 			expect(entityDiff).toBeDefined()
 
 			// Should have multiple value diffs
 			expect(entityDiff.values.length).toBeGreaterThanOrEqual(4)
 
 			// Check text value (ADD: before=null, after has value)
-			const textDiff = entityDiff.values.find((v: any) => v.propertyId === uuid.propText)
+			const textDiff = entityDiff.values.find((v: any) => v.propertyId === n(uuid.propText))
 			expect(textDiff?.type).toBe("TEXT")
 			expect(textDiff?.before).toBeNull()
 			expect(textDiff?.after).toBe("Entity with all types")
 
 			// Check bool value
-			const boolDiff = entityDiff.values.find((v: any) => v.propertyId === uuid.propBool)
+			const boolDiff = entityDiff.values.find((v: any) => v.propertyId === n(uuid.propBool))
 			expect(boolDiff?.type).toBe("BOOL")
 			expect(boolDiff?.before).toBeNull()
 			expect(boolDiff?.after).toBe("true")
 
 			// Check int value
-			const intDiff = entityDiff.values.find((v: any) => v.propertyId === uuid.propInt)
+			const intDiff = entityDiff.values.find((v: any) => v.propertyId === n(uuid.propInt))
 			expect(intDiff?.type).toBe("INT64")
 			expect(intDiff?.before).toBeNull()
 			expect(intDiff?.after).toBe("42")
 
 			// Check float value
-			const floatDiff = entityDiff.values.find((v: any) => v.propertyId === uuid.propFloat)
+			const floatDiff = entityDiff.values.find((v: any) => v.propertyId === n(uuid.propFloat))
 			expect(floatDiff?.type).toBe("FLOAT64")
 			expect(floatDiff?.before).toBeNull()
 			expect(Number(floatDiff?.after)).toBeCloseTo(3.14159, 4)
@@ -221,11 +225,11 @@ describe.skipIf(SKIP_INTEGRATION)("Proposal Diff - Full GRC-20 Edit Flow", () =>
 			expect(res.status).toBe(200)
 
 			const body = await res.json()
-			const entityDiff = body.entities.find((d: any) => d.entityId === uuid.entityExisting1)
+			const entityDiff = body.entities.find((d: any) => d.entityId === n(uuid.entityExisting1))
 			expect(entityDiff).toBeDefined()
 
 			// Should have UPDATE for the text value (both before and after have values)
-			const textValueDiff = entityDiff.values.find((v: any) => v.propertyId === uuid.propText)
+			const textValueDiff = entityDiff.values.find((v: any) => v.propertyId === n(uuid.propText))
 			expect(textValueDiff).toBeDefined()
 			expect(textValueDiff.type).toBe("TEXT")
 			expect(textValueDiff.before).toBe("Original Text")
@@ -239,10 +243,10 @@ describe.skipIf(SKIP_INTEGRATION)("Proposal Diff - Full GRC-20 Edit Flow", () =>
 			expect(res.status).toBe(200)
 
 			const body = await res.json()
-			const entityDiff = body.entities.find((d: any) => d.entityId === uuid.entityExisting1)
+			const entityDiff = body.entities.find((d: any) => d.entityId === n(uuid.entityExisting1))
 
 			// Should have ADD for the new bool value (entity didn't have it before)
-			const boolValueDiff = entityDiff.values.find((v: any) => v.propertyId === uuid.propBool)
+			const boolValueDiff = entityDiff.values.find((v: any) => v.propertyId === n(uuid.propBool))
 			expect(boolValueDiff).toBeDefined()
 			expect(boolValueDiff.type).toBe("BOOL")
 			expect(boolValueDiff.before).toBeNull()
@@ -262,11 +266,11 @@ describe.skipIf(SKIP_INTEGRATION)("Proposal Diff - Full GRC-20 Edit Flow", () =>
 			expect(res.status).toBe(200)
 
 			const body = await res.json()
-			const entityDiff = body.entities.find((d: any) => d.entityId === uuid.entityToDelete)
+			const entityDiff = body.entities.find((d: any) => d.entityId === n(uuid.entityToDelete))
 			expect(entityDiff).toBeDefined()
 
 			// Should have REMOVE for all existing values (before has value, after=null)
-			const textValueDiff = entityDiff.values.find((v: any) => v.propertyId === uuid.propText)
+			const textValueDiff = entityDiff.values.find((v: any) => v.propertyId === n(uuid.propText))
 			expect(textValueDiff).toBeDefined()
 			expect(textValueDiff.type).toBe("TEXT")
 			expect(textValueDiff.before).toBe("Entity to be deleted")
@@ -287,17 +291,17 @@ describe.skipIf(SKIP_INTEGRATION)("Proposal Diff - Full GRC-20 Edit Flow", () =>
 
 			const body = await res.json()
 			// Find the entity that has the relation
-			const entityDiff = body.entities.find((d: any) => d.entityId === uuid.entityExisting1)
+			const entityDiff = body.entities.find((d: any) => d.entityId === n(uuid.entityExisting1))
 			expect(entityDiff).toBeDefined()
 
 			// Should have ADD for the new relation
 			// Structure: { relationId, typeId, spaceId, changeType, before, after: {toEntityId, toSpaceId, position} }
-			const relationDiff = entityDiff.relations.find((r: any) => r.after?.toEntityId === uuid.entityExisting2)
+			const relationDiff = entityDiff.relations.find((r: any) => r.after?.toEntityId === n(uuid.entityExisting2))
 			expect(relationDiff).toBeDefined()
 			expect(relationDiff.changeType).toBe("ADD")
 			expect(relationDiff.before).toBeNull()
-			expect(relationDiff.typeId).toBe(uuid.relTypeGeneric)
-			expect(relationDiff.after?.toEntityId).toBe(uuid.entityExisting2)
+			expect(relationDiff.typeId).toBe(n(uuid.relTypeGeneric))
+			expect(relationDiff.after?.toEntityId).toBe(n(uuid.entityExisting2))
 		})
 	})
 
@@ -319,15 +323,15 @@ describe.skipIf(SKIP_INTEGRATION)("Proposal Diff - Full GRC-20 Edit Flow", () =>
 			const body = await res.json()
 
 			// The diff should contain the entity that has the relation being deleted
-			const entityDiff = body.entities.find((d: any) => d.entityId === uuid.entityExistingWithRelations)
+			const entityDiff = body.entities.find((d: any) => d.entityId === n(uuid.entityExistingWithRelations))
 			expect(entityDiff).toBeDefined()
 
 			// Should have REMOVE for the deleted relation
-			const relationDiff = entityDiff.relations.find((r: any) => r.relationId === uuid.relToDelete)
+			const relationDiff = entityDiff.relations.find((r: any) => r.relationId === n(uuid.relToDelete))
 			expect(relationDiff).toBeDefined()
 			expect(relationDiff.changeType).toBe("REMOVE")
 			expect(relationDiff.before).not.toBeNull()
-			expect(relationDiff.before?.toEntityId).toBe(uuid.entityExisting1)
+			expect(relationDiff.before?.toEntityId).toBe(n(uuid.entityExisting1))
 			expect(relationDiff.after).toBeNull()
 		})
 	})
@@ -348,11 +352,11 @@ describe.skipIf(SKIP_INTEGRATION)("Proposal Diff - Full GRC-20 Edit Flow", () =>
 			const body = await res.json()
 
 			// The diff should contain the entity that has the relation being updated
-			const entityDiff = body.entities.find((d: any) => d.entityId === uuid.entityExistingWithRelations)
+			const entityDiff = body.entities.find((d: any) => d.entityId === n(uuid.entityExistingWithRelations))
 			expect(entityDiff).toBeDefined()
 
 			// Should have UPDATE for the modified relation
-			const relationDiff = entityDiff.relations.find((r: any) => r.relationId === uuid.relToUpdate)
+			const relationDiff = entityDiff.relations.find((r: any) => r.relationId === n(uuid.relToUpdate))
 			expect(relationDiff).toBeDefined()
 			expect(relationDiff.changeType).toBe("UPDATE")
 			expect(relationDiff.before?.position).toBe("b0")
@@ -377,11 +381,11 @@ describe.skipIf(SKIP_INTEGRATION)("Proposal Diff - Full GRC-20 Edit Flow", () =>
 			expect(body.entities.length).toBeGreaterThanOrEqual(2)
 
 			// Check first entity (existing1 is updated)
-			const diff1 = body.entities.find((d: any) => d.entityId === uuid.entityExisting1)
+			const diff1 = body.entities.find((d: any) => d.entityId === n(uuid.entityExisting1))
 			expect(diff1).toBeDefined()
 
 			// Check second entity (existing2 is updated)
-			const diff2 = body.entities.find((d: any) => d.entityId === uuid.entityExisting2)
+			const diff2 = body.entities.find((d: any) => d.entityId === n(uuid.entityExisting2))
 			expect(diff2).toBeDefined()
 		})
 	})
