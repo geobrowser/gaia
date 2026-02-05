@@ -39,7 +39,26 @@ export class EditDecodeError {
 	constructor(readonly cause: unknown) {}
 }
 
-export type ProposalDiffError = QueryError | ProposalNotFoundError | EditBlobNotCachedError | EditDecodeError
+export class SpaceMismatchError {
+	readonly _tag = "SpaceMismatchError"
+	constructor(
+		readonly expectedSpaceId: string,
+		readonly actualSpaceId: string,
+	) {}
+}
+
+export class InvalidCursorError {
+	readonly _tag = "InvalidCursorError"
+	constructor(readonly cursor: string) {}
+}
+
+export type ProposalDiffError =
+	| QueryError
+	| ProposalNotFoundError
+	| EditBlobNotCachedError
+	| EditDecodeError
+	| SpaceMismatchError
+	| InvalidCursorError
 
 type Database = NodePgDatabase<Record<string, unknown>>
 
@@ -605,7 +624,12 @@ export function computeProposalDiff(
 		const {proposal, contentUri} = data
 		const status = getProposalStatus(proposal)
 
-		// 2. If no publish action, return empty diff
+		// 2. Validate spaceId matches the proposal's space
+		if (proposal.spaceId !== spaceId) {
+			return yield* Effect.fail(new SpaceMismatchError(proposal.spaceId, spaceId))
+		}
+
+		// 3. If no publish action, return empty diff
 		if (!contentUri) {
 			return {
 				proposalId,
@@ -620,13 +644,23 @@ export function computeProposalDiff(
 			}
 		}
 
-		// 3. Fetch edit blob from IPFS cache
+		// 4. Validate cursor format early (before expensive operations)
+		let startIndex = 0
+		if (cursorStr) {
+			const cursor = decodeCursor(cursorStr)
+			if (cursor === null) {
+				return yield* Effect.fail(new InvalidCursorError(cursorStr))
+			}
+			startIndex = cursor.entityIndex
+		}
+
+		// 5. Fetch edit blob from IPFS cache
 		const blob = yield* getIpfsCacheData(db, contentUri)
 		if (!blob) {
 			return yield* Effect.fail(new EditBlobNotCachedError(contentUri))
 		}
 
-		// 4. Decode using @geoprotocol/grc-20
+		// 5. Decode using @geoprotocol/grc-20
 		const ops = yield* Effect.tryPromise({
 			try: async () => {
 				const edit = await decodeEditAuto(blob)
@@ -635,15 +669,13 @@ export function computeProposalDiff(
 			catch: (error) => new EditDecodeError(error),
 		})
 
-		// 5. Extract affected entity IDs (sorted for stable pagination)
+		// 6. Extract affected entity IDs (sorted for stable pagination)
 		const entityIds = extractAffectedEntities(ops).sort()
 
-		// 6. Parse cursor
-		const cursor = cursorStr ? decodeCursor(cursorStr) : null
-		const startIndex = cursor?.entityIndex ?? 0
+		// 7. Paginate using the already-validated cursor
 		const pageEntityIds = entityIds.slice(startIndex, startIndex + limit)
 
-		// 7. Batch fetch base states
+		// 8. Batch fetch base states (values and relations for affected entities)
 		let baseStates: Map<string, EntitySnapshot>
 		if (status === "active") {
 			baseStates = yield* batchGetLiveSnapshots(db, pageEntityIds, spaceId)
@@ -661,7 +693,7 @@ export function computeProposalDiff(
 			}
 		}
 
-		// 8. Compute diffs (in-memory, no DB calls)
+		// 9. Compute diffs (in-memory, no DB calls)
 		const diffs: EntityDiff[] = []
 		for (const entityId of pageEntityIds) {
 			const baseState = baseStates.get(entityId) ?? emptySnapshot(entityId)
@@ -672,7 +704,7 @@ export function computeProposalDiff(
 			}
 		}
 
-		// 9. Build pagination info
+		// 10. Build pagination info
 		const nextIndex = startIndex + limit
 		const hasMore = nextIndex < entityIds.length
 

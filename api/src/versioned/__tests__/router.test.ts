@@ -485,8 +485,9 @@ describe("GET /versioned/proposals/:id/diff", () => {
 			expect(body.message).toContain("Proposal")
 		})
 
-		it("returns 404 when edit blob is not cached", async () => {
+		it("returns 404 when edit blob is not cached (without leaking URI)", async () => {
 			const proposalId = "00000000-0000-0000-0000-000000000001"
+			const spaceId = "00000000-0000-0000-0000-000000000002"
 			const now = Math.floor(Date.now() / 1000)
 
 			// Mock: getProposalWithPublishAction returns proposal with content_uri
@@ -494,11 +495,11 @@ describe("GET /versioned/proposals/:id/diff", () => {
 				rows: [
 					{
 						proposal_id: proposalId,
-						space_id: "00000000-0000-0000-0000-000000000002",
+						space_id: spaceId,
 						start_time: (now - 1000).toString(),
 						end_time: (now + 1000).toString(), // Active proposal
 						executed_at: null,
-						content_uri: "ipfs://QmTest123",
+						content_uri: "ipfs://QmTest123SensitiveUri",
 					},
 				],
 			})
@@ -506,14 +507,79 @@ describe("GET /versioned/proposals/:id/diff", () => {
 			// Mock: getIpfsCacheData returns no data
 			db.execute.mockResolvedValueOnce({rows: []})
 
-			const res = await app.request(
-				`/versioned/proposals/${proposalId}/diff?spaceId=00000000-0000-0000-0000-000000000002`,
-			)
+			const res = await app.request(`/versioned/proposals/${proposalId}/diff?spaceId=${spaceId}`)
 
 			expect(res.status).toBe(404)
 			const body = await res.json()
 			expect(body.error).toBe("Not found")
 			expect(body.message).toContain("Edit blob not cached")
+			// Verify IPFS URI is NOT leaked in the error message
+			expect(body.message).not.toContain("ipfs://")
+			expect(body.message).not.toContain("QmTest123")
+		})
+
+		it("returns 400 when spaceId does not match proposal's space", async () => {
+			const proposalId = "00000000-0000-0000-0000-000000000001"
+			const proposalSpaceId = "00000000-0000-0000-0000-000000000002"
+			const wrongSpaceId = "00000000-0000-0000-0000-000000000099" // Different from proposal's space
+			const now = Math.floor(Date.now() / 1000)
+
+			// Mock: getProposalWithPublishAction returns proposal with different space_id
+			db.execute.mockResolvedValueOnce({
+				rows: [
+					{
+						proposal_id: proposalId,
+						space_id: proposalSpaceId, // Proposal belongs to this space
+						start_time: (now - 1000).toString(),
+						end_time: (now + 1000).toString(),
+						executed_at: null,
+						content_uri: null,
+					},
+				],
+			})
+
+			// Request with wrong spaceId
+			const res = await app.request(`/versioned/proposals/${proposalId}/diff?spaceId=${wrongSpaceId}`)
+
+			expect(res.status).toBe(400)
+			const body = await res.json()
+			expect(body.error).toBe("Invalid parameter")
+			expect(body.message).toContain("spaceId does not match")
+		})
+
+		it("returns 400 when cursor is malformed", async () => {
+			const proposalId = "00000000-0000-0000-0000-000000000001"
+			const spaceId = "00000000-0000-0000-0000-000000000002"
+			const now = Math.floor(Date.now() / 1000)
+			const invalidCursor = "not-a-valid-base64-cursor!!!"
+
+			// Mock: getProposalWithPublishAction returns proposal with content_uri
+			db.execute.mockResolvedValueOnce({
+				rows: [
+					{
+						proposal_id: proposalId,
+						space_id: spaceId,
+						start_time: (now - 1000).toString(),
+						end_time: (now + 1000).toString(),
+						executed_at: null,
+						content_uri: "ipfs://QmTest123",
+					},
+				],
+			})
+
+			// Mock: getIpfsCacheData returns valid blob
+			// Create a minimal valid edit blob that decodes to empty ops
+			const mockEditBlob = Buffer.from('{"version":1,"ops":[]}')
+			db.execute.mockResolvedValueOnce({rows: [{data: mockEditBlob}]})
+
+			const res = await app.request(
+				`/versioned/proposals/${proposalId}/diff?spaceId=${spaceId}&cursor=${invalidCursor}`,
+			)
+
+			expect(res.status).toBe(400)
+			const body = await res.json()
+			expect(body.error).toBe("Invalid parameter")
+			expect(body.message).toContain("Invalid pagination cursor")
 		})
 	})
 

@@ -24,7 +24,9 @@ import {
 	computeProposalDiff,
 	EditBlobNotCachedError,
 	EditDecodeError,
+	InvalidCursorError,
 	ProposalNotFoundError,
+	SpaceMismatchError,
 } from "./proposal-diff"
 import {
 	getEntitySnapshotAtVersion,
@@ -55,6 +57,8 @@ type ProposalError =
 	| ProposalNotFoundError
 	| EditBlobNotCachedError
 	| EditDecodeError
+	| SpaceMismatchError
+	| InvalidCursorError
 
 /**
  * Create the versioned entities router.
@@ -744,7 +748,7 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 					return Effect.void
 				}),
 				Effect.withSpan("GET /versioned/proposals/:id/diff"),
-				Effect.annotateSpans({requestId, proposalId, spaceId}),
+				Effect.annotateSpans({requestId, proposalId, spaceId, cursor, limit: limitParam}),
 			)
 
 			const result = await runtime.runPromise(Effect.either(program))
@@ -758,21 +762,39 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 							return c.json({error: "Not found", message: error.message}, 404)
 						case "ProposalNotFoundError":
 							return c.json({error: "Not found", message: `Proposal '${error.proposalId}' not found`}, 404)
-						case "EditBlobNotCachedError":
-							return c.json(
-								{error: "Not found", message: `Edit blob not cached for URI: ${error.uri}`},
-								404,
-							)
-						case "EditDecodeError":
-							return c.json(
-								{error: "Internal server error", message: "Failed to decode edit blob"},
-								500,
-							)
-						case "QueryError":
-							return c.json(
-								{error: "Internal server error", message: "An unexpected error occurred"},
-								500,
-							)
+					case "EditBlobNotCachedError":
+						return c.json(
+							{error: "Not found", message: "Edit blob not cached for this proposal"},
+							404,
+						)
+					case "SpaceMismatchError":
+						return c.json(
+							{error: "Invalid parameter", message: "spaceId does not match the proposal's space"},
+							400,
+						)
+					case "InvalidCursorError":
+						return c.json(
+							{error: "Invalid parameter", message: "Invalid pagination cursor"},
+							400,
+						)
+					case "EditDecodeError":
+						return c.json(
+							{error: "Internal server error", message: "Failed to decode edit blob"},
+							500,
+						)
+					case "QueryError":
+						return c.json(
+							{error: "Internal server error", message: "An unexpected error occurred"},
+							500,
+						)
+					default: {
+						// Exhaustive check - TypeScript will error if a case is missing
+						const _exhaustive: never = error
+						return c.json(
+							{error: "Internal server error", message: "An unexpected error occurred"},
+							500,
+						)
+					}
 					}
 				},
 				onRight: (diff: PaginatedProposalDiff) => c.json(diff),
