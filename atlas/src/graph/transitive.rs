@@ -107,16 +107,35 @@ impl TransitiveCache {
 
     /// Invalidate all cached graphs affected by a space change
     pub fn invalidate(&mut self, space: &SpaceId) {
-        // Remove this space's own graphs
-        self.full.remove(space);
-        self.explicit_only.remove(space);
-
-        // Remove all graphs that contained this space
+        // Collect all graph roots to evict: this space's own graphs + dependents
+        let mut to_evict: Vec<SpaceId> = vec![*space];
         if let Some(dependents) = self.reverse_deps.remove(space) {
-            for dep in dependents {
-                self.full.remove(&dep);
-                self.explicit_only.remove(&dep);
+            to_evict.extend(dependents);
+        }
+
+        // For each evicted graph, clean up its reverse_deps entries using
+        // the graph's flat set before removing it from cache
+        for root in &to_evict {
+            // Collect flat sets from both caches before mutating reverse_deps
+            let flat_members: Vec<SpaceId> = self
+                .full
+                .get(root)
+                .into_iter()
+                .chain(self.explicit_only.get(root))
+                .flat_map(|g| g.flat.iter().copied())
+                .collect();
+
+            for member in flat_members {
+                if let Some(deps) = self.reverse_deps.get_mut(&member) {
+                    deps.remove(root);
+                    if deps.is_empty() {
+                        self.reverse_deps.remove(&member);
+                    }
+                }
             }
+
+            self.full.remove(root);
+            self.explicit_only.remove(root);
         }
     }
 
@@ -591,5 +610,38 @@ mod tests {
         // Should handle cycle gracefully - each node appears once
         assert_eq!(graph.len(), 3);
         assert_eq!(graph.tree.node_count(), 3);
+    }
+
+    #[test]
+    fn test_invalidation_cleans_up_stale_reverse_deps() {
+        // Build: A -> B -> C
+        // Cache A's graph (contains A, B, C)
+        // Invalidate B — should remove A's graph AND clean up reverse_deps
+        let mut state = GraphState::new();
+        let a = create_space(&mut state, 1);
+        let b = create_space(&mut state, 2);
+        let c = create_space(&mut state, 3);
+        add_verified_edge(&mut state, a, b);
+        add_verified_edge(&mut state, b, c);
+
+        let mut processor = TransitiveProcessor::new();
+        let _ = processor.get_full(a, &state);
+
+        // reverse_deps should have entries for A, B, C (all pointing back to A)
+        let stats_before = processor.cache_stats();
+        assert_eq!(stats_before.full_count, 1);
+        assert!(stats_before.reverse_deps_count > 0);
+
+        // Invalidate B — should cascade to A's graph and clean stale refs
+        processor.cache.invalidate(&b);
+
+        // After invalidation, reverse_deps should not have stale entries
+        // for spaces whose graphs no longer exist
+        let stats_after = processor.cache_stats();
+        assert_eq!(stats_after.full_count, 0);
+        assert_eq!(
+            stats_after.reverse_deps_count, 0,
+            "stale reverse_deps should be cleaned up"
+        );
     }
 }

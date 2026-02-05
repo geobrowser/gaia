@@ -120,6 +120,9 @@ impl GraphState {
     fn remove_explicit_edge(&mut self, source: SpaceId, target: SpaceId, edge_type: EdgeType) {
         if let Some(edges) = self.explicit_edges.get_mut(&source) {
             edges.retain(|(t, et)| !(*t == target && *et == edge_type));
+            if edges.is_empty() {
+                self.explicit_edges.remove(&source);
+            }
         }
     }
 
@@ -139,10 +142,16 @@ impl GraphState {
         // Remove from forward index
         if let Some(topics) = self.topic_edges.get_mut(&source) {
             topics.remove(&topic_id);
+            if topics.is_empty() {
+                self.topic_edges.remove(&source);
+            }
         }
         // Remove from reverse index
         if let Some(sources) = self.topic_edge_sources.get_mut(&topic_id) {
             sources.remove(&source);
+            if sources.is_empty() {
+                self.topic_edge_sources.remove(&topic_id);
+            }
         }
     }
 
@@ -305,6 +314,63 @@ mod tests {
 
         let topic_edges = state.get_topic_edges(&space1).unwrap();
         assert!(topic_edges.contains(&topic2));
+    }
+
+    #[test]
+    fn test_remove_explicit_edge_cleans_up_empty_vec() {
+        let mut state = GraphState::new();
+        let space1 = make_space_id(1);
+        let space2 = make_space_id(2);
+
+        state.apply_event(&make_space_created_event(space1, make_topic_id(1)));
+        state.apply_event(&make_space_created_event(space2, make_topic_id(2)));
+        state.apply_event(&make_verified_event(space1, space2));
+
+        assert!(state.explicit_edges.contains_key(&space1));
+
+        // Remove the only edge
+        let remove_event = SpaceTopologyEvent {
+            meta: make_block_meta(4),
+            payload: SpaceTopologyPayload::TrustExtended(TrustExtended {
+                source_space_id: space1,
+                extension: TrustExtension::VerifiedRemoved {
+                    target_space_id: space2,
+                },
+            }),
+        };
+        state.apply_event(&remove_event);
+
+        // Empty Vec should be removed from HashMap
+        assert!(!state.explicit_edges.contains_key(&space1));
+    }
+
+    #[test]
+    fn test_remove_topic_edge_cleans_up_empty_sets() {
+        let mut state = GraphState::new();
+        let space1 = make_space_id(1);
+        let topic = make_topic_id(10);
+
+        state.apply_event(&make_space_created_event(space1, make_topic_id(1)));
+        state.apply_event(&make_subtopic_event(space1, topic));
+
+        assert!(state.topic_edges.contains_key(&space1));
+        assert!(state.topic_edge_sources.contains_key(&topic));
+
+        // Remove the only topic edge
+        let remove_event = SpaceTopologyEvent {
+            meta: make_block_meta(4),
+            payload: SpaceTopologyPayload::TrustExtended(TrustExtended {
+                source_space_id: space1,
+                extension: TrustExtension::SubtopicRemoved {
+                    target_topic_id: topic,
+                },
+            }),
+        };
+        state.apply_event(&remove_event);
+
+        // Empty sets should be removed from HashMaps
+        assert!(!state.topic_edges.contains_key(&space1));
+        assert!(!state.topic_edge_sources.contains_key(&topic));
     }
 
     #[test]
