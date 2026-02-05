@@ -205,18 +205,7 @@ impl GraphState {
 mod tests {
     use super::*;
     use crate::events::{BlockMetadata, SpaceType};
-
-    fn make_space_id(n: u8) -> SpaceId {
-        let mut id = [0u8; 16];
-        id[15] = n;
-        id
-    }
-
-    fn make_topic_id(n: u8) -> TopicId {
-        let mut id = [0u8; 16];
-        id[15] = n;
-        id
-    }
+    use crate::test_utils::{make_space_id, make_topic_id};
 
     fn make_block_meta(block: u64) -> BlockMetadata {
         BlockMetadata {

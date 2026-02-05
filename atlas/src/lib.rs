@@ -9,3 +9,6 @@ pub mod convert;
 pub mod events;
 pub mod graph;
 pub mod kafka;
+
+#[cfg(test)]
+pub(crate) mod test_utils;

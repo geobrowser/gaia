@@ -269,19 +269,7 @@ fn compute_diff(old: &[(SpaceId, Position)], new: &[(SpaceId, Position)]) -> Gra
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::events::TopicId;
-
-    fn make_space_id(n: u8) -> SpaceId {
-        let mut id = [0u8; 16];
-        id[15] = n;
-        id
-    }
-
-    fn make_topic_id(n: u8) -> TopicId {
-        let mut id = [0u8; 16];
-        id[15] = n;
-        id
-    }
+    use crate::test_utils::{make_space_id, make_topic_id};
 
     /// Create a simple tree: root -> A -> B
     fn make_simple_tree() -> TreeNode {

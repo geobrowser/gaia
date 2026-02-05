@@ -77,18 +77,7 @@ impl TreeNode {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn make_space_id(n: u8) -> SpaceId {
-        let mut id = [0u8; 16];
-        id[15] = n;
-        id
-    }
-
-    fn make_topic_id(n: u8) -> TopicId {
-        let mut id = [0u8; 16];
-        id[15] = n;
-        id
-    }
+    use crate::test_utils::{make_space_id, make_topic_id};
 
     #[test]
     fn test_new_root() {

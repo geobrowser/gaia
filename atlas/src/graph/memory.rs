@@ -198,49 +198,8 @@ pub fn bytes_per_node(state: &GraphState) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::events::{BlockMetadata, SpaceType};
     use crate::graph::GraphState;
-
-    fn make_space_id(n: u8) -> SpaceId {
-        let mut id = [0u8; 16];
-        id[15] = n;
-        id
-    }
-
-    fn make_topic_id(n: u8) -> TopicId {
-        let mut id = [0u8; 16];
-        id[15] = n;
-        id
-    }
-
-    fn make_block_meta() -> BlockMetadata {
-        BlockMetadata {
-            block_number: 1,
-            block_timestamp: 12,
-            tx_hash: "0x1".to_string(),
-            cursor: "cursor_1".to_string(),
-        }
-    }
-
-    fn create_space(state: &mut GraphState, n: u8) -> SpaceId {
-        use crate::events::{SpaceCreated, SpaceTopologyEvent, SpaceTopologyPayload};
-
-        let space = make_space_id(n);
-        let topic = make_topic_id(n);
-        let event = SpaceTopologyEvent {
-            meta: make_block_meta(),
-            payload: SpaceTopologyPayload::SpaceCreated(SpaceCreated {
-                space_id: space,
-                topic_id: topic,
-                space_type: SpaceType::Dao {
-                    initial_editors: vec![],
-                    initial_members: vec![],
-                },
-            }),
-        };
-        state.apply_event(&event);
-        space
-    }
+    use crate::test_utils::{create_space, make_space_id};
 
     #[test]
     fn test_empty_graph_state_size() {

@@ -292,11 +292,11 @@ fn bench_affects_canonical(c: &mut Criterion) {
     };
 
     group.bench_function("canonical_source", |b| {
-        b.iter(|| black_box(processor.affects_canonical(&event_canonical, &canonical_set)));
+        b.iter(|| black_box(processor.affects_canonical(&event_canonical)));
     });
 
     group.bench_function("non_canonical_source", |b| {
-        b.iter(|| black_box(processor.affects_canonical(&event_non_canonical, &canonical_set)));
+        b.iter(|| black_box(processor.affects_canonical(&event_non_canonical)));
     });
 
     group.finish();

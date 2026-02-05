@@ -48,14 +48,8 @@ pub fn hash_tree(tree: &TreeNode) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::events::SpaceId;
     use crate::graph::EdgeType;
-
-    fn make_space_id(n: u8) -> SpaceId {
-        let mut id = [0u8; 16];
-        id[15] = n;
-        id
-    }
+    use crate::test_utils::make_space_id;
 
     #[test]
     fn test_hash_tree_deterministic() {
