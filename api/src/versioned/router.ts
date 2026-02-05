@@ -761,7 +761,7 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 						case "NotFoundError":
 							return c.json({error: "Not found", message: error.message}, 404)
 						case "ProposalNotFoundError":
-							return c.json({error: "Not found", message: `Proposal '${error.proposalId}' not found`}, 404)
+							return c.json({error: "Not found", message: "Proposal not found"}, 404)
 					case "EditBlobNotCachedError":
 						return c.json(
 							{error: "Not found", message: "Edit blob not cached for this proposal"},
