@@ -19,11 +19,11 @@ A fully local end-to-end development environment for the indexing stack, allowin
 - **Substreams tier1/tier2** to execute `hermes-substream` WASM modules
 - **Local Kafka** for message streaming
 - **Local PostgreSQL** for IPFS cache storage
+- **Local IPFS node** (Kubo) for content storage and retrieval
 - **Space Registry + Geo protocol contracts**
 
 ### External Services (kept as-is)
 - **Privy** - Authentication + embedded EOA wallet (users sign in via email)
-- **Public IPFS gateway** - content already exists on IPFS
 
 ### User Flow
 1. User authenticates via Privy (production) → gets EOA
@@ -61,7 +61,7 @@ A fully local end-to-end development environment for the indexing stack, allowin
 
 2. **RPC Poller over Firehose Geth**: Avoids the need for a modified Geth node. RPC Poller produces "Base Blocks" which are sufficient since we only use event logs.
 
-3. **Keep IPFS external**: Content referenced in events already exists on public IPFS. Running a local IPFS node adds complexity without significant benefit for local dev.
+3. **Run local IPFS node (Kubo)**: Running a local IPFS node allows developers to test the full content lifecycle—publishing and retrieving content without depending on public gateways. Use the official `ipfs/kubo` Docker image.
 
 4. **Focus on Substreams (not Amp)**: While Amp migration (PR #288) is in progress, this local setup targets the current production architecture. Can adapt for Amp later.
 
@@ -129,10 +129,10 @@ A fully local end-to-end development environment for the indexing stack, allowin
 │  │   │ (Poller)│    │ Tier1/2  │    │                    │   │         │     │   │
 │  │   └─────────┘    └──────────┘    └────────────────────┘   └─────────┘     │   │
 │  │                                                                            │   │
-│  │   ┌─────────────┐    ┌─────────────────────┐                              │   │
-│  │   │  PostgreSQL │◀───│  hermes-ipfs-cache  │───────────────────────────────┼───┼──▶ Public IPFS
-│  │   │ (ipfs_cache)│    │                     │                              │   │     (external)
-│  │   └─────────────┘    └─────────────────────┘                              │   │
+│  │   ┌─────────────┐    ┌─────────────────────┐    ┌─────────────┐           │   │
+│  │   │  PostgreSQL │◀───│  hermes-ipfs-cache  │───▶│  Local IPFS │           │   │
+│  │   │ (ipfs_cache)│    │                     │    │   (Kubo)    │           │   │
+│  │   └─────────────┘    └─────────────────────┘    └─────────────┘           │   │
 │  └───────────────────────────────────────────────────────────────────────────┘   │
 │                                                                                   │
 │  Contracts on Anvil: EntryPoint, Safe Factory, Safe Singleton, Safe4337Module,   │
@@ -152,6 +152,7 @@ A fully local end-to-end development environment for the indexing stack, allowin
 | Substreams tiers | Part of fireeth | `fireeth start substreams-tier1,substreams-tier2` |
 | Kafka | Apache Kafka | Already in docker-compose |
 | PostgreSQL | postgres:16 | Already in docker-compose |
+| IPFS (Kubo) | `ipfs/kubo` | Local content storage, exposes API on 5001 and gateway on 8080 |
 
 ### Contracts (deployed to Anvil on startup)
 
