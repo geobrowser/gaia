@@ -178,11 +178,20 @@ impl AtlasSink {
         log_event(*event_count, event);
         *event_count += 1;
 
+        // Check if this event can affect the canonical graph before doing work
+        let may_affect = canonical.affects_canonical(event);
+
         // Update transitive cache based on event
         transitive.handle_event(event, graph);
 
         // Apply event to graph state
         graph.apply_event(event);
+
+        // Skip canonical recomputation for events that can't affect it
+        // (e.g., SpaceCreated, or edges from non-canonical sources)
+        if !may_affect {
+            return Ok(());
+        }
 
         // Compute canonical graph and emit diff if changed
         if let Some(new_graph) = canonical.compute(graph, transitive) {

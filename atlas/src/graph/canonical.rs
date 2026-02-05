@@ -59,6 +59,11 @@ pub struct CanonicalProcessor {
     /// Hash of the last computed tree structure
     /// Used to detect changes in tree structure (not just canonical set)
     last_hash: Option<u64>,
+
+    /// Canonical set from the last successful `compute()` call.
+    /// Used by `affects_canonical()` to skip recomputation for events
+    /// from non-canonical sources.
+    last_canonical_set: Option<HashSet<SpaceId>>,
 }
 
 impl CanonicalProcessor {
@@ -67,6 +72,7 @@ impl CanonicalProcessor {
         Self {
             root,
             last_hash: None,
+            last_canonical_set: None,
         }
     }
 
@@ -75,15 +81,19 @@ impl CanonicalProcessor {
         self.root
     }
 
-    /// Check if an event can affect the canonical graph
+    /// Check if an event can affect the canonical graph.
     ///
-    /// This is an optimization to skip recomputation for events that
-    /// cannot possibly change the canonical graph.
-    pub fn affects_canonical(
-        &self,
-        event: &SpaceTopologyEvent,
-        canonical_set: &HashSet<SpaceId>,
-    ) -> bool {
+    /// Returns `true` if we haven't computed a canonical graph yet (no set to check against),
+    /// or if the event originates from a canonical source.
+    /// Returns `false` for SpaceCreated events (new spaces aren't canonical until
+    /// explicitly connected from root) and for events from non-canonical sources.
+    pub fn affects_canonical(&self, event: &SpaceTopologyEvent) -> bool {
+        let canonical_set = match &self.last_canonical_set {
+            Some(set) => set,
+            // No prior computation — must compute to establish baseline
+            None => return true,
+        };
+
         match &event.payload {
             // New spaces are not canonical until reached via explicit edges from root
             SpaceTopologyPayload::SpaceCreated(_) => false,
@@ -142,10 +152,13 @@ impl CanonicalProcessor {
         // Check if tree structure changed
         let new_hash = hash_tree(&graph.tree);
         if self.last_hash == Some(new_hash) {
+            // Tree unchanged, but still update canonical set for affects_canonical checks
+            self.last_canonical_set = Some(graph.flat);
             return None;
         }
 
         self.last_hash = Some(new_hash);
+        self.last_canonical_set = Some(graph.flat.clone());
         Some(graph)
     }
 
@@ -510,12 +523,35 @@ mod tests {
     }
 
     #[test]
+    fn test_affects_canonical_returns_true_before_first_compute() {
+        let mut state = GraphState::new();
+        let root = create_space(&mut state, 1);
+        let processor = CanonicalProcessor::new(root);
+
+        // Before any compute(), affects_canonical should return true (no baseline)
+        let event = SpaceTopologyEvent {
+            meta: make_block_meta(),
+            payload: SpaceTopologyPayload::SpaceCreated(SpaceCreated {
+                space_id: make_space_id(99),
+                topic_id: make_topic_id(99),
+                space_type: SpaceType::Dao {
+                    initial_editors: vec![],
+                    initial_members: vec![],
+                },
+            }),
+        };
+
+        assert!(processor.affects_canonical(&event));
+    }
+
+    #[test]
     fn test_affects_canonical_space_created() {
         let mut state = GraphState::new();
         let root = create_space(&mut state, 1);
-        let canonical_set: HashSet<SpaceId> = [root].into_iter().collect();
 
-        let processor = CanonicalProcessor::new(root);
+        let mut transitive = TransitiveProcessor::new();
+        let mut processor = CanonicalProcessor::new(root);
+        processor.compute(&state, &mut transitive); // establish baseline
 
         // SpaceCreated events don't affect canonical
         let event = SpaceTopologyEvent {
@@ -530,7 +566,7 @@ mod tests {
             }),
         };
 
-        assert!(!processor.affects_canonical(&event, &canonical_set));
+        assert!(!processor.affects_canonical(&event));
     }
 
     #[test]
@@ -540,8 +576,9 @@ mod tests {
         let a = create_space(&mut state, 2);
         add_verified_edge(&mut state, root, a);
 
-        let canonical_set: HashSet<SpaceId> = [root, a].into_iter().collect();
-        let processor = CanonicalProcessor::new(root);
+        let mut transitive = TransitiveProcessor::new();
+        let mut processor = CanonicalProcessor::new(root);
+        processor.compute(&state, &mut transitive); // establish baseline
 
         // Edge from canonical source should affect canonical
         let event = SpaceTopologyEvent {
@@ -554,30 +591,31 @@ mod tests {
             }),
         };
 
-        assert!(processor.affects_canonical(&event, &canonical_set));
+        assert!(processor.affects_canonical(&event));
     }
 
     #[test]
     fn test_affects_canonical_from_non_canonical_source() {
         let mut state = GraphState::new();
         let root = create_space(&mut state, 1);
-        let non_canonical = create_space(&mut state, 99);
+        let _non_canonical = create_space(&mut state, 99);
 
-        let canonical_set: HashSet<SpaceId> = [root].into_iter().collect();
-        let processor = CanonicalProcessor::new(root);
+        let mut transitive = TransitiveProcessor::new();
+        let mut processor = CanonicalProcessor::new(root);
+        processor.compute(&state, &mut transitive); // establish baseline
 
         // Edge from non-canonical source should NOT affect canonical
         let event = SpaceTopologyEvent {
             meta: make_block_meta(),
             payload: SpaceTopologyPayload::TrustExtended(TrustExtended {
-                source_space_id: non_canonical,
+                source_space_id: make_space_id(99),
                 extension: TrustExtension::Verified {
                     target_space_id: make_space_id(100),
                 },
             }),
         };
 
-        assert!(!processor.affects_canonical(&event, &canonical_set));
+        assert!(!processor.affects_canonical(&event));
     }
 
     #[test]
