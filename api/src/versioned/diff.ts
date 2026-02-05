@@ -7,6 +7,18 @@ import { Effect } from "effect";
 import { diffWords } from "diff";
 import { SystemIds } from "@graphprotocol/grc-20";
 
+import { normalizeUuid } from "../utils/uuid";
+
+// Normalized SystemIds for comparing against dashless UUIDs from the DB layer
+const TYPES_PROPERTY = normalizeUuid(SystemIds.TYPES_PROPERTY);
+const TEXT_BLOCK = normalizeUuid(SystemIds.TEXT_BLOCK);
+const IMAGE_BLOCK = normalizeUuid(SystemIds.IMAGE_BLOCK);
+const IMAGE = normalizeUuid(SystemIds.IMAGE);
+const DATA_BLOCK = normalizeUuid(SystemIds.DATA_BLOCK);
+const MARKDOWN_CONTENT = normalizeUuid(SystemIds.MARKDOWN_CONTENT);
+const IMAGE_URL_PROPERTY = normalizeUuid(SystemIds.IMAGE_URL_PROPERTY);
+const NAME_PROPERTY = normalizeUuid(SystemIds.NAME_PROPERTY);
+
 import type {
 	DiffChunk,
 	VersionedValue,
@@ -311,14 +323,14 @@ function getBlockType(
 ): "textBlock" | "imageBlock" | "dataBlock" | null {
 	// Check relations for type indicators
 	for (const rel of block.relations) {
-		if (rel.typeId === SystemIds.TYPES_PROPERTY) {
-			if (rel.toEntityId === SystemIds.TEXT_BLOCK) return "textBlock";
+		if (rel.typeId === TYPES_PROPERTY) {
+			if (rel.toEntityId === TEXT_BLOCK) return "textBlock";
 			if (
-				rel.toEntityId === SystemIds.IMAGE_BLOCK ||
-				rel.toEntityId === SystemIds.IMAGE
+				rel.toEntityId === IMAGE_BLOCK ||
+				rel.toEntityId === IMAGE
 			)
 				return "imageBlock";
-			if (rel.toEntityId === SystemIds.DATA_BLOCK) return "dataBlock";
+			if (rel.toEntityId === DATA_BLOCK) return "dataBlock";
 		}
 	}
 	return null;
@@ -329,7 +341,7 @@ function getBlockType(
  */
 function getMarkdownContent(block: BlockSnapshot): string {
 	const markdownValue = block.values.find(
-		(v) => v.propertyId === SystemIds.MARKDOWN_CONTENT
+		(v) => v.propertyId === MARKDOWN_CONTENT
 	);
 	return markdownValue?.text ?? "";
 }
@@ -339,7 +351,7 @@ function getMarkdownContent(block: BlockSnapshot): string {
  */
 function getImageUrl(block: BlockSnapshot): string | null {
 	const imageValue = block.values.find(
-		(v) => v.propertyId === SystemIds.IMAGE_URL_PROPERTY
+		(v) => v.propertyId === IMAGE_URL_PROPERTY
 	);
 	return imageValue?.text ?? null;
 }
@@ -349,7 +361,7 @@ function getImageUrl(block: BlockSnapshot): string | null {
  */
 function getBlockName(block: BlockSnapshot): string | null {
 	const nameValue = block.values.find(
-		(v) => v.propertyId === SystemIds.NAME_PROPERTY
+		(v) => v.propertyId === NAME_PROPERTY
 	);
 	return nameValue?.text ?? null;
 }
@@ -509,7 +521,7 @@ export function diffBlocks(
  */
 function getSnapshotName(snapshot: BlockSnapshot): string | null {
 	const nameValue = snapshot.values.find(
-		(v) => v.propertyId === SystemIds.NAME_PROPERTY
+		(v) => v.propertyId === NAME_PROPERTY
 	);
 	return nameValue?.text ?? null;
 }
@@ -723,7 +735,7 @@ export function diffDynamicGroup(
  */
 function getEntityName(snapshot: EntitySnapshot | GroupedEntitySnapshot): string | null {
 	const nameValue = snapshot.values.find(
-		(v) => v.propertyId === SystemIds.NAME_PROPERTY
+		(v) => v.propertyId === NAME_PROPERTY
 	);
 	return nameValue?.text ?? null;
 }

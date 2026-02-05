@@ -66,16 +66,16 @@ describe("groupEntitiesByContext", () => {
 			expect(result.dynamicGroups.size).toBe(0);
 		});
 
-		it("uses custom fallback type when provided", () => {
+		it("uses custom blocks type ID when provided", () => {
 			const customType = "custom-type-id";
 			const entities = [makeEntity("entity-1", null)];
 
 			const result = run(groupEntitiesByContext(entities, customType));
 
-			// Should go into dynamic groups, not blocks
-			expect(result.blocks).toEqual([]);
-			expect(result.dynamicGroups.get(customType)).toEqual(["entity-1"]);
-			expect(result.groupKeys).toEqual([customType]);
+			// Entities with null context get the custom type, which IS the blocks type
+			expect(result.blocks).toEqual(["entity-1"]);
+			expect(result.dynamicGroups.size).toBe(0);
+			expect(result.groupKeys).toEqual([]);
 		});
 	});
 

@@ -12,6 +12,8 @@ import type { NodePgDatabase } from "drizzle-orm/node-postgres";
 import { SystemIds } from "@graphprotocol/grc-20";
 import { decodeEditAuto, type Op, type Id } from "@geoprotocol/grc-20";
 
+import { normalizeUuid } from "../utils/uuid";
+
 import type {
 	EntitySnapshot,
 	EntityDiff,
@@ -45,8 +47,8 @@ export type ProposalDiffError = QueryError | ProposalNotFoundError | EditBlobNot
 
 type Database = NodePgDatabase<Record<string, unknown>>;
 
-// The BLOCKS relation type ID from GRC-20
-const BLOCKS_TYPE_ID = SystemIds.BLOCKS;
+// The BLOCKS relation type ID from GRC-20 (normalized to dashless)
+const BLOCKS_TYPE_ID = normalizeUuid(SystemIds.BLOCKS);
 
 // ============================================================================
 // Database Queries
@@ -100,8 +102,8 @@ function getProposalWithPublishAction(
 
 			return {
 				proposal: {
-					id: row.proposal_id,
-					spaceId: row.space_id,
+					id: normalizeUuid(row.proposal_id),
+					spaceId: normalizeUuid(row.space_id),
 					startTime: BigInt(row.start_time),
 					endTime: BigInt(row.end_time),
 					executedAt: row.executed_at ? BigInt(row.executed_at) : null,
@@ -292,12 +294,12 @@ function groupByEntityId(
 
 	// Group values by entity
 	for (const row of valueRows) {
-		const entityId = row.entity_id as string;
+		const entityId = normalizeUuid(row.entity_id as string);
 		const snapshot = result.get(entityId);
 		if (snapshot) {
 			snapshot.values.push({
-				propertyId: row.property_id as string,
-				spaceId: row.space_id as string,
+				propertyId: normalizeUuid(row.property_id as string),
+				spaceId: normalizeUuid(row.space_id as string),
 				boolean: row.boolean as boolean | null,
 				integer: row.integer as number | null,
 				float: row.float as number | null,
@@ -320,19 +322,19 @@ function groupByEntityId(
 
 	// Group relations by entity (excluding block relations)
 	for (const row of relationRows) {
-		const entityId = row.from_entity_id as string;
-		const typeId = row.type_id as string;
+		const entityId = normalizeUuid(row.from_entity_id as string);
+		const typeId = normalizeUuid(row.type_id as string);
 		const snapshot = result.get(entityId);
 		if (snapshot && typeId !== BLOCKS_TYPE_ID) {
 			snapshot.relations.push({
-				relationId: row.relation_id as string,
+				relationId: normalizeUuid(row.relation_id as string),
 				typeId,
 				fromEntityId: entityId,
-				fromSpaceId: row.from_space_id as string | null,
-				toEntityId: row.to_entity_id as string,
-				toSpaceId: row.to_space_id as string | null,
+				fromSpaceId: row.from_space_id ? normalizeUuid(row.from_space_id as string) : null,
+				toEntityId: normalizeUuid(row.to_entity_id as string),
+				toSpaceId: row.to_space_id ? normalizeUuid(row.to_space_id as string) : null,
 				position: row.position as string | null,
-				spaceId: row.space_id as string,
+				spaceId: normalizeUuid(row.space_id as string),
 				verified: row.verified as boolean | null,
 			});
 		}
@@ -346,14 +348,13 @@ function groupByEntityId(
 // ============================================================================
 
 /**
- * Convert Id (Uint8Array) to UUID string.
+ * Convert Id (Uint8Array) to dashless UUID string.
  */
 function idToUuid(id: Id): string {
-	// Id is a 16-byte Uint8Array, convert to UUID format
-	const hex = Array.from(id)
+	// Id is a 16-byte Uint8Array, convert to dashless hex
+	return Array.from(id)
 		.map((b) => b.toString(16).padStart(2, "0"))
 		.join("");
-	return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20, 32)}`;
 }
 
 /**
@@ -612,11 +613,14 @@ function decodeCursor(encoded: string): ProposalDiffCursor | null {
  */
 export function computeProposalDiff(
 	db: Database,
-	proposalId: string,
-	spaceId: string,
+	rawProposalId: string,
+	rawSpaceId: string,
 	cursorStr?: string,
 	limit = 50
 ): Effect.Effect<PaginatedProposalDiff, ProposalDiffError> {
+	const proposalId = normalizeUuid(rawProposalId);
+	const spaceId = normalizeUuid(rawSpaceId);
+
 	return Effect.gen(function* () {
 		// 1. Get proposal with publish action
 		const data = yield* getProposalWithPublishAction(db, proposalId);

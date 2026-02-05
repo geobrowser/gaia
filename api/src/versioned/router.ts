@@ -18,7 +18,7 @@ type AppEnv = {
 	}
 }
 
-import {isValidUuid} from "../utils/uuid"
+import {isValidUuid, normalizeUuid} from "../utils/uuid"
 import {diffEntitySnapshots, diffGroupedEntitySnapshots} from "./diff"
 import {
 	getEntitySnapshotAtVersion,
@@ -142,30 +142,35 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 			},
 		}),
 		async (c) => {
-			const entityId = c.req.param("id")
-			const editId = c.req.query("editId")
-			const spaceId = c.req.query("spaceId")
+			const rawEntityId = c.req.param("id")
+			const rawEditId = c.req.query("editId")
+			const rawSpaceId = c.req.query("spaceId")
 			const requestId = c.get("requestId") ?? "unknown"
 
 			const program = Effect.gen(function* () {
 				// Validate entityId
-				if (!isValidUuid(entityId)) {
+				if (!isValidUuid(rawEntityId)) {
 					return yield* Effect.fail(new ValidationError({message: "Entity ID must be a valid UUID"}))
 				}
 
 				// Validate editId is provided
-				if (!editId) {
+				if (!rawEditId) {
 					return yield* Effect.fail(new ValidationError({message: "editId query parameter is required"}))
 				}
 
-				if (!isValidUuid(editId)) {
+				if (!isValidUuid(rawEditId)) {
 					return yield* Effect.fail(new ValidationError({message: "editId must be a valid UUID"}))
 				}
 
 				// Validate spaceId if provided
-				if (spaceId && !isValidUuid(spaceId)) {
+				if (rawSpaceId && !isValidUuid(rawSpaceId)) {
 					return yield* Effect.fail(new ValidationError({message: "spaceId must be a valid UUID"}))
 				}
+
+				// Normalize UUIDs after validation
+				const entityId = normalizeUuid(rawEntityId)
+				const editId = normalizeUuid(rawEditId)
+				const spaceId = rawSpaceId ? normalizeUuid(rawSpaceId) : undefined
 
 				// Resolve edit to version key
 				const versionKey = yield* resolveVersionKey(db, editId)
@@ -188,7 +193,7 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 					return Effect.void
 				}),
 				Effect.withSpan("GET /versioned/entities/:id"),
-				Effect.annotateSpans({requestId, entityId, editId, spaceId}),
+				Effect.annotateSpans({requestId, entityId: rawEntityId, editId: rawEditId, spaceId: rawSpaceId}),
 			)
 
 			const result = await runtime.runPromise(Effect.either(program))
@@ -304,22 +309,26 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 			},
 		}),
 		async (c) => {
-			const entityId = c.req.param("id")
-			const spaceId = c.req.query("spaceId")
+			const rawEntityId = c.req.param("id")
+			const rawSpaceId = c.req.query("spaceId")
 			const limitParam = c.req.query("limit")
 			const offsetParam = c.req.query("offset")
 			const requestId = c.get("requestId") ?? "unknown"
 
 			const program = Effect.gen(function* () {
 				// Validate entityId
-				if (!isValidUuid(entityId)) {
+				if (!isValidUuid(rawEntityId)) {
 					return yield* Effect.fail(new ValidationError({message: "Entity ID must be a valid UUID"}))
 				}
 
 				// Validate spaceId if provided
-				if (spaceId && !isValidUuid(spaceId)) {
+				if (rawSpaceId && !isValidUuid(rawSpaceId)) {
 					return yield* Effect.fail(new ValidationError({message: "spaceId must be a valid UUID"}))
 				}
+
+				// Normalize UUIDs after validation
+				const entityId = normalizeUuid(rawEntityId)
+				const spaceId = rawSpaceId ? normalizeUuid(rawSpaceId) : undefined
 
 				// Parse and validate limit
 				let limit = 50
@@ -357,7 +366,7 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 					return Effect.void
 				}),
 				Effect.withSpan("GET /versioned/entities/:id/versions"),
-				Effect.annotateSpans({requestId, entityId, spaceId}),
+				Effect.annotateSpans({requestId, entityId: rawEntityId, spaceId: rawSpaceId}),
 			)
 
 			const result = await runtime.runPromise(Effect.either(program))
@@ -478,45 +487,51 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 			},
 		}),
 		async (c) => {
-			const entityId = c.req.param("id")
-			const fromEditId = c.req.query("fromEditId")
-			const toEditId = c.req.query("toEditId")
-			const spaceId = c.req.query("spaceId")
+			const rawEntityId = c.req.param("id")
+			const rawFromEditId = c.req.query("fromEditId")
+			const rawToEditId = c.req.query("toEditId")
+			const rawSpaceId = c.req.query("spaceId")
 			const requestId = c.get("requestId") ?? "unknown"
 
 			const program = Effect.gen(function* () {
 				// Validate entityId
-				if (!isValidUuid(entityId)) {
+				if (!isValidUuid(rawEntityId)) {
 					return yield* Effect.fail(new ValidationError({message: "Entity ID must be a valid UUID"}))
 				}
 
 				// Validate required parameters
-				if (!fromEditId) {
+				if (!rawFromEditId) {
 					return yield* Effect.fail(new ValidationError({message: "fromEditId query parameter is required"}))
 				}
 
-				if (!toEditId) {
+				if (!rawToEditId) {
 					return yield* Effect.fail(new ValidationError({message: "toEditId query parameter is required"}))
 				}
 
-				if (!spaceId) {
+				if (!rawSpaceId) {
 					return yield* Effect.fail(
 						new ValidationError({message: "spaceId query parameter is required for diffs"}),
 					)
 				}
 
 				// Validate UUIDs
-				if (!isValidUuid(fromEditId)) {
+				if (!isValidUuid(rawFromEditId)) {
 					return yield* Effect.fail(new ValidationError({message: "fromEditId must be a valid UUID"}))
 				}
 
-				if (!isValidUuid(toEditId)) {
+				if (!isValidUuid(rawToEditId)) {
 					return yield* Effect.fail(new ValidationError({message: "toEditId must be a valid UUID"}))
 				}
 
-				if (!isValidUuid(spaceId)) {
+				if (!isValidUuid(rawSpaceId)) {
 					return yield* Effect.fail(new ValidationError({message: "spaceId must be a valid UUID"}))
 				}
+
+				// Normalize UUIDs after validation
+				const entityId = normalizeUuid(rawEntityId)
+				const fromEditId = normalizeUuid(rawFromEditId)
+				const toEditId = normalizeUuid(rawToEditId)
+				const spaceId = normalizeUuid(rawSpaceId)
 
 				// Resolve both edits to version keys
 				const [fromVersionKey, toVersionKey] = yield* Effect.all([
@@ -552,7 +567,7 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 					return Effect.void
 				}),
 				Effect.withSpan("GET /versioned/entities/:id/diff"),
-				Effect.annotateSpans({requestId, entityId, fromEditId, toEditId, spaceId}),
+				Effect.annotateSpans({requestId, entityId: rawEntityId, fromEditId: rawFromEditId, toEditId: rawToEditId, spaceId: rawSpaceId}),
 			)
 
 			const result = await runtime.runPromise(Effect.either(program))

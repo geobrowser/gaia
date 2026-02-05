@@ -17,6 +17,18 @@ import type {
 	SimpleValueChange,
 } from "../types";
 import { SystemIds } from "@graphprotocol/grc-20";
+import { normalizeUuid } from "../../utils/uuid";
+
+// Normalized SystemIds to match production (dashless) format
+const Ids = {
+	MARKDOWN_CONTENT: normalizeUuid(SystemIds.MARKDOWN_CONTENT),
+	IMAGE_URL_PROPERTY: normalizeUuid(SystemIds.IMAGE_URL_PROPERTY),
+	NAME_PROPERTY: normalizeUuid(SystemIds.NAME_PROPERTY),
+	TYPES_PROPERTY: normalizeUuid(SystemIds.TYPES_PROPERTY),
+	TEXT_BLOCK: normalizeUuid(SystemIds.TEXT_BLOCK),
+	IMAGE_BLOCK: normalizeUuid(SystemIds.IMAGE_BLOCK),
+	DATA_BLOCK: normalizeUuid(SystemIds.DATA_BLOCK),
+} as const;
 
 // =============================================================================
 // Test Helpers
@@ -70,10 +82,10 @@ function makeTextBlock(id: string, markdownContent: string): BlockSnapshot {
 	return {
 		id,
 		values: [
-			makeTextValue(SystemIds.MARKDOWN_CONTENT, markdownContent),
+			makeTextValue(Ids.MARKDOWN_CONTENT, markdownContent),
 		],
 		relations: [
-			makeRelation(`${id}-type`, SystemIds.TYPES_PROPERTY, SystemIds.TEXT_BLOCK),
+			makeRelation(`${id}-type`, Ids.TYPES_PROPERTY, Ids.TEXT_BLOCK),
 		],
 	};
 }
@@ -82,10 +94,10 @@ function makeImageBlock(id: string, imageUrl: string | null): BlockSnapshot {
 	return {
 		id,
 		values: imageUrl
-			? [makeTextValue(SystemIds.IMAGE_URL_PROPERTY, imageUrl)]
+			? [makeTextValue(Ids.IMAGE_URL_PROPERTY, imageUrl)]
 			: [],
 		relations: [
-			makeRelation(`${id}-type`, SystemIds.TYPES_PROPERTY, SystemIds.IMAGE_BLOCK),
+			makeRelation(`${id}-type`, Ids.TYPES_PROPERTY, Ids.IMAGE_BLOCK),
 		],
 	};
 }
@@ -94,10 +106,10 @@ function makeDataBlock(id: string, name: string | null): BlockSnapshot {
 	return {
 		id,
 		values: name
-			? [makeTextValue(SystemIds.NAME_PROPERTY, name)]
+			? [makeTextValue(Ids.NAME_PROPERTY, name)]
 			: [],
 		relations: [
-			makeRelation(`${id}-type`, SystemIds.TYPES_PROPERTY, SystemIds.DATA_BLOCK),
+			makeRelation(`${id}-type`, Ids.TYPES_PROPERTY, Ids.DATA_BLOCK),
 		],
 	};
 }
@@ -454,13 +466,13 @@ describe("diffEntitySnapshots", () => {
 	it("returns diff with entity ID and name", () => {
 		const from: EntitySnapshot = {
 			id: "entity-1",
-			values: [makeTextValue(SystemIds.NAME_PROPERTY, "Old Name")],
+			values: [makeTextValue(Ids.NAME_PROPERTY, "Old Name")],
 			relations: [],
 			blocks: [],
 		};
 		const to: EntitySnapshot = {
 			id: "entity-1",
-			values: [makeTextValue(SystemIds.NAME_PROPERTY, "New Name")],
+			values: [makeTextValue(Ids.NAME_PROPERTY, "New Name")],
 			relations: [],
 			blocks: [],
 		};
@@ -495,7 +507,7 @@ describe("diffEntitySnapshots", () => {
 	it("uses name from 'to' snapshot, falling back to 'from'", () => {
 		const from: EntitySnapshot = {
 			id: "entity-1",
-			values: [makeTextValue(SystemIds.NAME_PROPERTY, "From Name")],
+			values: [makeTextValue(Ids.NAME_PROPERTY, "From Name")],
 			relations: [],
 			blocks: [],
 		};
@@ -703,7 +715,7 @@ describe("diffGroupedEntitySnapshots", () => {
 
 	it("uses name from to snapshot, falling back to from", () => {
 		const from = makeGroupedSnapshot("entity-1", {
-			values: [makeTextValue(SystemIds.NAME_PROPERTY, "From Name")],
+			values: [makeTextValue(Ids.NAME_PROPERTY, "From Name")],
 		});
 		const to = makeGroupedSnapshot("entity-1");
 

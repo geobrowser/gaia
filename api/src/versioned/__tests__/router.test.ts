@@ -118,6 +118,8 @@ describe("GET /versioned/entities/:id", () => {
 		it("returns entity snapshot when found", async () => {
 			const entityId = "00000000-0000-0000-0000-000000000001";
 			const editId = "00000000-0000-0000-0000-000000000002";
+			const propertyId = "00000000-0000-0000-0000-000000000010";
+			const spaceId = "00000000-0000-0000-0000-000000000020";
 
 			// Mock: resolveVersionKey
 			db.execute.mockResolvedValueOnce({
@@ -129,8 +131,8 @@ describe("GET /versioned/entities/:id", () => {
 				rows: [
 					{
 						entity_id: entityId,
-						property_id: "prop-1",
-						space_id: "space-1",
+						property_id: propertyId,
+						space_id: spaceId,
 						text: "Test value",
 					},
 				],
@@ -157,7 +159,7 @@ describe("GET /versioned/entities/:id", () => {
 
 			expect(res.status).toBe(200);
 			const body = await res.json();
-			expect(body.id).toBe(entityId);
+			expect(body.id).toBe("00000000000000000000000000000001");
 			expect(body.values).toBeInstanceOf(Array);
 			expect(body.relations).toBeInstanceOf(Array);
 			expect(body.blocks).toBeInstanceOf(Array);
@@ -235,12 +237,12 @@ describe("GET /versioned/entities/:id/versions", () => {
 			db.execute.mockResolvedValueOnce({
 				rows: [
 					{
-						edit_id: "edit-1",
+						edit_id: "00000000-0000-0000-0000-000000000010",
 						block_number: "100",
 						created_at: "2024-01-01T00:00:00Z",
 					},
 					{
-						edit_id: "edit-2",
+						edit_id: "00000000-0000-0000-0000-000000000020",
 						block_number: "200",
 						created_at: "2024-01-02T00:00:00Z",
 					},
@@ -265,7 +267,7 @@ describe("GET /versioned/entities/:id/versions", () => {
 			db.execute.mockResolvedValueOnce({
 				rows: [
 					{
-						edit_id: "edit-1",
+						edit_id: "00000000-0000-0000-0000-000000000010",
 						block_number: "100",
 						created_at: "2024-01-01T00:00:00Z",
 					},
@@ -364,6 +366,8 @@ describe("GET /versioned/entities/:id/diff", () => {
 	describe("successful responses", () => {
 		it("returns entity diff", async () => {
 			const entityId = "00000000-0000-0000-0000-000000000001";
+			const namePropertyId = "00000000-0000-0000-0000-000000000010";
+			const spaceId = "00000000-0000-0000-0000-000000000020";
 
 			// Mock: resolveVersionKey (from)
 			db.execute.mockResolvedValueOnce({ rows: [{ version_key: "100" }] });
@@ -375,8 +379,8 @@ describe("GET /versioned/entities/:id/diff", () => {
 				rows: [
 					{
 						entity_id: entityId,
-						property_id: "name-prop",
-						space_id: "space-1",
+						property_id: namePropertyId,
+						space_id: spaceId,
 						text: "Old Name",
 					},
 				],
@@ -393,8 +397,8 @@ describe("GET /versioned/entities/:id/diff", () => {
 				rows: [
 					{
 						entity_id: entityId,
-						property_id: "name-prop",
-						space_id: "space-1",
+						property_id: namePropertyId,
+						space_id: spaceId,
 						text: "New Name",
 					},
 				],
@@ -412,7 +416,7 @@ describe("GET /versioned/entities/:id/diff", () => {
 
 			expect(res.status).toBe(200);
 			const body = await res.json();
-			expect(body.entityId).toBe(entityId);
+			expect(body.entityId).toBe("00000000000000000000000000000001");
 			expect(body.values).toBeInstanceOf(Array);
 			expect(body.relations).toBeInstanceOf(Array);
 			expect(body.blocks).toBeInstanceOf(Array);

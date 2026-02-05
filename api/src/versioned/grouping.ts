@@ -46,7 +46,7 @@ export interface GroupedEntities {
  */
 export function groupEntitiesByContext(
 	entities: DiscoveredEntity[],
-	fallbackTypeId: string = SystemIds.BLOCKS
+	blocksTypeId: string = SystemIds.BLOCKS
 ): Effect.Effect<GroupedEntities, never, never> {
 	return Effect.sync(() => {
 		const blocks: string[] = [];
@@ -68,9 +68,9 @@ export function groupEntitiesByContext(
 
 			// Determine the effective type ID
 			// null contextEdgeTypeId means it came from relation fallback
-			const typeId = entity.contextEdgeTypeId ?? fallbackTypeId;
+			const typeId = entity.contextEdgeTypeId ?? blocksTypeId;
 
-			if (typeId === SystemIds.BLOCKS) {
+			if (typeId === blocksTypeId) {
 				blocks.push(entity.entityId);
 			} else {
 				const group = dynamicGroups.get(typeId) ?? [];
