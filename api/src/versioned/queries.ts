@@ -39,8 +39,9 @@ type Database = NodePgDatabase<Record<string, unknown>>
 
 /**
  * Map a database row to a VersionedValue.
+ * Exported for use in proposal-diff.ts batch operations.
  */
-function mapValueRow(row: Record<string, unknown>): VersionedValue {
+export function mapValueRow(row: Record<string, unknown>): VersionedValue {
 	return {
 		propertyId: row.property_id as string,
 		spaceId: row.space_id as string,
@@ -66,8 +67,9 @@ function mapValueRow(row: Record<string, unknown>): VersionedValue {
 
 /**
  * Map a database row to a VersionedRelation.
+ * Exported for use in proposal-diff.ts batch operations.
  */
-function mapRelationRow(row: Record<string, unknown>): VersionedRelation {
+export function mapRelationRow(row: Record<string, unknown>): VersionedRelation {
 	return {
 		relationId: row.relation_id as string,
 		typeId: row.type_id as string,

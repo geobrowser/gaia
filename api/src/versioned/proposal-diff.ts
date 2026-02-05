@@ -30,7 +30,7 @@ import {sql} from "drizzle-orm"
 import type {NodePgDatabase} from "drizzle-orm/node-postgres"
 import {Effect} from "effect"
 import {diffEntitySnapshots} from "./diff"
-import {QueryError} from "./queries"
+import {mapRelationRow, mapValueRow, QueryError} from "./queries"
 import type {
 	EntityDiff,
 	EntitySnapshot,
@@ -292,8 +292,12 @@ function batchGetLiveSnapshots(
 			const entityIdsArray = `{${entityIds.join(",")}}`
 
 			// Query 1: All values for all entities
+			// Explicitly list columns to avoid fetching large 'embedding' column
 			const valuesResult = await db.execute<Record<string, unknown>>(sql`
-				SELECT * FROM "values"
+				SELECT entity_id, property_id, space_id, text, language, unit, boolean,
+				       decimal, point, time, integer, float, bytes, date, datetime, 
+				       schedule, rect
+				FROM "values"
 				WHERE entity_id = ANY(${entityIdsArray}::uuid[])
 				AND space_id = ${spaceId}
 			`)
@@ -338,8 +342,12 @@ function batchGetVersionedSnapshots(
 			const entityIdsArray = `{${entityIds.join(",")}}`
 
 			// Query 1: All values at version
+			// Explicitly list columns to avoid fetching large 'embedding' column
 			const valuesResult = await db.execute<Record<string, unknown>>(sql`
-				SELECT * FROM value_versions
+				SELECT entity_id, property_id, space_id, text, language, unit, boolean,
+				       decimal, point, time, integer, float, bytes, date, datetime,
+				       schedule, rect, context_root_id, context_edge_type_id
+				FROM value_versions
 				WHERE entity_id = ANY(${entityIdsArray}::uuid[])
 				AND space_id = ${spaceId}
 				AND valid_from_key <= ${versionKeyStr}::bigint
@@ -348,7 +356,10 @@ function batchGetVersionedSnapshots(
 
 			// Query 2: All relations at version
 			const relationsResult = await db.execute<Record<string, unknown>>(sql`
-				SELECT * FROM relation_versions
+				SELECT relation_id, entity_id, type_id, from_entity_id, from_space_id,
+				       to_entity_id, to_space_id, position, space_id, verified,
+				       context_root_id, context_edge_type_id
+				FROM relation_versions
 				WHERE from_entity_id = ANY(${entityIdsArray}::uuid[])
 				AND space_id = ${spaceId}
 				AND valid_from_key <= ${versionKeyStr}::bigint
@@ -367,6 +378,7 @@ function batchGetVersionedSnapshots(
 
 /**
  * Group query results by entity ID.
+ * Uses shared mapValueRow and mapRelationRow functions from queries.ts.
  */
 function groupByEntityId(
 	entityIds: string[],
@@ -385,24 +397,7 @@ function groupByEntityId(
 		const entityId = row.entity_id as string
 		const snapshot = result.get(entityId)
 		if (snapshot) {
-			snapshot.values.push({
-				propertyId: row.property_id as string,
-				spaceId: row.space_id as string,
-				boolean: row.boolean as boolean | null,
-				integer: row.integer as number | null,
-				float: row.float as number | null,
-				decimal: row.decimal as string | null,
-				text: row.text as string | null,
-				bytes: row.bytes ? Buffer.from(row.bytes as Buffer).toString("base64") : null,
-				date: row.date as string | null,
-				time: row.time as string | null,
-				datetime: row.datetime as string | null,
-				schedule: row.schedule as unknown | null,
-				point: row.point as string | null,
-				embedding: row.embedding as unknown | null,
-				language: row.language as string | null,
-				unit: row.unit as string | null,
-			})
+			snapshot.values.push(mapValueRow(row))
 		}
 	}
 
@@ -412,17 +407,7 @@ function groupByEntityId(
 		const typeId = row.type_id as string
 		const snapshot = result.get(entityId)
 		if (snapshot && typeId !== BLOCKS_TYPE_ID) {
-			snapshot.relations.push({
-				relationId: row.relation_id as string,
-				typeId,
-				fromEntityId: entityId,
-				fromSpaceId: row.from_space_id as string | null,
-				toEntityId: row.to_entity_id as string,
-				toSpaceId: row.to_space_id as string | null,
-				position: row.position as string | null,
-				spaceId: row.space_id as string,
-				verified: row.verified as boolean | null,
-			})
+			snapshot.relations.push(mapRelationRow(row))
 		}
 	}
 
@@ -536,9 +521,25 @@ function propertyValueToVersionedValue(pv: {property: Id; value: unknown}, space
 			break
 		case "decimal": {
 			// Decimal has exponent and mantissa fields at the top level
+			// Use string manipulation to preserve precision for large numbers (> 2^53)
 			const dec = value as unknown as {exponent: number; mantissa: {type: string; value: bigint}}
-			const mantissaValue = dec.mantissa.value
-			result.decimal = (Number(mantissaValue) / 10 ** (-dec.exponent)).toString()
+			const mantissaStr = dec.mantissa.value.toString()
+			const exp = dec.exponent
+			if (exp >= 0) {
+				// Positive exponent: append zeros
+				result.decimal = mantissaStr + "0".repeat(exp)
+			} else {
+				// Negative exponent: insert decimal point
+				const decimalPlaces = -exp
+				if (mantissaStr.length <= decimalPlaces) {
+					// Need leading zeros after decimal point
+					result.decimal = "0." + "0".repeat(decimalPlaces - mantissaStr.length) + mantissaStr
+				} else {
+					// Insert decimal point within the string
+					const insertPos = mantissaStr.length - decimalPlaces
+					result.decimal = mantissaStr.slice(0, insertPos) + "." + mantissaStr.slice(insertPos)
+				}
+			}
 			break
 		}
 		case "bytes":
@@ -765,14 +766,23 @@ export function computeProposalDiff(
 	limit = 50,
 ): Effect.Effect<PaginatedProposalDiff, ProposalDiffError> {
 	return Effect.gen(function* () {
+		yield* Effect.logDebug("ComputeProposalDiff started").pipe(
+			Effect.annotateLogs({proposalId, spaceId, limit, hasCursor: !!cursorStr}),
+		)
+
 		// 1. Get proposal with publish action
 		const data = yield* getProposalWithPublishAction(db, proposalId)
 		if (!data) {
+			yield* Effect.logInfo("Proposal not found").pipe(Effect.annotateLogs({proposalId}))
 			return yield* Effect.fail(new ProposalNotFoundError(proposalId))
 		}
 
 		const {proposal, contentUri} = data
 		const status = getProposalStatus(proposal)
+
+		yield* Effect.logDebug("Proposal loaded").pipe(
+			Effect.annotateLogs({proposalId, status, hasContentUri: !!contentUri}),
+		)
 
 		// 2. Validate spaceId matches the proposal's space
 		if (proposal.spaceId !== spaceId) {
@@ -796,12 +806,14 @@ export function computeProposalDiff(
 
 		// 4. Validate cursor format early (before expensive operations)
 		let startIndex = 0
+		let expectedTotalEntities: number | undefined
 		if (cursorStr) {
 			const cursor = decodeCursor(cursorStr)
 			if (cursor === null) {
 				return yield* Effect.fail(new InvalidCursorError(cursorStr))
 			}
 			startIndex = cursor.entityIndex
+			expectedTotalEntities = cursor.totalEntities
 		}
 
 		// 5. Fetch edit blob from IPFS cache
@@ -823,7 +835,19 @@ export function computeProposalDiff(
 		// This includes looking up from_entity_id for updateRelation/deleteRelation/restoreRelation ops
 		const entityIds = (yield* extractAffectedEntities(db, ops)).sort()
 
-		// 7. Paginate using the already-validated cursor
+		yield* Effect.logDebug("Entities extracted").pipe(
+			Effect.annotateLogs({proposalId, opCount: ops.length, entityCount: entityIds.length}),
+		)
+
+		// 7. Validate cursor consistency (entity count shouldn't change between pages)
+		if (expectedTotalEntities !== undefined && expectedTotalEntities !== entityIds.length) {
+			yield* Effect.logWarning("Entity count changed between pages").pipe(
+				Effect.annotateLogs({proposalId, expected: expectedTotalEntities, actual: entityIds.length}),
+			)
+			// Don't fail - just log the inconsistency. The proposal may have been updated.
+		}
+
+		// 8. Paginate using the already-validated cursor
 		const pageEntityIds = entityIds.slice(startIndex, startIndex + limit)
 
 		// 8. Batch fetch base states (values and relations for affected entities)
@@ -859,9 +883,24 @@ export function computeProposalDiff(
 			}
 		}
 
+		yield* Effect.logDebug("Diffs computed").pipe(
+			Effect.annotateLogs({proposalId, pageSize: pageEntityIds.length, diffCount: diffs.length}),
+		)
+
 		// 10. Build pagination info
 		const nextIndex = startIndex + limit
 		const hasMore = nextIndex < entityIds.length
+
+		yield* Effect.logInfo("ComputeProposalDiff completed").pipe(
+			Effect.annotateLogs({
+				proposalId,
+				status,
+				totalEntities: entityIds.length,
+				pageEntities: pageEntityIds.length,
+				diffsReturned: diffs.length,
+				hasMore,
+			}),
+		)
 
 		return {
 			proposalId,
@@ -869,7 +908,7 @@ export function computeProposalDiff(
 			proposalStatus: status,
 			entities: diffs,
 			pagination: {
-				cursor: hasMore ? encodeCursor({entityIndex: nextIndex}) : null,
+				cursor: hasMore ? encodeCursor({entityIndex: nextIndex, totalEntities: entityIds.length}) : null,
 				hasMore,
 				totalEntities: entityIds.length,
 			},
