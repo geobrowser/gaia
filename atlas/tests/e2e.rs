@@ -927,12 +927,11 @@ fn test_e2e_diamond_with_different_edge_types() {
 fn test_e2e_empty_actions() {
     let actions: Vec<Action> = Vec::new();
 
-    let (_state, _transitive, _canonical, _diff_tracker, diffs, last_graph) =
+    let (_state, _transitive, _canonical, _diff_tracker, diffs, _last_graph) =
         process_with_canonical(&actions, ROOT_SPACE_ID);
 
-    // Should handle gracefully - might not have a graph if root doesn't exist
-    // The behavior depends on implementation, but shouldn't panic
-    assert!(diffs.is_empty() || last_graph.is_none() || last_graph.is_some());
+    // No actions means no topology changes, so no diffs should be emitted
+    assert!(diffs.is_empty());
 }
 
 #[test]
