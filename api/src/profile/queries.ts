@@ -134,7 +134,7 @@ export function getProfileByAddress(db: Database, address: string): Effect.Effec
 			const result = await db.execute<RawProfileRow>(sql`
 				SELECT ${profileSelectFields()}
 				FROM spaces s
-				WHERE s.address = ${address}
+				WHERE LOWER(s.address) = ${address}
 				  AND s.type = 'Personal'
 				LIMIT 1
 			`)
