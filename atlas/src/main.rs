@@ -96,7 +96,7 @@ enum AtlasError {
     #[error("Failed to decode actions: {0}")]
     DecodeError(#[from] prost::DecodeError),
     #[error("Kafka error: {0}")]
-    KafkaError(String),
+    KafkaError(#[from] atlas::kafka::ProducerError),
 }
 
 impl Sink for AtlasSink {
@@ -200,8 +200,7 @@ impl AtlasSink {
             if !diff.is_empty() {
                 let change_count = diff.len();
                 self.emitter
-                    .emit_diff(&new_graph.root, &diff, &event.meta)
-                    .map_err(|e| AtlasError::KafkaError(e.to_string()))?;
+                    .emit_diff(&new_graph.root, &diff, &event.meta)?;
                 *emit_count += 1;
 
                 let added = diff.changes.iter().filter(|c| c.change_type == atlas::graph::ChangeType::Added).count();
