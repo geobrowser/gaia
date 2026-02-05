@@ -68,8 +68,10 @@ spec:
             # Kafka consumer configuration
             - name: ENVIRONMENT
               value: "production"
-            - name: KAFKA_GROUP_ID
-              value: "search-indexer-group-v2"
+            - name: KAFKA_GROUP_EDITS_ID
+              value: "search-indexer-group-edits-v2"
+            - name: KAFKA_GROUP_SCORES_ID
+              value: "search-indexer-group-scores-v2"
             # Logging
             - name: RUST_LOG
               value: "info"

@@ -1,6 +1,6 @@
 # search-admin
 
-A Rust tool for managing OpenSearch indices. This tool provides commands for creating, reindexing, deleting, and monitoring OpenSearch indices used by the search-indexer. In production, this tool should be executed as Kubernetes Jobs by administrators (see search-indexer-deploy/k8s/jobs/).
+A Rust tool for managing OpenSearch indices. This tool provides commands for creating, reindexing, deleting, and monitoring OpenSearch indices used by the search-indexer. In production, this tool should be executed as Kubernetes Jobs by administrators (see `search-indexer-deploy/k8s/production/jobs/` or `search-indexer-deploy/k8s/staging/jobs/`).
 
 ## Features
 
@@ -64,9 +64,14 @@ git push origin main
 
 # Wait for CI/CD to build (~5-10 min)
 
-# Run migrations using the CI/CD-built image as Kubernetes Jobs
-cd search-indexer-deploy/k8s/jobs
-# Edit full-migration-job.yaml to set SOURCE_VERSION=2 and TARGET_VERSION=3
+# 1. Choose your environment
+#    - Production: k8s/production/jobs/ (namespace: search)
+#    - Staging: k8s/staging/jobs/ (namespace: search-staging)
+cd search-indexer-deploy/k8s/production/jobs  # or staging/jobs
+
+# 2. Edit full-migration-job.yaml to set SOURCE_VERSION=2 and TARGET_VERSION=3
+
+# 3. Run the migration (example for production)
 kubectl delete job opensearch-full-migration -n search 2>/dev/null || true
 kubectl apply -f full-migration-job.yaml
 kubectl wait --for=condition=ready pod -l job-name=opensearch-full-migration -n search --timeout=300s
@@ -111,13 +116,17 @@ search-admin delete-index --version 2 --confirm --yes
 
 ### Via Kubernetes Jobs (Recommended)
 
-For production migrations, use the full-migration job:
+For migrations, use the full-migration job:
 
 ```bash
-cd search-indexer-deploy/k8s/jobs
+# 1. Choose your environment:
+#    - Production: cd search-indexer-deploy/k8s/production/jobs
+#    - Staging:    cd search-indexer-deploy/k8s/staging/jobs
+cd search-indexer-deploy/k8s/production/jobs
 
-# Edit full-migration-job.yaml to set SOURCE_VERSION and TARGET_VERSION
-# Then run:
+# 2. Edit full-migration-job.yaml to set SOURCE_VERSION and TARGET_VERSION
+
+# 3. Run the migration (adjust namespace for staging: -n search-staging)
 kubectl delete job opensearch-full-migration -n search 2>/dev/null || true
 kubectl apply -f full-migration-job.yaml
 kubectl wait --for=condition=ready pod -l job-name=opensearch-full-migration -n search --timeout=300s
@@ -126,12 +135,12 @@ kubectl logs -n search -f job/opensearch-full-migration
 
 **Prerequisites:** Contact your Kubernetes administrator for search admin credentials.
 
-For debugging or individual operations:
+For debugging or individual operations (from the chosen environment's jobs/ directory):
 
 ```bash
 # List indices
 kubectl apply -f list-indices-job.yaml
-kubectl logs -n search -f job/opensearch-list-indices
+kubectl logs -n search -f job/opensearch-list-indices  # use -n search-staging for staging
 
 # Create index (for testing)
 kubectl apply -f create-index-job.yaml
@@ -147,7 +156,8 @@ kubectl logs -n search -f job/opensearch-delete-index
 | Variable | Description | Default |
 |----------|-------------|---------|
 | `OPENSEARCH_URL` | OpenSearch connection URL | `http://localhost:9200` |
-| `INDEX_ALIAS` | Index alias name | `entities` |
+| `ENVIRONMENT` | Environment name (`staging` or `production`). Staging adds `staging_` prefix to index names. | `production` |
+| `INDEX_ALIAS` | Base index alias name | `entities` |
 | `RUST_LOG` | Log level (trace, debug, info, warn, error) | `info` |
 
 ## Commands

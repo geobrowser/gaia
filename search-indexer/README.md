@@ -77,7 +77,8 @@ See the [search-admin documentation](../search-admin/README.md) for manual index
 | `INDEX_ALIAS` | Index alias name | `entities` |
 | `ENTITIES_INDEX_VERSION` | Index version number | `0` |
 | `KAFKA_BROKER` | Kafka broker address | `localhost:9092` |
-| `KAFKA_GROUP_ID` | Consumer group ID | `search-indexer` |
+| `KAFKA_GROUP_EDITS_ID` | Consumer group ID for entity events | `search-indexer-group-edits` |
+| `KAFKA_GROUP_SCORES_ID` | Consumer group ID for score events | `search-indexer-group-scores` |
 | `KAFKA_TOPIC` | Kafka topic to consume | `knowledge.edits` |
 | `KAFKA_BATCH_SIZE` | Messages to batch before sending | `10` |
 | `KAFKA_BATCH_TIMEOUT_MS` | Max wait time before flushing batch (ms) | `1000` |
@@ -463,11 +464,12 @@ With production settings (`CHANNEL_BUFFER_SIZE=10`, `KAFKA_BATCH_SIZE=10`, avg m
 
 ### Reprocessing All Events
 
-If you need to reprocess all events from the beginning (e.g., after fixing a bug, schema changes, or data corruption), change the `KAFKA_GROUP_ID` to a new value:
+If you need to reprocess all events from the beginning (e.g., after fixing a bug, schema changes, or data corruption), change the consumer group IDs to new values:
 
 ```bash
-# Use a new consumer group ID to reprocess from the beginning
-KAFKA_GROUP_ID=search-indexer-v2 \
+# Use new consumer group IDs to reprocess from the beginning
+KAFKA_GROUP_EDITS_ID=search-indexer-group-edits-v3 \
+KAFKA_GROUP_SCORES_ID=search-indexer-group-scores-v3 \
 ENVIRONMENT=staging \
 OPENSEARCH_URL=http://localhost:9200 \
 KAFKA_BROKER=localhost:9092 \
@@ -478,7 +480,7 @@ cargo run --features search-indexer-repository/auto_index_creation
 
 **Notes:**
 - A new consumer group has no committed offsets, so `auto.offset.reset=earliest` starts from offset 0
-- Update `KAFKA_GROUP_ID` once (e.g., `search-indexer` → `search-indexer-v2`), then keep using that value
+- Update consumer group IDs once (e.g., `...-v2` → `...-v3`), then keep using those values
 - Consider incrementing `ENTITIES_INDEX_VERSION` to index into a fresh index (use `search-admin` to create the new index first)
 
 ## Troubleshooting
@@ -499,4 +501,41 @@ cargo run --features search-indexer-repository/auto_index_creation
 - Check OpenSearch cluster health
 - Monitor Kafka consumer lag
 - Consider increasing batch size in loader config
+
+## Environment Isolation
+
+The search-indexer supports staging and production environments on shared infrastructure (Kafka, OpenSearch, Kubernetes) through automatic prefixing controlled by the `ENVIRONMENT` variable.
+
+### Resource Isolation Table
+
+| Resource | Production | Staging |
+|----------|------------|---------|
+| **K8s Namespace** | `search` | `search-staging` |
+| **Kafka Topics** | `knowledge.edits`, `curation.scores` | `staging.knowledge.edits`, `staging.curation.scores` |
+| **Consumer Groups** | `search-indexer-group-edits-v2`, `search-indexer-group-scores-v2` | `staging-search-indexer-group-edits-v2`, `staging-search-indexer-group-scores-v2` |
+| **OpenSearch Alias** | `entities` | `staging_entities` |
+| **OpenSearch Indices** | `entities_v0`, `entities_v1`, ... | `staging_entities_v0`, `staging_entities_v1`, ... |
+
+### How Prefixing Works
+
+```
+ENVIRONMENT=staging
+    │
+    ├─► Topic Prefix: "staging." (via hermes-kafka)
+    │   └─► Topics: staging.knowledge.edits, staging.curation.scores
+    │
+    ├─► Index Prefix: "staging_" (via search-indexer-shared)
+    │   └─► Alias: staging_entities
+    │   └─► Indices: staging_entities_v0, staging_entities_v1, ...
+    │
+    └─► Consumer Group Prefix: "staging-" (applied to KAFKA_GROUP_EDITS_ID and KAFKA_GROUP_SCORES_ID)
+        └─► Entities: staging-search-indexer-group-edits-v2
+        └─► Scores: staging-search-indexer-group-scores-v2
+```
+
+### Deployment Files
+
+- **Production:** `search-indexer-deploy/k8s/production/`
+- **Staging:** `search-indexer-deploy/k8s/staging/`
+- **Migration Jobs:** See `search-indexer-deploy/k8s/jobs/README.md`
 

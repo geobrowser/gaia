@@ -2,24 +2,25 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: opensearch-create-index
-  namespace: search
+  name: opensearch-delete-index
+  namespace: search-staging
   labels:
     app: opensearch-admin
-    task: create-index
+    task: delete-index
+    environment: staging
 spec:
-  # Keep job history for debugging
   ttlSecondsAfterFinished: 86400  # 24 hours
-  backoffLimit: 3
+  backoffLimit: 1
   template:
     metadata:
       labels:
         app: opensearch-admin
-        task: create-index
+        task: delete-index
+        environment: staging
     spec:
       imagePullSecrets:
       - name: regcred
-      restartPolicy: OnFailure
+      restartPolicy: Never
       securityContext:
         runAsNonRoot: true
         runAsUser: 1000
@@ -28,8 +29,8 @@ spec:
         seccompProfile:
           type: RuntimeDefault
       containers:
-      - name: create-index
-        image: registry.digitalocean.com/geo/search-admin:latest  # Update with your registry
+      - name: delete-index
+        image: registry.digitalocean.com/geo/search-admin:latest
         securityContext:
           allowPrivilegeEscalation: false
           runAsNonRoot: true
@@ -47,18 +48,32 @@ spec:
             secretKeyRef:
               name: opensearch-credentials
               key: OPENSEARCH_URL
+        - name: ENVIRONMENT
+          value: "staging"
         - name: INDEX_ALIAS
-          value: "entities"  # Default alias name
+          value: "entities"
         - name: INDEX_VERSION
-          value: "3"  # CHANGE THIS: Set to the new index version
+          value: "2"  # CHANGE THIS: Set to the index version to DELETE
+        - name: CONFIRM_DELETE
+          value: "false"  # CHANGE THIS to "true" to actually delete (safety check)
         - name: RUST_LOG
           value: "info"
         command:
-        - search-admin
-        - create-index
-        - --version
-        - "$(INDEX_VERSION)"
-        - --skip-if-exists
+        - /bin/sh
+        - -c
+        - |
+          if [ "$CONFIRM_DELETE" = "true" ]; then
+            search-admin delete-index \
+              --version "$INDEX_VERSION" \
+              --confirm \
+              --yes
+          else
+            echo "SAFETY CHECK FAILED"
+            echo ""
+            echo "This is a destructive operation."
+            echo "Set CONFIRM_DELETE to 'true' to proceed."
+            exit 1
+          fi
         resources:
           requests:
             memory: "128Mi"
