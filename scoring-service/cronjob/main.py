@@ -255,7 +255,7 @@ def main() -> None:
         logger.error("ENVIRONMENT variable is required when OUTPUT_MODE includes kafka")
         sys.exit(1)
     kafka_topic_base = os.environ.get("KAFKA_TOPIC", "curation.scores")
-    kafka_topic = f"{environment}.{kafka_topic_base}" if environment else kafka_topic_base
+    kafka_topic = f"{environment}.{kafka_topic_base}"
     kafka_username = os.environ.get("KAFKA_USERNAME")
     kafka_password = os.environ.get("KAFKA_PASSWORD")
     kafka_ssl_ca_pem = os.environ.get("KAFKA_SSL_CA_PEM")
