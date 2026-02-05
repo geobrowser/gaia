@@ -43,7 +43,7 @@ spec:
                   key: OPENSEARCH_URL
             # Index version (defaults to 0 if not set)
             - name: ENTITIES_INDEX_VERSION
-              value: "3"
+              value: "4"
             # Kafka connection (managed Kafka with SSL)
             - name: KAFKA_BROKER
               valueFrom:
@@ -68,10 +68,8 @@ spec:
             # Kafka consumer configuration
             - name: ENVIRONMENT
               value: "production"
-            - name: KAFKA_BATCH_SIZE
-              value: "50"
-            - name: KAFKA_BATCH_TIMEOUT_MS
-              value: "1000"
+            - name: KAFKA_GROUP_ID
+              value: "search-indexer-group-v2"
             # Logging
             - name: RUST_LOG
               value: "info"
@@ -120,7 +118,7 @@ spec:
               path: /readyz
               port: health
             initialDelaySeconds: 10
-            periodSeconds: 10
+            periodSeconds: 30
             timeoutSeconds: 5
             failureThreshold: 3
       restartPolicy: Always

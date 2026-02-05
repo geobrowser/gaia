@@ -43,7 +43,7 @@ impl EntitiesConsumer {
     const KNOWLEDGE_EDITS_TOPIC: &'static str = "knowledge.edits";
 
     /// Default batch size for Kafka message batching (configurable via KAFKA_BATCH_SIZE env var).
-    const DEFAULT_BATCH_SIZE: usize = 50;
+    const DEFAULT_BATCH_SIZE: usize = 10;
 
     /// Default batch timeout in milliseconds (configurable via KAFKA_BATCH_TIMEOUT_MS env var).
     const DEFAULT_BATCH_TIMEOUT_MS: u64 = 1000;
@@ -53,7 +53,7 @@ impl EntitiesConsumer {
     /// Configuration is read from environment variables with fallbacks to defaults:
     /// - ENVIRONMENT: Environment name for topic prefix ("staging" or "production")
     /// - KAFKA_TOPIC: Base topic name (default: "knowledge.edits")
-    /// - KAFKA_BATCH_SIZE: Batch size (default: 50)
+    /// - KAFKA_BATCH_SIZE: Batch size (default: 10)
     /// - KAFKA_BATCH_TIMEOUT_MS: Batch timeout in milliseconds (default: 1000)
     ///
     /// # Arguments
@@ -224,7 +224,7 @@ impl EntitiesConsumer {
                 message = message_stream.next() => {
                     match message {
                         Some(Ok(msg)) => {
-                            info!(
+                            debug!(
                                 topic = %msg.topic(),
                                 partition = msg.partition(),
                                 offset = msg.offset(),
@@ -333,7 +333,7 @@ impl EntitiesConsumer {
             let last_offset = offsets.last().map(|(_, _, o)| *o).unwrap_or(0);
 
             async {
-                info!(
+                debug!(
                     event_count = event_count,
                     message_count = batch.len(),
                     offset_count = offsets.len(),
@@ -544,7 +544,7 @@ impl EntitiesConsumer {
                 grc_20::Op::DeleteEntity(del) => {
                     // Handle entity deletion (soft delete)
                     let entity_id = Self::id_to_uuid(&del.id);
-                    info!(
+                    debug!(
                         entity_id = %entity_id,
                         space_id = %space_id,
                         edit_name = %edit.name,
@@ -555,7 +555,7 @@ impl EntitiesConsumer {
                 grc_20::Op::RestoreEntity(restore) => {
                     // Handle entity restore (un-delete)
                     let entity_id = Self::id_to_uuid(&restore.id);
-                    info!(
+                    debug!(
                         entity_id = %entity_id,
                         space_id = %space_id,
                         edit_name = %edit.name,
@@ -636,7 +636,7 @@ impl EntitiesConsumer {
             }
         }
 
-        info!(
+        debug!(
             entity_id = %entity_id,
             space_id = %space_id,
             has_name = name.is_some(),
@@ -873,7 +873,7 @@ mod tests {
     #[test]
     fn test_constants() {
         assert_eq!(EntitiesConsumer::KNOWLEDGE_EDITS_TOPIC, "knowledge.edits");
-        assert_eq!(EntitiesConsumer::DEFAULT_BATCH_SIZE, 50);
+        assert_eq!(EntitiesConsumer::DEFAULT_BATCH_SIZE, 10);
         assert_eq!(EntitiesConsumer::DEFAULT_BATCH_TIMEOUT_MS, 1000);
     }
 

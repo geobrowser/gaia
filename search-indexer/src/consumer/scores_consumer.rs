@@ -268,7 +268,7 @@ impl ScoresConsumer {
             let last_offset = offsets.last().map(|(_, _, o)| *o).unwrap_or(0);
 
             async {
-                info!(
+                debug!(
                     event_count = event_count,
                     message_count = batch.len(),
                     "Sending batch of score events to processor"
