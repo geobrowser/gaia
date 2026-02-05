@@ -186,9 +186,25 @@ impl AtlasSink {
                     .emit_diff(&graph.root, &diff, &event.meta)
                     .map_err(|e| AtlasError::KafkaError(e.to_string()))?;
                 *emit_count += 1;
+
+                let added = diff.changes.iter().filter(|c| c.change_type == atlas::graph::ChangeType::Added).count();
+                let removed = diff.changes.iter().filter(|c| c.change_type == atlas::graph::ChangeType::Removed).count();
+                let moved = diff.changes.iter().filter(|c| c.change_type == atlas::graph::ChangeType::Moved).count();
+
+                // Show up to 5 affected space IDs for debuggability; truncate for large diffs
+                let sample: Vec<String> = diff.changes.iter()
+                    .take(5)
+                    .map(|c| format!("{}:{:?}", hex::encode(c.space_id), c.change_type))
+                    .collect();
+                let truncated = if diff.len() > 5 { format!(" (+{} more)", diff.len() - 5) } else { String::new() };
+
                 info!(
                     change_count,
+                    added,
+                    removed,
+                    moved,
                     node_count = graph.len(),
+                    changes = %format!("[{}]{}", sample.join(", "), truncated),
                     "Emitted canonical graph diff"
                 );
             }
