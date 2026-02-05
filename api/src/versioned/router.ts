@@ -21,13 +21,19 @@ type AppEnv = {
 import {isValidUuid} from "../utils/uuid"
 import {diffGroupedEntitySnapshots} from "./diff"
 import {
+	computeProposalDiff,
+	EditBlobNotCachedError,
+	EditDecodeError,
+	ProposalNotFoundError,
+} from "./proposal-diff"
+import {
 	getEntitySnapshotAtVersion,
 	getEntityVersions,
 	getGroupedEntitySnapshotAtVersion,
 	type QueryError,
 	resolveVersionKey,
 } from "./queries"
-import type {EntitySnapshot, GroupedEntityDiff, VersionEntry} from "./types"
+import type {EntitySnapshot, GroupedEntityDiff, PaginatedProposalDiff, VersionEntry} from "./types"
 
 type Database = NodePgDatabase<Record<string, unknown>>
 
@@ -41,6 +47,14 @@ class NotFoundError extends Data.TaggedError("NotFoundError")<{
 }> {}
 
 type VersionedError = ValidationError | NotFoundError | QueryError
+
+type ProposalError =
+	| ValidationError
+	| NotFoundError
+	| QueryError
+	| ProposalNotFoundError
+	| EditBlobNotCachedError
+	| EditDecodeError
 
 /**
  * Create the versioned entities router.
@@ -576,6 +590,192 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 					const {groups, ...rest} = diff
 					return c.json({...rest, ...groups})
 				},
+			})
+		},
+	)
+
+	/**
+	 * GET /versioned/proposals/:id/diff
+	 *
+	 * Compute a diff between a proposal's proposed changes and the base state.
+	 * - Active proposals: compare against current live state
+	 * - Closed proposals: compare against versioned state at end_time
+	 */
+	router.get(
+		"/proposals/:id/diff",
+		describeRoute({
+			tags: ["Versioned Entities"],
+			summary: "Compute proposal diff",
+			description:
+				"Computes the difference between a proposal's proposed changes and the base state. For active proposals, compares against current live state. For closed proposals, compares against versioned state at end_time.",
+			parameters: [
+				{
+					name: "id",
+					in: "path",
+					description: "Proposal UUID",
+					required: true,
+					schema: {type: "string", format: "uuid"},
+				},
+				{
+					name: "spaceId",
+					in: "query",
+					description: "Space UUID to scope the diff",
+					required: true,
+					schema: {type: "string", format: "uuid"},
+				},
+				{
+					name: "cursor",
+					in: "query",
+					description: "Pagination cursor for fetching next page",
+					required: false,
+					schema: {type: "string"},
+				},
+				{
+					name: "limit",
+					in: "query",
+					description: "Maximum number of entities per page",
+					required: false,
+					schema: {type: "integer", minimum: 1, maximum: 100, default: 50},
+				},
+			],
+			responses: {
+				200: {
+					description: "Paginated proposal diff",
+					content: {
+						"application/json": {
+							schema: {
+								$ref: "#/components/schemas/PaginatedProposalDiff",
+							},
+						},
+					},
+				},
+				400: {
+					description: "Invalid parameter",
+					content: {
+						"application/json": {
+							schema: {
+								type: "object",
+								properties: {
+									error: {type: "string"},
+									message: {type: "string"},
+								},
+							},
+						},
+					},
+				},
+				404: {
+					description: "Proposal not found or edit blob not cached",
+					content: {
+						"application/json": {
+							schema: {
+								type: "object",
+								properties: {
+									error: {type: "string"},
+									message: {type: "string"},
+								},
+							},
+						},
+					},
+				},
+				500: {
+					description: "Internal server error",
+					content: {
+						"application/json": {
+							schema: {
+								type: "object",
+								properties: {
+									error: {type: "string"},
+									message: {type: "string"},
+								},
+							},
+						},
+					},
+				},
+			},
+		}),
+		async (c) => {
+			const proposalId = c.req.param("id")
+			const spaceId = c.req.query("spaceId")
+			const cursor = c.req.query("cursor")
+			const limitParam = c.req.query("limit")
+			const requestId = c.get("requestId") ?? "unknown"
+
+			const program = Effect.gen(function* () {
+				// Validate proposalId
+				if (!isValidUuid(proposalId)) {
+					return yield* Effect.fail(new ValidationError({message: "Proposal ID must be a valid UUID"}))
+				}
+
+				// Validate spaceId is provided
+				if (!spaceId) {
+					return yield* Effect.fail(
+						new ValidationError({message: "spaceId query parameter is required"}),
+					)
+				}
+
+				if (!isValidUuid(spaceId)) {
+					return yield* Effect.fail(new ValidationError({message: "spaceId must be a valid UUID"}))
+				}
+
+				// Parse and validate limit
+				let limit = 50
+				if (limitParam) {
+					const parsed = parseInt(limitParam, 10)
+					if (Number.isNaN(parsed) || parsed < 1) {
+						return yield* Effect.fail(new ValidationError({message: "limit must be a positive integer"}))
+					}
+					limit = Math.min(parsed, 100)
+				}
+
+				// Compute proposal diff
+				const diff = yield* computeProposalDiff(db, proposalId, spaceId, cursor, limit)
+
+				return diff
+			}).pipe(
+				Effect.tapError((error) => {
+					if (error._tag === "QueryError") {
+						return Effect.logError(
+							`Database error: operation=${error.operation}, cause=${String(error.cause)}`,
+						)
+					}
+					if (error._tag === "EditDecodeError") {
+						return Effect.logError(`Edit decode error: ${String(error.cause)}`)
+					}
+					return Effect.void
+				}),
+				Effect.withSpan("GET /versioned/proposals/:id/diff"),
+				Effect.annotateSpans({requestId, proposalId, spaceId}),
+			)
+
+			const result = await runtime.runPromise(Effect.either(program))
+
+			return Either.match(result, {
+				onLeft: (error: ProposalError) => {
+					switch (error._tag) {
+						case "ValidationError":
+							return c.json({error: "Invalid parameter", message: error.message}, 400)
+						case "NotFoundError":
+							return c.json({error: "Not found", message: error.message}, 404)
+						case "ProposalNotFoundError":
+							return c.json({error: "Not found", message: `Proposal '${error.proposalId}' not found`}, 404)
+						case "EditBlobNotCachedError":
+							return c.json(
+								{error: "Not found", message: `Edit blob not cached for URI: ${error.uri}`},
+								404,
+							)
+						case "EditDecodeError":
+							return c.json(
+								{error: "Internal server error", message: "Failed to decode edit blob"},
+								500,
+							)
+						case "QueryError":
+							return c.json(
+								{error: "Internal server error", message: "An unexpected error occurred"},
+								500,
+							)
+					}
+				},
+				onRight: (diff: PaginatedProposalDiff) => c.json(diff),
 			})
 		},
 	)
