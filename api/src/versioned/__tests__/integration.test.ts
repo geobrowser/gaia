@@ -23,6 +23,7 @@ import {Hono} from "hono"
 import {Pool} from "pg"
 import {afterAll, beforeAll, describe, expect, it} from "vitest"
 import {runtime} from "../../services/runtime"
+import {normalizeUuid} from "../../utils/uuid"
 import {createVersionedRouter} from "../router"
 
 // Skip integration tests if DATABASE_URL is not set
@@ -35,95 +36,95 @@ const SKIP_INTEGRATION = !DATABASE_URL
 
 const uuid = {
 	// Spaces
-	space1: "10000000-0001-4000-8000-000000000001",
-	space2: "10000000-0001-4000-8000-000000000002",
+	space1: normalizeUuid("10000000-0001-4000-8000-000000000001"),
+	space2: normalizeUuid("10000000-0001-4000-8000-000000000002"),
 
 	// Entities
-	entityAllTypes: "10000000-0002-4000-8000-000000000001", // Has all 13 value types
-	entityWithRelations: "10000000-0002-4000-8000-000000000002",
-	entityWithBlocks: "10000000-0002-4000-8000-000000000003",
-	entityChanging: "10000000-0002-4000-8000-000000000004", // Changes between versions
-	entityDeleted: "10000000-0002-4000-8000-000000000005", // Deleted at v2
-	entityCreatedLater: "10000000-0002-4000-8000-000000000006", // Created at v2
-	entityNonExistent: "10000000-0002-4000-8000-000000000999",
+	entityAllTypes: normalizeUuid("10000000-0002-4000-8000-000000000001"), // Has all 13 value types
+	entityWithRelations: normalizeUuid("10000000-0002-4000-8000-000000000002"),
+	entityWithBlocks: normalizeUuid("10000000-0002-4000-8000-000000000003"),
+	entityChanging: normalizeUuid("10000000-0002-4000-8000-000000000004"), // Changes between versions
+	entityDeleted: normalizeUuid("10000000-0002-4000-8000-000000000005"), // Deleted at v2
+	entityCreatedLater: normalizeUuid("10000000-0002-4000-8000-000000000006"), // Created at v2
+	entityNonExistent: normalizeUuid("10000000-0002-4000-8000-000000000999"),
 
 	// Block entities (linked via BLOCKS relation)
-	blockText1: "10000000-0003-4000-8000-000000000001",
-	blockText2: "10000000-0003-4000-8000-000000000002",
-	blockImage: "10000000-0003-4000-8000-000000000003",
-	blockData: "10000000-0003-4000-8000-000000000004",
+	blockText1: normalizeUuid("10000000-0003-4000-8000-000000000001"),
+	blockText2: normalizeUuid("10000000-0003-4000-8000-000000000002"),
+	blockImage: normalizeUuid("10000000-0003-4000-8000-000000000003"),
+	blockData: normalizeUuid("10000000-0003-4000-8000-000000000004"),
 
 	// Entity with dynamic groups (non-BLOCKS context)
-	entityWithDynamicGroups: "10000000-0002-4000-8000-000000000007",
+	entityWithDynamicGroups: normalizeUuid("10000000-0002-4000-8000-000000000007"),
 	// Child entities for dynamic groups
-	dynamicChildA1: "10000000-0003-4000-8000-000000000005",
-	dynamicChildA2: "10000000-0003-4000-8000-000000000006",
-	dynamicChildB1: "10000000-0003-4000-8000-000000000007",
+	dynamicChildA1: normalizeUuid("10000000-0003-4000-8000-000000000005"),
+	dynamicChildA2: normalizeUuid("10000000-0003-4000-8000-000000000006"),
+	dynamicChildB1: normalizeUuid("10000000-0003-4000-8000-000000000007"),
 
 	// Properties (custom test properties)
-	propText: "10000000-0004-4000-8000-000000000001",
-	propBool: "10000000-0004-4000-8000-000000000002",
-	propInt: "10000000-0004-4000-8000-000000000003",
-	propFloat: "10000000-0004-4000-8000-000000000004",
-	propDecimal: "10000000-0004-4000-8000-000000000005",
-	propBytes: "10000000-0004-4000-8000-000000000006",
-	propDate: "10000000-0004-4000-8000-000000000007",
-	propTime: "10000000-0004-4000-8000-000000000008",
-	propDatetime: "10000000-0004-4000-8000-000000000009",
-	propSchedule: "10000000-0004-4000-8000-000000000010",
-	propPoint: "10000000-0004-4000-8000-000000000011",
-	propRect: "10000000-0004-4000-8000-000000000012",
-	propEmbedding: "10000000-0004-4000-8000-000000000013",
+	propText: normalizeUuid("10000000-0004-4000-8000-000000000001"),
+	propBool: normalizeUuid("10000000-0004-4000-8000-000000000002"),
+	propInt: normalizeUuid("10000000-0004-4000-8000-000000000003"),
+	propFloat: normalizeUuid("10000000-0004-4000-8000-000000000004"),
+	propDecimal: normalizeUuid("10000000-0004-4000-8000-000000000005"),
+	propBytes: normalizeUuid("10000000-0004-4000-8000-000000000006"),
+	propDate: normalizeUuid("10000000-0004-4000-8000-000000000007"),
+	propTime: normalizeUuid("10000000-0004-4000-8000-000000000008"),
+	propDatetime: normalizeUuid("10000000-0004-4000-8000-000000000009"),
+	propSchedule: normalizeUuid("10000000-0004-4000-8000-000000000010"),
+	propPoint: normalizeUuid("10000000-0004-4000-8000-000000000011"),
+	propRect: normalizeUuid("10000000-0004-4000-8000-000000000012"),
+	propEmbedding: normalizeUuid("10000000-0004-4000-8000-000000000013"),
 
 	// System properties (from GRC-20)
-	propName: SystemIds.NAME_PROPERTY,
-	propMarkdownContent: SystemIds.MARKDOWN_CONTENT,
-	propImageUrl: SystemIds.IMAGE_URL_PROPERTY,
-	propTypesProperty: SystemIds.TYPES_PROPERTY,
+	propName: normalizeUuid(SystemIds.NAME_PROPERTY),
+	propMarkdownContent: normalizeUuid(SystemIds.MARKDOWN_CONTENT),
+	propImageUrl: normalizeUuid(SystemIds.IMAGE_URL_PROPERTY),
+	propTypesProperty: normalizeUuid(SystemIds.TYPES_PROPERTY),
 
 	// Block type entities (from GRC-20)
-	textBlockType: SystemIds.TEXT_BLOCK,
-	imageBlockType: SystemIds.IMAGE_BLOCK,
-	dataBlockType: SystemIds.DATA_BLOCK,
+	textBlockType: normalizeUuid(SystemIds.TEXT_BLOCK),
+	imageBlockType: normalizeUuid(SystemIds.IMAGE_BLOCK),
+	dataBlockType: normalizeUuid(SystemIds.DATA_BLOCK),
 
 	// Relation types
-	relTypeGeneric: "10000000-0005-4000-8000-000000000001",
-	relTypeBlocks: SystemIds.BLOCKS, // Must use real BLOCKS type ID for block grouping to work
-	relTypeCustomA: "10000000-0005-4000-8000-000000000003", // Custom type for dynamic grouping
-	relTypeCustomB: "10000000-0005-4000-8000-000000000004", // Another custom type
+	relTypeGeneric: normalizeUuid("10000000-0005-4000-8000-000000000001"),
+	relTypeBlocks: normalizeUuid(SystemIds.BLOCKS), // Must use real BLOCKS type ID for block grouping to work
+	relTypeCustomA: normalizeUuid("10000000-0005-4000-8000-000000000003"), // Custom type for dynamic grouping
+	relTypeCustomB: normalizeUuid("10000000-0005-4000-8000-000000000004"), // Another custom type
 
 	// Relations
-	rel1: "10000000-0006-4000-8000-000000000001",
-	rel2: "10000000-0006-4000-8000-000000000002",
-	relCrossSpace: "10000000-0006-4000-8000-000000000003",
-	relPositioned: "10000000-0006-4000-8000-000000000004",
-	relBlock1: "10000000-0006-4000-8000-000000000005",
-	relBlock2: "10000000-0006-4000-8000-000000000006",
-	relBlockImage: "10000000-0006-4000-8000-000000000007",
-	relBlockData: "10000000-0006-4000-8000-000000000008",
+	rel1: normalizeUuid("10000000-0006-4000-8000-000000000001"),
+	rel2: normalizeUuid("10000000-0006-4000-8000-000000000002"),
+	relCrossSpace: normalizeUuid("10000000-0006-4000-8000-000000000003"),
+	relPositioned: normalizeUuid("10000000-0006-4000-8000-000000000004"),
+	relBlock1: normalizeUuid("10000000-0006-4000-8000-000000000005"),
+	relBlock2: normalizeUuid("10000000-0006-4000-8000-000000000006"),
+	relBlockImage: normalizeUuid("10000000-0006-4000-8000-000000000007"),
+	relBlockData: normalizeUuid("10000000-0006-4000-8000-000000000008"),
 	// Type relations for blocks (to identify block type)
-	relBlock1Type: "10000000-0006-4000-8000-000000000009",
-	relBlock2Type: "10000000-0006-4000-8000-000000000010",
-	relBlockImageType: "10000000-0006-4000-8000-000000000011",
-	relBlockDataType: "10000000-0006-4000-8000-000000000012",
+	relBlock1Type: normalizeUuid("10000000-0006-4000-8000-000000000009"),
+	relBlock2Type: normalizeUuid("10000000-0006-4000-8000-000000000010"),
+	relBlockImageType: normalizeUuid("10000000-0006-4000-8000-000000000011"),
+	relBlockDataType: normalizeUuid("10000000-0006-4000-8000-000000000012"),
 	// Relations for dynamic grouping (custom types, not BLOCKS)
-	relDynamicA1: "10000000-0006-4000-8000-000000000013",
-	relDynamicA2: "10000000-0006-4000-8000-000000000014",
-	relDynamicB1: "10000000-0006-4000-8000-000000000015",
+	relDynamicA1: normalizeUuid("10000000-0006-4000-8000-000000000013"),
+	relDynamicA2: normalizeUuid("10000000-0006-4000-8000-000000000014"),
+	relDynamicB1: normalizeUuid("10000000-0006-4000-8000-000000000015"),
 
 	// Edits (versions)
-	edit1: "10000000-0007-4000-8000-000000000001", // Version 1
-	edit2: "10000000-0007-4000-8000-000000000002", // Version 2
-	edit3: "10000000-0007-4000-8000-000000000003", // Version 3
+	edit1: normalizeUuid("10000000-0007-4000-8000-000000000001"), // Version 1
+	edit2: normalizeUuid("10000000-0007-4000-8000-000000000002"), // Version 2
+	edit3: normalizeUuid("10000000-0007-4000-8000-000000000003"), // Version 3
 
 	// Proposals
-	proposalActive: "10000000-0008-4000-8000-000000000001",
-	proposalClosed: "10000000-0008-4000-8000-000000000002",
-	proposalExecuted: "10000000-0008-4000-8000-000000000003",
-	proposalNoPublish: "10000000-0008-4000-8000-000000000004",
+	proposalActive: normalizeUuid("10000000-0008-4000-8000-000000000001"),
+	proposalClosed: normalizeUuid("10000000-0008-4000-8000-000000000002"),
+	proposalExecuted: normalizeUuid("10000000-0008-4000-8000-000000000003"),
+	proposalNoPublish: normalizeUuid("10000000-0008-4000-8000-000000000004"),
 
 	// Value IDs (for value_versions)
-	val: (n: number) => `10000000-0009-4000-8000-${n.toString().padStart(12, "0")}`,
+	val: (n: number) => normalizeUuid(`10000000-0009-4000-8000-${n.toString().padStart(12, "0")}`),
 }
 
 // Version keys: (block_number << 32) | sequence
@@ -747,6 +748,189 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 			// This test would need a proposal WITH content_uri to test cursor validation
 			// For now, we verify the endpoint handles the request
 			expect([200, 400]).toContain(res.status)
+		})
+	})
+
+	// ==========================================================================
+	// 11. UUID Format - Dashless Regression Guard
+	//
+	// The API must return dashless lowercase hex UUIDs (32 chars, no dashes).
+	// These tests verify every UUID field in every response shape to catch
+	// regressions where Postgres dashed UUIDs leak through.
+	// ==========================================================================
+
+	describe("UUID Format - all responses use dashless UUIDs", () => {
+		const DASHLESS_UUID = /^[0-9a-f]{32}$/
+
+		function expectDashlessUuid(value: unknown, field: string): void {
+			expect(value, `${field} should be a dashless UUID but got: ${value}`).toMatch(DASHLESS_UUID)
+		}
+
+		function expectOptionalDashlessUuid(value: unknown, field: string): void {
+			if (value !== null && value !== undefined) {
+				expectDashlessUuid(value, field)
+			}
+		}
+
+		function assertValueUuids(v: any, prefix: string): void {
+			expectDashlessUuid(v.propertyId, `${prefix}.propertyId`)
+			expectDashlessUuid(v.spaceId, `${prefix}.spaceId`)
+			expectOptionalDashlessUuid(v.contextRootId, `${prefix}.contextRootId`)
+			expectOptionalDashlessUuid(v.contextEdgeTypeId, `${prefix}.contextEdgeTypeId`)
+		}
+
+		function assertRelationUuids(r: any, prefix: string): void {
+			expectDashlessUuid(r.relationId, `${prefix}.relationId`)
+			expectDashlessUuid(r.typeId, `${prefix}.typeId`)
+			expectDashlessUuid(r.fromEntityId, `${prefix}.fromEntityId`)
+			expectOptionalDashlessUuid(r.fromSpaceId, `${prefix}.fromSpaceId`)
+			expectDashlessUuid(r.toEntityId, `${prefix}.toEntityId`)
+			expectOptionalDashlessUuid(r.toSpaceId, `${prefix}.toSpaceId`)
+			expectDashlessUuid(r.spaceId, `${prefix}.spaceId`)
+			expectOptionalDashlessUuid(r.contextRootId, `${prefix}.contextRootId`)
+			expectOptionalDashlessUuid(r.contextEdgeTypeId, `${prefix}.contextEdgeTypeId`)
+		}
+
+		function assertBlockSnapshotUuids(b: any, prefix: string): void {
+			expectDashlessUuid(b.id, `${prefix}.id`)
+			for (let i = 0; i < b.values.length; i++) {
+				assertValueUuids(b.values[i], `${prefix}.values[${i}]`)
+			}
+			for (let i = 0; i < b.relations.length; i++) {
+				assertRelationUuids(b.relations[i], `${prefix}.relations[${i}]`)
+			}
+		}
+
+		function assertValueChangeUuids(v: any, prefix: string): void {
+			expectDashlessUuid(v.propertyId, `${prefix}.propertyId`)
+			expectDashlessUuid(v.spaceId, `${prefix}.spaceId`)
+		}
+
+		function assertRelationChangeUuids(r: any, prefix: string): void {
+			expectDashlessUuid(r.relationId, `${prefix}.relationId`)
+			expectDashlessUuid(r.typeId, `${prefix}.typeId`)
+			expectDashlessUuid(r.spaceId, `${prefix}.spaceId`)
+			if (r.before) {
+				expectDashlessUuid(r.before.toEntityId, `${prefix}.before.toEntityId`)
+				expectOptionalDashlessUuid(r.before.toSpaceId, `${prefix}.before.toSpaceId`)
+			}
+			if (r.after) {
+				expectDashlessUuid(r.after.toEntityId, `${prefix}.after.toEntityId`)
+				expectOptionalDashlessUuid(r.after.toSpaceId, `${prefix}.after.toSpaceId`)
+			}
+		}
+
+		function assertBlockChangeUuids(b: any, prefix: string): void {
+			expectDashlessUuid(b.id, `${prefix}.id`)
+		}
+
+		function assertEntityDiffUuids(d: any, prefix: string): void {
+			expectDashlessUuid(d.entityId, `${prefix}.entityId`)
+			for (let i = 0; i < d.values.length; i++) {
+				assertValueChangeUuids(d.values[i], `${prefix}.values[${i}]`)
+			}
+			for (let i = 0; i < d.relations.length; i++) {
+				assertRelationChangeUuids(d.relations[i], `${prefix}.relations[${i}]`)
+			}
+			for (let i = 0; i < d.blocks.length; i++) {
+				assertBlockChangeUuids(d.blocks[i], `${prefix}.blocks[${i}]`)
+			}
+		}
+
+		it("entity snapshot: id, values, relations, blocks all dashless", async () => {
+			const res = await app.request(
+				`/versioned/entities/${uuid.entityWithBlocks}?editId=${uuid.edit1}&spaceId=${uuid.space1}`,
+			)
+			expect(res.status).toBe(200)
+			const body = await res.json()
+
+			// EntitySnapshot.id
+			expectDashlessUuid(body.id, "id")
+
+			// EntitySnapshot.values[]
+			for (let i = 0; i < body.values.length; i++) {
+				assertValueUuids(body.values[i], `values[${i}]`)
+			}
+
+			// EntitySnapshot.relations[]
+			for (let i = 0; i < body.relations.length; i++) {
+				assertRelationUuids(body.relations[i], `relations[${i}]`)
+			}
+
+			// EntitySnapshot.blocks[]
+			for (let i = 0; i < body.blocks.length; i++) {
+				assertBlockSnapshotUuids(body.blocks[i], `blocks[${i}]`)
+			}
+		})
+
+		it("entity snapshot with relations: all relation UUID fields dashless", async () => {
+			const res = await app.request(
+				`/versioned/entities/${uuid.entityWithRelations}?editId=${uuid.edit1}&spaceId=${uuid.space1}`,
+			)
+			expect(res.status).toBe(200)
+			const body = await res.json()
+
+			expect(body.relations.length).toBeGreaterThan(0)
+			for (let i = 0; i < body.relations.length; i++) {
+				assertRelationUuids(body.relations[i], `relations[${i}]`)
+			}
+		})
+
+		it("entity diff: entityId, value changes, relation changes, block changes all dashless", async () => {
+			const res = await app.request(
+				`/versioned/entities/${uuid.entityChanging}/diff?fromEditId=${uuid.edit1}&toEditId=${uuid.edit2}&spaceId=${uuid.space1}`,
+			)
+			expect(res.status).toBe(200)
+			const body = await res.json()
+
+			// GroupedEntityDiff top-level
+			expectDashlessUuid(body.entityId, "entityId")
+
+			// ValueChange[]
+			for (let i = 0; i < body.values.length; i++) {
+				assertValueChangeUuids(body.values[i], `values[${i}]`)
+			}
+
+			// RelationChange[]
+			for (let i = 0; i < body.relations.length; i++) {
+				assertRelationChangeUuids(body.relations[i], `relations[${i}]`)
+			}
+
+			// BlockChange[]
+			for (let i = 0; i < body.blocks.length; i++) {
+				assertBlockChangeUuids(body.blocks[i], `blocks[${i}]`)
+			}
+
+			// GroupedEntityDiff.groupKeys[]
+			for (let i = 0; i < body.groupKeys.length; i++) {
+				expectDashlessUuid(body.groupKeys[i], `groupKeys[${i}]`)
+			}
+		})
+
+		it("entity versions: editId is dashless", async () => {
+			const res = await app.request(`/versioned/entities/${uuid.entityAllTypes}/versions?spaceId=${uuid.space1}`)
+			expect(res.status).toBe(200)
+			const body = await res.json()
+
+			expect(body.versions.length).toBeGreaterThan(0)
+			for (let i = 0; i < body.versions.length; i++) {
+				expectDashlessUuid(body.versions[i].editId, `versions[${i}].editId`)
+			}
+		})
+
+		it("proposal diff: proposalId, spaceId, entity diffs all dashless", async () => {
+			const res = await app.request(`/versioned/proposals/${uuid.proposalActive}/diff?spaceId=${uuid.space1}`)
+			expect(res.status).toBe(200)
+			const body = await res.json()
+
+			// PaginatedProposalDiff top-level
+			expectDashlessUuid(body.proposalId, "proposalId")
+			expectDashlessUuid(body.spaceId, "spaceId")
+
+			// PaginatedProposalDiff.entities[]
+			for (let i = 0; i < body.entities.length; i++) {
+				assertEntityDiffUuids(body.entities[i], `entities[${i}]`)
+			}
 		})
 	})
 })

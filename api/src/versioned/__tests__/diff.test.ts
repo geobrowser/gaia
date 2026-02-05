@@ -1,6 +1,7 @@
 import {SystemIds} from "@graphprotocol/grc-20"
 import {Effect} from "effect"
 import {describe, expect, it} from "vitest"
+import {type NormalizedUuid, normalizeUuid} from "../../utils/uuid"
 import {diffBlocks, diffEntitySnapshots, diffGroupedEntitySnapshots, diffRelations, diffValues} from "../diff"
 import type {
 	BlockSnapshot,
@@ -16,19 +17,25 @@ import type {
 // Test Helpers
 // =============================================================================
 
+/** Cast a string to NormalizedUuid for test convenience. Tests use synthetic IDs that don't need actual normalization. */
+const nuuid = (s: string) => s as NormalizedUuid
+
+/** Normalize a real UUID (like SystemIds constants) to match the dashless format used in diff.ts. */
+const norm = normalizeUuid
+
 /** Run an Effect synchronously for testing */
 const run = <A>(effect: Effect.Effect<A, never, never>): A => Effect.runSync(effect)
 
 function makeTextValue(propertyId: string, text: string, spaceId = "space-1"): VersionedValue {
-	return {propertyId, spaceId, text}
+	return {propertyId: nuuid(propertyId), spaceId: nuuid(spaceId), text}
 }
 
 function makeIntegerValue(propertyId: string, integer: number, spaceId = "space-1"): VersionedValue {
-	return {propertyId, spaceId, integer}
+	return {propertyId: nuuid(propertyId), spaceId: nuuid(spaceId), integer}
 }
 
 function makeBooleanValue(propertyId: string, boolean: boolean, spaceId = "space-1"): VersionedValue {
-	return {propertyId, spaceId, boolean}
+	return {propertyId: nuuid(propertyId), spaceId: nuuid(spaceId), boolean}
 }
 
 function makeRelation(
@@ -38,36 +45,36 @@ function makeRelation(
 	opts: Partial<VersionedRelation> = {},
 ): VersionedRelation {
 	return {
-		relationId,
-		typeId,
-		fromEntityId: "from-entity",
-		toEntityId,
-		spaceId: "space-1",
+		relationId: nuuid(relationId),
+		typeId: nuuid(typeId),
+		fromEntityId: nuuid("from-entity"),
+		toEntityId: nuuid(toEntityId),
+		spaceId: nuuid("space-1"),
 		...opts,
 	}
 }
 
 function makeTextBlock(id: string, markdownContent: string): BlockSnapshot {
 	return {
-		id,
-		values: [makeTextValue(SystemIds.MARKDOWN_CONTENT, markdownContent)],
-		relations: [makeRelation(`${id}-type`, SystemIds.TYPES_PROPERTY, SystemIds.TEXT_BLOCK)],
+		id: nuuid(id),
+		values: [makeTextValue(norm(SystemIds.MARKDOWN_CONTENT), markdownContent)],
+		relations: [makeRelation(`${id}-type`, norm(SystemIds.TYPES_PROPERTY), norm(SystemIds.TEXT_BLOCK))],
 	}
 }
 
 function makeImageBlock(id: string, imageUrl: string | null): BlockSnapshot {
 	return {
-		id,
-		values: imageUrl ? [makeTextValue(SystemIds.IMAGE_URL_PROPERTY, imageUrl)] : [],
-		relations: [makeRelation(`${id}-type`, SystemIds.TYPES_PROPERTY, SystemIds.IMAGE_BLOCK)],
+		id: nuuid(id),
+		values: imageUrl ? [makeTextValue(norm(SystemIds.IMAGE_URL_PROPERTY), imageUrl)] : [],
+		relations: [makeRelation(`${id}-type`, norm(SystemIds.TYPES_PROPERTY), norm(SystemIds.IMAGE_BLOCK))],
 	}
 }
 
 function makeDataBlock(id: string, name: string | null): BlockSnapshot {
 	return {
-		id,
-		values: name ? [makeTextValue(SystemIds.NAME_PROPERTY, name)] : [],
-		relations: [makeRelation(`${id}-type`, SystemIds.TYPES_PROPERTY, SystemIds.DATA_BLOCK)],
+		id: nuuid(id),
+		values: name ? [makeTextValue(norm(SystemIds.NAME_PROPERTY), name)] : [],
+		relations: [makeRelation(`${id}-type`, norm(SystemIds.TYPES_PROPERTY), norm(SystemIds.DATA_BLOCK))],
 	}
 }
 
@@ -404,19 +411,19 @@ describe("diffBlocks", () => {
 describe("diffEntitySnapshots", () => {
 	it("returns diff with entity ID and name", () => {
 		const from: EntitySnapshot = {
-			id: "entity-1",
-			values: [makeTextValue(SystemIds.NAME_PROPERTY, "Old Name")],
+			id: nuuid("entity-1"),
+			values: [makeTextValue(norm(SystemIds.NAME_PROPERTY), "Old Name")],
 			relations: [],
 			blocks: [],
 		}
 		const to: EntitySnapshot = {
-			id: "entity-1",
-			values: [makeTextValue(SystemIds.NAME_PROPERTY, "New Name")],
+			id: nuuid("entity-1"),
+			values: [makeTextValue(norm(SystemIds.NAME_PROPERTY), "New Name")],
 			relations: [],
 			blocks: [],
 		}
 
-		const result = run(diffEntitySnapshots("entity-1", from, to))
+		const result = run(diffEntitySnapshots(nuuid("entity-1"), from, to))
 
 		expect(result.entityId).toBe("entity-1")
 		expect(result.name).toBe("New Name")
@@ -424,19 +431,19 @@ describe("diffEntitySnapshots", () => {
 
 	it("computes value, relation, and block diffs together", () => {
 		const from: EntitySnapshot = {
-			id: "entity-1",
+			id: nuuid("entity-1"),
 			values: [makeTextValue("prop-1", "old value")],
 			relations: [makeRelation("rel-1", "type-1", "target-1")],
 			blocks: [makeTextBlock("block-1", "old block")],
 		}
 		const to: EntitySnapshot = {
-			id: "entity-1",
+			id: nuuid("entity-1"),
 			values: [makeTextValue("prop-1", "new value")],
 			relations: [makeRelation("rel-1", "type-1", "target-2")],
 			blocks: [makeTextBlock("block-1", "new block")],
 		}
 
-		const result = run(diffEntitySnapshots("entity-1", from, to))
+		const result = run(diffEntitySnapshots(nuuid("entity-1"), from, to))
 
 		expect(result.values).toHaveLength(1)
 		expect(result.relations).toHaveLength(1)
@@ -445,19 +452,19 @@ describe("diffEntitySnapshots", () => {
 
 	it("uses name from 'to' snapshot, falling back to 'from'", () => {
 		const from: EntitySnapshot = {
-			id: "entity-1",
-			values: [makeTextValue(SystemIds.NAME_PROPERTY, "From Name")],
+			id: nuuid("entity-1"),
+			values: [makeTextValue(norm(SystemIds.NAME_PROPERTY), "From Name")],
 			relations: [],
 			blocks: [],
 		}
 		const to: EntitySnapshot = {
-			id: "entity-1",
+			id: nuuid("entity-1"),
 			values: [],
 			relations: [],
 			blocks: [],
 		}
 
-		const result = run(diffEntitySnapshots("entity-1", from, to))
+		const result = run(diffEntitySnapshots(nuuid("entity-1"), from, to))
 
 		expect(result.name).toBe("From Name")
 	})
@@ -469,7 +476,7 @@ describe("diffEntitySnapshots", () => {
 
 function makeGroupedSnapshot(id: string, opts: Partial<GroupedEntitySnapshot> = {}): GroupedEntitySnapshot {
 	return {
-		id,
+		id: nuuid(id),
 		values: [],
 		relations: [],
 		blocks: [],
@@ -484,7 +491,7 @@ describe("diffGroupedEntitySnapshots", () => {
 		const from = makeGroupedSnapshot("entity-1")
 		const to = makeGroupedSnapshot("entity-1")
 
-		const result = run(diffGroupedEntitySnapshots("entity-1", from, to))
+		const result = run(diffGroupedEntitySnapshots(nuuid("entity-1"), from, to))
 
 		// Verify response shape
 		expect(result).toHaveProperty("entityId")
@@ -501,7 +508,7 @@ describe("diffGroupedEntitySnapshots", () => {
 			blocks: [makeTextBlock("block-1", "content")],
 		})
 
-		const result = run(diffGroupedEntitySnapshots("entity-1", snapshot, snapshot))
+		const result = run(diffGroupedEntitySnapshots(nuuid("entity-1"), snapshot, snapshot))
 
 		expect(result.values).toEqual([])
 		expect(result.relations).toEqual([])
@@ -518,14 +525,14 @@ describe("diffGroupedEntitySnapshots", () => {
 			blocks: [makeTextBlock("block-1", "new content")],
 		})
 
-		const result = run(diffGroupedEntitySnapshots("entity-1", from, to))
+		const result = run(diffGroupedEntitySnapshots(nuuid("entity-1"), from, to))
 
 		expect(result.blocks).toHaveLength(1)
 		expect(result.blocks[0]?.type).toBe("textBlock")
 	})
 
 	it("computes dynamic group diffs", () => {
-		const customType = "custom-relation-type"
+		const customType = nuuid("custom-relation-type")
 		const from = makeGroupedSnapshot("entity-1", {
 			groupKeys: [customType],
 			groups: {
@@ -539,15 +546,15 @@ describe("diffGroupedEntitySnapshots", () => {
 			},
 		})
 
-		const result = run(diffGroupedEntitySnapshots("entity-1", from, to))
+		const result = run(diffGroupedEntitySnapshots(nuuid("entity-1"), from, to))
 
 		expect(result.groupKeys).toContain(customType)
 		expect(result.groups[customType]).toHaveLength(1)
 	})
 
 	it("includes groupKeys only for groups with changes", () => {
-		const typeA = "type-a"
-		const typeB = "type-b"
+		const typeA = nuuid("type-a")
+		const typeB = nuuid("type-b")
 		const from = makeGroupedSnapshot("entity-1", {
 			groupKeys: [typeA, typeB],
 			groups: {
@@ -563,7 +570,7 @@ describe("diffGroupedEntitySnapshots", () => {
 			},
 		})
 
-		const result = run(diffGroupedEntitySnapshots("entity-1", from, to))
+		const result = run(diffGroupedEntitySnapshots(nuuid("entity-1"), from, to))
 
 		// Only typeB has changes
 		expect(result.groupKeys).toEqual([typeB])
@@ -572,7 +579,7 @@ describe("diffGroupedEntitySnapshots", () => {
 	})
 
 	it("handles added dynamic group", () => {
-		const customType = "custom-type"
+		const customType = nuuid("custom-type")
 		const from = makeGroupedSnapshot("entity-1")
 		const to = makeGroupedSnapshot("entity-1", {
 			groupKeys: [customType],
@@ -581,14 +588,14 @@ describe("diffGroupedEntitySnapshots", () => {
 			},
 		})
 
-		const result = run(diffGroupedEntitySnapshots("entity-1", from, to))
+		const result = run(diffGroupedEntitySnapshots(nuuid("entity-1"), from, to))
 
 		expect(result.groupKeys).toContain(customType)
 		expect(result.groups[customType]).toHaveLength(1)
 	})
 
 	it("handles removed dynamic group", () => {
-		const customType = "custom-type"
+		const customType = nuuid("custom-type")
 		const from = makeGroupedSnapshot("entity-1", {
 			groupKeys: [customType],
 			groups: {
@@ -597,14 +604,14 @@ describe("diffGroupedEntitySnapshots", () => {
 		})
 		const to = makeGroupedSnapshot("entity-1")
 
-		const result = run(diffGroupedEntitySnapshots("entity-1", from, to))
+		const result = run(diffGroupedEntitySnapshots(nuuid("entity-1"), from, to))
 
 		expect(result.groupKeys).toContain(customType)
 		expect(result.groups[customType]).toHaveLength(1)
 	})
 
 	it("handles hybrid mode with blocks and dynamic groups", () => {
-		const customType = "custom-type"
+		const customType = nuuid("custom-type")
 		const from = makeGroupedSnapshot("entity-1", {
 			blocks: [makeTextBlock("block-1", "old block")],
 			groupKeys: [customType],
@@ -620,7 +627,7 @@ describe("diffGroupedEntitySnapshots", () => {
 			},
 		})
 
-		const result = run(diffGroupedEntitySnapshots("entity-1", from, to))
+		const result = run(diffGroupedEntitySnapshots(nuuid("entity-1"), from, to))
 
 		// Both blocks and dynamic groups have changes
 		expect(result.blocks).toHaveLength(1)
@@ -630,32 +637,32 @@ describe("diffGroupedEntitySnapshots", () => {
 
 	it("sorts groupKeys alphabetically", () => {
 		const from = makeGroupedSnapshot("entity-1", {
-			groupKeys: ["zzz-type", "aaa-type"],
+			groupKeys: [nuuid("zzz-type"), nuuid("aaa-type")],
 			groups: {
-				"zzz-type": [makeTextBlock("z-1", "old")],
-				"aaa-type": [makeTextBlock("a-1", "old")],
+				[nuuid("zzz-type")]: [makeTextBlock("z-1", "old")],
+				[nuuid("aaa-type")]: [makeTextBlock("a-1", "old")],
 			},
 		})
 		const to = makeGroupedSnapshot("entity-1", {
-			groupKeys: ["zzz-type", "aaa-type"],
+			groupKeys: [nuuid("zzz-type"), nuuid("aaa-type")],
 			groups: {
-				"zzz-type": [makeTextBlock("z-1", "new")],
-				"aaa-type": [makeTextBlock("a-1", "new")],
+				[nuuid("zzz-type")]: [makeTextBlock("z-1", "new")],
+				[nuuid("aaa-type")]: [makeTextBlock("a-1", "new")],
 			},
 		})
 
-		const result = run(diffGroupedEntitySnapshots("entity-1", from, to))
+		const result = run(diffGroupedEntitySnapshots(nuuid("entity-1"), from, to))
 
 		expect(result.groupKeys).toEqual(["aaa-type", "zzz-type"])
 	})
 
 	it("uses name from to snapshot, falling back to from", () => {
 		const from = makeGroupedSnapshot("entity-1", {
-			values: [makeTextValue(SystemIds.NAME_PROPERTY, "From Name")],
+			values: [makeTextValue(norm(SystemIds.NAME_PROPERTY), "From Name")],
 		})
 		const to = makeGroupedSnapshot("entity-1")
 
-		const result = run(diffGroupedEntitySnapshots("entity-1", from, to))
+		const result = run(diffGroupedEntitySnapshots(nuuid("entity-1"), from, to))
 
 		expect(result.name).toBe("From Name")
 	})

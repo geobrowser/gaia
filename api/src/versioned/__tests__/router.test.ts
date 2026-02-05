@@ -1,11 +1,19 @@
 import {Effect} from "effect"
 import {Hono} from "hono"
 import {beforeEach, describe, expect, it, vi} from "vitest"
+import {normalizeUuid} from "../../utils/uuid"
 import {createVersionedRouter} from "../router"
 
 // =============================================================================
 // Test Setup
 // =============================================================================
+
+// Valid UUIDs for use in mock DB rows (these pass through normalizeUuid)
+const PROP_1 = "00000000-0000-0000-0000-000000000a01"
+const SPACE_1 = "00000000-0000-0000-0000-000000000b01"
+const EDIT_1 = "00000000-0000-0000-0000-000000000c01"
+const EDIT_2 = "00000000-0000-0000-0000-000000000c02"
+const NAME_PROP = "00000000-0000-0000-0000-000000000d01"
 
 /**
  * Create a minimal mock database that implements the query interface.
@@ -122,8 +130,8 @@ describe("GET /versioned/entities/:id", () => {
 				rows: [
 					{
 						entity_id: entityId,
-						property_id: "prop-1",
-						space_id: "space-1",
+						property_id: PROP_1,
+						space_id: SPACE_1,
 						text: "Test value",
 					},
 				],
@@ -148,7 +156,7 @@ describe("GET /versioned/entities/:id", () => {
 
 			expect(res.status).toBe(200)
 			const body = await res.json()
-			expect(body.id).toBe(entityId)
+			expect(body.id).toBe(normalizeUuid(entityId))
 			expect(body.values).toBeInstanceOf(Array)
 			expect(body.relations).toBeInstanceOf(Array)
 			expect(body.blocks).toBeInstanceOf(Array)
@@ -222,12 +230,12 @@ describe("GET /versioned/entities/:id/versions", () => {
 			db.execute.mockResolvedValueOnce({
 				rows: [
 					{
-						edit_id: "edit-1",
+						edit_id: EDIT_1,
 						block_number: "100",
 						created_at: "2024-01-01T00:00:00Z",
 					},
 					{
-						edit_id: "edit-2",
+						edit_id: EDIT_2,
 						block_number: "200",
 						created_at: "2024-01-02T00:00:00Z",
 					},
@@ -250,7 +258,7 @@ describe("GET /versioned/entities/:id/versions", () => {
 			db.execute.mockResolvedValueOnce({
 				rows: [
 					{
-						edit_id: "edit-1",
+						edit_id: EDIT_1,
 						block_number: "100",
 						created_at: "2024-01-01T00:00:00Z",
 					},
@@ -353,13 +361,13 @@ describe("GET /versioned/entities/:id/diff", () => {
 			// Mock: resolveVersionKey (to)
 			db.execute.mockResolvedValueOnce({rows: [{version_key: "200"}]})
 
-			// Mock: getEntitySnapshotAtVersion (from) - values
+			// Mock: getGroupedEntitySnapshotAtVersion (from) - values
 			db.execute.mockResolvedValueOnce({
 				rows: [
 					{
 						entity_id: entityId,
-						property_id: "name-prop",
-						space_id: "space-1",
+						property_id: NAME_PROP,
+						space_id: SPACE_1,
 						text: "Old Name",
 					},
 				],
@@ -371,13 +379,13 @@ describe("GET /versioned/entities/:id/diff", () => {
 			// Mock: from - relations fallback
 			db.execute.mockResolvedValueOnce({rows: []})
 
-			// Mock: getEntitySnapshotAtVersion (to) - values
+			// Mock: getGroupedEntitySnapshotAtVersion (to) - values
 			db.execute.mockResolvedValueOnce({
 				rows: [
 					{
 						entity_id: entityId,
-						property_id: "name-prop",
-						space_id: "space-1",
+						property_id: NAME_PROP,
+						space_id: SPACE_1,
 						text: "New Name",
 					},
 				],
@@ -395,7 +403,7 @@ describe("GET /versioned/entities/:id/diff", () => {
 
 			expect(res.status).toBe(200)
 			const body = await res.json()
-			expect(body.entityId).toBe(entityId)
+			expect(body.entityId).toBe(normalizeUuid(entityId))
 			expect(body.values).toBeInstanceOf(Array)
 			expect(body.relations).toBeInstanceOf(Array)
 			expect(body.blocks).toBeInstanceOf(Array)
@@ -607,8 +615,8 @@ describe("GET /versioned/proposals/:id/diff", () => {
 
 			expect(res.status).toBe(200)
 			const body = await res.json()
-			expect(body.proposalId).toBe(proposalId)
-			expect(body.spaceId).toBe(spaceId)
+			expect(body.proposalId).toBe(normalizeUuid(proposalId))
+			expect(body.spaceId).toBe(normalizeUuid(spaceId))
 			expect(body.proposalStatus).toBe("active")
 			expect(body.entities).toEqual([])
 			expect(body.pagination).toEqual({

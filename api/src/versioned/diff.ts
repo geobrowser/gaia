@@ -7,6 +7,8 @@ import {SystemIds} from "@graphprotocol/grc-20"
 import {diffWords} from "diff"
 import {Effect} from "effect"
 
+import {type NormalizedUuid, normalizeUuid} from "../utils/uuid"
+
 import type {
 	BlockChange,
 	BlockSnapshot,
@@ -21,6 +23,16 @@ import type {
 	VersionedRelation,
 	VersionedValue,
 } from "./types"
+
+// Normalize SystemIds for comparison with NormalizedUuid fields
+const TYPES_PROPERTY = normalizeUuid(SystemIds.TYPES_PROPERTY)
+const TEXT_BLOCK = normalizeUuid(SystemIds.TEXT_BLOCK)
+const IMAGE_BLOCK = normalizeUuid(SystemIds.IMAGE_BLOCK)
+const IMAGE = normalizeUuid(SystemIds.IMAGE)
+const DATA_BLOCK = normalizeUuid(SystemIds.DATA_BLOCK)
+const MARKDOWN_CONTENT = normalizeUuid(SystemIds.MARKDOWN_CONTENT)
+const IMAGE_URL_PROPERTY = normalizeUuid(SystemIds.IMAGE_URL_PROPERTY)
+const NAME_PROPERTY = normalizeUuid(SystemIds.NAME_PROPERTY)
 
 // ============================================================================
 // Value Diffing
@@ -316,10 +328,10 @@ export function diffRelations(
 function getBlockType(block: BlockSnapshot): "textBlock" | "imageBlock" | "dataBlock" | null {
 	// Check relations for type indicators
 	for (const rel of block.relations) {
-		if (rel.typeId === SystemIds.TYPES_PROPERTY) {
-			if (rel.toEntityId === SystemIds.TEXT_BLOCK) return "textBlock"
-			if (rel.toEntityId === SystemIds.IMAGE_BLOCK || rel.toEntityId === SystemIds.IMAGE) return "imageBlock"
-			if (rel.toEntityId === SystemIds.DATA_BLOCK) return "dataBlock"
+		if (rel.typeId === TYPES_PROPERTY) {
+			if (rel.toEntityId === TEXT_BLOCK) return "textBlock"
+			if (rel.toEntityId === IMAGE_BLOCK || rel.toEntityId === IMAGE) return "imageBlock"
+			if (rel.toEntityId === DATA_BLOCK) return "dataBlock"
 		}
 	}
 	return null
@@ -329,7 +341,7 @@ function getBlockType(block: BlockSnapshot): "textBlock" | "imageBlock" | "dataB
  * Extract markdown content from a text block.
  */
 function getMarkdownContent(block: BlockSnapshot): string {
-	const markdownValue = block.values.find((v) => v.propertyId === SystemIds.MARKDOWN_CONTENT)
+	const markdownValue = block.values.find((v) => v.propertyId === MARKDOWN_CONTENT)
 	return markdownValue?.text ?? ""
 }
 
@@ -337,7 +349,7 @@ function getMarkdownContent(block: BlockSnapshot): string {
  * Extract image URL from an image block.
  */
 function getImageUrl(block: BlockSnapshot): string | null {
-	const imageValue = block.values.find((v) => v.propertyId === SystemIds.IMAGE_URL_PROPERTY)
+	const imageValue = block.values.find((v) => v.propertyId === IMAGE_URL_PROPERTY)
 	return imageValue?.text ?? null
 }
 
@@ -345,7 +357,7 @@ function getImageUrl(block: BlockSnapshot): string | null {
  * Extract name from a data block.
  */
 function getBlockName(block: BlockSnapshot): string | null {
-	const nameValue = block.values.find((v) => v.propertyId === SystemIds.NAME_PROPERTY)
+	const nameValue = block.values.find((v) => v.propertyId === NAME_PROPERTY)
 	return nameValue?.text ?? null
 }
 
@@ -503,14 +515,14 @@ export function diffBlocks(
  * Extract name from a block snapshot.
  */
 function getSnapshotName(snapshot: BlockSnapshot): string | null {
-	const nameValue = snapshot.values.find((v) => v.propertyId === SystemIds.NAME_PROPERTY)
+	const nameValue = snapshot.values.find((v) => v.propertyId === NAME_PROPERTY)
 	return nameValue?.text ?? null
 }
 
 /**
  * Create an empty BlockSnapshot for diffing against when entity is added/removed.
  */
-function emptySnapshot(id: string): BlockSnapshot {
+function emptySnapshot(id: NormalizedUuid): BlockSnapshot {
 	return {id, values: [], relations: []}
 }
 
@@ -518,7 +530,7 @@ function emptySnapshot(id: string): BlockSnapshot {
  * Compute a full EntityDiff for a non-block entity.
  */
 function diffEntitySnapshot(
-	id: string,
+	id: NormalizedUuid,
 	from: BlockSnapshot,
 	to: BlockSnapshot,
 ): Effect.Effect<EntityDiff, never, never> {
@@ -719,7 +731,7 @@ export function diffDynamicGroup(
  * Extract entity name from values.
  */
 function getEntityName(snapshot: EntitySnapshot | GroupedEntitySnapshot): string | null {
-	const nameValue = snapshot.values.find((v) => v.propertyId === SystemIds.NAME_PROPERTY)
+	const nameValue = snapshot.values.find((v) => v.propertyId === NAME_PROPERTY)
 	return nameValue?.text ?? null
 }
 
@@ -727,7 +739,7 @@ function getEntityName(snapshot: EntitySnapshot | GroupedEntitySnapshot): string
  * Compute a full entity diff between two snapshots.
  */
 export function diffEntitySnapshots(
-	entityId: string,
+	entityId: NormalizedUuid,
 	from: EntitySnapshot,
 	to: EntitySnapshot,
 ): Effect.Effect<EntityDiff, never, never> {
@@ -761,7 +773,7 @@ export function diffEntitySnapshots(
  * - `groupKeys` for discoverability (union of keys from both snapshots)
  */
 export function diffGroupedEntitySnapshots(
-	entityId: string,
+	entityId: NormalizedUuid,
 	from: GroupedEntitySnapshot,
 	to: GroupedEntitySnapshot,
 ): Effect.Effect<GroupedEntityDiff, never, never> {
@@ -776,7 +788,7 @@ export function diffGroupedEntitySnapshots(
 		// Compute dynamic group diffs
 		// Collect all group keys from both snapshots
 		const allGroupKeys = new Set([...from.groupKeys, ...to.groupKeys])
-		const groups: Record<string, DynamicGroupItem[]> = {}
+		const groups: Record<NormalizedUuid, DynamicGroupItem[]> = {}
 
 		for (const key of allGroupKeys) {
 			const fromGroup = from.groups[key] ?? []
@@ -790,7 +802,7 @@ export function diffGroupedEntitySnapshots(
 		}
 
 		// groupKeys includes all keys that have changes
-		const groupKeys = Object.keys(groups).sort()
+		const groupKeys = (Object.keys(groups) as NormalizedUuid[]).sort()
 
 		return {
 			entityId,
