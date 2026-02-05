@@ -391,59 +391,69 @@ async fn async_main() -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Format a space ID with a friendly name if known
+/// Format a space ID as a short hex string (with friendly test names in test builds)
 fn format_space_id(id: SpaceId) -> String {
-    let last_byte = id[15];
-    let name = match last_byte {
-        0x01 => "Root",
-        0x0A => "A",
-        0x0B => "B",
-        0x0C => "C",
-        0x0D => "D",
-        0x0E => "E",
-        0x0F => "F",
-        0x10 => "G",
-        0x11 => "H",
-        0x12 => "I",
-        0x13 => "J",
-        0x20 => "X",
-        0x21 => "Y",
-        0x22 => "Z",
-        0x23 => "W",
-        0x30 => "P",
-        0x31 => "Q",
-        0x40 => "S",
-        _ => return format!("{:.8}...", hex::encode(id)),
-    };
-    format!("{} (0x{:02x})", name, last_byte)
+    #[cfg(test)]
+    {
+        let last_byte = id[15];
+        let name = match last_byte {
+            0x01 => "Root",
+            0x0A => "A",
+            0x0B => "B",
+            0x0C => "C",
+            0x0D => "D",
+            0x0E => "E",
+            0x0F => "F",
+            0x10 => "G",
+            0x11 => "H",
+            0x12 => "I",
+            0x13 => "J",
+            0x20 => "X",
+            0x21 => "Y",
+            0x22 => "Z",
+            0x23 => "W",
+            0x30 => "P",
+            0x31 => "Q",
+            0x40 => "S",
+            _ => return format!("{:.8}...", hex::encode(id)),
+        };
+        format!("{} (0x{:02x})", name, last_byte)
+    }
+    #[cfg(not(test))]
+    format!("{:.8}...", hex::encode(id))
 }
 
-/// Format a topic ID with a friendly name if known
+/// Format a topic ID as a short hex string (with friendly test names in test builds)
 fn format_topic_id(id: &[u8; 16]) -> String {
-    let last_byte = id[15];
-    let name = match last_byte {
-        0x02 => "T_Root",
-        0x8A => "T_A",
-        0x8B => "T_B",
-        0x8C => "T_C",
-        0x8D => "T_D",
-        0x8E => "T_E",
-        0x8F => "T_F",
-        0x90 => "T_G",
-        0x91 => "T_H",
-        0x92 => "T_I",
-        0x93 => "T_J",
-        0xA0 => "T_X",
-        0xA1 => "T_Y",
-        0xA2 => "T_Z",
-        0xA3 => "T_W",
-        0xB0 => "T_P",
-        0xB1 => "T_Q",
-        0xC0 => "T_S",
-        0xF0 => "T_SHARED",
-        _ => return format!("{:.8}...", hex::encode(id)),
-    };
-    format!("{} (0x{:02x})", name, last_byte)
+    #[cfg(test)]
+    {
+        let last_byte = id[15];
+        let name = match last_byte {
+            0x02 => "T_Root",
+            0x8A => "T_A",
+            0x8B => "T_B",
+            0x8C => "T_C",
+            0x8D => "T_D",
+            0x8E => "T_E",
+            0x8F => "T_F",
+            0x90 => "T_G",
+            0x91 => "T_H",
+            0x92 => "T_I",
+            0x93 => "T_J",
+            0xA0 => "T_X",
+            0xA1 => "T_Y",
+            0xA2 => "T_Z",
+            0xA3 => "T_W",
+            0xB0 => "T_P",
+            0xB1 => "T_Q",
+            0xC0 => "T_S",
+            0xF0 => "T_SHARED",
+            _ => return format!("{:.8}...", hex::encode(id)),
+        };
+        format!("{} (0x{:02x})", name, last_byte)
+    }
+    #[cfg(not(test))]
+    format!("{:.8}...", hex::encode(id))
 }
 
 /// Log a topology event with structured fields
