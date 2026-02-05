@@ -41,46 +41,51 @@ use hermes_instrumentation::{debug, info, info_span, Instrument};
 use hermes_relay::{Actions, HermesModule, Sink, StreamSource};
 use prost::Message;
 
+/// Mutable pipeline state behind a single Mutex.
+///
+/// Processing is single-threaded (one block, one event at a time), so all
+/// mutable state can live behind one lock. The Mutex exists only because
+/// `Sink` requires `&self` for `Send + Sync`.
+struct PipelineState {
+    graph: GraphState,
+    transitive: TransitiveProcessor,
+    canonical: CanonicalProcessor,
+    diff_tracker: DiffTracker,
+    event_count: usize,
+    emit_count: usize,
+}
+
 /// Atlas topology processor that implements the hermes-relay Sink trait.
 struct AtlasSink {
-    /// Graph state tracking all spaces and edges
-    state: Mutex<GraphState>,
-    /// Transitive closure processor
-    transitive: Mutex<TransitiveProcessor>,
-    /// Canonical graph processor
-    canonical_processor: Mutex<CanonicalProcessor>,
-    /// Diff tracker for computing incremental graph changes
-    diff_tracker: Mutex<DiffTracker>,
-    /// Kafka emitter for canonical graph updates
+    /// All mutable pipeline state behind a single lock
+    state: Mutex<PipelineState>,
+    /// Kafka emitter for canonical graph updates (internally thread-safe)
     emitter: CanonicalGraphEmitter,
-    /// Event counter for logging
-    event_count: Mutex<usize>,
-    /// Emit counter for summary (counts non-empty diffs emitted)
-    emit_count: Mutex<usize>,
 }
 
 impl AtlasSink {
     fn new(root_space: SpaceId, emitter: CanonicalGraphEmitter) -> Self {
         Self {
-            state: Mutex::new(GraphState::new()),
-            transitive: Mutex::new(TransitiveProcessor::new()),
-            canonical_processor: Mutex::new(CanonicalProcessor::new(root_space)),
-            diff_tracker: Mutex::new(DiffTracker::new()),
+            state: Mutex::new(PipelineState {
+                graph: GraphState::new(),
+                transitive: TransitiveProcessor::new(),
+                canonical: CanonicalProcessor::new(root_space),
+                diff_tracker: DiffTracker::new(),
+                event_count: 0,
+                emit_count: 0,
+            }),
             emitter,
-            event_count: Mutex::new(0),
-            emit_count: Mutex::new(0),
         }
     }
 
     fn summary(&self) {
-        let state = self.state.lock().unwrap();
-        let emit_count = *self.emit_count.lock().unwrap();
+        let s = self.state.lock().unwrap();
 
         info!(
-            spaces = state.space_count(),
-            explicit_edges = state.explicit_edge_count(),
-            topic_edges = state.topic_edge_count(),
-            kafka_messages = emit_count,
+            spaces = s.graph.space_count(),
+            explicit_edges = s.graph.explicit_edge_count(),
+            topic_edges = s.graph.topic_edge_count(),
+            kafka_messages = s.emit_count,
             "Processing complete"
         );
     }
@@ -159,31 +164,34 @@ impl AtlasSink {
 
         let _span = info_span!("process_event", event_type).entered();
 
-        let mut state = self.state.lock().unwrap();
-        let mut transitive = self.transitive.lock().unwrap();
-        let mut canonical_processor = self.canonical_processor.lock().unwrap();
-        let mut diff_tracker = self.diff_tracker.lock().unwrap();
-        let mut event_count = self.event_count.lock().unwrap();
-        let mut emit_count = self.emit_count.lock().unwrap();
+        let mut s = self.state.lock().unwrap();
+        let PipelineState {
+            graph,
+            transitive,
+            canonical,
+            diff_tracker,
+            event_count,
+            emit_count,
+        } = &mut *s;
 
         // Log the event
         log_event(*event_count, event);
         *event_count += 1;
 
         // Update transitive cache based on event
-        transitive.handle_event(event, &state);
+        transitive.handle_event(event, graph);
 
         // Apply event to graph state
-        state.apply_event(event);
+        graph.apply_event(event);
 
         // Compute canonical graph and emit diff if changed
-        if let Some(graph) = canonical_processor.compute(&state, &mut transitive) {
-            let diff = diff_tracker.track(&graph);
+        if let Some(new_graph) = canonical.compute(graph, transitive) {
+            let diff = diff_tracker.track(&new_graph);
 
             if !diff.is_empty() {
                 let change_count = diff.len();
                 self.emitter
-                    .emit_diff(&graph.root, &diff, &event.meta)
+                    .emit_diff(&new_graph.root, &diff, &event.meta)
                     .map_err(|e| AtlasError::KafkaError(e.to_string()))?;
                 *emit_count += 1;
 
@@ -203,7 +211,7 @@ impl AtlasSink {
                     added,
                     removed,
                     moved,
-                    node_count = graph.len(),
+                    node_count = new_graph.len(),
                     changes = %format!("[{}]{}", sample.join(", "), truncated),
                     "Emitted canonical graph diff"
                 );
