@@ -53,7 +53,7 @@ pub trait ScoresConsumerTrait: Send + Sync {
 /// Configuration for the orchestrator.
 #[derive(Debug, Clone)]
 pub struct OrchestratorConfig {
-    /// Size of the message channel buffer.
+    /// Size of the message channel buffers.
     pub channel_buffer_size: usize,
 }
 
@@ -87,7 +87,23 @@ pub struct ScoreProcessingBatch {
 impl Default for OrchestratorConfig {
     fn default() -> Self {
         Self {
-            channel_buffer_size: 1000,
+            channel_buffer_size: 10,
+        }
+    }
+}
+
+impl OrchestratorConfig {
+    /// Build config from environment variables.
+    ///
+    /// - `CHANNEL_BUFFER_SIZE`: Max batches in flight per channel (default: 10).
+    ///   Use a smaller value when memory is limited to avoid OOM on large backlogs.
+    pub fn from_env() -> Self {
+        let channel_buffer_size = std::env::var("CHANNEL_BUFFER_SIZE")
+            .ok()
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(10);
+        Self {
+            channel_buffer_size,
         }
     }
 }

@@ -79,8 +79,9 @@ See the [search-admin documentation](../search-admin/README.md) for manual index
 | `KAFKA_BROKER` | Kafka broker address | `localhost:9092` |
 | `KAFKA_GROUP_ID` | Consumer group ID | `search-indexer` |
 | `KAFKA_TOPIC` | Kafka topic to consume | `knowledge.edits` |
-| `KAFKA_BATCH_SIZE` | Messages to batch before sending | `50` |
+| `KAFKA_BATCH_SIZE` | Messages to batch before sending | `10` |
 | `KAFKA_BATCH_TIMEOUT_MS` | Max wait time before flushing batch (ms) | `1000` |
+| `CHANNEL_BUFFER_SIZE` | Max batches in flight per channel | `10` |
 | `KAFKA_USERNAME` | SASL username for managed Kafka (optional, enables SASL/SSL if set) | - |
 | `KAFKA_PASSWORD` | SASL password for managed Kafka (required if username is set) | - |
 | `KAFKA_SSL_CA_PEM` | Custom CA certificate in PEM format (optional) | - |
@@ -391,6 +392,73 @@ message HermesEdit {
 ```
 
 The `payload` field contains GRC-20 v2 wire format bytes, decoded using `grc_20::decode_edit()`.
+
+## Memory
+
+When reprocessing large Kafka backlogs (e.g., starting with a new consumer group), the indexer can accumulate significant data in memory. Understanding the memory model helps avoid OOM errors.
+
+### Memory Architecture
+
+```
+Kafka Broker
+     │
+     ▼
+┌─────────────────────────────────────┐
+│   rdkafka Internal Queue            │  ← 64 MiB per consumer (rdkafka default)
+│   (pre-fetched messages)            │
+└─────────────────────────────────────┘
+     │
+     ▼
+┌─────────────────────────────────────┐
+│   Application Channels              │  ← CHANNEL_BUFFER_SIZE × KAFKA_BATCH_SIZE
+│   (EntityProcessingBatch, etc.)     │
+└─────────────────────────────────────┘
+     │
+     ▼
+   OpenSearch
+```
+
+### Channel Memory Usage
+
+| Channel | Contents | Max Items | Memory Formula |
+|---------|----------|-----------|----------------|
+| `entities_processor` | `EntityProcessingBatch` | `CHANNEL_BUFFER_SIZE` | `CHANNEL_BUFFER_SIZE` × `KAFKA_BATCH_SIZE` × avg_msg_size |
+| `scores_processor` | `ScoreProcessingBatch` | `CHANNEL_BUFFER_SIZE` | `CHANNEL_BUFFER_SIZE` × `KAFKA_BATCH_SIZE` × avg_msg_size |
+| `loader` | `ProcessedBatch` | `CHANNEL_BUFFER_SIZE` | `CHANNEL_BUFFER_SIZE` × `KAFKA_BATCH_SIZE` × avg_processed_size |
+| `entities_ack` | `StreamMessage` (offsets only) | `CHANNEL_BUFFER_SIZE` | Negligible (~1 KiB total) |
+| `scores_ack` | `StreamMessage` (offsets only) | `CHANNEL_BUFFER_SIZE` | Negligible (~1 KiB total) |
+
+### rdkafka Internal Queue Memory
+
+| Queue | Memory |
+|-------|--------|
+| entities consumer | 64 MiB |
+| scores consumer | 64 MiB |
+| **Total** | **128 MiB** |
+
+This is controlled by rdkafka's `queued.max.messages.kbytes` default (65,536 KiB per consumer).
+
+### Total Memory Formula
+
+```
+Total Memory ≈
+    128 MiB                                                            # rdkafka queues (fixed)
+  + (3 × CHANNEL_BUFFER_SIZE × KAFKA_BATCH_SIZE × avg_msg_size)        # data channels
+  + overhead                                                            # ~50-100 MiB
+```
+
+### Example Calculation
+
+With production settings (`CHANNEL_BUFFER_SIZE=10`, `KAFKA_BATCH_SIZE=10`, avg message ~500 KiB):
+
+| Component | Calculation | Memory |
+|-----------|-------------|--------|
+| rdkafka queues | 64 MiB × 2 consumers | 128 MiB |
+| entities_processor | 10 batches × 10 msgs × 500 KiB | 50 MiB |
+| scores_processor | 10 batches × 10 msgs × 500 KiB | 50 MiB |
+| loader | 10 batches × 10 msgs × 300 KiB (processed) | 30 MiB |
+| Overhead | Runtime, heap fragmentation | 80 MiB |
+| **Total** | | **~338 MiB** |
 
 ## Troubleshooting
 

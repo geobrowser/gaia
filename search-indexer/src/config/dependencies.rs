@@ -12,7 +12,7 @@ use rdkafka::client::DefaultClientContext;
 use crate::consumer::kafka_config::create_client_config;
 use crate::consumer::{EntitiesConsumer, ScoresConsumer};
 use crate::loader::SearchLoader;
-use crate::orchestrator::Orchestrator;
+use crate::orchestrator::{Orchestrator, OrchestratorConfig};
 use crate::processor::Processor;
 use crate::IndexingError;
 use search_indexer_repository::opensearch::IndexConfig;
@@ -169,12 +169,17 @@ impl Dependencies {
 
         info!("Scores consumer created");
 
-        // Create orchestrator with both consumers
-        let orchestrator = Orchestrator::new(
+        let orchestrator_config = OrchestratorConfig::from_env();
+        info!(
+            channel_buffer_size = orchestrator_config.channel_buffer_size,
+            "Orchestrator config from env"
+        );
+        let orchestrator = Orchestrator::with_config(
             Arc::new(entities_consumer),
             Arc::new(scores_consumer),
             processor,
             loader,
+            orchestrator_config,
         );
 
         Ok(Self {

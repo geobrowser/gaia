@@ -70,10 +70,6 @@ spec:
             # Kafka consumer configuration
             - name: ENVIRONMENT
               value: "staging"
-            - name: KAFKA_BATCH_SIZE
-              value: "50"
-            - name: KAFKA_BATCH_TIMEOUT_MS
-              value: "1000"
             # Logging
             - name: RUST_LOG
               value: "info"
@@ -118,7 +114,7 @@ spec:
               path: /readyz
               port: health
             initialDelaySeconds: 10
-            periodSeconds: 10
+            periodSeconds: 30
             timeoutSeconds: 5
             failureThreshold: 3
       restartPolicy: Always
