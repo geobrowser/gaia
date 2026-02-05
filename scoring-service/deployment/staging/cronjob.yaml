@@ -51,6 +51,8 @@ spec:
                     secretKeyRef:
                       name: kafka-credentials
                       key: KAFKA_SSL_CA_PEM
+                - name: ENVIRONMENT
+                  value: "staging"
                 - name: KAFKA_TOPIC
                   value: "curation.scores"
                 - name: SCORE_BATCH_SIZE
