@@ -260,18 +260,31 @@ fn filter_child_recursive(node: &TreeNode, canonical_set: &HashSet<SpaceId>) -> 
     filtered
 }
 
-/// Attach a subtree to a source node in the tree
+/// Attach a subtree to a source node in the tree.
 ///
-/// Finds the source node in the tree and adds the subtree as a child.
+/// Finds the node matching `source` and adds `subtree` as its child.
+/// Uses ownership threading to avoid cloning: the subtree is passed through
+/// each recursive call by value, returned via Err if not consumed.
 fn attach_subtree(tree: &mut TreeNode, source: SpaceId, subtree: TreeNode) {
+    // Discard the Err (subtree returned unused) — means source wasn't found,
+    // which is a no-op.
+    let _ = try_attach(tree, source, subtree);
+}
+
+fn try_attach(tree: &mut TreeNode, source: SpaceId, subtree: TreeNode) -> Result<(), TreeNode> {
     if tree.space_id == source {
         tree.children.push(subtree);
-        return;
+        return Ok(());
     }
 
+    let mut sub = subtree;
     for child in &mut tree.children {
-        attach_subtree(child, source, subtree.clone());
+        match try_attach(child, source, sub) {
+            Ok(()) => return Ok(()),
+            Err(returned) => sub = returned,
+        }
     }
+    Err(sub)
 }
 
 #[cfg(test)]

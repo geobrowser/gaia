@@ -125,8 +125,9 @@ impl DiffTracker {
         build_position_vec_into(&graph.tree, &mut self.scratch);
         self.scratch.sort_unstable_by_key(|(id, _)| *id);
 
-        // Debug assertion: verify no duplicates (invariant from CanonicalGraph)
-        debug_assert!(
+        // Invariant: CanonicalGraph must not contain duplicate SpaceIds.
+        // If violated, the merge-join diff produces incorrect results.
+        assert!(
             self.scratch.windows(2).all(|w| w[0].0 != w[1].0),
             "duplicate SpaceId in tree - this indicates a bug in CanonicalGraph construction"
         );

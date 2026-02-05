@@ -15,6 +15,9 @@
 //! - `SUBSTREAMS_END_BLOCK` - End block number (default: u64::MAX for continuous streaming)
 //! - `SUBSTREAMS_API_TOKEN` - Optional API token for authenticated endpoints
 //!
+//! ### Graph Configuration
+//! - `ROOT_SPACE_ID` - **Required.** Root space ID as a 32-char hex string (16 bytes). Varies per environment.
+//!
 //! ### Kafka Configuration
 //! - `KAFKA_BROKER` - Kafka broker address (default: localhost:9092)
 //! - `KAFKA_TOPIC` - Output topic for canonical graph updates (default: topology.canonical)
@@ -35,7 +38,6 @@ use atlas::events::{BlockMetadata, SpaceId, SpaceTopologyEvent, SpaceTopologyPay
 use atlas::graph::{CanonicalProcessor, DiffTracker, GraphState, TransitiveProcessor};
 use atlas::kafka::{AtlasProducer, CanonicalGraphEmitter};
 use hermes_instrumentation::{debug, info, info_span, Instrument};
-use hermes_relay::source::mock_events::test_topology::ROOT_SPACE_ID;
 use hermes_relay::{Actions, HermesModule, Sink, StreamSource};
 use prost::Message;
 
@@ -251,6 +253,26 @@ fn build_telemetry_config() -> hermes_instrumentation::Config {
     Config::new("atlas", backend)
 }
 
+/// Parse ROOT_SPACE_ID from environment variable.
+///
+/// Expects a 32-character hex string (16 bytes) representing the root space ID.
+/// This varies per environment and must be set explicitly.
+fn parse_root_space_id() -> anyhow::Result<SpaceId> {
+    let hex_str = env::var("ROOT_SPACE_ID")
+        .map_err(|_| anyhow::anyhow!("ROOT_SPACE_ID env var is required but not set"))?;
+
+    let bytes = hex::decode(&hex_str).map_err(|e| {
+        anyhow::anyhow!("ROOT_SPACE_ID must be a valid hex string: {e} (got: {hex_str})")
+    })?;
+
+    bytes.try_into().map_err(|v: Vec<u8>| {
+        anyhow::anyhow!(
+            "ROOT_SPACE_ID must be exactly 16 bytes (32 hex chars), got {} bytes",
+            v.len()
+        )
+    })
+}
+
 fn main() -> anyhow::Result<()> {
     // Load .env file if present (ignored in production)
     dotenv::dotenv().ok();
@@ -291,6 +313,9 @@ async fn async_main() -> anyhow::Result<()> {
         .and_then(|s| s.parse().ok())
         .unwrap_or(u64::MAX);
 
+    // Root space configuration
+    let root_space_id = parse_root_space_id()?;
+
     info!("Atlas Topology Processor starting");
     info!(
         kafka_broker = %broker,
@@ -306,8 +331,7 @@ async fn async_main() -> anyhow::Result<()> {
     let emitter = CanonicalGraphEmitter::new(producer);
     info!("Connected to Kafka broker");
 
-    // Create the sink with root space from test topology
-    let sink = AtlasSink::new(ROOT_SPACE_ID, emitter);
+    let sink = AtlasSink::new(root_space_id, emitter);
 
     info!("Starting event processing");
 

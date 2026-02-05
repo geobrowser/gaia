@@ -25,11 +25,20 @@ use crate::events::{
     BlockMetadata, SpaceCreated, SpaceTopologyEvent, SpaceTopologyPayload, SpaceType,
     TrustExtended, TrustExtension,
 };
+use hermes_instrumentation::warn;
 use hermes_relay::{actions, Action};
 
 /// Convert a slice to a fixed-size array, returning None if length doesn't match.
 fn to_array<const N: usize>(slice: &[u8]) -> Option<[u8; N]> {
     slice.try_into().ok()
+}
+
+/// Log a warning when a required field is missing or malformed during action conversion.
+fn warn_missing_field(action_type: &str, field: &str, actual_len: usize, expected_len: usize) {
+    warn!(
+        action_type,
+        field, actual_len, expected_len, "malformed action: field missing or wrong length"
+    );
 }
 
 /// Convert an Action to a SpaceTopologyEvent, if it's a topology-relevant action.
@@ -97,10 +106,16 @@ pub fn convert_action(action: &Action, meta: &BlockMetadata) -> Option<SpaceTopo
 /// event, not from this event. We default to Personal with the registrar as owner.
 fn convert_space_registered(action: &Action, meta: &BlockMetadata) -> Option<SpaceTopologyEvent> {
     // Space ID is now in to_id (from_id is zeros in new format)
-    let space_id = to_array::<16>(&action.to_id)?;
+    let Some(space_id) = to_array::<16>(&action.to_id) else {
+        warn_missing_field("SpaceRegistered", "to_id", action.to_id.len(), 16);
+        return None;
+    };
 
     // Registrar address is in topic - this is the owner for personal spaces
-    let owner = to_array::<32>(&action.topic)?;
+    let Some(owner) = to_array::<32>(&action.topic) else {
+        warn_missing_field("SpaceRegistered", "topic", action.topic.len(), 32);
+        return None;
+    };
     let space_type = SpaceType::Personal { owner };
 
     // Topic ID defaults to zeros - spaces can declare topics separately
@@ -123,12 +138,24 @@ fn convert_space_registered(action: &Action, meta: &BlockMetadata) -> Option<Spa
 /// - `topic[0..16]`: padding (zeros)
 /// - `topic[16..32]`: target_space_id (16 bytes)
 fn convert_subspace_verified(action: &Action, meta: &BlockMetadata) -> Option<SpaceTopologyEvent> {
-    let source_space_id = to_array::<16>(&action.from_id)?;
+    let Some(source_space_id) = to_array::<16>(&action.from_id) else {
+        warn_missing_field("SubspaceVerified", "from_id", action.from_id.len(), 16);
+        return None;
+    };
 
     if action.topic.len() < 32 {
+        warn_missing_field("SubspaceVerified", "topic", action.topic.len(), 32);
         return None;
     }
-    let target_space_id = to_array::<16>(&action.topic[16..32])?;
+    let Some(target_space_id) = to_array::<16>(&action.topic[16..32]) else {
+        warn_missing_field(
+            "SubspaceVerified",
+            "topic[16..32]",
+            action.topic[16..32].len(),
+            16,
+        );
+        return None;
+    };
 
     Some(SpaceTopologyEvent {
         meta: meta.clone(),
@@ -146,12 +173,24 @@ fn convert_subspace_verified(action: &Action, meta: &BlockMetadata) -> Option<Sp
 /// - `topic[0..16]`: padding (zeros)
 /// - `topic[16..32]`: target_space_id (16 bytes)
 fn convert_subspace_related(action: &Action, meta: &BlockMetadata) -> Option<SpaceTopologyEvent> {
-    let source_space_id = to_array::<16>(&action.from_id)?;
+    let Some(source_space_id) = to_array::<16>(&action.from_id) else {
+        warn_missing_field("SubspaceRelated", "from_id", action.from_id.len(), 16);
+        return None;
+    };
 
     if action.topic.len() < 32 {
+        warn_missing_field("SubspaceRelated", "topic", action.topic.len(), 32);
         return None;
     }
-    let target_space_id = to_array::<16>(&action.topic[16..32])?;
+    let Some(target_space_id) = to_array::<16>(&action.topic[16..32]) else {
+        warn_missing_field(
+            "SubspaceRelated",
+            "topic[16..32]",
+            action.topic[16..32].len(),
+            16,
+        );
+        return None;
+    };
 
     Some(SpaceTopologyEvent {
         meta: meta.clone(),
@@ -172,13 +211,25 @@ fn convert_subspace_topic_declared(
     action: &Action,
     meta: &BlockMetadata,
 ) -> Option<SpaceTopologyEvent> {
-    let source_space_id = to_array::<16>(&action.from_id)?;
+    let Some(source_space_id) = to_array::<16>(&action.from_id) else {
+        warn_missing_field("SubspaceTopicDeclared", "from_id", action.from_id.len(), 16);
+        return None;
+    };
 
     if action.topic.len() < 32 {
+        warn_missing_field("SubspaceTopicDeclared", "topic", action.topic.len(), 32);
         return None;
     }
     // Topic ID is in the last 16 bytes
-    let target_topic_id = to_array::<16>(&action.topic[16..32])?;
+    let Some(target_topic_id) = to_array::<16>(&action.topic[16..32]) else {
+        warn_missing_field(
+            "SubspaceTopicDeclared",
+            "topic[16..32]",
+            action.topic[16..32].len(),
+            16,
+        );
+        return None;
+    };
 
     Some(SpaceTopologyEvent {
         meta: meta.clone(),
@@ -195,12 +246,19 @@ fn convert_subspace_topic_declared(
 /// - `from_id`: dao_space_id (16 bytes) - the DAO space
 /// - `topic[0..16]`: member_space_id (16 bytes) - the space being added as editor
 fn convert_editor_added(action: &Action, meta: &BlockMetadata) -> Option<SpaceTopologyEvent> {
-    let source_space_id = to_array::<16>(&action.from_id)?;
+    let Some(source_space_id) = to_array::<16>(&action.from_id) else {
+        warn_missing_field("EditorAdded", "from_id", action.from_id.len(), 16);
+        return None;
+    };
 
     if action.topic.len() < 16 {
+        warn_missing_field("EditorAdded", "topic", action.topic.len(), 16);
         return None;
     }
-    let member_space_id = to_array::<16>(&action.topic[0..16])?;
+    let Some(member_space_id) = to_array::<16>(&action.topic[0..16]) else {
+        warn_missing_field("EditorAdded", "topic[0..16]", action.topic[0..16].len(), 16);
+        return None;
+    };
 
     Some(SpaceTopologyEvent {
         meta: meta.clone(),
@@ -217,12 +275,19 @@ fn convert_editor_added(action: &Action, meta: &BlockMetadata) -> Option<SpaceTo
 /// - `from_id`: dao_space_id (16 bytes) - the DAO space
 /// - `topic[0..16]`: member_space_id (16 bytes) - the space being added as member
 fn convert_member_added(action: &Action, meta: &BlockMetadata) -> Option<SpaceTopologyEvent> {
-    let source_space_id = to_array::<16>(&action.from_id)?;
+    let Some(source_space_id) = to_array::<16>(&action.from_id) else {
+        warn_missing_field("MemberAdded", "from_id", action.from_id.len(), 16);
+        return None;
+    };
 
     if action.topic.len() < 16 {
+        warn_missing_field("MemberAdded", "topic", action.topic.len(), 16);
         return None;
     }
-    let member_space_id = to_array::<16>(&action.topic[0..16])?;
+    let Some(member_space_id) = to_array::<16>(&action.topic[0..16]) else {
+        warn_missing_field("MemberAdded", "topic[0..16]", action.topic[0..16].len(), 16);
+        return None;
+    };
 
     Some(SpaceTopologyEvent {
         meta: meta.clone(),
@@ -243,12 +308,24 @@ fn convert_subspace_unverified(
     action: &Action,
     meta: &BlockMetadata,
 ) -> Option<SpaceTopologyEvent> {
-    let source_space_id = to_array::<16>(&action.from_id)?;
+    let Some(source_space_id) = to_array::<16>(&action.from_id) else {
+        warn_missing_field("SubspaceUnverified", "from_id", action.from_id.len(), 16);
+        return None;
+    };
 
     if action.topic.len() < 32 {
+        warn_missing_field("SubspaceUnverified", "topic", action.topic.len(), 32);
         return None;
     }
-    let target_space_id = to_array::<16>(&action.topic[16..32])?;
+    let Some(target_space_id) = to_array::<16>(&action.topic[16..32]) else {
+        warn_missing_field(
+            "SubspaceUnverified",
+            "topic[16..32]",
+            action.topic[16..32].len(),
+            16,
+        );
+        return None;
+    };
 
     Some(SpaceTopologyEvent {
         meta: meta.clone(),
@@ -266,12 +343,24 @@ fn convert_subspace_unverified(
 /// - `topic[0..16]`: padding (zeros)
 /// - `topic[16..32]`: target_space_id (16 bytes)
 fn convert_subspace_unrelated(action: &Action, meta: &BlockMetadata) -> Option<SpaceTopologyEvent> {
-    let source_space_id = to_array::<16>(&action.from_id)?;
+    let Some(source_space_id) = to_array::<16>(&action.from_id) else {
+        warn_missing_field("SubspaceUnrelated", "from_id", action.from_id.len(), 16);
+        return None;
+    };
 
     if action.topic.len() < 32 {
+        warn_missing_field("SubspaceUnrelated", "topic", action.topic.len(), 32);
         return None;
     }
-    let target_space_id = to_array::<16>(&action.topic[16..32])?;
+    let Some(target_space_id) = to_array::<16>(&action.topic[16..32]) else {
+        warn_missing_field(
+            "SubspaceUnrelated",
+            "topic[16..32]",
+            action.topic[16..32].len(),
+            16,
+        );
+        return None;
+    };
 
     Some(SpaceTopologyEvent {
         meta: meta.clone(),
@@ -288,12 +377,24 @@ fn convert_subspace_unrelated(action: &Action, meta: &BlockMetadata) -> Option<S
 /// - `from_id`: dao_space_id (16 bytes) - the DAO space
 /// - `topic[0..16]`: member_space_id (16 bytes) - the space being removed as editor
 fn convert_editor_removed(action: &Action, meta: &BlockMetadata) -> Option<SpaceTopologyEvent> {
-    let source_space_id = to_array::<16>(&action.from_id)?;
+    let Some(source_space_id) = to_array::<16>(&action.from_id) else {
+        warn_missing_field("EditorRemoved", "from_id", action.from_id.len(), 16);
+        return None;
+    };
 
     if action.topic.len() < 16 {
+        warn_missing_field("EditorRemoved", "topic", action.topic.len(), 16);
         return None;
     }
-    let member_space_id = to_array::<16>(&action.topic[0..16])?;
+    let Some(member_space_id) = to_array::<16>(&action.topic[0..16]) else {
+        warn_missing_field(
+            "EditorRemoved",
+            "topic[0..16]",
+            action.topic[0..16].len(),
+            16,
+        );
+        return None;
+    };
 
     Some(SpaceTopologyEvent {
         meta: meta.clone(),
@@ -310,12 +411,24 @@ fn convert_editor_removed(action: &Action, meta: &BlockMetadata) -> Option<Space
 /// - `from_id`: dao_space_id (16 bytes) - the DAO space
 /// - `topic[0..16]`: member_space_id (16 bytes) - the space being removed as member
 fn convert_member_removed(action: &Action, meta: &BlockMetadata) -> Option<SpaceTopologyEvent> {
-    let source_space_id = to_array::<16>(&action.from_id)?;
+    let Some(source_space_id) = to_array::<16>(&action.from_id) else {
+        warn_missing_field("MemberRemoved", "from_id", action.from_id.len(), 16);
+        return None;
+    };
 
     if action.topic.len() < 16 {
+        warn_missing_field("MemberRemoved", "topic", action.topic.len(), 16);
         return None;
     }
-    let member_space_id = to_array::<16>(&action.topic[0..16])?;
+    let Some(member_space_id) = to_array::<16>(&action.topic[0..16]) else {
+        warn_missing_field(
+            "MemberRemoved",
+            "topic[0..16]",
+            action.topic[0..16].len(),
+            16,
+        );
+        return None;
+    };
 
     Some(SpaceTopologyEvent {
         meta: meta.clone(),
@@ -336,13 +449,25 @@ fn convert_subspace_topic_removed(
     action: &Action,
     meta: &BlockMetadata,
 ) -> Option<SpaceTopologyEvent> {
-    let source_space_id = to_array::<16>(&action.from_id)?;
+    let Some(source_space_id) = to_array::<16>(&action.from_id) else {
+        warn_missing_field("SubspaceTopicRemoved", "from_id", action.from_id.len(), 16);
+        return None;
+    };
 
     if action.topic.len() < 32 {
+        warn_missing_field("SubspaceTopicRemoved", "topic", action.topic.len(), 32);
         return None;
     }
     // Topic ID is in the last 16 bytes
-    let target_topic_id = to_array::<16>(&action.topic[16..32])?;
+    let Some(target_topic_id) = to_array::<16>(&action.topic[16..32]) else {
+        warn_missing_field(
+            "SubspaceTopicRemoved",
+            "topic[16..32]",
+            action.topic[16..32].len(),
+            16,
+        );
+        return None;
+    };
 
     Some(SpaceTopologyEvent {
         meta: meta.clone(),

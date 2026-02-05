@@ -31,7 +31,7 @@ use crate::graph::{
     CanonicalGraph, ChangeType, EdgeType, GraphDiff, NodeChange, Position, TreeNode,
 };
 use crate::kafka::{AtlasProducer, ProducerError};
-use hermes_instrumentation::debug_span;
+use hermes_instrumentation::{debug_span, warn};
 use hermes_schema::pb::blockchain_metadata::BlockchainMetadata as ProtoBlockchainMetadata;
 use hermes_schema::pb::topology::{
     canonical_tree_node::Edge, edge_info, CanonicalGraphDiff, CanonicalGraphUpdated,
@@ -154,11 +154,11 @@ fn node_change_to_proto(change: &NodeChange) -> ProtoNodeChange {
             ChangeType::Moved => ProtoChangeType::Moved as i32,
         },
         distance: change.position.as_ref().map(|p| p.distance),
-        parent_edge: change.position.as_ref().map(position_to_edge_info),
+        parent_edge: change.position.as_ref().and_then(position_to_edge_info),
     }
 }
 
-fn position_to_edge_info(pos: &Position) -> EdgeInfo {
+fn position_to_edge_info(pos: &Position) -> Option<EdgeInfo> {
     let edge_type = match pos.edge_type {
         EdgeType::Verified => edge_info::EdgeType::Verified(VerifiedEdge {}),
         EdgeType::Related => edge_info::EdgeType::Related(RelatedEdge {}),
@@ -167,13 +167,19 @@ fn position_to_edge_info(pos: &Position) -> EdgeInfo {
         }),
         EdgeType::Editor => edge_info::EdgeType::Editor(EditorEdge {}),
         EdgeType::Member => edge_info::EdgeType::Member(MemberEdge {}),
-        EdgeType::Root => unreachable!("Root nodes don't appear in diffs"),
+        EdgeType::Root => {
+            warn!(
+                parent = ?pos.parent,
+                "Root edge reached diff emitter — this should not happen, skipping"
+            );
+            return None;
+        }
     };
 
-    EdgeInfo {
+    Some(EdgeInfo {
         parent_id: pos.parent.to_vec(),
         edge_type: Some(edge_type),
-    }
+    })
 }
 
 impl std::fmt::Debug for CanonicalGraphEmitter {
