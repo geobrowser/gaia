@@ -470,10 +470,7 @@ function extractAffectedEntitiesAndRelations(ops: Op[]): {
 /**
  * Extract all affected entity IDs from ops, including those requiring relation lookups.
  */
-function extractAffectedEntities(
-	db: Database,
-	ops: Op[],
-): Effect.Effect<string[], QueryError> {
+function extractAffectedEntities(db: Database, ops: Op[]): Effect.Effect<string[], QueryError> {
 	return Effect.gen(function* () {
 		const {entityIds, relationIdsNeedingLookup} = extractAffectedEntitiesAndRelations(ops)
 
@@ -559,9 +556,7 @@ function propertyValueToVersionedValue(pv: {property: Id; value: unknown}, space
 			break
 		case "point": {
 			const pt = value.value as {lon: number; lat: number; alt?: number}
-			result.point = pt.alt !== undefined
-				? `${pt.lat},${pt.lon},${pt.alt}`
-				: `${pt.lat},${pt.lon}`
+			result.point = pt.alt !== undefined ? `${pt.lat},${pt.lon},${pt.alt}` : `${pt.lat},${pt.lon}`
 			break
 		}
 		case "rect": {

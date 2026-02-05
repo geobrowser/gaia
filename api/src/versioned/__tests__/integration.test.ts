@@ -460,9 +460,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 
 	describe("Entity Versions", () => {
 		it("lists versions that affected an entity", async () => {
-			const res = await app.request(
-				`/versioned/entities/${uuid.entityChanging}/versions?spaceId=${uuid.space1}`,
-			)
+			const res = await app.request(`/versioned/entities/${uuid.entityChanging}/versions?spaceId=${uuid.space1}`)
 			expect(res.status).toBe(200)
 			const body = await res.json()
 
@@ -577,9 +575,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 			)
 			const body = await res.json()
 
-			const relAdd = body.relations.find(
-				(r: any) => r.changeType === "ADD" && r.relationId === uuid.rel2,
-			)
+			const relAdd = body.relations.find((r: any) => r.changeType === "ADD" && r.relationId === uuid.rel2)
 			expect(relAdd).toBeDefined()
 			expect(relAdd.before).toBeNull()
 			expect(relAdd.after).toBeDefined()
@@ -611,9 +607,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 			expect(res.status).toBe(200)
 			const body = await res.json()
 
-			const textBlockChange = body.blocks.find(
-				(b: any) => b.id === uuid.blockText1 && b.type === "textBlock",
-			)
+			const textBlockChange = body.blocks.find((b: any) => b.id === uuid.blockText1 && b.type === "textBlock")
 			expect(textBlockChange).toBeDefined()
 			expect(textBlockChange.before).toBe("Block 1 content")
 			expect(textBlockChange.after).toBe("Block 1 updated content")
@@ -705,36 +699,28 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 
 	describe("Proposal Diff", () => {
 		it("returns proposal status as active when end_time is in future", async () => {
-			const res = await app.request(
-				`/versioned/proposals/${uuid.proposalActive}/diff?spaceId=${uuid.space1}`,
-			)
+			const res = await app.request(`/versioned/proposals/${uuid.proposalActive}/diff?spaceId=${uuid.space1}`)
 			expect(res.status).toBe(200)
 			const body = await res.json()
 			expect(body.proposalStatus).toBe("active")
 		})
 
 		it("returns proposal status as closed when end_time is in past", async () => {
-			const res = await app.request(
-				`/versioned/proposals/${uuid.proposalClosed}/diff?spaceId=${uuid.space1}`,
-			)
+			const res = await app.request(`/versioned/proposals/${uuid.proposalClosed}/diff?spaceId=${uuid.space1}`)
 			expect(res.status).toBe(200)
 			const body = await res.json()
 			expect(body.proposalStatus).toBe("closed")
 		})
 
 		it("returns proposal status as executed when executed_at is set", async () => {
-			const res = await app.request(
-				`/versioned/proposals/${uuid.proposalExecuted}/diff?spaceId=${uuid.space1}`,
-			)
+			const res = await app.request(`/versioned/proposals/${uuid.proposalExecuted}/diff?spaceId=${uuid.space1}`)
 			expect(res.status).toBe(200)
 			const body = await res.json()
 			expect(body.proposalStatus).toBe("executed")
 		})
 
 		it("returns empty diff for proposal without publish action", async () => {
-			const res = await app.request(
-				`/versioned/proposals/${uuid.proposalNoPublish}/diff?spaceId=${uuid.space1}`,
-			)
+			const res = await app.request(`/versioned/proposals/${uuid.proposalNoPublish}/diff?spaceId=${uuid.space1}`)
 			expect(res.status).toBe(200)
 			const body = await res.json()
 			expect(body.entities).toEqual([])
@@ -742,16 +728,12 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 		})
 
 		it("returns 404 for non-existent proposal", async () => {
-			const res = await app.request(
-				`/versioned/proposals/${uuid.entityNonExistent}/diff?spaceId=${uuid.space1}`,
-			)
+			const res = await app.request(`/versioned/proposals/${uuid.entityNonExistent}/diff?spaceId=${uuid.space1}`)
 			expect(res.status).toBe(404)
 		})
 
 		it("returns 400 when spaceId does not match proposal", async () => {
-			const res = await app.request(
-				`/versioned/proposals/${uuid.proposalActive}/diff?spaceId=${uuid.space2}`,
-			)
+			const res = await app.request(`/versioned/proposals/${uuid.proposalActive}/diff?spaceId=${uuid.space2}`)
 			expect(res.status).toBe(400)
 			const body = await res.json()
 			expect(body.message).toContain("spaceId does not match")
@@ -862,17 +844,42 @@ async function setupTestData(pool: Pool): Promise<void> {
 		await client.query(
 			`INSERT INTO relation_versions (id, relation_id, entity_id, type_id, from_entity_id, to_entity_id, space_id, valid_from_key, valid_to_key)
 			 VALUES ($1, $2, $3, $4, $3, $5, $6, $7, NULL) ON CONFLICT DO NOTHING`,
-			[uuid.val(valIdx++), uuid.rel1, uuid.entityWithRelations, uuid.relTypeGeneric, uuid.entityAllTypes, uuid.space1, versionKey1],
+			[
+				uuid.val(valIdx++),
+				uuid.rel1,
+				uuid.entityWithRelations,
+				uuid.relTypeGeneric,
+				uuid.entityAllTypes,
+				uuid.space1,
+				versionKey1,
+			],
 		)
 		await client.query(
 			`INSERT INTO relation_versions (id, relation_id, entity_id, type_id, from_entity_id, to_entity_id, to_space_id, space_id, valid_from_key, valid_to_key)
 			 VALUES ($1, $2, $3, $4, $3, $5, $6, $7, $8, NULL) ON CONFLICT DO NOTHING`,
-			[uuid.val(valIdx++), uuid.relCrossSpace, uuid.entityWithRelations, uuid.relTypeGeneric, uuid.entityAllTypes, uuid.space2, uuid.space1, versionKey1],
+			[
+				uuid.val(valIdx++),
+				uuid.relCrossSpace,
+				uuid.entityWithRelations,
+				uuid.relTypeGeneric,
+				uuid.entityAllTypes,
+				uuid.space2,
+				uuid.space1,
+				versionKey1,
+			],
 		)
 		await client.query(
 			`INSERT INTO relation_versions (id, relation_id, entity_id, type_id, from_entity_id, to_entity_id, position, space_id, valid_from_key, valid_to_key)
 			 VALUES ($1, $2, $3, $4, $3, $5, 'a0', $6, $7, NULL) ON CONFLICT DO NOTHING`,
-			[uuid.val(valIdx++), uuid.relPositioned, uuid.entityWithRelations, uuid.relTypeGeneric, uuid.entityAllTypes, uuid.space1, versionKey1],
+			[
+				uuid.val(valIdx++),
+				uuid.relPositioned,
+				uuid.entityWithRelations,
+				uuid.relTypeGeneric,
+				uuid.entityAllTypes,
+				uuid.space1,
+				versionKey1,
+			],
 		)
 
 		// 6. Create blocks for entityWithBlocks
@@ -907,44 +914,108 @@ async function setupTestData(pool: Pool): Promise<void> {
 		await client.query(
 			`INSERT INTO relation_versions (id, relation_id, entity_id, type_id, from_entity_id, to_entity_id, position, space_id, valid_from_key, valid_to_key)
 			 VALUES ($1, $2, $3, $4, $3, $5, 'a0', $6, $7, NULL) ON CONFLICT DO NOTHING`,
-			[uuid.val(valIdx++), uuid.relBlock1, uuid.entityWithBlocks, uuid.relTypeBlocks, uuid.blockText1, uuid.space1, versionKey1],
+			[
+				uuid.val(valIdx++),
+				uuid.relBlock1,
+				uuid.entityWithBlocks,
+				uuid.relTypeBlocks,
+				uuid.blockText1,
+				uuid.space1,
+				versionKey1,
+			],
 		)
 		await client.query(
 			`INSERT INTO relation_versions (id, relation_id, entity_id, type_id, from_entity_id, to_entity_id, position, space_id, valid_from_key, valid_to_key)
 			 VALUES ($1, $2, $3, $4, $3, $5, 'a1', $6, $7, NULL) ON CONFLICT DO NOTHING`,
-			[uuid.val(valIdx++), uuid.relBlock2, uuid.entityWithBlocks, uuid.relTypeBlocks, uuid.blockText2, uuid.space1, versionKey1],
+			[
+				uuid.val(valIdx++),
+				uuid.relBlock2,
+				uuid.entityWithBlocks,
+				uuid.relTypeBlocks,
+				uuid.blockText2,
+				uuid.space1,
+				versionKey1,
+			],
 		)
 		await client.query(
 			`INSERT INTO relation_versions (id, relation_id, entity_id, type_id, from_entity_id, to_entity_id, position, space_id, valid_from_key, valid_to_key)
 			 VALUES ($1, $2, $3, $4, $3, $5, 'a2', $6, $7, NULL) ON CONFLICT DO NOTHING`,
-			[uuid.val(valIdx++), uuid.relBlockImage, uuid.entityWithBlocks, uuid.relTypeBlocks, uuid.blockImage, uuid.space1, versionKey1],
+			[
+				uuid.val(valIdx++),
+				uuid.relBlockImage,
+				uuid.entityWithBlocks,
+				uuid.relTypeBlocks,
+				uuid.blockImage,
+				uuid.space1,
+				versionKey1,
+			],
 		)
 		await client.query(
 			`INSERT INTO relation_versions (id, relation_id, entity_id, type_id, from_entity_id, to_entity_id, position, space_id, valid_from_key, valid_to_key)
 			 VALUES ($1, $2, $3, $4, $3, $5, 'a3', $6, $7, NULL) ON CONFLICT DO NOTHING`,
-			[uuid.val(valIdx++), uuid.relBlockData, uuid.entityWithBlocks, uuid.relTypeBlocks, uuid.blockData, uuid.space1, versionKey1],
+			[
+				uuid.val(valIdx++),
+				uuid.relBlockData,
+				uuid.entityWithBlocks,
+				uuid.relTypeBlocks,
+				uuid.blockData,
+				uuid.space1,
+				versionKey1,
+			],
 		)
 
 		// TYPES_PROPERTY relations (to identify block types)
 		await client.query(
 			`INSERT INTO relation_versions (id, relation_id, entity_id, type_id, from_entity_id, to_entity_id, space_id, valid_from_key, valid_to_key)
 			 VALUES ($1, $2, $3, $4, $3, $5, $6, $7, NULL) ON CONFLICT DO NOTHING`,
-			[uuid.val(valIdx++), uuid.relBlock1Type, uuid.blockText1, uuid.propTypesProperty, uuid.textBlockType, uuid.space1, versionKey1],
+			[
+				uuid.val(valIdx++),
+				uuid.relBlock1Type,
+				uuid.blockText1,
+				uuid.propTypesProperty,
+				uuid.textBlockType,
+				uuid.space1,
+				versionKey1,
+			],
 		)
 		await client.query(
 			`INSERT INTO relation_versions (id, relation_id, entity_id, type_id, from_entity_id, to_entity_id, space_id, valid_from_key, valid_to_key)
 			 VALUES ($1, $2, $3, $4, $3, $5, $6, $7, NULL) ON CONFLICT DO NOTHING`,
-			[uuid.val(valIdx++), uuid.relBlock2Type, uuid.blockText2, uuid.propTypesProperty, uuid.textBlockType, uuid.space1, versionKey1],
+			[
+				uuid.val(valIdx++),
+				uuid.relBlock2Type,
+				uuid.blockText2,
+				uuid.propTypesProperty,
+				uuid.textBlockType,
+				uuid.space1,
+				versionKey1,
+			],
 		)
 		await client.query(
 			`INSERT INTO relation_versions (id, relation_id, entity_id, type_id, from_entity_id, to_entity_id, space_id, valid_from_key, valid_to_key)
 			 VALUES ($1, $2, $3, $4, $3, $5, $6, $7, NULL) ON CONFLICT DO NOTHING`,
-			[uuid.val(valIdx++), uuid.relBlockImageType, uuid.blockImage, uuid.propTypesProperty, uuid.imageBlockType, uuid.space1, versionKey1],
+			[
+				uuid.val(valIdx++),
+				uuid.relBlockImageType,
+				uuid.blockImage,
+				uuid.propTypesProperty,
+				uuid.imageBlockType,
+				uuid.space1,
+				versionKey1,
+			],
 		)
 		await client.query(
 			`INSERT INTO relation_versions (id, relation_id, entity_id, type_id, from_entity_id, to_entity_id, space_id, valid_from_key, valid_to_key)
 			 VALUES ($1, $2, $3, $4, $3, $5, $6, $7, NULL) ON CONFLICT DO NOTHING`,
-			[uuid.val(valIdx++), uuid.relBlockDataType, uuid.blockData, uuid.propTypesProperty, uuid.dataBlockType, uuid.space1, versionKey1],
+			[
+				uuid.val(valIdx++),
+				uuid.relBlockDataType,
+				uuid.blockData,
+				uuid.propTypesProperty,
+				uuid.dataBlockType,
+				uuid.space1,
+				versionKey1,
+			],
 		)
 
 		// 7. Create values for entityChanging (changes across versions)
@@ -976,7 +1047,16 @@ async function setupTestData(pool: Pool): Promise<void> {
 		await client.query(
 			`INSERT INTO relation_versions (id, relation_id, entity_id, type_id, from_entity_id, to_entity_id, space_id, valid_from_key, valid_to_key)
 			 VALUES ($1, $2, $3, $4, $3, $5, $6, $7, $8) ON CONFLICT DO NOTHING`,
-			[uuid.val(valIdx++), uuid.rel2, uuid.entityChanging, uuid.relTypeGeneric, uuid.entityAllTypes, uuid.space1, versionKey2, versionKey3],
+			[
+				uuid.val(valIdx++),
+				uuid.rel2,
+				uuid.entityChanging,
+				uuid.relTypeGeneric,
+				uuid.entityAllTypes,
+				uuid.space1,
+				versionKey2,
+				versionKey3,
+			],
 		)
 
 		// 8. Create values for entityDeleted (exists at v1, deleted at v2)
@@ -998,39 +1078,96 @@ async function setupTestData(pool: Pool): Promise<void> {
 		await client.query(
 			`INSERT INTO value_versions (id, entity_id, property_id, space_id, valid_from_key, valid_to_key, text, context_root_id, context_edge_type_id)
 			 VALUES ($1, $2, $3, $4, $5, $6, 'Dynamic A1 original', $7, $8) ON CONFLICT DO NOTHING`,
-			[uuid.val(valIdx++), uuid.dynamicChildA1, uuid.propText, uuid.space1, versionKey1, versionKey2, uuid.entityWithDynamicGroups, uuid.relTypeCustomA],
+			[
+				uuid.val(valIdx++),
+				uuid.dynamicChildA1,
+				uuid.propText,
+				uuid.space1,
+				versionKey1,
+				versionKey2,
+				uuid.entityWithDynamicGroups,
+				uuid.relTypeCustomA,
+			],
 		)
 		await client.query(
 			`INSERT INTO value_versions (id, entity_id, property_id, space_id, valid_from_key, valid_to_key, text, context_root_id, context_edge_type_id)
 			 VALUES ($1, $2, $3, $4, $5, NULL, 'Dynamic A1 updated', $6, $7) ON CONFLICT DO NOTHING`,
-			[uuid.val(valIdx++), uuid.dynamicChildA1, uuid.propText, uuid.space1, versionKey2, uuid.entityWithDynamicGroups, uuid.relTypeCustomA],
+			[
+				uuid.val(valIdx++),
+				uuid.dynamicChildA1,
+				uuid.propText,
+				uuid.space1,
+				versionKey2,
+				uuid.entityWithDynamicGroups,
+				uuid.relTypeCustomA,
+			],
 		)
 		await client.query(
 			`INSERT INTO value_versions (id, entity_id, property_id, space_id, valid_from_key, valid_to_key, text, context_root_id, context_edge_type_id)
 			 VALUES ($1, $2, $3, $4, $5, NULL, 'Dynamic A2 content', $6, $7) ON CONFLICT DO NOTHING`,
-			[uuid.val(valIdx++), uuid.dynamicChildA2, uuid.propText, uuid.space1, versionKey1, uuid.entityWithDynamicGroups, uuid.relTypeCustomA],
+			[
+				uuid.val(valIdx++),
+				uuid.dynamicChildA2,
+				uuid.propText,
+				uuid.space1,
+				versionKey1,
+				uuid.entityWithDynamicGroups,
+				uuid.relTypeCustomA,
+			],
 		)
 		await client.query(
 			`INSERT INTO value_versions (id, entity_id, property_id, space_id, valid_from_key, valid_to_key, text, context_root_id, context_edge_type_id)
 			 VALUES ($1, $2, $3, $4, $5, NULL, 'Dynamic B1 content', $6, $7) ON CONFLICT DO NOTHING`,
-			[uuid.val(valIdx++), uuid.dynamicChildB1, uuid.propText, uuid.space1, versionKey2, uuid.entityWithDynamicGroups, uuid.relTypeCustomB],
+			[
+				uuid.val(valIdx++),
+				uuid.dynamicChildB1,
+				uuid.propText,
+				uuid.space1,
+				versionKey2,
+				uuid.entityWithDynamicGroups,
+				uuid.relTypeCustomB,
+			],
 		)
 
 		// Relations linking children to parent via custom types (for fallback discovery)
 		await client.query(
 			`INSERT INTO relation_versions (id, relation_id, entity_id, type_id, from_entity_id, to_entity_id, space_id, valid_from_key, valid_to_key)
 			 VALUES ($1, $2, $3, $4, $3, $5, $6, $7, NULL) ON CONFLICT DO NOTHING`,
-			[uuid.val(valIdx++), uuid.relDynamicA1, uuid.entityWithDynamicGroups, uuid.relTypeCustomA, uuid.dynamicChildA1, uuid.space1, versionKey1],
+			[
+				uuid.val(valIdx++),
+				uuid.relDynamicA1,
+				uuid.entityWithDynamicGroups,
+				uuid.relTypeCustomA,
+				uuid.dynamicChildA1,
+				uuid.space1,
+				versionKey1,
+			],
 		)
 		await client.query(
 			`INSERT INTO relation_versions (id, relation_id, entity_id, type_id, from_entity_id, to_entity_id, space_id, valid_from_key, valid_to_key)
 			 VALUES ($1, $2, $3, $4, $3, $5, $6, $7, NULL) ON CONFLICT DO NOTHING`,
-			[uuid.val(valIdx++), uuid.relDynamicA2, uuid.entityWithDynamicGroups, uuid.relTypeCustomA, uuid.dynamicChildA2, uuid.space1, versionKey1],
+			[
+				uuid.val(valIdx++),
+				uuid.relDynamicA2,
+				uuid.entityWithDynamicGroups,
+				uuid.relTypeCustomA,
+				uuid.dynamicChildA2,
+				uuid.space1,
+				versionKey1,
+			],
 		)
 		await client.query(
 			`INSERT INTO relation_versions (id, relation_id, entity_id, type_id, from_entity_id, to_entity_id, space_id, valid_from_key, valid_to_key)
 			 VALUES ($1, $2, $3, $4, $3, $5, $6, $7, NULL) ON CONFLICT DO NOTHING`,
-			[uuid.val(valIdx++), uuid.relDynamicB1, uuid.entityWithDynamicGroups, uuid.relTypeCustomB, uuid.dynamicChildB1, uuid.space1, versionKey2],
+			[
+				uuid.val(valIdx++),
+				uuid.relDynamicB1,
+				uuid.entityWithDynamicGroups,
+				uuid.relTypeCustomB,
+				uuid.dynamicChildB1,
+				uuid.space1,
+				versionKey2,
+			],
 		)
 
 		// 11. Create proposals

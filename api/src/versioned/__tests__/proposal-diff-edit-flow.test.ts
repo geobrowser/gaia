@@ -160,15 +160,11 @@ describe.skipIf(SKIP_INTEGRATION)("Proposal Diff - Full GRC-20 Edit Flow", () =>
 			expect(body.entities.length).toBeGreaterThan(0)
 
 			// Find the diff for our new entity
-			const entityDiff = body.entities.find(
-				(d: any) => d.entityId === uuid.entityNew1,
-			)
+			const entityDiff = body.entities.find((d: any) => d.entityId === uuid.entityNew1)
 			expect(entityDiff).toBeDefined()
 
 			// Should have ADD for the text value (before=null, after has value)
-			const textValueDiff = entityDiff.values.find(
-				(v: any) => v.propertyId === uuid.propText,
-			)
+			const textValueDiff = entityDiff.values.find((v: any) => v.propertyId === uuid.propText)
 			expect(textValueDiff).toBeDefined()
 			expect(textValueDiff.type).toBe("TEXT")
 			expect(textValueDiff.before).toBeNull()
@@ -182,42 +178,32 @@ describe.skipIf(SKIP_INTEGRATION)("Proposal Diff - Full GRC-20 Edit Flow", () =>
 			expect(res.status).toBe(200)
 
 			const body = await res.json()
-			const entityDiff = body.entities.find(
-				(d: any) => d.entityId === uuid.entityNew2,
-			)
+			const entityDiff = body.entities.find((d: any) => d.entityId === uuid.entityNew2)
 			expect(entityDiff).toBeDefined()
 
 			// Should have multiple value diffs
 			expect(entityDiff.values.length).toBeGreaterThanOrEqual(4)
 
 			// Check text value (ADD: before=null, after has value)
-			const textDiff = entityDiff.values.find(
-				(v: any) => v.propertyId === uuid.propText,
-			)
+			const textDiff = entityDiff.values.find((v: any) => v.propertyId === uuid.propText)
 			expect(textDiff?.type).toBe("TEXT")
 			expect(textDiff?.before).toBeNull()
 			expect(textDiff?.after).toBe("Entity with all types")
 
 			// Check bool value
-			const boolDiff = entityDiff.values.find(
-				(v: any) => v.propertyId === uuid.propBool,
-			)
+			const boolDiff = entityDiff.values.find((v: any) => v.propertyId === uuid.propBool)
 			expect(boolDiff?.type).toBe("BOOL")
 			expect(boolDiff?.before).toBeNull()
 			expect(boolDiff?.after).toBe("true")
 
 			// Check int value
-			const intDiff = entityDiff.values.find(
-				(v: any) => v.propertyId === uuid.propInt,
-			)
+			const intDiff = entityDiff.values.find((v: any) => v.propertyId === uuid.propInt)
 			expect(intDiff?.type).toBe("INT64")
 			expect(intDiff?.before).toBeNull()
 			expect(intDiff?.after).toBe("42")
 
 			// Check float value
-			const floatDiff = entityDiff.values.find(
-				(v: any) => v.propertyId === uuid.propFloat,
-			)
+			const floatDiff = entityDiff.values.find((v: any) => v.propertyId === uuid.propFloat)
 			expect(floatDiff?.type).toBe("FLOAT64")
 			expect(floatDiff?.before).toBeNull()
 			expect(Number(floatDiff?.after)).toBeCloseTo(3.14159, 4)
@@ -236,15 +222,11 @@ describe.skipIf(SKIP_INTEGRATION)("Proposal Diff - Full GRC-20 Edit Flow", () =>
 			expect(res.status).toBe(200)
 
 			const body = await res.json()
-			const entityDiff = body.entities.find(
-				(d: any) => d.entityId === uuid.entityExisting1,
-			)
+			const entityDiff = body.entities.find((d: any) => d.entityId === uuid.entityExisting1)
 			expect(entityDiff).toBeDefined()
 
 			// Should have UPDATE for the text value (both before and after have values)
-			const textValueDiff = entityDiff.values.find(
-				(v: any) => v.propertyId === uuid.propText,
-			)
+			const textValueDiff = entityDiff.values.find((v: any) => v.propertyId === uuid.propText)
 			expect(textValueDiff).toBeDefined()
 			expect(textValueDiff.type).toBe("TEXT")
 			expect(textValueDiff.before).toBe("Original Text")
@@ -258,14 +240,10 @@ describe.skipIf(SKIP_INTEGRATION)("Proposal Diff - Full GRC-20 Edit Flow", () =>
 			expect(res.status).toBe(200)
 
 			const body = await res.json()
-			const entityDiff = body.entities.find(
-				(d: any) => d.entityId === uuid.entityExisting1,
-			)
+			const entityDiff = body.entities.find((d: any) => d.entityId === uuid.entityExisting1)
 
 			// Should have ADD for the new bool value (entity didn't have it before)
-			const boolValueDiff = entityDiff.values.find(
-				(v: any) => v.propertyId === uuid.propBool,
-			)
+			const boolValueDiff = entityDiff.values.find((v: any) => v.propertyId === uuid.propBool)
 			expect(boolValueDiff).toBeDefined()
 			expect(boolValueDiff.type).toBe("BOOL")
 			expect(boolValueDiff.before).toBeNull()
@@ -285,15 +263,11 @@ describe.skipIf(SKIP_INTEGRATION)("Proposal Diff - Full GRC-20 Edit Flow", () =>
 			expect(res.status).toBe(200)
 
 			const body = await res.json()
-			const entityDiff = body.entities.find(
-				(d: any) => d.entityId === uuid.entityToDelete,
-			)
+			const entityDiff = body.entities.find((d: any) => d.entityId === uuid.entityToDelete)
 			expect(entityDiff).toBeDefined()
 
 			// Should have REMOVE for all existing values (before has value, after=null)
-			const textValueDiff = entityDiff.values.find(
-				(v: any) => v.propertyId === uuid.propText,
-			)
+			const textValueDiff = entityDiff.values.find((v: any) => v.propertyId === uuid.propText)
 			expect(textValueDiff).toBeDefined()
 			expect(textValueDiff.type).toBe("TEXT")
 			expect(textValueDiff.before).toBe("Entity to be deleted")
@@ -314,16 +288,12 @@ describe.skipIf(SKIP_INTEGRATION)("Proposal Diff - Full GRC-20 Edit Flow", () =>
 
 			const body = await res.json()
 			// Find the entity that has the relation
-			const entityDiff = body.entities.find(
-				(d: any) => d.entityId === uuid.entityExisting1,
-			)
+			const entityDiff = body.entities.find((d: any) => d.entityId === uuid.entityExisting1)
 			expect(entityDiff).toBeDefined()
 
 			// Should have ADD for the new relation
 			// Structure: { relationId, typeId, spaceId, changeType, before, after: {toEntityId, toSpaceId, position} }
-			const relationDiff = entityDiff.relations.find(
-				(r: any) => r.after?.toEntityId === uuid.entityExisting2,
-			)
+			const relationDiff = entityDiff.relations.find((r: any) => r.after?.toEntityId === uuid.entityExisting2)
 			expect(relationDiff).toBeDefined()
 			expect(relationDiff.changeType).toBe("ADD")
 			expect(relationDiff.before).toBeNull()
@@ -350,15 +320,11 @@ describe.skipIf(SKIP_INTEGRATION)("Proposal Diff - Full GRC-20 Edit Flow", () =>
 			const body = await res.json()
 
 			// The diff should contain the entity that has the relation being deleted
-			const entityDiff = body.entities.find(
-				(d: any) => d.entityId === uuid.entityExistingWithRelations,
-			)
+			const entityDiff = body.entities.find((d: any) => d.entityId === uuid.entityExistingWithRelations)
 			expect(entityDiff).toBeDefined()
 
 			// Should have REMOVE for the deleted relation
-			const relationDiff = entityDiff.relations.find(
-				(r: any) => r.relationId === uuid.relToDelete,
-			)
+			const relationDiff = entityDiff.relations.find((r: any) => r.relationId === uuid.relToDelete)
 			expect(relationDiff).toBeDefined()
 			expect(relationDiff.changeType).toBe("REMOVE")
 			expect(relationDiff.before).not.toBeNull()
@@ -383,15 +349,11 @@ describe.skipIf(SKIP_INTEGRATION)("Proposal Diff - Full GRC-20 Edit Flow", () =>
 			const body = await res.json()
 
 			// The diff should contain the entity that has the relation being updated
-			const entityDiff = body.entities.find(
-				(d: any) => d.entityId === uuid.entityExistingWithRelations,
-			)
+			const entityDiff = body.entities.find((d: any) => d.entityId === uuid.entityExistingWithRelations)
 			expect(entityDiff).toBeDefined()
 
 			// Should have UPDATE for the modified relation
-			const relationDiff = entityDiff.relations.find(
-				(r: any) => r.relationId === uuid.relToUpdate,
-			)
+			const relationDiff = entityDiff.relations.find((r: any) => r.relationId === uuid.relToUpdate)
 			expect(relationDiff).toBeDefined()
 			expect(relationDiff.changeType).toBe("UPDATE")
 			expect(relationDiff.before?.position).toBe("b0")
@@ -416,15 +378,11 @@ describe.skipIf(SKIP_INTEGRATION)("Proposal Diff - Full GRC-20 Edit Flow", () =>
 			expect(body.entities.length).toBeGreaterThanOrEqual(2)
 
 			// Check first entity (existing1 is updated)
-			const diff1 = body.entities.find(
-				(d: any) => d.entityId === uuid.entityExisting1,
-			)
+			const diff1 = body.entities.find((d: any) => d.entityId === uuid.entityExisting1)
 			expect(diff1).toBeDefined()
 
 			// Check second entity (existing2 is updated)
-			const diff2 = body.entities.find(
-				(d: any) => d.entityId === uuid.entityExisting2,
-			)
+			const diff2 = body.entities.find((d: any) => d.entityId === uuid.entityExisting2)
 			expect(diff2).toBeDefined()
 		})
 	})
@@ -435,9 +393,7 @@ describe.skipIf(SKIP_INTEGRATION)("Proposal Diff - Full GRC-20 Edit Flow", () =>
 
 	describe("Closed Proposal", () => {
 		it("uses versioned base state for closed proposals", async () => {
-			const res = await app.request(
-				`/versioned/proposals/${uuid.proposalClosed}/diff?spaceId=${uuid.space1}`,
-			)
+			const res = await app.request(`/versioned/proposals/${uuid.proposalClosed}/diff?spaceId=${uuid.space1}`)
 			expect(res.status).toBe(200)
 
 			const body = await res.json()
@@ -466,9 +422,7 @@ describe.skipIf(SKIP_INTEGRATION)("Proposal Diff - Full GRC-20 Edit Flow", () =>
 
 		it("returns 404 for non-existent proposal", async () => {
 			const nonExistentId = "20000000-0008-4000-8000-000000000999"
-			const res = await app.request(
-				`/versioned/proposals/${nonExistentId}/diff?spaceId=${uuid.space1}`,
-			)
+			const res = await app.request(`/versioned/proposals/${nonExistentId}/diff?spaceId=${uuid.space1}`)
 			expect(res.status).toBe(404)
 		})
 	})
@@ -547,12 +501,30 @@ async function setupTestData(pool: Pool): Promise<void> {
 		await client.query(
 			`INSERT INTO relations (id, entity_id, from_entity_id, to_entity_id, type_id, space_id, position)
 			 VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT DO NOTHING`,
-			[uuid.relToDelete, uuid.entityExistingWithRelations, uuid.entityExistingWithRelations, uuid.entityExisting1, uuid.relTypeGeneric, uuid.space1, "a0"],
+			[
+				uuid.relToDelete,
+				uuid.entityExistingWithRelations,
+				uuid.entityExistingWithRelations,
+				uuid.entityExisting1,
+				uuid.relTypeGeneric,
+				uuid.space1,
+				"a0",
+			],
 		)
 		await client.query(
 			`INSERT INTO relation_versions (id, relation_id, entity_id, from_entity_id, to_entity_id, type_id, space_id, valid_from_key, valid_to_key, position)
 			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL, $9) ON CONFLICT DO NOTHING`,
-			[uuid.rel1, uuid.relToDelete, uuid.entityExistingWithRelations, uuid.entityExistingWithRelations, uuid.entityExisting1, uuid.relTypeGeneric, uuid.space1, versionKey1, "a0"],
+			[
+				uuid.rel1,
+				uuid.relToDelete,
+				uuid.entityExistingWithRelations,
+				uuid.entityExistingWithRelations,
+				uuid.entityExisting1,
+				uuid.relTypeGeneric,
+				uuid.space1,
+				versionKey1,
+				"a0",
+			],
 		)
 
 		// Create another relation that will be updated (position changed) by a proposal
@@ -560,12 +532,30 @@ async function setupTestData(pool: Pool): Promise<void> {
 		await client.query(
 			`INSERT INTO relations (id, entity_id, from_entity_id, to_entity_id, type_id, space_id, position)
 			 VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT DO NOTHING`,
-			[uuid.relToUpdate, uuid.entityExistingWithRelations, uuid.entityExistingWithRelations, uuid.entityExisting2, uuid.relTypeGeneric, uuid.space1, "b0"],
+			[
+				uuid.relToUpdate,
+				uuid.entityExistingWithRelations,
+				uuid.entityExistingWithRelations,
+				uuid.entityExisting2,
+				uuid.relTypeGeneric,
+				uuid.space1,
+				"b0",
+			],
 		)
 		await client.query(
 			`INSERT INTO relation_versions (id, relation_id, entity_id, from_entity_id, to_entity_id, type_id, space_id, valid_from_key, valid_to_key, position)
 			 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, NULL, $9) ON CONFLICT DO NOTHING`,
-			[uuid.rel2, uuid.relToUpdate, uuid.entityExistingWithRelations, uuid.entityExistingWithRelations, uuid.entityExisting2, uuid.relTypeGeneric, uuid.space1, versionKey1, "b0"],
+			[
+				uuid.rel2,
+				uuid.relToUpdate,
+				uuid.entityExistingWithRelations,
+				uuid.entityExistingWithRelations,
+				uuid.entityExisting2,
+				uuid.relTypeGeneric,
+				uuid.space1,
+				versionKey1,
+				"b0",
+			],
 		)
 
 		// Entity to delete (live state)
@@ -594,9 +584,7 @@ async function setupTestData(pool: Pool): Promise<void> {
 				const builder = new EditBuilder(editId)
 					.setName("Create New Entity")
 					.setCreatedNow()
-					.createEntity(uuidToId(uuid.entityNew1), (e) =>
-						e.text(uuidToId(uuid.propText), "New Entity Title"),
-					)
+					.createEntity(uuidToId(uuid.entityNew1), (e) => e.text(uuidToId(uuid.propText), "New Entity Title"))
 				return builder.build()
 			},
 			contentUri: generateTestUri("create-entity"),
@@ -614,8 +602,7 @@ async function setupTestData(pool: Pool): Promise<void> {
 					.setName("Update Entity")
 					.setCreatedNow()
 					.updateEntity(uuidToId(uuid.entityExisting1), (u) =>
-						u.setText(uuidToId(uuid.propText), "Updated Text")
-							.setBool(uuidToId(uuid.propBool), true),
+						u.setText(uuidToId(uuid.propText), "Updated Text").setBool(uuidToId(uuid.propBool), true),
 					)
 				return builder.build()
 			},
@@ -696,7 +683,8 @@ async function setupTestData(pool: Pool): Promise<void> {
 					.setName("All Value Types")
 					.setCreatedNow()
 					.createEntity(uuidToId(uuid.entityNew2), (e) =>
-						e.text(uuidToId(uuid.propText), "Entity with all types")
+						e
+							.text(uuidToId(uuid.propText), "Entity with all types")
 							.bool(uuidToId(uuid.propBool), true)
 							.int64(uuidToId(uuid.propInt), BigInt(42))
 							.float64(uuidToId(uuid.propFloat), 3.14159),
@@ -757,9 +745,7 @@ async function setupTestData(pool: Pool): Promise<void> {
 				const builder = new EditBuilder(editId)
 					.setName("Update Relation")
 					.setCreatedNow()
-					.updateRelation(uuidToId(uuid.relToUpdate), (r) =>
-						r.setPosition("z9"),
-					)
+					.updateRelation(uuidToId(uuid.relToUpdate), (r) => r.setPosition("z9"))
 				return builder.build()
 			},
 			contentUri: generateTestUri("update-relation"),
@@ -785,20 +771,8 @@ interface CreateProposalOptions {
 	executedAt?: number
 }
 
-async function createProposalWithEdit(
-	client: any,
-	options: CreateProposalOptions,
-): Promise<void> {
-	const {
-		proposalId,
-		actionId,
-		spaceId,
-		startTime,
-		endTime,
-		editBuilder,
-		contentUri,
-		executedAt,
-	} = options
+async function createProposalWithEdit(client: any, options: CreateProposalOptions): Promise<void> {
+	const {proposalId, actionId, spaceId, startTime, endTime, editBuilder, contentUri, executedAt} = options
 
 	// Generate a random edit ID
 	const editId = randomId()

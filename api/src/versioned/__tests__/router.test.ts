@@ -743,9 +743,7 @@ describe("GET /versioned/proposals/:id/diff", () => {
 				],
 			})
 
-			const res = await app.request(
-				`/versioned/proposals/${proposalId}/diff?spaceId=${spaceId}&cursor=${cursor}`,
-			)
+			const res = await app.request(`/versioned/proposals/${proposalId}/diff?spaceId=${spaceId}&cursor=${cursor}`)
 
 			// Should accept the cursor without error (even if no entities to paginate)
 			expect(res.status).toBe(200)
