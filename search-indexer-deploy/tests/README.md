@@ -34,8 +34,8 @@ After the script completes, you can test the full migration workflow:
 # Using the test script (recommended)
 ./search-indexer-deploy/tests/test-full-migration.sh 1 2
 
-# Or using the job YAML files directly
-kubectl apply -f search-indexer-deploy/k8s/jobs/list-indices-job.yaml
+# Or using the job YAML files directly (use production jobs for local testing)
+kubectl apply -f search-indexer-deploy/k8s/production/jobs/list-indices-job.yaml
 kubectl logs -n search -f job/opensearch-list-indices
 ```
 

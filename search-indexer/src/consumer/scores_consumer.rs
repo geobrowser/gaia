@@ -83,14 +83,11 @@ impl ScoresConsumer {
         batch_size: usize,
         batch_timeout_ms: u64,
     ) -> Result<Self, IngestError> {
-        // Use a separate consumer group for scores
-        let scores_group_id = format!("{}-scores", group_id);
-
-        let client_config = super::kafka_config::create_client_config(brokers, &scores_group_id);
+        let client_config = super::kafka_config::create_client_config(brokers, group_id);
 
         info!(
             brokers = %brokers,
-            group_id = %scores_group_id,
+            group_id = %group_id,
             topic = %topic,
             batch_size = batch_size,
             batch_timeout_ms = batch_timeout_ms,

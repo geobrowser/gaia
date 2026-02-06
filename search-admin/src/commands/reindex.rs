@@ -5,7 +5,6 @@ use std::time::Duration;
 use tokio::time::sleep;
 use tracing::info;
 
-use search_indexer_repository::opensearch::get_versioned_index_name;
 
 use crate::commands::get;
 use crate::opensearch_client;
@@ -34,18 +33,22 @@ pub struct ReindexCommand {
 }
 
 impl ReindexCommand {
-    pub async fn execute(&self, opensearch_url: &str, _index_alias: &str) -> Result<()> {
+    pub async fn execute(&self, opensearch_url: &str, index_alias: &str) -> Result<()> {
+        // Generate versioned index names from the (possibly prefixed) alias
+        let source_index = format!("{}_v{}", index_alias, self.source_version);
+        let target_index = format!("{}_v{}", index_alias, self.target_version);
+
         info!(
             source_version = self.source_version,
             target_version = self.target_version,
+            index_alias = %index_alias,
+            source_index = %source_index,
+            target_index = %target_index,
             wait_for_completion = self.wait_for_completion,
             "Starting reindex"
         );
 
         let client = opensearch_client::create_client(opensearch_url)?;
-
-        let source_index = get_versioned_index_name(Some(self.source_version));
-        let target_index = get_versioned_index_name(Some(self.target_version));
 
         println!("\n════════════════════════════════════════════════");
         println!("OpenSearch Reindex");

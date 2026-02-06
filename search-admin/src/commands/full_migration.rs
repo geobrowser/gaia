@@ -11,7 +11,7 @@ use std::time::Duration;
 use tokio::time::sleep;
 use tracing::{info, warn};
 
-use search_indexer_repository::opensearch::{get_index_settings, get_versioned_index_name};
+use search_indexer_repository::opensearch::get_index_settings;
 
 use crate::commands::get;
 use crate::opensearch_client;
@@ -37,6 +37,10 @@ pub struct FullMigrationCommand {
 
 impl FullMigrationCommand {
     pub async fn execute(&self, opensearch_url: &str, index_alias: &str) -> Result<()> {
+        // Generate versioned index names from the (possibly prefixed) alias
+        let source_index = format!("{}_v{}", index_alias, self.source_version);
+        let target_index = format!("{}_v{}", index_alias, self.target_version);
+
         println!("\n════════════════════════════════════════════════");
         println!("Full Index Migration: v{} → v{}", self.source_version, self.target_version);
         println!("════════════════════════════════════════════════\n");
@@ -44,13 +48,13 @@ impl FullMigrationCommand {
         info!(
             source_version = self.source_version,
             target_version = self.target_version,
+            index_alias = %index_alias,
+            source_index = %source_index,
+            target_index = %target_index,
             namespace = %self.namespace,
             deployment = %self.deployment_name,
             "Starting full migration"
         );
-
-        let source_index = get_versioned_index_name(Some(self.source_version));
-        let target_index = get_versioned_index_name(Some(self.target_version));
 
         println!("Source Index: {}", source_index);
         println!("Target Index: {}", target_index);
@@ -115,17 +119,20 @@ impl FullMigrationCommand {
         Ok(())
     }
 
-    async fn step_create_index(&self, client: &OpenSearch, _index_alias: &str) -> Result<()> {
+    async fn step_create_index(&self, client: &OpenSearch, index_alias: &str) -> Result<()> {
         println!("────────────────────────────────────────────────");
         println!("Step 1/5: Creating New Index");
         println!("────────────────────────────────────────────────\n");
 
+        // Generate versioned index name from the (possibly prefixed) alias
+        let versioned_index_name = format!("{}_v{}", index_alias, self.target_version);
+
         info!(
             version = self.target_version,
+            index_alias = %index_alias,
+            versioned_index_name = %versioned_index_name,
             "Creating index"
         );
-
-        let versioned_index_name = get_versioned_index_name(Some(self.target_version));
 
         // Check if index exists
         let index_exists = get::index_exists(client, &versioned_index_name).await?;
@@ -456,13 +463,15 @@ impl FullMigrationCommand {
         println!("Step 4/5: Updating Alias");
         println!("────────────────────────────────────────────────\n");
 
+        // Generate versioned index name from the (possibly prefixed) alias
+        let new_index = format!("{}_v{}", index_alias, self.target_version);
+
         info!(
             alias = %index_alias,
             version = self.target_version,
+            new_index = %new_index,
             "Updating alias"
         );
-
-        let new_index = get_versioned_index_name(Some(self.target_version));
 
         // Get current alias target(s)
         let alias_response = client

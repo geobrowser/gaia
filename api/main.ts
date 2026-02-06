@@ -70,9 +70,16 @@ if (opensearchUrl) {
 		log.error("Invalid OPENSEARCH_URL", {url: opensearchUrl})
 		throw error
 	}
-	const searchClient = new OpenSearchClient(opensearchUrl)
+
+	// Get environment-specific index name
+	// staging -> staging_entities, production -> entities
+	const environment = process.env.ENVIRONMENT
+	const baseIndexAlias = process.env.INDEX_ALIAS ?? "entities"
+	const indexName = environment === "staging" ? `staging_${baseIndexAlias}` : baseIndexAlias
+
+	const searchClient = new OpenSearchClient(opensearchUrl, indexName)
 	app.route("/search", createSearchRouter(searchClient, runtime))
-	log.info("Search routes enabled", {url: opensearchUrl})
+	log.info("Search routes enabled", {url: opensearchUrl, indexName, environment: environment ?? "production"})
 } else {
 	log.info("Search routes disabled - OPENSEARCH_URL not set")
 }

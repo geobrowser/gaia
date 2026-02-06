@@ -212,6 +212,7 @@ jobs:
         env:
           DATABASE_URL: postgresql://test_user:test_password@localhost:5432/gaia_test
           OPENSEARCH_URL: http://localhost:9200
+          ENVIRONMENT: staging
           IPFS_KEY: dummy-key-for-e2e-tests
           IPFS_GATEWAY_WRITE: http://localhost:5001
 
@@ -220,7 +221,8 @@ jobs:
           ENVIRONMENT=staging \
           KAFKA_BROKER=localhost:9092 \
           OPENSEARCH_URL=http://localhost:9200 \
-          KAFKA_GROUP_ID=search-indexer-e2e \
+          KAFKA_GROUP_EDITS_ID=search-indexer-group-edits-e2e \
+          KAFKA_GROUP_SCORES_ID=search-indexer-group-scores-e2e \
           HEALTH_PORT=8080 \
           RUST_LOG=search_indexer=info \
           ./target/release/search-indexer &
