@@ -4,7 +4,7 @@
 //! into their typed representations.
 
 use alloy::sol;
-use alloy::sol_types::{sol_data, SolType};
+use alloy::sol_types::{SolType, sol_data};
 use ethabi::{ParamType, Token};
 use std::borrow::Cow;
 use thiserror::Error;
