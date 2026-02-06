@@ -209,6 +209,9 @@ export class OpenSearchClient implements SearchClient {
 			case "GLOBAL_BY_SPACE_SCORE":
 				return this.buildGlobalBySpaceScoreQuery(baseTextQuery, query.type_ids, includeDeleted)
 
+			case "GLOBAL_BY_ENTITY_SPACE_SCORE":
+				return this.buildGlobalByEntitySpaceScoreQuery(baseTextQuery, query.type_ids, includeDeleted)
+
 			case "SPACE_SINGLE": {
 				if (!query.space_id) {
 					throw SearchError.validationError("SPACE_SINGLE scope requires space_id")
@@ -260,6 +263,7 @@ export class OpenSearchClient implements SearchClient {
 		switch (scope) {
 			case "GLOBAL":
 			case "GLOBAL_BY_SPACE_SCORE":
+			case "GLOBAL_BY_ENTITY_SPACE_SCORE":
 				return {
 					query: {
 						bool: {
@@ -340,6 +344,23 @@ export class OpenSearchClient implements SearchClient {
 								},
 							},
 							functions: [this.buildScoreBoostFunction("space_score")],
+							boost_mode: "replace",
+							score_mode: "sum",
+						},
+					},
+				}
+
+			case "GLOBAL_BY_ENTITY_SPACE_SCORE":
+				return {
+					query: {
+						function_score: {
+							query: {
+								bool: {
+									must: [{match_all: {}}],
+									filter: filters,
+								},
+							},
+							functions: [this.buildScoreBoostFunction("entity_space_score")],
 							boost_mode: "replace",
 							score_mode: "sum",
 						},
@@ -522,6 +543,33 @@ export class OpenSearchClient implements SearchClient {
 						},
 					},
 					functions: [this.buildScoreBoostFunction("space_score")],
+					boost_mode: "sum",
+					score_mode: "sum",
+				},
+			},
+		}
+	}
+
+	/**
+	 * Build a global search query ranked by entity space score.
+	 * Boosts results by entity_space_score using function_score.
+	 */
+	buildGlobalByEntitySpaceScoreQuery(baseTextQuery: object, typeIds?: string[], includeDeleted: boolean = false): object {
+		const typeFilter = this.buildTypeFilter(typeIds)
+		const filters: object[] = []
+		if (!includeDeleted) filters.push(this.buildNonDeletedFilter())
+		if (typeFilter) filters.push(typeFilter)
+
+		return {
+			query: {
+				function_score: {
+					query: {
+						bool: {
+							must: [baseTextQuery],
+							filter: filters,
+						},
+					},
+					functions: [this.buildScoreBoostFunction("entity_space_score")],
 					boost_mode: "sum",
 					score_mode: "sum",
 				},

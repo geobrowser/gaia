@@ -52,6 +52,15 @@ describe("OpenSearchClient", () => {
 			expect(queryStr).toContain("term")
 		})
 
+		it("should build a simple term query for GLOBAL_BY_ENTITY_SPACE_SCORE scope", () => {
+			const query = client.buildUuidQuery(testUuid, "GLOBAL_BY_ENTITY_SPACE_SCORE")
+			const queryStr = JSON.stringify(query)
+
+			expect(queryStr).toContain(testUuid)
+			expect(queryStr).toContain("entity_id")
+			expect(queryStr).toContain("term")
+		})
+
 		it("should build query with space filter for SPACE_SINGLE scope", () => {
 			const spaceId = "space-123"
 			const query = client.buildUuidQuery(testUuid, "SPACE_SINGLE", spaceId)
@@ -102,6 +111,20 @@ describe("OpenSearchClient", () => {
 			const queryStr = JSON.stringify(query)
 
 			expect(queryStr).toContain("space_score")
+			expect(queryStr).toContain(`* ${SCORE_BOOST}`)
+			expect(queryStr).toContain("function_score")
+			expect(queryStr).toContain("script_score")
+			expect(queryStr).toContain("test")
+		})
+	})
+
+	describe("buildGlobalByEntitySpaceScoreQuery", () => {
+		it("should wrap base text query with entity_space_score boost", () => {
+			const baseQuery = client.buildBaseTextQuery("test")
+			const query = client.buildGlobalByEntitySpaceScoreQuery(baseQuery)
+			const queryStr = JSON.stringify(query)
+
+			expect(queryStr).toContain("entity_space_score")
 			expect(queryStr).toContain(`* ${SCORE_BOOST}`)
 			expect(queryStr).toContain("function_score")
 			expect(queryStr).toContain("script_score")
@@ -221,6 +244,32 @@ describe("OpenSearchClient", () => {
 
 			const queryStr = JSON.stringify(query)
 			expect(queryStr).toContain("space_score")
+			expect(queryStr).toContain("blockchain")
+			expect(queryStr).toContain("type_relations.entity_to_id")
+			expect(queryStr).toContain("type-1")
+		})
+
+		it("should build global by entity space score query for GLOBAL_BY_ENTITY_SPACE_SCORE scope", () => {
+			const query = client.buildSearchBody({
+				query: "blockchain",
+				scope: "GLOBAL_BY_ENTITY_SPACE_SCORE",
+			})
+
+			const queryStr = JSON.stringify(query)
+			expect(queryStr).toContain("entity_space_score")
+			expect(queryStr).toContain("blockchain")
+		})
+
+		it("should build global by entity space score query with type_ids filtering", () => {
+			const typeIds = ["type-1"]
+			const query = client.buildSearchBody({
+				query: "blockchain",
+				scope: "GLOBAL_BY_ENTITY_SPACE_SCORE",
+				type_ids: typeIds,
+			})
+
+			const queryStr = JSON.stringify(query)
+			expect(queryStr).toContain("entity_space_score")
 			expect(queryStr).toContain("blockchain")
 			expect(queryStr).toContain("type_relations.entity_to_id")
 			expect(queryStr).toContain("type-1")

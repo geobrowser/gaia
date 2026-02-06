@@ -843,6 +843,67 @@ class SearchValidator {
     }
   }
 
+  /** Verifies GLOBAL_BY_ENTITY_SPACE_SCORE scope returns results ranked by entitySpaceScore. */
+  async test16_GlobalByEntitySpaceScoreSearch(): Promise<void> {
+    console.log(`\n${BLUE}Test 16: GLOBAL_BY_ENTITY_SPACE_SCORE scope (empty query returns results ranked by entity space score)${NC}`);
+
+    // Test empty query with GLOBAL_BY_ENTITY_SPACE_SCORE scope
+    console.log(`  ${BLUE}→ Testing empty query with GLOBAL_BY_ENTITY_SPACE_SCORE scope${NC}`);
+    const response = await this.search({
+      scope: 'GLOBAL_BY_ENTITY_SPACE_SCORE',
+    });
+
+    // Should return results
+    if (response.results.length > 0) {
+      this.addResult('test16_has_results', true, `Empty query (GLOBAL_BY_ENTITY_SPACE_SCORE) returned ${response.results.length} results`);
+    } else {
+      this.addResult('test16_has_results', false, `Empty query (GLOBAL_BY_ENTITY_SPACE_SCORE) should return results, got 0`);
+      return;
+    }
+
+    // Verify results are ordered by entity space score (descending)
+    let scoresDescending = true;
+    for (let i = 0; i < response.results.length - 1; i++) {
+      const currentScore = response.results[i].entitySpaceScore ?? DEFAULT_AVERAGE_SCORE;
+      const nextScore = response.results[i + 1].entitySpaceScore ?? DEFAULT_AVERAGE_SCORE;
+
+      if (currentScore < nextScore) {
+        scoresDescending = false;
+        break;
+      }
+    }
+
+    if (scoresDescending) {
+      this.addResult('test16_score_ordering', true,
+        `Empty query (GLOBAL_BY_ENTITY_SPACE_SCORE) results ordered by entity space score (descending, missing scores default to ${DEFAULT_AVERAGE_SCORE})`);
+    } else {
+      this.addResult('test16_score_ordering', false,
+        `Empty query (GLOBAL_BY_ENTITY_SPACE_SCORE) results not properly ordered by entity space score`);
+    }
+
+    // Test text query with GLOBAL_BY_ENTITY_SPACE_SCORE scope
+    console.log(`  ${BLUE}→ Testing text query with GLOBAL_BY_ENTITY_SPACE_SCORE scope${NC}`);
+    const textResponse = await this.search({
+      query: 'alice',
+      scope: 'GLOBAL_BY_ENTITY_SPACE_SCORE',
+    });
+
+    if (textResponse.results.length > 0) {
+      this.addResult('test16_text_has_results', true,
+        `Text query (GLOBAL_BY_ENTITY_SPACE_SCORE) returned ${textResponse.results.length} results`);
+    } else {
+      this.addResult('test16_text_has_results', false,
+        `Text query (GLOBAL_BY_ENTITY_SPACE_SCORE) should return results, got 0`);
+    }
+
+    // Check total count makes sense
+    if (typeof response.total === 'number' && response.total > 0) {
+      this.addResult('test16_total', true, `Response includes total count: ${response.total}`);
+    } else {
+      this.addResult('test16_total', false, `Response missing or invalid total count`);
+    }
+  }
+
   /** Verifies entity created via CreateEntity GRC-20 op is searchable. */
   async test15_CreateEntityOp(): Promise<void> {
     console.log(`\n${BLUE}Test 15: Verify entity created via CreateEntity GRC-20 op${NC}`);
@@ -966,6 +1027,7 @@ async function main() {
     await validator.test13_LWWBehavior();
     await validator.test14_IncludeDeletedFlag();
     await validator.test15_CreateEntityOp();
+    await validator.test16_GlobalByEntitySpaceScoreSearch();
 
     const allPassed = validator.printSummary();
     process.exit(allPassed ? 0 : 1);

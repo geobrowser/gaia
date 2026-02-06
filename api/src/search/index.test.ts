@@ -123,6 +123,19 @@ describe("Search Router - Integration Tests", () => {
 			})
 		})
 
+		it("handles GLOBAL_BY_ENTITY_SPACE_SCORE scope", async () => {
+			const request = new Request("http://localhost/search?query=test&scope=GLOBAL_BY_ENTITY_SPACE_SCORE")
+			const response = await app.fetch(request)
+
+			expect(response.status).toBe(200)
+			expect(mockSearchClient.search).toHaveBeenCalledWith({
+				query: "test",
+				scope: "GLOBAL_BY_ENTITY_SPACE_SCORE",
+				limit: 20,
+				offset: 0,
+			})
+		})
+
 		// Top ranked results for empty queries
 		it("returns top ranked results for missing query parameter", async () => {
 			const request = new Request("http://localhost/search")
