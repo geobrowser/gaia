@@ -1,5 +1,5 @@
 import SimplifyInflectionPlugin from "@graphile-contrib/pg-simplify-inflector"
-import {useResponseCache} from "@graphql-yoga/plugin-response-cache"
+import {createInMemoryCache, useResponseCache} from "@graphql-yoga/plugin-response-cache"
 import {createYoga, useExecutionCancellation} from "graphql-yoga"
 import {Pool} from "pg"
 import {createPostGraphileSchema, withPostGraphileContext} from "postgraphile"
@@ -37,7 +37,7 @@ const pgPool = new Pool({
 
 // Base PostGraphile options (without uuidScalarPlugin)
 const postgraphileOptions = {
-	watchPg: true,
+	watchPg: false,
 	graphiql: true,
 	enhanceGraphiql: true,
 	dynamicJson: true,
@@ -108,6 +108,7 @@ const sharedPlugins = [
 	useResponseCache({
 		session: () => null,
 		ttl: 10_000, // 10 seconds
+		cache: createInMemoryCache({max: 1024}),
 	}),
 	useGraphQLInstrumentation(),
 ]
