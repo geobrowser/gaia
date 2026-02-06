@@ -10,6 +10,7 @@ import {Data, Effect} from "effect"
 import {
 	type ProposalAction,
 	type ProposalActionType,
+	type ProposalListItem,
 	type ProposalStatus,
 	type ProposalWithVotes,
 	RATIO_BASE,
@@ -97,10 +98,9 @@ function mapVotesFromJson(votesJson: VoteJsonRow[] | null): Vote[] {
 }
 
 /**
- * Maps base proposal row fields to domain ProposalWithVotes.
- * Votes array must be provided separately (empty for list, populated for single).
+ * Maps shared base fields from a proposal row.
  */
-function mapRowToProposal(row: BaseProposalRow, votes: Vote[]): ProposalWithVotes {
+function mapBaseFields(row: BaseProposalRow) {
 	return {
 		id: row.id,
 		spaceId: row.space_id,
@@ -115,9 +115,24 @@ function mapRowToProposal(row: BaseProposalRow, votes: Vote[]): ProposalWithVote
 		yesCount: BigInt(row.yes_count),
 		noCount: BigInt(row.no_count),
 		abstainCount: BigInt(row.abstain_count),
-		votes,
 		actions: mapActionsFromJson(row.actions_json),
 	}
+}
+
+/**
+ * Maps a proposal row to the full domain type with individual voter records.
+ * Used by the single-proposal detail query.
+ */
+function mapRowToProposal(row: BaseProposalRow, votes: Vote[]): ProposalWithVotes {
+	return {...mapBaseFields(row), votes}
+}
+
+/**
+ * Maps a proposal row to a list item with the requesting user's vote.
+ * No individual voter records — only aggregate counts.
+ */
+function mapRowToListItem(row: BaseProposalRow, userVote: VoteOption | null): ProposalListItem {
+	return {...mapBaseFields(row), userVote}
 }
 
 // =============================================================================
@@ -241,13 +256,15 @@ export interface ListProposalsOptions {
 	orderBy?: ProposalOrderBy
 	/** Sort direction (default: desc) */
 	orderDirection?: ProposalOrderDirection
+	/** Voter ID to look up the user's vote on each proposal */
+	voterId?: string
 }
 
 /**
  * Result of listing proposals with cursor for pagination.
  */
 export interface ListProposalsResult {
-	proposals: ProposalWithVotes[]
+	proposals: ProposalListItem[]
 	nextCursor: string | null
 }
 
@@ -410,7 +427,7 @@ export function listProposalsInSpace(
 	db: Database,
 	options: ListProposalsOptions,
 ): Effect.Effect<ListProposalsResult, QueryError> {
-	const {spaceId, limit, cursor, actionTypes, excludeActionTypes, status, orderBy, orderDirection} = options
+	const {spaceId, limit, cursor, actionTypes, excludeActionTypes, status, orderBy, orderDirection, voterId} = options
 
 	return Effect.tryPromise({
 		try: async () => {
@@ -517,9 +534,19 @@ export function listProposalsInSpace(
 				statusCondition = sql`AND (${statusOr})`
 			}
 
-			// Note: votes_json omitted for performance - use single proposal endpoint for voters
-			// Vote counts are now denormalized on the proposals table, eliminating the LATERAL join
-			const result = await db.execute<BaseProposalRow & {created_at: string}>(
+			// Vote counts are denormalized on the proposals table.
+			// Individual voters are omitted for performance (use single proposal endpoint for full voter list).
+			// When voterId is provided, we fetch just the user's vote via a LATERAL join.
+			const userVoteJoin = voterId
+				? sql`LEFT JOIN LATERAL (
+            SELECT vote FROM proposal_votes
+            WHERE proposal_id = p.id AND voter_id = ${voterId}::uuid
+            LIMIT 1
+          ) user_vote ON true`
+				: sql``
+			const userVoteSelect = voterId ? sql`, user_vote.vote as user_vote` : sql``
+
+			const result = await db.execute<BaseProposalRow & {created_at: string; user_vote?: string | null}>(
 				sql`
         SELECT 
           p.id,
@@ -537,6 +564,7 @@ export function listProposalsInSpace(
           p.no_count,
           p.abstain_count,
           actions_agg.actions_json
+          ${userVoteSelect}
         FROM proposals p
         LEFT JOIN LATERAL (
           SELECT COALESCE(json_agg(json_build_object(
@@ -552,6 +580,7 @@ export function listProposalsInSpace(
           FROM proposal_actions
           WHERE proposal_id = p.id
         ) actions_agg ON true
+        ${userVoteJoin}
         WHERE p.space_id = ${spaceId}::uuid
         ${cursorCondition}
         ${actionTypeCondition}
@@ -565,8 +594,12 @@ export function listProposalsInSpace(
 			const hasMore = rows.length > limit
 			const proposalRows = hasMore ? rows.slice(0, limit) : rows
 
-			// Map rows to domain objects with empty votes (use single endpoint for voters)
-			const proposals = proposalRows.map((row) => mapRowToProposal(row, []))
+			const proposals = proposalRows.map((row) => {
+				const rawVote = row.user_vote?.toUpperCase()
+				const userVote =
+					rawVote && VOTE_OPTIONS.includes(rawVote as VoteOption) ? (rawVote as VoteOption) : null
+				return mapRowToListItem(row, userVote)
+			})
 
 			// Next cursor is the order value + id of the last item
 			const lastRow = proposalRows[proposalRows.length - 1]
