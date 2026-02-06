@@ -10,7 +10,7 @@ use serde_json::{json, Value};
 use tracing::{error, info};
 
 use crate::errors::SearchIndexError;
-use crate::opensearch::index_config::{get_index_settings, get_versioned_index_name, IndexConfig};
+use crate::opensearch::index_config::{get_index_settings, get_versioned_index_name_with_base, IndexConfig};
 
 /// Ensure the versioned index and alias exist, creating them if necessary.
 ///
@@ -32,8 +32,8 @@ pub async fn ensure_index_exists(
     client: &OpenSearch,
     index_config: &IndexConfig,
 ) -> Result<(), SearchIndexError> {
-    // Get the versioned index name (e.g., "entities_v0")
-    let versioned_index_name = get_versioned_index_name(Some(index_config.version));
+    // Get the versioned index name (e.g., "staging_entities_v2" or "entities_v2")
+    let versioned_index_name = get_versioned_index_name_with_base(&index_config.alias, Some(index_config.version));
 
     // Step 1: Ensure the versioned index exists
     ensure_versioned_index_exists(client, &versioned_index_name, index_config.version).await?;
