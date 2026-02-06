@@ -4,7 +4,7 @@
 //! into their typed representations.
 
 use alloy::sol;
-use alloy::sol_types::{SolType, sol_data};
+use alloy::sol_types::{sol_data, SolType};
 use ethabi::{ParamType, Token};
 use std::borrow::Cow;
 use thiserror::Error;
@@ -578,13 +578,19 @@ pub struct ProposalVotedData {
     /// Proposal ID (16 bytes).
     #[allow(dead_code)] // Available for callers who need it
     pub proposal_id: Vec<u8>,
-    /// Vote option (0=None, 1=Abstain, 2=Yes, 3=No).
+    /// Vote option (0=None, 1=Yes, 2=No, 3=Abstain).
     pub vote: u8,
 }
 
 /// Decode PROPOSAL_VOTED data.
 ///
 /// Encoding: `abi.encode(bytes16 proposalId, VoteOption)`
+///
+/// The data may arrive wrapped in an ABI `bytes` encoding (offset + length + content)
+/// because the SpaceRegistry's Action event emits `_data` as a non-indexed `bytes`
+/// parameter. The EVM ABI-encodes this in the log data section, so `log.data()`
+/// includes the wrapper. We use `maybe_unwrap_bytes` to strip it, matching the
+/// approach used by `decode_proposal_created` and `decode_proposal_settings_used`.
 pub fn decode_proposal_voted(data: &[u8]) -> Result<ProposalVotedData, DecodeError> {
     if data.is_empty() {
         return Err(DecodeError::DataTooShort {
@@ -593,7 +599,9 @@ pub fn decode_proposal_voted(data: &[u8]) -> Result<ProposalVotedData, DecodeErr
         });
     }
 
-    let (proposal_id, vote_option) = ProposalVotedDataType::abi_decode(data)
+    let current = maybe_unwrap_bytes(data);
+
+    let (proposal_id, vote_option) = ProposalVotedDataType::abi_decode(&current)
         .map_err(|e| DecodeError::AbiDecode(e.to_string()))?;
 
     Ok(ProposalVotedData {
