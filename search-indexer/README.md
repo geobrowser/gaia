@@ -80,8 +80,10 @@ See the [search-admin documentation](../search-admin/README.md) for manual index
 | `KAFKA_GROUP_EDITS_ID` | Consumer group ID for entity events | `search-indexer-group-edits` |
 | `KAFKA_GROUP_SCORES_ID` | Consumer group ID for score events | `search-indexer-group-scores` |
 | `KAFKA_TOPIC` | Kafka topic to consume | `knowledge.edits` |
-| `KAFKA_BATCH_SIZE` | Messages to batch before sending | `10` |
-| `KAFKA_BATCH_TIMEOUT_MS` | Max wait time before flushing batch (ms) | `1000` |
+| `KAFKA_BATCH_SIZE` | Messages to batch before sending (entities consumer) | `10` |
+| `KAFKA_BATCH_TIMEOUT_MS` | Max wait time before flushing batch (entities consumer, ms) | `1000` |
+| `SCORES_BATCH_SIZE` | Messages to batch before sending (scores consumer) | `10` |
+| `SCORES_BATCH_TIMEOUT_MS` | Max wait time before flushing batch (scores consumer, ms) | `1000` |
 | `CHANNEL_BUFFER_SIZE` | Max batches in flight per channel | `10` |
 | `KAFKA_USERNAME` | SASL username for managed Kafka (optional, enables SASL/SSL if set) | - |
 | `KAFKA_PASSWORD` | SASL password for managed Kafka (required if username is set) | - |
@@ -424,8 +426,8 @@ Kafka Broker
 | Channel | Contents | Max Items | Memory Formula |
 |---------|----------|-----------|----------------|
 | `entities_processor` | `EntityProcessingBatch` | `CHANNEL_BUFFER_SIZE` | `CHANNEL_BUFFER_SIZE` × `KAFKA_BATCH_SIZE` × avg_msg_size |
-| `scores_processor` | `ScoreProcessingBatch` | `CHANNEL_BUFFER_SIZE` | `CHANNEL_BUFFER_SIZE` × `KAFKA_BATCH_SIZE` × avg_msg_size |
-| `loader` | `ProcessedBatch` | `CHANNEL_BUFFER_SIZE` | `CHANNEL_BUFFER_SIZE` × `KAFKA_BATCH_SIZE` × avg_processed_size |
+| `scores_processor` | `ScoreProcessingBatch` | `CHANNEL_BUFFER_SIZE` | `CHANNEL_BUFFER_SIZE` × `SCORES_BATCH_SIZE` × avg_msg_size |
+| `loader` | `ProcessedBatch` | `CHANNEL_BUFFER_SIZE` | `CHANNEL_BUFFER_SIZE` × max(`KAFKA_BATCH_SIZE`, `SCORES_BATCH_SIZE`) × avg_processed_size |
 | `entities_ack` | `StreamMessage` (offsets only) | `CHANNEL_BUFFER_SIZE` | Negligible (~1 KiB total) |
 | `scores_ack` | `StreamMessage` (offsets only) | `CHANNEL_BUFFER_SIZE` | Negligible (~1 KiB total) |
 
@@ -443,14 +445,16 @@ This is controlled by rdkafka's `queued.max.messages.kbytes` default (65,536 KiB
 
 ```
 Total Memory ≈
-    128 MiB                                                            # rdkafka queues (fixed)
-  + (3 × CHANNEL_BUFFER_SIZE × KAFKA_BATCH_SIZE × avg_msg_size)        # data channels
-  + overhead                                                            # ~50-100 MiB
+    128 MiB                                                                          # rdkafka queues (fixed)
+  + (CHANNEL_BUFFER_SIZE × KAFKA_BATCH_SIZE × avg_msg_size)                          # entities_processor
+  + (CHANNEL_BUFFER_SIZE × SCORES_BATCH_SIZE × avg_msg_size)                         # scores_processor
+  + (CHANNEL_BUFFER_SIZE × max(KAFKA_BATCH_SIZE, SCORES_BATCH_SIZE) × avg_proc_size) # loader
+  + overhead                                                                         # ~50-100 MiB
 ```
 
 ### Example Calculation
 
-With production settings (`CHANNEL_BUFFER_SIZE=10`, `KAFKA_BATCH_SIZE=10`, avg message ~500 KiB):
+With production settings (`CHANNEL_BUFFER_SIZE=10`, `KAFKA_BATCH_SIZE=10`, `SCORES_BATCH_SIZE=10`, avg message ~500 KiB):
 
 | Component | Calculation | Memory |
 |-----------|-------------|--------|
