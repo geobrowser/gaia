@@ -28,23 +28,6 @@ impl IndexConfig {
     }
 }
 
-/// The base name of the search index (without version).
-pub const INDEX_NAME: &str = "entities";
-
-/// Get the versioned index name.
-///
-/// # Arguments
-///
-/// * `version` - The version number (defaults to 0 if None)
-///
-/// # Returns
-///
-/// The versioned index name (e.g., "entities_v0")
-pub fn get_versioned_index_name(version: Option<u32>) -> String {
-    let v = version.unwrap_or(0);
-    format!("{}_v{}", INDEX_NAME, v)
-}
-
 /// Get a versioned index name with a custom base name.
 ///
 /// This allows generating versioned index names with environment prefixes.
@@ -207,20 +190,6 @@ mod tests {
             settings["mappings"]["properties"]["entity_space_score"]["type"],
             "float"
         );
-    }
-
-    #[test]
-    fn test_index_name() {
-        assert_eq!(INDEX_NAME, "entities");
-    }
-
-    #[test]
-    fn test_versioned_index_name() {
-        assert_eq!(get_versioned_index_name(None), "entities_v0");
-        assert_eq!(get_versioned_index_name(Some(0)), "entities_v0");
-        assert_eq!(get_versioned_index_name(Some(1)), "entities_v1");
-        assert_eq!(get_versioned_index_name(Some(2)), "entities_v2");
-        assert_eq!(get_versioned_index_name(Some(42)), "entities_v42");
     }
 
     #[test]
