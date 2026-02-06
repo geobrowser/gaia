@@ -888,7 +888,7 @@ mod tests {
         // Inner data, padded to 32-byte boundary
         wrapped.extend_from_slice(inner);
         let padding = (32 - (len % 32)) % 32;
-        wrapped.extend(std::iter::repeat(0u8).take(padding));
+        wrapped.extend(std::iter::repeat_n(0u8, padding));
         wrapped
     }
 
