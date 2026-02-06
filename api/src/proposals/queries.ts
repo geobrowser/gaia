@@ -4,22 +4,22 @@
  * Uses Effect for error handling and tracing.
  */
 
-import {sql} from "drizzle-orm"
-import type {NodePgDatabase} from "drizzle-orm/node-postgres"
-import {Data, Effect} from "effect"
+import { sql } from "drizzle-orm";
+import type { NodePgDatabase } from "drizzle-orm/node-postgres";
+import { Data, Effect } from "effect";
 import {
-	type ProposalAction,
-	type ProposalActionType,
-	type ProposalStatus,
-	type ProposalWithVotes,
-	RATIO_BASE,
-	VOTE_OPTIONS,
-	type Vote,
-	type VoteOption,
-	type VotingMode,
-} from "./types"
+  type ProposalAction,
+  type ProposalActionType,
+  type ProposalStatus,
+  type ProposalWithVotes,
+  RATIO_BASE,
+  VOTE_OPTIONS,
+  type Vote,
+  type VoteOption,
+  type VotingMode,
+} from "./types";
 
-type Database = NodePgDatabase<Record<string, unknown>>
+type Database = NodePgDatabase<Record<string, unknown>>;
 
 // =============================================================================
 // Shared Types and Mappers
@@ -27,97 +27,102 @@ type Database = NodePgDatabase<Record<string, unknown>>
 
 /** Raw action row from JSON aggregation */
 interface ActionJsonRow {
-	action_type: string
-	target_id: string | null
-	content_uri: string | null
-	content_id: string | null
-	quorum: number | null
-	fast_threshold: number | null
-	slow_threshold: number | null
-	duration: number | null
+  action_type: string;
+  target_id: string | null;
+  content_uri: string | null;
+  content_id: string | null;
+  quorum: number | null;
+  fast_threshold: number | null;
+  slow_threshold: number | null;
+  duration: number | null;
 }
 
 /** Raw vote row from JSON aggregation */
 interface VoteJsonRow {
-	voter_id: string
-	vote: string
+  voter_id: string;
+  vote: string;
 }
 
 /** Base proposal row fields shared between queries */
 interface BaseProposalRow extends Record<string, unknown> {
-	id: string
-	space_id: string
-	name: string | null
-	proposed_by: string
-	voting_mode: "Fast" | "Slow"
-	start_time: string
-	end_time: string
-	quorum: string
-	threshold: string
-	executed_at: string | null
-	yes_count: string
-	no_count: string
-	abstain_count: string
-	actions_json: ActionJsonRow[] | null
+  id: string;
+  space_id: string;
+  name: string | null;
+  proposed_by: string;
+  voting_mode: "Fast" | "Slow";
+  start_time: string;
+  end_time: string;
+  quorum: string;
+  threshold: string;
+  executed_at: string | null;
+  yes_count: string;
+  no_count: string;
+  abstain_count: string;
+  actions_json: ActionJsonRow[] | null;
 }
 
 /**
  * Maps raw action JSON to domain ProposalAction.
  */
-function mapActionsFromJson(actionsJson: ActionJsonRow[] | null): ProposalAction[] {
-	return (actionsJson ?? []).map((a) => ({
-		actionType: a.action_type as ProposalActionType,
-		targetId: a.target_id,
-		contentUri: a.content_uri,
-		contentId: a.content_id,
-		quorum: a.quorum,
-		fastThreshold: a.fast_threshold,
-		slowThreshold: a.slow_threshold,
-		duration: a.duration,
-	}))
+function mapActionsFromJson(
+  actionsJson: ActionJsonRow[] | null,
+): ProposalAction[] {
+  return (actionsJson ?? []).map((a) => ({
+    actionType: a.action_type as ProposalActionType,
+    targetId: a.target_id,
+    contentUri: a.content_uri,
+    contentId: a.content_id,
+    quorum: a.quorum,
+    fastThreshold: a.fast_threshold,
+    slowThreshold: a.slow_threshold,
+    duration: a.duration,
+  }));
 }
 
 /**
  * Maps raw vote JSON to domain Vote, filtering invalid values.
  */
 function mapVotesFromJson(votesJson: VoteJsonRow[] | null): Vote[] {
-	return (votesJson ?? [])
-		.map((v) => {
-			const voteUpper = v.vote.toUpperCase()
-			if (!VOTE_OPTIONS.includes(voteUpper as VoteOption)) {
-				// Skip invalid votes rather than crash or pass bad data
-				return null
-			}
-			return {
-				voterId: v.voter_id,
-				vote: voteUpper as VoteOption,
-			}
-		})
-		.filter((v): v is Vote => v !== null)
+  return (votesJson ?? [])
+    .map((v) => {
+      const voteUpper = v.vote.toUpperCase();
+      if (!VOTE_OPTIONS.includes(voteUpper as VoteOption)) {
+        // Skip invalid votes rather than crash or pass bad data
+        return null;
+      }
+      return {
+        voterId: v.voter_id,
+        vote: voteUpper as VoteOption,
+      };
+    })
+    .filter((v): v is Vote => v !== null);
 }
 
 /**
  * Maps base proposal row fields to domain ProposalWithVotes.
  * Votes array must be provided separately (empty for list, populated for single).
  */
-function mapRowToProposal(row: BaseProposalRow, votes: Vote[]): ProposalWithVotes {
-	return {
-		id: row.id,
-		spaceId: row.space_id,
-		name: row.name,
-		proposedBy: row.proposed_by,
-		votingMode: row.voting_mode as VotingMode,
-		startTime: BigInt(row.start_time),
-		endTime: BigInt(row.end_time),
-		quorum: BigInt(row.quorum),
-		threshold: BigInt(row.threshold),
-		executedAt: row.executed_at ? BigInt(row.executed_at) : null,
-		yesCount: BigInt(row.yes_count),
-		noCount: BigInt(row.no_count),
-		abstainCount: BigInt(row.abstain_count),
-		votes,
-		actions: mapActionsFromJson(row.actions_json),
-	}
+function mapRowToProposal(
+  row: BaseProposalRow,
+  votes: Vote[],
+): ProposalWithVotes {
+  return {
+    id: row.id,
+    spaceId: row.space_id,
+    name: row.name,
+    proposedBy: row.proposed_by,
+    votingMode: row.voting_mode as VotingMode,
+    startTime: BigInt(row.start_time),
+    endTime: BigInt(row.end_time),
+    quorum: BigInt(row.quorum),
+    threshold: BigInt(row.threshold),
+    executedAt: row.executed_at ? BigInt(row.executed_at) : null,
+    yesCount: BigInt(row.yes_count),
+    noCount: BigInt(row.no_count),
+    abstainCount: BigInt(row.abstain_count),
+    votes,
+    actions: mapActionsFromJson(row.actions_json),
+  };
 }
 
 // =============================================================================
@@ -129,12 +134,12 @@ function mapRowToProposal(row: BaseProposalRow, votes: Vote[]): ProposalWithVote
  * Using Data.TaggedError for exhaustive pattern matching with Effect.
  */
 export class QueryError extends Data.TaggedError("QueryError")<{
-	readonly operation: string
-	readonly cause: Error
+  readonly operation: string;
+  readonly cause: Error;
 }> {
-	get message(): string {
-		return this.cause.message
-	}
+  get message(): string {
+    return this.cause.message;
+  }
 }
 
 /**
@@ -146,15 +151,17 @@ export class QueryError extends Data.TaggedError("QueryError")<{
  * @returns The proposal with vote counts, votes, and actions, or null if not found
  */
 export function getProposalWithVotes(
-	db: Database,
-	proposalId: string,
+  db: Database,
+  proposalId: string,
 ): Effect.Effect<ProposalWithVotes | null, QueryError> {
-	return Effect.tryPromise({
-		try: async () => {
-			// PostgreSQL returns bigint columns as strings to preserve precision
-			// Use JSON aggregation to get votes and actions in a single query
-			// Vote counts use denormalized columns; individual votes fetched via LATERAL
-			const result = await db.execute<BaseProposalRow & {votes_json: VoteJsonRow[] | null}>(sql`
+  return Effect.tryPromise({
+    try: async () => {
+      // PostgreSQL returns bigint columns as strings to preserve precision
+      // Use JSON aggregation to get votes and actions in a single query
+      // Vote counts use denormalized columns; individual votes fetched via LATERAL
+      const result = await db.execute<
+        BaseProposalRow & { votes_json: VoteJsonRow[] | null }
+      >(sql`
         SELECT 
           p.id,
           p.space_id,
@@ -195,60 +202,66 @@ export function getProposalWithVotes(
           WHERE proposal_id = p.id
         ) a ON true
         WHERE p.id = ${proposalId}::uuid
-      `)
+      `);
 
-			const row = result.rows[0]
-			if (!row) return null
+      const row = result.rows[0];
+      if (!row) return null;
 
-			const votes = mapVotesFromJson(row.votes_json)
-			return mapRowToProposal(row, votes)
-		},
-		catch: (error) =>
-			new QueryError({
-				operation: "getProposalWithVotes",
-				cause: error as Error,
-			}),
-	}).pipe(
-		Effect.withSpan("queries.getProposalWithVotes", {
-			attributes: {"query.proposal_id": proposalId},
-		}),
-	)
+      const votes = mapVotesFromJson(row.votes_json);
+      return mapRowToProposal(row, votes);
+    },
+    catch: (error) =>
+      new QueryError({
+        operation: "getProposalWithVotes",
+        cause: error as Error,
+      }),
+  }).pipe(
+    Effect.withSpan("queries.getProposalWithVotes", {
+      attributes: { "query.proposal_id": proposalId },
+    }),
+  );
 }
 
 /**
  * Sort order options for listing proposals.
  */
-export const PROPOSAL_ORDER_BY = ["created_at", "end_time", "start_time"] as const
-export type ProposalOrderBy = (typeof PROPOSAL_ORDER_BY)[number]
+export const PROPOSAL_ORDER_BY = [
+  "created_at",
+  "end_time",
+  "start_time",
+] as const;
+export type ProposalOrderBy = (typeof PROPOSAL_ORDER_BY)[number];
 
-export const PROPOSAL_ORDER_DIRECTION = ["asc", "desc"] as const
-export type ProposalOrderDirection = (typeof PROPOSAL_ORDER_DIRECTION)[number]
+export const PROPOSAL_ORDER_DIRECTION = ["asc", "desc"] as const;
+export type ProposalOrderDirection = (typeof PROPOSAL_ORDER_DIRECTION)[number];
 
 /**
  * Options for listing proposals in a space.
  */
 export interface ListProposalsOptions {
-	spaceId: string
-	limit: number
-	cursor?: string
-	/** Include only proposals with these action types */
-	actionTypes?: ProposalActionType[]
-	/** Exclude proposals with these action types */
-	excludeActionTypes?: ProposalActionType[]
-	/** Filter by computed proposal status */
-	status?: ProposalStatus[]
-	/** Field to order by (default: created_at) */
-	orderBy?: ProposalOrderBy
-	/** Sort direction (default: desc) */
-	orderDirection?: ProposalOrderDirection
+  spaceId: string;
+  limit: number;
+  cursor?: string;
+  /** Include only proposals with these action types */
+  actionTypes?: ProposalActionType[];
+  /** Exclude proposals with these action types */
+  excludeActionTypes?: ProposalActionType[];
+  /** Filter by computed proposal status */
+  status?: ProposalStatus[];
+  /** Field to order by (default: created_at) */
+  orderBy?: ProposalOrderBy;
+  /** Sort direction (default: desc) */
+  orderDirection?: ProposalOrderDirection;
+  /** Voter ID to look up the user's vote on each proposal */
+  voterId?: string;
 }
 
 /**
  * Result of listing proposals with cursor for pagination.
  */
 export interface ListProposalsResult {
-	proposals: ProposalWithVotes[]
-	nextCursor: string | null
+  proposals: ProposalWithVotes[];
+  nextCursor: string | null;
 }
 
 /**
@@ -262,64 +275,68 @@ export interface ListProposalsResult {
  * Returns the appropriate SQL fragment for ordering.
  */
 function buildOrderClause(
-	orderBy: ProposalOrderBy = "created_at",
-	orderDirection: ProposalOrderDirection = "desc",
+  orderBy: ProposalOrderBy = "created_at",
+  orderDirection: ProposalOrderDirection = "desc",
 ): ReturnType<typeof sql> {
-	// Map orderBy to actual column and build ORDER BY
-	// Using explicit branches to avoid SQL injection - we control the column names
-	if (orderDirection === "asc") {
-		switch (orderBy) {
-			case "end_time":
-				return sql`ORDER BY p.end_time ASC, p.id ASC`
-			case "start_time":
-				return sql`ORDER BY p.start_time ASC, p.id ASC`
-			case "created_at":
-			default:
-				return sql`ORDER BY p.created_at ASC, p.id ASC`
-		}
-	} else {
-		switch (orderBy) {
-			case "end_time":
-				return sql`ORDER BY p.end_time DESC, p.id DESC`
-			case "start_time":
-				return sql`ORDER BY p.start_time DESC, p.id DESC`
-			case "created_at":
-			default:
-				return sql`ORDER BY p.created_at DESC, p.id DESC`
-		}
-	}
+  // Map orderBy to actual column and build ORDER BY
+  // Using explicit branches to avoid SQL injection - we control the column names
+  if (orderDirection === "asc") {
+    switch (orderBy) {
+      case "end_time":
+        return sql`ORDER BY p.end_time ASC, p.id ASC`;
+      case "start_time":
+        return sql`ORDER BY p.start_time ASC, p.id ASC`;
+      case "created_at":
+      default:
+        return sql`ORDER BY p.created_at ASC, p.id ASC`;
+    }
+  } else {
+    switch (orderBy) {
+      case "end_time":
+        return sql`ORDER BY p.end_time DESC, p.id DESC`;
+      case "start_time":
+        return sql`ORDER BY p.start_time DESC, p.id DESC`;
+      case "created_at":
+      default:
+        return sql`ORDER BY p.created_at DESC, p.id DESC`;
+    }
+  }
 }
 
 /** UUID pattern for cursor validation */
-const UUID_PATTERN = /^[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}$/i
+const UUID_PATTERN =
+  /^[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}$/i;
 
 /** Numeric pattern for bigint cursor values */
-const BIGINT_PATTERN = /^-?\d+$/
+const BIGINT_PATTERN = /^-?\d+$/;
 
 /**
  * Validates the cursor format and returns parsed components.
  * Returns null if cursor is invalid.
  */
-function parseCursor(cursor: string, orderBy: ProposalOrderBy): {orderValue: string; cursorId: string} | null {
-	const parts = cursor.split("|")
-	if (parts.length !== 2) return null
+function parseCursor(
+  cursor: string,
+  orderBy: ProposalOrderBy,
+): { orderValue: string; cursorId: string } | null {
+  const parts = cursor.split("|");
+  if (parts.length !== 2) return null;
 
-	const [orderValue, cursorId] = parts
-	if (!orderValue || !cursorId) return null
+  const [orderValue, cursorId] = parts;
+  if (!orderValue || !cursorId) return null;
 
-	// Validate cursorId is a valid UUID
-	if (!UUID_PATTERN.test(cursorId)) return null
+  // Validate cursorId is a valid UUID
+  if (!UUID_PATTERN.test(cursorId)) return null;
 
-	// Validate orderValue format based on orderBy type
-	if (orderBy === "created_at") {
-		// Should be ISO timestamp - basic format check
-		if (!/^\d{4}-\d{2}-\d{2}/.test(orderValue)) return null
-	} else {
-		// Should be bigint for end_time/start_time
-		if (!BIGINT_PATTERN.test(orderValue)) return null
-	}
+  // Validate orderValue format based on orderBy type
+  if (orderBy === "created_at") {
+    // Should be ISO timestamp - basic format check
+    if (!/^\d{4}-\d{2}-\d{2}/.test(orderValue)) return null;
+  } else {
+    // Should be bigint for end_time/start_time
+    if (!BIGINT_PATTERN.test(orderValue)) return null;
+  }
 
-	return {orderValue, cursorId}
+  return { orderValue, cursorId };
 }
 
 /**
@@ -328,46 +345,46 @@ function parseCursor(cursor: string, orderBy: ProposalOrderBy): {orderValue: str
  * Returns empty SQL fragment if cursor is missing or invalid.
  */
 function buildCursorCondition(
-	cursor: string | undefined,
-	orderBy: ProposalOrderBy = "created_at",
-	orderDirection: ProposalOrderDirection = "desc",
+  cursor: string | undefined,
+  orderBy: ProposalOrderBy = "created_at",
+  orderDirection: ProposalOrderDirection = "desc",
 ): ReturnType<typeof sql> {
-	if (!cursor) return sql``
+  if (!cursor) return sql``;
 
-	const parsed = parseCursor(cursor, orderBy)
-	if (!parsed) {
-		// Log warning for debugging - invalid cursor format causes pagination to restart from beginning
-		console.warn(
-			`[queries] Invalid cursor format ignored, restarting pagination: cursor=${cursor}, orderBy=${orderBy}`,
-		)
-		return sql``
-	}
+  const parsed = parseCursor(cursor, orderBy);
+  if (!parsed) {
+    // Log warning for debugging - invalid cursor format causes pagination to restart from beginning
+    console.warn(
+      `[queries] Invalid cursor format ignored, restarting pagination: cursor=${cursor}, orderBy=${orderBy}`,
+    );
+    return sql``;
+  }
 
-	const {orderValue, cursorId} = parsed
+  const { orderValue, cursorId } = parsed;
 
-	// Build comparison based on direction (< for DESC, > for ASC)
-	// Using tuple comparison for stable pagination with ties
-	if (orderDirection === "asc") {
-		switch (orderBy) {
-			case "end_time":
-				return sql`AND (p.end_time, p.id) > (${orderValue}::bigint, ${cursorId}::uuid)`
-			case "start_time":
-				return sql`AND (p.start_time, p.id) > (${orderValue}::bigint, ${cursorId}::uuid)`
-			case "created_at":
-			default:
-				return sql`AND (p.created_at, p.id) > (${orderValue}::timestamptz, ${cursorId}::uuid)`
-		}
-	} else {
-		switch (orderBy) {
-			case "end_time":
-				return sql`AND (p.end_time, p.id) < (${orderValue}::bigint, ${cursorId}::uuid)`
-			case "start_time":
-				return sql`AND (p.start_time, p.id) < (${orderValue}::bigint, ${cursorId}::uuid)`
-			case "created_at":
-			default:
-				return sql`AND (p.created_at, p.id) < (${orderValue}::timestamptz, ${cursorId}::uuid)`
-		}
-	}
+  // Build comparison based on direction (< for DESC, > for ASC)
+  // Using tuple comparison for stable pagination with ties
+  if (orderDirection === "asc") {
+    switch (orderBy) {
+      case "end_time":
+        return sql`AND (p.end_time, p.id) > (${orderValue}::bigint, ${cursorId}::uuid)`;
+      case "start_time":
+        return sql`AND (p.start_time, p.id) > (${orderValue}::bigint, ${cursorId}::uuid)`;
+      case "created_at":
+      default:
+        return sql`AND (p.created_at, p.id) > (${orderValue}::timestamptz, ${cursorId}::uuid)`;
+    }
+  } else {
+    switch (orderBy) {
+      case "end_time":
+        return sql`AND (p.end_time, p.id) < (${orderValue}::bigint, ${cursorId}::uuid)`;
+      case "start_time":
+        return sql`AND (p.start_time, p.id) < (${orderValue}::bigint, ${cursorId}::uuid)`;
+      case "created_at":
+      default:
+        return sql`AND (p.created_at, p.id) < (${orderValue}::timestamptz, ${cursorId}::uuid)`;
+    }
+  }
 }
 
 /**
@@ -375,18 +392,18 @@ function buildCursorCondition(
  * Returns format "order_value|id" for stable pagination.
  */
 function extractCursorValue(
-	row: BaseProposalRow & {created_at: string},
-	orderBy: ProposalOrderBy = "created_at",
+  row: BaseProposalRow & { created_at: string },
+  orderBy: ProposalOrderBy = "created_at",
 ): string {
-	switch (orderBy) {
-		case "end_time":
-			return `${row.end_time}|${row.id}`
-		case "start_time":
-			return `${row.start_time}|${row.id}`
-		case "created_at":
-		default:
-			return `${row.created_at}|${row.id}`
-	}
+  switch (orderBy) {
+    case "end_time":
+      return `${row.end_time}|${row.id}`;
+    case "start_time":
+      return `${row.start_time}|${row.id}`;
+    case "created_at":
+    default:
+      return `${row.created_at}|${row.id}`;
+  }
 }
 
 /**
@@ -407,62 +424,82 @@ function extractCursorValue(
  * @returns Paginated list of proposals with vote counts and actions
  */
 export function listProposalsInSpace(
-	db: Database,
-	options: ListProposalsOptions,
+  db: Database,
+  options: ListProposalsOptions,
 ): Effect.Effect<ListProposalsResult, QueryError> {
-	const {spaceId, limit, cursor, actionTypes, excludeActionTypes, status, orderBy, orderDirection} = options
+  const {
+    spaceId,
+    limit,
+    cursor,
+    actionTypes,
+    excludeActionTypes,
+    status,
+    orderBy,
+    orderDirection,
+    voterId,
+  } = options;
 
-	return Effect.tryPromise({
-		try: async () => {
-			// Build dynamic query conditions
-			const cursorCondition = buildCursorCondition(cursor, orderBy, orderDirection)
-			const orderClause = buildOrderClause(orderBy, orderDirection)
+  return Effect.tryPromise({
+    try: async () => {
+      // Build dynamic query conditions
+      const cursorCondition = buildCursorCondition(
+        cursor,
+        orderBy,
+        orderDirection,
+      );
+      const orderClause = buildOrderClause(orderBy, orderDirection);
 
-			// Build action type filter conditions
-			// Use EXISTS subquery instead of JOIN to avoid SQL injection and cartesian products
-			let actionTypeCondition = sql``
-			if (actionTypes && actionTypes.length > 0) {
-				// Include filter: proposal must have at least one of these action types
-				// Build safe parameterized OR conditions
-				const actionTypeChecks = actionTypes.map((t) => sql`pa_filter.action_type = ${t}::"proposalActionType"`)
-				const actionTypeOr = actionTypeChecks.reduce((acc, check) => sql`${acc} OR ${check}`)
-				actionTypeCondition = sql`AND EXISTS (
+      // Build action type filter conditions
+      // Use EXISTS subquery instead of JOIN to avoid SQL injection and cartesian products
+      let actionTypeCondition = sql``;
+      if (actionTypes && actionTypes.length > 0) {
+        // Include filter: proposal must have at least one of these action types
+        // Build safe parameterized OR conditions
+        const actionTypeChecks = actionTypes.map(
+          (t) => sql`pa_filter.action_type = ${t}::"proposalActionType"`,
+        );
+        const actionTypeOr = actionTypeChecks.reduce(
+          (acc, check) => sql`${acc} OR ${check}`,
+        );
+        actionTypeCondition = sql`AND EXISTS (
           SELECT 1 FROM proposal_actions pa_filter 
           WHERE pa_filter.proposal_id = p.id AND (${actionTypeOr})
-        )`
-			} else if (excludeActionTypes && excludeActionTypes.length > 0) {
-				// Exclude filter: proposal must NOT have any of these action types
-				const excludeTypeChecks = excludeActionTypes.map(
-					(t) => sql`pa_exclude.action_type = ${t}::"proposalActionType"`,
-				)
-				const excludeTypeOr = excludeTypeChecks.reduce((acc, check) => sql`${acc} OR ${check}`)
-				actionTypeCondition = sql`AND NOT EXISTS (
+        )`;
+      } else if (excludeActionTypes && excludeActionTypes.length > 0) {
+        // Exclude filter: proposal must NOT have any of these action types
+        const excludeTypeChecks = excludeActionTypes.map(
+          (t) => sql`pa_exclude.action_type = ${t}::"proposalActionType"`,
+        );
+        const excludeTypeOr = excludeTypeChecks.reduce(
+          (acc, check) => sql`${acc} OR ${check}`,
+        );
+        actionTypeCondition = sql`AND NOT EXISTS (
           SELECT 1 FROM proposal_actions pa_exclude 
           WHERE pa_exclude.proposal_id = p.id AND (${excludeTypeOr})
-        )`
-			}
+        )`;
+      }
 
-			// Build status filter condition
-			// Status is computed in SQL using denormalized vote counts on the proposals table
-			// This matches the logic in status.ts computeProposalStatus
-			let statusCondition = sql``
-			if (status && status.length > 0) {
-				const nowSeconds = BigInt(Math.floor(Date.now() / 1000))
+      // Build status filter condition
+      // Status is computed in SQL using denormalized vote counts on the proposals table
+      // This matches the logic in status.ts computeProposalStatus
+      let statusCondition = sql``;
+      if (status && status.length > 0) {
+        const nowSeconds = BigInt(Math.floor(Date.now() / 1000));
 
-				// Build OR conditions for each requested status
-				// Uses denormalized p.yes_count, p.no_count, p.abstain_count for efficient filtering
-				const statusChecks = status.map((s) => {
-					switch (s) {
-						case "ACCEPTED":
-							// Already executed
-							return sql`(p.executed_at IS NOT NULL)`
+        // Build OR conditions for each requested status
+        // Uses denormalized p.yes_count, p.no_count, p.abstain_count for efficient filtering
+        const statusChecks = status.map((s) => {
+          switch (s) {
+            case "ACCEPTED":
+              // Already executed
+              return sql`(p.executed_at IS NOT NULL)`;
 
-						case "EXECUTABLE":
-							// Not executed AND meets threshold conditions
-							// Fast path: yes > (threshold - 1), equivalent to yes >= threshold for threshold > 0
-							//            For threshold = 0, this means yes > 0 (needs at least 1 yes vote)
-							// Slow path: voting ended AND quorum met AND (RATIO_BASE - threshold) * yes > threshold * no
-							return sql`(
+            case "EXECUTABLE":
+              // Not executed AND meets threshold conditions
+              // Fast path: yes > (threshold - 1), equivalent to yes >= threshold for threshold > 0
+              //            For threshold = 0, this means yes > 0 (needs at least 1 yes vote)
+              // Slow path: voting ended AND quorum met AND (RATIO_BASE - threshold) * yes > threshold * no
+              return sql`(
                 p.executed_at IS NULL
                 AND (
                   (p.voting_mode = 'Fast' AND p.yes_count > GREATEST(p.threshold - 1, 0))
@@ -473,12 +510,12 @@ export function listProposalsInSpace(
                     AND (${RATIO_BASE}::numeric - p.threshold::numeric) * p.yes_count::numeric > p.threshold::numeric * p.no_count::numeric
                   )
                 )
-              )`
+              )`;
 
-						case "REJECTED":
-							// Not executed AND voting ended AND threshold/quorum not met
-							// Fast path: yes <= (threshold - 1), i.e., NOT (yes > threshold - 1)
-							return sql`(
+            case "REJECTED":
+              // Not executed AND voting ended AND threshold/quorum not met
+              // Fast path: yes <= (threshold - 1), i.e., NOT (yes > threshold - 1)
+              return sql`(
                 p.executed_at IS NULL
                 AND ${nowSeconds}::bigint > p.end_time
                 AND (
@@ -491,36 +528,52 @@ export function listProposalsInSpace(
                     )
                   )
                 )
-              )`
+              )`;
 
-						case "PROPOSED":
-							// Not executed AND voting not ended AND (fast path: threshold not yet met)
-							// Fast path: yes <= (threshold - 1), i.e., NOT yet executable
-							return sql`(
+            case "PROPOSED":
+              // Not executed AND voting not ended AND (fast path: threshold not yet met)
+              // Fast path: yes <= (threshold - 1), i.e., NOT yet executable
+              return sql`(
                 p.executed_at IS NULL
                 AND ${nowSeconds}::bigint <= p.end_time
                 AND (
                   p.voting_mode = 'Slow'
                   OR (p.voting_mode = 'Fast' AND p.yes_count <= GREATEST(p.threshold - 1, 0))
                 )
-              )`
+              )`;
 
-						default: {
-							// Exhaustiveness check - TypeScript will error if a new status is added
-							const _exhaustive: never = s
-							return sql`FALSE`
-						}
-					}
-				})
+            default: {
+              // Exhaustiveness check - TypeScript will error if a new status is added
+              const _exhaustive: never = s;
+              return sql`FALSE`;
+            }
+          }
+        });
 
-				const statusOr = statusChecks.reduce((acc, check) => sql`${acc} OR ${check}`)
-				statusCondition = sql`AND (${statusOr})`
-			}
+        const statusOr = statusChecks.reduce(
+          (acc, check) => sql`${acc} OR ${check}`,
+        );
+        statusCondition = sql`AND (${statusOr})`;
+      }
 
-			// Note: votes_json omitted for performance - use single proposal endpoint for voters
-			// Vote counts are now denormalized on the proposals table, eliminating the LATERAL join
-			const result = await db.execute<BaseProposalRow & {created_at: string}>(
-				sql`
+      // Vote counts are denormalized on the proposals table.
+      // Individual voters are omitted for performance (use single proposal endpoint for full voter list).
+      // When voterId is provided, we fetch just the user's vote via a LATERAL join.
+      const userVoteJoin = voterId
+        ? sql`LEFT JOIN LATERAL (
+            SELECT vote FROM proposal_votes
+            WHERE proposal_id = p.id AND voter_id = ${voterId}::uuid
+            LIMIT 1
+          ) user_vote ON true`
+        : sql``;
+      const userVoteSelect = voterId
+        ? sql`, user_vote.vote as user_vote`
+        : sql``;
+
+      const result = await db.execute<
+        BaseProposalRow & { created_at: string; user_vote?: string | null }
+      >(
+        sql`
         SELECT 
           p.id,
           p.space_id,
@@ -537,6 +590,7 @@ export function listProposalsInSpace(
           p.no_count,
           p.abstain_count,
           actions_agg.actions_json
+          ${userVoteSelect}
         FROM proposals p
         LEFT JOIN LATERAL (
           SELECT COALESCE(json_agg(json_build_object(
@@ -552,6 +606,7 @@ export function listProposalsInSpace(
           FROM proposal_actions
           WHERE proposal_id = p.id
         ) actions_agg ON true
+        ${userVoteJoin}
         WHERE p.space_id = ${spaceId}::uuid
         ${cursorCondition}
         ${actionTypeCondition}
@@ -559,38 +614,50 @@ export function listProposalsInSpace(
         ${orderClause}
         LIMIT ${limit + 1}
       `,
-			)
+      );
 
-			const rows = result.rows
-			const hasMore = rows.length > limit
-			const proposalRows = hasMore ? rows.slice(0, limit) : rows
+      const rows = result.rows;
+      const hasMore = rows.length > limit;
+      const proposalRows = hasMore ? rows.slice(0, limit) : rows;
 
-			// Map rows to domain objects with empty votes (use single endpoint for voters)
-			const proposals = proposalRows.map((row) => mapRowToProposal(row, []))
+      // Map rows to domain objects.
+      // Include the user's vote as a single entry in the votes array when present,
+      // so buildProposalResponse can resolve userVote from it.
+      const proposals = proposalRows.map((row) => {
+        const userVoteValue = row.user_vote?.toUpperCase();
+        const votes: Vote[] =
+          voterId &&
+          userVoteValue &&
+          VOTE_OPTIONS.includes(userVoteValue as VoteOption)
+            ? [{ voterId, vote: userVoteValue as VoteOption }]
+            : [];
+        return mapRowToProposal(row, votes);
+      });
 
-			// Next cursor is the order value + id of the last item
-			const lastRow = proposalRows[proposalRows.length - 1]
-			const nextCursor = hasMore && lastRow ? extractCursorValue(lastRow, orderBy) : null
+      // Next cursor is the order value + id of the last item
+      const lastRow = proposalRows[proposalRows.length - 1];
+      const nextCursor =
+        hasMore && lastRow ? extractCursorValue(lastRow, orderBy) : null;
 
-			return {proposals, nextCursor}
-		},
-		catch: (error) =>
-			new QueryError({
-				operation: "listProposalsInSpace",
-				cause: error as Error,
-			}),
-	}).pipe(
-		Effect.withSpan("queries.listProposalsInSpace", {
-			attributes: {
-				"query.space_id": spaceId,
-				"query.limit": limit,
-				"query.cursor": cursor ?? "none",
-				"query.action_types": actionTypes?.join(",") ?? "all",
-				"query.exclude_action_types": excludeActionTypes?.join(",") ?? "none",
-				"query.status": status?.join(",") ?? "all",
-				"query.order_by": orderBy ?? "created_at",
-				"query.order_direction": orderDirection ?? "desc",
-			},
-		}),
-	)
+      return { proposals, nextCursor };
+    },
+    catch: (error) =>
+      new QueryError({
+        operation: "listProposalsInSpace",
+        cause: error as Error,
+      }),
+  }).pipe(
+    Effect.withSpan("queries.listProposalsInSpace", {
+      attributes: {
+        "query.space_id": spaceId,
+        "query.limit": limit,
+        "query.cursor": cursor ?? "none",
+        "query.action_types": actionTypes?.join(",") ?? "all",
+        "query.exclude_action_types": excludeActionTypes?.join(",") ?? "none",
+        "query.status": status?.join(",") ?? "all",
+        "query.order_by": orderBy ?? "created_at",
+        "query.order_direction": orderDirection ?? "desc",
+      },
+    }),
+  );
 }
