@@ -990,7 +990,7 @@ impl Storage {
 
     /// Update only the voting settings of a proposal (fast→slow escalation).
     /// Unlike update_proposal, this does not touch proposer_id or actions.
-    #[allow(dead_code)]
+    #[allow(dead_code, clippy::too_many_arguments)]
     pub async fn update_proposal_settings(
         &self,
         proposal_id: Uuid,
