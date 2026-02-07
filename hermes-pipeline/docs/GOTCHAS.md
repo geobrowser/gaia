@@ -22,6 +22,3 @@ The DAOSpace contract auto-executes fast-path proposals inline when a YES vote m
 
 This means the pipeline never sees a `PROPOSAL_EXECUTED` event for fast-path auto-executions. The kg-indexer compensates by detecting fast-path execution in its tally worker: after updating vote counts, it checks for fast-path proposals where `yes_count > threshold` and `executed_at IS NULL`, then infers `executed_at` from the latest vote timestamp.
 
-### Fast-path escalation to slow path not tracked
-
-When a NO vote on a fast-path proposal escalates it to slow path, the contract emits a `PROPOSAL_SETTINGS_SELECTED` event (via ping) but does **not** emit `PROPOSAL_UPDATED`. The pipeline squash logic requires `PROPOSAL_SETTINGS_SELECTED` to be paired with `PROPOSAL_CREATED` or `PROPOSAL_UPDATED`, so the orphaned settings event is discarded. This means the indexer's `voting_mode` remains `Fast` even after escalation. This is a known gap.

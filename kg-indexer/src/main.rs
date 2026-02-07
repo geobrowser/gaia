@@ -685,6 +685,7 @@ const EXPECTED_EVENT_TYPES: &[&str] = &[
     "PROPOSAL_UPDATED",
     "PROPOSAL_VOTED",
     "PROPOSAL_EXECUTED",
+    "PROPOSAL_SETTINGS_UPDATED",
 ];
 
 fn expected_count_for_indexer(
@@ -727,6 +728,7 @@ fn event_type_label(event: &BufferedEvent) -> String {
         KgMessage::ProposalUpdated(_) => "PROPOSAL_UPDATED".to_string(),
         KgMessage::ProposalVoted(_) => "PROPOSAL_VOTED".to_string(),
         KgMessage::ProposalExecuted(_) => "PROPOSAL_EXECUTED".to_string(),
+        KgMessage::ProposalSettingsUpdated(_) => "PROPOSAL_SETTINGS_UPDATED".to_string(),
         KgMessage::BlockSummary(_) => "BLOCK_SUMMARY".to_string(),
     }
 }
@@ -1091,6 +1093,30 @@ async fn process_message(
                 .await?;
             1
         }
+        KgMessage::ProposalSettingsUpdated(event) => {
+            let result = handlers::governance::handle_proposal_settings_updated(&event)?;
+            let voting_mode = match result.voting_mode {
+                models::governance::VotingMode::Fast => "Fast",
+                models::governance::VotingMode::Slow => "Slow",
+            };
+            debug!(
+                proposal_id = %result.proposal_id,
+                voting_mode = voting_mode,
+                "Processing ProposalSettingsUpdated"
+            );
+            storage
+                .update_proposal_settings(
+                    result.proposal_id,
+                    voting_mode,
+                    result.start_time,
+                    result.end_time,
+                    result.quorum,
+                    result.threshold,
+                    &mut tx,
+                )
+                .await?;
+            1
+        }
     };
 
     tx.commit().await?;
@@ -1191,6 +1217,14 @@ async fn process_block(
                 "kg_indexer.handle_proposal_executed",
                 event_id = event_id,
                 proposal_id = tracing::field::Empty,
+                "otel.status_code" = tracing::field::Empty,
+                "otel.status_message" = tracing::field::Empty
+            ),
+            KgMessage::ProposalSettingsUpdated(_) => info_span!(
+                "kg_indexer.handle_proposal_settings_updated",
+                event_id = event_id,
+                proposal_id = tracing::field::Empty,
+                space_id = tracing::field::Empty,
                 "otel.status_code" = tracing::field::Empty,
                 "otel.status_message" = tracing::field::Empty
             ),
@@ -1430,6 +1464,31 @@ async fn process_block(
                         .update_proposal_executed(
                             execution.proposal_id,
                             execution.executed_at,
+                            &mut tx,
+                        )
+                        .await?;
+                    1
+                }
+                KgMessage::ProposalSettingsUpdated(settings_event) => {
+                    let result =
+                        handlers::governance::handle_proposal_settings_updated(settings_event)?;
+                    let voting_mode = match result.voting_mode {
+                        models::governance::VotingMode::Fast => "Fast",
+                        models::governance::VotingMode::Slow => "Slow",
+                    };
+
+                    // Record trace context
+                    event_span.record("proposal_id", display(result.proposal_id));
+                    event_span.record("space_id", display(result.space_id));
+
+                    storage
+                        .update_proposal_settings(
+                            result.proposal_id,
+                            voting_mode,
+                            result.start_time,
+                            result.end_time,
+                            result.quorum,
+                            result.threshold,
                             &mut tx,
                         )
                         .await?;

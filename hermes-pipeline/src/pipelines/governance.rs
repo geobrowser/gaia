@@ -16,16 +16,17 @@ use hermes_instrumentation::{debug, debug_span, info, warn};
 
 use crate::cache::CachedEdit;
 use crate::decode::{
-    self, ProposalActionType, decode_flag_args, decode_publish_args, decode_space_id_arg,
-    decode_voting_settings_args,
+    self, decode_flag_args, decode_publish_args, decode_space_id_arg, decode_voting_settings_args,
+    ProposalActionType,
 };
 
-use hermes_relay::{Action, actions};
+use hermes_relay::{actions, Action};
 use hermes_schema::pb::governance::{
-    AddEditorAction, AddMemberAction, FlagAction, HermesProposalCreated, HermesProposalExecuted,
-    HermesProposalUpdated, HermesProposalVoted, ProposalAction, ProposalSettings,
-    ProposalVoteOption, PublishAction, RemoveEditorAction, RemoveMemberAction, UnflagAction,
-    UnflagEditorAction, UpdateVotingSettingsAction, VotingMode, proposal_action,
+    proposal_action, AddEditorAction, AddMemberAction, FlagAction, HermesProposalCreated,
+    HermesProposalExecuted, HermesProposalSettingsUpdated, HermesProposalUpdated,
+    HermesProposalVoted, ProposalAction, ProposalSettings, ProposalVoteOption, PublishAction,
+    RemoveEditorAction, RemoveMemberAction, UnflagAction, UnflagEditorAction,
+    UpdateVotingSettingsAction, VotingMode,
 };
 
 use super::BlockMetadata;
@@ -37,6 +38,7 @@ pub struct TransformResult {
     pub proposals_updated: Vec<HermesProposalUpdated>,
     pub proposals_voted: Vec<HermesProposalVoted>,
     pub proposals_executed: Vec<HermesProposalExecuted>,
+    pub proposals_settings_updated: Vec<HermesProposalSettingsUpdated>,
 }
 
 impl TransformResult {
@@ -45,6 +47,7 @@ impl TransformResult {
             + self.proposals_updated.len()
             + self.proposals_voted.len()
             + self.proposals_executed.len()
+            + self.proposals_settings_updated.len()
     }
 }
 
@@ -60,6 +63,8 @@ struct ProposalCreatedPending {
 
 /// Intermediate data for a PROPOSAL_SETTINGS_SELECTED event before squashing.
 struct ProposalSettingsPending {
+    space_id: Vec<u8>,
+    sequence: u32,
     settings: ProposalSettings,
 }
 
@@ -113,7 +118,7 @@ pub fn transform(
                 "parse.governance.settings",
                 proposal_id = %hex::encode(&action.topic[..16])
             )
-            .in_scope(|| parse_proposal_settings_used(action))
+            .in_scope(|| parse_proposal_settings_used(action, sequence))
             {
                 // proposal_id is in topic field (bytes16 right-padded to 32, so first 16 bytes)
                 let proposal_id = action.topic[..16].to_vec();
@@ -220,12 +225,24 @@ pub fn transform(
         }
     }
 
-    // Log any orphaned PROPOSAL_SETTINGS_SELECTED events
-    for (proposal_id, _) in settings_map {
-        warn!(
+    // Emit orphaned PROPOSAL_SETTINGS_SELECTED as settings-only updates.
+    // This handles fast-path → slow-path escalation: when a NO vote on a fast-path
+    // proposal triggers escalation, the contract emits PROPOSAL_SETTINGS_SELECTED
+    // (via ping) but not PROPOSAL_UPDATED, so the settings have no created/updated
+    // event to squash with.
+    for (proposal_id, settings_pending) in settings_map {
+        info!(
             proposal_id = %hex::encode(&proposal_id),
-            "PROPOSAL_SETTINGS_SELECTED without matching PROPOSAL_CREATED/UPDATED, discarding"
+            "Orphaned PROPOSAL_SETTINGS_SELECTED — emitting as settings update (fast→slow escalation)"
         );
+        result
+            .proposals_settings_updated
+            .push(HermesProposalSettingsUpdated {
+                space_id: settings_pending.space_id,
+                proposal_id,
+                settings: Some(settings_pending.settings),
+                meta: Some(meta.to_proto(settings_pending.sequence)),
+            });
     }
 
     // Enrich all Publish actions with edit names from the prefetched cache
@@ -484,7 +501,7 @@ fn parse_proposal_created(action: &Action, sequence: u32) -> Option<ProposalCrea
 /// - to_id: space_id (16 bytes, same as from_id)
 /// - topic: proposal_id (16 bytes, padded to 32)
 /// - data: abi.encode(startDate, lastDate, votingMode, quorum, supportThreshold)
-fn parse_proposal_settings_used(action: &Action) -> Option<ProposalSettingsPending> {
+fn parse_proposal_settings_used(action: &Action, sequence: u32) -> Option<ProposalSettingsPending> {
     let decoded = match decode::decode_proposal_settings_used(&action.data) {
         Ok(decoded) => decoded,
         Err(e) => {
@@ -539,6 +556,8 @@ fn parse_proposal_settings_used(action: &Action) -> Option<ProposalSettingsPendi
     };
 
     Some(ProposalSettingsPending {
+        space_id: action.from_id.clone(),
+        sequence,
         settings: ProposalSettings {
             start_date: decoded.start_date,
             last_date: decoded.last_date,
@@ -634,7 +653,7 @@ mod tests {
 
     // Helper to create encoded PROPOSAL_CREATED data
     fn encode_proposal_created_data(proposal_id: [u8; 16], voting_mode: u8) -> Vec<u8> {
-        use ethabi::{Token, ethereum_types::U256 as EthU256};
+        use ethabi::{ethereum_types::U256 as EthU256, Token};
 
         let action_tuple = Token::Tuple(vec![
             Token::Address(ethabi::Address::zero()),
@@ -657,7 +676,7 @@ mod tests {
         quorum: u64,
         threshold: u64,
     ) -> Vec<u8> {
-        use ethabi::{Token, ethereum_types::U256 as EthU256};
+        use ethabi::{ethereum_types::U256 as EthU256, Token};
 
         ethabi::encode(&[
             Token::Uint(EthU256::from(start_date)),

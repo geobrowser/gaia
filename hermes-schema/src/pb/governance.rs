@@ -229,6 +229,25 @@ pub struct HermesProposalExecuted {
     #[prost(message, optional, tag = "3")]
     pub meta: ::core::option::Option<super::blockchain_metadata::BlockchainMetadata>,
 }
+/// HermesProposalSettingsUpdated - emitted for orphaned PROPOSAL_SETTINGS_SELECTED events.
+/// This occurs when a NO vote on a fast-path proposal escalates it to slow path:
+/// the contract emits PROPOSAL_SETTINGS_SELECTED (via ping) with new settings but
+/// does NOT emit PROPOSAL_UPDATED. The pipeline detects these orphaned settings and
+/// emits them as a settings-only update so the indexer can update the proposal in place.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct HermesProposalSettingsUpdated {
+    /// 16 bytes - space owning the proposal (from_id)
+    #[prost(bytes = "vec", tag = "1")]
+    pub space_id: ::prost::alloc::vec::Vec<u8>,
+    /// 16 bytes - proposal identifier
+    #[prost(bytes = "vec", tag = "2")]
+    pub proposal_id: ::prost::alloc::vec::Vec<u8>,
+    /// Updated voting settings
+    #[prost(message, optional, tag = "3")]
+    pub settings: ::core::option::Option<ProposalSettings>,
+    #[prost(message, optional, tag = "4")]
+    pub meta: ::core::option::Option<super::blockchain_metadata::BlockchainMetadata>,
+}
 /// Voting mode for proposals
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, ::prost::Enumeration)]
 #[repr(i32)]
@@ -323,7 +342,9 @@ impl ProposalActionType {
             Self::ProposalActionFlag => "PROPOSAL_ACTION_FLAG",
             Self::ProposalActionUnflag => "PROPOSAL_ACTION_UNFLAG",
             Self::ProposalActionUnflagEditor => "PROPOSAL_ACTION_UNFLAG_EDITOR",
-            Self::ProposalActionUpdateVotingSettings => "PROPOSAL_ACTION_UPDATE_VOTING_SETTINGS",
+            Self::ProposalActionUpdateVotingSettings => {
+                "PROPOSAL_ACTION_UPDATE_VOTING_SETTINGS"
+            }
             Self::ProposalActionPing => "PROPOSAL_ACTION_PING",
         }
     }

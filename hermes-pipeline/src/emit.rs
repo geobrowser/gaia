@@ -4,7 +4,7 @@
 //! for any type that implements `KafkaEvent + prost::Message`.
 
 use anyhow::Result;
-use hermes_instrumentation::{Span, debug_span, error, info};
+use hermes_instrumentation::{debug_span, error, info, Span};
 use opentelemetry::global;
 use opentelemetry::propagation::Injector;
 use prost::Message;
@@ -16,7 +16,8 @@ use hermes_schema::pb::{
     block_summary::HermesBlockSummary,
     blockchain_metadata::BlockchainMetadata,
     governance::{
-        HermesProposalCreated, HermesProposalExecuted, HermesProposalUpdated, HermesProposalVoted,
+        HermesProposalCreated, HermesProposalExecuted, HermesProposalSettingsUpdated,
+        HermesProposalUpdated, HermesProposalVoted,
     },
     knowledge::HermesEdit,
     membership::{HermesRoleGranted, HermesRoleRevoked, HermesSpaceLeft, MembershipRole},
@@ -24,8 +25,8 @@ use hermes_schema::pb::{
         HermesContentFlagged, HermesContentUnflagged, HermesEditorFlagged, HermesEditorUnflagged,
     },
     space::{
-        HermesCreateSpace, HermesSpaceTrustExtension, hermes_create_space,
-        hermes_space_trust_extension,
+        hermes_create_space, hermes_space_trust_extension, HermesCreateSpace,
+        HermesSpaceTrustExtension,
     },
     topics::HermesTopicDeclared,
     voting::{HermesVoteCast, VoteDirection},
@@ -268,6 +269,27 @@ impl KafkaEvent for HermesProposalExecuted {
 }
 
 impl HasMeta for HermesProposalExecuted {
+    fn meta(&self) -> Option<&BlockchainMetadata> {
+        self.meta.as_ref()
+    }
+}
+
+impl KafkaEvent for HermesProposalSettingsUpdated {
+    const TOPIC: &'static str = topics::GOVERNANCE;
+
+    fn key(&self) -> Vec<u8> {
+        self.space_id.clone()
+    }
+
+    fn headers(&self) -> OwnedHeaders {
+        OwnedHeaders::new().insert(Header {
+            key: "event-type",
+            value: Some("PROPOSAL_SETTINGS_UPDATED"),
+        })
+    }
+}
+
+impl HasMeta for HermesProposalSettingsUpdated {
     fn meta(&self) -> Option<&BlockchainMetadata> {
         self.meta.as_ref()
     }

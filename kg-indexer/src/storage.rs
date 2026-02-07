@@ -988,6 +988,42 @@ impl Storage {
         Ok(())
     }
 
+    /// Update only the voting settings of a proposal (fast→slow escalation).
+    /// Unlike update_proposal, this does not touch proposer_id or actions.
+    #[allow(dead_code)]
+    pub async fn update_proposal_settings(
+        &self,
+        proposal_id: Uuid,
+        voting_mode: &str,
+        start_time: i64,
+        end_time: i64,
+        quorum: i64,
+        threshold: i64,
+        tx: &mut sqlx::Transaction<'_, Postgres>,
+    ) -> Result<(), IndexerError> {
+        sqlx::query(
+            r#"
+            UPDATE proposals
+            SET voting_mode = $2::"votingMode",
+                start_time = $3,
+                end_time = $4,
+                quorum = $5,
+                threshold = $6
+            WHERE id = $1
+            "#,
+        )
+        .bind(proposal_id)
+        .bind(voting_mode)
+        .bind(start_time)
+        .bind(end_time)
+        .bind(quorum)
+        .bind(threshold)
+        .execute(&mut **tx)
+        .await?;
+
+        Ok(())
+    }
+
     /// Queue a proposal for vote tally update.
     /// Uses INSERT ON CONFLICT DO NOTHING to avoid duplicate entries.
     /// The background worker will process the queue and update denormalized vote counts.
