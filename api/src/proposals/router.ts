@@ -26,6 +26,8 @@ import {
 	PROPOSAL_ACTION_TYPES,
 	PROPOSAL_STATUSES,
 	type ProposalActionType,
+	type ProposalListItem,
+	type ProposalListItemResponse,
 	type ProposalStatus,
 	type ProposalStatusResponse,
 	type ProposalWithVotes,
@@ -130,17 +132,10 @@ function mapToActionResponse(action: ProposalWithVotes["actions"][number]): Acti
 }
 
 /**
- * Builds a ProposalStatusResponse from a proposal and current time.
- *
- * @param proposal - The proposal with vote counts, votes, and actions
- * @param nowSeconds - Current time in seconds
- * @param voterId - Optional voter ID to find user's vote
+ * Computes the shared response fields from a proposal domain object.
+ * Used by both the detail and list response builders.
  */
-function buildProposalResponse(
-	proposal: ProposalWithVotes,
-	nowSeconds: bigint,
-	voterId?: string,
-): ProposalStatusResponse {
+function computeResponseFields(proposal: ProposalWithVotes | ProposalListItem, nowSeconds: bigint) {
 	const {status, isQuorumReached, isThresholdReached} = computeProposalStatus(proposal, nowSeconds)
 
 	const now = Number(nowSeconds)
@@ -158,8 +153,6 @@ function buildProposalResponse(
 	let thresholdProgress: number
 
 	if (proposal.votingMode === "Fast") {
-		// Fast path: absolute yes votes needed
-		// Progress is measured against the full threshold for UI display
 		thresholdCurrent = Number(proposal.yesCount)
 		thresholdProgress = thresholdRequired > 0n ? Math.min(thresholdCurrent / Number(thresholdRequired), 1) : 1
 	} else {
@@ -176,23 +169,6 @@ function buildProposalResponse(
 		}
 	}
 
-	// Build voters list for response
-	const voters: Vote[] = proposal.votes.map((v) => ({
-		voterId: normalizeUuid(v.voterId),
-		vote: v.vote,
-	}))
-
-	// Find user's vote if voterId provided
-	let userVote: VoteOption | null = null
-	if (voterId) {
-		const normalizedVoterId = normalizeUuid(voterId)
-		const userVoteRecord = proposal.votes.find((v) => normalizeUuid(v.voterId) === normalizedVoterId)
-		userVote = userVoteRecord?.vote ?? null
-	}
-
-	// Build actions list for response (discriminated union)
-	const actions: ActionResponse[] = proposal.actions.map(mapToActionResponse)
-
 	return {
 		proposalId: normalizeUuid(proposal.id),
 		spaceId: normalizeUuid(proposal.spaceId),
@@ -200,15 +176,13 @@ function buildProposalResponse(
 		proposedBy: normalizeUuid(proposal.proposedBy),
 		status,
 		votingMode: proposal.votingMode.toUpperCase() as "FAST" | "SLOW",
-		actions,
+		actions: proposal.actions.map(mapToActionResponse),
 		votes: {
 			yes: Number(proposal.yesCount),
 			no: Number(proposal.noCount),
 			abstain: Number(proposal.abstainCount),
 			total: Number(totalVotes),
-			voters,
 		},
-		userVote,
 		quorum: {
 			required: quorumRequired,
 			current: quorumCurrent,
@@ -228,6 +202,48 @@ function buildProposalResponse(
 			isVotingEnded,
 		},
 		canExecute: status === "EXECUTABLE",
+	}
+}
+
+/**
+ * Builds the full detail response for a single proposal.
+ * Includes individual voter records and resolves userVote from them.
+ */
+function buildProposalResponse(
+	proposal: ProposalWithVotes,
+	nowSeconds: bigint,
+	voterId?: string,
+): ProposalStatusResponse {
+	const base = computeResponseFields(proposal, nowSeconds)
+
+	const voters: Vote[] = proposal.votes.map((v) => ({
+		voterId: normalizeUuid(v.voterId),
+		vote: v.vote,
+	}))
+
+	let userVote: VoteOption | null = null
+	if (voterId) {
+		const normalizedVoterId = normalizeUuid(voterId)
+		const userVoteRecord = proposal.votes.find((v) => normalizeUuid(v.voterId) === normalizedVoterId)
+		userVote = userVoteRecord?.vote ?? null
+	}
+
+	return {
+		...base,
+		votes: {...base.votes, voters},
+		userVote,
+	}
+}
+
+/**
+ * Builds a list item response for a proposal.
+ * No individual voter records — userVote comes directly from the query.
+ */
+function buildListItemResponse(proposal: ProposalListItem, nowSeconds: bigint): ProposalListItemResponse {
+	const base = computeResponseFields(proposal, nowSeconds)
+	return {
+		...base,
+		userVote: proposal.userVote,
 	}
 }
 
@@ -477,7 +493,10 @@ export function createProposalsRouter(db: Database, runtime: AppRuntime) {
 					name: "orderBy",
 					in: "query",
 					description: "Field to order by: created_at (default), end_time, start_time",
-					schema: {type: "string", enum: ["created_at", "end_time", "start_time"]},
+					schema: {
+						type: "string",
+						enum: ["created_at", "end_time", "start_time"],
+					},
 				},
 				{
 					name: "orderDirection",
@@ -559,6 +578,7 @@ export function createProposalsRouter(db: Database, runtime: AppRuntime) {
 				const orderBy = yield* parseOrderBy(orderByParam)
 				const orderDirection = yield* parseOrderDirection(orderDirectionParam)
 
+				const normalizedVoterId = voterId ? normalizeUuid(voterId) : undefined
 				const {proposals, nextCursor} = yield* listProposalsInSpace(db, {
 					spaceId,
 					limit,
@@ -568,10 +588,11 @@ export function createProposalsRouter(db: Database, runtime: AppRuntime) {
 					status,
 					orderBy,
 					orderDirection,
+					voterId: normalizedVoterId,
 				})
 
 				const nowSeconds = getCurrentTimeSeconds()
-				const proposalResponses = proposals.map((p) => buildProposalResponse(p, nowSeconds, voterId))
+				const proposalResponses = proposals.map((p) => buildListItemResponse(p, nowSeconds))
 
 				return {
 					proposals: proposalResponses,

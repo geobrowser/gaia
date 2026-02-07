@@ -117,6 +117,7 @@ pub enum KgMessage {
     ProposalUpdated(hermes_schema::pb::governance::HermesProposalUpdated),
     ProposalVoted(hermes_schema::pb::governance::HermesProposalVoted),
     ProposalExecuted(hermes_schema::pb::governance::HermesProposalExecuted),
+    ProposalSettingsUpdated(hermes_schema::pb::governance::HermesProposalSettingsUpdated),
 }
 
 impl KgMessage {
@@ -133,6 +134,7 @@ impl KgMessage {
             KgMessage::ProposalUpdated(p) => p.meta.as_ref(),
             KgMessage::ProposalVoted(v) => v.meta.as_ref(),
             KgMessage::ProposalExecuted(e) => e.meta.as_ref(),
+            KgMessage::ProposalSettingsUpdated(s) => s.meta.as_ref(),
         }
     }
 
@@ -243,6 +245,16 @@ pub fn parse_message(
                                 IndexerError::decode(format!("HermesProposalExecuted: {}", e))
                             })?;
                     Ok(KgMessage::ProposalExecuted(executed))
+                }
+                Some("PROPOSAL_SETTINGS_UPDATED") => {
+                    let settings_updated =
+                        hermes_schema::pb::governance::HermesProposalSettingsUpdated::decode(
+                            payload,
+                        )
+                        .map_err(|e| {
+                            IndexerError::decode(format!("HermesProposalSettingsUpdated: {}", e))
+                        })?;
+                    Ok(KgMessage::ProposalSettingsUpdated(settings_updated))
                 }
                 _ => Err(IndexerError::decode(format!(
                     "unknown governance event type: {:?}",

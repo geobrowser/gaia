@@ -113,6 +113,15 @@ export interface ProposalWithVotes {
 }
 
 /**
+ * Domain type for a proposal in a list query.
+ * No individual voter records — only aggregate counts and the requesting user's vote.
+ */
+export interface ProposalListItem extends Omit<ProposalWithVotes, "votes"> {
+	/** The requesting user's vote, if voterId was provided and they voted */
+	userVote: VoteOption | null
+}
+
+/**
  * Result of status computation including intermediate flags.
  * Used internally and returned in API response.
  */
@@ -252,10 +261,9 @@ export type ActionResponse =
 	| UnknownAction
 
 /**
- * API response for proposal status endpoint.
- * All bigint values are serialized appropriately for JSON.
+ * Shared fields between detail and list proposal responses.
  */
-export interface ProposalStatusResponse {
+interface ProposalResponseBase {
 	proposalId: string
 	spaceId: string
 	name: string | null
@@ -265,14 +273,6 @@ export interface ProposalStatusResponse {
 	votingMode: "FAST" | "SLOW"
 	/** Actions in this proposal */
 	actions: ActionResponse[]
-	votes: {
-		yes: number
-		no: number
-		abstain: number
-		total: number
-		/** Individual votes from voters */
-		voters: Vote[]
-	}
 	/** Current user's vote if voterId query param was provided */
 	userVote: VoteOption | null
 	quorum: {
@@ -306,9 +306,37 @@ export interface ProposalStatusResponse {
 }
 
 /**
+ * API response for single proposal detail endpoint.
+ * Includes individual voter records.
+ */
+export interface ProposalStatusResponse extends ProposalResponseBase {
+	votes: {
+		yes: number
+		no: number
+		abstain: number
+		total: number
+		/** Individual votes from voters */
+		voters: Vote[]
+	}
+}
+
+/**
+ * API response for proposals in a list.
+ * Omits individual voter records for performance — only aggregate counts.
+ */
+export interface ProposalListItemResponse extends ProposalResponseBase {
+	votes: {
+		yes: number
+		no: number
+		abstain: number
+		total: number
+	}
+}
+
+/**
  * API response for listing proposals in a space.
  */
 export interface ProposalListResponse {
-	proposals: ProposalStatusResponse[]
+	proposals: ProposalListItemResponse[]
 	nextCursor: string | null
 }

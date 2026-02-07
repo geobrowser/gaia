@@ -114,6 +114,15 @@ The `target_address` field is populated for actions that take an address argumen
 | `space_id` | `from_id` | bytes (16) |
 | `proposal_id` | `topic` | bytes (32) |
 
+> **Note: Fast-path auto-execution gap.** The DAOSpace contract auto-executes
+> fast-path proposals inline when a YES vote meets the threshold (inside `_vote`
+> → `_executeProposal`), but does **not** emit a `PROPOSAL_EXECUTED` event in
+> that path. Only the explicit `enter(PROPOSAL_EXECUTED)` path (used for slow-path
+> proposals and manual execution) emits this event. The kg-indexer compensates
+> by detecting fast-path execution in its tally worker: after updating vote counts,
+> it checks for fast-path proposals where `yes_count > threshold` and
+> `executed_at IS NULL`, then sets `executed_at` from the latest vote timestamp.
+
 #### PROPOSAL_SETTINGS_SELECTED
 
 Emitted by the DAO (ping pattern) after a proposal is created or escalated.
