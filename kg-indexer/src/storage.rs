@@ -1,3 +1,4 @@
+use hermes_instrumentation::info;
 use sqlx::{postgres::PgPoolOptions, Postgres, QueryBuilder};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -1068,6 +1069,42 @@ impl Storage {
         .bind(&proposal_ids)
         .execute(&mut *tx)
         .await?;
+
+        // Detect fast-path proposals that were auto-executed by a YES vote.
+        //
+        // The DAOSpace contract auto-executes fast-path proposals inline when a YES
+        // vote meets the threshold (_vote → _executeProposal), but does NOT emit a
+        // PROPOSAL_EXECUTED event. Only the explicit enter(PROPOSAL_EXECUTED) path
+        // emits that event. So for fast-path proposals we must infer execution from
+        // the tally: if yes_count > threshold and executed_at is still NULL, mark it
+        // as executed using the timestamp of the most recent vote.
+        let auto_executed = sqlx::query(
+            r#"
+            UPDATE proposals p
+            SET executed_at = latest_vote.max_created_at::bigint
+            FROM UNNEST($1::uuid[]) AS queued(proposal_id)
+            JOIN (
+                SELECT proposal_id, MAX(created_at)::bigint as max_created_at
+                FROM proposal_votes
+                WHERE proposal_id = ANY($1)
+                GROUP BY proposal_id
+            ) latest_vote ON queued.proposal_id = latest_vote.proposal_id
+            WHERE p.id = queued.proposal_id
+              AND p.voting_mode = 'Fast'::"votingMode"
+              AND p.executed_at IS NULL
+              AND p.yes_count >= p.threshold
+            "#,
+        )
+        .bind(&proposal_ids)
+        .execute(&mut *tx)
+        .await?;
+
+        if auto_executed.rows_affected() > 0 {
+            info!(
+                count = auto_executed.rows_affected(),
+                "Auto-detected fast-path proposal executions from vote tallies"
+            );
+        }
 
         // Remove processed proposals from the queue
         sqlx::query(

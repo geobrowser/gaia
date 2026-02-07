@@ -221,7 +221,7 @@ async fn async_main() -> Result<(), IndexerError> {
     let tally_interval_ms: u64 = env::var("TALLY_WORKER_INTERVAL_MS")
         .ok()
         .and_then(|s| s.parse().ok())
-        .unwrap_or(5000); // Default: 5 seconds
+        .unwrap_or(1000); // Default: 1 second
     let tally_batch_size: i64 = env::var("TALLY_WORKER_BATCH_SIZE")
         .ok()
         .and_then(|s| s.parse().ok())
