@@ -79,6 +79,11 @@ describe("OpenSearchClient", () => {
 			expect(queryStr).toContain(spaceId)
 			expect(queryStr).toContain("entity_id")
 		})
+
+		it("should not include script_fields", () => {
+			const query = client.buildUuidQuery(testUuid, "GLOBAL") as Record<string, unknown>
+			expect(query).not.toHaveProperty("script_fields")
+		})
 	})
 
 	describe("buildGlobalQuery", () => {
@@ -92,6 +97,16 @@ describe("OpenSearchClient", () => {
 			expect(queryStr).toContain("function_score")
 			expect(queryStr).toContain("script_score")
 			expect(queryStr).toContain("test")
+		})
+
+		it("should include script_fields for score_boost", () => {
+			const baseQuery = client.buildBaseTextQuery("test")
+			const query = client.buildGlobalQuery(baseQuery) as Record<string, unknown>
+
+			expect(query).toHaveProperty("script_fields")
+			const queryStr = JSON.stringify(query.script_fields)
+			expect(queryStr).toContain("score_boost")
+			expect(queryStr).toContain("entity_global_score")
 		})
 	})
 
@@ -120,6 +135,30 @@ describe("OpenSearchClient", () => {
 			expect(queryStr).toContain("entity_space_score")
 			expect(queryStr).toContain(`* ${SCORE_BOOST}`)
 			expect(queryStr).toContain("test")
+		})
+
+		it("should include script_fields for score_boost", () => {
+			const baseQuery = client.buildBaseTextQuery("test")
+			const query = client.buildSingleSpaceQuery(baseQuery, "space-789") as Record<string, unknown>
+
+			expect(query).toHaveProperty("script_fields")
+			const queryStr = JSON.stringify(query.script_fields)
+			expect(queryStr).toContain("score_boost")
+			expect(queryStr).toContain("entity_space_score")
+		})
+	})
+
+	describe("buildTopRankedQuery", () => {
+		it("should include script_fields for score_boost", () => {
+			const query = client.buildSearchBody({
+				query: "",
+				scope: "GLOBAL",
+			}) as Record<string, unknown>
+
+			expect(query).toHaveProperty("script_fields")
+			const queryStr = JSON.stringify(query.script_fields)
+			expect(queryStr).toContain("score_boost")
+			expect(queryStr).toContain("entity_global_score")
 		})
 	})
 
