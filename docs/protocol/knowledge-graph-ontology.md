@@ -66,8 +66,9 @@ Renderable types are UI representations of underlying data types or entities. Th
 | Renderable Type | UUID | Description |
 |---|---|---|
 | Time interval | `ba71f735d8e444f79535ea98981fde22` | Render time spans or moments. |
-| Video | `0fb6bbf022044db49f70fa82c41570a4` | Render linked video media. |
 | Image | `f3f790c4c74e4d23a0a91e8ef84e30d9` | Render linked image media. |
+| Video | `6c069754e565480cb7c9541fd62b8a97` | Render linked video media. |
+| PDF | `d28fb061b5054bab932005ead42d5ad4` | Render linked PDF media. |
 | Place | `edc4b62157e94ccc9f60f38903edb720` | Render a place entity with location context. |
 | URL | `283127c96142468492ed90b0ebc7f29a` | Render a URL with link-specific UI. |
 | Address | `e95864bfde0f4453914a0ab67ec41ad2` | Render a postal or physical address. |
@@ -97,6 +98,8 @@ Blocks are ordered using the `position` field on the Blocks relation (see [GRC-2
 | Text Block | `76474f2f00894e77a0410b39fb17d0bf` | Text blocks contain markdown content and are intended for rich text. |
 | Data Block | `b8803a8665de412bbb357e0c84adf473` | Data blocks render query or collection results. Query data source `3b069b04adbe4728917d1283fd4ac27e` defines a live, declarative query evaluated at render time. Collection data source `1295037a5d9c4d09b27c5502654b9177` enumerates a fixed, ordered set of entities. |
 | Image | `ba4e41460010499da0a3caaa7f579d0e` | Image blocks render image media and point to an Image entity. |
+| Video | `d7a4817c9795405b93e212df759c43f8` | Video blocks render video media and point to an Video entity. |
+| PDF | `14a39e59d9874596956ac2dd4165c210` | PDF blocks render pdf media and point to a PDF entity. |
 
 ### 2.4 Block Schemas
 
@@ -133,6 +136,22 @@ Blocks are ordered using the `position` field on the Blocks relation (see [GRC-2
 
 See Section 3 for Image entity properties.
 
+#### 2.4.5 Video Schema
+
+| Property | UUID | Description | Target |
+|---|---|---|---|
+| Types | `8f151ba4de204e3c9cb499ddf96f48f1` | Type membership for the block. | Video `d7a4817c9795405b93e212df759c43f8` |
+
+See Section 3 for Video entity properties.
+
+#### 2.4.6 PDF Schema
+
+| Property | UUID | Description | Target |
+|---|---|---|---|
+| Types | `8f151ba4de204e3c9cb499ddf96f48f1` | Type membership for the block. | PDF `14a39e59d9874596956ac2dd4165c210` |
+
+See Section 3 for PDF entity properties.
+
 ### 2.5 Data Block Views
 
 Data block view types are defined on the `BLOCKS` relation pointing to the block using the View property `1907fd1c81114a3ca378b1f353425b65`. View is optional; Table view is the default when no view is specified.
@@ -152,13 +171,27 @@ Images are entities. The Image entity type is `ba4e41460010499da0a3caaa7f579d0e`
 
 | Property | UUID | Description | Target |
 |---|---|---|---|
-| URL | `8a743832c0944a62b6650c3cc2f9c7bc` | Source URL for the image. | TEXT value |
+| IPFS URL | `8a743832c0944a62b6650c3cc2f9c7bc` | Source URL for the image. | TEXT value |
 | Width (optional) | `f7b33e08b76d4190aadacadaa9f561e1` | Image width. | FLOAT64 value |
 | Height (optional) | `7f6ad0433e214257a6d48bdad36b1d84` | Image height. | FLOAT64 value |
 
-### 3.2 File Type Relation
+### 3.2 Video Properties
 
-Images can specify a file type using the File type relation `515f346fe0fb40c78ea95339787eecc1`, which points to a file type entity (not yet specified).
+| Property | UUID | Description | Target |
+|---|---|---|---|
+| IPFS URL | `8a743832c0944a62b6650c3cc2f9c7bc` | Source URL for the video. | TEXT value |
+| Width (optional) | `f7b33e08b76d4190aadacadaa9f561e1` | Video width. | FLOAT64 value |
+| Height (optional) | `7f6ad0433e214257a6d48bdad36b1d84` | Video height. | FLOAT64 value |
+
+### 3.3 PDF Properties
+
+| Property | UUID | Description | Target |
+|---|---|---|---|
+| IPFS URL | `8a743832c0944a62b6650c3cc2f9c7bc` | Source URL for the PDF. | TEXT value |
+
+### 3.4 File Type Relation
+
+Images, videos, and PDFs can specify a file type using the File type relation `515f346fe0fb40c78ea95339787eecc1`, which points to a file type entity (not yet specified).
 
 
 ## 5. System Properties
@@ -190,13 +223,15 @@ The registry is alphabetized by name for easier lookup.
 | Float64 | `d1f0423c3165808d942ff929bf9fc4ce` | Data type entity for floating point values. |
 | Gallery view | `ccb70fc917f04a54b86e3b4d20cc7130` | Render results as a gallery/grid. |
 | Geo location | `9cf5c1b015dc451cbfd297db64806aff` | Renderable type. |
-| Height | `7f6ad0433e214257a6d48bdad36b1d84` | Image height. |
+| Height | `7f6ad0433e214257a6d48bdad36b1d84` | Image height. |s
 | Image | `ba4e41460010499da0a3caaa7f579d0e` | Image entity for media with URL and dimensions. |
 | Image (renderable) | `f3f790c4c74e4d23a0a91e8ef84e30d9` | Renderable type. |
 | Int64 | `4258025c2fa481c3a7acc4cbde4b82c2` | Data type entity for 64-bit integers. |
 | List view | `7d497dba09c249b8968f716bcf520473` | Render results as a list. |
 | Markdown content | `e3e363d1dd294ccb8e6ff3b76d99bc33` | Markdown body for a text block. |
 | Name | `a126ca530c8e48d5b88882c734c38935` | Human-readable name for the entity. |
+| PDF | `14a39e59d9874596956ac2dd4165c210` | PDF entity for media with URL. |
+| PDF (renderable) | `d28fb061b5054bab932005ead42d5ad4` | Renderable type. |
 | Place | `edc4b62157e94ccc9f60f38903edb720` | Renderable type. |
 | Point | `799dd1cff0068f7db65245cc6ace96ab` | Data type entity for geographic points. |
 | Properties | `01412f8381894ab1836565c7fd358cc1` | Relation used to attach properties to a schema/type. |
@@ -214,7 +249,8 @@ The registry is alphabetized by name for easier lookup.
 | Types | `8f151ba4de204e3c9cb499ddf96f48f1` | Relation type id for type membership. |
 | URL | `8a743832c0944a62b6650c3cc2f9c7bc` | Source URL for an image. |
 | URL (renderable) | `283127c96142468492ed90b0ebc7f29a` | Renderable type. |
-| Video | `0fb6bbf022044db49f70fa82c41570a4` | Renderable type. |
+| Video | `0fb6bbf022044db49f70fa82c41570a4` | Video entity for media with URL and dimensions.|
+| Video (renderable) | `6c069754e565480cb7c9541fd62b8a97` | Renderable type. |
 | View | `1907fd1c81114a3ca378b1f353425b65` | Sets the preferred rendering mode for a data block relation. |
 | Width | `f7b33e08b76d4190aadacadaa9f561e1` | Image width. |
 
@@ -227,3 +263,4 @@ Setting the topic is done onchain via the `SET_TOPIC` action in the protocol.
 ## 7. Actors and Profiles (WIP)
 
 This section will describe how actors/participants are modeled in the knowledge graph and how their profile entities are structured. Details are pending.
+
