@@ -6,9 +6,19 @@
  *
  * UUIDs are 128-bit values. Base58-encoded, they produce ~22 character strings
  * (variable length — leading zero bytes produce shorter output, no padding).
+ *
+ * NOTE: The zero UUID (all zeros) encodes to an empty string. This matches
+ * the Rust implementation. The roundtrip encode→decode is broken for zero
+ * because decodeBase58("") throws. Zero UUIDs should not appear in production
+ * data; if they do, callers must handle the empty string.
  */
 
 const BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
+
+/** Max encoded length for a 128-bit UUID in Base58. */
+const MAX_BASE58_LENGTH = 22
+
+const HEX32_PATTERN = /^[0-9a-f]{32}$/
 
 // Lookup table: char code → alphabet index (255 = invalid)
 const BASE58_DECODE_MAP = new Uint8Array(128).fill(255)
@@ -23,9 +33,16 @@ for (let i = 0; i < BASE58_ALPHABET.length; i++) {
  * no zero-padding, empty string for zero value.
  *
  * @param dashlessHex - 32-char lowercase hex string (no dashes)
+ * @throws if the input is not exactly 32 lowercase hex characters
  */
 export function encodeBase58(dashlessHex: string): string {
-	let remainder = hexToBigInt(dashlessHex)
+	if (!HEX32_PATTERN.test(dashlessHex)) {
+		throw new Error(
+			`encodeBase58: expected 32-char lowercase hex, got ${dashlessHex.length} chars: "${dashlessHex.slice(0, 40)}"`,
+		)
+	}
+
+	let remainder = BigInt(`0x${dashlessHex}`)
 	if (remainder === 0n) return ""
 
 	const chars: string[] = []
@@ -44,7 +61,7 @@ export function encodeBase58(dashlessHex: string): string {
  *
  * Matches the Rust `decode_base58_to_uuid` implementation exactly.
  *
- * @throws if the input contains invalid Base58 characters or is empty
+ * @throws if the input contains invalid Base58 characters, is empty, or overflows 128 bits
  */
 export function decodeBase58(encoded: string): string {
 	if (encoded.length === 0) {
@@ -69,21 +86,28 @@ export function decodeBase58(encoded: string): string {
 		throw new Error("Invalid Base58: value exceeds 128-bit UUID range")
 	}
 
-	return decoded.toString(16).padStart(32, "0")
+	const hex = decoded.toString(16).padStart(32, "0")
+
+	// Postcondition: padStart should always produce exactly 32 chars given the overflow check above
+	if (hex.length !== 32) {
+		throw new Error(`decodeBase58: internal error — produced ${hex.length}-char hex, expected 32`)
+	}
+
+	return hex
 }
 
 /**
- * Check if a string is a valid Base58-encoded UUID.
+ * Check if a string has valid Base58 syntax (alphabet + length ≤ 22).
+ *
+ * This checks syntax only — it does NOT verify the decoded value fits in
+ * 128 bits. A 22-char string of high-value digits can pass this check but
+ * overflow on decode. Use decodeBase58() for full validation.
  */
 export function isBase58(value: string): boolean {
-	if (value.length === 0 || value.length > 22) return false
+	if (value.length === 0 || value.length > MAX_BASE58_LENGTH) return false
 	for (let i = 0; i < value.length; i++) {
 		const charCode = value.charCodeAt(i)
 		if (charCode >= 128 || BASE58_DECODE_MAP[charCode] === 255) return false
 	}
 	return true
-}
-
-function hexToBigInt(hex: string): bigint {
-	return BigInt(`0x${hex}`)
 }

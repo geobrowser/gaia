@@ -39,7 +39,7 @@ describe("EntitySpaceFilterPlugin", () => {
 		`)
 
 		if (spaceResult.rows.length > 0) {
-			// Convert UUID to undashed format for GraphQL input
+			// Strip dashes for GraphQL input (parseValue also accepts dashed, but tests use dashless)
 			testSpaceId = spaceResult.rows[0].space_id.replace(/-/g, "")
 			testSpaceIdBase58 = toBase58(toUuid(spaceResult.rows[0].space_id))
 		}
@@ -53,7 +53,7 @@ describe("EntitySpaceFilterPlugin", () => {
 		`)
 
 		if (typeResult.rows.length > 0) {
-			// Convert UUID to undashed format for GraphQL input
+			// Strip dashes for GraphQL input (parseValue also accepts dashed, but tests use dashless)
 			testTypeId = typeResult.rows[0].to_entity_id.replace(/-/g, "")
 			testTypeIdBase58 = toBase58(toUuid(typeResult.rows[0].to_entity_id))
 		}

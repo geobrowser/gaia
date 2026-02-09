@@ -36,6 +36,18 @@ const UUID_UNDASHED_PATTERN = /^[0-9a-f]{32}$/i
 export type Uuid = string & {readonly __brand: "Uuid"}
 
 /**
+ * Insert dashes into a 32-char dashless hex string to produce a Uuid.
+ */
+function insertDashes(dashless: string): Uuid {
+	const result =
+		`${dashless.slice(0, 8)}-${dashless.slice(8, 12)}-${dashless.slice(12, 16)}-${dashless.slice(16, 20)}-${dashless.slice(20)}` as Uuid
+	if (result.length !== 36) {
+		throw new Error(`insertDashes: expected 36-char result, got ${result.length}`)
+	}
+	return result
+}
+
+/**
  * Normalizes any UUID input to dashed lowercase hex.
  *
  * Accepts:
@@ -55,22 +67,14 @@ export function toUuid(value: string): Uuid {
 	if (UUID_DASHED_PATTERN.test(trimmed)) return trimmed.toLowerCase() as Uuid
 
 	// 2. Dashless hex
-	if (UUID_UNDASHED_PATTERN.test(trimmed)) {
-		const lower = trimmed.toLowerCase()
-		return `${lower.slice(0, 8)}-${lower.slice(8, 12)}-${lower.slice(12, 16)}-${lower.slice(16, 20)}-${lower.slice(20)}` as Uuid
-	}
+	if (UUID_UNDASHED_PATTERN.test(trimmed)) return insertDashes(trimmed.toLowerCase())
 
-	// 3. Base58
-	if (isBase58(trimmed)) {
-		try {
-			const dashless = decodeBase58(trimmed)
-			return `${dashless.slice(0, 8)}-${dashless.slice(8, 12)}-${dashless.slice(12, 16)}-${dashless.slice(16, 20)}-${dashless.slice(20)}` as Uuid
-		} catch {
-			// Fall through to throw below
-		}
-	}
+	// 3. Base58 — if isBase58 accepts it, let decodeBase58 throw with its
+	// specific error (e.g. "value exceeds 128-bit UUID range") rather than
+	// swallowing it into a generic "Invalid UUID" message.
+	if (isBase58(trimmed)) return insertDashes(decodeBase58(trimmed))
 
-	throw new Error(`Invalid UUID: ${value}`)
+	throw new Error(`Invalid UUID format`)
 }
 
 /**
@@ -99,11 +103,16 @@ export function isValidUuid(value: string): boolean {
 /**
  * Encode a Uuid to Base58 for API output.
  *
+ * NOTE: The zero UUID encodes to an empty string (Rust parity).
+ * Zero UUIDs should not appear in production data.
+ *
  * @param uuid - A validated Uuid (dashed hex)
  * @returns Base58-encoded string
  */
 export function toBase58(uuid: Uuid): string {
-	// Strip dashes to get dashless hex for the encoder
 	const dashless = uuid.replaceAll("-", "")
+	if (dashless.length !== 32) {
+		throw new Error(`toBase58: expected 36-char dashed UUID, got: "${uuid}"`)
+	}
 	return encodeBase58(dashless)
 }

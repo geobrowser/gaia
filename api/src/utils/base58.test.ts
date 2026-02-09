@@ -27,6 +27,16 @@ describe("encodeBase58", () => {
 		expect(result.length).toBeLessThanOrEqual(22)
 		expect(result.length).toBeGreaterThan(0)
 	})
+
+	it("rejects non-32-char input", () => {
+		expect(() => encodeBase58("abc")).toThrow("expected 32-char lowercase hex")
+		expect(() => encodeBase58("")).toThrow("expected 32-char lowercase hex")
+		expect(() => encodeBase58("550e8400-e29b-41d4-a716-446655440000")).toThrow("expected 32-char lowercase hex")
+	})
+
+	it("rejects uppercase hex input", () => {
+		expect(() => encodeBase58("550E8400E29B41D4A716446655440000")).toThrow("expected 32-char lowercase hex")
+	})
 })
 
 describe("decodeBase58", () => {
@@ -76,6 +86,13 @@ describe("roundtrip", () => {
 			const decoded = decodeBase58(encoded)
 			expect(decoded).toBe(uuid)
 		}
+	})
+
+	it("zero UUID does not roundtrip (Rust parity — encode returns empty, decode rejects empty)", () => {
+		const zeroHex = "00000000000000000000000000000000"
+		const encoded = encodeBase58(zeroHex)
+		expect(encoded).toBe("")
+		expect(() => decodeBase58("")).toThrow("empty string")
 	})
 })
 

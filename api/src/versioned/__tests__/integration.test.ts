@@ -752,11 +752,11 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 	})
 
 	// ==========================================================================
-	// 11. UUID Format - Dashless Regression Guard
+	// 11. UUID Format - Dashed Hex Regression Guard
 	//
-	// The API must return dashless lowercase hex UUIDs (32 chars, no dashes).
-	// These tests verify every UUID field in every response shape to catch
-	// regressions where Postgres dashed UUIDs leak through.
+	// The versioned API returns dashed lowercase hex UUIDs (36 chars),
+	// matching PostgreSQL's native format. These tests verify every UUID
+	// field in every response shape to catch format regressions.
 	// ==========================================================================
 
 	describe("UUID Format - all responses use dashed lowercase hex UUIDs", () => {

@@ -267,7 +267,7 @@ interface ProposalResponseBase {
 	proposalId: string
 	spaceId: string
 	name: string | null
-	/** Member space ID of the proposer (dashless UUID) */
+	/** Member space ID of the proposer */
 	proposedBy: string
 	status: ProposalStatus
 	votingMode: "FAST" | "SLOW"
