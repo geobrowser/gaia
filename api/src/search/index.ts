@@ -170,18 +170,38 @@ export function createSearchRouter(searchClient: SearchClient, runtime: AppRunti
 										items: {
 											type: "object",
 											properties: {
-												id: {type: "string", format: "uuid"},
+												entityId: {type: "string", format: "uuid"},
+												spaceId: {type: "string", format: "uuid"},
 												name: {type: "string"},
 												description: {type: "string"},
-												types: {type: "array", items: {type: "string"}},
-												spaces: {type: "array", items: {type: "string", format: "uuid"}},
-												score: {type: "number"},
-												relevanceScore: {type: "number"},
-												textMatchScore: {type: "number"},
+												avatar: {type: "string"},
+												cover: {type: "string"},
+												typeIds: {
+													type: "array",
+													items: {type: "string", format: "uuid"},
+													description: "Type relation IDs associated with this entity",
+												},
+												entityGlobalScore: {type: "number", description: "Global entity score"},
+												spaceScore: {type: "number", description: "Space score"},
+												entitySpaceScore: {type: "number", description: "Entity-space score"},
+												relevanceScore: {
+													type: "number",
+													description:
+														"Final relevance score after all boosts including entity/space score factors",
+												},
+												textMatchScore: {
+													type: "number",
+													description:
+														"Text matching score without score field boosts, reflecting pure query relevance",
+												},
 											},
 										},
 									},
-									total: {type: "integer"},
+									total: {type: "integer", description: "Total number of matching documents"},
+									tookMs: {
+										type: "number",
+										description: "Time taken to execute the search in milliseconds",
+									},
 								},
 							},
 						},
