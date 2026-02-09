@@ -20,6 +20,8 @@ describe("Search Router - Integration Tests", () => {
 				entityGlobalScore: 0.8,
 				spaceScore: 0.7,
 				entitySpaceScore: 0.9,
+				relevanceScore: 15.2,
+				textMatchScore: 2.0,
 			},
 		],
 		total: 1,

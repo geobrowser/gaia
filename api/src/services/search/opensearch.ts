@@ -119,7 +119,12 @@ export class OpenSearchClient implements SearchClient {
 	 * Execute a search query against the index.
 	 */
 	async search(query: SearchQuery): Promise<SearchResponse> {
-		const searchBody = this.buildSearchBody(query)
+		const searchBody = this.buildSearchBody(query) as Record<string, unknown>
+
+		// When script_fields is present, OpenSearch suppresses _source by default
+		if (searchBody.script_fields) {
+			searchBody._source = true
+		}
 
 		const response = await this.client.search({
 			index: this.indexName,
@@ -132,12 +137,18 @@ export class OpenSearchClient implements SearchClient {
 		const hits = body.hits.hits as Array<{
 			_source: Record<string, unknown>
 			_score: number
+			fields?: Record<string, number[]>
 		}>
 
 		const results: SearchResult[] = hits.map((hit) => {
 			// Extract typeIds from type_relations array
 			const typeRelations = hit._source.type_relations as Array<{entity_to_id: string}> | undefined
 			const typeIds = typeRelations?.map((rel) => rel.entity_to_id)
+
+			// Compute relevanceScore and textMatchScore
+			const relevanceScore = hit._score
+			const scoreBoost = hit.fields?.score_boost?.[0]
+			const textMatchScore = scoreBoost !== undefined ? Math.max(0, relevanceScore - scoreBoost) : relevanceScore
 
 			return {
 				entityId: hit._source.entity_id as string,
@@ -150,6 +161,8 @@ export class OpenSearchClient implements SearchClient {
 				entityGlobalScore: hit._source.entity_global_score as number | undefined,
 				spaceScore: hit._source.space_score as number | undefined,
 				entitySpaceScore: hit._source.entity_space_score as number | undefined,
+				relevanceScore,
+				textMatchScore,
 			}
 		})
 
@@ -327,6 +340,7 @@ export class OpenSearchClient implements SearchClient {
 							score_mode: "sum",
 						},
 					},
+					script_fields: this.buildScoreBoostScriptFields("entity_global_score"),
 				}
 
 			case "GLOBAL_BY_SPACE_SCORE":
@@ -344,6 +358,7 @@ export class OpenSearchClient implements SearchClient {
 							score_mode: "sum",
 						},
 					},
+					script_fields: this.buildScoreBoostScriptFields("space_score"),
 				}
 
 			case "SPACE_SINGLE":
@@ -365,6 +380,7 @@ export class OpenSearchClient implements SearchClient {
 							score_mode: "sum",
 						},
 					},
+					script_fields: this.buildScoreBoostScriptFields("entity_space_score"),
 				}
 
 			default:
@@ -382,6 +398,7 @@ export class OpenSearchClient implements SearchClient {
 							score_mode: "sum",
 						},
 					},
+					script_fields: this.buildScoreBoostScriptFields("entity_global_score"),
 				}
 		}
 	}
@@ -448,28 +465,44 @@ export class OpenSearchClient implements SearchClient {
 	}
 
 	/**
-	 * Build a score boost function for float score fields.
-	 * Uses script_score with threshold clamping and linear shift to handle negative scores.
+	 * Build the Painless script for computing a score boost value.
+	 * Reused by buildScoreBoostFunction (for function_score) and
+	 * buildScoreBoostScriptFields (for returning the boost value in results).
 	 *
-	 * Strategy:
-	 * 1. Clamp scores at MIN_SCORE_THRESHOLD (-10) to limit impact of extreme outliers
-	 * 2. Shift by SCORE_SHIFT (10) to ensure all values are positive: [MIN, ∞) → [0, ∞)
-	 * 3. Apply SCORE_BOOST multiplier
-	 *
-	 * This is simple, efficient, and handles the typical z-score range [-3, 3] while
-	 * providing headroom for outliers up to -10.
+	 * Formula: (max(score, -10.0) + 10.0) * 1.3
+	 */
+	buildScoreBoostScript(scoreField: string): string {
+		return `
+			def scoreValue = doc.containsKey('${scoreField}') && !doc['${scoreField}'].empty
+				? doc['${scoreField}'].value
+				: ${DEFAULT_AVERAGE_SCORE};
+			def clampedScore = Math.max(scoreValue, ${MIN_SCORE_THRESHOLD});
+			return (clampedScore + ${SCORE_SHIFT}) * ${SCORE_BOOST};
+		`
+	}
+
+	/**
+	 * Build a score boost function for use in function_score queries.
 	 */
 	buildScoreBoostFunction(scoreField: string): object {
 		return {
 			script_score: {
 				script: {
-					source: `
-						def scoreValue = doc.containsKey('${scoreField}') && !doc['${scoreField}'].empty
-							? doc['${scoreField}'].value
-							: ${DEFAULT_AVERAGE_SCORE};
-						def clampedScore = Math.max(scoreValue, ${MIN_SCORE_THRESHOLD});
-						return (clampedScore + ${SCORE_SHIFT}) * ${SCORE_BOOST};
-					`,
+					source: this.buildScoreBoostScript(scoreField),
+				},
+			},
+		}
+	}
+
+	/**
+	 * Build script_fields to return the computed score boost value alongside each hit.
+	 * Used to derive textMatchScore = relevanceScore - scoreBoost.
+	 */
+	buildScoreBoostScriptFields(scoreField: string): object {
+		return {
+			score_boost: {
+				script: {
+					source: this.buildScoreBoostScript(scoreField),
 				},
 			},
 		}
@@ -499,6 +532,7 @@ export class OpenSearchClient implements SearchClient {
 					score_mode: "sum",
 				},
 			},
+			script_fields: this.buildScoreBoostScriptFields("entity_global_score"),
 		}
 	}
 
@@ -526,6 +560,7 @@ export class OpenSearchClient implements SearchClient {
 					score_mode: "sum",
 				},
 			},
+			script_fields: this.buildScoreBoostScriptFields("space_score"),
 		}
 	}
 
@@ -558,6 +593,7 @@ export class OpenSearchClient implements SearchClient {
 					score_mode: "sum",
 				},
 			},
+			script_fields: this.buildScoreBoostScriptFields("entity_space_score"),
 		}
 	}
 

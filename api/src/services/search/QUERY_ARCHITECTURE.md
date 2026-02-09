@@ -102,3 +102,16 @@ From highest to lowest impact:
   4. **Formula**: `(max(score, -10.0) + 10.0) * 1.3`
 - **Autocomplete support**: `search_as_you_type` field type with n-gram sub-fields enables smooth autocomplete UX.
 
+---
+
+## Output Score Fields
+
+Each search result includes two computed score fields:
+
+| Field | Description | Derivation |
+|-------|-------------|------------|
+| `relevanceScore` | Final score after all boosts | OpenSearch `_score` |
+| `textMatchScore` | Text matching score without score field boosts | `relevanceScore - scoreBoost` (clamped to 0) |
+
+The `scoreBoost` is computed via `script_fields` using the same Painless script as `buildScoreBoostFunction`. For empty queries (top-ranked), `textMatchScore` is 0 since `boost_mode: "replace"` means `_score` equals the boost. For UUID queries, `textMatchScore` equals `relevanceScore` since there is no score field boost.
+

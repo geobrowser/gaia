@@ -8,7 +8,7 @@
  */
 
 import type { SearchQuery, SearchResponse, SearchResult } from '../../../../api/src/services/search/types';
-import { DEFAULT_AVERAGE_SCORE } from '../../../../api/src/services/search/opensearch';
+import { DEFAULT_AVERAGE_SCORE, SCORE_BOOST, SCORE_SHIFT, MIN_SCORE_THRESHOLD } from '../../../../api/src/services/search/opensearch';
 
 // Colors for terminal output
 const GREEN = '\x1b[0;32m';
@@ -211,6 +211,26 @@ class SearchValidator {
         this.addResult('test4_scoring', true, `Entity has scoring fields`);
       } else {
         this.addResult('test4_scoring', false, `Entity missing scoring fields`);
+      }
+
+      // Check relevanceScore and textMatchScore fields
+      const hasRelevanceScore = typeof firstEntity.relevanceScore === 'number' && firstEntity.relevanceScore > 0;
+      const hasTextMatchScore = typeof firstEntity.textMatchScore === 'number' && firstEntity.textMatchScore >= 0;
+
+      if (hasRelevanceScore) {
+        this.addResult('test4_relevance_score', true,
+          `Entity has relevanceScore: ${firstEntity.relevanceScore}`);
+      } else {
+        this.addResult('test4_relevance_score', false,
+          `Entity missing or invalid relevanceScore: ${firstEntity.relevanceScore}`);
+      }
+
+      if (hasTextMatchScore) {
+        this.addResult('test4_text_match_score', true,
+          `Entity has textMatchScore: ${firstEntity.textMatchScore}`);
+      } else {
+        this.addResult('test4_text_match_score', false,
+          `Entity missing or invalid textMatchScore: ${firstEntity.textMatchScore}`);
       }
     }
   }
@@ -890,6 +910,419 @@ class SearchValidator {
     }
   }
 
+  /**
+   * Compute expected score boost for a given entity_global_score.
+   * Formula: (max(score, MIN_SCORE_THRESHOLD) + SCORE_SHIFT) * SCORE_BOOST
+   */
+  private expectedScoreBoost(entityGlobalScore: number): number {
+    return (Math.max(entityGlobalScore, MIN_SCORE_THRESHOLD) + SCORE_SHIFT) * SCORE_BOOST;
+  }
+
+  /** Verifies relevanceScores are in descending order for 'alice' query. */
+  async test16_RelevanceScoresDescendingOrder(): Promise<void> {
+    console.log(`\n${BLUE}Test 16: Verify relevanceScores are in descending order${NC}`);
+
+    const response = await this.search({
+      query: 'alice',
+      scope: 'GLOBAL',
+    });
+
+    if (response.results.length < 2) {
+      this.addResult('test16_count', false, `Need at least 2 results, got ${response.results.length}`);
+      return;
+    }
+
+    // Check all results have relevanceScore
+    const allHaveRelevance = response.results.every(r => typeof r.relevanceScore === 'number');
+    if (allHaveRelevance) {
+      this.addResult('test16_has_relevance', true, `All ${response.results.length} results have relevanceScore`);
+    } else {
+      this.addResult('test16_has_relevance', false, `Some results missing relevanceScore`);
+      return;
+    }
+
+    let isDescending = true;
+    for (let i = 0; i < response.results.length - 1; i++) {
+      if (response.results[i].relevanceScore! < response.results[i + 1].relevanceScore!) {
+        isDescending = false;
+        this.addResult('test16_descending', false,
+          `relevanceScore not descending at index ${i}: ${response.results[i].relevanceScore} < ${response.results[i + 1].relevanceScore}`);
+        break;
+      }
+    }
+
+    if (isDescending) {
+      this.addResult('test16_descending', true,
+        `relevanceScores in descending order: ${response.results.map(r => r.relevanceScore!.toFixed(3)).join(' >= ')}`);
+    }
+
+    // Scores are always indexed by the test generator
+    if (response.results[0].entityId === TEST_ENTITIES.ALICE_HIGH_ID) {
+      this.addResult('test16_first', true, `First result is Alice High (highest relevance)`);
+    } else {
+      this.addResult('test16_first', false,
+        `First result should be Alice High (${TEST_ENTITIES.ALICE_HIGH_ID}), got ${response.results[0].entityId}`);
+    }
+
+    const lastResult = response.results[response.results.length - 1];
+    if (lastResult.entityId === TEST_ENTITIES.ALICE_NEGATIVE_ID) {
+      this.addResult('test16_last', true, `Last result is Alice Negative (lowest relevance)`);
+    } else {
+      this.addResult('test16_last', false,
+        `Last result should be Alice Negative (${TEST_ENTITIES.ALICE_NEGATIVE_ID}), got ${lastResult.entityId}`);
+    }
+  }
+
+  /** Verifies textMatchScores are consistent across same-name entities and match expected formula. */
+  async test17_TextMatchConsistencyForSameName(): Promise<void> {
+    console.log(`\n${BLUE}Test 17: Verify textMatchScore consistency for same-name entities${NC}`);
+
+    const response = await this.search({
+      query: 'alice',
+      scope: 'GLOBAL',
+    });
+
+    if (response.results.length !== 7) {
+      this.addResult('test17_count', false, `Expected 7 Alice entities, got ${response.results.length}`);
+      return;
+    }
+
+    // All results should have textMatchScore
+    const allHaveTextMatch = response.results.every(r => typeof r.textMatchScore === 'number');
+    if (!allHaveTextMatch) {
+      this.addResult('test17_has_text_match', false, `Some results missing textMatchScore`);
+      return;
+    }
+
+    // textMatchScores should be approximately equal (all Alices have same name)
+    const textMatchScores = response.results.map(r => r.textMatchScore!);
+    const minTM = Math.min(...textMatchScores);
+    const maxTM = Math.max(...textMatchScores);
+    const tolerance = 0.1;
+
+    if (maxTM - minTM <= tolerance) {
+      this.addResult('test17_consistency', true,
+        `textMatchScores consistent: range [${minTM.toFixed(3)}, ${maxTM.toFixed(3)}] (spread ${(maxTM - minTM).toFixed(3)} <= ${tolerance})`);
+    } else {
+      this.addResult('test17_consistency', false,
+        `textMatchScores too spread: range [${minTM.toFixed(3)}, ${maxTM.toFixed(3)}] (spread ${(maxTM - minTM).toFixed(3)} > ${tolerance})`);
+    }
+
+    // relevanceScore > textMatchScore for every result (score boost always positive)
+    let allRelevanceGreater = true;
+    for (const r of response.results) {
+      if (r.relevanceScore! <= r.textMatchScore!) {
+        allRelevanceGreater = false;
+        this.addResult('test17_relevance_gt_text', false,
+          `relevanceScore (${r.relevanceScore}) should be > textMatchScore (${r.textMatchScore}) for entity ${r.entityId}`);
+        break;
+      }
+    }
+    if (allRelevanceGreater) {
+      this.addResult('test17_relevance_gt_text', true,
+        `relevanceScore > textMatchScore for all results (score boost always adds positively)`);
+    }
+
+    // Verify relevanceScore ≈ textMatchScore + expectedScoreBoost
+    // Use actual entityGlobalScore from results if present, otherwise DEFAULT_AVERAGE_SCORE
+    const hardcodedScores: Record<string, number> = {
+      [TEST_ENTITIES.ALICE_HIGH_ID]: 0.95,
+      [TEST_ENTITIES.ALICE_MEDIUM_ID]: 0.65,
+      [TEST_ENTITIES.ALICE_AT_THRESHOLD_ID]: 0.50,
+      [TEST_ENTITIES.ALICE_BELOW_THRESHOLD_ID]: 0.25,
+      [TEST_ENTITIES.ALICE_LOW_ID]: 0.15,
+      [TEST_ENTITIES.ALICE_ZERO_ID]: 0.0,
+      [TEST_ENTITIES.ALICE_NEGATIVE_ID]: -0.75,
+    };
+
+    let formulaValid = true;
+    const boostTolerance = 0.01;
+    for (const r of response.results) {
+      const entityScore = hardcodedScores[r.entityId] ?? DEFAULT_AVERAGE_SCORE;
+      const expectedBoost = this.expectedScoreBoost(entityScore);
+      const actualBoost = r.relevanceScore! - r.textMatchScore!;
+      const diff = Math.abs(actualBoost - expectedBoost);
+
+      if (diff > boostTolerance) {
+        formulaValid = false;
+        this.addResult('test17_formula', false,
+          `Score boost formula mismatch for ${r.entityId}: expected ${expectedBoost.toFixed(3)}, got ${actualBoost.toFixed(3)} (diff ${diff.toFixed(4)})`);
+        break;
+      }
+    }
+    if (formulaValid) {
+      this.addResult('test17_formula', true,
+        `relevanceScore = textMatchScore + expectedBoost (within ${boostTolerance}) using hardcoded scores`);
+    }
+  }
+
+  /** Verifies score boost determines ordering when text match is equal. */
+  async test18_ScoreBoostOverridesWithEqualTextMatch(): Promise<void> {
+    console.log(`\n${BLUE}Test 18: Score boost determines ordering when text match is equal${NC}`);
+
+    const response = await this.search({
+      query: 'alice',
+      scope: 'GLOBAL',
+    });
+
+    if (response.results.length !== 7) {
+      this.addResult('test18_count', false, `Expected 7 Alice entities, got ${response.results.length}`);
+      return;
+    }
+
+    // Expected ordering by entity_global_score descending
+    const expectedOrder = [
+      TEST_ENTITIES.ALICE_HIGH_ID,        // 0.95
+      TEST_ENTITIES.ALICE_MEDIUM_ID,      // 0.65
+      TEST_ENTITIES.ALICE_AT_THRESHOLD_ID,// 0.50
+      TEST_ENTITIES.ALICE_BELOW_THRESHOLD_ID, // 0.25
+      TEST_ENTITIES.ALICE_LOW_ID,         // 0.15
+      TEST_ENTITIES.ALICE_ZERO_ID,        // 0.0
+      TEST_ENTITIES.ALICE_NEGATIVE_ID,    // -0.75
+    ];
+
+    const actualOrder = response.results.map(r => r.entityId);
+    const orderMatches = expectedOrder.every((id, i) => actualOrder[i] === id);
+
+    if (orderMatches) {
+      this.addResult('test18_order', true,
+        `Ordering matches score boost order: High(0.95) > Med(0.65) > Thresh(0.50) > Below(0.25) > Low(0.15) > Zero(0.0) > Neg(-0.75)`);
+    } else {
+      this.addResult('test18_order', false,
+        `Ordering mismatch. Expected: ${expectedOrder.join(', ')}. Got: ${actualOrder.join(', ')}`);
+    }
+
+    // Verify score boost difference ≈ relevanceScore difference (since textMatch is ~equal)
+    const first = response.results[0];
+    const last = response.results[response.results.length - 1];
+    const relevanceDiff = first.relevanceScore! - last.relevanceScore!;
+    const expectedBoostDiff = this.expectedScoreBoost(0.95) - this.expectedScoreBoost(-0.75);
+    const diffTolerance = 0.5;
+
+    if (Math.abs(relevanceDiff - expectedBoostDiff) <= diffTolerance) {
+      this.addResult('test18_boost_diff', true,
+        `Relevance spread (${relevanceDiff.toFixed(3)}) ≈ boost spread (${expectedBoostDiff.toFixed(3)}) — text match contribution is equal`);
+    } else {
+      this.addResult('test18_boost_diff', false,
+        `Relevance spread (${relevanceDiff.toFixed(3)}) differs from boost spread (${expectedBoostDiff.toFixed(3)}) by more than ${diffTolerance}`);
+    }
+  }
+
+  /** Verifies text match overpowers a higher score boost from non-matching entities. */
+  async test19_TextMatchOverpowersScoreBoost(): Promise<void> {
+    console.log(`\n${BLUE}Test 19: Text match overpowers score boost (query 'bob')${NC}`);
+
+    const response = await this.search({
+      query: 'bob',
+      scope: 'GLOBAL',
+    });
+
+    if (response.results.length === 0) {
+      this.addResult('test19_has_results', false, `No results for 'bob' query`);
+      return;
+    }
+
+    // Bob should be the first result
+    const firstResult = response.results[0];
+    if (firstResult.entityId === TEST_ENTITIES.BOB_ID) {
+      this.addResult('test19_bob_first', true,
+        `Bob is the first result despite Alice High having higher score boost (0.95 vs 0.75)`);
+    } else {
+      this.addResult('test19_bob_first', false,
+        `First result should be Bob (${TEST_ENTITIES.BOB_ID}), got ${firstResult.entityId}`);
+    }
+
+    // Bob should have textMatchScore > 0
+    if (typeof firstResult.textMatchScore === 'number' && firstResult.textMatchScore > 0) {
+      this.addResult('test19_bob_text_match', true,
+        `Bob has textMatchScore: ${firstResult.textMatchScore.toFixed(3)}`);
+    } else {
+      this.addResult('test19_bob_text_match', false,
+        `Bob should have textMatchScore > 0, got ${firstResult.textMatchScore}`);
+    }
+
+    // Bob should have relevanceScore > 0
+    if (typeof firstResult.relevanceScore === 'number' && firstResult.relevanceScore > 0) {
+      this.addResult('test19_bob_relevance', true,
+        `Bob has relevanceScore: ${firstResult.relevanceScore.toFixed(3)}`);
+    } else {
+      this.addResult('test19_bob_relevance', false,
+        `Bob should have relevanceScore > 0, got ${firstResult.relevanceScore}`);
+    }
+
+    // If any Alice appears via fuzzy matching, she should rank below Bob
+    const aliceInResults = response.results.find(r => r.name === 'Alice');
+    if (aliceInResults) {
+      const bobIndex = response.results.findIndex(r => r.entityId === TEST_ENTITIES.BOB_ID);
+      const aliceIndex = response.results.findIndex(r => r.name === 'Alice');
+      if (bobIndex < aliceIndex) {
+        this.addResult('test19_bob_above_alice', true,
+          `Bob ranks above fuzzy-matched Alice (text match dominates over score boost)`);
+      } else {
+        this.addResult('test19_bob_above_alice', false,
+          `Bob should rank above Alice — text match should dominate score boost`);
+      }
+    } else {
+      this.addResult('test19_no_alice', true,
+        `No Alice in 'bob' results — entities with higher score boost but no text match are correctly excluded`);
+    }
+  }
+
+  /** Verifies empty query results have textMatchScore = 0. */
+  async test20_EmptyQueryTextMatchScoreZero(): Promise<void> {
+    console.log(`\n${BLUE}Test 20: Empty query — textMatchScore should be 0 (top-ranked by score only)${NC}`);
+
+    const response = await this.search({
+      scope: 'GLOBAL',
+    });
+
+    if (response.results.length === 0) {
+      this.addResult('test20_has_results', false, `Empty query should return results`);
+      return;
+    }
+
+    // All textMatchScores should be ~0 (floating point: score and script_fields compute independently)
+    const epsilon = 1e-6;
+    const allZeroTextMatch = response.results.every(r => (r.textMatchScore ?? 0) < epsilon);
+    if (allZeroTextMatch) {
+      this.addResult('test20_text_match_zero', true,
+        `All ${response.results.length} results have textMatchScore ≈ 0 (no text matching in empty queries)`);
+    } else {
+      const nonZero = response.results.find(r => (r.textMatchScore ?? 0) >= epsilon);
+      this.addResult('test20_text_match_zero', false,
+        `Expected textMatchScore ≈ 0 for all results, found ${nonZero?.textMatchScore} for entity ${nonZero?.entityId}`);
+    }
+
+    // All relevanceScores should be > 0 (score boost is always positive)
+    const allPositiveRelevance = response.results.every(r =>
+      typeof r.relevanceScore === 'number' && r.relevanceScore > 0
+    );
+    if (allPositiveRelevance) {
+      this.addResult('test20_positive_relevance', true,
+        `All results have relevanceScore > 0 (score boost always positive)`);
+    } else {
+      this.addResult('test20_positive_relevance', false,
+        `Some results have non-positive relevanceScore`);
+    }
+
+    // relevanceScores should be in descending order
+    let isDescending = true;
+    for (let i = 0; i < response.results.length - 1; i++) {
+      if (response.results[i].relevanceScore! < response.results[i + 1].relevanceScore!) {
+        isDescending = false;
+        break;
+      }
+    }
+    if (isDescending) {
+      this.addResult('test20_descending', true,
+        `Empty query relevanceScores in descending order`);
+    } else {
+      this.addResult('test20_descending', false,
+        `Empty query relevanceScores not in descending order`);
+    }
+  }
+
+  /** Verifies UUID query has textMatchScore = relevanceScore (no score boost). */
+  async test21_UuidQueryScoreEquality(): Promise<void> {
+    console.log(`\n${BLUE}Test 21: UUID query — textMatchScore should equal relevanceScore${NC}`);
+
+    const response = await this.search({
+      query: TEST_ENTITIES.ALICE_HIGH_ID,
+      scope: 'GLOBAL',
+    });
+
+    const aliceHigh = response.results.find(r => r.entityId === TEST_ENTITIES.ALICE_HIGH_ID);
+
+    if (!aliceHigh) {
+      this.addResult('test21_found', false, `Alice High not found via UUID query`);
+      return;
+    }
+
+    this.addResult('test21_found', true, `Alice High found via UUID query`);
+
+    // textMatchScore should equal relevanceScore (no function_score applied)
+    if (aliceHigh.textMatchScore === aliceHigh.relevanceScore) {
+      this.addResult('test21_equality', true,
+        `textMatchScore (${aliceHigh.textMatchScore}) === relevanceScore (${aliceHigh.relevanceScore}) — no score boost in UUID queries`);
+    } else {
+      this.addResult('test21_equality', false,
+        `textMatchScore (${aliceHigh.textMatchScore}) should equal relevanceScore (${aliceHigh.relevanceScore}) for UUID queries`);
+    }
+
+    // Both should be > 0
+    if (aliceHigh.relevanceScore! > 0 && aliceHigh.textMatchScore! > 0) {
+      this.addResult('test21_positive', true,
+        `Both scores are positive (relevance: ${aliceHigh.relevanceScore}, textMatch: ${aliceHigh.textMatchScore})`);
+    } else {
+      this.addResult('test21_positive', false,
+        `Scores should be positive — relevance: ${aliceHigh.relevanceScore}, textMatch: ${aliceHigh.textMatchScore}`);
+    }
+  }
+
+  /** Verifies score fields work correctly with SPACE scope (entity_space_score boost). */
+  async test22_SpaceScopeScoreFields(): Promise<void> {
+    console.log(`\n${BLUE}Test 22: SPACE scope — score fields use entity_space_score${NC}`);
+
+    const response = await this.search({
+      query: 'alice',
+      scope: 'SPACE',
+      space_id: TEST_ENTITIES.SPACE_ID,
+    });
+
+    if (response.results.length !== 7) {
+      this.addResult('test22_count', false, `Expected 7 Alice entities for SPACE scope, got ${response.results.length}`);
+      return;
+    }
+
+    // All results should have relevanceScore > 0 and textMatchScore >= 0
+    let allValid = true;
+    for (const r of response.results) {
+      if (typeof r.relevanceScore !== 'number' || r.relevanceScore <= 0) {
+        allValid = false;
+        this.addResult('test22_valid_scores', false,
+          `Entity ${r.entityId} has invalid relevanceScore: ${r.relevanceScore}`);
+        break;
+      }
+      if (typeof r.textMatchScore !== 'number' || r.textMatchScore < 0) {
+        allValid = false;
+        this.addResult('test22_valid_scores', false,
+          `Entity ${r.entityId} has invalid textMatchScore: ${r.textMatchScore}`);
+        break;
+      }
+    }
+    if (allValid) {
+      this.addResult('test22_valid_scores', true,
+        `All ${response.results.length} results have valid relevanceScore > 0 and textMatchScore >= 0`);
+    }
+
+    // relevanceScore >= textMatchScore for all results
+    const allRelevanceGte = response.results.every(r => r.relevanceScore! >= r.textMatchScore!);
+    if (allRelevanceGte) {
+      this.addResult('test22_relevance_gte_text', true,
+        `relevanceScore >= textMatchScore for all SPACE scope results`);
+    } else {
+      const bad = response.results.find(r => r.relevanceScore! < r.textMatchScore!);
+      this.addResult('test22_relevance_gte_text', false,
+        `Entity ${bad?.entityId}: relevanceScore (${bad?.relevanceScore}) < textMatchScore (${bad?.textMatchScore})`);
+    }
+
+    // relevanceScores should be in descending order
+    let isDescending = true;
+    for (let i = 0; i < response.results.length - 1; i++) {
+      if (response.results[i].relevanceScore! < response.results[i + 1].relevanceScore!) {
+        isDescending = false;
+        break;
+      }
+    }
+    if (isDescending) {
+      this.addResult('test22_descending', true,
+        `SPACE scope relevanceScores in descending order`);
+    } else {
+      this.addResult('test22_descending', false,
+        `SPACE scope relevanceScores not in descending order`);
+    }
+  }
+
   printSummary() {
     console.log(`\n${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}`);
 
@@ -966,6 +1399,13 @@ async function main() {
     await validator.test13_LWWBehavior();
     await validator.test14_IncludeDeletedFlag();
     await validator.test15_CreateEntityOp();
+    await validator.test16_RelevanceScoresDescendingOrder();
+    await validator.test17_TextMatchConsistencyForSameName();
+    await validator.test18_ScoreBoostOverridesWithEqualTextMatch();
+    await validator.test19_TextMatchOverpowersScoreBoost();
+    await validator.test20_EmptyQueryTextMatchScoreZero();
+    await validator.test21_UuidQueryScoreEquality();
+    await validator.test22_SpaceScopeScoreFields();
 
     const allPassed = validator.printSummary();
     process.exit(allPassed ? 0 : 1);
