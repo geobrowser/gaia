@@ -9,14 +9,14 @@
 
 import {SystemIds} from "@graphprotocol/grc-20"
 import {Effect} from "effect"
-import {type NormalizedUuid, normalizeUuid} from "../utils/uuid"
+import {type Uuid, toUuid} from "../utils/uuid"
 
 /**
  * Entity discovered via context metadata or relation lookup.
  */
 export interface DiscoveredEntity {
-	entityId: NormalizedUuid
-	contextEdgeTypeId: NormalizedUuid | null
+	entityId: Uuid
+	contextEdgeTypeId: Uuid | null
 	position: string | null
 }
 
@@ -25,11 +25,11 @@ export interface DiscoveredEntity {
  */
 export interface GroupedEntities {
 	/** Entities grouped under the static BLOCKS key */
-	blocks: NormalizedUuid[]
+	blocks: Uuid[]
 	/** Entities grouped under dynamic keys (key = relation type ID) */
-	dynamicGroups: Map<NormalizedUuid, NormalizedUuid[]>
+	dynamicGroups: Map<Uuid, Uuid[]>
 	/** List of dynamic group keys present (for discoverability) */
-	groupKeys: NormalizedUuid[]
+	groupKeys: Uuid[]
 }
 
 /**
@@ -47,12 +47,12 @@ export interface GroupedEntities {
  */
 export function groupEntitiesByContext(
 	entities: DiscoveredEntity[],
-	blocksTypeId: NormalizedUuid = normalizeUuid(SystemIds.BLOCKS),
+	blocksTypeId: Uuid = toUuid(SystemIds.BLOCKS),
 ): Effect.Effect<GroupedEntities, never, never> {
 	return Effect.sync(() => {
-		const blocks: NormalizedUuid[] = []
-		const dynamicGroups = new Map<NormalizedUuid, NormalizedUuid[]>()
-		const seen = new Set<NormalizedUuid>()
+		const blocks: Uuid[] = []
+		const dynamicGroups = new Map<Uuid, Uuid[]>()
+		const seen = new Set<Uuid>()
 
 		// Sort by position (nulls last) to maintain ordering
 		const sorted = [...entities].sort((a, b) => {
@@ -104,8 +104,8 @@ export function groupEntitiesByContext(
  */
 export function mergeDiscoveryResults(
 	contextEntities: DiscoveredEntity[],
-	relationEntities: Array<{entityId: NormalizedUuid; position: string | null}>,
-	_relationTypeId: NormalizedUuid,
+	relationEntities: Array<{entityId: Uuid; position: string | null}>,
+	_relationTypeId: Uuid,
 ): Effect.Effect<DiscoveredEntity[], never, never> {
 	return Effect.sync(() => {
 		// Context entities already have contextEdgeTypeId

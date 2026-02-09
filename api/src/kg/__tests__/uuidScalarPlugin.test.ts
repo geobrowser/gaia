@@ -3,8 +3,8 @@ import {Kind} from "graphql/language"
 import {describe, expect, it} from "vitest"
 import {patchUuidScalar} from "../uuidScalarPlugin"
 
-describe("UndashedUuidPlugin scalar patch", () => {
-	it("accepts dashed and undashed UUID inputs and normalizes to undashed lowercase", () => {
+describe("Base58UuidPlugin scalar patch", () => {
+	it("accepts dashed and undashed UUID inputs and normalizes to dashed lowercase", () => {
 		const scalar = new GraphQLScalarType({
 			name: "UUID",
 			serialize: (v) => String(v),
@@ -14,11 +14,11 @@ describe("UndashedUuidPlugin scalar patch", () => {
 
 		patchUuidScalar(scalar)
 
-		expect(scalar.parseValue("550E8400-E29B-41D4-A716-446655440000")).toBe("550e8400e29b41d4a716446655440000")
-		expect(scalar.parseValue("550e8400e29b41d4a716446655440000")).toBe("550e8400e29b41d4a716446655440000")
+		expect(scalar.parseValue("550E8400-E29B-41D4-A716-446655440000")).toBe("550e8400-e29b-41d4-a716-446655440000")
+		expect(scalar.parseValue("550e8400e29b41d4a716446655440000")).toBe("550e8400-e29b-41d4-a716-446655440000")
 	})
 
-	it("serializes UUID outputs without dashes (undashed lowercase)", () => {
+	it("serializes UUID outputs as Base58", () => {
 		const scalar = new GraphQLScalarType({
 			name: "UUID",
 			serialize: (v) => String(v),
@@ -28,7 +28,12 @@ describe("UndashedUuidPlugin scalar patch", () => {
 
 		patchUuidScalar(scalar)
 
-		expect(scalar.serialize("550e8400-e29b-41d4-a716-446655440000")).toBe("550e8400e29b41d4a716446655440000")
+		// serialize should produce Base58
+		const result = scalar.serialize("550e8400-e29b-41d4-a716-446655440000")
+		expect(typeof result).toBe("string")
+		// Base58 output should NOT contain dashes and should be shorter than 36 chars
+		expect(result).not.toContain("-")
+		expect((result as string).length).toBeLessThanOrEqual(22)
 	})
 
 	it("rejects non-string input values", () => {
@@ -57,7 +62,7 @@ describe("UndashedUuidPlugin scalar patch", () => {
 		expect(() => scalar.parseLiteral({kind: Kind.INT, value: "123"} as any)).toThrow(/parse string/i)
 	})
 
-	it("accepts dashed and undashed UUID literals and normalizes to undashed lowercase", () => {
+	it("accepts dashed and undashed UUID literals and normalizes to dashed lowercase", () => {
 		const scalar = new GraphQLScalarType({
 			name: "UUID",
 			serialize: (v) => String(v),
@@ -68,10 +73,10 @@ describe("UndashedUuidPlugin scalar patch", () => {
 		patchUuidScalar(scalar)
 
 		expect(scalar.parseLiteral({kind: Kind.STRING, value: "550E8400-E29B-41D4-A716-446655440000"})).toBe(
-			"550e8400e29b41d4a716446655440000",
+			"550e8400-e29b-41d4-a716-446655440000",
 		)
 		expect(scalar.parseLiteral({kind: Kind.STRING, value: "550e8400e29b41d4a716446655440000"})).toBe(
-			"550e8400e29b41d4a716446655440000",
+			"550e8400-e29b-41d4-a716-446655440000",
 		)
 	})
 

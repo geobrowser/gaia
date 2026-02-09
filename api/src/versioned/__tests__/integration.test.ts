@@ -23,7 +23,7 @@ import {Hono} from "hono"
 import {Pool} from "pg"
 import {afterAll, beforeAll, describe, expect, it} from "vitest"
 import {runtime} from "../../services/runtime"
-import {normalizeUuid} from "../../utils/uuid"
+import {toUuid} from "../../utils/uuid"
 import {createVersionedRouter} from "../router"
 
 // Skip integration tests if DATABASE_URL is not set
@@ -36,95 +36,95 @@ const SKIP_INTEGRATION = !DATABASE_URL
 
 const uuid = {
 	// Spaces
-	space1: normalizeUuid("10000000-0001-4000-8000-000000000001"),
-	space2: normalizeUuid("10000000-0001-4000-8000-000000000002"),
+	space1: toUuid("10000000-0001-4000-8000-000000000001"),
+	space2: toUuid("10000000-0001-4000-8000-000000000002"),
 
 	// Entities
-	entityAllTypes: normalizeUuid("10000000-0002-4000-8000-000000000001"), // Has all 13 value types
-	entityWithRelations: normalizeUuid("10000000-0002-4000-8000-000000000002"),
-	entityWithBlocks: normalizeUuid("10000000-0002-4000-8000-000000000003"),
-	entityChanging: normalizeUuid("10000000-0002-4000-8000-000000000004"), // Changes between versions
-	entityDeleted: normalizeUuid("10000000-0002-4000-8000-000000000005"), // Deleted at v2
-	entityCreatedLater: normalizeUuid("10000000-0002-4000-8000-000000000006"), // Created at v2
-	entityNonExistent: normalizeUuid("10000000-0002-4000-8000-000000000999"),
+	entityAllTypes: toUuid("10000000-0002-4000-8000-000000000001"), // Has all 13 value types
+	entityWithRelations: toUuid("10000000-0002-4000-8000-000000000002"),
+	entityWithBlocks: toUuid("10000000-0002-4000-8000-000000000003"),
+	entityChanging: toUuid("10000000-0002-4000-8000-000000000004"), // Changes between versions
+	entityDeleted: toUuid("10000000-0002-4000-8000-000000000005"), // Deleted at v2
+	entityCreatedLater: toUuid("10000000-0002-4000-8000-000000000006"), // Created at v2
+	entityNonExistent: toUuid("10000000-0002-4000-8000-000000000999"),
 
 	// Block entities (linked via BLOCKS relation)
-	blockText1: normalizeUuid("10000000-0003-4000-8000-000000000001"),
-	blockText2: normalizeUuid("10000000-0003-4000-8000-000000000002"),
-	blockImage: normalizeUuid("10000000-0003-4000-8000-000000000003"),
-	blockData: normalizeUuid("10000000-0003-4000-8000-000000000004"),
+	blockText1: toUuid("10000000-0003-4000-8000-000000000001"),
+	blockText2: toUuid("10000000-0003-4000-8000-000000000002"),
+	blockImage: toUuid("10000000-0003-4000-8000-000000000003"),
+	blockData: toUuid("10000000-0003-4000-8000-000000000004"),
 
 	// Entity with dynamic groups (non-BLOCKS context)
-	entityWithDynamicGroups: normalizeUuid("10000000-0002-4000-8000-000000000007"),
+	entityWithDynamicGroups: toUuid("10000000-0002-4000-8000-000000000007"),
 	// Child entities for dynamic groups
-	dynamicChildA1: normalizeUuid("10000000-0003-4000-8000-000000000005"),
-	dynamicChildA2: normalizeUuid("10000000-0003-4000-8000-000000000006"),
-	dynamicChildB1: normalizeUuid("10000000-0003-4000-8000-000000000007"),
+	dynamicChildA1: toUuid("10000000-0003-4000-8000-000000000005"),
+	dynamicChildA2: toUuid("10000000-0003-4000-8000-000000000006"),
+	dynamicChildB1: toUuid("10000000-0003-4000-8000-000000000007"),
 
 	// Properties (custom test properties)
-	propText: normalizeUuid("10000000-0004-4000-8000-000000000001"),
-	propBool: normalizeUuid("10000000-0004-4000-8000-000000000002"),
-	propInt: normalizeUuid("10000000-0004-4000-8000-000000000003"),
-	propFloat: normalizeUuid("10000000-0004-4000-8000-000000000004"),
-	propDecimal: normalizeUuid("10000000-0004-4000-8000-000000000005"),
-	propBytes: normalizeUuid("10000000-0004-4000-8000-000000000006"),
-	propDate: normalizeUuid("10000000-0004-4000-8000-000000000007"),
-	propTime: normalizeUuid("10000000-0004-4000-8000-000000000008"),
-	propDatetime: normalizeUuid("10000000-0004-4000-8000-000000000009"),
-	propSchedule: normalizeUuid("10000000-0004-4000-8000-000000000010"),
-	propPoint: normalizeUuid("10000000-0004-4000-8000-000000000011"),
-	propRect: normalizeUuid("10000000-0004-4000-8000-000000000012"),
-	propEmbedding: normalizeUuid("10000000-0004-4000-8000-000000000013"),
+	propText: toUuid("10000000-0004-4000-8000-000000000001"),
+	propBool: toUuid("10000000-0004-4000-8000-000000000002"),
+	propInt: toUuid("10000000-0004-4000-8000-000000000003"),
+	propFloat: toUuid("10000000-0004-4000-8000-000000000004"),
+	propDecimal: toUuid("10000000-0004-4000-8000-000000000005"),
+	propBytes: toUuid("10000000-0004-4000-8000-000000000006"),
+	propDate: toUuid("10000000-0004-4000-8000-000000000007"),
+	propTime: toUuid("10000000-0004-4000-8000-000000000008"),
+	propDatetime: toUuid("10000000-0004-4000-8000-000000000009"),
+	propSchedule: toUuid("10000000-0004-4000-8000-000000000010"),
+	propPoint: toUuid("10000000-0004-4000-8000-000000000011"),
+	propRect: toUuid("10000000-0004-4000-8000-000000000012"),
+	propEmbedding: toUuid("10000000-0004-4000-8000-000000000013"),
 
 	// System properties (from GRC-20)
-	propName: normalizeUuid(SystemIds.NAME_PROPERTY),
-	propMarkdownContent: normalizeUuid(SystemIds.MARKDOWN_CONTENT),
-	propImageUrl: normalizeUuid(SystemIds.IMAGE_URL_PROPERTY),
-	propTypesProperty: normalizeUuid(SystemIds.TYPES_PROPERTY),
+	propName: toUuid(SystemIds.NAME_PROPERTY),
+	propMarkdownContent: toUuid(SystemIds.MARKDOWN_CONTENT),
+	propImageUrl: toUuid(SystemIds.IMAGE_URL_PROPERTY),
+	propTypesProperty: toUuid(SystemIds.TYPES_PROPERTY),
 
 	// Block type entities (from GRC-20)
-	textBlockType: normalizeUuid(SystemIds.TEXT_BLOCK),
-	imageBlockType: normalizeUuid(SystemIds.IMAGE_BLOCK),
-	dataBlockType: normalizeUuid(SystemIds.DATA_BLOCK),
+	textBlockType: toUuid(SystemIds.TEXT_BLOCK),
+	imageBlockType: toUuid(SystemIds.IMAGE_BLOCK),
+	dataBlockType: toUuid(SystemIds.DATA_BLOCK),
 
 	// Relation types
-	relTypeGeneric: normalizeUuid("10000000-0005-4000-8000-000000000001"),
-	relTypeBlocks: normalizeUuid(SystemIds.BLOCKS), // Must use real BLOCKS type ID for block grouping to work
-	relTypeCustomA: normalizeUuid("10000000-0005-4000-8000-000000000003"), // Custom type for dynamic grouping
-	relTypeCustomB: normalizeUuid("10000000-0005-4000-8000-000000000004"), // Another custom type
+	relTypeGeneric: toUuid("10000000-0005-4000-8000-000000000001"),
+	relTypeBlocks: toUuid(SystemIds.BLOCKS), // Must use real BLOCKS type ID for block grouping to work
+	relTypeCustomA: toUuid("10000000-0005-4000-8000-000000000003"), // Custom type for dynamic grouping
+	relTypeCustomB: toUuid("10000000-0005-4000-8000-000000000004"), // Another custom type
 
 	// Relations
-	rel1: normalizeUuid("10000000-0006-4000-8000-000000000001"),
-	rel2: normalizeUuid("10000000-0006-4000-8000-000000000002"),
-	relCrossSpace: normalizeUuid("10000000-0006-4000-8000-000000000003"),
-	relPositioned: normalizeUuid("10000000-0006-4000-8000-000000000004"),
-	relBlock1: normalizeUuid("10000000-0006-4000-8000-000000000005"),
-	relBlock2: normalizeUuid("10000000-0006-4000-8000-000000000006"),
-	relBlockImage: normalizeUuid("10000000-0006-4000-8000-000000000007"),
-	relBlockData: normalizeUuid("10000000-0006-4000-8000-000000000008"),
+	rel1: toUuid("10000000-0006-4000-8000-000000000001"),
+	rel2: toUuid("10000000-0006-4000-8000-000000000002"),
+	relCrossSpace: toUuid("10000000-0006-4000-8000-000000000003"),
+	relPositioned: toUuid("10000000-0006-4000-8000-000000000004"),
+	relBlock1: toUuid("10000000-0006-4000-8000-000000000005"),
+	relBlock2: toUuid("10000000-0006-4000-8000-000000000006"),
+	relBlockImage: toUuid("10000000-0006-4000-8000-000000000007"),
+	relBlockData: toUuid("10000000-0006-4000-8000-000000000008"),
 	// Type relations for blocks (to identify block type)
-	relBlock1Type: normalizeUuid("10000000-0006-4000-8000-000000000009"),
-	relBlock2Type: normalizeUuid("10000000-0006-4000-8000-000000000010"),
-	relBlockImageType: normalizeUuid("10000000-0006-4000-8000-000000000011"),
-	relBlockDataType: normalizeUuid("10000000-0006-4000-8000-000000000012"),
+	relBlock1Type: toUuid("10000000-0006-4000-8000-000000000009"),
+	relBlock2Type: toUuid("10000000-0006-4000-8000-000000000010"),
+	relBlockImageType: toUuid("10000000-0006-4000-8000-000000000011"),
+	relBlockDataType: toUuid("10000000-0006-4000-8000-000000000012"),
 	// Relations for dynamic grouping (custom types, not BLOCKS)
-	relDynamicA1: normalizeUuid("10000000-0006-4000-8000-000000000013"),
-	relDynamicA2: normalizeUuid("10000000-0006-4000-8000-000000000014"),
-	relDynamicB1: normalizeUuid("10000000-0006-4000-8000-000000000015"),
+	relDynamicA1: toUuid("10000000-0006-4000-8000-000000000013"),
+	relDynamicA2: toUuid("10000000-0006-4000-8000-000000000014"),
+	relDynamicB1: toUuid("10000000-0006-4000-8000-000000000015"),
 
 	// Edits (versions)
-	edit1: normalizeUuid("10000000-0007-4000-8000-000000000001"), // Version 1
-	edit2: normalizeUuid("10000000-0007-4000-8000-000000000002"), // Version 2
-	edit3: normalizeUuid("10000000-0007-4000-8000-000000000003"), // Version 3
+	edit1: toUuid("10000000-0007-4000-8000-000000000001"), // Version 1
+	edit2: toUuid("10000000-0007-4000-8000-000000000002"), // Version 2
+	edit3: toUuid("10000000-0007-4000-8000-000000000003"), // Version 3
 
 	// Proposals
-	proposalActive: normalizeUuid("10000000-0008-4000-8000-000000000001"),
-	proposalClosed: normalizeUuid("10000000-0008-4000-8000-000000000002"),
-	proposalExecuted: normalizeUuid("10000000-0008-4000-8000-000000000003"),
-	proposalNoPublish: normalizeUuid("10000000-0008-4000-8000-000000000004"),
+	proposalActive: toUuid("10000000-0008-4000-8000-000000000001"),
+	proposalClosed: toUuid("10000000-0008-4000-8000-000000000002"),
+	proposalExecuted: toUuid("10000000-0008-4000-8000-000000000003"),
+	proposalNoPublish: toUuid("10000000-0008-4000-8000-000000000004"),
 
 	// Value IDs (for value_versions)
-	val: (n: number) => normalizeUuid(`10000000-0009-4000-8000-${n.toString().padStart(12, "0")}`),
+	val: (n: number) => toUuid(`10000000-0009-4000-8000-${n.toString().padStart(12, "0")}`),
 }
 
 // Version keys: (block_number << 32) | sequence
@@ -759,40 +759,40 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 	// regressions where Postgres dashed UUIDs leak through.
 	// ==========================================================================
 
-	describe("UUID Format - all responses use dashless UUIDs", () => {
-		const DASHLESS_UUID = /^[0-9a-f]{32}$/
+	describe("UUID Format - all responses use dashed lowercase hex UUIDs", () => {
+		const DASHED_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
 
-		function expectDashlessUuid(value: unknown, field: string): void {
-			expect(value, `${field} should be a dashless UUID but got: ${value}`).toMatch(DASHLESS_UUID)
+		function expectDashedUuid(value: unknown, field: string): void {
+			expect(value, `${field} should be a dashed UUID but got: ${value}`).toMatch(DASHED_UUID)
 		}
 
-		function expectOptionalDashlessUuid(value: unknown, field: string): void {
+		function expectOptionalDashedUuid(value: unknown, field: string): void {
 			if (value !== null && value !== undefined) {
-				expectDashlessUuid(value, field)
+				expectDashedUuid(value, field)
 			}
 		}
 
 		function assertValueUuids(v: any, prefix: string): void {
-			expectDashlessUuid(v.propertyId, `${prefix}.propertyId`)
-			expectDashlessUuid(v.spaceId, `${prefix}.spaceId`)
-			expectOptionalDashlessUuid(v.contextRootId, `${prefix}.contextRootId`)
-			expectOptionalDashlessUuid(v.contextEdgeTypeId, `${prefix}.contextEdgeTypeId`)
+			expectDashedUuid(v.propertyId, `${prefix}.propertyId`)
+			expectDashedUuid(v.spaceId, `${prefix}.spaceId`)
+			expectOptionalDashedUuid(v.contextRootId, `${prefix}.contextRootId`)
+			expectOptionalDashedUuid(v.contextEdgeTypeId, `${prefix}.contextEdgeTypeId`)
 		}
 
 		function assertRelationUuids(r: any, prefix: string): void {
-			expectDashlessUuid(r.relationId, `${prefix}.relationId`)
-			expectDashlessUuid(r.typeId, `${prefix}.typeId`)
-			expectDashlessUuid(r.fromEntityId, `${prefix}.fromEntityId`)
-			expectOptionalDashlessUuid(r.fromSpaceId, `${prefix}.fromSpaceId`)
-			expectDashlessUuid(r.toEntityId, `${prefix}.toEntityId`)
-			expectOptionalDashlessUuid(r.toSpaceId, `${prefix}.toSpaceId`)
-			expectDashlessUuid(r.spaceId, `${prefix}.spaceId`)
-			expectOptionalDashlessUuid(r.contextRootId, `${prefix}.contextRootId`)
-			expectOptionalDashlessUuid(r.contextEdgeTypeId, `${prefix}.contextEdgeTypeId`)
+			expectDashedUuid(r.relationId, `${prefix}.relationId`)
+			expectDashedUuid(r.typeId, `${prefix}.typeId`)
+			expectDashedUuid(r.fromEntityId, `${prefix}.fromEntityId`)
+			expectOptionalDashedUuid(r.fromSpaceId, `${prefix}.fromSpaceId`)
+			expectDashedUuid(r.toEntityId, `${prefix}.toEntityId`)
+			expectOptionalDashedUuid(r.toSpaceId, `${prefix}.toSpaceId`)
+			expectDashedUuid(r.spaceId, `${prefix}.spaceId`)
+			expectOptionalDashedUuid(r.contextRootId, `${prefix}.contextRootId`)
+			expectOptionalDashedUuid(r.contextEdgeTypeId, `${prefix}.contextEdgeTypeId`)
 		}
 
 		function assertBlockSnapshotUuids(b: any, prefix: string): void {
-			expectDashlessUuid(b.id, `${prefix}.id`)
+			expectDashedUuid(b.id, `${prefix}.id`)
 			for (let i = 0; i < b.values.length; i++) {
 				assertValueUuids(b.values[i], `${prefix}.values[${i}]`)
 			}
@@ -802,30 +802,30 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 		}
 
 		function assertValueChangeUuids(v: any, prefix: string): void {
-			expectDashlessUuid(v.propertyId, `${prefix}.propertyId`)
-			expectDashlessUuid(v.spaceId, `${prefix}.spaceId`)
+			expectDashedUuid(v.propertyId, `${prefix}.propertyId`)
+			expectDashedUuid(v.spaceId, `${prefix}.spaceId`)
 		}
 
 		function assertRelationChangeUuids(r: any, prefix: string): void {
-			expectDashlessUuid(r.relationId, `${prefix}.relationId`)
-			expectDashlessUuid(r.typeId, `${prefix}.typeId`)
-			expectDashlessUuid(r.spaceId, `${prefix}.spaceId`)
+			expectDashedUuid(r.relationId, `${prefix}.relationId`)
+			expectDashedUuid(r.typeId, `${prefix}.typeId`)
+			expectDashedUuid(r.spaceId, `${prefix}.spaceId`)
 			if (r.before) {
-				expectDashlessUuid(r.before.toEntityId, `${prefix}.before.toEntityId`)
-				expectOptionalDashlessUuid(r.before.toSpaceId, `${prefix}.before.toSpaceId`)
+				expectDashedUuid(r.before.toEntityId, `${prefix}.before.toEntityId`)
+				expectOptionalDashedUuid(r.before.toSpaceId, `${prefix}.before.toSpaceId`)
 			}
 			if (r.after) {
-				expectDashlessUuid(r.after.toEntityId, `${prefix}.after.toEntityId`)
-				expectOptionalDashlessUuid(r.after.toSpaceId, `${prefix}.after.toSpaceId`)
+				expectDashedUuid(r.after.toEntityId, `${prefix}.after.toEntityId`)
+				expectOptionalDashedUuid(r.after.toSpaceId, `${prefix}.after.toSpaceId`)
 			}
 		}
 
 		function assertBlockChangeUuids(b: any, prefix: string): void {
-			expectDashlessUuid(b.id, `${prefix}.id`)
+			expectDashedUuid(b.id, `${prefix}.id`)
 		}
 
 		function assertEntityDiffUuids(d: any, prefix: string): void {
-			expectDashlessUuid(d.entityId, `${prefix}.entityId`)
+			expectDashedUuid(d.entityId, `${prefix}.entityId`)
 			for (let i = 0; i < d.values.length; i++) {
 				assertValueChangeUuids(d.values[i], `${prefix}.values[${i}]`)
 			}
@@ -837,7 +837,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 			}
 		}
 
-		it("entity snapshot: id, values, relations, blocks all dashless", async () => {
+		it("entity snapshot: id, values, relations, blocks all dashed", async () => {
 			const res = await app.request(
 				`/versioned/entities/${uuid.entityWithBlocks}?editId=${uuid.edit1}&spaceId=${uuid.space1}`,
 			)
@@ -845,7 +845,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 			const body = await res.json()
 
 			// EntitySnapshot.id
-			expectDashlessUuid(body.id, "id")
+			expectDashedUuid(body.id, "id")
 
 			// EntitySnapshot.values[]
 			for (let i = 0; i < body.values.length; i++) {
@@ -863,7 +863,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 			}
 		})
 
-		it("entity snapshot with relations: all relation UUID fields dashless", async () => {
+		it("entity snapshot with relations: all relation UUID fields dashed", async () => {
 			const res = await app.request(
 				`/versioned/entities/${uuid.entityWithRelations}?editId=${uuid.edit1}&spaceId=${uuid.space1}`,
 			)
@@ -876,7 +876,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 			}
 		})
 
-		it("entity diff: entityId, value changes, relation changes, block changes all dashless", async () => {
+		it("entity diff: entityId, value changes, relation changes, block changes all dashed", async () => {
 			const res = await app.request(
 				`/versioned/entities/${uuid.entityChanging}/diff?fromEditId=${uuid.edit1}&toEditId=${uuid.edit2}&spaceId=${uuid.space1}`,
 			)
@@ -884,7 +884,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 			const body = await res.json()
 
 			// GroupedEntityDiff top-level
-			expectDashlessUuid(body.entityId, "entityId")
+			expectDashedUuid(body.entityId, "entityId")
 
 			// ValueChange[]
 			for (let i = 0; i < body.values.length; i++) {
@@ -903,29 +903,29 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 
 			// GroupedEntityDiff.groupKeys[]
 			for (let i = 0; i < body.groupKeys.length; i++) {
-				expectDashlessUuid(body.groupKeys[i], `groupKeys[${i}]`)
+				expectDashedUuid(body.groupKeys[i], `groupKeys[${i}]`)
 			}
 		})
 
-		it("entity versions: editId is dashless", async () => {
+		it("entity versions: editId is dashed", async () => {
 			const res = await app.request(`/versioned/entities/${uuid.entityAllTypes}/versions?spaceId=${uuid.space1}`)
 			expect(res.status).toBe(200)
 			const body = await res.json()
 
 			expect(body.versions.length).toBeGreaterThan(0)
 			for (let i = 0; i < body.versions.length; i++) {
-				expectDashlessUuid(body.versions[i].editId, `versions[${i}].editId`)
+				expectDashedUuid(body.versions[i].editId, `versions[${i}].editId`)
 			}
 		})
 
-		it("proposal diff: proposalId, spaceId, entity diffs all dashless", async () => {
+		it("proposal diff: proposalId, spaceId, entity diffs all dashed", async () => {
 			const res = await app.request(`/versioned/proposals/${uuid.proposalActive}/diff?spaceId=${uuid.space1}`)
 			expect(res.status).toBe(200)
 			const body = await res.json()
 
 			// PaginatedProposalDiff top-level
-			expectDashlessUuid(body.proposalId, "proposalId")
-			expectDashlessUuid(body.spaceId, "spaceId")
+			expectDashedUuid(body.proposalId, "proposalId")
+			expectDashedUuid(body.spaceId, "spaceId")
 
 			// PaginatedProposalDiff.entities[]
 			for (let i = 0; i < body.entities.length; i++) {

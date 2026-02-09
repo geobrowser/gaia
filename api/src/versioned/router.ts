@@ -18,7 +18,7 @@ type AppEnv = {
 	}
 }
 
-import {isValidUuid, normalizeUuid} from "../utils/uuid"
+import {isValidUuid, toUuid} from "../utils/uuid"
 import {diffGroupedEntitySnapshots} from "./diff"
 import type {
 	EditBlobNotCachedError,
@@ -185,9 +185,9 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 					return yield* Effect.fail(new ValidationError({message: "spaceId must be a valid UUID"}))
 				}
 
-				const entityId = normalizeUuid(rawEntityId)
-				const editId = normalizeUuid(rawEditId)
-				const spaceId = rawSpaceId ? normalizeUuid(rawSpaceId) : undefined
+				const entityId = toUuid(rawEntityId)
+				const editId = toUuid(rawEditId)
+				const spaceId = rawSpaceId ? toUuid(rawSpaceId) : undefined
 
 				// Resolve edit to version key
 				const versionKey = yield* resolveVersionKey(db, editId)
@@ -343,8 +343,8 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 					return yield* Effect.fail(new ValidationError({message: "spaceId must be a valid UUID"}))
 				}
 
-				const entityId = normalizeUuid(rawEntityId)
-				const spaceId = rawSpaceId ? normalizeUuid(rawSpaceId) : undefined
+				const entityId = toUuid(rawEntityId)
+				const spaceId = rawSpaceId ? toUuid(rawSpaceId) : undefined
 
 				// Parse and validate limit
 				let limit = 50
@@ -543,10 +543,10 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 					return yield* Effect.fail(new ValidationError({message: "spaceId must be a valid UUID"}))
 				}
 
-				const entityId = normalizeUuid(rawEntityId)
-				const fromEditId = normalizeUuid(rawFromEditId)
-				const toEditId = normalizeUuid(rawToEditId)
-				const spaceId = normalizeUuid(rawSpaceId)
+				const entityId = toUuid(rawEntityId)
+				const fromEditId = toUuid(rawFromEditId)
+				const toEditId = toUuid(rawToEditId)
+				const spaceId = toUuid(rawSpaceId)
 
 				// Resolve both edits to version keys
 				const [fromVersionKey, toVersionKey] = yield* Effect.all([
@@ -737,8 +737,8 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 					return yield* Effect.fail(new ValidationError({message: "spaceId must be a valid UUID"}))
 				}
 
-				const proposalId = normalizeUuid(rawProposalId)
-				const spaceId = normalizeUuid(rawSpaceId)
+				const proposalId = toUuid(rawProposalId)
+				const spaceId = toUuid(rawSpaceId)
 
 				// Parse and validate limit
 				let limit = 50

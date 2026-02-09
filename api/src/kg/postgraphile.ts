@@ -7,7 +7,7 @@ import {createPostGraphileSchema} from "postgraphile"
 import ConnectionFilterPlugin from "postgraphile-plugin-connection-filter"
 import EntitySpaceFilterPlugin from "./entitySpaceFilterPlugin"
 import {useGraphQLInstrumentation} from "./instrumentationPlugin"
-import UndashedUuidPlugin from "./uuidScalarPlugin"
+import Base58UuidPlugin from "./uuidScalarPlugin"
 import ValueScalarsPlugin from "./valueScalarsPlugin"
 
 // Server context passed from HTTP middleware
@@ -45,15 +45,15 @@ const postgraphileOptions = {
 	setofFunctionsContainNulls: false,
 	ignoreRBAC: false,
 	// NOTE: Plugin order is intentional:
-	// - UndashedUuidPlugin patches the UUID scalar first so that all subsequent
+	// - Base58UuidPlugin patches the UUID scalar first so that all subsequent
 	//   plugins (including ConnectionFilterPlugin) build their types against the
-	//   undashed UUID behavior. This has been verified to work with both dashed
-	//   and undashed UUID inputs in filters.
+	//   Base58 UUID behavior. This has been verified to work with dashed hex,
+	//   undashed hex, and Base58 UUID inputs in filters.
 	// - ValueScalarsPlugin registers custom scalars (GeoPoint, GeoRect, Date, etc.)
 	//   and remaps Value fields to use them for self-documenting schema
 	// - EntitySpaceFilterPlugin adds efficient spaceId filter using EXISTS instead of computed column
 	appendPlugins: [
-		UndashedUuidPlugin,
+		Base58UuidPlugin,
 		ValueScalarsPlugin,
 		ConnectionFilterPlugin,
 		SimplifyInflectionPlugin,

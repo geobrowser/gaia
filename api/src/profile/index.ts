@@ -13,7 +13,7 @@ import {Hono} from "hono"
 import {describeRoute} from "hono-openapi"
 
 import type {AppRuntime} from "../services/runtime"
-import {isValidUuid, normalizeUuid, toDashedUuid} from "../utils/uuid"
+import {isValidUuid, toBase58, toUuid} from "../utils/uuid"
 import {
 	defaultProfile,
 	getProfileByAddress,
@@ -222,18 +222,18 @@ export function createProfileRouter(db: Database, runtime: AppRuntime) {
 					return yield* Effect.fail(new ValidationError({message: "Space ID must be a valid UUID"}))
 				}
 
-				// Normalize: dashed for DB query, undashed for API response
-				const dashedSpaceId = toDashedUuid(spaceId)
-				const undashedSpaceId = normalizeUuid(spaceId)
+				// Normalize to dashed hex for DB query
+				const uuid = toUuid(spaceId)
+				const base58SpaceId = toBase58(uuid)
 
 				// Fetch profile
-				const profile = yield* getProfileBySpaceId(db, dashedSpaceId)
+				const profile = yield* getProfileBySpaceId(db, uuid)
 
-				const result = profile ?? defaultProfile(undashedSpaceId, undashedSpaceId)
+				const result = profile ?? defaultProfile(base58SpaceId, base58SpaceId)
 				const found = profile !== null
 
 				yield* Effect.logInfo("Profile fetched by space ID", {
-					spaceId: undashedSpaceId,
+					spaceId: base58SpaceId,
 					found,
 					hasName: result.name !== null,
 					hasAvatar: result.avatarUrl !== null,
@@ -362,15 +362,15 @@ export function createProfileRouter(db: Database, runtime: AppRuntime) {
 					return yield* Effect.fail(new ValidationError({message: "Invalid space ID format in request"}))
 				}
 
-				// Normalize UUIDs: dashed for DB query, undashed for Map lookup and API response
-				const dashedSpaceIds = (spaceIds as string[]).map(toDashedUuid)
-				const undashedSpaceIds = (spaceIds as string[]).map(normalizeUuid)
+				// Normalize UUIDs: dashed hex for DB query, Base58 for Map lookup and API response
+				const uuids = (spaceIds as string[]).map(toUuid)
+				const base58SpaceIds = uuids.map(toBase58)
 
-				// Fetch profiles (Map keys will be undashed from mapProfileRow)
-				const profileMap = yield* getProfilesBySpaceIds(db, dashedSpaceIds)
+				// Fetch profiles (Map keys will be Base58 from mapProfileRow)
+				const profileMap = yield* getProfilesBySpaceIds(db, uuids)
 
 				// Return profiles in the same order as input, with defaults for missing
-				const profiles = undashedSpaceIds.map((id) => profileMap.get(id) ?? defaultProfile(id, id))
+				const profiles = base58SpaceIds.map((id) => profileMap.get(id) ?? defaultProfile(id, id))
 				const foundCount = profileMap.size
 
 				yield* Effect.logInfo("Batch profile fetch completed", {

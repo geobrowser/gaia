@@ -8,8 +8,6 @@
  * (variable length — leading zero bytes produce shorter output, no padding).
  */
 
-import type {NormalizedUuid} from "./uuid"
-
 const BASE58_ALPHABET = "123456789ABCDEFGHJKLMNPQRSTUVWXYZabcdefghijkmnopqrstuvwxyz"
 
 // Lookup table: char code → alphabet index (255 = invalid)
@@ -19,13 +17,15 @@ for (let i = 0; i < BASE58_ALPHABET.length; i++) {
 }
 
 /**
- * Encode a dashless hex UUID to Base58.
+ * Encode a dashless hex string to Base58.
  *
  * Matches the Rust `encode_uuid_to_base58` implementation exactly:
  * no zero-padding, empty string for zero value.
+ *
+ * @param dashlessHex - 32-char lowercase hex string (no dashes)
  */
-export function encodeBase58(uuid: NormalizedUuid): string {
-	let remainder = hexToBigInt(uuid)
+export function encodeBase58(dashlessHex: string): string {
+	let remainder = hexToBigInt(dashlessHex)
 	if (remainder === 0n) return ""
 
 	const chars: string[] = []
@@ -40,14 +40,13 @@ export function encodeBase58(uuid: NormalizedUuid): string {
 }
 
 /**
- * Decode a Base58 string to a dashless hex UUID (NormalizedUuid).
+ * Decode a Base58 string to a dashless hex string (32 chars, zero-padded).
  *
- * Matches the Rust `decode_base58_to_uuid` implementation exactly:
- * output is zero-padded to 32 hex chars.
+ * Matches the Rust `decode_base58_to_uuid` implementation exactly.
  *
  * @throws if the input contains invalid Base58 characters or is empty
  */
-export function decodeBase58(encoded: string): NormalizedUuid {
+export function decodeBase58(encoded: string): string {
 	if (encoded.length === 0) {
 		throw new Error("Invalid Base58: empty string")
 	}
@@ -70,8 +69,7 @@ export function decodeBase58(encoded: string): NormalizedUuid {
 		throw new Error("Invalid Base58: value exceeds 128-bit UUID range")
 	}
 
-	const hex = decoded.toString(16).padStart(32, "0")
-	return hex as NormalizedUuid
+	return decoded.toString(16).padStart(32, "0")
 }
 
 /**

@@ -8,7 +8,7 @@ import {SystemIds} from "@graphprotocol/grc-20"
 import {sql} from "drizzle-orm"
 import type {NodePgDatabase} from "drizzle-orm/node-postgres"
 import {Effect} from "effect"
-import {type NormalizedUuid, normalizeUuid} from "../utils/uuid"
+import {type Uuid, toUuid} from "../utils/uuid"
 import {type DiscoveredEntity, type GroupedEntities, groupEntitiesByContext, mergeDiscoveryResults} from "./grouping"
 import type {
 	BlockSnapshot,
@@ -29,7 +29,7 @@ export class QueryError {
 }
 
 // The BLOCKS relation type ID from GRC-20, normalized for comparison with DB output
-const BLOCKS_TYPE_ID = normalizeUuid(SystemIds.BLOCKS)
+const BLOCKS_TYPE_ID = toUuid(SystemIds.BLOCKS)
 
 // Generic database type
 type Database = NodePgDatabase<Record<string, unknown>>
@@ -44,8 +44,8 @@ type Database = NodePgDatabase<Record<string, unknown>>
  */
 export function mapValueRow(row: Record<string, unknown>): VersionedValue {
 	return {
-		propertyId: normalizeUuid(row.property_id as string),
-		spaceId: normalizeUuid(row.space_id as string),
+		propertyId: toUuid(row.property_id as string),
+		spaceId: toUuid(row.space_id as string),
 		boolean: row.boolean as boolean | null,
 		integer: row.integer as number | null,
 		float: row.float as number | null,
@@ -61,8 +61,8 @@ export function mapValueRow(row: Record<string, unknown>): VersionedValue {
 		embedding: row.embedding as unknown | null,
 		language: row.language as string | null,
 		unit: row.unit as string | null,
-		contextRootId: row.context_root_id ? normalizeUuid(row.context_root_id as string) : null,
-		contextEdgeTypeId: row.context_edge_type_id ? normalizeUuid(row.context_edge_type_id as string) : null,
+		contextRootId: row.context_root_id ? toUuid(row.context_root_id as string) : null,
+		contextEdgeTypeId: row.context_edge_type_id ? toUuid(row.context_edge_type_id as string) : null,
 	}
 }
 
@@ -72,17 +72,17 @@ export function mapValueRow(row: Record<string, unknown>): VersionedValue {
  */
 export function mapRelationRow(row: Record<string, unknown>): VersionedRelation {
 	return {
-		relationId: normalizeUuid(row.relation_id as string),
-		typeId: normalizeUuid(row.type_id as string),
-		fromEntityId: normalizeUuid(row.from_entity_id as string),
-		fromSpaceId: row.from_space_id ? normalizeUuid(row.from_space_id as string) : null,
-		toEntityId: normalizeUuid(row.to_entity_id as string),
-		toSpaceId: row.to_space_id ? normalizeUuid(row.to_space_id as string) : null,
+		relationId: toUuid(row.relation_id as string),
+		typeId: toUuid(row.type_id as string),
+		fromEntityId: toUuid(row.from_entity_id as string),
+		fromSpaceId: row.from_space_id ? toUuid(row.from_space_id as string) : null,
+		toEntityId: toUuid(row.to_entity_id as string),
+		toSpaceId: row.to_space_id ? toUuid(row.to_space_id as string) : null,
 		position: row.position as string | null,
-		spaceId: normalizeUuid(row.space_id as string),
+		spaceId: toUuid(row.space_id as string),
 		verified: row.verified as boolean | null,
-		contextRootId: row.context_root_id ? normalizeUuid(row.context_root_id as string) : null,
-		contextEdgeTypeId: row.context_edge_type_id ? normalizeUuid(row.context_edge_type_id as string) : null,
+		contextRootId: row.context_root_id ? toUuid(row.context_root_id as string) : null,
+		contextEdgeTypeId: row.context_edge_type_id ? toUuid(row.context_edge_type_id as string) : null,
 	}
 }
 
@@ -258,8 +258,8 @@ function queryContextEntities(
 					`)
 
 			return result.rows.map((row) => ({
-				entityId: normalizeUuid(row.entity_id),
-				contextEdgeTypeId: row.context_edge_type_id ? normalizeUuid(row.context_edge_type_id) : null,
+				entityId: toUuid(row.entity_id),
+				contextEdgeTypeId: row.context_edge_type_id ? toUuid(row.context_edge_type_id) : null,
 				position: null, // Context-based discovery doesn't have position
 			}))
 		},
@@ -282,7 +282,7 @@ function queryBlocksRelationEntities(
 	entityId: string,
 	versionKey: bigint,
 	spaceId?: string,
-): Effect.Effect<Array<{entityId: NormalizedUuid; position: string | null}>, QueryError> {
+): Effect.Effect<Array<{entityId: Uuid; position: string | null}>, QueryError> {
 	return Effect.tryPromise({
 		try: async () => {
 			const versionKeyStr = versionKey.toString()
@@ -307,7 +307,7 @@ function queryBlocksRelationEntities(
 					`)
 
 			return result.rows.map((row) => ({
-				entityId: normalizeUuid(row.entity_id),
+				entityId: toUuid(row.entity_id),
 				position: row.position,
 			}))
 		},
@@ -370,7 +370,7 @@ function getBlockIdsAtVersion(
 	entityId: string,
 	versionKey: bigint,
 	spaceId?: string,
-): Effect.Effect<NormalizedUuid[], QueryError> {
+): Effect.Effect<Uuid[], QueryError> {
 	return Effect.map(getGroupedEntityIdsAtVersion(db, entityId, versionKey, spaceId), (grouped) => grouped.blocks)
 }
 
@@ -380,7 +380,7 @@ function getBlockIdsAtVersion(
  */
 function batchGetBlockSnapshotsAtVersion(
 	db: Database,
-	blockIds: NormalizedUuid[],
+	blockIds: Uuid[],
 	versionKey: bigint,
 	spaceId?: string,
 ): Effect.Effect<BlockSnapshot[], QueryError> {
@@ -429,8 +429,8 @@ function batchGetBlockSnapshotsAtVersion(
 					`)
 
 			// Group by entity ID
-			const valuesMap = new Map<NormalizedUuid, VersionedValue[]>()
-			const relationsMap = new Map<NormalizedUuid, VersionedRelation[]>()
+			const valuesMap = new Map<Uuid, VersionedValue[]>()
+			const relationsMap = new Map<Uuid, VersionedRelation[]>()
 
 			for (const id of blockIds) {
 				valuesMap.set(id, [])
@@ -438,12 +438,12 @@ function batchGetBlockSnapshotsAtVersion(
 			}
 
 			for (const row of valuesResult.rows) {
-				const entityId = normalizeUuid(row.entity_id as string)
+				const entityId = toUuid(row.entity_id as string)
 				valuesMap.get(entityId)?.push(mapValueRow(row))
 			}
 
 			for (const row of relationsResult.rows) {
-				const entityId = normalizeUuid(row.from_entity_id as string)
+				const entityId = toUuid(row.from_entity_id as string)
 				relationsMap.get(entityId)?.push(mapRelationRow(row))
 			}
 
@@ -477,7 +477,7 @@ function batchGetBlockSnapshotsAtVersion(
  */
 export function getEntitySnapshotAtVersion(
 	db: Database,
-	entityId: NormalizedUuid,
+	entityId: Uuid,
 	versionKey: bigint,
 	spaceId?: string,
 ): Effect.Effect<EntitySnapshot, QueryError> {
@@ -522,7 +522,7 @@ export function getEntitySnapshotAtVersion(
  */
 export function getGroupedEntitySnapshotAtVersion(
 	db: Database,
-	entityId: NormalizedUuid,
+	entityId: Uuid,
 	versionKey: bigint,
 	spaceId?: string,
 ): Effect.Effect<GroupedEntitySnapshot, QueryError> {
@@ -544,7 +544,7 @@ export function getGroupedEntitySnapshotAtVersion(
 		const childSnapshots = yield* batchGetBlockSnapshotsAtVersion(db, allChildIds, versionKey, spaceId)
 
 		// Build a map for quick lookup
-		const snapshotMap = new Map<NormalizedUuid, BlockSnapshot>()
+		const snapshotMap = new Map<Uuid, BlockSnapshot>()
 		for (const snapshot of childSnapshots) {
 			snapshotMap.set(snapshot.id, snapshot)
 		}
@@ -627,7 +627,7 @@ export function getEntityVersions(
 					`)
 
 			return result.rows.map((row) => ({
-				editId: normalizeUuid(row.edit_id),
+				editId: toUuid(row.edit_id),
 				blockNumber: row.block_number.toString(),
 				createdAt:
 					row.created_at instanceof Date

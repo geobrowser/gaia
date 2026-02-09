@@ -76,7 +76,7 @@ describe("GET /profile/address/:address", () => {
 		expect(res.status).toBe(200)
 		const body = await res.json()
 		expect(body).toEqual({
-			spaceId: "f3dab79cb5a3d9d1759656dd5361d1c6",
+			spaceId: "X7WMytqfmkJaMaZ4Zh9v93",
 			name: "Test User",
 			avatarUrl: "https://example.com/avatar.png",
 			address: "0xab28066d9a7ddFF52B67dF699592BA7060e0d3b9",
@@ -141,7 +141,7 @@ describe("GET /profile/space/:spaceId", () => {
 		expect(res.status).toBe(200)
 		const body = await res.json()
 		expect(body).toEqual({
-			spaceId: "f3dab79cb5a3d9d1759656dd5361d1c6",
+			spaceId: "X7WMytqfmkJaMaZ4Zh9v93",
 			name: "Test User",
 			avatarUrl: "https://example.com/avatar.png",
 			address: "0xab28066d9a7ddFF52B67dF699592BA7060e0d3b9",
@@ -157,10 +157,10 @@ describe("GET /profile/space/:spaceId", () => {
 		expect(res.status).toBe(200)
 		const body = await res.json()
 		expect(body).toEqual({
-			spaceId: "f3dab79cb5a3d9d1759656dd5361d1c6",
+			spaceId: "X7WMytqfmkJaMaZ4Zh9v93",
 			name: null,
 			avatarUrl: null,
-			address: "f3dab79cb5a3d9d1759656dd5361d1c6",
+			address: "X7WMytqfmkJaMaZ4Zh9v93",
 		})
 	})
 

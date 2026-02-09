@@ -8,7 +8,7 @@
  */
 
 import {Client} from "@opensearch-project/opensearch"
-import {isValidUuid, toDashedUuid} from "../../utils/uuid"
+import {isValidUuid, toUuid} from "../../utils/uuid"
 import type {SearchClient} from "./client"
 import {SearchError, type SearchQuery, type SearchResponse, type SearchResult, type SearchScope} from "./types"
 
@@ -200,7 +200,7 @@ export class OpenSearchClient implements SearchClient {
 			return this.buildUuidQuery(trimmedQuery, query.scope, query.space_id, query.type_ids, includeDeleted)
 		}
 		if (isValidUuid(trimmedQuery)) {
-			const dashedUuid = toDashedUuid(trimmedQuery)
+			const dashedUuid = toUuid(trimmedQuery)
 			return this.buildUuidQuery(dashedUuid, query.scope, query.space_id, query.type_ids, includeDeleted)
 		}
 

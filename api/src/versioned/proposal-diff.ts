@@ -29,7 +29,7 @@ import {SystemIds} from "@graphprotocol/grc-20"
 import {sql} from "drizzle-orm"
 import type {NodePgDatabase} from "drizzle-orm/node-postgres"
 import {Effect} from "effect"
-import {type NormalizedUuid, normalizeUuid} from "../utils/uuid"
+import {type Uuid, toUuid} from "../utils/uuid"
 import {diffEntitySnapshots} from "./diff"
 import {mapRelationRow, mapValueRow, QueryError} from "./queries"
 import type {
@@ -82,7 +82,7 @@ export type ProposalDiffError =
 type Database = NodePgDatabase<Record<string, unknown>>
 
 // The BLOCKS relation type ID from GRC-20, normalized for comparison with DB output
-const BLOCKS_TYPE_ID = normalizeUuid(SystemIds.BLOCKS)
+const BLOCKS_TYPE_ID = toUuid(SystemIds.BLOCKS)
 
 // ============================================================================
 // Database Queries
@@ -90,8 +90,8 @@ const BLOCKS_TYPE_ID = normalizeUuid(SystemIds.BLOCKS)
 
 interface ProposalWithAction {
 	proposal: {
-		id: NormalizedUuid
-		spaceId: NormalizedUuid
+		id: Uuid
+		spaceId: Uuid
 		startTime: bigint
 		endTime: bigint
 		executedAt: bigint | null
@@ -136,8 +136,8 @@ function getProposalWithPublishAction(
 
 			return {
 				proposal: {
-					id: normalizeUuid(row.proposal_id),
-					spaceId: normalizeUuid(row.space_id),
+					id: toUuid(row.proposal_id),
+					spaceId: toUuid(row.space_id),
 					startTime: BigInt(row.start_time),
 					endTime: BigInt(row.end_time),
 					executedAt: row.executed_at ? BigInt(row.executed_at) : null,
@@ -228,8 +228,8 @@ function resolveVersionKeyAtTimestamp(db: Database, timestamp: bigint): Effect.E
  */
 function batchLookupRelationEntities(
 	db: Database,
-	relationIds: NormalizedUuid[],
-): Effect.Effect<Map<NormalizedUuid, NormalizedUuid>, QueryError> {
+	relationIds: Uuid[],
+): Effect.Effect<Map<Uuid, Uuid>, QueryError> {
 	if (relationIds.length === 0) {
 		return Effect.succeed(new Map())
 	}
@@ -249,9 +249,9 @@ function batchLookupRelationEntities(
 				WHERE id = ANY(${relationIdsArray}::uuid[])
 			`)
 
-			const result = new Map<NormalizedUuid, NormalizedUuid>()
+			const result = new Map<Uuid, Uuid>()
 			for (const row of liveResult.rows) {
-				result.set(normalizeUuid(row.id), normalizeUuid(row.from_entity_id))
+				result.set(toUuid(row.id), toUuid(row.from_entity_id))
 			}
 
 			return result
@@ -280,9 +280,9 @@ function batchLookupRelationEntities(
  */
 function batchGetLiveSnapshots(
 	db: Database,
-	entityIds: NormalizedUuid[],
-	spaceId: NormalizedUuid,
-): Effect.Effect<Map<NormalizedUuid, EntitySnapshot>, QueryError> {
+	entityIds: Uuid[],
+	spaceId: Uuid,
+): Effect.Effect<Map<Uuid, EntitySnapshot>, QueryError> {
 	if (entityIds.length === 0) {
 		return Effect.succeed(new Map())
 	}
@@ -328,10 +328,10 @@ function batchGetLiveSnapshots(
  */
 function batchGetVersionedSnapshots(
 	db: Database,
-	entityIds: NormalizedUuid[],
-	spaceId: NormalizedUuid,
+	entityIds: Uuid[],
+	spaceId: Uuid,
 	versionKey: bigint,
-): Effect.Effect<Map<NormalizedUuid, EntitySnapshot>, QueryError> {
+): Effect.Effect<Map<Uuid, EntitySnapshot>, QueryError> {
 	if (entityIds.length === 0) {
 		return Effect.succeed(new Map())
 	}
@@ -382,11 +382,11 @@ function batchGetVersionedSnapshots(
  * Uses shared mapValueRow and mapRelationRow functions from queries.ts.
  */
 function groupByEntityId(
-	entityIds: NormalizedUuid[],
+	entityIds: Uuid[],
 	valueRows: Record<string, unknown>[],
 	relationRows: Record<string, unknown>[],
-): Map<NormalizedUuid, EntitySnapshot> {
-	const result = new Map<NormalizedUuid, EntitySnapshot>()
+): Map<Uuid, EntitySnapshot> {
+	const result = new Map<Uuid, EntitySnapshot>()
 
 	// Initialize empty snapshots for all entities
 	for (const id of entityIds) {
@@ -395,7 +395,7 @@ function groupByEntityId(
 
 	// Group values by entity
 	for (const row of valueRows) {
-		const entityId = normalizeUuid(row.entity_id as string)
+		const entityId = toUuid(row.entity_id as string)
 		const snapshot = result.get(entityId)
 		if (snapshot) {
 			snapshot.values.push(mapValueRow(row))
@@ -404,8 +404,8 @@ function groupByEntityId(
 
 	// Group relations by entity (excluding block relations)
 	for (const row of relationRows) {
-		const entityId = normalizeUuid(row.from_entity_id as string)
-		const typeId = normalizeUuid(row.type_id as string)
+		const entityId = toUuid(row.from_entity_id as string)
+		const typeId = toUuid(row.type_id as string)
 		const snapshot = result.get(entityId)
 		if (snapshot && typeId !== BLOCKS_TYPE_ID) {
 			snapshot.relations.push(mapRelationRow(row))
@@ -420,13 +420,13 @@ function groupByEntityId(
 // ============================================================================
 
 /**
- * Convert Id (Uint8Array) to NormalizedUuid.
- * Returns lowercase hex without dashes for consistent comparison with normalized DB output.
+ * Convert Id (Uint8Array) to Uuid (dashed lowercase hex).
  */
-function idToUuid(id: Id): NormalizedUuid {
-	return Array.from(id)
+function idToUuid(id: Id): Uuid {
+	const hex = Array.from(id)
 		.map((b) => b.toString(16).padStart(2, "0"))
-		.join("") as NormalizedUuid
+		.join("")
+	return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}` as Uuid
 }
 
 /**
@@ -434,11 +434,11 @@ function idToUuid(id: Id): NormalizedUuid {
  * Returns both directly-extractable entity IDs and relation IDs that need lookup.
  */
 function extractAffectedEntitiesAndRelations(ops: Op[]): {
-	entityIds: Set<NormalizedUuid>
-	relationIdsNeedingLookup: NormalizedUuid[]
+	entityIds: Set<Uuid>
+	relationIdsNeedingLookup: Uuid[]
 } {
-	const entityIds = new Set<NormalizedUuid>()
-	const relationIdsNeedingLookup: NormalizedUuid[] = []
+	const entityIds = new Set<Uuid>()
+	const relationIdsNeedingLookup: Uuid[] = []
 
 	for (const op of ops) {
 		switch (op.type) {
@@ -470,7 +470,7 @@ function extractAffectedEntitiesAndRelations(ops: Op[]): {
 /**
  * Extract all affected entity IDs from ops, including those requiring relation lookups.
  */
-function extractAffectedEntities(db: Database, ops: Op[]): Effect.Effect<NormalizedUuid[], QueryError> {
+function extractAffectedEntities(db: Database, ops: Op[]): Effect.Effect<Uuid[], QueryError> {
 	return Effect.gen(function* () {
 		const {entityIds, relationIdsNeedingLookup} = extractAffectedEntitiesAndRelations(ops)
 
@@ -496,7 +496,7 @@ function extractAffectedEntities(db: Database, ops: Op[]): Effect.Effect<Normali
  * GRC-20 v2 decoded values have the format: {type: "text", value: "..."}
  * We need to convert this to our VersionedValue format.
  */
-function propertyValueToVersionedValue(pv: {property: Id; value: unknown}, spaceId: NormalizedUuid): VersionedValue {
+function propertyValueToVersionedValue(pv: {property: Id; value: unknown}, spaceId: Uuid): VersionedValue {
 	const propertyId = idToUuid(pv.property)
 	const value = pv.value as {type: string; value: unknown}
 
@@ -582,8 +582,8 @@ function propertyValueToVersionedValue(pv: {property: Id; value: unknown}, space
 function applyOpsToSnapshot(
 	base: EntitySnapshot,
 	ops: Op[],
-	entityId: NormalizedUuid,
-	spaceId: NormalizedUuid,
+	entityId: Uuid,
+	spaceId: Uuid,
 ): EntitySnapshot {
 	// Deep copy the base snapshot
 	const proposed: EntitySnapshot = {
@@ -723,7 +723,7 @@ function isDiffEmpty(diff: EntityDiff): boolean {
 /**
  * Create an empty snapshot for a new entity.
  */
-function emptySnapshot(entityId: NormalizedUuid): EntitySnapshot {
+function emptySnapshot(entityId: Uuid): EntitySnapshot {
 	return {id: entityId, values: [], relations: [], blocks: []}
 }
 
@@ -760,8 +760,8 @@ function decodeCursor(encoded: string): ProposalDiffCursor | null {
  */
 export function computeProposalDiff(
 	db: Database,
-	proposalId: NormalizedUuid,
-	spaceId: NormalizedUuid,
+	proposalId: Uuid,
+	spaceId: Uuid,
 	cursorStr?: string,
 	limit = 50,
 ): Effect.Effect<PaginatedProposalDiff, ProposalDiffError> {
@@ -855,7 +855,7 @@ export function computeProposalDiff(
 		// condition if live state changes between fetching the proposal and fetching values/relations,
 		// but this is acceptable - the diff represents "what would change if executed right now"
 		// rather than "what would change relative to a fixed point in time".
-		let baseStates: Map<NormalizedUuid, EntitySnapshot>
+		let baseStates: Map<Uuid, EntitySnapshot>
 		if (status === "active") {
 			baseStates = yield* batchGetLiveSnapshots(db, pageEntityIds, spaceId)
 		} else {

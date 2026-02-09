@@ -1,32 +1,29 @@
 import {describe, expect, it} from "vitest"
-import type {NormalizedUuid} from "./uuid"
 import {decodeBase58, encodeBase58, isBase58} from "./base58"
-
-const nuuid = (s: string) => s as NormalizedUuid
 
 describe("encodeBase58", () => {
 	it("encodes UUIDs matching Rust test vectors", () => {
 		// From indexer_utils/src/id.rs test_base58_encoding
-		expect(encodeBase58(nuuid("1cc6995f6cc24c7a95921466bf95f6be"))).toBe("4Z6VLmpipszCVZb21Fey5F")
+		expect(encodeBase58("1cc6995f6cc24c7a95921466bf95f6be")).toBe("4Z6VLmpipszCVZb21Fey5F")
 		// From indexer_utils/src/id.rs test_base58_encoding_2
-		expect(encodeBase58(nuuid("08c4f09378584b7c9b94b82e448abcff"))).toBe("25omwWh6HYgeRQKCaSpVpa")
+		expect(encodeBase58("08c4f09378584b7c9b94b82e448abcff")).toBe("25omwWh6HYgeRQKCaSpVpa")
 	})
 
 	it("encodes known UUIDs from Sentry trace", () => {
 		// BDuZwkjCg3nPWMDshoYtpS was seen in trace ae1434810a6340c89edd6ef5d14f88c4
-		expect(encodeBase58(nuuid("52c8b540e2494e1bbabcc8eac0acaa23"))).toBe("BDuZwkjCg3nPWMDshoYtpS")
+		expect(encodeBase58("52c8b540e2494e1bbabcc8eac0acaa23")).toBe("BDuZwkjCg3nPWMDshoYtpS")
 	})
 
 	it("returns empty string for zero UUID", () => {
-		expect(encodeBase58(nuuid("00000000000000000000000000000000"))).toBe("")
+		expect(encodeBase58("00000000000000000000000000000000")).toBe("")
 	})
 
 	it("encodes single-digit values", () => {
-		expect(encodeBase58(nuuid("00000000000000000000000000000001"))).toBe("2")
+		expect(encodeBase58("00000000000000000000000000000001")).toBe("2")
 	})
 
 	it("encodes max UUID", () => {
-		const result = encodeBase58(nuuid("ffffffffffffffffffffffffffffffff"))
+		const result = encodeBase58("ffffffffffffffffffffffffffffffff")
 		expect(result.length).toBeLessThanOrEqual(22)
 		expect(result.length).toBeGreaterThan(0)
 	})
@@ -75,7 +72,7 @@ describe("roundtrip", () => {
 			"00000000000000000000000000000001",
 		]
 		for (const uuid of uuids) {
-			const encoded = encodeBase58(nuuid(uuid))
+			const encoded = encodeBase58(uuid)
 			const decoded = decodeBase58(encoded)
 			expect(decoded).toBe(uuid)
 		}

@@ -1,18 +1,18 @@
 import {SystemIds} from "@graphprotocol/grc-20"
 import {Effect} from "effect"
 import {describe, expect, it} from "vitest"
-import {type NormalizedUuid, normalizeUuid} from "../../utils/uuid"
+import {type Uuid, toUuid} from "../../utils/uuid"
 import {type DiscoveredEntity, groupEntitiesByContext, mergeDiscoveryResults} from "../grouping"
 
 // =============================================================================
 // Test Helpers
 // =============================================================================
 
-/** Cast a synthetic test string to NormalizedUuid. */
-const nuuid = (s: string) => s as NormalizedUuid
+/** Cast a synthetic test string to Uuid. */
+const nuuid = (s: string) => s as Uuid
 
-/** Normalize a real UUID (SystemIds) to match the dashless format used in source code. */
-const norm = normalizeUuid
+/** Normalize a real UUID (SystemIds) to dashed lowercase hex. */
+const norm = toUuid
 
 /**
  * Helper to run Effects synchronously in tests.
@@ -20,8 +20,8 @@ const norm = normalizeUuid
 const run = <A>(effect: Effect.Effect<A, never, never>): A => Effect.runSync(effect)
 
 function makeEntity(
-	entityId: NormalizedUuid,
-	contextEdgeTypeId: NormalizedUuid | null = null,
+	entityId: Uuid,
+	contextEdgeTypeId: Uuid | null = null,
 	position: string | null = null,
 ): DiscoveredEntity {
 	return {entityId, contextEdgeTypeId, position}

@@ -29,11 +29,11 @@ import {Hono} from "hono"
 import {Pool} from "pg"
 import {afterAll, beforeAll, describe, expect, it} from "vitest"
 import {runtime} from "../../services/runtime"
-import {normalizeUuid} from "../../utils/uuid"
+import {toUuid} from "../../utils/uuid"
 import {createVersionedRouter} from "../router"
 
 /** Shorthand to normalize a UUID for response-body assertions. */
-const n = normalizeUuid
+const n = toUuid
 
 // Skip integration tests if DATABASE_URL is not set
 const DATABASE_URL = process.env.DATABASE_URL

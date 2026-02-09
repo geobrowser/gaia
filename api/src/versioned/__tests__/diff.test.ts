@@ -1,7 +1,7 @@
 import {SystemIds} from "@graphprotocol/grc-20"
 import {Effect} from "effect"
 import {describe, expect, it} from "vitest"
-import {type NormalizedUuid, normalizeUuid} from "../../utils/uuid"
+import {type Uuid, toUuid} from "../../utils/uuid"
 import {diffBlocks, diffEntitySnapshots, diffGroupedEntitySnapshots, diffRelations, diffValues} from "../diff"
 import type {
 	BlockSnapshot,
@@ -17,11 +17,11 @@ import type {
 // Test Helpers
 // =============================================================================
 
-/** Cast a string to NormalizedUuid for test convenience. Tests use synthetic IDs that don't need actual normalization. */
-const nuuid = (s: string) => s as NormalizedUuid
+/** Cast a string to Uuid for test convenience. Tests use synthetic IDs that don't need actual normalization. */
+const nuuid = (s: string) => s as Uuid
 
-/** Normalize a real UUID (like SystemIds constants) to match the dashless format used in diff.ts. */
-const norm = normalizeUuid
+/** Normalize a real UUID (like SystemIds constants) to dashed lowercase hex. */
+const norm = toUuid
 
 /** Run an Effect synchronously for testing */
 const run = <A>(effect: Effect.Effect<A, never, never>): A => Effect.runSync(effect)

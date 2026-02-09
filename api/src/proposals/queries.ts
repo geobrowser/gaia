@@ -7,7 +7,7 @@
 import {sql} from "drizzle-orm"
 import type {NodePgDatabase} from "drizzle-orm/node-postgres"
 import {Data, Effect} from "effect"
-import {isValidUuid, toDashedUuid} from "../utils/uuid"
+import {isValidUuid, toUuid} from "../utils/uuid"
 import {
 	type ProposalAction,
 	type ProposalActionType,
@@ -336,7 +336,7 @@ function parseCursor(cursor: string, orderBy: ProposalOrderBy): {orderValue: str
 	}
 
 	// Convert to dashed hex for PostgreSQL ::uuid cast
-	return {orderValue, cursorId: toDashedUuid(cursorId)}
+	return {orderValue, cursorId: toUuid(cursorId)}
 }
 
 /**

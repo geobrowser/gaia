@@ -10,7 +10,7 @@ import {Hono} from "hono"
 import {describeRoute} from "hono-openapi"
 
 import type {AppRuntime} from "../services/runtime"
-import {isValidUuid, normalizeUuid, toDashedUuid} from "../utils/uuid"
+import {isValidUuid, toBase58, toUuid} from "../utils/uuid"
 import {
 	getProposalWithVotes,
 	listProposalsInSpace,
@@ -66,31 +66,31 @@ function mapToActionResponse(action: ProposalWithVotes["actions"][number]): Acti
 			if (!action.targetId) return {actionType: "UNKNOWN"}
 			return {
 				actionType: "ADD_MEMBER",
-				targetId: normalizeUuid(action.targetId),
+				targetId: toBase58(toUuid(action.targetId)),
 			}
 		case "RemoveMember":
 			if (!action.targetId) return {actionType: "UNKNOWN"}
 			return {
 				actionType: "REMOVE_MEMBER",
-				targetId: normalizeUuid(action.targetId),
+				targetId: toBase58(toUuid(action.targetId)),
 			}
 		case "AddEditor":
 			if (!action.targetId) return {actionType: "UNKNOWN"}
 			return {
 				actionType: "ADD_EDITOR",
-				targetId: normalizeUuid(action.targetId),
+				targetId: toBase58(toUuid(action.targetId)),
 			}
 		case "RemoveEditor":
 			if (!action.targetId) return {actionType: "UNKNOWN"}
 			return {
 				actionType: "REMOVE_EDITOR",
-				targetId: normalizeUuid(action.targetId),
+				targetId: toBase58(toUuid(action.targetId)),
 			}
 		case "UnflagEditor":
 			if (!action.targetId) return {actionType: "UNKNOWN"}
 			return {
 				actionType: "UNFLAG_EDITOR",
-				targetId: normalizeUuid(action.targetId),
+				targetId: toBase58(toUuid(action.targetId)),
 			}
 		case "Publish":
 			if (!action.contentUri) return {actionType: "UNKNOWN"}
@@ -170,10 +170,10 @@ function computeResponseFields(proposal: ProposalWithVotes | ProposalListItem, n
 	}
 
 	return {
-		proposalId: normalizeUuid(proposal.id),
-		spaceId: normalizeUuid(proposal.spaceId),
+		proposalId: toBase58(toUuid(proposal.id)),
+		spaceId: toBase58(toUuid(proposal.spaceId)),
 		name: proposal.name,
-		proposedBy: normalizeUuid(proposal.proposedBy),
+		proposedBy: toBase58(toUuid(proposal.proposedBy)),
 		status,
 		votingMode: proposal.votingMode.toUpperCase() as "FAST" | "SLOW",
 		actions: proposal.actions.map(mapToActionResponse),
@@ -217,14 +217,14 @@ function buildProposalResponse(
 	const base = computeResponseFields(proposal, nowSeconds)
 
 	const voters: Vote[] = proposal.votes.map((v) => ({
-		voterId: normalizeUuid(v.voterId),
+		voterId: toBase58(toUuid(v.voterId)),
 		vote: v.vote,
 	}))
 
 	let userVote: VoteOption | null = null
 	if (voterId) {
-		const normalizedVoterId = normalizeUuid(voterId)
-		const userVoteRecord = proposal.votes.find((v) => normalizeUuid(v.voterId) === normalizedVoterId)
+		const normalizedVoterId = toUuid(voterId)
+		const userVoteRecord = proposal.votes.find((v) => toUuid(v.voterId) === normalizedVoterId)
 		userVote = userVoteRecord?.vote ?? null
 	}
 
@@ -387,9 +387,8 @@ export function createProposalsRouter(db: Database, runtime: AppRuntime) {
 					)
 				}
 
-				// PostgreSQL ::uuid cast requires hex format
-				const dashedProposalId = toDashedUuid(proposalId)
-				const proposal = yield* getProposalWithVotes(db, dashedProposalId)
+				// PostgreSQL ::uuid cast requires dashed hex format
+				const proposal = yield* getProposalWithVotes(db, toUuid(proposalId))
 
 				if (!proposal) {
 					return yield* Effect.fail(
@@ -580,11 +579,9 @@ export function createProposalsRouter(db: Database, runtime: AppRuntime) {
 				const orderBy = yield* parseOrderBy(orderByParam)
 				const orderDirection = yield* parseOrderDirection(orderDirectionParam)
 
-				// PostgreSQL ::uuid cast requires hex format
-				const dashedSpaceId = toDashedUuid(spaceId)
-				const normalizedVoterId = voterId ? normalizeUuid(voterId) : undefined
+				// PostgreSQL ::uuid cast requires dashed hex format
 				const {proposals, nextCursor} = yield* listProposalsInSpace(db, {
-					spaceId: dashedSpaceId,
+					spaceId: toUuid(spaceId),
 					limit,
 					cursor,
 					actionTypes,
@@ -592,7 +589,7 @@ export function createProposalsRouter(db: Database, runtime: AppRuntime) {
 					status,
 					orderBy,
 					orderDirection,
-					voterId: normalizedVoterId,
+					voterId: voterId ? toUuid(voterId) : undefined,
 				})
 
 				const nowSeconds = getCurrentTimeSeconds()

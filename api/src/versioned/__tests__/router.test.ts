@@ -1,14 +1,14 @@
 import {Effect} from "effect"
 import {Hono} from "hono"
 import {beforeEach, describe, expect, it, vi} from "vitest"
-import {normalizeUuid} from "../../utils/uuid"
+import {toUuid} from "../../utils/uuid"
 import {createVersionedRouter} from "../router"
 
 // =============================================================================
 // Test Setup
 // =============================================================================
 
-// Valid UUIDs for use in mock DB rows (these pass through normalizeUuid)
+// Valid UUIDs for use in mock DB rows (these pass through toUuid)
 const PROP_1 = "00000000-0000-0000-0000-000000000a01"
 const SPACE_1 = "00000000-0000-0000-0000-000000000b01"
 const EDIT_1 = "00000000-0000-0000-0000-000000000c01"
@@ -156,7 +156,7 @@ describe("GET /versioned/entities/:id", () => {
 
 			expect(res.status).toBe(200)
 			const body = await res.json()
-			expect(body.id).toBe(normalizeUuid(entityId))
+			expect(body.id).toBe(toUuid(entityId))
 			expect(body.values).toBeInstanceOf(Array)
 			expect(body.relations).toBeInstanceOf(Array)
 			expect(body.blocks).toBeInstanceOf(Array)
@@ -403,7 +403,7 @@ describe("GET /versioned/entities/:id/diff", () => {
 
 			expect(res.status).toBe(200)
 			const body = await res.json()
-			expect(body.entityId).toBe(normalizeUuid(entityId))
+			expect(body.entityId).toBe(toUuid(entityId))
 			expect(body.values).toBeInstanceOf(Array)
 			expect(body.relations).toBeInstanceOf(Array)
 			expect(body.blocks).toBeInstanceOf(Array)
@@ -615,8 +615,8 @@ describe("GET /versioned/proposals/:id/diff", () => {
 
 			expect(res.status).toBe(200)
 			const body = await res.json()
-			expect(body.proposalId).toBe(normalizeUuid(proposalId))
-			expect(body.spaceId).toBe(normalizeUuid(spaceId))
+			expect(body.proposalId).toBe(toUuid(proposalId))
+			expect(body.spaceId).toBe(toUuid(spaceId))
 			expect(body.proposalStatus).toBe("active")
 			expect(body.entities).toEqual([])
 			expect(body.pagination).toEqual({
