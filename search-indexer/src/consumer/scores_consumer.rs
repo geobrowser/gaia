@@ -2,17 +2,17 @@
 //!
 //! Consumes HermesScoresBatch messages and forwards score events to the ingest.
 
+use hermes_instrumentation::{Instrument, debug, error, info, info_span, instrument, warn};
 use hermes_kafka::get_topic_prefix;
 use prost::Message;
 use rdkafka::{
+    TopicPartitionList,
     consumer::{Consumer, StreamConsumer},
     message::Message as KafkaMessage,
-    TopicPartitionList,
 };
 use std::env;
 use std::time::Duration;
 use tokio::sync::mpsc;
-use hermes_instrumentation::{debug, error, info, info_span, instrument, warn, Instrument};
 use uuid::Uuid;
 
 use crate::consumer::messages::{ScoreEvent, StreamMessage};
@@ -39,7 +39,7 @@ impl ScoresConsumer {
     const SCORES_TOPIC: &'static str = "curation.scores";
 
     /// Default batch size for Kafka message batching.
-    const DEFAULT_BATCH_SIZE: usize = 50;
+    const DEFAULT_BATCH_SIZE: usize = 10;
 
     /// Default batch timeout in milliseconds.
     const DEFAULT_BATCH_TIMEOUT_MS: u64 = 1000;
@@ -429,7 +429,7 @@ mod tests {
     #[test]
     fn test_constants() {
         assert_eq!(ScoresConsumer::SCORES_TOPIC, "curation.scores");
-        assert_eq!(ScoresConsumer::DEFAULT_BATCH_SIZE, 50);
+        assert_eq!(ScoresConsumer::DEFAULT_BATCH_SIZE, 10);
         assert_eq!(ScoresConsumer::DEFAULT_BATCH_TIMEOUT_MS, 1000);
     }
 }
