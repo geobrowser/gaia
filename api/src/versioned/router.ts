@@ -18,7 +18,7 @@ type AppEnv = {
 	}
 }
 
-import {fromBase58, isValidBase58Id} from "../utils/uuid"
+import {tryFromBase58} from "../utils/uuid"
 import {diffGroupedEntitySnapshots} from "./diff"
 import type {
 	EditBlobNotCachedError,
@@ -173,7 +173,8 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 
 			const program = Effect.gen(function* () {
 				// Validate entityId
-				if (!isValidBase58Id(rawEntityId)) {
+				const entityId = tryFromBase58(rawEntityId)
+				if (!entityId) {
 					return yield* Effect.fail(new ValidationError({message: "Entity ID must be a valid Base58 ID"}))
 				}
 
@@ -182,18 +183,16 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 					return yield* Effect.fail(new ValidationError({message: "editId query parameter is required"}))
 				}
 
-				if (!isValidBase58Id(rawEditId)) {
+				const editId = tryFromBase58(rawEditId)
+				if (!editId) {
 					return yield* Effect.fail(new ValidationError({message: "editId must be a valid Base58 ID"}))
 				}
 
 				// Validate spaceId if provided
-				if (rawSpaceId && !isValidBase58Id(rawSpaceId)) {
+				const spaceId = rawSpaceId ? tryFromBase58(rawSpaceId) : undefined
+				if (rawSpaceId && !spaceId) {
 					return yield* Effect.fail(new ValidationError({message: "spaceId must be a valid Base58 ID"}))
 				}
-
-				const entityId = fromBase58(rawEntityId)
-				const editId = fromBase58(rawEditId)
-				const spaceId = rawSpaceId ? fromBase58(rawSpaceId) : undefined
 
 				// Resolve edit to version key
 				const versionKey = yield* resolveVersionKey(db, editId)
@@ -340,17 +339,16 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 
 			const program = Effect.gen(function* () {
 				// Validate entityId
-				if (!isValidBase58Id(rawEntityId)) {
+				const entityId = tryFromBase58(rawEntityId)
+				if (!entityId) {
 					return yield* Effect.fail(new ValidationError({message: "Entity ID must be a valid Base58 ID"}))
 				}
 
 				// Validate spaceId if provided
-				if (rawSpaceId && !isValidBase58Id(rawSpaceId)) {
+				const spaceId = rawSpaceId ? tryFromBase58(rawSpaceId) : undefined
+				if (rawSpaceId && !spaceId) {
 					return yield* Effect.fail(new ValidationError({message: "spaceId must be a valid Base58 ID"}))
 				}
-
-				const entityId = fromBase58(rawEntityId)
-				const spaceId = rawSpaceId ? fromBase58(rawSpaceId) : undefined
 
 				// Parse and validate limit
 				let limit = 50
@@ -517,7 +515,8 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 
 			const program = Effect.gen(function* () {
 				// Validate entityId
-				if (!isValidBase58Id(rawEntityId)) {
+				const entityId = tryFromBase58(rawEntityId)
+				if (!entityId) {
 					return yield* Effect.fail(new ValidationError({message: "Entity ID must be a valid Base58 ID"}))
 				}
 
@@ -537,22 +536,20 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 				}
 
 				// Validate UUIDs
-				if (!isValidBase58Id(rawFromEditId)) {
+				const fromEditId = tryFromBase58(rawFromEditId)
+				if (!fromEditId) {
 					return yield* Effect.fail(new ValidationError({message: "fromEditId must be a valid Base58 ID"}))
 				}
 
-				if (!isValidBase58Id(rawToEditId)) {
+				const toEditId = tryFromBase58(rawToEditId)
+				if (!toEditId) {
 					return yield* Effect.fail(new ValidationError({message: "toEditId must be a valid Base58 ID"}))
 				}
 
-				if (!isValidBase58Id(rawSpaceId)) {
+				const spaceId = tryFromBase58(rawSpaceId)
+				if (!spaceId) {
 					return yield* Effect.fail(new ValidationError({message: "spaceId must be a valid Base58 ID"}))
 				}
-
-				const entityId = fromBase58(rawEntityId)
-				const fromEditId = fromBase58(rawFromEditId)
-				const toEditId = fromBase58(rawToEditId)
-				const spaceId = fromBase58(rawSpaceId)
 
 				// Resolve both edits to version keys
 				const [fromVersionKey, toVersionKey] = yield* Effect.all([
@@ -731,7 +728,8 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 
 			const program = Effect.gen(function* () {
 				// Validate proposalId
-				if (!isValidBase58Id(rawProposalId)) {
+				const proposalId = tryFromBase58(rawProposalId)
+				if (!proposalId) {
 					return yield* Effect.fail(new ValidationError({message: "Proposal ID must be a valid Base58 ID"}))
 				}
 
@@ -740,12 +738,10 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 					return yield* Effect.fail(new ValidationError({message: "spaceId query parameter is required"}))
 				}
 
-				if (!isValidBase58Id(rawSpaceId)) {
+				const spaceId = tryFromBase58(rawSpaceId)
+				if (!spaceId) {
 					return yield* Effect.fail(new ValidationError({message: "spaceId must be a valid Base58 ID"}))
 				}
-
-				const proposalId = fromBase58(rawProposalId)
-				const spaceId = fromBase58(rawSpaceId)
 
 				// Parse and validate limit
 				let limit = 50

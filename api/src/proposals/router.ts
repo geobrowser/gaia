@@ -10,7 +10,7 @@ import {Hono} from "hono"
 import {describeRoute} from "hono-openapi"
 
 import type {AppRuntime} from "../services/runtime"
-import {fromBase58, isValidBase58Id, toUuid, uuidToBase58} from "../utils/uuid"
+import {tryFromBase58, type Uuid, uuidToBase58} from "../utils/uuid"
 import {
 	getProposalWithVotes,
 	listProposalsInSpace,
@@ -212,7 +212,7 @@ function computeResponseFields(proposal: ProposalWithVotes | ProposalListItem, n
 function buildProposalResponse(
 	proposal: ProposalWithVotes,
 	nowSeconds: bigint,
-	voterId?: string,
+	voterId?: Uuid,
 ): ProposalStatusResponse {
 	const base = computeResponseFields(proposal, nowSeconds)
 
@@ -223,8 +223,7 @@ function buildProposalResponse(
 
 	let userVote: VoteOption | null = null
 	if (voterId) {
-		const normalizedVoterId = toUuid(voterId)
-		const userVoteRecord = proposal.votes.find((v) => toUuid(v.voterId) === normalizedVoterId)
+		const userVoteRecord = proposal.votes.find((v) => uuidToBase58(v.voterId) === uuidToBase58(voterId))
 		userVote = userVoteRecord?.vote ?? null
 	}
 
@@ -372,7 +371,8 @@ export function createProposalsRouter(db: Database, runtime: AppRuntime) {
 					voterId,
 				})
 
-				if (!isValidBase58Id(proposalId)) {
+				const parsedProposalId = tryFromBase58(proposalId)
+				if (!parsedProposalId) {
 					return yield* Effect.fail(
 						new ValidationError({
 							message: "Proposal ID must be a valid Base58 ID",
@@ -380,7 +380,8 @@ export function createProposalsRouter(db: Database, runtime: AppRuntime) {
 					)
 				}
 
-				if (voterId && !isValidBase58Id(voterId)) {
+				const parsedVoterId = voterId ? tryFromBase58(voterId) : undefined
+				if (voterId && !parsedVoterId) {
 					return yield* Effect.fail(
 						new ValidationError({
 							message: "Voter ID must be a valid Base58 ID",
@@ -389,7 +390,7 @@ export function createProposalsRouter(db: Database, runtime: AppRuntime) {
 				}
 
 				// PostgreSQL ::uuid cast requires dashed hex format
-				const proposal = yield* getProposalWithVotes(db, fromBase58(proposalId))
+				const proposal = yield* getProposalWithVotes(db, parsedProposalId)
 
 				if (!proposal) {
 					return yield* Effect.fail(
@@ -400,7 +401,7 @@ export function createProposalsRouter(db: Database, runtime: AppRuntime) {
 				}
 
 				const nowSeconds = getCurrentTimeSeconds()
-				return buildProposalResponse(proposal, nowSeconds, voterId)
+				return buildProposalResponse(proposal, nowSeconds, parsedVoterId)
 			}).pipe(
 				Effect.tapError((error) => {
 					switch (error._tag) {
@@ -552,11 +553,13 @@ export function createProposalsRouter(db: Database, runtime: AppRuntime) {
 					voterId,
 				})
 
-				if (!isValidBase58Id(spaceId)) {
+				const parsedSpaceId = tryFromBase58(spaceId)
+				if (!parsedSpaceId) {
 					return yield* Effect.fail(new ValidationError({message: "Space ID must be a valid Base58 ID"}))
 				}
 
-				if (voterId && !isValidBase58Id(voterId)) {
+				const parsedVoterId = voterId ? tryFromBase58(voterId) : undefined
+				if (voterId && !parsedVoterId) {
 					return yield* Effect.fail(new ValidationError({message: "Voter ID must be a valid Base58 ID"}))
 				}
 
@@ -583,7 +586,7 @@ export function createProposalsRouter(db: Database, runtime: AppRuntime) {
 
 				// PostgreSQL ::uuid cast requires dashed hex format
 				const {proposals, nextCursor} = yield* listProposalsInSpace(db, {
-					spaceId: fromBase58(spaceId),
+					spaceId: parsedSpaceId,
 					limit,
 					cursor,
 					actionTypes,
@@ -591,7 +594,7 @@ export function createProposalsRouter(db: Database, runtime: AppRuntime) {
 					status,
 					orderBy,
 					orderDirection,
-					voterId: voterId ? fromBase58(voterId) : undefined,
+					voterId: parsedVoterId,
 				})
 
 				const nowSeconds = getCurrentTimeSeconds()

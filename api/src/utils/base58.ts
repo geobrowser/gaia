@@ -41,9 +41,7 @@ const encodeCache = new Map<string, string>()
 
 export function encodeBase58(dashlessHex: string): string {
 	if (!HEX32_PATTERN.test(dashlessHex)) {
-		throw new Error(
-			`encodeBase58: expected 32-char lowercase hex, got ${dashlessHex.length} chars: "${dashlessHex.slice(0, 40)}"`,
-		)
+		throw new Error(`encodeBase58: expected 32-char lowercase hex, got ${dashlessHex.length} chars`)
 	}
 
 	const cached = encodeCache.get(dashlessHex)

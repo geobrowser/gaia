@@ -13,7 +13,7 @@ import {Hono} from "hono"
 import {describeRoute} from "hono-openapi"
 
 import type {AppRuntime} from "../services/runtime"
-import {fromBase58, isValidBase58Id, uuidToBase58} from "../utils/uuid"
+import {tryFromBase58, uuidToBase58} from "../utils/uuid"
 import {
 	defaultProfile,
 	getProfileByAddress,
@@ -217,13 +217,12 @@ export function createProfileRouter(db: Database, runtime: AppRuntime) {
 
 			const program = Effect.gen(function* () {
 				// Validate space ID format (don't echo user input in error message)
-				if (!isValidBase58Id(spaceId)) {
+				const uuid = tryFromBase58(spaceId)
+				if (!uuid) {
 					yield* Effect.logWarning("Invalid space ID format")
 					return yield* Effect.fail(new ValidationError({message: "Space ID must be a valid Base58 ID"}))
 				}
 
-				// Decode Base58 to dashed hex for DB query
-				const uuid = fromBase58(spaceId)
 				const base58SpaceId = spaceId
 
 				// Fetch profile
@@ -355,15 +354,21 @@ export function createProfileRouter(db: Database, runtime: AppRuntime) {
 					)
 				}
 
-				// Validate each space ID (don't echo user input in error message)
-				const invalidIndex = spaceIds.findIndex((id) => typeof id !== "string" || !isValidBase58Id(id))
-				if (invalidIndex !== -1) {
-					yield* Effect.logWarning("Invalid space ID in batch", {index: invalidIndex})
-					return yield* Effect.fail(new ValidationError({message: "Invalid Base58 ID format in request"}))
+				// Validate and decode each space ID in a single pass (don't echo user input in error message)
+				const uuids = []
+				for (let i = 0; i < spaceIds.length; i++) {
+					const id = spaceIds[i]
+					if (typeof id !== "string") {
+						yield* Effect.logWarning("Invalid space ID in batch", {index: i})
+						return yield* Effect.fail(new ValidationError({message: "Invalid Base58 ID format in request"}))
+					}
+					const uuid = tryFromBase58(id)
+					if (!uuid) {
+						yield* Effect.logWarning("Invalid space ID in batch", {index: i})
+						return yield* Effect.fail(new ValidationError({message: "Invalid Base58 ID format in request"}))
+					}
+					uuids.push(uuid)
 				}
-
-				// Decode Base58 to dashed hex for DB query and Map lookup
-				const uuids = (spaceIds as string[]).map(fromBase58)
 
 				// Fetch profiles (Map keys are Uuid from getProfilesBySpaceIds)
 				const profileMap = yield* getProfilesBySpaceIds(db, uuids)

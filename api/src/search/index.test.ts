@@ -233,7 +233,7 @@ describe("Search Router - Integration Tests", () => {
 
 			expect(response.status).toBe(400)
 			expect(result.error).toBe("Invalid parameter")
-			expect(result.message).toContain("must not exceed 22 characters")
+			expect(result.message).toContain("valid Base58 ID")
 		})
 
 		it("returns 400 for invalid limit parameter", async () => {

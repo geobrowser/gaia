@@ -13,7 +13,7 @@ export function patchUuidScalar(uuidScalar: GraphQLScalarType): void {
 	}
 	uuidScalar.parseValue = (value: unknown) => {
 		if (typeof value !== "string") {
-			throw new Error(`UUID cannot represent non-string value: ${String(value)}`)
+			throw new Error(`UUID cannot represent non-string value: ${typeof value}`)
 		}
 		return fromBase58(value)
 	}
@@ -29,7 +29,7 @@ export function patchUuidScalar(uuidScalar: GraphQLScalarType): void {
 
 /**
  * Graphile Engine / PostGraphile plugin:
- * - accepts UUID inputs in any format (dashed hex, undashed hex, Base58)
+ * - accepts UUID inputs as Base58 only (rejects hex formats)
  * - serializes UUID outputs as Base58
  */
 export default function Base58UuidPlugin(builder: any) {

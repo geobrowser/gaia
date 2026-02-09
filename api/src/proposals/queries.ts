@@ -7,7 +7,7 @@
 import {sql} from "drizzle-orm"
 import type {NodePgDatabase} from "drizzle-orm/node-postgres"
 import {Data, Effect} from "effect"
-import {fromBase58, isValidBase58Id, uuidToBase58} from "../utils/uuid"
+import {tryFromBase58, uuidToBase58} from "../utils/uuid"
 import {
 	type ProposalAction,
 	type ProposalActionType,
@@ -291,7 +291,6 @@ function buildOrderClause(
 				return sql`ORDER BY p.end_time ASC, p.id ASC`
 			case "start_time":
 				return sql`ORDER BY p.start_time ASC, p.id ASC`
-			case "created_at":
 			default:
 				return sql`ORDER BY p.created_at ASC, p.id ASC`
 		}
@@ -301,7 +300,6 @@ function buildOrderClause(
 				return sql`ORDER BY p.end_time DESC, p.id DESC`
 			case "start_time":
 				return sql`ORDER BY p.start_time DESC, p.id DESC`
-			case "created_at":
 			default:
 				return sql`ORDER BY p.created_at DESC, p.id DESC`
 		}
@@ -323,8 +321,9 @@ function parseCursor(cursor: string, orderBy: ProposalOrderBy): {orderValue: str
 	const [orderValue, cursorId] = parts
 	if (!orderValue || !cursorId) return null
 
-	// Validate cursorId is a valid Base58 ID
-	if (!isValidBase58Id(cursorId)) return null
+	// Validate cursorId is a valid Base58 ID and decode in one pass
+	const parsedCursorId = tryFromBase58(cursorId)
+	if (!parsedCursorId) return null
 
 	// Validate orderValue format based on orderBy type
 	if (orderBy === "created_at") {
@@ -335,8 +334,7 @@ function parseCursor(cursor: string, orderBy: ProposalOrderBy): {orderValue: str
 		if (!BIGINT_PATTERN.test(orderValue)) return null
 	}
 
-	// Decode Base58 to dashed hex for PostgreSQL ::uuid cast
-	return {orderValue, cursorId: fromBase58(cursorId)}
+	return {orderValue, cursorId: parsedCursorId}
 }
 
 /**
@@ -370,7 +368,6 @@ function buildCursorCondition(
 				return sql`AND (p.end_time, p.id) > (${orderValue}::bigint, ${cursorId}::uuid)`
 			case "start_time":
 				return sql`AND (p.start_time, p.id) > (${orderValue}::bigint, ${cursorId}::uuid)`
-			case "created_at":
 			default:
 				return sql`AND (p.created_at, p.id) > (${orderValue}::timestamptz, ${cursorId}::uuid)`
 		}
@@ -380,7 +377,6 @@ function buildCursorCondition(
 				return sql`AND (p.end_time, p.id) < (${orderValue}::bigint, ${cursorId}::uuid)`
 			case "start_time":
 				return sql`AND (p.start_time, p.id) < (${orderValue}::bigint, ${cursorId}::uuid)`
-			case "created_at":
 			default:
 				return sql`AND (p.created_at, p.id) < (${orderValue}::timestamptz, ${cursorId}::uuid)`
 		}
@@ -403,7 +399,6 @@ function extractCursorValue(
 			return `${row.end_time}|${id}`
 		case "start_time":
 			return `${row.start_time}|${id}`
-		case "created_at":
 		default:
 			return `${row.created_at}|${id}`
 	}

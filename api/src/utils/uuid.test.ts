@@ -1,5 +1,14 @@
 import {describe, expect, it} from "vitest"
-import {fromBase58, isValidBase58Id, isValidUuid, toBase58, toUuid, type Uuid, uuidToBase58} from "./uuid"
+import {
+	fromBase58,
+	isValidBase58Id,
+	isValidUuid,
+	toBase58,
+	toUuid,
+	tryFromBase58,
+	type Uuid,
+	uuidToBase58,
+} from "./uuid"
 
 // =============================================================================
 // toUuid — format detection and normalization
@@ -186,6 +195,36 @@ describe("fromBase58", () => {
 
 	it("surfaces overflow error for Base58 exceeding 128 bits", () => {
 		expect(() => fromBase58("zzzzzzzzzzzzzzzzzzzzzz")).toThrow("exceeds 128-bit")
+	})
+})
+
+// =============================================================================
+// tryFromBase58
+// =============================================================================
+
+describe("tryFromBase58", () => {
+	it("returns Uuid on valid Base58", () => {
+		expect(tryFromBase58("BDuZwkjCg3nPWMDshoYtpS")).toBe("52c8b540-e249-4e1b-babc-c8eac0acaa23")
+	})
+
+	it("returns null on dashed hex", () => {
+		expect(tryFromBase58("550e8400-e29b-41d4-a716-446655440000")).toBeNull()
+	})
+
+	it("returns null on dashless hex", () => {
+		expect(tryFromBase58("550e8400e29b41d4a716446655440000")).toBeNull()
+	})
+
+	it("returns null on empty string", () => {
+		expect(tryFromBase58("")).toBeNull()
+	})
+
+	it("returns null on overflow Base58", () => {
+		expect(tryFromBase58("zzzzzzzzzzzzzzzzzzzzzz")).toBeNull()
+	})
+
+	it("returns null on random text", () => {
+		expect(tryFromBase58("not-a-valid-id")).toBeNull()
 	})
 })
 

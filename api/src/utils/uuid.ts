@@ -124,18 +124,33 @@ export function fromBase58(value: string): Uuid {
 }
 
 /**
+ * Try to parse a Base58-encoded ID, returning null on failure.
+ *
+ * This is the preferred input boundary function: it validates and parses in a
+ * single pass (one `decodeBase58` call), unlike `isValidBase58Id()` + `fromBase58()`
+ * which would decode twice.
+ *
+ * @returns Uuid on success, null on invalid input
+ */
+export function tryFromBase58(value: string): Uuid | null {
+	try {
+		return fromBase58(value)
+	} catch {
+		return null
+	}
+}
+
+/**
  * Validate that a string is a valid Base58-encoded ID.
  *
  * Returns true only for Base58 input. Dashed hex and dashless hex are rejected.
  * Use at input boundaries where only Base58 is accepted.
+ *
+ * Prefer `tryFromBase58()` when you need both validation and the parsed value
+ * to avoid decoding twice.
  */
 export function isValidBase58Id(value: string): boolean {
-	try {
-		fromBase58(value)
-		return true
-	} catch {
-		return false
-	}
+	return tryFromBase58(value) !== null
 }
 
 /**

@@ -6,7 +6,7 @@
  * This module converts at the response boundary.
  */
 
-import {toBase58, type Uuid} from "../utils/uuid"
+import {isValidUuid, toBase58, type Uuid} from "../utils/uuid"
 import type {
 	BlockChange,
 	BlockSnapshot,
@@ -43,6 +43,48 @@ function isEntityDiff(item: DynamicGroupItem): item is EntityDiff {
 // =============================================================================
 // Serialized response types (string instead of Uuid for JSON output)
 // =============================================================================
+
+/** Utility type: replaces all Uuid fields with string for serialized output. */
+type Serialized<T> = {
+	[K in keyof T]: T[K] extends Uuid
+		? string
+		: T[K] extends Uuid | null
+			? string | null
+			: T[K] extends Uuid | null | undefined
+				? string | null | undefined
+				: T[K]
+}
+
+export interface SerializedEntitySnapshot {
+	id: string
+	values: Serialized<VersionedValue>[]
+	relations: Serialized<VersionedRelation>[]
+	blocks: {id: string; values: Serialized<VersionedValue>[]; relations: Serialized<VersionedRelation>[]}[]
+}
+
+export interface SerializedVersionEntry {
+	editId: string
+	blockNumber: string
+	createdAt: string
+}
+
+export interface SerializedGroupedEntityDiff {
+	entityId: string
+	name: string | null
+	values: Serialized<ValueChange>[]
+	relations: Serialized<RelationChange>[]
+	blocks: Serialized<BlockChange>[]
+	groupKeys: string[]
+	groups: Record<string, unknown[]>
+}
+
+export interface SerializedPaginatedProposalDiff {
+	proposalId: string
+	spaceId: string
+	proposalStatus: PaginatedProposalDiff["proposalStatus"]
+	entities: Serialized<EntityDiff>[]
+	pagination: PaginatedProposalDiff["pagination"]
+}
 
 function serializeValue(v: VersionedValue) {
 	return {
@@ -132,7 +174,7 @@ function serializeDynamicGroupItem(item: DynamicGroupItem) {
 // Public serializers for each response shape
 // =============================================================================
 
-export function serializeEntitySnapshot(snapshot: EntitySnapshot) {
+export function serializeEntitySnapshot(snapshot: EntitySnapshot): SerializedEntitySnapshot {
 	return {
 		id: toBase58(snapshot.id),
 		values: snapshot.values.map(serializeValue),
@@ -141,16 +183,19 @@ export function serializeEntitySnapshot(snapshot: EntitySnapshot) {
 	}
 }
 
-export function serializeVersionEntries(versions: VersionEntry[]) {
+export function serializeVersionEntries(versions: VersionEntry[]): SerializedVersionEntry[] {
 	return versions.map((v) => ({
 		...v,
 		editId: toBase58(v.editId),
 	}))
 }
 
-export function serializeGroupedEntityDiff(diff: GroupedEntityDiff) {
+export function serializeGroupedEntityDiff(diff: GroupedEntityDiff): SerializedGroupedEntityDiff {
 	const serializedGroups: Record<string, unknown[]> = {}
 	for (const [key, items] of Object.entries(diff.groups)) {
+		if (!isValidUuid(key)) {
+			throw new Error(`serializeGroupedEntityDiff: expected UUID group key, got length=${key.length}`)
+		}
 		serializedGroups[toBase58(key as Uuid)] = (items as DynamicGroupItem[]).map(serializeDynamicGroupItem)
 	}
 
@@ -165,7 +210,7 @@ export function serializeGroupedEntityDiff(diff: GroupedEntityDiff) {
 	}
 }
 
-export function serializePaginatedProposalDiff(diff: PaginatedProposalDiff) {
+export function serializePaginatedProposalDiff(diff: PaginatedProposalDiff): SerializedPaginatedProposalDiff {
 	return {
 		...diff,
 		proposalId: toBase58(diff.proposalId),
