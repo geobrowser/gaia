@@ -10,7 +10,7 @@ import {Hono} from "hono"
 import {describeRoute} from "hono-openapi"
 
 import type {AppRuntime} from "../services/runtime"
-import {isValidUuid, normalizeUuid} from "../utils/uuid"
+import {isValidUuid, normalizeUuid, toDashedUuid} from "../utils/uuid"
 import {
 	getProposalWithVotes,
 	listProposalsInSpace,
@@ -387,7 +387,9 @@ export function createProposalsRouter(db: Database, runtime: AppRuntime) {
 					)
 				}
 
-				const proposal = yield* getProposalWithVotes(db, proposalId)
+				// PostgreSQL ::uuid cast requires hex format
+				const dashedProposalId = toDashedUuid(proposalId)
+				const proposal = yield* getProposalWithVotes(db, dashedProposalId)
 
 				if (!proposal) {
 					return yield* Effect.fail(
@@ -578,9 +580,11 @@ export function createProposalsRouter(db: Database, runtime: AppRuntime) {
 				const orderBy = yield* parseOrderBy(orderByParam)
 				const orderDirection = yield* parseOrderDirection(orderDirectionParam)
 
+				// PostgreSQL ::uuid cast requires hex format
+				const dashedSpaceId = toDashedUuid(spaceId)
 				const normalizedVoterId = voterId ? normalizeUuid(voterId) : undefined
 				const {proposals, nextCursor} = yield* listProposalsInSpace(db, {
-					spaceId,
+					spaceId: dashedSpaceId,
 					limit,
 					cursor,
 					actionTypes,

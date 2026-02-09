@@ -20,7 +20,7 @@ export function patchUuidScalar(uuidScalar: GraphQLScalarType): void {
 	}
 	// Update the description to clarify undashed serialization and flexible input
 	uuidScalar.description =
-		"A universally unique identifier (UUID) as per RFC 4122. Accepts dashed or undashed input; always serializes without dashes."
+		"A universally unique identifier (UUID) as per RFC 4122. Accepts dashed hex, undashed hex, or Base58-encoded input; always serializes as undashed lowercase hex."
 }
 
 /**

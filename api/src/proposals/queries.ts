@@ -7,6 +7,7 @@
 import {sql} from "drizzle-orm"
 import type {NodePgDatabase} from "drizzle-orm/node-postgres"
 import {Data, Effect} from "effect"
+import {isValidUuid, toDashedUuid} from "../utils/uuid"
 import {
 	type ProposalAction,
 	type ProposalActionType,
@@ -307,14 +308,12 @@ function buildOrderClause(
 	}
 }
 
-/** UUID pattern for cursor validation */
-const UUID_PATTERN = /^[0-9a-f]{8}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{4}-?[0-9a-f]{12}$/i
-
 /** Numeric pattern for bigint cursor values */
 const BIGINT_PATTERN = /^-?\d+$/
 
 /**
  * Validates the cursor format and returns parsed components.
+ * The cursorId is returned as dashed hex for PostgreSQL ::uuid casts.
  * Returns null if cursor is invalid.
  */
 function parseCursor(cursor: string, orderBy: ProposalOrderBy): {orderValue: string; cursorId: string} | null {
@@ -324,8 +323,8 @@ function parseCursor(cursor: string, orderBy: ProposalOrderBy): {orderValue: str
 	const [orderValue, cursorId] = parts
 	if (!orderValue || !cursorId) return null
 
-	// Validate cursorId is a valid UUID
-	if (!UUID_PATTERN.test(cursorId)) return null
+	// Validate cursorId is a valid UUID (hex or Base58)
+	if (!isValidUuid(cursorId)) return null
 
 	// Validate orderValue format based on orderBy type
 	if (orderBy === "created_at") {
@@ -336,7 +335,8 @@ function parseCursor(cursor: string, orderBy: ProposalOrderBy): {orderValue: str
 		if (!BIGINT_PATTERN.test(orderValue)) return null
 	}
 
-	return {orderValue, cursorId}
+	// Convert to dashed hex for PostgreSQL ::uuid cast
+	return {orderValue, cursorId: toDashedUuid(cursorId)}
 }
 
 /**

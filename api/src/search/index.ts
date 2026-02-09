@@ -17,7 +17,7 @@ type AppEnv = {
 }
 
 import type {SearchClient, SearchResponse, SearchScope} from "../services/search"
-import {isValidUuid} from "../utils/uuid"
+import {isValidUuid, toDashedUuid} from "../utils/uuid"
 
 /**
  * Valid search scope values.
@@ -362,14 +362,19 @@ export function createSearchRouter(searchClient: SearchClient, runtime: AppRunti
 				// Parse include_deleted flag (default: false)
 				const includeDeleted = includeDeletedParam === "true"
 
+				// Normalize IDs to dashed hex for OpenSearch term queries.
+				// OpenSearch stores UUIDs as dashed hex keywords (from Rust Uuid::to_string()).
+				const dashedSpaceId = spaceId ? toDashedUuid(spaceId) : undefined
+				const dashedTypeIds = typeIds?.map(toDashedUuid)
+
 				// Execute search - only include optional params when defined
 				const searchQuery = {
 					query: trimmedQuery,
 					scope,
 					limit,
 					offset,
-					...(spaceId && {space_id: spaceId}),
-					...(typeIds && {type_ids: typeIds}),
+					...(dashedSpaceId && {space_id: dashedSpaceId}),
+					...(dashedTypeIds && {type_ids: dashedTypeIds}),
 					...(includeDeleted && {include_deleted: true}),
 				}
 

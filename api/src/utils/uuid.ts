@@ -7,9 +7,18 @@
  * DB row mapping, binary Id conversion) so interior code never needs to worry
  * about format.
  *
+ * Accepted input formats (disambiguation order):
+ *   1. Dashed hex (36 chars):   `550e8400-e29b-41d4-a716-446655440000`
+ *   2. Dashless hex (32 chars): `550e8400e29b41d4a716446655440000`
+ *   3. Base58 (≤22 chars):      `BDuZwkjCg3nPWMDshoYtpS`
+ *
+ * Hex always wins when ambiguous (e.g. a 32-char hex-only string is hex, not Base58).
+ *
  * The `NormalizedUuid` branded type provides compile-time safety: the compiler
  * will flag any place a raw `string` is used where a normalized UUID is expected.
  */
+
+import {decodeBase58, isBase58} from "./base58"
 
 /**
  * UUID regex pattern for validation.
@@ -32,18 +41,32 @@ export type NormalizedUuid = string & {readonly __brand: "NormalizedUuid"}
  * Accepts:
  * - dashed UUIDs: `550e8400-e29b-41d4-a716-446655440000`
  * - undashed UUIDs: `550e8400e29b41d4a716446655440000`
+ * - Base58-encoded UUIDs: `BDuZwkjCg3nPWMDshoYtpS`
  *
- * @throws if the input is not a valid UUID in either form
+ * Disambiguation order: dashed hex → dashless hex → Base58.
+ * Hex wins when ambiguous.
+ *
+ * @throws if the input is not a valid UUID in any accepted format
  */
 export function normalizeUuid(value: string): NormalizedUuid {
 	const trimmed = value.trim()
 	if (UUID_UNDASHED_PATTERN.test(trimmed)) return trimmed.toLowerCase() as NormalizedUuid
 	if (UUID_DASHED_PATTERN.test(trimmed)) return trimmed.replaceAll("-", "").toLowerCase() as NormalizedUuid
+
+	// Try Base58 last — only if it doesn't look like hex
+	if (isBase58(trimmed)) {
+		try {
+			return decodeBase58(trimmed)
+		} catch {
+			// Fall through to throw below
+		}
+	}
+
 	throw new Error(`Invalid UUID: ${value}`)
 }
 
 /**
- * Validates if a string is a valid UUID.
+ * Validates if a string is a valid UUID (hex or Base58-encoded).
  *
  * @param value - The string to validate
  * @returns true if the string is a valid UUID, false otherwise
@@ -52,6 +75,7 @@ export function normalizeUuid(value: string): NormalizedUuid {
  * ```typescript
  * isValidUuid("550e8400-e29b-41d4-a716-446655440000"); // true
  * isValidUuid("550e8400e29b41d4a716446655440000"); // true
+ * isValidUuid("BDuZwkjCg3nPWMDshoYtpS"); // true (Base58)
  * isValidUuid("invalid-uuid"); // false
  * ```
  */
@@ -68,7 +92,7 @@ export function isValidUuid(value: string): boolean {
  * Converts a UUID to dashed format (xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx).
  * PostgreSQL returns UUIDs in dashed format, so this is useful for consistent comparisons.
  *
- * @param value - A valid UUID string (dashed or undashed)
+ * @param value - A valid UUID string (dashed, undashed, or Base58-encoded)
  * @returns The UUID in dashed lowercase format
  * @throws if the input is not a valid UUID
  *
@@ -76,6 +100,7 @@ export function isValidUuid(value: string): boolean {
  * ```typescript
  * toDashedUuid("550e8400e29b41d4a716446655440000"); // "550e8400-e29b-41d4-a716-446655440000"
  * toDashedUuid("550e8400-e29b-41d4-a716-446655440000"); // "550e8400-e29b-41d4-a716-446655440000"
+ * toDashedUuid("BDuZwkjCg3nPWMDshoYtpS"); // "52c8b540-e249-4e1b-babc-c8eac0acaa23"
  * ```
  */
 export function toDashedUuid(value: string): string {

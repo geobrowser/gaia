@@ -8,13 +8,14 @@
  */
 
 import {Client} from "@opensearch-project/opensearch"
+import {isValidUuid, toDashedUuid} from "../../utils/uuid"
 import type {SearchClient} from "./client"
 import {SearchError, type SearchQuery, type SearchResponse, type SearchResult, type SearchScope} from "./types"
 
 /**
- * UUID regex pattern for detecting ID-based queries.
+ * UUID regex pattern for detecting dashed-hex ID-based queries.
  */
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+const UUID_DASHED_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 /**
  * Default average score for entities without a specific score.
@@ -193,9 +194,14 @@ export class OpenSearchClient implements SearchClient {
 			return this.buildTopRankedQuery(query.scope, query.space_id, query.type_ids, includeDeleted)
 		}
 
-		// Check if the query is a UUID for direct ID lookup
-		if (UUID_PATTERN.test(trimmedQuery)) {
+		// Check if the query is a UUID (dashed hex, dashless hex, or Base58) for direct ID lookup.
+		// OpenSearch stores entity_id as dashed hex, so we convert before the term query.
+		if (UUID_DASHED_PATTERN.test(trimmedQuery)) {
 			return this.buildUuidQuery(trimmedQuery, query.scope, query.space_id, query.type_ids, includeDeleted)
+		}
+		if (isValidUuid(trimmedQuery)) {
+			const dashedUuid = toDashedUuid(trimmedQuery)
+			return this.buildUuidQuery(dashedUuid, query.scope, query.space_id, query.type_ids, includeDeleted)
 		}
 
 		// Build base text search query
