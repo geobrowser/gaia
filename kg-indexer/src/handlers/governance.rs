@@ -1,6 +1,7 @@
 use hermes_schema::pb::governance::{
-    proposal_action::Action, HermesProposalCreated, HermesProposalExecuted, HermesProposalUpdated,
-    HermesProposalVoted, ProposalSettings, ProposalVoteOption, VotingMode as ProtoVotingMode,
+    proposal_action::Action, HermesProposalCreated, HermesProposalExecuted,
+    HermesProposalSettingsUpdated, HermesProposalUpdated, HermesProposalVoted, ProposalSettings,
+    ProposalVoteOption, VotingMode as ProtoVotingMode,
 };
 use uuid::Uuid;
 
@@ -97,6 +98,48 @@ pub fn handle_proposal_executed(
         proposal_id,
         space_id,
         executed_at,
+    })
+}
+
+/// Result of processing a proposal settings update (fast→slow escalation)
+#[allow(dead_code)]
+pub struct ProposalSettingsUpdateResult {
+    pub proposal_id: Uuid,
+    pub space_id: Uuid,
+    pub voting_mode: VotingMode,
+    pub start_time: i64,
+    pub end_time: i64,
+    pub quorum: i64,
+    pub threshold: i64,
+}
+
+/// Process a HermesProposalSettingsUpdated message (fast→slow escalation)
+pub fn handle_proposal_settings_updated(
+    msg: &HermesProposalSettingsUpdated,
+) -> Result<ProposalSettingsUpdateResult, HandlerError> {
+    let proposal_id = Uuid::from_slice(&msg.proposal_id)?;
+    let space_id = Uuid::from_slice(&msg.space_id)?;
+
+    let settings = msg.settings.as_ref().ok_or(HandlerError::MissingPayload)?;
+
+    let voting_mode = match ProtoVotingMode::try_from(settings.voting_mode) {
+        Ok(ProtoVotingMode::Fast) => VotingMode::Fast,
+        Ok(ProtoVotingMode::Slow) | Err(_) => VotingMode::Slow,
+    };
+
+    let threshold = match voting_mode {
+        VotingMode::Fast => settings.flat_threshold as i64,
+        VotingMode::Slow => settings.percentage_threshold as i64,
+    };
+
+    Ok(ProposalSettingsUpdateResult {
+        proposal_id,
+        space_id,
+        voting_mode,
+        start_time: settings.start_date as i64,
+        end_time: settings.last_date as i64,
+        quorum: settings.quorum as i64,
+        threshold,
     })
 }
 
