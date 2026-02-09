@@ -10,7 +10,7 @@ import {Hono} from "hono"
 import {describeRoute} from "hono-openapi"
 
 import type {AppRuntime} from "../services/runtime"
-import {isValidUuid, toBase58, toUuid} from "../utils/uuid"
+import {isValidUuid, toUuid, uuidToBase58} from "../utils/uuid"
 import {
 	getProposalWithVotes,
 	listProposalsInSpace,
@@ -66,31 +66,31 @@ function mapToActionResponse(action: ProposalWithVotes["actions"][number]): Acti
 			if (!action.targetId) return {actionType: "UNKNOWN"}
 			return {
 				actionType: "ADD_MEMBER",
-				targetId: toBase58(toUuid(action.targetId)),
+				targetId: uuidToBase58(action.targetId),
 			}
 		case "RemoveMember":
 			if (!action.targetId) return {actionType: "UNKNOWN"}
 			return {
 				actionType: "REMOVE_MEMBER",
-				targetId: toBase58(toUuid(action.targetId)),
+				targetId: uuidToBase58(action.targetId),
 			}
 		case "AddEditor":
 			if (!action.targetId) return {actionType: "UNKNOWN"}
 			return {
 				actionType: "ADD_EDITOR",
-				targetId: toBase58(toUuid(action.targetId)),
+				targetId: uuidToBase58(action.targetId),
 			}
 		case "RemoveEditor":
 			if (!action.targetId) return {actionType: "UNKNOWN"}
 			return {
 				actionType: "REMOVE_EDITOR",
-				targetId: toBase58(toUuid(action.targetId)),
+				targetId: uuidToBase58(action.targetId),
 			}
 		case "UnflagEditor":
 			if (!action.targetId) return {actionType: "UNKNOWN"}
 			return {
 				actionType: "UNFLAG_EDITOR",
-				targetId: toBase58(toUuid(action.targetId)),
+				targetId: uuidToBase58(action.targetId),
 			}
 		case "Publish":
 			if (!action.contentUri) return {actionType: "UNKNOWN"}
@@ -170,10 +170,10 @@ function computeResponseFields(proposal: ProposalWithVotes | ProposalListItem, n
 	}
 
 	return {
-		proposalId: toBase58(toUuid(proposal.id)),
-		spaceId: toBase58(toUuid(proposal.spaceId)),
+		proposalId: uuidToBase58(proposal.id),
+		spaceId: uuidToBase58(proposal.spaceId),
 		name: proposal.name,
-		proposedBy: toBase58(toUuid(proposal.proposedBy)),
+		proposedBy: uuidToBase58(proposal.proposedBy),
 		status,
 		votingMode: proposal.votingMode.toUpperCase() as "FAST" | "SLOW",
 		actions: proposal.actions.map(mapToActionResponse),
@@ -217,7 +217,7 @@ function buildProposalResponse(
 	const base = computeResponseFields(proposal, nowSeconds)
 
 	const voters: Vote[] = proposal.votes.map((v) => ({
-		voterId: toBase58(toUuid(v.voterId)),
+		voterId: uuidToBase58(v.voterId),
 		vote: v.vote,
 	}))
 

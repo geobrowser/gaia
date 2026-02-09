@@ -1,11 +1,16 @@
 import {Kind} from "graphql/language"
 import type {GraphQLScalarType} from "graphql/type/definition"
-import {toBase58, toUuid} from "../utils/uuid"
+import {toUuid, uuidToBase58} from "../utils/uuid"
 
 export function patchUuidScalar(uuidScalar: GraphQLScalarType): void {
 	// Mutate the existing scalar instance so all references across the schema
 	// automatically get the new behavior.
-	uuidScalar.serialize = (value: unknown) => toBase58(toUuid(String(value)))
+	uuidScalar.serialize = (value: unknown) => {
+		if (typeof value !== "string") {
+			throw new Error(`UUID cannot represent non-string value: ${typeof value}`)
+		}
+		return uuidToBase58(value)
+	}
 	uuidScalar.parseValue = (value: unknown) => {
 		if (typeof value !== "string") {
 			throw new Error(`UUID cannot represent non-string value: ${String(value)}`)

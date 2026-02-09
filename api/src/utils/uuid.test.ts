@@ -1,5 +1,5 @@
 import {describe, expect, it} from "vitest"
-import {type Uuid, isValidUuid, toBase58, toUuid} from "./uuid"
+import {type Uuid, isValidUuid, toBase58, toUuid, uuidToBase58} from "./uuid"
 
 // =============================================================================
 // toUuid — format detection and normalization
@@ -126,5 +126,50 @@ describe("toBase58", () => {
 		// Simulate a bad cast — someone passes a raw string as Uuid
 		const fake = "not-a-real-uuid" as Uuid
 		expect(() => toBase58(fake)).toThrow("expected 36-char dashed UUID")
+	})
+})
+
+// =============================================================================
+// uuidToBase58
+// =============================================================================
+
+describe("uuidToBase58", () => {
+	it("encodes dashed hex to Base58", () => {
+		expect(uuidToBase58("52c8b540-e249-4e1b-babc-c8eac0acaa23")).toBe("BDuZwkjCg3nPWMDshoYtpS")
+	})
+
+	it("encodes dashless hex to Base58", () => {
+		expect(uuidToBase58("52c8b540e2494e1bbabcc8eac0acaa23")).toBe("BDuZwkjCg3nPWMDshoYtpS")
+	})
+
+	it("encodes Base58 to Base58 (idempotent roundtrip)", () => {
+		expect(uuidToBase58("BDuZwkjCg3nPWMDshoYtpS")).toBe("BDuZwkjCg3nPWMDshoYtpS")
+	})
+
+	it("throws on invalid input", () => {
+		expect(() => uuidToBase58("not-valid")).toThrow()
+	})
+})
+
+// =============================================================================
+// toUuid error messages
+// =============================================================================
+
+describe("toUuid error messages", () => {
+	it("includes input length in error message", () => {
+		// Use a string with characters outside Base58 so it doesn't get decoded
+		expect(() => toUuid("this has spaces and is invalid")).toThrow("length=30")
+	})
+
+	it("does not echo raw input in error message", () => {
+		const malicious = "<script>alert('xss')</script>"
+		expect(() => toUuid(malicious)).toThrow("Invalid UUID format")
+		try {
+			toUuid(malicious)
+		} catch (e) {
+			// Error should contain length but not the raw input
+			expect((e as Error).message).toContain("length=")
+			expect((e as Error).message).not.toContain("<script>")
+		}
 	})
 })

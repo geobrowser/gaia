@@ -13,7 +13,7 @@ import {Hono} from "hono"
 import {describeRoute} from "hono-openapi"
 
 import type {AppRuntime} from "../services/runtime"
-import {isValidUuid, toBase58, toUuid} from "../utils/uuid"
+import {isValidUuid, toUuid, uuidToBase58} from "../utils/uuid"
 import {
 	defaultProfile,
 	getProfileByAddress,
@@ -224,7 +224,7 @@ export function createProfileRouter(db: Database, runtime: AppRuntime) {
 
 				// Normalize to dashed hex for DB query
 				const uuid = toUuid(spaceId)
-				const base58SpaceId = toBase58(uuid)
+				const base58SpaceId = uuidToBase58(spaceId)
 
 				// Fetch profile
 				const profile = yield* getProfileBySpaceId(db, uuid)
@@ -362,15 +362,17 @@ export function createProfileRouter(db: Database, runtime: AppRuntime) {
 					return yield* Effect.fail(new ValidationError({message: "Invalid space ID format in request"}))
 				}
 
-				// Normalize UUIDs: dashed hex for DB query, Base58 for Map lookup and API response
+				// Normalize UUIDs: dashed hex for DB query and Map lookup
 				const uuids = (spaceIds as string[]).map(toUuid)
-				const base58SpaceIds = uuids.map(toBase58)
 
-				// Fetch profiles (Map keys will be Base58 from mapProfileRow)
+				// Fetch profiles (Map keys are Uuid from getProfilesBySpaceIds)
 				const profileMap = yield* getProfilesBySpaceIds(db, uuids)
 
 				// Return profiles in the same order as input, with defaults for missing
-				const profiles = base58SpaceIds.map((id) => profileMap.get(id) ?? defaultProfile(id, id))
+				const profiles = uuids.map((uuid) => {
+					const base58Id = uuidToBase58(uuid)
+					return profileMap.get(uuid) ?? defaultProfile(base58Id, base58Id)
+				})
 				const foundCount = profileMap.size
 
 				yield* Effect.logInfo("Batch profile fetch completed", {

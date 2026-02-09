@@ -39,6 +39,9 @@ export type Uuid = string & {readonly __brand: "Uuid"}
  * Insert dashes into a 32-char dashless hex string to produce a Uuid.
  */
 function insertDashes(dashless: string): Uuid {
+	if (dashless.length !== 32) {
+		throw new Error(`insertDashes: expected 32-char input, got ${dashless.length}`)
+	}
 	const result =
 		`${dashless.slice(0, 8)}-${dashless.slice(8, 12)}-${dashless.slice(12, 16)}-${dashless.slice(16, 20)}-${dashless.slice(20)}` as Uuid
 	if (result.length !== 36) {
@@ -74,7 +77,7 @@ export function toUuid(value: string): Uuid {
 	// swallowing it into a generic "Invalid UUID" message.
 	if (isBase58(trimmed)) return insertDashes(decodeBase58(trimmed))
 
-	throw new Error(`Invalid UUID format`)
+	throw new Error(`Invalid UUID format (length=${trimmed.length})`)
 }
 
 /**
@@ -115,4 +118,16 @@ export function toBase58(uuid: Uuid): string {
 		throw new Error(`toBase58: expected 36-char dashed UUID, got: "${uuid}"`)
 	}
 	return encodeBase58(dashless)
+}
+
+/**
+ * Convenience: parse any UUID format (dashed hex, dashless hex, Base58) and
+ * encode to Base58 in one step. Use at serialization boundaries where the
+ * source format is unknown (e.g. raw DB strings, OpenSearch fields).
+ *
+ * @param value - A UUID in any accepted format
+ * @returns Base58-encoded string
+ */
+export function uuidToBase58(value: string): string {
+	return toBase58(toUuid(value))
 }

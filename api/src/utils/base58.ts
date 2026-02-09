@@ -35,6 +35,10 @@ for (let i = 0; i < BASE58_ALPHABET.length; i++) {
  * @param dashlessHex - 32-char lowercase hex string (no dashes)
  * @throws if the input is not exactly 32 lowercase hex characters
  */
+/** Bounded FIFO cache for encodeBase58 — avoids repeated BigInt work for recurring UUIDs. */
+const ENCODE_CACHE_MAX = 2048
+const encodeCache = new Map<string, string>()
+
 export function encodeBase58(dashlessHex: string): string {
 	if (!HEX32_PATTERN.test(dashlessHex)) {
 		throw new Error(
@@ -42,18 +46,34 @@ export function encodeBase58(dashlessHex: string): string {
 		)
 	}
 
+	const cached = encodeCache.get(dashlessHex)
+	if (cached !== undefined) return cached
+
 	let remainder = BigInt(`0x${dashlessHex}`)
 	if (remainder === 0n) return ""
 
 	const chars: string[] = []
+	let iterations = 0
 	while (remainder > 0n) {
+		if (++iterations > MAX_BASE58_LENGTH) {
+			throw new Error(`encodeBase58: loop exceeded ${MAX_BASE58_LENGTH} iterations — input may be invalid`)
+		}
 		const mod = Number(remainder % 58n)
 		chars.push(BASE58_ALPHABET[mod])
 		remainder /= 58n
 	}
 
 	chars.reverse()
-	return chars.join("")
+	const result = chars.join("")
+
+	// FIFO eviction: delete oldest entry when cache is full
+	if (encodeCache.size >= ENCODE_CACHE_MAX) {
+		const firstKey = encodeCache.keys().next().value
+		if (firstKey !== undefined) encodeCache.delete(firstKey)
+	}
+	encodeCache.set(dashlessHex, result)
+
+	return result
 }
 
 /**
@@ -66,6 +86,10 @@ export function encodeBase58(dashlessHex: string): string {
 export function decodeBase58(encoded: string): string {
 	if (encoded.length === 0) {
 		throw new Error("Invalid Base58: empty string")
+	}
+
+	if (encoded.length > MAX_BASE58_LENGTH) {
+		throw new Error(`Invalid Base58: length ${encoded.length} exceeds maximum ${MAX_BASE58_LENGTH}`)
 	}
 
 	let decoded = 0n

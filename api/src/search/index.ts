@@ -40,7 +40,8 @@ const MAX_LIMIT = 100
 const MAX_QUERY_LENGTH = 500
 
 /**
- * Maximum length for space_id parameter (UUID format).
+ * Maximum length for space_id parameter.
+ * Dashed hex = 36 chars, Base58 ≤ 22 chars. Accept either format.
  */
 const MAX_SPACE_ID_LENGTH = 36
 

@@ -63,9 +63,16 @@ describe("decodeBase58", () => {
 		expect(() => decodeBase58("IIll")).toThrow("Invalid Base58 character: I")
 	})
 
+	it("rejects strings longer than 22 chars before BigInt work", () => {
+		// 23 chars should be rejected by the length guard, not overflow
+		expect(() => decodeBase58("zzzzzzzzzzzzzzzzzzzzzzz")).toThrow("exceeds maximum 22")
+		// Very long string should also be rejected cheaply
+		expect(() => decodeBase58("A".repeat(10000))).toThrow("exceeds maximum 22")
+	})
+
 	it("rejects values exceeding 128-bit range", () => {
-		// 23 chars of 'z' (highest digit) will overflow u128
-		expect(() => decodeBase58("zzzzzzzzzzzzzzzzzzzzzzz")).toThrow("exceeds 128-bit")
+		// 22 chars of 'z' passes length check but overflows u128
+		expect(() => decodeBase58("zzzzzzzzzzzzzzzzzzzzzz")).toThrow("exceeds 128-bit")
 	})
 })
 

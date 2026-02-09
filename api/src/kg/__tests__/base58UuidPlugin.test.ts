@@ -1,7 +1,7 @@
 import {GraphQLScalarType} from "graphql"
 import {Kind} from "graphql/language"
 import {describe, expect, it} from "vitest"
-import {patchUuidScalar} from "../uuidScalarPlugin"
+import {patchUuidScalar} from "../base58UuidPlugin"
 
 describe("Base58UuidPlugin scalar patch", () => {
 	it("accepts dashed and undashed UUID inputs and normalizes to dashed lowercase", () => {
@@ -28,12 +28,9 @@ describe("Base58UuidPlugin scalar patch", () => {
 
 		patchUuidScalar(scalar)
 
-		// serialize should produce Base58
+		// serialize should produce the exact Base58 encoding
 		const result = scalar.serialize("550e8400-e29b-41d4-a716-446655440000")
-		expect(typeof result).toBe("string")
-		// Base58 output should NOT contain dashes and should be shorter than 36 chars
-		expect(result).not.toContain("-")
-		expect((result as string).length).toBeLessThanOrEqual(22)
+		expect(result).toBe("BWBeN28Vb7cMEx7Ym8AUzs")
 	})
 
 	it("rejects non-string input values", () => {
@@ -214,6 +211,22 @@ describe("Base58UuidPlugin scalar patch", () => {
 			expect(() => scalar.serialize("invalid-uuid")).toThrow(/Invalid UUID/i)
 			expect(() => scalar.serialize("")).toThrow(/Invalid UUID/i)
 			expect(() => scalar.serialize("550e8400-e29b-41d4-a716-44665544000g")).toThrow(/Invalid UUID/i)
+		})
+
+		it("rejects non-string values via serialize", () => {
+			const scalar = new GraphQLScalarType({
+				name: "UUID",
+				serialize: (v) => String(v),
+				parseValue: (v) => String(v),
+				parseLiteral: (ast) => (ast.kind === Kind.STRING ? ast.value : null),
+			})
+
+			patchUuidScalar(scalar)
+
+			expect(() => scalar.serialize(123 as any)).toThrow(/non-string/)
+			expect(() => scalar.serialize(null as any)).toThrow(/non-string/)
+			expect(() => scalar.serialize(undefined as any)).toThrow(/non-string/)
+			expect(() => scalar.serialize({} as any)).toThrow(/non-string/)
 		})
 	})
 })

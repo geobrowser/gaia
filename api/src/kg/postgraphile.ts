@@ -5,9 +5,9 @@ import type {PoolClient} from "pg"
 import {Pool} from "pg"
 import {createPostGraphileSchema} from "postgraphile"
 import ConnectionFilterPlugin from "postgraphile-plugin-connection-filter"
+import Base58UuidPlugin from "./base58UuidPlugin"
 import EntitySpaceFilterPlugin from "./entitySpaceFilterPlugin"
 import {useGraphQLInstrumentation} from "./instrumentationPlugin"
-import Base58UuidPlugin from "./uuidScalarPlugin"
 import ValueScalarsPlugin from "./valueScalarsPlugin"
 
 // Server context passed from HTTP middleware
@@ -36,7 +36,7 @@ const pgPool = new Pool({
 	allowExitOnIdle: true,
 })
 
-// Base PostGraphile options (without uuidScalarPlugin)
+// Base PostGraphile options (without Base58UuidPlugin)
 const postgraphileOptions = {
 	watchPg: false,
 	graphiql: true,
@@ -123,7 +123,7 @@ const sharedPlugins = [
 	useGraphQLInstrumentation(),
 ]
 
-// GraphQL server without uuidScalarPlugin
+// GraphQL server without Base58UuidPlugin
 export const graphqlServer = createYoga<GraphQLServerContext>({
 	schema: postgraphileSchema,
 	graphiql: {

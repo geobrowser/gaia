@@ -421,12 +421,17 @@ function groupByEntityId(
 
 /**
  * Convert Id (Uint8Array) to Uuid (dashed lowercase hex).
+ * Validates that the byte array is exactly 16 bytes and routes through
+ * toUuid for consistent validation.
  */
 function idToUuid(id: Id): Uuid {
+	if (id.length !== 16) {
+		throw new Error(`idToUuid: expected 16 bytes, got ${id.length}`)
+	}
 	const hex = Array.from(id)
 		.map((b) => b.toString(16).padStart(2, "0"))
 		.join("")
-	return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}` as Uuid
+	return toUuid(hex)
 }
 
 /**

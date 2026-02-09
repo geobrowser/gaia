@@ -7,7 +7,7 @@
 import {sql} from "drizzle-orm"
 import type {NodePgDatabase} from "drizzle-orm/node-postgres"
 import {Data, Effect} from "effect"
-import {isValidUuid, toUuid} from "../utils/uuid"
+import {isValidUuid, toUuid, uuidToBase58} from "../utils/uuid"
 import {
 	type ProposalAction,
 	type ProposalActionType,
@@ -390,19 +390,22 @@ function buildCursorCondition(
 /**
  * Extracts the cursor value from a row based on orderBy field.
  * Returns format "order_value|id" for stable pagination.
+ * The ID is encoded as Base58 for consistency with API UUID output.
+ * Cursors are opaque tokens — clients must not parse them.
  */
 function extractCursorValue(
 	row: BaseProposalRow & {created_at: string},
 	orderBy: ProposalOrderBy = "created_at",
 ): string {
+	const id = uuidToBase58(row.id)
 	switch (orderBy) {
 		case "end_time":
-			return `${row.end_time}|${row.id}`
+			return `${row.end_time}|${id}`
 		case "start_time":
-			return `${row.start_time}|${row.id}`
+			return `${row.start_time}|${id}`
 		case "created_at":
 		default:
-			return `${row.created_at}|${row.id}`
+			return `${row.created_at}|${id}`
 	}
 }
 

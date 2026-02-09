@@ -1,6 +1,6 @@
 import {Pool} from "pg"
 import {afterAll, beforeAll, describe, expect, it} from "vitest"
-import {toBase58, toUuid} from "../../utils/uuid"
+import {uuidToBase58} from "../../utils/uuid"
 import {graphqlServer} from "../postgraphile"
 
 // Helper to execute GraphQL queries against the yoga server
@@ -41,7 +41,7 @@ describe("EntitySpaceFilterPlugin", () => {
 		if (spaceResult.rows.length > 0) {
 			// Strip dashes for GraphQL input (parseValue also accepts dashed, but tests use dashless)
 			testSpaceId = spaceResult.rows[0].space_id.replace(/-/g, "")
-			testSpaceIdBase58 = toBase58(toUuid(spaceResult.rows[0].space_id))
+			testSpaceIdBase58 = uuidToBase58(spaceResult.rows[0].space_id)
 		}
 
 		// Find a type that has entities (via SystemIds.Types relation)
@@ -55,7 +55,7 @@ describe("EntitySpaceFilterPlugin", () => {
 		if (typeResult.rows.length > 0) {
 			// Strip dashes for GraphQL input (parseValue also accepts dashed, but tests use dashless)
 			testTypeId = typeResult.rows[0].to_entity_id.replace(/-/g, "")
-			testTypeIdBase58 = toBase58(toUuid(typeResult.rows[0].to_entity_id))
+			testTypeIdBase58 = uuidToBase58(typeResult.rows[0].to_entity_id)
 		}
 	})
 
