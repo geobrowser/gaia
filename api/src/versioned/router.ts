@@ -35,6 +35,12 @@ import {
 	type QueryError,
 	resolveVersionKey,
 } from "./queries"
+import {
+	serializeEntitySnapshot,
+	serializeGroupedEntityDiff,
+	serializePaginatedProposalDiff,
+	serializeVersionEntries,
+} from "./serialize"
 import type {EntitySnapshot, GroupedEntityDiff, PaginatedProposalDiff, VersionEntry} from "./types"
 
 type Database = NodePgDatabase<Record<string, unknown>>
@@ -229,7 +235,7 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 							)
 					}
 				},
-				onRight: (snapshot: EntitySnapshot) => c.json(snapshot),
+				onRight: (snapshot: EntitySnapshot) => c.json(serializeEntitySnapshot(snapshot)),
 			})
 		},
 	)
@@ -401,7 +407,7 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 							)
 					}
 				},
-				onRight: (versions: VersionEntry[]) => c.json({versions}),
+				onRight: (versions: VersionEntry[]) => c.json({versions: serializeVersionEntries(versions)}),
 			})
 		},
 	)
@@ -609,7 +615,8 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 				},
 				onRight: (diff: GroupedEntityDiff) => {
 					// Spread dynamic groups at root level per spec
-					const {groups, ...rest} = diff
+					const serialized = serializeGroupedEntityDiff(diff)
+					const {groups, ...rest} = serialized
 					return c.json({...rest, ...groups})
 				},
 			})
@@ -813,7 +820,7 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 						}
 					}
 				},
-				onRight: (diff: PaginatedProposalDiff) => c.json(diff),
+				onRight: (diff: PaginatedProposalDiff) => c.json(serializePaginatedProposalDiff(diff)),
 			})
 		},
 	)

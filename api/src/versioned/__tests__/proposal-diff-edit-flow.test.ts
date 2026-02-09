@@ -29,11 +29,11 @@ import {Hono} from "hono"
 import {Pool} from "pg"
 import {afterAll, beforeAll, describe, expect, it} from "vitest"
 import {runtime} from "../../services/runtime"
-import {toUuid} from "../../utils/uuid"
+import {toBase58, toUuid} from "../../utils/uuid"
 import {createVersionedRouter} from "../router"
 
-/** Shorthand to normalize a UUID for response-body assertions. */
-const n = toUuid
+/** Shorthand to encode a UUID for response-body assertions (API returns Base58). */
+const n = (value: string) => toBase58(toUuid(value))
 
 // Skip integration tests if DATABASE_URL is not set
 const DATABASE_URL = process.env.DATABASE_URL

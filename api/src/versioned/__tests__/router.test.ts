@@ -1,7 +1,7 @@
 import {Effect} from "effect"
 import {Hono} from "hono"
 import {beforeEach, describe, expect, it, vi} from "vitest"
-import {toUuid} from "../../utils/uuid"
+import {toBase58, toUuid} from "../../utils/uuid"
 import {createVersionedRouter} from "../router"
 
 // =============================================================================
@@ -156,7 +156,7 @@ describe("GET /versioned/entities/:id", () => {
 
 			expect(res.status).toBe(200)
 			const body = await res.json()
-			expect(body.id).toBe(toUuid(entityId))
+			expect(body.id).toBe(toBase58(toUuid(entityId)))
 			expect(body.values).toBeInstanceOf(Array)
 			expect(body.relations).toBeInstanceOf(Array)
 			expect(body.blocks).toBeInstanceOf(Array)
@@ -403,7 +403,7 @@ describe("GET /versioned/entities/:id/diff", () => {
 
 			expect(res.status).toBe(200)
 			const body = await res.json()
-			expect(body.entityId).toBe(toUuid(entityId))
+			expect(body.entityId).toBe(toBase58(toUuid(entityId)))
 			expect(body.values).toBeInstanceOf(Array)
 			expect(body.relations).toBeInstanceOf(Array)
 			expect(body.blocks).toBeInstanceOf(Array)
@@ -615,8 +615,8 @@ describe("GET /versioned/proposals/:id/diff", () => {
 
 			expect(res.status).toBe(200)
 			const body = await res.json()
-			expect(body.proposalId).toBe(toUuid(proposalId))
-			expect(body.spaceId).toBe(toUuid(spaceId))
+			expect(body.proposalId).toBe(toBase58(toUuid(proposalId)))
+			expect(body.spaceId).toBe(toBase58(toUuid(spaceId)))
 			expect(body.proposalStatus).toBe("active")
 			expect(body.entities).toEqual([])
 			expect(body.pagination).toEqual({

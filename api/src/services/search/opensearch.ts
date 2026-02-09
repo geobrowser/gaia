@@ -8,7 +8,7 @@
  */
 
 import {Client} from "@opensearch-project/opensearch"
-import {isValidUuid, toUuid} from "../../utils/uuid"
+import {isValidUuid, toBase58, toUuid} from "../../utils/uuid"
 import type {SearchClient} from "./client"
 import {SearchError, type SearchQuery, type SearchResponse, type SearchResult, type SearchScope} from "./types"
 
@@ -133,11 +133,11 @@ export class OpenSearchClient implements SearchClient {
 		const results: SearchResult[] = hits.map((hit) => {
 			// Extract typeIds from type_relations array
 			const typeRelations = hit._source.type_relations as Array<{entity_to_id: string}> | undefined
-			const typeIds = typeRelations?.map((rel) => rel.entity_to_id)
+			const typeIds = typeRelations?.map((rel) => toBase58(toUuid(rel.entity_to_id)))
 
 			return {
-				entityId: hit._source.entity_id as string,
-				spaceId: hit._source.space_id as string,
+				entityId: toBase58(toUuid(hit._source.entity_id as string)),
+				spaceId: toBase58(toUuid(hit._source.space_id as string)),
 				name: hit._source.name as string | undefined,
 				description: hit._source.description as string | undefined,
 				avatar: hit._source.avatar as string | undefined,

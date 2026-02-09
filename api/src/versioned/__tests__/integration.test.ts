@@ -23,7 +23,7 @@ import {Hono} from "hono"
 import {Pool} from "pg"
 import {afterAll, beforeAll, describe, expect, it} from "vitest"
 import {runtime} from "../../services/runtime"
-import {toUuid} from "../../utils/uuid"
+import {toBase58, toUuid} from "../../utils/uuid"
 import {createVersionedRouter} from "../router"
 
 // Skip integration tests if DATABASE_URL is not set
@@ -165,7 +165,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 			)
 			expect(res.status).toBe(200)
 			const body = await res.json()
-			const value = body.values.find((v: any) => v.propertyId === uuid.propText)
+			const value = body.values.find((v: any) => v.propertyId === toBase58(uuid.propText))
 			expect(value).toBeDefined()
 			expect(value.text).toBe("Hello World")
 		})
@@ -175,7 +175,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 				`/versioned/entities/${uuid.entityAllTypes}?editId=${uuid.edit1}&spaceId=${uuid.space1}`,
 			)
 			const body = await res.json()
-			const value = body.values.find((v: any) => v.propertyId === uuid.propBool)
+			const value = body.values.find((v: any) => v.propertyId === toBase58(uuid.propBool))
 			expect(value).toBeDefined()
 			expect(value.boolean).toBe(true)
 		})
@@ -185,7 +185,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 				`/versioned/entities/${uuid.entityAllTypes}?editId=${uuid.edit1}&spaceId=${uuid.space1}`,
 			)
 			const body = await res.json()
-			const value = body.values.find((v: any) => v.propertyId === uuid.propInt)
+			const value = body.values.find((v: any) => v.propertyId === toBase58(uuid.propInt))
 			expect(value).toBeDefined()
 			expect(value.integer).toBe("42") // Bigint serialized as string
 		})
@@ -195,7 +195,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 				`/versioned/entities/${uuid.entityAllTypes}?editId=${uuid.edit1}&spaceId=${uuid.space1}`,
 			)
 			const body = await res.json()
-			const value = body.values.find((v: any) => v.propertyId === uuid.propFloat)
+			const value = body.values.find((v: any) => v.propertyId === toBase58(uuid.propFloat))
 			expect(value).toBeDefined()
 			expect(value.float).toBeCloseTo(3.14159, 5)
 		})
@@ -205,7 +205,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 				`/versioned/entities/${uuid.entityAllTypes}?editId=${uuid.edit1}&spaceId=${uuid.space1}`,
 			)
 			const body = await res.json()
-			const value = body.values.find((v: any) => v.propertyId === uuid.propDecimal)
+			const value = body.values.find((v: any) => v.propertyId === toBase58(uuid.propDecimal))
 			expect(value).toBeDefined()
 			expect(value.decimal).toBe("123.456789")
 		})
@@ -215,7 +215,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 				`/versioned/entities/${uuid.entityAllTypes}?editId=${uuid.edit1}&spaceId=${uuid.space1}`,
 			)
 			const body = await res.json()
-			const value = body.values.find((v: any) => v.propertyId === uuid.propBytes)
+			const value = body.values.find((v: any) => v.propertyId === toBase58(uuid.propBytes))
 			expect(value).toBeDefined()
 			// "hello" in base64
 			expect(value.bytes).toBe("aGVsbG8=")
@@ -226,7 +226,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 				`/versioned/entities/${uuid.entityAllTypes}?editId=${uuid.edit1}&spaceId=${uuid.space1}`,
 			)
 			const body = await res.json()
-			const value = body.values.find((v: any) => v.propertyId === uuid.propDate)
+			const value = body.values.find((v: any) => v.propertyId === toBase58(uuid.propDate))
 			expect(value).toBeDefined()
 			expect(value.date).toBe("2024-01-15")
 		})
@@ -236,7 +236,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 				`/versioned/entities/${uuid.entityAllTypes}?editId=${uuid.edit1}&spaceId=${uuid.space1}`,
 			)
 			const body = await res.json()
-			const value = body.values.find((v: any) => v.propertyId === uuid.propTime)
+			const value = body.values.find((v: any) => v.propertyId === toBase58(uuid.propTime))
 			expect(value).toBeDefined()
 			expect(value.time).toBe("14:30:00")
 		})
@@ -246,7 +246,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 				`/versioned/entities/${uuid.entityAllTypes}?editId=${uuid.edit1}&spaceId=${uuid.space1}`,
 			)
 			const body = await res.json()
-			const value = body.values.find((v: any) => v.propertyId === uuid.propDatetime)
+			const value = body.values.find((v: any) => v.propertyId === toBase58(uuid.propDatetime))
 			expect(value).toBeDefined()
 			expect(value.datetime).toBe("2024-01-15T14:30:00Z")
 		})
@@ -256,7 +256,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 				`/versioned/entities/${uuid.entityAllTypes}?editId=${uuid.edit1}&spaceId=${uuid.space1}`,
 			)
 			const body = await res.json()
-			const value = body.values.find((v: any) => v.propertyId === uuid.propSchedule)
+			const value = body.values.find((v: any) => v.propertyId === toBase58(uuid.propSchedule))
 			expect(value).toBeDefined()
 			expect(value.schedule).toEqual({rrule: "FREQ=DAILY"})
 		})
@@ -266,7 +266,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 				`/versioned/entities/${uuid.entityAllTypes}?editId=${uuid.edit1}&spaceId=${uuid.space1}`,
 			)
 			const body = await res.json()
-			const value = body.values.find((v: any) => v.propertyId === uuid.propPoint)
+			const value = body.values.find((v: any) => v.propertyId === toBase58(uuid.propPoint))
 			expect(value).toBeDefined()
 			expect(value.point).toBe("37.7749,-122.4194")
 		})
@@ -276,7 +276,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 				`/versioned/entities/${uuid.entityAllTypes}?editId=${uuid.edit1}&spaceId=${uuid.space1}`,
 			)
 			const body = await res.json()
-			const value = body.values.find((v: any) => v.propertyId === uuid.propRect)
+			const value = body.values.find((v: any) => v.propertyId === toBase58(uuid.propRect))
 			expect(value).toBeDefined()
 			expect(value.rect).toBe("0,0,100,100")
 		})
@@ -286,7 +286,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 				`/versioned/entities/${uuid.entityAllTypes}?editId=${uuid.edit1}&spaceId=${uuid.space1}`,
 			)
 			const body = await res.json()
-			const value = body.values.find((v: any) => v.propertyId === uuid.propEmbedding)
+			const value = body.values.find((v: any) => v.propertyId === toBase58(uuid.propEmbedding))
 			expect(value).toBeDefined()
 			expect(value.embedding).toEqual([0.1, 0.2, 0.3])
 		})
@@ -313,11 +313,11 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 			const body = await res.json()
 			expect(body.relations.length).toBeGreaterThanOrEqual(1)
 
-			const rel = body.relations.find((r: any) => r.relationId === uuid.rel1)
+			const rel = body.relations.find((r: any) => r.relationId === toBase58(uuid.rel1))
 			expect(rel).toBeDefined()
-			expect(rel.typeId).toBe(uuid.relTypeGeneric)
-			expect(rel.fromEntityId).toBe(uuid.entityWithRelations)
-			expect(rel.toEntityId).toBe(uuid.entityAllTypes)
+			expect(rel.typeId).toBe(toBase58(uuid.relTypeGeneric))
+			expect(rel.fromEntityId).toBe(toBase58(uuid.entityWithRelations))
+			expect(rel.toEntityId).toBe(toBase58(uuid.entityAllTypes))
 		})
 
 		it("returns cross-space relation with toSpaceId", async () => {
@@ -325,9 +325,9 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 				`/versioned/entities/${uuid.entityWithRelations}?editId=${uuid.edit1}&spaceId=${uuid.space1}`,
 			)
 			const body = await res.json()
-			const rel = body.relations.find((r: any) => r.relationId === uuid.relCrossSpace)
+			const rel = body.relations.find((r: any) => r.relationId === toBase58(uuid.relCrossSpace))
 			expect(rel).toBeDefined()
-			expect(rel.toSpaceId).toBe(uuid.space2)
+			expect(rel.toSpaceId).toBe(toBase58(uuid.space2))
 		})
 
 		it("returns positioned relation with position", async () => {
@@ -335,7 +335,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 				`/versioned/entities/${uuid.entityWithRelations}?editId=${uuid.edit1}&spaceId=${uuid.space1}`,
 			)
 			const body = await res.json()
-			const rel = body.relations.find((r: any) => r.relationId === uuid.relPositioned)
+			const rel = body.relations.find((r: any) => r.relationId === toBase58(uuid.relPositioned))
 			expect(rel).toBeDefined()
 			expect(rel.position).toBe("a0")
 		})
@@ -357,9 +357,9 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 			expect(body.blocks.length).toBeGreaterThanOrEqual(2)
 
 			// Find text blocks - they have MARKDOWN_CONTENT property
-			const textBlock = body.blocks.find((b: any) => b.id === uuid.blockText1)
+			const textBlock = body.blocks.find((b: any) => b.id === toBase58(uuid.blockText1))
 			expect(textBlock).toBeDefined()
-			const textValue = textBlock.values.find((v: any) => v.propertyId === uuid.propMarkdownContent)
+			const textValue = textBlock.values.find((v: any) => v.propertyId === toBase58(uuid.propMarkdownContent))
 			expect(textValue?.text).toBe("Block 1 content")
 		})
 
@@ -369,9 +369,9 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 			)
 			const body = await res.json()
 
-			const imageBlock = body.blocks.find((b: any) => b.id === uuid.blockImage)
+			const imageBlock = body.blocks.find((b: any) => b.id === toBase58(uuid.blockImage))
 			expect(imageBlock).toBeDefined()
-			const urlValue = imageBlock.values.find((v: any) => v.propertyId === uuid.propImageUrl)
+			const urlValue = imageBlock.values.find((v: any) => v.propertyId === toBase58(uuid.propImageUrl))
 			expect(urlValue?.text).toBe("https://example.com/image.png")
 		})
 
@@ -381,9 +381,9 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 			)
 			const body = await res.json()
 
-			const dataBlock = body.blocks.find((b: any) => b.id === uuid.blockData)
+			const dataBlock = body.blocks.find((b: any) => b.id === toBase58(uuid.blockData))
 			expect(dataBlock).toBeDefined()
-			const nameValue = dataBlock.values.find((v: any) => v.propertyId === uuid.propName)
+			const nameValue = dataBlock.values.find((v: any) => v.propertyId === toBase58(uuid.propName))
 			expect(nameValue?.text).toBe("Data Block Name")
 		})
 
@@ -394,7 +394,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 			const body = await res.json()
 
 			// BLOCKS relations should NOT appear in the relations array
-			const blockRelations = body.relations.filter((r: any) => r.typeId === uuid.relTypeBlocks)
+			const blockRelations = body.relations.filter((r: any) => r.typeId === toBase58(uuid.relTypeBlocks))
 			expect(blockRelations).toEqual([])
 		})
 	})
@@ -410,7 +410,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 			)
 			expect(res.status).toBe(200)
 			const body = await res.json()
-			expect(body.id).toBe(uuid.entityNonExistent)
+			expect(body.id).toBe(toBase58(uuid.entityNonExistent))
 			expect(body.values).toEqual([])
 			expect(body.relations).toEqual([])
 			expect(body.blocks).toEqual([])
@@ -506,7 +506,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 			expect(res.status).toBe(200)
 			const body = await res.json()
 
-			const textChange = body.values.find((v: any) => v.propertyId === uuid.propText)
+			const textChange = body.values.find((v: any) => v.propertyId === toBase58(uuid.propText))
 			expect(textChange).toBeDefined()
 			expect(textChange.type).toBe("TEXT")
 			expect(textChange.before).toBe("Original text")
@@ -519,7 +519,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 			)
 			const body = await res.json()
 
-			const intChange = body.values.find((v: any) => v.propertyId === uuid.propInt)
+			const intChange = body.values.find((v: any) => v.propertyId === toBase58(uuid.propInt))
 			expect(intChange).toBeDefined()
 			expect(intChange.before).toBeNull()
 			expect(intChange.after).toBe("100")
@@ -531,7 +531,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 			)
 			const body = await res.json()
 
-			const boolChange = body.values.find((v: any) => v.propertyId === uuid.propBool)
+			const boolChange = body.values.find((v: any) => v.propertyId === toBase58(uuid.propBool))
 			expect(boolChange).toBeDefined()
 			expect(boolChange.before).not.toBeNull()
 			expect(boolChange.after).toBeNull()
@@ -553,7 +553,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 			)
 			const body = await res.json()
 
-			const textChange = body.values.find((v: any) => v.propertyId === uuid.propText)
+			const textChange = body.values.find((v: any) => v.propertyId === toBase58(uuid.propText))
 			expect(textChange.diff).toBeInstanceOf(Array)
 			expect(textChange.diff.length).toBeGreaterThan(0)
 
@@ -576,7 +576,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 			)
 			const body = await res.json()
 
-			const relAdd = body.relations.find((r: any) => r.changeType === "ADD" && r.relationId === uuid.rel2)
+			const relAdd = body.relations.find((r: any) => r.changeType === "ADD" && r.relationId === toBase58(uuid.rel2))
 			expect(relAdd).toBeDefined()
 			expect(relAdd.before).toBeNull()
 			expect(relAdd.after).toBeDefined()
@@ -608,7 +608,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 			expect(res.status).toBe(200)
 			const body = await res.json()
 
-			const textBlockChange = body.blocks.find((b: any) => b.id === uuid.blockText1 && b.type === "textBlock")
+			const textBlockChange = body.blocks.find((b: any) => b.id === toBase58(uuid.blockText1) && b.type === "textBlock")
 			expect(textBlockChange).toBeDefined()
 			expect(textBlockChange.before).toBe("Block 1 content")
 			expect(textBlockChange.after).toBe("Block 1 updated content")
@@ -630,7 +630,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 
 			// Should have groupKeys listing the dynamic group types with changes
 			expect(body.groupKeys).toBeInstanceOf(Array)
-			expect(body.groupKeys).toContain(uuid.relTypeCustomA)
+			expect(body.groupKeys).toContain(toBase58(uuid.relTypeCustomA))
 		})
 
 		it("spreads dynamic groups at root level", async () => {
@@ -641,7 +641,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 
 			// Dynamic groups should be spread at root level (not nested under 'groups')
 			expect(body.groups).toBeUndefined() // 'groups' is spread, not returned as-is
-			expect(body[uuid.relTypeCustomA]).toBeInstanceOf(Array)
+			expect(body[toBase58(uuid.relTypeCustomA)]).toBeInstanceOf(Array)
 		})
 
 		it("includes entity diffs in dynamic groups", async () => {
@@ -650,7 +650,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 			)
 			const body = await res.json()
 
-			const dynamicGroupA = body[uuid.relTypeCustomA]
+			const dynamicGroupA = body[toBase58(uuid.relTypeCustomA)]
 			expect(dynamicGroupA).toBeDefined()
 			expect(dynamicGroupA.length).toBeGreaterThan(0)
 
@@ -667,8 +667,8 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 			const body = await res.json()
 
 			// Should have both custom types when both have changes
-			if (body.groupKeys.includes(uuid.relTypeCustomB)) {
-				expect(body[uuid.relTypeCustomB]).toBeInstanceOf(Array)
+			if (body.groupKeys.includes(toBase58(uuid.relTypeCustomB))) {
+				expect(body[toBase58(uuid.relTypeCustomB)]).toBeInstanceOf(Array)
 			}
 		})
 
@@ -752,47 +752,48 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 	})
 
 	// ==========================================================================
-	// 11. UUID Format - Dashed Hex Regression Guard
+	// 11. UUID Format - Base58 Output Regression Guard
 	//
-	// The versioned API returns dashed lowercase hex UUIDs (36 chars),
-	// matching PostgreSQL's native format. These tests verify every UUID
-	// field in every response shape to catch format regressions.
+	// The versioned API serializes UUID fields as Base58 in responses.
+	// Internal types use dashed hex (Uuid), but the serialization layer
+	// converts to Base58 at the response boundary. These tests verify
+	// every UUID field in every response shape to catch format regressions.
 	// ==========================================================================
 
-	describe("UUID Format - all responses use dashed lowercase hex UUIDs", () => {
-		const DASHED_UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+	describe("UUID Format - all responses use Base58-encoded UUIDs", () => {
+		const BASE58_PATTERN = /^[1-9A-HJ-NP-Za-km-z]+$/
 
-		function expectDashedUuid(value: unknown, field: string): void {
-			expect(value, `${field} should be a dashed UUID but got: ${value}`).toMatch(DASHED_UUID)
+		function expectBase58(value: unknown, field: string): void {
+			expect(value, `${field} should be a Base58 string but got: ${value}`).toMatch(BASE58_PATTERN)
 		}
 
-		function expectOptionalDashedUuid(value: unknown, field: string): void {
+		function expectOptionalBase58(value: unknown, field: string): void {
 			if (value !== null && value !== undefined) {
-				expectDashedUuid(value, field)
+				expectBase58(value, field)
 			}
 		}
 
 		function assertValueUuids(v: any, prefix: string): void {
-			expectDashedUuid(v.propertyId, `${prefix}.propertyId`)
-			expectDashedUuid(v.spaceId, `${prefix}.spaceId`)
-			expectOptionalDashedUuid(v.contextRootId, `${prefix}.contextRootId`)
-			expectOptionalDashedUuid(v.contextEdgeTypeId, `${prefix}.contextEdgeTypeId`)
+			expectBase58(v.propertyId, `${prefix}.propertyId`)
+			expectBase58(v.spaceId, `${prefix}.spaceId`)
+			expectOptionalBase58(v.contextRootId, `${prefix}.contextRootId`)
+			expectOptionalBase58(v.contextEdgeTypeId, `${prefix}.contextEdgeTypeId`)
 		}
 
 		function assertRelationUuids(r: any, prefix: string): void {
-			expectDashedUuid(r.relationId, `${prefix}.relationId`)
-			expectDashedUuid(r.typeId, `${prefix}.typeId`)
-			expectDashedUuid(r.fromEntityId, `${prefix}.fromEntityId`)
-			expectOptionalDashedUuid(r.fromSpaceId, `${prefix}.fromSpaceId`)
-			expectDashedUuid(r.toEntityId, `${prefix}.toEntityId`)
-			expectOptionalDashedUuid(r.toSpaceId, `${prefix}.toSpaceId`)
-			expectDashedUuid(r.spaceId, `${prefix}.spaceId`)
-			expectOptionalDashedUuid(r.contextRootId, `${prefix}.contextRootId`)
-			expectOptionalDashedUuid(r.contextEdgeTypeId, `${prefix}.contextEdgeTypeId`)
+			expectBase58(r.relationId, `${prefix}.relationId`)
+			expectBase58(r.typeId, `${prefix}.typeId`)
+			expectBase58(r.fromEntityId, `${prefix}.fromEntityId`)
+			expectOptionalBase58(r.fromSpaceId, `${prefix}.fromSpaceId`)
+			expectBase58(r.toEntityId, `${prefix}.toEntityId`)
+			expectOptionalBase58(r.toSpaceId, `${prefix}.toSpaceId`)
+			expectBase58(r.spaceId, `${prefix}.spaceId`)
+			expectOptionalBase58(r.contextRootId, `${prefix}.contextRootId`)
+			expectOptionalBase58(r.contextEdgeTypeId, `${prefix}.contextEdgeTypeId`)
 		}
 
 		function assertBlockSnapshotUuids(b: any, prefix: string): void {
-			expectDashedUuid(b.id, `${prefix}.id`)
+			expectBase58(b.id, `${prefix}.id`)
 			for (let i = 0; i < b.values.length; i++) {
 				assertValueUuids(b.values[i], `${prefix}.values[${i}]`)
 			}
@@ -802,30 +803,30 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 		}
 
 		function assertValueChangeUuids(v: any, prefix: string): void {
-			expectDashedUuid(v.propertyId, `${prefix}.propertyId`)
-			expectDashedUuid(v.spaceId, `${prefix}.spaceId`)
+			expectBase58(v.propertyId, `${prefix}.propertyId`)
+			expectBase58(v.spaceId, `${prefix}.spaceId`)
 		}
 
 		function assertRelationChangeUuids(r: any, prefix: string): void {
-			expectDashedUuid(r.relationId, `${prefix}.relationId`)
-			expectDashedUuid(r.typeId, `${prefix}.typeId`)
-			expectDashedUuid(r.spaceId, `${prefix}.spaceId`)
+			expectBase58(r.relationId, `${prefix}.relationId`)
+			expectBase58(r.typeId, `${prefix}.typeId`)
+			expectBase58(r.spaceId, `${prefix}.spaceId`)
 			if (r.before) {
-				expectDashedUuid(r.before.toEntityId, `${prefix}.before.toEntityId`)
-				expectOptionalDashedUuid(r.before.toSpaceId, `${prefix}.before.toSpaceId`)
+				expectBase58(r.before.toEntityId, `${prefix}.before.toEntityId`)
+				expectOptionalBase58(r.before.toSpaceId, `${prefix}.before.toSpaceId`)
 			}
 			if (r.after) {
-				expectDashedUuid(r.after.toEntityId, `${prefix}.after.toEntityId`)
-				expectOptionalDashedUuid(r.after.toSpaceId, `${prefix}.after.toSpaceId`)
+				expectBase58(r.after.toEntityId, `${prefix}.after.toEntityId`)
+				expectOptionalBase58(r.after.toSpaceId, `${prefix}.after.toSpaceId`)
 			}
 		}
 
 		function assertBlockChangeUuids(b: any, prefix: string): void {
-			expectDashedUuid(b.id, `${prefix}.id`)
+			expectBase58(b.id, `${prefix}.id`)
 		}
 
 		function assertEntityDiffUuids(d: any, prefix: string): void {
-			expectDashedUuid(d.entityId, `${prefix}.entityId`)
+			expectBase58(d.entityId, `${prefix}.entityId`)
 			for (let i = 0; i < d.values.length; i++) {
 				assertValueChangeUuids(d.values[i], `${prefix}.values[${i}]`)
 			}
@@ -837,7 +838,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 			}
 		}
 
-		it("entity snapshot: id, values, relations, blocks all dashed", async () => {
+		it("entity snapshot: id, values, relations, blocks all Base58", async () => {
 			const res = await app.request(
 				`/versioned/entities/${uuid.entityWithBlocks}?editId=${uuid.edit1}&spaceId=${uuid.space1}`,
 			)
@@ -845,7 +846,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 			const body = await res.json()
 
 			// EntitySnapshot.id
-			expectDashedUuid(body.id, "id")
+			expectBase58(body.id, "id")
 
 			// EntitySnapshot.values[]
 			for (let i = 0; i < body.values.length; i++) {
@@ -863,7 +864,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 			}
 		})
 
-		it("entity snapshot with relations: all relation UUID fields dashed", async () => {
+		it("entity snapshot with relations: all relation UUID fields Base58", async () => {
 			const res = await app.request(
 				`/versioned/entities/${uuid.entityWithRelations}?editId=${uuid.edit1}&spaceId=${uuid.space1}`,
 			)
@@ -876,7 +877,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 			}
 		})
 
-		it("entity diff: entityId, value changes, relation changes, block changes all dashed", async () => {
+		it("entity diff: entityId, value changes, relation changes, block changes all Base58", async () => {
 			const res = await app.request(
 				`/versioned/entities/${uuid.entityChanging}/diff?fromEditId=${uuid.edit1}&toEditId=${uuid.edit2}&spaceId=${uuid.space1}`,
 			)
@@ -884,7 +885,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 			const body = await res.json()
 
 			// GroupedEntityDiff top-level
-			expectDashedUuid(body.entityId, "entityId")
+			expectBase58(body.entityId, "entityId")
 
 			// ValueChange[]
 			for (let i = 0; i < body.values.length; i++) {
@@ -903,29 +904,29 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 
 			// GroupedEntityDiff.groupKeys[]
 			for (let i = 0; i < body.groupKeys.length; i++) {
-				expectDashedUuid(body.groupKeys[i], `groupKeys[${i}]`)
+				expectBase58(body.groupKeys[i], `groupKeys[${i}]`)
 			}
 		})
 
-		it("entity versions: editId is dashed", async () => {
+		it("entity versions: editId is Base58", async () => {
 			const res = await app.request(`/versioned/entities/${uuid.entityAllTypes}/versions?spaceId=${uuid.space1}`)
 			expect(res.status).toBe(200)
 			const body = await res.json()
 
 			expect(body.versions.length).toBeGreaterThan(0)
 			for (let i = 0; i < body.versions.length; i++) {
-				expectDashedUuid(body.versions[i].editId, `versions[${i}].editId`)
+				expectBase58(body.versions[i].editId, `versions[${i}].editId`)
 			}
 		})
 
-		it("proposal diff: proposalId, spaceId, entity diffs all dashed", async () => {
+		it("proposal diff: proposalId, spaceId, entity diffs all Base58", async () => {
 			const res = await app.request(`/versioned/proposals/${uuid.proposalActive}/diff?spaceId=${uuid.space1}`)
 			expect(res.status).toBe(200)
 			const body = await res.json()
 
 			// PaginatedProposalDiff top-level
-			expectDashedUuid(body.proposalId, "proposalId")
-			expectDashedUuid(body.spaceId, "spaceId")
+			expectBase58(body.proposalId, "proposalId")
+			expectBase58(body.spaceId, "spaceId")
 
 			// PaginatedProposalDiff.entities[]
 			for (let i = 0; i < body.entities.length; i++) {
