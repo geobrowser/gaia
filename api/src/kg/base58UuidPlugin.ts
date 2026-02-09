@@ -1,6 +1,6 @@
 import {Kind} from "graphql/language"
 import type {GraphQLScalarType} from "graphql/type/definition"
-import {toUuid, uuidToBase58} from "../utils/uuid"
+import {fromBase58, uuidToBase58} from "../utils/uuid"
 
 export function patchUuidScalar(uuidScalar: GraphQLScalarType): void {
 	// Mutate the existing scalar instance so all references across the schema
@@ -15,16 +15,16 @@ export function patchUuidScalar(uuidScalar: GraphQLScalarType): void {
 		if (typeof value !== "string") {
 			throw new Error(`UUID cannot represent non-string value: ${String(value)}`)
 		}
-		return toUuid(value)
+		return fromBase58(value)
 	}
 	uuidScalar.parseLiteral = (ast) => {
 		if (ast.kind !== Kind.STRING) {
 			throw new Error("UUID can only parse string values")
 		}
-		return toUuid(ast.value)
+		return fromBase58(ast.value)
 	}
 	uuidScalar.description =
-		"A universally unique identifier (UUID) as per RFC 4122. Accepts dashed hex, undashed hex, or Base58-encoded input; always serializes as Base58."
+		"A universally unique identifier (UUID) as per RFC 4122. Accepts Base58-encoded input only; always serializes as Base58."
 }
 
 /**

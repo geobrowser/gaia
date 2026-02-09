@@ -10,9 +10,15 @@
 import {Effect} from "effect"
 import {Hono} from "hono"
 import {beforeEach, describe, expect, it, vi} from "vitest"
+import {uuidToBase58} from "../../utils/uuid"
 import {createProposalsRouter} from "../router"
 import {computeProposalStatus} from "../status"
 import type {ProposalWithVotes} from "../types"
+
+// Base58-encoded versions of test UUIDs for use in request URLs.
+// The API only accepts Base58 IDs on input; dashed hex UUIDs remain in mock DB rows.
+const PROPOSAL_ID_B58 = uuidToBase58("550e8400-e29b-41d4-a716-446655440000")
+const SPACE_ID_B58 = uuidToBase58("660e8400-e29b-41d4-a716-446655440000")
 
 // =============================================================================
 // Test Setup
@@ -114,17 +120,17 @@ describe("GET /proposals/space/:spaceId/status", () => {
 	})
 
 	describe("parameter validation", () => {
-		it("returns 400 when spaceId is not a valid UUID", async () => {
+		it("returns 400 when spaceId is not a valid Base58 ID", async () => {
 			const res = await app.request("/proposals/space/not-a-uuid/status")
 
 			expect(res.status).toBe(400)
 			const body = await res.json()
 			expect(body.error).toBe("Invalid parameter")
-			expect(body.message).toContain("UUID")
+			expect(body.message).toContain("Base58")
 		})
 
 		it("returns 400 when limit is not a number", async () => {
-			const res = await app.request("/proposals/space/550e8400-e29b-41d4-a716-446655440000/status?limit=abc")
+			const res = await app.request(`/proposals/space/${PROPOSAL_ID_B58}/status?limit=abc`)
 
 			expect(res.status).toBe(400)
 			const body = await res.json()
@@ -132,7 +138,7 @@ describe("GET /proposals/space/:spaceId/status", () => {
 		})
 
 		it("returns 400 when limit is out of range", async () => {
-			const res = await app.request("/proposals/space/550e8400-e29b-41d4-a716-446655440000/status?limit=101")
+			const res = await app.request(`/proposals/space/${PROPOSAL_ID_B58}/status?limit=101`)
 
 			expect(res.status).toBe(400)
 			const body = await res.json()
@@ -140,9 +146,7 @@ describe("GET /proposals/space/:spaceId/status", () => {
 		})
 
 		it("returns 400 for invalid status values", async () => {
-			const res = await app.request(
-				"/proposals/space/550e8400-e29b-41d4-a716-446655440000/status?status=INVALID,BADSTATUS",
-			)
+			const res = await app.request(`/proposals/space/${PROPOSAL_ID_B58}/status?status=INVALID,BADSTATUS`)
 
 			expect(res.status).toBe(400)
 			const body = await res.json()
@@ -153,9 +157,7 @@ describe("GET /proposals/space/:spaceId/status", () => {
 		})
 
 		it("returns 400 for invalid orderBy value", async () => {
-			const res = await app.request(
-				"/proposals/space/550e8400-e29b-41d4-a716-446655440000/status?orderBy=invalid_column",
-			)
+			const res = await app.request(`/proposals/space/${PROPOSAL_ID_B58}/status?orderBy=invalid_column`)
 
 			expect(res.status).toBe(400)
 			const body = await res.json()
@@ -164,9 +166,7 @@ describe("GET /proposals/space/:spaceId/status", () => {
 		})
 
 		it("returns 400 for invalid orderDirection value", async () => {
-			const res = await app.request(
-				"/proposals/space/550e8400-e29b-41d4-a716-446655440000/status?orderDirection=sideways",
-			)
+			const res = await app.request(`/proposals/space/${PROPOSAL_ID_B58}/status?orderDirection=sideways`)
 
 			expect(res.status).toBe(400)
 			const body = await res.json()
@@ -179,7 +179,7 @@ describe("GET /proposals/space/:spaceId/status", () => {
 			db.execute.mockResolvedValueOnce({rows: []})
 
 			const res = await app.request(
-				"/proposals/space/550e8400-e29b-41d4-a716-446655440000/status?status=proposed,EXECUTABLE,Accepted",
+				`/proposals/space/${PROPOSAL_ID_B58}/status?status=proposed,EXECUTABLE,Accepted`,
 			)
 
 			expect(res.status).toBe(200)
@@ -188,9 +188,7 @@ describe("GET /proposals/space/:spaceId/status", () => {
 		it("accepts valid orderBy values", async () => {
 			db.execute.mockResolvedValueOnce({rows: []})
 
-			const res = await app.request(
-				"/proposals/space/550e8400-e29b-41d4-a716-446655440000/status?orderBy=end_time",
-			)
+			const res = await app.request(`/proposals/space/${PROPOSAL_ID_B58}/status?orderBy=end_time`)
 
 			expect(res.status).toBe(200)
 		})
@@ -198,9 +196,7 @@ describe("GET /proposals/space/:spaceId/status", () => {
 		it("accepts valid orderDirection values", async () => {
 			db.execute.mockResolvedValueOnce({rows: []})
 
-			const res = await app.request(
-				"/proposals/space/550e8400-e29b-41d4-a716-446655440000/status?orderDirection=asc",
-			)
+			const res = await app.request(`/proposals/space/${PROPOSAL_ID_B58}/status?orderDirection=asc`)
 
 			expect(res.status).toBe(200)
 		})
@@ -211,7 +207,7 @@ describe("GET /proposals/space/:spaceId/status", () => {
 			const row = makeDbProposalRow()
 			db.execute.mockResolvedValueOnce({rows: [row]})
 
-			const res = await app.request("/proposals/space/660e8400-e29b-41d4-a716-446655440000/status")
+			const res = await app.request(`/proposals/space/${SPACE_ID_B58}/status`)
 
 			expect(res.status).toBe(200)
 			const body = await res.json()
@@ -230,7 +226,7 @@ describe("GET /proposals/space/:spaceId/status", () => {
 			)
 			db.execute.mockResolvedValueOnce({rows})
 
-			const res = await app.request("/proposals/space/660e8400-e29b-41d4-a716-446655440000/status?limit=20")
+			const res = await app.request(`/proposals/space/${SPACE_ID_B58}/status?limit=20`)
 
 			expect(res.status).toBe(200)
 			const body = await res.json()
@@ -243,7 +239,7 @@ describe("GET /proposals/space/:spaceId/status", () => {
 		it("passes status filter to query", async () => {
 			db.execute.mockResolvedValueOnce({rows: []})
 
-			await app.request("/proposals/space/660e8400-e29b-41d4-a716-446655440000/status?status=PROPOSED,EXECUTABLE")
+			await app.request(`/proposals/space/${SPACE_ID_B58}/status?status=PROPOSED,EXECUTABLE`)
 
 			expect(db.execute).toHaveBeenCalled()
 			// Verify the SQL was called (we can't easily inspect the SQL content with mocks)
@@ -252,9 +248,7 @@ describe("GET /proposals/space/:spaceId/status", () => {
 		it("passes orderBy and orderDirection to query", async () => {
 			db.execute.mockResolvedValueOnce({rows: []})
 
-			await app.request(
-				"/proposals/space/660e8400-e29b-41d4-a716-446655440000/status?orderBy=end_time&orderDirection=asc",
-			)
+			await app.request(`/proposals/space/${SPACE_ID_B58}/status?orderBy=end_time&orderDirection=asc`)
 
 			expect(db.execute).toHaveBeenCalled()
 		})
@@ -264,9 +258,9 @@ describe("GET /proposals/space/:spaceId/status", () => {
 		it("accepts valid cursor format for created_at ordering", async () => {
 			db.execute.mockResolvedValueOnce({rows: []})
 
-			const cursor = "2024-01-15T10:30:00.000Z|550e8400-e29b-41d4-a716-446655440000"
+			const cursor = `2024-01-15T10:30:00.000Z|${PROPOSAL_ID_B58}`
 			const res = await app.request(
-				`/proposals/space/660e8400-e29b-41d4-a716-446655440000/status?cursor=${encodeURIComponent(cursor)}`,
+				`/proposals/space/${SPACE_ID_B58}/status?cursor=${encodeURIComponent(cursor)}`,
 			)
 
 			expect(res.status).toBe(200)
@@ -275,9 +269,9 @@ describe("GET /proposals/space/:spaceId/status", () => {
 		it("accepts valid cursor format for end_time ordering", async () => {
 			db.execute.mockResolvedValueOnce({rows: []})
 
-			const cursor = "1706789400|550e8400-e29b-41d4-a716-446655440000"
+			const cursor = `1706789400|${PROPOSAL_ID_B58}`
 			const res = await app.request(
-				`/proposals/space/660e8400-e29b-41d4-a716-446655440000/status?cursor=${encodeURIComponent(cursor)}&orderBy=end_time`,
+				`/proposals/space/${SPACE_ID_B58}/status?cursor=${encodeURIComponent(cursor)}&orderBy=end_time`,
 			)
 
 			expect(res.status).toBe(200)
@@ -287,20 +281,18 @@ describe("GET /proposals/space/:spaceId/status", () => {
 			db.execute.mockResolvedValueOnce({rows: []})
 
 			// Malformed cursor (no pipe separator)
-			const res = await app.request(
-				"/proposals/space/660e8400-e29b-41d4-a716-446655440000/status?cursor=invalid-cursor",
-			)
+			const res = await app.request(`/proposals/space/${SPACE_ID_B58}/status?cursor=invalid-cursor`)
 
 			// Should succeed but start from beginning
 			expect(res.status).toBe(200)
 		})
 
-		it("ignores cursor with invalid UUID", async () => {
+		it("ignores cursor with invalid ID", async () => {
 			db.execute.mockResolvedValueOnce({rows: []})
 
 			const cursor = "2024-01-15T10:30:00.000Z|not-a-uuid"
 			const res = await app.request(
-				`/proposals/space/660e8400-e29b-41d4-a716-446655440000/status?cursor=${encodeURIComponent(cursor)}`,
+				`/proposals/space/${SPACE_ID_B58}/status?cursor=${encodeURIComponent(cursor)}`,
 			)
 
 			// Should succeed but start from beginning
@@ -312,7 +304,7 @@ describe("GET /proposals/space/:spaceId/status", () => {
 		it("returns 500 for database errors without leaking details", async () => {
 			db.execute.mockRejectedValueOnce(new Error("Connection refused"))
 
-			const res = await app.request("/proposals/space/660e8400-e29b-41d4-a716-446655440000/status")
+			const res = await app.request(`/proposals/space/${SPACE_ID_B58}/status`)
 
 			expect(res.status).toBe(500)
 			const body = await res.json()
@@ -327,7 +319,7 @@ describe("GET /proposals/space/:spaceId/status", () => {
 			db.execute.mockResolvedValueOnce({rows: []})
 
 			const res = await app.request(
-				"/proposals/space/660e8400-e29b-41d4-a716-446655440000/status?status=PROPOSED,EXECUTABLE&orderBy=end_time&orderDirection=asc",
+				`/proposals/space/${SPACE_ID_B58}/status?status=PROPOSED,EXECUTABLE&orderBy=end_time&orderDirection=asc`,
 			)
 
 			expect(res.status).toBe(200)
@@ -338,7 +330,7 @@ describe("GET /proposals/space/:spaceId/status", () => {
 			db.execute.mockResolvedValueOnce({rows: []})
 
 			const res = await app.request(
-				"/proposals/space/660e8400-e29b-41d4-a716-446655440000/status?actionTypes=Publish,AddMember&status=EXECUTABLE",
+				`/proposals/space/${SPACE_ID_B58}/status?actionTypes=Publish,AddMember&status=EXECUTABLE`,
 			)
 
 			expect(res.status).toBe(200)
@@ -349,7 +341,7 @@ describe("GET /proposals/space/:spaceId/status", () => {
 			db.execute.mockResolvedValueOnce({rows: []})
 
 			const res = await app.request(
-				"/proposals/space/660e8400-e29b-41d4-a716-446655440000/status?status=PROPOSED&actionTypes=Publish&orderBy=start_time&orderDirection=desc&limit=50",
+				`/proposals/space/${SPACE_ID_B58}/status?status=PROPOSED&actionTypes=Publish&orderBy=start_time&orderDirection=desc&limit=50`,
 			)
 
 			expect(res.status).toBe(200)
@@ -358,7 +350,7 @@ describe("GET /proposals/space/:spaceId/status", () => {
 
 		it("returns 400 when both actionTypes and excludeActionTypes are provided", async () => {
 			const res = await app.request(
-				"/proposals/space/660e8400-e29b-41d4-a716-446655440000/status?actionTypes=Publish&excludeActionTypes=AddMember",
+				`/proposals/space/${SPACE_ID_B58}/status?actionTypes=Publish&excludeActionTypes=AddMember`,
 			)
 
 			expect(res.status).toBe(400)

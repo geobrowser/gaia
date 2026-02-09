@@ -8,7 +8,7 @@ import {SystemIds} from "@graphprotocol/grc-20"
 import {sql} from "drizzle-orm"
 import type {NodePgDatabase} from "drizzle-orm/node-postgres"
 import {Effect} from "effect"
-import {type Uuid, toUuid} from "../utils/uuid"
+import {toUuid, type Uuid} from "../utils/uuid"
 import {type DiscoveredEntity, type GroupedEntities, groupEntitiesByContext, mergeDiscoveryResults} from "./grouping"
 import type {
 	BlockSnapshot,

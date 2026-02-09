@@ -8,7 +8,7 @@
  */
 
 import {Client} from "@opensearch-project/opensearch"
-import {isValidUuid, toUuid, uuidToBase58} from "../../utils/uuid"
+import {fromBase58, isValidBase58Id, uuidToBase58} from "../../utils/uuid"
 import type {SearchClient} from "./client"
 import {SearchError, type SearchQuery, type SearchResponse, type SearchResult, type SearchScope} from "./types"
 
@@ -189,10 +189,16 @@ export class OpenSearchClient implements SearchClient {
 			return this.buildTopRankedQuery(query.scope, query.space_id, query.type_ids, includeDeleted)
 		}
 
-		// Check if the query is a UUID (dashed hex, dashless hex, or Base58) for direct ID lookup.
-		// OpenSearch stores entity_id as dashed hex, so we normalize before the term query.
-		if (isValidUuid(trimmedQuery)) {
-			return this.buildUuidQuery(toUuid(trimmedQuery), query.scope, query.space_id, query.type_ids, includeDeleted)
+		// Check if the query is a Base58 ID for direct ID lookup.
+		// OpenSearch stores entity_id as dashed hex, so we decode before the term query.
+		if (isValidBase58Id(trimmedQuery)) {
+			return this.buildUuidQuery(
+				fromBase58(trimmedQuery),
+				query.scope,
+				query.space_id,
+				query.type_ids,
+				includeDeleted,
+			)
 		}
 
 		// Build base text search query

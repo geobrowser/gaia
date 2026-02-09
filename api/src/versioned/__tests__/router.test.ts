@@ -15,6 +15,13 @@ const EDIT_1 = "00000000-0000-0000-0000-000000000c01"
 const EDIT_2 = "00000000-0000-0000-0000-000000000c02"
 const NAME_PROP = "00000000-0000-0000-0000-000000000d01"
 
+// Base58-encoded IDs for use in request URLs (API input boundary)
+const BASE58_1 = uuidToBase58("00000000-0000-0000-0000-000000000001")
+const BASE58_2 = uuidToBase58("00000000-0000-0000-0000-000000000002")
+const BASE58_3 = uuidToBase58("00000000-0000-0000-0000-000000000003")
+const BASE58_4 = uuidToBase58("00000000-0000-0000-0000-000000000004")
+const BASE58_99 = uuidToBase58("00000000-0000-0000-0000-000000000099")
+
 /**
  * Create a minimal mock database that implements the query interface.
  */
@@ -61,16 +68,16 @@ describe("GET /versioned/entities/:id", () => {
 
 	describe("validation errors", () => {
 		it("returns 400 when entityId is not a valid UUID", async () => {
-			const res = await app.request("/versioned/entities/not-a-uuid?editId=00000000-0000-0000-0000-000000000001")
+			const res = await app.request(`/versioned/entities/not-a-uuid?editId=${BASE58_1}`)
 
 			expect(res.status).toBe(400)
 			const body = await res.json()
 			expect(body.error).toBe("Invalid parameter")
-			expect(body.message).toContain("UUID")
+			expect(body.message).toContain("Base58")
 		})
 
 		it("returns 400 when editId is missing", async () => {
-			const res = await app.request("/versioned/entities/00000000-0000-0000-0000-000000000001")
+			const res = await app.request(`/versioned/entities/${BASE58_1}`)
 
 			expect(res.status).toBe(400)
 			const body = await res.json()
@@ -79,7 +86,7 @@ describe("GET /versioned/entities/:id", () => {
 		})
 
 		it("returns 400 when editId is not a valid UUID", async () => {
-			const res = await app.request("/versioned/entities/00000000-0000-0000-0000-000000000001?editId=bad-id")
+			const res = await app.request(`/versioned/entities/${BASE58_1}?editId=bad-id`)
 
 			expect(res.status).toBe(400)
 			const body = await res.json()
@@ -88,9 +95,7 @@ describe("GET /versioned/entities/:id", () => {
 		})
 
 		it("returns 400 when spaceId is provided but not a valid UUID", async () => {
-			const res = await app.request(
-				"/versioned/entities/00000000-0000-0000-0000-000000000001?editId=00000000-0000-0000-0000-000000000002&spaceId=invalid",
-			)
+			const res = await app.request(`/versioned/entities/${BASE58_1}?editId=${BASE58_2}&spaceId=invalid`)
 
 			expect(res.status).toBe(400)
 			const body = await res.json()
@@ -104,9 +109,7 @@ describe("GET /versioned/entities/:id", () => {
 			// Mock: resolveVersionKey returns no rows
 			db.execute.mockResolvedValueOnce({rows: []})
 
-			const res = await app.request(
-				"/versioned/entities/00000000-0000-0000-0000-000000000001?editId=00000000-0000-0000-0000-000000000002",
-			)
+			const res = await app.request(`/versioned/entities/${BASE58_1}?editId=${BASE58_2}`)
 
 			expect(res.status).toBe(404)
 			const body = await res.json()
@@ -118,7 +121,6 @@ describe("GET /versioned/entities/:id", () => {
 	describe("successful responses", () => {
 		it("returns entity snapshot when found", async () => {
 			const entityId = "00000000-0000-0000-0000-000000000001"
-			const editId = "00000000-0000-0000-0000-000000000002"
 
 			// Mock: resolveVersionKey
 			db.execute.mockResolvedValueOnce({
@@ -152,7 +154,7 @@ describe("GET /versioned/entities/:id", () => {
 				rows: [],
 			})
 
-			const res = await app.request(`/versioned/entities/${entityId}?editId=${editId}`)
+			const res = await app.request(`/versioned/entities/${BASE58_1}?editId=${BASE58_2}`)
 
 			expect(res.status).toBe(200)
 			const body = await res.json()
@@ -168,9 +170,7 @@ describe("GET /versioned/entities/:id", () => {
 			// Mock: database throws an error
 			db.execute.mockRejectedValueOnce(new Error("Connection refused"))
 
-			const res = await app.request(
-				"/versioned/entities/00000000-0000-0000-0000-000000000001?editId=00000000-0000-0000-0000-000000000002",
-			)
+			const res = await app.request(`/versioned/entities/${BASE58_1}?editId=${BASE58_2}`)
 
 			expect(res.status).toBe(500)
 			const body = await res.json()
@@ -206,7 +206,7 @@ describe("GET /versioned/entities/:id/versions", () => {
 		})
 
 		it("returns 400 when limit is invalid", async () => {
-			const res = await app.request("/versioned/entities/00000000-0000-0000-0000-000000000001/versions?limit=-1")
+			const res = await app.request(`/versioned/entities/${BASE58_1}/versions?limit=-1`)
 
 			expect(res.status).toBe(400)
 			const body = await res.json()
@@ -214,7 +214,7 @@ describe("GET /versioned/entities/:id/versions", () => {
 		})
 
 		it("returns 400 when offset is invalid", async () => {
-			const res = await app.request("/versioned/entities/00000000-0000-0000-0000-000000000001/versions?offset=-5")
+			const res = await app.request(`/versioned/entities/${BASE58_1}/versions?offset=-5`)
 
 			expect(res.status).toBe(400)
 			const body = await res.json()
@@ -224,8 +224,6 @@ describe("GET /versioned/entities/:id/versions", () => {
 
 	describe("successful responses", () => {
 		it("returns versions list with pagination", async () => {
-			const entityId = "00000000-0000-0000-0000-000000000001"
-
 			// Mock: getEntityVersions
 			db.execute.mockResolvedValueOnce({
 				rows: [
@@ -242,7 +240,7 @@ describe("GET /versioned/entities/:id/versions", () => {
 				],
 			})
 
-			const res = await app.request(`/versioned/entities/${entityId}/versions`)
+			const res = await app.request(`/versioned/entities/${BASE58_1}/versions`)
 
 			expect(res.status).toBe(200)
 			const body = await res.json()
@@ -253,8 +251,6 @@ describe("GET /versioned/entities/:id/versions", () => {
 		})
 
 		it("respects limit parameter", async () => {
-			const entityId = "00000000-0000-0000-0000-000000000001"
-
 			db.execute.mockResolvedValueOnce({
 				rows: [
 					{
@@ -265,7 +261,7 @@ describe("GET /versioned/entities/:id/versions", () => {
 				],
 			})
 
-			const res = await app.request(`/versioned/entities/${entityId}/versions?limit=1`)
+			const res = await app.request(`/versioned/entities/${BASE58_1}/versions?limit=1`)
 
 			expect(res.status).toBe(200)
 			// Verify the query was called (limit is applied in SQL)
@@ -291,7 +287,7 @@ describe("GET /versioned/entities/:id/diff", () => {
 	describe("validation errors", () => {
 		it("returns 400 when fromEditId is missing", async () => {
 			const res = await app.request(
-				"/versioned/entities/00000000-0000-0000-0000-000000000001/diff?toEditId=00000000-0000-0000-0000-000000000002&spaceId=00000000-0000-0000-0000-000000000003",
+				`/versioned/entities/${BASE58_1}/diff?toEditId=${BASE58_2}&spaceId=${BASE58_3}`,
 			)
 
 			expect(res.status).toBe(400)
@@ -301,7 +297,7 @@ describe("GET /versioned/entities/:id/diff", () => {
 
 		it("returns 400 when toEditId is missing", async () => {
 			const res = await app.request(
-				"/versioned/entities/00000000-0000-0000-0000-000000000001/diff?fromEditId=00000000-0000-0000-0000-000000000002&spaceId=00000000-0000-0000-0000-000000000003",
+				`/versioned/entities/${BASE58_1}/diff?fromEditId=${BASE58_2}&spaceId=${BASE58_3}`,
 			)
 
 			expect(res.status).toBe(400)
@@ -311,7 +307,7 @@ describe("GET /versioned/entities/:id/diff", () => {
 
 		it("returns 400 when spaceId is missing", async () => {
 			const res = await app.request(
-				"/versioned/entities/00000000-0000-0000-0000-000000000001/diff?fromEditId=00000000-0000-0000-0000-000000000002&toEditId=00000000-0000-0000-0000-000000000003",
+				`/versioned/entities/${BASE58_1}/diff?fromEditId=${BASE58_2}&toEditId=${BASE58_3}`,
 			)
 
 			expect(res.status).toBe(400)
@@ -328,7 +324,7 @@ describe("GET /versioned/entities/:id/diff", () => {
 			db.execute.mockResolvedValueOnce({rows: [{version_key: "100"}]})
 
 			const res = await app.request(
-				"/versioned/entities/00000000-0000-0000-0000-000000000001/diff?fromEditId=00000000-0000-0000-0000-000000000002&toEditId=00000000-0000-0000-0000-000000000003&spaceId=00000000-0000-0000-0000-000000000004",
+				`/versioned/entities/${BASE58_1}/diff?fromEditId=${BASE58_2}&toEditId=${BASE58_3}&spaceId=${BASE58_4}`,
 			)
 
 			expect(res.status).toBe(404)
@@ -343,7 +339,7 @@ describe("GET /versioned/entities/:id/diff", () => {
 			db.execute.mockResolvedValueOnce({rows: []})
 
 			const res = await app.request(
-				"/versioned/entities/00000000-0000-0000-0000-000000000001/diff?fromEditId=00000000-0000-0000-0000-000000000002&toEditId=00000000-0000-0000-0000-000000000003&spaceId=00000000-0000-0000-0000-000000000004",
+				`/versioned/entities/${BASE58_1}/diff?fromEditId=${BASE58_2}&toEditId=${BASE58_3}&spaceId=${BASE58_4}`,
 			)
 
 			expect(res.status).toBe(404)
@@ -398,7 +394,7 @@ describe("GET /versioned/entities/:id/diff", () => {
 			db.execute.mockResolvedValueOnce({rows: []})
 
 			const res = await app.request(
-				`/versioned/entities/${entityId}/diff?fromEditId=00000000-0000-0000-0000-000000000002&toEditId=00000000-0000-0000-0000-000000000003&spaceId=00000000-0000-0000-0000-000000000004`,
+				`/versioned/entities/${BASE58_1}/diff?fromEditId=${BASE58_2}&toEditId=${BASE58_3}&spaceId=${BASE58_4}`,
 			)
 
 			expect(res.status).toBe(200)
@@ -427,18 +423,16 @@ describe("GET /versioned/proposals/:id/diff", () => {
 
 	describe("validation errors", () => {
 		it("returns 400 when proposalId is not a valid UUID", async () => {
-			const res = await app.request(
-				"/versioned/proposals/not-a-uuid/diff?spaceId=00000000-0000-0000-0000-000000000001",
-			)
+			const res = await app.request(`/versioned/proposals/not-a-uuid/diff?spaceId=${BASE58_1}`)
 
 			expect(res.status).toBe(400)
 			const body = await res.json()
 			expect(body.error).toBe("Invalid parameter")
-			expect(body.message).toContain("UUID")
+			expect(body.message).toContain("Base58")
 		})
 
 		it("returns 400 when spaceId is missing", async () => {
-			const res = await app.request("/versioned/proposals/00000000-0000-0000-0000-000000000001/diff")
+			const res = await app.request(`/versioned/proposals/${BASE58_1}/diff`)
 
 			expect(res.status).toBe(400)
 			const body = await res.json()
@@ -447,9 +441,7 @@ describe("GET /versioned/proposals/:id/diff", () => {
 		})
 
 		it("returns 400 when spaceId is not a valid UUID", async () => {
-			const res = await app.request(
-				"/versioned/proposals/00000000-0000-0000-0000-000000000001/diff?spaceId=invalid",
-			)
+			const res = await app.request(`/versioned/proposals/${BASE58_1}/diff?spaceId=invalid`)
 
 			expect(res.status).toBe(400)
 			const body = await res.json()
@@ -458,9 +450,7 @@ describe("GET /versioned/proposals/:id/diff", () => {
 		})
 
 		it("returns 400 when limit is invalid", async () => {
-			const res = await app.request(
-				"/versioned/proposals/00000000-0000-0000-0000-000000000001/diff?spaceId=00000000-0000-0000-0000-000000000002&limit=-1",
-			)
+			const res = await app.request(`/versioned/proposals/${BASE58_1}/diff?spaceId=${BASE58_2}&limit=-1`)
 
 			expect(res.status).toBe(400)
 			const body = await res.json()
@@ -468,9 +458,7 @@ describe("GET /versioned/proposals/:id/diff", () => {
 		})
 
 		it("returns 400 when limit is not a number", async () => {
-			const res = await app.request(
-				"/versioned/proposals/00000000-0000-0000-0000-000000000001/diff?spaceId=00000000-0000-0000-0000-000000000002&limit=abc",
-			)
+			const res = await app.request(`/versioned/proposals/${BASE58_1}/diff?spaceId=${BASE58_2}&limit=abc`)
 
 			expect(res.status).toBe(400)
 			const body = await res.json()
@@ -483,9 +471,7 @@ describe("GET /versioned/proposals/:id/diff", () => {
 			// Mock: getProposalWithPublishAction returns no rows
 			db.execute.mockResolvedValueOnce({rows: []})
 
-			const res = await app.request(
-				"/versioned/proposals/00000000-0000-0000-0000-000000000001/diff?spaceId=00000000-0000-0000-0000-000000000002",
-			)
+			const res = await app.request(`/versioned/proposals/${BASE58_1}/diff?spaceId=${BASE58_2}`)
 
 			expect(res.status).toBe(404)
 			const body = await res.json()
@@ -515,7 +501,7 @@ describe("GET /versioned/proposals/:id/diff", () => {
 			// Mock: getIpfsCacheData returns no data
 			db.execute.mockResolvedValueOnce({rows: []})
 
-			const res = await app.request(`/versioned/proposals/${proposalId}/diff?spaceId=${spaceId}`)
+			const res = await app.request(`/versioned/proposals/${BASE58_1}/diff?spaceId=${BASE58_2}`)
 
 			expect(res.status).toBe(404)
 			const body = await res.json()
@@ -529,7 +515,6 @@ describe("GET /versioned/proposals/:id/diff", () => {
 		it("returns 400 when spaceId does not match proposal's space", async () => {
 			const proposalId = "00000000-0000-0000-0000-000000000001"
 			const proposalSpaceId = "00000000-0000-0000-0000-000000000002"
-			const wrongSpaceId = "00000000-0000-0000-0000-000000000099" // Different from proposal's space
 			const now = Math.floor(Date.now() / 1000)
 
 			// Mock: getProposalWithPublishAction returns proposal with different space_id
@@ -547,7 +532,7 @@ describe("GET /versioned/proposals/:id/diff", () => {
 			})
 
 			// Request with wrong spaceId
-			const res = await app.request(`/versioned/proposals/${proposalId}/diff?spaceId=${wrongSpaceId}`)
+			const res = await app.request(`/versioned/proposals/${BASE58_1}/diff?spaceId=${BASE58_99}`)
 
 			expect(res.status).toBe(400)
 			const body = await res.json()
@@ -581,7 +566,7 @@ describe("GET /versioned/proposals/:id/diff", () => {
 			db.execute.mockResolvedValueOnce({rows: [{data: mockEditBlob}]})
 
 			const res = await app.request(
-				`/versioned/proposals/${proposalId}/diff?spaceId=${spaceId}&cursor=${invalidCursor}`,
+				`/versioned/proposals/${BASE58_1}/diff?spaceId=${BASE58_2}&cursor=${invalidCursor}`,
 			)
 
 			expect(res.status).toBe(400)
@@ -611,7 +596,7 @@ describe("GET /versioned/proposals/:id/diff", () => {
 				],
 			})
 
-			const res = await app.request(`/versioned/proposals/${proposalId}/diff?spaceId=${spaceId}`)
+			const res = await app.request(`/versioned/proposals/${BASE58_1}/diff?spaceId=${BASE58_2}`)
 
 			expect(res.status).toBe(200)
 			const body = await res.json()
@@ -645,7 +630,7 @@ describe("GET /versioned/proposals/:id/diff", () => {
 				],
 			})
 
-			const res = await app.request(`/versioned/proposals/${proposalId}/diff?spaceId=${spaceId}`)
+			const res = await app.request(`/versioned/proposals/${BASE58_1}/diff?spaceId=${BASE58_2}`)
 
 			expect(res.status).toBe(200)
 			const body = await res.json()
@@ -671,7 +656,7 @@ describe("GET /versioned/proposals/:id/diff", () => {
 				],
 			})
 
-			const res = await app.request(`/versioned/proposals/${proposalId}/diff?spaceId=${spaceId}`)
+			const res = await app.request(`/versioned/proposals/${BASE58_1}/diff?spaceId=${BASE58_2}`)
 
 			expect(res.status).toBe(200)
 			const body = await res.json()
@@ -697,7 +682,7 @@ describe("GET /versioned/proposals/:id/diff", () => {
 				],
 			})
 
-			const res = await app.request(`/versioned/proposals/${proposalId}/diff?spaceId=${spaceId}`)
+			const res = await app.request(`/versioned/proposals/${BASE58_1}/diff?spaceId=${BASE58_2}`)
 
 			expect(res.status).toBe(200)
 			const body = await res.json()
@@ -723,7 +708,7 @@ describe("GET /versioned/proposals/:id/diff", () => {
 				],
 			})
 
-			const res = await app.request(`/versioned/proposals/${proposalId}/diff?spaceId=${spaceId}&limit=10`)
+			const res = await app.request(`/versioned/proposals/${BASE58_1}/diff?spaceId=${BASE58_2}&limit=10`)
 
 			expect(res.status).toBe(200)
 			// Verify the query was called (limit would be applied during processing)
@@ -751,7 +736,7 @@ describe("GET /versioned/proposals/:id/diff", () => {
 				],
 			})
 
-			const res = await app.request(`/versioned/proposals/${proposalId}/diff?spaceId=${spaceId}&cursor=${cursor}`)
+			const res = await app.request(`/versioned/proposals/${BASE58_1}/diff?spaceId=${BASE58_2}&cursor=${cursor}`)
 
 			// Should accept the cursor without error (even if no entities to paginate)
 			expect(res.status).toBe(200)
@@ -763,9 +748,7 @@ describe("GET /versioned/proposals/:id/diff", () => {
 			// Mock: database throws an error
 			db.execute.mockRejectedValueOnce(new Error("Connection refused"))
 
-			const res = await app.request(
-				"/versioned/proposals/00000000-0000-0000-0000-000000000001/diff?spaceId=00000000-0000-0000-0000-000000000002",
-			)
+			const res = await app.request(`/versioned/proposals/${BASE58_1}/diff?spaceId=${BASE58_2}`)
 
 			expect(res.status).toBe(500)
 			const body = await res.json()

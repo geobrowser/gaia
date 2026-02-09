@@ -29,7 +29,7 @@ import {SystemIds} from "@graphprotocol/grc-20"
 import {sql} from "drizzle-orm"
 import type {NodePgDatabase} from "drizzle-orm/node-postgres"
 import {Effect} from "effect"
-import {type Uuid, toUuid} from "../utils/uuid"
+import {toUuid, type Uuid} from "../utils/uuid"
 import {diffEntitySnapshots} from "./diff"
 import {mapRelationRow, mapValueRow, QueryError} from "./queries"
 import type {
@@ -226,10 +226,7 @@ function resolveVersionKeyAtTimestamp(db: Database, timestamp: bigint): Effect.E
  * Used to find which entities are affected by updateRelation/deleteRelation/restoreRelation ops.
  * Returns a map from relation ID to from_entity_id.
  */
-function batchLookupRelationEntities(
-	db: Database,
-	relationIds: Uuid[],
-): Effect.Effect<Map<Uuid, Uuid>, QueryError> {
+function batchLookupRelationEntities(db: Database, relationIds: Uuid[]): Effect.Effect<Map<Uuid, Uuid>, QueryError> {
 	if (relationIds.length === 0) {
 		return Effect.succeed(new Map())
 	}
@@ -584,12 +581,7 @@ function propertyValueToVersionedValue(pv: {property: Id; value: unknown}, space
  * Apply ops to a base snapshot to get the proposed state.
  * Returns a new snapshot (does not mutate the input).
  */
-function applyOpsToSnapshot(
-	base: EntitySnapshot,
-	ops: Op[],
-	entityId: Uuid,
-	spaceId: Uuid,
-): EntitySnapshot {
+function applyOpsToSnapshot(base: EntitySnapshot, ops: Op[], entityId: Uuid, spaceId: Uuid): EntitySnapshot {
 	// Deep copy the base snapshot
 	const proposed: EntitySnapshot = {
 		id: entityId,

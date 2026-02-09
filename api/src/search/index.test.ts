@@ -2,8 +2,12 @@ import {Hono} from "hono"
 import {beforeEach, describe, expect, it, vi} from "vitest"
 import {runtime} from "../services/runtime"
 import type {SearchClient, SearchResponse} from "../services/search"
+import {uuidToBase58} from "../utils/uuid"
 
 import {createSearchRouter} from "./index"
+
+const DASHED_HEX_UUID = "123e4567-e89b-12d3-a456-426614174000"
+const SPACE_ID_BASE58 = uuidToBase58(DASHED_HEX_UUID)
 
 describe("Search Router - Integration Tests", () => {
 	let mockSearchClient: SearchClient
@@ -81,8 +85,9 @@ describe("Search Router - Integration Tests", () => {
 		})
 
 		it("handles SPACE_SINGLE scope with valid space_id", async () => {
-			const spaceId = "123e4567-e89b-12d3-a456-426614174000"
-			const request = new Request(`http://localhost/search?query=test&scope=SPACE_SINGLE&space_id=${spaceId}`)
+			const request = new Request(
+				`http://localhost/search?query=test&scope=SPACE_SINGLE&space_id=${SPACE_ID_BASE58}`,
+			)
 			const response = await app.fetch(request)
 
 			expect(response.status).toBe(200)
@@ -91,13 +96,12 @@ describe("Search Router - Integration Tests", () => {
 				scope: "SPACE_SINGLE",
 				limit: 20,
 				offset: 0,
-				space_id: spaceId,
+				space_id: DASHED_HEX_UUID,
 			})
 		})
 
 		it("handles SPACE scope with valid space_id", async () => {
-			const spaceId = "123e4567-e89b-12d3-a456-426614174000"
-			const request = new Request(`http://localhost/search?query=test&scope=SPACE&space_id=${spaceId}`)
+			const request = new Request(`http://localhost/search?query=test&scope=SPACE&space_id=${SPACE_ID_BASE58}`)
 			const response = await app.fetch(request)
 
 			expect(response.status).toBe(200)
@@ -106,7 +110,7 @@ describe("Search Router - Integration Tests", () => {
 				scope: "SPACE",
 				limit: 20,
 				offset: 0,
-				space_id: spaceId,
+				space_id: DASHED_HEX_UUID,
 			})
 		})
 
@@ -212,24 +216,24 @@ describe("Search Router - Integration Tests", () => {
 		})
 
 		it("returns 400 for invalid space_id format", async () => {
-			const request = new Request("http://localhost/search?query=test&scope=SPACE_SINGLE&space_id=invalid-uuid")
+			const request = new Request("http://localhost/search?query=test&scope=SPACE_SINGLE&space_id=invalid-id!")
 			const response = await app.fetch(request)
 			const result = await response.json()
 
 			expect(response.status).toBe(400)
 			expect(result.error).toBe("Invalid parameter")
-			expect(result.message).toContain("must be a valid UUID")
+			expect(result.message).toContain("must be a valid Base58 ID")
 		})
 
 		it("returns 400 for space_id longer than maximum length", async () => {
-			const longSpaceId = "a".repeat(37)
+			const longSpaceId = "a".repeat(23)
 			const request = new Request(`http://localhost/search?query=test&scope=SPACE_SINGLE&space_id=${longSpaceId}`)
 			const response = await app.fetch(request)
 			const result = await response.json()
 
 			expect(response.status).toBe(400)
 			expect(result.error).toBe("Invalid parameter")
-			expect(result.message).toContain("must not exceed 36 characters")
+			expect(result.message).toContain("must not exceed 22 characters")
 		})
 
 		it("returns 400 for invalid limit parameter", async () => {

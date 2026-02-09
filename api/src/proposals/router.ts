@@ -10,7 +10,7 @@ import {Hono} from "hono"
 import {describeRoute} from "hono-openapi"
 
 import type {AppRuntime} from "../services/runtime"
-import {isValidUuid, toUuid, uuidToBase58} from "../utils/uuid"
+import {fromBase58, isValidBase58Id, toUuid, uuidToBase58} from "../utils/uuid"
 import {
 	getProposalWithVotes,
 	listProposalsInSpace,
@@ -336,14 +336,15 @@ export function createProposalsRouter(db: Database, runtime: AppRuntime) {
 				{
 					name: "id",
 					in: "path",
+					description: "Proposal ID (Base58-encoded)",
 					required: true,
-					schema: {type: "string", format: "uuid"},
+					schema: {type: "string"},
 				},
 				{
 					name: "voterId",
 					in: "query",
-					description: "UUID of the voter to check for their vote",
-					schema: {type: "string", format: "uuid"},
+					description: "Voter ID to check for their vote (Base58-encoded)",
+					schema: {type: "string"},
 				},
 			],
 			responses: {
@@ -371,24 +372,24 @@ export function createProposalsRouter(db: Database, runtime: AppRuntime) {
 					voterId,
 				})
 
-				if (!isValidUuid(proposalId)) {
+				if (!isValidBase58Id(proposalId)) {
 					return yield* Effect.fail(
 						new ValidationError({
-							message: "Proposal ID must be a valid UUID",
+							message: "Proposal ID must be a valid Base58 ID",
 						}),
 					)
 				}
 
-				if (voterId && !isValidUuid(voterId)) {
+				if (voterId && !isValidBase58Id(voterId)) {
 					return yield* Effect.fail(
 						new ValidationError({
-							message: "Voter ID must be a valid UUID",
+							message: "Voter ID must be a valid Base58 ID",
 						}),
 					)
 				}
 
 				// PostgreSQL ::uuid cast requires dashed hex format
-				const proposal = yield* getProposalWithVotes(db, toUuid(proposalId))
+				const proposal = yield* getProposalWithVotes(db, fromBase58(proposalId))
 
 				if (!proposal) {
 					return yield* Effect.fail(
@@ -462,8 +463,9 @@ export function createProposalsRouter(db: Database, runtime: AppRuntime) {
 				{
 					name: "spaceId",
 					in: "path",
+					description: "Space ID (Base58-encoded)",
 					required: true,
-					schema: {type: "string", format: "uuid"},
+					schema: {type: "string"},
 				},
 				{
 					name: "limit",
@@ -508,8 +510,8 @@ export function createProposalsRouter(db: Database, runtime: AppRuntime) {
 				{
 					name: "voterId",
 					in: "query",
-					description: "UUID of the voter to check for their vote on each proposal",
-					schema: {type: "string", format: "uuid"},
+					description: "Voter ID to check for their vote on each proposal (Base58-encoded)",
+					schema: {type: "string"},
 				},
 			],
 			responses: {
@@ -550,12 +552,12 @@ export function createProposalsRouter(db: Database, runtime: AppRuntime) {
 					voterId,
 				})
 
-				if (!isValidUuid(spaceId)) {
-					return yield* Effect.fail(new ValidationError({message: "Space ID must be a valid UUID"}))
+				if (!isValidBase58Id(spaceId)) {
+					return yield* Effect.fail(new ValidationError({message: "Space ID must be a valid Base58 ID"}))
 				}
 
-				if (voterId && !isValidUuid(voterId)) {
-					return yield* Effect.fail(new ValidationError({message: "Voter ID must be a valid UUID"}))
+				if (voterId && !isValidBase58Id(voterId)) {
+					return yield* Effect.fail(new ValidationError({message: "Voter ID must be a valid Base58 ID"}))
 				}
 
 				const limit = limitParam ? parseInt(limitParam, 10) : 20
@@ -581,7 +583,7 @@ export function createProposalsRouter(db: Database, runtime: AppRuntime) {
 
 				// PostgreSQL ::uuid cast requires dashed hex format
 				const {proposals, nextCursor} = yield* listProposalsInSpace(db, {
-					spaceId: toUuid(spaceId),
+					spaceId: fromBase58(spaceId),
 					limit,
 					cursor,
 					actionTypes,
@@ -589,7 +591,7 @@ export function createProposalsRouter(db: Database, runtime: AppRuntime) {
 					status,
 					orderBy,
 					orderDirection,
-					voterId: voterId ? toUuid(voterId) : undefined,
+					voterId: voterId ? fromBase58(voterId) : undefined,
 				})
 
 				const nowSeconds = getCurrentTimeSeconds()

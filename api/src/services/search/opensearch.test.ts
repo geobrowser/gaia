@@ -1,4 +1,5 @@
 import {beforeEach, describe, expect, it} from "vitest"
+import {uuidToBase58} from "../../utils/uuid"
 
 import {OpenSearchClient, SCORE_BOOST} from "./opensearch"
 
@@ -124,29 +125,32 @@ describe("OpenSearchClient", () => {
 	})
 
 	describe("buildSearchBody with type_ids filtering", () => {
-		it("should build UUID query when query is a UUID", () => {
-			const uuid = "123e4567-e89b-12d3-a456-426614174000"
+		it("should build UUID query when query is a Base58 ID", () => {
+			const dashedHex = "123e4567-e89b-12d3-a456-426614174000"
+			const base58Id = uuidToBase58(dashedHex)
 			const query = client.buildSearchBody({
-				query: uuid,
+				query: base58Id,
 				scope: "GLOBAL",
 			})
 
 			const queryStr = JSON.stringify(query)
-			expect(queryStr).toContain(uuid)
+			// buildSearchBody decodes Base58 to dashed hex for the OpenSearch term query
+			expect(queryStr).toContain(dashedHex)
 			expect(queryStr).toContain("entity_id")
 		})
 
 		it("should build UUID query with type_ids filtering for GLOBAL scope", () => {
-			const uuid = "123e4567-e89b-12d3-a456-426614174000"
+			const dashedHex = "123e4567-e89b-12d3-a456-426614174000"
+			const base58Id = uuidToBase58(dashedHex)
 			const typeIds = ["type-1", "type-2"]
 			const query = client.buildSearchBody({
-				query: uuid,
+				query: base58Id,
 				scope: "GLOBAL",
 				type_ids: typeIds,
 			})
 
 			const queryStr = JSON.stringify(query)
-			expect(queryStr).toContain(uuid)
+			expect(queryStr).toContain(dashedHex)
 			expect(queryStr).toContain("entity_id")
 			expect(queryStr).toContain("type_relations.entity_to_id")
 			expect(queryStr).toContain("type-1")
@@ -154,18 +158,19 @@ describe("OpenSearchClient", () => {
 		})
 
 		it("should build UUID query with type_ids and space filtering for SPACE_SINGLE scope", () => {
-			const uuid = "123e4567-e89b-12d3-a456-426614174000"
+			const dashedHex = "123e4567-e89b-12d3-a456-426614174000"
+			const base58Id = uuidToBase58(dashedHex)
 			const spaceId = "space-123"
 			const typeIds = ["type-1"]
 			const query = client.buildSearchBody({
-				query: uuid,
+				query: base58Id,
 				scope: "SPACE_SINGLE",
 				space_id: spaceId,
 				type_ids: typeIds,
 			})
 
 			const queryStr = JSON.stringify(query)
-			expect(queryStr).toContain(uuid)
+			expect(queryStr).toContain(dashedHex)
 			expect(queryStr).toContain(spaceId)
 			expect(queryStr).toContain("entity_id")
 			expect(queryStr).toContain("type_relations.entity_to_id")

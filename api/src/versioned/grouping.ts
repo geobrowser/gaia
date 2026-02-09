@@ -9,7 +9,7 @@
 
 import {SystemIds} from "@graphprotocol/grc-20"
 import {Effect} from "effect"
-import {type Uuid, toUuid} from "../utils/uuid"
+import {toUuid, type Uuid} from "../utils/uuid"
 
 /**
  * Entity discovered via context metadata or relation lookup.

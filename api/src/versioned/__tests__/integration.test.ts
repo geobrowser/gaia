@@ -127,6 +127,27 @@ const uuid = {
 	val: (n: number) => toUuid(`10000000-0009-4000-8000-${n.toString().padStart(12, "0")}`),
 }
 
+/** Base58-encoded versions of test UUIDs for request URLs (API only accepts Base58 input). */
+const b58 = {
+	space1: toBase58(uuid.space1),
+	space2: toBase58(uuid.space2),
+	entityAllTypes: toBase58(uuid.entityAllTypes),
+	entityWithRelations: toBase58(uuid.entityWithRelations),
+	entityWithBlocks: toBase58(uuid.entityWithBlocks),
+	entityChanging: toBase58(uuid.entityChanging),
+	entityDeleted: toBase58(uuid.entityDeleted),
+	entityCreatedLater: toBase58(uuid.entityCreatedLater),
+	entityNonExistent: toBase58(uuid.entityNonExistent),
+	entityWithDynamicGroups: toBase58(uuid.entityWithDynamicGroups),
+	edit1: toBase58(uuid.edit1),
+	edit2: toBase58(uuid.edit2),
+	edit3: toBase58(uuid.edit3),
+	proposalActive: toBase58(uuid.proposalActive),
+	proposalClosed: toBase58(uuid.proposalClosed),
+	proposalExecuted: toBase58(uuid.proposalExecuted),
+	proposalNoPublish: toBase58(uuid.proposalNoPublish),
+} as const
+
 // Version keys: (block_number << 32) | sequence
 const versionKey1 = (BigInt(1000) << BigInt(32)).toString()
 const versionKey2 = (BigInt(1001) << BigInt(32)).toString()
@@ -161,7 +182,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 	describe("Entity Snapshot - All Value Types", () => {
 		it("returns TEXT value", async () => {
 			const res = await app.request(
-				`/versioned/entities/${uuid.entityAllTypes}?editId=${uuid.edit1}&spaceId=${uuid.space1}`,
+				`/versioned/entities/${b58.entityAllTypes}?editId=${b58.edit1}&spaceId=${b58.space1}`,
 			)
 			expect(res.status).toBe(200)
 			const body = await res.json()
@@ -172,7 +193,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 
 		it("returns BOOL value", async () => {
 			const res = await app.request(
-				`/versioned/entities/${uuid.entityAllTypes}?editId=${uuid.edit1}&spaceId=${uuid.space1}`,
+				`/versioned/entities/${b58.entityAllTypes}?editId=${b58.edit1}&spaceId=${b58.space1}`,
 			)
 			const body = await res.json()
 			const value = body.values.find((v: any) => v.propertyId === toBase58(uuid.propBool))
@@ -182,7 +203,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 
 		it("returns INT64 value", async () => {
 			const res = await app.request(
-				`/versioned/entities/${uuid.entityAllTypes}?editId=${uuid.edit1}&spaceId=${uuid.space1}`,
+				`/versioned/entities/${b58.entityAllTypes}?editId=${b58.edit1}&spaceId=${b58.space1}`,
 			)
 			const body = await res.json()
 			const value = body.values.find((v: any) => v.propertyId === toBase58(uuid.propInt))
@@ -192,7 +213,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 
 		it("returns FLOAT64 value", async () => {
 			const res = await app.request(
-				`/versioned/entities/${uuid.entityAllTypes}?editId=${uuid.edit1}&spaceId=${uuid.space1}`,
+				`/versioned/entities/${b58.entityAllTypes}?editId=${b58.edit1}&spaceId=${b58.space1}`,
 			)
 			const body = await res.json()
 			const value = body.values.find((v: any) => v.propertyId === toBase58(uuid.propFloat))
@@ -202,7 +223,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 
 		it("returns DECIMAL value", async () => {
 			const res = await app.request(
-				`/versioned/entities/${uuid.entityAllTypes}?editId=${uuid.edit1}&spaceId=${uuid.space1}`,
+				`/versioned/entities/${b58.entityAllTypes}?editId=${b58.edit1}&spaceId=${b58.space1}`,
 			)
 			const body = await res.json()
 			const value = body.values.find((v: any) => v.propertyId === toBase58(uuid.propDecimal))
@@ -212,7 +233,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 
 		it("returns BYTES value (base64)", async () => {
 			const res = await app.request(
-				`/versioned/entities/${uuid.entityAllTypes}?editId=${uuid.edit1}&spaceId=${uuid.space1}`,
+				`/versioned/entities/${b58.entityAllTypes}?editId=${b58.edit1}&spaceId=${b58.space1}`,
 			)
 			const body = await res.json()
 			const value = body.values.find((v: any) => v.propertyId === toBase58(uuid.propBytes))
@@ -223,7 +244,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 
 		it("returns DATE value", async () => {
 			const res = await app.request(
-				`/versioned/entities/${uuid.entityAllTypes}?editId=${uuid.edit1}&spaceId=${uuid.space1}`,
+				`/versioned/entities/${b58.entityAllTypes}?editId=${b58.edit1}&spaceId=${b58.space1}`,
 			)
 			const body = await res.json()
 			const value = body.values.find((v: any) => v.propertyId === toBase58(uuid.propDate))
@@ -233,7 +254,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 
 		it("returns TIME value", async () => {
 			const res = await app.request(
-				`/versioned/entities/${uuid.entityAllTypes}?editId=${uuid.edit1}&spaceId=${uuid.space1}`,
+				`/versioned/entities/${b58.entityAllTypes}?editId=${b58.edit1}&spaceId=${b58.space1}`,
 			)
 			const body = await res.json()
 			const value = body.values.find((v: any) => v.propertyId === toBase58(uuid.propTime))
@@ -243,7 +264,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 
 		it("returns DATETIME value", async () => {
 			const res = await app.request(
-				`/versioned/entities/${uuid.entityAllTypes}?editId=${uuid.edit1}&spaceId=${uuid.space1}`,
+				`/versioned/entities/${b58.entityAllTypes}?editId=${b58.edit1}&spaceId=${b58.space1}`,
 			)
 			const body = await res.json()
 			const value = body.values.find((v: any) => v.propertyId === toBase58(uuid.propDatetime))
@@ -253,7 +274,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 
 		it("returns SCHEDULE value (JSON)", async () => {
 			const res = await app.request(
-				`/versioned/entities/${uuid.entityAllTypes}?editId=${uuid.edit1}&spaceId=${uuid.space1}`,
+				`/versioned/entities/${b58.entityAllTypes}?editId=${b58.edit1}&spaceId=${b58.space1}`,
 			)
 			const body = await res.json()
 			const value = body.values.find((v: any) => v.propertyId === toBase58(uuid.propSchedule))
@@ -263,7 +284,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 
 		it("returns POINT value", async () => {
 			const res = await app.request(
-				`/versioned/entities/${uuid.entityAllTypes}?editId=${uuid.edit1}&spaceId=${uuid.space1}`,
+				`/versioned/entities/${b58.entityAllTypes}?editId=${b58.edit1}&spaceId=${b58.space1}`,
 			)
 			const body = await res.json()
 			const value = body.values.find((v: any) => v.propertyId === toBase58(uuid.propPoint))
@@ -273,7 +294,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 
 		it("returns RECT value", async () => {
 			const res = await app.request(
-				`/versioned/entities/${uuid.entityAllTypes}?editId=${uuid.edit1}&spaceId=${uuid.space1}`,
+				`/versioned/entities/${b58.entityAllTypes}?editId=${b58.edit1}&spaceId=${b58.space1}`,
 			)
 			const body = await res.json()
 			const value = body.values.find((v: any) => v.propertyId === toBase58(uuid.propRect))
@@ -283,7 +304,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 
 		it("returns EMBEDDING value (JSON array)", async () => {
 			const res = await app.request(
-				`/versioned/entities/${uuid.entityAllTypes}?editId=${uuid.edit1}&spaceId=${uuid.space1}`,
+				`/versioned/entities/${b58.entityAllTypes}?editId=${b58.edit1}&spaceId=${b58.space1}`,
 			)
 			const body = await res.json()
 			const value = body.values.find((v: any) => v.propertyId === toBase58(uuid.propEmbedding))
@@ -299,7 +320,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 	describe("Entity Snapshot - Relations", () => {
 		it("returns entity with no relations", async () => {
 			const res = await app.request(
-				`/versioned/entities/${uuid.entityAllTypes}?editId=${uuid.edit1}&spaceId=${uuid.space1}`,
+				`/versioned/entities/${b58.entityAllTypes}?editId=${b58.edit1}&spaceId=${b58.space1}`,
 			)
 			const body = await res.json()
 			expect(body.relations).toEqual([])
@@ -307,7 +328,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 
 		it("returns entity with single relation", async () => {
 			const res = await app.request(
-				`/versioned/entities/${uuid.entityWithRelations}?editId=${uuid.edit1}&spaceId=${uuid.space1}`,
+				`/versioned/entities/${b58.entityWithRelations}?editId=${b58.edit1}&spaceId=${b58.space1}`,
 			)
 			expect(res.status).toBe(200)
 			const body = await res.json()
@@ -322,7 +343,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 
 		it("returns cross-space relation with toSpaceId", async () => {
 			const res = await app.request(
-				`/versioned/entities/${uuid.entityWithRelations}?editId=${uuid.edit1}&spaceId=${uuid.space1}`,
+				`/versioned/entities/${b58.entityWithRelations}?editId=${b58.edit1}&spaceId=${b58.space1}`,
 			)
 			const body = await res.json()
 			const rel = body.relations.find((r: any) => r.relationId === toBase58(uuid.relCrossSpace))
@@ -332,7 +353,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 
 		it("returns positioned relation with position", async () => {
 			const res = await app.request(
-				`/versioned/entities/${uuid.entityWithRelations}?editId=${uuid.edit1}&spaceId=${uuid.space1}`,
+				`/versioned/entities/${b58.entityWithRelations}?editId=${b58.edit1}&spaceId=${b58.space1}`,
 			)
 			const body = await res.json()
 			const rel = body.relations.find((r: any) => r.relationId === toBase58(uuid.relPositioned))
@@ -348,7 +369,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 	describe("Entity Snapshot - Blocks", () => {
 		it("returns entity with text blocks", async () => {
 			const res = await app.request(
-				`/versioned/entities/${uuid.entityWithBlocks}?editId=${uuid.edit1}&spaceId=${uuid.space1}`,
+				`/versioned/entities/${b58.entityWithBlocks}?editId=${b58.edit1}&spaceId=${b58.space1}`,
 			)
 			expect(res.status).toBe(200)
 			const body = await res.json()
@@ -365,7 +386,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 
 		it("returns entity with image block", async () => {
 			const res = await app.request(
-				`/versioned/entities/${uuid.entityWithBlocks}?editId=${uuid.edit1}&spaceId=${uuid.space1}`,
+				`/versioned/entities/${b58.entityWithBlocks}?editId=${b58.edit1}&spaceId=${b58.space1}`,
 			)
 			const body = await res.json()
 
@@ -377,7 +398,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 
 		it("returns entity with data block", async () => {
 			const res = await app.request(
-				`/versioned/entities/${uuid.entityWithBlocks}?editId=${uuid.edit1}&spaceId=${uuid.space1}`,
+				`/versioned/entities/${b58.entityWithBlocks}?editId=${b58.edit1}&spaceId=${b58.space1}`,
 			)
 			const body = await res.json()
 
@@ -389,7 +410,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 
 		it("excludes BLOCKS relations from relations array", async () => {
 			const res = await app.request(
-				`/versioned/entities/${uuid.entityWithBlocks}?editId=${uuid.edit1}&spaceId=${uuid.space1}`,
+				`/versioned/entities/${b58.entityWithBlocks}?editId=${b58.edit1}&spaceId=${b58.space1}`,
 			)
 			const body = await res.json()
 
@@ -406,7 +427,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 	describe("Entity Snapshot - Edge Cases", () => {
 		it("returns empty snapshot for non-existent entity", async () => {
 			const res = await app.request(
-				`/versioned/entities/${uuid.entityNonExistent}?editId=${uuid.edit1}&spaceId=${uuid.space1}`,
+				`/versioned/entities/${b58.entityNonExistent}?editId=${b58.edit1}&spaceId=${b58.space1}`,
 			)
 			expect(res.status).toBe(200)
 			const body = await res.json()
@@ -419,7 +440,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 		it("returns empty snapshot for entity deleted before version", async () => {
 			// entityDeleted exists at v1, deleted at v2
 			const res = await app.request(
-				`/versioned/entities/${uuid.entityDeleted}?editId=${uuid.edit3}&spaceId=${uuid.space1}`,
+				`/versioned/entities/${b58.entityDeleted}?editId=${b58.edit3}&spaceId=${b58.space1}`,
 			)
 			expect(res.status).toBe(200)
 			const body = await res.json()
@@ -428,7 +449,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 
 		it("returns entity state at v1 before deletion", async () => {
 			const res = await app.request(
-				`/versioned/entities/${uuid.entityDeleted}?editId=${uuid.edit1}&spaceId=${uuid.space1}`,
+				`/versioned/entities/${b58.entityDeleted}?editId=${b58.edit1}&spaceId=${b58.space1}`,
 			)
 			expect(res.status).toBe(200)
 			const body = await res.json()
@@ -438,7 +459,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 		it("returns empty snapshot for entity created after requested version", async () => {
 			// entityCreatedLater created at v2
 			const res = await app.request(
-				`/versioned/entities/${uuid.entityCreatedLater}?editId=${uuid.edit1}&spaceId=${uuid.space1}`,
+				`/versioned/entities/${b58.entityCreatedLater}?editId=${b58.edit1}&spaceId=${b58.space1}`,
 			)
 			expect(res.status).toBe(200)
 			const body = await res.json()
@@ -447,7 +468,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 
 		it("returns entity state after creation version", async () => {
 			const res = await app.request(
-				`/versioned/entities/${uuid.entityCreatedLater}?editId=${uuid.edit2}&spaceId=${uuid.space1}`,
+				`/versioned/entities/${b58.entityCreatedLater}?editId=${b58.edit2}&spaceId=${b58.space1}`,
 			)
 			expect(res.status).toBe(200)
 			const body = await res.json()
@@ -461,7 +482,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 
 	describe("Entity Versions", () => {
 		it("lists versions that affected an entity", async () => {
-			const res = await app.request(`/versioned/entities/${uuid.entityChanging}/versions?spaceId=${uuid.space1}`)
+			const res = await app.request(`/versioned/entities/${b58.entityChanging}/versions?spaceId=${b58.space1}`)
 			expect(res.status).toBe(200)
 			const body = await res.json()
 
@@ -476,9 +497,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 		})
 
 		it("returns empty versions for entity with no history", async () => {
-			const res = await app.request(
-				`/versioned/entities/${uuid.entityNonExistent}/versions?spaceId=${uuid.space1}`,
-			)
+			const res = await app.request(`/versioned/entities/${b58.entityNonExistent}/versions?spaceId=${b58.space1}`)
 			expect(res.status).toBe(200)
 			const body = await res.json()
 			expect(body.versions).toEqual([])
@@ -486,7 +505,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 
 		it("respects limit parameter", async () => {
 			const res = await app.request(
-				`/versioned/entities/${uuid.entityChanging}/versions?spaceId=${uuid.space1}&limit=1`,
+				`/versioned/entities/${b58.entityChanging}/versions?spaceId=${b58.space1}&limit=1`,
 			)
 			expect(res.status).toBe(200)
 			const body = await res.json()
@@ -501,7 +520,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 	describe("Entity Diff - Value Changes", () => {
 		it("shows value UPDATE (text changed)", async () => {
 			const res = await app.request(
-				`/versioned/entities/${uuid.entityChanging}/diff?fromEditId=${uuid.edit1}&toEditId=${uuid.edit2}&spaceId=${uuid.space1}`,
+				`/versioned/entities/${b58.entityChanging}/diff?fromEditId=${b58.edit1}&toEditId=${b58.edit2}&spaceId=${b58.space1}`,
 			)
 			expect(res.status).toBe(200)
 			const body = await res.json()
@@ -515,7 +534,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 
 		it("shows value ADD (new property)", async () => {
 			const res = await app.request(
-				`/versioned/entities/${uuid.entityChanging}/diff?fromEditId=${uuid.edit1}&toEditId=${uuid.edit2}&spaceId=${uuid.space1}`,
+				`/versioned/entities/${b58.entityChanging}/diff?fromEditId=${b58.edit1}&toEditId=${b58.edit2}&spaceId=${b58.space1}`,
 			)
 			const body = await res.json()
 
@@ -527,7 +546,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 
 		it("shows value REMOVE (deleted property)", async () => {
 			const res = await app.request(
-				`/versioned/entities/${uuid.entityChanging}/diff?fromEditId=${uuid.edit2}&toEditId=${uuid.edit3}&spaceId=${uuid.space1}`,
+				`/versioned/entities/${b58.entityChanging}/diff?fromEditId=${b58.edit2}&toEditId=${b58.edit3}&spaceId=${b58.space1}`,
 			)
 			const body = await res.json()
 
@@ -539,7 +558,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 
 		it("returns empty diff for same version", async () => {
 			const res = await app.request(
-				`/versioned/entities/${uuid.entityChanging}/diff?fromEditId=${uuid.edit1}&toEditId=${uuid.edit1}&spaceId=${uuid.space1}`,
+				`/versioned/entities/${b58.entityChanging}/diff?fromEditId=${b58.edit1}&toEditId=${b58.edit1}&spaceId=${b58.space1}`,
 			)
 			expect(res.status).toBe(200)
 			const body = await res.json()
@@ -549,7 +568,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 
 		it("includes text diff chunks for TEXT values", async () => {
 			const res = await app.request(
-				`/versioned/entities/${uuid.entityChanging}/diff?fromEditId=${uuid.edit1}&toEditId=${uuid.edit2}&spaceId=${uuid.space1}`,
+				`/versioned/entities/${b58.entityChanging}/diff?fromEditId=${b58.edit1}&toEditId=${b58.edit2}&spaceId=${b58.space1}`,
 			)
 			const body = await res.json()
 
@@ -572,11 +591,13 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 	describe("Entity Diff - Relation Changes", () => {
 		it("shows relation ADD", async () => {
 			const res = await app.request(
-				`/versioned/entities/${uuid.entityChanging}/diff?fromEditId=${uuid.edit1}&toEditId=${uuid.edit2}&spaceId=${uuid.space1}`,
+				`/versioned/entities/${b58.entityChanging}/diff?fromEditId=${b58.edit1}&toEditId=${b58.edit2}&spaceId=${b58.space1}`,
 			)
 			const body = await res.json()
 
-			const relAdd = body.relations.find((r: any) => r.changeType === "ADD" && r.relationId === toBase58(uuid.rel2))
+			const relAdd = body.relations.find(
+				(r: any) => r.changeType === "ADD" && r.relationId === toBase58(uuid.rel2),
+			)
 			expect(relAdd).toBeDefined()
 			expect(relAdd.before).toBeNull()
 			expect(relAdd.after).toBeDefined()
@@ -585,7 +606,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 
 		it("shows relation REMOVE", async () => {
 			const res = await app.request(
-				`/versioned/entities/${uuid.entityChanging}/diff?fromEditId=${uuid.edit2}&toEditId=${uuid.edit3}&spaceId=${uuid.space1}`,
+				`/versioned/entities/${b58.entityChanging}/diff?fromEditId=${b58.edit2}&toEditId=${b58.edit3}&spaceId=${b58.space1}`,
 			)
 			const body = await res.json()
 
@@ -603,12 +624,14 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 	describe("Entity Diff - Block Changes", () => {
 		it("shows text block content change with diff", async () => {
 			const res = await app.request(
-				`/versioned/entities/${uuid.entityWithBlocks}/diff?fromEditId=${uuid.edit1}&toEditId=${uuid.edit2}&spaceId=${uuid.space1}`,
+				`/versioned/entities/${b58.entityWithBlocks}/diff?fromEditId=${b58.edit1}&toEditId=${b58.edit2}&spaceId=${b58.space1}`,
 			)
 			expect(res.status).toBe(200)
 			const body = await res.json()
 
-			const textBlockChange = body.blocks.find((b: any) => b.id === toBase58(uuid.blockText1) && b.type === "textBlock")
+			const textBlockChange = body.blocks.find(
+				(b: any) => b.id === toBase58(uuid.blockText1) && b.type === "textBlock",
+			)
 			expect(textBlockChange).toBeDefined()
 			expect(textBlockChange.before).toBe("Block 1 content")
 			expect(textBlockChange.after).toBe("Block 1 updated content")
@@ -623,7 +646,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 	describe("Entity Diff - Dynamic Grouping", () => {
 		it("returns groupKeys for dynamic groups with changes", async () => {
 			const res = await app.request(
-				`/versioned/entities/${uuid.entityWithDynamicGroups}/diff?fromEditId=${uuid.edit1}&toEditId=${uuid.edit2}&spaceId=${uuid.space1}`,
+				`/versioned/entities/${b58.entityWithDynamicGroups}/diff?fromEditId=${b58.edit1}&toEditId=${b58.edit2}&spaceId=${b58.space1}`,
 			)
 			expect(res.status).toBe(200)
 			const body = await res.json()
@@ -635,7 +658,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 
 		it("spreads dynamic groups at root level", async () => {
 			const res = await app.request(
-				`/versioned/entities/${uuid.entityWithDynamicGroups}/diff?fromEditId=${uuid.edit1}&toEditId=${uuid.edit2}&spaceId=${uuid.space1}`,
+				`/versioned/entities/${b58.entityWithDynamicGroups}/diff?fromEditId=${b58.edit1}&toEditId=${b58.edit2}&spaceId=${b58.space1}`,
 			)
 			const body = await res.json()
 
@@ -646,7 +669,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 
 		it("includes entity diffs in dynamic groups", async () => {
 			const res = await app.request(
-				`/versioned/entities/${uuid.entityWithDynamicGroups}/diff?fromEditId=${uuid.edit1}&toEditId=${uuid.edit2}&spaceId=${uuid.space1}`,
+				`/versioned/entities/${b58.entityWithDynamicGroups}/diff?fromEditId=${b58.edit1}&toEditId=${b58.edit2}&spaceId=${b58.space1}`,
 			)
 			const body = await res.json()
 
@@ -662,7 +685,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 
 		it("supports multiple dynamic groups", async () => {
 			const res = await app.request(
-				`/versioned/entities/${uuid.entityWithDynamicGroups}/diff?fromEditId=${uuid.edit1}&toEditId=${uuid.edit3}&spaceId=${uuid.space1}`,
+				`/versioned/entities/${b58.entityWithDynamicGroups}/diff?fromEditId=${b58.edit1}&toEditId=${b58.edit3}&spaceId=${b58.space1}`,
 			)
 			const body = await res.json()
 
@@ -674,7 +697,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 
 		it("sorts groupKeys alphabetically", async () => {
 			const res = await app.request(
-				`/versioned/entities/${uuid.entityWithDynamicGroups}/diff?fromEditId=${uuid.edit1}&toEditId=${uuid.edit3}&spaceId=${uuid.space1}`,
+				`/versioned/entities/${b58.entityWithDynamicGroups}/diff?fromEditId=${b58.edit1}&toEditId=${b58.edit3}&spaceId=${b58.space1}`,
 			)
 			const body = await res.json()
 
@@ -686,7 +709,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 		it("excludes groups with no changes from groupKeys", async () => {
 			// When comparing same version, no dynamic groups should have changes
 			const res = await app.request(
-				`/versioned/entities/${uuid.entityWithDynamicGroups}/diff?fromEditId=${uuid.edit1}&toEditId=${uuid.edit1}&spaceId=${uuid.space1}`,
+				`/versioned/entities/${b58.entityWithDynamicGroups}/diff?fromEditId=${b58.edit1}&toEditId=${b58.edit1}&spaceId=${b58.space1}`,
 			)
 			const body = await res.json()
 
@@ -700,28 +723,28 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 
 	describe("Proposal Diff", () => {
 		it("returns proposal status as active when end_time is in future", async () => {
-			const res = await app.request(`/versioned/proposals/${uuid.proposalActive}/diff?spaceId=${uuid.space1}`)
+			const res = await app.request(`/versioned/proposals/${b58.proposalActive}/diff?spaceId=${b58.space1}`)
 			expect(res.status).toBe(200)
 			const body = await res.json()
 			expect(body.proposalStatus).toBe("active")
 		})
 
 		it("returns proposal status as closed when end_time is in past", async () => {
-			const res = await app.request(`/versioned/proposals/${uuid.proposalClosed}/diff?spaceId=${uuid.space1}`)
+			const res = await app.request(`/versioned/proposals/${b58.proposalClosed}/diff?spaceId=${b58.space1}`)
 			expect(res.status).toBe(200)
 			const body = await res.json()
 			expect(body.proposalStatus).toBe("closed")
 		})
 
 		it("returns proposal status as executed when executed_at is set", async () => {
-			const res = await app.request(`/versioned/proposals/${uuid.proposalExecuted}/diff?spaceId=${uuid.space1}`)
+			const res = await app.request(`/versioned/proposals/${b58.proposalExecuted}/diff?spaceId=${b58.space1}`)
 			expect(res.status).toBe(200)
 			const body = await res.json()
 			expect(body.proposalStatus).toBe("executed")
 		})
 
 		it("returns empty diff for proposal without publish action", async () => {
-			const res = await app.request(`/versioned/proposals/${uuid.proposalNoPublish}/diff?spaceId=${uuid.space1}`)
+			const res = await app.request(`/versioned/proposals/${b58.proposalNoPublish}/diff?spaceId=${b58.space1}`)
 			expect(res.status).toBe(200)
 			const body = await res.json()
 			expect(body.entities).toEqual([])
@@ -729,12 +752,12 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 		})
 
 		it("returns 404 for non-existent proposal", async () => {
-			const res = await app.request(`/versioned/proposals/${uuid.entityNonExistent}/diff?spaceId=${uuid.space1}`)
+			const res = await app.request(`/versioned/proposals/${b58.entityNonExistent}/diff?spaceId=${b58.space1}`)
 			expect(res.status).toBe(404)
 		})
 
 		it("returns 400 when spaceId does not match proposal", async () => {
-			const res = await app.request(`/versioned/proposals/${uuid.proposalActive}/diff?spaceId=${uuid.space2}`)
+			const res = await app.request(`/versioned/proposals/${b58.proposalActive}/diff?spaceId=${b58.space2}`)
 			expect(res.status).toBe(400)
 			const body = await res.json()
 			expect(body.message).toContain("spaceId does not match")
@@ -742,7 +765,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 
 		it("returns 400 for invalid cursor", async () => {
 			const res = await app.request(
-				`/versioned/proposals/${uuid.proposalNoPublish}/diff?spaceId=${uuid.space1}&cursor=invalid!!!`,
+				`/versioned/proposals/${b58.proposalNoPublish}/diff?spaceId=${b58.space1}&cursor=invalid!!!`,
 			)
 			// No content_uri means cursor validation is skipped (early return)
 			// This test would need a proposal WITH content_uri to test cursor validation
@@ -840,7 +863,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 
 		it("entity snapshot: id, values, relations, blocks all Base58", async () => {
 			const res = await app.request(
-				`/versioned/entities/${uuid.entityWithBlocks}?editId=${uuid.edit1}&spaceId=${uuid.space1}`,
+				`/versioned/entities/${b58.entityWithBlocks}?editId=${b58.edit1}&spaceId=${b58.space1}`,
 			)
 			expect(res.status).toBe(200)
 			const body = await res.json()
@@ -866,7 +889,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 
 		it("entity snapshot with relations: all relation UUID fields Base58", async () => {
 			const res = await app.request(
-				`/versioned/entities/${uuid.entityWithRelations}?editId=${uuid.edit1}&spaceId=${uuid.space1}`,
+				`/versioned/entities/${b58.entityWithRelations}?editId=${b58.edit1}&spaceId=${b58.space1}`,
 			)
 			expect(res.status).toBe(200)
 			const body = await res.json()
@@ -879,7 +902,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 
 		it("entity diff: entityId, value changes, relation changes, block changes all Base58", async () => {
 			const res = await app.request(
-				`/versioned/entities/${uuid.entityChanging}/diff?fromEditId=${uuid.edit1}&toEditId=${uuid.edit2}&spaceId=${uuid.space1}`,
+				`/versioned/entities/${b58.entityChanging}/diff?fromEditId=${b58.edit1}&toEditId=${b58.edit2}&spaceId=${b58.space1}`,
 			)
 			expect(res.status).toBe(200)
 			const body = await res.json()
@@ -909,7 +932,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 		})
 
 		it("entity versions: editId is Base58", async () => {
-			const res = await app.request(`/versioned/entities/${uuid.entityAllTypes}/versions?spaceId=${uuid.space1}`)
+			const res = await app.request(`/versioned/entities/${b58.entityAllTypes}/versions?spaceId=${b58.space1}`)
 			expect(res.status).toBe(200)
 			const body = await res.json()
 
@@ -920,7 +943,7 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 		})
 
 		it("proposal diff: proposalId, spaceId, entity diffs all Base58", async () => {
-			const res = await app.request(`/versioned/proposals/${uuid.proposalActive}/diff?spaceId=${uuid.space1}`)
+			const res = await app.request(`/versioned/proposals/${b58.proposalActive}/diff?spaceId=${b58.space1}`)
 			expect(res.status).toBe(200)
 			const body = await res.json()
 

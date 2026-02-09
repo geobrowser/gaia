@@ -7,7 +7,7 @@ import {SystemIds} from "@graphprotocol/grc-20"
 import {diffWords} from "diff"
 import {Effect} from "effect"
 
-import {type Uuid, toUuid} from "../utils/uuid"
+import {toUuid, type Uuid} from "../utils/uuid"
 
 import type {
 	BlockChange,
@@ -529,11 +529,7 @@ function emptySnapshot(id: Uuid): BlockSnapshot {
 /**
  * Compute a full EntityDiff for a non-block entity.
  */
-function diffEntitySnapshot(
-	id: Uuid,
-	from: BlockSnapshot,
-	to: BlockSnapshot,
-): Effect.Effect<EntityDiff, never, never> {
+function diffEntitySnapshot(id: Uuid, from: BlockSnapshot, to: BlockSnapshot): Effect.Effect<EntityDiff, never, never> {
 	return Effect.gen(function* () {
 		const [values, relations] = yield* Effect.all([
 			diffValues(from.values, to.values),

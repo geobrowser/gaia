@@ -7,7 +7,7 @@
 import {sql} from "drizzle-orm"
 import type {NodePgDatabase} from "drizzle-orm/node-postgres"
 import {Data, Effect} from "effect"
-import {isValidUuid, toUuid, uuidToBase58} from "../utils/uuid"
+import {fromBase58, isValidBase58Id, uuidToBase58} from "../utils/uuid"
 import {
 	type ProposalAction,
 	type ProposalActionType,
@@ -323,8 +323,8 @@ function parseCursor(cursor: string, orderBy: ProposalOrderBy): {orderValue: str
 	const [orderValue, cursorId] = parts
 	if (!orderValue || !cursorId) return null
 
-	// Validate cursorId is a valid UUID (hex or Base58)
-	if (!isValidUuid(cursorId)) return null
+	// Validate cursorId is a valid Base58 ID
+	if (!isValidBase58Id(cursorId)) return null
 
 	// Validate orderValue format based on orderBy type
 	if (orderBy === "created_at") {
@@ -335,8 +335,8 @@ function parseCursor(cursor: string, orderBy: ProposalOrderBy): {orderValue: str
 		if (!BIGINT_PATTERN.test(orderValue)) return null
 	}
 
-	// Convert to dashed hex for PostgreSQL ::uuid cast
-	return {orderValue, cursorId: toUuid(cursorId)}
+	// Decode Base58 to dashed hex for PostgreSQL ::uuid cast
+	return {orderValue, cursorId: fromBase58(cursorId)}
 }
 
 /**

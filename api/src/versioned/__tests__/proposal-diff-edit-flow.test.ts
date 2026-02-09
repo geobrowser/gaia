@@ -103,6 +103,21 @@ const uuid = {
 	val: (n: number) => `20000000-0009-4000-8000-${n.toString().padStart(12, "0")}`,
 }
 
+// Base58-encoded versions of UUIDs used in request URLs.
+// The API only accepts Base58 IDs on input; hex UUIDs in mock DB rows stay as-is.
+const b58 = {
+	space1: uuidToBase58(uuid.space1),
+	proposalCreateEntity: uuidToBase58(uuid.proposalCreateEntity),
+	proposalUpdateEntity: uuidToBase58(uuid.proposalUpdateEntity),
+	proposalDeleteEntity: uuidToBase58(uuid.proposalDeleteEntity),
+	proposalCreateRelation: uuidToBase58(uuid.proposalCreateRelation),
+	proposalMultipleOps: uuidToBase58(uuid.proposalMultipleOps),
+	proposalAllValueTypes: uuidToBase58(uuid.proposalAllValueTypes),
+	proposalClosed: uuidToBase58(uuid.proposalClosed),
+	proposalDeleteRelation: uuidToBase58(uuid.proposalDeleteRelation),
+	proposalUpdateRelation: uuidToBase58(uuid.proposalUpdateRelation),
+}
+
 // Version key: (block_number << 32) | sequence
 const versionKey1 = (BigInt(2000) << BigInt(32)).toString()
 
@@ -153,9 +168,7 @@ describe.skipIf(SKIP_INTEGRATION)("Proposal Diff - Full GRC-20 Edit Flow", () =>
 
 	describe("CreateEntity Op", () => {
 		it("returns ADD diff for new entity with text value", async () => {
-			const res = await app.request(
-				`/versioned/proposals/${uuid.proposalCreateEntity}/diff?spaceId=${uuid.space1}`,
-			)
+			const res = await app.request(`/versioned/proposals/${b58.proposalCreateEntity}/diff?spaceId=${b58.space1}`)
 			expect(res.status).toBe(200)
 
 			const body = await res.json()
@@ -176,7 +189,7 @@ describe.skipIf(SKIP_INTEGRATION)("Proposal Diff - Full GRC-20 Edit Flow", () =>
 
 		it("returns ADD diff for new entity with multiple values", async () => {
 			const res = await app.request(
-				`/versioned/proposals/${uuid.proposalAllValueTypes}/diff?spaceId=${uuid.space1}`,
+				`/versioned/proposals/${b58.proposalAllValueTypes}/diff?spaceId=${b58.space1}`,
 			)
 			expect(res.status).toBe(200)
 
@@ -219,9 +232,7 @@ describe.skipIf(SKIP_INTEGRATION)("Proposal Diff - Full GRC-20 Edit Flow", () =>
 
 	describe("UpdateEntity Op", () => {
 		it("returns UPDATE diff when modifying existing value", async () => {
-			const res = await app.request(
-				`/versioned/proposals/${uuid.proposalUpdateEntity}/diff?spaceId=${uuid.space1}`,
-			)
+			const res = await app.request(`/versioned/proposals/${b58.proposalUpdateEntity}/diff?spaceId=${b58.space1}`)
 			expect(res.status).toBe(200)
 
 			const body = await res.json()
@@ -237,9 +248,7 @@ describe.skipIf(SKIP_INTEGRATION)("Proposal Diff - Full GRC-20 Edit Flow", () =>
 		})
 
 		it("returns ADD diff when setting new property on existing entity", async () => {
-			const res = await app.request(
-				`/versioned/proposals/${uuid.proposalUpdateEntity}/diff?spaceId=${uuid.space1}`,
-			)
+			const res = await app.request(`/versioned/proposals/${b58.proposalUpdateEntity}/diff?spaceId=${b58.space1}`)
 			expect(res.status).toBe(200)
 
 			const body = await res.json()
@@ -260,9 +269,7 @@ describe.skipIf(SKIP_INTEGRATION)("Proposal Diff - Full GRC-20 Edit Flow", () =>
 
 	describe("DeleteEntity Op", () => {
 		it("returns REMOVE diff for all values on deleted entity", async () => {
-			const res = await app.request(
-				`/versioned/proposals/${uuid.proposalDeleteEntity}/diff?spaceId=${uuid.space1}`,
-			)
+			const res = await app.request(`/versioned/proposals/${b58.proposalDeleteEntity}/diff?spaceId=${b58.space1}`)
 			expect(res.status).toBe(200)
 
 			const body = await res.json()
@@ -285,7 +292,7 @@ describe.skipIf(SKIP_INTEGRATION)("Proposal Diff - Full GRC-20 Edit Flow", () =>
 	describe("CreateRelation Op", () => {
 		it("returns ADD relation diff for new relation", async () => {
 			const res = await app.request(
-				`/versioned/proposals/${uuid.proposalCreateRelation}/diff?spaceId=${uuid.space1}`,
+				`/versioned/proposals/${b58.proposalCreateRelation}/diff?spaceId=${b58.space1}`,
 			)
 			expect(res.status).toBe(200)
 
@@ -316,7 +323,7 @@ describe.skipIf(SKIP_INTEGRATION)("Proposal Diff - Full GRC-20 Edit Flow", () =>
 			// The proposal-diff code must look up the from_entity_id to know which
 			// entity is affected by the relation deletion.
 			const res = await app.request(
-				`/versioned/proposals/${uuid.proposalDeleteRelation}/diff?spaceId=${uuid.space1}`,
+				`/versioned/proposals/${b58.proposalDeleteRelation}/diff?spaceId=${b58.space1}`,
 			)
 			expect(res.status).toBe(200)
 
@@ -345,7 +352,7 @@ describe.skipIf(SKIP_INTEGRATION)("Proposal Diff - Full GRC-20 Edit Flow", () =>
 			// This test verifies that updateRelation ops correctly look up the from_entity_id
 			// and show the position change in the diff.
 			const res = await app.request(
-				`/versioned/proposals/${uuid.proposalUpdateRelation}/diff?spaceId=${uuid.space1}`,
+				`/versioned/proposals/${b58.proposalUpdateRelation}/diff?spaceId=${b58.space1}`,
 			)
 			expect(res.status).toBe(200)
 
@@ -370,9 +377,7 @@ describe.skipIf(SKIP_INTEGRATION)("Proposal Diff - Full GRC-20 Edit Flow", () =>
 
 	describe("Multiple Operations", () => {
 		it("returns diffs for all affected entities from multiple ops", async () => {
-			const res = await app.request(
-				`/versioned/proposals/${uuid.proposalMultipleOps}/diff?spaceId=${uuid.space1}`,
-			)
+			const res = await app.request(`/versioned/proposals/${b58.proposalMultipleOps}/diff?spaceId=${b58.space1}`)
 			expect(res.status).toBe(200)
 
 			const body = await res.json()
@@ -396,7 +401,7 @@ describe.skipIf(SKIP_INTEGRATION)("Proposal Diff - Full GRC-20 Edit Flow", () =>
 
 	describe("Closed Proposal", () => {
 		it("uses versioned base state for closed proposals", async () => {
-			const res = await app.request(`/versioned/proposals/${uuid.proposalClosed}/diff?spaceId=${uuid.space1}`)
+			const res = await app.request(`/versioned/proposals/${b58.proposalClosed}/diff?spaceId=${b58.space1}`)
 			expect(res.status).toBe(200)
 
 			const body = await res.json()
@@ -412,9 +417,9 @@ describe.skipIf(SKIP_INTEGRATION)("Proposal Diff - Full GRC-20 Edit Flow", () =>
 
 	describe("Error Cases", () => {
 		it("returns 400 for proposal with non-matching spaceId", async () => {
-			const wrongSpaceId = "30000000-0001-4000-8000-000000000099"
+			const wrongSpaceId = uuidToBase58("30000000-0001-4000-8000-000000000099")
 			const res = await app.request(
-				`/versioned/proposals/${uuid.proposalCreateEntity}/diff?spaceId=${wrongSpaceId}`,
+				`/versioned/proposals/${b58.proposalCreateEntity}/diff?spaceId=${wrongSpaceId}`,
 			)
 			expect(res.status).toBe(400)
 
@@ -424,8 +429,8 @@ describe.skipIf(SKIP_INTEGRATION)("Proposal Diff - Full GRC-20 Edit Flow", () =>
 		})
 
 		it("returns 404 for non-existent proposal", async () => {
-			const nonExistentId = "20000000-0008-4000-8000-000000000999"
-			const res = await app.request(`/versioned/proposals/${nonExistentId}/diff?spaceId=${uuid.space1}`)
+			const nonExistentId = uuidToBase58("20000000-0008-4000-8000-000000000999")
+			const res = await app.request(`/versioned/proposals/${nonExistentId}/diff?spaceId=${b58.space1}`)
 			expect(res.status).toBe(404)
 		})
 	})

@@ -11,6 +11,7 @@
 import {Effect} from "effect"
 import {Hono} from "hono"
 import {beforeEach, describe, expect, it, vi} from "vitest"
+import {uuidToBase58} from "../../utils/uuid"
 import {createProfileRouter} from "../index"
 
 // =============================================================================
@@ -60,6 +61,16 @@ function makeDbProfileRow(overrides: Partial<Record<string, unknown>> = {}) {
 		...overrides,
 	}
 }
+
+// =============================================================================
+// Base58-encoded IDs for request URLs and bodies (API only accepts Base58 input)
+// =============================================================================
+
+const SPACE_ID_B58 = uuidToBase58("f3dab79c-b5a3-d9d1-7596-56dd5361d1c6")
+const SPACE_ID_2_B58 = uuidToBase58("a1234567-b5a3-d9d1-7596-56dd5361d1c6")
+const SPACE_ID_A_B58 = uuidToBase58("a0000000-0000-0000-0000-000000000000")
+const SPACE_ID_B_B58 = uuidToBase58("b0000000-0000-0000-0000-000000000000")
+const MISSING_SPACE_ID_B58 = uuidToBase58("deadbeef-dead-beef-dead-beefdeadbeef")
 
 // =============================================================================
 // GET /profile/address/:address Tests
@@ -136,7 +147,7 @@ describe("GET /profile/space/:spaceId", () => {
 		const mockRow = makeDbProfileRow()
 		db.execute.mockResolvedValueOnce({rows: [mockRow]})
 
-		const res = await app.request("/profile/space/f3dab79c-b5a3-d9d1-7596-56dd5361d1c6")
+		const res = await app.request(`/profile/space/${SPACE_ID_B58}`)
 
 		expect(res.status).toBe(200)
 		const body = await res.json()
@@ -152,7 +163,7 @@ describe("GET /profile/space/:spaceId", () => {
 		const {app, db} = setupTestApp()
 		db.execute.mockResolvedValueOnce({rows: []})
 
-		const res = await app.request("/profile/space/f3dab79c-b5a3-d9d1-7596-56dd5361d1c6")
+		const res = await app.request(`/profile/space/${SPACE_ID_B58}`)
 
 		expect(res.status).toBe(200)
 		const body = await res.json()
@@ -167,21 +178,19 @@ describe("GET /profile/space/:spaceId", () => {
 	it("should return 400 for invalid space ID format", async () => {
 		const {app} = setupTestApp()
 
-		const res = await app.request("/profile/space/not-a-uuid")
+		const res = await app.request("/profile/space/not-a-valid-id")
 
 		expect(res.status).toBe(400)
 		const body = await res.json()
 		expect(body.error).toBe("Invalid parameter")
 	})
 
-	it("should accept space ID without dashes", async () => {
-		const {app, db} = setupTestApp()
-		const mockRow = makeDbProfileRow()
-		db.execute.mockResolvedValueOnce({rows: [mockRow]})
+	it("should reject dashless hex space ID", async () => {
+		const {app} = setupTestApp()
 
 		const res = await app.request("/profile/space/f3dab79cb5a3d9d1759656dd5361d1c6")
 
-		expect(res.status).toBe(200)
+		expect(res.status).toBe(400)
 	})
 })
 
@@ -203,7 +212,7 @@ describe("POST /profile/batch", () => {
 			method: "POST",
 			headers: {"Content-Type": "application/json"},
 			body: JSON.stringify({
-				spaceIds: ["f3dab79c-b5a3-d9d1-7596-56dd5361d1c6", "a1234567-b5a3-d9d1-7596-56dd5361d1c6"],
+				spaceIds: [SPACE_ID_B58, SPACE_ID_2_B58],
 			}),
 		})
 
@@ -238,7 +247,7 @@ describe("POST /profile/batch", () => {
 			method: "POST",
 			headers: {"Content-Type": "application/json"},
 			body: JSON.stringify({
-				spaceIds: ["f3dab79c-b5a3-d9d1-7596-56dd5361d1c6", "00000000-0000-0000-0000-000000000000"],
+				spaceIds: [SPACE_ID_B58, MISSING_SPACE_ID_B58],
 			}),
 		})
 
@@ -256,7 +265,7 @@ describe("POST /profile/batch", () => {
 			method: "POST",
 			headers: {"Content-Type": "application/json"},
 			body: JSON.stringify({
-				spaceIds: ["f3dab79c-b5a3-d9d1-7596-56dd5361d1c6", "not-a-uuid"],
+				spaceIds: [SPACE_ID_B58, "not-a-valid-id"],
 			}),
 		})
 
@@ -269,7 +278,7 @@ describe("POST /profile/batch", () => {
 		const {app} = setupTestApp()
 		const tooManyIds = Array(101)
 			.fill(null)
-			.map((_, i) => `f3dab79c-b5a3-d9d1-7596-${String(i).padStart(12, "0")}`)
+			.map((_, i) => uuidToBase58(`f3dab79c-b5a3-d9d1-7596-${String(i).padStart(12, "0")}`))
 
 		const res = await app.request("/profile/batch", {
 			method: "POST",
@@ -311,7 +320,7 @@ describe("POST /profile/batch", () => {
 			method: "POST",
 			headers: {"Content-Type": "application/json"},
 			body: JSON.stringify({
-				spaceIds: ["a0000000-0000-0000-0000-000000000000", "b0000000-0000-0000-0000-000000000000"],
+				spaceIds: [SPACE_ID_A_B58, SPACE_ID_B_B58],
 			}),
 		})
 
@@ -333,7 +342,7 @@ describe("Profile data resolution", () => {
 		const mockRow = makeDbProfileRow({entity_name: null})
 		db.execute.mockResolvedValueOnce({rows: [mockRow]})
 
-		const res = await app.request("/profile/space/f3dab79c-b5a3-d9d1-7596-56dd5361d1c6")
+		const res = await app.request(`/profile/space/${SPACE_ID_B58}`)
 
 		expect(res.status).toBe(200)
 		const body = await res.json()
@@ -346,7 +355,7 @@ describe("Profile data resolution", () => {
 		const mockRow = makeDbProfileRow({avatar_url: null})
 		db.execute.mockResolvedValueOnce({rows: [mockRow]})
 
-		const res = await app.request("/profile/space/f3dab79c-b5a3-d9d1-7596-56dd5361d1c6")
+		const res = await app.request(`/profile/space/${SPACE_ID_B58}`)
 
 		expect(res.status).toBe(200)
 		const body = await res.json()

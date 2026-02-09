@@ -17,7 +17,7 @@ type AppEnv = {
 }
 
 import type {SearchClient, SearchResponse, SearchScope} from "../services/search"
-import {isValidUuid, toUuid} from "../utils/uuid"
+import {fromBase58, isValidBase58Id} from "../utils/uuid"
 
 /**
  * Valid search scope values.
@@ -41,9 +41,9 @@ const MAX_QUERY_LENGTH = 500
 
 /**
  * Maximum length for space_id parameter.
- * Dashed hex = 36 chars, Base58 ≤ 22 chars. Accept either format.
+ * Base58-encoded UUID is at most 22 characters.
  */
-const MAX_SPACE_ID_LENGTH = 36
+const MAX_SPACE_ID_LENGTH = 22
 
 /**
  * Maximum offset to prevent excessive pagination.
@@ -132,9 +132,9 @@ export function createSearchRouter(searchClient: SearchClient, runtime: AppRunti
 				{
 					name: "space_id",
 					in: "query",
-					description: "Space UUID (required for SPACE_SINGLE and SPACE scopes)",
+					description: "Space ID (required for SPACE_SINGLE and SPACE scopes). Base58-encoded.",
 					required: false,
-					schema: {type: "string", format: "uuid"},
+					schema: {type: "string"},
 				},
 				{
 					name: "type_ids",
@@ -171,11 +171,14 @@ export function createSearchRouter(searchClient: SearchClient, runtime: AppRunti
 										items: {
 											type: "object",
 											properties: {
-												id: {type: "string", format: "uuid"},
+												id: {type: "string", description: "Entity ID (Base58-encoded)"},
 												name: {type: "string"},
 												description: {type: "string"},
 												types: {type: "array", items: {type: "string"}},
-												spaces: {type: "array", items: {type: "string", format: "uuid"}},
+												spaces: {
+													type: "array",
+													items: {type: "string", description: "Space ID (Base58-encoded)"},
+												},
 												score: {type: "number"},
 											},
 										},
@@ -283,10 +286,10 @@ export function createSearchRouter(searchClient: SearchClient, runtime: AppRunti
 						)
 					}
 
-					if (!isValidUuid(spaceId)) {
+					if (!isValidBase58Id(spaceId)) {
 						return yield* Effect.fail(
 							new SearchValidationError({
-								message: "space_id must be a valid UUID",
+								message: "space_id must be a valid Base58 ID",
 								status: 400,
 							}),
 						)
@@ -349,10 +352,10 @@ export function createSearchRouter(searchClient: SearchClient, runtime: AppRunti
 					}
 
 					for (const typeId of typeIds) {
-						if (!isValidUuid(typeId)) {
+						if (!isValidBase58Id(typeId)) {
 							return yield* Effect.fail(
 								new SearchValidationError({
-									message: `type_ids must contain valid UUIDs, got invalid ID: ${typeId}`,
+									message: "type_ids must contain valid Base58 IDs",
 									status: 400,
 								}),
 							)
@@ -363,10 +366,10 @@ export function createSearchRouter(searchClient: SearchClient, runtime: AppRunti
 				// Parse include_deleted flag (default: false)
 				const includeDeleted = includeDeletedParam === "true"
 
-				// Normalize IDs to dashed hex for OpenSearch term queries.
+				// Decode Base58 IDs to dashed hex for OpenSearch term queries.
 				// OpenSearch stores UUIDs as dashed hex keywords (from Rust Uuid::to_string()).
-				const dashedSpaceId = spaceId ? toUuid(spaceId) : undefined
-				const dashedTypeIds = typeIds?.map(toUuid)
+				const dashedSpaceId = spaceId ? fromBase58(spaceId) : undefined
+				const dashedTypeIds = typeIds?.map(fromBase58)
 
 				// Execute search - only include optional params when defined
 				const searchQuery = {

@@ -1,7 +1,7 @@
 import {SystemIds} from "@graphprotocol/grc-20"
 import {Effect} from "effect"
 import {describe, expect, it} from "vitest"
-import {type Uuid, toUuid} from "../../utils/uuid"
+import {toUuid, type Uuid} from "../../utils/uuid"
 import {diffBlocks, diffEntitySnapshots, diffGroupedEntitySnapshots, diffRelations, diffValues} from "../diff"
 import type {
 	BlockSnapshot,

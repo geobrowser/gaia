@@ -5,14 +5,14 @@
  * matching PostgreSQL's native UUID representation. This eliminates conversion at
  * DB boundaries — what PostgreSQL returns is what we store internally.
  *
- * Accepted input formats (disambiguation order):
- *   1. Dashed hex (36 chars):   `550e8400-e29b-41d4-a716-446655440000`
- *   2. Dashless hex (32 chars): `550e8400e29b41d4a716446655440000`
- *   3. Base58 (≤22 chars):      `BDuZwkjCg3nPWMDshoYtpS`
+ * **Input boundaries (API params, GraphQL variables, request bodies):**
+ *   Use `fromBase58()` / `isValidBase58Id()` — accepts Base58 only.
  *
- * Hex always wins when ambiguous (e.g. a 32-char hex-only string is hex, not Base58).
+ * **Internal conversions (DB rows, system constants, test fixtures):**
+ *   Use `toUuid()` / `isValidUuid()` — accepts dashed hex, dashless hex, or Base58.
  *
- * Output format is Base58 for API responses. Use `toBase58()` at serialization boundaries.
+ * **Output boundaries (API responses, GraphQL serialize):**
+ *   Use `toBase58()` / `uuidToBase58()` — encodes to Base58.
  *
  * The `Uuid` branded type provides compile-time safety: the compiler will flag any
  * place a raw `string` is used where a validated UUID is expected.
@@ -97,6 +97,41 @@ export function toUuid(value: string): Uuid {
 export function isValidUuid(value: string): boolean {
 	try {
 		toUuid(value)
+		return true
+	} catch {
+		return false
+	}
+}
+
+/**
+ * Parse a Base58-encoded ID to a Uuid.
+ *
+ * This is the **input boundary** function: it accepts Base58 only and rejects
+ * dashed hex and dashless hex. Use this for all external-facing inputs (REST
+ * params, GraphQL variables, request bodies).
+ *
+ * For internal conversions (DB rows, system constants) that are already in
+ * dashed hex, use `toUuid()` instead.
+ *
+ * @throws if the input is not valid Base58 or decodes to a value outside 128-bit range
+ */
+export function fromBase58(value: string): Uuid {
+	const trimmed = value.trim()
+	if (!isBase58(trimmed)) {
+		throw new Error(`Invalid Base58 ID (length=${trimmed.length})`)
+	}
+	return insertDashes(decodeBase58(trimmed))
+}
+
+/**
+ * Validate that a string is a valid Base58-encoded ID.
+ *
+ * Returns true only for Base58 input. Dashed hex and dashless hex are rejected.
+ * Use at input boundaries where only Base58 is accepted.
+ */
+export function isValidBase58Id(value: string): boolean {
+	try {
+		fromBase58(value)
 		return true
 	} catch {
 		return false

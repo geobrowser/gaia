@@ -18,12 +18,9 @@ async function executeGraphQL(query: string, variables?: Record<string, unknown>
 
 describe("EntitySpaceFilterPlugin", () => {
 	let pool: Pool
-	/** UUID sent as GraphQL variable input (dashless hex — parseValue accepts this) */
+	/** Base58-encoded UUID sent as GraphQL variable input (parseValue only accepts Base58) */
 	let testSpaceId: string | null = null
 	let testTypeId: string | null = null
-	/** Base58 form of the same UUID — what the UUID scalar serializes to in output fields */
-	let testSpaceIdBase58: string | null = null
-	let testTypeIdBase58: string | null = null
 
 	beforeAll(async () => {
 		pool = new Pool({
@@ -39,9 +36,7 @@ describe("EntitySpaceFilterPlugin", () => {
 		`)
 
 		if (spaceResult.rows.length > 0) {
-			// Strip dashes for GraphQL input (parseValue also accepts dashed, but tests use dashless)
-			testSpaceId = spaceResult.rows[0].space_id.replace(/-/g, "")
-			testSpaceIdBase58 = uuidToBase58(spaceResult.rows[0].space_id)
+			testSpaceId = uuidToBase58(spaceResult.rows[0].space_id)
 		}
 
 		// Find a type that has entities (via SystemIds.Types relation)
@@ -53,9 +48,7 @@ describe("EntitySpaceFilterPlugin", () => {
 		`)
 
 		if (typeResult.rows.length > 0) {
-			// Strip dashes for GraphQL input (parseValue also accepts dashed, but tests use dashless)
-			testTypeId = typeResult.rows[0].to_entity_id.replace(/-/g, "")
-			testTypeIdBase58 = uuidToBase58(typeResult.rows[0].to_entity_id)
+			testTypeId = uuidToBase58(typeResult.rows[0].to_entity_id)
 		}
 	})
 
@@ -92,12 +85,12 @@ describe("EntitySpaceFilterPlugin", () => {
 
 			// All returned entities should have the test space in their spaceIds
 			for (const entity of result.data.entities) {
-				expect(entity.spaceIds).toContain(testSpaceIdBase58)
+				expect(entity.spaceIds).toContain(testSpaceId)
 			}
 		})
 
 		it("should return empty array for non-existent space ID", async () => {
-			const fakeSpaceId = "00000000000000000000000000000000"
+			const fakeSpaceId = uuidToBase58("00000001-0000-0000-0000-000000000000")
 
 			const result = await executeGraphQL(
 				`
@@ -138,7 +131,7 @@ describe("EntitySpaceFilterPlugin", () => {
 			expect(result.data.entities).toBeDefined()
 
 			for (const entity of result.data.entities) {
-				expect(entity.spaceIds).toContain(testSpaceIdBase58)
+				expect(entity.spaceIds).toContain(testSpaceId)
 			}
 		})
 
@@ -164,7 +157,7 @@ describe("EntitySpaceFilterPlugin", () => {
 			expect(result.data.entities).toBeDefined()
 
 			for (const entity of result.data.entities) {
-				expect(entity.spaceIds).toContain(testSpaceIdBase58)
+				expect(entity.spaceIds).toContain(testSpaceId)
 			}
 		})
 
@@ -191,7 +184,7 @@ describe("EntitySpaceFilterPlugin", () => {
 
 			// None of the returned entities should have the test space
 			for (const entity of result.data.entities) {
-				expect(entity.spaceIds).not.toContain(testSpaceIdBase58)
+				expect(entity.spaceIds).not.toContain(testSpaceId)
 			}
 		})
 
@@ -217,7 +210,7 @@ describe("EntitySpaceFilterPlugin", () => {
 			expect(result.data.entities).toBeDefined()
 
 			for (const entity of result.data.entities) {
-				expect(entity.spaceIds).not.toContain(testSpaceIdBase58)
+				expect(entity.spaceIds).not.toContain(testSpaceId)
 			}
 		})
 
@@ -289,12 +282,12 @@ describe("EntitySpaceFilterPlugin", () => {
 
 			// All returned entities should have the test type in their typeIds
 			for (const entity of result.data.entities) {
-				expect(entity.typeIds).toContain(testTypeIdBase58)
+				expect(entity.typeIds).toContain(testTypeId)
 			}
 		})
 
 		it("should return empty array for non-existent type ID", async () => {
-			const fakeTypeId = "00000000000000000000000000000000"
+			const fakeTypeId = uuidToBase58("00000001-0000-0000-0000-000000000000")
 
 			const result = await executeGraphQL(
 				`
@@ -335,7 +328,7 @@ describe("EntitySpaceFilterPlugin", () => {
 			expect(result.data.entities).toBeDefined()
 
 			for (const entity of result.data.entities) {
-				expect(entity.typeIds).toContain(testTypeIdBase58)
+				expect(entity.typeIds).toContain(testTypeId)
 			}
 		})
 
@@ -361,7 +354,7 @@ describe("EntitySpaceFilterPlugin", () => {
 			expect(result.data.entities).toBeDefined()
 
 			for (const entity of result.data.entities) {
-				expect(entity.typeIds).toContain(testTypeIdBase58)
+				expect(entity.typeIds).toContain(testTypeId)
 			}
 		})
 
@@ -388,7 +381,7 @@ describe("EntitySpaceFilterPlugin", () => {
 
 			// None of the returned entities should have the test type
 			for (const entity of result.data.entities) {
-				expect(entity.typeIds).not.toContain(testTypeIdBase58)
+				expect(entity.typeIds).not.toContain(testTypeId)
 			}
 		})
 
@@ -414,7 +407,7 @@ describe("EntitySpaceFilterPlugin", () => {
 			expect(result.data.entities).toBeDefined()
 
 			for (const entity of result.data.entities) {
-				expect(entity.typeIds).not.toContain(testTypeIdBase58)
+				expect(entity.typeIds).not.toContain(testTypeId)
 			}
 		})
 
@@ -486,8 +479,8 @@ describe("EntitySpaceFilterPlugin", () => {
 
 			// All returned entities should have both the space and type
 			for (const entity of result.data.entities) {
-				expect(entity.spaceIds).toContain(testSpaceIdBase58)
-				expect(entity.typeIds).toContain(testTypeIdBase58)
+				expect(entity.spaceIds).toContain(testSpaceId)
+				expect(entity.typeIds).toContain(testTypeId)
 			}
 		})
 	})

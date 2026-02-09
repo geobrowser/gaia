@@ -1,5 +1,5 @@
 import {describe, expect, it} from "vitest"
-import {type Uuid, isValidUuid, toBase58, toUuid, uuidToBase58} from "./uuid"
+import {fromBase58, isValidBase58Id, isValidUuid, toBase58, toUuid, type Uuid, uuidToBase58} from "./uuid"
 
 // =============================================================================
 // toUuid — format detection and normalization
@@ -148,6 +148,72 @@ describe("uuidToBase58", () => {
 
 	it("throws on invalid input", () => {
 		expect(() => uuidToBase58("not-valid")).toThrow()
+	})
+})
+
+// =============================================================================
+// fromBase58 — Base58-only input parsing
+// =============================================================================
+
+describe("fromBase58", () => {
+	it("decodes Base58 to dashed hex", () => {
+		expect(fromBase58("BDuZwkjCg3nPWMDshoYtpS")).toBe("52c8b540-e249-4e1b-babc-c8eac0acaa23")
+	})
+
+	it("decodes single-char Base58", () => {
+		expect(fromBase58("2")).toBe("00000000-0000-0000-0000-000000000001")
+	})
+
+	it("trims whitespace", () => {
+		expect(fromBase58("  BDuZwkjCg3nPWMDshoYtpS  ")).toBe("52c8b540-e249-4e1b-babc-c8eac0acaa23")
+	})
+
+	it("rejects dashed hex UUID", () => {
+		expect(() => fromBase58("550e8400-e29b-41d4-a716-446655440000")).toThrow("Invalid Base58")
+	})
+
+	it("rejects dashless hex UUID", () => {
+		expect(() => fromBase58("550e8400e29b41d4a716446655440000")).toThrow("Invalid Base58")
+	})
+
+	it("rejects empty string", () => {
+		expect(() => fromBase58("")).toThrow("Invalid Base58")
+	})
+
+	it("rejects random text", () => {
+		expect(() => fromBase58("not-a-valid-id")).toThrow("Invalid Base58")
+	})
+
+	it("surfaces overflow error for Base58 exceeding 128 bits", () => {
+		expect(() => fromBase58("zzzzzzzzzzzzzzzzzzzzzz")).toThrow("exceeds 128-bit")
+	})
+})
+
+// =============================================================================
+// isValidBase58Id
+// =============================================================================
+
+describe("isValidBase58Id", () => {
+	it("accepts valid Base58", () => {
+		expect(isValidBase58Id("BDuZwkjCg3nPWMDshoYtpS")).toBe(true)
+		expect(isValidBase58Id("2")).toBe(true)
+		expect(isValidBase58Id("4Z6VLmpipszCVZb21Fey5F")).toBe(true)
+	})
+
+	it("rejects dashed hex", () => {
+		expect(isValidBase58Id("550e8400-e29b-41d4-a716-446655440000")).toBe(false)
+	})
+
+	it("rejects dashless hex", () => {
+		expect(isValidBase58Id("550e8400e29b41d4a716446655440000")).toBe(false)
+	})
+
+	it("rejects empty string", () => {
+		expect(isValidBase58Id("")).toBe(false)
+	})
+
+	it("rejects overflow Base58", () => {
+		expect(isValidBase58Id("zzzzzzzzzzzzzzzzzzzzzz")).toBe(false)
 	})
 })
 

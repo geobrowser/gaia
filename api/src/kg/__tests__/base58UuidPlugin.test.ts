@@ -1,10 +1,11 @@
 import {GraphQLScalarType} from "graphql"
 import {Kind} from "graphql/language"
 import {describe, expect, it} from "vitest"
+import {uuidToBase58} from "../../utils/uuid"
 import {patchUuidScalar} from "../base58UuidPlugin"
 
 describe("Base58UuidPlugin scalar patch", () => {
-	it("accepts dashed and undashed UUID inputs and normalizes to dashed lowercase", () => {
+	it("accepts Base58 input and normalizes to dashed lowercase UUID", () => {
 		const scalar = new GraphQLScalarType({
 			name: "UUID",
 			serialize: (v) => String(v),
@@ -14,8 +15,34 @@ describe("Base58UuidPlugin scalar patch", () => {
 
 		patchUuidScalar(scalar)
 
-		expect(scalar.parseValue("550E8400-E29B-41D4-A716-446655440000")).toBe("550e8400-e29b-41d4-a716-446655440000")
-		expect(scalar.parseValue("550e8400e29b41d4a716446655440000")).toBe("550e8400-e29b-41d4-a716-446655440000")
+		const base58 = uuidToBase58("550e8400-e29b-41d4-a716-446655440000")
+		expect(scalar.parseValue(base58)).toBe("550e8400-e29b-41d4-a716-446655440000")
+	})
+
+	it("rejects dashed hex UUID via parseValue", () => {
+		const scalar = new GraphQLScalarType({
+			name: "UUID",
+			serialize: (v) => String(v),
+			parseValue: (v) => String(v),
+			parseLiteral: (ast) => (ast.kind === Kind.STRING ? ast.value : null),
+		})
+
+		patchUuidScalar(scalar)
+
+		expect(() => scalar.parseValue("550e8400-e29b-41d4-a716-446655440000")).toThrow(/Invalid Base58/i)
+	})
+
+	it("rejects dashless hex UUID via parseValue", () => {
+		const scalar = new GraphQLScalarType({
+			name: "UUID",
+			serialize: (v) => String(v),
+			parseValue: (v) => String(v),
+			parseLiteral: (ast) => (ast.kind === Kind.STRING ? ast.value : null),
+		})
+
+		patchUuidScalar(scalar)
+
+		expect(() => scalar.parseValue("550e8400e29b41d4a716446655440000")).toThrow(/Invalid Base58/i)
 	})
 
 	it("serializes UUID outputs as Base58", () => {
@@ -59,7 +86,7 @@ describe("Base58UuidPlugin scalar patch", () => {
 		expect(() => scalar.parseLiteral({kind: Kind.INT, value: "123"} as any)).toThrow(/parse string/i)
 	})
 
-	it("accepts dashed and undashed UUID literals and normalizes to dashed lowercase", () => {
+	it("accepts Base58 literals and normalizes to dashed lowercase UUID", () => {
 		const scalar = new GraphQLScalarType({
 			name: "UUID",
 			serialize: (v) => String(v),
@@ -69,15 +96,26 @@ describe("Base58UuidPlugin scalar patch", () => {
 
 		patchUuidScalar(scalar)
 
-		expect(scalar.parseLiteral({kind: Kind.STRING, value: "550E8400-E29B-41D4-A716-446655440000"})).toBe(
-			"550e8400-e29b-41d4-a716-446655440000",
-		)
-		expect(scalar.parseLiteral({kind: Kind.STRING, value: "550e8400e29b41d4a716446655440000"})).toBe(
-			"550e8400-e29b-41d4-a716-446655440000",
+		const base58 = uuidToBase58("550e8400-e29b-41d4-a716-446655440000")
+		expect(scalar.parseLiteral({kind: Kind.STRING, value: base58})).toBe("550e8400-e29b-41d4-a716-446655440000")
+	})
+
+	it("rejects dashed hex UUID via parseLiteral", () => {
+		const scalar = new GraphQLScalarType({
+			name: "UUID",
+			serialize: (v) => String(v),
+			parseValue: (v) => String(v),
+			parseLiteral: (ast) => (ast.kind === Kind.STRING ? ast.value : null),
+		})
+
+		patchUuidScalar(scalar)
+
+		expect(() => scalar.parseLiteral({kind: Kind.STRING, value: "550e8400-e29b-41d4-a716-446655440000"})).toThrow(
+			/Invalid Base58/i,
 		)
 	})
 
-	describe("invalid UUID input validation", () => {
+	describe("invalid input validation", () => {
 		it("rejects partially dashed UUIDs via parseValue", () => {
 			const scalar = new GraphQLScalarType({
 				name: "UUID",
@@ -88,7 +126,7 @@ describe("Base58UuidPlugin scalar patch", () => {
 
 			patchUuidScalar(scalar)
 
-			expect(() => scalar.parseValue("550e8400-e29b41d4a716446655440000")).toThrow(/Invalid UUID/i)
+			expect(() => scalar.parseValue("550e8400-e29b41d4a716446655440000")).toThrow(/Invalid Base58/i)
 		})
 
 		it("rejects partially dashed UUIDs via parseLiteral", () => {
@@ -102,7 +140,7 @@ describe("Base58UuidPlugin scalar patch", () => {
 			patchUuidScalar(scalar)
 
 			expect(() => scalar.parseLiteral({kind: Kind.STRING, value: "550e8400-e29b41d4a716446655440000"})).toThrow(
-				/Invalid UUID/i,
+				/Invalid Base58/i,
 			)
 		})
 
@@ -116,7 +154,7 @@ describe("Base58UuidPlugin scalar patch", () => {
 
 			patchUuidScalar(scalar)
 
-			expect(() => scalar.parseValue("")).toThrow(/Invalid UUID/i)
+			expect(() => scalar.parseValue("")).toThrow(/Invalid Base58/i)
 		})
 
 		it("rejects empty strings via parseLiteral", () => {
@@ -129,10 +167,10 @@ describe("Base58UuidPlugin scalar patch", () => {
 
 			patchUuidScalar(scalar)
 
-			expect(() => scalar.parseLiteral({kind: Kind.STRING, value: ""})).toThrow(/Invalid UUID/i)
+			expect(() => scalar.parseLiteral({kind: Kind.STRING, value: ""})).toThrow(/Invalid Base58/i)
 		})
 
-		it("rejects UUIDs with incorrect character counts via parseValue", () => {
+		it("rejects hex strings with incorrect character counts via parseValue", () => {
 			const scalar = new GraphQLScalarType({
 				name: "UUID",
 				serialize: (v) => String(v),
@@ -142,15 +180,15 @@ describe("Base58UuidPlugin scalar patch", () => {
 
 			patchUuidScalar(scalar)
 
-			// Too short (31 characters)
-			expect(() => scalar.parseValue("550e8400e29b41d4a71644665544000")).toThrow(/Invalid UUID/i)
-			// Too long (33 characters)
-			expect(() => scalar.parseValue("550e8400e29b41d4a7164466554400000")).toThrow(/Invalid UUID/i)
-			// Dashed but wrong format (too short)
-			expect(() => scalar.parseValue("550e8400-e29b-41d4-a716-44665544000")).toThrow(/Invalid UUID/i)
+			// Dashless hex (31 characters) — not valid Base58 due to '0'
+			expect(() => scalar.parseValue("550e8400e29b41d4a71644665544000")).toThrow(/Invalid Base58/i)
+			// Dashless hex (33 characters) — not valid Base58 due to '0'
+			expect(() => scalar.parseValue("550e8400e29b41d4a7164466554400000")).toThrow(/Invalid Base58/i)
+			// Dashed hex (wrong format) — not valid Base58 due to '-'
+			expect(() => scalar.parseValue("550e8400-e29b-41d4-a716-44665544000")).toThrow(/Invalid Base58/i)
 		})
 
-		it("rejects UUIDs with incorrect character counts via parseLiteral", () => {
+		it("rejects hex strings with incorrect character counts via parseLiteral", () => {
 			const scalar = new GraphQLScalarType({
 				name: "UUID",
 				serialize: (v) => String(v),
@@ -161,11 +199,11 @@ describe("Base58UuidPlugin scalar patch", () => {
 			patchUuidScalar(scalar)
 
 			expect(() => scalar.parseLiteral({kind: Kind.STRING, value: "550e8400e29b41d4a71644665544000"})).toThrow(
-				/Invalid UUID/i,
+				/Invalid Base58/i,
 			)
 		})
 
-		it("rejects UUIDs with invalid characters via parseValue", () => {
+		it("rejects strings with invalid characters via parseValue", () => {
 			const scalar = new GraphQLScalarType({
 				name: "UUID",
 				serialize: (v) => String(v),
@@ -175,15 +213,15 @@ describe("Base58UuidPlugin scalar patch", () => {
 
 			patchUuidScalar(scalar)
 
-			// Invalid character 'g' in undashed format
-			expect(() => scalar.parseValue("550e8400e29b41d4a71644665544000g")).toThrow(/Invalid UUID/i)
-			// Invalid character 'g' in dashed format
-			expect(() => scalar.parseValue("550e8400-e29b-41d4-a716-44665544000g")).toThrow(/Invalid UUID/i)
-			// Invalid character 'x' in undashed format
-			expect(() => scalar.parseValue("550e8400e29b41d4a71644665544000x")).toThrow(/Invalid UUID/i)
+			// Invalid character 'g' in undashed format — not valid Base58 due to '0'
+			expect(() => scalar.parseValue("550e8400e29b41d4a71644665544000g")).toThrow(/Invalid Base58/i)
+			// Invalid character 'g' in dashed format — not valid Base58 due to '-'
+			expect(() => scalar.parseValue("550e8400-e29b-41d4-a716-44665544000g")).toThrow(/Invalid Base58/i)
+			// Invalid character 'x' in undashed format — not valid Base58 due to '0'
+			expect(() => scalar.parseValue("550e8400e29b41d4a71644665544000x")).toThrow(/Invalid Base58/i)
 		})
 
-		it("rejects UUIDs with invalid characters via parseLiteral", () => {
+		it("rejects strings with invalid characters via parseLiteral", () => {
 			const scalar = new GraphQLScalarType({
 				name: "UUID",
 				serialize: (v) => String(v),
@@ -195,7 +233,7 @@ describe("Base58UuidPlugin scalar patch", () => {
 
 			expect(() =>
 				scalar.parseLiteral({kind: Kind.STRING, value: "550e8400-e29b-41d4-a716-44665544000g"}),
-			).toThrow(/Invalid UUID/i)
+			).toThrow(/Invalid Base58/i)
 		})
 
 		it("rejects invalid UUIDs via serialize", () => {

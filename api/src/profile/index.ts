@@ -13,7 +13,7 @@ import {Hono} from "hono"
 import {describeRoute} from "hono-openapi"
 
 import type {AppRuntime} from "../services/runtime"
-import {isValidUuid, toUuid, uuidToBase58} from "../utils/uuid"
+import {fromBase58, isValidBase58Id, uuidToBase58} from "../utils/uuid"
 import {
 	defaultProfile,
 	getProfileByAddress,
@@ -191,9 +191,9 @@ export function createProfileRouter(db: Database, runtime: AppRuntime) {
 				{
 					name: "spaceId",
 					in: "path",
-					description: "Personal space UUID",
+					description: "Personal space ID (Base58-encoded)",
 					required: true,
-					schema: {type: "string", format: "uuid"},
+					schema: {type: "string"},
 				},
 			],
 			responses: {
@@ -217,14 +217,14 @@ export function createProfileRouter(db: Database, runtime: AppRuntime) {
 
 			const program = Effect.gen(function* () {
 				// Validate space ID format (don't echo user input in error message)
-				if (!isValidUuid(spaceId)) {
+				if (!isValidBase58Id(spaceId)) {
 					yield* Effect.logWarning("Invalid space ID format")
-					return yield* Effect.fail(new ValidationError({message: "Space ID must be a valid UUID"}))
+					return yield* Effect.fail(new ValidationError({message: "Space ID must be a valid Base58 ID"}))
 				}
 
-				// Normalize to dashed hex for DB query
-				const uuid = toUuid(spaceId)
-				const base58SpaceId = uuidToBase58(spaceId)
+				// Decode Base58 to dashed hex for DB query
+				const uuid = fromBase58(spaceId)
+				const base58SpaceId = spaceId
 
 				// Fetch profile
 				const profile = yield* getProfileBySpaceId(db, uuid)
@@ -284,9 +284,9 @@ export function createProfileRouter(db: Database, runtime: AppRuntime) {
 							properties: {
 								spaceIds: {
 									type: "array",
-									items: {type: "string", format: "uuid"},
+									items: {type: "string"},
 									maxItems: MAX_BATCH_SIZE,
-									description: "Array of space UUIDs to fetch profiles for",
+									description: "Array of space IDs to fetch profiles for (Base58-encoded)",
 								},
 							},
 							required: ["spaceIds"],
@@ -356,14 +356,14 @@ export function createProfileRouter(db: Database, runtime: AppRuntime) {
 				}
 
 				// Validate each space ID (don't echo user input in error message)
-				const invalidIndex = spaceIds.findIndex((id) => typeof id !== "string" || !isValidUuid(id))
+				const invalidIndex = spaceIds.findIndex((id) => typeof id !== "string" || !isValidBase58Id(id))
 				if (invalidIndex !== -1) {
 					yield* Effect.logWarning("Invalid space ID in batch", {index: invalidIndex})
-					return yield* Effect.fail(new ValidationError({message: "Invalid space ID format in request"}))
+					return yield* Effect.fail(new ValidationError({message: "Invalid Base58 ID format in request"}))
 				}
 
-				// Normalize UUIDs: dashed hex for DB query and Map lookup
-				const uuids = (spaceIds as string[]).map(toUuid)
+				// Decode Base58 to dashed hex for DB query and Map lookup
+				const uuids = (spaceIds as string[]).map(fromBase58)
 
 				// Fetch profiles (Map keys are Uuid from getProfilesBySpaceIds)
 				const profileMap = yield* getProfilesBySpaceIds(db, uuids)
