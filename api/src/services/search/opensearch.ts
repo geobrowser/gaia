@@ -554,7 +554,11 @@ export class OpenSearchClient implements SearchClient {
 	 * Build a global search query ranked by entity space score.
 	 * Boosts results by entity_space_score using function_score.
 	 */
-	buildGlobalByEntitySpaceScoreQuery(baseTextQuery: object, typeIds?: string[], includeDeleted: boolean = false): object {
+	buildGlobalByEntitySpaceScoreQuery(
+		baseTextQuery: object,
+		typeIds?: string[],
+		includeDeleted: boolean = false,
+	): object {
 		const typeFilter = this.buildTypeFilter(typeIds)
 		const filters: object[] = []
 		if (!includeDeleted) filters.push(this.buildNonDeletedFilter())

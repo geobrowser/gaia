@@ -22,7 +22,13 @@ import {isValidUuid} from "../utils/uuid"
 /**
  * Valid search scope values.
  */
-const VALID_SCOPES: Set<SearchScope> = new Set(["GLOBAL", "GLOBAL_BY_SPACE_SCORE", "GLOBAL_BY_ENTITY_SPACE_SCORE", "SPACE_SINGLE", "SPACE"])
+const VALID_SCOPES: Set<SearchScope> = new Set([
+	"GLOBAL",
+	"GLOBAL_BY_SPACE_SCORE",
+	"GLOBAL_BY_ENTITY_SPACE_SCORE",
+	"SPACE_SINGLE",
+	"SPACE",
+])
 
 /**
  * Default limit for search results.
@@ -124,7 +130,13 @@ export function createSearchRouter(searchClient: SearchClient, runtime: AppRunti
 					required: false,
 					schema: {
 						type: "string",
-						enum: ["GLOBAL", "GLOBAL_BY_SPACE_SCORE", "GLOBAL_BY_ENTITY_SPACE_SCORE", "SPACE_SINGLE", "SPACE"],
+						enum: [
+							"GLOBAL",
+							"GLOBAL_BY_SPACE_SCORE",
+							"GLOBAL_BY_ENTITY_SPACE_SCORE",
+							"SPACE_SINGLE",
+							"SPACE",
+						],
 						default: "GLOBAL",
 					},
 				},
