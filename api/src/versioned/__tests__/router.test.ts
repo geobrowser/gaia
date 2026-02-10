@@ -1,5 +1,5 @@
-import {Effect} from "effect"
 import {encodeEdit, type Op, randomId} from "@geoprotocol/grc-20"
+import {Effect} from "effect"
 import {Hono} from "hono"
 import {beforeEach, describe, expect, it, vi} from "vitest"
 import {normalizeUuid} from "../../utils/uuid"
@@ -854,10 +854,10 @@ describe("GET /versioned/proposals/:id/diff", () => {
 			// Verify the version resolution used executedAt, not endTime.
 			// Mock call 3 (index 2) is resolveVersionKeyBeforeTimestamp.
 			const resolveCall = db.execute.mock.calls[2]
-			const resolveQuery = resolveCall[0]
+			expect(resolveCall).toBeDefined()
+			const resolveQuery = resolveCall![0]
 			// Drizzle sql tagged templates store params in queryChunks or similar.
 			// Check that the bound parameter is executedAt, not endTime.
-			const paramValues = resolveQuery.params ?? resolveQuery.typings ?? []
 			const allParams = JSON.stringify(resolveCall)
 			expect(allParams).toContain(executedAt.toString())
 			expect(allParams).not.toContain(endTime.toString())
