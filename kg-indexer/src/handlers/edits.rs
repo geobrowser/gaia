@@ -427,16 +427,16 @@ fn value_to_value_op(
     };
 
     match &pv.value {
-        Grc20Value::Bool(v) => {
+        Grc20Value::Boolean(v) => {
             op.boolean = Some(*v);
         }
-        Grc20Value::Int64 { value, unit } => {
+        Grc20Value::Integer { value, unit } => {
             op.integer = Some(*value);
             if let Some(unit_id) = unit {
                 op.unit = Some(id_to_uuid(unit_id).to_string());
             }
         }
-        Grc20Value::Float64 { value, unit } => {
+        Grc20Value::Float { value, unit } => {
             op.float = Some(*value);
             if let Some(unit_id) = unit {
                 op.unit = Some(id_to_uuid(unit_id).to_string());
