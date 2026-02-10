@@ -92,7 +92,7 @@ export function mapRelationRow(row: Record<string, unknown>): VersionedRelation 
 export interface ResolvedEdit {
 	versionKey: bigint
 	name: string | null
-	createdById: string | null
+	createdById: NormalizedUuid | null
 }
 
 /**
@@ -112,7 +112,8 @@ export function resolveVersionKey(db: Database, editId: string): Effect.Effect<R
 
 			return {
 				versionKey: BigInt(row.version_key),
-				name: row.name,
+				// Use || instead of ?? to coerce empty strings to null (protobuf defaults to "")
+				name: row.name || null,
 				createdById: row.created_by_id ? normalizeUuid(row.created_by_id) : null,
 			}
 		},
@@ -645,7 +646,8 @@ export function getEntityVersions(
 
 			return result.rows.map((row) => ({
 				editId: normalizeUuid(row.edit_id),
-				name: row.name ?? null,
+				// Use || instead of ?? to coerce empty strings to null (protobuf defaults to "")
+				name: row.name || null,
 				createdById: row.created_by_id ? normalizeUuid(row.created_by_id) : null,
 				blockNumber: row.block_number.toString(),
 				createdAt:

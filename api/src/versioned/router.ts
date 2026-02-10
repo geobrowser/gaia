@@ -10,6 +10,7 @@ import {Data, Effect, Either} from "effect"
 import {Hono} from "hono"
 import {describeRoute} from "hono-openapi"
 
+import type {Profile} from "../profile/types"
 import type {AppRuntime} from "../services/runtime"
 
 type AppEnv = {
@@ -36,7 +37,7 @@ import {
 	type QueryError,
 	resolveVersionKey,
 } from "./queries"
-import type {PaginatedProposalDiff, VersionEntry} from "./types"
+import type {DiffResponse, PaginatedProposalDiff, SnapshotResponse, VersionEntry} from "./types"
 
 type Database = NodePgDatabase<Record<string, unknown>>
 
@@ -60,6 +61,25 @@ type ProposalError =
 	| EditDecodeError
 	| SpaceMismatchError
 	| InvalidCursorError
+
+/**
+ * Batch-resolve creator profiles from a list of nullable creator IDs.
+ * Deduplicates IDs, fetches profiles, and returns a lookup map.
+ * Degrades gracefully on failure (logs a warning, returns empty map).
+ */
+function resolveCreatorProfiles(
+	db: Database,
+	creatorIds: (string | null)[],
+): Effect.Effect<Map<string, Profile>, never> {
+	const unique = [...new Set(creatorIds.filter((id): id is string => id !== null))]
+	if (unique.length === 0) return Effect.succeed(new Map())
+	return getProfilesBySpaceIds(db, unique.map(toDashedUuid)).pipe(
+		Effect.tapError((err) =>
+			Effect.logWarning("Profile resolution failed, degrading gracefully", {cause: String(err)}),
+		),
+		Effect.catchAll(() => Effect.succeed(new Map())),
+	)
+}
 
 /**
  * Create the versioned entities router.
@@ -201,14 +221,10 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 				const snapshot = yield* getEntitySnapshotAtVersion(db, entityId, resolved.versionKey, spaceId)
 
 				// Resolve creator profile
-				const createdBy = resolved.createdById
-					? yield* getProfilesBySpaceIds(db, [toDashedUuid(resolved.createdById)]).pipe(
-							Effect.map((m) => m.get(resolved.createdById!) ?? null),
-							Effect.catchAll(() => Effect.succeed(null)),
-						)
-					: null
+				const profileMap = yield* resolveCreatorProfiles(db, [resolved.createdById])
+				const createdBy = resolved.createdById ? (profileMap.get(resolved.createdById) ?? null) : null
 
-				return {editName: resolved.name, createdById: resolved.createdById, createdBy, ...snapshot}
+				return {editName: resolved.name, createdById: resolved.createdById, createdBy, ...snapshot} satisfies SnapshotResponse
 			}).pipe(
 				Effect.tapError((error) => {
 					if (error._tag === "QueryError") {
@@ -381,15 +397,7 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 				const versions = yield* getEntityVersions(db, entityId, spaceId, limit, offset)
 
 				// Batch-resolve creator profiles server-side to avoid client N+1
-				const creatorIds = [...new Set(
-					versions.map((v) => v.createdById).filter((id): id is string => id !== null),
-				)]
-
-				const profileMap = creatorIds.length > 0
-					? yield* getProfilesBySpaceIds(db, creatorIds.map(toDashedUuid)).pipe(
-							Effect.catchAll(() => Effect.succeed(new Map())),
-						)
-					: new Map()
+				const profileMap = yield* resolveCreatorProfiles(db, versions.map((v) => v.createdById))
 
 				return versions.map((v) => ({
 					...v,
@@ -595,15 +603,10 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 				const diff = yield* diffGroupedEntitySnapshots(entityId, fromSnapshot, toSnapshot)
 
 				// Resolve creator profiles for both edits
-				const creatorIds = [...new Set(
-					[fromResolved.createdById, toResolved.createdById].filter((id): id is string => id !== null),
-				)]
-
-				const profileMap = creatorIds.length > 0
-					? yield* getProfilesBySpaceIds(db, creatorIds.map(toDashedUuid)).pipe(
-							Effect.catchAll(() => Effect.succeed(new Map())),
-						)
-					: new Map()
+				const profileMap = yield* resolveCreatorProfiles(
+					db,
+					[fromResolved.createdById, toResolved.createdById],
+				)
 
 				return {
 					...diff,
@@ -613,7 +616,7 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 					toEditName: toResolved.name,
 					toCreatedById: toResolved.createdById,
 					toCreatedBy: toResolved.createdById ? (profileMap.get(toResolved.createdById) ?? null) : null,
-				}
+				} as const
 			}).pipe(
 				Effect.tapError((error) => {
 					if (error._tag === "QueryError") {
@@ -652,7 +655,7 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 				onRight: (diff) => {
 					// Spread dynamic groups at root level per spec
 					const {groups, ...rest} = diff
-					return c.json({...rest, ...groups})
+					return c.json({...rest, ...groups} as DiffResponse)
 				},
 			})
 		},

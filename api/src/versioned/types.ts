@@ -8,6 +8,7 @@
  * lowercase hex format at compile time. See `utils/uuid.ts` for details.
  */
 
+import type {Profile} from "../profile/types"
 import type {NormalizedUuid} from "../utils/uuid"
 
 // ============================================================================
@@ -258,6 +259,40 @@ export interface GroupedEntityDiff {
 }
 
 // ============================================================================
+// API Response Types
+// ============================================================================
+
+/**
+ * Edit metadata attached to API responses.
+ */
+interface EditMetadata {
+	editName: string | null
+	createdById: NormalizedUuid | null
+	createdBy: Profile | null
+}
+
+/**
+ * Response for GET /versioned/entities/:id — entity snapshot with edit metadata.
+ */
+export type SnapshotResponse = EntitySnapshot & EditMetadata
+
+/**
+ * Response for GET /versioned/entities/:id/diff — grouped diff with edit metadata for both sides.
+ *
+ * Note: `groups` from GroupedEntityDiff is spread at root level in the JSON response,
+ * so dynamic group keys appear as top-level fields.
+ */
+export type DiffResponse = Omit<GroupedEntityDiff, "groups"> &
+	Record<NormalizedUuid, DynamicGroupItem[]> & {
+		fromEditName: string | null
+		fromCreatedById: NormalizedUuid | null
+		fromCreatedBy: Profile | null
+		toEditName: string | null
+		toCreatedById: NormalizedUuid | null
+		toCreatedBy: Profile | null
+	}
+
+// ============================================================================
 // Version History
 // ============================================================================
 
@@ -276,18 +311,7 @@ export interface VersionRow {
  * A version entry for API responses (with resolved creator profile).
  */
 export interface VersionEntry extends VersionRow {
-	createdBy: VersionProfile | null
-}
-
-/**
- * Minimal profile for version creators.
- * Matches the shape from the profile module.
- */
-export interface VersionProfile {
-	spaceId: string
-	name: string | null
-	avatarUrl: string | null
-	address: string
+	createdBy: Profile | null
 }
 
 // ============================================================================
