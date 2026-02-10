@@ -63,6 +63,8 @@ prometheus:
 alertmanager:
   enabled: true
   alertmanagerSpec:
+    secrets:
+      - alertmanager-slack-webhook
     resources:
       requests:
         cpu: 50m
@@ -70,6 +72,47 @@ alertmanager:
       limits:
         cpu: 200m
         memory: 256Mi
+  config:
+    global:
+      resolve_timeout: 5m
+      slack_api_url_file: /etc/alertmanager/secrets/alertmanager-slack-webhook/url
+    receivers:
+      - name: "null"
+      - name: "slack"
+        slack_configs:
+          - channel: "#alerts"
+            send_resolved: true
+            title: '{{ if eq .Status "firing" }}:fire:{{ else }}:white_check_mark:{{ end }} [{{ .Status | toUpper }}] {{ .GroupLabels.alertname }}'
+            text: >-
+              {{ range .Alerts }}
+              *{{ .Labels.severity | toUpper }}* — {{ .Labels.namespace }}/{{ .Labels.alertname }}
+              {{ if .Annotations.description }}{{ .Annotations.description }}{{ end }}
+              {{ if .Annotations.summary }}{{ .Annotations.summary }}{{ end }}
+              {{ end }}
+    route:
+      receiver: "slack"
+      group_by: [namespace, alertname]
+      group_wait: 30s
+      group_interval: 5m
+      repeat_interval: 12h
+      routes:
+        - matchers:
+            - alertname = "Watchdog"
+          receiver: "null"
+        - matchers:
+            - alertname = "InfoInhibitor"
+          receiver: "null"
+    inhibit_rules:
+      - equal: [namespace, alertname]
+        source_matchers:
+          - severity = critical
+        target_matchers:
+          - severity =~ warning|info
+      - equal: [namespace, alertname]
+        source_matchers:
+          - severity = warning
+        target_matchers:
+          - severity = info
 
 # Node exporter - runs on every node
 nodeExporter:
