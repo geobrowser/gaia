@@ -101,7 +101,11 @@ export interface ResolvedEdit {
 export function resolveVersionKey(db: Database, editId: string): Effect.Effect<ResolvedEdit | null, QueryError> {
 	return Effect.tryPromise({
 		try: async () => {
-			const result = await db.execute<{version_key: string; name: string | null; created_by_id: string | null}>(sql`
+			const result = await db.execute<{
+				version_key: string
+				name: string | null
+				created_by_id: string | null
+			}>(sql`
 				SELECT version_key, name, created_by_id FROM edit_versions WHERE edit_id = ${editId} LIMIT 1
 			`)
 

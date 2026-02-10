@@ -741,7 +741,9 @@ const MAX_EDIT_NAME_LENGTH: usize = 256;
 /// - Converts empty name to None (protobuf defaults to "")
 /// - Truncates name to MAX_EDIT_NAME_LENGTH at a char boundary
 /// - Parses first author as a UUID (16-byte author entries)
-fn extract_edit_metadata(edit: &hermes_schema::pb::knowledge::HermesEdit) -> (Option<String>, Option<uuid::Uuid>) {
+fn extract_edit_metadata(
+    edit: &hermes_schema::pb::knowledge::HermesEdit,
+) -> (Option<String>, Option<uuid::Uuid>) {
     let name = if edit.name.is_empty() {
         None
     } else if edit.name.len() > MAX_EDIT_NAME_LENGTH {
@@ -1331,7 +1333,7 @@ async fn process_block(
                     // Versioned writes (temporal tables)
                     // Only write versions if this edit hasn't been processed before (idempotency)
                     if let Some(meta) = edit.meta.as_ref() {
-                        let (edit_name, created_by_id) = extract_edit_metadata(&edit);
+                        let (edit_name, created_by_id) = extract_edit_metadata(edit);
 
                         if let Some(version_key) = storage
                             .insert_edit_version(

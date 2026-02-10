@@ -122,7 +122,9 @@ describe("GET /versioned/entities/:id", () => {
 
 			// Mock: resolveVersionKey
 			db.execute.mockResolvedValueOnce({
-				rows: [{version_key: "12345", name: "Test Edit", created_by_id: "aabbccdd-1122-3344-5566-778899001122"}],
+				rows: [
+					{version_key: "12345", name: "Test Edit", created_by_id: "aabbccdd-1122-3344-5566-778899001122"},
+				],
 			})
 
 			// Mock: values query
@@ -406,9 +408,13 @@ describe("GET /versioned/entities/:id/diff", () => {
 			const entityId = "00000000-0000-0000-0000-000000000001"
 
 			// Mock: resolveVersionKey (from)
-			db.execute.mockResolvedValueOnce({rows: [{version_key: "100", name: "From Edit", created_by_id: "aabbccdd-0000-0000-0000-000000000001"}]})
+			db.execute.mockResolvedValueOnce({
+				rows: [{version_key: "100", name: "From Edit", created_by_id: "aabbccdd-0000-0000-0000-000000000001"}],
+			})
 			// Mock: resolveVersionKey (to)
-			db.execute.mockResolvedValueOnce({rows: [{version_key: "200", name: "To Edit", created_by_id: "aabbccdd-0000-0000-0000-000000000002"}]})
+			db.execute.mockResolvedValueOnce({
+				rows: [{version_key: "200", name: "To Edit", created_by_id: "aabbccdd-0000-0000-0000-000000000002"}],
+			})
 
 			// Mock: getGroupedEntitySnapshotAtVersion (from) - values
 			db.execute.mockResolvedValueOnce({

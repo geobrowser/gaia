@@ -1228,6 +1228,7 @@ impl Storage {
     ///
     /// The ON CONFLICT on edit_versions detects re-processing, but value_versions has no
     /// such protection - it relies on callers checking this return value.
+    #[allow(clippy::too_many_arguments)]
     pub async fn insert_edit_version(
         &self,
         edit_id: Uuid,

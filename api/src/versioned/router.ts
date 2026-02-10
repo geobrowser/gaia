@@ -224,7 +224,12 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 				const profileMap = yield* resolveCreatorProfiles(db, [resolved.createdById])
 				const createdBy = resolved.createdById ? (profileMap.get(resolved.createdById) ?? null) : null
 
-				return {editName: resolved.name, createdById: resolved.createdById, createdBy, ...snapshot} satisfies SnapshotResponse
+				return {
+					editName: resolved.name,
+					createdById: resolved.createdById,
+					createdBy,
+					...snapshot,
+				} satisfies SnapshotResponse
 			}).pipe(
 				Effect.tapError((error) => {
 					if (error._tag === "QueryError") {
@@ -397,7 +402,10 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 				const versions = yield* getEntityVersions(db, entityId, spaceId, limit, offset)
 
 				// Batch-resolve creator profiles server-side to avoid client N+1
-				const profileMap = yield* resolveCreatorProfiles(db, versions.map((v) => v.createdById))
+				const profileMap = yield* resolveCreatorProfiles(
+					db,
+					versions.map((v) => v.createdById),
+				)
 
 				return versions.map((v) => ({
 					...v,
@@ -603,10 +611,7 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 				const diff = yield* diffGroupedEntitySnapshots(entityId, fromSnapshot, toSnapshot)
 
 				// Resolve creator profiles for both edits
-				const profileMap = yield* resolveCreatorProfiles(
-					db,
-					[fromResolved.createdById, toResolved.createdById],
-				)
+				const profileMap = yield* resolveCreatorProfiles(db, [fromResolved.createdById, toResolved.createdById])
 
 				return {
 					...diff,
