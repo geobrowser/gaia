@@ -1,6 +1,7 @@
 import SimplifyInflectionPlugin from "@graphile-contrib/pg-simplify-inflector"
-import {createInMemoryCache, useResponseCache} from "@graphql-yoga/plugin-response-cache"
+import {useResponseCache} from "@graphql-yoga/plugin-response-cache"
 import {createYoga, type Plugin, useExecutionCancellation} from "graphql-yoga"
+import {LRUCache} from "lru-cache"
 import type {PoolClient} from "pg"
 import {Pool} from "pg"
 import {createPostGraphileSchema} from "postgraphile"
@@ -111,6 +112,36 @@ function usePgClient(pool: Pool): Plugin<{pgClient: PoolClient}> {
 	}
 }
 
+/**
+ * Simple TTL-based response cache backed by lru-cache.
+ *
+ * The default createInMemoryCache from @envelop/response-cache maintains
+ * unbounded side Maps (entityToResponseIds, responseIdToEntityIds) for
+ * entity-based cache invalidation. A bug in its dispose callback (receives
+ * the cached value instead of the cache key due to lru-cache v10's
+ * dispose(value, key, reason) signature) means those Maps are never cleaned
+ * up on eviction, causing a memory leak proportional to query diversity.
+ *
+ * Since we don't use entity-based invalidation (no external writes trigger
+ * cache purges — mutations are disabled), we replace it with a plain LRU
+ * that only does TTL-based expiry.
+ */
+function createSimpleResponseCache(max: number) {
+	const cache = new LRUCache<string, any>({max, allowStale: false})
+	return {
+		set(id: string, data: unknown, _entities: Iterable<unknown>, ttl: number) {
+			cache.set(id, data, {ttl})
+		},
+		get(id: string) {
+			return cache.get(id) ?? null
+		},
+		invalidate(_entities: Iterable<unknown>) {
+			// No-op: we don't use entity-based invalidation.
+			// All entries expire via TTL or LRU eviction.
+		},
+	}
+}
+
 // Shared plugins for GraphQL server
 const sharedPlugins = [
 	usePgClient(pgPool),
@@ -118,7 +149,7 @@ const sharedPlugins = [
 	useResponseCache({
 		session: () => null,
 		ttl: 10_000, // 10 seconds
-		cache: createInMemoryCache({max: 1024}),
+		cache: createSimpleResponseCache(1024),
 	}),
 	useGraphQLInstrumentation(),
 ]
