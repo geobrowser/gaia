@@ -189,15 +189,18 @@ function getProposalStatus(proposal: ProposalWithAction["proposal"]): ProposalSt
 }
 
 /**
- * Resolve end_time to a version key for closed proposals.
+ * Resolve a timestamp to the latest version key strictly before it.
+ *
+ * Used for executed proposals: the base state should be just before execution,
+ * so the diff shows what the proposal changed. Using `<` (not `<=`) ensures
+ * edits at the exact execution timestamp are excluded from the base.
  */
-function resolveVersionKeyAtTimestamp(db: Database, timestamp: bigint): Effect.Effect<bigint | null, QueryError> {
+function resolveVersionKeyBeforeTimestamp(db: Database, timestamp: bigint): Effect.Effect<bigint | null, QueryError> {
 	return Effect.tryPromise({
 		try: async () => {
-			// Find the latest edit before or at the timestamp
 			const result = await db.execute<{version_key: string}>(sql`
 				SELECT version_key FROM edit_versions
-				WHERE created_at <= to_timestamp(${timestamp.toString()}::bigint)
+				WHERE created_at < to_timestamp(${timestamp.toString()}::bigint)
 				ORDER BY version_key DESC
 				LIMIT 1
 			`)
@@ -209,9 +212,9 @@ function resolveVersionKeyAtTimestamp(db: Database, timestamp: bigint): Effect.E
 
 			return BigInt(row.version_key)
 		},
-		catch: (error) => new QueryError("resolveVersionKeyAtTimestamp", error),
+		catch: (error) => new QueryError("resolveVersionKeyBeforeTimestamp", error),
 	}).pipe(
-		Effect.withSpan("proposal-diff.resolveVersionKeyAtTimestamp", {
+		Effect.withSpan("proposal-diff.resolveVersionKeyBeforeTimestamp", {
 			attributes: {timestamp: timestamp.toString()},
 		}),
 	)
@@ -859,8 +862,12 @@ export function computeProposalDiff(
 		if (status === "active") {
 			baseStates = yield* batchGetLiveSnapshots(db, pageEntityIds, spaceId)
 		} else {
-			// For closed/executed proposals, use versioned state at end_time
-			const versionKey = yield* resolveVersionKeyAtTimestamp(db, proposal.endTime)
+			// For executed proposals, use the state just before execution so the diff shows
+			// what the proposal changed. For closed (not executed) proposals, use end_time.
+			// Using end_time for executed proposals would include the execution's own edits
+			// in the base state, producing an empty diff.
+			const baseTimestamp = proposal.executedAt ?? proposal.endTime
+			const versionKey = yield* resolveVersionKeyBeforeTimestamp(db, baseTimestamp)
 			if (versionKey === null) {
 				// No edits existed at that time - use empty snapshots
 				baseStates = new Map()

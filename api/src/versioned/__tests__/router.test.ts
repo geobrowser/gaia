@@ -1,4 +1,5 @@
 import {Effect} from "effect"
+import {encodeEdit, type Op, randomId} from "@geoprotocol/grc-20"
 import {Hono} from "hono"
 import {beforeEach, describe, expect, it, vi} from "vitest"
 import {normalizeUuid} from "../../utils/uuid"
@@ -791,6 +792,75 @@ describe("GET /versioned/proposals/:id/diff", () => {
 			expect(res.status).toBe(200)
 			const body = await res.json()
 			expect(body.proposalStatus).toBe("executed")
+		})
+
+		it("uses executedAt (not endTime) as base state for executed proposals", async () => {
+			const proposalId = "00000000-0000-0000-0000-000000000001"
+			const spaceId = "00000000-0000-0000-0000-000000000002"
+			const now = Math.floor(Date.now() / 1000)
+			const executedAt = now - 500
+			const endTime = now + 1000 // Fast path: executed before endTime
+
+			// Build a real encoded edit with a createEntity op
+			const grcEntityId = randomId()
+			const grcPropertyId = randomId()
+			const ops: Op[] = [
+				{
+					type: "createEntity",
+					id: grcEntityId,
+					values: [{property: grcPropertyId, value: {type: "text", value: "Hello"}}],
+				},
+			]
+			const editBlob = Buffer.from(
+				encodeEdit({id: randomId(), name: "test", ops, authors: [], createdAt: BigInt(now) * 1000n}),
+			)
+
+			// Mock 1: getProposalWithPublishAction — executed proposal with content_uri
+			db.execute.mockResolvedValueOnce({
+				rows: [
+					{
+						proposal_id: proposalId,
+						space_id: spaceId,
+						start_time: (now - 2000).toString(),
+						end_time: endTime.toString(),
+						executed_at: executedAt.toString(),
+						content_uri: "ipfs://QmTestBlob",
+					},
+				],
+			})
+
+			// Mock 2: getIpfsCacheData
+			db.execute.mockResolvedValueOnce({rows: [{data: editBlob}]})
+
+			// Mock 3: resolveVersionKeyBeforeTimestamp(executedAt)
+			// Returns a version key so we take the batchGetVersionedSnapshots path
+			db.execute.mockResolvedValueOnce({rows: [{version_key: "100"}]})
+
+			// Mock 4: batchGetVersionedSnapshots — values query (empty base = no pre-existing values)
+			db.execute.mockResolvedValueOnce({rows: []})
+
+			// Mock 5: batchGetVersionedSnapshots — relations query (empty base)
+			db.execute.mockResolvedValueOnce({rows: []})
+
+			const res = await app.request(`/versioned/proposals/${proposalId}/diff?spaceId=${spaceId}`)
+
+			expect(res.status).toBe(200)
+			const body = await res.json()
+			expect(body.proposalStatus).toBe("executed")
+			// The diff should be non-empty because the proposal adds a value to an empty base
+			expect(body.entities.length).toBe(1)
+			expect(body.pagination.totalEntities).toBe(1)
+
+			// Verify the version resolution used executedAt, not endTime.
+			// Mock call 3 (index 2) is resolveVersionKeyBeforeTimestamp.
+			const resolveCall = db.execute.mock.calls[2]
+			const resolveQuery = resolveCall[0]
+			// Drizzle sql tagged templates store params in queryChunks or similar.
+			// Check that the bound parameter is executedAt, not endTime.
+			const paramValues = resolveQuery.params ?? resolveQuery.typings ?? []
+			const allParams = JSON.stringify(resolveCall)
+			expect(allParams).toContain(executedAt.toString())
+			expect(allParams).not.toContain(endTime.toString())
 		})
 
 		it("respects limit parameter", async () => {
