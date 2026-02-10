@@ -122,7 +122,7 @@ describe("GET /versioned/entities/:id", () => {
 
 			// Mock: resolveVersionKey
 			db.execute.mockResolvedValueOnce({
-				rows: [{version_key: "12345"}],
+				rows: [{version_key: "12345", name: "Test Edit"}],
 			})
 
 			// Mock: values query
@@ -157,6 +157,7 @@ describe("GET /versioned/entities/:id", () => {
 			expect(res.status).toBe(200)
 			const body = await res.json()
 			expect(body.id).toBe(normalizeUuid(entityId))
+			expect(body.editName).toBe("Test Edit")
 			expect(body.values).toBeInstanceOf(Array)
 			expect(body.relations).toBeInstanceOf(Array)
 			expect(body.blocks).toBeInstanceOf(Array)
@@ -233,11 +234,13 @@ describe("GET /versioned/entities/:id/versions", () => {
 						edit_id: EDIT_1,
 						block_number: "100",
 						created_at: "2024-01-01T00:00:00Z",
+						name: "First Edit",
 					},
 					{
 						edit_id: EDIT_2,
 						block_number: "200",
 						created_at: "2024-01-02T00:00:00Z",
+						name: null,
 					},
 				],
 			})
@@ -250,6 +253,9 @@ describe("GET /versioned/entities/:id/versions", () => {
 			expect(body.versions).toHaveLength(2)
 			expect(body.versions[0]).toHaveProperty("editId")
 			expect(body.versions[0]).toHaveProperty("blockNumber")
+			expect(body.versions[0]).toHaveProperty("name")
+			expect(body.versions[0].name).toBe("First Edit")
+			expect(body.versions[1].name).toBeNull()
 		})
 
 		it("respects limit parameter", async () => {
@@ -261,6 +267,7 @@ describe("GET /versioned/entities/:id/versions", () => {
 						edit_id: EDIT_1,
 						block_number: "100",
 						created_at: "2024-01-01T00:00:00Z",
+						name: null,
 					},
 				],
 			})
@@ -325,7 +332,7 @@ describe("GET /versioned/entities/:id/diff", () => {
 			// Mock: first resolveVersionKey returns null
 			db.execute.mockResolvedValueOnce({rows: []})
 			// Mock: second resolveVersionKey returns a result
-			db.execute.mockResolvedValueOnce({rows: [{version_key: "100"}]})
+			db.execute.mockResolvedValueOnce({rows: [{version_key: "100", name: null}]})
 
 			const res = await app.request(
 				"/versioned/entities/00000000-0000-0000-0000-000000000001/diff?fromEditId=00000000-0000-0000-0000-000000000002&toEditId=00000000-0000-0000-0000-000000000003&spaceId=00000000-0000-0000-0000-000000000004",
@@ -338,7 +345,7 @@ describe("GET /versioned/entities/:id/diff", () => {
 
 		it("returns 404 when toEditId is not found", async () => {
 			// Mock: first resolveVersionKey returns a result
-			db.execute.mockResolvedValueOnce({rows: [{version_key: "100"}]})
+			db.execute.mockResolvedValueOnce({rows: [{version_key: "100", name: null}]})
 			// Mock: second resolveVersionKey returns null
 			db.execute.mockResolvedValueOnce({rows: []})
 
@@ -357,9 +364,9 @@ describe("GET /versioned/entities/:id/diff", () => {
 			const entityId = "00000000-0000-0000-0000-000000000001"
 
 			// Mock: resolveVersionKey (from)
-			db.execute.mockResolvedValueOnce({rows: [{version_key: "100"}]})
+			db.execute.mockResolvedValueOnce({rows: [{version_key: "100", name: "From Edit"}]})
 			// Mock: resolveVersionKey (to)
-			db.execute.mockResolvedValueOnce({rows: [{version_key: "200"}]})
+			db.execute.mockResolvedValueOnce({rows: [{version_key: "200", name: "To Edit"}]})
 
 			// Mock: getGroupedEntitySnapshotAtVersion (from) - values
 			db.execute.mockResolvedValueOnce({
@@ -404,6 +411,8 @@ describe("GET /versioned/entities/:id/diff", () => {
 			expect(res.status).toBe(200)
 			const body = await res.json()
 			expect(body.entityId).toBe(normalizeUuid(entityId))
+			expect(body.fromEditName).toBe("From Edit")
+			expect(body.toEditName).toBe("To Edit")
 			expect(body.values).toBeInstanceOf(Array)
 			expect(body.relations).toBeInstanceOf(Array)
 			expect(body.blocks).toBeInstanceOf(Array)

@@ -266,6 +266,7 @@ export interface GroupedEntityDiff {
  */
 export interface VersionEntry {
 	editId: NormalizedUuid
+	name: string | null
 	blockNumber: string
 	createdAt: string
 }

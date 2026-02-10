@@ -35,7 +35,7 @@ import {
 	type QueryError,
 	resolveVersionKey,
 } from "./queries"
-import type {EntitySnapshot, GroupedEntityDiff, PaginatedProposalDiff, VersionEntry} from "./types"
+import type {PaginatedProposalDiff, VersionEntry} from "./types"
 
 type Database = NodePgDatabase<Record<string, unknown>>
 
@@ -189,17 +189,17 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 				const editId = normalizeUuid(rawEditId)
 				const spaceId = rawSpaceId ? normalizeUuid(rawSpaceId) : undefined
 
-				// Resolve edit to version key
-				const versionKey = yield* resolveVersionKey(db, editId)
+				// Resolve edit to version key and name
+				const resolved = yield* resolveVersionKey(db, editId)
 
-				if (versionKey === null) {
+				if (resolved === null) {
 					return yield* Effect.fail(new NotFoundError({message: `Edit '${editId}' not found`}))
 				}
 
 				// Get entity snapshot at version
-				const snapshot = yield* getEntitySnapshotAtVersion(db, entityId, versionKey, spaceId)
+				const snapshot = yield* getEntitySnapshotAtVersion(db, entityId, resolved.versionKey, spaceId)
 
-				return snapshot
+				return {editName: resolved.name, ...snapshot}
 			}).pipe(
 				Effect.tapError((error) => {
 					if (error._tag === "QueryError") {
@@ -229,7 +229,7 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 							)
 					}
 				},
-				onRight: (snapshot: EntitySnapshot) => c.json(snapshot),
+				onRight: (snapshot) => c.json(snapshot),
 			})
 		},
 	)
@@ -548,30 +548,34 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 				const toEditId = normalizeUuid(rawToEditId)
 				const spaceId = normalizeUuid(rawSpaceId)
 
-				// Resolve both edits to version keys
-				const [fromVersionKey, toVersionKey] = yield* Effect.all([
+				// Resolve both edits to version keys and names
+				const [fromResolved, toResolved] = yield* Effect.all([
 					resolveVersionKey(db, fromEditId),
 					resolveVersionKey(db, toEditId),
 				])
 
-				if (fromVersionKey === null) {
+				if (fromResolved === null) {
 					return yield* Effect.fail(new NotFoundError({message: `Edit '${fromEditId}' not found`}))
 				}
 
-				if (toVersionKey === null) {
+				if (toResolved === null) {
 					return yield* Effect.fail(new NotFoundError({message: `Edit '${toEditId}' not found`}))
 				}
 
 				// Get grouped snapshots at both versions
 				const [fromSnapshot, toSnapshot] = yield* Effect.all([
-					getGroupedEntitySnapshotAtVersion(db, entityId, fromVersionKey, spaceId),
-					getGroupedEntitySnapshotAtVersion(db, entityId, toVersionKey, spaceId),
+					getGroupedEntitySnapshotAtVersion(db, entityId, fromResolved.versionKey, spaceId),
+					getGroupedEntitySnapshotAtVersion(db, entityId, toResolved.versionKey, spaceId),
 				])
 
 				// Compute grouped diff
 				const diff = yield* diffGroupedEntitySnapshots(entityId, fromSnapshot, toSnapshot)
 
-				return diff
+				return {
+					...diff,
+					fromEditName: fromResolved.name,
+					toEditName: toResolved.name,
+				}
 			}).pipe(
 				Effect.tapError((error) => {
 					if (error._tag === "QueryError") {
@@ -607,7 +611,7 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 							)
 					}
 				},
-				onRight: (diff: GroupedEntityDiff) => {
+				onRight: (diff) => {
 					// Spread dynamic groups at root level per spec
 					const {groups, ...rest} = diff
 					return c.json({...rest, ...groups})

@@ -976,12 +976,20 @@ async fn process_message(
             // Versioned writes (temporal tables)
             // Only write versions if this edit hasn't been processed before (idempotency)
             if let Some(meta) = edit.meta.as_ref() {
+                // Store edit name if non-empty (protobuf defaults to "")
+                let edit_name = if edit.name.is_empty() {
+                    None
+                } else {
+                    Some(edit.name.as_str())
+                };
+
                 if let Some(version_key) = storage
                     .insert_edit_version(
                         result.edit_id,
                         meta.block_number as i64,
                         meta.sequence as i64,
                         meta.created_at as i64,
+                        edit_name,
                         &mut tx,
                     )
                     .await?
@@ -1300,12 +1308,20 @@ async fn process_block(
                     // Versioned writes (temporal tables)
                     // Only write versions if this edit hasn't been processed before (idempotency)
                     if let Some(meta) = edit.meta.as_ref() {
+                        // Store edit name if non-empty (protobuf defaults to "")
+                        let edit_name = if edit.name.is_empty() {
+                            None
+                        } else {
+                            Some(edit.name.as_str())
+                        };
+
                         if let Some(version_key) = storage
                             .insert_edit_version(
                                 result.edit_id,
                                 meta.block_number as i64,
                                 meta.sequence as i64,
                                 meta.created_at as i64,
+                                edit_name,
                                 &mut tx,
                             )
                             .await?
