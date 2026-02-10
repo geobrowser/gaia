@@ -10,6 +10,7 @@ import {Data, Effect, Either} from "effect"
 import {Hono} from "hono"
 import {describeRoute} from "hono-openapi"
 
+import type {Profile} from "../profile/types"
 import type {AppRuntime} from "../services/runtime"
 
 type AppEnv = {
@@ -18,7 +19,8 @@ type AppEnv = {
 	}
 }
 
-import {isValidUuid, normalizeUuid} from "../utils/uuid"
+import {getProfilesBySpaceIds} from "../profile/queries"
+import {isValidUuid, normalizeUuid, toDashedUuid} from "../utils/uuid"
 import {diffGroupedEntitySnapshots} from "./diff"
 import type {
 	EditBlobNotCachedError,
@@ -35,7 +37,7 @@ import {
 	type QueryError,
 	resolveVersionKey,
 } from "./queries"
-import type {EntitySnapshot, GroupedEntityDiff, PaginatedProposalDiff, VersionEntry} from "./types"
+import type {DiffResponse, PaginatedProposalDiff, SnapshotResponse, VersionEntry} from "./types"
 
 type Database = NodePgDatabase<Record<string, unknown>>
 
@@ -59,6 +61,25 @@ type ProposalError =
 	| EditDecodeError
 	| SpaceMismatchError
 	| InvalidCursorError
+
+/**
+ * Batch-resolve creator profiles from a list of nullable creator IDs.
+ * Deduplicates IDs, fetches profiles, and returns a lookup map.
+ * Degrades gracefully on failure (logs a warning, returns empty map).
+ */
+function resolveCreatorProfiles(
+	db: Database,
+	creatorIds: (string | null)[],
+): Effect.Effect<Map<string, Profile>, never> {
+	const unique = [...new Set(creatorIds.filter((id): id is string => id !== null))]
+	if (unique.length === 0) return Effect.succeed(new Map())
+	return getProfilesBySpaceIds(db, unique.map(toDashedUuid)).pipe(
+		Effect.tapError((err) =>
+			Effect.logWarning("Profile resolution failed, degrading gracefully", {cause: String(err)}),
+		),
+		Effect.catchAll(() => Effect.succeed(new Map())),
+	)
+}
 
 /**
  * Create the versioned entities router.
@@ -189,17 +210,26 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 				const editId = normalizeUuid(rawEditId)
 				const spaceId = rawSpaceId ? normalizeUuid(rawSpaceId) : undefined
 
-				// Resolve edit to version key
-				const versionKey = yield* resolveVersionKey(db, editId)
+				// Resolve edit to version key and name
+				const resolved = yield* resolveVersionKey(db, editId)
 
-				if (versionKey === null) {
+				if (resolved === null) {
 					return yield* Effect.fail(new NotFoundError({message: `Edit '${editId}' not found`}))
 				}
 
 				// Get entity snapshot at version
-				const snapshot = yield* getEntitySnapshotAtVersion(db, entityId, versionKey, spaceId)
+				const snapshot = yield* getEntitySnapshotAtVersion(db, entityId, resolved.versionKey, spaceId)
 
-				return snapshot
+				// Resolve creator profile
+				const profileMap = yield* resolveCreatorProfiles(db, [resolved.createdById])
+				const createdBy = resolved.createdById ? (profileMap.get(resolved.createdById) ?? null) : null
+
+				return {
+					editName: resolved.name,
+					createdById: resolved.createdById,
+					createdBy,
+					...snapshot,
+				} satisfies SnapshotResponse
 			}).pipe(
 				Effect.tapError((error) => {
 					if (error._tag === "QueryError") {
@@ -229,7 +259,7 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 							)
 					}
 				},
-				onRight: (snapshot: EntitySnapshot) => c.json(snapshot),
+				onRight: (snapshot) => c.json(snapshot),
 			})
 		},
 	)
@@ -371,7 +401,16 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 				// Get entity versions
 				const versions = yield* getEntityVersions(db, entityId, spaceId, limit, offset)
 
-				return versions
+				// Batch-resolve creator profiles server-side to avoid client N+1
+				const profileMap = yield* resolveCreatorProfiles(
+					db,
+					versions.map((v) => v.createdById),
+				)
+
+				return versions.map((v) => ({
+					...v,
+					createdBy: v.createdById ? (profileMap.get(v.createdById) ?? null) : null,
+				}))
 			}).pipe(
 				Effect.tapError((error) => {
 					if (error._tag === "QueryError") {
@@ -548,30 +587,41 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 				const toEditId = normalizeUuid(rawToEditId)
 				const spaceId = normalizeUuid(rawSpaceId)
 
-				// Resolve both edits to version keys
-				const [fromVersionKey, toVersionKey] = yield* Effect.all([
+				// Resolve both edits to version keys and names
+				const [fromResolved, toResolved] = yield* Effect.all([
 					resolveVersionKey(db, fromEditId),
 					resolveVersionKey(db, toEditId),
 				])
 
-				if (fromVersionKey === null) {
+				if (fromResolved === null) {
 					return yield* Effect.fail(new NotFoundError({message: `Edit '${fromEditId}' not found`}))
 				}
 
-				if (toVersionKey === null) {
+				if (toResolved === null) {
 					return yield* Effect.fail(new NotFoundError({message: `Edit '${toEditId}' not found`}))
 				}
 
 				// Get grouped snapshots at both versions
 				const [fromSnapshot, toSnapshot] = yield* Effect.all([
-					getGroupedEntitySnapshotAtVersion(db, entityId, fromVersionKey, spaceId),
-					getGroupedEntitySnapshotAtVersion(db, entityId, toVersionKey, spaceId),
+					getGroupedEntitySnapshotAtVersion(db, entityId, fromResolved.versionKey, spaceId),
+					getGroupedEntitySnapshotAtVersion(db, entityId, toResolved.versionKey, spaceId),
 				])
 
 				// Compute grouped diff
 				const diff = yield* diffGroupedEntitySnapshots(entityId, fromSnapshot, toSnapshot)
 
-				return diff
+				// Resolve creator profiles for both edits
+				const profileMap = yield* resolveCreatorProfiles(db, [fromResolved.createdById, toResolved.createdById])
+
+				return {
+					...diff,
+					fromEditName: fromResolved.name,
+					fromCreatedById: fromResolved.createdById,
+					fromCreatedBy: fromResolved.createdById ? (profileMap.get(fromResolved.createdById) ?? null) : null,
+					toEditName: toResolved.name,
+					toCreatedById: toResolved.createdById,
+					toCreatedBy: toResolved.createdById ? (profileMap.get(toResolved.createdById) ?? null) : null,
+				} as const
 			}).pipe(
 				Effect.tapError((error) => {
 					if (error._tag === "QueryError") {
@@ -607,10 +657,10 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 							)
 					}
 				},
-				onRight: (diff: GroupedEntityDiff) => {
+				onRight: (diff) => {
 					// Spread dynamic groups at root level per spec
 					const {groups, ...rest} = diff
-					return c.json({...rest, ...groups})
+					return c.json({...rest, ...groups} as DiffResponse)
 				},
 			})
 		},

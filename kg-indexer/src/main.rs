@@ -733,6 +733,35 @@ fn event_type_label(event: &BufferedEvent) -> String {
     }
 }
 
+/// Maximum length for edit names stored in the database.
+const MAX_EDIT_NAME_LENGTH: usize = 256;
+
+/// Extract edit metadata (name and creator ID) from a protobuf Edit message.
+///
+/// - Converts empty name to None (protobuf defaults to "")
+/// - Truncates name to MAX_EDIT_NAME_LENGTH at a char boundary
+/// - Parses first author as a UUID (16-byte author entries)
+fn extract_edit_metadata(
+    edit: &hermes_schema::pb::knowledge::HermesEdit,
+) -> (Option<String>, Option<uuid::Uuid>) {
+    let name = if edit.name.is_empty() {
+        None
+    } else if edit.name.len() > MAX_EDIT_NAME_LENGTH {
+        // Truncate at a char boundary to avoid splitting multi-byte characters
+        let truncated = &edit.name[..edit.name.floor_char_boundary(MAX_EDIT_NAME_LENGTH)];
+        Some(truncated.to_string())
+    } else {
+        Some(edit.name.clone())
+    };
+
+    let created_by_id = edit
+        .authors
+        .first()
+        .and_then(|a| uuid::Uuid::from_slice(a).ok());
+
+    (name, created_by_id)
+}
+
 async fn process_buffered_block(
     events: Vec<BufferedEvent>,
     storage: &Storage,
@@ -976,12 +1005,16 @@ async fn process_message(
             // Versioned writes (temporal tables)
             // Only write versions if this edit hasn't been processed before (idempotency)
             if let Some(meta) = edit.meta.as_ref() {
+                let (edit_name, created_by_id) = extract_edit_metadata(&edit);
+
                 if let Some(version_key) = storage
                     .insert_edit_version(
                         result.edit_id,
                         meta.block_number as i64,
                         meta.sequence as i64,
                         meta.created_at as i64,
+                        edit_name.as_deref(),
+                        created_by_id,
                         &mut tx,
                     )
                     .await?
@@ -1300,12 +1333,16 @@ async fn process_block(
                     // Versioned writes (temporal tables)
                     // Only write versions if this edit hasn't been processed before (idempotency)
                     if let Some(meta) = edit.meta.as_ref() {
+                        let (edit_name, created_by_id) = extract_edit_metadata(edit);
+
                         if let Some(version_key) = storage
                             .insert_edit_version(
                                 result.edit_id,
                                 meta.block_number as i64,
                                 meta.sequence as i64,
                                 meta.created_at as i64,
+                                edit_name.as_deref(),
+                                created_by_id,
                                 &mut tx,
                             )
                             .await?

@@ -695,6 +695,17 @@ export const editVersions = pgTable(
 		sequence: bigint("sequence", {mode: "number"}).notNull(),
 		versionKey: bigint("version_key", {mode: "bigint"}).notNull(),
 		createdAt: timestamp("created_at", {mode: "date"}).notNull(),
+		/**
+		 * Human-readable name for this edit, extracted from the GRC-20 payload.
+		 * Nullable because existing rows predate this column and some edits may lack names.
+		 */
+		name: text("name"),
+		/**
+		 * The first author (creator) of this edit, extracted from HermesEdit.authors[0].
+		 * Stored as a UUID. Nullable because existing rows predate this column and
+		 * some edits may lack authors.
+		 */
+		createdById: uuid("created_by_id"),
 	},
 	(table) => [
 		unique("edit_versions_block_sequence_unique").on(table.blockNumber, table.sequence),

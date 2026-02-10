@@ -91,7 +91,7 @@ spec:
             - name: ENVIRONMENT
               value: "production"
             - name: KAFKA_GROUP_ID
-              value: "kg-indexer-v7"
+              value: "kg-indexer-v8"
             - name: BLOCK_STALE_TIMEOUT_MS
               value: "1000"
             - name: SENTRY_DSN

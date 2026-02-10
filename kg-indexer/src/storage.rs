@@ -1228,20 +1228,23 @@ impl Storage {
     ///
     /// The ON CONFLICT on edit_versions detects re-processing, but value_versions has no
     /// such protection - it relies on callers checking this return value.
+    #[allow(clippy::too_many_arguments)]
     pub async fn insert_edit_version(
         &self,
         edit_id: Uuid,
         block_number: i64,
         sequence: i64,
         created_at: i64,
+        name: Option<&str>,
+        created_by_id: Option<Uuid>,
         tx: &mut sqlx::Transaction<'_, Postgres>,
     ) -> Result<Option<i64>, IndexerError> {
         let version_key = (block_number << 32) | sequence;
 
         let result = sqlx::query(
             r#"
-            INSERT INTO edit_versions (edit_id, block_number, sequence, version_key, created_at)
-            VALUES ($1, $2, $3, $4, to_timestamp($5))
+            INSERT INTO edit_versions (edit_id, block_number, sequence, version_key, created_at, name, created_by_id)
+            VALUES ($1, $2, $3, $4, to_timestamp($5), $6, $7)
             ON CONFLICT (edit_id) DO NOTHING
             "#,
         )
@@ -1250,6 +1253,8 @@ impl Storage {
         .bind(sequence)
         .bind(version_key)
         .bind(created_at as f64)
+        .bind(name)
+        .bind(created_by_id)
         .execute(&mut **tx)
         .await?;
 

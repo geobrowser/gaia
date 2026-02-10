@@ -14,9 +14,9 @@ import type {
 	BlockSnapshot,
 	EntitySnapshot,
 	GroupedEntitySnapshot,
-	VersionEntry,
 	VersionedRelation,
 	VersionedValue,
+	VersionRow,
 } from "./types"
 
 // Error type for database query failures
@@ -87,13 +87,26 @@ export function mapRelationRow(row: Record<string, unknown>): VersionedRelation 
 }
 
 /**
- * Resolve an edit ID to its version key.
+ * Resolved edit metadata from the edit_versions table.
  */
-export function resolveVersionKey(db: Database, editId: string): Effect.Effect<bigint | null, QueryError> {
+export interface ResolvedEdit {
+	versionKey: bigint
+	name: string | null
+	createdById: NormalizedUuid | null
+}
+
+/**
+ * Resolve an edit ID to its version key and name.
+ */
+export function resolveVersionKey(db: Database, editId: string): Effect.Effect<ResolvedEdit | null, QueryError> {
 	return Effect.tryPromise({
 		try: async () => {
-			const result = await db.execute<{version_key: string}>(sql`
-				SELECT version_key FROM edit_versions WHERE edit_id = ${editId} LIMIT 1
+			const result = await db.execute<{
+				version_key: string
+				name: string | null
+				created_by_id: string | null
+			}>(sql`
+				SELECT version_key, name, created_by_id FROM edit_versions WHERE edit_id = ${editId} LIMIT 1
 			`)
 
 			const row = result.rows[0]
@@ -101,7 +114,12 @@ export function resolveVersionKey(db: Database, editId: string): Effect.Effect<b
 				return null
 			}
 
-			return BigInt(row.version_key)
+			return {
+				versionKey: BigInt(row.version_key),
+				// Use || instead of ?? to coerce empty strings to null (protobuf defaults to "")
+				name: row.name || null,
+				createdById: row.created_by_id ? normalizeUuid(row.created_by_id) : null,
+			}
 		},
 		catch: (error) => new QueryError("resolveVersionKey", error),
 	}).pipe(
@@ -585,7 +603,7 @@ export function getEntityVersions(
 	spaceId?: string,
 	limit = 50,
 	offset = 0,
-): Effect.Effect<VersionEntry[], QueryError> {
+): Effect.Effect<VersionRow[], QueryError> {
 	return Effect.tryPromise({
 		try: async () => {
 			const result = spaceId
@@ -594,8 +612,10 @@ export function getEntityVersions(
 						block_number: string
 						created_at: Date
 						version_key: string
+						name: string | null
+						created_by_id: string | null
 					}>(sql`
-						SELECT DISTINCT e.edit_id, e.block_number, e.created_at, e.version_key
+						SELECT DISTINCT e.edit_id, e.block_number, e.created_at, e.version_key, e.name, e.created_by_id
 						FROM edit_versions e
 						WHERE e.version_key IN (
 							SELECT DISTINCT valid_from_key FROM value_versions
@@ -612,8 +632,10 @@ export function getEntityVersions(
 						block_number: string
 						created_at: Date
 						version_key: string
+						name: string | null
+						created_by_id: string | null
 					}>(sql`
-						SELECT DISTINCT e.edit_id, e.block_number, e.created_at, e.version_key
+						SELECT DISTINCT e.edit_id, e.block_number, e.created_at, e.version_key, e.name, e.created_by_id
 						FROM edit_versions e
 						WHERE e.version_key IN (
 							SELECT DISTINCT valid_from_key FROM value_versions
@@ -628,6 +650,9 @@ export function getEntityVersions(
 
 			return result.rows.map((row) => ({
 				editId: normalizeUuid(row.edit_id),
+				// Use || instead of ?? to coerce empty strings to null (protobuf defaults to "")
+				name: row.name || null,
+				createdById: row.created_by_id ? normalizeUuid(row.created_by_id) : null,
 				blockNumber: row.block_number.toString(),
 				createdAt:
 					row.created_at instanceof Date
