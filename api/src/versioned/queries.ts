@@ -14,9 +14,9 @@ import type {
 	BlockSnapshot,
 	EntitySnapshot,
 	GroupedEntitySnapshot,
-	VersionRow,
 	VersionedRelation,
 	VersionedValue,
+	VersionRow,
 } from "./types"
 
 // Error type for database query failures

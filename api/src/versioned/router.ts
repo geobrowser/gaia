@@ -19,6 +19,7 @@ type AppEnv = {
 	}
 }
 
+import {getProfilesBySpaceIds} from "../profile/queries"
 import {isValidUuid, normalizeUuid, toDashedUuid} from "../utils/uuid"
 import {diffGroupedEntitySnapshots} from "./diff"
 import type {
@@ -29,7 +30,6 @@ import type {
 	SpaceMismatchError,
 } from "./proposal-diff"
 import {computeProposalDiff} from "./proposal-diff"
-import {getProfilesBySpaceIds} from "../profile/queries"
 import {
 	getEntitySnapshotAtVersion,
 	getEntityVersions,
