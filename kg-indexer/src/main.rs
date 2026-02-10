@@ -21,6 +21,14 @@ use consumer::{get_event_type, parse_message, KafkaConsumer, KgMessage};
 use error::IndexerError;
 use storage::Storage;
 
+/// Spaces whose edits should be dropped by the indexer.
+/// These spaces produced corrupt or unwanted data that was manually cleaned from the database.
+const BLOCKED_SPACES: &[uuid::Uuid] = &[
+    uuid::uuid!("d24e4d32-3f4e-b6cc-4eaa-757cdd653857"),
+    uuid::uuid!("2df9f305-6ccc-2875-e610-2ed299883371"),
+    uuid::uuid!("655d6077-dc49-e1f9-0e85-74dd57c3164e"),
+];
+
 /// A buffered event with its Kafka metadata for later commit.
 struct BufferedEvent {
     msg: KgMessage,
@@ -396,6 +404,19 @@ async fn async_main() -> Result<(), IndexerError> {
                                 continue;
                             }
                         };
+
+                        // Skip edits from blocked spaces
+                        if let KgMessage::Edit(ref edit) = kg_msg {
+                            if let Ok(space_id) = uuid::Uuid::from_slice(&edit.space_id) {
+                                if BLOCKED_SPACES.contains(&space_id) {
+                                    warn!(
+                                        space_id = %space_id,
+                                        "Skipping edit from blocked space"
+                                    );
+                                    continue;
+                                }
+                            }
+                        }
 
                         // Skip empty blocks entirely - no span created
                         if let KgMessage::BlockSummary(ref summary) = kg_msg {
