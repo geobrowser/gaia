@@ -1,0 +1,1 @@
+ALTER TABLE "edit_versions" ADD COLUMN "created_by_id" uuid;

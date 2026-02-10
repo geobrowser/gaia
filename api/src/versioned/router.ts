@@ -18,7 +18,7 @@ type AppEnv = {
 	}
 }
 
-import {isValidUuid, normalizeUuid} from "../utils/uuid"
+import {isValidUuid, normalizeUuid, toDashedUuid} from "../utils/uuid"
 import {diffGroupedEntitySnapshots} from "./diff"
 import type {
 	EditBlobNotCachedError,
@@ -28,6 +28,7 @@ import type {
 	SpaceMismatchError,
 } from "./proposal-diff"
 import {computeProposalDiff} from "./proposal-diff"
+import {getProfilesBySpaceIds} from "../profile/queries"
 import {
 	getEntitySnapshotAtVersion,
 	getEntityVersions,
@@ -199,7 +200,15 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 				// Get entity snapshot at version
 				const snapshot = yield* getEntitySnapshotAtVersion(db, entityId, resolved.versionKey, spaceId)
 
-				return {editName: resolved.name, ...snapshot}
+				// Resolve creator profile
+				const createdBy = resolved.createdById
+					? yield* getProfilesBySpaceIds(db, [toDashedUuid(resolved.createdById)]).pipe(
+							Effect.map((m) => m.get(resolved.createdById!) ?? null),
+							Effect.catchAll(() => Effect.succeed(null)),
+						)
+					: null
+
+				return {editName: resolved.name, createdById: resolved.createdById, createdBy, ...snapshot}
 			}).pipe(
 				Effect.tapError((error) => {
 					if (error._tag === "QueryError") {
@@ -371,7 +380,21 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 				// Get entity versions
 				const versions = yield* getEntityVersions(db, entityId, spaceId, limit, offset)
 
-				return versions
+				// Batch-resolve creator profiles server-side to avoid client N+1
+				const creatorIds = [...new Set(
+					versions.map((v) => v.createdById).filter((id): id is string => id !== null),
+				)]
+
+				const profileMap = creatorIds.length > 0
+					? yield* getProfilesBySpaceIds(db, creatorIds.map(toDashedUuid)).pipe(
+							Effect.catchAll(() => Effect.succeed(new Map())),
+						)
+					: new Map()
+
+				return versions.map((v) => ({
+					...v,
+					createdBy: v.createdById ? (profileMap.get(v.createdById) ?? null) : null,
+				}))
 			}).pipe(
 				Effect.tapError((error) => {
 					if (error._tag === "QueryError") {
@@ -571,10 +594,25 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 				// Compute grouped diff
 				const diff = yield* diffGroupedEntitySnapshots(entityId, fromSnapshot, toSnapshot)
 
+				// Resolve creator profiles for both edits
+				const creatorIds = [...new Set(
+					[fromResolved.createdById, toResolved.createdById].filter((id): id is string => id !== null),
+				)]
+
+				const profileMap = creatorIds.length > 0
+					? yield* getProfilesBySpaceIds(db, creatorIds.map(toDashedUuid)).pipe(
+							Effect.catchAll(() => Effect.succeed(new Map())),
+						)
+					: new Map()
+
 				return {
 					...diff,
 					fromEditName: fromResolved.name,
+					fromCreatedById: fromResolved.createdById,
+					fromCreatedBy: fromResolved.createdById ? (profileMap.get(fromResolved.createdById) ?? null) : null,
 					toEditName: toResolved.name,
+					toCreatedById: toResolved.createdById,
+					toCreatedBy: toResolved.createdById ? (profileMap.get(toResolved.createdById) ?? null) : null,
 				}
 			}).pipe(
 				Effect.tapError((error) => {

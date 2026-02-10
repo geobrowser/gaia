@@ -262,13 +262,32 @@ export interface GroupedEntityDiff {
 // ============================================================================
 
 /**
- * A version entry for listing versions.
+ * A version row as returned from the database query (before profile enrichment).
  */
-export interface VersionEntry {
+export interface VersionRow {
 	editId: NormalizedUuid
 	name: string | null
+	createdById: NormalizedUuid | null
 	blockNumber: string
 	createdAt: string
+}
+
+/**
+ * A version entry for API responses (with resolved creator profile).
+ */
+export interface VersionEntry extends VersionRow {
+	createdBy: VersionProfile | null
+}
+
+/**
+ * Minimal profile for version creators.
+ * Matches the shape from the profile module.
+ */
+export interface VersionProfile {
+	spaceId: string
+	name: string | null
+	avatarUrl: string | null
+	address: string
 }
 
 // ============================================================================

@@ -1235,14 +1235,15 @@ impl Storage {
         sequence: i64,
         created_at: i64,
         name: Option<&str>,
+        created_by_id: Option<Uuid>,
         tx: &mut sqlx::Transaction<'_, Postgres>,
     ) -> Result<Option<i64>, IndexerError> {
         let version_key = (block_number << 32) | sequence;
 
         let result = sqlx::query(
             r#"
-            INSERT INTO edit_versions (edit_id, block_number, sequence, version_key, created_at, name)
-            VALUES ($1, $2, $3, $4, to_timestamp($5), $6)
+            INSERT INTO edit_versions (edit_id, block_number, sequence, version_key, created_at, name, created_by_id)
+            VALUES ($1, $2, $3, $4, to_timestamp($5), $6, $7)
             ON CONFLICT (edit_id) DO NOTHING
             "#,
         )
@@ -1252,6 +1253,7 @@ impl Storage {
         .bind(version_key)
         .bind(created_at as f64)
         .bind(name)
+        .bind(created_by_id)
         .execute(&mut **tx)
         .await?;
 

@@ -983,6 +983,9 @@ async fn process_message(
                     Some(edit.name.as_str())
                 };
 
+                // Extract first author as creator (authors are 16-byte UUIDs)
+                let created_by_id = edit.authors.first().and_then(|a| uuid::Uuid::from_slice(a).ok());
+
                 if let Some(version_key) = storage
                     .insert_edit_version(
                         result.edit_id,
@@ -990,6 +993,7 @@ async fn process_message(
                         meta.sequence as i64,
                         meta.created_at as i64,
                         edit_name,
+                        created_by_id,
                         &mut tx,
                     )
                     .await?
@@ -1315,6 +1319,9 @@ async fn process_block(
                             Some(edit.name.as_str())
                         };
 
+                        // Extract first author as creator (authors are 16-byte UUIDs)
+                        let created_by_id = edit.authors.first().and_then(|a| uuid::Uuid::from_slice(a).ok());
+
                         if let Some(version_key) = storage
                             .insert_edit_version(
                                 result.edit_id,
@@ -1322,6 +1329,7 @@ async fn process_block(
                                 meta.sequence as i64,
                                 meta.created_at as i64,
                                 edit_name,
+                                created_by_id,
                                 &mut tx,
                             )
                             .await?

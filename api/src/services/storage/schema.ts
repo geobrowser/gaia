@@ -700,6 +700,12 @@ export const editVersions = pgTable(
 		 * Nullable because existing rows predate this column and some edits may lack names.
 		 */
 		name: text("name"),
+		/**
+		 * The first author (creator) of this edit, extracted from HermesEdit.authors[0].
+		 * Stored as a UUID. Nullable because existing rows predate this column and
+		 * some edits may lack authors.
+		 */
+		createdById: uuid("created_by_id"),
 	},
 	(table) => [
 		unique("edit_versions_block_sequence_unique").on(table.blockNumber, table.sequence),

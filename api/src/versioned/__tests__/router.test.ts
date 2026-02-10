@@ -122,7 +122,7 @@ describe("GET /versioned/entities/:id", () => {
 
 			// Mock: resolveVersionKey
 			db.execute.mockResolvedValueOnce({
-				rows: [{version_key: "12345", name: "Test Edit"}],
+				rows: [{version_key: "12345", name: "Test Edit", created_by_id: "aabbccdd-1122-3344-5566-778899001122"}],
 			})
 
 			// Mock: values query
@@ -152,12 +152,31 @@ describe("GET /versioned/entities/:id", () => {
 				rows: [],
 			})
 
+			// Mock: getProfilesBySpaceIds (creator profile resolution)
+			db.execute.mockResolvedValueOnce({
+				rows: [
+					{
+						space_id: "aabbccdd-1122-3344-5566-778899001122",
+						space_address: "0x1234567890123456789012345678901234567890",
+						entity_name: "Alice",
+						avatar_url: "https://example.com/alice.png",
+					},
+				],
+			})
+
 			const res = await app.request(`/versioned/entities/${entityId}?editId=${editId}`)
 
 			expect(res.status).toBe(200)
 			const body = await res.json()
 			expect(body.id).toBe(normalizeUuid(entityId))
 			expect(body.editName).toBe("Test Edit")
+			expect(body.createdById).toBe("aabbccdd112233445566778899001122")
+			expect(body.createdBy).toEqual({
+				spaceId: "aabbccdd112233445566778899001122",
+				name: "Alice",
+				avatarUrl: "https://example.com/alice.png",
+				address: "0x1234567890123456789012345678901234567890",
+			})
 			expect(body.values).toBeInstanceOf(Array)
 			expect(body.relations).toBeInstanceOf(Array)
 			expect(body.blocks).toBeInstanceOf(Array)
@@ -235,12 +254,25 @@ describe("GET /versioned/entities/:id/versions", () => {
 						block_number: "100",
 						created_at: "2024-01-01T00:00:00Z",
 						name: "First Edit",
+						created_by_id: "aabbccdd-1122-3344-5566-778899001122",
 					},
 					{
 						edit_id: EDIT_2,
 						block_number: "200",
 						created_at: "2024-01-02T00:00:00Z",
 						name: null,
+						created_by_id: null,
+					},
+				],
+			})
+			// Mock: getProfilesBySpaceIds (batch profile resolution)
+			db.execute.mockResolvedValueOnce({
+				rows: [
+					{
+						space_id: "aabbccdd-1122-3344-5566-778899001122",
+						space_address: "0x1234567890123456789012345678901234567890",
+						entity_name: "Alice",
+						avatar_url: "https://example.com/alice.png",
 					},
 				],
 			})
@@ -255,7 +287,16 @@ describe("GET /versioned/entities/:id/versions", () => {
 			expect(body.versions[0]).toHaveProperty("blockNumber")
 			expect(body.versions[0]).toHaveProperty("name")
 			expect(body.versions[0].name).toBe("First Edit")
+			expect(body.versions[0].createdById).toBe("aabbccdd112233445566778899001122")
+			expect(body.versions[0].createdBy).toEqual({
+				spaceId: "aabbccdd112233445566778899001122",
+				name: "Alice",
+				avatarUrl: "https://example.com/alice.png",
+				address: "0x1234567890123456789012345678901234567890",
+			})
 			expect(body.versions[1].name).toBeNull()
+			expect(body.versions[1].createdById).toBeNull()
+			expect(body.versions[1].createdBy).toBeNull()
 		})
 
 		it("respects limit parameter", async () => {
@@ -268,6 +309,7 @@ describe("GET /versioned/entities/:id/versions", () => {
 						block_number: "100",
 						created_at: "2024-01-01T00:00:00Z",
 						name: null,
+						created_by_id: null,
 					},
 				],
 			})
@@ -332,7 +374,7 @@ describe("GET /versioned/entities/:id/diff", () => {
 			// Mock: first resolveVersionKey returns null
 			db.execute.mockResolvedValueOnce({rows: []})
 			// Mock: second resolveVersionKey returns a result
-			db.execute.mockResolvedValueOnce({rows: [{version_key: "100", name: null}]})
+			db.execute.mockResolvedValueOnce({rows: [{version_key: "100", name: null, created_by_id: null}]})
 
 			const res = await app.request(
 				"/versioned/entities/00000000-0000-0000-0000-000000000001/diff?fromEditId=00000000-0000-0000-0000-000000000002&toEditId=00000000-0000-0000-0000-000000000003&spaceId=00000000-0000-0000-0000-000000000004",
@@ -345,7 +387,7 @@ describe("GET /versioned/entities/:id/diff", () => {
 
 		it("returns 404 when toEditId is not found", async () => {
 			// Mock: first resolveVersionKey returns a result
-			db.execute.mockResolvedValueOnce({rows: [{version_key: "100", name: null}]})
+			db.execute.mockResolvedValueOnce({rows: [{version_key: "100", name: null, created_by_id: null}]})
 			// Mock: second resolveVersionKey returns null
 			db.execute.mockResolvedValueOnce({rows: []})
 
@@ -364,9 +406,9 @@ describe("GET /versioned/entities/:id/diff", () => {
 			const entityId = "00000000-0000-0000-0000-000000000001"
 
 			// Mock: resolveVersionKey (from)
-			db.execute.mockResolvedValueOnce({rows: [{version_key: "100", name: "From Edit"}]})
+			db.execute.mockResolvedValueOnce({rows: [{version_key: "100", name: "From Edit", created_by_id: "aabbccdd-0000-0000-0000-000000000001"}]})
 			// Mock: resolveVersionKey (to)
-			db.execute.mockResolvedValueOnce({rows: [{version_key: "200", name: "To Edit"}]})
+			db.execute.mockResolvedValueOnce({rows: [{version_key: "200", name: "To Edit", created_by_id: "aabbccdd-0000-0000-0000-000000000002"}]})
 
 			// Mock: getGroupedEntitySnapshotAtVersion (from) - values
 			db.execute.mockResolvedValueOnce({
@@ -404,6 +446,24 @@ describe("GET /versioned/entities/:id/diff", () => {
 			// Mock: to - relations fallback
 			db.execute.mockResolvedValueOnce({rows: []})
 
+			// Mock: getProfilesBySpaceIds (creator profile resolution for both from/to)
+			db.execute.mockResolvedValueOnce({
+				rows: [
+					{
+						space_id: "aabbccdd-0000-0000-0000-000000000001",
+						space_address: "0x1111111111111111111111111111111111111111",
+						entity_name: "Author One",
+						avatar_url: null,
+					},
+					{
+						space_id: "aabbccdd-0000-0000-0000-000000000002",
+						space_address: "0x2222222222222222222222222222222222222222",
+						entity_name: "Author Two",
+						avatar_url: "https://example.com/two.png",
+					},
+				],
+			})
+
 			const res = await app.request(
 				`/versioned/entities/${entityId}/diff?fromEditId=00000000-0000-0000-0000-000000000002&toEditId=00000000-0000-0000-0000-000000000003&spaceId=00000000-0000-0000-0000-000000000004`,
 			)
@@ -412,7 +472,21 @@ describe("GET /versioned/entities/:id/diff", () => {
 			const body = await res.json()
 			expect(body.entityId).toBe(normalizeUuid(entityId))
 			expect(body.fromEditName).toBe("From Edit")
+			expect(body.fromCreatedById).toBe("aabbccdd000000000000000000000001")
+			expect(body.fromCreatedBy).toEqual({
+				spaceId: "aabbccdd000000000000000000000001",
+				name: "Author One",
+				avatarUrl: null,
+				address: "0x1111111111111111111111111111111111111111",
+			})
 			expect(body.toEditName).toBe("To Edit")
+			expect(body.toCreatedById).toBe("aabbccdd000000000000000000000002")
+			expect(body.toCreatedBy).toEqual({
+				spaceId: "aabbccdd000000000000000000000002",
+				name: "Author Two",
+				avatarUrl: "https://example.com/two.png",
+				address: "0x2222222222222222222222222222222222222222",
+			})
 			expect(body.values).toBeInstanceOf(Array)
 			expect(body.relations).toBeInstanceOf(Array)
 			expect(body.blocks).toBeInstanceOf(Array)

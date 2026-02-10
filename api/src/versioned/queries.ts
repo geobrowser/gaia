@@ -14,7 +14,7 @@ import type {
 	BlockSnapshot,
 	EntitySnapshot,
 	GroupedEntitySnapshot,
-	VersionEntry,
+	VersionRow,
 	VersionedRelation,
 	VersionedValue,
 } from "./types"
@@ -92,6 +92,7 @@ export function mapRelationRow(row: Record<string, unknown>): VersionedRelation 
 export interface ResolvedEdit {
 	versionKey: bigint
 	name: string | null
+	createdById: string | null
 }
 
 /**
@@ -100,8 +101,8 @@ export interface ResolvedEdit {
 export function resolveVersionKey(db: Database, editId: string): Effect.Effect<ResolvedEdit | null, QueryError> {
 	return Effect.tryPromise({
 		try: async () => {
-			const result = await db.execute<{version_key: string; name: string | null}>(sql`
-				SELECT version_key, name FROM edit_versions WHERE edit_id = ${editId} LIMIT 1
+			const result = await db.execute<{version_key: string; name: string | null; created_by_id: string | null}>(sql`
+				SELECT version_key, name, created_by_id FROM edit_versions WHERE edit_id = ${editId} LIMIT 1
 			`)
 
 			const row = result.rows[0]
@@ -112,6 +113,7 @@ export function resolveVersionKey(db: Database, editId: string): Effect.Effect<R
 			return {
 				versionKey: BigInt(row.version_key),
 				name: row.name,
+				createdById: row.created_by_id ? normalizeUuid(row.created_by_id) : null,
 			}
 		},
 		catch: (error) => new QueryError("resolveVersionKey", error),
@@ -596,7 +598,7 @@ export function getEntityVersions(
 	spaceId?: string,
 	limit = 50,
 	offset = 0,
-): Effect.Effect<VersionEntry[], QueryError> {
+): Effect.Effect<VersionRow[], QueryError> {
 	return Effect.tryPromise({
 		try: async () => {
 			const result = spaceId
@@ -606,8 +608,9 @@ export function getEntityVersions(
 						created_at: Date
 						version_key: string
 						name: string | null
+						created_by_id: string | null
 					}>(sql`
-						SELECT DISTINCT e.edit_id, e.block_number, e.created_at, e.version_key, e.name
+						SELECT DISTINCT e.edit_id, e.block_number, e.created_at, e.version_key, e.name, e.created_by_id
 						FROM edit_versions e
 						WHERE e.version_key IN (
 							SELECT DISTINCT valid_from_key FROM value_versions
@@ -625,8 +628,9 @@ export function getEntityVersions(
 						created_at: Date
 						version_key: string
 						name: string | null
+						created_by_id: string | null
 					}>(sql`
-						SELECT DISTINCT e.edit_id, e.block_number, e.created_at, e.version_key, e.name
+						SELECT DISTINCT e.edit_id, e.block_number, e.created_at, e.version_key, e.name, e.created_by_id
 						FROM edit_versions e
 						WHERE e.version_key IN (
 							SELECT DISTINCT valid_from_key FROM value_versions
@@ -642,6 +646,7 @@ export function getEntityVersions(
 			return result.rows.map((row) => ({
 				editId: normalizeUuid(row.edit_id),
 				name: row.name ?? null,
+				createdById: row.created_by_id ? normalizeUuid(row.created_by_id) : null,
 				blockNumber: row.block_number.toString(),
 				createdAt:
 					row.created_at instanceof Date
