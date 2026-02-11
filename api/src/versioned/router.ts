@@ -19,7 +19,7 @@ type AppEnv = {
 	}
 }
 
-import {getProfilesByEntityIds} from "../profile/queries"
+import {getProfilesBySpaceIds} from "../profile/queries"
 import {isValidUuid, normalizeUuid, toDashedUuid} from "../utils/uuid"
 import {diffGroupedEntitySnapshots} from "./diff"
 import type {
@@ -63,7 +63,7 @@ type ProposalError =
 	| InvalidCursorError
 
 /**
- * Batch-resolve creator profiles from a list of nullable Person Entity IDs.
+ * Batch-resolve creator profiles from a list of nullable creator space IDs.
  * Deduplicates IDs, fetches profiles, and returns a lookup map.
  * Degrades gracefully on failure (logs a warning, returns empty map).
  */
@@ -73,7 +73,7 @@ function resolveCreatorProfiles(
 ): Effect.Effect<Map<string, Profile>, never> {
 	const unique = [...new Set(creatorIds.filter((id): id is string => id !== null))]
 	if (unique.length === 0) return Effect.succeed(new Map())
-	return getProfilesByEntityIds(db, unique.map(toDashedUuid)).pipe(
+	return getProfilesBySpaceIds(db, unique.map(toDashedUuid)).pipe(
 		Effect.tapError((err) =>
 			Effect.logWarning("Profile resolution failed, degrading gracefully", {
 				cause: String(err),

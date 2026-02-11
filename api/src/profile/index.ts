@@ -18,7 +18,6 @@ import {
 	defaultProfile,
 	getProfileByAddress,
 	getProfileBySpaceId,
-	getProfilesByEntityIds,
 	getProfilesBySpaceIds,
 	type QueryError,
 } from "./queries"
