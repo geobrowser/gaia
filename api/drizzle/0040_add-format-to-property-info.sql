@@ -1,8 +1,10 @@
--- Add 'format' field to property_info composite type and update build_property_info
+-- Add 'format' and 'is_type' fields to property_info composite type and update build_property_info
 --
 -- FORMAT_PROPERTY_ID = '396f8c72-dfd0-4b57-91ea-09c1b9321b2f'
+-- IS_TYPE_PROPERTY_ID = 'd2c1a101-14e3-464a-8272-f4e75b0f1407'
 
 ALTER TYPE property_info ADD ATTRIBUTE format text;
+ALTER TYPE property_info ADD ATTRIBUTE is_type boolean;
 
 CREATE OR REPLACE FUNCTION public.build_property_info(entity_id uuid)
 RETURNS property_info AS $$
@@ -36,6 +38,9 @@ RETURNS property_info AS $$
      AND v.property_id = 'a126ca53-0c8e-48d5-b888-82c734c38935' LIMIT 1),
     -- format
     (SELECT "text" FROM "values" WHERE entity_id = build_property_info.entity_id
-     AND property_id = '396f8c72-dfd0-4b57-91ea-09c1b9321b2f' LIMIT 1)
+     AND property_id = '396f8c72-dfd0-4b57-91ea-09c1b9321b2f' LIMIT 1),
+    -- is_type
+    (SELECT "boolean" FROM "values" WHERE entity_id = build_property_info.entity_id
+     AND property_id = 'd2c1a101-14e3-464a-8272-f4e75b0f1407' LIMIT 1)
   )::property_info;
 $$ LANGUAGE sql STABLE;
