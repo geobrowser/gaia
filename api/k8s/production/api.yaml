@@ -139,10 +139,10 @@ spec:
                   optional: true
           resources:
             requests:
-              memory: "512Mi"
+              memory: "768Mi"
               cpu: "500m"
             limits:
-              memory: "1Gi"
+              memory: "1536Mi"
           livenessProbe:
             httpGet:
               path: /health/liveness
