@@ -46,7 +46,6 @@
 		"graphql-yoga": "^5.14.0",
 		"hono": "^4.7.11",
 		"hono-openapi": "^0.4.8",
-		"lru-cache": "^11.2.6",
 		"pg": "^8.16.0",
 		"postgraphile": "^4.14.1",
 		"postgraphile-plugin-connection-filter": "^2.3.0",
