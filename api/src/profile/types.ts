@@ -13,12 +13,14 @@
  * profile data (name, avatar).
  */
 export type Profile = {
-	/** The user's personal space ID */
-	spaceId: string
-	/** Display name from the NAME_PROPERTY value */
-	name: string | null
-	/** Avatar image URL from the AVATAR_PROPERTY relation */
-	avatarUrl: string | null
-	/** The user's wallet address (0x prefixed) */
-	address: string
-}
+  /** The entity ID of the space's front page entity (the profile entity) */
+  entityId: string | null;
+  /** The user's personal space ID */
+  spaceId: string;
+  /** Display name from the NAME_PROPERTY value */
+  name: string | null;
+  /** Avatar image URL from the AVATAR_PROPERTY relation */
+  avatarUrl: string | null;
+  /** The user's wallet address (0x prefixed) */
+  address: string;
+};
