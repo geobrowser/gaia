@@ -188,6 +188,21 @@ metadata:
   annotations:
     cert-manager.io/cluster-issuer: letsencrypt-prod
     nginx.ingress.kubernetes.io/proxy-body-size: "100m"
+    nginx.ingress.kubernetes.io/server-snippet: |
+      gzip on;
+      gzip_comp_level 5;
+      gzip_min_length 512;
+      gzip_proxied any;
+      gzip_vary on;
+      gzip_types
+        application/json
+        application/graphql-response+json
+        application/javascript
+        application/xml
+        text/plain
+        text/css
+        text/javascript
+        text/xml;
 spec:
   ingressClassName: nginx
   tls:

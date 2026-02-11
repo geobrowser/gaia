@@ -1,7 +1,6 @@
 import {swaggerUI} from "@hono/swagger-ui"
 import {Effect, Either} from "effect"
 import {Hono} from "hono"
-import {compress} from "hono/compress"
 import {cors} from "hono/cors"
 import {describeRoute, openAPISpecs} from "hono-openapi"
 import {health} from "./src/health"
@@ -15,13 +14,6 @@ import {runtime} from "./src/services/runtime"
 import {OpenSearchClient} from "./src/services/search"
 import {db} from "./src/services/storage/storage"
 import {createVersionedRouter} from "./src/versioned"
-
-/**
- * Currently hand-rolling a compression polyfill until Bun implements
- * CompressionStream in the runtime.
- * https://github.com/oven-sh/bun/issues/1723
- */
-import "./src/compression-polyfill"
 import {log} from "./src/services/telemetry"
 
 type AppEnv = {
@@ -41,11 +33,7 @@ const app = new Hono<AppEnv>()
 app.use("*", requestId())
 
 app.use("*", cors())
-app.use(
-	compress({
-		encoding: "gzip",
-	}),
-)
+log.info("HTTP compression disabled in API (managed by ingress)")
 
 // Health routes - no tracing (high frequency, low value)
 app.route("/health", health)
