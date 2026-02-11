@@ -19,7 +19,7 @@ type AppEnv = {
 	}
 }
 
-import {getProfilesBySpaceIds} from "../profile/queries"
+import {getProfilesByEntityIds} from "../profile/queries"
 import {isValidUuid, normalizeUuid, toDashedUuid} from "../utils/uuid"
 import {diffGroupedEntitySnapshots} from "./diff"
 import type {
@@ -63,7 +63,7 @@ type ProposalError =
 	| InvalidCursorError
 
 /**
- * Batch-resolve creator profiles from a list of nullable creator IDs.
+ * Batch-resolve creator profiles from a list of nullable Person Entity IDs.
  * Deduplicates IDs, fetches profiles, and returns a lookup map.
  * Degrades gracefully on failure (logs a warning, returns empty map).
  */
@@ -73,9 +73,11 @@ function resolveCreatorProfiles(
 ): Effect.Effect<Map<string, Profile>, never> {
 	const unique = [...new Set(creatorIds.filter((id): id is string => id !== null))]
 	if (unique.length === 0) return Effect.succeed(new Map())
-	return getProfilesBySpaceIds(db, unique.map(toDashedUuid)).pipe(
+	return getProfilesByEntityIds(db, unique.map(toDashedUuid)).pipe(
 		Effect.tapError((err) =>
-			Effect.logWarning("Profile resolution failed, degrading gracefully", {cause: String(err)}),
+			Effect.logWarning("Profile resolution failed, degrading gracefully", {
+				cause: String(err),
+			}),
 		),
 		Effect.catchAll(() => Effect.succeed(new Map())),
 	)
@@ -194,7 +196,11 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 
 				// Validate editId is provided
 				if (!rawEditId) {
-					return yield* Effect.fail(new ValidationError({message: "editId query parameter is required"}))
+					return yield* Effect.fail(
+						new ValidationError({
+							message: "editId query parameter is required",
+						}),
+					)
 				}
 
 				if (!isValidUuid(rawEditId)) {
@@ -240,7 +246,12 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 					return Effect.void
 				}),
 				Effect.withSpan("GET /versioned/entities/:id"),
-				Effect.annotateSpans({requestId, entityId: rawEntityId, editId: rawEditId, spaceId: rawSpaceId}),
+				Effect.annotateSpans({
+					requestId,
+					entityId: rawEntityId,
+					editId: rawEditId,
+					spaceId: rawSpaceId,
+				}),
 			)
 
 			const result = await runtime.runPromise(Effect.either(program))
@@ -254,7 +265,10 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 							return c.json({error: "Not found", message: error.message}, 404)
 						case "QueryError":
 							return c.json(
-								{error: "Internal server error", message: "An unexpected error occurred"},
+								{
+									error: "Internal server error",
+									message: "An unexpected error occurred",
+								},
 								500,
 							)
 					}
@@ -381,7 +395,11 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 				if (limitParam) {
 					const parsed = parseInt(limitParam, 10)
 					if (Number.isNaN(parsed) || parsed < 1) {
-						return yield* Effect.fail(new ValidationError({message: "limit must be a positive integer"}))
+						return yield* Effect.fail(
+							new ValidationError({
+								message: "limit must be a positive integer",
+							}),
+						)
 					}
 					limit = Math.min(parsed, 100)
 				}
@@ -392,7 +410,9 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 					const parsed = parseInt(offsetParam, 10)
 					if (Number.isNaN(parsed) || parsed < 0) {
 						return yield* Effect.fail(
-							new ValidationError({message: "offset must be a non-negative integer"}),
+							new ValidationError({
+								message: "offset must be a non-negative integer",
+							}),
 						)
 					}
 					offset = parsed
@@ -421,7 +441,11 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 					return Effect.void
 				}),
 				Effect.withSpan("GET /versioned/entities/:id/versions"),
-				Effect.annotateSpans({requestId, entityId: rawEntityId, spaceId: rawSpaceId}),
+				Effect.annotateSpans({
+					requestId,
+					entityId: rawEntityId,
+					spaceId: rawSpaceId,
+				}),
 			)
 
 			const result = await runtime.runPromise(Effect.either(program))
@@ -435,7 +459,10 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 							return c.json({error: "Not found", message: error.message}, 404)
 						case "QueryError":
 							return c.json(
-								{error: "Internal server error", message: "An unexpected error occurred"},
+								{
+									error: "Internal server error",
+									message: "An unexpected error occurred",
+								},
 								500,
 							)
 					}
@@ -556,16 +583,26 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 
 				// Validate required parameters
 				if (!rawFromEditId) {
-					return yield* Effect.fail(new ValidationError({message: "fromEditId query parameter is required"}))
+					return yield* Effect.fail(
+						new ValidationError({
+							message: "fromEditId query parameter is required",
+						}),
+					)
 				}
 
 				if (!rawToEditId) {
-					return yield* Effect.fail(new ValidationError({message: "toEditId query parameter is required"}))
+					return yield* Effect.fail(
+						new ValidationError({
+							message: "toEditId query parameter is required",
+						}),
+					)
 				}
 
 				if (!rawSpaceId) {
 					return yield* Effect.fail(
-						new ValidationError({message: "spaceId query parameter is required for diffs"}),
+						new ValidationError({
+							message: "spaceId query parameter is required for diffs",
+						}),
 					)
 				}
 
@@ -652,7 +689,10 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 							return c.json({error: "Not found", message: error.message}, 404)
 						case "QueryError":
 							return c.json(
-								{error: "Internal server error", message: "An unexpected error occurred"},
+								{
+									error: "Internal server error",
+									message: "An unexpected error occurred",
+								},
 								500,
 							)
 					}
@@ -775,12 +815,20 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 			const program = Effect.gen(function* () {
 				// Validate proposalId
 				if (!isValidUuid(rawProposalId)) {
-					return yield* Effect.fail(new ValidationError({message: "Proposal ID must be a valid UUID"}))
+					return yield* Effect.fail(
+						new ValidationError({
+							message: "Proposal ID must be a valid UUID",
+						}),
+					)
 				}
 
 				// Validate spaceId is provided
 				if (!rawSpaceId) {
-					return yield* Effect.fail(new ValidationError({message: "spaceId query parameter is required"}))
+					return yield* Effect.fail(
+						new ValidationError({
+							message: "spaceId query parameter is required",
+						}),
+					)
 				}
 
 				if (!isValidUuid(rawSpaceId)) {
@@ -795,7 +843,11 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 				if (limitParam) {
 					const parsed = parseInt(limitParam, 10)
 					if (Number.isNaN(parsed) || parsed < 1) {
-						return yield* Effect.fail(new ValidationError({message: "limit must be a positive integer"}))
+						return yield* Effect.fail(
+							new ValidationError({
+								message: "limit must be a positive integer",
+							}),
+						)
 					}
 					limit = Math.min(parsed, 100)
 				}
@@ -838,26 +890,53 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 						case "ProposalNotFoundError":
 							return c.json({error: "Not found", message: "Proposal not found"}, 404)
 						case "EditBlobNotCachedError":
-							return c.json({error: "Not found", message: "Edit blob not cached for this proposal"}, 404)
+							return c.json(
+								{
+									error: "Not found",
+									message: "Edit blob not cached for this proposal",
+								},
+								404,
+							)
 						case "SpaceMismatchError":
 							return c.json(
-								{error: "Invalid parameter", message: "spaceId does not match the proposal's space"},
+								{
+									error: "Invalid parameter",
+									message: "spaceId does not match the proposal's space",
+								},
 								400,
 							)
 						case "InvalidCursorError":
-							return c.json({error: "Invalid parameter", message: "Invalid pagination cursor"}, 400)
+							return c.json(
+								{
+									error: "Invalid parameter",
+									message: "Invalid pagination cursor",
+								},
+								400,
+							)
 						case "EditDecodeError":
-							return c.json({error: "Internal server error", message: "Failed to decode edit blob"}, 500)
+							return c.json(
+								{
+									error: "Internal server error",
+									message: "Failed to decode edit blob",
+								},
+								500,
+							)
 						case "QueryError":
 							return c.json(
-								{error: "Internal server error", message: "An unexpected error occurred"},
+								{
+									error: "Internal server error",
+									message: "An unexpected error occurred",
+								},
 								500,
 							)
 						default: {
 							// Exhaustive check - TypeScript will error if a case is missing
 							const _exhaustive: never = error
 							return c.json(
-								{error: "Internal server error", message: "An unexpected error occurred"},
+								{
+									error: "Internal server error",
+									message: "An unexpected error occurred",
+								},
 								500,
 							)
 						}

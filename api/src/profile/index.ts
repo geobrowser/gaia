@@ -18,6 +18,7 @@ import {
 	defaultProfile,
 	getProfileByAddress,
 	getProfileBySpaceId,
+	getProfilesByEntityIds,
 	getProfilesBySpaceIds,
 	type QueryError,
 } from "./queries"
@@ -70,7 +71,13 @@ function handleProfileError(c: Context, error: ProfileError) {
 		case "ValidationError":
 			return c.json({error: "Invalid parameter", message: error.message}, 400)
 		case "QueryError":
-			return c.json({error: "Internal server error", message: "An unexpected error occurred"}, 500)
+			return c.json(
+				{
+					error: "Internal server error",
+					message: "An unexpected error occurred",
+				},
+				500,
+			)
 	}
 }
 
@@ -108,7 +115,11 @@ export function createProfileRouter(db: Database, runtime: AppRuntime) {
 			responses: {
 				200: {
 					description: "Profile found",
-					content: {"application/json": {schema: {$ref: "#/components/schemas/Profile"}}},
+					content: {
+						"application/json": {
+							schema: {$ref: "#/components/schemas/Profile"},
+						},
+					},
 				},
 				400: {
 					description: "Invalid address format",
@@ -127,7 +138,9 @@ export function createProfileRouter(db: Database, runtime: AppRuntime) {
 			const program = Effect.gen(function* () {
 				// Validate address format
 				if (!isValidAddress(address)) {
-					yield* Effect.logWarning("Invalid address format", {address: address.slice(0, 10) + "..."})
+					yield* Effect.logWarning("Invalid address format", {
+						address: address.slice(0, 10) + "...",
+					})
 					return yield* Effect.fail(
 						new ValidationError({
 							message: "Invalid Ethereum address format. Expected 0x-prefixed 40 hex characters.",
@@ -199,7 +212,11 @@ export function createProfileRouter(db: Database, runtime: AppRuntime) {
 			responses: {
 				200: {
 					description: "Profile found",
-					content: {"application/json": {schema: {$ref: "#/components/schemas/Profile"}}},
+					content: {
+						"application/json": {
+							schema: {$ref: "#/components/schemas/Profile"},
+						},
+					},
 				},
 				400: {
 					description: "Invalid space ID format",
@@ -343,23 +360,37 @@ export function createProfileRouter(db: Database, runtime: AppRuntime) {
 
 				// Handle empty array
 				if (batchSize === 0) {
-					yield* Effect.logInfo("Batch profile fetch completed", {batchSize: 0, found: 0})
+					yield* Effect.logInfo("Batch profile fetch completed", {
+						batchSize: 0,
+						found: 0,
+					})
 					return {profiles: []}
 				}
 
 				// Check batch size limit
 				if (batchSize > MAX_BATCH_SIZE) {
-					yield* Effect.logWarning("Batch size exceeded limit", {batchSize, maxBatchSize: MAX_BATCH_SIZE})
+					yield* Effect.logWarning("Batch size exceeded limit", {
+						batchSize,
+						maxBatchSize: MAX_BATCH_SIZE,
+					})
 					return yield* Effect.fail(
-						new ValidationError({message: `Maximum ${MAX_BATCH_SIZE} space IDs allowed per request`}),
+						new ValidationError({
+							message: `Maximum ${MAX_BATCH_SIZE} space IDs allowed per request`,
+						}),
 					)
 				}
 
 				// Validate each space ID (don't echo user input in error message)
 				const invalidIndex = spaceIds.findIndex((id) => typeof id !== "string" || !isValidUuid(id))
 				if (invalidIndex !== -1) {
-					yield* Effect.logWarning("Invalid space ID in batch", {index: invalidIndex})
-					return yield* Effect.fail(new ValidationError({message: "Invalid space ID format in request"}))
+					yield* Effect.logWarning("Invalid space ID in batch", {
+						index: invalidIndex,
+					})
+					return yield* Effect.fail(
+						new ValidationError({
+							message: "Invalid space ID format in request",
+						}),
+					)
 				}
 
 				// Normalize UUIDs: dashed for DB query, undashed for Map lookup and API response
