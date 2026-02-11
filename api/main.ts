@@ -13,8 +13,8 @@ import {uploadEdit, uploadFile} from "./src/services/ipfs"
 import {runtime} from "./src/services/runtime"
 import {OpenSearchClient} from "./src/services/search"
 import {db} from "./src/services/storage/storage"
-import {createVersionedRouter} from "./src/versioned"
 import {log} from "./src/services/telemetry"
+import {createVersionedRouter} from "./src/versioned"
 
 type AppEnv = {
 	Variables: {
