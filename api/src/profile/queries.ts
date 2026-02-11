@@ -196,6 +196,60 @@ export function getProfileBySpaceId(db: Database, spaceId: string): Effect.Effec
 }
 
 /**
+ * Batch fetch profiles by Person Entity IDs (front-page entity of a space).
+ *
+ * Finds spaces whose front-page entity matches the given entity IDs,
+ * then returns the full profile for each. The returned map is keyed by
+ * the normalized (dashless) entity ID for O(1) lookup by the caller.
+ */
+export function getProfilesByEntityIds(
+	db: Database,
+	entityIds: string[],
+): Effect.Effect<Map<string, Profile>, QueryError> {
+	if (entityIds.length === 0) {
+		return Effect.succeed(new Map())
+	}
+
+	return Effect.tryPromise({
+		try: async () => {
+			const entityIdParams = sql.join(
+				entityIds.map((id) => sql`${id}::uuid`),
+				sql`, `,
+			)
+
+			// Find spaces whose front-page entity matches the given entity IDs,
+			// then select the standard profile fields from those spaces.
+			const result = await db.execute<RawProfileRow>(sql`
+				SELECT ${profileSelectFields()}
+				FROM spaces s
+				WHERE EXISTS (
+					SELECT 1 FROM relations r
+					WHERE r.space_id = s.id
+					  AND r.type_id = ${TYPES_RELATION}::uuid
+					  AND r.to_entity_id = ${SPACE_TYPE}::uuid
+					  AND r.from_entity_id = ANY(ARRAY[${entityIdParams}])
+				)
+			`)
+
+			const profileMap = new Map<string, Profile>()
+			for (const row of result.rows) {
+				const entityId = row.entity_id ? normalizeUuid(row.entity_id) : null
+				if (entityId) {
+					profileMap.set(entityId, mapProfileRow(row))
+				}
+			}
+
+			return profileMap
+		},
+		catch: (error) => new QueryError({operation: "getProfilesByEntityIds", cause: error}),
+	}).pipe(
+		Effect.withSpan("queries.getProfilesByEntityIds", {
+			attributes: {"query.entity_ids_count": entityIds.length},
+		}),
+	)
+}
+
+/**
  * Batch fetch profiles by space IDs.
  *
  * Efficiently fetches multiple profiles in a single query using proper
