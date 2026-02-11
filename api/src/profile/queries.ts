@@ -42,6 +42,7 @@ const IMAGE_URL_PROPERTY = SystemIds.IMAGE_URL_PROPERTY
  * Raw profile data from database query.
  */
 type RawProfileRow = {
+	entity_id: string | null
 	space_id: string
 	space_address: string
 	entity_name: string | null
@@ -54,6 +55,7 @@ type RawProfileRow = {
  */
 function mapProfileRow(row: RawProfileRow): Profile {
 	return {
+		entityId: row.entity_id ? normalizeUuid(row.entity_id) : null,
 		spaceId: normalizeUuid(row.space_id),
 		name: row.entity_name,
 		avatarUrl: row.avatar_url,
@@ -66,6 +68,7 @@ function mapProfileRow(row: RawProfileRow): Profile {
  */
 export function defaultProfile(address: string, spaceId?: string): Profile {
 	return {
+		entityId: null,
 		spaceId: spaceId ?? address,
 		name: null,
 		avatarUrl: null,
@@ -86,6 +89,14 @@ function profileSelectFields() {
 	return sql`
 		s.id AS space_id,
 		s.address AS space_address,
+		(
+			SELECT r.from_entity_id
+			FROM relations r
+			WHERE r.space_id = s.id
+			  AND r.type_id = ${TYPES_RELATION}::uuid
+			  AND r.to_entity_id = ${SPACE_TYPE}::uuid
+			LIMIT 1
+		)::text AS entity_id,
 		(
 			SELECT v.text
 			FROM "values" v

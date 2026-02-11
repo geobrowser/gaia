@@ -124,7 +124,11 @@ describe("GET /versioned/entities/:id", () => {
 			// Mock: resolveVersionKey
 			db.execute.mockResolvedValueOnce({
 				rows: [
-					{version_key: "12345", name: "Test Edit", created_by_id: "aabbccdd-1122-3344-5566-778899001122"},
+					{
+						version_key: "12345",
+						name: "Test Edit",
+						created_by_id: "aabbccdd-1122-3344-5566-778899001122",
+					},
 				],
 			})
 
@@ -159,6 +163,7 @@ describe("GET /versioned/entities/:id", () => {
 			db.execute.mockResolvedValueOnce({
 				rows: [
 					{
+						entity_id: "11111111-2222-3333-4444-555555555555",
 						space_id: "aabbccdd-1122-3344-5566-778899001122",
 						space_address: "0x1234567890123456789012345678901234567890",
 						entity_name: "Alice",
@@ -175,6 +180,7 @@ describe("GET /versioned/entities/:id", () => {
 			expect(body.editName).toBe("Test Edit")
 			expect(body.createdById).toBe("aabbccdd112233445566778899001122")
 			expect(body.createdBy).toEqual({
+				entityId: "11111111222233334444555555555555",
 				spaceId: "aabbccdd112233445566778899001122",
 				name: "Alice",
 				avatarUrl: "https://example.com/alice.png",
@@ -272,6 +278,7 @@ describe("GET /versioned/entities/:id/versions", () => {
 			db.execute.mockResolvedValueOnce({
 				rows: [
 					{
+						entity_id: "11111111-2222-3333-4444-555555555555",
 						space_id: "aabbccdd-1122-3344-5566-778899001122",
 						space_address: "0x1234567890123456789012345678901234567890",
 						entity_name: "Alice",
@@ -292,6 +299,7 @@ describe("GET /versioned/entities/:id/versions", () => {
 			expect(body.versions[0].name).toBe("First Edit")
 			expect(body.versions[0].createdById).toBe("aabbccdd112233445566778899001122")
 			expect(body.versions[0].createdBy).toEqual({
+				entityId: "11111111222233334444555555555555",
 				spaceId: "aabbccdd112233445566778899001122",
 				name: "Alice",
 				avatarUrl: "https://example.com/alice.png",
@@ -377,7 +385,9 @@ describe("GET /versioned/entities/:id/diff", () => {
 			// Mock: first resolveVersionKey returns null
 			db.execute.mockResolvedValueOnce({rows: []})
 			// Mock: second resolveVersionKey returns a result
-			db.execute.mockResolvedValueOnce({rows: [{version_key: "100", name: null, created_by_id: null}]})
+			db.execute.mockResolvedValueOnce({
+				rows: [{version_key: "100", name: null, created_by_id: null}],
+			})
 
 			const res = await app.request(
 				"/versioned/entities/00000000-0000-0000-0000-000000000001/diff?fromEditId=00000000-0000-0000-0000-000000000002&toEditId=00000000-0000-0000-0000-000000000003&spaceId=00000000-0000-0000-0000-000000000004",
@@ -390,7 +400,9 @@ describe("GET /versioned/entities/:id/diff", () => {
 
 		it("returns 404 when toEditId is not found", async () => {
 			// Mock: first resolveVersionKey returns a result
-			db.execute.mockResolvedValueOnce({rows: [{version_key: "100", name: null, created_by_id: null}]})
+			db.execute.mockResolvedValueOnce({
+				rows: [{version_key: "100", name: null, created_by_id: null}],
+			})
 			// Mock: second resolveVersionKey returns null
 			db.execute.mockResolvedValueOnce({rows: []})
 
@@ -410,11 +422,23 @@ describe("GET /versioned/entities/:id/diff", () => {
 
 			// Mock: resolveVersionKey (from)
 			db.execute.mockResolvedValueOnce({
-				rows: [{version_key: "100", name: "From Edit", created_by_id: "aabbccdd-0000-0000-0000-000000000001"}],
+				rows: [
+					{
+						version_key: "100",
+						name: "From Edit",
+						created_by_id: "aabbccdd-0000-0000-0000-000000000001",
+					},
+				],
 			})
 			// Mock: resolveVersionKey (to)
 			db.execute.mockResolvedValueOnce({
-				rows: [{version_key: "200", name: "To Edit", created_by_id: "aabbccdd-0000-0000-0000-000000000002"}],
+				rows: [
+					{
+						version_key: "200",
+						name: "To Edit",
+						created_by_id: "aabbccdd-0000-0000-0000-000000000002",
+					},
+				],
 			})
 
 			// Mock: getGroupedEntitySnapshotAtVersion (from) - values
@@ -457,12 +481,14 @@ describe("GET /versioned/entities/:id/diff", () => {
 			db.execute.mockResolvedValueOnce({
 				rows: [
 					{
+						entity_id: "aaaaaaaa-0000-0000-0000-000000000001",
 						space_id: "aabbccdd-0000-0000-0000-000000000001",
 						space_address: "0x1111111111111111111111111111111111111111",
 						entity_name: "Author One",
 						avatar_url: null,
 					},
 					{
+						entity_id: "aaaaaaaa-0000-0000-0000-000000000002",
 						space_id: "aabbccdd-0000-0000-0000-000000000002",
 						space_address: "0x2222222222222222222222222222222222222222",
 						entity_name: "Author Two",
@@ -481,6 +507,7 @@ describe("GET /versioned/entities/:id/diff", () => {
 			expect(body.fromEditName).toBe("From Edit")
 			expect(body.fromCreatedById).toBe("aabbccdd000000000000000000000001")
 			expect(body.fromCreatedBy).toEqual({
+				entityId: "aaaaaaaa000000000000000000000001",
 				spaceId: "aabbccdd000000000000000000000001",
 				name: "Author One",
 				avatarUrl: null,
@@ -489,6 +516,7 @@ describe("GET /versioned/entities/:id/diff", () => {
 			expect(body.toEditName).toBe("To Edit")
 			expect(body.toCreatedById).toBe("aabbccdd000000000000000000000002")
 			expect(body.toCreatedBy).toEqual({
+				entityId: "aaaaaaaa000000000000000000000002",
 				spaceId: "aabbccdd000000000000000000000002",
 				name: "Author Two",
 				avatarUrl: "https://example.com/two.png",
@@ -808,11 +836,22 @@ describe("GET /versioned/proposals/:id/diff", () => {
 				{
 					type: "createEntity",
 					id: grcEntityId,
-					values: [{property: grcPropertyId, value: {type: "text", value: "Hello"}}],
+					values: [
+						{
+							property: grcPropertyId,
+							value: {type: "text", value: "Hello"},
+						},
+					],
 				},
 			]
 			const editBlob = Buffer.from(
-				encodeEdit({id: randomId(), name: "test", ops, authors: [], createdAt: BigInt(now) * 1000n}),
+				encodeEdit({
+					id: randomId(),
+					name: "test",
+					ops,
+					authors: [],
+					createdAt: BigInt(now) * 1000n,
+				}),
 			)
 
 			// Mock 1: getProposalWithPublishAction — executed proposal with content_uri
