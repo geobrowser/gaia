@@ -639,13 +639,13 @@ export function createVersionedRouter(db: Database, runtime: AppRuntime) {
 				}
 
 				// Get grouped snapshots at both versions
-				const [fromSnapshot, toSnapshot] = yield* Effect.all([
+				const [beforeSnapshot, afterSnapshot] = yield* Effect.all([
 					getGroupedEntitySnapshotAtVersion(db, entityId, fromResolved.versionKey, spaceId),
 					getGroupedEntitySnapshotAtVersion(db, entityId, toResolved.versionKey, spaceId),
 				])
 
 				// Compute grouped diff
-				const diff = yield* diffGroupedEntitySnapshots(entityId, fromSnapshot, toSnapshot)
+				const diff = yield* diffGroupedEntitySnapshots(entityId, beforeSnapshot, afterSnapshot)
 
 				// Resolve creator profiles for both edits
 				const profileMap = yield* resolveCreatorProfiles(db, [fromResolved.createdById, toResolved.createdById])

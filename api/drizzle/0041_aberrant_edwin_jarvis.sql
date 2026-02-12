@@ -1,0 +1,1 @@
+CREATE INDEX "relation_versions_from_entity_type_idx" ON "relation_versions" USING btree ("from_entity_id","type_id","valid_from_key");

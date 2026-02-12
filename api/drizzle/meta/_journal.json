@@ -288,6 +288,20 @@
       "when": 1770845736914,
       "tag": "0040_add-format-to-property-info",
       "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1770925988195,
+      "tag": "0041_aberrant_edwin_jarvis",
+      "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1770927193139,
+      "tag": "0042_messy_power_man",
+      "breakpoints": true
     }
   ]
 }

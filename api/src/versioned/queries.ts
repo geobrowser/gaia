@@ -396,7 +396,7 @@ function getBlockIdsAtVersion(
  * Batch fetch block snapshots at a specific version.
  * Uses 2 queries total (values + relations) instead of 2N queries.
  */
-function batchGetBlockSnapshotsAtVersion(
+export function batchGetBlockSnapshotsAtVersion(
 	db: Database,
 	blockIds: NormalizedUuid[],
 	versionKey: bigint,
@@ -413,16 +413,23 @@ function batchGetBlockSnapshotsAtVersion(
 			const blockIdsArray = `{${blockIds.join(",")}}`
 
 			// Query 1: All values for all blocks
+			// Explicitly list columns to avoid fetching large 'embedding' column
 			const valuesResult = spaceId
 				? await db.execute<Record<string, unknown>>(sql`
-						SELECT * FROM value_versions
+						SELECT entity_id, property_id, space_id, text, language, unit, boolean,
+						       decimal, point, time, integer, float, bytes, date, datetime,
+						       schedule, rect, context_root_id, context_edge_type_id
+						FROM value_versions
 						WHERE entity_id = ANY(${blockIdsArray}::uuid[])
 							AND valid_from_key <= ${versionKeyStr}::bigint
 							AND (valid_to_key IS NULL OR valid_to_key > ${versionKeyStr}::bigint)
 							AND space_id = ${spaceId}
 					`)
 				: await db.execute<Record<string, unknown>>(sql`
-						SELECT * FROM value_versions
+						SELECT entity_id, property_id, space_id, text, language, unit, boolean,
+						       decimal, point, time, integer, float, bytes, date, datetime,
+						       schedule, rect, context_root_id, context_edge_type_id
+						FROM value_versions
 						WHERE entity_id = ANY(${blockIdsArray}::uuid[])
 							AND valid_from_key <= ${versionKeyStr}::bigint
 							AND (valid_to_key IS NULL OR valid_to_key > ${versionKeyStr}::bigint)
@@ -431,7 +438,10 @@ function batchGetBlockSnapshotsAtVersion(
 			// Query 2: All relations for all blocks (excluding BLOCKS type)
 			const relationsResult = spaceId
 				? await db.execute<Record<string, unknown>>(sql`
-						SELECT * FROM relation_versions
+						SELECT relation_id, entity_id, type_id, from_entity_id, from_space_id,
+						       to_entity_id, to_space_id, position, space_id, verified,
+						       context_root_id, context_edge_type_id
+						FROM relation_versions
 						WHERE from_entity_id = ANY(${blockIdsArray}::uuid[])
 							AND type_id != ${BLOCKS_TYPE_ID}
 							AND valid_from_key <= ${versionKeyStr}::bigint
@@ -439,7 +449,10 @@ function batchGetBlockSnapshotsAtVersion(
 							AND space_id = ${spaceId}
 					`)
 				: await db.execute<Record<string, unknown>>(sql`
-						SELECT * FROM relation_versions
+						SELECT relation_id, entity_id, type_id, from_entity_id, from_space_id,
+						       to_entity_id, to_space_id, position, space_id, verified,
+						       context_root_id, context_edge_type_id
+						FROM relation_versions
 						WHERE from_entity_id = ANY(${blockIdsArray}::uuid[])
 							AND type_id != ${BLOCKS_TYPE_ID}
 							AND valid_from_key <= ${versionKeyStr}::bigint
@@ -479,6 +492,204 @@ function batchGetBlockSnapshotsAtVersion(
 				"query.block_count": blockIds.length,
 				"query.version_key": versionKey.toString(),
 			},
+		}),
+	)
+}
+
+/**
+ * A BLOCKS relation entry with both the relation ID and block entity ID.
+ * The relation ID is needed to match deleteRelation ops in proposal diffs.
+ */
+export interface BlockRelationEntry {
+	relationId: NormalizedUuid
+	blockEntityId: NormalizedUuid
+}
+
+/**
+ * Batch discover block relations for multiple parent entities at a specific version.
+ * Returns a map from parent entity ID to its block relation entries (ordered by position).
+ * Each entry includes both the relation ID and block entity ID.
+ * Uses a single query against relation_versions.
+ */
+export function batchGetBlockRelationsForEntities(
+	db: Database,
+	parentEntityIds: NormalizedUuid[],
+	versionKey: bigint,
+	spaceId: NormalizedUuid,
+): Effect.Effect<Map<NormalizedUuid, BlockRelationEntry[]>, QueryError> {
+	if (parentEntityIds.length === 0) {
+		return Effect.succeed(new Map())
+	}
+
+	return Effect.tryPromise({
+		try: async () => {
+			const versionKeyStr = versionKey.toString()
+			const entityIdsArray = `{${parentEntityIds.join(",")}}`
+
+			const result = await db.execute<{
+				from_entity_id: string
+				relation_id: string
+				to_entity_id: string
+				position: string | null
+			}>(sql`
+				SELECT from_entity_id, relation_id, to_entity_id, position
+				FROM relation_versions
+				WHERE from_entity_id = ANY(${entityIdsArray}::uuid[])
+					AND type_id = ${BLOCKS_TYPE_ID}
+					AND space_id = ${spaceId}
+					AND valid_from_key <= ${versionKeyStr}::bigint
+					AND (valid_to_key IS NULL OR valid_to_key > ${versionKeyStr}::bigint)
+				ORDER BY position ASC NULLS LAST
+			`)
+
+			// Group by parent entity
+			const blockMap = new Map<NormalizedUuid, BlockRelationEntry[]>()
+			for (const id of parentEntityIds) {
+				blockMap.set(id, [])
+			}
+			for (const row of result.rows) {
+				const parentId = normalizeUuid(row.from_entity_id)
+				blockMap.get(parentId)?.push({
+					relationId: normalizeUuid(row.relation_id),
+					blockEntityId: normalizeUuid(row.to_entity_id),
+				})
+			}
+
+			return blockMap
+		},
+		catch: (error) => new QueryError("batchGetBlockRelationsForEntities", error),
+	}).pipe(
+		Effect.withSpan("queries.batchGetBlockRelationsForEntities", {
+			attributes: {
+				"query.parent_count": parentEntityIds.length,
+				"query.version_key": versionKey.toString(),
+			},
+		}),
+	)
+}
+
+/**
+ * Batch discover block relations for multiple parent entities from live tables.
+ * Returns a map from parent entity ID to its block relation entries (ordered by position).
+ * Each entry includes both the relation ID and block entity ID.
+ * Uses a single query against the live relations table.
+ */
+export function batchGetLiveBlockRelationsForEntities(
+	db: Database,
+	parentEntityIds: NormalizedUuid[],
+	spaceId: NormalizedUuid,
+): Effect.Effect<Map<NormalizedUuid, BlockRelationEntry[]>, QueryError> {
+	if (parentEntityIds.length === 0) {
+		return Effect.succeed(new Map())
+	}
+
+	return Effect.tryPromise({
+		try: async () => {
+			const entityIdsArray = `{${parentEntityIds.join(",")}}`
+
+			const result = await db.execute<{
+				from_entity_id: string
+				id: string
+				to_entity_id: string
+				position: string | null
+			}>(sql`
+				SELECT from_entity_id, id, to_entity_id, position
+				FROM relations
+				WHERE from_entity_id = ANY(${entityIdsArray}::uuid[])
+					AND type_id = ${BLOCKS_TYPE_ID}
+					AND space_id = ${spaceId}
+				ORDER BY position ASC NULLS LAST
+			`)
+
+			// Group by parent entity
+			const blockMap = new Map<NormalizedUuid, BlockRelationEntry[]>()
+			for (const id of parentEntityIds) {
+				blockMap.set(id, [])
+			}
+			for (const row of result.rows) {
+				const parentId = normalizeUuid(row.from_entity_id)
+				blockMap.get(parentId)?.push({
+					relationId: normalizeUuid(row.id),
+					blockEntityId: normalizeUuid(row.to_entity_id),
+				})
+			}
+
+			return blockMap
+		},
+		catch: (error) => new QueryError("batchGetLiveBlockRelationsForEntities", error),
+	}).pipe(
+		Effect.withSpan("queries.batchGetLiveBlockRelationsForEntities", {
+			attributes: {"query.parent_count": parentEntityIds.length},
+		}),
+	)
+}
+
+/**
+ * Batch fetch block snapshots from live tables.
+ * Uses 2 queries total (values + relations) instead of 2N.
+ */
+export function batchGetLiveBlockSnapshots(
+	db: Database,
+	blockIds: NormalizedUuid[],
+	spaceId: NormalizedUuid,
+): Effect.Effect<BlockSnapshot[], QueryError> {
+	if (blockIds.length === 0) {
+		return Effect.succeed([])
+	}
+
+	return Effect.tryPromise({
+		try: async () => {
+			const blockIdsArray = `{${blockIds.join(",")}}`
+
+			// Query 1: All values for all blocks
+			const valuesResult = await db.execute<Record<string, unknown>>(sql`
+				SELECT entity_id, property_id, space_id, text, language, unit, boolean,
+				       decimal, point, time, integer, float, bytes, date, datetime,
+				       schedule, rect
+				FROM "values"
+				WHERE entity_id = ANY(${blockIdsArray}::uuid[])
+				AND space_id = ${spaceId}
+			`)
+
+			// Query 2: All relations for all blocks (excluding BLOCKS type)
+			const relationsResult = await db.execute<Record<string, unknown>>(sql`
+				SELECT id AS relation_id, entity_id, type_id, from_entity_id, from_space_id,
+				       to_entity_id, to_space_id, position, space_id, verified
+				FROM relations
+				WHERE from_entity_id = ANY(${blockIdsArray}::uuid[])
+				AND type_id != ${BLOCKS_TYPE_ID}
+				AND space_id = ${spaceId}
+			`)
+
+			// Group by entity ID
+			const valuesMap = new Map<NormalizedUuid, VersionedValue[]>()
+			const relationsMap = new Map<NormalizedUuid, VersionedRelation[]>()
+
+			for (const id of blockIds) {
+				valuesMap.set(id, [])
+				relationsMap.set(id, [])
+			}
+
+			for (const row of valuesResult.rows) {
+				const entityId = normalizeUuid(row.entity_id as string)
+				valuesMap.get(entityId)?.push(mapValueRow(row))
+			}
+
+			for (const row of relationsResult.rows) {
+				const entityId = normalizeUuid(row.from_entity_id as string)
+				relationsMap.get(entityId)?.push(mapRelationRow(row))
+			}
+
+			return blockIds.map((id) => ({
+				id,
+				values: valuesMap.get(id) ?? [],
+				relations: relationsMap.get(id) ?? [],
+			}))
+		},
+		catch: (error) => new QueryError("batchGetLiveBlockSnapshots", error),
+	}).pipe(
+		Effect.withSpan("queries.batchGetLiveBlockSnapshots", {
+			attributes: {"query.block_count": blockIds.length},
 		}),
 	)
 }
@@ -596,6 +807,14 @@ export function getGroupedEntitySnapshotAtVersion(
 
 /**
  * Get versions (edits) that affected an entity.
+ *
+ * Discovers edits by looking at both valid_from_key (creations/modifications)
+ * and valid_to_key (deletions/supersessions) in value_versions and
+ * relation_versions. An edit that only removes data from an entity still
+ * appears in the version list.
+ *
+ * Uses UNION ALL (not UNION) because the outer IN clause deduplicates
+ * implicitly, and avoiding the sort+dedup of UNION is cheaper.
  */
 export function getEntityVersions(
 	db: Database,
@@ -618,11 +837,17 @@ export function getEntityVersions(
 						SELECT DISTINCT e.edit_id, e.block_number, e.created_at, e.version_key, e.name, e.created_by_id
 						FROM edit_versions e
 						WHERE e.version_key IN (
-							SELECT DISTINCT valid_from_key FROM value_versions
+							SELECT valid_from_key FROM value_versions
 							WHERE entity_id = ${entityId} AND space_id = ${spaceId}
-							UNION
-							SELECT DISTINCT valid_from_key FROM relation_versions
+							UNION ALL
+							SELECT valid_to_key FROM value_versions
+							WHERE entity_id = ${entityId} AND space_id = ${spaceId} AND valid_to_key IS NOT NULL
+							UNION ALL
+							SELECT valid_from_key FROM relation_versions
 							WHERE from_entity_id = ${entityId} AND space_id = ${spaceId}
+							UNION ALL
+							SELECT valid_to_key FROM relation_versions
+							WHERE from_entity_id = ${entityId} AND space_id = ${spaceId} AND valid_to_key IS NOT NULL
 						)
 						ORDER BY e.version_key DESC
 						LIMIT ${limit} OFFSET ${offset}
@@ -638,11 +863,17 @@ export function getEntityVersions(
 						SELECT DISTINCT e.edit_id, e.block_number, e.created_at, e.version_key, e.name, e.created_by_id
 						FROM edit_versions e
 						WHERE e.version_key IN (
-							SELECT DISTINCT valid_from_key FROM value_versions
+							SELECT valid_from_key FROM value_versions
 							WHERE entity_id = ${entityId}
-							UNION
-							SELECT DISTINCT valid_from_key FROM relation_versions
+							UNION ALL
+							SELECT valid_to_key FROM value_versions
+							WHERE entity_id = ${entityId} AND valid_to_key IS NOT NULL
+							UNION ALL
+							SELECT valid_from_key FROM relation_versions
 							WHERE from_entity_id = ${entityId}
+							UNION ALL
+							SELECT valid_to_key FROM relation_versions
+							WHERE from_entity_id = ${entityId} AND valid_to_key IS NOT NULL
 						)
 						ORDER BY e.version_key DESC
 						LIMIT ${limit} OFFSET ${offset}

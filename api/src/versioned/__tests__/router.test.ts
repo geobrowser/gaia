@@ -881,6 +881,9 @@ describe("GET /versioned/proposals/:id/diff", () => {
 			// Mock 5: batchGetVersionedSnapshots — relations query (empty base)
 			db.execute.mockResolvedValueOnce({rows: []})
 
+			// Mock 6: batchGetBlockRelationsForEntities — no block relations
+			db.execute.mockResolvedValueOnce({rows: []})
+
 			const res = await app.request(`/versioned/proposals/${proposalId}/diff?spaceId=${spaceId}`)
 
 			expect(res.status).toBe(200)
