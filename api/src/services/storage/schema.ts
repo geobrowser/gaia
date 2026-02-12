@@ -759,6 +759,11 @@ export const valueVersions = pgTable(
 			.on(table.entityId, table.propertyId, table.spaceId)
 			.where(sql`${table.validToKey} IS NULL`),
 		index("value_versions_range_idx").on(table.entityId, table.validFromKey),
+		// Partial index for version discovery queries that scan valid_to_key
+		// to find edits that deleted/superseded values on an entity
+		index("value_versions_entity_space_valid_to_idx")
+			.on(table.entityId, table.spaceId, table.validToKey)
+			.where(sql`${table.validToKey} IS NOT NULL`),
 	],
 )
 
@@ -796,6 +801,11 @@ export const relationVersions = pgTable(
 		// Composite index for batch block relation discovery queries that filter on
 		// from_entity_id + type_id with temporal range predicates
 		index("relation_versions_from_entity_type_idx").on(table.fromEntityId, table.typeId, table.validFromKey),
+		// Partial index for version discovery queries that scan valid_to_key
+		// to find edits that deleted/superseded relations on an entity
+		index("relation_versions_from_entity_valid_to_idx")
+			.on(table.fromEntityId, table.validToKey)
+			.where(sql`${table.validToKey} IS NOT NULL`),
 	],
 )
 

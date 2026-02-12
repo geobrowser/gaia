@@ -812,6 +812,9 @@ export function getGroupedEntitySnapshotAtVersion(
  * and valid_to_key (deletions/supersessions) in value_versions and
  * relation_versions. An edit that only removes data from an entity still
  * appears in the version list.
+ *
+ * Uses UNION ALL (not UNION) because the outer IN clause deduplicates
+ * implicitly, and avoiding the sort+dedup of UNION is cheaper.
  */
 export function getEntityVersions(
 	db: Database,
@@ -834,16 +837,16 @@ export function getEntityVersions(
 						SELECT DISTINCT e.edit_id, e.block_number, e.created_at, e.version_key, e.name, e.created_by_id
 						FROM edit_versions e
 						WHERE e.version_key IN (
-							SELECT DISTINCT valid_from_key FROM value_versions
+							SELECT valid_from_key FROM value_versions
 							WHERE entity_id = ${entityId} AND space_id = ${spaceId}
-							UNION
-							SELECT DISTINCT valid_to_key FROM value_versions
+							UNION ALL
+							SELECT valid_to_key FROM value_versions
 							WHERE entity_id = ${entityId} AND space_id = ${spaceId} AND valid_to_key IS NOT NULL
-							UNION
-							SELECT DISTINCT valid_from_key FROM relation_versions
+							UNION ALL
+							SELECT valid_from_key FROM relation_versions
 							WHERE from_entity_id = ${entityId} AND space_id = ${spaceId}
-							UNION
-							SELECT DISTINCT valid_to_key FROM relation_versions
+							UNION ALL
+							SELECT valid_to_key FROM relation_versions
 							WHERE from_entity_id = ${entityId} AND space_id = ${spaceId} AND valid_to_key IS NOT NULL
 						)
 						ORDER BY e.version_key DESC
@@ -860,16 +863,16 @@ export function getEntityVersions(
 						SELECT DISTINCT e.edit_id, e.block_number, e.created_at, e.version_key, e.name, e.created_by_id
 						FROM edit_versions e
 						WHERE e.version_key IN (
-							SELECT DISTINCT valid_from_key FROM value_versions
+							SELECT valid_from_key FROM value_versions
 							WHERE entity_id = ${entityId}
-							UNION
-							SELECT DISTINCT valid_to_key FROM value_versions
+							UNION ALL
+							SELECT valid_to_key FROM value_versions
 							WHERE entity_id = ${entityId} AND valid_to_key IS NOT NULL
-							UNION
-							SELECT DISTINCT valid_from_key FROM relation_versions
+							UNION ALL
+							SELECT valid_from_key FROM relation_versions
 							WHERE from_entity_id = ${entityId}
-							UNION
-							SELECT DISTINCT valid_to_key FROM relation_versions
+							UNION ALL
+							SELECT valid_to_key FROM relation_versions
 							WHERE from_entity_id = ${entityId} AND valid_to_key IS NOT NULL
 						)
 						ORDER BY e.version_key DESC

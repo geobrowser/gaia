@@ -1,0 +1,2 @@
+CREATE INDEX "relation_versions_from_entity_valid_to_idx" ON "relation_versions" USING btree ("from_entity_id","valid_to_key") WHERE "relation_versions"."valid_to_key" IS NOT NULL;--> statement-breakpoint
+CREATE INDEX "value_versions_entity_space_valid_to_idx" ON "value_versions" USING btree ("entity_id","space_id","valid_to_key") WHERE "value_versions"."valid_to_key" IS NOT NULL;
