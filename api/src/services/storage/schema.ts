@@ -793,6 +793,9 @@ export const relationVersions = pgTable(
 		index("relation_versions_entity_idx").on(table.entityId),
 		index("relation_versions_open_idx").on(table.relationId).where(sql`${table.validToKey} IS NULL`),
 		index("relation_versions_range_idx").on(table.entityId, table.validFromKey),
+		// Composite index for batch block relation discovery queries that filter on
+		// from_entity_id + type_id with temporal range predicates
+		index("relation_versions_from_entity_type_idx").on(table.fromEntityId, table.typeId, table.validFromKey),
 	],
 )
 

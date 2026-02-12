@@ -413,16 +413,23 @@ export function batchGetBlockSnapshotsAtVersion(
 			const blockIdsArray = `{${blockIds.join(",")}}`
 
 			// Query 1: All values for all blocks
+			// Explicitly list columns to avoid fetching large 'embedding' column
 			const valuesResult = spaceId
 				? await db.execute<Record<string, unknown>>(sql`
-						SELECT * FROM value_versions
+						SELECT entity_id, property_id, space_id, text, language, unit, boolean,
+						       decimal, point, time, integer, float, bytes, date, datetime,
+						       schedule, rect, context_root_id, context_edge_type_id
+						FROM value_versions
 						WHERE entity_id = ANY(${blockIdsArray}::uuid[])
 							AND valid_from_key <= ${versionKeyStr}::bigint
 							AND (valid_to_key IS NULL OR valid_to_key > ${versionKeyStr}::bigint)
 							AND space_id = ${spaceId}
 					`)
 				: await db.execute<Record<string, unknown>>(sql`
-						SELECT * FROM value_versions
+						SELECT entity_id, property_id, space_id, text, language, unit, boolean,
+						       decimal, point, time, integer, float, bytes, date, datetime,
+						       schedule, rect, context_root_id, context_edge_type_id
+						FROM value_versions
 						WHERE entity_id = ANY(${blockIdsArray}::uuid[])
 							AND valid_from_key <= ${versionKeyStr}::bigint
 							AND (valid_to_key IS NULL OR valid_to_key > ${versionKeyStr}::bigint)
@@ -431,7 +438,10 @@ export function batchGetBlockSnapshotsAtVersion(
 			// Query 2: All relations for all blocks (excluding BLOCKS type)
 			const relationsResult = spaceId
 				? await db.execute<Record<string, unknown>>(sql`
-						SELECT * FROM relation_versions
+						SELECT relation_id, entity_id, type_id, from_entity_id, from_space_id,
+						       to_entity_id, to_space_id, position, space_id, verified,
+						       context_root_id, context_edge_type_id
+						FROM relation_versions
 						WHERE from_entity_id = ANY(${blockIdsArray}::uuid[])
 							AND type_id != ${BLOCKS_TYPE_ID}
 							AND valid_from_key <= ${versionKeyStr}::bigint
@@ -439,7 +449,10 @@ export function batchGetBlockSnapshotsAtVersion(
 							AND space_id = ${spaceId}
 					`)
 				: await db.execute<Record<string, unknown>>(sql`
-						SELECT * FROM relation_versions
+						SELECT relation_id, entity_id, type_id, from_entity_id, from_space_id,
+						       to_entity_id, to_space_id, position, space_id, verified,
+						       context_root_id, context_edge_type_id
+						FROM relation_versions
 						WHERE from_entity_id = ANY(${blockIdsArray}::uuid[])
 							AND type_id != ${BLOCKS_TYPE_ID}
 							AND valid_from_key <= ${versionKeyStr}::bigint

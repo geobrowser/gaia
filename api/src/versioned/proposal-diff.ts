@@ -316,13 +316,15 @@ function batchGetLiveSnapshots(
 				AND space_id = ${spaceId}
 			`)
 
-			// Query 2: All relations for all entities
+			// Query 2: All relations for all entities (excluding BLOCKS relations,
+			// which are fetched separately via batchGetLiveBlockRelationsForEntities)
 			// Note: Live table uses `id` but versioned uses `relation_id` - alias for consistency
 			const relationsResult = await db.execute<Record<string, unknown>>(sql`
 				SELECT id AS relation_id, entity_id, type_id, from_entity_id, from_space_id, 
 				       to_entity_id, to_space_id, position, space_id, verified
 				FROM relations
 				WHERE from_entity_id = ANY(${entityIdsArray}::uuid[])
+				AND type_id != ${BLOCKS_TYPE_ID}
 				AND space_id = ${spaceId}
 			`)
 
@@ -368,13 +370,15 @@ function batchGetVersionedSnapshots(
 				AND (valid_to_key IS NULL OR valid_to_key > ${versionKeyStr}::bigint)
 			`)
 
-			// Query 2: All relations at version
+			// Query 2: All relations at version (excluding BLOCKS relations,
+			// which are fetched separately via batchGetBlockRelationsForEntities)
 			const relationsResult = await db.execute<Record<string, unknown>>(sql`
 				SELECT relation_id, entity_id, type_id, from_entity_id, from_space_id,
 				       to_entity_id, to_space_id, position, space_id, verified,
 				       context_root_id, context_edge_type_id
 				FROM relation_versions
 				WHERE from_entity_id = ANY(${entityIdsArray}::uuid[])
+				AND type_id != ${BLOCKS_TYPE_ID}
 				AND space_id = ${spaceId}
 				AND valid_from_key <= ${versionKeyStr}::bigint
 				AND (valid_to_key IS NULL OR valid_to_key > ${versionKeyStr}::bigint)
@@ -415,12 +419,13 @@ function groupByEntityId(
 		}
 	}
 
-	// Group relations by entity (excluding block relations)
+	// Group relations by entity
+	// Note: BLOCKS relations are already excluded at the SQL level in both
+	// batchGetLiveSnapshots and batchGetVersionedSnapshots queries.
 	for (const row of relationRows) {
 		const entityId = normalizeUuid(row.from_entity_id as string)
-		const typeId = normalizeUuid(row.type_id as string)
 		const snapshot = result.get(entityId)
-		if (snapshot && typeId !== BLOCKS_TYPE_ID) {
+		if (snapshot) {
 			snapshot.relations.push(mapRelationRow(row))
 		}
 	}
@@ -590,11 +595,14 @@ function propertyValueToVersionedValue(pv: {property: Id; value: unknown}, space
 
 /**
  * Apply ops to a base snapshot to get the proposed state.
- * Returns a new snapshot (does not mutate the input).
+ * Returns a new snapshot with deep-copied values, relations, and blocks.
+ * Does not mutate `base`, but does mutate `blocksRelationMap` when
+ * createRelation ops add new BLOCKS relations.
  *
  * @param blocksRelationMap - Maps BLOCKS relation IDs to block entity IDs.
  *   Used to match deleteRelation/createRelation ops against BLOCKS relations,
  *   which are stored in `blocks` rather than `relations` on the snapshot.
+ *   **Mutated** by createRelation ops that add new BLOCKS relations.
  */
 function applyOpsToSnapshot(
 	base: EntitySnapshot,
@@ -799,6 +807,35 @@ function decodeCursor(encoded: string): ProposalDiffCursor | null {
 }
 
 // ============================================================================
+// Base State Fetching Helper
+// ============================================================================
+
+/**
+ * Dispatch data fetching based on proposal status and resolved base version key.
+ *
+ * Encapsulates the 3-way branching pattern used for fetching entity base states,
+ * block relations, and block snapshots:
+ * - Active proposals → fetch from live tables
+ * - Non-active with no resolved version → use empty fallback
+ * - Non-active with resolved version → fetch from versioned tables
+ */
+function fetchBaseData<T>(
+	status: ProposalStatus,
+	baseVersionKey: bigint | null,
+	fetchLive: () => Effect.Effect<T, QueryError>,
+	fetchVersioned: (versionKey: bigint) => Effect.Effect<T, QueryError>,
+	empty: () => T,
+): Effect.Effect<T, QueryError> {
+	if (status === "active") {
+		return fetchLive()
+	}
+	if (baseVersionKey === null) {
+		return Effect.succeed(empty())
+	}
+	return fetchVersioned(baseVersionKey)
+}
+
+// ============================================================================
 // Main Export
 // ============================================================================
 
@@ -876,7 +913,7 @@ export function computeProposalDiff(
 			return yield* Effect.fail(new EditBlobNotCachedError(contentUri))
 		}
 
-		// 5. Decode using @geoprotocol/grc-20
+		// 6. Decode using @geoprotocol/grc-20
 		const ops = yield* Effect.tryPromise({
 			try: async () => {
 				const edit = await decodeEditAuto(blob)
@@ -885,7 +922,7 @@ export function computeProposalDiff(
 			catch: (error) => new EditDecodeError(error),
 		})
 
-		// 6. Extract affected entity IDs (sorted for stable pagination)
+		// 7. Extract affected entity IDs (sorted for stable pagination)
 		// This includes looking up from_entity_id for updateRelation/deleteRelation/restoreRelation ops
 		const entityIds = (yield* extractAffectedEntities(db, ops)).sort()
 
@@ -893,7 +930,7 @@ export function computeProposalDiff(
 			Effect.annotateLogs({proposalId, opCount: ops.length, entityCount: entityIds.length}),
 		)
 
-		// 7. Validate cursor consistency (entity count shouldn't change between pages)
+		// 8. Validate cursor consistency (entity count shouldn't change between pages)
 		if (expectedTotalEntities !== undefined && expectedTotalEntities !== entityIds.length) {
 			yield* Effect.logWarning("Entity count changed between pages").pipe(
 				Effect.annotateLogs({proposalId, expected: expectedTotalEntities, actual: entityIds.length}),
@@ -901,10 +938,10 @@ export function computeProposalDiff(
 			// Don't fail - just log the inconsistency. The proposal may have been updated.
 		}
 
-		// 8. Paginate using the already-validated cursor
+		// 9. Paginate using the already-validated cursor
 		const pageEntityIds = entityIds.slice(startIndex, startIndex + limit)
 
-		// 9. Resolve base version key once for non-active proposals.
+		// 10. Resolve base version key once for non-active proposals.
 		// Used for both entity base states and block relation/snapshot fetching.
 		// For executed proposals, use the state just before execution so the diff shows
 		// what the proposal changed. For closed (not executed) proposals, use end_time.
@@ -916,39 +953,38 @@ export function computeProposalDiff(
 			baseVersionKey = yield* resolveVersionKeyBeforeTimestamp(db, baseTimestamp)
 		}
 
-		// 10. Batch fetch base states (values and relations for affected entities)
+		// 11. Batch fetch base states (values and relations for affected entities)
 		// Note: For active proposals, we fetch current live state. There's a potential race
 		// condition if live state changes between fetching the proposal and fetching values/relations,
 		// but this is acceptable - the diff represents "what would change if executed right now"
 		// rather than "what would change relative to a fixed point in time".
-		let baseStates: Map<NormalizedUuid, EntitySnapshot>
-		if (status === "active") {
-			baseStates = yield* batchGetLiveSnapshots(db, pageEntityIds, spaceId)
-		} else if (baseVersionKey === null) {
-			// No edits existed at that time - use empty snapshots
-			baseStates = new Map()
-			for (const id of pageEntityIds) {
-				baseStates.set(id, emptySnapshot(id))
-			}
-		} else {
-			baseStates = yield* batchGetVersionedSnapshots(db, pageEntityIds, spaceId, baseVersionKey)
-		}
+		const baseStates = yield* fetchBaseData(
+			status,
+			baseVersionKey,
+			() => batchGetLiveSnapshots(db, pageEntityIds, spaceId),
+			(vk) => batchGetVersionedSnapshots(db, pageEntityIds, spaceId, vk),
+			() => {
+				const m = new Map<NormalizedUuid, EntitySnapshot>()
+				for (const id of pageEntityIds) m.set(id, emptySnapshot(id))
+				return m
+			},
+		)
 
-		// 11. Discover block relations and populate blocks on base state snapshots.
+		// 12. Discover block relations and populate blocks on base state snapshots.
 		// This step fetches BLOCKS relations for each page entity, then batch-fetches
 		// the block snapshots (values + relations). The relation IDs are needed so
 		// applyOpsToSnapshot can match deleteRelation ops against BLOCKS relations.
-		let blockRelationsMap: Map<NormalizedUuid, BlockRelationEntry[]>
-		if (status === "active") {
-			blockRelationsMap = yield* batchGetLiveBlockRelationsForEntities(db, pageEntityIds, spaceId)
-		} else if (baseVersionKey === null) {
-			blockRelationsMap = new Map()
-			for (const id of pageEntityIds) {
-				blockRelationsMap.set(id, [])
-			}
-		} else {
-			blockRelationsMap = yield* batchGetBlockRelationsForEntities(db, pageEntityIds, baseVersionKey, spaceId)
-		}
+		const blockRelationsMap = yield* fetchBaseData(
+			status,
+			baseVersionKey,
+			() => batchGetLiveBlockRelationsForEntities(db, pageEntityIds, spaceId),
+			(vk) => batchGetBlockRelationsForEntities(db, pageEntityIds, vk, spaceId),
+			() => {
+				const m = new Map<NormalizedUuid, BlockRelationEntry[]>()
+				for (const id of pageEntityIds) m.set(id, [])
+				return m
+			},
+		)
 
 		// Collect all unique block entity IDs across all page entities
 		const allBlockIds = new Set<NormalizedUuid>()
@@ -963,18 +999,21 @@ export function computeProposalDiff(
 		let blockSnapshotsMap: Map<NormalizedUuid, BlockSnapshot>
 		if (blockIdsList.length === 0) {
 			blockSnapshotsMap = new Map()
-		} else if (status === "active") {
-			const blockSnapshots = yield* batchGetLiveBlockSnapshots(db, blockIdsList, spaceId)
-			blockSnapshotsMap = new Map(blockSnapshots.map((b) => [b.id, b]))
-		} else if (baseVersionKey === null) {
-			blockSnapshotsMap = new Map()
 		} else {
-			const blockSnapshots = yield* batchGetBlockSnapshotsAtVersion(db, blockIdsList, baseVersionKey, spaceId)
+			const blockSnapshots = yield* fetchBaseData(
+				status,
+				baseVersionKey,
+				() => batchGetLiveBlockSnapshots(db, blockIdsList, spaceId),
+				(vk) => batchGetBlockSnapshotsAtVersion(db, blockIdsList, vk, spaceId),
+				() => [] as BlockSnapshot[],
+			)
 			blockSnapshotsMap = new Map(blockSnapshots.map((b) => [b.id, b]))
 		}
 
 		// Attach blocks to each entity's base state and build the relation-to-block mapping.
-		// The blocksRelationMap maps relation ID → block entity ID for use in applyOpsToSnapshot.
+		// The blocksRelationMap is shared across all entities, but this is safe because each
+		// entity's blocksMap in applyOpsToSnapshot is scoped per-entity. The shared map only
+		// provides a lookup from relation ID to block entity ID for matching deleteRelation ops.
 		const blocksRelationMap = new Map<NormalizedUuid, NormalizedUuid>()
 		for (const entityId of pageEntityIds) {
 			const entries = blockRelationsMap.get(entityId) ?? []
@@ -989,7 +1028,7 @@ export function computeProposalDiff(
 			}
 		}
 
-		// 12. Compute diffs (in-memory, no DB calls)
+		// 13. Compute diffs (in-memory, no DB calls)
 		const diffs: EntityDiff[] = []
 		for (const entityId of pageEntityIds) {
 			const baseState = baseStates.get(entityId) ?? emptySnapshot(entityId)
@@ -1004,7 +1043,7 @@ export function computeProposalDiff(
 			Effect.annotateLogs({proposalId, pageSize: pageEntityIds.length, diffCount: diffs.length}),
 		)
 
-		// 13. Build pagination info
+		// 14. Build pagination info
 		const nextIndex = startIndex + limit
 		const hasMore = nextIndex < entityIds.length
 
