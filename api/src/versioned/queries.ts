@@ -807,6 +807,11 @@ export function getGroupedEntitySnapshotAtVersion(
 
 /**
  * Get versions (edits) that affected an entity.
+ *
+ * Discovers edits by looking at both valid_from_key (creations/modifications)
+ * and valid_to_key (deletions/supersessions) in value_versions and
+ * relation_versions. An edit that only removes data from an entity still
+ * appears in the version list.
  */
 export function getEntityVersions(
 	db: Database,
@@ -832,8 +837,14 @@ export function getEntityVersions(
 							SELECT DISTINCT valid_from_key FROM value_versions
 							WHERE entity_id = ${entityId} AND space_id = ${spaceId}
 							UNION
+							SELECT DISTINCT valid_to_key FROM value_versions
+							WHERE entity_id = ${entityId} AND space_id = ${spaceId} AND valid_to_key IS NOT NULL
+							UNION
 							SELECT DISTINCT valid_from_key FROM relation_versions
 							WHERE from_entity_id = ${entityId} AND space_id = ${spaceId}
+							UNION
+							SELECT DISTINCT valid_to_key FROM relation_versions
+							WHERE from_entity_id = ${entityId} AND space_id = ${spaceId} AND valid_to_key IS NOT NULL
 						)
 						ORDER BY e.version_key DESC
 						LIMIT ${limit} OFFSET ${offset}
@@ -852,8 +863,14 @@ export function getEntityVersions(
 							SELECT DISTINCT valid_from_key FROM value_versions
 							WHERE entity_id = ${entityId}
 							UNION
+							SELECT DISTINCT valid_to_key FROM value_versions
+							WHERE entity_id = ${entityId} AND valid_to_key IS NOT NULL
+							UNION
 							SELECT DISTINCT valid_from_key FROM relation_versions
 							WHERE from_entity_id = ${entityId}
+							UNION
+							SELECT DISTINCT valid_to_key FROM relation_versions
+							WHERE from_entity_id = ${entityId} AND valid_to_key IS NOT NULL
 						)
 						ORDER BY e.version_key DESC
 						LIMIT ${limit} OFFSET ${offset}
