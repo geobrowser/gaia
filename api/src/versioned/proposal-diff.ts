@@ -31,8 +31,18 @@ import type {NodePgDatabase} from "drizzle-orm/node-postgres"
 import {Effect} from "effect"
 import {type NormalizedUuid, normalizeUuid} from "../utils/uuid"
 import {diffEntitySnapshots} from "./diff"
-import {mapRelationRow, mapValueRow, QueryError} from "./queries"
+import {
+	type BlockRelationEntry,
+	batchGetBlockRelationsForEntities,
+	batchGetBlockSnapshotsAtVersion,
+	batchGetLiveBlockRelationsForEntities,
+	batchGetLiveBlockSnapshots,
+	mapRelationRow,
+	mapValueRow,
+	QueryError,
+} from "./queries"
 import type {
+	BlockSnapshot,
 	EntityDiff,
 	EntitySnapshot,
 	PaginatedProposalDiff,
@@ -581,12 +591,17 @@ function propertyValueToVersionedValue(pv: {property: Id; value: unknown}, space
 /**
  * Apply ops to a base snapshot to get the proposed state.
  * Returns a new snapshot (does not mutate the input).
+ *
+ * @param blocksRelationMap - Maps BLOCKS relation IDs to block entity IDs.
+ *   Used to match deleteRelation/createRelation ops against BLOCKS relations,
+ *   which are stored in `blocks` rather than `relations` on the snapshot.
  */
 function applyOpsToSnapshot(
 	base: EntitySnapshot,
 	ops: Op[],
 	entityId: NormalizedUuid,
 	spaceId: NormalizedUuid,
+	blocksRelationMap: Map<NormalizedUuid, NormalizedUuid>,
 ): EntitySnapshot {
 	// Deep copy the base snapshot
 	const proposed: EntitySnapshot = {
@@ -609,6 +624,12 @@ function applyOpsToSnapshot(
 	const relationsMap = new Map<string, VersionedRelation>()
 	for (const r of proposed.relations) {
 		relationsMap.set(r.relationId, r)
+	}
+
+	// Track blocks by entity ID for efficient add/remove
+	const blocksMap = new Map<NormalizedUuid, BlockSnapshot>()
+	for (const b of proposed.blocks) {
+		blocksMap.set(b.id, b)
 	}
 
 	// Apply ops that affect this entity
@@ -641,9 +662,10 @@ function applyOpsToSnapshot(
 
 			case "deleteEntity":
 				if (idToUuid(op.id) === entityId) {
-					// Clear all values and relations
+					// Clear all values, relations, and blocks
 					valuesMap.clear()
 					relationsMap.clear()
+					blocksMap.clear()
 				}
 				break
 
@@ -655,18 +677,35 @@ function applyOpsToSnapshot(
 			case "createRelation":
 				if (idToUuid(op.from) === entityId) {
 					const relationId = idToUuid(op.id)
-					const relation: VersionedRelation = {
-						relationId,
-						typeId: idToUuid(op.relationType),
-						fromEntityId: entityId,
-						fromSpaceId: op.fromSpace ? idToUuid(op.fromSpace) : null,
-						toEntityId: idToUuid(op.to),
-						toSpaceId: op.toSpace ? idToUuid(op.toSpace) : null,
-						position: op.position ?? null,
-						spaceId: spaceId,
-						verified: null,
+					const typeId = idToUuid(op.relationType)
+
+					if (typeId === BLOCKS_TYPE_ID) {
+						// BLOCKS relation: add an empty block snapshot for the target entity.
+						// The block's content (values/relations) would come from separate
+						// createEntity/updateEntity ops on the block entity, but those ops
+						// target the block entity ID (not this parent entity), so they aren't
+						// applied here. The diff will show the block as added with whatever
+						// content the block has.
+						const blockEntityId = idToUuid(op.to)
+						if (!blocksMap.has(blockEntityId)) {
+							blocksMap.set(blockEntityId, {id: blockEntityId, values: [], relations: []})
+						}
+						// Track this new relation so future deleteRelation ops can find it
+						blocksRelationMap.set(relationId, blockEntityId)
+					} else {
+						const relation: VersionedRelation = {
+							relationId,
+							typeId,
+							fromEntityId: entityId,
+							fromSpaceId: op.fromSpace ? idToUuid(op.fromSpace) : null,
+							toEntityId: idToUuid(op.to),
+							toSpaceId: op.toSpace ? idToUuid(op.toSpace) : null,
+							position: op.position ?? null,
+							spaceId: spaceId,
+							verified: null,
+						}
+						relationsMap.set(relationId, relation)
 					}
-					relationsMap.set(relationId, relation)
 				}
 				break
 
@@ -685,14 +724,25 @@ function applyOpsToSnapshot(
 					if (op.fromSpace) existing.fromSpaceId = idToUuid(op.fromSpace)
 					if (op.toSpace) existing.toSpaceId = idToUuid(op.toSpace)
 				}
+				// Note: updateRelation on a BLOCKS relation would change position/space,
+				// but the block entity itself stays in blocksMap. No action needed.
 				break
 			}
 
 			case "deleteRelation": {
 				const relationId = idToUuid(op.id)
-				const existing = relationsMap.get(relationId)
-				if (existing && existing.fromEntityId === entityId) {
-					relationsMap.delete(relationId)
+
+				// Check if this is a BLOCKS relation
+				const blockEntityId = blocksRelationMap.get(relationId)
+				if (blockEntityId) {
+					// Remove the block from the proposed snapshot
+					blocksMap.delete(blockEntityId)
+				} else {
+					// Regular relation
+					const existing = relationsMap.get(relationId)
+					if (existing && existing.fromEntityId === entityId) {
+						relationsMap.delete(relationId)
+					}
 				}
 				break
 			}
@@ -712,6 +762,7 @@ function applyOpsToSnapshot(
 	// Rebuild arrays from maps
 	proposed.values = Array.from(valuesMap.values())
 	proposed.relations = Array.from(relationsMap.values())
+	proposed.blocks = Array.from(blocksMap.values())
 
 	return proposed
 }
@@ -853,7 +904,19 @@ export function computeProposalDiff(
 		// 8. Paginate using the already-validated cursor
 		const pageEntityIds = entityIds.slice(startIndex, startIndex + limit)
 
-		// 8. Batch fetch base states (values and relations for affected entities)
+		// 9. Resolve base version key once for non-active proposals.
+		// Used for both entity base states and block relation/snapshot fetching.
+		// For executed proposals, use the state just before execution so the diff shows
+		// what the proposal changed. For closed (not executed) proposals, use end_time.
+		// Using end_time for executed proposals would include the execution's own edits
+		// in the base state, producing an empty diff.
+		let baseVersionKey: bigint | null = null
+		if (status !== "active") {
+			const baseTimestamp = proposal.executedAt ?? proposal.endTime
+			baseVersionKey = yield* resolveVersionKeyBeforeTimestamp(db, baseTimestamp)
+		}
+
+		// 10. Batch fetch base states (values and relations for affected entities)
 		// Note: For active proposals, we fetch current live state. There's a potential race
 		// condition if live state changes between fetching the proposal and fetching values/relations,
 		// but this is acceptable - the diff represents "what would change if executed right now"
@@ -861,29 +924,76 @@ export function computeProposalDiff(
 		let baseStates: Map<NormalizedUuid, EntitySnapshot>
 		if (status === "active") {
 			baseStates = yield* batchGetLiveSnapshots(db, pageEntityIds, spaceId)
+		} else if (baseVersionKey === null) {
+			// No edits existed at that time - use empty snapshots
+			baseStates = new Map()
+			for (const id of pageEntityIds) {
+				baseStates.set(id, emptySnapshot(id))
+			}
 		} else {
-			// For executed proposals, use the state just before execution so the diff shows
-			// what the proposal changed. For closed (not executed) proposals, use end_time.
-			// Using end_time for executed proposals would include the execution's own edits
-			// in the base state, producing an empty diff.
-			const baseTimestamp = proposal.executedAt ?? proposal.endTime
-			const versionKey = yield* resolveVersionKeyBeforeTimestamp(db, baseTimestamp)
-			if (versionKey === null) {
-				// No edits existed at that time - use empty snapshots
-				baseStates = new Map()
-				for (const id of pageEntityIds) {
-					baseStates.set(id, emptySnapshot(id))
-				}
-			} else {
-				baseStates = yield* batchGetVersionedSnapshots(db, pageEntityIds, spaceId, versionKey)
+			baseStates = yield* batchGetVersionedSnapshots(db, pageEntityIds, spaceId, baseVersionKey)
+		}
+
+		// 11. Discover block relations and populate blocks on base state snapshots.
+		// This step fetches BLOCKS relations for each page entity, then batch-fetches
+		// the block snapshots (values + relations). The relation IDs are needed so
+		// applyOpsToSnapshot can match deleteRelation ops against BLOCKS relations.
+		let blockRelationsMap: Map<NormalizedUuid, BlockRelationEntry[]>
+		if (status === "active") {
+			blockRelationsMap = yield* batchGetLiveBlockRelationsForEntities(db, pageEntityIds, spaceId)
+		} else if (baseVersionKey === null) {
+			blockRelationsMap = new Map()
+			for (const id of pageEntityIds) {
+				blockRelationsMap.set(id, [])
+			}
+		} else {
+			blockRelationsMap = yield* batchGetBlockRelationsForEntities(db, pageEntityIds, baseVersionKey, spaceId)
+		}
+
+		// Collect all unique block entity IDs across all page entities
+		const allBlockIds = new Set<NormalizedUuid>()
+		for (const entries of blockRelationsMap.values()) {
+			for (const entry of entries) {
+				allBlockIds.add(entry.blockEntityId)
 			}
 		}
 
-		// 9. Compute diffs (in-memory, no DB calls)
+		// Batch fetch block snapshots
+		const blockIdsList = Array.from(allBlockIds)
+		let blockSnapshotsMap: Map<NormalizedUuid, BlockSnapshot>
+		if (blockIdsList.length === 0) {
+			blockSnapshotsMap = new Map()
+		} else if (status === "active") {
+			const blockSnapshots = yield* batchGetLiveBlockSnapshots(db, blockIdsList, spaceId)
+			blockSnapshotsMap = new Map(blockSnapshots.map((b) => [b.id, b]))
+		} else if (baseVersionKey === null) {
+			blockSnapshotsMap = new Map()
+		} else {
+			const blockSnapshots = yield* batchGetBlockSnapshotsAtVersion(db, blockIdsList, baseVersionKey, spaceId)
+			blockSnapshotsMap = new Map(blockSnapshots.map((b) => [b.id, b]))
+		}
+
+		// Attach blocks to each entity's base state and build the relation-to-block mapping.
+		// The blocksRelationMap maps relation ID → block entity ID for use in applyOpsToSnapshot.
+		const blocksRelationMap = new Map<NormalizedUuid, NormalizedUuid>()
+		for (const entityId of pageEntityIds) {
+			const entries = blockRelationsMap.get(entityId) ?? []
+			const baseState = baseStates.get(entityId)
+			if (baseState) {
+				baseState.blocks = entries
+					.map((entry) => {
+						blocksRelationMap.set(entry.relationId, entry.blockEntityId)
+						return blockSnapshotsMap.get(entry.blockEntityId)
+					})
+					.filter((b): b is BlockSnapshot => b !== undefined)
+			}
+		}
+
+		// 12. Compute diffs (in-memory, no DB calls)
 		const diffs: EntityDiff[] = []
 		for (const entityId of pageEntityIds) {
 			const baseState = baseStates.get(entityId) ?? emptySnapshot(entityId)
-			const proposedState = applyOpsToSnapshot(baseState, ops, entityId, spaceId)
+			const proposedState = applyOpsToSnapshot(baseState, ops, entityId, spaceId, blocksRelationMap)
 			const diff = yield* diffEntitySnapshots(entityId, baseState, proposedState)
 			if (!isDiffEmpty(diff)) {
 				diffs.push(diff)
@@ -894,7 +1004,7 @@ export function computeProposalDiff(
 			Effect.annotateLogs({proposalId, pageSize: pageEntityIds.length, diffCount: diffs.length}),
 		)
 
-		// 10. Build pagination info
+		// 13. Build pagination info
 		const nextIndex = startIndex + limit
 		const hasMore = nextIndex < entityIds.length
 
