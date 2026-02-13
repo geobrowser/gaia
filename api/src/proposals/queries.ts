@@ -268,11 +268,81 @@ export interface ListProposalsResult {
 	nextCursor: string | null
 }
 
+// =============================================================================
+// Shared SQL Status Fragments
+// =============================================================================
+
 /**
- * WARNING: Status computation logic in SQL below MUST match computeProposalStatus() in status.ts.
- * Any changes to status computation must be made in BOTH places.
- * Run tests in __tests__/queries.test.ts to verify implementations match.
+ * WARNING: Status computation logic in SQL fragments below MUST match
+ * computeProposalStatus() in status.ts. Any changes to status computation
+ * must be made in BOTH places. Run tests in __tests__/queries.test.ts to
+ * verify implementations match.
+ *
+ * These fragment builders are the single source of truth for SQL status
+ * conditions. All query functions (listProposalsInSpace, hasActiveProposalForTarget)
+ * compose from these fragments rather than duplicating the logic.
  */
+
+/** Proposal is ACCEPTED: already executed. */
+function sqlIsAccepted() {
+	return sql`(p.executed_at IS NOT NULL)`
+}
+
+/**
+ * Proposal is PROPOSED: not executed, voting not ended, and not yet
+ * executable on the fast path.
+ */
+function sqlIsProposed(nowSeconds: bigint) {
+	return sql`(
+		p.executed_at IS NULL
+		AND ${nowSeconds}::bigint <= p.end_time
+		AND (
+			p.voting_mode = 'Slow'
+			OR (p.voting_mode = 'Fast' AND p.yes_count <= GREATEST(p.threshold - 1, 0))
+		)
+	)`
+}
+
+/**
+ * Proposal is EXECUTABLE: not executed, and threshold conditions met.
+ * Fast path: yes_count > threshold - 1 (equivalent to yes >= threshold).
+ * Slow path: voting ended, quorum met, and ratio-based threshold met.
+ */
+function sqlIsExecutable(nowSeconds: bigint) {
+	return sql`(
+		p.executed_at IS NULL
+		AND (
+			(p.voting_mode = 'Fast' AND p.yes_count > GREATEST(p.threshold - 1, 0))
+			OR (
+				p.voting_mode = 'Slow'
+				AND ${nowSeconds}::bigint > p.end_time
+				AND (p.yes_count + p.no_count + p.abstain_count) >= p.quorum
+				AND (${RATIO_BASE}::numeric - p.threshold::numeric) * p.yes_count::numeric > p.threshold::numeric * p.no_count::numeric
+			)
+		)
+	)`
+}
+
+/**
+ * Proposal is REJECTED: not executed, voting ended, and threshold/quorum
+ * not met.
+ */
+function sqlIsRejected(nowSeconds: bigint) {
+	return sql`(
+		p.executed_at IS NULL
+		AND ${nowSeconds}::bigint > p.end_time
+		AND (
+			(p.voting_mode = 'Fast' AND p.yes_count <= GREATEST(p.threshold - 1, 0))
+			OR (
+				p.voting_mode = 'Slow'
+				AND (
+					(p.yes_count + p.no_count + p.abstain_count) < p.quorum
+					OR (${RATIO_BASE}::numeric - p.threshold::numeric) * p.yes_count::numeric <= p.threshold::numeric * p.no_count::numeric
+				)
+			)
+		)
+	)`
+}
 
 /**
  * Builds the SQL ORDER BY clause based on orderBy and orderDirection options.
@@ -408,10 +478,7 @@ function extractCursorValue(
 
 /**
  * Checks whether a specific member space has an active (PROPOSED or EXECUTABLE) ADD_MEMBER
- * proposal in the given space. Returns a simple boolean.
- *
- * WARNING: Status computation logic in SQL below MUST match computeProposalStatus() in status.ts.
- * Any changes to status computation must be made in BOTH places.
+ * proposal in the given space. Returns a simple boolean via SELECT EXISTS.
  *
  * @param db - Drizzle database instance
  * @param spaceId - UUID of the space to check
@@ -428,10 +495,7 @@ export function hasActiveMemberProposal(
 
 /**
  * Checks whether a specific member space has an active (PROPOSED or EXECUTABLE) ADD_EDITOR
- * proposal in the given space. Returns a simple boolean.
- *
- * WARNING: Status computation logic in SQL below MUST match computeProposalStatus() in status.ts.
- * Any changes to status computation must be made in BOTH places.
+ * proposal in the given space. Returns a simple boolean via SELECT EXISTS.
  *
  * @param db - Drizzle database instance
  * @param spaceId - UUID of the space to check
@@ -450,8 +514,8 @@ export function hasActiveEditorProposal(
  * Shared implementation for checking active proposals targeting a specific member/editor.
  * Runs a single SELECT EXISTS query scoped to the action type and target.
  *
- * Status conditions (PROPOSED + EXECUTABLE) match the SQL in listProposalsInSpace and
- * the TypeScript logic in computeProposalStatus (status.ts).
+ * Uses the shared SQL status fragment builders (sqlIsProposed, sqlIsExecutable)
+ * to stay in sync with listProposalsInSpace and computeProposalStatus (status.ts).
  */
 function hasActiveProposalForTarget(
 	db: Database,
@@ -475,37 +539,22 @@ function hasActiveProposalForTarget(
 								AND pa.action_type = ${actionType}::"proposalActionType"
 								AND pa.target_id = ${targetSpaceId}::uuid
 						)
-						AND (
-							-- PROPOSED: voting not ended, threshold not yet met
-							(
-								${nowSeconds}::bigint <= p.end_time
-								AND (
-									p.voting_mode = 'Slow'
-									OR (p.voting_mode = 'Fast' AND p.yes_count <= GREATEST(p.threshold - 1, 0))
-								)
-							)
-							OR
-							-- EXECUTABLE: threshold met (fast path) or voting ended + quorum + threshold met (slow path)
-							(
-								p.voting_mode = 'Fast' AND p.yes_count > GREATEST(p.threshold - 1, 0)
-							)
-							OR
-							(
-								p.voting_mode = 'Slow'
-								AND ${nowSeconds}::bigint > p.end_time
-								AND (p.yes_count + p.no_count + p.abstain_count) >= p.quorum
-								AND (${RATIO_BASE}::numeric - p.threshold::numeric) * p.yes_count::numeric > p.threshold::numeric * p.no_count::numeric
-							)
-						)
+						AND (${sqlIsProposed(nowSeconds)} OR ${sqlIsExecutable(nowSeconds)})
 				) as exists
 			`)
 
-			return result.rows[0]?.exists ?? false
+			// SELECT EXISTS always returns exactly 1 row in PostgreSQL.
+			// Zero rows would indicate a broken query or connection issue.
+			const row = result.rows[0]
+			if (!row) {
+				throw new Error(`SELECT EXISTS returned ${result.rows.length} rows, expected 1`)
+			}
+			return row.exists
 		},
 		catch: (error) =>
 			new QueryError({
 				operation: operationName,
-				cause: error as Error,
+				cause: error instanceof Error ? error : new Error(String(error)),
 			}),
 	}).pipe(
 		Effect.withSpan(`queries.${operationName}`, {
@@ -570,69 +619,22 @@ export function listProposalsInSpace(
         )`
 			}
 
-			// Build status filter condition
-			// Status is computed in SQL using denormalized vote counts on the proposals table
-			// This matches the logic in status.ts computeProposalStatus
+			// Build status filter condition using shared SQL fragment builders.
+			// These fragments match the logic in status.ts computeProposalStatus.
 			let statusCondition = sql``
 			if (status && status.length > 0) {
 				const nowSeconds = BigInt(Math.floor(Date.now() / 1000))
 
-				// Build OR conditions for each requested status
-				// Uses denormalized p.yes_count, p.no_count, p.abstain_count for efficient filtering
 				const statusChecks = status.map((s) => {
 					switch (s) {
 						case "ACCEPTED":
-							// Already executed
-							return sql`(p.executed_at IS NOT NULL)`
-
+							return sqlIsAccepted()
 						case "EXECUTABLE":
-							// Not executed AND meets threshold conditions
-							// Fast path: yes > (threshold - 1), equivalent to yes >= threshold for threshold > 0
-							//            For threshold = 0, this means yes > 0 (needs at least 1 yes vote)
-							// Slow path: voting ended AND quorum met AND (RATIO_BASE - threshold) * yes > threshold * no
-							return sql`(
-                p.executed_at IS NULL
-                AND (
-                  (p.voting_mode = 'Fast' AND p.yes_count > GREATEST(p.threshold - 1, 0))
-                  OR (
-                    p.voting_mode = 'Slow'
-                    AND ${nowSeconds}::bigint > p.end_time
-                    AND (p.yes_count + p.no_count + p.abstain_count) >= p.quorum
-                    AND (${RATIO_BASE}::numeric - p.threshold::numeric) * p.yes_count::numeric > p.threshold::numeric * p.no_count::numeric
-                  )
-                )
-              )`
-
+							return sqlIsExecutable(nowSeconds)
 						case "REJECTED":
-							// Not executed AND voting ended AND threshold/quorum not met
-							// Fast path: yes <= (threshold - 1), i.e., NOT (yes > threshold - 1)
-							return sql`(
-                p.executed_at IS NULL
-                AND ${nowSeconds}::bigint > p.end_time
-                AND (
-                  (p.voting_mode = 'Fast' AND p.yes_count <= GREATEST(p.threshold - 1, 0))
-                  OR (
-                    p.voting_mode = 'Slow'
-                    AND (
-                      (p.yes_count + p.no_count + p.abstain_count) < p.quorum
-                      OR (${RATIO_BASE}::numeric - p.threshold::numeric) * p.yes_count::numeric <= p.threshold::numeric * p.no_count::numeric
-                    )
-                  )
-                )
-              )`
-
+							return sqlIsRejected(nowSeconds)
 						case "PROPOSED":
-							// Not executed AND voting not ended AND (fast path: threshold not yet met)
-							// Fast path: yes <= (threshold - 1), i.e., NOT yet executable
-							return sql`(
-                p.executed_at IS NULL
-                AND ${nowSeconds}::bigint <= p.end_time
-                AND (
-                  p.voting_mode = 'Slow'
-                  OR (p.voting_mode = 'Fast' AND p.yes_count <= GREATEST(p.threshold - 1, 0))
-                )
-              )`
-
+							return sqlIsProposed(nowSeconds)
 						default: {
 							// Exhaustiveness check - TypeScript will error if a new status is added
 							const _exhaustive: never = s
