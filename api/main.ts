@@ -1,4 +1,3 @@
-import {serve} from "@hono/node-server"
 import {swaggerUI} from "@hono/swagger-ui"
 import {Effect, Either} from "effect"
 import {Hono} from "hono"
@@ -16,8 +15,6 @@ import {OpenSearchClient} from "./src/services/search"
 import {db} from "./src/services/storage/storage"
 import {log} from "./src/services/telemetry"
 import {createVersionedRouter} from "./src/versioned"
-
-const isBun = typeof globalThis.Bun !== "undefined"
 
 type AppEnv = {
 	Variables: {
@@ -40,94 +37,6 @@ log.info("HTTP compression disabled in API (managed by ingress)")
 
 // Health routes - no tracing (high frequency, low value)
 app.route("/health", health)
-
-// Debug endpoint for heap profiling — only registered when ENABLE_DEBUG_ENDPOINTS is set.
-// Works on both Bun and Node runtimes with appropriate APIs for each.
-if (process.env.ENABLE_DEBUG_ENDPOINTS) {
-	app.get("/debug/heap-snapshot", async (c) => {
-		if (isBun) {
-			const snapshot = Bun.generateHeapSnapshot()
-			const filename = `heap-${Date.now()}.heapsnapshot`
-			const path = `/tmp/${filename}`
-			await Bun.write(path, JSON.stringify(snapshot))
-			log.info("Heap snapshot written", {path, runtime: "bun"})
-			return c.json({path, filename})
-		}
-
-		// Node: use v8.writeHeapSnapshot (V8 format, loads in Chrome DevTools)
-		const v8 = await import("node:v8")
-		const path = v8.writeHeapSnapshot(`/tmp/heap-${Date.now()}.heapsnapshot`)
-		const filename = path?.split("/").pop() ?? "unknown"
-		log.info("Heap snapshot written", {path, runtime: "node"})
-		return c.json({path, filename})
-	})
-
-	app.post("/debug/gc", async (c) => {
-		const fs = await import("node:fs")
-		const readStatus = () => fs.readFileSync("/proc/1/status", "utf8")
-
-		const beforeStatus = readStatus()
-		const before = {
-			rss: beforeStatus.match(/VmRSS:\s+(\d+)/)?.[1],
-			anon: beforeStatus.match(/RssAnon:\s+(\d+)/)?.[1],
-		}
-
-		if (isBun) {
-			Bun.gc(true)
-		} else if (global.gc) {
-			global.gc()
-		} else {
-			return c.json({error: "GC not exposed. Start node with --expose-gc"}, 501)
-		}
-
-		const afterStatus = readStatus()
-		const after = {
-			rss: afterStatus.match(/VmRSS:\s+(\d+)/)?.[1],
-			anon: afterStatus.match(/RssAnon:\s+(\d+)/)?.[1],
-		}
-
-		const result = {
-			runtime: isBun ? "bun" : "node",
-			before: {rssKB: Number(before.rss), anonKB: Number(before.anon)},
-			after: {rssKB: Number(after.rss), anonKB: Number(after.anon)},
-			freedKB: {
-				rss: Number(before.rss) - Number(after.rss),
-				anon: Number(before.anon) - Number(after.anon),
-			},
-		}
-		log.info("GC triggered", result)
-		return c.json(result)
-	})
-
-	app.get("/debug/memory", async (c) => {
-		const fs = await import("node:fs")
-		const status = fs.readFileSync("/proc/1/status", "utf8")
-		const rss = status.match(/VmRSS:\s+(\d+)/)?.[1]
-		const anon = status.match(/RssAnon:\s+(\d+)/)?.[1]
-		const file = status.match(/RssFile:\s+(\d+)/)?.[1]
-		const hwm = status.match(/VmHWM:\s+(\d+)/)?.[1]
-
-		const result: Record<string, unknown> = {
-			runtime: isBun ? "bun" : "node",
-			rssMiB: rss ? (Number(rss) / 1024).toFixed(0) : null,
-			rssAnonMiB: anon ? (Number(anon) / 1024).toFixed(0) : null,
-			rssFileMiB: file ? (Number(file) / 1024).toFixed(0) : null,
-			vmHWMMiB: hwm ? (Number(hwm) / 1024).toFixed(0) : null,
-		}
-
-		if (!isBun) {
-			const v8 = await import("node:v8")
-			const heap = v8.getHeapStatistics()
-			result.heapUsedMiB = (heap.used_heap_size / 1024 / 1024).toFixed(1)
-			result.heapTotalMiB = (heap.total_heap_size / 1024 / 1024).toFixed(1)
-			result.externalMiB = (heap.external_memory / 1024 / 1024).toFixed(1)
-		}
-
-		return c.json(result)
-	})
-
-	log.info("Debug endpoints enabled", {runtime: isBun ? "bun" : "node"})
-}
 
 // Apply canonical logging/tracing to API routes (not health)
 // Health checks are high-frequency noise with low observability value
@@ -990,16 +899,5 @@ app.get(
 		},
 	}),
 )
-
-// Start the server.
-// Bun: export default triggers Bun.serve() automatically.
-// Node: use @hono/node-server's serve().
-if (isBun) {
-	log.info("Starting server with Bun runtime", {port: 3000})
-} else {
-	serve({fetch: app.fetch, port: 3000}, (info) => {
-		log.info("Starting server with Node runtime", {port: info.port})
-	})
-}
 
 export default app
