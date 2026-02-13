@@ -29,10 +29,8 @@ export class StorageError extends Data.TaggedError("StorageError")<{
 const _pool = new Pool({
 	connectionString: Redacted.value(EnvironmentLive.databaseUrl),
 	max: 18,
-	// min: 2,
-	// idleTimeoutMillis: 30000,
-	// connectionTimeoutMillis: 15000, // Slightly increased for batched queries
-	// allowExitOnIdle: true, // Allow process to exit when pool is idle
+	idleTimeoutMillis: 30000,
+	connectionTimeoutMillis: 3000,
 })
 
 // Add basic error handling for the pool
