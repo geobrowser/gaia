@@ -23,10 +23,17 @@ import {
 
 const pool = new Pool({
 	connectionString: Redacted.value(EnvironmentLive.databaseUrl),
+	// REST routes (/versioned, /proposals, /profile) do sequential db.execute() calls
+	// that check out a connection for ~milliseconds each. 18 is generous for this pattern.
+	// With 2 replicas: (50 PostGraphile + 18 Drizzle) × 2 = 136, under PgBouncer's 200 max_client_conn.
 	max: 18,
+	// Close idle connections after 30s to free PgBouncer slots.
 	idleTimeoutMillis: 30000,
-	// Fail fast when pool is saturated. Matches PostGraphile pool. See: 5d88b96.
+	// Fail fast when pool is saturated — 3s means all 18 connections are busy,
+	// indicating DB trouble, not normal load. See: 5d88b96.
 	connectionTimeoutMillis: 3000,
+	// Allow process to exit cleanly when pool is idle (for graceful shutdown).
+	allowExitOnIdle: true,
 })
 
 pool.on("error", (err) => {
@@ -64,6 +71,6 @@ export function getPoolStats() {
 		totalConnections: pool.totalCount,
 		idleConnections: pool.idleCount,
 		waitingCount: pool.waitingCount,
-		maxConnections: pool.options.max ?? 10,
+		maxConnections: pool.options.max!, // Set to 18 in constructor above
 	}
 }
