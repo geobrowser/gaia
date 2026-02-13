@@ -12,7 +12,7 @@ COPY package.json bun.lock ./
 RUN bun install --frozen-lockfile
 COPY src ./src
 COPY main.ts tsconfig.json ./
-RUN bun build main.ts --target=node --outdir=dist --sourcemap=linked --format=esm --packages=external
+RUN bun build main.ts --target=node --outdir=dist --sourcemap=linked --format=esm
 
 # Production image — Node runtime with bun available for migrations
 FROM node:22-slim AS runner
