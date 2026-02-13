@@ -1,7 +1,5 @@
 import SimplifyInflectionPlugin from "@graphile-contrib/pg-simplify-inflector"
-import {useResponseCache} from "@graphql-yoga/plugin-response-cache"
 import {createYoga, type Plugin, useExecutionCancellation} from "graphql-yoga"
-import {LRUCache} from "lru-cache"
 import type {PoolClient} from "pg"
 import {Pool} from "pg"
 import {createPostGraphileSchema} from "postgraphile"
@@ -92,10 +90,6 @@ const postgraphileSchema = await createPostGraphileSchema(pgPool, ["public"], po
  * checked out from the pool. This plugin checks out a client before execution
  * and releases it back to the pool after execution completes.
  *
- * The checkout happens in onExecute (not in the context factory) so that
- * cache hits from useResponseCache never check out a client at all — the
- * response cache short-circuits in onParams before onExecute fires.
- *
  * We don't use PostGraphile's `withPostGraphileContext` because we don't need
  * its transaction wrapper or JWT/role features (mutations are disabled, all
  * queries are reads). Checking out the client directly is simpler and avoids
@@ -116,47 +110,8 @@ function usePgClient(pool: Pool): Plugin<{pgClient: PoolClient}> {
 	}
 }
 
-/**
- * Simple TTL-based response cache backed by lru-cache.
- *
- * The default createInMemoryCache from @envelop/response-cache maintains
- * unbounded side Maps (entityToResponseIds, responseIdToEntityIds) for
- * entity-based cache invalidation. A bug in its dispose callback (receives
- * the cached value instead of the cache key due to lru-cache v10's
- * dispose(value, key, reason) signature) means those Maps are never cleaned
- * up on eviction, causing a memory leak proportional to query diversity.
- *
- * Since we don't use entity-based invalidation (no external writes trigger
- * cache purges — mutations are disabled), we replace it with a plain LRU
- * that only does TTL-based expiry.
- */
-function createSimpleResponseCache(max: number) {
-	const cache = new LRUCache<string, any>({max, allowStale: false})
-	return {
-		set(id: string, data: unknown, _entities: Iterable<unknown>, ttl: number) {
-			cache.set(id, data, {ttl})
-		},
-		get(id: string) {
-			return cache.get(id) ?? null
-		},
-		invalidate(_entities: Iterable<unknown>) {
-			// No-op: we don't use entity-based invalidation.
-			// All entries expire via TTL or LRU eviction.
-		},
-	}
-}
-
 // Shared plugins for GraphQL server
-const sharedPlugins = [
-	usePgClient(pgPool),
-	useExecutionCancellation(),
-	useResponseCache({
-		session: () => null,
-		ttl: 10_000, // 10 seconds
-		cache: createSimpleResponseCache(1024),
-	}),
-	useGraphQLInstrumentation(),
-]
+const sharedPlugins = [usePgClient(pgPool), useExecutionCancellation(), useGraphQLInstrumentation()]
 
 // GraphQL server without uuidScalarPlugin
 export const graphqlServer = createYoga<GraphQLServerContext>({
