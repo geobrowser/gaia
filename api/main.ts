@@ -835,6 +835,19 @@ app.get(
 						},
 						required: ["proposals", "nextCursor"],
 					},
+					ActiveProposalCheckResponse: {
+						type: "object",
+						description:
+							"Whether an active (PROPOSED or EXECUTABLE) ADD_MEMBER or ADD_EDITOR proposal exists for the target in the given space",
+						properties: {
+							active: {
+								type: "boolean",
+								description:
+									"True if at least one non-executed proposal with matching action type and target is currently in PROPOSED or EXECUTABLE status",
+							},
+						},
+						required: ["active"],
+					},
 					// Proposal diff types
 					EntityDiff: {
 						type: "object",

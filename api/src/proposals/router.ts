@@ -726,10 +726,7 @@ function registerActiveProposalRoute(
 					description: "Active proposal check result",
 					content: {
 						"application/json": {
-							schema: {
-								type: "object",
-								properties: {active: {type: "boolean"}},
-							},
+							schema: {$ref: "#/components/schemas/ActiveProposalCheckResponse"},
 						},
 					},
 				},
