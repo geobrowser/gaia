@@ -81,7 +81,7 @@ Components investigated and confirmed **not leaking**:
 | Sentry event buffer | `PromiseBuffer` with max 64 concurrent sends. When full, events are dropped immediately, not queued. No unbounded accumulation. |
 | OTEL SentrySpanProcessor | Time-bounded ring buffer (300 slots, 5-min TTL). Spans evict automatically. `_sentSpans` Map has TTL-based cleanup. This is a fixed-window cost, not a monotonic leak — memory would come back down if this were the cause. |
 | Drizzle pg pool | No hung queries observed in DB metrics. Pool at max 18. `connectionTimeoutMillis: 3000` and `idleTimeoutMillis: 30000` now configured. |
-| Bun runtime memory leaks | Production Docker image uses `oven/bun:1` which floats to latest 1.x — verified via Docker Hub digest that `:1` = `:1.3.9` as of Feb 8 2026. Bun 1.3.6 fixed streaming response leaks in `Bun.serve()` and `fetch()`, 1.3.7 upgraded mimalloc v3. These fixes are already in production. Memory still grows, so the leak is application-level, not Bun runtime. |
+| Bun runtime memory leaks | Dockerfile previously used `oven/bun:1` (floating tag), now pinned to `oven/bun:1.3.9`. Verified via Docker Hub digest that production was already on 1.3.9 before pinning. Bun 1.3.6 fixed streaming response leaks in `Bun.serve()` and `fetch()`, 1.3.7 upgraded mimalloc v3. Memory still grows, so the leak is application-level, not Bun runtime. |
 
 ## Current Architecture
 
@@ -105,22 +105,25 @@ Two separate pg pools:
 
 ## Open Leads
 
-### graphql-yoga document cache
+### graphql-yoga parser/validation cache (confirmed bounded)
 
-Yoga parses and caches GraphQL documents internally. If there is high query diversity (many unique query strings), this cache could grow unboundedly. Need to check:
-- Does yoga use an LRU or an unbounded Map for parsed documents?
-- What's the cache key — the full query string?
-- Is there a `documentCacheSize` option?
+Yoga installs `useParserAndValidationCache` by default (unless `parserAndValidationCache: false`). It caches parsed documents and parse errors using an LRU cache.
 
-### PostGraphile query plan cache
+- **Cache key:** full query string (`params.source.toString()`).
+- **Default size:** max 1024 entries, TTL 1 hour.
+- **Bounded:** yes, LRU + TTL; high query diversity can fill it but it should not grow unboundedly.
 
-PostGraphile v4 may cache parsed/validated queries internally. Need to check:
-- Does `createPostGraphileSchema` result in any runtime caches?
-- Are query plans cached per unique query, and is that bounded?
+If needed, this can be disabled or configured via `parserAndValidationCache` in `createYoga`.
+
+### PostGraphile query cache (bounded, likely not used here)
+
+PostGraphile’s HTTP handler has a bounded LRU cache for parsed/validated queries (default `queryCacheMaxSize` = 50 MiB, effectively ~525 entries). Only queries <100 KB are cached. The cache resets when the schema changes.
+
+However, this cache is part of PostGraphile’s HTTP handler and is **not used** in our Yoga integration (we only use `createPostGraphileSchema`).
 
 ### graphql-js parse/validate caching
 
-The `graphql` package itself may cache parse results. Need to verify whether yoga or PostGraphile layers add their own caching on top.
+The `graphql` package itself does **not** maintain a global parse/validate cache. `parse()` and `validate()` construct new parser/context instances per call. Some validation rules (e.g., `OverlappingFieldsCanBeMergedRule`) maintain **per-validation** Maps to memoize work, but these are scoped to a single validation run and should be GC’d after the request completes.
 
 ### Bun heap fragmentation
 
@@ -155,15 +158,18 @@ Since Bun runtime leaks are ruled out (production is already on 1.3.9), the next
 
 The API has a `/debug/heap-snapshot` endpoint, gated behind `ENABLE_DEBUG_ENDPOINTS` env var. To use it:
 
-1. Set `ENABLE_DEBUG_ENDPOINTS=1` on the deployment (via secret or env patch)
-2. Take a snapshot from a running pod:
+1. Set `ENABLE_DEBUG_ENDPOINTS=1` on the deployment (currently enabled in both staging and production)
+2. Take a snapshot from a running pod (no `curl` in the container — use `bun -e` with `fetch`):
    ```bash
    POD=$(kubectl get pods -n api -l app=api -o jsonpath='{.items[0].metadata.name}')
-   kubectl exec -n api $POD -- curl -s localhost:3000/debug/heap-snapshot
+   kubectl exec -n api $POD -- bun -e "
+     const res = await fetch('http://localhost:3000/debug/heap-snapshot');
+     console.log(await res.text());
+   "
    # Returns: {"path":"/tmp/heap-<ts>.heapsnapshot","filename":"heap-<ts>.heapsnapshot"}
-   kubectl cp api/$POD:/tmp/heap-<ts>.heapsnapshot ./heap-fresh.heapsnapshot
+   kubectl cp api/$POD:/tmp/heap-<ts>.heapsnapshot ./heap.heapsnapshot
    ```
-3. Wait several hours under traffic, take another snapshot, compare in Chrome DevTools
+3. Wait several hours under traffic, take another snapshot, compare using the script above
 
 **What to look for:**
 - Object types with monotonically increasing retained size
@@ -176,3 +182,141 @@ The API has a `/debug/heap-snapshot` endpoint, gated behind `ENABLE_DEBUG_ENDPOI
 - PostGraphile query plan cache
 - graphql-js internal caches
 - Hono middleware closures or context objects
+
+### Baseline heap snapshot — Feb 13, 2026
+
+Taken from a fresh pod (~minutes after deploy, pod `api-7bbdb8ccb4-6clzg`, working set ~288 MiB).
+
+**Note on snapshot format:** `Bun.generateHeapSnapshot()` produces JSC Inspector format (`"type":"Inspector"`), not V8 format. These files don't load in Chrome DevTools. Parse them programmatically — the node layout is 4 fields per node where field[2] is the `nodeClassNames` index.
+
+**How to take a snapshot and parse it:**
+```bash
+POD=$(kubectl get pods -n api -l app=api -o jsonpath='{.items[0].metadata.name}')
+kubectl exec -n api $POD -- bun -e "
+const res = await fetch('http://localhost:3000/debug/heap-snapshot');
+const data = await res.json();
+const file = Bun.file(data.path);
+const snap = await file.json();
+const classNames = snap.nodeClassNames;
+const nodes = snap.nodes;
+const byClass = {};
+for (let i = 0; i < nodes.length; i += 4) {
+  const name = classNames[nodes[i + 2]] || '(unknown)';
+  const size = nodes[i + 1];
+  if (!byClass[name]) byClass[name] = { count: 0, totalSize: 0 };
+  byClass[name].count++;
+  byClass[name].totalSize += size;
+}
+Object.entries(byClass)
+  .sort((a, b) => b[1].totalSize - a[1].totalSize)
+  .slice(0, 20)
+  .forEach(([name, s], i) => {
+    const fmt = s.totalSize > 1024*1024
+      ? (s.totalSize/1024/1024).toFixed(1)+' MiB'
+      : (s.totalSize/1024).toFixed(1)+' KB';
+    console.log((i+1) + '. ' + name + ': ' + s.count + ' instances, ' + fmt);
+  });
+"
+```
+
+**Baseline results (96.3 MiB JS heap, 288 MiB working set):**
+
+| Rank | Type | Count | Size |
+| ---: | ---- | ----: | ---: |
+| 1 | `string` | 327,813 | 29.4 MiB |
+| 2 | `ArrayBuffer` | 18 | 16.2 MiB |
+| 3 | `ModuleRecord` | 2,199 | 10.4 MiB |
+| 4 | `Object` | 141,161 | 8.9 MiB |
+| 5 | `FunctionCodeBlock` | 2,420 | 6.5 MiB |
+| 6 | `FunctionExecutable` | 30,091 | 3.7 MiB |
+| 7 | `Structure` | 27,720 | 3.0 MiB |
+| 8 | `Cell Butterfly` | 4,182 | 2.9 MiB |
+| 9 | `UnlinkedFunctionExecutable` | 29,107 | 2.7 MiB |
+| 10 | `Function` | 62,133 | 2.3 MiB |
+
+**Key observations:**
+- 96.3 MiB JS heap vs 288 MiB working set = ~192 MiB in native allocations (pg pools, TLS, Bun internals, mimalloc)
+- `string` dominates (30% of heap) — expected for a server with many modules and query strings
+- 141k `Object` instances and 62k `Function` instances — baseline for module loading
+- 18 `ArrayBuffer`s account for 16.2 MiB — likely compiled bytecode or large buffers
+- 6,598 `InternalPromise` instances — worth tracking; growth would indicate unresolved promises
+
+**What to compare on next snapshot:**
+- `string` count/size growing → cached query strings or response bodies
+- `Object` count growing → accumulating request contexts or cache entries
+- `InternalPromise` count growing → unresolved promises holding references
+- `Array` count growing (47,909 baseline) → accumulating collections
+- New types appearing in top 10 → new source of accumulation
+
+### Follow-up snapshot — Feb 13, 2026 (same pod, ~420 MiB working set)
+
+Same pod `6clzg`, after receiving traffic. Working set grew from 288 → 420 MiB (+132 MiB).
+
+**JS heap comparison:**
+
+| Type | Baseline Count | Now Count | Δ Count | Baseline Size | Now Size | Δ Size |
+| ---- | -------------: | --------: | ------: | ------------: | -------: | -----: |
+| `string` | 327,813 | 436,109 | +108,296 | 29.4 MiB | 38.6 MiB | +9.2 MiB |
+| `Object` | 141,161 | 191,320 | +50,159 | 8.9 MiB | 12.1 MiB | +3.2 MiB |
+| `Array` | 47,909 | 66,473 | +18,564 | 748 KB | 1.0 MiB | +290 KB |
+| `FunctionCodeBlock` | 2,420 | 2,756 | +336 | 6.5 MiB | 7.4 MiB | +0.9 MiB |
+| `ArrayBuffer` | 18 | 19 | +1 | 16.2 MiB | 16.2 MiB | ~0 |
+| `ModuleRecord` | 2,199 | 2,199 | 0 | 10.4 MiB | 10.4 MiB | 0 |
+| `Function` | 62,133 | 62,275 | +142 | 2.3 MiB | 2.3 MiB | ~0 |
+| **Total JS heap** | | | **+180,944 nodes** | **96.3 MiB** | **110.1 MiB** | **+13.8 MiB** |
+
+**Key finding: The leak is mostly native, not JS.**
+
+Working set grew 132 MiB but JS heap only grew 13.8 MiB. ~90% of the memory growth (118 MiB) is in native allocations invisible to the JS heap profiler.
+
+### Native memory analysis
+
+Read from `/proc/1/status` and `/proc/1/smaps_rollup` on the running pod:
+
+**Process memory breakdown (pod `6clzg` at 420 MiB working set):**
+
+| Component | Size | Notes |
+| --------- | ---: | ----- |
+| VmRSS (total resident) | 421 MiB | What the OS reports |
+| RssAnon (heap + stacks) | 367 MiB | All anonymous memory |
+| RssFile (mmap'd files) | 54 MiB | Bun binary, shared libs — fixed cost |
+| JS heap (from snapshot) | 110 MiB | Only 26% of RssAnon |
+| Thread stacks (10 threads × 1 MiB) | ~10 MiB | Fixed cost |
+| **Unaccounted native** | **~247 MiB** | **This is the leak** |
+| VmHWM (peak RSS ever) | 956 MiB | Pod nearly hit the 1536 MiB limit at some point |
+
+**Thread inventory (10 threads):**
+- `bun` × 2 (main + event loop)
+- `HeapHelper` × 3 (JSC GC helper threads)
+- `Bun Pool` × 4 (Bun's thread pool for async I/O)
+- `HTTP Client` × 1 (outbound HTTP connections)
+
+**Comparison across pods (same age, different traffic):**
+
+| | `6clzg` (more traffic) | `6jqw5` (less traffic) |
+| --- | ---: | ---: |
+| VmRSS | 421 MiB | 388 MiB |
+| RssAnon | 367 MiB | 333 MiB |
+| RssFile | 54 MiB | 54 MiB |
+| VmHWM (peak) | 956 MiB | 640 MiB |
+
+RssFile is identical (fixed). The difference is entirely in RssAnon (native heap), and it correlates with traffic volume.
+
+### Revised understanding
+
+The memory leak has two components:
+
+1. **JS heap growth (~14 MiB):** Slow, mostly `string` (+108k instances, +9.2 MiB) and `Object` (+50k instances, +3.2 MiB). Likely graphql-yoga's document parse cache or PostGraphile internal caches accumulating unique query strings and parsed ASTs. Worth investigating but not the primary problem.
+
+2. **Native memory growth (~118 MiB):** The dominant component. Not visible in JS heap snapshots. Candidates:
+   - **mimalloc fragmentation** — Bun uses mimalloc v3. Large temporary allocations (decoded edit blobs in `/versioned/*/diff` can be 100s of KiB) fragment the arena. Pages get committed but never fully decommitted. The VmHWM of 956 MiB (spike then partial recovery to 420 MiB) is classic fragmentation — the allocator retains pages in its free lists even after the JS objects are GC'd.
+   - **Bun HTTP server internals** — Each request through `Bun.serve()` allocates native request/response buffers. If not fully released on completion, they accumulate with request volume.
+   - **pg driver TLS buffers** — Each pg connection through PgBouncer uses TLS. OpenSSL/BoringSSL contexts retain per-connection state that may not be fully freed on connection return to pool.
+   - **Sentry/OTEL transport buffers** — Native HTTP client buffers for telemetry transport.
+
+### Next steps
+
+1. **Force GC + mimalloc purge** — Call `Bun.gc(true)` from a running pod and check if RssAnon drops. If it does, the "leak" is actually fragmentation/deferred decommit. If it doesn't, there's a true native allocation leak.
+2. **Investigate JS string growth** — The +108k strings could be graphql-yoga's unbounded document cache. Check if yoga uses an LRU or a plain Map for parsed documents.
+3. **Monitor with `--smol`** — Bun's `--smol` flag trades throughput for lower memory by using a smaller heap and more aggressive GC. Could mitigate fragmentation at the cost of CPU.
+4. **Profile native allocations** — If `Bun.gc(true)` doesn't recover memory, use `jemalloc` or `heaptrack` to trace native allocation sites. This requires rebuilding the Docker image with profiling tools.
