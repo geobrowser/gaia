@@ -15,7 +15,7 @@ COPY main.ts tsconfig.json ./
 RUN bun build main.ts --target=node --outdir=dist --sourcemap=linked --format=esm
 
 # Production image — Node runtime with bun available for migrations
-FROM node:22-slim AS runner
+FROM node:24-slim AS runner
 WORKDIR /app
 
 # Copy bun binary for migrations (drizzle-kit runs via bun)
