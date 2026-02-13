@@ -51,6 +51,35 @@ if (process.env.ENABLE_DEBUG_ENDPOINTS) {
 		log.info("Heap snapshot written", {path})
 		return c.json({path, filename})
 	})
+
+	app.post("/debug/gc", (c) => {
+		const fs = require("fs")
+		const beforeStatus = fs.readFileSync("/proc/1/status", "utf8")
+		const before = {
+			rss: beforeStatus.match(/VmRSS:\s+(\d+)/)?.[1],
+			anon: beforeStatus.match(/RssAnon:\s+(\d+)/)?.[1],
+		}
+
+		Bun.gc(true)
+
+		const afterStatus = fs.readFileSync("/proc/1/status", "utf8")
+		const after = {
+			rss: afterStatus.match(/VmRSS:\s+(\d+)/)?.[1],
+			anon: afterStatus.match(/RssAnon:\s+(\d+)/)?.[1],
+		}
+
+		const result = {
+			before: {rssKB: Number(before.rss), anonKB: Number(before.anon)},
+			after: {rssKB: Number(after.rss), anonKB: Number(after.anon)},
+			freedKB: {
+				rss: Number(before.rss) - Number(after.rss),
+				anon: Number(before.anon) - Number(after.anon),
+			},
+		}
+		log.info("GC triggered", result)
+		return c.json(result)
+	})
+
 	log.info("Debug endpoints enabled")
 }
 
