@@ -302,6 +302,13 @@
       "when": 1770927193139,
       "tag": "0042_messy_power_man",
       "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1771004354519,
+      "tag": "0043_real_psylocke",
+      "breakpoints": true
     }
   ]
 }

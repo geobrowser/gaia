@@ -462,6 +462,9 @@ export const proposalActions = pgTable(
 	(table) => [
 		index("proposal_actions_proposal_id_idx").on(table.proposalId),
 		index("proposal_actions_action_type_idx").on(table.actionType),
+		// Composite index for the active proposal check query (hasActiveProposalForTarget)
+		// which filters by (proposal_id, action_type, target_id) in a correlated EXISTS subquery
+		index("proposal_actions_proposal_action_target_idx").on(table.proposalId, table.actionType, table.targetId),
 	],
 )
 

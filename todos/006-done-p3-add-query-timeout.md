@@ -1,5 +1,5 @@
 ---
-status: pending
+status: done
 priority: p3
 issue_id: "006"
 tags: [code-review, performance, safety, proposals]
@@ -53,9 +53,9 @@ _To be filled during triage._
 
 ## Acceptance Criteria
 
-- [ ] Query timeout configured (pool-level or statement-level)
-- [ ] Timeout is generous enough for normal operations (e.g., 30s)
-- [ ] Existing tests pass
+- [x] Query timeout configured (pool-level or statement-level)
+- [x] Timeout is generous enough for normal operations (e.g., 30s)
+- [x] Existing tests pass
 
 ## Work Log
 
@@ -66,3 +66,13 @@ _To be filled during triage._
 **Actions:**
 - Verified no query timeout exists at any level
 - Confirmed connection pool has connection/idle timeouts but not statement timeout
+
+### 2026-02-13 - Completed (Option 1)
+
+**By:** Claude Code
+
+**Actions:**
+- Added `statement_timeout: 30000` (30s) to the Drizzle connection pool in storage.ts
+- Uses pg's native `statement_timeout` config which sends `SET statement_timeout` on connect
+- 30s is generous enough for all normal queries (<100ms) but catches pathological cases
+- All 52 tests pass, TypeScript clean

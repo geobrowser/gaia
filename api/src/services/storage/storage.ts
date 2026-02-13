@@ -32,6 +32,10 @@ const pool = new Pool({
 	// Fail fast when pool is saturated — 3s means all 18 connections are busy,
 	// indicating DB trouble, not normal load. See: 5d88b96.
 	connectionTimeoutMillis: 3000,
+	// Safety net: cancel any query that runs longer than 30s. Normal queries complete
+	// in <100ms; 30s is generous enough to never trigger under normal conditions but
+	// catches pathological cases (missing index, lock contention, bad query plan).
+	statement_timeout: 30000,
 	// Allow process to exit cleanly when pool is idle (for graceful shutdown).
 	allowExitOnIdle: true,
 })
