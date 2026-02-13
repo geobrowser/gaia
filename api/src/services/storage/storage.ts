@@ -1,5 +1,5 @@
 import {drizzle} from "drizzle-orm/node-postgres"
-import {Context, Data, Effect, Redacted} from "effect"
+import {Redacted} from "effect"
 import {Pool} from "pg"
 
 import {EnvironmentLive} from "../environment"
@@ -21,20 +21,15 @@ import {
 	values,
 } from "./schema"
 
-export class StorageError extends Data.TaggedError("StorageError")<{
-	cause?: unknown
-	message?: string
-}> {}
-
-const _pool = new Pool({
+const pool = new Pool({
 	connectionString: Redacted.value(EnvironmentLive.databaseUrl),
 	max: 18,
 	idleTimeoutMillis: 30000,
+	// Fail fast when pool is saturated. Matches PostGraphile pool. See: 5d88b96.
 	connectionTimeoutMillis: 3000,
 })
 
-// Add basic error handling for the pool
-_pool.on("error", (err) => {
+pool.on("error", (err) => {
 	log.error("PostgreSQL pool error", {error: String(err)})
 })
 
@@ -60,96 +55,15 @@ type DbSchema = typeof schemaDefinition
 
 export const db = drizzle<DbSchema>({
 	casing: "snake_case",
-	client: _pool,
+	client: pool,
 	schema: schemaDefinition,
 })
 
-interface StorageShape {
-	use: <T>(fn: (client: typeof db) => T) => Effect.Effect<Awaited<T>, StorageError, never>
-	getPoolStats: () => Effect.Effect<
-		{
-			totalConnections: number
-			idleConnections: number
-			waitingCount: number
-			maxConnections: number
-		},
-		never,
-		never
-	>
+export function getPoolStats() {
+	return {
+		totalConnections: pool.totalCount,
+		idleConnections: pool.idleCount,
+		waitingCount: pool.waitingCount,
+		maxConnections: pool.options.max ?? 10,
+	}
 }
-
-export class Storage extends Context.Tag("Storage")<Storage, StorageShape>() {}
-
-export const make = Effect.gen(function* () {
-	return Storage.of({
-		use: (fn) => {
-			return Effect.gen(function* () {
-				const result = yield* Effect.try({
-					try: () => fn(db),
-					catch: (error) => {
-						const errorMessage = String(error)
-
-						// Provide more specific error messages for common pool issues
-						if (errorMessage.includes("too many clients")) {
-							return new StorageError({
-								message: `Database connection pool exhausted. Consider increasing max pool size or optimizing query patterns.`,
-								cause: error,
-							})
-						}
-
-						if (errorMessage.includes("pool is closed")) {
-							return new StorageError({
-								message: `Database connection pool is closed.`,
-								cause: error,
-							})
-						}
-
-						return new StorageError({
-							message: `Database operation failed: ${errorMessage}`,
-							cause: error,
-						})
-					},
-				})
-
-				if (result instanceof Promise) {
-					return yield* Effect.tryPromise({
-						try: () => result,
-						catch: (error) => {
-							const errorMessage = String(error)
-
-							if (errorMessage.includes("too many clients")) {
-								return new StorageError({
-									cause: error,
-									message: `Database connection pool exhausted. Consider increasing max pool size or optimizing query patterns.`,
-								})
-							}
-
-							if (errorMessage.includes("pool is closed")) {
-								return new StorageError({
-									cause: error,
-									message: `Database connection pool is closed.`,
-								})
-							}
-
-							return new StorageError({
-								cause: error,
-								message: `Async database operation failed: ${errorMessage}`,
-							})
-						},
-					})
-				}
-
-				return result
-			})
-		},
-
-		getPoolStats: () => {
-			return Effect.sync(() => ({
-				totalConnections: _pool.totalCount,
-				idleConnections: _pool.idleCount,
-				waitingCount: _pool.waitingCount,
-				maxConnections: _pool.options.max || 10,
-			}))
-		},
-	})
-})
