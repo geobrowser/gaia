@@ -615,3 +615,169 @@ describe("SQL/TypeScript status parity", () => {
 		})
 	})
 })
+
+// =============================================================================
+// Active Proposal Check Endpoint Tests
+// =============================================================================
+
+const SPACE_ID = "660e8400-e29b-41d4-a716-446655440000"
+const MEMBER_SPACE_ID = "770e8400-e29b-41d4-a716-446655440000"
+const EDITOR_SPACE_ID = "880e8400-e29b-41d4-a716-446655440000"
+
+describe("GET /proposals/space/:spaceId/members/:memberSpaceId/active", () => {
+	let app: Hono
+	let db: ReturnType<typeof createMockDb>
+
+	beforeEach(() => {
+		const setup = setupTestApp()
+		app = setup.app
+		db = setup.db
+	})
+
+	describe("parameter validation", () => {
+		it("returns 400 when spaceId is not a valid UUID", async () => {
+			const res = await app.request(`/proposals/space/not-a-uuid/members/${MEMBER_SPACE_ID}/active`)
+
+			expect(res.status).toBe(400)
+			const body = await res.json()
+			expect(body.error).toBe("Invalid parameter")
+			expect(body.message).toContain("Space ID")
+			expect(body.message).toContain("UUID")
+		})
+
+		it("returns 400 when memberSpaceId is not a valid UUID", async () => {
+			const res = await app.request(`/proposals/space/${SPACE_ID}/members/not-a-uuid/active`)
+
+			expect(res.status).toBe(400)
+			const body = await res.json()
+			expect(body.error).toBe("Invalid parameter")
+			expect(body.message).toContain("Member space ID")
+			expect(body.message).toContain("UUID")
+		})
+	})
+
+	describe("successful responses", () => {
+		it("returns { active: true } when an active proposal exists", async () => {
+			db.execute.mockResolvedValueOnce({rows: [{exists: true}]})
+
+			const res = await app.request(`/proposals/space/${SPACE_ID}/members/${MEMBER_SPACE_ID}/active`)
+
+			expect(res.status).toBe(200)
+			const body = await res.json()
+			expect(body).toEqual({active: true})
+		})
+
+		it("returns { active: false } when no active proposal exists", async () => {
+			db.execute.mockResolvedValueOnce({rows: [{exists: false}]})
+
+			const res = await app.request(`/proposals/space/${SPACE_ID}/members/${MEMBER_SPACE_ID}/active`)
+
+			expect(res.status).toBe(200)
+			const body = await res.json()
+			expect(body).toEqual({active: false})
+		})
+
+		it("returns { active: false } when query returns no rows", async () => {
+			db.execute.mockResolvedValueOnce({rows: []})
+
+			const res = await app.request(`/proposals/space/${SPACE_ID}/members/${MEMBER_SPACE_ID}/active`)
+
+			expect(res.status).toBe(200)
+			const body = await res.json()
+			expect(body).toEqual({active: false})
+		})
+	})
+
+	describe("database errors", () => {
+		it("returns 500 for database errors without leaking details", async () => {
+			db.execute.mockRejectedValueOnce(new Error("Connection refused"))
+
+			const res = await app.request(`/proposals/space/${SPACE_ID}/members/${MEMBER_SPACE_ID}/active`)
+
+			expect(res.status).toBe(500)
+			const body = await res.json()
+			expect(body.error).toBe("Internal server error")
+			expect(body.message).toBe("An unexpected error occurred")
+			expect(body.message).not.toContain("Connection refused")
+		})
+	})
+})
+
+describe("GET /proposals/space/:spaceId/editors/:editorSpaceId/active", () => {
+	let app: Hono
+	let db: ReturnType<typeof createMockDb>
+
+	beforeEach(() => {
+		const setup = setupTestApp()
+		app = setup.app
+		db = setup.db
+	})
+
+	describe("parameter validation", () => {
+		it("returns 400 when spaceId is not a valid UUID", async () => {
+			const res = await app.request(`/proposals/space/not-a-uuid/editors/${EDITOR_SPACE_ID}/active`)
+
+			expect(res.status).toBe(400)
+			const body = await res.json()
+			expect(body.error).toBe("Invalid parameter")
+			expect(body.message).toContain("Space ID")
+			expect(body.message).toContain("UUID")
+		})
+
+		it("returns 400 when editorSpaceId is not a valid UUID", async () => {
+			const res = await app.request(`/proposals/space/${SPACE_ID}/editors/not-a-uuid/active`)
+
+			expect(res.status).toBe(400)
+			const body = await res.json()
+			expect(body.error).toBe("Invalid parameter")
+			expect(body.message).toContain("Editor space ID")
+			expect(body.message).toContain("UUID")
+		})
+	})
+
+	describe("successful responses", () => {
+		it("returns { active: true } when an active proposal exists", async () => {
+			db.execute.mockResolvedValueOnce({rows: [{exists: true}]})
+
+			const res = await app.request(`/proposals/space/${SPACE_ID}/editors/${EDITOR_SPACE_ID}/active`)
+
+			expect(res.status).toBe(200)
+			const body = await res.json()
+			expect(body).toEqual({active: true})
+		})
+
+		it("returns { active: false } when no active proposal exists", async () => {
+			db.execute.mockResolvedValueOnce({rows: [{exists: false}]})
+
+			const res = await app.request(`/proposals/space/${SPACE_ID}/editors/${EDITOR_SPACE_ID}/active`)
+
+			expect(res.status).toBe(200)
+			const body = await res.json()
+			expect(body).toEqual({active: false})
+		})
+
+		it("returns { active: false } when query returns no rows", async () => {
+			db.execute.mockResolvedValueOnce({rows: []})
+
+			const res = await app.request(`/proposals/space/${SPACE_ID}/editors/${EDITOR_SPACE_ID}/active`)
+
+			expect(res.status).toBe(200)
+			const body = await res.json()
+			expect(body).toEqual({active: false})
+		})
+	})
+
+	describe("database errors", () => {
+		it("returns 500 for database errors without leaking details", async () => {
+			db.execute.mockRejectedValueOnce(new Error("Connection refused"))
+
+			const res = await app.request(`/proposals/space/${SPACE_ID}/editors/${EDITOR_SPACE_ID}/active`)
+
+			expect(res.status).toBe(500)
+			const body = await res.json()
+			expect(body.error).toBe("Internal server error")
+			expect(body.message).toBe("An unexpected error occurred")
+			expect(body.message).not.toContain("Connection refused")
+		})
+	})
+})

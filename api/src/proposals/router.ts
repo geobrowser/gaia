@@ -13,6 +13,8 @@ import type {AppRuntime} from "../services/runtime"
 import {isValidUuid, normalizeUuid} from "../utils/uuid"
 import {
 	getProposalWithVotes,
+	hasActiveEditorProposal,
+	hasActiveMemberProposal,
 	listProposalsInSpace,
 	PROPOSAL_ORDER_BY,
 	PROPOSAL_ORDER_DIRECTION,
@@ -617,6 +619,212 @@ export function createProposalsRouter(db: Database, runtime: AppRuntime) {
 				Effect.withSpan("GET /proposals/space/:spaceId/status"),
 				Effect.annotateLogs({requestId, spaceId}),
 				Effect.annotateSpans({requestId, spaceId}),
+			)
+
+			const result = await runtime.runPromise(Effect.either(program))
+
+			return Either.match(result, {
+				onLeft: (error: ProposalListError) => {
+					switch (error._tag) {
+						case "ValidationError":
+							return c.json({error: "Invalid parameter", message: error.message}, 400)
+						case "QueryError":
+							return c.json(
+								{
+									error: "Internal server error",
+									message: "An unexpected error occurred",
+								},
+								500,
+							)
+					}
+				},
+				onRight: (response) => c.json(response),
+			})
+		},
+	)
+
+	// GET /proposals/space/:spaceId/members/:memberSpaceId/active
+	router.get(
+		"/space/:spaceId/members/:memberSpaceId/active",
+		describeRoute({
+			tags: ["Proposals"],
+			summary: "Check if a member has an active ADD_MEMBER proposal",
+			description:
+				"Returns whether the specified member space has an active (PROPOSED or EXECUTABLE) ADD_MEMBER proposal in the given space.",
+			parameters: [
+				{
+					name: "spaceId",
+					in: "path",
+					required: true,
+					schema: {type: "string", format: "uuid"},
+				},
+				{
+					name: "memberSpaceId",
+					in: "path",
+					required: true,
+					schema: {type: "string", format: "uuid"},
+				},
+			],
+			responses: {
+				200: {
+					description: "Active proposal check result",
+					content: {
+						"application/json": {
+							schema: {
+								type: "object",
+								properties: {active: {type: "boolean"}},
+							},
+						},
+					},
+				},
+				400: {description: "Invalid parameter"},
+				500: {description: "Internal server error"},
+			},
+		}),
+		async (c) => {
+			const spaceId = c.req.param("spaceId")
+			const memberSpaceId = c.req.param("memberSpaceId")
+			const requestId = c.get("requestId") ?? "unknown"
+
+			const program = Effect.gen(function* () {
+				yield* Effect.logInfo("HasActiveMemberProposal started", {
+					spaceId,
+					memberSpaceId,
+				})
+
+				if (!isValidUuid(spaceId)) {
+					return yield* Effect.fail(new ValidationError({message: "Space ID must be a valid UUID"}))
+				}
+				if (!isValidUuid(memberSpaceId)) {
+					return yield* Effect.fail(
+						new ValidationError({message: "Member space ID must be a valid UUID"}),
+					)
+				}
+
+				const active = yield* hasActiveMemberProposal(db, spaceId, memberSpaceId)
+				return {active}
+			}).pipe(
+				Effect.tapError((error) => {
+					switch (error._tag) {
+						case "QueryError":
+							return Effect.logError("HasActiveMemberProposal failed", {
+								errorType: "database_error",
+								operation: error.operation,
+								message: error.cause.message,
+							})
+						case "ValidationError":
+							return Effect.logWarning("HasActiveMemberProposal failed", {
+								errorType: "validation_error",
+								message: error.message,
+							})
+					}
+				}),
+				Effect.withSpan("GET /proposals/space/:spaceId/members/:memberSpaceId/active"),
+				Effect.annotateLogs({requestId, spaceId, memberSpaceId}),
+				Effect.annotateSpans({requestId, spaceId, memberSpaceId}),
+			)
+
+			const result = await runtime.runPromise(Effect.either(program))
+
+			return Either.match(result, {
+				onLeft: (error: ProposalListError) => {
+					switch (error._tag) {
+						case "ValidationError":
+							return c.json({error: "Invalid parameter", message: error.message}, 400)
+						case "QueryError":
+							return c.json(
+								{
+									error: "Internal server error",
+									message: "An unexpected error occurred",
+								},
+								500,
+							)
+					}
+				},
+				onRight: (response) => c.json(response),
+			})
+		},
+	)
+
+	// GET /proposals/space/:spaceId/editors/:editorSpaceId/active
+	router.get(
+		"/space/:spaceId/editors/:editorSpaceId/active",
+		describeRoute({
+			tags: ["Proposals"],
+			summary: "Check if a member has an active ADD_EDITOR proposal",
+			description:
+				"Returns whether the specified member space has an active (PROPOSED or EXECUTABLE) ADD_EDITOR proposal in the given space.",
+			parameters: [
+				{
+					name: "spaceId",
+					in: "path",
+					required: true,
+					schema: {type: "string", format: "uuid"},
+				},
+				{
+					name: "editorSpaceId",
+					in: "path",
+					required: true,
+					schema: {type: "string", format: "uuid"},
+				},
+			],
+			responses: {
+				200: {
+					description: "Active proposal check result",
+					content: {
+						"application/json": {
+							schema: {
+								type: "object",
+								properties: {active: {type: "boolean"}},
+							},
+						},
+					},
+				},
+				400: {description: "Invalid parameter"},
+				500: {description: "Internal server error"},
+			},
+		}),
+		async (c) => {
+			const spaceId = c.req.param("spaceId")
+			const editorSpaceId = c.req.param("editorSpaceId")
+			const requestId = c.get("requestId") ?? "unknown"
+
+			const program = Effect.gen(function* () {
+				yield* Effect.logInfo("HasActiveEditorProposal started", {
+					spaceId,
+					editorSpaceId,
+				})
+
+				if (!isValidUuid(spaceId)) {
+					return yield* Effect.fail(new ValidationError({message: "Space ID must be a valid UUID"}))
+				}
+				if (!isValidUuid(editorSpaceId)) {
+					return yield* Effect.fail(
+						new ValidationError({message: "Editor space ID must be a valid UUID"}),
+					)
+				}
+
+				const active = yield* hasActiveEditorProposal(db, spaceId, editorSpaceId)
+				return {active}
+			}).pipe(
+				Effect.tapError((error) => {
+					switch (error._tag) {
+						case "QueryError":
+							return Effect.logError("HasActiveEditorProposal failed", {
+								errorType: "database_error",
+								operation: error.operation,
+								message: error.cause.message,
+							})
+						case "ValidationError":
+							return Effect.logWarning("HasActiveEditorProposal failed", {
+								errorType: "validation_error",
+								message: error.message,
+							})
+					}
+				}),
+				Effect.withSpan("GET /proposals/space/:spaceId/editors/:editorSpaceId/active"),
+				Effect.annotateLogs({requestId, spaceId, editorSpaceId}),
+				Effect.annotateSpans({requestId, spaceId, editorSpaceId}),
 			)
 
 			const result = await runtime.runPromise(Effect.either(program))

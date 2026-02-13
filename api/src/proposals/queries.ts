@@ -407,6 +407,117 @@ function extractCursorValue(
 }
 
 /**
+ * Checks whether a specific member space has an active (PROPOSED or EXECUTABLE) ADD_MEMBER
+ * proposal in the given space. Returns a simple boolean.
+ *
+ * WARNING: Status computation logic in SQL below MUST match computeProposalStatus() in status.ts.
+ * Any changes to status computation must be made in BOTH places.
+ *
+ * @param db - Drizzle database instance
+ * @param spaceId - UUID of the space to check
+ * @param memberSpaceId - UUID of the member space to check for
+ * @returns true if an active ADD_MEMBER proposal exists for this member
+ */
+export function hasActiveMemberProposal(
+	db: Database,
+	spaceId: string,
+	memberSpaceId: string,
+): Effect.Effect<boolean, QueryError> {
+	return hasActiveProposalForTarget(db, spaceId, memberSpaceId, "AddMember", "hasActiveMemberProposal")
+}
+
+/**
+ * Checks whether a specific member space has an active (PROPOSED or EXECUTABLE) ADD_EDITOR
+ * proposal in the given space. Returns a simple boolean.
+ *
+ * WARNING: Status computation logic in SQL below MUST match computeProposalStatus() in status.ts.
+ * Any changes to status computation must be made in BOTH places.
+ *
+ * @param db - Drizzle database instance
+ * @param spaceId - UUID of the space to check
+ * @param editorSpaceId - UUID of the editor space to check for
+ * @returns true if an active ADD_EDITOR proposal exists for this editor
+ */
+export function hasActiveEditorProposal(
+	db: Database,
+	spaceId: string,
+	editorSpaceId: string,
+): Effect.Effect<boolean, QueryError> {
+	return hasActiveProposalForTarget(db, spaceId, editorSpaceId, "AddEditor", "hasActiveEditorProposal")
+}
+
+/**
+ * Shared implementation for checking active proposals targeting a specific member/editor.
+ * Runs a single SELECT EXISTS query scoped to the action type and target.
+ *
+ * Status conditions (PROPOSED + EXECUTABLE) match the SQL in listProposalsInSpace and
+ * the TypeScript logic in computeProposalStatus (status.ts).
+ */
+function hasActiveProposalForTarget(
+	db: Database,
+	spaceId: string,
+	targetSpaceId: string,
+	actionType: "AddMember" | "AddEditor",
+	operationName: string,
+): Effect.Effect<boolean, QueryError> {
+	return Effect.tryPromise({
+		try: async () => {
+			const nowSeconds = BigInt(Math.floor(Date.now() / 1000))
+
+			const result = await db.execute<{exists: boolean}>(sql`
+				SELECT EXISTS (
+					SELECT 1 FROM proposals p
+					WHERE p.space_id = ${spaceId}::uuid
+						AND p.executed_at IS NULL
+						AND EXISTS (
+							SELECT 1 FROM proposal_actions pa
+							WHERE pa.proposal_id = p.id
+								AND pa.action_type = ${actionType}::"proposalActionType"
+								AND pa.target_id = ${targetSpaceId}::uuid
+						)
+						AND (
+							-- PROPOSED: voting not ended, threshold not yet met
+							(
+								${nowSeconds}::bigint <= p.end_time
+								AND (
+									p.voting_mode = 'Slow'
+									OR (p.voting_mode = 'Fast' AND p.yes_count <= GREATEST(p.threshold - 1, 0))
+								)
+							)
+							OR
+							-- EXECUTABLE: threshold met (fast path) or voting ended + quorum + threshold met (slow path)
+							(
+								p.voting_mode = 'Fast' AND p.yes_count > GREATEST(p.threshold - 1, 0)
+							)
+							OR
+							(
+								p.voting_mode = 'Slow'
+								AND ${nowSeconds}::bigint > p.end_time
+								AND (p.yes_count + p.no_count + p.abstain_count) >= p.quorum
+								AND (${RATIO_BASE}::numeric - p.threshold::numeric) * p.yes_count::numeric > p.threshold::numeric * p.no_count::numeric
+							)
+						)
+				) as exists
+			`)
+
+			return result.rows[0]?.exists ?? false
+		},
+		catch: (error) =>
+			new QueryError({
+				operation: operationName,
+				cause: error as Error,
+			}),
+	}).pipe(
+		Effect.withSpan(`queries.${operationName}`, {
+			attributes: {
+				"query.space_id": spaceId,
+				"query.target_space_id": targetSpaceId,
+			},
+		}),
+	)
+}
+
+/**
  * Lists proposals in a space with optional filtering by action type and status.
  * Uses cursor-based pagination with configurable ordering.
  * Returns vote counts only (not individual voters) for performance.
