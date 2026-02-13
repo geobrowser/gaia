@@ -23,8 +23,12 @@ export type GraphQLServerContext = {
 // Create PostgreSQL pool with explicit configuration to prevent connection exhaustion
 // Note: Without PgBouncer, each pool connection = 1 Postgres connection.
 // Ensure max * num_replicas < Postgres max_connections (leaving room for admin/migrations).
+if (!process.env.DATABASE_URL) {
+	throw new Error("DATABASE_URL environment variable is required")
+}
+
 const pgPool = new Pool({
-	connectionString: process.env.DATABASE_URL || "postgres://user:pass@localhost/mydb",
+	connectionString: process.env.DATABASE_URL,
 	// Pool size - PgBouncer handles multiplexing, so we can be generous here.
 	// The real PostgreSQL connection limit is managed by PgBouncer's pool_size.
 	// With 2 replicas at 50 each = 100 connections, well under PgBouncer's 200 max_client_conn.

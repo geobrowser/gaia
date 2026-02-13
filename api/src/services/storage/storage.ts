@@ -1,5 +1,5 @@
 import {drizzle} from "drizzle-orm/node-postgres"
-import {Context, Data, Effect, Redacted} from "effect"
+import {Redacted} from "effect"
 import {Pool} from "pg"
 
 import {EnvironmentLive} from "../environment"
@@ -21,22 +21,22 @@ import {
 	values,
 } from "./schema"
 
-export class StorageError extends Data.TaggedError("StorageError")<{
-	cause?: unknown
-	message?: string
-}> {}
-
-const _pool = new Pool({
+const pool = new Pool({
 	connectionString: Redacted.value(EnvironmentLive.databaseUrl),
+	// REST routes (/versioned, /proposals, /profile) do sequential db.execute() calls
+	// that check out a connection for ~milliseconds each. 18 is generous for this pattern.
+	// With 2 replicas: (50 PostGraphile + 18 Drizzle) × 2 = 136, under PgBouncer's 200 max_client_conn.
 	max: 18,
-	// min: 2,
-	// idleTimeoutMillis: 30000,
-	// connectionTimeoutMillis: 15000, // Slightly increased for batched queries
-	// allowExitOnIdle: true, // Allow process to exit when pool is idle
+	// Close idle connections after 30s to free PgBouncer slots.
+	idleTimeoutMillis: 30000,
+	// Fail fast when pool is saturated — 3s means all 18 connections are busy,
+	// indicating DB trouble, not normal load. See: 5d88b96.
+	connectionTimeoutMillis: 3000,
+	// Allow process to exit cleanly when pool is idle (for graceful shutdown).
+	allowExitOnIdle: true,
 })
 
-// Add basic error handling for the pool
-_pool.on("error", (err) => {
+pool.on("error", (err) => {
 	log.error("PostgreSQL pool error", {error: String(err)})
 })
 
@@ -62,96 +62,15 @@ type DbSchema = typeof schemaDefinition
 
 export const db = drizzle<DbSchema>({
 	casing: "snake_case",
-	client: _pool,
+	client: pool,
 	schema: schemaDefinition,
 })
 
-interface StorageShape {
-	use: <T>(fn: (client: typeof db) => T) => Effect.Effect<Awaited<T>, StorageError, never>
-	getPoolStats: () => Effect.Effect<
-		{
-			totalConnections: number
-			idleConnections: number
-			waitingCount: number
-			maxConnections: number
-		},
-		never,
-		never
-	>
+export function getPoolStats() {
+	return {
+		totalConnections: pool.totalCount,
+		idleConnections: pool.idleCount,
+		waitingCount: pool.waitingCount,
+		maxConnections: pool.options.max!, // Set to 18 in constructor above
+	}
 }
-
-export class Storage extends Context.Tag("Storage")<Storage, StorageShape>() {}
-
-export const make = Effect.gen(function* () {
-	return Storage.of({
-		use: (fn) => {
-			return Effect.gen(function* () {
-				const result = yield* Effect.try({
-					try: () => fn(db),
-					catch: (error) => {
-						const errorMessage = String(error)
-
-						// Provide more specific error messages for common pool issues
-						if (errorMessage.includes("too many clients")) {
-							return new StorageError({
-								message: `Database connection pool exhausted. Consider increasing max pool size or optimizing query patterns.`,
-								cause: error,
-							})
-						}
-
-						if (errorMessage.includes("pool is closed")) {
-							return new StorageError({
-								message: `Database connection pool is closed.`,
-								cause: error,
-							})
-						}
-
-						return new StorageError({
-							message: `Database operation failed: ${errorMessage}`,
-							cause: error,
-						})
-					},
-				})
-
-				if (result instanceof Promise) {
-					return yield* Effect.tryPromise({
-						try: () => result,
-						catch: (error) => {
-							const errorMessage = String(error)
-
-							if (errorMessage.includes("too many clients")) {
-								return new StorageError({
-									cause: error,
-									message: `Database connection pool exhausted. Consider increasing max pool size or optimizing query patterns.`,
-								})
-							}
-
-							if (errorMessage.includes("pool is closed")) {
-								return new StorageError({
-									cause: error,
-									message: `Database connection pool is closed.`,
-								})
-							}
-
-							return new StorageError({
-								cause: error,
-								message: `Async database operation failed: ${errorMessage}`,
-							})
-						},
-					})
-				}
-
-				return result
-			})
-		},
-
-		getPoolStats: () => {
-			return Effect.sync(() => ({
-				totalConnections: _pool.totalCount,
-				idleConnections: _pool.idleCount,
-				waitingCount: _pool.waitingCount,
-				maxConnections: _pool.options.max || 10,
-			}))
-		},
-	})
-})

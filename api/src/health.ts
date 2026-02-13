@@ -1,8 +1,6 @@
-import {Effect} from "effect"
 import {Hono} from "hono"
 import {describeRoute} from "hono-openapi"
-import {runtime} from "./services/runtime"
-import {Storage} from "./services/storage/storage"
+import {db, getPoolStats} from "./services/storage/storage"
 
 const health = new Hono()
 
@@ -77,34 +75,11 @@ health.get(
 	}),
 	async (c) => {
 		try {
-			const healthCheck = await runtime.runPromise(
-				Effect.gen(function* () {
-					const storage = yield* Storage
-
-					// Try a simple query to test connectivity
-					const result = yield* storage.use(async (client) => {
-						await client.execute("SELECT 1")
-						return true
-					})
-
-					return result
-				}),
-			)
-
-			if (healthCheck) {
-				return c.json({
-					status: "healthy",
-					timestamp: new Date().toISOString(),
-				})
-			} else {
-				return c.json(
-					{
-						status: "unhealthy",
-						timestamp: new Date().toISOString(),
-					},
-					503,
-				)
-			}
+			await db.execute("SELECT 1")
+			return c.json({
+				status: "healthy",
+				timestamp: new Date().toISOString(),
+			})
 		} catch (error) {
 			return c.json(
 				{
@@ -202,49 +177,32 @@ health.get(
 	}),
 	async (c) => {
 		try {
-			const healthData = await runtime.runPromise(
-				Effect.gen(function* () {
-					const storage = yield* Storage
+			await db.execute("SELECT 1")
 
-					// Get pool statistics
-					const poolStats = yield* storage.getPoolStats()
+			const poolStats = getPoolStats()
+			const utilizationPercent = Math.round((poolStats.totalConnections / poolStats.maxConnections) * 100)
+			const isHealthy = utilizationPercent < 90 && poolStats.waitingCount === 0
 
-					// Test database connectivity
-					const dbConnected = yield* storage.use(async (client) => {
-						const result = await client.execute("SELECT 1 as test, NOW() as timestamp")
-						return {
-							connected: true,
-							testResult: result,
-						}
-					})
+			const healthData = {
+				status: isHealthy ? "healthy" : "degraded",
+				database: {
+					connected: true,
+					testQuery: "SELECT 1",
+				},
+				connectionPool: {
+					totalConnections: poolStats.totalConnections,
+					idleConnections: poolStats.idleConnections,
+					activeConnections: poolStats.totalConnections - poolStats.idleConnections,
+					waitingCount: poolStats.waitingCount,
+					maxConnections: poolStats.maxConnections,
+					utilizationPercent,
+					status: utilizationPercent > 85 ? "high" : utilizationPercent > 70 ? "medium" : "low",
+				},
+				recommendations: getHealthRecommendations(poolStats, utilizationPercent),
+				timestamp: new Date().toISOString(),
+			}
 
-					const utilizationPercent = Math.round((poolStats.totalConnections / poolStats.maxConnections) * 100)
-
-					const isHealthy = dbConnected.connected && utilizationPercent < 90 && poolStats.waitingCount === 0
-
-					return {
-						status: isHealthy ? "healthy" : "degraded",
-						database: {
-							connected: dbConnected.connected,
-							testQuery: "SELECT 1",
-						},
-						connectionPool: {
-							totalConnections: poolStats.totalConnections,
-							idleConnections: poolStats.idleConnections,
-							activeConnections: poolStats.totalConnections - poolStats.idleConnections,
-							waitingCount: poolStats.waitingCount,
-							maxConnections: poolStats.maxConnections,
-							utilizationPercent,
-							status: utilizationPercent > 85 ? "high" : utilizationPercent > 70 ? "medium" : "low",
-						},
-						recommendations: getHealthRecommendations(poolStats, utilizationPercent),
-						timestamp: new Date().toISOString(),
-					}
-				}),
-			)
-
-			const statusCode = healthData.status === "healthy" ? 200 : healthData.status === "degraded" ? 206 : 503
-
+			const statusCode = healthData.status === "healthy" ? 200 : 206
 			return c.json(healthData, statusCode)
 		} catch (error) {
 			return c.json(
@@ -314,35 +272,17 @@ health.get(
 			},
 		},
 	}),
-	async (c) => {
-		try {
-			const poolData = await runtime.runPromise(
-				Effect.gen(function* () {
-					const storage = yield* Storage
-					const poolStats = yield* storage.getPoolStats()
+	(c) => {
+		const poolStats = getPoolStats()
+		const utilizationPercent = Math.round((poolStats.totalConnections / poolStats.maxConnections) * 100)
 
-					const utilizationPercent = Math.round((poolStats.totalConnections / poolStats.maxConnections) * 100)
-
-					return {
-						...poolStats,
-						activeConnections: poolStats.totalConnections - poolStats.idleConnections,
-						utilizationPercent,
-						status: utilizationPercent > 85 ? "critical" : utilizationPercent > 70 ? "warning" : "ok",
-						timestamp: new Date().toISOString(),
-					}
-				}),
-			)
-
-			return c.json(poolData)
-		} catch (error) {
-			return c.json(
-				{
-					error: String(error),
-					timestamp: new Date().toISOString(),
-				},
-				500,
-			)
-		}
+		return c.json({
+			...poolStats,
+			activeConnections: poolStats.totalConnections - poolStats.idleConnections,
+			utilizationPercent,
+			status: utilizationPercent > 85 ? "critical" : utilizationPercent > 70 ? "warning" : "ok",
+			timestamp: new Date().toISOString(),
+		})
 	},
 )
 
