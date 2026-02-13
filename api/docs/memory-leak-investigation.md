@@ -145,28 +145,34 @@ Dockerfile used `oven/bun:1` (floating tag). CI workflows used various outdated 
 
 Since Bun runtime leaks are ruled out (production is already on 1.3.9), the next investigation step is heap profiling to identify what's accumulating.
 
-### Using `bun --heap-prof` (available since 1.3.7)
+### Heap profiling tools
 
-1. **Local reproduction:** Run the API with `bun --heap-prof run main.ts` and send sustained traffic. This writes `.heapprofile` files that can be loaded in Chrome DevTools.
+**CLI flags (Bun 1.3.7+):**
+- `bun --heap-prof run main.ts` — writes `.heapsnapshot` at exit (V8-compatible, Chrome DevTools → Memory tab)
+- `bun --heap-prof-md run main.ts` — writes markdown report with type-by-retained-size tables, retainer chains
 
-2. **Production snapshot:** Alternatively, exec into a running pod and use `Bun.generateHeapSnapshot()` to capture a point-in-time heap:
+**Production snapshots via debug endpoint:**
+
+The API has a `/debug/heap-snapshot` endpoint, gated behind `ENABLE_DEBUG_ENDPOINTS` env var. To use it:
+
+1. Set `ENABLE_DEBUG_ENDPOINTS=1` on the deployment (via secret or env patch)
+2. Take a snapshot from a running pod:
    ```bash
-   kubectl exec -n api <pod> -- bun -e "
-     const snap = Bun.generateHeapSnapshot();
-     await Bun.write('/tmp/heap.json', JSON.stringify(snap));
-   "
-   kubectl cp api/<pod>:/tmp/heap.json ./heap.json
+   POD=$(kubectl get pods -n api -l app=api -o jsonpath='{.items[0].metadata.name}')
+   kubectl exec -n api $POD -- curl -s localhost:3000/debug/heap-snapshot
+   # Returns: {"path":"/tmp/heap-<ts>.heapsnapshot","filename":"heap-<ts>.heapsnapshot"}
+   kubectl cp api/$POD:/tmp/heap-<ts>.heapsnapshot ./heap-fresh.heapsnapshot
    ```
-   Compare snapshots taken at startup vs. after several hours of traffic to identify growing object types.
+3. Wait several hours under traffic, take another snapshot, compare in Chrome DevTools
 
-3. **What to look for:**
-   - Object types with monotonically increasing retained size
-   - String/Buffer accumulation (suggests cached query strings or response bodies)
-   - Map/Set instances with growing entry counts (suggests unbounded caches)
-   - Closures retaining request-scoped variables beyond request lifetime
+**What to look for:**
+- Object types with monotonically increasing retained size
+- String/Buffer accumulation (suggests cached query strings or response bodies)
+- Map/Set instances with growing entry counts (suggests unbounded caches)
+- Closures retaining request-scoped variables beyond request lifetime
 
-4. **Key suspects to validate:**
-   - graphql-yoga document parse cache (bounded LRU? or unbounded Map?)
-   - PostGraphile query plan cache
-   - graphql-js internal caches
-   - Hono middleware closures or context objects
+**Key suspects to validate:**
+- graphql-yoga document parse cache (bounded LRU? or unbounded Map?)
+- PostGraphile query plan cache
+- graphql-js internal caches
+- Hono middleware closures or context objects

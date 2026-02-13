@@ -38,6 +38,22 @@ log.info("HTTP compression disabled in API (managed by ingress)")
 // Health routes - no tracing (high frequency, low value)
 app.route("/health", health)
 
+// Debug endpoint for heap profiling — only registered when ENABLE_DEBUG_ENDPOINTS is set.
+// Usage: kubectl exec -n api <pod> -- curl -s localhost:3000/debug/heap-snapshot
+//        kubectl cp api/<pod>:/tmp/heap-<ts>.heapsnapshot ./heap.heapsnapshot
+// Open .heapsnapshot files in Chrome DevTools → Memory tab.
+if (process.env.ENABLE_DEBUG_ENDPOINTS) {
+	app.get("/debug/heap-snapshot", async (c) => {
+		const snapshot = Bun.generateHeapSnapshot()
+		const filename = `heap-${Date.now()}.heapsnapshot`
+		const path = `/tmp/${filename}`
+		await Bun.write(path, JSON.stringify(snapshot))
+		log.info("Heap snapshot written", {path})
+		return c.json({path, filename})
+	})
+	log.info("Debug endpoints enabled")
+}
+
 // Apply canonical logging/tracing to API routes (not health)
 // Health checks are high-frequency noise with low observability value
 app.use("/ipfs/*", canonicalRequestLogging())
