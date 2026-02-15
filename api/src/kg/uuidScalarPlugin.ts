@@ -1,3 +1,4 @@
+import {GraphQLError} from "graphql"
 import {Kind} from "graphql/language"
 import type {GraphQLScalarType} from "graphql/type/definition"
 import {normalizeUuid} from "../utils/uuid"
@@ -8,15 +9,23 @@ export function patchUuidScalar(uuidScalar: GraphQLScalarType): void {
 	uuidScalar.serialize = (value: unknown) => normalizeUuid(String(value))
 	uuidScalar.parseValue = (value: unknown) => {
 		if (typeof value !== "string") {
-			throw new Error(`UUID cannot represent non-string value: ${String(value)}`)
+			throw new GraphQLError(`UUID cannot represent non-string value: ${String(value)}`)
 		}
-		return normalizeUuid(value)
+		try {
+			return normalizeUuid(value)
+		} catch {
+			throw new GraphQLError(`Invalid UUID: ${value}`)
+		}
 	}
 	uuidScalar.parseLiteral = (ast) => {
 		if (ast.kind !== Kind.STRING) {
-			throw new Error("UUID can only parse string values")
+			throw new GraphQLError("UUID can only parse string values")
 		}
-		return normalizeUuid(ast.value)
+		try {
+			return normalizeUuid(ast.value)
+		} catch {
+			throw new GraphQLError(`Invalid UUID: ${ast.value}`)
+		}
 	}
 	// Update the description to clarify undashed serialization and flexible input
 	uuidScalar.description =
