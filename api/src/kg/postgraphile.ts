@@ -4,6 +4,7 @@ import type {PoolClient} from "pg"
 import {Pool} from "pg"
 import {createPostGraphileSchema} from "postgraphile"
 import ConnectionFilterPlugin from "postgraphile-plugin-connection-filter"
+import {log} from "../services/telemetry"
 import EntitySpaceFilterPlugin from "./entitySpaceFilterPlugin"
 import {useGraphQLInstrumentation} from "./instrumentationPlugin"
 import UndashedUuidPlugin from "./uuidScalarPlugin"
@@ -37,6 +38,13 @@ const pgPool = new Pool({
 	idleTimeoutMillis: parseInt(process.env.PG_IDLE_TIMEOUT_MS || "30000", 10),
 	// Allow process to exit cleanly when pool is idle (for graceful shutdown)
 	allowExitOnIdle: true,
+})
+
+// Without this handler, background connection errors (PgBouncer closing idle connections,
+// network blips) become unhandled events. The pool doesn't remove the dead connection,
+// so subsequent connect() calls can check out a stale client that fails during query execution.
+pgPool.on("error", (err) => {
+	log.error("PostGraphile pool error", {error: String(err)})
 })
 
 // Base PostGraphile options (without uuidScalarPlugin)
@@ -94,6 +102,10 @@ const postgraphileSchema = await createPostGraphileSchema(pgPool, ["public"], po
  * its transaction wrapper or JWT/role features (mutations are disabled, all
  * queries are reads). Checking out the client directly is simpler and avoids
  * the unnecessary BEGIN/COMMIT overhead on every request.
+ *
+ * On completion, we check the result for errors. release(err) tells pg.Pool to
+ * destroy the connection instead of returning it to the pool — this prevents
+ * stale connections (e.g. from PgBouncer closing them) from being reused.
  */
 function usePgClient(pool: Pool): Plugin<{pgClient: PoolClient}> {
 	return {
@@ -102,8 +114,16 @@ function usePgClient(pool: Pool): Plugin<{pgClient: PoolClient}> {
 			extendContext({pgClient})
 
 			return {
-				onExecuteDone() {
-					pgClient.release()
+				onExecuteDone({result}) {
+					// If the result has GraphQL errors, the underlying connection may be
+					// broken (e.g. PgBouncer closed it). release(err) destroys it so the
+					// pool doesn't hand out a dead connection on the next request.
+					const errors = "errors" in result ? result.errors : undefined
+					if (errors?.length) {
+						pgClient.release(errors[0])
+					} else {
+						pgClient.release()
+					}
 				},
 			}
 		},
