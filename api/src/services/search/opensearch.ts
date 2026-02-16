@@ -19,43 +19,56 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
 /**
  * Default average score for entities without a specific score.
  * When an entity has no score value (missing or empty), this default is used.
+ * Scores are normalized to [0, 1] with 0.5 being average.
  */
-export const DEFAULT_AVERAGE_SCORE = 0.0
+export const DEFAULT_AVERAGE_SCORE = 0.5
 
 /**
  * Minimum score threshold for search boosting.
  * Any score below this threshold will be clamped to this value.
- * Since z-scores typically fall within [-3, 3], a threshold of -10 provides
- * ample headroom for outliers while preventing a negative result
- * from script_score (opensearch requirement). Any entities with a score below -10
- * will be equally deboosted.
+ * Scores are normalized to [0, 1] with 0.5 being average.
+ * A threshold of 0 prevents negative results from script_score (OpenSearch requirement).
  */
-export const MIN_SCORE_THRESHOLD = -10.0
+export const MIN_SCORE_THRESHOLD = 0.0
 
 /**
  * Score shift value to ensure all scores are positive.
- * Calculated as the absolute value of MIN_SCORE_THRESHOLD.
- * This shifts the score range from [MIN_SCORE_THRESHOLD, ∞) to [0, ∞).
+ * With scores in [0, 1], a shift of 1 ensures the minimum boost is
+ * always positive: (0 + 1) * SCORE_BOOST > 0.
  */
-export const SCORE_SHIFT = Math.abs(MIN_SCORE_THRESHOLD)
+export const SCORE_SHIFT = 1.0
 
 /**
  * Score boost multiplier for score fields.
  * Applied to entity_global_score, space_score, and entity_space_score fields.
- * Note: Since scores can be zero or negative (from z-score normalization),
- * we clamp at MIN_SCORE_THRESHOLD and shift by SCORE_SHIFT to ensure positive values.
+ * With scores in [0, 1], this multiplier controls how much global/space scores
+ * influence ranking relative to text match quality.
+ *
+ * Formula: (max(score, 0) + 1) * 10
+ *   score=0.0 → boost=10, score=0.5 → boost=15, score=1.0 → boost=20
+ *
+ * This produces a boost range of 10 across the full score spectrum, which is
+ * large enough for high-score entities to outrank low-score entities that have
+ * moderately better text matches (e.g., exact single-word name match vs multi-word name).
  */
-export const SCORE_BOOST = 1.3
+export const SCORE_BOOST = 10.0
 
 /**
  * Boost value for name field in match_phrase_prefix queries.
- * Strongly boosts documents where the name starts with the query text.
+ * Strongly boosts documents where the query matches as a phrase prefix in the name.
+ *
+ * Set to 5.0 (vs DESCRIPTION_PREFIX_BOOST=1.5) to ensure name matches consistently
+ * outscore description-only matches. A lower ratio (e.g. 2.0/1.5=1.33x) is insufficient
+ * because BM25 field length normalization can amplify description match scores when
+ * descriptions are short relative to the index-wide average description length.
  */
-export const NAME_PREFIX_BOOST = 2.0
+export const NAME_PREFIX_BOOST = 5.0
 
 /**
  * Boost value for description field in match_phrase_prefix queries.
- * Moderately boosts documents where the description starts with the query text.
+ * Moderately boosts documents where the query matches as a phrase prefix in the description.
+ * Matches any position in the description, not just the start of the string — e.g. query
+ * "Quant" matches "Applied Quantum Physics" because a word starts with the prefix.
  */
 export const DESCRIPTION_PREFIX_BOOST = 1.5
 
@@ -469,7 +482,7 @@ export class OpenSearchClient implements SearchClient {
 	 * Reused by buildScoreBoostFunction (for function_score) and
 	 * buildScoreBoostScriptFields (for returning the boost value in results).
 	 *
-	 * Formula: (max(score, -10.0) + 10.0) * 1.3
+	 * Formula: (max(score, 0.0) + 1.0) * 10.0
 	 */
 	buildScoreBoostScript(scoreField: string): string {
 		return `

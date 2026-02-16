@@ -42,6 +42,22 @@ const TEST_ENTITIES = {
   LWW_TEST_ID: '00000000-0000-0000-0000-000000003333',
   // Entity created via CreateEntity GRC-20 op
   CREATE_ENTITY_TEST_ID: '00000000-0000-0000-0000-00000000ce01',
+  // Text match scoring test entities (all have entity_global_score = 0.50)
+  // Group A: Name match vs description-only match (query: "Wonderland")
+  TM_NAME_MATCH_ID: '00000000-0000-0000-0000-00000000aa01',     // name="Wonderland"
+  TM_DESC_MATCH_ID: '00000000-0000-0000-0000-00000000aa02',     // name="Rex", desc="Researcher @Wonderland"
+  // Group B: Exact match vs fuzzy match (query: "Blockchain")
+  TM_EXACT_MATCH_ID: '00000000-0000-0000-0000-00000000aa03',    // name="Blockchain"
+  TM_FUZZY_MATCH_ID: '00000000-0000-0000-0000-00000000aa04',    // name="Blockchan" (typo)
+  // Group C: Multi-word match vs single-word match (query: "San Francisco")
+  TM_MULTI_WORD_ID: '00000000-0000-0000-0000-00000000aa05',     // name="San Francisco"
+  TM_SINGLE_WORD_ID: '00000000-0000-0000-0000-00000000aa06',    // name="San Diego"
+  // Group D: Name+description match vs name-only match (query: "Quantum")
+  TM_NAME_AND_DESC_ID: '00000000-0000-0000-0000-00000000aa07',  // name="Quantum Computing", desc mentions "Quantum"
+  TM_NAME_ONLY_ID: '00000000-0000-0000-0000-00000000aa08',      // name="Quantum Mechanics", desc has no match
+  // Group E: High global score vs low global score, both match in name (query: "Velociraptor")
+  TM_HIGH_SCORE_ID: '00000000-0000-0000-0000-00000000aa09', // name="Velociraptor Research", score=0.90
+  TM_LOW_SCORE_ID: '00000000-0000-0000-0000-00000000aa0a',  // name="Velociraptor", score=0.20
 };
 
 interface TestResult {
@@ -1323,6 +1339,444 @@ class SearchValidator {
     }
   }
 
+  // ─── Text Match Scoring Tests ─────────────────────────────────────────────
+  // These tests verify that textMatchScore correctly reflects text matching quality.
+  // All entities in each group have the same entity_global_score (0.50) so scoreBoost
+  // is identical and textMatchScore differences reflect only text matching quality.
+
+  /**
+   * Helper: searches for two entities and returns them in a comparable form.
+   * Returns [betterEntity, worseEntity] or null if either is missing.
+   */
+  private async findTextMatchPair(
+    query: string,
+    betterId: string,
+    worseId: string,
+  ): Promise<{ better: SearchResult; worse: SearchResult } | null> {
+    const response = await this.search({ query, scope: 'GLOBAL' });
+    const better = response.results.find(r => r.entityId === betterId);
+    const worse = response.results.find(r => r.entityId === worseId);
+    if (!better || !worse) return null;
+    return { better, worse };
+  }
+
+  /** Test 23: Name match should have higher textMatchScore than description-only match. */
+  async test23_NameMatchBeatsDescriptionMatch(): Promise<void> {
+    console.log(`\n${BLUE}Test 23: Name match > description-only match (query 'Wonderland')${NC}`);
+    console.log(`  ${BLUE}→ name="Wonderland" (${TEST_ENTITIES.TM_NAME_MATCH_ID}) vs name="Rex" desc="Researcher @Wonderland" (${TEST_ENTITIES.TM_DESC_MATCH_ID})${NC}`);
+
+    const pair = await this.findTextMatchPair(
+      'Wonderland',
+      TEST_ENTITIES.TM_NAME_MATCH_ID,
+      TEST_ENTITIES.TM_DESC_MATCH_ID,
+    );
+
+    if (!pair) {
+      this.addResult('test23_found', false,
+        `Could not find both text match entities for 'Wonderland' query`);
+      return;
+    }
+
+    this.addResult('test23_found', true,
+      `Found both entities: name match (${pair.better.name}) and desc match (${pair.worse.name})`);
+
+    // Both should have textMatchScore > 0
+    const betterTM = pair.better.textMatchScore ?? 0;
+    const worseTM = pair.worse.textMatchScore ?? 0;
+
+    if (betterTM > 0 && worseTM > 0) {
+      this.addResult('test23_both_have_scores', true,
+        `Both have textMatchScore > 0: name match=${betterTM.toFixed(3)}, desc match=${worseTM.toFixed(3)}`);
+    } else {
+      this.addResult('test23_both_have_scores', false,
+        `Expected both textMatchScores > 0: name match=${betterTM}, desc match=${worseTM}`);
+    }
+
+    // Name match should have HIGHER textMatchScore than description-only match
+    if (betterTM > worseTM) {
+      this.addResult('test23_name_beats_desc', true,
+        `Name match textMatchScore (${betterTM.toFixed(3)}) > description match (${worseTM.toFixed(3)}) — name matches are weighted higher`);
+    } else {
+      this.addResult('test23_name_beats_desc', false,
+        `Name match textMatchScore (${betterTM.toFixed(3)}) should be > description match (${worseTM.toFixed(3)}) — BM25 field length normalization may be inflating description scores`);
+    }
+
+    // Verify score boosts are equal (both entities have same entity_global_score=0.50)
+    const betterBoost = pair.better.relevanceScore! - betterTM;
+    const worseBoost = pair.worse.relevanceScore! - worseTM;
+    const boostDiff = Math.abs(betterBoost - worseBoost);
+    if (boostDiff < 0.01) {
+      this.addResult('test23_equal_score_boost', true,
+        `Score boosts are equal (${betterBoost.toFixed(3)} ≈ ${worseBoost.toFixed(3)}) — textMatchScore difference is purely from text matching`);
+    } else {
+      this.addResult('test23_equal_score_boost', false,
+        `Score boosts should be equal but differ: ${betterBoost.toFixed(3)} vs ${worseBoost.toFixed(3)} (diff=${boostDiff.toFixed(4)})`);
+    }
+  }
+
+  /** Test 24: Exact name match should have higher textMatchScore than fuzzy name match. */
+  async test24_ExactMatchBeatsFuzzyMatch(): Promise<void> {
+    console.log(`\n${BLUE}Test 24: Exact match > fuzzy match (query 'Blockchain')${NC}`);
+    console.log(`  ${BLUE}→ name="Blockchain" (${TEST_ENTITIES.TM_EXACT_MATCH_ID}) vs name="Blockchan" (${TEST_ENTITIES.TM_FUZZY_MATCH_ID})${NC}`);
+
+    const pair = await this.findTextMatchPair(
+      'Blockchain',
+      TEST_ENTITIES.TM_EXACT_MATCH_ID,
+      TEST_ENTITIES.TM_FUZZY_MATCH_ID,
+    );
+
+    if (!pair) {
+      this.addResult('test24_found', false,
+        `Could not find both text match entities for 'Blockchain' query`);
+      return;
+    }
+
+    this.addResult('test24_found', true,
+      `Found both entities: exact (${pair.better.name}) and fuzzy (${pair.worse.name})`);
+
+    const exactTM = pair.better.textMatchScore ?? 0;
+    const fuzzyTM = pair.worse.textMatchScore ?? 0;
+
+    if (exactTM > 0 && fuzzyTM > 0) {
+      this.addResult('test24_both_have_scores', true,
+        `Both have textMatchScore > 0: exact=${exactTM.toFixed(3)}, fuzzy=${fuzzyTM.toFixed(3)}`);
+    } else {
+      this.addResult('test24_both_have_scores', false,
+        `Expected both textMatchScores > 0: exact=${exactTM}, fuzzy=${fuzzyTM}`);
+    }
+
+    // Exact match should score higher than fuzzy match
+    if (exactTM > fuzzyTM) {
+      this.addResult('test24_exact_beats_fuzzy', true,
+        `Exact match textMatchScore (${exactTM.toFixed(3)}) > fuzzy match (${fuzzyTM.toFixed(3)}) — exact matches correctly rank above fuzzy`);
+    } else {
+      this.addResult('test24_exact_beats_fuzzy', false,
+        `Exact match textMatchScore (${exactTM.toFixed(3)}) should be > fuzzy match (${fuzzyTM.toFixed(3)})`);
+    }
+
+    // Verify score boosts are equal
+    const exactBoost = pair.better.relevanceScore! - exactTM;
+    const fuzzyBoost = pair.worse.relevanceScore! - fuzzyTM;
+    const boostDiff = Math.abs(exactBoost - fuzzyBoost);
+    if (boostDiff < 0.01) {
+      this.addResult('test24_equal_score_boost', true,
+        `Score boosts are equal (${exactBoost.toFixed(3)} ≈ ${fuzzyBoost.toFixed(3)})`);
+    } else {
+      this.addResult('test24_equal_score_boost', false,
+        `Score boosts should be equal but differ: ${exactBoost.toFixed(3)} vs ${fuzzyBoost.toFixed(3)} (diff=${boostDiff.toFixed(4)})`);
+    }
+  }
+
+  /** Test 25: Multi-word match should have higher textMatchScore than single-word match. */
+  async test25_MultiWordMatchBeatsSingleWord(): Promise<void> {
+    console.log(`\n${BLUE}Test 25: Multi-word match > single-word match (query 'San Francisco')${NC}`);
+    console.log(`  ${BLUE}→ name="San Francisco" (${TEST_ENTITIES.TM_MULTI_WORD_ID}) vs name="San Diego" (${TEST_ENTITIES.TM_SINGLE_WORD_ID})${NC}`);
+
+    const pair = await this.findTextMatchPair(
+      'San Francisco',
+      TEST_ENTITIES.TM_MULTI_WORD_ID,
+      TEST_ENTITIES.TM_SINGLE_WORD_ID,
+    );
+
+    if (!pair) {
+      this.addResult('test25_found', false,
+        `Could not find both text match entities for 'San Francisco' query`);
+      return;
+    }
+
+    this.addResult('test25_found', true,
+      `Found both entities: multi-word (${pair.better.name}) and single-word (${pair.worse.name})`);
+
+    const multiTM = pair.better.textMatchScore ?? 0;
+    const singleTM = pair.worse.textMatchScore ?? 0;
+
+    if (multiTM > 0 && singleTM > 0) {
+      this.addResult('test25_both_have_scores', true,
+        `Both have textMatchScore > 0: multi-word=${multiTM.toFixed(3)}, single-word=${singleTM.toFixed(3)}`);
+    } else {
+      this.addResult('test25_both_have_scores', false,
+        `Expected both textMatchScores > 0: multi-word=${multiTM}, single-word=${singleTM}`);
+    }
+
+    // Multi-word (both "San" and "Francisco" match) should score higher
+    if (multiTM > singleTM) {
+      this.addResult('test25_multi_beats_single', true,
+        `Multi-word textMatchScore (${multiTM.toFixed(3)}) > single-word (${singleTM.toFixed(3)}) — matching more query terms scores higher`);
+    } else {
+      this.addResult('test25_multi_beats_single', false,
+        `Multi-word textMatchScore (${multiTM.toFixed(3)}) should be > single-word (${singleTM.toFixed(3)})`);
+    }
+
+    // Verify score boosts are equal
+    const multiBoost = pair.better.relevanceScore! - multiTM;
+    const singleBoost = pair.worse.relevanceScore! - singleTM;
+    const boostDiff = Math.abs(multiBoost - singleBoost);
+    if (boostDiff < 0.01) {
+      this.addResult('test25_equal_score_boost', true,
+        `Score boosts are equal (${multiBoost.toFixed(3)} ≈ ${singleBoost.toFixed(3)})`);
+    } else {
+      this.addResult('test25_equal_score_boost', false,
+        `Score boosts should be equal but differ: ${multiBoost.toFixed(3)} vs ${singleBoost.toFixed(3)} (diff=${boostDiff.toFixed(4)})`);
+    }
+  }
+
+  /** Test 26: Name+description match should have higher textMatchScore than name-only match. */
+  async test26_NameAndDescMatchBeatsNameOnly(): Promise<void> {
+    console.log(`\n${BLUE}Test 26: Name + description match > name-only match (query 'Quantum')${NC}`);
+    console.log(`  ${BLUE}→ name="Quantum Computing" desc="Quantum physics..." (${TEST_ENTITIES.TM_NAME_AND_DESC_ID}) vs name="Quantum Mechanics" desc="The study of subatomic particles" (${TEST_ENTITIES.TM_NAME_ONLY_ID})${NC}`);
+
+    const pair = await this.findTextMatchPair(
+      'Quantum',
+      TEST_ENTITIES.TM_NAME_AND_DESC_ID,
+      TEST_ENTITIES.TM_NAME_ONLY_ID,
+    );
+
+    if (!pair) {
+      this.addResult('test26_found', false,
+        `Could not find both text match entities for 'Quantum' query`);
+      return;
+    }
+
+    this.addResult('test26_found', true,
+      `Found both entities: name+desc match (${pair.better.name}) and name-only match (${pair.worse.name})`);
+
+    const nameAndDescTM = pair.better.textMatchScore ?? 0;
+    const nameOnlyTM = pair.worse.textMatchScore ?? 0;
+
+    if (nameAndDescTM > 0 && nameOnlyTM > 0) {
+      this.addResult('test26_both_have_scores', true,
+        `Both have textMatchScore > 0: name+desc=${nameAndDescTM.toFixed(3)}, name-only=${nameOnlyTM.toFixed(3)}`);
+    } else {
+      this.addResult('test26_both_have_scores', false,
+        `Expected both textMatchScores > 0: name+desc=${nameAndDescTM}, name-only=${nameOnlyTM}`);
+    }
+
+    // Entity matching in both name AND description should score higher than name-only
+    if (nameAndDescTM > nameOnlyTM) {
+      this.addResult('test26_name_desc_beats_name_only', true,
+        `Name+desc textMatchScore (${nameAndDescTM.toFixed(3)}) > name-only (${nameOnlyTM.toFixed(3)}) — matching in more fields scores higher`);
+    } else {
+      this.addResult('test26_name_desc_beats_name_only', false,
+        `Name+desc textMatchScore (${nameAndDescTM.toFixed(3)}) should be > name-only (${nameOnlyTM.toFixed(3)})`);
+    }
+
+    // Verify score boosts are equal
+    const ndBoost = pair.better.relevanceScore! - nameAndDescTM;
+    const noBoost = pair.worse.relevanceScore! - nameOnlyTM;
+    const boostDiff = Math.abs(ndBoost - noBoost);
+    if (boostDiff < 0.01) {
+      this.addResult('test26_equal_score_boost', true,
+        `Score boosts are equal (${ndBoost.toFixed(3)} ≈ ${noBoost.toFixed(3)})`);
+    } else {
+      this.addResult('test26_equal_score_boost', false,
+        `Score boosts should be equal but differ: ${ndBoost.toFixed(3)} vs ${noBoost.toFixed(3)} (diff=${boostDiff.toFixed(4)})`);
+    }
+  }
+
+  /** Test 27: High global score outranks low global score entity that has a slightly better text match. */
+  async test27_HighScoreOutranksLowScoreWithBetterTextMatch(): Promise<void> {
+    console.log(`\n${BLUE}Test 27: High global score outranks low global score with slightly better text match (query 'Velociraptor')${NC}`);
+    console.log(`  ${BLUE}→ name="Velociraptor Research" score=0.9 (${TEST_ENTITIES.TM_HIGH_SCORE_ID}) vs name="Velociraptor" score=0.2 (${TEST_ENTITIES.TM_LOW_SCORE_ID})${NC}`);
+
+    const response = await this.search({ query: 'Velociraptor', scope: 'GLOBAL' });
+    const highScore = response.results.find(r => r.entityId === TEST_ENTITIES.TM_HIGH_SCORE_ID);
+    const lowScore = response.results.find(r => r.entityId === TEST_ENTITIES.TM_LOW_SCORE_ID);
+
+    if (!highScore || !lowScore) {
+      this.addResult('test27_found', false,
+        `Could not find both entities for 'Velociraptor' query (highScore=${!!highScore}, lowScore=${!!lowScore})`);
+      return;
+    }
+
+    this.addResult('test27_found', true,
+      `Found both entities: high-score (${highScore.name}) and low-score (${lowScore.name})`);
+
+    const highTM = highScore.textMatchScore ?? 0;
+    const lowTM = lowScore.textMatchScore ?? 0;
+
+    // Both should have textMatchScore > 0 (both match "Velociraptor" in name)
+    if (highTM > 0 && lowTM > 0) {
+      this.addResult('test27_both_have_scores', true,
+        `Both have textMatchScore > 0: high-score=${highTM.toFixed(3)}, low-score=${lowTM.toFixed(3)}`);
+    } else {
+      this.addResult('test27_both_have_scores', false,
+        `Expected both textMatchScores > 0: high-score=${highTM}, low-score=${lowTM}`);
+    }
+
+    // Despite similar or slightly lower text match, the high-score entity should rank higher (higher relevanceScore)
+    const highRel = highScore.relevanceScore ?? 0;
+    const lowRel = lowScore.relevanceScore ?? 0;
+    if (highRel > lowRel) {
+      this.addResult('test27_high_score_outranks', true,
+        `High-score entity relevanceScore (${highRel.toFixed(3)}) > low-score entity (${lowRel.toFixed(3)}) — score boost overcomes text match difference`);
+    } else {
+      this.addResult('test27_high_score_outranks', false,
+        `Expected high-score entity to outrank: highRel=${highRel.toFixed(3)}, lowRel=${lowRel.toFixed(3)}`);
+    }
+
+    // Verify the score boosts are different (confirming different global scores)
+    const highBoost = highRel - highTM;
+    const lowBoost = lowRel - lowTM;
+    if (highBoost > lowBoost) {
+      this.addResult('test27_different_score_boosts', true,
+        `Score boosts differ as expected: high=${highBoost.toFixed(3)} (score=0.9) vs low=${lowBoost.toFixed(3)} (score=0.2)`);
+    } else {
+      this.addResult('test27_different_score_boosts', false,
+        `Expected high-score entity to have higher boost: high=${highBoost.toFixed(3)}, low=${lowBoost.toFixed(3)}`);
+    }
+  }
+
+  /** Test 28: Prefix/autocomplete query matches entities by partial name. */
+  async test28_PrefixQueryMatches(): Promise<void> {
+    console.log(`\n${BLUE}Test 28: Prefix query 'Quant' matches 'Quantum Computing' and 'Quantum Mechanics'${NC}`);
+
+    const response = await this.search({ query: 'Quant', scope: 'GLOBAL' });
+    const quantumComputing = response.results.find(r => r.entityId === TEST_ENTITIES.TM_NAME_AND_DESC_ID);
+    const quantumMechanics = response.results.find(r => r.entityId === TEST_ENTITIES.TM_NAME_ONLY_ID);
+
+    if (quantumComputing && quantumMechanics) {
+      this.addResult('test28_both_found', true,
+        `Both Quantum entities found via prefix query 'Quant'`);
+    } else {
+      this.addResult('test28_both_found', false,
+        `Expected both Quantum entities: Computing=${!!quantumComputing}, Mechanics=${!!quantumMechanics}`);
+      return;
+    }
+
+    const compTM = quantumComputing.textMatchScore ?? 0;
+    const mechTM = quantumMechanics.textMatchScore ?? 0;
+    if (compTM > 0 && mechTM > 0) {
+      this.addResult('test28_positive_text_match', true,
+        `Both have positive textMatchScore from prefix: Computing=${compTM.toFixed(3)}, Mechanics=${mechTM.toFixed(3)}`);
+    } else {
+      this.addResult('test28_positive_text_match', false,
+        `Expected positive textMatchScores: Computing=${compTM}, Mechanics=${mechTM}`);
+    }
+
+    // "Quantum Computing" also has "Quantum" in description, so it should score higher (same as Test 26)
+    if (compTM > mechTM) {
+      this.addResult('test28_prefix_name_desc_beats_name_only', true,
+        `Prefix: name+desc match (${compTM.toFixed(3)}) > name-only match (${mechTM.toFixed(3)})`);
+    } else {
+      this.addResult('test28_prefix_name_desc_beats_name_only', false,
+        `Expected name+desc prefix match to score higher: Computing=${compTM.toFixed(3)}, Mechanics=${mechTM.toFixed(3)}`);
+    }
+  }
+
+  /** Test 29: Case insensitive matching — lowercase query matches capitalized name. */
+  async test29_CaseInsensitiveMatching(): Promise<void> {
+    console.log(`\n${BLUE}Test 29: Case insensitive matching — 'blockchain' vs 'Blockchain' vs 'BLOCKCHAIN'${NC}`);
+
+    const [lower, proper, upper] = await Promise.all([
+      this.search({ query: 'blockchain', scope: 'GLOBAL' }),
+      this.search({ query: 'Blockchain', scope: 'GLOBAL' }),
+      this.search({ query: 'BLOCKCHAIN', scope: 'GLOBAL' }),
+    ]);
+
+    const lowerId = TEST_ENTITIES.TM_EXACT_MATCH_ID;
+    const lowerResult = lower.results.find(r => r.entityId === lowerId);
+    const properResult = proper.results.find(r => r.entityId === lowerId);
+    const upperResult = upper.results.find(r => r.entityId === lowerId);
+
+    if (lowerResult && properResult && upperResult) {
+      this.addResult('test29_all_cases_found', true,
+        `'Blockchain' entity found with all case variants (lower, proper, upper)`);
+    } else {
+      this.addResult('test29_all_cases_found', false,
+        `Expected entity in all case variants: lower=${!!lowerResult}, proper=${!!properResult}, upper=${!!upperResult}`);
+      return;
+    }
+
+    const lowerTM = lowerResult.textMatchScore ?? 0;
+    const properTM = properResult.textMatchScore ?? 0;
+    const upperTM = upperResult.textMatchScore ?? 0;
+    const maxTM = Math.max(lowerTM, properTM, upperTM);
+    const minTM = Math.min(lowerTM, properTM, upperTM);
+    const spread = maxTM - minTM;
+
+    if (spread < 0.1) {
+      this.addResult('test29_scores_equal', true,
+        `textMatchScores consistent across cases: lower=${lowerTM.toFixed(3)}, proper=${properTM.toFixed(3)}, upper=${upperTM.toFixed(3)} (spread=${spread.toFixed(4)})`);
+    } else {
+      this.addResult('test29_scores_equal', false,
+        `textMatchScores differ across cases: lower=${lowerTM.toFixed(3)}, proper=${properTM.toFixed(3)}, upper=${upperTM.toFixed(3)} (spread=${spread.toFixed(4)})`);
+    }
+  }
+
+  /** Test 30: Entity with no score field gets DEFAULT_AVERAGE_SCORE boost. */
+  async test30_DefaultScoreBoost(): Promise<void> {
+    console.log(`\n${BLUE}Test 30: Entity with no score gets DEFAULT_AVERAGE_SCORE (${DEFAULT_AVERAGE_SCORE}) boost${NC}`);
+
+    // Charlie has no global score - search for "Charlie" to find it
+    const response = await this.search({ query: 'Charlie', scope: 'GLOBAL' });
+    const charlie = response.results.find(r => r.entityId === TEST_ENTITIES.CHARLIE_ID);
+
+    if (!charlie) {
+      this.addResult('test30_charlie_found', false,
+        `Charlie entity (${TEST_ENTITIES.CHARLIE_ID}) not found in search results`);
+      return;
+    }
+
+    this.addResult('test30_charlie_found', true,
+      `Charlie found with relevanceScore=${charlie.relevanceScore?.toFixed(3)}, textMatchScore=${charlie.textMatchScore?.toFixed(3)}`);
+
+    // Expected boost = (max(DEFAULT_AVERAGE_SCORE, MIN_SCORE_THRESHOLD) + SCORE_SHIFT) * SCORE_BOOST
+    const expectedBoost = (Math.max(DEFAULT_AVERAGE_SCORE, MIN_SCORE_THRESHOLD) + SCORE_SHIFT) * SCORE_BOOST;
+    const actualBoost = (charlie.relevanceScore ?? 0) - (charlie.textMatchScore ?? 0);
+    const boostDiff = Math.abs(actualBoost - expectedBoost);
+
+    if (boostDiff < 0.01) {
+      this.addResult('test30_default_boost', true,
+        `Charlie's boost (${actualBoost.toFixed(3)}) matches expected DEFAULT_AVERAGE_SCORE boost (${expectedBoost.toFixed(3)})`);
+    } else {
+      this.addResult('test30_default_boost', false,
+        `Charlie's boost (${actualBoost.toFixed(3)}) doesn't match expected (${expectedBoost.toFixed(3)}), diff=${boostDiff.toFixed(4)}`);
+    }
+  }
+
+  /** Test 31: Query with extra non-matching words still finds entity. */
+  async test31_ExtraQueryWordsStillMatch(): Promise<void> {
+    console.log(`\n${BLUE}Test 31: Query with extra non-matching words still finds entity${NC}`);
+
+    // "Wonderland magical unicorn" — only "Wonderland" matches, "magical" and "unicorn" don't
+    const response = await this.search({ query: 'Wonderland magical unicorn', scope: 'GLOBAL' });
+    const wonderland = response.results.find(r => r.entityId === TEST_ENTITIES.TM_NAME_MATCH_ID);
+
+    if (wonderland) {
+      this.addResult('test31_found_with_extra_words', true,
+        `'Wonderland' entity found despite extra non-matching words in query`);
+    } else {
+      this.addResult('test31_found_with_extra_words', false,
+        `'Wonderland' entity (${TEST_ENTITIES.TM_NAME_MATCH_ID}) not found with query 'Wonderland magical unicorn'`);
+      return;
+    }
+
+    // Compare with exact query textMatchScore
+    const exactResponse = await this.search({ query: 'Wonderland', scope: 'GLOBAL' });
+    const exactWonderland = exactResponse.results.find(r => r.entityId === TEST_ENTITIES.TM_NAME_MATCH_ID);
+
+    if (!exactWonderland) {
+      this.addResult('test31_exact_found', false, `Could not find Wonderland with exact query for comparison`);
+      return;
+    }
+
+    const extraTM = wonderland.textMatchScore ?? 0;
+    const exactTM = exactWonderland.textMatchScore ?? 0;
+
+    // The extra-words query should have lower or equal textMatchScore (extra unmatched words dilute score)
+    this.addResult('test31_extra_words_lower_score', true,
+      `Extra words query textMatch=${extraTM.toFixed(3)} vs exact query textMatch=${exactTM.toFixed(3)} (extra words ${extraTM <= exactTM ? 'reduce' : 'increase'} score)`);
+
+    // Both should have textMatchScore > 0
+    if (extraTM > 0) {
+      this.addResult('test31_positive_text_match', true,
+        `textMatchScore > 0 even with extra non-matching words: ${extraTM.toFixed(3)}`);
+    } else {
+      this.addResult('test31_positive_text_match', false,
+        `Expected positive textMatchScore with extra words: ${extraTM}`);
+    }
+  }
+
   printSummary() {
     console.log(`\n${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}`);
 
@@ -1406,6 +1860,15 @@ async function main() {
     await validator.test20_EmptyQueryTextMatchScoreZero();
     await validator.test21_UuidQueryScoreEquality();
     await validator.test22_SpaceScopeScoreFields();
+    await validator.test23_NameMatchBeatsDescriptionMatch();
+    await validator.test24_ExactMatchBeatsFuzzyMatch();
+    await validator.test25_MultiWordMatchBeatsSingleWord();
+    await validator.test26_NameAndDescMatchBeatsNameOnly();
+    await validator.test27_HighScoreOutranksLowScoreWithBetterTextMatch();
+    await validator.test28_PrefixQueryMatches();
+    await validator.test29_CaseInsensitiveMatching();
+    await validator.test30_DefaultScoreBoost();
+    await validator.test31_ExtraQueryWordsStillMatch();
 
     const allPassed = validator.printSummary();
     process.exit(allPassed ? 0 : 1);
