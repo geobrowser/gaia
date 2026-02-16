@@ -469,7 +469,7 @@ export class OpenSearchClient implements SearchClient {
 							},
 						},
 					},
-					],
+				],
 				minimum_should_match: 1,
 			},
 		}
