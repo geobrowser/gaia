@@ -98,6 +98,24 @@ async fn main() -> Result<()> {
     // Entity created via CreateEntity op (for testing CreateEntity handling)
     let create_entity_test_id = Uuid::parse_str("00000000-0000-0000-0000-00000000ce01").unwrap();
 
+    // Text match scoring test entities (all get the same entity_global_score so scoreBoost is equal)
+    // Group A: Name match vs description-only match (query: "Wonderland")
+    let tm_name_match_id = Uuid::parse_str("00000000-0000-0000-0000-00000000aa01").unwrap();
+    let tm_desc_match_id = Uuid::parse_str("00000000-0000-0000-0000-00000000aa02").unwrap();
+    // Group B: Exact match vs fuzzy match (query: "Blockchain")
+    let tm_exact_match_id = Uuid::parse_str("00000000-0000-0000-0000-00000000aa03").unwrap();
+    let tm_fuzzy_match_id = Uuid::parse_str("00000000-0000-0000-0000-00000000aa04").unwrap();
+    // Group C: Multi-word match vs single-word match (query: "San Francisco")
+    let tm_multi_word_id = Uuid::parse_str("00000000-0000-0000-0000-00000000aa05").unwrap();
+    let tm_single_word_id = Uuid::parse_str("00000000-0000-0000-0000-00000000aa06").unwrap();
+    // Group D: Name+description match vs name-only match (query: "Quantum")
+    let tm_name_and_desc_id = Uuid::parse_str("00000000-0000-0000-0000-00000000aa07").unwrap();
+    let tm_name_only_id = Uuid::parse_str("00000000-0000-0000-0000-00000000aa08").unwrap();
+    // Group E: High global score vs low global score, both match in name (query: "Velociraptor")
+    // Both have "Velociraptor" in name, but low-score entity is an exact single-word name match
+    // (slightly higher BM25 score). High score boost should overcome the small text match difference.
+    let tm_high_score_id = Uuid::parse_str("00000000-0000-0000-0000-00000000aa09").unwrap();
+    let tm_low_score_id = Uuid::parse_str("00000000-0000-0000-0000-00000000aa0a").unwrap();
     info!("Test Space ID: {}", test_space);
     info!("Person Type ID: {}", person_type_id);
     info!("Organization Type ID: {}", org_type_id);
@@ -131,7 +149,12 @@ async fn main() -> Result<()> {
     info!("  Delete Eve ID: {} (will be deleted then updated)", delete_eve_id);
     info!("\nCreateEntity test:");
     info!("  CreateEntity Test ID: {} (created via CreateEntity op)", create_entity_test_id);
-
+    info!("\nText match scoring test entities:");
+    info!("  Group A (query 'Wonderland'): name match {} vs desc match {}", tm_name_match_id, tm_desc_match_id);
+    info!("  Group B (query 'Blockchain'): exact {} vs fuzzy {}", tm_exact_match_id, tm_fuzzy_match_id);
+    info!("  Group C (query 'San Francisco'): multi-word {} vs single-word {}", tm_multi_word_id, tm_single_word_id);
+    info!("  Group D (query 'Quantum'): name+desc {} vs name-only {}", tm_name_and_desc_id, tm_name_only_id);
+    info!("  Group E (query 'Velociraptor'): high-score {} vs low-score {}", tm_high_score_id, tm_low_score_id);
     // 1. Create Person type entity
     info!("\n1. Creating Person type entity...");
     let person_type_payload = edits::create_entity_edit(
@@ -395,6 +418,126 @@ async fn main() -> Result<()> {
         .send(&edits_topic, None, alice_low_org_delete_payload)
         .await?;
 
+    // 7.5. Create text match scoring test entities
+    // All entities in each group have the SAME score (0.50) so textMatchScore comparisons
+    // reflect only text matching quality, not score boost differences.
+    info!("7.5. Creating text match scoring test entities...");
+
+    // Group A: Name match vs description-only match (query: "Wonderland")
+    // tm_name_match: name IS the query → should score highest
+    // tm_desc_match: name is unrelated, query appears in short description → should score lower
+    let tm_name_match_payload = edits::create_entity_edit(
+        "Create TM Name Match (Wonderland)",
+        test_space,
+        tm_name_match_id,
+        Some("Wonderland"),
+        Some("A magical place in fiction"),
+        None,
+    )?;
+    producer.send(&edits_topic, None, tm_name_match_payload).await?;
+
+    let tm_desc_match_payload = edits::create_entity_edit(
+        "Create TM Desc Match (Rex)",
+        test_space,
+        tm_desc_match_id,
+        Some("Rex"),
+        Some("Researcher @Wonderland"),
+        None,
+    )?;
+    producer.send(&edits_topic, None, tm_desc_match_payload).await?;
+
+    // Group B: Exact match vs fuzzy match (query: "Blockchain")
+    // tm_exact_match: name exactly matches query → should score highest
+    // tm_fuzzy_match: name has typo, matches only via fuzziness → should score lower
+    let tm_exact_match_payload = edits::create_entity_edit(
+        "Create TM Exact Match (Blockchain)",
+        test_space,
+        tm_exact_match_id,
+        Some("Blockchain"),
+        Some("A distributed ledger technology"),
+        None,
+    )?;
+    producer.send(&edits_topic, None, tm_exact_match_payload).await?;
+
+    let tm_fuzzy_match_payload = edits::create_entity_edit(
+        "Create TM Fuzzy Match (Blockchan)",
+        test_space,
+        tm_fuzzy_match_id,
+        Some("Blockchan"),
+        Some("A distributed ledger technology"),
+        None,
+    )?;
+    producer.send(&edits_topic, None, tm_fuzzy_match_payload).await?;
+
+    // Group C: Multi-word match vs single-word match (query: "San Francisco")
+    // tm_multi_word: name matches both words "San" and "Francisco" → should score highest
+    // tm_single_word: name matches only "San" → should score lower
+    let tm_multi_word_payload = edits::create_entity_edit(
+        "Create TM Multi Word (San Francisco)",
+        test_space,
+        tm_multi_word_id,
+        Some("San Francisco"),
+        Some("A city in California"),
+        None,
+    )?;
+    producer.send(&edits_topic, None, tm_multi_word_payload).await?;
+
+    let tm_single_word_payload = edits::create_entity_edit(
+        "Create TM Single Word (San Diego)",
+        test_space,
+        tm_single_word_id,
+        Some("San Diego"),
+        Some("A city in southern California"),
+        None,
+    )?;
+    producer.send(&edits_topic, None, tm_single_word_payload).await?;
+
+    // Group D: Name+description match vs name-only match (query: "Quantum")
+    // tm_name_and_desc: name matches AND description also matches → should score highest
+    // tm_name_only: name matches but description has no matching terms → should score lower
+    let tm_name_and_desc_payload = edits::create_entity_edit(
+        "Create TM Name+Desc (Quantum Computing)",
+        test_space,
+        tm_name_and_desc_id,
+        Some("Quantum Computing"),
+        Some("Quantum physics applied to computation"),
+        None,
+    )?;
+    producer.send(&edits_topic, None, tm_name_and_desc_payload).await?;
+
+    let tm_name_only_payload = edits::create_entity_edit(
+        "Create TM Name Only (Quantum Mechanics)",
+        test_space,
+        tm_name_only_id,
+        Some("Quantum Mechanics"),
+        Some("The study of subatomic particles"),
+        None,
+    )?;
+    producer.send(&edits_topic, None, tm_name_only_payload).await?;
+
+    // Group E: High global score vs low global score, both match "Velociraptor" in name
+    // tm_high_score: multi-word name containing query (slightly lower BM25 due to longer name)
+    // tm_low_score: exact single-word name match (slightly higher BM25), but very low global score
+    let tm_high_score_payload = edits::create_entity_edit(
+        "Create TM High Score (Velociraptor Research)",
+        test_space,
+        tm_high_score_id,
+        Some("Velociraptor Research"),
+        Some("Academic center for dinosaur studies"),
+        None,
+    )?;
+    producer.send(&edits_topic, None, tm_high_score_payload).await?;
+
+    let tm_low_score_payload = edits::create_entity_edit(
+        "Create TM Low Score (Velociraptor)",
+        test_space,
+        tm_low_score_id,
+        Some("Velociraptor"),
+        Some("A small feathered dinosaur"),
+        None,
+    )?;
+    producer.send(&edits_topic, None, tm_low_score_payload).await?;
+
     // 8. Generate scores with varying values (Charlie intentionally excluded)
     info!("8. Generating scores with varying entity and space scores (Charlie has no global score)...");
     let score_payload = scores::create_mixed_score_batch(
@@ -409,6 +552,18 @@ async fn main() -> Result<()> {
             (alice_below_threshold_id, 0.25), // Below threshold
             // Other entities
             (bob_id, 0.75),
+            // Text match scoring test entities (all same score for fair textMatchScore comparison)
+            (tm_name_match_id, 0.50),
+            (tm_desc_match_id, 0.50),
+            (tm_exact_match_id, 0.50),
+            (tm_fuzzy_match_id, 0.50),
+            (tm_multi_word_id, 0.50),
+            (tm_single_word_id, 0.50),
+            (tm_name_and_desc_id, 0.50),
+            (tm_name_only_id, 0.50),
+            // Group E: Different scores to test score boost outranking text match
+            (tm_high_score_id, 0.90),   // High score, "Velociraptor Research"
+            (tm_low_score_id, 0.20),    // Low score, "Velociraptor"
             (org_id, 0.90),
             (person_type_id, 0.70),
             (org_type_id, 0.65),
@@ -537,8 +692,9 @@ async fn main() -> Result<()> {
     info!("    • Other Alice entities, Bob, Charlie: Single type (Person)");
     info!("    • Acme Corp: Single type (Organization)");
     info!("  - 15 type relation events (11 creates, 2 deletes, 1 recreate for testing typeIds)");
-    info!("  - 11 entity scores (including negative and zero)");
+    info!("  - 21 entity scores (including negative and zero)");
     info!("  - Charlie has NO global score (tests default score behavior)");
+    info!("  - 10 text match scoring test entities (8 at score 0.50, 2 with different scores)");
     info!("  - 1 space score");
     info!("  - 7 perspective scores");
     info!("\nScore ranges:");
@@ -675,8 +831,9 @@ async fn main() -> Result<()> {
     info!("    • Other Alice entities, Bob, Charlie: Single type (Person)");
     info!("    • Acme Corp: Single type (Organization)");
     info!("  - 15 type relation events (11 creates, 2 deletes, 1 recreate for testing typeIds)");
-    info!("  - 11 entity scores (including negative and zero)");
+    info!("  - 21 entity scores (including negative and zero)");
     info!("  - Charlie has NO global score (tests default score behavior)");
+    info!("  - 10 text match scoring test entities (8 at score 0.50, 2 with different scores)");
     info!("  - 1 space score");
     info!("  - 7 perspective scores");
     info!("  - 3 property operation test cases:");
