@@ -55,7 +55,7 @@ export const SCORE_BOOST = 10.0
 
 /**
  * Boost value for name field in match_phrase_prefix queries.
- * Strongly boosts documents where the name contains the query phrase.
+ * Strongly boosts documents where the query matches as a phrase prefix in the name.
  *
  * Set to 5.0 (vs DESCRIPTION_PREFIX_BOOST=1.5) to ensure name matches consistently
  * outscore description-only matches. A lower ratio (e.g. 2.0/1.5=1.33x) is insufficient
@@ -66,7 +66,9 @@ export const NAME_PREFIX_BOOST = 5.0
 
 /**
  * Boost value for description field in match_phrase_prefix queries.
- * Moderately boosts documents where the description contains the query phrase.
+ * Moderately boosts documents where the query matches as a phrase prefix in the description.
+ * Matches any position in the description, not just the start of the string — e.g. query
+ * "Quant" matches "Applied Quantum Physics" because a word starts with the prefix.
  */
 export const DESCRIPTION_PREFIX_BOOST = 1.5
 
