@@ -84,9 +84,13 @@ export function canonicalRequestLogging() {
 
 			const status = c.res.status
 			const duration = Date.now() - startTime
+			const graphqlOperationName = c.get("graphqlOperationName") as string | undefined
 
 			span.setAttribute("http.status_code", status)
 			span.setAttribute("http.response_time_ms", duration)
+			if (graphqlOperationName) {
+				span.setAttribute("graphql.operation_name", graphqlOperationName)
+			}
 
 			if (status >= 400) {
 				span.setStatus({code: SpanStatusCode.ERROR, message: `HTTP ${status}`})
@@ -99,6 +103,7 @@ export function canonicalRequestLogging() {
 				path,
 				status,
 				durationMs: duration,
+				...(graphqlOperationName ? {graphqlOperationName} : {}),
 			})
 		} catch (error) {
 			const duration = Date.now() - startTime

@@ -138,6 +138,10 @@ Tasks:
 - For top 3 offenders per cycle, run execution-plan analysis and apply targeted query/index fixes.
 - Enforce pagination and query-shape limits on high-cost endpoints.
 
+Execution notes (2026-02-17):
+- Added a concrete Phase 2 SQL offender query pack and weekly triage template in `api/docs/database-configuration.md`.
+- Added ingress dashboard/rules panels for failure-class proxy rates and top routes by 5xx/503 to speed initial offender localization.
+
 Implementation files:
 - `api/docs/database-configuration.md` (operational query pack updates)
 - `api/src/proposals/router.ts` (high-traffic DB-heavy paths)

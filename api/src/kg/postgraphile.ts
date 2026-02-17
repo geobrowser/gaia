@@ -20,6 +20,8 @@ export type GraphQLServerContext = {
 		spanId: string
 		traceFlags: number
 	}
+	requestId?: string
+	setGraphqlOperationName?: (operationName: string) => void
 }
 
 // Create PostgreSQL pool with explicit configuration to prevent connection exhaustion

@@ -20,6 +20,7 @@ import {createVersionedRouter} from "./src/versioned"
 type AppEnv = {
 	Variables: {
 		requestId: string
+		graphqlOperationName?: string
 		traceContext?: {
 			traceId: string
 			spanId: string
@@ -88,13 +89,17 @@ log.info("Proposals routes enabled")
 app.get("/", swaggerUI({url: "/openapi"}))
 
 app.use("/graphql", async (c) => {
+	const requestId = c.get("requestId") || "unknown"
 	try {
 		return await graphqlServer.fetch(c.req.raw, {
 			traceContext: c.get("traceContext"),
+			requestId,
+			setGraphqlOperationName: (operationName: string) => {
+				c.set("graphqlOperationName", operationName)
+			},
 		})
 	} catch (error) {
 		if (isPoolConnectTimeout(error)) {
-			const requestId = c.get("requestId") || "unknown"
 			log.warn("GraphQL overloaded: pool checkout timeout", {
 				requestId,
 				path: c.req.path,
