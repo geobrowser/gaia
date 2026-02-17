@@ -1,4 +1,6 @@
 import SimplifyInflectionPlugin from "@graphile-contrib/pg-simplify-inflector"
+import * as Sentry from "@sentry/node"
+import {print} from "graphql"
 import {createYoga, type Plugin, useExecutionCancellation} from "graphql-yoga"
 import type {PoolClient} from "pg"
 import {Pool} from "pg"
@@ -109,8 +111,34 @@ const postgraphileSchema = await createPostGraphileSchema(pgPool, ["public"], po
  */
 function usePgClient(pool: Pool): Plugin<{pgClient: PoolClient}> {
 	return {
-		async onExecute({extendContext}) {
-			const pgClient = await pool.connect()
+		async onExecute({extendContext, args}) {
+			const operationName = args.operationName || "anonymous"
+			const query = print(args.document).slice(0, 2000)
+
+			let pgClient: PoolClient
+			try {
+				pgClient = await pool.connect()
+			} catch (error) {
+				const err = error instanceof Error ? error : new Error(String(error))
+				log.error("PostGraphile pool connect error", {
+					error: err.message,
+					operationName,
+					query,
+				})
+
+				Sentry.captureException(err, {
+					tags: {
+						"graphql.operation_name": operationName,
+					},
+					extra: {
+						query,
+						variables: args.variableValues,
+					},
+				})
+
+				throw error
+			}
+
 			extendContext({pgClient})
 
 			return {
@@ -131,7 +159,7 @@ function usePgClient(pool: Pool): Plugin<{pgClient: PoolClient}> {
 }
 
 // Shared plugins for GraphQL server
-const sharedPlugins = [usePgClient(pgPool), useExecutionCancellation(), useGraphQLInstrumentation()]
+const sharedPlugins = [useGraphQLInstrumentation(), usePgClient(pgPool), useExecutionCancellation()]
 
 // GraphQL server without uuidScalarPlugin
 export const graphqlServer = createYoga<GraphQLServerContext>({
