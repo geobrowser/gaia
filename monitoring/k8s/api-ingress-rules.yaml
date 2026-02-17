@@ -23,6 +23,12 @@ spec:
             /
             clamp_min(api:ingress_requests_per_second:rate5m, 1)
 
+        - record: api:ingress_status_requests_per_second:rate5m
+          expr: |
+            sum by (status) (
+              rate(nginx_ingress_controller_requests{host="testnet-api.geobrowser.io"}[5m])
+            )
+
         - record: api:ingress_p95_latency_seconds:5m
           expr: |
             histogram_quantile(

@@ -6,6 +6,7 @@ import type {PoolClient} from "pg"
 import {Pool} from "pg"
 import {createPostGraphileSchema} from "postgraphile"
 import ConnectionFilterPlugin from "postgraphile-plugin-connection-filter"
+import {classifyDbFailure} from "../services/dbFailures"
 import {log} from "../services/telemetry"
 import EntitySpaceFilterPlugin from "./entitySpaceFilterPlugin"
 import {useGraphQLInstrumentation} from "./instrumentationPlugin"
@@ -42,11 +43,24 @@ const pgPool = new Pool({
 	allowExitOnIdle: true,
 })
 
+export function getGraphqlPoolStats() {
+	return {
+		totalConnections: pgPool.totalCount,
+		idleConnections: pgPool.idleCount,
+		waitingCount: pgPool.waitingCount,
+		maxConnections: pgPool.options.max!,
+	}
+}
+
 // Without this handler, background connection errors (PgBouncer closing idle connections,
 // network blips) become unhandled events. The pool doesn't remove the dead connection,
 // so subsequent connect() calls can check out a stale client that fails during query execution.
 pgPool.on("error", (err) => {
-	log.error("PostGraphile pool error", {error: String(err)})
+	log.error("PostGraphile pool error", {
+		error: String(err),
+		failureClass: classifyDbFailure(err),
+		poolStats: getGraphqlPoolStats(),
+	})
 })
 
 // Base PostGraphile options (without uuidScalarPlugin)
@@ -120,19 +134,26 @@ function usePgClient(pool: Pool): Plugin<{pgClient: PoolClient}> {
 				pgClient = await pool.connect()
 			} catch (error) {
 				const err = error instanceof Error ? error : new Error(String(error))
+				const poolStats = getGraphqlPoolStats()
+				const failureClass = classifyDbFailure(err)
 				log.error("PostGraphile pool connect error", {
 					error: err.message,
+					failureClass,
 					operationName,
 					query,
+					poolStats,
 				})
 
 				Sentry.captureException(err, {
 					tags: {
 						"graphql.operation_name": operationName,
+						"db.failure_class": failureClass,
 					},
 					extra: {
 						query,
 						variables: args.variableValues,
+						poolStats,
+						failureClass,
 					},
 				})
 

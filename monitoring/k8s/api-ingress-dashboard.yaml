@@ -13,7 +13,7 @@ data:
       "title": "API Ingress Observability",
       "uid": "api-ingress-observability",
       "schemaVersion": 39,
-      "version": 1,
+      "version": 3,
       "timezone": "browser",
       "refresh": "30s",
       "time": {
@@ -245,6 +245,99 @@ data:
             "tooltip": {
               "mode": "multi"
             }
+          }
+        },
+        {
+          "id": 6,
+          "type": "timeseries",
+          "title": "Ingress Response Codes (RPS by Status)",
+          "gridPos": {
+            "h": 8,
+            "w": 24,
+            "x": 0,
+            "y": 24
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "api:ingress_status_requests_per_second:rate5m",
+              "legendFormat": "{{status}}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "reqps"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "table",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi"
+            }
+          }
+        },
+        {
+          "id": 7,
+          "type": "table",
+          "title": "Ingress Response Codes (24h Totals)",
+          "gridPos": {
+            "h": 8,
+            "w": 24,
+            "x": 0,
+            "y": 32
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum by (status) (increase(nginx_ingress_controller_requests{host=\"testnet-api.geobrowser.io\"}[24h]))",
+              "format": "table",
+              "instant": true,
+              "legendFormat": "{{status}}"
+            }
+          ],
+          "transformations": [
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": {
+                  "Time": true,
+                  "Value #A": false,
+                  "status": false
+                },
+                "indexByName": {
+                  "status": 0,
+                  "Value #A": 1
+                },
+                "renameByName": {
+                  "Value #A": "responses_24h"
+                }
+              }
+            }
+          ],
+          "options": {
+            "showHeader": true,
+            "footer": {
+              "show": false
+            }
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "none"
+            },
+            "overrides": []
           }
         }
       ]

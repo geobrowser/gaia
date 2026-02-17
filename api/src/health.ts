@@ -1,5 +1,6 @@
 import {Hono} from "hono"
 import {describeRoute} from "hono-openapi"
+import {getGraphqlPoolStats} from "./kg/postgraphile"
 import {db, getPoolStats} from "./services/storage/storage"
 
 const health = new Hono()
@@ -218,6 +219,59 @@ health.get(
 )
 
 // Pool-specific metrics endpoint
+health.get(
+	"/graphql-pool",
+	describeRoute({
+		tags: ["Health"],
+		summary: "GraphQL connection pool metrics",
+		description: "Returns PostGraphile connection pool statistics and status",
+		responses: {
+			200: {
+				description: "GraphQL pool statistics",
+				content: {
+					"application/json": {
+						schema: {
+							type: "object",
+							properties: {
+								totalConnections: {type: "integer"},
+								idleConnections: {type: "integer"},
+								activeConnections: {type: "integer"},
+								waitingCount: {type: "integer"},
+								maxConnections: {type: "integer"},
+								utilizationPercent: {type: "integer"},
+								status: {type: "string", enum: ["ok", "warning", "critical"]},
+								timestamp: {type: "string", format: "date-time"},
+							},
+							required: [
+								"totalConnections",
+								"idleConnections",
+								"activeConnections",
+								"waitingCount",
+								"maxConnections",
+								"utilizationPercent",
+								"status",
+								"timestamp",
+							],
+						},
+					},
+				},
+			},
+		},
+	}),
+	(c) => {
+		const poolStats = getGraphqlPoolStats()
+		const utilizationPercent = Math.round((poolStats.totalConnections / poolStats.maxConnections) * 100)
+
+		return c.json({
+			...poolStats,
+			activeConnections: poolStats.totalConnections - poolStats.idleConnections,
+			utilizationPercent,
+			status: utilizationPercent > 85 ? "critical" : utilizationPercent > 70 ? "warning" : "ok",
+			timestamp: new Date().toISOString(),
+		})
+	},
+)
+
 health.get(
 	"/pool",
 	describeRoute({

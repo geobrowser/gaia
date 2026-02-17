@@ -10,6 +10,7 @@
 
 import {SpanStatusCode, trace} from "@opentelemetry/api"
 import type {Context, Next} from "hono"
+import {detectDbFailureClass} from "../services/dbFailures"
 import {log} from "../services/telemetry"
 
 /**
@@ -101,9 +102,13 @@ export function canonicalRequestLogging() {
 			})
 		} catch (error) {
 			const duration = Date.now() - startTime
+			const failureClass = detectDbFailureClass(error)
 
 			span.setStatus({code: SpanStatusCode.ERROR, message: "error"})
 			span.setAttribute("http.response_time_ms", duration)
+			if (failureClass) {
+				span.setAttribute("db.failure_class", failureClass)
+			}
 
 			// Canonical ERROR log
 			log.error(`${method} ${path} failed`, {
@@ -111,6 +116,7 @@ export function canonicalRequestLogging() {
 				method,
 				path,
 				durationMs: duration,
+				...(failureClass ? {failureClass} : {}),
 				error: error instanceof Error ? error.message : String(error),
 			})
 

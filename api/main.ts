@@ -9,6 +9,7 @@ import {canonicalRequestLogging, requestId} from "./src/middleware/requestLoggin
 import {createProfileRouter} from "./src/profile"
 import {createProposalsRouter} from "./src/proposals"
 import {createSearchRouter} from "./src/search"
+import {isPoolConnectTimeout} from "./src/services/dbFailures"
 import {uploadEdit, uploadFile} from "./src/services/ipfs"
 import {runtime} from "./src/services/runtime"
 import {OpenSearchClient} from "./src/services/search"
@@ -87,9 +88,33 @@ log.info("Proposals routes enabled")
 app.get("/", swaggerUI({url: "/openapi"}))
 
 app.use("/graphql", async (c) => {
-	return graphqlServer.fetch(c.req.raw, {
-		traceContext: c.get("traceContext"),
-	})
+	try {
+		return await graphqlServer.fetch(c.req.raw, {
+			traceContext: c.get("traceContext"),
+		})
+	} catch (error) {
+		if (isPoolConnectTimeout(error)) {
+			const requestId = c.get("requestId") || "unknown"
+			log.warn("GraphQL overloaded: pool checkout timeout", {
+				requestId,
+				path: c.req.path,
+				method: c.req.method,
+			})
+
+			const headers = new Headers({
+				"content-type": "application/json",
+				"retry-after": "1",
+				"x-request-id": requestId,
+			})
+
+			return new Response(JSON.stringify({error: "database temporarily overloaded", requestId}), {
+				status: 503,
+				headers,
+			})
+		}
+
+		throw error
+	}
 })
 
 app.post(
