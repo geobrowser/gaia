@@ -165,6 +165,92 @@ ORDER BY mean_exec_time DESC
 LIMIT 15;
 ```
 
+## Phase 2 Offender Query Pack
+
+Use this query pack weekly to identify slow SQL offenders by both total impact and tail behavior.
+
+### 1) Top queries by total DB time (primary ranking)
+
+```sql
+SELECT
+  queryid,
+  calls,
+  round(total_exec_time::numeric, 0) AS total_ms,
+  round(mean_exec_time::numeric, 2) AS mean_ms,
+  round(max_exec_time::numeric, 2) AS max_ms,
+  round((total_exec_time / NULLIF(calls, 0))::numeric, 2) AS avg_ms,
+  left(regexp_replace(query, '\\s+', ' ', 'g'), 180) AS query
+FROM pg_stat_statements
+ORDER BY total_exec_time DESC
+LIMIT 25;
+```
+
+### 2) Tail outliers (high max latency with enough volume)
+
+```sql
+SELECT
+  queryid,
+  calls,
+  round(mean_exec_time::numeric, 2) AS mean_ms,
+  round(max_exec_time::numeric, 2) AS max_ms,
+  round(total_exec_time::numeric, 0) AS total_ms,
+  left(regexp_replace(query, '\\s+', ' ', 'g'), 180) AS query
+FROM pg_stat_statements
+WHERE calls >= 50
+ORDER BY max_exec_time DESC
+LIMIT 25;
+```
+
+### 3) Lock-sensitive offenders (often hidden by averages)
+
+```sql
+SELECT
+  pid,
+  now() - query_start AS age,
+  wait_event_type,
+  wait_event,
+  state,
+  left(regexp_replace(query, '\\s+', ' ', 'g'), 180) AS query
+FROM pg_stat_activity
+WHERE datname = current_database()
+  AND state = 'active'
+  AND wait_event_type = 'Lock'
+ORDER BY age DESC
+LIMIT 25;
+```
+
+### 4) Correlate offenders to API operations
+
+Use `queryid` and statement snippet from the queries above with API/Sentry context:
+
+- GraphQL operation names and request IDs are logged in:
+  - `api/src/kg/postgraphile.ts`
+  - `api/src/middleware/requestLogging.ts`
+- Failure-class tags in Sentry include:
+  - `db.failure_class`
+  - `graphql.operation_name`
+
+Recommended triage workflow:
+
+1. Rank top 10 by `total_exec_time`.
+2. For each offender, collect top GraphQL operation names/request IDs in the same time window.
+3. Run `EXPLAIN (ANALYZE, BUFFERS)` for the highest-impact 3 offenders.
+4. Prioritize fixes by total DB time share first, then tail (`max_exec_time`).
+
+### 5) Weekly output template (copy into incident or planning docs)
+
+| Rank | queryid | total_ms | calls | mean_ms | max_ms | Operation(s) | Owner | Action |
+|------|---------|----------|-------|---------|--------|--------------|-------|--------|
+| 1 | ... | ... | ... | ... | ... | ... | ... | Index/query rewrite |
+| 2 | ... | ... | ... | ... | ... | ... | ... | Pagination/shape limit |
+| 3 | ... | ... | ... | ... | ... | ... | ... | Plan analysis + migration |
+
+### Grafana support notes
+
+- Current Grafana/Prometheus setup in this repo tracks ingress and route-level pressure proxies.
+- Use dashboard panels to quickly narrow suspect routes, then run SQL query pack commands above for true SQL offenders.
+- If you want direct SQL-fingerprint panels in Grafana, add PostgreSQL exporter metrics for `pg_stat_statements` and create recording rules keyed by `queryid`.
+
 ## Troubleshooting
 
 ### Check for Connection Issues

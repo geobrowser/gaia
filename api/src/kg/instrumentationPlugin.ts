@@ -79,6 +79,8 @@ export function useGraphQLInstrumentation(): Plugin {
 			}
 
 			const operationLabel = getOperationLabel(args)
+			const ctxWithSetter = args.contextValue as {setGraphqlOperationName?: (operationName: string) => void}
+			ctxWithSetter.setGraphqlOperationName?.(operationLabel)
 			const query = print(args.document)
 			const variables = args.variableValues ? JSON.stringify(args.variableValues).slice(0, 2000) : undefined
 

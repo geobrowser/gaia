@@ -10,6 +10,7 @@
 
 import {SpanStatusCode, trace} from "@opentelemetry/api"
 import type {Context, Next} from "hono"
+import {detectDbFailureClass} from "../services/dbFailures"
 import {log} from "../services/telemetry"
 
 /**
@@ -83,9 +84,13 @@ export function canonicalRequestLogging() {
 
 			const status = c.res.status
 			const duration = Date.now() - startTime
+			const graphqlOperationName = c.get("graphqlOperationName") as string | undefined
 
 			span.setAttribute("http.status_code", status)
 			span.setAttribute("http.response_time_ms", duration)
+			if (graphqlOperationName) {
+				span.setAttribute("graphql.operation_name", graphqlOperationName)
+			}
 
 			if (status >= 400) {
 				span.setStatus({code: SpanStatusCode.ERROR, message: `HTTP ${status}`})
@@ -98,12 +103,17 @@ export function canonicalRequestLogging() {
 				path,
 				status,
 				durationMs: duration,
+				...(graphqlOperationName ? {graphqlOperationName} : {}),
 			})
 		} catch (error) {
 			const duration = Date.now() - startTime
+			const failureClass = detectDbFailureClass(error)
 
 			span.setStatus({code: SpanStatusCode.ERROR, message: "error"})
 			span.setAttribute("http.response_time_ms", duration)
+			if (failureClass) {
+				span.setAttribute("db.failure_class", failureClass)
+			}
 
 			// Canonical ERROR log
 			log.error(`${method} ${path} failed`, {
@@ -111,6 +121,7 @@ export function canonicalRequestLogging() {
 				method,
 				path,
 				durationMs: duration,
+				...(failureClass ? {failureClass} : {}),
 				error: error instanceof Error ? error.message : String(error),
 			})
 
