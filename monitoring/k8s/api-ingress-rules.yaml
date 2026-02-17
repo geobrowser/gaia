@@ -31,3 +31,45 @@ spec:
                 rate(nginx_ingress_controller_request_duration_seconds_bucket{host="testnet-api.geobrowser.io"}[5m])
               )
             )
+
+        - record: api:ingress_p50_latency_seconds:5m
+          expr: |
+            histogram_quantile(
+              0.50,
+              sum by (le) (
+                rate(nginx_ingress_controller_request_duration_seconds_bucket{host="testnet-api.geobrowser.io"}[5m])
+              )
+            )
+
+        - record: api:ingress_p75_latency_seconds:5m
+          expr: |
+            histogram_quantile(
+              0.75,
+              sum by (le) (
+                rate(nginx_ingress_controller_request_duration_seconds_bucket{host="testnet-api.geobrowser.io"}[5m])
+              )
+            )
+
+        - record: api:ingress_p99_latency_seconds:5m
+          expr: |
+            histogram_quantile(
+              0.99,
+              sum by (le) (
+                rate(nginx_ingress_controller_request_duration_seconds_bucket{host="testnet-api.geobrowser.io"}[5m])
+              )
+            )
+
+        - record: api:ingress_route_requests_per_second:rate5m
+          expr: |
+            sum by (path) (
+              rate(nginx_ingress_controller_requests{host="testnet-api.geobrowser.io"}[5m])
+            )
+
+        - record: api:ingress_route_p99_latency_seconds:5m
+          expr: |
+            histogram_quantile(
+              0.99,
+              sum by (le, path) (
+                rate(nginx_ingress_controller_request_duration_seconds_bucket{host="testnet-api.geobrowser.io"}[5m])
+              )
+            )

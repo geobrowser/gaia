@@ -1,0 +1,251 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: api-ingress-observability-dashboard
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+    app: kube-prometheus-stack-grafana
+    release: kube-prometheus-stack
+data:
+  api-ingress-observability.json: |-
+    {
+      "title": "API Ingress Observability",
+      "uid": "api-ingress-observability",
+      "schemaVersion": 39,
+      "version": 1,
+      "timezone": "browser",
+      "refresh": "30s",
+      "time": {
+        "from": "now-6h",
+        "to": "now"
+      },
+      "templating": {
+        "list": [
+          {
+            "name": "datasource",
+            "type": "datasource",
+            "query": "prometheus",
+            "current": {
+              "selected": true,
+              "text": "Prometheus",
+              "value": "Prometheus"
+            }
+          }
+        ]
+      },
+      "panels": [
+        {
+          "id": 1,
+          "type": "timeseries",
+          "title": "Ingress Request Rate (RPS)",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 0
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "api:ingress_requests_per_second:rate5m",
+              "legendFormat": "total"
+            },
+            {
+              "refId": "B",
+              "expr": "api:ingress_5xx_per_second:rate5m",
+              "legendFormat": "5xx"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "reqps"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi"
+            }
+          }
+        },
+        {
+          "id": 2,
+          "type": "timeseries",
+          "title": "Ingress 5xx Ratio",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 0
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "api:ingress_5xx_ratio:rate5m",
+              "legendFormat": "5xx ratio"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "min": 0,
+              "max": 1
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi"
+            }
+          }
+        },
+        {
+          "id": 3,
+          "type": "timeseries",
+          "title": "Ingress Latency Percentiles (p50/p75/p95/p99)",
+          "gridPos": {
+            "h": 8,
+            "w": 24,
+            "x": 0,
+            "y": 8
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "api:ingress_p50_latency_seconds:5m",
+              "legendFormat": "p50"
+            },
+            {
+              "refId": "B",
+              "expr": "api:ingress_p75_latency_seconds:5m",
+              "legendFormat": "p75"
+            },
+            {
+              "refId": "C",
+              "expr": "api:ingress_p95_latency_seconds:5m",
+              "legendFormat": "p95"
+            },
+            {
+              "refId": "D",
+              "expr": "api:ingress_p99_latency_seconds:5m",
+              "legendFormat": "p99"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "table",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi"
+            }
+          }
+        },
+        {
+          "id": 4,
+          "type": "timeseries",
+          "title": "Top Routes by p99 Latency",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 16
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "topk(10, api:ingress_route_p99_latency_seconds:5m)",
+              "legendFormat": "{{path}}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "table",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi"
+            }
+          }
+        },
+        {
+          "id": 5,
+          "type": "timeseries",
+          "title": "Top Routes by Request Rate",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 16
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "topk(10, api:ingress_route_requests_per_second:rate5m)",
+              "legendFormat": "{{path}}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "reqps"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "table",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi"
+            }
+          }
+        }
+      ]
+    }
