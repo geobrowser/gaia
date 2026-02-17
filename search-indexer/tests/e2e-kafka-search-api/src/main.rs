@@ -98,6 +98,16 @@ async fn main() -> Result<()> {
     // Entity created via CreateEntity op (for testing CreateEntity handling)
     let create_entity_test_id = Uuid::parse_str("00000000-0000-0000-0000-00000000ce01").unwrap();
 
+    // Entities for GLOBAL_BY_ENTITY_SPACE_SCORE ranking test (entity_space_score * space_score)
+    // Two separate spaces with different space_scores
+    let rank_high_space_id = Uuid::parse_str("00000000-0000-4000-8000-000000000a01").unwrap();
+    let rank_low_space_id = Uuid::parse_str("00000000-0000-4000-8000-000000000b01").unwrap();
+    // Four entities across the two spaces
+    let rank_gamma_entity_id = Uuid::parse_str("00000000-0000-0000-0000-000000000ea1").unwrap();
+    let rank_delta_entity_id = Uuid::parse_str("00000000-0000-0000-0000-000000000ea2").unwrap();
+    let rank_epsilon_entity_id = Uuid::parse_str("00000000-0000-0000-0000-000000000ea3").unwrap();
+    let rank_zeta_entity_id = Uuid::parse_str("00000000-0000-0000-0000-000000000ea4").unwrap();
+
     info!("Test Space ID: {}", test_space);
     info!("Person Type ID: {}", person_type_id);
     info!("Organization Type ID: {}", org_type_id);
@@ -509,6 +519,95 @@ async fn main() -> Result<()> {
         Some("https://example.com/create-entity-avatar.png"),
     )?;
     producer.send(&edits_topic, None, create_entity_payload).await?;
+
+    // 14. Create entities for GLOBAL_BY_ENTITY_SPACE_SCORE ranking test
+    info!("\n14. Creating entities for GLOBAL_BY_ENTITY_SPACE_SCORE ranking test...");
+    info!("  Two spaces: rank_high_space_id (score=0.80), rank_low_space_id (score=0.10)");
+    info!("  Four 'RankTest' entities across the two spaces to test entity_space_score * space_score ranking");
+
+    let rank_gamma_payload = edits::create_entity_edit(
+        "Create RankTest Gamma",
+        rank_high_space_id,
+        rank_gamma_entity_id,
+        Some("RankTest"),
+        Some("Gamma: high entity_space_score in high space_score space"),
+        None,
+    )?;
+    producer.send(&edits_topic, None, rank_gamma_payload).await?;
+
+    let rank_delta_payload = edits::create_entity_edit(
+        "Create RankTest Delta",
+        rank_high_space_id,
+        rank_delta_entity_id,
+        Some("RankTest"),
+        Some("Delta: low entity_space_score in high space_score space"),
+        None,
+    )?;
+    producer.send(&edits_topic, None, rank_delta_payload).await?;
+
+    let rank_epsilon_payload = edits::create_entity_edit(
+        "Create RankTest Epsilon",
+        rank_low_space_id,
+        rank_epsilon_entity_id,
+        Some("RankTest"),
+        Some("Epsilon: high entity_space_score in low space_score space"),
+        None,
+    )?;
+    producer.send(&edits_topic, None, rank_epsilon_payload).await?;
+
+    let rank_zeta_payload = edits::create_entity_edit(
+        "Create RankTest Zeta",
+        rank_low_space_id,
+        rank_zeta_entity_id,
+        Some("RankTest"),
+        Some("Zeta: low entity_space_score in low space_score space"),
+        None,
+    )?;
+    producer.send(&edits_topic, None, rank_zeta_payload).await?;
+
+    // 15. Generate scores for GLOBAL_BY_ENTITY_SPACE_SCORE ranking test entities
+    info!("15. Generating scores for ranking test entities...");
+    info!("  Space scores: rank_high_space_id=0.80, rank_low_space_id=0.10");
+    info!("  Perspective scores:");
+    info!("    Gamma (high space): entity_space=0.90 → product=0.72");
+    info!("    Delta (high space): entity_space=0.20 → product=0.16");
+    info!("    Epsilon (low space): entity_space=0.90 → product=0.09");
+    info!("    Zeta (low space): entity_space=0.20 → product=0.02");
+    // Send entity global scores and perspective scores first (creates documents via upsert)
+    let rank_score_payload = scores::create_mixed_score_batch(
+        vec![
+            // Give all ranking test entities the same global score (irrelevant for this test)
+            (rank_gamma_entity_id, 0.50),
+            (rank_delta_entity_id, 0.50),
+            (rank_epsilon_entity_id, 0.50),
+            (rank_zeta_entity_id, 0.50),
+        ],
+        vec![], // Space scores sent separately below
+        vec![
+            (rank_gamma_entity_id, rank_high_space_id, 0.90),   // product: 0.90 * 0.80 = 0.72
+            (rank_delta_entity_id, rank_high_space_id, 0.20),    // product: 0.20 * 0.80 = 0.16
+            (rank_epsilon_entity_id, rank_low_space_id, 0.90),   // product: 0.90 * 0.10 = 0.09
+            (rank_zeta_entity_id, rank_low_space_id, 0.20),      // product: 0.20 * 0.10 = 0.02
+        ],
+        2,
+        true,
+    )?;
+    producer.send(&scores_topic, None, rank_score_payload).await?;
+
+    // Send space scores in a separate batch so they run AFTER entity documents are created.
+    // The space score uses update_by_query which requires documents to already exist.
+    info!("  Sending space scores separately (after entity documents are created)...");
+    let rank_space_score_payload = scores::create_mixed_score_batch(
+        vec![],
+        vec![
+            (rank_high_space_id, 0.80),
+            (rank_low_space_id, 0.10),
+        ],
+        vec![],
+        3,
+        true,
+    )?;
+    producer.send(&scores_topic, None, rank_space_score_payload).await?;
 
     // 11.1. Restore Delete Dana (testing restore after delete)
     info!("11.1. Restoring Delete Dana after deletion (testing restore behavior)...");

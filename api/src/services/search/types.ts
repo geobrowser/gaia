@@ -11,7 +11,7 @@
  *
  * - GLOBAL: Search across all spaces, boosted by entity_global_score
  * - GLOBAL_BY_SPACE_SCORE: Search across all spaces, boosted by space_score
- * - GLOBAL_BY_ENTITY_SPACE_SCORE: Search across all spaces, boosted by entity_space_score
+ * - GLOBAL_BY_ENTITY_SPACE_SCORE: Search across all spaces, boosted by entity_space_score * space_score
  * - SPACE_SINGLE: Search within a single specific space, boosted by entity_space_score
  * - SPACE: Search within a space and its subspaces (currently implemented as single space)
  */

@@ -360,7 +360,7 @@ export class OpenSearchClient implements SearchClient {
 									filter: filters,
 								},
 							},
-							functions: [this.buildScoreBoostFunction("entity_space_score")],
+							functions: [this.buildGlobalByEntitySpaceBoost()],
 							boost_mode: "replace",
 							score_mode: "sum",
 						},
@@ -497,6 +497,37 @@ export class OpenSearchClient implements SearchClient {
 	}
 
 	/**
+	 * Build a score boost function that multiplies entity_space_score by space_score.
+	 * Uses script_score to compute entity_space_score * space_score, then clamp and shift.
+	 *
+	 * Strategy:
+	 * 1. Read both entity_space_score and space_score (default to 0 if missing)
+	 * 2. Multiply them together
+	 * 3. Clamp at MIN_SCORE_THRESHOLD (-10) to limit extreme outliers
+	 * 4. Shift by SCORE_SHIFT (10) to ensure positive values
+	 * 5. Apply SCORE_BOOST multiplier
+	 */
+	buildGlobalByEntitySpaceBoost(): object {
+		return {
+			script_score: {
+				script: {
+					source: `
+						def entitySpaceScore = doc.containsKey('entity_space_score') && !doc['entity_space_score'].empty
+							? doc['entity_space_score'].value
+							: ${DEFAULT_AVERAGE_SCORE};
+						def spaceScore = doc.containsKey('space_score') && !doc['space_score'].empty
+							? doc['space_score'].value
+							: ${DEFAULT_AVERAGE_SCORE};
+						def product = entitySpaceScore * spaceScore;
+						def clampedScore = Math.max(product, ${MIN_SCORE_THRESHOLD});
+						return (clampedScore + ${SCORE_SHIFT}) * ${SCORE_BOOST};
+					`,
+				},
+			},
+		}
+	}
+
+	/**
 	 * Build a global search query.
 	 * Boosts results by entity_global_score using function_score.
 	 */
@@ -551,8 +582,8 @@ export class OpenSearchClient implements SearchClient {
 	}
 
 	/**
-	 * Build a global search query ranked by entity space score.
-	 * Boosts results by entity_space_score using function_score.
+	 * Build a global search query ranked by entity space score * space score.
+	 * Boosts results by entity_space_score * space_score using function_score.
 	 */
 	buildGlobalByEntitySpaceScoreQuery(
 		baseTextQuery: object,
@@ -573,7 +604,7 @@ export class OpenSearchClient implements SearchClient {
 							filter: filters,
 						},
 					},
-					functions: [this.buildScoreBoostFunction("entity_space_score")],
+					functions: [this.buildGlobalByEntitySpaceBoost()],
 					boost_mode: "sum",
 					score_mode: "sum",
 				},
