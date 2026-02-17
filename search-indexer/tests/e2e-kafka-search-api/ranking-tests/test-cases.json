@@ -1,0 +1,365 @@
+{
+  "uniform_score": 0.50,
+  "space_id": "00000000-0000-4000-8000-000000000099",
+  "space_id_prefix": "00000000-0000-4000-8000-000000cc",
+  "uuid_prefix": "00000000-0000-0000-0000-000000bb",
+  "test_cases": [
+    {
+      "name": "Name match beats description-only match",
+      "query": "Wonderland",
+      "entities": [
+        { "name": "Wonderland", "description": "A magical place in fiction" },
+        { "name": "Rex", "description": "Researcher @Wonderland" }
+      ]
+    },
+    {
+      "name": "Exact match beats fuzzy match",
+      "query": "Blockchain",
+      "entities": [
+        { "name": "Blockchain", "description": "A distributed ledger technology" },
+        { "name": "Blockchan", "description": "A distributed ledger technology" }
+      ]
+    },
+    {
+      "name": "Multi-word match beats single-word match",
+      "query": "San Francisco",
+      "entities": [
+        { "name": "San Francisco", "description": "A city in California" },
+        { "name": "San Diego", "description": "A city in southern California" }
+      ]
+    },
+    {
+      "name": "Name and description match beats name-only match",
+      "query": "Quantum",
+      "entities": [
+        { "name": "Quantum Computing", "description": "Quantum physics applied to computation" },
+        { "name": "Quantum Mechanics", "description": "The study of subatomic particles" }
+      ]
+    },
+    {
+      "name": "Prefix match finds partial names",
+      "query": "Quant",
+      "entities": [
+        { "name": "Quantum Computing", "description": "Quantum physics applied to computation" },
+        { "name": "Quantum Mechanics", "description": "The study of subatomic particles" }
+      ]
+    },
+    {
+      "name": "Adjacent query words beat separated words",
+      "query": "New York",
+      "entities": [
+        { "name": "New York City", "description": "The largest city in the United States" },
+        { "name": "New Adventures in York", "description": "A travel blog about Yorkshire" }
+      ]
+    },
+    {
+      "name": "Correct word order beats reversed order",
+      "query": "Machine Learning",
+      "entities": [
+        { "name": "Machine Learning Lab", "description": "An academic research laboratory" },
+        { "name": "Learning Machine Corp", "description": "A technology company" }
+      ]
+    },
+    {
+      "name": "Exact name beats longer name containing query",
+      "query": "Bitcoin",
+      "entities": [
+        { "name": "Bitcoin", "description": "A peer-to-peer electronic cash system" },
+        { "name": "Bitcoin Cash", "description": "A fork of the original blockchain" }
+      ]
+    },
+    {
+      "name": "Prefix match in name beats prefix match only in description",
+      "query": "Chain",
+      "entities": [
+        { "name": "Chainlink Protocol", "description": "A decentralized oracle network" },
+        { "name": "Oracle Network", "description": "A chainable data provider" }
+      ]
+    },
+    {
+      "name": "Exact multi-word phrase beats partial phrase match",
+      "query": "Open Source",
+      "entities": [
+        { "name": "Open Source Initiative", "description": "Promoting open source software" },
+        { "name": "Open Banking API", "description": "A financial data standard" }
+      ]
+    },
+    {
+      "name": "Dot-separated tokens match as separate words",
+      "query": "web3 js",
+      "entities": [
+        { "name": "web3.js", "description": "Ethereum JavaScript API library" },
+        { "name": "web3 framework", "description": "A generic development toolkit" }
+      ]
+    },
+    {
+      "name": "Slash-separated tokens match as separate words",
+      "query": "TCP IP",
+      "entities": [
+        { "name": "TCP/IP Networking", "description": "Internet protocol suite" },
+        { "name": "TCP Monitoring", "description": "Network connection tracking tool" }
+      ]
+    },
+    {
+      "name": "Ampersand-separated tokens match as separate words",
+      "query": "Arts Sciences",
+      "entities": [
+        { "name": "Arts & Sciences Academy", "description": "A liberal arts college" },
+        { "name": "Arts Department", "description": "A university fine arts program" }
+      ]
+    },
+    {
+      "name": "At-sign-separated tokens match as separate words",
+      "query": "alice wonderland",
+      "entities": [
+        { "name": "alice@wonderland.xyz", "description": "A contact identifier" },
+        { "name": "alice in movies", "description": "A filmography database" }
+      ]
+    },
+    {
+      "name": "Numbers attached to word beat numbers separated",
+      "query": "Web3",
+      "entities": [
+        { "name": "Web3 Foundation", "description": "Supporting decentralized web protocols" },
+        { "name": "Web 3 Foundation", "description": "Supporting decentralized web protocols" }
+      ]
+    },
+    {
+      "name": "Short exact name beats long diluted name",
+      "query": "AI",
+      "entities": [
+        { "name": "AI", "description": "Artificial intelligence technology" },
+        { "name": "AI and Machine Learning Research Lab", "description": "An academic research laboratory" }
+      ]
+    },
+    {
+      "name": "Parenthetical content creates matchable tokens",
+      "query": "ETH",
+      "entities": [
+        { "name": "Ethereum (ETH)", "description": "A smart contract platform" },
+        { "name": "Ethereum Network", "description": "The distributed computing chain" }
+      ]
+    },
+    {
+      "name": "Two of three query words beat one of three",
+      "query": "decentralized finance protocol",
+      "entities": [
+        { "name": "Decentralized Finance Hub", "description": "A DeFi aggregation platform" },
+        { "name": "Protocol Governance", "description": "A voting coordination tool" }
+      ]
+    },
+    {
+      "name": "Three of three query words beat two of three",
+      "query": "decentralized autonomous organization",
+      "entities": [
+        { "name": "Decentralized Autonomous Organization", "description": "A community governance structure" },
+        { "name": "Decentralized Organization", "description": "A flat corporate structure" }
+      ]
+    },
+    {
+      "name": "Multi-word query with extra words preserves ranking",
+      "query": "amazing Solana ecosystem overview",
+      "entities": [
+        { "name": "Solana Ecosystem", "description": "The Solana blockchain community and tools" },
+        { "name": "Solana Validators", "description": "Infrastructure operators for the network" }
+      ]
+    },
+    {
+      "name": "Singular query matches singular name over plural name",
+      "query": "token",
+      "entities": [
+        { "name": "Token Terminal", "description": "A crypto analytics platform" },
+        { "name": "Tokens Daily", "description": "A crypto news aggregator" }
+      ]
+    },
+    {
+      "name": "Transposed characters still find correct entity via fuzzy match",
+      "query": "Ehtereum",
+      "entities": [
+        { "name": "Ethereum Foundation", "description": "Supporting the Ethereum ecosystem" },
+        { "name": "Crypto Foundation", "description": "Supporting the Ethereum network" }
+      ]
+    },
+    {
+      "name": "Mixed case query matches name over description",
+      "query": "bItCoIn",
+      "entities": [
+        { "name": "Bitcoin Protocol", "description": "The original cryptocurrency network" },
+        { "name": "Digital Currency", "description": "A Bitcoin-based payment system" }
+      ]
+    },
+    {
+      "name": "Exact word match in shorter name beats prefix in longer name",
+      "query": "Graph",
+      "entities": [
+        { "name": "The Graph", "description": "An indexing protocol for blockchains" },
+        { "name": "GraphQL Explorer", "description": "A query language development tool" }
+      ]
+    },
+    {
+      "name": "Stop-word-like query words still contribute to matching",
+      "query": "the protocol",
+      "entities": [
+        { "name": "The Protocol", "description": "A governance framework" },
+        { "name": "Protocol Labs", "description": "A research and development company" }
+      ]
+    },
+    {
+      "name": "Trailing punctuation in query does not break matching",
+      "query": "Ethereum!",
+      "entities": [
+        { "name": "Ethereum", "description": "A decentralized computing platform" },
+        { "name": "Ethereum Classic", "description": "The original chain fork" }
+      ]
+    },
+    {
+      "name": "Two-character query matches short name over longer compound",
+      "query": "Go",
+      "entities": [
+        { "name": "Go Language", "description": "A statically typed programming language" },
+        { "name": "Golem Network", "description": "A decentralized computing marketplace" }
+      ]
+    },
+    {
+      "name": "Numeric query matches name over description",
+      "query": "404",
+      "entities": [
+        { "name": "Error 404 Page", "description": "A web standard status code" },
+        { "name": "Web Standards", "description": "Covers HTTP status codes like 404" }
+      ]
+    },
+    {
+      "name": "Repeated word in query still finds name match over desc match",
+      "query": "Bitcoin Bitcoin",
+      "entities": [
+        { "name": "Bitcoin Maximalist", "description": "A Bitcoin single-chain advocacy group" },
+        { "name": "Crypto Maximalist", "description": "A Bitcoin community forum" }
+      ]
+    },
+    {
+      "name": "Possessive form in name beats possessive only in description",
+      "query": "Satoshi's",
+      "entities": [
+        { "name": "Satoshi's Vision", "description": "A blockchain philosophy movement" },
+        { "name": "Crypto Pioneer", "description": "Following Satoshi's ideals" }
+      ]
+    },
+    {
+      "name": "Hyphenated phrase in query matches hyphenated name",
+      "query": "peer-to-peer",
+      "entities": [
+        { "name": "Peer-to-Peer Network", "description": "A distributed system topology" },
+        { "name": "Peer Review Process", "description": "An academic validation method" }
+      ]
+    },
+    {
+      "name": "URL-like query matches exact URL entity name",
+      "query": "ethereum.org",
+      "entities": [
+        { "name": "ethereum.org", "description": "The official Ethereum website" },
+        { "name": "ethereum.org community", "description": "A contributor forum" }
+      ]
+    },
+    {
+      "name": "Word in both name and description beats word in name only",
+      "query": "Avalanche",
+      "entities": [
+        { "name": "Avalanche Network", "description": "Avalanche is a high-throughput blockchain platform" },
+        { "name": "Avalanche Bridge", "description": "A cross-chain asset transfer tool" }
+      ]
+    },
+    {
+      "name": "Same name with long description containing query beats same name without",
+      "query": "Wonderland",
+      "entities": [
+        { "name": "Wonderland", "description": "Wonderland presented their work on ERC-7828 and ERC-7930. Wonderland unveiled ERC-7930 and ERC-7828, complementary standards to enable interoperable, machine-friendly binary addresses and human-readable names for seamless cross-chain Ethereum transactions. These proposals aim to solve long-standing challenges in blockchain address resolution and cross-chain identity management across multiple Layer 2 networks and rollups in the growing Ethereum ecosystem." },
+        { "name": "Wonderland", "description": "A decentralized community organization" }
+      ]
+    },
+    {
+      "name": "High global score overcomes weaker text match",
+      "query": "Cosmos",
+      "entities": [
+        { "name": "Cosmos Hub", "description": "Interchain network", "global_score": 0.95 },
+        { "name": "Cosmos", "description": "An interoperability network", "global_score": 0.10 }
+      ]
+    },
+    {
+      "name": "Strong text match overcomes small score difference",
+      "query": "Polkadot",
+      "entities": [
+        { "name": "Polkadot", "description": "A multi-chain blockchain platform", "global_score": 0.40 },
+        { "name": "Relay Chain", "description": "A Polkadot parachain connector", "global_score": 0.60 }
+      ]
+    },
+    {
+      "name": "Equal text match ranks by global score",
+      "query": "Stellar",
+      "entities": [
+        { "name": "Stellar Network", "description": "A payment protocol", "global_score": 0.90 },
+        { "name": "Stellar Protocol", "description": "A payment network", "global_score": 0.20 }
+      ]
+    },
+    {
+      "name": "Zero score still ranks by text match quality",
+      "query": "Filecoin",
+      "entities": [
+        { "name": "Filecoin", "description": "A decentralized storage network", "global_score": 0.0 },
+        { "name": "Storage Net", "description": "A Filecoin-based storage provider", "global_score": 0.0 }
+      ]
+    },
+    {
+      "name": "High score does not rescue poor text match",
+      "query": "Cardano",
+      "entities": [
+        { "name": "Cardano", "description": "A proof-of-stake blockchain platform", "global_score": 0.30 },
+        { "name": "Proof Chain", "description": "Cardano validator infrastructure", "global_score": 0.70 }
+      ]
+    },
+    {
+      "name": "High entity-space score overcomes weaker text match",
+      "query": "Cosmos",
+      "scope": "SPACE_SINGLE",
+      "entities": [
+        { "name": "Cosmos Hub", "description": "Interchain network", "entity_space_score": 0.95 },
+        { "name": "Cosmos", "description": "An interoperability network", "entity_space_score": 0.10 }
+      ]
+    },
+    {
+      "name": "Strong text match overcomes small entity-space score difference",
+      "query": "Polkadot",
+      "scope": "SPACE_SINGLE",
+      "entities": [
+        { "name": "Polkadot", "description": "A multi-chain blockchain platform", "entity_space_score": 0.40 },
+        { "name": "Relay Chain", "description": "A Polkadot parachain connector", "entity_space_score": 0.60 }
+      ]
+    },
+    {
+      "name": "Equal text match ranks by entity-space score",
+      "query": "Stellar",
+      "scope": "SPACE_SINGLE",
+      "entities": [
+        { "name": "Stellar Network", "description": "A payment protocol", "entity_space_score": 0.90 },
+        { "name": "Stellar Protocol", "description": "A payment network", "entity_space_score": 0.20 }
+      ]
+    },
+    {
+      "name": "High space score overcomes weaker text match",
+      "query": "Cosmos",
+      "scope": "GLOBAL_BY_SPACE_SCORE",
+      "entities": [
+        { "name": "Cosmos Hub", "description": "Interchain network", "space_score": 0.95 },
+        { "name": "Cosmos", "description": "An interoperability network", "space_score": 0.10 }
+      ]
+    },
+    {
+      "name": "Equal text match ranks by space score",
+      "query": "Stellar",
+      "scope": "GLOBAL_BY_SPACE_SCORE",
+      "entities": [
+        { "name": "Stellar Network", "description": "A payment protocol", "space_score": 0.90 },
+        { "name": "Stellar Protocol", "description": "A payment network", "space_score": 0.20 }
+      ]
+    }
+  ]
+}

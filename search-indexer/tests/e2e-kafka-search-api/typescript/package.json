@@ -5,7 +5,8 @@
   "description": "Validation scripts for E2E Kafka Search API test scenarios",
   "type": "module",
   "scripts": {
-    "validate": "tsx validate-search.ts"
+    "validate": "tsx validate-search.ts",
+    "validate-rankings": "tsx validate-rankings.ts"
   },
   "devDependencies": {
     "@types/node": "^20.0.0",

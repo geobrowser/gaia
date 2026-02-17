@@ -817,6 +817,13 @@ async fn main() -> Result<()> {
         .send(&edits_topic, Some(&lww_test_key), lww_second_set)
         .await?;
 
+    // 14. Publish ranking test entities from JSON config
+    info!("\n14. Publishing ranking test entities...");
+    let ranking_suite = generators::rankings::RankingTestSuite::load()?;
+    ranking_suite
+        .publish_all(&producer, &edits_topic, &scores_topic)
+        .await?;
+
     info!("\n✅ Test scenario complete!");
     info!("Created:");
     info!("  - 15 entities (12 from before + 3 property operation test entities)");

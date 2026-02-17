@@ -258,6 +258,58 @@ jobs:
           KAFKA_BROKER: localhost:9092
           SEARCH_API_URL: http://localhost:3000
 
+      - name: Reset OpenSearch and Kafka for ranking tests
+        run: |
+          # Stop search-indexer
+          kill $(cat /tmp/search-indexer.pid) 2>/dev/null || true
+          sleep 2
+
+          # Delete and let search-indexer recreate the index
+          curl -s -X DELETE "http://localhost:9200/entities*" || true
+
+          # Delete Kafka topics so ranking tests start clean
+          # Use a new consumer group to avoid stale offsets
+          export RANKING_GROUP_SUFFIX=$(date +%s)
+
+          # Restart search-indexer with fresh consumer groups
+          ENVIRONMENT=staging \
+          KAFKA_BROKER=localhost:9092 \
+          OPENSEARCH_URL=http://localhost:9200 \
+          KAFKA_GROUP_EDITS_ID=search-indexer-group-edits-ranking-${RANKING_GROUP_SUFFIX} \
+          KAFKA_GROUP_SCORES_ID=search-indexer-group-scores-ranking-${RANKING_GROUP_SUFFIX} \
+          HEALTH_PORT=8080 \
+          RUST_LOG=search_indexer=info \
+          ./target/release/search-indexer &
+          echo $! > /tmp/search-indexer.pid
+
+          echo "Waiting for search-indexer to be ready..."
+          for i in {1..30}; do
+            if ! kill -0 $(cat /tmp/search-indexer.pid) 2>/dev/null; then
+              echo "ERROR: search-indexer process exited unexpectedly"
+              exit 1
+            fi
+            if curl -s http://localhost:8080/readyz | grep -q "ready"; then
+              echo "search-indexer is ready"
+              exit 0
+            fi
+            echo "Waiting for search-indexer... ($i/30)"
+            sleep 2
+          done
+          echo "ERROR: search-indexer failed to become ready within 60 seconds"
+          exit 1
+
+      - name: Install ranking test dependencies
+        working-directory: ./search-indexer/tests/e2e-kafka-search-api/typescript
+        run: npm install --silent
+
+      - name: Run ranking tests
+        working-directory: ./search-indexer/tests/e2e-kafka-search-api
+        run: ./run-ranking-tests.sh
+        env:
+          ENVIRONMENT: staging
+          KAFKA_BROKER: localhost:9092
+          SEARCH_API_URL: http://localhost:3000
+
       - name: Cleanup
         if: always()
         run: |
