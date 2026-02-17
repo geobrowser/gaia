@@ -42,6 +42,13 @@ const TEST_ENTITIES = {
   LWW_TEST_ID: '00000000-0000-0000-0000-000000003333',
   // Entity created via CreateEntity GRC-20 op
   CREATE_ENTITY_TEST_ID: '00000000-0000-0000-0000-00000000ce01',
+  // GLOBAL_BY_ENTITY_SPACE_SCORE ranking test entities
+  RANK_HIGH_SPACE_ID: '00000000-0000-4000-8000-000000000a01',     // space_score = 0.80
+  RANK_LOW_SPACE_ID: '00000000-0000-4000-8000-000000000b01',      // space_score = 0.10
+  RANK_GAMMA_ENTITY_ID: '00000000-0000-0000-0000-000000000ea1',   // entity_space=0.90, space=0.80, product=0.72
+  RANK_DELTA_ENTITY_ID: '00000000-0000-0000-0000-000000000ea2',   // entity_space=0.20, space=0.80, product=0.16
+  RANK_EPSILON_ENTITY_ID: '00000000-0000-0000-0000-000000000ea3', // entity_space=0.90, space=0.10, product=0.09
+  RANK_ZETA_ENTITY_ID: '00000000-0000-0000-0000-000000000ea4',    // entity_space=0.20, space=0.10, product=0.02
   // Text match scoring test entities (all have entity_global_score = 0.50)
   // Group A: Name match vs description-only match (query: "Wonderland")
   TM_NAME_MATCH_ID: '00000000-0000-0000-0000-00000000aa01',     // name="Wonderland"
@@ -876,6 +883,145 @@ class SearchValidator {
     } else {
       this.addResult('test14_eve_included_with_flag', false,
         `Delete Eve should be returned when include_deleted=true`);
+    }
+  }
+
+  /**
+   * Verifies GLOBAL_BY_ENTITY_SPACE_SCORE scope ranks by entity_space_score * space_score.
+   *
+   * Test entities across two spaces with different space_scores:
+   *   - rank_space_high (space_score=0.80)
+   *   - rank_space_low  (space_score=0.10)
+   *
+   * Four "RankTest" entities with varying entity_space_scores:
+   *   Gamma:   entity_space=0.90, space=0.80 → product=0.72 (rank 1)
+   *   Delta:   entity_space=0.20, space=0.80 → product=0.16 (rank 2)
+   *   Epsilon: entity_space=0.90, space=0.10 → product=0.09 (rank 3)
+   *   Zeta:    entity_space=0.20, space=0.10 → product=0.02 (rank 4)
+   *
+   * Key insight: Delta (low entity_space=0.20) outranks Epsilon (high entity_space=0.90)
+   * because Delta's space_score (0.80) is much higher. This validates the multiplication.
+   */
+  async test32_GlobalByEntitySpaceScoreSearch(): Promise<void> {
+    console.log(`\n${BLUE}Test 32: GLOBAL_BY_ENTITY_SPACE_SCORE scope (entity_space_score * space_score ranking)${NC}`);
+
+    // 32a: Text query for "RankTest" entities with GLOBAL_BY_ENTITY_SPACE_SCORE scope
+    console.log(`  ${BLUE}→ 32a: Text query "RankTest" with GLOBAL_BY_ENTITY_SPACE_SCORE scope${NC}`);
+    const response = await this.search({
+      query: 'RankTest',
+      scope: 'GLOBAL_BY_ENTITY_SPACE_SCORE',
+    });
+
+    if (response.results.length >= 4) {
+      this.addResult('test32a_has_results', true,
+        `Text query "RankTest" (GLOBAL_BY_ENTITY_SPACE_SCORE) returned ${response.results.length} results (expected >= 4)`);
+    } else {
+      this.addResult('test32a_has_results', false,
+        `Text query "RankTest" should return >= 4 results, got ${response.results.length}`);
+      return;
+    }
+
+    // Find the ranking test entities in results
+    const gamma = response.results.find(r => r.entityId === TEST_ENTITIES.RANK_GAMMA_ENTITY_ID);
+    const delta = response.results.find(r => r.entityId === TEST_ENTITIES.RANK_DELTA_ENTITY_ID);
+    const epsilon = response.results.find(r => r.entityId === TEST_ENTITIES.RANK_EPSILON_ENTITY_ID);
+    const zeta = response.results.find(r => r.entityId === TEST_ENTITIES.RANK_ZETA_ENTITY_ID);
+
+    if (gamma && delta && epsilon && zeta) {
+      this.addResult('test32a_all_found', true, `All 4 RankTest entities found in results`);
+    } else {
+      const missing = [];
+      if (!gamma) missing.push('Gamma');
+      if (!delta) missing.push('Delta');
+      if (!epsilon) missing.push('Epsilon');
+      if (!zeta) missing.push('Zeta');
+      this.addResult('test32a_all_found', false, `Missing RankTest entities: ${missing.join(', ')}`);
+      return;
+    }
+
+    // Get positions of each entity in results
+    const gammaIdx = response.results.findIndex(r => r.entityId === TEST_ENTITIES.RANK_GAMMA_ENTITY_ID);
+    const deltaIdx = response.results.findIndex(r => r.entityId === TEST_ENTITIES.RANK_DELTA_ENTITY_ID);
+    const epsilonIdx = response.results.findIndex(r => r.entityId === TEST_ENTITIES.RANK_EPSILON_ENTITY_ID);
+    const zetaIdx = response.results.findIndex(r => r.entityId === TEST_ENTITIES.RANK_ZETA_ENTITY_ID);
+
+    console.log(`    Positions: Gamma=${gammaIdx}, Delta=${deltaIdx}, Epsilon=${epsilonIdx}, Zeta=${zetaIdx}`);
+    console.log(`    Expected:  Gamma < Delta < Epsilon < Zeta (lower index = higher rank)`);
+
+    // 32b: High entity_space * High space should rank first
+    console.log(`  ${BLUE}→ 32b: High entity_space_score * High space_score ranks first${NC}`);
+    if (gammaIdx < deltaIdx && gammaIdx < epsilonIdx && gammaIdx < zetaIdx) {
+      this.addResult('test32b_gamma_first', true,
+        `Gamma (entity_space=0.90 * space=0.80 = 0.72) ranks highest among RankTest entities`);
+    } else {
+      this.addResult('test32b_gamma_first', false,
+        `Gamma should rank highest (product=0.72), but position=${gammaIdx} vs Delta=${deltaIdx}, Epsilon=${epsilonIdx}, Zeta=${zetaIdx}`);
+    }
+
+    // 32c: Low entity_space * High space should beat High entity_space * Low space
+    // This is the critical test that validates the multiplication by space_score
+    console.log(`  ${BLUE}→ 32c: Low entity_space * High space beats High entity_space * Low space${NC}`);
+    if (deltaIdx < epsilonIdx) {
+      this.addResult('test32c_delta_beats_epsilon', true,
+        `Delta (entity_space=0.20 * space=0.80 = 0.16) outranks Epsilon (entity_space=0.90 * space=0.10 = 0.09) — space_score multiplication validated`);
+    } else {
+      this.addResult('test32c_delta_beats_epsilon', false,
+        `Delta (product=0.16) should outrank Epsilon (product=0.09), but Delta position=${deltaIdx}, Epsilon position=${epsilonIdx}`);
+    }
+
+    // 32d: Low entity_space * Low space should rank last
+    console.log(`  ${BLUE}→ 32d: Low entity_space_score * Low space_score ranks last${NC}`);
+    if (zetaIdx > gammaIdx && zetaIdx > deltaIdx && zetaIdx > epsilonIdx) {
+      this.addResult('test32d_zeta_last', true,
+        `Zeta (entity_space=0.20 * space=0.10 = 0.02) ranks lowest among RankTest entities`);
+    } else {
+      this.addResult('test32d_zeta_last', false,
+        `Zeta should rank lowest (product=0.02), but position=${zetaIdx} vs Gamma=${gammaIdx}, Delta=${deltaIdx}, Epsilon=${epsilonIdx}`);
+    }
+
+    // 32e: Verify complete ordering: Gamma > Delta > Epsilon > Zeta
+    console.log(`  ${BLUE}→ 32e: Verify complete ranking order${NC}`);
+    if (gammaIdx < deltaIdx && deltaIdx < epsilonIdx && epsilonIdx < zetaIdx) {
+      this.addResult('test32e_full_ordering', true,
+        `Full ranking order correct: Gamma(0.72) > Delta(0.16) > Epsilon(0.09) > Zeta(0.02)`);
+    } else {
+      this.addResult('test32e_full_ordering', false,
+        `Expected order Gamma < Delta < Epsilon < Zeta by position, got: Gamma=${gammaIdx}, Delta=${deltaIdx}, Epsilon=${epsilonIdx}, Zeta=${zetaIdx}`);
+    }
+
+    // 32f: Empty query with GLOBAL_BY_ENTITY_SPACE_SCORE scope
+    console.log(`  ${BLUE}→ 32f: Empty query with GLOBAL_BY_ENTITY_SPACE_SCORE scope${NC}`);
+    const emptyResponse = await this.search({
+      scope: 'GLOBAL_BY_ENTITY_SPACE_SCORE',
+      limit: 100,
+    });
+
+    if (emptyResponse.results.length > 0) {
+      this.addResult('test32f_empty_has_results', true,
+        `Empty query (GLOBAL_BY_ENTITY_SPACE_SCORE) returned ${emptyResponse.results.length} results`);
+    } else {
+      this.addResult('test32f_empty_has_results', false,
+        `Empty query (GLOBAL_BY_ENTITY_SPACE_SCORE) should return results, got 0`);
+      return;
+    }
+
+    // Verify the ranking test entities maintain correct order in empty query too
+    const emptyGammaIdx = emptyResponse.results.findIndex(r => r.entityId === TEST_ENTITIES.RANK_GAMMA_ENTITY_ID);
+    const emptyDeltaIdx = emptyResponse.results.findIndex(r => r.entityId === TEST_ENTITIES.RANK_DELTA_ENTITY_ID);
+    const emptyEpsilonIdx = emptyResponse.results.findIndex(r => r.entityId === TEST_ENTITIES.RANK_EPSILON_ENTITY_ID);
+    const emptyZetaIdx = emptyResponse.results.findIndex(r => r.entityId === TEST_ENTITIES.RANK_ZETA_ENTITY_ID);
+
+    if (emptyGammaIdx !== -1 && emptyDeltaIdx !== -1 && emptyEpsilonIdx !== -1 && emptyZetaIdx !== -1) {
+      if (emptyGammaIdx < emptyDeltaIdx && emptyDeltaIdx < emptyEpsilonIdx && emptyEpsilonIdx < emptyZetaIdx) {
+        this.addResult('test32f_empty_ordering', true,
+          `Empty query ranking order correct: Gamma(0.72) > Delta(0.16) > Epsilon(0.09) > Zeta(0.02)`);
+      } else {
+        this.addResult('test32f_empty_ordering', false,
+          `Empty query order wrong: Gamma=${emptyGammaIdx}, Delta=${emptyDeltaIdx}, Epsilon=${emptyEpsilonIdx}, Zeta=${emptyZetaIdx}`);
+      }
+    } else {
+      this.addResult('test32f_empty_ordering', false,
+        `Not all RankTest entities found in empty query results`);
     }
   }
 
@@ -1869,6 +2015,7 @@ async function main() {
     await validator.test29_CaseInsensitiveMatching();
     await validator.test30_DefaultScoreBoost();
     await validator.test31_ExtraQueryWordsStillMatch();
+    await validator.test32_GlobalByEntitySpaceScoreSearch();
 
     const allPassed = validator.printSummary();
     process.exit(allPassed ? 0 : 1);

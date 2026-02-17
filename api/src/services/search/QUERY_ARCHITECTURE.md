@@ -61,6 +61,7 @@ Four parallel matching strategies run inside a `bool.should` clause with `minimu
 |-------|--------|-------------|
 | `GLOBAL` | None | `entity_global_score` |
 | `GLOBAL_BY_SPACE_SCORE` | None | `space_score` |
+| `GLOBAL_BY_ENTITY_SPACE_SCORE` | None | `entity_space_score` |
 | `SPACE_SINGLE` / `SPACE` | `space_id` term filter | `entity_space_score` |
 
 ---
