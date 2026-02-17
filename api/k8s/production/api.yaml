@@ -92,6 +92,8 @@ spec:
                 secretKeyRef:
                   name: api-secrets
                   key: DATABASE_URL
+            - name: PG_CONNECTION_TIMEOUT_MS
+              value: "10000"
             - name: IPFS_KEY
               valueFrom:
                 secretKeyRef:
