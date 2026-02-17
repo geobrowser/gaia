@@ -1,8 +1,9 @@
 import SimplifyInflectionPlugin from "@graphile-contrib/pg-simplify-inflector"
-import {useResponseCache} from "@graphql-yoga/plugin-response-cache"
-import {createYoga, useExecutionCancellation} from "graphql-yoga"
+import {createInMemoryCache, useResponseCache} from "@graphql-yoga/plugin-response-cache"
+import {createYoga, type Plugin, useExecutionCancellation} from "graphql-yoga"
+import type {PoolClient} from "pg"
 import {Pool} from "pg"
-import {createPostGraphileSchema, withPostGraphileContext} from "postgraphile"
+import {createPostGraphileSchema} from "postgraphile"
 import ConnectionFilterPlugin from "postgraphile-plugin-connection-filter"
 import EntitySpaceFilterPlugin from "./entitySpaceFilterPlugin"
 import {useGraphQLInstrumentation} from "./instrumentationPlugin"
@@ -37,7 +38,7 @@ const pgPool = new Pool({
 
 // Base PostGraphile options (without uuidScalarPlugin)
 const postgraphileOptions = {
-	watchPg: true,
+	watchPg: false,
 	graphiql: true,
 	enhanceGraphiql: true,
 	dynamicJson: true,
@@ -79,35 +80,45 @@ const postgraphileOptions = {
 // Create PostGraphile schemas
 const postgraphileSchema = await createPostGraphileSchema(pgPool, ["public"], postgraphileOptions)
 
-// Helper to create context
-const createContext = async ({request}: {request: Request}) => {
-	const contextPromise = new Promise((resolve, reject) => {
-		withPostGraphileContext(
-			{
-				pgPool,
-			},
-			async (postgraphileContext) => {
-				resolve({
-					request,
-					...postgraphileContext,
-				})
+/**
+ * Yoga plugin that manages the pgClient lifecycle for PostGraphile resolvers.
+ *
+ * PostGraphile's generated resolvers expect `context.pgClient` — a pg.Client
+ * checked out from the pool. This plugin checks out a client before execution
+ * and releases it back to the pool after execution completes.
+ *
+ * The checkout happens in onExecute (not in the context factory) so that
+ * cache hits from useResponseCache never check out a client at all — the
+ * response cache short-circuits in onParams before onExecute fires.
+ *
+ * We don't use PostGraphile's `withPostGraphileContext` because we don't need
+ * its transaction wrapper or JWT/role features (mutations are disabled, all
+ * queries are reads). Checking out the client directly is simpler and avoids
+ * the unnecessary BEGIN/COMMIT overhead on every request.
+ */
+function usePgClient(pool: Pool): Plugin<{pgClient: PoolClient}> {
+	return {
+		async onExecute({extendContext}) {
+			const pgClient = await pool.connect()
+			extendContext({pgClient})
 
-				// Return a dummy result since withPostGraphileContext expects a result
-				// The actual result will be handled by GraphQL execution
-				return {data: null}
-			},
-		).catch(reject) // Propagate connection errors (e.g., pool timeout)
-	})
-
-	return await contextPromise
+			return {
+				onExecuteDone() {
+					pgClient.release()
+				},
+			}
+		},
+	}
 }
 
 // Shared plugins for GraphQL server
 const sharedPlugins = [
+	usePgClient(pgPool),
 	useExecutionCancellation(),
 	useResponseCache({
 		session: () => null,
 		ttl: 10_000, // 10 seconds
+		cache: createInMemoryCache({max: 1024}),
 	}),
 	useGraphQLInstrumentation(),
 ]
@@ -119,5 +130,4 @@ export const graphqlServer = createYoga<GraphQLServerContext>({
 		title: "Geo API",
 	},
 	plugins: sharedPlugins,
-	context: createContext,
 })

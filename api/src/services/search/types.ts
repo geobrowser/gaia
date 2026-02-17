@@ -64,6 +64,10 @@ export interface SearchResult {
 	spaceScore?: number
 	/** Entity-space score. */
 	entitySpaceScore?: number
+	/** Final relevance score after all boosts (OpenSearch _score). */
+	relevanceScore?: number
+	/** Text matching score without score field boosts. */
+	textMatchScore?: number
 }
 
 /**

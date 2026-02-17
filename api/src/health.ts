@@ -6,6 +6,34 @@ import {Storage} from "./services/storage/storage"
 
 const health = new Hono()
 
+// Liveness probe — proves the event loop is responsive, no DB or external dependencies.
+// This must never block on I/O so Kubernetes doesn't kill healthy-but-busy pods.
+health.get(
+	"/liveness",
+	describeRoute({
+		tags: ["Health"],
+		summary: "Liveness probe",
+		description: "Returns 200 if the process is alive. No external dependency checks.",
+		responses: {
+			200: {
+				description: "Process is alive",
+				content: {
+					"application/json": {
+						schema: {
+							type: "object",
+							properties: {
+								status: {type: "string", enum: ["ok"]},
+							},
+							required: ["status"],
+						},
+					},
+				},
+			},
+		},
+	}),
+	(c) => c.json({status: "ok"}),
+)
+
 // Simple health check - returns 200 if database is accessible
 health.get(
 	"/",

@@ -260,6 +260,13 @@
       "when": 1770234567890,
       "tag": "0037_proposal_status_indexes",
       "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1770437401893,
+      "tag": "0037_deferrable-tally-queue-fk",
+      "breakpoints": true
     }
   ]
 }

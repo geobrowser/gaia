@@ -24,9 +24,9 @@ fn get_topic_prefix() -> &'static str {
             "ENVIRONMENT variable must be set to 'staging' or 'production', got: '{}'",
             other
         ),
-        Err(_) => panic!(
-            "ENVIRONMENT variable must be set to 'staging' or 'production': NotPresent"
-        ),
+        Err(_) => {
+            panic!("ENVIRONMENT variable must be set to 'staging' or 'production': NotPresent")
+        }
     }
 }
 
@@ -63,7 +63,10 @@ async fn main() -> Result<()> {
     let topic_prefix = get_topic_prefix();
 
     info!("Topic prefix: '{}'", topic_prefix);
-    info!("Using topics: edits={}, scores={}", edits_topic, scores_topic);
+    info!(
+        "Using topics: edits={}, scores={}",
+        edits_topic, scores_topic
+    );
 
     // Create Kafka producer
     let producer = KafkaProducer::new(&cli.broker)?;
@@ -82,8 +85,7 @@ async fn main() -> Result<()> {
     let alice_zero_id = Uuid::parse_str("00000000-0000-0000-0000-0000000000f4").unwrap();
     let alice_negative_id = Uuid::parse_str("00000000-0000-0000-0000-0000000000f5").unwrap();
     let alice_at_threshold_id = Uuid::parse_str("00000000-0000-0000-0000-0000000000f6").unwrap();
-    let alice_below_threshold_id =
-        Uuid::parse_str("00000000-0000-0000-0000-0000000000f7").unwrap();
+    let alice_below_threshold_id = Uuid::parse_str("00000000-0000-0000-0000-0000000000f7").unwrap();
 
     // Other entities
     let bob_id = Uuid::parse_str("00000000-0000-0000-0000-000000000b0b").unwrap();
@@ -108,6 +110,24 @@ async fn main() -> Result<()> {
     let rank_epsilon_entity_id = Uuid::parse_str("00000000-0000-0000-0000-000000000ea3").unwrap();
     let rank_zeta_entity_id = Uuid::parse_str("00000000-0000-0000-0000-000000000ea4").unwrap();
 
+    // Text match scoring test entities (all get the same entity_global_score so scoreBoost is equal)
+    // Group A: Name match vs description-only match (query: "Wonderland")
+    let tm_name_match_id = Uuid::parse_str("00000000-0000-0000-0000-00000000aa01").unwrap();
+    let tm_desc_match_id = Uuid::parse_str("00000000-0000-0000-0000-00000000aa02").unwrap();
+    // Group B: Exact match vs fuzzy match (query: "Blockchain")
+    let tm_exact_match_id = Uuid::parse_str("00000000-0000-0000-0000-00000000aa03").unwrap();
+    let tm_fuzzy_match_id = Uuid::parse_str("00000000-0000-0000-0000-00000000aa04").unwrap();
+    // Group C: Multi-word match vs single-word match (query: "San Francisco")
+    let tm_multi_word_id = Uuid::parse_str("00000000-0000-0000-0000-00000000aa05").unwrap();
+    let tm_single_word_id = Uuid::parse_str("00000000-0000-0000-0000-00000000aa06").unwrap();
+    // Group D: Name+description match vs name-only match (query: "Quantum")
+    let tm_name_and_desc_id = Uuid::parse_str("00000000-0000-0000-0000-00000000aa07").unwrap();
+    let tm_name_only_id = Uuid::parse_str("00000000-0000-0000-0000-00000000aa08").unwrap();
+    // Group E: High global score vs low global score, both match in name (query: "Velociraptor")
+    // Both have "Velociraptor" in name, but low-score entity is an exact single-word name match
+    // (slightly higher BM25 score). High score boost should overcome the small text match difference.
+    let tm_high_score_id = Uuid::parse_str("00000000-0000-0000-0000-00000000aa09").unwrap();
+    let tm_low_score_id = Uuid::parse_str("00000000-0000-0000-0000-00000000aa0a").unwrap();
     info!("Test Space ID: {}", test_space);
     info!("Person Type ID: {}", person_type_id);
     info!("Organization Type ID: {}", org_type_id);
@@ -127,21 +147,47 @@ async fn main() -> Result<()> {
     info!("  Alice (Zero Score) ID: {}", alice_zero_id);
     info!("  Alice (Negative Score) ID: {}", alice_negative_id);
     info!("  Alice (At Threshold) ID: {}", alice_at_threshold_id);
-    info!(
-        "  Alice (Below Threshold) ID: {}",
-        alice_below_threshold_id
-    );
+    info!("  Alice (Below Threshold) ID: {}", alice_below_threshold_id);
     info!("\nOther entities:");
     info!("  Bob ID: {}", bob_id);
     info!("  Charlie ID: {} - will have NO global score", charlie_id);
     info!("  Organization ID: {}", org_id);
     info!("\nDeletion test entities:");
-    info!("  Delete Charlie ID: {} (will be deleted)", delete_charlie_id);
+    info!(
+        "  Delete Charlie ID: {} (will be deleted)",
+        delete_charlie_id
+    );
     info!("  Delete Dana ID: {} (will be deleted)", delete_dana_id);
-    info!("  Delete Eve ID: {} (will be deleted then updated)", delete_eve_id);
+    info!(
+        "  Delete Eve ID: {} (will be deleted then updated)",
+        delete_eve_id
+    );
     info!("\nCreateEntity test:");
-    info!("  CreateEntity Test ID: {} (created via CreateEntity op)", create_entity_test_id);
-
+    info!(
+        "  CreateEntity Test ID: {} (created via CreateEntity op)",
+        create_entity_test_id
+    );
+    info!("\nText match scoring test entities:");
+    info!(
+        "  Group A (query 'Wonderland'): name match {} vs desc match {}",
+        tm_name_match_id, tm_desc_match_id
+    );
+    info!(
+        "  Group B (query 'Blockchain'): exact {} vs fuzzy {}",
+        tm_exact_match_id, tm_fuzzy_match_id
+    );
+    info!(
+        "  Group C (query 'San Francisco'): multi-word {} vs single-word {}",
+        tm_multi_word_id, tm_single_word_id
+    );
+    info!(
+        "  Group D (query 'Quantum'): name+desc {} vs name-only {}",
+        tm_name_and_desc_id, tm_name_only_id
+    );
+    info!(
+        "  Group E (query 'Velociraptor'): high-score {} vs low-score {}",
+        tm_high_score_id, tm_low_score_id
+    );
     // 1. Create Person type entity
     info!("\n1. Creating Person type entity...");
     let person_type_payload = edits::create_entity_edit(
@@ -166,9 +212,7 @@ async fn main() -> Result<()> {
         Some("A structured group of people"),
         None,
     )?;
-    producer
-        .send(&edits_topic, None, org_type_payload)
-        .await?;
+    producer.send(&edits_topic, None, org_type_payload).await?;
 
     // 3. Create multiple Alice entities with different score profiles
     info!("3. Creating Alice entities with varying characteristics...");
@@ -205,9 +249,7 @@ async fn main() -> Result<()> {
         Some("Software developer with low global score"),
         None,
     )?;
-    producer
-        .send(&edits_topic, None, alice_low_payload)
-        .await?;
+    producer.send(&edits_topic, None, alice_low_payload).await?;
 
     let alice_zero_payload = edits::create_entity_edit(
         "Create Alice Zero",
@@ -312,9 +354,7 @@ async fn main() -> Result<()> {
             entity_id,
             person_type_id,
         )?;
-        producer
-            .send(&edits_topic, None, type_rel_payload)
-            .await?;
+        producer.send(&edits_topic, None, type_rel_payload).await?;
     }
 
     let org_type_payload_rel = relations::create_type_relation(
@@ -331,9 +371,7 @@ async fn main() -> Result<()> {
     info!("7.1. Setting up typeIds test scenarios with Alice entities...");
 
     // Alice High: Multiple type relations (typeIds should have both Person and Organization)
-    info!(
-        "  - Alice High: Adding Organization type relation (already has Person)..."
-    );
+    info!("  - Alice High: Adding Organization type relation (already has Person)...");
     let alice_high_org_payload = relations::create_type_relation(
         "Alice High -> Organization Type",
         test_space,
@@ -405,20 +443,172 @@ async fn main() -> Result<()> {
         .send(&edits_topic, None, alice_low_org_delete_payload)
         .await?;
 
+    // 7.5. Create text match scoring test entities
+    // All entities in each group have the SAME score (0.50) so textMatchScore comparisons
+    // reflect only text matching quality, not score boost differences.
+    info!("7.5. Creating text match scoring test entities...");
+
+    // Group A: Name match vs description-only match (query: "Wonderland")
+    // tm_name_match: name IS the query → should score highest
+    // tm_desc_match: name is unrelated, query appears in short description → should score lower
+    let tm_name_match_payload = edits::create_entity_edit(
+        "Create TM Name Match (Wonderland)",
+        test_space,
+        tm_name_match_id,
+        Some("Wonderland"),
+        Some("A magical place in fiction"),
+        None,
+    )?;
+    producer
+        .send(&edits_topic, None, tm_name_match_payload)
+        .await?;
+
+    let tm_desc_match_payload = edits::create_entity_edit(
+        "Create TM Desc Match (Rex)",
+        test_space,
+        tm_desc_match_id,
+        Some("Rex"),
+        Some("Researcher @Wonderland"),
+        None,
+    )?;
+    producer
+        .send(&edits_topic, None, tm_desc_match_payload)
+        .await?;
+
+    // Group B: Exact match vs fuzzy match (query: "Blockchain")
+    // tm_exact_match: name exactly matches query → should score highest
+    // tm_fuzzy_match: name has typo, matches only via fuzziness → should score lower
+    let tm_exact_match_payload = edits::create_entity_edit(
+        "Create TM Exact Match (Blockchain)",
+        test_space,
+        tm_exact_match_id,
+        Some("Blockchain"),
+        Some("A distributed ledger technology"),
+        None,
+    )?;
+    producer
+        .send(&edits_topic, None, tm_exact_match_payload)
+        .await?;
+
+    let tm_fuzzy_match_payload = edits::create_entity_edit(
+        "Create TM Fuzzy Match (Blockchan)",
+        test_space,
+        tm_fuzzy_match_id,
+        Some("Blockchan"),
+        Some("A distributed ledger technology"),
+        None,
+    )?;
+    producer
+        .send(&edits_topic, None, tm_fuzzy_match_payload)
+        .await?;
+
+    // Group C: Multi-word match vs single-word match (query: "San Francisco")
+    // tm_multi_word: name matches both words "San" and "Francisco" → should score highest
+    // tm_single_word: name matches only "San" → should score lower
+    let tm_multi_word_payload = edits::create_entity_edit(
+        "Create TM Multi Word (San Francisco)",
+        test_space,
+        tm_multi_word_id,
+        Some("San Francisco"),
+        Some("A city in California"),
+        None,
+    )?;
+    producer
+        .send(&edits_topic, None, tm_multi_word_payload)
+        .await?;
+
+    let tm_single_word_payload = edits::create_entity_edit(
+        "Create TM Single Word (San Diego)",
+        test_space,
+        tm_single_word_id,
+        Some("San Diego"),
+        Some("A city in southern California"),
+        None,
+    )?;
+    producer
+        .send(&edits_topic, None, tm_single_word_payload)
+        .await?;
+
+    // Group D: Name+description match vs name-only match (query: "Quantum")
+    // tm_name_and_desc: name matches AND description also matches → should score highest
+    // tm_name_only: name matches but description has no matching terms → should score lower
+    let tm_name_and_desc_payload = edits::create_entity_edit(
+        "Create TM Name+Desc (Quantum Computing)",
+        test_space,
+        tm_name_and_desc_id,
+        Some("Quantum Computing"),
+        Some("Quantum physics applied to computation"),
+        None,
+    )?;
+    producer
+        .send(&edits_topic, None, tm_name_and_desc_payload)
+        .await?;
+
+    let tm_name_only_payload = edits::create_entity_edit(
+        "Create TM Name Only (Quantum Mechanics)",
+        test_space,
+        tm_name_only_id,
+        Some("Quantum Mechanics"),
+        Some("The study of subatomic particles"),
+        None,
+    )?;
+    producer
+        .send(&edits_topic, None, tm_name_only_payload)
+        .await?;
+
+    // Group E: High global score vs low global score, both match "Velociraptor" in name
+    // tm_high_score: multi-word name containing query (slightly lower BM25 due to longer name)
+    // tm_low_score: exact single-word name match (slightly higher BM25), but very low global score
+    let tm_high_score_payload = edits::create_entity_edit(
+        "Create TM High Score (Velociraptor Research)",
+        test_space,
+        tm_high_score_id,
+        Some("Velociraptor Research"),
+        Some("Academic center for dinosaur studies"),
+        None,
+    )?;
+    producer
+        .send(&edits_topic, None, tm_high_score_payload)
+        .await?;
+
+    let tm_low_score_payload = edits::create_entity_edit(
+        "Create TM Low Score (Velociraptor)",
+        test_space,
+        tm_low_score_id,
+        Some("Velociraptor"),
+        Some("A small feathered dinosaur"),
+        None,
+    )?;
+    producer
+        .send(&edits_topic, None, tm_low_score_payload)
+        .await?;
+
     // 8. Generate scores with varying values (Charlie intentionally excluded)
     info!("8. Generating scores with varying entity and space scores (Charlie has no global score)...");
     let score_payload = scores::create_mixed_score_batch(
         vec![
             // Alice entities with different score profiles
-            (alice_high_id, 0.95),           // High positive score
-            (alice_medium_id, 0.65),         // Medium positive score
-            (alice_low_id, 0.15),            // Low positive score
-            (alice_zero_id, 0.0),            // Exactly zero
-            (alice_negative_id, -0.75),      // Negative score (z-score)
-            (alice_at_threshold_id, 0.50),   // At typical threshold
+            (alice_high_id, 0.95),            // High positive score
+            (alice_medium_id, 0.65),          // Medium positive score
+            (alice_low_id, 0.15),             // Low positive score
+            (alice_zero_id, 0.0),             // Exactly zero
+            (alice_negative_id, -0.75),       // Negative score (z-score)
+            (alice_at_threshold_id, 0.50),    // At typical threshold
             (alice_below_threshold_id, 0.25), // Below threshold
             // Other entities
             (bob_id, 0.75),
+            // Text match scoring test entities (all same score for fair textMatchScore comparison)
+            (tm_name_match_id, 0.50),
+            (tm_desc_match_id, 0.50),
+            (tm_exact_match_id, 0.50),
+            (tm_fuzzy_match_id, 0.50),
+            (tm_multi_word_id, 0.50),
+            (tm_single_word_id, 0.50),
+            (tm_name_and_desc_id, 0.50),
+            (tm_name_only_id, 0.50),
+            // Group E: Different scores to test score boost outranking text match
+            (tm_high_score_id, 0.90), // High score, "Velociraptor Research"
+            (tm_low_score_id, 0.20),  // Low score, "Velociraptor"
             (org_id, 0.90),
             (person_type_id, 0.70),
             (org_type_id, 0.65),
@@ -437,9 +627,7 @@ async fn main() -> Result<()> {
         1,
         true,
     )?;
-    producer
-        .send(&scores_topic, None, score_payload)
-        .await?;
+    producer.send(&scores_topic, None, score_payload).await?;
 
     // 9. Create entities that will be soft deleted (for delete testing)
     info!("9. Creating entities for deletion testing...");
@@ -451,7 +639,9 @@ async fn main() -> Result<()> {
         Some("This entity will be deleted"),
         None,
     )?;
-    producer.send(&edits_topic, None, delete_charlie_payload_create).await?;
+    producer
+        .send(&edits_topic, None, delete_charlie_payload_create)
+        .await?;
 
     let delete_dana_payload_create = edits::create_entity_edit(
         "Create Delete Dana",
@@ -461,7 +651,9 @@ async fn main() -> Result<()> {
         Some("This entity will also be deleted"),
         None,
     )?;
-    producer.send(&edits_topic, None, delete_dana_payload_create).await?;
+    producer
+        .send(&edits_topic, None, delete_dana_payload_create)
+        .await?;
 
     let delete_eve_payload_create = edits::create_entity_edit(
         "Create Delete Eve",
@@ -471,30 +663,28 @@ async fn main() -> Result<()> {
         Some("This entity will be deleted then updated"),
         None,
     )?;
-    producer.send(&edits_topic, None, delete_eve_payload_create).await?;
+    producer
+        .send(&edits_topic, None, delete_eve_payload_create)
+        .await?;
 
     // 10. Delete the test entities (soft delete)
     info!("10. Soft deleting Delete Charlie, Delete Dana, and Delete Eve...");
-    let delete_charlie_payload = edits::delete_entity(
-        "Delete Delete Charlie",
-        test_space,
-        delete_charlie_id,
-    )?;
-    producer.send(&edits_topic, None, delete_charlie_payload).await?;
+    let delete_charlie_payload =
+        edits::delete_entity("Delete Delete Charlie", test_space, delete_charlie_id)?;
+    producer
+        .send(&edits_topic, None, delete_charlie_payload)
+        .await?;
 
-    let delete_dana_payload = edits::delete_entity(
-        "Delete Delete Dana",
-        test_space,
-        delete_dana_id,
-    )?;
-    producer.send(&edits_topic, None, delete_dana_payload).await?;
+    let delete_dana_payload =
+        edits::delete_entity("Delete Delete Dana", test_space, delete_dana_id)?;
+    producer
+        .send(&edits_topic, None, delete_dana_payload)
+        .await?;
 
-    let delete_eve_payload = edits::delete_entity(
-        "Delete Delete Eve",
-        test_space,
-        delete_eve_id,
-    )?;
-    producer.send(&edits_topic, None, delete_eve_payload).await?;
+    let delete_eve_payload = edits::delete_entity("Delete Delete Eve", test_space, delete_eve_id)?;
+    producer
+        .send(&edits_topic, None, delete_eve_payload)
+        .await?;
 
     // 11. Update a deleted entity (Delete Eve) - should remain deleted
     info!("11. Updating Delete Eve after deletion (testing delete-then-update behavior)...");
@@ -506,7 +696,9 @@ async fn main() -> Result<()> {
         Some("This entity was updated after being deleted - should remain deleted"),
         None,
     )?;
-    producer.send(&edits_topic, None, update_eve_payload).await?;
+    producer
+        .send(&edits_topic, None, update_eve_payload)
+        .await?;
 
     // 12. Test CreateEntity GRC-20 operation
     info!("12. Testing CreateEntity GRC-20 operation...");
@@ -518,7 +710,9 @@ async fn main() -> Result<()> {
         Some("Entity created using the GRC-20 CreateEntity operation"),
         Some("https://example.com/create-entity-avatar.png"),
     )?;
-    producer.send(&edits_topic, None, create_entity_payload).await?;
+    producer
+        .send(&edits_topic, None, create_entity_payload)
+        .await?;
 
     // 14. Create entities for GLOBAL_BY_ENTITY_SPACE_SCORE ranking test
     info!("\n14. Creating entities for GLOBAL_BY_ENTITY_SPACE_SCORE ranking test...");
@@ -533,7 +727,9 @@ async fn main() -> Result<()> {
         Some("Gamma: high entity_space_score in high space_score space"),
         None,
     )?;
-    producer.send(&edits_topic, None, rank_gamma_payload).await?;
+    producer
+        .send(&edits_topic, None, rank_gamma_payload)
+        .await?;
 
     let rank_delta_payload = edits::create_entity_edit(
         "Create RankTest Delta",
@@ -543,7 +739,9 @@ async fn main() -> Result<()> {
         Some("Delta: low entity_space_score in high space_score space"),
         None,
     )?;
-    producer.send(&edits_topic, None, rank_delta_payload).await?;
+    producer
+        .send(&edits_topic, None, rank_delta_payload)
+        .await?;
 
     let rank_epsilon_payload = edits::create_entity_edit(
         "Create RankTest Epsilon",
@@ -553,7 +751,9 @@ async fn main() -> Result<()> {
         Some("Epsilon: high entity_space_score in low space_score space"),
         None,
     )?;
-    producer.send(&edits_topic, None, rank_epsilon_payload).await?;
+    producer
+        .send(&edits_topic, None, rank_epsilon_payload)
+        .await?;
 
     let rank_zeta_payload = edits::create_entity_edit(
         "Create RankTest Zeta",
@@ -584,44 +784,46 @@ async fn main() -> Result<()> {
         ],
         vec![], // Space scores sent separately below
         vec![
-            (rank_gamma_entity_id, rank_high_space_id, 0.90),   // product: 0.90 * 0.80 = 0.72
-            (rank_delta_entity_id, rank_high_space_id, 0.20),    // product: 0.20 * 0.80 = 0.16
-            (rank_epsilon_entity_id, rank_low_space_id, 0.90),   // product: 0.90 * 0.10 = 0.09
-            (rank_zeta_entity_id, rank_low_space_id, 0.20),      // product: 0.20 * 0.10 = 0.02
+            (rank_gamma_entity_id, rank_high_space_id, 0.90), // product: 0.90 * 0.80 = 0.72
+            (rank_delta_entity_id, rank_high_space_id, 0.20), // product: 0.20 * 0.80 = 0.16
+            (rank_epsilon_entity_id, rank_low_space_id, 0.90), // product: 0.90 * 0.10 = 0.09
+            (rank_zeta_entity_id, rank_low_space_id, 0.20),   // product: 0.20 * 0.10 = 0.02
         ],
         2,
         true,
     )?;
-    producer.send(&scores_topic, None, rank_score_payload).await?;
+    producer
+        .send(&scores_topic, None, rank_score_payload)
+        .await?;
 
     // Send space scores in a separate batch so they run AFTER entity documents are created.
     // The space score uses update_by_query which requires documents to already exist.
     info!("  Sending space scores separately (after entity documents are created)...");
     let rank_space_score_payload = scores::create_mixed_score_batch(
         vec![],
-        vec![
-            (rank_high_space_id, 0.80),
-            (rank_low_space_id, 0.10),
-        ],
+        vec![(rank_high_space_id, 0.80), (rank_low_space_id, 0.10)],
         vec![],
         3,
         true,
     )?;
-    producer.send(&scores_topic, None, rank_space_score_payload).await?;
+    producer
+        .send(&scores_topic, None, rank_space_score_payload)
+        .await?;
 
     // 11.1. Restore Delete Dana (testing restore after delete)
     info!("11.1. Restoring Delete Dana after deletion (testing restore behavior)...");
-    let restore_dana_payload = edits::restore_entity(
-        "Restore Delete Dana",
-        test_space,
-        delete_dana_id,
-    )?;
-    producer.send(&edits_topic, None, restore_dana_payload).await?;
+    let restore_dana_payload =
+        edits::restore_entity("Restore Delete Dana", test_space, delete_dana_id)?;
+    producer
+        .send(&edits_topic, None, restore_dana_payload)
+        .await?;
 
     info!("\n✅ Test scenario complete!");
     info!("Created:");
     info!("  - 18 entities (13 active + 2 deleted + 3 unset test entities)");
-    info!("    • 7 Alice variants (high, medium, low, zero, negative, at threshold, below threshold)");
+    info!(
+        "    • 7 Alice variants (high, medium, low, zero, negative, at threshold, below threshold)"
+    );
     info!("    • Bob, Charlie, Acme Corp");
     info!("    • Person type, Organization type");
     info!("    • CreateEntity test entity (created via CreateEntity GRC-20 op)");
@@ -636,8 +838,9 @@ async fn main() -> Result<()> {
     info!("    • Other Alice entities, Bob, Charlie: Single type (Person)");
     info!("    • Acme Corp: Single type (Organization)");
     info!("  - 15 type relation events (11 creates, 2 deletes, 1 recreate for testing typeIds)");
-    info!("  - 11 entity scores (including negative and zero)");
+    info!("  - 21 entity scores (including negative and zero)");
     info!("  - Charlie has NO global score (tests default score behavior)");
+    info!("  - 10 text match scoring test entities (8 at score 0.50, 2 with different scores)");
     info!("  - 1 space score");
     info!("  - 7 perspective scores");
     info!("\nScore ranges:");
@@ -710,7 +913,11 @@ async fn main() -> Result<()> {
         ],
     )?;
     producer
-        .send(&edits_topic, Some(&unset_test_2_key), unset_name_desc_payload)
+        .send(
+            &edits_topic,
+            Some(&unset_test_2_key),
+            unset_name_desc_payload,
+        )
         .await?;
 
     // Test Case 3: Mixed set/unset + LWW (Last-Writer-Wins) test
@@ -736,9 +943,9 @@ async fn main() -> Result<()> {
         "LWW Mixed Set and Unset",
         test_space,
         lww_test_id,
-        Some("First Update"),     // Set name to first value
-        None,                      // Don't set description
-        None,                      // Don't set avatar
+        Some("First Update"), // Set name to first value
+        None,                 // Don't set description
+        None,                 // Don't set avatar
         vec![
             sdk::core::ids::DESCRIPTION_PROPERTY_ID, // Unset description (no overlap with set)
         ],
@@ -752,9 +959,9 @@ async fn main() -> Result<()> {
         "LWW Second Set",
         test_space,
         lww_test_id,
-        Some("Second Update"),    // Set name again - last write should win
-        None,                      // Don't set description (remains unset)
-        None,                      // Don't set avatar (keep existing)
+        Some("Second Update"), // Set name again - last write should win
+        None,                  // Don't set description (remains unset)
+        None,                  // Don't set avatar (keep existing)
     )?;
     producer
         .send(&edits_topic, Some(&lww_test_key), lww_second_set)
@@ -763,7 +970,9 @@ async fn main() -> Result<()> {
     info!("\n✅ Test scenario complete!");
     info!("Created:");
     info!("  - 15 entities (12 from before + 3 property operation test entities)");
-    info!("    • 7 Alice variants (high, medium, low, zero, negative, at threshold, below threshold)");
+    info!(
+        "    • 7 Alice variants (high, medium, low, zero, negative, at threshold, below threshold)"
+    );
     info!("    • Bob, Charlie, Acme Corp");
     info!("    • Person type, Organization type");
     info!("    • 2 entities for unset property testing");
@@ -774,13 +983,20 @@ async fn main() -> Result<()> {
     info!("    • Other Alice entities, Bob, Charlie: Single type (Person)");
     info!("    • Acme Corp: Single type (Organization)");
     info!("  - 15 type relation events (11 creates, 2 deletes, 1 recreate for testing typeIds)");
-    info!("  - 11 entity scores (including negative and zero)");
+    info!("  - 21 entity scores (including negative and zero)");
     info!("  - Charlie has NO global score (tests default score behavior)");
+    info!("  - 10 text match scoring test entities (8 at score 0.50, 2 with different scores)");
     info!("  - 1 space score");
     info!("  - 7 perspective scores");
     info!("  - 3 property operation test cases:");
-    info!("    • Test 1 ({}): name unset, description remains", unset_test_1_id);
-    info!("    • Test 2 ({}): name and description unset, avatar remains", unset_test_2_id);
+    info!(
+        "    • Test 1 ({}): name unset, description remains",
+        unset_test_1_id
+    );
+    info!(
+        "    • Test 2 ({}): name and description unset, avatar remains",
+        unset_test_2_id
+    );
     info!("    • Test 3 ({}): mixed set/unset + LWW test (name='Second Update' wins, description unset)", lww_test_id);
     info!("\nScore ranges:");
     info!("  • High: 0.95");

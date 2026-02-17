@@ -5,7 +5,7 @@
  * matching the contract's `isSupportThresholdReached()` implementation.
  */
 
-import type {ProposalWithVotes, StatusComputationResult} from "./types"
+import type {ProposalListItem, ProposalWithVotes, StatusComputationResult} from "./types"
 import {RATIO_BASE} from "./types"
 
 /**
@@ -22,7 +22,10 @@ import {RATIO_BASE} from "./types"
  * @param nowSeconds - Current time in seconds (inject for testability)
  * @returns Status computation result with status and intermediate flags
  */
-export function computeProposalStatus(proposal: ProposalWithVotes, nowSeconds: bigint): StatusComputationResult {
+export function computeProposalStatus(
+	proposal: ProposalWithVotes | ProposalListItem,
+	nowSeconds: bigint,
+): StatusComputationResult {
 	// Already executed -> ACCEPTED (regardless of votes)
 	if (proposal.executedAt !== null) {
 		return {

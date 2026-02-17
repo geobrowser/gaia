@@ -23,9 +23,9 @@ use crate::decode::{
 use hermes_relay::{Action, actions};
 use hermes_schema::pb::governance::{
     AddEditorAction, AddMemberAction, FlagAction, HermesProposalCreated, HermesProposalExecuted,
-    HermesProposalUpdated, HermesProposalVoted, ProposalAction, ProposalSettings,
-    ProposalVoteOption, PublishAction, RemoveEditorAction, RemoveMemberAction, UnflagAction,
-    UnflagEditorAction, UpdateVotingSettingsAction, VotingMode, proposal_action,
+    HermesProposalSettingsUpdated, HermesProposalUpdated, HermesProposalVoted, ProposalAction,
+    ProposalSettings, ProposalVoteOption, PublishAction, RemoveEditorAction, RemoveMemberAction,
+    UnflagAction, UnflagEditorAction, UpdateVotingSettingsAction, VotingMode, proposal_action,
 };
 
 use super::BlockMetadata;
@@ -37,6 +37,7 @@ pub struct TransformResult {
     pub proposals_updated: Vec<HermesProposalUpdated>,
     pub proposals_voted: Vec<HermesProposalVoted>,
     pub proposals_executed: Vec<HermesProposalExecuted>,
+    pub proposals_settings_updated: Vec<HermesProposalSettingsUpdated>,
 }
 
 impl TransformResult {
@@ -45,6 +46,7 @@ impl TransformResult {
             + self.proposals_updated.len()
             + self.proposals_voted.len()
             + self.proposals_executed.len()
+            + self.proposals_settings_updated.len()
     }
 }
 
@@ -60,6 +62,8 @@ struct ProposalCreatedPending {
 
 /// Intermediate data for a PROPOSAL_SETTINGS_SELECTED event before squashing.
 struct ProposalSettingsPending {
+    space_id: Vec<u8>,
+    sequence: u32,
     settings: ProposalSettings,
 }
 
@@ -113,7 +117,7 @@ pub fn transform(
                 "parse.governance.settings",
                 proposal_id = %hex::encode(&action.topic[..16])
             )
-            .in_scope(|| parse_proposal_settings_used(action))
+            .in_scope(|| parse_proposal_settings_used(action, sequence))
             {
                 // proposal_id is in topic field (bytes16 right-padded to 32, so first 16 bytes)
                 let proposal_id = action.topic[..16].to_vec();
@@ -220,12 +224,24 @@ pub fn transform(
         }
     }
 
-    // Log any orphaned PROPOSAL_SETTINGS_SELECTED events
-    for (proposal_id, _) in settings_map {
-        warn!(
+    // Emit orphaned PROPOSAL_SETTINGS_SELECTED as settings-only updates.
+    // This handles fast-path → slow-path escalation: when a NO vote on a fast-path
+    // proposal triggers escalation, the contract emits PROPOSAL_SETTINGS_SELECTED
+    // (via ping) but not PROPOSAL_UPDATED, so the settings have no created/updated
+    // event to squash with.
+    for (proposal_id, settings_pending) in settings_map {
+        info!(
             proposal_id = %hex::encode(&proposal_id),
-            "PROPOSAL_SETTINGS_SELECTED without matching PROPOSAL_CREATED/UPDATED, discarding"
+            "Orphaned PROPOSAL_SETTINGS_SELECTED — emitting as settings update (fast→slow escalation)"
         );
+        result
+            .proposals_settings_updated
+            .push(HermesProposalSettingsUpdated {
+                space_id: settings_pending.space_id,
+                proposal_id,
+                settings: Some(settings_pending.settings),
+                meta: Some(meta.to_proto(settings_pending.sequence)),
+            });
     }
 
     // Enrich all Publish actions with edit names from the prefetched cache
@@ -484,7 +500,7 @@ fn parse_proposal_created(action: &Action, sequence: u32) -> Option<ProposalCrea
 /// - to_id: space_id (16 bytes, same as from_id)
 /// - topic: proposal_id (16 bytes, padded to 32)
 /// - data: abi.encode(startDate, lastDate, votingMode, quorum, supportThreshold)
-fn parse_proposal_settings_used(action: &Action) -> Option<ProposalSettingsPending> {
+fn parse_proposal_settings_used(action: &Action, sequence: u32) -> Option<ProposalSettingsPending> {
     let decoded = match decode::decode_proposal_settings_used(&action.data) {
         Ok(decoded) => decoded,
         Err(e) => {
@@ -539,6 +555,8 @@ fn parse_proposal_settings_used(action: &Action) -> Option<ProposalSettingsPendi
     };
 
     Some(ProposalSettingsPending {
+        space_id: action.from_id.clone(),
+        sequence,
         settings: ProposalSettings {
             start_date: decoded.start_date,
             last_date: decoded.last_date,
@@ -858,6 +876,121 @@ mod tests {
         assert_eq!(result.proposals_created.len(), 0);
         assert_eq!(result.proposals_voted.len(), 1);
         assert_eq!(result.proposals_executed.len(), 1);
+    }
+
+    /// Encode vote data matching Solidity's `abi.encode(bytes16 proposalId, VoteOption)`.
+    ///
+    /// ABI encoding for `(bytes16, uint8)`:
+    ///   Word 0: bytes16 left-aligned, right-padded with zeros to 32 bytes
+    ///   Word 1: uint8 right-aligned, left-padded with zeros to 32 bytes
+    fn encode_vote_data(proposal_id: [u8; 16], vote_option: u8) -> Vec<u8> {
+        let mut data = vec![0u8; 64];
+        // Word 0: bytes16, left-aligned
+        data[..16].copy_from_slice(&proposal_id);
+        // Word 1: uint8, right-aligned
+        data[63] = vote_option;
+        data
+    }
+
+    /// Wrap raw bytes in ABI `bytes` encoding (offset + length + data), matching
+    /// what the EVM produces for a non-indexed `bytes` event parameter.
+    fn wrap_in_abi_bytes(inner: &[u8]) -> Vec<u8> {
+        let mut wrapped = Vec::new();
+        // Offset to data (always 0x20 = 32 for a single bytes param)
+        wrapped.extend_from_slice(&[0u8; 31]);
+        wrapped.push(0x20);
+        // Length of inner data
+        let len = inner.len();
+        wrapped.extend_from_slice(&[0u8; 24]);
+        wrapped.extend_from_slice(&(len as u64).to_be_bytes());
+        // Inner data, padded to 32-byte boundary
+        wrapped.extend_from_slice(inner);
+        let padding = (32 - (len % 32)) % 32;
+        wrapped.extend(std::iter::repeat_n(0u8, padding));
+        wrapped
+    }
+
+    /// Test that convert_proposal_voted correctly decodes each VoteOption
+    /// when data is ABI-encoded as the contract produces it (raw, no bytes wrapper).
+    #[test]
+    fn test_convert_proposal_voted_with_abi_encoded_vote_options() {
+        let proposal_id = [0xAA; 16];
+        let voter_id = vec![0x01; 16];
+        let space_id = vec![0x02; 16];
+
+        let cases = [
+            (0u8, ProposalVoteOption::VoteOptionNone as i32, "None"),
+            (1, ProposalVoteOption::VoteOptionYes as i32, "Yes"),
+            (2, ProposalVoteOption::VoteOptionNo as i32, "No"),
+            (3, ProposalVoteOption::VoteOptionAbstain as i32, "Abstain"),
+        ];
+
+        for (vote_value, expected_proto, label) in cases {
+            let action = Action {
+                from_id: voter_id.clone(),
+                to_id: space_id.clone(),
+                action: actions::PROPOSAL_VOTED.to_vec(),
+                topic: proposal_id.iter().copied().chain(vec![0; 16]).collect(),
+                data: encode_vote_data(proposal_id, vote_value),
+            };
+
+            let result = convert_proposal_voted(&action, &test_meta(), 0)
+                .unwrap_or_else(|e| panic!("Failed to convert VoteOption.{label}: {e}"));
+
+            assert_eq!(
+                result.vote, expected_proto,
+                "VoteOption.{label} (value={vote_value}): expected proto value {expected_proto}, got {}",
+                result.vote
+            );
+            assert_eq!(result.voter_id, voter_id);
+            assert_eq!(result.space_id, space_id);
+            assert_eq!(result.proposal_id, proposal_id.to_vec());
+        }
+    }
+
+    /// Regression test: the EVM wraps non-indexed `bytes` event parameters in
+    /// ABI encoding (offset + length + content). decode_proposal_voted must
+    /// unwrap this to extract the actual vote data.
+    ///
+    /// Before the fix, the bytes-wrapped data failed to decode as `(bytes16, uint8)`,
+    /// causing convert_proposal_voted to default to VoteOptionNone, which kg-indexer
+    /// then mapped to Abstain — making every vote appear as Abstain.
+    #[test]
+    fn test_convert_proposal_voted_with_bytes_wrapped_data() {
+        let proposal_id = [0xAA; 16];
+        let voter_id = vec![0x01; 16];
+        let space_id = vec![0x02; 16];
+
+        let cases = [
+            (1u8, ProposalVoteOption::VoteOptionYes as i32, "Yes"),
+            (2, ProposalVoteOption::VoteOptionNo as i32, "No"),
+            (3, ProposalVoteOption::VoteOptionAbstain as i32, "Abstain"),
+        ];
+
+        for (vote_value, expected_proto, label) in cases {
+            // Inner data: abi.encode(bytes16 proposalId, uint8 VoteOption)
+            let inner = encode_vote_data(proposal_id, vote_value);
+            // Wrapped as the EVM would produce for a non-indexed `bytes` event parameter
+            let wrapped = wrap_in_abi_bytes(&inner);
+
+            let action = Action {
+                from_id: voter_id.clone(),
+                to_id: space_id.clone(),
+                action: actions::PROPOSAL_VOTED.to_vec(),
+                topic: proposal_id.iter().copied().chain(vec![0; 16]).collect(),
+                data: wrapped,
+            };
+
+            let result = convert_proposal_voted(&action, &test_meta(), 0).unwrap_or_else(|e| {
+                panic!("Failed to convert bytes-wrapped VoteOption.{label}: {e}")
+            });
+
+            assert_eq!(
+                result.vote, expected_proto,
+                "Bytes-wrapped VoteOption.{label}: expected proto value {expected_proto}, got {}",
+                result.vote
+            );
+        }
     }
 
     // Tests for enrich_publish_action_names
