@@ -97,6 +97,23 @@ export const DESCRIPTION_PREFIX_BOOST = 1.5
 export const NAME_FIELD_BOOST = 1.5
 
 /**
+ * Boost value for exact token match on the name field.
+ * Uses a standard `match` query (not prefix/phrase_prefix) to boost documents
+ * where the query terms exactly match analyzed tokens in the name.
+ *
+ * This ensures that an entity named "Geo" ranks above "geojson_preview_tool"
+ * for query "geo", because `match` requires exact token equality — "geo" matches
+ * the token "geo" but does NOT match "geojson". Without this, accumulated prefix
+ * matches in name and description (e.g. "geojson.io", "GeoJSON") can outscore
+ * a short exact name match.
+ *
+ * Set to 5.0 to create a meaningful signal for exact token matches while
+ * keeping the boost modest enough that score field differences (SCORE_BOOST=10)
+ * can still override text match gaps between single-word and multi-word names.
+ */
+export const NAME_EXACT_TOKEN_BOOST = 5.0
+
+/**
  * Boost value for fuzzy text match queries.
  * Reduces the weight of fuzzy matches compared to exact/prefix matches.
  */
@@ -462,6 +479,18 @@ export class OpenSearchClient implements SearchClient {
 		return {
 			bool: {
 				should: [
+					{
+						// Exact token match on name — strongly boosts documents where
+						// query terms match full analyzed tokens in the name field.
+						// e.g. query "geo" matches name "Geo" (token "geo") but NOT
+						// "geojson_preview_tool" (token "geojson" ≠ "geo").
+						match: {
+							name: {
+								query: queryText,
+								boost: NAME_EXACT_TOKEN_BOOST,
+							},
+						},
+					},
 					{
 						// Autocomplete-style match over n-grams with higher weight on name
 						multi_match: {
