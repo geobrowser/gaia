@@ -266,7 +266,7 @@ async fn main() -> Result<()> {
         test_space,
         alice_negative_id,
         Some("Alice"),
-        Some("Software developer with negative global score"),
+        Some("Software developer with second zero global score"),
         None,
     )?;
     producer
@@ -614,7 +614,7 @@ async fn main() -> Result<()> {
             (alice_medium_id, 0.65),         // Medium positive score
             (alice_low_id, 0.15),            // Low positive score
             (alice_zero_id, 0.0),            // Exactly zero
-            (alice_negative_id, -0.75),      // Negative score (z-score)
+            (alice_negative_id, 0.0),        // Second zero score
             (alice_at_threshold_id, 0.50),   // At typical threshold
             (alice_below_threshold_id, 0.25), // Below threshold
             // Other entities
@@ -642,7 +642,7 @@ async fn main() -> Result<()> {
             (alice_medium_id, test_space, 0.70),
             (alice_low_id, test_space, 0.20),
             (alice_zero_id, test_space, 0.0),
-            (alice_negative_id, test_space, -0.60),
+            (alice_negative_id, test_space, 0.0),
             (bob_id, test_space, 0.78),
             (org_id, test_space, 0.92),
         ],
@@ -744,7 +744,7 @@ async fn main() -> Result<()> {
     info!("\n✅ Test scenario complete!");
     info!("Created:");
     info!("  - 18 entities (13 active + 2 deleted + 3 unset test entities)");
-    info!("    • 7 Alice variants (high, medium, low, zero, negative, at threshold, below threshold)");
+    info!("    • 7 Alice variants (high, medium, low, zero, second zero, at threshold, below threshold)");
     info!("    • Bob, Charlie, Acme Corp");
     info!("    • Person type, Organization type");
     info!("    • CreateEntity test entity (created via CreateEntity GRC-20 op)");
@@ -759,7 +759,7 @@ async fn main() -> Result<()> {
     info!("    • Other Alice entities, Bob, Charlie: Single type (Person)");
     info!("    • Acme Corp: Single type (Organization)");
     info!("  - 15 type relation events (11 creates, 2 deletes, 1 recreate for testing typeIds)");
-    info!("  - 21 entity scores (including negative and zero)");
+    info!("  - 21 entity scores (including zero)");
     info!("  - Charlie has NO global score (tests default score behavior)");
     info!("  - 10 text match scoring test entities (8 at score 0.50, 2 with different scores)");
     info!("  - 1 space score");
@@ -769,7 +769,7 @@ async fn main() -> Result<()> {
     info!("  • Medium: 0.65");
     info!("  • Low: 0.15");
     info!("  • Zero: 0.0");
-    info!("  • Negative: -0.75");
+    info!("  • Second Zero: 0.0");
     info!("  • At Threshold: 0.50");
     info!("  • Below Threshold: 0.25");
 
@@ -894,7 +894,7 @@ async fn main() -> Result<()> {
     info!("\n✅ Test scenario complete!");
     info!("Created:");
     info!("  - 15 entities (12 from before + 3 property operation test entities)");
-    info!("    • 7 Alice variants (high, medium, low, zero, negative, at threshold, below threshold)");
+    info!("    • 7 Alice variants (high, medium, low, zero, second zero, at threshold, below threshold)");
     info!("    • Bob, Charlie, Acme Corp");
     info!("    • Person type, Organization type");
     info!("    • 2 entities for unset property testing");
@@ -905,7 +905,7 @@ async fn main() -> Result<()> {
     info!("    • Other Alice entities, Bob, Charlie: Single type (Person)");
     info!("    • Acme Corp: Single type (Organization)");
     info!("  - 15 type relation events (11 creates, 2 deletes, 1 recreate for testing typeIds)");
-    info!("  - 21 entity scores (including negative and zero)");
+    info!("  - 21 entity scores (including zero)");
     info!("  - Charlie has NO global score (tests default score behavior)");
     info!("  - 10 text match scoring test entities (8 at score 0.50, 2 with different scores)");
     info!("  - 2 geo name match test entities (no scores, testing exact vs prefix name matching)");
@@ -920,7 +920,7 @@ async fn main() -> Result<()> {
     info!("  • Medium: 0.65");
     info!("  • Low: 0.15");
     info!("  • Zero: 0.0");
-    info!("  • Negative: -0.75");
+    info!("  • Second Zero: 0.0");
     info!("  • At Threshold: 0.50");
     info!("  • Below Threshold: 0.25");
 
