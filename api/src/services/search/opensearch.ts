@@ -20,7 +20,7 @@ const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{
  * Default average score for entities without a specific score.
  * When an entity has no score value (missing or empty), this default is used.
  */
-export const DEFAULT_AVERAGE_SCORE = 0.0
+export const DEFAULT_AVERAGE_SCORE = 0.5
 
 /**
  * Minimum score threshold for search boosting.
@@ -589,10 +589,7 @@ export class OpenSearchClient implements SearchClient {
 	buildNonDeletedFilter(): object {
 		return {
 			bool: {
-				should: [
-					{term: {deleted: false}},
-					{bool: {must_not: [{exists: {field: "deleted"}}]}},
-				],
+				should: [{term: {deleted: false}}, {bool: {must_not: [{exists: {field: "deleted"}}]}}],
 				minimum_should_match: 1,
 			},
 		}

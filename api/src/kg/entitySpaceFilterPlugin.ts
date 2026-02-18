@@ -135,7 +135,7 @@ export const EntitySpaceFilterPlugin = (builder: any) => {
 	// Add spaceId/spaceIds/typeId/typeIds arguments and register data generators
 	builder.hook("GraphQLObjectType:fields:field:args", (args: any, build: any, context: any) => {
 		const {
-			scope: { isPgFieldConnection, isPgFieldSimpleCollection, pgFieldIntrospection },
+			scope: {isPgFieldConnection, isPgFieldSimpleCollection, pgFieldIntrospection},
 			addArgDataGenerator,
 		} = context
 
@@ -148,7 +148,7 @@ export const EntitySpaceFilterPlugin = (builder: any) => {
 			return args
 		}
 
-		const { pgSql: sql } = build
+		const {pgSql: sql} = build
 		const UUIDType = build.getTypeByName("UUID")
 		const UUIDFilterType = build.getTypeByName("UUIDFilter")
 
@@ -157,7 +157,7 @@ export const EntitySpaceFilterPlugin = (builder: any) => {
 		// ========================================================================
 
 		// Register the data generator for spaceId argument
-		addArgDataGenerator(({ spaceId }: { spaceId?: string }) => {
+		addArgDataGenerator(({spaceId}: {spaceId?: string}) => {
 			if (!spaceId) return {}
 			return {
 				pgQuery: (queryBuilder: any) => {
@@ -167,7 +167,7 @@ export const EntitySpaceFilterPlugin = (builder: any) => {
 		})
 
 		// Register the data generator for spaceIds argument
-		addArgDataGenerator(({ spaceIds }: { spaceIds?: any }) => {
+		addArgDataGenerator(({spaceIds}: {spaceIds?: any}) => {
 			if (!spaceIds) return {}
 
 			return {
@@ -178,13 +178,17 @@ export const EntitySpaceFilterPlugin = (builder: any) => {
 						queryBuilder.where(buildSingleSpaceCondition(sql, tableAlias, spaceIds.is))
 					}
 					if (spaceIds.isNot) {
-						queryBuilder.where(sql.fragment`NOT ${buildSingleSpaceCondition(sql, tableAlias, spaceIds.isNot)}`)
+						queryBuilder.where(
+							sql.fragment`NOT ${buildSingleSpaceCondition(sql, tableAlias, spaceIds.isNot)}`,
+						)
 					}
 					if (spaceIds.in && spaceIds.in.length > 0) {
 						queryBuilder.where(buildMultiSpaceCondition(sql, tableAlias, spaceIds.in))
 					}
 					if (spaceIds.notIn && spaceIds.notIn.length > 0) {
-						queryBuilder.where(sql.fragment`NOT ${buildMultiSpaceCondition(sql, tableAlias, spaceIds.notIn)}`)
+						queryBuilder.where(
+							sql.fragment`NOT ${buildMultiSpaceCondition(sql, tableAlias, spaceIds.notIn)}`,
+						)
 					}
 					if (spaceIds.isNull === true) {
 						queryBuilder.where(sql.fragment`NOT ${buildHasAnySpaceCondition(sql, tableAlias)}`)
@@ -201,7 +205,7 @@ export const EntitySpaceFilterPlugin = (builder: any) => {
 		// ========================================================================
 
 		// Register the data generator for typeId argument
-		addArgDataGenerator(({ typeId }: { typeId?: string }) => {
+		addArgDataGenerator(({typeId}: {typeId?: string}) => {
 			if (!typeId) return {}
 			return {
 				pgQuery: (queryBuilder: any) => {
@@ -211,7 +215,7 @@ export const EntitySpaceFilterPlugin = (builder: any) => {
 		})
 
 		// Register the data generator for typeIds argument
-		addArgDataGenerator(({ typeIds }: { typeIds?: any }) => {
+		addArgDataGenerator(({typeIds}: {typeIds?: any}) => {
 			if (!typeIds) return {}
 
 			return {
@@ -222,7 +226,9 @@ export const EntitySpaceFilterPlugin = (builder: any) => {
 						queryBuilder.where(buildSingleTypeCondition(sql, tableAlias, typeIds.is))
 					}
 					if (typeIds.isNot) {
-						queryBuilder.where(sql.fragment`NOT ${buildSingleTypeCondition(sql, tableAlias, typeIds.isNot)}`)
+						queryBuilder.where(
+							sql.fragment`NOT ${buildSingleTypeCondition(sql, tableAlias, typeIds.isNot)}`,
+						)
 					}
 					if (typeIds.in && typeIds.in.length > 0) {
 						queryBuilder.where(buildMultiTypeCondition(sql, tableAlias, typeIds.in))

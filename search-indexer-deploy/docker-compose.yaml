@@ -123,7 +123,9 @@ services:
       - OPENSEARCH_RETRY_INTERVAL_SECS=15
       # Kafka configuration
       - KAFKA_BROKER=${KAFKA_BROKER:-kafka:29092}
-      - KAFKA_GROUP_ID=search-indexer
+      - KAFKA_GROUP_EDITS_ID=${KAFKA_GROUP_EDITS_ID:-search-indexer-group-edits-local}
+      - KAFKA_GROUP_SCORES_ID=${KAFKA_GROUP_SCORES_ID:-search-indexer-group-scores-local}
+      - ENVIRONMENT=${ENVIRONMENT:-staging}
       # Logging
       - RUST_LOG=debug
       # Sentry telemetry (optional - set in .env file to enable)

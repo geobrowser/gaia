@@ -1,0 +1,75 @@
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: opensearch-reindex
+  namespace: search-staging
+  labels:
+    app: opensearch-admin
+    task: reindex
+    environment: staging
+spec:
+  ttlSecondsAfterFinished: 86400  # 24 hours
+  backoffLimit: 1  # Don't retry automatically - reindex is expensive
+  template:
+    metadata:
+      labels:
+        app: opensearch-admin
+        task: reindex
+        environment: staging
+    spec:
+      imagePullSecrets:
+      - name: regcred
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: reindex
+        image: registry.digitalocean.com/geo/search-admin:latest
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+          seccompProfile:
+            type: RuntimeDefault
+        env:
+        - name: OPENSEARCH_URL
+          valueFrom:
+            secretKeyRef:
+              name: opensearch-credentials
+              key: OPENSEARCH_URL
+        - name: ENVIRONMENT
+          value: "staging"
+        - name: INDEX_ALIAS
+          value: "entities"
+        - name: SOURCE_VERSION
+          value: "2"  # CHANGE THIS: Source index version to copy from
+        - name: TARGET_VERSION
+          value: "3"  # CHANGE THIS: Target index version to copy to
+        - name: RUST_LOG
+          value: "info"
+        command:
+        - search-admin
+        - reindex
+        - --source-version
+        - "$(SOURCE_VERSION)"
+        - --target-version
+        - "$(TARGET_VERSION)"
+        - --wait-for-completion
+        resources:
+          requests:
+            memory: "256Mi"
+            cpu: "200m"
+          limits:
+            memory: "512Mi"
+            cpu: "500m"

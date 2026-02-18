@@ -110,22 +110,28 @@ search-indexer-deploy/
 │   ├── datasources.yml
 │   ├── dashboard-providers.yml
 │   └── dashboards/     # Dashboard JSON files
-└── k8s/                 # Kubernetes manifests (production)
-    ├── kustomization.yaml
-    ├── namespace.yaml
-    ├── search-indexer.yaml  # Search Indexer Deployment
-    ├── monitoring.yaml      # Prometheus + Grafana + OpenSearch Exporter
-    └── jobs/               # Index migration jobs (see jobs/README.md)
-        ├── README.md
-        ├── create-index-job.yaml
-        ├── delete-index-job.yaml
-        ├── full-migration-job.yaml
-        └── list-indices-job.yaml
+└── k8s/                 # Kubernetes manifests
+    ├── jobs/
+    │   └── README.md           # Index migration documentation
+    ├── production/
+    │   ├── kustomization.yaml
+    │   ├── namespace.yaml      # namespace: search
+    │   ├── search-indexer.yaml
+    │   ├── monitoring.yaml
+    │   └── jobs/               # Production migration jobs (ENVIRONMENT=production)
+    └── staging/
+        ├── namespace.yaml      # namespace: search-staging
+        ├── search-indexer.yaml
+        └── jobs/               # Staging migration jobs (ENVIRONMENT=staging)
 ```
 
 ## Index Migrations
 
-OpenSearch index migrations are managed using the [search-admin](../search-admin/) tool, which runs as Kubernetes Jobs in production.
+OpenSearch index migrations are managed using the [search-admin](../search-admin/) tool, which runs as Kubernetes Jobs.
+
+**Important:** Jobs are separated by environment:
+- **Production:** `k8s/production/jobs/` (namespace: `search`, no index prefix)
+- **Staging:** `k8s/staging/jobs/` (namespace: `search-staging`, `staging_` prefix)
 
 **For full migration workflows and step-by-step instructions, see:**
 - **[k8s/jobs/README.md](k8s/jobs/README.md)** - Complete guide for running index migrations

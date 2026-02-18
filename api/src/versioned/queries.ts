@@ -4,40 +4,35 @@
  * All queries are wrapped in Effect for proper error handling and tracing.
  */
 
-import { Effect } from "effect";
-import { sql } from "drizzle-orm";
-import type { NodePgDatabase } from "drizzle-orm/node-postgres";
-import { SystemIds } from "@graphprotocol/grc-20";
-
+import {SystemIds} from "@graphprotocol/grc-20"
+import {sql} from "drizzle-orm"
+import type {NodePgDatabase} from "drizzle-orm/node-postgres"
+import {Effect} from "effect"
+import {type NormalizedUuid, normalizeUuid} from "../utils/uuid"
+import {type DiscoveredEntity, type GroupedEntities, groupEntitiesByContext, mergeDiscoveryResults} from "./grouping"
 import type {
-	VersionedValue,
-	VersionedRelation,
 	BlockSnapshot,
 	EntitySnapshot,
 	GroupedEntitySnapshot,
-	VersionEntry,
-} from "./types";
-import {
-	groupEntitiesByContext,
-	mergeDiscoveryResults,
-	type DiscoveredEntity,
-	type GroupedEntities,
-} from "./grouping";
+	VersionedRelation,
+	VersionedValue,
+	VersionRow,
+} from "./types"
 
 // Error type for database query failures
 export class QueryError {
-	readonly _tag = "QueryError";
+	readonly _tag = "QueryError"
 	constructor(
 		readonly operation: string,
-		readonly cause: unknown
+		readonly cause: unknown,
 	) {}
 }
 
-// The BLOCKS relation type ID from GRC-20
-const BLOCKS_TYPE_ID = SystemIds.BLOCKS;
+// The BLOCKS relation type ID from GRC-20, normalized for comparison with DB output
+const BLOCKS_TYPE_ID = normalizeUuid(SystemIds.BLOCKS)
 
 // Generic database type
-type Database = NodePgDatabase<Record<string, unknown>>;
+type Database = NodePgDatabase<Record<string, unknown>>
 
 // =============================================================================
 // Row Mapping Helpers
@@ -45,11 +40,12 @@ type Database = NodePgDatabase<Record<string, unknown>>;
 
 /**
  * Map a database row to a VersionedValue.
+ * Exported for use in proposal-diff.ts batch operations.
  */
-function mapValueRow(row: Record<string, unknown>): VersionedValue {
+export function mapValueRow(row: Record<string, unknown>): VersionedValue {
 	return {
-		propertyId: row.property_id as string,
-		spaceId: row.space_id as string,
+		propertyId: normalizeUuid(row.property_id as string),
+		spaceId: normalizeUuid(row.space_id as string),
 		boolean: row.boolean as boolean | null,
 		integer: row.integer as number | null,
 		float: row.float as number | null,
@@ -61,59 +57,76 @@ function mapValueRow(row: Record<string, unknown>): VersionedValue {
 		datetime: row.datetime as string | null,
 		schedule: row.schedule as unknown | null,
 		point: row.point as string | null,
+		rect: row.rect as string | null,
 		embedding: row.embedding as unknown | null,
 		language: row.language as string | null,
 		unit: row.unit as string | null,
-		contextRootId: row.context_root_id as string | null,
-		contextEdgeTypeId: row.context_edge_type_id as string | null,
-	};
+		contextRootId: row.context_root_id ? normalizeUuid(row.context_root_id as string) : null,
+		contextEdgeTypeId: row.context_edge_type_id ? normalizeUuid(row.context_edge_type_id as string) : null,
+	}
 }
 
 /**
  * Map a database row to a VersionedRelation.
+ * Exported for use in proposal-diff.ts batch operations.
  */
-function mapRelationRow(row: Record<string, unknown>): VersionedRelation {
+export function mapRelationRow(row: Record<string, unknown>): VersionedRelation {
 	return {
-		relationId: row.relation_id as string,
-		typeId: row.type_id as string,
-		fromEntityId: row.from_entity_id as string,
-		fromSpaceId: row.from_space_id as string | null,
-		toEntityId: row.to_entity_id as string,
-		toSpaceId: row.to_space_id as string | null,
+		relationId: normalizeUuid(row.relation_id as string),
+		typeId: normalizeUuid(row.type_id as string),
+		fromEntityId: normalizeUuid(row.from_entity_id as string),
+		fromSpaceId: row.from_space_id ? normalizeUuid(row.from_space_id as string) : null,
+		toEntityId: normalizeUuid(row.to_entity_id as string),
+		toSpaceId: row.to_space_id ? normalizeUuid(row.to_space_id as string) : null,
 		position: row.position as string | null,
-		spaceId: row.space_id as string,
+		spaceId: normalizeUuid(row.space_id as string),
 		verified: row.verified as boolean | null,
-		contextRootId: row.context_root_id as string | null,
-		contextEdgeTypeId: row.context_edge_type_id as string | null,
-	};
+		contextRootId: row.context_root_id ? normalizeUuid(row.context_root_id as string) : null,
+		contextEdgeTypeId: row.context_edge_type_id ? normalizeUuid(row.context_edge_type_id as string) : null,
+	}
 }
 
 /**
- * Resolve an edit ID to its version key.
+ * Resolved edit metadata from the edit_versions table.
  */
-export function resolveVersionKey(
-	db: Database,
-	editId: string
-): Effect.Effect<bigint | null, QueryError> {
+export interface ResolvedEdit {
+	versionKey: bigint
+	name: string | null
+	createdById: NormalizedUuid | null
+}
+
+/**
+ * Resolve an edit ID to its version key and name.
+ */
+export function resolveVersionKey(db: Database, editId: string): Effect.Effect<ResolvedEdit | null, QueryError> {
 	return Effect.tryPromise({
 		try: async () => {
-			const result = await db.execute<{ version_key: string }>(sql`
-				SELECT version_key FROM edit_versions WHERE edit_id = ${editId} LIMIT 1
-			`);
+			const result = await db.execute<{
+				version_key: string
+				name: string | null
+				created_by_id: string | null
+			}>(sql`
+				SELECT version_key, name, created_by_id FROM edit_versions WHERE edit_id = ${editId} LIMIT 1
+			`)
 
-			const row = result.rows[0];
+			const row = result.rows[0]
 			if (!row) {
-				return null;
+				return null
 			}
 
-			return BigInt(row.version_key);
+			return {
+				versionKey: BigInt(row.version_key),
+				// Use || instead of ?? to coerce empty strings to null (protobuf defaults to "")
+				name: row.name || null,
+				createdById: row.created_by_id ? normalizeUuid(row.created_by_id) : null,
+			}
 		},
 		catch: (error) => new QueryError("resolveVersionKey", error),
 	}).pipe(
 		Effect.withSpan("queries.resolveVersionKey", {
-			attributes: { "query.edit_id": editId },
-		})
-	);
+			attributes: {"query.edit_id": editId},
+		}),
+	)
 }
 
 /**
@@ -123,11 +136,11 @@ export function getValuesAtVersion(
 	db: Database,
 	entityId: string,
 	versionKey: bigint,
-	spaceId?: string
+	spaceId?: string,
 ): Effect.Effect<VersionedValue[], QueryError> {
 	return Effect.tryPromise({
 		try: async () => {
-			const versionKeyStr = versionKey.toString();
+			const versionKeyStr = versionKey.toString()
 
 			const result = spaceId
 				? await db.execute<Record<string, unknown>>(sql`
@@ -142,9 +155,9 @@ export function getValuesAtVersion(
 						WHERE entity_id = ${entityId}
 							AND valid_from_key <= ${versionKeyStr}::bigint
 							AND (valid_to_key IS NULL OR valid_to_key > ${versionKeyStr}::bigint)
-					`);
+					`)
 
-			return result.rows.map(mapValueRow);
+			return result.rows.map(mapValueRow)
 		},
 		catch: (error) => new QueryError("getValuesAtVersion", error),
 	}).pipe(
@@ -154,8 +167,8 @@ export function getValuesAtVersion(
 				"query.version_key": versionKey.toString(),
 				"query.space_id": spaceId ?? "all",
 			},
-		})
-	);
+		}),
+	)
 }
 
 /**
@@ -165,11 +178,11 @@ export function getRelationsAtVersion(
 	db: Database,
 	entityId: string,
 	versionKey: bigint,
-	spaceId?: string
+	spaceId?: string,
 ): Effect.Effect<VersionedRelation[], QueryError> {
 	return Effect.tryPromise({
 		try: async () => {
-			const versionKeyStr = versionKey.toString();
+			const versionKeyStr = versionKey.toString()
 
 			const result = spaceId
 				? await db.execute<Record<string, unknown>>(sql`
@@ -184,9 +197,9 @@ export function getRelationsAtVersion(
 						WHERE from_entity_id = ${entityId}
 							AND valid_from_key <= ${versionKeyStr}::bigint
 							AND (valid_to_key IS NULL OR valid_to_key > ${versionKeyStr}::bigint)
-					`);
+					`)
 
-			return result.rows.map(mapRelationRow);
+			return result.rows.map(mapRelationRow)
 		},
 		catch: (error) => new QueryError("getRelationsAtVersion", error),
 	}).pipe(
@@ -196,8 +209,8 @@ export function getRelationsAtVersion(
 				"query.version_key": versionKey.toString(),
 				"query.space_id": spaceId ?? "all",
 			},
-		})
-	);
+		}),
+	)
 }
 
 /**
@@ -208,17 +221,17 @@ function queryContextEntities(
 	db: Database,
 	entityId: string,
 	versionKey: bigint,
-	spaceId?: string
+	spaceId?: string,
 ): Effect.Effect<DiscoveredEntity[], QueryError> {
 	return Effect.tryPromise({
 		try: async () => {
-			const versionKeyStr = versionKey.toString();
+			const versionKeyStr = versionKey.toString()
 
 			const result = spaceId
 				? await db.execute<{
-						entity_id: string;
-						context_edge_type_id: string | null;
-				  }>(sql`
+						entity_id: string
+						context_edge_type_id: string | null
+					}>(sql`
 						SELECT DISTINCT entity_id, context_edge_type_id FROM (
 							-- Context-based discovery from values
 							SELECT DISTINCT v.entity_id, v.context_edge_type_id
@@ -240,9 +253,9 @@ function queryContextEntities(
 						) context_entities
 					`)
 				: await db.execute<{
-						entity_id: string;
-						context_edge_type_id: string | null;
-				  }>(sql`
+						entity_id: string
+						context_edge_type_id: string | null
+					}>(sql`
 						SELECT DISTINCT entity_id, context_edge_type_id FROM (
 							-- Context-based discovery from values
 							SELECT DISTINCT v.entity_id, v.context_edge_type_id
@@ -260,13 +273,13 @@ function queryContextEntities(
 								AND r.valid_from_key <= ${versionKeyStr}::bigint
 								AND (r.valid_to_key IS NULL OR r.valid_to_key > ${versionKeyStr}::bigint)
 						) context_entities
-					`);
+					`)
 
 			return result.rows.map((row) => ({
-				entityId: row.entity_id,
-				contextEdgeTypeId: row.context_edge_type_id,
+				entityId: normalizeUuid(row.entity_id),
+				contextEdgeTypeId: row.context_edge_type_id ? normalizeUuid(row.context_edge_type_id) : null,
 				position: null, // Context-based discovery doesn't have position
-			}));
+			}))
 		},
 		catch: (error) => new QueryError("queryContextEntities", error),
 	}).pipe(
@@ -275,8 +288,8 @@ function queryContextEntities(
 				"query.entity_id": entityId,
 				"query.version_key": versionKey.toString(),
 			},
-		})
-	);
+		}),
+	)
 }
 
 /**
@@ -286,14 +299,14 @@ function queryBlocksRelationEntities(
 	db: Database,
 	entityId: string,
 	versionKey: bigint,
-	spaceId?: string
-): Effect.Effect<Array<{ entityId: string; position: string | null }>, QueryError> {
+	spaceId?: string,
+): Effect.Effect<Array<{entityId: NormalizedUuid; position: string | null}>, QueryError> {
 	return Effect.tryPromise({
 		try: async () => {
-			const versionKeyStr = versionKey.toString();
+			const versionKeyStr = versionKey.toString()
 
 			const result = spaceId
-				? await db.execute<{ entity_id: string; position: string | null }>(sql`
+				? await db.execute<{entity_id: string; position: string | null}>(sql`
 						SELECT r.to_entity_id AS entity_id, r.position
 						FROM relation_versions r
 						WHERE r.from_entity_id = ${entityId}
@@ -302,19 +315,19 @@ function queryBlocksRelationEntities(
 							AND (r.valid_to_key IS NULL OR r.valid_to_key > ${versionKeyStr}::bigint)
 							AND r.space_id = ${spaceId}
 					`)
-				: await db.execute<{ entity_id: string; position: string | null }>(sql`
+				: await db.execute<{entity_id: string; position: string | null}>(sql`
 						SELECT r.to_entity_id AS entity_id, r.position
 						FROM relation_versions r
 						WHERE r.from_entity_id = ${entityId}
 							AND r.type_id = ${BLOCKS_TYPE_ID}
 							AND r.valid_from_key <= ${versionKeyStr}::bigint
 							AND (r.valid_to_key IS NULL OR r.valid_to_key > ${versionKeyStr}::bigint)
-					`);
+					`)
 
 			return result.rows.map((row) => ({
-				entityId: row.entity_id,
+				entityId: normalizeUuid(row.entity_id),
 				position: row.position,
-			}));
+			}))
 		},
 		catch: (error) => new QueryError("queryBlocksRelationEntities", error),
 	}).pipe(
@@ -323,8 +336,8 @@ function queryBlocksRelationEntities(
 				"query.entity_id": entityId,
 				"query.version_key": versionKey.toString(),
 			},
-		})
-	);
+		}),
+	)
 }
 
 /**
@@ -342,30 +355,26 @@ export function getGroupedEntityIdsAtVersion(
 	db: Database,
 	entityId: string,
 	versionKey: bigint,
-	spaceId?: string
+	spaceId?: string,
 ): Effect.Effect<GroupedEntities, QueryError> {
 	return Effect.gen(function* () {
 		const [contextEntities, relationEntities] = yield* Effect.all([
 			queryContextEntities(db, entityId, versionKey, spaceId),
 			queryBlocksRelationEntities(db, entityId, versionKey, spaceId),
-		]);
+		])
 
 		// Merge and group using pure functions
-		const merged = yield* mergeDiscoveryResults(
-			contextEntities,
-			relationEntities,
-			BLOCKS_TYPE_ID
-		);
+		const merged = yield* mergeDiscoveryResults(contextEntities, relationEntities, BLOCKS_TYPE_ID)
 
-		return yield* groupEntitiesByContext(merged, BLOCKS_TYPE_ID);
+		return yield* groupEntitiesByContext(merged, BLOCKS_TYPE_ID)
 	}).pipe(
 		Effect.withSpan("queries.getGroupedEntityIdsAtVersion", {
 			attributes: {
 				"query.entity_id": entityId,
 				"query.version_key": versionKey.toString(),
 			},
-		})
-	);
+		}),
+	)
 }
 
 /**
@@ -378,54 +387,61 @@ function getBlockIdsAtVersion(
 	db: Database,
 	entityId: string,
 	versionKey: bigint,
-	spaceId?: string
-): Effect.Effect<string[], QueryError> {
-	return Effect.map(
-		getGroupedEntityIdsAtVersion(db, entityId, versionKey, spaceId),
-		(grouped) => grouped.blocks
-	);
+	spaceId?: string,
+): Effect.Effect<NormalizedUuid[], QueryError> {
+	return Effect.map(getGroupedEntityIdsAtVersion(db, entityId, versionKey, spaceId), (grouped) => grouped.blocks)
 }
 
 /**
  * Batch fetch block snapshots at a specific version.
  * Uses 2 queries total (values + relations) instead of 2N queries.
  */
-function batchGetBlockSnapshotsAtVersion(
+export function batchGetBlockSnapshotsAtVersion(
 	db: Database,
-	blockIds: string[],
+	blockIds: NormalizedUuid[],
 	versionKey: bigint,
-	spaceId?: string
+	spaceId?: string,
 ): Effect.Effect<BlockSnapshot[], QueryError> {
 	if (blockIds.length === 0) {
-		return Effect.succeed([]);
+		return Effect.succeed([])
 	}
 
 	return Effect.tryPromise({
 		try: async () => {
-			const versionKeyStr = versionKey.toString();
+			const versionKeyStr = versionKey.toString()
 			// Cast to PostgreSQL array type for ANY() operator
-			const blockIdsArray = `{${blockIds.join(",")}}`;
+			const blockIdsArray = `{${blockIds.join(",")}}`
 
 			// Query 1: All values for all blocks
+			// Explicitly list columns to avoid fetching large 'embedding' column
 			const valuesResult = spaceId
 				? await db.execute<Record<string, unknown>>(sql`
-						SELECT * FROM value_versions
+						SELECT entity_id, property_id, space_id, text, language, unit, boolean,
+						       decimal, point, time, integer, float, bytes, date, datetime,
+						       schedule, rect, context_root_id, context_edge_type_id
+						FROM value_versions
 						WHERE entity_id = ANY(${blockIdsArray}::uuid[])
 							AND valid_from_key <= ${versionKeyStr}::bigint
 							AND (valid_to_key IS NULL OR valid_to_key > ${versionKeyStr}::bigint)
 							AND space_id = ${spaceId}
 					`)
 				: await db.execute<Record<string, unknown>>(sql`
-						SELECT * FROM value_versions
+						SELECT entity_id, property_id, space_id, text, language, unit, boolean,
+						       decimal, point, time, integer, float, bytes, date, datetime,
+						       schedule, rect, context_root_id, context_edge_type_id
+						FROM value_versions
 						WHERE entity_id = ANY(${blockIdsArray}::uuid[])
 							AND valid_from_key <= ${versionKeyStr}::bigint
 							AND (valid_to_key IS NULL OR valid_to_key > ${versionKeyStr}::bigint)
-					`);
+					`)
 
 			// Query 2: All relations for all blocks (excluding BLOCKS type)
 			const relationsResult = spaceId
 				? await db.execute<Record<string, unknown>>(sql`
-						SELECT * FROM relation_versions
+						SELECT relation_id, entity_id, type_id, from_entity_id, from_space_id,
+						       to_entity_id, to_space_id, position, space_id, verified,
+						       context_root_id, context_edge_type_id
+						FROM relation_versions
 						WHERE from_entity_id = ANY(${blockIdsArray}::uuid[])
 							AND type_id != ${BLOCKS_TYPE_ID}
 							AND valid_from_key <= ${versionKeyStr}::bigint
@@ -433,30 +449,33 @@ function batchGetBlockSnapshotsAtVersion(
 							AND space_id = ${spaceId}
 					`)
 				: await db.execute<Record<string, unknown>>(sql`
-						SELECT * FROM relation_versions
+						SELECT relation_id, entity_id, type_id, from_entity_id, from_space_id,
+						       to_entity_id, to_space_id, position, space_id, verified,
+						       context_root_id, context_edge_type_id
+						FROM relation_versions
 						WHERE from_entity_id = ANY(${blockIdsArray}::uuid[])
 							AND type_id != ${BLOCKS_TYPE_ID}
 							AND valid_from_key <= ${versionKeyStr}::bigint
 							AND (valid_to_key IS NULL OR valid_to_key > ${versionKeyStr}::bigint)
-					`);
+					`)
 
 			// Group by entity ID
-			const valuesMap = new Map<string, VersionedValue[]>();
-			const relationsMap = new Map<string, VersionedRelation[]>();
+			const valuesMap = new Map<NormalizedUuid, VersionedValue[]>()
+			const relationsMap = new Map<NormalizedUuid, VersionedRelation[]>()
 
 			for (const id of blockIds) {
-				valuesMap.set(id, []);
-				relationsMap.set(id, []);
+				valuesMap.set(id, [])
+				relationsMap.set(id, [])
 			}
 
 			for (const row of valuesResult.rows) {
-				const entityId = row.entity_id as string;
-				valuesMap.get(entityId)?.push(mapValueRow(row));
+				const entityId = normalizeUuid(row.entity_id as string)
+				valuesMap.get(entityId)?.push(mapValueRow(row))
 			}
 
 			for (const row of relationsResult.rows) {
-				const entityId = row.from_entity_id as string;
-				relationsMap.get(entityId)?.push(mapRelationRow(row));
+				const entityId = normalizeUuid(row.from_entity_id as string)
+				relationsMap.get(entityId)?.push(mapRelationRow(row))
 			}
 
 			// Build snapshots in order
@@ -464,7 +483,7 @@ function batchGetBlockSnapshotsAtVersion(
 				id,
 				values: valuesMap.get(id) ?? [],
 				relations: relationsMap.get(id) ?? [],
-			}));
+			}))
 		},
 		catch: (error) => new QueryError("batchGetBlockSnapshotsAtVersion", error),
 	}).pipe(
@@ -473,8 +492,206 @@ function batchGetBlockSnapshotsAtVersion(
 				"query.block_count": blockIds.length,
 				"query.version_key": versionKey.toString(),
 			},
-		})
-	);
+		}),
+	)
+}
+
+/**
+ * A BLOCKS relation entry with both the relation ID and block entity ID.
+ * The relation ID is needed to match deleteRelation ops in proposal diffs.
+ */
+export interface BlockRelationEntry {
+	relationId: NormalizedUuid
+	blockEntityId: NormalizedUuid
+}
+
+/**
+ * Batch discover block relations for multiple parent entities at a specific version.
+ * Returns a map from parent entity ID to its block relation entries (ordered by position).
+ * Each entry includes both the relation ID and block entity ID.
+ * Uses a single query against relation_versions.
+ */
+export function batchGetBlockRelationsForEntities(
+	db: Database,
+	parentEntityIds: NormalizedUuid[],
+	versionKey: bigint,
+	spaceId: NormalizedUuid,
+): Effect.Effect<Map<NormalizedUuid, BlockRelationEntry[]>, QueryError> {
+	if (parentEntityIds.length === 0) {
+		return Effect.succeed(new Map())
+	}
+
+	return Effect.tryPromise({
+		try: async () => {
+			const versionKeyStr = versionKey.toString()
+			const entityIdsArray = `{${parentEntityIds.join(",")}}`
+
+			const result = await db.execute<{
+				from_entity_id: string
+				relation_id: string
+				to_entity_id: string
+				position: string | null
+			}>(sql`
+				SELECT from_entity_id, relation_id, to_entity_id, position
+				FROM relation_versions
+				WHERE from_entity_id = ANY(${entityIdsArray}::uuid[])
+					AND type_id = ${BLOCKS_TYPE_ID}
+					AND space_id = ${spaceId}
+					AND valid_from_key <= ${versionKeyStr}::bigint
+					AND (valid_to_key IS NULL OR valid_to_key > ${versionKeyStr}::bigint)
+				ORDER BY position ASC NULLS LAST
+			`)
+
+			// Group by parent entity
+			const blockMap = new Map<NormalizedUuid, BlockRelationEntry[]>()
+			for (const id of parentEntityIds) {
+				blockMap.set(id, [])
+			}
+			for (const row of result.rows) {
+				const parentId = normalizeUuid(row.from_entity_id)
+				blockMap.get(parentId)?.push({
+					relationId: normalizeUuid(row.relation_id),
+					blockEntityId: normalizeUuid(row.to_entity_id),
+				})
+			}
+
+			return blockMap
+		},
+		catch: (error) => new QueryError("batchGetBlockRelationsForEntities", error),
+	}).pipe(
+		Effect.withSpan("queries.batchGetBlockRelationsForEntities", {
+			attributes: {
+				"query.parent_count": parentEntityIds.length,
+				"query.version_key": versionKey.toString(),
+			},
+		}),
+	)
+}
+
+/**
+ * Batch discover block relations for multiple parent entities from live tables.
+ * Returns a map from parent entity ID to its block relation entries (ordered by position).
+ * Each entry includes both the relation ID and block entity ID.
+ * Uses a single query against the live relations table.
+ */
+export function batchGetLiveBlockRelationsForEntities(
+	db: Database,
+	parentEntityIds: NormalizedUuid[],
+	spaceId: NormalizedUuid,
+): Effect.Effect<Map<NormalizedUuid, BlockRelationEntry[]>, QueryError> {
+	if (parentEntityIds.length === 0) {
+		return Effect.succeed(new Map())
+	}
+
+	return Effect.tryPromise({
+		try: async () => {
+			const entityIdsArray = `{${parentEntityIds.join(",")}}`
+
+			const result = await db.execute<{
+				from_entity_id: string
+				id: string
+				to_entity_id: string
+				position: string | null
+			}>(sql`
+				SELECT from_entity_id, id, to_entity_id, position
+				FROM relations
+				WHERE from_entity_id = ANY(${entityIdsArray}::uuid[])
+					AND type_id = ${BLOCKS_TYPE_ID}
+					AND space_id = ${spaceId}
+				ORDER BY position ASC NULLS LAST
+			`)
+
+			// Group by parent entity
+			const blockMap = new Map<NormalizedUuid, BlockRelationEntry[]>()
+			for (const id of parentEntityIds) {
+				blockMap.set(id, [])
+			}
+			for (const row of result.rows) {
+				const parentId = normalizeUuid(row.from_entity_id)
+				blockMap.get(parentId)?.push({
+					relationId: normalizeUuid(row.id),
+					blockEntityId: normalizeUuid(row.to_entity_id),
+				})
+			}
+
+			return blockMap
+		},
+		catch: (error) => new QueryError("batchGetLiveBlockRelationsForEntities", error),
+	}).pipe(
+		Effect.withSpan("queries.batchGetLiveBlockRelationsForEntities", {
+			attributes: {"query.parent_count": parentEntityIds.length},
+		}),
+	)
+}
+
+/**
+ * Batch fetch block snapshots from live tables.
+ * Uses 2 queries total (values + relations) instead of 2N.
+ */
+export function batchGetLiveBlockSnapshots(
+	db: Database,
+	blockIds: NormalizedUuid[],
+	spaceId: NormalizedUuid,
+): Effect.Effect<BlockSnapshot[], QueryError> {
+	if (blockIds.length === 0) {
+		return Effect.succeed([])
+	}
+
+	return Effect.tryPromise({
+		try: async () => {
+			const blockIdsArray = `{${blockIds.join(",")}}`
+
+			// Query 1: All values for all blocks
+			const valuesResult = await db.execute<Record<string, unknown>>(sql`
+				SELECT entity_id, property_id, space_id, text, language, unit, boolean,
+				       decimal, point, time, integer, float, bytes, date, datetime,
+				       schedule, rect
+				FROM "values"
+				WHERE entity_id = ANY(${blockIdsArray}::uuid[])
+				AND space_id = ${spaceId}
+			`)
+
+			// Query 2: All relations for all blocks (excluding BLOCKS type)
+			const relationsResult = await db.execute<Record<string, unknown>>(sql`
+				SELECT id AS relation_id, entity_id, type_id, from_entity_id, from_space_id,
+				       to_entity_id, to_space_id, position, space_id, verified
+				FROM relations
+				WHERE from_entity_id = ANY(${blockIdsArray}::uuid[])
+				AND type_id != ${BLOCKS_TYPE_ID}
+				AND space_id = ${spaceId}
+			`)
+
+			// Group by entity ID
+			const valuesMap = new Map<NormalizedUuid, VersionedValue[]>()
+			const relationsMap = new Map<NormalizedUuid, VersionedRelation[]>()
+
+			for (const id of blockIds) {
+				valuesMap.set(id, [])
+				relationsMap.set(id, [])
+			}
+
+			for (const row of valuesResult.rows) {
+				const entityId = normalizeUuid(row.entity_id as string)
+				valuesMap.get(entityId)?.push(mapValueRow(row))
+			}
+
+			for (const row of relationsResult.rows) {
+				const entityId = normalizeUuid(row.from_entity_id as string)
+				relationsMap.get(entityId)?.push(mapRelationRow(row))
+			}
+
+			return blockIds.map((id) => ({
+				id,
+				values: valuesMap.get(id) ?? [],
+				relations: relationsMap.get(id) ?? [],
+			}))
+		},
+		catch: (error) => new QueryError("batchGetLiveBlockSnapshots", error),
+	}).pipe(
+		Effect.withSpan("queries.batchGetLiveBlockSnapshots", {
+			attributes: {"query.block_count": blockIds.length},
+		}),
+	)
 }
 
 /**
@@ -489,32 +706,32 @@ function batchGetBlockSnapshotsAtVersion(
  */
 export function getEntitySnapshotAtVersion(
 	db: Database,
-	entityId: string,
+	entityId: NormalizedUuid,
 	versionKey: bigint,
-	spaceId?: string
+	spaceId?: string,
 ): Effect.Effect<EntitySnapshot, QueryError> {
 	return Effect.gen(function* () {
 		const [values, allRelations, blockIds] = yield* Effect.all([
 			getValuesAtVersion(db, entityId, versionKey, spaceId),
 			getRelationsAtVersion(db, entityId, versionKey, spaceId),
 			getBlockIdsAtVersion(db, entityId, versionKey, spaceId),
-		]);
+		])
 
 		// Filter out block relations
-		const relations = allRelations.filter((r) => r.typeId !== BLOCKS_TYPE_ID);
+		const relations = allRelations.filter((r) => r.typeId !== BLOCKS_TYPE_ID)
 
 		// Batch fetch all block snapshots (2 queries instead of 2N)
-		const blocks = yield* batchGetBlockSnapshotsAtVersion(db, blockIds, versionKey, spaceId);
+		const blocks = yield* batchGetBlockSnapshotsAtVersion(db, blockIds, versionKey, spaceId)
 
-		return { id: entityId, values, relations, blocks };
+		return {id: entityId, values, relations, blocks}
 	}).pipe(
 		Effect.withSpan("queries.getEntitySnapshotAtVersion", {
 			attributes: {
 				"query.entity_id": entityId,
 				"query.version_key": versionKey.toString(),
 			},
-		})
-	);
+		}),
+	)
 }
 
 /**
@@ -534,48 +751,40 @@ export function getEntitySnapshotAtVersion(
  */
 export function getGroupedEntitySnapshotAtVersion(
 	db: Database,
-	entityId: string,
+	entityId: NormalizedUuid,
 	versionKey: bigint,
-	spaceId?: string
+	spaceId?: string,
 ): Effect.Effect<GroupedEntitySnapshot, QueryError> {
 	return Effect.gen(function* () {
 		const [values, allRelations, grouped] = yield* Effect.all([
 			getValuesAtVersion(db, entityId, versionKey, spaceId),
 			getRelationsAtVersion(db, entityId, versionKey, spaceId),
 			getGroupedEntityIdsAtVersion(db, entityId, versionKey, spaceId),
-		]);
+		])
 
 		// Filter out relations that are used for grouping (BLOCKS + dynamic types)
-		const groupedTypeIds = new Set([BLOCKS_TYPE_ID, ...grouped.groupKeys]);
-		const relations = allRelations.filter((r) => !groupedTypeIds.has(r.typeId));
+		const groupedTypeIds = new Set([BLOCKS_TYPE_ID, ...grouped.groupKeys])
+		const relations = allRelations.filter((r) => !groupedTypeIds.has(r.typeId))
 
 		// Collect all child entity IDs for batch fetching
-		const allChildIds = [
-			...grouped.blocks,
-			...Array.from(grouped.dynamicGroups.values()).flat(),
-		];
+		const allChildIds = [...grouped.blocks, ...Array.from(grouped.dynamicGroups.values()).flat()]
 
 		// Batch fetch all child snapshots (2 queries instead of 2N)
-		const childSnapshots = yield* batchGetBlockSnapshotsAtVersion(
-			db,
-			allChildIds,
-			versionKey,
-			spaceId
-		);
+		const childSnapshots = yield* batchGetBlockSnapshotsAtVersion(db, allChildIds, versionKey, spaceId)
 
 		// Build a map for quick lookup
-		const snapshotMap = new Map<string, BlockSnapshot>();
+		const snapshotMap = new Map<NormalizedUuid, BlockSnapshot>()
 		for (const snapshot of childSnapshots) {
-			snapshotMap.set(snapshot.id, snapshot);
+			snapshotMap.set(snapshot.id, snapshot)
 		}
 
 		// Extract blocks (preserving order)
-		const blocks = grouped.blocks.map((id) => snapshotMap.get(id)!);
+		const blocks = grouped.blocks.map((id) => snapshotMap.get(id)!)
 
 		// Extract dynamic groups (preserving order within each group)
-		const groups: Record<string, BlockSnapshot[]> = {};
+		const groups: Record<string, BlockSnapshot[]> = {}
 		for (const [typeId, entityIds] of grouped.dynamicGroups) {
-			groups[typeId] = entityIds.map((id) => snapshotMap.get(id)!);
+			groups[typeId] = entityIds.map((id) => snapshotMap.get(id)!)
 		}
 
 		return {
@@ -585,75 +794,102 @@ export function getGroupedEntitySnapshotAtVersion(
 			blocks,
 			groupKeys: grouped.groupKeys,
 			groups,
-		};
+		}
 	}).pipe(
 		Effect.withSpan("queries.getGroupedEntitySnapshotAtVersion", {
 			attributes: {
 				"query.entity_id": entityId,
 				"query.version_key": versionKey.toString(),
 			},
-		})
-	);
+		}),
+	)
 }
 
 /**
  * Get versions (edits) that affected an entity.
+ *
+ * Discovers edits by looking at both valid_from_key (creations/modifications)
+ * and valid_to_key (deletions/supersessions) in value_versions and
+ * relation_versions. An edit that only removes data from an entity still
+ * appears in the version list.
+ *
+ * Uses UNION ALL (not UNION) because the outer IN clause deduplicates
+ * implicitly, and avoiding the sort+dedup of UNION is cheaper.
  */
 export function getEntityVersions(
 	db: Database,
 	entityId: string,
 	spaceId?: string,
 	limit = 50,
-	offset = 0
-): Effect.Effect<VersionEntry[], QueryError> {
+	offset = 0,
+): Effect.Effect<VersionRow[], QueryError> {
 	return Effect.tryPromise({
 		try: async () => {
 			const result = spaceId
 				? await db.execute<{
-						edit_id: string;
-						block_number: string;
-						created_at: Date;
-						version_key: string;
-				  }>(sql`
-						SELECT DISTINCT e.edit_id, e.block_number, e.created_at, e.version_key
+						edit_id: string
+						block_number: string
+						created_at: Date
+						version_key: string
+						name: string | null
+						created_by_id: string | null
+					}>(sql`
+						SELECT DISTINCT e.edit_id, e.block_number, e.created_at, e.version_key, e.name, e.created_by_id
 						FROM edit_versions e
 						WHERE e.version_key IN (
-							SELECT DISTINCT valid_from_key FROM value_versions
+							SELECT valid_from_key FROM value_versions
 							WHERE entity_id = ${entityId} AND space_id = ${spaceId}
-							UNION
-							SELECT DISTINCT valid_from_key FROM relation_versions
+							UNION ALL
+							SELECT valid_to_key FROM value_versions
+							WHERE entity_id = ${entityId} AND space_id = ${spaceId} AND valid_to_key IS NOT NULL
+							UNION ALL
+							SELECT valid_from_key FROM relation_versions
 							WHERE from_entity_id = ${entityId} AND space_id = ${spaceId}
+							UNION ALL
+							SELECT valid_to_key FROM relation_versions
+							WHERE from_entity_id = ${entityId} AND space_id = ${spaceId} AND valid_to_key IS NOT NULL
 						)
 						ORDER BY e.version_key DESC
 						LIMIT ${limit} OFFSET ${offset}
 					`)
 				: await db.execute<{
-						edit_id: string;
-						block_number: string;
-						created_at: Date;
-						version_key: string;
-				  }>(sql`
-						SELECT DISTINCT e.edit_id, e.block_number, e.created_at, e.version_key
+						edit_id: string
+						block_number: string
+						created_at: Date
+						version_key: string
+						name: string | null
+						created_by_id: string | null
+					}>(sql`
+						SELECT DISTINCT e.edit_id, e.block_number, e.created_at, e.version_key, e.name, e.created_by_id
 						FROM edit_versions e
 						WHERE e.version_key IN (
-							SELECT DISTINCT valid_from_key FROM value_versions
+							SELECT valid_from_key FROM value_versions
 							WHERE entity_id = ${entityId}
-							UNION
-							SELECT DISTINCT valid_from_key FROM relation_versions
+							UNION ALL
+							SELECT valid_to_key FROM value_versions
+							WHERE entity_id = ${entityId} AND valid_to_key IS NOT NULL
+							UNION ALL
+							SELECT valid_from_key FROM relation_versions
 							WHERE from_entity_id = ${entityId}
+							UNION ALL
+							SELECT valid_to_key FROM relation_versions
+							WHERE from_entity_id = ${entityId} AND valid_to_key IS NOT NULL
 						)
 						ORDER BY e.version_key DESC
 						LIMIT ${limit} OFFSET ${offset}
-					`);
+					`)
 
 			return result.rows.map((row) => ({
-				editId: row.edit_id,
+				editId: normalizeUuid(row.edit_id),
+				// Use || instead of ?? to coerce empty strings to null (protobuf defaults to "")
+				name: row.name || null,
+				createdById: row.created_by_id ? normalizeUuid(row.created_by_id) : null,
 				blockNumber: row.block_number.toString(),
 				createdAt:
 					row.created_at instanceof Date
 						? row.created_at.toISOString()
 						: new Date(row.created_at).toISOString(),
-			}));
+			}))
 		},
 		catch: (error) => new QueryError("getEntityVersions", error),
 	}).pipe(
@@ -664,6 +900,6 @@ export function getEntityVersions(
 				"query.limit": limit,
 				"query.offset": offset,
 			},
-		})
-	);
+		}),
+	)
 }

@@ -10,6 +10,7 @@ cd ../hermes && docker-compose up -d kafka
 
 # 2. Run the indexer (with auto index creation for local dev)
 cd ../search-indexer
+ENVIRONMENT=staging \
 OPENSEARCH_URL=http://localhost:9200 \
 KAFKA_BROKER=localhost:9092 \
 cargo run --features search-indexer-repository/auto_index_creation
@@ -71,14 +72,17 @@ See the [search-admin documentation](../search-admin/README.md) for manual index
 
 | Variable | Description | Default |
 |----------|-------------|---------|
+| `ENVIRONMENT` | **Required.** `staging` or `production`. Controls Kafka topic prefix. | - |
 | `OPENSEARCH_URL` | OpenSearch server URL | `http://localhost:9200` |
 | `INDEX_ALIAS` | Index alias name | `entities` |
 | `ENTITIES_INDEX_VERSION` | Index version number | `0` |
 | `KAFKA_BROKER` | Kafka broker address | `localhost:9092` |
-| `KAFKA_GROUP_ID` | Consumer group ID | `search-indexer` |
+| `KAFKA_GROUP_EDITS_ID` | Consumer group ID for entity events | `search-indexer-group-edits` |
+| `KAFKA_GROUP_SCORES_ID` | Consumer group ID for score events | `search-indexer-group-scores` |
 | `KAFKA_TOPIC` | Kafka topic to consume | `knowledge.edits` |
-| `KAFKA_BATCH_SIZE` | Messages to batch before sending | `50` |
+| `KAFKA_BATCH_SIZE` | Messages to batch before sending | `10` |
 | `KAFKA_BATCH_TIMEOUT_MS` | Max wait time before flushing batch (ms) | `1000` |
+| `CHANNEL_BUFFER_SIZE` | Max batches in flight per channel | `10` |
 | `KAFKA_USERNAME` | SASL username for managed Kafka (optional, enables SASL/SSL if set) | - |
 | `KAFKA_PASSWORD` | SASL password for managed Kafka (required if username is set) | - |
 | `KAFKA_SSL_CA_PEM` | Custom CA certificate in PEM format (optional) | - |
@@ -212,13 +216,14 @@ When Sentry backend is enabled:
 
 ```bash
 # With environment variables (enable auto index creation for local dev)
+ENVIRONMENT=staging \
 OPENSEARCH_URL=http://localhost:9200 \
 KAFKA_BROKER=localhost:9092 \
 cargo run --features search-indexer-repository/auto_index_creation
 
 # Or with .env file
 cp .env.example .env
-# Edit .env with your configuration
+# Edit .env with your configuration (must include ENVIRONMENT=staging or ENVIRONMENT=production)
 cargo run --features search-indexer-repository/auto_index_creation
 
 # For production builds (no auto index creation - use search-admin)
@@ -258,14 +263,16 @@ docker-compose up -d kafka
 #### Running standalone
 
 ```bash
-# With retry mode (default)
-docker run -e OPENSEARCH_URL=http://opensearch:9200 \
+# With retry mode (default) - staging environment
+docker run -e ENVIRONMENT=staging \
+           -e OPENSEARCH_URL=http://opensearch:9200 \
            -e KAFKA_BROKER=kafka:29092 \
            -e OPENSEARCH_CONNECTION_MODE=retry \
            search-indexer
 
-# With fail-fast mode
-docker run -e OPENSEARCH_URL=http://opensearch:9200 \
+# With fail-fast mode - production environment
+docker run -e ENVIRONMENT=production \
+           -e OPENSEARCH_URL=http://opensearch:9200 \
            -e KAFKA_BROKER=kafka:29092 \
            -e OPENSEARCH_CONNECTION_MODE=fail-fast \
            search-indexer
@@ -299,7 +306,7 @@ See [TESTING.md](TESTING.md) for comprehensive end-to-end testing documentation.
 docker-compose -f ../hermes/docker-compose.yml up -d
 
 # Run the indexer (with auto index creation for local dev)
-cargo run --features search-indexer-repository/auto_index_creation
+ENVIRONMENT=staging cargo run --features search-indexer-repository/auto_index_creation
 ```
 
 ## Verifying the Indexer
@@ -339,31 +346,34 @@ The search indexer consumes `HermesEdit` messages from Kafka and decodes the GRC
 
 | Operation | Handling | Notes |
 |-----------|----------|-------|
+| `CreateEntity` | ✓ Indexed | Creates entity document with `name`, `description`, `avatar` properties from initial values. |
 | `UpdateEntity` | ✓ Indexed | Extracts `name`, `description`, `avatar` properties. Handles `unset_values` to clear properties. |
 | `CreateRelation` | ✓ Indexed | Only processes **type relations** (where `relation_type == TYPE_RELATION_TYPE_ID`). Adds type IDs to entities for type filtering. |
 | `DeleteRelation` | ✓ Indexed | Removes type relations from entities. |
 | `DeleteEntity` | ✓ Indexed | Soft delete - sets `deleted=true` on the entity document. Deleted entities are excluded from search results. |
+| `RestoreEntity` | ✓ Indexed | Restores a soft-deleted entity by setting `deleted=false`. The entity will reappear in search results. |
 
 ### Not Yet Implemented
 
 | Operation | Notes |
 |-----------|-------|
-| `CreateEntity` | Could be used to pre-create entity documents before properties are set. |
-| `RestoreEntity` | Would set `deleted=false` to un-delete entities. |
 | `UpdateRelation` | Could support updating type relations. |
 | `RestoreRelation` | Would restore deleted type relations. |
 | `CreateValueRef` | Could index value reference metadata. |
 
-### Soft Delete Behavior
+### Soft Delete and Restore Behavior
 
 When a `DeleteEntity` operation is processed:
 1. The entity document is updated with `deleted=true`
 2. The OpenSearch query filters exclude `deleted=true` documents from search results
 3. Subsequent updates to the deleted entity are ignored (tombstone dominance)
 
-**Tombstone dominance:** Per the GRC-20 spec, updates to deleted entities are ignored. This is enforced at the OpenSearch level using Painless scripts that check the `deleted` status before applying updates. Type relation additions/removals are also skipped for deleted entities.
+When a `RestoreEntity` operation is processed:
+1. The entity document is updated with `deleted=false`
+2. The entity will reappear in search results
+3. Subsequent updates to the entity will be applied normally
 
-**Note:** `RestoreEntity` is not currently handled. If you need to un-delete an entity, you would need to manually update the OpenSearch document or re-index.
+**Tombstone dominance:** Per the GRC-20 spec, updates to deleted entities are ignored. This is enforced at the OpenSearch level using Painless scripts that check the `deleted` status before applying updates. Type relation additions/removals are also skipped for deleted entities. Only explicit delete (`deleted=true`) or restore (`deleted=false`) operations can modify deleted entities.
 
 ### Message Format
 
@@ -384,6 +394,95 @@ message HermesEdit {
 
 The `payload` field contains GRC-20 v2 wire format bytes, decoded using `grc_20::decode_edit()`.
 
+## Memory
+
+When reprocessing large Kafka backlogs (e.g., starting with a new consumer group), the indexer can accumulate significant data in memory. Understanding the memory model helps avoid OOM errors.
+
+### Memory Architecture
+
+```
+Kafka Broker
+     │
+     ▼
+┌─────────────────────────────────────┐
+│   rdkafka Internal Queue            │  ← 64 MiB per consumer (rdkafka default)
+│   (pre-fetched messages)            │
+└─────────────────────────────────────┘
+     │
+     ▼
+┌─────────────────────────────────────┐
+│   Application Channels              │  ← CHANNEL_BUFFER_SIZE × KAFKA_BATCH_SIZE
+│   (EntityProcessingBatch, etc.)     │
+└─────────────────────────────────────┘
+     │
+     ▼
+   OpenSearch
+```
+
+### Channel Memory Usage
+
+| Channel | Contents | Max Items | Memory Formula |
+|---------|----------|-----------|----------------|
+| `entities_processor` | `EntityProcessingBatch` | `CHANNEL_BUFFER_SIZE` | `CHANNEL_BUFFER_SIZE` × `KAFKA_BATCH_SIZE` × avg_msg_size |
+| `scores_processor` | `ScoreProcessingBatch` | `CHANNEL_BUFFER_SIZE` | `CHANNEL_BUFFER_SIZE` × `KAFKA_BATCH_SIZE` × avg_msg_size |
+| `loader` | `ProcessedBatch` | `CHANNEL_BUFFER_SIZE` | `CHANNEL_BUFFER_SIZE` × `KAFKA_BATCH_SIZE` × avg_processed_size |
+| `entities_ack` | `StreamMessage` (offsets only) | `CHANNEL_BUFFER_SIZE` | Negligible (~1 KiB total) |
+| `scores_ack` | `StreamMessage` (offsets only) | `CHANNEL_BUFFER_SIZE` | Negligible (~1 KiB total) |
+
+### rdkafka Internal Queue Memory
+
+| Queue | Memory |
+|-------|--------|
+| entities consumer | 64 MiB |
+| scores consumer | 64 MiB |
+| **Total** | **128 MiB** |
+
+This is controlled by rdkafka's `queued.max.messages.kbytes` default (65,536 KiB per consumer).
+
+### Total Memory Formula
+
+```
+Total Memory ≈
+    128 MiB                                                            # rdkafka queues (fixed)
+  + (3 × CHANNEL_BUFFER_SIZE × KAFKA_BATCH_SIZE × avg_msg_size)        # data channels
+  + overhead                                                            # ~50-100 MiB
+```
+
+### Example Calculation
+
+With production settings (`CHANNEL_BUFFER_SIZE=10`, `KAFKA_BATCH_SIZE=10`, avg message ~500 KiB):
+
+| Component | Calculation | Memory |
+|-----------|-------------|--------|
+| rdkafka queues | 64 MiB × 2 consumers | 128 MiB |
+| entities_processor | 10 batches × 10 msgs × 500 KiB | 50 MiB |
+| scores_processor | 10 batches × 10 msgs × 500 KiB | 50 MiB |
+| loader | 10 batches × 10 msgs × 300 KiB (processed) | 30 MiB |
+| Overhead | Runtime, heap fragmentation | 80 MiB |
+| **Total** | | **~338 MiB** |
+## Error Recovery
+
+### Reprocessing All Events
+
+If you need to reprocess all events from the beginning (e.g., after fixing a bug, schema changes, or data corruption), change the consumer group IDs to new values:
+
+```bash
+# Use new consumer group IDs to reprocess from the beginning
+KAFKA_GROUP_EDITS_ID=search-indexer-group-edits-v3 \
+KAFKA_GROUP_SCORES_ID=search-indexer-group-scores-v3 \
+ENVIRONMENT=staging \
+OPENSEARCH_URL=http://localhost:9200 \
+KAFKA_BROKER=localhost:9092 \
+cargo run --features search-indexer-repository/auto_index_creation
+```
+
+**Warning:** This will reprocess ALL events from the very first Kafka message. For large topics, this may take significant time.
+
+**Notes:**
+- A new consumer group has no committed offsets, so `auto.offset.reset=earliest` starts from offset 0
+- Update consumer group IDs once (e.g., `...-v2` → `...-v3`), then keep using those values
+- Consider incrementing `ENTITIES_INDEX_VERSION` to index into a fresh index (use `search-admin` to create the new index first)
+
 ## Troubleshooting
 
 ### Common issues
@@ -402,4 +501,41 @@ The `payload` field contains GRC-20 v2 wire format bytes, decoded using `grc_20:
 - Check OpenSearch cluster health
 - Monitor Kafka consumer lag
 - Consider increasing batch size in loader config
+
+## Environment Isolation
+
+The search-indexer supports staging and production environments on shared infrastructure (Kafka, OpenSearch, Kubernetes) through automatic prefixing controlled by the `ENVIRONMENT` variable.
+
+### Resource Isolation Table
+
+| Resource | Production | Staging |
+|----------|------------|---------|
+| **K8s Namespace** | `search` | `search-staging` |
+| **Kafka Topics** | `knowledge.edits`, `curation.scores` | `staging.knowledge.edits`, `staging.curation.scores` |
+| **Consumer Groups** | `search-indexer-group-edits-v2`, `search-indexer-group-scores-v2` | `staging-search-indexer-group-edits-v2`, `staging-search-indexer-group-scores-v2` |
+| **OpenSearch Alias** | `entities` | `staging_entities` |
+| **OpenSearch Indices** | `entities_v0`, `entities_v1`, ... | `staging_entities_v0`, `staging_entities_v1`, ... |
+
+### How Prefixing Works
+
+```
+ENVIRONMENT=staging
+    │
+    ├─► Topic Prefix: "staging." (via hermes-kafka)
+    │   └─► Topics: staging.knowledge.edits, staging.curation.scores
+    │
+    ├─► Index Prefix: "staging_" (via search-indexer-shared)
+    │   └─► Alias: staging_entities
+    │   └─► Indices: staging_entities_v0, staging_entities_v1, ...
+    │
+    └─► Consumer Group Prefix: "staging-" (applied to KAFKA_GROUP_EDITS_ID and KAFKA_GROUP_SCORES_ID)
+        └─► Entities: staging-search-indexer-group-edits-v2
+        └─► Scores: staging-search-indexer-group-scores-v2
+```
+
+### Deployment Files
+
+- **Production:** `search-indexer-deploy/k8s/production/`
+- **Staging:** `search-indexer-deploy/k8s/staging/`
+- **Migration Jobs:** See `search-indexer-deploy/k8s/jobs/README.md`
 

@@ -10,12 +10,13 @@ search-indexer-shared = { path = "../search-indexer-shared" }
 search-indexer-repository = { path = "../search-indexer-repository" }
 hermes-schema = { path = "../hermes-schema" }
 hermes-instrumentation = { path = "../hermes-instrumentation" }
+hermes-kafka = { path = "../hermes-kafka" }
 wire = { path = "../wire" }
 indexer_utils = { path = "../indexer_utils" }
 sdk = { path = "../sdk" }
 
 # GRC-20 decoding
-grc-20 = "0.3.0"
+grc-20 = "0.4.0"
 
 # Kafka
 rdkafka = { version = "0.38.0", features = ["cmake-build", "zstd", "ssl"] }

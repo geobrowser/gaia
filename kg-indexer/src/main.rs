@@ -5,9 +5,11 @@ use std::time::{Duration, Instant};
 use futures::StreamExt;
 use hermes_instrumentation::{debug, error, info, info_span, warn, Instrument};
 use hermes_schema::pb::blockchain_metadata::BlockchainMetadata;
+use hermes_schema::pb::space::hermes_space_trust_extension::Extension as TrustExtensionType;
 use rdkafka::message::Headers;
 use rdkafka::Message;
 use std::sync::OnceLock;
+use tracing::field::display;
 
 mod consumer;
 mod error;
@@ -18,6 +20,14 @@ mod storage;
 use consumer::{get_event_type, parse_message, KafkaConsumer, KgMessage};
 use error::IndexerError;
 use storage::Storage;
+
+/// Spaces whose edits should be dropped by the indexer.
+/// These spaces produced corrupt or unwanted data that was manually cleaned from the database.
+const BLOCKED_SPACES: &[uuid::Uuid] = &[
+    uuid::uuid!("d24e4d32-3f4e-b6cc-4eaa-757cdd653857"),
+    uuid::uuid!("2df9f305-6ccc-2875-e610-2ed299883371"),
+    uuid::uuid!("655d6077-dc49-e1f9-0e85-74dd57c3164e"),
+];
 
 /// A buffered event with its Kafka metadata for later commit.
 struct BufferedEvent {
@@ -157,6 +167,7 @@ fn build_telemetry_config() -> hermes_instrumentation::Config {
                 environment,
                 release,
                 debug,
+                axiom: hermes_instrumentation::AxiomConfig::from_env(),
             }
         }
         _ => {
@@ -204,11 +215,89 @@ async fn async_main() -> Result<(), IndexerError> {
 
     // Set up shutdown signal
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::broadcast::channel::<()>(1);
+    let mut tally_shutdown_rx = shutdown_tx.subscribe();
 
     tokio::spawn(async move {
         tokio::signal::ctrl_c().await.ok();
         info!("Shutdown signal received");
         shutdown_tx.send(()).ok();
+    });
+
+    // Spawn background worker to process proposal vote tally updates
+    // This decouples the vote write path from tally computation for better performance
+    let tally_storage = storage.clone();
+    let tally_interval_ms: u64 = env::var("TALLY_WORKER_INTERVAL_MS")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(1000); // Default: 1 second
+    let tally_batch_size: i64 = env::var("TALLY_WORKER_BATCH_SIZE")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(100); // Default: 100 proposals per batch
+
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(Duration::from_millis(tally_interval_ms));
+        // Skip missed ticks to avoid thundering herd after pause/delay
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        info!(
+            interval_ms = tally_interval_ms,
+            batch_size = tally_batch_size,
+            "Starting proposal tally worker"
+        );
+
+        // Log queue depth every N ticks (roughly every minute at default 5s interval)
+        let mut tick_count: u64 = 0;
+        let depth_log_interval: u64 = 12; // Log depth every ~60 seconds
+
+        loop {
+            tokio::select! {
+                _ = tally_shutdown_rx.recv() => {
+                    info!("Tally worker shutting down");
+                    break;
+                }
+                _ = interval.tick() => {
+                    tick_count += 1;
+
+                    match tally_storage.process_tally_queue(tally_batch_size).await {
+                        Ok(0) => {
+                            // No proposals to process, nothing to log
+                        }
+                        Ok(count) => {
+                            debug!(
+                                count = count,
+                                "Processed proposal tally updates"
+                            );
+                        }
+                        Err(e) => {
+                            error!(
+                                error = %e,
+                                "Failed to process proposal tally queue"
+                            );
+                        }
+                    }
+
+                    // Periodically log queue depth for monitoring
+                    if tick_count.is_multiple_of(depth_log_interval) {
+                        match tally_storage.get_tally_queue_depth().await {
+                            Ok(depth) => {
+                                if depth > 0 {
+                                    info!(
+                                        queue_depth = depth,
+                                        "Proposal tally queue depth"
+                                    );
+                                }
+                            }
+                            Err(e) => {
+                                warn!(
+                                    error = %e,
+                                    "Failed to get tally queue depth"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
     });
 
     // Main processing loop
@@ -315,6 +404,19 @@ async fn async_main() -> Result<(), IndexerError> {
                                 continue;
                             }
                         };
+
+                        // Skip edits from blocked spaces
+                        if let KgMessage::Edit(ref edit) = kg_msg {
+                            if let Ok(space_id) = uuid::Uuid::from_slice(&edit.space_id) {
+                                if BLOCKED_SPACES.contains(&space_id) {
+                                    warn!(
+                                        space_id = %space_id,
+                                        "Skipping edit from blocked space"
+                                    );
+                                    continue;
+                                }
+                            }
+                        }
 
                         // Skip empty blocks entirely - no span created
                         if let KgMessage::BlockSummary(ref summary) = kg_msg {
@@ -604,6 +706,7 @@ const EXPECTED_EVENT_TYPES: &[&str] = &[
     "PROPOSAL_UPDATED",
     "PROPOSAL_VOTED",
     "PROPOSAL_EXECUTED",
+    "PROPOSAL_SETTINGS_UPDATED",
 ];
 
 fn expected_count_for_indexer(
@@ -646,8 +749,38 @@ fn event_type_label(event: &BufferedEvent) -> String {
         KgMessage::ProposalUpdated(_) => "PROPOSAL_UPDATED".to_string(),
         KgMessage::ProposalVoted(_) => "PROPOSAL_VOTED".to_string(),
         KgMessage::ProposalExecuted(_) => "PROPOSAL_EXECUTED".to_string(),
+        KgMessage::ProposalSettingsUpdated(_) => "PROPOSAL_SETTINGS_UPDATED".to_string(),
         KgMessage::BlockSummary(_) => "BLOCK_SUMMARY".to_string(),
     }
+}
+
+/// Maximum length for edit names stored in the database.
+const MAX_EDIT_NAME_LENGTH: usize = 256;
+
+/// Extract edit metadata (name and creator ID) from a protobuf Edit message.
+///
+/// - Converts empty name to None (protobuf defaults to "")
+/// - Truncates name to MAX_EDIT_NAME_LENGTH at a char boundary
+/// - Parses first author as a UUID (16-byte author entries)
+fn extract_edit_metadata(
+    edit: &hermes_schema::pb::knowledge::HermesEdit,
+) -> (Option<String>, Option<uuid::Uuid>) {
+    let name = if edit.name.is_empty() {
+        None
+    } else if edit.name.len() > MAX_EDIT_NAME_LENGTH {
+        // Truncate at a char boundary to avoid splitting multi-byte characters
+        let truncated = &edit.name[..edit.name.floor_char_boundary(MAX_EDIT_NAME_LENGTH)];
+        Some(truncated.to_string())
+    } else {
+        Some(edit.name.clone())
+    };
+
+    let created_by_id = edit
+        .authors
+        .first()
+        .and_then(|a| uuid::Uuid::from_slice(a).ok());
+
+    (name, created_by_id)
 }
 
 async fn process_buffered_block(
@@ -893,12 +1026,16 @@ async fn process_message(
             // Versioned writes (temporal tables)
             // Only write versions if this edit hasn't been processed before (idempotency)
             if let Some(meta) = edit.meta.as_ref() {
+                let (edit_name, created_by_id) = extract_edit_metadata(&edit);
+
                 if let Some(version_key) = storage
                     .insert_edit_version(
                         result.edit_id,
                         meta.block_number as i64,
                         meta.sequence as i64,
                         meta.created_at as i64,
+                        edit_name.as_deref(),
+                        created_by_id,
                         &mut tx,
                     )
                     .await?
@@ -988,12 +1125,15 @@ async fn process_message(
         }
         KgMessage::ProposalVoted(event) => {
             let vote = handlers::governance::handle_proposal_voted(&event)?;
+            let proposal_id = vote.proposal_id;
             debug!(
                 proposal_id = %vote.proposal_id,
                 voter_id = %vote.voter_id,
                 "Processing ProposalVoted"
             );
             storage.insert_proposal_votes(&[vote], &mut tx).await?;
+            // Queue proposal for tally update (processed by background worker)
+            storage.queue_tally_update(proposal_id, &mut tx).await?;
             1
         }
         KgMessage::ProposalExecuted(event) => {
@@ -1004,6 +1144,30 @@ async fn process_message(
             );
             storage
                 .update_proposal_executed(execution.proposal_id, execution.executed_at, &mut tx)
+                .await?;
+            1
+        }
+        KgMessage::ProposalSettingsUpdated(event) => {
+            let result = handlers::governance::handle_proposal_settings_updated(&event)?;
+            let voting_mode = match result.voting_mode {
+                models::governance::VotingMode::Fast => "Fast",
+                models::governance::VotingMode::Slow => "Slow",
+            };
+            debug!(
+                proposal_id = %result.proposal_id,
+                voting_mode = voting_mode,
+                "Processing ProposalSettingsUpdated"
+            );
+            storage
+                .update_proposal_settings(
+                    result.proposal_id,
+                    voting_mode,
+                    result.start_time,
+                    result.end_time,
+                    result.quorum,
+                    result.threshold,
+                    &mut tx,
+                )
                 .await?;
             1
         }
@@ -1048,33 +1212,95 @@ async fn process_block(
     let tx_start = Instant::now();
 
     // Process each message in sequence order
-    let handle_events_span = info_span!(
-        "kg_indexer.handle_events",
-        event_count = events.len(),
-        "otel.status_code" = tracing::field::Empty,
-        "otel.status_message" = tracing::field::Empty
-    );
-    let _handle_events_guard = handle_events_span.enter();
-
     for event in &events {
-        let event_type_str = event
-            .event_type
-            .as_deref()
-            .unwrap_or_else(|| event.msg.event_type_name());
+        let event_id = event.event_id.as_deref().unwrap_or("");
 
-        let event_span = info_span!(
-            "kg_indexer.handle_event",
-            event_type = event_type_str,
-            event_id = event.event_id.as_deref().unwrap_or(""),
-            "otel.status_code" = tracing::field::Empty,
-            "otel.status_message" = tracing::field::Empty
-        );
-        let _event_guard = event_span.enter();
+        // Create event-specific span with only the fields each event type needs
+        let event_span = match &event.msg {
+            KgMessage::Edit(_) => info_span!(
+                "kg_indexer.handle_edit",
+                event_id = event_id,
+                edit_id = tracing::field::Empty,
+                space_id = tracing::field::Empty,
+                "otel.status_code" = tracing::field::Empty,
+                "otel.status_message" = tracing::field::Empty
+            ),
+            KgMessage::CreateSpace(_) => info_span!(
+                "kg_indexer.handle_create_space",
+                event_id = event_id,
+                space_id = tracing::field::Empty,
+                space_address = tracing::field::Empty,
+                "otel.status_code" = tracing::field::Empty,
+                "otel.status_message" = tracing::field::Empty
+            ),
+            KgMessage::RoleGranted(_) | KgMessage::RoleRevoked(_) => info_span!(
+                "kg_indexer.handle_role_change",
+                event_id = event_id,
+                space_id = tracing::field::Empty,
+                account = tracing::field::Empty,
+                role = tracing::field::Empty,
+                "otel.status_code" = tracing::field::Empty,
+                "otel.status_message" = tracing::field::Empty
+            ),
+            KgMessage::TrustExtension(_) => info_span!(
+                "kg_indexer.handle_trust_extension",
+                event_id = event_id,
+                extension_type = tracing::field::Empty,
+                parent_space_id = tracing::field::Empty,
+                child_space_id = tracing::field::Empty,
+                "otel.status_code" = tracing::field::Empty,
+                "otel.status_message" = tracing::field::Empty
+            ),
+            KgMessage::ProposalCreated(_) | KgMessage::ProposalUpdated(_) => info_span!(
+                "kg_indexer.handle_proposal",
+                event_id = event_id,
+                proposal_id = tracing::field::Empty,
+                space_id = tracing::field::Empty,
+                "otel.status_code" = tracing::field::Empty,
+                "otel.status_message" = tracing::field::Empty
+            ),
+            KgMessage::ProposalVoted(_) => info_span!(
+                "kg_indexer.handle_proposal_voted",
+                event_id = event_id,
+                proposal_id = tracing::field::Empty,
+                voter_id = tracing::field::Empty,
+                "otel.status_code" = tracing::field::Empty,
+                "otel.status_message" = tracing::field::Empty
+            ),
+            KgMessage::ProposalExecuted(_) => info_span!(
+                "kg_indexer.handle_proposal_executed",
+                event_id = event_id,
+                proposal_id = tracing::field::Empty,
+                "otel.status_code" = tracing::field::Empty,
+                "otel.status_message" = tracing::field::Empty
+            ),
+            KgMessage::ProposalSettingsUpdated(_) => info_span!(
+                "kg_indexer.handle_proposal_settings_updated",
+                event_id = event_id,
+                proposal_id = tracing::field::Empty,
+                space_id = tracing::field::Empty,
+                "otel.status_code" = tracing::field::Empty,
+                "otel.status_message" = tracing::field::Empty
+            ),
+            KgMessage::BlockSummary(_) => info_span!(
+                "kg_indexer.handle_block_summary",
+                event_id = event_id,
+                "otel.status_code" = tracing::field::Empty,
+                "otel.status_message" = tracing::field::Empty
+            ),
+        };
 
+        // Use instrument() instead of enter() for async code to properly track span across await points
         let ops = async {
             Ok::<usize, IndexerError>(match &event.msg {
                 KgMessage::Edit(edit) => {
                     let result = handlers::edits::handle_edit(edit)?;
+
+                    // Record trace context
+                    event_span.record("edit_id", display(result.edit_id));
+                    if let Ok(space_id) = uuid::Uuid::from_slice(&edit.space_id) {
+                        event_span.record("space_id", display(space_id));
+                    }
 
                     // Keep copies for versioned writes before partitioning
                     let values_for_versioning = result.values.clone();
@@ -1128,12 +1354,16 @@ async fn process_block(
                     // Versioned writes (temporal tables)
                     // Only write versions if this edit hasn't been processed before (idempotency)
                     if let Some(meta) = edit.meta.as_ref() {
+                        let (edit_name, created_by_id) = extract_edit_metadata(edit);
+
                         if let Some(version_key) = storage
                             .insert_edit_version(
                                 result.edit_id,
                                 meta.block_number as i64,
                                 meta.sequence as i64,
                                 meta.created_at as i64,
+                                edit_name.as_deref(),
+                                created_by_id,
                                 &mut tx,
                             )
                             .await?
@@ -1155,11 +1385,29 @@ async fn process_block(
                 }
                 KgMessage::CreateSpace(space) => {
                     let space_item = handlers::spaces::handle_create_space(space)?;
+
+                    // Record trace context
+                    event_span.record("space_id", display(space_item.id));
+                    event_span.record("space_address", space_item.address.as_str());
+
                     storage.insert_spaces(&[space_item], &mut tx).await?;
                     1
                 }
-                KgMessage::RoleGranted(event) => {
-                    match handlers::membership::handle_role_granted(event)? {
+                KgMessage::RoleGranted(role_event) => {
+                    // Record trace context
+                    if let Ok(space_id) = uuid::Uuid::from_slice(&role_event.space_id) {
+                        event_span.record("space_id", display(space_id));
+                    }
+                    if let Ok(member_id) = uuid::Uuid::from_slice(&role_event.member_space_id) {
+                        event_span.record("account", display(member_id));
+                    }
+                    if let Ok(role) =
+                        hermes_schema::pb::membership::MembershipRole::try_from(role_event.role)
+                    {
+                        event_span.record("role", role.as_str_name());
+                    }
+
+                    match handlers::membership::handle_role_granted(role_event)? {
                         MembershipChange::AddEditor(e) => {
                             storage.insert_editors(&[e], &mut tx).await?;
                         }
@@ -1170,8 +1418,21 @@ async fn process_block(
                     }
                     1
                 }
-                KgMessage::RoleRevoked(event) => {
-                    match handlers::membership::handle_role_revoked(event)? {
+                KgMessage::RoleRevoked(role_event) => {
+                    // Record trace context
+                    if let Ok(space_id) = uuid::Uuid::from_slice(&role_event.space_id) {
+                        event_span.record("space_id", display(space_id));
+                    }
+                    if let Ok(member_id) = uuid::Uuid::from_slice(&role_event.member_space_id) {
+                        event_span.record("account", display(member_id));
+                    }
+                    if let Ok(role) =
+                        hermes_schema::pb::membership::MembershipRole::try_from(role_event.role)
+                    {
+                        event_span.record("role", role.as_str_name());
+                    }
+
+                    match handlers::membership::handle_role_revoked(role_event)? {
                         MembershipChange::RemoveEditor(e) => {
                             storage.remove_editors(&[e], &mut tx).await?;
                         }
@@ -1182,21 +1443,34 @@ async fn process_block(
                     }
                     1
                 }
-                KgMessage::TrustExtension(event) => {
-                    if let Some(subspace) = handlers::subspaces::handle_trust_extension(event)? {
+                KgMessage::TrustExtension(trust_event) => {
+                    // Record trace context
+                    let extension_type = match &trust_event.extension {
+                        Some(TrustExtensionType::Verified(_)) => "verified",
+                        Some(TrustExtensionType::Related(_)) => "related",
+                        Some(TrustExtensionType::Subtopic(_)) => "subtopic",
+                        None => "unknown",
+                    };
+                    event_span.record("extension_type", extension_type);
+
+                    if let Some(subspace) =
+                        handlers::subspaces::handle_trust_extension(trust_event)?
+                    {
+                        event_span.record("parent_space_id", display(subspace.parent_space_id));
+                        event_span.record("child_space_id", display(subspace.subspace_id));
                         storage.insert_subspaces(&[subspace], &mut tx).await?;
                         1
                     } else {
                         0
                     }
                 }
-                KgMessage::ProposalCreated(event) => {
-                    let result = handlers::governance::handle_proposal_created(event)?;
-                    debug!(
-                        proposal_id = %result.proposal.id,
-                        actions = result.actions.len(),
-                        "Processing ProposalCreated"
-                    );
+                KgMessage::ProposalCreated(proposal_event) => {
+                    let result = handlers::governance::handle_proposal_created(proposal_event)?;
+
+                    // Record trace context
+                    event_span.record("proposal_id", display(result.proposal.id));
+                    event_span.record("space_id", display(result.proposal.space_id));
+
                     storage
                         .insert_proposals(&[result.proposal], &mut tx)
                         .await?;
@@ -1207,13 +1481,13 @@ async fn process_block(
                     }
                     1 + result.actions.len()
                 }
-                KgMessage::ProposalUpdated(event) => {
-                    let result = handlers::governance::handle_proposal_updated(event)?;
-                    debug!(
-                        proposal_id = %result.proposal.id,
-                        actions = result.actions.len(),
-                        "Processing ProposalUpdated"
-                    );
+                KgMessage::ProposalUpdated(proposal_event) => {
+                    let result = handlers::governance::handle_proposal_updated(proposal_event)?;
+
+                    // Record trace context
+                    event_span.record("proposal_id", display(result.proposal.id));
+                    event_span.record("space_id", display(result.proposal.space_id));
+
                     storage.update_proposal(&result.proposal, &mut tx).await?;
                     storage
                         .delete_proposal_actions(result.proposal.id, &mut tx)
@@ -1225,22 +1499,25 @@ async fn process_block(
                     }
                     1 + result.actions.len()
                 }
-                KgMessage::ProposalVoted(event) => {
-                    let vote = handlers::governance::handle_proposal_voted(event)?;
-                    debug!(
-                        proposal_id = %vote.proposal_id,
-                        voter_id = %vote.voter_id,
-                        "Processing ProposalVoted"
-                    );
+                KgMessage::ProposalVoted(vote_event) => {
+                    let vote = handlers::governance::handle_proposal_voted(vote_event)?;
+                    let proposal_id = vote.proposal_id;
+
+                    // Record trace context
+                    event_span.record("proposal_id", display(vote.proposal_id));
+                    event_span.record("voter_id", display(vote.voter_id));
+
                     storage.insert_proposal_votes(&[vote], &mut tx).await?;
+                    // Queue proposal for tally update (processed by background worker)
+                    storage.queue_tally_update(proposal_id, &mut tx).await?;
                     1
                 }
-                KgMessage::ProposalExecuted(event) => {
-                    let execution = handlers::governance::handle_proposal_executed(event)?;
-                    debug!(
-                        proposal_id = %execution.proposal_id,
-                        "Processing ProposalExecuted"
-                    );
+                KgMessage::ProposalExecuted(exec_event) => {
+                    let execution = handlers::governance::handle_proposal_executed(exec_event)?;
+
+                    // Record trace context
+                    event_span.record("proposal_id", display(execution.proposal_id));
+
                     storage
                         .update_proposal_executed(
                             execution.proposal_id,
@@ -1250,9 +1527,35 @@ async fn process_block(
                         .await?;
                     1
                 }
+                KgMessage::ProposalSettingsUpdated(settings_event) => {
+                    let result =
+                        handlers::governance::handle_proposal_settings_updated(settings_event)?;
+                    let voting_mode = match result.voting_mode {
+                        models::governance::VotingMode::Fast => "Fast",
+                        models::governance::VotingMode::Slow => "Slow",
+                    };
+
+                    // Record trace context
+                    event_span.record("proposal_id", display(result.proposal_id));
+                    event_span.record("space_id", display(result.space_id));
+
+                    storage
+                        .update_proposal_settings(
+                            result.proposal_id,
+                            voting_mode,
+                            result.start_time,
+                            result.end_time,
+                            result.quorum,
+                            result.threshold,
+                            &mut tx,
+                        )
+                        .await?;
+                    1
+                }
                 KgMessage::BlockSummary(_) => 0,
             })
         }
+        .instrument(event_span.clone())
         .await
         .map_err(|e| {
             event_span.record("otel.status_code", "ERROR");
@@ -1267,9 +1570,6 @@ async fn process_block(
 
         total_ops += ops;
     }
-
-    // Drop the handle_events span before starting db_commit (sibling spans)
-    drop(_handle_events_guard);
 
     // Commit the transaction
     let db_commit_span = info_span!(

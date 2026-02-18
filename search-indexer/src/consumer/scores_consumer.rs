@@ -2,6 +2,7 @@
 //!
 //! Consumes HermesScoresBatch messages and forwards score events to the ingest.
 
+use hermes_kafka::get_topic_prefix;
 use prost::Message;
 use rdkafka::{
     consumer::{Consumer, StreamConsumer},
@@ -46,7 +47,8 @@ impl ScoresConsumer {
     /// Create a new scores consumer.
     ///
     /// Configuration is read from environment variables:
-    /// - SCORES_KAFKA_TOPIC: Topic name (default: "curation.scores")
+    /// - ENVIRONMENT: Environment name for topic prefix ("staging" or "production")
+    /// - SCORES_KAFKA_TOPIC: Base topic name (default: "curation.scores")
     /// - SCORES_BATCH_SIZE: Batch size (default: 50)
     /// - SCORES_BATCH_TIMEOUT_MS: Batch timeout in milliseconds (default: 1000)
     ///
@@ -55,8 +57,10 @@ impl ScoresConsumer {
     /// * `brokers` - Kafka broker addresses (comma-separated)
     /// * `group_id` - Consumer group ID (will append "-scores" suffix)
     pub fn new(brokers: &str, group_id: &str) -> Result<Self, IngestError> {
-        let topic =
+        let prefix = get_topic_prefix();
+        let base_topic =
             env::var("SCORES_KAFKA_TOPIC").unwrap_or_else(|_| Self::SCORES_TOPIC.to_string());
+        let topic = format!("{}{}", prefix, base_topic);
 
         let batch_size = env::var("SCORES_BATCH_SIZE")
             .ok()
@@ -79,14 +83,11 @@ impl ScoresConsumer {
         batch_size: usize,
         batch_timeout_ms: u64,
     ) -> Result<Self, IngestError> {
-        // Use a separate consumer group for scores
-        let scores_group_id = format!("{}-scores", group_id);
-
-        let client_config = super::kafka_config::create_client_config(brokers, &scores_group_id);
+        let client_config = super::kafka_config::create_client_config(brokers, group_id);
 
         info!(
             brokers = %brokers,
-            group_id = %scores_group_id,
+            group_id = %group_id,
             topic = %topic,
             batch_size = batch_size,
             batch_timeout_ms = batch_timeout_ms,
@@ -264,7 +265,7 @@ impl ScoresConsumer {
             let last_offset = offsets.last().map(|(_, _, o)| *o).unwrap_or(0);
 
             async {
-                info!(
+                debug!(
                     event_count = event_count,
                     message_count = batch.len(),
                     "Sending batch of score events to processor"

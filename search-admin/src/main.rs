@@ -12,6 +12,17 @@ use commands::{
     reindex::ReindexCommand, update_alias::UpdateAliasCommand,
 };
 
+/// Get the prefixed alias name based on environment.
+///
+/// - `staging` → `staging_{base_alias}`
+/// - `production` (or any other value) → `{base_alias}`
+fn get_prefixed_alias(environment: &str, base_alias: &str) -> String {
+    match environment {
+        "staging" => format!("staging_{}", base_alias),
+        _ => base_alias.to_string(),
+    }
+}
+
 #[derive(Parser)]
 #[command(name = "search-admin")]
 #[command(about = "CLI tool for managing OpenSearch indices", long_about = None)]
@@ -24,9 +35,13 @@ struct Cli {
     )]
     opensearch_url: String,
 
-    /// Index alias name
+    /// Base index alias name (will be prefixed based on environment)
     #[arg(long, env = "INDEX_ALIAS", default_value = "entities")]
     index_alias: String,
+
+    /// Environment (staging or production). Required. Staging adds "staging_" prefix to index names.
+    #[arg(long, env = "ENVIRONMENT")]
+    environment: String,
 
     #[command(subcommand)]
     command: Commands,
@@ -66,6 +81,15 @@ async fn main() -> Result<()> {
 
     let cli = Cli::parse();
 
+    // Validate environment value
+    if cli.environment != "staging" && cli.environment != "production" {
+        error!(
+            environment = %cli.environment,
+            "ENVIRONMENT must be 'staging' or 'production'"
+        );
+        std::process::exit(1);
+    }
+
     // Sanitize OpenSearch URL to avoid logging credentials
     let sanitized_url = if let Ok(parsed) = url::Url::parse(&cli.opensearch_url) {
         // Create URL without userinfo (username:password)
@@ -78,24 +102,34 @@ async fn main() -> Result<()> {
         "[invalid-url]".to_string()
     };
 
+    // Apply environment prefix to index alias
+    let index_alias = get_prefixed_alias(&cli.environment, &cli.index_alias);
+
+    info!(
+        environment = %cli.environment,
+        "=== ENVIRONMENT: {} ===",
+        cli.environment
+    );
+
     info!(
         opensearch_url = %sanitized_url,
-        index_alias = %cli.index_alias,
+        base_alias = %cli.index_alias,
+        index_alias = %index_alias,
         "Starting search-admin CLI"
     );
 
     let result = match cli.command {
         Commands::CreateIndex(cmd) => {
-            cmd.execute(&cli.opensearch_url, &cli.index_alias).await
+            cmd.execute(&cli.opensearch_url, &index_alias).await
         }
-        Commands::Reindex(cmd) => cmd.execute(&cli.opensearch_url, &cli.index_alias).await,
+        Commands::Reindex(cmd) => cmd.execute(&cli.opensearch_url, &index_alias).await,
         Commands::DeleteIndex(cmd) => {
-            cmd.execute(&cli.opensearch_url, &cli.index_alias).await
+            cmd.execute(&cli.opensearch_url, &index_alias).await
         }
-        Commands::ListIndices(cmd) => cmd.execute(&cli.opensearch_url, &cli.index_alias).await,
-        Commands::UpdateAlias(cmd) => cmd.execute(&cli.opensearch_url, &cli.index_alias).await,
+        Commands::ListIndices(cmd) => cmd.execute(&cli.opensearch_url, &index_alias).await,
+        Commands::UpdateAlias(cmd) => cmd.execute(&cli.opensearch_url, &index_alias).await,
         Commands::FullMigration(cmd) => {
-            cmd.execute(&cli.opensearch_url, &cli.index_alias).await
+            cmd.execute(&cli.opensearch_url, &index_alias).await
         }
     };
 

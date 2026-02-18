@@ -1,9 +1,13 @@
 //! Telemetry initialization.
 
-use crate::config::{Backend, Config};
-use opentelemetry_sdk::trace::SdkTracerProvider;
+use std::collections::HashMap;
+use std::time::Duration;
+
+use crate::config::{AxiomConfig, Backend, Config};
+use opentelemetry_otlp::{SpanExporter, WithExportConfig, WithHttpConfig};
+use opentelemetry_sdk::trace::{BatchConfigBuilder, BatchSpanProcessor, SdkTracerProvider};
 use tracing_subscriber::filter::LevelFilter;
-use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
+use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
 
 /// Errors that can occur during telemetry initialization.
 #[derive(Debug, thiserror::Error)]
@@ -91,8 +95,9 @@ pub fn init(config: Config) -> Result<TelemetryGuard, Error> {
             environment,
             release,
             debug,
+            axiom,
         } => {
-            let (provider, sentry_guard) = init_sentry(
+            let (provider, sentry_guard) = init_instrumentation(
                 namespace,
                 &dsn,
                 traces_sample_rate,
@@ -100,6 +105,7 @@ pub fn init(config: Config) -> Result<TelemetryGuard, Error> {
                 environment.as_deref(),
                 release.as_deref(),
                 debug,
+                axiom.as_ref(),
             )?;
             Ok(TelemetryGuard {
                 provider: Some(provider),
@@ -212,7 +218,8 @@ where
     }
 }
 
-fn init_sentry(
+#[allow(clippy::too_many_arguments)]
+fn init_instrumentation(
     namespace: &'static str,
     dsn: &str,
     traces_sample_rate: f32,
@@ -220,11 +227,12 @@ fn init_sentry(
     environment: Option<&str>,
     release: Option<&str>,
     debug: bool,
+    axiom: Option<&AxiomConfig>,
 ) -> Result<(SdkTracerProvider, sentry::ClientInitGuard), Error> {
-    use opentelemetry::KeyValue;
     use opentelemetry::trace::TracerProvider as _;
-    use opentelemetry_sdk::Resource;
+    use opentelemetry::KeyValue;
     use opentelemetry_sdk::propagation::TraceContextPropagator;
+    use opentelemetry_sdk::Resource;
 
     let mut options = sentry::ClientOptions {
         traces_sample_rate,
@@ -243,15 +251,70 @@ fn init_sentry(
 
     opentelemetry::global::set_text_map_propagator(TraceContextPropagator::new());
 
-    let resource = Resource::builder()
-        .with_attribute(KeyValue::new("service.name", namespace))
-        .build();
+    let mut resource_builder =
+        Resource::builder().with_attribute(KeyValue::new("service.name", namespace));
+
+    // Add environment and release to resource attributes for Axiom
+    if let Some(env) = environment {
+        resource_builder = resource_builder
+            .with_attribute(KeyValue::new("deployment.environment", env.to_string()));
+    }
+    if let Some(rel) = release {
+        resource_builder =
+            resource_builder.with_attribute(KeyValue::new("service.version", rel.to_string()));
+    }
+
+    let resource = resource_builder.build();
 
     let mut provider_builder = SdkTracerProvider::builder().with_resource(resource);
 
     if debug {
         let stdout_exporter = opentelemetry_stdout::SpanExporter::default();
         provider_builder = provider_builder.with_simple_exporter(stdout_exporter);
+    }
+
+    // Add Axiom OTLP exporter if configured
+    if let Some(axiom_config) = axiom {
+        let mut headers = HashMap::new();
+        headers.insert(
+            "Authorization".to_string(),
+            format!("Bearer {}", axiom_config.token),
+        );
+        headers.insert("X-Axiom-Dataset".to_string(), axiom_config.dataset.clone());
+
+        // Use blocking reqwest client with explicit timeouts - the batch exporter runs on
+        // a dedicated thread outside the Tokio runtime, so we need a blocking client
+        let http_client = reqwest::blocking::Client::builder()
+            .timeout(Duration::from_secs(10))
+            .connect_timeout(Duration::from_secs(5))
+            .pool_max_idle_per_host(2)
+            .build()
+            .map_err(|e| Error::OpenTelemetry(format!("Failed to build HTTP client: {}", e)))?;
+
+        let axiom_exporter = SpanExporter::builder()
+            .with_http()
+            .with_http_client(http_client)
+            .with_endpoint("https://api.axiom.co/v1/traces")
+            .with_headers(headers)
+            .build()
+            .map_err(|e| Error::OpenTelemetry(format!("Failed to create Axiom exporter: {}", e)))?;
+
+        // Configure batch exporter with explicit settings for high-volume workloads:
+        // - Larger queue to handle bursts (4x default)
+        // - Larger batches for fewer HTTP calls
+        // - More frequent exports to reduce memory pressure
+        // Note: Export timeout is controlled by the HTTP client (10s) configured above
+        let batch_config = BatchConfigBuilder::default()
+            .with_max_queue_size(8192)
+            .with_max_export_batch_size(1024)
+            .with_scheduled_delay(Duration::from_millis(1000))
+            .build();
+
+        let batch_processor = BatchSpanProcessor::builder(axiom_exporter)
+            .with_batch_config(batch_config)
+            .build();
+
+        provider_builder = provider_builder.with_span_processor(batch_processor);
     }
 
     let provider = provider_builder.build();
@@ -284,6 +347,7 @@ fn init_sentry(
         .unwrap_or(LevelFilter::INFO);
 
     if debug {
+        // Human-readable format for local development
         let fmt_layer = tracing_subscriber::fmt::layer()
             .with_target(true)
             .with_thread_ids(false)
@@ -297,14 +361,34 @@ fn init_sentry(
             .with(fmt_layer)
             .init();
     } else {
+        // JSON format for production (K8s) - includes trace context
+        let json_layer = tracing_subscriber::fmt::layer()
+            .json()
+            .with_current_span(true)
+            .with_span_list(false)
+            .flatten_event(true)
+            .with_file(false)
+            .with_line_number(false);
+
         tracing_subscriber::registry()
             .with(level)
             .with(telemetry_layer)
             .with(sentry_layer)
+            .with(json_layer)
             .init();
     }
 
-    eprintln!("Telemetry initialized: service.name={} sentry", namespace);
+    if let Some(axiom_config) = axiom {
+        eprintln!(
+            "Telemetry initialized: service.name={} sentry(sample_rate={}) axiom={}",
+            namespace, traces_sample_rate, axiom_config.dataset
+        );
+    } else {
+        eprintln!(
+            "Telemetry initialized: service.name={} sentry(sample_rate={})",
+            namespace, traces_sample_rate
+        );
+    }
 
     Ok((provider, sentry_guard))
 }

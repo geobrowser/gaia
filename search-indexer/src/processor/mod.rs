@@ -21,12 +21,8 @@ use uuid::Uuid;
 #[derive(Debug)]
 pub enum ProcessedEvent {
     /// Document to be indexed (create or update).
+    /// For soft deletes, the document will have `deleted=Some(true)`.
     Index(EntityDocument),
-    /// Document to be deleted.
-    Delete {
-        entity_id: uuid::Uuid,
-        space_id: uuid::Uuid,
-    },
     /// Properties to be unset from a document.
     UnsetProperties {
         entity_id: uuid::Uuid,
@@ -439,6 +435,19 @@ impl Processor {
 
                 Ok(Some(ProcessedEvent::Index(doc)))
             }
+            EntityEventType::Restore => {
+                // Restore: create a document with deleted=false to un-delete
+                // The upsert will preserve existing fields and only update the deleted flag
+                let mut doc = EntityDocument::new(
+                    event.entity_id,
+                    event.space_id,
+                    None,  // Name not needed for restore
+                    None,  // Description not needed for restore
+                );
+                doc.deleted = Some(false);
+
+                Ok(Some(ProcessedEvent::Index(doc)))
+            }
             EntityEventType::UnsetProperties => {
                 if event.unset_property_keys.is_empty() {
                     // No properties to unset, skip
@@ -548,6 +557,26 @@ mod tests {
             assert_eq!(doc.entity_id, entity_id);
             assert_eq!(doc.space_id, space_id);
             assert_eq!(doc.deleted, Some(true));
+            assert_eq!(doc.name, None);
+            assert_eq!(doc.description, None);
+        }
+    }
+
+    #[test]
+    fn test_process_restore_event() {
+        let processor = Processor::new();
+        let entity_id = Uuid::new_v4();
+        let space_id = Uuid::new_v4();
+
+        let event = EntityEvent::restore(entity_id, space_id);
+
+        let result = processor.process_event(event).unwrap();
+        assert!(matches!(result, Some(ProcessedEvent::Index(_))));
+
+        if let Some(ProcessedEvent::Index(doc)) = result {
+            assert_eq!(doc.entity_id, entity_id);
+            assert_eq!(doc.space_id, space_id);
+            assert_eq!(doc.deleted, Some(false));
             assert_eq!(doc.name, None);
             assert_eq!(doc.description, None);
         }

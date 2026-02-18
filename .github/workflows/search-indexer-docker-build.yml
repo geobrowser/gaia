@@ -1,0 +1,99 @@
+name: Search Indexer Docker Build
+
+on:
+  push:
+    branches: [main, dev]
+    paths:
+      - 'search-indexer/**'
+      - 'search-indexer-shared/**'
+      - 'search-indexer-repository/**'
+      - 'search-indexer-deploy/docker-compose.yaml'
+      - 'hermes-schema/**'
+      - 'hermes-instrumentation/**'
+      - 'hermes-kafka/**'
+      - 'wire/**'
+      - 'indexer_utils/**'
+      - 'sdk/**'
+      - '.github/workflows/search-indexer-docker-build.yml'
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - 'search-indexer/**'
+      - 'search-indexer-shared/**'
+      - 'search-indexer-repository/**'
+      - 'search-indexer-deploy/docker-compose.yaml'
+      - 'hermes-schema/**'
+      - 'hermes-instrumentation/**'
+      - 'hermes-kafka/**'
+      - 'wire/**'
+      - 'indexer_utils/**'
+      - 'sdk/**'
+      - '.github/workflows/search-indexer-docker-build.yml'
+  workflow_dispatch:
+
+jobs:
+  docker-compose-test:
+    name: Docker Compose Test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Create external network
+        run: docker network create hermes_default || true
+
+      - name: Build and start services
+        working-directory: ./search-indexer-deploy
+        run: docker compose up -d --build opensearch search-indexer
+
+      - name: Wait for OpenSearch to be healthy
+        run: |
+          echo "Waiting for OpenSearch to be healthy..."
+          timeout 120 bash -c 'until docker inspect opensearch --format="{{.State.Health.Status}}" | grep -q "healthy"; do sleep 5; done'
+          echo "OpenSearch is healthy"
+
+      - name: Wait for search-indexer to start
+        run: |
+          echo "Waiting for search-indexer to initialize..."
+          sleep 10
+
+      - name: Check search-indexer health endpoint
+        run: |
+          docker run --rm --network search-indexer-deploy_default curlimages/curl:latest \
+            curl -sf http://search-indexer:8080/healthz || (echo "Health check failed" && exit 1)
+          echo "Health check passed"
+
+      - name: Verify search-indexer stays healthy for 30 seconds
+        run: |
+          echo "Monitoring search-indexer for 30 seconds..."
+          for i in {1..6}; do
+            sleep 5
+
+            # Check container is still running
+            STATUS=$(docker inspect search-indexer --format="{{.State.Status}}")
+            if [ "$STATUS" != "running" ]; then
+              echo "Container stopped unexpectedly. Status: $STATUS"
+              docker logs search-indexer --tail 50
+              exit 1
+            fi
+
+            # Check for panics in logs
+            if docker logs search-indexer 2>&1 | grep -q "panicked"; then
+              echo "Panic detected in search-indexer logs"
+              docker logs search-indexer --tail 100
+              exit 1
+            fi
+
+            echo "Check $i/6: search-indexer is healthy"
+          done
+          echo "Search-indexer remained healthy for 30 seconds"
+
+      - name: Show search-indexer logs
+        if: always()
+        run: docker logs search-indexer --tail 100
+
+      - name: Cleanup
+        if: always()
+        working-directory: ./search-indexer-deploy
+        run: docker compose down -v

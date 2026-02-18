@@ -1,3 +1,4 @@
+use hermes_instrumentation::info;
 use sqlx::{postgres::PgPoolOptions, Postgres, QueryBuilder};
 use std::collections::hash_map::DefaultHasher;
 use std::hash::{Hash, Hasher};
@@ -17,6 +18,7 @@ use crate::models::{
     values::{ValueChangeType, ValueOp},
 };
 
+#[derive(Clone)]
 pub struct Storage {
     pub pool: sqlx::Pool<Postgres>,
 }
@@ -92,6 +94,7 @@ impl Storage {
         let mut boolean_values = Vec::with_capacity(values.len());
         let mut time_values = Vec::with_capacity(values.len());
         let mut point_values = Vec::with_capacity(values.len());
+        let mut rect_values = Vec::with_capacity(values.len());
         let mut integer_values = Vec::with_capacity(values.len());
         let mut float_values = Vec::with_capacity(values.len());
         let mut bytes_values: Vec<Option<&[u8]>> = Vec::with_capacity(values.len());
@@ -114,6 +117,7 @@ impl Storage {
             boolean_values.push(prop.boolean);
             time_values.push(prop.time.as_deref());
             point_values.push(prop.point.as_deref());
+            rect_values.push(prop.rect.as_deref());
             integer_values.push(prop.integer);
             float_values.push(prop.float);
             bytes_values.push(prop.bytes.as_deref());
@@ -128,7 +132,7 @@ impl Storage {
         let query = r#"
             INSERT INTO values (
                 id, entity_id, property_id, space_id, language, unit,
-                text, decimal, boolean, time, point,
+                text, decimal, boolean, time, point, rect,
                 integer, float, bytes, date, datetime, schedule, embedding,
                 time_utc, datetime_utc
             )
@@ -144,15 +148,16 @@ impl Storage {
                 $9::boolean[],
                 $10::text[],
                 $11::text[],
-                $12::bigint[],
-                $13::double precision[],
-                $14::bytea[],
-                $15::text[],
+                $12::text[],
+                $13::bigint[],
+                $14::double precision[],
+                $15::bytea[],
                 $16::text[],
-                $17::jsonb[],
+                $17::text[],
                 $18::jsonb[],
-                $19::timetz[],
-                $20::timestamptz[]
+                $19::jsonb[],
+                $20::timetz[],
+                $21::timestamptz[]
             )
             ON CONFLICT (id) DO UPDATE SET
                 language = EXCLUDED.language,
@@ -162,6 +167,7 @@ impl Storage {
                 boolean = EXCLUDED.boolean,
                 time = EXCLUDED.time,
                 point = EXCLUDED.point,
+                rect = EXCLUDED.rect,
                 integer = EXCLUDED.integer,
                 float = EXCLUDED.float,
                 bytes = EXCLUDED.bytes,
@@ -185,6 +191,7 @@ impl Storage {
             .bind(&boolean_values)
             .bind(&time_values)
             .bind(&point_values)
+            .bind(&rect_values)
             .bind(&integer_values)
             .bind(&float_values)
             .bind(&bytes_values)
@@ -647,6 +654,7 @@ impl Storage {
         let mut executed_ats: Vec<Option<i64>> = Vec::with_capacity(proposals.len());
         let mut created_ats = Vec::with_capacity(proposals.len());
         let mut created_at_blocks = Vec::with_capacity(proposals.len());
+        let mut names: Vec<Option<String>> = Vec::with_capacity(proposals.len());
 
         for proposal in proposals {
             ids.push(proposal.id);
@@ -663,22 +671,24 @@ impl Storage {
             executed_ats.push(proposal.executed_at);
             created_ats.push(proposal.created_at.to_string());
             created_at_blocks.push(proposal.created_at_block.to_string());
+            names.push(proposal.name.clone());
         }
 
         let query = r#"
             INSERT INTO proposals (
                 id, space_id, proposed_by, voting_mode, start_time, end_time,
-                quorum, threshold, executed_at, created_at, created_at_block
+                quorum, threshold, executed_at, created_at, created_at_block, name
             )
             SELECT id, space_id, proposed_by, voting_mode::"votingMode", start_time, end_time,
-                   quorum, threshold, executed_at, created_at, created_at_block
+                   quorum, threshold, executed_at, created_at, created_at_block, name
             FROM UNNEST(
                 $1::uuid[], $2::uuid[], $3::uuid[], $4::text[], $5::bigint[], $6::bigint[],
-                $7::bigint[], $8::bigint[], $9::bigint[], $10::text[], $11::text[]
+                $7::bigint[], $8::bigint[], $9::bigint[], $10::text[], $11::text[], $12::text[]
             ) AS t(id, space_id, proposed_by, voting_mode, start_time, end_time,
-                   quorum, threshold, executed_at, created_at, created_at_block)
+                   quorum, threshold, executed_at, created_at, created_at_block, name)
             ON CONFLICT (id) DO UPDATE SET
-                executed_at = COALESCE(EXCLUDED.executed_at, proposals.executed_at)
+                executed_at = COALESCE(EXCLUDED.executed_at, proposals.executed_at),
+                name = COALESCE(EXCLUDED.name, proposals.name)
         "#;
 
         sqlx::query(query)
@@ -693,6 +703,7 @@ impl Storage {
             .bind(&executed_ats)
             .bind(&created_ats)
             .bind(&created_at_blocks)
+            .bind(&names)
             .execute(&mut **tx)
             .await?;
 
@@ -977,6 +988,186 @@ impl Storage {
         Ok(())
     }
 
+    /// Update only the voting settings of a proposal (fast→slow escalation).
+    /// Unlike update_proposal, this does not touch proposer_id or actions.
+    #[allow(dead_code, clippy::too_many_arguments)]
+    pub async fn update_proposal_settings(
+        &self,
+        proposal_id: Uuid,
+        voting_mode: &str,
+        start_time: i64,
+        end_time: i64,
+        quorum: i64,
+        threshold: i64,
+        tx: &mut sqlx::Transaction<'_, Postgres>,
+    ) -> Result<(), IndexerError> {
+        sqlx::query(
+            r#"
+            UPDATE proposals
+            SET voting_mode = $2::"votingMode",
+                start_time = $3,
+                end_time = $4,
+                quorum = $5,
+                threshold = $6
+            WHERE id = $1
+            "#,
+        )
+        .bind(proposal_id)
+        .bind(voting_mode)
+        .bind(start_time)
+        .bind(end_time)
+        .bind(quorum)
+        .bind(threshold)
+        .execute(&mut **tx)
+        .await?;
+
+        Ok(())
+    }
+
+    /// Queue a proposal for vote tally update.
+    /// Uses INSERT ON CONFLICT DO NOTHING to avoid duplicate entries.
+    /// The background worker will process the queue and update denormalized vote counts.
+    #[allow(dead_code)]
+    pub async fn queue_tally_update(
+        &self,
+        proposal_id: Uuid,
+        tx: &mut sqlx::Transaction<'_, Postgres>,
+    ) -> Result<(), IndexerError> {
+        sqlx::query(
+            r#"
+            INSERT INTO proposal_tally_queue (proposal_id)
+            VALUES ($1)
+            ON CONFLICT (proposal_id) DO NOTHING
+            "#,
+        )
+        .bind(proposal_id)
+        .execute(&mut **tx)
+        .await?;
+
+        Ok(())
+    }
+
+    /// Process the proposal tally queue: fetch queued proposal IDs, update their
+    /// denormalized vote counts, and remove them from the queue.
+    /// Returns the number of proposals processed.
+    pub async fn process_tally_queue(&self, batch_size: i64) -> Result<usize, IndexerError> {
+        // Use a transaction to atomically:
+        // 1. Grab and lock a batch of queued proposals
+        // 2. Update their vote counts
+        // 3. Remove them from the queue
+        let mut tx = self.pool.begin().await?;
+
+        // Grab a batch of proposal IDs from the queue with FOR UPDATE SKIP LOCKED
+        // This allows multiple workers to process concurrently without conflicts
+        let queued: Vec<(Uuid,)> = sqlx::query_as(
+            r#"
+            SELECT proposal_id
+            FROM proposal_tally_queue
+            ORDER BY queued_at ASC
+            LIMIT $1
+            FOR UPDATE SKIP LOCKED
+            "#,
+        )
+        .bind(batch_size)
+        .fetch_all(&mut *tx)
+        .await?;
+
+        if queued.is_empty() {
+            return Ok(0);
+        }
+
+        let proposal_ids: Vec<Uuid> = queued.into_iter().map(|(id,)| id).collect();
+        let count = proposal_ids.len();
+
+        // Update vote counts for these proposals by computing from proposal_votes.
+        // Use LEFT JOIN to handle proposals with zero votes (all votes deleted).
+        sqlx::query(
+            r#"
+            UPDATE proposals p
+            SET
+                yes_count = COALESCE(vc.yes_count, 0),
+                no_count = COALESCE(vc.no_count, 0),
+                abstain_count = COALESCE(vc.abstain_count, 0)
+            FROM UNNEST($1::uuid[]) AS queued(proposal_id)
+            LEFT JOIN (
+                SELECT
+                    proposal_id,
+                    COUNT(*) FILTER (WHERE vote = 'Yes') as yes_count,
+                    COUNT(*) FILTER (WHERE vote = 'No') as no_count,
+                    COUNT(*) FILTER (WHERE vote = 'Abstain') as abstain_count
+                FROM proposal_votes
+                WHERE proposal_id = ANY($1)
+                GROUP BY proposal_id
+            ) vc ON queued.proposal_id = vc.proposal_id
+            WHERE p.id = queued.proposal_id
+            "#,
+        )
+        .bind(&proposal_ids)
+        .execute(&mut *tx)
+        .await?;
+
+        // Detect fast-path proposals that were auto-executed by a YES vote.
+        //
+        // The DAOSpace contract auto-executes fast-path proposals inline when a YES
+        // vote meets the threshold (_vote → _executeProposal), but does NOT emit a
+        // PROPOSAL_EXECUTED event. Only the explicit enter(PROPOSAL_EXECUTED) path
+        // emits that event. So for fast-path proposals we must infer execution from
+        // the tally: if yes_count > threshold and executed_at is still NULL, mark it
+        // as executed using the timestamp of the most recent vote.
+        let auto_executed = sqlx::query(
+            r#"
+            UPDATE proposals p
+            SET executed_at = latest_vote.max_created_at::bigint
+            FROM UNNEST($1::uuid[]) AS queued(proposal_id)
+            JOIN (
+                SELECT proposal_id, MAX(created_at)::bigint as max_created_at
+                FROM proposal_votes
+                WHERE proposal_id = ANY($1)
+                GROUP BY proposal_id
+            ) latest_vote ON queued.proposal_id = latest_vote.proposal_id
+            WHERE p.id = queued.proposal_id
+              AND p.voting_mode = 'Fast'::"votingMode"
+              AND p.executed_at IS NULL
+              AND p.yes_count >= p.threshold
+            "#,
+        )
+        .bind(&proposal_ids)
+        .execute(&mut *tx)
+        .await?;
+
+        if auto_executed.rows_affected() > 0 {
+            info!(
+                count = auto_executed.rows_affected(),
+                "Auto-detected fast-path proposal executions from vote tallies"
+            );
+        }
+
+        // Remove processed proposals from the queue
+        sqlx::query(
+            r#"
+            DELETE FROM proposal_tally_queue
+            WHERE proposal_id = ANY($1)
+            "#,
+        )
+        .bind(&proposal_ids)
+        .execute(&mut *tx)
+        .await?;
+
+        tx.commit().await?;
+
+        Ok(count)
+    }
+
+    /// Get the current depth of the proposal tally queue.
+    /// Useful for monitoring worker health and detecting backlogs.
+    pub async fn get_tally_queue_depth(&self) -> Result<i64, IndexerError> {
+        let result: (i64,) = sqlx::query_as(r#"SELECT COUNT(*) FROM proposal_tally_queue"#)
+            .fetch_one(&self.pool)
+            .await?;
+
+        Ok(result.0)
+    }
+
     // ==================== Versioned writes ====================
 
     /// Derive a deterministic version ID from entity, property, space, and version_key.
@@ -1037,20 +1228,23 @@ impl Storage {
     ///
     /// The ON CONFLICT on edit_versions detects re-processing, but value_versions has no
     /// such protection - it relies on callers checking this return value.
+    #[allow(clippy::too_many_arguments)]
     pub async fn insert_edit_version(
         &self,
         edit_id: Uuid,
         block_number: i64,
         sequence: i64,
         created_at: i64,
+        name: Option<&str>,
+        created_by_id: Option<Uuid>,
         tx: &mut sqlx::Transaction<'_, Postgres>,
     ) -> Result<Option<i64>, IndexerError> {
         let version_key = (block_number << 32) | sequence;
 
         let result = sqlx::query(
             r#"
-            INSERT INTO edit_versions (edit_id, block_number, sequence, version_key, created_at)
-            VALUES ($1, $2, $3, $4, to_timestamp($5))
+            INSERT INTO edit_versions (edit_id, block_number, sequence, version_key, created_at, name, created_by_id)
+            VALUES ($1, $2, $3, $4, to_timestamp($5), $6, $7)
             ON CONFLICT (edit_id) DO NOTHING
             "#,
         )
@@ -1059,6 +1253,8 @@ impl Storage {
         .bind(sequence)
         .bind(version_key)
         .bind(created_at as f64)
+        .bind(name)
+        .bind(created_by_id)
         .execute(&mut **tx)
         .await?;
 
@@ -1131,6 +1327,7 @@ impl Storage {
         let mut decimals = Vec::with_capacity(set_values.len());
         let mut times = Vec::with_capacity(set_values.len());
         let mut points = Vec::with_capacity(set_values.len());
+        let mut rects = Vec::with_capacity(set_values.len());
         let mut integers = Vec::with_capacity(set_values.len());
         let mut floats = Vec::with_capacity(set_values.len());
         let mut bytes_values: Vec<Option<&[u8]>> = Vec::with_capacity(set_values.len());
@@ -1162,6 +1359,7 @@ impl Storage {
             decimals.push(v.decimal.as_deref());
             times.push(v.time.as_deref());
             points.push(v.point.as_deref());
+            rects.push(v.rect.as_deref());
             integers.push(v.integer);
             floats.push(v.float);
             bytes_values.push(v.bytes.as_deref());
@@ -1179,16 +1377,16 @@ impl Storage {
             r#"
             INSERT INTO value_versions (
                 id, entity_id, property_id, space_id, valid_from_key,
-                language, unit, text, boolean, decimal, time, point,
+                language, unit, text, boolean, decimal, time, point, rect,
                 integer, float, bytes, date, datetime, schedule, embedding,
                 time_utc, datetime_utc, context_root_id, context_edge_type_id
             )
             SELECT * FROM UNNEST(
                 $1::uuid[], $2::uuid[], $3::uuid[], $4::uuid[], $5::bigint[],
                 $6::text[], $7::text[], $8::text[], $9::boolean[], $10::numeric[],
-                $11::text[], $12::text[], $13::bigint[], $14::double precision[],
-                $15::bytea[], $16::text[], $17::text[], $18::jsonb[], $19::jsonb[],
-                $20::timetz[], $21::timestamptz[], $22::uuid[], $23::uuid[]
+                $11::text[], $12::text[], $13::text[], $14::bigint[], $15::double precision[],
+                $16::bytea[], $17::text[], $18::text[], $19::jsonb[], $20::jsonb[],
+                $21::timetz[], $22::timestamptz[], $23::uuid[], $24::uuid[]
             )
             ON CONFLICT (id) DO NOTHING
             "#,
@@ -1205,6 +1403,7 @@ impl Storage {
         .bind(&decimals)
         .bind(&times)
         .bind(&points)
+        .bind(&rects)
         .bind(&integers)
         .bind(&floats)
         .bind(&bytes_values)

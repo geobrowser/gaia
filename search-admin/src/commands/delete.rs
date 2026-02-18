@@ -2,7 +2,6 @@ use anyhow::{Context, Result};
 use clap::Args;
 use tracing::info;
 
-use search_indexer_repository::opensearch::get_versioned_index_name;
 
 use crate::commands::get;
 use crate::opensearch_client;
@@ -24,10 +23,17 @@ pub struct DeleteIndexCommand {
 
 impl DeleteIndexCommand {
     pub async fn execute(&self, opensearch_url: &str, index_alias: &str) -> Result<()> {
-        info!(version = self.version, "Deleting index");
+        // Generate versioned index name from the (possibly prefixed) alias
+        let versioned_index_name = format!("{}_v{}", index_alias, self.version);
+
+        info!(
+            version = self.version,
+            index_alias = %index_alias,
+            versioned_index_name = %versioned_index_name,
+            "Deleting index"
+        );
 
         let client = opensearch_client::create_client(opensearch_url)?;
-        let versioned_index_name = get_versioned_index_name(Some(self.version));
 
         println!("\n════════════════════════════════════════════════");
         println!("OpenSearch Delete Index");

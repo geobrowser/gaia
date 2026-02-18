@@ -62,6 +62,7 @@ message UnflagEditorAction {
 message PublishAction {
   string content_uri = 1;  // Content URI (IPFS hash)
   bytes metadata = 2;      // Edit metadata
+  string name = 3;         // Edit name (extracted from IPFS cache)
 }
 
 // Decoded action: flag content
@@ -156,4 +157,16 @@ message HermesProposalExecuted {
   bytes space_id = 1;                                   // 16 bytes - space executing the proposal
   bytes proposal_id = 2;                                // 16 bytes - executed proposal identifier
   blockchain_metadata.BlockchainMetadata meta = 3;
+}
+
+// HermesProposalSettingsUpdated - emitted for orphaned PROPOSAL_SETTINGS_SELECTED events.
+// This occurs when a NO vote on a fast-path proposal escalates it to slow path:
+// the contract emits PROPOSAL_SETTINGS_SELECTED (via ping) with new settings but
+// does NOT emit PROPOSAL_UPDATED. The pipeline detects these orphaned settings and
+// emits them as a settings-only update so the indexer can update the proposal in place.
+message HermesProposalSettingsUpdated {
+  bytes space_id = 1;                                   // 16 bytes - space owning the proposal (from_id)
+  bytes proposal_id = 2;                                // 16 bytes - proposal identifier
+  ProposalSettings settings = 3;                        // Updated voting settings
+  blockchain_metadata.BlockchainMetadata meta = 4;
 }

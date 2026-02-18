@@ -49,16 +49,22 @@ const EDIT_C_1: [u8; 16] = make_id(0xED);
 // Author ID (16 bytes for grc-20)
 const AUTHOR_1: [u8; 16] = make_id(0x11);
 
+/// A cached mock entry with payload bytes and edit name.
+struct MockCacheEntry {
+    payload: Vec<u8>,
+    name: Option<String>,
+}
+
 /// Mock IPFS cache with pre-populated GRC-20 v2 payload bytes.
 pub struct MockIpfsCache {
-    payloads: HashMap<String, Vec<u8>>,
+    entries: HashMap<String, MockCacheEntry>,
     errored_hashes: std::collections::HashSet<String>,
 }
 
 impl MockIpfsCache {
     pub fn new() -> Self {
         let mut cache = Self {
-            payloads: HashMap::new(),
+            entries: HashMap::new(),
             errored_hashes: std::collections::HashSet::new(),
         };
         cache.populate();
@@ -91,8 +97,20 @@ impl MockIpfsCache {
     }
 
     fn insert_edit(&mut self, hash: &str, edit: Edit) {
+        // Extract the name before encoding
+        let name = if edit.name.is_empty() {
+            None
+        } else {
+            Some(edit.name.to_string())
+        };
         if let Ok(bytes) = encode_edit(&edit) {
-            self.payloads.insert(hash.to_string(), bytes);
+            self.entries.insert(
+                hash.to_string(),
+                MockCacheEntry {
+                    payload: bytes,
+                    name,
+                },
+            );
         }
     }
 }
@@ -113,11 +131,12 @@ impl IpfsCache for MockIpfsCache {
             ));
         }
 
-        match self.payloads.get(ipfs_hash) {
-            Some(payload) => Ok(CachedEdit::success(
+        match self.entries.get(ipfs_hash) {
+            Some(entry) => Ok(CachedEdit::success(
                 ipfs_hash.to_string(),
-                payload.clone(),
+                entry.payload.clone(),
                 space_id.to_vec(),
+                entry.name.clone(),
             )),
             None => Err(CacheError::NotFound(ipfs_hash.to_string())),
         }

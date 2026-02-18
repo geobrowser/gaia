@@ -139,13 +139,11 @@ impl ScoresConsumerTrait for MockScoresConsumer {
 // Mock Search Provider for testing
 struct MockSearchProvider {
     updated_documents: std::sync::Mutex<Vec<UpdateEntityRequest>>,
-    deleted_documents: std::sync::Mutex<Vec<DeleteEntityRequest>>,
     unset_properties_calls: std::sync::Mutex<Vec<UnsetEntityPropertiesRequest>>,
     /// Track all operations in order for verifying ordering
     all_operations: std::sync::Mutex<Vec<EntityOperation>>,
     // Configuration for simulating failures
     fail_bulk_updates: bool,
-    fail_bulk_deletes: bool,
     fail_bulk_unsets: bool,
 }
 
@@ -153,11 +151,9 @@ impl MockSearchProvider {
     fn new() -> Self {
         Self {
             updated_documents: std::sync::Mutex::new(Vec::new()),
-            deleted_documents: std::sync::Mutex::new(Vec::new()),
             unset_properties_calls: std::sync::Mutex::new(Vec::new()),
             all_operations: std::sync::Mutex::new(Vec::new()),
             fail_bulk_updates: false,
-            fail_bulk_deletes: false,
             fail_bulk_unsets: false,
         }
     }
@@ -165,13 +161,6 @@ impl MockSearchProvider {
     fn with_bulk_update_failures() -> Self {
         Self {
             fail_bulk_updates: true,
-            ..Self::new()
-        }
-    }
-
-    fn with_bulk_delete_failures() -> Self {
-        Self {
-            fail_bulk_deletes: true,
             ..Self::new()
         }
     }
@@ -187,8 +176,14 @@ impl MockSearchProvider {
         self.updated_documents.lock().unwrap().len()
     }
 
-    fn get_deleted_count(&self) -> usize {
-        self.deleted_documents.lock().unwrap().len()
+    /// Get count of soft deletes (updates with deleted=Some(true)).
+    fn get_soft_deleted_count(&self) -> usize {
+        self.updated_documents
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|r| r.deleted == Some(true))
+            .count()
     }
 
     fn get_unset_count(&self) -> usize {
@@ -239,8 +234,8 @@ impl SearchIndexProvider for MockSearchProvider {
         Ok(())
     }
 
-    async fn delete_document(&self, request: &DeleteEntityRequest) -> Result<(), SearchIndexError> {
-        self.deleted_documents.lock().unwrap().push(request.clone());
+    async fn delete_document(&self, _request: &DeleteEntityRequest) -> Result<(), SearchIndexError> {
+        // Hard deletes not used - soft delete goes through update_document
         Ok(())
     }
 
@@ -270,7 +265,7 @@ impl SearchIndexProvider for MockSearchProvider {
             // Determine if this operation should fail based on configuration
             let should_fail = match op {
                 EntityOperation::Update(_) => self.fail_bulk_updates && i >= operations.len() / 2,
-                EntityOperation::Delete(_) => self.fail_bulk_deletes && i >= operations.len() / 2,
+                EntityOperation::Delete(_) => false, // Hard deletes not used (soft delete via Update)
                 EntityOperation::Unset(_) => self.fail_bulk_unsets && i >= operations.len() / 2,
                 EntityOperation::RemoveTypeRelationById(_) => false, // Never fails in mock
                 // Score operations never fail in mock
@@ -284,6 +279,7 @@ impl SearchIndexProvider for MockSearchProvider {
                 results.push(BatchOperationResult {
                     entity_id,
                     space_id,
+                    operation_type: op.operation_type().to_string(),
                     success: false,
                     error: Some(SearchIndexError::bulk_operation(
                         "Simulated failure".to_string(),
@@ -295,8 +291,8 @@ impl SearchIndexProvider for MockSearchProvider {
                     EntityOperation::Update(req) => {
                         self.updated_documents.lock().unwrap().push(req.clone());
                     }
-                    EntityOperation::Delete(req) => {
-                        self.deleted_documents.lock().unwrap().push(req.clone());
+                    EntityOperation::Delete(_) => {
+                        // Hard deletes not used - soft delete goes through Update
                     }
                     EntityOperation::Unset(req) => {
                         self.unset_properties_calls
@@ -321,6 +317,7 @@ impl SearchIndexProvider for MockSearchProvider {
                 results.push(BatchOperationResult {
                     entity_id,
                     space_id,
+                    operation_type: op.operation_type().to_string(),
                     success: true,
                     error: None,
                 });
@@ -408,27 +405,6 @@ fn create_bulk_update_failure_orchestrator(
     (orchestrator, mock_provider, mock_consumer)
 }
 
-/// Helper to create a test orchestrator with bulk delete failures
-fn create_bulk_delete_failure_orchestrator(
-    events: Vec<EntityEvent>,
-) -> (Orchestrator, Arc<MockSearchProvider>, Arc<MockConsumer>) {
-    let processor = Processor::new();
-    let mock_provider = Arc::new(MockSearchProvider::with_bulk_delete_failures());
-    let loader = SearchLoader::new(mock_provider.clone());
-
-    let mock_consumer = Arc::new(MockConsumer::new(events.clone()));
-    let mock_scores_consumer = Arc::new(MockScoresConsumer);
-
-    let orchestrator = Orchestrator::new(
-        mock_consumer.clone(),
-        mock_scores_consumer,
-        processor,
-        loader,
-    );
-
-    (orchestrator, mock_provider, mock_consumer)
-}
-
 /// Helper to create a test orchestrator with bulk unset failures
 fn create_bulk_unset_failure_orchestrator(
     events: Vec<EntityEvent>,
@@ -498,7 +474,7 @@ async fn test_orchestrator_with_delete_events() {
     assert!(result.is_ok());
     assert!(result.unwrap().is_ok());
 
-    assert_eq!(mock_provider.get_deleted_count(), 2);
+    assert_eq!(mock_provider.get_soft_deleted_count(), 2);
 }
 
 #[tokio::test]
@@ -687,8 +663,8 @@ async fn test_orchestrator_bulk_update_failure_nack() {
 }
 
 #[tokio::test]
-async fn test_orchestrator_bulk_delete_failure_nack() {
-    // Create events that will trigger bulk deletes
+async fn test_orchestrator_bulk_soft_delete_failure_nack() {
+    // Create events that will trigger soft deletes (which are updates)
     let events = vec![
         EntityEvent::delete(Uuid::new_v4(), Uuid::new_v4()),
         EntityEvent::delete(Uuid::new_v4(), Uuid::new_v4()),
@@ -697,7 +673,7 @@ async fn test_orchestrator_bulk_delete_failure_nack() {
     ];
 
     let (orchestrator, _mock_provider, mock_consumer) =
-        create_bulk_delete_failure_orchestrator(events);
+        create_bulk_update_failure_orchestrator(events);
 
     // Run the orchestrator
     let result = timeout(Duration::from_secs(5), orchestrator.run()).await;
@@ -715,7 +691,7 @@ async fn test_orchestrator_bulk_delete_failure_nack() {
     assert_eq!(
         last_ack,
         Some(false),
-        "Expected NACK due to bulk delete failures"
+        "Expected NACK due to bulk soft delete (update) failures"
     );
 }
 
@@ -751,9 +727,9 @@ async fn test_orchestrator_successful_bulk_operations_ack() {
         "Expected ACK for successful operations"
     );
 
-    // Verify documents were processed
-    assert_eq!(mock_provider.get_updated_count(), 1);
-    assert_eq!(mock_provider.get_deleted_count(), 1);
+    // Verify documents were processed (soft delete is also an update)
+    assert_eq!(mock_provider.get_updated_count(), 2);
+    assert_eq!(mock_provider.get_soft_deleted_count(), 1);
 }
 
 #[tokio::test]
@@ -867,19 +843,20 @@ async fn test_bulk_delete_success() {
     );
 
     // Verify both documents were deleted
-    assert_eq!(mock_provider.get_deleted_count(), 2);
+    assert_eq!(mock_provider.get_soft_deleted_count(), 2);
 }
 
 #[tokio::test]
-async fn test_bulk_delete_partial_failure() {
+async fn test_bulk_soft_delete_partial_failure() {
     // Test case with 1 success op and 1 failure op - should end in error/NACK
+    // Soft deletes are updates, so we use update failure orchestrator
     let events = vec![
         EntityEvent::delete(Uuid::new_v4(), Uuid::new_v4()),
         EntityEvent::delete(Uuid::new_v4(), Uuid::new_v4()),
     ];
 
     let (orchestrator, mock_provider, mock_consumer) =
-        create_bulk_delete_failure_orchestrator(events);
+        create_bulk_update_failure_orchestrator(events);
 
     // Run the orchestrator
     let result = timeout(Duration::from_secs(5), orchestrator.run()).await;
@@ -897,11 +874,11 @@ async fn test_bulk_delete_partial_failure() {
     assert_eq!(
         last_ack,
         Some(false),
-        "Expected NACK due to bulk delete partial failure (1 success, 1 failure)"
+        "Expected NACK due to bulk soft delete partial failure (1 success, 1 failure)"
     );
 
-    // Verify only 1 document was deleted (the successful one)
-    assert_eq!(mock_provider.get_deleted_count(), 1);
+    // Verify only 1 document was soft deleted (the successful one)
+    assert_eq!(mock_provider.get_soft_deleted_count(), 1);
 }
 
 #[tokio::test]
@@ -1574,11 +1551,10 @@ async fn test_interleaved_entity_and_relation_operations() {
     assert_eq!(last_ack, Some(true), "Expected ACK");
 
     // Verify counts:
-    // - 2 entity upserts + 1 add_type_relation = 3 updates
-    // - 1 entity delete
-    // - 1 relation delete
-    assert_eq!(mock_provider.get_updated_count(), 3, "Expected 3 updates");
-    assert_eq!(mock_provider.get_deleted_count(), 1, "Expected 1 delete");
+    // - 2 entity upserts + 1 add_type_relation + 1 soft delete = 4 updates
+    // - 1 relation delete (RemoveTypeRelationById)
+    assert_eq!(mock_provider.get_updated_count(), 4, "Expected 4 updates (including soft delete)");
+    assert_eq!(mock_provider.get_soft_deleted_count(), 1, "Expected 1 soft delete");
 
     let removed_relation_ids = mock_provider.get_removed_relation_ids();
     assert_eq!(

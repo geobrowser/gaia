@@ -88,8 +88,10 @@ spec:
                 secretKeyRef:
                   name: kg-indexer-secrets
                   key: KAFKA_SSL_CA_PEM
+            - name: ENVIRONMENT
+              value: "production"
             - name: KAFKA_GROUP_ID
-              value: "kg-indexer-v4"
+              value: "kg-indexer-v8"
             - name: BLOCK_STALE_TIMEOUT_MS
               value: "1000"
             - name: SENTRY_DSN
@@ -127,6 +129,18 @@ spec:
                 secretKeyRef:
                   name: kg-indexer-secrets
                   key: SENTRY_DEBUG
+                  optional: true
+            - name: AXIOM_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: kg-indexer-secrets
+                  key: AXIOM_TOKEN
+                  optional: true
+            - name: AXIOM_DATASET
+              valueFrom:
+                secretKeyRef:
+                  name: kg-indexer-secrets
+                  key: AXIOM_DATASET
                   optional: true
             - name: RUST_LOG
               value: "kg_indexer=info"

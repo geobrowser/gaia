@@ -55,7 +55,7 @@ use hermes_relay::{Actions, HermesModule, Sink, StreamSource};
 use hermes_pipeline::cache::{CacheSource, IpfsCache};
 use hermes_pipeline::pipelines;
 use hermes_pipeline::pipelines::BlockMetadata;
-use hermes_pipeline::pipelines::edits::RetryConfig;
+use hermes_pipeline::pipelines::prefetch::{self, RetryConfig};
 use hermes_pipeline::pipelines::trust::get_extension_type;
 use hermes_pipeline::pipelines::voting::get_vote_direction;
 
@@ -150,16 +150,19 @@ impl Pipeline {
         let actions = &actions_msg.actions;
 
         // =========================================================================
+        // Phase 0: Prefetch all IPFS URIs needed for this block
+        // =========================================================================
+        // Batch all cache lookups at the start so transform functions can be sync.
+        // This fetches URIs for both EDITS_PUBLISHED and PROPOSAL_CREATED actions.
+        let prefetch_result = prefetch::prefetch_block(actions, &self.cache, &self.retry_config)
+            .instrument(info_span!("prefetch", action_count = actions.len()))
+            .await;
+
+        // =========================================================================
         // Phase 1: Transform actions into events
         // =========================================================================
 
-        // Kick off edits transform FIRST - it has async IPFS fetching that can
-        // happen in parallel with the sync transforms below
-        let edits_future =
-            pipelines::edits::transform(actions, &meta, &self.cache, &self.retry_config)
-                .instrument(info_span!("transform.edits", action_count = actions.len()));
-
-        // Sync transforms - fast, no I/O, run while edits fetches from IPFS
+        // All transforms are now synchronous - they use the prefetched cache.
         let mut spaces = info_span!("transform.spaces", action_count = actions.len())
             .in_scope(|| pipelines::spaces::transform(actions, &meta))
             .map_err(|e| {
@@ -226,7 +229,7 @@ impl Pipeline {
             })?;
 
         let mut governance = info_span!("transform.governance", action_count = actions.len())
-            .in_scope(|| pipelines::governance::transform(actions, &meta))
+            .in_scope(|| pipelines::governance::transform(actions, &meta, &prefetch_result.cache))
             .map_err(|e| {
                 error!(
                     event = "hermes_pipeline.event_error",
@@ -251,17 +254,19 @@ impl Pipeline {
                 e
             })?;
 
-        // Now await the edits - IPFS fetch should have been happening in parallel
-        let mut edits = edits_future.await.map_err(|e| {
-            error!(
-                event = "hermes_pipeline.event_error",
-                stage = "transform.edits",
-                block_number = meta.block_number,
-                error = %e,
-                "Transform failed"
-            );
-            e
-        })?;
+        // Edits transform is now sync - uses prefetched cache
+        let mut edits = info_span!("transform.edits", action_count = actions.len())
+            .in_scope(|| pipelines::edits::transform(actions, &meta, &prefetch_result.cache))
+            .map_err(|e| {
+                error!(
+                    event = "hermes_pipeline.event_error",
+                    stage = "transform.edits",
+                    block_number = meta.block_number,
+                    error = %e,
+                    "Transform failed"
+                );
+                e
+            })?;
 
         // =========================================================================
         // Phase 1.5: Mark the last event in the block
@@ -286,6 +291,7 @@ impl Pipeline {
                 max_sequence(&governance.proposals_updated),
                 max_sequence(&governance.proposals_voted),
                 max_sequence(&governance.proposals_executed),
+                max_sequence(&governance.proposals_settings_updated),
                 max_sequence(&voting.votes),
                 max_sequence(&edits.events),
             ]
@@ -308,6 +314,7 @@ impl Pipeline {
                 || mark_sequence_as_last(&mut governance.proposals_updated, max_seq)
                 || mark_sequence_as_last(&mut governance.proposals_voted, max_seq)
                 || mark_sequence_as_last(&mut governance.proposals_executed, max_seq)
+                || mark_sequence_as_last(&mut governance.proposals_settings_updated, max_seq)
                 || mark_sequence_as_last(&mut voting.votes, max_seq)
                 || mark_sequence_as_last(&mut edits.events, max_seq);
         }
@@ -410,6 +417,10 @@ impl Pipeline {
         counts_by_event_type.insert(
             "PROPOSAL_EXECUTED".to_string(),
             governance.proposals_executed.len() as u64,
+        );
+        counts_by_event_type.insert(
+            "PROPOSAL_SETTINGS_UPDATED".to_string(),
+            governance.proposals_settings_updated.len() as u64,
         );
         counts_by_event_type.insert("VOTE_CAST".to_string(), voting.votes.len() as u64);
 
@@ -577,6 +588,14 @@ impl Pipeline {
                         "Proposal executed"
                     );
                 }
+                for event in &governance.proposals_settings_updated {
+                    self.emitter.emit(event)?;
+                    debug!(
+                        space_id = %hex::encode(&event.space_id),
+                        proposal_id = %hex::encode(&event.proposal_id),
+                        "Proposal settings updated"
+                    );
+                }
             }
 
             // 7. Emit voting events
@@ -638,21 +657,22 @@ impl Pipeline {
             }
         }
 
-        // Log cache issues
-        if edits.cache_misses > 0 {
+        // Log cache issues (from prefetch and edits transform)
+        let total_cache_misses = prefetch_result.cache_misses + edits.cache_misses;
+        let total_errored_entries = prefetch_result.errored_entries + edits.errored_entries;
+        let total_fetch_failures = prefetch_result.fetch_failures;
+
+        if total_cache_misses > 0 {
             warn!(
-                count = edits.cache_misses,
-                "Edit cache misses (retries exhausted)"
+                count = total_cache_misses,
+                "Cache misses (retries exhausted)"
             );
         }
-        if edits.errored_entries > 0 {
-            warn!(
-                count = edits.errored_entries,
-                "Edit entries errored in cache"
-            );
+        if total_errored_entries > 0 {
+            warn!(count = total_errored_entries, "Errored entries in cache");
         }
-        if edits.fetch_failures > 0 {
-            warn!(count = edits.fetch_failures, "Edit fetch failures");
+        if total_fetch_failures > 0 {
+            warn!(count = total_fetch_failures, "Cache fetch failures");
         }
 
         // Emit block summary for consumers
@@ -668,7 +688,7 @@ impl Pipeline {
         self.emitter.emit(&summary)?;
 
         // Log block summary
-        if total > 0 || edits.cache_misses > 0 || edits.errored_entries > 0 {
+        if total > 0 || total_cache_misses > 0 || total_errored_entries > 0 {
             info!(
                 spaces = space_count,
                 membership = membership_count,
@@ -683,9 +703,9 @@ impl Pipeline {
                 voting_down = voting.downvotes,
                 voting_unvote = voting.unvotes,
                 edits = edit_count,
-                cache_misses = edits.cache_misses,
-                errored_entries = edits.errored_entries,
-                fetch_failures = edits.fetch_failures,
+                cache_misses = total_cache_misses,
+                errored_entries = total_errored_entries,
+                fetch_failures = total_fetch_failures,
                 drift = %utils::format_drift(&relay_meta),
                 "Block processed"
             );
@@ -775,6 +795,7 @@ fn build_telemetry_config() -> hermes_instrumentation::Config {
                 environment,
                 release,
                 debug,
+                axiom: hermes_instrumentation::AxiomConfig::from_env(),
             }
         }
         _ => {

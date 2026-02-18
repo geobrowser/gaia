@@ -69,6 +69,8 @@ spec:
                 secretKeyRef:
                   name: api-secrets
                   key: DATABASE_URL
+            - name: ENVIRONMENT
+              value: "production"
             - name: KAFKA_BROKER
               valueFrom:
                 secretKeyRef:
@@ -134,6 +136,18 @@ spec:
                 secretKeyRef:
                   name: hermes-pipeline-secrets
                   key: SENTRY_DEBUG
+                  optional: true
+            - name: AXIOM_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hermes-pipeline-secrets
+                  key: AXIOM_TOKEN
+                  optional: true
+            - name: AXIOM_DATASET
+              valueFrom:
+                secretKeyRef:
+                  name: hermes-pipeline-secrets
+                  key: AXIOM_DATASET
                   optional: true
           resources:
             requests:

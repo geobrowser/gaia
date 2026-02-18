@@ -118,6 +118,7 @@ fn build_telemetry_config() -> Config {
                 environment,
                 release,
                 debug,
+                axiom: hermes_instrumentation::AxiomConfig::from_env(),
             }
         }
         _ => {

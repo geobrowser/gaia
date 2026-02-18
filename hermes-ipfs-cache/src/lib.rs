@@ -348,13 +348,20 @@ async fn process_ipfs_uri(
         Ok(bytes) => {
             // Validate by decoding with grc-20 (supports GRC2 and GRC2Z formats)
             match decode_edit(&bytes) {
-                Ok(_edit) => {
-                    // Valid GRC-20 v2 format - store raw bytes
+                Ok(edit) => {
+                    // Extract the edit name (convert from Cow to owned String)
+                    let name = if edit.name.is_empty() {
+                        None
+                    } else {
+                        Some(edit.name.into_owned())
+                    };
+                    // Valid GRC-20 v2 format - store raw bytes and name
                     info!(
                         uri = %uri,
                         ipfs_hash = %ipfs_hash,
                         block = block_number,
                         bytes = bytes.len(),
+                        name = ?name,
                         "Cached IPFS content (GRC-20 v2 validated)"
                     );
                     CacheItem {
@@ -363,6 +370,7 @@ async fn process_ipfs_uri(
                         block: block_str.to_string(),
                         space_id,
                         is_errored: false,
+                        name,
                     }
                 }
                 Err(decode_error) => {
@@ -383,6 +391,7 @@ async fn process_ipfs_uri(
                         block: block_str.to_string(),
                         space_id,
                         is_errored: true,
+                        name: None,
                     }
                 }
             }
@@ -413,6 +422,7 @@ async fn process_ipfs_uri(
                 block: block_str.to_string(),
                 space_id,
                 is_errored: true,
+                name: None,
             }
         }
     };

@@ -250,7 +250,12 @@ def main() -> None:
 
     # Kafka configuration
     kafka_broker = os.environ.get("KAFKA_BROKER", "localhost:9092")
-    kafka_topic = os.environ.get("KAFKA_TOPIC", "curation.scores")
+    environment = os.environ.get("ENVIRONMENT")
+    if output_mode in (OutputMode.KAFKA, OutputMode.ALL) and not environment:
+        logger.error("ENVIRONMENT variable is required when OUTPUT_MODE includes kafka")
+        sys.exit(1)
+    kafka_topic_base = os.environ.get("KAFKA_TOPIC", "curation.scores")
+    kafka_topic = f"{environment}.{kafka_topic_base}"
     kafka_username = os.environ.get("KAFKA_USERNAME")
     kafka_password = os.environ.get("KAFKA_PASSWORD")
     kafka_ssl_ca_pem = os.environ.get("KAFKA_SSL_CA_PEM")
@@ -267,7 +272,7 @@ def main() -> None:
         distance_weight_base=float(os.environ.get("DISTANCE_WEIGHT_BASE", "0.8")),
         max_distance=int(os.environ.get("MAX_DISTANCE", "10")),
         normalize_scores=os.environ.get("NORMALIZE_SCORES", "True").lower() == "true",
-        normalization_method=os.environ.get("NORMALIZATION_METHOD", "z_score"),
+        normalization_method=os.environ.get("NORMALIZATION_METHOD", "z_score_sigmoid"),
         filter_non_members=os.environ.get("FILTER_NON_MEMBERS", "False").lower() == "true",
         require_space_membership=os.environ.get("REQUIRE_SPACE_MEMBERSHIP", "False").lower() == "true",
     )

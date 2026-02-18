@@ -16,7 +16,8 @@ use hermes_schema::pb::{
     block_summary::HermesBlockSummary,
     blockchain_metadata::BlockchainMetadata,
     governance::{
-        HermesProposalCreated, HermesProposalExecuted, HermesProposalUpdated, HermesProposalVoted,
+        HermesProposalCreated, HermesProposalExecuted, HermesProposalSettingsUpdated,
+        HermesProposalUpdated, HermesProposalVoted,
     },
     knowledge::HermesEdit,
     membership::{HermesRoleGranted, HermesRoleRevoked, HermesSpaceLeft, MembershipRole},
@@ -268,6 +269,27 @@ impl KafkaEvent for HermesProposalExecuted {
 }
 
 impl HasMeta for HermesProposalExecuted {
+    fn meta(&self) -> Option<&BlockchainMetadata> {
+        self.meta.as_ref()
+    }
+}
+
+impl KafkaEvent for HermesProposalSettingsUpdated {
+    const TOPIC: &'static str = topics::GOVERNANCE;
+
+    fn key(&self) -> Vec<u8> {
+        self.space_id.clone()
+    }
+
+    fn headers(&self) -> OwnedHeaders {
+        OwnedHeaders::new().insert(Header {
+            key: "event-type",
+            value: Some("PROPOSAL_SETTINGS_UPDATED"),
+        })
+    }
+}
+
+impl HasMeta for HermesProposalSettingsUpdated {
     fn meta(&self) -> Option<&BlockchainMetadata> {
         self.meta.as_ref()
     }
@@ -570,6 +592,9 @@ fn log_event_ids_enabled() -> bool {
     })
 }
 
+// Re-export topic utilities from hermes-kafka
+use hermes_kafka::{get_topic_prefix, prefixed_topic};
+
 // =============================================================================
 // Emitter
 // =============================================================================
@@ -577,12 +602,24 @@ fn log_event_ids_enabled() -> bool {
 /// Emitter wraps a Kafka producer and provides generic event emission.
 pub struct Emitter {
     producer: BaseProducer,
+    topic_prefix: &'static str,
 }
 
 impl Emitter {
     /// Create a new emitter wrapping the given Kafka producer.
+    ///
+    /// Reads `ENVIRONMENT` from environment to support environment isolation.
+    /// If set to "staging", all topics will be prefixed with "staging.".
     pub fn new(producer: BaseProducer) -> Self {
-        Self { producer }
+        let topic_prefix = get_topic_prefix();
+        info!(
+            topic_prefix = %topic_prefix,
+            "Kafka topic prefix configured"
+        );
+        Self {
+            producer,
+            topic_prefix,
+        }
     }
 
     /// Emit any event that implements `KafkaEvent + Message`.
@@ -590,17 +627,20 @@ impl Emitter {
         let mut payload = Vec::new();
         event.encode(&mut payload)?;
 
+        // Apply topic prefix for environment isolation
+        let topic = prefixed_topic(self.topic_prefix, T::TOPIC);
+
         let headers = event.headers();
-        let headers = attach_event_id(headers, event, T::TOPIC);
+        let headers = attach_event_id(headers, event, &topic);
         let headers = inject_trace_headers(headers);
         let event_id = event
-            .event_id(T::TOPIC)
+            .event_id(&topic)
             .unwrap_or_else(|| "unknown".to_string());
 
         if log_event_ids_enabled() {
             info!(
                 event = "hermes_pipeline.event_id",
-                topic = T::TOPIC,
+                topic = %topic,
                 event_id = %event_id,
                 "Emitting event"
             );
@@ -608,13 +648,13 @@ impl Emitter {
 
         debug_span!(
             "kafka.send",
-            topic = T::TOPIC,
+            topic = %topic,
             payload_size = payload.len(),
             event_id = %event_id
         )
         .in_scope(|| {
             let key = event.key();
-            let record = BaseRecord::to(T::TOPIC)
+            let record = BaseRecord::to(&topic)
                 .key(&key)
                 .payload(&payload)
                 .headers(headers);
@@ -628,7 +668,7 @@ impl Emitter {
                 error!(
                     event = "hermes_pipeline.event_error",
                     stage = "kafka.send",
-                    topic = T::TOPIC,
+                    topic = %topic,
                     event_id = %event_id,
                     error = %err,
                     "Kafka send failed"
@@ -799,4 +839,6 @@ mod tests {
         // Should key by object_id for partitioning
         assert_eq!(event.key(), vec![0xAB; 16]);
     }
+
+    // Topic prefix tests are in hermes-kafka crate
 }

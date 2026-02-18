@@ -7,10 +7,10 @@ use opensearch::{
     OpenSearch,
 };
 use serde_json::{json, Value};
-use tracing::{debug, error, info, warn};
+use tracing::{error, info};
 
 use crate::errors::SearchIndexError;
-use crate::opensearch::index_config::{get_index_settings, get_versioned_index_name, IndexConfig};
+use crate::opensearch::index_config::{get_index_settings, get_versioned_index_name_with_base, IndexConfig};
 
 /// Ensure the versioned index and alias exist, creating them if necessary.
 ///
@@ -32,8 +32,8 @@ pub async fn ensure_index_exists(
     client: &OpenSearch,
     index_config: &IndexConfig,
 ) -> Result<(), SearchIndexError> {
-    // Get the versioned index name (e.g., "entities_v0")
-    let versioned_index_name = get_versioned_index_name(Some(index_config.version));
+    // Get the versioned index name (e.g., "staging_entities_v2" or "entities_v2")
+    let versioned_index_name = get_versioned_index_name_with_base(&index_config.alias, Some(index_config.version));
 
     // Step 1: Ensure the versioned index exists
     ensure_versioned_index_exists(client, &versioned_index_name, index_config.version).await?;
@@ -44,16 +44,9 @@ pub async fn ensure_index_exists(
     Ok(())
 }
 
-/// Check if automatic index creation is allowed.
-/// Index creation is only allowed if:
-/// - version is 0 (default development version), OR
-/// - the `auto_index_creation` feature is enabled at compile time
-fn should_allow_index_creation(version: u32) -> bool {
-    if version == 0 {
-        return true;
-    }
-
-    // Check if the auto_index_creation feature is enabled
+/// Check if automatic index and alias changes are allowed.
+/// Only allowed if the `auto_index_creation` feature is enabled at compile time.
+fn should_allow_index_and_alias_changes() -> bool {
     #[cfg(feature = "auto_index_creation")]
     return true;
 
@@ -63,9 +56,8 @@ fn should_allow_index_creation(version: u32) -> bool {
 
 /// Ensure the versioned index exists, creating it if necessary.
 ///
-/// Note: Automatic index creation is only allowed for version 0 or when the
-/// `auto_index_creation` feature is enabled. In production, indices should be
-/// created using the search-admin tool.
+/// Note: Automatic index creation is only allowed when the `auto_index_creation`
+/// feature is enabled. In production, indices should be created using the search-admin tool.
 async fn ensure_versioned_index_exists(
     client: &OpenSearch,
     versioned_index_name: &str,
@@ -84,7 +76,7 @@ async fn ensure_versioned_index_exists(
         // Check if this is specifically a 404 (index not found)
         if status.as_u16() == 404 {
             // Index doesn't exist - check if we should create it automatically
-            if !should_allow_index_creation(version) {
+            if !should_allow_index_and_alias_changes() {
                 error!(
                     index = %versioned_index_name,
                     version = version,
@@ -92,9 +84,8 @@ async fn ensure_versioned_index_exists(
                      The index should be created using the search-admin tool."
                 );
                 return Err(SearchIndexError::index_creation(format!(
-                    "Index '{}' does not exist. Automatic index creation is only allowed for version 0 \
-                     or when compiled with the 'auto_index_creation' feature. \
-                     The index should be created using the search-admin tool.",
+                    "Index '{}' does not exist. Automatic index creation requires the \
+                     'auto_index_creation' feature. The index should be created using the search-admin tool.",
                     versioned_index_name
                 )));
             }
@@ -137,13 +128,19 @@ async fn ensure_versioned_index_exists(
             )));
         }
     } else {
-        debug!(index = %versioned_index_name, "Versioned index already exists");
+        info!(index = %versioned_index_name, "Index exists");
     }
 
     Ok(())
 }
 
 /// Ensure the alias points to the correct versioned index.
+///
+/// If the `auto_index_creation` feature is enabled, this will create the alias if it
+/// doesn't exist. If the alias exists and points to a different index, this will fail.
+///
+/// If the feature is not enabled, this will fail if the alias doesn't point to the
+/// correct index. Use the search-admin tool to manage aliases in production.
 async fn ensure_alias_points_to_index(
     client: &OpenSearch,
     alias: &str,
@@ -163,8 +160,23 @@ async fn ensure_alias_points_to_index(
             .unwrap_or(false);
 
     if !alias_exists {
-        // Alias doesn't exist, create it
-        create_alias(client, alias, versioned_index_name).await
+        // Alias doesn't exist
+        if should_allow_index_and_alias_changes() {
+            // Feature enabled, create the alias
+            create_alias(client, alias, versioned_index_name).await
+        } else {
+            // Feature not enabled, fail - alias should be managed by search-admin
+            error!(
+                alias = %alias,
+                expected_index = %versioned_index_name,
+                "Alias does not exist. Use search-admin to create the alias."
+            );
+            Err(SearchIndexError::index_creation(format!(
+                "Alias '{}' does not exist. Automatic alias creation requires the \
+                 'auto_index_creation' feature. Use the search-admin tool to create the alias.",
+                alias
+            )))
+        }
     } else {
         // Alias exists, check if it points to the correct index
         let alias_body: Value = get_alias_response
@@ -175,16 +187,30 @@ async fn ensure_alias_points_to_index(
             .await
             .map_err(|e| SearchIndexError::parse(e.to_string()))?;
 
-        // Check if alias points to the versioned index
-        let points_to_correct_index = alias_body
+        // Check if alias points ONLY to the versioned index (not multiple indices)
+        let indices: Vec<&str> = alias_body
             .as_object()
-            .and_then(|obj| obj.get(versioned_index_name))
-            .is_some();
+            .map(|obj| obj.keys().map(|s| s.as_str()).collect())
+            .unwrap_or_default();
+
+        let points_to_correct_index = indices.len() == 1 && indices[0] == versioned_index_name;
 
         if !points_to_correct_index {
-            update_alias_to_correct_index(client, alias, versioned_index_name, &alias_body).await
+            // Alias points to wrong index - always fail, even with feature enabled
+            // Use search-admin to explicitly update the alias
+            error!(
+                alias = %alias,
+                expected_index = %versioned_index_name,
+                current_indices = ?indices,
+                "Alias points to wrong index(es). Use search-admin to update the alias."
+            );
+            Err(SearchIndexError::index_creation(format!(
+                "Alias '{}' points to {:?} but expected '{}'. Use the search-admin tool to \
+                 update the alias.",
+                alias, indices, versioned_index_name
+            )))
         } else {
-            debug!(alias = %alias, index = %versioned_index_name, "Alias already points to correct index");
+            info!(alias = %alias, index = %versioned_index_name, "Alias points to correct index");
             Ok(())
         }
     }
@@ -231,84 +257,19 @@ async fn create_alias(
     Ok(())
 }
 
-/// Update an existing alias to point to the correct versioned index.
-async fn update_alias_to_correct_index(
-    client: &OpenSearch,
-    alias: &str,
-    versioned_index_name: &str,
-    current_alias_body: &Value,
-) -> Result<(), SearchIndexError> {
-    // First, remove alias from all indices it currently points to
-    warn!(
-        alias = %alias,
-        expected_index = %versioned_index_name,
-        "Alias points to different index, updating"
-    );
-
-    let mut actions = Vec::new();
-    if let Some(indices) = current_alias_body.as_object() {
-        for index_name in indices.keys() {
-            actions.push(json!({
-                "remove": {
-                    "index": index_name,
-                    "alias": alias
-                }
-            }));
-        }
-    }
-    // Then add alias to the correct index
-    actions.push(json!({
-        "add": {
-            "index": versioned_index_name,
-            "alias": alias
-        }
-    }));
-
-    let update_response = client
-        .indices()
-        .update_aliases()
-        .body(json!({ "actions": actions }))
-        .send()
-        .await
-        .map_err(|e| SearchIndexError::index_creation(e.to_string()))?;
-
-    let status = update_response.status_code();
-    if !status.is_success() {
-        let error_body = update_response.text().await.unwrap_or_default();
-        error!(status = %status, body = %error_body, "Alias update failed");
-        return Err(SearchIndexError::index_creation(format!(
-            "Alias update failed with status {}: {}",
-            status, error_body
-        )));
-    }
-
-    info!(alias = %alias, index = %versioned_index_name, "Alias updated successfully");
-    Ok(())
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn test_should_allow_index_creation_version_0() {
-        // Version 0 should always allow creation regardless of feature flags
-        assert!(should_allow_index_creation(0));
-    }
-
-    #[test]
     #[cfg(feature = "auto_index_creation")]
-    fn test_should_allow_index_creation_with_feature() {
-        // When feature is enabled, version > 0 should allow creation
-        assert!(should_allow_index_creation(1));
-        assert!(should_allow_index_creation(100));
+    fn test_should_allow_index_and_alias_changes_with_feature() {
+        assert!(should_allow_index_and_alias_changes());
     }
 
     #[test]
     #[cfg(not(feature = "auto_index_creation"))]
-    fn test_should_disallow_index_creation_without_feature() {
-        // When feature is disabled (default), version > 0 should not allow creation
-        assert!(!should_allow_index_creation(1));
-        assert!(!should_allow_index_creation(100));
+    fn test_should_disallow_index_and_alias_changes_without_feature() {
+        assert!(!should_allow_index_and_alias_changes());
     }
 }

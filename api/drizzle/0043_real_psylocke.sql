@@ -1,0 +1,1 @@
+CREATE INDEX "proposal_actions_proposal_action_target_idx" ON "proposal_actions" USING btree ("proposal_id","action_type","target_id");

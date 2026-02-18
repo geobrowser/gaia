@@ -1,3 +1,4 @@
+use hermes_kafka::{get_topic_prefix, strip_topic_prefix};
 use prost::Message;
 use rdkafka::{
     config::ClientConfig,
@@ -45,19 +46,23 @@ impl KafkaConsumer {
             .create()
             .map_err(|e| IndexerError::kafka(e.to_string()))?;
 
+        // Topic prefix for environment isolation (e.g., "staging." or empty for production)
+        let prefix = get_topic_prefix();
+
         // Topics to consume (subset of what hermes-pipeline produces)
         let topics = vec![
-            "hermes.blocks".to_string(),
-            "knowledge.edits".to_string(),
-            "space.creations".to_string(),
-            "space.membership".to_string(),
-            "space.trust.extensions".to_string(),
-            "space.governance".to_string(),
+            format!("{}hermes.blocks", prefix),
+            format!("{}knowledge.edits", prefix),
+            format!("{}space.creations", prefix),
+            format!("{}space.membership", prefix),
+            format!("{}space.trust.extensions", prefix),
+            format!("{}space.governance", prefix),
         ];
 
         info!(
             brokers = %brokers,
             group_id = %group_id,
+            topic_prefix = %prefix,
             topics = ?topics,
             "Created Kafka consumer"
         );
@@ -112,6 +117,7 @@ pub enum KgMessage {
     ProposalUpdated(hermes_schema::pb::governance::HermesProposalUpdated),
     ProposalVoted(hermes_schema::pb::governance::HermesProposalVoted),
     ProposalExecuted(hermes_schema::pb::governance::HermesProposalExecuted),
+    ProposalSettingsUpdated(hermes_schema::pb::governance::HermesProposalSettingsUpdated),
 }
 
 impl KgMessage {
@@ -128,6 +134,7 @@ impl KgMessage {
             KgMessage::ProposalUpdated(p) => p.meta.as_ref(),
             KgMessage::ProposalVoted(v) => v.meta.as_ref(),
             KgMessage::ProposalExecuted(e) => e.meta.as_ref(),
+            KgMessage::ProposalSettingsUpdated(s) => s.meta.as_ref(),
         }
     }
 
@@ -144,22 +151,6 @@ impl KgMessage {
     /// Check if this is the last message in the block.
     pub fn is_last(&self) -> bool {
         self.meta().map(|m| m.is_last).unwrap_or(false)
-    }
-
-    /// Get the event type name for this message.
-    pub fn event_type_name(&self) -> &'static str {
-        match self {
-            KgMessage::BlockSummary(_) => "BLOCK_SUMMARY",
-            KgMessage::Edit(_) => "EDIT",
-            KgMessage::CreateSpace(_) => "CREATE_SPACE",
-            KgMessage::RoleGranted(_) => "ROLE_GRANTED",
-            KgMessage::RoleRevoked(_) => "ROLE_REVOKED",
-            KgMessage::TrustExtension(_) => "TRUST_EXTENSION",
-            KgMessage::ProposalCreated(_) => "PROPOSAL_CREATED",
-            KgMessage::ProposalUpdated(_) => "PROPOSAL_UPDATED",
-            KgMessage::ProposalVoted(_) => "PROPOSAL_VOTED",
-            KgMessage::ProposalExecuted(_) => "PROPOSAL_EXECUTED",
-        }
     }
 }
 
@@ -183,7 +174,7 @@ pub fn parse_message(
     payload: &[u8],
     event_type: Option<&str>,
 ) -> Result<KgMessage, IndexerError> {
-    match topic {
+    match strip_topic_prefix(topic) {
         "hermes.blocks" => {
             let summary = hermes_schema::pb::block_summary::HermesBlockSummary::decode(payload)
                 .map_err(|e| IndexerError::decode(format!("HermesBlockSummary: {}", e)))?;
@@ -254,6 +245,16 @@ pub fn parse_message(
                                 IndexerError::decode(format!("HermesProposalExecuted: {}", e))
                             })?;
                     Ok(KgMessage::ProposalExecuted(executed))
+                }
+                Some("PROPOSAL_SETTINGS_UPDATED") => {
+                    let settings_updated =
+                        hermes_schema::pb::governance::HermesProposalSettingsUpdated::decode(
+                            payload,
+                        )
+                        .map_err(|e| {
+                            IndexerError::decode(format!("HermesProposalSettingsUpdated: {}", e))
+                        })?;
+                    Ok(KgMessage::ProposalSettingsUpdated(settings_updated))
                 }
                 _ => Err(IndexerError::decode(format!(
                     "unknown governance event type: {:?}",

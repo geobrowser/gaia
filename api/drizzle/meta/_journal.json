@@ -218,6 +218,97 @@
       "when": 1769753397003,
       "tag": "0030_fix-property-function-type-check",
       "breakpoints": true
+    },
+    {
+      "idx": 31,
+      "version": "7",
+      "when": 1769753397004,
+      "tag": "0031_perpetual_jackpot",
+      "breakpoints": true
+    },
+    {
+      "idx": 32,
+      "version": "7",
+      "when": 1770154888085,
+      "tag": "0032_tranquil_imperial_guard",
+      "breakpoints": true
+    },
+    {
+      "idx": 33,
+      "version": "7",
+      "when": 1770225552690,
+      "tag": "0033_windy_stingray",
+      "breakpoints": true
+    },
+    {
+      "idx": 34,
+      "version": "7",
+      "when": 1770232216797,
+      "tag": "0035_brief_clint_barton",
+      "breakpoints": true
+    },
+    {
+      "idx": 35,
+      "version": "7",
+      "when": 1770233659989,
+      "tag": "0036_pale_marauders",
+      "breakpoints": true
+    },
+    {
+      "idx": 36,
+      "version": "7",
+      "when": 1770234567890,
+      "tag": "0037_proposal_status_indexes",
+      "breakpoints": true
+    },
+    {
+      "idx": 37,
+      "version": "7",
+      "when": 1770437401893,
+      "tag": "0037_deferrable-tally-queue-fk",
+      "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1770750272778,
+      "tag": "0038_milky_senator_kelly",
+      "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1770753111130,
+      "tag": "0039_whole_the_liberteens",
+      "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1770845736914,
+      "tag": "0040_add-format-to-property-info",
+      "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1770925988195,
+      "tag": "0041_aberrant_edwin_jarvis",
+      "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1770927193139,
+      "tag": "0042_messy_power_man",
+      "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1771004354519,
+      "tag": "0043_real_psylocke",
+      "breakpoints": true
     }
   ]
 }

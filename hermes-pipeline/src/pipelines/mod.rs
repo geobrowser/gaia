@@ -14,6 +14,7 @@ pub mod edits;
 pub mod governance;
 pub mod membership;
 pub mod moderation;
+pub mod prefetch;
 pub mod spaces;
 pub mod topics;
 pub mod trust;
@@ -21,7 +22,8 @@ pub mod voting;
 
 use hermes_schema::pb::blockchain_metadata::BlockchainMetadata;
 use hermes_schema::pb::governance::{
-    HermesProposalCreated, HermesProposalExecuted, HermesProposalUpdated, HermesProposalVoted,
+    HermesProposalCreated, HermesProposalExecuted, HermesProposalSettingsUpdated,
+    HermesProposalUpdated, HermesProposalVoted,
 };
 use hermes_schema::pb::knowledge::HermesEdit;
 use hermes_schema::pb::membership::{HermesRoleGranted, HermesRoleRevoked, HermesSpaceLeft};
@@ -68,6 +70,7 @@ impl_has_meta!(
     HermesProposalUpdated,
     HermesProposalVoted,
     HermesProposalExecuted,
+    HermesProposalSettingsUpdated,
     HermesVoteCast,
     HermesEdit,
 );

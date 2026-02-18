@@ -1,6 +1,6 @@
+import {ROOT_CONTEXT, SpanStatusCode, trace} from "@opentelemetry/api"
 import * as Sentry from "@sentry/node"
-import {SpanStatusCode, trace, ROOT_CONTEXT} from "@opentelemetry/api"
-import {Kind, print, type OperationDefinitionNode, type FieldNode} from "graphql"
+import {type FieldNode, Kind, type OperationDefinitionNode, print} from "graphql"
 import type {Plugin} from "graphql-yoga"
 
 type TraceContext = {
@@ -58,9 +58,7 @@ function getOperationLabel(args: {operationName?: string | null; document: {defi
 	}
 
 	const operationType = operationDef.operation // "query", "mutation", "subscription"
-	const firstField = operationDef.selectionSet.selections.find(
-		(sel): sel is FieldNode => sel.kind === Kind.FIELD,
-	)
+	const firstField = operationDef.selectionSet.selections.find((sel): sel is FieldNode => sel.kind === Kind.FIELD)
 
 	if (firstField) {
 		return `${operationType} ${firstField.name.value}`
@@ -81,10 +79,10 @@ export function useGraphQLInstrumentation(): Plugin {
 			}
 
 			const operationLabel = getOperationLabel(args)
+			const ctxWithSetter = args.contextValue as {setGraphqlOperationName?: (operationName: string) => void}
+			ctxWithSetter.setGraphqlOperationName?.(operationLabel)
 			const query = print(args.document)
-			const variables = args.variableValues
-				? JSON.stringify(args.variableValues).slice(0, 2000)
-				: undefined
+			const variables = args.variableValues ? JSON.stringify(args.variableValues).slice(0, 2000) : undefined
 
 			// Get tracer lazily at request time (not module load) to ensure OTEL SDK is initialized
 			const tracer = trace.getTracer("gaia-api-graphql")

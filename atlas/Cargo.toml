@@ -17,6 +17,7 @@ harness = false
 
 [dependencies]
 hermes-instrumentation = { path = "../hermes-instrumentation" }
+hermes-kafka = { path = "../hermes-kafka" }
 hermes-relay = { path = "../hermes-relay" }
 hermes-schema = { path = "../hermes-schema" }
 hex = "0.4"
@@ -30,3 +31,8 @@ thiserror = "1"
 [dev-dependencies]
 criterion = { version = "0.5", features = ["html_reports"] }
 rand = "0.8"
+roaring = "0.10"
+
+[[bench]]
+name = "graph_diff"
+harness = false

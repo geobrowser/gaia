@@ -92,6 +92,8 @@ spec:
                 secretKeyRef:
                   name: api-secrets
                   key: DATABASE_URL
+            - name: PG_CONNECTION_TIMEOUT_MS
+              value: "10000"
             - name: IPFS_KEY
               valueFrom:
                 secretKeyRef:
@@ -139,18 +141,18 @@ spec:
                   optional: true
           resources:
             requests:
-              memory: "512Mi"
-              cpu: "250m"
+              memory: "768Mi"
+              cpu: "500m"
             limits:
-              memory: "1Gi"
-              cpu: "1000m"
+              memory: "1536Mi"
           livenessProbe:
             httpGet:
-              path: /health
+              path: /health/liveness
               port: 3000
             initialDelaySeconds: 10
-            periodSeconds: 30
-            timeoutSeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 3
+            failureThreshold: 3
           readinessProbe:
             httpGet:
               path: /health
@@ -185,6 +187,21 @@ metadata:
   annotations:
     cert-manager.io/cluster-issuer: letsencrypt-prod
     nginx.ingress.kubernetes.io/proxy-body-size: "100m"
+    nginx.ingress.kubernetes.io/server-snippet: |
+      gzip on;
+      gzip_comp_level 5;
+      gzip_min_length 512;
+      gzip_proxied any;
+      gzip_vary on;
+      gzip_types
+        application/json
+        application/graphql-response+json
+        application/javascript
+        application/xml
+        text/plain
+        text/css
+        text/javascript
+        text/xml;
 spec:
   ingressClassName: nginx
   tls:

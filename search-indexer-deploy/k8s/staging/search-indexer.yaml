@@ -68,10 +68,12 @@ spec:
                   name: kafka-credentials
                   key: KAFKA_SSL_CA_PEM
             # Kafka consumer configuration
-            - name: KAFKA_BATCH_SIZE
-              value: "50"
-            - name: KAFKA_BATCH_TIMEOUT_MS
-              value: "1000"
+            - name: ENVIRONMENT
+              value: "staging"
+            - name: KAFKA_GROUP_EDITS_ID
+              value: "search-indexer-group-edits-v2"
+            - name: KAFKA_GROUP_SCORES_ID
+              value: "search-indexer-group-scores-v2"
             # Logging
             - name: RUST_LOG
               value: "info"
@@ -116,7 +118,7 @@ spec:
               path: /readyz
               port: health
             initialDelaySeconds: 10
-            periodSeconds: 10
+            periodSeconds: 30
             timeoutSeconds: 5
             failureThreshold: 3
       restartPolicy: Always

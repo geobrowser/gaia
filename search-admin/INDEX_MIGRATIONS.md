@@ -49,8 +49,29 @@ This guide walks through migrating from one index version to another using Kuber
 ### Prerequisites
 
 - `kubectl` configured with access to the cluster
-- Appropriate permissions for the `search` namespace
-- The job YAML files from `search-indexer-deploy/k8s/jobs/`
+- Appropriate permissions for the target namespace (`search` for production, `search-staging` for staging)
+- The job YAML files from the appropriate environment directory:
+  - **Production:** `search-indexer-deploy/k8s/production/jobs/`
+  - **Staging:** `search-indexer-deploy/k8s/staging/jobs/`
+
+### Step 0: Choose Your Environment
+
+Before running any jobs, decide which environment you're migrating:
+
+| Environment | Directory | Namespace | Index Prefix |
+|-------------|-----------|-----------|--------------|
+| Production | `k8s/production/jobs/` | `search` | (none) |
+| Staging | `k8s/staging/jobs/` | `search-staging` | `staging_` |
+
+```bash
+# For production
+cd search-indexer-deploy/k8s/production/jobs
+
+# For staging
+cd search-indexer-deploy/k8s/staging/jobs
+```
+
+All commands below assume you've navigated to the appropriate jobs directory.
 
 ### Full Automation (Recommended)
 
@@ -68,6 +89,8 @@ Edit `full-migration-job.yaml` and update these environment variables:
 ```
 
 #### Step 2: Run the migration
+
+**Note:** Replace `-n search` with `-n search-staging` if running in staging.
 
 ```bash
 # Clean up any previous migration job
@@ -184,7 +207,9 @@ Update the `ENTITIES_INDEX_VERSION` in the deployment YAML file so that future C
 > **💡 Important**
 > If you skip this step, the next CI/CD deployment will start the search-indexer with old index version (and it will fail to start)
 
-1. Edit `search-indexer-deploy/k8s/search-indexer.yaml`:
+1. Edit the appropriate deployment file:
+   - **Production:** `search-indexer-deploy/k8s/production/search-indexer.yaml`
+   - **Staging:** `search-indexer-deploy/k8s/staging/search-indexer.yaml`
 
 ```yaml
 # Find the ENTITIES_INDEX_VERSION environment variable
@@ -195,7 +220,11 @@ Update the `ENTITIES_INDEX_VERSION` in the deployment YAML file so that future C
 2. Commit and merge the change:
 
 ```bash
-git add search-indexer-deploy/k8s/search-indexer.yaml
+# For production
+git add search-indexer-deploy/k8s/production/search-indexer.yaml
+# For staging
+git add search-indexer-deploy/k8s/staging/search-indexer.yaml
+
 git commit -m "chore(search): update ENTITIES_INDEX_VERSION to 3"
 git push
 # Create PR and merge to main
@@ -486,7 +515,9 @@ Update the `ENTITIES_INDEX_VERSION` in the deployment YAML file so that future C
 > **💡 Important**
 > If you skip this step, the next CI/CD deployment will revert the search-indexer back to the old index version!
 
-1. Edit `search-indexer-deploy/k8s/search-indexer.yaml`:
+1. Edit the appropriate deployment file:
+   - **Production:** `search-indexer-deploy/k8s/production/search-indexer.yaml`
+   - **Staging:** `search-indexer-deploy/k8s/staging/search-indexer.yaml`
 
 ```yaml
 # Find the ENTITIES_INDEX_VERSION environment variable
@@ -497,7 +528,11 @@ Update the `ENTITIES_INDEX_VERSION` in the deployment YAML file so that future C
 2. Commit and merge the change:
 
 ```bash
-git add search-indexer-deploy/k8s/search-indexer.yaml
+# For production
+git add search-indexer-deploy/k8s/production/search-indexer.yaml
+# For staging
+git add search-indexer-deploy/k8s/staging/search-indexer.yaml
+
 git commit -m "chore(search): update ENTITIES_INDEX_VERSION to 3"
 git push
 # Create PR and merge to main
@@ -622,7 +657,10 @@ Common issues:
 
 ## Additional Resources
 
-- **Job YAML Files**: `search-indexer-deploy/k8s/jobs/`
+- **Job YAML Files**:
+  - Production: `search-indexer-deploy/k8s/production/jobs/`
+  - Staging: `search-indexer-deploy/k8s/staging/jobs/`
+- **Jobs Documentation**: `search-indexer-deploy/k8s/jobs/README.md`
 - **Search Admin Tool README**: `search-admin/README.md`
 - **CI/CD Pipeline**: `.github/workflows/search-admin-build.yml`
 - **Index Configuration**: `search-indexer-repository/src/opensearch/index_config.rs`

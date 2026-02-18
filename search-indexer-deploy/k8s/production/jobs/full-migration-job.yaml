@@ -7,8 +7,8 @@ metadata:
   labels:
     app: opensearch-admin
     task: full-migration
+    environment: production
 spec:
-  # Keep job history for debugging
   ttlSecondsAfterFinished: 86400  # 24 hours
   backoffLimit: 1  # Don't retry automatically - migrations are sensitive
   template:
@@ -16,6 +16,7 @@ spec:
       labels:
         app: opensearch-admin
         task: full-migration
+        environment: production
     spec:
       imagePullSecrets:
       - name: regcred
@@ -31,7 +32,7 @@ spec:
           type: RuntimeDefault
       containers:
       - name: full-migration
-        image: registry.digitalocean.com/geo/search-admin:latest  # Update with your registry
+        image: registry.digitalocean.com/geo/search-admin:latest
         securityContext:
           allowPrivilegeEscalation: false
           runAsNonRoot: true
@@ -49,16 +50,18 @@ spec:
             secretKeyRef:
               name: opensearch-credentials
               key: OPENSEARCH_URL
+        - name: ENVIRONMENT
+          value: "production"
         - name: INDEX_ALIAS
-          value: "entities"  # Default alias name
+          value: "entities"
         - name: SOURCE_VERSION
           value: "2"  # CHANGE THIS: Current/source index version
         - name: TARGET_VERSION
           value: "3"  # CHANGE THIS: New/target index version
         - name: NAMESPACE
-          value: "search"  # Kubernetes namespace
+          value: "search"  # Kubernetes namespace for production
         - name: DEPLOYMENT_NAME
-          value: "search-indexer"  # Deployment to manage
+          value: "search-indexer"
         - name: RUST_LOG
           value: "info"
         command:

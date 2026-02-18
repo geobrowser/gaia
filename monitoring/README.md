@@ -21,6 +21,11 @@ kubectl apply -f monitoring/k8s/prometheus-stack.yaml --server-side
 
 # If you get errors about CRDs not existing, wait a moment and re-run
 kubectl apply -f monitoring/k8s/prometheus-stack.yaml --server-side
+
+# Scrape ingress-nginx request metrics + API ingress recording rules
+kubectl apply -f monitoring/k8s/ingress-nginx-metrics.yaml
+kubectl apply -f monitoring/k8s/api-ingress-rules.yaml
+kubectl apply -f monitoring/k8s/api-ingress-dashboard.yaml
 ```
 
 ## Access Grafana

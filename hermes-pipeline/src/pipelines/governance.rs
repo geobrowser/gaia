@@ -14,17 +14,18 @@ use std::collections::HashMap;
 use anyhow::Result;
 use hermes_instrumentation::{debug, debug_span, info, warn};
 
-use hermes_relay::{Action, actions};
-use hermes_schema::pb::governance::{
-    AddEditorAction, AddMemberAction, FlagAction, HermesProposalCreated, HermesProposalExecuted,
-    HermesProposalUpdated, HermesProposalVoted, ProposalAction, ProposalSettings,
-    ProposalVoteOption, PublishAction, RemoveEditorAction, RemoveMemberAction, UnflagAction,
-    UnflagEditorAction, UpdateVotingSettingsAction, VotingMode, proposal_action,
-};
-
+use crate::cache::CachedEdit;
 use crate::decode::{
     self, ProposalActionType, decode_flag_args, decode_publish_args, decode_space_id_arg,
     decode_voting_settings_args,
+};
+
+use hermes_relay::{Action, actions};
+use hermes_schema::pb::governance::{
+    AddEditorAction, AddMemberAction, FlagAction, HermesProposalCreated, HermesProposalExecuted,
+    HermesProposalSettingsUpdated, HermesProposalUpdated, HermesProposalVoted, ProposalAction,
+    ProposalSettings, ProposalVoteOption, PublishAction, RemoveEditorAction, RemoveMemberAction,
+    UnflagAction, UnflagEditorAction, UpdateVotingSettingsAction, VotingMode, proposal_action,
 };
 
 use super::BlockMetadata;
@@ -36,6 +37,7 @@ pub struct TransformResult {
     pub proposals_updated: Vec<HermesProposalUpdated>,
     pub proposals_voted: Vec<HermesProposalVoted>,
     pub proposals_executed: Vec<HermesProposalExecuted>,
+    pub proposals_settings_updated: Vec<HermesProposalSettingsUpdated>,
 }
 
 impl TransformResult {
@@ -44,6 +46,7 @@ impl TransformResult {
             + self.proposals_updated.len()
             + self.proposals_voted.len()
             + self.proposals_executed.len()
+            + self.proposals_settings_updated.len()
     }
 }
 
@@ -59,6 +62,8 @@ struct ProposalCreatedPending {
 
 /// Intermediate data for a PROPOSAL_SETTINGS_SELECTED event before squashing.
 struct ProposalSettingsPending {
+    space_id: Vec<u8>,
+    sequence: u32,
     settings: ProposalSettings,
 }
 
@@ -67,7 +72,13 @@ struct ProposalSettingsPending {
 /// Squashes PROPOSAL_CREATED + PROPOSAL_SETTINGS_SELECTED pairs into single events.
 /// For each PROPOSAL_CREATED, looks for a matching PROPOSAL_SETTINGS_SELECTED
 /// with the same proposal_id. If not found, both events are discarded.
-pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformResult> {
+///
+/// For Publish actions, looks up the edit name from the prefetched IPFS cache.
+pub fn transform(
+    actions: &[Action],
+    meta: &BlockMetadata,
+    prefetched: &HashMap<String, CachedEdit>,
+) -> Result<TransformResult> {
     let mut result = TransformResult::default();
 
     // Collect PROPOSAL_CREATED/UPDATED and PROPOSAL_SETTINGS_SELECTED by proposal_id
@@ -106,7 +117,7 @@ pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformRe
                 "parse.governance.settings",
                 proposal_id = %hex::encode(&action.topic[..16])
             )
-            .in_scope(|| parse_proposal_settings_used(action))
+            .in_scope(|| parse_proposal_settings_used(action, sequence))
             {
                 // proposal_id is in topic field (bytes16 right-padded to 32, so first 16 bytes)
                 let proposal_id = action.topic[..16].to_vec();
@@ -213,13 +224,32 @@ pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformRe
         }
     }
 
-    // Log any orphaned PROPOSAL_SETTINGS_SELECTED events
-    for (proposal_id, _) in settings_map {
-        warn!(
+    // Emit orphaned PROPOSAL_SETTINGS_SELECTED as settings-only updates.
+    // This handles fast-path → slow-path escalation: when a NO vote on a fast-path
+    // proposal triggers escalation, the contract emits PROPOSAL_SETTINGS_SELECTED
+    // (via ping) but not PROPOSAL_UPDATED, so the settings have no created/updated
+    // event to squash with.
+    for (proposal_id, settings_pending) in settings_map {
+        info!(
             proposal_id = %hex::encode(&proposal_id),
-            "PROPOSAL_SETTINGS_SELECTED without matching PROPOSAL_CREATED/UPDATED, discarding"
+            "Orphaned PROPOSAL_SETTINGS_SELECTED — emitting as settings update (fast→slow escalation)"
         );
+        result
+            .proposals_settings_updated
+            .push(HermesProposalSettingsUpdated {
+                space_id: settings_pending.space_id,
+                proposal_id,
+                settings: Some(settings_pending.settings),
+                meta: Some(meta.to_proto(settings_pending.sequence)),
+            });
     }
+
+    // Enrich all Publish actions with edit names from the prefetched cache
+    enrich_publish_action_names(
+        &mut result.proposals_created,
+        &mut result.proposals_updated,
+        prefetched,
+    );
 
     Ok(result)
 }
@@ -262,9 +292,11 @@ fn decode_proposal_action(
         }
         ProposalActionType::Publish => {
             let args = decode_publish_args(calldata).ok()?;
+            // Note: name is populated later by enrich_publish_action_names
             Some(proposal_action::Action::Publish(PublishAction {
                 content_uri: args.content_uri,
                 metadata: args.metadata,
+                name: String::new(),
             }))
         }
         ProposalActionType::Flag => {
@@ -291,6 +323,80 @@ fn decode_proposal_action(
             ))
         }
         ProposalActionType::Ping | ProposalActionType::Unknown => None,
+    }
+}
+
+/// Enrich Publish actions across all proposals with edit names from the prefetched cache.
+fn enrich_publish_action_names(
+    proposals_created: &mut [HermesProposalCreated],
+    proposals_updated: &mut [HermesProposalUpdated],
+    prefetched: &HashMap<String, CachedEdit>,
+) {
+    let mut enriched_count = 0u32;
+    let mut cache_miss_count = 0u32;
+
+    // Enrich proposals_created
+    for proposal in proposals_created.iter_mut() {
+        let proposal_id_hex = hex::encode(&proposal.proposal_id);
+        for action in proposal.actions.iter_mut() {
+            if let Some(proposal_action::Action::Publish(publish)) = &mut action.action {
+                if let Some(cached_edit) = prefetched.get(&publish.content_uri) {
+                    if let Some(name) = &cached_edit.name {
+                        debug!(
+                            proposal_id = %proposal_id_hex,
+                            content_uri = %publish.content_uri,
+                            name = %name,
+                            "Enriched publish action with edit name"
+                        );
+                        publish.name = name.clone();
+                        enriched_count += 1;
+                    }
+                } else {
+                    debug!(
+                        proposal_id = %proposal_id_hex,
+                        content_uri = %publish.content_uri,
+                        "Cache miss for publish action content URI"
+                    );
+                    cache_miss_count += 1;
+                }
+            }
+        }
+    }
+
+    // Enrich proposals_updated
+    for proposal in proposals_updated.iter_mut() {
+        let proposal_id_hex = hex::encode(&proposal.proposal_id);
+        for action in proposal.actions.iter_mut() {
+            if let Some(proposal_action::Action::Publish(publish)) = &mut action.action {
+                if let Some(cached_edit) = prefetched.get(&publish.content_uri) {
+                    if let Some(name) = &cached_edit.name {
+                        debug!(
+                            proposal_id = %proposal_id_hex,
+                            content_uri = %publish.content_uri,
+                            name = %name,
+                            "Enriched publish action with edit name"
+                        );
+                        publish.name = name.clone();
+                        enriched_count += 1;
+                    }
+                } else {
+                    debug!(
+                        proposal_id = %proposal_id_hex,
+                        content_uri = %publish.content_uri,
+                        "Cache miss for publish action content URI"
+                    );
+                    cache_miss_count += 1;
+                }
+            }
+        }
+    }
+
+    if enriched_count > 0 || cache_miss_count > 0 {
+        info!(
+            enriched = enriched_count,
+            cache_misses = cache_miss_count,
+            "Enriched publish action names"
+        );
     }
 }
 
@@ -394,7 +500,7 @@ fn parse_proposal_created(action: &Action, sequence: u32) -> Option<ProposalCrea
 /// - to_id: space_id (16 bytes, same as from_id)
 /// - topic: proposal_id (16 bytes, padded to 32)
 /// - data: abi.encode(startDate, lastDate, votingMode, quorum, supportThreshold)
-fn parse_proposal_settings_used(action: &Action) -> Option<ProposalSettingsPending> {
+fn parse_proposal_settings_used(action: &Action, sequence: u32) -> Option<ProposalSettingsPending> {
     let decoded = match decode::decode_proposal_settings_used(&action.data) {
         Ok(decoded) => decoded,
         Err(e) => {
@@ -449,6 +555,8 @@ fn parse_proposal_settings_used(action: &Action) -> Option<ProposalSettingsPendi
     };
 
     Some(ProposalSettingsPending {
+        space_id: action.from_id.clone(),
+        sequence,
         settings: ProposalSettings {
             start_date: decoded.start_date,
             last_date: decoded.last_date,
@@ -538,6 +646,10 @@ mod tests {
         }
     }
 
+    fn empty_prefetch() -> HashMap<String, CachedEdit> {
+        HashMap::new()
+    }
+
     // Helper to create encoded PROPOSAL_CREATED data
     fn encode_proposal_created_data(proposal_id: [u8; 16], voting_mode: u8) -> Vec<u8> {
         use ethabi::{Token, ethereum_types::U256 as EthU256};
@@ -600,7 +712,7 @@ mod tests {
             },
         ];
 
-        let result = transform(&test_actions, &test_meta()).unwrap();
+        let result = transform(&test_actions, &test_meta(), &empty_prefetch()).unwrap();
 
         // Should have 1 squashed event
         assert_eq!(result.proposals_created.len(), 1);
@@ -634,7 +746,7 @@ mod tests {
             },
         ];
 
-        let result = transform(&test_actions, &test_meta()).unwrap();
+        let result = transform(&test_actions, &test_meta(), &empty_prefetch()).unwrap();
 
         // Should be discarded - no matching settings
         assert_eq!(result.proposals_created.len(), 0);
@@ -656,7 +768,7 @@ mod tests {
             },
         ];
 
-        let result = transform(&test_actions, &test_meta()).unwrap();
+        let result = transform(&test_actions, &test_meta(), &empty_prefetch()).unwrap();
 
         // Should be discarded - no matching created
         assert_eq!(result.proposals_created.len(), 0);
@@ -687,7 +799,7 @@ mod tests {
             },
         ];
 
-        let result = transform(&test_actions, &test_meta()).unwrap();
+        let result = transform(&test_actions, &test_meta(), &empty_prefetch()).unwrap();
 
         // Both should be discarded - IDs don't match
         assert_eq!(result.proposals_created.len(), 0);
@@ -759,10 +871,266 @@ mod tests {
             },
         ];
 
-        let result = transform(&test_actions, &test_meta()).unwrap();
+        let result = transform(&test_actions, &test_meta(), &empty_prefetch()).unwrap();
         // No PROPOSAL_CREATED events without matching PROPOSAL_SETTINGS_USED
         assert_eq!(result.proposals_created.len(), 0);
         assert_eq!(result.proposals_voted.len(), 1);
         assert_eq!(result.proposals_executed.len(), 1);
+    }
+
+    /// Encode vote data matching Solidity's `abi.encode(bytes16 proposalId, VoteOption)`.
+    ///
+    /// ABI encoding for `(bytes16, uint8)`:
+    ///   Word 0: bytes16 left-aligned, right-padded with zeros to 32 bytes
+    ///   Word 1: uint8 right-aligned, left-padded with zeros to 32 bytes
+    fn encode_vote_data(proposal_id: [u8; 16], vote_option: u8) -> Vec<u8> {
+        let mut data = vec![0u8; 64];
+        // Word 0: bytes16, left-aligned
+        data[..16].copy_from_slice(&proposal_id);
+        // Word 1: uint8, right-aligned
+        data[63] = vote_option;
+        data
+    }
+
+    /// Wrap raw bytes in ABI `bytes` encoding (offset + length + data), matching
+    /// what the EVM produces for a non-indexed `bytes` event parameter.
+    fn wrap_in_abi_bytes(inner: &[u8]) -> Vec<u8> {
+        let mut wrapped = Vec::new();
+        // Offset to data (always 0x20 = 32 for a single bytes param)
+        wrapped.extend_from_slice(&[0u8; 31]);
+        wrapped.push(0x20);
+        // Length of inner data
+        let len = inner.len();
+        wrapped.extend_from_slice(&[0u8; 24]);
+        wrapped.extend_from_slice(&(len as u64).to_be_bytes());
+        // Inner data, padded to 32-byte boundary
+        wrapped.extend_from_slice(inner);
+        let padding = (32 - (len % 32)) % 32;
+        wrapped.extend(std::iter::repeat_n(0u8, padding));
+        wrapped
+    }
+
+    /// Test that convert_proposal_voted correctly decodes each VoteOption
+    /// when data is ABI-encoded as the contract produces it (raw, no bytes wrapper).
+    #[test]
+    fn test_convert_proposal_voted_with_abi_encoded_vote_options() {
+        let proposal_id = [0xAA; 16];
+        let voter_id = vec![0x01; 16];
+        let space_id = vec![0x02; 16];
+
+        let cases = [
+            (0u8, ProposalVoteOption::VoteOptionNone as i32, "None"),
+            (1, ProposalVoteOption::VoteOptionYes as i32, "Yes"),
+            (2, ProposalVoteOption::VoteOptionNo as i32, "No"),
+            (3, ProposalVoteOption::VoteOptionAbstain as i32, "Abstain"),
+        ];
+
+        for (vote_value, expected_proto, label) in cases {
+            let action = Action {
+                from_id: voter_id.clone(),
+                to_id: space_id.clone(),
+                action: actions::PROPOSAL_VOTED.to_vec(),
+                topic: proposal_id.iter().copied().chain(vec![0; 16]).collect(),
+                data: encode_vote_data(proposal_id, vote_value),
+            };
+
+            let result = convert_proposal_voted(&action, &test_meta(), 0)
+                .unwrap_or_else(|e| panic!("Failed to convert VoteOption.{label}: {e}"));
+
+            assert_eq!(
+                result.vote, expected_proto,
+                "VoteOption.{label} (value={vote_value}): expected proto value {expected_proto}, got {}",
+                result.vote
+            );
+            assert_eq!(result.voter_id, voter_id);
+            assert_eq!(result.space_id, space_id);
+            assert_eq!(result.proposal_id, proposal_id.to_vec());
+        }
+    }
+
+    /// Regression test: the EVM wraps non-indexed `bytes` event parameters in
+    /// ABI encoding (offset + length + content). decode_proposal_voted must
+    /// unwrap this to extract the actual vote data.
+    ///
+    /// Before the fix, the bytes-wrapped data failed to decode as `(bytes16, uint8)`,
+    /// causing convert_proposal_voted to default to VoteOptionNone, which kg-indexer
+    /// then mapped to Abstain — making every vote appear as Abstain.
+    #[test]
+    fn test_convert_proposal_voted_with_bytes_wrapped_data() {
+        let proposal_id = [0xAA; 16];
+        let voter_id = vec![0x01; 16];
+        let space_id = vec![0x02; 16];
+
+        let cases = [
+            (1u8, ProposalVoteOption::VoteOptionYes as i32, "Yes"),
+            (2, ProposalVoteOption::VoteOptionNo as i32, "No"),
+            (3, ProposalVoteOption::VoteOptionAbstain as i32, "Abstain"),
+        ];
+
+        for (vote_value, expected_proto, label) in cases {
+            // Inner data: abi.encode(bytes16 proposalId, uint8 VoteOption)
+            let inner = encode_vote_data(proposal_id, vote_value);
+            // Wrapped as the EVM would produce for a non-indexed `bytes` event parameter
+            let wrapped = wrap_in_abi_bytes(&inner);
+
+            let action = Action {
+                from_id: voter_id.clone(),
+                to_id: space_id.clone(),
+                action: actions::PROPOSAL_VOTED.to_vec(),
+                topic: proposal_id.iter().copied().chain(vec![0; 16]).collect(),
+                data: wrapped,
+            };
+
+            let result = convert_proposal_voted(&action, &test_meta(), 0).unwrap_or_else(|e| {
+                panic!("Failed to convert bytes-wrapped VoteOption.{label}: {e}")
+            });
+
+            assert_eq!(
+                result.vote, expected_proto,
+                "Bytes-wrapped VoteOption.{label}: expected proto value {expected_proto}, got {}",
+                result.vote
+            );
+        }
+    }
+
+    // Tests for enrich_publish_action_names
+
+    fn make_proposal_with_publish(content_uri: &str) -> HermesProposalCreated {
+        use hermes_schema::pb::governance::{ProposalAction, ProposalSettings, PublishAction};
+
+        HermesProposalCreated {
+            space_id: vec![1u8; 16],
+            proposer_id: vec![2u8; 16],
+            proposal_id: vec![3u8; 16],
+            voting_mode: 0,
+            actions: vec![ProposalAction {
+                to: vec![],
+                value: vec![],
+                data: vec![],
+                action: Some(proposal_action::Action::Publish(PublishAction {
+                    content_uri: content_uri.to_string(),
+                    metadata: vec![],
+                    name: String::new(), // starts empty
+                })),
+            }],
+            settings: Some(ProposalSettings {
+                start_date: 0,
+                last_date: 0,
+                voting_mode: 0,
+                quorum: 0,
+                percentage_threshold: 0,
+                flat_threshold: 0,
+            }),
+            meta: None,
+        }
+    }
+
+    fn make_cached_edit(name: Option<&str>) -> CachedEdit {
+        CachedEdit {
+            cid: "Qmtest".to_string(),
+            payload: Some(vec![]),
+            is_errored: false,
+            space_id: vec![1u8; 16],
+            name: name.map(|s| s.to_string()),
+        }
+    }
+
+    #[test]
+    fn test_enrich_publish_action_names_with_cached_name() {
+        let mut proposals = vec![make_proposal_with_publish("ipfs://Qmtest123")];
+        let mut prefetched = HashMap::new();
+        prefetched.insert(
+            "ipfs://Qmtest123".to_string(),
+            make_cached_edit(Some("My Edit Name")),
+        );
+
+        enrich_publish_action_names(&mut proposals, &mut [], &prefetched);
+
+        let action = &proposals[0].actions[0];
+        if let Some(proposal_action::Action::Publish(publish)) = &action.action {
+            assert_eq!(publish.name, "My Edit Name");
+        } else {
+            panic!("Expected Publish action");
+        }
+    }
+
+    #[test]
+    fn test_enrich_publish_action_names_cache_miss() {
+        let mut proposals = vec![make_proposal_with_publish("ipfs://Qmnotfound")];
+        let prefetched = HashMap::new(); // empty cache
+
+        enrich_publish_action_names(&mut proposals, &mut [], &prefetched);
+
+        let action = &proposals[0].actions[0];
+        if let Some(proposal_action::Action::Publish(publish)) = &action.action {
+            assert_eq!(publish.name, ""); // unchanged
+        } else {
+            panic!("Expected Publish action");
+        }
+    }
+
+    #[test]
+    fn test_enrich_publish_action_names_with_none_name() {
+        let mut proposals = vec![make_proposal_with_publish("ipfs://Qmtest456")];
+        let mut prefetched = HashMap::new();
+        prefetched.insert(
+            "ipfs://Qmtest456".to_string(),
+            make_cached_edit(None), // no name in cache
+        );
+
+        enrich_publish_action_names(&mut proposals, &mut [], &prefetched);
+
+        let action = &proposals[0].actions[0];
+        if let Some(proposal_action::Action::Publish(publish)) = &action.action {
+            assert_eq!(publish.name, ""); // defaults to empty string
+        } else {
+            panic!("Expected Publish action");
+        }
+    }
+
+    #[test]
+    fn test_enrich_publish_action_names_proposals_updated() {
+        use hermes_schema::pb::governance::{ProposalAction, ProposalSettings, PublishAction};
+
+        let mut proposals_updated = vec![HermesProposalUpdated {
+            space_id: vec![1u8; 16],
+            proposer_id: vec![2u8; 16],
+            proposal_id: vec![3u8; 16],
+            voting_mode: VotingMode::Fast as i32,
+            actions: vec![ProposalAction {
+                to: vec![],
+                value: vec![],
+                data: vec![],
+                action: Some(proposal_action::Action::Publish(PublishAction {
+                    content_uri: "ipfs://Qmupdated".to_string(),
+                    metadata: vec![],
+                    name: String::new(),
+                })),
+            }],
+            settings: Some(ProposalSettings {
+                start_date: 0,
+                last_date: 0,
+                voting_mode: 0,
+                quorum: 0,
+                percentage_threshold: 0,
+                flat_threshold: 0,
+            }),
+            meta: None,
+        }];
+
+        let mut prefetched = HashMap::new();
+        prefetched.insert(
+            "ipfs://Qmupdated".to_string(),
+            make_cached_edit(Some("Updated Edit")),
+        );
+
+        enrich_publish_action_names(&mut [], &mut proposals_updated, &prefetched);
+
+        let action = &proposals_updated[0].actions[0];
+        if let Some(proposal_action::Action::Publish(publish)) = &action.action {
+            assert_eq!(publish.name, "Updated Edit");
+        } else {
+            panic!("Expected Publish action");
+        }
     }
 }

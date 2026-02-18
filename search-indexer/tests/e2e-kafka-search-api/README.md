@@ -73,6 +73,7 @@ This creates:
 
 ```bash
 cd ../../..  # Back to repo root
+ENVIRONMENT=staging \
 KAFKA_BROKER=localhost:9092 \
 OPENSEARCH_URL=http://localhost:9200 \
 KAFKA_GROUP_ID=search-indexer-test-$(date +%s) \
@@ -116,9 +117,10 @@ e2e-kafka-search-api --broker kafka.example.com:9092 --debug
 
 ### Environment Variables
 
-While not required, you can set default values using environment variables:
+The following environment variables are used:
 
 ```bash
+export ENVIRONMENT=staging  # Required: 'staging' or 'production' for Kafka topic isolation
 export KAFKA_BROKER=localhost:9092
 export RUST_LOG=info
 ```
@@ -131,9 +133,12 @@ Use a different Kafka broker:
 e2e-kafka-search-api --broker kafka.example.com:9092
 ```
 
-The tool always uses the standard Kafka topics:
+The tool uses the following Kafka topics (prefixed based on ENVIRONMENT):
 - `knowledge.edits` for entity and relation events
 - `curation.scores` for score events
+
+When `ENVIRONMENT=staging`, topics are prefixed with `staging.` (e.g., `staging.knowledge.edits`).
+When `ENVIRONMENT=production`, topics have no prefix.
 
 ## Property IDs
 
@@ -146,9 +151,14 @@ The tool uses these well-known property IDs:
 
 ## Kafka Topics
 
-The tool uses these standard Kafka topics:
+The tool uses these Kafka topics (automatically prefixed based on `ENVIRONMENT`):
 - **knowledge.edits**: Entity and relation events
 - **curation.scores**: Score events
+
+| ENVIRONMENT | Edits Topic | Scores Topic |
+|-------------|-------------|--------------|
+| `staging` | `staging.knowledge.edits` | `staging.curation.scores` |
+| `production` | `knowledge.edits` | `curation.scores` |
 
 ## Verifying Events
 
@@ -172,9 +182,13 @@ This script:
   - Test 6: Response metadata (total count, execution time)
   - Test 7: Zero and negative score entities
   - Test 8: TypeIds field for different relation scenarios
-  - Test 9: Empty query returns top ranked results
-  - Test 10: Unset properties functionality (validates unset_values in UpdateEntity)
-  - Test 11: Mixed set/unset + LWW behavior (validates Last-Writer-Wins semantics)
+  - Test 9a: Deleted entity excluded from results (Charlie soft deleted)
+  - Test 9b: Restored entity appears in results (Dana restored after deletion)
+  - Test 10: Deleted then updated entity remains excluded (Eve)
+  - Test 11: Empty query returns top ranked results
+  - Test 12: Unset properties functionality (validates unset_values in UpdateEntity)
+  - Test 13: Mixed set/unset + LWW behavior (validates Last-Writer-Wins semantics)
+  - Test 14: Include deleted flag returns soft-deleted entities
 - Provides color-coded pass/fail reporting
 - Exits with appropriate status codes for CI/CD integration
 

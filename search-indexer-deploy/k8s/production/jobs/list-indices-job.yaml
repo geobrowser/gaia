@@ -2,20 +2,21 @@
 apiVersion: batch/v1
 kind: Job
 metadata:
-  name: opensearch-reindex
+  name: opensearch-list-indices
   namespace: search
   labels:
     app: opensearch-admin
-    task: reindex
+    task: list-indices
+    environment: production
 spec:
-  # Keep job history for debugging
   ttlSecondsAfterFinished: 86400  # 24 hours
-  backoffLimit: 1  # Don't retry automatically - reindex is expensive
+  backoffLimit: 1
   template:
     metadata:
       labels:
         app: opensearch-admin
-        task: reindex
+        task: list-indices
+        environment: production
     spec:
       imagePullSecrets:
       - name: regcred
@@ -28,8 +29,8 @@ spec:
         seccompProfile:
           type: RuntimeDefault
       containers:
-      - name: reindex
-        image: registry.digitalocean.com/geo/search-admin:latest  # Update with your registry
+      - name: list-indices
+        image: registry.digitalocean.com/geo/search-admin:latest
         securityContext:
           allowPrivilegeEscalation: false
           runAsNonRoot: true
@@ -47,26 +48,27 @@ spec:
             secretKeyRef:
               name: opensearch-credentials
               key: OPENSEARCH_URL
+        - name: ENVIRONMENT
+          value: "production"
         - name: INDEX_ALIAS
-          value: "entities"  # Default alias name
-        - name: SOURCE_VERSION
-          value: "2"  # CHANGE THIS: Source index version to copy from
-        - name: TARGET_VERSION
-          value: "3"  # CHANGE THIS: Target index version to copy to
+          value: "entities"
+        - name: SHOW_DETAILED
+          value: "true"  # Set to "false" for simple list
         - name: RUST_LOG
           value: "info"
         command:
-        - search-admin
-        - reindex
-        - --source-version
-        - "$(SOURCE_VERSION)"
-        - --target-version
-        - "$(TARGET_VERSION)"
-        - --wait-for-completion
+        - /bin/sh
+        - -c
+        - |
+          if [ "$SHOW_DETAILED" = "true" ]; then
+            search-admin list-indices --detailed
+          else
+            search-admin list-indices
+          fi
         resources:
           requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
             memory: "256Mi"
             cpu: "200m"
-          limits:
-            memory: "512Mi"
-            cpu: "500m"

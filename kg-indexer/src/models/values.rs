@@ -21,6 +21,7 @@ pub enum ValueChangeType {
 /// - Datetime -> datetime
 /// - Schedule -> schedule (jsonb)
 /// - Point -> point
+/// - Rect -> rect
 /// - Embedding -> embedding (jsonb)
 #[derive(Clone, Debug)]
 pub struct ValueOp {
@@ -37,6 +38,7 @@ pub struct ValueOp {
     pub boolean: Option<bool>,        // Bool
     pub time: Option<String>,         // Time
     pub point: Option<String>,        // Point
+    pub rect: Option<String>,         // Rect (bounding box)
     pub integer: Option<i64>,         // Int64
     pub float: Option<f64>,           // Float64
     pub bytes: Option<Vec<u8>>,       // Bytes

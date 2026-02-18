@@ -28,21 +28,30 @@ impl IndexConfig {
     }
 }
 
-/// The base name of the search index (without version).
-pub const INDEX_NAME: &str = "entities";
-
-/// Get the versioned index name.
+/// Get a versioned index name with a custom base name.
+///
+/// This allows generating versioned index names with environment prefixes.
 ///
 /// # Arguments
 ///
+/// * `base_name` - The base index name (e.g., "staging_entities" or "entities")
 /// * `version` - The version number (defaults to 0 if None)
 ///
 /// # Returns
 ///
-/// The versioned index name (e.g., "entities_v0")
-pub fn get_versioned_index_name(version: Option<u32>) -> String {
+/// The versioned index name (e.g., "staging_entities_v2")
+///
+/// # Example
+///
+/// ```
+/// use search_indexer_repository::opensearch::get_versioned_index_name_with_base;
+///
+/// assert_eq!(get_versioned_index_name_with_base("entities", Some(2)), "entities_v2");
+/// assert_eq!(get_versioned_index_name_with_base("staging_entities", Some(2)), "staging_entities_v2");
+/// ```
+pub fn get_versioned_index_name_with_base(base_name: &str, version: Option<u32>) -> String {
     let v = version.unwrap_or(0);
-    format!("{}_v{}", INDEX_NAME, v)
+    format!("{}_v{}", base_name, v)
 }
 
 /// Get the index settings and mappings for the entity search index.
@@ -184,16 +193,25 @@ mod tests {
     }
 
     #[test]
-    fn test_index_name() {
-        assert_eq!(INDEX_NAME, "entities");
-    }
+    fn test_versioned_index_name_with_base() {
+        // Production (no prefix)
+        assert_eq!(
+            get_versioned_index_name_with_base("entities", None),
+            "entities_v0"
+        );
+        assert_eq!(
+            get_versioned_index_name_with_base("entities", Some(2)),
+            "entities_v2"
+        );
 
-    #[test]
-    fn test_versioned_index_name() {
-        assert_eq!(get_versioned_index_name(None), "entities_v0");
-        assert_eq!(get_versioned_index_name(Some(0)), "entities_v0");
-        assert_eq!(get_versioned_index_name(Some(1)), "entities_v1");
-        assert_eq!(get_versioned_index_name(Some(2)), "entities_v2");
-        assert_eq!(get_versioned_index_name(Some(42)), "entities_v42");
+        // Staging (with prefix)
+        assert_eq!(
+            get_versioned_index_name_with_base("staging_entities", None),
+            "staging_entities_v0"
+        );
+        assert_eq!(
+            get_versioned_index_name_with_base("staging_entities", Some(2)),
+            "staging_entities_v2"
+        );
     }
 }

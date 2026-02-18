@@ -1,49 +1,73 @@
-import SimplifyInflectionPlugin from "@graphile-contrib/pg-simplify-inflector";
-import { useResponseCache } from "@graphql-yoga/plugin-response-cache";
-import { createYoga, useExecutionCancellation } from "graphql-yoga";
-import { Pool } from "pg";
-import {
-	createPostGraphileSchema,
-	withPostGraphileContext,
-} from "postgraphile";
-import ConnectionFilterPlugin from "postgraphile-plugin-connection-filter";
-import EntitySpaceFilterPlugin from "./entitySpaceFilterPlugin";
-import { useGraphQLInstrumentation } from "./instrumentationPlugin";
-import UndashedUuidPlugin from "./uuidScalarPlugin";
+import SimplifyInflectionPlugin from "@graphile-contrib/pg-simplify-inflector"
+import * as Sentry from "@sentry/node"
+import {print} from "graphql"
+import {createYoga, type Plugin, useExecutionCancellation} from "graphql-yoga"
+import type {PoolClient} from "pg"
+import {Pool} from "pg"
+import {createPostGraphileSchema} from "postgraphile"
+import ConnectionFilterPlugin from "postgraphile-plugin-connection-filter"
+import {classifyDbFailure} from "../services/dbFailures"
+import {log} from "../services/telemetry"
+import EntitySpaceFilterPlugin from "./entitySpaceFilterPlugin"
+import {useGraphQLInstrumentation} from "./instrumentationPlugin"
+import UndashedUuidPlugin from "./uuidScalarPlugin"
+import ValueScalarsPlugin from "./valueScalarsPlugin"
 
 // Server context passed from HTTP middleware
 export type GraphQLServerContext = {
 	traceContext?: {
-		traceId: string;
-		spanId: string;
-		traceFlags: number;
-	};
-};
+		traceId: string
+		spanId: string
+		traceFlags: number
+	}
+	requestId?: string
+	setGraphqlOperationName?: (operationName: string) => void
+}
 
 // Create PostgreSQL pool with explicit configuration to prevent connection exhaustion
 // Note: Without PgBouncer, each pool connection = 1 Postgres connection.
 // Ensure max * num_replicas < Postgres max_connections (leaving room for admin/migrations).
+if (!process.env.DATABASE_URL) {
+	throw new Error("DATABASE_URL environment variable is required")
+}
+
 const pgPool = new Pool({
-	connectionString:
-		process.env.DATABASE_URL || "postgres://user:pass@localhost/mydb",
+	connectionString: process.env.DATABASE_URL,
 	// Pool size - PgBouncer handles multiplexing, so we can be generous here.
 	// The real PostgreSQL connection limit is managed by PgBouncer's pool_size.
 	// With 2 replicas at 50 each = 100 connections, well under PgBouncer's 200 max_client_conn.
 	max: parseInt(process.env.PG_POOL_MAX || "50", 10),
 	// Fail fast if no connection available (default is 0 = wait forever, causing hangs)
-	connectionTimeoutMillis: parseInt(
-		process.env.PG_CONNECTION_TIMEOUT_MS || "3000",
-		10,
-	),
+	connectionTimeoutMillis: parseInt(process.env.PG_CONNECTION_TIMEOUT_MS || "3000", 10),
 	// Close idle connections after 30 seconds to free up PgBouncer slots
 	idleTimeoutMillis: parseInt(process.env.PG_IDLE_TIMEOUT_MS || "30000", 10),
 	// Allow process to exit cleanly when pool is idle (for graceful shutdown)
 	allowExitOnIdle: true,
-});
+})
+
+export function getGraphqlPoolStats() {
+	return {
+		totalConnections: pgPool.totalCount,
+		idleConnections: pgPool.idleCount,
+		waitingCount: pgPool.waitingCount,
+		maxConnections: pgPool.options.max!,
+	}
+}
+
+// Without this handler, background connection errors (PgBouncer closing idle connections,
+// network blips) become unhandled events. The pool doesn't remove the dead connection,
+// so subsequent connect() calls can check out a stale client that fails during query execution.
+pgPool.on("error", (err) => {
+	log.error("PostGraphile pool error", {
+		error: String(err),
+		failureClass: classifyDbFailure(err),
+		poolStats: getGraphqlPoolStats(),
+	})
+})
 
 // Base PostGraphile options (without uuidScalarPlugin)
 const postgraphileOptions = {
-	watchPg: true,
+	watchPg: false,
 	graphiql: true,
 	enhanceGraphiql: true,
 	dynamicJson: true,
@@ -54,9 +78,12 @@ const postgraphileOptions = {
 	//   plugins (including ConnectionFilterPlugin) build their types against the
 	//   undashed UUID behavior. This has been verified to work with both dashed
 	//   and undashed UUID inputs in filters.
+	// - ValueScalarsPlugin registers custom scalars (GeoPoint, GeoRect, Date, etc.)
+	//   and remaps Value fields to use them for self-documenting schema
 	// - EntitySpaceFilterPlugin adds efficient spaceId filter using EXISTS instead of computed column
 	appendPlugins: [
 		UndashedUuidPlugin,
+		ValueScalarsPlugin,
 		ConnectionFilterPlugin,
 		SimplifyInflectionPlugin,
 		EntitySpaceFilterPlugin,
@@ -77,47 +104,85 @@ const postgraphileOptions = {
 		},
 		pgOmitListSuffix: true,
 	},
-};
+}
 
 // Create PostGraphile schemas
-const postgraphileSchema = await createPostGraphileSchema(
-	pgPool,
-	["public"],
-	postgraphileOptions,
-);
+const postgraphileSchema = await createPostGraphileSchema(pgPool, ["public"], postgraphileOptions)
 
-// Helper to create context
-const createContext = async ({ request }: { request: Request }) => {
-	const contextPromise = new Promise((resolve, reject) => {
-		withPostGraphileContext(
-			{
-				pgPool,
-			},
-			async (postgraphileContext) => {
-				resolve({
-					request,
-					...postgraphileContext,
-				});
+/**
+ * Yoga plugin that manages the pgClient lifecycle for PostGraphile resolvers.
+ *
+ * PostGraphile's generated resolvers expect `context.pgClient` — a pg.Client
+ * checked out from the pool. This plugin checks out a client before execution
+ * and releases it back to the pool after execution completes.
+ *
+ * We don't use PostGraphile's `withPostGraphileContext` because we don't need
+ * its transaction wrapper or JWT/role features (mutations are disabled, all
+ * queries are reads). Checking out the client directly is simpler and avoids
+ * the unnecessary BEGIN/COMMIT overhead on every request.
+ *
+ * On completion, we check the result for errors. release(err) tells pg.Pool to
+ * destroy the connection instead of returning it to the pool — this prevents
+ * stale connections (e.g. from PgBouncer closing them) from being reused.
+ */
+function usePgClient(pool: Pool): Plugin<{pgClient: PoolClient}> {
+	return {
+		async onExecute({extendContext, args}) {
+			const operationName = args.operationName || "anonymous"
+			const query = print(args.document).slice(0, 2000)
 
-				// Return a dummy result since withPostGraphileContext expects a result
-				// The actual result will be handled by GraphQL execution
-				return { data: null };
-			},
-		).catch(reject); // Propagate connection errors (e.g., pool timeout)
-	});
+			let pgClient: PoolClient
+			try {
+				pgClient = await pool.connect()
+			} catch (error) {
+				const err = error instanceof Error ? error : new Error(String(error))
+				const poolStats = getGraphqlPoolStats()
+				const failureClass = classifyDbFailure(err)
+				log.error("PostGraphile pool connect error", {
+					error: err.message,
+					failureClass,
+					operationName,
+					query,
+					poolStats,
+				})
 
-	return await contextPromise;
-};
+				Sentry.captureException(err, {
+					tags: {
+						"graphql.operation_name": operationName,
+						"db.failure_class": failureClass,
+					},
+					extra: {
+						query,
+						variables: args.variableValues,
+						poolStats,
+						failureClass,
+					},
+				})
+
+				throw error
+			}
+
+			extendContext({pgClient})
+
+			return {
+				onExecuteDone({result}) {
+					// If the result has GraphQL errors, the underlying connection may be
+					// broken (e.g. PgBouncer closed it). release(err) destroys it so the
+					// pool doesn't hand out a dead connection on the next request.
+					const errors = "errors" in result ? result.errors : undefined
+					if (errors?.length) {
+						pgClient.release(errors[0])
+					} else {
+						pgClient.release()
+					}
+				},
+			}
+		},
+	}
+}
 
 // Shared plugins for GraphQL server
-const sharedPlugins = [
-	useExecutionCancellation(),
-	useResponseCache({
-		session: () => null,
-		ttl: 10_000, // 10 seconds
-	}),
-	useGraphQLInstrumentation(),
-];
+const sharedPlugins = [useGraphQLInstrumentation(), usePgClient(pgPool), useExecutionCancellation()]
 
 // GraphQL server without uuidScalarPlugin
 export const graphqlServer = createYoga<GraphQLServerContext>({
@@ -126,5 +191,4 @@ export const graphqlServer = createYoga<GraphQLServerContext>({
 		title: "Geo API",
 	},
 	plugins: sharedPlugins,
-	context: createContext,
-});
+})
