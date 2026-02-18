@@ -17,54 +17,54 @@ const YELLOW = '\x1b[1;33m';
 const BLUE = '\x1b[0;34m';
 const NC = '\x1b[0m'; // No Color
 
-// Fixed entity IDs matching the test scenario in main.rs
+// Fixed entity IDs matching the test scenario in main.rs (dashless format — canonical API output)
 const TEST_ENTITIES = {
-  SPACE_ID: '00000000-0000-4000-8000-000000000001',
-  PERSON_TYPE_ID: '00000000-0000-0000-0000-000000000b01',
-  ORG_TYPE_ID: '00000000-0000-0000-0000-000000000b02',
-  ALICE_HIGH_ID: '00000000-0000-0000-0000-0000000000f1',
-  ALICE_MEDIUM_ID: '00000000-0000-0000-0000-0000000000f2',
-  ALICE_LOW_ID: '00000000-0000-0000-0000-0000000000f3',
-  ALICE_ZERO_ID: '00000000-0000-0000-0000-0000000000f4',
-  ALICE_NEGATIVE_ID: '00000000-0000-0000-0000-0000000000f5',
-  ALICE_AT_THRESHOLD_ID: '00000000-0000-0000-0000-0000000000f6',
-  ALICE_BELOW_THRESHOLD_ID: '00000000-0000-0000-0000-0000000000f7',
-  BOB_ID: '00000000-0000-0000-0000-000000000b0b',
-  CHARLIE_ID: '00000000-0000-0000-0000-000000000c1c',
-  ORG_ID: '00000000-0000-0000-0000-0000000ac3ec',
+  SPACE_ID: '00000000000040008000000000000001',
+  PERSON_TYPE_ID: '00000000000000000000000000000b01',
+  ORG_TYPE_ID: '00000000000000000000000000000b02',
+  ALICE_HIGH_ID: '000000000000000000000000000000f1',
+  ALICE_MEDIUM_ID: '000000000000000000000000000000f2',
+  ALICE_LOW_ID: '000000000000000000000000000000f3',
+  ALICE_ZERO_ID: '000000000000000000000000000000f4',
+  ALICE_NEGATIVE_ID: '000000000000000000000000000000f5',
+  ALICE_AT_THRESHOLD_ID: '000000000000000000000000000000f6',
+  ALICE_BELOW_THRESHOLD_ID: '000000000000000000000000000000f7',
+  BOB_ID: '00000000000000000000000000000b0b',
+  CHARLIE_ID: '00000000000000000000000000000c1c',
+  ORG_ID: '000000000000000000000000000ac3ec',
   // Entities for soft delete testing
-  DELETE_CHARLIE_ID: '00000000-0000-0000-0000-000000000c01',
-  DELETE_DANA_ID: '00000000-0000-0000-0000-000000000d01',
-  DELETE_EVE_ID: '00000000-0000-0000-0000-000000000e01',
+  DELETE_CHARLIE_ID: '00000000000000000000000000000c01',
+  DELETE_DANA_ID: '00000000000000000000000000000d01',
+  DELETE_EVE_ID: '00000000000000000000000000000e01',
   // Entities for unset property testing
-  UNSET_TEST_1_ID: '00000000-0000-0000-0000-000000001111',
-  UNSET_TEST_2_ID: '00000000-0000-0000-0000-000000002222',
-  LWW_TEST_ID: '00000000-0000-0000-0000-000000003333',
+  UNSET_TEST_1_ID: '00000000000000000000000000001111',
+  UNSET_TEST_2_ID: '00000000000000000000000000002222',
+  LWW_TEST_ID: '00000000000000000000000000003333',
   // Entity created via CreateEntity GRC-20 op
-  CREATE_ENTITY_TEST_ID: '00000000-0000-0000-0000-00000000ce01',
+  CREATE_ENTITY_TEST_ID: '0000000000000000000000000000ce01',
   // GLOBAL_BY_ENTITY_SPACE_SCORE ranking test entities
-  RANK_HIGH_SPACE_ID: '00000000-0000-4000-8000-000000000a01',     // space_score = 0.80
-  RANK_LOW_SPACE_ID: '00000000-0000-4000-8000-000000000b01',      // space_score = 0.10
-  RANK_GAMMA_ENTITY_ID: '00000000-0000-0000-0000-000000000ea1',   // entity_space=0.90, space=0.80, product=0.72
-  RANK_DELTA_ENTITY_ID: '00000000-0000-0000-0000-000000000ea2',   // entity_space=0.20, space=0.80, product=0.16
-  RANK_EPSILON_ENTITY_ID: '00000000-0000-0000-0000-000000000ea3', // entity_space=0.90, space=0.10, product=0.09
-  RANK_ZETA_ENTITY_ID: '00000000-0000-0000-0000-000000000ea4',    // entity_space=0.20, space=0.10, product=0.02
+  RANK_HIGH_SPACE_ID: '00000000000040008000000000000a01',     // space_score = 0.80
+  RANK_LOW_SPACE_ID: '00000000000040008000000000000b01',      // space_score = 0.10
+  RANK_GAMMA_ENTITY_ID: '00000000000000000000000000000ea1',   // entity_space=0.90, space=0.80, product=0.72
+  RANK_DELTA_ENTITY_ID: '00000000000000000000000000000ea2',   // entity_space=0.20, space=0.80, product=0.16
+  RANK_EPSILON_ENTITY_ID: '00000000000000000000000000000ea3', // entity_space=0.90, space=0.10, product=0.09
+  RANK_ZETA_ENTITY_ID: '00000000000000000000000000000ea4',    // entity_space=0.20, space=0.10, product=0.02
   // Text match scoring test entities (all have entity_global_score = 0.50)
   // Group A: Name match vs description-only match (query: "Wonderland")
-  TM_NAME_MATCH_ID: '00000000-0000-0000-0000-00000000aa01',     // name="Wonderland"
-  TM_DESC_MATCH_ID: '00000000-0000-0000-0000-00000000aa02',     // name="Rex", desc="Researcher @Wonderland"
+  TM_NAME_MATCH_ID: '0000000000000000000000000000aa01',     // name="Wonderland"
+  TM_DESC_MATCH_ID: '0000000000000000000000000000aa02',     // name="Rex", desc="Researcher @Wonderland"
   // Group B: Exact match vs fuzzy match (query: "Blockchain")
-  TM_EXACT_MATCH_ID: '00000000-0000-0000-0000-00000000aa03',    // name="Blockchain"
-  TM_FUZZY_MATCH_ID: '00000000-0000-0000-0000-00000000aa04',    // name="Blockchan" (typo)
+  TM_EXACT_MATCH_ID: '0000000000000000000000000000aa03',    // name="Blockchain"
+  TM_FUZZY_MATCH_ID: '0000000000000000000000000000aa04',    // name="Blockchan" (typo)
   // Group C: Multi-word match vs single-word match (query: "San Francisco")
-  TM_MULTI_WORD_ID: '00000000-0000-0000-0000-00000000aa05',     // name="San Francisco"
-  TM_SINGLE_WORD_ID: '00000000-0000-0000-0000-00000000aa06',    // name="San Diego"
+  TM_MULTI_WORD_ID: '0000000000000000000000000000aa05',     // name="San Francisco"
+  TM_SINGLE_WORD_ID: '0000000000000000000000000000aa06',    // name="San Diego"
   // Group D: Name+description match vs name-only match (query: "Quantum")
-  TM_NAME_AND_DESC_ID: '00000000-0000-0000-0000-00000000aa07',  // name="Quantum Computing", desc mentions "Quantum"
-  TM_NAME_ONLY_ID: '00000000-0000-0000-0000-00000000aa08',      // name="Quantum Mechanics", desc has no match
+  TM_NAME_AND_DESC_ID: '0000000000000000000000000000aa07',  // name="Quantum Computing", desc mentions "Quantum"
+  TM_NAME_ONLY_ID: '0000000000000000000000000000aa08',      // name="Quantum Mechanics", desc has no match
   // Group E: High global score vs low global score, both match in name (query: "Velociraptor")
-  TM_HIGH_SCORE_ID: '00000000-0000-0000-0000-00000000aa09', // name="Velociraptor Research", score=0.90
-  TM_LOW_SCORE_ID: '00000000-0000-0000-0000-00000000aa0a',  // name="Velociraptor", score=0.20
+  TM_HIGH_SCORE_ID: '0000000000000000000000000000aa09', // name="Velociraptor Research", score=0.90
+  TM_LOW_SCORE_ID: '0000000000000000000000000000aa0a',  // name="Velociraptor", score=0.20
 };
 
 interface TestResult {
@@ -1923,6 +1923,87 @@ class SearchValidator {
     }
   }
 
+  /** Verifies API returns dashless UUIDs and accepts dashless UUID queries. */
+  async test33_DashlessUuidFormat(): Promise<void> {
+    console.log(`\n${BLUE}Test 33: Verify dashless UUID format in responses and inputs${NC}`);
+
+    const DASHLESS_PATTERN = /^[0-9a-f]{32}$/;
+
+    // 33a: Verify response entityId is dashless
+    console.log(`  ${BLUE}→ 33a: Verify response entityId/spaceId/typeIds are dashless UUIDs${NC}`);
+    const response = await this.search({
+      query: 'alice',
+      scope: 'GLOBAL',
+    });
+
+    if (response.results.length === 0) {
+      this.addResult('test33a_has_results', false, `No results found for Alice search`);
+      return;
+    }
+
+    const firstResult = response.results[0];
+
+    if (DASHLESS_PATTERN.test(firstResult.entityId)) {
+      this.addResult('test33a_entityId_dashless', true,
+        `entityId is dashless format: ${firstResult.entityId}`);
+    } else {
+      this.addResult('test33a_entityId_dashless', false,
+        `entityId should be dashless (32 hex chars), got: ${firstResult.entityId}`);
+    }
+
+    if (DASHLESS_PATTERN.test(firstResult.spaceId)) {
+      this.addResult('test33a_spaceId_dashless', true,
+        `spaceId is dashless format: ${firstResult.spaceId}`);
+    } else {
+      this.addResult('test33a_spaceId_dashless', false,
+        `spaceId should be dashless (32 hex chars), got: ${firstResult.spaceId}`);
+    }
+
+    if (firstResult.typeIds && firstResult.typeIds.length > 0) {
+      const allTypeIdsDashless = firstResult.typeIds.every(id => DASHLESS_PATTERN.test(id));
+      if (allTypeIdsDashless) {
+        this.addResult('test33a_typeIds_dashless', true,
+          `All typeIds are dashless format (${firstResult.typeIds.length} IDs)`);
+      } else {
+        const badId = firstResult.typeIds.find(id => !DASHLESS_PATTERN.test(id));
+        this.addResult('test33a_typeIds_dashless', false,
+          `typeIds should be dashless, found: ${badId}`);
+      }
+    }
+
+    // 33b: Verify dashless UUID query finds the entity
+    console.log(`  ${BLUE}→ 33b: Search by dashless UUID query finds entity${NC}`);
+    const dashlessUuidResponse = await this.search({
+      query: TEST_ENTITIES.BOB_ID,
+      scope: 'GLOBAL',
+    });
+
+    const bobByDashless = dashlessUuidResponse.results.find(r => r.entityId === TEST_ENTITIES.BOB_ID);
+    if (bobByDashless) {
+      this.addResult('test33b_dashless_uuid_query', true,
+        `Dashless UUID query (${TEST_ENTITIES.BOB_ID}) found Bob entity`);
+    } else {
+      this.addResult('test33b_dashless_uuid_query', false,
+        `Dashless UUID query (${TEST_ENTITIES.BOB_ID}) should find Bob entity`);
+    }
+
+    // 33c: Verify dashless space_id is accepted in SPACE scope
+    console.log(`  ${BLUE}→ 33c: Dashless space_id is accepted in SPACE scope${NC}`);
+    const spaceResponse = await this.search({
+      query: 'alice',
+      scope: 'SPACE',
+      space_id: TEST_ENTITIES.SPACE_ID,
+    });
+
+    if (spaceResponse.results.length > 0) {
+      this.addResult('test33c_dashless_space_id', true,
+        `Dashless space_id (${TEST_ENTITIES.SPACE_ID}) accepted, returned ${spaceResponse.results.length} results`);
+    } else {
+      this.addResult('test33c_dashless_space_id', false,
+        `Dashless space_id (${TEST_ENTITIES.SPACE_ID}) should return results`);
+    }
+  }
+
   printSummary() {
     console.log(`\n${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}`);
 
@@ -2016,6 +2097,7 @@ async function main() {
     await validator.test30_DefaultScoreBoost();
     await validator.test31_ExtraQueryWordsStillMatch();
     await validator.test32_GlobalByEntitySpaceScoreSearch();
+    await validator.test33_DashlessUuidFormat();
 
     const allPassed = validator.printSummary();
     process.exit(allPassed ? 0 : 1);
