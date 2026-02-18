@@ -51,7 +51,7 @@ export const SCORE_SHIFT = 1.0
  * large enough for high-score entities to outrank low-score entities that have
  * moderately better text matches (e.g., exact single-word name match vs multi-word name).
  */
-export const SCORE_BOOST = 10.0
+export const SCORE_BOOST = 20.0
 
 /**
  * Boost value for name field in match_phrase_prefix queries.

@@ -556,10 +556,10 @@ async fn main() -> Result<()> {
     producer.send(&edits_topic, None, tm_high_score_payload).await?;
 
     let tm_low_score_payload = edits::create_entity_edit(
-        "Create TM Low Score (Velociraptor Species)",
+        "Create TM Low Score (Velociraptor)",
         test_space,
         tm_low_score_id,
-        Some("Velociraptor Species"),
+        Some("Velociraptor"),
         Some("A small feathered dinosaur"),
         None,
     )?;
@@ -630,7 +630,7 @@ async fn main() -> Result<()> {
             (tm_name_only_id, 0.50),
             // Group E: Different scores to test score boost outranking text match
             (tm_high_score_id, 0.90), // High score, "Velociraptor Research"
-            (tm_low_score_id, 0.20),  // Low score, "Velociraptor Species"
+            (tm_low_score_id, 0.20),  // Low score, "Velociraptor"
             (org_id, 0.90),
             (person_type_id, 0.70),
             (org_type_id, 0.65),

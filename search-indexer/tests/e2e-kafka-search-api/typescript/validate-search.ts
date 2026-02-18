@@ -57,7 +57,7 @@ const TEST_ENTITIES = {
   TM_NAME_ONLY_ID: '00000000-0000-0000-0000-00000000aa08',      // name="Quantum Mechanics", desc has no match
   // Group E: High global score vs low global score, both match in name (query: "Velociraptor")
   TM_HIGH_SCORE_ID: '00000000-0000-0000-0000-00000000aa09', // name="Velociraptor Research", score=0.90
-  TM_LOW_SCORE_ID: '00000000-0000-0000-0000-00000000aa0a',  // name="Velociraptor Species", score=0.20
+  TM_LOW_SCORE_ID: '00000000-0000-0000-0000-00000000aa0a',  // name="Velociraptor", score=0.20
   // Group F: Exact short name match vs longer prefix name match (query: "geo")
   // Both have NO score values (default score behavior)
   GEO_EXACT_ID: '00000000-0000-0000-0000-00000000bb01',     // name="Geo", desc="Geo is a network..."
@@ -1581,7 +1581,7 @@ class SearchValidator {
   /** Test 27: High global score outranks low global score entity that has a slightly better text match. */
   async test27_HighScoreOutranksLowScoreWithBetterTextMatch(): Promise<void> {
     console.log(`\n${BLUE}Test 27: High global score outranks low global score with slightly better text match (query 'Velociraptor')${NC}`);
-    console.log(`  ${BLUE}→ name="Velociraptor Research" score=0.9 (${TEST_ENTITIES.TM_HIGH_SCORE_ID}) vs name="Velociraptor Species" score=0.2 (${TEST_ENTITIES.TM_LOW_SCORE_ID})${NC}`);
+    console.log(`  ${BLUE}→ name="Velociraptor Research" score=0.9 (${TEST_ENTITIES.TM_HIGH_SCORE_ID}) vs name="Velociraptor" score=0.2 (${TEST_ENTITIES.TM_LOW_SCORE_ID})${NC}`);
 
     const response = await this.search({ query: 'Velociraptor', scope: 'GLOBAL' });
     const highScore = response.results.find(r => r.entityId === TEST_ENTITIES.TM_HIGH_SCORE_ID);
