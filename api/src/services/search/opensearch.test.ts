@@ -199,7 +199,10 @@ describe("OpenSearchClient", () => {
 
 		it("should include script_fields for score_boost", () => {
 			const baseQuery = client.buildBaseTextQuery("test")
-			const query = client.buildSingleSpaceQuery(baseQuery, "abcd1234-abcd-1234-abcd-1234abcd5678") as Record<string, unknown>
+			const query = client.buildSingleSpaceQuery(baseQuery, "abcd1234-abcd-1234-abcd-1234abcd5678") as Record<
+				string,
+				unknown
+			>
 
 			expect(query).toHaveProperty("script_fields")
 			const queryStr = JSON.stringify(query.script_fields)
@@ -317,7 +320,11 @@ describe("OpenSearchClient", () => {
 		})
 
 		it("should build global query with type_ids filtering", () => {
-			const typeIds = ["abcd1234-abcd-1234-abcd-1234abcd0001", "abcd1234-abcd-1234-abcd-1234abcd0002", "abcd1234-abcd-1234-abcd-1234abcd0003"]
+			const typeIds = [
+				"abcd1234-abcd-1234-abcd-1234abcd0001",
+				"abcd1234-abcd-1234-abcd-1234abcd0002",
+				"abcd1234-abcd-1234-abcd-1234abcd0003",
+			]
 			const query = client.buildSearchBody({
 				query: "blockchain",
 				scope: "GLOBAL",
