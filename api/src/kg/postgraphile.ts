@@ -7,10 +7,10 @@ import {Pool} from "pg"
 import {createPostGraphileSchema} from "postgraphile"
 import ConnectionFilterPlugin from "postgraphile-plugin-connection-filter"
 import {classifyDbFailure} from "../services/dbFailures"
-import {withDbRetry} from "../services/dbRetry"
 import {log} from "../services/telemetry"
 import EntitySpaceFilterPlugin from "./entitySpaceFilterPlugin"
 import {useGraphQLInstrumentation} from "./instrumentationPlugin"
+import {connectPgClientWithRetry} from "./pgClient"
 import UndashedUuidPlugin from "./uuidScalarPlugin"
 import ValueScalarsPlugin from "./valueScalarsPlugin"
 
@@ -152,19 +152,11 @@ function usePgClient(pool: Pool): Plugin<{pgClient: PoolClient}> {
 
 			let pgClient: PoolClient
 			try {
-				pgClient = await withDbRetry(() => pool.connect(), {
+				pgClient = await connectPgClientWithRetry({
+					pool,
 					operationName: "postgraphile.pool.connect",
-					onRetry: ({attempt, delayMs, elapsedMs, failureClass, error}) => {
-						log.warn("Retrying PostGraphile pool connect", {
-							attempt,
-							delayMs,
-							elapsedMs,
-							failureClass,
-							operationName,
-							error: error instanceof Error ? error.message : String(error),
-							poolStats: getGraphqlPoolStats(),
-						})
-					},
+					getPoolStats: getGraphqlPoolStats,
+					logger: log,
 				})
 			} catch (error) {
 				const err = error instanceof Error ? error : new Error(String(error))
