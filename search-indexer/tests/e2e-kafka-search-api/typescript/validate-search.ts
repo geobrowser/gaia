@@ -64,7 +64,12 @@ const TEST_ENTITIES = {
   TM_NAME_ONLY_ID: '00000000-0000-0000-0000-00000000aa08',      // name="Quantum Mechanics", desc has no match
   // Group E: High global score vs low global score, both match in name (query: "Velociraptor")
   TM_HIGH_SCORE_ID: '00000000-0000-0000-0000-00000000aa09', // name="Velociraptor Research", score=0.90
-  TM_LOW_SCORE_ID: '00000000-0000-0000-0000-00000000aa0a',  // name="Velociraptor", score=0.20
+  TM_LOW_SCORE_ID: '00000000-0000-0000-0000-00000000aa0a',  // name="Velociraptor Species", score=0.20
+  // Group F: Exact short name match vs longer prefix name match (query: "geo")
+  // Both have NO score values (default score behavior)
+  GEO_EXACT_ID: '00000000-0000-0000-0000-00000000bb01',     // name="Geo", desc="Geo is a network..."
+  GEO_PREFIX_ID: '00000000-0000-0000-0000-00000000bb02',    // name="geojson_preview_tool", desc="Generate a geojson.io URL..."
+  GEO_GRAPH_ID: '00000000-0000-0000-0000-00000000bb03',     // name="Geo Graph", desc="Geo Graph is an open source tool..."
 };
 
 interface TestResult {
@@ -1722,7 +1727,7 @@ class SearchValidator {
   /** Test 27: High global score outranks low global score entity that has a slightly better text match. */
   async test27_HighScoreOutranksLowScoreWithBetterTextMatch(): Promise<void> {
     console.log(`\n${BLUE}Test 27: High global score outranks low global score with slightly better text match (query 'Velociraptor')${NC}`);
-    console.log(`  ${BLUE}→ name="Velociraptor Research" score=0.9 (${TEST_ENTITIES.TM_HIGH_SCORE_ID}) vs name="Velociraptor" score=0.2 (${TEST_ENTITIES.TM_LOW_SCORE_ID})${NC}`);
+    console.log(`  ${BLUE}→ name="Velociraptor Research" score=0.9 (${TEST_ENTITIES.TM_HIGH_SCORE_ID}) vs name="Velociraptor Species" score=0.2 (${TEST_ENTITIES.TM_LOW_SCORE_ID})${NC}`);
 
     const response = await this.search({ query: 'Velociraptor', scope: 'GLOBAL' });
     const highScore = response.results.find(r => r.entityId === TEST_ENTITIES.TM_HIGH_SCORE_ID);
@@ -1923,6 +1928,93 @@ class SearchValidator {
     }
   }
 
+  /**
+   * Verifies that an entity with an exact short name match ranks above an entity
+   * where the query is only a prefix of a longer word in the name, and also
+   * verifies where a multi-word exact-token name ("Geo Graph") ranks.
+   *
+   * Query: "geo"
+   * - "Geo" (name is the exact query) should rank FIRST
+   * - "Geo Graph" (name contains exact token "geo" + extra word) should rank SECOND
+   * - "geojson_preview_tool" (name starts with "geojson", "geo" is only a prefix) should rank last
+   *
+   * All entities have NO score values (all get DEFAULT_AVERAGE_SCORE boost),
+   * so ranking should be determined purely by text match quality.
+   */
+  async test33_ExactShortNameBeatsLongerPrefixName(): Promise<void> {
+    console.log(`\n${BLUE}Test 33: Exact name match ranking (query 'geo')${NC}`);
+    console.log(`  ${BLUE}→ "Geo" (${TEST_ENTITIES.GEO_EXACT_ID}) vs "Geo Graph" (${TEST_ENTITIES.GEO_GRAPH_ID}) vs "geojson_preview_tool" (${TEST_ENTITIES.GEO_PREFIX_ID})${NC}`);
+
+    const response = await this.search({ query: 'geo', scope: 'GLOBAL' });
+
+    const geoExact = response.results.find(r => r.entityId === TEST_ENTITIES.GEO_EXACT_ID);
+    const geoPrefix = response.results.find(r => r.entityId === TEST_ENTITIES.GEO_PREFIX_ID);
+    const geoGraph = response.results.find(r => r.entityId === TEST_ENTITIES.GEO_GRAPH_ID);
+
+    if (!geoExact || !geoPrefix || !geoGraph) {
+      this.addResult('test33_found', false,
+        `Could not find all entities for 'geo' query (geoExact=${!!geoExact}, geoGraph=${!!geoGraph}, geoPrefix=${!!geoPrefix})`);
+      return;
+    }
+
+    this.addResult('test33_found', true,
+      `Found all 3 entities: "${geoExact.name}", "${geoGraph.name}", "${geoPrefix.name}"`);
+
+    // Log the scores for debugging
+    const geoExactIdx = response.results.findIndex(r => r.entityId === TEST_ENTITIES.GEO_EXACT_ID);
+    const geoGraphIdx = response.results.findIndex(r => r.entityId === TEST_ENTITIES.GEO_GRAPH_ID);
+    const geoPrefixIdx = response.results.findIndex(r => r.entityId === TEST_ENTITIES.GEO_PREFIX_ID);
+
+    console.log(`    Geo: position=${geoExactIdx}, relevance=${geoExact.relevanceScore?.toFixed(3)}, textMatch=${geoExact.textMatchScore?.toFixed(3)}`);
+    console.log(`    Geo Graph: position=${geoGraphIdx}, relevance=${geoGraph.relevanceScore?.toFixed(3)}, textMatch=${geoGraph.textMatchScore?.toFixed(3)}`);
+    console.log(`    geojson_preview_tool: position=${geoPrefixIdx}, relevance=${geoPrefix.relevanceScore?.toFixed(3)}, textMatch=${geoPrefix.textMatchScore?.toFixed(3)}`);
+
+    // "Geo" should rank ABOVE "geojson_preview_tool"
+    if (geoExactIdx < geoPrefixIdx) {
+      this.addResult('test33_geo_beats_geojson', true,
+        `"Geo" (position ${geoExactIdx}) ranks above "geojson_preview_tool" (position ${geoPrefixIdx}) — exact name match outranks prefix match`);
+    } else {
+      this.addResult('test33_geo_beats_geojson', false,
+        `"Geo" (position ${geoExactIdx}) should rank above "geojson_preview_tool" (position ${geoPrefixIdx})`);
+    }
+
+    // "Geo" should rank ABOVE "Geo Graph"
+    if (geoExactIdx < geoGraphIdx) {
+      this.addResult('test33_geo_beats_geo_graph', true,
+        `"Geo" (position ${geoExactIdx}) ranks above "Geo Graph" (position ${geoGraphIdx}) — shorter exact name match outranks longer name`);
+    } else {
+      this.addResult('test33_geo_beats_geo_graph', false,
+        `"Geo" (position ${geoExactIdx}) should rank above "Geo Graph" (position ${geoGraphIdx})`);
+    }
+
+    // "Geo Graph" should rank ABOVE "geojson_preview_tool"
+    if (geoGraphIdx < geoPrefixIdx) {
+      this.addResult('test33_geo_graph_beats_geojson', true,
+        `"Geo Graph" (position ${geoGraphIdx}) ranks above "geojson_preview_tool" (position ${geoPrefixIdx}) — exact token match outranks prefix-only match`);
+    } else {
+      this.addResult('test33_geo_graph_beats_geojson', false,
+        `"Geo Graph" (position ${geoGraphIdx}) should rank above "geojson_preview_tool" (position ${geoPrefixIdx})`);
+    }
+
+    // Verify score boosts are equal (all entities have no score → DEFAULT_AVERAGE_SCORE)
+    const geoExactRel = geoExact.relevanceScore ?? 0;
+    const geoPrefixRel = geoPrefix.relevanceScore ?? 0;
+    const geoGraphRel = geoGraph.relevanceScore ?? 0;
+    const geoExactTM = geoExact.textMatchScore ?? 0;
+    const geoPrefixTM = geoPrefix.textMatchScore ?? 0;
+    const geoGraphTM = geoGraph.textMatchScore ?? 0;
+    const boosts = [geoExactRel - geoExactTM, geoGraphRel - geoGraphTM, geoPrefixRel - geoPrefixTM];
+    const boostSpread = Math.max(...boosts) - Math.min(...boosts);
+
+    if (boostSpread < 0.01) {
+      this.addResult('test33_equal_score_boost', true,
+        `Score boosts are equal across all 3 entities (spread=${boostSpread.toFixed(4)}) — ranking is purely from text matching`);
+    } else {
+      this.addResult('test33_equal_score_boost', false,
+        `Score boosts should be equal but spread=${boostSpread.toFixed(4)}: Geo=${boosts[0].toFixed(3)}, GeoGraph=${boosts[1].toFixed(3)}, geojson=${boosts[2].toFixed(3)}`);
+    }
+  }
+
   printSummary() {
     console.log(`\n${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}`);
 
@@ -2016,6 +2108,7 @@ async function main() {
     await validator.test30_DefaultScoreBoost();
     await validator.test31_ExtraQueryWordsStillMatch();
     await validator.test32_GlobalByEntitySpaceScoreSearch();
+    await validator.test33_ExactShortNameBeatsLongerPrefixName();
 
     const allPassed = validator.printSummary();
     process.exit(allPassed ? 0 : 1);
