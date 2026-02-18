@@ -7,6 +7,7 @@ import {Pool} from "pg"
 import {createPostGraphileSchema} from "postgraphile"
 import ConnectionFilterPlugin from "postgraphile-plugin-connection-filter"
 import {classifyDbFailure} from "../services/dbFailures"
+import {parsePositiveIntEnv} from "../services/numberEnv"
 import {log} from "../services/telemetry"
 import EntitySpaceFilterPlugin from "./entitySpaceFilterPlugin"
 import {useGraphQLInstrumentation} from "./instrumentationPlugin"
@@ -32,23 +33,9 @@ if (!process.env.DATABASE_URL) {
 	throw new Error("DATABASE_URL environment variable is required")
 }
 
-function parseEnvInt(name: string, fallback: number): number {
-	const raw = process.env[name]
-	if (!raw) {
-		return fallback
-	}
-
-	const parsed = Number.parseInt(raw, 10)
-	if (!Number.isFinite(parsed) || parsed <= 0) {
-		return fallback
-	}
-
-	return parsed
-}
-
-const graphqlPoolMax = parseEnvInt("PG_POOL_MAX", 50)
-const poolConnectionTimeoutMs = parseEnvInt("PG_CONNECTION_TIMEOUT_MS", 10000)
-const poolIdleTimeoutMs = parseEnvInt("PG_IDLE_TIMEOUT_MS", 30000)
+const graphqlPoolMax = parsePositiveIntEnv("PG_POOL_MAX", 50)
+const poolConnectionTimeoutMs = parsePositiveIntEnv("PG_CONNECTION_TIMEOUT_MS", 10000)
+const poolIdleTimeoutMs = parsePositiveIntEnv("PG_IDLE_TIMEOUT_MS", 30000)
 
 const pgPool = new Pool({
 	connectionString: process.env.DATABASE_URL,
@@ -148,7 +135,6 @@ function usePgClient(pool: Pool): Plugin<{pgClient: PoolClient}> {
 	return {
 		async onExecute({extendContext, args}) {
 			const operationName = args.operationName || "anonymous"
-			const query = print(args.document).slice(0, 2000)
 
 			let pgClient: PoolClient
 			try {
@@ -160,6 +146,7 @@ function usePgClient(pool: Pool): Plugin<{pgClient: PoolClient}> {
 				})
 			} catch (error) {
 				const err = error instanceof Error ? error : new Error(String(error))
+				const query = print(args.document).slice(0, 2000)
 				const poolStats = getGraphqlPoolStats()
 				const failureClass = classifyDbFailure(err)
 				log.error("PostGraphile pool connect error", {

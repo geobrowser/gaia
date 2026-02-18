@@ -111,10 +111,11 @@ Configured in:
 Both pools use bounded retry for transient DB connection failures:
 
 - Jittered exponential backoff
-- `maxElapsedMs=3000`
+- `maxElapsedMs=12000`
 - `baseDelayMs=100`
 - `maxDelayMs=800`
-- Retries only transient classes (`pool_connect_timeout`, connection abort/reset, too many clients)
+- `maxAttempts=3`
+- Retries only transient classes (`pool_connect_timeout`, connection abort/reset)
 
 ### Environment Variables
 
@@ -125,9 +126,10 @@ PG_POOL_MAX=50
 PG_DRIZZLE_POOL_MAX=18
 PG_CONNECTION_TIMEOUT_MS=10000
 PG_IDLE_TIMEOUT_MS=30000
-DB_RETRY_MAX_ELAPSED_MS=3000
+DB_RETRY_MAX_ELAPSED_MS=12000
 DB_RETRY_BASE_DELAY_MS=100
 DB_RETRY_MAX_DELAY_MS=800
+DB_RETRY_MAX_ATTEMPTS=3
 ```
 
 ## Capacity Planning

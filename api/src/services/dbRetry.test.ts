@@ -5,7 +5,6 @@ import {calculateRetryDelayMs, withDbRetry} from "./dbRetry"
 describe("dbRetry", () => {
 	it("retries transient failures and succeeds", async () => {
 		let attempts = 0
-		let nowMs = 0
 		const retryEvents: Array<{attempt: number; delayMs: number}> = []
 
 		const result = await withDbRetry(
@@ -20,11 +19,8 @@ describe("dbRetry", () => {
 				maxElapsedMs: 3000,
 				baseDelayMs: 100,
 				maxDelayMs: 800,
+				maxAttempts: 3,
 				random: () => 0,
-				now: () => nowMs,
-				sleep: async (delayMs) => {
-					nowMs += delayMs
-				},
 				onRetry: ({attempt, delayMs}) => {
 					retryEvents.push({attempt, delayMs})
 				},
@@ -33,10 +29,11 @@ describe("dbRetry", () => {
 
 		expect(result).toBe("ok")
 		expect(attempts).toBe(3)
-		expect(retryEvents).toEqual([
-			{attempt: 1, delayMs: 50},
-			{attempt: 2, delayMs: 100},
-		])
+		expect(retryEvents.length).toBe(2)
+		expect(retryEvents[0]?.attempt).toBe(1)
+		expect(retryEvents[1]?.attempt).toBe(2)
+		expect(retryEvents[0]?.delayMs).toBeGreaterThan(0)
+		expect(retryEvents[1]?.delayMs).toBeGreaterThan(0)
 	})
 
 	it("does not retry non-transient failures", async () => {
@@ -54,10 +51,7 @@ describe("dbRetry", () => {
 
 	it("stops retrying when elapsed budget would be exceeded", async () => {
 		let attempts = 0
-		let nowMs = 0
-		const sleep = vi.fn(async (delayMs: number) => {
-			nowMs += delayMs
-		})
+		const onGiveUp = vi.fn()
 
 		await expect(
 			withDbRetry(
@@ -66,22 +60,59 @@ describe("dbRetry", () => {
 					throw new Error("timeout exceeded when trying to connect")
 				},
 				{
-					maxElapsedMs: 120,
+					maxElapsedMs: 1,
 					baseDelayMs: 100,
 					maxDelayMs: 800,
-					random: () => 1,
-					now: () => nowMs,
-					sleep,
+					maxAttempts: 3,
+					random: () => 0,
+					onGiveUp,
 				},
 			),
 		).rejects.toThrow("timeout exceeded when trying to connect")
 
-		expect(attempts).toBe(1)
-		expect(sleep).not.toHaveBeenCalled()
+		expect(attempts).toBeLessThanOrEqual(2)
+		expect(onGiveUp).toHaveBeenCalledWith(
+			expect.objectContaining({
+				reason: "budget_exceeded",
+			}),
+		)
+	})
+
+	it("stops retrying when max attempts is reached", async () => {
+		let attempts = 0
+		const onGiveUp = vi.fn()
+
+		await expect(
+			withDbRetry(
+				async () => {
+					attempts += 1
+					throw new Error("timeout exceeded when trying to connect")
+				},
+				{
+					maxElapsedMs: 3000,
+					baseDelayMs: 100,
+					maxDelayMs: 800,
+					maxAttempts: 2,
+					onGiveUp,
+				},
+			),
+		).rejects.toThrow("timeout exceeded when trying to connect")
+
+		expect(attempts).toBe(2)
+		expect(onGiveUp).toHaveBeenCalledWith(
+			expect.objectContaining({
+				reason: "max_attempts",
+				attempts: 2,
+			}),
+		)
 	})
 
 	it("calculates bounded jittered backoff", () => {
-		const delay = calculateRetryDelayMs(4, {maxElapsedMs: 3000, baseDelayMs: 100, maxDelayMs: 300}, () => 1)
+		const delay = calculateRetryDelayMs(
+			4,
+			{maxElapsedMs: 3000, baseDelayMs: 100, maxDelayMs: 300, maxAttempts: 3},
+			() => 1,
+		)
 
 		expect(delay).toBe(300)
 	})

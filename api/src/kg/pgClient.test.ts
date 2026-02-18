@@ -18,7 +18,7 @@ describe("connectPgClientWithRetry", () => {
 			}),
 		}
 
-		const logger = {warn: vi.fn()}
+		const logger = {warn: vi.fn(), error: vi.fn()}
 		const result = await connectPgClientWithRetry({
 			pool,
 			operationName: "postgraphile.pool.connect",
@@ -29,6 +29,7 @@ describe("connectPgClientWithRetry", () => {
 		expect(result).toBe(client)
 		expect(pool.connect).toHaveBeenCalledTimes(3)
 		expect(logger.warn).toHaveBeenCalledTimes(2)
+		expect(logger.error).not.toHaveBeenCalled()
 	})
 
 	it("does not retry non-transient failures", async () => {
@@ -37,7 +38,7 @@ describe("connectPgClientWithRetry", () => {
 				throw new Error("relation does not exist")
 			}),
 		}
-		const logger = {warn: vi.fn()}
+		const logger = {warn: vi.fn(), error: vi.fn()}
 
 		await expect(
 			connectPgClientWithRetry({
@@ -50,5 +51,6 @@ describe("connectPgClientWithRetry", () => {
 
 		expect(pool.connect).toHaveBeenCalledTimes(1)
 		expect(logger.warn).not.toHaveBeenCalled()
+		expect(logger.error).toHaveBeenCalledTimes(1)
 	})
 })

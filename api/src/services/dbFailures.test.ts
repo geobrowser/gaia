@@ -17,6 +17,8 @@ describe("dbFailures", () => {
 
 	it("marks retryable classes correctly", () => {
 		expect(isRetryableDbFailureClass("pool_connect_timeout")).toBe(true)
+		expect(isRetryableDbFailureClass("connection_reset")).toBe(true)
+		expect(isRetryableDbFailureClass("too_many_connections")).toBe(false)
 		expect(isRetryableDbFailureClass("statement_timeout")).toBe(false)
 		expect(isRetryableDbFailureClass("unknown_db_failure")).toBe(false)
 	})

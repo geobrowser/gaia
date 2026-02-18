@@ -94,8 +94,7 @@ export function isRetryableDbFailureClass(failureClass: DbFailureClass): boolean
 	return (
 		failureClass === "pool_connect_timeout" ||
 		failureClass === "connection_closed_abort" ||
-		failureClass === "connection_reset" ||
-		failureClass === "too_many_connections"
+		failureClass === "connection_reset"
 	)
 }
 

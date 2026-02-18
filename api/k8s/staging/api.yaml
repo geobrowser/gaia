@@ -103,11 +103,13 @@ spec:
             - name: PG_DRIZZLE_POOL_MAX
               value: "18"
             - name: DB_RETRY_MAX_ELAPSED_MS
-              value: "3000"
+              value: "12000"
             - name: DB_RETRY_BASE_DELAY_MS
               value: "100"
             - name: DB_RETRY_MAX_DELAY_MS
               value: "800"
+            - name: DB_RETRY_MAX_ATTEMPTS
+              value: "3"
             - name: IPFS_KEY
               valueFrom:
                 secretKeyRef:
