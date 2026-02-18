@@ -36,12 +36,13 @@ If the query matches a UUID pattern, it bypasses text search entirely and perfor
 
 ## 2. Base Text Query
 
-Four parallel matching strategies run inside a `bool.should` clause with `minimum_should_match: 1`:
+Five parallel matching strategies run inside a `bool.should` clause with `minimum_should_match: 1`:
 
 ### Strategy Breakdown
 
 | Strategy | Query Type | Fields | Boost | Purpose |
 |----------|------------|--------|-------|---------|
+| **Exact Name Token** | `match` | `name` | **5.0×** | Strong boost for exact analyzed token match in name |
 | **Autocomplete** | `multi_match` (bool_prefix) | `name^1.5`, `name._2gram^1.5`, `name._3gram^1.5`, `description`, `description._2gram`, `description._3gram` | 1.5× on name fields | N-gram autocomplete matching |
 | **Fuzzy** | `multi_match` | `name`, `description` | **0.6×** (reduced) | Typo tolerance with AUTO fuzziness |
 | **Name Prefix** | `match_phrase_prefix` | `name` | **5.0×** | Strong boost for "starts with" on name |
@@ -69,12 +70,13 @@ Four parallel matching strategies run inside a `bool.should` clause with `minimu
 
 From highest to lowest impact:
 
-1. **Exact name prefix match** — `match_phrase_prefix` on name (5.0×)
-2. **Name n-gram matches** — `bool_prefix` with 1.5× field boost
-3. **Description prefix match** — `match_phrase_prefix` on description (1.5×)
-4. **Description n-gram matches** — no additional boost
-5. **Fuzzy matches** — 0.6× penalty (deliberately reduced)
-6. **+ Score Fields** — additive boost from score fields via `function_score` with `script_score` (clamped, shifted, then 1.3× multiplied)
+1. **Exact name token match** — `match` on name (10.0×) — query terms exactly match analyzed tokens
+2. **Exact name prefix match** — `match_phrase_prefix` on name (5.0×)
+3. **Name n-gram matches** — `bool_prefix` with 1.5× field boost
+4. **Description prefix match** — `match_phrase_prefix` on description (1.5×)
+5. **Description n-gram matches** — no additional boost
+6. **Fuzzy matches** — 0.6× penalty (deliberately reduced)
+7. **+ Score Fields** — additive boost from score fields via `function_score` with `script_score` (clamped, shifted, then 1.3× multiplied)
 
 ---
 

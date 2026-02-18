@@ -112,10 +112,18 @@ async fn main() -> Result<()> {
     let tm_name_and_desc_id = Uuid::parse_str("00000000-0000-0000-0000-00000000aa07").unwrap();
     let tm_name_only_id = Uuid::parse_str("00000000-0000-0000-0000-00000000aa08").unwrap();
     // Group E: High global score vs low global score, both match in name (query: "Velociraptor")
-    // Both have "Velociraptor" in name, but low-score entity is an exact single-word name match
-    // (slightly higher BM25 score). High score boost should overcome the small text match difference.
+    // Both have "Velociraptor" in name with 2-word names. High score boost should overcome
+    // the small text match difference.
     let tm_high_score_id = Uuid::parse_str("00000000-0000-0000-0000-00000000aa09").unwrap();
     let tm_low_score_id = Uuid::parse_str("00000000-0000-0000-0000-00000000aa0a").unwrap();
+
+    // Group F: Exact short name match vs longer prefix name match (query: "geo")
+    // Both have NO score values (default score behavior).
+    // geo_exact: name="Geo", short exact name match → should rank first
+    // geo_prefix: name="geojson_preview_tool", "geo" is only a prefix of "geojson" → should rank second
+    let geo_exact_id = Uuid::parse_str("00000000-0000-0000-0000-00000000bb01").unwrap();
+    let geo_prefix_id = Uuid::parse_str("00000000-0000-0000-0000-00000000bb02").unwrap();
+    let geo_graph_id = Uuid::parse_str("00000000-0000-0000-0000-00000000bb03").unwrap();
     info!("Test Space ID: {}", test_space);
     info!("Person Type ID: {}", person_type_id);
     info!("Organization Type ID: {}", org_type_id);
@@ -150,11 +158,30 @@ async fn main() -> Result<()> {
     info!("\nCreateEntity test:");
     info!("  CreateEntity Test ID: {} (created via CreateEntity op)", create_entity_test_id);
     info!("\nText match scoring test entities:");
-    info!("  Group A (query 'Wonderland'): name match {} vs desc match {}", tm_name_match_id, tm_desc_match_id);
-    info!("  Group B (query 'Blockchain'): exact {} vs fuzzy {}", tm_exact_match_id, tm_fuzzy_match_id);
-    info!("  Group C (query 'San Francisco'): multi-word {} vs single-word {}", tm_multi_word_id, tm_single_word_id);
-    info!("  Group D (query 'Quantum'): name+desc {} vs name-only {}", tm_name_and_desc_id, tm_name_only_id);
-    info!("  Group E (query 'Velociraptor'): high-score {} vs low-score {}", tm_high_score_id, tm_low_score_id);
+    info!(
+        "  Group A (query 'Wonderland'): name match {} vs desc match {}",
+        tm_name_match_id, tm_desc_match_id
+    );
+    info!(
+        "  Group B (query 'Blockchain'): exact {} vs fuzzy {}",
+        tm_exact_match_id, tm_fuzzy_match_id
+    );
+    info!(
+        "  Group C (query 'San Francisco'): multi-word {} vs single-word {}",
+        tm_multi_word_id, tm_single_word_id
+    );
+    info!(
+        "  Group D (query 'Quantum'): name+desc {} vs name-only {}",
+        tm_name_and_desc_id, tm_name_only_id
+    );
+    info!(
+        "  Group E (query 'Velociraptor'): high-score {} vs low-score {}",
+        tm_high_score_id, tm_low_score_id
+    );
+    info!(
+        "  Group F (query 'geo'): exact name {} vs prefix name {} vs multi-word name {}",
+        geo_exact_id, geo_prefix_id, geo_graph_id
+    );
     // 1. Create Person type entity
     info!("\n1. Creating Person type entity...");
     let person_type_payload = edits::create_entity_edit(
@@ -529,14 +556,54 @@ async fn main() -> Result<()> {
     producer.send(&edits_topic, None, tm_high_score_payload).await?;
 
     let tm_low_score_payload = edits::create_entity_edit(
-        "Create TM Low Score (Velociraptor)",
+        "Create TM Low Score (Velociraptor Species)",
         test_space,
         tm_low_score_id,
-        Some("Velociraptor"),
+        Some("Velociraptor Species"),
         Some("A small feathered dinosaur"),
         None,
     )?;
     producer.send(&edits_topic, None, tm_low_score_payload).await?;
+
+    // Group F: Exact short name match vs longer prefix name match (query: "geo")
+    // geo_exact: name IS the query term exactly → should rank highest
+    // geo_prefix: name contains query as prefix of a longer word → should rank lower
+    // Both have NO scores (like Charlie) to test pure text matching behavior
+    let geo_exact_payload = edits::create_entity_edit(
+        "Create Geo Exact (Geo)",
+        test_space,
+        geo_exact_id,
+        Some("Geo"),
+        Some("Geo is a network for organizing knowledge that we can collectively govern and trust."),
+        None,
+    )?;
+    producer
+        .send(&edits_topic, None, geo_exact_payload)
+        .await?;
+
+    let geo_prefix_payload = edits::create_entity_edit(
+        "Create Geo Prefix (geojson_preview_tool)",
+        test_space,
+        geo_prefix_id,
+        Some("geojson_preview_tool"),
+        Some("Generate a geojson.io URL to visualize GeoJSON data"),
+        None,
+    )?;
+    producer
+        .send(&edits_topic, None, geo_prefix_payload)
+        .await?;
+
+    let geo_graph_payload = edits::create_entity_edit(
+        "Create Geo Graph",
+        test_space,
+        geo_graph_id,
+        Some("Geo Graph"),
+        Some("Geo Graph is an open source tool for building and visualizing knowledge graphs with structured geographic and semantic data on the decentralized web"),
+        None,
+    )?;
+    producer
+        .send(&edits_topic, None, geo_graph_payload)
+        .await?;
 
     // 8. Generate scores with varying values (Charlie intentionally excluded)
     info!("8. Generating scores with varying entity and space scores (Charlie has no global score)...");
@@ -562,8 +629,8 @@ async fn main() -> Result<()> {
             (tm_name_and_desc_id, 0.50),
             (tm_name_only_id, 0.50),
             // Group E: Different scores to test score boost outranking text match
-            (tm_high_score_id, 0.90),   // High score, "Velociraptor Research"
-            (tm_low_score_id, 0.20),    // Low score, "Velociraptor"
+            (tm_high_score_id, 0.90), // High score, "Velociraptor Research"
+            (tm_low_score_id, 0.20),  // Low score, "Velociraptor Species"
             (org_id, 0.90),
             (person_type_id, 0.70),
             (org_type_id, 0.65),
@@ -841,6 +908,7 @@ async fn main() -> Result<()> {
     info!("  - 21 entity scores (including negative and zero)");
     info!("  - Charlie has NO global score (tests default score behavior)");
     info!("  - 10 text match scoring test entities (8 at score 0.50, 2 with different scores)");
+    info!("  - 2 geo name match test entities (no scores, testing exact vs prefix name matching)");
     info!("  - 1 space score");
     info!("  - 7 perspective scores");
     info!("  - 3 property operation test cases:");
