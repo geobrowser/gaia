@@ -1,6 +1,8 @@
 export type DbFailureClass =
 	| "pool_connect_timeout"
 	| "connection_closed_abort"
+	| "connection_reset"
+	| "too_many_connections"
 	| "statement_timeout"
 	| "unknown_db_failure"
 
@@ -28,9 +30,21 @@ function normalizeMessage(value: unknown): string {
 	return String(value).toLowerCase()
 }
 
+function normalizeCode(value: unknown): string | null {
+	const err = asErrorLike(value)
+	if (typeof err.code === "string") {
+		return err.code.toUpperCase()
+	}
+	if (typeof err.code === "number") {
+		return String(err.code)
+	}
+	return null
+}
+
 export function detectDbFailureClass(error: unknown): Exclude<DbFailureClass, "unknown_db_failure"> | null {
 	const message = normalizeMessage(error)
 	const err = asErrorLike(error)
+	const code = normalizeCode(error)
 
 	if (message.includes("timeout exceeded when trying to connect")) {
 		return "pool_connect_timeout"
@@ -38,6 +52,21 @@ export function detectDbFailureClass(error: unknown): Exclude<DbFailureClass, "u
 
 	if (message.includes("canceling statement due to statement timeout")) {
 		return "statement_timeout"
+	}
+
+	if (message.includes("too many clients already") || message.includes("remaining connection slots are reserved")) {
+		return "too_many_connections"
+	}
+
+	if (
+		code === "ECONNRESET" ||
+		code === "57P01" ||
+		code === "57P02" ||
+		code === "57P03" ||
+		code === "08006" ||
+		code === "08001"
+	) {
+		return "connection_reset"
 	}
 
 	const isAbort =
@@ -59,4 +88,17 @@ export function classifyDbFailure(error: unknown): DbFailureClass {
 
 export function isPoolConnectTimeout(error: unknown): boolean {
 	return classifyDbFailure(error) === "pool_connect_timeout"
+}
+
+export function isRetryableDbFailureClass(failureClass: DbFailureClass): boolean {
+	return (
+		failureClass === "pool_connect_timeout" ||
+		failureClass === "connection_closed_abort" ||
+		failureClass === "connection_reset" ||
+		failureClass === "too_many_connections"
+	)
+}
+
+export function isRetryableDbFailure(error: unknown): boolean {
+	return isRetryableDbFailureClass(classifyDbFailure(error))
 }

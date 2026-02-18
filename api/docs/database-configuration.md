@@ -5,14 +5,15 @@ This document describes the PostgreSQL and PgBouncer configuration for the Geo A
 ## Architecture
 
 ```
-API Replicas (3x)              PgBouncer                 PostgreSQL
+API Replicas (2x baseline)     PgBouncer                 PostgreSQL
 ┌─────────────────┐           ┌─────────────┐           ┌─────────────┐
-│ pg Pool: 50     │──────────▶│ max: 200    │──────────▶│ max: 100    │
+│ GraphQL pool: 50│──────────▶│ max: 200    │──────────▶│ max: 100    │
+│ Drizzle pool: 18│           │ pool: 70    │           │             │
 │ per replica     │           │ pool: 70    │           │             │
 └─────────────────┘           └─────────────┘           └─────────────┘
-     150 total                  multiplexes               70 active
+     136 total                  multiplexes               70 active
    client conns                to 70 server               connections
-                                connections
+                                 connections
 ```
 
 ## PostgreSQL Settings
@@ -92,14 +93,28 @@ SHOW servers;
 
 ## Node.js pg Pool Settings (API)
 
-Configured in `src/kg/postgraphile.ts`:
+Configured in:
 
-| Setting | Value | Purpose |
-|---------|-------|---------|
-| `max` | 50 | Connections per replica to PgBouncer |
-| `connectionTimeoutMillis` | 3000 | Fail fast if no connection available (3s) |
-| `idleTimeoutMillis` | 30000 | Close idle connections after 30s |
-| `allowExitOnIdle` | true | Allow graceful shutdown |
+- `src/kg/postgraphile.ts` (GraphQL)
+- `src/services/storage/storage.ts` (Drizzle)
+
+| Pool | Setting | Value | Purpose |
+|------|---------|-------|---------|
+| GraphQL | `max` | 50 | GraphQL connection budget per replica |
+| Drizzle | `max` | 18 | REST/versioned connection budget per replica |
+| Both | `connectionTimeoutMillis` | 10000 | Wait up to 10s for a pool checkout/connect |
+| Both | `idleTimeoutMillis` | 30000 | Close idle connections after 30s |
+| Both | `allowExitOnIdle` | true | Allow graceful shutdown |
+
+### Read Retry Policy
+
+Both pools use bounded retry for transient DB connection failures:
+
+- Jittered exponential backoff
+- `maxElapsedMs=3000`
+- `baseDelayMs=100`
+- `maxDelayMs=800`
+- Retries only transient classes (`pool_connect_timeout`, connection abort/reset, too many clients)
 
 ### Environment Variables
 
@@ -107,8 +122,12 @@ All settings can be overridden via environment variables:
 
 ```bash
 PG_POOL_MAX=50
-PG_CONNECTION_TIMEOUT_MS=3000
+PG_DRIZZLE_POOL_MAX=18
+PG_CONNECTION_TIMEOUT_MS=10000
 PG_IDLE_TIMEOUT_MS=30000
+DB_RETRY_MAX_ELAPSED_MS=3000
+DB_RETRY_BASE_DELAY_MS=100
+DB_RETRY_MAX_DELAY_MS=800
 ```
 
 ## Capacity Planning
@@ -117,9 +136,9 @@ PG_IDLE_TIMEOUT_MS=30000
 
 ```
 API replicas × pool size = client connections to PgBouncer
-3 replicas × 50 = 150 client connections
+2 replicas × (50 + 18) = 136 client connections
 
-PgBouncer max_client_conn = 200 (headroom for scaling to 4 replicas)
+PgBouncer max_client_conn = 200
 PgBouncer default_pool_size = 70 (connections to PostgreSQL)
 PostgreSQL max_connections = 100 (30 reserved for indexers/admin/emergencies)
 ```

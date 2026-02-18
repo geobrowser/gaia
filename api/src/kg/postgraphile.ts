@@ -7,6 +7,7 @@ import {Pool} from "pg"
 import {createPostGraphileSchema} from "postgraphile"
 import ConnectionFilterPlugin from "postgraphile-plugin-connection-filter"
 import {classifyDbFailure} from "../services/dbFailures"
+import {withDbRetry} from "../services/dbRetry"
 import {log} from "../services/telemetry"
 import EntitySpaceFilterPlugin from "./entitySpaceFilterPlugin"
 import {useGraphQLInstrumentation} from "./instrumentationPlugin"
@@ -31,16 +32,34 @@ if (!process.env.DATABASE_URL) {
 	throw new Error("DATABASE_URL environment variable is required")
 }
 
+function parseEnvInt(name: string, fallback: number): number {
+	const raw = process.env[name]
+	if (!raw) {
+		return fallback
+	}
+
+	const parsed = Number.parseInt(raw, 10)
+	if (!Number.isFinite(parsed) || parsed <= 0) {
+		return fallback
+	}
+
+	return parsed
+}
+
+const graphqlPoolMax = parseEnvInt("PG_POOL_MAX", 50)
+const poolConnectionTimeoutMs = parseEnvInt("PG_CONNECTION_TIMEOUT_MS", 10000)
+const poolIdleTimeoutMs = parseEnvInt("PG_IDLE_TIMEOUT_MS", 30000)
+
 const pgPool = new Pool({
 	connectionString: process.env.DATABASE_URL,
 	// Pool size - PgBouncer handles multiplexing, so we can be generous here.
 	// The real PostgreSQL connection limit is managed by PgBouncer's pool_size.
 	// With 2 replicas at 50 each = 100 connections, well under PgBouncer's 200 max_client_conn.
-	max: parseInt(process.env.PG_POOL_MAX || "50", 10),
+	max: graphqlPoolMax,
 	// Fail fast if no connection available (default is 0 = wait forever, causing hangs)
-	connectionTimeoutMillis: parseInt(process.env.PG_CONNECTION_TIMEOUT_MS || "3000", 10),
+	connectionTimeoutMillis: poolConnectionTimeoutMs,
 	// Close idle connections after 30 seconds to free up PgBouncer slots
-	idleTimeoutMillis: parseInt(process.env.PG_IDLE_TIMEOUT_MS || "30000", 10),
+	idleTimeoutMillis: poolIdleTimeoutMs,
 	// Allow process to exit cleanly when pool is idle (for graceful shutdown)
 	allowExitOnIdle: true,
 })
@@ -50,7 +69,7 @@ export function getGraphqlPoolStats() {
 		totalConnections: pgPool.totalCount,
 		idleConnections: pgPool.idleCount,
 		waitingCount: pgPool.waitingCount,
-		maxConnections: pgPool.options.max!,
+		maxConnections: pgPool.options.max ?? graphqlPoolMax,
 	}
 }
 
@@ -133,7 +152,20 @@ function usePgClient(pool: Pool): Plugin<{pgClient: PoolClient}> {
 
 			let pgClient: PoolClient
 			try {
-				pgClient = await pool.connect()
+				pgClient = await withDbRetry(() => pool.connect(), {
+					operationName: "postgraphile.pool.connect",
+					onRetry: ({attempt, delayMs, elapsedMs, failureClass, error}) => {
+						log.warn("Retrying PostGraphile pool connect", {
+							attempt,
+							delayMs,
+							elapsedMs,
+							failureClass,
+							operationName,
+							error: error instanceof Error ? error.message : String(error),
+							poolStats: getGraphqlPoolStats(),
+						})
+					},
+				})
 			} catch (error) {
 				const err = error instanceof Error ? error : new Error(String(error))
 				const poolStats = getGraphqlPoolStats()

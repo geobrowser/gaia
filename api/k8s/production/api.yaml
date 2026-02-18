@@ -94,6 +94,18 @@ spec:
                   key: DATABASE_URL
             - name: PG_CONNECTION_TIMEOUT_MS
               value: "10000"
+            - name: PG_IDLE_TIMEOUT_MS
+              value: "30000"
+            - name: PG_POOL_MAX
+              value: "50"
+            - name: PG_DRIZZLE_POOL_MAX
+              value: "18"
+            - name: DB_RETRY_MAX_ELAPSED_MS
+              value: "3000"
+            - name: DB_RETRY_BASE_DELAY_MS
+              value: "100"
+            - name: DB_RETRY_MAX_DELAY_MS
+              value: "800"
             - name: IPFS_KEY
               valueFrom:
                 secretKeyRef:
