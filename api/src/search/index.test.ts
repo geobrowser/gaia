@@ -12,11 +12,11 @@ describe("Search Router - Integration Tests", () => {
 	const mockSearchResponse: SearchResponse = {
 		results: [
 			{
-				entityId: "123e4567-e89b-12d3-a456-426614174000",
-				spaceId: "space-123",
+				entityId: "123e4567e89b12d3a456426614174000",
+				spaceId: "abcd1234abcd1234abcd1234abcd5678",
 				name: "Test Entity",
 				description: "A test entity for search",
-				typeIds: ["type-id-1", "type-id-2"],
+				typeIds: ["abcd1234abcd1234abcd1234abcd0001", "abcd1234abcd1234abcd1234abcd0002"],
 				entityGlobalScore: 0.8,
 				spaceScore: 0.7,
 				entitySpaceScore: 0.9,
@@ -82,8 +82,23 @@ describe("Search Router - Integration Tests", () => {
 			})
 		})
 
-		it("handles SPACE_SINGLE scope with valid space_id", async () => {
+		it("handles SPACE_SINGLE scope with valid dashed space_id", async () => {
 			const spaceId = "123e4567-e89b-12d3-a456-426614174000"
+			const request = new Request(`http://localhost/search?query=test&scope=SPACE_SINGLE&space_id=${spaceId}`)
+			const response = await app.fetch(request)
+
+			expect(response.status).toBe(200)
+			expect(mockSearchClient.search).toHaveBeenCalledWith({
+				query: "test",
+				scope: "SPACE_SINGLE",
+				limit: 20,
+				offset: 0,
+				space_id: spaceId,
+			})
+		})
+
+		it("handles SPACE_SINGLE scope with valid dashless space_id", async () => {
+			const spaceId = "123e4567e89b12d3a456426614174000"
 			const request = new Request(`http://localhost/search?query=test&scope=SPACE_SINGLE&space_id=${spaceId}`)
 			const response = await app.fetch(request)
 

@@ -10,11 +10,24 @@
 import {Client} from "@opensearch-project/opensearch"
 import type {SearchClient} from "./client"
 import {SearchError, type SearchQuery, type SearchResponse, type SearchResult, type SearchScope} from "./types"
+import {normalizeUuid, toDashedUuid} from "../../utils/uuid"
 
 /**
- * UUID regex pattern for detecting ID-based queries.
+ * UUID regex patterns for detecting ID-based queries.
+ * Supports both dashed (36 chars) and dashless (32 chars) formats.
  */
-const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+const UUID_DASHED_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+const UUID_DASHLESS_PATTERN = /^[0-9a-f]{32}$/i
+
+/**
+ * Return both dashed and dashless forms of a UUID for OpenSearch term queries.
+ * The index may contain either format during migration, so we match both.
+ */
+function uuidTermVariants(uuid: string): [string, string] {
+	const dashless = normalizeUuid(uuid) as string
+	const dashed = toDashedUuid(uuid)
+	return [dashed, dashless]
+}
 
 /**
  * Default average score for entities without a specific score.
@@ -171,9 +184,9 @@ export class OpenSearchClient implements SearchClient {
 		}>
 
 		const results: SearchResult[] = hits.map((hit) => {
-			// Extract typeIds from type_relations array
+			// Extract typeIds from type_relations array and normalize to dashless format
 			const typeRelations = hit._source.type_relations as Array<{entity_to_id: string}> | undefined
-			const typeIds = typeRelations?.map((rel) => rel.entity_to_id)
+			const typeIds = typeRelations?.map((rel) => normalizeUuid(rel.entity_to_id) as string)
 
 			// Compute relevanceScore and textMatchScore
 			const relevanceScore = hit._score
@@ -181,8 +194,8 @@ export class OpenSearchClient implements SearchClient {
 			const textMatchScore = scoreBoost !== undefined ? Math.max(0, relevanceScore - scoreBoost) : relevanceScore
 
 			return {
-				entityId: hit._source.entity_id as string,
-				spaceId: hit._source.space_id as string,
+				entityId: normalizeUuid(hit._source.entity_id as string) as string,
+				spaceId: normalizeUuid(hit._source.space_id as string) as string,
 				name: hit._source.name as string | undefined,
 				description: hit._source.description as string | undefined,
 				avatar: hit._source.avatar as string | undefined,
@@ -236,8 +249,8 @@ export class OpenSearchClient implements SearchClient {
 			return this.buildTopRankedQuery(query.scope, query.space_id, query.type_ids, includeDeleted)
 		}
 
-		// Check if the query is a UUID for direct ID lookup
-		if (UUID_PATTERN.test(trimmedQuery)) {
+		// Check if the query is a UUID for direct ID lookup (dashed or dashless)
+		if (UUID_DASHED_PATTERN.test(trimmedQuery) || UUID_DASHLESS_PATTERN.test(trimmedQuery)) {
 			return this.buildUuidQuery(trimmedQuery, query.scope, query.space_id, query.type_ids, includeDeleted)
 		}
 
@@ -292,9 +305,9 @@ export class OpenSearchClient implements SearchClient {
 		typeIds?: string[],
 		includeDeleted: boolean = false,
 	): object {
-		// term query is correct for keyword fields - performs exact match lookup
+		// Match both dashed and dashless forms (index may contain either during migration)
 		const baseUuidQuery = {
-			term: {entity_id: uuid},
+			terms: {entity_id: uuidTermVariants(uuid)},
 		}
 
 		const typeFilter = this.buildTypeFilter(typeIds)
@@ -319,7 +332,7 @@ export class OpenSearchClient implements SearchClient {
 			case "SPACE_SINGLE":
 			case "SPACE":
 				if (space_id) {
-					filters.push({term: {space_id}})
+					filters.push({terms: {space_id: uuidTermVariants(space_id)}})
 				}
 				return {
 					query: {
@@ -415,7 +428,7 @@ export class OpenSearchClient implements SearchClient {
 			case "SPACE_SINGLE":
 			case "SPACE":
 				if (space_id) {
-					filters.push({term: {space_id}})
+					filters.push({terms: {space_id: uuidTermVariants(space_id)}})
 				}
 				return {
 					query: {
@@ -700,7 +713,7 @@ export class OpenSearchClient implements SearchClient {
 		includeDeleted: boolean = false,
 	): object {
 		const typeFilter = this.buildTypeFilter(typeIds)
-		const filters: object[] = [{term: {space_id: spaceId}}]
+		const filters: object[] = [{terms: {space_id: uuidTermVariants(spaceId)}}]
 		if (!includeDeleted) filters.push(this.buildNonDeletedFilter())
 		if (typeFilter) filters.push(typeFilter)
 
@@ -731,12 +744,15 @@ export class OpenSearchClient implements SearchClient {
 			return null
 		}
 
+		// Include both dashed and dashless forms (index may contain either during migration)
+		const allVariants = typeIds.flatMap((id) => uuidTermVariants(id))
+
 		return {
 			nested: {
 				path: "type_relations",
 				query: {
 					terms: {
-						"type_relations.entity_to_id": typeIds,
+						"type_relations.entity_to_id": allVariants,
 					},
 				},
 			},
