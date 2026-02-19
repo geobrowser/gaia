@@ -7,6 +7,7 @@ import {Pool} from "pg"
 import {createPostGraphileSchema} from "postgraphile"
 import ConnectionFilterPlugin from "postgraphile-plugin-connection-filter"
 import {classifyDbFailure} from "../services/dbFailures"
+import {getGraphqlPressureSnapshot, recordGraphqlAcquireTimeout} from "../services/dbSaturation"
 import {log} from "../services/telemetry"
 import EntitySpaceFilterPlugin from "./entitySpaceFilterPlugin"
 import {useGraphQLInstrumentation} from "./instrumentationPlugin"
@@ -50,8 +51,12 @@ export function getGraphqlPoolStats() {
 		totalConnections: pgPool.totalCount,
 		idleConnections: pgPool.idleCount,
 		waitingCount: pgPool.waitingCount,
-		maxConnections: pgPool.options.max!,
+		maxConnections: pgPool.options.max ?? 0,
 	}
+}
+
+export function getGraphqlPoolPressure() {
+	return getGraphqlPressureSnapshot(getGraphqlPoolStats())
 }
 
 // Without this handler, background connection errors (PgBouncer closing idle connections,
@@ -130,20 +135,26 @@ function usePgClient(pool: Pool): Plugin<{pgClient: PoolClient}> {
 		async onExecute({extendContext, args}) {
 			const operationName = args.operationName || "anonymous"
 			const query = print(args.document).slice(0, 2000)
+			const acquireStartMs = Date.now()
 
 			let pgClient: PoolClient
 			try {
 				pgClient = await pool.connect()
 			} catch (error) {
+				recordGraphqlAcquireTimeout()
 				const err = error instanceof Error ? error : new Error(String(error))
 				const poolStats = getGraphqlPoolStats()
+				const poolPressure = getGraphqlPressureSnapshot(poolStats)
 				const failureClass = classifyDbFailure(err)
+				const acquireWaitMs = Date.now() - acquireStartMs
 				log.error("PostGraphile pool connect error", {
 					error: err.message,
 					failureClass,
 					operationName,
 					query,
+					acquireWaitMs,
 					poolStats,
+					poolPressure,
 				})
 
 				Sentry.captureException(err, {
@@ -154,12 +165,24 @@ function usePgClient(pool: Pool): Plugin<{pgClient: PoolClient}> {
 					extra: {
 						query,
 						variables: args.variableValues,
+						acquireWaitMs,
 						poolStats,
+						poolPressure,
 						failureClass,
 					},
 				})
 
 				throw error
+			}
+
+			const acquireWaitMs = Date.now() - acquireStartMs
+			if (acquireWaitMs > 250) {
+				log.warn("PostGraphile pool acquire was slow", {
+					operationName,
+					acquireWaitMs,
+					poolStats: getGraphqlPoolStats(),
+					poolPressure: getGraphqlPoolPressure(),
+				})
 			}
 
 			extendContext({pgClient})

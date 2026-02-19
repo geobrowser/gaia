@@ -109,7 +109,34 @@ All settings can be overridden via environment variables:
 PG_POOL_MAX=50
 PG_CONNECTION_TIMEOUT_MS=3000
 PG_IDLE_TIMEOUT_MS=30000
+
+# Pool saturation readiness controls
+PG_POOL_PRESSURE_WAITING_THRESHOLD=1
+PG_POOL_PRESSURE_UTILIZATION_THRESHOLD=90
+PG_POOL_PRESSURE_TIMEOUT_THRESHOLD=2
+PG_POOL_ACQUIRE_TIMEOUT_WINDOW_MS=30000
+PG_POOL_SATURATION_ACTIVATION_MS=15000
+PG_POOL_SATURATION_RELEASE_MS=30000
 ```
+
+### Timeout Hierarchy
+
+Keep timeout budgets ordered so overload fails predictably:
+
+1. Pool acquire/connect timeout (shortest)
+2. Request/application deadline
+3. `statement_timeout` (longest)
+
+Avoid setting all layers to the same value (for example all 10s), which makes root cause ambiguous.
+
+### Readiness and Saturation Routing
+
+The API exposes:
+
+- `/health/liveness` for process-only liveness.
+- `/health/readiness` for sustained pool saturation checks.
+
+Kubernetes readiness should target `/health/readiness` so saturated pods are removed from service endpoints without restart loops.
 
 ## Capacity Planning
 
