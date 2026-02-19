@@ -24,15 +24,32 @@ type SaturationState = {
 	lastSignalAtMs: number | null
 }
 
-const PRESSURE_WAITING_THRESHOLD = parseInt(process.env.PG_POOL_PRESSURE_WAITING_THRESHOLD || "1", 10)
-const PRESSURE_UTILIZATION_THRESHOLD = parseInt(process.env.PG_POOL_PRESSURE_UTILIZATION_THRESHOLD || "90", 10)
-const PRESSURE_TIMEOUT_THRESHOLD = parseInt(process.env.PG_POOL_PRESSURE_TIMEOUT_THRESHOLD || "2", 10)
-const SATURATION_ACTIVATION_MS = parseInt(process.env.PG_POOL_SATURATION_ACTIVATION_MS || "15000", 10)
-const SATURATION_RELEASE_MS = parseInt(process.env.PG_POOL_SATURATION_RELEASE_MS || "30000", 10)
-const ACQUIRE_TIMEOUT_WINDOW_MS = parseInt(process.env.PG_POOL_ACQUIRE_TIMEOUT_WINDOW_MS || "30000", 10)
+function readIntEnv(name: string, defaultValue: number, minValue: number, maxValue: number): number {
+	const raw = process.env[name]
+	if (raw === undefined || raw.trim() === "") {
+		return defaultValue
+	}
+
+	const parsed = Number(raw)
+	if (!Number.isInteger(parsed) || parsed < minValue || parsed > maxValue) {
+		throw new Error(
+			`${name} must be an integer between ${minValue} and ${maxValue}. Received: ${JSON.stringify(raw)}`,
+		)
+	}
+
+	return parsed
+}
+
+const PRESSURE_WAITING_THRESHOLD = readIntEnv("PG_POOL_PRESSURE_WAITING_THRESHOLD", 1, 1, 500)
+const PRESSURE_UTILIZATION_THRESHOLD = readIntEnv("PG_POOL_PRESSURE_UTILIZATION_THRESHOLD", 90, 1, 100)
+const PRESSURE_TIMEOUT_THRESHOLD = readIntEnv("PG_POOL_PRESSURE_TIMEOUT_THRESHOLD", 2, 1, 500)
+const SATURATION_ACTIVATION_MS = readIntEnv("PG_POOL_SATURATION_ACTIVATION_MS", 15000, 1000, 300000)
+const SATURATION_RELEASE_MS = readIntEnv("PG_POOL_SATURATION_RELEASE_MS", 30000, 1000, 600000)
+const ACQUIRE_TIMEOUT_WINDOW_MS = readIntEnv("PG_POOL_ACQUIRE_TIMEOUT_WINDOW_MS", 30000, 1000, 600000)
+const ACQUIRE_TIMEOUT_BUCKET_MS = 1000
 
 const perPoolState = new Map<string, SaturationState>()
-const acquireTimeoutTimestamps = new Map<string, number[]>()
+const acquireTimeoutBuckets = new Map<string, Map<number, number>>()
 
 function toIsoOrNull(valueMs: number | null): string | null {
 	return valueMs === null ? null : new Date(valueMs).toISOString()
@@ -61,18 +78,47 @@ function getUtilizationPercent(stats: PoolStats): number {
 	return Math.round((stats.totalConnections / stats.maxConnections) * 100)
 }
 
-function pruneOldTimeouts(poolName: string, nowMs: number): number[] {
-	const list = acquireTimeoutTimestamps.get(poolName) || []
-	const cutoff = nowMs - ACQUIRE_TIMEOUT_WINDOW_MS
-	const pruned = list.filter((timestamp) => timestamp >= cutoff)
-	acquireTimeoutTimestamps.set(poolName, pruned)
-	return pruned
+function getBucketSecond(nowMs: number): number {
+	return Math.floor(nowMs / ACQUIRE_TIMEOUT_BUCKET_MS)
+}
+
+function getOrCreateTimeoutBuckets(poolName: string): Map<number, number> {
+	const existing = acquireTimeoutBuckets.get(poolName)
+	if (existing) {
+		return existing
+	}
+
+	const created = new Map<number, number>()
+	acquireTimeoutBuckets.set(poolName, created)
+	return created
+}
+
+function pruneOldTimeoutBuckets(poolName: string, nowMs: number): Map<number, number> {
+	const buckets = getOrCreateTimeoutBuckets(poolName)
+	const oldestAllowedSecond = getBucketSecond(nowMs - ACQUIRE_TIMEOUT_WINDOW_MS)
+
+	for (const second of buckets.keys()) {
+		if (second < oldestAllowedSecond) {
+			buckets.delete(second)
+		}
+	}
+
+	return buckets
+}
+
+function getRecentTimeoutCount(poolName: string, nowMs: number): number {
+	const buckets = pruneOldTimeoutBuckets(poolName, nowMs)
+	let total = 0
+	for (const count of buckets.values()) {
+		total += count
+	}
+	return total
 }
 
 function getPressureReasons(stats: PoolStats, nowMs: number, poolName: string): SaturationReason[] {
 	const reasons: SaturationReason[] = []
 	const utilizationPercent = getUtilizationPercent(stats)
-	const recentTimeouts = pruneOldTimeouts(poolName, nowMs).length
+	const recentTimeouts = getRecentTimeoutCount(poolName, nowMs)
 
 	if (stats.waitingCount >= PRESSURE_WAITING_THRESHOLD) {
 		reasons.push("waiting_clients")
@@ -90,14 +136,13 @@ function getPressureReasons(stats: PoolStats, nowMs: number, poolName: string): 
 }
 
 export function recordPoolAcquireTimeout(poolName: string, nowMs = Date.now()): void {
-	const list = acquireTimeoutTimestamps.get(poolName) || []
-	list.push(nowMs)
-	acquireTimeoutTimestamps.set(poolName, list)
-	pruneOldTimeouts(poolName, nowMs)
+	const buckets = pruneOldTimeoutBuckets(poolName, nowMs)
+	const second = getBucketSecond(nowMs)
+	buckets.set(second, (buckets.get(second) || 0) + 1)
 }
 
 export function getRecentPoolAcquireTimeoutCount(poolName: string, nowMs = Date.now()): number {
-	return pruneOldTimeouts(poolName, nowMs).length
+	return getRecentTimeoutCount(poolName, nowMs)
 }
 
 export function getPoolSaturationSnapshot(poolName: string, stats: PoolStats, nowMs = Date.now()): SaturationSnapshot {

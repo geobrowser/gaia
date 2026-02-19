@@ -1,0 +1,64 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  labels:
+    app.kubernetes.io/component: metrics-adapter
+    app.kubernetes.io/name: prometheus-adapter
+    app.kubernetes.io/version: 0.12.0
+  name: adapter-config
+  namespace: monitoring
+data:
+  config.yaml: |-
+    resourceRules:
+      cpu:
+        containerLabel: container
+        containerQuery: |
+          sum by (<<.GroupBy>>) (
+            irate (
+                container_cpu_usage_seconds_total{<<.LabelMatchers>>,container!="",pod!=""}[4m]
+            )
+          )
+        nodeQuery: |
+          sum by (<<.GroupBy>>) (
+            irate(
+                node_cpu_usage_seconds_total{<<.LabelMatchers>>}[4m]
+            )
+          )
+        resources:
+          overrides:
+            namespace:
+              resource: namespace
+            node:
+              resource: node
+            pod:
+              resource: pod
+      memory:
+        containerLabel: container
+        containerQuery: |
+          sum by (<<.GroupBy>>) (
+            container_memory_working_set_bytes{<<.LabelMatchers>>,container!="",pod!=""}
+          )
+        nodeQuery: |
+          sum by (<<.GroupBy>>) (
+            node_memory_working_set_bytes{<<.LabelMatchers>>}
+          )
+        resources:
+          overrides:
+            node:
+              resource: node
+            namespace:
+              resource: namespace
+            pod:
+              resource: pod
+      window: 5m
+
+    externalRules:
+      - seriesQuery: '{__name__="nginx_ingress_controller_requests",host="testnet-api.geobrowser.io"}'
+        name:
+          as: api_ingress_503_ratio_rate5m
+        metricsQuery: |
+          (sum(rate(nginx_ingress_controller_requests{host="testnet-api.geobrowser.io",status="503"}[5m])) or vector(0))
+          /
+          clamp_min(sum(rate(nginx_ingress_controller_requests{host="testnet-api.geobrowser.io"}[5m])), 1)
+        resources:
+          namespaced: false

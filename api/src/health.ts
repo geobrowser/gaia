@@ -5,6 +5,22 @@ import {db, getPoolStats} from "./services/storage/storage"
 
 const health = new Hono()
 
+const READINESS_DB_TIMEOUT_MS = parseInt(process.env.READINESS_DB_TIMEOUT_MS || "1000", 10)
+
+async function isDatabaseReachable(): Promise<boolean> {
+	try {
+		await Promise.race([
+			db.execute("SELECT 1"),
+			new Promise((_, reject) =>
+				setTimeout(() => reject(new Error("readiness_db_timeout")), READINESS_DB_TIMEOUT_MS),
+			),
+		])
+		return true
+	} catch {
+		return false
+	}
+}
+
 // Liveness probe — proves the event loop is responsive, no DB or external dependencies.
 // This must never block on I/O so Kubernetes doesn't kill healthy-but-busy pods.
 health.get(
@@ -41,7 +57,7 @@ health.get(
 	describeRoute({
 		tags: ["Health"],
 		summary: "Readiness probe",
-		description: "Returns 200 when pod is ready to receive traffic, 503 when DB pool is saturated.",
+		description: "Returns 200 when pod is ready to receive traffic, 503 when dependencies are unavailable.",
 		responses: {
 			200: {
 				description: "Pod is ready",
@@ -51,10 +67,9 @@ health.get(
 							type: "object",
 							properties: {
 								status: {type: "string", enum: ["ready"]},
-								poolPressure: {type: "object"},
 								timestamp: {type: "string", format: "date-time"},
 							},
-							required: ["status", "poolPressure", "timestamp"],
+							required: ["status", "timestamp"],
 						},
 					},
 				},
@@ -68,21 +83,29 @@ health.get(
 							properties: {
 								status: {type: "string", enum: ["not_ready"]},
 								reason: {type: "string"},
-								poolPressure: {type: "object"},
 								timestamp: {type: "string", format: "date-time"},
 							},
-							required: ["status", "reason", "poolPressure", "timestamp"],
+							required: ["status", "reason", "timestamp"],
 						},
 					},
 				},
 			},
 		},
 	}),
-	(c) => {
+	async (c) => {
 		const poolPressure = getGraphqlPoolPressure()
-		const payload = {
-			poolPressure,
-			timestamp: new Date().toISOString(),
+		const databaseReachable = await isDatabaseReachable()
+		const timestamp = new Date().toISOString()
+
+		if (!databaseReachable) {
+			return c.json(
+				{
+					status: "not_ready",
+					reason: "database_unreachable",
+					timestamp,
+				},
+				503,
+			)
 		}
 
 		if (poolPressure.isSaturated) {
@@ -90,7 +113,7 @@ health.get(
 				{
 					status: "not_ready",
 					reason: "sustained_graphql_pool_saturation",
-					...payload,
+					timestamp,
 				},
 				503,
 			)
@@ -98,7 +121,7 @@ health.get(
 
 		return c.json({
 			status: "ready",
-			...payload,
+			timestamp,
 		})
 	},
 )

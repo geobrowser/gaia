@@ -37,7 +37,7 @@ const pgPool = new Pool({
 	connectionString: process.env.DATABASE_URL,
 	// Pool size - PgBouncer handles multiplexing, so we can be generous here.
 	// The real PostgreSQL connection limit is managed by PgBouncer's pool_size.
-	// With 2 replicas at 50 each = 100 connections, well under PgBouncer's 200 max_client_conn.
+	// With 2 replicas at 50 each = 100 GraphQL connections, well under PgBouncer's 900 max_client_conn.
 	max: parseInt(process.env.PG_POOL_MAX || "50", 10),
 	// Fail fast if no connection available (default is 0 = wait forever, causing hangs)
 	connectionTimeoutMillis: parseInt(process.env.PG_CONNECTION_TIMEOUT_MS || "3000", 10),
@@ -135,19 +135,22 @@ function usePgClient(pool: Pool): Plugin<{pgClient: PoolClient}> {
 	return {
 		async onExecute({extendContext, args}) {
 			const operationName = args.operationName || "anonymous"
-			const query = print(args.document).slice(0, 2000)
-			const queryFingerprint = graphqlQueryFingerprint(query)
+			const fullQuery = print(args.document)
+			const query = fullQuery.slice(0, 2000)
+			const queryFingerprint = graphqlQueryFingerprint(fullQuery)
 			const acquireStartMs = Date.now()
 
 			let pgClient: PoolClient
 			try {
 				pgClient = await pool.connect()
 			} catch (error) {
-				recordGraphqlAcquireTimeout()
 				const err = error instanceof Error ? error : new Error(String(error))
 				const poolStats = getGraphqlPoolStats()
 				const poolPressure = getGraphqlPressureSnapshot(poolStats)
 				const failureClass = classifyDbFailure(err)
+				if (failureClass === "pool_connect_timeout") {
+					recordGraphqlAcquireTimeout()
+				}
 				const acquireWaitMs = Date.now() - acquireStartMs
 				log.error("PostGraphile pool connect error", {
 					error: err.message,
