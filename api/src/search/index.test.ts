@@ -13,10 +13,13 @@ describe("Search Router - Integration Tests", () => {
 		results: [
 			{
 				entityId: "123e4567e89b12d3a456426614174000",
-				spaceId: "abcd1234abcd1234abcd1234abcd5678",
+				space: {id: "abcd1234abcd1234abcd1234abcd5678"},
 				name: "Test Entity",
 				description: "A test entity for search",
-				typeIds: ["abcd1234abcd1234abcd1234abcd0001", "abcd1234abcd1234abcd1234abcd0002"],
+				types: [
+					{id: "abcd1234abcd1234abcd1234abcd0001", name: "Type A"},
+					{id: "abcd1234abcd1234abcd1234abcd0002", name: "Type B"},
+				],
 				entityGlobalScore: 0.8,
 				spaceScore: 0.7,
 				entitySpaceScore: 0.9,

@@ -9,7 +9,15 @@
 
 import {Client} from "@opensearch-project/opensearch"
 import type {SearchClient} from "./client"
-import {SearchError, type SearchQuery, type SearchResponse, type SearchResult, type SearchScope} from "./types"
+import {
+	SearchError,
+	type SearchQuery,
+	type SearchResponse,
+	type SearchResult,
+	type SearchResultSpace,
+	type SearchResultType,
+	type SearchScope,
+} from "./types"
 import {normalizeUuid, toDashedUuid} from "../../utils/uuid"
 
 /**
@@ -183,24 +191,66 @@ export class OpenSearchClient implements SearchClient {
 			fields?: Record<string, number[]>
 		}>
 
-		const results: SearchResult[] = hits.map((hit) => {
-			// Extract typeIds from type_relations array and normalize to dashless format
+		// Collect unique type entity IDs and space topic entity IDs for batch resolution
+		const allTypeEntityIds = new Set<string>()
+		const allSpaceTopicEntityIds = new Set<string>()
+
+		// First pass: extract IDs from hits
+		const hitData = hits.map((hit) => {
 			const typeRelations = hit._source.type_relations as Array<{entity_to_id: string}> | undefined
 			const typeIds = typeRelations?.map((rel) => normalizeUuid(rel.entity_to_id) as string)
+			typeIds?.forEach((id) => allTypeEntityIds.add(id))
 
+			const spaceTopicEntityId = hit._source.space_topic_entity_id as string | undefined
+			if (spaceTopicEntityId) {
+				allSpaceTopicEntityIds.add(normalizeUuid(spaceTopicEntityId) as string)
+			}
+
+			return {hit, typeIds, spaceTopicEntityId}
+		})
+
+		// Batch-resolve type names and space metadata in parallel
+		const [typeNameMap, spaceMetadataMap] = await Promise.all([
+			this.resolveTypeNames([...allTypeEntityIds]),
+			this.resolveSpaceMetadata([...allSpaceTopicEntityIds]),
+		])
+
+		// Second pass: build results with enriched data
+		const results: SearchResult[] = hitData.map(({hit, typeIds, spaceTopicEntityId}) => {
 			// Compute relevanceScore and textMatchScore
 			const relevanceScore = hit._score
 			const scoreBoost = hit.fields?.score_boost?.[0]
 			const textMatchScore = scoreBoost !== undefined ? Math.max(0, relevanceScore - scoreBoost) : relevanceScore
 
+			// Build enriched types array
+			const types: SearchResultType[] | undefined = typeIds?.length
+				? typeIds.map((id) => ({id, name: typeNameMap.get(id)}))
+				: undefined
+
+			// Build enriched space object
+			const spaceId = normalizeUuid(hit._source.space_id as string) as string
+			const normalizedTopicId = spaceTopicEntityId
+				? (normalizeUuid(spaceTopicEntityId) as string)
+				: undefined
+			const spaceMeta = normalizedTopicId ? spaceMetadataMap.get(normalizedTopicId) : undefined
+			const space: SearchResultSpace = {
+				id: spaceId,
+				...(spaceMeta && {
+					name: spaceMeta.name,
+					description: spaceMeta.description,
+					avatar: spaceMeta.avatar,
+					cover: spaceMeta.cover,
+				}),
+			}
+
 			return {
 				entityId: normalizeUuid(hit._source.entity_id as string) as string,
-				spaceId: normalizeUuid(hit._source.space_id as string) as string,
+				space,
 				name: hit._source.name as string | undefined,
 				description: hit._source.description as string | undefined,
 				avatar: hit._source.avatar as string | undefined,
 				cover: hit._source.cover as string | undefined,
-				typeIds: typeIds?.length ? typeIds : undefined,
+				types,
 				entityGlobalScore: hit._source.entity_global_score as number | undefined,
 				spaceScore: hit._source.space_score as number | undefined,
 				entitySpaceScore: hit._source.entity_space_score as number | undefined,
@@ -214,6 +264,76 @@ export class OpenSearchClient implements SearchClient {
 			total: typeof body.hits.total === "number" ? body.hits.total : (body.hits.total?.value ?? 0),
 			tookMs: body.took,
 		}
+	}
+
+	/**
+	 * Batch-fetch type entity names from the index.
+	 * Returns a map of typeEntityId → name.
+	 */
+	private async resolveTypeNames(typeEntityIds: string[]): Promise<Map<string, string>> {
+		if (typeEntityIds.length === 0) return new Map()
+
+		// Include both dashed and dashless variants since the index may store either format
+		const termVariants = typeEntityIds.flatMap((id) => uuidTermVariants(id))
+
+		const response = await this.client.search({
+			index: this.indexName,
+			body: {
+				query: {terms: {entity_id: termVariants}},
+				_source: ["entity_id", "name"],
+				size: typeEntityIds.length,
+			},
+		})
+
+		const nameMap = new Map<string, string>()
+		for (const hit of response.body.hits.hits) {
+			const source = hit._source as Record<string, unknown>
+			const entityId = normalizeUuid(source.entity_id as string) as string
+			if (source.name && !nameMap.has(entityId)) {
+				nameMap.set(entityId, source.name as string)
+			}
+		}
+		return nameMap
+	}
+
+	/**
+	 * Batch-fetch space metadata from topic entities in the index.
+	 * Returns a map of topicEntityId → { name, description, avatar, cover }.
+	 */
+	private async resolveSpaceMetadata(
+		topicEntityIds: string[],
+	): Promise<Map<string, {name?: string; description?: string; avatar?: string; cover?: string}>> {
+		if (topicEntityIds.length === 0) return new Map()
+
+		// Include both dashed and dashless variants since the index may store either format
+		const termVariants = topicEntityIds.flatMap((id) => uuidTermVariants(id))
+
+		const response = await this.client.search({
+			index: this.indexName,
+			body: {
+				query: {terms: {entity_id: termVariants}},
+				_source: ["entity_id", "name", "description", "avatar", "cover"],
+				size: topicEntityIds.length,
+			},
+		})
+
+		const metadataMap = new Map<
+			string,
+			{name?: string; description?: string; avatar?: string; cover?: string}
+		>()
+		for (const hit of response.body.hits.hits) {
+			const source = hit._source as Record<string, unknown>
+			const entityId = normalizeUuid(source.entity_id as string) as string
+			if (!metadataMap.has(entityId)) {
+				metadataMap.set(entityId, {
+					name: source.name as string | undefined,
+					description: source.description as string | undefined,
+					avatar: source.avatar as string | undefined,
+					cover: source.cover as string | undefined,
+				})
+			}
+		}
+		return metadataMap
 	}
 
 	/**

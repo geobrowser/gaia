@@ -15,9 +15,9 @@ echo "This will generate test events in your local Kafka broker at localhost:909
 
 # Show prefixed topic names based on environment
 if [ "$ENVIRONMENT" = "staging" ]; then
-    echo "Topics: staging.knowledge.edits and staging.curation.scores"
+    echo "Topics: staging.knowledge.edits, staging.curation.scores, and staging.space.topics"
 else
-    echo "Topics: knowledge.edits and curation.scores"
+    echo "Topics: knowledge.edits, curation.scores, and space.topics"
 fi
 echo ""
 

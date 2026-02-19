@@ -44,6 +44,9 @@ pub struct UpdateEntityRequest {
     pub entity_space_score: Option<f64>,
     /// Soft delete flag - None for active entities, Some(true) for deleted entities.
     pub deleted: Option<bool>,
+    /// The topic entity ID for this entity's space.
+    /// Set from the in-memory cache during upserts.
+    pub space_topic_entity_id: Option<String>,
 }
 
 /// Request to delete an entity document from the search index.
@@ -120,6 +123,18 @@ pub struct UpdateEntitySpaceScoreRequest {
     pub score: f64,
 }
 
+/// Request to update the space_topic_entity_id for all entities in a space.
+///
+/// This will set the `space_topic_entity_id` field for ALL documents
+/// that have the given space_id, using update_by_query.
+#[derive(Debug, Clone)]
+pub struct UpdateSpaceTopicEntityIdRequest {
+    /// The space's unique identifier.
+    pub space_id: String,
+    /// The topic entity ID that represents this space.
+    pub topic_entity_id: String,
+}
+
 /// A single operation in a bulk request.
 ///
 /// This enum represents any operation that can be performed on an entity document.
@@ -144,6 +159,9 @@ pub enum EntityOperation {
     /// Update an entity's score within a specific space.
     /// Uses a targeted update for the specific entity+space document.
     UpdateEntitySpaceScore(UpdateEntitySpaceScoreRequest),
+    /// Update the space_topic_entity_id for all entities in a space.
+    /// Uses update_by_query to set the topic entity ID on all documents in the space.
+    UpdateSpaceTopicEntityId(UpdateSpaceTopicEntityIdRequest),
 }
 
 impl EntityOperation {
@@ -158,6 +176,7 @@ impl EntityOperation {
             EntityOperation::UpdateEntityGlobalScore(r) => &r.entity_id,
             EntityOperation::UpdateSpaceScore(_) => "",
             EntityOperation::UpdateEntitySpaceScore(r) => &r.entity_id,
+            EntityOperation::UpdateSpaceTopicEntityId(_) => "",
         }
     }
 
@@ -172,6 +191,7 @@ impl EntityOperation {
             EntityOperation::UpdateEntityGlobalScore(_) => "",
             EntityOperation::UpdateSpaceScore(r) => &r.space_id,
             EntityOperation::UpdateEntitySpaceScore(r) => &r.space_id,
+            EntityOperation::UpdateSpaceTopicEntityId(r) => &r.space_id,
         }
     }
 
@@ -185,6 +205,7 @@ impl EntityOperation {
             EntityOperation::UpdateEntityGlobalScore(_) => "UpdateEntityGlobalScore",
             EntityOperation::UpdateSpaceScore(_) => "UpdateSpaceScore",
             EntityOperation::UpdateEntitySpaceScore(_) => "UpdateEntitySpaceScore",
+            EntityOperation::UpdateSpaceTopicEntityId(_) => "UpdateSpaceTopicEntityId",
         }
     }
 }

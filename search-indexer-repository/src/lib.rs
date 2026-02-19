@@ -21,6 +21,6 @@ pub use types::{
     BatchOperationResult, BatchOperationSummary, DeleteEntityRequest, EntityOperation,
     RemoveTypeRelationData, TypeRelationData, UnsetEntityPropertiesRequest,
     UpdateEntityGlobalScoreRequest, UpdateEntityRequest, UpdateEntitySpaceScoreRequest,
-    UpdateSpaceScoreRequest,
+    UpdateSpaceScoreRequest, UpdateSpaceTopicEntityIdRequest,
 };
 pub use utils::parse_entity_and_space_ids;

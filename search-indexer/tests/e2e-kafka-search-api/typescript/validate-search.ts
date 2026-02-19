@@ -70,6 +70,10 @@ const TEST_ENTITIES = {
   GEO_EXACT_ID: '0000000000000000000000000000bb01',     // name="Geo", desc="Geo is a network..."
   GEO_PREFIX_ID: '0000000000000000000000000000bb02',    // name="geojson_preview_tool", desc="Generate a geojson.io URL..."
   GEO_GRAPH_ID: '0000000000000000000000000000bb03',     // name="Geo Graph", desc="Geo Graph is an open source tool..."
+  // Topic entity for space metadata enrichment
+  TOPIC_ENTITY_ID: '00000000000000000000000000000d00',   // represents test_space as a topic entity
+  // Late entity created AFTER space.topics event (tests cache-hit ordering)
+  LATE_ENTITY_ID: '0000000000000000000000000000af01',    // name="Frankie Late", created after HermesTopicDeclared
 };
 
 interface TestResult {
@@ -206,9 +210,9 @@ class SearchValidator {
     }
   }
 
-  /** Verifies entities have required fields: entityId, name, description, typeIds, scores. */
+  /** Verifies entities have required fields: entityId, name, description, types, space, scores. */
   async test4_EntityFields(): Promise<void> {
-    console.log(`\n${BLUE}Test 4: Verify entity fields (entityId, name, description, typeIds)${NC}`);
+    console.log(`\n${BLUE}Test 4: Verify entity fields (entityId, name, description, types, space)${NC}`);
 
     const response = await this.search({
       query: 'alice',
@@ -221,13 +225,14 @@ class SearchValidator {
       const hasEntityId = firstEntity.entityId !== undefined && firstEntity.entityId !== null;
       const hasName = firstEntity.name !== undefined && firstEntity.name !== null;
       const hasDescription = firstEntity.description !== undefined;
-      const hasTypeIds = Array.isArray(firstEntity.typeIds);
+      const hasTypes = Array.isArray(firstEntity.types);
+      const hasSpace = firstEntity.space !== undefined && firstEntity.space.id !== undefined;
 
-      if (hasEntityId && hasName && hasDescription && hasTypeIds) {
-        this.addResult('test4_fields', true, `Entity has all expected fields (entityId, name, description, typeIds)`);
+      if (hasEntityId && hasName && hasDescription && hasTypes && hasSpace) {
+        this.addResult('test4_fields', true, `Entity has all expected fields (entityId, name, description, types, space)`);
       } else {
         this.addResult('test4_fields', false,
-          `Entity missing fields - entityId:${hasEntityId} name:${hasName} desc:${hasDescription} typeIds:${hasTypeIds}`);
+          `Entity missing fields - entityId:${hasEntityId} name:${hasName} desc:${hasDescription} types:${hasTypes} space:${hasSpace}`);
       }
 
       // Check score fields exist (camelCase as per API types)
@@ -374,9 +379,9 @@ class SearchValidator {
     }
   }
 
-  /** Verifies typeIds reflect type relation create/delete scenarios. */
+  /** Verifies types reflect type relation create/delete scenarios. */
   async test8_TypeIdsScenarios(): Promise<void> {
-    console.log(`\n${BLUE}Test 8: Verify typeIds field for different relation scenarios${NC}`);
+    console.log(`\n${BLUE}Test 8: Verify types field for different relation scenarios${NC}`);
 
     const response = await this.search({
       query: 'alice',
@@ -384,7 +389,7 @@ class SearchValidator {
     });
 
     if (response.results.length < 3) {
-      this.addResult('test8_count', false, `Need at least 3 Alice entities for typeIds tests, got ${response.results.length}`);
+      this.addResult('test8_count', false, `Need at least 3 Alice entities for types tests, got ${response.results.length}`);
       return;
     }
 
@@ -392,12 +397,12 @@ class SearchValidator {
     const aliceHigh = response.results.find(r => r.entityId === TEST_ENTITIES.ALICE_HIGH_ID);
 
     if (aliceHigh) {
-      if (aliceHigh.typeIds?.length === 2) {
+      if (aliceHigh.types?.length === 2) {
         this.addResult('test8_alice_high_multiple', true,
           `Alice High (${TEST_ENTITIES.ALICE_HIGH_ID}) has 2 types (multiple type relations work)`);
       } else {
         this.addResult('test8_alice_high_multiple', false,
-          `Alice High (${TEST_ENTITIES.ALICE_HIGH_ID}) should have 2 types, got ${aliceHigh.typeIds?.length || 0}`);
+          `Alice High (${TEST_ENTITIES.ALICE_HIGH_ID}) should have 2 types, got ${aliceHigh.types?.length || 0}`);
       }
     } else {
       this.addResult('test8_alice_high_multiple', false, `Could not find Alice High entity (${TEST_ENTITIES.ALICE_HIGH_ID})`);
@@ -407,12 +412,12 @@ class SearchValidator {
     const aliceMedium = response.results.find(r => r.entityId === TEST_ENTITIES.ALICE_MEDIUM_ID);
 
     if (aliceMedium) {
-      if (aliceMedium.typeIds?.length === 2) {
+      if (aliceMedium.types?.length === 2) {
         this.addResult('test8_alice_medium_recreate', true,
           `Alice Medium (${TEST_ENTITIES.ALICE_MEDIUM_ID}) has 2 types (Create->Delete->Create pattern works, final create processed)`);
       } else {
         this.addResult('test8_alice_medium_recreate', false,
-          `Alice Medium (${TEST_ENTITIES.ALICE_MEDIUM_ID}) should have 2 types after recreate, got ${aliceMedium.typeIds?.length || 0}`);
+          `Alice Medium (${TEST_ENTITIES.ALICE_MEDIUM_ID}) should have 2 types after recreate, got ${aliceMedium.types?.length || 0}`);
       }
     } else {
       this.addResult('test8_alice_medium_recreate', false, `Could not find Alice Medium entity (${TEST_ENTITIES.ALICE_MEDIUM_ID})`);
@@ -422,12 +427,12 @@ class SearchValidator {
     const aliceLow = response.results.find(r => r.entityId === TEST_ENTITIES.ALICE_LOW_ID);
 
     if (aliceLow) {
-      if (aliceLow.typeIds?.length === 1) {
+      if (aliceLow.types?.length === 1) {
         this.addResult('test8_alice_low_partial_removal', true,
           `Alice Low (${TEST_ENTITIES.ALICE_LOW_ID}) has 1 type (partial removal works, kept Person after Org deleted)`);
       } else {
         this.addResult('test8_alice_low_partial_removal', false,
-          `Alice Low (${TEST_ENTITIES.ALICE_LOW_ID}) should have 1 type after partial removal, got ${aliceLow.typeIds?.length || 0}`);
+          `Alice Low (${TEST_ENTITIES.ALICE_LOW_ID}) should have 1 type after partial removal, got ${aliceLow.types?.length || 0}`);
       }
     } else {
       this.addResult('test8_alice_low_partial_removal', false, `Could not find Alice Low entity (${TEST_ENTITIES.ALICE_LOW_ID})`);
@@ -444,7 +449,7 @@ class SearchValidator {
     let allOthersHaveOneType = true;
     for (const aliceId of otherAliceIds) {
       const alice = response.results.find(r => r.entityId === aliceId);
-      if (alice && (!Array.isArray(alice.typeIds) || alice.typeIds.length !== 1)) {
+      if (alice && (!Array.isArray(alice.types) || alice.types.length !== 1)) {
         allOthersHaveOneType = false;
         break;
       }
@@ -2021,8 +2026,8 @@ class SearchValidator {
 
     const DASHLESS_PATTERN = /^[0-9a-f]{32}$/;
 
-    // 34a: Verify response entityId is dashless
-    console.log(`  ${BLUE}→ 34a: Verify response entityId/spaceId/typeIds are dashless UUIDs${NC}`);
+    // 34a: Verify response entityId, space.id, and types[].id are dashless
+    console.log(`  ${BLUE}→ 34a: Verify response entityId/space.id/types[].id are dashless UUIDs${NC}`);
     const response = await this.search({
       query: 'alice',
       scope: 'GLOBAL',
@@ -2043,23 +2048,24 @@ class SearchValidator {
         `entityId should be dashless (32 hex chars), got: ${firstResult.entityId}`);
     }
 
-    if (DASHLESS_PATTERN.test(firstResult.spaceId)) {
+    if (DASHLESS_PATTERN.test(firstResult.space.id)) {
       this.addResult('test34a_spaceId_dashless', true,
-        `spaceId is dashless format: ${firstResult.spaceId}`);
+        `space.id is dashless format: ${firstResult.space.id}`);
     } else {
       this.addResult('test34a_spaceId_dashless', false,
-        `spaceId should be dashless (32 hex chars), got: ${firstResult.spaceId}`);
+        `space.id should be dashless (32 hex chars), got: ${firstResult.space.id}`);
     }
 
-    if (firstResult.typeIds && firstResult.typeIds.length > 0) {
-      const allTypeIdsDashless = firstResult.typeIds.every(id => DASHLESS_PATTERN.test(id));
+    const typeIds = firstResult.types?.map(t => t.id);
+    if (typeIds && typeIds.length > 0) {
+      const allTypeIdsDashless = typeIds.every(id => DASHLESS_PATTERN.test(id));
       if (allTypeIdsDashless) {
         this.addResult('test34a_typeIds_dashless', true,
-          `All typeIds are dashless format (${firstResult.typeIds.length} IDs)`);
+          `All type IDs are dashless format (${typeIds.length} IDs)`);
       } else {
-        const badId = firstResult.typeIds.find(id => !DASHLESS_PATTERN.test(id));
+        const badId = typeIds.find(id => !DASHLESS_PATTERN.test(id));
         this.addResult('test34a_typeIds_dashless', false,
-          `typeIds should be dashless, found: ${badId}`);
+          `type IDs should be dashless, found: ${badId}`);
       }
     }
 
@@ -2093,6 +2099,176 @@ class SearchValidator {
     } else {
       this.addResult('test34c_dashless_space_id', false,
         `Dashless space_id (${TEST_ENTITIES.SPACE_ID}) should return results`);
+    }
+  }
+
+  /** Verifies space metadata enrichment and type name resolution, including ordering scenarios. */
+  async test35_SpaceAndTypeEnrichment(): Promise<void> {
+    console.log(`\n${BLUE}Test 35: Verify space metadata enrichment and type name resolution${NC}`);
+
+    // 35a: Space metadata enrichment — entity created BEFORE space.topics event
+    console.log(`  ${BLUE}→ 35a: Space metadata on entity created BEFORE space.topics event (update_by_query path)${NC}`);
+    const aliceResponse = await this.search({
+      query: 'alice',
+      scope: 'GLOBAL',
+    });
+
+    const aliceHigh = aliceResponse.results.find(r => r.entityId === TEST_ENTITIES.ALICE_HIGH_ID);
+
+    if (!aliceHigh) {
+      this.addResult('test35a_alice_found', false, `Could not find Alice High entity (${TEST_ENTITIES.ALICE_HIGH_ID})`);
+    } else {
+      if (aliceHigh.space.id === TEST_ENTITIES.SPACE_ID) {
+        this.addResult('test35a_space_id', true, `Alice High space.id matches test space`);
+      } else {
+        this.addResult('test35a_space_id', false,
+          `Alice High space.id should be ${TEST_ENTITIES.SPACE_ID}, got ${aliceHigh.space.id}`);
+      }
+
+      if (aliceHigh.space.name === 'Test Space') {
+        this.addResult('test35a_space_name', true, `Alice High space.name is "Test Space"`);
+      } else {
+        this.addResult('test35a_space_name', false,
+          `Alice High space.name should be "Test Space", got "${aliceHigh.space.name}"`);
+      }
+
+      if (aliceHigh.space.description && aliceHigh.space.description.length > 0) {
+        this.addResult('test35a_space_description', true,
+          `Alice High space.description is populated: "${aliceHigh.space.description}"`);
+      } else {
+        this.addResult('test35a_space_description', false,
+          `Alice High space.description should be populated`);
+      }
+
+      if (aliceHigh.space.avatar && aliceHigh.space.avatar.length > 0) {
+        this.addResult('test35a_space_avatar', true,
+          `Alice High space.avatar is populated: "${aliceHigh.space.avatar}"`);
+      } else {
+        this.addResult('test35a_space_avatar', false,
+          `Alice High space.avatar should be populated`);
+      }
+    }
+
+    // 35b: Space metadata enrichment — entity created AFTER space.topics event (cache-hit path)
+    console.log(`  ${BLUE}→ 35b: Space metadata on entity created AFTER space.topics event (cache-hit path)${NC}`);
+    const lateResponse = await this.search({
+      query: 'frankie late',
+      scope: 'GLOBAL',
+    });
+
+    const lateEntity = lateResponse.results.find(r => r.entityId === TEST_ENTITIES.LATE_ENTITY_ID);
+
+    if (!lateEntity) {
+      this.addResult('test35b_late_found', false,
+        `Could not find Frankie Late entity (${TEST_ENTITIES.LATE_ENTITY_ID})`);
+    } else {
+      if (lateEntity.space.id === TEST_ENTITIES.SPACE_ID) {
+        this.addResult('test35b_space_id', true, `Frankie Late space.id matches test space`);
+      } else {
+        this.addResult('test35b_space_id', false,
+          `Frankie Late space.id should be ${TEST_ENTITIES.SPACE_ID}, got ${lateEntity.space.id}`);
+      }
+
+      if (lateEntity.space.name === 'Test Space') {
+        this.addResult('test35b_space_name', true,
+          `Frankie Late space.name is "Test Space" (cache-hit ordering works)`);
+      } else {
+        this.addResult('test35b_space_name', false,
+          `Frankie Late space.name should be "Test Space", got "${lateEntity.space.name}" (cache-hit ordering may have failed)`);
+      }
+
+      if (lateEntity.space.avatar && lateEntity.space.avatar.length > 0) {
+        this.addResult('test35b_space_avatar', true,
+          `Frankie Late space.avatar is populated (cache-hit ordering works)`);
+      } else {
+        this.addResult('test35b_space_avatar', false,
+          `Frankie Late space.avatar should be populated (cache-hit ordering may have failed)`);
+      }
+    }
+
+    // 35c: Type name resolution — Alice High has Person + Organization types with names
+    console.log(`  ${BLUE}→ 35c: Type name resolution on Alice High (Person + Organization)${NC}`);
+    if (aliceHigh) {
+      if (!Array.isArray(aliceHigh.types) || aliceHigh.types.length !== 2) {
+        this.addResult('test35c_type_count', false,
+          `Alice High should have 2 types, got ${aliceHigh.types?.length || 0}`);
+      } else {
+        this.addResult('test35c_type_count', true, `Alice High has 2 types`);
+
+        const typeNames = aliceHigh.types.map(t => t.name).sort();
+        const hasOrganization = typeNames.includes('Organization');
+        const hasPerson = typeNames.includes('Person');
+
+        if (hasPerson && hasOrganization) {
+          this.addResult('test35c_type_names', true,
+            `Type names resolved: ${typeNames.join(', ')}`);
+        } else {
+          this.addResult('test35c_type_names', false,
+            `Expected type names ["Organization", "Person"], got ${JSON.stringify(typeNames)}`);
+        }
+      }
+    }
+
+    // 35d: Type id values — verify IDs match expected constants
+    console.log(`  ${BLUE}→ 35d: Type id values match expected constants${NC}`);
+    if (aliceHigh && Array.isArray(aliceHigh.types) && aliceHigh.types.length === 2) {
+      const typeIdSet = new Set(aliceHigh.types.map(t => t.id));
+      const hasPersonId = typeIdSet.has(TEST_ENTITIES.PERSON_TYPE_ID);
+      const hasOrgId = typeIdSet.has(TEST_ENTITIES.ORG_TYPE_ID);
+
+      if (hasPersonId && hasOrgId) {
+        this.addResult('test35d_type_ids', true,
+          `Type IDs match: Person=${TEST_ENTITIES.PERSON_TYPE_ID}, Org=${TEST_ENTITIES.ORG_TYPE_ID}`);
+      } else {
+        this.addResult('test35d_type_ids', false,
+          `Expected type IDs [${TEST_ENTITIES.PERSON_TYPE_ID}, ${TEST_ENTITIES.ORG_TYPE_ID}], got ${JSON.stringify(Array.from(typeIdSet))}`);
+      }
+    }
+  }
+
+  /**
+   * Test 36: Verify that a space.topics event creates a stub document in the index.
+   *
+   * The topic entity should be findable by its entity ID, proving the
+   * HermesTopicDeclared event alone is enough to create a document.
+   */
+  async test36_SpaceTopicCreatesDocument(): Promise<void> {
+    console.log(`\n${BLUE}Test 36: Verify space.topics event creates a document for the topic entity${NC}`);
+
+    // Search for the topic entity by its UUID — this should find the stub document
+    // created by the space.topics consumer, even if knowledge.edits also enriched it.
+    const response = await this.search({
+      query: TEST_ENTITIES.TOPIC_ENTITY_ID,
+      scope: 'GLOBAL',
+    });
+
+    const topicEntity = response.results.find(r => r.entityId === TEST_ENTITIES.TOPIC_ENTITY_ID);
+
+    if (!topicEntity) {
+      this.addResult('test36_topic_entity_exists', false,
+        `Topic entity (${TEST_ENTITIES.TOPIC_ENTITY_ID}) not found in index — space.topics event should create a stub document`);
+      return;
+    }
+
+    this.addResult('test36_topic_entity_exists', true,
+      `Topic entity (${TEST_ENTITIES.TOPIC_ENTITY_ID}) found in index`);
+
+    // The topic entity should belong to the test space
+    if (topicEntity.space.id === TEST_ENTITIES.SPACE_ID) {
+      this.addResult('test36_topic_space_id', true,
+        `Topic entity space.id matches test space`);
+    } else {
+      this.addResult('test36_topic_space_id', false,
+        `Topic entity space.id should be ${TEST_ENTITIES.SPACE_ID}, got ${topicEntity.space.id}`);
+    }
+
+    // The topic entity's own space metadata should resolve to itself
+    if (topicEntity.space.name === 'Test Space') {
+      this.addResult('test36_topic_self_resolve', true,
+        `Topic entity resolves its own space.name: "Test Space"`);
+    } else {
+      this.addResult('test36_topic_self_resolve', false,
+        `Topic entity space.name should be "Test Space" (self-resolve), got "${topicEntity.space.name}"`);
     }
   }
 
@@ -2191,6 +2367,8 @@ async function main() {
     await validator.test32_GlobalByEntitySpaceScoreSearch();
     await validator.test33_ExactShortNameBeatsLongerPrefixName();
     await validator.test34_DashlessUuidFormat();
+    await validator.test35_SpaceAndTypeEnrichment();
+    await validator.test36_SpaceTopicCreatesDocument();
 
     const allPassed = validator.printSummary();
     process.exit(allPassed ? 0 : 1);

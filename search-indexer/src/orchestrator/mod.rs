@@ -12,7 +12,7 @@ use hermes_instrumentation::{error, info, instrument};
 #[cfg(unix)]
 use tokio::signal::unix::{signal, SignalKind};
 
-use crate::consumer::{EntitiesConsumer, EntityEvent, ScoresConsumer, StreamMessage};
+use crate::consumer::{EntitiesConsumer, EntityEvent, ScoresConsumer, SpaceTopicsConsumer, StreamMessage};
 use crate::errors::IngestError;
 use crate::loader::SearchLoader;
 use crate::metrics::SearchIndexerMetrics;
@@ -50,11 +50,35 @@ pub trait ScoresConsumerTrait: Send + Sync {
     ) -> Result<(), IngestError>;
 }
 
+/// Trait for space topic event consumers used by the orchestrator.
+/// This allows for dependency injection and testing with mock consumers.
+#[async_trait::async_trait]
+pub trait SpaceTopicsConsumerTrait: Send + Sync {
+    /// Subscribe to the configured topics/channels.
+    fn subscribe(&self) -> Result<(), IngestError>;
+
+    /// Run the consumer, sending events to processor and receiving acknowledgments from loader.
+    async fn run(
+        &self,
+        processor_tx: mpsc::Sender<SpaceTopicProcessingBatch>,
+        ack_receiver: mpsc::Receiver<StreamMessage>,
+        shutdown: tokio::sync::broadcast::Receiver<()>,
+    ) -> Result<(), IngestError>;
+}
+
 /// Configuration for the orchestrator.
 #[derive(Debug, Clone)]
 pub struct OrchestratorConfig {
     /// Size of the message channel buffers.
     pub channel_buffer_size: usize,
+}
+
+/// Identifies which consumer pipeline a processed batch originated from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BatchSource {
+    Entity,
+    Score,
+    SpaceTopic,
 }
 
 /// Processed batch ready for loading with associated offsets for acknowledgment.
@@ -63,7 +87,7 @@ pub struct ProcessedBatch {
     pub events: Vec<ProcessedEvent>,
     pub offsets: Vec<(String, i32, i64)>, // Kafka offsets for acknowledgment
     pub index_count: usize,               // Number of index operations for metrics
-    pub is_scores_batch: bool,            // True if this batch originated from scores consumer
+    pub source: BatchSource,
 }
 
 /// Batch of entity events to be processed with their offsets.
@@ -78,6 +102,14 @@ pub struct EntityProcessingBatch {
 #[derive(Debug, Clone)]
 pub struct ScoreProcessingBatch {
     pub events: Vec<crate::consumer::ScoreEvent>,
+    pub offsets: Vec<(String, i32, i64)>, // Kafka offsets for acknowledgment
+    pub event_count: usize,               // Number of events for metrics
+}
+
+/// Batch of space topic events to be processed with their offsets.
+#[derive(Debug, Clone)]
+pub struct SpaceTopicProcessingBatch {
+    pub events: Vec<crate::consumer::SpaceTopicEvent>,
     pub offsets: Vec<(String, i32, i64)>, // Kafka offsets for acknowledgment
     pub event_count: usize,               // Number of events for metrics
 }
@@ -128,6 +160,7 @@ impl OrchestratorConfig {
 pub struct Orchestrator {
     entities_consumer: Arc<dyn EntitiesConsumerTrait>,
     scores_consumer: Arc<dyn ScoresConsumerTrait>,
+    space_topics_consumer: Arc<dyn SpaceTopicsConsumerTrait>,
     processor: Processor,
     loader: SearchLoader,
     config: OrchestratorConfig,
@@ -140,6 +173,7 @@ impl Orchestrator {
     pub fn new(
         entities_consumer: Arc<dyn EntitiesConsumerTrait>,
         scores_consumer: Arc<dyn ScoresConsumerTrait>,
+        space_topics_consumer: Arc<dyn SpaceTopicsConsumerTrait>,
         processor: Processor,
         loader: SearchLoader,
     ) -> Self {
@@ -148,6 +182,7 @@ impl Orchestrator {
         Self {
             entities_consumer,
             scores_consumer,
+            space_topics_consumer,
             processor,
             loader,
             config: OrchestratorConfig::default(),
@@ -160,6 +195,7 @@ impl Orchestrator {
     pub fn with_config(
         entities_consumer: Arc<dyn EntitiesConsumerTrait>,
         scores_consumer: Arc<dyn ScoresConsumerTrait>,
+        space_topics_consumer: Arc<dyn SpaceTopicsConsumerTrait>,
         processor: Processor,
         loader: SearchLoader,
         config: OrchestratorConfig,
@@ -169,6 +205,7 @@ impl Orchestrator {
         Self {
             entities_consumer,
             scores_consumer,
+            space_topics_consumer,
             processor,
             loader,
             config,
@@ -188,6 +225,7 @@ impl Orchestrator {
         // Take ownership of components to avoid partial moves
         let entities_consumer = self.entities_consumer;
         let scores_consumer = self.scores_consumer;
+        let space_topics_consumer = self.space_topics_consumer;
         let processor = self.processor;
         let loader = self.loader;
         let config = self.config;
@@ -204,6 +242,9 @@ impl Orchestrator {
         scores_consumer.subscribe()?;
         info!("Scores consumer subscribed");
 
+        space_topics_consumer.subscribe()?;
+        info!("Space topics consumer subscribed");
+
         // Create channels for direct component-to-component communication:
         // Consumer -> Processor -> Loader -> Consumer (for acks)
 
@@ -211,7 +252,7 @@ impl Orchestrator {
         let (entities_processor_tx, entities_processor_rx) =
             mpsc::channel::<EntityProcessingBatch>(config.channel_buffer_size);
 
-        // Channel from processor to loader (shared by both entity and score events)
+        // Channel from processor to loader (shared by all event types)
         let (loader_tx, loader_rx) = mpsc::channel::<ProcessedBatch>(config.channel_buffer_size);
 
         // Channel from loader back to entities consumer (for acknowledgments)
@@ -226,6 +267,14 @@ impl Orchestrator {
         let (scores_ack_tx, scores_ack_rx) =
             mpsc::channel::<StreamMessage>(config.channel_buffer_size);
 
+        // Channels from space topics consumer to processor
+        let (space_topics_processor_tx, space_topics_processor_rx) =
+            mpsc::channel::<SpaceTopicProcessingBatch>(config.channel_buffer_size);
+
+        // Channel from loader back to space topics consumer (for acknowledgments)
+        let (space_topics_ack_tx, space_topics_ack_rx) =
+            mpsc::channel::<StreamMessage>(config.channel_buffer_size);
+
         // Clone senders for components that need them
         let entities_processor_tx_for_consumer = entities_processor_tx.clone();
         let loader_tx_for_processor = loader_tx.clone();
@@ -233,14 +282,18 @@ impl Orchestrator {
         let entities_ack_tx_for_loader = entities_ack_tx.clone();
         let scores_ack_tx_for_processor = scores_ack_tx.clone();
         let scores_ack_tx_for_loader = scores_ack_tx.clone();
+        let space_topics_ack_tx_for_processor = space_topics_ack_tx.clone();
+        let space_topics_ack_tx_for_loader = space_topics_ack_tx.clone();
 
-        // Start processor task - receives from both consumers, sends to loader
+        // Start processor task - receives from all consumers, sends to loader
         let processor_handle = processor.run(
             entities_processor_rx,
             scores_processor_rx,
+            space_topics_processor_rx,
             loader_tx_for_processor,
             entities_ack_tx_for_processor,
             scores_ack_tx_for_processor,
+            space_topics_ack_tx_for_processor,
             Arc::clone(&metrics),
         );
 
@@ -270,17 +323,29 @@ impl Orchestrator {
         // So that we can await it later on shutdown
         tokio::pin!(scores_consumer_handle);
 
+        // Start space topics consumer task
+        let space_topics_consumer_clone = Arc::clone(&space_topics_consumer);
+        let shutdown_rx = shutdown_tx.subscribe();
+        let space_topics_consumer_handle = tokio::spawn(async move {
+            space_topics_consumer_clone
+                .run(space_topics_processor_tx, space_topics_ack_rx, shutdown_rx)
+                .await
+        });
+        // So that we can await it later on shutdown
+        tokio::pin!(space_topics_consumer_handle);
+
         // Start loader task - receives from processor, sends acks to appropriate consumer
         let loader_handle = loader.run(
             loader_rx,
             entities_ack_tx_for_loader,
             scores_ack_tx_for_loader,
+            space_topics_ack_tx_for_loader,
             Arc::clone(&metrics),
         );
 
         // Orchestrator now just monitors for shutdown and metrics
         // Components communicate directly with each other
-        info!("Ready to process events from Kafka (entities + scores) - components communicating directly");
+        info!("Ready to process events from Kafka (entities + scores + space topics) - components communicating directly");
 
         // Set up progress logging timer (every 10 seconds)
         let metrics_ref = Arc::clone(&metrics);
@@ -299,6 +364,9 @@ impl Orchestrator {
             Result<Result<(), IngestError>, tokio::task::JoinError>,
         > = None;
         let mut scores_consumer_result: Option<
+            Result<Result<(), IngestError>, tokio::task::JoinError>,
+        > = None;
+        let mut space_topics_consumer_result: Option<
             Result<Result<(), IngestError>, tokio::task::JoinError>,
         > = None;
 
@@ -340,6 +408,13 @@ impl Orchestrator {
                     // Scores consumer task completed (either finished or errored)
                     error!("Scores consumer completed unexpectedly, initiating shutdown");
                     scores_consumer_result = Some(result);
+                    let _ = shutdown_tx.send(());
+                    break;
+                }
+                result = &mut space_topics_consumer_handle => {
+                    // Space topics consumer task completed (either finished or errored)
+                    error!("Space topics consumer completed unexpectedly, initiating shutdown");
+                    space_topics_consumer_result = Some(result);
                     let _ = shutdown_tx.send(());
                     break;
                 }
@@ -397,6 +472,14 @@ impl Orchestrator {
         // Close ack channels (loader stops sending, signals consumers)
         drop(entities_ack_tx);
         drop(scores_ack_tx);
+        drop(space_topics_ack_tx);
+
+        // Wait for space topics consumer to finish (if we don't already have its result)
+        let space_topics_consumer_final_result = match space_topics_consumer_result {
+            Some(result) => result,
+            None => space_topics_consumer_handle.await,
+        };
+        info!("Space topics consumer shutdown complete");
 
         // Wait for scores consumer to finish (if we don't already have its result)
         let scores_consumer_final_result = match scores_consumer_result {
@@ -423,7 +506,14 @@ impl Orchestrator {
         // Propagate consumer errors if any (entities takes priority)
         match entities_consumer_final_result {
             Ok(Ok(())) => match scores_consumer_final_result {
-                Ok(Ok(())) => Ok(()),
+                Ok(Ok(())) => match space_topics_consumer_final_result {
+                    Ok(Ok(())) => Ok(()),
+                    Ok(Err(e)) => Err(e),
+                    Err(join_error) => Err(IngestError::OrchestratorError(format!(
+                        "Space topics consumer task panicked: {}",
+                        join_error
+                    ))),
+                },
                 Ok(Err(e)) => Err(e),
                 Err(join_error) => Err(IngestError::OrchestratorError(format!(
                     "Scores consumer task panicked: {}",
@@ -464,6 +554,22 @@ impl ScoresConsumerTrait for ScoresConsumer {
     async fn run(
         &self,
         processor_tx: mpsc::Sender<ScoreProcessingBatch>,
+        ack_receiver: mpsc::Receiver<StreamMessage>,
+        shutdown: tokio::sync::broadcast::Receiver<()>,
+    ) -> Result<(), IngestError> {
+        self.run(processor_tx, ack_receiver, shutdown).await
+    }
+}
+
+#[async_trait]
+impl SpaceTopicsConsumerTrait for SpaceTopicsConsumer {
+    fn subscribe(&self) -> Result<(), IngestError> {
+        self.subscribe()
+    }
+
+    async fn run(
+        &self,
+        processor_tx: mpsc::Sender<SpaceTopicProcessingBatch>,
         ack_receiver: mpsc::Receiver<StreamMessage>,
         shutdown: tokio::sync::broadcast::Receiver<()>,
     ) -> Result<(), IngestError> {

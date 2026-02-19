@@ -63,6 +63,10 @@ pub struct EntityDocument {
     /// Entity-space score - None until scoring service is implemented
     #[serde(skip_serializing_if = "Option::is_none")]
     pub entity_space_score: Option<f64>,
+    /// The topic entity ID that represents this entity's space.
+    /// Set via update_by_query when a space.topics event is received.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub space_topic_entity_id: Option<String>,
     pub indexed_at: DateTime<Utc>,
     /// Soft delete flag - None for active entities, Some(true) for deleted entities
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -109,6 +113,7 @@ impl EntityDocument {
             entity_global_score: None,
             space_score: None,
             entity_space_score: None,
+            space_topic_entity_id: None,
             indexed_at: Utc::now(),
             deleted: None,
         }
@@ -144,6 +149,7 @@ impl EntityDocument {
             entity_global_score: None,
             space_score: None,
             entity_space_score: None,
+            space_topic_entity_id: None,
             indexed_at: Utc::now(),
             deleted: None,
         }

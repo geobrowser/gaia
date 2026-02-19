@@ -14,7 +14,8 @@ use search_indexer::errors::IngestError;
 use search_indexer::loader::SearchLoader;
 use search_indexer::orchestrator::{
     EntitiesConsumerTrait, EntityProcessingBatch, Orchestrator, OrchestratorConfig,
-    ScoreProcessingBatch, ScoresConsumerTrait,
+    ScoreProcessingBatch, ScoresConsumerTrait, SpaceTopicProcessingBatch,
+    SpaceTopicsConsumerTrait,
 };
 use search_indexer::processor::Processor;
 use search_indexer_repository::{
@@ -131,6 +132,27 @@ impl ScoresConsumerTrait for MockScoresConsumer {
         mut shutdown: broadcast::Receiver<()>,
     ) -> Result<(), IngestError> {
         // Just wait for shutdown - no score events in these tests
+        let _ = shutdown.recv().await;
+        Ok(())
+    }
+}
+
+// Mock Space Topics Consumer for testing - does nothing, just waits for shutdown
+struct MockSpaceTopicsConsumer;
+
+#[async_trait::async_trait]
+impl SpaceTopicsConsumerTrait for MockSpaceTopicsConsumer {
+    fn subscribe(&self) -> Result<(), IngestError> {
+        Ok(())
+    }
+
+    async fn run(
+        &self,
+        _processor_tx: mpsc::Sender<SpaceTopicProcessingBatch>,
+        _ack_receiver: mpsc::Receiver<StreamMessage>,
+        mut shutdown: broadcast::Receiver<()>,
+    ) -> Result<(), IngestError> {
+        // Just wait for shutdown - no space topic events in these tests
         let _ = shutdown.recv().await;
         Ok(())
     }
@@ -268,10 +290,11 @@ impl SearchIndexProvider for MockSearchProvider {
                 EntityOperation::Delete(_) => false, // Hard deletes not used (soft delete via Update)
                 EntityOperation::Unset(_) => self.fail_bulk_unsets && i >= operations.len() / 2,
                 EntityOperation::RemoveTypeRelationById(_) => false, // Never fails in mock
-                // Score operations never fail in mock
+                // Score and space topic operations never fail in mock
                 EntityOperation::UpdateEntityGlobalScore(_)
                 | EntityOperation::UpdateSpaceScore(_)
-                | EntityOperation::UpdateEntitySpaceScore(_) => false,
+                | EntityOperation::UpdateEntitySpaceScore(_)
+                | EntityOperation::UpdateSpaceTopicEntityId(_) => false,
             };
 
             if should_fail {
@@ -303,10 +326,11 @@ impl SearchIndexProvider for MockSearchProvider {
                     EntityOperation::RemoveTypeRelationById(_) => {
                         // Tracked via all_operations
                     }
-                    // Score operations are tracked via all_operations only
+                    // Score and space topic operations are tracked via all_operations only
                     EntityOperation::UpdateEntityGlobalScore(_)
                     | EntityOperation::UpdateSpaceScore(_)
-                    | EntityOperation::UpdateEntitySpaceScore(_) => {
+                    | EntityOperation::UpdateEntitySpaceScore(_)
+                    | EntityOperation::UpdateSpaceTopicEntityId(_) => {
                         // Tracked via all_operations
                     }
                 }
@@ -341,8 +365,9 @@ fn create_test_orchestrator(events: Vec<EntityEvent>) -> (Orchestrator, Arc<Mock
 
     let mock_consumer = Arc::new(MockConsumer::new(events));
     let mock_scores_consumer = Arc::new(MockScoresConsumer);
+    let mock_space_topics_consumer = Arc::new(MockSpaceTopicsConsumer);
 
-    let orchestrator = Orchestrator::new(mock_consumer, mock_scores_consumer, processor, loader);
+    let orchestrator = Orchestrator::new(mock_consumer, mock_scores_consumer, mock_space_topics_consumer, processor, loader);
 
     (orchestrator, mock_provider)
 }
@@ -357,10 +382,12 @@ fn create_test_orchestrator_with_consumer(
 
     let mock_consumer = Arc::new(MockConsumer::new(events));
     let mock_scores_consumer = Arc::new(MockScoresConsumer);
+    let mock_space_topics_consumer = Arc::new(MockSpaceTopicsConsumer);
 
     let orchestrator = Orchestrator::new(
         mock_consumer.clone(),
         mock_scores_consumer,
+        mock_space_topics_consumer,
         processor,
         loader,
     );
@@ -378,8 +405,9 @@ fn create_error_test_orchestrator(
 
     let mock_consumer = Arc::new(MockConsumer::with_subscribe_error(events));
     let mock_scores_consumer = Arc::new(MockScoresConsumer);
+    let mock_space_topics_consumer = Arc::new(MockSpaceTopicsConsumer);
 
-    let orchestrator = Orchestrator::new(mock_consumer, mock_scores_consumer, processor, loader);
+    let orchestrator = Orchestrator::new(mock_consumer, mock_scores_consumer, mock_space_topics_consumer, processor, loader);
 
     (orchestrator, mock_provider)
 }
@@ -394,10 +422,12 @@ fn create_bulk_update_failure_orchestrator(
 
     let mock_consumer = Arc::new(MockConsumer::new(events.clone()));
     let mock_scores_consumer = Arc::new(MockScoresConsumer);
+    let mock_space_topics_consumer = Arc::new(MockSpaceTopicsConsumer);
 
     let orchestrator = Orchestrator::new(
         mock_consumer.clone(),
         mock_scores_consumer,
+        mock_space_topics_consumer,
         processor,
         loader,
     );
@@ -415,10 +445,12 @@ fn create_bulk_unset_failure_orchestrator(
 
     let mock_consumer = Arc::new(MockConsumer::new(events.clone()));
     let mock_scores_consumer = Arc::new(MockScoresConsumer);
+    let mock_space_topics_consumer = Arc::new(MockSpaceTopicsConsumer);
 
     let orchestrator = Orchestrator::new(
         mock_consumer.clone(),
         mock_scores_consumer,
+        mock_space_topics_consumer,
         processor,
         loader,
     );
@@ -506,6 +538,7 @@ async fn test_orchestrator_configuration() {
     let loader = SearchLoader::new(mock_provider.clone());
     let mock_consumer = Arc::new(MockConsumer::new(vec![]));
     let mock_scores_consumer = Arc::new(MockScoresConsumer);
+    let mock_space_topics_consumer = Arc::new(MockSpaceTopicsConsumer);
 
     let config = OrchestratorConfig {
         channel_buffer_size: 2000,
@@ -514,6 +547,7 @@ async fn test_orchestrator_configuration() {
     let _orchestrator = Orchestrator::with_config(
         mock_consumer,
         mock_scores_consumer,
+        mock_space_topics_consumer,
         processor,
         loader,
         config,

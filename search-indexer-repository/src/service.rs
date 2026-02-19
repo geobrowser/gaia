@@ -55,6 +55,7 @@ use uuid::Uuid;
 ///     space_score: None,
 ///     entity_space_score: None,
 ///     deleted: None,
+///     space_topic_entity_id: None,
 /// };
 ///
 /// // This will create the document if it doesn't exist, or update it if it does
@@ -500,6 +501,7 @@ mod tests {
             space_score: None,
             entity_space_score: None,
             deleted: None,
+            space_topic_entity_id: None,
         }
     }
 
@@ -628,6 +630,7 @@ mod tests {
             space_score: None,
             entity_space_score: None,
             deleted: None,
+            space_topic_entity_id: None,
         };
         assert!(service.update(request).await.is_err());
 
@@ -644,6 +647,7 @@ mod tests {
             space_score: None,
             entity_space_score: None,
             deleted: None,
+            space_topic_entity_id: None,
         };
         assert!(service.update(request).await.is_err());
     }
@@ -688,6 +692,7 @@ mod tests {
                 space_score: None,
                 entity_space_score: None,
                 deleted: None,
+                space_topic_entity_id: None,
             })
             .collect();
 

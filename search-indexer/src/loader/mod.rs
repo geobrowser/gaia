@@ -11,12 +11,12 @@ use tokio::task::JoinHandle;
 use crate::consumer::StreamMessage;
 use crate::errors::IngestError;
 use crate::metrics::SearchIndexerMetrics;
-use crate::orchestrator::ProcessedBatch;
+use crate::orchestrator::{BatchSource, ProcessedBatch};
 use crate::processor::ProcessedEvent;
 use search_indexer_repository::{
     EntityOperation, RemoveTypeRelationData, SearchIndexProvider, TypeRelationData,
     UnsetEntityPropertiesRequest, UpdateEntityGlobalScoreRequest, UpdateEntityRequest,
-    UpdateEntitySpaceScoreRequest, UpdateSpaceScoreRequest,
+    UpdateEntitySpaceScoreRequest, UpdateSpaceScoreRequest, UpdateSpaceTopicEntityIdRequest,
 };
 
 /// Loader that indexes documents into the search engine.
@@ -70,6 +70,7 @@ impl SearchLoader {
                             space_score: doc.space_score,
                             entity_space_score: doc.entity_space_score,
                             deleted: doc.deleted,
+                            space_topic_entity_id: doc.space_topic_entity_id,
                         }));
                 }
                 ProcessedEvent::UnsetProperties {
@@ -107,6 +108,7 @@ impl SearchLoader {
                             space_score: None,
                             entity_space_score: None,
                             deleted: None,
+                            space_topic_entity_id: None,
                         }));
                 }
                 ProcessedEvent::RemoveTypeRelationById { relation_id } => {
@@ -144,6 +146,18 @@ impl SearchLoader {
                                 entity_id: entity_id.to_string(),
                                 space_id: space_id.to_string(),
                                 score,
+                            },
+                        ));
+                }
+                ProcessedEvent::UpdateSpaceTopicEntityId {
+                    space_id,
+                    topic_entity_id,
+                } => {
+                    self.pending_operations
+                        .push(EntityOperation::UpdateSpaceTopicEntityId(
+                            UpdateSpaceTopicEntityIdRequest {
+                                space_id: space_id.to_string(),
+                                topic_entity_id: topic_entity_id.to_string(),
                             },
                         ));
                 }
@@ -225,15 +239,16 @@ impl SearchLoader {
         mut loader_rx: mpsc::Receiver<ProcessedBatch>,
         entity_ack_tx: mpsc::Sender<StreamMessage>,
         scores_ack_tx: mpsc::Sender<StreamMessage>,
+        space_topics_ack_tx: mpsc::Sender<StreamMessage>,
         metrics: Arc<SearchIndexerMetrics>,
     ) -> JoinHandle<()> {
         tokio::spawn(async move {
             while let Some(batch) = loader_rx.recv().await {
                 // Determine which ack channel to use based on batch type
-                let ack_tx = if batch.is_scores_batch {
-                    &scores_ack_tx
-                } else {
-                    &entity_ack_tx
+                let ack_tx = match batch.source {
+                    BatchSource::SpaceTopic => &space_topics_ack_tx,
+                    BatchSource::Score => &scores_ack_tx,
+                    BatchSource::Entity => &entity_ack_tx,
                 };
 
                 match self.load(batch.events).await {
@@ -419,11 +434,12 @@ mod tests {
                             relation_id: r.relation_id.clone(),
                         });
                     }
-                    // Score updates are tracked but don't need detailed tracking in tests
+                    // Score and space topic updates are tracked but don't need detailed tracking in tests
                     EntityOperation::UpdateEntityGlobalScore(_)
                     | EntityOperation::UpdateSpaceScore(_)
-                    | EntityOperation::UpdateEntitySpaceScore(_) => {
-                        // Score updates pass through - no special tracking needed
+                    | EntityOperation::UpdateEntitySpaceScore(_)
+                    | EntityOperation::UpdateSpaceTopicEntityId(_) => {
+                        // Score and space topic updates pass through - no special tracking needed
                     }
                 }
             }
