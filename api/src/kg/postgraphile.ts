@@ -8,6 +8,7 @@ import {createPostGraphileSchema} from "postgraphile"
 import ConnectionFilterPlugin from "postgraphile-plugin-connection-filter"
 import {classifyDbFailure} from "../services/dbFailures"
 import {getGraphqlPressureSnapshot, recordGraphqlAcquireTimeout} from "../services/dbSaturation"
+import {graphqlQueryFingerprint} from "../services/queryFingerprint"
 import {log} from "../services/telemetry"
 import EntitySpaceFilterPlugin from "./entitySpaceFilterPlugin"
 import {useGraphQLInstrumentation} from "./instrumentationPlugin"
@@ -135,6 +136,7 @@ function usePgClient(pool: Pool): Plugin<{pgClient: PoolClient}> {
 		async onExecute({extendContext, args}) {
 			const operationName = args.operationName || "anonymous"
 			const query = print(args.document).slice(0, 2000)
+			const queryFingerprint = graphqlQueryFingerprint(query)
 			const acquireStartMs = Date.now()
 
 			let pgClient: PoolClient
@@ -151,6 +153,7 @@ function usePgClient(pool: Pool): Plugin<{pgClient: PoolClient}> {
 					error: err.message,
 					failureClass,
 					operationName,
+					queryFingerprint,
 					query,
 					acquireWaitMs,
 					poolStats,
@@ -160,9 +163,11 @@ function usePgClient(pool: Pool): Plugin<{pgClient: PoolClient}> {
 				Sentry.captureException(err, {
 					tags: {
 						"graphql.operation_name": operationName,
+						"graphql.query_fingerprint": queryFingerprint,
 						"db.failure_class": failureClass,
 					},
 					extra: {
+						queryFingerprint,
 						query,
 						variables: args.variableValues,
 						acquireWaitMs,

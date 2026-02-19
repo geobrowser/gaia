@@ -253,6 +253,9 @@ Use `queryid` and statement snippet from the queries above with API/Sentry conte
 - GraphQL operation names and request IDs are logged in:
   - `api/src/kg/postgraphile.ts`
   - `api/src/middleware/requestLogging.ts`
+- Query fingerprint tags are emitted in GraphQL spans/errors:
+  - `graphql.query_fingerprint`
+  - `graphql.operation_name`
 - Failure-class tags in Sentry include:
   - `db.failure_class`
   - `graphql.operation_name`

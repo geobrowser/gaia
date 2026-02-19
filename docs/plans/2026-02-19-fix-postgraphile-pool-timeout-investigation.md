@@ -142,3 +142,21 @@ Target policy:
 - keep max replicas fixed to connection-budget-safe value.
 
 Prerequisite: expose app pool-pressure counters as Prometheus metrics and wire Prometheus Adapter (or equivalent) for HPA custom/external metrics.
+
+## Implementation Status (2026-02-19)
+
+Completed:
+
+- Readiness-based saturation drain is implemented (`/health/readiness`) and wired in staging + production manifests.
+- Pool pressure hysteresis and acquire-timeout tracking are implemented in API runtime.
+- GraphQL timeout events now include pool pressure context and query fingerprint (`graphql.query_fingerprint`).
+- Production HPA behavior now has explicit fast scale-up and conservative scale-down policy.
+- Capacity alerts added for readiness degradation, HPA max + high p99, and elevated 503 ratio.
+- Database updates applied:
+  - `CREATE EXTENSION IF NOT EXISTS pg_stat_statements;`
+  - `ALTER DATABASE defaultdb SET lock_timeout = '2s';`
+
+Remaining:
+
+- Add Prometheus Adapter (or equivalent) and wire custom/external metrics to HPA.
+- Build the weekly offender report automation from `pg_stat_statements` + operation mappings.
