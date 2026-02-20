@@ -8,6 +8,7 @@
  */
 
 import {Client} from "@opensearch-project/opensearch"
+import {normalizeUuid, toDashedUuid} from "../../utils/uuid"
 import type {SearchClient} from "./client"
 import {
 	SearchError,
@@ -18,7 +19,6 @@ import {
 	type SearchResultType,
 	type SearchScope,
 } from "./types"
-import {normalizeUuid, toDashedUuid} from "../../utils/uuid"
 
 /**
  * UUID regex patterns for detecting ID-based queries.
@@ -199,7 +199,9 @@ export class OpenSearchClient implements SearchClient {
 		const hitData = hits.map((hit) => {
 			const typeRelations = hit._source.type_relations as Array<{entity_to_id: string}> | undefined
 			const typeIds = typeRelations?.map((rel) => normalizeUuid(rel.entity_to_id) as string)
-			typeIds?.forEach((id) => allTypeEntityIds.add(id))
+			typeIds?.forEach((id) => {
+				allTypeEntityIds.add(id)
+			})
 
 			const spaceTopicEntityId = hit._source.space_topic_entity_id as string | undefined
 			if (spaceTopicEntityId) {

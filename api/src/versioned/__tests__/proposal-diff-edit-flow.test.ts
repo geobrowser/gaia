@@ -605,7 +605,7 @@ async function setupTestData(pool: Pool): Promise<void> {
 					.setName("Update Entity")
 					.setCreatedNow()
 					.updateEntity(uuidToId(uuid.entityExisting1), (u) =>
-						u.setText(uuidToId(uuid.propText), "Updated Text").setBool(uuidToId(uuid.propBool), true),
+						u.setText(uuidToId(uuid.propText), "Updated Text").setBoolean(uuidToId(uuid.propBool), true),
 					)
 				return builder.build()
 			},
@@ -664,11 +664,9 @@ async function setupTestData(pool: Pool): Promise<void> {
 					.setName("Multiple Operations")
 					.setCreatedNow()
 					.updateEntity(uuidToId(uuid.entityExisting1), (u) =>
-						u.setInt64(uuidToId(uuid.propInt), BigInt(100)),
+						u.setInteger(uuidToId(uuid.propInt), BigInt(100)),
 					)
-					.updateEntity(uuidToId(uuid.entityExisting2), (u) =>
-						u.setFloat64(uuidToId(uuid.propFloat), 2.71828),
-					)
+					.updateEntity(uuidToId(uuid.entityExisting2), (u) => u.setFloat(uuidToId(uuid.propFloat), 2.71828))
 				return builder.build()
 			},
 			contentUri: generateTestUri("multiple-ops"),
@@ -688,9 +686,9 @@ async function setupTestData(pool: Pool): Promise<void> {
 					.createEntity(uuidToId(uuid.entityNew2), (e) =>
 						e
 							.text(uuidToId(uuid.propText), "Entity with all types")
-							.bool(uuidToId(uuid.propBool), true)
-							.int64(uuidToId(uuid.propInt), BigInt(42))
-							.float64(uuidToId(uuid.propFloat), 3.14159),
+							.boolean(uuidToId(uuid.propBool), true)
+							.integer(uuidToId(uuid.propInt), BigInt(42))
+							.float(uuidToId(uuid.propFloat), 3.14159),
 					)
 				return builder.build()
 			},

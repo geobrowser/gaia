@@ -125,7 +125,7 @@ const sharedPlugins = [
 
 // GraphQL server without uuidScalarPlugin
 export const graphqlServer = createYoga<GraphQLServerContext>({
-	schema: postgraphileSchema,
+	schema: postgraphileSchema as any,
 	graphiql: {
 		title: "Geo API",
 	},
