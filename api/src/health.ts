@@ -1,9 +1,25 @@
 import {Hono} from "hono"
 import {describeRoute} from "hono-openapi"
-import {getGraphqlPoolStats} from "./kg/postgraphile"
+import {getGraphqlPoolPressure, getGraphqlPoolStats} from "./kg/postgraphile"
 import {db, getPoolStats} from "./services/storage/storage"
 
 const health = new Hono()
+
+const READINESS_DB_TIMEOUT_MS = parseInt(process.env.READINESS_DB_TIMEOUT_MS || "1000", 10)
+
+async function isDatabaseReachable(): Promise<boolean> {
+	try {
+		await Promise.race([
+			db.execute("SELECT 1"),
+			new Promise((_, reject) =>
+				setTimeout(() => reject(new Error("readiness_db_timeout")), READINESS_DB_TIMEOUT_MS),
+			),
+		])
+		return true
+	} catch {
+		return false
+	}
+}
 
 // Liveness probe — proves the event loop is responsive, no DB or external dependencies.
 // This must never block on I/O so Kubernetes doesn't kill healthy-but-busy pods.
@@ -31,6 +47,83 @@ health.get(
 		},
 	}),
 	(c) => c.json({status: "ok"}),
+)
+
+// Readiness probe — fail only on sustained DB pool saturation.
+// This allows Kubernetes to route traffic away from saturated pods
+// while avoiding liveness restart cascades.
+health.get(
+	"/readiness",
+	describeRoute({
+		tags: ["Health"],
+		summary: "Readiness probe",
+		description: "Returns 200 when pod is ready to receive traffic, 503 when dependencies are unavailable.",
+		responses: {
+			200: {
+				description: "Pod is ready",
+				content: {
+					"application/json": {
+						schema: {
+							type: "object",
+							properties: {
+								status: {type: "string", enum: ["ready"]},
+								timestamp: {type: "string", format: "date-time"},
+							},
+							required: ["status", "timestamp"],
+						},
+					},
+				},
+			},
+			503: {
+				description: "Pod is temporarily not ready due to sustained pool saturation",
+				content: {
+					"application/json": {
+						schema: {
+							type: "object",
+							properties: {
+								status: {type: "string", enum: ["not_ready"]},
+								reason: {type: "string"},
+								timestamp: {type: "string", format: "date-time"},
+							},
+							required: ["status", "reason", "timestamp"],
+						},
+					},
+				},
+			},
+		},
+	}),
+	async (c) => {
+		const poolPressure = getGraphqlPoolPressure()
+		const databaseReachable = await isDatabaseReachable()
+		const timestamp = new Date().toISOString()
+
+		if (!databaseReachable) {
+			return c.json(
+				{
+					status: "not_ready",
+					reason: "database_unreachable",
+					timestamp,
+				},
+				503,
+			)
+		}
+
+		if (poolPressure.isSaturated) {
+			return c.json(
+				{
+					status: "not_ready",
+					reason: "sustained_graphql_pool_saturation",
+					timestamp,
+				},
+				503,
+			)
+		}
+
+		return c.json({
+			status: "ready",
+			timestamp,
+		})
+	},
 )
 
 // Simple health check - returns 200 if database is accessible
@@ -181,8 +274,10 @@ health.get(
 			await db.execute("SELECT 1")
 
 			const poolStats = getPoolStats()
+			const graphqlPoolPressure = getGraphqlPoolPressure()
 			const utilizationPercent = Math.round((poolStats.totalConnections / poolStats.maxConnections) * 100)
-			const isHealthy = utilizationPercent < 90 && poolStats.waitingCount === 0
+			const isHealthy =
+				utilizationPercent < 90 && poolStats.waitingCount === 0 && !graphqlPoolPressure.isSaturated
 
 			const healthData = {
 				status: isHealthy ? "healthy" : "degraded",
@@ -199,6 +294,7 @@ health.get(
 					utilizationPercent,
 					status: utilizationPercent > 85 ? "high" : utilizationPercent > 70 ? "medium" : "low",
 				},
+				graphqlPoolPressure,
 				recommendations: getHealthRecommendations(poolStats, utilizationPercent),
 				timestamp: new Date().toISOString(),
 			}
@@ -239,6 +335,8 @@ health.get(
 								waitingCount: {type: "integer"},
 								maxConnections: {type: "integer"},
 								utilizationPercent: {type: "integer"},
+								recentAcquireTimeouts: {type: "integer"},
+								poolPressure: {type: "object"},
 								status: {type: "string", enum: ["ok", "warning", "critical"]},
 								timestamp: {type: "string", format: "date-time"},
 							},
@@ -249,6 +347,8 @@ health.get(
 								"waitingCount",
 								"maxConnections",
 								"utilizationPercent",
+								"recentAcquireTimeouts",
+								"poolPressure",
 								"status",
 								"timestamp",
 							],
@@ -260,12 +360,15 @@ health.get(
 	}),
 	(c) => {
 		const poolStats = getGraphqlPoolStats()
+		const poolPressure = getGraphqlPoolPressure()
 		const utilizationPercent = Math.round((poolStats.totalConnections / poolStats.maxConnections) * 100)
 
 		return c.json({
 			...poolStats,
 			activeConnections: poolStats.totalConnections - poolStats.idleConnections,
 			utilizationPercent,
+			recentAcquireTimeouts: poolPressure.recentAcquireTimeouts,
+			poolPressure,
 			status: utilizationPercent > 85 ? "critical" : utilizationPercent > 70 ? "warning" : "ok",
 			timestamp: new Date().toISOString(),
 		})

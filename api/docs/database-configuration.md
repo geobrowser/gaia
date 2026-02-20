@@ -7,7 +7,7 @@ This document describes the PostgreSQL and PgBouncer configuration for the Geo A
 ```
 API Replicas (3x)              PgBouncer                 PostgreSQL
 ┌─────────────────┐           ┌─────────────┐           ┌─────────────┐
-│ pg Pool: 50     │──────────▶│ max: 200    │──────────▶│ max: 100    │
+│ pg Pool: 50     │──────────▶│ max: 900    │──────────▶│ max: 100    │
 │ per replica     │           │ pool: 70    │           │             │
 └─────────────────┘           └─────────────┘           └─────────────┘
      150 total                  multiplexes               70 active
@@ -43,7 +43,7 @@ WHERE name IN ('statement_timeout', 'idle_in_transaction_session_timeout', 'max_
 | `pool_mode` | transaction | Release connections after each transaction (most efficient) |
 | `default_pool_size` | 70 | Max connections to PostgreSQL per database/user |
 | `min_pool_size` | 50 | Connections kept warm for instant availability |
-| `max_client_conn` | 200 | Max connections from applications to PgBouncer |
+| `max_client_conn` | 900 | Max connections from applications to PgBouncer |
 | `reserve_pool_size` | 10 | Extra connections for traffic spikes |
 | `query_timeout` | 15 | Kill queries running longer than 15s (seconds) |
 | `idle_transaction_timeout` | 30 | Kill idle transactions after 30s (seconds) |
@@ -60,7 +60,7 @@ psql "postgres://user:pass@pgbouncer-host:port/pgbouncer"
 -- Apply settings
 SET default_pool_size = 70;
 SET min_pool_size = 50;
-SET max_client_conn = 200;
+SET max_client_conn = 900;
 SET reserve_pool_size = 10;
 SET query_timeout = 15;
 SET idle_transaction_timeout = 30;
@@ -109,7 +109,39 @@ All settings can be overridden via environment variables:
 PG_POOL_MAX=50
 PG_CONNECTION_TIMEOUT_MS=3000
 PG_IDLE_TIMEOUT_MS=30000
+
+# Pool saturation readiness controls
+PG_POOL_PRESSURE_WAITING_THRESHOLD=1
+PG_POOL_PRESSURE_UTILIZATION_THRESHOLD=90
+PG_POOL_PRESSURE_TIMEOUT_THRESHOLD=2
+PG_POOL_ACQUIRE_TIMEOUT_WINDOW_MS=30000
+PG_POOL_SATURATION_ACTIVATION_MS=15000
+PG_POOL_SATURATION_RELEASE_MS=30000
+
+# Optional readiness DB probe timeout
+READINESS_DB_TIMEOUT_MS=1000
 ```
+
+Saturation env values are validated at startup. Invalid values fail fast instead of silently disabling pressure detection.
+
+### Timeout Hierarchy
+
+Keep timeout budgets ordered so overload fails predictably:
+
+1. Pool acquire/connect timeout (shortest)
+2. Request/application deadline
+3. `statement_timeout` (longest)
+
+Avoid setting all layers to the same value (for example all 10s), which makes root cause ambiguous.
+
+### Readiness and Saturation Routing
+
+The API exposes:
+
+- `/health/liveness` for process-only liveness.
+- `/health/readiness` for sustained pool saturation checks.
+
+Kubernetes readiness should target `/health/readiness` so saturated pods are removed from service endpoints without restart loops.
 
 ## Capacity Planning
 
@@ -119,9 +151,14 @@ PG_IDLE_TIMEOUT_MS=30000
 API replicas × pool size = client connections to PgBouncer
 3 replicas × 50 = 150 client connections
 
-PgBouncer max_client_conn = 200 (headroom for scaling to 4 replicas)
+PgBouncer max_client_conn = 900
 PgBouncer default_pool_size = 70 (connections to PostgreSQL)
 PostgreSQL max_connections = 100 (30 reserved for indexers/admin/emergencies)
+
+Current safety budget:
+- Per pod DB clients: ~68 (50 GraphQL + 18 REST)
+- Max replicas: 6
+- Worst-case client demand: ~408 (< 900 max_client_conn)
 ```
 
 ## Logging
@@ -226,6 +263,9 @@ Use `queryid` and statement snippet from the queries above with API/Sentry conte
 - GraphQL operation names and request IDs are logged in:
   - `api/src/kg/postgraphile.ts`
   - `api/src/middleware/requestLogging.ts`
+- Query fingerprint tags are emitted in GraphQL spans/errors:
+  - `graphql.query_fingerprint`
+  - `graphql.operation_name`
 - Failure-class tags in Sentry include:
   - `db.failure_class`
   - `graphql.operation_name`

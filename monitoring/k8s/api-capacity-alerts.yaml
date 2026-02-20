@@ -1,0 +1,49 @@
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: api-capacity-observability
+  namespace: monitoring
+  labels:
+    release: kube-prometheus-stack
+spec:
+  groups:
+    - name: api.capacity
+      rules:
+        - alert: ApiReadinessDegraded
+          expr: |
+            (
+              sum(kube_pod_status_ready{namespace="api", condition="true", pod=~"api-.*"})
+              /
+              clamp_min(sum(kube_pod_status_phase{namespace="api", phase="Running", pod=~"api-.*"}), 1)
+            ) < 0.75
+          for: 5m
+          labels:
+            severity: warning
+            service: api
+          annotations:
+            summary: API readiness ratio is degraded
+            description: Fewer than 75% of running API pods are ready for 5 minutes.
+
+        - alert: ApiHpaMaxedWithHighP99
+          expr: |
+            kube_horizontalpodautoscaler_status_current_replicas{namespace="api", horizontalpodautoscaler="api"}
+            >=
+            kube_horizontalpodautoscaler_spec_max_replicas{namespace="api", horizontalpodautoscaler="api"}
+            and api:ingress_p99_latency_seconds:5m > 2
+          for: 10m
+          labels:
+            severity: critical
+            service: api
+          annotations:
+            summary: API HPA is maxed while p99 latency is high
+            description: API is at max replicas with sustained p99 latency above 2s.
+
+        - alert: Api503RateHigh
+          expr: api:ingress_503_ratio:rate5m > 0.02
+          for: 10m
+          labels:
+            severity: warning
+            service: api
+          annotations:
+            summary: API 503 ratio is elevated
+            description: More than 2% of API ingress requests are returning 503 over 10 minutes.
