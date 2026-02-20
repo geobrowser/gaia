@@ -22,8 +22,9 @@ use crate::opensearch::bulk::{execute_bulk, BulkAction, BulkOperationMeta};
 use crate::opensearch::index_config::IndexConfig;
 use crate::opensearch::index_management;
 use crate::opensearch::scripts::{
-    ADD_TYPE_RELATION_SCRIPT, REMOVE_TYPE_RELATION_SCRIPT, UPDATE_WITH_TOMBSTONE_CHECK_SCRIPT,
+    ADD_RELATION_SCRIPT, REMOVE_RELATION_SCRIPT, UPDATE_WITH_TOMBSTONE_CHECK_SCRIPT,
 };
+
 use crate::opensearch::unset_document_properties::create_unset_properties_script;
 use crate::types::{
     BatchOperationResult, BatchOperationSummary, DeleteEntityRequest, EntityOperation,
@@ -132,6 +133,9 @@ impl OpenSearchProvider {
         }
         if let Some(ref cover) = request.cover {
             doc.insert("cover".to_string(), json!(cover));
+        }
+        if let Some(ref image_url) = request.image_url {
+            doc.insert("image_url".to_string(), json!(image_url));
         }
         if let Some(entity_global_score) = request.entity_global_score {
             doc.insert(
@@ -305,7 +309,7 @@ impl SearchIndexProvider for OpenSearchProvider {
     /// with the provided fields. Fields that are `None` in the request will be left unchanged
     /// (for existing documents) or omitted (for new documents).
     ///
-    /// Also supports atomic type relation addition via `add_type_relation` field.
+    /// Also supports atomic relation addition via `add_relation` field.
     async fn update_document(&self, request: &UpdateEntityRequest) -> Result<(), SearchIndexError> {
         // Validate UUIDs
         let (entity_id, space_id) =
@@ -313,42 +317,47 @@ impl SearchIndexProvider for OpenSearchProvider {
 
         let doc_id = Self::document_id(&entity_id, &space_id);
 
-        // Handle add_type_relation - use script for atomic addition to type_relations array
-        if let Some(ref relation_data) = request.add_type_relation {
+        // Handle add_relation - use script for atomic addition to relations array
+        if let Some(ref relation_data) = request.add_relation {
             let relation_id = uuid::Uuid::parse_str(&relation_data.relation_id).map_err(|_| {
                 SearchIndexError::validation(format!(
                     "Invalid relation_id: {}",
                     relation_data.relation_id
                 ))
             })?;
-            let entity_to_id =
-                uuid::Uuid::parse_str(&relation_data.entity_to_id).map_err(|_| {
+            let to_entity_id =
+                uuid::Uuid::parse_str(&relation_data.to_entity_id).map_err(|_| {
                     SearchIndexError::validation(format!(
-                        "Invalid entity_to_id: {}",
-                        relation_data.entity_to_id
+                        "Invalid to_entity_id: {}",
+                        relation_data.to_entity_id
                     ))
                 })?;
+
+            let params = json!({
+                "relation_id": relation_id.to_string(),
+                "relation_type": relation_data.relation_type.clone(),
+                "to_entity_id": to_entity_id.to_string()
+            });
+
+            let upsert_relation = json!({
+                "relation_id": relation_id.to_string(),
+                "relation_type": relation_data.relation_type.clone(),
+                "to_entity_id": to_entity_id.to_string()
+            });
 
             let response = self
                 .client
                 .update(UpdateParts::IndexId(&self.index_config.alias, &doc_id))
                 .body(json!({
                     "script": {
-                        "source": ADD_TYPE_RELATION_SCRIPT,
+                        "source": ADD_RELATION_SCRIPT,
                         "lang": "painless",
-                        "params": {
-                            "relation_id": relation_id.to_string(),
-                            "entity_to_id": entity_to_id.to_string()
-                        }
+                        "params": params
                     },
-                    // If the document doesn't exist, create it with required fields
                     "upsert": {
                         "entity_id": entity_id.to_string(),
                         "space_id": space_id.to_string(),
-                        "type_relations": [{
-                            "relation_id": relation_id.to_string(),
-                            "entity_to_id": entity_to_id.to_string()
-                        }]
+                        "relations": [upsert_relation]
                     }
                 }))
                 .send()
@@ -358,14 +367,14 @@ impl SearchIndexProvider for OpenSearchProvider {
             let status = response.status_code();
             if !status.is_success() {
                 let error_body = response.text().await.unwrap_or_default();
-                error!(status = %status, body = %error_body, "Add type relation request failed");
+                error!(status = %status, body = %error_body, "Add relation request failed");
                 return Err(SearchIndexError::update(format!(
-                    "Add type relation failed with status {}: {}",
+                    "Add relation failed with status {}: {}",
                     status, error_body
                 )));
             }
 
-            debug!(doc_id = %doc_id, relation_id = %relation_id, "Type relation added");
+            debug!(doc_id = %doc_id, relation_id = %relation_id, "Relation added");
             return Ok(());
         }
 
@@ -451,7 +460,7 @@ impl SearchIndexProvider for OpenSearchProvider {
 
     /// Unset (remove) specific properties from a document.
     ///
-    /// Note: To remove type relations, use `EntityOperation::RemoveTypeRelationById` via `bulk_operations`.
+    /// Note: To remove relations, use `EntityOperation::RemoveRelationById` via `bulk_operations`.
     async fn unset_document_properties(
         &self,
         request: &UnsetEntityPropertiesRequest,
@@ -506,11 +515,11 @@ impl SearchIndexProvider for OpenSearchProvider {
 
     /// Execute multiple operations in bulk, processing them IN ORDER.
     ///
-    /// This method handles all operation types (Update, Delete, Unset, RemoveTypeRelationById)
+    /// This method handles all operation types (Update, Delete, Unset, RemoveRelationById)
     /// while maintaining the order of operations for consistency.
     ///
     /// For bulk-compatible operations (Update, Delete, Unset), we batch them together.
-    /// When we encounter a RemoveTypeRelationById (which requires update_by_query),
+    /// When we encounter a RemoveRelationById (which requires update_by_query),
     /// we first flush the pending batch, then execute the update_by_query, then continue.
     /// This ensures ordering is preserved.
     #[instrument(skip(self, operations), fields(count = operations.len()))]
@@ -533,7 +542,7 @@ impl SearchIndexProvider for OpenSearchProvider {
 
         for op in operations {
             match op {
-                EntityOperation::RemoveTypeRelationById(request) => {
+                EntityOperation::RemoveRelationById(request) => {
                     // Flush before executing the update_by_query to maintain ordering
                     flush_pending_bulk!(
                         self,
@@ -563,16 +572,16 @@ impl SearchIndexProvider for OpenSearchProvider {
                         .body(json!({
                             "query": {
                                 "nested": {
-                                    "path": "type_relations",
+                                    "path": "relations",
                                     "query": {
                                         "term": {
-                                            "type_relations.relation_id": relation_uuid.to_string()
+                                            "relations.relation_id": relation_uuid.to_string()
                                         }
                                     }
                                 }
                             },
                             "script": {
-                                "source": REMOVE_TYPE_RELATION_SCRIPT,
+                                "source": REMOVE_RELATION_SCRIPT,
                                 "lang": "painless",
                                 "params": {
                                     "relation_id": relation_uuid.to_string()
@@ -589,25 +598,25 @@ impl SearchIndexProvider for OpenSearchProvider {
                         all_results.push(BatchOperationResult {
                             entity_id: String::new(),
                             space_id: String::new(),
-                            operation_type: "RemoveTypeRelation".to_string(),
+                            operation_type: "RemoveRelation".to_string(),
                             success: true,
                             error: None,
                         });
                         debug!(
                             relation_id = %relation_uuid,
-                            "Removed type relation by ID via update_by_query"
+                            "Removed relation by ID via update_by_query"
                         );
                     } else {
                         let error_body = response.text().await.unwrap_or_default();
-                        error!(status = %status, body = %error_body, "Remove type relation by ID failed");
+                        error!(status = %status, body = %error_body, "Remove relation by ID failed");
                         total_failed += 1;
                         all_results.push(BatchOperationResult {
                             entity_id: String::new(),
                             space_id: String::new(),
-                            operation_type: "RemoveTypeRelation".to_string(),
+                            operation_type: "RemoveRelation".to_string(),
                             success: false,
                             error: Some(SearchIndexError::update(format!(
-                                "Remove type relation by ID failed: {}",
+                                "Remove relation by ID failed: {}",
                                 error_body
                             ))),
                         });
@@ -620,7 +629,7 @@ impl SearchIndexProvider for OpenSearchProvider {
                     let mut has_operation = false;
 
                     // Handle add_relation
-                    if let Some(ref relation_data) = request.add_type_relation {
+                    if let Some(ref relation_data) = request.add_relation {
                         let relation_id = uuid::Uuid::parse_str(&relation_data.relation_id)
                             .map_err(|_| {
                                 SearchIndexError::validation(format!(
@@ -628,37 +637,43 @@ impl SearchIndexProvider for OpenSearchProvider {
                                     relation_data.relation_id
                                 ))
                             })?;
-                        let entity_to_id = uuid::Uuid::parse_str(&relation_data.entity_to_id)
+                        let to_entity_id = uuid::Uuid::parse_str(&relation_data.to_entity_id)
                             .map_err(|_| {
                                 SearchIndexError::validation(format!(
-                                    "Invalid entity_to_id: {}",
-                                    relation_data.entity_to_id
+                                    "Invalid to_entity_id: {}",
+                                    relation_data.to_entity_id
                                 ))
                             })?;
 
+                        let params = json!({
+                            "relation_id": relation_id.to_string(),
+                            "relation_type": relation_data.relation_type.clone(),
+                            "to_entity_id": to_entity_id.to_string()
+                        });
+
+                        let upsert_relation = json!({
+                            "relation_id": relation_id.to_string(),
+                            "relation_type": relation_data.relation_type.clone(),
+                            "to_entity_id": to_entity_id.to_string()
+                        });
+
                         let body = json!({
                             "script": {
-                                "source": ADD_TYPE_RELATION_SCRIPT,
+                                "source": ADD_RELATION_SCRIPT,
                                 "lang": "painless",
-                                "params": {
-                                    "relation_id": relation_id.to_string(),
-                                    "entity_to_id": entity_to_id.to_string()
-                                }
+                                "params": params
                             },
                             "upsert": {
                                 "entity_id": entity_id.to_string(),
                                 "space_id": space_id.to_string(),
-                                "type_relations": [{
-                                    "relation_id": relation_id.to_string(),
-                                    "entity_to_id": entity_to_id.to_string()
-                                }]
+                                "relations": [upsert_relation]
                             }
                         });
                         bulk_ops.push(BulkOperation::update(doc_id.clone(), body).into());
                         metas.push(BulkOperationMeta {
                             entity_id: request.entity_id.clone(),
                             space_id: request.space_id.clone(),
-                            operation_type: "AddTypeRelation".to_string(),
+                            operation_type: "AddRelation".to_string(),
                         });
                         has_operation = true;
                     }
@@ -1076,7 +1091,8 @@ mod tests {
             description: None,
             avatar: None,
             cover: None,
-            add_type_relation: None,
+            image_url: None,
+            add_relation: None,
             entity_global_score: None,
             space_score: None,
             entity_space_score: None,
@@ -1099,7 +1115,8 @@ mod tests {
             description: None,
             avatar: None,
             cover: None,
-            add_type_relation: None, // add_type_relation is handled separately, not by build_update_doc
+            image_url: None,
+            add_relation: None,
             entity_global_score: None,
             space_score: None,
             entity_space_score: None,
@@ -1118,10 +1135,10 @@ mod tests {
     }
 
     #[test]
-    fn test_build_update_doc_ignores_add_type_relation() {
-        use crate::types::TypeRelationData;
+    fn test_build_update_doc_ignores_add_relation() {
+        use crate::types::RelationData;
 
-        // add_type_relation is handled separately via script, not included in doc
+        // add_relation is handled separately via script, not included in doc
         let request = UpdateEntityRequest {
             entity_id: "entity-1".to_string(),
             space_id: "space-1".to_string(),
@@ -1129,9 +1146,11 @@ mod tests {
             description: None,
             avatar: None,
             cover: None,
-            add_type_relation: Some(TypeRelationData {
+            image_url: None,
+            add_relation: Some(RelationData {
                 relation_id: "rel-1".to_string(),
-                entity_to_id: "type-id-1".to_string(),
+                relation_type: "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1".to_string(),
+                to_entity_id: "type-id-1".to_string(),
             }),
             entity_global_score: None,
             space_score: None,
@@ -1141,11 +1160,11 @@ mod tests {
         };
 
         let doc = OpenSearchProvider::build_update_doc(&request);
-        // Doc should contain name but NOT add_type_relation (that's handled via script)
+        // Doc should contain name but NOT add_relation (that's handled via script)
         assert!(!doc.is_empty());
         assert_eq!(doc.get("name"), Some(&json!("Test Name")));
-        // add_type_relation should NOT be in the doc - it's handled separately
-        assert!(doc.get("add_type_relation").is_none());
-        assert!(doc.get("type_relations").is_none());
+        // add_relation should NOT be in the doc - it's handled separately
+        assert!(doc.get("add_relation").is_none());
+        assert!(doc.get("relations").is_none());
     }
 }

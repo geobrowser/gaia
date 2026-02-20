@@ -265,7 +265,7 @@ describe("OpenSearchClient", () => {
 			const queryStr = JSON.stringify(query)
 			expect(queryStr).toContain(uuid)
 			expect(queryStr).toContain("entity_id")
-			expect(queryStr).toContain("type_relations.entity_to_id")
+			expect(queryStr).toContain("relations.to_entity_id")
 			expect(queryStr).toContain(typeIds[0])
 			expect(queryStr).toContain(typeIds[1])
 		})
@@ -281,7 +281,7 @@ describe("OpenSearchClient", () => {
 			})
 
 			const queryStr = JSON.stringify(query)
-			expect(queryStr).toContain("type_relations.entity_to_id")
+			expect(queryStr).toContain("relations.to_entity_id")
 			// Both formats should be present for each type ID
 			expect(queryStr).toContain(dashedTypeIds[0])
 			expect(queryStr).toContain(dashedTypeIds[1])
@@ -304,7 +304,7 @@ describe("OpenSearchClient", () => {
 			expect(queryStr).toContain(uuid)
 			expect(queryStr).toContain(spaceId)
 			expect(queryStr).toContain("entity_id")
-			expect(queryStr).toContain("type_relations.entity_to_id")
+			expect(queryStr).toContain("relations.to_entity_id")
 			expect(queryStr).toContain(typeIds[0])
 		})
 
@@ -334,7 +334,7 @@ describe("OpenSearchClient", () => {
 			const queryStr = JSON.stringify(query)
 			expect(queryStr).toContain("entity_global_score")
 			expect(queryStr).toContain("blockchain")
-			expect(queryStr).toContain("type_relations.entity_to_id")
+			expect(queryStr).toContain("relations.to_entity_id")
 			typeIds.forEach((typeId) => {
 				expect(queryStr).toContain(typeId)
 			})
@@ -362,7 +362,7 @@ describe("OpenSearchClient", () => {
 			const queryStr = JSON.stringify(query)
 			expect(queryStr).toContain("space_score")
 			expect(queryStr).toContain("blockchain")
-			expect(queryStr).toContain("type_relations.entity_to_id")
+			expect(queryStr).toContain("relations.to_entity_id")
 			expect(queryStr).toContain(typeIds[0])
 		})
 
@@ -388,7 +388,7 @@ describe("OpenSearchClient", () => {
 			const queryStr = JSON.stringify(query)
 			expect(queryStr).toContain("entity_space_score")
 			expect(queryStr).toContain("blockchain")
-			expect(queryStr).toContain("type_relations.entity_to_id")
+			expect(queryStr).toContain("relations.to_entity_id")
 			expect(queryStr).toContain(typeIds[0])
 		})
 
@@ -435,7 +435,7 @@ describe("OpenSearchClient", () => {
 			expect(queryStr).toContain(spaceId)
 			expect(queryStr).toContain("entity_space_score")
 			expect(queryStr).toContain("blockchain")
-			expect(queryStr).toContain("type_relations.entity_to_id")
+			expect(queryStr).toContain("relations.to_entity_id")
 			typeIds.forEach((typeId) => {
 				expect(queryStr).toContain(typeId)
 			})
@@ -454,7 +454,7 @@ describe("OpenSearchClient", () => {
 			const queryStr = JSON.stringify(query)
 			expect(queryStr).toContain(spaceId)
 			expect(queryStr).toContain("blockchain")
-			expect(queryStr).toContain("type_relations.entity_to_id")
+			expect(queryStr).toContain("relations.to_entity_id")
 			expect(queryStr).toContain(typeIds[0])
 		})
 

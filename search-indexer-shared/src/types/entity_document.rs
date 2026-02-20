@@ -6,17 +6,20 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-/// A type relation entry stored in the entity document.
+/// A relation entry stored in the entity document.
 ///
-/// This tracks "type" relations associated with this entity, allowing:
-/// - Filtering entities by type using nested queries on `entity_to_id`
+/// This tracks indexed relations associated with this entity, allowing:
+/// - Filtering entities by type using nested queries on `to_entity_id`
 /// - Looking up and removing relations by their `relation_id` when a DeleteRelation event occurs
+/// - Resolving avatar/cover at query time by matching `relation_type` and looking up the target entity
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct TypeRelationEntry {
+pub struct RelationEntry {
     /// The relation's unique identifier.
     pub relation_id: Uuid,
-    /// The entity this relation points to (the "type" entity).
-    pub entity_to_id: Uuid,
+    /// The relation type entity ID.
+    pub relation_type: Uuid,
+    /// The entity this relation points to.
+    pub to_entity_id: Uuid,
 }
 
 /// Document representation for the search index.
@@ -31,9 +34,10 @@ pub struct TypeRelationEntry {
 /// - `space_id`: The space this entity belongs to
 /// - `name`: Optional entity display name (primary search field)
 /// - `description`: Optional description text (secondary search field)
-/// - `avatar`: Optional avatar image URL
-/// - `cover`: Optional cover image URL
-/// - `type_relations`: List of type relations (used for filtering entities by type via nested queries)
+/// - `avatar`: Optional avatar image URL (convenience field resolved from avatar relation)
+/// - `cover`: Optional cover image URL (convenience field resolved from cover relation)
+/// - `image_url`: Optional image URL property value (from IMAGE_URL_PROPERTY on the entity itself)
+/// - `relations`: List of indexed relations (type, avatar, cover — used for filtering and retrieval)
 /// - `entity_global_score`: Global reputation score (None until scoring service)
 /// - `space_score`: Space-level score (None until scoring service)
 /// - `entity_space_score`: Entity's score within the space (None until scoring service)
@@ -51,9 +55,13 @@ pub struct EntityDocument {
     pub avatar: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub cover: Option<String>,
-    /// Type relations associated with this entity (for filtering by type_id via nested queries).
+    /// Image URL property value from IMAGE_URL_PROPERTY on this entity.
+    /// Used to resolve avatar/cover URLs when this entity is the target of an avatar/cover relation.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_url: Option<String>,
+    /// Indexed relations associated with this entity (type, avatar, cover relations).
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
-    pub type_relations: Vec<TypeRelationEntry>,
+    pub relations: Vec<RelationEntry>,
     /// Global entity score - None until scoring service is implemented
     #[serde(skip_serializing_if = "Option::is_none")]
     pub entity_global_score: Option<f64>,
@@ -109,7 +117,8 @@ impl EntityDocument {
             description,
             avatar: None,
             cover: None,
-            type_relations: Vec::new(),
+            image_url: None,
+            relations: Vec::new(),
             entity_global_score: None,
             space_score: None,
             entity_space_score: None,
@@ -119,7 +128,7 @@ impl EntityDocument {
         }
     }
 
-    /// Create a new document with all optional fields.
+    /// Create a new document with all optional image fields.
     ///
     /// # Arguments
     ///
@@ -145,7 +154,8 @@ impl EntityDocument {
             description,
             avatar,
             cover,
-            type_relations: Vec::new(),
+            image_url: None,
+            relations: Vec::new(),
             entity_global_score: None,
             space_score: None,
             entity_space_score: None,
@@ -183,7 +193,8 @@ mod tests {
         assert_eq!(doc.description, description);
         assert!(doc.avatar.is_none());
         assert!(doc.cover.is_none());
-        assert!(doc.type_relations.is_empty());
+        assert!(doc.image_url.is_none());
+        assert!(doc.relations.is_empty());
         assert!(doc.entity_global_score.is_none());
         assert!(doc.space_score.is_none());
         assert!(doc.entity_space_score.is_none());
@@ -232,7 +243,7 @@ mod tests {
     }
 
     #[test]
-    fn test_type_relations_serialization() {
+    fn test_relations_serialization() {
         let mut doc = EntityDocument::new(
             Uuid::new_v4(),
             Uuid::new_v4(),
@@ -240,17 +251,19 @@ mod tests {
             Some("Description".to_string()),
         );
 
-        let type_relations = vec![
-            TypeRelationEntry {
+        let relations = vec![
+            RelationEntry {
                 relation_id: Uuid::new_v4(),
-                entity_to_id: Uuid::new_v4(),
+                relation_type: Uuid::new_v4(),
+                to_entity_id: Uuid::new_v4(),
             },
-            TypeRelationEntry {
+            RelationEntry {
                 relation_id: Uuid::new_v4(),
-                entity_to_id: Uuid::new_v4(),
+                relation_type: Uuid::new_v4(),
+                to_entity_id: Uuid::new_v4(),
             },
         ];
-        doc.type_relations = type_relations.clone();
+        doc.relations = relations.clone();
 
         let json = serde_json::to_string(&doc).unwrap();
         let deserialized: EntityDocument = serde_json::from_str(&json).unwrap();
@@ -259,11 +272,11 @@ mod tests {
         assert_eq!(doc.space_id, deserialized.space_id);
         assert_eq!(doc.name, deserialized.name);
         assert_eq!(doc.description, deserialized.description);
-        assert_eq!(doc.type_relations, type_relations);
+        assert_eq!(doc.relations, relations);
     }
 
     #[test]
-    fn test_empty_type_relations_not_serialized() {
+    fn test_empty_relations_not_serialized() {
         let doc = EntityDocument::new(
             Uuid::new_v4(),
             Uuid::new_v4(),
@@ -271,19 +284,19 @@ mod tests {
             Some("Description".to_string()),
         );
 
-        // type_relations is empty by default
-        assert!(doc.type_relations.is_empty());
+        // relations is empty by default
+        assert!(doc.relations.is_empty());
 
         let json = serde_json::to_string(&doc).unwrap();
-        // The type_relations field should not appear in the JSON when empty due to skip_serializing_if
-        assert!(!json.contains("type_relations"));
+        // The relations field should not appear in the JSON when empty due to skip_serializing_if
+        assert!(!json.contains("relations"));
 
         let deserialized: EntityDocument = serde_json::from_str(&json).unwrap();
-        assert!(deserialized.type_relations.is_empty());
+        assert!(deserialized.relations.is_empty());
     }
 
     #[test]
-    fn test_type_relations_with_other_optional_fields() {
+    fn test_relations_with_other_optional_fields() {
         let mut doc = EntityDocument::new(
             Uuid::new_v4(),
             Uuid::new_v4(),
@@ -291,11 +304,12 @@ mod tests {
             Some("Description".to_string()),
         );
 
-        let type_relations = vec![TypeRelationEntry {
+        let relations = vec![RelationEntry {
             relation_id: Uuid::new_v4(),
-            entity_to_id: Uuid::new_v4(),
+            relation_type: Uuid::new_v4(),
+            to_entity_id: Uuid::new_v4(),
         }];
-        doc.type_relations = type_relations.clone();
+        doc.relations = relations.clone();
         doc.avatar = Some("avatar.jpg".to_string());
         doc.cover = Some("cover.jpg".to_string());
         doc.entity_global_score = Some(0.85);
@@ -305,7 +319,7 @@ mod tests {
         let json = serde_json::to_string(&doc).unwrap();
         let deserialized: EntityDocument = serde_json::from_str(&json).unwrap();
 
-        assert_eq!(deserialized.type_relations, type_relations);
+        assert_eq!(deserialized.relations, relations);
         assert_eq!(deserialized.avatar, Some("avatar.jpg".to_string()));
         assert_eq!(deserialized.cover, Some("cover.jpg".to_string()));
         assert_eq!(deserialized.entity_global_score, Some(0.85));
@@ -314,15 +328,17 @@ mod tests {
     }
 
     #[test]
-    fn test_type_relations_roundtrip_serialization() {
-        let type_relations = vec![
-            TypeRelationEntry {
+    fn test_relations_roundtrip_serialization() {
+        let relations = vec![
+            RelationEntry {
                 relation_id: Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap(),
-                entity_to_id: Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c8").unwrap(),
+                relation_type: Uuid::parse_str("8f151ba4-de20-4e3c-9cb4-99ddf96f48f1").unwrap(),
+                to_entity_id: Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c8").unwrap(),
             },
-            TypeRelationEntry {
+            RelationEntry {
                 relation_id: Uuid::parse_str("12345678-1234-1234-1234-123456789abc").unwrap(),
-                entity_to_id: Uuid::parse_str("87654321-4321-4321-4321-cba987654321").unwrap(),
+                relation_type: Uuid::parse_str("1155beff-fad5-49b7-a2e0-da4777b8792c").unwrap(),
+                to_entity_id: Uuid::parse_str("87654321-4321-4321-4321-cba987654321").unwrap(),
             },
         ];
 
@@ -332,7 +348,7 @@ mod tests {
             Some("Test Entity".to_string()),
             Some("Test Description".to_string()),
         );
-        doc.type_relations = type_relations.clone();
+        doc.relations = relations.clone();
 
         // Serialize to JSON
         let json = serde_json::to_string(&doc).unwrap();
@@ -340,18 +356,34 @@ mod tests {
         // Deserialize back
         let deserialized: EntityDocument = serde_json::from_str(&json).unwrap();
 
-        // Verify type_relations are preserved exactly
-        assert_eq!(deserialized.type_relations, type_relations);
-        assert_eq!(deserialized.type_relations.len(), 2);
+        // Verify relations are preserved exactly
+        assert_eq!(deserialized.relations, relations);
+        assert_eq!(deserialized.relations.len(), 2);
 
         // Verify all UUIDs are correct
         assert_eq!(
-            deserialized.type_relations[0].relation_id,
+            deserialized.relations[0].relation_id,
             Uuid::parse_str("550e8400-e29b-41d4-a716-446655440000").unwrap()
         );
         assert_eq!(
-            deserialized.type_relations[0].entity_to_id,
+            deserialized.relations[0].to_entity_id,
             Uuid::parse_str("6ba7b810-9dad-11d1-80b4-00c04fd430c8").unwrap()
         );
+    }
+
+    #[test]
+    fn test_image_url_field() {
+        let mut doc = EntityDocument::new(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Some("Image Entity".to_string()),
+            None,
+        );
+        doc.image_url = Some("https://ipfs.io/image.png".to_string());
+
+        let json = serde_json::to_string(&doc).unwrap();
+        let deserialized: EntityDocument = serde_json::from_str(&json).unwrap();
+
+        assert_eq!(deserialized.image_url, Some("https://ipfs.io/image.png".to_string()));
     }
 }
