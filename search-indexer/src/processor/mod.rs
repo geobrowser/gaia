@@ -289,6 +289,7 @@ impl Processor {
     ///
     /// Receives batches from all consumers, processes them, and sends results to the loader.
     /// Returns a tokio task handle.
+    #[allow(clippy::too_many_arguments)]
     pub fn run(
         mut self,
         mut entity_rx: mpsc::Receiver<EntityProcessingBatch>,

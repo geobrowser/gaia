@@ -271,7 +271,7 @@ impl OpenSearchProvider {
 
             // Check for after_key for pagination
             after_key = response_body["aggregations"]["spaces"]["after_key"].clone().into();
-            if after_key.as_ref().map_or(true, |v| v.is_null()) {
+            if after_key.as_ref().is_none_or(|v| v.is_null()) {
                 break;
             }
         }
