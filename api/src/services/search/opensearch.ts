@@ -229,9 +229,7 @@ export class OpenSearchClient implements SearchClient {
 
 			// Build enriched space object
 			const spaceId = normalizeUuid(hit._source.space_id as string) as string
-			const normalizedTopicId = spaceTopicEntityId
-				? (normalizeUuid(spaceTopicEntityId) as string)
-				: undefined
+			const normalizedTopicId = spaceTopicEntityId ? (normalizeUuid(spaceTopicEntityId) as string) : undefined
 			const spaceMeta = normalizedTopicId ? spaceMetadataMap.get(normalizedTopicId) : undefined
 			const space: SearchResultSpace = {
 				id: spaceId,
@@ -317,10 +315,7 @@ export class OpenSearchClient implements SearchClient {
 			},
 		})
 
-		const metadataMap = new Map<
-			string,
-			{name?: string; description?: string; avatar?: string; cover?: string}
-		>()
+		const metadataMap = new Map<string, {name?: string; description?: string; avatar?: string; cover?: string}>()
 		for (const hit of response.body.hits.hits) {
 			const source = hit._source as Record<string, unknown>
 			const entityId = normalizeUuid(source.entity_id as string) as string
