@@ -553,124 +553,62 @@ impl SearchIndexProvider for OpenSearchProvider {
                             ))
                         })?;
 
-                    // Retry up to 3 times on version conflicts. Conflicts can occur
-                    // when a concurrent consumer (e.g. scores) modifies the same
-                    // document between the search snapshot and the script execution.
-                    let body = json!({
-                        "query": {
-                            "nested": {
-                                "path": "type_relations",
-                                "query": {
-                                    "term": {
-                                        "type_relations.relation_id": relation_uuid.to_string()
+                    let response = self
+                        .client
+                        .update_by_query(UpdateByQueryParts::Index(&[
+                            &self.index_config.alias,
+                        ]))
+                        .conflicts(Conflicts::Proceed)
+                        .body(json!({
+                            "query": {
+                                "nested": {
+                                    "path": "type_relations",
+                                    "query": {
+                                        "term": {
+                                            "type_relations.relation_id": relation_uuid.to_string()
+                                        }
                                     }
                                 }
+                            },
+                            "script": {
+                                "source": REMOVE_TYPE_RELATION_SCRIPT,
+                                "lang": "painless",
+                                "params": {
+                                    "relation_id": relation_uuid.to_string()
+                                }
                             }
-                        },
-                        "script": {
-                            "source": REMOVE_TYPE_RELATION_SCRIPT,
-                            "lang": "painless",
-                            "params": {
-                                "relation_id": relation_uuid.to_string()
-                            }
-                        }
-                    });
+                        }))
+                        .send()
+                        .await
+                        .map_err(|e| SearchIndexError::update(e.to_string()))?;
 
-                    let mut succeeded = false;
-                    let max_retries = 3;
-                    for attempt in 0..max_retries {
-                        let response = self
-                            .client
-                            .update_by_query(UpdateByQueryParts::Index(&[
-                                &self.index_config.alias,
-                            ]))
-                            .conflicts(Conflicts::Proceed)
-                            .body(body.clone())
-                            .send()
-                            .await
-                            .map_err(|e| SearchIndexError::update(e.to_string()))?;
-
-                        let status = response.status_code();
-                        if !status.is_success() {
-                            let error_body = response.text().await.unwrap_or_default();
-                            error!(status = %status, body = %error_body, "Remove type relation by ID failed");
-                            total_failed += 1;
-                            all_results.push(BatchOperationResult {
-                                entity_id: String::new(),
-                                space_id: String::new(),
-                                operation_type: "RemoveTypeRelation".to_string(),
-                                success: false,
-                                error: Some(SearchIndexError::update(format!(
-                                    "Remove type relation by ID failed: {}",
-                                    error_body
-                                ))),
-                            });
-                            succeeded = true; // exit loop, error already recorded
-                            break;
-                        }
-
-                        let response_body: Value = response
-                            .json()
-                            .await
-                            .map_err(|e| SearchIndexError::update(e.to_string()))?;
-
-                        let version_conflicts = response_body["version_conflicts"]
-                            .as_u64()
-                            .unwrap_or(0);
-
-                        if version_conflicts == 0 {
-                            debug!(
-                                relation_id = %relation_uuid,
-                                attempt = attempt,
-                                "Removed type relation by ID via update_by_query"
-                            );
-                            total_succeeded += 1;
-                            all_results.push(BatchOperationResult {
-                                entity_id: String::new(),
-                                space_id: String::new(),
-                                operation_type: "RemoveTypeRelation".to_string(),
-                                success: true,
-                                error: None,
-                            });
-                            succeeded = true;
-                            break;
-                        }
-
-                        // Version conflict — refresh and retry
-                        warn!(
+                    let status = response.status_code();
+                    if status.is_success() {
+                        total_succeeded += 1;
+                        all_results.push(BatchOperationResult {
+                            entity_id: String::new(),
+                            space_id: String::new(),
+                            operation_type: "RemoveTypeRelation".to_string(),
+                            success: true,
+                            error: None,
+                        });
+                        debug!(
                             relation_id = %relation_uuid,
-                            version_conflicts = version_conflicts,
-                            attempt = attempt + 1,
-                            max_retries = max_retries,
-                            "Version conflict during type relation removal, retrying"
+                            "Removed type relation by ID via update_by_query"
                         );
-
-                        // Refresh the index so the retry sees the latest document version
-                        let _ = self
-                            .client
-                            .indices()
-                            .refresh(opensearch::indices::IndicesRefreshParts::Index(&[
-                                &self.index_config.alias,
-                            ]))
-                            .send()
-                            .await;
-                    }
-
-                    if !succeeded {
-                        warn!(
-                            relation_id = %relation_uuid,
-                            "Type relation removal failed after {max_retries} retries due to version conflicts"
-                        );
+                    } else {
+                        let error_body = response.text().await.unwrap_or_default();
+                        error!(status = %status, body = %error_body, "Remove type relation by ID failed");
                         total_failed += 1;
                         all_results.push(BatchOperationResult {
                             entity_id: String::new(),
                             space_id: String::new(),
                             operation_type: "RemoveTypeRelation".to_string(),
                             success: false,
-                            error: Some(SearchIndexError::update(
-                                "Remove type relation failed after retries due to version conflicts"
-                                    .to_string(),
-                            )),
+                            error: Some(SearchIndexError::update(format!(
+                                "Remove type relation by ID failed: {}",
+                                error_body
+                            ))),
                         });
                     }
                 }
