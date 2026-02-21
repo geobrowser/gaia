@@ -53,7 +53,6 @@ function setupTestApp() {
  */
 function makeDbProfileRow(overrides: Partial<Record<string, unknown>> = {}) {
 	return {
-		entity_id: "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
 		space_id: "f3dab79c-b5a3-d9d1-7596-56dd5361d1c6",
 		space_address: "0xab28066d9a7ddFF52B67dF699592BA7060e0d3b9",
 		entity_name: "Test User",
@@ -77,7 +76,6 @@ describe("GET /profile/address/:address", () => {
 		expect(res.status).toBe(200)
 		const body = await res.json()
 		expect(body).toEqual({
-			entityId: "a1b2c3d4e5f67890abcdef1234567890",
 			spaceId: "f3dab79cb5a3d9d1759656dd5361d1c6",
 			name: "Test User",
 			avatarUrl: "https://example.com/avatar.png",
@@ -94,7 +92,6 @@ describe("GET /profile/address/:address", () => {
 		expect(res.status).toBe(200)
 		const body = await res.json()
 		expect(body).toEqual({
-			entityId: null,
 			spaceId: "0x1234567890123456789012345678901234567890",
 			name: null,
 			avatarUrl: null,
@@ -144,7 +141,6 @@ describe("GET /profile/space/:spaceId", () => {
 		expect(res.status).toBe(200)
 		const body = await res.json()
 		expect(body).toEqual({
-			entityId: "a1b2c3d4e5f67890abcdef1234567890",
 			spaceId: "f3dab79cb5a3d9d1759656dd5361d1c6",
 			name: "Test User",
 			avatarUrl: "https://example.com/avatar.png",
@@ -161,7 +157,6 @@ describe("GET /profile/space/:spaceId", () => {
 		expect(res.status).toBe(200)
 		const body = await res.json()
 		expect(body).toEqual({
-			entityId: null,
 			spaceId: "f3dab79cb5a3d9d1759656dd5361d1c6",
 			name: null,
 			avatarUrl: null,

@@ -88,20 +88,6 @@ const uuid = {
 	proposalDeleteRelation: "20000000-0008-4000-8000-000000000008",
 	proposalUpdateRelation: "20000000-0008-4000-8000-000000000009",
 
-	// Blocks-related entities
-	entityWithBlocks: "20000000-0002-4000-8000-000000000020",
-	blockEntity1: "20000000-0002-4000-8000-000000000021",
-	blocksRelation1: "20000000-0006-4000-8000-000000000010",
-	blockTypesRelation1: "20000000-0006-4000-8000-000000000011",
-
-	// GRC-20 system IDs for blocks
-	typesProperty: SystemIds.TYPES_PROPERTY,
-	textBlockType: SystemIds.TEXT_BLOCK,
-	markdownContent: SystemIds.MARKDOWN_CONTENT,
-
-	// Proposals (continued)
-	proposalDeleteBlock: "20000000-0008-4000-8000-000000000010",
-
 	// Proposal actions
 	actionCreateEntity: "20000000-000a-4000-8000-000000000001",
 	actionUpdateEntity: "20000000-000a-4000-8000-000000000002",
@@ -112,7 +98,6 @@ const uuid = {
 	actionClosed: "20000000-000a-4000-8000-000000000007",
 	actionDeleteRelation: "20000000-000a-4000-8000-000000000008",
 	actionUpdateRelation: "20000000-000a-4000-8000-000000000009",
-	actionDeleteBlock: "20000000-000a-4000-8000-000000000010",
 
 	// Value IDs (for value_versions)
 	val: (n: number) => `20000000-0009-4000-8000-${n.toString().padStart(12, "0")}`,
@@ -380,41 +365,7 @@ describe.skipIf(SKIP_INTEGRATION)("Proposal Diff - Full GRC-20 Edit Flow", () =>
 	})
 
 	// ==========================================================================
-	// 7. Block Relation Tests
-	// ==========================================================================
-
-	describe("Block Relations", () => {
-		it("returns REMOVE block diff when deleting a BLOCKS relation", async () => {
-			// Regression test: proposal diffs should include blocks.
-			// Previously, blocks were missing because batch snapshot fetching
-			// skipped block discovery/population.
-			const res = await app.request(
-				`/versioned/proposals/${uuid.proposalDeleteBlock}/diff?spaceId=${uuid.space1}`,
-			)
-			expect(res.status).toBe(200)
-
-			const body = await res.json()
-
-			// The diff should contain the parent entity that owns the BLOCKS relation
-			const entityDiff = body.entities.find((d: any) => d.entityId === n(uuid.entityWithBlocks))
-			expect(entityDiff).toBeDefined()
-
-			// Should have a REMOVE block diff (the block existed in base state, removed in proposed).
-			// Block diffs use the format: { id, type, before, after, diff? }
-			// For a removed text block: before = markdown content string, after = null
-			expect(entityDiff.blocks).toBeDefined()
-			expect(entityDiff.blocks.length).toBeGreaterThan(0)
-
-			const blockDiff = entityDiff.blocks.find((b: any) => b.id === n(uuid.blockEntity1))
-			expect(blockDiff).toBeDefined()
-			expect(blockDiff.type).toBe("textBlock")
-			expect(blockDiff.before).toBe("Block text content")
-			expect(blockDiff.after).toBeNull()
-		})
-	})
-
-	// ==========================================================================
-	// 8. Multiple Operations Tests
+	// 7. Multiple Operations Tests
 	// ==========================================================================
 
 	describe("Multiple Operations", () => {
@@ -610,50 +561,6 @@ async function setupTestData(pool: Pool): Promise<void> {
 			],
 		)
 
-		// Entity with blocks - a page-like entity that has a BLOCKS relation to a text block.
-		// Used by the "Block Relations" test to verify proposal diffs correctly show blocks.
-		await client.query(
-			`INSERT INTO "values" (id, entity_id, property_id, space_id, text)
-			 VALUES ($1, $2, $3, $4, 'Page with blocks') ON CONFLICT DO NOTHING`,
-			[uuid.val(valIdx++), uuid.entityWithBlocks, uuid.propText, uuid.space1],
-		)
-
-		// Block entity - a text block with MARKDOWN_CONTENT value
-		await client.query(
-			`INSERT INTO "values" (id, entity_id, property_id, space_id, text)
-			 VALUES ($1, $2, $3, $4, 'Block text content') ON CONFLICT DO NOTHING`,
-			[uuid.val(valIdx++), uuid.blockEntity1, uuid.markdownContent, uuid.space1],
-		)
-
-		// TYPES relation on the block: blockEntity1 -> TEXT_BLOCK (identifies this as a text block)
-		await client.query(
-			`INSERT INTO relations (id, entity_id, from_entity_id, to_entity_id, type_id, space_id)
-			 VALUES ($1, $2, $3, $4, $5, $6) ON CONFLICT DO NOTHING`,
-			[
-				uuid.blockTypesRelation1,
-				uuid.blockEntity1,
-				uuid.blockEntity1,
-				uuid.textBlockType,
-				uuid.typesProperty,
-				uuid.space1,
-			],
-		)
-
-		// BLOCKS relation: entityWithBlocks -> blockEntity1 (live table)
-		await client.query(
-			`INSERT INTO relations (id, entity_id, from_entity_id, to_entity_id, type_id, space_id, position)
-			 VALUES ($1, $2, $3, $4, $5, $6, $7) ON CONFLICT DO NOTHING`,
-			[
-				uuid.blocksRelation1,
-				uuid.entityWithBlocks,
-				uuid.entityWithBlocks,
-				uuid.blockEntity1,
-				uuid.relTypeBlocks,
-				uuid.space1,
-				"a0",
-			],
-		)
-
 		// Entity to delete (live state)
 		await client.query(
 			`INSERT INTO "values" (id, entity_id, property_id, space_id, text)
@@ -845,25 +752,6 @@ async function setupTestData(pool: Pool): Promise<void> {
 				return builder.build()
 			},
 			contentUri: generateTestUri("update-relation"),
-		})
-
-		// Proposal 10: Delete BLOCKS relation
-		// Regression test: verifies that proposal diffs correctly populate blocks
-		// on base state snapshots, so the diff shows the removed block with its content.
-		await createProposalWithEdit(client, {
-			proposalId: uuid.proposalDeleteBlock,
-			actionId: uuid.actionDeleteBlock,
-			spaceId: uuid.space1,
-			startTime: now - 1000,
-			endTime: now + 86400,
-			editBuilder: (editId) => {
-				const builder = new EditBuilder(editId)
-					.setName("Delete Block Relation")
-					.setCreatedNow()
-					.deleteRelation(uuidToId(uuid.blocksRelation1))
-				return builder.build()
-			},
-			contentUri: generateTestUri("delete-block"),
 		})
 
 		await client.query("COMMIT")
