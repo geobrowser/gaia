@@ -233,16 +233,12 @@ impl OpenSearchProvider {
                 .await
                 .map_err(|e| SearchIndexError::connection(e.to_string()))?;
 
-            let buckets = response_body["aggregations"]["spaces"]["buckets"]
-                .as_array()
-                .unwrap_or(&Vec::new())
-                .clone();
+            let buckets = match response_body["aggregations"]["spaces"]["buckets"].as_array() {
+                Some(b) if !b.is_empty() => b,
+                _ => break,
+            };
 
-            if buckets.is_empty() {
-                break;
-            }
-
-            for bucket in &buckets {
+            for bucket in buckets {
                 let space_id_str = bucket["key"]["space"].as_str().unwrap_or_default();
                 let topic_buckets = bucket["topic"]["buckets"].as_array();
 
@@ -553,6 +549,11 @@ impl SearchIndexProvider for OpenSearchProvider {
                             ))
                         })?;
 
+                    // Conflicts::Proceed so a version conflict doesn't fail the batch.
+                    // The loader processes batches sequentially, so conflicts from our
+                    // own pipeline can't occur. External conflicts (e.g. another indexer
+                    // instance) are harmless — the relation will be removed on the next
+                    // redelivery if this attempt was a no-op.
                     let response = self
                         .client
                         .update_by_query(UpdateByQueryParts::Index(&[
