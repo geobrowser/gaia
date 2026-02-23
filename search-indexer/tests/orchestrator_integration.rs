@@ -312,7 +312,7 @@ impl SearchIndexProvider for MockSearchProvider {
                 // Track the operation in type-specific vectors
                 match op {
                     EntityOperation::Update(req) => {
-                        self.updated_documents.lock().unwrap().push(req.clone());
+                        self.updated_documents.lock().unwrap().push(*req.clone());
                     }
                     EntityOperation::Delete(_) => {
                         // Hard deletes not used - soft delete goes through Update

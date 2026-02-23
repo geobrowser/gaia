@@ -286,7 +286,7 @@ impl SearchIndexService {
 
         // Convert to EntityOperations for bulk_operations
         let operations: Vec<EntityOperation> =
-            requests.into_iter().map(EntityOperation::Update).collect();
+            requests.into_iter().map(|r| EntityOperation::Update(Box::new(r))).collect();
 
         self.provider.bulk_operations(&operations).await
     }

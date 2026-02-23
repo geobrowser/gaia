@@ -58,7 +58,7 @@ impl SearchLoader {
             match event {
                 ProcessedEvent::Index(doc) => {
                     self.pending_operations
-                        .push(EntityOperation::Update(UpdateEntityRequest {
+                        .push(EntityOperation::Update(Box::new(UpdateEntityRequest {
                             entity_id: doc.entity_id.to_string(),
                             space_id: doc.space_id.to_string(),
                             name: doc.name,
@@ -72,7 +72,7 @@ impl SearchLoader {
                             entity_space_score: doc.entity_space_score,
                             deleted: doc.deleted,
                             space_topic_entity_id: doc.space_topic_entity_id,
-                        }));
+                        })));
                 }
                 ProcessedEvent::UnsetProperties {
                     entity_id,
@@ -95,7 +95,7 @@ impl SearchLoader {
                     to_entity_id,
                 } => {
                     self.pending_operations
-                        .push(EntityOperation::Update(UpdateEntityRequest {
+                        .push(EntityOperation::Update(Box::new(UpdateEntityRequest {
                             entity_id: entity_id.to_string(),
                             space_id: space_id.to_string(),
                             name: None,
@@ -113,7 +113,7 @@ impl SearchLoader {
                             entity_space_score: None,
                             deleted: None,
                             space_topic_entity_id: None,
-                        }));
+                        })));
                 }
                 ProcessedEvent::RemoveRelationById { relation_id } => {
                     self.pending_operations

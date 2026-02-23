@@ -146,7 +146,7 @@ pub struct UpdateSpaceTopicEntityIdRequest {
 #[derive(Debug, Clone)]
 pub enum EntityOperation {
     /// Update/upsert an entity document.
-    Update(UpdateEntityRequest),
+    Update(Box<UpdateEntityRequest>),
     /// Delete an entity document.
     Delete(DeleteEntityRequest),
     /// Unset specific properties from an entity document.
