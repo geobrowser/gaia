@@ -558,68 +558,91 @@ impl SearchIndexProvider for OpenSearchProvider {
                             ))
                         })?;
 
-                    // Conflicts::Proceed so a version conflict doesn't fail the batch.
-                    // The loader processes batches sequentially, so conflicts from our
-                    // own pipeline can't occur. External conflicts (e.g. another indexer
-                    // instance) are harmless — the relation will be removed on the next
-                    // redelivery if this attempt was a no-op.
-                    let response = self
-                        .client
-                        .update_by_query(UpdateByQueryParts::Index(&[
-                            &self.index_config.alias,
-                        ]))
-                        .conflicts(Conflicts::Proceed)
-                        .body(json!({
-                            "query": {
-                                "nested": {
-                                    "path": "relations",
-                                    "query": {
-                                        "term": {
-                                            "relations.relation_id": relation_uuid.to_string()
+                    // Retry on version conflict (HTTP 409). This handles the
+                    // NRT reader race where a preceding bulk write's refresh
+                    // hasn't fully propagated to update_by_query's snapshot.
+                    const MAX_RETRIES: u32 = 3;
+                    const RETRY_DELAY_MS: u64 = 50;
+                    let mut attempt = 0u32;
+
+                    loop {
+                        let response = self
+                            .client
+                            .update_by_query(UpdateByQueryParts::Index(&[
+                                &self.index_config.alias,
+                            ]))
+                            .body(json!({
+                                "query": {
+                                    "nested": {
+                                        "path": "relations",
+                                        "query": {
+                                            "term": {
+                                                "relations.relation_id": relation_uuid.to_string()
+                                            }
                                         }
                                     }
+                                },
+                                "script": {
+                                    "source": REMOVE_RELATION_SCRIPT,
+                                    "lang": "painless",
+                                    "params": {
+                                        "relation_id": relation_uuid.to_string()
+                                    }
                                 }
-                            },
-                            "script": {
-                                "source": REMOVE_RELATION_SCRIPT,
-                                "lang": "painless",
-                                "params": {
-                                    "relation_id": relation_uuid.to_string()
-                                }
-                            }
-                        }))
-                        .send()
-                        .await
-                        .map_err(|e| SearchIndexError::update(e.to_string()))?;
+                            }))
+                            .send()
+                            .await
+                            .map_err(|e| SearchIndexError::update(e.to_string()))?;
 
-                    let status = response.status_code();
-                    if status.is_success() {
-                        total_succeeded += 1;
-                        all_results.push(BatchOperationResult {
-                            entity_id: String::new(),
-                            space_id: String::new(),
-                            operation_type: "RemoveRelation".to_string(),
-                            success: true,
-                            error: None,
-                        });
-                        debug!(
-                            relation_id = %relation_uuid,
-                            "Removed relation by ID via update_by_query"
-                        );
-                    } else {
-                        let error_body = response.text().await.unwrap_or_default();
-                        error!(status = %status, body = %error_body, "Remove relation by ID failed");
-                        total_failed += 1;
-                        all_results.push(BatchOperationResult {
-                            entity_id: String::new(),
-                            space_id: String::new(),
-                            operation_type: "RemoveRelation".to_string(),
-                            success: false,
-                            error: Some(SearchIndexError::update(format!(
-                                "Remove relation by ID failed: {}",
-                                error_body
-                            ))),
-                        });
+                        let status = response.status_code();
+                        if status.is_success() {
+                            total_succeeded += 1;
+                            all_results.push(BatchOperationResult {
+                                entity_id: String::new(),
+                                space_id: String::new(),
+                                operation_type: "RemoveRelation".to_string(),
+                                success: true,
+                                error: None,
+                            });
+                            debug!(
+                                relation_id = %relation_uuid,
+                                attempt = attempt,
+                                "Removed relation by ID via update_by_query"
+                            );
+                            break;
+                        } else if status.as_u16() == 409 && attempt < MAX_RETRIES {
+                            attempt += 1;
+                            warn!(
+                                relation_id = %relation_uuid,
+                                attempt = attempt,
+                                "Version conflict on RemoveRelationById, retrying"
+                            );
+                            tokio::time::sleep(std::time::Duration::from_millis(
+                                RETRY_DELAY_MS * attempt as u64,
+                            ))
+                            .await;
+                            continue;
+                        } else {
+                            let error_body = response.text().await.unwrap_or_default();
+                            error!(
+                                status = %status,
+                                body = %error_body,
+                                attempt = attempt,
+                                "Remove relation by ID failed"
+                            );
+                            total_failed += 1;
+                            all_results.push(BatchOperationResult {
+                                entity_id: String::new(),
+                                space_id: String::new(),
+                                operation_type: "RemoveRelation".to_string(),
+                                success: false,
+                                error: Some(SearchIndexError::update(format!(
+                                    "Remove relation by ID failed: {}",
+                                    error_body
+                                ))),
+                            });
+                            break;
+                        }
                     }
                 }
                 EntityOperation::Update(request) => {
