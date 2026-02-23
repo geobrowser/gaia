@@ -9,6 +9,7 @@ use uuid::Uuid;
 
 use generators::{edits, relations, scores, space_topics};
 use kafka::KafkaProducer;
+use sdk::core::ids::AVATAR_RELATION_TYPE_ID;
 
 const DEFAULT_KAFKA_BROKER: &str = "localhost:9092";
 
@@ -136,6 +137,14 @@ async fn main() -> Result<()> {
     let tm_high_score_id = Uuid::parse_str("00000000-0000-0000-0000-00000000aa09").unwrap();
     let tm_low_score_id = Uuid::parse_str("00000000-0000-0000-0000-00000000aa0a").unwrap();
 
+    // Image entities for avatar relations (avatar is now set via relation → image entity)
+    let topic_avatar_image_id = Uuid::parse_str("00000000-0000-0000-0000-0000000a7a01").unwrap();
+    let unset2_avatar_image_id = Uuid::parse_str("00000000-0000-0000-0000-0000000a7a02").unwrap();
+    let lww_avatar_image_id = Uuid::parse_str("00000000-0000-0000-0000-0000000a7a03").unwrap();
+    let create_entity_avatar_image_id =
+        Uuid::parse_str("00000000-0000-0000-0000-0000000a7a04").unwrap();
+    let avatar_relation_type_id = Uuid::parse_str(AVATAR_RELATION_TYPE_ID).unwrap();
+
     // Group F: Exact short name match vs longer prefix name match (query: "geo")
     // Both have NO score values (default score behavior).
     // geo_exact: name="Geo", short exact name match → should rank first
@@ -241,10 +250,35 @@ async fn main() -> Result<()> {
         topic_entity_id,
         Some("Test Space"),
         Some("The main test space for e2e tests"),
-        Some("https://example.com/space-avatar.png"),
+        None,
     )?;
     producer
         .send(&edits_topic, None, topic_entity_payload)
+        .await?;
+
+    // 2.2. Create image entity + avatar relation for topic entity (space avatar)
+    info!("2.2. Creating image entity and avatar relation for topic entity...");
+    let topic_avatar_image_payload = edits::create_entity_edit(
+        "Create Topic Avatar Image",
+        test_space,
+        topic_avatar_image_id,
+        None,
+        None,
+        Some("https://example.com/space-avatar.png"),
+    )?;
+    producer
+        .send(&edits_topic, None, topic_avatar_image_payload)
+        .await?;
+    let topic_avatar_rel_payload = relations::create_custom_relation(
+        "Topic Entity Avatar Relation",
+        test_space,
+        Uuid::new_v4(),
+        avatar_relation_type_id,
+        topic_entity_id,
+        topic_avatar_image_id,
+    )?;
+    producer
+        .send(&edits_topic, None, topic_avatar_rel_payload)
         .await?;
 
     // 3. Create multiple Alice entities with different score profiles
@@ -781,10 +815,35 @@ async fn main() -> Result<()> {
         create_entity_test_id,
         Some("CreateEntity Test"),
         Some("Entity created using the GRC-20 CreateEntity operation"),
-        Some("https://example.com/create-entity-avatar.png"),
+        None,
     )?;
     producer
         .send(&edits_topic, None, create_entity_payload)
+        .await?;
+
+    // 12.1. Create image entity + avatar relation for CreateEntity test
+    info!("12.1. Creating image entity and avatar relation for CreateEntity test...");
+    let ce_avatar_image_payload = edits::create_entity_edit(
+        "Create CreateEntity Avatar Image",
+        test_space,
+        create_entity_avatar_image_id,
+        None,
+        None,
+        Some("https://example.com/create-entity-avatar.png"),
+    )?;
+    producer
+        .send(&edits_topic, None, ce_avatar_image_payload)
+        .await?;
+    let ce_avatar_rel_payload = relations::create_custom_relation(
+        "CreateEntity Avatar Relation",
+        test_space,
+        Uuid::new_v4(),
+        avatar_relation_type_id,
+        create_entity_test_id,
+        create_entity_avatar_image_id,
+    )?;
+    producer
+        .send(&edits_topic, None, ce_avatar_rel_payload)
         .await?;
 
     // 14. Create entities for GLOBAL_BY_ENTITY_SPACE_SCORE ranking test
@@ -1023,10 +1082,34 @@ async fn main() -> Result<()> {
         unset_test_2_id,
         Some("Entity With Name And Description To Unset"),
         Some("This entity will have its name and description unset"),
-        Some("https://example.com/avatar.png"),
+        None,
     )?;
     producer
         .send(&edits_topic, Some(&unset_test_2_key), unset_test_2_create)
+        .await?;
+
+    // Create image entity + avatar relation for unset test 2
+    let unset2_avatar_image_payload = edits::create_entity_edit(
+        "Create Unset2 Avatar Image",
+        test_space,
+        unset2_avatar_image_id,
+        None,
+        None,
+        Some("https://example.com/avatar.png"),
+    )?;
+    producer
+        .send(&edits_topic, None, unset2_avatar_image_payload)
+        .await?;
+    let unset2_avatar_rel_payload = relations::create_custom_relation(
+        "Unset2 Avatar Relation",
+        test_space,
+        Uuid::new_v4(),
+        avatar_relation_type_id,
+        unset_test_2_id,
+        unset2_avatar_image_id,
+    )?;
+    producer
+        .send(&edits_topic, None, unset2_avatar_rel_payload)
         .await?;
 
     info!("    Unsetting name and description properties...");
@@ -1059,10 +1142,34 @@ async fn main() -> Result<()> {
         lww_test_id,
         Some("Initial Name"),
         Some("Initial Description"),
-        Some("https://example.com/lww-avatar.png"),
+        None,
     )?;
     producer
         .send(&edits_topic, Some(&lww_test_key), lww_test_create)
+        .await?;
+
+    // Create image entity + avatar relation for LWW test
+    let lww_avatar_image_payload = edits::create_entity_edit(
+        "Create LWW Avatar Image",
+        test_space,
+        lww_avatar_image_id,
+        None,
+        None,
+        Some("https://example.com/lww-avatar.png"),
+    )?;
+    producer
+        .send(&edits_topic, None, lww_avatar_image_payload)
+        .await?;
+    let lww_avatar_rel_payload = relations::create_custom_relation(
+        "LWW Avatar Relation",
+        test_space,
+        Uuid::new_v4(),
+        avatar_relation_type_id,
+        lww_test_id,
+        lww_avatar_image_id,
+    )?;
+    producer
+        .send(&edits_topic, None, lww_avatar_rel_payload)
         .await?;
 
     info!("    Step 1: Mixed operation - set name='First Update', unset description (different properties)...");

@@ -8,6 +8,7 @@
  */
 
 import {Client} from "@opensearch-project/opensearch"
+import {normalizeUuid, toDashedUuid} from "../../utils/uuid"
 import type {SearchClient} from "./client"
 import {
 	SearchError,
@@ -18,7 +19,6 @@ import {
 	type SearchResultType,
 	type SearchScope,
 } from "./types"
-import {normalizeUuid, toDashedUuid} from "../../utils/uuid"
 
 /**
  * UUID regex patterns for detecting ID-based queries.
@@ -140,9 +140,9 @@ export const MAX_PAGE_SIZE = 100
 /**
  * GRC-20 relation type IDs used to identify avatar and cover relations.
  */
-const TYPE_RELATION_TYPE_ID = "8f151ba4-de20-4e3c-9cb4-99ddf96f48f1"
-const AVATAR_RELATION_TYPE_ID = "1155beff-fad5-49b7-a2e0-da4777b8792c"
-const COVER_RELATION_TYPE_ID = "34f53507-2e6b-42c5-a844-43981a77cfa2"
+const TYPE_RELATION_TYPE_ID = normalizeUuid("8f151ba4-de20-4e3c-9cb4-99ddf96f48f1") as string
+const AVATAR_RELATION_TYPE_ID = normalizeUuid("1155beff-fad5-49b7-a2e0-da4777b8792c") as string
+const COVER_RELATION_TYPE_ID = normalizeUuid("34f53507-2e6b-42c5-a844-43981a77cfa2") as string
 
 /**
  * OpenSearch client implementation.
@@ -223,6 +223,7 @@ export class OpenSearchClient implements SearchClient {
 			if (normalizedAvatarId) allImageEntityIds.add(normalizedAvatarId)
 			if (normalizedCoverId) allImageEntityIds.add(normalizedCoverId)
 
+
 			const spaceTopicEntityId = hit._source.space_topic_entity_id as string | undefined
 			if (spaceTopicEntityId) {
 				allSpaceTopicEntityIds.add(normalizeUuid(spaceTopicEntityId) as string)
@@ -252,9 +253,7 @@ export class OpenSearchClient implements SearchClient {
 
 			// Build enriched space object
 			const spaceId = normalizeUuid(hit._source.space_id as string) as string
-			const normalizedTopicId = spaceTopicEntityId
-				? (normalizeUuid(spaceTopicEntityId) as string)
-				: undefined
+			const normalizedTopicId = spaceTopicEntityId ? (normalizeUuid(spaceTopicEntityId) as string) : undefined
 			const spaceMeta = normalizedTopicId ? spaceMetadataMap.get(normalizedTopicId) : undefined
 			const space: SearchResultSpace = {
 				id: spaceId,
@@ -269,6 +268,7 @@ export class OpenSearchClient implements SearchClient {
 			// Resolve avatar/cover from image entity URLs
 			const avatar = avatarImageEntityId ? imageUrlMap.get(avatarImageEntityId) : undefined
 			const cover = coverImageEntityId ? imageUrlMap.get(coverImageEntityId) : undefined
+
 
 			return {
 				entityId: normalizeUuid(hit._source.entity_id as string) as string,
@@ -326,6 +326,7 @@ export class OpenSearchClient implements SearchClient {
 	/**
 	 * Batch-fetch space metadata from topic entities in the index.
 	 * Returns a map of topicEntityId → { name, description, avatar, cover }.
+	 * Avatar/cover are resolved from relations on the topic entity → image entities.
 	 */
 	private async resolveSpaceMetadata(
 		topicEntityIds: string[],
@@ -339,24 +340,51 @@ export class OpenSearchClient implements SearchClient {
 			index: this.indexName,
 			body: {
 				query: {terms: {entity_id: termVariants}},
-				_source: ["entity_id", "name", "description", "avatar", "cover"],
+				_source: ["entity_id", "name", "description", "relations"],
 				size: topicEntityIds.length,
 			},
 		})
 
-		const metadataMap = new Map<
-			string,
-			{name?: string; description?: string; avatar?: string; cover?: string}
-		>()
+		// Collect image entity IDs from avatar/cover relations on topic entities
+		const imageEntityIds = new Set<string>()
+		for (const hit of response.body.hits.hits) {
+			const source = hit._source as Record<string, unknown>
+			const relations = source.relations as Array<{relation_type: string; to_entity_id: string}> | undefined
+			if (relations) {
+				for (const rel of relations) {
+					const relType = normalizeUuid(rel.relation_type) as string
+					if (relType === AVATAR_RELATION_TYPE_ID || relType === COVER_RELATION_TYPE_ID) {
+						imageEntityIds.add(normalizeUuid(rel.to_entity_id) as string)
+					}
+				}
+			}
+		}
+
+		// Resolve image URLs for avatar/cover
+		const imageUrlMap = imageEntityIds.size > 0 ? await this.resolveImageUrls([...imageEntityIds]) : new Map<string, string>()
+
+		const metadataMap = new Map<string, {name?: string; description?: string; avatar?: string; cover?: string}>()
 		for (const hit of response.body.hits.hits) {
 			const source = hit._source as Record<string, unknown>
 			const entityId = normalizeUuid(source.entity_id as string) as string
 			if (!metadataMap.has(entityId)) {
+				const relations = source.relations as Array<{relation_type: string; to_entity_id: string}> | undefined
+
+				// Resolve avatar/cover from relations → image entities
+				let avatar: string | undefined
+				let cover: string | undefined
+				if (relations) {
+					const avatarRel = relations.find((rel) => normalizeUuid(rel.relation_type) === AVATAR_RELATION_TYPE_ID)
+					if (avatarRel) avatar = imageUrlMap.get(normalizeUuid(avatarRel.to_entity_id) as string)
+					const coverRel = relations.find((rel) => normalizeUuid(rel.relation_type) === COVER_RELATION_TYPE_ID)
+					if (coverRel) cover = imageUrlMap.get(normalizeUuid(coverRel.to_entity_id) as string)
+				}
+
 				metadataMap.set(entityId, {
 					name: source.name as string | undefined,
 					description: source.description as string | undefined,
-					avatar: source.avatar as string | undefined,
-					cover: source.cover as string | undefined,
+					avatar,
+					cover,
 				})
 			}
 		}

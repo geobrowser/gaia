@@ -189,9 +189,9 @@ impl Processor {
             // 2. Pipeline emit ordering: within a single block, hermes-pipeline
             //    emits `space.topics` BEFORE `knowledge.edits`, so the topic
             //    entity's full data (name, description, avatar) could arrive
-            //    AFTER this event. The stub is created now and the full entity
-            //    data merges into it via upsert when `knowledge.edits` is
-            //    processed.
+            //    AFTER this event. The None fields (name, description, etc.) are
+            //    ignored by build_update_doc in the loader, so only entity_id,
+            //    space_id, and space_topic_entity_id are written to the index.
             let mut doc = EntityDocument::new(
                 event.topic_entity_id,
                 event.space_id,
@@ -288,6 +288,7 @@ impl Processor {
     ///
     /// Receives batches from all consumers, processes them, and sends results to the loader.
     /// Returns a tokio task handle.
+    #[allow(clippy::too_many_arguments)]
     pub fn run(
         mut self,
         mut entity_rx: mpsc::Receiver<EntityProcessingBatch>,
@@ -1106,4 +1107,5 @@ mod tests {
             panic!("Expected ProcessedEvent::Index");
         }
     }
+
 }

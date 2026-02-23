@@ -185,7 +185,8 @@ export function createSearchRouter(searchClient: SearchClient, runtime: AppRunti
 												entityId: {type: "string", format: "uuid"},
 												space: {
 													type: "object",
-													description: "The space this entity belongs to, with optional metadata",
+													description:
+														"The space this entity belongs to, with optional metadata",
 													properties: {
 														id: {type: "string", format: "uuid"},
 														name: {type: "string"},
@@ -209,7 +210,8 @@ export function createSearchRouter(searchClient: SearchClient, runtime: AppRunti
 														},
 														required: ["id"],
 													},
-													description: "Types associated with this entity, with optional names",
+													description:
+														"Types associated with this entity, with optional names",
 												},
 												entityGlobalScore: {type: "number", description: "Global entity score"},
 												spaceScore: {type: "number", description: "Space score"},

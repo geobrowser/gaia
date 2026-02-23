@@ -2272,6 +2272,83 @@ class SearchValidator {
     }
   }
 
+  /**
+   * Test 37: Verify that entities in spaces WITHOUT a topic declaration
+   * do not get enriched space metadata (name, description, avatar).
+   *
+   * The rank_high_space and rank_low_space have no HermesTopicDeclared event,
+   * so their entities should have space.id but NOT space.name/description/avatar.
+   * This is the counterpart to test35 which verifies spaces WITH topics DO get metadata.
+   */
+  async test37_SpaceWithoutTopicHasNoMetadata(): Promise<void> {
+    console.log(`\n${BLUE}Test 37: Verify spaces without topic declaration have no enriched metadata${NC}`);
+
+    const response = await this.search({
+      query: 'RankTest',
+      scope: 'GLOBAL',
+    });
+
+    // Find Gamma entity (lives in rank_high_space which has no topic declared)
+    const gamma = response.results.find(r => r.entityId === TEST_ENTITIES.RANK_GAMMA_ENTITY_ID);
+
+    if (!gamma) {
+      this.addResult('test37_gamma_found', false,
+        `Could not find RankTest Gamma entity (${TEST_ENTITIES.RANK_GAMMA_ENTITY_ID})`);
+      return;
+    }
+
+    // 37a: space.id should be present (always set from the edit event)
+    if (gamma.space.id === TEST_ENTITIES.RANK_HIGH_SPACE_ID) {
+      this.addResult('test37a_space_id_present', true,
+        `Gamma space.id is present and matches rank_high_space`);
+    } else {
+      this.addResult('test37a_space_id_present', false,
+        `Gamma space.id should be ${TEST_ENTITIES.RANK_HIGH_SPACE_ID}, got ${gamma.space.id}`);
+    }
+
+    // 37b: space.name should be absent (no topic declared for this space)
+    if (!gamma.space.name) {
+      this.addResult('test37b_no_space_name', true,
+        `Gamma has no space.name (correct — no topic declared for rank_high_space)`);
+    } else {
+      this.addResult('test37b_no_space_name', false,
+        `Gamma should not have space.name (no topic declared), got "${gamma.space.name}"`);
+    }
+
+    // 37c: space.description should be absent
+    if (!gamma.space.description) {
+      this.addResult('test37c_no_space_description', true,
+        `Gamma has no space.description (correct — no topic declared)`);
+    } else {
+      this.addResult('test37c_no_space_description', false,
+        `Gamma should not have space.description, got "${gamma.space.description}"`);
+    }
+
+    // 37d: space.avatar should be absent
+    if (!gamma.space.avatar) {
+      this.addResult('test37d_no_space_avatar', true,
+        `Gamma has no space.avatar (correct — no topic declared)`);
+    } else {
+      this.addResult('test37d_no_space_avatar', false,
+        `Gamma should not have space.avatar, got "${gamma.space.avatar}"`);
+    }
+
+    // 37e: Check a second entity in a different space without topic (rank_low_space)
+    const epsilon = response.results.find(r => r.entityId === TEST_ENTITIES.RANK_EPSILON_ENTITY_ID);
+
+    if (!epsilon) {
+      this.addResult('test37e_epsilon_found', false,
+        `Could not find RankTest Epsilon entity (${TEST_ENTITIES.RANK_EPSILON_ENTITY_ID})`);
+    } else if (!epsilon.space.name && !epsilon.space.description && !epsilon.space.avatar) {
+      this.addResult('test37e_epsilon_no_metadata', true,
+        `Epsilon (rank_low_space) also has no enriched space metadata`);
+    } else {
+      this.addResult('test37e_epsilon_no_metadata', false,
+        `Epsilon should not have space metadata, got name="${epsilon.space.name}" desc="${epsilon.space.description}" avatar="${epsilon.space.avatar}"`);
+    }
+  }
+
+
   printSummary() {
     console.log(`\n${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}`);
 
@@ -2369,6 +2446,7 @@ async function main() {
     await validator.test34_DashlessUuidFormat();
     await validator.test35_SpaceAndTypeEnrichment();
     await validator.test36_SpaceTopicCreatesDocument();
+    await validator.test37_SpaceWithoutTopicHasNoMetadata();
 
     const allPassed = validator.printSummary();
     process.exit(allPassed ? 0 : 1);
