@@ -212,24 +212,29 @@ export class OpenSearchClient implements SearchClient {
 			typeIds?.forEach((id) => allTypeEntityIds.add(id))
 
 			// Extract avatar/cover image entity IDs from relations
-			const avatarImageEntityId = relations
-				?.find((rel) => normalizeUuid(rel.relation_type) === AVATAR_RELATION_TYPE_ID)
-				?.to_entity_id
-			const coverImageEntityId = relations
-				?.find((rel) => normalizeUuid(rel.relation_type) === COVER_RELATION_TYPE_ID)
-				?.to_entity_id
+			const avatarImageEntityId = relations?.find(
+				(rel) => normalizeUuid(rel.relation_type) === AVATAR_RELATION_TYPE_ID,
+			)?.to_entity_id
+			const coverImageEntityId = relations?.find(
+				(rel) => normalizeUuid(rel.relation_type) === COVER_RELATION_TYPE_ID,
+			)?.to_entity_id
 			const normalizedAvatarId = avatarImageEntityId ? (normalizeUuid(avatarImageEntityId) as string) : undefined
 			const normalizedCoverId = coverImageEntityId ? (normalizeUuid(coverImageEntityId) as string) : undefined
 			if (normalizedAvatarId) allImageEntityIds.add(normalizedAvatarId)
 			if (normalizedCoverId) allImageEntityIds.add(normalizedCoverId)
-
 
 			const spaceTopicEntityId = hit._source.space_topic_entity_id as string | undefined
 			if (spaceTopicEntityId) {
 				allSpaceTopicEntityIds.add(normalizeUuid(spaceTopicEntityId) as string)
 			}
 
-			return {hit, typeIds, spaceTopicEntityId, avatarImageEntityId: normalizedAvatarId, coverImageEntityId: normalizedCoverId}
+			return {
+				hit,
+				typeIds,
+				spaceTopicEntityId,
+				avatarImageEntityId: normalizedAvatarId,
+				coverImageEntityId: normalizedCoverId,
+			}
 		})
 
 		// Batch-resolve type names, space metadata, and image URLs in parallel
@@ -240,51 +245,53 @@ export class OpenSearchClient implements SearchClient {
 		])
 
 		// Second pass: build results with enriched data
-		const results: SearchResult[] = hitData.map(({hit, typeIds, spaceTopicEntityId, avatarImageEntityId, coverImageEntityId}) => {
-			// Compute relevanceScore and textMatchScore
-			const relevanceScore = hit._score
-			const scoreBoost = hit.fields?.score_boost?.[0]
-			const textMatchScore = scoreBoost !== undefined ? Math.max(0, relevanceScore - scoreBoost) : relevanceScore
+		const results: SearchResult[] = hitData.map(
+			({hit, typeIds, spaceTopicEntityId, avatarImageEntityId, coverImageEntityId}) => {
+				// Compute relevanceScore and textMatchScore
+				const relevanceScore = hit._score
+				const scoreBoost = hit.fields?.score_boost?.[0]
+				const textMatchScore =
+					scoreBoost !== undefined ? Math.max(0, relevanceScore - scoreBoost) : relevanceScore
 
-			// Build enriched types array
-			const types: SearchResultType[] | undefined = typeIds?.length
-				? typeIds.map((id) => ({id, name: typeNameMap.get(id)}))
-				: undefined
+				// Build enriched types array
+				const types: SearchResultType[] | undefined = typeIds?.length
+					? typeIds.map((id) => ({id, name: typeNameMap.get(id)}))
+					: undefined
 
-			// Build enriched space object
-			const spaceId = normalizeUuid(hit._source.space_id as string) as string
-			const normalizedTopicId = spaceTopicEntityId ? (normalizeUuid(spaceTopicEntityId) as string) : undefined
-			const spaceMeta = normalizedTopicId ? spaceMetadataMap.get(normalizedTopicId) : undefined
-			const space: SearchResultSpace = {
-				id: spaceId,
-				...(spaceMeta && {
-					name: spaceMeta.name,
-					description: spaceMeta.description,
-					avatar: spaceMeta.avatar,
-					cover: spaceMeta.cover,
-				}),
-			}
+				// Build enriched space object
+				const spaceId = normalizeUuid(hit._source.space_id as string) as string
+				const normalizedTopicId = spaceTopicEntityId ? (normalizeUuid(spaceTopicEntityId) as string) : undefined
+				const spaceMeta = normalizedTopicId ? spaceMetadataMap.get(normalizedTopicId) : undefined
+				const space: SearchResultSpace = {
+					id: spaceId,
+					...(spaceMeta && {
+						name: spaceMeta.name,
+						description: spaceMeta.description,
+						avatar: spaceMeta.avatar,
+						cover: spaceMeta.cover,
+					}),
+				}
 
-			// Resolve avatar/cover from image entity URLs
-			const avatar = avatarImageEntityId ? imageUrlMap.get(avatarImageEntityId) : undefined
-			const cover = coverImageEntityId ? imageUrlMap.get(coverImageEntityId) : undefined
+				// Resolve avatar/cover from image entity URLs
+				const avatar = avatarImageEntityId ? imageUrlMap.get(avatarImageEntityId) : undefined
+				const cover = coverImageEntityId ? imageUrlMap.get(coverImageEntityId) : undefined
 
-
-			return {
-				entityId: normalizeUuid(hit._source.entity_id as string) as string,
-				space,
-				name: hit._source.name as string | undefined,
-				description: hit._source.description as string | undefined,
-				avatar,
-				cover,
-				types,
-				entityGlobalScore: hit._source.entity_global_score as number | undefined,
-				spaceScore: hit._source.space_score as number | undefined,
-				entitySpaceScore: hit._source.entity_space_score as number | undefined,
-				relevanceScore,
-				textMatchScore,
-			}
-		})
+				return {
+					entityId: normalizeUuid(hit._source.entity_id as string) as string,
+					space,
+					name: hit._source.name as string | undefined,
+					description: hit._source.description as string | undefined,
+					avatar,
+					cover,
+					types,
+					entityGlobalScore: hit._source.entity_global_score as number | undefined,
+					spaceScore: hit._source.space_score as number | undefined,
+					entitySpaceScore: hit._source.entity_space_score as number | undefined,
+					relevanceScore,
+					textMatchScore,
+				}
+			},
+		)
 
 		return {
 			results,
@@ -361,7 +368,8 @@ export class OpenSearchClient implements SearchClient {
 		}
 
 		// Resolve image URLs for avatar/cover
-		const imageUrlMap = imageEntityIds.size > 0 ? await this.resolveImageUrls([...imageEntityIds]) : new Map<string, string>()
+		const imageUrlMap =
+			imageEntityIds.size > 0 ? await this.resolveImageUrls([...imageEntityIds]) : new Map<string, string>()
 
 		const metadataMap = new Map<string, {name?: string; description?: string; avatar?: string; cover?: string}>()
 		for (const hit of response.body.hits.hits) {
@@ -374,9 +382,13 @@ export class OpenSearchClient implements SearchClient {
 				let avatar: string | undefined
 				let cover: string | undefined
 				if (relations) {
-					const avatarRel = relations.find((rel) => normalizeUuid(rel.relation_type) === AVATAR_RELATION_TYPE_ID)
+					const avatarRel = relations.find(
+						(rel) => normalizeUuid(rel.relation_type) === AVATAR_RELATION_TYPE_ID,
+					)
 					if (avatarRel) avatar = imageUrlMap.get(normalizeUuid(avatarRel.to_entity_id) as string)
-					const coverRel = relations.find((rel) => normalizeUuid(rel.relation_type) === COVER_RELATION_TYPE_ID)
+					const coverRel = relations.find(
+						(rel) => normalizeUuid(rel.relation_type) === COVER_RELATION_TYPE_ID,
+					)
 					if (coverRel) cover = imageUrlMap.get(normalizeUuid(coverRel.to_entity_id) as string)
 				}
 
