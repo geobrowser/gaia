@@ -2,17 +2,18 @@
 //!
 //! Transforms entity and score events into search documents.
 
+use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
-use hermes_instrumentation::{debug, error, instrument, warn};
+use hermes_instrumentation::{debug, error, info, instrument, warn};
 
 use crate::consumer::StreamMessage;
-use crate::consumer::{EntityEvent, EntityEventType, ScoreEvent, ScoreEventType};
+use crate::consumer::{EntityEvent, EntityEventType, ScoreEvent, ScoreEventType, SpaceTopicEvent};
 use crate::errors::IngestError;
 use crate::metrics::SearchIndexerMetrics;
-use crate::orchestrator::{EntityProcessingBatch, ProcessedBatch, ScoreProcessingBatch};
+use crate::orchestrator::{BatchSource, EntityProcessingBatch, ProcessedBatch, ScoreProcessingBatch, SpaceTopicProcessingBatch};
 use sdk::core::ids::TYPE_RELATION_TYPE_ID;
 use search_indexer_shared::EntityDocument;
 use uuid::Uuid;
@@ -52,6 +53,12 @@ pub enum ProcessedEvent {
         space_id: uuid::Uuid,
         score: f64,
     },
+    /// Update space_topic_entity_id for all entities in a space.
+    /// This records which entity represents the space (its topic entity).
+    UpdateSpaceTopicEntityId {
+        space_id: uuid::Uuid,
+        topic_entity_id: uuid::Uuid,
+    },
 }
 
 /// Processor that transforms entity and score events into search documents.
@@ -60,15 +67,27 @@ pub enum ProcessedEvent {
 /// - Converting entity events to EntityDocument structures
 /// - Converting score events to score update operations
 /// - Filtering out events that shouldn't be indexed
-/// - Enriching documents with additional metadata
+/// - Enriching documents with additional metadata (e.g., space_topic_entity_id from cache)
 pub struct Processor {
-    // Could hold configuration or caches in the future
+    /// In-memory cache of space_id → topic_entity_id.
+    /// Used to set space_topic_entity_id on new entity documents during upserts.
+    space_topic_cache: HashMap<Uuid, Uuid>,
 }
 
 impl Processor {
-    /// Create a new processor.
+    /// Create a new processor with an empty space topic cache.
     pub fn new() -> Self {
-        Self {}
+        Self {
+            space_topic_cache: HashMap::new(),
+        }
+    }
+
+    /// Create a new processor with a pre-warmed space topic cache.
+    pub fn with_space_topic_cache(cache: HashMap<Uuid, Uuid>) -> Self {
+        info!(cache_size = cache.len(), "Processor created with space topic cache");
+        Self {
+            space_topic_cache: cache,
+        }
     }
 
     /// Check if a relation type represents an entity type relationship.
@@ -128,6 +147,65 @@ impl Processor {
         debug!(
             processed_count = processed.len(),
             "Processed score event batch"
+        );
+        Ok(processed)
+    }
+
+    /// Process a batch of space topic events.
+    ///
+    /// For each event this:
+    /// 1. Updates the in-memory cache so subsequent entity upserts get `space_topic_entity_id` set.
+    /// 2. Emits an `UpdateSpaceTopicEntityId` to backfill existing docs via `update_by_query`.
+    /// 3. Upserts a stub document for the topic entity itself. This ensures the mapping
+    ///    survives indexer restarts (the cache warm-up query will find this document) even
+    ///    if no other entities in the space have been indexed yet. When the full entity data
+    ///    arrives via `knowledge.edits`, the upsert merges into this stub.
+    #[instrument(skip(self, events), fields(event_count = events.len()))]
+    pub fn process_space_topic_batch(
+        &mut self,
+        events: Vec<SpaceTopicEvent>,
+    ) -> Result<Vec<ProcessedEvent>, IngestError> {
+        let mut processed = Vec::with_capacity(events.len() * 2);
+
+        for event in events {
+            // Update the cache before creating the processed events
+            self.space_topic_cache
+                .insert(event.space_id, event.topic_entity_id);
+
+            // Backfill all existing documents in this space
+            processed.push(ProcessedEvent::UpdateSpaceTopicEntityId {
+                space_id: event.space_id,
+                topic_entity_id: event.topic_entity_id,
+            });
+
+            // Upsert a stub document for the topic entity itself. This is
+            // necessary for two reasons:
+            //
+            // 1. Restart resilience: if the indexer restarts before any entities
+            //    in this space are indexed, the in-memory cache is lost. The
+            //    cache warm-up query (`get_space_topic_mappings`) reads
+            //    `space_topic_entity_id` from the index — without this stub
+            //    document, there would be nothing to warm from.
+            //
+            // 2. Pipeline emit ordering: within a single block, hermes-pipeline
+            //    emits `space.topics` BEFORE `knowledge.edits`, so the topic
+            //    entity's full data (name, description, avatar) could arrive
+            //    AFTER this event. The None fields (name, description, etc.) are
+            //    ignored by build_update_doc in the loader, so only entity_id,
+            //    space_id, and space_topic_entity_id are written to the index.
+            let mut doc = EntityDocument::new(
+                event.topic_entity_id,
+                event.space_id,
+                None,
+                None,
+            );
+            doc.space_topic_entity_id = Some(event.topic_entity_id.to_string());
+            processed.push(ProcessedEvent::Index(doc));
+        }
+
+        debug!(
+            processed_count = processed.len(),
+            "Processed space topic event batch"
         );
         Ok(processed)
     }
@@ -207,30 +285,34 @@ impl Processor {
         }
     }
 
-    /// Run the processor task with both entity and score event processing.
+    /// Run the processor task with entity, score, and space topic event processing.
     ///
-    /// Receives batches from both consumers, processes them, and sends results to the loader.
+    /// Receives batches from all consumers, processes them, and sends results to the loader.
     /// Returns a tokio task handle.
+    #[allow(clippy::too_many_arguments)]
     pub fn run(
-        self,
+        mut self,
         mut entity_rx: mpsc::Receiver<EntityProcessingBatch>,
         mut scores_rx: mpsc::Receiver<ScoreProcessingBatch>,
+        mut space_topics_rx: mpsc::Receiver<SpaceTopicProcessingBatch>,
         loader_tx: mpsc::Sender<ProcessedBatch>,
         entity_ack_tx: mpsc::Sender<StreamMessage>,
         scores_ack_tx: mpsc::Sender<StreamMessage>,
+        space_topics_ack_tx: mpsc::Sender<StreamMessage>,
         metrics: Arc<SearchIndexerMetrics>,
     ) -> JoinHandle<()> {
         tokio::spawn(async move {
             let mut entity_closed = false;
             let mut scores_closed = false;
+            let mut space_topics_closed = false;
 
             loop {
-                // Exit when both channels are closed
-                if entity_closed && scores_closed {
+                // Exit when all channels are closed
+                if entity_closed && scores_closed && space_topics_closed {
                     break;
                 }
 
-                // Use tokio::select to handle both channels
+                // Use tokio::select to handle all channels
                 tokio::select! {
                     // Handle entity events
                     entity_batch = entity_rx.recv(), if !entity_closed => {
@@ -263,6 +345,23 @@ impl Processor {
                             None => {
                                 warn!("Scores processor channel closed");
                                 scores_closed = true;
+                            }
+                        }
+                    }
+                    // Handle space topic events
+                    space_topic_batch = space_topics_rx.recv(), if !space_topics_closed => {
+                        match space_topic_batch {
+                            Some(batch) => {
+                                self.handle_space_topic_batch(
+                                    batch,
+                                    &loader_tx,
+                                    &space_topics_ack_tx,
+                                    &metrics,
+                                ).await;
+                            }
+                            None => {
+                                warn!("Space topics processor channel closed");
+                                space_topics_closed = true;
                             }
                         }
                     }
@@ -317,7 +416,7 @@ impl Processor {
                     events: processed_events,
                     offsets,
                     index_count,
-                    is_scores_batch: false,
+                    source: BatchSource::Entity,
                 };
 
                 if let Err(send_err) = loader_tx.send(processed_batch).await {
@@ -381,7 +480,7 @@ impl Processor {
                     events: processed_events,
                     offsets,
                     index_count: 0, // Score updates don't count as new documents
-                    is_scores_batch: true,
+                    source: BatchSource::Score,
                 };
 
                 if let Err(send_err) = loader_tx.send(processed_batch).await {
@@ -404,6 +503,69 @@ impl Processor {
         }
     }
 
+    /// Handle a batch of space topic events.
+    #[instrument(skip(self, batch, loader_tx, ack_tx, metrics), fields(event_count = batch.event_count))]
+    async fn handle_space_topic_batch(
+        &mut self,
+        batch: SpaceTopicProcessingBatch,
+        loader_tx: &mpsc::Sender<ProcessedBatch>,
+        ack_tx: &mpsc::Sender<StreamMessage>,
+        metrics: &Arc<SearchIndexerMetrics>,
+    ) {
+        let SpaceTopicProcessingBatch {
+            events,
+            offsets,
+            event_count,
+        } = batch;
+
+        match self.process_space_topic_batch(events) {
+            Ok(processed_events) => {
+                metrics
+                    .total_events_processed
+                    .fetch_add(event_count as u64, Ordering::Relaxed);
+
+                if processed_events.is_empty() {
+                    debug!("No space topic updates to index, sending ACK directly");
+                    if let Err(send_err) = ack_tx
+                        .send(StreamMessage::Acknowledgment {
+                            offsets,
+                            success: true,
+                            error: None,
+                        })
+                        .await
+                    {
+                        error!(error = %send_err, "Failed to send space topics acknowledgment - channel closed");
+                    }
+                    return;
+                }
+
+                let processed_batch = ProcessedBatch {
+                    events: processed_events,
+                    offsets,
+                    index_count: 0,
+                    source: BatchSource::SpaceTopic,
+                };
+
+                if let Err(send_err) = loader_tx.send(processed_batch).await {
+                    error!(error = %send_err, "Failed to send space topic batch to loader - channel closed");
+                }
+            }
+            Err(e) => {
+                error!(error = %e, "Failed to process space topic events, sending NACK to consumer");
+                if let Err(send_err) = ack_tx
+                    .send(StreamMessage::Acknowledgment {
+                        offsets,
+                        success: false,
+                        error: Some(e.to_string()),
+                    })
+                    .await
+                {
+                    error!(error = %send_err, "Failed to send space topics failure acknowledgment - channel closed");
+                }
+            }
+        }
+    }
+
     /// Process a single entity event.
     fn process_event(&self, event: EntityEvent) -> Result<Option<ProcessedEvent>, IngestError> {
         match event.event_type {
@@ -419,6 +581,11 @@ impl Processor {
                 // Set optional fields
                 doc.avatar = event.avatar;
                 doc.cover = event.cover;
+
+                // Look up space_topic_entity_id from cache
+                if let Some(topic_entity_id) = self.space_topic_cache.get(&event.space_id) {
+                    doc.space_topic_entity_id = Some(topic_entity_id.to_string());
+                }
 
                 Ok(Some(ProcessedEvent::Index(doc)))
             }
@@ -512,6 +679,14 @@ impl Processor {
 impl Default for Processor {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+impl Processor {
+    /// Get the current size of the space topic cache (for testing/metrics).
+    #[cfg(test)]
+    pub fn space_topic_cache_len(&self) -> usize {
+        self.space_topic_cache.len()
     }
 }
 
@@ -726,5 +901,120 @@ mod tests {
         let type_relation_id =
             Uuid::parse_str(TYPE_RELATION_TYPE_ID).expect("TYPE_RELATION_TYPE_ID should be valid");
         assert!(processor.is_type_relation(&type_relation_id));
+    }
+
+    #[test]
+    fn test_process_upsert_with_space_topic_cache() {
+        // Pre-warm cache with a space→topic mapping
+        let space_id = Uuid::new_v4();
+        let topic_entity_id = Uuid::new_v4();
+        let mut cache = HashMap::new();
+        cache.insert(space_id, topic_entity_id);
+
+        let processor = Processor::with_space_topic_cache(cache);
+
+        let event = EntityEvent::upsert(
+            Uuid::new_v4(),
+            space_id,
+            Some("Test Entity".to_string()),
+            None,
+            None,
+        );
+
+        let result = processor.process_event(event).unwrap();
+        assert!(matches!(result, Some(ProcessedEvent::Index(_))));
+
+        if let Some(ProcessedEvent::Index(doc)) = result {
+            assert_eq!(
+                doc.space_topic_entity_id,
+                Some(topic_entity_id.to_string()),
+                "Upsert for a cached space should have space_topic_entity_id set"
+            );
+        }
+    }
+
+    #[test]
+    fn test_process_upsert_without_space_topic_cache() {
+        // Empty cache — no space_topic_entity_id should be set
+        let processor = Processor::new();
+
+        let event = EntityEvent::upsert(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Some("Test Entity".to_string()),
+            None,
+            None,
+        );
+
+        let result = processor.process_event(event).unwrap();
+        assert!(matches!(result, Some(ProcessedEvent::Index(_))));
+
+        if let Some(ProcessedEvent::Index(doc)) = result {
+            assert_eq!(
+                doc.space_topic_entity_id, None,
+                "Upsert for an uncached space should have space_topic_entity_id None"
+            );
+        }
+    }
+
+    #[test]
+    fn test_space_topic_batch_updates_cache_and_creates_stub() {
+        let mut processor = Processor::new();
+        assert_eq!(processor.space_topic_cache_len(), 0);
+
+        let space_id = Uuid::new_v4();
+        let topic_entity_id = Uuid::new_v4();
+
+        // Process a space topic event
+        let events = vec![SpaceTopicEvent {
+            space_id,
+            topic_entity_id,
+        }];
+        let processed = processor.process_space_topic_batch(events).unwrap();
+
+        // Should emit 2 events: UpdateSpaceTopicEntityId + Index stub
+        assert_eq!(processed.len(), 2);
+        assert!(matches!(
+            processed[0],
+            ProcessedEvent::UpdateSpaceTopicEntityId { .. }
+        ));
+
+        // Verify the stub document
+        if let ProcessedEvent::Index(ref doc) = processed[1] {
+            assert_eq!(doc.entity_id, topic_entity_id);
+            assert_eq!(doc.space_id, space_id);
+            assert_eq!(
+                doc.space_topic_entity_id,
+                Some(topic_entity_id.to_string()),
+                "Stub document should have space_topic_entity_id set to itself"
+            );
+            assert!(doc.name.is_none(), "Stub document should have no name");
+            assert!(doc.description.is_none(), "Stub document should have no description");
+        } else {
+            panic!("Expected ProcessedEvent::Index for stub document");
+        }
+
+        // Cache should now have one entry
+        assert_eq!(processor.space_topic_cache_len(), 1);
+
+        // Now upsert an entity for that space — it should pick up the topic
+        let event = EntityEvent::upsert(
+            Uuid::new_v4(),
+            space_id,
+            Some("New Entity".to_string()),
+            None,
+            None,
+        );
+
+        let result = processor.process_event(event).unwrap();
+        if let Some(ProcessedEvent::Index(doc)) = result {
+            assert_eq!(
+                doc.space_topic_entity_id,
+                Some(topic_entity_id.to_string()),
+                "After processing a SpaceTopicEvent, subsequent upserts should have the topic set"
+            );
+        } else {
+            panic!("Expected ProcessedEvent::Index");
+        }
     }
 }

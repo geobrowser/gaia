@@ -122,6 +122,9 @@ pub fn get_index_settings(_version: Option<u32>) -> Value {
                 "entity_space_score": {
                     "type": "float"
                 },
+                "space_topic_entity_id": {
+                    "type": "keyword"
+                },
                 "indexed_at": {
                     "type": "date"
                 },

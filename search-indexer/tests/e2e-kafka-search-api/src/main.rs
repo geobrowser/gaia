@@ -7,7 +7,7 @@ use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
 use uuid::Uuid;
 
-use generators::{edits, relations, scores};
+use generators::{edits, relations, scores, space_topics};
 use kafka::KafkaProducer;
 
 const DEFAULT_KAFKA_BROKER: &str = "localhost:9092";
@@ -60,12 +60,13 @@ async fn main() -> Result<()> {
     // Get prefixed topic names based on ENVIRONMENT variable
     let edits_topic = prefixed_topic("knowledge.edits");
     let scores_topic = prefixed_topic("curation.scores");
+    let space_topics_topic = prefixed_topic("space.topics");
     let topic_prefix = get_topic_prefix();
 
     info!("Topic prefix: '{}'", topic_prefix);
     info!(
-        "Using topics: edits={}, scores={}",
-        edits_topic, scores_topic
+        "Using topics: edits={}, scores={}, space_topics={}",
+        edits_topic, scores_topic, space_topics_topic
     );
 
     // Create Kafka producer
@@ -77,6 +78,12 @@ async fn main() -> Result<()> {
     let test_space = Uuid::parse_str("00000000-0000-4000-8000-000000000001").unwrap();
     let person_type_id = Uuid::parse_str("00000000-0000-0000-0000-000000000b01").unwrap();
     let org_type_id = Uuid::parse_str("00000000-0000-0000-0000-000000000b02").unwrap();
+
+    // Topic entity for space metadata enrichment (represents test_space as a topic)
+    let topic_entity_id = Uuid::parse_str("00000000-0000-0000-0000-000000000d00").unwrap();
+
+    // Entity created AFTER the space.topics event (tests cache-hit ordering)
+    let late_entity_id = Uuid::parse_str("00000000-0000-0000-0000-00000000af01").unwrap();
 
     // Multiple Alice entities for score-based testing (FIXED IDs for validation)
     let alice_high_id = Uuid::parse_str("00000000-0000-0000-0000-0000000000f1").unwrap();
@@ -225,6 +232,20 @@ async fn main() -> Result<()> {
         None,
     )?;
     producer.send(&edits_topic, None, org_type_payload).await?;
+
+    // 2.1. Create topic entity for test_space (used by space metadata enrichment)
+    info!("2.1. Creating topic entity for test space (space metadata enrichment)...");
+    let topic_entity_payload = edits::create_entity_edit(
+        "Create Topic Entity",
+        test_space,
+        topic_entity_id,
+        Some("Test Space"),
+        Some("The main test space for e2e tests"),
+        Some("https://example.com/space-avatar.png"),
+    )?;
+    producer
+        .send(&edits_topic, None, topic_entity_payload)
+        .await?;
 
     // 3. Create multiple Alice entities with different score profiles
     info!("3. Creating Alice entities with varying characteristics...");
@@ -868,6 +889,60 @@ async fn main() -> Result<()> {
         edits::restore_entity("Restore Delete Dana", test_space, delete_dana_id)?;
     producer
         .send(&edits_topic, None, restore_dana_payload)
+        .await?;
+
+    // 16. Send HermesTopicDeclared event on space.topics (maps test_space → topic_entity_id)
+    // This is sent AFTER all test_space entities are created so update_by_query sets
+    // space_topic_entity_id on existing docs (tests "entity first, topic later" ordering).
+    info!("\n16. Sending HermesTopicDeclared for test_space → topic_entity...");
+    let topic_declared_payload =
+        space_topics::create_topic_declared(test_space, topic_entity_id)?;
+    producer
+        .send(&space_topics_topic, None, topic_declared_payload)
+        .await?;
+
+    // 17. Create a "late" entity AFTER the space.topics event to test the other ordering.
+    // When the search-indexer processes this entity, it should find the topic_entity_id
+    // in its cache (set by step 16) and set space_topic_entity_id at index time.
+    // Named "Frankie Late" to avoid interfering with existing "alice" search tests.
+    // Sleep to allow the indexer to process the space.topics event and warm the cache
+    // before we produce the late entity on a different Kafka topic.
+    info!("17. Waiting 3s for space.topics event to be processed before creating late entity...");
+    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+    info!("    Creating late entity AFTER space.topics event (tests cache-hit ordering)...");
+    let late_entity_payload = edits::create_entity_edit(
+        "Create Late Entity",
+        test_space,
+        late_entity_id,
+        Some("Frankie Late"),
+        Some("Entity created after space.topics event to test ordering"),
+        None,
+    )?;
+    producer
+        .send(&edits_topic, None, late_entity_payload)
+        .await?;
+
+    // Give late entity a score so it appears in search results
+    let late_entity_score_payload = scores::create_mixed_score_batch(
+        vec![(late_entity_id, 0.60)],
+        vec![],
+        vec![],
+        4,
+        true,
+    )?;
+    producer
+        .send(&scores_topic, None, late_entity_score_payload)
+        .await?;
+
+    // Add Person type relation for late entity (so it has a type like other Alice entities)
+    let late_entity_type_payload = relations::create_type_relation(
+        "Late Alice -> Person Type",
+        test_space,
+        late_entity_id,
+        person_type_id,
+    )?;
+    producer
+        .send(&edits_topic, None, late_entity_type_payload)
         .await?;
 
     info!("\n✅ Test scenario complete!");

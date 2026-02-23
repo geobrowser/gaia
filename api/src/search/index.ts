@@ -183,15 +183,35 @@ export function createSearchRouter(searchClient: SearchClient, runtime: AppRunti
 											type: "object",
 											properties: {
 												entityId: {type: "string", format: "uuid"},
-												spaceId: {type: "string", format: "uuid"},
+												space: {
+													type: "object",
+													description:
+														"The space this entity belongs to, with optional metadata",
+													properties: {
+														id: {type: "string", format: "uuid"},
+														name: {type: "string"},
+														description: {type: "string"},
+														avatar: {type: "string"},
+														cover: {type: "string"},
+													},
+													required: ["id"],
+												},
 												name: {type: "string"},
 												description: {type: "string"},
 												avatar: {type: "string"},
 												cover: {type: "string"},
-												typeIds: {
+												types: {
 													type: "array",
-													items: {type: "string", format: "uuid"},
-													description: "Type relation IDs associated with this entity",
+													items: {
+														type: "object",
+														properties: {
+															id: {type: "string", format: "uuid"},
+															name: {type: "string"},
+														},
+														required: ["id"],
+													},
+													description:
+														"Types associated with this entity, with optional names",
 												},
 												entityGlobalScore: {type: "number", description: "Global entity score"},
 												spaceScore: {type: "number", description: "Space score"},

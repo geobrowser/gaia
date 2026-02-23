@@ -3,14 +3,16 @@
 //! This module provides the concrete implementation of `SearchIndexProvider`
 //! using the OpenSearch crate.
 
+use std::collections::HashMap;
+
 use async_trait::async_trait;
 use opensearch::{
     http::transport::{SingleNodeConnectionPool, TransportBuilder},
     params::Conflicts,
-    BulkOperation, DeleteParts, OpenSearch, UpdateByQueryParts, UpdateParts,
+    BulkOperation, DeleteParts, OpenSearch, SearchParts, UpdateByQueryParts, UpdateParts,
 };
 use serde_json::{json, Value};
-use tracing::{debug, error, info, instrument};
+use tracing::{debug, error, info, instrument, warn};
 use url::Url;
 use uuid::Uuid;
 
@@ -146,7 +148,131 @@ impl OpenSearchProvider {
         if let Some(deleted) = request.deleted {
             doc.insert("deleted".to_string(), json!(deleted));
         }
+        if let Some(ref space_topic_entity_id) = request.space_topic_entity_id {
+            doc.insert(
+                "space_topic_entity_id".to_string(),
+                json!(space_topic_entity_id),
+            );
+        }
         doc
+    }
+
+    /// Fetch all space_id → space_topic_entity_id mappings from the index.
+    ///
+    /// Uses a composite aggregation to paginate through all spaces that have
+    /// a `space_topic_entity_id` set, returning a map of space_id to topic_entity_id.
+    /// This is used to warm the in-memory cache at startup.
+    ///
+    /// Each page fetches up to 10,000 unique space_ids, so for n unique spaces
+    /// with a topic, the loop runs ⌈n / 10,000⌉ iterations (+ 1 final empty page).
+    pub async fn get_space_topic_mappings(
+        &self,
+    ) -> Result<HashMap<Uuid, Uuid>, SearchIndexError> {
+        let mut mappings = HashMap::new();
+        let mut after_key: Option<Value> = None;
+
+        loop {
+            let mut composite_source = json!({
+                "size": 10000,
+                "sources": [
+                    {
+                        "space": {
+                            "terms": {
+                                "field": "space_id"
+                            }
+                        }
+                    }
+                ]
+            });
+
+            if let Some(ref after) = after_key {
+                composite_source["after"] = after.clone();
+            }
+
+            let body = json!({
+                "size": 0,
+                "query": {
+                    "exists": {
+                        "field": "space_topic_entity_id"
+                    }
+                },
+                "aggs": {
+                    "spaces": {
+                        "composite": composite_source,
+                        "aggs": {
+                            "topic": {
+                                "terms": {
+                                    "field": "space_topic_entity_id",
+                                    "size": 1
+                                }
+                            }
+                        }
+                    }
+                }
+            });
+
+            let response = self
+                .client
+                .search(SearchParts::Index(&[&self.index_config.alias]))
+                .body(body)
+                .send()
+                .await
+                .map_err(|e| SearchIndexError::connection(e.to_string()))?;
+
+            let status = response.status_code();
+            if !status.is_success() {
+                let error_body = response.text().await.unwrap_or_default();
+                return Err(SearchIndexError::connection(format!(
+                    "Space topic mappings query failed with status {}: {}",
+                    status, error_body
+                )));
+            }
+
+            let response_body: Value = response
+                .json()
+                .await
+                .map_err(|e| SearchIndexError::connection(e.to_string()))?;
+
+            let buckets = match response_body["aggregations"]["spaces"]["buckets"].as_array() {
+                Some(b) if !b.is_empty() => b,
+                _ => break,
+            };
+
+            for bucket in buckets {
+                let space_id_str = bucket["key"]["space"].as_str().unwrap_or_default();
+                let topic_buckets = bucket["topic"]["buckets"].as_array();
+
+                if let Some(topic_buckets) = topic_buckets {
+                    if let Some(first_topic) = topic_buckets.first() {
+                        let topic_id_str = first_topic["key"].as_str().unwrap_or_default();
+
+                        match (
+                            Uuid::parse_str(space_id_str),
+                            Uuid::parse_str(topic_id_str),
+                        ) {
+                            (Ok(space_id), Ok(topic_id)) => {
+                                mappings.insert(space_id, topic_id);
+                            }
+                            _ => {
+                                warn!(
+                                    space_id = %space_id_str,
+                                    topic_id = %topic_id_str,
+                                    "Skipping invalid UUID in space topic mapping"
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Check for after_key for pagination
+            after_key = response_body["aggregations"]["spaces"]["after_key"].clone().into();
+            if after_key.as_ref().is_none_or(|v| v.is_null()) {
+                break;
+            }
+        }
+
+        Ok(mappings)
     }
 }
 
@@ -423,12 +549,16 @@ impl SearchIndexProvider for OpenSearchProvider {
                             ))
                         })?;
 
-                    // Use Conflicts::Proceed to ignore version conflicts - within a batch,
-                    // a relation can be created then deleted, and the bulk update changes the
-                    // document's seq_no before this update_by_query runs.
+                    // Conflicts::Proceed so a version conflict doesn't fail the batch.
+                    // The loader processes batches sequentially, so conflicts from our
+                    // own pipeline can't occur. External conflicts (e.g. another indexer
+                    // instance) are harmless — the relation will be removed on the next
+                    // redelivery if this attempt was a no-op.
                     let response = self
                         .client
-                        .update_by_query(UpdateByQueryParts::Index(&[&self.index_config.alias]))
+                        .update_by_query(UpdateByQueryParts::Index(&[
+                            &self.index_config.alias,
+                        ]))
                         .conflicts(Conflicts::Proceed)
                         .body(json!({
                             "query": {
@@ -812,6 +942,86 @@ impl SearchIndexProvider for OpenSearchProvider {
                         operation_type: "UpdateEntitySpaceScore".to_string(),
                     });
                 }
+                EntityOperation::UpdateSpaceTopicEntityId(request) => {
+                    // Flush before executing the update_by_query to maintain ordering
+                    flush_pending_bulk!(
+                        self,
+                        bulk_ops,
+                        metas,
+                        total_succeeded,
+                        total_failed,
+                        all_results
+                    );
+
+                    let space_uuid = uuid::Uuid::parse_str(&request.space_id).map_err(|_| {
+                        SearchIndexError::validation(format!(
+                            "Invalid space_id: {}",
+                            request.space_id
+                        ))
+                    })?;
+
+                    let topic_entity_uuid =
+                        uuid::Uuid::parse_str(&request.topic_entity_id).map_err(|_| {
+                            SearchIndexError::validation(format!(
+                                "Invalid topic_entity_id: {}",
+                                request.topic_entity_id
+                            ))
+                        })?;
+
+                    // Update all documents in this space to set space_topic_entity_id
+                    let response = self
+                        .client
+                        .update_by_query(UpdateByQueryParts::Index(&[&self.index_config.alias]))
+                        .conflicts(Conflicts::Proceed)
+                        .body(json!({
+                            "query": {
+                                "term": {
+                                    "space_id": space_uuid.to_string()
+                                }
+                            },
+                            "script": {
+                                "source": "ctx._source.space_topic_entity_id = params.topic_entity_id",
+                                "lang": "painless",
+                                "params": {
+                                    "topic_entity_id": topic_entity_uuid.to_string()
+                                }
+                            }
+                        }))
+                        .send()
+                        .await
+                        .map_err(|e| SearchIndexError::update(e.to_string()))?;
+
+                    let status = response.status_code();
+                    if status.is_success() {
+                        total_succeeded += 1;
+                        all_results.push(BatchOperationResult {
+                            entity_id: String::new(),
+                            space_id: request.space_id.clone(),
+                            operation_type: "UpdateSpaceTopicEntityId".to_string(),
+                            success: true,
+                            error: None,
+                        });
+                        debug!(
+                            space_id = %space_uuid,
+                            topic_entity_id = %topic_entity_uuid,
+                            "Updated space topic entity ID"
+                        );
+                    } else {
+                        let error_body = response.text().await.unwrap_or_default();
+                        error!(status = %status, body = %error_body, "Update space topic entity ID failed");
+                        total_failed += 1;
+                        all_results.push(BatchOperationResult {
+                            entity_id: String::new(),
+                            space_id: request.space_id.clone(),
+                            operation_type: "UpdateSpaceTopicEntityId".to_string(),
+                            success: false,
+                            error: Some(SearchIndexError::update(format!(
+                                "Update space topic entity ID failed: {}",
+                                error_body
+                            ))),
+                        });
+                    }
+                }
             }
         }
 
@@ -871,6 +1081,7 @@ mod tests {
             space_score: None,
             entity_space_score: None,
             deleted: None,
+            space_topic_entity_id: None,
         };
 
         let doc = OpenSearchProvider::build_update_doc(&request);
@@ -893,6 +1104,7 @@ mod tests {
             space_score: None,
             entity_space_score: None,
             deleted: None,
+            space_topic_entity_id: None,
         };
 
         let doc = OpenSearchProvider::build_update_doc(&request);
@@ -925,6 +1137,7 @@ mod tests {
             space_score: None,
             entity_space_score: None,
             deleted: None,
+            space_topic_entity_id: None,
         };
 
         let doc = OpenSearchProvider::build_update_doc(&request);

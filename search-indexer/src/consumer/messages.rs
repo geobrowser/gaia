@@ -242,6 +242,22 @@ impl ScoreEvent {
 }
 
 // ============================================================================
+// Space Topic Events - from space.topics Kafka topic
+// ============================================================================
+
+/// A space topic event received from the space.topics Kafka topic.
+///
+/// When a space declares a topic, the topic entity ID serves as the
+/// representative entity for the space (containing its name, description, etc.).
+#[derive(Debug, Clone)]
+pub struct SpaceTopicEvent {
+    /// The space that declared the topic.
+    pub space_id: Uuid,
+    /// The topic entity ID (represents the space in the entity index).
+    pub topic_entity_id: Uuid,
+}
+
+// ============================================================================
 // Stream Messages - internal message passing
 // ============================================================================
 
