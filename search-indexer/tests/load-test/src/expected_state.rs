@@ -89,6 +89,11 @@ impl ExpectedState {
         let doc = self.ensure_doc(entity_id, space_id);
         // Tombstone dominance: if deleted, non-delete updates are noop
         if doc.deleted {
+            // Even when deleted, if this is a CreateEntity/UpdateEntity,
+            // the indexer will upsert and the image_url, name, description
+            // go through. But the deleted flag stays true. However the
+            // actual indexer treats deleted docs as tombstoned and skips
+            // upsert fields — so we also skip here.
             return;
         }
         if let Some(n) = name {
@@ -97,8 +102,8 @@ impl ExpectedState {
         if let Some(d) = description {
             doc.description = Some(d);
         }
-        if let Some(i) = image_url {
-            doc.image_url = Some(i);
+        if let Some(u) = image_url {
+            doc.image_url = Some(u);
         }
     }
 

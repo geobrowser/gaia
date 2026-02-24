@@ -253,6 +253,24 @@ pub async fn validate(
                 _ => {}
             }
 
+            // Validate image_url
+            let actual_image_url = source.get("image_url").and_then(|v| v.as_str());
+            match (&expected_doc.image_url, actual_image_url) {
+                (Some(expected), Some(actual)) if expected != actual => {
+                    doc_failures.push(format!(
+                        "image_url: expected {:?}, got {:?}",
+                        expected, actual
+                    ));
+                }
+                (Some(expected), None) => {
+                    doc_failures.push(format!("image_url: expected {:?}, got null", expected));
+                }
+                (None, Some(actual)) if !actual.is_empty() => {
+                    doc_failures.push(format!("image_url: expected null, got {:?}", actual));
+                }
+                _ => {}
+            }
+
             // Validate deleted flag
             let actual_deleted = source
                 .get("deleted")
@@ -457,6 +475,7 @@ impl ValidationReport {
             let mut relation_failures = 0usize;
             let mut name_failures = 0usize;
             let mut desc_failures = 0usize;
+            let mut image_url_failures = 0usize;
             let mut deleted_failures = 0usize;
             let mut topic_failures = 0usize;
             let mut other_failures = 0usize;
@@ -471,6 +490,8 @@ impl ValidationReport {
                     name_failures += 1;
                 } else if reason.contains("description:") {
                     desc_failures += 1;
+                } else if reason.contains("image_url:") {
+                    image_url_failures += 1;
                 } else if reason.contains("deleted:") {
                     deleted_failures += 1;
                 } else if reason.contains("space_topic") {
@@ -481,13 +502,14 @@ impl ValidationReport {
             }
 
             println!("  Failure breakdown:");
-            if score_failures > 0 { println!("    Score mismatches:    {}", score_failures); }
-            if relation_failures > 0 { println!("    Relation mismatches: {}", relation_failures); }
-            if name_failures > 0 { println!("    Name mismatches:     {}", name_failures); }
-            if desc_failures > 0 { println!("    Desc mismatches:     {}", desc_failures); }
-            if deleted_failures > 0 { println!("    Deleted mismatches:  {}", deleted_failures); }
-            if topic_failures > 0 { println!("    Topic mismatches:    {}", topic_failures); }
-            if other_failures > 0 { println!("    Other:               {}", other_failures); }
+            if score_failures > 0 { println!("    Score mismatches:     {}", score_failures); }
+            if relation_failures > 0 { println!("    Relation mismatches:  {}", relation_failures); }
+            if name_failures > 0 { println!("    Name mismatches:      {}", name_failures); }
+            if desc_failures > 0 { println!("    Desc mismatches:      {}", desc_failures); }
+            if image_url_failures > 0 { println!("    Image URL mismatches: {}", image_url_failures); }
+            if deleted_failures > 0 { println!("    Deleted mismatches:   {}", deleted_failures); }
+            if topic_failures > 0 { println!("    Topic mismatches:     {}", topic_failures); }
+            if other_failures > 0 { println!("    Other:                {}", other_failures); }
             println!();
 
             println!(

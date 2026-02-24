@@ -5,7 +5,7 @@ use uuid::Uuid;
 use grc_20::{encode_edit, CreateRelation, DeleteRelation, Edit as Grc20Edit, Op as Grc20Op};
 use hermes_schema::pb::knowledge::HermesEdit;
 
-use sdk::core::ids::TYPE_RELATION_TYPE_ID;
+use sdk::core::ids::{AVATAR_RELATION_TYPE_ID, COVER_RELATION_TYPE_ID, TYPE_RELATION_TYPE_ID};
 
 /// Generate a CreateRelation operation for a type relation
 pub fn create_type_relation(
@@ -116,6 +116,42 @@ pub fn create_custom_relation(
     let mut buf = Vec::new();
     edit.encode(&mut buf)?;
     Ok(buf)
+}
+
+/// Generate a CreateRelation operation for an avatar relation
+pub fn create_avatar_relation(
+    edit_name: &str,
+    space_id: Uuid,
+    relation_id: Uuid,
+    entity_id: Uuid,
+    image_entity_id: Uuid,
+) -> Result<Vec<u8>> {
+    create_custom_relation(
+        edit_name,
+        space_id,
+        relation_id,
+        Uuid::parse_str(AVATAR_RELATION_TYPE_ID)?,
+        entity_id,
+        image_entity_id,
+    )
+}
+
+/// Generate a CreateRelation operation for a cover relation
+pub fn create_cover_relation(
+    edit_name: &str,
+    space_id: Uuid,
+    relation_id: Uuid,
+    entity_id: Uuid,
+    image_entity_id: Uuid,
+) -> Result<Vec<u8>> {
+    create_custom_relation(
+        edit_name,
+        space_id,
+        relation_id,
+        Uuid::parse_str(COVER_RELATION_TYPE_ID)?,
+        entity_id,
+        image_entity_id,
+    )
 }
 
 /// Generate a DeleteRelation operation

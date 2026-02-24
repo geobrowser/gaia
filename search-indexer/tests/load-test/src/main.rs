@@ -85,6 +85,18 @@ async fn main() -> Result<()> {
             "    Bulk relation churn:     {}",
             scenario.stats.bulk_relation_churn
         );
+        println!(
+            "    Avatar+Cover relations:  {}",
+            scenario.stats.avatar_cover_relations
+        );
+        println!(
+            "    Space scores:            {}",
+            scenario.stats.space_scores
+        );
+        println!(
+            "    Perspective scores:      {}",
+            scenario.stats.perspective_scores
+        );
         println!("    Filler:                  {}", scenario.stats.filler);
         println!(
             "    Late scores:             {}",
