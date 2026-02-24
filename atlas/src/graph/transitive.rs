@@ -350,49 +350,7 @@ impl TransitiveProcessor {
             }
         }
 
-        // Build tree structure iteratively using post-order traversal.
-        //
-        // Strategy: collect nodes in post-order (children before parents),
-        // then build TreeNodes bottom-up so each parent can consume its
-        // already-constructed children.
-        let tree = {
-            // Phase 1: Collect post-order via iterative DFS
-            let mut dfs_stack = vec![root];
-            // We need post-order, so we collect in pre-order then reverse.
-            // Push children in forward order so rightmost is popped first;
-            // reversing the result gives left-to-right post-order.
-            let mut post_order: Vec<SpaceId> = Vec::with_capacity(visited.len());
-            while let Some(node_id) = dfs_stack.pop() {
-                post_order.push(node_id);
-                if let Some(children) = children_index.get(&node_id) {
-                    for child_id in children {
-                        dfs_stack.push(*child_id);
-                    }
-                }
-            }
-            // Reverse pre-order gives post-order (children before parents)
-            post_order.reverse();
-
-            // Phase 2: Build nodes bottom-up
-            let mut built_nodes: HashMap<SpaceId, TreeNode> = HashMap::with_capacity(visited.len());
-            for node_id in post_order {
-                let edge_type = node_metadata.get(&node_id).copied().unwrap();
-                let mut node = TreeNode::new(node_id, edge_type);
-
-                if let Some(child_ids) = children_index.get(&node_id) {
-                    node.children.reserve(child_ids.len());
-                    for child_id in child_ids {
-                        if let Some(child_node) = built_nodes.remove(child_id) {
-                            node.children.push(child_node);
-                        }
-                    }
-                }
-
-                built_nodes.insert(node_id, node);
-            }
-
-            built_nodes.remove(&root).unwrap()
-        };
+        let tree = build_tree_iterative(root, &node_metadata, &children_index);
 
         TransitiveGraph::new(root, tree, visited)
     }
@@ -405,6 +363,71 @@ impl TransitiveProcessor {
     /// Get estimated heap memory usage of the cache in bytes
     pub fn cache_memory_bytes(&self) -> usize {
         self.cache.heap_size()
+    }
+}
+
+/// Build a tree from a children index iteratively.
+///
+/// Simulates recursive tree construction by maintaining an explicit stack
+/// of (partially-built TreeNode, remaining child IDs). When all children
+/// of a node are processed, it's pushed onto its parent's children vec.
+fn build_tree_iterative(
+    root: SpaceId,
+    node_metadata: &HashMap<SpaceId, EdgeType>,
+    children_index: &HashMap<SpaceId, Vec<SpaceId>>,
+) -> TreeNode {
+    let root_edge = node_metadata.get(&root).copied().unwrap();
+    let mut root_node = TreeNode::new(root, root_edge);
+
+    let root_children = match children_index.get(&root) {
+        Some(ids) => ids,
+        None => return root_node, // Leaf root
+    };
+
+    // Stack item: (node being built, index of next child to process)
+    // Using index instead of iterator avoids lifetime issues.
+    root_node.children.reserve(root_children.len());
+    let mut stack: Vec<(TreeNode, usize)> = vec![(root_node, 0)];
+
+    loop {
+        // Get the next child to process for the top-of-stack node
+        let next_child_id = {
+            let (ref node, ref mut idx) = stack.last_mut().unwrap();
+            children_index.get(&node.space_id).and_then(|child_ids| {
+                if *idx < child_ids.len() {
+                    let id = child_ids[*idx];
+                    *idx += 1;
+                    Some(id)
+                } else {
+                    None
+                }
+            })
+        };
+
+        match next_child_id {
+            Some(child_id) => {
+                let edge_type = node_metadata.get(&child_id).copied().unwrap();
+                let mut child_node = TreeNode::new(child_id, edge_type);
+
+                if let Some(grandchild_ids) = children_index.get(&child_id) {
+                    // Has children — push onto stack to process
+                    child_node.children.reserve(grandchild_ids.len());
+                    stack.push((child_node, 0));
+                } else {
+                    // Leaf — attach directly to parent
+                    stack.last_mut().unwrap().0.children.push(child_node);
+                }
+            }
+            None => {
+                // All children processed — pop and attach to parent
+                let (completed, _) = stack.pop().unwrap();
+                if let Some(parent) = stack.last_mut() {
+                    parent.0.children.push(completed);
+                } else {
+                    return completed; // Root is complete
+                }
+            }
+        }
     }
 }
 
