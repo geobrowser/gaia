@@ -9,7 +9,7 @@
 
 use super::{hash_tree, GraphState, TransitiveProcessor, TreeNode};
 use crate::events::{SpaceId, SpaceTopologyEvent, SpaceTopologyPayload, TopicId};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// Result of canonical graph computation
 #[derive(Debug, Clone)]
@@ -132,19 +132,15 @@ impl CanonicalProcessor {
         let mut tree = root_transitive.tree.clone();
 
         // Phase 2: Add topic edges with filtered subtrees
-        // Collect all topic edges from canonical nodes
+        //
+        // Collects all subtrees to attach, grouped by source SpaceId, then
+        // attaches them in a single DFS pass over the tree. This is O(N + T)
+        // instead of the previous O(T × N) approach of doing a separate DFS
+        // per attachment.
         let topic_edges = self.collect_topic_edges(&canonical_set, state);
-
-        // Process each topic edge
-        for (source, topic_id) in topic_edges {
-            self.process_topic_edge(
-                source,
-                topic_id,
-                &canonical_set,
-                state,
-                transitive,
-                &mut tree,
-            );
+        let pending = self.collect_topic_subtrees(&topic_edges, &canonical_set, state, transitive);
+        if !pending.is_empty() {
+            attach_all_subtrees(&mut tree, pending);
         }
 
         let graph = CanonicalGraph::new(self.root, tree, canonical_set);
@@ -185,47 +181,43 @@ impl CanonicalProcessor {
         topic_edges
     }
 
-    /// Process a single topic edge
+    /// Collect all filtered topic subtrees, grouped by their attachment source.
     ///
-    /// For each topic edge (source -> topic_id):
-    /// 1. Resolve topic to spaces that announced it
-    /// 2. Filter to spaces in the canonical set
-    /// 3. For each canonical member, attach its filtered subtree
-    fn process_topic_edge(
+    /// For each topic edge (source -> topic_id), resolves the topic to its
+    /// canonical members and builds filtered subtrees. Returns a map from
+    /// source SpaceId to the list of subtrees to attach at that node.
+    fn collect_topic_subtrees(
         &self,
-        source: SpaceId,
-        topic_id: TopicId,
+        topic_edges: &[(SpaceId, TopicId)],
         canonical_set: &HashSet<SpaceId>,
         state: &GraphState,
         transitive: &mut TransitiveProcessor,
-        tree: &mut TreeNode,
-    ) {
-        // Get all spaces that announced this topic
-        let members = match state.get_topic_members(&topic_id) {
-            Some(m) => m,
-            None => return,
-        };
+    ) -> HashMap<SpaceId, Vec<TreeNode>> {
+        let mut pending: HashMap<SpaceId, Vec<TreeNode>> = HashMap::new();
 
-        // Filter to canonical members and sort for deterministic ordering
-        let mut canonical_members: Vec<SpaceId> = members
-            .iter()
-            .filter(|m| canonical_set.contains(*m))
-            .copied()
-            .collect();
-        canonical_members.sort();
+        for &(source, topic_id) in topic_edges {
+            let members = match state.get_topic_members(&topic_id) {
+                Some(m) => m,
+                None => continue,
+            };
 
-        // For each canonical member, attach its filtered subtree
-        for member in canonical_members {
-            // Get the member's full transitive graph
-            let member_transitive = transitive.get_full(member, state);
+            // Filter to canonical members and sort for deterministic ordering
+            let mut canonical_members: Vec<SpaceId> = members
+                .iter()
+                .filter(|m| canonical_set.contains(*m))
+                .copied()
+                .collect();
+            canonical_members.sort();
 
-            // Filter the subtree to only include canonical nodes
-            let filtered_subtree =
-                self.filter_to_canonical(&member_transitive.tree, canonical_set, topic_id);
-
-            // Attach the filtered subtree to the source node in the tree
-            attach_subtree(tree, source, filtered_subtree);
+            for member in canonical_members {
+                let member_transitive = transitive.get_full(member, state);
+                let filtered_subtree =
+                    self.filter_to_canonical(&member_transitive.tree, canonical_set, topic_id);
+                pending.entry(source).or_default().push(filtered_subtree);
+            }
         }
+
+        pending
     }
 
     /// Filter a transitive tree to only include canonical nodes
@@ -312,20 +304,24 @@ fn filter_child_iterative(root_node: &TreeNode, canonical_set: &HashSet<SpaceId>
     built[0].take().unwrap()
 }
 
-/// Attach a subtree to a source node in the tree.
+/// Attach all pending subtrees in a single DFS pass over the tree.
 ///
-/// Finds the node matching `source` via iterative DFS and adds `subtree`
-/// as its child. If `source` is not found, the subtree is silently dropped.
-fn attach_subtree(tree: &mut TreeNode, source: SpaceId, subtree: TreeNode) {
+/// For each node visited, checks if there are subtrees pending for that
+/// node's SpaceId and appends them as children. This is O(N + T) where
+/// N = tree size and T = total subtrees, versus O(T × N) for individual
+/// attach calls.
+fn attach_all_subtrees(tree: &mut TreeNode, mut pending: HashMap<SpaceId, Vec<TreeNode>>) {
     let mut stack: Vec<&mut TreeNode> = vec![tree];
     while let Some(node) = stack.pop() {
-        if node.space_id == source {
-            node.children.push(subtree);
+        if let Some(subtrees) = pending.remove(&node.space_id) {
+            node.children.extend(subtrees);
+        }
+        // Early exit: no more pending attachments
+        if pending.is_empty() {
             return;
         }
         stack.extend(node.children.iter_mut());
     }
-    // Source not found — subtree is dropped (no-op)
 }
 
 #[cfg(test)]

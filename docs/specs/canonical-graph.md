@@ -399,6 +399,8 @@ fn affects_canonical(event, canonical_set) -> bool {
 2. **Buffer reuse**: Scratch buffers swapped instead of reallocated
 3. **Hash-based change detection**: Skip recomputation when graph hash unchanged
 4. **Transitive cache**: Memoize BFS results, invalidate selectively on events
+5. **Single-pass subtree attachment**: Topic subtrees collected then attached in one DFS pass (see design decision below)
+6. **Iterative tree traversal**: All tree functions use explicit stacks instead of recursion to avoid stack overflow on deep graphs
 
 ## Design Decisions
 
@@ -448,3 +450,34 @@ fn affects_canonical(event, canonical_set) -> bool {
 - Editor/Member spaces are full spaces, not special leaf nodes
 - A personal space might verify other spaces
 - Consistent with "reachable via explicit edges" rule
+
+### Why Single-Pass Subtree Attachment?
+
+**Decision**: Collect all topic subtrees into a `HashMap<SpaceId, Vec<TreeNode>>`, then attach them in a single DFS pass over the tree.
+
+**Context**: Phase 2 of canonical computation attaches filtered subtrees at source nodes in the tree for each topic edge. The original implementation called `attach_subtree()` per topic member, which performed a full DFS to find the source node each time — O(T x N) total where T = topic attachments and N = tree size.
+
+**Rationale**:
+- Profiling showed Phase 2 consumed ~94% of total compute time on topic-heavy graphs
+- Single-pass reduces O(T x N) to O(N + T): one DFS over the tree with O(1) HashMap lookups
+- HashMap was chosen over sorted Vec for the pending attachments because the lookup is per-node during a single DFS (not a batch of binary searches), and the number of distinct source nodes is typically small
+
+**Benchmarks (Apple Silicon, 1000 canonical nodes + 500 non-canonical + topic edges)**:
+
+| Benchmark | Before | After | Speedup |
+|-----------|--------|-------|---------|
+| `canonical_with_topics/large` | 15.8 ms | 3.9 ms | 4.0x |
+| `end_to_end/full_pipeline` | 17.0 ms | 3.7 ms | 4.6x |
+| `end_to_end/warm_cache` | 14.7 ms | 0.8 ms | 18.4x |
+
+No regression on explicit-only graphs (no topic edges).
+
+### Why Iterative Tree Traversal?
+
+**Decision**: All tree traversal functions use iterative DFS with explicit `Vec` stacks instead of recursion.
+
+**Rationale**:
+- Rust's default thread stack is 8 MB; each recursive frame is ~100-200 bytes
+- A linear chain of ~80K nodes (possible with blockchain-derived graph data) overflows the stack
+- Iterative traversal moves the "stack" to the heap where it can grow to available memory
+- Benchmarks show equal or better performance vs. recursive (8-13% faster for tree construction due to better cache behavior with an index-based stack)
