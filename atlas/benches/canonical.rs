@@ -266,7 +266,7 @@ fn bench_affects_canonical(c: &mut Criterion) {
     let mut transitive = TransitiveProcessor::new();
     let mut processor = CanonicalProcessor::new(root);
     let graph = processor.compute(&state, &mut transitive).unwrap();
-    let canonical_set = graph.flat.clone();
+    let canonical_set = graph.members.clone();
 
     // Event from canonical source
     let canonical_source = *canonical_set.iter().next().unwrap();

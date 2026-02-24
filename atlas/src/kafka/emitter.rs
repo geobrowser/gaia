@@ -60,7 +60,7 @@ impl CanonicalGraphEmitter {
         let update = CanonicalGraphUpdated {
             root_id: graph.root.to_vec(),
             tree: Some(tree_node_to_proto(&graph.tree)),
-            canonical_space_ids: graph.flat.iter().map(|id| id.to_vec()).collect(),
+            canonical_space_ids: graph.members.iter().map(|id| id.to_vec()).collect(),
             meta: Some(block_meta_to_proto(meta)),
         };
 

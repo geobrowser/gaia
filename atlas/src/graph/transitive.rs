@@ -18,8 +18,8 @@ pub struct TransitiveGraph {
     /// Tree representation with edge metadata
     pub tree: TreeNode,
 
-    /// Flat set of all reachable spaces
-    pub flat: HashSet<SpaceId>,
+    /// Set of all reachable space IDs (the "membership" set)
+    pub members: HashSet<SpaceId>,
 
     /// Hash for change detection
     pub hash: u64,
@@ -27,29 +27,29 @@ pub struct TransitiveGraph {
 
 impl TransitiveGraph {
     /// Create a new transitive graph
-    pub fn new(root: SpaceId, tree: TreeNode, flat: HashSet<SpaceId>) -> Self {
+    pub fn new(root: SpaceId, tree: TreeNode, members: HashSet<SpaceId>) -> Self {
         let hash = hash_tree(&tree);
         Self {
             root,
             tree,
-            flat,
+            members,
             hash,
         }
     }
 
     /// Check if a space is reachable
     pub fn contains(&self, space_id: &SpaceId) -> bool {
-        self.flat.contains(space_id)
+        self.members.contains(space_id)
     }
 
     /// Get the number of reachable spaces
     pub fn len(&self) -> usize {
-        self.flat.len()
+        self.members.len()
     }
 
     /// Check if the graph is empty (only contains root)
     pub fn is_empty(&self) -> bool {
-        self.flat.len() <= 1
+        self.members.len() <= 1
     }
 }
 
@@ -97,7 +97,7 @@ impl TransitiveCache {
 
     /// Update reverse dependency index
     fn update_reverse_deps(&mut self, graph: &TransitiveGraph) {
-        for space in &graph.flat {
+        for space in &graph.members {
             self.reverse_deps
                 .entry(*space)
                 .or_default()
@@ -122,7 +122,7 @@ impl TransitiveCache {
                 .get(root)
                 .into_iter()
                 .chain(self.explicit_only.get(root))
-                .flat_map(|g| g.flat.iter().copied())
+                .flat_map(|g| g.members.iter().copied())
                 .collect();
 
             for member in flat_members {

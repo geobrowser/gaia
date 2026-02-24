@@ -21,29 +21,33 @@ pub struct CanonicalGraph {
     /// The tree structure preserves distance from root
     pub tree: TreeNode,
 
-    /// Flat set of all canonical spaces
-    pub flat: HashSet<SpaceId>,
+    /// Set of all canonical space IDs (the "membership" set)
+    pub members: HashSet<SpaceId>,
 }
 
 impl CanonicalGraph {
     /// Create a new canonical graph
-    pub fn new(root: SpaceId, tree: TreeNode, flat: HashSet<SpaceId>) -> Self {
-        Self { root, tree, flat }
+    pub fn new(root: SpaceId, tree: TreeNode, members: HashSet<SpaceId>) -> Self {
+        Self {
+            root,
+            tree,
+            members,
+        }
     }
 
     /// Check if a space is in the canonical set
     pub fn contains(&self, space_id: &SpaceId) -> bool {
-        self.flat.contains(space_id)
+        self.members.contains(space_id)
     }
 
     /// Get the number of canonical spaces
     pub fn len(&self) -> usize {
-        self.flat.len()
+        self.members.len()
     }
 
     /// Check if the graph is empty (only contains root)
     pub fn is_empty(&self) -> bool {
-        self.flat.len() <= 1
+        self.members.len() <= 1
     }
 }
 
@@ -137,7 +141,7 @@ impl CanonicalProcessor {
         // Fast path: hash the inputs (Phase 1 tree + topic edges) to detect
         // whether anything changed since the last computation. If unchanged,
         // skip cloning and Phase 2 entirely.
-        let topic_edges = self.collect_topic_edges(&root_transitive.flat, state);
+        let topic_edges = self.collect_topic_edges(&root_transitive.members, state);
         let input_hash = {
             use std::hash::{Hash, Hasher};
             let mut hasher = std::collections::hash_map::DefaultHasher::new();
@@ -152,7 +156,7 @@ impl CanonicalProcessor {
         self.last_input_hash = Some(input_hash);
 
         // Inputs changed — clone and run Phase 2
-        let canonical_set = root_transitive.flat.clone();
+        let canonical_set = root_transitive.members.clone();
         let mut tree = root_transitive.tree.clone();
 
         // Phase 2: Add topic edges with filtered subtrees
@@ -167,15 +171,25 @@ impl CanonicalProcessor {
 
         let graph = CanonicalGraph::new(self.root, tree, canonical_set);
 
+        // Postconditions: canonical set must contain root, tree root must match
+        debug_assert!(
+            graph.members.contains(&self.root),
+            "canonical set does not contain root"
+        );
+        debug_assert_eq!(
+            graph.tree.space_id, self.root,
+            "tree root does not match processor root"
+        );
+
         // Check if tree structure changed (Phase 2 may not have altered the tree)
         let new_hash = hash_tree(&graph.tree);
         if self.last_hash == Some(new_hash) {
-            self.last_canonical_set = Some(graph.flat);
+            self.last_canonical_set = Some(graph.members);
             return None;
         }
 
         self.last_hash = Some(new_hash);
-        self.last_canonical_set = Some(graph.flat.clone());
+        self.last_canonical_set = Some(graph.members.clone());
         Some(graph)
     }
 

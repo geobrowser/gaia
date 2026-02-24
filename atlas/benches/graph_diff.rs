@@ -78,11 +78,11 @@ fn tree_to_graph(tree: TreeNode) -> CanonicalGraph {
         }
     }
 
-    let mut flat = HashSet::new();
-    collect_ids(&tree, &mut flat);
+    let mut members = HashSet::new();
+    collect_ids(&tree, &mut members);
     let root = tree.space_id;
 
-    CanonicalGraph::new(root, tree, flat)
+    CanonicalGraph::new(root, tree, members)
 }
 
 /// Mutate a tree by adding/removing/moving nodes

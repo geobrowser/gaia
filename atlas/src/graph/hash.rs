@@ -12,7 +12,16 @@ pub trait TreeHasher {
     fn hash_tree(&self, tree: &TreeNode) -> u64;
 }
 
-/// Default tree hasher using Rust's DefaultHasher
+/// Default tree hasher using Rust's DefaultHasher (SipHash-2-4, 64-bit).
+///
+/// This hash is used for **change detection**, not content addressing. A
+/// collision means a changed tree is silently treated as unchanged for one
+/// block (the next event will likely re-trigger computation).
+///
+/// Birthday bound: ~2^32 distinct trees before 50% collision probability.
+/// At realistic throughput (millions of distinct trees, not billions) the
+/// risk is negligible. If the system scales to very high throughput,
+/// consider migrating to a 128-bit hash (e.g., blake3).
 #[derive(Debug, Default, Clone)]
 pub struct DefaultTreeHasher;
 

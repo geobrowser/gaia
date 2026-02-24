@@ -126,7 +126,7 @@ fn assert_all_canonical(graph: &CanonicalGraph, spaces: &[SpaceId], context: &st
             space[15],
             graph.len(),
             graph
-                .flat
+                .members
                 .iter()
                 .map(|s| format!("0x{:02x}", s[15]))
                 .collect::<Vec<_>>()
@@ -143,7 +143,7 @@ fn assert_none_canonical(graph: &CanonicalGraph, spaces: &[SpaceId], context: &s
             context,
             space[15],
             graph
-                .flat
+                .members
                 .iter()
                 .map(|s| format!("0x{:02x}", s[15]))
                 .collect::<Vec<_>>()
@@ -784,7 +784,7 @@ fn test_e2e_cycle_produces_deterministic_output() {
     let g2 = graph2.expect("Should have graph 2");
 
     assert_eq!(
-        g1.flat, g2.flat,
+        g1.members, g2.members,
         "Cycle should produce deterministic canonical set"
     );
     assert_eq!(
@@ -915,7 +915,7 @@ fn test_e2e_diamond_with_different_edge_types() {
     let g2 = graph2.expect("Should have graph 2");
 
     // Should be deterministic
-    assert_eq!(g1.flat, g2.flat);
+    assert_eq!(g1.members, g2.members);
     assert_eq!(diffs1.len(), diffs2.len());
 }
 
@@ -1232,7 +1232,7 @@ fn test_e2e_deterministic_output() {
     let g1 = graph1.expect("Should have graph 1");
     let g2 = graph2.expect("Should have graph 2");
 
-    assert_eq!(g1.flat, g2.flat, "Canonical sets should be identical");
+    assert_eq!(g1.members, g2.members, "Canonical sets should be identical");
     assert_eq!(
         diffs1.len(),
         diffs2.len(),
@@ -1300,7 +1300,7 @@ fn test_e2e_event_ordering_determinism() {
     let g2 = graph2.expect("Should have graph 2");
 
     assert_eq!(
-        g1.flat, g2.flat,
+        g1.members, g2.members,
         "Different event orders should produce same canonical set"
     );
 }

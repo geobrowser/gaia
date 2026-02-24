@@ -12,26 +12,29 @@ use std::collections::{HashMap, HashSet};
 use super::EdgeType;
 
 /// In-memory state of the topology graph
+///
+/// Fields are `pub(crate)` to enforce mutation through methods that
+/// maintain bidirectional invariants (e.g., `topic_edges` ↔ `topic_edge_sources`).
 #[derive(Debug, Default)]
 pub struct GraphState {
     /// All known spaces
-    pub spaces: HashSet<SpaceId>,
+    pub(crate) spaces: HashSet<SpaceId>,
 
     /// Topic announced by each space (space_id -> topic_id)
-    pub space_topics: HashMap<SpaceId, TopicId>,
+    pub(crate) space_topics: HashMap<SpaceId, TopicId>,
 
     /// Reverse mapping: topic -> spaces that announced it
-    pub topic_spaces: HashMap<TopicId, HashSet<SpaceId>>,
+    pub(crate) topic_spaces: HashMap<TopicId, HashSet<SpaceId>>,
 
     /// Explicit edges: source -> [(target, edge_type)]
-    pub explicit_edges: HashMap<SpaceId, Vec<(SpaceId, EdgeType)>>,
+    pub(crate) explicit_edges: HashMap<SpaceId, Vec<(SpaceId, EdgeType)>>,
 
     /// Topic edges: source -> [topic_ids]
-    pub topic_edges: HashMap<SpaceId, HashSet<TopicId>>,
+    pub(crate) topic_edges: HashMap<SpaceId, HashSet<TopicId>>,
 
     /// Reverse topic edges: topic -> spaces that have edges TO this topic
     /// Used for O(1) lookup of which spaces are affected when a topic changes
-    pub topic_edge_sources: HashMap<TopicId, HashSet<SpaceId>>,
+    pub(crate) topic_edge_sources: HashMap<TopicId, HashSet<SpaceId>>,
 }
 
 impl GraphState {
