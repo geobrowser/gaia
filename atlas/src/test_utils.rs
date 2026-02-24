@@ -25,11 +25,18 @@ pub fn make_topic_id(n: u8) -> TopicId {
 
 /// Create block metadata with fixed values suitable for tests.
 pub fn make_block_meta() -> BlockMetadata {
+    make_block_meta_at(1)
+}
+
+/// Create block metadata for a specific block number.
+///
+/// Useful when tests need events at distinct blocks (e.g., ordering by block).
+pub fn make_block_meta_at(block: u64) -> BlockMetadata {
     BlockMetadata {
-        block_number: 1,
-        block_timestamp: 12,
-        tx_hash: "0x1".to_string(),
-        cursor: "cursor_1".to_string(),
+        block_number: block,
+        block_timestamp: block * 12,
+        tx_hash: format!("0x{:064x}", block),
+        cursor: format!("cursor_{}", block),
     }
 }
 
@@ -98,4 +105,47 @@ pub fn add_topic_edge(state: &mut GraphState, source: SpaceId, topic: TopicId) {
         }),
     };
     state.apply_event(&event);
+}
+
+// --- Raw event factories (return events without applying) ---
+
+/// Build a `SpaceCreated` event (does NOT apply it to state).
+pub fn make_space_created_event(space_id: SpaceId, topic_id: TopicId) -> SpaceTopologyEvent {
+    SpaceTopologyEvent {
+        meta: make_block_meta(),
+        payload: SpaceTopologyPayload::SpaceCreated(SpaceCreated {
+            space_id,
+            topic_id,
+            space_type: SpaceType::Dao {
+                initial_editors: vec![],
+                initial_members: vec![],
+            },
+        }),
+    }
+}
+
+/// Build a `Verified` trust extension event (does NOT apply it to state).
+pub fn make_verified_event(source: SpaceId, target: SpaceId) -> SpaceTopologyEvent {
+    SpaceTopologyEvent {
+        meta: make_block_meta(),
+        payload: SpaceTopologyPayload::TrustExtended(TrustExtended {
+            source_space_id: source,
+            extension: TrustExtension::Verified {
+                target_space_id: target,
+            },
+        }),
+    }
+}
+
+/// Build a `Subtopic` trust extension event (does NOT apply it to state).
+pub fn make_subtopic_event(source: SpaceId, topic: TopicId) -> SpaceTopologyEvent {
+    SpaceTopologyEvent {
+        meta: make_block_meta(),
+        payload: SpaceTopologyPayload::TrustExtended(TrustExtended {
+            source_space_id: source,
+            extension: TrustExtension::Subtopic {
+                target_topic_id: topic,
+            },
+        }),
+    }
 }

@@ -47,15 +47,18 @@ impl TransitiveGraph {
         self.members.len()
     }
 
-    /// Check if the graph is empty (only contains root)
-    pub fn is_empty(&self) -> bool {
+    /// Check if the graph contains only the root (no children).
+    ///
+    /// Named `has_only_root` rather than `is_empty` because the graph always
+    /// contains at least the root node — it's never truly empty.
+    pub fn has_only_root(&self) -> bool {
         self.members.len() <= 1
     }
 }
 
 /// Cache of pre-computed transitive graphs
 #[derive(Debug, Default, Clone)]
-pub struct TransitiveCache {
+pub(crate) struct TransitiveCache {
     /// Full transitive graphs (explicit + topic edges)
     full: HashMap<SpaceId, TransitiveGraph>,
 
@@ -68,11 +71,6 @@ pub struct TransitiveCache {
 }
 
 impl TransitiveCache {
-    /// Create a new empty cache
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// Get a cached full transitive graph
     pub fn get_full(&self, space: &SpaceId) -> Option<&TransitiveGraph> {
         self.full.get(space)

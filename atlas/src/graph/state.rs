@@ -207,55 +207,10 @@ impl GraphState {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::events::{BlockMetadata, SpaceType};
-    use crate::test_utils::{make_space_id, make_topic_id};
-
-    fn make_block_meta(block: u64) -> BlockMetadata {
-        BlockMetadata {
-            block_number: block,
-            block_timestamp: block * 12,
-            tx_hash: format!("0x{:064x}", block),
-            cursor: format!("cursor_{}", block),
-        }
-    }
-
-    fn make_space_created_event(space_id: SpaceId, topic_id: TopicId) -> SpaceTopologyEvent {
-        SpaceTopologyEvent {
-            meta: make_block_meta(1),
-            payload: SpaceTopologyPayload::SpaceCreated(SpaceCreated {
-                space_id,
-                topic_id,
-                space_type: SpaceType::Dao {
-                    initial_editors: vec![],
-                    initial_members: vec![],
-                },
-            }),
-        }
-    }
-
-    fn make_verified_event(source: SpaceId, target: SpaceId) -> SpaceTopologyEvent {
-        SpaceTopologyEvent {
-            meta: make_block_meta(2),
-            payload: SpaceTopologyPayload::TrustExtended(TrustExtended {
-                source_space_id: source,
-                extension: TrustExtension::Verified {
-                    target_space_id: target,
-                },
-            }),
-        }
-    }
-
-    fn make_subtopic_event(source: SpaceId, topic: TopicId) -> SpaceTopologyEvent {
-        SpaceTopologyEvent {
-            meta: make_block_meta(3),
-            payload: SpaceTopologyPayload::TrustExtended(TrustExtended {
-                source_space_id: source,
-                extension: TrustExtension::Subtopic {
-                    target_topic_id: topic,
-                },
-            }),
-        }
-    }
+    use crate::test_utils::{
+        make_block_meta_at, make_space_created_event, make_space_id, make_subtopic_event,
+        make_topic_id, make_verified_event,
+    };
 
     #[test]
     fn test_new_state_is_empty() {
@@ -322,7 +277,7 @@ mod tests {
 
         // Remove the only edge
         let remove_event = SpaceTopologyEvent {
-            meta: make_block_meta(4),
+            meta: make_block_meta_at(4),
             payload: SpaceTopologyPayload::TrustExtended(TrustExtended {
                 source_space_id: space1,
                 extension: TrustExtension::VerifiedRemoved {
@@ -350,7 +305,7 @@ mod tests {
 
         // Remove the only topic edge
         let remove_event = SpaceTopologyEvent {
-            meta: make_block_meta(4),
+            meta: make_block_meta_at(4),
             payload: SpaceTopologyPayload::TrustExtended(TrustExtended {
                 source_space_id: space1,
                 extension: TrustExtension::SubtopicRemoved {

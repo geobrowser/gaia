@@ -18,7 +18,7 @@ mod tree;
 
 pub use canonical::{CanonicalGraph, CanonicalProcessor};
 pub use diff::{ChangeType, DiffTracker, GraphDiff, NodeChange, Position};
-pub use hash::{hash_tree, DefaultTreeHasher, TreeHasher};
+pub use hash::hash_tree;
 pub use state::GraphState;
-pub use transitive::{TransitiveCache, TransitiveGraph, TransitiveProcessor};
+pub use transitive::{TransitiveGraph, TransitiveProcessor};
 pub use tree::{EdgeType, TreeNode};

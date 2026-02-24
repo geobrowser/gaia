@@ -45,8 +45,11 @@ impl CanonicalGraph {
         self.members.len()
     }
 
-    /// Check if the graph is empty (only contains root)
-    pub fn is_empty(&self) -> bool {
+    /// Check if the graph contains only the root (no children).
+    ///
+    /// Named `has_only_root` rather than `is_empty` because the graph always
+    /// contains at least the root node — it's never truly empty.
+    pub fn has_only_root(&self) -> bool {
         self.members.len() <= 1
     }
 }
@@ -357,6 +360,15 @@ fn attach_all_subtrees(tree: &mut TreeNode, mut pending: HashMap<SpaceId, Vec<Tr
         }
         stack.extend(node.children.iter_mut());
     }
+
+    // All pending entries should have been attached. Leftover entries indicate
+    // a bug — the source SpaceId wasn't found in the tree despite being in the
+    // canonical set.
+    debug_assert!(
+        pending.is_empty(),
+        "attach_all_subtrees: {} source(s) not found in tree",
+        pending.len()
+    );
 }
 
 #[cfg(test)]
