@@ -224,8 +224,8 @@ jobs:
           KAFKA_GROUP_EDITS_ID=search-indexer-group-edits-e2e \
           KAFKA_GROUP_SCORES_ID=search-indexer-group-scores-e2e \
           HEALTH_PORT=8080 \
-          RUST_LOG=search_indexer=info \
-          ./target/release/search-indexer &
+          RUST_LOG=search_indexer=info,search_indexer_repository=debug \
+          ./target/release/search-indexer > /tmp/search-indexer.log 2>&1 &
           echo $! > /tmp/search-indexer.pid
 
           echo "Waiting for search-indexer to be ready..."
@@ -257,6 +257,14 @@ jobs:
           ENVIRONMENT: staging
           KAFKA_BROKER: localhost:9092
           SEARCH_API_URL: http://localhost:3000
+
+      - name: Upload search-indexer logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: search-indexer-logs
+          path: /tmp/search-indexer.log
+          retention-days: 7
 
       - name: Cleanup
         if: always()
