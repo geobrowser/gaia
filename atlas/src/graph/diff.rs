@@ -112,6 +112,10 @@ impl DiffTracker {
     /// On first call (bootstrap), returns a diff with all nodes as ADDED.
     /// On subsequent calls, returns changes between previous and current state.
     ///
+    /// When a SpaceId appears at multiple positions in the tree (e.g., via
+    /// both explicit and topic edges), only the position closest to the root
+    /// is tracked. This matches the spec's "first path wins" semantics.
+    ///
     /// ## Performance
     ///
     /// After the first call, this method performs near-zero heap allocations
@@ -121,14 +125,20 @@ impl DiffTracker {
         // Reuse scratch buffer - clear but keep capacity
         self.scratch.clear();
         build_position_vec_into(&graph.tree, &mut self.scratch);
-        self.scratch.sort_unstable_by_key(|(id, _)| *id);
 
-        // Invariant: CanonicalGraph must not contain duplicate SpaceIds.
-        // If violated, the merge-join diff produces incorrect results.
-        assert!(
-            self.scratch.windows(2).all(|w| w[0].0 != w[1].0),
-            "duplicate SpaceId in tree - this indicates a bug in CanonicalGraph construction"
-        );
+        // Sort by (SpaceId, distance) so that for duplicates, the shortest
+        // distance comes first. This ensures "closest to root wins" when a
+        // node appears multiple times in the tree (e.g., via both explicit
+        // and topic edges).
+        self.scratch
+            .sort_unstable_by(|(id_a, pos_a), (id_b, pos_b)| {
+                id_a.cmp(id_b)
+                    .then_with(|| pos_a.distance.cmp(&pos_b.distance))
+            });
+
+        // Dedup by SpaceId, keeping the first entry (shortest distance due to sort above).
+        // The merge-join diff requires unique SpaceIds.
+        self.scratch.dedup_by_key(|(id, _)| *id);
 
         let diff = if self.initialized {
             compute_diff(&self.last_positions, &self.scratch)
@@ -594,5 +604,110 @@ mod tests {
         // Third graph: same as second (no changes)
         let diff = tracker.track(&graph2);
         assert!(diff.is_empty());
+    }
+
+    #[test]
+    fn test_duplicate_spaceid_keeps_shortest_distance() {
+        // Tree where B appears twice:
+        //   Root -> A (explicit, distance 1)
+        //     A -> B (explicit, distance 2)
+        //   Root -> B (topic, distance 1)
+        //
+        // B should be emitted once at distance 1 (the topic path, closer to root)
+        let mut root = TreeNode::new_root(make_space_id(0x01));
+        let mut a = TreeNode::new(make_space_id(0x0A), EdgeType::Verified);
+        let b_explicit = TreeNode::new(make_space_id(0x0B), EdgeType::Verified);
+        a.add_child(b_explicit);
+        root.add_child(a);
+        // B again via topic edge, directly under root (distance 1)
+        let b_topic = TreeNode::new_with_topic(make_space_id(0x0B), make_topic_id(0x8B));
+        root.add_child(b_topic);
+
+        let graph = CanonicalGraph::new(
+            make_space_id(0x01),
+            root,
+            [
+                make_space_id(0x01),
+                make_space_id(0x0A),
+                make_space_id(0x0B),
+            ]
+            .into_iter()
+            .collect(),
+        );
+
+        let mut tracker = DiffTracker::new();
+        let diff = tracker.track(&graph);
+
+        // A and B should each appear exactly once
+        assert_eq!(diff.len(), 2);
+
+        let b_change = diff
+            .changes
+            .iter()
+            .find(|c| c.space_id == make_space_id(0x0B))
+            .expect("B should be in diff");
+        assert_eq!(b_change.change_type, ChangeType::Added);
+
+        // B's position should be at distance 1 (topic path, closer to root)
+        let pos = b_change.position.unwrap();
+        assert_eq!(pos.distance, 1);
+        assert_eq!(pos.parent, make_space_id(0x01)); // root is parent
+        assert_eq!(
+            pos.edge_type,
+            EdgeType::Topic {
+                topic_id: make_topic_id(0x8B)
+            }
+        );
+
+        // Tracker should only track 2 positions (A and B, not 3)
+        assert_eq!(tracker.position_count(), 2);
+    }
+
+    #[test]
+    fn test_duplicate_spaceid_explicit_closer_than_topic() {
+        // Tree where B appears twice, but explicit is closer:
+        //   Root -> B (explicit, distance 1)
+        //   Root -> A (explicit, distance 1)
+        //     A -> B (topic, distance 2)
+        //
+        // B should be emitted once at distance 1 (the explicit path)
+        let mut root = TreeNode::new_root(make_space_id(0x01));
+        let b_explicit = TreeNode::new(make_space_id(0x0B), EdgeType::Verified);
+        root.add_child(b_explicit);
+        let mut a = TreeNode::new(make_space_id(0x0A), EdgeType::Verified);
+        let b_topic = TreeNode::new_with_topic(make_space_id(0x0B), make_topic_id(0x8B));
+        a.add_child(b_topic);
+        root.add_child(a);
+
+        let graph = CanonicalGraph::new(
+            make_space_id(0x01),
+            root,
+            [
+                make_space_id(0x01),
+                make_space_id(0x0A),
+                make_space_id(0x0B),
+            ]
+            .into_iter()
+            .collect(),
+        );
+
+        let mut tracker = DiffTracker::new();
+        let diff = tracker.track(&graph);
+
+        assert_eq!(diff.len(), 2);
+
+        let b_change = diff
+            .changes
+            .iter()
+            .find(|c| c.space_id == make_space_id(0x0B))
+            .expect("B should be in diff");
+
+        // B's position should be at distance 1 (explicit path, closer to root)
+        let pos = b_change.position.unwrap();
+        assert_eq!(pos.distance, 1);
+        assert_eq!(pos.parent, make_space_id(0x01));
+        assert_eq!(pos.edge_type, EdgeType::Verified);
+
+        assert_eq!(tracker.position_count(), 2);
     }
 }
