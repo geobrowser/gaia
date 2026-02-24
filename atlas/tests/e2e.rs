@@ -92,7 +92,7 @@ fn process_with_canonical(
             transitive.handle_event(&event, &state);
             state.apply_event(&event);
 
-            if let Some(graph) = canonical.compute(&state, &mut transitive) {
+            if let Some(graph) = canonical.compute_if_changed(&state, &mut transitive) {
                 let diff = diff_tracker.track(&graph);
                 if !diff.is_empty() {
                     diffs.push(diff);
@@ -1431,7 +1431,7 @@ fn test_e2e_diff_tracker_with_capacity() {
             transitive.handle_event(&event, &state);
             state.apply_event(&event);
 
-            if let Some(graph) = canonical.compute(&state, &mut transitive) {
+            if let Some(graph) = canonical.compute_if_changed(&state, &mut transitive) {
                 let diff = diff_tracker.track(&graph);
                 if !diff.is_empty() {
                     diff_count += 1;
@@ -1463,7 +1463,7 @@ fn test_e2e_diff_tracker_reset() {
     diff_tracker.reset();
 
     // Next computation should be a "bootstrap" again
-    if let Some(graph) = canonical.compute(&state, &mut transitive) {
+    if let Some(graph) = canonical.compute_if_changed(&state, &mut transitive) {
         let diff = diff_tracker.track(&graph);
         // Should have ADDED changes (bootstrap behavior)
         let added_count = diff

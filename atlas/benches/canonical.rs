@@ -201,7 +201,7 @@ fn bench_canonical_computation(c: &mut Criterion) {
             b.iter(|| {
                 let mut transitive = TransitiveProcessor::new();
                 let mut processor = CanonicalProcessor::new(root);
-                let graph = processor.compute(&state, &mut transitive);
+                let graph = processor.compute_if_changed(&state, &mut transitive);
                 black_box(graph)
             });
         });
@@ -249,7 +249,7 @@ fn bench_canonical_with_topics(c: &mut Criterion) {
             b.iter(|| {
                 let mut transitive = TransitiveProcessor::new();
                 let mut processor = CanonicalProcessor::new(root);
-                let graph = processor.compute(&state, &mut transitive);
+                let graph = processor.compute_if_changed(&state, &mut transitive);
                 black_box(graph)
             });
         });
@@ -265,7 +265,9 @@ fn bench_affects_canonical(c: &mut Criterion) {
     let (state, root) = generate_random_graph(1000, 2000, 42);
     let mut transitive = TransitiveProcessor::new();
     let mut processor = CanonicalProcessor::new(root);
-    let graph = processor.compute(&state, &mut transitive).unwrap();
+    let graph = processor
+        .compute_if_changed(&state, &mut transitive)
+        .unwrap();
     let canonical_set = graph.members.clone();
 
     // Event from canonical source
@@ -313,7 +315,7 @@ fn bench_change_detection(c: &mut Criterion) {
         b.iter(|| {
             let mut transitive = TransitiveProcessor::new();
             let mut processor = CanonicalProcessor::new(root);
-            let graph = processor.compute(&state, &mut transitive);
+            let graph = processor.compute_if_changed(&state, &mut transitive);
             black_box(graph)
         });
     });
@@ -321,11 +323,11 @@ fn bench_change_detection(c: &mut Criterion) {
     // Second compute (no change - should return None quickly)
     let mut transitive = TransitiveProcessor::new();
     let mut processor = CanonicalProcessor::new(root);
-    let _ = processor.compute(&state, &mut transitive);
+    let _ = processor.compute_if_changed(&state, &mut transitive);
 
     group.bench_function("second_compute_no_change", |b| {
         b.iter(|| {
-            let graph = processor.compute(&state, &mut transitive);
+            let graph = processor.compute_if_changed(&state, &mut transitive);
             black_box(graph)
         });
     });
@@ -353,7 +355,7 @@ fn bench_subtree_filtering(c: &mut Criterion) {
             b.iter(|| {
                 let mut transitive = TransitiveProcessor::new();
                 let mut processor = CanonicalProcessor::new(root);
-                let graph = processor.compute(&state, &mut transitive);
+                let graph = processor.compute_if_changed(&state, &mut transitive);
                 black_box(graph)
             });
         });
@@ -373,7 +375,7 @@ fn bench_end_to_end(c: &mut Criterion) {
         b.iter(|| {
             let mut transitive = TransitiveProcessor::new();
             let mut processor = CanonicalProcessor::new(root);
-            let graph = processor.compute(&state, &mut transitive);
+            let graph = processor.compute_if_changed(&state, &mut transitive);
             black_box(graph)
         });
     });
@@ -381,13 +383,13 @@ fn bench_end_to_end(c: &mut Criterion) {
     // With pre-warmed transitive cache
     let mut transitive = TransitiveProcessor::new();
     let mut processor = CanonicalProcessor::new(root);
-    let _ = processor.compute(&state, &mut transitive); // Warm the cache
+    let _ = processor.compute_if_changed(&state, &mut transitive); // Warm the cache
 
     group.bench_function("with_warm_cache_1000_nodes", |b| {
         b.iter(|| {
             // Reset processor state but keep transitive cache
             let mut processor = CanonicalProcessor::new(root);
-            let graph = processor.compute(&state, &mut transitive);
+            let graph = processor.compute_if_changed(&state, &mut transitive);
             black_box(graph)
         });
     });

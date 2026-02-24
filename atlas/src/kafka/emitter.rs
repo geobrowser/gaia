@@ -3,6 +3,11 @@
 //! Emits canonical graph updates to Kafka when the graph changes.
 //! Supports both full snapshots (CanonicalGraphUpdated) and incremental diffs (CanonicalGraphDiff).
 //!
+//! Implementation notes:
+//! - Tree -> protobuf conversion is iterative to avoid stack overflow on deep trees.
+//! - Diff emission treats Root edge positions as invalid defensive input and drops
+//!   them with a warning rather than emitting malformed edge metadata.
+//!
 //! # Example
 //!
 //! ```ignore
@@ -24,7 +29,7 @@
 //! }
 //!
 //! // Compute canonical graph once per block and emit a single diff
-//! if let Some(graph) = canonical.compute(&state, &mut transitive) {
+//! if let Some(graph) = canonical.compute_if_changed(&state, &mut transitive) {
 //!     let diff = diff_tracker.track(&graph);
 //!     emitter.emit_diff(&graph.root, &diff, &block_meta)?;
 //! }

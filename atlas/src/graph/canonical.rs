@@ -6,6 +6,14 @@
 //!
 //! The canonical graph represents the "trusted" portion of the topology graph,
 //! where trust flows only through explicit edges (Verified, Related).
+//!
+//! Important implementation semantics:
+//! - Topic edges never grant canonical membership. They can only attach paths
+//!   between nodes that are already canonical via explicit edges.
+//! - Tree nodes may contain duplicate SpaceIds via different attachment paths
+//!   (for example explicit + topic). This is intentional.
+//! - The flat membership set is still unique by SpaceId and is the authority for
+//!   canonical inclusion checks.
 
 use super::{hash_tree, GraphState, TransitiveProcessor, TreeNode};
 use crate::events::{SpaceId, SpaceTopologyEvent, SpaceTopologyPayload, TopicId};
@@ -61,13 +69,17 @@ pub struct CanonicalProcessor {
 
     /// Hash of the last computed canonical tree (after Phase 2).
     /// Used to detect changes in tree structure (not just canonical set).
-    last_hash: Option<u64>,
+    last_tree_hash: Option<u64>,
 
     /// Hash of inputs to the canonical computation (Phase 1 tree + topic edges).
     /// Used to short-circuit before cloning when inputs haven't changed.
-    last_input_hash: Option<u64>,
+    ///
+    /// This is intentionally separate from `last_tree_hash`:
+    /// - `last_phase1_input_hash` skips work before Phase 2 when inputs are identical.
+    /// - `last_tree_hash` detects whether final tree structure changed after Phase 2.
+    last_phase1_input_hash: Option<u64>,
 
-    /// Canonical set from the last successful `compute()` call.
+    /// Canonical set from the last successful `compute_if_changed()` call.
     /// Used by `affects_canonical()` to skip recomputation for events
     /// from non-canonical sources.
     last_canonical_set: Option<HashSet<SpaceId>>,
@@ -78,8 +90,8 @@ impl CanonicalProcessor {
     pub fn new(root: SpaceId) -> Self {
         Self {
             root,
-            last_hash: None,
-            last_input_hash: None,
+            last_tree_hash: None,
+            last_phase1_input_hash: None,
             last_canonical_set: None,
         }
     }
@@ -95,6 +107,10 @@ impl CanonicalProcessor {
     /// or if the event originates from a canonical source.
     /// Returns `false` for SpaceCreated events (new spaces aren't canonical until
     /// explicitly connected from root) and for events from non-canonical sources.
+    ///
+    /// This is a performance hint, not a correctness oracle. The pipeline computes
+    /// canonical state from full graph state at block boundaries when any event in
+    /// that block may affect canonical output.
     pub fn affects_canonical(&self, event: &SpaceTopologyEvent) -> bool {
         let canonical_set = match &self.last_canonical_set {
             Some(set) => set,
@@ -128,7 +144,7 @@ impl CanonicalProcessor {
     /// Note: Even if `affects_canonical` returns true, the tree structure may
     /// not actually change (e.g., adding a duplicate edge). The hash comparison
     /// detects this case.
-    pub fn compute(
+    pub fn compute_if_changed(
         &mut self,
         state: &GraphState,
         transitive: &mut TransitiveProcessor,
@@ -149,10 +165,10 @@ impl CanonicalProcessor {
             hasher.finish()
         };
 
-        if self.last_input_hash == Some(input_hash) {
+        if self.last_phase1_input_hash == Some(input_hash) {
             return None;
         }
-        self.last_input_hash = Some(input_hash);
+        self.last_phase1_input_hash = Some(input_hash);
 
         // Inputs changed — clone and run Phase 2
         let canonical_set = root_transitive.members.clone();
@@ -184,12 +200,12 @@ impl CanonicalProcessor {
 
         // Check if tree structure changed (Phase 2 may not have altered the tree)
         let new_hash = hash_tree(&graph.tree);
-        if self.last_hash == Some(new_hash) {
+        if self.last_tree_hash == Some(new_hash) {
             self.last_canonical_set = Some(graph.members);
             return None;
         }
 
-        self.last_hash = Some(new_hash);
+        self.last_tree_hash = Some(new_hash);
         self.last_canonical_set = Some(graph.members.clone());
         Some(graph)
     }
@@ -388,7 +404,9 @@ mod tests {
         let mut transitive = TransitiveProcessor::new();
         let mut processor = CanonicalProcessor::new(root);
 
-        let graph = processor.compute(&state, &mut transitive).unwrap();
+        let graph = processor
+            .compute_if_changed(&state, &mut transitive)
+            .unwrap();
 
         assert_eq!(graph.root, root);
         assert_eq!(graph.len(), 1);
@@ -409,7 +427,9 @@ mod tests {
         let mut transitive = TransitiveProcessor::new();
         let mut processor = CanonicalProcessor::new(root);
 
-        let graph = processor.compute(&state, &mut transitive).unwrap();
+        let graph = processor
+            .compute_if_changed(&state, &mut transitive)
+            .unwrap();
 
         assert_eq!(graph.len(), 3);
         assert!(graph.contains(&root));
@@ -435,7 +455,9 @@ mod tests {
         let mut transitive = TransitiveProcessor::new();
         let mut processor = CanonicalProcessor::new(root);
 
-        let graph = processor.compute(&state, &mut transitive).unwrap();
+        let graph = processor
+            .compute_if_changed(&state, &mut transitive)
+            .unwrap();
 
         // All three should be canonical
         assert_eq!(graph.len(), 3);
@@ -464,7 +486,9 @@ mod tests {
         let mut transitive = TransitiveProcessor::new();
         let mut processor = CanonicalProcessor::new(root);
 
-        let graph = processor.compute(&state, &mut transitive).unwrap();
+        let graph = processor
+            .compute_if_changed(&state, &mut transitive)
+            .unwrap();
 
         // C should NOT be canonical (only reachable via topic edge)
         assert_eq!(graph.len(), 2);
@@ -499,7 +523,9 @@ mod tests {
         let mut transitive = TransitiveProcessor::new();
         let mut processor = CanonicalProcessor::new(root);
 
-        let graph = processor.compute(&state, &mut transitive).unwrap();
+        let graph = processor
+            .compute_if_changed(&state, &mut transitive)
+            .unwrap();
 
         // All should be canonical
         assert_eq!(graph.len(), 5);
@@ -542,7 +568,7 @@ mod tests {
 
         let mut transitive = TransitiveProcessor::new();
         let mut processor = CanonicalProcessor::new(root);
-        processor.compute(&state, &mut transitive); // establish baseline
+        processor.compute_if_changed(&state, &mut transitive); // establish baseline
 
         // SpaceCreated events don't affect canonical
         let event = SpaceTopologyEvent {
@@ -569,7 +595,7 @@ mod tests {
 
         let mut transitive = TransitiveProcessor::new();
         let mut processor = CanonicalProcessor::new(root);
-        processor.compute(&state, &mut transitive); // establish baseline
+        processor.compute_if_changed(&state, &mut transitive); // establish baseline
 
         // Edge from canonical source should affect canonical
         let event = SpaceTopologyEvent {
@@ -593,7 +619,7 @@ mod tests {
 
         let mut transitive = TransitiveProcessor::new();
         let mut processor = CanonicalProcessor::new(root);
-        processor.compute(&state, &mut transitive); // establish baseline
+        processor.compute_if_changed(&state, &mut transitive); // establish baseline
 
         // Edge from non-canonical source should NOT affect canonical
         let event = SpaceTopologyEvent {
@@ -618,12 +644,12 @@ mod tests {
         let mut processor = CanonicalProcessor::new(root);
 
         // First computation should return a graph
-        let graph1 = processor.compute(&state, &mut transitive);
+        let graph1 = processor.compute_if_changed(&state, &mut transitive);
         assert!(graph1.is_some());
         let graph1 = graph1.unwrap();
 
         // Second computation with no changes should return None
-        let graph2 = processor.compute(&state, &mut transitive);
+        let graph2 = processor.compute_if_changed(&state, &mut transitive);
         assert!(graph2.is_none());
 
         // Add a new edge
@@ -643,7 +669,7 @@ mod tests {
         );
 
         // Third computation should return a new graph (tree structure changed)
-        let graph3 = processor.compute(&state, &mut transitive);
+        let graph3 = processor.compute_if_changed(&state, &mut transitive);
         assert!(graph3.is_some());
         let graph3 = graph3.unwrap();
 
@@ -677,7 +703,9 @@ mod tests {
         let mut transitive = TransitiveProcessor::new();
         let mut processor = CanonicalProcessor::new(root);
 
-        let graph = processor.compute(&state, &mut transitive).unwrap();
+        let graph = processor
+            .compute_if_changed(&state, &mut transitive)
+            .unwrap();
 
         // Should have Root, A, B (not C)
         assert_eq!(graph.len(), 3);
@@ -706,7 +734,9 @@ mod tests {
         let mut transitive = TransitiveProcessor::new();
         let mut processor = CanonicalProcessor::new(root);
 
-        let graph = processor.compute(&state, &mut transitive).unwrap();
+        let graph = processor
+            .compute_if_changed(&state, &mut transitive)
+            .unwrap();
 
         // All explicitly connected nodes are canonical
         assert_eq!(graph.len(), 5);

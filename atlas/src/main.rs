@@ -137,11 +137,18 @@ impl Sink for AtlasSink {
 
         // Process all events in the block, then compute and emit once.
         //
-        // Block-level batching: all events in a block are logically simultaneous
-        // (same block number/timestamp). Rather than computing the canonical graph
-        // and emitting a diff after each event — which produces intermediate states
-        // that downstream consumers must process — we apply all events first and
-        // emit a single diff representing the net change for the entire block.
+        // This batching model is intentional and load-bearing:
+        // - Avoids per-event intermediate diffs within the same block.
+        // - Emits exactly one net diff for the block's final state.
+        // - Keeps consumer replay stable (apply one atomic batch per block).
+        //
+        // Pipeline shape (per block):
+        //   for event in block:
+        //     1) affects_canonical(event) on pre-mutation canonical set
+        //     2) transitive.handle_event(event, pre-mutation graph)
+        //     3) graph.apply_event(event)
+        //   then:
+        //     compute canonical once -> diff once -> emit once
         let action_count = actions.actions.len();
         async {
             let mut s = self.state.lock().unwrap();
@@ -156,6 +163,8 @@ impl Sink for AtlasSink {
 
             // Phase 1: Apply all events to graph state and transitive cache.
             // Track whether any event in this block may affect the canonical graph.
+            // This flag is intentionally conservative: false means "safe to skip",
+            // true means "compute once at end of block and decide from hashes/diff".
             let mut block_may_affect = false;
 
             for action in &actions.actions {
@@ -188,7 +197,7 @@ impl Sink for AtlasSink {
                 return Ok(());
             }
 
-            if let Some(new_graph) = canonical.compute(graph, transitive) {
+            if let Some(new_graph) = canonical.compute_if_changed(graph, transitive) {
                 let diff = diff_tracker.track(&new_graph);
 
                 if !diff.is_empty() {
@@ -349,6 +358,7 @@ use hermes_kafka::get_topic_prefix;
 async fn async_main() -> anyhow::Result<()> {
     // Kafka configuration
     let broker = env::var("KAFKA_BROKER").unwrap_or_else(|_| "localhost:9092".to_string());
+    // Topic contract: ENVIRONMENT controls prefixing (staging. vs production "").
     let topic_prefix = get_topic_prefix();
     let base_topic = env::var("KAFKA_TOPIC").unwrap_or_else(|_| "topology.canonical".to_string());
     let topic = format!("{}{}", topic_prefix, base_topic);

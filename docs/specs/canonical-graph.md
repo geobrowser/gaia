@@ -1,5 +1,7 @@
 # Canonical Graph Specification
 
+> Note: For the consolidated, normative Atlas behavior spec, see `docs/specs/atlas-canonical-graph-spec.md`.
+
 This document specifies the data model, algorithms, and wire format for the Atlas canonical graph system.
 
 ## Overview

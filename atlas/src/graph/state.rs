@@ -2,6 +2,11 @@
 //!
 //! `GraphState` is the in-memory representation of the space topology graph,
 //! updated by processing blockchain events.
+//!
+//! Invariant notes:
+//! - Forward and reverse indexes are kept in sync via mutation methods.
+//! - Space re-announcement with a new topic must remove stale reverse mappings.
+//! - Callers should mutate only via `apply_event`/helpers, not by direct field edits.
 
 use crate::events::{
     SpaceCreated, SpaceId, SpaceTopologyEvent, SpaceTopologyPayload, TopicId, TrustExtended,
@@ -127,6 +132,11 @@ impl GraphState {
 
     /// Add an explicit edge (Verified, Related, Editor, Member)
     fn add_explicit_edge(&mut self, source: SpaceId, target: SpaceId, edge_type: EdgeType) {
+        // Intentionally allow duplicate entries.
+        //
+        // Upstream event sources can emit duplicate topology actions; preserving
+        // them here keeps GraphState as an append-only reflection of input events.
+        // Canonical/diff computation layers handle effective dedup semantics.
         self.explicit_edges
             .entry(source)
             .or_default()

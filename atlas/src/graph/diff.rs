@@ -4,6 +4,12 @@
 //! semantics. The DiffTracker stores positions as sorted vectors for efficient
 //! diff computation via merge-join.
 //!
+//! Important implementation semantics:
+//! - The root node is implicit protocol state and is never emitted as a diff change.
+//! - If a SpaceId appears multiple times in the tree, one position is chosen for
+//!   diffing: the shortest distance from root (closest-to-root wins).
+//! - Output is deterministic: changes are sorted by SpaceId.
+//!
 //! ## Performance Characteristics
 //!
 //! - **Time complexity**: O(n log n) per diff (dominated by sort)
