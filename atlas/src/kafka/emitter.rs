@@ -14,17 +14,19 @@
 //! let emitter = CanonicalGraphEmitter::new(producer);
 //! let mut diff_tracker = DiffTracker::new();
 //!
-//! // Process events and emit diffs
-//! for event in events {
+//! // Process a block: apply all events, then compute and emit once.
+//! // Block-level batching avoids emitting intermediate states.
+//! for event in block_events {
 //!     // Order matters: transitive reads pre-mutation state for cache invalidation,
 //!     // then graph state is updated with the new event.
 //!     transitive.handle_event(&event, &state);
 //!     state.apply_event(&event);
+//! }
 //!
-//!     if let Some(graph) = canonical.compute(&state, &mut transitive) {
-//!         let diff = diff_tracker.track(&graph);
-//!         emitter.emit_diff(&graph.root, &diff, &event.meta)?;
-//!     }
+//! // Compute canonical graph once per block and emit a single diff
+//! if let Some(graph) = canonical.compute(&state, &mut transitive) {
+//!     let diff = diff_tracker.track(&graph);
+//!     emitter.emit_diff(&graph.root, &diff, &block_meta)?;
 //! }
 //! ```
 

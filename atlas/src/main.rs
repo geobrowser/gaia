@@ -135,14 +135,92 @@ impl Sink for AtlasSink {
 
         let actions = Actions::decode(output)?;
 
-        // Process each action within a block span
+        // Process all events in the block, then compute and emit once.
+        //
+        // Block-level batching: all events in a block are logically simultaneous
+        // (same block number/timestamp). Rather than computing the canonical graph
+        // and emitting a diff after each event — which produces intermediate states
+        // that downstream consumers must process — we apply all events first and
+        // emit a single diff representing the net change for the entire block.
         let action_count = actions.actions.len();
         async {
+            let mut s = self.state.lock().unwrap();
+            let PipelineState {
+                graph,
+                transitive,
+                canonical,
+                diff_tracker,
+                event_count,
+                emit_count,
+            } = &mut *s;
+
+            // Phase 1: Apply all events to graph state and transitive cache.
+            // Track whether any event in this block may affect the canonical graph.
+            let mut block_may_affect = false;
+
             for action in &actions.actions {
                 if let Some(event) = convert_action(action, &meta) {
-                    self.process_event(&event)?;
+                    let event_type = match &event.payload {
+                        SpaceTopologyPayload::SpaceCreated(_) => "SpaceCreated",
+                        SpaceTopologyPayload::TrustExtended(_) => "TrustExtended",
+                    };
+
+                    let _span = info_span!("apply_event", event_type).entered();
+
+                    log_event(*event_count, &event);
+                    *event_count += 1;
+
+                    // Check before mutation — affects_canonical reads pre-mutation
+                    // canonical set (same as the transitive cache invalidation order)
+                    if canonical.affects_canonical(&event) {
+                        block_may_affect = true;
+                    }
+
+                    // Order matters: transitive reads pre-mutation state for cache
+                    // invalidation, then graph state is updated.
+                    transitive.handle_event(&event, graph);
+                    graph.apply_event(&event);
                 }
             }
+
+            // Phase 2: Compute canonical graph once and emit a single diff for the block.
+            if !block_may_affect {
+                return Ok(());
+            }
+
+            if let Some(new_graph) = canonical.compute(graph, transitive) {
+                let diff = diff_tracker.track(&new_graph);
+
+                if !diff.is_empty() {
+                    let change_count = diff.len();
+                    self.emitter
+                        .emit_diff(&new_graph.root, &diff, &meta)?;
+                    *emit_count += 1;
+
+                    let added = diff.changes.iter().filter(|c| c.change_type == atlas::graph::ChangeType::Added).count();
+                    let removed = diff.changes.iter().filter(|c| c.change_type == atlas::graph::ChangeType::Removed).count();
+                    let moved = diff.changes.iter().filter(|c| c.change_type == atlas::graph::ChangeType::Moved).count();
+
+                    // Show up to 5 affected space IDs for debuggability; truncate for large diffs
+                    let sample: Vec<String> = diff.changes.iter()
+                        .take(5)
+                        .map(|c| format!("{}:{:?}", hex::encode(c.space_id), c.change_type))
+                        .collect();
+                    let truncated = if diff.len() > 5 { format!(" (+{} more)", diff.len() - 5) } else { String::new() };
+
+                    info!(
+                        block_number,
+                        change_count,
+                        added,
+                        removed,
+                        moved,
+                        node_count = new_graph.len(),
+                        changes = %format!("[{}]{}", sample.join(", "), truncated),
+                        "Emitted canonical graph diff"
+                    );
+                }
+            }
+
             Ok::<(), AtlasError>(())
         }
         .instrument(info_span!(
@@ -152,81 +230,6 @@ impl Sink for AtlasSink {
             action_count
         ))
         .await
-    }
-}
-
-impl AtlasSink {
-    fn process_event(&self, event: &SpaceTopologyEvent) -> Result<(), AtlasError> {
-        let event_type = match &event.payload {
-            SpaceTopologyPayload::SpaceCreated(_) => "SpaceCreated",
-            SpaceTopologyPayload::TrustExtended(_) => "TrustExtended",
-        };
-
-        let _span = info_span!("process_event", event_type).entered();
-
-        let mut s = self.state.lock().unwrap();
-        let PipelineState {
-            graph,
-            transitive,
-            canonical,
-            diff_tracker,
-            event_count,
-            emit_count,
-        } = &mut *s;
-
-        // Log the event
-        log_event(*event_count, event);
-        *event_count += 1;
-
-        // Check if this event can affect the canonical graph before doing work
-        let may_affect = canonical.affects_canonical(event);
-
-        // Update transitive cache based on event
-        transitive.handle_event(event, graph);
-
-        // Apply event to graph state
-        graph.apply_event(event);
-
-        // Skip canonical recomputation for events that can't affect it
-        // (e.g., SpaceCreated, or edges from non-canonical sources)
-        if !may_affect {
-            return Ok(());
-        }
-
-        // Compute canonical graph and emit diff if changed
-        if let Some(new_graph) = canonical.compute(graph, transitive) {
-            let diff = diff_tracker.track(&new_graph);
-
-            if !diff.is_empty() {
-                let change_count = diff.len();
-                self.emitter
-                    .emit_diff(&new_graph.root, &diff, &event.meta)?;
-                *emit_count += 1;
-
-                let added = diff.changes.iter().filter(|c| c.change_type == atlas::graph::ChangeType::Added).count();
-                let removed = diff.changes.iter().filter(|c| c.change_type == atlas::graph::ChangeType::Removed).count();
-                let moved = diff.changes.iter().filter(|c| c.change_type == atlas::graph::ChangeType::Moved).count();
-
-                // Show up to 5 affected space IDs for debuggability; truncate for large diffs
-                let sample: Vec<String> = diff.changes.iter()
-                    .take(5)
-                    .map(|c| format!("{}:{:?}", hex::encode(c.space_id), c.change_type))
-                    .collect();
-                let truncated = if diff.len() > 5 { format!(" (+{} more)", diff.len() - 5) } else { String::new() };
-
-                info!(
-                    change_count,
-                    added,
-                    removed,
-                    moved,
-                    node_count = new_graph.len(),
-                    changes = %format!("[{}]{}", sample.join(", "), truncated),
-                    "Emitted canonical graph diff"
-                );
-            }
-        }
-
-        Ok(())
     }
 }
 
