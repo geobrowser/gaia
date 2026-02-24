@@ -40,7 +40,11 @@ impl CanonicalGraph {
         self.members.contains(space_id)
     }
 
-    /// Get the number of canonical spaces
+    /// Get the number of canonical spaces.
+    ///
+    /// A canonical graph always contains at least the root, so `is_empty`
+    /// is intentionally omitted — it would always return false.
+    #[allow(clippy::len_without_is_empty)]
     pub fn len(&self) -> usize {
         self.members.len()
     }
