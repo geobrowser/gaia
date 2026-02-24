@@ -14,7 +14,7 @@ use crate::consumer::{EntityEvent, EntityEventType, ScoreEvent, ScoreEventType, 
 use crate::errors::IngestError;
 use crate::metrics::SearchIndexerMetrics;
 use crate::orchestrator::{BatchSource, EntityProcessingBatch, ProcessedBatch, ScoreProcessingBatch, SpaceTopicProcessingBatch};
-use sdk::core::ids::TYPE_RELATION_TYPE_ID;
+use sdk::core::ids::{AVATAR_RELATION_TYPE_ID, COVER_RELATION_TYPE_ID, TYPE_RELATION_TYPE_ID};
 use search_indexer_shared::EntityDocument;
 use uuid::Uuid;
 
@@ -30,16 +30,17 @@ pub enum ProcessedEvent {
         space_id: uuid::Uuid,
         property_keys: Vec<String>,
     },
-    /// Add a type relation to an entity's type_relations array.
-    AddTypeRelation {
+    /// Add a relation to an entity's relations array.
+    AddRelation {
         entity_id: uuid::Uuid,
         space_id: uuid::Uuid,
         relation_id: uuid::Uuid,
-        entity_to_id: uuid::Uuid,
+        relation_type: uuid::Uuid,
+        to_entity_id: uuid::Uuid,
     },
-    /// Remove a type relation from any entity containing it, using only the relation_id.
+    /// Remove a relation from any entity containing it, using only the relation_id.
     /// Used when we don't know which entity contains the relation.
-    RemoveTypeRelationById { relation_id: uuid::Uuid },
+    RemoveRelationById { relation_id: uuid::Uuid },
     /// Update an entity's global score across all spaces.
     /// This will update entity_global_score for all documents with this entity_id.
     UpdateEntityGlobalScore { entity_id: uuid::Uuid, score: f64 },
@@ -90,12 +91,10 @@ impl Processor {
         }
     }
 
-    /// Check if a relation type represents an entity type relationship.
-    ///
-    /// Returns true if the relation type ID matches the "type" relation type ID,
-    /// which indicates that the from_entity has a type of to_entity.
-    fn is_type_relation(&self, relation_type: &Uuid) -> bool {
-        relation_type.to_string() == TYPE_RELATION_TYPE_ID
+    /// Check if a relation type is one we index (type, avatar, or cover).
+    fn is_indexed_relation(&self, relation_type: &Uuid) -> bool {
+        let rt = relation_type.to_string();
+        rt == TYPE_RELATION_TYPE_ID || rt == AVATAR_RELATION_TYPE_ID || rt == COVER_RELATION_TYPE_ID
     }
 
     /// Process a batch of entity events.
@@ -581,6 +580,7 @@ impl Processor {
                 // Set optional fields
                 doc.avatar = event.avatar;
                 doc.cover = event.cover;
+                doc.image_url = event.image_url;
 
                 // Look up space_topic_entity_id from cache
                 if let Some(topic_entity_id) = self.space_topic_cache.get(&event.space_id) {
@@ -630,26 +630,27 @@ impl Processor {
                 if let (Some(relation_id), Some(relation_type), Some(to_entity_id)) =
                     (event.relation_id, event.relation_type, event.to_entity_id)
                 {
-                    if self.is_type_relation(&relation_type) {
-                        // This is a type relation - we need to add it to type_relations
+                    if self.is_indexed_relation(&relation_type) {
                         debug!(
                             entity_id = %event.entity_id,
                             relation_id = %relation_id,
+                            relation_type = %relation_type,
                             to_entity_id = %to_entity_id,
                             space_id = %event.space_id,
-                            "Processing type relation upsert - adding to entity's type_relations"
+                            "Processing indexed relation - adding to entity's relations"
                         );
 
-                        Ok(Some(ProcessedEvent::AddTypeRelation {
+                        Ok(Some(ProcessedEvent::AddRelation {
                             entity_id: event.entity_id,
                             space_id: event.space_id,
                             relation_id,
-                            entity_to_id: to_entity_id,
+                            relation_type,
+                            to_entity_id,
                         }))
                     } else {
                         debug!(
                             relation_type = %relation_type,
-                            "Skipped non-type relation upsert"
+                            "Skipped non-indexed relation"
                         );
                         Ok(None)
                     }
@@ -666,7 +667,7 @@ impl Processor {
                         relation_id = %relation_id,
                         "Processing relation delete"
                     );
-                    Ok(Some(ProcessedEvent::RemoveTypeRelationById { relation_id }))
+                    Ok(Some(ProcessedEvent::RemoveRelationById { relation_id }))
                 } else {
                     debug!("Skipped delete relation event with missing relation_id");
                     Ok(None)
@@ -693,7 +694,7 @@ impl Processor {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sdk::core::ids::TYPE_RELATION_TYPE_ID;
+    use sdk::core::ids::{AVATAR_RELATION_TYPE_ID, COVER_RELATION_TYPE_ID, TYPE_RELATION_TYPE_ID};
     use uuid::Uuid;
 
     #[test]
@@ -706,6 +707,8 @@ mod tests {
             Some("Test Entity".to_string()),
             Some("Description".to_string()),
             None,
+            None,
+            None,
         );
 
         let result = processor.process_event(event).unwrap();
@@ -714,6 +717,28 @@ mod tests {
         if let Some(ProcessedEvent::Index(doc)) = result {
             assert_eq!(doc.name, Some("Test Entity".to_string()));
             assert_eq!(doc.description, Some("Description".to_string()));
+        }
+    }
+
+    #[test]
+    fn test_process_upsert_with_image_url() {
+        let processor = Processor::new();
+
+        let event = EntityEvent::upsert(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Some("Image Entity".to_string()),
+            None,
+            None,
+            None,
+            Some("https://example.com/img.png".to_string()),
+        );
+
+        let result = processor.process_event(event).unwrap();
+        if let Some(ProcessedEvent::Index(doc)) = result {
+            assert_eq!(doc.image_url, Some("https://example.com/img.png".to_string()));
+        } else {
+            panic!("Expected ProcessedEvent::Index");
         }
     }
 
@@ -767,6 +792,8 @@ mod tests {
             None, // No name
             None,
             None,
+            None,
+            None,
         );
 
         let result = processor.process_event(event).unwrap();
@@ -788,12 +815,16 @@ mod tests {
                 Some("Entity 1".to_string()),
                 None,
                 None,
+                None,
+                None,
             ),
             EntityEvent::upsert(
                 Uuid::new_v4(),
                 Uuid::new_v4(),
                 Some("Entity 2".to_string()),
                 Some("Desc".to_string()),
+                None,
+                None,
                 None,
             ),
             EntityEvent::delete(Uuid::new_v4(), Uuid::new_v4()),
@@ -804,11 +835,11 @@ mod tests {
     }
 
     #[test]
-    fn test_process_create_relation_non_type() {
+    fn test_process_create_relation_non_indexed() {
         let processor = Processor::new();
 
         let relation_id = Uuid::new_v4();
-        let relation_type = Uuid::new_v4(); // Non-type relation
+        let relation_type = Uuid::new_v4(); // Non-indexed relation
         let entity_id = Uuid::new_v4();
         let to_entity_id = Uuid::new_v4();
         let space_id = Uuid::new_v4();
@@ -822,7 +853,7 @@ mod tests {
         );
 
         let result = processor.process_event(event).unwrap();
-        // Non-type relations should be skipped
+        // Non-indexed relations should be skipped
         assert!(result.is_none());
     }
 
@@ -831,7 +862,6 @@ mod tests {
         let processor = Processor::new();
 
         let relation_id = Uuid::new_v4();
-        // Use the actual type relation ID
         let relation_type =
             Uuid::parse_str(TYPE_RELATION_TYPE_ID).expect("TYPE_RELATION_TYPE_ID should be valid");
         let entity_id = Uuid::new_v4();
@@ -846,61 +876,115 @@ mod tests {
             space_id,
         );
 
-        // Since this is a type relation, it should return an AddTypeRelation event
         let result = processor.process_event(event).unwrap();
         assert!(result.is_some());
-        assert!(matches!(
-            result,
-            Some(ProcessedEvent::AddTypeRelation { .. })
-        ));
+        assert!(matches!(result, Some(ProcessedEvent::AddRelation { .. })));
 
-        if let Some(ProcessedEvent::AddTypeRelation {
+        if let Some(ProcessedEvent::AddRelation {
             entity_id: eid,
             space_id: sid,
             relation_id: rid,
-            entity_to_id: etid,
+            relation_type: rt,
+            to_entity_id: teid,
         }) = result
         {
             assert_eq!(eid, entity_id);
             assert_eq!(sid, space_id);
             assert_eq!(rid, relation_id);
-            assert_eq!(etid, to_entity_id);
+            assert_eq!(rt, relation_type);
+            assert_eq!(teid, to_entity_id);
         }
     }
 
     #[test]
-    fn test_process_delete_type_relation() {
+    fn test_process_create_avatar_relation() {
+        let processor = Processor::new();
+
+        let relation_id = Uuid::new_v4();
+        let relation_type =
+            Uuid::parse_str(AVATAR_RELATION_TYPE_ID).expect("AVATAR_RELATION_TYPE_ID should be valid");
+        let entity_id = Uuid::new_v4();
+        let to_entity_id = Uuid::new_v4();
+        let space_id = Uuid::new_v4();
+
+        let event = EntityEvent::create_relation(
+            relation_id,
+            relation_type,
+            entity_id,
+            to_entity_id,
+            space_id,
+        );
+
+        let result = processor.process_event(event).unwrap();
+        assert!(result.is_some());
+        assert!(matches!(result, Some(ProcessedEvent::AddRelation { .. })));
+    }
+
+    #[test]
+    fn test_process_create_cover_relation() {
+        let processor = Processor::new();
+
+        let relation_id = Uuid::new_v4();
+        let relation_type =
+            Uuid::parse_str(COVER_RELATION_TYPE_ID).expect("COVER_RELATION_TYPE_ID should be valid");
+        let entity_id = Uuid::new_v4();
+        let to_entity_id = Uuid::new_v4();
+        let space_id = Uuid::new_v4();
+
+        let event = EntityEvent::create_relation(
+            relation_id,
+            relation_type,
+            entity_id,
+            to_entity_id,
+            space_id,
+        );
+
+        let result = processor.process_event(event).unwrap();
+        assert!(matches!(result, Some(ProcessedEvent::AddRelation { .. })));
+    }
+
+    #[test]
+    fn test_process_delete_relation() {
         let processor = Processor::new();
 
         let relation_id = Uuid::new_v4();
 
-        // delete_relation should produce RemoveTypeRelationById
         let event = EntityEvent::delete_relation(relation_id);
 
         let result = processor.process_event(event).unwrap();
         assert!(result.is_some());
         assert!(matches!(
             result,
-            Some(ProcessedEvent::RemoveTypeRelationById { .. })
+            Some(ProcessedEvent::RemoveRelationById { .. })
         ));
 
-        if let Some(ProcessedEvent::RemoveTypeRelationById { relation_id: rid }) = result {
+        if let Some(ProcessedEvent::RemoveRelationById { relation_id: rid }) = result {
             assert_eq!(rid, relation_id);
         }
     }
 
     #[test]
-    fn test_is_type_relation() {
+    fn test_is_indexed_relation() {
         let processor = Processor::new();
 
-        // Random relation type should not be a type relation
+        // Random relation type should not be indexed
         let random_relation_type = Uuid::new_v4();
-        assert!(!processor.is_type_relation(&random_relation_type));
+        assert!(!processor.is_indexed_relation(&random_relation_type));
 
-        // The specific type relation ID should be recognized
+        // TYPE relation should be indexed
         let type_relation_id =
             Uuid::parse_str(TYPE_RELATION_TYPE_ID).expect("TYPE_RELATION_TYPE_ID should be valid");
-        assert!(processor.is_type_relation(&type_relation_id));
+        assert!(processor.is_indexed_relation(&type_relation_id));
+
+        // AVATAR relation should be indexed
+        let avatar_relation_id =
+            Uuid::parse_str(AVATAR_RELATION_TYPE_ID).expect("AVATAR_RELATION_TYPE_ID should be valid");
+        assert!(processor.is_indexed_relation(&avatar_relation_id));
+
+        // COVER relation should be indexed
+        let cover_relation_id =
+            Uuid::parse_str(COVER_RELATION_TYPE_ID).expect("COVER_RELATION_TYPE_ID should be valid");
+        assert!(processor.is_indexed_relation(&cover_relation_id));
     }
 
     #[test]
@@ -917,6 +1001,8 @@ mod tests {
             Uuid::new_v4(),
             space_id,
             Some("Test Entity".to_string()),
+            None,
+            None,
             None,
             None,
         );
@@ -942,6 +1028,8 @@ mod tests {
             Uuid::new_v4(),
             Uuid::new_v4(),
             Some("Test Entity".to_string()),
+            None,
+            None,
             None,
             None,
         );
@@ -1004,6 +1092,8 @@ mod tests {
             Some("New Entity".to_string()),
             None,
             None,
+            None,
+            None,
         );
 
         let result = processor.process_event(event).unwrap();
@@ -1017,4 +1107,5 @@ mod tests {
             panic!("Expected ProcessedEvent::Index");
         }
     }
+
 }

@@ -7,4 +7,4 @@ pub mod env;
 pub mod types;
 
 pub use env::{get_consumer_group_prefix, get_index_prefix};
-pub use types::entity_document::{EntityDocument, TypeRelationEntry};
+pub use types::entity_document::{EntityDocument, RelationEntry};

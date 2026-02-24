@@ -50,7 +50,8 @@ use uuid::Uuid;
 ///     description: None,
 ///     avatar: None,
 ///     cover: None,
-///     add_type_relation: None,
+///     image_url: None,
+///     add_relation: None,
 ///     entity_global_score: None,
 ///     space_score: None,
 ///     entity_space_score: None,
@@ -285,7 +286,7 @@ impl SearchIndexService {
 
         // Convert to EntityOperations for bulk_operations
         let operations: Vec<EntityOperation> =
-            requests.into_iter().map(EntityOperation::Update).collect();
+            requests.into_iter().map(|r| EntityOperation::Update(Box::new(r))).collect();
 
         self.provider.bulk_operations(&operations).await
     }
@@ -496,7 +497,8 @@ mod tests {
             description: None,
             avatar: None,
             cover: None,
-            add_type_relation: None,
+            image_url: None,
+            add_relation: None,
             entity_global_score: None,
             space_score: None,
             entity_space_score: None,
@@ -625,7 +627,8 @@ mod tests {
             description: None,
             avatar: None,
             cover: None,
-            add_type_relation: None,
+            image_url: None,
+            add_relation: None,
             entity_global_score: None,
             space_score: None,
             entity_space_score: None,
@@ -642,7 +645,8 @@ mod tests {
             description: None,
             avatar: None,
             cover: None,
-            add_type_relation: None,
+            image_url: None,
+            add_relation: None,
             entity_global_score: None,
             space_score: None,
             entity_space_score: None,
@@ -687,7 +691,8 @@ mod tests {
                 description: None,
                 avatar: None,
                 cover: None,
-                add_type_relation: None,
+                image_url: None,
+            add_relation: None,
                 entity_global_score: None,
                 space_score: None,
                 entity_space_score: None,

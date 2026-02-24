@@ -14,7 +14,7 @@ use crate::metrics::SearchIndexerMetrics;
 use crate::orchestrator::{BatchSource, ProcessedBatch};
 use crate::processor::ProcessedEvent;
 use search_indexer_repository::{
-    EntityOperation, RemoveTypeRelationData, SearchIndexProvider, TypeRelationData,
+    EntityOperation, RelationData, RemoveRelationData, SearchIndexProvider,
     UnsetEntityPropertiesRequest, UpdateEntityGlobalScoreRequest, UpdateEntityRequest,
     UpdateEntitySpaceScoreRequest, UpdateSpaceScoreRequest, UpdateSpaceTopicEntityIdRequest,
 };
@@ -58,20 +58,21 @@ impl SearchLoader {
             match event {
                 ProcessedEvent::Index(doc) => {
                     self.pending_operations
-                        .push(EntityOperation::Update(UpdateEntityRequest {
+                        .push(EntityOperation::Update(Box::new(UpdateEntityRequest {
                             entity_id: doc.entity_id.to_string(),
                             space_id: doc.space_id.to_string(),
                             name: doc.name,
                             description: doc.description,
                             avatar: doc.avatar,
                             cover: doc.cover,
-                            add_type_relation: None,
+                            image_url: doc.image_url,
+                            add_relation: None,
                             entity_global_score: doc.entity_global_score,
                             space_score: doc.space_score,
                             entity_space_score: doc.entity_space_score,
                             deleted: doc.deleted,
                             space_topic_entity_id: doc.space_topic_entity_id,
-                        }));
+                        })));
                 }
                 ProcessedEvent::UnsetProperties {
                     entity_id,
@@ -86,35 +87,38 @@ impl SearchLoader {
                         },
                     ));
                 }
-                ProcessedEvent::AddTypeRelation {
+                ProcessedEvent::AddRelation {
                     entity_id,
                     space_id,
                     relation_id,
-                    entity_to_id,
+                    relation_type,
+                    to_entity_id,
                 } => {
                     self.pending_operations
-                        .push(EntityOperation::Update(UpdateEntityRequest {
+                        .push(EntityOperation::Update(Box::new(UpdateEntityRequest {
                             entity_id: entity_id.to_string(),
                             space_id: space_id.to_string(),
                             name: None,
                             description: None,
                             avatar: None,
                             cover: None,
-                            add_type_relation: Some(TypeRelationData {
+                            image_url: None,
+                            add_relation: Some(RelationData {
                                 relation_id: relation_id.to_string(),
-                                entity_to_id: entity_to_id.to_string(),
+                                relation_type: relation_type.to_string(),
+                                to_entity_id: to_entity_id.to_string(),
                             }),
                             entity_global_score: None,
                             space_score: None,
                             entity_space_score: None,
                             deleted: None,
                             space_topic_entity_id: None,
-                        }));
+                        })));
                 }
-                ProcessedEvent::RemoveTypeRelationById { relation_id } => {
+                ProcessedEvent::RemoveRelationById { relation_id } => {
                     self.pending_operations
-                        .push(EntityOperation::RemoveTypeRelationById(
-                            RemoveTypeRelationData {
+                        .push(EntityOperation::RemoveRelationById(
+                            RemoveRelationData {
                                 relation_id: relation_id.to_string(),
                             },
                         ));
@@ -333,7 +337,7 @@ mod tests {
     enum TrackedOperation {
         Update {
             entity_id: String,
-            add_type_relation: Option<TypeRelationData>,
+            add_relation: Option<RelationData>,
         },
         Delete {
             entity_id: String,
@@ -342,7 +346,7 @@ mod tests {
             entity_id: String,
             property_keys: Vec<String>,
         },
-        RemoveTypeRelationById {
+        RemoveRelationById {
             relation_id: String,
         },
     }
@@ -415,7 +419,7 @@ mod tests {
                     EntityOperation::Update(r) => {
                         ops.push(TrackedOperation::Update {
                             entity_id: r.entity_id.clone(),
-                            add_type_relation: r.add_type_relation.clone(),
+                            add_relation: r.add_relation.clone(),
                         });
                     }
                     EntityOperation::Delete(r) => {
@@ -429,8 +433,8 @@ mod tests {
                             property_keys: r.property_keys.clone(),
                         });
                     }
-                    EntityOperation::RemoveTypeRelationById(r) => {
-                        ops.push(TrackedOperation::RemoveTypeRelationById {
+                    EntityOperation::RemoveRelationById(r) => {
+                        ops.push(TrackedOperation::RemoveRelationById {
                             relation_id: r.relation_id.clone(),
                         });
                     }
@@ -664,70 +668,74 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_add_type_relation_processing() {
+    async fn test_add_relation_processing() {
         let provider = Arc::new(MockSearchProvider::new());
         let mut loader = SearchLoader::new(provider.clone());
 
         let entity_id = Uuid::new_v4();
         let space_id = Uuid::new_v4();
         let relation_id = Uuid::new_v4();
-        let entity_to_id = Uuid::new_v4();
+        let relation_type = Uuid::new_v4();
+        let to_entity_id = Uuid::new_v4();
 
-        let events = vec![ProcessedEvent::AddTypeRelation {
+        let events = vec![ProcessedEvent::AddRelation {
             entity_id,
             space_id,
             relation_id,
-            entity_to_id,
+            relation_type,
+            to_entity_id,
         }];
 
         loader.load(events).await.unwrap();
 
-        // AddTypeRelation should create an Update operation with add_type_relation set
+        // AddRelation should create an Update operation with add_relation set
         assert_eq!(provider.get_operation_count(), 1);
 
         let ops = provider.get_operation_order();
         assert!(matches!(
             &ops[0],
-            TrackedOperation::Update { add_type_relation: Some(rel), .. }
-            if rel.entity_to_id == entity_to_id.to_string()
+            TrackedOperation::Update { add_relation: Some(rel), .. }
+            if rel.to_entity_id == to_entity_id.to_string()
         ));
     }
 
     #[tokio::test]
-    async fn test_remove_type_relation_processing() {
+    async fn test_remove_relation_processing() {
         let provider = Arc::new(MockSearchProvider::new());
         let mut loader = SearchLoader::new(provider.clone());
 
         let relation_id = Uuid::new_v4();
 
-        let events = vec![ProcessedEvent::RemoveTypeRelationById { relation_id }];
+        let events = vec![ProcessedEvent::RemoveRelationById { relation_id }];
 
         loader.load(events).await.unwrap();
 
-        // RemoveTypeRelationById goes through bulk_operations
+        // RemoveRelationById goes through bulk_operations
         assert_eq!(provider.get_operation_count(), 1);
     }
 
     #[tokio::test]
-    async fn test_multiple_add_type_relations() {
+    async fn test_multiple_add_relations() {
         let provider = Arc::new(MockSearchProvider::new());
         let mut loader = SearchLoader::new(provider.clone());
 
-        let entity_to_id1 = Uuid::new_v4();
-        let entity_to_id2 = Uuid::new_v4();
+        let to_entity_id1 = Uuid::new_v4();
+        let to_entity_id2 = Uuid::new_v4();
 
         let events = vec![
-            ProcessedEvent::AddTypeRelation {
+            ProcessedEvent::AddRelation {
                 entity_id: Uuid::new_v4(),
                 space_id: Uuid::new_v4(),
                 relation_id: Uuid::new_v4(),
-                entity_to_id: entity_to_id1,
+                relation_type: Uuid::new_v4(),
+                to_entity_id: to_entity_id1,
             },
-            ProcessedEvent::AddTypeRelation {
+            ProcessedEvent::AddRelation {
                 entity_id: Uuid::new_v4(),
                 space_id: Uuid::new_v4(),
                 relation_id: Uuid::new_v4(),
-                entity_to_id: entity_to_id2,
+                relation_type: Uuid::new_v4(),
+                to_entity_id: to_entity_id2,
             },
         ];
 
@@ -738,32 +746,33 @@ mod tests {
         let ops = provider.get_operation_order();
         assert!(matches!(
             &ops[0],
-            TrackedOperation::Update { add_type_relation: Some(rel), .. }
-            if rel.entity_to_id == entity_to_id1.to_string()
+            TrackedOperation::Update { add_relation: Some(rel), .. }
+            if rel.to_entity_id == to_entity_id1.to_string()
         ));
         assert!(matches!(
             &ops[1],
-            TrackedOperation::Update { add_type_relation: Some(rel), .. }
-            if rel.entity_to_id == entity_to_id2.to_string()
+            TrackedOperation::Update { add_relation: Some(rel), .. }
+            if rel.to_entity_id == to_entity_id2.to_string()
         ));
     }
 
     #[tokio::test]
-    async fn test_mixed_type_relation_operations() {
+    async fn test_mixed_relation_operations() {
         let provider = Arc::new(MockSearchProvider::new());
         let mut loader = SearchLoader::new(provider.clone());
 
-        let add_entity_to_id = Uuid::new_v4();
+        let add_to_entity_id = Uuid::new_v4();
         let remove_relation_id = Uuid::new_v4();
 
         let events = vec![
-            ProcessedEvent::AddTypeRelation {
+            ProcessedEvent::AddRelation {
                 entity_id: Uuid::new_v4(),
                 space_id: Uuid::new_v4(),
                 relation_id: Uuid::new_v4(),
-                entity_to_id: add_entity_to_id,
+                relation_type: Uuid::new_v4(),
+                to_entity_id: add_to_entity_id,
             },
-            ProcessedEvent::RemoveTypeRelationById {
+            ProcessedEvent::RemoveRelationById {
                 relation_id: remove_relation_id,
             },
             ProcessedEvent::Index(EntityDocument::new(
@@ -776,58 +785,60 @@ mod tests {
 
         loader.load(events).await.unwrap();
 
-        // 3 operations: AddTypeRelation, RemoveTypeRelationById, and Index
+        // 3 operations: AddRelation, RemoveRelationById, and Index
         assert_eq!(provider.get_operation_count(), 3);
 
         // Verify the operations are in order
         let ops = provider.get_operation_order();
         assert_eq!(ops.len(), 3);
 
-        // First should be the add_type_relation (Update)
+        // First should be the add_relation (Update)
         assert!(matches!(
             &ops[0],
-            TrackedOperation::Update { add_type_relation: Some(rel), .. }
-            if rel.entity_to_id == add_entity_to_id.to_string()
+            TrackedOperation::Update { add_relation: Some(rel), .. }
+            if rel.to_entity_id == add_to_entity_id.to_string()
         ));
 
-        // Second should be the RemoveTypeRelationById
+        // Second should be the RemoveRelationById
         assert!(matches!(
             &ops[1],
-            TrackedOperation::RemoveTypeRelationById { relation_id }
+            TrackedOperation::RemoveRelationById { relation_id }
             if *relation_id == remove_relation_id.to_string()
         ));
 
-        // Third should be the regular index (Update with no add_type_relation)
+        // Third should be the regular index (Update with no add_relation)
         assert!(matches!(
             &ops[2],
             TrackedOperation::Update {
-                add_type_relation: None,
+                add_relation: None,
                 ..
             }
         ));
     }
 
-    /// This test verifies that type relation operations are processed in order.
+    /// This test verifies that relation operations are processed in order.
     ///
-    /// The scenario: RemoveTypeRelationById followed by AddTypeRelation
+    /// The scenario: RemoveRelationById followed by AddRelation
     #[tokio::test]
-    async fn test_type_relation_operations_preserve_order() {
+    async fn test_relation_operations_preserve_order() {
         let provider = Arc::new(MockSearchProvider::new());
         let mut loader = SearchLoader::new(provider.clone());
 
         let entity_id = Uuid::new_v4();
         let space_id = Uuid::new_v4();
         let relation_id = Uuid::new_v4();
-        let entity_to_id = Uuid::new_v4();
+        let relation_type = Uuid::new_v4();
+        let to_entity_id = Uuid::new_v4();
 
         // Events in this order: Remove first, then Add
         let events = vec![
-            ProcessedEvent::RemoveTypeRelationById { relation_id },
-            ProcessedEvent::AddTypeRelation {
+            ProcessedEvent::RemoveRelationById { relation_id },
+            ProcessedEvent::AddRelation {
                 entity_id,
                 space_id,
                 relation_id,
-                entity_to_id,
+                relation_type,
+                to_entity_id,
             },
         ];
 
@@ -844,51 +855,49 @@ mod tests {
         let ops = provider.get_operation_order();
         assert_eq!(ops.len(), 2, "Should have 2 operations tracked");
 
-        // First operation should be RemoveTypeRelationById
+        // First operation should be RemoveRelationById
         assert!(
-            matches!(&ops[0], TrackedOperation::RemoveTypeRelationById { relation_id: rid } if *rid == relation_id.to_string()),
-            "First operation should be RemoveTypeRelationById, got: {:?}",
+            matches!(&ops[0], TrackedOperation::RemoveRelationById { relation_id: rid } if *rid == relation_id.to_string()),
+            "First operation should be RemoveRelationById, got: {:?}",
             ops[0]
         );
 
-        // Second operation should be AddTypeRelation (via Update)
+        // Second operation should be AddRelation (via Update)
         assert!(
-            matches!(&ops[1], TrackedOperation::Update { add_type_relation: Some(rel), .. } if rel.entity_to_id == entity_to_id.to_string()),
-            "Second operation should be AddTypeRelation (via Update), got: {:?}",
+            matches!(&ops[1], TrackedOperation::Update { add_relation: Some(rel), .. } if rel.to_entity_id == to_entity_id.to_string()),
+            "Second operation should be AddRelation (via Update), got: {:?}",
             ops[1]
         );
     }
 
-    /// Test that an UpdateEntityRequest with both add_type_relation AND other properties
+    /// Test that an UpdateEntityRequest with both add_relation AND other properties
     /// results in two separate bulk operations.
     #[tokio::test]
-    async fn test_update_with_add_type_relation_and_properties() {
+    async fn test_update_with_add_relation_and_properties() {
         let provider = Arc::new(MockSearchProvider::new());
         let mut loader = SearchLoader::new(provider.clone());
 
         let entity_id = Uuid::new_v4();
         let space_id = Uuid::new_v4();
         let relation_id = Uuid::new_v4();
-        let entity_to_id = Uuid::new_v4();
+        let relation_type = Uuid::new_v4();
+        let to_entity_id = Uuid::new_v4();
 
-        // Create a document with name set
         let doc = EntityDocument::new(
             entity_id,
             space_id,
             Some("Test Entity Name".to_string()),
             Some("Test Description".to_string()),
         );
-        // We need to simulate having add_type_relation - but EntityDocument doesn't have this field.
-        // Instead, we'll test this at a lower level by creating the operation directly.
-        // For now, let's just test that Index + AddTypeRelation for the same entity creates proper operations.
 
         let events = vec![
-            // First, add a type relation
-            ProcessedEvent::AddTypeRelation {
+            // First, add a relation
+            ProcessedEvent::AddRelation {
                 entity_id,
                 space_id,
                 relation_id,
-                entity_to_id,
+                relation_type,
+                to_entity_id,
             },
             // Then, index the document with name/description
             ProcessedEvent::Index(doc),
@@ -896,24 +905,24 @@ mod tests {
 
         loader.load(events).await.unwrap();
 
-        // Should have 2 operations: one for add_type_relation, one for the document update
+        // Should have 2 operations: one for add_relation, one for the document update
         assert_eq!(provider.get_operation_count(), 2);
 
         let ops = provider.get_operation_order();
         assert_eq!(ops.len(), 2);
 
-        // First should be add_type_relation
+        // First should be add_relation
         assert!(matches!(
             &ops[0],
-            TrackedOperation::Update { add_type_relation: Some(rel), .. }
-            if rel.entity_to_id == entity_to_id.to_string()
+            TrackedOperation::Update { add_relation: Some(rel), .. }
+            if rel.to_entity_id == to_entity_id.to_string()
         ));
 
-        // Second should be regular document update (no add_type_relation)
+        // Second should be regular document update (no add_relation)
         assert!(matches!(
             &ops[1],
             TrackedOperation::Update {
-                add_type_relation: None,
+                add_relation: None,
                 ..
             }
         ));

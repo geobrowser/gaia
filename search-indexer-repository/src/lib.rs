@@ -19,7 +19,7 @@ pub use opensearch::OpenSearchProvider;
 pub use service::SearchIndexService;
 pub use types::{
     BatchOperationResult, BatchOperationSummary, DeleteEntityRequest, EntityOperation,
-    RemoveTypeRelationData, TypeRelationData, UnsetEntityPropertiesRequest,
+    RelationData, RemoveRelationData, UnsetEntityPropertiesRequest,
     UpdateEntityGlobalScoreRequest, UpdateEntityRequest, UpdateEntitySpaceScoreRequest,
     UpdateSpaceScoreRequest, UpdateSpaceTopicEntityIdRequest,
 };

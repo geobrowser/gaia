@@ -2348,6 +2348,7 @@ class SearchValidator {
     }
   }
 
+
   printSummary() {
     console.log(`\n${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}`);
 
