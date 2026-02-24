@@ -94,6 +94,10 @@ jobs:
         echo "ERROR: Kafka failed to become ready within 120 seconds"
         exit 1
 
+    - name: Build atlas binary
+      run: cargo build --bin atlas
+      working-directory: ./atlas
+
     - name: Run Kafka E2E test
       run: cargo test --test kafka_e2e -- --test-threads=1
       working-directory: ./atlas

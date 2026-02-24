@@ -7,6 +7,7 @@
 use std::process::{Command, Stdio};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+use std::{env, path::PathBuf};
 
 use hermes_relay::source::mock_events::test_topology::ROOT_SPACE_ID;
 use hermes_schema::pb::topology::CanonicalGraphDiff;
@@ -40,6 +41,33 @@ fn wait_for_process(mut child: std::process::Child, timeout: Duration) -> std::p
     }
 }
 
+fn resolve_atlas_bin() -> PathBuf {
+    if let Ok(bin) = env::var("CARGO_BIN_EXE_atlas") {
+        return PathBuf::from(bin);
+    }
+
+    let mut candidates = Vec::new();
+
+    if let Ok(target_dir) = env::var("CARGO_TARGET_DIR") {
+        candidates.push(PathBuf::from(target_dir).join("debug").join("atlas"));
+    }
+
+    // Workspace default when running from ./atlas
+    candidates.push(PathBuf::from("../target").join("debug").join("atlas"));
+    // Package-local fallback
+    candidates.push(PathBuf::from("target").join("debug").join("atlas"));
+
+    for candidate in candidates {
+        if candidate.exists() {
+            return candidate;
+        }
+    }
+
+    panic!(
+        "atlas binary not found: CARGO_BIN_EXE_atlas is unset and no fallback binary exists; run `cargo build --bin atlas` before this test"
+    );
+}
+
 #[test]
 fn test_atlas_mock_to_real_kafka_e2e() {
     if std::env::var("KAFKA_E2E").ok().as_deref() != Some("1") {
@@ -58,11 +86,10 @@ fn test_atlas_mock_to_real_kafka_e2e() {
     let full_topic = format!("{}{}", topic_prefix, base_topic);
     let root_hex = hex::encode(ROOT_SPACE_ID);
 
-    let bin = std::env::var("CARGO_BIN_EXE_atlas")
-        .expect("CARGO_BIN_EXE_atlas should be set for integration tests");
+    let bin = resolve_atlas_bin();
 
     // Run full stack: mock substream source -> atlas pipeline -> real Kafka producer.
-    let child = Command::new(bin)
+    let child = Command::new(&bin)
         .env("USE_MOCK", "true")
         .env("KAFKA_BROKER", &broker)
         .env("KAFKA_TOPIC", &base_topic)
