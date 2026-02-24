@@ -410,7 +410,7 @@ impl EntitiesConsumer {
             topic = %msg.topic(),
             partition = msg.partition(),
             offset = msg.offset(),
-            edit = ?edit,
+            edit_name = %edit.name,
             "Received knowledge.edits message"
         );
 

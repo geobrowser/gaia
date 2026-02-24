@@ -10,6 +10,7 @@ on:
       - 'hermes-kafka/**'
       - 'wire/**'
       - 'api/**'
+      - 'search-indexer/tests/load-test/**'
       - '.github/workflows/search-indexer-e2e-tests.yml'
   pull_request:
     branches: [main, dev]
@@ -20,6 +21,7 @@ on:
       - 'hermes-kafka/**'
       - 'wire/**'
       - 'api/**'
+      - 'search-indexer/tests/load-test/**'
       - '.github/workflows/search-indexer-e2e-tests.yml'
   workflow_dispatch:
 
@@ -110,6 +112,7 @@ jobs:
           workspaces: |
             ./search-indexer
             ./search-indexer-repository
+            ./search-indexer/tests/load-test
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@v1
@@ -258,12 +261,81 @@ jobs:
           KAFKA_BROKER: localhost:9092
           SEARCH_API_URL: http://localhost:3000
 
+      - name: Stop indexer for load test
+        run: |
+          if [ -f /tmp/search-indexer.pid ]; then
+            kill $(cat /tmp/search-indexer.pid) 2>/dev/null || true
+            sleep 2
+          fi
+
+      - name: Clean OpenSearch for load test
+        run: |
+          CONCRETE=$(curl -sf "$OPENSEARCH_URL/_alias/staging_entities" \
+            | python3 -c "import sys,json; print(' '.join(json.load(sys.stdin).keys()))" 2>/dev/null || true)
+          if [ -n "$CONCRETE" ]; then
+            for idx in $CONCRETE; do
+              echo "Deleting index: $idx"
+              curl -sf -X DELETE "$OPENSEARCH_URL/$idx"
+            done
+          else
+            echo "No existing index to clean"
+          fi
+
+      - name: Start indexer for load test
+        run: |
+          ENVIRONMENT=staging \
+          KAFKA_BROKER=localhost:9092 \
+          OPENSEARCH_URL=http://localhost:9200 \
+          KAFKA_GROUP_EDITS_ID=search-indexer-group-edits-load \
+          KAFKA_GROUP_SCORES_ID=search-indexer-group-scores-load \
+          KAFKA_GROUP_SPACE_TOPICS_ID=search-indexer-group-space-topics-load \
+          HEALTH_PORT=8081 \
+          RUST_LOG=search_indexer=info,search_indexer_repository=info \
+          ./target/release/search-indexer > /tmp/search-indexer-load.log 2>&1 &
+          echo $! > /tmp/search-indexer-load.pid
+
+          echo "Waiting for search-indexer to be ready..."
+          for i in {1..30}; do
+            if ! kill -0 $(cat /tmp/search-indexer-load.pid) 2>/dev/null; then
+              echo "ERROR: search-indexer process exited unexpectedly"
+              cat /tmp/search-indexer-load.log
+              exit 1
+            fi
+            if curl -s http://localhost:8081/readyz | grep -q "ready"; then
+              echo "search-indexer is ready"
+              exit 0
+            fi
+            echo "Waiting for search-indexer... ($i/30)"
+            sleep 2
+          done
+          echo "ERROR: search-indexer failed to become ready"
+          cat /tmp/search-indexer-load.log
+          exit 1
+
+      - name: Build load test
+        working-directory: ./search-indexer/tests/load-test
+        run: cargo +nightly build --release
+
+      - name: Run load test
+        working-directory: ./search-indexer/tests/load-test
+        run: |
+          ENVIRONMENT=staging \
+          SCALE=0.1 \
+          SEED=42 \
+          TIMEOUT=180 \
+          cargo +nightly run --release -- \
+            --seed 42 --scale 0.1 --timeout 180 \
+            2>&1 | tee /tmp/load-test.log
+
       - name: Upload search-indexer logs
         if: always()
         uses: actions/upload-artifact@v4
         with:
           name: search-indexer-logs
-          path: /tmp/search-indexer.log
+          path: |
+            /tmp/search-indexer.log
+            /tmp/search-indexer-load.log
+            /tmp/load-test.log
           retention-days: 7
 
       - name: Cleanup
@@ -274,4 +346,7 @@ jobs:
           fi
           if [ -f /tmp/search-indexer.pid ]; then
             kill $(cat /tmp/search-indexer.pid) 2>/dev/null || true
+          fi
+          if [ -f /tmp/search-indexer-load.pid ]; then
+            kill $(cat /tmp/search-indexer-load.pid) 2>/dev/null || true
           fi
