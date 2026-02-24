@@ -54,8 +54,7 @@ fn test_atlas_mock_to_real_kafka_e2e() {
         "production" => "",
         other => panic!("ENVIRONMENT must be 'staging' or 'production', got '{other}'"),
     };
-    let base_topic =
-        std::env::var("KAFKA_TOPIC").unwrap_or_else(|_| "topology.canonical".to_string());
+    let base_topic = "topology.canonical".to_string();
     let full_topic = format!("{}{}", topic_prefix, base_topic);
     let root_hex = hex::encode(ROOT_SPACE_ID);
 

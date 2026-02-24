@@ -102,4 +102,3 @@ jobs:
         KAFKA_E2E: 1
         KAFKA_BROKER: localhost:9092
         ENVIRONMENT: staging
-        KAFKA_TOPIC: topology.canonical
