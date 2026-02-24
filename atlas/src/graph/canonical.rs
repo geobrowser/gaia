@@ -56,9 +56,13 @@ pub struct CanonicalProcessor {
     /// The root space for canonical graph computation
     root: SpaceId,
 
-    /// Hash of the last computed tree structure
-    /// Used to detect changes in tree structure (not just canonical set)
+    /// Hash of the last computed canonical tree (after Phase 2).
+    /// Used to detect changes in tree structure (not just canonical set).
     last_hash: Option<u64>,
+
+    /// Hash of inputs to the canonical computation (Phase 1 tree + topic edges).
+    /// Used to short-circuit before cloning when inputs haven't changed.
+    last_input_hash: Option<u64>,
 
     /// Canonical set from the last successful `compute()` call.
     /// Used by `affects_canonical()` to skip recomputation for events
@@ -72,6 +76,7 @@ impl CanonicalProcessor {
         Self {
             root,
             last_hash: None,
+            last_input_hash: None,
             last_canonical_set: None,
         }
     }
@@ -128,6 +133,25 @@ impl CanonicalProcessor {
         // Phase 1: Get canonical set from root's explicit-only transitive graph
         // This gives us all nodes reachable via explicit edges (Verified, Related)
         let root_transitive = transitive.get_explicit_only(self.root, state);
+
+        // Fast path: hash the inputs (Phase 1 tree + topic edges) to detect
+        // whether anything changed since the last computation. If unchanged,
+        // skip cloning and Phase 2 entirely.
+        let topic_edges = self.collect_topic_edges(&root_transitive.flat, state);
+        let input_hash = {
+            use std::hash::{Hash, Hasher};
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            hash_tree(&root_transitive.tree).hash(&mut hasher);
+            topic_edges.hash(&mut hasher);
+            hasher.finish()
+        };
+
+        if self.last_input_hash == Some(input_hash) {
+            return None;
+        }
+        self.last_input_hash = Some(input_hash);
+
+        // Inputs changed — clone and run Phase 2
         let canonical_set = root_transitive.flat.clone();
         let mut tree = root_transitive.tree.clone();
 
@@ -135,9 +159,7 @@ impl CanonicalProcessor {
         //
         // Collects all subtrees to attach, grouped by source SpaceId, then
         // attaches them in a single DFS pass over the tree. This is O(N + T)
-        // instead of the previous O(T × N) approach of doing a separate DFS
-        // per attachment.
-        let topic_edges = self.collect_topic_edges(&canonical_set, state);
+        // instead of O(T × N) for individual attach calls.
         let pending = self.collect_topic_subtrees(&topic_edges, &canonical_set, state, transitive);
         if !pending.is_empty() {
             attach_all_subtrees(&mut tree, pending);
@@ -145,10 +167,9 @@ impl CanonicalProcessor {
 
         let graph = CanonicalGraph::new(self.root, tree, canonical_set);
 
-        // Check if tree structure changed
+        // Check if tree structure changed (Phase 2 may not have altered the tree)
         let new_hash = hash_tree(&graph.tree);
         if self.last_hash == Some(new_hash) {
-            // Tree unchanged, but still update canonical set for affects_canonical checks
             self.last_canonical_set = Some(graph.flat);
             return None;
         }
