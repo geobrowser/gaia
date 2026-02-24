@@ -294,7 +294,10 @@ fn parse_root_space_id() -> anyhow::Result<SpaceId> {
         .map_err(|_| anyhow::anyhow!("ROOT_SPACE_ID env var is required but not set"))?;
 
     let bytes = hex::decode(&hex_str).map_err(|e| {
-        anyhow::anyhow!("ROOT_SPACE_ID must be a valid hex string: {e} (got: {hex_str})")
+        anyhow::anyhow!(
+            "ROOT_SPACE_ID must be a valid hex string: {e} (got {len} chars)",
+            len = hex_str.len()
+        )
     })?;
 
     bytes.try_into().map_err(|v: Vec<u8>| {

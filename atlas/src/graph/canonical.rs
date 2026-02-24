@@ -174,12 +174,14 @@ impl CanonicalProcessor {
 
         let graph = CanonicalGraph::new(self.root, tree, canonical_set);
 
-        // Postconditions: canonical set must contain root, tree root must match
-        debug_assert!(
+        // Postconditions: canonical set must contain root, tree root must match.
+        // These are promoted to `assert!` (not `debug_assert!`) because violating
+        // them would emit corrupt Kafka messages — a panic is preferable.
+        assert!(
             graph.members.contains(&self.root),
             "canonical set does not contain root"
         );
-        debug_assert_eq!(
+        assert_eq!(
             graph.tree.space_id, self.root,
             "tree root does not match processor root"
         );

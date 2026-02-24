@@ -16,8 +16,10 @@
 //!
 //! // Process events and emit diffs
 //! for event in events {
-//!     state.apply_event(&event);
+//!     // Order matters: transitive reads pre-mutation state for cache invalidation,
+//!     // then graph state is updated with the new event.
 //!     transitive.handle_event(&event, &state);
+//!     state.apply_event(&event);
 //!
 //!     if let Some(graph) = canonical.compute(&state, &mut transitive) {
 //!         let diff = diff_tracker.track(&graph);
@@ -112,8 +114,65 @@ impl CanonicalGraphEmitter {
     }
 }
 
-fn tree_node_to_proto(node: &TreeNode) -> CanonicalTreeNode {
-    let edge = match node.edge_type {
+/// Convert a tree node to protobuf representation.
+///
+/// Uses an iterative post-order traversal with an explicit stack to avoid
+/// stack overflow on deep graphs (~80K linear chains).
+fn tree_node_to_proto(root: &TreeNode) -> CanonicalTreeNode {
+    // Phase 1: Collect nodes in pre-order, tracking parent indices.
+    // Each entry: (source_node, parent_index_in_order or None for root)
+    let mut order: Vec<(&TreeNode, Option<usize>)> = Vec::new();
+    let mut stack: Vec<(&TreeNode, Option<usize>)> = vec![(root, None)];
+
+    while let Some((node, parent_idx)) = stack.pop() {
+        let my_idx = order.len();
+        order.push((node, parent_idx));
+
+        // Push children in reverse so left children are processed first
+        for child in node.children.iter().rev() {
+            stack.push((child, Some(my_idx)));
+        }
+    }
+
+    // Phase 2: Build proto nodes, then assemble in reverse order
+    // (children finalized before their parents consume them).
+    let mut built: Vec<Option<CanonicalTreeNode>> = order
+        .iter()
+        .map(|(node, _)| {
+            Some(CanonicalTreeNode {
+                space_id: node.space_id.to_vec(),
+                edge: Some(edge_type_to_proto_edge(node.edge_type)),
+                children: Vec::new(),
+            })
+        })
+        .collect();
+
+    for i in (0..order.len()).rev() {
+        if let Some(parent_idx) = order[i].1 {
+            let child_node = built[i].take().unwrap();
+            built[parent_idx]
+                .as_mut()
+                .unwrap()
+                .children
+                .push(child_node);
+        }
+    }
+
+    // Reverse-order assembly produces children in reverse; restore original order.
+    // Only nodes that actually have children need reversal.
+    for node_opt in &mut built {
+        if let Some(node) = node_opt.as_mut() {
+            if node.children.len() > 1 {
+                node.children.reverse();
+            }
+        }
+    }
+
+    built[0].take().unwrap()
+}
+
+fn edge_type_to_proto_edge(edge_type: EdgeType) -> Edge {
+    match edge_type {
         EdgeType::Root => Edge::Root(RootEdge {}),
         EdgeType::Verified => Edge::Verified(VerifiedEdge {}),
         EdgeType::Related => Edge::Related(RelatedEdge {}),
@@ -122,12 +181,6 @@ fn tree_node_to_proto(node: &TreeNode) -> CanonicalTreeNode {
         }),
         EdgeType::Editor => Edge::Editor(EditorEdge {}),
         EdgeType::Member => Edge::Member(MemberEdge {}),
-    };
-
-    CanonicalTreeNode {
-        space_id: node.space_id.to_vec(),
-        edge: Some(edge),
-        children: node.children.iter().map(tree_node_to_proto).collect(),
     }
 }
 

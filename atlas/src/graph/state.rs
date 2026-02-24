@@ -60,6 +60,20 @@ impl GraphState {
         // Add space to known spaces
         self.spaces.insert(event.space_id);
 
+        // Clean up stale reverse mapping if this space previously announced a different topic.
+        // Without this, the old topic→space entry would remain, violating the
+        // bidirectional invariant between `space_topics` and `topic_spaces`.
+        if let Some(&old_topic) = self.space_topics.get(&event.space_id) {
+            if old_topic != event.topic_id {
+                if let Some(old_set) = self.topic_spaces.get_mut(&old_topic) {
+                    old_set.remove(&event.space_id);
+                    if old_set.is_empty() {
+                        self.topic_spaces.remove(&old_topic);
+                    }
+                }
+            }
+        }
+
         // Record the topic this space announces
         self.space_topics.insert(event.space_id, event.topic_id);
 
@@ -318,6 +332,51 @@ mod tests {
         // Empty sets should be removed from HashMaps
         assert!(!state.topic_edges.contains_key(&space1));
         assert!(!state.topic_edge_sources.contains_key(&topic));
+    }
+
+    #[test]
+    fn test_space_reannounce_cleans_up_old_topic_reverse_mapping() {
+        let mut state = GraphState::new();
+        let space = make_space_id(1);
+        let old_topic = make_topic_id(1);
+        let new_topic = make_topic_id(2);
+
+        // Space announces old_topic
+        state.apply_event(&make_space_created_event(space, old_topic));
+        assert!(state
+            .get_topic_members(&old_topic)
+            .unwrap()
+            .contains(&space));
+
+        // Space re-announces with new_topic
+        state.apply_event(&make_space_created_event(space, new_topic));
+
+        // Old reverse mapping should be cleaned up
+        assert!(
+            state.get_topic_members(&old_topic).is_none(),
+            "stale reverse mapping should be removed when space re-announces with a different topic"
+        );
+        // New reverse mapping should be present
+        assert!(state
+            .get_topic_members(&new_topic)
+            .unwrap()
+            .contains(&space));
+        // Forward mapping should point to new topic
+        assert_eq!(state.get_space_topic(&space), Some(&new_topic));
+    }
+
+    #[test]
+    fn test_space_reannounce_same_topic_is_idempotent() {
+        let mut state = GraphState::new();
+        let space = make_space_id(1);
+        let topic = make_topic_id(1);
+
+        state.apply_event(&make_space_created_event(space, topic));
+        state.apply_event(&make_space_created_event(space, topic));
+
+        // Should still have exactly one entry
+        assert_eq!(state.get_topic_members(&topic).unwrap().len(), 1);
+        assert_eq!(state.get_space_topic(&space), Some(&topic));
     }
 
     #[test]
