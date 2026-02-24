@@ -46,14 +46,6 @@ impl TransitiveGraph {
     pub fn len(&self) -> usize {
         self.members.len()
     }
-
-    /// Check if the graph contains only the root (no children).
-    ///
-    /// Named `has_only_root` rather than `is_empty` because the graph always
-    /// contains at least the root node — it's never truly empty.
-    pub fn has_only_root(&self) -> bool {
-        self.members.len() <= 1
-    }
 }
 
 /// Cache of pre-computed transitive graphs

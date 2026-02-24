@@ -56,11 +56,6 @@ pub struct GraphDiff {
 }
 
 impl GraphDiff {
-    /// Create an empty diff
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// Check if the diff has no changes
     pub fn is_empty(&self) -> bool {
         self.changes.is_empty()

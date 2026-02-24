@@ -238,3 +238,183 @@ impl std::fmt::Debug for CanonicalGraphEmitter {
             .finish_non_exhaustive()
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::test_utils::{make_block_meta, make_space_id, make_topic_id};
+
+    #[test]
+    fn test_tree_node_to_proto_single_node() {
+        let root = TreeNode::new_root(make_space_id(1));
+        let proto = tree_node_to_proto(&root);
+
+        assert_eq!(proto.space_id, make_space_id(1).to_vec());
+        assert!(matches!(proto.edge, Some(Edge::Root(RootEdge {}))));
+        assert!(proto.children.is_empty());
+    }
+
+    #[test]
+    fn test_tree_node_to_proto_preserves_structure() {
+        // Root -> A (verified) -> B (related)
+        let mut root = TreeNode::new_root(make_space_id(1));
+        let mut a = TreeNode::new(make_space_id(2), EdgeType::Verified);
+        let b = TreeNode::new(make_space_id(3), EdgeType::Related);
+        a.add_child(b);
+        root.add_child(a);
+
+        let proto = tree_node_to_proto(&root);
+
+        assert_eq!(proto.children.len(), 1);
+        let proto_a = &proto.children[0];
+        assert_eq!(proto_a.space_id, make_space_id(2).to_vec());
+        assert!(matches!(
+            proto_a.edge,
+            Some(Edge::Verified(VerifiedEdge {}))
+        ));
+
+        assert_eq!(proto_a.children.len(), 1);
+        let proto_b = &proto_a.children[0];
+        assert_eq!(proto_b.space_id, make_space_id(3).to_vec());
+        assert!(matches!(proto_b.edge, Some(Edge::Related(RelatedEdge {}))));
+        assert!(proto_b.children.is_empty());
+    }
+
+    #[test]
+    fn test_tree_node_to_proto_all_edge_types() {
+        let mut root = TreeNode::new_root(make_space_id(1));
+        root.add_child(TreeNode::new(make_space_id(2), EdgeType::Verified));
+        root.add_child(TreeNode::new(make_space_id(3), EdgeType::Related));
+        root.add_child(TreeNode::new(make_space_id(4), EdgeType::Editor));
+        root.add_child(TreeNode::new(make_space_id(5), EdgeType::Member));
+        root.add_child(TreeNode::new_with_topic(
+            make_space_id(6),
+            make_topic_id(0x8A),
+        ));
+
+        let proto = tree_node_to_proto(&root);
+        assert_eq!(proto.children.len(), 5);
+
+        assert!(matches!(proto.children[0].edge, Some(Edge::Verified(_))));
+        assert!(matches!(proto.children[1].edge, Some(Edge::Related(_))));
+        assert!(matches!(proto.children[2].edge, Some(Edge::Editor(_))));
+        assert!(matches!(proto.children[3].edge, Some(Edge::Member(_))));
+
+        match &proto.children[4].edge {
+            Some(Edge::Topic(TopicEdge { topic_id })) => {
+                assert_eq!(*topic_id, make_topic_id(0x8A).to_vec());
+            }
+            other => panic!("expected Topic edge, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_tree_node_to_proto_wide_tree() {
+        let mut root = TreeNode::new_root(make_space_id(1));
+        for i in 2..=10 {
+            root.add_child(TreeNode::new(make_space_id(i), EdgeType::Verified));
+        }
+
+        let proto = tree_node_to_proto(&root);
+        assert_eq!(proto.children.len(), 9);
+    }
+
+    #[test]
+    fn test_node_change_to_proto_added() {
+        let change = NodeChange {
+            space_id: make_space_id(5),
+            change_type: ChangeType::Added,
+            position: Some(Position {
+                distance: 2,
+                parent: make_space_id(1),
+                edge_type: EdgeType::Verified,
+            }),
+        };
+
+        let proto = node_change_to_proto(&change);
+        assert_eq!(proto.space_id, make_space_id(5).to_vec());
+        assert_eq!(proto.change_type, ProtoChangeType::Added as i32);
+        assert_eq!(proto.distance, Some(2));
+        assert!(proto.parent_edge.is_some());
+
+        let edge_info = proto.parent_edge.unwrap();
+        assert_eq!(edge_info.parent_id, make_space_id(1).to_vec());
+        assert!(matches!(
+            edge_info.edge_type,
+            Some(edge_info::EdgeType::Verified(_))
+        ));
+    }
+
+    #[test]
+    fn test_node_change_to_proto_removed() {
+        let change = NodeChange {
+            space_id: make_space_id(3),
+            change_type: ChangeType::Removed,
+            position: None,
+        };
+
+        let proto = node_change_to_proto(&change);
+        assert_eq!(proto.change_type, ProtoChangeType::Removed as i32);
+        assert_eq!(proto.distance, None);
+        assert!(proto.parent_edge.is_none());
+    }
+
+    #[test]
+    fn test_node_change_to_proto_moved() {
+        let change = NodeChange {
+            space_id: make_space_id(4),
+            change_type: ChangeType::Moved,
+            position: Some(Position {
+                distance: 3,
+                parent: make_space_id(2),
+                edge_type: EdgeType::Related,
+            }),
+        };
+
+        let proto = node_change_to_proto(&change);
+        assert_eq!(proto.change_type, ProtoChangeType::Moved as i32);
+        assert_eq!(proto.distance, Some(3));
+    }
+
+    #[test]
+    fn test_position_to_edge_info_root_returns_none() {
+        let pos = Position {
+            distance: 0,
+            parent: make_space_id(1),
+            edge_type: EdgeType::Root,
+        };
+
+        // Root edge should return None (this is a defensive edge case)
+        assert!(position_to_edge_info(&pos).is_none());
+    }
+
+    #[test]
+    fn test_position_to_edge_info_topic_carries_topic_id() {
+        let topic_id = make_topic_id(0x8B);
+        let pos = Position {
+            distance: 1,
+            parent: make_space_id(1),
+            edge_type: EdgeType::Topic { topic_id },
+        };
+
+        let info = position_to_edge_info(&pos).unwrap();
+        assert_eq!(info.parent_id, make_space_id(1).to_vec());
+
+        match info.edge_type {
+            Some(edge_info::EdgeType::Topic(TopicEdge { topic_id: tid })) => {
+                assert_eq!(tid, topic_id.to_vec());
+            }
+            other => panic!("expected Topic edge, got {:?}", other),
+        }
+    }
+
+    #[test]
+    fn test_block_meta_to_proto() {
+        let meta = make_block_meta();
+        let proto = block_meta_to_proto(&meta);
+
+        assert_eq!(proto.block_number, meta.block_number);
+        assert_eq!(proto.created_at, meta.block_timestamp);
+        assert_eq!(proto.cursor, meta.cursor);
+    }
+}

@@ -310,7 +310,7 @@ fn parse_root_space_id() -> anyhow::Result<SpaceId> {
 
 fn main() -> anyhow::Result<()> {
     // Load .env file if present (ignored in production)
-    dotenv::dotenv().ok();
+    dotenvy::dotenv().ok();
 
     // Initialize telemetry BEFORE tokio runtime starts.
     // Keep the guard alive until the end of main to ensure spans are flushed.
