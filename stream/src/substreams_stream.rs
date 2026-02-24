@@ -184,7 +184,9 @@ fn stream_blocks(
 
 fn is_concurrent_stream_limit(status: &tonic::Status) -> bool {
     status.code() == tonic::Code::ResourceExhausted
-        && status.message().contains("Concurrent stream limit exceeded")
+        && status
+            .message()
+            .contains("Concurrent stream limit exceeded")
 }
 
 enum BlockProcessedResult {
