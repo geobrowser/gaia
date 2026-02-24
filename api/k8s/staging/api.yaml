@@ -104,6 +104,8 @@ spec:
                 secretKeyRef:
                   name: api-secrets
                   key: IPFS_GATEWAY_WRITE
+            - name: ENVIRONMENT
+              value: "staging"
             - name: OPENSEARCH_URL
               valueFrom:
                 secretKeyRef:
