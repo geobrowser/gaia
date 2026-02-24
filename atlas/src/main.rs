@@ -193,20 +193,37 @@ impl Sink for AtlasSink {
 
                 if !diff.is_empty() {
                     let change_count = diff.len();
-                    self.emitter
-                        .emit_diff(&new_graph.root, &diff, &meta)?;
+                    self.emitter.emit_diff(&new_graph.root, &diff, &meta)?;
                     *emit_count += 1;
 
-                    let added = diff.changes.iter().filter(|c| c.change_type == atlas::graph::ChangeType::Added).count();
-                    let removed = diff.changes.iter().filter(|c| c.change_type == atlas::graph::ChangeType::Removed).count();
-                    let moved = diff.changes.iter().filter(|c| c.change_type == atlas::graph::ChangeType::Moved).count();
+                    let added = diff
+                        .changes
+                        .iter()
+                        .filter(|c| c.change_type == atlas::graph::ChangeType::Added)
+                        .count();
+                    let removed = diff
+                        .changes
+                        .iter()
+                        .filter(|c| c.change_type == atlas::graph::ChangeType::Removed)
+                        .count();
+                    let moved = diff
+                        .changes
+                        .iter()
+                        .filter(|c| c.change_type == atlas::graph::ChangeType::Moved)
+                        .count();
 
                     // Show up to 5 affected space IDs for debuggability; truncate for large diffs
-                    let sample: Vec<String> = diff.changes.iter()
+                    let sample: Vec<String> = diff
+                        .changes
+                        .iter()
                         .take(5)
                         .map(|c| format!("{}:{:?}", hex::encode(c.space_id), c.change_type))
                         .collect();
-                    let truncated = if diff.len() > 5 { format!(" (+{} more)", diff.len() - 5) } else { String::new() };
+                    let truncated = if diff.len() > 5 {
+                        format!(" (+{} more)", diff.len() - 5)
+                    } else {
+                        String::new()
+                    };
 
                     info!(
                         block_number,
