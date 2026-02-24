@@ -25,18 +25,26 @@ impl DefaultTreeHasher {
 impl TreeHasher for DefaultTreeHasher {
     fn hash_tree(&self, tree: &TreeNode) -> u64 {
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
-        hash_node_recursive(tree, &mut hasher);
+        hash_tree_iterative(tree, &mut hasher);
         hasher.finish()
     }
 }
 
-/// Recursively hash a tree node and its children
-fn hash_node_recursive<H: Hasher>(node: &TreeNode, hasher: &mut H) {
-    node.space_id.hash(hasher);
-    node.edge_type.hash(hasher);
-    node.children.len().hash(hasher);
-    for child in &node.children {
-        hash_node_recursive(child, hasher);
+/// Hash a tree using iterative pre-order DFS.
+///
+/// Hashes space_id, edge_type, and children count for each node in
+/// deterministic pre-order, matching the previous recursive implementation.
+fn hash_tree_iterative<H: Hasher>(root: &TreeNode, hasher: &mut H) {
+    // Pre-order DFS: visit node, then children left-to-right.
+    // Push children in reverse so leftmost is popped first.
+    let mut stack = vec![root];
+    while let Some(node) = stack.pop() {
+        node.space_id.hash(hasher);
+        node.edge_type.hash(hasher);
+        node.children.len().hash(hasher);
+        for child in node.children.iter().rev() {
+            stack.push(child);
+        }
     }
 }
 

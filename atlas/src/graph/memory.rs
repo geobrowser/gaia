@@ -93,13 +93,15 @@ pub fn transitive_graph_size(graph: &TransitiveGraph) -> TransitiveGraphMemory {
 // TreeNode memory calculation
 // ============================================================================
 
-/// Calculate heap memory usage of a TreeNode (recursive)
+/// Calculate heap memory usage of a TreeNode (iterative)
 pub fn tree_node_size(node: &TreeNode) -> usize {
-    // Vec allocation for children
-    let vec_alloc = node.children.capacity() * mem::size_of::<TreeNode>();
-    // Recursive children heap allocations
-    let children_heap: usize = node.children.iter().map(tree_node_size).sum();
-    vec_alloc + children_heap
+    let mut total = 0;
+    let mut stack = vec![node];
+    while let Some(n) = stack.pop() {
+        total += n.children.capacity() * mem::size_of::<TreeNode>();
+        stack.extend(n.children.iter());
+    }
+    total
 }
 
 // ============================================================================

@@ -350,29 +350,49 @@ impl TransitiveProcessor {
             }
         }
 
-        // Build tree structure using children index (O(n) total)
-        fn build_tree(
-            node_id: SpaceId,
-            node_metadata: &HashMap<SpaceId, EdgeType>,
-            children_index: &HashMap<SpaceId, Vec<SpaceId>>,
-        ) -> TreeNode {
-            let edge_type = node_metadata.get(&node_id).copied().unwrap();
-            let mut node = TreeNode::new(node_id, edge_type);
-
-            // Children are already collected - just iterate (O(1) lookup)
-            if let Some(children) = children_index.get(&node_id) {
-                // Reserve capacity to avoid reallocations
-                node.children.reserve(children.len());
-                for child_id in children {
-                    node.children
-                        .push(build_tree(*child_id, node_metadata, children_index));
+        // Build tree structure iteratively using post-order traversal.
+        //
+        // Strategy: collect nodes in post-order (children before parents),
+        // then build TreeNodes bottom-up so each parent can consume its
+        // already-constructed children.
+        let tree = {
+            // Phase 1: Collect post-order via iterative DFS
+            let mut dfs_stack = vec![root];
+            // We need post-order, so we collect in pre-order then reverse.
+            // Push children in forward order so rightmost is popped first;
+            // reversing the result gives left-to-right post-order.
+            let mut post_order: Vec<SpaceId> = Vec::with_capacity(visited.len());
+            while let Some(node_id) = dfs_stack.pop() {
+                post_order.push(node_id);
+                if let Some(children) = children_index.get(&node_id) {
+                    for child_id in children {
+                        dfs_stack.push(*child_id);
+                    }
                 }
             }
+            // Reverse pre-order gives post-order (children before parents)
+            post_order.reverse();
 
-            node
-        }
+            // Phase 2: Build nodes bottom-up
+            let mut built_nodes: HashMap<SpaceId, TreeNode> = HashMap::with_capacity(visited.len());
+            for node_id in post_order {
+                let edge_type = node_metadata.get(&node_id).copied().unwrap();
+                let mut node = TreeNode::new(node_id, edge_type);
 
-        let tree = build_tree(root, &node_metadata, &children_index);
+                if let Some(child_ids) = children_index.get(&node_id) {
+                    node.children.reserve(child_ids.len());
+                    for child_id in child_ids {
+                        if let Some(child_node) = built_nodes.remove(child_id) {
+                            node.children.push(child_node);
+                        }
+                    }
+                }
+
+                built_nodes.insert(node_id, node);
+            }
+
+            built_nodes.remove(&root).unwrap()
+        };
 
         TransitiveGraph::new(root, tree, visited)
     }

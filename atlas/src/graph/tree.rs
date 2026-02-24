@@ -70,7 +70,13 @@ impl TreeNode {
 
     /// Count total nodes in this subtree (including self)
     pub fn node_count(&self) -> usize {
-        1 + self.children.iter().map(|c| c.node_count()).sum::<usize>()
+        let mut count = 0;
+        let mut stack = vec![self];
+        while let Some(node) = stack.pop() {
+            count += 1;
+            stack.extend(node.children.iter());
+        }
+        count
     }
 }
 

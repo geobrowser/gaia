@@ -241,12 +241,12 @@ impl CanonicalProcessor {
         // Create the root of the filtered subtree as a topic edge
         let mut filtered = TreeNode::new_with_topic(subtree.space_id, topic_id);
 
-        // Recursively filter children
+        // Iteratively filter children
         for child in &subtree.children {
             if canonical_set.contains(&child.space_id) {
                 filtered
                     .children
-                    .push(filter_child_recursive(child, canonical_set));
+                    .push(filter_child_iterative(child, canonical_set));
             }
         }
 
@@ -254,49 +254,78 @@ impl CanonicalProcessor {
     }
 }
 
-/// Recursively filter a child node and its descendants
+/// Iteratively filter a child node and its descendants to canonical-only nodes.
 ///
 /// Unlike `filter_to_canonical`, this preserves the original edge type
 /// since we're not at the root of the topic edge attachment.
-fn filter_child_recursive(node: &TreeNode, canonical_set: &HashSet<SpaceId>) -> TreeNode {
-    let mut filtered = TreeNode::new(node.space_id, node.edge_type);
+///
+/// Uses post-order traversal: builds children before parents so each
+/// parent can collect its already-filtered children.
+fn filter_child_iterative(root_node: &TreeNode, canonical_set: &HashSet<SpaceId>) -> TreeNode {
+    // Phase 1: Collect nodes in post-order via iterative DFS.
+    // Only include nodes that are in the canonical set.
+    // Each entry: (source_node, index_of_parent_in_post_order or None for root)
+    struct WorkItem<'a> {
+        node: &'a TreeNode,
+        parent_idx: Option<usize>,
+    }
 
-    for child in &node.children {
-        if canonical_set.contains(&child.space_id) {
-            filtered
-                .children
-                .push(filter_child_recursive(child, canonical_set));
+    let mut post_order: Vec<(&TreeNode, Option<usize>)> = Vec::new();
+    // DFS stack: (source_node, parent_index_in_post_order)
+    let mut stack: Vec<WorkItem<'_>> = vec![WorkItem {
+        node: root_node,
+        parent_idx: None,
+    }];
+
+    while let Some(item) = stack.pop() {
+        let my_idx = post_order.len();
+        post_order.push((item.node, item.parent_idx));
+
+        for child in item.node.children.iter().rev() {
+            if canonical_set.contains(&child.space_id) {
+                stack.push(WorkItem {
+                    node: child,
+                    parent_idx: Some(my_idx),
+                });
+            }
         }
     }
 
-    filtered
+    // Phase 2: Build filtered nodes in reverse (post-order = children before parents).
+    let mut built: Vec<Option<TreeNode>> = Vec::with_capacity(post_order.len());
+    for (node, _) in &post_order {
+        built.push(Some(TreeNode::new(node.space_id, node.edge_type)));
+    }
+
+    // Traverse in reverse so children are finalized before their parents consume them.
+    for i in (0..post_order.len()).rev() {
+        if let Some(parent_idx) = post_order[i].1 {
+            let child_node = built[i].take().unwrap();
+            built[parent_idx]
+                .as_mut()
+                .unwrap()
+                .children
+                .push(child_node);
+        }
+    }
+
+    built[0].take().unwrap()
 }
 
 /// Attach a subtree to a source node in the tree.
 ///
-/// Finds the node matching `source` and adds `subtree` as its child.
-/// Uses ownership threading to avoid cloning: the subtree is passed through
-/// each recursive call by value, returned via Err if not consumed.
+/// Finds the node matching `source` via iterative DFS and adds `subtree`
+/// as its child. If `source` is not found, the subtree is silently dropped.
 fn attach_subtree(tree: &mut TreeNode, source: SpaceId, subtree: TreeNode) {
-    // Discard the Err (subtree returned unused) — means source wasn't found,
-    // which is a no-op.
-    let _ = try_attach(tree, source, subtree);
-}
-
-fn try_attach(tree: &mut TreeNode, source: SpaceId, subtree: TreeNode) -> Result<(), TreeNode> {
-    if tree.space_id == source {
-        tree.children.push(subtree);
-        return Ok(());
-    }
-
-    let mut sub = subtree;
-    for child in &mut tree.children {
-        match try_attach(child, source, sub) {
-            Ok(()) => return Ok(()),
-            Err(returned) => sub = returned,
+    let mut stack: Vec<&mut TreeNode> = vec![tree];
+    while let Some(node) = stack.pop() {
+        if node.space_id == source {
+            node.children.push(subtree);
+            return;
         }
+        stack.extend(node.children.iter_mut());
     }
-    Err(sub)
+    // Source not found — subtree is dropped (no-op)
 }
 
 #[cfg(test)]

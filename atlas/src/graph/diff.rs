@@ -170,30 +170,26 @@ impl DiffTracker {
 
 /// Build position vec by traversing tree and appending to existing vec
 fn build_position_vec_into(tree: &TreeNode, vec: &mut Vec<(SpaceId, Position)>) {
-    // Root is at distance 0, but we use its own space_id as "parent" for consistency
-    build_position_vec_recursive(tree, vec, 0, tree.space_id);
-}
+    // Stack items: (node, distance, parent_space_id)
+    let mut stack: Vec<(&TreeNode, u32, SpaceId)> = vec![(tree, 0, tree.space_id)];
 
-fn build_position_vec_recursive(
-    node: &TreeNode,
-    vec: &mut Vec<(SpaceId, Position)>,
-    distance: u32,
-    parent: SpaceId,
-) {
-    // Don't include root in diff (it's implicit and never changes)
-    if distance > 0 {
-        vec.push((
-            node.space_id,
-            Position {
-                distance,
-                parent,
-                edge_type: node.edge_type,
-            },
-        ));
-    }
+    while let Some((node, distance, parent)) = stack.pop() {
+        // Don't include root in diff (it's implicit and never changes)
+        if distance > 0 {
+            vec.push((
+                node.space_id,
+                Position {
+                    distance,
+                    parent,
+                    edge_type: node.edge_type,
+                },
+            ));
+        }
 
-    for child in &node.children {
-        build_position_vec_recursive(child, vec, distance + 1, node.space_id);
+        // Push children in reverse so leftmost is processed first
+        for child in node.children.iter().rev() {
+            stack.push((child, distance + 1, node.space_id));
+        }
     }
 }
 
