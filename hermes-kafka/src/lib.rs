@@ -96,6 +96,10 @@ pub fn create_producer_with_config(
     config: &ProducerConfig,
 ) -> Result<rdkafka::producer::FutureProducer> {
     let mut client_config = ClientConfig::new();
+    let message_timeout_ms = env::var("KAFKA_MESSAGE_TIMEOUT_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(30_000);
 
     client_config
         .set("bootstrap.servers", &config.broker)
@@ -105,7 +109,7 @@ pub fn create_producer_with_config(
         .set("enable.idempotence", "true")
         .set("max.in.flight.requests.per.connection", "1")
         .set("retries", "1000000")
-        .set("message.timeout.ms", "5000")
+        .set("message.timeout.ms", message_timeout_ms.to_string())
         .set("message.max.bytes", "20971520") // 20MB to match broker config
         .set("queue.buffering.max.messages", "100000")
         .set("queue.buffering.max.kbytes", "1048576")

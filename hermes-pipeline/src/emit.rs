@@ -593,6 +593,17 @@ fn log_event_ids_enabled() -> bool {
     })
 }
 
+fn kafka_send_timeout() -> Duration {
+    static TIMEOUT: OnceLock<Duration> = OnceLock::new();
+    *TIMEOUT.get_or_init(|| {
+        let timeout_ms = std::env::var("KAFKA_SEND_TIMEOUT_MS")
+            .ok()
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or(30_000);
+        Duration::from_millis(timeout_ms)
+    })
+}
+
 // Re-export topic utilities from hermes-kafka
 use hermes_kafka::{get_topic_prefix, prefixed_topic};
 
@@ -655,7 +666,7 @@ impl Emitter {
 
         let result = self
             .producer
-            .send(record, Duration::from_secs(5))
+            .send(record, kafka_send_timeout())
             .await
             .map(|_| ())
             .map_err(|(e, _)| anyhow::anyhow!(e));
