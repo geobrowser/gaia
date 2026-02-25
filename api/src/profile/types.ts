@@ -13,6 +13,8 @@
  * profile data (name, avatar).
  */
 export type Profile = {
+	/** The entity ID of the space's front page entity (the profile entity) */
+	entityId: string | null
 	/** The user's personal space ID */
 	spaceId: string
 	/** Display name from the NAME_PROPERTY value */

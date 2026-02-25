@@ -1,10 +1,15 @@
 import SimplifyInflectionPlugin from "@graphile-contrib/pg-simplify-inflector"
-import {createInMemoryCache, useResponseCache} from "@graphql-yoga/plugin-response-cache"
+import * as Sentry from "@sentry/node"
+import {print} from "graphql"
 import {createYoga, type Plugin, useExecutionCancellation} from "graphql-yoga"
 import type {PoolClient} from "pg"
 import {Pool} from "pg"
 import {createPostGraphileSchema} from "postgraphile"
 import ConnectionFilterPlugin from "postgraphile-plugin-connection-filter"
+import {classifyDbFailure} from "../services/dbFailures"
+import {getGraphqlPressureSnapshot, recordGraphqlAcquireTimeout} from "../services/dbSaturation"
+import {graphqlQueryFingerprint} from "../services/queryFingerprint"
+import {log} from "../services/telemetry"
 import EntitySpaceFilterPlugin from "./entitySpaceFilterPlugin"
 import {useGraphQLInstrumentation} from "./instrumentationPlugin"
 import UndashedUuidPlugin from "./uuidScalarPlugin"
@@ -17,16 +22,22 @@ export type GraphQLServerContext = {
 		spanId: string
 		traceFlags: number
 	}
+	requestId?: string
+	setGraphqlOperationName?: (operationName: string) => void
 }
 
 // Create PostgreSQL pool with explicit configuration to prevent connection exhaustion
 // Note: Without PgBouncer, each pool connection = 1 Postgres connection.
 // Ensure max * num_replicas < Postgres max_connections (leaving room for admin/migrations).
+if (!process.env.DATABASE_URL) {
+	throw new Error("DATABASE_URL environment variable is required")
+}
+
 const pgPool = new Pool({
-	connectionString: process.env.DATABASE_URL || "postgres://user:pass@localhost/mydb",
+	connectionString: process.env.DATABASE_URL,
 	// Pool size - PgBouncer handles multiplexing, so we can be generous here.
 	// The real PostgreSQL connection limit is managed by PgBouncer's pool_size.
-	// With 2 replicas at 50 each = 100 connections, well under PgBouncer's 200 max_client_conn.
+	// With 2 replicas at 50 each = 100 GraphQL connections, well under PgBouncer's 900 max_client_conn.
 	max: parseInt(process.env.PG_POOL_MAX || "50", 10),
 	// Fail fast if no connection available (default is 0 = wait forever, causing hangs)
 	connectionTimeoutMillis: parseInt(process.env.PG_CONNECTION_TIMEOUT_MS || "3000", 10),
@@ -34,6 +45,30 @@ const pgPool = new Pool({
 	idleTimeoutMillis: parseInt(process.env.PG_IDLE_TIMEOUT_MS || "30000", 10),
 	// Allow process to exit cleanly when pool is idle (for graceful shutdown)
 	allowExitOnIdle: true,
+})
+
+export function getGraphqlPoolStats() {
+	return {
+		totalConnections: pgPool.totalCount,
+		idleConnections: pgPool.idleCount,
+		waitingCount: pgPool.waitingCount,
+		maxConnections: pgPool.options.max ?? 0,
+	}
+}
+
+export function getGraphqlPoolPressure() {
+	return getGraphqlPressureSnapshot(getGraphqlPoolStats())
+}
+
+// Without this handler, background connection errors (PgBouncer closing idle connections,
+// network blips) become unhandled events. The pool doesn't remove the dead connection,
+// so subsequent connect() calls can check out a stale client that fails during query execution.
+pgPool.on("error", (err) => {
+	log.error("PostGraphile pool error", {
+		error: String(err),
+		failureClass: classifyDbFailure(err),
+		poolStats: getGraphqlPoolStats(),
+	})
 })
 
 // Base PostGraphile options (without uuidScalarPlugin)
@@ -87,24 +122,90 @@ const postgraphileSchema = await createPostGraphileSchema(pgPool, ["public"], po
  * checked out from the pool. This plugin checks out a client before execution
  * and releases it back to the pool after execution completes.
  *
- * The checkout happens in onExecute (not in the context factory) so that
- * cache hits from useResponseCache never check out a client at all — the
- * response cache short-circuits in onParams before onExecute fires.
- *
  * We don't use PostGraphile's `withPostGraphileContext` because we don't need
  * its transaction wrapper or JWT/role features (mutations are disabled, all
  * queries are reads). Checking out the client directly is simpler and avoids
  * the unnecessary BEGIN/COMMIT overhead on every request.
+ *
+ * On completion, we check the result for errors. release(err) tells pg.Pool to
+ * destroy the connection instead of returning it to the pool — this prevents
+ * stale connections (e.g. from PgBouncer closing them) from being reused.
  */
 function usePgClient(pool: Pool): Plugin<{pgClient: PoolClient}> {
 	return {
-		async onExecute({extendContext}) {
-			const pgClient = await pool.connect()
+		async onExecute({extendContext, args}) {
+			const operationName = args.operationName || "anonymous"
+			const fullQuery = print(args.document)
+			const query = fullQuery.slice(0, 2000)
+			const queryFingerprint = graphqlQueryFingerprint(fullQuery)
+			const acquireStartMs = Date.now()
+
+			let pgClient: PoolClient
+			try {
+				pgClient = await pool.connect()
+			} catch (error) {
+				const err = error instanceof Error ? error : new Error(String(error))
+				const poolStats = getGraphqlPoolStats()
+				const poolPressure = getGraphqlPressureSnapshot(poolStats)
+				const failureClass = classifyDbFailure(err)
+				if (failureClass === "pool_connect_timeout") {
+					recordGraphqlAcquireTimeout()
+				}
+				const acquireWaitMs = Date.now() - acquireStartMs
+				log.error("PostGraphile pool connect error", {
+					error: err.message,
+					failureClass,
+					operationName,
+					queryFingerprint,
+					query,
+					acquireWaitMs,
+					poolStats,
+					poolPressure,
+				})
+
+				Sentry.captureException(err, {
+					tags: {
+						"graphql.operation_name": operationName,
+						"graphql.query_fingerprint": queryFingerprint,
+						"db.failure_class": failureClass,
+					},
+					extra: {
+						queryFingerprint,
+						query,
+						variables: args.variableValues,
+						acquireWaitMs,
+						poolStats,
+						poolPressure,
+						failureClass,
+					},
+				})
+
+				throw error
+			}
+
+			const acquireWaitMs = Date.now() - acquireStartMs
+			if (acquireWaitMs > 250) {
+				log.warn("PostGraphile pool acquire was slow", {
+					operationName,
+					acquireWaitMs,
+					poolStats: getGraphqlPoolStats(),
+					poolPressure: getGraphqlPoolPressure(),
+				})
+			}
+
 			extendContext({pgClient})
 
 			return {
-				onExecuteDone() {
-					pgClient.release()
+				onExecuteDone({result}) {
+					// If the result has GraphQL errors, the underlying connection may be
+					// broken (e.g. PgBouncer closed it). release(err) destroys it so the
+					// pool doesn't hand out a dead connection on the next request.
+					const errors = "errors" in result ? result.errors : undefined
+					if (errors?.length) {
+						pgClient.release(errors[0])
+					} else {
+						pgClient.release()
+					}
 				},
 			}
 		},
@@ -112,16 +213,7 @@ function usePgClient(pool: Pool): Plugin<{pgClient: PoolClient}> {
 }
 
 // Shared plugins for GraphQL server
-const sharedPlugins = [
-	usePgClient(pgPool),
-	useExecutionCancellation(),
-	useResponseCache({
-		session: () => null,
-		ttl: 10_000, // 10 seconds
-		cache: createInMemoryCache({max: 1024}),
-	}),
-	useGraphQLInstrumentation(),
-]
+const sharedPlugins = [useGraphQLInstrumentation(), usePgClient(pgPool), useExecutionCancellation()]
 
 // GraphQL server without uuidScalarPlugin
 export const graphqlServer = createYoga<GraphQLServerContext>({

@@ -181,6 +181,9 @@ impl CacheStorage for MockStorage {
 // PostgreSQL Storage
 // =============================================================================
 
+use std::env;
+use std::time::Duration;
+
 use sqlx::{Postgres, postgres::PgPoolOptions};
 
 /// PostgreSQL storage backend for the IPFS cache.
@@ -188,11 +191,23 @@ pub struct PostgresStorage {
     connection: sqlx::Pool<Postgres>,
 }
 
+fn env_or<T: std::str::FromStr>(key: &str, default: T) -> T {
+    env::var(key)
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(default)
+}
+
 impl PostgresStorage {
     /// Create a new storage instance connected to the database.
     pub async fn new(database_url: &str) -> Result<Self, CacheError> {
         let connection = PgPoolOptions::new()
-            .max_connections(20)
+            .max_connections(env_or("PG_POOL_MAX", 20))
+            // Close idle connections after 30s to free PgBouncer slots.
+            .idle_timeout(Duration::from_secs(env_or("PG_IDLE_TIMEOUT_SECS", 30)))
+            // Fail fast when pool is saturated — 3s means all 20 connections are busy,
+            // indicating DB trouble, not normal load (max observed query time ~2s).
+            .acquire_timeout(Duration::from_secs(env_or("PG_ACQUIRE_TIMEOUT_SECS", 3)))
             .connect(database_url)
             .await?;
 

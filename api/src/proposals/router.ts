@@ -13,6 +13,8 @@ import type {AppRuntime} from "../services/runtime"
 import {isValidUuid, normalizeUuid} from "../utils/uuid"
 import {
 	getProposalWithVotes,
+	hasActiveEditorProposal,
+	hasActiveMemberProposal,
 	listProposalsInSpace,
 	PROPOSAL_ORDER_BY,
 	PROPOSAL_ORDER_DIRECTION,
@@ -641,5 +643,161 @@ export function createProposalsRouter(db: Database, runtime: AppRuntime) {
 		},
 	)
 
+	// Active proposal check endpoints — shared handler with per-route config
+	registerActiveProposalRoute(router, db, runtime, {
+		path: "/space/:spaceId/members/:memberSpaceId/active",
+		targetParam: "memberSpaceId",
+		targetLabel: "Member space ID",
+		summary: "Check if a member has an active ADD_MEMBER proposal",
+		description:
+			"Returns whether the specified member space has an active (PROPOSED or EXECUTABLE) ADD_MEMBER proposal in the given space.",
+		queryFn: hasActiveMemberProposal,
+		operationName: "HasActiveMemberProposal",
+	})
+
+	registerActiveProposalRoute(router, db, runtime, {
+		path: "/space/:spaceId/editors/:editorSpaceId/active",
+		targetParam: "editorSpaceId",
+		targetLabel: "Editor space ID",
+		summary: "Check if a member has an active ADD_EDITOR proposal",
+		description:
+			"Returns whether the specified member space has an active (PROPOSED or EXECUTABLE) ADD_EDITOR proposal in the given space.",
+		queryFn: hasActiveEditorProposal,
+		operationName: "HasActiveEditorProposal",
+	})
+
 	return router
+}
+
+// =============================================================================
+// Active Proposal Check — Shared Route Handler
+// =============================================================================
+
+interface ActiveProposalRouteConfig {
+	/** Route path pattern, e.g. "/space/:spaceId/members/:memberSpaceId/active" */
+	path: string
+	/** Name of the target path parameter, e.g. "memberSpaceId" */
+	targetParam: string
+	/** Human-readable label for the target param in validation errors */
+	targetLabel: string
+	/** OpenAPI summary */
+	summary: string
+	/** OpenAPI description */
+	description: string
+	/** Query function to call with (db, spaceId, targetId) */
+	queryFn: (db: Database, spaceId: string, targetId: string) => Effect.Effect<boolean, QueryError>
+	/** Operation name for logs and spans, e.g. "HasActiveMemberProposal" */
+	operationName: string
+}
+
+/**
+ * Registers a GET route that checks whether an active proposal exists for a
+ * specific target. Both the member and editor active-check endpoints share
+ * this handler — only the config differs.
+ */
+function registerActiveProposalRoute(
+	router: Hono<AppEnv>,
+	db: Database,
+	runtime: AppRuntime,
+	config: ActiveProposalRouteConfig,
+) {
+	router.get(
+		config.path,
+		describeRoute({
+			tags: ["Proposals"],
+			summary: config.summary,
+			description: config.description,
+			parameters: [
+				{
+					name: "spaceId",
+					in: "path",
+					required: true,
+					schema: {type: "string", format: "uuid"},
+				},
+				{
+					name: config.targetParam,
+					in: "path",
+					required: true,
+					schema: {type: "string", format: "uuid"},
+				},
+			],
+			responses: {
+				200: {
+					description: "Active proposal check result",
+					content: {
+						"application/json": {
+							schema: {$ref: "#/components/schemas/ActiveProposalCheckResponse"},
+						},
+					},
+				},
+				400: {description: "Invalid parameter"},
+				500: {description: "Internal server error"},
+			},
+		}),
+		async (c) => {
+			// Path params are always present for matched routes. The dynamic lookup
+			// returns string | undefined because Hono can't narrow from a variable key.
+			const spaceId = c.req.param("spaceId") as string
+			const targetId = c.req.param(config.targetParam) as string
+			const requestId = c.get("requestId") ?? "unknown"
+
+			const program = Effect.gen(function* () {
+				yield* Effect.logInfo(`${config.operationName} started`, {
+					spaceId,
+					[config.targetParam]: targetId,
+				})
+
+				if (!isValidUuid(spaceId)) {
+					return yield* Effect.fail(new ValidationError({message: "Space ID must be a valid UUID"}))
+				}
+				if (!isValidUuid(targetId)) {
+					return yield* Effect.fail(
+						new ValidationError({message: `${config.targetLabel} must be a valid UUID`}),
+					)
+				}
+
+				const active = yield* config.queryFn(db, spaceId, targetId)
+				return {active}
+			}).pipe(
+				Effect.tapError((error) => {
+					switch (error._tag) {
+						case "QueryError":
+							return Effect.logError(`${config.operationName} failed`, {
+								errorType: "database_error",
+								operation: error.operation,
+								message: error.cause.message,
+							})
+						case "ValidationError":
+							return Effect.logWarning(`${config.operationName} failed`, {
+								errorType: "validation_error",
+								message: error.message,
+							})
+					}
+				}),
+				Effect.withSpan(`GET /proposals${config.path}`),
+				Effect.annotateLogs({requestId, spaceId, [config.targetParam]: targetId}),
+				Effect.annotateSpans({requestId, spaceId, [config.targetParam]: targetId}),
+			)
+
+			const result = await runtime.runPromise(Effect.either(program))
+
+			return Either.match(result, {
+				onLeft: (error: ProposalListError) => {
+					switch (error._tag) {
+						case "ValidationError":
+							return c.json({error: "Invalid parameter", message: error.message}, 400)
+						case "QueryError":
+							return c.json(
+								{
+									error: "Internal server error",
+									message: "An unexpected error occurred",
+								},
+								500,
+							)
+					}
+				},
+				onRight: (response) => c.json(response),
+			})
+		},
+	)
 }

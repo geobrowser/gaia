@@ -5,10 +5,20 @@
 //! Note: As of v2, the cache stores raw GRC2/GRC2Z payload bytes that have
 //! been validated by hermes-ipfs-cache. No decoding is performed here.
 
+use std::env;
+use std::time::Duration;
+
 use async_trait::async_trait;
 use sqlx::{Postgres, Row, postgres::PgPoolOptions};
 
 use super::{CacheError, CachedEdit, IpfsCache};
+
+fn env_or<T: std::str::FromStr>(key: &str, default: T) -> T {
+    env::var(key)
+        .ok()
+        .and_then(|v| v.parse().ok())
+        .unwrap_or(default)
+}
 
 /// PostgreSQL-backed IPFS cache.
 ///
@@ -25,7 +35,12 @@ impl PostgresCache {
     /// Create a new cache connected to the given database.
     pub async fn new(database_url: &str) -> Result<Self, CacheError> {
         let pool = PgPoolOptions::new()
-            .max_connections(20)
+            .max_connections(env_or("PG_POOL_MAX", 20))
+            // Close idle connections after 30s to free PgBouncer slots.
+            .idle_timeout(Duration::from_secs(env_or("PG_IDLE_TIMEOUT_SECS", 30)))
+            // Fail fast when pool is saturated — 3s means all 20 connections are busy,
+            // indicating DB trouble, not normal load (max observed query time ~6s).
+            .acquire_timeout(Duration::from_secs(env_or("PG_ACQUIRE_TIMEOUT_SECS", 3)))
             .connect(database_url)
             .await
             .map_err(|e| CacheError::Database(e.to_string()))?;

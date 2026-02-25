@@ -90,6 +90,12 @@ doctl databases topics update $KAFKA_ID topology.canonical --retention-ms -1
 doctl databases topics update $KAFKA_ID space.creations --retention-ms -1
 doctl databases topics update $KAFKA_ID space.trust.extensions --retention-ms -1
 doctl databases topics update $KAFKA_ID knowledge.edits --retention-ms -1
+
+# Set max message size to 20MB
+doctl databases topics update $KAFKA_ID topology.canonical --max-message-bytes 20971520
+doctl databases topics update $KAFKA_ID space.creations --max-message-bytes 20971520
+doctl databases topics update $KAFKA_ID space.trust.extensions --max-message-bytes 20971520
+doctl databases topics update $KAFKA_ID knowledge.edits --max-message-bytes 20971520
 ```
 
 ### Kafka UI

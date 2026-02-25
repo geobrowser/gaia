@@ -1,0 +1,430 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: api-ingress-observability-dashboard
+  namespace: monitoring
+  labels:
+    grafana_dashboard: "1"
+    app: kube-prometheus-stack-grafana
+    release: kube-prometheus-stack
+data:
+  api-ingress-observability.json: |-
+    {
+      "title": "API Ingress Observability",
+      "uid": "api-ingress-observability",
+      "schemaVersion": 39,
+      "version": 6,
+      "timezone": "browser",
+      "refresh": "30s",
+      "time": {
+        "from": "now-6h",
+        "to": "now"
+      },
+      "templating": {
+        "list": [
+          {
+            "name": "datasource",
+            "type": "datasource",
+            "query": "prometheus",
+            "current": {
+              "selected": true,
+              "text": "Prometheus",
+              "value": "Prometheus"
+            }
+          }
+        ]
+      },
+      "panels": [
+        {
+          "id": 1,
+          "type": "timeseries",
+          "title": "Ingress Request Rate (RPS)",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 0
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "api:ingress_requests_per_second:rate5m",
+              "legendFormat": "total"
+            },
+            {
+              "refId": "B",
+              "expr": "api:ingress_5xx_per_second:rate5m",
+              "legendFormat": "5xx"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "reqps"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi"
+            }
+          }
+        },
+        {
+          "id": 2,
+          "type": "timeseries",
+          "title": "Ingress 5xx Ratio",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 0
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "api:ingress_5xx_ratio:rate5m",
+              "legendFormat": "5xx ratio"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "min": 0,
+              "max": 1
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "list",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi"
+            }
+          }
+        },
+        {
+          "id": 3,
+          "type": "timeseries",
+          "title": "Ingress Latency Percentiles (p50/p75/p95/p99)",
+          "gridPos": {
+            "h": 8,
+            "w": 24,
+            "x": 0,
+            "y": 8
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "api:ingress_p50_latency_seconds:5m",
+              "legendFormat": "p50"
+            },
+            {
+              "refId": "B",
+              "expr": "api:ingress_p75_latency_seconds:5m",
+              "legendFormat": "p75"
+            },
+            {
+              "refId": "C",
+              "expr": "api:ingress_p95_latency_seconds:5m",
+              "legendFormat": "p95"
+            },
+            {
+              "refId": "D",
+              "expr": "api:ingress_p99_latency_seconds:5m",
+              "legendFormat": "p99"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "table",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi"
+            }
+          }
+        },
+        {
+          "id": 4,
+          "type": "timeseries",
+          "title": "Ingress p99 by Method",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 16
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "api:ingress_method_p99_latency_seconds:5m",
+              "legendFormat": "{{method}}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "s"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "table",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi"
+            }
+          }
+        },
+        {
+          "id": 5,
+          "type": "timeseries",
+          "title": "Request Rate by Method",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 16
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "api:ingress_method_requests_per_second:rate5m",
+              "legendFormat": "{{method}}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "reqps"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "table",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi"
+            }
+          }
+        },
+        {
+          "id": 6,
+          "type": "timeseries",
+          "title": "Ingress Response Codes (RPS by Status)",
+          "gridPos": {
+            "h": 8,
+            "w": 24,
+            "x": 0,
+            "y": 24
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "api:ingress_status_requests_per_second:rate5m",
+              "legendFormat": "{{status}}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "reqps"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "table",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi"
+            }
+          }
+        },
+        {
+          "id": 7,
+          "type": "table",
+          "title": "Ingress Response Codes (24h Totals)",
+          "gridPos": {
+            "h": 8,
+            "w": 24,
+            "x": 0,
+            "y": 32
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum by (status) (increase(nginx_ingress_controller_requests{host=\"testnet-api.geobrowser.io\"}[24h]))",
+              "format": "table",
+              "instant": true,
+              "legendFormat": "{{status}}"
+            }
+          ],
+          "transformations": [
+            {
+              "id": "organize",
+              "options": {
+                "excludeByName": {
+                  "Time": true,
+                  "Value #A": false,
+                  "status": false
+                },
+                "indexByName": {
+                  "status": 0,
+                  "Value #A": 1
+                },
+                "renameByName": {
+                  "Value #A": "responses_24h"
+                }
+              }
+            }
+          ],
+          "options": {
+            "showHeader": true,
+            "footer": {
+              "show": false
+            }
+          },
+          "fieldConfig": {
+            "defaults": {
+              "unit": "none"
+            },
+            "overrides": []
+          }
+        },
+        {
+          "id": 8,
+          "type": "timeseries",
+          "title": "Failure-Class Proxy Rates (499/500/503)",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 0,
+            "y": 40
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "api:ingress_499_per_second:rate5m",
+              "legendFormat": "499"
+            },
+            {
+              "refId": "B",
+              "expr": "api:ingress_500_per_second:rate5m",
+              "legendFormat": "500"
+            },
+            {
+              "refId": "C",
+              "expr": "api:ingress_503_per_second:rate5m",
+              "legendFormat": "503"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "reqps"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "table",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi"
+            }
+          }
+        },
+        {
+          "id": 9,
+          "type": "timeseries",
+          "title": "Error Rate by Status (4xx/5xx)",
+          "gridPos": {
+            "h": 8,
+            "w": 12,
+            "x": 12,
+            "y": 40
+          },
+          "datasource": {
+            "type": "prometheus",
+            "uid": "$datasource"
+          },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "api:ingress_error_status_requests_per_second:rate5m",
+              "legendFormat": "{{status}}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "reqps"
+            },
+            "overrides": []
+          },
+          "options": {
+            "legend": {
+              "displayMode": "table",
+              "placement": "bottom",
+              "showLegend": true
+            },
+            "tooltip": {
+              "mode": "multi"
+            }
+          }
+        }
+      ]
+    }

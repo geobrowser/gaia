@@ -8,15 +8,13 @@
 import {Layer, ManagedRuntime} from "effect"
 
 import {Environment, make as makeEnvironment} from "./environment"
-import {make as makeStorage, Storage} from "./storage/storage"
 import {TelemetryLive} from "./telemetry"
 
 // Layer definitions
 const EnvironmentLayer = Layer.effect(Environment, makeEnvironment)
-const StorageLayer = Layer.effect(Storage, makeStorage).pipe(Layer.provide(EnvironmentLayer))
 
 // Combined layer with all dependencies including telemetry
-const AppLayer = Layer.mergeAll(EnvironmentLayer, StorageLayer, TelemetryLive)
+const AppLayer = Layer.mergeAll(EnvironmentLayer, TelemetryLive)
 
 // ManagedRuntime initialized once at startup
 export const runtime = ManagedRuntime.make(AppLayer)

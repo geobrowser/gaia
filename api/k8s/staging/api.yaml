@@ -94,6 +94,20 @@ spec:
                 secretKeyRef:
                   name: api-secrets
                   key: DATABASE_URL
+            - name: PG_CONNECTION_TIMEOUT_MS
+              value: "3000"
+            - name: PG_POOL_PRESSURE_WAITING_THRESHOLD
+              value: "1"
+            - name: PG_POOL_PRESSURE_UTILIZATION_THRESHOLD
+              value: "90"
+            - name: PG_POOL_PRESSURE_TIMEOUT_THRESHOLD
+              value: "2"
+            - name: PG_POOL_ACQUIRE_TIMEOUT_WINDOW_MS
+              value: "30000"
+            - name: PG_POOL_SATURATION_ACTIVATION_MS
+              value: "15000"
+            - name: PG_POOL_SATURATION_RELEASE_MS
+              value: "30000"
             - name: IPFS_KEY
               valueFrom:
                 secretKeyRef:
@@ -155,7 +169,7 @@ spec:
             failureThreshold: 3
           readinessProbe:
             httpGet:
-              path: /health
+              path: /health/readiness
               port: 3000
             initialDelaySeconds: 5
             periodSeconds: 10
@@ -188,6 +202,21 @@ metadata:
   annotations:
     cert-manager.io/cluster-issuer: letsencrypt-prod
     nginx.ingress.kubernetes.io/proxy-body-size: "100m"
+    nginx.ingress.kubernetes.io/server-snippet: |
+      gzip on;
+      gzip_comp_level 5;
+      gzip_min_length 512;
+      gzip_proxied any;
+      gzip_vary on;
+      gzip_types
+        application/json
+        application/graphql-response+json
+        application/javascript
+        application/xml
+        text/plain
+        text/css
+        text/javascript
+        text/xml;
 spec:
   ingressClassName: nginx
   tls:

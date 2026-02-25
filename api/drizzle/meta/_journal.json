@@ -267,6 +267,48 @@
       "when": 1770437401893,
       "tag": "0037_deferrable-tally-queue-fk",
       "breakpoints": true
+    },
+    {
+      "idx": 38,
+      "version": "7",
+      "when": 1770750272778,
+      "tag": "0038_milky_senator_kelly",
+      "breakpoints": true
+    },
+    {
+      "idx": 39,
+      "version": "7",
+      "when": 1770753111130,
+      "tag": "0039_whole_the_liberteens",
+      "breakpoints": true
+    },
+    {
+      "idx": 40,
+      "version": "7",
+      "when": 1770845736914,
+      "tag": "0040_add-format-to-property-info",
+      "breakpoints": true
+    },
+    {
+      "idx": 41,
+      "version": "7",
+      "when": 1770925988195,
+      "tag": "0041_aberrant_edwin_jarvis",
+      "breakpoints": true
+    },
+    {
+      "idx": 42,
+      "version": "7",
+      "when": 1770927193139,
+      "tag": "0042_messy_power_man",
+      "breakpoints": true
+    },
+    {
+      "idx": 43,
+      "version": "7",
+      "when": 1771004354519,
+      "tag": "0043_real_psylocke",
+      "breakpoints": true
     }
   ]
 }

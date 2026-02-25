@@ -462,6 +462,9 @@ export const proposalActions = pgTable(
 	(table) => [
 		index("proposal_actions_proposal_id_idx").on(table.proposalId),
 		index("proposal_actions_action_type_idx").on(table.actionType),
+		// Composite index for the active proposal check query (hasActiveProposalForTarget)
+		// which filters by (proposal_id, action_type, target_id) in a correlated EXISTS subquery
+		index("proposal_actions_proposal_action_target_idx").on(table.proposalId, table.actionType, table.targetId),
 	],
 )
 
@@ -695,6 +698,17 @@ export const editVersions = pgTable(
 		sequence: bigint("sequence", {mode: "number"}).notNull(),
 		versionKey: bigint("version_key", {mode: "bigint"}).notNull(),
 		createdAt: timestamp("created_at", {mode: "date"}).notNull(),
+		/**
+		 * Human-readable name for this edit, extracted from the GRC-20 payload.
+		 * Nullable because existing rows predate this column and some edits may lack names.
+		 */
+		name: text("name"),
+		/**
+		 * The first author (creator) of this edit, extracted from HermesEdit.authors[0].
+		 * Stored as a UUID. Nullable because existing rows predate this column and
+		 * some edits may lack authors.
+		 */
+		createdById: uuid("created_by_id"),
 	},
 	(table) => [
 		unique("edit_versions_block_sequence_unique").on(table.blockNumber, table.sequence),
@@ -748,6 +762,11 @@ export const valueVersions = pgTable(
 			.on(table.entityId, table.propertyId, table.spaceId)
 			.where(sql`${table.validToKey} IS NULL`),
 		index("value_versions_range_idx").on(table.entityId, table.validFromKey),
+		// Partial index for version discovery queries that scan valid_to_key
+		// to find edits that deleted/superseded values on an entity
+		index("value_versions_entity_space_valid_to_idx")
+			.on(table.entityId, table.spaceId, table.validToKey)
+			.where(sql`${table.validToKey} IS NOT NULL`),
 	],
 )
 
@@ -782,6 +801,14 @@ export const relationVersions = pgTable(
 		index("relation_versions_entity_idx").on(table.entityId),
 		index("relation_versions_open_idx").on(table.relationId).where(sql`${table.validToKey} IS NULL`),
 		index("relation_versions_range_idx").on(table.entityId, table.validFromKey),
+		// Composite index for batch block relation discovery queries that filter on
+		// from_entity_id + type_id with temporal range predicates
+		index("relation_versions_from_entity_type_idx").on(table.fromEntityId, table.typeId, table.validFromKey),
+		// Partial index for version discovery queries that scan valid_to_key
+		// to find edits that deleted/superseded relations on an entity
+		index("relation_versions_from_entity_valid_to_idx")
+			.on(table.fromEntityId, table.validToKey)
+			.where(sql`${table.validToKey} IS NOT NULL`),
 	],
 )
 

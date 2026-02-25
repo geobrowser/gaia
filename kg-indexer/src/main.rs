@@ -21,6 +21,14 @@ use consumer::{get_event_type, parse_message, KafkaConsumer, KgMessage};
 use error::IndexerError;
 use storage::Storage;
 
+/// Spaces whose edits should be dropped by the indexer.
+/// These spaces produced corrupt or unwanted data that was manually cleaned from the database.
+const BLOCKED_SPACES: &[uuid::Uuid] = &[
+    uuid::uuid!("d24e4d32-3f4e-b6cc-4eaa-757cdd653857"),
+    uuid::uuid!("2df9f305-6ccc-2875-e610-2ed299883371"),
+    uuid::uuid!("655d6077-dc49-e1f9-0e85-74dd57c3164e"),
+];
+
 /// A buffered event with its Kafka metadata for later commit.
 struct BufferedEvent {
     msg: KgMessage,
@@ -397,6 +405,19 @@ async fn async_main() -> Result<(), IndexerError> {
                             }
                         };
 
+                        // Skip edits from blocked spaces
+                        if let KgMessage::Edit(ref edit) = kg_msg {
+                            if let Ok(space_id) = uuid::Uuid::from_slice(&edit.space_id) {
+                                if BLOCKED_SPACES.contains(&space_id) {
+                                    warn!(
+                                        space_id = %space_id,
+                                        "Skipping edit from blocked space"
+                                    );
+                                    continue;
+                                }
+                            }
+                        }
+
                         // Skip empty blocks entirely - no span created
                         if let KgMessage::BlockSummary(ref summary) = kg_msg {
                             let expected_count = expected_count_for_indexer(summary);
@@ -733,6 +754,35 @@ fn event_type_label(event: &BufferedEvent) -> String {
     }
 }
 
+/// Maximum length for edit names stored in the database.
+const MAX_EDIT_NAME_LENGTH: usize = 256;
+
+/// Extract edit metadata (name and creator ID) from a protobuf Edit message.
+///
+/// - Converts empty name to None (protobuf defaults to "")
+/// - Truncates name to MAX_EDIT_NAME_LENGTH at a char boundary
+/// - Parses first author as a UUID (16-byte author entries)
+fn extract_edit_metadata(
+    edit: &hermes_schema::pb::knowledge::HermesEdit,
+) -> (Option<String>, Option<uuid::Uuid>) {
+    let name = if edit.name.is_empty() {
+        None
+    } else if edit.name.len() > MAX_EDIT_NAME_LENGTH {
+        // Truncate at a char boundary to avoid splitting multi-byte characters
+        let truncated = &edit.name[..edit.name.floor_char_boundary(MAX_EDIT_NAME_LENGTH)];
+        Some(truncated.to_string())
+    } else {
+        Some(edit.name.clone())
+    };
+
+    let created_by_id = edit
+        .authors
+        .first()
+        .and_then(|a| uuid::Uuid::from_slice(a).ok());
+
+    (name, created_by_id)
+}
+
 async fn process_buffered_block(
     events: Vec<BufferedEvent>,
     storage: &Storage,
@@ -976,12 +1026,16 @@ async fn process_message(
             // Versioned writes (temporal tables)
             // Only write versions if this edit hasn't been processed before (idempotency)
             if let Some(meta) = edit.meta.as_ref() {
+                let (edit_name, created_by_id) = extract_edit_metadata(&edit);
+
                 if let Some(version_key) = storage
                     .insert_edit_version(
                         result.edit_id,
                         meta.block_number as i64,
                         meta.sequence as i64,
                         meta.created_at as i64,
+                        edit_name.as_deref(),
+                        created_by_id,
                         &mut tx,
                     )
                     .await?
@@ -1300,12 +1354,16 @@ async fn process_block(
                     // Versioned writes (temporal tables)
                     // Only write versions if this edit hasn't been processed before (idempotency)
                     if let Some(meta) = edit.meta.as_ref() {
+                        let (edit_name, created_by_id) = extract_edit_metadata(edit);
+
                         if let Some(version_key) = storage
                             .insert_edit_version(
                                 result.edit_id,
                                 meta.block_number as i64,
                                 meta.sequence as i64,
                                 meta.created_at as i64,
+                                edit_name.as_deref(),
+                                created_by_id,
                                 &mut tx,
                             )
                             .await?

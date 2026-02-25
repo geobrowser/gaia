@@ -1,32 +1,26 @@
 import {swaggerUI} from "@hono/swagger-ui"
 import {Effect, Either} from "effect"
 import {Hono} from "hono"
-import {compress} from "hono/compress"
 import {cors} from "hono/cors"
 import {describeRoute, openAPISpecs} from "hono-openapi"
 import {health} from "./src/health"
-import {graphqlServer} from "./src/kg/postgraphile"
+import {getGraphqlPoolPressure, graphqlServer} from "./src/kg/postgraphile"
 import {canonicalRequestLogging, requestId} from "./src/middleware/requestLogging"
 import {createProfileRouter} from "./src/profile"
 import {createProposalsRouter} from "./src/proposals"
 import {createSearchRouter} from "./src/search"
+import {isPoolConnectTimeout} from "./src/services/dbFailures"
 import {uploadEdit, uploadFile} from "./src/services/ipfs"
 import {runtime} from "./src/services/runtime"
 import {OpenSearchClient} from "./src/services/search"
 import {db} from "./src/services/storage/storage"
-import {createVersionedRouter} from "./src/versioned"
-
-/**
- * Currently hand-rolling a compression polyfill until Bun implements
- * CompressionStream in the runtime.
- * https://github.com/oven-sh/bun/issues/1723
- */
-import "./src/compression-polyfill"
 import {log} from "./src/services/telemetry"
+import {createVersionedRouter} from "./src/versioned"
 
 type AppEnv = {
 	Variables: {
 		requestId: string
+		graphqlOperationName?: string
 		traceContext?: {
 			traceId: string
 			spanId: string
@@ -41,11 +35,7 @@ const app = new Hono<AppEnv>()
 app.use("*", requestId())
 
 app.use("*", cors())
-app.use(
-	compress({
-		encoding: "gzip",
-	}),
-)
+log.info("HTTP compression disabled in API (managed by ingress)")
 
 // Health routes - no tracing (high frequency, low value)
 app.route("/health", health)
@@ -99,9 +89,40 @@ log.info("Proposals routes enabled")
 app.get("/", swaggerUI({url: "/openapi"}))
 
 app.use("/graphql", async (c) => {
-	return graphqlServer.fetch(c.req.raw, {
-		traceContext: c.get("traceContext"),
-	})
+	const requestId = c.get("requestId") || "unknown"
+
+	try {
+		return await graphqlServer.fetch(c.req.raw, {
+			traceContext: c.get("traceContext"),
+			requestId,
+			setGraphqlOperationName: (operationName: string) => {
+				c.set("graphqlOperationName", operationName)
+			},
+		})
+	} catch (error) {
+		if (isPoolConnectTimeout(error)) {
+			const freshPoolPressure = getGraphqlPoolPressure()
+			log.warn("GraphQL overloaded: pool checkout timeout", {
+				requestId,
+				path: c.req.path,
+				method: c.req.method,
+				poolPressure: freshPoolPressure,
+			})
+
+			const headers = new Headers({
+				"content-type": "application/json",
+				"retry-after": "1",
+				"x-request-id": requestId,
+			})
+
+			return new Response(JSON.stringify({error: "database temporarily overloaded", requestId}), {
+				status: 503,
+				headers,
+			})
+		}
+
+		throw error
+	}
 })
 
 app.post(
@@ -846,6 +867,19 @@ app.get(
 							},
 						},
 						required: ["proposals", "nextCursor"],
+					},
+					ActiveProposalCheckResponse: {
+						type: "object",
+						description:
+							"Whether an active (PROPOSED or EXECUTABLE) ADD_MEMBER or ADD_EDITOR proposal exists for the target in the given space",
+						properties: {
+							active: {
+								type: "boolean",
+								description:
+									"True if at least one non-executed proposal with matching action type and target is currently in PROPOSED or EXECUTABLE status",
+							},
+						},
+						required: ["active"],
 					},
 					// Proposal diff types
 					EntityDiff: {

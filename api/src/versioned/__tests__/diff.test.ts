@@ -95,10 +95,10 @@ describe("diffValues", () => {
 	})
 
 	it("detects added text value", () => {
-		const from: VersionedValue[] = []
-		const to = [makeTextValue("prop-1", "new text")]
+		const before: VersionedValue[] = []
+		const after = [makeTextValue("prop-1", "new text")]
 
-		const result = run(diffValues(from, to))
+		const result = run(diffValues(before, after))
 
 		expect(result).toHaveLength(1)
 		const change = result[0] as TextValueChange
@@ -110,10 +110,10 @@ describe("diffValues", () => {
 	})
 
 	it("detects removed text value", () => {
-		const from = [makeTextValue("prop-1", "old text")]
-		const to: VersionedValue[] = []
+		const before = [makeTextValue("prop-1", "old text")]
+		const after: VersionedValue[] = []
 
-		const result = run(diffValues(from, to))
+		const result = run(diffValues(before, after))
 
 		expect(result).toHaveLength(1)
 		const change = result[0] as TextValueChange
@@ -125,10 +125,10 @@ describe("diffValues", () => {
 	})
 
 	it("detects changed text value with word-level diff", () => {
-		const from = [makeTextValue("prop-1", "hello world")]
-		const to = [makeTextValue("prop-1", "hello universe")]
+		const before = [makeTextValue("prop-1", "hello world")]
+		const after = [makeTextValue("prop-1", "hello universe")]
 
-		const result = run(diffValues(from, to))
+		const result = run(diffValues(before, after))
 
 		expect(result).toHaveLength(1)
 		const change = result[0] as TextValueChange
@@ -140,10 +140,10 @@ describe("diffValues", () => {
 	})
 
 	it("detects added integer value", () => {
-		const from: VersionedValue[] = []
-		const to = [makeIntegerValue("prop-1", 42)]
+		const before: VersionedValue[] = []
+		const after = [makeIntegerValue("prop-1", 42)]
 
-		const result = run(diffValues(from, to))
+		const result = run(diffValues(before, after))
 
 		expect(result).toHaveLength(1)
 		const change = result[0] as SimpleValueChange
@@ -153,10 +153,10 @@ describe("diffValues", () => {
 	})
 
 	it("detects changed integer value", () => {
-		const from = [makeIntegerValue("prop-1", 10)]
-		const to = [makeIntegerValue("prop-1", 20)]
+		const before = [makeIntegerValue("prop-1", 10)]
+		const after = [makeIntegerValue("prop-1", 20)]
 
-		const result = run(diffValues(from, to))
+		const result = run(diffValues(before, after))
 
 		expect(result).toHaveLength(1)
 		const change = result[0] as SimpleValueChange
@@ -166,10 +166,10 @@ describe("diffValues", () => {
 	})
 
 	it("detects changed boolean value", () => {
-		const from = [makeBooleanValue("prop-1", false)]
-		const to = [makeBooleanValue("prop-1", true)]
+		const before = [makeBooleanValue("prop-1", false)]
+		const after = [makeBooleanValue("prop-1", true)]
 
-		const result = run(diffValues(from, to))
+		const result = run(diffValues(before, after))
 
 		expect(result).toHaveLength(1)
 		const change = result[0] as SimpleValueChange
@@ -179,22 +179,22 @@ describe("diffValues", () => {
 	})
 
 	it("handles multiple changes in single diff", () => {
-		const from = [makeTextValue("prop-1", "old"), makeIntegerValue("prop-2", 1)]
-		const to = [makeTextValue("prop-1", "new"), makeTextValue("prop-3", "added")]
+		const before = [makeTextValue("prop-1", "old"), makeIntegerValue("prop-2", 1)]
+		const after = [makeTextValue("prop-1", "new"), makeTextValue("prop-3", "added")]
 
-		const result = run(diffValues(from, to))
+		const result = run(diffValues(before, after))
 
 		expect(result).toHaveLength(3) // changed, removed, added
 	})
 
 	it("distinguishes values by space", () => {
-		const from = [makeTextValue("prop-1", "space-a-value", "space-a")]
-		const to = [
+		const before = [makeTextValue("prop-1", "space-a-value", "space-a")]
+		const after = [
 			makeTextValue("prop-1", "space-a-value", "space-a"),
 			makeTextValue("prop-1", "space-b-value", "space-b"),
 		]
 
-		const result = run(diffValues(from, to))
+		const result = run(diffValues(before, after))
 
 		// Should only show space-b as added
 		expect(result).toHaveLength(1)
@@ -220,10 +220,10 @@ describe("diffRelations", () => {
 	})
 
 	it("detects added relation", () => {
-		const from: VersionedRelation[] = []
-		const to = [makeRelation("rel-1", "type-1", "to-1")]
+		const before: VersionedRelation[] = []
+		const after = [makeRelation("rel-1", "type-1", "to-1")]
 
-		const result = run(diffRelations(from, to))
+		const result = run(diffRelations(before, after))
 
 		expect(result).toHaveLength(1)
 		const change = result[0]!
@@ -234,10 +234,10 @@ describe("diffRelations", () => {
 	})
 
 	it("detects removed relation", () => {
-		const from = [makeRelation("rel-1", "type-1", "to-1")]
-		const to: VersionedRelation[] = []
+		const before = [makeRelation("rel-1", "type-1", "to-1")]
+		const after: VersionedRelation[] = []
 
-		const result = run(diffRelations(from, to))
+		const result = run(diffRelations(before, after))
 
 		expect(result).toHaveLength(1)
 		const change = result[0]!
@@ -248,10 +248,10 @@ describe("diffRelations", () => {
 	})
 
 	it("detects changed relation target", () => {
-		const from = [makeRelation("rel-1", "type-1", "old-target")]
-		const to = [makeRelation("rel-1", "type-1", "new-target")]
+		const before = [makeRelation("rel-1", "type-1", "old-target")]
+		const after = [makeRelation("rel-1", "type-1", "new-target")]
 
-		const result = run(diffRelations(from, to))
+		const result = run(diffRelations(before, after))
 
 		expect(result).toHaveLength(1)
 		const change = result[0]!
@@ -261,10 +261,10 @@ describe("diffRelations", () => {
 	})
 
 	it("detects changed relation position", () => {
-		const from = [makeRelation("rel-1", "type-1", "to-1", {position: "a"})]
-		const to = [makeRelation("rel-1", "type-1", "to-1", {position: "b"})]
+		const before = [makeRelation("rel-1", "type-1", "to-1", {position: "a"})]
+		const after = [makeRelation("rel-1", "type-1", "to-1", {position: "b"})]
 
-		const result = run(diffRelations(from, to))
+		const result = run(diffRelations(before, after))
 
 		expect(result).toHaveLength(1)
 		const change = result[0]!
@@ -274,10 +274,10 @@ describe("diffRelations", () => {
 	})
 
 	it("handles multiple relation changes", () => {
-		const from = [makeRelation("rel-1", "type-1", "to-1"), makeRelation("rel-2", "type-1", "to-2")]
-		const to = [makeRelation("rel-1", "type-1", "to-1-changed"), makeRelation("rel-3", "type-1", "to-3")]
+		const before = [makeRelation("rel-1", "type-1", "to-1"), makeRelation("rel-2", "type-1", "to-2")]
+		const after = [makeRelation("rel-1", "type-1", "to-1-changed"), makeRelation("rel-3", "type-1", "to-3")]
 
-		const result = run(diffRelations(from, to))
+		const result = run(diffRelations(before, after))
 
 		expect(result).toHaveLength(3) // updated, removed, added
 	})
@@ -300,10 +300,10 @@ describe("diffBlocks", () => {
 	})
 
 	it("detects added text block", () => {
-		const from: BlockSnapshot[] = []
-		const to = [makeTextBlock("block-1", "new content")]
+		const before: BlockSnapshot[] = []
+		const after = [makeTextBlock("block-1", "new content")]
 
-		const result = run(diffBlocks(from, to))
+		const result = run(diffBlocks(before, after))
 
 		expect(result).toHaveLength(1)
 		const change = result[0]!
@@ -317,10 +317,10 @@ describe("diffBlocks", () => {
 	})
 
 	it("detects removed text block", () => {
-		const from = [makeTextBlock("block-1", "old content")]
-		const to: BlockSnapshot[] = []
+		const before = [makeTextBlock("block-1", "old content")]
+		const after: BlockSnapshot[] = []
 
-		const result = run(diffBlocks(from, to))
+		const result = run(diffBlocks(before, after))
 
 		expect(result).toHaveLength(1)
 		const change = result[0]!
@@ -333,10 +333,10 @@ describe("diffBlocks", () => {
 	})
 
 	it("detects changed text block content", () => {
-		const from = [makeTextBlock("block-1", "old content")]
-		const to = [makeTextBlock("block-1", "new content")]
+		const before = [makeTextBlock("block-1", "old content")]
+		const after = [makeTextBlock("block-1", "new content")]
 
-		const result = run(diffBlocks(from, to))
+		const result = run(diffBlocks(before, after))
 
 		expect(result).toHaveLength(1)
 		const change = result[0]!
@@ -350,10 +350,10 @@ describe("diffBlocks", () => {
 	})
 
 	it("detects added image block", () => {
-		const from: BlockSnapshot[] = []
-		const to = [makeImageBlock("block-1", "https://example.com/image.png")]
+		const before: BlockSnapshot[] = []
+		const after = [makeImageBlock("block-1", "https://example.com/image.png")]
 
-		const result = run(diffBlocks(from, to))
+		const result = run(diffBlocks(before, after))
 
 		expect(result).toHaveLength(1)
 		const change = result[0]!
@@ -365,10 +365,10 @@ describe("diffBlocks", () => {
 	})
 
 	it("detects changed image block URL", () => {
-		const from = [makeImageBlock("block-1", "https://old.com/image.png")]
-		const to = [makeImageBlock("block-1", "https://new.com/image.png")]
+		const before = [makeImageBlock("block-1", "https://old.com/image.png")]
+		const after = [makeImageBlock("block-1", "https://new.com/image.png")]
 
-		const result = run(diffBlocks(from, to))
+		const result = run(diffBlocks(before, after))
 
 		expect(result).toHaveLength(1)
 		const change = result[0]!
@@ -380,10 +380,10 @@ describe("diffBlocks", () => {
 	})
 
 	it("detects added data block", () => {
-		const from: BlockSnapshot[] = []
-		const to = [makeDataBlock("block-1", "My Data Block")]
+		const before: BlockSnapshot[] = []
+		const after = [makeDataBlock("block-1", "My Data Block")]
 
-		const result = run(diffBlocks(from, to))
+		const result = run(diffBlocks(before, after))
 
 		expect(result).toHaveLength(1)
 		const change = result[0]!
@@ -395,10 +395,10 @@ describe("diffBlocks", () => {
 	})
 
 	it("handles mixed block types", () => {
-		const from = [makeTextBlock("text-1", "old text"), makeImageBlock("img-1", "https://old.com/img.png")]
-		const to = [makeTextBlock("text-1", "new text"), makeDataBlock("data-1", "New Data")]
+		const before = [makeTextBlock("text-1", "old text"), makeImageBlock("img-1", "https://old.com/img.png")]
+		const after = [makeTextBlock("text-1", "new text"), makeDataBlock("data-1", "New Data")]
 
-		const result = run(diffBlocks(from, to))
+		const result = run(diffBlocks(before, after))
 
 		expect(result).toHaveLength(3) // text changed, image removed, data added
 	})
@@ -410,63 +410,63 @@ describe("diffBlocks", () => {
 
 describe("diffEntitySnapshots", () => {
 	it("returns diff with entity ID and name", () => {
-		const from: EntitySnapshot = {
+		const before: EntitySnapshot = {
 			id: nuuid("entity-1"),
 			values: [makeTextValue(norm(SystemIds.NAME_PROPERTY), "Old Name")],
 			relations: [],
 			blocks: [],
 		}
-		const to: EntitySnapshot = {
+		const after: EntitySnapshot = {
 			id: nuuid("entity-1"),
 			values: [makeTextValue(norm(SystemIds.NAME_PROPERTY), "New Name")],
 			relations: [],
 			blocks: [],
 		}
 
-		const result = run(diffEntitySnapshots(nuuid("entity-1"), from, to))
+		const result = run(diffEntitySnapshots(nuuid("entity-1"), before, after))
 
 		expect(result.entityId).toBe("entity-1")
 		expect(result.name).toBe("New Name")
 	})
 
 	it("computes value, relation, and block diffs together", () => {
-		const from: EntitySnapshot = {
+		const before: EntitySnapshot = {
 			id: nuuid("entity-1"),
 			values: [makeTextValue("prop-1", "old value")],
 			relations: [makeRelation("rel-1", "type-1", "target-1")],
 			blocks: [makeTextBlock("block-1", "old block")],
 		}
-		const to: EntitySnapshot = {
+		const after: EntitySnapshot = {
 			id: nuuid("entity-1"),
 			values: [makeTextValue("prop-1", "new value")],
 			relations: [makeRelation("rel-1", "type-1", "target-2")],
 			blocks: [makeTextBlock("block-1", "new block")],
 		}
 
-		const result = run(diffEntitySnapshots(nuuid("entity-1"), from, to))
+		const result = run(diffEntitySnapshots(nuuid("entity-1"), before, after))
 
 		expect(result.values).toHaveLength(1)
 		expect(result.relations).toHaveLength(1)
 		expect(result.blocks).toHaveLength(1)
 	})
 
-	it("uses name from 'to' snapshot, falling back to 'from'", () => {
-		const from: EntitySnapshot = {
+	it("uses name from 'after' snapshot, falling back to 'before'", () => {
+		const before: EntitySnapshot = {
 			id: nuuid("entity-1"),
-			values: [makeTextValue(norm(SystemIds.NAME_PROPERTY), "From Name")],
+			values: [makeTextValue(norm(SystemIds.NAME_PROPERTY), "Before Name")],
 			relations: [],
 			blocks: [],
 		}
-		const to: EntitySnapshot = {
+		const after: EntitySnapshot = {
 			id: nuuid("entity-1"),
 			values: [],
 			relations: [],
 			blocks: [],
 		}
 
-		const result = run(diffEntitySnapshots(nuuid("entity-1"), from, to))
+		const result = run(diffEntitySnapshots(nuuid("entity-1"), before, after))
 
-		expect(result.name).toBe("From Name")
+		expect(result.name).toBe("Before Name")
 	})
 })
 
@@ -488,10 +488,10 @@ function makeGroupedSnapshot(id: string, opts: Partial<GroupedEntitySnapshot> = 
 
 describe("diffGroupedEntitySnapshots", () => {
 	it("returns correct response shape with all fields", () => {
-		const from = makeGroupedSnapshot("entity-1")
-		const to = makeGroupedSnapshot("entity-1")
+		const before = makeGroupedSnapshot("entity-1")
+		const after = makeGroupedSnapshot("entity-1")
 
-		const result = run(diffGroupedEntitySnapshots(nuuid("entity-1"), from, to))
+		const result = run(diffGroupedEntitySnapshots(nuuid("entity-1"), before, after))
 
 		// Verify response shape
 		expect(result).toHaveProperty("entityId")
@@ -518,14 +518,14 @@ describe("diffGroupedEntitySnapshots", () => {
 	})
 
 	it("computes block diffs in static blocks array", () => {
-		const from = makeGroupedSnapshot("entity-1", {
+		const before = makeGroupedSnapshot("entity-1", {
 			blocks: [makeTextBlock("block-1", "old content")],
 		})
-		const to = makeGroupedSnapshot("entity-1", {
+		const after = makeGroupedSnapshot("entity-1", {
 			blocks: [makeTextBlock("block-1", "new content")],
 		})
 
-		const result = run(diffGroupedEntitySnapshots(nuuid("entity-1"), from, to))
+		const result = run(diffGroupedEntitySnapshots(nuuid("entity-1"), before, after))
 
 		expect(result.blocks).toHaveLength(1)
 		expect(result.blocks[0]?.type).toBe("textBlock")
@@ -533,20 +533,20 @@ describe("diffGroupedEntitySnapshots", () => {
 
 	it("computes dynamic group diffs", () => {
 		const customType = nuuid("custom-relation-type")
-		const from = makeGroupedSnapshot("entity-1", {
+		const before = makeGroupedSnapshot("entity-1", {
 			groupKeys: [customType],
 			groups: {
 				[customType]: [makeTextBlock("child-1", "old content")],
 			},
 		})
-		const to = makeGroupedSnapshot("entity-1", {
+		const after = makeGroupedSnapshot("entity-1", {
 			groupKeys: [customType],
 			groups: {
 				[customType]: [makeTextBlock("child-1", "new content")],
 			},
 		})
 
-		const result = run(diffGroupedEntitySnapshots(nuuid("entity-1"), from, to))
+		const result = run(diffGroupedEntitySnapshots(nuuid("entity-1"), before, after))
 
 		expect(result.groupKeys).toContain(customType)
 		expect(result.groups[customType]).toHaveLength(1)
@@ -555,14 +555,14 @@ describe("diffGroupedEntitySnapshots", () => {
 	it("includes groupKeys only for groups with changes", () => {
 		const typeA = nuuid("type-a")
 		const typeB = nuuid("type-b")
-		const from = makeGroupedSnapshot("entity-1", {
+		const before = makeGroupedSnapshot("entity-1", {
 			groupKeys: [typeA, typeB],
 			groups: {
 				[typeA]: [makeTextBlock("a-1", "unchanged")],
 				[typeB]: [makeTextBlock("b-1", "old")],
 			},
 		})
-		const to = makeGroupedSnapshot("entity-1", {
+		const after = makeGroupedSnapshot("entity-1", {
 			groupKeys: [typeA, typeB],
 			groups: {
 				[typeA]: [makeTextBlock("a-1", "unchanged")],
@@ -570,7 +570,7 @@ describe("diffGroupedEntitySnapshots", () => {
 			},
 		})
 
-		const result = run(diffGroupedEntitySnapshots(nuuid("entity-1"), from, to))
+		const result = run(diffGroupedEntitySnapshots(nuuid("entity-1"), before, after))
 
 		// Only typeB has changes
 		expect(result.groupKeys).toEqual([typeB])
@@ -580,15 +580,15 @@ describe("diffGroupedEntitySnapshots", () => {
 
 	it("handles added dynamic group", () => {
 		const customType = nuuid("custom-type")
-		const from = makeGroupedSnapshot("entity-1")
-		const to = makeGroupedSnapshot("entity-1", {
+		const before = makeGroupedSnapshot("entity-1")
+		const after = makeGroupedSnapshot("entity-1", {
 			groupKeys: [customType],
 			groups: {
 				[customType]: [makeTextBlock("child-1", "new content")],
 			},
 		})
 
-		const result = run(diffGroupedEntitySnapshots(nuuid("entity-1"), from, to))
+		const result = run(diffGroupedEntitySnapshots(nuuid("entity-1"), before, after))
 
 		expect(result.groupKeys).toContain(customType)
 		expect(result.groups[customType]).toHaveLength(1)
@@ -596,15 +596,15 @@ describe("diffGroupedEntitySnapshots", () => {
 
 	it("handles removed dynamic group", () => {
 		const customType = nuuid("custom-type")
-		const from = makeGroupedSnapshot("entity-1", {
+		const before = makeGroupedSnapshot("entity-1", {
 			groupKeys: [customType],
 			groups: {
 				[customType]: [makeTextBlock("child-1", "old content")],
 			},
 		})
-		const to = makeGroupedSnapshot("entity-1")
+		const after = makeGroupedSnapshot("entity-1")
 
-		const result = run(diffGroupedEntitySnapshots(nuuid("entity-1"), from, to))
+		const result = run(diffGroupedEntitySnapshots(nuuid("entity-1"), before, after))
 
 		expect(result.groupKeys).toContain(customType)
 		expect(result.groups[customType]).toHaveLength(1)
@@ -612,14 +612,14 @@ describe("diffGroupedEntitySnapshots", () => {
 
 	it("handles hybrid mode with blocks and dynamic groups", () => {
 		const customType = nuuid("custom-type")
-		const from = makeGroupedSnapshot("entity-1", {
+		const before = makeGroupedSnapshot("entity-1", {
 			blocks: [makeTextBlock("block-1", "old block")],
 			groupKeys: [customType],
 			groups: {
 				[customType]: [makeTextBlock("child-1", "old child")],
 			},
 		})
-		const to = makeGroupedSnapshot("entity-1", {
+		const after = makeGroupedSnapshot("entity-1", {
 			blocks: [makeTextBlock("block-1", "new block")],
 			groupKeys: [customType],
 			groups: {
@@ -627,7 +627,7 @@ describe("diffGroupedEntitySnapshots", () => {
 			},
 		})
 
-		const result = run(diffGroupedEntitySnapshots(nuuid("entity-1"), from, to))
+		const result = run(diffGroupedEntitySnapshots(nuuid("entity-1"), before, after))
 
 		// Both blocks and dynamic groups have changes
 		expect(result.blocks).toHaveLength(1)
@@ -636,14 +636,14 @@ describe("diffGroupedEntitySnapshots", () => {
 	})
 
 	it("sorts groupKeys alphabetically", () => {
-		const from = makeGroupedSnapshot("entity-1", {
+		const before = makeGroupedSnapshot("entity-1", {
 			groupKeys: [nuuid("zzz-type"), nuuid("aaa-type")],
 			groups: {
 				[nuuid("zzz-type")]: [makeTextBlock("z-1", "old")],
 				[nuuid("aaa-type")]: [makeTextBlock("a-1", "old")],
 			},
 		})
-		const to = makeGroupedSnapshot("entity-1", {
+		const after = makeGroupedSnapshot("entity-1", {
 			groupKeys: [nuuid("zzz-type"), nuuid("aaa-type")],
 			groups: {
 				[nuuid("zzz-type")]: [makeTextBlock("z-1", "new")],
@@ -651,19 +651,19 @@ describe("diffGroupedEntitySnapshots", () => {
 			},
 		})
 
-		const result = run(diffGroupedEntitySnapshots(nuuid("entity-1"), from, to))
+		const result = run(diffGroupedEntitySnapshots(nuuid("entity-1"), before, after))
 
 		expect(result.groupKeys).toEqual(["aaa-type", "zzz-type"])
 	})
 
-	it("uses name from to snapshot, falling back to from", () => {
-		const from = makeGroupedSnapshot("entity-1", {
-			values: [makeTextValue(norm(SystemIds.NAME_PROPERTY), "From Name")],
+	it("uses name from after snapshot, falling back to before", () => {
+		const before = makeGroupedSnapshot("entity-1", {
+			values: [makeTextValue(norm(SystemIds.NAME_PROPERTY), "Before Name")],
 		})
-		const to = makeGroupedSnapshot("entity-1")
+		const after = makeGroupedSnapshot("entity-1")
 
-		const result = run(diffGroupedEntitySnapshots(nuuid("entity-1"), from, to))
+		const result = run(diffGroupedEntitySnapshots(nuuid("entity-1"), before, after))
 
-		expect(result.name).toBe("From Name")
+		expect(result.name).toBe("Before Name")
 	})
 })

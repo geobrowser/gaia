@@ -9,8 +9,17 @@ spec:
     kind: Deployment
     name: api
   minReplicas: 2
-  maxReplicas: 10
+  maxReplicas: 6
   metrics:
+    # DB-pressure-adjacent trigger via ingress 503 ratio.
+    # Target 1.5% (15m = 0.015) sustained error ratio.
+    - type: External
+      external:
+        metric:
+          name: api_ingress_503_ratio_rate5m
+        target:
+          type: Value
+          value: 15m
     - type: Resource
       resource:
         name: cpu

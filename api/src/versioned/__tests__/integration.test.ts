@@ -492,6 +492,20 @@ describe.skipIf(SKIP_INTEGRATION)("Versioned Endpoints - Comprehensive Integrati
 			const body = await res.json()
 			expect(body.versions.length).toBeLessThanOrEqual(1)
 		})
+
+		it("includes deletion edits in version history", async () => {
+			// entityDeleted has valid_from_key=v1, valid_to_key=v2.
+			// The creation (v1) and the deletion (v2) should both appear.
+			const res = await app.request(`/versioned/entities/${uuid.entityDeleted}/versions?spaceId=${uuid.space1}`)
+			expect(res.status).toBe(200)
+			const body = await res.json()
+
+			expect(body.versions.length).toBe(2)
+
+			const editIds = body.versions.map((v: any) => v.editId)
+			expect(editIds).toContain(uuid.edit1) // creation
+			expect(editIds).toContain(uuid.edit2) // deletion
+		})
 	})
 
 	// ==========================================================================
