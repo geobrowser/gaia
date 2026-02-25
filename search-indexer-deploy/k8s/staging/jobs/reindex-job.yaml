@@ -30,7 +30,7 @@ spec:
           type: RuntimeDefault
       containers:
       - name: reindex
-        image: registry.digitalocean.com/geo/search-admin:latest
+        image: registry.digitalocean.com/geo/search-admin:staging
         securityContext:
           allowPrivilegeEscalation: false
           runAsNonRoot: true

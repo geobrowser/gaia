@@ -4,11 +4,13 @@ on:
   push:
     branches:
       - main
+      - dev
     paths:
       - 'search-admin/**'
       - 'search-indexer-repository/**'
       - 'search-indexer-shared/**'
       - '.github/workflows/search-admin-build.yml'
+  workflow_dispatch:
 
 env:
   REGISTRY: registry.digitalocean.com/geo
@@ -29,10 +31,24 @@ jobs:
       - name: Log in to DigitalOcean Container Registry
         run: doctl registry login --expiry-seconds 1200
 
+      - name: Determine image tag
+        id: tag
+        run: |
+          BRANCH="${{ github.ref_name }}"
+          if [ "$BRANCH" = "main" ]; then
+            echo "env_tag=latest" >> "$GITHUB_OUTPUT"
+          elif [ "$BRANCH" = "dev" ]; then
+            echo "env_tag=staging" >> "$GITHUB_OUTPUT"
+          else
+            # Sanitize branch name for Docker tag (replace / with -)
+            SAFE_TAG=$(echo "$BRANCH" | sed 's|/|-|g')
+            echo "env_tag=$SAFE_TAG" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Build and push Docker image
         run: |
           docker build -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
-                       -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest \
+                       -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.env_tag }} \
                        -f search-admin/Dockerfile .
           docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
-          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ steps.tag.outputs.env_tag }}
