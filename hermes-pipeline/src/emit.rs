@@ -4,14 +4,15 @@
 //! for any type that implements `KafkaEvent + prost::Message`.
 
 use anyhow::Result;
-use hermes_instrumentation::{Span, debug_span, error, info};
+use hermes_instrumentation::{Span, error, info};
 use opentelemetry::global;
 use opentelemetry::propagation::Injector;
 use prost::Message;
 use std::sync::OnceLock;
+use std::time::Duration;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
-use hermes_kafka::{BaseProducer, BaseRecord, Header, OwnedHeaders, Producer};
+use hermes_kafka::{FutureProducer, FutureRecord, Header, OwnedHeaders, Producer};
 use hermes_schema::pb::{
     block_summary::HermesBlockSummary,
     blockchain_metadata::BlockchainMetadata,
@@ -601,7 +602,7 @@ use hermes_kafka::{get_topic_prefix, prefixed_topic};
 
 /// Emitter wraps a Kafka producer and provides generic event emission.
 pub struct Emitter {
-    producer: BaseProducer,
+    producer: FutureProducer,
     topic_prefix: &'static str,
 }
 
@@ -610,7 +611,7 @@ impl Emitter {
     ///
     /// Reads `ENVIRONMENT` from environment to support environment isolation.
     /// If set to "staging", all topics will be prefixed with "staging.".
-    pub fn new(producer: BaseProducer) -> Self {
+    pub fn new(producer: FutureProducer) -> Self {
         let topic_prefix = get_topic_prefix();
         info!(
             topic_prefix = %topic_prefix,
@@ -623,7 +624,7 @@ impl Emitter {
     }
 
     /// Emit any event that implements `KafkaEvent + Message`.
-    pub fn emit<T: KafkaEvent + Message + HasMeta>(&self, event: &T) -> Result<()> {
+    pub async fn emit<T: KafkaEvent + Message + HasMeta>(&self, event: &T) -> Result<()> {
         let mut payload = Vec::new();
         event.encode(&mut payload)?;
 
@@ -646,44 +647,38 @@ impl Emitter {
             );
         }
 
-        debug_span!(
-            "kafka.send",
-            topic = %topic,
-            payload_size = payload.len(),
-            event_id = %event_id
-        )
-        .in_scope(|| {
-            let key = event.key();
-            let record = BaseRecord::to(&topic)
-                .key(&key)
-                .payload(&payload)
-                .headers(headers);
+        let key = event.key();
+        let record = FutureRecord::to(&topic)
+            .key(&key)
+            .payload(&payload)
+            .headers(headers);
 
-            let result = self
-                .producer
-                .send(record)
-                .map_err(|(e, _)| anyhow::anyhow!(e));
+        let result = self
+            .producer
+            .send(record, Duration::from_secs(5))
+            .await
+            .map(|_| ())
+            .map_err(|(e, _)| anyhow::anyhow!(e));
 
-            if let Err(ref err) = result {
-                error!(
-                    event = "hermes_pipeline.event_error",
-                    stage = "kafka.send",
-                    topic = %topic,
-                    event_id = %event_id,
-                    error = %err,
-                    "Kafka send failed"
-                );
-            }
+        if let Err(ref err) = result {
+            error!(
+                event = "hermes_pipeline.event_error",
+                stage = "kafka.send",
+                topic = %topic,
+                event_id = %event_id,
+                error = %err,
+                "Kafka send failed"
+            );
+        }
 
-            result
-        })
+        result
     }
 
     /// Emit a batch of events.
-    pub fn emit_batch<T: KafkaEvent + Message + HasMeta>(&self, events: &[T]) -> Result<u64> {
+    pub async fn emit_batch<T: KafkaEvent + Message + HasMeta>(&self, events: &[T]) -> Result<u64> {
         let mut count = 0;
         for event in events {
-            self.emit(event)?;
+            self.emit(event).await?;
             count += 1;
         }
         Ok(count)

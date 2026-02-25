@@ -94,13 +94,17 @@ impl ProducerConfig {
 /// - SASL/SSL authentication if credentials are provided
 pub fn create_producer_with_config(
     config: &ProducerConfig,
-) -> Result<rdkafka::producer::BaseProducer> {
+) -> Result<rdkafka::producer::FutureProducer> {
     let mut client_config = ClientConfig::new();
 
     client_config
         .set("bootstrap.servers", &config.broker)
         .set("client.id", &config.client_id)
         .set("compression.type", "zstd")
+        .set("acks", "all")
+        .set("enable.idempotence", "true")
+        .set("max.in.flight.requests.per.connection", "1")
+        .set("retries", "1000000")
         .set("message.timeout.ms", "5000")
         .set("message.max.bytes", "20971520") // 20MB to match broker config
         .set("queue.buffering.max.messages", "100000")
@@ -140,7 +144,7 @@ pub fn create_producer_with_config(
 ///
 /// * `broker` - Kafka broker address
 /// * `client_id` - Client ID for this producer
-pub fn create_producer(broker: &str, client_id: &str) -> Result<rdkafka::producer::BaseProducer> {
+pub fn create_producer(broker: &str, client_id: &str) -> Result<rdkafka::producer::FutureProducer> {
     let config = ProducerConfig {
         broker: broker.to_string(),
         client_id: client_id.to_string(),
@@ -154,7 +158,7 @@ pub fn create_producer(broker: &str, client_id: &str) -> Result<rdkafka::produce
 
 // Re-export commonly used rdkafka types for convenience
 pub use rdkafka::message::{Header, OwnedHeaders};
-pub use rdkafka::producer::{BaseProducer, BaseRecord, Producer};
+pub use rdkafka::producer::{FutureProducer, FutureRecord, Producer};
 
 // =============================================================================
 // Topic Prefix (Environment Isolation)
