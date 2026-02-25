@@ -102,7 +102,7 @@ pub fn create_producer_with_config(
         .set("client.id", &config.client_id)
         .set("compression.type", "zstd")
         .set("message.timeout.ms", "5000")
-        .set("message.max.bytes", "10485760") // 10MB to match broker config
+        .set("message.max.bytes", "20971520") // 20MB to match broker config
         .set("queue.buffering.max.messages", "100000")
         .set("queue.buffering.max.kbytes", "1048576")
         .set("batch.num.messages", "10000");
