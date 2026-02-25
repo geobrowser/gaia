@@ -143,16 +143,23 @@ impl SpaceTopicsConsumer {
                     match ack_msg {
                         Some(StreamMessage::Acknowledgment { offsets, success, error }) => {
                             if success {
+                                let max_offset = offsets.iter().map(|(_, _, o)| *o).max().unwrap_or(0);
                                 if let Err(e) = self.commit_offsets(&offsets).await {
-                                    error!(error = %e, "Failed to commit space topics offsets");
+                                    error!(error = %e, offset_count = offsets.len(), max_offset, "Failed to commit space topics offsets after ACK");
                                 } else {
-                                    debug!(offset_count = offsets.len(), "Committed space topics offsets");
+                                    debug!(
+                                        offset_count = offsets.len(),
+                                        max_offset,
+                                        "ACK: committed space topics offsets"
+                                    );
                                 }
                             } else {
+                                let max_offset = offsets.iter().map(|(_, _, o)| *o).max().unwrap_or(0);
                                 error!(
                                     offset_count = offsets.len(),
+                                    max_offset,
                                     error = error.as_deref().unwrap_or("Unknown error"),
-                                    "Not committing space topics offsets due to processing failure"
+                                    "NACK: not committing space topics offsets due to processing failure"
                                 );
                             }
                         }

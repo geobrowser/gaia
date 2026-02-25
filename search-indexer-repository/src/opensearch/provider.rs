@@ -8,7 +8,6 @@ use std::collections::HashMap;
 use async_trait::async_trait;
 use opensearch::{
     http::transport::{SingleNodeConnectionPool, TransportBuilder},
-    params::Conflicts,
     BulkOperation, DeleteParts, OpenSearch, SearchParts, UpdateByQueryParts, UpdateParts,
 };
 use serde_json::{json, Value};
@@ -51,7 +50,7 @@ macro_rules! flush_pending_bulk {
                 batch_ops,
                 &batch_metas,
                 BulkAction::Update,
-                true, // refresh so followingupdate_by_query sees latest data
+                true, // refresh so update_by_query sees latest data
             )
             .await?;
             $total_succeeded += summary.succeeded;
@@ -72,6 +71,14 @@ macro_rules! flush_pending_bulk {
                 .map_err(|e| SearchIndexError::update(e.to_string()))?;
         }
     };
+}
+
+/// Outcome of an `update_by_query` call with retry.
+enum UpdateByQueryOutcome {
+    /// The query succeeded. Contains response stats.
+    Success { updated: u64, total: u64, conflicts: u64 },
+    /// The query failed after all retries. Contains the error body.
+    Failed(String),
 }
 
 /// OpenSearch provider implementation.
@@ -128,9 +135,87 @@ impl OpenSearchProvider {
         })
     }
 
+    /// Maximum number of retries on HTTP 409 version conflict.
+    const MAX_RETRIES: u32 = 3;
+    /// Base delay in milliseconds between retries (multiplied by attempt number).
+    const RETRY_DELAY_MS: u64 = 50;
+
     /// Generate document ID as `{entity_id}_{space_id}`.
     fn document_id(entity_id: &Uuid, space_id: &Uuid) -> String {
         format!("{}_{}", entity_id, space_id)
+    }
+
+    /// Execute an `update_by_query` with retry on HTTP 409 version conflicts.
+    ///
+    /// Returns `UpdateByQueryOutcome::Success` on success with response stats,
+    /// or `UpdateByQueryOutcome::Failed` on non-retryable failure with the error body.
+    /// The `operation_name` is used in log messages for diagnostics.
+    async fn update_by_query_with_retry(
+        &self,
+        body: Value,
+        operation_name: &str,
+    ) -> Result<UpdateByQueryOutcome, SearchIndexError> {
+        let mut attempt = 0u32;
+
+        loop {
+            let response = self
+                .client
+                .update_by_query(UpdateByQueryParts::Index(&[&self.index_config.alias]))
+                .body(body.clone())
+                .send()
+                .await
+                .map_err(|e| SearchIndexError::update(e.to_string()))?;
+
+            let status = response.status_code();
+            if status.is_success() {
+                let response_body: Value = response.json().await.unwrap_or_default();
+                let updated = response_body
+                    .get("updated")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                let total = response_body
+                    .get("total")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+                let conflicts = response_body
+                    .get("version_conflicts")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
+
+                debug!(
+                    operation = operation_name,
+                    attempt = attempt,
+                    updated = updated,
+                    total = total,
+                    version_conflicts = conflicts,
+                    "update_by_query completed"
+                );
+
+                return Ok(UpdateByQueryOutcome::Success { updated, total, conflicts });
+            } else if status.as_u16() == 409 && attempt < Self::MAX_RETRIES {
+                attempt += 1;
+                warn!(
+                    operation = operation_name,
+                    attempt = attempt,
+                    "Version conflict on update_by_query, retrying"
+                );
+                tokio::time::sleep(std::time::Duration::from_millis(
+                    Self::RETRY_DELAY_MS * attempt as u64,
+                ))
+                .await;
+                continue;
+            } else {
+                let error_body = response.text().await.unwrap_or_default();
+                error!(
+                    operation = operation_name,
+                    status = %status,
+                    body = %error_body,
+                    attempt = attempt,
+                    "update_by_query failed"
+                );
+                return Ok(UpdateByQueryOutcome::Failed(error_body));
+            }
+        }
     }
 
     /// Build a document map from an UpdateEntityRequest with only the provided fields.
@@ -569,7 +654,6 @@ impl SearchIndexProvider for OpenSearchProvider {
                         all_results
                     );
 
-                    // Now execute the update_by_query
                     let relation_uuid =
                         uuid::Uuid::parse_str(&request.relation_id).map_err(|_| {
                             SearchIndexError::validation(format!(
@@ -578,75 +662,36 @@ impl SearchIndexProvider for OpenSearchProvider {
                             ))
                         })?;
 
-                    // Retry on version conflict (HTTP 409). This handles the
-                    // NRT reader race where a preceding bulk write's refresh
-                    // hasn't fully propagated to update_by_query's snapshot.
-                    const MAX_RETRIES: u32 = 3;
-                    const RETRY_DELAY_MS: u64 = 50;
-                    let mut attempt = 0u32;
-
-                    loop {
-                        let response = self
-                            .client
-                            .update_by_query(UpdateByQueryParts::Index(&[&self.index_config.alias]))
-                            .body(json!({
+                    let body = json!({
+                        "query": {
+                            "nested": {
+                                "path": "relations",
                                 "query": {
-                                    "nested": {
-                                        "path": "relations",
-                                        "query": {
-                                            "term": {
-                                                "relations.relation_id": relation_uuid.to_string()
-                                            }
-                                        }
-                                    }
-                                },
-                                "script": {
-                                    "source": REMOVE_RELATION_SCRIPT,
-                                    "lang": "painless",
-                                    "params": {
-                                        "relation_id": relation_uuid.to_string()
+                                    "term": {
+                                        "relations.relation_id": relation_uuid.to_string()
                                     }
                                 }
-                            }))
-                            .send()
-                            .await
-                            .map_err(|e| SearchIndexError::update(e.to_string()))?;
+                            }
+                        },
+                        "script": {
+                            "source": REMOVE_RELATION_SCRIPT,
+                            "lang": "painless",
+                            "params": {
+                                "relation_id": relation_uuid.to_string()
+                            }
+                        }
+                    });
 
-                        let status = response.status_code();
-                        if status.is_success() {
-                            let response_body: Value = response.json().await.unwrap_or_default();
-                            let updated = response_body
-                                .get("updated")
-                                .and_then(|v| v.as_u64())
-                                .unwrap_or(0);
-                            let total = response_body
-                                .get("total")
-                                .and_then(|v| v.as_u64())
-                                .unwrap_or(0);
-                            let conflicts = response_body
-                                .get("version_conflicts")
-                                .and_then(|v| v.as_u64())
-                                .unwrap_or(0);
-
-                            debug!(
-                                relation_id = %relation_uuid,
-                                attempt = attempt,
-                                updated = updated,
-                                total = total,
-                                version_conflicts = conflicts,
-                                "RemoveRelationById update_by_query completed"
-                            );
-
+                    match self.update_by_query_with_retry(body, "RemoveRelationById").await? {
+                        UpdateByQueryOutcome::Success { updated, total, conflicts } => {
                             if updated == 0 {
                                 warn!(
                                     relation_id = %relation_uuid,
-                                    attempt = attempt,
                                     total = total,
                                     version_conflicts = conflicts,
                                     "RemoveRelationById matched 0 documents"
                                 );
                             }
-
                             total_succeeded += 1;
                             all_results.push(BatchOperationResult {
                                 entity_id: String::new(),
@@ -655,27 +700,8 @@ impl SearchIndexProvider for OpenSearchProvider {
                                 success: true,
                                 error: None,
                             });
-                            break;
-                        } else if status.as_u16() == 409 && attempt < MAX_RETRIES {
-                            attempt += 1;
-                            warn!(
-                                relation_id = %relation_uuid,
-                                attempt = attempt,
-                                "Version conflict on RemoveRelationById, retrying"
-                            );
-                            tokio::time::sleep(std::time::Duration::from_millis(
-                                RETRY_DELAY_MS * attempt as u64,
-                            ))
-                            .await;
-                            continue;
-                        } else {
-                            let error_body = response.text().await.unwrap_or_default();
-                            error!(
-                                status = %status,
-                                body = %error_body,
-                                attempt = attempt,
-                                "Remove relation by ID failed"
-                            );
+                        }
+                        UpdateByQueryOutcome::Failed(error_body) => {
                             total_failed += 1;
                             all_results.push(BatchOperationResult {
                                 entity_id: String::new(),
@@ -687,7 +713,6 @@ impl SearchIndexProvider for OpenSearchProvider {
                                     error_body
                                 ))),
                             });
-                            break;
                         }
                     }
                 }
@@ -888,58 +913,45 @@ impl SearchIndexProvider for OpenSearchProvider {
                         ))
                     })?;
 
-                    // Update all documents with this entity_id
-                    let response = self
-                        .client
-                        .update_by_query(UpdateByQueryParts::Index(&[&self.index_config.alias]))
-                        .conflicts(Conflicts::Proceed)
-                        .body(json!({
-                            "query": {
-                                "term": {
-                                    "entity_id": entity_uuid.to_string()
-                                }
-                            },
-                            "script": {
-                                "source": "ctx._source.entity_global_score = params.score",
-                                "lang": "painless",
-                                "params": {
-                                    "score": request.score
-                                }
+                    let body = json!({
+                        "query": {
+                            "term": {
+                                "entity_id": entity_uuid.to_string()
                             }
-                        }))
-                        .send()
-                        .await
-                        .map_err(|e| SearchIndexError::update(e.to_string()))?;
+                        },
+                        "script": {
+                            "source": "ctx._source.entity_global_score = params.score",
+                            "lang": "painless",
+                            "params": {
+                                "score": request.score
+                            }
+                        }
+                    });
 
-                    let status = response.status_code();
-                    if status.is_success() {
-                        total_succeeded += 1;
-                        all_results.push(BatchOperationResult {
-                            entity_id: request.entity_id.clone(),
-                            space_id: String::new(),
-                            operation_type: "UpdateEntityGlobalScore".to_string(),
-                            success: true,
-                            error: None,
-                        });
-                        debug!(
-                            entity_id = %entity_uuid,
-                            score = request.score,
-                            "Updated entity global score"
-                        );
-                    } else {
-                        let error_body = response.text().await.unwrap_or_default();
-                        error!(status = %status, body = %error_body, "Update entity global score failed");
-                        total_failed += 1;
-                        all_results.push(BatchOperationResult {
-                            entity_id: request.entity_id.clone(),
-                            space_id: String::new(),
-                            operation_type: "UpdateEntityGlobalScore".to_string(),
-                            success: false,
-                            error: Some(SearchIndexError::update(format!(
-                                "Update entity global score failed: {}",
-                                error_body
-                            ))),
-                        });
+                    match self.update_by_query_with_retry(body, "UpdateEntityGlobalScore").await? {
+                        UpdateByQueryOutcome::Success { .. } => {
+                            total_succeeded += 1;
+                            all_results.push(BatchOperationResult {
+                                entity_id: request.entity_id.clone(),
+                                space_id: String::new(),
+                                operation_type: "UpdateEntityGlobalScore".to_string(),
+                                success: true,
+                                error: None,
+                            });
+                        }
+                        UpdateByQueryOutcome::Failed(error_body) => {
+                            total_failed += 1;
+                            all_results.push(BatchOperationResult {
+                                entity_id: request.entity_id.clone(),
+                                space_id: String::new(),
+                                operation_type: "UpdateEntityGlobalScore".to_string(),
+                                success: false,
+                                error: Some(SearchIndexError::update(format!(
+                                    "Update entity global score failed: {}",
+                                    error_body
+                                ))),
+                            });
+                        }
                     }
                 }
                 EntityOperation::UpdateSpaceScore(request) => {
@@ -960,58 +972,45 @@ impl SearchIndexProvider for OpenSearchProvider {
                         ))
                     })?;
 
-                    // Update all documents in this space
-                    let response = self
-                        .client
-                        .update_by_query(UpdateByQueryParts::Index(&[&self.index_config.alias]))
-                        .conflicts(Conflicts::Proceed)
-                        .body(json!({
-                            "query": {
-                                "term": {
-                                    "space_id": space_uuid.to_string()
-                                }
-                            },
-                            "script": {
-                                "source": "ctx._source.space_score = params.score",
-                                "lang": "painless",
-                                "params": {
-                                    "score": request.score
-                                }
+                    let body = json!({
+                        "query": {
+                            "term": {
+                                "space_id": space_uuid.to_string()
                             }
-                        }))
-                        .send()
-                        .await
-                        .map_err(|e| SearchIndexError::update(e.to_string()))?;
+                        },
+                        "script": {
+                            "source": "ctx._source.space_score = params.score",
+                            "lang": "painless",
+                            "params": {
+                                "score": request.score
+                            }
+                        }
+                    });
 
-                    let status = response.status_code();
-                    if status.is_success() {
-                        total_succeeded += 1;
-                        all_results.push(BatchOperationResult {
-                            entity_id: String::new(),
-                            space_id: request.space_id.clone(),
-                            operation_type: "UpdateSpaceScore".to_string(),
-                            success: true,
-                            error: None,
-                        });
-                        debug!(
-                            space_id = %space_uuid,
-                            score = request.score,
-                            "Updated space score"
-                        );
-                    } else {
-                        let error_body = response.text().await.unwrap_or_default();
-                        error!(status = %status, body = %error_body, "Update space score failed");
-                        total_failed += 1;
-                        all_results.push(BatchOperationResult {
-                            entity_id: String::new(),
-                            space_id: request.space_id.clone(),
-                            operation_type: "UpdateSpaceScore".to_string(),
-                            success: false,
-                            error: Some(SearchIndexError::update(format!(
-                                "Update space score failed: {}",
-                                error_body
-                            ))),
-                        });
+                    match self.update_by_query_with_retry(body, "UpdateSpaceScore").await? {
+                        UpdateByQueryOutcome::Success { .. } => {
+                            total_succeeded += 1;
+                            all_results.push(BatchOperationResult {
+                                entity_id: String::new(),
+                                space_id: request.space_id.clone(),
+                                operation_type: "UpdateSpaceScore".to_string(),
+                                success: true,
+                                error: None,
+                            });
+                        }
+                        UpdateByQueryOutcome::Failed(error_body) => {
+                            total_failed += 1;
+                            all_results.push(BatchOperationResult {
+                                entity_id: String::new(),
+                                space_id: request.space_id.clone(),
+                                operation_type: "UpdateSpaceScore".to_string(),
+                                success: false,
+                                error: Some(SearchIndexError::update(format!(
+                                    "Update space score failed: {}",
+                                    error_body
+                                ))),
+                            });
+                        }
                     }
                 }
                 EntityOperation::UpdateEntitySpaceScore(request) => {
@@ -1061,39 +1060,23 @@ impl SearchIndexProvider for OpenSearchProvider {
                             ))
                         })?;
 
-                    // Retry on version conflict (HTTP 409). Without retries a
-                    // conflict would silently skip documents, leaving them with
-                    // a stale space_topic_entity_id permanently.
-                    const MAX_RETRIES: u32 = 3;
-                    const RETRY_DELAY_MS: u64 = 50;
-                    let mut attempt = 0u32;
+                    let body = json!({
+                        "query": {
+                            "term": {
+                                "space_id": space_uuid.to_string()
+                            }
+                        },
+                        "script": {
+                            "source": "ctx._source.space_topic_entity_id = params.topic_entity_id",
+                            "lang": "painless",
+                            "params": {
+                                "topic_entity_id": topic_entity_uuid.to_string()
+                            }
+                        }
+                    });
 
-                    loop {
-                        let response = self
-                            .client
-                            .update_by_query(UpdateByQueryParts::Index(&[
-                                &self.index_config.alias,
-                            ]))
-                            .body(json!({
-                                "query": {
-                                    "term": {
-                                        "space_id": space_uuid.to_string()
-                                    }
-                                },
-                                "script": {
-                                    "source": "ctx._source.space_topic_entity_id = params.topic_entity_id",
-                                    "lang": "painless",
-                                    "params": {
-                                        "topic_entity_id": topic_entity_uuid.to_string()
-                                    }
-                                }
-                            }))
-                            .send()
-                            .await
-                            .map_err(|e| SearchIndexError::update(e.to_string()))?;
-
-                        let status = response.status_code();
-                        if status.is_success() {
+                    match self.update_by_query_with_retry(body, "UpdateSpaceTopicEntityId").await? {
+                        UpdateByQueryOutcome::Success { .. } => {
                             total_succeeded += 1;
                             all_results.push(BatchOperationResult {
                                 entity_id: String::new(),
@@ -1102,33 +1085,8 @@ impl SearchIndexProvider for OpenSearchProvider {
                                 success: true,
                                 error: None,
                             });
-                            debug!(
-                                space_id = %space_uuid,
-                                topic_entity_id = %topic_entity_uuid,
-                                attempt = attempt,
-                                "Updated space topic entity ID"
-                            );
-                            break;
-                        } else if status.as_u16() == 409 && attempt < MAX_RETRIES {
-                            attempt += 1;
-                            warn!(
-                                space_id = %space_uuid,
-                                attempt = attempt,
-                                "Version conflict on UpdateSpaceTopicEntityId, retrying"
-                            );
-                            tokio::time::sleep(std::time::Duration::from_millis(
-                                RETRY_DELAY_MS * attempt as u64,
-                            ))
-                            .await;
-                            continue;
-                        } else {
-                            let error_body = response.text().await.unwrap_or_default();
-                            error!(
-                                status = %status,
-                                body = %error_body,
-                                attempt = attempt,
-                                "Update space topic entity ID failed"
-                            );
+                        }
+                        UpdateByQueryOutcome::Failed(error_body) => {
                             total_failed += 1;
                             all_results.push(BatchOperationResult {
                                 entity_id: String::new(),
@@ -1140,7 +1098,6 @@ impl SearchIndexProvider for OpenSearchProvider {
                                     error_body
                                 ))),
                             });
-                            break;
                         }
                     }
                 }

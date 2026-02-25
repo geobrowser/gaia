@@ -53,7 +53,7 @@ spec:
         - name: INDEX_ALIAS
           value: "entities"
         - name: INDEX_VERSION
-          value: "3"  # CHANGE THIS: Set to the new index version
+          value: "4"  # CHANGE THIS: Set to the new index version
         - name: RUST_LOG
           value: "info"
         command:
