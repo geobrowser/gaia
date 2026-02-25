@@ -147,7 +147,8 @@ impl OpenSearchProvider {
 
     /// Execute an `update_by_query` with retry on HTTP 409 version conflicts.
     ///
-    /// Returns `Ok(true)` on success, `Ok(false)` on non-retryable failure.
+    /// Returns `UpdateByQueryOutcome::Success` on success with response stats,
+    /// or `UpdateByQueryOutcome::Failed` on non-retryable failure with the error body.
     /// The `operation_name` is used in log messages for diagnostics.
     async fn update_by_query_with_retry(
         &self,

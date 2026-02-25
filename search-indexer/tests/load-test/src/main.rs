@@ -189,7 +189,7 @@ async fn main() -> Result<()> {
 
         // Final refresh to ensure all updates are searchable in OpenSearch
         let refresh_url = format!("{}/{}/_refresh", config.opensearch_url, config.resolved_index());
-        http_client.post(&refresh_url).send().await?;
+        http_client.post(&refresh_url).send().await?.error_for_status()?;
         println!();
 
         // =====================================================================
@@ -298,7 +298,7 @@ async fn main() -> Result<()> {
         let http_client = reqwest::Client::new();
 
         let refresh_url = format!("{}/{}/_refresh", config.opensearch_url, config.resolved_index());
-        http_client.post(&refresh_url).send().await?;
+        http_client.post(&refresh_url).send().await?.error_for_status()?;
 
         let report =
             validator::validate(&http_client, &config, &scenario.expected_state).await?;

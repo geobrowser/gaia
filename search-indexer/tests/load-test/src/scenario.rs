@@ -1346,7 +1346,7 @@ pub fn generate(config: &LoadTestConfig) -> Result<GeneratedScenario> {
 
         // Enriched fillers use a topic'd space; others get a random space
         let space_id = if enriched {
-            filler_space_ids[i % num_filler_spaces]
+            filler_space_ids[(i / 5) % num_filler_spaces]
         } else {
             rand_uuid(&mut rng)
         };

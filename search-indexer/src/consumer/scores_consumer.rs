@@ -145,7 +145,7 @@ impl ScoresConsumer {
                             if success {
                                 let max_offset = offsets.iter().map(|(_, _, o)| *o).max().unwrap_or(0);
                                 if let Err(e) = self.commit_offsets(&offsets).await {
-                                    error!(error = %e, "Failed to commit scores offsets after ACK");
+                                    error!(error = %e, offset_count = offsets.len(), max_offset, "Failed to commit scores offsets after ACK");
                                 } else {
                                     debug!(
                                         offset_count = offsets.len(),

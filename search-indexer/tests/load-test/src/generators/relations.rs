@@ -25,46 +25,14 @@ pub fn create_type_relation_with_id(
     entity_id: Uuid,
     type_entity_id: Uuid,
 ) -> Result<Vec<u8>> {
-    let relation = CreateRelation {
-        id: *relation_id.as_bytes(),
-        entity: Some(*entity_id.as_bytes()),
-        relation_type: *Uuid::parse_str(TYPE_RELATION_TYPE_ID)?.as_bytes(),
-        from: *entity_id.as_bytes(),
-        from_is_value_ref: false,
-        from_space: None,
-        from_version: None,
-        to: *type_entity_id.as_bytes(),
-        to_is_value_ref: false,
-        to_space: None,
-        to_version: None,
-        position: None,
-        context: None,
-    };
-
-    let grc20_edit = Grc20Edit {
-        id: *Uuid::new_v4().as_bytes(),
-        name: edit_name.into(),
-        authors: vec![*Uuid::new_v4().as_bytes()],
-        created_at: 0,
-        ops: vec![Grc20Op::CreateRelation(relation)],
-    };
-
-    let payload = encode_edit(&grc20_edit)?;
-
-    let edit = HermesEdit {
-        id: grc20_edit.id.to_vec(),
-        name: edit_name.to_string(),
-        payload,
-        authors: vec![Uuid::new_v4().as_bytes().to_vec()],
-        language: None,
-        space_id: space_id.as_bytes().to_vec(),
-        is_canonical: true,
-        meta: None,
-    };
-
-    let mut buf = Vec::new();
-    edit.encode(&mut buf)?;
-    Ok(buf)
+    create_custom_relation(
+        edit_name,
+        space_id,
+        relation_id,
+        Uuid::parse_str(TYPE_RELATION_TYPE_ID)?,
+        entity_id,
+        type_entity_id,
+    )
 }
 
 /// Generate a CreateRelation operation for a custom relation type

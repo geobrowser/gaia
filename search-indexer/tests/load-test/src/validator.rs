@@ -123,7 +123,7 @@ pub async fn wait_for_processing(
 
     // Refresh index before validation
     let refresh_url = format!("{}/{}/_refresh", config.opensearch_url, config.resolved_index());
-    client.post(&refresh_url).send().await?;
+    client.post(&refresh_url).send().await?.error_for_status()?;
 
     Ok(ProcessingStats { duration, samples })
 }
@@ -541,6 +541,9 @@ impl ValidationReport {
     }
 
     pub fn is_pass(&self) -> bool {
+        // extra_docs is intentionally excluded: interleaved scores may create
+        // docs (via doc_as_upsert) not tracked in expected state, and deleted
+        // entities remain in the index.
         self.failed == 0 && self.missing == 0
     }
 }
