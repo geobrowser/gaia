@@ -4,12 +4,12 @@
 //! for any type that implements `KafkaEvent + prost::Message`.
 
 use anyhow::Result;
-use hermes_instrumentation::{Span, error, info};
+use hermes_instrumentation::{Span, debug, error, info};
 use opentelemetry::global;
 use opentelemetry::propagation::Injector;
 use prost::Message;
 use std::sync::OnceLock;
-use std::time::Duration;
+use std::time::Instant;
 use tracing_opentelemetry::OpenTelemetrySpanExt;
 
 use hermes_kafka::{FutureProducer, FutureRecord, Header, OwnedHeaders, Producer};
@@ -593,19 +593,8 @@ fn log_event_ids_enabled() -> bool {
     })
 }
 
-fn kafka_send_timeout() -> Duration {
-    static TIMEOUT: OnceLock<Duration> = OnceLock::new();
-    *TIMEOUT.get_or_init(|| {
-        let timeout_ms = std::env::var("KAFKA_SEND_TIMEOUT_MS")
-            .ok()
-            .and_then(|v| v.parse::<u64>().ok())
-            .unwrap_or(30_000);
-        Duration::from_millis(timeout_ms)
-    })
-}
-
 // Re-export topic utilities from hermes-kafka
-use hermes_kafka::{get_topic_prefix, prefixed_topic};
+use hermes_kafka::{get_topic_prefix, kafka_send_timeout, prefixed_topic};
 
 // =============================================================================
 // Emitter
@@ -664,25 +653,39 @@ impl Emitter {
             .payload(&payload)
             .headers(headers);
 
+        let send_start = Instant::now();
         let result = self
             .producer
             .send(record, kafka_send_timeout())
-            .await
-            .map(|_| ())
-            .map_err(|(e, _)| anyhow::anyhow!(e));
+            .await;
 
-        if let Err(ref err) = result {
-            error!(
-                event = "hermes_pipeline.event_error",
-                stage = "kafka.send",
-                topic = %topic,
-                event_id = %event_id,
-                error = %err,
-                "Kafka send failed"
-            );
+        match result {
+            Ok((partition, offset)) => {
+                debug!(
+                    event = "hermes_pipeline.event_delivered",
+                    stage = "kafka.send",
+                    topic = %topic,
+                    event_id = %event_id,
+                    payload_size = payload.len(),
+                    partition = partition,
+                    offset = offset,
+                    duration_ms = send_start.elapsed().as_millis(),
+                    "Kafka send delivered"
+                );
+                Ok(())
+            }
+            Err((err, _)) => {
+                error!(
+                    event = "hermes_pipeline.event_error",
+                    stage = "kafka.send",
+                    topic = %topic,
+                    event_id = %event_id,
+                    error = %err,
+                    "Kafka send failed"
+                );
+                Err(anyhow::anyhow!(err))
+            }
         }
-
-        result
     }
 
     /// Emit a batch of events.

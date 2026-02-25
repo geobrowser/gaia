@@ -23,9 +23,27 @@
 //! ```
 
 use std::env;
+use std::time::Duration;
 
 use anyhow::Result;
 use rdkafka::config::ClientConfig;
+
+pub const DEFAULT_KAFKA_TIMEOUT_MS: u64 = 30_000;
+
+pub fn kafka_message_timeout_ms() -> u64 {
+    env::var("KAFKA_MESSAGE_TIMEOUT_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or(DEFAULT_KAFKA_TIMEOUT_MS)
+}
+
+pub fn kafka_send_timeout() -> Duration {
+    let timeout_ms = env::var("KAFKA_SEND_TIMEOUT_MS")
+        .ok()
+        .and_then(|v| v.parse::<u64>().ok())
+        .unwrap_or_else(kafka_message_timeout_ms);
+    Duration::from_millis(timeout_ms)
+}
 
 /// Configuration for creating a Kafka producer.
 #[derive(Debug, Clone)]
@@ -96,10 +114,7 @@ pub fn create_producer_with_config(
     config: &ProducerConfig,
 ) -> Result<rdkafka::producer::FutureProducer> {
     let mut client_config = ClientConfig::new();
-    let message_timeout_ms = env::var("KAFKA_MESSAGE_TIMEOUT_MS")
-        .ok()
-        .and_then(|v| v.parse::<u64>().ok())
-        .unwrap_or(30_000);
+    let message_timeout_ms = kafka_message_timeout_ms();
 
     client_config
         .set("bootstrap.servers", &config.broker)
