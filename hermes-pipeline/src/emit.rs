@@ -654,10 +654,7 @@ impl Emitter {
             .headers(headers);
 
         let send_start = Instant::now();
-        let result = self
-            .producer
-            .send(record, kafka_send_timeout())
-            .await;
+        let result = self.producer.send(record, kafka_send_timeout()).await;
 
         match result {
             Ok((partition, offset)) => {
