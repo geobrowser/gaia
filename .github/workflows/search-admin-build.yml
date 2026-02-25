@@ -10,6 +10,7 @@ on:
       - 'search-indexer-repository/**'
       - 'search-indexer-shared/**'
       - '.github/workflows/search-admin-build.yml'
+  workflow_dispatch:
 
 env:
   REGISTRY: registry.digitalocean.com/geo
@@ -33,10 +34,15 @@ jobs:
       - name: Determine image tag
         id: tag
         run: |
-          if [ "${{ github.ref_name }}" = "main" ]; then
+          BRANCH="${{ github.ref_name }}"
+          if [ "$BRANCH" = "main" ]; then
             echo "env_tag=latest" >> "$GITHUB_OUTPUT"
-          else
+          elif [ "$BRANCH" = "dev" ]; then
             echo "env_tag=staging" >> "$GITHUB_OUTPUT"
+          else
+            # Sanitize branch name for Docker tag (replace / with -)
+            SAFE_TAG=$(echo "$BRANCH" | sed 's|/|-|g')
+            echo "env_tag=$SAFE_TAG" >> "$GITHUB_OUTPUT"
           fi
 
       - name: Build and push Docker image
