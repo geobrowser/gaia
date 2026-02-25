@@ -1,8 +1,10 @@
+use std::collections::HashMap;
+use std::time::{Duration, Instant};
+
 use anyhow::{Context, Result};
 use indicatif::{ProgressBar, ProgressStyle};
 use rdkafka::config::ClientConfig;
 use rdkafka::producer::{FutureProducer, FutureRecord, Producer};
-use std::time::{Duration, Instant};
 use tracing::warn;
 
 /// A Kafka event ready to send.
@@ -17,6 +19,8 @@ pub struct SendStats {
     pub total: usize,
     pub errors: usize,
     pub duration: Duration,
+    /// Max produced offset per (topic, partition).
+    pub max_offsets: HashMap<(String, i32), i64>,
 }
 
 /// High-throughput Kafka sender optimized for load testing.
@@ -56,6 +60,7 @@ impl LoadTestSender {
         );
 
         let mut errors = 0usize;
+        let mut max_offsets: HashMap<(String, i32), i64> = HashMap::new();
         let chunk_size = 5_000;
 
         for chunk in events.chunks(chunk_size) {
@@ -68,7 +73,7 @@ impl LoadTestSender {
                 }
 
                 match self.producer.send_result(record) {
-                    Ok(future) => futures.push(future),
+                    Ok(future) => futures.push((event.topic.clone(), future)),
                     Err((err, _)) => {
                         errors += 1;
                         if errors <= 10 {
@@ -79,9 +84,16 @@ impl LoadTestSender {
             }
 
             // Await all futures in this chunk
-            for future in futures {
+            for (topic, future) in futures {
                 match future.await {
-                    Ok(Ok(_)) => {}
+                    Ok(Ok((partition, offset))) => {
+                        let entry = max_offsets
+                            .entry((topic, partition))
+                            .or_insert(offset);
+                        if offset > *entry {
+                            *entry = offset;
+                        }
+                    }
                     Ok(Err((err, _))) => {
                         errors += 1;
                         if errors <= 10 {
@@ -108,6 +120,7 @@ impl LoadTestSender {
             total,
             errors,
             duration: start.elapsed(),
+            max_offsets,
         })
     }
 }

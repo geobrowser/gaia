@@ -143,16 +143,23 @@ impl ScoresConsumer {
                     match ack_msg {
                         Some(StreamMessage::Acknowledgment { offsets, success, error }) => {
                             if success {
+                                let max_offset = offsets.iter().map(|(_, _, o)| *o).max().unwrap_or(0);
                                 if let Err(e) = self.commit_offsets(&offsets).await {
-                                    error!(error = %e, "Failed to commit scores offsets");
+                                    error!(error = %e, "Failed to commit scores offsets after ACK");
                                 } else {
-                                    debug!(offset_count = offsets.len(), "Committed scores offsets");
+                                    debug!(
+                                        offset_count = offsets.len(),
+                                        max_offset,
+                                        "ACK: committed scores offsets"
+                                    );
                                 }
                             } else {
+                                let max_offset = offsets.iter().map(|(_, _, o)| *o).max().unwrap_or(0);
                                 error!(
                                     offset_count = offsets.len(),
+                                    max_offset,
                                     error = error.as_deref().unwrap_or("Unknown error"),
-                                    "Not committing scores offsets due to processing failure"
+                                    "NACK: not committing scores offsets due to processing failure"
                                 );
                             }
                         }

@@ -3,6 +3,7 @@ mod config;
 mod expected_state;
 #[allow(dead_code)]
 mod generators;
+mod kafka_lag;
 mod scenario;
 mod sender;
 mod validator;
@@ -170,23 +171,25 @@ async fn main() -> Result<()> {
         println!();
 
         // =====================================================================
-        // Step 5: Wait for indexer to process late scores
+        // Step 5: Wait for indexer to consume all late scores
         // =====================================================================
-        println!("  [5/6] Waiting for indexer to process late scores...");
-        let late_wait_start = Instant::now();
-        // Late scores update existing docs (no new docs created) via update_by_query,
-        // which is slower than bulk ops. Wait proportionally to the number of events.
-        // Each score takes ~20-50ms (refresh + update_by_query), processed in batches of 10.
-        let late_wait_secs = ((late_count as f64 / 40.0).ceil() as u64).max(15);
-        println!("  Waiting up to {}s for {} late score events...", late_wait_secs, late_count);
-        tokio::time::sleep(std::time::Duration::from_secs(late_wait_secs)).await;
+        println!("  [5/6] Waiting for indexer to consume late scores...");
+        let scores_group_id = config.resolved_scores_group_id();
 
-        // Final refresh to ensure all updates are searchable
+        let late_score_timeout_secs = 300; // 5 minutes
+        let late_wait_duration = kafka_lag::wait_for_committed_past(
+            &config.broker,
+            &scores_group_id,
+            &late_send_stats.max_offsets,
+            late_score_timeout_secs,
+        )
+        .await?;
+
+        println!("  Late scores committed in {:.1}s", late_wait_duration.as_secs_f64());
+
+        // Final refresh to ensure all updates are searchable in OpenSearch
         let refresh_url = format!("{}/{}/_refresh", config.opensearch_url, config.resolved_index());
         http_client.post(&refresh_url).send().await?;
-
-        let late_wait_duration = late_wait_start.elapsed();
-        println!("  Waited {:.1}s for late score processing", late_wait_duration.as_secs_f64());
         println!();
 
         // =====================================================================

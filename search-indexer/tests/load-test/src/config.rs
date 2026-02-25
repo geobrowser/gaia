@@ -32,8 +32,13 @@ pub struct LoadTestConfig {
     pub index: String,
 
     /// Max wait seconds for indexer processing
-    #[arg(long, default_value = "120")]
+    #[arg(long, default_value = "300")]
     pub timeout: u64,
+
+    /// Kafka consumer group ID used by the indexer for scores.
+    /// The environment prefix (e.g. "staging-") is applied automatically.
+    #[arg(long, default_value = "search-indexer-group-scores")]
+    pub scores_group_id: String,
 
     /// Enable debug logging
     #[arg(short, long)]
@@ -51,6 +56,16 @@ impl LoadTestConfig {
         match std::env::var("ENVIRONMENT").as_deref() {
             Ok("staging") => format!("staging_{}", self.index),
             Ok("production") => self.index.clone(),
+            Ok(other) => panic!("Invalid ENVIRONMENT: {}", other),
+            Err(_) => panic!("ENVIRONMENT must be set"),
+        }
+    }
+
+    /// Get the resolved scores consumer group ID with environment prefix.
+    pub fn resolved_scores_group_id(&self) -> String {
+        match std::env::var("ENVIRONMENT").as_deref() {
+            Ok("staging") => format!("staging-{}", self.scores_group_id),
+            Ok("production") => self.scores_group_id.clone(),
             Ok(other) => panic!("Invalid ENVIRONMENT: {}", other),
             Err(_) => panic!("ENVIRONMENT must be set"),
         }

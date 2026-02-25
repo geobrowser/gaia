@@ -156,16 +156,23 @@ impl EntitiesConsumer {
                     match ack_msg {
                         Some(crate::consumer::messages::StreamMessage::Acknowledgment { offsets, success, error }) => {
                             if success {
+                                let max_offset = offsets.iter().map(|(_, _, o)| *o).max().unwrap_or(0);
                                 if let Err(e) = self.commit_offsets(&offsets).await {
-                                    error!(error = %e, "Failed to commit offsets after acknowledgment");
+                                    error!(error = %e, "Failed to commit edits offsets after ACK");
                                 } else {
-                                    debug!(offset_count = offsets.len(), "Committed offsets after successful processing");
+                                    debug!(
+                                        offset_count = offsets.len(),
+                                        max_offset,
+                                        "ACK: committed edits offsets"
+                                    );
                                 }
                             } else {
+                                let max_offset = offsets.iter().map(|(_, _, o)| *o).max().unwrap_or(0);
                                 error!(
                                     offset_count = offsets.len(),
+                                    max_offset,
                                     error = error.as_deref().unwrap_or("Unknown error"),
-                                    "Not committing offsets due to processing failure"
+                                    "NACK: not committing edits offsets due to processing failure"
                                 );
                             }
                         }

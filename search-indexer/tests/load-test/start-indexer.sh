@@ -12,7 +12,7 @@ set -e
 RUST_LOG="info"
 for arg in "$@"; do
     case "$arg" in
-        --debug) RUST_LOG="debug" ;;
+        --debug) RUST_LOG="info,search_indexer=debug,search_indexer_repository=debug" ;;
         *) echo "Unknown arg: $arg"; exit 1 ;;
     esac
 done

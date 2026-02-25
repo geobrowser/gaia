@@ -7,7 +7,7 @@ use opensearch::params::Refresh;
 use opensearch::{BulkOperation, BulkParts, OpenSearch};
 use serde::Serialize;
 use serde_json::Value;
-use tracing::{debug, error};
+use tracing::{debug, error, warn};
 
 use crate::errors::SearchIndexError;
 use crate::types::{BatchOperationResult, BatchOperationSummary};
@@ -111,13 +111,22 @@ pub async fn execute_bulk<B: Serialize>(
 
     let summary = parse_bulk_response(&response_body, metas, action);
 
-    debug!(
-        total = summary.total,
-        succeeded = summary.succeeded,
-        failed = summary.failed,
-        "Bulk {} completed",
-        action_str
-    );
+    if summary.failed > 0 {
+        warn!(
+            total = summary.total,
+            succeeded = summary.succeeded,
+            failed = summary.failed,
+            "Bulk {} completed with failures",
+            action_str
+        );
+    } else {
+        debug!(
+            total = summary.total,
+            succeeded = summary.succeeded,
+            "Bulk {} indexed successfully",
+            action_str
+        );
+    }
 
     Ok(summary)
 }

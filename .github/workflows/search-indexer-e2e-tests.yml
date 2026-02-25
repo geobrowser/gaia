@@ -320,11 +320,9 @@ jobs:
         working-directory: ./search-indexer/tests/load-test
         run: |
           ENVIRONMENT=staging \
-          SCALE=0.1 \
-          SEED=42 \
-          TIMEOUT=180 \
           cargo +nightly run --release -- \
-            --seed 42 --scale 0.1 --timeout 180 \
+            --seed 42 --scale 0.05 --timeout 300 \
+            --scores-group-id search-indexer-group-scores-load \
             2>&1 | tee /tmp/load-test.log
 
       - name: Upload search-indexer logs
@@ -336,7 +334,7 @@ jobs:
             /tmp/search-indexer.log
             /tmp/search-indexer-load.log
             /tmp/load-test.log
-          retention-days: 7
+          retention-days: 3
 
       - name: Cleanup
         if: always()

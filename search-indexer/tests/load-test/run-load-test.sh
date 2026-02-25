@@ -17,9 +17,13 @@ if ! curl -sf http://localhost:9200/_cluster/health > /dev/null 2>&1; then
     exit 1
 fi
 
-# Build and run
-cargo run --release -- \
+# Default scores group ID matches start-indexer.sh
+SCORES_GROUP="${SCORES_GROUP:-search-indexer-group-scores-local}"
+
+# Build and run (edition 2024 requires nightly)
+cargo +nightly run --release -- \
     --seed "${SEED:-42}" \
     --scale "${SCALE:-1.0}" \
-    --timeout "${TIMEOUT:-120}" \
+    --timeout "${TIMEOUT:-300}" \
+    --scores-group-id "$SCORES_GROUP" \
     "$@"
