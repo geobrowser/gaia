@@ -45,7 +45,7 @@ spec:
                   key: OPENSEARCH_URL
             # Index version (defaults to 0 if not set)
             - name: ENTITIES_INDEX_VERSION
-              value: "2"
+              value: "6"
             # Kafka connection (managed Kafka with SSL)
             - name: KAFKA_BROKER
               valueFrom:
@@ -71,12 +71,15 @@ spec:
             - name: ENVIRONMENT
               value: "staging"
             - name: KAFKA_GROUP_EDITS_ID
-              value: "search-indexer-group-edits-v2"
+              value: "search-indexer-group-edits-v6"
             - name: KAFKA_GROUP_SCORES_ID
-              value: "search-indexer-group-scores-v2"
+              value: "search-indexer-group-scores-v6"
+            - name: KAFKA_GROUP_SPACE_TOPICS_ID
+              value: "search-indexer-group-space-topics-v6"
             # Logging
             - name: RUST_LOG
               value: "info"
+              # Set with kubectl for debugging: "info,search_indexer=debug,search_indexer_repository=debug"
             # Sentry telemetry and monitoring
             - name: SENTRY_DSN
               valueFrom:
