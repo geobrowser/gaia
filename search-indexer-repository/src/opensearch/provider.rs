@@ -31,8 +31,12 @@ use crate::types::{
 };
 use crate::utils;
 
-/// Macro to flush pending bulk operations before executing update_by_query.
+/// Macro to flush pending bulk operations and refresh before update_by_query.
 /// This ensures ordering is preserved when mixing bulk and update_by_query operations.
+/// When there are pending ops, they are flushed with `Refresh::True`. When the pending
+/// queue is empty, an explicit index refresh is performed so that writes from earlier
+/// batches (which may have been flushed without refresh) are visible to the subsequent
+/// update_by_query's search phase.
 /// A macro is used instead of a function because this code mutates multiple local variables
 /// and uses `await?`, which would require passing many `&mut` references to a function.
 macro_rules! flush_pending_bulk {
@@ -52,6 +56,19 @@ macro_rules! flush_pending_bulk {
             $total_succeeded += summary.succeeded;
             $total_failed += summary.failed;
             $all_results.extend(summary.results);
+        } else {
+            // No pending ops, but prior batches may have written without
+            // refresh. Force a refresh so update_by_query sees all data.
+            debug!("No pending bulk ops; issuing explicit index refresh before update_by_query");
+            $self
+                .client
+                .indices()
+                .refresh(opensearch::indices::IndicesRefreshParts::Index(&[&$self
+                    .index_config
+                    .alias]))
+                .send()
+                .await
+                .map_err(|e| SearchIndexError::update(e.to_string()))?;
         }
     };
 }
@@ -620,7 +637,6 @@ impl SearchIndexProvider for OpenSearchProvider {
         for op in operations {
             match op {
                 EntityOperation::RemoveRelationById(request) => {
-                    let had_pending_ops = !bulk_ops.is_empty();
                     debug!(
                         relation_id = %request.relation_id,
                         pending_bulk_ops = bulk_ops.len(),
@@ -636,22 +652,6 @@ impl SearchIndexProvider for OpenSearchProvider {
                         total_failed,
                         all_results
                     );
-
-                    // The flush above refreshes when it has pending ops, but if
-                    // there were none, writes from earlier batches (flushed
-                    // without refresh) may not be visible yet. Force a refresh
-                    // so update_by_query's search phase finds the document.
-                    if !had_pending_ops {
-                        debug!("Issuing explicit index refresh before RemoveRelationById");
-                        self.client
-                            .indices()
-                            .refresh(opensearch::indices::IndicesRefreshParts::Index(&[
-                                &self.index_config.alias,
-                            ]))
-                            .send()
-                            .await
-                            .map_err(|e| SearchIndexError::update(e.to_string()))?;
-                    }
 
                     let relation_uuid =
                         uuid::Uuid::parse_str(&request.relation_id).map_err(|_| {
@@ -895,8 +895,6 @@ impl SearchIndexProvider for OpenSearchProvider {
                     );
                 }
                 EntityOperation::UpdateEntityGlobalScore(request) => {
-                    let had_pending_ops = !bulk_ops.is_empty();
-
                     // Flush before executing the update_by_query to maintain ordering
                     flush_pending_bulk!(
                         self,
@@ -906,22 +904,6 @@ impl SearchIndexProvider for OpenSearchProvider {
                         total_failed,
                         all_results
                     );
-
-                    // The flush above refreshes when it has pending ops, but if
-                    // there were none, writes from earlier batches (flushed
-                    // without refresh) may not be visible yet. Force a refresh
-                    // so update_by_query's search phase finds the documents.
-                    if !had_pending_ops {
-                        debug!("Issuing explicit index refresh before UpdateEntityGlobalScore");
-                        self.client
-                            .indices()
-                            .refresh(opensearch::indices::IndicesRefreshParts::Index(&[
-                                &self.index_config.alias,
-                            ]))
-                            .send()
-                            .await
-                            .map_err(|e| SearchIndexError::update(e.to_string()))?;
-                    }
 
                     let entity_uuid = uuid::Uuid::parse_str(&request.entity_id).map_err(|_| {
                         SearchIndexError::validation(format!(
@@ -972,8 +954,6 @@ impl SearchIndexProvider for OpenSearchProvider {
                     }
                 }
                 EntityOperation::UpdateSpaceScore(request) => {
-                    let had_pending_ops = !bulk_ops.is_empty();
-
                     // Flush before executing the update_by_query to maintain ordering
                     flush_pending_bulk!(
                         self,
@@ -983,22 +963,6 @@ impl SearchIndexProvider for OpenSearchProvider {
                         total_failed,
                         all_results
                     );
-
-                    // The flush above refreshes when it has pending ops, but if
-                    // there were none, writes from earlier batches (flushed
-                    // without refresh) may not be visible yet. Force a refresh
-                    // so update_by_query's search phase finds the documents.
-                    if !had_pending_ops {
-                        debug!("Issuing explicit index refresh before UpdateSpaceScore");
-                        self.client
-                            .indices()
-                            .refresh(opensearch::indices::IndicesRefreshParts::Index(&[
-                                &self.index_config.alias,
-                            ]))
-                            .send()
-                            .await
-                            .map_err(|e| SearchIndexError::update(e.to_string()))?;
-                    }
 
                     let space_uuid = uuid::Uuid::parse_str(&request.space_id).map_err(|_| {
                         SearchIndexError::validation(format!(
@@ -1070,8 +1034,6 @@ impl SearchIndexProvider for OpenSearchProvider {
                     });
                 }
                 EntityOperation::UpdateSpaceTopicEntityId(request) => {
-                    let had_pending_ops = !bulk_ops.is_empty();
-
                     // Flush before executing the update_by_query to maintain ordering
                     flush_pending_bulk!(
                         self,
@@ -1081,22 +1043,6 @@ impl SearchIndexProvider for OpenSearchProvider {
                         total_failed,
                         all_results
                     );
-
-                    // The flush above refreshes when it has pending ops, but if
-                    // there were none, writes from earlier batches (flushed
-                    // without refresh) may not be visible yet. Force a refresh
-                    // so update_by_query's search phase finds the documents.
-                    if !had_pending_ops {
-                        debug!("Issuing explicit index refresh before UpdateSpaceTopicEntityId");
-                        self.client
-                            .indices()
-                            .refresh(opensearch::indices::IndicesRefreshParts::Index(&[
-                                &self.index_config.alias,
-                            ]))
-                            .send()
-                            .await
-                            .map_err(|e| SearchIndexError::update(e.to_string()))?;
-                    }
 
                     let space_uuid = uuid::Uuid::parse_str(&request.space_id).map_err(|_| {
                         SearchIndexError::validation(format!(
