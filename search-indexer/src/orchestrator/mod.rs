@@ -18,6 +18,29 @@ use crate::loader::SearchLoader;
 use crate::metrics::SearchIndexerMetrics;
 use crate::processor::{ProcessedEvent, Processor};
 
+/// Read the resident set size (RSS) of the current process in MB.
+/// Only available on Linux (reads `/proc/self/status`); returns `None` on other platforms.
+fn read_rss_mb() -> Option<u64> {
+    #[cfg(target_os = "linux")]
+    {
+        if let Ok(status) = std::fs::read_to_string("/proc/self/status") {
+            for line in status.lines() {
+                if let Some(rest) = line.strip_prefix("VmRSS:") {
+                    let kb_str = rest.trim().trim_end_matches(" kB").trim();
+                    if let Ok(kb) = kb_str.parse::<u64>() {
+                        return Some(kb / 1024);
+                    }
+                }
+            }
+        }
+        None
+    }
+    #[cfg(not(target_os = "linux"))]
+    {
+        None
+    }
+}
+
 /// Trait for entity event consumers used by the orchestrator.
 /// This allows for dependency injection and testing with mock consumers.
 #[async_trait::async_trait]
@@ -357,6 +380,10 @@ impl Orchestrator {
         // Track previous values for rate calculation
         let mut prev_events: u64 = 0;
         let mut prev_docs: u64 = 0;
+        let mut prev_bulk_calls: u64 = 0;
+        let mut prev_bulk_wall: u64 = 0;
+        let mut prev_ops: u64 = 0;
+        let mut prev_failed: u64 = 0;
         let mut prev_time = std::time::Instant::now();
 
         // Track consumer results for shutdown
@@ -421,34 +448,77 @@ impl Orchestrator {
                 _ = progress_timer.tick() => {
                     let events = total_events.load(Ordering::Relaxed);
                     let docs = total_docs.load(Ordering::Relaxed);
+                    let bulk_calls = metrics_ref.total_bulk_calls.load(Ordering::Relaxed);
+                    let bulk_wall = metrics_ref.total_bulk_wall_ms.load(Ordering::Relaxed);
+                    let ops = metrics_ref.total_operations.load(Ordering::Relaxed);
+                    let failed = metrics_ref.total_failed_operations.load(Ordering::Relaxed);
 
-                    // Calculate rates per second
+                    // Cumulative operation type counts
+                    let updates = metrics_ref.total_updates.load(Ordering::Relaxed);
+                    let deletes = metrics_ref.total_deletes.load(Ordering::Relaxed);
+                    let unsets = metrics_ref.total_unsets.load(Ordering::Relaxed);
+                    let remove_rels = metrics_ref.total_remove_relations.load(Ordering::Relaxed);
+                    let scores = metrics_ref.total_score_updates.load(Ordering::Relaxed);
+                    let topics = metrics_ref.total_space_topic_updates.load(Ordering::Relaxed);
+
+                    // Calculate deltas and rates per second
                     let now = std::time::Instant::now();
                     let elapsed_secs = now.duration_since(prev_time).as_secs_f64();
 
-                    let events_per_sec = if elapsed_secs > 0.0 {
-                        (events.saturating_sub(prev_events) as f64) / elapsed_secs
+                    let (events_per_sec, docs_per_sec, ops_per_sec, bulk_calls_per_sec, avg_bulk_wall_ms) = if elapsed_secs > 0.0 {
+                        let delta_events = events.saturating_sub(prev_events);
+                        let delta_docs = docs.saturating_sub(prev_docs);
+                        let delta_ops = ops.saturating_sub(prev_ops);
+                        let delta_bulk_calls = bulk_calls.saturating_sub(prev_bulk_calls);
+                        let delta_bulk_wall = bulk_wall.saturating_sub(prev_bulk_wall);
+
+                        let avg = if delta_bulk_calls > 0 {
+                            delta_bulk_wall as f64 / delta_bulk_calls as f64
+                        } else {
+                            0.0
+                        };
+
+                        (
+                            delta_events as f64 / elapsed_secs,
+                            delta_docs as f64 / elapsed_secs,
+                            delta_ops as f64 / elapsed_secs,
+                            delta_bulk_calls as f64 / elapsed_secs,
+                            avg,
+                        )
                     } else {
-                        0.0
+                        (0.0, 0.0, 0.0, 0.0, 0.0)
                     };
 
-                    let docs_per_sec = if elapsed_secs > 0.0 {
-                        (docs.saturating_sub(prev_docs) as f64) / elapsed_secs
-                    } else {
-                        0.0
-                    };
+                    let delta_failed = failed.saturating_sub(prev_failed);
+
+                    let rss_mb = read_rss_mb().map(|v| v.to_string()).unwrap_or_else(|| "n/a".to_string());
 
                     info!(
                         events_processed = events,
                         documents_indexed = docs,
-                        events_per_sec = format!("{:.2}", events_per_sec),
-                        documents_per_sec = format!("{:.2}", docs_per_sec),
-                        "Processing progress"
+                        events_per_sec = format!("{:.1}", events_per_sec),
+                        docs_per_sec = format!("{:.1}", docs_per_sec),
+                        ops_per_sec = format!("{:.1}", ops_per_sec),
+                        bulk_calls_per_sec = format!("{:.1}", bulk_calls_per_sec),
+                        avg_bulk_ms = format!("{:.1}", avg_bulk_wall_ms),
+                        failed_ops = delta_failed,
+                        updates = updates,
+                        deletes = deletes,
+                        unsets = unsets,
+                        remove_relations = remove_rels,
+                        score_updates = scores,
+                        topic_updates = topics,
+                        rss_mb = %rss_mb,
+                        "indexer.stats"
                     );
 
                     // Update previous values for next calculation
                     prev_events = events;
                     prev_docs = docs;
+                    prev_bulk_calls = bulk_calls;
+                    prev_bulk_wall = bulk_wall;
+                    prev_ops = ops;
+                    prev_failed = failed;
                     prev_time = now;
                 }
             }

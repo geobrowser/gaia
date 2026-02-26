@@ -244,6 +244,8 @@ impl SearchIndexProvider for MockSearchProvider {
             succeeded: operations.len(),
             failed: 0,
             results,
+            wall_ms: 0,
+            took_ms: 0,
         })
     }
 }

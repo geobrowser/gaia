@@ -273,6 +273,8 @@ impl SearchIndexService {
                 succeeded: 0,
                 failed: 0,
                 results: vec![],
+                wall_ms: 0,
+                took_ms: 0,
             });
         }
 
@@ -323,6 +325,8 @@ impl SearchIndexService {
                 succeeded: 0,
                 failed: 0,
                 results: vec![],
+                wall_ms: 0,
+                took_ms: 0,
             });
         }
 
@@ -372,6 +376,8 @@ impl SearchIndexService {
                 succeeded: 0,
                 failed: 0,
                 results: vec![],
+                wall_ms: 0,
+                took_ms: 0,
             });
         }
 
@@ -485,6 +491,8 @@ mod tests {
                 succeeded: operations.len(),
                 failed: 0,
                 results,
+                wall_ms: 0,
+                took_ms: 0,
             })
         }
     }

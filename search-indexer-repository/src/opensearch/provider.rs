@@ -40,7 +40,7 @@ use crate::utils;
 /// A macro is used instead of a function because this code mutates multiple local variables
 /// and uses `await?`, which would require passing many `&mut` references to a function.
 macro_rules! flush_pending_bulk {
-    ($self:expr, $bulk_ops:expr, $metas:expr, $total_succeeded:expr, $total_failed:expr, $all_results:expr) => {
+    ($self:expr, $bulk_ops:expr, $metas:expr, $total_succeeded:expr, $total_failed:expr, $all_results:expr, $total_wall_ms:expr, $total_took_ms:expr, $bulk_call_count:expr) => {
         if !$bulk_ops.is_empty() {
             let batch_ops = std::mem::take(&mut $bulk_ops);
             let batch_metas = std::mem::take(&mut $metas);
@@ -55,6 +55,9 @@ macro_rules! flush_pending_bulk {
             .await?;
             $total_succeeded += summary.succeeded;
             $total_failed += summary.failed;
+            $total_wall_ms += summary.wall_ms;
+            $total_took_ms += summary.took_ms;
+            $bulk_call_count += 1u64;
             $all_results.extend(summary.results);
         } else {
             // No pending ops, but prior batches may have written without
@@ -75,8 +78,8 @@ macro_rules! flush_pending_bulk {
 
 /// Outcome of an `update_by_query` call with retry.
 enum UpdateByQueryOutcome {
-    /// The query succeeded. Contains response stats.
-    Success { updated: u64, total: u64, conflicts: u64 },
+    /// The query succeeded. Contains response stats and timing.
+    Success { updated: u64, total: u64, conflicts: u64, took_ms: u64, wall_ms: u64 },
     /// The query failed after all retries. Contains the error body.
     Failed(String),
 }
@@ -158,6 +161,7 @@ impl OpenSearchProvider {
         let mut attempt = 0u32;
 
         loop {
+            let start = std::time::Instant::now();
             let response = self
                 .client
                 .update_by_query(UpdateByQueryParts::Index(&[&self.index_config.alias]))
@@ -165,6 +169,7 @@ impl OpenSearchProvider {
                 .send()
                 .await
                 .map_err(|e| SearchIndexError::update(e.to_string()))?;
+            let wall_ms = start.elapsed().as_millis() as u64;
 
             let status = response.status_code();
             if status.is_success() {
@@ -181,6 +186,10 @@ impl OpenSearchProvider {
                     .get("version_conflicts")
                     .and_then(|v| v.as_u64())
                     .unwrap_or(0);
+                let took_ms = response_body
+                    .get("took")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
 
                 debug!(
                     operation = operation_name,
@@ -191,7 +200,7 @@ impl OpenSearchProvider {
                     "update_by_query completed"
                 );
 
-                return Ok(UpdateByQueryOutcome::Success { updated, total, conflicts });
+                return Ok(UpdateByQueryOutcome::Success { updated, total, conflicts, took_ms, wall_ms });
             } else if status.as_u16() == 409 && attempt < Self::MAX_RETRIES {
                 attempt += 1;
                 warn!(
@@ -630,6 +639,9 @@ impl SearchIndexProvider for OpenSearchProvider {
         let mut all_results: Vec<BatchOperationResult> = Vec::new();
         let mut total_succeeded = 0usize;
         let mut total_failed = 0usize;
+        let mut total_wall_ms = 0u64;
+        let mut total_took_ms = 0u64;
+        let mut _bulk_call_count = 0u64;
 
         // Current batch of bulk-compatible operations
         let mut bulk_ops: Vec<BulkOperation<Value>> = Vec::new();
@@ -651,7 +663,10 @@ impl SearchIndexProvider for OpenSearchProvider {
                         metas,
                         total_succeeded,
                         total_failed,
-                        all_results
+                        all_results,
+                        total_wall_ms,
+                        total_took_ms,
+                        _bulk_call_count
                     );
 
                     let relation_uuid =
@@ -683,7 +698,7 @@ impl SearchIndexProvider for OpenSearchProvider {
                     });
 
                     match self.update_by_query_with_retry(body, "RemoveRelationById").await? {
-                        UpdateByQueryOutcome::Success { updated, total, conflicts } => {
+                        UpdateByQueryOutcome::Success { updated, total, conflicts, took_ms, wall_ms } => {
                             if updated == 0 {
                                 warn!(
                                     relation_id = %relation_uuid,
@@ -693,6 +708,9 @@ impl SearchIndexProvider for OpenSearchProvider {
                                 );
                             }
                             total_succeeded += 1;
+                            total_wall_ms += wall_ms;
+                            total_took_ms += took_ms;
+                            _bulk_call_count += 1;
                             all_results.push(BatchOperationResult {
                                 entity_id: String::new(),
                                 space_id: String::new(),
@@ -856,7 +874,10 @@ impl SearchIndexProvider for OpenSearchProvider {
                         metas,
                         total_succeeded,
                         total_failed,
-                        all_results
+                        all_results,
+                        total_wall_ms,
+                        total_took_ms,
+                        _bulk_call_count
                     );
 
                     let (entity_id, space_id) =
@@ -892,7 +913,10 @@ impl SearchIndexProvider for OpenSearchProvider {
                         metas,
                         total_succeeded,
                         total_failed,
-                        all_results
+                        all_results,
+                        total_wall_ms,
+                        total_took_ms,
+                        _bulk_call_count
                     );
                 }
                 EntityOperation::UpdateEntityGlobalScore(request) => {
@@ -903,7 +927,10 @@ impl SearchIndexProvider for OpenSearchProvider {
                         metas,
                         total_succeeded,
                         total_failed,
-                        all_results
+                        all_results,
+                        total_wall_ms,
+                        total_took_ms,
+                        _bulk_call_count
                     );
 
                     let entity_uuid = uuid::Uuid::parse_str(&request.entity_id).map_err(|_| {
@@ -929,8 +956,11 @@ impl SearchIndexProvider for OpenSearchProvider {
                     });
 
                     match self.update_by_query_with_retry(body, "UpdateEntityGlobalScore").await? {
-                        UpdateByQueryOutcome::Success { .. } => {
+                        UpdateByQueryOutcome::Success { took_ms, wall_ms, .. } => {
                             total_succeeded += 1;
+                            total_wall_ms += wall_ms;
+                            total_took_ms += took_ms;
+                            _bulk_call_count += 1;
                             all_results.push(BatchOperationResult {
                                 entity_id: request.entity_id.clone(),
                                 space_id: String::new(),
@@ -962,7 +992,10 @@ impl SearchIndexProvider for OpenSearchProvider {
                         metas,
                         total_succeeded,
                         total_failed,
-                        all_results
+                        all_results,
+                        total_wall_ms,
+                        total_took_ms,
+                        _bulk_call_count
                     );
 
                     let space_uuid = uuid::Uuid::parse_str(&request.space_id).map_err(|_| {
@@ -988,8 +1021,11 @@ impl SearchIndexProvider for OpenSearchProvider {
                     });
 
                     match self.update_by_query_with_retry(body, "UpdateSpaceScore").await? {
-                        UpdateByQueryOutcome::Success { .. } => {
+                        UpdateByQueryOutcome::Success { took_ms, wall_ms, .. } => {
                             total_succeeded += 1;
+                            total_wall_ms += wall_ms;
+                            total_took_ms += took_ms;
+                            _bulk_call_count += 1;
                             all_results.push(BatchOperationResult {
                                 entity_id: String::new(),
                                 space_id: request.space_id.clone(),
@@ -1042,7 +1078,10 @@ impl SearchIndexProvider for OpenSearchProvider {
                         metas,
                         total_succeeded,
                         total_failed,
-                        all_results
+                        all_results,
+                        total_wall_ms,
+                        total_took_ms,
+                        _bulk_call_count
                     );
 
                     let space_uuid = uuid::Uuid::parse_str(&request.space_id).map_err(|_| {
@@ -1076,8 +1115,11 @@ impl SearchIndexProvider for OpenSearchProvider {
                     });
 
                     match self.update_by_query_with_retry(body, "UpdateSpaceTopicEntityId").await? {
-                        UpdateByQueryOutcome::Success { .. } => {
+                        UpdateByQueryOutcome::Success { took_ms, wall_ms, .. } => {
                             total_succeeded += 1;
+                            total_wall_ms += wall_ms;
+                            total_took_ms += took_ms;
+                            _bulk_call_count += 1;
                             all_results.push(BatchOperationResult {
                                 entity_id: String::new(),
                                 space_id: request.space_id.clone(),
@@ -1117,6 +1159,9 @@ impl SearchIndexProvider for OpenSearchProvider {
             .await?;
             total_succeeded += summary.succeeded;
             total_failed += summary.failed;
+            total_wall_ms += summary.wall_ms;
+            total_took_ms += summary.took_ms;
+            _bulk_call_count += 1;
             all_results.extend(summary.results);
         }
 
@@ -1125,6 +1170,8 @@ impl SearchIndexProvider for OpenSearchProvider {
             succeeded: total_succeeded,
             failed: total_failed,
             results: all_results,
+            wall_ms: total_wall_ms,
+            took_ms: total_took_ms,
         })
     }
 }
