@@ -261,12 +261,35 @@ jobs:
           KAFKA_BROKER: localhost:9092
           SEARCH_API_URL: http://localhost:3000
 
-      - name: Stop indexer for load test
+      - name: Stop indexer for NACK crash test
         run: |
           if [ -f /tmp/search-indexer.pid ]; then
             kill $(cat /tmp/search-indexer.pid) 2>/dev/null || true
             sleep 2
           fi
+          # Also stop the API — NACK test doesn't need it
+          if [ -f /tmp/api.pid ]; then
+            kill $(cat /tmp/api.pid) 2>/dev/null || true
+          fi
+
+      - name: Run NACK crash test
+        working-directory: ./search-indexer/tests/e2e-nack-crash
+        run: |
+          KAFKA_CONTAINER=$(docker ps --format '{{.Names}}' | grep -i kafka | grep -v ui | head -1)
+          echo "Using Kafka container: $KAFKA_CONTAINER"
+          KAFKA_CONTAINER="$KAFKA_CONTAINER" ./run-test.sh
+        env:
+          ENVIRONMENT: staging
+          KAFKA_BROKER: localhost:9092
+          OPENSEARCH_URL: http://localhost:9200
+
+      - name: Upload NACK crash test logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: nack-crash-test-logs
+          path: /tmp/e2e-nack-crash.*/
+          retention-days: 3
 
       - name: Clean OpenSearch for load test
         run: |
