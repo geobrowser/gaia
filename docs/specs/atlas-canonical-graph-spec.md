@@ -197,6 +197,41 @@ Producers MAY use plaintext in local/dev and SASL/SSL when credentials are prese
 
 Canonical output wire format is defined by `hermes-schema/proto/topology.proto`.
 
+Reference protobuf shape (abridged):
+
+```protobuf
+message CanonicalGraphDiff {
+  bytes root_id = 1;
+  repeated NodeChange changes = 2;
+  blockchain_metadata.BlockchainMetadata meta = 3;
+}
+
+message NodeChange {
+  bytes space_id = 1;
+  ChangeType change_type = 2;
+  optional uint32 distance = 3;
+  optional EdgeInfo parent_edge = 4;
+}
+
+enum ChangeType {
+  CHANGE_TYPE_UNSPECIFIED = 0;
+  CHANGE_TYPE_ADDED = 1;
+  CHANGE_TYPE_REMOVED = 2;
+  CHANGE_TYPE_MOVED = 3;
+}
+
+message EdgeInfo {
+  bytes parent_id = 1;
+  oneof edge_type {
+    Empty verified = 2;
+    Empty related = 3;
+    TopicEdge topic = 4;
+    Empty editor = 5;
+    Empty member = 6;
+  }
+}
+```
+
 #### CanonicalGraphDiff
 
 - `root_id: bytes` - root space this diff applies to
@@ -231,6 +266,29 @@ Canonical output wire format is defined by `hermes-schema/proto/topology.proto`.
 - `CHANGE_TYPE_MOVED`
 
 (`CHANGE_TYPE_UNSPECIFIED` exists in schema as proto default and should not be emitted by Atlas.)
+
+Rust emission shape (conceptual):
+
+```rust
+CanonicalGraphDiff {
+    root_id,
+    changes: vec![
+        NodeChange {
+            space_id,
+            change_type: ChangeType::Added as i32,
+            distance: Some(distance),
+            parent_edge: Some(edge_info),
+        },
+        NodeChange {
+            space_id,
+            change_type: ChangeType::Removed as i32,
+            distance: None,
+            parent_edge: None,
+        },
+    ],
+    meta: Some(blockchain_meta),
+}
+```
 
 ### Canonical Graph Diff Output
 
@@ -267,6 +325,9 @@ These are current implementation constraints and engineering decisions, captured
 - Diff computation should use allocation-conscious structures (sorted vectors + buffer reuse).
 - Emission should avoid redundant no-op messages (empty diffs are not emitted).
 
+Benchmark evidence and run instructions:
+- `docs/benchmarks/atlas-diff-emission.md`
+
 ## Conformance Test Matrix
 
 An implementation is conformant only if tests cover at least:
@@ -289,6 +350,7 @@ An implementation is conformant only if tests cover at least:
 
 - `docs/specs/canonical-graph.md`
 - `docs/specs/versioned-diffing.md`
+- `docs/benchmarks/atlas-diff-emission.md`
 - `hermes-schema/proto/topology.proto`
 - `atlas/src/main.rs`
 - `atlas/src/graph/canonical.rs`
