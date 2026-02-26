@@ -117,11 +117,11 @@ impl AtlasSink {
 #[derive(Debug, thiserror::Error)]
 enum AtlasError {
     #[error("Failed to decode actions: {0}")]
-    DecodeError(#[from] prost::DecodeError),
+    Decode(#[from] prost::DecodeError),
     #[error("Kafka error: {0}")]
-    KafkaError(#[from] atlas::kafka::ProducerError),
+    Kafka(#[from] atlas::kafka::ProducerError),
     #[error("Checkpoint error: {0}")]
-    CheckpointError(String),
+    Checkpoint(String),
 }
 
 impl Sink for AtlasSink {
@@ -138,7 +138,7 @@ impl Sink for AtlasSink {
         self.checkpoint_manager
             .wait_for_persistence_recovery_if_paused()
             .await
-            .map_err(|err| AtlasError::CheckpointError(err.to_string()))?;
+            .map_err(|err| AtlasError::Checkpoint(err.to_string()))?;
 
         // Extract block metadata
         let clock = data.clock.as_ref();
