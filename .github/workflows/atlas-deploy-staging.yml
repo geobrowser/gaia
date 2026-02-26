@@ -13,6 +13,7 @@ on:
       - 'stream/**'
       - 'wire/**'
       - 'hermes/k8s/staging/atlas.yaml'
+      - 'hermes/k8s/staging/atlas-monitoring.yaml'
       - '.github/workflows/atlas-deploy-staging.yml'
 
 concurrency:
@@ -64,6 +65,7 @@ jobs:
           # Update image tag to use SHA and apply
           sed -i 's|image: registry.digitalocean.com/geo/atlas:latest|image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}|g' hermes/k8s/staging/atlas.yaml
           kubectl apply -f hermes/k8s/staging/atlas.yaml
+          kubectl apply -f hermes/k8s/staging/atlas-monitoring.yaml
 
       - name: Wait for deployment rollout
         run: |
