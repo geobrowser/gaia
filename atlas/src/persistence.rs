@@ -569,6 +569,7 @@ impl PostgresCheckpointStore {
                     pool_config.statement_timeout_ms
                 ))
             })?;
+        let statement_timeout_query = format!("SET statement_timeout = {}", statement_timeout_ms);
         let pool = PgPoolOptions::new()
             .max_connections(pool_config.max_connections)
             .min_connections(pool_config.min_connections)
@@ -576,11 +577,9 @@ impl PostgresCheckpointStore {
             .idle_timeout(Duration::from_millis(pool_config.idle_timeout_ms))
             .max_lifetime(Duration::from_millis(pool_config.max_lifetime_ms))
             .after_connect(move |conn, _meta| {
+                let statement_timeout_query = statement_timeout_query.clone();
                 Box::pin(async move {
-                    sqlx::query("SET statement_timeout = $1")
-                        .bind(statement_timeout_ms)
-                        .execute(conn)
-                        .await?;
+                    sqlx::query(&statement_timeout_query).execute(conn).await?;
                     Ok(())
                 })
             })
