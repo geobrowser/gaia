@@ -20,6 +20,7 @@ use crate::interfaces::SearchIndexProvider;
 use crate::opensearch::bulk::{execute_bulk, BulkAction, BulkOperationMeta};
 use crate::opensearch::index_config::IndexConfig;
 use crate::opensearch::index_management;
+use crate::opensearch::retry::{self, RetryConfig};
 use crate::opensearch::scripts::{
     ADD_RELATION_SCRIPT, REMOVE_RELATION_SCRIPT, UPDATE_WITH_TOMBSTONE_CHECK_SCRIPT,
 };
@@ -51,6 +52,7 @@ macro_rules! flush_pending_bulk {
                 &batch_metas,
                 BulkAction::Update,
                 true, // refresh so update_by_query sees latest data
+                &$self.retry_config,
             )
             .await?;
             $total_succeeded += summary.succeeded;
@@ -109,6 +111,7 @@ enum UpdateByQueryOutcome {
 pub struct OpenSearchProvider {
     client: OpenSearch,
     index_config: IndexConfig,
+    retry_config: RetryConfig,
 }
 
 impl OpenSearchProvider {
@@ -135,20 +138,19 @@ impl OpenSearchProvider {
         Ok(Self {
             client,
             index_config,
+            retry_config: RetryConfig::default(),
         })
     }
-
-    /// Maximum number of retries on HTTP 409 version conflict.
-    const MAX_RETRIES: u32 = 3;
-    /// Base delay in milliseconds between retries (multiplied by attempt number).
-    const RETRY_DELAY_MS: u64 = 50;
 
     /// Generate document ID as `{entity_id}_{space_id}`.
     fn document_id(entity_id: &Uuid, space_id: &Uuid) -> String {
         format!("{}_{}", entity_id, space_id)
     }
 
-    /// Execute an `update_by_query` with retry on HTTP 409 version conflicts.
+    /// Execute an `update_by_query` with retry on transient errors.
+    ///
+    /// Retries on transport errors, HTTP 409 (version conflict), 429, 502, 503, 504
+    /// using exponential backoff from `self.retry_config`.
     ///
     /// Returns `UpdateByQueryOutcome::Success` on success with response stats,
     /// or `UpdateByQueryOutcome::Failed` on non-retryable failure with the error body.
@@ -162,14 +164,31 @@ impl OpenSearchProvider {
 
         loop {
             let start = std::time::Instant::now();
-            let response = self
+            let result = self
                 .client
                 .update_by_query(UpdateByQueryParts::Index(&[&self.index_config.alias]))
                 .body(body.clone())
                 .send()
-                .await
-                .map_err(|e| SearchIndexError::update(e.to_string()))?;
+                .await;
             let wall_ms = start.elapsed().as_millis() as u64;
+
+            let response = match result {
+                Ok(resp) => resp,
+                Err(e) => {
+                    // Transport/network error — retryable
+                    if attempt < self.retry_config.max_retries {
+                        attempt += 1;
+                        retry::backoff_sleep(
+                            attempt,
+                            &self.retry_config,
+                            &format!("update_by_query {operation_name} transport error: {e}"),
+                        )
+                        .await;
+                        continue;
+                    }
+                    return Err(SearchIndexError::update(e.to_string()));
+                }
+            };
 
             let status = response.status_code();
             if status.is_success() {
@@ -201,29 +220,33 @@ impl OpenSearchProvider {
                 );
 
                 return Ok(UpdateByQueryOutcome::Success { updated, total, conflicts, took_ms, wall_ms });
-            } else if status.as_u16() == 409 && attempt < Self::MAX_RETRIES {
+            }
+
+            let status_code = status.as_u16();
+            let is_retryable = status_code == 409
+                || retry::is_retryable_status(status_code);
+
+            if is_retryable && attempt < self.retry_config.max_retries {
+                let error_body = response.text().await.unwrap_or_default();
                 attempt += 1;
-                warn!(
-                    operation = operation_name,
-                    attempt = attempt,
-                    "Version conflict on update_by_query, retrying"
-                );
-                tokio::time::sleep(std::time::Duration::from_millis(
-                    Self::RETRY_DELAY_MS * attempt as u64,
-                ))
+                retry::backoff_sleep(
+                    attempt,
+                    &self.retry_config,
+                    &format!("update_by_query {operation_name} HTTP {status}: {error_body}"),
+                )
                 .await;
                 continue;
-            } else {
-                let error_body = response.text().await.unwrap_or_default();
-                error!(
-                    operation = operation_name,
-                    status = %status,
-                    body = %error_body,
-                    attempt = attempt,
-                    "update_by_query failed"
-                );
-                return Ok(UpdateByQueryOutcome::Failed(error_body));
             }
+
+            let error_body = response.text().await.unwrap_or_default();
+            error!(
+                operation = operation_name,
+                status = %status,
+                body = %error_body,
+                attempt = attempt,
+                "update_by_query failed"
+            );
+            return Ok(UpdateByQueryOutcome::Failed(error_body));
         }
     }
 
@@ -1155,6 +1178,7 @@ impl SearchIndexProvider for OpenSearchProvider {
                 &metas,
                 BulkAction::Update,
                 false, // no need to refresh for final batch
+                &self.retry_config,
             )
             .await?;
             total_succeeded += summary.succeeded;
