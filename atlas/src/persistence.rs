@@ -20,6 +20,34 @@ const RETRY_BACKOFF_MS_MAX: u64 = 30_000;
 const PAUSE_RECOVERY_MAX_ATTEMPTS_DEFAULT: u32 = 120;
 const PAUSE_RECOVERY_MAX_ATTEMPTS_MIN: u32 = 1;
 const PAUSE_RECOVERY_MAX_ATTEMPTS_MAX: u32 = 10_000;
+const PG_POOL_MAX_CONNECTIONS_DEFAULT: u32 = 2;
+const PG_POOL_MAX_CONNECTIONS_MIN: u32 = 1;
+const PG_POOL_MAX_CONNECTIONS_MAX: u32 = 10;
+const PG_POOL_MIN_CONNECTIONS_DEFAULT: u32 = 0;
+const PG_POOL_MIN_CONNECTIONS_MIN: u32 = 0;
+const PG_POOL_MIN_CONNECTIONS_MAX: u32 = 5;
+const PG_POOL_ACQUIRE_TIMEOUT_MS_DEFAULT: u64 = 5_000;
+const PG_POOL_ACQUIRE_TIMEOUT_MS_MIN: u64 = 100;
+const PG_POOL_ACQUIRE_TIMEOUT_MS_MAX: u64 = 60_000;
+const PG_POOL_IDLE_TIMEOUT_MS_DEFAULT: u64 = 60_000;
+const PG_POOL_IDLE_TIMEOUT_MS_MIN: u64 = 1_000;
+const PG_POOL_IDLE_TIMEOUT_MS_MAX: u64 = 600_000;
+const PG_POOL_MAX_LIFETIME_MS_DEFAULT: u64 = 1_800_000;
+const PG_POOL_MAX_LIFETIME_MS_MIN: u64 = 60_000;
+const PG_POOL_MAX_LIFETIME_MS_MAX: u64 = 7_200_000;
+const PG_STATEMENT_TIMEOUT_MS_DEFAULT: u64 = 3_000;
+const PG_STATEMENT_TIMEOUT_MS_MIN: u64 = 100;
+const PG_STATEMENT_TIMEOUT_MS_MAX: u64 = 60_000;
+
+#[derive(Debug, Clone)]
+pub struct PostgresPoolConfig {
+    pub max_connections: u32,
+    pub min_connections: u32,
+    pub acquire_timeout_ms: u64,
+    pub idle_timeout_ms: u64,
+    pub max_lifetime_ms: u64,
+    pub statement_timeout_ms: u64,
+}
 
 #[derive(Debug, Clone)]
 pub struct CheckpointConfig {
@@ -46,8 +74,53 @@ impl CheckpointConfig {
             .map(|value| value.trim().to_string())
             .filter(|value| !value.is_empty());
 
+        let pool_config = PostgresPoolConfig {
+            max_connections: parse_clamped_env_u32(
+                "ATLAS_CHECKPOINT_POOL_MAX_CONNECTIONS",
+                PG_POOL_MAX_CONNECTIONS_DEFAULT,
+                PG_POOL_MAX_CONNECTIONS_MIN,
+                PG_POOL_MAX_CONNECTIONS_MAX,
+                "checkpoint pool max connections",
+            ),
+            min_connections: parse_clamped_env_u32(
+                "ATLAS_CHECKPOINT_POOL_MIN_CONNECTIONS",
+                PG_POOL_MIN_CONNECTIONS_DEFAULT,
+                PG_POOL_MIN_CONNECTIONS_MIN,
+                PG_POOL_MIN_CONNECTIONS_MAX,
+                "checkpoint pool min connections",
+            ),
+            acquire_timeout_ms: parse_clamped_env_u64(
+                "ATLAS_CHECKPOINT_POOL_ACQUIRE_TIMEOUT_MS",
+                PG_POOL_ACQUIRE_TIMEOUT_MS_DEFAULT,
+                PG_POOL_ACQUIRE_TIMEOUT_MS_MIN,
+                PG_POOL_ACQUIRE_TIMEOUT_MS_MAX,
+                "checkpoint pool acquire timeout",
+            ),
+            idle_timeout_ms: parse_clamped_env_u64(
+                "ATLAS_CHECKPOINT_POOL_IDLE_TIMEOUT_MS",
+                PG_POOL_IDLE_TIMEOUT_MS_DEFAULT,
+                PG_POOL_IDLE_TIMEOUT_MS_MIN,
+                PG_POOL_IDLE_TIMEOUT_MS_MAX,
+                "checkpoint pool idle timeout",
+            ),
+            max_lifetime_ms: parse_clamped_env_u64(
+                "ATLAS_CHECKPOINT_POOL_MAX_LIFETIME_MS",
+                PG_POOL_MAX_LIFETIME_MS_DEFAULT,
+                PG_POOL_MAX_LIFETIME_MS_MIN,
+                PG_POOL_MAX_LIFETIME_MS_MAX,
+                "checkpoint pool max lifetime",
+            ),
+            statement_timeout_ms: parse_clamped_env_u64(
+                "ATLAS_CHECKPOINT_STATEMENT_TIMEOUT_MS",
+                PG_STATEMENT_TIMEOUT_MS_DEFAULT,
+                PG_STATEMENT_TIMEOUT_MS_MIN,
+                PG_STATEMENT_TIMEOUT_MS_MAX,
+                "checkpoint statement timeout",
+            ),
+        };
+
         let store = match database_url {
-            Some(url) => Some(PostgresCheckpointStore::new(&url)?),
+            Some(url) => Some(PostgresCheckpointStore::new(&url, &pool_config)?),
             None => None,
         };
 
@@ -475,9 +548,42 @@ pub struct PostgresCheckpointStore {
 }
 
 impl PostgresCheckpointStore {
-    pub fn new(database_url: &str) -> Result<Self, CheckpointError> {
+    pub fn new(
+        database_url: &str,
+        pool_config: &PostgresPoolConfig,
+    ) -> Result<Self, CheckpointError> {
+        info!(
+            max_connections = pool_config.max_connections,
+            min_connections = pool_config.min_connections,
+            acquire_timeout_ms = pool_config.acquire_timeout_ms,
+            idle_timeout_ms = pool_config.idle_timeout_ms,
+            max_lifetime_ms = pool_config.max_lifetime_ms,
+            statement_timeout_ms = pool_config.statement_timeout_ms,
+            "Configuring Atlas checkpoint Postgres pool"
+        );
+
+        let statement_timeout_ms =
+            i32::try_from(pool_config.statement_timeout_ms).map_err(|_| {
+                CheckpointError::Incompatible(format!(
+                    "ATLAS_CHECKPOINT_STATEMENT_TIMEOUT_MS out of range for Postgres: {}",
+                    pool_config.statement_timeout_ms
+                ))
+            })?;
         let pool = PgPoolOptions::new()
-            .max_connections(2)
+            .max_connections(pool_config.max_connections)
+            .min_connections(pool_config.min_connections)
+            .acquire_timeout(Duration::from_millis(pool_config.acquire_timeout_ms))
+            .idle_timeout(Duration::from_millis(pool_config.idle_timeout_ms))
+            .max_lifetime(Duration::from_millis(pool_config.max_lifetime_ms))
+            .after_connect(move |conn, _meta| {
+                Box::pin(async move {
+                    sqlx::query("SET statement_timeout = $1")
+                        .bind(statement_timeout_ms)
+                        .execute(conn)
+                        .await?;
+                    Ok(())
+                })
+            })
             .connect_lazy(database_url)
             .map_err(|err| CheckpointError::Io(format!("create postgres pool: {err}")))?;
         Ok(Self { pool })
