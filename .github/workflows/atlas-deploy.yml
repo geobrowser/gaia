@@ -53,28 +53,29 @@ jobs:
         run: |
           doctl kubernetes cluster kubeconfig save ${{ secrets.DIGITALOCEAN_CLUSTER_NAME }}
 
-      - name: Delete existing job (jobs are immutable)
+      - name: Cleanup old atlas workload locations
         run: |
           kubectl delete job atlas -n kafka --ignore-not-found=true
+          kubectl delete deployment atlas -n kafka --ignore-not-found=true
+          kubectl delete job atlas -n knowledge --ignore-not-found=true
 
       - name: Deploy to Kubernetes
         run: |
-          kubectl apply -f hermes/k8s/production/namespace.yaml
           # Update image tag to use SHA and apply
           sed -i 's|image: registry.digitalocean.com/geo/atlas:latest|image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}|g' hermes/k8s/production/atlas.yaml
           kubectl apply -f hermes/k8s/production/atlas.yaml
 
-      - name: Wait for job to start
+      - name: Wait for deployment rollout
         run: |
-          kubectl wait --for=condition=ready pod -l app=atlas -n kafka --timeout=60s || true
+          kubectl rollout status deployment/atlas -n knowledge --timeout=180s
 
       - name: Show deployment status
         run: |
-          echo "=== Atlas Job ==="
-          kubectl get job atlas -n kafka || echo "Job not found"
+          echo "=== Atlas Deployment ==="
+          kubectl get deployment atlas -n knowledge || echo "Deployment not found"
           echo ""
           echo "=== Atlas Pods ==="
-          kubectl get pods -n kafka -l app=atlas
+          kubectl get pods -n knowledge -l app=atlas
           echo ""
           echo "=== Recent Events ==="
-          kubectl get events -n kafka --sort-by='.lastTimestamp' | tail -10
+          kubectl get events -n knowledge --sort-by='.lastTimestamp' | tail -10
