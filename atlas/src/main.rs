@@ -37,6 +37,7 @@ use atlas::convert::convert_action;
 use atlas::events::{BlockMetadata, SpaceId, SpaceTopologyEvent, SpaceTopologyPayload};
 use atlas::graph::{CanonicalProcessor, DiffTracker, GraphState, TransitiveProcessor};
 use atlas::kafka::{AtlasProducer, CanonicalGraphEmitter};
+use atlas::persistence::{CheckpointManager, PersistedGraphState};
 use hermes_instrumentation::{debug, info, info_span, Instrument};
 use hermes_relay::{Actions, HermesModule, Sink, StreamSource};
 use prost::Message;
@@ -61,21 +62,43 @@ struct AtlasSink {
     state: Mutex<PipelineState>,
     /// Kafka emitter for canonical graph updates (internally thread-safe)
     emitter: CanonicalGraphEmitter,
+    /// Checkpoint manager for restore/persist/fail-open handling
+    checkpoint_manager: CheckpointManager,
 }
 
 impl AtlasSink {
-    fn new(root_space: SpaceId, emitter: CanonicalGraphEmitter) -> Self {
-        Self {
+    async fn new(root_space: SpaceId, emitter: CanonicalGraphEmitter) -> anyhow::Result<Self> {
+        let mut checkpoint_manager = CheckpointManager::from_env(root_space, 1)?;
+        let restored_state = checkpoint_manager.restore_checkpoint_on_startup().await?;
+
+        let graph = restored_state.unwrap_or_else(GraphState::new);
+        let mut transitive = TransitiveProcessor::new();
+        let mut canonical = CanonicalProcessor::new(root_space);
+        let mut diff_tracker = DiffTracker::new();
+
+        if checkpoint_manager.restored_cursor().is_some() {
+            if let Some(restored_graph) = canonical.compute_if_changed(&graph, &mut transitive) {
+                let _ = diff_tracker.track(&restored_graph);
+                info!(
+                    restored_cursor = checkpoint_manager.restored_cursor().is_some(),
+                    warmed_nodes = restored_graph.len(),
+                    "Warmed canonical/transitive/diff caches from restored checkpoint state"
+                );
+            }
+        }
+
+        Ok(Self {
             state: Mutex::new(PipelineState {
-                graph: GraphState::new(),
-                transitive: TransitiveProcessor::new(),
-                canonical: CanonicalProcessor::new(root_space),
-                diff_tracker: DiffTracker::new(),
+                graph,
+                transitive,
+                canonical,
+                diff_tracker,
                 event_count: 0,
                 emit_count: 0,
             }),
             emitter,
-        }
+            checkpoint_manager,
+        })
     }
 
     fn summary(&self) {
@@ -97,15 +120,26 @@ enum AtlasError {
     DecodeError(#[from] prost::DecodeError),
     #[error("Kafka error: {0}")]
     KafkaError(#[from] atlas::kafka::ProducerError),
+    #[error("Checkpoint error: {0}")]
+    CheckpointError(String),
 }
 
 impl Sink for AtlasSink {
     type Error = AtlasError;
 
+    async fn load_persisted_cursor(&self) -> Result<Option<String>, Self::Error> {
+        Ok(self.checkpoint_manager.restored_cursor())
+    }
+
     async fn process_block_scoped_data(
         &self,
         data: &hermes_relay::stream::pb::sf::substreams::rpc::v2::BlockScopedData,
     ) -> Result<(), Self::Error> {
+        self.checkpoint_manager
+            .wait_for_persistence_recovery_if_paused()
+            .await
+            .map_err(|err| AtlasError::CheckpointError(err.to_string()))?;
+
         // Extract block metadata
         let clock = data.clock.as_ref();
         let block_number = clock.map(|c| c.number).unwrap_or(0);
@@ -150,7 +184,7 @@ impl Sink for AtlasSink {
         //   then:
         //     compute canonical once -> diff once -> emit once
         let action_count = actions.actions.len();
-        async {
+        let processed_events = async {
             let mut s = self.state.lock().unwrap();
             let PipelineState {
                 graph,
@@ -166,9 +200,11 @@ impl Sink for AtlasSink {
             // This flag is intentionally conservative: false means "safe to skip",
             // true means "compute once at end of block and decide from hashes/diff".
             let mut block_may_affect = false;
+            let mut processed_events = 0usize;
 
             for action in &actions.actions {
                 if let Some(event) = convert_action(action, &meta) {
+                    processed_events += 1;
                     let event_type = match &event.payload {
                         SpaceTopologyPayload::SpaceCreated(_) => "SpaceCreated",
                         SpaceTopologyPayload::TrustExtended(_) => "TrustExtended",
@@ -194,7 +230,7 @@ impl Sink for AtlasSink {
 
             // Phase 2: Compute canonical graph once and emit a single diff for the block.
             if !block_may_affect {
-                return Ok(());
+                return Ok(processed_events);
             }
 
             if let Some(new_graph) = canonical.compute_if_changed(graph, transitive) {
@@ -247,7 +283,7 @@ impl Sink for AtlasSink {
                 }
             }
 
-            Ok::<(), AtlasError>(())
+            Ok::<usize, AtlasError>(processed_events)
         }
         .instrument(info_span!(
             "process_block",
@@ -255,7 +291,20 @@ impl Sink for AtlasSink {
             cursor = %meta.cursor,
             action_count
         ))
-        .await
+        .await?;
+
+        if processed_events > 0 {
+            let persisted_snapshot = {
+                let state = self.state.lock().unwrap();
+                PersistedGraphState::from(&state.graph)
+            };
+
+            self.checkpoint_manager
+                .persist_block_checkpoint(block_number, meta.cursor.clone(), persisted_snapshot)
+                .await;
+        }
+
+        Ok(())
     }
 }
 
@@ -396,7 +445,7 @@ async fn async_main() -> anyhow::Result<()> {
     let emitter = CanonicalGraphEmitter::new(producer);
     info!("Connected to Kafka broker");
 
-    let sink = AtlasSink::new(root_space_id, emitter);
+    let sink = AtlasSink::new(root_space_id, emitter).await?;
 
     info!("Starting event processing");
 

@@ -1087,6 +1087,9 @@ dependencies = [
  "prost 0.13.5",
  "rand 0.8.5",
  "rdkafka 0.36.2",
+ "serde",
+ "serde_json",
+ "sqlx",
  "thiserror 1.0.69",
  "tokio",
 ]
