@@ -53,7 +53,7 @@ spec:
         - name: INDEX_ALIAS
           value: "entities"
         - name: TARGET_VERSION
-          value: "3"  # CHANGE THIS: Index version to point the alias to
+          value: "5"  # CHANGE THIS: Index version to point the alias to
         - name: RUST_LOG
           value: "info"
         command:
