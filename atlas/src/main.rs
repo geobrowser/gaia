@@ -37,7 +37,7 @@ use atlas::convert::convert_action;
 use atlas::events::{BlockMetadata, SpaceId, SpaceTopologyEvent, SpaceTopologyPayload};
 use atlas::graph::{CanonicalProcessor, DiffTracker, GraphState, TransitiveProcessor};
 use atlas::kafka::{AtlasProducer, CanonicalGraphEmitter};
-use atlas::persistence::{CheckpointManager, PersistedGraphState};
+use atlas::persistence::{CheckpointConfig, CheckpointManager, PersistedGraphState};
 use hermes_instrumentation::{debug, info, info_span, Instrument};
 use hermes_relay::{Actions, HermesModule, Sink, StreamSource};
 use prost::Message;
@@ -429,6 +429,11 @@ async fn async_main() -> anyhow::Result<()> {
 
     // Root space configuration
     let root_space_id = parse_root_space_id()?;
+
+    // Validate checkpoint environment invariants before external connections.
+    // This catches misconfiguration (e.g. missing ATLAS_INDEXER_ID when checkpoint
+    // persistence is enabled) before we connect to Kafka.
+    let _checkpoint_preflight = CheckpointConfig::from_env(root_space_id, 1)?;
 
     info!("Atlas Topology Processor starting");
     info!(
