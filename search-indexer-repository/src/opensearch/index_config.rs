@@ -102,13 +102,20 @@ pub fn get_index_settings(_version: Option<u32>) -> Value {
                     "type": "keyword",
                     "index": false
                 },
-                "type_relations": {
+                "image_url": {
+                    "type": "keyword",
+                    "index": false
+                },
+                "relations": {
                     "type": "nested",
                     "properties": {
                         "relation_id": {
                             "type": "keyword"
                         },
-                        "entity_to_id": {
+                        "relation_type": {
+                            "type": "keyword"
+                        },
+                        "to_entity_id": {
                             "type": "keyword"
                         }
                     }
@@ -121,6 +128,9 @@ pub fn get_index_settings(_version: Option<u32>) -> Value {
                 },
                 "entity_space_score": {
                     "type": "float"
+                },
+                "space_topic_entity_id": {
+                    "type": "keyword"
                 },
                 "indexed_at": {
                     "type": "date"
@@ -149,7 +159,7 @@ mod tests {
         assert!(settings["mappings"]["properties"]["entity_id"].is_object());
         assert!(settings["mappings"]["properties"]["name"].is_object());
         assert!(settings["mappings"]["properties"]["description"].is_object());
-        assert!(settings["mappings"]["properties"]["type_relations"].is_object());
+        assert!(settings["mappings"]["properties"]["relations"].is_object());
 
         // Check search_as_you_type fields
         assert_eq!(
@@ -161,18 +171,23 @@ mod tests {
             "search_as_you_type"
         );
 
-        // Check type_relations nested type
+        // Check relations nested type
         assert_eq!(
-            settings["mappings"]["properties"]["type_relations"]["type"],
+            settings["mappings"]["properties"]["relations"]["type"],
             "nested"
         );
         assert_eq!(
-            settings["mappings"]["properties"]["type_relations"]["properties"]["relation_id"]
+            settings["mappings"]["properties"]["relations"]["properties"]["relation_id"]
                 ["type"],
             "keyword"
         );
         assert_eq!(
-            settings["mappings"]["properties"]["type_relations"]["properties"]["entity_to_id"]
+            settings["mappings"]["properties"]["relations"]["properties"]["relation_type"]
+                ["type"],
+            "keyword"
+        );
+        assert_eq!(
+            settings["mappings"]["properties"]["relations"]["properties"]["to_entity_id"]
                 ["type"],
             "keyword"
         );

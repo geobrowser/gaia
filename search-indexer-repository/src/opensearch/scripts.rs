@@ -1,37 +1,37 @@
 //! Painless scripts for OpenSearch operations.
 
-/// Atomically add a type relation to the type_relations array.
+/// Atomically add a relation to the relations array.
 /// Idempotent - checks for duplicates before adding.
 /// Enforces tombstone dominance - ignores updates to deleted entities.
-pub const ADD_TYPE_RELATION_SCRIPT: &str = r#"
+pub const ADD_RELATION_SCRIPT: &str = r#"
     if (ctx._source.containsKey('deleted') && ctx._source.deleted == true) {
         ctx.op = 'noop';
     } else {
-        def newRelation = ['relation_id': params.relation_id, 'entity_to_id': params.entity_to_id];
-        if (ctx._source.type_relations == null) {
-            ctx._source.type_relations = [newRelation];
+        def newRelation = ['relation_id': params.relation_id, 'relation_type': params.relation_type, 'to_entity_id': params.to_entity_id];
+        if (ctx._source.relations == null) {
+            ctx._source.relations = [newRelation];
         } else {
             boolean exists = false;
-            for (rel in ctx._source.type_relations) {
+            for (rel in ctx._source.relations) {
                 if (rel.relation_id == params.relation_id) {
                     exists = true;
                     break;
                 }
             }
             if (!exists) {
-                ctx._source.type_relations.add(newRelation);
+                ctx._source.relations.add(newRelation);
             }
         }
     }
 "#;
 
-/// Atomically remove a type relation from the type_relations array by relation_id.
+/// Atomically remove a relation from the relations array by relation_id.
 /// Enforces tombstone dominance - ignores updates to deleted entities.
-pub const REMOVE_TYPE_RELATION_SCRIPT: &str = r#"
+pub const REMOVE_RELATION_SCRIPT: &str = r#"
     if (ctx._source.containsKey('deleted') && ctx._source.deleted == true) {
         ctx.op = 'noop';
-    } else if (ctx._source.type_relations != null) {
-        ctx._source.type_relations.removeIf(rel -> rel.relation_id != null && rel.relation_id.equals(params.relation_id));
+    } else if (ctx._source.relations != null) {
+        ctx._source.relations.removeIf(rel -> rel.relation_id != null && rel.relation_id.equals(params.relation_id));
     }
 "#;
 

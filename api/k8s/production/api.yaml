@@ -116,6 +116,9 @@ spec:
                 secretKeyRef:
                   name: api-secrets
                   key: IPFS_GATEWAY_WRITE
+            # Required so the API resolves the correct alias/index in the shared OpenSearch cluster.
+            - name: ENVIRONMENT
+              value: "production"
             - name: OPENSEARCH_URL
               valueFrom:
                 secretKeyRef:

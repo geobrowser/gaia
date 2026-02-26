@@ -2,16 +2,18 @@
 
 use crate::errors::SearchIndexError;
 
-/// Data for a type relation to be added to an entity document.
+/// Data for a relation to be added to an entity document.
 ///
-/// This struct contains all the information needed to add a type relation entry
-/// to an entity's `type_relations` array.
+/// This struct contains all the information needed to add a relation entry
+/// to an entity's `relations` array.
 #[derive(Debug, Clone, PartialEq)]
-pub struct TypeRelationData {
+pub struct RelationData {
     /// The relation's unique identifier.
     pub relation_id: String,
-    /// The entity this relation points to (the "type" entity).
-    pub entity_to_id: String,
+    /// The relation type entity ID.
+    pub relation_type: String,
+    /// The entity this relation points to.
+    pub to_entity_id: String,
 }
 
 /// Request to update an existing entity document in the search index.
@@ -33,9 +35,11 @@ pub struct UpdateEntityRequest {
     pub avatar: Option<String>,
     /// Optional cover image URL.
     pub cover: Option<String>,
-    /// Atomically add a type relation to the entity's type_relations array.
+    /// Optional image URL property value (from IMAGE_URL_PROPERTY on this entity).
+    pub image_url: Option<String>,
+    /// Atomically add a relation to the entity's relations array.
     /// Does not overwrite existing data.
-    pub add_type_relation: Option<TypeRelationData>,
+    pub add_relation: Option<RelationData>,
     /// Global entity score.
     pub entity_global_score: Option<f64>,
     /// Space score.
@@ -44,6 +48,9 @@ pub struct UpdateEntityRequest {
     pub entity_space_score: Option<f64>,
     /// Soft delete flag - None for active entities, Some(true) for deleted entities.
     pub deleted: Option<bool>,
+    /// The topic entity ID for this entity's space.
+    /// Set from the in-memory cache during upserts.
+    pub space_topic_entity_id: Option<String>,
 }
 
 /// Request to delete an entity document from the search index.
@@ -64,7 +71,7 @@ pub struct DeleteEntityRequest {
 /// `space_id` are required to identify the document. The `property_keys` vector
 /// contains the names of the fields to remove (e.g., "name", "description", "avatar", "cover").
 ///
-/// Note: To remove type relations, use `EntityOperation::RemoveTypeRelationById` instead.
+/// Note: To remove relations, use `EntityOperation::RemoveRelationById` instead.
 #[derive(Debug, Clone)]
 pub struct UnsetEntityPropertiesRequest {
     /// The entity's unique identifier.
@@ -75,9 +82,9 @@ pub struct UnsetEntityPropertiesRequest {
     pub property_keys: Vec<String>,
 }
 
-/// Data for removing a type relation from an entity document by relation_id.
+/// Data for removing a relation from an entity document by relation_id.
 #[derive(Debug, Clone, PartialEq)]
-pub struct RemoveTypeRelationData {
+pub struct RemoveRelationData {
     /// The relation's unique identifier to remove.
     pub relation_id: String,
 }
@@ -120,6 +127,18 @@ pub struct UpdateEntitySpaceScoreRequest {
     pub score: f64,
 }
 
+/// Request to update the space_topic_entity_id for all entities in a space.
+///
+/// This will set the `space_topic_entity_id` field for ALL documents
+/// that have the given space_id, using update_by_query.
+#[derive(Debug, Clone)]
+pub struct UpdateSpaceTopicEntityIdRequest {
+    /// The space's unique identifier.
+    pub space_id: String,
+    /// The topic entity ID that represents this space.
+    pub topic_entity_id: String,
+}
+
 /// A single operation in a bulk request.
 ///
 /// This enum represents any operation that can be performed on an entity document.
@@ -127,14 +146,14 @@ pub struct UpdateEntitySpaceScoreRequest {
 #[derive(Debug, Clone)]
 pub enum EntityOperation {
     /// Update/upsert an entity document.
-    Update(UpdateEntityRequest),
+    Update(Box<UpdateEntityRequest>),
     /// Delete an entity document.
     Delete(DeleteEntityRequest),
     /// Unset specific properties from an entity document.
     Unset(UnsetEntityPropertiesRequest),
-    /// Remove a type relation by relation_id (searches for documents containing it).
+    /// Remove a relation by relation_id (searches for documents containing it).
     /// Used when only the relation_id is available (e.g., from DeleteRelation Kafka messages).
-    RemoveTypeRelationById(RemoveTypeRelationData),
+    RemoveRelationById(RemoveRelationData),
     /// Update an entity's global score across all spaces.
     /// Uses update_by_query to update all documents with this entity_id.
     UpdateEntityGlobalScore(UpdateEntityGlobalScoreRequest),
@@ -144,6 +163,9 @@ pub enum EntityOperation {
     /// Update an entity's score within a specific space.
     /// Uses a targeted update for the specific entity+space document.
     UpdateEntitySpaceScore(UpdateEntitySpaceScoreRequest),
+    /// Update the space_topic_entity_id for all entities in a space.
+    /// Uses update_by_query to set the topic entity ID on all documents in the space.
+    UpdateSpaceTopicEntityId(UpdateSpaceTopicEntityIdRequest),
 }
 
 impl EntityOperation {
@@ -154,10 +176,11 @@ impl EntityOperation {
             EntityOperation::Update(r) => &r.entity_id,
             EntityOperation::Delete(r) => &r.entity_id,
             EntityOperation::Unset(r) => &r.entity_id,
-            EntityOperation::RemoveTypeRelationById(_) => "",
+            EntityOperation::RemoveRelationById(_) => "",
             EntityOperation::UpdateEntityGlobalScore(r) => &r.entity_id,
             EntityOperation::UpdateSpaceScore(_) => "",
             EntityOperation::UpdateEntitySpaceScore(r) => &r.entity_id,
+            EntityOperation::UpdateSpaceTopicEntityId(_) => "",
         }
     }
 
@@ -168,10 +191,11 @@ impl EntityOperation {
             EntityOperation::Update(r) => &r.space_id,
             EntityOperation::Delete(r) => &r.space_id,
             EntityOperation::Unset(r) => &r.space_id,
-            EntityOperation::RemoveTypeRelationById(_) => "",
+            EntityOperation::RemoveRelationById(_) => "",
             EntityOperation::UpdateEntityGlobalScore(_) => "",
             EntityOperation::UpdateSpaceScore(r) => &r.space_id,
             EntityOperation::UpdateEntitySpaceScore(r) => &r.space_id,
+            EntityOperation::UpdateSpaceTopicEntityId(r) => &r.space_id,
         }
     }
 
@@ -181,10 +205,11 @@ impl EntityOperation {
             EntityOperation::Update(_) => "Update",
             EntityOperation::Delete(_) => "Delete",
             EntityOperation::Unset(_) => "Unset",
-            EntityOperation::RemoveTypeRelationById(_) => "RemoveTypeRelationById",
+            EntityOperation::RemoveRelationById(_) => "RemoveRelationById",
             EntityOperation::UpdateEntityGlobalScore(_) => "UpdateEntityGlobalScore",
             EntityOperation::UpdateSpaceScore(_) => "UpdateSpaceScore",
             EntityOperation::UpdateEntitySpaceScore(_) => "UpdateEntitySpaceScore",
+            EntityOperation::UpdateSpaceTopicEntityId(_) => "UpdateSpaceTopicEntityId",
         }
     }
 }
@@ -200,7 +225,7 @@ pub struct BatchOperationResult {
     pub entity_id: String,
     /// The space this entity belongs to.
     pub space_id: String,
-    /// The type of operation (e.g., "Update", "Unset", "Delete", "AddTypeRelation").
+    /// The type of operation (e.g., "Update", "Unset", "Delete", "AddRelation").
     /// Used for debugging failed operations.
     pub operation_type: String,
     /// Whether the operation succeeded.

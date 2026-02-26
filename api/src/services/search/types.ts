@@ -11,10 +11,11 @@
  *
  * - GLOBAL: Search across all spaces, boosted by entity_global_score
  * - GLOBAL_BY_SPACE_SCORE: Search across all spaces, boosted by space_score
+ * - GLOBAL_BY_ENTITY_SPACE_SCORE: Search across all spaces, boosted by entity_space_score * space_score
  * - SPACE_SINGLE: Search within a single specific space, boosted by entity_space_score
  * - SPACE: Search within a space and its subspaces (currently implemented as single space)
  */
-export type SearchScope = "GLOBAL" | "GLOBAL_BY_SPACE_SCORE" | "SPACE_SINGLE" | "SPACE"
+export type SearchScope = "GLOBAL" | "GLOBAL_BY_SPACE_SCORE" | "GLOBAL_BY_ENTITY_SPACE_SCORE" | "SPACE_SINGLE" | "SPACE"
 
 /**
  * Search query parameters.
@@ -40,13 +41,39 @@ export interface SearchQuery {
 }
 
 /**
+ * A type associated with a search result entity.
+ */
+export interface SearchResultType {
+	/** The type entity's unique identifier. */
+	id: string
+	/** The type entity's display name, if available. */
+	name?: string
+}
+
+/**
+ * Space metadata for a search result entity.
+ */
+export interface SearchResultSpace {
+	/** The space's unique identifier. */
+	id: string
+	/** The space's display name, if available. */
+	name?: string
+	/** The space's description, if available. */
+	description?: string
+	/** The space's avatar image URL, if available. */
+	avatar?: string
+	/** The space's cover image URL, if available. */
+	cover?: string
+}
+
+/**
  * A single search result item.
  */
 export interface SearchResult {
 	/** The entity's unique identifier. */
 	entityId: string
-	/** The space this entity belongs to. */
-	spaceId: string
+	/** The space this entity belongs to, with optional metadata. */
+	space: SearchResultSpace
 	/** Optional entity display name. */
 	name?: string
 	/** Optional description text. */
@@ -55,14 +82,18 @@ export interface SearchResult {
 	avatar?: string
 	/** Optional cover image URL. */
 	cover?: string
-	/** Type IDs associated with this entity (extracted from type_relations). */
-	typeIds?: string[]
+	/** Types associated with this entity, with optional names. */
+	types?: SearchResultType[]
 	/** Global entity score. */
 	entityGlobalScore?: number
 	/** Space score. */
 	spaceScore?: number
 	/** Entity-space score. */
 	entitySpaceScore?: number
+	/** Final relevance score after all boosts (OpenSearch _score). */
+	relevanceScore?: number
+	/** Text matching score without score field boosts. */
+	textMatchScore?: number
 }
 
 /**

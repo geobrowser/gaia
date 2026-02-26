@@ -2,6 +2,7 @@
 //!
 //! Consumes entity events from Kafka topics and forwards them to the ingest.
 
+
 use hermes_kafka::get_topic_prefix;
 use prost::Message;
 use rdkafka::{
@@ -21,7 +22,8 @@ use crate::orchestrator::EntityProcessingBatch;
 
 use hermes_schema::pb::knowledge::HermesEdit;
 use sdk::core::ids::{
-    AVATAR_PROPERTY_ID, DESCRIPTION_PROPERTY_ID, NAME_PROPERTY_ID, TYPE_RELATION_TYPE_ID,
+    AVATAR_RELATION_TYPE_ID, COVER_RELATION_TYPE_ID, DESCRIPTION_PROPERTY_ID,
+    IMAGE_URL_PROPERTY_ID, NAME_PROPERTY_ID, TYPE_RELATION_TYPE_ID,
 };
 use grc_20::decode_edit;
 
@@ -85,19 +87,6 @@ impl EntitiesConsumer {
     }
 
     /// Create a new Kafka consumer with custom batch configuration.
-    ///
-    /// # Arguments
-    ///
-    /// * `brokers` - Kafka broker addresses (comma-separated)
-    /// * `group_id` - Consumer group ID
-    /// * `topic` - Kafka topic to consume from
-    /// * `batch_size` - Number of messages to batch before sending
-    /// * `batch_timeout_ms` - Maximum time to wait before flushing a partial batch (milliseconds)
-    ///
-    /// # Returns
-    ///
-    /// * `Ok(EntitiesConsumer)` - A new consumer instance
-    /// * `Err(IngestError)` - If consumer creation fails
     pub fn with_batch_config(
         brokers: &str,
         group_id: &str,
@@ -140,14 +129,6 @@ impl EntitiesConsumer {
     }
 
     /// Start consuming messages and send them through the channel.
-    ///
-    /// Messages are batched before being sent to improve efficiency.
-    ///
-    /// # Arguments
-    ///
-    /// * `processor_tx` - Channel to send events to processor
-    /// * `ack_receiver` - Channel to receive acknowledgments from loader
-    /// * `shutdown` - Shutdown signal receiver
     #[instrument(skip(self, processor_tx, ack_receiver, shutdown))]
     pub async fn run(
         &self,
@@ -165,50 +146,33 @@ impl EntitiesConsumer {
         // Skip the first tick immediately
         flush_timer.tick().await;
 
-        // ========================================================================================
-        // MAIN CONSUMER LOOP: Coordinate multiple async operations
-        //
-        // tokio::select! allows waiting on multiple async operations concurrently and executes
-        // the first branch that becomes ready.
-        //
-        // EXECUTION ORDER (by priority):
-        // 1. Shutdown signal - Immediate termination, highest priority for graceful shutdown
-        // 2. Acknowledgments - Offset commits after successful processing (time-sensitive)
-        // 3. Kafka messages - Regular message processing and batching
-        // 4. Batch timeout - Periodic flushing of accumulated messages
-        //
-        // BENEFITS:
-        // - Less race condition risk than multi-threaded code: Only one branch executes per iteration
-        // - Clear semantics: All concurrent logic visible in one place
-        //
-        // AT-LEAST-ONCE DELIVERY: Unprocessed batches are discarded on shutdown since they may not fully
-        // have been processed and offsets haven't been committed.
-        // They'll be re-processed on restart.
-        // ========================================================================================
         loop {
             tokio::select! {
                 _ = shutdown.recv() => {
                     info!("Consumer received shutdown signal");
-                    // Don't flush pending messages - they haven't been committed
-                    // and will be re-read from the last committed offset on restart
-                    // Just close the processor channel by dropping our sender
                     break;
                 }
-                // Handle acknowledgments from loader
                 ack_msg = ack_receiver.recv() => {
                     match ack_msg {
                         Some(crate::consumer::messages::StreamMessage::Acknowledgment { offsets, success, error }) => {
                             if success {
+                                let max_offset = offsets.iter().map(|(_, _, o)| *o).max().unwrap_or(0);
                                 if let Err(e) = self.commit_offsets(&offsets).await {
-                                    error!(error = %e, "Failed to commit offsets after acknowledgment");
+                                    error!(error = %e, offset_count = offsets.len(), max_offset, "Failed to commit edits offsets after ACK");
                                 } else {
-                                    debug!(offset_count = offsets.len(), "Committed offsets after successful processing");
+                                    debug!(
+                                        offset_count = offsets.len(),
+                                        max_offset,
+                                        "ACK: committed edits offsets"
+                                    );
                                 }
                             } else {
+                                let max_offset = offsets.iter().map(|(_, _, o)| *o).max().unwrap_or(0);
                                 error!(
                                     offset_count = offsets.len(),
+                                    max_offset,
                                     error = error.as_deref().unwrap_or("Unknown error"),
-                                    "Not committing offsets due to processing failure"
+                                    "NACK: not committing edits offsets due to processing failure"
                                 );
                             }
                         }
@@ -235,7 +199,6 @@ impl EntitiesConsumer {
                                     batch.push(pending);
                                     pending_offsets.push((msg.topic().to_string(), msg.partition(), msg.offset()));
 
-                                    // Flush if batch is full
                                     if batch.len() >= self.batch_size {
                                         let offsets_to_send = pending_offsets.clone();
                                         self.flush_batch(&batch, &offsets_to_send, &processor_tx).await?;
@@ -244,10 +207,6 @@ impl EntitiesConsumer {
                                     }
                                 }
                                 Ok(None) => {
-                                    // Message parsed but no events extracted
-                                    // Unexpected message, commit offset immediately so,
-                                    // We don't re-read this irrelevant message on restart
-                                    // We don't hold up batch processing waiting for messages that have no work
                                     debug!(
                                         topic = %msg.topic(),
                                         partition = msg.partition(),
@@ -279,23 +238,18 @@ impl EntitiesConsumer {
                         }
                         Some(Err(e)) => {
                             error!(error = %e, "Kafka error");
-                            // On Kafka error, we can't send to processor, just log and continue
-                            // The error will be handled by retrying or shutting down
                         }
                         None => {
                             info!("Kafka stream ended");
-                            // Flush any pending messages
                             if !batch.is_empty() {
                                 let offsets_to_send = pending_offsets.clone();
                                 self.flush_batch(&batch, &offsets_to_send, &processor_tx).await?;
                             }
-                            // Channel will be closed when we drop processor_tx
                             break;
                         }
                     }
                 }
                 _ = flush_timer.tick() => {
-                    // Flush if timeout reached and we have pending messages
                     if !batch.is_empty() {
                         debug!(count = batch.len(), "Flushing batch due to timeout");
                         let offsets_to_send = pending_offsets.clone();
@@ -321,7 +275,6 @@ impl EntitiesConsumer {
             return Ok(());
         }
 
-        // Collect all events from the batch
         let mut all_events = Vec::new();
         for pending in batch {
             all_events.extend(pending.events.clone());
@@ -404,7 +357,6 @@ impl EntitiesConsumer {
             "Processing message"
         );
 
-        // Parse the message based on topic
         let events = if topic == self.topics[0] {
             match self.parse_edit_message(payload, msg) {
                 Ok(events) => events,
@@ -461,16 +413,14 @@ impl EntitiesConsumer {
         let edit = HermesEdit::decode(payload)
             .map_err(|e| IngestError::parse(format!("Failed to decode HermesEdit: {}", e)))?;
 
-        // Log the full message body for debugging
         debug!(
             topic = %msg.topic(),
             partition = msg.partition(),
             offset = msg.offset(),
-            edit = ?edit,
+            edit_name = %edit.name,
             "Received knowledge.edits message"
         );
 
-        // Parse space_id - it's a 16-byte UUID
         let space_id = if edit.space_id.len() == 16 {
             let bytes: [u8; 16] =
                 edit.space_id.as_slice().try_into().map_err(|_| {
@@ -484,7 +434,6 @@ impl EntitiesConsumer {
             )));
         };
 
-        // Decode the GRC-20 payload
         let grc20_edit = Self::decode_payload(&edit.payload)?;
 
         let mut events = Vec::new();
@@ -515,8 +464,6 @@ impl EntitiesConsumer {
                         events.extend(entity_events);
                     }
                 }
-                // Note: UnsetEntityFields not available in grc-20 0.1.6
-                // Handle unset fields via UpdateEntity with unset_properties
                 grc_20::Op::CreateRelation(relation) => {
                     if let Some(event) = self.process_create_relation(relation, space_id) {
                         events.push(event);
@@ -542,7 +489,6 @@ impl EntitiesConsumer {
                     }
                 }
                 grc_20::Op::DeleteEntity(del) => {
-                    // Handle entity deletion (soft delete)
                     let entity_id = Self::id_to_uuid(&del.id);
                     debug!(
                         entity_id = %entity_id,
@@ -553,7 +499,6 @@ impl EntitiesConsumer {
                     events.push(EntityEvent::delete(entity_id, space_id));
                 }
                 grc_20::Op::RestoreEntity(restore) => {
-                    // Handle entity restore (un-delete)
                     let entity_id = Self::id_to_uuid(&restore.id);
                     debug!(
                         entity_id = %entity_id,
@@ -564,7 +509,6 @@ impl EntitiesConsumer {
                     events.push(EntityEvent::restore(entity_id, space_id));
                 }
                 _ => {
-                    // Other operations (RestoreRelation, CreateValueRef, UpdateRelation) not yet implemented
                     debug!("Skipped operation (not yet implemented)");
                 }
             }
@@ -583,7 +527,7 @@ impl EntitiesConsumer {
     /// Process a CreateEntity operation.
     ///
     /// CreateEntity initializes a new entity with optional property values.
-    /// We extract name, description, and avatar from the values and create an upsert event.
+    /// We extract name, description, and image_url from the values and create an upsert event.
     fn process_create_entity(
         &self,
         entity: &grc_20::CreateEntity,
@@ -591,19 +535,17 @@ impl EntitiesConsumer {
     ) -> Option<EntityEvent> {
         let entity_id = Self::id_to_uuid(&entity.id);
 
-        // Extract name, description, and avatar from values
         let mut name: Option<String> = None;
         let mut description: Option<String> = None;
-        let mut avatar: Option<String> = None;
+        let mut image_url: Option<String> = None;
 
         for prop_value in &entity.values {
             let property_id = Self::id_to_uuid(&prop_value.property);
             let property_id_str = property_id.to_string();
 
-            // Extract the string value from the grc_20::Value enum
             let value_str = match &prop_value.value {
                 grc_20::Value::Text { value, .. } => value.as_ref(),
-                _ => continue, // Skip non-string values
+                _ => continue,
             };
 
             if property_id_str == NAME_PROPERTY_ID {
@@ -624,14 +566,14 @@ impl EntitiesConsumer {
                     description_value = %value_str,
                     "description property detected in CreateEntity"
                 );
-            } else if property_id_str == AVATAR_PROPERTY_ID {
-                avatar = Some(value_str.to_string());
+            } else if property_id_str == IMAGE_URL_PROPERTY_ID {
+                image_url = Some(value_str.to_string());
                 debug!(
                     entity_id = %entity_id,
                     space_id = %space_id,
                     property_id = %property_id_str,
-                    avatar_value = %value_str,
-                    "avatar property detected in CreateEntity"
+                    image_url_value = %value_str,
+                    "image_url property detected in CreateEntity"
                 );
             }
         }
@@ -641,28 +583,24 @@ impl EntitiesConsumer {
             space_id = %space_id,
             has_name = name.is_some(),
             has_description = description.is_some(),
-            has_avatar = avatar.is_some(),
+            has_image_url = image_url.is_some(),
             "Processing CreateEntity"
         );
 
-        // Always create an upsert event for CreateEntity - even without properties,
-        // we want to create the entity document with entity_id and space_id
         Some(EntityEvent::upsert(
             entity_id,
             space_id,
             name,
             description,
-            avatar,
+            None, // avatar is set via relations, not properties
+            None, // cover is set via relations, not properties
+            image_url,
         ))
     }
 
     /// Process an UpdateEntity operation.
     ///
-    /// According to GRC-20 v2 spec, UpdateEntity can contain both set_properties and unset_values.
-    /// The GRC-20 library validates that a property cannot appear in both set_properties and
-    /// unset_values in the same operation (invalid at wire format level).
-    ///
-    /// This may return multiple events when both set and unset are present (for different properties):
+    /// This may return multiple events when both set and unset are present:
     /// - UnsetProperties event for properties to clear
     /// - Upsert event for properties to set
     fn process_update_entity(
@@ -681,15 +619,13 @@ impl EntitiesConsumer {
                 let property_id = Self::id_to_uuid(&unset_val.property);
                 let property_id_str = property_id.to_string();
 
-                // Map known property UUIDs to their field names in OpenSearch
                 let field_name = if property_id_str == NAME_PROPERTY_ID {
                     Some("name")
                 } else if property_id_str == DESCRIPTION_PROPERTY_ID {
                     Some("description")
-                } else if property_id_str == AVATAR_PROPERTY_ID {
-                    Some("avatar")
+                } else if property_id_str == IMAGE_URL_PROPERTY_ID {
+                    Some("image_url")
                 } else {
-                    // Unknown property - skip it
                     debug!(
                         entity_id = %entity_id,
                         space_id = %space_id,
@@ -721,19 +657,18 @@ impl EntitiesConsumer {
             }
         }
 
-        // Extract name, description, and avatar from set_properties
+        // Extract name, description, and image_url from set_properties
         let mut name: Option<String> = None;
         let mut description: Option<String> = None;
-        let mut avatar: Option<String> = None;
+        let mut image_url: Option<String> = None;
 
         for prop_value in &entity.set_properties {
             let property_id = Self::id_to_uuid(&prop_value.property);
             let property_id_str = property_id.to_string();
 
-            // Extract the string value from the grc_20::Value enum
             let value_str = match &prop_value.value {
                 grc_20::Value::Text { value, .. } => value.as_ref(),
-                _ => continue, // Skip non-string values
+                _ => continue,
             };
 
             if property_id_str == NAME_PROPERTY_ID {
@@ -754,27 +689,27 @@ impl EntitiesConsumer {
                     description_value = %value_str,
                     "description property detected in property edit"
                 );
-            } else if property_id_str == AVATAR_PROPERTY_ID {
-                avatar = Some(value_str.to_string());
+            } else if property_id_str == IMAGE_URL_PROPERTY_ID {
+                image_url = Some(value_str.to_string());
                 debug!(
                     entity_id = %entity_id,
                     space_id = %space_id,
                     property_id = %property_id_str,
-                    avatar_value = %value_str,
-                    "avatar property detected in property edit"
+                    image_url_value = %value_str,
+                    "image_url property detected in property edit"
                 );
             }
         }
 
-        // Always create an upsert event if there are set_properties
-        // This handles both pure upserts and mixed set/unset operations
         if !entity.set_properties.is_empty() {
             events.push(EntityEvent::upsert(
                 entity_id,
                 space_id,
                 name,
                 description,
-                avatar,
+                None, // avatar is set via relations
+                None, // cover is set via relations
+                image_url,
             ));
         }
 
@@ -782,6 +717,11 @@ impl EntitiesConsumer {
     }
 
     /// Process a CreateRelation operation.
+    ///
+    /// Handles three indexed relation types:
+    /// - TYPE_RELATION_TYPE_ID: type relations (entity has type of to_entity)
+    /// - AVATAR_RELATION_TYPE_ID: avatar relations (entity's avatar is the image at to_entity)
+    /// - COVER_RELATION_TYPE_ID: cover relations (entity's cover is the image at to_entity)
     fn process_create_relation(
         &self,
         relation: &grc_20::CreateRelation,
@@ -789,14 +729,18 @@ impl EntitiesConsumer {
     ) -> Option<EntityEvent> {
         let relation_id = Self::id_to_uuid(&relation.id);
         let relation_type = Self::id_to_uuid(&relation.relation_type);
+        let relation_type_str = relation_type.to_string();
 
-        // Only process "type" relations (where from has type of to)
-        if relation_type.to_string() != TYPE_RELATION_TYPE_ID {
+        let is_type = relation_type_str == TYPE_RELATION_TYPE_ID;
+        let is_avatar = relation_type_str == AVATAR_RELATION_TYPE_ID;
+        let is_cover = relation_type_str == COVER_RELATION_TYPE_ID;
+
+        if !is_type && !is_avatar && !is_cover {
             debug!(
                 relation_id = %relation_id,
                 relation_type = %relation_type,
                 space_id = %space_id,
-                "Skipped relation (not a type relation)"
+                "Skipped relation (not an indexed relation type)"
             );
             return None;
         }
@@ -804,15 +748,13 @@ impl EntitiesConsumer {
         let entity_id = Self::id_to_uuid(&relation.from);
         let to_entity_id = Self::id_to_uuid(&relation.to);
 
-        // This is a "type" relation - the from_entity has a type of to_entity
-        // We need to update the from_entity's type_relations in the search index
         debug!(
             relation_id = %relation_id,
             relation_type = %relation_type,
             entity_id = %entity_id,
             to_entity_id = %to_entity_id,
             space_id = %space_id,
-            "Processing type relation upsert - entity will have type added"
+            "Processing indexed relation"
         );
 
         Some(EntityEvent::create_relation(
@@ -826,8 +768,9 @@ impl EntitiesConsumer {
 
     /// Process an UpdateRelation GRC20 message.
     ///
-    /// Note: Relation updates are not supported in the search indexer. This function
-    /// handles the protocol message but always returns None (skips the event).
+    /// Note: GRC-20 UpdateRelation only updates mutable fields (space pins, version pins,
+    /// position), not structural fields (from, to, relation_type). Since we don't index
+    /// those mutable fields, we skip all UpdateRelation messages.
     fn process_update_relation_message(
         &self,
         relation_update: &grc_20::UpdateRelation,
@@ -835,8 +778,6 @@ impl EntitiesConsumer {
     ) -> Option<EntityEvent> {
         let relation_id = Self::id_to_uuid(&relation_update.id);
 
-        // Relation updates are not supported - we only index type relations on create.
-        // Skip all UpdateRelation messages.
         debug!(
             relation_id = %relation_id,
             space_id = %space_id,
@@ -846,9 +787,6 @@ impl EntitiesConsumer {
     }
 
     /// Process a DeleteRelation operation.
-    ///
-    /// For delete relations, we only have the relation_id. The downstream processor
-    /// will handle finding and removing the relation from any affected entities.
     fn process_delete_relation(
         &self,
         relation_id: &Uuid,
@@ -877,14 +815,12 @@ mod tests {
         assert_eq!(EntitiesConsumer::DEFAULT_BATCH_TIMEOUT_MS, 1000);
     }
 
-    // Helper to create a dummy message reference (unused in process_update_entity)
     #[tokio::test]
     async fn test_process_update_entity_unset_single_property() {
         let consumer = EntitiesConsumer::new("localhost:9092", "test-group").unwrap();
         let entity_id = Uuid::new_v4();
         let space_id = Uuid::new_v4();
 
-        // Create UpdateEntity with unset_values for name property
         let update_entity = grc_20::UpdateEntity {
             id: *entity_id.as_bytes(),
             set_properties: vec![],
@@ -893,17 +829,6 @@ mod tests {
                 language: UnsetLanguage::All,
             }],
             context: None,
-        };
-
-        let _edit = HermesEdit {
-            id: Uuid::new_v4().as_bytes().to_vec(),
-            name: "Test Unset".to_string(),
-            payload: vec![],
-            authors: vec![],
-            language: None,
-            space_id: space_id.as_bytes().to_vec(),
-            is_canonical: true,
-            meta: None,
         };
 
         let result = consumer.process_update_entity(&update_entity, space_id);
@@ -922,7 +847,6 @@ mod tests {
         let entity_id = Uuid::new_v4();
         let space_id = Uuid::new_v4();
 
-        // Create UpdateEntity with unset_values for name and description properties
         let update_entity = grc_20::UpdateEntity {
             id: *entity_id.as_bytes(),
             set_properties: vec![],
@@ -939,17 +863,6 @@ mod tests {
                 },
             ],
             context: None,
-        };
-
-        let _edit = HermesEdit {
-            id: Uuid::new_v4().as_bytes().to_vec(),
-            name: "Test Unset Multiple".to_string(),
-            payload: vec![],
-            authors: vec![],
-            language: None,
-            space_id: space_id.as_bytes().to_vec(),
-            is_canonical: true,
-            meta: None,
         };
 
         let result = consumer.process_update_entity(&update_entity, space_id);
@@ -972,7 +885,6 @@ mod tests {
         let entity_id = Uuid::new_v4();
         let space_id = Uuid::new_v4();
 
-        // Create UpdateEntity with unset_values for an unknown property
         let unknown_property_id = Uuid::new_v4();
         let update_entity = grc_20::UpdateEntity {
             id: *entity_id.as_bytes(),
@@ -984,20 +896,7 @@ mod tests {
             context: None,
         };
 
-        let _edit = HermesEdit {
-            id: Uuid::new_v4().as_bytes().to_vec(),
-            name: "Test Unset Unknown".to_string(),
-            payload: vec![],
-            authors: vec![],
-            language: None,
-            space_id: space_id.as_bytes().to_vec(),
-            is_canonical: true,
-            meta: None,
-        };
-
         let result = consumer.process_update_entity(&update_entity, space_id);
-
-        // Should return empty vec because no recognized properties to unset
         assert!(result.is_empty());
     }
 
@@ -1007,8 +906,6 @@ mod tests {
         let entity_id = Uuid::new_v4();
         let space_id = Uuid::new_v4();
 
-        // Create UpdateEntity with BOTH set_properties and unset_values
-        // This should fall through to upsert logic (not unset)
         let update_entity = grc_20::UpdateEntity {
             id: *entity_id.as_bytes(),
             set_properties: vec![PropertyValue {
@@ -1027,30 +924,16 @@ mod tests {
             context: None,
         };
 
-        let _edit = HermesEdit {
-            id: Uuid::new_v4().as_bytes().to_vec(),
-            name: "Test Mixed Operation".to_string(),
-            payload: vec![],
-            authors: vec![],
-            language: None,
-            space_id: space_id.as_bytes().to_vec(),
-            is_canonical: true,
-            meta: None,
-        };
-
         let result = consumer.process_update_entity(&update_entity, space_id);
 
-        // Should return 2 events: UnsetProperties for description, then Upsert for name
         assert_eq!(result.len(), 2);
 
-        // First event: Unset description
         let unset_event = &result[0];
         assert_eq!(unset_event.entity_id, entity_id);
         assert_eq!(unset_event.space_id, space_id);
         assert_eq!(unset_event.event_type, EntityEventType::UnsetProperties);
         assert_eq!(unset_event.unset_property_keys, vec!["description"]);
 
-        // Second event: Upsert with name
         let upsert_event = &result[1];
         assert_eq!(upsert_event.entity_id, entity_id);
         assert_eq!(upsert_event.space_id, space_id);
@@ -1064,7 +947,6 @@ mod tests {
         let entity_id = Uuid::new_v4();
         let space_id = Uuid::new_v4();
 
-        // Create UpdateEntity with empty unset_values
         let update_entity = grc_20::UpdateEntity {
             id: *entity_id.as_bytes(),
             set_properties: vec![],
@@ -1072,114 +954,8 @@ mod tests {
             context: None,
         };
 
-        let _edit = HermesEdit {
-            id: Uuid::new_v4().as_bytes().to_vec(),
-            name: "Test Empty Unset".to_string(),
-            payload: vec![],
-            authors: vec![],
-            language: None,
-            space_id: space_id.as_bytes().to_vec(),
-            is_canonical: true,
-            meta: None,
-        };
-
         let result = consumer.process_update_entity(&update_entity, space_id);
-
-        // Should return empty vec (no set_properties, no unset_values to process)
         assert!(result.is_empty());
-    }
-
-    #[tokio::test]
-    async fn test_process_update_entity_unset_avatar() {
-        let consumer = EntitiesConsumer::new("localhost:9092", "test-group").unwrap();
-        let entity_id = Uuid::new_v4();
-        let space_id = Uuid::new_v4();
-
-        // Create UpdateEntity with unset_values for avatar property
-        let update_entity = grc_20::UpdateEntity {
-            id: *entity_id.as_bytes(),
-            set_properties: vec![],
-            unset_values: vec![UnsetValue {
-                property: *Uuid::parse_str(AVATAR_PROPERTY_ID).unwrap().as_bytes(),
-                language: UnsetLanguage::All,
-            }],
-            context: None,
-        };
-
-        let _edit = HermesEdit {
-            id: Uuid::new_v4().as_bytes().to_vec(),
-            name: "Test Unset Avatar".to_string(),
-            payload: vec![],
-            authors: vec![],
-            language: None,
-            space_id: space_id.as_bytes().to_vec(),
-            is_canonical: true,
-            meta: None,
-        };
-
-        let result = consumer.process_update_entity(&update_entity, space_id);
-
-        assert_eq!(result.len(), 1);
-        let event = &result[0];
-        assert_eq!(event.entity_id, entity_id);
-        assert_eq!(event.space_id, space_id);
-        assert_eq!(event.event_type, EntityEventType::UnsetProperties);
-        assert_eq!(event.unset_property_keys, vec!["avatar"]);
-    }
-
-    #[tokio::test]
-    async fn test_process_update_entity_unset_all_three_properties() {
-        let consumer = EntitiesConsumer::new("localhost:9092", "test-group").unwrap();
-        let entity_id = Uuid::new_v4();
-        let space_id = Uuid::new_v4();
-
-        // Create UpdateEntity with unset_values for all three properties
-        let update_entity = grc_20::UpdateEntity {
-            id: *entity_id.as_bytes(),
-            set_properties: vec![],
-            unset_values: vec![
-                UnsetValue {
-                    property: *Uuid::parse_str(NAME_PROPERTY_ID).unwrap().as_bytes(),
-                    language: UnsetLanguage::All,
-                },
-                UnsetValue {
-                    property: *Uuid::parse_str(DESCRIPTION_PROPERTY_ID)
-                        .unwrap()
-                        .as_bytes(),
-                    language: UnsetLanguage::All,
-                },
-                UnsetValue {
-                    property: *Uuid::parse_str(AVATAR_PROPERTY_ID).unwrap().as_bytes(),
-                    language: UnsetLanguage::All,
-                },
-            ],
-            context: None,
-        };
-
-        let _edit = HermesEdit {
-            id: Uuid::new_v4().as_bytes().to_vec(),
-            name: "Test Unset All".to_string(),
-            payload: vec![],
-            authors: vec![],
-            language: None,
-            space_id: space_id.as_bytes().to_vec(),
-            is_canonical: true,
-            meta: None,
-        };
-
-        let result = consumer.process_update_entity(&update_entity, space_id);
-
-        assert_eq!(result.len(), 1);
-        let event = &result[0];
-        assert_eq!(event.entity_id, entity_id);
-        assert_eq!(event.space_id, space_id);
-        assert_eq!(event.event_type, EntityEventType::UnsetProperties);
-        assert_eq!(event.unset_property_keys.len(), 3);
-        assert!(event.unset_property_keys.contains(&"name".to_string()));
-        assert!(event
-            .unset_property_keys
-            .contains(&"description".to_string()));
-        assert!(event.unset_property_keys.contains(&"avatar".to_string()));
     }
 
     // ==================== CreateEntity Tests ====================
@@ -1238,9 +1014,9 @@ mod tests {
                     },
                 },
                 PropertyValue {
-                    property: *Uuid::parse_str(AVATAR_PROPERTY_ID).unwrap().as_bytes(),
+                    property: *Uuid::parse_str(IMAGE_URL_PROPERTY_ID).unwrap().as_bytes(),
                     value: grc_20::Value::Text {
-                        value: "https://example.com/avatar.png".into(),
+                        value: "https://example.com/image.png".into(),
                         language: None,
                     },
                 },
@@ -1257,7 +1033,9 @@ mod tests {
         assert_eq!(event.event_type, EntityEventType::Upsert);
         assert_eq!(event.name, Some("Test Entity".to_string()));
         assert_eq!(event.description, Some("A test description".to_string()));
-        assert_eq!(event.avatar, Some("https://example.com/avatar.png".to_string()));
+        assert_eq!(event.image_url, Some("https://example.com/image.png".to_string()));
+        // Avatar is not set from properties anymore — it comes via relations
+        assert_eq!(event.avatar, None);
     }
 
     #[tokio::test]
@@ -1266,7 +1044,6 @@ mod tests {
         let entity_id = Uuid::new_v4();
         let space_id = Uuid::new_v4();
 
-        // CreateEntity with no property values - should still create the entity
         let create_entity = CreateEntity {
             id: *entity_id.as_bytes(),
             values: vec![],
@@ -1283,6 +1060,7 @@ mod tests {
         assert_eq!(event.name, None);
         assert_eq!(event.description, None);
         assert_eq!(event.avatar, None);
+        assert_eq!(event.image_url, None);
     }
 
     #[tokio::test]
@@ -1292,7 +1070,6 @@ mod tests {
         let space_id = Uuid::new_v4();
         let unknown_property_id = Uuid::new_v4();
 
-        // CreateEntity with unknown property - should create entity but ignore unknown property
         let create_entity = CreateEntity {
             id: *entity_id.as_bytes(),
             values: vec![PropertyValue {
@@ -1312,10 +1089,93 @@ mod tests {
         assert_eq!(event.entity_id, entity_id);
         assert_eq!(event.space_id, space_id);
         assert_eq!(event.event_type, EntityEventType::Upsert);
-        // Unknown properties are ignored, so no name/description/avatar
         assert_eq!(event.name, None);
         assert_eq!(event.description, None);
         assert_eq!(event.avatar, None);
     }
 
+    // ==================== CreateRelation Tests ====================
+
+    #[tokio::test]
+    async fn test_process_create_relation_avatar() {
+        let consumer = EntitiesConsumer::new("localhost:9092", "test-group").unwrap();
+        let space_id = Uuid::new_v4();
+        let image_entity_id = Uuid::new_v4();
+
+        let relation = grc_20::CreateRelation {
+            id: *Uuid::new_v4().as_bytes(),
+            relation_type: *Uuid::parse_str(AVATAR_RELATION_TYPE_ID).unwrap().as_bytes(),
+            from: *Uuid::new_v4().as_bytes(),
+            to: *image_entity_id.as_bytes(),
+            from_is_value_ref: false,
+            from_space: None,
+            from_version: None,
+            to_is_value_ref: false,
+            to_space: None,
+            to_version: None,
+            entity: None,
+            position: None,
+            context: None,
+        };
+
+        let result = consumer.process_create_relation(&relation, space_id);
+
+        assert!(result.is_some());
+        let event = result.unwrap();
+        assert_eq!(event.event_type, EntityEventType::CreateRelation);
+        assert_eq!(event.to_entity_id, Some(image_entity_id));
+    }
+
+    #[tokio::test]
+    async fn test_process_create_relation_type() {
+        let consumer = EntitiesConsumer::new("localhost:9092", "test-group").unwrap();
+        let space_id = Uuid::new_v4();
+
+        let relation = grc_20::CreateRelation {
+            id: *Uuid::new_v4().as_bytes(),
+            relation_type: *Uuid::parse_str(TYPE_RELATION_TYPE_ID).unwrap().as_bytes(),
+            from: *Uuid::new_v4().as_bytes(),
+            to: *Uuid::new_v4().as_bytes(),
+            from_is_value_ref: false,
+            from_space: None,
+            from_version: None,
+            to_is_value_ref: false,
+            to_space: None,
+            to_version: None,
+            entity: None,
+            position: None,
+            context: None,
+        };
+
+        let result = consumer.process_create_relation(&relation, space_id);
+
+        assert!(result.is_some());
+        let event = result.unwrap();
+        assert_eq!(event.event_type, EntityEventType::CreateRelation);
+    }
+
+    #[tokio::test]
+    async fn test_process_create_relation_non_indexed() {
+        let consumer = EntitiesConsumer::new("localhost:9092", "test-group").unwrap();
+        let space_id = Uuid::new_v4();
+
+        let relation = grc_20::CreateRelation {
+            id: *Uuid::new_v4().as_bytes(),
+            relation_type: *Uuid::new_v4().as_bytes(), // Random non-indexed type
+            from: *Uuid::new_v4().as_bytes(),
+            to: *Uuid::new_v4().as_bytes(),
+            from_is_value_ref: false,
+            from_space: None,
+            from_version: None,
+            to_is_value_ref: false,
+            to_space: None,
+            to_version: None,
+            entity: None,
+            position: None,
+            context: None,
+        };
+
+        let result = consumer.process_create_relation(&relation, space_id);
+        assert!(result.is_none());
+    }
 }

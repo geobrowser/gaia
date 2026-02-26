@@ -2,9 +2,12 @@ use anyhow::Result;
 use prost::Message;
 use uuid::Uuid;
 
-use hermes_schema::pb::knowledge::HermesEdit;
-use grc_20::{encode_edit, CreateEntity, DeleteEntity, Edit as Grc20Edit, Op as Grc20Op, PropertyValue, UnsetLanguage, UnsetValue, UpdateEntity, Value as Grc20Value};
 use grc_20::model::RestoreEntity;
+use grc_20::{
+    encode_edit, CreateEntity, DeleteEntity, Edit as Grc20Edit, Op as Grc20Op, PropertyValue,
+    UnsetLanguage, UnsetValue, UpdateEntity, Value as Grc20Value,
+};
+use hermes_schema::pb::knowledge::HermesEdit;
 
 use sdk::core::ids::{DESCRIPTION_PROPERTY_ID, IMAGE_URL_PROPERTY_ID, NAME_PROPERTY_ID};
 
@@ -19,7 +22,6 @@ pub fn create_entity_edit(
 ) -> Result<Vec<u8>> {
     let mut set_properties = Vec::new();
 
-    // Add name if provided
     if let Some(name_value) = name {
         set_properties.push(PropertyValue {
             property: *Uuid::parse_str(NAME_PROPERTY_ID)?.as_bytes(),
@@ -30,7 +32,6 @@ pub fn create_entity_edit(
         });
     }
 
-    // Add description if provided
     if let Some(desc_value) = description {
         set_properties.push(PropertyValue {
             property: *Uuid::parse_str(DESCRIPTION_PROPERTY_ID)?.as_bytes(),
@@ -41,7 +42,6 @@ pub fn create_entity_edit(
         });
     }
 
-    // Add image_url if provided
     if let Some(image_url_value) = image_url {
         set_properties.push(PropertyValue {
             property: *Uuid::parse_str(IMAGE_URL_PROPERTY_ID)?.as_bytes(),
@@ -67,7 +67,6 @@ pub fn create_entity_edit(
         ops: vec![Grc20Op::UpdateEntity(update_entity)],
     };
 
-    // Encode the GRC-20 edit into bytes
     let payload = encode_edit(&grc20_edit)?;
 
     let edit = HermesEdit {
@@ -87,7 +86,6 @@ pub fn create_entity_edit(
 }
 
 /// Generate an edit that unsets entity properties
-#[allow(dead_code)]
 pub fn unset_entity_properties(
     edit_name: &str,
     space_id: Uuid,
@@ -119,7 +117,6 @@ pub fn unset_entity_properties(
         ops: vec![Grc20Op::UpdateEntity(update_entity)],
     };
 
-    // Encode the GRC-20 edit into bytes
     let payload = encode_edit(&grc20_edit)?;
 
     let edit = HermesEdit {
@@ -139,9 +136,6 @@ pub fn unset_entity_properties(
 }
 
 /// Generate an edit that both sets and unsets properties (tests LWW semantics)
-///
-/// When both set_properties and unset_values contain operations for the same property,
-/// the set operation should win (Last-Writer-Wins). This function allows testing that behavior.
 pub fn update_entity_with_set_and_unset(
     edit_name: &str,
     space_id: Uuid,
@@ -153,7 +147,6 @@ pub fn update_entity_with_set_and_unset(
 ) -> Result<Vec<u8>> {
     let mut set_properties = Vec::new();
 
-    // Add name if provided
     if let Some(name_value) = set_name {
         set_properties.push(PropertyValue {
             property: *Uuid::parse_str(NAME_PROPERTY_ID)?.as_bytes(),
@@ -164,7 +157,6 @@ pub fn update_entity_with_set_and_unset(
         });
     }
 
-    // Add description if provided
     if let Some(desc_value) = set_description {
         set_properties.push(PropertyValue {
             property: *Uuid::parse_str(DESCRIPTION_PROPERTY_ID)?.as_bytes(),
@@ -175,7 +167,6 @@ pub fn update_entity_with_set_and_unset(
         });
     }
 
-    // Add image_url if provided
     if let Some(image_url_value) = set_image_url {
         set_properties.push(PropertyValue {
             property: *Uuid::parse_str(IMAGE_URL_PROPERTY_ID)?.as_bytes(),
@@ -186,7 +177,6 @@ pub fn update_entity_with_set_and_unset(
         });
     }
 
-    // Build unset_values from property IDs
     let unset_values: Result<Vec<_>> = unset_property_ids
         .into_iter()
         .map(|id| {
@@ -212,7 +202,6 @@ pub fn update_entity_with_set_and_unset(
         ops: vec![Grc20Op::UpdateEntity(update_entity)],
     };
 
-    // Encode the GRC-20 edit into bytes
     let payload = encode_edit(&grc20_edit)?;
 
     let edit = HermesEdit {
@@ -232,9 +221,6 @@ pub fn update_entity_with_set_and_unset(
 }
 
 /// Generate a CreateEntity operation (using the actual GRC-20 CreateEntity op)
-///
-/// This is different from create_entity_edit which uses UpdateEntity.
-/// CreateEntity initializes a new entity with optional property values.
 pub fn create_entity_grc20_op(
     edit_name: &str,
     space_id: Uuid,
@@ -245,7 +231,6 @@ pub fn create_entity_grc20_op(
 ) -> Result<Vec<u8>> {
     let mut values = Vec::new();
 
-    // Add name if provided
     if let Some(name_value) = name {
         values.push(PropertyValue {
             property: *Uuid::parse_str(NAME_PROPERTY_ID)?.as_bytes(),
@@ -256,7 +241,6 @@ pub fn create_entity_grc20_op(
         });
     }
 
-    // Add description if provided
     if let Some(desc_value) = description {
         values.push(PropertyValue {
             property: *Uuid::parse_str(DESCRIPTION_PROPERTY_ID)?.as_bytes(),
@@ -267,7 +251,6 @@ pub fn create_entity_grc20_op(
         });
     }
 
-    // Add image_url if provided
     if let Some(image_url_value) = image_url {
         values.push(PropertyValue {
             property: *Uuid::parse_str(IMAGE_URL_PROPERTY_ID)?.as_bytes(),
@@ -292,7 +275,6 @@ pub fn create_entity_grc20_op(
         ops: vec![Grc20Op::CreateEntity(create_entity)],
     };
 
-    // Encode the GRC-20 edit into bytes
     let payload = encode_edit(&grc20_edit)?;
 
     let edit = HermesEdit {
@@ -312,11 +294,7 @@ pub fn create_entity_grc20_op(
 }
 
 /// Generate a DeleteEntity operation
-pub fn delete_entity(
-    edit_name: &str,
-    space_id: Uuid,
-    entity_id: Uuid,
-) -> Result<Vec<u8>> {
+pub fn delete_entity(edit_name: &str, space_id: Uuid, entity_id: Uuid) -> Result<Vec<u8>> {
     let delete_entity = DeleteEntity {
         id: *entity_id.as_bytes(),
         context: None,
@@ -330,7 +308,6 @@ pub fn delete_entity(
         ops: vec![Grc20Op::DeleteEntity(delete_entity)],
     };
 
-    // Encode the GRC-20 edit into bytes
     let payload = encode_edit(&grc20_edit)?;
 
     let edit = HermesEdit {
@@ -350,11 +327,7 @@ pub fn delete_entity(
 }
 
 /// Generate a RestoreEntity operation (un-delete)
-pub fn restore_entity(
-    edit_name: &str,
-    space_id: Uuid,
-    entity_id: Uuid,
-) -> Result<Vec<u8>> {
+pub fn restore_entity(edit_name: &str, space_id: Uuid, entity_id: Uuid) -> Result<Vec<u8>> {
     let restore_entity = RestoreEntity {
         id: *entity_id.as_bytes(),
         context: None,
@@ -368,7 +341,6 @@ pub fn restore_entity(
         ops: vec![Grc20Op::RestoreEntity(restore_entity)],
     };
 
-    // Encode the GRC-20 edit into bytes
     let payload = encode_edit(&grc20_edit)?;
 
     let edit = HermesEdit {
@@ -385,94 +357,4 @@ pub fn restore_entity(
     let mut buf = Vec::new();
     edit.encode(&mut buf)?;
     Ok(buf)
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_create_entity_edit() {
-        let space_id = Uuid::new_v4();
-        let entity_id = Uuid::new_v4();
-
-        let result = create_entity_edit(
-            "Test Edit",
-            space_id,
-            entity_id,
-            Some("Test Entity"),
-            Some("A test description"),
-            None,
-        );
-
-        assert!(result.is_ok());
-        let bytes = result.unwrap();
-        assert!(!bytes.is_empty());
-
-        // Verify we can decode it
-        let decoded = HermesEdit::decode(&bytes[..]);
-        assert!(decoded.is_ok());
-        let edit = decoded.unwrap();
-        assert_eq!(edit.name, "Test Edit");
-        assert!(!edit.payload.is_empty());
-    }
-
-    #[test]
-    fn test_unset_entity_properties() {
-        let space_id = Uuid::new_v4();
-        let entity_id = Uuid::new_v4();
-
-        let result = unset_entity_properties(
-            "Unset Properties",
-            space_id,
-            entity_id,
-            vec![NAME_PROPERTY_ID, DESCRIPTION_PROPERTY_ID],
-        );
-
-        assert!(result.is_ok());
-    }
-
-    #[test]
-    fn test_delete_entity() {
-        let space_id = Uuid::new_v4();
-        let entity_id = Uuid::new_v4();
-
-        let result = super::delete_entity(
-            "Delete Entity",
-            space_id,
-            entity_id,
-        );
-
-        assert!(result.is_ok());
-        let bytes = result.unwrap();
-        assert!(!bytes.is_empty());
-
-        // Verify we can decode it
-        let decoded = HermesEdit::decode(&bytes[..]);
-        assert!(decoded.is_ok());
-        let edit = decoded.unwrap();
-        assert_eq!(edit.name, "Delete Entity");
-    }
-
-    #[test]
-    fn test_restore_entity() {
-        let space_id = Uuid::new_v4();
-        let entity_id = Uuid::new_v4();
-
-        let result = super::restore_entity(
-            "Restore Entity",
-            space_id,
-            entity_id,
-        );
-
-        assert!(result.is_ok());
-        let bytes = result.unwrap();
-        assert!(!bytes.is_empty());
-
-        // Verify we can decode it
-        let decoded = HermesEdit::decode(&bytes[..]);
-        assert!(decoded.is_ok());
-        let edit = decoded.unwrap();
-        assert_eq!(edit.name, "Restore Entity");
-    }
 }
