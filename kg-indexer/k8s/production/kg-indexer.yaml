@@ -146,9 +146,9 @@ spec:
               value: "kg_indexer=info"
           resources:
             requests:
-              memory: "256Mi"
+              memory: "768Mi"
               cpu: "250m"
             limits:
-              memory: "1Gi"
+              memory: "2Gi"
               cpu: "500m"
       restartPolicy: Always

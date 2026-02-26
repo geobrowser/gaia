@@ -292,6 +292,21 @@ cargo bench -p hermes-pipeline -- 'decode_proposal_created'
 
 The pipeline transform is not a bottleneck. Network I/O (substreams, Kafka, IPFS) dominates real-world latency.
 
+## Delivery Semantics
+
+- Hermes pipeline now waits for Kafka broker delivery reports before treating an emit as successful.
+- Producer defaults prioritize durability and ordering (`acks=all`, idempotence enabled, single in-flight request).
+- Timeouts are configurable:
+  - `KAFKA_MESSAGE_TIMEOUT_MS` (producer delivery timeout, default `30000`)
+  - `KAFKA_SEND_TIMEOUT_MS` (send queue timeout, defaults to `KAFKA_MESSAGE_TIMEOUT_MS`)
+
+### Duplicate and Replay Behavior
+
+- The system remains at-least-once at block level.
+- If a block partially emits and then fails, a retry can re-emit previously delivered events from that block.
+- Consumers should treat `event-id` as an idempotency key and deduplicate accordingly.
+- Reorg undo handling and persistent cursor recovery are still future work.
+
 ## Future Work
 
 - **Cursor persistence**: Add PostgreSQL/Redis storage for cursor to resume from last processed block
