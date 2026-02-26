@@ -41,6 +41,45 @@ spec:
               value: "production"
             - name: KAFKA_TOPIC
               value: "topology.canonical"
+            - name: USE_MOCK
+              value: "false"
+            - name: SUBSTREAMS_ENDPOINT
+              valueFrom:
+                secretKeyRef:
+                  name: hermes-ipfs-cache-secrets
+                  key: SUBSTREAMS_ENDPOINT
+            - name: SUBSTREAMS_API_TOKEN
+              valueFrom:
+                secretKeyRef:
+                  name: hermes-ipfs-cache-secrets
+                  key: SUBSTREAMS_API_TOKEN
+                  optional: true
+            - name: SUBSTREAMS_START_BLOCK
+              value: "82655"
+            - name: ROOT_SPACE_ID
+              valueFrom:
+                secretKeyRef:
+                  name: atlas-secrets
+                  key: ROOT_SPACE_ID
+            - name: ATLAS_CHECKPOINT_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: api-secrets
+                  key: DATABASE_URL
+            - name: ATLAS_INDEXER_ID
+              value: "atlas-production"
+            - name: ATLAS_RUNTIME_COMPATIBILITY_MARKER
+              value: "atlas-v1"
+            - name: ATLAS_FAIL_OPEN_BOUND
+              value: "10"
+            - name: ATLAS_CHECKPOINT_RETRY_ATTEMPTS
+              value: "3"
+            - name: ATLAS_CHECKPOINT_RETRY_BACKOFF_MS
+              value: "200"
+            - name: ATLAS_PAUSE_RECOVERY_MAX_ATTEMPTS
+              value: "120"
+            - name: ATLAS_CHECKPOINT_ALLOW_FRESH_START
+              value: "false"
             - name: SENTRY_DSN
               valueFrom:
                 secretKeyRef:
