@@ -309,6 +309,13 @@
       "when": 1771004354519,
       "tag": "0043_real_psylocke",
       "breakpoints": true
+    },
+    {
+      "idx": 44,
+      "version": "7",
+      "when": 1772135257640,
+      "tag": "0044_sweet_photon",
+      "breakpoints": true
     }
   ]
 }
