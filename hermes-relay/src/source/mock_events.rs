@@ -28,6 +28,8 @@
 use alloy::primitives::U256;
 use alloy::sol;
 use alloy::sol_types::SolType;
+use ethabi::Token;
+use ethabi::ethereum_types::U256 as EthU256;
 
 use crate::actions;
 use hermes_substream::pb::hermes::Action;
@@ -224,6 +226,40 @@ pub fn subspace_related(parent_space_id: SpaceId, subspace_id: SpaceId) -> Actio
     }
 }
 
+/// Create a SUBSPACE_UNVERIFIED action (removes a verified edge).
+///
+/// - `parent_space_id`: The space removing verification
+/// - `subspace_id`: The subspace being unverified
+pub fn subspace_unverified(parent_space_id: SpaceId, subspace_id: SpaceId) -> Action {
+    let mut topic = vec![0u8; 16];
+    topic.extend_from_slice(&subspace_id);
+
+    Action {
+        from_id: parent_space_id.to_vec(),
+        to_id: vec![0u8; 16],
+        action: actions::SUBSPACE_UNVERIFIED.to_vec(),
+        topic,
+        data: vec![],
+    }
+}
+
+/// Create a SUBSPACE_UNRELATED action (removes a related edge).
+///
+/// - `parent_space_id`: The space removing the related link
+/// - `subspace_id`: The subspace being unrelated
+pub fn subspace_unrelated(parent_space_id: SpaceId, subspace_id: SpaceId) -> Action {
+    let mut topic = vec![0u8; 16];
+    topic.extend_from_slice(&subspace_id);
+
+    Action {
+        from_id: parent_space_id.to_vec(),
+        to_id: vec![0u8; 16],
+        action: actions::SUBSPACE_UNRELATED.to_vec(),
+        topic,
+        data: vec![],
+    }
+}
+
 /// Create a SUBSPACE_TOPIC_DECLARED action.
 ///
 /// - `parent_space_id`: The parent space declaring the topic
@@ -413,8 +449,6 @@ fn encode_proposal_data(
     voting_mode: VotingMode,
     actions: &[ProposalAction],
 ) -> Vec<u8> {
-    use ethabi::{Token, ethereum_types::U256 as EthU256};
-
     // Convert actions to ethabi tokens
     let action_tokens: Vec<Token> = actions
         .iter()
@@ -1179,11 +1213,12 @@ pub mod test_topology {
         actions.push(member_removed(SPACE_A, make_id(0x12)));
 
         // Proposal 3: Add editor
+        // Note: Using 0x50 to avoid collision with SPACE_Z (0x22) which is in the non-canonical island
         actions.push(proposal_created(
             SPACE_B,
             PROPOSAL_3,
             VotingMode::Fast,
-            vec![ProposalAction::add_editor(make_id(0x22))],
+            vec![ProposalAction::add_editor(make_id(0x50))],
         ));
         actions.push(proposal_settings_selected(
             SPACE_B,
@@ -1213,14 +1248,15 @@ pub mod test_topology {
             VoteOption::Abstain,
         ));
         actions.push(proposal_executed(SPACE_B, PROPOSAL_3));
-        actions.push(editor_added(SPACE_B, make_id(0x22)));
+        actions.push(editor_added(SPACE_B, make_id(0x50)));
 
         // Proposal 4: Remove editor
+        // Note: Using 0x51 to avoid collision with SPACE_W (0x23) which is in the non-canonical island
         actions.push(proposal_created(
             SPACE_B,
             PROPOSAL_4,
             VotingMode::Slow,
-            vec![ProposalAction::remove_editor(make_id(0x23))],
+            vec![ProposalAction::remove_editor(make_id(0x51))],
         ));
         actions.push(proposal_settings_selected(
             SPACE_B,
@@ -1251,7 +1287,7 @@ pub mod test_topology {
             VoteOption::Yes,
         ));
         actions.push(proposal_executed(SPACE_B, PROPOSAL_4));
-        actions.push(editor_removed(SPACE_B, make_id(0x23)));
+        actions.push(editor_removed(SPACE_B, make_id(0x51)));
 
         // Proposal 5: Flag content
         let mut flag_target = [0u8; 32];

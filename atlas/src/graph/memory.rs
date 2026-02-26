@@ -80,7 +80,7 @@ pub struct TransitiveGraphMemory {
 /// Calculate memory usage of a TransitiveGraph
 pub fn transitive_graph_size(graph: &TransitiveGraph) -> TransitiveGraphMemory {
     let tree_bytes = tree_node_size(&graph.tree);
-    let flat_set_bytes = hashset_size::<SpaceId>(&graph.flat);
+    let flat_set_bytes = hashset_size::<SpaceId>(&graph.members);
 
     TransitiveGraphMemory {
         total_bytes: tree_bytes + flat_set_bytes,
@@ -93,40 +93,15 @@ pub fn transitive_graph_size(graph: &TransitiveGraph) -> TransitiveGraphMemory {
 // TreeNode memory calculation
 // ============================================================================
 
-/// Calculate heap memory usage of a TreeNode (recursive)
+/// Calculate heap memory usage of a TreeNode (iterative)
 pub fn tree_node_size(node: &TreeNode) -> usize {
-    // Vec allocation for children
-    let vec_alloc = node.children.capacity() * mem::size_of::<TreeNode>();
-    // Recursive children heap allocations
-    let children_heap: usize = node.children.iter().map(tree_node_size).sum();
-    vec_alloc + children_heap
-}
-
-// ============================================================================
-// Cache memory calculation
-// ============================================================================
-
-/// Memory breakdown for TransitiveProcessor cache
-#[derive(Debug, Clone, Default)]
-pub struct CacheMemory {
-    pub total_bytes: usize,
-    pub full_graphs_bytes: usize,
-    pub explicit_only_graphs_bytes: usize,
-    pub reverse_deps_bytes: usize,
-}
-
-/// Calculate memory usage of a TransitiveProcessor's cache
-pub fn processor_cache_size(processor: &super::TransitiveProcessor) -> CacheMemory {
-    // We need to compute this through the public API
-    // The processor exposes cache_memory_bytes() but we want a breakdown
-    // For now, return the total from the processor
-    let total = processor.cache_memory_bytes();
-    CacheMemory {
-        total_bytes: total,
-        full_graphs_bytes: 0,          // Would need internal access
-        explicit_only_graphs_bytes: 0, // Would need internal access
-        reverse_deps_bytes: 0,         // Would need internal access
+    let mut total = 0;
+    let mut stack = vec![node];
+    while let Some(n) = stack.pop() {
+        total += n.children.capacity() * mem::size_of::<TreeNode>();
+        stack.extend(n.children.iter());
     }
+    total
 }
 
 // ============================================================================
@@ -198,49 +173,8 @@ pub fn bytes_per_node(state: &GraphState) -> f64 {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::events::{BlockMetadata, SpaceType};
     use crate::graph::GraphState;
-
-    fn make_space_id(n: u8) -> SpaceId {
-        let mut id = [0u8; 16];
-        id[15] = n;
-        id
-    }
-
-    fn make_topic_id(n: u8) -> TopicId {
-        let mut id = [0u8; 16];
-        id[15] = n;
-        id
-    }
-
-    fn make_block_meta() -> BlockMetadata {
-        BlockMetadata {
-            block_number: 1,
-            block_timestamp: 12,
-            tx_hash: "0x1".to_string(),
-            cursor: "cursor_1".to_string(),
-        }
-    }
-
-    fn create_space(state: &mut GraphState, n: u8) -> SpaceId {
-        use crate::events::{SpaceCreated, SpaceTopologyEvent, SpaceTopologyPayload};
-
-        let space = make_space_id(n);
-        let topic = make_topic_id(n);
-        let event = SpaceTopologyEvent {
-            meta: make_block_meta(),
-            payload: SpaceTopologyPayload::SpaceCreated(SpaceCreated {
-                space_id: space,
-                topic_id: topic,
-                space_type: SpaceType::Dao {
-                    initial_editors: vec![],
-                    initial_members: vec![],
-                },
-            }),
-        };
-        state.apply_event(&event);
-        space
-    }
+    use crate::test_utils::{create_space, make_space_id};
 
     #[test]
     fn test_empty_graph_state_size() {
