@@ -353,6 +353,8 @@ impl SearchIndexProvider for MockSearchProvider {
             succeeded,
             failed,
             results,
+            wall_ms: 0,
+            took_ms: 0,
         })
     }
 }

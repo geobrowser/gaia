@@ -487,6 +487,55 @@ cargo run --features search-indexer-repository/auto_index_creation
 - Update consumer group IDs once (e.g., `...-v2` → `...-v3`), then keep using those values
 - Consider incrementing `ENTITIES_INDEX_VERSION` to index into a fresh index (use `search-admin` to create the new index first)
 
+## Operational Observability (Structured Logs)
+
+The indexer emits a structured `indexer.stats` log line every 10 seconds with fields that let you diagnose performance and health from logs alone, without Prometheus or Grafana.
+
+### Fields
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `events_processed` | cumulative | Total Kafka events consumed since startup |
+| `documents_indexed` | cumulative | Total documents successfully indexed |
+| `events_per_sec` | rate | Kafka events consumed per second (this interval) |
+| `docs_per_sec` | rate | Documents indexed per second (this interval) |
+| `ops_per_sec` | rate | Individual OpenSearch operations per second |
+| `bulk_calls_per_sec` | rate | OpenSearch HTTP bulk/update_by_query calls per second |
+| `avg_bulk_ms` | rate | Average wall-clock ms per OpenSearch call (this interval) |
+| `failed_ops` | delta | Failed operations in this interval |
+| `updates` | cumulative | Upsert operations (entity index + add relation) |
+| `deletes` | cumulative | Delete operations |
+| `unsets` | cumulative | Unset-property operations |
+| `remove_relations` | cumulative | Remove-relation-by-ID operations |
+| `score_updates` | cumulative | Score updates (entity global + space + entity-space) |
+| `topic_updates` | cumulative | Space topic entity ID updates |
+| `rss_mb` | snapshot | Process resident memory in MB (Linux only, `n/a` on macOS) |
+
+### Diagnosing Common Issues
+
+**"Where is the bottleneck?"**
+- Low `events_per_sec` with idle `ops_per_sec` → Kafka consumption is the bottleneck (consumer lag, slow network, large messages).
+- High `events_per_sec` but high `avg_bulk_ms` (>200ms) → OpenSearch is slow. Check cluster health, disk I/O, or index shard count.
+- `events_per_sec` and `ops_per_sec` are both healthy but `docs_per_sec` is low → most events are score/topic updates (not document indexes).
+
+**"What's the error rate?"**
+- `failed_ops > 0` in an interval means OpenSearch rejected some operations. Check the error-level logs above the stats line for details (entity_id, operation_type, error message).
+
+**"Is memory growing?"**
+- Watch `rss_mb` over time. Steady growth suggests a leak or unbounded cache. Flat is healthy. See the Memory section above for expected baseline.
+
+**"What kind of work is the indexer doing?"**
+- Compare `updates` vs `score_updates` vs `topic_updates`. During a score backfill, `score_updates` will dominate. During normal entity ingestion, `updates` will dominate.
+
+**"Is OpenSearch keeping up?"**
+- `bulk_calls_per_sec` × `avg_bulk_ms` gives total ms spent in OpenSearch per second. If this approaches 1000ms, OpenSearch is saturated and you may need to scale it or reduce batch frequency.
+
+### Example Log Line
+
+```
+INFO indexer.stats events_processed=152340 documents_indexed=148200 events_per_sec=1520.3 docs_per_sec=1480.1 ops_per_sec=1520.3 bulk_calls_per_sec=15.2 avg_bulk_ms=42.3 failed_ops=0 updates=148200 deletes=12 unsets=340 remove_relations=5 score_updates=3780 topic_updates=3 rss_mb=285
+```
+
 ## Troubleshooting
 
 ### Common issues

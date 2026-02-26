@@ -255,8 +255,40 @@ impl SearchLoader {
                     BatchSource::Entity => &entity_ack_tx,
                 };
 
+                // Count operation types for metrics
+                for event in &batch.events {
+                    match event {
+                        ProcessedEvent::Index(_) | ProcessedEvent::AddRelation { .. } => {
+                            metrics.total_updates.fetch_add(1, Ordering::Relaxed);
+                        }
+                        ProcessedEvent::UnsetProperties { .. } => {
+                            metrics.total_unsets.fetch_add(1, Ordering::Relaxed);
+                        }
+                        ProcessedEvent::RemoveRelationById { .. } => {
+                            metrics.total_remove_relations.fetch_add(1, Ordering::Relaxed);
+                        }
+                        ProcessedEvent::UpdateEntityGlobalScore { .. }
+                        | ProcessedEvent::UpdateSpaceScore { .. }
+                        | ProcessedEvent::UpdateEntitySpaceScore { .. } => {
+                            metrics.total_score_updates.fetch_add(1, Ordering::Relaxed);
+                        }
+                        ProcessedEvent::UpdateSpaceTopicEntityId { .. } => {
+                            metrics.total_space_topic_updates.fetch_add(1, Ordering::Relaxed);
+                        }
+                    }
+                }
+
                 match self.load(batch.events).await {
                     Ok(operation_summaries) => {
+                        // Aggregate timing metrics from summaries
+                        for summary in &operation_summaries {
+                            metrics.total_bulk_calls.fetch_add(1, Ordering::Relaxed);
+                            metrics.total_bulk_wall_ms.fetch_add(summary.wall_ms, Ordering::Relaxed);
+                            metrics.total_bulk_took_ms.fetch_add(summary.took_ms, Ordering::Relaxed);
+                            metrics.total_operations.fetch_add(summary.total as u64, Ordering::Relaxed);
+                            metrics.total_failed_operations.fetch_add(summary.failed as u64, Ordering::Relaxed);
+                        }
+
                         // Check if any operation had failures
                         let total_failed =
                             operation_summaries.iter().map(|s| s.failed).sum::<usize>();
@@ -465,6 +497,8 @@ mod tests {
                 succeeded: count,
                 failed: 0,
                 results,
+                wall_ms: 0,
+                took_ms: 0,
             })
         }
     }

@@ -249,4 +249,8 @@ pub struct BatchOperationSummary {
     pub failed: usize,
     /// Individual results for each item.
     pub results: Vec<BatchOperationResult>,
+    /// Wall-clock time for the HTTP request(s) in milliseconds.
+    pub wall_ms: u64,
+    /// Server-side processing time reported by OpenSearch in milliseconds.
+    pub took_ms: u64,
 }

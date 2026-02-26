@@ -40,6 +40,8 @@ impl BatchOperationSummary {
             succeeded: 0,
             failed: 0,
             results: Vec::new(),
+            wall_ms: 0,
+            took_ms: 0,
         }
     }
 }
@@ -89,10 +91,12 @@ pub async fn execute_bulk<B: Serialize>(
     if refresh {
         bulk_request = bulk_request.refresh(Refresh::True);
     }
+    let start = std::time::Instant::now();
     let response = bulk_request
         .send()
         .await
         .map_err(|e| SearchIndexError::bulk_index(e.to_string()))?;
+    let wall_ms = start.elapsed().as_millis() as u64;
 
     let status = response.status_code();
     if !status.is_success() {
@@ -109,7 +113,10 @@ pub async fn execute_bulk<B: Serialize>(
         .await
         .map_err(|e| SearchIndexError::parse(e.to_string()))?;
 
-    let summary = parse_bulk_response(&response_body, metas, action);
+    let took_ms = response_body.get("took").and_then(|v| v.as_u64()).unwrap_or(0);
+    let mut summary = parse_bulk_response(&response_body, metas, action);
+    summary.wall_ms = wall_ms;
+    summary.took_ms = took_ms;
 
     if summary.failed > 0 {
         warn!(
@@ -205,5 +212,7 @@ pub fn parse_bulk_response(
         succeeded,
         failed,
         results,
+        wall_ms: 0,
+        took_ms: 0,
     }
 }
