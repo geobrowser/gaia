@@ -84,7 +84,10 @@ cleanup() {
         echo -e "${RED}── Indexer log (second run) ──${RESET}"
         cat "$WORK_DIR/indexer-run2.log" 2>/dev/null | tail -40 || true
     fi
-    rm -rf "$WORK_DIR"
+    # In CI, keep logs for artifact upload; locally, clean up
+    if [[ -z "${CI:-}" ]]; then
+        rm -rf "$WORK_DIR"
+    fi
 }
 trap cleanup EXIT
 
@@ -124,9 +127,11 @@ fi
 pass "OpenSearch reachable"
 
 # Find Kafka container for admin commands
-KAFKA_CONTAINER=$(docker ps --format '{{.Names}}' | grep -E '^(kafka|hermes-kafka)' | grep -v ui | head -1)
+if [[ -z "${KAFKA_CONTAINER:-}" ]]; then
+    KAFKA_CONTAINER=$(docker ps --format '{{.Names}}' | grep -i kafka | grep -v ui | head -1)
+fi
 if [[ -z "$KAFKA_CONTAINER" ]]; then
-    fail "Cannot find Kafka container"
+    fail "Cannot find Kafka container (set KAFKA_CONTAINER env var in CI)"
     exit 1
 fi
 pass "Kafka container: $KAFKA_CONTAINER"

@@ -78,6 +78,23 @@ export const meta = pgTable("meta", {
 	blockNumber: text().notNull(),
 })
 
+/**
+ * atlas_checkpoints
+ *
+ * Stores Atlas checkpoint state used for restart recovery.
+ */
+export const atlasCheckpoints = pgTable("atlas_checkpoints", {
+	indexerId: text("indexer_id").primaryKey(),
+	cursor: text().notNull(),
+	blockNumber: bigint("block_number", {mode: "number"}).notNull(),
+	graphStateVersion: smallint("graph_state_version").notNull(),
+	runtimeCompatibilityMarker: text("runtime_compatibility_marker").notNull(),
+	rootSpaceId: text("root_space_id").notNull(),
+	schemaVersion: smallint("schema_version").notNull(),
+	graphStateBlob: jsonb("graph_state_blob").notNull(),
+	updatedAt: timestamp("updated_at", {withTimezone: true, mode: "date"}).notNull().defaultNow(),
+})
+
 export const spaceTypesEnum = pgEnum("spaceTypes", ["DAO", "Personal"])
 
 export const spaces = pgTable("spaces", {
