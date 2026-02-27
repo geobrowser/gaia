@@ -278,6 +278,21 @@ def main() -> None:
     )
     engine = RankingEngine(config)
 
+    logger.info(
+        "Scoring configuration: normalize_scores=%s, normalization_method=%s, "
+        "use_time_decay=%s, time_decay_factor=%s, use_activity_metrics=%s, "
+        "use_distance_weighting=%s, distance_weight_base=%s, max_distance=%s, "
+        "use_contestation_score=%s, include_subspace_votes=%s, "
+        "filter_non_members=%s, require_space_membership=%s, output_mode=%s",
+        config.normalize_scores, config.normalization_method,
+        config.use_time_decay, config.time_decay_factor,
+        config.use_activity_metrics, config.use_distance_weighting,
+        config.distance_weight_base, config.max_distance,
+        config.use_contestation_score, config.include_subspace_votes,
+        config.filter_non_members, config.require_space_membership,
+        output_mode.value,
+    )
+
     try:
         pipeline = ScoringPipeline(
             database_url=database_url,
