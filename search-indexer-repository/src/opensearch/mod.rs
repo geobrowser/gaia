@@ -7,6 +7,7 @@ mod bulk;
 mod index_config;
 mod index_management;
 mod provider;
+pub mod retry;
 mod scripts;
 mod unset_document_properties;
 

@@ -5860,6 +5860,7 @@ name = "search-indexer-repository"
 version = "0.1.0"
 dependencies = [
  "async-trait",
+ "bytes",
  "chrono",
  "opensearch",
  "search-indexer-shared",
