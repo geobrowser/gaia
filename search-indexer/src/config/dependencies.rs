@@ -196,8 +196,20 @@ impl Dependencies {
 
         info!("Entities consumer created");
 
+        // Read log sample rate and compute sampling interval
+        let log_sample_rate: f64 = env::var("LOG_SAMPLE_RATE")
+            .ok()
+            .and_then(|s| s.parse().ok())
+            .unwrap_or(0.01);
+        let sample_interval = if log_sample_rate <= 0.0 {
+            0
+        } else {
+            (1.0 / log_sample_rate).round() as u64
+        };
+        info!(log_sample_rate, sample_interval, "Log sampling configuration");
+
         // Initialize processor with pre-warmed space topic cache
-        let processor = Processor::with_space_topic_cache(space_topic_cache);
+        let processor = Processor::with_space_topic_cache(space_topic_cache, sample_interval);
 
         // Wrap provider in Arc for sharing between loader and health checks
         let provider = Arc::new(search_provider);

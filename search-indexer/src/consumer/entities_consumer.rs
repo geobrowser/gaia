@@ -811,6 +811,19 @@ mod tests {
     use crate::consumer::EntityEventType;
     use grc_20::{CreateEntity, PropertyValue, UnsetLanguage, UnsetValue};
 
+    /// Create a consumer for testing without requiring the ENVIRONMENT env var.
+    /// Bypasses `get_topic_prefix()` by using `with_batch_config()` directly.
+    fn test_consumer() -> EntitiesConsumer {
+        EntitiesConsumer::with_batch_config(
+            "localhost:9092",
+            "test-group",
+            "knowledge.edits".to_string(),
+            EntitiesConsumer::DEFAULT_BATCH_SIZE,
+            EntitiesConsumer::DEFAULT_BATCH_TIMEOUT_MS,
+        )
+        .unwrap()
+    }
+
     #[test]
     fn test_constants() {
         assert_eq!(EntitiesConsumer::KNOWLEDGE_EDITS_TOPIC, "knowledge.edits");
@@ -820,7 +833,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_process_update_entity_unset_single_property() {
-        let consumer = EntitiesConsumer::new("localhost:9092", "test-group").unwrap();
+        let consumer = test_consumer();
         let entity_id = Uuid::new_v4();
         let space_id = Uuid::new_v4();
 
@@ -846,7 +859,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_process_update_entity_unset_multiple_properties() {
-        let consumer = EntitiesConsumer::new("localhost:9092", "test-group").unwrap();
+        let consumer = test_consumer();
         let entity_id = Uuid::new_v4();
         let space_id = Uuid::new_v4();
 
@@ -884,7 +897,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_process_update_entity_unset_unknown_property() {
-        let consumer = EntitiesConsumer::new("localhost:9092", "test-group").unwrap();
+        let consumer = test_consumer();
         let entity_id = Uuid::new_v4();
         let space_id = Uuid::new_v4();
 
@@ -905,7 +918,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_process_update_entity_unset_with_set_properties() {
-        let consumer = EntitiesConsumer::new("localhost:9092", "test-group").unwrap();
+        let consumer = test_consumer();
         let entity_id = Uuid::new_v4();
         let space_id = Uuid::new_v4();
 
@@ -946,7 +959,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_process_update_entity_unset_empty() {
-        let consumer = EntitiesConsumer::new("localhost:9092", "test-group").unwrap();
+        let consumer = test_consumer();
         let entity_id = Uuid::new_v4();
         let space_id = Uuid::new_v4();
 
@@ -965,7 +978,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_process_create_entity_with_name() {
-        let consumer = EntitiesConsumer::new("localhost:9092", "test-group").unwrap();
+        let consumer = test_consumer();
         let entity_id = Uuid::new_v4();
         let space_id = Uuid::new_v4();
 
@@ -995,7 +1008,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_process_create_entity_with_all_properties() {
-        let consumer = EntitiesConsumer::new("localhost:9092", "test-group").unwrap();
+        let consumer = test_consumer();
         let entity_id = Uuid::new_v4();
         let space_id = Uuid::new_v4();
 
@@ -1043,7 +1056,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_process_create_entity_empty_values() {
-        let consumer = EntitiesConsumer::new("localhost:9092", "test-group").unwrap();
+        let consumer = test_consumer();
         let entity_id = Uuid::new_v4();
         let space_id = Uuid::new_v4();
 
@@ -1068,7 +1081,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_process_create_entity_unknown_properties() {
-        let consumer = EntitiesConsumer::new("localhost:9092", "test-group").unwrap();
+        let consumer = test_consumer();
         let entity_id = Uuid::new_v4();
         let space_id = Uuid::new_v4();
         let unknown_property_id = Uuid::new_v4();
@@ -1101,7 +1114,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_process_create_relation_avatar() {
-        let consumer = EntitiesConsumer::new("localhost:9092", "test-group").unwrap();
+        let consumer = test_consumer();
         let space_id = Uuid::new_v4();
         let image_entity_id = Uuid::new_v4();
 
@@ -1131,7 +1144,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_process_create_relation_type() {
-        let consumer = EntitiesConsumer::new("localhost:9092", "test-group").unwrap();
+        let consumer = test_consumer();
         let space_id = Uuid::new_v4();
 
         let relation = grc_20::CreateRelation {
@@ -1159,7 +1172,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_process_create_relation_non_indexed() {
-        let consumer = EntitiesConsumer::new("localhost:9092", "test-group").unwrap();
+        let consumer = test_consumer();
         let space_id = Uuid::new_v4();
 
         let relation = grc_20::CreateRelation {

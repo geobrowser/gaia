@@ -3,7 +3,7 @@
 //! Transforms entity and score events into search documents.
 
 use std::collections::HashMap;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -62,6 +62,23 @@ pub enum ProcessedEvent {
     },
 }
 
+/// Index into the per-event-type sample counters.
+#[derive(Clone, Copy)]
+enum SampleCategory {
+    EntityUpsert = 0,
+    EntityDelete = 1,
+    EntityRestore = 2,
+    UnsetProperties = 3,
+    CreateRelation = 4,
+    DeleteRelation = 5,
+    EntityGlobalScore = 6,
+    SpaceScore = 7,
+    EntitySpaceScore = 8,
+    UpdateSpaceTopicEntityId = 9,
+}
+
+const SAMPLE_CATEGORY_COUNT: usize = 10;
+
 /// Processor that transforms entity and score events into search documents.
 ///
 /// The processor is responsible for:
@@ -73,6 +90,8 @@ pub struct Processor {
     /// In-memory cache of space_id → topic_entity_id.
     /// Used to set space_topic_entity_id on new entity documents during upserts.
     space_topic_cache: HashMap<Uuid, Uuid>,
+    sample_counters: [AtomicU64; SAMPLE_CATEGORY_COUNT],
+    sample_interval: u64,
 }
 
 impl Processor {
@@ -80,14 +99,18 @@ impl Processor {
     pub fn new() -> Self {
         Self {
             space_topic_cache: HashMap::new(),
+            sample_counters: std::array::from_fn(|_| AtomicU64::new(0)),
+            sample_interval: 0,
         }
     }
 
     /// Create a new processor with a pre-warmed space topic cache.
-    pub fn with_space_topic_cache(cache: HashMap<Uuid, Uuid>) -> Self {
-        info!(cache_size = cache.len(), "Processor created with space topic cache");
+    pub fn with_space_topic_cache(cache: HashMap<Uuid, Uuid>, sample_interval: u64) -> Self {
+        info!(cache_size = cache.len(), sample_interval, "Processor created with space topic cache");
         Self {
             space_topic_cache: cache,
+            sample_counters: std::array::from_fn(|_| AtomicU64::new(0)),
+            sample_interval,
         }
     }
 
@@ -95,6 +118,18 @@ impl Processor {
     fn is_indexed_relation(&self, relation_type: &Uuid) -> bool {
         let rt = relation_type.to_string();
         rt == TYPE_RELATION_TYPE_ID || rt == AVATAR_RELATION_TYPE_ID || rt == COVER_RELATION_TYPE_ID
+    }
+
+    /// Returns true for approximately 1-in-N events of the given category
+    /// (where N = sample_interval). Each event type has its own counter so
+    /// that high-volume event types don't starve low-volume ones.
+    /// When sample_interval is 0, sampling is disabled.
+    fn should_sample(&self, category: SampleCategory) -> bool {
+        if self.sample_interval == 0 {
+            return false;
+        }
+        let count = self.sample_counters[category as usize].fetch_add(1, Ordering::Relaxed);
+        count.is_multiple_of(self.sample_interval)
     }
 
     /// Process a batch of entity events.
@@ -171,6 +206,14 @@ impl Processor {
             self.space_topic_cache
                 .insert(event.space_id, event.topic_entity_id);
 
+            if self.should_sample(SampleCategory::UpdateSpaceTopicEntityId) {
+                info!(
+                    space_id = %event.space_id,
+                    topic_entity_id = %event.topic_entity_id,
+                    "[sample] UpdateSpaceTopicEntityId"
+                );
+            }
+
             // Backfill all existing documents in this space
             processed.push(ProcessedEvent::UpdateSpaceTopicEntityId {
                 space_id: event.space_id,
@@ -228,6 +271,14 @@ impl Processor {
                         event.score
                     )));
                 }
+                if self.should_sample(SampleCategory::EntityGlobalScore) {
+                    info!(
+                        entity_id = %entity_id,
+                        score = event.score,
+                        "[sample] EntityGlobalScore"
+                    );
+                }
+
                 Ok(ProcessedEvent::UpdateEntityGlobalScore {
                     entity_id,
                     score: event.score,
@@ -249,6 +300,14 @@ impl Processor {
                         event.score
                     )));
                 }
+                if self.should_sample(SampleCategory::SpaceScore) {
+                    info!(
+                        space_id = %space_id,
+                        score = event.score,
+                        "[sample] SpaceScore"
+                    );
+                }
+
                 Ok(ProcessedEvent::UpdateSpaceScore {
                     space_id,
                     score: event.score,
@@ -275,6 +334,15 @@ impl Processor {
                         event.score
                     )));
                 }
+                if self.should_sample(SampleCategory::EntitySpaceScore) {
+                    info!(
+                        entity_id = %entity_id,
+                        space_id = %space_id,
+                        score = event.score,
+                        "[sample] EntitySpaceScore"
+                    );
+                }
+
                 Ok(ProcessedEvent::UpdateEntitySpaceScore {
                     entity_id,
                     space_id,
@@ -587,6 +655,19 @@ impl Processor {
                     doc.space_topic_entity_id = Some(topic_entity_id.to_string());
                 }
 
+                if self.should_sample(SampleCategory::EntityUpsert) {
+                    info!(
+                        entity_id = %doc.entity_id,
+                        space_id = %doc.space_id,
+                        name = ?doc.name,
+                        description = ?doc.description,
+                        has_avatar = doc.avatar.is_some(),
+                        has_cover = doc.cover.is_some(),
+                        has_image_url = doc.image_url.is_some(),
+                        "[sample] EntityUpsert"
+                    );
+                }
+
                 Ok(Some(ProcessedEvent::Index(doc)))
             }
             EntityEventType::Delete => {
@@ -599,6 +680,14 @@ impl Processor {
                     None,  // Description not needed for delete
                 );
                 doc.deleted = Some(true);
+
+                if self.should_sample(SampleCategory::EntityDelete) {
+                    info!(
+                        entity_id = %doc.entity_id,
+                        space_id = %doc.space_id,
+                        "[sample] EntityDelete"
+                    );
+                }
 
                 Ok(Some(ProcessedEvent::Index(doc)))
             }
@@ -613,6 +702,14 @@ impl Processor {
                 );
                 doc.deleted = Some(false);
 
+                if self.should_sample(SampleCategory::EntityRestore) {
+                    info!(
+                        entity_id = %doc.entity_id,
+                        space_id = %doc.space_id,
+                        "[sample] EntityRestore"
+                    );
+                }
+
                 Ok(Some(ProcessedEvent::Index(doc)))
             }
             EntityEventType::UnsetProperties => {
@@ -620,6 +717,15 @@ impl Processor {
                     // No properties to unset, skip
                     return Ok(None);
                 }
+                if self.should_sample(SampleCategory::UnsetProperties) {
+                    info!(
+                        entity_id = %event.entity_id,
+                        space_id = %event.space_id,
+                        property_keys = ?event.unset_property_keys,
+                        "[sample] UnsetProperties"
+                    );
+                }
+
                 Ok(Some(ProcessedEvent::UnsetProperties {
                     entity_id: event.entity_id,
                     space_id: event.space_id,
@@ -639,6 +745,17 @@ impl Processor {
                             space_id = %event.space_id,
                             "Processing indexed relation - adding to entity's relations"
                         );
+
+                        if self.should_sample(SampleCategory::CreateRelation) {
+                            info!(
+                                entity_id = %event.entity_id,
+                                space_id = %event.space_id,
+                                relation_id = %relation_id,
+                                relation_type = %relation_type,
+                                to_entity_id = %to_entity_id,
+                                "[sample] CreateRelation"
+                            );
+                        }
 
                         Ok(Some(ProcessedEvent::AddRelation {
                             entity_id: event.entity_id,
@@ -667,6 +784,13 @@ impl Processor {
                         relation_id = %relation_id,
                         "Processing relation delete"
                     );
+                    if self.should_sample(SampleCategory::DeleteRelation) {
+                        info!(
+                            relation_id = %relation_id,
+                            "[sample] DeleteRelation"
+                        );
+                    }
+
                     Ok(Some(ProcessedEvent::RemoveRelationById { relation_id }))
                 } else {
                     debug!("Skipped delete relation event with missing relation_id");
@@ -995,7 +1119,7 @@ mod tests {
         let mut cache = HashMap::new();
         cache.insert(space_id, topic_entity_id);
 
-        let processor = Processor::with_space_topic_cache(cache);
+        let processor = Processor::with_space_topic_cache(cache, 0);
 
         let event = EntityEvent::upsert(
             Uuid::new_v4(),
