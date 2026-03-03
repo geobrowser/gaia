@@ -43,7 +43,7 @@ const CLOCK_SKEW_BUFFER = 60
  * for an already-added member). 7 days is well beyond normal voting periods
  * (typically 1 day) while ensuring stale proposals age out naturally.
  */
-const MAX_PROPOSAL_AGE = 7 * 24 * 60 * 60 // 7 days
+export const MAX_PROPOSAL_AGE = 7 * 24 * 60 * 60 // 7 days
 
 // ---------------------------------------------------------------------------
 // Detection SQL
@@ -53,6 +53,7 @@ const MAX_PROPOSAL_AGE = 7 * 24 * 60 * 60 // 7 days
  * Finds slow-path proposals that are EXECUTABLE:
  * - Not yet executed (executed_at IS NULL)
  * - Slow voting mode
+ * - Created in the past (guards against corrupt future timestamps)
  * - Created within MAX_PROPOSAL_AGE (7 days) — older proposals are likely stuck
  * - Voting period ended (with clock-skew buffer)
  * - Quorum reached (total votes >= quorum)
@@ -69,6 +70,7 @@ SELECT p.id, p.space_id AS "spaceId"
 FROM proposals p
 WHERE p.executed_at IS NULL
   AND p.voting_mode = 'Slow'
+  AND p.created_at::bigint <= $1::bigint
   AND $1::bigint - p.created_at::bigint < ${MAX_PROPOSAL_AGE}
   AND $1::bigint > p.end_time + ${CLOCK_SKEW_BUFFER}
   AND (p.yes_count + p.no_count + p.abstain_count) >= p.quorum

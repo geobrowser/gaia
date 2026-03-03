@@ -120,7 +120,7 @@ Long-term mitigation: extract shared types/logic into `@geo/protocol` when a thi
 
 - **`created_at` is stored as text** — Unix timestamp in the proposals table. `ORDER BY created_at::bigint ASC` ensures numeric ordering. Without the `::bigint` cast, string ordering would be incorrect for timestamps of different lengths.
 - **`pg` doesn't support JS BigInt** — `nowSeconds` is passed as `Number()` and cast to `::bigint` in SQL. All Unix timestamps fit safely in JS number precision.
-- **7-day age cutoff** (`MAX_PROPOSAL_AGE`) — Proposals older than 7 days from creation are excluded. This prevents the executor from retrying permanently stuck proposals whose embedded actions revert (e.g., `addMember` for an already-added member). The DAOSpace contract reverts with `ActionReverted()` (selector `0x24c05f9a`), which rolls back the `executed` flag, so these proposals appear executable forever. The 7-day window is well beyond typical 1-day voting periods.
+- **7-day age cutoff** (`MAX_PROPOSAL_AGE`) — Excludes proposals older than 7 days to skip permanently stuck proposals. See RUNBOOK § "Proposals With Reverting Actions".
 - **No `LIMIT`** — Result set is bounded by reality (proposals simultaneously in EXECUTABLE state within the 7-day window). The DB read is fast; throughput is bounded by on-chain submission, not the query.
 
 ## Smart Wallet

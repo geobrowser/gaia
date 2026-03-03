@@ -16,7 +16,7 @@ import type {Hex} from "viem"
 import {type Address, getAddress} from "viem"
 
 import {InfraError, type RevertError, type SupportedChainId} from "./contracts.js"
-import {connectDb, disconnectDb, findExecutableProposals, type Proposal} from "./detect.js"
+import {connectDb, disconnectDb, findExecutableProposals, MAX_PROPOSAL_AGE, type Proposal} from "./detect.js"
 import {createSmartWallet, executeProposal, type SmartWallet, verifyExecutorSetup} from "./execute.js"
 import {flush, TelemetryLive} from "./telemetry.js"
 
@@ -231,7 +231,11 @@ const main = Effect.gen(function* () {
 	const bySpace = Map.groupBy(proposals, (p) => p.spaceId)
 
 	yield* Effect.logInfo("run_start").pipe(
-		Effect.annotateLogs({proposalsFound: proposals.length, spaces: bySpace.size}),
+		Effect.annotateLogs({
+			proposalsFound: proposals.length,
+			spaces: bySpace.size,
+			ageCutoffTimestamp: nowSeconds - MAX_PROPOSAL_AGE,
+		}),
 	)
 
 	if (proposals.length === 0) {
