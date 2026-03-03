@@ -89,9 +89,6 @@ export function connectDb(databaseUrl: string): Effect.Effect<PgClient, InfraErr
 		try: async () => {
 			const client = new Pg.Client({
 				connectionString: databaseUrl,
-				// DigitalOcean managed Postgres uses a self-signed CA. pg v8.19+ treats
-				// sslmode=require as verify-full, which rejects self-signed certs.
-				ssl: {rejectUnauthorized: false},
 				connectionTimeoutMillis: 5_000,
 				statement_timeout: 30_000,
 				idle_in_transaction_session_timeout: 60_000,

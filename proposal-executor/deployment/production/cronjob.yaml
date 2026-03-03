@@ -20,6 +20,26 @@ spec:
             runAsUser: 1001
           imagePullSecrets:
             - name: regcred
+          volumes:
+            - name: ssl-certs
+              emptyDir: {}
+          initContainers:
+            - name: setup-certs
+              image: registry.digitalocean.com/geo/proposal-executor:latest
+              command: ["sh", "-c", "echo \"$DATABASE_SSL_CA\" > /ssl/ca.crt"]
+              env:
+                - name: DATABASE_SSL_CA
+                  valueFrom:
+                    secretKeyRef:
+                      name: proposal-executor-credentials
+                      key: DATABASE_SSL_CA
+              volumeMounts:
+                - name: ssl-certs
+                  mountPath: /ssl
+              securityContext:
+                allowPrivilegeEscalation: false
+                capabilities:
+                  drop: ["ALL"]
           containers:
             - name: proposal-executor
               image: registry.digitalocean.com/geo/proposal-executor:latest
@@ -60,6 +80,13 @@ spec:
                       name: proposal-executor-credentials
                       key: SENTRY_DSN
                       optional: true
+                # Trust DigitalOcean's CA cert for database SSL
+                - name: NODE_EXTRA_CA_CERTS
+                  value: "/ssl/ca.crt"
+              volumeMounts:
+                - name: ssl-certs
+                  mountPath: /ssl
+                  readOnly: true
               securityContext:
                 allowPrivilegeEscalation: false
                 readOnlyRootFilesystem: true
