@@ -229,7 +229,10 @@ async fn test_insert_subspace_idempotent() {
     .fetch_one(&pool)
     .await
     .unwrap();
-    assert_eq!(count.0, 1, "should have exactly 1 row after duplicate insert");
+    assert_eq!(
+        count.0, 1,
+        "should have exactly 1 row after duplicate insert"
+    );
 
     // Cleanup
     sqlx::query("DELETE FROM subspaces WHERE parent_space_id = $1 AND child_space_id = $2")

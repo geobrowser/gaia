@@ -11,9 +11,9 @@
 use anyhow::Result;
 use hermes_instrumentation::{debug_span, warn};
 
-use hermes_relay::{actions, Action};
+use hermes_relay::{Action, actions};
 use hermes_schema::pb::space::{
-    hermes_create_space, DefaultDaoSpacePayload, EoaSpacePayload, HermesCreateSpace,
+    DefaultDaoSpacePayload, EoaSpacePayload, HermesCreateSpace, hermes_create_space,
 };
 
 use super::BlockMetadata;

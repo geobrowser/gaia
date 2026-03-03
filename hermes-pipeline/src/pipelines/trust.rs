@@ -13,10 +13,10 @@
 use anyhow::Result;
 use hermes_instrumentation::debug_span;
 
-use hermes_relay::{actions, Action};
+use hermes_relay::{Action, actions};
 use hermes_schema::pb::space::{
-    hermes_space_trust_extension, HermesSpaceTrustExtension, RelatedExtension, RelatedRemoval,
-    SubtopicExtension, SubtopicRemoval, VerifiedExtension, VerifiedRemoval,
+    HermesSpaceTrustExtension, RelatedExtension, RelatedRemoval, SubtopicExtension,
+    SubtopicRemoval, VerifiedExtension, VerifiedRemoval, hermes_space_trust_extension,
 };
 
 use super::BlockMetadata;
