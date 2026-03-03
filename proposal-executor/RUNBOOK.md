@@ -31,7 +31,7 @@ Parallel across spaces, sequential within each. The bottleneck is the slowest si
 | `PIMLICO_API_KEY` | Yes | Pimlico bundler/paymaster API key. |
 | `EXECUTOR_SPACE_ID` | No | bytes16, 0x-prefixed. The executor's personal space ID (public on-chain data). |
 | `SPACE_REGISTRY_ADDRESS` | No | Space Registry contract address. |
-| `RPC_URL` | No | Chain RPC endpoint (must be `http://` or `https://`). |
+| `RPC_URL` | Yes | Chain RPC endpoint (must be `http://` or `https://`). May contain API keys in the path. |
 | `CHAIN_ID` | No | `80451` (mainnet) or `19411` (testnet). |
 
 > **Note:** `SENTRY_DSN` is accepted by the K8s manifest (`optional: true`) but Sentry integration is **not yet wired**. Structured JSON logs are the sole observability channel.

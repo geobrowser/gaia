@@ -48,11 +48,14 @@ spec:
                       key: PIMLICO_API_KEY
                 # Config (non-sensitive — plain values)
                 - name: EXECUTOR_SPACE_ID
-                  value: "" # TODO: set after creating executor personal space on testnet
+                  value: "0xb64f2e2d69be2ddbb5e3c997cf8a7d15"
                 - name: SPACE_REGISTRY_ADDRESS
                   value: "0xB01683b2f0d38d43fcD4D9aAB980166988924132"
                 - name: RPC_URL
-                  value: "https://rpc-geo-test-zc16z3tcvf.t.conduit.xyz"
+                  valueFrom:
+                    secretKeyRef:
+                      name: proposal-executor-credentials
+                      key: RPC_URL
                 - name: CHAIN_ID
                   value: "19411"
                 # Optional: Sentry error reporting

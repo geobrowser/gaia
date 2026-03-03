@@ -34,7 +34,8 @@ interface ExecutorEnv {
 	pimlicoApiKey: Redacted.Redacted
 	executorSpaceId: Hex
 	spaceRegistryAddress: Address
-	rpcUrl: string
+	/** Redacted — may contain API keys in the path */
+	rpcUrl: Redacted.Redacted
 	chainId: SupportedChainId
 }
 
@@ -50,10 +51,11 @@ const parseConfig: Effect.Effect<ExecutorEnv, InfraError> = Effect.gen(function*
 	const rawPrivateKey = yield* Config.redacted("EXECUTOR_PRIVATE_KEY")
 	const pimlicoApiKey = yield* Config.redacted("PIMLICO_API_KEY")
 
+	const rpcUrl = yield* Config.redacted("RPC_URL")
+
 	// Non-sensitive
 	const rawExecutorSpaceId = yield* Config.string("EXECUTOR_SPACE_ID")
 	const rawSpaceRegistryAddress = yield* Config.string("SPACE_REGISTRY_ADDRESS")
-	const rpcUrl = yield* Config.string("RPC_URL")
 	const chainId = yield* Config.integer("CHAIN_ID")
 
 	// --- Validate private key ---
@@ -97,11 +99,12 @@ const parseConfig: Effect.Effect<ExecutorEnv, InfraError> = Effect.gen(function*
 	}
 
 	// --- Validate RPC URL ---
-	if (!rpcUrl.startsWith("http://") && !rpcUrl.startsWith("https://")) {
+	const rpcUrlValue = Redacted.value(rpcUrl)
+	if (!rpcUrlValue.startsWith("http://") && !rpcUrlValue.startsWith("https://")) {
 		return yield* Effect.fail(
 			new InfraError({
 				proposalId: "N/A",
-				message: `Invalid RPC_URL: expected http:// or https:// URL, got "${rpcUrl}"`,
+				message: "Invalid RPC_URL: expected http:// or https:// URL",
 				durationMs: 0,
 			}),
 		)
@@ -213,7 +216,7 @@ const program = Effect.gen(function* () {
 		pimlicoApiKey: Redacted.value(config.pimlicoApiKey),
 		executorSpaceId: config.executorSpaceId,
 		spaceRegistryAddress: config.spaceRegistryAddress,
-		rpcUrl: config.rpcUrl,
+		rpcUrl: Redacted.value(config.rpcUrl),
 		chainId: config.chainId,
 	})
 
