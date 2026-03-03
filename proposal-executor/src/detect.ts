@@ -93,14 +93,16 @@ export function connectDb(databaseUrl: string): Effect.Effect<PgClient, InfraErr
 				// sslmode=require as verify-full, which rejects self-signed certs.
 				ssl: {rejectUnauthorized: false},
 				connectionTimeoutMillis: 5_000,
-				statement_timeout: 30_000,
-				idle_in_transaction_session_timeout: 60_000,
-				lock_timeout: 5_000,
 				keepAlive: true,
 				keepAliveInitialDelayMillis: 10_000,
 				application_name: "proposal-executor",
 			})
 			await client.connect()
+			// Set session-level timeouts after connecting. DigitalOcean managed Postgres
+			// rejects these as startup parameters, so we issue SET commands instead.
+			await client.query("SET statement_timeout = '30s'")
+			await client.query("SET idle_in_transaction_session_timeout = '60s'")
+			await client.query("SET lock_timeout = '5s'")
 			return client
 		},
 		catch: (error) => {
