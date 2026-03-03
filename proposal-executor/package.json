@@ -1,0 +1,26 @@
+{
+	"name": "proposal-executor",
+	"version": "0.1.0",
+	"description": "Auto-execute EXECUTABLE slow-path governance proposals",
+	"type": "module",
+	"private": true,
+	"scripts": {
+		"start": "bun run src/index.ts",
+		"test": "bun test",
+		"lint": "biome check",
+		"lint:fix": "biome check --write",
+		"typecheck": "tsc --noEmit"
+	},
+	"dependencies": {
+		"effect": "^3.19.14",
+		"permissionless": "^0.3.2",
+		"pg": "^8.13.3",
+		"viem": "^2.43.5"
+	},
+	"devDependencies": {
+		"@biomejs/biome": "^2.3.11",
+		"@types/bun": "latest",
+		"@types/pg": "^8.11.11",
+		"typescript": "^5.9.3"
+	}
+}

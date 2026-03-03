@@ -1,0 +1,71 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: proposal-executor
+  namespace: proposal-executor
+spec:
+  schedule: "*/5 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 5
+  failedJobsHistoryLimit: 5
+  jobTemplate:
+    spec:
+      activeDeadlineSeconds: 290 # 10s gap before next 5-min CronJob invocation
+      backoffLimit: 1 # Don't restart-loop on failure — try again in 5 min
+      template:
+        spec:
+          restartPolicy: Never # CronJob retries via next scheduled run, not restarts
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1001
+          imagePullSecrets:
+            - name: regcred
+          containers:
+            - name: proposal-executor
+              image: registry.digitalocean.com/geo/proposal-executor:latest
+              imagePullPolicy: Always
+              env:
+                # Secrets (sensitive — from K8s Secret)
+                - name: DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: proposal-executor-credentials
+                      key: DATABASE_URL
+                - name: EXECUTOR_PRIVATE_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: proposal-executor-credentials
+                      key: EXECUTOR_PRIVATE_KEY
+                - name: PIMLICO_API_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: proposal-executor-credentials
+                      key: PIMLICO_API_KEY
+                # Config (non-sensitive — plain values)
+                - name: EXECUTOR_SPACE_ID
+                  value: "" # Set per environment (public on-chain data, not a secret)
+                - name: SPACE_REGISTRY_ADDRESS
+                  value: "" # Set per environment (public blockchain data, not a secret)
+                - name: RPC_URL
+                  value: "" # Set per environment
+                - name: CHAIN_ID
+                  value: "80451"
+                # Optional: Sentry error reporting
+                - name: SENTRY_DSN
+                  valueFrom:
+                    secretKeyRef:
+                      name: proposal-executor-credentials
+                      key: SENTRY_DSN
+                      optional: true
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              resources:
+                requests:
+                  memory: "256Mi"
+                  cpu: "250m"
+                limits:
+                  memory: "512Mi"
+                  cpu: "500m"

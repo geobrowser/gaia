@@ -1,0 +1,128 @@
+/**
+ * Contract ABIs, chain definitions, and governance constants for the proposal executor.
+ *
+ * FORKED from geo-cli (v0.1.0):
+ * - ABI subset: geo-cli/src/contracts.ts (SpaceRegistryAbi — enter, addressToSpaceId)
+ * - Chain defs: geo-cli/src/network.ts (mainnetChain, testnetChain)
+ * - Governance: geo-cli/src/governance.ts (GOVERNANCE_ACTIONS, encoding helpers)
+ * - Safe addrs: geo-cli/src/wallet.ts:54-61 (TESTNET_SAFE_ADDRESSES)
+ *
+ * Long-term consolidation: extract a shared @geo/protocol package when a third consumer appears.
+ */
+
+import {Data} from "effect"
+import type {Chain, Hex} from "viem"
+
+// ---------------------------------------------------------------------------
+// Tagged errors — defined here (leaf dependency) to avoid circular imports
+// ---------------------------------------------------------------------------
+
+/** On-chain revert — proposal is skipped and execution continues */
+export class RevertError extends Data.TaggedError("RevertError")<{
+	proposalId: string
+	message: string
+	expected: boolean
+	durationMs: number
+}> {}
+
+/** Infrastructure failure — retried per-proposal, then space is aborted */
+export class InfraError extends Data.TaggedError("InfraError")<{
+	proposalId: string
+	message: string
+	durationMs: number
+}> {}
+
+// ---------------------------------------------------------------------------
+// SpaceRegistry ABI — minimal subset (only enter + addressToSpaceId)
+// Source: geo-cli/src/contracts.ts:125-152
+// ---------------------------------------------------------------------------
+
+export const SpaceRegistryAbi = [
+	{
+		inputs: [{internalType: "address", name: "_account", type: "address"}],
+		name: "addressToSpaceId",
+		outputs: [{internalType: "bytes16", name: "_spaceId", type: "bytes16"}],
+		stateMutability: "view",
+		type: "function",
+	},
+	{
+		inputs: [
+			{internalType: "bytes16", name: "_fromSpaceId", type: "bytes16"},
+			{internalType: "bytes16", name: "_toSpaceId", type: "bytes16"},
+			{internalType: "bytes32", name: "_action", type: "bytes32"},
+			{internalType: "bytes32", name: "_topic", type: "bytes32"},
+			{internalType: "bytes", name: "_data", type: "bytes"},
+			{internalType: "bytes", name: "_signature", type: "bytes"},
+		],
+		name: "enter",
+		outputs: [],
+		stateMutability: "nonpayable",
+		type: "function",
+	},
+] as const
+
+// ---------------------------------------------------------------------------
+// Chain definitions
+// Source: geo-cli/src/network.ts
+// ---------------------------------------------------------------------------
+
+export const mainnetChain: Chain = {
+	id: 80451,
+	name: "Geo Genesis",
+	nativeCurrency: {name: "Ethereum", symbol: "ETH", decimals: 18},
+	rpcUrls: {
+		default: {http: ["https://rpc-geo-genesis-h0q2s21xx8.t.conduit.xyz"]},
+	},
+}
+
+export const testnetChain: Chain = {
+	id: 19411,
+	name: "Geo Genesis Testnet",
+	nativeCurrency: {name: "Ethereum", symbol: "ETH", decimals: 18},
+	rpcUrls: {
+		default: {http: ["https://rpc-geo-test-zc16z3tcvf.t.conduit.xyz"]},
+	},
+}
+
+export type SupportedChainId = 80451 | 19411
+
+export function getChain(chainId: SupportedChainId): Chain {
+	if (chainId === 80451) return mainnetChain
+	if (chainId === 19411) return testnetChain
+	// Exhaustiveness check — TypeScript will error here if a new chain ID is added
+	// to SupportedChainId without a corresponding branch above.
+	const _exhaustive: never = chainId
+	throw new Error(`Unsupported chain ID: ${_exhaustive}`)
+}
+
+// ---------------------------------------------------------------------------
+// Testnet Safe deployment addresses
+// Source: geo-cli/src/wallet.ts:54-61
+// ---------------------------------------------------------------------------
+
+export const TESTNET_SAFE_ADDRESSES = {
+	safeModuleSetupAddress: "0x2dd68b007B46fBe91B9A7c3EDa5A7a1063cB5b47" as const,
+	safe4337ModuleAddress: "0x75cf11467937ce3F2f357CE24ffc3DBF8fD5c226" as const,
+	safeProxyFactoryAddress: "0xd9d2Ba03a7754250FDD71333F444636471CACBC4" as const,
+	safeSingletonAddress: "0x639245e8476E03e789a244f279b5843b9633b2E7" as const,
+	multiSendAddress: "0x7B21BBDBdE8D01Df591fdc2dc0bE9956Dde1e16C" as const,
+	multiSendCallOnlyAddress: "0x32228dDEA8b9A2bd7f2d71A958fF241D79ca5eEC" as const,
+}
+
+// ---------------------------------------------------------------------------
+// Governance constants
+// Source: geo-cli/src/governance.ts
+// ---------------------------------------------------------------------------
+
+/** keccak256('GOVERNANCE.PROPOSAL_EXECUTED') — action hash for enter() */
+export const PROPOSAL_EXECUTED_ACTION = "0x62a60c0a9681612871e0dafa0f24bb0c83cbdde8be5a6299979c88d382369e96" as Hex
+
+/** Empty signature — ignored when msg.sender == _fromSpace */
+export const EMPTY_SIGNATURE = "0x" as Hex
+
+/**
+ * RATIO_BASE from the governance contract. Used in threshold calculations.
+ * Source: api/src/proposals/types.ts — RATIO_BASE = 10_000_000n
+ * Inlined as a number for SQL literal comparison.
+ */
+export const RATIO_BASE = 10_000_000
