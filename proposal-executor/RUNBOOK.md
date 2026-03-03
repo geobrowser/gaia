@@ -249,15 +249,13 @@ Some proposals pass all governance checks (quorum met, threshold met, voting end
 
 On-chain, the DAOSpace contract's `_executeProposal` executes each action sequentially and reverts with `ActionReverted()` (selector `0x24c05f9a`) if any action's `.call()` fails. Because the entire transaction reverts, `proposal.executed` is never set to `true` on-chain, and `executed_at` stays `NULL` in the database.
 
-**These proposals are permanently stuck.** They will be detected every CronJob cycle and revert every time. This is harmless — gas is sponsored and the reverts complete in <500ms — but it creates log noise.
+**Mitigation:** The detection SQL includes a **7-day age cutoff** (`MAX_PROPOSAL_AGE`). Proposals older than 7 days from creation are excluded from detection, so stuck proposals age out naturally without any per-proposal state tracking. This is well beyond the typical 1-day voting period.
 
-**How to identify them:** Look for `proposal_reverted` logs where the error contains `0x24c05f9a` or `ActionReverted`. Unlike transient infra errors, these will persist across every run with the same proposal IDs.
+**During the 7-day window:** Stuck proposals will be retried every CronJob cycle until they age out. This is harmless — gas is sponsored and reverts complete in <500ms — but creates some log noise.
 
-**Current behavior:** The executor classifies `ActionReverted` as an unexpected revert (`expected: false`) and skips the proposal. It will retry the same proposal on the next CronJob cycle indefinitely.
+**How to identify them:** Look for `proposal_reverted` logs where the error contains `0x24c05f9a` or `ActionReverted`. Unlike transient infra errors, these will repeat with the same proposal IDs across runs until the 7-day cutoff elapses.
 
-**Future improvement:** Add an `executor_skipped_proposals` table to track proposals that permanently revert. After N consecutive `ActionReverted` failures for the same proposal, stop retrying. The detection query would join against this table with `NOT EXISTS`. This keeps the executor's concerns separate from the API's `proposals` table schema.
-
-**Manual resolution:** If the embedded actions can be fixed (e.g., the proposal creator updates the proposal via `PROPOSAL_UPDATED`), the proposal will succeed on the next cycle. Otherwise, these proposals remain in the stuck state until the skip-list is implemented.
+**Manual resolution:** If a stuck proposal's embedded actions can be fixed (e.g., the proposal creator updates the proposal via `PROPOSAL_UPDATED`), it will succeed on the next cycle — as long as it's still within the 7-day window.
 
 ### Invalid UUIDs in Database
 
