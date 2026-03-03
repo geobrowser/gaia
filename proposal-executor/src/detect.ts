@@ -139,7 +139,13 @@ export function findExecutableProposals(client: PgClient, nowSeconds: number): E
 			const result = await client.query<Proposal>(DETECTION_SQL, [nowSeconds])
 			return result.rows
 		},
-		catch: (error) =>
-			new InfraError({proposalId: "N/A", message: `Detection query failed: ${error}`, durationMs: 0}),
+		catch: (error) => {
+			// Sanitize: pg errors on broken connections may contain the connection string (with password).
+			const safe =
+				error instanceof Error
+					? error.message.replace(/postgresql?:\/\/[^\s]+/gi, "<redacted>")
+					: "unknown error"
+			return new InfraError({proposalId: "N/A", message: `Detection query failed: ${safe}`, durationMs: 0})
+		},
 	})
 }

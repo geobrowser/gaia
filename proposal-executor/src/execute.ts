@@ -298,7 +298,10 @@ export function executeProposal(
 			},
 			catch: (error) => {
 				const durationMs = Date.now() - start
-				const message = String(error)
+				// Sanitize: strip Pimlico API key from bundler URL if present in error message.
+				// Defense in depth — viem may not include URLs in errors today, but we don't
+				// control their error formatting across versions.
+				const message = String(error).replace(/apikey=[^\s&"]+/gi, "apikey=<redacted>")
 				// Capture error type for observability — helps tighten classification over time
 				const errorName = error instanceof Error ? error.name : typeof error
 

@@ -96,6 +96,17 @@ const parseConfig: Effect.Effect<ExecutorEnv, InfraError> = Effect.gen(function*
 		)
 	}
 
+	// --- Validate RPC URL ---
+	if (!rpcUrl.startsWith("http://") && !rpcUrl.startsWith("https://")) {
+		return yield* Effect.fail(
+			new InfraError({
+				proposalId: "N/A",
+				message: `Invalid RPC_URL: expected http:// or https:// URL, got "${rpcUrl}"`,
+				durationMs: 0,
+			}),
+		)
+	}
+
 	// --- Validate chain ID ---
 	if (chainId !== 80451 && chainId !== 19411) {
 		return yield* Effect.fail(
