@@ -10,7 +10,8 @@ proposal-executor/
 │   ├── index.ts        # Effect orchestration, config parsing, entry point
 │   ├── detect.ts       # DB connection + detection SQL query
 │   ├── execute.ts      # Smart wallet, encoding helpers, on-chain execution
-│   └── contracts.ts    # ABI subset, chain defs, tagged errors, governance constants
+│   ├── contracts.ts    # ABI subset, chain defs, tagged errors, governance constants
+│   └── telemetry.ts    # OTel tracing + Sentry error tracking (adapted from api/)
 ├── tests/
 │   ├── detect.test.ts  # RATIO_BASE cross-validation, SQL structure, Proposal shape
 │   ├── execute.test.ts # Encoding correctness, constant validation, error classification
@@ -167,6 +168,33 @@ If revert noise becomes a problem at scale, the best future option is a local tr
 | `CHAIN_ID` | Must be `80451` or `19411` (exhaustive check). |
 
 Sensitive values use `Config.redacted` (matches API + geo-cli patterns). All validation failures are fail-fast `InfraError` with descriptive messages.
+
+## Telemetry
+
+Adapted from `api/src/services/telemetry.ts` for a short-lived CronJob.
+
+**Architecture:** OTel spans → `SentrySpanProcessor` → Sentry. Same as the API.
+
+**Differences from the API's telemetry:**
+- No HTTP/GraphQL middleware (batch job, not a server)
+- Always emits to console AND Sentry (API uses Sentry breadcrumbs as the sole output when Sentry is enabled — we dual-write because CronJob pods rely on `kubectl logs` / log aggregators as the primary observability channel)
+- Exports `flush()` called before `process.exit()` — short-lived processes must flush or pending events are lost
+- Initializes eagerly at module load (same as API)
+
+**OTel Spans:**
+
+| Span | Scope |
+|---|---|
+| `proposal-executor.run` | Entire CronJob invocation (top-level) |
+| `proposal-executor.detect` | PostgreSQL detection query |
+| `proposal-executor.execute-proposal` | Per-proposal execution (attributes: `proposalId`, `spaceId`) |
+
+**Effect Logger routing:**
+- `ERROR` / `FATAL` → `Sentry.captureMessage` (creates Sentry issues)
+- `INFO` / `WARN` / `DEBUG` → `Sentry.addBreadcrumb` (context for subsequent errors)
+- All levels also emit structured JSON to console
+
+**Graceful degradation:** When `SENTRY_DSN` is not set, `telemetry.ts` logs `[TELEMETRY] Sentry disabled` and falls back to console-only. No spans are exported. The service runs identically otherwise.
 
 ## Timeout Layering
 

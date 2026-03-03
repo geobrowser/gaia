@@ -11,13 +11,14 @@
  * See: docs/plans/2026-03-02-feat-proposal-auto-executor-plan.md
  */
 
-import {Config, Duration, Effect, Logger, Redacted, Schedule} from "effect"
+import {Config, Duration, Effect, Redacted, Schedule} from "effect"
 import type {Hex} from "viem"
 import {type Address, getAddress} from "viem"
 
 import {InfraError, type SupportedChainId} from "./contracts.js"
 import {connectDb, disconnectDb, findExecutableProposals, type Proposal} from "./detect.js"
 import {createSmartWallet, executeProposal, type SmartWallet, verifyExecutorSetup} from "./execute.js"
+import {flush, TelemetryLive} from "./telemetry.js"
 
 // Re-export tagged errors so tests and consumers have a single import
 export {InfraError, RevertError} from "./contracts.js"
@@ -159,6 +160,9 @@ function executeWithRetry(
 				new InfraError({proposalId: proposal.id, message: "Execution timed out after 30s", durationMs: 30_000}),
 		}),
 		Effect.retry({schedule: infraRetryPolicy, while: (e) => e._tag === "InfraError"}),
+		Effect.withSpan("proposal-executor.execute-proposal", {
+			attributes: {proposalId: proposal.id, spaceId: proposal.spaceId},
+		}),
 	)
 }
 
@@ -226,7 +230,7 @@ const program = Effect.gen(function* () {
 
 	const runStart = Date.now()
 	const nowSeconds = Math.floor(runStart / 1000)
-	const proposals = yield* findExecutableProposals(db, nowSeconds)
+	const proposals = yield* findExecutableProposals(db, nowSeconds).pipe(Effect.withSpan("proposal-executor.detect"))
 	const bySpace = Map.groupBy(proposals, (p) => p.spaceId)
 
 	yield* Effect.logInfo("run_start").pipe(
@@ -308,15 +312,18 @@ const main = Effect.gen(function* () {
 			return Effect.succeed({succeeded: 0, failed: 1})
 		}),
 		Effect.annotateLogs({runId}),
+		Effect.withSpan("proposal-executor.run"),
 	)
 }).pipe(
-	Effect.provide(Logger.json),
+	Effect.provide(TelemetryLive),
 	Effect.catchAllDefect((defect) => {
 		console.error(JSON.stringify({event: "fatal", error: String(defect)}))
 		return Effect.succeed({succeeded: 0, failed: 1})
 	}),
 )
 
-Effect.runPromise(main).then(({succeeded, failed}) => {
+Effect.runPromise(main).then(async ({succeeded, failed}) => {
+	// Flush pending Sentry events before exiting — short-lived process
+	await flush()
 	process.exit(failed > 0 && succeeded === 0 ? 1 : 0)
 })

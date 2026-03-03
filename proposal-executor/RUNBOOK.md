@@ -34,9 +34,19 @@ Parallel across spaces, sequential within each. The bottleneck is the slowest si
 | `RPC_URL` | Yes | Chain RPC endpoint (must be `http://` or `https://`). May contain API keys in the path. |
 | `CHAIN_ID` | No | `80451` (mainnet) or `19411` (testnet). |
 
-> **Note:** `SENTRY_DSN` is accepted by the K8s manifest (`optional: true`) but Sentry integration is **not yet wired**. Structured JSON logs are the sole observability channel.
+> **Sentry** is optional. When `SENTRY_DSN` is set, ERROR/FATAL logs create Sentry issues and all logs become breadcrumbs. OTel spans are routed through Sentry for tracing. When not set, falls back to structured JSON console logging only.
 
 Sensitive values come from K8s Secrets (`proposal-executor-credentials`) in the `knowledge` namespace. Non-sensitive values are plain in `cronjob.yaml`.
+
+Optional Sentry env vars (also from K8s Secret, all `optional: true`):
+
+| Variable | Description |
+|---|---|
+| `SENTRY_DSN` | Sentry DSN. If not set, telemetry falls back to console-only. |
+| `SENTRY_ENVIRONMENT` | e.g. `production`, `staging`. Defaults to `production`. |
+| `SENTRY_RELEASE` | Release version tag. |
+| `SENTRY_TRACES_SAMPLE_RATE` | Trace sampling rate (0.0–1.0). Defaults to `1.0`. |
+| `SENTRY_DEBUG` | Set to `"true"` for Sentry debug logging. |
 
 ## First-Time Setup
 
@@ -286,8 +296,9 @@ kubectl get cronjob proposal-executor -n knowledge -o jsonpath='{.spec.suspend}'
 
 | Alert | Status | Notes |
 |---|---|---|
+| **Sentry error tracking** | Wired | `space_aborted`, `run_failed`, `fatal` events create Sentry issues when `SENTRY_DSN` is set. |
+| **OTel tracing** | Wired | Spans for `proposal-executor.run`, `.detect`, `.execute-proposal` routed through Sentry. |
 | **Pimlico budget** | TODO: Not yet configured | Monitor sponsorship balance. Budget exhaustion stops all executions. |
 | **CronJob failures** | TODO: Not yet configured | Alert on repeated exit code 1 (systemic failure). |
-| **`space_aborted` events** | TODO: Not yet configured | Alert in log aggregation. Indicates infra issues that survived retries. |
 | **Proposals stuck >15 min** | TODO: Not yet configured | Alert if proposals stay EXECUTABLE beyond 3 CronJob cycles. |
 | **kg-indexer lag** | Informational | Long lag increases expected reverts. Not harmful, but noisy. |
