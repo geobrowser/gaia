@@ -36,6 +36,15 @@ export interface Proposal {
  */
 const CLOCK_SKEW_BUFFER = 60
 
+/**
+ * Maximum proposal age in seconds. Proposals older than this are ignored.
+ * Prevents the executor from retrying permanently stuck proposals (e.g.,
+ * proposals whose embedded actions revert due to stale state like addMember
+ * for an already-added member). 7 days is well beyond normal voting periods
+ * (typically 1 day) while ensuring stale proposals age out naturally.
+ */
+const MAX_PROPOSAL_AGE = 7 * 24 * 60 * 60 // 7 days
+
 // ---------------------------------------------------------------------------
 // Detection SQL
 // ---------------------------------------------------------------------------
@@ -44,6 +53,7 @@ const CLOCK_SKEW_BUFFER = 60
  * Finds slow-path proposals that are EXECUTABLE:
  * - Not yet executed (executed_at IS NULL)
  * - Slow voting mode
+ * - Created within MAX_PROPOSAL_AGE (7 days) — older proposals are likely stuck
  * - Voting period ended (with clock-skew buffer)
  * - Quorum reached (total votes >= quorum)
  * - Threshold reached: (RATIO_BASE - threshold) * yes > threshold * no
@@ -59,6 +69,7 @@ SELECT p.id, p.space_id AS "spaceId"
 FROM proposals p
 WHERE p.executed_at IS NULL
   AND p.voting_mode = 'Slow'
+  AND $1::bigint - p.created_at::bigint < ${MAX_PROPOSAL_AGE}
   AND $1::bigint > p.end_time + ${CLOCK_SKEW_BUFFER}
   AND (p.yes_count + p.no_count + p.abstain_count) >= p.quorum
   -- RATIO_BASE = 10,000,000 (protocol constant from api/src/proposals/types.ts)
