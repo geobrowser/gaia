@@ -36,7 +36,7 @@ Parallel across spaces, sequential within each. The bottleneck is the slowest si
 
 > **Note:** `SENTRY_DSN` is accepted by the K8s manifest (`optional: true`) but Sentry integration is **not yet wired**. Structured JSON logs are the sole observability channel.
 
-Sensitive values come from K8s Secrets (`proposal-executor-credentials`). Non-sensitive values are plain in `cronjob.yaml`.
+Sensitive values come from K8s Secrets (`proposal-executor-credentials`) in the `knowledge` namespace. Non-sensitive values are plain in `cronjob.yaml`.
 
 ## First-Time Setup
 
@@ -62,25 +62,25 @@ Before applying, edit the environment-specific `deployment/<env>/cronjob.yaml` a
 ### 3. Create K8s resources
 
 ```bash
+# Both environments deploy into the existing 'knowledge' namespace.
+
 # For staging (testnet):
-kubectl apply -f deployment/staging/namespace.yaml
-kubectl apply -f deployment/staging/secrets.yaml  # NOT the .example file
 kubectl apply -f deployment/staging/cronjob.yaml
 
 # For production (mainnet):
-kubectl apply -f deployment/production/namespace.yaml
-kubectl apply -f deployment/production/secrets.yaml  # NOT the .example file
 kubectl apply -f deployment/production/cronjob.yaml
 ```
+
+Secrets are created separately (see secrets.yaml.example for the template).
 
 ### 4. Verify
 
 ```bash
-# Trigger a manual run (use proposal-executor-staging for staging)
-kubectl create job --from=cronjob/proposal-executor test-run -n proposal-executor
+# Trigger a manual run
+kubectl create job --from=cronjob/proposal-executor test-run -n knowledge
 
 # Watch logs
-kubectl logs -f job/test-run -n proposal-executor
+kubectl logs -f job/test-run -n knowledge
 ```
 
 Look for:
@@ -180,13 +180,13 @@ During incidents (Pimlico outage, contract upgrade, DB maintenance):
 
 ```bash
 # Suspend — stops scheduling new runs
-kubectl patch cronjob proposal-executor -n proposal-executor -p '{"spec":{"suspend":true}}'
+kubectl patch cronjob proposal-executor -n knowledge -p '{"spec":{"suspend":true}}'
 
 # Resume
-kubectl patch cronjob proposal-executor -n proposal-executor -p '{"spec":{"suspend":false}}'
+kubectl patch cronjob proposal-executor -n knowledge -p '{"spec":{"suspend":false}}'
 
 # Verify
-kubectl get cronjob proposal-executor -n proposal-executor -o jsonpath='{.spec.suspend}'
+kubectl get cronjob proposal-executor -n knowledge -o jsonpath='{.spec.suspend}'
 ```
 
 ### Key Rotation / Compromise Response
@@ -265,13 +265,13 @@ If the proposals table contains a malformed proposal or space ID, `uuidToBytes16
 
 ```bash
 # Check CronJob status
-kubectl get cronjob proposal-executor -n proposal-executor
+kubectl get cronjob proposal-executor -n knowledge
 
 # Check recent jobs
-kubectl get jobs -n proposal-executor --sort-by=.metadata.creationTimestamp
+kubectl get jobs -n knowledge --sort-by=.metadata.creationTimestamp
 
 # Check for suspended CronJob
-kubectl get cronjob proposal-executor -n proposal-executor -o jsonpath='{.spec.suspend}'
+kubectl get cronjob proposal-executor -n knowledge -o jsonpath='{.spec.suspend}'
 ```
 
 ### Proposals stuck in EXECUTABLE

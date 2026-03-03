@@ -48,7 +48,6 @@ jobs:
 
       - name: Deploy to Kubernetes
         run: |
-          kubectl apply -f proposal-executor/deployment/staging/namespace.yaml
           # Update image tag to use SHA and apply
           sed -i 's|image: registry.digitalocean.com/geo/proposal-executor:latest|image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}|g' proposal-executor/deployment/staging/cronjob.yaml
           kubectl apply -f proposal-executor/deployment/staging/cronjob.yaml
@@ -56,10 +55,10 @@ jobs:
       - name: Show deployment status
         run: |
           echo "=== Proposal Executor CronJob (Staging) ==="
-          kubectl get cronjob proposal-executor -n proposal-executor-staging || echo "CronJob not found"
+          kubectl get cronjob proposal-executor -n knowledge || echo "CronJob not found"
           echo ""
           echo "=== Recent Jobs ==="
-          kubectl get jobs -n proposal-executor-staging --sort-by='.metadata.creationTimestamp' | tail -5
+          kubectl get jobs -n knowledge -l app.kubernetes.io/name=proposal-executor --sort-by='.metadata.creationTimestamp' | tail -5
           echo ""
           echo "=== Recent Events ==="
-          kubectl get events -n proposal-executor-staging --sort-by='.lastTimestamp' | tail -10
+          kubectl get events -n knowledge --sort-by='.lastTimestamp' | tail -10

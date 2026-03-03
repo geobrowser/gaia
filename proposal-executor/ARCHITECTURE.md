@@ -15,14 +15,12 @@ proposal-executor/
 │   ├── detect.test.ts  # RATIO_BASE cross-validation, SQL structure, Proposal shape
 │   ├── execute.test.ts # Encoding correctness, constant validation, error classification
 │   └── index.test.ts   # Tagged error discrimination, exit code logic, concurrency model
-├── deployment/
+├── deployment/         # Both environments deploy into the 'knowledge' namespace
 │   ├── staging/        # Testnet (chain 19411) manifests
 │   │   ├── cronjob.yaml
-│   │   ├── namespace.yaml
 │   │   └── secrets.yaml.example
 │   └── production/     # Mainnet (chain 80451) manifests
 │       ├── cronjob.yaml
-│       ├── namespace.yaml
 │       └── secrets.yaml.example
 ├── Dockerfile
 ├── package.json

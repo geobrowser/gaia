@@ -2,7 +2,7 @@ apiVersion: batch/v1
 kind: CronJob
 metadata:
   name: proposal-executor
-  namespace: proposal-executor-staging
+  namespace: knowledge
   labels:
     environment: staging
 spec:
