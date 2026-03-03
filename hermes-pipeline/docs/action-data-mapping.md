@@ -349,37 +349,46 @@ This action triggers an internal `createProposal()` which emits PROPOSAL_CREATED
 
 ### Trust/Topology Actions
 
-| Action | Kafka Topic | Proto Message |
-|--------|-------------|---------------|
-| SUBSPACE_ADDED | `space.trust.extensions` | `HermesSpaceTrustExtension` |
-| SUBSPACE_REMOVED | `space.trust.extensions` | `HermesSpaceTrustExtension` |
-| SUBSPACE_VERIFIED | `space.trust.extensions` | `HermesSpaceTrustExtension` |
-| SUBSPACE_RELATED | `space.trust.extensions` | `HermesSpaceTrustExtension` |
-| SUBSPACE_TOPIC_DECLARED | `space.trust.extensions` | `HermesSpaceTrustExtension` |
+| Action | Kafka Topic | Proto Extension Variant | Header `extension-type` |
+|--------|-------------|------------------------|------------------------|
+| SUBSPACE_VERIFIED | `space.trust.extensions` | `VerifiedExtension` | `VERIFIED` |
+| SUBSPACE_RELATED | `space.trust.extensions` | `RelatedExtension` | `RELATED` |
+| SUBSPACE_TOPIC_DECLARED | `space.trust.extensions` | `SubtopicExtension` | `SUBTOPIC` |
+| SUBSPACE_UNVERIFIED | `space.trust.extensions` | `VerifiedRemoval` | `VERIFIED_REMOVAL` |
+| SUBSPACE_UNRELATED | `space.trust.extensions` | `RelatedRemoval` | `RELATED_REMOVAL` |
+| SUBSPACE_TOPIC_REMOVED | `space.trust.extensions` | `SubtopicRemoval` | `SUBTOPIC_REMOVAL` |
+| ~~SUBSPACE_ADDED~~ | *(deprecated)* | — | — |
+| ~~SUBSPACE_REMOVED~~ | `space.trust.extensions` | `VerifiedExtension` (**BUG**: always INSERT) | `VERIFIED` |
 
-#### SUBSPACE_ADDED / SUBSPACE_REMOVED / SUBSPACE_VERIFIED / SUBSPACE_RELATED
+> **Deprecated actions:** `SUBSPACE_ADDED` is not handled by the trust pipeline (referenced
+> only in governance test data). `SUBSPACE_REMOVED` is a known bug — it produces a
+> `VerifiedExtension` (INSERT) instead of a removal, because the `TrustEvent.is_removal` flag
+> was never serialized to Kafka. Both are superseded by the typed removal actions above.
+
+#### SUBSPACE_VERIFIED / SUBSPACE_RELATED / SUBSPACE_UNVERIFIED / SUBSPACE_UNRELATED
 
 **Onchain:**
 - Action: `keccak256('GOVERNANCE.SUBSPACE_*')`
-- Topic: `bytes32(spaceId)` - Space ID of the subspace
+- Topic: `[padding: 16 bytes | target_space_id: 16 bytes]`
 - Data: empty
 
 **Proto Output:** `HermesSpaceTrustExtension`
 | Field | Source | Type |
 |-------|--------|------|
 | `source_space_id` | `from_id` | bytes (16) |
-| `extension` | Action type + `topic` | oneof `Verified` / `Related` / `Subtopic` |
+| `extension` | Action type → oneof variant | `VerifiedExtension` / `RelatedExtension` / `VerifiedRemoval` / `RelatedRemoval` |
+| `extension.*.target_space_id` | `topic[16..32]` | bytes (16) |
 
-#### SUBSPACE_TOPIC_DECLARED
+#### SUBSPACE_TOPIC_DECLARED / SUBSPACE_TOPIC_REMOVED
 
 **Onchain:**
-- Action: `keccak256('GOVERNANCE.SUBSPACE_TOPIC_DECLARED')`
-- Topic: `bytes32(bytes16(spaceId) | bytes16(topicId) >> 128)`
+- Action: `keccak256('GOVERNANCE.SUBSPACE_TOPIC_DECLARED')` / `SUBSPACE_TOPIC_REMOVED`
+- Topic: `[subspace_id: 16 bytes | topic_id: 16 bytes]`
 - Data: empty
 
 **Proto Output:** `HermesSpaceTrustExtension`
 | Field | Source | Type |
 |-------|--------|------|
 | `source_space_id` | `from_id` | bytes (16) |
-| `extension.subtopic.target_space_id` | `topic[0..16]` | bytes (16) |
-| `extension.subtopic.topic_id` | `topic[16..32]` | bytes (16) |
+| `extension` | Action type → oneof variant | `SubtopicExtension` / `SubtopicRemoval` |
+| `extension.*.target_topic_id` | `topic[16..32]` | bytes (16) |

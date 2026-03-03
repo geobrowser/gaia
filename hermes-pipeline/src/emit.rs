@@ -154,6 +154,13 @@ impl KafkaEvent for HermesSpaceTrustExtension {
             Some(hermes_space_trust_extension::Extension::Verified(_)) => "VERIFIED",
             Some(hermes_space_trust_extension::Extension::Related(_)) => "RELATED",
             Some(hermes_space_trust_extension::Extension::Subtopic(_)) => "SUBTOPIC",
+            Some(hermes_space_trust_extension::Extension::VerifiedRemoval(_)) => {
+                "VERIFIED_REMOVAL"
+            }
+            Some(hermes_space_trust_extension::Extension::RelatedRemoval(_)) => "RELATED_REMOVAL",
+            Some(hermes_space_trust_extension::Extension::SubtopicRemoval(_)) => {
+                "SUBTOPIC_REMOVAL"
+            }
             None => "UNKNOWN",
         };
 

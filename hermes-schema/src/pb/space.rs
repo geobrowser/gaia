@@ -66,13 +66,34 @@ pub struct SubtopicExtension {
     pub target_topic_id: ::prost::alloc::vec::Vec<u8>,
 }
 #[derive(Clone, PartialEq, ::prost::Message)]
+pub struct VerifiedRemoval {
+    /// uuid of the space losing verified trust
+    #[prost(bytes = "vec", tag = "1")]
+    pub target_space_id: ::prost::alloc::vec::Vec<u8>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct RelatedRemoval {
+    /// uuid of the space losing related trust
+    #[prost(bytes = "vec", tag = "1")]
+    pub target_space_id: ::prost::alloc::vec::Vec<u8>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SubtopicRemoval {
+    /// uuid of the topic losing trust
+    #[prost(bytes = "vec", tag = "1")]
+    pub target_topic_id: ::prost::alloc::vec::Vec<u8>,
+}
+#[derive(Clone, PartialEq, ::prost::Message)]
 pub struct HermesSpaceTrustExtension {
     /// uuid of the space extending trust
     #[prost(bytes = "vec", tag = "1")]
     pub source_space_id: ::prost::alloc::vec::Vec<u8>,
     #[prost(message, optional, tag = "5")]
     pub meta: ::core::option::Option<super::blockchain_metadata::BlockchainMetadata>,
-    #[prost(oneof = "hermes_space_trust_extension::Extension", tags = "2, 3, 4")]
+    #[prost(
+        oneof = "hermes_space_trust_extension::Extension",
+        tags = "2, 3, 4, 6, 7, 8"
+    )]
     pub extension: ::core::option::Option<hermes_space_trust_extension::Extension>,
 }
 /// Nested message and enum types in `HermesSpaceTrustExtension`.
@@ -85,5 +106,12 @@ pub mod hermes_space_trust_extension {
         Related(super::RelatedExtension),
         #[prost(message, tag = "4")]
         Subtopic(super::SubtopicExtension),
+        /// Removal variants
+        #[prost(message, tag = "6")]
+        VerifiedRemoval(super::VerifiedRemoval),
+        #[prost(message, tag = "7")]
+        RelatedRemoval(super::RelatedRemoval),
+        #[prost(message, tag = "8")]
+        SubtopicRemoval(super::SubtopicRemoval),
     }
 }

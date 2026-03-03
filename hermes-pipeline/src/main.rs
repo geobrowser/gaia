@@ -382,6 +382,12 @@ impl Pipeline {
             trust.topic_declared as u64,
         );
         counts_by_event_type.insert("SUBSPACE_REMOVED".to_string(), trust.removed as u64);
+        counts_by_event_type.insert("SUBSPACE_UNVERIFIED".to_string(), trust.unverified as u64);
+        counts_by_event_type.insert("SUBSPACE_UNRELATED".to_string(), trust.unrelated as u64);
+        counts_by_event_type.insert(
+            "SUBSPACE_TOPIC_REMOVED".to_string(),
+            trust.topic_removed as u64,
+        );
         counts_by_event_type.insert(
             "EDITOR_FLAGGED".to_string(),
             moderation.editors_flagged.len() as u64,
@@ -486,12 +492,11 @@ impl Pipeline {
 
             // 3. Emit trust events
             if trust.total() > 0 {
-                for trust_event in &trust.events {
-                    self.emitter.emit(&trust_event.event).await?;
+                for event in &trust.events {
+                    self.emitter.emit(event).await?;
                     debug!(
-                        source = %hex::encode(&trust_event.event.source_space_id),
-                        extension_type = get_extension_type(&trust_event.event),
-                        is_removal = trust_event.is_removal,
+                        source = %hex::encode(&event.source_space_id),
+                        extension_type = get_extension_type(event),
                         "Trust event emitted"
                     );
                 }
@@ -686,6 +691,9 @@ impl Pipeline {
                 trust_related = trust.related,
                 trust_topic = trust.topic_declared,
                 trust_removed = trust.removed,
+                trust_unverified = trust.unverified,
+                trust_unrelated = trust.unrelated,
+                trust_topic_removed = trust.topic_removed,
                 moderation = moderation_count,
                 topics = topics_count,
                 governance = governance_count,
