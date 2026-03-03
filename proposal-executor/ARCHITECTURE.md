@@ -16,9 +16,14 @@ proposal-executor/
 │   ├── execute.test.ts # Encoding correctness, constant validation, error classification
 │   └── index.test.ts   # Tagged error discrimination, exit code logic, concurrency model
 ├── deployment/
-│   ├── cronjob.yaml    # K8s CronJob manifest
-│   ├── namespace.yaml
-│   └── secrets.yaml.example
+│   ├── staging/        # Testnet (chain 19411) manifests
+│   │   ├── cronjob.yaml
+│   │   ├── namespace.yaml
+│   │   └── secrets.yaml.example
+│   └── production/     # Mainnet (chain 80451) manifests
+│       ├── cronjob.yaml
+│       ├── namespace.yaml
+│       └── secrets.yaml.example
 ├── Dockerfile
 ├── package.json
 ├── tsconfig.json

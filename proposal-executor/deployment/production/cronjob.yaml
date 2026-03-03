@@ -43,11 +43,11 @@ spec:
                       key: PIMLICO_API_KEY
                 # Config (non-sensitive — plain values)
                 - name: EXECUTOR_SPACE_ID
-                  value: "" # Set per environment (public on-chain data, not a secret)
+                  value: "" # TODO: set after creating executor personal space on mainnet
                 - name: SPACE_REGISTRY_ADDRESS
-                  value: "" # Set per environment (public blockchain data, not a secret)
+                  value: "0xB01683b2f0d38d43fcD4D9aAB980166988924132"
                 - name: RPC_URL
-                  value: "" # Set per environment
+                  value: "https://rpc-geo-genesis-h0q2s21xx8.t.conduit.xyz"
                 - name: CHAIN_ID
                   value: "80451"
                 # Optional: Sentry error reporting

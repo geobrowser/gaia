@@ -53,27 +53,30 @@ The `enter()` function requires the caller to have a registered personal space. 
 
 ### 2. Edit deployment values
 
-Before applying, edit `deployment/cronjob.yaml` and fill in the three empty placeholder values:
+Before applying, edit the environment-specific `deployment/<env>/cronjob.yaml` and fill in the `EXECUTOR_SPACE_ID` placeholder:
 
 - `EXECUTOR_SPACE_ID` — from step 1.4 above
-- `SPACE_REGISTRY_ADDRESS` — the deployed Space Registry contract address for your chain
-- `RPC_URL` — the chain RPC endpoint
 
-These are empty strings by default and **must** be set or the service will crash on startup.
+`SPACE_REGISTRY_ADDRESS`, `RPC_URL`, and `CHAIN_ID` are pre-filled per environment. `EXECUTOR_SPACE_ID` is the only value you must set — it's empty by default and the service will crash without it.
 
 ### 3. Create K8s resources
 
 ```bash
-kubectl apply -f deployment/namespace.yaml
-# Create the secret (use secrets.yaml.example as template, fill real values)
-kubectl apply -f deployment/secrets.yaml  # NOT the .example file
-kubectl apply -f deployment/cronjob.yaml
+# For staging (testnet):
+kubectl apply -f deployment/staging/namespace.yaml
+kubectl apply -f deployment/staging/secrets.yaml  # NOT the .example file
+kubectl apply -f deployment/staging/cronjob.yaml
+
+# For production (mainnet):
+kubectl apply -f deployment/production/namespace.yaml
+kubectl apply -f deployment/production/secrets.yaml  # NOT the .example file
+kubectl apply -f deployment/production/cronjob.yaml
 ```
 
 ### 4. Verify
 
 ```bash
-# Trigger a manual run
+# Trigger a manual run (use proposal-executor-staging for staging)
 kubectl create job --from=cronjob/proposal-executor test-run -n proposal-executor
 
 # Watch logs

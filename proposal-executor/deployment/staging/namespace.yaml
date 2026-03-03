@@ -1,0 +1,8 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: proposal-executor-staging
+  labels:
+    app.kubernetes.io/name: proposal-executor
+    app.kubernetes.io/part-of: geo-knowledge-graph
+    environment: staging
