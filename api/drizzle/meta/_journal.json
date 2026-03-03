@@ -316,6 +316,13 @@
       "when": 1772135257640,
       "tag": "0044_sweet_photon",
       "breakpoints": true
+    },
+    {
+      "idx": 45,
+      "version": "7",
+      "when": 1772558926359,
+      "tag": "0045_hard_annihilus",
+      "breakpoints": true
     }
   ]
 }
