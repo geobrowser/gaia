@@ -32,7 +32,7 @@ Parallel across spaces, sequential within each. The bottleneck is the slowest si
 | `EXECUTOR_SPACE_ID` | No | bytes16, 0x-prefixed. The executor's personal space ID (public on-chain data). |
 | `SPACE_REGISTRY_ADDRESS` | No | Space Registry contract address. |
 | `RPC_URL` | Yes | Chain RPC endpoint (must be `http://` or `https://`). May contain API keys in the path. |
-| `CHAIN_ID` | No | `80451` (mainnet) or `19411` (testnet). |
+| `CHAIN_ID` | No | `19411` (testnet). Mainnet (`80451`) is not yet deployed. |
 
 > **Sentry** is optional. When `SENTRY_DSN` is set, ERROR/FATAL logs create Sentry issues and all logs become breadcrumbs. OTel spans are routed through Sentry for tracing. When not set, falls back to structured JSON console logging only.
 
@@ -243,6 +243,22 @@ The executor's copy is intentionally stricter (60s clock-skew buffer). If the th
 
 Run `bun test` in `proposal-executor/` to verify cross-validation passes.
 
+### Proposals With Reverting Actions (`ActionReverted`)
+
+Some proposals pass all governance checks (quorum met, threshold met, voting ended) but contain **embedded actions that revert** when executed. For example, a proposal to `addMember` where the member was already added by another proposal, or `removeEditor` when the editor already left.
+
+On-chain, the DAOSpace contract's `_executeProposal` executes each action sequentially and reverts with `ActionReverted()` (selector `0x24c05f9a`) if any action's `.call()` fails. Because the entire transaction reverts, `proposal.executed` is never set to `true` on-chain, and `executed_at` stays `NULL` in the database.
+
+**These proposals are permanently stuck.** They will be detected every CronJob cycle and revert every time. This is harmless — gas is sponsored and the reverts complete in <500ms — but it creates log noise.
+
+**How to identify them:** Look for `proposal_reverted` logs where the error contains `0x24c05f9a` or `ActionReverted`. Unlike transient infra errors, these will persist across every run with the same proposal IDs.
+
+**Current behavior:** The executor classifies `ActionReverted` as an unexpected revert (`expected: false`) and skips the proposal. It will retry the same proposal on the next CronJob cycle indefinitely.
+
+**Future improvement:** Add an `executor_skipped_proposals` table to track proposals that permanently revert. After N consecutive `ActionReverted` failures for the same proposal, stop retrying. The detection query would join against this table with `NOT EXISTS`. This keeps the executor's concerns separate from the API's `proposals` table schema.
+
+**Manual resolution:** If the embedded actions can be fixed (e.g., the proposal creator updates the proposal via `PROPOSAL_UPDATED`), the proposal will succeed on the next cycle. Otherwise, these proposals remain in the stuck state until the skip-list is implemented.
+
 ### Invalid UUIDs in Database
 
 If the proposals table contains a malformed proposal or space ID, `uuidToBytes16` throws, which is classified as an `InfraError`. This triggers retries and then aborts the space. Look for `space_aborted` with "Invalid UUID for bytes16 conversion" — this is a data issue, not an infra issue.
@@ -257,7 +273,7 @@ If the proposals table contains a malformed proposal or space ID, `uuidToBytes16
 | `Invalid EXECUTOR_SPACE_ID` | Not 0x-prefixed bytes16 (34 chars) | UUID → strip dashes → prefix 0x |
 | `Invalid EXECUTOR_PRIVATE_KEY` | Not 0x-prefixed 64 hex chars | Check key format, add 0x prefix if missing |
 | `Invalid SPACE_REGISTRY_ADDRESS` | Not a valid checksummed address | Use `viem.getAddress()` to checksum |
-| `Invalid CHAIN_ID` | Not 80451 or 19411 | Only mainnet (80451) and testnet (19411) supported |
+| `Invalid CHAIN_ID` | Not 80451 or 19411 | Only testnet (19411) is currently deployed. Mainnet (80451) not yet available. |
 | `Invalid RPC_URL` | Empty or not a URL | Must start with `http://` or `https://` |
 | `DB connect failed: [ECONNREFUSED]` | DB unreachable | Check DATABASE_URL, network policies, PgBouncer |
 | `Executor Safe ... has no registered personal space` | Personal space not created | Run `geo space create` for the Safe address |
@@ -269,6 +285,7 @@ If the proposals table contains a malformed proposal or space ID, `uuidToBytes16
 |---|---|---|
 | All `proposal_reverted` | Wrong `SPACE_REGISTRY_ADDRESS` or ABI change | Verify address matches deployed contract |
 | All "already executed" | kg-indexer caught up between runs | Normal — these are `proposal_skip_expected` |
+| Same proposals revert with `0x24c05f9a` every cycle | Embedded actions revert (`ActionReverted`) | Proposals are permanently stuck — see "Proposals With Reverting Actions" in Edge Cases |
 | `Smart wallet creation failed` | Pimlico API key invalid or budget exhausted | Check Pimlico dashboard |
 
 ### CronJob not running
@@ -288,9 +305,10 @@ kubectl get cronjob proposal-executor -n knowledge -o jsonpath='{.spec.suspend}'
 
 1. Check logs — is the service running and finding them?
 2. If `proposalsFound: 0` — the 60s clock-skew buffer may not have elapsed yet. Wait and check again.
-3. If proposals are found but all revert — check contract state, ABI compatibility.
-4. If the service isn't running — check CronJob schedule and namespace.
-5. If the same proposals are stuck across 3+ cycles — investigate manually (see "Manual Proposal Execution" above).
+3. If proposals are found but all revert with `0x24c05f9a` — these have reverting embedded actions. See "Proposals With Reverting Actions" in Edge Cases.
+4. If proposals revert with other errors — check contract state, ABI compatibility.
+5. If the service isn't running — check CronJob schedule and namespace.
+6. If the same proposals are stuck across 3+ cycles and the revert is *not* `ActionReverted` — investigate manually (see "Manual Proposal Execution" above).
 
 ## Monitoring Checklist
 
