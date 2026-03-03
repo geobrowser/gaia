@@ -357,13 +357,7 @@ This action triggers an internal `createProposal()` which emits PROPOSAL_CREATED
 | SUBSPACE_UNVERIFIED | `space.trust.extensions` | `VerifiedRemoval` | `VERIFIED_REMOVAL` |
 | SUBSPACE_UNRELATED | `space.trust.extensions` | `RelatedRemoval` | `RELATED_REMOVAL` |
 | SUBSPACE_TOPIC_REMOVED | `space.trust.extensions` | `SubtopicRemoval` | `SUBTOPIC_REMOVAL` |
-| ~~SUBSPACE_ADDED~~ | *(deprecated)* | — | — |
-| ~~SUBSPACE_REMOVED~~ | `space.trust.extensions` | `VerifiedExtension` (**BUG**: always INSERT) | `VERIFIED` |
 
-> **Deprecated actions:** `SUBSPACE_ADDED` is not handled by the trust pipeline (referenced
-> only in governance test data). `SUBSPACE_REMOVED` is a known bug — it produces a
-> `VerifiedExtension` (INSERT) instead of a removal, because the `TrustEvent.is_removal` flag
-> was never serialized to Kafka. Both are superseded by the typed removal actions above.
 
 #### SUBSPACE_VERIFIED / SUBSPACE_RELATED / SUBSPACE_UNVERIFIED / SUBSPACE_UNRELATED
 

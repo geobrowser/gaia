@@ -11,9 +11,9 @@
 use anyhow::Result;
 use hermes_instrumentation::{debug_span, warn};
 
-use hermes_relay::{Action, actions};
+use hermes_relay::{actions, Action};
 use hermes_schema::pb::space::{
-    DefaultDaoSpacePayload, EoaSpacePayload, HermesCreateSpace, hermes_create_space,
+    hermes_create_space, DefaultDaoSpacePayload, EoaSpacePayload, HermesCreateSpace,
 };
 
 use super::BlockMetadata;
@@ -256,7 +256,7 @@ mod tests {
             Action {
                 from_id: vec![2; 16],
                 to_id: vec![3; 16],
-                action: actions::SUBSPACE_ADDED.to_vec(), // Different action type
+                action: actions::SUBSPACE_VERIFIED.to_vec(), // Different action type
                 topic: vec![3; 32],
                 data: vec![],
             },

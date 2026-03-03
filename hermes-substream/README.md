@@ -57,7 +57,6 @@ The `substreams build` command:
 | `map_edits_published` | `EditsPublishedList` | Published edits |
 | `map_flagged` | `FlaggedList` | Flagged content |
 | `map_unflagged` | `UnflaggedList` | Unflagged content |
-| `map_subspaces_removed` | `SubspaceRemovedList` | Subspaces removed from parent spaces |
 | `map_subspaces_verified` | `SubspaceVerifiedList` | Verified subspaces |
 | `map_subspaces_related` | `SubspaceRelatedList` | Related subspaces |
 | `map_subspaces_topic_declared` | `SubspaceTopicDeclaredList` | Topic declarations for subspaces |
@@ -113,7 +112,6 @@ Events are identified by keccak256 hashes of action name strings:
 | Edits Published | `GOVERNANCE.EDITS_PUBLISHED` |
 | Content Flagged | `GOVERNANCE.FLAGGED` |
 | Content Unflagged | `GOVERNANCE.UNFLAGGED` |
-| Subspace Removed | `GOVERNANCE.SUBSPACE_REMOVED` |
 | Subspace Verified | `GOVERNANCE.SUBSPACE_VERIFIED` |
 | Subspace Related | `GOVERNANCE.SUBSPACE_RELATED` |
 | Subspace Topic Declared | `GOVERNANCE.SUBSPACE_TOPIC_DECLARED` |

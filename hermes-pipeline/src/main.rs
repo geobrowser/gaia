@@ -381,7 +381,6 @@ impl Pipeline {
             "SUBSPACE_TOPIC_DECLARED".to_string(),
             trust.topic_declared as u64,
         );
-        counts_by_event_type.insert("SUBSPACE_REMOVED".to_string(), trust.removed as u64);
         counts_by_event_type.insert("SUBSPACE_UNVERIFIED".to_string(), trust.unverified as u64);
         counts_by_event_type.insert("SUBSPACE_UNRELATED".to_string(), trust.unrelated as u64);
         counts_by_event_type.insert(
@@ -690,7 +689,6 @@ impl Pipeline {
                 trust_verified = trust.verified,
                 trust_related = trust.related,
                 trust_topic = trust.topic_declared,
-                trust_removed = trust.removed,
                 trust_unverified = trust.unverified,
                 trust_unrelated = trust.unrelated,
                 trust_topic_removed = trust.topic_removed,

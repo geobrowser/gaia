@@ -1,4 +1,4 @@
-//! Pipeline: SUBSPACE_VERIFIED/RELATED/TOPIC_DECLARED/REMOVED → space.trust.extensions
+//! Pipeline: SUBSPACE_VERIFIED/RELATED/TOPIC_DECLARED → space.trust.extensions
 //!
 //! Converts trust extension and revocation actions to HermesSpaceTrustExtension events.
 //!
@@ -9,10 +9,9 @@
 //! - SUBSPACE_UNVERIFIED: Verified trust removal
 //! - SUBSPACE_UNRELATED: Related trust removal
 //! - SUBSPACE_TOPIC_REMOVED: Topic trust removal
-//! - SUBSPACE_REMOVED: Trust revocation (deprecated — see BUG comment in transform())
 
 use anyhow::Result;
-use hermes_instrumentation::{debug_span, warn};
+use hermes_instrumentation::debug_span;
 
 use hermes_relay::{actions, Action};
 use hermes_schema::pb::space::{
@@ -33,8 +32,6 @@ pub struct TransformResult {
     pub related: u64,
     /// Count of topic declarations.
     pub topic_declared: u64,
-    /// Count of deprecated SUBSPACE_REMOVED events.
-    pub removed: u64,
     /// Count of verified removals.
     pub unverified: u64,
     /// Count of related removals.
@@ -50,7 +47,6 @@ impl TransformResult {
         self.verified
             + self.related
             + self.topic_declared
-            + self.removed
             + self.unverified
             + self.unrelated
             + self.topic_removed
@@ -66,7 +62,6 @@ impl TransformResult {
 /// - SUBSPACE_UNVERIFIED: Verified trust removal
 /// - SUBSPACE_UNRELATED: Related trust removal
 /// - SUBSPACE_TOPIC_REMOVED: Topic trust removal
-/// - SUBSPACE_REMOVED: Trust revocation (deprecated — see BUG comment below)
 ///
 /// Returns transformed events without sending to Kafka.
 pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformResult> {
@@ -131,25 +126,6 @@ pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformRe
             .in_scope(|| convert_topic_removed(action, meta, sequence))?;
             result.events.push(event);
             result.topic_removed += 1;
-        } else if actions::matches(action_type, &actions::SUBSPACE_REMOVED) {
-            // BUG: SUBSPACE_REMOVED produces VerifiedExtension (an INSERT, not a DELETE).
-            // The removal signal is lost at Kafka serialization. Kept for backward
-            // compatibility until the contract stops emitting SUBSPACE_REMOVED.
-            // New code should use SUBSPACE_UNVERIFIED / SUBSPACE_UNRELATED / SUBSPACE_TOPIC_REMOVED.
-            warn!(
-                source = %hex::encode(&action.from_id),
-                target = %hex::encode(&action.topic[16..32]),
-                "SUBSPACE_REMOVED is deprecated — removal will be treated as INSERT. \
-                 Use typed removal actions (SUBSPACE_UNVERIFIED, etc.) instead."
-            );
-            let event = debug_span!(
-                "convert.trust.removed",
-                source = %hex::encode(&action.from_id),
-                target = %hex::encode(&action.topic[16..32])
-            )
-            .in_scope(|| convert_removed(action, meta, sequence))?;
-            result.events.push(event);
-            result.removed += 1;
         }
     }
 
@@ -287,30 +263,6 @@ fn convert_topic_removed(
 
     let extension = Some(hermes_space_trust_extension::Extension::SubtopicRemoval(
         SubtopicRemoval { target_topic_id },
-    ));
-
-    Ok(HermesSpaceTrustExtension {
-        source_space_id,
-        extension,
-        meta: Some(meta.to_proto(sequence)),
-    })
-}
-
-/// Convert a SUBSPACE_REMOVED action to HermesSpaceTrustExtension proto.
-///
-/// DEPRECATED: This produces a VerifiedExtension (INSERT), not a removal.
-/// The is_removal flag on TrustEvent was never serialized to Kafka.
-/// Kept for backward compatibility until the contract stops emitting SUBSPACE_REMOVED.
-fn convert_removed(
-    action: &Action,
-    meta: &BlockMetadata,
-    sequence: u32,
-) -> Result<HermesSpaceTrustExtension> {
-    let source_space_id = action.from_id.clone();
-    let target_space_id = action.topic[16..32].to_vec();
-
-    let extension = Some(hermes_space_trust_extension::Extension::Verified(
-        VerifiedExtension { target_space_id },
     ));
 
     Ok(HermesSpaceTrustExtension {
@@ -486,28 +438,6 @@ mod tests {
     }
 
     #[test]
-    fn test_convert_subspace_removed() {
-        let target = vec![2u8; 16];
-        let action = Action {
-            from_id: vec![1; 16],
-            to_id: vec![],
-            action: actions::SUBSPACE_REMOVED.to_vec(),
-            topic: make_topic_with_target(&target),
-            data: vec![],
-        };
-
-        // SUBSPACE_REMOVED is deprecated — it still produces VerifiedExtension (INSERT)
-        let result = convert_removed(&action, &test_meta(), 0).unwrap();
-        assert_eq!(result.source_space_id, vec![1; 16]);
-        match result.extension {
-            Some(hermes_space_trust_extension::Extension::Verified(v)) => {
-                assert_eq!(v.target_space_id, target);
-            }
-            _ => panic!("Expected Verified extension (deprecated SUBSPACE_REMOVED behavior)"),
-        }
-    }
-
-    #[test]
     fn test_transform_counts() {
         let actions = vec![
             Action {
@@ -533,13 +463,6 @@ mod tests {
                     t.extend_from_slice(&[7u8; 16]);
                     t
                 },
-                data: vec![],
-            },
-            Action {
-                from_id: vec![8; 16],
-                to_id: vec![],
-                action: actions::SUBSPACE_REMOVED.to_vec(),
-                topic: make_topic_with_target(&[9u8; 16]),
                 data: vec![],
             },
             Action {
@@ -570,15 +493,14 @@ mod tests {
         ];
 
         let result = transform(&actions, &test_meta()).unwrap();
-        assert_eq!(result.events.len(), 7);
+        assert_eq!(result.events.len(), 6);
         assert_eq!(result.verified, 1);
         assert_eq!(result.related, 1);
         assert_eq!(result.topic_declared, 1);
-        assert_eq!(result.removed, 1);
         assert_eq!(result.unverified, 1);
         assert_eq!(result.unrelated, 1);
         assert_eq!(result.topic_removed, 1);
-        assert_eq!(result.total(), 7);
+        assert_eq!(result.total(), 6);
     }
 
     /// Blocks with only removal events must still have total() > 0

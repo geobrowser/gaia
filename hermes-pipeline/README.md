@@ -27,7 +27,9 @@ This transformer is part of the Hermes architecture (see `docs/hermes-architectu
 | `SUBSPACE_VERIFIED` | Verified trust extensions | `space.trust.extensions` |
 | `SUBSPACE_RELATED` | Related trust extensions | `space.trust.extensions` |
 | `SUBSPACE_TOPIC_DECLARED` | Topic-based trust extensions | `space.trust.extensions` |
-| `SUBSPACE_REMOVED` | Trust revocations | `space.trust.extensions` |
+| `SUBSPACE_UNVERIFIED` | Verified trust removals | `space.trust.extensions` |
+| `SUBSPACE_UNRELATED` | Related trust removals | `space.trust.extensions` |
+| `SUBSPACE_TOPIC_REMOVED` | Topic trust removals | `space.trust.extensions` |
 
 ### Membership
 

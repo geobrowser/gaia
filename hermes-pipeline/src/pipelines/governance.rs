@@ -16,16 +16,17 @@ use hermes_instrumentation::{debug, debug_span, info, warn};
 
 use crate::cache::CachedEdit;
 use crate::decode::{
-    self, ProposalActionType, decode_flag_args, decode_publish_args, decode_space_id_arg,
-    decode_voting_settings_args,
+    self, decode_flag_args, decode_publish_args, decode_space_id_arg, decode_voting_settings_args,
+    ProposalActionType,
 };
 
-use hermes_relay::{Action, actions};
+use hermes_relay::{actions, Action};
 use hermes_schema::pb::governance::{
-    AddEditorAction, AddMemberAction, FlagAction, HermesProposalCreated, HermesProposalExecuted,
-    HermesProposalSettingsUpdated, HermesProposalUpdated, HermesProposalVoted, ProposalAction,
-    ProposalSettings, ProposalVoteOption, PublishAction, RemoveEditorAction, RemoveMemberAction,
-    UnflagAction, UnflagEditorAction, UpdateVotingSettingsAction, VotingMode, proposal_action,
+    proposal_action, AddEditorAction, AddMemberAction, FlagAction, HermesProposalCreated,
+    HermesProposalExecuted, HermesProposalSettingsUpdated, HermesProposalUpdated,
+    HermesProposalVoted, ProposalAction, ProposalSettings, ProposalVoteOption, PublishAction,
+    RemoveEditorAction, RemoveMemberAction, UnflagAction, UnflagEditorAction,
+    UpdateVotingSettingsAction, VotingMode,
 };
 
 use super::BlockMetadata;
@@ -652,7 +653,7 @@ mod tests {
 
     // Helper to create encoded PROPOSAL_CREATED data
     fn encode_proposal_created_data(proposal_id: [u8; 16], voting_mode: u8) -> Vec<u8> {
-        use ethabi::{Token, ethereum_types::U256 as EthU256};
+        use ethabi::{ethereum_types::U256 as EthU256, Token};
 
         let action_tuple = Token::Tuple(vec![
             Token::Address(ethabi::Address::zero()),
@@ -675,7 +676,7 @@ mod tests {
         quorum: u64,
         threshold: u64,
     ) -> Vec<u8> {
-        use ethabi::{Token, ethereum_types::U256 as EthU256};
+        use ethabi::{ethereum_types::U256 as EthU256, Token};
 
         ethabi::encode(&[
             Token::Uint(EthU256::from(start_date)),
@@ -865,7 +866,7 @@ mod tests {
             Action {
                 from_id: vec![8; 16],
                 to_id: vec![9; 16],
-                action: actions::SUBSPACE_ADDED.to_vec(),
+                action: actions::SUBSPACE_VERIFIED.to_vec(),
                 topic: vec![10; 32],
                 data: vec![],
             },

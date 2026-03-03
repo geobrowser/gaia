@@ -18,8 +18,8 @@
 //! fn filter_space_events(action: &Action) -> bool {
 //!     let action_type = action.action.as_slice();
 //!     action_type == actions::SPACE_REGISTERED
-//!         || action_type == actions::SUBSPACE_ADDED
-//!         || action_type == actions::SUBSPACE_REMOVED
+//!         || action_type == actions::SUBSPACE_VERIFIED
+//!         || action_type == actions::SUBSPACE_RELATED
 //! }
 //! ```
 
@@ -34,9 +34,9 @@ pub use hermes_substream::ACTION_EDITOR_ADDED as EDITOR_ADDED;
 pub use hermes_substream::ACTION_EDITOR_REMOVED as EDITOR_REMOVED;
 pub use hermes_substream::ACTION_EDITS_PUBLISHED as EDITS_PUBLISHED;
 pub use hermes_substream::ACTION_FLAGGED as FLAGGED;
+pub use hermes_substream::ACTION_MEMBERSHIP_REQUESTED as MEMBERSHIP_REQUESTED;
 pub use hermes_substream::ACTION_MEMBER_ADDED as MEMBER_ADDED;
 pub use hermes_substream::ACTION_MEMBER_REMOVED as MEMBER_REMOVED;
-pub use hermes_substream::ACTION_MEMBERSHIP_REQUESTED as MEMBERSHIP_REQUESTED;
 pub use hermes_substream::ACTION_PERMISSIONLESS_ACTION_ADDED as PERMISSIONLESS_ACTION_ADDED;
 pub use hermes_substream::ACTION_PERMISSIONLESS_ACTION_REMOVED as PERMISSIONLESS_ACTION_REMOVED;
 pub use hermes_substream::ACTION_PROPOSAL_CREATED as PROPOSAL_CREATED;
@@ -51,9 +51,7 @@ pub use hermes_substream::ACTION_SPACE_ID_MIGRATED as SPACE_MIGRATED;
 pub use hermes_substream::ACTION_SPACE_ID_REGISTERED as SPACE_REGISTERED;
 pub use hermes_substream::ACTION_SPACE_LEFT as SPACE_LEFT;
 pub use hermes_substream::ACTION_SPACE_TYPE_DECLARED as SPACE_TYPE_DECLARED;
-pub use hermes_substream::ACTION_SUBSPACE_ADDED as SUBSPACE_ADDED;
 pub use hermes_substream::ACTION_SUBSPACE_RELATED as SUBSPACE_RELATED;
-pub use hermes_substream::ACTION_SUBSPACE_REMOVED as SUBSPACE_REMOVED;
 pub use hermes_substream::ACTION_SUBSPACE_TOPIC_DECLARED as SUBSPACE_TOPIC_DECLARED;
 pub use hermes_substream::ACTION_SUBSPACE_TOPIC_REMOVED as SUBSPACE_TOPIC_REMOVED;
 pub use hermes_substream::ACTION_SUBSPACE_UNRELATED as SUBSPACE_UNRELATED;
