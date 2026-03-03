@@ -26,7 +26,7 @@
 		"@sentry/opentelemetry": "^10.36.0",
 		"effect": "^3.19.14",
 		"permissionless": "^0.3.2",
-		"pg": "^8.13.3",
+		"pg": "8.16.0",
 		"viem": "^2.43.5"
 	},
 	"devDependencies": {
