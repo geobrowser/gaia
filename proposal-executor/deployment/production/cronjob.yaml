@@ -72,7 +72,7 @@ spec:
                       name: proposal-executor-credentials
                       key: RPC_URL
                 - name: CHAIN_ID
-                  value: "80451"
+                  value: "19411"
                 # Optional: Sentry error reporting
                 - name: SENTRY_DSN
                   valueFrom:
