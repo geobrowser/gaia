@@ -3,7 +3,7 @@
  *
  * Adapted from api/src/services/telemetry.ts for a short-lived CronJob:
  * - No HTTP/GraphQL middleware (batch job, not a server)
- * - Exports flush() for graceful shutdown before process.exit
+ * - Exports flush Effect for graceful shutdown before process.exit
  * - Falls back to JSON console logging when SENTRY_DSN is not set
  *
  * Architecture: OTel spans → SentrySpanProcessor → Sentry.
@@ -11,13 +11,9 @@
  */
 
 import {NodeSdk} from "@effect/opentelemetry"
-import {trace} from "@opentelemetry/api"
-import {resourceFromAttributes} from "@opentelemetry/resources"
-import {BasicTracerProvider} from "@opentelemetry/sdk-trace-base"
-import {ATTR_SERVICE_NAME} from "@opentelemetry/semantic-conventions"
 import * as Sentry from "@sentry/node"
 import {SentrySpanProcessor} from "@sentry/opentelemetry"
-import {Effect, HashMap, Layer, Logger, LogLevel} from "effect"
+import {Duration, Effect, HashMap, Layer, Logger, LogLevel} from "effect"
 
 const SERVICE_NAME = "proposal-executor"
 
@@ -29,6 +25,8 @@ let spanProcessor: SentrySpanProcessor | undefined
 // ---------------------------------------------------------------------------
 
 function initSentry() {
+	if (sentryInitialized) return
+
 	const dsn = process.env.SENTRY_DSN
 
 	if (!dsn) {
@@ -36,31 +34,29 @@ function initSentry() {
 		return
 	}
 
-	const environment = process.env.SENTRY_ENVIRONMENT || "production"
-	const release = process.env.SENTRY_RELEASE
-	const tracesSampleRate = Number.parseFloat(process.env.SENTRY_TRACES_SAMPLE_RATE || "1.0")
-	const debug = process.env.SENTRY_DEBUG === "true"
+	try {
+		const environment = process.env.SENTRY_ENVIRONMENT || "production"
+		const release = process.env.SENTRY_RELEASE
+		const rawRate = Number.parseFloat(process.env.SENTRY_TRACES_SAMPLE_RATE || "1.0")
+		const tracesSampleRate = Number.isNaN(rawRate) || rawRate < 0 || rawRate > 1 ? 1.0 : rawRate
+		const debug = process.env.SENTRY_DEBUG === "true"
 
-	Sentry.init({
-		dsn,
-		environment,
-		release,
-		tracesSampleRate,
-		skipOpenTelemetrySetup: true, // We manage OTel setup ourselves
-		debug,
-	})
+		Sentry.init({
+			dsn,
+			environment,
+			release,
+			tracesSampleRate,
+			skipOpenTelemetrySetup: true, // We manage OTel setup ourselves
+			debug,
+		})
 
-	spanProcessor = new SentrySpanProcessor()
-	const globalProvider = new BasicTracerProvider({
-		resource: resourceFromAttributes({
-			[ATTR_SERVICE_NAME]: SERVICE_NAME,
-		}),
-		spanProcessors: [spanProcessor],
-	})
-	trace.setGlobalTracerProvider(globalProvider)
+		spanProcessor = new SentrySpanProcessor()
 
-	sentryInitialized = true
-	console.log(`[TELEMETRY] Sentry enabled (env: ${environment})`)
+		sentryInitialized = true
+		console.log(`[TELEMETRY] Sentry enabled (env: ${environment})`)
+	} catch (err) {
+		console.error(`[TELEMETRY] Sentry init failed, continuing without Sentry: ${err}`)
+	}
 }
 
 initSentry()
@@ -74,7 +70,7 @@ const makeTelemetryConfig = Effect.sync(() => ({
 	spanProcessor: spanProcessor,
 }))
 
-export const NodeSdkLive = NodeSdk.layer(makeTelemetryConfig)
+const NodeSdkLive = NodeSdk.layer(makeTelemetryConfig)
 
 // ---------------------------------------------------------------------------
 // Effect Logger → Sentry
@@ -86,20 +82,10 @@ function formatConsoleLog(level: string, message: string, data?: LogData): strin
 	return JSON.stringify({level, message, ...data})
 }
 
-/** Serialize values for logging — special-cases Error instances */
+/** Serialize a single value for logging — special-cases Error instances */
 function serializeValue(value: unknown): unknown {
 	if (value instanceof Error) {
 		return {name: value.name, message: value.message, stack: value.stack}
-	}
-	if (typeof value === "object" && value !== null) {
-		if (Array.isArray(value)) {
-			return value.map(serializeValue)
-		}
-		const result: Record<string, unknown> = {}
-		for (const [k, v] of Object.entries(value)) {
-			result[k] = serializeValue(v)
-		}
-		return result
 	}
 	return value
 }
@@ -113,7 +99,10 @@ function parseLogMessage(message: unknown): {messageStr: string; inlineData?: Lo
 		const [first, second] = message
 		const messageStr = typeof first === "string" ? first : String(first)
 		if (second && typeof second === "object" && !Array.isArray(second)) {
-			return {messageStr, inlineData: serializeValue(second) as LogData}
+			const serialized = serializeValue(second)
+			if (serialized && typeof serialized === "object" && !Array.isArray(serialized)) {
+				return {messageStr, inlineData: serialized as LogData}
+			}
 		}
 		return {messageStr}
 	}
@@ -129,44 +118,48 @@ function extractAnnotations(annotations: HashMap.HashMap<string, unknown>): LogD
 	return data
 }
 
+// Maps Effect log levels to Sentry breadcrumb level + console method.
+// ERROR/FATAL → Sentry.captureMessage (creates issues); others → breadcrumbs.
+const LOG_LEVEL_CONFIG: ReadonlyMap<
+	LogLevel.LogLevel,
+	{
+		sentryLevel: "error" | "warning" | "info" | "debug"
+		console: "error" | "warn" | "info" | "debug"
+		capture: boolean
+	}
+> = new Map([
+	[LogLevel.Fatal, {sentryLevel: "error", console: "error", capture: true}],
+	[LogLevel.Error, {sentryLevel: "error", console: "error", capture: true}],
+	[LogLevel.Warning, {sentryLevel: "warning", console: "warn", capture: false}],
+	[LogLevel.Info, {sentryLevel: "info", console: "info", capture: false}],
+	[LogLevel.Debug, {sentryLevel: "debug", console: "debug", capture: false}],
+	[LogLevel.Trace, {sentryLevel: "debug", console: "debug", capture: false}],
+])
+
+const DEFAULT_LOG_CONFIG = {sentryLevel: "debug" as const, console: "debug" as const, capture: false}
+
 /**
- * Effect Logger that routes to Sentry when available:
- * - ERROR/FATAL → Sentry.captureMessage (creates issues)
- * - INFO/WARN/DEBUG → Sentry.addBreadcrumb (context for subsequent errors)
- *
- * Falls back to structured JSON console logging when SENTRY_DSN is not set.
+ * Effect Logger that dual-writes to console (primary) and Sentry (supplementary).
+ * CronJob pods rely on kubectl logs / log aggregators as the primary observability channel.
  */
 const SentryLogger = Logger.make(({logLevel, message, annotations}) => {
 	const {messageStr, inlineData} = parseLogMessage(message)
 	const contextData = extractAnnotations(annotations)
 	const data = inlineData || contextData ? {...inlineData, ...contextData} : undefined
+	const config = LOG_LEVEL_CONFIG.get(logLevel) ?? DEFAULT_LOG_CONFIG
 
 	if (sentryInitialized) {
-		if (logLevel === LogLevel.Error || logLevel === LogLevel.Fatal) {
-			Sentry.captureMessage(messageStr, {level: "error", extra: data})
-		} else if (logLevel === LogLevel.Warning) {
-			Sentry.addBreadcrumb({message: messageStr, data, level: "warning", category: "effect"})
-		} else if (logLevel === LogLevel.Info) {
-			Sentry.addBreadcrumb({message: messageStr, data, level: "info", category: "effect"})
+		if (config.capture) {
+			Sentry.captureMessage(messageStr, {level: config.sentryLevel, extra: data})
 		} else {
-			Sentry.addBreadcrumb({message: messageStr, data, level: "debug", category: "effect"})
+			Sentry.addBreadcrumb({message: messageStr, data, level: config.sentryLevel, category: "effect"})
 		}
 	}
 
-	// Always emit to console — structured JSON is our primary log stream,
-	// Sentry is supplementary. CronJob pods rely on kubectl logs / log aggregators.
-	if (logLevel === LogLevel.Debug || logLevel === LogLevel.Trace) {
-		console.debug(formatConsoleLog("debug", messageStr, data))
-	} else if (logLevel === LogLevel.Info) {
-		console.info(formatConsoleLog("info", messageStr, data))
-	} else if (logLevel === LogLevel.Warning) {
-		console.warn(formatConsoleLog("warn", messageStr, data))
-	} else {
-		console.error(formatConsoleLog("error", messageStr, data))
-	}
+	console[config.console](formatConsoleLog(config.console, messageStr, data))
 })
 
-export const SentryLoggerLive = Logger.replace(Logger.defaultLogger, SentryLogger)
+const SentryLoggerLive = Logger.replace(Logger.defaultLogger, SentryLogger)
 
 // ---------------------------------------------------------------------------
 // Combined telemetry layer
@@ -180,12 +173,17 @@ export const TelemetryLive = Layer.merge(NodeSdkLive, SentryLoggerLive)
 // ---------------------------------------------------------------------------
 
 /**
- * Flush pending Sentry events and OTel spans.
- * Call before process.exit() to avoid losing events in short-lived processes.
- * Timeout prevents hanging if Sentry is unreachable.
+ * Flush pending Sentry events and OTel spans in parallel.
+ * Must be called before process.exit() — short-lived processes lose events otherwise.
+ * Each flush is individually ignored so one hanging/failing doesn't block the other.
  */
-export async function flush(timeoutMs = 5000): Promise<void> {
-	if (sentryInitialized) {
-		await Sentry.flush(timeoutMs)
-	}
-}
+const flushOTel = spanProcessor
+	? Effect.promise(() => {
+			const sp = spanProcessor
+			return sp ? sp.forceFlush() : Promise.resolve()
+		}).pipe(Effect.timeout(Duration.seconds(5)), Effect.ignore)
+	: Effect.void
+
+const flushSentry = sentryInitialized ? Effect.promise(() => Sentry.flush(5000)).pipe(Effect.ignore) : Effect.void
+
+export const flush = Effect.all([flushOTel, flushSentry], {concurrency: "unbounded"}).pipe(Effect.asVoid)

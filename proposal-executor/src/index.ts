@@ -15,7 +15,7 @@ import {Config, Duration, Effect, Redacted, Schedule} from "effect"
 import type {Hex} from "viem"
 import {type Address, getAddress} from "viem"
 
-import {InfraError, type SupportedChainId} from "./contracts.js"
+import {InfraError, type RevertError, type SupportedChainId} from "./contracts.js"
 import {connectDb, disconnectDb, findExecutableProposals, type Proposal} from "./detect.js"
 import {createSmartWallet, executeProposal, type SmartWallet, verifyExecutorSetup} from "./execute.js"
 import {flush, TelemetryLive} from "./telemetry.js"
@@ -67,7 +67,6 @@ const parseConfig: Effect.Effect<ExecutorEnv, InfraError> = Effect.gen(function*
 	if (!PRIVATE_KEY_RE.test(privateKey)) {
 		return yield* Effect.fail(
 			new InfraError({
-				proposalId: "N/A",
 				message: "Invalid EXECUTOR_PRIVATE_KEY: expected a 32-byte hex-encoded key with 0x prefix",
 				durationMs: 0,
 			}),
@@ -78,7 +77,6 @@ const parseConfig: Effect.Effect<ExecutorEnv, InfraError> = Effect.gen(function*
 	if (!BYTES16_RE.test(rawExecutorSpaceId)) {
 		return yield* Effect.fail(
 			new InfraError({
-				proposalId: "N/A",
 				message: `Invalid EXECUTOR_SPACE_ID: expected 0x-prefixed bytes16 (34 chars), got "${rawExecutorSpaceId}"`,
 				durationMs: 0,
 			}),
@@ -92,7 +90,6 @@ const parseConfig: Effect.Effect<ExecutorEnv, InfraError> = Effect.gen(function*
 	} catch {
 		return yield* Effect.fail(
 			new InfraError({
-				proposalId: "N/A",
 				message: `Invalid SPACE_REGISTRY_ADDRESS: "${rawSpaceRegistryAddress}" is not a valid Ethereum address`,
 				durationMs: 0,
 			}),
@@ -104,7 +101,6 @@ const parseConfig: Effect.Effect<ExecutorEnv, InfraError> = Effect.gen(function*
 	if (!rpcUrlValue.startsWith("http://") && !rpcUrlValue.startsWith("https://")) {
 		return yield* Effect.fail(
 			new InfraError({
-				proposalId: "N/A",
 				message: "Invalid RPC_URL: expected http:// or https:// URL",
 				durationMs: 0,
 			}),
@@ -115,7 +111,6 @@ const parseConfig: Effect.Effect<ExecutorEnv, InfraError> = Effect.gen(function*
 	if (chainId !== 80451 && chainId !== 19411) {
 		return yield* Effect.fail(
 			new InfraError({
-				proposalId: "N/A",
 				message: `Invalid CHAIN_ID: ${chainId}. Expected 80451 (mainnet) or 19411 (testnet).`,
 				durationMs: 0,
 			}),
@@ -133,7 +128,7 @@ const parseConfig: Effect.Effect<ExecutorEnv, InfraError> = Effect.gen(function*
 	}
 }).pipe(
 	Effect.catchTag("ConfigError", (e) =>
-		Effect.fail(new InfraError({proposalId: "N/A", message: `Config error: ${e.message}`, durationMs: 0})),
+		Effect.fail(new InfraError({message: `Config error: ${e.message}`, durationMs: 0})),
 	),
 )
 
@@ -152,7 +147,7 @@ function executeWithRetry(
 	proposal: Proposal,
 	executorSpaceId: Hex,
 	spaceRegistryAddress: Address,
-) {
+): Effect.Effect<string, InfraError | RevertError> {
 	return executeProposal(wallet, proposal, executorSpaceId, spaceRegistryAddress).pipe(
 		Effect.timeoutFail({
 			duration: Duration.seconds(30),
@@ -176,7 +171,7 @@ function executeSpaceProposals(
 	wallet: SmartWallet,
 	executorSpaceId: Hex,
 	spaceRegistryAddress: Address,
-) {
+): Effect.Effect<(string | "skipped")[], InfraError> {
 	return Effect.forEach(
 		proposals,
 		(proposal) =>
@@ -205,10 +200,12 @@ function executeSpaceProposals(
 }
 
 // ---------------------------------------------------------------------------
-// Main orchestration
+// Main — orchestration, error handling, flush, exit code
 // ---------------------------------------------------------------------------
 
-const program = Effect.gen(function* () {
+const runId = crypto.randomUUID()
+
+const main = Effect.gen(function* () {
 	const config = yield* parseConfig
 	const db = yield* connectDb(Redacted.value(config.databaseUrl))
 
@@ -244,7 +241,7 @@ const program = Effect.gen(function* () {
 		return {succeeded: 0, failed: 0}
 	}
 
-	// Execute spaces in parallel (unbounded — one fiber per space); sequential
+	// Parallel across spaces (capped at 10 concurrent RPC connections), sequential
 	// within each space. Each space is independent — an InfraError in one space
 	// doesn't affect others.
 	const results = yield* Effect.forEach(
@@ -257,25 +254,29 @@ const program = Effect.gen(function* () {
 				config.executorSpaceId,
 				config.spaceRegistryAddress,
 			).pipe(
-				Effect.map((outcomes) => ({
-					spaceId,
-					succeeded: outcomes.filter((r) => r !== "skipped").length,
-					skipped: outcomes.filter((r) => r === "skipped").length,
-				})),
+				Effect.map(
+					(outcomes) =>
+						({
+							status: "ok" as const,
+							spaceId,
+							succeeded: outcomes.filter((r) => r !== "skipped").length,
+							skipped: outcomes.filter((r) => r === "skipped").length,
+						}) as const,
+				),
 				// Catch InfraError at the space level so one space failing
 				// doesn't cancel the others
 				Effect.catchTag("InfraError", (e) =>
 					Effect.logError("space_aborted").pipe(
 						Effect.annotateLogs({spaceId, error: e.message, proposalId: e.proposalId}),
-						Effect.as({spaceId, succeeded: 0, skipped: 0, infraError: true as const}),
+						Effect.as({status: "infraError" as const, spaceId, succeeded: 0, skipped: 0} as const),
 					),
 				),
 			),
-		{concurrency: "unbounded"},
+		{concurrency: 10},
 	)
 
 	const succeeded = results.reduce((n, r) => n + r.succeeded, 0)
-	const failed = results.filter((r) => "infraError" in r).length
+	const failed = results.filter((r) => r.status === "infraError").length
 	const skipped = results.reduce((n, r) => n + r.skipped, 0)
 
 	yield* Effect.logInfo("run_end").pipe(
@@ -290,40 +291,39 @@ const program = Effect.gen(function* () {
 	)
 
 	return {succeeded, failed}
-})
-
-// ---------------------------------------------------------------------------
-// Entry point
-// ---------------------------------------------------------------------------
-
-const main = Effect.gen(function* () {
-	const runId = crypto.randomUUID()
-
-	return yield* Effect.scoped(program).pipe(
-		// 270s top-level timeout — leaves 20s margin before K8s SIGKILL at 290s,
-		// ensuring finalizers (DB disconnect) run and a structured log is emitted.
-		Effect.timeoutFail({
-			duration: Duration.seconds(270),
-			onTimeout: () =>
-				new InfraError({proposalId: "N/A", message: "Run timed out after 270s", durationMs: 270_000}),
-		}),
-		Effect.catchTag("InfraError", (e) => {
-			console.error(JSON.stringify({event: "run_failed", runId, error: e.message, proposalId: e.proposalId}))
-			return Effect.succeed({succeeded: 0, failed: 1})
-		}),
-		Effect.annotateLogs({runId}),
-		Effect.withSpan("proposal-executor.run"),
-	)
 }).pipe(
-	Effect.provide(TelemetryLive),
-	Effect.catchAllDefect((defect) => {
-		console.error(JSON.stringify({event: "fatal", error: String(defect)}))
-		return Effect.succeed({succeeded: 0, failed: 1})
+	Effect.scoped,
+	// 270s top-level timeout — leaves 20s margin before K8s SIGKILL at 290s,
+	// ensuring finalizers (DB disconnect) run and a structured log is emitted.
+	Effect.timeoutFail({
+		duration: Duration.seconds(270),
+		onTimeout: () => new InfraError({message: "Run timed out after 270s", durationMs: 270_000}),
 	}),
+	Effect.catchTag("InfraError", (e) =>
+		Effect.logError("run_failed").pipe(
+			Effect.annotateLogs({error: e.message, proposalId: e.proposalId}),
+			Effect.as({succeeded: 0, failed: 1}),
+		),
+	),
+	Effect.annotateLogs({runId}),
+	Effect.withSpan("proposal-executor.run"),
+	Effect.catchAllDefect((defect) =>
+		Effect.logFatal("fatal").pipe(
+			Effect.annotateLogs({error: String(defect)}),
+			Effect.as({succeeded: 0, failed: 1}),
+		),
+	),
+	// Flush runs on every exit path — success, error, timeout, defect
+	Effect.tap(() => flush),
+	// Outermost: provides SentryLogger to catchTag, catchAllDefect, and flush
+	Effect.provide(TelemetryLive),
 )
 
-Effect.runPromise(main).then(async ({succeeded, failed}) => {
-	// Flush pending Sentry events before exiting — short-lived process
-	await flush()
-	process.exit(failed > 0 && succeeded === 0 ? 1 : 0)
-})
+// Total failure (all failed, none succeeded) → exit 1 so K8s marks the job as failed.
+// Partial success → exit 0; the next CronJob run will retry the remaining proposals.
+Effect.runPromise(main)
+	.then(({succeeded, failed}) => process.exit(failed > 0 && succeeded === 0 ? 1 : 0))
+	.catch((err) => {
+		console.error(JSON.stringify({level: "fatal", message: "unhandled_defect", error: String(err)}))
+		process.exit(1)
+	})

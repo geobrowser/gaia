@@ -201,13 +201,13 @@ describe("concurrency model contracts", () => {
 
 	test("result aggregation logic", () => {
 		const results = [
-			{spaceId: "s1", succeeded: 2, skipped: 1},
-			{spaceId: "s2", succeeded: 0, skipped: 0, infraError: true as const},
-			{spaceId: "s3", succeeded: 1, skipped: 0},
+			{status: "ok" as const, spaceId: "s1", succeeded: 2, skipped: 1},
+			{status: "infraError" as const, spaceId: "s2", succeeded: 0, skipped: 0},
+			{status: "ok" as const, spaceId: "s3", succeeded: 1, skipped: 0},
 		]
 
 		const succeeded = results.reduce((n, r) => n + r.succeeded, 0)
-		const failed = results.filter((r) => "infraError" in r).length
+		const failed = results.filter((r) => r.status === "infraError").length
 		const skipped = results.reduce((n, r) => n + r.skipped, 0)
 
 		expect(succeeded).toBe(3)

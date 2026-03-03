@@ -108,7 +108,7 @@ export function connectDb(databaseUrl: string): Effect.Effect<PgClient, InfraErr
 				error instanceof Error
 					? error.message.replace(/postgresql?:\/\/[^\s]+/gi, "<redacted>")
 					: "unknown error"
-			return new InfraError({proposalId: "N/A", message: `DB connect failed: [${code}] ${safe}`, durationMs: 0})
+			return new InfraError({message: `DB connect failed: [${code}] ${safe}`, durationMs: 0})
 		},
 	})
 }
@@ -145,7 +145,7 @@ export function findExecutableProposals(client: PgClient, nowSeconds: number): E
 				error instanceof Error
 					? error.message.replace(/postgresql?:\/\/[^\s]+/gi, "<redacted>")
 					: "unknown error"
-			return new InfraError({proposalId: "N/A", message: `Detection query failed: ${safe}`, durationMs: 0})
+			return new InfraError({message: `Detection query failed: ${safe}`, durationMs: 0})
 		},
 	})
 }

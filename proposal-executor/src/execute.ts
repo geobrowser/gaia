@@ -157,8 +157,7 @@ export function createSmartWallet(config: ExecutorConfig): Effect.Effect<SmartWa
 				safeAddress: safeAccount.address,
 			} satisfies SmartWallet
 		},
-		catch: (error) =>
-			new InfraError({proposalId: "N/A", message: `Smart wallet creation failed: ${error}`, durationMs: 0}),
+		catch: (error) => new InfraError({message: `Smart wallet creation failed: ${error}`, durationMs: 0}),
 	})
 }
 
@@ -201,8 +200,7 @@ export function verifyExecutorSetup(
 				)
 			}
 		},
-		catch: (error) =>
-			new InfraError({proposalId: "N/A", message: `Executor setup verification failed: ${error}`, durationMs: 0}),
+		catch: (error) => new InfraError({message: `Executor setup verification failed: ${error}`, durationMs: 0}),
 	})
 }
 

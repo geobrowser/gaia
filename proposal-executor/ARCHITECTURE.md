@@ -178,7 +178,7 @@ Adapted from `api/src/services/telemetry.ts` for a short-lived CronJob.
 **Differences from the API's telemetry:**
 - No HTTP/GraphQL middleware (batch job, not a server)
 - Always emits to console AND Sentry (API uses Sentry breadcrumbs as the sole output when Sentry is enabled — we dual-write because CronJob pods rely on `kubectl logs` / log aggregators as the primary observability channel)
-- Exports `flush()` called before `process.exit()` — short-lived processes must flush or pending events are lost
+- Exports `flush` Effect called before `process.exit()` — short-lived processes must flush or pending events are lost
 - Initializes eagerly at module load (same as API)
 
 **OTel Spans:**

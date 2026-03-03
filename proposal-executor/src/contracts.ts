@@ -27,7 +27,8 @@ export class RevertError extends Data.TaggedError("RevertError")<{
 
 /** Infrastructure failure — retried per-proposal, then space is aborted */
 export class InfraError extends Data.TaggedError("InfraError")<{
-	proposalId: string
+	/** Omitted for run-level failures (config, timeout) that aren't tied to a proposal */
+	proposalId?: string
 	message: string
 	durationMs: number
 }> {}
