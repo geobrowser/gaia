@@ -395,13 +395,13 @@ Uses hardcoded SCREAMING_SNAKE_CASE strings, matching the existing convention in
 
 ## Acceptance Criteria
 
-- [ ] Proposals with subspace ping actions are decoded and stored with the correct `action_type` (not `Unknown`)
-- [ ] `GET /proposals?actionTypes=SubspaceVerified` returns only proposals with verified subspace actions
-- [ ] Non-subspace ping actions still fall through to `Unknown`
-- [ ] Malformed ping calldata logs a warning and is stored as `Unknown`
-- [ ] Pipeline unit tests cover all 6 subspace action types + non-subspace ping fallthrough + malformed data
-- [ ] KG-indexer handler unit tests cover all 6 proto variants
-- [ ] API returns correct typed responses for each subspace action type
+- [x] Proposals with subspace ping actions are decoded and stored with the correct `action_type` (not `Unknown`)
+- [x] `GET /proposals?actionTypes=SubspaceVerified` returns only proposals with verified subspace actions
+- [x] Non-subspace ping actions still fall through to `Unknown`
+- [x] Malformed ping calldata logs a warning and is stored as `Unknown`
+- [x] Pipeline unit tests cover all 6 subspace action types + non-subspace ping fallthrough + malformed data
+- [x] KG-indexer handler unit tests cover all 6 proto variants
+- [x] API returns correct typed responses for each subspace action type
 
 ## Deployment Order
 

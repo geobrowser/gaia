@@ -177,6 +177,12 @@ fn derive_proposal_name(
             Some(Action::Flag(_)) => "Flag",
             Some(Action::Unflag(_)) => "Unflag",
             Some(Action::UpdateVotingSettings(_)) => "Update Voting Settings",
+            Some(Action::SubspaceVerified(_)) => "Add Verified Subspace",
+            Some(Action::SubspaceUnverified(_)) => "Remove Verified Subspace",
+            Some(Action::SubspaceRelated(_)) => "Add Related Subspace",
+            Some(Action::SubspaceUnrelated(_)) => "Remove Related Subspace",
+            Some(Action::SubspaceTopicDeclared(_)) => "Declare Subspace Topic",
+            Some(Action::SubspaceTopicRemoved(_)) => "Remove Subspace Topic",
             None => "Unknown Action",
         })
         .collect();
@@ -327,6 +333,42 @@ fn map_proposal_action(
             fast_threshold: a.fast_threshold,
             slow_threshold: a.slow_threshold,
             duration: a.duration,
+        },
+        Some(Action::SubspaceVerified(a)) => match bytes_to_uuid(&a.target_space_id) {
+            Some(id) => ProposalActionPayload::SubspaceVerified {
+                target_space_id: id,
+            },
+            None => ProposalActionPayload::Unknown,
+        },
+        Some(Action::SubspaceUnverified(a)) => match bytes_to_uuid(&a.target_space_id) {
+            Some(id) => ProposalActionPayload::SubspaceUnverified {
+                target_space_id: id,
+            },
+            None => ProposalActionPayload::Unknown,
+        },
+        Some(Action::SubspaceRelated(a)) => match bytes_to_uuid(&a.target_space_id) {
+            Some(id) => ProposalActionPayload::SubspaceRelated {
+                target_space_id: id,
+            },
+            None => ProposalActionPayload::Unknown,
+        },
+        Some(Action::SubspaceUnrelated(a)) => match bytes_to_uuid(&a.target_space_id) {
+            Some(id) => ProposalActionPayload::SubspaceUnrelated {
+                target_space_id: id,
+            },
+            None => ProposalActionPayload::Unknown,
+        },
+        Some(Action::SubspaceTopicDeclared(a)) => match bytes_to_uuid(&a.target_topic_id) {
+            Some(id) => ProposalActionPayload::SubspaceTopicDeclared {
+                target_topic_id: id,
+            },
+            None => ProposalActionPayload::Unknown,
+        },
+        Some(Action::SubspaceTopicRemoved(a)) => match bytes_to_uuid(&a.target_topic_id) {
+            Some(id) => ProposalActionPayload::SubspaceTopicRemoved {
+                target_topic_id: id,
+            },
+            None => ProposalActionPayload::Unknown,
         },
         None => ProposalActionPayload::Unknown,
     };

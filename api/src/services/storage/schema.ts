@@ -425,6 +425,13 @@ export const proposalActionTypeEnum = pgEnum("proposalActionType", [
 	"Unflag",
 	"UpdateVotingSettings",
 	"Unknown",
+	// Subspace proposal actions
+	"SubspaceVerified",
+	"SubspaceUnverified",
+	"SubspaceRelated",
+	"SubspaceUnrelated",
+	"SubspaceTopicDeclared",
+	"SubspaceTopicRemoved",
 ])
 
 /**

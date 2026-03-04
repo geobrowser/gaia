@@ -61,6 +61,22 @@ pub struct UnflagAction {
     #[prost(bytes = "vec", tag = "1")]
     pub content_id: ::prost::alloc::vec::Vec<u8>,
 }
+/// Decoded action: subspace edge operation (add/remove verified or related edge)
+/// The specific operation type is determined by the ProposalActionType enum value.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SubspaceEdgeAction {
+    /// 16 bytes - target child space
+    #[prost(bytes = "vec", tag = "1")]
+    pub target_space_id: ::prost::alloc::vec::Vec<u8>,
+}
+/// Decoded action: subspace topic operation (declare/remove topic)
+/// The specific operation type is determined by the ProposalActionType enum value.
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SubspaceTopicAction {
+    /// 16 bytes - topic entity ID
+    #[prost(bytes = "vec", tag = "1")]
+    pub target_topic_id: ::prost::alloc::vec::Vec<u8>,
+}
 /// Decoded action: update voting settings
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct UpdateVotingSettingsAction {
@@ -92,7 +108,7 @@ pub struct ProposalAction {
     /// Decoded action (based on function selector in calldata)
     #[prost(
         oneof = "proposal_action::Action",
-        tags = "10, 11, 12, 13, 14, 15, 16, 17, 18"
+        tags = "10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24"
     )]
     pub action: ::core::option::Option<proposal_action::Action>,
 }
@@ -119,6 +135,18 @@ pub mod proposal_action {
         Unflag(super::UnflagAction),
         #[prost(message, tag = "18")]
         UpdateVotingSettings(super::UpdateVotingSettingsAction),
+        #[prost(message, tag = "19")]
+        SubspaceVerified(super::SubspaceEdgeAction),
+        #[prost(message, tag = "20")]
+        SubspaceUnverified(super::SubspaceEdgeAction),
+        #[prost(message, tag = "21")]
+        SubspaceRelated(super::SubspaceEdgeAction),
+        #[prost(message, tag = "22")]
+        SubspaceUnrelated(super::SubspaceEdgeAction),
+        #[prost(message, tag = "23")]
+        SubspaceTopicDeclared(super::SubspaceTopicAction),
+        #[prost(message, tag = "24")]
+        SubspaceTopicRemoved(super::SubspaceTopicAction),
     }
 }
 /// Voting settings for a proposal, from PROPOSAL_SETTINGS_USED event
@@ -324,7 +352,13 @@ pub enum ProposalActionType {
     ProposalActionUnflag = 7,
     ProposalActionUnflagEditor = 8,
     ProposalActionUpdateVotingSettings = 9,
-    ProposalActionPing = 10,
+    /// Was PROPOSAL_ACTION_PING (10) — now reserved, sub-classified into 11-16
+    ProposalActionSubspaceVerified = 11,
+    ProposalActionSubspaceUnverified = 12,
+    ProposalActionSubspaceRelated = 13,
+    ProposalActionSubspaceUnrelated = 14,
+    ProposalActionSubspaceTopicDeclared = 15,
+    ProposalActionSubspaceTopicRemoved = 16,
 }
 impl ProposalActionType {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -342,10 +376,13 @@ impl ProposalActionType {
             Self::ProposalActionFlag => "PROPOSAL_ACTION_FLAG",
             Self::ProposalActionUnflag => "PROPOSAL_ACTION_UNFLAG",
             Self::ProposalActionUnflagEditor => "PROPOSAL_ACTION_UNFLAG_EDITOR",
-            Self::ProposalActionUpdateVotingSettings => {
-                "PROPOSAL_ACTION_UPDATE_VOTING_SETTINGS"
-            }
-            Self::ProposalActionPing => "PROPOSAL_ACTION_PING",
+            Self::ProposalActionUpdateVotingSettings => "PROPOSAL_ACTION_UPDATE_VOTING_SETTINGS",
+            Self::ProposalActionSubspaceVerified => "PROPOSAL_ACTION_SUBSPACE_VERIFIED",
+            Self::ProposalActionSubspaceUnverified => "PROPOSAL_ACTION_SUBSPACE_UNVERIFIED",
+            Self::ProposalActionSubspaceRelated => "PROPOSAL_ACTION_SUBSPACE_RELATED",
+            Self::ProposalActionSubspaceUnrelated => "PROPOSAL_ACTION_SUBSPACE_UNRELATED",
+            Self::ProposalActionSubspaceTopicDeclared => "PROPOSAL_ACTION_SUBSPACE_TOPIC_DECLARED",
+            Self::ProposalActionSubspaceTopicRemoved => "PROPOSAL_ACTION_SUBSPACE_TOPIC_REMOVED",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -363,7 +400,16 @@ impl ProposalActionType {
             "PROPOSAL_ACTION_UPDATE_VOTING_SETTINGS" => {
                 Some(Self::ProposalActionUpdateVotingSettings)
             }
-            "PROPOSAL_ACTION_PING" => Some(Self::ProposalActionPing),
+            "PROPOSAL_ACTION_SUBSPACE_VERIFIED" => Some(Self::ProposalActionSubspaceVerified),
+            "PROPOSAL_ACTION_SUBSPACE_UNVERIFIED" => Some(Self::ProposalActionSubspaceUnverified),
+            "PROPOSAL_ACTION_SUBSPACE_RELATED" => Some(Self::ProposalActionSubspaceRelated),
+            "PROPOSAL_ACTION_SUBSPACE_UNRELATED" => Some(Self::ProposalActionSubspaceUnrelated),
+            "PROPOSAL_ACTION_SUBSPACE_TOPIC_DECLARED" => {
+                Some(Self::ProposalActionSubspaceTopicDeclared)
+            }
+            "PROPOSAL_ACTION_SUBSPACE_TOPIC_REMOVED" => {
+                Some(Self::ProposalActionSubspaceTopicRemoved)
+            }
             _ => None,
         }
     }

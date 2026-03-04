@@ -30,7 +30,13 @@ enum ProposalActionType {
   PROPOSAL_ACTION_UNFLAG = 7;
   PROPOSAL_ACTION_UNFLAG_EDITOR = 8;
   PROPOSAL_ACTION_UPDATE_VOTING_SETTINGS = 9;
-  PROPOSAL_ACTION_PING = 10;
+  reserved 10;  // Was PROPOSAL_ACTION_PING — never emitted, now sub-classified into 11-16
+  PROPOSAL_ACTION_SUBSPACE_VERIFIED = 11;
+  PROPOSAL_ACTION_SUBSPACE_UNVERIFIED = 12;
+  PROPOSAL_ACTION_SUBSPACE_RELATED = 13;
+  PROPOSAL_ACTION_SUBSPACE_UNRELATED = 14;
+  PROPOSAL_ACTION_SUBSPACE_TOPIC_DECLARED = 15;
+  PROPOSAL_ACTION_SUBSPACE_TOPIC_REMOVED = 16;
 }
 
 // Decoded action: add a member to the space
@@ -83,6 +89,18 @@ message UpdateVotingSettingsAction {
   uint64 duration = 4;          // Voting duration
 }
 
+// Decoded action: subspace edge operation (add/remove verified or related edge)
+// The specific operation type is determined by the ProposalActionType enum value.
+message SubspaceEdgeAction {
+  bytes target_space_id = 1;  // 16 bytes - target child space
+}
+
+// Decoded action: subspace topic operation (declare/remove topic)
+// The specific operation type is determined by the ProposalActionType enum value.
+message SubspaceTopicAction {
+  bytes target_topic_id = 1;  // 16 bytes - topic entity ID
+}
+
 // Action to be executed when proposal passes
 message ProposalAction {
   bytes to = 1;        // 20 bytes - target contract address
@@ -100,6 +118,12 @@ message ProposalAction {
     FlagAction flag = 16;
     UnflagAction unflag = 17;
     UpdateVotingSettingsAction update_voting_settings = 18;
+    SubspaceEdgeAction subspace_verified = 19;
+    SubspaceEdgeAction subspace_unverified = 20;
+    SubspaceEdgeAction subspace_related = 21;
+    SubspaceEdgeAction subspace_unrelated = 22;
+    SubspaceTopicAction subspace_topic_declared = 23;
+    SubspaceTopicAction subspace_topic_removed = 24;
   }
 }
 

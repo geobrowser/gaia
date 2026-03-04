@@ -44,6 +44,18 @@ pub enum ProposalActionPayload {
         slow_threshold: u64,
         duration: u64,
     },
+    /// Add verified subspace edge
+    SubspaceVerified { target_space_id: Uuid },
+    /// Remove verified subspace edge
+    SubspaceUnverified { target_space_id: Uuid },
+    /// Add related subspace edge
+    SubspaceRelated { target_space_id: Uuid },
+    /// Remove related subspace edge
+    SubspaceUnrelated { target_space_id: Uuid },
+    /// Declare a topic on a subspace
+    SubspaceTopicDeclared { target_topic_id: Uuid },
+    /// Remove a topic from a subspace
+    SubspaceTopicRemoved { target_topic_id: Uuid },
     /// Unknown or undecoded action
     Unknown,
 }
