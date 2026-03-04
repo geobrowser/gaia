@@ -31,12 +31,13 @@ This preserves the existing architectural separation: `from_calldata` → classi
 
 ### Data Layout
 
-The `ping(bytes32,bytes32,bytes)` calldata after selector strip is ABI-encoded:
+The `ping(bytes32,bytes32,bytes)` calldata after selector strip is ABI-encoded as a tuple `(bytes32, bytes32, bytes)`:
 
 ```
-offset 0:    _action  (bytes32) — keccak256 hash of the action name
-offset 32:   _topic   (bytes32) — packed field, layout depends on action type
-offset 64:   _data    (bytes)   — dynamic, always empty for subspace actions
+head[0]:    _action  (bytes32) — keccak256 hash of the action name
+head[32]:   _topic   (bytes32) — packed field, layout depends on action type
+head[64]:   offset to _data
+tail:       _data length + bytes — always empty for subspace actions
 ```
 
 The `_topic` field packing (same layout used by the trust pipeline in `trust.rs`):
@@ -47,18 +48,27 @@ The `_topic` field packing (same layout used by the trust pipeline in `trust.rs`
 | `SUBSPACE_UNVERIFIED` | zero-padded | target child space ID |
 | `SUBSPACE_RELATED` | zero-padded | target child space ID |
 | `SUBSPACE_UNRELATED` | zero-padded | target child space ID |
-| `SUBSPACE_TOPIC_DECLARED` | child space ID | topic entity ID |
-| `SUBSPACE_TOPIC_REMOVED` | child space ID | topic entity ID |
+| `SUBSPACE_TOPIC_DECLARED` | (unused by pipeline) | topic entity ID |
+| `SUBSPACE_TOPIC_REMOVED` | (unused by pipeline) | topic entity ID |
 
-For edge actions (verified/related), the parent space is the proposal's `space_id` (the DAO that owns the proposal). The `_topic` field carries only the target child space.
+For edge actions (verified/related), the parent space is the proposal's `space_id` (the DAO that owns the proposal). The `_topic` field carries only the target child space in `[16..32]`.
 
-For topic actions, the `_topic` field packs both the child space ID and the topic entity ID.
+For topic actions, the trust pipeline only extracts `topic[16..32]` as the `target_topic_id` — the `source_space_id` (from `from_id`) is the parent space. In the proposal context, the parent is the proposal's `space_id`. So we extract only `topic[16..32]` for the topic entity ID, matching the trust pipeline pattern exactly (`trust.rs:196`).
 
 ### Storage Model
 
-The `proposal_actions` table already has `target_id` (UUID, nullable). For edge actions, `target_id` stores the target child space ID. For topic actions, `target_id` stores the topic entity ID and a new `subspace_id` column stores the child space ID. This avoids overloading `target_id` with different semantics.
+The `proposal_actions` table has `target_id` (UUID, nullable, no FK constraint). This column is already a polymorphic UUID pointer — for member/editor actions it holds a space ID, for subspace actions it will hold:
 
-**Alternative considered:** Use `target_id` for one and `content_id` (existing bytes column) for the other. Rejected because `content_id` is typed as `bytea` not `uuid`, and repurposing it would be confusing.
+- **Edge actions** (verified/related/unverified/unrelated): `target_id` = the target child space ID (references `spaces.id`)
+- **Topic actions** (topic declared/removed): `target_id` = the topic entity ID (references `entities.id`)
+
+The parent space is always the proposal's `space_id`. No new columns needed.
+
+### Proto Message Design
+
+Use 2 proto messages instead of 6 (simplicity reviewer finding). The 4 edge actions have identical structure (`bytes target_space_id`), and the 2 topic actions differ only in semantics. The `ProposalActionType` enum already discriminates the specific action.
+
+However, since proto `oneof` requires distinct message types per field, and the existing codebase uses 1 message per action type (e.g., separate `AddMemberAction`/`RemoveMemberAction` with identical fields), we use 2 messages with 6 `oneof` arms — the edge message is shared across 4 arms, and the topic message across 2 arms.
 
 ## Technical Approach
 
@@ -66,7 +76,7 @@ The `proposal_actions` table already has `target_id` (UUID, nullable). For edge 
 
 #### `hermes-schema/proto/governance.proto`
 
-Add 4 new proto messages and 6 new enum values:
+Add 2 new proto messages and 6 new enum values:
 
 ```protobuf
 enum ProposalActionType {
@@ -79,58 +89,36 @@ enum ProposalActionType {
   PROPOSAL_ACTION_SUBSPACE_TOPIC_REMOVED = 16;
 }
 
-// Decoded action: add a verified subspace edge
-message SubspaceVerifiedAction {
-  bytes target_space_id = 1;  // 16 bytes - child space to verify
+// Decoded action: subspace edge operation (add/remove verified or related edge)
+// The specific operation type is determined by the ProposalActionType enum value.
+message SubspaceEdgeAction {
+  bytes target_space_id = 1;  // 16 bytes - target child space
 }
 
-// Decoded action: remove a verified subspace edge
-message SubspaceUnverifiedAction {
-  bytes target_space_id = 1;  // 16 bytes - child space to unverify
-}
-
-// Decoded action: add a related subspace edge
-message SubspaceRelatedAction {
-  bytes target_space_id = 1;  // 16 bytes - child space to relate
-}
-
-// Decoded action: remove a related subspace edge
-message SubspaceUnrelatedAction {
-  bytes target_space_id = 1;  // 16 bytes - child space to unrelate
-}
-
-// Decoded action: declare a topic for a subspace
-message SubspaceTopicDeclaredAction {
-  bytes subspace_id = 1;  // 16 bytes - child space
-  bytes topic_id = 2;     // 16 bytes - topic entity ID
-}
-
-// Decoded action: remove a topic from a subspace
-message SubspaceTopicRemovedAction {
-  bytes subspace_id = 1;  // 16 bytes - child space
-  bytes topic_id = 2;     // 16 bytes - topic entity ID
+// Decoded action: subspace topic operation (declare/remove topic)
+// The specific operation type is determined by the ProposalActionType enum value.
+message SubspaceTopicAction {
+  bytes target_topic_id = 1;  // 16 bytes - topic entity ID
 }
 ```
 
-Add to `ProposalAction.oneof action`:
+Add to `ProposalAction.oneof action` (6 arms, 2 message types):
 
 ```protobuf
-SubspaceVerifiedAction subspace_verified = 19;
-SubspaceUnverifiedAction subspace_unverified = 20;
-SubspaceRelatedAction subspace_related = 21;
-SubspaceUnrelatedAction subspace_unrelated = 22;
-SubspaceTopicDeclaredAction subspace_topic_declared = 23;
-SubspaceTopicRemovedAction subspace_topic_removed = 24;
+SubspaceEdgeAction subspace_verified = 19;
+SubspaceEdgeAction subspace_unverified = 20;
+SubspaceEdgeAction subspace_related = 21;
+SubspaceEdgeAction subspace_unrelated = 22;
+SubspaceTopicAction subspace_topic_declared = 23;
+SubspaceTopicAction subspace_topic_removed = 24;
 ```
 
 #### `hermes-pipeline/src/decode.rs`
 
-Add a `decode_ping_args` function using `alloy::sol!`:
+Add a `decode_ping_args` function following the existing tuple-decode pattern (strip selector, then `SolType::abi_decode`):
 
 ```rust
-sol! {
-    function ping(bytes32 action, bytes32 topic, bytes data);
-}
+type PingArgsType = sol! { (bytes32, bytes32, bytes) };
 
 pub struct PingArgs {
     pub action: [u8; 32],
@@ -139,7 +127,17 @@ pub struct PingArgs {
 }
 
 pub fn decode_ping_args(calldata: &[u8]) -> Result<PingArgs, DecodeError> {
-    // Strip 4-byte selector, ABI-decode (bytes32, bytes32, bytes)
+    // Strip 4-byte selector, then ABI-decode tuple
+    if calldata.len() < 4 {
+        return Err(DecodeError::DataTooShort { expected: 4, actual: calldata.len() });
+    }
+    let decoded = PingArgsType::abi_decode(&calldata[4..], true)
+        .map_err(|e| DecodeError::AbiDecode(e.to_string()))?;
+    Ok(PingArgs {
+        action: decoded.0.into(),
+        topic: decoded.1.into(),
+        data: decoded.2.to_vec(),
+    })
 }
 ```
 
@@ -153,28 +151,70 @@ Replace the `Ping => None` arm:
 ProposalActionType::Ping => decode_ping_subspace_action(calldata),
 ```
 
-New function `decode_ping_subspace_action`:
+New function `decode_ping_subspace_action` using `match` (codebase convention) with explicit error logging:
 
 ```rust
 fn decode_ping_subspace_action(calldata: &[u8]) -> Option<proposal_action::Action> {
-    let args = decode_ping_args(calldata).ok()?;
-    
-    if args.action == *actions::SUBSPACE_VERIFIED {
-        let target = args.topic[16..32].to_vec();
-        Some(proposal_action::Action::SubspaceVerified(SubspaceVerifiedAction {
-            target_space_id: target,
-        }))
-    } else if args.action == *actions::SUBSPACE_UNVERIFIED {
-        // ... same pattern
-    } else if args.action == *actions::SUBSPACE_TOPIC_DECLARED {
-        let subspace_id = args.topic[0..16].to_vec();
-        let topic_id = args.topic[16..32].to_vec();
-        Some(proposal_action::Action::SubspaceTopicDeclared(SubspaceTopicDeclaredAction {
-            subspace_id,
-            topic_id,
-        }))
+    let args = match decode_ping_args(calldata) {
+        Ok(args) => args,
+        Err(e) => {
+            warn!(error = %e, calldata_len = calldata.len(), "Failed to decode ping calldata");
+            return None;
+        }
+    };
+
+    // Extract target from topic field — same byte layout as trust.rs
+    let target = args.topic[16..32].to_vec();
+
+    match args.action {
+        x if x == actions::SUBSPACE_VERIFIED => {
+            Some(proposal_action::Action::SubspaceVerified(SubspaceEdgeAction {
+                target_space_id: target,
+            }))
+        }
+        x if x == actions::SUBSPACE_UNVERIFIED => {
+            Some(proposal_action::Action::SubspaceUnverified(SubspaceEdgeAction {
+                target_space_id: target,
+            }))
+        }
+        x if x == actions::SUBSPACE_RELATED => {
+            Some(proposal_action::Action::SubspaceRelated(SubspaceEdgeAction {
+                target_space_id: target,
+            }))
+        }
+        x if x == actions::SUBSPACE_UNRELATED => {
+            Some(proposal_action::Action::SubspaceUnrelated(SubspaceEdgeAction {
+                target_space_id: target,
+            }))
+        }
+        x if x == actions::SUBSPACE_TOPIC_DECLARED => {
+            Some(proposal_action::Action::SubspaceTopicDeclared(SubspaceTopicAction {
+                target_topic_id: target,
+            }))
+        }
+        x if x == actions::SUBSPACE_TOPIC_REMOVED => {
+            Some(proposal_action::Action::SubspaceTopicRemoved(SubspaceTopicAction {
+                target_topic_id: target,
+            }))
+        }
+        _ => None,  // Non-subspace ping — stored as Unknown
+    }
+}
+```
+
+#### Shared topic layout helper (`hermes-pipeline/src/decode.rs`)
+
+Extract the `topic[16..32]` extraction into a shared helper to consolidate the byte-slicing knowledge between trust.rs and governance.rs:
+
+```rust
+/// Extract the target ID from a 32-byte topic field.
+/// The target is always in the last 16 bytes (topic[16..32]).
+/// Used by both trust pipeline (direct action events) and governance
+/// pipeline (ping calldata within proposals).
+pub fn extract_topic_target(topic: &[u8]) -> Option<&[u8]> {
+    if topic.len() >= 32 {
+        Some(&topic[16..32])
     } else {
-        // Non-subspace ping — fall through to None (stored as Unknown)
         None
     }
 }
@@ -184,20 +224,38 @@ fn decode_ping_subspace_action(calldata: &[u8]) -> Option<proposal_action::Actio
 
 #### `kg-indexer/src/models/governance.rs`
 
-Add 6 new `ProposalActionPayload` variants:
+Add 2 new `ProposalActionPayload` variants (matching the 2 proto message shapes):
 
 ```rust
-SubspaceVerified { target_space_id: Uuid },
-SubspaceUnverified { target_space_id: Uuid },
-SubspaceRelated { target_space_id: Uuid },
-SubspaceUnrelated { target_space_id: Uuid },
-SubspaceTopicDeclared { subspace_id: Uuid, topic_id: Uuid },
-SubspaceTopicRemoved { subspace_id: Uuid, topic_id: Uuid },
+/// Subspace edge action (verified/unverified/related/unrelated)
+/// The specific edge type is determined by the action_type string in storage.
+SubspaceEdge { target_space_id: Uuid },
+/// Subspace topic action (topic declared/removed)
+/// The specific operation is determined by the action_type string in storage.
+SubspaceTopic { target_topic_id: Uuid },
 ```
 
 #### `kg-indexer/src/handlers/governance.rs`
 
-Add new arms in `map_proposal_action` for the 6 new proto `Action` variants. Same pattern as existing member/editor variants: extract bytes → `bytes_to_uuid`.
+Add new arms in `map_proposal_action` for the 6 new proto `Action` oneof variants. The 4 edge variants all map to `SubspaceEdge`, the 2 topic variants to `SubspaceTopic`:
+
+```rust
+Some(Action::SubspaceVerified(a)) | Some(Action::SubspaceUnverified(a))
+| Some(Action::SubspaceRelated(a)) | Some(Action::SubspaceUnrelated(a)) => {
+    match bytes_to_uuid(&a.target_space_id) {
+        Some(id) => ProposalActionPayload::SubspaceEdge { target_space_id: id },
+        None => ProposalActionPayload::Unknown,
+    }
+}
+Some(Action::SubspaceTopicDeclared(a)) | Some(Action::SubspaceTopicRemoved(a)) => {
+    match bytes_to_uuid(&a.target_topic_id) {
+        Some(id) => ProposalActionPayload::SubspaceTopic { target_topic_id: id },
+        None => ProposalActionPayload::Unknown,
+    }
+}
+```
+
+Note: The `action_type` string is determined by which proto enum value accompanies the action, not by the payload variant. The kg-indexer should read `ProposalActionType` from the proto message to set the correct action_type string. If the proto doesn't carry the enum explicitly, the oneof field name discriminates it.
 
 Update `derive_proposal_name` with human-readable labels:
 - `SubspaceVerified` → `"Add Verified Subspace"`
@@ -209,7 +267,20 @@ Update `derive_proposal_name` with human-readable labels:
 
 #### `kg-indexer/src/storage.rs`
 
-Add new arms in `insert_proposal_actions` for the 6 variants. Edge actions use `target_id` for the target space. Topic actions use `target_id` for the topic entity ID and `subspace_id` for the child space.
+Add new arms in `insert_proposal_actions`. Both variants use `target_id` — for edges it's a space ID, for topics it's a topic entity ID. The `action_type` string must be set per-variant (not per-payload-shape), so each oneof arm needs its own action_type string. The updated UNNEST SQL stays at 11 columns (no new column):
+
+```rust
+ProposalActionPayload::SubspaceEdge { target_space_id: id } => {
+    target_id = Some(*id);
+    // action_type is set from the proto enum, e.g. "SubspaceVerified"
+    action_type_from_proto
+}
+ProposalActionPayload::SubspaceTopic { target_topic_id: id } => {
+    target_id = Some(*id);
+    // action_type is set from the proto enum, e.g. "SubspaceTopicDeclared"
+    action_type_from_proto
+}
+```
 
 The action_type strings for the SQL enum cast:
 - `"SubspaceVerified"`, `"SubspaceUnverified"`, `"SubspaceRelated"`, `"SubspaceUnrelated"`, `"SubspaceTopicDeclared"`, `"SubspaceTopicRemoved"`
@@ -232,9 +303,9 @@ export const proposalActionTypeEnum = pgEnum("proposalActionType", [
 ])
 ```
 
-Add `subspace_id` column to `proposal_actions` table (UUID, nullable) for topic actions.
+No new columns needed — `target_id` is reused.
 
-Run `drizzle-kit generate` to create the migration. The generated SQL will need manual adjustment because `ALTER TYPE ... ADD VALUE` cannot run inside a transaction. Each `ADD VALUE` statement must be a separate statement outside `BEGIN/COMMIT`.
+Run `drizzle-kit generate` to create the migration. The generated SQL will need manual adjustment because `ALTER TYPE ... ADD VALUE` cannot run inside a transaction. Each `ADD VALUE` statement must be a separate statement outside `BEGIN/COMMIT` (same as migration `0045`).
 
 ### Phase 4: API Layer
 
@@ -251,37 +322,48 @@ export const PROPOSAL_ACTION_TYPES = [
 ] as const
 ```
 
-Add new `ActionResponse` interfaces:
+Add 2 new `ActionResponse` interfaces (collapsed from 6 since the shapes are identical within each group):
 
 ```typescript
-interface SubspaceVerifiedAction { actionType: "SUBSPACE_VERIFIED"; targetSpaceId: string }
-interface SubspaceUnverifiedAction { actionType: "SUBSPACE_UNVERIFIED"; targetSpaceId: string }
-interface SubspaceRelatedAction { actionType: "SUBSPACE_RELATED"; targetSpaceId: string }
-interface SubspaceUnrelatedAction { actionType: "SUBSPACE_UNRELATED"; targetSpaceId: string }
-interface SubspaceTopicDeclaredAction { actionType: "SUBSPACE_TOPIC_DECLARED"; subspaceId: string; topicId: string }
-interface SubspaceTopicRemovedAction { actionType: "SUBSPACE_TOPIC_REMOVED"; subspaceId: string; topicId: string }
+interface SubspaceEdgeAction {
+    actionType: "SUBSPACE_VERIFIED" | "SUBSPACE_UNVERIFIED" | "SUBSPACE_RELATED" | "SUBSPACE_UNRELATED"
+    targetSpaceId: string
+}
+
+interface SubspaceTopicAction {
+    actionType: "SUBSPACE_TOPIC_DECLARED" | "SUBSPACE_TOPIC_REMOVED"
+    targetTopicId: string
+}
 ```
 
 Add to the `ActionResponse` discriminated union.
 
 #### `api/src/proposals/router.ts`
 
-Add 6 new cases in `mapToActionResponse`:
+Add new cases in `mapToActionResponse` with defensive null checks (existing convention — missing required fields → `UNKNOWN`):
 
 ```typescript
 case "SubspaceVerified":
-    return { actionType: "SUBSPACE_VERIFIED", targetSpaceId: action.targetId ?? "" }
-// ... similar for others
+case "SubspaceUnverified":
+case "SubspaceRelated":
+case "SubspaceUnrelated":
+    if (!action.targetId) return { actionType: "UNKNOWN" }
+    return { actionType: ACTION_TYPE_MAP[action.actionType], targetSpaceId: action.targetId }
+
 case "SubspaceTopicDeclared":
-    return { actionType: "SUBSPACE_TOPIC_DECLARED", subspaceId: action.subspaceId ?? "", topicId: action.targetId ?? "" }
+case "SubspaceTopicRemoved":
+    if (!action.targetId) return { actionType: "UNKNOWN" }
+    return { actionType: ACTION_TYPE_MAP[action.actionType], targetTopicId: action.targetId }
 ```
+
+Note: `ACTION_TYPE_MAP` converts PascalCase DB values → SCREAMING_SNAKE_CASE API values (existing pattern).
 
 ## Acceptance Criteria
 
 - [ ] Proposals with subspace ping actions are decoded and stored with the correct `action_type` (not `Unknown`)
 - [ ] `GET /proposals?actionTypes=SubspaceVerified` returns only proposals with verified subspace actions
 - [ ] Non-subspace ping actions still fall through to `Unknown`
-- [ ] Malformed ping calldata is handled gracefully (logged, stored as `Unknown`)
+- [ ] Malformed ping calldata logs a warning and is stored as `Unknown`
 - [ ] Pipeline unit tests cover all 6 subspace action types + non-subspace ping fallthrough + malformed data
 - [ ] KG-indexer handler unit tests cover all 6 proto variants
 - [ ] API returns correct typed responses for each subspace action type
@@ -297,16 +379,21 @@ The indexer should be rerun after all components are deployed to backfill histor
 
 ## Dependencies & Risks
 
-- **`ALTER TYPE ADD VALUE` is not transactional** — each statement must run outside a transaction. Drizzle-generated migration may need manual adjustment (same as migration `0045`).
+- **`ALTER TYPE ADD VALUE` is not transactional** — each statement must run outside a transaction. Drizzle-generated migration will need manual adjustment (same as migration `0045`).
 - **Backward compatibility** — Old pipeline emitting `Ping` → new indexer: proto `action` is `None` → stored as `Unknown`. Fine.
 - **Forward compatibility** — New pipeline → old indexer: unknown proto oneof variant → `action` is `None` → stored as `Unknown`. Fine, but the new enum values won't exist in the old database. Hence: deploy migration first.
 - **Re-indexing** — Historical subspace proposals currently stored as `Unknown` will need re-indexing to be reclassified. The indexer rerun handles this.
+- **`target_id` semantic overloading** — `target_id` is already polymorphic (space IDs for member/editor actions, no FK constraint). Subspace actions add space IDs (for edges) and entity IDs (for topics) to this column. The `action_type` enum disambiguates. Acceptable given the existing pattern.
 
 ## References
 
-- Trust pipeline topic field decoding: `hermes-pipeline/src/pipelines/trust.rs` (lines 130-200)
-- Existing proposal action decode pattern: `hermes-pipeline/src/pipelines/governance.rs` (lines 258-327)
-- Action constants: `hermes-substream/src/lib.rs` (lines 113-152)
-- Existing proposal action storage: `kg-indexer/src/storage.rs` (lines 844-950)
+- Trust pipeline topic field decoding: `hermes-pipeline/src/pipelines/trust.rs:184-207`
+- Existing proposal action decode pattern: `hermes-pipeline/src/pipelines/governance.rs:258-327`
+- Action constants: `hermes-substream/src/lib.rs:113-152`
+- Existing proposal action storage: `kg-indexer/src/storage.rs:844-950`
+- Atlas topic model: `atlas/src/graph/state.rs` — `topic_edges: HashMap<SpaceId, HashSet<TopicId>>`
+- Atlas events: `atlas/src/events.rs:76` — `Subtopic { target_topic_id: TopicId }`
+- Subspace topics table: `api/src/services/storage/schema.ts:281-292` — `(space_id, topic_id)`
+- Spaces table: `api/src/services/storage/schema.ts:100-105` — `topicId: uuid()` (space → topic association)
 - DAOSpace contract `ping` function: `ping(bytes32 _action, bytes32 _topic, bytes calldata _data)` — generic passthrough that re-enters Space Registry
 - Previous PR: #438 (wired typed subspace removal events end-to-end)
