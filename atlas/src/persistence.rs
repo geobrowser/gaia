@@ -618,12 +618,12 @@ impl PostgresCheckpointStore {
             })?
             .0;
 
-        let schema_version_i32 = row.try_get::<i32, _>("schema_version").map_err(|err| {
+        let schema_version_i16 = row.try_get::<i16, _>("schema_version").map_err(|err| {
             CheckpointError::Serialization(format!("decode schema_version: {err}"))
         })?;
-        let schema_version = u32::try_from(schema_version_i32).map_err(|_| {
+        let schema_version = u32::try_from(schema_version_i16).map_err(|_| {
             CheckpointError::Serialization(format!(
-                "invalid schema_version value: {schema_version_i32}"
+                "invalid schema_version value: {schema_version_i16}"
             ))
         })?;
 
@@ -636,14 +636,14 @@ impl PostgresCheckpointStore {
             ))
         })?;
 
-        let graph_state_version_i32 =
-            row.try_get::<i32, _>("graph_state_version")
+        let graph_state_version_i16 =
+            row.try_get::<i16, _>("graph_state_version")
                 .map_err(|err| {
                     CheckpointError::Serialization(format!("decode graph_state_version: {err}"))
                 })?;
-        let graph_state_version = u32::try_from(graph_state_version_i32).map_err(|_| {
+        let graph_state_version = u32::try_from(graph_state_version_i16).map_err(|_| {
             CheckpointError::Serialization(format!(
-                "invalid graph_state_version value: {graph_state_version_i32}"
+                "invalid graph_state_version value: {graph_state_version_i16}"
             ))
         })?;
 
@@ -682,16 +682,16 @@ impl PostgresCheckpointStore {
         })?;
 
         let db_graph_state_version =
-            i32::try_from(checkpoint.graph_state_version).map_err(|_| {
+            i16::try_from(checkpoint.graph_state_version).map_err(|_| {
                 CheckpointError::Serialization(format!(
-                    "graph_state_version out of range for INTEGER: {}",
+                    "graph_state_version out of range for SMALLINT: {}",
                     checkpoint.graph_state_version
                 ))
             })?;
 
-        let db_schema_version = i32::try_from(checkpoint.schema_version).map_err(|_| {
+        let db_schema_version = i16::try_from(checkpoint.schema_version).map_err(|_| {
             CheckpointError::Serialization(format!(
-                "schema_version out of range for INTEGER: {}",
+                "schema_version out of range for SMALLINT: {}",
                 checkpoint.schema_version
             ))
         })?;
