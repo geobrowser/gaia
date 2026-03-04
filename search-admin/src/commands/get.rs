@@ -5,7 +5,9 @@ use opensearch::OpenSearch;
 pub async fn index_exists(client: &OpenSearch, index_name: &str) -> Result<bool> {
     let response = client
         .indices()
-        .exists(opensearch::indices::IndicesExistsParts::Index(&[index_name]))
+        .exists(opensearch::indices::IndicesExistsParts::Index(&[
+            index_name,
+        ]))
         .send()
         .await
         .context("Failed to check if index exists")?;

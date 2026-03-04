@@ -16,14 +16,8 @@ pub struct HermesBlockSummary {
     pub total_events: u64,
     /// Counts keyed by Kafka topic name.
     #[prost(map = "string, uint64", tag = "5")]
-    pub counts_by_topic: ::std::collections::HashMap<
-        ::prost::alloc::string::String,
-        u64,
-    >,
+    pub counts_by_topic: ::std::collections::HashMap<::prost::alloc::string::String, u64>,
     /// Counts keyed by event type (e.g., ROLE_GRANTED, PROPOSAL_CREATED).
     #[prost(map = "string, uint64", tag = "6")]
-    pub counts_by_event_type: ::std::collections::HashMap<
-        ::prost::alloc::string::String,
-        u64,
-    >,
+    pub counts_by_event_type: ::std::collections::HashMap<::prost::alloc::string::String, u64>,
 }

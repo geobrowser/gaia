@@ -117,11 +117,9 @@ impl SearchLoader {
                 }
                 ProcessedEvent::RemoveRelationById { relation_id } => {
                     self.pending_operations
-                        .push(EntityOperation::RemoveRelationById(
-                            RemoveRelationData {
-                                relation_id: relation_id.to_string(),
-                            },
-                        ));
+                        .push(EntityOperation::RemoveRelationById(RemoveRelationData {
+                            relation_id: relation_id.to_string(),
+                        }));
                 }
                 ProcessedEvent::UpdateEntityGlobalScore { entity_id, score } => {
                     self.pending_operations

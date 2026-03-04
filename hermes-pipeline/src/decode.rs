@@ -247,6 +247,49 @@ pub fn decode_voting_settings_args(calldata: &[u8]) -> Result<VotingSettingsArgs
     })
 }
 
+/// Decoded ping action arguments.
+#[derive(Debug, Clone)]
+pub struct PingArgs {
+    /// Action hash (keccak256 of the action name)
+    pub action: [u8; 32],
+    /// Packed topic field — layout depends on action type
+    pub topic: [u8; 32],
+    /// Additional data (always empty for subspace actions)
+    pub data: Vec<u8>,
+}
+
+/// Decode ping(bytes32, bytes32, bytes) calldata.
+///
+/// The calldata is:
+/// - 4 bytes: function selector (0xc70d8282)
+/// - ABI-encoded (bytes32 action, bytes32 topic, bytes data)
+///
+/// The `action` field is a keccak256 hash identifying the subspace operation.
+/// The `topic` field packs the target ID in bytes [16..32].
+pub fn decode_ping_args(calldata: &[u8]) -> Result<PingArgs, DecodeError> {
+    // Minimum: 4-byte selector + 2×32 static (bytes32, bytes32) + 32 offset + 32 length = 132 bytes
+    if calldata.len() < 132 {
+        return Err(DecodeError::DataTooShort {
+            expected: 132,
+            actual: calldata.len(),
+        });
+    }
+
+    // Skip the 4-byte selector
+    let data = &calldata[4..];
+
+    // Decode (bytes32, bytes32, bytes)
+    type PingArgsType = sol! { (bytes32, bytes32, bytes) };
+    let (action, topic, ping_data) =
+        PingArgsType::abi_decode(data).map_err(|e| DecodeError::AbiDecode(e.to_string()))?;
+
+    Ok(PingArgs {
+        action: action.into(),
+        topic: topic.into(),
+        data: ping_data.to_vec(),
+    })
+}
+
 // ============================================================================
 // Solidity Type Definitions
 // ============================================================================

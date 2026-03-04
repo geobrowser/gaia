@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use opensearch::{
-    http::transport::{SingleNodeConnectionPool, TransportBuilder},
     OpenSearch,
+    http::transport::{SingleNodeConnectionPool, TransportBuilder},
 };
 use url::Url;
 

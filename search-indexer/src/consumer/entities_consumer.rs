@@ -2,7 +2,7 @@
 //!
 //! Consumes entity events from Kafka topics and forwards them to the ingest.
 
-
+use hermes_instrumentation::{debug, error, info, info_span, instrument, warn, Instrument};
 use hermes_kafka::get_topic_prefix;
 use prost::Message;
 use rdkafka::{
@@ -13,19 +13,18 @@ use rdkafka::{
 use std::env;
 use std::time::Duration;
 use tokio::sync::mpsc;
-use hermes_instrumentation::{debug, error, info, info_span, instrument, warn, Instrument};
 use uuid::Uuid;
 
 use crate::consumer::messages::EntityEvent;
 use crate::errors::IngestError;
 use crate::orchestrator::EntityProcessingBatch;
 
+use grc_20::decode_edit;
 use hermes_schema::pb::knowledge::HermesEdit;
 use sdk::core::ids::{
     AVATAR_RELATION_TYPE_ID, COVER_RELATION_TYPE_ID, DESCRIPTION_PROPERTY_ID,
     IMAGE_URL_PROPERTY_ID, NAME_PROPERTY_ID, TYPE_RELATION_TYPE_ID,
 };
-use grc_20::decode_edit;
 
 /// Pending message information for batching.
 struct PendingMessage {
@@ -787,11 +786,7 @@ impl EntitiesConsumer {
     }
 
     /// Process a DeleteRelation operation.
-    fn process_delete_relation(
-        &self,
-        relation_id: &Uuid,
-        space_id: Uuid,
-    ) -> Option<EntityEvent> {
+    fn process_delete_relation(&self, relation_id: &Uuid, space_id: Uuid) -> Option<EntityEvent> {
         debug!(
             relation_id = %relation_id,
             space_id = %space_id,
@@ -856,9 +851,7 @@ mod tests {
                     language: UnsetLanguage::All,
                 },
                 UnsetValue {
-                    property: *Uuid::parse_str(DESCRIPTION_PROPERTY_ID)
-                        .unwrap()
-                        .as_bytes(),
+                    property: *Uuid::parse_str(DESCRIPTION_PROPERTY_ID).unwrap().as_bytes(),
                     language: UnsetLanguage::All,
                 },
             ],
@@ -916,9 +909,7 @@ mod tests {
                 },
             }],
             unset_values: vec![UnsetValue {
-                property: *Uuid::parse_str(DESCRIPTION_PROPERTY_ID)
-                    .unwrap()
-                    .as_bytes(),
+                property: *Uuid::parse_str(DESCRIPTION_PROPERTY_ID).unwrap().as_bytes(),
                 language: UnsetLanguage::All,
             }],
             context: None,
@@ -1033,7 +1024,10 @@ mod tests {
         assert_eq!(event.event_type, EntityEventType::Upsert);
         assert_eq!(event.name, Some("Test Entity".to_string()));
         assert_eq!(event.description, Some("A test description".to_string()));
-        assert_eq!(event.image_url, Some("https://example.com/image.png".to_string()));
+        assert_eq!(
+            event.image_url,
+            Some("https://example.com/image.png".to_string())
+        );
         // Avatar is not set from properties anymore — it comes via relations
         assert_eq!(event.avatar, None);
     }

@@ -177,18 +177,15 @@ mod tests {
             "nested"
         );
         assert_eq!(
-            settings["mappings"]["properties"]["relations"]["properties"]["relation_id"]
-                ["type"],
+            settings["mappings"]["properties"]["relations"]["properties"]["relation_id"]["type"],
             "keyword"
         );
         assert_eq!(
-            settings["mappings"]["properties"]["relations"]["properties"]["relation_type"]
-                ["type"],
+            settings["mappings"]["properties"]["relations"]["properties"]["relation_type"]["type"],
             "keyword"
         );
         assert_eq!(
-            settings["mappings"]["properties"]["relations"]["properties"]["to_entity_id"]
-                ["type"],
+            settings["mappings"]["properties"]["relations"]["properties"]["to_entity_id"]["type"],
             "keyword"
         );
 

@@ -35,7 +35,15 @@ impl ListIndicesCommand {
             .cat()
             .indices(opensearch::cat::CatIndicesParts::Index(&[pattern]))
             .v(true)
-            .h(&["index", "health", "status", "pri", "rep", "docs.count", "store.size"])
+            .h(&[
+                "index",
+                "health",
+                "status",
+                "pri",
+                "rep",
+                "docs.count",
+                "store.size",
+            ])
             .send()
             .await
             .context("Failed to list indices")?;
@@ -71,8 +79,7 @@ impl ListIndicesCommand {
             println!("Aliases:");
             if let Some(indices) = alias_json.as_object() {
                 for (index_name, aliases_obj) in indices {
-                    if let Some(aliases) = aliases_obj.get("aliases").and_then(|a| a.as_object())
-                    {
+                    if let Some(aliases) = aliases_obj.get("aliases").and_then(|a| a.as_object()) {
                         for alias_name in aliases.keys() {
                             println!("  {} → {}", alias_name, index_name);
                         }
@@ -89,11 +96,7 @@ impl ListIndicesCommand {
         } else {
             // Any other non-2xx status - surface the error
             let error_body = alias_response.text().await.unwrap_or_default();
-            anyhow::bail!(
-                "Failed to get aliases: status {} - {}",
-                status,
-                error_body
-            );
+            anyhow::bail!("Failed to get aliases: status {} - {}", status, error_body);
         }
 
         if self.detailed {
@@ -135,10 +138,7 @@ impl ListIndicesCommand {
                         println!("    Total: {}", doc_count);
                         println!("    Deleted: {}", deleted);
                         println!("  Storage:");
-                        println!(
-                            "    Primary: {:.2} MB",
-                            store_size as f64 / 1024.0 / 1024.0
-                        );
+                        println!("    Primary: {:.2} MB", store_size as f64 / 1024.0 / 1024.0);
 
                         // Get total (including replicas)
                         let total_store = index_stats["total"]["store"]["size_in_bytes"]
@@ -186,15 +186,22 @@ impl ListIndicesCommand {
                                 println!("    Replicas: {}", replicas);
                             }
                             if let Some(created) = settings.get("creation_date") {
-                                if let Some(timestamp) = created.as_str().and_then(|s| s.parse::<i64>().ok()) {
+                                if let Some(timestamp) =
+                                    created.as_str().and_then(|s| s.parse::<i64>().ok())
+                                {
                                     use chrono::{DateTime, Utc};
                                     let dt = DateTime::<Utc>::from_timestamp(timestamp / 1000, 0);
                                     if let Some(dt) = dt {
-                                        println!("    Created: {}", dt.format("%Y-%m-%d %H:%M:%S UTC"));
+                                        println!(
+                                            "    Created: {}",
+                                            dt.format("%Y-%m-%d %H:%M:%S UTC")
+                                        );
                                     }
                                 }
                             }
-                            if let Some(version) = settings.get("version").and_then(|v| v.get("created")) {
+                            if let Some(version) =
+                                settings.get("version").and_then(|v| v.get("created"))
+                            {
                                 println!("    OpenSearch Version: {}", version);
                             }
                         }
