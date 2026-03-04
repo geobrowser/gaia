@@ -103,7 +103,7 @@ The executable-proposal detection logic exists in three places:
 2. `api/src/proposals/queries.ts` — `sqlIsExecutable()` (SQL fragments)
 3. `proposal-executor/src/detect.ts` — Detection SQL
 
-The executor's copy is intentionally stricter — it adds a 60s clock-skew buffer not present in the other copies.
+The executor's copy is intentionally stricter — it adds a 60s clock-skew buffer and a 7-day maximum proposal age not present in the other copies.
 
 **What's cross-validated by tests:**
 - `RATIO_BASE` constant (10,000,000) matches `api/src/proposals/types.ts`
@@ -112,6 +112,7 @@ The executor's copy is intentionally stricter — it adds a 60s clock-skew buffe
 - Threshold formula shape: `(RATIO_BASE - threshold) * yes > threshold * no`
 - `voting_mode` enum value: `'Slow'`
 - Clock-skew buffer delta (executor's `+ 60` vs API's bare `end_time`)
+- Maximum proposal age (executor's 7-day cutoff — not present in API)
 
 Long-term mitigation: extract shared types/logic into `@geo/protocol` when a third consumer appears.
 
@@ -119,7 +120,8 @@ Long-term mitigation: extract shared types/logic into `@geo/protocol` when a thi
 
 - **`created_at` is stored as text** — Unix timestamp in the proposals table. `ORDER BY created_at::bigint ASC` ensures numeric ordering. Without the `::bigint` cast, string ordering would be incorrect for timestamps of different lengths.
 - **`pg` doesn't support JS BigInt** — `nowSeconds` is passed as `Number()` and cast to `::bigint` in SQL. All Unix timestamps fit safely in JS number precision.
-- **No `LIMIT`** — Result set is bounded by reality (proposals simultaneously in EXECUTABLE state). The DB read is fast; throughput is bounded by on-chain submission, not the query.
+- **7-day age cutoff** (`MAX_PROPOSAL_AGE`) — Excludes proposals older than 7 days to skip permanently stuck proposals. See RUNBOOK § "Proposals With Reverting Actions".
+- **No `LIMIT`** — Result set is bounded by reality (proposals simultaneously in EXECUTABLE state within the 7-day window). The DB read is fast; throughput is bounded by on-chain submission, not the query.
 
 ## Smart Wallet
 
