@@ -381,11 +381,17 @@ impl ProposalAction {
 
     /// Create a publish action.
     pub fn publish(topic: [u8; 32], content_uri: &[u8], metadata: &[u8]) -> Self {
+        // ABI-encode (bytes32, bytes, bytes)
+        use alloy::primitives::{Bytes, FixedBytes};
+        type PublishArgsType = sol! { (bytes32, bytes, bytes) };
+        let encoded = PublishArgsType::abi_encode(&(
+            FixedBytes::<32>::from(topic),
+            Bytes::copy_from_slice(content_uri),
+            Bytes::copy_from_slice(metadata),
+        ));
+
         let mut data = selectors::PUBLISH.to_vec();
-        // Simplified encoding - just append the topic and content
-        data.extend_from_slice(&topic);
-        data.extend_from_slice(content_uri);
-        data.extend_from_slice(metadata);
+        data.extend_from_slice(&encoded);
         Self {
             to: [0u8; 20],
             value: [0u8; 32],

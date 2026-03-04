@@ -144,15 +144,20 @@ mod expected {
 
     /// Expected subspace topic entries (space_id, topic_id) from trust pipeline.
     ///
-    /// 5 declared via subspace_topic_declared, 1 declared then removed (TOPIC_REMOVED).
+    /// The trust pipeline stores (source_space_id, topic_id) where source_space_id
+    /// is the parent space (from_id), not the subspace. So for:
+    ///   subspace_topic_declared(SPACE_B, SPACE_H, TOPIC_H)
+    /// the stored row is (SPACE_B, TOPIC_H), not (SPACE_H, TOPIC_H).
+    ///
+    /// 6 declared via subspace_topic_declared, 1 declared then removed (TOPIC_REMOVED).
     /// Net result: 5 rows in subspace_topics (the removed one shouldn't be there).
     pub fn subspace_topics() -> Vec<(Uuid, Uuid)> {
         vec![
-            (uuid_from_bytes(SPACE_H), uuid_from_bytes(TOPIC_H)),
-            (uuid_from_bytes(SPACE_E), uuid_from_bytes(TOPIC_E)),
-            (uuid_from_bytes(SPACE_A), uuid_from_bytes(TOPIC_SHARED)),
-            (uuid_from_bytes(SPACE_A), uuid_from_bytes(TOPIC_A)),
-            (uuid_from_bytes(SPACE_Q), uuid_from_bytes(TOPIC_Q)),
+            (uuid_from_bytes(SPACE_B), uuid_from_bytes(TOPIC_H)), // subspace_topic_declared(SPACE_B, SPACE_H, TOPIC_H)
+            (uuid_from_bytes(ROOT_SPACE_ID), uuid_from_bytes(TOPIC_E)), // subspace_topic_declared(ROOT, SPACE_E, TOPIC_E)
+            (uuid_from_bytes(SPACE_A), uuid_from_bytes(TOPIC_SHARED)), // subspace_topic_declared(SPACE_A, SPACE_A, TOPIC_SHARED)
+            (uuid_from_bytes(SPACE_X), uuid_from_bytes(TOPIC_A)), // subspace_topic_declared(SPACE_X, SPACE_A, TOPIC_A)
+            (uuid_from_bytes(SPACE_P), uuid_from_bytes(TOPIC_Q)), // subspace_topic_declared(SPACE_P, SPACE_Q, TOPIC_Q)
         ]
     }
 
@@ -487,7 +492,9 @@ async fn test_subspace_topics() {
     }
 
     // The removed topic should NOT be present
-    let removed_space = uuid_from_bytes(expected::SPACE_C);
+    // The parent space is SPACE_A (from_id in the subspace_topic_removed call),
+    // not SPACE_C (the subspace).
+    let removed_space = uuid_from_bytes(expected::SPACE_A);
     let removed_topic = uuid_from_bytes(expected::TOPIC_REMOVED);
     let exists: (bool,) = sqlx::query_as(
         "SELECT EXISTS(SELECT 1 FROM subspace_topics WHERE space_id = $1 AND topic_id = $2)",
