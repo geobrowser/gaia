@@ -926,27 +926,39 @@ impl Storage {
                     duration = Some(*d as i64);
                     "UpdateVotingSettings"
                 }
-                ProposalActionPayload::SubspaceVerified { target_space_id: id } => {
+                ProposalActionPayload::SubspaceVerified {
+                    target_space_id: id,
+                } => {
                     target_id = Some(*id);
                     "SubspaceVerified"
                 }
-                ProposalActionPayload::SubspaceUnverified { target_space_id: id } => {
+                ProposalActionPayload::SubspaceUnverified {
+                    target_space_id: id,
+                } => {
                     target_id = Some(*id);
                     "SubspaceUnverified"
                 }
-                ProposalActionPayload::SubspaceRelated { target_space_id: id } => {
+                ProposalActionPayload::SubspaceRelated {
+                    target_space_id: id,
+                } => {
                     target_id = Some(*id);
                     "SubspaceRelated"
                 }
-                ProposalActionPayload::SubspaceUnrelated { target_space_id: id } => {
+                ProposalActionPayload::SubspaceUnrelated {
+                    target_space_id: id,
+                } => {
                     target_id = Some(*id);
                     "SubspaceUnrelated"
                 }
-                ProposalActionPayload::SubspaceTopicDeclared { target_topic_id: id } => {
+                ProposalActionPayload::SubspaceTopicDeclared {
+                    target_topic_id: id,
+                } => {
                     target_id = Some(*id);
                     "SubspaceTopicDeclared"
                 }
-                ProposalActionPayload::SubspaceTopicRemoved { target_topic_id: id } => {
+                ProposalActionPayload::SubspaceTopicRemoved {
+                    target_topic_id: id,
+                } => {
                     target_id = Some(*id);
                     "SubspaceTopicRemoved"
                 }

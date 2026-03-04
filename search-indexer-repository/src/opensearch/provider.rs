@@ -76,7 +76,11 @@ macro_rules! flush_pending_bulk {
 /// Outcome of an `update_by_query` call with retry.
 enum UpdateByQueryOutcome {
     /// The query succeeded. Contains response stats.
-    Success { updated: u64, total: u64, conflicts: u64 },
+    Success {
+        updated: u64,
+        total: u64,
+        conflicts: u64,
+    },
     /// The query failed after all retries. Contains the error body.
     Failed(String),
 }
@@ -191,7 +195,11 @@ impl OpenSearchProvider {
                     "update_by_query completed"
                 );
 
-                return Ok(UpdateByQueryOutcome::Success { updated, total, conflicts });
+                return Ok(UpdateByQueryOutcome::Success {
+                    updated,
+                    total,
+                    conflicts,
+                });
             } else if status.as_u16() == 409 && attempt < Self::MAX_RETRIES {
                 attempt += 1;
                 warn!(
@@ -682,8 +690,15 @@ impl SearchIndexProvider for OpenSearchProvider {
                         }
                     });
 
-                    match self.update_by_query_with_retry(body, "RemoveRelationById").await? {
-                        UpdateByQueryOutcome::Success { updated, total, conflicts } => {
+                    match self
+                        .update_by_query_with_retry(body, "RemoveRelationById")
+                        .await?
+                    {
+                        UpdateByQueryOutcome::Success {
+                            updated,
+                            total,
+                            conflicts,
+                        } => {
                             if updated == 0 {
                                 warn!(
                                     relation_id = %relation_uuid,
@@ -928,7 +943,10 @@ impl SearchIndexProvider for OpenSearchProvider {
                         }
                     });
 
-                    match self.update_by_query_with_retry(body, "UpdateEntityGlobalScore").await? {
+                    match self
+                        .update_by_query_with_retry(body, "UpdateEntityGlobalScore")
+                        .await?
+                    {
                         UpdateByQueryOutcome::Success { .. } => {
                             total_succeeded += 1;
                             all_results.push(BatchOperationResult {
@@ -987,7 +1005,10 @@ impl SearchIndexProvider for OpenSearchProvider {
                         }
                     });
 
-                    match self.update_by_query_with_retry(body, "UpdateSpaceScore").await? {
+                    match self
+                        .update_by_query_with_retry(body, "UpdateSpaceScore")
+                        .await?
+                    {
                         UpdateByQueryOutcome::Success { .. } => {
                             total_succeeded += 1;
                             all_results.push(BatchOperationResult {
@@ -1075,7 +1096,10 @@ impl SearchIndexProvider for OpenSearchProvider {
                         }
                     });
 
-                    match self.update_by_query_with_retry(body, "UpdateSpaceTopicEntityId").await? {
+                    match self
+                        .update_by_query_with_retry(body, "UpdateSpaceTopicEntityId")
+                        .await?
+                    {
                         UpdateByQueryOutcome::Success { .. } => {
                             total_succeeded += 1;
                             all_results.push(BatchOperationResult {

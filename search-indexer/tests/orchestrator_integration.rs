@@ -14,8 +14,7 @@ use search_indexer::errors::IngestError;
 use search_indexer::loader::SearchLoader;
 use search_indexer::orchestrator::{
     EntitiesConsumerTrait, EntityProcessingBatch, Orchestrator, OrchestratorConfig,
-    ScoreProcessingBatch, ScoresConsumerTrait, SpaceTopicProcessingBatch,
-    SpaceTopicsConsumerTrait,
+    ScoreProcessingBatch, ScoresConsumerTrait, SpaceTopicProcessingBatch, SpaceTopicsConsumerTrait,
 };
 use search_indexer::processor::Processor;
 use search_indexer_repository::{
@@ -256,7 +255,10 @@ impl SearchIndexProvider for MockSearchProvider {
         Ok(())
     }
 
-    async fn delete_document(&self, _request: &DeleteEntityRequest) -> Result<(), SearchIndexError> {
+    async fn delete_document(
+        &self,
+        _request: &DeleteEntityRequest,
+    ) -> Result<(), SearchIndexError> {
         // Hard deletes not used - soft delete goes through update_document
         Ok(())
     }
@@ -367,7 +369,13 @@ fn create_test_orchestrator(events: Vec<EntityEvent>) -> (Orchestrator, Arc<Mock
     let mock_scores_consumer = Arc::new(MockScoresConsumer);
     let mock_space_topics_consumer = Arc::new(MockSpaceTopicsConsumer);
 
-    let orchestrator = Orchestrator::new(mock_consumer, mock_scores_consumer, mock_space_topics_consumer, processor, loader);
+    let orchestrator = Orchestrator::new(
+        mock_consumer,
+        mock_scores_consumer,
+        mock_space_topics_consumer,
+        processor,
+        loader,
+    );
 
     (orchestrator, mock_provider)
 }
@@ -407,7 +415,13 @@ fn create_error_test_orchestrator(
     let mock_scores_consumer = Arc::new(MockScoresConsumer);
     let mock_space_topics_consumer = Arc::new(MockSpaceTopicsConsumer);
 
-    let orchestrator = Orchestrator::new(mock_consumer, mock_scores_consumer, mock_space_topics_consumer, processor, loader);
+    let orchestrator = Orchestrator::new(
+        mock_consumer,
+        mock_scores_consumer,
+        mock_space_topics_consumer,
+        processor,
+        loader,
+    );
 
     (orchestrator, mock_provider)
 }
@@ -1234,11 +1248,7 @@ async fn test_add_then_remove_relation() {
 
     // Should have 1 add_relation via bulk operations
     let add_requests = mock_provider.get_add_relation_requests();
-    assert_eq!(
-        add_requests.len(),
-        1,
-        "Expected 1 add_relation request"
-    );
+    assert_eq!(add_requests.len(), 1, "Expected 1 add_relation request");
 
     // Should have 1 RemoveRelationById operation
     let removed_relation_ids = mock_provider.get_removed_relation_ids();
@@ -1251,19 +1261,11 @@ async fn test_add_then_remove_relation() {
     // Verify they're for the same relation
     assert!(add_requests[0].add_relation.is_some());
     assert_eq!(
-        add_requests[0]
-            .add_relation
-            .as_ref()
-            .unwrap()
-            .to_entity_id,
+        add_requests[0].add_relation.as_ref().unwrap().to_entity_id,
         type_id.to_string()
     );
     assert_eq!(
-        add_requests[0]
-            .add_relation
-            .as_ref()
-            .unwrap()
-            .relation_id,
+        add_requests[0].add_relation.as_ref().unwrap().relation_id,
         relation_id.to_string()
     );
     assert_eq!(removed_relation_ids[0], relation_id.to_string());
@@ -1350,11 +1352,7 @@ async fn test_multiple_types_for_same_entity() {
 
     // Should have 3 add_relation operations
     let add_requests = mock_provider.get_add_relation_requests();
-    assert_eq!(
-        add_requests.len(),
-        3,
-        "Expected 3 add_relation requests"
-    );
+    assert_eq!(add_requests.len(), 3, "Expected 3 add_relation requests");
 
     // Verify all are for the same entity
     for request in &add_requests {
@@ -1365,11 +1363,7 @@ async fn test_multiple_types_for_same_entity() {
     // Verify all three types are represented
     let added_types: Vec<_> = add_requests
         .iter()
-        .filter_map(|r| {
-            r.add_relation
-                .as_ref()
-                .map(|rel| rel.to_entity_id.clone())
-        })
+        .filter_map(|r| r.add_relation.as_ref().map(|rel| rel.to_entity_id.clone()))
         .collect();
     assert!(added_types.contains(&type_id_1.to_string()));
     assert!(added_types.contains(&type_id_2.to_string()));
@@ -1426,11 +1420,7 @@ async fn test_create_relations_for_multiple_entities() {
 
     // Should have 3 add_relation operations
     let add_requests = mock_provider.get_add_relation_requests();
-    assert_eq!(
-        add_requests.len(),
-        3,
-        "Expected 3 add_relation requests"
-    );
+    assert_eq!(add_requests.len(), 3, "Expected 3 add_relation requests");
 
     // Verify each entity got its correct type
     let entity_type_pairs: Vec<_> = add_requests
@@ -1539,11 +1529,7 @@ async fn test_mixed_create_and_delete_relations_different_entities() {
 
     // Verify 2 add_relation operations
     let add_requests = mock_provider.get_add_relation_requests();
-    assert_eq!(
-        add_requests.len(),
-        2,
-        "Expected 2 add_relation requests"
-    );
+    assert_eq!(add_requests.len(), 2, "Expected 2 add_relation requests");
 
     // Verify 2 RemoveRelationById operations
     let removed_relation_ids = mock_provider.get_removed_relation_ids();
@@ -1619,8 +1605,16 @@ async fn test_interleaved_entity_and_relation_operations() {
     // Verify counts:
     // - 2 entity upserts + 1 add_relation + 1 soft delete = 4 updates
     // - 1 relation delete (RemoveRelationById)
-    assert_eq!(mock_provider.get_updated_count(), 4, "Expected 4 updates (including soft delete)");
-    assert_eq!(mock_provider.get_soft_deleted_count(), 1, "Expected 1 soft delete");
+    assert_eq!(
+        mock_provider.get_updated_count(),
+        4,
+        "Expected 4 updates (including soft delete)"
+    );
+    assert_eq!(
+        mock_provider.get_soft_deleted_count(),
+        1,
+        "Expected 1 soft delete"
+    );
 
     let removed_relation_ids = mock_provider.get_removed_relation_ids();
     assert_eq!(
@@ -1635,11 +1629,7 @@ async fn test_interleaved_entity_and_relation_operations() {
     assert_eq!(add_requests.len(), 1, "Expected 1 add_relation");
     assert_eq!(add_requests[0].entity_id, entity_id_1.to_string());
     assert_eq!(
-        add_requests[0]
-            .add_relation
-            .as_ref()
-            .unwrap()
-            .relation_id,
+        add_requests[0].add_relation.as_ref().unwrap().relation_id,
         relation_id_1.to_string()
     );
 }

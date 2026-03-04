@@ -1,11 +1,11 @@
 //! Dependency initialization and wiring for the search indexer.
 
+use hermes_instrumentation::{info, warn};
+use search_indexer_shared::{get_consumer_group_prefix, get_index_prefix};
 use std::env;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::sleep;
-use hermes_instrumentation::{info, warn};
-use search_indexer_shared::{get_consumer_group_prefix, get_index_prefix};
 
 use rdkafka::admin::AdminClient;
 use rdkafka::client::DefaultClientContext;
@@ -102,15 +102,20 @@ impl Dependencies {
 
         // Apply environment prefix to Kafka group IDs for staging isolation
         let consumer_group_prefix = get_consumer_group_prefix();
-        let base_kafka_group_edits_id =
-            env::var("KAFKA_GROUP_EDITS_ID").unwrap_or_else(|_| DEFAULT_KAFKA_GROUP_EDITS_ID.to_string());
-        let base_kafka_group_scores_id =
-            env::var("KAFKA_GROUP_SCORES_ID").unwrap_or_else(|_| DEFAULT_KAFKA_GROUP_SCORES_ID.to_string());
-        let base_kafka_group_space_topics_id =
-            env::var("KAFKA_GROUP_SPACE_TOPICS_ID").unwrap_or_else(|_| DEFAULT_KAFKA_GROUP_SPACE_TOPICS_ID.to_string());
-        let kafka_group_edits_id = format!("{}{}", consumer_group_prefix, base_kafka_group_edits_id);
-        let kafka_group_scores_id = format!("{}{}", consumer_group_prefix, base_kafka_group_scores_id);
-        let kafka_group_space_topics_id = format!("{}{}", consumer_group_prefix, base_kafka_group_space_topics_id);
+        let base_kafka_group_edits_id = env::var("KAFKA_GROUP_EDITS_ID")
+            .unwrap_or_else(|_| DEFAULT_KAFKA_GROUP_EDITS_ID.to_string());
+        let base_kafka_group_scores_id = env::var("KAFKA_GROUP_SCORES_ID")
+            .unwrap_or_else(|_| DEFAULT_KAFKA_GROUP_SCORES_ID.to_string());
+        let base_kafka_group_space_topics_id = env::var("KAFKA_GROUP_SPACE_TOPICS_ID")
+            .unwrap_or_else(|_| DEFAULT_KAFKA_GROUP_SPACE_TOPICS_ID.to_string());
+        let kafka_group_edits_id =
+            format!("{}{}", consumer_group_prefix, base_kafka_group_edits_id);
+        let kafka_group_scores_id =
+            format!("{}{}", consumer_group_prefix, base_kafka_group_scores_id);
+        let kafka_group_space_topics_id = format!(
+            "{}{}",
+            consumer_group_prefix, base_kafka_group_space_topics_id
+        );
 
         let connection_mode = ConnectionMode::from_env();
         let retry_interval = env::var("OPENSEARCH_RETRY_INTERVAL_SECS")
@@ -186,11 +191,14 @@ impl Dependencies {
                 IndexingError::config(format!("Failed to warm space topic cache: {}", e))
             })?;
 
-        info!(entries = space_topic_cache.len(), "Space topic cache warmed");
+        info!(
+            entries = space_topic_cache.len(),
+            "Space topic cache warmed"
+        );
 
         // Initialize Kafka consumer for entity events
-        let entities_consumer =
-            EntitiesConsumer::new(&kafka_broker, &kafka_group_edits_id).map_err(|e| {
+        let entities_consumer = EntitiesConsumer::new(&kafka_broker, &kafka_group_edits_id)
+            .map_err(|e| {
                 IndexingError::config(format!("Failed to create entities consumer: {}", e))
             })?;
 
@@ -206,16 +214,18 @@ impl Dependencies {
         let loader = SearchLoader::new(provider.clone());
 
         // Initialize Kafka consumer for score updates
-        let scores_consumer = ScoresConsumer::new(&kafka_broker, &kafka_group_scores_id).map_err(|e| {
-            IndexingError::config(format!("Failed to create scores consumer: {}", e))
-        })?;
+        let scores_consumer =
+            ScoresConsumer::new(&kafka_broker, &kafka_group_scores_id).map_err(|e| {
+                IndexingError::config(format!("Failed to create scores consumer: {}", e))
+            })?;
 
         info!("Scores consumer created");
 
         // Initialize Kafka consumer for space topic events
-        let space_topics_consumer = SpaceTopicsConsumer::new(&kafka_broker, &kafka_group_space_topics_id).map_err(|e| {
-            IndexingError::config(format!("Failed to create space topics consumer: {}", e))
-        })?;
+        let space_topics_consumer =
+            SpaceTopicsConsumer::new(&kafka_broker, &kafka_group_space_topics_id).map_err(|e| {
+                IndexingError::config(format!("Failed to create space topics consumer: {}", e))
+            })?;
 
         info!("Space topics consumer created");
 

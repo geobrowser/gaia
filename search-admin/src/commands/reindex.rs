@@ -5,7 +5,6 @@ use std::time::Duration;
 use tokio::time::sleep;
 use tracing::info;
 
-
 use crate::commands::get;
 use crate::opensearch_client;
 
@@ -193,11 +192,7 @@ impl ReindexCommand {
 
                         if !status.is_success() {
                             let error_body = response.text().await.unwrap_or_default();
-                            anyhow::bail!(
-                                "Failed to get task status: {} - {}",
-                                status,
-                                error_body
-                            );
+                            anyhow::bail!("Failed to get task status: {} - {}", status, error_body);
                         }
 
                         let task_json: serde_json::Value = response
@@ -214,10 +209,22 @@ impl ReindexCommand {
                                 println!("  Task ID: {}", task_id);
                                 println!();
                                 println!("Reindex statistics:");
-                                println!("  Total: {}", response_data["total"].as_u64().unwrap_or(0));
-                                println!("  Created: {}", response_data["created"].as_u64().unwrap_or(0));
-                                println!("  Updated: {}", response_data["updated"].as_u64().unwrap_or(0));
-                                println!("  Deleted: {}", response_data["deleted"].as_u64().unwrap_or(0));
+                                println!(
+                                    "  Total: {}",
+                                    response_data["total"].as_u64().unwrap_or(0)
+                                );
+                                println!(
+                                    "  Created: {}",
+                                    response_data["created"].as_u64().unwrap_or(0)
+                                );
+                                println!(
+                                    "  Updated: {}",
+                                    response_data["updated"].as_u64().unwrap_or(0)
+                                );
+                                println!(
+                                    "  Deleted: {}",
+                                    response_data["deleted"].as_u64().unwrap_or(0)
+                                );
 
                                 if let Some(failures) = response_data["failures"].as_array() {
                                     if !failures.is_empty() {
@@ -242,7 +249,10 @@ impl ReindexCommand {
                                 if let Some(total) = status.get("total").and_then(|v| v.as_u64()) {
                                     if total > 0 {
                                         let percentage = (created as f64 / total as f64) * 100.0;
-                                        print!("\r  Progress: {:.1}% ({}/{})", percentage, created, total);
+                                        print!(
+                                            "\r  Progress: {:.1}% ({}/{})",
+                                            percentage, created, total
+                                        );
                                         std::io::Write::flush(&mut std::io::stdout()).ok();
                                     }
                                 }

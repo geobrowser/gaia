@@ -2,8 +2,8 @@ use anyhow::{Context, Result};
 use clap::Args;
 use k8s_openapi::api::apps::v1::Deployment;
 use kube::{
-    api::{Api, Patch, PatchParams},
     Client,
+    api::{Api, Patch, PatchParams},
 };
 use opensearch::OpenSearch;
 use serde_json::json;
@@ -42,7 +42,10 @@ impl FullMigrationCommand {
         let target_index = format!("{}_v{}", index_alias, self.target_version);
 
         println!("\n════════════════════════════════════════════════");
-        println!("Full Index Migration: v{} → v{}", self.source_version, self.target_version);
+        println!(
+            "Full Index Migration: v{} → v{}",
+            self.source_version, self.target_version
+        );
         println!("════════════════════════════════════════════════\n");
 
         info!(
@@ -105,15 +108,27 @@ impl FullMigrationCommand {
         println!();
         println!("Next steps:");
         println!("  1. Monitor the search-indexer logs for any issues:");
-        println!("     kubectl logs -n {} -l app={} -f", self.namespace, self.deployment_name);
+        println!(
+            "     kubectl logs -n {} -l app={} -f",
+            self.namespace, self.deployment_name
+        );
         println!();
         println!("  2. Verify search functionality in your application");
         println!();
         println!("  3. After a few days of stable operation, delete the old index:");
-        println!("     Edit delete-index-job.yaml (set INDEX_VERSION={}, CONFIRM_DELETE=true)", self.source_version);
-        println!("     kubectl delete job opensearch-delete-index -n {} 2>/dev/null || true", self.namespace);
+        println!(
+            "     Edit delete-index-job.yaml (set INDEX_VERSION={}, CONFIRM_DELETE=true)",
+            self.source_version
+        );
+        println!(
+            "     kubectl delete job opensearch-delete-index -n {} 2>/dev/null || true",
+            self.namespace
+        );
         println!("     kubectl apply -f delete-index-job.yaml");
-        println!("     kubectl logs -n {} -f job/opensearch-delete-index", self.namespace);
+        println!(
+            "     kubectl logs -n {} -f job/opensearch-delete-index",
+            self.namespace
+        );
         println!();
 
         Ok(())
@@ -142,7 +157,10 @@ impl FullMigrationCommand {
                 index = %versioned_index_name,
                 "Index already exists, skipping creation"
             );
-            println!("✓ Index {} already exists, skipping creation\n", versioned_index_name);
+            println!(
+                "✓ Index {} already exists, skipping creation\n",
+                versioned_index_name
+            );
             return Ok(());
         }
 
@@ -180,7 +198,10 @@ impl FullMigrationCommand {
         println!("Step 2/5: Stopping Search Indexer");
         println!("────────────────────────────────────────────────\n");
 
-        info!("Scaling down {} deployment to 0 replicas", self.deployment_name);
+        info!(
+            "Scaling down {} deployment to 0 replicas",
+            self.deployment_name
+        );
 
         // Scale to 0 replicas
         let patch = json!({
@@ -225,7 +246,10 @@ impl FullMigrationCommand {
                 .context("Failed to get deployment status")?;
 
             if let Some(status) = deployment.status {
-                let ready_replicas = status.ready_replicas.or(status.available_replicas).unwrap_or(0);
+                let ready_replicas = status
+                    .ready_replicas
+                    .or(status.available_replicas)
+                    .unwrap_or(0);
 
                 if ready_replicas == 0 {
                     info!("All replicas terminated");
@@ -372,10 +396,7 @@ impl FullMigrationCommand {
                             println!("  Task ID: {}", task_id);
                             println!();
                             println!("Reindex statistics:");
-                            println!(
-                                "  Total: {}",
-                                response_data["total"].as_u64().unwrap_or(0)
-                            );
+                            println!("  Total: {}", response_data["total"].as_u64().unwrap_or(0));
                             println!(
                                 "  Created: {}",
                                 response_data["created"].as_u64().unwrap_or(0)
@@ -404,13 +425,15 @@ impl FullMigrationCommand {
                     }
 
                     // Show progress
-                    if let Some(status_obj) = task_json.get("task").and_then(|t| t.get("status"))
-                    {
+                    if let Some(status_obj) = task_json.get("task").and_then(|t| t.get("status")) {
                         if let Some(created) = status_obj.get("created").and_then(|v| v.as_u64()) {
                             if let Some(total) = status_obj.get("total").and_then(|v| v.as_u64()) {
                                 if total > 0 {
                                     let percentage = (created as f64 / total as f64) * 100.0;
-                                    print!("\r  Progress: {:.1}% ({}/{})", percentage, created, total);
+                                    print!(
+                                        "\r  Progress: {:.1}% ({}/{})",
+                                        percentage, created, total
+                                    );
                                     std::io::Write::flush(&mut std::io::stdout()).ok();
                                 }
                             }
@@ -578,7 +601,10 @@ impl FullMigrationCommand {
             .await
             .context("Failed to update deployment")?;
 
-        println!("✓ Updated ENTITIES_INDEX_VERSION to {}", self.target_version);
+        println!(
+            "✓ Updated ENTITIES_INDEX_VERSION to {}",
+            self.target_version
+        );
         println!("✓ Scaled up {} to 1 replica", self.deployment_name);
         println!();
         println!("⏳ Waiting for pod to be ready...");

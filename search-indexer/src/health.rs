@@ -4,12 +4,12 @@
 //! for Kubernetes to monitor the search-indexer service.
 
 use axum::{extract::State, http::StatusCode, response::IntoResponse, routing::get, Router};
+use hermes_instrumentation::{error, info};
 use rdkafka::admin::AdminClient;
 use rdkafka::client::DefaultClientContext;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::task::JoinHandle;
-use hermes_instrumentation::{error, info};
 
 use search_indexer_repository::SearchIndexProvider;
 

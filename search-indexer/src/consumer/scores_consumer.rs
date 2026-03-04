@@ -2,13 +2,13 @@
 //!
 //! Consumes HermesScoresBatch messages and forwards score events to the ingest.
 
-use hermes_instrumentation::{Instrument, debug, error, info, info_span, instrument, warn};
+use hermes_instrumentation::{debug, error, info, info_span, instrument, warn, Instrument};
 use hermes_kafka::get_topic_prefix;
 use prost::Message;
 use rdkafka::{
-    TopicPartitionList,
     consumer::{Consumer, StreamConsumer},
     message::Message as KafkaMessage,
+    TopicPartitionList,
 };
 use std::env;
 use std::time::Duration;

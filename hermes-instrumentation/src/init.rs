@@ -7,7 +7,7 @@ use crate::config::{AxiomConfig, Backend, Config};
 use opentelemetry_otlp::{SpanExporter, WithExportConfig, WithHttpConfig};
 use opentelemetry_sdk::trace::{BatchConfigBuilder, BatchSpanProcessor, SdkTracerProvider};
 use tracing_subscriber::filter::LevelFilter;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 /// Errors that can occur during telemetry initialization.
 #[derive(Debug, thiserror::Error)]
@@ -229,10 +229,10 @@ fn init_instrumentation(
     debug: bool,
     axiom: Option<&AxiomConfig>,
 ) -> Result<(SdkTracerProvider, sentry::ClientInitGuard), Error> {
-    use opentelemetry::trace::TracerProvider as _;
     use opentelemetry::KeyValue;
-    use opentelemetry_sdk::propagation::TraceContextPropagator;
+    use opentelemetry::trace::TracerProvider as _;
     use opentelemetry_sdk::Resource;
+    use opentelemetry_sdk::propagation::TraceContextPropagator;
 
     let mut options = sentry::ClientOptions {
         traces_sample_rate,

@@ -437,10 +437,10 @@ mod tests {
 
         // 18 spaces: 11 canonical + 7 non-canonical
         assert_eq!(space_count, 18);
-        // 10 verified + 4 related + 5 topic declarations + 3 editor_added + 2 member_added
-        // + 1 editor_removed + 1 member_removed = 26 trust extensions
-        assert_eq!(trust_count, 26);
+        // 10 verified + 4 related + 6 topic declarations + 1 topic removal
+        // + 3 editor_added + 2 member_added + 1 editor_removed + 1 member_removed = 28
+        assert_eq!(trust_count, 28);
         // Total topology events (edits, proposals, flagging, voting filtered out)
-        assert_eq!(events.len(), 44);
+        assert_eq!(events.len(), 46);
     }
 }

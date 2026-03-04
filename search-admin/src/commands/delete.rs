@@ -2,7 +2,6 @@ use anyhow::{Context, Result};
 use clap::Args;
 use tracing::info;
 
-
 use crate::commands::get;
 use crate::opensearch_client;
 
@@ -49,7 +48,10 @@ impl DeleteIndexCommand {
             println!("  {}", versioned_index_name);
             println!();
             println!("To proceed, add the --confirm flag:");
-            println!("  search-admin delete-index --version {} --confirm", self.version);
+            println!(
+                "  search-admin delete-index --version {} --confirm",
+                self.version
+            );
             println!();
             anyhow::bail!("Deletion cancelled: --confirm flag required");
         }
@@ -128,7 +130,10 @@ impl DeleteIndexCommand {
                 .and_then(|obj| obj.get(&versioned_index_name))
                 .is_some()
             {
-                println!("❌ ERROR: Index {} is currently ACTIVE!", versioned_index_name);
+                println!(
+                    "❌ ERROR: Index {} is currently ACTIVE!",
+                    versioned_index_name
+                );
                 println!("The alias '{}' is pointing to this index.", index_alias);
                 println!();
                 println!("You must switch the alias to a different index before deleting.");
@@ -139,7 +144,10 @@ impl DeleteIndexCommand {
             // Index not in alias - safe to proceed
         } else if status.as_u16() == 404 {
             // 404 means alias doesn't exist - safe to proceed
-            info!("Alias '{}' not found (404) - index is not active", index_alias);
+            info!(
+                "Alias '{}' not found (404) - index is not active",
+                index_alias
+            );
         } else {
             // Any other non-2xx status is ambiguous - fail closed
             let error_body = alias_response.text().await.unwrap_or_default();
@@ -197,7 +205,11 @@ impl DeleteIndexCommand {
         let status = delete_response.status_code();
         if !status.is_success() {
             let error_body = delete_response.text().await.unwrap_or_default();
-            anyhow::bail!("Index deletion failed with status {}: {}", status, error_body);
+            anyhow::bail!(
+                "Index deletion failed with status {}: {}",
+                status,
+                error_body
+            );
         }
 
         info!("✓ Index deleted successfully");

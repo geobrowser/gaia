@@ -14,8 +14,6 @@ pub use bulk::{
     execute_bulk, parse_bulk_response, BulkAction, BulkOperationMeta, BulkScript, BulkScriptBody,
     BulkUpdateBody,
 };
-pub use index_config::{
-    get_index_settings, get_versioned_index_name_with_base, IndexConfig,
-};
+pub use index_config::{get_index_settings, get_versioned_index_name_with_base, IndexConfig};
 pub use provider::OpenSearchProvider;
 pub use unset_document_properties::{create_unset_properties_script, validate_property_keys};

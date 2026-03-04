@@ -9,6 +9,8 @@ mod scores_consumer;
 mod space_topics_consumer;
 
 pub use entities_consumer::EntitiesConsumer;
-pub use messages::{EntityEvent, EntityEventType, ScoreEvent, ScoreEventType, SpaceTopicEvent, StreamMessage};
+pub use messages::{
+    EntityEvent, EntityEventType, ScoreEvent, ScoreEventType, SpaceTopicEvent, StreamMessage,
+};
 pub use scores_consumer::ScoresConsumer;
 pub use space_topics_consumer::SpaceTopicsConsumer;

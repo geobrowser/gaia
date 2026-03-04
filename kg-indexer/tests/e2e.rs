@@ -160,10 +160,10 @@ mod expected {
     pub fn proposal_action_types() -> Vec<(Uuid, &'static str, Option<Uuid>)> {
         vec![
             // Original proposals 1-7
-            (uuid_from_bytes(PROPOSAL_1), "AddMember", None),     // target is make_id(0x11), not a known space
-            (uuid_from_bytes(PROPOSAL_2), "RemoveMember", None),  // target is make_id(0x12)
-            (uuid_from_bytes(PROPOSAL_3), "AddEditor", None),     // target is make_id(0x50)
-            (uuid_from_bytes(PROPOSAL_4), "RemoveEditor", None),  // target is make_id(0x51)
+            (uuid_from_bytes(PROPOSAL_1), "AddMember", None), // target is make_id(0x11), not a known space
+            (uuid_from_bytes(PROPOSAL_2), "RemoveMember", None), // target is make_id(0x12)
+            (uuid_from_bytes(PROPOSAL_3), "AddEditor", None), // target is make_id(0x50)
+            (uuid_from_bytes(PROPOSAL_4), "RemoveEditor", None), // target is make_id(0x51)
             (uuid_from_bytes(PROPOSAL_5), "Flag", None),
             (uuid_from_bytes(PROPOSAL_6), "Unflag", None),
             // Proposal 7 (Publish) - content_uri is present but target_id is null
