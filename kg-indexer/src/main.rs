@@ -1081,11 +1081,24 @@ async fn process_message(
             1
         }
         KgMessage::TrustExtension(event) => {
-            if let Some(subspace) = handlers::subspaces::handle_trust_extension(&event)? {
-                storage.insert_subspaces(&[subspace], &mut tx).await?;
-                1
-            } else {
-                0
+            match handlers::subspaces::handle_trust_extension(&event)? {
+                Some(models::subspaces::SubspaceChange::InsertExplicit(item)) => {
+                    storage.insert_subspaces(&[item], &mut tx).await?;
+                    1
+                }
+                Some(models::subspaces::SubspaceChange::RemoveExplicit(item)) => {
+                    storage.remove_subspaces(&[item], &mut tx).await?;
+                    1
+                }
+                Some(models::subspaces::SubspaceChange::InsertTopic(item)) => {
+                    storage.insert_subspace_topics(&[item], &mut tx).await?;
+                    1
+                }
+                Some(models::subspaces::SubspaceChange::RemoveTopic(item)) => {
+                    storage.remove_subspace_topics(&[item], &mut tx).await?;
+                    1
+                }
+                None => 0,
             }
         }
         KgMessage::ProposalCreated(event) => {
@@ -1449,19 +1462,39 @@ async fn process_block(
                         Some(TrustExtensionType::Verified(_)) => "verified",
                         Some(TrustExtensionType::Related(_)) => "related",
                         Some(TrustExtensionType::Subtopic(_)) => "subtopic",
+                        Some(TrustExtensionType::VerifiedRemoval(_)) => "verified_removal",
+                        Some(TrustExtensionType::RelatedRemoval(_)) => "related_removal",
+                        Some(TrustExtensionType::SubtopicRemoval(_)) => "subtopic_removal",
                         None => "unknown",
                     };
                     event_span.record("extension_type", extension_type);
 
-                    if let Some(subspace) =
-                        handlers::subspaces::handle_trust_extension(trust_event)?
-                    {
-                        event_span.record("parent_space_id", display(subspace.parent_space_id));
-                        event_span.record("child_space_id", display(subspace.subspace_id));
-                        storage.insert_subspaces(&[subspace], &mut tx).await?;
-                        1
-                    } else {
-                        0
+                    match handlers::subspaces::handle_trust_extension(trust_event)? {
+                        Some(models::subspaces::SubspaceChange::InsertExplicit(item)) => {
+                            event_span.record("parent_space_id", display(item.parent_space_id));
+                            event_span.record("child_space_id", display(item.subspace_id));
+                            storage.insert_subspaces(&[item], &mut tx).await?;
+                            1
+                        }
+                        Some(models::subspaces::SubspaceChange::RemoveExplicit(item)) => {
+                            event_span.record("parent_space_id", display(item.parent_space_id));
+                            event_span.record("child_space_id", display(item.subspace_id));
+                            storage.remove_subspaces(&[item], &mut tx).await?;
+                            1
+                        }
+                        Some(models::subspaces::SubspaceChange::InsertTopic(item)) => {
+                            event_span.record("space_id", display(item.space_id));
+                            event_span.record("topic_id", display(item.topic_id));
+                            storage.insert_subspace_topics(&[item], &mut tx).await?;
+                            1
+                        }
+                        Some(models::subspaces::SubspaceChange::RemoveTopic(item)) => {
+                            event_span.record("space_id", display(item.space_id));
+                            event_span.record("topic_id", display(item.topic_id));
+                            storage.remove_subspace_topics(&[item], &mut tx).await?;
+                            1
+                        }
+                        None => 0,
                     }
                 }
                 KgMessage::ProposalCreated(proposal_event) => {

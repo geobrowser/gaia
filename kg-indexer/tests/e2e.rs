@@ -79,7 +79,7 @@ mod expected {
         ]
     }
 
-    /// Expected subspace relationships (parent, child) from subspace_verified calls
+    /// Expected subspace relationships (parent, child) from subspace_verified + subspace_related calls
     pub fn subspace_relationships() -> Vec<(Uuid, Uuid)> {
         vec![
             (uuid_from_bytes(ROOT_SPACE_ID), uuid_from_bytes(SPACE_A)),
@@ -92,6 +92,11 @@ mod expected {
             (uuid_from_bytes(SPACE_X), uuid_from_bytes(SPACE_Y)),
             (uuid_from_bytes(SPACE_Y), uuid_from_bytes(SPACE_Z)),
             (uuid_from_bytes(SPACE_P), uuid_from_bytes(SPACE_Q)),
+            // Related subspaces
+            (uuid_from_bytes(ROOT_SPACE_ID), uuid_from_bytes(SPACE_H)),
+            (uuid_from_bytes(SPACE_A), uuid_from_bytes(SPACE_D)),
+            (uuid_from_bytes(SPACE_C), uuid_from_bytes(SPACE_G)),
+            (uuid_from_bytes(SPACE_X), uuid_from_bytes(SPACE_W)),
         ]
     }
 
@@ -172,7 +177,11 @@ async fn test_subspace_relationships() {
         .await
         .expect("Failed to count subspaces");
 
-    assert_eq!(count.0, 10, "Expected 10 subspaces, found {}", count.0);
+    assert_eq!(
+        count.0, 14,
+        "Expected 14 subspaces (10 verified + 4 related), found {}",
+        count.0
+    );
 }
 
 #[tokio::test]

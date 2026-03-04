@@ -4,7 +4,6 @@
 //! the action types from the Space Registry contract:
 //!
 //! - `personal_space_registered` → `SPACE_ID_REGISTERED` + `SPACE_TYPE_DECLARED` actions
-//! - `subspace_added` → `GOVERNANCE.SUBSPACE_ADDED` action
 //! - `subspace_verified` → `GOVERNANCE.SUBSPACE_VERIFIED` action
 //! - `subspace_related` → `GOVERNANCE.SUBSPACE_RELATED` action
 //! - `subspace_topic_declared` → `GOVERNANCE.SUBSPACE_TOPIC_DECLARED` action
@@ -157,40 +156,6 @@ pub fn space_migrated(space_id: SpaceId, new_space_address: Address) -> Action {
 // =============================================================================
 // Subspace Actions
 // =============================================================================
-
-/// Create a SUBSPACE_ADDED action.
-///
-/// - `parent_space_id`: The parent space adding the subspace
-/// - `subspace_id`: The subspace being added
-pub fn subspace_added(parent_space_id: SpaceId, subspace_id: SpaceId) -> Action {
-    let mut topic = vec![0u8; 16];
-    topic.extend_from_slice(&subspace_id);
-
-    Action {
-        from_id: parent_space_id.to_vec(),
-        to_id: vec![0u8; 16],
-        action: actions::SUBSPACE_ADDED.to_vec(),
-        topic,
-        data: vec![],
-    }
-}
-
-/// Create a SUBSPACE_REMOVED action.
-///
-/// - `parent_space_id`: The parent space removing the subspace
-/// - `subspace_id`: The subspace being removed
-pub fn subspace_removed(parent_space_id: SpaceId, subspace_id: SpaceId) -> Action {
-    let mut topic = vec![0u8; 16];
-    topic.extend_from_slice(&subspace_id);
-
-    Action {
-        from_id: parent_space_id.to_vec(),
-        to_id: vec![0u8; 16],
-        action: actions::SUBSPACE_REMOVED.to_vec(),
-        topic,
-        data: vec![],
-    }
-}
 
 /// Create a SUBSPACE_VERIFIED action.
 ///
@@ -1071,7 +1036,7 @@ pub mod test_topology {
     ///
     /// Returns actions for:
     /// - Space registrations (personal and DAO)
-    /// - Subspace operations (added, removed, verified, related, topic declared)
+    /// - Subspace operations (verified, related, topic declared)
     /// - Editor/member management
     /// - Proposals (created, voted, executed)
     /// - Content operations (edits, flagging)

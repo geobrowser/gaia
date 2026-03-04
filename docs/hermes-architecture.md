@@ -181,7 +181,7 @@ Primary transformer that handles space events, trust relationships, and edit pub
 
 **Handles:**
 - **Space registration** (`SPACE_REGISTERED`) → `space.creations` topic
-- **Trust relationships** (`SUBSPACE_ADDED`, `SUBSPACE_REMOVED`) → `space.trust.extensions` topic
+- **Trust relationships** (`SUBSPACE_VERIFIED`, `SUBSPACE_RELATED`, `SUBSPACE_UNVERIFIED`, `SUBSPACE_UNRELATED`, `SUBSPACE_TOPIC_DECLARED`, `SUBSPACE_TOPIC_REMOVED`) → `space.trust.extensions` topic
 - **Edit publishing** (`EDITS_PUBLISHED`) → `knowledge.edits` topic
 
 **Edit processing:**

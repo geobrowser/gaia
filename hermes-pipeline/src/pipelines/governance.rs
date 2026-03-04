@@ -865,7 +865,7 @@ mod tests {
             Action {
                 from_id: vec![8; 16],
                 to_id: vec![9; 16],
-                action: actions::SUBSPACE_ADDED.to_vec(),
+                action: actions::SUBSPACE_VERIFIED.to_vec(),
                 topic: vec![10; 32],
                 data: vec![],
             },

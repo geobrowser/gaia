@@ -256,7 +256,7 @@ mod tests {
             Action {
                 from_id: vec![2; 16],
                 to_id: vec![3; 16],
-                action: actions::SUBSPACE_ADDED.to_vec(), // Different action type
+                action: actions::SUBSPACE_VERIFIED.to_vec(), // Different action type
                 topic: vec![3; 32],
                 data: vec![],
             },
