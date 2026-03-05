@@ -178,13 +178,13 @@ impl Default for OrchestratorConfig {
 impl OrchestratorConfig {
     /// Build config from environment variables.
     ///
-    /// - `CHANNEL_BUFFER_SIZE`: Max batches in flight per channel (default: 10).
+    /// - `CHANNEL_BUFFER_SIZE`: Max batches in flight per channel (default: 5).
     ///   Use a smaller value when memory is limited to avoid OOM on large backlogs.
     pub fn from_env() -> Self {
         let channel_buffer_size = std::env::var("CHANNEL_BUFFER_SIZE")
             .ok()
             .and_then(|s| s.parse::<usize>().ok())
-            .unwrap_or(10);
+            .unwrap_or(5);
         Self {
             channel_buffer_size,
         }

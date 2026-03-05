@@ -1,19 +1,22 @@
 # =============================================================================
-# Search Indexer Deployment
+# Search Indexer StatefulSet
 # =============================================================================
 # Consumes messages from Kafka and indexes them into OpenSearch
 apiVersion: apps/v1
-kind: Deployment
+kind: StatefulSet
 metadata:
   name: search-indexer
   namespace: search
   labels:
     app: search-indexer
 spec:
+  serviceName: search-indexer
   replicas: 1
   selector:
     matchLabels:
       app: search-indexer
+  updateStrategy:
+    type: RollingUpdate
   template:
     metadata:
       labels:
@@ -101,11 +104,14 @@ spec:
               protocol: TCP
           resources:
             requests:
-              memory: "768Mi"
+              memory: "1Gi"
               cpu: "100m"
             limits:
               memory: "2Gi"
               cpu: "500m"
+          volumeMounts:
+            - name: topology-data
+              mountPath: /data
           # Liveness probe - checks if the process is alive and can respond to HTTP requests
           # Used by Kubernetes to restart the container if it becomes unresponsive
           livenessProbe:
@@ -127,6 +133,14 @@ spec:
             timeoutSeconds: 5
             failureThreshold: 3
       restartPolicy: Always
+  volumeClaimTemplates:
+    - metadata:
+        name: topology-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 1Gi
 ---
 # Optional: Secret for sensitive configuration
 # Create with: kubectl create secret generic search-indexer-secrets \

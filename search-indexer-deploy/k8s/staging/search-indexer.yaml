@@ -1,9 +1,9 @@
 # =============================================================================
-# Search Indexer Deployment (Staging)
+# Search Indexer StatefulSet (Staging)
 # =============================================================================
 # Consumes messages from Kafka and indexes them into OpenSearch
 apiVersion: apps/v1
-kind: Deployment
+kind: StatefulSet
 metadata:
   name: search-indexer
   namespace: search-staging
@@ -11,10 +11,13 @@ metadata:
     app: search-indexer
     environment: staging
 spec:
+  serviceName: search-indexer
   replicas: 1
   selector:
     matchLabels:
       app: search-indexer
+  updateStrategy:
+    type: RollingUpdate
   template:
     metadata:
       labels:
@@ -103,11 +106,14 @@ spec:
               protocol: TCP
           resources:
             requests:
-              memory: "512Mi"
+              memory: "1Gi"
               cpu: "100m"
             limits:
-              memory: "768Mi"
+              memory: "2Gi"
               cpu: "500m"
+          volumeMounts:
+            - name: topology-data
+              mountPath: /data
           livenessProbe:
             httpGet:
               path: /healthz
@@ -125,3 +131,11 @@ spec:
             timeoutSeconds: 5
             failureThreshold: 3
       restartPolicy: Always
+  volumeClaimTemplates:
+    - metadata:
+        name: topology-data
+      spec:
+        accessModes: ["ReadWriteOnce"]
+        resources:
+          requests:
+            storage: 1Gi
