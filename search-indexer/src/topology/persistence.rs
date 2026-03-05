@@ -6,7 +6,7 @@
 use std::io::Write;
 use std::path::Path;
 
-use hermes_instrumentation::{info, warn};
+use hermes_instrumentation::{error, info, warn};
 use serde::{Deserialize, Serialize};
 
 use super::state::CanonicalGraphState;
@@ -93,7 +93,7 @@ pub fn save(state: &CanonicalGraphState, path: &Path) -> Result<(), String> {
 /// Load graph state from a JSON file and reconstruct in-memory state.
 pub fn load(path: &Path) -> Result<CanonicalGraphState, String> {
     if !path.exists() {
-        info!(path = %path.display(), "No topology state file found, starting with empty state");
+        error!(path = %path.display(), "No topology state file found, starting with empty state");
         return Ok(CanonicalGraphState::new());
     }
 

@@ -56,18 +56,20 @@ jobs:
       - name: Deploy to Kubernetes
         run: |
           kubectl apply -f search-indexer-deploy/k8s/staging/namespace.yaml
+          # Remove legacy Deployment if it exists (one-time migration to StatefulSet)
+          kubectl delete deployment search-indexer -n search-staging --ignore-not-found
           # Update image tag to use SHA and apply
           sed -i 's|image: registry.digitalocean.com/geo/search-indexer:latest|image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}|g' search-indexer-deploy/k8s/staging/search-indexer.yaml
           kubectl apply -f search-indexer-deploy/k8s/staging/search-indexer.yaml
 
-      - name: Wait for deployment to be ready
+      - name: Wait for rollout to be ready
         run: |
-          kubectl rollout status deployment/search-indexer -n search-staging --timeout=120s
+          kubectl rollout status statefulset/search-indexer -n search-staging --timeout=120s
 
       - name: Show deployment status
         run: |
-          echo "=== Search Indexer Deployment ==="
-          kubectl get deployment search-indexer -n search-staging || echo "Deployment not found"
+          echo "=== Search Indexer StatefulSet ==="
+          kubectl get statefulset search-indexer -n search-staging || echo "StatefulSet not found"
           echo ""
           echo "=== Search Indexer Pods ==="
           kubectl get pods -n search-staging -l app=search-indexer
