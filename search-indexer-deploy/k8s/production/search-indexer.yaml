@@ -1,4 +1,23 @@
 # =============================================================================
+# Search Indexer Headless Service (required by StatefulSet)
+# =============================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: search-indexer
+  namespace: search
+  labels:
+    app: search-indexer
+spec:
+  clusterIP: None
+  selector:
+    app: search-indexer
+  ports:
+    - name: http
+      port: 8080
+      targetPort: health
+---
+# =============================================================================
 # Search Indexer StatefulSet
 # =============================================================================
 # Consumes messages from Kafka and indexes them into OpenSearch

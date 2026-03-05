@@ -170,7 +170,7 @@ pub struct TopologyProcessingBatch {
 impl Default for OrchestratorConfig {
     fn default() -> Self {
         Self {
-            channel_buffer_size: 10,
+            channel_buffer_size: 5,
         }
     }
 }
