@@ -26,6 +26,8 @@ class TestScoringDataProvider:
             mock_cursor.fetchall.side_effect = [
                 # spaces query
                 [("space-1",), (ROOT_SPACE_ID,), ("space-2",)],
+                # topology distances query (empty = fallback to flat hierarchy)
+                [],
                 # members query
                 [("0xuser1", "space-1"), ("0xuser2", "space-2"), ("0xuser3", "space-1")],
                 # editors query
@@ -62,6 +64,8 @@ class TestScoringDataProvider:
             mock_cursor.fetchall.side_effect = [
                 # spaces query
                 [("space-parent",), ("space-child",), (ROOT_SPACE_ID,)],
+                # topology distances query (empty = fallback to flat hierarchy)
+                [],
             ]
 
             provider = ScoringDataProvider("postgresql://test:test@localhost/test")
@@ -173,6 +177,8 @@ class TestScoringDataProvider:
             mock_cursor.fetchall.side_effect = [
                 # spaces query
                 [("space-1",)],
+                # topology distances query (empty = fallback to flat hierarchy)
+                [],
                 # members query
                 [],
                 # editors query
@@ -236,3 +242,89 @@ class TestScoringDataProvider:
             assert result.votes == []
             assert result.users == []
             assert result.spaces == []
+
+    def test_fetch_spaces_uses_topology_distances_when_available(self) -> None:
+        """Test that spaces use pre-computed topology distances when available."""
+        with patch("src.scoring_data_provider.scoring_data_provider.psycopg.connect") as mock_connect:
+            mock_conn = MagicMock()
+            mock_cursor = MagicMock()
+            mock_connect.return_value.__enter__.return_value = mock_conn
+            mock_conn.cursor.return_value.__enter__.return_value = mock_cursor
+
+            mock_cursor.fetchall.side_effect = [
+                # spaces query
+                [(ROOT_SPACE_ID,), ("space-a",), ("space-b",), ("space-c",)],
+                # topology distances query
+                [
+                    (ROOT_SPACE_ID, 0),
+                    ("space-a", 1),
+                    ("space-b", 2),
+                ],
+            ]
+
+            provider = ScoringDataProvider("postgresql://test:test@localhost/test")
+            spaces = provider._fetch_spaces(mock_conn)
+
+            assert len(spaces) == 4
+
+            root = next(s for s in spaces if s.id == ROOT_SPACE_ID)
+            assert root.distance_to_root == 0
+            assert root.parent_space_id is None
+
+            space_a = next(s for s in spaces if s.id == "space-a")
+            assert space_a.distance_to_root == 1
+
+            space_b = next(s for s in spaces if s.id == "space-b")
+            assert space_b.distance_to_root == 2
+
+            # space-c not in topology → gets DISCONNECTED_SPACE_DEPTH
+            space_c = next(s for s in spaces if s.id == "space-c")
+            assert space_c.distance_to_root == 11
+
+    def test_fetch_spaces_falls_back_to_flat_hierarchy(self) -> None:
+        """Test that spaces fall back to flat hierarchy when no topology distances."""
+        with patch("src.scoring_data_provider.scoring_data_provider.psycopg.connect") as mock_connect:
+            mock_conn = MagicMock()
+            mock_cursor = MagicMock()
+            mock_connect.return_value.__enter__.return_value = mock_conn
+            mock_conn.cursor.return_value.__enter__.return_value = mock_cursor
+
+            mock_cursor.fetchall.side_effect = [
+                # spaces query
+                [(ROOT_SPACE_ID,), ("space-1",)],
+                # topology distances query — empty (indexer hasn't run)
+                [],
+            ]
+
+            provider = ScoringDataProvider("postgresql://test:test@localhost/test")
+            spaces = provider._fetch_spaces(mock_conn)
+
+            assert len(spaces) == 2
+
+            root = next(s for s in spaces if s.id == ROOT_SPACE_ID)
+            assert root.parent_space_id is None
+            assert "space-1" in root.subspace_ids
+
+            child = next(s for s in spaces if s.id == "space-1")
+            assert child.parent_space_id == ROOT_SPACE_ID
+
+    def test_fetch_scoring_topology_distances(self) -> None:
+        """Test that topology distances are fetched correctly."""
+        with patch("src.scoring_data_provider.scoring_data_provider.psycopg.connect") as mock_connect:
+            mock_conn = MagicMock()
+            mock_cursor = MagicMock()
+            mock_connect.return_value.__enter__.return_value = mock_conn
+            mock_conn.cursor.return_value.__enter__.return_value = mock_cursor
+
+            mock_cursor.fetchall.return_value = [
+                (ROOT_SPACE_ID, 0),
+                ("space-a", 1),
+                ("space-b", 3),
+            ]
+
+            provider = ScoringDataProvider("postgresql://test:test@localhost/test")
+            distances = provider._fetch_scoring_topology_distances(mock_conn)
+
+            assert distances[ROOT_SPACE_ID] == 0
+            assert distances["space-a"] == 1
+            assert distances["space-b"] == 3

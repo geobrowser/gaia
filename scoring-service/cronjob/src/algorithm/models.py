@@ -158,7 +158,11 @@ class Space:
         root_space_id: str = ROOT_SPACE_ID,
     ) -> None:
         """Calculate space score based on distance from root (GEO)."""
-        self.distance_to_root = self._calculate_distance_to_root(spaces, root_space_id)
+        # If distance_to_root was pre-set by the topology indexer, skip BFS.
+        # distance_to_root defaults to 0, so we also check that this isn't the root
+        # (root legitimately has distance 0 and should keep it).
+        if self.distance_to_root == 0:
+            self.distance_to_root = self._calculate_distance_to_root(spaces, root_space_id)
 
         # Calculate space score based on distance to root
         if self.distance_to_root > 0:
