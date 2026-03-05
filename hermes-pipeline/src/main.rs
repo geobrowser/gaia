@@ -657,9 +657,10 @@ impl Pipeline {
         let total_fetch_failures = prefetch_result.fetch_failures;
 
         if total_cache_misses > 0 {
-            warn!(
+            error!(
+                block_number = meta.block_number,
                 count = total_cache_misses,
-                "Cache misses (retries exhausted)"
+                "Cache misses (retries exhausted) — edits dropped"
             );
         }
         if total_errored_entries > 0 {
