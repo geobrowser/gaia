@@ -2486,7 +2486,7 @@ class SearchValidator {
   }
 
   /**
-   * Test 40: SPACE scope on topo_root (canonical root) returns all 6 entities.
+   * Test 40: SPACE scope on topo_root (canonical root) returns all 5 canonical entities.
    *
    * topo_root is the canonical root → the API must use {term:{in_canonical_graph:true}}
    * which matches ALL entities across all canonical spaces (root + children + grandchild).

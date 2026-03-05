@@ -8,11 +8,13 @@ use hermes_schema::pb::topology::{
 };
 
 /// A node to add/move/remove in a diff.
+#[derive(Debug, Clone)]
 pub struct DiffNode {
     pub space_id: Uuid,
     pub change: NodeChangeKind,
 }
 
+#[derive(Debug, Clone)]
 pub enum NodeChangeKind {
     Added {
         parent_id: Uuid,
@@ -28,6 +30,7 @@ pub enum NodeChangeKind {
     },
 }
 
+#[derive(Debug, Clone)]
 pub enum EdgeKind {
     Verified,
     Related,
@@ -115,10 +118,10 @@ mod tests {
         );
 
         assert!(result.is_ok());
-        let bytes = result.unwrap();
+        let bytes = result.expect("Failed to encode canonical graph diff");
         assert!(!bytes.is_empty());
 
-        let decoded = CanonicalGraphDiff::decode(&bytes[..]).unwrap();
+        let decoded = CanonicalGraphDiff::decode(&bytes[..]).expect("Failed to decode canonical graph diff");
         assert_eq!(decoded.root_id, root.as_bytes().to_vec());
         assert_eq!(decoded.changes.len(), 1);
         assert_eq!(decoded.changes[0].change_type, ChangeType::Added as i32);
@@ -136,9 +139,9 @@ mod tests {
                 change: NodeChangeKind::Removed,
             }],
         )
-        .unwrap();
+        .expect("Failed to encode remove diff");
 
-        let decoded = CanonicalGraphDiff::decode(&bytes[..]).unwrap();
+        let decoded = CanonicalGraphDiff::decode(&bytes[..]).expect("Failed to decode remove diff");
         assert_eq!(decoded.changes[0].change_type, ChangeType::Removed as i32);
         assert!(decoded.changes[0].distance.is_none());
         assert!(decoded.changes[0].parent_edge.is_none());

@@ -10,12 +10,12 @@ use axum::{
     routing::get,
     Json, Router,
 };
+use hermes_instrumentation::{error, info};
 use rdkafka::admin::AdminClient;
 use rdkafka::client::DefaultClientContext;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::task::JoinHandle;
-use hermes_instrumentation::{error, info};
 
 use crate::topology::CanonicalGraphState;
 use search_indexer_repository::SearchIndexProvider;
@@ -103,21 +103,10 @@ async fn readiness(State(state): State<HealthState>) -> impl IntoResponse {
 /// Parse a space_id from a path parameter.
 /// Accepts both dashed UUID (36 chars) and 32-char hex.
 fn parse_space_id(space_id_str: &str) -> Option<[u8; 16]> {
-    // Try dashed UUID first
-    if let Ok(uuid) = uuid::Uuid::parse_str(space_id_str) {
-        return Some(*uuid.as_bytes());
-    }
-    // Try 32-char hex
-    if space_id_str.len() == 32 {
-        if let Ok(bytes) = hex::decode(space_id_str) {
-            if bytes.len() == 16 {
-                let mut arr = [0u8; 16];
-                arr.copy_from_slice(&bytes);
-                return Some(arr);
-            }
-        }
-    }
-    None
+    // Uuid::parse_str accepts both dashed (36-char) and simple hex (32-char) formats.
+    uuid::Uuid::parse_str(space_id_str)
+        .ok()
+        .map(|uuid| *uuid.as_bytes())
 }
 
 /// GET /topology/subspaces/:space_id

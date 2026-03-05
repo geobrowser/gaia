@@ -80,8 +80,7 @@ pub fn save(state: &CanonicalGraphState, path: &Path) -> Result<(), String> {
         .map_err(|e| format!("failed to sync temp file: {}", e))?;
     drop(file);
 
-    std::fs::rename(&tmp_path, path)
-        .map_err(|e| format!("failed to rename temp file: {}", e))?;
+    std::fs::rename(&tmp_path, path).map_err(|e| format!("failed to rename temp file: {}", e))?;
 
     info!(
         node_count = persisted.nodes.len(),
@@ -155,7 +154,7 @@ mod tests {
     #[test]
     fn test_persistence_roundtrip() {
         let dir = std::env::temp_dir().join("topology_test");
-        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::create_dir_all(&dir).expect("Failed to create temp dir for test");
         let path = dir.join("test_state.json");
 
         let state = CanonicalGraphState::new();
@@ -179,10 +178,10 @@ mod tests {
         );
 
         // Save
-        save(&state, &path).unwrap();
+        save(&state, &path).expect("Failed to save topology state");
 
         // Load
-        let restored = load(&path).unwrap();
+        let restored = load(&path).expect("Failed to load topology state");
 
         assert_eq!(restored.len(), state.len());
         assert!(restored.is_canonical(&root));
@@ -191,7 +190,9 @@ mod tests {
         assert_eq!(restored.get_distance(&make_id(3)), Some(2));
 
         // Verify subspaces work after restore
-        let subs = restored.get_subspaces(&root).unwrap();
+        let subs = restored
+            .get_subspaces(&root)
+            .expect("Root should have subspaces after restore");
         assert_eq!(subs.len(), 3);
 
         // Cleanup
@@ -201,7 +202,7 @@ mod tests {
     #[test]
     fn test_load_nonexistent() {
         let path = std::path::Path::new("/tmp/does_not_exist_topology.json");
-        let state = load(path).unwrap();
+        let state = load(path).expect("Loading nonexistent file should return Ok(empty)");
         assert!(state.is_empty());
     }
 
@@ -209,7 +210,7 @@ mod tests {
     fn test_hex_roundtrip() {
         let id = make_id(42);
         let hex = bytes_to_hex(&id);
-        let restored = hex_to_bytes(&hex).unwrap();
+        let restored = hex_to_bytes(&hex).expect("Failed to parse hex back to bytes");
         assert_eq!(id, restored);
     }
 }

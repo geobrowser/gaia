@@ -2,9 +2,9 @@
 //!
 //! Provides common configuration for Kafka consumers.
 
+use hermes_instrumentation::info;
 use rdkafka::config::ClientConfig;
 use std::env;
-use hermes_instrumentation::info;
 
 /// Create a base Kafka client configuration with common settings.
 ///

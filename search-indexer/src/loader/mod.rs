@@ -120,11 +120,9 @@ impl SearchLoader {
                 }
                 ProcessedEvent::RemoveRelationById { relation_id } => {
                     self.pending_operations
-                        .push(EntityOperation::RemoveRelationById(
-                            RemoveRelationData {
-                                relation_id: relation_id.to_string(),
-                            },
-                        ));
+                        .push(EntityOperation::RemoveRelationById(RemoveRelationData {
+                            relation_id: relation_id.to_string(),
+                        }));
                 }
                 ProcessedEvent::UpdateEntityGlobalScore { entity_id, score } => {
                     self.pending_operations
@@ -282,7 +280,9 @@ impl SearchLoader {
                             metrics.total_unsets.fetch_add(1, Ordering::Relaxed);
                         }
                         ProcessedEvent::RemoveRelationById { .. } => {
-                            metrics.total_remove_relations.fetch_add(1, Ordering::Relaxed);
+                            metrics
+                                .total_remove_relations
+                                .fetch_add(1, Ordering::Relaxed);
                         }
                         ProcessedEvent::UpdateEntityGlobalScore { .. }
                         | ProcessedEvent::UpdateSpaceScore { .. }
@@ -290,7 +290,9 @@ impl SearchLoader {
                             metrics.total_score_updates.fetch_add(1, Ordering::Relaxed);
                         }
                         ProcessedEvent::UpdateSpaceTopicEntityId { .. } => {
-                            metrics.total_space_topic_updates.fetch_add(1, Ordering::Relaxed);
+                            metrics
+                                .total_space_topic_updates
+                                .fetch_add(1, Ordering::Relaxed);
                         }
                         ProcessedEvent::UpdateInCanonicalGraph { .. } => {
                             metrics.total_updates.fetch_add(1, Ordering::Relaxed);
@@ -303,10 +305,18 @@ impl SearchLoader {
                         // Aggregate timing metrics from summaries
                         for summary in &operation_summaries {
                             metrics.total_bulk_calls.fetch_add(1, Ordering::Relaxed);
-                            metrics.total_bulk_wall_ms.fetch_add(summary.wall_ms, Ordering::Relaxed);
-                            metrics.total_bulk_took_ms.fetch_add(summary.took_ms, Ordering::Relaxed);
-                            metrics.total_operations.fetch_add(summary.total as u64, Ordering::Relaxed);
-                            metrics.total_failed_operations.fetch_add(summary.failed as u64, Ordering::Relaxed);
+                            metrics
+                                .total_bulk_wall_ms
+                                .fetch_add(summary.wall_ms, Ordering::Relaxed);
+                            metrics
+                                .total_bulk_took_ms
+                                .fetch_add(summary.took_ms, Ordering::Relaxed);
+                            metrics
+                                .total_operations
+                                .fetch_add(summary.total as u64, Ordering::Relaxed);
+                            metrics
+                                .total_failed_operations
+                                .fetch_add(summary.failed as u64, Ordering::Relaxed);
                         }
 
                         // Check if any operation had failures

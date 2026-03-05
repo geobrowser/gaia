@@ -3,17 +3,19 @@
 //! Coordinates the consumer, processor, and loader components.
 
 use async_trait::async_trait;
+use hermes_instrumentation::{error, info, instrument};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc};
 use tokio::time::{interval, Duration};
-use hermes_instrumentation::{error, info, instrument};
 
 #[cfg(unix)]
 use tokio::signal::unix::{signal, SignalKind};
 
-use crate::consumer::{EntitiesConsumer, EntityEvent, ScoresConsumer, SpaceTopicsConsumer, TopologyConsumer, StreamMessage};
-use crate::consumer::topology_consumer::ParsedCanonicalGraphDiff;
+use crate::consumer::{
+    EntitiesConsumer, EntityEvent, ParsedCanonicalGraphDiff, ScoresConsumer, SpaceTopicsConsumer,
+    StreamMessage, TopologyConsumer,
+};
 use crate::errors::IngestError;
 use crate::loader::SearchLoader;
 use crate::metrics::SearchIndexerMetrics;

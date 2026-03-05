@@ -2,13 +2,13 @@
 //!
 //! Consumes `CanonicalGraphDiff` messages and forwards parsed diffs to the processor.
 
-use hermes_instrumentation::{Instrument, debug, error, info, info_span, instrument, warn};
+use hermes_instrumentation::{debug, error, info, info_span, instrument, warn, Instrument};
 use hermes_kafka::get_topic_prefix;
 use prost::Message;
 use rdkafka::{
-    TopicPartitionList,
     consumer::{Consumer, StreamConsumer},
     message::Message as KafkaMessage,
+    TopicPartitionList,
 };
 use std::env;
 use std::time::Duration;
@@ -54,8 +54,8 @@ impl TopologyConsumer {
     /// - `TOPOLOGY_BATCH_TIMEOUT_MS`: Batch timeout ms (default: 1000)
     pub fn new(brokers: &str, group_id: &str) -> Result<Self, IngestError> {
         let prefix = get_topic_prefix();
-        let base_topic = env::var("TOPOLOGY_KAFKA_TOPIC")
-            .unwrap_or_else(|_| Self::TOPOLOGY_TOPIC.to_string());
+        let base_topic =
+            env::var("TOPOLOGY_KAFKA_TOPIC").unwrap_or_else(|_| Self::TOPOLOGY_TOPIC.to_string());
         let topic = format!("{}{}", prefix, base_topic);
 
         let batch_size = env::var("TOPOLOGY_BATCH_SIZE")
@@ -259,8 +259,7 @@ impl TopologyConsumer {
             return Ok(());
         }
 
-        let diffs: Vec<ParsedCanonicalGraphDiff> =
-            batch.iter().map(|p| p.diff.clone()).collect();
+        let diffs: Vec<ParsedCanonicalGraphDiff> = batch.iter().map(|p| p.diff.clone()).collect();
         let event_count = diffs.iter().map(|d| d.changes.len()).sum::<usize>();
 
         if event_count > 0 || !diffs.is_empty() {
@@ -356,11 +355,10 @@ impl TopologyConsumer {
                 continue;
             }
 
-            let space_id: [u8; 16] = node_change
-                .space_id
-                .as_slice()
-                .try_into()
-                .map_err(|_| IngestError::parse("Failed to convert space_id bytes".to_string()))?;
+            let space_id: [u8; 16] =
+                node_change.space_id.as_slice().try_into().map_err(|_| {
+                    IngestError::parse("Failed to convert space_id bytes".to_string())
+                })?;
 
             let change_type = match ProtoChangeType::try_from(node_change.change_type) {
                 Ok(ProtoChangeType::Added) => ChangeType::Added,
@@ -375,18 +373,15 @@ impl TopologyConsumer {
                 }
             };
 
-            let parent_id = node_change
-                .parent_edge
-                .as_ref()
-                .and_then(|edge| {
-                    if edge.parent_id.len() == 16 {
-                        let mut arr = [0u8; 16];
-                        arr.copy_from_slice(&edge.parent_id);
-                        Some(arr)
-                    } else {
-                        None
-                    }
-                });
+            let parent_id = node_change.parent_edge.as_ref().and_then(|edge| {
+                if edge.parent_id.len() == 16 {
+                    let mut arr = [0u8; 16];
+                    arr.copy_from_slice(&edge.parent_id);
+                    Some(arr)
+                } else {
+                    None
+                }
+            });
 
             changes.push(ParsedNodeChange {
                 space_id,

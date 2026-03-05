@@ -552,13 +552,11 @@ describe("OpenSearchClient", () => {
 			expect(result.subspaces).toEqual([spaceId])
 		})
 
-		it("should fall back gracefully on network error", async () => {
+		it("should throw on network error", async () => {
 			const spaceId = "abcd1234-abcd-1234-abcd-1234abcd0004"
 			vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(new Error("network error"))
 
-			const result = await topologyClient.fetchSubspaces(spaceId)
-			expect(result.isRoot).toBe(false)
-			expect(result.subspaces).toEqual([spaceId])
+			await expect(topologyClient.fetchSubspaces(spaceId)).rejects.toThrow("network error")
 		})
 
 		it("should cache results and not re-fetch", async () => {

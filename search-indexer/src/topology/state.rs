@@ -33,11 +33,12 @@ pub struct ParsedNodeChange {
 }
 
 /// Thread-safe canonical graph state.
-#[derive(Clone)]
+#[derive(Debug, Clone)]
 pub struct CanonicalGraphState {
     inner: Arc<RwLock<CanonicalGraphInner>>,
 }
 
+#[derive(Debug)]
 struct CanonicalGraphInner {
     root_id: Option<[u8; 16]>,
     /// O(1) membership check
@@ -67,7 +68,11 @@ impl CanonicalGraphState {
     /// Create from pre-loaded data (used by persistence layer on startup).
     pub fn from_snapshot(
         root_id: Option<[u8; 16]>,
-        nodes: Vec<(/* space_id */ [u8; 16], /* parent_id */ [u8; 16], /* distance */ u32)>,
+        nodes: Vec<(
+            /* space_id */ [u8; 16],
+            /* parent_id */ [u8; 16],
+            /* distance */ u32,
+        )>,
     ) -> Self {
         let mut canonical_spaces = HashSet::with_capacity(nodes.len());
         let mut children: HashMap<[u8; 16], HashSet<[u8; 16]>> = HashMap::new();
@@ -100,20 +105,20 @@ impl CanonicalGraphState {
 
     /// Get the root space ID, if set.
     pub fn root_id(&self) -> Option<Uuid> {
-        let inner = self.inner.read().unwrap();
+        let inner = self.inner.read().expect("lock poisoned");
         inner.root_id.map(Uuid::from_bytes)
     }
 
     /// Check if a space is in the canonical graph. O(1).
     pub fn is_canonical(&self, space_id: &[u8; 16]) -> bool {
-        let inner = self.inner.read().unwrap();
+        let inner = self.inner.read().expect("lock poisoned");
         inner.canonical_spaces.contains(space_id)
     }
 
     /// Get all subspaces (descendants + self) via BFS. O(subtree).
     /// Returns `None` if `space_id` is not in the canonical graph.
     pub fn get_subspaces(&self, space_id: &[u8; 16]) -> Option<Vec<Uuid>> {
-        let inner = self.inner.read().unwrap();
+        let inner = self.inner.read().expect("lock poisoned");
         if !inner.canonical_spaces.contains(space_id) {
             return None;
         }
@@ -136,7 +141,7 @@ impl CanonicalGraphState {
 
     /// Get the distance from root for a space. O(1).
     pub fn get_distance(&self, space_id: &[u8; 16]) -> Option<u32> {
-        let inner = self.inner.read().unwrap();
+        let inner = self.inner.read().expect("lock poisoned");
         inner.distances.get(space_id).copied()
     }
 
@@ -150,7 +155,7 @@ impl CanonicalGraphState {
         root_id: [u8; 16],
         changes: &[ParsedNodeChange],
     ) -> Vec<CanonicalityChange> {
-        let mut inner = self.inner.write().unwrap();
+        let mut inner = self.inner.write().expect("lock poisoned");
         let mut result = Vec::new();
 
         // Set root if not already set
@@ -212,6 +217,9 @@ impl CanonicalGraphState {
                 }
                 ChangeType::Moved => {
                     // MOVED: node stays canonical, but parent/distance may change
+                    if !inner.canonical_spaces.contains(&change.space_id) {
+                        continue;
+                    }
                     // Remove from old parent's children
                     if let Some(old_parent) = inner.parents.remove(&change.space_id) {
                         if let Some(siblings) = inner.children.get_mut(&old_parent) {
@@ -245,13 +253,8 @@ impl CanonicalGraphState {
     /// Get a snapshot of the graph state for persistence.
     /// Returns (root_id, Vec<(space_id, parent_id, distance)>).
     #[allow(clippy::type_complexity)]
-    pub fn snapshot(
-        &self,
-    ) -> (
-        Option<[u8; 16]>,
-        Vec<([u8; 16], [u8; 16], u32)>,
-    ) {
-        let inner = self.inner.read().unwrap();
+    pub fn snapshot(&self) -> (Option<[u8; 16]>, Vec<([u8; 16], [u8; 16], u32)>) {
+        let inner = self.inner.read().expect("lock poisoned");
         let mut nodes = Vec::with_capacity(inner.canonical_spaces.len());
 
         for &space_id in &inner.canonical_spaces {
@@ -269,7 +272,7 @@ impl CanonicalGraphState {
 
     /// Get the number of canonical spaces (for metrics/logging).
     pub fn len(&self) -> usize {
-        let inner = self.inner.read().unwrap();
+        let inner = self.inner.read().expect("lock poisoned");
         inner.canonical_spaces.len()
     }
 
@@ -310,14 +313,12 @@ mod tests {
         let root = make_id(1);
         let child = make_id(2);
 
-        let changes = vec![
-            ParsedNodeChange {
-                space_id: child,
-                change_type: ChangeType::Added,
-                distance: Some(1),
-                parent_id: Some(root),
-            },
-        ];
+        let changes = vec![ParsedNodeChange {
+            space_id: child,
+            change_type: ChangeType::Added,
+            distance: Some(1),
+            parent_id: Some(root),
+        }];
 
         let result = state.apply_changes(root, &changes);
 
@@ -415,10 +416,14 @@ mod tests {
         assert!(state.is_canonical(&node));
 
         // Verify subspaces reflect the move
-        let parent_a_subs = state.get_subspaces(&parent_a).unwrap();
+        let parent_a_subs = state
+            .get_subspaces(&parent_a)
+            .expect("parent_a should be in canonical graph");
         assert_eq!(parent_a_subs.len(), 1); // just parent_a itself
 
-        let parent_b_subs = state.get_subspaces(&parent_b).unwrap();
+        let parent_b_subs = state
+            .get_subspaces(&parent_b)
+            .expect("parent_b should be in canonical graph");
         assert_eq!(parent_b_subs.len(), 2); // parent_b + node
     }
 
@@ -455,15 +460,21 @@ mod tests {
         );
 
         // Root subtree = all 4 nodes
-        let root_subs = state.get_subspaces(&root).unwrap();
+        let root_subs = state
+            .get_subspaces(&root)
+            .expect("Root should be in canonical graph");
         assert_eq!(root_subs.len(), 4);
 
         // child1 subtree = child1 + grandchild
-        let child1_subs = state.get_subspaces(&child1).unwrap();
+        let child1_subs = state
+            .get_subspaces(&child1)
+            .expect("child1 should be in canonical graph");
         assert_eq!(child1_subs.len(), 2);
 
         // child2 subtree = just child2
-        let child2_subs = state.get_subspaces(&child2).unwrap();
+        let child2_subs = state
+            .get_subspaces(&child2)
+            .expect("child2 should be in canonical graph");
         assert_eq!(child2_subs.len(), 1);
 
         // Non-canonical node returns None
@@ -525,7 +536,9 @@ mod tests {
         assert!(restored.is_canonical(&make_id(3)));
         assert_eq!(restored.get_distance(&make_id(3)), Some(2));
 
-        let subs = restored.get_subspaces(&root).unwrap();
+        let subs = restored
+            .get_subspaces(&root)
+            .expect("Root should have subspaces after snapshot roundtrip");
         assert_eq!(subs.len(), 3);
     }
 }

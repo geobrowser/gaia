@@ -1089,7 +1089,8 @@ export class OpenSearchClient implements SearchClient {
 
 	/**
 	 * Fetch subspace IDs for a given space from the topology service.
-	 * Falls back to returning just the original space_id on error or if topology service is unavailable.
+	 * Falls back to returning just the original space_id if topology service is not configured or returns 404.
+	 * Throws on non-404 HTTP errors and network/timeout failures so callers return 500.
 	 * Results are cached for 30 seconds.
 	 */
 	async fetchSubspaces(spaceId: string): Promise<SubspacesResult> {
@@ -1116,8 +1117,7 @@ export class OpenSearchClient implements SearchClient {
 			}
 
 			if (!response.ok) {
-				console.warn(`Topology service returned ${response.status} for space ${spaceId}`)
-				return {subspaces: [spaceId], isRoot: false}
+				throw new Error(`Topology service returned ${response.status} for space ${spaceId}`)
 			}
 
 			const data = (await response.json()) as {subspaces: string[]; is_root?: boolean}
@@ -1130,8 +1130,7 @@ export class OpenSearchClient implements SearchClient {
 			this.subspaceCache.set(spaceId, {result, expiry: Date.now() + 30_000})
 			return result
 		} catch (error) {
-			console.warn(`Failed to fetch subspaces for space ${spaceId}:`, error)
-			return {subspaces: [spaceId], isRoot: false}
+			throw error instanceof Error ? error : new Error(`Failed to fetch subspaces for space ${spaceId}: ${error}`)
 		}
 	}
 

@@ -2,20 +2,23 @@
 //!
 //! Transforms entity and score events into search documents.
 
+use hermes_instrumentation::{debug, error, info, instrument, warn};
 use std::collections::HashMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
-use hermes_instrumentation::{debug, error, info, instrument, warn};
 
 use crate::consumer::StreamMessage;
 use crate::consumer::{EntityEvent, EntityEventType, ScoreEvent, ScoreEventType, SpaceTopicEvent};
 use crate::errors::IngestError;
 use crate::metrics::SearchIndexerMetrics;
-use crate::orchestrator::{BatchSource, EntityProcessingBatch, ProcessedBatch, ScoreProcessingBatch, SpaceTopicProcessingBatch, TopologyProcessingBatch};
-use crate::topology::CanonicalGraphState;
+use crate::orchestrator::{
+    BatchSource, EntityProcessingBatch, ProcessedBatch, ScoreProcessingBatch,
+    SpaceTopicProcessingBatch, TopologyProcessingBatch,
+};
 use crate::topology::persistence;
+use crate::topology::CanonicalGraphState;
 use sdk::core::ids::{AVATAR_RELATION_TYPE_ID, COVER_RELATION_TYPE_ID, TYPE_RELATION_TYPE_ID};
 use search_indexer_shared::EntityDocument;
 use uuid::Uuid;
@@ -137,7 +140,10 @@ impl Processor {
 
     /// Create a new processor with a pre-warmed space topic cache.
     pub fn with_space_topic_cache(cache: HashMap<Uuid, Uuid>, sample_interval: u64) -> Self {
-        info!(cache_size = cache.len(), sample_interval, "Processor created with space topic cache");
+        info!(
+            cache_size = cache.len(),
+            sample_interval, "Processor created with space topic cache"
+        );
         Self {
             space_topic_cache: cache,
             topology_state: CanonicalGraphState::new(),
@@ -267,12 +273,7 @@ impl Processor {
             //    AFTER this event. The None fields (name, description, etc.) are
             //    ignored by build_update_doc in the loader, so only entity_id,
             //    space_id, and space_topic_entity_id are written to the index.
-            let mut doc = EntityDocument::new(
-                event.topic_entity_id,
-                event.space_id,
-                None,
-                None,
-            );
+            let mut doc = EntityDocument::new(event.topic_entity_id, event.space_id, None, None);
             doc.space_topic_entity_id = Some(event.topic_entity_id.to_string());
             processed.push(ProcessedEvent::Index(doc));
         }
@@ -286,13 +287,12 @@ impl Processor {
 
     /// Process a topology batch: apply changes to in-memory graph, return update operations.
     #[instrument(skip(self, batch), fields(diff_count = batch.diffs.len()))]
-    pub fn process_topology_batch(
-        &self,
-        batch: &TopologyProcessingBatch,
-    ) -> Vec<ProcessedEvent> {
+    pub fn process_topology_batch(&self, batch: &TopologyProcessingBatch) -> Vec<ProcessedEvent> {
         let mut ops = Vec::new();
         for diff in &batch.diffs {
-            let changes = self.topology_state.apply_changes(diff.root_id, &diff.changes);
+            let changes = self
+                .topology_state
+                .apply_changes(diff.root_id, &diff.changes);
             for change in changes {
                 ops.push(ProcessedEvent::UpdateInCanonicalGraph {
                     space_id: change.space_id,
@@ -300,10 +300,7 @@ impl Processor {
                 });
             }
         }
-        debug!(
-            operations = ops.len(),
-            "Processed topology batch"
-        );
+        debug!(operations = ops.len(), "Processed topology batch");
         ops
     }
 
@@ -744,10 +741,9 @@ impl Processor {
         // 2. Persist state to disk before committing Kafka offsets
         let topology_state = self.topology_state.clone();
         let state_path = persistence::state_path();
-        let save_result = tokio::task::spawn_blocking(move || {
-            persistence::save(&topology_state, &state_path)
-        })
-        .await;
+        let save_result =
+            tokio::task::spawn_blocking(move || persistence::save(&topology_state, &state_path))
+                .await;
 
         match save_result {
             Ok(Ok(())) => {} // Save succeeded
@@ -856,8 +852,8 @@ impl Processor {
                 let mut doc = EntityDocument::new(
                     event.entity_id,
                     event.space_id,
-                    None,  // Name not needed for delete
-                    None,  // Description not needed for delete
+                    None, // Name not needed for delete
+                    None, // Description not needed for delete
                 );
                 doc.deleted = Some(true);
 
@@ -877,8 +873,8 @@ impl Processor {
                 let mut doc = EntityDocument::new(
                     event.entity_id,
                     event.space_id,
-                    None,  // Name not needed for restore
-                    None,  // Description not needed for restore
+                    None, // Name not needed for restore
+                    None, // Description not needed for restore
                 );
                 doc.deleted = Some(false);
 
@@ -1040,7 +1036,10 @@ mod tests {
 
         let result = processor.process_event(event).unwrap();
         if let Some(ProcessedEvent::Index(doc)) = result {
-            assert_eq!(doc.image_url, Some("https://example.com/img.png".to_string()));
+            assert_eq!(
+                doc.image_url,
+                Some("https://example.com/img.png".to_string())
+            );
         } else {
             panic!("Expected ProcessedEvent::Index");
         }
@@ -1205,8 +1204,8 @@ mod tests {
         let processor = Processor::new();
 
         let relation_id = Uuid::new_v4();
-        let relation_type =
-            Uuid::parse_str(AVATAR_RELATION_TYPE_ID).expect("AVATAR_RELATION_TYPE_ID should be valid");
+        let relation_type = Uuid::parse_str(AVATAR_RELATION_TYPE_ID)
+            .expect("AVATAR_RELATION_TYPE_ID should be valid");
         let entity_id = Uuid::new_v4();
         let to_entity_id = Uuid::new_v4();
         let space_id = Uuid::new_v4();
@@ -1229,8 +1228,8 @@ mod tests {
         let processor = Processor::new();
 
         let relation_id = Uuid::new_v4();
-        let relation_type =
-            Uuid::parse_str(COVER_RELATION_TYPE_ID).expect("COVER_RELATION_TYPE_ID should be valid");
+        let relation_type = Uuid::parse_str(COVER_RELATION_TYPE_ID)
+            .expect("COVER_RELATION_TYPE_ID should be valid");
         let entity_id = Uuid::new_v4();
         let to_entity_id = Uuid::new_v4();
         let space_id = Uuid::new_v4();
@@ -1281,13 +1280,13 @@ mod tests {
         assert!(processor.is_indexed_relation(&type_relation_id));
 
         // AVATAR relation should be indexed
-        let avatar_relation_id =
-            Uuid::parse_str(AVATAR_RELATION_TYPE_ID).expect("AVATAR_RELATION_TYPE_ID should be valid");
+        let avatar_relation_id = Uuid::parse_str(AVATAR_RELATION_TYPE_ID)
+            .expect("AVATAR_RELATION_TYPE_ID should be valid");
         assert!(processor.is_indexed_relation(&avatar_relation_id));
 
         // COVER relation should be indexed
-        let cover_relation_id =
-            Uuid::parse_str(COVER_RELATION_TYPE_ID).expect("COVER_RELATION_TYPE_ID should be valid");
+        let cover_relation_id = Uuid::parse_str(COVER_RELATION_TYPE_ID)
+            .expect("COVER_RELATION_TYPE_ID should be valid");
         assert!(processor.is_indexed_relation(&cover_relation_id));
     }
 
@@ -1381,7 +1380,10 @@ mod tests {
                 "Stub document should have space_topic_entity_id set to itself"
             );
             assert!(doc.name.is_none(), "Stub document should have no name");
-            assert!(doc.description.is_none(), "Stub document should have no description");
+            assert!(
+                doc.description.is_none(),
+                "Stub document should have no description"
+            );
         } else {
             panic!("Expected ProcessedEvent::Index for stub document");
         }
@@ -1411,5 +1413,4 @@ mod tests {
             panic!("Expected ProcessedEvent::Index");
         }
     }
-
 }

@@ -152,7 +152,7 @@ header "Phase 1: Setup"
 
 # Check prerequisites
 info "Checking Kafka at $KAFKA_BROKER"
-if ! timeout 5 bash -c 'cat < /dev/null > /dev/tcp/localhost/9092' 2>/dev/null; then
+if ! timeout 5 bash -c "cat < /dev/null > /dev/tcp/${KAFKA_BROKER%%:*}/${KAFKA_BROKER##*:}" 2>/dev/null; then
     fail "Kafka not reachable at $KAFKA_BROKER"
     echo "  Start it: cd hermes && docker-compose up -d kafka"
     exit 1
@@ -185,14 +185,14 @@ pass "Index deleted (or didn't exist)"
 info "Cleaning Kafka consumer groups"
 for group in "${KAFKA_GROUPS[@]}"; do
     docker exec "$KAFKA_CONTAINER" /opt/kafka/bin/kafka-consumer-groups.sh \
-        --bootstrap-server localhost:9092 --delete --group "$group" 2>&1 > /dev/null || true
+        --bootstrap-server localhost:9092 --delete --group "$group"  > /dev/null 2>&1 || true
 done
 pass "Consumer groups cleaned"
 
 info "Cleaning Kafka topics"
 for topic in "${TOPICS[@]}"; do
     docker exec "$KAFKA_CONTAINER" /opt/kafka/bin/kafka-topics.sh \
-        --bootstrap-server localhost:9092 --delete --topic "$topic" 2>&1 > /dev/null || true
+        --bootstrap-server localhost:9092 --delete --topic "$topic"  > /dev/null 2>&1 || true
 done
 pass "Topics cleaned"
 
@@ -297,7 +297,7 @@ header "Phase 3: Restart without topology topic → verify restore"
 info "Deleting all Kafka topics (no replay possible)"
 for topic in "${TOPICS[@]}"; do
     docker exec "$KAFKA_CONTAINER" /opt/kafka/bin/kafka-topics.sh \
-        --bootstrap-server localhost:9092 --delete --topic "$topic" 2>&1 > /dev/null || true
+        --bootstrap-server localhost:9092 --delete --topic "$topic"  > /dev/null 2>&1 || true
 done
 pass "All topics deleted"
 

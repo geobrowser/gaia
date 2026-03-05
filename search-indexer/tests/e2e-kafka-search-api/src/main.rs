@@ -68,8 +68,8 @@ async fn main() -> Result<()> {
 
     info!("Topic prefix: '{}'", topic_prefix);
     info!(
-        "Using topics: edits={}, scores={}, space_topics={}",
-        edits_topic, scores_topic, space_topics_topic
+        "Using topics: edits={}, scores={}, space_topics={}, topology={}",
+        edits_topic, scores_topic, space_topics_topic, topology_topic
     );
 
     // Create Kafka producer
@@ -165,25 +165,25 @@ async fn main() -> Result<()> {
     // Entities are created in each space so in_canonical_graph can be validated.
     // topo_root is also used as the canonical root → its SPACE scope query must use
     // the {term: {in_canonical_graph: true}} optimisation.
-    let topo_root_id = Uuid::parse_str("00000000-0000-4000-8000-000000000c01").unwrap();
-    let topo_child_a_id = Uuid::parse_str("00000000-0000-4000-8000-000000000c02").unwrap();
-    let topo_child_b_id = Uuid::parse_str("00000000-0000-4000-8000-000000000c03").unwrap();
-    let topo_grandchild_id = Uuid::parse_str("00000000-0000-4000-8000-000000000c04").unwrap();
+    let topo_root_id = Uuid::parse_str("00000000-0000-4000-8000-000000000c01").expect("Failed to parse topo_root_id UUID");
+    let topo_child_a_id = Uuid::parse_str("00000000-0000-4000-8000-000000000c02").expect("Failed to parse topo_child_a_id UUID");
+    let topo_child_b_id = Uuid::parse_str("00000000-0000-4000-8000-000000000c03").expect("Failed to parse topo_child_b_id UUID");
+    let topo_grandchild_id = Uuid::parse_str("00000000-0000-4000-8000-000000000c04").expect("Failed to parse topo_grandchild_id UUID");
     // A fifth space that starts canonical and will be removed in a later diff.
-    let topo_remove_me_id = Uuid::parse_str("00000000-0000-4000-8000-000000000c05").unwrap();
+    let topo_remove_me_id = Uuid::parse_str("00000000-0000-4000-8000-000000000c05").expect("Failed to parse topo_remove_me_id UUID");
     // A sixth space that will receive a MOVED diff (same canonicality, new parent).
-    let topo_moveable_id = Uuid::parse_str("00000000-0000-4000-8000-000000000c06").unwrap();
+    let topo_moveable_id = Uuid::parse_str("00000000-0000-4000-8000-000000000c06").expect("Failed to parse topo_moveable_id UUID");
 
     // Entities that live in the topology spaces (fixed IDs for search result validation)
-    let topo_root_entity_id = Uuid::parse_str("00000000-0000-0000-0000-00000000ec01").unwrap();
-    let topo_child_a_entity_id = Uuid::parse_str("00000000-0000-0000-0000-00000000ec02").unwrap();
-    let topo_child_b_entity_id = Uuid::parse_str("00000000-0000-0000-0000-00000000ec03").unwrap();
+    let topo_root_entity_id = Uuid::parse_str("00000000-0000-0000-0000-00000000ec01").expect("Failed to parse topo_root_entity_id UUID");
+    let topo_child_a_entity_id = Uuid::parse_str("00000000-0000-0000-0000-00000000ec02").expect("Failed to parse topo_child_a_entity_id UUID");
+    let topo_child_b_entity_id = Uuid::parse_str("00000000-0000-0000-0000-00000000ec03").expect("Failed to parse topo_child_b_entity_id UUID");
     let topo_grandchild_entity_id =
-        Uuid::parse_str("00000000-0000-0000-0000-00000000ec04").unwrap();
+        Uuid::parse_str("00000000-0000-0000-0000-00000000ec04").expect("Failed to parse topo_grandchild_entity_id UUID");
     let topo_remove_me_entity_id =
-        Uuid::parse_str("00000000-0000-0000-0000-00000000ec05").unwrap();
+        Uuid::parse_str("00000000-0000-0000-0000-00000000ec05").expect("Failed to parse topo_remove_me_entity_id UUID");
     let topo_moveable_entity_id =
-        Uuid::parse_str("00000000-0000-0000-0000-00000000ec06").unwrap();
+        Uuid::parse_str("00000000-0000-0000-0000-00000000ec06").expect("Failed to parse topo_moveable_entity_id UUID");
     info!("Test Space ID: {}", test_space);
     info!("Person Type ID: {}", person_type_id);
     info!("Organization Type ID: {}", org_type_id);

@@ -49,4 +49,5 @@ tracing = "0.1.41"
 
 [dev-dependencies]
 serial_test = "3.4.0"
+temp-env = { version = "0.3", features = ["async_closure"] }
 tokio = { version = "1.42.0", features = ["macros", "rt-multi-thread", "test-util"] }

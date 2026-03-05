@@ -12,8 +12,7 @@ use std::time::Duration;
 use tokio::sync::{broadcast, mpsc};
 use tokio::time::timeout;
 
-use search_indexer::consumer::topology_consumer::ParsedCanonicalGraphDiff;
-use search_indexer::consumer::StreamMessage;
+use search_indexer::consumer::{ParsedCanonicalGraphDiff, StreamMessage};
 use search_indexer::errors::IngestError;
 use search_indexer::loader::SearchLoader;
 use search_indexer::orchestrator::{
@@ -25,8 +24,7 @@ use search_indexer::processor::Processor;
 use search_indexer::topology::CanonicalGraphState;
 use search_indexer_repository::{
     BatchOperationResult, BatchOperationSummary, DeleteEntityRequest, EntityOperation,
-    SearchIndexError, SearchIndexProvider, UnsetEntityPropertiesRequest,
-    UpdateEntityRequest,
+    SearchIndexError, SearchIndexProvider, UnsetEntityPropertiesRequest, UpdateEntityRequest,
 };
 use uuid::Uuid;
 
@@ -137,7 +135,7 @@ impl MockTopologyConsumer {
     }
 
     fn get_last_acknowledgment(&self) -> Option<bool> {
-        *self.last_acknowledgment.lock().unwrap()
+        *self.last_acknowledgment.lock().expect("lock poisoned")
     }
 }
 
@@ -161,7 +159,7 @@ impl TopologyConsumerTrait for MockTopologyConsumer {
                 _ = shutdown.recv() => return Ok(()),
                 msg = ack_receiver.recv() => {
                     if let Some(StreamMessage::Acknowledgment { success, .. }) = msg {
-                        *self.last_acknowledgment.lock().unwrap() = Some(success);
+                        *self.last_acknowledgment.lock().expect("lock poisoned") = Some(success);
                         if !success {
                             return Err(IngestError::kafka("NACK received"));
                         }
@@ -194,13 +192,13 @@ impl MockSearchProvider {
 
     #[allow(dead_code)]
     fn get_all_operations(&self) -> Vec<EntityOperation> {
-        self.all_operations.lock().unwrap().clone()
+        self.all_operations.lock().expect("lock poisoned").clone()
     }
 
     fn get_canonical_graph_updates(&self) -> Vec<(String, bool)> {
         self.all_operations
             .lock()
-            .unwrap()
+            .expect("lock poisoned")
             .iter()
             .filter_map(|op| {
                 if let EntityOperation::UpdateInCanonicalGraph(req) = op {
@@ -250,7 +248,10 @@ impl SearchIndexProvider for MockSearchProvider {
             let entity_id = op.entity_id().to_string();
             let space_id = op.space_id().to_string();
 
-            self.all_operations.lock().unwrap().push(op.clone());
+            self.all_operations
+                .lock()
+                .expect("lock poisoned")
+                .push(op.clone());
 
             results.push(BatchOperationResult {
                 entity_id,
@@ -280,20 +281,18 @@ impl SearchIndexProvider for MockSearchProvider {
 // Test Setup
 // ============================================================================
 
-/// Global mutex to serialize topology tests that rely on TOPOLOGY_STATE_PATH env var.
-static TOPOLOGY_PATH_MUTEX: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-/// Sets TOPOLOGY_STATE_PATH to a unique writable temp path.
-/// Topology tests are marked #[serial] so only one runs at a time, making this safe.
-fn set_topology_state_path() {
-    let _guard = TOPOLOGY_PATH_MUTEX.lock().unwrap();
+/// Creates a unique writable temp path for topology state and returns the
+/// `(key, value)` pair for use with `temp_env::async_with_vars`.
+fn topology_state_env() -> Vec<(&'static str, Option<String>)> {
     let dir = std::env::temp_dir()
         .join("topology_integration_tests")
         .join(uuid::Uuid::new_v4().to_string());
     std::fs::create_dir_all(&dir).expect("Failed to create temp dir for topology tests");
     let path = dir.join("state.json");
-    // Safety: topology tests run serially via #[serial], so no concurrent env var mutations
-    unsafe { std::env::set_var("TOPOLOGY_STATE_PATH", &path) };
+    vec![(
+        "TOPOLOGY_STATE_PATH",
+        Some(path.to_string_lossy().into_owned()),
+    )]
 }
 
 fn create_topology_test_orchestrator(
@@ -314,13 +313,7 @@ fn create_topology_test_orchestrator_with_state(
     Arc<MockSearchProvider>,
     Arc<MockTopologyConsumer>,
 ) {
-    set_topology_state_path();
-
-    let processor = Processor::with_config(
-        std::collections::HashMap::new(),
-        topology_state,
-        0,
-    );
+    let processor = Processor::with_config(std::collections::HashMap::new(), topology_state, 0);
     let mock_provider = Arc::new(MockSearchProvider::new());
     let loader = SearchLoader::new(mock_provider.clone());
 
@@ -348,290 +341,331 @@ fn create_topology_test_orchestrator_with_state(
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[serial]
 async fn test_topology_basic_canonical_graph() {
-    // Root + 2 children ADDED → 3x UpdateInCanonicalGraph(true)
-    let root = make_bytes(1);
-    let child_a = make_bytes(2);
-    let child_b = make_bytes(3);
+    let env = topology_state_env();
+    temp_env::async_with_vars(env, async {
+        // Root + 2 children ADDED → 3x UpdateInCanonicalGraph(true)
+        let root = make_bytes(1);
+        let child_a = make_bytes(2);
+        let child_b = make_bytes(3);
 
-    let batch = make_topology_batch(
-        root,
-        vec![
-            ParsedNodeChange {
-                space_id: child_a,
-                change_type: ChangeType::Added,
-                distance: Some(1),
-                parent_id: Some(root),
-            },
-            ParsedNodeChange {
-                space_id: child_b,
-                change_type: ChangeType::Added,
-                distance: Some(1),
-                parent_id: Some(root),
-            },
-        ],
-    );
-
-    let (orchestrator, mock_provider, mock_consumer) =
-        create_topology_test_orchestrator(vec![batch]);
-
-    let result = timeout(Duration::from_secs(5), orchestrator.run()).await;
-    assert!(result.is_ok(), "Orchestrator should complete");
-    let run_result = result.unwrap();
-    assert!(run_result.is_ok(), "Orchestrator should succeed, got error: {:?}", run_result.err());
-
-    let last_ack = mock_consumer.get_last_acknowledgment();
-    assert_eq!(last_ack, Some(true), "Expected ACK");
-
-    let updates = mock_provider.get_canonical_graph_updates();
-    assert_eq!(updates.len(), 3, "Expected 3 updates (root + 2 children)");
-
-    // All should be added (in_canonical_graph=true)
-    for (space_id, in_canonical) in &updates {
-        assert!(
-            *in_canonical,
-            "Expected in_canonical_graph=true for space {}",
-            space_id
+        let batch = make_topology_batch(
+            root,
+            vec![
+                ParsedNodeChange {
+                    space_id: child_a,
+                    change_type: ChangeType::Added,
+                    distance: Some(1),
+                    parent_id: Some(root),
+                },
+                ParsedNodeChange {
+                    space_id: child_b,
+                    change_type: ChangeType::Added,
+                    distance: Some(1),
+                    parent_id: Some(root),
+                },
+            ],
         );
-    }
 
-    // Check that all expected space IDs are present
-    let space_ids: Vec<&str> = updates.iter().map(|(s, _)| s.as_str()).collect();
-    assert!(space_ids.contains(&make_uuid(1).to_string().as_str()));
-    assert!(space_ids.contains(&make_uuid(2).to_string().as_str()));
-    assert!(space_ids.contains(&make_uuid(3).to_string().as_str()));
+        let (orchestrator, mock_provider, mock_consumer) =
+            create_topology_test_orchestrator(vec![batch]);
+
+        let result = timeout(Duration::from_secs(5), orchestrator.run()).await;
+        assert!(result.is_ok(), "Orchestrator should complete");
+        let run_result = result.expect("Orchestrator should complete within timeout");
+        assert!(
+            run_result.is_ok(),
+            "Orchestrator should succeed, got error: {:?}",
+            run_result.err()
+        );
+
+        let last_ack = mock_consumer.get_last_acknowledgment();
+        assert_eq!(last_ack, Some(true), "Expected ACK");
+
+        let updates = mock_provider.get_canonical_graph_updates();
+        assert_eq!(updates.len(), 3, "Expected 3 updates (root + 2 children)");
+
+        // All should be added (in_canonical_graph=true)
+        for (space_id, in_canonical) in &updates {
+            assert!(
+                *in_canonical,
+                "Expected in_canonical_graph=true for space {}",
+                space_id
+            );
+        }
+
+        // Check that all expected space IDs are present
+        let space_ids: Vec<&str> = updates.iter().map(|(s, _)| s.as_str()).collect();
+        assert!(space_ids.contains(&make_uuid(1).to_string().as_str()));
+        assert!(space_ids.contains(&make_uuid(2).to_string().as_str()));
+        assert!(space_ids.contains(&make_uuid(3).to_string().as_str()));
+    })
+    .await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[serial]
 async fn test_topology_remove_child() {
-    // Batch 1: root + A + B added
-    // Batch 2: B removed
-    // Verify UpdateInCanonicalGraph(B, false) in second batch
-    let root = make_bytes(1);
-    let child_a = make_bytes(2);
-    let child_b = make_bytes(3);
+    let env = topology_state_env();
+    temp_env::async_with_vars(env, async {
+        // Batch 1: root + A + B added
+        // Batch 2: B removed
+        // Verify UpdateInCanonicalGraph(B, false) in second batch
+        let root = make_bytes(1);
+        let child_a = make_bytes(2);
+        let child_b = make_bytes(3);
 
-    let batch1 = make_topology_batch(
-        root,
-        vec![
-            ParsedNodeChange {
-                space_id: child_a,
-                change_type: ChangeType::Added,
-                distance: Some(1),
-                parent_id: Some(root),
-            },
-            ParsedNodeChange {
+        let batch1 = make_topology_batch(
+            root,
+            vec![
+                ParsedNodeChange {
+                    space_id: child_a,
+                    change_type: ChangeType::Added,
+                    distance: Some(1),
+                    parent_id: Some(root),
+                },
+                ParsedNodeChange {
+                    space_id: child_b,
+                    change_type: ChangeType::Added,
+                    distance: Some(1),
+                    parent_id: Some(root),
+                },
+            ],
+        );
+
+        let batch2 = make_topology_batch(
+            root,
+            vec![ParsedNodeChange {
                 space_id: child_b,
-                change_type: ChangeType::Added,
-                distance: Some(1),
-                parent_id: Some(root),
-            },
-        ],
-    );
+                change_type: ChangeType::Removed,
+                distance: None,
+                parent_id: None,
+            }],
+        );
 
-    let batch2 = make_topology_batch(
-        root,
-        vec![ParsedNodeChange {
-            space_id: child_b,
-            change_type: ChangeType::Removed,
-            distance: None,
-            parent_id: None,
-        }],
-    );
+        let (orchestrator, mock_provider, mock_consumer) =
+            create_topology_test_orchestrator(vec![batch1, batch2]);
 
-    let (orchestrator, mock_provider, mock_consumer) =
-        create_topology_test_orchestrator(vec![batch1, batch2]);
+        let result = timeout(Duration::from_secs(5), orchestrator.run()).await;
+        assert!(result.is_ok(), "Orchestrator should complete");
+        assert!(
+            result
+                .expect("Orchestrator should complete within timeout")
+                .is_ok(),
+            "Orchestrator should succeed"
+        );
 
-    let result = timeout(Duration::from_secs(5), orchestrator.run()).await;
-    assert!(result.is_ok(), "Orchestrator should complete");
-    assert!(result.unwrap().is_ok(), "Orchestrator should succeed");
+        let last_ack = mock_consumer.get_last_acknowledgment();
+        assert_eq!(last_ack, Some(true), "Expected ACK");
 
-    let last_ack = mock_consumer.get_last_acknowledgment();
-    assert_eq!(last_ack, Some(true), "Expected ACK");
+        let updates = mock_provider.get_canonical_graph_updates();
 
-    let updates = mock_provider.get_canonical_graph_updates();
+        // Batch 1: root(true) + A(true) + B(true) = 3
+        // Batch 2: B(false) = 1
+        // Total = 4
+        assert_eq!(updates.len(), 4, "Expected 4 total updates");
 
-    // Batch 1: root(true) + A(true) + B(true) = 3
-    // Batch 2: B(false) = 1
-    // Total = 4
-    assert_eq!(updates.len(), 4, "Expected 4 total updates");
-
-    // The last update should be B removed
-    let b_uuid = make_uuid(3).to_string();
-    let b_removal = updates
-        .iter()
-        .filter(|(s, c)| s == &b_uuid && !c)
-        .count();
-    assert_eq!(b_removal, 1, "Expected exactly 1 removal for B");
+        // The last update should be B removed
+        let b_uuid = make_uuid(3).to_string();
+        let b_removal = updates.iter().filter(|(s, c)| s == &b_uuid && !c).count();
+        assert_eq!(b_removal, 1, "Expected exactly 1 removal for B");
+    })
+    .await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[serial]
 async fn test_topology_move_no_canonicality_change() {
-    // Tree: root -> A -> C, root -> B
-    // Move C from A to B
-    // Verify zero UpdateInCanonicalGraph ops for C in second batch
-    let root = make_bytes(1);
-    let node_a = make_bytes(2);
-    let node_b = make_bytes(3);
-    let node_c = make_bytes(4);
+    let env = topology_state_env();
+    temp_env::async_with_vars(env, async {
+        // Tree: root -> A -> C, root -> B
+        // Move C from A to B
+        // Verify zero UpdateInCanonicalGraph ops for C in second batch
+        let root = make_bytes(1);
+        let node_a = make_bytes(2);
+        let node_b = make_bytes(3);
+        let node_c = make_bytes(4);
 
-    let batch1 = make_topology_batch(
-        root,
-        vec![
-            ParsedNodeChange {
-                space_id: node_a,
-                change_type: ChangeType::Added,
-                distance: Some(1),
-                parent_id: Some(root),
-            },
-            ParsedNodeChange {
-                space_id: node_b,
-                change_type: ChangeType::Added,
-                distance: Some(1),
-                parent_id: Some(root),
-            },
-            ParsedNodeChange {
+        let batch1 = make_topology_batch(
+            root,
+            vec![
+                ParsedNodeChange {
+                    space_id: node_a,
+                    change_type: ChangeType::Added,
+                    distance: Some(1),
+                    parent_id: Some(root),
+                },
+                ParsedNodeChange {
+                    space_id: node_b,
+                    change_type: ChangeType::Added,
+                    distance: Some(1),
+                    parent_id: Some(root),
+                },
+                ParsedNodeChange {
+                    space_id: node_c,
+                    change_type: ChangeType::Added,
+                    distance: Some(2),
+                    parent_id: Some(node_a),
+                },
+            ],
+        );
+
+        let batch2 = make_topology_batch(
+            root,
+            vec![ParsedNodeChange {
                 space_id: node_c,
-                change_type: ChangeType::Added,
+                change_type: ChangeType::Moved,
                 distance: Some(2),
-                parent_id: Some(node_a),
-            },
-        ],
-    );
+                parent_id: Some(node_b),
+            }],
+        );
 
-    let batch2 = make_topology_batch(
-        root,
-        vec![ParsedNodeChange {
-            space_id: node_c,
-            change_type: ChangeType::Moved,
-            distance: Some(2),
-            parent_id: Some(node_b),
-        }],
-    );
+        let (orchestrator, mock_provider, mock_consumer) =
+            create_topology_test_orchestrator(vec![batch1, batch2]);
 
-    let (orchestrator, mock_provider, mock_consumer) =
-        create_topology_test_orchestrator(vec![batch1, batch2]);
+        let result = timeout(Duration::from_secs(5), orchestrator.run()).await;
+        assert!(result.is_ok(), "Orchestrator should complete");
+        assert!(
+            result
+                .expect("Orchestrator should complete within timeout")
+                .is_ok(),
+            "Orchestrator should succeed"
+        );
 
-    let result = timeout(Duration::from_secs(5), orchestrator.run()).await;
-    assert!(result.is_ok(), "Orchestrator should complete");
-    assert!(result.unwrap().is_ok(), "Orchestrator should succeed");
+        let last_ack = mock_consumer.get_last_acknowledgment();
+        assert_eq!(last_ack, Some(true), "Expected ACK");
 
-    let last_ack = mock_consumer.get_last_acknowledgment();
-    assert_eq!(last_ack, Some(true), "Expected ACK");
+        let updates = mock_provider.get_canonical_graph_updates();
 
-    let updates = mock_provider.get_canonical_graph_updates();
+        // Batch 1: root + A + B + C = 4 additions
+        // Batch 2: MOVED → 0 operations
+        // Total = 4
+        assert_eq!(updates.len(), 4, "Expected 4 updates (all from batch 1)");
 
-    // Batch 1: root + A + B + C = 4 additions
-    // Batch 2: MOVED → 0 operations
-    // Total = 4
-    assert_eq!(updates.len(), 4, "Expected 4 updates (all from batch 1)");
-
-    // All should be additions
-    for (_, in_canonical) in &updates {
-        assert!(*in_canonical, "All updates should be additions");
-    }
+        // All should be additions
+        for (_, in_canonical) in &updates {
+            assert!(*in_canonical, "All updates should be additions");
+        }
+    })
+    .await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[serial]
 async fn test_topology_multiple_diffs_varying_order() {
-    // Batch 1: root + A
-    // Batch 2: B + C added under root
-    let root = make_bytes(1);
-    let node_a = make_bytes(2);
-    let node_b = make_bytes(3);
-    let node_c = make_bytes(4);
+    let env = topology_state_env();
+    temp_env::async_with_vars(env, async {
+        // Batch 1: root + A
+        // Batch 2: B + C added under root
+        let root = make_bytes(1);
+        let node_a = make_bytes(2);
+        let node_b = make_bytes(3);
+        let node_c = make_bytes(4);
 
-    let batch1 = make_topology_batch(
-        root,
-        vec![ParsedNodeChange {
-            space_id: node_a,
-            change_type: ChangeType::Added,
-            distance: Some(1),
-            parent_id: Some(root),
-        }],
-    );
-
-    let batch2 = make_topology_batch(
-        root,
-        vec![
-            ParsedNodeChange {
-                space_id: node_b,
+        let batch1 = make_topology_batch(
+            root,
+            vec![ParsedNodeChange {
+                space_id: node_a,
                 change_type: ChangeType::Added,
                 distance: Some(1),
                 parent_id: Some(root),
-            },
-            ParsedNodeChange {
-                space_id: node_c,
-                change_type: ChangeType::Added,
-                distance: Some(1),
-                parent_id: Some(root),
-            },
-        ],
-    );
+            }],
+        );
 
-    let (orchestrator, mock_provider, mock_consumer) =
-        create_topology_test_orchestrator(vec![batch1, batch2]);
+        let batch2 = make_topology_batch(
+            root,
+            vec![
+                ParsedNodeChange {
+                    space_id: node_b,
+                    change_type: ChangeType::Added,
+                    distance: Some(1),
+                    parent_id: Some(root),
+                },
+                ParsedNodeChange {
+                    space_id: node_c,
+                    change_type: ChangeType::Added,
+                    distance: Some(1),
+                    parent_id: Some(root),
+                },
+            ],
+        );
 
-    let result = timeout(Duration::from_secs(5), orchestrator.run()).await;
-    assert!(result.is_ok(), "Orchestrator should complete");
-    assert!(result.unwrap().is_ok(), "Orchestrator should succeed");
+        let (orchestrator, mock_provider, mock_consumer) =
+            create_topology_test_orchestrator(vec![batch1, batch2]);
 
-    let last_ack = mock_consumer.get_last_acknowledgment();
-    assert_eq!(last_ack, Some(true), "Expected ACK");
+        let result = timeout(Duration::from_secs(5), orchestrator.run()).await;
+        assert!(result.is_ok(), "Orchestrator should complete");
+        assert!(
+            result
+                .expect("Orchestrator should complete within timeout")
+                .is_ok(),
+            "Orchestrator should succeed"
+        );
 
-    let updates = mock_provider.get_canonical_graph_updates();
+        let last_ack = mock_consumer.get_last_acknowledgment();
+        assert_eq!(last_ack, Some(true), "Expected ACK");
 
-    // Batch 1: root + A = 2
-    // Batch 2: B + C = 2
-    // Total = 4
-    assert_eq!(updates.len(), 4, "Expected 4 updates across 2 batches");
+        let updates = mock_provider.get_canonical_graph_updates();
 
-    let space_ids: Vec<String> = updates.iter().map(|(s, _)| s.clone()).collect();
-    assert!(space_ids.contains(&make_uuid(1).to_string()));
-    assert!(space_ids.contains(&make_uuid(2).to_string()));
-    assert!(space_ids.contains(&make_uuid(3).to_string()));
-    assert!(space_ids.contains(&make_uuid(4).to_string()));
+        // Batch 1: root + A = 2
+        // Batch 2: B + C = 2
+        // Total = 4
+        assert_eq!(updates.len(), 4, "Expected 4 updates across 2 batches");
+
+        let space_ids: Vec<String> = updates.iter().map(|(s, _)| s.clone()).collect();
+        assert!(space_ids.contains(&make_uuid(1).to_string()));
+        assert!(space_ids.contains(&make_uuid(2).to_string()));
+        assert!(space_ids.contains(&make_uuid(3).to_string()));
+        assert!(space_ids.contains(&make_uuid(4).to_string()));
+    })
+    .await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
 #[serial]
 async fn test_topology_idempotent_replay() {
-    // Same diff sent twice. First produces ops, second produces zero ops.
-    let root = make_bytes(1);
-    let child = make_bytes(2);
+    let env = topology_state_env();
+    temp_env::async_with_vars(env, async {
+        // Same diff sent twice. First produces ops, second produces zero ops.
+        let root = make_bytes(1);
+        let child = make_bytes(2);
 
-    let changes = vec![ParsedNodeChange {
-        space_id: child,
-        change_type: ChangeType::Added,
-        distance: Some(1),
-        parent_id: Some(root),
-    }];
+        let changes = vec![ParsedNodeChange {
+            space_id: child,
+            change_type: ChangeType::Added,
+            distance: Some(1),
+            parent_id: Some(root),
+        }];
 
-    let batch1 = make_topology_batch(root, changes.clone());
-    let batch2 = make_topology_batch(root, changes);
+        let batch1 = make_topology_batch(root, changes.clone());
+        let batch2 = make_topology_batch(root, changes);
 
-    let (orchestrator, mock_provider, mock_consumer) =
-        create_topology_test_orchestrator(vec![batch1, batch2]);
+        let (orchestrator, mock_provider, mock_consumer) =
+            create_topology_test_orchestrator(vec![batch1, batch2]);
 
-    let result = timeout(Duration::from_secs(5), orchestrator.run()).await;
-    assert!(result.is_ok(), "Orchestrator should complete");
-    assert!(result.unwrap().is_ok(), "Orchestrator should succeed");
+        let result = timeout(Duration::from_secs(5), orchestrator.run()).await;
+        assert!(result.is_ok(), "Orchestrator should complete");
+        assert!(
+            result
+                .expect("Orchestrator should complete within timeout")
+                .is_ok(),
+            "Orchestrator should succeed"
+        );
 
-    let last_ack = mock_consumer.get_last_acknowledgment();
-    assert_eq!(last_ack, Some(true), "Expected ACK");
+        let last_ack = mock_consumer.get_last_acknowledgment();
+        assert_eq!(last_ack, Some(true), "Expected ACK");
 
-    let updates = mock_provider.get_canonical_graph_updates();
+        let updates = mock_provider.get_canonical_graph_updates();
 
-    // First batch: root + child = 2 additions
-    // Second batch: both already canonical = 0 ops
-    // Total = 2
-    assert_eq!(
-        updates.len(),
-        2,
-        "Expected 2 updates (idempotent replay produces 0 extra)"
-    );
+        // First batch: root + child = 2 additions
+        // Second batch: both already canonical = 0 ops
+        // Total = 2
+        assert_eq!(
+            updates.len(),
+            2,
+            "Expected 2 updates (idempotent replay produces 0 extra)"
+        );
+    })
+    .await;
 }
 
 #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
@@ -648,10 +682,8 @@ async fn test_topology_entities_get_canonical_flag() {
     let non_canonical_space = make_bytes(99);
 
     // Pre-populate topology state: root + canonical_space
-    let topology_state = CanonicalGraphState::from_snapshot(
-        Some(root),
-        vec![(canonical_space, root, 1)],
-    );
+    let topology_state =
+        CanonicalGraphState::from_snapshot(Some(root), vec![(canonical_space, root, 1)]);
 
     // Verify the state is correct before testing
     assert!(topology_state.is_canonical(&root));
@@ -659,11 +691,7 @@ async fn test_topology_entities_get_canonical_flag() {
     assert!(!topology_state.is_canonical(&non_canonical_space));
 
     // Test via processor directly (simpler and avoids concurrent timing issues)
-    let processor = Processor::with_config(
-        std::collections::HashMap::new(),
-        topology_state,
-        0,
-    );
+    let processor = Processor::with_config(std::collections::HashMap::new(), topology_state, 0);
 
     use search_indexer::consumer::{EntityEvent, EntityEventType};
 
@@ -698,7 +726,9 @@ async fn test_topology_entities_get_canonical_flag() {
     };
 
     let events = vec![canonical_entity, non_canonical_entity];
-    let processed = processor.process_batch(events).unwrap();
+    let processed = processor
+        .process_batch(events)
+        .expect("Failed to process entity batch");
 
     // Find the Index events
     use search_indexer::processor::ProcessedEvent;
