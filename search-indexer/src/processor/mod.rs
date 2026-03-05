@@ -13,7 +13,9 @@ use crate::consumer::StreamMessage;
 use crate::consumer::{EntityEvent, EntityEventType, ScoreEvent, ScoreEventType, SpaceTopicEvent};
 use crate::errors::IngestError;
 use crate::metrics::SearchIndexerMetrics;
-use crate::orchestrator::{BatchSource, EntityProcessingBatch, ProcessedBatch, ScoreProcessingBatch, SpaceTopicProcessingBatch};
+use crate::orchestrator::{BatchSource, EntityProcessingBatch, ProcessedBatch, ScoreProcessingBatch, SpaceTopicProcessingBatch, TopologyProcessingBatch};
+use crate::topology::CanonicalGraphState;
+use crate::topology::persistence;
 use sdk::core::ids::{AVATAR_RELATION_TYPE_ID, COVER_RELATION_TYPE_ID, TYPE_RELATION_TYPE_ID};
 use search_indexer_shared::EntityDocument;
 use uuid::Uuid;
@@ -60,6 +62,12 @@ pub enum ProcessedEvent {
         space_id: uuid::Uuid,
         topic_entity_id: uuid::Uuid,
     },
+    /// Update in_canonical_graph for all entities in a space.
+    /// Emitted when a space's canonical status changes.
+    UpdateInCanonicalGraph {
+        space_id: uuid::Uuid,
+        in_canonical_graph: bool,
+    },
 }
 
 /// Index into the per-event-type sample counters.
@@ -90,6 +98,8 @@ pub struct Processor {
     /// In-memory cache of space_id → topic_entity_id.
     /// Used to set space_topic_entity_id on new entity documents during upserts.
     space_topic_cache: HashMap<Uuid, Uuid>,
+    /// Canonical graph state for determining in_canonical_graph status.
+    topology_state: CanonicalGraphState,
     sample_counters: [AtomicU64; SAMPLE_CATEGORY_COUNT],
     sample_interval: u64,
 }
@@ -99,8 +109,29 @@ impl Processor {
     pub fn new() -> Self {
         Self {
             space_topic_cache: HashMap::new(),
+            topology_state: CanonicalGraphState::new(),
             sample_counters: std::array::from_fn(|_| AtomicU64::new(0)),
             sample_interval: 0,
+        }
+    }
+
+    /// Create a new processor with a pre-warmed space topic cache and topology state.
+    pub fn with_config(
+        cache: HashMap<Uuid, Uuid>,
+        topology_state: CanonicalGraphState,
+        sample_interval: u64,
+    ) -> Self {
+        info!(
+            cache_size = cache.len(),
+            topology_nodes = topology_state.len(),
+            sample_interval,
+            "Processor created with space topic cache and topology state"
+        );
+        Self {
+            space_topic_cache: cache,
+            topology_state,
+            sample_counters: std::array::from_fn(|_| AtomicU64::new(0)),
+            sample_interval,
         }
     }
 
@@ -109,6 +140,7 @@ impl Processor {
         info!(cache_size = cache.len(), sample_interval, "Processor created with space topic cache");
         Self {
             space_topic_cache: cache,
+            topology_state: CanonicalGraphState::new(),
             sample_counters: std::array::from_fn(|_| AtomicU64::new(0)),
             sample_interval,
         }
@@ -252,6 +284,34 @@ impl Processor {
         Ok(processed)
     }
 
+    /// Process a topology batch: apply changes to in-memory graph, return update operations.
+    #[instrument(skip(self, batch), fields(diff_count = batch.diffs.len()))]
+    pub fn process_topology_batch(
+        &self,
+        batch: &TopologyProcessingBatch,
+    ) -> Vec<ProcessedEvent> {
+        let mut ops = Vec::new();
+        for diff in &batch.diffs {
+            let changes = self.topology_state.apply_changes(diff.root_id, &diff.changes);
+            for change in changes {
+                ops.push(ProcessedEvent::UpdateInCanonicalGraph {
+                    space_id: change.space_id,
+                    in_canonical_graph: change.in_canonical_graph,
+                });
+            }
+        }
+        debug!(
+            operations = ops.len(),
+            "Processed topology batch"
+        );
+        ops
+    }
+
+    /// Get a reference to the topology state (for persistence).
+    pub fn topology_state(&self) -> &CanonicalGraphState {
+        &self.topology_state
+    }
+
     /// Process a single score event.
     fn process_score_event(&self, event: ScoreEvent) -> Result<ProcessedEvent, IngestError> {
         match event.event_type {
@@ -362,20 +422,23 @@ impl Processor {
         mut entity_rx: mpsc::Receiver<EntityProcessingBatch>,
         mut scores_rx: mpsc::Receiver<ScoreProcessingBatch>,
         mut space_topics_rx: mpsc::Receiver<SpaceTopicProcessingBatch>,
+        mut topology_rx: mpsc::Receiver<TopologyProcessingBatch>,
         loader_tx: mpsc::Sender<ProcessedBatch>,
         entity_ack_tx: mpsc::Sender<StreamMessage>,
         scores_ack_tx: mpsc::Sender<StreamMessage>,
         space_topics_ack_tx: mpsc::Sender<StreamMessage>,
+        topology_ack_tx: mpsc::Sender<StreamMessage>,
         metrics: Arc<SearchIndexerMetrics>,
     ) -> JoinHandle<()> {
         tokio::spawn(async move {
             let mut entity_closed = false;
             let mut scores_closed = false;
             let mut space_topics_closed = false;
+            let mut topology_closed = false;
 
             loop {
                 // Exit when all channels are closed
-                if entity_closed && scores_closed && space_topics_closed {
+                if entity_closed && scores_closed && space_topics_closed && topology_closed {
                     break;
                 }
 
@@ -429,6 +492,23 @@ impl Processor {
                             None => {
                                 warn!("Space topics processor channel closed");
                                 space_topics_closed = true;
+                            }
+                        }
+                    }
+                    // Handle topology events
+                    topology_batch = topology_rx.recv(), if !topology_closed => {
+                        match topology_batch {
+                            Some(batch) => {
+                                self.handle_topology_batch(
+                                    batch,
+                                    &loader_tx,
+                                    &topology_ack_tx,
+                                    &metrics,
+                                ).await;
+                            }
+                            None => {
+                                warn!("Topology processor channel closed");
+                                topology_closed = true;
                             }
                         }
                     }
@@ -633,6 +713,102 @@ impl Processor {
         }
     }
 
+    /// Handle a batch of topology events.
+    ///
+    /// Flow:
+    /// 1. Apply changes to in-memory graph → get operations
+    /// 2. Save graph state to JSON (write-then-rename) — if save fails, NACK
+    /// 3. Send ops to loader → loader executes → ACK → consumer commits offsets
+    #[instrument(skip(self, batch, loader_tx, ack_tx, metrics), fields(event_count = batch.event_count))]
+    async fn handle_topology_batch(
+        &self,
+        batch: TopologyProcessingBatch,
+        loader_tx: &mpsc::Sender<ProcessedBatch>,
+        ack_tx: &mpsc::Sender<StreamMessage>,
+        metrics: &Arc<SearchIndexerMetrics>,
+    ) {
+        let TopologyProcessingBatch {
+            diffs: _,
+            offsets: _offsets,
+            event_count,
+        } = &batch;
+        let event_count = *event_count;
+
+        // 1. Apply changes to in-memory graph
+        let processed_events = self.process_topology_batch(&batch);
+
+        metrics
+            .total_events_processed
+            .fetch_add(event_count as u64, Ordering::Relaxed);
+
+        // 2. Persist state to disk before committing Kafka offsets
+        let topology_state = self.topology_state.clone();
+        let state_path = persistence::state_path();
+        let save_result = tokio::task::spawn_blocking(move || {
+            persistence::save(&topology_state, &state_path)
+        })
+        .await;
+
+        match save_result {
+            Ok(Ok(())) => {} // Save succeeded
+            Ok(Err(e)) => {
+                error!(error = %e, "Failed to save topology state, NACKing batch");
+                if let Err(send_err) = ack_tx
+                    .send(StreamMessage::Acknowledgment {
+                        offsets: batch.offsets,
+                        success: false,
+                        error: Some(format!("Topology state save failed: {}", e)),
+                    })
+                    .await
+                {
+                    error!(error = %send_err, "Failed to send topology NACK - channel closed");
+                }
+                return;
+            }
+            Err(join_err) => {
+                error!(error = %join_err, "Topology state save task panicked, NACKing batch");
+                if let Err(send_err) = ack_tx
+                    .send(StreamMessage::Acknowledgment {
+                        offsets: batch.offsets,
+                        success: false,
+                        error: Some(format!("Topology state save panicked: {}", join_err)),
+                    })
+                    .await
+                {
+                    error!(error = %send_err, "Failed to send topology NACK - channel closed");
+                }
+                return;
+            }
+        }
+
+        // 3. Send to loader
+        if processed_events.is_empty() {
+            debug!("No topology updates to index, sending ACK directly");
+            if let Err(send_err) = ack_tx
+                .send(StreamMessage::Acknowledgment {
+                    offsets: batch.offsets,
+                    success: true,
+                    error: None,
+                })
+                .await
+            {
+                error!(error = %send_err, "Failed to send topology acknowledgment - channel closed");
+            }
+            return;
+        }
+
+        let processed_batch = ProcessedBatch {
+            events: processed_events,
+            offsets: batch.offsets,
+            index_count: 0,
+            source: BatchSource::Topology,
+        };
+
+        if let Err(send_err) = loader_tx.send(processed_batch).await {
+            error!(error = %send_err, "Failed to send topology batch to loader - channel closed");
+        }
+    }
+
     /// Process a single entity event.
     fn process_event(&self, event: EntityEvent) -> Result<Option<ProcessedEvent>, IngestError> {
         match event.event_type {
@@ -654,6 +830,10 @@ impl Processor {
                 if let Some(topic_entity_id) = self.space_topic_cache.get(&event.space_id) {
                     doc.space_topic_entity_id = Some(topic_entity_id.to_string());
                 }
+
+                // Set in_canonical_graph from topology state
+                let space_bytes = event.space_id.into_bytes();
+                doc.in_canonical_graph = Some(self.topology_state.is_canonical(&space_bytes));
 
                 if self.should_sample(SampleCategory::EntityUpsert) {
                     info!(

@@ -57,6 +57,7 @@ use uuid::Uuid;
 ///     entity_space_score: None,
 ///     deleted: None,
 ///     space_topic_entity_id: None,
+///     in_canonical_graph: None,
 /// };
 ///
 /// // This will create the document if it doesn't exist, or update it if it does
@@ -512,6 +513,7 @@ mod tests {
             entity_space_score: None,
             deleted: None,
             space_topic_entity_id: None,
+            in_canonical_graph: None,
         }
     }
 
@@ -642,6 +644,7 @@ mod tests {
             entity_space_score: None,
             deleted: None,
             space_topic_entity_id: None,
+            in_canonical_graph: None,
         };
         assert!(service.update(request).await.is_err());
 
@@ -660,6 +663,7 @@ mod tests {
             entity_space_score: None,
             deleted: None,
             space_topic_entity_id: None,
+            in_canonical_graph: None,
         };
         assert!(service.update(request).await.is_err());
     }
@@ -706,6 +710,7 @@ mod tests {
                 entity_space_score: None,
                 deleted: None,
                 space_topic_entity_id: None,
+                in_canonical_graph: None,
             })
             .collect();
 

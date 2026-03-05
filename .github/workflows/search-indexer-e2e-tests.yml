@@ -218,6 +218,7 @@ jobs:
           ENVIRONMENT: staging
           IPFS_KEY: dummy-key-for-e2e-tests
           IPFS_GATEWAY_WRITE: http://localhost:5001
+          TOPOLOGY_SERVICE_URL: http://localhost:8080
 
       - name: Run search-indexer in background
         run: |
@@ -226,6 +227,9 @@ jobs:
           OPENSEARCH_URL=http://localhost:9200 \
           KAFKA_GROUP_EDITS_ID=search-indexer-group-edits-e2e \
           KAFKA_GROUP_SCORES_ID=search-indexer-group-scores-e2e \
+          KAFKA_GROUP_SPACE_TOPICS_ID=search-indexer-group-space-topics-e2e \
+          KAFKA_GROUP_TOPOLOGY_ID=search-indexer-group-topology-e2e \
+          TOPOLOGY_STATE_PATH=/tmp/topology_state.json \
           HEALTH_PORT=8080 \
           RUST_LOG=search_indexer=info,search_indexer_repository=debug \
           ./target/release/search-indexer > /tmp/search-indexer.log 2>&1 &
@@ -260,6 +264,7 @@ jobs:
           ENVIRONMENT: staging
           KAFKA_BROKER: localhost:9092
           SEARCH_API_URL: http://localhost:3000
+          INDEXER_URL: http://localhost:8080
 
       - name: Stop indexer for NACK crash test
         run: |
@@ -291,6 +296,25 @@ jobs:
           path: /tmp/e2e-nack-crash.*/
           retention-days: 3
 
+      - name: Run topology restart test
+        working-directory: ./search-indexer/tests/e2e-topology-restart
+        run: |
+          KAFKA_CONTAINER=$(docker ps --format '{{.Names}}' | grep -i kafka | grep -v ui | head -1)
+          KAFKA_CONTAINER="$KAFKA_CONTAINER" ./run-test.sh
+        env:
+          ENVIRONMENT: staging
+          KAFKA_BROKER: localhost:9092
+          OPENSEARCH_URL: http://localhost:9200
+
+      - name: Upload topology restart test logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: topology-restart-test-logs
+          path: /tmp/e2e-topology-restart.*/
+          if-no-files-found: warn
+          retention-days: 3
+
       - name: Clean OpenSearch for load test
         run: |
           CONCRETE=$(curl -sf "$OPENSEARCH_URL/_alias/staging_entities" \
@@ -312,6 +336,8 @@ jobs:
           KAFKA_GROUP_EDITS_ID=search-indexer-group-edits-load \
           KAFKA_GROUP_SCORES_ID=search-indexer-group-scores-load \
           KAFKA_GROUP_SPACE_TOPICS_ID=search-indexer-group-space-topics-load \
+          KAFKA_GROUP_TOPOLOGY_ID=search-indexer-group-topology-load \
+          TOPOLOGY_STATE_PATH=/tmp/topology_state_load.json \
           HEALTH_PORT=8081 \
           RUST_LOG=search_indexer=info,search_indexer_repository=info \
           ./target/release/search-indexer > /tmp/search-indexer-load.log 2>&1 &

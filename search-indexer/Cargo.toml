@@ -32,7 +32,9 @@ axum = "0.8.8"
 
 # Serialization
 prost = "0.13.5"
+serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0.140"
+hex = "0.4"
 
 # Error handling
 thiserror = "2.0.17"
@@ -46,4 +48,5 @@ dotenv = "0.15.0"
 tracing = "0.1.41"
 
 [dev-dependencies]
+serial_test = "3.4.0"
 tokio = { version = "1.42.0", features = ["macros", "rt-multi-thread", "test-util"] }

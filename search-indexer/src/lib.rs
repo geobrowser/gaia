@@ -30,6 +30,7 @@ pub mod loader;
 pub mod metrics;
 pub mod orchestrator;
 pub mod processor;
+pub mod topology;
 
 pub use config::Dependencies;
 pub use errors::{IndexingError, IngestError};

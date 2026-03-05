@@ -15,7 +15,7 @@ use search_indexer::loader::SearchLoader;
 use search_indexer::orchestrator::{
     EntitiesConsumerTrait, EntityProcessingBatch, Orchestrator, OrchestratorConfig,
     ScoreProcessingBatch, ScoresConsumerTrait, SpaceTopicProcessingBatch,
-    SpaceTopicsConsumerTrait,
+    SpaceTopicsConsumerTrait, TopologyConsumerTrait, TopologyProcessingBatch,
 };
 use search_indexer::processor::Processor;
 use search_indexer_repository::{
@@ -159,6 +159,26 @@ impl SpaceTopicsConsumerTrait for MockSpaceTopicsConsumer {
     }
 }
 
+// Mock Topology Consumer for testing - does nothing, just waits for shutdown
+struct MockTopologyConsumer;
+
+#[async_trait::async_trait]
+impl TopologyConsumerTrait for MockTopologyConsumer {
+    fn subscribe(&self) -> Result<(), IngestError> {
+        Ok(())
+    }
+
+    async fn run(
+        &self,
+        _processor_tx: mpsc::Sender<TopologyProcessingBatch>,
+        _ack_receiver: mpsc::Receiver<StreamMessage>,
+        mut shutdown: broadcast::Receiver<()>,
+    ) -> Result<(), IngestError> {
+        let _ = shutdown.recv().await;
+        Ok(())
+    }
+}
+
 // Mock Search Provider for testing
 struct MockSearchProvider {
     updated_documents: std::sync::Mutex<Vec<UpdateEntityRequest>>,
@@ -291,11 +311,12 @@ impl SearchIndexProvider for MockSearchProvider {
                 EntityOperation::Delete(_) => false, // Hard deletes not used (soft delete via Update)
                 EntityOperation::Unset(_) => self.fail_bulk_unsets && i >= operations.len() / 2,
                 EntityOperation::RemoveRelationById(_) => false, // Never fails in mock
-                // Score and space topic operations never fail in mock
+                // Score, space topic, and topology operations never fail in mock
                 EntityOperation::UpdateEntityGlobalScore(_)
                 | EntityOperation::UpdateSpaceScore(_)
                 | EntityOperation::UpdateEntitySpaceScore(_)
-                | EntityOperation::UpdateSpaceTopicEntityId(_) => false,
+                | EntityOperation::UpdateSpaceTopicEntityId(_)
+                | EntityOperation::UpdateInCanonicalGraph(_) => false,
             };
 
             if should_fail {
@@ -327,11 +348,12 @@ impl SearchIndexProvider for MockSearchProvider {
                     EntityOperation::RemoveRelationById(_) => {
                         // Tracked via all_operations
                     }
-                    // Score and space topic operations are tracked via all_operations only
+                    // Score, space topic, and topology operations are tracked via all_operations only
                     EntityOperation::UpdateEntityGlobalScore(_)
                     | EntityOperation::UpdateSpaceScore(_)
                     | EntityOperation::UpdateEntitySpaceScore(_)
-                    | EntityOperation::UpdateSpaceTopicEntityId(_) => {
+                    | EntityOperation::UpdateSpaceTopicEntityId(_)
+                    | EntityOperation::UpdateInCanonicalGraph(_) => {
                         // Tracked via all_operations
                     }
                 }
@@ -369,8 +391,9 @@ fn create_test_orchestrator(events: Vec<EntityEvent>) -> (Orchestrator, Arc<Mock
     let mock_consumer = Arc::new(MockConsumer::new(events));
     let mock_scores_consumer = Arc::new(MockScoresConsumer);
     let mock_space_topics_consumer = Arc::new(MockSpaceTopicsConsumer);
+    let mock_topology_consumer = Arc::new(MockTopologyConsumer);
 
-    let orchestrator = Orchestrator::new(mock_consumer, mock_scores_consumer, mock_space_topics_consumer, processor, loader);
+    let orchestrator = Orchestrator::new(mock_consumer, mock_scores_consumer, mock_space_topics_consumer, mock_topology_consumer, processor, loader);
 
     (orchestrator, mock_provider)
 }
@@ -386,11 +409,13 @@ fn create_test_orchestrator_with_consumer(
     let mock_consumer = Arc::new(MockConsumer::new(events));
     let mock_scores_consumer = Arc::new(MockScoresConsumer);
     let mock_space_topics_consumer = Arc::new(MockSpaceTopicsConsumer);
+    let mock_topology_consumer = Arc::new(MockTopologyConsumer);
 
     let orchestrator = Orchestrator::new(
         mock_consumer.clone(),
         mock_scores_consumer,
         mock_space_topics_consumer,
+        mock_topology_consumer,
         processor,
         loader,
     );
@@ -409,8 +434,9 @@ fn create_error_test_orchestrator(
     let mock_consumer = Arc::new(MockConsumer::with_subscribe_error(events));
     let mock_scores_consumer = Arc::new(MockScoresConsumer);
     let mock_space_topics_consumer = Arc::new(MockSpaceTopicsConsumer);
+    let mock_topology_consumer = Arc::new(MockTopologyConsumer);
 
-    let orchestrator = Orchestrator::new(mock_consumer, mock_scores_consumer, mock_space_topics_consumer, processor, loader);
+    let orchestrator = Orchestrator::new(mock_consumer, mock_scores_consumer, mock_space_topics_consumer, mock_topology_consumer, processor, loader);
 
     (orchestrator, mock_provider)
 }
@@ -426,11 +452,13 @@ fn create_bulk_update_failure_orchestrator(
     let mock_consumer = Arc::new(MockConsumer::new(events.clone()));
     let mock_scores_consumer = Arc::new(MockScoresConsumer);
     let mock_space_topics_consumer = Arc::new(MockSpaceTopicsConsumer);
+    let mock_topology_consumer = Arc::new(MockTopologyConsumer);
 
     let orchestrator = Orchestrator::new(
         mock_consumer.clone(),
         mock_scores_consumer,
         mock_space_topics_consumer,
+        mock_topology_consumer,
         processor,
         loader,
     );
@@ -449,11 +477,13 @@ fn create_bulk_unset_failure_orchestrator(
     let mock_consumer = Arc::new(MockConsumer::new(events.clone()));
     let mock_scores_consumer = Arc::new(MockScoresConsumer);
     let mock_space_topics_consumer = Arc::new(MockSpaceTopicsConsumer);
+    let mock_topology_consumer = Arc::new(MockTopologyConsumer);
 
     let orchestrator = Orchestrator::new(
         mock_consumer.clone(),
         mock_scores_consumer,
         mock_space_topics_consumer,
+        mock_topology_consumer,
         processor,
         loader,
     );
@@ -546,6 +576,7 @@ async fn test_orchestrator_configuration() {
     let mock_consumer = Arc::new(MockConsumer::new(vec![]));
     let mock_scores_consumer = Arc::new(MockScoresConsumer);
     let mock_space_topics_consumer = Arc::new(MockSpaceTopicsConsumer);
+    let mock_topology_consumer = Arc::new(MockTopologyConsumer);
 
     let config = OrchestratorConfig {
         channel_buffer_size: 2000,
@@ -555,6 +586,7 @@ async fn test_orchestrator_configuration() {
         mock_consumer,
         mock_scores_consumer,
         mock_space_topics_consumer,
+        mock_topology_consumer,
         processor,
         loader,
         config,
@@ -798,10 +830,12 @@ async fn test_nack_stops_then_restart_replays() {
     let consumer1 = Arc::new(MockConsumer::new(events.clone()));
     let mock_scores_consumer1 = Arc::new(MockScoresConsumer);
     let mock_space_topics_consumer1 = Arc::new(MockSpaceTopicsConsumer);
+    let mock_topology_consumer1 = Arc::new(MockTopologyConsumer);
     let orch1 = Orchestrator::new(
         consumer1.clone(),
         mock_scores_consumer1,
         mock_space_topics_consumer1,
+        mock_topology_consumer1,
         Processor::new(),
         SearchLoader::new(fail_provider.clone()),
     );
@@ -823,10 +857,12 @@ async fn test_nack_stops_then_restart_replays() {
     let consumer2 = Arc::new(MockConsumer::new(events.clone())); // same events = Kafka replay
     let mock_scores_consumer2 = Arc::new(MockScoresConsumer);
     let mock_space_topics_consumer2 = Arc::new(MockSpaceTopicsConsumer);
+    let mock_topology_consumer2 = Arc::new(MockTopologyConsumer);
     let orch2 = Orchestrator::new(
         consumer2.clone(),
         mock_scores_consumer2,
         mock_space_topics_consumer2,
+        mock_topology_consumer2,
         Processor::new(),
         SearchLoader::new(ok_provider.clone()),
     );

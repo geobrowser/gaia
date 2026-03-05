@@ -3,7 +3,13 @@
 //! This module provides a simple HTTP server that exposes health check endpoints
 //! for Kubernetes to monitor the search-indexer service.
 
-use axum::{extract::State, http::StatusCode, response::IntoResponse, routing::get, Router};
+use axum::{
+    extract::{Path, State},
+    http::StatusCode,
+    response::IntoResponse,
+    routing::get,
+    Json, Router,
+};
 use rdkafka::admin::AdminClient;
 use rdkafka::client::DefaultClientContext;
 use std::sync::Arc;
@@ -11,6 +17,7 @@ use std::time::Duration;
 use tokio::task::JoinHandle;
 use hermes_instrumentation::{error, info};
 
+use crate::topology::CanonicalGraphState;
 use search_indexer_repository::SearchIndexProvider;
 
 /// Health check server state.
@@ -20,6 +27,8 @@ pub struct HealthState {
     provider: Arc<dyn SearchIndexProvider>,
     /// Kafka admin client for checking broker connectivity.
     kafka_admin: Arc<AdminClient<DefaultClientContext>>,
+    /// Canonical graph topology state for subspace queries.
+    topology_state: CanonicalGraphState,
 }
 
 impl HealthState {
@@ -27,10 +36,12 @@ impl HealthState {
     pub fn new(
         provider: Arc<dyn SearchIndexProvider>,
         kafka_admin: Arc<AdminClient<DefaultClientContext>>,
+        topology_state: CanonicalGraphState,
     ) -> Self {
         Self {
             provider,
             kafka_admin,
+            topology_state,
         }
     }
 }
@@ -89,31 +100,149 @@ async fn readiness(State(state): State<HealthState>) -> impl IntoResponse {
     }
 }
 
+/// Parse a space_id from a path parameter.
+/// Accepts both dashed UUID (36 chars) and 32-char hex.
+fn parse_space_id(space_id_str: &str) -> Option<[u8; 16]> {
+    // Try dashed UUID first
+    if let Ok(uuid) = uuid::Uuid::parse_str(space_id_str) {
+        return Some(*uuid.as_bytes());
+    }
+    // Try 32-char hex
+    if space_id_str.len() == 32 {
+        if let Ok(bytes) = hex::decode(space_id_str) {
+            if bytes.len() == 16 {
+                let mut arr = [0u8; 16];
+                arr.copy_from_slice(&bytes);
+                return Some(arr);
+            }
+        }
+    }
+    None
+}
+
+/// GET /topology/subspaces/:space_id
+///
+/// Returns all subspaces (descendants + self) for a canonical space.
+async fn get_subspaces(
+    State(state): State<HealthState>,
+    Path(space_id_str): Path<String>,
+) -> impl IntoResponse {
+    let space_bytes = match parse_space_id(&space_id_str) {
+        Some(bytes) => bytes,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": "invalid space_id format" })),
+            );
+        }
+    };
+
+    match state.topology_state.get_subspaces(&space_bytes) {
+        Some(subspaces) => {
+            let count = subspaces.len();
+            let subspace_strs: Vec<String> = subspaces.iter().map(|u| u.to_string()).collect();
+            let is_root = state
+                .topology_state
+                .root_id()
+                .map(|r| *r.as_bytes() == space_bytes)
+                .unwrap_or(false);
+            (
+                StatusCode::OK,
+                Json(serde_json::json!({
+                    "space_id": space_id_str,
+                    "subspaces": subspace_strs,
+                    "count": count,
+                    "is_root": is_root,
+                })),
+            )
+        }
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "error": "space not found in canonical graph",
+                "space_id": space_id_str,
+            })),
+        ),
+    }
+}
+
+/// GET /topology/distance/:space_id
+///
+/// Returns the distance from root for a canonical space.
+async fn get_distance(
+    State(state): State<HealthState>,
+    Path(space_id_str): Path<String>,
+) -> impl IntoResponse {
+    let space_bytes = match parse_space_id(&space_id_str) {
+        Some(bytes) => bytes,
+        None => {
+            return (
+                StatusCode::BAD_REQUEST,
+                Json(serde_json::json!({ "error": "invalid space_id format" })),
+            );
+        }
+    };
+
+    match state.topology_state.get_distance(&space_bytes) {
+        Some(distance) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "space_id": space_id_str,
+                "distance": distance,
+            })),
+        ),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "error": "space not found in canonical graph",
+                "space_id": space_id_str,
+            })),
+        ),
+    }
+}
+
+/// GET /topology/root
+///
+/// Returns the canonical graph root space ID.
+async fn get_root(State(state): State<HealthState>) -> impl IntoResponse {
+    match state.topology_state.root_id() {
+        Some(root_uuid) => (
+            StatusCode::OK,
+            Json(serde_json::json!({
+                "root_id": root_uuid.to_string(),
+            })),
+        ),
+        None => (
+            StatusCode::NOT_FOUND,
+            Json(serde_json::json!({
+                "error": "no root set yet",
+            })),
+        ),
+    }
+}
+
 /// Start the health check HTTP server.
 ///
-/// The server exposes two endpoints:
-/// - `GET /healthz` - Liveness probe (always returns 200 if process is running)
-/// - `GET /readyz` - Readiness probe (checks OpenSearch and Kafka connectivity)
-///
-/// # Arguments
-///
-/// * `provider` - The search index provider for checking OpenSearch connectivity
-/// * `kafka_admin` - Kafka admin client for checking broker connectivity
-/// * `port` - The port to bind the server to (default: 8080)
-///
-/// # Returns
-///
-/// A tokio task handle for the health check server.
+/// The server exposes:
+/// - `GET /healthz` - Liveness probe
+/// - `GET /readyz` - Readiness probe
+/// - `GET /topology/subspaces/:space_id` - Subspace query for SPACE scope expansion
+/// - `GET /topology/distance/:space_id` - Distance from root query
+/// - `GET /topology/root` - Canonical graph root ID
 pub fn start_health_server(
     provider: Arc<dyn SearchIndexProvider>,
     kafka_admin: Arc<AdminClient<DefaultClientContext>>,
+    topology_state: CanonicalGraphState,
     port: u16,
 ) -> JoinHandle<()> {
-    let state = HealthState::new(provider, kafka_admin);
+    let state = HealthState::new(provider, kafka_admin, topology_state);
 
     let app = Router::new()
         .route("/healthz", get(liveness))
         .route("/readyz", get(readiness))
+        .route("/topology/subspaces/{space_id}", get(get_subspaces))
+        .route("/topology/distance/{space_id}", get(get_distance))
+        .route("/topology/root", get(get_root))
         .with_state(state);
 
     tokio::spawn(async move {

@@ -11,10 +11,12 @@ use rdkafka::admin::AdminClient;
 use rdkafka::client::DefaultClientContext;
 
 use crate::consumer::kafka_config::create_client_config;
-use crate::consumer::{EntitiesConsumer, ScoresConsumer, SpaceTopicsConsumer};
+use crate::consumer::{EntitiesConsumer, ScoresConsumer, SpaceTopicsConsumer, TopologyConsumer};
 use crate::loader::SearchLoader;
 use crate::orchestrator::{Orchestrator, OrchestratorConfig};
 use crate::processor::Processor;
+use crate::topology::CanonicalGraphState;
+use crate::topology::persistence as topology_persistence;
 use crate::IndexingError;
 use search_indexer_repository::opensearch::IndexConfig;
 use search_indexer_repository::{OpenSearchProvider, SearchIndexProvider};
@@ -33,6 +35,9 @@ const DEFAULT_KAFKA_GROUP_SCORES_ID: &str = "search-indexer-group-scores";
 
 /// Default Kafka consumer group ID for space topics.
 const DEFAULT_KAFKA_GROUP_SPACE_TOPICS_ID: &str = "search-indexer-group-space-topics";
+
+/// Default Kafka consumer group ID for topology.
+const DEFAULT_KAFKA_GROUP_TOPOLOGY_ID: &str = "search-indexer-group-topology";
 
 /// Default connection retry interval in seconds.
 const DEFAULT_RETRY_INTERVAL_SECS: u64 = 15;
@@ -54,6 +59,8 @@ pub struct Dependencies {
     pub provider: Arc<dyn SearchIndexProvider>,
     /// Kafka admin client (for health checks).
     pub kafka_admin: Arc<AdminClient<DefaultClientContext>>,
+    /// Canonical graph topology state (shared with health server).
+    pub topology_state: CanonicalGraphState,
 }
 
 impl ConnectionMode {
@@ -108,9 +115,12 @@ impl Dependencies {
             env::var("KAFKA_GROUP_SCORES_ID").unwrap_or_else(|_| DEFAULT_KAFKA_GROUP_SCORES_ID.to_string());
         let base_kafka_group_space_topics_id =
             env::var("KAFKA_GROUP_SPACE_TOPICS_ID").unwrap_or_else(|_| DEFAULT_KAFKA_GROUP_SPACE_TOPICS_ID.to_string());
+        let base_kafka_group_topology_id =
+            env::var("KAFKA_GROUP_TOPOLOGY_ID").unwrap_or_else(|_| DEFAULT_KAFKA_GROUP_TOPOLOGY_ID.to_string());
         let kafka_group_edits_id = format!("{}{}", consumer_group_prefix, base_kafka_group_edits_id);
         let kafka_group_scores_id = format!("{}{}", consumer_group_prefix, base_kafka_group_scores_id);
         let kafka_group_space_topics_id = format!("{}{}", consumer_group_prefix, base_kafka_group_space_topics_id);
+        let kafka_group_topology_id = format!("{}{}", consumer_group_prefix, base_kafka_group_topology_id);
 
         let connection_mode = ConnectionMode::from_env();
         let retry_interval = env::var("OPENSEARCH_RETRY_INTERVAL_SECS")
@@ -196,6 +206,17 @@ impl Dependencies {
 
         info!("Entities consumer created");
 
+        // Load topology state from disk (if state file exists)
+        let topology_state_path = topology_persistence::state_path();
+        let topology_state = topology_persistence::load(&topology_state_path).map_err(|e| {
+            IndexingError::config(format!("Failed to load topology state: {}", e))
+        })?;
+        info!(
+            node_count = topology_state.len(),
+            path = %topology_state_path.display(),
+            "Topology state loaded"
+        );
+
         // Read log sample rate and compute sampling interval
         let log_sample_rate: f64 = env::var("LOG_SAMPLE_RATE")
             .ok()
@@ -208,8 +229,8 @@ impl Dependencies {
         };
         info!(log_sample_rate, sample_interval, "Log sampling configuration");
 
-        // Initialize processor with pre-warmed space topic cache
-        let processor = Processor::with_space_topic_cache(space_topic_cache, sample_interval);
+        // Initialize processor with pre-warmed space topic cache and topology state
+        let processor = Processor::with_config(space_topic_cache, topology_state.clone(), sample_interval);
 
         // Wrap provider in Arc for sharing between loader and health checks
         let provider = Arc::new(search_provider);
@@ -231,6 +252,13 @@ impl Dependencies {
 
         info!("Space topics consumer created");
 
+        // Initialize Kafka consumer for topology events
+        let topology_consumer = TopologyConsumer::new(&kafka_broker, &kafka_group_topology_id).map_err(|e| {
+            IndexingError::config(format!("Failed to create topology consumer: {}", e))
+        })?;
+
+        info!("Topology consumer created");
+
         let orchestrator_config = OrchestratorConfig::from_env();
         info!(
             channel_buffer_size = orchestrator_config.channel_buffer_size,
@@ -240,6 +268,7 @@ impl Dependencies {
             Arc::new(entities_consumer),
             Arc::new(scores_consumer),
             Arc::new(space_topics_consumer),
+            Arc::new(topology_consumer),
             processor,
             loader,
             orchestrator_config,
@@ -249,6 +278,7 @@ impl Dependencies {
             orchestrator,
             provider,
             kafka_admin,
+            topology_state,
         })
     }
 
