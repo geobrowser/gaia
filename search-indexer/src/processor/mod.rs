@@ -86,9 +86,10 @@ enum SampleCategory {
     SpaceScore = 7,
     EntitySpaceScore = 8,
     UpdateSpaceTopicEntityId = 9,
+    TopologyChange = 10,
 }
 
-const SAMPLE_CATEGORY_COUNT: usize = 10;
+const SAMPLE_CATEGORY_COUNT: usize = 11;
 
 /// Processor that transforms entity and score events into search documents.
 ///
@@ -290,10 +291,26 @@ impl Processor {
     pub fn process_topology_batch(&self, batch: &TopologyProcessingBatch) -> Vec<ProcessedEvent> {
         let mut ops = Vec::new();
         for diff in &batch.diffs {
+            let root_uuid = Uuid::from_bytes(diff.root_id);
             let changes = self
                 .topology_state
                 .apply_changes(diff.root_id, &diff.changes);
             for change in changes {
+                let is_root = change.space_id == root_uuid;
+                if is_root {
+                    info!(
+                        space_id = %change.space_id,
+                        in_canonical_graph = change.in_canonical_graph,
+                        is_root = true,
+                        "TopologyChange for root space"
+                    );
+                } else if self.should_sample(SampleCategory::TopologyChange) {
+                    info!(
+                        space_id = %change.space_id,
+                        in_canonical_graph = change.in_canonical_graph,
+                        "[sample] TopologyChange"
+                    );
+                }
                 ops.push(ProcessedEvent::UpdateInCanonicalGraph {
                     space_id: change.space_id,
                     in_canonical_graph: change.in_canonical_graph,

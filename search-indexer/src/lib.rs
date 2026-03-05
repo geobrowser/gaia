@@ -25,7 +25,7 @@
 pub mod config;
 pub mod consumer;
 pub mod errors;
-pub mod health;
+pub mod http;
 pub mod loader;
 pub mod metrics;
 pub mod orchestrator;
