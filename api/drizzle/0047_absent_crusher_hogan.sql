@@ -1,0 +1,3 @@
+ALTER TABLE "spaces" ADD CONSTRAINT "spaces_topic_id_entities_id_fk" FOREIGN KEY ("topic_id") REFERENCES "public"."entities"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "subspace_topics" ADD CONSTRAINT "subspace_topics_space_id_spaces_id_fk" FOREIGN KEY ("space_id") REFERENCES "public"."spaces"("id") ON DELETE no action ON UPDATE no action;--> statement-breakpoint
+ALTER TABLE "subspace_topics" ADD CONSTRAINT "subspace_topics_topic_id_entities_id_fk" FOREIGN KEY ("topic_id") REFERENCES "public"."entities"("id") ON DELETE no action ON UPDATE no action;
