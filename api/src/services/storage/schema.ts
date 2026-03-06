@@ -281,8 +281,8 @@ export const subspaces = pgTable(
 export const subspaceTopics = pgTable(
 	"subspace_topics",
 	{
-		spaceId: uuid("space_id").notNull(),
-		topicId: uuid("topic_id").notNull(),
+		spaceId: uuid("space_id").notNull().references(() => spaces.id),
+		topicId: uuid("topic_id").notNull().references(() => entities.id),
 	},
 	(table) => [
 		primaryKey({columns: [table.spaceId, table.topicId]}),
@@ -381,6 +381,11 @@ export const subspaceTopicsRelations = drizzleRelations(subspaceTopics, ({one}) 
 		fields: [subspaceTopics.spaceId],
 		references: [spaces.id],
 		relationName: "subspaceTopicSpace",
+	}),
+	topic: one(entities, {
+		fields: [subspaceTopics.topicId],
+		references: [entities.id],
+		relationName: "subspaceTopicEntity",
 	}),
 }))
 
