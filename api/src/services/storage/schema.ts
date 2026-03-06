@@ -281,8 +281,12 @@ export const subspaces = pgTable(
 export const subspaceTopics = pgTable(
 	"subspace_topics",
 	{
-		spaceId: uuid("space_id").notNull().references(() => spaces.id),
-		topicId: uuid("topic_id").notNull().references(() => entities.id),
+		spaceId: uuid("space_id")
+			.notNull()
+			.references(() => spaces.id),
+		topicId: uuid("topic_id")
+			.notNull()
+			.references(() => entities.id),
 	},
 	(table) => [
 		primaryKey({columns: [table.spaceId, table.topicId]}),
