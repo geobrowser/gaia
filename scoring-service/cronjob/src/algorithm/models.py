@@ -163,7 +163,7 @@ class Space:
             self.distance_to_root = self._calculate_distance_to_root(spaces, root_space_id)
 
         # Calculate space score based on distance to root
-        if self.distance_to_root > 0:
+        if self.distance_to_root >= 0:
             self.space_score = SPACE_SCORE_DECAY_BASE**self.distance_to_root
         else:
             self.space_score = SPACE_SCORE_DECAY_BASE**DISCONNECTED_SPACE_DEPTH

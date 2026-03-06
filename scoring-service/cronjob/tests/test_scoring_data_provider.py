@@ -5,7 +5,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from src.algorithm.models import VoteType
+from src.algorithm.models import Space, VoteType
 from src.constants import ROOT_SPACE_ID
 from src.scoring_data_provider import ScoringDataProvider, ScoringData
 
@@ -328,3 +328,22 @@ class TestScoringDataProvider:
             assert distances[ROOT_SPACE_ID] == 0
             assert distances["space-a"] == 1
             assert distances["space-b"] == 3
+
+
+class TestSpaceScoreCalculation:
+    """Tests for space score calculation with topology distances."""
+
+    def test_root_space_has_highest_score(self) -> None:
+        """Test that root space (distance=0) scores higher than any child space."""
+        now = datetime.now()
+        root = Space(id=ROOT_SPACE_ID, created_at=now, distance_to_root=0)
+        child_1 = Space(id="child-1", created_at=now, distance_to_root=1)
+        child_3 = Space(id="child-3", created_at=now, distance_to_root=3)
+        spaces = [root, child_1, child_3]
+
+        for space in spaces:
+            space.calculate_space_score([], [], spaces)
+
+        assert root.space_score == 1.0
+        assert root.space_score > child_1.space_score
+        assert child_1.space_score > child_3.space_score
