@@ -5,7 +5,7 @@
 
 use dotenv::dotenv;
 use hermes_instrumentation::{error, info};
-use search_indexer::health::start_health_server;
+use search_indexer::http::start_http_server;
 use search_indexer::{Dependencies, IndexingError};
 use std::env;
 
@@ -79,14 +79,18 @@ async fn main() -> Result<(), IndexingError> {
         }
     };
 
-    // Start health check server
-    let health_port = env::var("HEALTH_PORT")
+    // Start HTTP server (health checks + topology endpoints)
+    let http_port = env::var("HEALTH_PORT")
         .ok()
         .and_then(|p| p.parse::<u16>().ok())
         .unwrap_or(8080);
-    let _health_handle =
-        start_health_server(deps.provider.clone(), deps.kafka_admin.clone(), health_port);
-    info!(port = health_port, "Health check server started");
+    let _http_handle = start_http_server(
+        deps.provider.clone(),
+        deps.kafka_admin.clone(),
+        deps.topology_state.clone(),
+        http_port,
+    );
+    info!(port = http_port, "HTTP server started");
 
     // Run the orchestrator
     match deps.orchestrator.run().await {

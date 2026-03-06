@@ -1,6 +1,6 @@
-//! Kafka consumer for score updates from the curation.scores topic.
+//! Kafka consumer for topology canonical graph diffs from the topology.canonical topic.
 //!
-//! Consumes HermesScoresBatch messages and forwards score events to the ingest.
+//! Consumes `CanonicalGraphDiff` messages and forwards parsed diffs to the processor.
 
 use hermes_instrumentation::{debug, error, info, info_span, instrument, warn, Instrument};
 use hermes_kafka::get_topic_prefix;
@@ -13,61 +13,57 @@ use rdkafka::{
 use std::env;
 use std::time::Duration;
 use tokio::sync::mpsc;
-use uuid::Uuid;
 
-use crate::consumer::messages::{ScoreEvent, StreamMessage};
+use crate::consumer::messages::StreamMessage;
 use crate::errors::IngestError;
-use crate::orchestrator::ScoreProcessingBatch;
+use crate::orchestrator::TopologyProcessingBatch;
+use crate::topology::state::{ChangeType, ParsedNodeChange};
 
-use hermes_schema::pb::scoring::HermesScoresBatch;
+use hermes_schema::pb::topology::{CanonicalGraphDiff, ChangeType as ProtoChangeType};
 
-/// Pending score messages for batching.
-struct PendingScoreMessage {
-    events: Vec<ScoreEvent>,
+/// A parsed diff ready for processing.
+#[derive(Debug, Clone)]
+pub struct ParsedCanonicalGraphDiff {
+    pub root_id: [u8; 16],
+    pub changes: Vec<ParsedNodeChange>,
 }
 
-/// Kafka consumer for score events.
-pub struct ScoresConsumer {
+/// Pending topology message for batching.
+struct PendingTopologyMessage {
+    diff: ParsedCanonicalGraphDiff,
+}
+
+/// Kafka consumer for canonical graph topology diffs.
+pub struct TopologyConsumer {
     consumer: StreamConsumer,
     topic: String,
     batch_size: usize,
     batch_timeout: Duration,
 }
 
-impl ScoresConsumer {
-    /// The Kafka topic for curation scores.
-    const SCORES_TOPIC: &'static str = "curation.scores";
-
-    /// Default batch size for Kafka message batching.
+impl TopologyConsumer {
+    const TOPOLOGY_TOPIC: &'static str = "topology.canonical";
     const DEFAULT_BATCH_SIZE: usize = 10;
-
-    /// Default batch timeout in milliseconds.
     const DEFAULT_BATCH_TIMEOUT_MS: u64 = 1000;
 
-    /// Create a new scores consumer.
+    /// Create a new topology consumer.
     ///
-    /// Configuration is read from environment variables:
-    /// - ENVIRONMENT: Environment name for topic prefix ("staging" or "production")
-    /// - SCORES_KAFKA_TOPIC: Base topic name (default: "curation.scores")
-    /// - SCORES_BATCH_SIZE: Batch size (default: 50)
-    /// - SCORES_BATCH_TIMEOUT_MS: Batch timeout in milliseconds (default: 1000)
-    ///
-    /// # Arguments
-    ///
-    /// * `brokers` - Kafka broker addresses (comma-separated)
-    /// * `group_id` - Consumer group ID (will append "-scores" suffix)
+    /// Configuration from environment:
+    /// - `TOPOLOGY_KAFKA_TOPIC`: Base topic name (default: "topology.canonical")
+    /// - `TOPOLOGY_BATCH_SIZE`: Batch size (default: 10)
+    /// - `TOPOLOGY_BATCH_TIMEOUT_MS`: Batch timeout ms (default: 1000)
     pub fn new(brokers: &str, group_id: &str) -> Result<Self, IngestError> {
         let prefix = get_topic_prefix();
         let base_topic =
-            env::var("SCORES_KAFKA_TOPIC").unwrap_or_else(|_| Self::SCORES_TOPIC.to_string());
+            env::var("TOPOLOGY_KAFKA_TOPIC").unwrap_or_else(|_| Self::TOPOLOGY_TOPIC.to_string());
         let topic = format!("{}{}", prefix, base_topic);
 
-        let batch_size = env::var("SCORES_BATCH_SIZE")
+        let batch_size = env::var("TOPOLOGY_BATCH_SIZE")
             .ok()
             .and_then(|s| s.parse::<usize>().ok())
             .unwrap_or(Self::DEFAULT_BATCH_SIZE);
 
-        let batch_timeout_ms = env::var("SCORES_BATCH_TIMEOUT_MS")
+        let batch_timeout_ms = env::var("TOPOLOGY_BATCH_TIMEOUT_MS")
             .ok()
             .and_then(|s| s.parse::<u64>().ok())
             .unwrap_or(Self::DEFAULT_BATCH_TIMEOUT_MS);
@@ -75,7 +71,7 @@ impl ScoresConsumer {
         Self::with_config(brokers, group_id, topic, batch_size, batch_timeout_ms)
     }
 
-    /// Create a new scores consumer with custom configuration.
+    /// Create with custom config.
     pub fn with_config(
         brokers: &str,
         group_id: &str,
@@ -91,7 +87,7 @@ impl ScoresConsumer {
             topic = %topic,
             batch_size = batch_size,
             batch_timeout_ms = batch_timeout_ms,
-            "Created scores consumer"
+            "Created topology consumer"
         );
 
         let consumer: StreamConsumer = client_config
@@ -106,13 +102,13 @@ impl ScoresConsumer {
         })
     }
 
-    /// Subscribe to the scores topic.
+    /// Subscribe to the topology topic.
     pub fn subscribe(&self) -> Result<(), IngestError> {
         self.consumer
             .subscribe(&[&self.topic])
             .map_err(|e| IngestError::kafka(e.to_string()))?;
 
-        info!(topic = %self.topic, "Subscribed to scores Kafka topic");
+        info!(topic = %self.topic, "Subscribed to topology Kafka topic");
         Ok(())
     }
 
@@ -120,14 +116,14 @@ impl ScoresConsumer {
     #[instrument(skip(self, processor_tx, ack_receiver, shutdown))]
     pub async fn run(
         &self,
-        processor_tx: mpsc::Sender<ScoreProcessingBatch>,
+        processor_tx: mpsc::Sender<TopologyProcessingBatch>,
         mut ack_receiver: mpsc::Receiver<StreamMessage>,
         mut shutdown: tokio::sync::broadcast::Receiver<()>,
     ) -> Result<(), IngestError> {
         use futures::StreamExt;
 
         let mut message_stream = self.consumer.stream();
-        let mut batch: Vec<PendingScoreMessage> = Vec::with_capacity(self.batch_size);
+        let mut batch: Vec<PendingTopologyMessage> = Vec::with_capacity(self.batch_size);
         let mut pending_offsets: Vec<(String, i32, i64)> = Vec::new();
         let mut flush_timer = tokio::time::interval(self.batch_timeout);
         flush_timer.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
@@ -136,7 +132,7 @@ impl ScoresConsumer {
         loop {
             tokio::select! {
                 _ = shutdown.recv() => {
-                    info!("Scores consumer received shutdown signal");
+                    info!("Topology consumer received shutdown signal");
                     break;
                 }
                 ack_msg = ack_receiver.recv() => {
@@ -145,12 +141,12 @@ impl ScoresConsumer {
                             if success {
                                 let max_offset = offsets.iter().map(|(_, _, o)| *o).max().unwrap_or(0);
                                 if let Err(e) = self.commit_offsets(&offsets).await {
-                                    error!(error = %e, offset_count = offsets.len(), max_offset, "Failed to commit scores offsets after ACK");
+                                    error!(error = %e, offset_count = offsets.len(), max_offset, "Failed to commit topology offsets after ACK");
                                 } else {
                                     debug!(
                                         offset_count = offsets.len(),
                                         max_offset,
-                                        "ACK: committed scores offsets"
+                                        "ACK: committed topology offsets"
                                     );
                                 }
                             } else {
@@ -159,15 +155,15 @@ impl ScoresConsumer {
                                     offset_count = offsets.len(),
                                     max_offset,
                                     error = error.as_deref().unwrap_or("Unknown error"),
-                                    "NACK: shutting down consumer to prevent data loss"
+                                    "NACK: shutting down topology consumer to prevent data loss"
                                 );
                                 return Err(IngestError::LoaderError(
-                                    format!("Batch processing failed: {}", error.as_deref().unwrap_or("Unknown error"))
+                                    format!("Topology batch processing failed: {}", error.as_deref().unwrap_or("Unknown error"))
                                 ));
                             }
                         }
                         Some(StreamMessage::End) | None => {
-                            info!("Scores acknowledgment channel closed");
+                            info!("Topology acknowledgment channel closed");
                             break;
                         }
                         _ => {}
@@ -180,7 +176,7 @@ impl ScoresConsumer {
                                 topic = %msg.topic(),
                                 partition = msg.partition(),
                                 offset = msg.offset(),
-                                "Received scores message from Kafka"
+                                "Received topology message from Kafka"
                             );
                             match self.parse_message(&msg) {
                                 Ok(Some(pending)) => {
@@ -195,12 +191,11 @@ impl ScoresConsumer {
                                     }
                                 }
                                 Ok(None) => {
-                                    // Empty batch, commit immediately
                                     debug!(
                                         topic = %msg.topic(),
                                         partition = msg.partition(),
                                         offset = msg.offset(),
-                                        "Scores message parsed but no events extracted"
+                                        "Topology message parsed but no changes extracted"
                                     );
 
                                     let mut tpl = TopicPartitionList::new();
@@ -220,16 +215,16 @@ impl ScoresConsumer {
                                         partition = msg.partition(),
                                         offset = msg.offset(),
                                         error = %e,
-                                        "Failed to parse scores message"
+                                        "Failed to parse topology message"
                                     );
                                 }
                             }
                         }
                         Some(Err(e)) => {
-                            error!(error = %e, "Kafka error in scores consumer");
+                            error!(error = %e, "Kafka error in topology consumer");
                         }
                         None => {
-                            info!("Scores Kafka stream ended");
+                            info!("Topology Kafka stream ended");
                             if !batch.is_empty() {
                                 let offsets_to_send = pending_offsets.clone();
                                 self.flush_batch(&batch, &offsets_to_send, &processor_tx).await?;
@@ -240,7 +235,7 @@ impl ScoresConsumer {
                 }
                 _ = flush_timer.tick() => {
                     if !batch.is_empty() {
-                        debug!(count = batch.len(), "Flushing scores batch due to timeout");
+                        debug!(count = batch.len(), "Flushing topology batch due to timeout");
                         let offsets_to_send = pending_offsets.clone();
                         self.flush_batch(&batch, &offsets_to_send, &processor_tx).await?;
                         batch.clear();
@@ -253,24 +248,21 @@ impl ScoresConsumer {
         Ok(())
     }
 
-    /// Flush a batch of pending score messages to the channel.
+    /// Flush a batch of pending topology messages to the channel.
     async fn flush_batch(
         &self,
-        batch: &[PendingScoreMessage],
+        batch: &[PendingTopologyMessage],
         offsets: &[(String, i32, i64)],
-        processor_tx: &mpsc::Sender<ScoreProcessingBatch>,
+        processor_tx: &mpsc::Sender<TopologyProcessingBatch>,
     ) -> Result<(), IngestError> {
         if batch.is_empty() {
             return Ok(());
         }
 
-        let mut all_events = Vec::new();
-        for pending in batch {
-            all_events.extend(pending.events.clone());
-        }
+        let diffs: Vec<ParsedCanonicalGraphDiff> = batch.iter().map(|p| p.diff.clone()).collect();
+        let event_count = diffs.iter().map(|d| d.changes.len()).sum::<usize>();
 
-        if !all_events.is_empty() {
-            let event_count = all_events.len();
+        if event_count > 0 || !diffs.is_empty() {
             let first_offset = offsets.first().map(|(_, _, o)| *o).unwrap_or(0);
             let last_offset = offsets.last().map(|(_, _, o)| *o).unwrap_or(0);
 
@@ -278,11 +270,11 @@ impl ScoresConsumer {
                 debug!(
                     event_count = event_count,
                     message_count = batch.len(),
-                    "Sending batch of score events to processor"
+                    "Sending batch of topology diffs to processor"
                 );
                 processor_tx
-                    .send(ScoreProcessingBatch {
-                        events: all_events,
+                    .send(TopologyProcessingBatch {
+                        diffs,
                         offsets: offsets.to_vec(),
                         event_count,
                     })
@@ -290,7 +282,7 @@ impl ScoresConsumer {
                     .map_err(|e| IngestError::ChannelError(e.to_string()))
             }
             .instrument(info_span!(
-                "search_indexer.consume_scores_batch",
+                "search_indexer.consume_topology_batch",
                 batch_size = batch.len(),
                 event_count = event_count,
                 offset_start = first_offset,
@@ -321,114 +313,97 @@ impl ScoresConsumer {
         Ok(())
     }
 
-    /// Parse a Kafka message into score events.
+    /// Parse a Kafka message into a topology diff.
     fn parse_message(
         &self,
         msg: &rdkafka::message::BorrowedMessage<'_>,
-    ) -> Result<Option<PendingScoreMessage>, IngestError> {
+    ) -> Result<Option<PendingTopologyMessage>, IngestError> {
         let payload = match msg.payload() {
             Some(p) => p,
             None => {
-                warn!("Received scores message with empty payload");
+                warn!("Received topology message with empty payload");
                 return Ok(None);
             }
         };
 
-        let scores_batch = HermesScoresBatch::decode(payload).map_err(|e| {
-            IngestError::parse(format!("Failed to decode HermesScoresBatch: {}", e))
+        let diff = CanonicalGraphDiff::decode(payload).map_err(|e| {
+            IngestError::parse(format!("Failed to decode CanonicalGraphDiff: {}", e))
         })?;
 
-        debug!(
-            entity_scores_count = scores_batch.entity_scores.len(),
-            perspective_scores_count = scores_batch.perspective_scores.len(),
-            space_scores_count = scores_batch.space_scores.len(),
-            batch_sequence = scores_batch.batch_sequence,
-            is_final = scores_batch.is_final,
-            "Parsed HermesScoresBatch"
-        );
-
-        let mut events = Vec::new();
-
-        // Process entity global scores
-        for entity_score in &scores_batch.entity_scores {
-            if entity_score.entity_id.len() == 16 {
-                let bytes: [u8; 16] =
-                    entity_score.entity_id.as_slice().try_into().map_err(|_| {
-                        IngestError::parse("Failed to convert entity_id bytes".to_string())
-                    })?;
-                let entity_id = Uuid::from_bytes(bytes);
-                events.push(ScoreEvent::entity_global_score(
-                    entity_id,
-                    entity_score.score,
-                    entity_score.updated_at,
-                ));
-            } else {
-                warn!(
-                    entity_id_len = entity_score.entity_id.len(),
-                    "Invalid entity_id length in EntityScore, expected 16 bytes"
-                );
-            }
-        }
-
-        // Process space scores
-        for space_score in &scores_batch.space_scores {
-            if space_score.space_id.len() == 16 {
-                let bytes: [u8; 16] = space_score.space_id.as_slice().try_into().map_err(|_| {
-                    IngestError::parse("Failed to convert space_id bytes".to_string())
-                })?;
-                let space_id = Uuid::from_bytes(bytes);
-                events.push(ScoreEvent::space_score(
-                    space_id,
-                    space_score.score,
-                    space_score.updated_at,
-                ));
-            } else {
-                warn!(
-                    space_id_len = space_score.space_id.len(),
-                    "Invalid space_id length in SpaceScore, expected 16 bytes"
-                );
-            }
-        }
-
-        // Process perspective scores (entity-space scores)
-        for perspective_score in &scores_batch.perspective_scores {
-            if perspective_score.entity_id.len() == 16 && perspective_score.space_id.len() == 16 {
-                let entity_bytes: [u8; 16] = perspective_score
-                    .entity_id
-                    .as_slice()
-                    .try_into()
-                    .map_err(|_| {
-                        IngestError::parse("Failed to convert entity_id bytes".to_string())
-                    })?;
-                let space_bytes: [u8; 16] = perspective_score
-                    .space_id
-                    .as_slice()
-                    .try_into()
-                    .map_err(|_| {
-                        IngestError::parse("Failed to convert space_id bytes".to_string())
-                    })?;
-                let entity_id = Uuid::from_bytes(entity_bytes);
-                let space_id = Uuid::from_bytes(space_bytes);
-                events.push(ScoreEvent::entity_space_score(
-                    entity_id,
-                    space_id,
-                    perspective_score.score,
-                    perspective_score.updated_at,
-                ));
-            } else {
-                warn!(
-                    entity_id_len = perspective_score.entity_id.len(),
-                    space_id_len = perspective_score.space_id.len(),
-                    "Invalid ID lengths in PerspectiveScore, expected 16 bytes each"
-                );
-            }
-        }
-
-        if events.is_empty() {
+        if diff.root_id.len() != 16 {
+            warn!(
+                root_id_len = diff.root_id.len(),
+                "Invalid root_id length in CanonicalGraphDiff, expected 16 bytes"
+            );
             return Ok(None);
         }
 
-        Ok(Some(PendingScoreMessage { events }))
+        let root_id: [u8; 16] = diff
+            .root_id
+            .as_slice()
+            .try_into()
+            .map_err(|_| IngestError::parse("Failed to convert root_id bytes".to_string()))?;
+
+        let mut changes = Vec::with_capacity(diff.changes.len());
+
+        for node_change in &diff.changes {
+            if node_change.space_id.len() != 16 {
+                warn!(
+                    space_id_len = node_change.space_id.len(),
+                    "Invalid space_id length in NodeChange, skipping"
+                );
+                continue;
+            }
+
+            let space_id: [u8; 16] =
+                node_change.space_id.as_slice().try_into().map_err(|_| {
+                    IngestError::parse("Failed to convert space_id bytes".to_string())
+                })?;
+
+            let change_type = match ProtoChangeType::try_from(node_change.change_type) {
+                Ok(ProtoChangeType::Added) => ChangeType::Added,
+                Ok(ProtoChangeType::Removed) => ChangeType::Removed,
+                Ok(ProtoChangeType::Moved) => ChangeType::Moved,
+                Ok(ProtoChangeType::Unspecified) | Err(_) => {
+                    warn!(
+                        change_type = node_change.change_type,
+                        "Unknown change type in NodeChange, skipping"
+                    );
+                    continue;
+                }
+            };
+
+            let parent_id = node_change.parent_edge.as_ref().and_then(|edge| {
+                if edge.parent_id.len() == 16 {
+                    let mut arr = [0u8; 16];
+                    arr.copy_from_slice(&edge.parent_id);
+                    Some(arr)
+                } else {
+                    None
+                }
+            });
+
+            changes.push(ParsedNodeChange {
+                space_id,
+                change_type,
+                distance: node_change.distance,
+                parent_id,
+            });
+        }
+
+        if changes.is_empty() {
+            return Ok(None);
+        }
+
+        debug!(
+            root_id = %uuid::Uuid::from_bytes(root_id),
+            change_count = changes.len(),
+            "Parsed CanonicalGraphDiff"
+        );
+
+        Ok(Some(PendingTopologyMessage {
+            diff: ParsedCanonicalGraphDiff { root_id, changes },
+        }))
     }
 }
 
@@ -438,8 +413,8 @@ mod tests {
 
     #[test]
     fn test_constants() {
-        assert_eq!(ScoresConsumer::SCORES_TOPIC, "curation.scores");
-        assert_eq!(ScoresConsumer::DEFAULT_BATCH_SIZE, 10);
-        assert_eq!(ScoresConsumer::DEFAULT_BATCH_TIMEOUT_MS, 1000);
+        assert_eq!(TopologyConsumer::TOPOLOGY_TOPIC, "topology.canonical");
+        assert_eq!(TopologyConsumer::DEFAULT_BATCH_SIZE, 10);
+        assert_eq!(TopologyConsumer::DEFAULT_BATCH_TIMEOUT_MS, 1000);
     }
 }

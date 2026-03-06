@@ -292,6 +292,9 @@ impl OpenSearchProvider {
                 json!(space_topic_entity_id),
             );
         }
+        if let Some(in_canonical_graph) = request.in_canonical_graph {
+            doc.insert("in_canonical_graph".to_string(), json!(in_canonical_graph));
+        }
         doc
     }
 
@@ -1166,6 +1169,71 @@ impl SearchIndexProvider for OpenSearchProvider {
                         }
                     }
                 }
+                EntityOperation::UpdateInCanonicalGraph(request) => {
+                    // Flush before executing the update_by_query to maintain ordering
+                    flush_pending_bulk!(
+                        self,
+                        bulk_ops,
+                        metas,
+                        total_succeeded,
+                        total_failed,
+                        all_results,
+                        total_wall_ms,
+                        total_took_ms,
+                        _bulk_call_count
+                    );
+
+                    let space_uuid = uuid::Uuid::parse_str(&request.space_id).map_err(|_| {
+                        SearchIndexError::validation(format!(
+                            "Invalid space_id: {}",
+                            request.space_id
+                        ))
+                    })?;
+
+                    let body = json!({
+                        "query": {
+                            "term": {
+                                "space_id": space_uuid.to_string()
+                            }
+                        },
+                        "script": {
+                            "source": "ctx._source.in_canonical_graph = params.value",
+                            "lang": "painless",
+                            "params": {
+                                "value": request.in_canonical_graph
+                            }
+                        }
+                    });
+
+                    match self.update_by_query_with_retry(body, "UpdateInCanonicalGraph").await? {
+                        UpdateByQueryOutcome::Success { took_ms, wall_ms, .. } => {
+                            total_succeeded += 1;
+                            total_wall_ms += wall_ms;
+                            total_took_ms += took_ms;
+                            _bulk_call_count += 1;
+                            all_results.push(BatchOperationResult {
+                                entity_id: String::new(),
+                                space_id: request.space_id.clone(),
+                                operation_type: "UpdateInCanonicalGraph".to_string(),
+                                success: true,
+                                error: None,
+                            });
+                        }
+                        UpdateByQueryOutcome::Failed(error_body) => {
+                            total_failed += 1;
+                            all_results.push(BatchOperationResult {
+                                entity_id: String::new(),
+                                space_id: request.space_id.clone(),
+                                operation_type: "UpdateInCanonicalGraph".to_string(),
+                                success: false,
+                                error: Some(SearchIndexError::update(format!(
+                                    "Update in_canonical_graph failed: {}",
+                                    error_body
+                                ))),
+                            });
+                        }
+                    }
+                }
             }
         }
 
@@ -1233,6 +1301,7 @@ mod tests {
             entity_space_score: None,
             deleted: None,
             space_topic_entity_id: None,
+            in_canonical_graph: None,
         };
 
         let doc = OpenSearchProvider::build_update_doc(&request);
@@ -1257,6 +1326,7 @@ mod tests {
             entity_space_score: None,
             deleted: None,
             space_topic_entity_id: None,
+            in_canonical_graph: None,
         };
 
         let doc = OpenSearchProvider::build_update_doc(&request);
@@ -1292,6 +1362,7 @@ mod tests {
             entity_space_score: None,
             deleted: None,
             space_topic_entity_id: None,
+            in_canonical_graph: None,
         };
 
         let doc = OpenSearchProvider::build_update_doc(&request);

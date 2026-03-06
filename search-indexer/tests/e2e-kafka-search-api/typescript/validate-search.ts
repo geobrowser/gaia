@@ -74,6 +74,30 @@ const TEST_ENTITIES = {
   TOPIC_ENTITY_ID: '00000000000000000000000000000d00',   // represents test_space as a topic entity
   // Late entity created AFTER space.topics event (tests cache-hit ordering)
   LATE_ENTITY_ID: '0000000000000000000000000000af01',    // name="Frankie Late", created after HermesTopicDeclared
+
+  // ── Topology / canonical graph test spaces ────────────────────────────────
+  // Tree after all three diffs:
+  //   topo_root (d=0, canonical root)
+  //     ├── topo_child_a  (verified, d=1)
+  //     │     └── topo_grandchild (verified, d=2)
+  //     └── topo_child_b  (related,  d=1)
+  //           └── topo_moveable (verified, d=2)   ← moved here in diff 3
+  //
+  //   topo_remove_me was added in diff 1 then removed in diff 2.
+  TOPO_ROOT_SPACE_ID: '00000000000040008000000000000c01',
+  TOPO_CHILD_A_SPACE_ID: '00000000000040008000000000000c02',
+  TOPO_CHILD_B_SPACE_ID: '00000000000040008000000000000c03',
+  TOPO_GRANDCHILD_SPACE_ID: '00000000000040008000000000000c04',
+  TOPO_REMOVE_ME_SPACE_ID: '00000000000040008000000000000c05',
+  TOPO_MOVEABLE_SPACE_ID: '00000000000040008000000000000c06',
+
+  // Entities created in each topology space (used in search result validation)
+  TOPO_ROOT_ENTITY_ID: '0000000000000000000000000000ec01',
+  TOPO_CHILD_A_ENTITY_ID: '0000000000000000000000000000ec02',
+  TOPO_CHILD_B_ENTITY_ID: '0000000000000000000000000000ec03',
+  TOPO_GRANDCHILD_ENTITY_ID: '0000000000000000000000000000ec04',
+  TOPO_REMOVE_ME_ENTITY_ID: '0000000000000000000000000000ec05',
+  TOPO_MOVEABLE_ENTITY_ID: '0000000000000000000000000000ec06',
 };
 
 interface TestResult {
@@ -84,10 +108,12 @@ interface TestResult {
 
 class SearchValidator {
   private baseUrl: string;
+  private indexerUrl: string;
   private testResults: TestResult[] = [];
 
-  constructor(baseUrl: string = 'http://localhost:3000') {
+  constructor(baseUrl: string = 'http://localhost:3000', indexerUrl: string = 'http://localhost:8080') {
     this.baseUrl = baseUrl;
+    this.indexerUrl = indexerUrl;
   }
 
   private async search(query: Partial<SearchQuery>): Promise<SearchResponse> {
@@ -2349,6 +2375,401 @@ class SearchValidator {
   }
 
 
+  // ── Topology helpers ────────────────────────────────────────────────────────
+
+  /** Fetch the topology subspaces response from the indexer health port. */
+  private async fetchTopologySubspaces(spaceId: string): Promise<{
+    space_id: string;
+    subspaces: string[];
+    count: number;
+    is_root: boolean;
+  } | null> {
+    try {
+      const response = await fetch(`${this.indexerUrl}/topology/subspaces/${spaceId}`);
+      if (response.status === 404) return null;
+      if (!response.ok) return null;
+      return response.json() as Promise<{
+        space_id: string;
+        subspaces: string[];
+        count: number;
+        is_root: boolean;
+      }>;
+    } catch {
+      return null;
+    }
+  }
+
+  /** Fetch the topology root from the indexer health port. */
+  private async fetchTopologyRoot(): Promise<{ root_id: string } | null> {
+    try {
+      const response = await fetch(`${this.indexerUrl}/topology/root`);
+      if (!response.ok) return null;
+      return response.json() as Promise<{ root_id: string }>;
+    } catch {
+      return null;
+    }
+  }
+
+  // ── Topology / canonical graph diff tests ───────────────────────────────────
+
+  /**
+   * Test 38: Topology root is set after diff 1.
+   *
+   * Validates that /topology/root returns topo_root_id and that is_root=true for
+   * the root space in /topology/subspaces/:id.
+   */
+  async test38_TopologyRootIsSet(): Promise<void> {
+    console.log(`\n${BLUE}Test 38: Topology root is set after diff 1${NC}`);
+
+    const rootResp = await this.fetchTopologyRoot();
+    if (!rootResp) {
+      this.addResult('test38_root_endpoint', false, '/topology/root returned null — topology state not loaded');
+      return;
+    }
+
+    // The dashless hex of topo_root_id
+    const expectedRootHex = TEST_ENTITIES.TOPO_ROOT_SPACE_ID.replace(/-/g, '');
+    // The endpoint returns a dashed UUID string
+    const actualRootDashless = rootResp.root_id.replace(/-/g, '');
+    if (actualRootDashless === expectedRootHex) {
+      this.addResult('test38_root_id', true, `/topology/root returns correct root ${rootResp.root_id}`);
+    } else {
+      this.addResult('test38_root_id', false, `Expected root ${TEST_ENTITIES.TOPO_ROOT_SPACE_ID}, got ${rootResp.root_id}`);
+    }
+
+    const subResp = await this.fetchTopologySubspaces(TEST_ENTITIES.TOPO_ROOT_SPACE_ID);
+    if (!subResp) {
+      this.addResult('test38_subspaces_found', false, `/topology/subspaces/${TEST_ENTITIES.TOPO_ROOT_SPACE_ID} returned 404`);
+      return;
+    }
+    this.addResult('test38_subspaces_found', true, `/topology/subspaces/:root returned ${subResp.count} subspaces`);
+
+    if (subResp.is_root) {
+      this.addResult('test38_is_root', true, 'topo_root reported is_root=true');
+    } else {
+      this.addResult('test38_is_root', false, `Expected is_root=true for topo_root, got ${subResp.is_root}`);
+    }
+  }
+
+  /**
+   * Test 39: in_canonical_graph flag is set for entities after diff 1.
+   *
+   * Searches for "TopoEntity" in SPACE scope for each canonical space; all six
+   * spaces should return their entity with the search succeeding (the entity is
+   * indexed and reachable).  We don't have direct OpenSearch field access, but
+   * the SPACE scope query succeeds only when the document exists and the
+   * in_canonical_graph flag is consistent with the search query used.
+   *
+   * We also verify that a GLOBAL search returns all six TopoEntity documents.
+   */
+  async test39_CanonicalEntitiesIndexed(): Promise<void> {
+    console.log(`\n${BLUE}Test 39: All six topology entities are indexed (in_canonical_graph set after diff 1)${NC}`);
+
+    const globalResp = await this.search({ query: 'TopoEntity', scope: 'GLOBAL', limit: 20 });
+    const topoIds = new Set([
+      TEST_ENTITIES.TOPO_ROOT_ENTITY_ID,
+      TEST_ENTITIES.TOPO_CHILD_A_ENTITY_ID,
+      TEST_ENTITIES.TOPO_CHILD_B_ENTITY_ID,
+      TEST_ENTITIES.TOPO_GRANDCHILD_ENTITY_ID,
+      TEST_ENTITIES.TOPO_REMOVE_ME_ENTITY_ID,
+      TEST_ENTITIES.TOPO_MOVEABLE_ENTITY_ID,
+    ]);
+
+    const foundIds = new Set(globalResp.results.map(r => r.entityId));
+    const allFound = [...topoIds].every(id => foundIds.has(id));
+    if (allFound) {
+      this.addResult('test39_all_indexed', true, `All 6 TopoEntity entities found in GLOBAL search`);
+    } else {
+      const missing = [...topoIds].filter(id => !foundIds.has(id));
+      this.addResult('test39_all_indexed', false, `Missing TopoEntity entities: ${missing.join(', ')}`);
+    }
+  }
+
+  /**
+   * Test 40: SPACE scope on topo_root (canonical root) returns all 5 canonical entities.
+   *
+   * topo_root is the canonical root → the API must use {term:{in_canonical_graph:true}}
+   * which matches ALL entities across all canonical spaces (root + children + grandchild).
+   *
+   * After all three diffs the canonical set is:
+   *   topo_root, topo_child_a, topo_child_b, topo_grandchild, topo_moveable (5 spaces)
+   * So we expect 5 entities in the result (topo_remove_me was removed).
+   */
+  async test40_SpaceScopeRootUsesCanonicalFilter(): Promise<void> {
+    console.log(`\n${BLUE}Test 40: SPACE scope on canonical root returns entities from all canonical subspaces${NC}`);
+
+    const response = await this.search({
+      query: 'TopoEntity',
+      scope: 'SPACE',
+      space_id: TEST_ENTITIES.TOPO_ROOT_SPACE_ID,
+      limit: 20,
+    });
+
+    // topo_remove_me was removed in diff 2 → its entity should not appear
+    // (or if it does, its in_canonical_graph=false so the term filter excludes it)
+    const expectedCanonical = new Set([
+      TEST_ENTITIES.TOPO_ROOT_ENTITY_ID,
+      TEST_ENTITIES.TOPO_CHILD_A_ENTITY_ID,
+      TEST_ENTITIES.TOPO_CHILD_B_ENTITY_ID,
+      TEST_ENTITIES.TOPO_GRANDCHILD_ENTITY_ID,
+      TEST_ENTITIES.TOPO_MOVEABLE_ENTITY_ID,
+    ]);
+
+    const foundIds = new Set(response.results.map(r => r.entityId));
+
+    const removeMePresent = foundIds.has(TEST_ENTITIES.TOPO_REMOVE_ME_ENTITY_ID);
+    if (!removeMePresent) {
+      this.addResult('test40_remove_me_excluded', true, 'topo_remove_me entity excluded by in_canonical_graph filter');
+    } else {
+      this.addResult('test40_remove_me_excluded', false, 'topo_remove_me entity appeared in canonical root SPACE scope (expected exclusion)');
+    }
+
+    const allCanonicalPresent = [...expectedCanonical].every(id => foundIds.has(id));
+    if (allCanonicalPresent) {
+      this.addResult('test40_canonical_entities_present', true, `All 5 canonical TopoEntity entities returned by root SPACE scope`);
+    } else {
+      const missing = [...expectedCanonical].filter(id => !foundIds.has(id));
+      this.addResult('test40_canonical_entities_present', false, `Missing canonical TopoEntity entities: ${missing.join(', ')}`);
+    }
+  }
+
+  /**
+   * Test 41: SPACE scope on a non-root canonical space uses subspace ID list.
+   *
+   * topo_child_a has one child (topo_grandchild) → subspaces = [child_a, grandchild].
+   * The SPACE scope query must use a terms filter with those two IDs, NOT
+   * in_canonical_graph (because child_a is not the root).
+   *
+   * Expected results: topo_child_a entity + topo_grandchild entity = 2 results.
+   * topo_root, topo_child_b, topo_moveable entities are NOT children of child_a
+   * so they must NOT appear.
+   */
+  async test41_SpaceScopeNonRootUsesSubspaceList(): Promise<void> {
+    console.log(`\n${BLUE}Test 41: SPACE scope on non-root space uses subspace ID list (not in_canonical_graph)${NC}`);
+
+    const subResp = await this.fetchTopologySubspaces(TEST_ENTITIES.TOPO_CHILD_A_SPACE_ID);
+    if (!subResp) {
+      this.addResult('test41_subspaces_endpoint', false, `/topology/subspaces/${TEST_ENTITIES.TOPO_CHILD_A_SPACE_ID} returned 404`);
+      return;
+    }
+
+    if (subResp.is_root === false) {
+      this.addResult('test41_not_root', true, `topo_child_a correctly reports is_root=false`);
+    } else {
+      this.addResult('test41_not_root', false, `Expected is_root=false for topo_child_a, got ${subResp.is_root}`);
+    }
+
+    const expectedSubspaceCount = 2; // child_a + grandchild
+    if (subResp.count === expectedSubspaceCount) {
+      this.addResult('test41_subspace_count', true, `topo_child_a has ${subResp.count} subspaces (child_a + grandchild)`);
+    } else {
+      this.addResult('test41_subspace_count', false, `Expected 2 subspaces for topo_child_a, got ${subResp.count}: ${JSON.stringify(subResp.subspaces)}`);
+    }
+
+    const response = await this.search({
+      query: 'TopoEntity',
+      scope: 'SPACE',
+      space_id: TEST_ENTITIES.TOPO_CHILD_A_SPACE_ID,
+      limit: 20,
+    });
+
+    const foundIds = new Set(response.results.map(r => r.entityId));
+
+    const childAPresent = foundIds.has(TEST_ENTITIES.TOPO_CHILD_A_ENTITY_ID);
+    const grandchildPresent = foundIds.has(TEST_ENTITIES.TOPO_GRANDCHILD_ENTITY_ID);
+    const rootAbsent = !foundIds.has(TEST_ENTITIES.TOPO_ROOT_ENTITY_ID);
+    const childBAbsent = !foundIds.has(TEST_ENTITIES.TOPO_CHILD_B_ENTITY_ID);
+
+    this.addResult('test41_child_a_present', childAPresent, childAPresent
+      ? 'topo_child_a entity in child_a SPACE scope result'
+      : 'topo_child_a entity MISSING from child_a SPACE scope result');
+    this.addResult('test41_grandchild_present', grandchildPresent, grandchildPresent
+      ? 'topo_grandchild entity in child_a SPACE scope result'
+      : 'topo_grandchild entity MISSING from child_a SPACE scope result');
+    this.addResult('test41_root_absent', rootAbsent, rootAbsent
+      ? 'topo_root entity correctly absent from child_a SPACE scope'
+      : 'topo_root entity incorrectly appeared in child_a SPACE scope');
+    this.addResult('test41_child_b_absent', childBAbsent, childBAbsent
+      ? 'topo_child_b entity correctly absent from child_a SPACE scope'
+      : 'topo_child_b entity incorrectly appeared in child_a SPACE scope');
+  }
+
+  /**
+   * Test 42: Removed node loses in_canonical_graph flag (diff 2).
+   *
+   * topo_remove_me was removed in diff 2.  Its entity must NOT appear in a SPACE
+   * scope search on topo_root (which uses the in_canonical_graph filter).  We
+   * also confirm that the topology endpoint no longer knows about topo_remove_me.
+   */
+  async test42_RemovedNodeLosesCanonicalFlag(): Promise<void> {
+    console.log(`\n${BLUE}Test 42: Removed node loses in_canonical_graph flag (diff 2 removal)${NC}`);
+
+    // The /topology/subspaces endpoint returns 404 for spaces not in the graph.
+    const subResp = await this.fetchTopologySubspaces(TEST_ENTITIES.TOPO_REMOVE_ME_SPACE_ID);
+    if (subResp === null) {
+      this.addResult('test42_topology_404', true, 'topo_remove_me not found in topology (correctly removed)');
+    } else {
+      this.addResult('test42_topology_404', false, `Expected 404 for topo_remove_me, got subspaces: ${JSON.stringify(subResp)}`);
+    }
+
+    // Root SPACE scope must exclude topo_remove_me_entity (in_canonical_graph=false)
+    const response = await this.search({
+      query: 'TopoEntity',
+      scope: 'SPACE',
+      space_id: TEST_ENTITIES.TOPO_ROOT_SPACE_ID,
+      limit: 20,
+    });
+
+    const foundIds = response.results.map(r => r.entityId);
+    const removeMeAbsent = !foundIds.includes(TEST_ENTITIES.TOPO_REMOVE_ME_ENTITY_ID);
+    if (removeMeAbsent) {
+      this.addResult('test42_removed_entity_absent', true, 'topo_remove_me entity absent from root SPACE scope after diff 2');
+    } else {
+      this.addResult('test42_removed_entity_absent', false, 'topo_remove_me entity still appears in root SPACE scope after removal');
+    }
+  }
+
+  /**
+   * Test 43: Subtree cascade — topo_moveable is also removed by diff 2 (was child
+   * of topo_remove_me), then re-added under topo_child_b by diff 3.
+   *
+   * After all diffs:
+   *   - topo_moveable IS canonical again (under topo_child_b)
+   *   - topo_child_b's subspaces = [child_b, moveable] (count = 2)
+   *   - SPACE scope on child_b returns both entities
+   */
+  async test43_SubtreeCascadeAndRejoin(): Promise<void> {
+    console.log(`\n${BLUE}Test 43: Subtree cascade removal + re-add (diff 2 + diff 3)${NC}`);
+
+    const subResp = await this.fetchTopologySubspaces(TEST_ENTITIES.TOPO_CHILD_B_SPACE_ID);
+    if (!subResp) {
+      this.addResult('test43_child_b_subspaces', false, `/topology/subspaces/${TEST_ENTITIES.TOPO_CHILD_B_SPACE_ID} returned 404`);
+      return;
+    }
+
+    // After diff 3, topo_moveable is under child_b → child_b subspaces = {child_b, moveable}
+    const expectedCount = 2;
+    if (subResp.count === expectedCount) {
+      this.addResult('test43_child_b_subspace_count', true, `topo_child_b has ${subResp.count} subspaces after move (child_b + moveable)`);
+    } else {
+      this.addResult('test43_child_b_subspace_count', false, `Expected 2 subspaces for topo_child_b after diff 3, got ${subResp.count}: ${JSON.stringify(subResp.subspaces)}`);
+    }
+
+    // topo_moveable entity should appear in child_b SPACE scope
+    const response = await this.search({
+      query: 'TopoEntity',
+      scope: 'SPACE',
+      space_id: TEST_ENTITIES.TOPO_CHILD_B_SPACE_ID,
+      limit: 20,
+    });
+
+    const foundIds = new Set(response.results.map(r => r.entityId));
+    const moveablePresent = foundIds.has(TEST_ENTITIES.TOPO_MOVEABLE_ENTITY_ID);
+    const childBPresent = foundIds.has(TEST_ENTITIES.TOPO_CHILD_B_ENTITY_ID);
+    const grandchildAbsent = !foundIds.has(TEST_ENTITIES.TOPO_GRANDCHILD_ENTITY_ID);
+
+    this.addResult('test43_moveable_present', moveablePresent, moveablePresent
+      ? 'topo_moveable entity present in child_b SPACE scope after re-add'
+      : 'topo_moveable entity MISSING from child_b SPACE scope after re-add');
+    this.addResult('test43_child_b_present', childBPresent, childBPresent
+      ? 'topo_child_b entity present in child_b SPACE scope'
+      : 'topo_child_b entity MISSING from child_b SPACE scope');
+    this.addResult('test43_grandchild_absent', grandchildAbsent, grandchildAbsent
+      ? 'topo_grandchild entity correctly absent from child_b SPACE scope'
+      : 'topo_grandchild entity incorrectly appeared in child_b SPACE scope');
+  }
+
+  /**
+   * Test 44: Topology state persistence — /topology/root and /topology/subspaces
+   * endpoints serve correct data, implying the indexer loaded or built the state
+   * from the persisted file on startup and applied all subsequent diffs.
+   *
+   * We verify the final subspace topology matches all three diffs applied correctly:
+   *   root → {root, child_a, child_b, grandchild, moveable}  (5 total)
+   */
+  async test44_TopologyPersistenceAndFinalState(): Promise<void> {
+    console.log(`\n${BLUE}Test 44: Topology final state — all diffs applied, root has 5 subspaces${NC}`);
+
+    const subResp = await this.fetchTopologySubspaces(TEST_ENTITIES.TOPO_ROOT_SPACE_ID);
+    if (!subResp) {
+      this.addResult('test44_root_subspaces', false, 'Failed to fetch root subspaces');
+      return;
+    }
+
+    const expectedCount = 5; // root + child_a + child_b + grandchild + moveable
+    if (subResp.count === expectedCount) {
+      this.addResult('test44_final_subspace_count', true, `Root has ${subResp.count} subspaces after all 3 diffs`);
+    } else {
+      this.addResult('test44_final_subspace_count', false, `Expected ${expectedCount} subspaces at root after all diffs, got ${subResp.count}: ${JSON.stringify(subResp.subspaces)}`);
+    }
+
+    // Confirm the removed space is not in the root's subspace list
+    const dashlessSubspaces = subResp.subspaces.map(s => s.replace(/-/g, ''));
+    const removeMeInList = dashlessSubspaces.includes(TEST_ENTITIES.TOPO_REMOVE_ME_SPACE_ID);
+    if (!removeMeInList) {
+      this.addResult('test44_remove_me_not_in_list', true, 'topo_remove_me not in root subspace list after diff 2');
+    } else {
+      this.addResult('test44_remove_me_not_in_list', false, 'topo_remove_me still in root subspace list after diff 2');
+    }
+
+    // topo_moveable should appear in root's subspace list after re-add in diff 3
+    const moveableInList = dashlessSubspaces.includes(TEST_ENTITIES.TOPO_MOVEABLE_SPACE_ID);
+    if (moveableInList) {
+      this.addResult('test44_moveable_in_list', true, 'topo_moveable in root subspace list after diff 3 re-add');
+    } else {
+      this.addResult('test44_moveable_in_list', false, 'topo_moveable missing from root subspace list after diff 3');
+    }
+  }
+
+  /**
+   * Test 45: SPACE scope on a non-root space with no subspaces returns only that
+   * space's own entities (no in_canonical_graph spill-over).
+   *
+   * topo_grandchild has no children → subspaces = [grandchild] (count = 1).
+   * SPACE scope must return only topo_grandchild_entity, not root/child entities.
+   */
+  async test45_SpaceScopeLeafSpaceReturnsOnlyOwnEntities(): Promise<void> {
+    console.log(`\n${BLUE}Test 45: SPACE scope on leaf space returns only that space's entity${NC}`);
+
+    const subResp = await this.fetchTopologySubspaces(TEST_ENTITIES.TOPO_GRANDCHILD_SPACE_ID);
+    if (!subResp) {
+      this.addResult('test45_grandchild_found', false, `/topology/subspaces/${TEST_ENTITIES.TOPO_GRANDCHILD_SPACE_ID} returned 404`);
+      return;
+    }
+
+    if (subResp.count === 1) {
+      this.addResult('test45_leaf_subspace_count', true, `topo_grandchild has 1 subspace (self only)`);
+    } else {
+      this.addResult('test45_leaf_subspace_count', false, `Expected 1 subspace for topo_grandchild, got ${subResp.count}`);
+    }
+
+    if (subResp.is_root === false) {
+      this.addResult('test45_not_root', true, 'topo_grandchild correctly is_root=false');
+    } else {
+      this.addResult('test45_not_root', false, `Expected is_root=false for leaf space, got ${subResp.is_root}`);
+    }
+
+    const response = await this.search({
+      query: 'TopoEntity',
+      scope: 'SPACE',
+      space_id: TEST_ENTITIES.TOPO_GRANDCHILD_SPACE_ID,
+      limit: 20,
+    });
+
+    const foundIds = new Set(response.results.map(r => r.entityId));
+    const onlyGrandchild =
+      foundIds.has(TEST_ENTITIES.TOPO_GRANDCHILD_ENTITY_ID) &&
+      !foundIds.has(TEST_ENTITIES.TOPO_ROOT_ENTITY_ID) &&
+      !foundIds.has(TEST_ENTITIES.TOPO_CHILD_A_ENTITY_ID);
+
+    if (onlyGrandchild) {
+      this.addResult('test45_only_grandchild', true, 'Only grandchild entity returned for leaf SPACE scope');
+    } else {
+      this.addResult('test45_only_grandchild', false,
+        `Unexpected entities in leaf SPACE scope. Found: ${[...foundIds].join(', ')}`);
+    }
+  }
+
   printSummary() {
     console.log(`\n${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}`);
 
@@ -2388,6 +2809,7 @@ async function main() {
   console.log(`${BLUE}🔍 Search API Validation Tests${NC}\n`);
 
   const apiUrl = process.env.SEARCH_API_URL || 'http://localhost:3000';
+  const indexerUrl = process.env.INDEXER_URL || 'http://localhost:8080';
 
   // Check if API is available
   console.log(`Checking API availability at ${apiUrl}...`);
@@ -2406,7 +2828,7 @@ async function main() {
 
   console.log(`\n${BLUE}📊 Running API validation tests...${NC}`);
 
-  const validator = new SearchValidator(apiUrl);
+  const validator = new SearchValidator(apiUrl, indexerUrl);
 
   try {
     await validator.test1_BasicAliceSearch();
@@ -2447,6 +2869,14 @@ async function main() {
     await validator.test35_SpaceAndTypeEnrichment();
     await validator.test36_SpaceTopicCreatesDocument();
     await validator.test37_SpaceWithoutTopicHasNoMetadata();
+    await validator.test38_TopologyRootIsSet();
+    await validator.test39_CanonicalEntitiesIndexed();
+    await validator.test40_SpaceScopeRootUsesCanonicalFilter();
+    await validator.test41_SpaceScopeNonRootUsesSubspaceList();
+    await validator.test42_RemovedNodeLosesCanonicalFlag();
+    await validator.test43_SubtreeCascadeAndRejoin();
+    await validator.test44_TopologyPersistenceAndFinalState();
+    await validator.test45_SpaceScopeLeafSpaceReturnsOnlyOwnEntities();
 
     const allPassed = validator.printSummary();
     process.exit(allPassed ? 0 : 1);

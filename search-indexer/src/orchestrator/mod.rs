@@ -3,16 +3,19 @@
 //! Coordinates the consumer, processor, and loader components.
 
 use async_trait::async_trait;
+use hermes_instrumentation::{error, info, instrument};
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use tokio::sync::{broadcast, mpsc};
 use tokio::time::{interval, Duration};
-use hermes_instrumentation::{error, info, instrument};
 
 #[cfg(unix)]
 use tokio::signal::unix::{signal, SignalKind};
 
-use crate::consumer::{EntitiesConsumer, EntityEvent, ScoresConsumer, SpaceTopicsConsumer, StreamMessage};
+use crate::consumer::{
+    EntitiesConsumer, EntityEvent, ParsedCanonicalGraphDiff, ScoresConsumer, SpaceTopicsConsumer,
+    StreamMessage, TopologyConsumer,
+};
 use crate::errors::IngestError;
 use crate::loader::SearchLoader;
 use crate::metrics::SearchIndexerMetrics;
@@ -89,6 +92,22 @@ pub trait SpaceTopicsConsumerTrait: Send + Sync {
     ) -> Result<(), IngestError>;
 }
 
+/// Trait for topology event consumers used by the orchestrator.
+/// This allows for dependency injection and testing with mock consumers.
+#[async_trait::async_trait]
+pub trait TopologyConsumerTrait: Send + Sync {
+    /// Subscribe to the configured topics/channels.
+    fn subscribe(&self) -> Result<(), IngestError>;
+
+    /// Run the consumer, sending events to processor and receiving acknowledgments from loader.
+    async fn run(
+        &self,
+        processor_tx: mpsc::Sender<TopologyProcessingBatch>,
+        ack_receiver: mpsc::Receiver<StreamMessage>,
+        shutdown: tokio::sync::broadcast::Receiver<()>,
+    ) -> Result<(), IngestError>;
+}
+
 /// Configuration for the orchestrator.
 #[derive(Debug, Clone)]
 pub struct OrchestratorConfig {
@@ -102,6 +121,7 @@ pub enum BatchSource {
     Entity,
     Score,
     SpaceTopic,
+    Topology,
 }
 
 /// Processed batch ready for loading with associated offsets for acknowledgment.
@@ -137,12 +157,20 @@ pub struct SpaceTopicProcessingBatch {
     pub event_count: usize,               // Number of events for metrics
 }
 
+/// Batch of topology diffs to be processed with their offsets.
+#[derive(Debug, Clone)]
+pub struct TopologyProcessingBatch {
+    pub diffs: Vec<ParsedCanonicalGraphDiff>,
+    pub offsets: Vec<(String, i32, i64)>, // Kafka offsets for acknowledgment
+    pub event_count: usize,               // Number of node changes for metrics
+}
+
 // ProcessingResult is no longer needed - processor sends directly to loader
 
 impl Default for OrchestratorConfig {
     fn default() -> Self {
         Self {
-            channel_buffer_size: 10,
+            channel_buffer_size: 5,
         }
     }
 }
@@ -150,13 +178,13 @@ impl Default for OrchestratorConfig {
 impl OrchestratorConfig {
     /// Build config from environment variables.
     ///
-    /// - `CHANNEL_BUFFER_SIZE`: Max batches in flight per channel (default: 10).
+    /// - `CHANNEL_BUFFER_SIZE`: Max batches in flight per channel (default: 5).
     ///   Use a smaller value when memory is limited to avoid OOM on large backlogs.
     pub fn from_env() -> Self {
         let channel_buffer_size = std::env::var("CHANNEL_BUFFER_SIZE")
             .ok()
             .and_then(|s| s.parse::<usize>().ok())
-            .unwrap_or(10);
+            .unwrap_or(5);
         Self {
             channel_buffer_size,
         }
@@ -184,6 +212,7 @@ pub struct Orchestrator {
     entities_consumer: Arc<dyn EntitiesConsumerTrait>,
     scores_consumer: Arc<dyn ScoresConsumerTrait>,
     space_topics_consumer: Arc<dyn SpaceTopicsConsumerTrait>,
+    topology_consumer: Arc<dyn TopologyConsumerTrait>,
     processor: Processor,
     loader: SearchLoader,
     config: OrchestratorConfig,
@@ -197,6 +226,7 @@ impl Orchestrator {
         entities_consumer: Arc<dyn EntitiesConsumerTrait>,
         scores_consumer: Arc<dyn ScoresConsumerTrait>,
         space_topics_consumer: Arc<dyn SpaceTopicsConsumerTrait>,
+        topology_consumer: Arc<dyn TopologyConsumerTrait>,
         processor: Processor,
         loader: SearchLoader,
     ) -> Self {
@@ -206,6 +236,7 @@ impl Orchestrator {
             entities_consumer,
             scores_consumer,
             space_topics_consumer,
+            topology_consumer,
             processor,
             loader,
             config: OrchestratorConfig::default(),
@@ -219,6 +250,7 @@ impl Orchestrator {
         entities_consumer: Arc<dyn EntitiesConsumerTrait>,
         scores_consumer: Arc<dyn ScoresConsumerTrait>,
         space_topics_consumer: Arc<dyn SpaceTopicsConsumerTrait>,
+        topology_consumer: Arc<dyn TopologyConsumerTrait>,
         processor: Processor,
         loader: SearchLoader,
         config: OrchestratorConfig,
@@ -229,6 +261,7 @@ impl Orchestrator {
             entities_consumer,
             scores_consumer,
             space_topics_consumer,
+            topology_consumer,
             processor,
             loader,
             config,
@@ -249,6 +282,7 @@ impl Orchestrator {
         let entities_consumer = self.entities_consumer;
         let scores_consumer = self.scores_consumer;
         let space_topics_consumer = self.space_topics_consumer;
+        let topology_consumer = self.topology_consumer;
         let processor = self.processor;
         let loader = self.loader;
         let config = self.config;
@@ -268,8 +302,19 @@ impl Orchestrator {
         space_topics_consumer.subscribe()?;
         info!("Space topics consumer subscribed");
 
+        topology_consumer.subscribe()?;
+        info!("Topology consumer subscribed");
+
         // Create channels for direct component-to-component communication:
         // Consumer -> Processor -> Loader -> Consumer (for acks)
+        //
+        // ACK channels use a large buffer to prevent deadlock: consumers block
+        // on processor_tx.send() inside flush_batch (within a select! arm),
+        // during which they cannot drain ACKs. If the ACK channel fills, the
+        // loader blocks on ack_tx.send(), which stalls the loader channel,
+        // which stalls the processor, creating a circular wait. A large ACK
+        // buffer breaks this cycle. ACKs are small (offset metadata only).
+        let ack_buffer_size = config.channel_buffer_size * 20;
 
         // Channel from entities consumer to processor
         let (entities_processor_tx, entities_processor_rx) =
@@ -280,7 +325,7 @@ impl Orchestrator {
 
         // Channel from loader back to entities consumer (for acknowledgments)
         let (entities_ack_tx, entities_ack_rx) =
-            mpsc::channel::<StreamMessage>(config.channel_buffer_size);
+            mpsc::channel::<StreamMessage>(ack_buffer_size);
 
         // Channels from scores consumer to processor
         let (scores_processor_tx, scores_processor_rx) =
@@ -288,7 +333,7 @@ impl Orchestrator {
 
         // Channel from loader back to scores consumer (for acknowledgments)
         let (scores_ack_tx, scores_ack_rx) =
-            mpsc::channel::<StreamMessage>(config.channel_buffer_size);
+            mpsc::channel::<StreamMessage>(ack_buffer_size);
 
         // Channels from space topics consumer to processor
         let (space_topics_processor_tx, space_topics_processor_rx) =
@@ -296,7 +341,15 @@ impl Orchestrator {
 
         // Channel from loader back to space topics consumer (for acknowledgments)
         let (space_topics_ack_tx, space_topics_ack_rx) =
-            mpsc::channel::<StreamMessage>(config.channel_buffer_size);
+            mpsc::channel::<StreamMessage>(ack_buffer_size);
+
+        // Channels from topology consumer to processor
+        let (topology_processor_tx, topology_processor_rx) =
+            mpsc::channel::<TopologyProcessingBatch>(config.channel_buffer_size);
+
+        // Channel from loader back to topology consumer (for acknowledgments)
+        let (topology_ack_tx, topology_ack_rx) =
+            mpsc::channel::<StreamMessage>(ack_buffer_size);
 
         // Clone senders for components that need them
         let entities_processor_tx_for_consumer = entities_processor_tx.clone();
@@ -307,16 +360,20 @@ impl Orchestrator {
         let scores_ack_tx_for_loader = scores_ack_tx.clone();
         let space_topics_ack_tx_for_processor = space_topics_ack_tx.clone();
         let space_topics_ack_tx_for_loader = space_topics_ack_tx.clone();
+        let topology_ack_tx_for_processor = topology_ack_tx.clone();
+        let topology_ack_tx_for_loader = topology_ack_tx.clone();
 
         // Start processor task - receives from all consumers, sends to loader
         let processor_handle = processor.run(
             entities_processor_rx,
             scores_processor_rx,
             space_topics_processor_rx,
+            topology_processor_rx,
             loader_tx_for_processor,
             entities_ack_tx_for_processor,
             scores_ack_tx_for_processor,
             space_topics_ack_tx_for_processor,
+            topology_ack_tx_for_processor,
             Arc::clone(&metrics),
         );
 
@@ -357,18 +414,29 @@ impl Orchestrator {
         // So that we can await it later on shutdown
         tokio::pin!(space_topics_consumer_handle);
 
+        // Start topology consumer task
+        let topology_consumer_clone = Arc::clone(&topology_consumer);
+        let shutdown_rx = shutdown_tx.subscribe();
+        let topology_consumer_handle = tokio::spawn(async move {
+            topology_consumer_clone
+                .run(topology_processor_tx, topology_ack_rx, shutdown_rx)
+                .await
+        });
+        tokio::pin!(topology_consumer_handle);
+
         // Start loader task - receives from processor, sends acks to appropriate consumer
         let loader_handle = loader.run(
             loader_rx,
             entities_ack_tx_for_loader,
             scores_ack_tx_for_loader,
             space_topics_ack_tx_for_loader,
+            topology_ack_tx_for_loader,
             Arc::clone(&metrics),
         );
 
         // Orchestrator now just monitors for shutdown and metrics
         // Components communicate directly with each other
-        info!("Ready to process events from Kafka (entities + scores + space topics) - components communicating directly");
+        info!("Ready to process events from Kafka (entities + scores + space topics + topology) - components communicating directly");
 
         // Set up progress logging timer (every 10 seconds)
         let metrics_ref = Arc::clone(&metrics);
@@ -394,6 +462,9 @@ impl Orchestrator {
             Result<Result<(), IngestError>, tokio::task::JoinError>,
         > = None;
         let mut space_topics_consumer_result: Option<
+            Result<Result<(), IngestError>, tokio::task::JoinError>,
+        > = None;
+        let mut topology_consumer_result: Option<
             Result<Result<(), IngestError>, tokio::task::JoinError>,
         > = None;
 
@@ -442,6 +513,13 @@ impl Orchestrator {
                     // Space topics consumer task completed (either finished or errored)
                     error!("Space topics consumer completed unexpectedly, initiating shutdown");
                     space_topics_consumer_result = Some(result);
+                    let _ = shutdown_tx.send(());
+                    break;
+                }
+                result = &mut topology_consumer_handle => {
+                    // Topology consumer task completed (either finished or errored)
+                    error!("Topology consumer completed unexpectedly, initiating shutdown");
+                    topology_consumer_result = Some(result);
                     let _ = shutdown_tx.send(());
                     break;
                 }
@@ -543,6 +621,14 @@ impl Orchestrator {
         drop(entities_ack_tx);
         drop(scores_ack_tx);
         drop(space_topics_ack_tx);
+        drop(topology_ack_tx);
+
+        // Wait for topology consumer to finish (if we don't already have its result)
+        let topology_consumer_final_result = match topology_consumer_result {
+            Some(result) => result,
+            None => topology_consumer_handle.await,
+        };
+        info!("Topology consumer shutdown complete");
 
         // Wait for space topics consumer to finish (if we don't already have its result)
         let space_topics_consumer_final_result = match space_topics_consumer_result {
@@ -577,7 +663,14 @@ impl Orchestrator {
         match entities_consumer_final_result {
             Ok(Ok(())) => match scores_consumer_final_result {
                 Ok(Ok(())) => match space_topics_consumer_final_result {
-                    Ok(Ok(())) => Ok(()),
+                    Ok(Ok(())) => match topology_consumer_final_result {
+                        Ok(Ok(())) => Ok(()),
+                        Ok(Err(e)) => Err(e),
+                        Err(join_error) => Err(IngestError::OrchestratorError(format!(
+                            "Topology consumer task panicked: {}",
+                            join_error
+                        ))),
+                    },
                     Ok(Err(e)) => Err(e),
                     Err(join_error) => Err(IngestError::OrchestratorError(format!(
                         "Space topics consumer task panicked: {}",
@@ -640,6 +733,22 @@ impl SpaceTopicsConsumerTrait for SpaceTopicsConsumer {
     async fn run(
         &self,
         processor_tx: mpsc::Sender<SpaceTopicProcessingBatch>,
+        ack_receiver: mpsc::Receiver<StreamMessage>,
+        shutdown: tokio::sync::broadcast::Receiver<()>,
+    ) -> Result<(), IngestError> {
+        self.run(processor_tx, ack_receiver, shutdown).await
+    }
+}
+
+#[async_trait]
+impl TopologyConsumerTrait for TopologyConsumer {
+    fn subscribe(&self) -> Result<(), IngestError> {
+        self.subscribe()
+    }
+
+    async fn run(
+        &self,
+        processor_tx: mpsc::Sender<TopologyProcessingBatch>,
         ack_receiver: mpsc::Receiver<StreamMessage>,
         shutdown: tokio::sync::broadcast::Receiver<()>,
     ) -> Result<(), IngestError> {

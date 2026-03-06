@@ -84,7 +84,7 @@ See the [search-admin documentation](../search-admin/README.md) for manual index
 | `KAFKA_BATCH_TIMEOUT_MS` | Max wait time before flushing batch (entities consumer, ms) | `1000` |
 | `SCORES_BATCH_SIZE` | Messages to batch before sending (scores consumer) | `10` |
 | `SCORES_BATCH_TIMEOUT_MS` | Max wait time before flushing batch (scores consumer, ms) | `1000` |
-| `CHANNEL_BUFFER_SIZE` | Max batches in flight per channel | `10` |
+| `CHANNEL_BUFFER_SIZE` | Max batches in flight per channel | `5` |
 | `KAFKA_USERNAME` | SASL username for managed Kafka (optional, enables SASL/SSL if set) | - |
 | `KAFKA_PASSWORD` | SASL password for managed Kafka (required if username is set) | - |
 | `KAFKA_SSL_CA_PEM` | Custom CA certificate in PEM format (optional) | - |
@@ -427,9 +427,10 @@ Kafka Broker
 |---------|----------|-----------|----------------|
 | `entities_processor` | `EntityProcessingBatch` | `CHANNEL_BUFFER_SIZE` | `CHANNEL_BUFFER_SIZE` × `KAFKA_BATCH_SIZE` × avg_msg_size |
 | `scores_processor` | `ScoreProcessingBatch` | `CHANNEL_BUFFER_SIZE` | `CHANNEL_BUFFER_SIZE` × `SCORES_BATCH_SIZE` × avg_msg_size |
+| `space_topics_processor` | `SpaceTopicProcessingBatch` | `CHANNEL_BUFFER_SIZE` | `CHANNEL_BUFFER_SIZE` × `SPACE_TOPICS_BATCH_SIZE` × avg_msg_size |
+| `topology_processor` | `TopologyProcessingBatch` | `CHANNEL_BUFFER_SIZE` | `CHANNEL_BUFFER_SIZE` × `TOPOLOGY_BATCH_SIZE` × avg_msg_size |
 | `loader` | `ProcessedBatch` | `CHANNEL_BUFFER_SIZE` | `CHANNEL_BUFFER_SIZE` × max(`KAFKA_BATCH_SIZE`, `SCORES_BATCH_SIZE`) × avg_processed_size |
-| `entities_ack` | `StreamMessage` (offsets only) | `CHANNEL_BUFFER_SIZE` | Negligible (~1 KiB total) |
-| `scores_ack` | `StreamMessage` (offsets only) | `CHANNEL_BUFFER_SIZE` | Negligible (~1 KiB total) |
+| `*_ack` channels | `StreamMessage` (offsets only) | `CHANNEL_BUFFER_SIZE × 20` | Negligible (~1 KiB each) |
 
 ### rdkafka Internal Queue Memory
 
@@ -437,33 +438,82 @@ Kafka Broker
 |-------|--------|
 | entities consumer | 64 MiB |
 | scores consumer | 64 MiB |
-| **Total** | **128 MiB** |
+| space_topics consumer | 64 MiB |
+| topology consumer | 64 MiB |
+| **Total** | **256 MiB** |
 
 This is controlled by rdkafka's `queued.max.messages.kbytes` default (65,536 KiB per consumer).
+
+### Topology State Memory
+
+The canonical graph is held entirely in memory for O(1) lookups. It uses four data structures (`HashSet` for membership, two `HashMap`s for parent/distance, and nested `HashMap<HashSet>` for children). Per canonical space, this costs ~300 bytes due to hash table overhead.
+
+| Canonical Spaces | Topology Memory |
+|------------------|-----------------|
+| 10,000 | ~3 MiB |
+| 100,000 | ~30 MiB |
+| 500,000 | ~150 MiB |
+
+The topology state is also persisted to disk as JSON (see `TOPOLOGY_STATE_PATH`). During persistence, `snapshot()` temporarily allocates a copy of the node list (~36 bytes/node).
+
+### Disk Storage
+
+The topology state is persisted to a JSON file at `TOPOLOGY_STATE_PATH` (default `/data/topology_state.json`). Each node stores two hex-encoded UUIDs (space_id, parent_id) and a distance value, costing ~130 bytes per node on disk.
+
+| Canonical Spaces | File Size |
+|------------------|-----------|
+| 10,000 | ~1.3 MB |
+| 100,000 | ~13 MB |
+| 500,000 | ~65 MB |
+| ~8,000,000 | ~1 Gi |
+
+The Kubernetes StatefulSet provisions a 1 Gi PersistentVolumeClaim at `/data`, which is sufficient for millions of spaces.
 
 ### Total Memory Formula
 
 ```
 Total Memory ≈
-    128 MiB                                                                          # rdkafka queues (fixed)
+    256 MiB                                                                          # rdkafka queues (4 consumers, fixed)
   + (CHANNEL_BUFFER_SIZE × KAFKA_BATCH_SIZE × avg_msg_size)                          # entities_processor
   + (CHANNEL_BUFFER_SIZE × SCORES_BATCH_SIZE × avg_msg_size)                         # scores_processor
   + (CHANNEL_BUFFER_SIZE × max(KAFKA_BATCH_SIZE, SCORES_BATCH_SIZE) × avg_proc_size) # loader
-  + overhead                                                                         # ~50-100 MiB
+  + topology_state                                                                   # ~300 bytes × canonical_spaces
+  + overhead                                                                         # ~100 MiB
 ```
 
-### Example Calculation
+### Example: Typical Case
 
-With production settings (`CHANNEL_BUFFER_SIZE=10`, `KAFKA_BATCH_SIZE=10`, `SCORES_BATCH_SIZE=10`, avg message ~500 KiB):
+With production settings (`CHANNEL_BUFFER_SIZE=5`, `KAFKA_BATCH_SIZE=10`, `SCORES_BATCH_SIZE=10`, avg entity message ~500 KiB, 500K canonical spaces):
 
 | Component | Calculation | Memory |
 |-----------|-------------|--------|
-| rdkafka queues | 64 MiB × 2 consumers | 128 MiB |
-| entities_processor | 10 batches × 10 msgs × 500 KiB | 50 MiB |
-| scores_processor | 10 batches × 10 msgs × 500 KiB | 50 MiB |
-| loader | 10 batches × 10 msgs × 300 KiB (processed) | 30 MiB |
-| Overhead | Runtime, heap fragmentation | 80 MiB |
-| **Total** | | **~338 MiB** |
+| rdkafka queues | 64 MiB × 4 consumers | 256 MiB |
+| entities_processor | 5 batches × 10 msgs × 500 KiB | 25 MiB |
+| scores_processor | 5 batches × 10 msgs × 50 bytes | <1 MiB |
+| space_topics_processor | 5 batches × 10 msgs × 32 bytes | <1 MiB |
+| topology_processor | 5 batches × 10 msgs × 40 KiB | 2 MiB |
+| loader | 5 batches × 10 msgs × 300 KiB (processed) | 15 MiB |
+| Topology state | 500K spaces × ~300 bytes | 150 MiB |
+| Overhead | Runtime, heap fragmentation | 100 MiB |
+| **Total** | | **~550 MiB** |
+
+### Example: Worst Case
+
+With worst-case entity messages at 10 MB, topology diffs with 1,000 changes each, 500K canonical spaces:
+
+| Component | Calculation | Memory |
+|-----------|-------------|--------|
+| rdkafka queues | 64 MiB × 4 consumers | 256 MiB |
+| entities_processor | 5 batches × 10 msgs × 10 MB | 500 MiB |
+| scores_processor | 5 batches × 10 msgs × 50 bytes | <1 MiB |
+| space_topics_processor | 5 batches × 10 msgs × 32 bytes | <1 MiB |
+| topology_processor | 5 batches × 10 msgs × 40 KiB | 2 MiB |
+| loader | 5 batches × 10 msgs × 10 MB | 500 MiB |
+| Topology state | 500K spaces × ~300 bytes | 150 MiB |
+| Overhead | Runtime, heap fragmentation | 100 MiB |
+| **Total** | | **~1,510 MiB** |
+
+Note: rdkafka's 64 MiB per-consumer queue limit throttles intake, so sustained worst-case entity messages cannot fully saturate all channel slots simultaneously. Realistic peak is closer to ~1.2–1.3 GiB.
 ## Error Recovery
 
 ### Reprocessing All Events

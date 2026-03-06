@@ -51,6 +51,9 @@ pub struct UpdateEntityRequest {
     /// The topic entity ID for this entity's space.
     /// Set from the in-memory cache during upserts.
     pub space_topic_entity_id: Option<String>,
+    /// Whether the entity's space is in the canonical graph.
+    /// Set from the in-memory topology state during upserts.
+    pub in_canonical_graph: Option<bool>,
 }
 
 /// Request to delete an entity document from the search index.
@@ -139,6 +142,18 @@ pub struct UpdateSpaceTopicEntityIdRequest {
     pub topic_entity_id: String,
 }
 
+/// Request to update in_canonical_graph for all entities in a space.
+///
+/// This will set the `in_canonical_graph` field for ALL documents
+/// that have the given space_id, using update_by_query.
+#[derive(Debug, Clone)]
+pub struct UpdateInCanonicalGraphRequest {
+    /// The space's unique identifier.
+    pub space_id: String,
+    /// Whether the space is in the canonical graph.
+    pub in_canonical_graph: bool,
+}
+
 /// A single operation in a bulk request.
 ///
 /// This enum represents any operation that can be performed on an entity document.
@@ -166,6 +181,9 @@ pub enum EntityOperation {
     /// Update the space_topic_entity_id for all entities in a space.
     /// Uses update_by_query to set the topic entity ID on all documents in the space.
     UpdateSpaceTopicEntityId(UpdateSpaceTopicEntityIdRequest),
+    /// Update in_canonical_graph for all entities in a space.
+    /// Uses update_by_query to set the boolean field on all documents in the space.
+    UpdateInCanonicalGraph(UpdateInCanonicalGraphRequest),
 }
 
 impl EntityOperation {
@@ -181,6 +199,7 @@ impl EntityOperation {
             EntityOperation::UpdateSpaceScore(_) => "",
             EntityOperation::UpdateEntitySpaceScore(r) => &r.entity_id,
             EntityOperation::UpdateSpaceTopicEntityId(_) => "",
+            EntityOperation::UpdateInCanonicalGraph(_) => "",
         }
     }
 
@@ -196,6 +215,7 @@ impl EntityOperation {
             EntityOperation::UpdateSpaceScore(r) => &r.space_id,
             EntityOperation::UpdateEntitySpaceScore(r) => &r.space_id,
             EntityOperation::UpdateSpaceTopicEntityId(r) => &r.space_id,
+            EntityOperation::UpdateInCanonicalGraph(r) => &r.space_id,
         }
     }
 
@@ -210,6 +230,7 @@ impl EntityOperation {
             EntityOperation::UpdateSpaceScore(_) => "UpdateSpaceScore",
             EntityOperation::UpdateEntitySpaceScore(_) => "UpdateEntitySpaceScore",
             EntityOperation::UpdateSpaceTopicEntityId(_) => "UpdateSpaceTopicEntityId",
+            EntityOperation::UpdateInCanonicalGraph(_) => "UpdateInCanonicalGraph",
         }
     }
 }

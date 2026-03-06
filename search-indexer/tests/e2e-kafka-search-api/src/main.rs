@@ -7,7 +7,8 @@ use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
 use uuid::Uuid;
 
-use generators::{edits, relations, scores, space_topics};
+use generators::{edits, relations, scores, space_topics, topology};
+use generators::topology::{DiffNode, EdgeKind, NodeChangeKind};
 use kafka::KafkaProducer;
 use sdk::core::ids::AVATAR_RELATION_TYPE_ID;
 
@@ -62,12 +63,13 @@ async fn main() -> Result<()> {
     let edits_topic = prefixed_topic("knowledge.edits");
     let scores_topic = prefixed_topic("curation.scores");
     let space_topics_topic = prefixed_topic("space.topics");
+    let topology_topic = prefixed_topic("topology.canonical");
     let topic_prefix = get_topic_prefix();
 
     info!("Topic prefix: '{}'", topic_prefix);
     info!(
-        "Using topics: edits={}, scores={}, space_topics={}",
-        edits_topic, scores_topic, space_topics_topic
+        "Using topics: edits={}, scores={}, space_topics={}, topology={}",
+        edits_topic, scores_topic, space_topics_topic, topology_topic
     );
 
     // Create Kafka producer
@@ -152,6 +154,36 @@ async fn main() -> Result<()> {
     let geo_exact_id = Uuid::parse_str("00000000-0000-0000-0000-00000000bb01").unwrap();
     let geo_prefix_id = Uuid::parse_str("00000000-0000-0000-0000-00000000bb02").unwrap();
     let geo_graph_id = Uuid::parse_str("00000000-0000-0000-0000-00000000bb03").unwrap();
+
+    // Topology test spaces (fixed IDs for validation)
+    // Tree layout:
+    //   topo_root (d=0)
+    //     ├── topo_child_a (verified, d=1)
+    //     │     └── topo_grandchild (verified, d=2)
+    //     └── topo_child_b (related, d=1)
+    //
+    // Entities are created in each space so in_canonical_graph can be validated.
+    // topo_root is also used as the canonical root → its SPACE scope query must use
+    // the {term: {in_canonical_graph: true}} optimisation.
+    let topo_root_id = Uuid::parse_str("00000000-0000-4000-8000-000000000c01").expect("Failed to parse topo_root_id UUID");
+    let topo_child_a_id = Uuid::parse_str("00000000-0000-4000-8000-000000000c02").expect("Failed to parse topo_child_a_id UUID");
+    let topo_child_b_id = Uuid::parse_str("00000000-0000-4000-8000-000000000c03").expect("Failed to parse topo_child_b_id UUID");
+    let topo_grandchild_id = Uuid::parse_str("00000000-0000-4000-8000-000000000c04").expect("Failed to parse topo_grandchild_id UUID");
+    // A fifth space that starts canonical and will be removed in a later diff.
+    let topo_remove_me_id = Uuid::parse_str("00000000-0000-4000-8000-000000000c05").expect("Failed to parse topo_remove_me_id UUID");
+    // A sixth space that will receive a MOVED diff (same canonicality, new parent).
+    let topo_moveable_id = Uuid::parse_str("00000000-0000-4000-8000-000000000c06").expect("Failed to parse topo_moveable_id UUID");
+
+    // Entities that live in the topology spaces (fixed IDs for search result validation)
+    let topo_root_entity_id = Uuid::parse_str("00000000-0000-0000-0000-00000000ec01").expect("Failed to parse topo_root_entity_id UUID");
+    let topo_child_a_entity_id = Uuid::parse_str("00000000-0000-0000-0000-00000000ec02").expect("Failed to parse topo_child_a_entity_id UUID");
+    let topo_child_b_entity_id = Uuid::parse_str("00000000-0000-0000-0000-00000000ec03").expect("Failed to parse topo_child_b_entity_id UUID");
+    let topo_grandchild_entity_id =
+        Uuid::parse_str("00000000-0000-0000-0000-00000000ec04").expect("Failed to parse topo_grandchild_entity_id UUID");
+    let topo_remove_me_entity_id =
+        Uuid::parse_str("00000000-0000-0000-0000-00000000ec05").expect("Failed to parse topo_remove_me_entity_id UUID");
+    let topo_moveable_entity_id =
+        Uuid::parse_str("00000000-0000-0000-0000-00000000ec06").expect("Failed to parse topo_moveable_entity_id UUID");
     info!("Test Space ID: {}", test_space);
     info!("Person Type ID: {}", person_type_id);
     info!("Organization Type ID: {}", org_type_id);
@@ -1241,6 +1273,206 @@ async fn main() -> Result<()> {
     info!("  • Negative: -0.75");
     info!("  • At Threshold: 0.50");
     info!("  • Below Threshold: 0.25");
+
+    // =========================================================================
+    // TOPOLOGY / CANONICAL GRAPH DIFF TESTS
+    // =========================================================================
+    //
+    // These steps exercise the full pipeline:
+    //   CanonicalGraphDiff message → topology.canonical Kafka topic
+    //     → TopologyConsumer → Processor → loader.update_canonical_graph()
+    //     → in_canonical_graph flag on OpenSearch documents
+    //     → SPACE scope search using {term: {in_canonical_graph: true}} (root)
+    //       or subspace ID list (non-root)
+    //
+    // Tree structure built over multiple diffs:
+    //
+    //   Diff 1 (initial):
+    //     topo_root (d=0)
+    //       ├── topo_child_a  (verified, d=1)
+    //       │     └── topo_grandchild (verified, d=2)
+    //       ├── topo_child_b  (related,  d=1)
+    //       └── topo_remove_me (verified, d=1)  ← will be removed in diff 2
+    //            └── topo_moveable (verified, d=2) ← will be moved in diff 3
+    //
+    //   Diff 2 (removal):
+    //     REMOVED topo_remove_me + topo_moveable (subtree cascade)
+    //
+    //   Diff 3 (move / reparent):
+    //     MOVED topo_moveable  child_a→child_b  (same canonicality, new parent)
+    //     (To make topo_moveable canonical again after the removal we ADDED it
+    //      back as a child of child_b in this diff.)
+
+    info!("\n18. Creating topology test entities (one per space)...");
+
+    // Create one entity in each topology space so we can search for them by space.
+    for (space_id, entity_id, name, description) in [
+        (topo_root_id, topo_root_entity_id, "TopoEntity", "Entity in topo_root space"),
+        (topo_child_a_id, topo_child_a_entity_id, "TopoEntity", "Entity in topo_child_a space"),
+        (topo_child_b_id, topo_child_b_entity_id, "TopoEntity", "Entity in topo_child_b space"),
+        (
+            topo_grandchild_id,
+            topo_grandchild_entity_id,
+            "TopoEntity",
+            "Entity in topo_grandchild space",
+        ),
+        (
+            topo_remove_me_id,
+            topo_remove_me_entity_id,
+            "TopoEntity",
+            "Entity in topo_remove_me space (will lose canonical flag)",
+        ),
+        (
+            topo_moveable_id,
+            topo_moveable_entity_id,
+            "TopoEntity",
+            "Entity in topo_moveable space (will be moved between parents)",
+        ),
+    ] {
+        let payload =
+            edits::create_entity_edit("Create TopoEntity", space_id, entity_id, Some(name), Some(description), None)?;
+        producer.send(&edits_topic, None, payload).await?;
+    }
+
+    // Give all topology entities a global score so they appear in search results.
+    let topo_entity_scores = scores::create_mixed_score_batch(
+        vec![
+            (topo_root_entity_id, 0.60),
+            (topo_child_a_entity_id, 0.60),
+            (topo_child_b_entity_id, 0.60),
+            (topo_grandchild_entity_id, 0.60),
+            (topo_remove_me_entity_id, 0.60),
+            (topo_moveable_entity_id, 0.60),
+        ],
+        vec![],
+        vec![],
+        5,
+        true,
+    )?;
+    producer.send(&scores_topic, None, topo_entity_scores).await?;
+
+    info!("19. Sending Diff 1: initial canonical graph (root + 4 children + grandchild)...");
+    let diff1 = topology::create_canonical_graph_diff(
+        topo_root_id,
+        vec![
+            DiffNode {
+                space_id: topo_child_a_id,
+                change: NodeChangeKind::Added {
+                    parent_id: topo_root_id,
+                    distance: 1,
+                    edge: EdgeKind::Verified,
+                },
+            },
+            DiffNode {
+                space_id: topo_child_b_id,
+                change: NodeChangeKind::Added {
+                    parent_id: topo_root_id,
+                    distance: 1,
+                    edge: EdgeKind::Related,
+                },
+            },
+            DiffNode {
+                space_id: topo_remove_me_id,
+                change: NodeChangeKind::Added {
+                    parent_id: topo_root_id,
+                    distance: 1,
+                    edge: EdgeKind::Verified,
+                },
+            },
+            DiffNode {
+                space_id: topo_grandchild_id,
+                change: NodeChangeKind::Added {
+                    parent_id: topo_child_a_id,
+                    distance: 2,
+                    edge: EdgeKind::Verified,
+                },
+            },
+            DiffNode {
+                space_id: topo_moveable_id,
+                change: NodeChangeKind::Added {
+                    parent_id: topo_remove_me_id,
+                    distance: 2,
+                    edge: EdgeKind::Verified,
+                },
+            },
+        ],
+    )?;
+    producer.send(&topology_topic, None, diff1).await?;
+
+    // Wait for the indexer to process diff 1 and write in_canonical_graph flags.
+    info!("   Waiting 5s for topology diff 1 to be processed...");
+    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+
+    info!("20. Sending Diff 2: remove topo_remove_me + topo_moveable (subtree cascade)...");
+    // topo_remove_me and its subtree (topo_moveable) leave the canonical graph.
+    // Their in_canonical_graph flag must be set to false in OpenSearch.
+    let diff2 = topology::create_canonical_graph_diff(
+        topo_root_id,
+        vec![
+            DiffNode {
+                space_id: topo_remove_me_id,
+                change: NodeChangeKind::Removed,
+            },
+            DiffNode {
+                space_id: topo_moveable_id,
+                change: NodeChangeKind::Removed,
+            },
+        ],
+    )?;
+    producer.send(&topology_topic, None, diff2).await?;
+
+    // Wait for diff 2 to be processed.
+    info!("   Waiting 5s for topology diff 2 (removal) to be processed...");
+    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+
+    info!("21. Sending Diff 3: re-add topo_moveable under child_b (MOVED semantics via REMOVE+ADD)...");
+    // After the subtree removal, topo_moveable is not canonical.  We add it back
+    // under topo_child_b — exercising the "node re-joins" code path.  The diff
+    // uses explicit REMOVED+ADDED to model a MOVED-like scenario (the spec allows
+    // emitting REMOVED/ADDED pairs; MOVED is an optimisation the Atlas emitter may
+    // use when the node stays canonical but its parent changes).
+    let diff3 = topology::create_canonical_graph_diff(
+        topo_root_id,
+        vec![DiffNode {
+            space_id: topo_moveable_id,
+            change: NodeChangeKind::Added {
+                parent_id: topo_child_b_id,
+                distance: 2,
+                edge: EdgeKind::Verified,
+            },
+        }],
+    )?;
+    producer.send(&topology_topic, None, diff3).await?;
+
+    // Wait for diff 3 to be processed before the TypeScript validator runs.
+    info!("   Waiting 5s for topology diff 3 (re-add / move) to be processed...");
+    tokio::time::sleep(std::time::Duration::from_secs(5)).await;
+
+    info!("\n✅ Topology test scenario complete!");
+    info!(
+        "  topo_root:       {} — canonical root, SPACE scope must use in_canonical_graph filter",
+        topo_root_id
+    );
+    info!(
+        "  topo_child_a:    {} — canonical (verified, d=1)",
+        topo_child_a_id
+    );
+    info!(
+        "  topo_child_b:    {} — canonical (related, d=1)",
+        topo_child_b_id
+    );
+    info!(
+        "  topo_grandchild: {} — canonical (verified, d=2 under child_a)",
+        topo_grandchild_id
+    );
+    info!(
+        "  topo_remove_me:  {} — NOT canonical after diff 2",
+        topo_remove_me_id
+    );
+    info!(
+        "  topo_moveable:   {} — canonical again after diff 3 (under child_b)",
+        topo_moveable_id
+    );
 
     Ok(())
 }

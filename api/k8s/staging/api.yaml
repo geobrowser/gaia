@@ -126,6 +126,8 @@ spec:
                 secretKeyRef:
                   name: api-secrets
                   key: OPENSEARCH_URL
+            - name: TOPOLOGY_SERVICE_URL
+              value: "http://search-indexer.search-staging.svc.cluster.local:8080"
             - name: SENTRY_DSN
               valueFrom:
                 secretKeyRef:
