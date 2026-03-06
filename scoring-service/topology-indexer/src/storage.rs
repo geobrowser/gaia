@@ -8,6 +8,7 @@ use crate::consumer::{ChangeType, TopologyChange};
 use crate::error::StorageError;
 
 /// Storage for topology distance database operations.
+#[derive(Debug, Clone)]
 pub struct Storage {
     pool: PgPool,
 }
@@ -55,10 +56,20 @@ impl Storage {
                 ChangeType::Added | ChangeType::Moved => {
                     if let Some(distance) = change.distance {
                         upsert_ids.push(change.space_id);
-                        upsert_distances.push(distance as i32);
+                        let distance_i32 = i32::try_from(distance).map_err(|_| {
+                            StorageError::Database(sqlx::Error::Protocol(format!(
+                                "distance {} exceeds i32 range for space {}",
+                                distance, change.space_id
+                            )))
+                        })?;
+                        upsert_distances.push(distance_i32);
                     }
                 }
                 ChangeType::Removed => {
+                    // Never delete the root row — it was upserted above with distance=0
+                    if change.space_id == root_id {
+                        continue;
+                    }
                     delete_ids.push(change.space_id);
                 }
             }

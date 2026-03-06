@@ -63,11 +63,12 @@ impl KafkaConsumer {
             config.set("sasl.mechanisms", "PLAIN");
             config.set("sasl.username", &username);
 
-            if let Ok(password) = env::var("KAFKA_PASSWORD") {
-                config.set("sasl.password", &password);
-            } else {
-                warn!("KAFKA_PASSWORD is not set");
-            }
+            let password = env::var("KAFKA_PASSWORD").map_err(|_| {
+                IndexerError::Config(
+                    "KAFKA_PASSWORD must be set when KAFKA_USERNAME is configured".into(),
+                )
+            })?;
+            config.set("sasl.password", &password);
         }
 
         // Optional custom CA certificate
@@ -211,7 +212,9 @@ mod tests {
         };
 
         let payload = diff.encode_to_vec();
-        let parsed = parse_diff(&payload).unwrap().unwrap();
+        let parsed = parse_diff(&payload)
+            .expect("parse_diff should not fail")
+            .expect("parsed diff should not be None");
 
         assert_eq!(parsed.root_id, Uuid::from_bytes(1u128.to_be_bytes()));
         assert_eq!(parsed.changes.len(), 1);
@@ -240,7 +243,9 @@ mod tests {
         };
 
         let payload = diff.encode_to_vec();
-        let parsed = parse_diff(&payload).unwrap().unwrap();
+        let parsed = parse_diff(&payload)
+            .expect("parse_diff should not fail")
+            .expect("parsed diff should not be None");
 
         assert_eq!(parsed.changes[0].change_type, ChangeType::Removed);
         assert_eq!(parsed.changes[0].distance, None);
@@ -263,7 +268,9 @@ mod tests {
         };
 
         let payload = diff.encode_to_vec();
-        let parsed = parse_diff(&payload).unwrap().unwrap();
+        let parsed = parse_diff(&payload)
+            .expect("parse_diff should not fail")
+            .expect("parsed diff should not be None");
 
         assert_eq!(parsed.changes[0].change_type, ChangeType::Moved);
         assert_eq!(parsed.changes[0].distance, Some(5));
@@ -285,7 +292,7 @@ mod tests {
         };
 
         let payload = diff.encode_to_vec();
-        let parsed = parse_diff(&payload).unwrap();
+        let parsed = parse_diff(&payload).expect("parse_diff should not fail");
         assert!(parsed.is_none());
     }
 
@@ -303,7 +310,7 @@ mod tests {
         };
 
         let payload = diff.encode_to_vec();
-        let parsed = parse_diff(&payload).unwrap();
+        let parsed = parse_diff(&payload).expect("parse_diff should not fail");
         assert!(parsed.is_none());
     }
 
@@ -337,7 +344,9 @@ mod tests {
         };
 
         let payload = diff.encode_to_vec();
-        let parsed = parse_diff(&payload).unwrap().unwrap();
+        let parsed = parse_diff(&payload)
+            .expect("parse_diff should not fail")
+            .expect("parsed diff should not be None");
 
         assert_eq!(parsed.changes.len(), 3);
         assert_eq!(parsed.changes[0].change_type, ChangeType::Added);

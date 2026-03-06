@@ -99,7 +99,7 @@ async fn async_main() -> Result<(), IndexerError> {
     // Set up shutdown signal
     let (shutdown_tx, mut shutdown_rx) = tokio::sync::broadcast::channel::<()>(1);
 
-    tokio::spawn(async move {
+    let _signal_handle = tokio::spawn(async move {
         tokio::signal::ctrl_c().await.ok();
         info!("Shutdown signal received");
         shutdown_tx.send(()).ok();
@@ -164,52 +164,59 @@ async fn async_main() -> Result<(), IndexerError> {
                         let partition = msg.partition();
                         let offset = msg.offset();
 
-                        if let Some(payload) = msg.payload() {
-                            match parse_diff(payload) {
-                                Ok(Some(parsed)) => {
-                                    debug!(
-                                        root_id = %parsed.root_id,
-                                        changes = parsed.changes.len(),
-                                        partition = partition,
-                                        offset = offset,
-                                        "Parsed topology diff"
-                                    );
-                                    diff_buffer.push(parsed);
-                                    commit_info.push((topic, partition, offset));
+                        let Some(payload) = msg.payload() else {
+                            // Null payload (tombstone) — commit and skip
+                            debug!(partition = partition, offset = offset, "Skipping null payload");
+                            if let Err(e) = consumer.commit_message(&topic, partition, offset) {
+                                error!(error = %e, "Failed to commit offset");
+                            }
+                            continue;
+                        };
 
-                                    if diff_buffer.len() >= batch_size {
-                                        debug!(count = diff_buffer.len(), "Processing full batch");
-                                        match process_diff_batch(&diff_buffer, &storage).await {
-                                            Ok(count) => {
-                                                processed_count += count as u64;
-                                                commit_offsets(&consumer, &commit_info);
-                                            }
-                                            Err(e) => {
-                                                error!(error = %e, "Failed to process batch");
-                                                error_count += diff_buffer.len() as u64;
-                                            }
+                        match parse_diff(payload) {
+                            Ok(Some(parsed)) => {
+                                debug!(
+                                    root_id = %parsed.root_id,
+                                    changes = parsed.changes.len(),
+                                    partition = partition,
+                                    offset = offset,
+                                    "Parsed topology diff"
+                                );
+                                diff_buffer.push(parsed);
+                                commit_info.push((topic, partition, offset));
+
+                                if diff_buffer.len() >= batch_size {
+                                    debug!(count = diff_buffer.len(), "Processing full batch");
+                                    match process_diff_batch(&diff_buffer, &storage).await {
+                                        Ok(count) => {
+                                            processed_count += count as u64;
+                                            commit_offsets(&consumer, &commit_info);
                                         }
-                                        diff_buffer.clear();
-                                        commit_info.clear();
+                                        Err(e) => {
+                                            error!(error = %e, "Failed to process batch");
+                                            error_count += diff_buffer.len() as u64;
+                                        }
                                     }
+                                    diff_buffer.clear();
+                                    commit_info.clear();
                                 }
-                                Ok(None) => {
-                                    // Empty diff or invalid root_id — commit and skip
-                                    if let Err(e) = consumer.commit_message(&topic, partition, offset) {
-                                        error!(error = %e, "Failed to commit offset");
-                                    }
+                            }
+                            Ok(None) => {
+                                // Empty diff or invalid root_id — commit and skip
+                                if let Err(e) = consumer.commit_message(&topic, partition, offset) {
+                                    error!(error = %e, "Failed to commit offset");
                                 }
-                                Err(e) => {
-                                    warn!(
-                                        error = %e,
-                                        partition = partition,
-                                        offset = offset,
-                                        "Failed to parse topology diff message"
-                                    );
-                                    error_count += 1;
-                                    if let Err(e) = consumer.commit_message(&topic, partition, offset) {
-                                        error!(error = %e, "Failed to commit offset");
-                                    }
+                            }
+                            Err(e) => {
+                                warn!(
+                                    error = %e,
+                                    partition = partition,
+                                    offset = offset,
+                                    "Failed to parse topology diff message"
+                                );
+                                error_count += 1;
+                                if let Err(e) = consumer.commit_message(&topic, partition, offset) {
+                                    error!(error = %e, "Failed to commit offset");
                                 }
                             }
                         }

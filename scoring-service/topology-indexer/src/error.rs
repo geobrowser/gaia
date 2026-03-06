@@ -14,8 +14,6 @@ pub enum IndexerError {
     Kafka(#[from] rdkafka::error::KafkaError),
     #[error("decode error: {0}")]
     Decode(#[from] prost::DecodeError),
-    #[error("database error: {0}")]
-    Database(#[from] sqlx::Error),
     #[error("telemetry error: {0}")]
     Telemetry(#[from] hermes_instrumentation::Error),
     #[error("configuration error: {0}")]

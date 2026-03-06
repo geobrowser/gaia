@@ -144,7 +144,7 @@ class Space:
     subspace_ids: set[str] = field(default_factory=set)
 
     # Computed fields
-    distance_to_root: int = 0
+    distance_to_root: int | None = None
     space_score: float = 1.0
     member_count: int = 0
     entity_count: int = 0
@@ -159,9 +159,7 @@ class Space:
     ) -> None:
         """Calculate space score based on distance from root (GEO)."""
         # If distance_to_root was pre-set by the topology indexer, skip BFS.
-        # distance_to_root defaults to 0, so we also check that this isn't the root
-        # (root legitimately has distance 0 and should keep it).
-        if self.distance_to_root == 0:
+        if self.distance_to_root is None:
             self.distance_to_root = self._calculate_distance_to_root(spaces, root_space_id)
 
         # Calculate space score based on distance to root
