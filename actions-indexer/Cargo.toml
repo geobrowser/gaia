@@ -6,6 +6,7 @@ edition = "2024"
 [dependencies]
 tokio = { version = "1.44.2", features = ["macros", "rt-multi-thread"] }
 dotenv = "0.15.0"
+hermes-instrumentation = { path = "../hermes-instrumentation" }
 sqlx = { version = "0.8", features = [
     "runtime-tokio",
     "postgres",

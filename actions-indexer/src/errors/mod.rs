@@ -11,4 +11,8 @@ pub enum IndexingError {
     ActionsRepository(#[from] actions_indexer_repository::ActionsRepositoryError),
     #[error("Cursor repository error: {0}")]
     CursorRepository(#[from] actions_indexer_repository::CursorRepositoryError),
+    #[error("Telemetry error: {0}")]
+    Telemetry(#[from] hermes_instrumentation::Error),
+    #[error("Configuration error: {0}")]
+    Config(String),
 }
