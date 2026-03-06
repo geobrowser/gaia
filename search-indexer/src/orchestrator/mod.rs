@@ -307,6 +307,14 @@ impl Orchestrator {
 
         // Create channels for direct component-to-component communication:
         // Consumer -> Processor -> Loader -> Consumer (for acks)
+        //
+        // ACK channels use a large buffer to prevent deadlock: consumers block
+        // on processor_tx.send() inside flush_batch (within a select! arm),
+        // during which they cannot drain ACKs. If the ACK channel fills, the
+        // loader blocks on ack_tx.send(), which stalls the loader channel,
+        // which stalls the processor, creating a circular wait. A large ACK
+        // buffer breaks this cycle. ACKs are small (offset metadata only).
+        let ack_buffer_size = config.channel_buffer_size * 20;
 
         // Channel from entities consumer to processor
         let (entities_processor_tx, entities_processor_rx) =
@@ -317,7 +325,7 @@ impl Orchestrator {
 
         // Channel from loader back to entities consumer (for acknowledgments)
         let (entities_ack_tx, entities_ack_rx) =
-            mpsc::channel::<StreamMessage>(config.channel_buffer_size);
+            mpsc::channel::<StreamMessage>(ack_buffer_size);
 
         // Channels from scores consumer to processor
         let (scores_processor_tx, scores_processor_rx) =
@@ -325,7 +333,7 @@ impl Orchestrator {
 
         // Channel from loader back to scores consumer (for acknowledgments)
         let (scores_ack_tx, scores_ack_rx) =
-            mpsc::channel::<StreamMessage>(config.channel_buffer_size);
+            mpsc::channel::<StreamMessage>(ack_buffer_size);
 
         // Channels from space topics consumer to processor
         let (space_topics_processor_tx, space_topics_processor_rx) =
@@ -333,7 +341,7 @@ impl Orchestrator {
 
         // Channel from loader back to space topics consumer (for acknowledgments)
         let (space_topics_ack_tx, space_topics_ack_rx) =
-            mpsc::channel::<StreamMessage>(config.channel_buffer_size);
+            mpsc::channel::<StreamMessage>(ack_buffer_size);
 
         // Channels from topology consumer to processor
         let (topology_processor_tx, topology_processor_rx) =
@@ -341,7 +349,7 @@ impl Orchestrator {
 
         // Channel from loader back to topology consumer (for acknowledgments)
         let (topology_ack_tx, topology_ack_rx) =
-            mpsc::channel::<StreamMessage>(config.channel_buffer_size);
+            mpsc::channel::<StreamMessage>(ack_buffer_size);
 
         // Clone senders for components that need them
         let entities_processor_tx_for_consumer = entities_processor_tx.clone();

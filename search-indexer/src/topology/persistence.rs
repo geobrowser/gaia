@@ -8,8 +8,22 @@ use std::path::Path;
 
 use hermes_instrumentation::{error, info, warn};
 use serde::{Deserialize, Serialize};
+use thiserror::Error;
 
 use super::state::CanonicalGraphState;
+
+/// Errors that can occur during topology state persistence.
+#[derive(Error, Debug)]
+pub enum PersistenceError {
+    #[error("I/O error: {0}")]
+    Io(#[from] std::io::Error),
+
+    #[error("JSON error: {0}")]
+    Json(#[from] serde_json::Error),
+
+    #[error("invalid state data: {0}")]
+    InvalidData(String),
+}
 
 /// Default path for the topology state file.
 pub const DEFAULT_TOPOLOGY_STATE_PATH: &str = "/data/topology_state.json";
@@ -33,10 +47,14 @@ fn bytes_to_hex(bytes: &[u8; 16]) -> String {
     hex::encode(bytes)
 }
 
-fn hex_to_bytes(s: &str) -> Result<[u8; 16], String> {
-    let decoded = hex::decode(s).map_err(|e| format!("invalid hex: {}", e))?;
+fn hex_to_bytes(s: &str) -> Result<[u8; 16], PersistenceError> {
+    let decoded =
+        hex::decode(s).map_err(|e| PersistenceError::InvalidData(format!("invalid hex: {}", e)))?;
     if decoded.len() != 16 {
-        return Err(format!("expected 16 bytes, got {}", decoded.len()));
+        return Err(PersistenceError::InvalidData(format!(
+            "expected 16 bytes, got {}",
+            decoded.len()
+        )));
     }
     let mut arr = [0u8; 16];
     arr.copy_from_slice(&decoded);
@@ -44,7 +62,7 @@ fn hex_to_bytes(s: &str) -> Result<[u8; 16], String> {
 }
 
 /// Save graph state to a JSON file using write-then-rename for atomicity.
-pub fn save(state: &CanonicalGraphState, path: &Path) -> Result<(), String> {
+pub fn save(state: &CanonicalGraphState, path: &Path) -> Result<(), PersistenceError> {
     let (root_id, nodes) = state.snapshot();
 
     let persisted = PersistedState {
@@ -60,27 +78,22 @@ pub fn save(state: &CanonicalGraphState, path: &Path) -> Result<(), String> {
             .collect(),
     };
 
-    let json =
-        serde_json::to_string(&persisted).map_err(|e| format!("serialization failed: {}", e))?;
+    let json = serde_json::to_string(&persisted)?;
 
     // Write to temp file then rename for atomicity
     let tmp_path = path.with_extension("tmp");
 
     // Ensure parent directory exists
     if let Some(parent) = path.parent() {
-        std::fs::create_dir_all(parent)
-            .map_err(|e| format!("failed to create parent directory: {}", e))?;
+        std::fs::create_dir_all(parent)?;
     }
 
-    let mut file = std::fs::File::create(&tmp_path)
-        .map_err(|e| format!("failed to create temp file: {}", e))?;
-    file.write_all(json.as_bytes())
-        .map_err(|e| format!("failed to write temp file: {}", e))?;
-    file.sync_all()
-        .map_err(|e| format!("failed to sync temp file: {}", e))?;
+    let mut file = std::fs::File::create(&tmp_path)?;
+    file.write_all(json.as_bytes())?;
+    file.sync_all()?;
     drop(file);
 
-    std::fs::rename(&tmp_path, path).map_err(|e| format!("failed to rename temp file: {}", e))?;
+    std::fs::rename(&tmp_path, path)?;
 
     info!(
         node_count = persisted.nodes.len(),
@@ -91,17 +104,15 @@ pub fn save(state: &CanonicalGraphState, path: &Path) -> Result<(), String> {
 }
 
 /// Load graph state from a JSON file and reconstruct in-memory state.
-pub fn load(path: &Path) -> Result<CanonicalGraphState, String> {
+pub fn load(path: &Path) -> Result<CanonicalGraphState, PersistenceError> {
     if !path.exists() {
         error!(path = %path.display(), "No topology state file found, starting with empty state");
         return Ok(CanonicalGraphState::new());
     }
 
-    let json =
-        std::fs::read_to_string(path).map_err(|e| format!("failed to read state file: {}", e))?;
+    let json = std::fs::read_to_string(path)?;
 
-    let persisted: PersistedState =
-        serde_json::from_str(&json).map_err(|e| format!("failed to parse state file: {}", e))?;
+    let persisted: PersistedState = serde_json::from_str(&json)?;
 
     if persisted.version != 1 {
         warn!(

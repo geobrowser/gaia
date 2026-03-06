@@ -430,7 +430,7 @@ Kafka Broker
 | `space_topics_processor` | `SpaceTopicProcessingBatch` | `CHANNEL_BUFFER_SIZE` | `CHANNEL_BUFFER_SIZE` × `SPACE_TOPICS_BATCH_SIZE` × avg_msg_size |
 | `topology_processor` | `TopologyProcessingBatch` | `CHANNEL_BUFFER_SIZE` | `CHANNEL_BUFFER_SIZE` × `TOPOLOGY_BATCH_SIZE` × avg_msg_size |
 | `loader` | `ProcessedBatch` | `CHANNEL_BUFFER_SIZE` | `CHANNEL_BUFFER_SIZE` × max(`KAFKA_BATCH_SIZE`, `SCORES_BATCH_SIZE`) × avg_processed_size |
-| `*_ack` channels | `StreamMessage` (offsets only) | `CHANNEL_BUFFER_SIZE` | Negligible (~1 KiB each) |
+| `*_ack` channels | `StreamMessage` (offsets only) | `CHANNEL_BUFFER_SIZE × 20` | Negligible (~1 KiB each) |
 
 ### rdkafka Internal Queue Memory
 
