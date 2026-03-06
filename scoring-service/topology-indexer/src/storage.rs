@@ -57,10 +57,10 @@ impl Storage {
                     if let Some(distance) = change.distance {
                         upsert_ids.push(change.space_id);
                         let distance_i32 = i32::try_from(distance).map_err(|_| {
-                            StorageError::Database(sqlx::Error::Protocol(format!(
+                            StorageError::Conversion(format!(
                                 "distance {} exceeds i32 range for space {}",
                                 distance, change.space_id
-                            )))
+                            ))
                         })?;
                         upsert_distances.push(distance_i32);
                     }

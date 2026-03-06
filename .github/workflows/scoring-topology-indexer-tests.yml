@@ -1,4 +1,4 @@
-name: Topology Indexer Unit Tests
+name: Scoring Topology Indexer Unit Tests
 
 on:
   push:

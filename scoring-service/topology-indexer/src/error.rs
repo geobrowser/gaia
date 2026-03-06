@@ -4,6 +4,8 @@ use thiserror::Error;
 pub enum StorageError {
     #[error("database error: {0}")]
     Database(#[from] sqlx::Error),
+    #[error("conversion error: {0}")]
+    Conversion(String),
 }
 
 #[derive(Debug, Error)]
