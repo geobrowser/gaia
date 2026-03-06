@@ -458,7 +458,7 @@ describe("OpenSearchClient", () => {
 			expect(queryStr).toContain(typeIds[0])
 		})
 
-		it("should throw error for SPACE_SINGLE scope without space_id", async () => {
+		it("throws error for SPACE_SINGLE scope without space_id", async () => {
 			await expect(
 				client.buildSearchBody({
 					query: "blockchain",
@@ -467,7 +467,7 @@ describe("OpenSearchClient", () => {
 			).rejects.toThrow("SPACE_SINGLE scope requires space_id")
 		})
 
-		it("should throw error for SPACE scope without space_id", async () => {
+		it("throws error for SPACE scope without space_id", async () => {
 			await expect(
 				client.buildSearchBody({
 					query: "blockchain",
@@ -478,7 +478,7 @@ describe("OpenSearchClient", () => {
 	})
 
 	describe("buildMultiSpaceQuery", () => {
-		it("should filter by space_id terms when isRoot is false", () => {
+		it("filters by space_id terms when isRoot is false", () => {
 			const baseQuery = client.buildBaseTextQuery("test")
 			const spaceIds = ["abcd1234-abcd-1234-abcd-1234abcd0001", "abcd1234-abcd-1234-abcd-1234abcd0002"]
 			const query = client.buildMultiSpaceQuery(baseQuery, spaceIds, undefined, false, false)
@@ -490,7 +490,7 @@ describe("OpenSearchClient", () => {
 			expect(queryStr).not.toContain("in_canonical_graph")
 		})
 
-		it("should use in_canonical_graph filter when isRoot is true", () => {
+		it("uses in_canonical_graph filter when isRoot is true", () => {
 			const baseQuery = client.buildBaseTextQuery("test")
 			const spaceIds = ["abcd1234-abcd-1234-abcd-1234abcd0001"]
 			const query = client.buildMultiSpaceQuery(baseQuery, spaceIds, undefined, false, true)
@@ -513,7 +513,7 @@ describe("OpenSearchClient", () => {
 			vi.restoreAllMocks()
 		})
 
-		it("should return isRoot true when topology response has is_root true", async () => {
+		it("returns isRoot true when topology response has is_root true", async () => {
 			const spaceId = "abcd1234-abcd-1234-abcd-1234abcd0001"
 			vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
 				new Response(JSON.stringify({subspaces: [spaceId, "child-1", "child-2"], is_root: true}), {
@@ -527,7 +527,7 @@ describe("OpenSearchClient", () => {
 			expect(result.subspaces).toEqual([spaceId, "child-1", "child-2"])
 		})
 
-		it("should return isRoot false when is_root is missing from response", async () => {
+		it("returns isRoot false when is_root is missing from response", async () => {
 			const spaceId = "abcd1234-abcd-1234-abcd-1234abcd0002"
 			vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
 				new Response(JSON.stringify({subspaces: [spaceId]}), {
@@ -541,7 +541,7 @@ describe("OpenSearchClient", () => {
 			expect(result.subspaces).toEqual([spaceId])
 		})
 
-		it("should return isRoot false on 404", async () => {
+		it("returns isRoot false on 404", async () => {
 			const spaceId = "abcd1234-abcd-1234-abcd-1234abcd0003"
 			vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
 				new Response(JSON.stringify({error: "not found"}), {status: 404}),
@@ -552,14 +552,14 @@ describe("OpenSearchClient", () => {
 			expect(result.subspaces).toEqual([spaceId])
 		})
 
-		it("should throw on network error", async () => {
+		it("throws on network error", async () => {
 			const spaceId = "abcd1234-abcd-1234-abcd-1234abcd0004"
 			vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(new Error("network error"))
 
 			await expect(topologyClient.fetchSubspaces(spaceId)).rejects.toThrow("network error")
 		})
 
-		it("should cache results and not re-fetch", async () => {
+		it("caches results and does not re-fetch", async () => {
 			const spaceId = "abcd1234-abcd-1234-abcd-1234abcd0005"
 			const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValue(
 				new Response(JSON.stringify({subspaces: [spaceId], is_root: true}), {
@@ -588,7 +588,7 @@ describe("OpenSearchClient", () => {
 			vi.restoreAllMocks()
 		})
 
-		it("should use in_canonical_graph filter when space is root", async () => {
+		it("uses in_canonical_graph filter when space is root", async () => {
 			const spaceId = "abcd1234-abcd-1234-abcd-1234abcd0001"
 			vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
 				new Response(JSON.stringify({subspaces: [spaceId, "child-1"], is_root: true}), {
@@ -608,7 +608,7 @@ describe("OpenSearchClient", () => {
 			expect(queryStr).not.toContain(spaceId)
 		})
 
-		it("should use space_id terms filter when space is not root", async () => {
+		it("uses space_id terms filter when space is not root", async () => {
 			const spaceId = "abcd1234-abcd-1234-abcd-1234abcd0002"
 			const childId = "abcd1234-abcd-1234-abcd-1234abcd0003"
 			vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
@@ -642,7 +642,7 @@ describe("OpenSearchClient", () => {
 			vi.restoreAllMocks()
 		})
 
-		it("should fetch and cache root space ID on init", async () => {
+		it("fetches and caches root space ID on init", async () => {
 			const rootId = "root1234-abcd-1234-abcd-1234abcd0001"
 			vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
 				new Response(JSON.stringify({root_id: rootId}), {
@@ -660,21 +660,21 @@ describe("OpenSearchClient", () => {
 			)
 		})
 
-		it("should not crash when init fails with network error", async () => {
+		it("does not crash when init fails with network error", async () => {
 			vi.spyOn(globalThis, "fetch").mockRejectedValueOnce(new Error("connection refused"))
 
 			// Should not throw
 			await topologyClient.init()
 		})
 
-		it("should not crash when init returns non-200", async () => {
+		it("does not crash when init returns non-200", async () => {
 			vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(new Response("not found", {status: 404}))
 
 			// Should not throw
 			await topologyClient.init()
 		})
 
-		it("should skip init when no topology URL is configured", async () => {
+		it("skips init when no topology URL is configured", async () => {
 			const noTopologyClient = new OpenSearchClient("http://localhost:9200", "test-index")
 			const fetchSpy = vi.spyOn(globalThis, "fetch")
 
@@ -683,7 +683,7 @@ describe("OpenSearchClient", () => {
 			expect(fetchSpy).not.toHaveBeenCalled()
 		})
 
-		it("should short-circuit fetchSubspaces when space is cached root", async () => {
+		it("short-circuits fetchSubspaces when space is cached root", async () => {
 			const rootId = "root1234-abcd-1234-abcd-1234abcd0001"
 			// Mock init response
 			const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
@@ -708,7 +708,7 @@ describe("OpenSearchClient", () => {
 			expect(queryStr).toContain("in_canonical_graph")
 		})
 
-		it("should still call fetchSubspaces for non-root spaces after init", async () => {
+		it("calls fetchSubspaces for non-root spaces after init", async () => {
 			const rootId = "root1234-abcd-1234-abcd-1234abcd0001"
 			const otherSpaceId = "abcd1234-abcd-1234-abcd-1234abcd9999"
 			const fetchSpy = vi
@@ -743,7 +743,7 @@ describe("OpenSearchClient", () => {
 			expect(queryStr).toContain(otherSpaceId)
 		})
 
-		it("should lazily backfill rootSpaceId when fetchSubspaces discovers root", async () => {
+		it("lazily backfills rootSpaceId when fetchSubspaces discovers root", async () => {
 			const rootId = "root1234-abcd-1234-abcd-1234abcd0001"
 			const fetchSpy = vi
 				.spyOn(globalThis, "fetch")
@@ -779,7 +779,7 @@ describe("OpenSearchClient", () => {
 			expect(fetchSpy).not.toHaveBeenCalled()
 		})
 
-		it("should short-circuit root space in buildUuidQuery SPACE scope", async () => {
+		it("short-circuits root space in buildUuidQuery SPACE scope", async () => {
 			const rootId = "root1234-abcd-1234-abcd-1234abcd0001"
 			const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
 				new Response(JSON.stringify({root_id: rootId}), {
@@ -800,7 +800,7 @@ describe("OpenSearchClient", () => {
 			expect(queryStr).toContain("entity_id")
 		})
 
-		it("should short-circuit root space in buildTopRankedQuery SPACE scope", async () => {
+		it("short-circuits root space in buildTopRankedQuery SPACE scope", async () => {
 			const rootId = "root1234-abcd-1234-abcd-1234abcd0001"
 			const fetchSpy = vi.spyOn(globalThis, "fetch").mockResolvedValueOnce(
 				new Response(JSON.stringify({root_id: rootId}), {
