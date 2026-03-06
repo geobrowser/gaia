@@ -1,5 +1,5 @@
 {
-  "id": "44e2b14f-5ee0-41f1-aa4a-804e5a694fef",
+  "id": "f1667ec7-aeb8-4855-ba20-8d202e03e0a9",
   "prevId": "3aa5bf79-ed6a-4d96-9814-760476ba755e",
   "version": "7",
   "dialect": "postgresql",
@@ -1672,7 +1672,21 @@
         }
       },
       "indexes": {},
-      "foreignKeys": {},
+      "foreignKeys": {
+        "spaces_topic_id_entities_id_fk": {
+          "name": "spaces_topic_id_entities_id_fk",
+          "tableFrom": "spaces",
+          "tableTo": "entities",
+          "columnsFrom": [
+            "topic_id"
+          ],
+          "columnsTo": [
+            "id"
+          ],
+          "onDelete": "no action",
+          "onUpdate": "no action"
+        }
+      },
       "compositePrimaryKeys": {},
       "uniqueConstraints": {},
       "policies": {},
