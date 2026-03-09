@@ -8,7 +8,7 @@ use rdkafka::{
     TopicPartitionList,
 };
 use std::env;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
 use crate::error::IndexerError;
 
@@ -38,11 +38,12 @@ impl KafkaConsumer {
             config.set("sasl.mechanisms", "PLAIN");
             config.set("sasl.username", &username);
 
-            if let Ok(password) = env::var("KAFKA_PASSWORD") {
-                config.set("sasl.password", &password);
-            } else {
-                warn!("KAFKA_PASSWORD is not set");
-            }
+            let password = env::var("KAFKA_PASSWORD").map_err(|_| {
+                IndexerError::Config(
+                    "KAFKA_PASSWORD must be set when KAFKA_USERNAME is configured".into(),
+                )
+            })?;
+            config.set("sasl.password", &password);
         }
 
         // Optional custom CA certificate

@@ -7368,6 +7368,24 @@ dependencies = [
 ]
 
 [[package]]
+name = "topology-indexer"
+version = "0.1.0"
+dependencies = [
+ "dotenv",
+ "futures 0.3.31",
+ "hermes-instrumentation",
+ "hermes-kafka",
+ "hermes-schema",
+ "prost 0.13.5",
+ "rdkafka 0.38.0",
+ "sqlx",
+ "thiserror 2.0.18",
+ "tokio",
+ "tracing",
+ "uuid",
+]
+
+[[package]]
 name = "tower"
 version = "0.4.13"
 source = "registry+https://github.com/rust-lang/crates.io-index"
