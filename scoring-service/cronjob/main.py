@@ -228,17 +228,17 @@ def main() -> None:
     else:
         print("Sentry monitoring disabled (set SENTRY_DSN to enable)")
 
-    # Start background memory monitor
-    memory_threshold = float(os.environ.get("MEMORY_MONITOR_THRESHOLD", "0.85"))
-    memory_interval = float(os.environ.get("MEMORY_MONITOR_INTERVAL", "5"))
-    start_memory_monitor(threshold=memory_threshold, interval=memory_interval)
-
     log_level = os.environ.get("LOG_LEVEL", "INFO").upper()
     logging.basicConfig(
         level=getattr(logging, log_level, logging.INFO),
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
         handlers=[logging.StreamHandler(sys.stdout)],
     )
+
+    # Start background memory monitor
+    memory_threshold = float(os.environ.get("MEMORY_MONITOR_THRESHOLD", "0.85"))
+    memory_interval = float(os.environ.get("MEMORY_MONITOR_INTERVAL", "5"))
+    start_memory_monitor(threshold=memory_threshold, interval=memory_interval)
 
     # Database configuration (required)
     database_url = os.environ.get("DATABASE_URL")
