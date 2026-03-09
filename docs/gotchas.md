@@ -48,3 +48,17 @@ Gaia + Hermes have two producers: Atlas and Hermes Pipeline. They emit different
 ### Kafka emission guarantees
 
 Right now we use a FutureProducer in Hermes Pipeline to await a response from Kafka when emitting an event so we know there's some guarantee of delivery. Previously we used BaseProducer and there could be situations where we sent an event to Kafka but it failed to deliver without any errors. It hasn't been benchmarked, but FutureProducer probably slows our throughput quite considerably. Probably doesn't matter in practice except in situations where we index from the beginning.
+
+### Indexer performance, hot path sidecars, and custom databases
+
+In kg-indexer we try and optimize write throughput by avoiding any reads in the hot path. There are some situations where we NEED to read data before writing. For those situations we currently have async sidecar indexers that operate within the same kg-indexer process.
+
+One example of this is the proposal vote tally. We currently don't emit the total YES/NO vote counts from the protocol as users vote on proposals. Knowing the vote counts are useful for UI display, but also useful to compute the status of a proposal, like whether it's executable or not, without having to read from the chain RPC.
+
+For this we have a proposal vote tally sidecar that runs in kg-indexer but does not block the main indexing thread. This does introduce some durability/persistence problems to solve, but it works at the current scale.
+
+Generally we should try and make the main kg-indexer hot path as performant as possible since we only have one global indexer. Future indexer sharding implementations can help here as well.
+
+We currently have quite a few indexes due to the nature of our existing query patterns. We can probably audit these, but my guess is that most of them need to stick around. This could be alleviated if we move away from GraphQL and user-driven querying. These indexes impact our write throughput quite a bit in Postgres.
+
+For very exploratory future work, we can look at implementing a custom database oriented specifically to our needs. This DB can run in memory and ocassionally flush checkpoints to disk. Since we have the blockchain, IPFS, and Kafka in front of the indexer, we can actually get away with not having to implement a lot of the durability mechanisms that traditional databases do. Additionally, our data model is very well-scoped, so we can build the right indexes and storage mechanics specifically for our needs right into the database. We can implement a disaggregated storage database which a lot of modern databases are moving to.
