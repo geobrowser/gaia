@@ -1,0 +1,76 @@
+name: Deploy Scoring Topology Indexer (Staging)
+
+on:
+  push:
+    branches:
+      - dev
+    paths:
+      - 'scoring-service/topology-indexer/**'
+      - 'scoring-service/deployment/staging/topology-indexer.yaml'
+      - 'hermes-schema/**'
+      - 'wire/**'
+      - '.github/workflows/scoring-topology-indexer-deploy-staging.yml'
+
+concurrency:
+  group: topology-indexer-staging
+  cancel-in-progress: true
+
+env:
+  REGISTRY: registry.digitalocean.com/geo
+  IMAGE_NAME: topology-indexer
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v6.0.1
+
+      - name: Install doctl
+        uses: digitalocean/action-doctl@v2.5.1
+        with:
+          token: ${{ secrets.DIGITALOCEAN_ACCESS_TOKEN }}
+
+      - name: Log in to DigitalOcean Container Registry
+        run: doctl registry login --expiry-seconds 1200
+
+      - name: Build and push Docker image
+        run: |
+          docker build -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }} \
+                       -t ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:staging \
+                       -f scoring-service/topology-indexer/Dockerfile .
+          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          docker push ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:staging
+
+      - name: Set up kubectl
+        uses: Azure/setup-kubectl@v4.0.1
+
+      - name: Configure kubectl for DigitalOcean
+        run: |
+          doctl kubernetes cluster kubeconfig save ${{ secrets.DIGITALOCEAN_CLUSTER_NAME }}
+
+      - name: Deploy to Kubernetes
+        run: |
+          kubectl apply -f scoring-service/deployment/staging/namespace.yaml
+          # Update image tag to use SHA and apply
+          sed -i 's|image: registry.digitalocean.com/geo/topology-indexer:latest|image: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.sha }}|g' scoring-service/deployment/staging/topology-indexer.yaml
+          kubectl apply -f scoring-service/deployment/staging/topology-indexer.yaml
+
+      - name: Restart deployment to pick up new image
+        run: |
+          kubectl rollout restart deployment/topology-indexer -n scoring-staging
+
+      - name: Wait for rollout
+        run: |
+          kubectl rollout status deployment/topology-indexer -n scoring-staging --timeout=120s
+
+      - name: Show deployment status
+        run: |
+          echo "=== Scoring Topology Indexer Deployment ==="
+          kubectl get deployment topology-indexer -n scoring-staging
+          echo ""
+          echo "=== Scoring Topology Indexer Pods ==="
+          kubectl get pods -n scoring-staging -l app=topology-indexer
+          echo ""
+          echo "=== Recent Events ==="
+          kubectl get events -n scoring-staging --sort-by='.lastTimestamp' | grep topology-indexer | tail -10
