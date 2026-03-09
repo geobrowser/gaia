@@ -65,6 +65,6 @@ For very exploratory future work, we can look at implementing a custom database 
 
 ### Dashless UUIDs
 
-In Postgres UUIDs are stored using the `uuid` database. We return dashless UUIDs for any queries that return UUIDs from the database. This can be a cause of subtle bugs, especially when doing comparisons between dashed and dashless UUIDs.
+In Postgres UUIDs are stored using the `uuid` data type. We return dashless UUIDs for any queries that return UUIDs from the database. This can be a cause of subtle bugs, especially when doing comparisons between dashed and dashless UUIDs.
 
 In Postgraphile we have a plugin which automatically strips dashes from responses. Any comparisons/filters done through Postgraphile should automatically work as comparisons are done at the database level rather than in-memory.
