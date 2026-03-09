@@ -11,6 +11,7 @@ from sentry_sdk.integrations.logging import LoggingIntegration
 
 from src.algorithm.models import RankingConfig
 from src.algorithm.scoring import RankingEngine
+from src.memory_monitor import start_memory_monitor
 from src.scoring_data_emitter import ScoringDataEmitter
 from src.scoring_data_provider import ScoringDataProvider
 from src.scoring_data_provider.scoring_data_provider import ScoringData
@@ -233,6 +234,11 @@ def main() -> None:
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
         handlers=[logging.StreamHandler(sys.stdout)],
     )
+
+    # Start background memory monitor
+    memory_threshold = float(os.environ.get("MEMORY_MONITOR_THRESHOLD", "0.85"))
+    memory_interval = float(os.environ.get("MEMORY_MONITOR_INTERVAL", "5"))
+    start_memory_monitor(threshold=memory_threshold, interval=memory_interval)
 
     # Database configuration (required)
     database_url = os.environ.get("DATABASE_URL")
