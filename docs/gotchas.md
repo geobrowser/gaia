@@ -62,3 +62,9 @@ Generally we should try and make the main kg-indexer hot path as performant as p
 We currently have quite a few indexes due to the nature of our existing query patterns. We can probably audit these, but my guess is that most of them need to stick around. This could be alleviated if we move away from GraphQL and user-driven querying. These indexes impact our write throughput quite a bit in Postgres.
 
 For very exploratory future work, we can look at implementing a custom database oriented specifically to our needs. This DB can run in memory and ocassionally flush checkpoints to disk. Since we have the blockchain, IPFS, and Kafka in front of the indexer, we can actually get away with not having to implement a lot of the durability mechanisms that traditional databases do. Additionally, our data model is very well-scoped, so we can build the right indexes and storage mechanics specifically for our needs right into the database. We can implement a disaggregated storage database which a lot of modern databases are moving to.
+
+### Dashless UUIDs
+
+In Postgres UUIDs are stored using the `uuid` database. We return dashless UUIDs for any queries that return UUIDs from the database. This can be a cause of subtle bugs, especially when doing comparisons between dashed and dashless UUIDs.
+
+In Postgraphile we have a plugin which automatically strips dashes from responses. Any comparisons/filters done through Postgraphile should automatically work as comparisons are done at the database level rather than in-memory.
