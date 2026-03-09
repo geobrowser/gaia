@@ -118,7 +118,7 @@ class TestMain:
 
             main()
 
-            assert "Scoring pipeline completed: 2 entities, 1 spaces" in caplog.text
+            assert "Pipeline complete: 2 entities, 1 spaces" in caplog.text
 
 
 class TestScoringPipeline:

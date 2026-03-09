@@ -3,6 +3,7 @@
 import logging
 import os
 import sys
+import time
 from enum import Enum
 
 import sentry_sdk
@@ -84,30 +85,40 @@ class ScoringPipeline:
         """Run the full scoring pipeline."""
         logger.info("Starting scoring pipeline (output_mode=%s)", self.output_mode.value)
 
+        phase_times: dict[str, float] = {}
+
         # Create parent transaction for the entire pipeline
         with sentry_sdk.start_transaction(op="pipeline.run", name="scoring_pipeline"):
+            t0 = time.monotonic()
             with sentry_sdk.start_span(op="pipeline.fetch_data", description="Fetch scoring data"):
                 self._fetch_data()
+            phase_times["fetch"] = time.monotonic() - t0
 
+            t0 = time.monotonic()
             with sentry_sdk.start_span(op="pipeline.rank_spaces", description="Rank spaces"):
                 self._rank_spaces()
+            phase_times["spaces"] = time.monotonic() - t0
 
+            t0 = time.monotonic()
             with sentry_sdk.start_span(op="pipeline.rank_entities", description="Rank entities"):
                 self._rank_entities()
+            phase_times["entities"] = time.monotonic() - t0
 
+            t0 = time.monotonic()
             with sentry_sdk.start_span(op="pipeline.write_scores", description="Write scores"):
                 self._write_scores()
+            phase_times["write"] = time.monotonic() - t0
 
         entity_count = len(self.scoring_data.entities)
         space_count = len(self.scoring_data.spaces)
+        total_time = sum(phase_times.values())
+        phase_summary = ", ".join(f"{k}={v:.0f}s" for k, v in phase_times.items())
         logger.info(
-            "Scoring pipeline completed: %d entities, %d spaces",
+            "Pipeline complete: %d entities, %d spaces in %.0fs (%s)",
             entity_count,
             space_count,
-            extra={
-                "pipeline_entities_processed": entity_count,
-                "pipeline_spaces_processed": space_count,
-            },
+            total_time,
+            phase_summary,
         )
 
         return entity_count, space_count

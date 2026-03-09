@@ -1,5 +1,7 @@
 """ScoringDataProvider module for fetching and aggregating scoring data from PostgreSQL."""
 
+import logging
+import time
 from dataclasses import dataclass
 from datetime import datetime
 
@@ -15,6 +17,8 @@ from src.algorithm.models import (
     VoteType,
 )
 from src.constants import ROOT_SPACE_ID
+
+logger = logging.getLogger(__name__)
 
 @dataclass
 class ScoringData:
@@ -44,12 +48,29 @@ class ScoringDataProvider:
             ScoringData containing entities, votes, users, and spaces.
         """
         with psycopg.connect(self._connection_string) as conn:
+            t0 = time.monotonic()
             spaces = self._fetch_spaces(conn)
+            logger.info("Fetched %d spaces in %.1fs", len(spaces), time.monotonic() - t0)
+
+            t0 = time.monotonic()
             users = self._fetch_users(conn)
+            logger.info("Fetched %d users in %.1fs", len(users), time.monotonic() - t0)
+
+            t0 = time.monotonic()
             votes = self._fetch_votes(conn)
+            logger.info("Fetched %d votes in %.1fs", len(votes), time.monotonic() - t0)
+
+            t0 = time.monotonic()
             perspectives = self._fetch_perspectives(conn)
+            logger.info("Fetched %d perspectives in %.1fs", len(perspectives), time.monotonic() - t0)
+
+            t0 = time.monotonic()
             entities = self._fetch_entities(conn)
+            logger.info("Fetched %d entities in %.1fs", len(entities), time.monotonic() - t0)
+
+            t0 = time.monotonic()
             entities = self._build_entities_with_perspectives(entities, perspectives)
+            logger.info("Built entities with perspectives in %.1fs", time.monotonic() - t0)
 
         return ScoringData(
             entities=entities,
@@ -146,10 +167,14 @@ class ScoringDataProvider:
         topology_distances = self._fetch_scoring_topology_distances(conn)
 
         if topology_distances:
-            # Use topology distances from the indexer
+            logger.info(
+                "Using topology distances (%d entries, root=%s)",
+                len(topology_distances),
+                next((sid for sid, d in topology_distances.items() if d == 0), "unknown"),
+            )
             return self._build_spaces_from_topology(space_rows, topology_distances)
 
-        # Fallback: flat hierarchy (all spaces are children of root)
+        logger.info("Topology distances empty, using flat hierarchy fallback")
         return self._build_spaces_flat(space_rows)
 
     def _build_spaces_from_topology(
