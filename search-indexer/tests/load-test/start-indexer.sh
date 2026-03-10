@@ -45,12 +45,12 @@ echo
 # ---- Check prerequisites ----
 if ! timeout 5 bash -c 'cat < /dev/null > /dev/tcp/localhost/9092' 2>/dev/null; then
     echo "ERROR: Kafka not reachable at $KAFKA_BROKER"
-    echo "Start it: cd hermes && docker-compose up -d kafka"
+    echo "Start it: docker compose --profile infra up -d"
     exit 1
 fi
 if ! curl -sf "$OPENSEARCH_URL/_cluster/health" > /dev/null 2>&1; then
     echo "ERROR: OpenSearch not reachable at $OPENSEARCH_URL"
-    echo "Start it: cd search-indexer-deploy && docker-compose up -d opensearch"
+    echo "Start it: docker compose --profile infra up -d"
     exit 1
 fi
 
@@ -105,8 +105,7 @@ cleanup() {
     echo "Indexer stopped."
     echo
     echo "To stop infrastructure:"
-    echo "  docker compose -f search-indexer-deploy/docker-compose.yaml down   # OpenSearch"
-    echo "  docker compose -f hermes/docker-compose.yaml stop kafka            # Kafka"
+    echo "  docker compose --profile infra down"
     echo
 }
 trap cleanup EXIT

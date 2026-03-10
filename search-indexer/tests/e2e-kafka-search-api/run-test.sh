@@ -25,7 +25,7 @@ echo ""
 if ! timeout 5 bash -c 'cat < /dev/null > /dev/tcp/localhost/9092' 2>/dev/null; then
     echo "⚠️  Warning: Cannot connect to Kafka at localhost:9092"
     echo "   Make sure Kafka is running:"
-    echo "   cd hermes && docker-compose up -d kafka kafka-ui"
+    echo "   docker compose --profile infra up -d"
     echo ""
     read -p "Continue anyway? (y/N): " -n 1 -r
     echo

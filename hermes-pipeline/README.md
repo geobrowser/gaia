@@ -117,8 +117,8 @@ If `SENTRY_DSN` is set, telemetry is exported to Sentry. Otherwise, logs are wri
 ### Local Development (Live Data)
 
 ```bash
-# Start local Kafka (see hermes/docker-compose.yaml)
-docker-compose -f hermes/docker-compose.yaml up -d
+# Start infrastructure (see docker-compose.yml at repo root)
+docker compose --profile infra up -d
 
 # Run with live substreams data (default)
 SUBSTREAMS_API_TOKEN=your-token \

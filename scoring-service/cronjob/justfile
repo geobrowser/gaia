@@ -43,15 +43,15 @@ proto-gen:
 
 # Start Kafka infrastructure (Kafka + Kafka UI)
 kafka-up:
-    cd ../hermes && docker compose up kafka kafka-ui -d
+    cd ../.. && docker compose --profile infra --profile tools up kafka kafka-ui -d
     @echo "Waiting for Kafka to be healthy..."
-    @until docker compose -f ../hermes/docker-compose.yaml exec kafka /opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 > /dev/null 2>&1; do sleep 2; done
+    @until docker compose -f ../../docker-compose.yml exec kafka /opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 > /dev/null 2>&1; do sleep 2; done
     @echo "Kafka is ready!"
     @echo "Kafka UI available at http://localhost:8080"
 
 # Stop Kafka infrastructure
 kafka-down:
-    cd ../hermes && docker compose down kafka kafka-ui
+    cd ../.. && docker compose stop kafka kafka-ui
 
 # Run scoring service with Kafka output (requires DATABASE_URL)
 run-scoring-kafka:

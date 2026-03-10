@@ -125,9 +125,10 @@ kubectl logs -n kafka -l app=atlas --tail=50 -f
 
 ```
 hermes/
-+-- docker-compose.yaml  # Local development
 +-- k8s/                 # Kubernetes manifests (production)
 ```
+
+> Local development compose is at the repo root: `docker-compose.yml`
 
 ## Related Documents
 

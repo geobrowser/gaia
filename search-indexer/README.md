@@ -5,15 +5,14 @@ Main binary for the Geo Knowledge Graph search indexer. Creates an orchestrator 
 ## Quick Start
 
 ```bash
-# 1. Start Kafka
-cd ../hermes && docker-compose up -d kafka
+# 1. Start infrastructure (from repo root)
+docker compose --profile infra up -d
 
 # 2. Run the indexer (with auto index creation for local dev)
-cd ../search-indexer
-ENVIRONMENT=staging \
+ENVIRONMENT=production \
 OPENSEARCH_URL=http://localhost:9200 \
 KAFKA_BROKER=localhost:9092 \
-cargo run --features search-indexer-repository/auto_index_creation
+cargo run -p search-indexer --features search-indexer-repository/auto_index_creation
 ```
 
 Or use the full docker-compose stack:
@@ -254,12 +253,11 @@ docker-compose up -d
 docker-compose logs -f search-indexer
 ```
 
-**Note**: The docker-compose setup connects to the Kafka broker from the `hermes` docker-compose network. Make sure the hermes Kafka broker is running:
+**Note**: The docker-compose setup connects to the Kafka broker via the `hermes_default` network. Make sure infrastructure is running:
 
 ```bash
-# Start Kafka broker
-cd ../hermes
-docker-compose up -d kafka
+# Start infrastructure (from repo root)
+docker compose --profile infra up -d
 ```
 
 #### Running standalone
@@ -304,11 +302,11 @@ See [TESTING.md](TESTING.md) for comprehensive end-to-end testing documentation.
 ### Running locally
 
 ```bash
-# Start dependencies
-docker-compose -f ../hermes/docker-compose.yml up -d
+# Start dependencies (from repo root)
+docker compose --profile infra up -d
 
 # Run the indexer (with auto index creation for local dev)
-ENVIRONMENT=staging cargo run --features search-indexer-repository/auto_index_creation
+ENVIRONMENT=production cargo run --features search-indexer-repository/auto_index_creation
 ```
 
 ## Verifying the Indexer

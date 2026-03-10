@@ -471,16 +471,12 @@ gaia/
 Each transformer runs as an independent service:
 
 ```bash
-# Local development (from hermes/ directory)
-docker-compose -f hermes/docker-compose.yaml up
+# Local development (from repo root)
+docker compose --profile infra up -d                           # infrastructure only
+docker compose --profile infra --profile services up           # + all app services
 
-# Starts:
-# - Kafka broker (localhost:9092)
-# - Kafka UI (http://localhost:8080)
-# - hermes-pipeline transformer
-# - atlas (topology transformer)
-# - hermes-ipfs-cache service
-# - PostgreSQL (for IPFS cache)
+# Infrastructure starts: Kafka (localhost:9092), 2x PostgreSQL, OpenSearch
+# Services start: hermes-pipeline, atlas, hermes-ipfs-cache, kg-indexer, etc.
 ```
 
 All services run with mock data by default, processing a deterministic test topology and publishing to Kafka topics.
