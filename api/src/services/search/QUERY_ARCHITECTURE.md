@@ -85,7 +85,7 @@ From highest to lowest impact:
 
 | Constant | Value | Usage |
 |----------|-------|-------|
-| `SCORE_BOOST` | 10.0 | Multiplier applied inside `script_score` logic after clamping and shifting score fields (see `buildScoreBoostFunction` in opensearch.ts) |
+| `SCORE_BOOST` | 20.0 | Multiplier applied inside `script_score` logic after clamping and shifting score fields (see `buildScoreBoostFunction` in opensearch.ts) |
 | `NAME_PREFIX_BOOST` | 5.0 | `match_phrase_prefix` on name |
 | `DESCRIPTION_PREFIX_BOOST` | 1.5 | `match_phrase_prefix` on description |
 | `NAME_FIELD_BOOST` | 1.5 | Field boost on name in `multi_match` |
@@ -102,9 +102,9 @@ From highest to lowest impact:
 - **Score field normalization**: Score fields use `float` type normalized to [0, 1] with 0.5 as average. Boosting is done via `function_score` with `script_score` (see `buildScoreBoostFunction` in opensearch.ts). The script applies:
   1. **Clamping**: Scores below `MIN_SCORE_THRESHOLD` (0.0) are clamped to 0.0
   2. **Shifting**: Scores are shifted by `SCORE_SHIFT` (1.0) to ensure all values are positive (OpenSearch requirement)
-  3. **Multiplier**: The shifted score is multiplied by `SCORE_BOOST` (10.0) for the final boost value
-  4. **Formula**: `(max(score, 0.0) + 1.0) * 10.0`
-  5. **Range**: score=0.0 → boost=10, score=0.5 → boost=15, score=1.0 → boost=20
+  3. **Multiplier**: The shifted score is multiplied by `SCORE_BOOST` (20.0) for the final boost value
+  4. **Formula**: `(max(score, 0.0) + 1.0) * 20.0`
+  5. **Range**: score=0.0 → boost=20, score=0.5 → boost=30, score=1.0 → boost=40
 - **Autocomplete support**: `search_as_you_type` field type with n-gram sub-fields enables smooth autocomplete UX.
 
 ---

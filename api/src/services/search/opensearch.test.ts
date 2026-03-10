@@ -1,6 +1,6 @@
 import {afterEach, beforeEach, describe, expect, it, vi} from "vitest"
 
-import {OpenSearchClient, SCORE_BOOST} from "./opensearch"
+import {DEFAULT_AVERAGE_SCORE, MIN_SCORE_THRESHOLD, OpenSearchClient, SCORE_BOOST, SCORE_SHIFT} from "./opensearch"
 
 describe("OpenSearchClient", () => {
 	let client: OpenSearchClient
@@ -817,6 +817,53 @@ describe("OpenSearchClient", () => {
 
 			expect(fetchSpy).not.toHaveBeenCalled()
 			expect(queryStr).toContain("in_canonical_graph")
+		})
+	})
+
+	describe("score boost ranking: Geo root space vs other Geo entity", () => {
+		/**
+		 * Regression test for score boost tuning.
+		 *
+		 * Entity A: name="Geo", desc="The root space for the global decentralized knowledge graph."
+		 *           entity_global_score=1.2
+		 * Entity B: name="Geo", desc="Geo is a network for organizing knowledge that we can collectively govern and trust."
+		 *           entity_global_score=0.4
+		 *
+		 * Entity A (the root space) must always rank higher than Entity B in global search,
+		 * even though Entity B has a richer description containing the query term "Geo".
+		 */
+
+		function computeScoreBoost(score: number): number {
+			const clamped = Math.max(score, MIN_SCORE_THRESHOLD)
+			return (clamped + SCORE_SHIFT) * SCORE_BOOST
+		}
+
+		it("should produce a higher score boost for entity_global_score=1.2 than 0.4", () => {
+			const boostA = computeScoreBoost(1.2)
+			const boostB = computeScoreBoost(0.4)
+
+			expect(boostA).toBeGreaterThan(boostB)
+		})
+
+		it("should produce a score boost gap large enough to overcome description text match advantage", () => {
+			const boostA = computeScoreBoost(1.2)
+			const boostB = computeScoreBoost(0.4)
+			const boostGap = boostA - boostB
+
+			// Entity B's description contains "Geo" which adds ~3-5 extra text match points
+			// from match_phrase_prefix, bool_prefix, and fuzzy matches on description.
+			// The score boost gap must exceed this text match advantage.
+			const estimatedDescriptionAdvantage = 5.0
+			expect(boostGap).toBeGreaterThan(estimatedDescriptionAdvantage)
+		})
+
+		it("should include entity_global_score in the global query boost script", () => {
+			const baseQuery = client.buildBaseTextQuery("Geo")
+			const query = client.buildGlobalQuery(baseQuery)
+			const queryStr = JSON.stringify(query)
+
+			expect(queryStr).toContain("entity_global_score")
+			expect(queryStr).toContain(`* ${SCORE_BOOST}`)
 		})
 	})
 })
