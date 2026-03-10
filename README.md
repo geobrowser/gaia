@@ -84,7 +84,7 @@ See [.env.example](.env.example) for all variables and descriptions.
 ### 2. Start Infrastructure
 
 ```bash
-# Kafka, 2x PostgreSQL, OpenSearch
+# Kafka, PostgreSQL, OpenSearch
 docker compose --profile infra up -d
 ```
 
@@ -120,7 +120,7 @@ The API is available at `http://localhost:3000`.
 
 | Profile | Command | What it starts |
 |---------|---------|----------------|
-| `infra` | `docker compose --profile infra up` | Kafka, 2x PostgreSQL, OpenSearch |
+| `infra` | `docker compose --profile infra up` | Kafka, PostgreSQL, OpenSearch |
 | `tools` | `docker compose --profile infra --profile tools up` | + Kafka UI (:8080), OpenSearch Dashboards (:5601) |
 | `services` | `docker compose --profile infra --profile services up` | + all 8 application services |
 | `executor` | `docker compose --profile infra --profile services --profile executor up` | + proposal-executor (requires secrets) |

@@ -475,7 +475,7 @@ Each transformer runs as an independent service:
 docker compose --profile infra up -d                           # infrastructure only
 docker compose --profile infra --profile services up           # + all app services
 
-# Infrastructure starts: Kafka (localhost:9092), 2x PostgreSQL, OpenSearch
+# Infrastructure starts: Kafka (localhost:9092), PostgreSQL, OpenSearch
 # Services start: hermes-pipeline, atlas, hermes-ipfs-cache, kg-indexer, etc.
 ```
 

@@ -1,7 +1,7 @@
 # Unified Docker Compose for Gaia local development.
 #
 # Profiles:
-#   infra     — Kafka, 2x PostgreSQL, OpenSearch
+#   infra     — Kafka, PostgreSQL, OpenSearch
 #   tools     — Kafka UI (protobuf serde), OpenSearch Dashboards
 #   services  — All application services (API, indexers, pipeline, atlas, etc.)
 #   executor  — proposal-executor (requires external secrets)
@@ -64,23 +64,6 @@ services:
       timeout: 5s
       retries: 5
     tty: true
-
-  postgres-ipfs-cache:
-    image: postgres:16
-    profiles: [infra]
-    ports:
-      - "127.0.0.1:5433:5432"
-    environment:
-      POSTGRES_DB: ipfs_cache
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-    volumes:
-      - postgres-ipfs-cache:/var/lib/postgresql/data
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U postgres -d ipfs_cache"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
 
   opensearch:
     image: opensearchproject/opensearch:2.17.1
@@ -291,15 +274,15 @@ services:
     environment:
       KAFKA_BROKER: kafka:29092
       ENVIRONMENT: ${ENVIRONMENT:-production}
-      DATABASE_URL: postgres://postgres:postgres@postgres-ipfs-cache:5432/ipfs_cache
+      DATABASE_URL: postgresql://postgres:postgres@postgres-gaia:5432/gaia
       SUBSTREAMS_ENDPOINT: ${SUBSTREAMS_ENDPOINT}
       SUBSTREAMS_API_TOKEN: ${SUBSTREAMS_API_TOKEN}
       SENTRY_DSN: ${SENTRY_DSN:-}
     depends_on:
       kafka:
         condition: service_healthy
-      postgres-ipfs-cache:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
 
   atlas:
     profiles: [services]
@@ -363,15 +346,15 @@ services:
       context: .
       dockerfile: hermes-ipfs-cache/Dockerfile
     environment:
-      DATABASE_URL: postgres://postgres:postgres@postgres-ipfs-cache:5432/ipfs_cache
+      DATABASE_URL: postgresql://postgres:postgres@postgres-gaia:5432/gaia
       IPFS_GATEWAY_URL: ${IPFS_GATEWAY_URL:-https://gateway.mesh3.network/ipfs/}
       SUBSTREAMS_ENDPOINT: ${SUBSTREAMS_ENDPOINT}
       SUBSTREAMS_API_TOKEN: ${SUBSTREAMS_API_TOKEN}
       RUST_LOG: info,hermes_ipfs_cache=debug
       SENTRY_DSN: ${SENTRY_DSN:-}
     depends_on:
-      postgres-ipfs-cache:
-        condition: service_healthy
+      migrate:
+        condition: service_completed_successfully
 
   vote-indexer:
     profiles: [services]
@@ -477,5 +460,4 @@ networks:
 volumes:
   kafka-data:
   postgres-gaia:
-  postgres-ipfs-cache:
   opensearch-data:
