@@ -5,46 +5,49 @@ Knowledge graph data service for the [Geo protocol](https://geobrowser.io/). Gai
 ## Architecture
 
 ```
-                              ┌───────────────────────────────────────────────────────────┐
-                              │  Hermes (event streaming)                                 │
-                              │                                                           │
-┌──────────────┐              │  ┌────────────────┐    ┌──────────────┐                   │
-│  Blockchain  │──────────────│─▶│ hermes-        │───▶│ hermes-relay │                   │
-│    (Geo)     │              │  │ substream      │    │   (library)  │                   │
-└──────────────┘              │  └────────────────┘    └──────┬───────┘                   │
-                              │                               │                           │
-                              │                  ┌────────────┤                           │
-                              │                  ▼            ▼                           │
-                              │  ┌───────────────────┐  ┌──────────┐                      │
-                              │  │ hermes-pipeline   │  │  atlas   │                      │
-                              │  │ (all events)      │  │ (graphs) │                      │
-                              │  └────────┬──────────┘  └────┬─────┘                      │
-                              │           │                   │                           │
-                              └───────────┼───────────────────┼───────────────────────────┘
-                                          │                   │
-                                          ▼                   ▼
+                              +-----------------------------------------------------------+
+                              |  Hermes (event streaming)                                 |
+                              |                                                           |
++--------------+              |  +----------------+    +--------------+                   |
+|  Blockchain  |--------------|--->  hermes-      |--->| hermes-relay |                   |
+|    (Geo)     |              |  |  substream     |    |   (library)  |                   |
++--------------+              |  +----------------+    +------+-------+                   |
+                              |                               |                           |
+                              |                  +------------+                           |
+                              |                  |            |                           |
+                              |                  v            v                           |
+                              |  +-------------------+  +----------+                      |
+                              |  | hermes-pipeline   |  |  atlas   |                      |
+                              |  | (all events)      |  | (graphs) |                      |
+                              |  +--------+----------+  +----+-----+                      |
+                              |           |                   |                           |
+                              +-----------+-------------------+---------------------------+
+                                          |                   |
+                                          v                   v
                                        Kafka              Kafka
-                                                              │
-                     ┌────────────────────────────────────────┘
-                     ▼
-┌────────────────────────────────────────────────────────────────────┐
-│  Indexers (Kafka → PostgreSQL / OpenSearch)                        │
-│                                                                    │
-│  kg-indexer · search-indexer · actions-indexer · scoring-service   │
-└──────────────────────────────┬─────────────────────────────────────┘
-                               ▼
-                     ┌───────────────────┐
-                     │   Gaia API        │
-                     │   (Bun + Hono)    │
-                     │                   │
-                     │  /graphql         │◄── PostGraphile
-                     │  /versioned/*     │◄── Temporal queries
-                     │  /proposals/*     │◄── Governance
-                     │  /profile/*       │◄── User profiles
-                     │  /search/*        │◄── OpenSearch
-                     │  /ipfs/*          │◄── IPFS uploads
-                     │  /health/*        │◄── K8s probes
-                     └───────────────────┘
+                                                              |
+                     +----------------------------------------+
+                     |
+                     v
++--------------------------------------------------------------------+
+|  Indexers (Kafka --> PostgreSQL / OpenSearch)                       |
+|                                                                    |
+|  kg-indexer . search-indexer . actions-indexer . scoring-service    |
++------------------------------+-------------------------------------+
+                               |
+                               v
+                     +-------------------+
+                     |   Gaia API        |
+                     |   (Bun + Hono)    |
+                     |                   |
+                     |  /graphql         |<-- PostGraphile
+                     |  /versioned/*     |<-- Temporal queries
+                     |  /proposals/*     |<-- Governance
+                     |  /profile/*       |<-- User profiles
+                     |  /search/*        |<-- OpenSearch
+                     |  /ipfs/*          |<-- IPFS uploads
+                     |  /health/*        |<-- K8s probes
+                     +-------------------+
 ```
 
 ### Subsystems
@@ -55,7 +58,7 @@ Knowledge graph data service for the [Geo protocol](https://geobrowser.io/). Gai
 | **Graph**           | [atlas](atlas/)                                                                                                                                                                   | Computes canonical space topology from trust events    |
 | **Indexers**        | [kg-indexer](kg-indexer/), [search-indexer](search-indexer/), [actions-indexer](actions-indexer/), [scoring-service](scoring-service/)                                            | Consume Kafka topics, write to PostgreSQL / OpenSearch |
 | **API**             | [api](api/)                                                                                                                                                                       | GraphQL + REST read layer over indexed data            |
-| **Governance**      | [proposal-executor](proposal-executor/), [deployer](deployer/)                                                                                                                    | Onchain proposal execution and contract deployment     |
+| **Governance**      | [proposal-executor](proposal-executor/)                                                                                                                                           | Onchain proposal execution                             |
 | **Infrastructure**  | [hermes](hermes/) (docker-compose + k8s), [monitoring](monitoring/), [search-indexer-deploy](search-indexer-deploy/)                                                              | Local dev environment, observability, deployment       |
 
 ## Local Development
