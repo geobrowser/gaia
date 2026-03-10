@@ -4,7 +4,7 @@ A transformer binary that consumes space-related events from `hermes-substream` 
 
 ## Overview
 
-This transformer is part of the Hermes architecture (see `docs/hermes-architecture.md`). It:
+This transformer is part of the Hermes architecture (see `docs/architecture.md`). It:
 
 1. Connects to the blockchain data source via `hermes-relay`
 2. Subscribes to `HermesModule::Actions` to receive all raw actions

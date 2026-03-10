@@ -182,4 +182,4 @@ See the `docs/` directory for detailed architecture documentation:
 
 ## Related Documents
 
-- [Hermes Architecture](../docs/hermes-architecture.md) - Event streaming system that feeds Atlas
+- [Hermes Architecture](../docs/architecture.md) - Event streaming system that feeds Atlas

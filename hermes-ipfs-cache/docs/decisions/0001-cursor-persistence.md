@@ -171,4 +171,4 @@ If crash after step 7:
 
 - `hermes-ipfs-cache/src/lib.rs` - `PendingFetches` implementation
 - `hermes-ipfs-cache/docs/architecture.md` - Overall architecture
-- `docs/hermes-architecture.md` - Hermes system design
+- `docs/architecture.md` - Hermes system design
