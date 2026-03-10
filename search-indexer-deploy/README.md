@@ -107,25 +107,25 @@ The credentials are set via the `grafana-credentials` secret created in the prer
 
 ```
 search-indexer-deploy/
-├── docker-compose.yaml  # Local development
-├── prometheus.yml       # Prometheus config for docker-compose
-├── grafana/             # Grafana provisioning configs
-│   ├── datasources.yml
-│   ├── dashboard-providers.yml
-│   └── dashboards/     # Dashboard JSON files
-└── k8s/                 # Kubernetes manifests
-    ├── jobs/
-    │   └── README.md           # Index migration documentation
-    ├── production/
-    │   ├── kustomization.yaml
-    │   ├── namespace.yaml      # namespace: search
-    │   ├── search-indexer.yaml
-    │   ├── monitoring.yaml
-    │   └── jobs/               # Production migration jobs (ENVIRONMENT=production)
-    └── staging/
-        ├── namespace.yaml      # namespace: search-staging
-        ├── search-indexer.yaml
-        └── jobs/               # Staging migration jobs (ENVIRONMENT=staging)
++-- docker-compose.yaml  # Local development
++-- prometheus.yml       # Prometheus config for docker-compose
++-- grafana/             # Grafana provisioning configs
+|   +-- datasources.yml
+|   +-- dashboard-providers.yml
+|   +-- dashboards/     # Dashboard JSON files
++-- k8s/                 # Kubernetes manifests
+    +-- jobs/
+    |   +-- README.md           # Index migration documentation
+    +-- production/
+    |   +-- kustomization.yaml
+    |   +-- namespace.yaml      # namespace: search
+    |   +-- search-indexer.yaml
+    |   +-- monitoring.yaml
+    |   +-- jobs/               # Production migration jobs (ENVIRONMENT=production)
+    +-- staging/
+        +-- namespace.yaml      # namespace: search-staging
+        +-- search-indexer.yaml
+        +-- jobs/               # Staging migration jobs (ENVIRONMENT=staging)
 ```
 
 ## Index Migrations

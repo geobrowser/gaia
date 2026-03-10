@@ -23,28 +23,28 @@ The system receives blockchain events which fall into several categories:
 7. **Curation** - upvotes, downvotes, unvotes on objects
 
 ```
-                              ┌───────────────────────────────────────────────────────────────┐
-                              │  Hermes                                                       │
-                              │                                                               │
-┌──────────────┐              │  ┌────────────────┐    ┌─────────────────────────────┐        │
-│  Blockchain  │              │  │ hermes-        │    │  hermes-relay (lib)         │        │
-│    (Geo)     │─────────────▶│  │ substream      │───▶│  - Connect to substream     │        │
-└──────────────┘              │  │ (lib)          │    │  - Cursor/checkpoint mgmt   │        │
-                              │  └────────────────┘    │  - Typed event stream       │        │
-                              │                        └──────────────┬──────────────┘        │
-                              │                                       │                       │
-                              │                  ┌────────────────────┤                       │
-                              │                  │                    │                       │
-                              │                  ▼                    ▼                       │
-                              │  ┌───────────────────────────┐  ┌──────────┐                  │
-                              │  │  hermes-pipeline (bin)    │  │  atlas   │                  │
-                              │  │  - All event pipelines    │  │  (bin)   │                  │
-                              │  │  - IPFS cache integration │  └────┬─────┘                  │
-                              │  └────────────┬──────────────┘       │                       │
-                              │               │                      │                       │
-                              └───────────────┼──────────────────────┼───────────────────────┘
-                                              │                      │
-                                              ▼                      ▼
+                              +---------------------------------------------------------------+
+                              |  Hermes                                                       |
+                              |                                                               |
++--------------+              |  +----------------+    +-----------------------------+        |
+|  Blockchain  |              |  | hermes-        |    |  hermes-relay (lib)         |        |
+|    (Geo)     |------------->|  | substream      |--->|  - Connect to substream     |        |
++--------------+              |  | (lib)          |    |  - Cursor/checkpoint mgmt   |        |
+                              |  +----------------+    |  - Typed event stream       |        |
+                              |                        +--------------+--------------+        |
+                              |                                       |                       |
+                              |                  +--------------------+                       |
+                              |                  |                    |                       |
+                              |                  v                    v                       |
+                              |  +---------------------------+  +----------+                  |
+                              |  |  hermes-pipeline (bin)    |  |  atlas   |                  |
+                              |  |  - All event pipelines    |  |  (bin)   |                  |
+                              |  |  - IPFS cache integration |  +----+-----+                  |
+                              |  +------------+--------------+       |                       |
+                              |               |                      |                       |
+                              +---------------+----------------------+-----------------------+
+                                              |                      |
+                                              v                      v
                                            Kafka:                 Kafka:
                                            space.creations        topology.canonical
                                            space.trust.extensions
@@ -56,11 +56,11 @@ The system receives blockchain events which fall into several categories:
                                            knowledge.edits
                                            hermes.blocks
 
-                              ┌────────────────────────────────────────┐
-Blockchain ──────────────────▶│  IPFS Cache (parallel, ahead-of-time) │
-Data Source                   │  (hermes-pipeline uses mock cache for  │
-                              │   dev, live cache for production)      │
-                              └────────────────────────────────────────┘
+                              +----------------------------------------+
+Blockchain ------------------>|  IPFS Cache (parallel, ahead-of-time)  |
+Data Source                   |  (hermes-pipeline uses mock cache for   |
+                              |   dev, live cache for production)       |
+                              +----------------------------------------+
 ```
 
 ## Design Principles
@@ -370,19 +370,19 @@ The canonical graph represents the "trusted" portion of the knowledge graph.
 CANONICAL (reachable from Root):
 
   Root
-   ├─subspace─▶ A ─subspace─▶ C ─subspace─▶ F
-   │             │              └─subspace─▶ G
-   │             └─subspace─▶ D
-   ├─subspace─▶ B ─subspace─▶ E
-   └─subspace─▶ H ─subspace─▶ I
-                └─subspace─▶ J
+   +--subspace--> A --subspace--> C --subspace--> F
+   |              |                +--subspace--> G
+   |              +--subspace--> D
+   +--subspace--> B --subspace--> E
+   +--subspace--> H --subspace--> I
+                  +--subspace--> J
 
 NON-CANONICAL (isolated islands):
 
-  Island 1: X ─▶ Y ─▶ Z
-             └─▶ W
+  Island 1: X --> Y --> Z
+             +--> W
 
-  Island 2: P ─▶ Q
+  Island 2: P --> Q
 
   Island 3: S (isolated)
 ```
@@ -408,14 +408,14 @@ All topics support environment prefixing: in staging, topics are prefixed with `
 
 ```
 gaia/
-├── hermes-substream/      # Library: decodes Space Registry events (Substreams WASM + rlib)
-├── hermes-relay/          # Library: connects to substream, provides typed event stream
-├── hermes-schema/         # Library: Kafka output protobuf definitions
-├── hermes-kafka/          # Library: shared Kafka producer config, topic prefixing
-├── hermes-instrumentation/# Library: unified telemetry (tracing, OpenTelemetry, Sentry)
-├── hermes-pipeline/       # Binary: primary transformer (all event types)
-├── hermes-ipfs-cache/     # Service: IPFS content pre-fetcher (production)
-└── atlas/                 # Binary: canonical graph computation, publishes diffs to Kafka
++-- hermes-substream/       # Library: decodes Space Registry events (Substreams WASM + rlib)
++-- hermes-relay/           # Library: connects to substream, provides typed event stream
++-- hermes-schema/          # Library: Kafka output protobuf definitions
++-- hermes-kafka/           # Library: shared Kafka producer config, topic prefixing
++-- hermes-instrumentation/ # Library: unified telemetry (tracing, OpenTelemetry, Sentry)
++-- hermes-pipeline/        # Binary: primary transformer (all event types)
++-- hermes-ipfs-cache/      # Service: IPFS content pre-fetcher (production)
++-- atlas/                  # Binary: canonical graph computation, publishes diffs to Kafka
 ```
 
 `hermes-pipeline` is the primary transformer, handling all event types (spaces, membership, trust, moderation, topics, governance, voting, edits). It depends on `hermes-relay` for data source access, `hermes-schema` for output types, `hermes-kafka` for Kafka production, `hermes-instrumentation` for telemetry, and uses either a mock or live IPFS cache for edit content resolution.

@@ -13,25 +13,25 @@ All data enters through the Rust indexer pipeline (Kafka → indexers → Postgr
 
 ```
 Kafka Topics
-    │
-    ├── kg-indexer ──────────────► PostgreSQL
-    ├── search-indexer ──────────► OpenSearch
-    ├── actions-indexer ─────────► PostgreSQL
-    └── scoring-service ─────────► PostgreSQL
-                                       │
-                                       ▼
-                              ┌─────────────────┐
-                              │   Gaia API       │
-                              │   (Bun + Hono)   │
-                              │                  │
-                              │  /graphql        │◄── PostGraphile
-                              │  /versioned/*    │◄── Temporal entity queries
-                              │  /proposals/*    │◄── Governance status
-                              │  /profile/*      │◄── User profiles
-                              │  /search/*       │◄── OpenSearch proxy
-                              │  /ipfs/*         │◄── IPFS uploads
-                              │  /health/*       │◄── K8s probes
-                              └─────────────────┘
+    |
+    +-- kg-indexer --------------> PostgreSQL
+    +-- search-indexer ----------> OpenSearch
+    +-- actions-indexer ---------> PostgreSQL
+    +-- scoring-service ---------> PostgreSQL
+                                        |
+                                        v
+                               +------------------+
+                               |   Gaia API       |
+                               |   (Bun + Hono)   |
+                               |                  |
+                               |  /graphql        |<-- PostGraphile
+                               |  /versioned/*    |<-- Temporal entity queries
+                               |  /proposals/*    |<-- Governance status
+                               |  /profile/*      |<-- User profiles
+                               |  /search/*       |<-- OpenSearch proxy
+                               |  /ipfs/*         |<-- IPFS uploads
+                               |  /health/*       |<-- K8s probes
+                               +------------------+
 ```
 
 ## Local Development

@@ -39,12 +39,12 @@ Add `EDITS_PUBLISHED` support to `hermes-pipeline` as another data pipeline.
 Each pipeline converts Actions into Kafka events:
 
 ```
-Action ──────────────────────────────────────────────────────▶ Kafka Event
+Action ------------------------------------------------------------> Kafka Event
 
-SPACE_REGISTERED ──[ convert ]──────────────────────────────▶ space.creations
-SUBSPACE_ADDED   ──[ convert ]──────────────────────────────▶ space.trust.extensions  
-SUBSPACE_REMOVED ──[ convert ]──────────────────────────────▶ space.trust.extensions
-EDITS_PUBLISHED  ──[ convert + IPFS cache lookup ]──────────▶ knowledge.edits
+SPACE_REGISTERED --[ convert ]--------------------------------------> space.creations
+SUBSPACE_ADDED   --[ convert ]--------------------------------------> space.trust.extensions
+SUBSPACE_REMOVED --[ convert ]--------------------------------------> space.trust.extensions
+EDITS_PUBLISHED  --[ convert + IPFS cache lookup ]------------------> knowledge.edits
 ```
 
 Most pipelines are simple: extract fields from Action, build proto, emit to Kafka.
@@ -70,16 +70,16 @@ Organize pipelines into separate modules. Each pipeline is a simple function:
 
 ```
 hermes-pipeline/src/
-├── main.rs                      # Runs all pipelines per action
-├── pipelines/
-│   ├── mod.rs                   # Re-exports all pipelines
-│   ├── spaces.rs                # SPACE_REGISTERED → space.creations
-│   ├── trust.rs                 # SUBSPACE_ADDED/REMOVED → space.trust.extensions
-│   └── edits.rs                 # EDITS_PUBLISHED → knowledge.edits (+ cache)
-├── cache/
-│   ├── mod.rs                   # Cache trait
-│   └── mock.rs                  # Mock IPFS cache for testing
-└── shared.rs                    # Shared utilities (block metadata conversion)
++-- main.rs                      # Runs all pipelines per action
++-- pipelines/
+|   +-- mod.rs                   # Re-exports all pipelines
+|   +-- spaces.rs                # SPACE_REGISTERED -> space.creations
+|   +-- trust.rs                 # SUBSPACE_ADDED/REMOVED -> space.trust.extensions
+|   +-- edits.rs                 # EDITS_PUBLISHED -> knowledge.edits (+ cache)
++-- cache/
+|   +-- mod.rs                   # Cache trait
+|   +-- mock.rs                  # Mock IPFS cache for testing
++-- shared.rs                    # Shared utilities (block metadata conversion)
 ```
 
 ### Phase 1: Restructure into Pipelines

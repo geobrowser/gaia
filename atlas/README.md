@@ -78,23 +78,24 @@ When `KAFKA_USERNAME` and `KAFKA_PASSWORD` are both set, the producer automatica
 
 ```
 hermes-relay (StreamSource::mock() or StreamSource::live())
-        │
-        ▼
-┌───────────────────────────────────────┐
-│              Atlas                     │
-│                                       │
-│  ┌─────────────┐    ┌──────────────┐  │
-│  │ GraphState  │───►│ Transitive   │  │
-│  │             │    │ Processor    │  │
-│  └─────────────┘    └──────┬───────┘  │
-│                            │          │
-│                     ┌──────▼───────┐  │
-│                     │  Canonical   │  │
-│                     │  Processor   │  │
-│                     └──────┬───────┘  │
-│                            │          │
-└────────────────────────────┼──────────┘
-                             ▼
+        |
+        v
++---------------------------------------+
+|              Atlas                     |
+|                                       |
+|  +-------------+    +--------------+  |
+|  | GraphState  |--->| Transitive   |  |
+|  |             |    | Processor    |  |
+|  +-------------+    +------+-------+  |
+|                            |          |
+|                     +------v-------+  |
+|                     |  Canonical   |  |
+|                     |  Processor   |  |
+|                     +------+-------+  |
+|                            |          |
++----------------------------+----------+
+                             |
+                             v
                    topology.canonical topic
 ```
 

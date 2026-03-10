@@ -152,41 +152,41 @@ docker run \
 ## Architecture
 
 ```
-┌─────────────────┐     ┌──────────────┐     ┌─────────────────┐
-│ hermes-substream│────▶│ hermes-relay │────▶│ hermes-pipeline │
-│  (blockchain)   │     │   (stream)   │     │  (transformer)  │
-└─────────────────┘     └──────────────┘     └────────┬────────┘
-                                                      │
-                                                      ▼
-                                             ┌─────────────────┐
-                                             │      Kafka      │
-                                             │  ┌───────────┐  │
-                                             │  │ space.    │  │
-                                             │  │ creations │  │
-                                             │  ├───────────┤  │
-                                             │  │ space.    │  │
-                                             │  │membership │  │
-                                             │  ├───────────┤  │
-                                             │  │ space.    │  │
-                                             │  │ trust.    │  │
-                                             │  │extensions │  │
-                                             │  ├───────────┤  │
-                                             │  │ space.    │  │
-                                             │  │moderation │  │
-                                             │  ├───────────┤  │
-                                             │  │ space.    │  │
-                                             │  │  topics   │  │
-                                             │  ├───────────┤  │
-                                             │  │ space.    │  │
-                                             │  │governance │  │
-                                             │  ├───────────┤  │
-                                             │  │ curation. │  │
-                                             │  │  votes    │  │
-                                             │  ├───────────┤  │
-                                             │  │knowledge. │  │
-                                             │  │  edits    │  │
-                                             │  └───────────┘  │
-                                             └─────────────────┘
++-----------------+     +--------------+     +-----------------+
+| hermes-substream|--->| hermes-relay  |--->| hermes-pipeline  |
+|  (blockchain)   |     |   (stream)   |     |  (transformer)  |
++-----------------+     +--------------+     +--------+--------+
+                                                      |
+                                                      v
+                                             +-----------------+
+                                             |      Kafka      |
+                                             |  +-----------+  |
+                                             |  | space.    |  |
+                                             |  | creations |  |
+                                             |  +-----------+  |
+                                             |  | space.    |  |
+                                             |  |membership |  |
+                                             |  +-----------+  |
+                                             |  | space.    |  |
+                                             |  | trust.    |  |
+                                             |  |extensions |  |
+                                             |  +-----------+  |
+                                             |  | space.    |  |
+                                             |  |moderation |  |
+                                             |  +-----------+  |
+                                             |  | space.    |  |
+                                             |  |  topics   |  |
+                                             |  +-----------+  |
+                                             |  | space.    |  |
+                                             |  |governance |  |
+                                             |  +-----------+  |
+                                             |  | curation. |  |
+                                             |  |  votes    |  |
+                                             |  +-----------+  |
+                                             |  |knowledge. |  |
+                                             |  |  edits    |  |
+                                             |  +-----------+  |
+                                             +-----------------+
 ```
 
 ## Pipeline Modules

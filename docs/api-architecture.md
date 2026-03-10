@@ -13,25 +13,25 @@ The API is read-only. All data enters through the Rust indexer pipeline (Kafka �
 
 ```
 Kafka Topics
-    │
-    ├── kg-indexer (Rust) ──────────────► PostgreSQL
-    ├── search-indexer (Rust) ──────────► OpenSearch
-    ├── vote-indexer (Rust) ────────────► PostgreSQL
-    └── actions-indexer (Rust) ─────────► PostgreSQL
-                                              │
-                                              ▼
-                                     ┌─────────────────┐
-                                     │   Gaia API       │
-                                     │   (Bun + Hono)   │
-                                     │                  │
-                                     │  /graphql        │◄── PostGraphile (auto-generated)
-                                     │  /versioned/*    │◄── Temporal entity queries
-                                     │  /proposals/*    │◄── Governance status
-                                     │  /profile/*      │◄── User profiles
-                                     │  /search/*       │◄── OpenSearch proxy
-                                     │  /ipfs/*         │◄── IPFS uploads
-                                     │  /health/*       │◄── K8s probes
-                                     └─────────────────┘
+    |
+    +-- kg-indexer (Rust) ----------------> PostgreSQL
+    +-- search-indexer (Rust) ------------> OpenSearch
+    +-- vote-indexer (Rust) --------------> PostgreSQL
+    +-- actions-indexer (Rust) -----------> PostgreSQL
+                                               |
+                                               v
+                                      +------------------+
+                                      |   Gaia API       |
+                                      |   (Bun + Hono)   |
+                                      |                  |
+                                      |  /graphql        |<-- PostGraphile (auto-generated)
+                                      |  /versioned/*    |<-- Temporal entity queries
+                                      |  /proposals/*    |<-- Governance status
+                                      |  /profile/*      |<-- User profiles
+                                      |  /search/*       |<-- OpenSearch proxy
+                                      |  /ipfs/*         |<-- IPFS uploads
+                                      |  /health/*       |<-- K8s probes
+                                      +------------------+
 ```
 
 ## Tech Stack

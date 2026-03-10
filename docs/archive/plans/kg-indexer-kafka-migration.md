@@ -9,43 +9,43 @@ Migrate from Substreams-based `indexer` crate to a new Kafka-consuming `kg-index
 Simple loop-based consumer - no channels or orchestrator overhead:
 
 ```
-┌─────────────────────────────────────────────────┐
-│  kg-indexer                                     │
-│                                                 │
-│  loop {                                         │
-│      batch = consumer.poll_batch()              │
-│      for msg in batch {                         │
-│          events = process(msg)                  │
-│          storage.write(events)                  │
-│      }                                          │
-│      consumer.commit()                          │
-│  }                                              │
-└─────────────────────────────────────────────────┘
++-------------------------------------------------+
+|  kg-indexer                                     |
+|                                                 |
+|  loop {                                         |
+|      batch = consumer.poll_batch()              |
+|      for msg in batch {                         |
+|          events = process(msg)                  |
+|          storage.write(events)                  |
+|      }                                          |
+|      consumer.commit()                          |
+|  }                                              |
++-------------------------------------------------+
 
 Kafka Topics:
-├── knowledge.edits      (HermesEdit)
-├── space.creations      (HermesCreateSpace)
-├── space.membership     (HermesMembershipChange)
-└── space.trust.extensions (HermesSpaceTrustExtension)
++-- knowledge.edits      (HermesEdit)
++-- space.creations      (HermesCreateSpace)
++-- space.membership     (HermesMembershipChange)
++-- space.trust.extensions (HermesSpaceTrustExtension)
 ```
 
 ## Crate Structure
 
 ```
 kg-indexer/
-├── Cargo.toml
-├── src/
-│   ├── main.rs           # Entry point, config, main loop
-│   ├── consumer.rs       # Kafka consumer setup
-│   ├── handlers/
-│   │   ├── mod.rs
-│   │   ├── edits.rs      # Process HermesEdit → entities/values/relations
-│   │   ├── spaces.rs     # Process HermesCreateSpace → spaces
-│   │   ├── membership.rs # Process membership → members/editors
-│   │   └── subspaces.rs  # Process trust extensions → subspaces
-│   ├── models/           # Copy from indexer or share
-│   ├── storage.rs        # PostgreSQL operations
-│   └── error.rs
++-- Cargo.toml
++-- src/
+    +-- main.rs           # Entry point, config, main loop
+    +-- consumer.rs       # Kafka consumer setup
+    +-- handlers/
+    |   +-- mod.rs
+    |   +-- edits.rs      # Process HermesEdit -> entities/values/relations
+    |   +-- spaces.rs     # Process HermesCreateSpace -> spaces
+    |   +-- membership.rs # Process membership -> members/editors
+    |   +-- subspaces.rs  # Process trust extensions -> subspaces
+    +-- models/           # Copy from indexer or share
+    +-- storage.rs        # PostgreSQL operations
+    +-- error.rs
 ```
 
 ## Implementation Steps

@@ -34,15 +34,16 @@ There are two viable approaches, each with trade-offs:
 ### Option A: GitFlow (Branch-Based Promotion)
 
 ```
-feature branches → dev → main
-                    ↓      ↓
-                staging   prod
+feature branches --> dev --> main
+                     |       |
+                     v       v
+                 staging   prod
 ```
 
 | Event | Action |
 |-------|--------|
 | Push to `dev` | Auto-deploy changed services to staging |
-| Merge `dev` → `main` | Auto-deploy changed services to production |
+| Merge `dev` -> `main` | Auto-deploy changed services to production |
 
 **Pros:**
 - Simple mental model
@@ -57,7 +58,7 @@ feature branches → dev → main
 ### Option B: Trunk-Based with Manual Promotion
 
 ```
-feature branches → main → staging (auto) → production (manual trigger)
+feature branches --> main --> staging (auto) --> production (manual trigger)
 ```
 
 | Event | Action |
@@ -98,9 +99,10 @@ Given our monorepo with independent services, **Trunk-Based with Manual Promotio
 ### Deployment Model: GitFlow (Branch-Based Promotion)
 
 ```
-feature branches → dev → main
-                    ↓      ↓
-                staging   prod
+feature branches --> dev --> main
+                     |       |
+                     v       v
+                 staging   prod
 ```
 
 After further consideration, GitFlow was chosen for simplicity:
@@ -129,14 +131,14 @@ Given our small number of environments (2) and relatively simple manifests, we'l
 
 ```
 api/k8s/
-├── staging/
-│   ├── namespace.yaml
-│   ├── api.yaml
-│   └── secrets.yaml
-└── production/
-    ├── namespace.yaml
-    ├── api.yaml
-    └── secrets.yaml
++-- staging/
+|   +-- namespace.yaml
+|   +-- api.yaml
+|   +-- secrets.yaml
++-- production/
+    +-- namespace.yaml
+    +-- api.yaml
+    +-- secrets.yaml
 ```
 
 **Rationale**: Kustomize adds complexity (patch syntax, mental overhead) for minimal benefit with only 2 environments. Duplication is explicit and easy to review.
@@ -299,7 +301,7 @@ Recommended tools: LaunchDarkly, Unleash, or simple env var flags.
 
 ### Positive
 - Clear separation between staging and production
-- Simple promotion: merge `dev` → `main`
+- Simple promotion: merge `dev` -> `main`
 - No manual workflow triggers needed
 - Services ship together naturally (monorepo pattern)
 
@@ -395,9 +397,10 @@ If the team later prefers GitFlow over trunk-based, here's the setup:
 ### Branch Structure
 
 ```
-feature branches → dev → main
-                    ↓      ↓
-                staging   prod
+feature branches --> dev --> main
+                     |       |
+                     v       v
+                 staging   prod
 ```
 
 ### Workflow Changes
@@ -454,7 +457,7 @@ jobs:
 
 1. Branch from `main`: `git checkout -b hotfix/fix-bug main`
 2. Make fix, push, create PR to `main`
-3. After merge to `main`, immediately merge `main` → `dev`
+3. After merge to `main`, immediately merge `main` -> `dev`
 4. The CI check enforces this—PRs to `dev` will fail until synced
 
 ### GitFlow Selective Promotion Problem

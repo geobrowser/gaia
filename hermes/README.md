@@ -125,8 +125,8 @@ kubectl logs -n kafka -l app=atlas --tail=50 -f
 
 ```
 hermes/
-├── docker-compose.yaml  # Local development
-└── k8s/                 # Kubernetes manifests (production)
++-- docker-compose.yaml  # Local development
++-- k8s/                 # Kubernetes manifests (production)
 ```
 
 ## Related Documents
