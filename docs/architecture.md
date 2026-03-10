@@ -501,7 +501,6 @@ kubectl rollout restart deployment/atlas
 
 ## Related Documents
 
-- [K8s Secrets Isolation](./k8s-secrets-isolation.md) - Secrets management for Hermes services
 - [Atlas Documentation](../atlas/docs/) - Canonical graph computation (topology consumer)
 - [Hermes Infrastructure](../hermes/README.md) - Local development and deployment
 - [Hermes Substream](../hermes-substream/README.md) - Event filtering from blockchain

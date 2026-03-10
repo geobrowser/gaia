@@ -95,8 +95,8 @@ Currently only the knowledge graph indexer is implemented, but in the near futur
 Architecture and design documents are in the `docs/` directory:
 
 - [Hermes Architecture](docs/hermes-architecture.md) - Event streaming from blockchain to Kafka
-- [K8s Secrets Isolation](docs/k8s-secrets-isolation.md) - Kubernetes secrets management
 
 Project-specific documentation lives in each project's directory:
+
 - [Atlas](atlas/docs/) - Canonical graph computation
 - [Hermes Substream](hermes-substream/docs/) - Event filtering and modification
