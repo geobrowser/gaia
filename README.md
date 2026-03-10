@@ -122,7 +122,7 @@ The API is available at `http://localhost:3000`.
 |---------|---------|----------------|
 | `infra` | `docker compose --profile infra up` | Kafka, PostgreSQL, OpenSearch |
 | `tools` | `docker compose --profile infra --profile tools up` | + Kafka UI (:8080), OpenSearch Dashboards (:5601) |
-| `services` | `docker compose --profile infra --profile services up` | + all 8 application services |
+| `services` | `docker compose --profile infra --profile services up` | + hermes-pipeline, atlas, kg-indexer, search-indexer, hermes-ipfs-cache, vote-indexer, api, scoring-cronjob |
 | `executor` | `docker compose --profile infra --profile services --profile executor up` | + proposal-executor (requires secrets) |
 
 ### Common Operations
