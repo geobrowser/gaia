@@ -67,10 +67,10 @@ Knowledge graph data service for the [Geo protocol](https://geobrowser.io/). Gai
 
 - [Rust](https://www.rust-lang.org/) (see `rust-toolchain.toml`)
 - [Bun](https://bun.sh/)
-- [Docker Desktop](https://www.docker.com/) with **≥ 8 GB memory** allocated (OpenSearch needs 2–4 GB alone)
+- [Docker Desktop](https://www.docker.com/) or [OrbStack](https://orbstack.dev/) with **≥ 8 GB memory** allocated (OpenSearch needs 2–4 GB alone)
 - Docker Compose v2 (for profiles support)
 
-> **First build warning:** Rust services take 20–40 minutes to compile on first `docker compose build`.
+> **First build note:** Rust services compile from source on first `docker compose build`, which can take a while depending on your machine.
 
 ### 1. Environment Setup
 
