@@ -144,31 +144,15 @@ By handling persistence in the spawned tasks themselves, we persist at the right
 ## Example Walkthrough
 
 ```
-Time ──────────────────────────────────────────────────▶
+Time ----------------------------------------------------->
 
-Block 100 (3 edits)  ├──A──┤    ├──B──┤        ├──C──┤
-Block 101 (2 edits)       ├──D──┤  ├──E──┤
-Block 102 (1 edit)             ├──F──┤
-
-Events:
-1. Block 100 arrives -> pending: {100: (c100, 3)}
-2. Block 101 arrives -> pending: {100: (c100, 3), 101: (c101, 2)}
-3. Block 102 arrives -> pending: {100: (c100, 3), 101: (c101, 2), 102: (c102, 1)}
-4. A completes      -> pending: {100: (c100, 2), 101: (c101, 2), 102: (c102, 1)}
-5. D completes      -> pending: {100: (c100, 2), 101: (c101, 1), 102: (c102, 1)}
-6. F completes      -> pending: {100: (c100, 2), 101: (c101, 1)} // 102 done but not min
-7. E completes      -> pending: {100: (c100, 2)}                  // 101 done but not min
-8. B completes      -> pending: {100: (c100, 1)}
-9. C completes      -> pending: {} -> PERSIST cursor 100
-
-If crash after step 7:
-- Restart from cursor 100
-- Reprocess 100, 101, 102 (all already cached, upserts are no-ops)
-- Minimal wasted work
+Block 100 (3 edits)  |--A--|    |--B--|        |--C--|
+Block 101 (2 edits)       |--D--|  |--E--|
+Block 102 (1 edit)             |--F--|
 ```
 
 ## References
 
 - `hermes-ipfs-cache/src/lib.rs` - `PendingFetches` implementation
 - `hermes-ipfs-cache/docs/architecture.md` - Overall architecture
-- `docs/hermes-architecture.md` - Hermes system design
+- `docs/architecture.md` - Hermes system design

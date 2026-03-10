@@ -4,54 +4,62 @@ Consumes Hermes Kafka events and indexes them into PostgreSQL for the Knowledge 
 
 ## Overview
 
-kg-indexer reads Hermes event topics, buffers events per block, and writes them in a single DB transaction to preserve block ordering. It also consumes canonical block summaries (`hermes.blocks`) to close batches deterministically even when `is_last` is missing on the topics it reads.
+kg-indexer is part of the Hermes event pipeline. It reads events from multiple Kafka topics, buffers them per blockchain block, and writes each block's events as a single PostgreSQL transaction to preserve ordering. A background tally worker asynchronously computes proposal vote tallies, decoupled from the main write path.
 
-## Topics consumed
+```
+hermes-pipeline → Kafka topics → kg-indexer → PostgreSQL → API
+                                      ↑
+                                 hermes.blocks
+                              (batch close signal)
+```
 
-- `hermes.blocks` (block summary)
-- `knowledge.edits`
-- `space.creations`
-- `space.membership`
-- `space.trust.extensions`
-- `space.governance`
+Block-level buffering relies on `sequence` and `is_last` fields from hermes-pipeline (see [hermes-pipeline ADR-001](../hermes-pipeline/docs/DECISIONS.md)). When `is_last` arrives for a block, all buffered events are sorted by sequence and processed in a single transaction. If `is_last` never arrives, stale block detection kicks in after a configurable timeout.
+
+## Topics Consumed
+
+| Topic | Description |
+|-------|-------------|
+| `hermes.blocks` | Block summary — used as batch close signal |
+| `knowledge.edits` | Entity and relation CRUD operations |
+| `space.creations` | New space registrations |
+| `space.membership` | Editor/member additions and removals |
+| `space.trust.extensions` | Subspace trust changes (verified, related, topic) |
+| `space.governance` | Proposals created, voted, executed |
 
 ## Configuration
 
-Environment variables:
+All environment variables are documented in [`.env.example`](.env.example). Key variables:
 
-- `DATABASE_URL` (required)
-- `KAFKA_BROKER` (default: `localhost:9092`)
-- `KAFKA_GROUP_ID` (default: `kg-indexer`)
-- `BLOCK_STALE_TIMEOUT_MS` (default: `1000`)
-- `KAFKA_USERNAME` / `KAFKA_PASSWORD` (optional SASL)
-- `KAFKA_SSL_CA_PEM` (optional)
+| Variable | Required | Default | Description |
+|----------|----------|---------|-------------|
+| `DATABASE_URL` | Yes | — | PostgreSQL connection string |
+| `KAFKA_BROKER` | No | `localhost:9092` | Kafka bootstrap server address |
+| `KAFKA_GROUP_ID` | No | `kg-indexer` | Consumer group ID |
+| `ENVIRONMENT` | Conditional | — | `staging` or `production` — sets Kafka topic prefix (read by hermes-kafka, required in production) |
+| `BLOCK_STALE_TIMEOUT_MS` | No | `1000` | Stale block detection timeout in ms |
+| `TALLY_WORKER_INTERVAL_MS` | No | `5000` | Tally worker run interval in ms |
+| `TALLY_WORKER_BATCH_SIZE` | No | `1000` | Tally worker batch size |
+| `LOG_EVENT_IDS` | No | `false` | Emit per-event `event-id` logs |
+| `SENTRY_DSN` | No | — | Enables Sentry telemetry when set |
 
-## Logging and tracing
+For Kafka authentication (`KAFKA_USERNAME`, `KAFKA_PASSWORD`, `KAFKA_SSL_CA_PEM`), see [hermes-kafka README](../hermes-kafka/README.md). Full Sentry configuration is documented in [`.env.example`](.env.example).
 
-Canonical batch logs:
+## Local Development
 
-- `kg_indexer.batch_start` — batch intent
-- `kg_indexer.batch_end` — batch outcome
-- `kg_indexer.event_error` — per-event failures
-
-Debug flag:
-
-- `LOG_EVENT_IDS=true` — emits per-event `event-id` logs (off by default)
-
-Sentry:
-
-- If `SENTRY_DSN` is set, spans are exported to Sentry
-- Otherwise logs go to stdout (console backend)
-- `SENTRY_DEBUG=true` mirrors spans to stdout when Sentry is enabled
-
-## Development
-
-Run locally:
+Prerequisites: PostgreSQL and Kafka running locally.
 
 ```bash
-cargo run -p kg-indexer
+# Start Kafka (from repo root)
+docker-compose -f hermes/docker-compose.yaml up -d
+
+# Run kg-indexer (from repo root)
+DATABASE_URL=postgresql://postgres:postgres@localhost:5432/gaia KAFKA_BROKER=localhost:9092 cargo run -p kg-indexer
 ```
 
-## Notes
+## Documentation
 
-See `docs/GOTCHAS.md` for buffering behavior and other operational details.
+- [GOTCHAS.md](docs/GOTCHAS.md) — Buffering behavior and operational details
+- [DECISIONS.md](docs/DECISIONS.md) — Architecture decision records
+- [hermes-pipeline](../hermes-pipeline/) — Upstream event producer
+- [hermes-kafka](../hermes-kafka/) — Shared Kafka consumer/producer library
+- [hermes-schema](../hermes-schema/) — Protobuf message definitions

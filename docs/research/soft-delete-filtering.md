@@ -1,7 +1,7 @@
 # Soft Delete Filtering Implementation Plan
 
 **Status:** Draft
-**Related:** `docs/plans/grc20-v2-gaps.md` (Deferred Schema Changes section)
+**Related:** `docs/archive/plans/grc20-v2-gaps.md` (Deferred Schema Changes section)
 
 ## Problem
 

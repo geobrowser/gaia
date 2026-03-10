@@ -326,22 +326,22 @@ import {log} from "../services/telemetry"
 ## Telemetry Flow
 
 ```
-┌─────────────────────────────────────────────────────────┐
-│                    Sentry.init()                        │
-│              (global singleton client)                  │
-└─────────────────────────────────────────────────────────┘
-         ▲                ▲                 ▲
-         │                │                 │
-┌────────┴────────┐ ┌─────┴─────┐ ┌────────┴────────┐
-│ SentrySpanProcessor │ │ log utility │ │ SentryLogger    │
-│ (OTEL → Sentry)     │ │ (non-Effect) │ │ (Effect.log)    │
-└─────────────────────┘ └─────────────┘ └─────────────────┘
-         ▲                ▲                 ▲
-         │                │                 │
-┌────────┴────────┐ ┌─────┴─────┐ ┌────────┴────────┐
-│ Effect.withSpan()   │ │ Hono routes │ │ Effect code     │
-│ GraphQL plugin      │ │ Error handlers│ │                 │
-└─────────────────────┘ └─────────────┘ └─────────────────┘
++---------------------------------------------------------+
+|                    Sentry.init()                        |
+|              (global singleton client)                  |
++---------------------------------------------------------+
+         ^                ^                 ^
+         |                |                 |
++---------------------+ +-------------+ +-----------------+
+| SentrySpanProcessor | | log utility | | SentryLogger    |
+| (OTEL -> Sentry)    | | (non-Effect)| | (Effect.log)    |
++---------------------+ +-------------+ +-----------------+
+         ^                ^                 ^
+         |                |                 |
++---------------------+ +-------------+ +-----------------+
+| Effect.withSpan()   | | Hono routes | | Effect code     |
+| GraphQL plugin      | | Error hdlrs | |                 |
++---------------------+ +-------------+ +-----------------+
 ```
 
 ## Verification
