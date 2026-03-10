@@ -65,14 +65,14 @@ export const SCORE_SHIFT = 1.0
  * With scores in [0, 1], this multiplier controls how much global/space scores
  * influence ranking relative to text match quality.
  *
- * Formula: (max(score, 0) + 1) * 10
- *   score=0.0 → boost=10, score=0.5 → boost=15, score=1.0 → boost=20
+ * Formula: (max(score, 0) + 1) * 20
+ *   score=0.0 → boost=20, score=0.5 → boost=30, score=1.0 → boost=40
  *
- * This produces a boost range of 10 across the full score spectrum, which is
- * large enough for high-score entities to outrank low-score entities that have
- * moderately better text matches (e.g., exact single-word name match vs multi-word name).
+ * This produces a boost range of 20 across the full score spectrum, which is
+ * large enough for high-score entities to outrank low-score entities even when
+ * the lower-score entity has richer text matches (e.g., keyword-heavy descriptions).
  */
-export const SCORE_BOOST = 10.0
+export const SCORE_BOOST = 20.0
 
 /**
  * Boost value for name field in match_phrase_prefix queries.
@@ -115,11 +115,11 @@ export const NAME_FIELD_BOOST = 1.5
  * matches in name and description (e.g. "geojson.io", "GeoJSON") can outscore
  * a short exact name match.
  *
- * Set to 5.0 to create a meaningful signal for exact token matches while
- * keeping the boost modest enough that score field differences (SCORE_BOOST=10)
- * can still override text match gaps between single-word and multi-word names.
+ * Set to 8.0 to create a strong signal for exact token matches while
+ * keeping the boost proportional to SCORE_BOOST=20 so that score field
+ * differences can still override text match gaps between entities.
  */
-export const NAME_EXACT_TOKEN_BOOST = 5.0
+export const NAME_EXACT_TOKEN_BOOST = 8.0
 
 /**
  * Boost value for fuzzy text match queries.
