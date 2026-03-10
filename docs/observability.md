@@ -72,9 +72,15 @@ The observability stack consists of:
 
 ## 3. Alerting
 
+### Alert Channels
+
+| Source | Channel | What |
+|--------|---------|------|
+| Alertmanager | Slack `#alerts` | Prometheus alert rules (API capacity, atlas health) |
+| Sentry | Slack + Email | Application errors from all services with SENTRY_DSN (see §4 tracing table) |
+
 ### Alertmanager Configuration
 
-- **Channel:** Slack `#alerts` via webhook (secret `alertmanager-slack-webhook`)
 - **Routing:** Group by `[namespace, alertname]`, 30s group wait, 5m group interval, 12h repeat
 - **Suppressed:** `Watchdog` and `InfoInhibitor` alerts routed to null receiver
 - **Inhibition rules:**
