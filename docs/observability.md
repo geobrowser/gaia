@@ -77,7 +77,7 @@ The observability stack consists of:
 | Source | Channel | What |
 |--------|---------|------|
 | Alertmanager | Slack `#infra-alerts` | Prometheus alert rules (API capacity, atlas health) |
-| Sentry | Slack + Email | Application errors from all services with SENTRY_DSN (see §4 tracing table) |
+| Sentry | Slack `#infra-alerts` + Email | Application errors from all services with SENTRY_DSN (see §4 tracing table) |
 
 ### Alertmanager Configuration
 
