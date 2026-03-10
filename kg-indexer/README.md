@@ -49,8 +49,8 @@ For Kafka authentication (`KAFKA_USERNAME`, `KAFKA_PASSWORD`, `KAFKA_SSL_CA_PEM`
 Prerequisites: PostgreSQL and Kafka running locally.
 
 ```bash
-# Start Kafka (from repo root)
-docker-compose -f hermes/docker-compose.yaml up -d
+# Start infrastructure (from repo root)
+docker compose --profile infra up -d
 
 # Run kg-indexer (from repo root)
 DATABASE_URL=postgresql://postgres:postgres@localhost:5432/gaia KAFKA_BROKER=localhost:9092 cargo run -p kg-indexer
