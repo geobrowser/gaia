@@ -127,6 +127,7 @@ When adding a new crate, update the subsystem table above and add a crate README
 
 - [Hermes Architecture](docs/architecture.md) — event streaming system design
 - [API Architecture](docs/api-architecture.md) — API layers, tech stack, query patterns
+- [Decision Records & RFCs](docs/decisions/README.md) — central index of all ADRs and RFCs
 - [Gotchas](docs/gotchas.md) — known sharp edges and workarounds
 
 ### Specifications & RFCs
@@ -141,7 +142,6 @@ When adding a new crate, update the subsystem table above and add a crate README
 ### Operations
 
 - [Staging & Production Runbook](docs/runbooks/staging-production.md)
-- [Deploying](docs/runbooks/deploying.md)
 
 ### Protocol
 

@@ -1,1 +1,0 @@
-Gaia and Hermes are deployed on our k8s cluster. Currently GitHub actions manage our deployments to production or staging automatically when merged to either `main` or `dev`. See [staging-production](./staging-production.md) for the relevant runbook.
