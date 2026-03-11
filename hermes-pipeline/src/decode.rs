@@ -265,7 +265,9 @@ pub struct PingArgs {
 /// - ABI-encoded (bytes32 action, bytes32 topic, bytes data)
 ///
 /// The `action` field is a keccak256 hash identifying the subspace operation.
-/// The `topic` field packs the target ID in bytes [16..32].
+/// The `topic` field layout depends on the action type:
+///   - Edge actions (verified/related/etc): `bytes32(bytes16)` → target in [0..16], padding in [16..32]
+///   - Topic actions (topic_declared/removed): [subspace_id: 16 | topic_id: 16]
 pub fn decode_ping_args(calldata: &[u8]) -> Result<PingArgs, DecodeError> {
     // Minimum: 4-byte selector + 2×32 static (bytes32, bytes32) + 32 offset + 32 length = 132 bytes
     if calldata.len() < 132 {

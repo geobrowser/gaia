@@ -267,8 +267,12 @@ export const subspaceTypeEnum = pgEnum("subspaceType", ["verified", "related"])
 export const subspaces = pgTable(
 	"subspaces",
 	{
-		parentSpaceId: uuid().notNull(),
-		childSpaceId: uuid().notNull(),
+		parentSpaceId: uuid()
+			.notNull()
+			.references(() => spaces.id),
+		childSpaceId: uuid()
+			.notNull()
+			.references(() => spaces.id),
 		type: subspaceTypeEnum().notNull().default("verified"),
 	},
 	(table) => [

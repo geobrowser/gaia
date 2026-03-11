@@ -162,8 +162,9 @@ pub fn space_migrated(space_id: SpaceId, new_space_address: Address) -> Action {
 /// - `parent_space_id`: The space verifying the subspace
 /// - `subspace_id`: The verified subspace
 pub fn subspace_verified(parent_space_id: SpaceId, subspace_id: SpaceId) -> Action {
-    let mut topic = vec![0u8; 16];
-    topic.extend_from_slice(&subspace_id);
+    // ZC16: bytes32(bytes16) right-pads — subspace_id in [0..16], zeros in [16..32]
+    let mut topic = subspace_id.to_vec();
+    topic.extend_from_slice(&[0u8; 16]);
 
     Action {
         from_id: parent_space_id.to_vec(),
@@ -179,8 +180,9 @@ pub fn subspace_verified(parent_space_id: SpaceId, subspace_id: SpaceId) -> Acti
 /// - `parent_space_id`: The space marking another as related
 /// - `subspace_id`: The related subspace
 pub fn subspace_related(parent_space_id: SpaceId, subspace_id: SpaceId) -> Action {
-    let mut topic = vec![0u8; 16];
-    topic.extend_from_slice(&subspace_id);
+    // ZC16: bytes32(bytes16) right-pads — subspace_id in [0..16], zeros in [16..32]
+    let mut topic = subspace_id.to_vec();
+    topic.extend_from_slice(&[0u8; 16]);
 
     Action {
         from_id: parent_space_id.to_vec(),
@@ -196,8 +198,9 @@ pub fn subspace_related(parent_space_id: SpaceId, subspace_id: SpaceId) -> Actio
 /// - `parent_space_id`: The space removing verification
 /// - `subspace_id`: The subspace being unverified
 pub fn subspace_unverified(parent_space_id: SpaceId, subspace_id: SpaceId) -> Action {
-    let mut topic = vec![0u8; 16];
-    topic.extend_from_slice(&subspace_id);
+    // ZC16: bytes32(bytes16) right-pads — subspace_id in [0..16], zeros in [16..32]
+    let mut topic = subspace_id.to_vec();
+    topic.extend_from_slice(&[0u8; 16]);
 
     Action {
         from_id: parent_space_id.to_vec(),
@@ -213,8 +216,9 @@ pub fn subspace_unverified(parent_space_id: SpaceId, subspace_id: SpaceId) -> Ac
 /// - `parent_space_id`: The space removing the related link
 /// - `subspace_id`: The subspace being unrelated
 pub fn subspace_unrelated(parent_space_id: SpaceId, subspace_id: SpaceId) -> Action {
-    let mut topic = vec![0u8; 16];
-    topic.extend_from_slice(&subspace_id);
+    // ZC16: bytes32(bytes16) right-pads — subspace_id in [0..16], zeros in [16..32]
+    let mut topic = subspace_id.to_vec();
+    topic.extend_from_slice(&[0u8; 16]);
 
     Action {
         from_id: parent_space_id.to_vec(),
@@ -466,7 +470,8 @@ impl ProposalAction {
     /// Convenience wrapper that packs the target space ID into the topic field.
     pub fn ping_subspace_edge(action_hash: [u8; 32], target_space_id: SpaceId) -> Self {
         let mut topic = [0u8; 32];
-        topic[16..32].copy_from_slice(&target_space_id);
+        // ZC16: bytes32(bytes16) right-pads — target occupies [0..16]
+        topic[0..16].copy_from_slice(&target_space_id);
         Self::ping(action_hash, topic, &[])
     }
 
@@ -1800,7 +1805,7 @@ mod tests {
 
         assert_eq!(action.from_id, parent.to_vec());
         assert_eq!(action.action, actions::SUBSPACE_VERIFIED.to_vec());
-        assert_eq!(&action.topic[16..32], &subspace);
+        assert_eq!(&action.topic[0..16], &subspace);
     }
 
     #[test]
@@ -1811,7 +1816,7 @@ mod tests {
 
         assert_eq!(action.from_id, parent.to_vec());
         assert_eq!(action.action, actions::SUBSPACE_RELATED.to_vec());
-        assert_eq!(&action.topic[16..32], &related);
+        assert_eq!(&action.topic[0..16], &related);
     }
 
     #[test]
