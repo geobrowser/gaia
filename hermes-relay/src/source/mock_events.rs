@@ -470,7 +470,8 @@ impl ProposalAction {
     /// Convenience wrapper that packs the target space ID into the topic field.
     pub fn ping_subspace_edge(action_hash: [u8; 32], target_space_id: SpaceId) -> Self {
         let mut topic = [0u8; 32];
-        topic[16..32].copy_from_slice(&target_space_id);
+        // ZC16: bytes32(bytes16) right-pads — target occupies [0..16]
+        topic[0..16].copy_from_slice(&target_space_id);
         Self::ping(action_hash, topic, &[])
     }
 
