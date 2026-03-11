@@ -19,6 +19,30 @@ A standalone notification indexer that consumes blockchain events from Kafka, de
 
 ---
 
+## User Stories
+
+### End User
+
+1. A user opens the Curator app and logs in. The app registers their device for push notifications. No additional setup is required — notifications start arriving based on their existing roles in the knowledge graph.
+
+2. A user is an editor of the **Health** space. Another editor creates a proposal to add a new entity. The user receives a push notification: **"New Proposal in Health"**. They tap it and are taken to the proposal in the app.
+
+3. A user creates a proposal in the **Crypto** space. When another editor votes on it, the user receives a notification: **"New Vote on your proposal in Crypto"**. When the proposal is executed or rejected, they receive a final status notification.
+
+4. A user is added as an editor to a new space. They receive a notification: **"You were added as an editor to AI"**.
+
+### App Developer
+
+1. A developer building a new Geo front-end registers a webhook URL with the notification service and receives a shared HMAC secret.
+
+2. The developer implements a POST endpoint that verifies the signature, deduplicates on the idempotency key, and maps `user_space_id` to their own user model.
+
+3. The developer chooses how to deliver notifications to their users (push, email, in-app, etc.) — the notification service doesn't prescribe this.
+
+4. The developer's app server starts receiving all notification events immediately. No per-user registration with the notification service is needed — implicit subscriptions are resolved automatically from on-chain membership data.
+
+---
+
 ## Architecture
 
 ```mermaid
@@ -385,6 +409,7 @@ The notification service is only responsible for delivering the webhook. Everyth
 - Push notification formatting and localization
 - Notification preferences and muting
 - Badge counts and notification history
+- Notification timing and deduplication strategies — e.g., debouncing rapid successive events, using APNs/FCM collapse keys to replace stale notifications, or holding notifications for a grace period before pushing to the device
 
 ---
 
