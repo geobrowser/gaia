@@ -262,6 +262,132 @@ Both share the same Postgres database. The indexer and delivery worker are separ
 
 ---
 
+## Example: Curator App with AWS SNS
+
+This section illustrates how an app server (the Curator iOS app) would integrate with the notification service using AWS SNS for push delivery.
+
+### Overview
+
+```mermaid
+flowchart LR
+    DW[Delivery Worker] -->|POST webhook| CUR[Curator API]
+    CUR -->|lookup device tokens| DB[(Curator DB)]
+    CUR -->|publish| SNS[AWS SNS]
+    SNS -->|push| APNs[APNs]
+    APNs -->|push| iOS[iOS Device]
+```
+
+### 1. Register Webhook
+
+The Curator API registers its webhook with the notification service:
+
+```json
+{
+  "app_id": "curator-ios",
+  "webhook_url": "https://curator-api.example.com/geo/notifications",
+  "secret": "whsec_abc123..."
+}
+```
+
+### 2. Map Users to Devices
+
+The Curator app maintains its own mapping of Geo users to device tokens. When a user logs into the Curator app, the app registers their APNs device token with AWS SNS using `@aws-sdk/client-sns` and stores the endpoint ARN alongside their `user_space_id`:
+
+```typescript
+import { SNSClient, CreatePlatformEndpointCommand } from "@aws-sdk/client-sns"
+
+const sns = new SNSClient({ region: "us-east-1" })
+
+async function registerDevice(userSpaceId: string, apnsDeviceToken: string) {
+  const { EndpointArn } = await sns.send(
+    new CreatePlatformEndpointCommand({
+      PlatformApplicationArn: "arn:aws:sns:us-east-1:123456789:app/APNS/curator",
+      Token: apnsDeviceToken,
+    })
+  )
+
+  // Store mapping in Curator's own database
+  await db.query(
+    `INSERT INTO curator_devices (user_space_id, device_token, sns_endpoint_arn)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (user_space_id) DO UPDATE SET device_token = $2, sns_endpoint_arn = $3`,
+    [userSpaceId, apnsDeviceToken, EndpointArn]
+  )
+}
+```
+
+### 3. Receive and Route Notifications
+
+When the Curator API receives a webhook POST from the delivery worker:
+
+```typescript
+import { SNSClient, PublishCommand } from "@aws-sdk/client-sns"
+import crypto from "node:crypto"
+
+const sns = new SNSClient({ region: "us-east-1" })
+
+app.post("/geo/notifications", async (req, res) => {
+  // 1. Verify HMAC signature
+  const expected = crypto
+    .createHmac("sha256", WEBHOOK_SECRET)
+    .update(JSON.stringify(req.body))
+    .digest("hex")
+
+  if (req.headers["x-signature"] !== `sha256=${expected}`) {
+    return res.status(401).send("Invalid signature")
+  }
+
+  // 2. Deduplicate
+  const idempotencyKey = req.headers["x-idempotency-key"]
+  if (await db.hasProcessed(idempotencyKey)) {
+    return res.status(409).send("Already processed")
+  }
+
+  // 3. Look up user's SNS endpoint
+  const { event_type, user_space_id, data } = req.body
+  const device = await db.query(
+    "SELECT sns_endpoint_arn FROM curator_devices WHERE user_space_id = $1",
+    [user_space_id]
+  )
+
+  if (!device) return res.status(200).send("No device registered")
+
+  // 4. Publish push notification via AWS SNS
+  await sns.send(
+    new PublishCommand({
+      TargetArn: device.sns_endpoint_arn,
+      MessageStructure: "json",
+      Message: JSON.stringify({
+        APNS: JSON.stringify({
+          aps: {
+            alert: {
+              title: `New ${event_type} in ${data.space_name}`,
+              body: data.proposal_name,
+            },
+            sound: "default",
+          },
+        }),
+      }),
+    })
+  )
+
+  await db.markProcessed(idempotencyKey)
+  return res.status(200).send("OK")
+})
+```
+
+### 4. What the Curator App Owns
+
+The notification service is only responsible for delivering the webhook. Everything else is the Curator app's responsibility:
+
+- User ↔ device token mapping and SNS endpoint registration
+- AWS SNS platform application setup
+- Push notification formatting and localization
+- Notification preferences and muting
+- Badge counts and notification history
+
+---
+
 ## Future Work
 
 Potential notification types that could be added later:
