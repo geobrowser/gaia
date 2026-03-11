@@ -100,7 +100,6 @@ sequenceDiagram
 | Proposal executed | `space.governance` | Proposal creator + space editors | Implicit |
 | Proposal rejected/failed | `space.governance` | Proposal creator + space editors | Implicit |
 | Proposal expiring soon | `space.governance` | Editors who haven't voted | Implicit (membership) |
-| Proposal on watched entity | `space.governance` | Entity subscribers | Explicit |
 | Voting settings changed | `space.governance` | Space editors | Implicit (membership) |
 
 ### Membership
@@ -112,12 +111,6 @@ sequenceDiagram
 | Editor/member added to your space | `space.membership` | Existing editors of the space | Implicit (membership) |
 | Editor/member removed from your space | `space.membership` | Existing editors of the space | Implicit (membership) |
 | User left space | `space.membership` | Existing editors of the space | Implicit (membership) |
-
-### Knowledge Graph
-
-| Event | Kafka Topic | Who Gets Notified | Subscription Type |
-|---|---|---|---|
-| Entity edited | `knowledge.edits` | Entity subscribers | Explicit |
 
 ### Moderation
 
@@ -132,27 +125,10 @@ sequenceDiagram
 
 ## Subscription Model
 
-Two kinds of subscriptions:
-
-### Implicit (derived from existing state)
-
-Editors and members of a space are automatically subscribed to governance events in that space. Resolved at notification time by querying the existing `editors` and `members` tables.
-
-### Explicit (user opt-in)
-
-Users subscribe to specific entities to get notified when proposals or edits affect them. Stored in a new table.
+All subscriptions are **implicit** — derived from existing state. Editors and members of a space are automatically subscribed to governance, membership, and moderation events in that space. Resolved at notification time by querying the existing `editors` and `members` tables. No new subscription tables are needed.
 
 ```mermaid
 erDiagram
-    notification_subscriptions {
-        uuid id PK
-        text user_space_id
-        text target_type "space | entity"
-        text target_id
-        text[] event_types "proposal_created, entity_edited, etc."
-        timestamp created_at
-    }
-
     notification_outbox {
         uuid id PK
         text idempotency_key UK "block:sequence:event_type:user_space_id"
@@ -174,7 +150,6 @@ erDiagram
     }
 
     app_webhooks ||--o{ notification_outbox : "delivers to"
-    notification_subscriptions ||--o{ notification_outbox : "triggers"
 ```
 
 ---
@@ -202,7 +177,7 @@ This key is:
 
 ### Registration
 
-App servers register via API or config:
+App servers register via API or config. All notifications are delivered to all registered webhooks — there is no per-app filtering of event types. Each app server is responsible for ignoring notification types it doesn't care about.
 
 ```json
 {
@@ -281,13 +256,9 @@ Both share the same Postgres database. The indexer and delivery worker are separ
 
 1. **User ↔ device mapping:** How does the app server know which device/user to notify? The notification payload includes `user_space_id` — the app server needs its own mapping of `user_space_id → user account → device token`. The Curator app already has user-to-email mappings that could serve as a starting point.
 
-2. **Subscription management API:** Where does the subscribe/unsubscribe API live? Options: (a) in the existing API service, (b) in the notification service itself. Leaning toward (a) since it's user-facing.
+2. **Notification preferences:** Do users control which event types they receive? Per-space mute? This can start simple (all-or-nothing) and add granularity later.
 
-3. **Notification preferences:** Do users control which event types they receive? Per-space mute? This can start simple (all-or-nothing) and add granularity later.
-
-4. **Backfill:** When a user subscribes to an entity, do they get historical notifications? Probably not — only forward-looking.
-
-5. **Rate limiting:** Should we batch notifications to avoid spamming? e.g., "5 proposals created in Crypto space" instead of 5 separate notifications.
+3. **Rate limiting:** Should we batch notifications to avoid spamming? e.g., "5 proposals created in Crypto space" instead of 5 separate notifications.
 
 ---
 
@@ -300,9 +271,58 @@ Potential notification types that could be added later:
 - **Subtopic added** — Space editors notified when their space is declared a subtopic of another
 - **New subspace created** — Parent space editors notified when a child space is created under theirs
 
+### Explicit Subscriptions (User Opt-In)
+
+Users subscribe to specific entities or spaces to get notified when proposals or edits affect them. Requires a new `notification_subscriptions` table and a subscription management API. Alternatively, this could be implemented entirely in the app layer — each app server manages its own subscriptions and filters the notifications it receives via webhook.
+
+```mermaid
+erDiagram
+    notification_subscriptions {
+        uuid id PK
+        text user_space_id
+        text target_type "space | entity"
+        text target_id
+        text[] event_types "proposal_created, entity_edited, etc."
+        timestamp created_at
+    }
+
+    notification_outbox {
+        uuid id PK
+        text idempotency_key UK
+        text app_id FK
+        text user_space_id
+        text event_type
+        jsonb payload
+        text status
+        int attempts
+        timestamp created_at
+        timestamp delivered_at
+    }
+
+    app_webhooks {
+        text app_id PK
+        text webhook_url
+        text secret
+        timestamp registered_at
+    }
+
+    notification_subscriptions ||--o{ notification_outbox : "triggers"
+    app_webhooks ||--o{ notification_outbox : "delivers to"
+```
+
+Notification types enabled by explicit subscriptions:
+
+| Event | Kafka Topic | Who Gets Notified |
+|---|---|---|
+| Proposal on watched entity | `space.governance` | Entity subscribers |
+| Entity edited | `knowledge.edits` | Entity subscribers |
+
 ### Curation
 - **Vote cast on your entity** — Entity creator notified of upvotes/downvotes (from `curation.votes` topic)
 - **Score milestone** — Notify when an entity crosses a score threshold (e.g., top 10% in its space)
+
+### Webhook Filtering
+- **Event type filter on webhook registration** — Add an `event_types` column to `app_webhooks` so apps only receive notification types they care about
 
 ### Engagement
 - **Notification batching/digests** — Aggregate multiple notifications into a single summary (e.g., daily digest of activity in your spaces)
