@@ -13,10 +13,10 @@
 use anyhow::Result;
 use hermes_instrumentation::debug_span;
 
-use hermes_relay::{Action, actions};
+use hermes_relay::{actions, Action};
 use hermes_schema::pb::space::{
-    HermesSpaceTrustExtension, RelatedExtension, RelatedRemoval, SubtopicExtension,
-    SubtopicRemoval, VerifiedExtension, VerifiedRemoval, hermes_space_trust_extension,
+    hermes_space_trust_extension, HermesSpaceTrustExtension, RelatedExtension, RelatedRemoval,
+    SubtopicExtension, SubtopicRemoval, VerifiedExtension, VerifiedRemoval,
 };
 
 use super::BlockMetadata;
@@ -75,7 +75,7 @@ pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformRe
             let event = debug_span!(
                 "convert.trust.verified",
                 source = %hex::encode(&action.from_id),
-                target = %hex::encode(&action.topic[16..32])
+                target = %hex::encode(&action.topic[0..16])
             )
             .in_scope(|| convert_verified(action, meta, sequence))?;
             result.events.push(event);
@@ -84,7 +84,7 @@ pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformRe
             let event = debug_span!(
                 "convert.trust.related",
                 source = %hex::encode(&action.from_id),
-                target = %hex::encode(&action.topic[16..32])
+                target = %hex::encode(&action.topic[0..16])
             )
             .in_scope(|| convert_related(action, meta, sequence))?;
             result.events.push(event);
@@ -103,7 +103,7 @@ pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformRe
             let event = debug_span!(
                 "convert.trust.unverified",
                 source = %hex::encode(&action.from_id),
-                target = %hex::encode(&action.topic[16..32])
+                target = %hex::encode(&action.topic[0..16])
             )
             .in_scope(|| convert_unverified(action, meta, sequence))?;
             result.events.push(event);
@@ -112,7 +112,7 @@ pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformRe
             let event = debug_span!(
                 "convert.trust.unrelated",
                 source = %hex::encode(&action.from_id),
-                target = %hex::encode(&action.topic[16..32])
+                target = %hex::encode(&action.topic[0..16])
             )
             .in_scope(|| convert_unrelated(action, meta, sequence))?;
             result.events.push(event);
@@ -136,15 +136,16 @@ pub fn transform(actions: &[Action], meta: &BlockMetadata) -> Result<TransformRe
 ///
 /// The action structure for SUBSPACE_VERIFIED:
 /// - from_id: parent_space_id (16 bytes)
-/// - topic: [padding (16 bytes)][subspace_id (16 bytes)]
+/// - topic: [subspace_id (16 bytes)][padding (16 bytes)]
+///
+/// ZC16: Solidity `bytes32(bytes16)` right-pads, so the bytes16 value is in [0..16].
 fn convert_verified(
     action: &Action,
     meta: &BlockMetadata,
     sequence: u32,
 ) -> Result<HermesSpaceTrustExtension> {
     let source_space_id = action.from_id.clone();
-    // Target space ID is in the last 16 bytes of the topic field
-    let target_space_id = action.topic[16..32].to_vec();
+    let target_space_id = action.topic[0..16].to_vec();
 
     let extension = Some(hermes_space_trust_extension::Extension::Verified(
         VerifiedExtension { target_space_id },
@@ -161,14 +162,16 @@ fn convert_verified(
 ///
 /// The action structure for SUBSPACE_RELATED:
 /// - from_id: parent_space_id (16 bytes)
-/// - topic: [padding (16 bytes)][subspace_id (16 bytes)]
+/// - topic: [subspace_id (16 bytes)][padding (16 bytes)]
+///
+/// ZC16: Solidity `bytes32(bytes16)` right-pads, so the bytes16 value is in [0..16].
 fn convert_related(
     action: &Action,
     meta: &BlockMetadata,
     sequence: u32,
 ) -> Result<HermesSpaceTrustExtension> {
     let source_space_id = action.from_id.clone();
-    let target_space_id = action.topic[16..32].to_vec();
+    let target_space_id = action.topic[0..16].to_vec();
 
     let extension = Some(hermes_space_trust_extension::Extension::Related(
         RelatedExtension { target_space_id },
@@ -208,14 +211,16 @@ fn convert_topic_declared(
 
 /// Convert a SUBSPACE_UNVERIFIED action to HermesSpaceTrustExtension proto.
 ///
-/// action.topic layout: [padding: 16 bytes | target_space_id: 16 bytes]
+/// action.topic layout: [target_space_id: 16 bytes | padding: 16 bytes]
+///
+/// ZC16: Solidity `bytes32(bytes16)` right-pads, so the bytes16 value is in [0..16].
 fn convert_unverified(
     action: &Action,
     meta: &BlockMetadata,
     sequence: u32,
 ) -> Result<HermesSpaceTrustExtension> {
     let source_space_id = action.from_id.clone();
-    let target_space_id = action.topic[16..32].to_vec();
+    let target_space_id = action.topic[0..16].to_vec();
 
     let extension = Some(hermes_space_trust_extension::Extension::VerifiedRemoval(
         VerifiedRemoval { target_space_id },
@@ -230,14 +235,16 @@ fn convert_unverified(
 
 /// Convert a SUBSPACE_UNRELATED action to HermesSpaceTrustExtension proto.
 ///
-/// action.topic layout: [padding: 16 bytes | target_space_id: 16 bytes]
+/// action.topic layout: [target_space_id: 16 bytes | padding: 16 bytes]
+///
+/// ZC16: Solidity `bytes32(bytes16)` right-pads, so the bytes16 value is in [0..16].
 fn convert_unrelated(
     action: &Action,
     meta: &BlockMetadata,
     sequence: u32,
 ) -> Result<HermesSpaceTrustExtension> {
     let source_space_id = action.from_id.clone();
-    let target_space_id = action.topic[16..32].to_vec();
+    let target_space_id = action.topic[0..16].to_vec();
 
     let extension = Some(hermes_space_trust_extension::Extension::RelatedRemoval(
         RelatedRemoval { target_space_id },
@@ -298,8 +305,9 @@ mod tests {
     }
 
     fn make_topic_with_target(target: &[u8]) -> Vec<u8> {
-        let mut topic = vec![0u8; 16]; // padding
-        topic.extend_from_slice(target);
+        // ZC16: bytes32(bytes16) right-pads — target in [0..16], zeros in [16..32]
+        let mut topic = target.to_vec();
+        topic.extend_from_slice(&[0u8; 16]); // padding
         topic
     }
 

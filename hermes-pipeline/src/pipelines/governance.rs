@@ -16,17 +16,17 @@ use hermes_instrumentation::{debug, debug_span, info, warn};
 
 use crate::cache::CachedEdit;
 use crate::decode::{
-    self, ProposalActionType, decode_flag_args, decode_ping_args, decode_publish_args,
-    decode_space_id_arg, decode_voting_settings_args,
+    self, decode_flag_args, decode_ping_args, decode_publish_args, decode_space_id_arg,
+    decode_voting_settings_args, ProposalActionType,
 };
 
-use hermes_relay::{Action, actions};
+use hermes_relay::{actions, Action};
 use hermes_schema::pb::governance::{
-    AddEditorAction, AddMemberAction, FlagAction, HermesProposalCreated, HermesProposalExecuted,
-    HermesProposalSettingsUpdated, HermesProposalUpdated, HermesProposalVoted, ProposalAction,
-    ProposalSettings, ProposalVoteOption, PublishAction, RemoveEditorAction, RemoveMemberAction,
-    SubspaceEdgeAction, SubspaceTopicAction, UnflagAction, UnflagEditorAction,
-    UpdateVotingSettingsAction, VotingMode, proposal_action,
+    proposal_action, AddEditorAction, AddMemberAction, FlagAction, HermesProposalCreated,
+    HermesProposalExecuted, HermesProposalSettingsUpdated, HermesProposalUpdated,
+    HermesProposalVoted, ProposalAction, ProposalSettings, ProposalVoteOption, PublishAction,
+    RemoveEditorAction, RemoveMemberAction, SubspaceEdgeAction, SubspaceTopicAction, UnflagAction,
+    UnflagEditorAction, UpdateVotingSettingsAction, VotingMode,
 };
 
 use super::BlockMetadata;
@@ -342,46 +342,67 @@ fn decode_ping_subspace_action(calldata: &[u8]) -> Option<proposal_action::Actio
         }
     };
 
-    // Extract target from topic field — same byte layout as trust.rs
-    let target = args.topic[16..32].to_vec();
-
-    // Reject all-zero target IDs — a zero target is never a valid space or topic reference
-    if target.iter().all(|b| *b == 0) {
-        warn!("All-zero target ID in ping subspace action, storing as Unknown");
-        return None;
-    }
+    // ZC16 topic layout depends on action type:
+    //   Edge actions (verified/related/etc): bytes32(bytes16 targetSpaceId)
+    //     → target in [0..16], zero-padding in [16..32]
+    //   Topic actions (topic_declared/removed): [subspace_id: 16 | topic_id: 16]
+    //     → topic_id in [16..32]
 
     match args.action {
-        x if x == actions::SUBSPACE_VERIFIED => Some(proposal_action::Action::SubspaceVerified(
-            SubspaceEdgeAction {
-                target_space_id: target,
-            },
-        )),
-        x if x == actions::SUBSPACE_UNVERIFIED => Some(
-            proposal_action::Action::SubspaceUnverified(SubspaceEdgeAction {
-                target_space_id: target,
-            }),
-        ),
-        x if x == actions::SUBSPACE_RELATED => Some(proposal_action::Action::SubspaceRelated(
-            SubspaceEdgeAction {
-                target_space_id: target,
-            },
-        )),
-        x if x == actions::SUBSPACE_UNRELATED => Some(proposal_action::Action::SubspaceUnrelated(
-            SubspaceEdgeAction {
-                target_space_id: target,
-            },
-        )),
-        x if x == actions::SUBSPACE_TOPIC_DECLARED => Some(
-            proposal_action::Action::SubspaceTopicDeclared(SubspaceTopicAction {
-                target_topic_id: target,
-            }),
-        ),
-        x if x == actions::SUBSPACE_TOPIC_REMOVED => Some(
-            proposal_action::Action::SubspaceTopicRemoved(SubspaceTopicAction {
-                target_topic_id: target,
-            }),
-        ),
+        x if x == actions::SUBSPACE_VERIFIED
+            || x == actions::SUBSPACE_UNVERIFIED
+            || x == actions::SUBSPACE_RELATED
+            || x == actions::SUBSPACE_UNRELATED =>
+        {
+            let target = args.topic[0..16].to_vec();
+            if target.iter().all(|b| *b == 0) {
+                warn!("All-zero target ID in ping subspace edge action, storing as Unknown");
+                return None;
+            }
+            match args.action {
+                x if x == actions::SUBSPACE_VERIFIED => Some(
+                    proposal_action::Action::SubspaceVerified(SubspaceEdgeAction {
+                        target_space_id: target,
+                    }),
+                ),
+                x if x == actions::SUBSPACE_UNVERIFIED => Some(
+                    proposal_action::Action::SubspaceUnverified(SubspaceEdgeAction {
+                        target_space_id: target,
+                    }),
+                ),
+                x if x == actions::SUBSPACE_RELATED => Some(
+                    proposal_action::Action::SubspaceRelated(SubspaceEdgeAction {
+                        target_space_id: target,
+                    }),
+                ),
+                x if x == actions::SUBSPACE_UNRELATED => Some(
+                    proposal_action::Action::SubspaceUnrelated(SubspaceEdgeAction {
+                        target_space_id: target,
+                    }),
+                ),
+                _ => unreachable!(),
+            }
+        }
+        x if x == actions::SUBSPACE_TOPIC_DECLARED || x == actions::SUBSPACE_TOPIC_REMOVED => {
+            let target = args.topic[16..32].to_vec();
+            if target.iter().all(|b| *b == 0) {
+                warn!("All-zero target ID in ping subspace topic action, storing as Unknown");
+                return None;
+            }
+            if x == actions::SUBSPACE_TOPIC_DECLARED {
+                Some(proposal_action::Action::SubspaceTopicDeclared(
+                    SubspaceTopicAction {
+                        target_topic_id: target,
+                    },
+                ))
+            } else {
+                Some(proposal_action::Action::SubspaceTopicRemoved(
+                    SubspaceTopicAction {
+                        target_topic_id: target,
+                    },
+                ))
+            }
+        }
         _ => {
             warn!(action_hash = %hex::encode(args.action), "Unrecognized ping action hash, storing as Unknown");
             None
@@ -715,7 +736,7 @@ mod tests {
 
     // Helper to create encoded PROPOSAL_CREATED data
     fn encode_proposal_created_data(proposal_id: [u8; 16], voting_mode: u8) -> Vec<u8> {
-        use ethabi::{Token, ethereum_types::U256 as EthU256};
+        use ethabi::{ethereum_types::U256 as EthU256, Token};
 
         let action_tuple = Token::Tuple(vec![
             Token::Address(ethabi::Address::zero()),
@@ -738,7 +759,7 @@ mod tests {
         quorum: u64,
         threshold: u64,
     ) -> Vec<u8> {
-        use ethabi::{Token, ethereum_types::U256 as EthU256};
+        use ethabi::{ethereum_types::U256 as EthU256, Token};
 
         ethabi::encode(&[
             Token::Uint(EthU256::from(start_date)),
@@ -1169,17 +1190,25 @@ mod tests {
         calldata
     }
 
-    /// Build a topic field with the target ID in bytes [16..32] (same layout as trust.rs).
-    fn make_topic(target_id: &[u8; 16]) -> [u8; 32] {
+    /// Build a topic field for edge actions: target in [0..16], zeros in [16..32].
+    /// ZC16: Solidity `bytes32(bytes16)` right-pads the bytes16 value.
+    fn make_edge_topic(target_id: &[u8; 16]) -> [u8; 32] {
         let mut topic = [0u8; 32];
-        topic[16..32].copy_from_slice(target_id);
+        topic[0..16].copy_from_slice(target_id);
+        topic
+    }
+
+    /// Build a topic field for topic actions: [subspace_id: 16 | topic_id: 16].
+    fn make_topic_topic(topic_id: &[u8; 16]) -> [u8; 32] {
+        let mut topic = [0u8; 32];
+        topic[16..32].copy_from_slice(topic_id);
         topic
     }
 
     #[test]
     fn test_decode_ping_subspace_verified() {
         let target_id = [0xAA; 16];
-        let topic = make_topic(&target_id);
+        let topic = make_edge_topic(&target_id);
         let calldata = encode_ping_calldata(&actions::SUBSPACE_VERIFIED, &topic, &[]);
 
         // Debug: verify decode_ping_args succeeds and action bytes match
@@ -1204,7 +1233,7 @@ mod tests {
     #[test]
     fn test_decode_ping_subspace_unverified() {
         let target_id = [0xBB; 16];
-        let topic = make_topic(&target_id);
+        let topic = make_edge_topic(&target_id);
         let calldata = encode_ping_calldata(&actions::SUBSPACE_UNVERIFIED, &topic, &[]);
 
         let result = decode_ping_subspace_action(&calldata);
@@ -1219,7 +1248,7 @@ mod tests {
     #[test]
     fn test_decode_ping_subspace_related() {
         let target_id = [0xCC; 16];
-        let topic = make_topic(&target_id);
+        let topic = make_edge_topic(&target_id);
         let calldata = encode_ping_calldata(&actions::SUBSPACE_RELATED, &topic, &[]);
 
         let result = decode_ping_subspace_action(&calldata);
@@ -1234,7 +1263,7 @@ mod tests {
     #[test]
     fn test_decode_ping_subspace_unrelated() {
         let target_id = [0xDD; 16];
-        let topic = make_topic(&target_id);
+        let topic = make_edge_topic(&target_id);
         let calldata = encode_ping_calldata(&actions::SUBSPACE_UNRELATED, &topic, &[]);
 
         let result = decode_ping_subspace_action(&calldata);
@@ -1249,7 +1278,7 @@ mod tests {
     #[test]
     fn test_decode_ping_subspace_topic_declared() {
         let target_id = [0xEE; 16];
-        let topic = make_topic(&target_id);
+        let topic = make_topic_topic(&target_id);
         let calldata = encode_ping_calldata(&actions::SUBSPACE_TOPIC_DECLARED, &topic, &[]);
 
         let result = decode_ping_subspace_action(&calldata);
@@ -1264,7 +1293,7 @@ mod tests {
     #[test]
     fn test_decode_ping_subspace_topic_removed() {
         let target_id = [0xFF; 16];
-        let topic = make_topic(&target_id);
+        let topic = make_topic_topic(&target_id);
         let calldata = encode_ping_calldata(&actions::SUBSPACE_TOPIC_REMOVED, &topic, &[]);
 
         let result = decode_ping_subspace_action(&calldata);
@@ -1280,7 +1309,7 @@ mod tests {
     fn test_decode_ping_unrecognized_action_returns_none() {
         let unknown_action = [0x42; 32]; // Not a known subspace action
         let target_id = [0xAA; 16];
-        let topic = make_topic(&target_id);
+        let topic = make_edge_topic(&target_id);
         let calldata = encode_ping_calldata(&unknown_action, &topic, &[]);
 
         let result = decode_ping_subspace_action(&calldata);

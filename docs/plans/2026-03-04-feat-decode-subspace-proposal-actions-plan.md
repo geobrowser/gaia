@@ -40,20 +40,20 @@ head[64]:   offset to _data
 tail:       _data length + bytes — always empty for subspace actions
 ```
 
-The `_topic` field packing (same layout used by the trust pipeline in `trust.rs`):
+The `_topic` field packing (ZC16: Solidity `bytes32(bytes16)` right-pads):
 
 | Action | `_topic[0..16]` | `_topic[16..32]` |
 |--------|-----------------|-------------------|
-| `SUBSPACE_VERIFIED` | zero-padded | target child space ID |
-| `SUBSPACE_UNVERIFIED` | zero-padded | target child space ID |
-| `SUBSPACE_RELATED` | zero-padded | target child space ID |
-| `SUBSPACE_UNRELATED` | zero-padded | target child space ID |
-| `SUBSPACE_TOPIC_DECLARED` | (unused by pipeline) | topic entity ID |
-| `SUBSPACE_TOPIC_REMOVED` | (unused by pipeline) | topic entity ID |
+| `SUBSPACE_VERIFIED` | target child space ID | zero-padded |
+| `SUBSPACE_UNVERIFIED` | target child space ID | zero-padded |
+| `SUBSPACE_RELATED` | target child space ID | zero-padded |
+| `SUBSPACE_UNRELATED` | target child space ID | zero-padded |
+| `SUBSPACE_TOPIC_DECLARED` | subspace ID | topic entity ID |
+| `SUBSPACE_TOPIC_REMOVED` | subspace ID | topic entity ID |
 
-For edge actions (verified/related), the parent space is the proposal's `space_id` (the DAO that owns the proposal). The `_topic` field carries only the target child space in `[16..32]`.
+For edge actions (verified/related), the parent space is the proposal's `space_id` (the DAO that owns the proposal). The `_topic` field carries the target child space in `[0..16]` (right-padded with zeros per ZC16 `bytes32(bytes16)` encoding).
 
-For topic actions, the trust pipeline only extracts `topic[16..32]` as the `target_topic_id` — the `source_space_id` (from `from_id`) is the parent space. In the proposal context, the parent is the proposal's `space_id`. So we extract only `topic[16..32]` for the topic entity ID, matching the trust pipeline pattern exactly (`trust.rs:196`).
+For topic actions, the pipeline extracts `topic[16..32]` as the `target_topic_id` — the `source_space_id` (from `from_id`) is the parent space. In the proposal context, the parent is the proposal's `space_id`.
 
 ### Storage Model
 

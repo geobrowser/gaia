@@ -363,15 +363,17 @@ This action triggers an internal `createProposal()` which emits PROPOSAL_CREATED
 
 **Onchain:**
 - Action: `keccak256('GOVERNANCE.SUBSPACE_*')`
-- Topic: `[padding: 16 bytes | target_space_id: 16 bytes]`
+- Topic: `bytes32(bytes16(targetSpaceId))` → `[target_space_id: 16 bytes | padding: 16 bytes]`
 - Data: empty
+
+ZC16: Solidity `bytes32(bytes16)` right-pads, so the bytes16 value occupies `[0..16]`.
 
 **Proto Output:** `HermesSpaceTrustExtension`
 | Field | Source | Type |
 |-------|--------|------|
 | `source_space_id` | `from_id` | bytes (16) |
 | `extension` | Action type → oneof variant | `VerifiedExtension` / `RelatedExtension` / `VerifiedRemoval` / `RelatedRemoval` |
-| `extension.*.target_space_id` | `topic[16..32]` | bytes (16) |
+| `extension.*.target_space_id` | `topic[0..16]` | bytes (16) |
 
 #### SUBSPACE_TOPIC_DECLARED / SUBSPACE_TOPIC_REMOVED
 
