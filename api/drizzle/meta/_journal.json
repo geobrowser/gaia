@@ -337,6 +337,13 @@
       "when": 1772813198990,
       "tag": "0047_absent_crusher_hogan",
       "breakpoints": true
+    },
+    {
+      "idx": 48,
+      "version": "7",
+      "when": 1773256034643,
+      "tag": "0048_needy_typhoid_mary",
+      "breakpoints": true
     }
   ]
 }
