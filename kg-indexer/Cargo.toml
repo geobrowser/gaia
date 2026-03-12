@@ -12,7 +12,7 @@ hermes-kafka = { path = "../hermes-kafka" }
 indexer_utils = { path = "../indexer_utils" }
 
 # GRC-20 v2 binary format
-grc-20 = "0.4.0"
+grc-20 = "0.4.1"
 
 # Kafka
 rdkafka = { version = "0.38.0", features = ["cmake-build", "ssl", "zstd"] }
