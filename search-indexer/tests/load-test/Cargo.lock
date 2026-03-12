@@ -476,9 +476,9 @@ dependencies = [
 
 [[package]]
 name = "grc-20"
-version = "0.3.1"
+version = "0.4.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "af523a5608db3a14ec574b10e24150b92c87eb795bc2aff08be0ca4a33c9b9a9"
+checksum = "1cb76f3e659f77f0fa8e2c8568ab2c20dd67b87f90461286861e61d0124089f9"
 dependencies = [
  "lazy_static",
  "rustc-hash",
