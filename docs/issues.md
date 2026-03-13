@@ -8,6 +8,14 @@ We currently have quite a large diff between our p50 queries (~10ms) and our p99
 
 It's not obvious how we get into situations where there are enough long queries to cause queuing. Need more investigation. Note that we do have statement timeouts configured at the DB level as well. We have quite a bit of monitoring set up around our query timing + DB connection pooling and saturation metrics.
 
+### PostGraphile computed field filters can hide expensive reverse lookups
+
+Some PostGraphile filters look cheap at the GraphQL layer but compile to expensive computed-column SQL. A concrete example is `entities(filter: {name: {is: "Date"}})`, where `name` is not a real column on `entities`; it is resolved via the `entities_name(entity)` function, which looks up the value in the `values` table.
+
+This pattern is efficient for "given an entity, fetch its name" but inefficient for "given a name, find matching entities". The computed-column filter encourages Postgres to evaluate `entities_name(...)` row-by-row instead of starting from the name rows in `values`, which can turn a simple lookup into a broad scan and contribute to connection pool saturation / apparent connection timeouts.
+
+The likely long-term fix is to avoid hot-path filtering through computed fields and instead route these lookups through a query shape that starts from `values` and joins back to `entities`. If we keep exact-name lookups on `values`, we should back them with a partial index on the name property, for example `(text, entity_id)` with `WHERE property_id = <NAME_PROPERTY_ID>`. If we need case-insensitive exact lookups, we should index `lower(text)` instead. If we need fuzzy name search, that should use a partial trigram index scoped to the name property rows rather than the generic computed-field path.
+
 ### Substream staleness
 
 In the past we've encountered a had situations where our substreams RPC becomes stale and we don't receive any new blocks. Each time we've had to reach out to Pinax to investigate on their end. This has happened twice but not in the last few weeks (March 2026).
