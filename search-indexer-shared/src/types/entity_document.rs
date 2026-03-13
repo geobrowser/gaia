@@ -79,6 +79,9 @@ pub struct EntityDocument {
     /// Soft delete flag - None for active entities, Some(true) for deleted entities
     #[serde(skip_serializing_if = "Option::is_none")]
     pub deleted: Option<bool>,
+    /// Whether this entity's space is in the canonical graph.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub in_canonical_graph: Option<bool>,
 }
 
 impl EntityDocument {
@@ -125,6 +128,7 @@ impl EntityDocument {
             space_topic_entity_id: None,
             indexed_at: Utc::now(),
             deleted: None,
+            in_canonical_graph: None,
         }
     }
 
@@ -162,6 +166,7 @@ impl EntityDocument {
             space_topic_entity_id: None,
             indexed_at: Utc::now(),
             deleted: None,
+            in_canonical_graph: None,
         }
     }
 

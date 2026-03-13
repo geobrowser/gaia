@@ -57,6 +57,7 @@ use uuid::Uuid;
 ///     entity_space_score: None,
 ///     deleted: None,
 ///     space_topic_entity_id: None,
+///     in_canonical_graph: None,
 /// };
 ///
 /// // This will create the document if it doesn't exist, or update it if it does
@@ -273,6 +274,8 @@ impl SearchIndexService {
                 succeeded: 0,
                 failed: 0,
                 results: vec![],
+                wall_ms: 0,
+                took_ms: 0,
             });
         }
 
@@ -325,6 +328,8 @@ impl SearchIndexService {
                 succeeded: 0,
                 failed: 0,
                 results: vec![],
+                wall_ms: 0,
+                took_ms: 0,
             });
         }
 
@@ -374,6 +379,8 @@ impl SearchIndexService {
                 succeeded: 0,
                 failed: 0,
                 results: vec![],
+                wall_ms: 0,
+                took_ms: 0,
             });
         }
 
@@ -487,6 +494,8 @@ mod tests {
                 succeeded: operations.len(),
                 failed: 0,
                 results,
+                wall_ms: 0,
+                took_ms: 0,
             })
         }
     }
@@ -506,6 +515,7 @@ mod tests {
             entity_space_score: None,
             deleted: None,
             space_topic_entity_id: None,
+            in_canonical_graph: None,
         }
     }
 
@@ -636,6 +646,7 @@ mod tests {
             entity_space_score: None,
             deleted: None,
             space_topic_entity_id: None,
+            in_canonical_graph: None,
         };
         assert!(service.update(request).await.is_err());
 
@@ -654,6 +665,7 @@ mod tests {
             entity_space_score: None,
             deleted: None,
             space_topic_entity_id: None,
+            in_canonical_graph: None,
         };
         assert!(service.update(request).await.is_err());
     }
@@ -700,6 +712,7 @@ mod tests {
                 entity_space_score: None,
                 deleted: None,
                 space_topic_entity_id: None,
+                in_canonical_graph: None,
             })
             .collect();
 

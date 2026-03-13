@@ -15,6 +15,7 @@ use search_indexer::loader::SearchLoader;
 use search_indexer::orchestrator::{
     EntitiesConsumerTrait, EntityProcessingBatch, Orchestrator, OrchestratorConfig,
     ScoreProcessingBatch, ScoresConsumerTrait, SpaceTopicProcessingBatch, SpaceTopicsConsumerTrait,
+    TopologyConsumerTrait, TopologyProcessingBatch,
 };
 use search_indexer::processor::Processor;
 use search_indexer_repository::{
@@ -99,10 +100,11 @@ impl EntitiesConsumerTrait for MockConsumer {
                 match msg {
                     Some(StreamMessage::Acknowledgment { success, .. }) => {
                         *self.last_acknowledgment.lock().unwrap() = Some(success);
-                        // For tests: we just record whether ACK or NACK was received.
-                        // The test can check get_last_acknowledgment() to verify.
-                        // We don't return an error on NACK since the mock's job is just
-                        // to record what happened, not to simulate real retry behavior.
+                        if !success {
+                            return Err(IngestError::LoaderError(
+                                "Batch processing failed (NACK received)".to_string()
+                            ));
+                        }
                     }
                     Some(_) | None => {
                         // Channel closed or unexpected message, exit
@@ -152,6 +154,26 @@ impl SpaceTopicsConsumerTrait for MockSpaceTopicsConsumer {
         mut shutdown: broadcast::Receiver<()>,
     ) -> Result<(), IngestError> {
         // Just wait for shutdown - no space topic events in these tests
+        let _ = shutdown.recv().await;
+        Ok(())
+    }
+}
+
+// Mock Topology Consumer for testing - does nothing, just waits for shutdown
+struct MockTopologyConsumer;
+
+#[async_trait::async_trait]
+impl TopologyConsumerTrait for MockTopologyConsumer {
+    fn subscribe(&self) -> Result<(), IngestError> {
+        Ok(())
+    }
+
+    async fn run(
+        &self,
+        _processor_tx: mpsc::Sender<TopologyProcessingBatch>,
+        _ack_receiver: mpsc::Receiver<StreamMessage>,
+        mut shutdown: broadcast::Receiver<()>,
+    ) -> Result<(), IngestError> {
         let _ = shutdown.recv().await;
         Ok(())
     }
@@ -292,11 +314,12 @@ impl SearchIndexProvider for MockSearchProvider {
                 EntityOperation::Delete(_) => false, // Hard deletes not used (soft delete via Update)
                 EntityOperation::Unset(_) => self.fail_bulk_unsets && i >= operations.len() / 2,
                 EntityOperation::RemoveRelationById(_) => false, // Never fails in mock
-                // Score and space topic operations never fail in mock
+                // Score, space topic, and topology operations never fail in mock
                 EntityOperation::UpdateEntityGlobalScore(_)
                 | EntityOperation::UpdateSpaceScore(_)
                 | EntityOperation::UpdateEntitySpaceScore(_)
-                | EntityOperation::UpdateSpaceTopicEntityId(_) => false,
+                | EntityOperation::UpdateSpaceTopicEntityId(_)
+                | EntityOperation::UpdateInCanonicalGraph(_) => false,
             };
 
             if should_fail {
@@ -328,11 +351,12 @@ impl SearchIndexProvider for MockSearchProvider {
                     EntityOperation::RemoveRelationById(_) => {
                         // Tracked via all_operations
                     }
-                    // Score and space topic operations are tracked via all_operations only
+                    // Score, space topic, and topology operations are tracked via all_operations only
                     EntityOperation::UpdateEntityGlobalScore(_)
                     | EntityOperation::UpdateSpaceScore(_)
                     | EntityOperation::UpdateEntitySpaceScore(_)
-                    | EntityOperation::UpdateSpaceTopicEntityId(_) => {
+                    | EntityOperation::UpdateSpaceTopicEntityId(_)
+                    | EntityOperation::UpdateInCanonicalGraph(_) => {
                         // Tracked via all_operations
                     }
                 }
@@ -355,6 +379,8 @@ impl SearchIndexProvider for MockSearchProvider {
             succeeded,
             failed,
             results,
+            wall_ms: 0,
+            took_ms: 0,
         })
     }
 }
@@ -368,11 +394,13 @@ fn create_test_orchestrator(events: Vec<EntityEvent>) -> (Orchestrator, Arc<Mock
     let mock_consumer = Arc::new(MockConsumer::new(events));
     let mock_scores_consumer = Arc::new(MockScoresConsumer);
     let mock_space_topics_consumer = Arc::new(MockSpaceTopicsConsumer);
+    let mock_topology_consumer = Arc::new(MockTopologyConsumer);
 
     let orchestrator = Orchestrator::new(
         mock_consumer,
         mock_scores_consumer,
         mock_space_topics_consumer,
+        mock_topology_consumer,
         processor,
         loader,
     );
@@ -391,11 +419,13 @@ fn create_test_orchestrator_with_consumer(
     let mock_consumer = Arc::new(MockConsumer::new(events));
     let mock_scores_consumer = Arc::new(MockScoresConsumer);
     let mock_space_topics_consumer = Arc::new(MockSpaceTopicsConsumer);
+    let mock_topology_consumer = Arc::new(MockTopologyConsumer);
 
     let orchestrator = Orchestrator::new(
         mock_consumer.clone(),
         mock_scores_consumer,
         mock_space_topics_consumer,
+        mock_topology_consumer,
         processor,
         loader,
     );
@@ -414,11 +444,13 @@ fn create_error_test_orchestrator(
     let mock_consumer = Arc::new(MockConsumer::with_subscribe_error(events));
     let mock_scores_consumer = Arc::new(MockScoresConsumer);
     let mock_space_topics_consumer = Arc::new(MockSpaceTopicsConsumer);
+    let mock_topology_consumer = Arc::new(MockTopologyConsumer);
 
     let orchestrator = Orchestrator::new(
         mock_consumer,
         mock_scores_consumer,
         mock_space_topics_consumer,
+        mock_topology_consumer,
         processor,
         loader,
     );
@@ -437,11 +469,13 @@ fn create_bulk_update_failure_orchestrator(
     let mock_consumer = Arc::new(MockConsumer::new(events.clone()));
     let mock_scores_consumer = Arc::new(MockScoresConsumer);
     let mock_space_topics_consumer = Arc::new(MockSpaceTopicsConsumer);
+    let mock_topology_consumer = Arc::new(MockTopologyConsumer);
 
     let orchestrator = Orchestrator::new(
         mock_consumer.clone(),
         mock_scores_consumer,
         mock_space_topics_consumer,
+        mock_topology_consumer,
         processor,
         loader,
     );
@@ -460,11 +494,13 @@ fn create_bulk_unset_failure_orchestrator(
     let mock_consumer = Arc::new(MockConsumer::new(events.clone()));
     let mock_scores_consumer = Arc::new(MockScoresConsumer);
     let mock_space_topics_consumer = Arc::new(MockSpaceTopicsConsumer);
+    let mock_topology_consumer = Arc::new(MockTopologyConsumer);
 
     let orchestrator = Orchestrator::new(
         mock_consumer.clone(),
         mock_scores_consumer,
         mock_space_topics_consumer,
+        mock_topology_consumer,
         processor,
         loader,
     );
@@ -557,6 +593,7 @@ async fn test_orchestrator_configuration() {
     let mock_consumer = Arc::new(MockConsumer::new(vec![]));
     let mock_scores_consumer = Arc::new(MockScoresConsumer);
     let mock_space_topics_consumer = Arc::new(MockSpaceTopicsConsumer);
+    let mock_topology_consumer = Arc::new(MockTopologyConsumer);
 
     let config = OrchestratorConfig {
         channel_buffer_size: 2000,
@@ -566,6 +603,7 @@ async fn test_orchestrator_configuration() {
         mock_consumer,
         mock_scores_consumer,
         mock_space_topics_consumer,
+        mock_topology_consumer,
         processor,
         loader,
         config,
@@ -711,10 +749,10 @@ async fn test_orchestrator_bulk_update_failure_nack() {
     assert!(result.is_ok(), "Orchestrator should complete");
 
     let run_result = result.unwrap();
-    // The orchestrator should fail due to bulk operation failures
+    // The orchestrator should fail because NACK causes consumer to return Err
     assert!(
-        run_result.is_ok(),
-        "Orchestrator run should succeed (error is handled via NACK)"
+        run_result.is_err(),
+        "Orchestrator run should fail (NACK causes consumer error to prevent data loss)"
     );
 
     // Verify that NACK was sent (not ACK)
@@ -744,10 +782,10 @@ async fn test_orchestrator_bulk_soft_delete_failure_nack() {
     assert!(result.is_ok(), "Orchestrator should complete");
 
     let run_result = result.unwrap();
-    // The orchestrator should fail due to bulk operation failures
+    // The orchestrator should fail because NACK causes consumer to return Err
     assert!(
-        run_result.is_ok(),
-        "Orchestrator run should succeed (error is handled via NACK)"
+        run_result.is_err(),
+        "Orchestrator run should fail (NACK causes consumer error to prevent data loss)"
     );
 
     // Verify that NACK was sent (not ACK)
@@ -756,6 +794,110 @@ async fn test_orchestrator_bulk_soft_delete_failure_nack() {
         last_ack,
         Some(false),
         "Expected NACK due to bulk soft delete (update) failures"
+    );
+}
+
+#[tokio::test]
+async fn test_nack_stops_then_restart_replays() {
+    // Simulate the full NACK → stop → restart → replay → success lifecycle.
+    // This validates that NACKs prevent data loss by stopping the consumer,
+    // and that replaying the same events after recovery succeeds.
+
+    let events = vec![
+        EntityEvent::upsert(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Some("Entity 1".to_string()),
+            Some("Description 1".to_string()),
+            None,
+            None,
+            None,
+        ),
+        EntityEvent::upsert(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Some("Entity 2".to_string()),
+            Some("Description 2".to_string()),
+            None,
+            None,
+            None,
+        ),
+        EntityEvent::upsert(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Some("Entity 3".to_string()),
+            Some("Description 3".to_string()),
+            None,
+            None,
+            None,
+        ),
+        EntityEvent::upsert(
+            Uuid::new_v4(),
+            Uuid::new_v4(),
+            Some("Entity 4".to_string()),
+            Some("Description 4".to_string()),
+            None,
+            None,
+            None,
+        ),
+    ];
+
+    // === Run 1: OpenSearch failing → NACK → orchestrator returns Err ===
+    let fail_provider = Arc::new(MockSearchProvider::with_bulk_update_failures());
+    let consumer1 = Arc::new(MockConsumer::new(events.clone()));
+    let mock_scores_consumer1 = Arc::new(MockScoresConsumer);
+    let mock_space_topics_consumer1 = Arc::new(MockSpaceTopicsConsumer);
+    let mock_topology_consumer1 = Arc::new(MockTopologyConsumer);
+    let orch1 = Orchestrator::new(
+        consumer1.clone(),
+        mock_scores_consumer1,
+        mock_space_topics_consumer1,
+        mock_topology_consumer1,
+        Processor::new(),
+        SearchLoader::new(fail_provider.clone()),
+    );
+
+    let result1 = timeout(Duration::from_secs(5), orch1.run()).await;
+    assert!(result1.is_ok(), "Run 1 should not timeout");
+    assert!(
+        result1.expect("Run 1 should not timeout").is_err(),
+        "Run 1 should fail (NACK causes consumer error)"
+    );
+    assert_eq!(
+        consumer1.get_last_acknowledgment(),
+        Some(false),
+        "Run 1 should receive NACK"
+    );
+
+    // === Run 2: OpenSearch recovered → same events replayed → ACK ===
+    let ok_provider = Arc::new(MockSearchProvider::new());
+    let consumer2 = Arc::new(MockConsumer::new(events.clone())); // same events = Kafka replay
+    let mock_scores_consumer2 = Arc::new(MockScoresConsumer);
+    let mock_space_topics_consumer2 = Arc::new(MockSpaceTopicsConsumer);
+    let mock_topology_consumer2 = Arc::new(MockTopologyConsumer);
+    let orch2 = Orchestrator::new(
+        consumer2.clone(),
+        mock_scores_consumer2,
+        mock_space_topics_consumer2,
+        mock_topology_consumer2,
+        Processor::new(),
+        SearchLoader::new(ok_provider.clone()),
+    );
+
+    let result2 = timeout(Duration::from_secs(5), orch2.run()).await;
+    assert!(result2.is_ok(), "Run 2 should not timeout");
+    assert!(
+        result2.expect("Run 2 should not timeout").is_ok(),
+        "Run 2 should succeed"
+    );
+    assert_eq!(
+        consumer2.get_last_acknowledgment(),
+        Some(true),
+        "Run 2 should receive ACK"
+    );
+    assert!(
+        ok_provider.get_updated_count() > 0,
+        "Documents should be indexed on replay"
     );
 }
 
@@ -874,10 +1016,10 @@ async fn test_bulk_update_partial_failure() {
     assert!(result.is_ok(), "Orchestrator should complete");
 
     let run_result = result.unwrap();
-    // The orchestrator should succeed (error is handled via NACK)
+    // The orchestrator should fail because NACK causes consumer to return Err
     assert!(
-        run_result.is_ok(),
-        "Orchestrator run should succeed (error is handled via NACK)"
+        run_result.is_err(),
+        "Orchestrator run should fail (NACK causes consumer error to prevent data loss)"
     );
 
     // Verify that NACK was sent (not ACK) - if one fails, whole batch is a failure
@@ -937,10 +1079,10 @@ async fn test_bulk_soft_delete_partial_failure() {
     assert!(result.is_ok(), "Orchestrator should complete");
 
     let run_result = result.unwrap();
-    // The orchestrator should succeed (error is handled via NACK)
+    // The orchestrator should fail because NACK causes consumer to return Err
     assert!(
-        run_result.is_ok(),
-        "Orchestrator run should succeed (error is handled via NACK)"
+        run_result.is_err(),
+        "Orchestrator run should fail (NACK causes consumer error to prevent data loss)"
     );
 
     // Verify that NACK was sent (not ACK) - if one fails, whole batch is a failure
@@ -1017,10 +1159,10 @@ async fn test_bulk_unset_partial_failure() {
     assert!(result.is_ok(), "Orchestrator should complete");
 
     let run_result = result.unwrap();
-    // The orchestrator should succeed (error is handled via NACK)
+    // The orchestrator should fail because NACK causes consumer to return Err
     assert!(
-        run_result.is_ok(),
-        "Orchestrator run should succeed (error is handled via NACK)"
+        run_result.is_err(),
+        "Orchestrator run should fail (NACK causes consumer error to prevent data loss)"
     );
 
     // Verify that NACK was sent (not ACK) - if one fails, whole batch is a failure

@@ -102,7 +102,7 @@ metadata:
   namespace: search
 rules:
 - apiGroups: ["apps"]
-  resources: ["deployments"]
+  resources: ["statefulsets"]
   verbs: ["get", "list", "patch", "update"]
 - apiGroups: [""]
   resources: ["pods"]
@@ -228,12 +228,27 @@ kubectl logs -n search job/opensearch-update-alias-v1
 
 echo "==> Deploying test indexer..."
 kubectl apply -f - <<EOF
-apiVersion: apps/v1
-kind: Deployment
+apiVersion: v1
+kind: Service
 metadata:
   name: search-indexer
   namespace: search
 spec:
+  clusterIP: None
+  selector:
+    app: search-indexer
+  ports:
+    - name: http
+      port: 8080
+      targetPort: 8080
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: search-indexer
+  namespace: search
+spec:
+  serviceName: search-indexer
   replicas: 1
   selector:
     matchLabels:
@@ -265,7 +280,7 @@ echo ""
 echo "Your local test environment is ready:"
 echo "  - OpenSearch running with 5 test documents in entities_v1"
 echo "  - Alias 'entities' pointing to entities_v1"
-echo "  - Test search-indexer deployment running"
+echo "  - Test search-indexer StatefulSet running"
 echo ""
 echo "Next steps:"
 echo ""

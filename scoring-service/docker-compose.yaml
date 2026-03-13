@@ -34,9 +34,9 @@ services:
     environment:
       - DATABASE_URL
       - KAFKA_BROKER=${KAFKA_BROKER:-kafka:29092}
-      - KAFKA_GROUP_ID=${KAFKA_GROUP_ID:-vote-indexer}
-      - BATCH_SIZE=${BATCH_SIZE:-100}
-      - BATCH_TIMEOUT_MS=${BATCH_TIMEOUT_MS:-1000}
+      - KAFKA_GROUP_ID=${VOTE_INDEXER_KAFKA_GROUP_ID:-vote-indexer}
+      - BATCH_SIZE=${VOTE_INDEXER_BATCH_SIZE:-100}
+      - BATCH_TIMEOUT_MS=${VOTE_INDEXER_BATCH_TIMEOUT_MS:-1000}
       - RUST_LOG=${RUST_LOG:-info,vote_indexer=debug}
       - SENTRY_DSN=${SENTRY_DSN:-}
       - SENTRY_TRACES_SAMPLE_RATE=${SENTRY_TRACES_SAMPLE_RATE:-1.0}
@@ -44,6 +44,27 @@ services:
       - SENTRY_SEND_DEFAULT_PII=${SENTRY_SEND_DEFAULT_PII:-false}
       - SENTRY_DEBUG=${SENTRY_DEBUG:-false}
       - SENTRY_RELEASE=${SENTRY_RELEASE:-vote-indexer@1.0.0}
+    networks:
+      - hermes_default
+
+  topology-indexer:
+    build:
+      context: ..
+      dockerfile: scoring-service/topology-indexer/Dockerfile
+    environment:
+      - DATABASE_URL
+      - KAFKA_BROKER=${KAFKA_BROKER:-kafka:29092}
+      - KAFKA_GROUP_ID=${TOPOLOGY_INDEXER_KAFKA_GROUP_ID:-topology-indexer}
+      - BATCH_SIZE=${TOPOLOGY_INDEXER_BATCH_SIZE:-10}
+      - BATCH_TIMEOUT_MS=${TOPOLOGY_INDEXER_BATCH_TIMEOUT_MS:-1000}
+      - ENVIRONMENT=${ENVIRONMENT:-staging}
+      - RUST_LOG=${RUST_LOG:-info,topology_indexer=debug}
+      - SENTRY_DSN=${SENTRY_DSN:-}
+      - SENTRY_TRACES_SAMPLE_RATE=${SENTRY_TRACES_SAMPLE_RATE:-1.0}
+      - SENTRY_ENVIRONMENT=${SENTRY_ENVIRONMENT:-development}
+      - SENTRY_SEND_DEFAULT_PII=${SENTRY_SEND_DEFAULT_PII:-false}
+      - SENTRY_DEBUG=${SENTRY_DEBUG:-false}
+      - SENTRY_RELEASE=${SENTRY_RELEASE:-topology-indexer@1.0.0}
     networks:
       - hermes_default
 

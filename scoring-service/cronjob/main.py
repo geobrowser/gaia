@@ -3,6 +3,7 @@
 import logging
 import os
 import sys
+import time
 from enum import Enum
 
 import sentry_sdk
@@ -11,6 +12,7 @@ from sentry_sdk.integrations.logging import LoggingIntegration
 
 from src.algorithm.models import RankingConfig
 from src.algorithm.scoring import RankingEngine
+from src.memory_monitor import start_memory_monitor
 from src.scoring_data_emitter import ScoringDataEmitter
 from src.scoring_data_provider import ScoringDataProvider
 from src.scoring_data_provider.scoring_data_provider import ScoringData
@@ -83,30 +85,40 @@ class ScoringPipeline:
         """Run the full scoring pipeline."""
         logger.info("Starting scoring pipeline (output_mode=%s)", self.output_mode.value)
 
+        phase_times: dict[str, float] = {}
+
         # Create parent transaction for the entire pipeline
         with sentry_sdk.start_transaction(op="pipeline.run", name="scoring_pipeline"):
+            t0 = time.monotonic()
             with sentry_sdk.start_span(op="pipeline.fetch_data", description="Fetch scoring data"):
                 self._fetch_data()
+            phase_times["fetch"] = time.monotonic() - t0
 
+            t0 = time.monotonic()
             with sentry_sdk.start_span(op="pipeline.rank_spaces", description="Rank spaces"):
                 self._rank_spaces()
+            phase_times["spaces"] = time.monotonic() - t0
 
+            t0 = time.monotonic()
             with sentry_sdk.start_span(op="pipeline.rank_entities", description="Rank entities"):
                 self._rank_entities()
+            phase_times["entities"] = time.monotonic() - t0
 
+            t0 = time.monotonic()
             with sentry_sdk.start_span(op="pipeline.write_scores", description="Write scores"):
                 self._write_scores()
+            phase_times["write"] = time.monotonic() - t0
 
         entity_count = len(self.scoring_data.entities)
         space_count = len(self.scoring_data.spaces)
+        total_time = sum(phase_times.values())
+        phase_summary = ", ".join(f"{k}={v:.0f}s" for k, v in phase_times.items())
         logger.info(
-            "Scoring pipeline completed: %d entities, %d spaces",
+            "Pipeline complete: %d entities, %d spaces in %.0fs (%s)",
             entity_count,
             space_count,
-            extra={
-                "pipeline_entities_processed": entity_count,
-                "pipeline_spaces_processed": space_count,
-            },
+            total_time,
+            phase_summary,
         )
 
         return entity_count, space_count
@@ -234,6 +246,11 @@ def main() -> None:
         handlers=[logging.StreamHandler(sys.stdout)],
     )
 
+    # Start background memory monitor
+    memory_threshold = float(os.environ.get("MEMORY_MONITOR_THRESHOLD", "0.85"))
+    memory_interval = float(os.environ.get("MEMORY_MONITOR_INTERVAL", "5"))
+    start_memory_monitor(threshold=memory_threshold, interval=memory_interval)
+
     # Database configuration (required)
     database_url = os.environ.get("DATABASE_URL")
     if not database_url:
@@ -277,6 +294,21 @@ def main() -> None:
         require_space_membership=os.environ.get("REQUIRE_SPACE_MEMBERSHIP", "False").lower() == "true",
     )
     engine = RankingEngine(config)
+
+    logger.info(
+        "Scoring configuration: normalize_scores=%s, normalization_method=%s, "
+        "use_time_decay=%s, time_decay_factor=%s, use_activity_metrics=%s, "
+        "use_distance_weighting=%s, distance_weight_base=%s, max_distance=%s, "
+        "use_contestation_score=%s, include_subspace_votes=%s, "
+        "filter_non_members=%s, require_space_membership=%s, output_mode=%s",
+        config.normalize_scores, config.normalization_method,
+        config.use_time_decay, config.time_decay_factor,
+        config.use_activity_metrics, config.use_distance_weighting,
+        config.distance_weight_base, config.max_distance,
+        config.use_contestation_score, config.include_subspace_votes,
+        config.filter_non_members, config.require_space_membership,
+        output_mode.value,
+    )
 
     try:
         pipeline = ScoringPipeline(

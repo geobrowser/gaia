@@ -65,14 +65,14 @@ export const SCORE_SHIFT = 1.0
  * With scores in [0, 1], this multiplier controls how much global/space scores
  * influence ranking relative to text match quality.
  *
- * Formula: (max(score, 0) + 1) * 10
- *   score=0.0 → boost=10, score=0.5 → boost=15, score=1.0 → boost=20
+ * Formula: (max(score, 0) + 1) * 20
+ *   score=0.0 → boost=20, score=0.5 → boost=30, score=1.0 → boost=40
  *
- * This produces a boost range of 10 across the full score spectrum, which is
- * large enough for high-score entities to outrank low-score entities that have
- * moderately better text matches (e.g., exact single-word name match vs multi-word name).
+ * This produces a boost range of 20 across the full score spectrum, which is
+ * large enough for high-score entities to outrank low-score entities even when
+ * the lower-score entity has richer text matches (e.g., keyword-heavy descriptions).
  */
-export const SCORE_BOOST = 10.0
+export const SCORE_BOOST = 20.0
 
 /**
  * Boost value for name field in match_phrase_prefix queries.
@@ -115,11 +115,20 @@ export const NAME_FIELD_BOOST = 1.5
  * matches in name and description (e.g. "geojson.io", "GeoJSON") can outscore
  * a short exact name match.
  *
- * Set to 5.0 to create a meaningful signal for exact token matches while
- * keeping the boost modest enough that score field differences (SCORE_BOOST=10)
- * can still override text match gaps between single-word and multi-word names.
+ * Set to 8.0 to create a strong signal for exact token matches while
+ * keeping the boost proportional to SCORE_BOOST=20 so that score field
+ * differences can still override text match gaps between entities.
  */
-export const NAME_EXACT_TOKEN_BOOST = 5.0
+export const NAME_EXACT_TOKEN_BOOST = 8.0
+
+/**
+ * Boost value for exact raw name match on the unanalyzed name.raw keyword field.
+ * Uses a `term` query against name.raw which preserves the original string,
+ * so "World affairs" matches "World affairs" but NOT "world-affairs".
+ * The standard analyzer treats these identically (both tokenize to ["world", "affairs"]),
+ * so this is the only way to prefer the exact string match.
+ */
+export const NAME_RAW_EXACT_BOOST = 10.0
 
 /**
  * Boost value for fuzzy text match queries.
@@ -144,6 +153,11 @@ const TYPE_RELATION_TYPE_ID = normalizeUuid("8f151ba4-de20-4e3c-9cb4-99ddf96f48f
 const AVATAR_RELATION_TYPE_ID = normalizeUuid("1155beff-fad5-49b7-a2e0-da4777b8792c") as string
 const COVER_RELATION_TYPE_ID = normalizeUuid("34f53507-2e6b-42c5-a844-43981a77cfa2") as string
 
+interface SubspacesResult {
+	subspaces: string[]
+	isRoot: boolean
+}
+
 /**
  * OpenSearch client implementation.
  *
@@ -161,23 +175,62 @@ const COVER_RELATION_TYPE_ID = normalizeUuid("34f53507-2e6b-42c5-a844-43981a77cf
 export class OpenSearchClient implements SearchClient {
 	private client: Client
 	private indexName: string
+	private topologyServiceUrl: string | null
+	private subspaceCache: Map<string, {result: SubspacesResult; expiry: number}>
+	private rootSpaceId: string | null
 
 	/**
 	 * Create a new OpenSearch client.
 	 *
 	 * @param nodeUrl - The OpenSearch server URL
 	 * @param indexName - The index name to use (default: "entities")
+	 * @param topologyServiceUrl - The topology service URL for subspace lookups (optional)
 	 */
-	constructor(nodeUrl: string, indexName: string = "entities") {
+	constructor(nodeUrl: string, indexName: string = "entities", topologyServiceUrl?: string) {
 		this.client = new Client({node: nodeUrl})
 		this.indexName = indexName
+		this.topologyServiceUrl = topologyServiceUrl ?? process.env.TOPOLOGY_SERVICE_URL ?? null
+		this.subspaceCache = new Map()
+		this.rootSpaceId = null
+	}
+
+	/**
+	 * Initialize the client by fetching the topology root space ID.
+	 * Best-effort: if topology service is unavailable, logs a warning and continues.
+	 * The root will be discovered lazily on the first root-space query via fetchSubspaces().
+	 */
+	async init(): Promise<void> {
+		if (!this.topologyServiceUrl) return
+
+		try {
+			const response = await fetch(`${this.topologyServiceUrl}/topology/root`, {
+				signal: AbortSignal.timeout(3000),
+			})
+
+			if (response.ok) {
+				const data = (await response.json()) as {root_id: string}
+				this.rootSpaceId = data.root_id
+				console.log(`Cached topology root space ID: ${this.rootSpaceId}`)
+			} else {
+				console.warn(`Topology root endpoint returned ${response.status}, will discover root lazily`)
+			}
+		} catch (error) {
+			console.warn("Failed to fetch topology root on init, will discover root lazily:", error)
+		}
+	}
+
+	/**
+	 * Check if a space ID is the cached root space.
+	 */
+	private isRootSpace(spaceId: string): boolean {
+		return this.rootSpaceId !== null && spaceId === this.rootSpaceId
 	}
 
 	/**
 	 * Execute a search query against the index.
 	 */
 	async search(query: SearchQuery): Promise<SearchResponse> {
-		const searchBody = this.buildSearchBody(query) as Record<string, unknown>
+		const searchBody = (await this.buildSearchBody(query)) as Record<string, unknown>
 
 		// When script_fields is present, OpenSearch suppresses _source by default
 		if (searchBody.script_fields) {
@@ -458,19 +511,19 @@ export class OpenSearchClient implements SearchClient {
 	 * - Score hierarchy: exact name > name prefix > description prefix > fuzzy > scored fields
 	 * - Empty queries return top ranked results based on scope-specific score fields
 	 */
-	buildSearchBody(query: SearchQuery): object {
+	async buildSearchBody(query: SearchQuery): Promise<object> {
 		const includeDeleted = query.include_deleted ?? false
 
 		// Check if the query is empty or whitespace-only
 		const trimmedQuery = query.query.trim()
 		if (trimmedQuery.length === 0) {
 			// For empty queries, return top ranked results based on scope
-			return this.buildTopRankedQuery(query.scope, query.space_id, query.type_ids, includeDeleted)
+			return await this.buildTopRankedQuery(query.scope, query.space_id, query.type_ids, includeDeleted)
 		}
 
 		// Check if the query is a UUID for direct ID lookup (dashed or dashless)
 		if (UUID_DASHED_PATTERN.test(trimmedQuery) || UUID_DASHLESS_PATTERN.test(trimmedQuery)) {
-			return this.buildUuidQuery(trimmedQuery, query.scope, query.space_id, query.type_ids, includeDeleted)
+			return await this.buildUuidQuery(trimmedQuery, query.scope, query.space_id, query.type_ids, includeDeleted)
 		}
 
 		// Build base text search query
@@ -498,10 +551,12 @@ export class OpenSearchClient implements SearchClient {
 				if (!query.space_id) {
 					throw SearchError.validationError("SPACE scope requires space_id")
 				}
-				// SPACE scope: Search within a space and its subspaces
-				// Currently implemented as single space query - future enhancement
-				// will expand to include hierarchical space relationships
-				return this.buildSingleSpaceQuery(baseTextQuery, query.space_id, query.type_ids, includeDeleted)
+				// Short-circuit for cached root space — no subspace fetch needed
+				if (this.isRootSpace(query.space_id)) {
+					return this.buildMultiSpaceQuery(baseTextQuery, [], query.type_ids, includeDeleted, true)
+				}
+				const {subspaces, isRoot} = await this.fetchSubspaces(query.space_id)
+				return this.buildMultiSpaceQuery(baseTextQuery, subspaces, query.type_ids, includeDeleted, isRoot)
 			}
 
 			default:
@@ -517,13 +572,13 @@ export class OpenSearchClient implements SearchClient {
 	 * on keyword fields. The entity_id field is indexed as a keyword type
 	 * in the OpenSearch index mapping.
 	 */
-	buildUuidQuery(
+	async buildUuidQuery(
 		uuid: string,
 		scope: SearchScope,
 		space_id?: string,
 		typeIds?: string[],
 		includeDeleted: boolean = false,
-	): object {
+	): Promise<object> {
 		// Match both dashed and dashless forms (index may contain either during migration)
 		const baseUuidQuery = {
 			terms: {entity_id: uuidTermVariants(uuid)},
@@ -549,9 +604,30 @@ export class OpenSearchClient implements SearchClient {
 				}
 
 			case "SPACE_SINGLE":
-			case "SPACE":
 				if (space_id) {
 					filters.push({terms: {space_id: uuidTermVariants(space_id)}})
+				}
+				return {
+					query: {
+						bool: {
+							must: [baseUuidQuery],
+							filter: filters,
+						},
+					},
+				}
+
+			case "SPACE":
+				if (space_id) {
+					if (this.isRootSpace(space_id)) {
+						filters.push({term: {in_canonical_graph: true}})
+					} else {
+						const {subspaces, isRoot} = await this.fetchSubspaces(space_id)
+						if (isRoot) {
+							filters.push({term: {in_canonical_graph: true}})
+						} else {
+							filters.push({terms: {space_id: subspaces.flatMap(uuidTermVariants)}})
+						}
+					}
 				}
 				return {
 					query: {
@@ -578,12 +654,12 @@ export class OpenSearchClient implements SearchClient {
 	 * Build a query for returning top ranked results without text matching.
 	 * Used when no search query is provided - returns results ranked by scope-specific score fields.
 	 */
-	buildTopRankedQuery(
+	async buildTopRankedQuery(
 		scope: SearchScope,
 		space_id?: string,
 		typeIds?: string[],
 		includeDeleted: boolean = false,
-	): object {
+	): Promise<object> {
 		const typeFilter = this.buildTypeFilter(typeIds)
 		const filters: object[] = []
 		if (!includeDeleted) filters.push(this.buildNonDeletedFilter())
@@ -645,9 +721,38 @@ export class OpenSearchClient implements SearchClient {
 				}
 
 			case "SPACE_SINGLE":
-			case "SPACE":
 				if (space_id) {
 					filters.push({terms: {space_id: uuidTermVariants(space_id)}})
+				}
+				return {
+					query: {
+						function_score: {
+							query: {
+								bool: {
+									must: [{match_all: {}}],
+									filter: filters,
+								},
+							},
+							functions: [this.buildScoreBoostFunction("entity_space_score")],
+							boost_mode: "replace",
+							score_mode: "sum",
+						},
+					},
+					script_fields: this.buildScoreBoostScriptFields("entity_space_score"),
+				}
+
+			case "SPACE":
+				if (space_id) {
+					if (this.isRootSpace(space_id)) {
+						filters.push({term: {in_canonical_graph: true}})
+					} else {
+						const {subspaces, isRoot} = await this.fetchSubspaces(space_id)
+						if (isRoot) {
+							filters.push({term: {in_canonical_graph: true}})
+						} else {
+							filters.push({terms: {space_id: subspaces.flatMap(uuidTermVariants)}})
+						}
+					}
 				}
 				return {
 					query: {
@@ -699,8 +804,23 @@ export class OpenSearchClient implements SearchClient {
 			bool: {
 				should: [
 					{
-						// Exact token match on name — strongly boosts documents where
-						// query terms match full analyzed tokens in the name field.
+						// Exact raw name match — boosts documents where the query
+						// matches the unanalyzed name string exactly. Differentiates
+						// "World affairs" from "world-affairs" which the analyzer
+						// treats as identical tokens.
+						term: {
+							"name.raw": {
+								value: queryText,
+								boost: NAME_RAW_EXACT_BOOST,
+							},
+						},
+					},
+					{
+						// Exact token match on the analyzed name field. The standard
+						// analyzer lowercases and splits on special characters (hyphens,
+						// underscores, etc.), so "world-affairs" and "World affairs" both
+						// match as tokens ["world", "affairs"]. Unlike name.raw above,
+						// this does not differentiate based on punctuation or casing.
 						// e.g. query "geo" matches name "Geo" (token "geo") but NOT
 						// "geojson_preview_tool" (token "geojson" ≠ "geo").
 						match: {
@@ -951,6 +1071,90 @@ export class OpenSearchClient implements SearchClient {
 				},
 			},
 			script_fields: this.buildScoreBoostScriptFields("entity_space_score"),
+		}
+	}
+
+	/**
+	 * Build a multi-space filtered query.
+	 * Filters by multiple space_ids (subspaces) and boosts by entity_space_score.
+	 */
+	buildMultiSpaceQuery(
+		baseTextQuery: object,
+		spaceIds: string[],
+		typeIds?: string[],
+		includeDeleted: boolean = false,
+		isRoot: boolean = false,
+	): object {
+		const typeFilter = this.buildTypeFilter(typeIds)
+		const spaceFilter = isRoot
+			? {term: {in_canonical_graph: true}}
+			: {terms: {space_id: spaceIds.flatMap(uuidTermVariants)}}
+		const filters: object[] = [spaceFilter]
+		if (!includeDeleted) filters.push(this.buildNonDeletedFilter())
+		if (typeFilter) filters.push(typeFilter)
+
+		return {
+			query: {
+				function_score: {
+					query: {
+						bool: {
+							must: [baseTextQuery],
+							filter: filters,
+						},
+					},
+					functions: [this.buildScoreBoostFunction("entity_space_score")],
+					boost_mode: "sum",
+					score_mode: "sum",
+				},
+			},
+			script_fields: this.buildScoreBoostScriptFields("entity_space_score"),
+		}
+	}
+
+	/**
+	 * Fetch subspace IDs for a given space from the topology service.
+	 * Falls back to returning just the original space_id if topology service is not configured or returns 404.
+	 * Throws on non-404 HTTP errors and network/timeout failures so callers return 500.
+	 * Results are cached for 30 seconds.
+	 */
+	async fetchSubspaces(spaceId: string): Promise<SubspacesResult> {
+		// Check cache first
+		const cached = this.subspaceCache.get(spaceId)
+		if (cached && cached.expiry > Date.now()) {
+			return cached.result
+		}
+
+		if (!this.topologyServiceUrl) {
+			return {subspaces: [spaceId], isRoot: false}
+		}
+
+		try {
+			const response = await fetch(`${this.topologyServiceUrl}/topology/subspaces/${spaceId}`, {
+				signal: AbortSignal.timeout(3000),
+			})
+
+			if (response.status === 404) {
+				// Space not in canonical graph — fall back to single space
+				const result: SubspacesResult = {subspaces: [spaceId], isRoot: false}
+				this.subspaceCache.set(spaceId, {result, expiry: Date.now() + 30_000})
+				return result
+			}
+
+			if (!response.ok) {
+				throw new Error(`Topology service returned ${response.status} for space ${spaceId}`)
+			}
+
+			const data = (await response.json()) as {subspaces: string[]; is_root?: boolean}
+			const result: SubspacesResult = {subspaces: data.subspaces, isRoot: data.is_root === true}
+			// Lazy backfill: if we discover the root via subspaces response, cache it
+			if (result.isRoot && this.rootSpaceId === null) {
+				this.rootSpaceId = spaceId
+				console.log(`Lazily cached topology root space ID: ${this.rootSpaceId}`)
+			}
+			this.subspaceCache.set(spaceId, {result, expiry: Date.now() + 30_000})
+			return result
+		} catch (error) {
+			throw error instanceof Error ? error : new Error(`Failed to fetch subspaces for space ${spaceId}: ${error}`)
 		}
 	}
 

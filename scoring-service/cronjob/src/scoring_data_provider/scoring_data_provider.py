@@ -1,12 +1,24 @@
 """ScoringDataProvider module for fetching and aggregating scoring data from PostgreSQL."""
 
+import logging
+import time
 from dataclasses import dataclass
 from datetime import datetime
 
 import psycopg
 
-from src.algorithm.models import Entity, Perspective, Space, User, Vote, VoteType
+from src.algorithm.models import (
+    DISCONNECTED_SPACE_DEPTH,
+    Entity,
+    Perspective,
+    Space,
+    User,
+    Vote,
+    VoteType,
+)
 from src.constants import ROOT_SPACE_ID
+
+logger = logging.getLogger(__name__)
 
 @dataclass
 class ScoringData:
@@ -36,12 +48,29 @@ class ScoringDataProvider:
             ScoringData containing entities, votes, users, and spaces.
         """
         with psycopg.connect(self._connection_string) as conn:
+            t0 = time.monotonic()
             spaces = self._fetch_spaces(conn)
+            logger.info("Fetched %d spaces in %.1fs", len(spaces), time.monotonic() - t0)
+
+            t0 = time.monotonic()
             users = self._fetch_users(conn)
+            logger.info("Fetched %d users in %.1fs", len(users), time.monotonic() - t0)
+
+            t0 = time.monotonic()
             votes = self._fetch_votes(conn)
+            logger.info("Fetched %d votes in %.1fs", len(votes), time.monotonic() - t0)
+
+            t0 = time.monotonic()
             perspectives = self._fetch_perspectives(conn)
+            logger.info("Fetched %d perspectives in %.1fs", len(perspectives), time.monotonic() - t0)
+
+            t0 = time.monotonic()
             entities = self._fetch_entities(conn)
+            logger.info("Fetched %d entities in %.1fs", len(entities), time.monotonic() - t0)
+
+            t0 = time.monotonic()
             entities = self._build_entities_with_perspectives(entities, perspectives)
+            logger.info("Built entities with perspectives in %.1fs", time.monotonic() - t0)
 
         return ScoringData(
             entities=entities,
@@ -93,8 +122,30 @@ class ScoringDataProvider:
 
         return entities
 
+    def _fetch_scoring_topology_distances(self, conn: psycopg.Connection) -> dict[str, int]:
+        """Fetch pre-computed topology distances from the scoring_topology_distances table.
+
+        Returns:
+            Dictionary mapping space_id -> distance from root.
+            Empty dict if the table has no data (indexer hasn't run yet).
+        """
+        with conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT space_id, distance
+                FROM scoring_topology_distances
+                """
+            )
+            rows = cur.fetchall()
+
+        return {str(space_id): distance for space_id, distance in rows}
+
     def _fetch_spaces(self, conn: psycopg.Connection) -> list[Space]:
         """Fetch all spaces and their subspace relationships from the database.
+
+        If the topology indexer has populated scoring_topology_distances, uses those
+        pre-computed distances. Otherwise falls back to the flat hierarchy where all
+        spaces are direct children of ROOT_SPACE_ID.
 
         Args:
             conn: Database connection.
@@ -112,9 +163,59 @@ class ScoringDataProvider:
             )
             space_rows = cur.fetchall()
 
-        # Build Space objects - all spaces are children of the root space
-        spaces = []
+        # Try to use pre-computed topology distances
+        topology_distances = self._fetch_scoring_topology_distances(conn)
 
+        if topology_distances:
+            logger.info(
+                "Using topology distances (%d entries, root=%s)",
+                len(topology_distances),
+                next((sid for sid, d in topology_distances.items() if d == 0), "unknown"),
+            )
+            return self._build_spaces_from_topology(space_rows, topology_distances)
+
+        logger.info("Topology distances empty, using flat hierarchy fallback")
+        return self._build_spaces_flat(space_rows)
+
+    def _build_spaces_from_topology(
+        self,
+        space_rows: list[tuple],
+        topology_distances: dict[str, int],
+    ) -> list[Space]:
+        """Build Space objects using pre-computed topology distances."""
+        # Derive root from the distance=0 entry
+        root_id = None
+        for space_id_str, distance in topology_distances.items():
+            if distance == 0:
+                root_id = space_id_str
+                break
+
+        spaces = []
+        for (space_id,) in space_rows:
+            space_id_str = str(space_id)
+            distance = topology_distances.get(space_id_str, DISCONNECTED_SPACE_DEPTH)
+
+            # Set parent_space_id for compatibility with existing code
+            if distance == 0:
+                parent_space_id = None
+            else:
+                parent_space_id = root_id if root_id else ROOT_SPACE_ID
+
+            spaces.append(
+                Space(
+                    id=space_id_str,
+                    created_at=datetime.now(),
+                    parent_space_id=parent_space_id,
+                    subspace_ids=set(),
+                    distance_to_root=distance,
+                )
+            )
+
+        return spaces
+
+    def _build_spaces_flat(self, space_rows: list[tuple]) -> list[Space]:
+        """Build Space objects using flat hierarchy (all children of root)."""
+        spaces = []
         non_root_spaces = {str(space_id) for (space_id,) in space_rows if space_id != ROOT_SPACE_ID}
 
         for (space_id,) in space_rows:

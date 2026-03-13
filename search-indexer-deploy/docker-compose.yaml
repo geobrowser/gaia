@@ -143,9 +143,11 @@ services:
     networks:
       - default
       - hermes_default
+    volumes:
+      - topology-data:/data
     restart: unless-stopped
-    mem_limit: 768m
-    mem_reservation: 512m
+    mem_limit: 2g
+    mem_reservation: 1g
 
 networks:
   hermes_default:
@@ -155,4 +157,5 @@ volumes:
   opensearch-data:
   prometheus-data:
   grafana-data:
+  topology-data:
 

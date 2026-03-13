@@ -4,7 +4,7 @@
 
 use hermes_instrumentation::{debug, error, info, instrument, warn};
 use std::collections::HashMap;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use tokio::sync::mpsc;
 use tokio::task::JoinHandle;
@@ -15,8 +15,10 @@ use crate::errors::IngestError;
 use crate::metrics::SearchIndexerMetrics;
 use crate::orchestrator::{
     BatchSource, EntityProcessingBatch, ProcessedBatch, ScoreProcessingBatch,
-    SpaceTopicProcessingBatch,
+    SpaceTopicProcessingBatch, TopologyProcessingBatch,
 };
+use crate::topology::persistence;
+use crate::topology::CanonicalGraphState;
 use sdk::core::ids::{AVATAR_RELATION_TYPE_ID, COVER_RELATION_TYPE_ID, TYPE_RELATION_TYPE_ID};
 use search_indexer_shared::EntityDocument;
 use uuid::Uuid;
@@ -63,7 +65,31 @@ pub enum ProcessedEvent {
         space_id: uuid::Uuid,
         topic_entity_id: uuid::Uuid,
     },
+    /// Update in_canonical_graph for all entities in a space.
+    /// Emitted when a space's canonical status changes.
+    UpdateInCanonicalGraph {
+        space_id: uuid::Uuid,
+        in_canonical_graph: bool,
+    },
 }
+
+/// Index into the per-event-type sample counters.
+#[derive(Clone, Copy)]
+enum SampleCategory {
+    EntityUpsert = 0,
+    EntityDelete = 1,
+    EntityRestore = 2,
+    UnsetProperties = 3,
+    CreateRelation = 4,
+    DeleteRelation = 5,
+    EntityGlobalScore = 6,
+    SpaceScore = 7,
+    EntitySpaceScore = 8,
+    UpdateSpaceTopicEntityId = 9,
+    TopologyChange = 10,
+}
+
+const SAMPLE_CATEGORY_COUNT: usize = 11;
 
 /// Processor that transforms entity and score events into search documents.
 ///
@@ -76,6 +102,10 @@ pub struct Processor {
     /// In-memory cache of space_id → topic_entity_id.
     /// Used to set space_topic_entity_id on new entity documents during upserts.
     space_topic_cache: HashMap<Uuid, Uuid>,
+    /// Canonical graph state for determining in_canonical_graph status.
+    topology_state: CanonicalGraphState,
+    sample_counters: [AtomicU64; SAMPLE_CATEGORY_COUNT],
+    sample_interval: u64,
 }
 
 impl Processor {
@@ -83,17 +113,43 @@ impl Processor {
     pub fn new() -> Self {
         Self {
             space_topic_cache: HashMap::new(),
+            topology_state: CanonicalGraphState::new(),
+            sample_counters: std::array::from_fn(|_| AtomicU64::new(0)),
+            sample_interval: 0,
+        }
+    }
+
+    /// Create a new processor with a pre-warmed space topic cache and topology state.
+    pub fn with_config(
+        cache: HashMap<Uuid, Uuid>,
+        topology_state: CanonicalGraphState,
+        sample_interval: u64,
+    ) -> Self {
+        info!(
+            cache_size = cache.len(),
+            topology_nodes = topology_state.len(),
+            sample_interval,
+            "Processor created with space topic cache and topology state"
+        );
+        Self {
+            space_topic_cache: cache,
+            topology_state,
+            sample_counters: std::array::from_fn(|_| AtomicU64::new(0)),
+            sample_interval,
         }
     }
 
     /// Create a new processor with a pre-warmed space topic cache.
-    pub fn with_space_topic_cache(cache: HashMap<Uuid, Uuid>) -> Self {
+    pub fn with_space_topic_cache(cache: HashMap<Uuid, Uuid>, sample_interval: u64) -> Self {
         info!(
             cache_size = cache.len(),
-            "Processor created with space topic cache"
+            sample_interval, "Processor created with space topic cache"
         );
         Self {
             space_topic_cache: cache,
+            topology_state: CanonicalGraphState::new(),
+            sample_counters: std::array::from_fn(|_| AtomicU64::new(0)),
+            sample_interval,
         }
     }
 
@@ -101,6 +157,18 @@ impl Processor {
     fn is_indexed_relation(&self, relation_type: &Uuid) -> bool {
         let rt = relation_type.to_string();
         rt == TYPE_RELATION_TYPE_ID || rt == AVATAR_RELATION_TYPE_ID || rt == COVER_RELATION_TYPE_ID
+    }
+
+    /// Returns true for approximately 1-in-N events of the given category
+    /// (where N = sample_interval). Each event type has its own counter so
+    /// that high-volume event types don't starve low-volume ones.
+    /// When sample_interval is 0, sampling is disabled.
+    fn should_sample(&self, category: SampleCategory) -> bool {
+        if self.sample_interval == 0 {
+            return false;
+        }
+        let count = self.sample_counters[category as usize].fetch_add(1, Ordering::Relaxed);
+        count.is_multiple_of(self.sample_interval)
     }
 
     /// Process a batch of entity events.
@@ -177,6 +245,14 @@ impl Processor {
             self.space_topic_cache
                 .insert(event.space_id, event.topic_entity_id);
 
+            if self.should_sample(SampleCategory::UpdateSpaceTopicEntityId) {
+                info!(
+                    space_id = %event.space_id,
+                    topic_entity_id = %event.topic_entity_id,
+                    "[sample] UpdateSpaceTopicEntityId"
+                );
+            }
+
             // Backfill all existing documents in this space
             processed.push(ProcessedEvent::UpdateSpaceTopicEntityId {
                 space_id: event.space_id,
@@ -210,6 +286,46 @@ impl Processor {
         Ok(processed)
     }
 
+    /// Process a topology batch: apply changes to in-memory graph, return update operations.
+    #[instrument(skip(self, batch), fields(diff_count = batch.diffs.len()))]
+    pub fn process_topology_batch(&self, batch: &TopologyProcessingBatch) -> Vec<ProcessedEvent> {
+        let mut ops = Vec::new();
+        for diff in &batch.diffs {
+            let root_uuid = Uuid::from_bytes(diff.root_id);
+            let changes = self
+                .topology_state
+                .apply_changes(diff.root_id, &diff.changes);
+            for change in changes {
+                let is_root = change.space_id == root_uuid;
+                if is_root {
+                    info!(
+                        space_id = %change.space_id,
+                        in_canonical_graph = change.in_canonical_graph,
+                        is_root = true,
+                        "TopologyChange for root space"
+                    );
+                } else if self.should_sample(SampleCategory::TopologyChange) {
+                    info!(
+                        space_id = %change.space_id,
+                        in_canonical_graph = change.in_canonical_graph,
+                        "[sample] TopologyChange"
+                    );
+                }
+                ops.push(ProcessedEvent::UpdateInCanonicalGraph {
+                    space_id: change.space_id,
+                    in_canonical_graph: change.in_canonical_graph,
+                });
+            }
+        }
+        debug!(operations = ops.len(), "Processed topology batch");
+        ops
+    }
+
+    /// Get a reference to the topology state (for persistence).
+    pub fn topology_state(&self) -> &CanonicalGraphState {
+        &self.topology_state
+    }
+
     /// Process a single score event.
     fn process_score_event(&self, event: ScoreEvent) -> Result<ProcessedEvent, IngestError> {
         match event.event_type {
@@ -229,6 +345,14 @@ impl Processor {
                         event.score
                     )));
                 }
+                if self.should_sample(SampleCategory::EntityGlobalScore) {
+                    info!(
+                        entity_id = %entity_id,
+                        score = event.score,
+                        "[sample] EntityGlobalScore"
+                    );
+                }
+
                 Ok(ProcessedEvent::UpdateEntityGlobalScore {
                     entity_id,
                     score: event.score,
@@ -250,6 +374,14 @@ impl Processor {
                         event.score
                     )));
                 }
+                if self.should_sample(SampleCategory::SpaceScore) {
+                    info!(
+                        space_id = %space_id,
+                        score = event.score,
+                        "[sample] SpaceScore"
+                    );
+                }
+
                 Ok(ProcessedEvent::UpdateSpaceScore {
                     space_id,
                     score: event.score,
@@ -276,6 +408,15 @@ impl Processor {
                         event.score
                     )));
                 }
+                if self.should_sample(SampleCategory::EntitySpaceScore) {
+                    info!(
+                        entity_id = %entity_id,
+                        space_id = %space_id,
+                        score = event.score,
+                        "[sample] EntitySpaceScore"
+                    );
+                }
+
                 Ok(ProcessedEvent::UpdateEntitySpaceScore {
                     entity_id,
                     space_id,
@@ -295,20 +436,23 @@ impl Processor {
         mut entity_rx: mpsc::Receiver<EntityProcessingBatch>,
         mut scores_rx: mpsc::Receiver<ScoreProcessingBatch>,
         mut space_topics_rx: mpsc::Receiver<SpaceTopicProcessingBatch>,
+        mut topology_rx: mpsc::Receiver<TopologyProcessingBatch>,
         loader_tx: mpsc::Sender<ProcessedBatch>,
         entity_ack_tx: mpsc::Sender<StreamMessage>,
         scores_ack_tx: mpsc::Sender<StreamMessage>,
         space_topics_ack_tx: mpsc::Sender<StreamMessage>,
+        topology_ack_tx: mpsc::Sender<StreamMessage>,
         metrics: Arc<SearchIndexerMetrics>,
     ) -> JoinHandle<()> {
         tokio::spawn(async move {
             let mut entity_closed = false;
             let mut scores_closed = false;
             let mut space_topics_closed = false;
+            let mut topology_closed = false;
 
             loop {
                 // Exit when all channels are closed
-                if entity_closed && scores_closed && space_topics_closed {
+                if entity_closed && scores_closed && space_topics_closed && topology_closed {
                     break;
                 }
 
@@ -362,6 +506,23 @@ impl Processor {
                             None => {
                                 warn!("Space topics processor channel closed");
                                 space_topics_closed = true;
+                            }
+                        }
+                    }
+                    // Handle topology events
+                    topology_batch = topology_rx.recv(), if !topology_closed => {
+                        match topology_batch {
+                            Some(batch) => {
+                                self.handle_topology_batch(
+                                    batch,
+                                    &loader_tx,
+                                    &topology_ack_tx,
+                                    &metrics,
+                                ).await;
+                            }
+                            None => {
+                                warn!("Topology processor channel closed");
+                                topology_closed = true;
                             }
                         }
                     }
@@ -566,6 +727,101 @@ impl Processor {
         }
     }
 
+    /// Handle a batch of topology events.
+    ///
+    /// Flow:
+    /// 1. Apply changes to in-memory graph → get operations
+    /// 2. Save graph state to JSON (write-then-rename) — if save fails, NACK
+    /// 3. Send ops to loader → loader executes → ACK → consumer commits offsets
+    #[instrument(skip(self, batch, loader_tx, ack_tx, metrics), fields(event_count = batch.event_count))]
+    async fn handle_topology_batch(
+        &self,
+        batch: TopologyProcessingBatch,
+        loader_tx: &mpsc::Sender<ProcessedBatch>,
+        ack_tx: &mpsc::Sender<StreamMessage>,
+        metrics: &Arc<SearchIndexerMetrics>,
+    ) {
+        let TopologyProcessingBatch {
+            diffs: _,
+            offsets: _offsets,
+            event_count,
+        } = &batch;
+        let event_count = *event_count;
+
+        // 1. Apply changes to in-memory graph
+        let processed_events = self.process_topology_batch(&batch);
+
+        metrics
+            .total_events_processed
+            .fetch_add(event_count as u64, Ordering::Relaxed);
+
+        // 2. Persist state to disk before committing Kafka offsets
+        let topology_state = self.topology_state.clone();
+        let state_path = persistence::state_path();
+        let save_result =
+            tokio::task::spawn_blocking(move || persistence::save(&topology_state, &state_path))
+                .await;
+
+        match save_result {
+            Ok(Ok(())) => {} // Save succeeded
+            Ok(Err(e)) => {
+                error!(error = %e, "Failed to save topology state, NACKing batch");
+                if let Err(send_err) = ack_tx
+                    .send(StreamMessage::Acknowledgment {
+                        offsets: batch.offsets,
+                        success: false,
+                        error: Some(format!("Topology state save failed: {}", e)),
+                    })
+                    .await
+                {
+                    error!(error = %send_err, "Failed to send topology NACK - channel closed");
+                }
+                return;
+            }
+            Err(join_err) => {
+                error!(error = %join_err, "Topology state save task panicked, NACKing batch");
+                if let Err(send_err) = ack_tx
+                    .send(StreamMessage::Acknowledgment {
+                        offsets: batch.offsets,
+                        success: false,
+                        error: Some(format!("Topology state save panicked: {}", join_err)),
+                    })
+                    .await
+                {
+                    error!(error = %send_err, "Failed to send topology NACK - channel closed");
+                }
+                return;
+            }
+        }
+
+        // 3. Send to loader
+        if processed_events.is_empty() {
+            debug!("No topology updates to index, sending ACK directly");
+            if let Err(send_err) = ack_tx
+                .send(StreamMessage::Acknowledgment {
+                    offsets: batch.offsets,
+                    success: true,
+                    error: None,
+                })
+                .await
+            {
+                error!(error = %send_err, "Failed to send topology acknowledgment - channel closed");
+            }
+            return;
+        }
+
+        let processed_batch = ProcessedBatch {
+            events: processed_events,
+            offsets: batch.offsets,
+            index_count: 0,
+            source: BatchSource::Topology,
+        };
+
+        if let Err(send_err) = loader_tx.send(processed_batch).await {
+            error!(error = %send_err, "Failed to send topology batch to loader - channel closed");
+        }
+    }
+
     /// Process a single entity event.
     fn process_event(&self, event: EntityEvent) -> Result<Option<ProcessedEvent>, IngestError> {
         match event.event_type {
@@ -588,6 +844,23 @@ impl Processor {
                     doc.space_topic_entity_id = Some(topic_entity_id.to_string());
                 }
 
+                // Set in_canonical_graph from topology state
+                let space_bytes = event.space_id.into_bytes();
+                doc.in_canonical_graph = Some(self.topology_state.is_canonical(&space_bytes));
+
+                if self.should_sample(SampleCategory::EntityUpsert) {
+                    info!(
+                        entity_id = %doc.entity_id,
+                        space_id = %doc.space_id,
+                        name = ?doc.name,
+                        description = ?doc.description,
+                        has_avatar = doc.avatar.is_some(),
+                        has_cover = doc.cover.is_some(),
+                        has_image_url = doc.image_url.is_some(),
+                        "[sample] EntityUpsert"
+                    );
+                }
+
                 Ok(Some(ProcessedEvent::Index(doc)))
             }
             EntityEventType::Delete => {
@@ -600,6 +873,14 @@ impl Processor {
                     None, // Description not needed for delete
                 );
                 doc.deleted = Some(true);
+
+                if self.should_sample(SampleCategory::EntityDelete) {
+                    info!(
+                        entity_id = %doc.entity_id,
+                        space_id = %doc.space_id,
+                        "[sample] EntityDelete"
+                    );
+                }
 
                 Ok(Some(ProcessedEvent::Index(doc)))
             }
@@ -614,6 +895,14 @@ impl Processor {
                 );
                 doc.deleted = Some(false);
 
+                if self.should_sample(SampleCategory::EntityRestore) {
+                    info!(
+                        entity_id = %doc.entity_id,
+                        space_id = %doc.space_id,
+                        "[sample] EntityRestore"
+                    );
+                }
+
                 Ok(Some(ProcessedEvent::Index(doc)))
             }
             EntityEventType::UnsetProperties => {
@@ -621,6 +910,15 @@ impl Processor {
                     // No properties to unset, skip
                     return Ok(None);
                 }
+                if self.should_sample(SampleCategory::UnsetProperties) {
+                    info!(
+                        entity_id = %event.entity_id,
+                        space_id = %event.space_id,
+                        property_keys = ?event.unset_property_keys,
+                        "[sample] UnsetProperties"
+                    );
+                }
+
                 Ok(Some(ProcessedEvent::UnsetProperties {
                     entity_id: event.entity_id,
                     space_id: event.space_id,
@@ -640,6 +938,17 @@ impl Processor {
                             space_id = %event.space_id,
                             "Processing indexed relation - adding to entity's relations"
                         );
+
+                        if self.should_sample(SampleCategory::CreateRelation) {
+                            info!(
+                                entity_id = %event.entity_id,
+                                space_id = %event.space_id,
+                                relation_id = %relation_id,
+                                relation_type = %relation_type,
+                                to_entity_id = %to_entity_id,
+                                "[sample] CreateRelation"
+                            );
+                        }
 
                         Ok(Some(ProcessedEvent::AddRelation {
                             entity_id: event.entity_id,
@@ -668,6 +977,13 @@ impl Processor {
                         relation_id = %relation_id,
                         "Processing relation delete"
                     );
+                    if self.should_sample(SampleCategory::DeleteRelation) {
+                        info!(
+                            relation_id = %relation_id,
+                            "[sample] DeleteRelation"
+                        );
+                    }
+
                     Ok(Some(ProcessedEvent::RemoveRelationById { relation_id }))
                 } else {
                     debug!("Skipped delete relation event with missing relation_id");
@@ -999,7 +1315,7 @@ mod tests {
         let mut cache = HashMap::new();
         cache.insert(space_id, topic_entity_id);
 
-        let processor = Processor::with_space_topic_cache(cache);
+        let processor = Processor::with_space_topic_cache(cache, 0);
 
         let event = EntityEvent::upsert(
             Uuid::new_v4(),
