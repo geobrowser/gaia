@@ -70,6 +70,9 @@ const TEST_ENTITIES = {
   GEO_EXACT_ID: '0000000000000000000000000000bb01',     // name="Geo", desc="Geo is a network..."
   GEO_PREFIX_ID: '0000000000000000000000000000bb02',    // name="geojson_preview_tool", desc="Generate a geojson.io URL..."
   GEO_GRAPH_ID: '0000000000000000000000000000bb03',     // name="Geo Graph", desc="Geo Graph is an open source tool..."
+  // Group G: Exact raw name match vs hyphenated (query: "World affairs")
+  WORLD_AFFAIRS_EXACT_ID: '0000000000000000000000000000bb04', // name="World affairs"
+  WORLD_AFFAIRS_HYPHEN_ID: '0000000000000000000000000000bb05', // name="world-affairs"
   // Topic entity for space metadata enrichment
   TOPIC_ENTITY_ID: '00000000000000000000000000000d00',   // represents test_space as a topic entity
   // Late entity created AFTER space.topics event (tests cache-hit ordering)
@@ -2046,6 +2049,40 @@ class SearchValidator {
     }
   }
 
+  /** Verifies that "World affairs" (with space) ranks above "world-affairs" (hyphenated). */
+  async test33b_ExactRawNameBeatsHyphenatedName(): Promise<void> {
+    console.log(`\n${BLUE}Test 33b: Exact raw name match beats hyphenated name (query 'World affairs')${NC}`);
+    console.log(`  ${BLUE}→ "World affairs" (${TEST_ENTITIES.WORLD_AFFAIRS_EXACT_ID}) vs "world-affairs" (${TEST_ENTITIES.WORLD_AFFAIRS_HYPHEN_ID})${NC}`);
+
+    const response = await this.search({ query: 'World affairs', scope: 'GLOBAL' });
+
+    const exact = response.results.find(r => r.entityId === TEST_ENTITIES.WORLD_AFFAIRS_EXACT_ID);
+    const hyphen = response.results.find(r => r.entityId === TEST_ENTITIES.WORLD_AFFAIRS_HYPHEN_ID);
+
+    if (!exact || !hyphen) {
+      this.addResult('test33b_found', false,
+        `Could not find both entities for 'World affairs' query (exact=${!!exact}, hyphen=${!!hyphen})`);
+      return;
+    }
+
+    this.addResult('test33b_found', true,
+      `Found both entities: "${exact.name}", "${hyphen.name}"`);
+
+    const exactIdx = response.results.findIndex(r => r.entityId === TEST_ENTITIES.WORLD_AFFAIRS_EXACT_ID);
+    const hyphenIdx = response.results.findIndex(r => r.entityId === TEST_ENTITIES.WORLD_AFFAIRS_HYPHEN_ID);
+
+    console.log(`    World affairs: position=${exactIdx}, relevance=${exact.relevanceScore?.toFixed(3)}, textMatch=${exact.textMatchScore?.toFixed(3)}`);
+    console.log(`    world-affairs: position=${hyphenIdx}, relevance=${hyphen.relevanceScore?.toFixed(3)}, textMatch=${hyphen.textMatchScore?.toFixed(3)}`);
+
+    if (exactIdx < hyphenIdx) {
+      this.addResult('test33b_exact_beats_hyphen', true,
+        `"World affairs" (position ${exactIdx}) ranks above "world-affairs" (position ${hyphenIdx}) — name.raw exact match outranks hyphenated variant`);
+    } else {
+      this.addResult('test33b_exact_beats_hyphen', false,
+        `"World affairs" (position ${exactIdx}) should rank above "world-affairs" (position ${hyphenIdx})`);
+    }
+  }
+
   /** Verifies API returns dashless UUIDs and accepts dashless UUID queries. */
   async test34_DashlessUuidFormat(): Promise<void> {
     console.log(`\n${BLUE}Test 34: Verify dashless UUID format in responses and inputs${NC}`);
@@ -2865,6 +2902,7 @@ async function main() {
     await validator.test31_ExtraQueryWordsStillMatch();
     await validator.test32_GlobalByEntitySpaceScoreSearch();
     await validator.test33_ExactShortNameBeatsLongerPrefixName();
+    await validator.test33b_ExactRawNameBeatsHyphenatedName();
     await validator.test34_DashlessUuidFormat();
     await validator.test35_SpaceAndTypeEnrichment();
     await validator.test36_SpaceTopicCreatesDocument();
