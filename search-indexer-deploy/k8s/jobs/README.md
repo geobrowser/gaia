@@ -134,7 +134,7 @@ kubectl logs -n search-staging -f job/opensearch-delete-index
 
 The full-migration job will:
 1. Create the new index (e.g., `entities_v3` or `staging_entities_v3`)
-2. Scale down the search-indexer to 0 replicas (stops indexing)
+2. Scale down the search-indexer StatefulSet to 0 replicas (stops indexing)
 3. Reindex all data from source → target version
 4. Update the alias to point to the new index
 5. Scale up the search-indexer with the new `ENTITIES_INDEX_VERSION`
@@ -143,8 +143,8 @@ The full-migration job will:
 
 **Production:**
 ```bash
-# Check the deployment version
-kubectl get deployment search-indexer -n search -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="ENTITIES_INDEX_VERSION")].value}'
+# Check the index version
+kubectl get statefulset search-indexer -n search -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="ENTITIES_INDEX_VERSION")].value}'
 
 # List indices and aliases
 kubectl delete job opensearch-list-indices -n search 2>/dev/null || true
@@ -154,8 +154,8 @@ kubectl logs -n search -f job/opensearch-list-indices
 
 **Staging:**
 ```bash
-# Check the deployment version
-kubectl get deployment search-indexer -n search-staging -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="ENTITIES_INDEX_VERSION")].value}'
+# Check the index version
+kubectl get statefulset search-indexer -n search-staging -o jsonpath='{.spec.template.spec.containers[0].env[?(@.name=="ENTITIES_INDEX_VERSION")].value}'
 
 # List indices and aliases
 kubectl delete job opensearch-list-indices -n search-staging 2>/dev/null || true

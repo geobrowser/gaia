@@ -16,7 +16,8 @@ use crate::processor::ProcessedEvent;
 use search_indexer_repository::{
     EntityOperation, RelationData, RemoveRelationData, SearchIndexProvider,
     UnsetEntityPropertiesRequest, UpdateEntityGlobalScoreRequest, UpdateEntityRequest,
-    UpdateEntitySpaceScoreRequest, UpdateSpaceScoreRequest, UpdateSpaceTopicEntityIdRequest,
+    UpdateEntitySpaceScoreRequest, UpdateInCanonicalGraphRequest, UpdateSpaceScoreRequest,
+    UpdateSpaceTopicEntityIdRequest,
 };
 
 /// Loader that indexes documents into the search engine.
@@ -72,6 +73,7 @@ impl SearchLoader {
                             entity_space_score: doc.entity_space_score,
                             deleted: doc.deleted,
                             space_topic_entity_id: doc.space_topic_entity_id,
+                            in_canonical_graph: doc.in_canonical_graph,
                         })));
                 }
                 ProcessedEvent::UnsetProperties {
@@ -113,6 +115,7 @@ impl SearchLoader {
                             entity_space_score: None,
                             deleted: None,
                             space_topic_entity_id: None,
+                            in_canonical_graph: None,
                         })));
                 }
                 ProcessedEvent::RemoveRelationById { relation_id } => {
@@ -160,6 +163,18 @@ impl SearchLoader {
                             UpdateSpaceTopicEntityIdRequest {
                                 space_id: space_id.to_string(),
                                 topic_entity_id: topic_entity_id.to_string(),
+                            },
+                        ));
+                }
+                ProcessedEvent::UpdateInCanonicalGraph {
+                    space_id,
+                    in_canonical_graph,
+                } => {
+                    self.pending_operations
+                        .push(EntityOperation::UpdateInCanonicalGraph(
+                            UpdateInCanonicalGraphRequest {
+                                space_id: space_id.to_string(),
+                                in_canonical_graph,
                             },
                         ));
                 }
@@ -242,6 +257,7 @@ impl SearchLoader {
         entity_ack_tx: mpsc::Sender<StreamMessage>,
         scores_ack_tx: mpsc::Sender<StreamMessage>,
         space_topics_ack_tx: mpsc::Sender<StreamMessage>,
+        topology_ack_tx: mpsc::Sender<StreamMessage>,
         metrics: Arc<SearchIndexerMetrics>,
     ) -> JoinHandle<()> {
         tokio::spawn(async move {
@@ -251,10 +267,58 @@ impl SearchLoader {
                     BatchSource::SpaceTopic => &space_topics_ack_tx,
                     BatchSource::Score => &scores_ack_tx,
                     BatchSource::Entity => &entity_ack_tx,
+                    BatchSource::Topology => &topology_ack_tx,
                 };
+
+                // Count operation types for metrics
+                for event in &batch.events {
+                    match event {
+                        ProcessedEvent::Index(_) | ProcessedEvent::AddRelation { .. } => {
+                            metrics.total_updates.fetch_add(1, Ordering::Relaxed);
+                        }
+                        ProcessedEvent::UnsetProperties { .. } => {
+                            metrics.total_unsets.fetch_add(1, Ordering::Relaxed);
+                        }
+                        ProcessedEvent::RemoveRelationById { .. } => {
+                            metrics
+                                .total_remove_relations
+                                .fetch_add(1, Ordering::Relaxed);
+                        }
+                        ProcessedEvent::UpdateEntityGlobalScore { .. }
+                        | ProcessedEvent::UpdateSpaceScore { .. }
+                        | ProcessedEvent::UpdateEntitySpaceScore { .. } => {
+                            metrics.total_score_updates.fetch_add(1, Ordering::Relaxed);
+                        }
+                        ProcessedEvent::UpdateSpaceTopicEntityId { .. } => {
+                            metrics
+                                .total_space_topic_updates
+                                .fetch_add(1, Ordering::Relaxed);
+                        }
+                        ProcessedEvent::UpdateInCanonicalGraph { .. } => {
+                            metrics.total_updates.fetch_add(1, Ordering::Relaxed);
+                        }
+                    }
+                }
 
                 match self.load(batch.events).await {
                     Ok(operation_summaries) => {
+                        // Aggregate timing metrics from summaries
+                        for summary in &operation_summaries {
+                            metrics.total_bulk_calls.fetch_add(1, Ordering::Relaxed);
+                            metrics
+                                .total_bulk_wall_ms
+                                .fetch_add(summary.wall_ms, Ordering::Relaxed);
+                            metrics
+                                .total_bulk_took_ms
+                                .fetch_add(summary.took_ms, Ordering::Relaxed);
+                            metrics
+                                .total_operations
+                                .fetch_add(summary.total as u64, Ordering::Relaxed);
+                            metrics
+                                .total_failed_operations
+                                .fetch_add(summary.failed as u64, Ordering::Relaxed);
+                        }
+
                         // Check if any operation had failures
                         let total_failed =
                             operation_summaries.iter().map(|s| s.failed).sum::<usize>();
@@ -440,8 +504,9 @@ mod tests {
                     EntityOperation::UpdateEntityGlobalScore(_)
                     | EntityOperation::UpdateSpaceScore(_)
                     | EntityOperation::UpdateEntitySpaceScore(_)
-                    | EntityOperation::UpdateSpaceTopicEntityId(_) => {
-                        // Score and space topic updates pass through - no special tracking needed
+                    | EntityOperation::UpdateSpaceTopicEntityId(_)
+                    | EntityOperation::UpdateInCanonicalGraph(_) => {
+                        // Score, space topic, and topology updates pass through - no special tracking needed
                     }
                 }
             }
@@ -463,6 +528,8 @@ mod tests {
                 succeeded: count,
                 failed: 0,
                 results,
+                wall_ms: 0,
+                took_ms: 0,
             })
         }
     }

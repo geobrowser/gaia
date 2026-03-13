@@ -159,8 +159,11 @@ impl ScoresConsumer {
                                     offset_count = offsets.len(),
                                     max_offset,
                                     error = error.as_deref().unwrap_or("Unknown error"),
-                                    "NACK: not committing scores offsets due to processing failure"
+                                    "NACK: shutting down consumer to prevent data loss"
                                 );
+                                return Err(IngestError::LoaderError(
+                                    format!("Batch processing failed: {}", error.as_deref().unwrap_or("Unknown error"))
+                                ));
                             }
                         }
                         Some(StreamMessage::End) | None => {

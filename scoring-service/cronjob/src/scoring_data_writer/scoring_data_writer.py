@@ -1,10 +1,14 @@
 """ScoringDataWriter module for persisting calculated scores to PostgreSQL."""
 
+import logging
+import time
 from datetime import datetime
 
 import psycopg
 
 from src.algorithm.models import Entity, Space
+
+logger = logging.getLogger(__name__)
 
 
 class ScoringDataWriter:
@@ -31,11 +35,20 @@ class ScoringDataWriter:
             psycopg.Error: If any database operation fails (all changes are rolled back).
         """
         now = datetime.now()
+        total_perspectives = sum(len(e.perspectives) for e in entities)
         with psycopg.connect(self._connection_string) as conn:
             with conn.transaction():
+                t0 = time.monotonic()
                 self._write_global_scores(conn, entities, now)
+                logger.info("Wrote global scores (%d entities) in %.1fs", len(entities), time.monotonic() - t0)
+
+                t0 = time.monotonic()
                 self._write_local_scores(conn, entities, now)
+                logger.info("Wrote local scores (%d perspectives) in %.1fs", total_perspectives, time.monotonic() - t0)
+
+                t0 = time.monotonic()
                 self._write_space_scores(conn, spaces, now)
+                logger.info("Wrote space scores (%d spaces) in %.1fs", len(spaces), time.monotonic() - t0)
 
     def _write_global_scores(self, conn: psycopg.Connection, entities: list[Entity], now: datetime) -> None:
         """Batch write entity.normalized_score to global_scores table.

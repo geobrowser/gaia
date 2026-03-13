@@ -1,6 +1,8 @@
 """Scoring algorithms for entities and spaces."""
 
+import logging
 import math
+import time
 from datetime import datetime
 
 import numpy as np
@@ -12,6 +14,8 @@ HOT_SCORE_TIME_DIVISOR = 45000  # Time divisor for hot score calculation
 ACTIVITY_WEIGHT = 0.1           # Activity weight in composite space score (10%)
 
 from .utils import calculate_space_distances
+
+logger = logging.getLogger(__name__)
 
 
 class EntityScorer:
@@ -258,6 +262,8 @@ class RankingEngine:
         spaces: list[Space] | None = None,
     ) -> list[Entity]:
         """Rank entities by their scores."""
+        total_perspectives = sum(len(e.perspectives) for e in entities)
+        logger.info("Ranking %d entities (%d perspectives)", len(entities), total_perspectives)
 
         # Step 0: Calculate space scores if spaces are provided
         if spaces is not None:
@@ -267,10 +273,18 @@ class RankingEngine:
         # Step 1: Apply distance-based weighting to votes if enabled
         processed_votes = votes
         if self.config.use_distance_weighting and spaces is not None:
+            t0 = time.monotonic()
             processed_votes = self.entity_scorer.apply_distance_weighting(votes, users, spaces)
+            logger.info(
+                "Distance weighting complete in %.1fs (%d -> %d weighted votes)",
+                time.monotonic() - t0, len(votes), len(processed_votes),
+            )
 
         # Step 2: Calculate raw perspective scores for all entities
-        for entity in entities:
+        t0 = time.monotonic()
+        total = len(entities)
+        log_interval = max(1, total // 4)
+        for i, entity in enumerate(entities):
             valid_votes = self.entity_scorer.filter_valid_votes(processed_votes, users, entity)
 
             for perspective in entity.perspectives:
@@ -283,6 +297,11 @@ class RankingEngine:
             entity.raw_score = sum(p.raw_score for p in entity.perspectives)
             entity.contestation_score = sum(p.contestation_score for p in entity.perspectives)
 
+            if (i + 1) % log_interval == 0 and (i + 1) < total:
+                logger.info("Scoring entities: %d/%d", i + 1, total)
+
+        logger.info("Entity scoring complete in %.1fs", time.monotonic() - t0)
+
         # TODO: should updating an entity reduce it's time decay?
         # Step 3: Apply time decay to entity raw scores if enabled
         if self.config.use_time_decay:
@@ -292,12 +311,15 @@ class RankingEngine:
 
         # Step 4: Normalize perspective scores within each space
         if self.config.normalize_scores:
+            t0 = time.monotonic()
             temp_config = RankingConfig()
             temp_config.normalize_scores = True
             temp_config.normalization_method = self.config.normalization_method
             temp_config.normalize_scores_by_space(entities, self.config.normalization_method)
+            logger.info("Perspective normalization complete in %.1fs", time.monotonic() - t0)
 
         # Step 5: Calculate weighted entity normalized scores
+        t0 = time.monotonic()
         for entity in entities:
             if entity.perspectives and spaces is not None:
                 # Calculate weighted normalized score: sum(normalized_perspective_score * space_score)
@@ -311,6 +333,7 @@ class RankingEngine:
                         )
             else:
                 entity.normalized_score = 0
+        logger.info("Weighted score calculation complete in %.1fs", time.monotonic() - t0)
 
         # Step 6: The weighted scores are already normalized at the perspective level
         # No additional entity-level normalization needed - the weighted sum is the final score
@@ -324,12 +347,21 @@ class RankingEngine:
         self, spaces: list[Space], entities: list[Entity], users: list[User]
     ) -> list[Space]:
         """Rank spaces by their scores."""
+        t0 = time.monotonic()
+        total = len(spaces)
+        log_interval = max(1, total // 4)
+
         # Calculate scores for all spaces
-        for space in spaces:
+        for i, space in enumerate(spaces):
             space.calculate_space_score(entities, users, spaces)
 
             if self.config.use_activity_metrics:
                 space.activity_score = self.space_scorer.calculate_activity_score(space, entities)
+
+            if (i + 1) % log_interval == 0 and (i + 1) < total:
+                logger.info("Scoring spaces: %d/%d", i + 1, total)
+
+        logger.info("Space scoring complete in %.1fs", time.monotonic() - t0)
 
         # Sort by space score (descending)
         ranked_spaces = sorted(spaces, key=lambda s: s.space_score, reverse=True)

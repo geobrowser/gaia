@@ -7,6 +7,7 @@ pub mod kafka_config;
 mod messages;
 mod scores_consumer;
 mod space_topics_consumer;
+mod topology_consumer;
 
 pub use entities_consumer::EntitiesConsumer;
 pub use messages::{
@@ -14,3 +15,4 @@ pub use messages::{
 };
 pub use scores_consumer::ScoresConsumer;
 pub use space_topics_consumer::SpaceTopicsConsumer;
+pub use topology_consumer::{ParsedCanonicalGraphDiff, TopologyConsumer};

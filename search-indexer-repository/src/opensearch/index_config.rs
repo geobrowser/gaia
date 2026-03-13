@@ -137,6 +137,9 @@ pub fn get_index_settings(_version: Option<u32>) -> Value {
                 },
                 "deleted": {
                     "type": "boolean"
+                },
+                "in_canonical_graph": {
+                    "type": "boolean"
                 }
             }
         }

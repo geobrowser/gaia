@@ -20,6 +20,7 @@ use crate::interfaces::SearchIndexProvider;
 use crate::opensearch::bulk::{execute_bulk, BulkAction, BulkOperationMeta};
 use crate::opensearch::index_config::IndexConfig;
 use crate::opensearch::index_management;
+use crate::opensearch::retry::{self, RetryConfig};
 use crate::opensearch::scripts::{
     ADD_RELATION_SCRIPT, REMOVE_RELATION_SCRIPT, UPDATE_WITH_TOMBSTONE_CHECK_SCRIPT,
 };
@@ -40,7 +41,7 @@ use crate::utils;
 /// A macro is used instead of a function because this code mutates multiple local variables
 /// and uses `await?`, which would require passing many `&mut` references to a function.
 macro_rules! flush_pending_bulk {
-    ($self:expr, $bulk_ops:expr, $metas:expr, $total_succeeded:expr, $total_failed:expr, $all_results:expr) => {
+    ($self:expr, $bulk_ops:expr, $metas:expr, $total_succeeded:expr, $total_failed:expr, $all_results:expr, $total_wall_ms:expr, $total_took_ms:expr, $bulk_call_count:expr) => {
         if !$bulk_ops.is_empty() {
             let batch_ops = std::mem::take(&mut $bulk_ops);
             let batch_metas = std::mem::take(&mut $metas);
@@ -51,10 +52,14 @@ macro_rules! flush_pending_bulk {
                 &batch_metas,
                 BulkAction::Update,
                 true, // refresh so update_by_query sees latest data
+                &$self.retry_config,
             )
             .await?;
             $total_succeeded += summary.succeeded;
             $total_failed += summary.failed;
+            $total_wall_ms += summary.wall_ms;
+            $total_took_ms += summary.took_ms;
+            $bulk_call_count += 1u64;
             $all_results.extend(summary.results);
         } else {
             // No pending ops, but prior batches may have written without
@@ -75,12 +80,8 @@ macro_rules! flush_pending_bulk {
 
 /// Outcome of an `update_by_query` call with retry.
 enum UpdateByQueryOutcome {
-    /// The query succeeded. Contains response stats.
-    Success {
-        updated: u64,
-        total: u64,
-        conflicts: u64,
-    },
+    /// The query succeeded. Contains response stats and timing.
+    Success { updated: u64, total: u64, conflicts: u64, took_ms: u64, wall_ms: u64 },
     /// The query failed after all retries. Contains the error body.
     Failed(String),
 }
@@ -110,6 +111,7 @@ enum UpdateByQueryOutcome {
 pub struct OpenSearchProvider {
     client: OpenSearch,
     index_config: IndexConfig,
+    retry_config: RetryConfig,
 }
 
 impl OpenSearchProvider {
@@ -136,20 +138,19 @@ impl OpenSearchProvider {
         Ok(Self {
             client,
             index_config,
+            retry_config: RetryConfig::default(),
         })
     }
-
-    /// Maximum number of retries on HTTP 409 version conflict.
-    const MAX_RETRIES: u32 = 3;
-    /// Base delay in milliseconds between retries (multiplied by attempt number).
-    const RETRY_DELAY_MS: u64 = 50;
 
     /// Generate document ID as `{entity_id}_{space_id}`.
     fn document_id(entity_id: &Uuid, space_id: &Uuid) -> String {
         format!("{}_{}", entity_id, space_id)
     }
 
-    /// Execute an `update_by_query` with retry on HTTP 409 version conflicts.
+    /// Execute an `update_by_query` with retry on transient errors.
+    ///
+    /// Retries on transport errors, HTTP 409 (version conflict), 429, 502, 503, 504
+    /// using exponential backoff from `self.retry_config`.
     ///
     /// Returns `UpdateByQueryOutcome::Success` on success with response stats,
     /// or `UpdateByQueryOutcome::Failed` on non-retryable failure with the error body.
@@ -162,13 +163,32 @@ impl OpenSearchProvider {
         let mut attempt = 0u32;
 
         loop {
-            let response = self
+            let start = std::time::Instant::now();
+            let result = self
                 .client
                 .update_by_query(UpdateByQueryParts::Index(&[&self.index_config.alias]))
                 .body(body.clone())
                 .send()
-                .await
-                .map_err(|e| SearchIndexError::update(e.to_string()))?;
+                .await;
+            let wall_ms = start.elapsed().as_millis() as u64;
+
+            let response = match result {
+                Ok(resp) => resp,
+                Err(e) => {
+                    // Transport/network error — retryable
+                    if attempt < self.retry_config.max_retries {
+                        attempt += 1;
+                        retry::backoff_sleep(
+                            attempt,
+                            &self.retry_config,
+                            &format!("update_by_query {operation_name} transport error: {e}"),
+                        )
+                        .await;
+                        continue;
+                    }
+                    return Err(SearchIndexError::update(e.to_string()));
+                }
+            };
 
             let status = response.status_code();
             if status.is_success() {
@@ -185,6 +205,10 @@ impl OpenSearchProvider {
                     .get("version_conflicts")
                     .and_then(|v| v.as_u64())
                     .unwrap_or(0);
+                let took_ms = response_body
+                    .get("took")
+                    .and_then(|v| v.as_u64())
+                    .unwrap_or(0);
 
                 debug!(
                     operation = operation_name,
@@ -195,34 +219,34 @@ impl OpenSearchProvider {
                     "update_by_query completed"
                 );
 
-                return Ok(UpdateByQueryOutcome::Success {
-                    updated,
-                    total,
-                    conflicts,
-                });
-            } else if status.as_u16() == 409 && attempt < Self::MAX_RETRIES {
+                return Ok(UpdateByQueryOutcome::Success { updated, total, conflicts, took_ms, wall_ms });
+            }
+
+            let status_code = status.as_u16();
+            let is_retryable = status_code == 409
+                || retry::is_retryable_status(status_code);
+
+            if is_retryable && attempt < self.retry_config.max_retries {
+                let error_body = response.text().await.unwrap_or_default();
                 attempt += 1;
-                warn!(
-                    operation = operation_name,
-                    attempt = attempt,
-                    "Version conflict on update_by_query, retrying"
-                );
-                tokio::time::sleep(std::time::Duration::from_millis(
-                    Self::RETRY_DELAY_MS * attempt as u64,
-                ))
+                retry::backoff_sleep(
+                    attempt,
+                    &self.retry_config,
+                    &format!("update_by_query {operation_name} HTTP {status}: {error_body}"),
+                )
                 .await;
                 continue;
-            } else {
-                let error_body = response.text().await.unwrap_or_default();
-                error!(
-                    operation = operation_name,
-                    status = %status,
-                    body = %error_body,
-                    attempt = attempt,
-                    "update_by_query failed"
-                );
-                return Ok(UpdateByQueryOutcome::Failed(error_body));
             }
+
+            let error_body = response.text().await.unwrap_or_default();
+            error!(
+                operation = operation_name,
+                status = %status,
+                body = %error_body,
+                attempt = attempt,
+                "update_by_query failed"
+            );
+            return Ok(UpdateByQueryOutcome::Failed(error_body));
         }
     }
 
@@ -267,6 +291,9 @@ impl OpenSearchProvider {
                 "space_topic_entity_id".to_string(),
                 json!(space_topic_entity_id),
             );
+        }
+        if let Some(in_canonical_graph) = request.in_canonical_graph {
+            doc.insert("in_canonical_graph".to_string(), json!(in_canonical_graph));
         }
         doc
     }
@@ -638,6 +665,9 @@ impl SearchIndexProvider for OpenSearchProvider {
         let mut all_results: Vec<BatchOperationResult> = Vec::new();
         let mut total_succeeded = 0usize;
         let mut total_failed = 0usize;
+        let mut total_wall_ms = 0u64;
+        let mut total_took_ms = 0u64;
+        let mut _bulk_call_count = 0u64;
 
         // Current batch of bulk-compatible operations
         let mut bulk_ops: Vec<BulkOperation<Value>> = Vec::new();
@@ -659,7 +689,10 @@ impl SearchIndexProvider for OpenSearchProvider {
                         metas,
                         total_succeeded,
                         total_failed,
-                        all_results
+                        all_results,
+                        total_wall_ms,
+                        total_took_ms,
+                        _bulk_call_count
                     );
 
                     let relation_uuid =
@@ -690,15 +723,8 @@ impl SearchIndexProvider for OpenSearchProvider {
                         }
                     });
 
-                    match self
-                        .update_by_query_with_retry(body, "RemoveRelationById")
-                        .await?
-                    {
-                        UpdateByQueryOutcome::Success {
-                            updated,
-                            total,
-                            conflicts,
-                        } => {
+                    match self.update_by_query_with_retry(body, "RemoveRelationById").await? {
+                        UpdateByQueryOutcome::Success { updated, total, conflicts, took_ms, wall_ms } => {
                             if updated == 0 {
                                 warn!(
                                     relation_id = %relation_uuid,
@@ -708,6 +734,9 @@ impl SearchIndexProvider for OpenSearchProvider {
                                 );
                             }
                             total_succeeded += 1;
+                            total_wall_ms += wall_ms;
+                            total_took_ms += took_ms;
+                            _bulk_call_count += 1;
                             all_results.push(BatchOperationResult {
                                 entity_id: String::new(),
                                 space_id: String::new(),
@@ -871,7 +900,10 @@ impl SearchIndexProvider for OpenSearchProvider {
                         metas,
                         total_succeeded,
                         total_failed,
-                        all_results
+                        all_results,
+                        total_wall_ms,
+                        total_took_ms,
+                        _bulk_call_count
                     );
 
                     let (entity_id, space_id) =
@@ -907,7 +939,10 @@ impl SearchIndexProvider for OpenSearchProvider {
                         metas,
                         total_succeeded,
                         total_failed,
-                        all_results
+                        all_results,
+                        total_wall_ms,
+                        total_took_ms,
+                        _bulk_call_count
                     );
                 }
                 EntityOperation::UpdateEntityGlobalScore(request) => {
@@ -918,7 +953,10 @@ impl SearchIndexProvider for OpenSearchProvider {
                         metas,
                         total_succeeded,
                         total_failed,
-                        all_results
+                        all_results,
+                        total_wall_ms,
+                        total_took_ms,
+                        _bulk_call_count
                     );
 
                     let entity_uuid = uuid::Uuid::parse_str(&request.entity_id).map_err(|_| {
@@ -943,12 +981,12 @@ impl SearchIndexProvider for OpenSearchProvider {
                         }
                     });
 
-                    match self
-                        .update_by_query_with_retry(body, "UpdateEntityGlobalScore")
-                        .await?
-                    {
-                        UpdateByQueryOutcome::Success { .. } => {
+                    match self.update_by_query_with_retry(body, "UpdateEntityGlobalScore").await? {
+                        UpdateByQueryOutcome::Success { took_ms, wall_ms, .. } => {
                             total_succeeded += 1;
+                            total_wall_ms += wall_ms;
+                            total_took_ms += took_ms;
+                            _bulk_call_count += 1;
                             all_results.push(BatchOperationResult {
                                 entity_id: request.entity_id.clone(),
                                 space_id: String::new(),
@@ -980,7 +1018,10 @@ impl SearchIndexProvider for OpenSearchProvider {
                         metas,
                         total_succeeded,
                         total_failed,
-                        all_results
+                        all_results,
+                        total_wall_ms,
+                        total_took_ms,
+                        _bulk_call_count
                     );
 
                     let space_uuid = uuid::Uuid::parse_str(&request.space_id).map_err(|_| {
@@ -1005,12 +1046,12 @@ impl SearchIndexProvider for OpenSearchProvider {
                         }
                     });
 
-                    match self
-                        .update_by_query_with_retry(body, "UpdateSpaceScore")
-                        .await?
-                    {
-                        UpdateByQueryOutcome::Success { .. } => {
+                    match self.update_by_query_with_retry(body, "UpdateSpaceScore").await? {
+                        UpdateByQueryOutcome::Success { took_ms, wall_ms, .. } => {
                             total_succeeded += 1;
+                            total_wall_ms += wall_ms;
+                            total_took_ms += took_ms;
+                            _bulk_call_count += 1;
                             all_results.push(BatchOperationResult {
                                 entity_id: String::new(),
                                 space_id: request.space_id.clone(),
@@ -1063,7 +1104,10 @@ impl SearchIndexProvider for OpenSearchProvider {
                         metas,
                         total_succeeded,
                         total_failed,
-                        all_results
+                        all_results,
+                        total_wall_ms,
+                        total_took_ms,
+                        _bulk_call_count
                     );
 
                     let space_uuid = uuid::Uuid::parse_str(&request.space_id).map_err(|_| {
@@ -1096,12 +1140,12 @@ impl SearchIndexProvider for OpenSearchProvider {
                         }
                     });
 
-                    match self
-                        .update_by_query_with_retry(body, "UpdateSpaceTopicEntityId")
-                        .await?
-                    {
-                        UpdateByQueryOutcome::Success { .. } => {
+                    match self.update_by_query_with_retry(body, "UpdateSpaceTopicEntityId").await? {
+                        UpdateByQueryOutcome::Success { took_ms, wall_ms, .. } => {
                             total_succeeded += 1;
+                            total_wall_ms += wall_ms;
+                            total_took_ms += took_ms;
+                            _bulk_call_count += 1;
                             all_results.push(BatchOperationResult {
                                 entity_id: String::new(),
                                 space_id: request.space_id.clone(),
@@ -1125,6 +1169,71 @@ impl SearchIndexProvider for OpenSearchProvider {
                         }
                     }
                 }
+                EntityOperation::UpdateInCanonicalGraph(request) => {
+                    // Flush before executing the update_by_query to maintain ordering
+                    flush_pending_bulk!(
+                        self,
+                        bulk_ops,
+                        metas,
+                        total_succeeded,
+                        total_failed,
+                        all_results,
+                        total_wall_ms,
+                        total_took_ms,
+                        _bulk_call_count
+                    );
+
+                    let space_uuid = uuid::Uuid::parse_str(&request.space_id).map_err(|_| {
+                        SearchIndexError::validation(format!(
+                            "Invalid space_id: {}",
+                            request.space_id
+                        ))
+                    })?;
+
+                    let body = json!({
+                        "query": {
+                            "term": {
+                                "space_id": space_uuid.to_string()
+                            }
+                        },
+                        "script": {
+                            "source": "ctx._source.in_canonical_graph = params.value",
+                            "lang": "painless",
+                            "params": {
+                                "value": request.in_canonical_graph
+                            }
+                        }
+                    });
+
+                    match self.update_by_query_with_retry(body, "UpdateInCanonicalGraph").await? {
+                        UpdateByQueryOutcome::Success { took_ms, wall_ms, .. } => {
+                            total_succeeded += 1;
+                            total_wall_ms += wall_ms;
+                            total_took_ms += took_ms;
+                            _bulk_call_count += 1;
+                            all_results.push(BatchOperationResult {
+                                entity_id: String::new(),
+                                space_id: request.space_id.clone(),
+                                operation_type: "UpdateInCanonicalGraph".to_string(),
+                                success: true,
+                                error: None,
+                            });
+                        }
+                        UpdateByQueryOutcome::Failed(error_body) => {
+                            total_failed += 1;
+                            all_results.push(BatchOperationResult {
+                                entity_id: String::new(),
+                                space_id: request.space_id.clone(),
+                                operation_type: "UpdateInCanonicalGraph".to_string(),
+                                success: false,
+                                error: Some(SearchIndexError::update(format!(
+                                    "Update in_canonical_graph failed: {}",
+                                    error_body
+                                ))),
+                            });
+                        }
+                    }
+                }
             }
         }
 
@@ -1137,10 +1246,14 @@ impl SearchIndexProvider for OpenSearchProvider {
                 &metas,
                 BulkAction::Update,
                 false, // no need to refresh for final batch
+                &self.retry_config,
             )
             .await?;
             total_succeeded += summary.succeeded;
             total_failed += summary.failed;
+            total_wall_ms += summary.wall_ms;
+            total_took_ms += summary.took_ms;
+            _bulk_call_count += 1;
             all_results.extend(summary.results);
         }
 
@@ -1149,6 +1262,8 @@ impl SearchIndexProvider for OpenSearchProvider {
             succeeded: total_succeeded,
             failed: total_failed,
             results: all_results,
+            wall_ms: total_wall_ms,
+            took_ms: total_took_ms,
         })
     }
 }
@@ -1186,6 +1301,7 @@ mod tests {
             entity_space_score: None,
             deleted: None,
             space_topic_entity_id: None,
+            in_canonical_graph: None,
         };
 
         let doc = OpenSearchProvider::build_update_doc(&request);
@@ -1210,6 +1326,7 @@ mod tests {
             entity_space_score: None,
             deleted: None,
             space_topic_entity_id: None,
+            in_canonical_graph: None,
         };
 
         let doc = OpenSearchProvider::build_update_doc(&request);
@@ -1245,6 +1362,7 @@ mod tests {
             entity_space_score: None,
             deleted: None,
             space_topic_entity_id: None,
+            in_canonical_graph: None,
         };
 
         let doc = OpenSearchProvider::build_update_doc(&request);

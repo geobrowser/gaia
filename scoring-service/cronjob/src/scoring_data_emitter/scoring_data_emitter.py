@@ -97,6 +97,7 @@ class ScoringDataEmitter:
         computed_at = int(time.time())
 
         # Prepare all scores
+        t0 = time.time()
         entity_scores = self._prepare_entity_scores(entities, computed_at)
         perspective_scores = self._prepare_perspective_scores(entities, computed_at)
         space_scores = self._prepare_space_scores(spaces, computed_at)
@@ -186,7 +187,11 @@ class ScoringDataEmitter:
                 f"is_final={is_final})"
             )
 
-        logger.info(f"Produced {batch_sequence} batches to topic '{self._topic}'")
+        elapsed = time.time() - t0
+        logger.info(
+            "Produced %d batches to topic '%s' in %.1fs",
+            batch_sequence, self._topic, elapsed,
+        )
 
     def _prepare_entity_scores(
         self, entities: list[Entity], updated_at: int

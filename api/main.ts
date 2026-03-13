@@ -68,6 +68,7 @@ if (opensearchUrl) {
 	const indexName = environment === "staging" ? `staging_${baseIndexAlias}` : baseIndexAlias
 
 	const searchClient = new OpenSearchClient(opensearchUrl, indexName)
+	await searchClient.init()
 	app.route("/search", createSearchRouter(searchClient, runtime))
 	log.info("Search routes enabled", {url: opensearchUrl, indexName, environment: environment ?? "production"})
 } else {
