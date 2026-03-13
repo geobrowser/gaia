@@ -84,12 +84,10 @@ pub fn get_index_settings(_version: Option<u32>) -> Value {
                     "type": "keyword"
                 },
                 "name": {
-                    "type": "search_as_you_type",
-                    "fields": {
-                        "raw": {
-                            "type": "keyword"
-                        }
-                    }
+                    "type": "search_as_you_type"
+                },
+                "name_raw": {
+                    "type": "keyword"
                 },
                 "description": {
                     "type": "search_as_you_type"

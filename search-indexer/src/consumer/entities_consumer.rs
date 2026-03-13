@@ -637,8 +637,11 @@ impl EntitiesConsumer {
                     None
                 };
 
-                if let Some(name) = field_name {
-                    property_keys.push(name.to_string());
+                if let Some(field) = field_name {
+                    property_keys.push(field.to_string());
+                    if field == "name" {
+                        property_keys.push("name_raw".to_string());
+                    }
                 }
             }
 
@@ -849,7 +852,7 @@ mod tests {
         assert_eq!(event.entity_id, entity_id);
         assert_eq!(event.space_id, space_id);
         assert_eq!(event.event_type, EntityEventType::UnsetProperties);
-        assert_eq!(event.unset_property_keys, vec!["name"]);
+        assert_eq!(event.unset_property_keys, vec!["name", "name_raw"]);
     }
 
     #[tokio::test]
@@ -881,8 +884,9 @@ mod tests {
         assert_eq!(event.entity_id, entity_id);
         assert_eq!(event.space_id, space_id);
         assert_eq!(event.event_type, EntityEventType::UnsetProperties);
-        assert_eq!(event.unset_property_keys.len(), 2);
+        assert_eq!(event.unset_property_keys.len(), 3);
         assert!(event.unset_property_keys.contains(&"name".to_string()));
+        assert!(event.unset_property_keys.contains(&"name_raw".to_string()));
         assert!(event
             .unset_property_keys
             .contains(&"description".to_string()));

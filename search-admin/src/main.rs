@@ -7,8 +7,9 @@ mod commands;
 mod opensearch_client;
 
 use commands::{
-    create::CreateIndexCommand, delete::DeleteIndexCommand, full_migration::FullMigrationCommand,
-    list::ListIndicesCommand, reindex::ReindexCommand, update_alias::UpdateAliasCommand,
+    backfill_name_raw::BackfillNameRawCommand, create::CreateIndexCommand,
+    delete::DeleteIndexCommand, full_migration::FullMigrationCommand, list::ListIndicesCommand,
+    reindex::ReindexCommand, update_alias::UpdateAliasCommand,
 };
 
 /// Get the prefixed alias name based on environment.
@@ -61,6 +62,9 @@ enum Commands {
 
     /// Run full migration workflow (create, stop, reindex, update alias, start)
     FullMigration(FullMigrationCommand),
+
+    /// Backfill name_raw field from existing name values
+    BackfillNameRaw(BackfillNameRawCommand),
 }
 
 #[tokio::main]
@@ -117,6 +121,7 @@ async fn main() -> Result<()> {
         Commands::ListIndices(cmd) => cmd.execute(&cli.opensearch_url, &index_alias).await,
         Commands::UpdateAlias(cmd) => cmd.execute(&cli.opensearch_url, &index_alias).await,
         Commands::FullMigration(cmd) => cmd.execute(&cli.opensearch_url, &index_alias).await,
+        Commands::BackfillNameRaw(cmd) => cmd.execute(&cli.opensearch_url, &index_alias).await,
     };
 
     if let Err(ref e) = result {
