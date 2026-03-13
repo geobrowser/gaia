@@ -332,6 +332,8 @@ All components share the same Postgres instance. The kg-indexer writes to member
 
 3. **Rate limiting:** Should we batch notifications to avoid spamming? e.g., "5 proposals created in Crypto space" instead of 5 separate notifications.
 
+4. **Cross-app read status:** Should marking a notification as "read" in one Geo app (e.g., Curator iOS) mark it as read across all apps (Geobrowser, Curator, etc.)? If so, read status would need to live in the notification service rather than in each app server independently. Alternatively, these apps could share a single app server for notification handling.
+
 ---
 
 ## Example: Curator App with AWS SNS
