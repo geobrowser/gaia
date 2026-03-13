@@ -155,6 +155,12 @@ async fn main() -> Result<()> {
     let geo_prefix_id = Uuid::parse_str("00000000-0000-0000-0000-00000000bb02").unwrap();
     let geo_graph_id = Uuid::parse_str("00000000-0000-0000-0000-00000000bb03").unwrap();
 
+    // Group G: Exact raw name match vs hyphenated name match (query: "World affairs")
+    // Tests that name.raw keyword match differentiates "World affairs" from "world-affairs"
+    // which the standard analyzer treats as identical tokens ["world", "affairs"].
+    let world_affairs_exact_id = Uuid::parse_str("00000000-0000-0000-0000-00000000bb04").unwrap();
+    let world_affairs_hyphen_id = Uuid::parse_str("00000000-0000-0000-0000-00000000bb05").unwrap();
+
     // Topology test spaces (fixed IDs for validation)
     // Tree layout:
     //   topo_root (d=0)
@@ -247,6 +253,10 @@ async fn main() -> Result<()> {
     info!(
         "  Group F (query 'geo'): exact name {} vs prefix name {} vs multi-word name {}",
         geo_exact_id, geo_prefix_id, geo_graph_id
+    );
+    info!(
+        "  Group G (query 'World affairs'): exact name {} vs hyphenated name {}",
+        world_affairs_exact_id, world_affairs_hyphen_id
     );
     // 1. Create Person type entity
     info!("\n1. Creating Person type entity...");
@@ -720,6 +730,34 @@ async fn main() -> Result<()> {
     )?;
     producer
         .send(&edits_topic, None, geo_graph_payload)
+        .await?;
+
+    // Group G: Exact raw name match vs hyphenated name match (query: "World affairs")
+    // "World affairs" should rank above "world-affairs" because name.raw preserves
+    // the original string, while the standard analyzer treats both as identical tokens.
+    // Both have NO scores (like Group F) to test pure text matching behavior.
+    let world_affairs_exact_payload = edits::create_entity_edit(
+        "Create World affairs (exact)",
+        test_space,
+        world_affairs_exact_id,
+        Some("World affairs"),
+        None,
+        None,
+    )?;
+    producer
+        .send(&edits_topic, None, world_affairs_exact_payload)
+        .await?;
+
+    let world_affairs_hyphen_payload = edits::create_entity_edit(
+        "Create world-affairs (hyphenated)",
+        test_space,
+        world_affairs_hyphen_id,
+        Some("world-affairs"),
+        None,
+        None,
+    )?;
+    producer
+        .send(&edits_topic, None, world_affairs_hyphen_payload)
         .await?;
 
     // 8. Generate scores with varying values (Charlie intentionally excluded)
