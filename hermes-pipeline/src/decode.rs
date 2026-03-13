@@ -281,9 +281,12 @@ pub fn decode_ping_args(calldata: &[u8]) -> Result<PingArgs, DecodeError> {
     let data = &calldata[4..];
 
     // Decode (bytes32, bytes32, bytes)
+    // Note: abi_decode_params is correct here because the data is raw function
+    // parameters (after stripping the 4-byte selector). abi_decode would wrap
+    // in an extra single-element tuple, expecting an offset at word 0.
     type PingArgsType = sol! { (bytes32, bytes32, bytes) };
     let (action, topic, ping_data) =
-        PingArgsType::abi_decode(data).map_err(|e| DecodeError::AbiDecode(e.to_string()))?;
+        PingArgsType::abi_decode_params(data).map_err(|e| DecodeError::AbiDecode(e.to_string()))?;
 
     Ok(PingArgs {
         action: action.into(),
@@ -1047,5 +1050,73 @@ mod tests {
         let data = vec![0u8; 20]; // Too short
         let result = decode_address(&data);
         assert!(matches!(result, Err(DecodeError::DataTooShort { .. })));
+    }
+
+    /// Verify that abi_decode vs abi_decode_params behaves differently for
+    /// dynamic tuples but identically for static tuples.
+    #[test]
+    fn test_abi_decode_vs_decode_params() {
+        use alloy::primitives::{Bytes as PrimBytes, U256};
+        use alloy::sol_types::SolType;
+
+        // Static tuple: (uint256, uint256, uint256, uint256)
+        // abi_decode and abi_decode_params should both work
+        type StaticTuple = alloy::sol! { (uint256, uint256, uint256, uint256) };
+        let static_encoded = StaticTuple::abi_encode_params(&(
+            U256::from(1),
+            U256::from(2),
+            U256::from(3),
+            U256::from(4),
+        ));
+        assert!(
+            StaticTuple::abi_decode(&static_encoded).is_ok(),
+            "static: abi_decode should work"
+        );
+        assert!(
+            StaticTuple::abi_decode_params(&static_encoded).is_ok(),
+            "static: abi_decode_params should work"
+        );
+
+        // Dynamic tuple: (bytes32, bytes32, bytes)
+        // abi_decode_params should work, abi_decode should fail
+        type DynTuple = alloy::sol! { (bytes32, bytes32, bytes) };
+        let dyn_encoded =
+            DynTuple::abi_encode_params(&([0xAA_u8; 32], [0xBB_u8; 32], PrimBytes::new()));
+        assert!(
+            DynTuple::abi_decode(&dyn_encoded).is_err(),
+            "dynamic (bytes32,bytes32,bytes): abi_decode should fail on params-encoded data"
+        );
+        assert!(
+            DynTuple::abi_decode_params(&dyn_encoded).is_ok(),
+            "dynamic (bytes32,bytes32,bytes): abi_decode_params should work on params-encoded data"
+        );
+
+        // Dynamic tuple: (bytes32, bytes, bytes) - like publish
+        // Both should behave the same as ping
+        type PublishTuple = alloy::sol! { (bytes32, bytes, bytes) };
+        let publish_encoded = PublishTuple::abi_encode_params(&(
+            [0xAA_u8; 32],
+            PrimBytes::from(b"ipfs://QmTest".to_vec()),
+            PrimBytes::from(vec![1, 2, 3]),
+        ));
+        let publish_decode_result = PublishTuple::abi_decode(&publish_encoded);
+        let publish_params_result = PublishTuple::abi_decode_params(&publish_encoded);
+        println!(
+            "publish abi_decode: {}, abi_decode_params: {}",
+            if publish_decode_result.is_ok() {
+                "OK"
+            } else {
+                "FAIL"
+            },
+            if publish_params_result.is_ok() {
+                "OK"
+            } else {
+                "FAIL"
+            },
+        );
+        assert!(
+            publish_params_result.is_ok(),
+            "publish: abi_decode_params should work"
+        );
     }
 }

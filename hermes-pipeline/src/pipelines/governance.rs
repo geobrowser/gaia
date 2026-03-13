@@ -889,6 +889,232 @@ mod tests {
         assert_eq!(result.proposals_created.len(), 0);
     }
 
+    // =========================================================================
+    // End-to-end tests: PROPOSAL_CREATED → transform → correct proto variant
+    // =========================================================================
+
+    /// Build PROPOSAL_CREATED data with custom inner actions.
+    ///
+    /// Encoding: `abi.encode(bytes16 proposalId, uint8 votingMode, Action[])`
+    /// where each Action is `(address to, uint256 value, bytes data)`.
+    fn encode_proposal_created_data_with_actions(
+        proposal_id: [u8; 16],
+        voting_mode: u8,
+        inner_actions: Vec<(ethabi::Address, Vec<u8>)>,
+    ) -> Vec<u8> {
+        use ethabi::{Token, ethereum_types::U256 as EthU256};
+
+        let action_tokens: Vec<Token> = inner_actions
+            .into_iter()
+            .map(|(to, data)| {
+                Token::Tuple(vec![
+                    Token::Address(to),
+                    Token::Uint(EthU256::zero()),
+                    Token::Bytes(data),
+                ])
+            })
+            .collect();
+
+        ethabi::encode(&[
+            Token::FixedBytes(proposal_id.to_vec()),
+            Token::Uint(EthU256::from(voting_mode)),
+            Token::Array(action_tokens),
+        ])
+    }
+
+    /// End-to-end: a PROPOSAL_CREATED containing a ping(SUBSPACE_VERIFIED) action
+    /// flows through transform() and produces a proto with SubspaceVerified variant.
+    #[test]
+    fn test_e2e_proposal_created_with_subspace_verified_action() {
+        let proposal_id = [0xA1; 16];
+        let proposer_id = vec![0x01; 16];
+        let space_id = vec![0x02; 16];
+        let target_space_id = [0xCC; 16];
+
+        let topic = make_edge_topic(&target_space_id);
+        let ping_calldata = encode_ping_calldata(&actions::SUBSPACE_VERIFIED, &topic, &[]);
+
+        let created_data = encode_proposal_created_data_with_actions(
+            proposal_id,
+            1, // Fast
+            vec![(ethabi::Address::zero(), ping_calldata)],
+        );
+
+        let test_actions = vec![
+            Action {
+                from_id: proposer_id.clone(),
+                to_id: space_id.clone(),
+                action: actions::PROPOSAL_CREATED.to_vec(),
+                topic: proposal_id.iter().copied().chain(vec![0; 16]).collect(),
+                data: created_data,
+            },
+            Action {
+                from_id: space_id.clone(),
+                to_id: space_id.clone(),
+                action: actions::PROPOSAL_SETTINGS_SELECTED.to_vec(),
+                topic: proposal_id.iter().copied().chain(vec![0; 16]).collect(),
+                data: encode_proposal_settings_data(1000, 2000, 1, 100, 50),
+            },
+        ];
+
+        let result = transform(&test_actions, &test_meta(), &empty_prefetch()).unwrap();
+
+        assert_eq!(
+            result.proposals_created.len(),
+            1,
+            "should produce 1 proposal"
+        );
+        let proposal = &result.proposals_created[0];
+        assert_eq!(proposal.proposal_id, proposal_id.to_vec());
+        assert_eq!(proposal.actions.len(), 1, "should have 1 action");
+
+        let action = &proposal.actions[0];
+        match &action.action {
+            Some(proposal_action::Action::SubspaceVerified(edge)) => {
+                assert_eq!(edge.target_space_id, target_space_id.to_vec());
+            }
+            other => panic!("Expected SubspaceVerified, got {other:?}"),
+        }
+    }
+
+    /// End-to-end: a PROPOSAL_CREATED containing a ping(SUBSPACE_RELATED) action.
+    #[test]
+    fn test_e2e_proposal_created_with_subspace_related_action() {
+        let proposal_id = [0xA2; 16];
+        let proposer_id = vec![0x01; 16];
+        let space_id = vec![0x02; 16];
+        let target_space_id = [0xDD; 16];
+
+        let topic = make_edge_topic(&target_space_id);
+        let ping_calldata = encode_ping_calldata(&actions::SUBSPACE_RELATED, &topic, &[]);
+
+        let created_data = encode_proposal_created_data_with_actions(
+            proposal_id,
+            0, // Slow
+            vec![(ethabi::Address::zero(), ping_calldata)],
+        );
+
+        let test_actions = vec![
+            Action {
+                from_id: proposer_id.clone(),
+                to_id: space_id.clone(),
+                action: actions::PROPOSAL_CREATED.to_vec(),
+                topic: proposal_id.iter().copied().chain(vec![0; 16]).collect(),
+                data: created_data,
+            },
+            Action {
+                from_id: space_id.clone(),
+                to_id: space_id.clone(),
+                action: actions::PROPOSAL_SETTINGS_SELECTED.to_vec(),
+                topic: proposal_id.iter().copied().chain(vec![0; 16]).collect(),
+                data: encode_proposal_settings_data(1000, 2000, 0, 100, 50),
+            },
+        ];
+
+        let result = transform(&test_actions, &test_meta(), &empty_prefetch()).unwrap();
+
+        assert_eq!(result.proposals_created.len(), 1);
+        let action = &result.proposals_created[0].actions[0];
+        match &action.action {
+            Some(proposal_action::Action::SubspaceRelated(edge)) => {
+                assert_eq!(edge.target_space_id, target_space_id.to_vec());
+            }
+            other => panic!("Expected SubspaceRelated, got {other:?}"),
+        }
+    }
+
+    /// End-to-end: a PROPOSAL_CREATED containing a ping(SUBSPACE_UNVERIFIED) removal action.
+    #[test]
+    fn test_e2e_proposal_created_with_subspace_unverified_action() {
+        let proposal_id = [0xA3; 16];
+        let proposer_id = vec![0x01; 16];
+        let space_id = vec![0x02; 16];
+        let target_space_id = [0xEE; 16];
+
+        let topic = make_edge_topic(&target_space_id);
+        let ping_calldata = encode_ping_calldata(&actions::SUBSPACE_UNVERIFIED, &topic, &[]);
+
+        let created_data = encode_proposal_created_data_with_actions(
+            proposal_id,
+            1,
+            vec![(ethabi::Address::zero(), ping_calldata)],
+        );
+
+        let test_actions = vec![
+            Action {
+                from_id: proposer_id.clone(),
+                to_id: space_id.clone(),
+                action: actions::PROPOSAL_CREATED.to_vec(),
+                topic: proposal_id.iter().copied().chain(vec![0; 16]).collect(),
+                data: created_data,
+            },
+            Action {
+                from_id: space_id.clone(),
+                to_id: space_id.clone(),
+                action: actions::PROPOSAL_SETTINGS_SELECTED.to_vec(),
+                topic: proposal_id.iter().copied().chain(vec![0; 16]).collect(),
+                data: encode_proposal_settings_data(1000, 2000, 1, 100, 50),
+            },
+        ];
+
+        let result = transform(&test_actions, &test_meta(), &empty_prefetch()).unwrap();
+
+        assert_eq!(result.proposals_created.len(), 1);
+        let action = &result.proposals_created[0].actions[0];
+        match &action.action {
+            Some(proposal_action::Action::SubspaceUnverified(edge)) => {
+                assert_eq!(edge.target_space_id, target_space_id.to_vec());
+            }
+            other => panic!("Expected SubspaceUnverified, got {other:?}"),
+        }
+    }
+
+    /// End-to-end: a PROPOSAL_CREATED containing a ping(SUBSPACE_TOPIC_DECLARED) action.
+    #[test]
+    fn test_e2e_proposal_created_with_subspace_topic_declared_action() {
+        let proposal_id = [0xA4; 16];
+        let proposer_id = vec![0x01; 16];
+        let space_id = vec![0x02; 16];
+        let topic_id = [0xFF; 16];
+
+        let topic = make_topic_topic(&topic_id);
+        let ping_calldata = encode_ping_calldata(&actions::SUBSPACE_TOPIC_DECLARED, &topic, &[]);
+
+        let created_data = encode_proposal_created_data_with_actions(
+            proposal_id,
+            1,
+            vec![(ethabi::Address::zero(), ping_calldata)],
+        );
+
+        let test_actions = vec![
+            Action {
+                from_id: proposer_id.clone(),
+                to_id: space_id.clone(),
+                action: actions::PROPOSAL_CREATED.to_vec(),
+                topic: proposal_id.iter().copied().chain(vec![0; 16]).collect(),
+                data: created_data,
+            },
+            Action {
+                from_id: space_id.clone(),
+                to_id: space_id.clone(),
+                action: actions::PROPOSAL_SETTINGS_SELECTED.to_vec(),
+                topic: proposal_id.iter().copied().chain(vec![0; 16]).collect(),
+                data: encode_proposal_settings_data(1000, 2000, 1, 100, 50),
+            },
+        ];
+
+        let result = transform(&test_actions, &test_meta(), &empty_prefetch()).unwrap();
+
+        assert_eq!(result.proposals_created.len(), 1);
+        let action = &result.proposals_created[0].actions[0];
+        match &action.action {
+            Some(proposal_action::Action::SubspaceTopicDeclared(topic_action)) => {
+                assert_eq!(topic_action.target_topic_id, topic_id.to_vec());
+            }
+            other => panic!("Expected SubspaceTopicDeclared, got {other:?}"),
+        }
+    }
+
     #[test]
     fn test_convert_proposal_voted_empty_data() {
         // Empty data should default to None vote
@@ -1177,12 +1403,16 @@ mod tests {
     // =========================================================================
 
     /// Build valid ping calldata: selector + ABI-encode(bytes32 action, bytes32 topic, bytes data).
+    ///
+    /// Uses `abi_encode_params` to produce raw function parameters (no outer
+    /// tuple wrapping), matching what `encodeFunctionData` produces in viem.
     fn encode_ping_calldata(action: &[u8; 32], topic: &[u8; 32], data: &[u8]) -> Vec<u8> {
         use alloy::primitives::Bytes as PrimBytes;
         use alloy::sol_types::SolType;
 
         type PingArgsType = alloy::sol! { (bytes32, bytes32, bytes) };
-        let encoded = PingArgsType::abi_encode(&(*action, *topic, PrimBytes::from(data.to_vec())));
+        let encoded =
+            PingArgsType::abi_encode_params(&(*action, *topic, PrimBytes::from(data.to_vec())));
 
         let mut calldata = Vec::with_capacity(4 + encoded.len());
         calldata.extend_from_slice(&decode::selectors::PING);
