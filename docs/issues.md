@@ -8,6 +8,29 @@ We currently have quite a large diff between our p50 queries (~10ms) and our p99
 
 It's not obvious how we get into situations where there are enough long queries to cause queuing. Need more investigation. Note that we do have statement timeouts configured at the DB level as well. We have quite a bit of monitoring set up around our query timing + DB connection pooling and saturation metrics.
 
+#### Pooling topology follow-up
+
+Part of the likely problem is that we are still treating "uses Postgres" as one workload class when it is really several:
+
+- Latency-sensitive online reads: the API
+- Continuous OLTP writers: hermes-pipeline, hermes-ipfs-cache, kg-indexer, vote-indexer, Atlas checkpoints
+- Short-lived batch jobs: proposal-executor
+- Batch compute + bulk write jobs: scoring cronjob
+- DDL / admin / migrations
+
+These workloads should not all share the same pooled lane.
+
+Current direction:
+
+- Keep migrations and admin work on direct connections, not PgBouncer
+- Give the API its own dedicated PgBouncer lane because it is autoscaled and latency-sensitive
+- Let the continuous indexer / writer services share a separate writer-oriented pooled lane unless one proves noisy enough to isolate further
+- Prefer direct connections for batch / ETL-style jobs, especially where session-level `SET` behavior matters or the job is not a latency-sensitive OLTP service
+
+The important budgeting rule is: for any single PgBouncer endpoint, we need an explicit connection budget where the sum of all app-side pool maxima across all replicas and concurrent jobs fits comfortably inside that endpoint's client capacity, with headroom for deploy surge and incidents.
+
+We probably do not need one dedicated pool per service. We do need dedicated pools per workload class or per SLO boundary.
+
 ### PostGraphile computed field filters can hide expensive reverse lookups
 
 Some PostGraphile filters look cheap at the GraphQL layer but compile to expensive computed-column SQL. A concrete example is `entities(filter: {name: {is: "Date"}})`, where `name` is not a real column on `entities`; it is resolved via the `entities_name(entity)` function, which looks up the value in the `values` table.
