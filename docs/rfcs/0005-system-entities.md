@@ -22,7 +22,9 @@ This creates a two-layer model:
 | --- | --- |
 | System Entity | An entity automatically created/updated from an onchain action event |
 | System Property | A property on a system entity that is derived from onchain state and protected from user edits |
+| System Relation | A relation on a system entity that is derived from onchain state and protected from user edits (e.g., type assignments) |
 | Protected Property | A hardcoded property ID that the indexer enforces as read-only on system entities |
+| Protected Relation Type | A hardcoded relation type ID that the indexer enforces as read-only on system entities |
 
 ## 2. Entity Placement
 
@@ -36,7 +38,7 @@ This ensures:
 
 ## 3. Deterministic IDs
 
-System entity IDs are deterministically derived from event data so that all indexers converge on the same state.
+System entity IDs are deterministically derived from event data so that all indexers converge on the same state. This follows the GRC-20 spec's `derived_id` pattern for deterministic UUID generation.
 
 ```
 entity_id = derived_uuid("geo:system:" || event_identifier || ":" || data)
@@ -57,17 +59,17 @@ Where:
 
 ### 4.1 System Properties
 
-System properties are a hardcoded set of property IDs reserved exclusively for system use. These property IDs are **globally protected,** the indexer ignores any `EDITS_PUBLISHED` operation that references a protected property ID, regardless of which entity it targets.
+System properties and system relations are hardcoded sets of IDs reserved exclusively for system use. These IDs are **globally protected,** the indexer ignores any `EDITS_PUBLISHED` operation that references a protected property ID or protected relation type, regardless of which entity it targets.
 
 This means:
 
-- Protected property IDs are reserved and cannot be used by user edits on any entity
-- The enforcement is simple: if an op references a protected property → ignore that op
+- Protected property IDs and relation type IDs are reserved and cannot be used by user edits on any entity
+- The enforcement is simple: if an op references a protected property or relation type → ignore that op
 
 Users can still freely:
 
 - Add values for non-system properties on any entity (including system entities)
-- Create relations to/from system entities
+- Create non-system relations to/from system entities
 
 <aside>
 ⚠️
@@ -78,6 +80,8 @@ We propose using hardcoded system property IDs to avoid database reads during in
 
 ### 4.2 Enforcement Rules
 
+**Value operations:**
+
 | Operation | Condition | Resolution |
 | --- | --- | --- |
 | CreateEntity with values | Any value references a protected property | Ignored for those values; non-protected values applied normally |
@@ -85,16 +89,24 @@ We propose using hardcoded system property IDs to avoid database reads during in
 | UpdateEntity `unset` | Property is protected | Ignored for that property |
 | Any op | Property is not protected | Applied normally |
 
+**Relation operations:**
+
+| Operation | Condition | Resolution |
+| --- | --- | --- |
+| CreateRelation | Relation type is a protected relation type | Ignored |
+| DeleteRelation | Relation targets a system-created relation | Ignored |
+| Any op | Relation type is not protected | Applied normally |
+
 <aside>
 ⚠️
 
-The indexer MUST ignore any value operation in `EDITS_PUBLISHED` that references a protected property ID. This applies globally, the check is on the property ID alone, not on the target entity.
+The indexer MUST ignore any value or relation operation in `EDITS_PUBLISHED` that references a protected property ID or a protected relation type. This applies globally, the check is on the property/relation type ID alone, not on the target entity.
 
 </aside>
 
-### 4.3 Protected Property IDs
+### 4.3 Protected Property and Relation Type IDs
 
-The set of protected property IDs is hardcoded in the indexer. This list will be defined as part of the event-to-entity mapping.
+The sets of protected property IDs and protected relation type IDs are hardcoded in the indexer. These lists will be defined as part of the event-to-entity mapping.
 
 ## 5. Indexer Flow
 
