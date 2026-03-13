@@ -1,0 +1,76 @@
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: opensearch-backfill-name-raw
+  namespace: search-staging
+  labels:
+    app: opensearch-admin
+    task: backfill-name-raw
+    environment: staging
+spec:
+  ttlSecondsAfterFinished: 86400  # 24 hours
+  backoffLimit: 1
+  template:
+    metadata:
+      labels:
+        app: opensearch-admin
+        task: backfill-name-raw
+        environment: staging
+    spec:
+      imagePullSecrets:
+      - name: regcred
+      restartPolicy: Never
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1000
+        runAsGroup: 1000
+        fsGroup: 1000
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+      - name: backfill-name-raw
+        image: registry.digitalocean.com/geo/search-admin:staging
+        securityContext:
+          allowPrivilegeEscalation: false
+          runAsNonRoot: true
+          runAsUser: 1000
+          runAsGroup: 1000
+          readOnlyRootFilesystem: true
+          capabilities:
+            drop:
+            - ALL
+          seccompProfile:
+            type: RuntimeDefault
+        env:
+        - name: OPENSEARCH_URL
+          valueFrom:
+            secretKeyRef:
+              name: opensearch-credentials
+              key: OPENSEARCH_URL
+        - name: ENVIRONMENT
+          value: "staging"
+        - name: INDEX_ALIAS
+          value: "entities"
+        - name: INDEX_VERSION
+          value: "0"  # CHANGE THIS: Index version to backfill
+        - name: DRY_RUN
+          value: "false"  # Set to "true" to preview without making changes
+        - name: RUST_LOG
+          value: "info"
+        command:
+        - /bin/sh
+        - -c
+        - |
+          if [ "$DRY_RUN" = "true" ]; then
+            search-admin backfill-name-raw --version "$INDEX_VERSION" --dry-run
+          else
+            search-admin backfill-name-raw --version "$INDEX_VERSION"
+          fi
+        resources:
+          requests:
+            memory: "128Mi"
+            cpu: "100m"
+          limits:
+            memory: "256Mi"
+            cpu: "200m"

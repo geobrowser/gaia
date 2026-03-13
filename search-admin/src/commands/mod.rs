@@ -1,3 +1,4 @@
+pub mod backfill_name_raw;
 pub mod create;
 pub mod delete;
 pub mod full_migration;

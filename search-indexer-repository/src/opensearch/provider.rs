@@ -258,6 +258,7 @@ impl OpenSearchProvider {
         doc.insert("space_id".to_string(), json!(request.space_id));
         if let Some(ref name) = request.name {
             doc.insert("name".to_string(), json!(name));
+            doc.insert("name_raw".to_string(), json!(name));
         }
         if let Some(ref description) = request.description {
             doc.insert("description".to_string(), json!(description));
