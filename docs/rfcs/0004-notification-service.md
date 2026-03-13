@@ -151,6 +151,8 @@ sequenceDiagram
 
 All subscriptions are **implicit** — derived from existing state. Editors and members of a space are automatically subscribed to governance, membership, and moderation events in that space. Resolved at notification time by querying the existing `editors` and `members` tables. No new subscription tables are needed.
 
+> **v1 simplification:** Subscription resolution can be skipped initially — all notifications for all events are sent to all registered webhooks, and each app server decides which users/events it cares about. Per-user subscription lookups can be added later to reduce webhook traffic.
+
 ```mermaid
 erDiagram
     notification_outbox {
@@ -180,10 +182,14 @@ erDiagram
 
 ## Idempotency
 
-Every blockchain event includes `BlockchainMetadata`:
+Every blockchain event includes `BlockchainMetadata` (defined in `hermes-schema/proto/blockchain_metadata.proto`):
 - `block_number` (u64)
-- `sequence` (u32 — order within block)
-- `transaction_hash` (bytes)
+- `sequence` (u32 — position in the filtered actions array for that block)
+- `cursor` (string — Substreams cursor)
+- `created_at` (u64 — Unix timestamp)
+- `created_by` (bytes — address)
+
+**Note on `sequence`:** This is the enumeration index of the action within the block's actions array, not the EVM log index or transaction index. The substreams layer extracts logs from the block, filters for valid actions (`block.logs().filter_map(parse_action)`), and the pipeline assigns each action its array position as the sequence value. Since the actions array is deterministic for a given block, `block_number + sequence` uniquely identifies each action.
 
 The idempotency key is deterministically derived:
 
@@ -202,6 +208,8 @@ This key is:
 ### Registration
 
 App servers register via API or config. All notifications are delivered to all registered webhooks — there is no per-app filtering of event types. Each app server is responsible for ignoring notification types it doesn't care about.
+
+> **v1 simplification:** Webhook registration can be skipped initially — webhooks are configured manually (e.g., via environment variables or a config file). A registration API can be added later when there are more than a handful of app servers.
 
 ```json
 {
