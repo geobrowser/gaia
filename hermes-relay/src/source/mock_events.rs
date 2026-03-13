@@ -447,10 +447,13 @@ impl ProposalAction {
     /// - `action_hash`: keccak256 of the subspace action name
     /// - `topic`: packed field — target ID in bytes [16..32]
     /// - `ping_data`: additional data (always empty for subspace actions)
+    ///
+    /// Uses `abi_encode_params` to produce raw function parameters (no outer
+    /// tuple wrapping), matching what viem's `encodeFunctionData` produces.
     pub fn ping(action_hash: [u8; 32], topic: [u8; 32], ping_data: &[u8]) -> Self {
         use alloy::primitives::{Bytes as PrimBytes, FixedBytes};
         type PingArgsType = sol! { (bytes32, bytes32, bytes) };
-        let encoded = PingArgsType::abi_encode(&(
+        let encoded = PingArgsType::abi_encode_params(&(
             FixedBytes::<32>::from(action_hash),
             FixedBytes::<32>::from(topic),
             PrimBytes::copy_from_slice(ping_data),
