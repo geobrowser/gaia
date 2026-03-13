@@ -1,0 +1,4 @@
+- AWS API
+- Handling idempotency
+- New service vs pipeline vs kg-indexer sidecar
+- Avoiding over notifying when reindexing from scratch

@@ -389,6 +389,9 @@ mod tests {
         let json = serde_json::to_string(&doc).unwrap();
         let deserialized: EntityDocument = serde_json::from_str(&json).unwrap();
 
-        assert_eq!(deserialized.image_url, Some("https://ipfs.io/image.png".to_string()));
+        assert_eq!(
+            deserialized.image_url,
+            Some("https://ipfs.io/image.png".to_string())
+        );
     }
 }

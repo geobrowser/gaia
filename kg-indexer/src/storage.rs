@@ -14,7 +14,7 @@ use crate::models::{
     membership::{EditorItem, MemberItem},
     relations::{RelationOp, SetRelationItem, UnsetRelationItem, UpdateRelationItem},
     spaces::{SpaceItem, SpaceType},
-    subspaces::SubspaceItem,
+    subspaces::{SubspaceItem, SubspaceTopicItem},
     values::{ValueChangeType, ValueOp},
 };
 
@@ -584,53 +584,121 @@ impl Storage {
 
         let subspace_ids: Vec<Uuid> = subspaces.iter().map(|s| s.subspace_id).collect();
         let parent_space_ids: Vec<Uuid> = subspaces.iter().map(|s| s.parent_space_id).collect();
+        let types: Vec<String> = subspaces
+            .iter()
+            .map(|s| s.subspace_type.as_str().to_string())
+            .collect();
 
-        sqlx::query!(
-            r#"
-            INSERT INTO subspaces (child_space_id, parent_space_id)
-            SELECT child_space_id, parent_space_id
-            FROM UNNEST($1::uuid[], $2::uuid[])
-            AS t(child_space_id, parent_space_id)
-            ON CONFLICT (parent_space_id, child_space_id) DO NOTHING
-            "#,
-            &subspace_ids,
-            &parent_space_ids
-        )
-        .execute(&mut **tx)
-        .await?;
+        let query = r#"
+            INSERT INTO subspaces (child_space_id, parent_space_id, type)
+            SELECT child_space_id, parent_space_id, type::"subspaceType"
+            FROM UNNEST($1::uuid[], $2::uuid[], $3::text[])
+            AS t(child_space_id, parent_space_id, type)
+            ON CONFLICT (parent_space_id, child_space_id, type) DO NOTHING
+        "#;
+
+        sqlx::query(query)
+            .bind(&subspace_ids)
+            .bind(&parent_space_ids)
+            .bind(&types)
+            .execute(&mut **tx)
+            .await?;
 
         Ok(())
     }
 
-    #[allow(dead_code)]
     pub async fn remove_subspaces(
         &self,
         subspaces: &[SubspaceItem],
         tx: &mut sqlx::Transaction<'_, Postgres>,
-    ) -> Result<(), IndexerError> {
+    ) -> Result<u64, IndexerError> {
         if subspaces.is_empty() {
-            return Ok(());
+            return Ok(0);
         }
 
         let subspace_ids: Vec<Uuid> = subspaces.iter().map(|s| s.subspace_id).collect();
         let parent_space_ids: Vec<Uuid> = subspaces.iter().map(|s| s.parent_space_id).collect();
+        let types: Vec<String> = subspaces
+            .iter()
+            .map(|s| s.subspace_type.as_str().to_string())
+            .collect();
 
-        sqlx::query!(
-            r#"
+        let query = r#"
             DELETE FROM subspaces
-            WHERE (child_space_id, parent_space_id) IN (
-                SELECT child_space_id, parent_space_id
-                FROM UNNEST($1::uuid[], $2::uuid[])
-                AS t(child_space_id, parent_space_id)
+            WHERE (child_space_id, parent_space_id, type) IN (
+                SELECT child_space_id, parent_space_id, type::"subspaceType"
+                FROM UNNEST($1::uuid[], $2::uuid[], $3::text[])
+                AS t(child_space_id, parent_space_id, type)
             )
-            "#,
-            &subspace_ids,
-            &parent_space_ids
-        )
-        .execute(&mut **tx)
-        .await?;
+        "#;
+
+        let result = sqlx::query(query)
+            .bind(&subspace_ids)
+            .bind(&parent_space_ids)
+            .bind(&types)
+            .execute(&mut **tx)
+            .await?;
+
+        Ok(result.rows_affected())
+    }
+
+    pub async fn insert_subspace_topics(
+        &self,
+        topics: &[SubspaceTopicItem],
+        tx: &mut sqlx::Transaction<'_, Postgres>,
+    ) -> Result<(), IndexerError> {
+        if topics.is_empty() {
+            return Ok(());
+        }
+
+        let space_ids: Vec<Uuid> = topics.iter().map(|t| t.space_id).collect();
+        let topic_ids: Vec<Uuid> = topics.iter().map(|t| t.topic_id).collect();
+
+        let query = r#"
+            INSERT INTO subspace_topics (space_id, topic_id)
+            SELECT space_id, topic_id
+            FROM UNNEST($1::uuid[], $2::uuid[])
+            AS t(space_id, topic_id)
+            ON CONFLICT (space_id, topic_id) DO NOTHING
+        "#;
+
+        sqlx::query(query)
+            .bind(&space_ids)
+            .bind(&topic_ids)
+            .execute(&mut **tx)
+            .await?;
 
         Ok(())
+    }
+
+    pub async fn remove_subspace_topics(
+        &self,
+        topics: &[SubspaceTopicItem],
+        tx: &mut sqlx::Transaction<'_, Postgres>,
+    ) -> Result<u64, IndexerError> {
+        if topics.is_empty() {
+            return Ok(0);
+        }
+
+        let space_ids: Vec<Uuid> = topics.iter().map(|t| t.space_id).collect();
+        let topic_ids: Vec<Uuid> = topics.iter().map(|t| t.topic_id).collect();
+
+        let query = r#"
+            DELETE FROM subspace_topics
+            WHERE (space_id, topic_id) IN (
+                SELECT space_id, topic_id
+                FROM UNNEST($1::uuid[], $2::uuid[])
+                AS t(space_id, topic_id)
+            )
+        "#;
+
+        let result = sqlx::query(query)
+            .bind(&space_ids)
+            .bind(&topic_ids)
+            .execute(&mut **tx)
+            .await?;
+
+        Ok(result.rows_affected())
     }
 
     #[allow(dead_code)]
@@ -857,6 +925,42 @@ impl Storage {
                     slow_threshold = Some(*st as i64);
                     duration = Some(*d as i64);
                     "UpdateVotingSettings"
+                }
+                ProposalActionPayload::SubspaceVerified {
+                    target_space_id: id,
+                } => {
+                    target_id = Some(*id);
+                    "SubspaceVerified"
+                }
+                ProposalActionPayload::SubspaceUnverified {
+                    target_space_id: id,
+                } => {
+                    target_id = Some(*id);
+                    "SubspaceUnverified"
+                }
+                ProposalActionPayload::SubspaceRelated {
+                    target_space_id: id,
+                } => {
+                    target_id = Some(*id);
+                    "SubspaceRelated"
+                }
+                ProposalActionPayload::SubspaceUnrelated {
+                    target_space_id: id,
+                } => {
+                    target_id = Some(*id);
+                    "SubspaceUnrelated"
+                }
+                ProposalActionPayload::SubspaceTopicDeclared {
+                    target_topic_id: id,
+                } => {
+                    target_id = Some(*id);
+                    "SubspaceTopicDeclared"
+                }
+                ProposalActionPayload::SubspaceTopicRemoved {
+                    target_topic_id: id,
+                } => {
+                    target_id = Some(*id);
+                    "SubspaceTopicRemoved"
                 }
                 ProposalActionPayload::Unknown => "Unknown",
             };

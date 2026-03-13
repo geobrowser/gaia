@@ -1,15 +1,14 @@
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use tracing::{error, info};
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt, EnvFilter};
+use tracing_subscriber::{EnvFilter, layer::SubscriberExt, util::SubscriberInitExt};
 
 mod commands;
 mod opensearch_client;
 
 use commands::{
-    create::CreateIndexCommand, delete::DeleteIndexCommand,
-    full_migration::FullMigrationCommand, list::ListIndicesCommand,
-    reindex::ReindexCommand, update_alias::UpdateAliasCommand,
+    create::CreateIndexCommand, delete::DeleteIndexCommand, full_migration::FullMigrationCommand,
+    list::ListIndicesCommand, reindex::ReindexCommand, update_alias::UpdateAliasCommand,
 };
 
 /// Get the prefixed alias name based on environment.
@@ -28,11 +27,7 @@ fn get_prefixed_alias(environment: &str, base_alias: &str) -> String {
 #[command(about = "CLI tool for managing OpenSearch indices", long_about = None)]
 struct Cli {
     /// OpenSearch URL
-    #[arg(
-        long,
-        env = "OPENSEARCH_URL",
-        default_value = "http://localhost:9200"
-    )]
+    #[arg(long, env = "OPENSEARCH_URL", default_value = "http://localhost:9200")]
     opensearch_url: String,
 
     /// Base index alias name (will be prefixed based on environment)
@@ -72,10 +67,7 @@ enum Commands {
 async fn main() -> Result<()> {
     // Initialize tracing
     tracing_subscriber::registry()
-        .with(
-            EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| EnvFilter::new("info")),
-        )
+        .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")))
         .with(tracing_subscriber::fmt::layer())
         .init();
 
@@ -119,18 +111,12 @@ async fn main() -> Result<()> {
     );
 
     let result = match cli.command {
-        Commands::CreateIndex(cmd) => {
-            cmd.execute(&cli.opensearch_url, &index_alias).await
-        }
+        Commands::CreateIndex(cmd) => cmd.execute(&cli.opensearch_url, &index_alias).await,
         Commands::Reindex(cmd) => cmd.execute(&cli.opensearch_url, &index_alias).await,
-        Commands::DeleteIndex(cmd) => {
-            cmd.execute(&cli.opensearch_url, &index_alias).await
-        }
+        Commands::DeleteIndex(cmd) => cmd.execute(&cli.opensearch_url, &index_alias).await,
         Commands::ListIndices(cmd) => cmd.execute(&cli.opensearch_url, &index_alias).await,
         Commands::UpdateAlias(cmd) => cmd.execute(&cli.opensearch_url, &index_alias).await,
-        Commands::FullMigration(cmd) => {
-            cmd.execute(&cli.opensearch_url, &index_alias).await
-        }
+        Commands::FullMigration(cmd) => cmd.execute(&cli.opensearch_url, &index_alias).await,
     };
 
     if let Err(ref e) = result {

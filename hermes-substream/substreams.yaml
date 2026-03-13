@@ -162,14 +162,6 @@ modules:
     output:
       type: proto:hermes.UnflaggedList
 
-  - name: map_subspaces_removed
-    kind: map
-    initialBlock: 81809
-    inputs:
-      - source: sf.ethereum.type.v2.Block
-    output:
-      type: proto:hermes.SubspaceRemovedList
-
   - name: map_subspaces_verified
     kind: map
     initialBlock: 81809

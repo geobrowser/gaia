@@ -16,8 +16,8 @@ use hermes_instrumentation::{debug, debug_span, info, warn};
 
 use crate::cache::CachedEdit;
 use crate::decode::{
-    self, ProposalActionType, decode_flag_args, decode_publish_args, decode_space_id_arg,
-    decode_voting_settings_args,
+    self, ProposalActionType, decode_flag_args, decode_ping_args, decode_publish_args,
+    decode_space_id_arg, decode_voting_settings_args,
 };
 
 use hermes_relay::{Action, actions};
@@ -25,7 +25,8 @@ use hermes_schema::pb::governance::{
     AddEditorAction, AddMemberAction, FlagAction, HermesProposalCreated, HermesProposalExecuted,
     HermesProposalSettingsUpdated, HermesProposalUpdated, HermesProposalVoted, ProposalAction,
     ProposalSettings, ProposalVoteOption, PublishAction, RemoveEditorAction, RemoveMemberAction,
-    UnflagAction, UnflagEditorAction, UpdateVotingSettingsAction, VotingMode, proposal_action,
+    SubspaceEdgeAction, SubspaceTopicAction, UnflagAction, UnflagEditorAction,
+    UpdateVotingSettingsAction, VotingMode, proposal_action,
 };
 
 use super::BlockMetadata;
@@ -322,7 +323,90 @@ fn decode_proposal_action(
                 },
             ))
         }
-        ProposalActionType::Ping | ProposalActionType::Unknown => None,
+        ProposalActionType::Ping => decode_ping_subspace_action(calldata),
+        ProposalActionType::Unknown => None,
+    }
+}
+
+/// Decode a ping calldata into a subspace proposal action.
+///
+/// Decodes the ABI-encoded ping args and matches the inner `_action` bytes32
+/// against the known subspace action constants. Non-subspace pings return `None`
+/// (stored as Unknown).
+fn decode_ping_subspace_action(calldata: &[u8]) -> Option<proposal_action::Action> {
+    let args = match decode_ping_args(calldata) {
+        Ok(args) => args,
+        Err(e) => {
+            warn!(error = %e, calldata_len = calldata.len(), "Failed to decode ping calldata");
+            return None;
+        }
+    };
+
+    // ZC16 topic layout depends on action type:
+    //   Edge actions (verified/related/etc): bytes32(bytes16 targetSpaceId)
+    //     → target in [0..16], zero-padding in [16..32]
+    //   Topic actions (topic_declared/removed): [subspace_id: 16 | topic_id: 16]
+    //     → topic_id in [16..32]
+
+    match args.action {
+        x if x == actions::SUBSPACE_VERIFIED
+            || x == actions::SUBSPACE_UNVERIFIED
+            || x == actions::SUBSPACE_RELATED
+            || x == actions::SUBSPACE_UNRELATED =>
+        {
+            let target = args.topic[0..16].to_vec();
+            if target.iter().all(|b| *b == 0) {
+                warn!("All-zero target ID in ping subspace edge action, storing as Unknown");
+                return None;
+            }
+            match args.action {
+                x if x == actions::SUBSPACE_VERIFIED => Some(
+                    proposal_action::Action::SubspaceVerified(SubspaceEdgeAction {
+                        target_space_id: target,
+                    }),
+                ),
+                x if x == actions::SUBSPACE_UNVERIFIED => Some(
+                    proposal_action::Action::SubspaceUnverified(SubspaceEdgeAction {
+                        target_space_id: target,
+                    }),
+                ),
+                x if x == actions::SUBSPACE_RELATED => Some(
+                    proposal_action::Action::SubspaceRelated(SubspaceEdgeAction {
+                        target_space_id: target,
+                    }),
+                ),
+                x if x == actions::SUBSPACE_UNRELATED => Some(
+                    proposal_action::Action::SubspaceUnrelated(SubspaceEdgeAction {
+                        target_space_id: target,
+                    }),
+                ),
+                _ => unreachable!(),
+            }
+        }
+        x if x == actions::SUBSPACE_TOPIC_DECLARED || x == actions::SUBSPACE_TOPIC_REMOVED => {
+            let target = args.topic[16..32].to_vec();
+            if target.iter().all(|b| *b == 0) {
+                warn!("All-zero target ID in ping subspace topic action, storing as Unknown");
+                return None;
+            }
+            if x == actions::SUBSPACE_TOPIC_DECLARED {
+                Some(proposal_action::Action::SubspaceTopicDeclared(
+                    SubspaceTopicAction {
+                        target_topic_id: target,
+                    },
+                ))
+            } else {
+                Some(proposal_action::Action::SubspaceTopicRemoved(
+                    SubspaceTopicAction {
+                        target_topic_id: target,
+                    },
+                ))
+            }
+        }
+        _ => {
+            warn!(action_hash = %hex::encode(args.action), "Unrecognized ping action hash, storing as Unknown");
+            None
+        }
     }
 }
 
@@ -805,6 +889,232 @@ mod tests {
         assert_eq!(result.proposals_created.len(), 0);
     }
 
+    // =========================================================================
+    // End-to-end tests: PROPOSAL_CREATED → transform → correct proto variant
+    // =========================================================================
+
+    /// Build PROPOSAL_CREATED data with custom inner actions.
+    ///
+    /// Encoding: `abi.encode(bytes16 proposalId, uint8 votingMode, Action[])`
+    /// where each Action is `(address to, uint256 value, bytes data)`.
+    fn encode_proposal_created_data_with_actions(
+        proposal_id: [u8; 16],
+        voting_mode: u8,
+        inner_actions: Vec<(ethabi::Address, Vec<u8>)>,
+    ) -> Vec<u8> {
+        use ethabi::{Token, ethereum_types::U256 as EthU256};
+
+        let action_tokens: Vec<Token> = inner_actions
+            .into_iter()
+            .map(|(to, data)| {
+                Token::Tuple(vec![
+                    Token::Address(to),
+                    Token::Uint(EthU256::zero()),
+                    Token::Bytes(data),
+                ])
+            })
+            .collect();
+
+        ethabi::encode(&[
+            Token::FixedBytes(proposal_id.to_vec()),
+            Token::Uint(EthU256::from(voting_mode)),
+            Token::Array(action_tokens),
+        ])
+    }
+
+    /// End-to-end: a PROPOSAL_CREATED containing a ping(SUBSPACE_VERIFIED) action
+    /// flows through transform() and produces a proto with SubspaceVerified variant.
+    #[test]
+    fn test_e2e_proposal_created_with_subspace_verified_action() {
+        let proposal_id = [0xA1; 16];
+        let proposer_id = vec![0x01; 16];
+        let space_id = vec![0x02; 16];
+        let target_space_id = [0xCC; 16];
+
+        let topic = make_edge_topic(&target_space_id);
+        let ping_calldata = encode_ping_calldata(&actions::SUBSPACE_VERIFIED, &topic, &[]);
+
+        let created_data = encode_proposal_created_data_with_actions(
+            proposal_id,
+            1, // Fast
+            vec![(ethabi::Address::zero(), ping_calldata)],
+        );
+
+        let test_actions = vec![
+            Action {
+                from_id: proposer_id.clone(),
+                to_id: space_id.clone(),
+                action: actions::PROPOSAL_CREATED.to_vec(),
+                topic: proposal_id.iter().copied().chain(vec![0; 16]).collect(),
+                data: created_data,
+            },
+            Action {
+                from_id: space_id.clone(),
+                to_id: space_id.clone(),
+                action: actions::PROPOSAL_SETTINGS_SELECTED.to_vec(),
+                topic: proposal_id.iter().copied().chain(vec![0; 16]).collect(),
+                data: encode_proposal_settings_data(1000, 2000, 1, 100, 50),
+            },
+        ];
+
+        let result = transform(&test_actions, &test_meta(), &empty_prefetch()).unwrap();
+
+        assert_eq!(
+            result.proposals_created.len(),
+            1,
+            "should produce 1 proposal"
+        );
+        let proposal = &result.proposals_created[0];
+        assert_eq!(proposal.proposal_id, proposal_id.to_vec());
+        assert_eq!(proposal.actions.len(), 1, "should have 1 action");
+
+        let action = &proposal.actions[0];
+        match &action.action {
+            Some(proposal_action::Action::SubspaceVerified(edge)) => {
+                assert_eq!(edge.target_space_id, target_space_id.to_vec());
+            }
+            other => panic!("Expected SubspaceVerified, got {other:?}"),
+        }
+    }
+
+    /// End-to-end: a PROPOSAL_CREATED containing a ping(SUBSPACE_RELATED) action.
+    #[test]
+    fn test_e2e_proposal_created_with_subspace_related_action() {
+        let proposal_id = [0xA2; 16];
+        let proposer_id = vec![0x01; 16];
+        let space_id = vec![0x02; 16];
+        let target_space_id = [0xDD; 16];
+
+        let topic = make_edge_topic(&target_space_id);
+        let ping_calldata = encode_ping_calldata(&actions::SUBSPACE_RELATED, &topic, &[]);
+
+        let created_data = encode_proposal_created_data_with_actions(
+            proposal_id,
+            0, // Slow
+            vec![(ethabi::Address::zero(), ping_calldata)],
+        );
+
+        let test_actions = vec![
+            Action {
+                from_id: proposer_id.clone(),
+                to_id: space_id.clone(),
+                action: actions::PROPOSAL_CREATED.to_vec(),
+                topic: proposal_id.iter().copied().chain(vec![0; 16]).collect(),
+                data: created_data,
+            },
+            Action {
+                from_id: space_id.clone(),
+                to_id: space_id.clone(),
+                action: actions::PROPOSAL_SETTINGS_SELECTED.to_vec(),
+                topic: proposal_id.iter().copied().chain(vec![0; 16]).collect(),
+                data: encode_proposal_settings_data(1000, 2000, 0, 100, 50),
+            },
+        ];
+
+        let result = transform(&test_actions, &test_meta(), &empty_prefetch()).unwrap();
+
+        assert_eq!(result.proposals_created.len(), 1);
+        let action = &result.proposals_created[0].actions[0];
+        match &action.action {
+            Some(proposal_action::Action::SubspaceRelated(edge)) => {
+                assert_eq!(edge.target_space_id, target_space_id.to_vec());
+            }
+            other => panic!("Expected SubspaceRelated, got {other:?}"),
+        }
+    }
+
+    /// End-to-end: a PROPOSAL_CREATED containing a ping(SUBSPACE_UNVERIFIED) removal action.
+    #[test]
+    fn test_e2e_proposal_created_with_subspace_unverified_action() {
+        let proposal_id = [0xA3; 16];
+        let proposer_id = vec![0x01; 16];
+        let space_id = vec![0x02; 16];
+        let target_space_id = [0xEE; 16];
+
+        let topic = make_edge_topic(&target_space_id);
+        let ping_calldata = encode_ping_calldata(&actions::SUBSPACE_UNVERIFIED, &topic, &[]);
+
+        let created_data = encode_proposal_created_data_with_actions(
+            proposal_id,
+            1,
+            vec![(ethabi::Address::zero(), ping_calldata)],
+        );
+
+        let test_actions = vec![
+            Action {
+                from_id: proposer_id.clone(),
+                to_id: space_id.clone(),
+                action: actions::PROPOSAL_CREATED.to_vec(),
+                topic: proposal_id.iter().copied().chain(vec![0; 16]).collect(),
+                data: created_data,
+            },
+            Action {
+                from_id: space_id.clone(),
+                to_id: space_id.clone(),
+                action: actions::PROPOSAL_SETTINGS_SELECTED.to_vec(),
+                topic: proposal_id.iter().copied().chain(vec![0; 16]).collect(),
+                data: encode_proposal_settings_data(1000, 2000, 1, 100, 50),
+            },
+        ];
+
+        let result = transform(&test_actions, &test_meta(), &empty_prefetch()).unwrap();
+
+        assert_eq!(result.proposals_created.len(), 1);
+        let action = &result.proposals_created[0].actions[0];
+        match &action.action {
+            Some(proposal_action::Action::SubspaceUnverified(edge)) => {
+                assert_eq!(edge.target_space_id, target_space_id.to_vec());
+            }
+            other => panic!("Expected SubspaceUnverified, got {other:?}"),
+        }
+    }
+
+    /// End-to-end: a PROPOSAL_CREATED containing a ping(SUBSPACE_TOPIC_DECLARED) action.
+    #[test]
+    fn test_e2e_proposal_created_with_subspace_topic_declared_action() {
+        let proposal_id = [0xA4; 16];
+        let proposer_id = vec![0x01; 16];
+        let space_id = vec![0x02; 16];
+        let topic_id = [0xFF; 16];
+
+        let topic = make_topic_topic(&topic_id);
+        let ping_calldata = encode_ping_calldata(&actions::SUBSPACE_TOPIC_DECLARED, &topic, &[]);
+
+        let created_data = encode_proposal_created_data_with_actions(
+            proposal_id,
+            1,
+            vec![(ethabi::Address::zero(), ping_calldata)],
+        );
+
+        let test_actions = vec![
+            Action {
+                from_id: proposer_id.clone(),
+                to_id: space_id.clone(),
+                action: actions::PROPOSAL_CREATED.to_vec(),
+                topic: proposal_id.iter().copied().chain(vec![0; 16]).collect(),
+                data: created_data,
+            },
+            Action {
+                from_id: space_id.clone(),
+                to_id: space_id.clone(),
+                action: actions::PROPOSAL_SETTINGS_SELECTED.to_vec(),
+                topic: proposal_id.iter().copied().chain(vec![0; 16]).collect(),
+                data: encode_proposal_settings_data(1000, 2000, 1, 100, 50),
+            },
+        ];
+
+        let result = transform(&test_actions, &test_meta(), &empty_prefetch()).unwrap();
+
+        assert_eq!(result.proposals_created.len(), 1);
+        let action = &result.proposals_created[0].actions[0];
+        match &action.action {
+            Some(proposal_action::Action::SubspaceTopicDeclared(topic_action)) => {
+                assert_eq!(topic_action.target_topic_id, topic_id.to_vec());
+            }
+            other => panic!("Expected SubspaceTopicDeclared, got {other:?}"),
+        }
+    }
+
     #[test]
     fn test_convert_proposal_voted_empty_data() {
         // Empty data should default to None vote
@@ -865,7 +1175,7 @@ mod tests {
             Action {
                 from_id: vec![8; 16],
                 to_id: vec![9; 16],
-                action: actions::SUBSPACE_ADDED.to_vec(),
+                action: actions::SUBSPACE_VERIFIED.to_vec(),
                 topic: vec![10; 32],
                 data: vec![],
             },
@@ -1086,6 +1396,157 @@ mod tests {
         } else {
             panic!("Expected Publish action");
         }
+    }
+
+    // =========================================================================
+    // Tests for decode_ping_subspace_action
+    // =========================================================================
+
+    /// Build valid ping calldata: selector + ABI-encode(bytes32 action, bytes32 topic, bytes data).
+    ///
+    /// Uses `abi_encode_params` to produce raw function parameters (no outer
+    /// tuple wrapping), matching what `encodeFunctionData` produces in viem.
+    fn encode_ping_calldata(action: &[u8; 32], topic: &[u8; 32], data: &[u8]) -> Vec<u8> {
+        use alloy::primitives::Bytes as PrimBytes;
+        use alloy::sol_types::SolType;
+
+        type PingArgsType = alloy::sol! { (bytes32, bytes32, bytes) };
+        let encoded =
+            PingArgsType::abi_encode_params(&(*action, *topic, PrimBytes::from(data.to_vec())));
+
+        let mut calldata = Vec::with_capacity(4 + encoded.len());
+        calldata.extend_from_slice(&decode::selectors::PING);
+        calldata.extend_from_slice(&encoded);
+        calldata
+    }
+
+    /// Build a topic field for edge actions: target in [0..16], zeros in [16..32].
+    /// ZC16: Solidity `bytes32(bytes16)` right-pads the bytes16 value.
+    fn make_edge_topic(target_id: &[u8; 16]) -> [u8; 32] {
+        let mut topic = [0u8; 32];
+        topic[0..16].copy_from_slice(target_id);
+        topic
+    }
+
+    /// Build a topic field for topic actions: [subspace_id: 16 | topic_id: 16].
+    fn make_topic_topic(topic_id: &[u8; 16]) -> [u8; 32] {
+        let mut topic = [0u8; 32];
+        topic[16..32].copy_from_slice(topic_id);
+        topic
+    }
+
+    #[test]
+    fn test_decode_ping_subspace_verified() {
+        let target_id = [0xAA; 16];
+        let topic = make_edge_topic(&target_id);
+        let calldata = encode_ping_calldata(&actions::SUBSPACE_VERIFIED, &topic, &[]);
+
+        // Debug: verify decode_ping_args succeeds and action bytes match
+        let args = decode_ping_args(&calldata).expect("decode_ping_args should succeed");
+        assert_eq!(
+            args.action,
+            actions::SUBSPACE_VERIFIED,
+            "Action bytes mismatch:\n  got:      {:02x?}\n  expected: {:02x?}",
+            args.action,
+            actions::SUBSPACE_VERIFIED
+        );
+
+        let result = decode_ping_subspace_action(&calldata);
+        match result {
+            Some(proposal_action::Action::SubspaceVerified(action)) => {
+                assert_eq!(action.target_space_id, target_id.to_vec());
+            }
+            other => panic!("Expected SubspaceVerified, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_decode_ping_subspace_unverified() {
+        let target_id = [0xBB; 16];
+        let topic = make_edge_topic(&target_id);
+        let calldata = encode_ping_calldata(&actions::SUBSPACE_UNVERIFIED, &topic, &[]);
+
+        let result = decode_ping_subspace_action(&calldata);
+        match result {
+            Some(proposal_action::Action::SubspaceUnverified(action)) => {
+                assert_eq!(action.target_space_id, target_id.to_vec());
+            }
+            other => panic!("Expected SubspaceUnverified, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_decode_ping_subspace_related() {
+        let target_id = [0xCC; 16];
+        let topic = make_edge_topic(&target_id);
+        let calldata = encode_ping_calldata(&actions::SUBSPACE_RELATED, &topic, &[]);
+
+        let result = decode_ping_subspace_action(&calldata);
+        match result {
+            Some(proposal_action::Action::SubspaceRelated(action)) => {
+                assert_eq!(action.target_space_id, target_id.to_vec());
+            }
+            other => panic!("Expected SubspaceRelated, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_decode_ping_subspace_unrelated() {
+        let target_id = [0xDD; 16];
+        let topic = make_edge_topic(&target_id);
+        let calldata = encode_ping_calldata(&actions::SUBSPACE_UNRELATED, &topic, &[]);
+
+        let result = decode_ping_subspace_action(&calldata);
+        match result {
+            Some(proposal_action::Action::SubspaceUnrelated(action)) => {
+                assert_eq!(action.target_space_id, target_id.to_vec());
+            }
+            other => panic!("Expected SubspaceUnrelated, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_decode_ping_subspace_topic_declared() {
+        let target_id = [0xEE; 16];
+        let topic = make_topic_topic(&target_id);
+        let calldata = encode_ping_calldata(&actions::SUBSPACE_TOPIC_DECLARED, &topic, &[]);
+
+        let result = decode_ping_subspace_action(&calldata);
+        match result {
+            Some(proposal_action::Action::SubspaceTopicDeclared(action)) => {
+                assert_eq!(action.target_topic_id, target_id.to_vec());
+            }
+            other => panic!("Expected SubspaceTopicDeclared, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_decode_ping_subspace_topic_removed() {
+        let target_id = [0xFF; 16];
+        let topic = make_topic_topic(&target_id);
+        let calldata = encode_ping_calldata(&actions::SUBSPACE_TOPIC_REMOVED, &topic, &[]);
+
+        let result = decode_ping_subspace_action(&calldata);
+        match result {
+            Some(proposal_action::Action::SubspaceTopicRemoved(action)) => {
+                assert_eq!(action.target_topic_id, target_id.to_vec());
+            }
+            other => panic!("Expected SubspaceTopicRemoved, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn test_decode_ping_unrecognized_action_returns_none() {
+        let unknown_action = [0x42; 32]; // Not a known subspace action
+        let target_id = [0xAA; 16];
+        let topic = make_edge_topic(&target_id);
+        let calldata = encode_ping_calldata(&unknown_action, &topic, &[]);
+
+        let result = decode_ping_subspace_action(&calldata);
+        assert!(
+            result.is_none(),
+            "Unrecognized ping action should return None"
+        );
     }
 
     #[test]

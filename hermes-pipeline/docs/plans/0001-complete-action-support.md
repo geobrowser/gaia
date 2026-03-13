@@ -170,6 +170,6 @@ Implemented in:
 
 ## References
 
-- `docs/hermes-architecture.md` - Overall Hermes system design
+- `docs/architecture.md` - Overall Hermes system design
 - `hermes-substream/proto/schema.proto` - Source event definitions
 - `hermes-relay/src/actions.rs` - Action type constants

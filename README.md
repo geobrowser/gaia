@@ -1,102 +1,193 @@
-## Running the data service stack
+# Gaia
 
-The knowledge graph data service is comprised of three components: 1) Indexers, 2) an IPFS cache, and 3) the API. The indexers read through the knowledge graph blockchain serially and index relevant events sequentially. For any events that read from IPFS, it reads from the IPFS cache. Reading from IPFS can be slow, especially for large files, so the IPFS cache is a separate process that reads through the chain in an optimized way and writes the IPFS contents to a local store on disk. Lastly the API reads indexed data from the database and serves it to consumers in an ergonomic way.
+Knowledge graph data service for the [Geo protocol](https://geobrowser.io/). Gaia ingests onchain events from the Geo blockchain, transforms and indexes them, and serves the resulting knowledge graph through a GraphQL/REST API.
 
-### Install dependencies and run migrations
+## Architecture
 
-The data service is dependent on the following tools:
+```
+                              +-----------------------------------------------------------+
+                              |  Hermes (event streaming)                                 |
+                              |                                                           |
++--------------+              |  +----------------+    +--------------+                   |
+|  Blockchain  |--------------|--->  hermes-      |--->| hermes-relay |                   |
+|    (Geo)     |              |  |  substream     |    |   (library)  |                   |
++--------------+              |  +----------------+    +------+-------+                   |
+                              |                               |                           |
+                              |                  +------------+                           |
+                              |                  |            |                           |
+                              |                  v            v                           |
+                              |  +-------------------+  +----------+                      |
+                              |  | hermes-pipeline   |  |  atlas   |                      |
+                              |  | (all events)      |  | (graphs) |                      |
+                              |  +--------+----------+  +----+-----+                      |
+                              |           |                   |                           |
+                              +-----------+-------------------+---------------------------+
+                                          |                   |
+                                          v                   v
+                                       Kafka              Kafka
+                                                              |
+                     +----------------------------------------+
+                     |
+                     v
++--------------------------------------------------------------------+
+|  Indexers (Kafka --> PostgreSQL / OpenSearch)                       |
+|                                                                    |
+|  kg-indexer . search-indexer . actions-indexer . scoring-service    |
++------------------------------+-------------------------------------+
+                               |
+                               v
+                     +-------------------+
+                     |   Gaia API        |
+                     |   (Bun + Hono)    |
+                     |                   |
+                     |  /graphql         |<-- PostGraphile
+                     |  /versioned/*     |<-- Temporal queries
+                     |  /proposals/*     |<-- Governance
+                     |  /profile/*       |<-- User profiles
+                     |  /search/*        |<-- OpenSearch
+                     |  /ipfs/*          |<-- IPFS uploads
+                     |  /health/*        |<-- K8s probes
+                     +-------------------+
+```
 
-- [Rust](https://www.rust-lang.org/)
-- [PostgreSQL](https://www.postgresql.org/)
+### Subsystems
+
+| Domain              | Crates                                                                                                                                                                            | Description                                            |
+| ------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------ |
+| **Hermes Pipeline** | [hermes-pipeline](hermes-pipeline/), [hermes-relay](hermes-relay/), [hermes-kafka](hermes-kafka/), [hermes-substream](hermes-substream/), [hermes-ipfs-cache](hermes-ipfs-cache/) | Streams blockchain events to Kafka topics              |
+| **Graph**           | [atlas](atlas/)                                                                                                                                                                   | Computes canonical space topology from trust events    |
+| **Indexers**        | [kg-indexer](kg-indexer/), [search-indexer](search-indexer/), [actions-indexer](actions-indexer/), [scoring-service](scoring-service/)                                            | Consume Kafka topics, write to PostgreSQL / OpenSearch |
+| **API**             | [api](api/)                                                                                                                                                                       | GraphQL + REST read layer over indexed data            |
+| **Governance**      | [proposal-executor](proposal-executor/)                                                                                                                                           | Onchain proposal execution                             |
+| **Infrastructure**  | [docker-compose.yml](docker-compose.yml), [hermes](hermes/) (k8s), [monitoring](monitoring/), [search-indexer-deploy](search-indexer-deploy/)                                     | Local dev environment, observability, deployment       |
+
+## Local Development
+
+### Prerequisites
+
+- [Rust](https://www.rust-lang.org/) (see `rust-toolchain.toml`)
 - [Bun](https://bun.sh/)
+- [Docker Desktop](https://www.docker.com/) or [OrbStack](https://orbstack.dev/) with **≥ 8 GB memory** allocated (OpenSearch needs 2–4 GB alone)
+- Docker Compose v2 (for profiles support)
 
-The database has an expected schema for the IPFS cache and indexers. For now all of the schemas are managed through the API project.
+> **First build note:** Rust services compile from source on first `docker compose build`, which can take a while depending on your machine.
 
-To run migrations, first populate an `.env` file in the `/api` directory with the following:
+### 1. Environment Setup
 
-```sh
-DATABASE_URL="postgresql://localhost:5432/gaia" # or any connection string
-CHAIN_ID="80451" # or 19411 for mainnet
-IPFS_KEY=''
-IPFS_GATEWAY_WRITE=''
-IPFS_GATEWAY_READ=''
-IPFS_ALTERNATIVE_GATEWAY_KEY='' # when using Pinata according to the docs example use JWT (it contains the API secret)
-IPFS_ALTERNATIVE_GATEWAY_WRITE=''
-RPC_ENDPOINT=''
-DEPLOYER_PK=''
-OPENSEARCH_URL="http://localhost:9200" # OpenSearch server URL (optional - if not set, search routes won't be added)
+```bash
+cp .env.example .env
+# Fill in at minimum: SUBSTREAMS_API_TOKEN, SUBSTREAMS_ENDPOINT, ROOT_SPACE_ID
 ```
 
-You can run a PostgreSQL container using the `docker compose up` command and then set the `DATABASE_URL` to `postgresql://postgres:postgres@localhost:5432/gaia`.
+See [.env.example](.env.example) for all variables and descriptions.
 
-Then run the following commands from within the `/api` directory:
+### 2. Start Infrastructure
 
-```sh
-bun install
-bun run db:migrate
+```bash
+# Kafka, PostgreSQL, OpenSearch
+docker compose --profile infra up -d
 ```
 
-If done correctly, you should see logs signaling a successful migration.
+### 3. Run Services
 
-### Running the IPFS cache
+**Option A — All services in Docker:**
 
-The indexers depend on the IPFS cache to handle preprocessing of IPFS contents. To run the cache, populate an `.env` file in the root of this directory.
-
-```sh
-SUBSTREAMS_API_TOKEN=""
-SUBSTREAMS_ENDPOINT=""
-DATABASE_URL="postgresql://localhost:5432/gaia" # or any connection string
+```bash
+# Infrastructure + all application services (first build is slow)
+docker compose --profile infra --profile services up
 ```
 
-Then run the following command
+**Option B — Infrastructure in Docker, run one service natively:**
 
-```sh
-cargo run -p cache
-# or with the --release flag to run in "production" mode
-# cargo run -p cache --release
+```bash
+docker compose --profile infra up -d
+
+# Example: run kg-indexer natively
+DATABASE_URL=postgresql://postgres:postgres@localhost:5432/gaia \
+  KAFKA_BROKER=localhost:9092 cargo run -p kg-indexer
 ```
 
-If done correctly you should see the indexer begin processing events and writing data to the `ipfs_cache` table in your postgres database.
+**Option C — Run the API natively:**
 
-The cache will continue to populate so long as the Rust process is still executing. If you run the process again, it will start from the beginning of the chain, but skip any cache entries that already exist in the database.
-
-### Running the knowledge graph indexer
-
-The knowledge graph indexer reads through the chain sequentially, listening for any events related to published edits. When it encounters an IPFS hash it reads from the cache, runs any transformations, then writes to the database.
-
-To run the knowledge graph indexer, run the following commands:
-
-```sh
-cargo run -p indexer
-# or with the --release flag to run in "production" mode
-# cargo run -p indexer --release
+```bash
+docker compose --profile infra up -d
+cd api && bun install && bun run db:migrate && bun run start
 ```
 
-If done correctly you should see the indexer begin processing the knowledge graph events sequentially.
+The API is available at `http://localhost:3000`.
 
-### Running the actions indexer
+### Profiles
 
-The actions indexer processes all knowledge graph onchain actions. Currently the only action implemented is entity curation/voting.
+| Profile | Command | What it starts |
+|---------|---------|----------------|
+| `infra` | `docker compose --profile infra up` | Kafka, PostgreSQL, OpenSearch |
+| `tools` | `docker compose --profile infra --profile tools up` | + Kafka UI (:8080), OpenSearch Dashboards (:5601) |
+| `services` | `docker compose --profile infra --profile services up` | + hermes-pipeline, atlas, kg-indexer, search-indexer, hermes-ipfs-cache, vote-indexer, api, scoring-cronjob |
+| `executor` | `docker compose --profile infra --profile services --profile executor up` | + proposal-executor (requires secrets) |
 
-To run the actions indexer, run the following commands:
+### Common Operations
 
-```sh
-cargo run -p actions-indexer
-# or with the --release flag to run in "production" mode
-# cargo run -p indexer --release
+```bash
+# View logs for a service
+docker compose logs -f kg-indexer
+
+# Rebuild a single service
+docker compose build kg-indexer
+
+# Build all services in parallel
+docker compose --profile services build --parallel
+
+# Reset all data (remove volumes)
+docker compose --profile infra down -v
 ```
-
-### Other indexers
-
-Currently only the knowledge graph indexer is implemented, but in the near future there will be other indexers for processing governance events or managing the knowledge graph's history.
 
 ## Documentation
 
-Architecture and design documents are in the `docs/` directory:
+### Conventions
 
-- [Hermes Architecture](docs/hermes-architecture.md) - Event streaming from blockchain to Kafka
-- [K8s Secrets Isolation](docs/k8s-secrets-isolation.md) - Kubernetes secrets management
+- `docs/` — cross-cutting system documentation
+- `<crate>/docs/` — crate-specific docs (decisions, plans, architecture)
+- `<crate>/README.md` — crate entry point
 
-Project-specific documentation lives in each project's directory:
-- [Atlas](atlas/docs/) - Canonical graph computation
-- [Hermes Substream](hermes-substream/docs/) - Event filtering and modification
+When adding a new crate, update the subsystem table above and add a crate README.
+
+### Architecture & Design
+
+- [Hermes Architecture](docs/architecture.md) — event streaming system design
+- [API Architecture](docs/api-architecture.md) — API layers, tech stack, query patterns
+- [Decision Records & RFCs](docs/decisions/README.md) — central index of all ADRs and RFCs
+- [Gotchas](docs/gotchas.md) — known sharp edges and workarounds
+
+### Specifications & RFCs
+
+- [Atlas Canonical Graph Spec](docs/specs/atlas-canonical-graph-spec.md)
+- [Canonical Graph Spec](docs/specs/canonical-graph.md)
+- [Versioned Diffing Spec](docs/specs/versioned-diffing.md)
+- [RFC 0001: Canonical Graph Inputs](docs/rfcs/0001-canonical-graph-inputs.md)
+- [RFC 0002: Graph Diff Emission](docs/rfcs/0002-graph-diff-emission.md)
+- [RFC 0003: Context-Aware Versioned Diffs](docs/rfcs/0003-context-aware-versioned-diffs.md)
+
+### Operations
+
+- [Staging & Production Runbook](docs/runbooks/staging-production.md)
+
+### Protocol
+
+- [Protocol docs](docs/protocol/)
+
+### Research
+
+- [Research docs](docs/research/)
+
+<details>
+<summary>Legacy System (pre-Hermes)</summary>
+
+The following crates are from the pre-Hermes architecture and are sunset. They are not actively maintained and will be removed in a future cleanup:
+
+- `indexer/` — legacy knowledge graph indexer (replaced by kg-indexer + Hermes pipeline)
+- `cache/` — legacy IPFS cache (replaced by hermes-ipfs-cache)
+- `wire/` — legacy protobuf wire format
+- `stream/` — legacy substreams connector
+- `indexer_utils/` — legacy indexer utilities
+
+</details>

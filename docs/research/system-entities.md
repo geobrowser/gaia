@@ -1,0 +1,3 @@
+- onchain, uneditable data
+- computed data
+- analytics engine for computed data vs OTLP storage

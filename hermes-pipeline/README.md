@@ -4,7 +4,7 @@ A transformer binary that consumes space-related events from `hermes-substream` 
 
 ## Overview
 
-This transformer is part of the Hermes architecture (see `docs/hermes-architecture.md`). It:
+This transformer is part of the Hermes architecture (see `docs/architecture.md`). It:
 
 1. Connects to the blockchain data source via `hermes-relay`
 2. Subscribes to `HermesModule::Actions` to receive all raw actions
@@ -27,7 +27,9 @@ This transformer is part of the Hermes architecture (see `docs/hermes-architectu
 | `SUBSPACE_VERIFIED` | Verified trust extensions | `space.trust.extensions` |
 | `SUBSPACE_RELATED` | Related trust extensions | `space.trust.extensions` |
 | `SUBSPACE_TOPIC_DECLARED` | Topic-based trust extensions | `space.trust.extensions` |
-| `SUBSPACE_REMOVED` | Trust revocations | `space.trust.extensions` |
+| `SUBSPACE_UNVERIFIED` | Verified trust removals | `space.trust.extensions` |
+| `SUBSPACE_UNRELATED` | Related trust removals | `space.trust.extensions` |
+| `SUBSPACE_TOPIC_REMOVED` | Topic trust removals | `space.trust.extensions` |
 
 ### Membership
 
@@ -115,8 +117,8 @@ If `SENTRY_DSN` is set, telemetry is exported to Sentry. Otherwise, logs are wri
 ### Local Development (Live Data)
 
 ```bash
-# Start local Kafka (see hermes/docker-compose.yaml)
-docker-compose -f hermes/docker-compose.yaml up -d
+# Start infrastructure (see docker-compose.yml at repo root)
+docker compose --profile infra up -d
 
 # Run with live substreams data (default)
 SUBSTREAMS_API_TOKEN=your-token \
@@ -150,41 +152,41 @@ docker run \
 ## Architecture
 
 ```
-┌─────────────────┐     ┌──────────────┐     ┌─────────────────┐
-│ hermes-substream│────▶│ hermes-relay │────▶│ hermes-pipeline │
-│  (blockchain)   │     │   (stream)   │     │  (transformer)  │
-└─────────────────┘     └──────────────┘     └────────┬────────┘
-                                                      │
-                                                      ▼
-                                             ┌─────────────────┐
-                                             │      Kafka      │
-                                             │  ┌───────────┐  │
-                                             │  │ space.    │  │
-                                             │  │ creations │  │
-                                             │  ├───────────┤  │
-                                             │  │ space.    │  │
-                                             │  │membership │  │
-                                             │  ├───────────┤  │
-                                             │  │ space.    │  │
-                                             │  │ trust.    │  │
-                                             │  │extensions │  │
-                                             │  ├───────────┤  │
-                                             │  │ space.    │  │
-                                             │  │moderation │  │
-                                             │  ├───────────┤  │
-                                             │  │ space.    │  │
-                                             │  │  topics   │  │
-                                             │  ├───────────┤  │
-                                             │  │ space.    │  │
-                                             │  │governance │  │
-                                             │  ├───────────┤  │
-                                             │  │ curation. │  │
-                                             │  │  votes    │  │
-                                             │  ├───────────┤  │
-                                             │  │knowledge. │  │
-                                             │  │  edits    │  │
-                                             │  └───────────┘  │
-                                             └─────────────────┘
++-----------------+     +--------------+     +-----------------+
+| hermes-substream|--->| hermes-relay  |--->| hermes-pipeline  |
+|  (blockchain)   |     |   (stream)   |     |  (transformer)  |
++-----------------+     +--------------+     +--------+--------+
+                                                      |
+                                                      v
+                                             +-----------------+
+                                             |      Kafka      |
+                                             |  +-----------+  |
+                                             |  | space.    |  |
+                                             |  | creations |  |
+                                             |  +-----------+  |
+                                             |  | space.    |  |
+                                             |  |membership |  |
+                                             |  +-----------+  |
+                                             |  | space.    |  |
+                                             |  | trust.    |  |
+                                             |  |extensions |  |
+                                             |  +-----------+  |
+                                             |  | space.    |  |
+                                             |  |moderation |  |
+                                             |  +-----------+  |
+                                             |  | space.    |  |
+                                             |  |  topics   |  |
+                                             |  +-----------+  |
+                                             |  | space.    |  |
+                                             |  |governance |  |
+                                             |  +-----------+  |
+                                             |  | curation. |  |
+                                             |  |  votes    |  |
+                                             |  +-----------+  |
+                                             |  |knowledge. |  |
+                                             |  |  edits    |  |
+                                             |  +-----------+  |
+                                             +-----------------+
 ```
 
 ## Pipeline Modules

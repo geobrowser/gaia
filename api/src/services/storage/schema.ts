@@ -101,7 +101,7 @@ export const spaces = pgTable("spaces", {
 	id: uuid().primaryKey(),
 	type: spaceTypesEnum().notNull(),
 	address: text().notNull(),
-	topicId: uuid(),
+	topicId: uuid().references(() => entities.id),
 })
 
 export const entities = pgTable(
@@ -262,16 +262,40 @@ export const editors = pgTable(
 	],
 )
 
+export const subspaceTypeEnum = pgEnum("subspaceType", ["verified", "related"])
+
 export const subspaces = pgTable(
 	"subspaces",
 	{
-		parentSpaceId: uuid().notNull(),
-		childSpaceId: uuid().notNull(),
+		parentSpaceId: uuid()
+			.notNull()
+			.references(() => spaces.id),
+		childSpaceId: uuid()
+			.notNull()
+			.references(() => spaces.id),
+		type: subspaceTypeEnum().notNull().default("verified"),
 	},
 	(table) => [
-		primaryKey({columns: [table.parentSpaceId, table.childSpaceId]}),
+		primaryKey({columns: [table.parentSpaceId, table.childSpaceId, table.type]}),
 		index("subspaces_parent_space_id_idx").on(table.parentSpaceId),
 		index("subspaces_child_space_id_idx").on(table.childSpaceId),
+	],
+)
+
+export const subspaceTopics = pgTable(
+	"subspace_topics",
+	{
+		spaceId: uuid("space_id")
+			.notNull()
+			.references(() => spaces.id),
+		topicId: uuid("topic_id")
+			.notNull()
+			.references(() => entities.id),
+	},
+	(table) => [
+		primaryKey({columns: [table.spaceId, table.topicId]}),
+		index("subspace_topics_space_id_idx").on(table.spaceId),
+		index("subspace_topics_topic_id_idx").on(table.topicId),
 	],
 )
 
@@ -360,7 +384,25 @@ export const subspacesRelations = drizzleRelations(subspaces, ({one}) => ({
 	}),
 }))
 
-export const spacesRelations = drizzleRelations(spaces, ({many}) => ({
+export const subspaceTopicsRelations = drizzleRelations(subspaceTopics, ({one}) => ({
+	space: one(spaces, {
+		fields: [subspaceTopics.spaceId],
+		references: [spaces.id],
+		relationName: "subspaceTopicSpace",
+	}),
+	topic: one(entities, {
+		fields: [subspaceTopics.topicId],
+		references: [entities.id],
+		relationName: "topic",
+	}),
+}))
+
+export const spacesRelations = drizzleRelations(spaces, ({many, one}) => ({
+	topic: one(entities, {
+		fields: [spaces.topicId],
+		references: [entities.id],
+		relationName: "topic",
+	}),
 	members: many(members),
 	editors: many(editors),
 	parentSpaces: many(subspaces, {
@@ -368,6 +410,9 @@ export const spacesRelations = drizzleRelations(spaces, ({many}) => ({
 	}),
 	childSpaces: many(subspaces, {
 		relationName: "parentSpace",
+	}),
+	subspaceTopics: many(subspaceTopics, {
+		relationName: "subspaceTopicSpace",
 	}),
 }))
 
@@ -398,6 +443,13 @@ export const proposalActionTypeEnum = pgEnum("proposalActionType", [
 	"Unflag",
 	"UpdateVotingSettings",
 	"Unknown",
+	// Subspace proposal actions
+	"SubspaceVerified",
+	"SubspaceUnverified",
+	"SubspaceRelated",
+	"SubspaceUnrelated",
+	"SubspaceTopicDeclared",
+	"SubspaceTopicRemoved",
 ])
 
 /**

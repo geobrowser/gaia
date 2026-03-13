@@ -131,10 +131,35 @@ fn convert_space_registered(action: &Action, meta: &BlockMetadata) -> Option<Spa
     })
 }
 
+/// Parse `from_id` as source (16 bytes) and `topic[0..16]` as target (16 bytes).
+///
+/// ZC16: Solidity `bytes32(bytes16)` right-pads, so the bytes16 value is in [0..16].
+///
+/// Used by: SubspaceVerified, SubspaceRelated, SubspaceUnverified, SubspaceUnrelated
+/// (edge actions where the topic is `bytes32(targetSpaceId)`).
+fn parse_source_and_edge_target(
+    action: &Action,
+    action_type: &str,
+) -> Option<([u8; 16], [u8; 16])> {
+    let Some(source) = to_array::<16>(&action.from_id) else {
+        warn_missing_field(action_type, "from_id", action.from_id.len(), 16);
+        return None;
+    };
+    if action.topic.len() < 16 {
+        warn_missing_field(action_type, "topic", action.topic.len(), 16);
+        return None;
+    }
+    let Some(target) = to_array::<16>(&action.topic[0..16]) else {
+        warn_missing_field(action_type, "topic[0..16]", action.topic[0..16].len(), 16);
+        return None;
+    };
+    Some((source, target))
+}
+
 /// Parse `from_id` as source (16 bytes) and `topic[16..32]` as target (16 bytes).
 ///
-/// Used by: SubspaceVerified, SubspaceRelated, SubspaceUnverified, SubspaceUnrelated,
-/// SubspaceTopicDeclared, SubspaceTopicRemoved.
+/// Used by: SubspaceTopicDeclared, SubspaceTopicRemoved
+/// (topic actions where the layout is [subspace_id: 16 | topic_id: 16]).
 fn parse_source_and_topic_high(action: &Action, action_type: &str) -> Option<([u8; 16], [u8; 16])> {
     let Some(source) = to_array::<16>(&action.from_id) else {
         warn_missing_field(action_type, "from_id", action.from_id.len(), 16);
@@ -185,10 +210,10 @@ fn trust_event(
     }
 }
 
-// --- Converters using topic[16..32] ---
+// --- Edge converters using topic[0..16] (ZC16: bytes32(bytes16) right-pads) ---
 
 fn convert_subspace_verified(action: &Action, meta: &BlockMetadata) -> Option<SpaceTopologyEvent> {
-    let (source, target) = parse_source_and_topic_high(action, "SubspaceVerified")?;
+    let (source, target) = parse_source_and_edge_target(action, "SubspaceVerified")?;
     Some(trust_event(
         meta,
         source,
@@ -199,7 +224,7 @@ fn convert_subspace_verified(action: &Action, meta: &BlockMetadata) -> Option<Sp
 }
 
 fn convert_subspace_related(action: &Action, meta: &BlockMetadata) -> Option<SpaceTopologyEvent> {
-    let (source, target) = parse_source_and_topic_high(action, "SubspaceRelated")?;
+    let (source, target) = parse_source_and_edge_target(action, "SubspaceRelated")?;
     Some(trust_event(
         meta,
         source,
@@ -213,7 +238,7 @@ fn convert_subspace_unverified(
     action: &Action,
     meta: &BlockMetadata,
 ) -> Option<SpaceTopologyEvent> {
-    let (source, target) = parse_source_and_topic_high(action, "SubspaceUnverified")?;
+    let (source, target) = parse_source_and_edge_target(action, "SubspaceUnverified")?;
     Some(trust_event(
         meta,
         source,
@@ -224,7 +249,7 @@ fn convert_subspace_unverified(
 }
 
 fn convert_subspace_unrelated(action: &Action, meta: &BlockMetadata) -> Option<SpaceTopologyEvent> {
-    let (source, target) = parse_source_and_topic_high(action, "SubspaceUnrelated")?;
+    let (source, target) = parse_source_and_edge_target(action, "SubspaceUnrelated")?;
     Some(trust_event(
         meta,
         source,
@@ -233,6 +258,8 @@ fn convert_subspace_unrelated(action: &Action, meta: &BlockMetadata) -> Option<S
         },
     ))
 }
+
+// --- Topic converters using topic[16..32] ([subspace_id: 16 | topic_id: 16]) ---
 
 fn convert_subspace_topic_declared(
     action: &Action,
@@ -437,10 +464,10 @@ mod tests {
 
         // 18 spaces: 11 canonical + 7 non-canonical
         assert_eq!(space_count, 18);
-        // 10 verified + 4 related + 5 topic declarations + 3 editor_added + 2 member_added
-        // + 1 editor_removed + 1 member_removed = 26 trust extensions
-        assert_eq!(trust_count, 26);
+        // 10 verified + 4 related + 6 topic declarations + 1 topic removal
+        // + 3 editor_added + 2 member_added + 1 editor_removed + 1 member_removed = 28
+        assert_eq!(trust_count, 28);
         // Total topology events (edits, proposals, flagging, voting filtered out)
-        assert_eq!(events.len(), 44);
+        assert_eq!(events.len(), 46);
     }
 }

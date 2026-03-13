@@ -61,6 +61,18 @@ message SubtopicExtension {
     bytes target_topic_id = 1; // uuid of the topic receiving trust
 }
 
+message VerifiedRemoval {
+    bytes target_space_id = 1; // uuid of the space losing verified trust
+}
+
+message RelatedRemoval {
+    bytes target_space_id = 1; // uuid of the space losing related trust
+}
+
+message SubtopicRemoval {
+    bytes target_topic_id = 1; // uuid of the topic losing trust
+}
+
 message HermesSpaceTrustExtension {
     bytes source_space_id = 1; // uuid of the space extending trust
 
@@ -68,6 +80,10 @@ message HermesSpaceTrustExtension {
         VerifiedExtension verified = 2;
         RelatedExtension related = 3;
         SubtopicExtension subtopic = 4;
+        // Removal variants
+        VerifiedRemoval verified_removal = 6;
+        RelatedRemoval related_removal = 7;
+        SubtopicRemoval subtopic_removal = 8;
     }
 
     blockchain_metadata.BlockchainMetadata meta = 5;
