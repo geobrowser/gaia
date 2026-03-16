@@ -1848,7 +1848,8 @@ class SearchValidator {
     }
   }
 
-  /** Test 29: Case insensitive matching — lowercase query matches capitalized name. */
+  /** Test 29: Case insensitive matching — all case variants find the entity,
+   *  but exact case match gets a name_raw boost (case-sensitive keyword field). */
   async test29_CaseInsensitiveMatching(): Promise<void> {
     console.log(`\n${BLUE}Test 29: Case insensitive matching — 'blockchain' vs 'Blockchain' vs 'BLOCKCHAIN'${NC}`);
 
@@ -1875,16 +1876,24 @@ class SearchValidator {
     const lowerTM = lowerResult.textMatchScore ?? 0;
     const properTM = properResult.textMatchScore ?? 0;
     const upperTM = upperResult.textMatchScore ?? 0;
-    const maxTM = Math.max(lowerTM, properTM, upperTM);
-    const minTM = Math.min(lowerTM, properTM, upperTM);
-    const spread = maxTM - minTM;
 
-    if (spread < 0.1) {
-      this.addResult('test29_scores_equal', true,
-        `textMatchScores consistent across cases: lower=${lowerTM.toFixed(3)}, proper=${properTM.toFixed(3)}, upper=${upperTM.toFixed(3)} (spread=${spread.toFixed(4)})`);
+    // Non-exact case variants should score equally (both miss name_raw boost)
+    const nonExactSpread = Math.abs(lowerTM - upperTM);
+    if (nonExactSpread < 0.1) {
+      this.addResult('test29_nonexact_cases_equal', true,
+        `Non-exact case variants score equally: lower=${lowerTM.toFixed(3)}, upper=${upperTM.toFixed(3)} (spread=${nonExactSpread.toFixed(4)})`);
     } else {
-      this.addResult('test29_scores_equal', false,
-        `textMatchScores differ across cases: lower=${lowerTM.toFixed(3)}, proper=${properTM.toFixed(3)}, upper=${upperTM.toFixed(3)} (spread=${spread.toFixed(4)})`);
+      this.addResult('test29_nonexact_cases_equal', false,
+        `Non-exact case variants should score equally: lower=${lowerTM.toFixed(3)}, upper=${upperTM.toFixed(3)} (spread=${nonExactSpread.toFixed(4)})`);
+    }
+
+    // Exact case match ("Blockchain") should score higher due to name_raw boost
+    if (properTM > lowerTM) {
+      this.addResult('test29_exact_case_boost', true,
+        `Exact case 'Blockchain' scores higher (${properTM.toFixed(3)}) than 'blockchain' (${lowerTM.toFixed(3)}) — name_raw exact match boost`);
+    } else {
+      this.addResult('test29_exact_case_boost', false,
+        `Expected exact case 'Blockchain' (${properTM.toFixed(3)}) to score higher than 'blockchain' (${lowerTM.toFixed(3)})`);
     }
   }
 

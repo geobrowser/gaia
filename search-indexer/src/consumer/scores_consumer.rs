@@ -3,7 +3,6 @@
 //! Consumes HermesScoresBatch messages and forwards score events to the ingest.
 
 use hermes_instrumentation::{debug, error, info, info_span, instrument, warn, Instrument};
-use hermes_kafka::get_topic_prefix;
 use prost::Message;
 use rdkafka::{
     consumer::{Consumer, StreamConsumer},
@@ -57,10 +56,13 @@ impl ScoresConsumer {
     /// * `brokers` - Kafka broker addresses (comma-separated)
     /// * `group_id` - Consumer group ID (will append "-scores" suffix)
     pub fn new(brokers: &str, group_id: &str) -> Result<Self, IngestError> {
-        let prefix = get_topic_prefix();
+        // Scores are produced by the Python scoring cron which uses "{environment}."
+        // as the topic prefix (e.g. "production.curation.scores", "staging.curation.scores").
+        let environment = env::var("ENVIRONMENT")
+            .expect("ENVIRONMENT variable must be set to 'staging' or 'production'");
         let base_topic =
             env::var("SCORES_KAFKA_TOPIC").unwrap_or_else(|_| Self::SCORES_TOPIC.to_string());
-        let topic = format!("{}{}", prefix, base_topic);
+        let topic = format!("{}.{}", environment, base_topic);
 
         let batch_size = env::var("SCORES_BATCH_SIZE")
             .ok()

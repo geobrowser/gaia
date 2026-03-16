@@ -122,11 +122,14 @@ export const NAME_FIELD_BOOST = 1.5
 export const NAME_EXACT_TOKEN_BOOST = 8.0
 
 /**
- * Boost value for exact raw name match on the unanalyzed name.raw keyword field.
- * Uses a `term` query against name.raw which preserves the original string,
- * so "World affairs" matches "World affairs" but NOT "world-affairs".
+ * Boost value for exact raw name match on the name_raw keyword field.
+ * Uses a `term` query against name_raw which preserves the original string
+ * (case-sensitive), so "World affairs" matches "World affairs" but NOT
+ * "world-affairs" or "World Affairs".
  * The standard analyzer treats these identically (both tokenize to ["world", "affairs"]),
  * so this is the only way to prefer the exact string match.
+ * Note: name_raw is a separate top-level field because search_as_you_type ignores
+ * custom subfields (name.raw does not work).
  */
 export const NAME_RAW_EXACT_BOOST = 10.0
 
@@ -807,9 +810,11 @@ export class OpenSearchClient implements SearchClient {
 						// Exact raw name match — boosts documents where the query
 						// matches the unanalyzed name string exactly. Differentiates
 						// "World affairs" from "world-affairs" which the analyzer
-						// treats as identical tokens.
+						// treats as identical tokens. Uses name_raw (separate keyword
+						// field with lowercase normalizer) because search_as_you_type
+						// ignores custom subfields.
 						term: {
-							"name.raw": {
+							name_raw: {
 								value: queryText,
 								boost: NAME_RAW_EXACT_BOOST,
 							},
@@ -1141,6 +1146,8 @@ export class OpenSearchClient implements SearchClient {
 			}
 
 			if (!response.ok) {
+				const body = await response.text().catch(() => "")
+				console.error(`Topology service error: status=${response.status} space=${spaceId} body=${body}`)
 				throw new Error(`Topology service returned ${response.status} for space ${spaceId}`)
 			}
 
@@ -1154,6 +1161,7 @@ export class OpenSearchClient implements SearchClient {
 			this.subspaceCache.set(spaceId, {result, expiry: Date.now() + 30_000})
 			return result
 		} catch (error) {
+			console.error(`Topology service fetch failed: space=${spaceId} error=${error}`)
 			throw error instanceof Error ? error : new Error(`Failed to fetch subspaces for space ${spaceId}: ${error}`)
 		}
 	}
