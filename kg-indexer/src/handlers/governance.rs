@@ -177,12 +177,12 @@ fn derive_proposal_name(
             Some(Action::Flag(_)) => "Flag",
             Some(Action::Unflag(_)) => "Unflag",
             Some(Action::UpdateVotingSettings(_)) => "Update Voting Settings",
-            Some(Action::SubspaceVerified(_)) => "Add Verified Subspace",
-            Some(Action::SubspaceUnverified(_)) => "Remove Verified Subspace",
-            Some(Action::SubspaceRelated(_)) => "Add Related Subspace",
-            Some(Action::SubspaceUnrelated(_)) => "Remove Related Subspace",
-            Some(Action::SubspaceTopicDeclared(_)) => "Declare Subspace Topic",
-            Some(Action::SubspaceTopicRemoved(_)) => "Remove Subspace Topic",
+            Some(Action::SubspaceVerified(_)) => "Add Verified Space",
+            Some(Action::SubspaceUnverified(_)) => "Remove Verified Space",
+            Some(Action::SubspaceRelated(_)) => "Add Related Space",
+            Some(Action::SubspaceUnrelated(_)) => "Remove Related Space",
+            Some(Action::SubspaceTopicDeclared(_)) => "Add subtopic",
+            Some(Action::SubspaceTopicRemoved(_)) => "Remove subtopic",
             None => "Unknown Action",
         })
         .collect();
