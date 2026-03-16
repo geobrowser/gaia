@@ -85,7 +85,10 @@ impl ScoresConsumer {
         batch_size: usize,
         batch_timeout_ms: u64,
     ) -> Result<Self, IngestError> {
-        let client_config = super::kafka_config::create_client_config(brokers, group_id);
+        let mut client_config = super::kafka_config::create_client_config(brokers, group_id);
+        // Score updates use update_by_query which can take minutes for large batches.
+        // Default 300s is too short — use 30 minutes to avoid MAXPOLL group kicks.
+        client_config.set("max.poll.interval.ms", "1800000");
 
         info!(
             brokers = %brokers,
