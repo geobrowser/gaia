@@ -1146,6 +1146,8 @@ export class OpenSearchClient implements SearchClient {
 			}
 
 			if (!response.ok) {
+				const body = await response.text().catch(() => "")
+				console.error(`Topology service error: status=${response.status} space=${spaceId} body=${body}`)
 				throw new Error(`Topology service returned ${response.status} for space ${spaceId}`)
 			}
 
@@ -1159,6 +1161,7 @@ export class OpenSearchClient implements SearchClient {
 			this.subspaceCache.set(spaceId, {result, expiry: Date.now() + 30_000})
 			return result
 		} catch (error) {
+			console.error(`Topology service fetch failed: space=${spaceId} error=${error}`)
 			throw error instanceof Error ? error : new Error(`Failed to fetch subspaces for space ${spaceId}: ${error}`)
 		}
 	}
