@@ -65,6 +65,7 @@ jobs:
           KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
           KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
           KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+          KAFKA_MESSAGE_MAX_BYTES: 10485760
           CLUSTER_ID: MkU3OEVBNTcwNTJENDM2Qk
         ports:
           - 9092:9092
@@ -333,6 +334,7 @@ jobs:
           ENVIRONMENT=staging \
           KAFKA_BROKER=localhost:9092 \
           OPENSEARCH_URL=http://localhost:9200 \
+          OPENSEARCH_MAX_BULK_SIZE=10 \
           KAFKA_GROUP_EDITS_ID=search-indexer-group-edits-load \
           KAFKA_GROUP_SCORES_ID=search-indexer-group-scores-load \
           KAFKA_GROUP_SPACE_TOPICS_ID=search-indexer-group-space-topics-load \

@@ -170,7 +170,7 @@ pub struct TopologyProcessingBatch {
 impl Default for OrchestratorConfig {
     fn default() -> Self {
         Self {
-            channel_buffer_size: 5,
+            channel_buffer_size: 2,
         }
     }
 }
@@ -178,13 +178,14 @@ impl Default for OrchestratorConfig {
 impl OrchestratorConfig {
     /// Build config from environment variables.
     ///
-    /// - `CHANNEL_BUFFER_SIZE`: Max batches in flight per channel (default: 5).
+    /// - `CHANNEL_BUFFER_SIZE`: Max batches in flight per channel (default: 2).
     ///   Use a smaller value when memory is limited to avoid OOM on large backlogs.
     pub fn from_env() -> Self {
+        let defaults = Self::default();
         let channel_buffer_size = std::env::var("CHANNEL_BUFFER_SIZE")
             .ok()
             .and_then(|s| s.parse::<usize>().ok())
-            .unwrap_or(5);
+            .unwrap_or(defaults.channel_buffer_size);
         Self {
             channel_buffer_size,
         }
@@ -538,6 +539,7 @@ impl Orchestrator {
                     let remove_rels = metrics_ref.total_remove_relations.load(Ordering::Relaxed);
                     let scores = metrics_ref.total_score_updates.load(Ordering::Relaxed);
                     let topics = metrics_ref.total_space_topic_updates.load(Ordering::Relaxed);
+                    let topo_nodes = metrics_ref.canonical_graph_size.load(Ordering::Relaxed);
 
                     // Calculate deltas and rates per second
                     let now = std::time::Instant::now();
@@ -586,6 +588,7 @@ impl Orchestrator {
                         remove_relations = remove_rels,
                         score_updates = scores,
                         topic_updates = topics,
+                        canonical_graph_size = topo_nodes,
                         rss_mb = %rss_mb,
                         "indexer.stats"
                     );

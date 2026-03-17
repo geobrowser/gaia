@@ -25,6 +25,7 @@ describe("Search Router - Integration Tests", () => {
 				entitySpaceScore: 0.9,
 				relevanceScore: 15.2,
 				textMatchScore: 2.0,
+				inCanonicalGraph: false,
 			},
 		],
 		total: 1,
@@ -360,6 +361,68 @@ describe("Search Router - Integration Tests", () => {
 
 			expect(response.status).toBe(500)
 			expect(result.message).toBe("Custom error message")
+		})
+	})
+
+	describe("inCanonicalGraph field", () => {
+		it("returns inCanonicalGraph: true when set", async () => {
+			const response: SearchResponse = {
+				results: [
+					{
+						entityId: "123e4567e89b12d3a456426614174000",
+						space: {id: "abcd1234abcd1234abcd1234abcd5678"},
+						inCanonicalGraph: true,
+					},
+				],
+				total: 1,
+				tookMs: 1,
+			}
+			mockSearchClient.search = vi.fn().mockResolvedValue(response)
+
+			const res = await app.fetch(new Request("http://localhost/search?q=test"))
+			const body = await res.json()
+
+			expect(body.results[0].inCanonicalGraph).toBe(true)
+		})
+
+		it("returns inCanonicalGraph: false when set", async () => {
+			const response: SearchResponse = {
+				results: [
+					{
+						entityId: "123e4567e89b12d3a456426614174000",
+						space: {id: "abcd1234abcd1234abcd1234abcd5678"},
+						inCanonicalGraph: false,
+					},
+				],
+				total: 1,
+				tookMs: 1,
+			}
+			mockSearchClient.search = vi.fn().mockResolvedValue(response)
+
+			const res = await app.fetch(new Request("http://localhost/search?q=test"))
+			const body = await res.json()
+
+			expect(body.results[0].inCanonicalGraph).toBe(false)
+		})
+
+		it("defaults inCanonicalGraph to false when not set", async () => {
+			const response: SearchResponse = {
+				results: [
+					{
+						entityId: "123e4567e89b12d3a456426614174000",
+						space: {id: "abcd1234abcd1234abcd1234abcd5678"},
+						inCanonicalGraph: false,
+					},
+				],
+				total: 1,
+				tookMs: 1,
+			}
+			mockSearchClient.search = vi.fn().mockResolvedValue(response)
+
+			const res = await app.fetch(new Request("http://localhost/search?q=test"))
+			const body = await res.json()
+
+			expect(body.results[0].inCanonicalGraph).toBe(false)
 		})
 	})
 

@@ -32,6 +32,18 @@ use crate::types::{
 };
 use crate::utils;
 
+/// Default maximum number of operations per bulk HTTP request.
+/// Prevents 413 Payload Too Large errors from OpenSearch.
+/// Override with the `OPENSEARCH_MAX_BULK_SIZE` environment variable.
+const DEFAULT_OPENSEARCH_MAX_BULK_SIZE: usize = 1000;
+
+fn opensearch_max_bulk_size() -> usize {
+    std::env::var("OPENSEARCH_MAX_BULK_SIZE")
+        .ok()
+        .and_then(|s| s.parse().ok())
+        .unwrap_or(DEFAULT_OPENSEARCH_MAX_BULK_SIZE)
+}
+
 /// Macro to flush pending bulk operations and refresh before update_by_query.
 /// This ensures ordering is preserved when mixing bulk and update_by_query operations.
 /// When there are pending ops, they are flushed with `Refresh::True`. When the pending
@@ -74,6 +86,35 @@ macro_rules! flush_pending_bulk {
                 .send()
                 .await
                 .map_err(|e| SearchIndexError::update(e.to_string()))?;
+        }
+    };
+}
+
+/// Macro to flush the bulk buffer when it reaches the configured chunk size.
+/// Prevents 413 Payload Too Large errors by chunking large batches.
+macro_rules! flush_bulk_if_full {
+    ($self:expr, $bulk_ops:expr, $metas:expr, $total_succeeded:expr, $total_failed:expr, $all_results:expr, $total_wall_ms:expr, $total_took_ms:expr, $bulk_call_count:expr) => {
+        if $bulk_ops.len() >= opensearch_max_bulk_size() {
+            let chunk_size = $bulk_ops.len();
+            debug!(chunk_size, max_bulk_size = opensearch_max_bulk_size(), "Flushing bulk chunk (size limit reached)");
+            let batch_ops = std::mem::take(&mut $bulk_ops);
+            let batch_metas = std::mem::take(&mut $metas);
+            let summary = execute_bulk(
+                &$self.client,
+                &$self.index_config.alias,
+                batch_ops,
+                &batch_metas,
+                BulkAction::Update,
+                false,
+                &$self.retry_config,
+            )
+            .await?;
+            $total_succeeded += summary.succeeded;
+            $total_failed += summary.failed;
+            $total_wall_ms += summary.wall_ms;
+            $total_took_ms += summary.took_ms;
+            $bulk_call_count += 1u64;
+            $all_results.extend(summary.results);
         }
     };
 }
@@ -653,6 +694,9 @@ impl SearchIndexProvider for OpenSearchProvider {
     /// When we encounter a RemoveRelationById (which requires update_by_query),
     /// we first flush the pending batch, then execute the update_by_query, then continue.
     /// This ensures ordering is preserved.
+    ///
+    /// Bulk batches are automatically flushed when they reach `MAX_BULK_CHUNK_SIZE`
+    /// to avoid exceeding OpenSearch's HTTP payload limits.
     #[instrument(skip(self, operations), fields(count = operations.len()))]
     async fn bulk_operations(
         &self,
@@ -823,6 +867,7 @@ impl SearchIndexProvider for OpenSearchProvider {
                             space_id: request.space_id.clone(),
                             operation_type: "AddRelation".to_string(),
                         });
+                        flush_bulk_if_full!(self, bulk_ops, metas, total_succeeded, total_failed, all_results, total_wall_ms, total_took_ms, _bulk_call_count);
                         has_operation = true;
                     }
 
@@ -853,6 +898,7 @@ impl SearchIndexProvider for OpenSearchProvider {
                             space_id: request.space_id.clone(),
                             operation_type: "Update".to_string(),
                         });
+                        flush_bulk_if_full!(self, bulk_ops, metas, total_succeeded, total_failed, all_results, total_wall_ms, total_took_ms, _bulk_call_count);
                         has_operation = true;
                     }
 
@@ -879,6 +925,7 @@ impl SearchIndexProvider for OpenSearchProvider {
                         space_id: request.space_id.clone(),
                         operation_type: "Delete".to_string(),
                     });
+                    flush_bulk_if_full!(self, bulk_ops, metas, total_succeeded, total_failed, all_results, total_wall_ms, total_took_ms, _bulk_call_count);
                 }
                 EntityOperation::Unset(request) => {
                     if request.property_keys.is_empty() {
@@ -930,6 +977,7 @@ impl SearchIndexProvider for OpenSearchProvider {
                         space_id: request.space_id.clone(),
                         operation_type: "Unset".to_string(),
                     });
+                    flush_bulk_if_full!(self, bulk_ops, metas, total_succeeded, total_failed, all_results, total_wall_ms, total_took_ms, _bulk_call_count);
 
                     // Flush immediately after unset to ensure it's processed before any subsequent
                     // updates to the same document. Multiple updates to the same document in one
@@ -1096,6 +1144,7 @@ impl SearchIndexProvider for OpenSearchProvider {
                         space_id: request.space_id.clone(),
                         operation_type: "UpdateEntitySpaceScore".to_string(),
                     });
+                    flush_bulk_if_full!(self, bulk_ops, metas, total_succeeded, total_failed, all_results, total_wall_ms, total_took_ms, _bulk_call_count);
                 }
                 EntityOperation::UpdateSpaceTopicEntityId(request) => {
                     // Flush before executing the update_by_query to maintain ordering

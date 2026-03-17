@@ -992,4 +992,29 @@ mod tests {
             }
         ));
     }
+
+    /// Regression test: a large batch (>1000 ops) must not crash the loader.
+    /// Previously, all operations were sent in a single bulk HTTP request which
+    /// caused a 413 Payload Too Large error from OpenSearch.
+    #[tokio::test]
+    async fn test_large_batch_does_not_overflow() {
+        let provider = Arc::new(MockSearchProvider::new());
+        let mut loader = SearchLoader::new(provider.clone());
+
+        // Generate 5000 entity events — more than MAX_BULK_CHUNK_SIZE (1000)
+        let events: Vec<ProcessedEvent> = (0..5000)
+            .map(|i| {
+                ProcessedEvent::Index(EntityDocument::new(
+                    Uuid::new_v4(),
+                    Uuid::new_v4(),
+                    Some(format!("Entity {}", i)),
+                    None,
+                ))
+            })
+            .collect();
+
+        loader.load(events).await.expect("large batch should not fail");
+
+        assert_eq!(provider.get_operation_count(), 5000);
+    }
 }

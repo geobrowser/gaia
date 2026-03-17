@@ -293,6 +293,59 @@ pub fn create_entity_grc20_op(
     Ok(buf)
 }
 
+/// Generate a single Kafka message containing many UpdateEntity operations.
+/// Simulates bulk space imports where one HermesEdit carries thousands of ops.
+pub fn create_bulk_entity_edit(
+    edit_name: &str,
+    space_id: Uuid,
+    entities: &[(Uuid, String)],
+) -> Result<Vec<u8>> {
+    let ops: Vec<Grc20Op> = entities
+        .iter()
+        .map(|(entity_id, name)| {
+            Grc20Op::UpdateEntity(UpdateEntity {
+                id: *entity_id.as_bytes(),
+                set_properties: vec![PropertyValue {
+                    property: *Uuid::parse_str(NAME_PROPERTY_ID)
+                        .expect("valid NAME_PROPERTY_ID")
+                        .as_bytes(),
+                    value: Grc20Value::Text {
+                        value: name.clone().into(),
+                        language: None,
+                    },
+                }],
+                unset_values: vec![],
+                context: None,
+            })
+        })
+        .collect();
+
+    let grc20_edit = Grc20Edit {
+        id: *Uuid::new_v4().as_bytes(),
+        name: edit_name.into(),
+        authors: vec![*Uuid::new_v4().as_bytes()],
+        created_at: 0,
+        ops,
+    };
+
+    let payload = encode_edit(&grc20_edit)?;
+
+    let edit = HermesEdit {
+        id: grc20_edit.id.to_vec(),
+        name: edit_name.to_string(),
+        payload,
+        authors: vec![Uuid::new_v4().as_bytes().to_vec()],
+        language: None,
+        space_id: space_id.as_bytes().to_vec(),
+        is_canonical: true,
+        meta: None,
+    };
+
+    let mut buf = Vec::new();
+    edit.encode(&mut buf)?;
+    Ok(buf)
+}
+
 /// Generate a DeleteEntity operation
 pub fn delete_entity(edit_name: &str, space_id: Uuid, entity_id: Uuid) -> Result<Vec<u8>> {
     let delete_entity = DeleteEntity {

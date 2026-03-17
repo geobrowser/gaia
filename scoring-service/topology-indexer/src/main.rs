@@ -113,6 +113,9 @@ async fn async_main() -> Result<(), IndexerError> {
         tokio::time::interval(tokio::time::Duration::from_millis(batch_timeout_ms));
     let mut processed_count: u64 = 0;
     let mut error_count: u64 = 0;
+    let mut heartbeat_timer =
+        tokio::time::interval(tokio::time::Duration::from_secs(60));
+    heartbeat_timer.tick().await; // skip immediate first tick
 
     info!(
         batch_size = batch_size,
@@ -122,6 +125,14 @@ async fn async_main() -> Result<(), IndexerError> {
 
     loop {
         tokio::select! {
+            _ = heartbeat_timer.tick() => {
+                info!(
+                    processed = processed_count,
+                    errors = error_count,
+                    pending = diff_buffer.len(),
+                    "Heartbeat"
+                );
+            }
             _ = shutdown_rx.recv() => {
                 info!("Shutting down...");
                 if !diff_buffer.is_empty() {

@@ -94,6 +94,8 @@ export interface SearchResult {
 	relevanceScore?: number
 	/** Text matching score without score field boosts. */
 	textMatchScore?: number
+	/** Whether this entity's space is in the canonical graph. */
+	inCanonicalGraph: boolean
 }
 
 /**
