@@ -6,7 +6,7 @@
 use std::io::Write;
 use std::path::Path;
 
-use hermes_instrumentation::{error, info, warn};
+use hermes_instrumentation::{debug, error, info, warn};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -63,6 +63,12 @@ fn hex_to_bytes(s: &str) -> Result<[u8; 16], PersistenceError> {
 
 /// Save graph state to a JSON file using write-then-rename for atomicity.
 pub fn save(state: &CanonicalGraphState, path: &Path) -> Result<(), PersistenceError> {
+    debug!(
+        node_count = state.len(),
+        path = %path.display(),
+        "Saving topology state to disk"
+    );
+    let start = std::time::Instant::now();
     let (root_id, nodes) = state.snapshot();
 
     let persisted = PersistedState {
@@ -95,8 +101,11 @@ pub fn save(state: &CanonicalGraphState, path: &Path) -> Result<(), PersistenceE
 
     std::fs::rename(&tmp_path, path)?;
 
-    info!(
+    let save_ms = start.elapsed().as_millis();
+    debug!(
         node_count = persisted.nodes.len(),
+        file_size_kb = json.len() / 1024,
+        save_ms = save_ms,
         path = %path.display(),
         "Saved topology state"
     );
@@ -110,6 +119,8 @@ pub fn load(path: &Path) -> Result<CanonicalGraphState, PersistenceError> {
         return Ok(CanonicalGraphState::new());
     }
 
+    let start = std::time::Instant::now();
+    let file_size_bytes = std::fs::metadata(path)?.len();
     let json = std::fs::read_to_string(path)?;
 
     let persisted: PersistedState = serde_json::from_str(&json)?;
@@ -135,8 +146,12 @@ pub fn load(path: &Path) -> Result<CanonicalGraphState, PersistenceError> {
     }
 
     let state = CanonicalGraphState::from_snapshot(root_id, nodes);
+    let load_ms = start.elapsed().as_millis();
     info!(
         node_count = state.len(),
+        file_size_kb = file_size_bytes / 1024,
+        load_ms = load_ms,
+        root_id = root_id.map(|r| uuid::Uuid::from_bytes(r).to_string()).unwrap_or_else(|| "none".to_string()),
         path = %path.display(),
         "Loaded topology state"
     );

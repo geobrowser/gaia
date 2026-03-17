@@ -38,6 +38,8 @@ pub struct SearchIndexerMetrics {
     pub total_score_updates: Arc<AtomicU64>,
     /// Space topic entity ID update operations.
     pub total_space_topic_updates: Arc<AtomicU64>,
+    /// Current number of nodes in the canonical topology graph.
+    pub canonical_graph_size: Arc<AtomicU64>,
 }
 
 impl SearchIndexerMetrics {
@@ -57,6 +59,7 @@ impl SearchIndexerMetrics {
             total_remove_relations: Arc::new(AtomicU64::new(0)),
             total_score_updates: Arc::new(AtomicU64::new(0)),
             total_space_topic_updates: Arc::new(AtomicU64::new(0)),
+            canonical_graph_size: Arc::new(AtomicU64::new(0)),
         }
     }
 }

@@ -127,7 +127,7 @@ impl Processor {
     ) -> Self {
         info!(
             cache_size = cache.len(),
-            topology_nodes = topology_state.len(),
+            canonical_graph_size = topology_state.len(),
             sample_interval,
             "Processor created with space topic cache and topology state"
         );
@@ -450,6 +450,13 @@ impl Processor {
             let mut space_topics_closed = false;
             let mut topology_closed = false;
 
+            // Topology heartbeat timer (every 2 minutes)
+            let mut topology_heartbeat = tokio::time::interval(tokio::time::Duration::from_secs(120));
+            topology_heartbeat.tick().await; // skip immediate first tick
+
+            // Set initial topology node count in metrics
+            metrics.canonical_graph_size.store(self.topology_state.len() as u64, std::sync::atomic::Ordering::Relaxed);
+
             loop {
                 // Exit when all channels are closed
                 if entity_closed && scores_closed && space_topics_closed && topology_closed {
@@ -458,6 +465,18 @@ impl Processor {
 
                 // Use tokio::select to handle all channels
                 tokio::select! {
+                    _ = topology_heartbeat.tick() => {
+                        let node_count = self.topology_state.len();
+                        let root_id = self.topology_state.root_id()
+                            .map(|id| id.to_string())
+                            .unwrap_or_else(|| "none".to_string());
+                        info!(
+                            node_count = node_count,
+                            root_id = %root_id,
+                            cache_size = self.space_topic_cache.len(),
+                            "topology.heartbeat"
+                        );
+                    }
                     // Handle entity events
                     entity_batch = entity_rx.recv(), if !entity_closed => {
                         match entity_batch {
@@ -763,7 +782,9 @@ impl Processor {
                 .await;
 
         match save_result {
-            Ok(Ok(())) => {} // Save succeeded
+            Ok(Ok(())) => {
+                metrics.canonical_graph_size.store(self.topology_state.len() as u64, Ordering::Relaxed);
+            }
             Ok(Err(e)) => {
                 error!(error = %e, "Failed to save topology state, NACKing batch");
                 if let Err(send_err) = ack_tx
