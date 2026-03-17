@@ -511,7 +511,7 @@ With worst-case entity messages at 20 MB (matching hermes producer `message.max.
 | Overhead | Runtime, heap fragmentation | 100 MiB |
 | **Total** | | **~1,310 MiB** |
 
-Note: This absolute worst case (all 10 messages at 20 MB each across all 2 channel slots) is unrealistic in practice. The consumer's `MAX_EVENTS_PER_BATCH=1000` causes early batch flushes when large messages arrive (a 20 MB message typically contains 100K+ events, triggering flush after 1 message). Combined with rdkafka's 64 MiB per-consumer queue limit throttling intake, realistic peak is closer to ~600–800 MiB.
+Note: This absolute worst case (all 10 messages at 20 MB each across all 2 channel slots) is unrealistic in practice. The consumer's `EVENTS_FLUSH_THRESHOLD=1000` causes early batch flushes when large messages arrive (a 20 MB message typically contains 100K+ events, triggering flush after 1 message). Combined with rdkafka's 64 MiB per-consumer queue limit throttling intake, realistic peak is closer to ~600–800 MiB.
 ## Error Recovery
 
 ### Reprocessing All Events
