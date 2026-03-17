@@ -170,7 +170,7 @@ pub struct TopologyProcessingBatch {
 impl Default for OrchestratorConfig {
     fn default() -> Self {
         Self {
-            channel_buffer_size: 5,
+            channel_buffer_size: 2,
         }
     }
 }
@@ -178,13 +178,14 @@ impl Default for OrchestratorConfig {
 impl OrchestratorConfig {
     /// Build config from environment variables.
     ///
-    /// - `CHANNEL_BUFFER_SIZE`: Max batches in flight per channel (default: 5).
+    /// - `CHANNEL_BUFFER_SIZE`: Max batches in flight per channel (default: 2).
     ///   Use a smaller value when memory is limited to avoid OOM on large backlogs.
     pub fn from_env() -> Self {
+        let defaults = Self::default();
         let channel_buffer_size = std::env::var("CHANNEL_BUFFER_SIZE")
             .ok()
             .and_then(|s| s.parse::<usize>().ok())
-            .unwrap_or(5);
+            .unwrap_or(defaults.channel_buffer_size);
         Self {
             channel_buffer_size,
         }

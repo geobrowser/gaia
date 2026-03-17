@@ -33,6 +33,7 @@ impl LoadTestSender {
         let producer: FutureProducer = ClientConfig::new()
             .set("bootstrap.servers", broker)
             .set("message.timeout.ms", "30000")
+            .set("message.max.bytes", "10485760") // 10MB — needed for bulk burst test
             .set("queue.buffering.max.messages", "500000")
             .set("queue.buffering.max.kbytes", "2097152")
             .set("batch.num.messages", "10000")
