@@ -345,6 +345,7 @@ export class OpenSearchClient implements SearchClient {
 					entitySpaceScore: hit._source.entity_space_score as number | undefined,
 					relevanceScore,
 					textMatchScore,
+					inCanonicalGraph: (hit._source.in_canonical_graph as boolean) ?? false,
 				}
 			},
 		)
