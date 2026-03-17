@@ -539,6 +539,7 @@ impl Orchestrator {
                     let remove_rels = metrics_ref.total_remove_relations.load(Ordering::Relaxed);
                     let scores = metrics_ref.total_score_updates.load(Ordering::Relaxed);
                     let topics = metrics_ref.total_space_topic_updates.load(Ordering::Relaxed);
+                    let topo_nodes = metrics_ref.canonical_graph_size.load(Ordering::Relaxed);
 
                     // Calculate deltas and rates per second
                     let now = std::time::Instant::now();
@@ -587,6 +588,7 @@ impl Orchestrator {
                         remove_relations = remove_rels,
                         score_updates = scores,
                         topic_updates = topics,
+                        canonical_graph_size = topo_nodes,
                         rss_mb = %rss_mb,
                         "indexer.stats"
                     );
