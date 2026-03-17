@@ -34,6 +34,7 @@ pub struct GenerationStats {
     pub space_scores: usize,
     pub perspective_scores: usize,
     pub filler: usize,
+    pub bulk_burst: usize,
     pub late_scores: usize,
     pub total_events: usize,
 }
@@ -1467,6 +1468,38 @@ pub fn generate(config: &LoadTestConfig) -> Result<GeneratedScenario> {
             stats.filler += 2;
         }
     }
+
+    // =========================================================================
+    // Bulk burst: a single Kafka message containing many entity operations.
+    // Simulates bulk space imports where one HermesEdit carries thousands of ops.
+    // Regression test for 413 Payload Too Large — the indexer must chunk these
+    // into smaller bulk requests rather than sending them all at once.
+    // =========================================================================
+    let bulk_burst_count = config.scaled(10_000);
+    let bulk_burst_space_id = rand_uuid(&mut rng);
+    let bulk_burst_group = group_counter;
+    group_counter += 1;
+    let bulk_burst_entities: Vec<(Uuid, String)> = (0..bulk_burst_count)
+        .map(|i| (rand_uuid(&mut rng), format!("burst-entity-{}", i)))
+        .collect();
+    let payload = edits::create_bulk_entity_edit(
+        "bulk-burst",
+        bulk_burst_space_id,
+        &bulk_burst_entities,
+    )?;
+    ordered_events.push(OrderedEvent {
+        ordering_group: bulk_burst_group,
+        sequence: 0,
+        event: KafkaEvent {
+            topic: edits_topic.clone(),
+            key: Some(bulk_burst_space_id.to_string()),
+            payload,
+        },
+    });
+    for (entity_id, name) in &bulk_burst_entities {
+        state.upsert_entity(*entity_id, bulk_burst_space_id, Some(name.clone()), None, None);
+    }
+    stats.bulk_burst = bulk_burst_count;
 
     stats.total_events = ordered_events.len();
 

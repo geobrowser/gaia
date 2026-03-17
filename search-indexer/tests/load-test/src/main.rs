@@ -100,6 +100,10 @@ async fn main() -> Result<()> {
         );
         println!("    Filler:                  {}", scenario.stats.filler);
         println!(
+            "    Bulk burst:              {}",
+            scenario.stats.bulk_burst
+        );
+        println!(
             "    Late scores:             {}",
             scenario.stats.late_scores
         );

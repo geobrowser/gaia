@@ -49,6 +49,11 @@ impl EntitiesConsumer {
     /// Default batch timeout in milliseconds (configurable via KAFKA_BATCH_TIMEOUT_MS env var).
     const DEFAULT_BATCH_TIMEOUT_MS: u64 = 1000;
 
+    /// Maximum number of entity events per batch. Flushes early if a single Kafka message
+    /// contains many events (e.g. bulk space imports). Prevents oversized batches from
+    /// propagating through the processor and loader.
+    const MAX_EVENTS_PER_BATCH: usize = 1000;
+
     /// Create a new Kafka consumer.
     ///
     /// Configuration is read from environment variables with fallbacks to defaults:
@@ -201,7 +206,8 @@ impl EntitiesConsumer {
                                     batch.push(pending);
                                     pending_offsets.push((msg.topic().to_string(), msg.partition(), msg.offset()));
 
-                                    if batch.len() >= self.batch_size {
+                                    let total_events: usize = batch.iter().map(|p| p.events.len()).sum();
+                                    if batch.len() >= self.batch_size || total_events >= Self::MAX_EVENTS_PER_BATCH {
                                         let offsets_to_send = pending_offsets.clone();
                                         self.flush_batch(&batch, &offsets_to_send, &processor_tx).await?;
                                         batch.clear();
