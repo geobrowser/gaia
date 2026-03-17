@@ -5,6 +5,7 @@ metadata:
   namespace: scoring
 spec:
   schedule: "0 3 * * *"  # Run at 3am every day
+  failedJobsHistoryLimit: 3
   jobTemplate:
     spec:
       template:
