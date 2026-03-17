@@ -81,6 +81,33 @@ cp .env.example .env
 
 See [.env.example](.env.example) for all variables and descriptions.
 
+### External Dependencies
+
+Gaia runs most infrastructure locally with Docker.
+Kafka, PostgreSQL, and OpenSearch come from [docker-compose.yml](docker-compose.yml).
+
+The remaining dependencies are external services:
+
+| Dependency | Current/default provider | Used by | Required env vars | Notes |
+| ---------- | ------------------------ | ------- | ----------------- | ----- |
+| Substreams | Pinax (`geotest.substreams.pinax.network:443`) | `hermes-pipeline`, `atlas`, `hermes-ipfs-cache`, `actions-indexer` | `SUBSTREAMS_ENDPOINT`, `SUBSTREAMS_API_TOKEN` | Required for any live blockchain ingestion. |
+| IPFS read gateway | Mesh3 by default (`gateway.mesh3.network`) | `hermes-ipfs-cache` | `IPFS_GATEWAY_URL` | Fetches edit and proposal blobs from IPFS. |
+| IPFS write gateway | Pinata (`uploads.pinata.cloud`) | `api` `/ipfs/*` routes | `IPFS_KEY`, `IPFS_GATEWAY_WRITE` | Only needed if you want API uploads enabled. |
+| Bundler / paymaster | Pimlico (`api.pimlico.io`) | `proposal-executor` | `PIMLICO_API_KEY` | Only needed with `--profile executor`. |
+| Chain RPC | Bring your own RPC provider | `proposal-executor` | `RPC_URL` | Only needed with `--profile executor`. |
+| Error tracking | Sentry | optional telemetry | `SENTRY_DSN` | Safe to omit locally. |
+| Trace export | Axiom | optional Hermes tracing | `AXIOM_TOKEN`, `AXIOM_DATASET` | Only used when Sentry-backed tracing is enabled. |
+
+If you only want the local indexers and API:
+
+- Set `SUBSTREAMS_ENDPOINT`, `SUBSTREAMS_API_TOKEN`, and `ROOT_SPACE_ID`.
+- Set `IPFS_GATEWAY_URL` if you run `hermes-ipfs-cache`.
+- Set `IPFS_KEY` and `IPFS_GATEWAY_WRITE` only if you need API uploads.
+- Skip `PIMLICO_API_KEY` and `RPC_URL` unless you run `proposal-executor`.
+
+If you run a service natively, pass the same env vars from `.env`.
+Docker Compose does not inject them into native `cargo run` or `bun run` commands.
+
 ### 2. Start Infrastructure
 
 ```bash
