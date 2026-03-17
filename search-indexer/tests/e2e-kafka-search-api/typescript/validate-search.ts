@@ -2816,6 +2816,77 @@ class SearchValidator {
     }
   }
 
+  /**
+   * Test 46: inCanonicalGraph field is returned correctly in search results.
+   *
+   * Verifies three cases:
+   *   - Canonical entity (topo_child_a) returns inCanonicalGraph: true
+   *   - Non-canonical entity (topo_remove_me, removed in diff 2) returns inCanonicalGraph: false
+   *   - Entity never in canonical graph (e.g. Alice High) returns inCanonicalGraph: false
+   */
+  async test46_InCanonicalGraphFieldReturned(): Promise<void> {
+    console.log(`\n${BLUE}Test 46: inCanonicalGraph field returned correctly in search results${NC}`);
+
+    // Search for a canonical entity
+    const canonicalResp = await this.search({
+      query: 'TopoEntity',
+      scope: 'SPACE_SINGLE',
+      space_id: TEST_ENTITIES.TOPO_CHILD_A_SPACE_ID,
+      limit: 1,
+    });
+
+    if (canonicalResp.results.length > 0) {
+      const result = canonicalResp.results[0];
+      if (result.inCanonicalGraph === true) {
+        this.addResult('test46_canonical_true', true, 'Canonical entity has inCanonicalGraph=true');
+      } else {
+        this.addResult('test46_canonical_true', false,
+          `Expected inCanonicalGraph=true for canonical entity, got ${result.inCanonicalGraph}`);
+      }
+    } else {
+      this.addResult('test46_canonical_true', false, 'No results for canonical space search');
+    }
+
+    // Search for a removed (non-canonical) entity
+    const removedResp = await this.search({
+      query: 'TopoEntity',
+      scope: 'SPACE_SINGLE',
+      space_id: TEST_ENTITIES.TOPO_REMOVE_ME_SPACE_ID,
+      limit: 1,
+    });
+
+    if (removedResp.results.length > 0) {
+      const result = removedResp.results[0];
+      if (result.inCanonicalGraph === false) {
+        this.addResult('test46_removed_false', true, 'Removed entity has inCanonicalGraph=false');
+      } else {
+        this.addResult('test46_removed_false', false,
+          `Expected inCanonicalGraph=false for removed entity, got ${result.inCanonicalGraph}`);
+      }
+    } else {
+      this.addResult('test46_removed_false', false, 'No results for removed space search');
+    }
+
+    // Search for an entity that was never in the canonical graph
+    const neverCanonicalResp = await this.search({
+      query: 'Alice High',
+      scope: 'GLOBAL',
+      limit: 1,
+    });
+
+    if (neverCanonicalResp.results.length > 0) {
+      const result = neverCanonicalResp.results[0];
+      if (result.inCanonicalGraph === false) {
+        this.addResult('test46_never_canonical_false', true, 'Non-canonical entity has inCanonicalGraph=false');
+      } else {
+        this.addResult('test46_never_canonical_false', false,
+          `Expected inCanonicalGraph=false for non-canonical entity, got ${result.inCanonicalGraph}`);
+      }
+    } else {
+      this.addResult('test46_never_canonical_false', false, 'No results for Alice High search');
+    }
+  }
+
   printSummary() {
     console.log(`\n${BLUE}━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━${NC}`);
 
@@ -2924,6 +2995,7 @@ async function main() {
     await validator.test43_SubtreeCascadeAndRejoin();
     await validator.test44_TopologyPersistenceAndFinalState();
     await validator.test45_SpaceScopeLeafSpaceReturnsOnlyOwnEntities();
+    await validator.test46_InCanonicalGraphFieldReturned();
 
     const allPassed = validator.printSummary();
     process.exit(allPassed ? 0 : 1);
