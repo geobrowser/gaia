@@ -83,7 +83,7 @@ See the [search-admin documentation](../search-admin/README.md) for manual index
 | `KAFKA_BATCH_TIMEOUT_MS` | Max wait time before flushing batch (entities consumer, ms) | `1000` |
 | `SCORES_BATCH_SIZE` | Messages to batch before sending (scores consumer) | `10` |
 | `SCORES_BATCH_TIMEOUT_MS` | Max wait time before flushing batch (scores consumer, ms) | `1000` |
-| `CHANNEL_BUFFER_SIZE` | Max batches in flight per channel | `5` |
+| `CHANNEL_BUFFER_SIZE` | Max batches in flight per channel | `2` |
 | `KAFKA_USERNAME` | SASL username for managed Kafka (optional, enables SASL/SSL if set) | - |
 | `KAFKA_PASSWORD` | SASL password for managed Kafka (required if username is set) | - |
 | `KAFKA_SSL_CA_PEM` | Custom CA certificate in PEM format (optional) | - |
