@@ -43,8 +43,8 @@ struct BufferedEvent {
 struct BlockBuffer {
     /// Events grouped by block number.
     events: HashMap<u64, Vec<BufferedEvent>>,
-    /// When each block was first seen.
-    first_seen: HashMap<u64, Instant>,
+    /// When each block last received an event or summary.
+    last_activity: HashMap<u64, Instant>,
     /// Block summaries keyed by block number.
     summaries: HashMap<u64, BlockSummaryInfo>,
     /// Timeout for waiting for is_last event.
@@ -55,7 +55,7 @@ impl BlockBuffer {
     fn new(stale_timeout: Duration) -> Self {
         Self {
             events: HashMap::new(),
-            first_seen: HashMap::new(),
+            last_activity: HashMap::new(),
             summaries: HashMap::new(),
             stale_timeout,
         }
@@ -63,9 +63,7 @@ impl BlockBuffer {
 
     /// Add an event to the buffer.
     fn push(&mut self, block_number: u64, event: BufferedEvent) {
-        self.first_seen
-            .entry(block_number)
-            .or_insert_with(Instant::now);
+        self.last_activity.insert(block_number, Instant::now());
         self.events.entry(block_number).or_default().push(event);
     }
 
@@ -75,11 +73,11 @@ impl BlockBuffer {
         summary: hermes_schema::pb::block_summary::HermesBlockSummary,
         expected_count: usize,
     ) {
+        self.last_activity.insert(block_number, Instant::now());
         self.summaries.insert(
             block_number,
             BlockSummaryInfo {
                 summary,
-                received_at: Instant::now(),
                 expected_count,
             },
         );
@@ -99,7 +97,7 @@ impl BlockBuffer {
 
     /// Remove and return all events for a block, sorted by sequence.
     fn take_block(&mut self, block_number: u64) -> Vec<BufferedEvent> {
-        self.first_seen.remove(&block_number);
+        self.last_activity.remove(&block_number);
         let mut events = self.events.remove(&block_number).unwrap_or_default();
         events.sort_by_key(|e| e.msg.sequence());
         events
@@ -110,14 +108,8 @@ impl BlockBuffer {
         let now = Instant::now();
         let mut blocks = Vec::new();
 
-        for (block, first_seen) in &self.first_seen {
-            if now.duration_since(*first_seen) > self.stale_timeout {
-                blocks.push(*block);
-            }
-        }
-
-        for (block, summary) in &self.summaries {
-            if now.duration_since(summary.received_at) > self.stale_timeout {
+        for (block, last_activity) in &self.last_activity {
+            if now.duration_since(*last_activity) > self.stale_timeout {
                 blocks.push(*block);
             }
         }
@@ -131,7 +123,6 @@ impl BlockBuffer {
 #[derive(Clone)]
 struct BlockSummaryInfo {
     summary: hermes_schema::pb::block_summary::HermesBlockSummary,
-    received_at: Instant,
     expected_count: usize,
 }
 
@@ -1744,6 +1735,7 @@ async fn process_block(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::consumer::KgMessage;
     use crate::models::spaces::{SpaceItem, SpaceType};
 
     #[test]
@@ -1763,5 +1755,57 @@ mod tests {
         apply_pending_space_topic(&mut space, &pending);
 
         assert_eq!(space.topic_id, Some(topic_id));
+    }
+
+    #[test]
+    fn test_stale_blocks_use_last_activity_not_first_seen() {
+        let mut buffer = BlockBuffer::new(Duration::from_millis(10));
+        let block_number = 42;
+
+        buffer.push(
+            block_number,
+            BufferedEvent {
+                msg: KgMessage::CreateSpace(hermes_schema::pb::space::HermesCreateSpace {
+                    meta: Some(BlockchainMetadata {
+                        created_at: 0,
+                        created_by: vec![],
+                        block_number,
+                        cursor: "cursor".to_string(),
+                        sequence: 0,
+                        is_last: false,
+                    }),
+                    space_id: vec![0; 16],
+                    payload: None,
+                }),
+                topic: "space.creations".to_string(),
+                partition: 0,
+                offset: 0,
+                event_type: Some("SPACE_REGISTERED".to_string()),
+                event_id: None,
+            },
+        );
+
+        std::thread::sleep(Duration::from_millis(7));
+        buffer.insert_summary(
+            block_number,
+            hermes_schema::pb::block_summary::HermesBlockSummary {
+                block_number,
+                cursor: "cursor".to_string(),
+                created_at: 0,
+                total_events: 1,
+                counts_by_topic: HashMap::new(),
+                counts_by_event_type: HashMap::new(),
+            },
+            1,
+        );
+
+        std::thread::sleep(Duration::from_millis(7));
+        assert!(
+            buffer.stale_blocks().is_empty(),
+            "recent block activity should reset stale timeout"
+        );
+
+        std::thread::sleep(Duration::from_millis(5));
+        assert_eq!(buffer.stale_blocks(), vec![block_number]);
     }
 }
