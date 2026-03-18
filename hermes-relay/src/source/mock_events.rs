@@ -865,21 +865,20 @@ pub fn membership_requested(
 // Content Actions
 // =============================================================================
 
-// Solidity type for topic declared data: bytes16
-type TopicDeclaredDataType = sol! { bytes16 };
-
 /// Create a TOPIC_DECLARED action.
 ///
 /// - `space_id`: The space declaring the topic
-/// - `topic_id`: The 16-byte topic UUID
+/// - `topic_id`: The 16-byte topic UUID stored in the first 16 bytes of `topic`
 pub fn topic_declared(space_id: SpaceId, topic_id: TopicId) -> Action {
-    use alloy::primitives::FixedBytes;
+    let mut topic = topic_id.to_vec();
+    topic.extend_from_slice(&[0u8; 16]);
+
     Action {
         from_id: space_id.to_vec(),
         to_id: vec![0u8; 16],
         action: actions::TOPIC_DECLARED.to_vec(),
-        topic: vec![0u8; 32], // Empty topic field
-        data: TopicDeclaredDataType::abi_encode(&FixedBytes::<16>::from_slice(&topic_id)),
+        topic,
+        data: vec![],
     }
 }
 
@@ -1833,6 +1832,19 @@ mod tests {
         assert_eq!(action.action, actions::SUBSPACE_TOPIC_DECLARED.to_vec());
         assert_eq!(&action.topic[0..16], &subspace);
         assert_eq!(&action.topic[16..32], &topic);
+    }
+
+    #[test]
+    fn test_topic_declared_format() {
+        let space_id = make_id(0x01);
+        let topic_id = make_id(0x02);
+        let action = topic_declared(space_id, topic_id);
+
+        assert_eq!(action.from_id, space_id.to_vec());
+        assert_eq!(action.action, actions::TOPIC_DECLARED.to_vec());
+        assert_eq!(&action.topic[0..16], &topic_id);
+        assert_eq!(&action.topic[16..32], &[0u8; 16]);
+        assert!(action.data.is_empty());
     }
 
     #[test]

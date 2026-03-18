@@ -262,7 +262,7 @@ cargo bench -p hermes-pipeline -- 'decode_proposal_created'
 | `decode_address_arg` | ~18 ns | Slice extraction |
 | `decode_proposal_voted` | ~32 ns | Fixed tuple decode |
 | `decode_vote_data` | ~37 ns | Fixed tuple decode |
-| `decode_topic_declared` | ~18 ns | Fixed bytes16 decode |
+| `decode_topic_declared` | ~18 ns | Slice extraction from topic field |
 | `decode_flag_data` | ~68 ns | String decode + UTF-8 validation |
 | `decode_proposal_created` (1 action) | ~204 ns | Dynamic array decode |
 | `decode_proposal_created` (50 actions) | ~5.7 µs | ~113 ns/action linear scaling |
