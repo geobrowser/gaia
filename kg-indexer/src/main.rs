@@ -693,6 +693,7 @@ const INDEXER_TOPICS: &[&str] = &[
     "space.creations",
     "space.membership",
     "space.trust.extensions",
+    "space.topics",
     "space.governance",
 ];
 
@@ -702,6 +703,7 @@ const EXPECTED_EVENT_TYPES: &[&str] = &[
     "ROLE_GRANTED",
     "ROLE_REVOKED",
     "TRUST_EXTENSION",
+    "TOPIC_DECLARED",
     "PROPOSAL_CREATED",
     "PROPOSAL_UPDATED",
     "PROPOSAL_VOTED",
