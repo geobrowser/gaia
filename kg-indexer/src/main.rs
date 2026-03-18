@@ -581,40 +581,16 @@ async fn async_main() -> Result<(), IndexerError> {
                                 }
                             }
 
-                            // If this is the last event in the block, process all buffered events
+                            // `is_last` is assigned by the producer, but Kafka can still deliver
+                            // that event before lower-sequence messages from other topics in the
+                            // same block. Treat it as a hint only; summary completion or idle
+                            // timeout are the safe completion signals.
                             if is_last {
-                                let events = buffer.take_block(block_number);
-                                let event_count = events.len();
-
                                 debug!(
                                     block_number = block_number,
-                                    event_count = event_count,
-                                    "Processing block"
+                                    buffered_event_count = buffer.buffered_count(block_number),
+                                    "Received is_last marker; waiting for block summary or stale timeout"
                                 );
-
-                                let summary = buffer.take_summary(block_number);
-                                let result = process_buffered_block(
-                                    events,
-                                    &storage,
-                                    &consumer,
-                                    summary,
-                                    BlockProcessReason::IsLast,
-                                )
-                                .await;
-                                if let Some((processed, errors)) = result {
-                                    processed_count += processed;
-                                    error_count += errors;
-                                    blocks_processed += 1;
-                                }
-
-                                if blocks_processed.is_multiple_of(10) && blocks_processed > 0 {
-                                    info!(
-                                        blocks = blocks_processed,
-                                        messages = processed_count,
-                                        errors = error_count,
-                                        "Progress update"
-                                    );
-                                }
                             }
                         };
                         fut.instrument(span).await;
@@ -713,7 +689,6 @@ fn expected_count_for_indexer(
 
 enum BlockProcessReason {
     Summary,
-    IsLast,
     Stale,
 }
 
@@ -721,7 +696,6 @@ impl BlockProcessReason {
     fn as_str(&self) -> &'static str {
         match self {
             BlockProcessReason::Summary => "summary",
-            BlockProcessReason::IsLast => "is_last",
             BlockProcessReason::Stale => "stale",
         }
     }
