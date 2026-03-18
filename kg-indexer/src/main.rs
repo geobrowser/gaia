@@ -745,6 +745,7 @@ fn event_type_label(event: &BufferedEvent) -> String {
         KgMessage::RoleGranted(_) => "ROLE_GRANTED".to_string(),
         KgMessage::RoleRevoked(_) => "ROLE_REVOKED".to_string(),
         KgMessage::TrustExtension(_) => "TRUST_EXTENSION".to_string(),
+        KgMessage::TopicDeclared(_) => "TOPIC_DECLARED".to_string(),
         KgMessage::ProposalCreated(_) => "PROPOSAL_CREATED".to_string(),
         KgMessage::ProposalUpdated(_) => "PROPOSAL_UPDATED".to_string(),
         KgMessage::ProposalVoted(_) => "PROPOSAL_VOTED".to_string(),
@@ -761,6 +762,30 @@ fn blockchain_metadata_to_strings(
         || ("0".to_string(), "0".to_string()),
         |m| (m.created_at.to_string(), m.block_number.to_string()),
     )
+}
+
+fn make_topic_entity(
+    topic_id: uuid::Uuid,
+    meta: Option<&hermes_schema::pb::blockchain_metadata::BlockchainMetadata>,
+) -> models::entities::EntityItem {
+    let (created_at, created_at_block) = blockchain_metadata_to_strings(meta);
+
+    models::entities::EntityItem {
+        id: topic_id,
+        created_at: created_at.clone(),
+        created_at_block: created_at_block.clone(),
+        updated_at: created_at,
+        updated_at_block: created_at_block,
+    }
+}
+
+fn apply_pending_space_topic(
+    space: &mut models::spaces::SpaceItem,
+    pending_space_topics: &HashMap<uuid::Uuid, uuid::Uuid>,
+) {
+    if let Some(topic_id) = pending_space_topics.get(&space.id).copied() {
+        space.topic_id = Some(topic_id);
+    }
 }
 
 /// Maximum length for edit names stored in the database.
@@ -1110,6 +1135,15 @@ async fn process_message(
                 None => 0,
             }
         }
+        KgMessage::TopicDeclared(event) => {
+            let assignment = handlers::topics::handle_topic_declared(&event)?;
+            let topic_entity = make_topic_entity(assignment.topic_id, event.meta.as_ref());
+            storage.insert_entities(&[topic_entity], &mut tx).await?;
+            storage
+                .update_space_topic(assignment.space_id, assignment.topic_id, &mut tx)
+                .await?;
+            2
+        }
         KgMessage::ProposalCreated(event) => {
             let result = handlers::governance::handle_proposal_created(&event)?;
             debug!(
@@ -1232,6 +1266,7 @@ async fn process_block(
         .await?;
     let mut total_ops = 0;
     let tx_start = Instant::now();
+    let mut pending_space_topics: HashMap<uuid::Uuid, uuid::Uuid> = HashMap::new();
 
     // Process each message in sequence order
     for event in &events {
@@ -1270,6 +1305,14 @@ async fn process_block(
                 extension_type = tracing::field::Empty,
                 parent_space_id = tracing::field::Empty,
                 child_space_id = tracing::field::Empty,
+                "otel.status_code" = tracing::field::Empty,
+                "otel.status_message" = tracing::field::Empty
+            ),
+            KgMessage::TopicDeclared(_) => info_span!(
+                "kg_indexer.handle_topic_declared",
+                event_id = event_id,
+                space_id = tracing::field::Empty,
+                topic_id = tracing::field::Empty,
                 "otel.status_code" = tracing::field::Empty,
                 "otel.status_message" = tracing::field::Empty
             ),
@@ -1406,7 +1449,8 @@ async fn process_block(
                     ops
                 }
                 KgMessage::CreateSpace(space) => {
-                    let space_item = handlers::spaces::handle_create_space(space)?;
+                    let mut space_item = handlers::spaces::handle_create_space(space)?;
+                    apply_pending_space_topic(&mut space_item, &pending_space_topics);
 
                     // Record trace context
                     event_span.record("space_id", display(space_item.id));
@@ -1515,6 +1559,21 @@ async fn process_block(
                         }
                         None => 0,
                     }
+                }
+                KgMessage::TopicDeclared(topic_event) => {
+                    let assignment = handlers::topics::handle_topic_declared(topic_event)?;
+
+                    event_span.record("space_id", display(assignment.space_id));
+                    event_span.record("topic_id", display(assignment.topic_id));
+
+                    let topic_entity =
+                        make_topic_entity(assignment.topic_id, topic_event.meta.as_ref());
+                    storage.insert_entities(&[topic_entity], &mut tx).await?;
+                    storage
+                        .update_space_topic(assignment.space_id, assignment.topic_id, &mut tx)
+                        .await?;
+                    pending_space_topics.insert(assignment.space_id, assignment.topic_id);
+                    2
                 }
                 KgMessage::ProposalCreated(proposal_event) => {
                     let result = handlers::governance::handle_proposal_created(proposal_event)?;
@@ -1678,4 +1737,29 @@ async fn process_block(
         commit_failures,
         db_tx_duration_ms,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::spaces::{SpaceItem, SpaceType};
+
+    #[test]
+    fn test_apply_pending_space_topic_sets_topic_id() {
+        let space_id = uuid::Uuid::new_v4();
+        let topic_id = uuid::Uuid::new_v4();
+        let mut pending = HashMap::new();
+        pending.insert(space_id, topic_id);
+
+        let mut space = SpaceItem {
+            id: space_id,
+            space_type: SpaceType::Dao,
+            address: "0x123".to_string(),
+            topic_id: None,
+        };
+
+        apply_pending_space_topic(&mut space, &pending);
+
+        assert_eq!(space.topic_id, Some(topic_id));
+    }
 }
