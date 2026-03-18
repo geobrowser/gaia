@@ -1,0 +1,69 @@
+# Delivery Worker Deployment (Staging)
+#
+# Polls the notification outbox for pending deliveries and POSTs
+# to registered webhooks with HMAC-SHA256 signatures.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: delivery-worker
+  namespace: notifications-staging
+  labels:
+    app: delivery-worker
+    environment: staging
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: delivery-worker
+  template:
+    metadata:
+      labels:
+        app: delivery-worker
+        environment: staging
+    spec:
+      restartPolicy: Always
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 1001
+        fsGroup: 1001
+      imagePullSecrets:
+        - name: regcred
+      containers:
+        - name: delivery-worker
+          image: registry.digitalocean.com/geo/delivery-worker:latest
+          imagePullPolicy: Always
+          env:
+            # Database configuration
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: scoring-service-credentials
+                  key: DATABASE_URL
+            # Worker configuration
+            - name: POLL_INTERVAL_MS
+              value: "5000"
+            - name: MAX_RETRIES
+              value: "10"
+            - name: BATCH_SIZE
+              value: "50"
+            # Logging
+            - name: RUST_LOG
+              value: "info,delivery_worker=debug"
+          startupProbe:
+            exec:
+              command: ["pgrep", "-x", "delivery-worker"]
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 6
+          livenessProbe:
+            exec:
+              command: ["pgrep", "-x", "delivery-worker"]
+            periodSeconds: 30
+            failureThreshold: 3
+          resources:
+            requests:
+              memory: "128Mi"
+              cpu: "50m"
+            limits:
+              memory: "256Mi"
+              cpu: "250m"

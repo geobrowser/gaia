@@ -884,3 +884,58 @@ export const relationVersions = pgTable(
 export type DbEditVersion = InferSelectModel<typeof editVersions>
 export type DbValueVersion = InferSelectModel<typeof valueVersions>
 export type DbRelationVersion = InferSelectModel<typeof relationVersions>
+
+/** Notification Service Tables */
+
+/**
+ * app_webhooks
+ *
+ * Registered webhook endpoints for app servers that receive governance notifications.
+ * Webhooks are manually seeded in the DB (no registration API in v1).
+ */
+export const appWebhooks = pgTable("app_webhooks", {
+	id: uuid().primaryKey().defaultRandom(),
+	appName: text("app_name").notNull().unique(),
+	url: text().notNull(),
+	secret: text().notNull(),
+	createdAt: timestamp("created_at", {withTimezone: true}).defaultNow().notNull(),
+})
+
+/**
+ * notification_outbox
+ *
+ * Stores governance notifications before delivery.
+ * Written by the notification-indexer from Kafka events and periodic rejection polling.
+ */
+export const notificationOutbox = pgTable("notification_outbox", {
+	id: uuid().primaryKey().defaultRandom(),
+	idempotencyKey: text("idempotency_key").notNull().unique(),
+	eventType: text("event_type").notNull(),
+	payload: jsonb().notNull(),
+	createdAt: timestamp("created_at", {withTimezone: true}).defaultNow().notNull(),
+})
+
+/**
+ * notification_deliveries
+ *
+ * Tracks delivery attempts for each outbox entry to each webhook.
+ * The delivery-worker polls for pending rows and POSTs with HMAC signatures.
+ */
+export const notificationDeliveries = pgTable(
+	"notification_deliveries",
+	{
+		id: uuid().primaryKey().defaultRandom(),
+		outboxId: uuid("outbox_id").notNull().references(() => notificationOutbox.id),
+		webhookId: uuid("webhook_id").notNull().references(() => appWebhooks.id),
+		status: text().notNull().default("pending"),
+		attempts: smallint().notNull().default(0),
+		lastError: text("last_error"),
+		nextRetryAt: timestamp("next_retry_at", {withTimezone: true}).defaultNow().notNull(),
+		deliveredAt: timestamp("delivered_at", {withTimezone: true}),
+		createdAt: timestamp("created_at", {withTimezone: true}).defaultNow().notNull(),
+	},
+	(table) => [
+		unique().on(table.outboxId, table.webhookId),
+		index("idx_deliveries_pending").on(table.status, table.nextRetryAt),
+	],
+)
