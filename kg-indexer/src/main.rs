@@ -43,11 +43,11 @@ struct BufferedEvent {
 struct BlockBuffer {
     /// Events grouped by block number.
     events: HashMap<u64, Vec<BufferedEvent>>,
-    /// When each block last received an event or summary.
-    last_activity: HashMap<u64, Instant>,
+    /// When each block was first observed.
+    first_seen: HashMap<u64, Instant>,
     /// Block summaries keyed by block number.
     summaries: HashMap<u64, BlockSummaryInfo>,
-    /// Timeout for waiting for is_last event.
+    /// Timeout before force-processing an incomplete block.
     stale_timeout: Duration,
 }
 
@@ -55,7 +55,7 @@ impl BlockBuffer {
     fn new(stale_timeout: Duration) -> Self {
         Self {
             events: HashMap::new(),
-            last_activity: HashMap::new(),
+            first_seen: HashMap::new(),
             summaries: HashMap::new(),
             stale_timeout,
         }
@@ -63,7 +63,9 @@ impl BlockBuffer {
 
     /// Add an event to the buffer.
     fn push(&mut self, block_number: u64, event: BufferedEvent) {
-        self.last_activity.insert(block_number, Instant::now());
+        self.first_seen
+            .entry(block_number)
+            .or_insert_with(Instant::now);
         self.events.entry(block_number).or_default().push(event);
     }
 
@@ -73,12 +75,12 @@ impl BlockBuffer {
         summary: hermes_schema::pb::block_summary::HermesBlockSummary,
         expected_count: usize,
     ) {
-        self.last_activity.insert(block_number, Instant::now());
         self.summaries.insert(
             block_number,
             BlockSummaryInfo {
                 summary,
                 expected_count,
+                received_at: Instant::now(),
             },
         );
     }
@@ -97,7 +99,7 @@ impl BlockBuffer {
 
     /// Remove and return all events for a block, sorted by sequence.
     fn take_block(&mut self, block_number: u64) -> Vec<BufferedEvent> {
-        self.last_activity.remove(&block_number);
+        self.first_seen.remove(&block_number);
         let mut events = self.events.remove(&block_number).unwrap_or_default();
         events.sort_by_key(|e| e.msg.sequence());
         events
@@ -108,8 +110,14 @@ impl BlockBuffer {
         let now = Instant::now();
         let mut blocks = Vec::new();
 
-        for (block, last_activity) in &self.last_activity {
-            if now.duration_since(*last_activity) > self.stale_timeout {
+        for (block, first_seen) in &self.first_seen {
+            if now.duration_since(*first_seen) > self.stale_timeout {
+                blocks.push(*block);
+            }
+        }
+
+        for (block, summary) in &self.summaries {
+            if now.duration_since(summary.received_at) > self.stale_timeout {
                 blocks.push(*block);
             }
         }
@@ -124,6 +132,7 @@ impl BlockBuffer {
 struct BlockSummaryInfo {
     summary: hermes_schema::pb::block_summary::HermesBlockSummary,
     expected_count: usize,
+    received_at: Instant,
 }
 
 fn build_telemetry_config() -> hermes_instrumentation::Config {
@@ -194,6 +203,12 @@ async fn async_main() -> Result<(), IndexerError> {
     let stale_timeout_ms: u64 = env::var("BLOCK_STALE_TIMEOUT_MS")
         .ok()
         .and_then(|s| s.parse().ok())
+        .or_else(|| {
+            env::var("BLOCK_STALE_TIMEOUT_SECS")
+                .ok()
+                .and_then(|s| s.parse::<u64>().ok())
+                .map(|secs| secs * 1000)
+        })
         .unwrap_or(1000);
 
     // Initialize storage
@@ -293,16 +308,13 @@ async fn async_main() -> Result<(), IndexerError> {
 
     // Main processing loop
     //
-    // Events are buffered by block number and processed together when `is_last=true`
-    // arrives, ensuring correct ordering within a block. However, we can't rely solely
-    // on `is_last` because:
-    //   1. It may arrive on a topic we don't subscribe to (e.g., curation.votes)
-    //   2. The producer may crash before sending it
-    //   3. Network issues may cause it to be lost
+    // Events are buffered by block number and normally flushed only once we have the
+    // block summary and the expected number of events for the topics kg-indexer consumes.
+    // Timeout is the fallback when the summary never arrives or delivery stays incomplete.
     //
     // To handle these cases, we use `tokio::select!` with a periodic tick that checks
     // for stale blocks (buffered longer than `stale_timeout`). The tick runs independently
-    // of the Kafka stream, so even if no messages arrive, stale blocks get processed.
+    // of the Kafka stream, so even if no messages arrive, timed out blocks get processed.
     let mut stream = consumer.stream();
     let stale_timeout = Duration::from_millis(stale_timeout_ms);
     let mut buffer = BlockBuffer::new(stale_timeout);
@@ -1732,7 +1744,7 @@ mod tests {
     }
 
     #[test]
-    fn test_stale_blocks_use_last_activity_not_first_seen() {
+    fn test_stale_blocks_use_fixed_deadline_from_first_seen() {
         let mut buffer = BlockBuffer::new(Duration::from_millis(10));
         let block_number = 42;
 
@@ -1774,12 +1786,32 @@ mod tests {
         );
 
         std::thread::sleep(Duration::from_millis(7));
-        assert!(
-            buffer.stale_blocks().is_empty(),
-            "recent block activity should reset stale timeout"
+        assert_eq!(
+            buffer.stale_blocks(),
+            vec![block_number],
+            "timeout should be measured from first block sighting, not reset by later summary arrival"
+        );
+    }
+
+    #[test]
+    fn test_stale_blocks_when_summary_arrives_before_events() {
+        let mut buffer = BlockBuffer::new(Duration::from_millis(10));
+        let block_number = 7;
+
+        buffer.insert_summary(
+            block_number,
+            hermes_schema::pb::block_summary::HermesBlockSummary {
+                block_number,
+                cursor: "cursor".to_string(),
+                created_at: 0,
+                total_events: 1,
+                counts_by_topic: HashMap::new(),
+                counts_by_event_type: HashMap::new(),
+            },
+            1,
         );
 
-        std::thread::sleep(Duration::from_millis(5));
+        std::thread::sleep(Duration::from_millis(11));
         assert_eq!(buffer.stale_blocks(), vec![block_number]);
     }
 }
