@@ -731,18 +731,22 @@ pub fn decode_address(data: &[u8]) -> Result<Vec<u8>, DecodeError> {
 // Content Decoding
 // ============================================================================
 
-/// Decode TOPIC_DECLARED data.
+/// Decode the topic id from a TOPIC_DECLARED `topic` field.
 ///
-/// Encoding: `abi.encode(bytes16(topicId))`
-pub fn decode_topic_declared(data: &[u8]) -> Result<Vec<u8>, DecodeError> {
-    if data.is_empty() {
+/// Encoding: `bytes32(bytes16(topicId) | padding)`
+pub fn decode_topic_declared(topic: &[u8]) -> Result<Vec<u8>, DecodeError> {
+    if topic.is_empty() {
         return Ok(vec![0; 16]);
     }
 
-    let topic_id = sol_data::FixedBytes::<16>::abi_decode(data)
-        .map_err(|e| DecodeError::AbiDecode(e.to_string()))?;
+    if topic.len() < 16 {
+        return Err(DecodeError::DataTooShort {
+            expected: 16,
+            actual: topic.len(),
+        });
+    }
 
-    Ok(topic_id.to_vec())
+    Ok(topic[..16].to_vec())
 }
 
 /// Decoded edits published data.
@@ -890,10 +894,10 @@ mod tests {
 
     #[test]
     fn test_decode_topic_declared() {
-        let topic_id = FixedBytes::<16>::from([1u8; 16]);
-        let encoded = sol_data::FixedBytes::<16>::abi_encode(&topic_id);
+        let mut topic = vec![1u8; 16];
+        topic.extend_from_slice(&[0u8; 16]);
 
-        let result = decode_topic_declared(&encoded).unwrap();
+        let result = decode_topic_declared(&topic).unwrap();
         assert_eq!(result, vec![1u8; 16]);
     }
 
@@ -901,6 +905,12 @@ mod tests {
     fn test_decode_topic_declared_empty() {
         let result = decode_topic_declared(&[]).unwrap();
         assert_eq!(result, vec![0u8; 16]);
+    }
+
+    #[test]
+    fn test_decode_topic_declared_short_topic() {
+        let result = decode_topic_declared(&[1u8; 15]).unwrap_err();
+        assert!(matches!(result, DecodeError::DataTooShort { expected: 16, actual: 15 }));
     }
 
     #[test]
