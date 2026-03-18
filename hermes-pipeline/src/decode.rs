@@ -910,7 +910,14 @@ mod tests {
     #[test]
     fn test_decode_topic_declared_short_topic() {
         let result = decode_topic_declared(&[1u8; 15]).unwrap_err();
-        assert!(matches!(result, DecodeError::DataTooShort { expected: 16, actual: 15 }));
+
+        match result {
+            DecodeError::DataTooShort {
+                expected: 16,
+                actual: 15,
+            } => {}
+            other => panic!("unexpected error: {other:?}"),
+        }
     }
 
     #[test]
