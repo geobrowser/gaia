@@ -146,6 +146,11 @@ function mapToActionResponse(action: ProposalWithVotes["actions"][number]): Acti
 		case "SubspaceTopicRemoved":
 			if (!action.targetId) return {actionType: "UNKNOWN"}
 			return {actionType: "SUBSPACE_TOPIC_REMOVED", targetTopicId: action.targetId}
+		case "SetTopic":
+			if (!action.targetId) return {actionType: "UNKNOWN"}
+			return {actionType: "SET_TOPIC", targetTopicId: action.targetId}
+		case "UnsetTopic":
+			return {actionType: "UNSET_TOPIC"}
 		default:
 			return {actionType: "UNKNOWN"}
 	}

@@ -220,6 +220,48 @@ describe("GET /proposals/space/:spaceId/status", () => {
 			expect(body.nextCursor).toBeNull()
 		})
 
+		it("maps SET_TOPIC and UNSET_TOPIC actions in list responses", async () => {
+			const row = makeDbProposalRow({
+				actions_json: [
+					{
+						action_type: "SetTopic",
+						target_id: "880e8400-e29b-41d4-a716-446655440000",
+						content_uri: null,
+						content_id: null,
+						quorum: null,
+						fast_threshold: null,
+						slow_threshold: null,
+						duration: null,
+					},
+					{
+						action_type: "UnsetTopic",
+						target_id: null,
+						content_uri: null,
+						content_id: null,
+						quorum: null,
+						fast_threshold: null,
+						slow_threshold: null,
+						duration: null,
+					},
+				],
+			})
+			db.execute.mockResolvedValueOnce({rows: [row]})
+
+			const res = await app.request("/proposals/space/660e8400-e29b-41d4-a716-446655440000/status")
+
+			expect(res.status).toBe(200)
+			const body = await res.json()
+			expect(body.proposals[0].actions).toEqual([
+				{
+					actionType: "SET_TOPIC",
+					targetTopicId: "880e8400-e29b-41d4-a716-446655440000",
+				},
+				{
+					actionType: "UNSET_TOPIC",
+				},
+			])
+		})
+
 		it("returns nextCursor when there are more results", async () => {
 			// Return 21 rows (limit + 1) to indicate there are more
 			const rows = Array.from({length: 21}, (_, i) =>
@@ -339,6 +381,17 @@ describe("GET /proposals/space/:spaceId/status", () => {
 
 			const res = await app.request(
 				"/proposals/space/660e8400-e29b-41d4-a716-446655440000/status?actionTypes=Publish,AddMember&status=EXECUTABLE",
+			)
+
+			expect(res.status).toBe(200)
+			expect(db.execute).toHaveBeenCalled()
+		})
+
+		it("accepts SET_TOPIC and UNSET_TOPIC action type filters", async () => {
+			db.execute.mockResolvedValueOnce({rows: []})
+
+			const res = await app.request(
+				"/proposals/space/660e8400-e29b-41d4-a716-446655440000/status?actionTypes=SetTopic,UnsetTopic",
 			)
 
 			expect(res.status).toBe(200)

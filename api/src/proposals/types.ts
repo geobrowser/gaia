@@ -32,6 +32,8 @@ export const PROPOSAL_ACTION_TYPES = [
 	"SubspaceUnrelated",
 	"SubspaceTopicDeclared",
 	"SubspaceTopicRemoved",
+	"SetTopic",
+	"UnsetTopic",
 ] as const
 export type ProposalActionType = (typeof PROPOSAL_ACTION_TYPES)[number]
 
@@ -250,6 +252,22 @@ export interface SubspaceTopicAction {
 }
 
 /**
+ * Action to set the current space topic.
+ */
+export interface SetTopicAction {
+	actionType: "SET_TOPIC"
+	/** Topic entity ID */
+	targetTopicId: string
+}
+
+/**
+ * Action to unset the current space topic.
+ */
+export interface UnsetTopicAction {
+	actionType: "UNSET_TOPIC"
+}
+
+/**
  * Unknown action type - used for forward compatibility.
  */
 export interface UnknownAction {
@@ -287,6 +305,8 @@ export type ActionResponse =
 	| UpdateVotingSettingsAction
 	| SubspaceEdgeAction
 	| SubspaceTopicAction
+	| SetTopicAction
+	| UnsetTopicAction
 	| UnknownAction
 
 /**
