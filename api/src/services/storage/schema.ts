@@ -899,6 +899,7 @@ export const appWebhooks = pgTable("app_webhooks", {
 	url: text().notNull(),
 	secret: text().notNull(),
 	createdAt: timestamp("created_at", {withTimezone: true}).defaultNow().notNull(),
+	updatedAt: timestamp("updated_at", {withTimezone: true}).defaultNow().notNull(),
 })
 
 /**
@@ -913,6 +914,7 @@ export const notificationOutbox = pgTable("notification_outbox", {
 	eventType: text("event_type").notNull(),
 	payload: jsonb().notNull(),
 	createdAt: timestamp("created_at", {withTimezone: true}).defaultNow().notNull(),
+	updatedAt: timestamp("updated_at", {withTimezone: true}).defaultNow().notNull(),
 })
 
 /**
@@ -933,6 +935,7 @@ export const notificationDeliveries = pgTable(
 		nextRetryAt: timestamp("next_retry_at", {withTimezone: true}).defaultNow().notNull(),
 		deliveredAt: timestamp("delivered_at", {withTimezone: true}),
 		createdAt: timestamp("created_at", {withTimezone: true}).defaultNow().notNull(),
+		updatedAt: timestamp("updated_at", {withTimezone: true}).defaultNow().notNull(),
 	},
 	(table) => [
 		unique().on(table.outboxId, table.webhookId),

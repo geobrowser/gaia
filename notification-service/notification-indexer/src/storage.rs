@@ -1,6 +1,7 @@
 //! Storage layer for notification outbox and delivery fan-out.
 
 use hermes_instrumentation::instrument;
+use sha2::{Digest, Sha256};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
@@ -75,7 +76,10 @@ impl Storage {
         for editor_id in editors {
             let mut payload = event.payload.clone();
             payload.user_space_id = Some(editor_id.to_string());
-            let idempotency_key = format!("{}:{}", event.idempotency_key, editor_id);
+
+            // Hash(base:user_space_id) — base is e.g. "12345:0:proposal_created"
+            let pre_hash = format!("{}:{}", event.idempotency_key, editor_id);
+            let idempotency_key = hex::encode(Sha256::digest(pre_hash.as_bytes()));
             payload.idempotency_key = Some(idempotency_key.clone());
 
             let serialized_payload = serde_json::to_value(&payload).map_err(|e| {

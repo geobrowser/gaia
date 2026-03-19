@@ -10,6 +10,7 @@ CREATE TABLE "app_webhooks" (
 	"url" text NOT NULL,
 	"secret" text NOT NULL,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
 	CONSTRAINT "app_webhooks_app_name_unique" UNIQUE("app_name")
 );
 --> statement-breakpoint
@@ -23,6 +24,7 @@ CREATE TABLE "notification_deliveries" (
 	"next_retry_at" timestamp with time zone DEFAULT now() NOT NULL,
 	"delivered_at" timestamp with time zone,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
 	CONSTRAINT "notification_deliveries_outbox_id_webhook_id_unique" UNIQUE("outbox_id","webhook_id")
 );
 --> statement-breakpoint
@@ -32,6 +34,7 @@ CREATE TABLE "notification_outbox" (
 	"event_type" text NOT NULL,
 	"payload" jsonb NOT NULL,
 	"created_at" timestamp with time zone DEFAULT now() NOT NULL,
+	"updated_at" timestamp with time zone DEFAULT now() NOT NULL,
 	CONSTRAINT "notification_outbox_idempotency_key_unique" UNIQUE("idempotency_key")
 );
 --> statement-breakpoint

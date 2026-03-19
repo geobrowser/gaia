@@ -532,19 +532,34 @@ fn verify_calls(calls: &[WebhookCall], webhook_secret: &str) -> TestResults {
     }
 
     // ===================================================================
-    // All calls have idempotency key containing editor id
+    // All calls have idempotency key (SHA-256 hex hash)
     // ===================================================================
     r.check(
         "all calls have idempotency key",
         calls.iter().all(|c| !c.idempotency_key.is_empty()),
     );
     r.check(
-        "all idempotency keys include user_space_id",
+        "all idempotency keys are 64-char hex (SHA-256)",
         calls.iter().all(|c| {
-            c.body["user_space_id"]
-                .as_str()
-                .map_or(false, |uid| c.idempotency_key.contains(uid))
+            c.idempotency_key.len() == 64
+                && c.idempotency_key.chars().all(|ch| ch.is_ascii_hexdigit())
         }),
+    );
+    // Each unique (event_type, user_space_id) pair should have a unique key.
+    // Multiple webhooks receive the same key for the same user — that's correct.
+    // So the number of distinct keys should equal events × users, not total calls.
+    r.check(
+        "idempotency keys are unique per (event, user) pair",
+        {
+            let keys: std::collections::HashSet<&str> = calls
+                .iter()
+                .map(|c| c.idempotency_key.as_str())
+                .collect();
+            // 3-editor space: 6 events × 3 editors = 18 distinct keys
+            // 1-editor space: 1 event × 1 editor = 1 distinct key
+            // Total: 19
+            keys.len() == 19
+        },
     );
 
     // ===================================================================

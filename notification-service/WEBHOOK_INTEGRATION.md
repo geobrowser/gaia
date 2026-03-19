@@ -233,6 +233,7 @@ Failed deliveries are retried with exponential backoff:
 | 5 | 8 minutes |
 | 6 | 16 minutes |
 | 7 | 32 minutes |
-| 8+ | 1 hour (capped) |
+| 8–13 | 1 hour → 34 hours |
+| 14+ | 48 hours (capped) |
 
-After **10 failed attempts**, the delivery is marked as permanently failed.
+After **100 failed attempts**, the delivery is marked as permanently failed.

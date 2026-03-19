@@ -53,15 +53,15 @@ pub fn should_retry(status: u16) -> bool {
 
 /// Calculate exponential backoff delay in seconds for a given attempt number.
 ///
-/// Formula: min(30 * 2^(attempt-1), 3600) seconds.
-/// Attempt 1 → 30s, attempt 2 → 60s, attempt 3 → 120s, ..., capped at 1 hour.
+/// Formula: min(30 * 2^(attempt-1), 172800) seconds.
+/// Attempt 1 → 30s, attempt 2 → 60s, attempt 3 → 120s, ..., capped at 48 hours.
 pub fn backoff_seconds(attempt: i32) -> i64 {
     let delay = 30i64.saturating_mul(1i64.checked_shl((attempt - 1) as u32).unwrap_or(i64::MAX));
-    delay.min(3600)
+    delay.min(172_800)
 }
 
 /// Maximum number of delivery attempts before marking as failed.
-pub const MAX_RETRIES: i32 = 10;
+pub const MAX_RETRIES: i32 = 100;
 
 #[cfg(test)]
 mod tests {
@@ -124,15 +124,17 @@ mod tests {
 
     #[test]
     fn test_exponential_backoff_calculation() {
-        assert_eq!(backoff_seconds(1), 30);     // 30 * 2^0
-        assert_eq!(backoff_seconds(2), 60);     // 30 * 2^1
-        assert_eq!(backoff_seconds(3), 120);    // 30 * 2^2
-        assert_eq!(backoff_seconds(4), 240);    // 30 * 2^3
-        assert_eq!(backoff_seconds(5), 480);    // 30 * 2^4
-        assert_eq!(backoff_seconds(6), 960);    // 30 * 2^5
-        assert_eq!(backoff_seconds(7), 1920);   // 30 * 2^6
-        assert_eq!(backoff_seconds(8), 3600);   // capped at 1hr
-        assert_eq!(backoff_seconds(9), 3600);   // still capped
-        assert_eq!(backoff_seconds(10), 3600);  // still capped
+        assert_eq!(backoff_seconds(1), 30);       // 30 * 2^0
+        assert_eq!(backoff_seconds(2), 60);       // 30 * 2^1
+        assert_eq!(backoff_seconds(3), 120);      // 30 * 2^2
+        assert_eq!(backoff_seconds(4), 240);      // 30 * 2^3
+        assert_eq!(backoff_seconds(5), 480);      // 30 * 2^4
+        assert_eq!(backoff_seconds(6), 960);      // 30 * 2^5
+        assert_eq!(backoff_seconds(7), 1920);     // 30 * 2^6
+        assert_eq!(backoff_seconds(8), 3840);     // 30 * 2^7
+        assert_eq!(backoff_seconds(13), 122880);  // 30 * 2^12
+        assert_eq!(backoff_seconds(14), 172800);  // capped at 48hr
+        assert_eq!(backoff_seconds(15), 172800);  // still capped
+        assert_eq!(backoff_seconds(100), 172800); // still capped
     }
 }

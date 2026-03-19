@@ -26,7 +26,7 @@ Uses `FOR UPDATE SKIP LOCKED` for safe horizontal scaling — multiple workers c
 | Variable | Default | Description |
 |---|---|---|
 | `POLL_INTERVAL_MS` | `5000` | How often to check for pending deliveries (milliseconds) |
-| `MAX_RETRIES` | `10` | Maximum delivery attempts before marking as permanently failed |
+| `MAX_RETRIES` | `100` | Maximum delivery attempts before marking as permanently failed |
 | `BATCH_SIZE` | `50` | Maximum deliveries to fetch per poll cycle |
 | `HEARTBEAT_INTERVAL_SECS` | `60` | How often to log heartbeat stats (seconds) |
 
@@ -55,7 +55,8 @@ Failed deliveries are retried with exponential backoff:
 | 5 | 8 minutes |
 | 6 | 16 minutes |
 | 7 | 32 minutes |
-| 8+ | 1 hour (capped) |
+| 8–13 | 1 hour → 34 hours |
+| 14+ | 48 hours (capped) |
 
 After `MAX_RETRIES` failed attempts, the delivery is marked as `failed` and logged at `error` level.
 

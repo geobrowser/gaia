@@ -30,13 +30,14 @@ CREATE TABLE IF NOT EXISTS editors (
 );
 CREATE INDEX IF NOT EXISTS editors_space_id_idx ON editors (space_id);
 
--- Notification service tables (matches migration 0046)
+-- Notification service tables (matches migration 0050)
 CREATE TABLE IF NOT EXISTS app_webhooks (
     id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
     app_name text NOT NULL UNIQUE,
     url text NOT NULL,
     secret text NOT NULL,
-    created_at timestamptz DEFAULT now() NOT NULL
+    created_at timestamptz DEFAULT now() NOT NULL,
+    updated_at timestamptz DEFAULT now() NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS notification_outbox (
@@ -44,7 +45,8 @@ CREATE TABLE IF NOT EXISTS notification_outbox (
     idempotency_key text NOT NULL UNIQUE,
     event_type text NOT NULL,
     payload jsonb NOT NULL,
-    created_at timestamptz DEFAULT now() NOT NULL
+    created_at timestamptz DEFAULT now() NOT NULL,
+    updated_at timestamptz DEFAULT now() NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS notification_deliveries (
@@ -57,6 +59,7 @@ CREATE TABLE IF NOT EXISTS notification_deliveries (
     next_retry_at timestamptz DEFAULT now() NOT NULL,
     delivered_at timestamptz,
     created_at timestamptz DEFAULT now() NOT NULL,
+    updated_at timestamptz DEFAULT now() NOT NULL,
     UNIQUE(outbox_id, webhook_id)
 );
 

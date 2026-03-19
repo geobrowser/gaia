@@ -85,13 +85,14 @@ pub fn handle_proposal_created(
 
     let meta = msg.meta.as_ref().ok_or(HandlerError::MissingMetadata)?;
     let block_number = meta.block_number;
+    let sequence = meta.sequence;
     let timestamp = meta.created_at;
 
-    let idempotency_key = format!("proposal_created:{}:{}", proposal_id, block_number);
+    let idempotency_base = format!("{}:{}:proposal_created", block_number, sequence);
 
     Ok(NotificationEvent {
         event_type: NotificationEventType::ProposalCreated,
-        idempotency_key,
+        idempotency_key: idempotency_base,
         payload: NotificationPayload {
             version: PAYLOAD_VERSION,
             event_type: NotificationEventType::ProposalCreated.as_str().to_string(),
@@ -118,13 +119,14 @@ pub fn handle_proposal_updated(
 
     let meta = msg.meta.as_ref().ok_or(HandlerError::MissingMetadata)?;
     let block_number = meta.block_number;
+    let sequence = meta.sequence;
     let timestamp = meta.created_at;
 
-    let idempotency_key = format!("proposal_updated:{}:{}", proposal_id, block_number);
+    let idempotency_base = format!("{}:{}:proposal_updated", block_number, sequence);
 
     Ok(NotificationEvent {
         event_type: NotificationEventType::ProposalUpdated,
-        idempotency_key,
+        idempotency_key: idempotency_base,
         payload: NotificationPayload {
             version: PAYLOAD_VERSION,
             event_type: NotificationEventType::ProposalUpdated.as_str().to_string(),
@@ -161,17 +163,14 @@ pub fn handle_proposal_voted(
 
     let meta = msg.meta.as_ref().ok_or(HandlerError::MissingMetadata)?;
     let block_number = meta.block_number;
+    let sequence = meta.sequence;
     let timestamp = meta.created_at;
 
-    // Include voter_id in key since multiple voters can vote in the same block.
-    let idempotency_key = format!(
-        "proposal_voted:{}:{}:{}",
-        proposal_id, voter_id, block_number
-    );
+    let idempotency_base = format!("{}:{}:proposal_voted", block_number, sequence);
 
     Ok(NotificationEvent {
         event_type: NotificationEventType::ProposalVoted,
-        idempotency_key,
+        idempotency_key: idempotency_base,
         payload: NotificationPayload {
             version: PAYLOAD_VERSION,
             event_type: NotificationEventType::ProposalVoted.as_str().to_string(),
@@ -197,13 +196,14 @@ pub fn handle_proposal_executed(
 
     let meta = msg.meta.as_ref().ok_or(HandlerError::MissingMetadata)?;
     let block_number = meta.block_number;
+    let sequence = meta.sequence;
     let timestamp = meta.created_at;
 
-    let idempotency_key = format!("proposal_executed:{}:{}", proposal_id, block_number);
+    let idempotency_base = format!("{}:{}:proposal_executed", block_number, sequence);
 
     Ok(NotificationEvent {
         event_type: NotificationEventType::ProposalExecuted,
-        idempotency_key,
+        idempotency_key: idempotency_base,
         payload: NotificationPayload {
             version: PAYLOAD_VERSION,
             event_type: NotificationEventType::ProposalExecuted.as_str().to_string(),
@@ -229,16 +229,17 @@ pub fn handle_proposal_settings_updated(
 
     let meta = msg.meta.as_ref().ok_or(HandlerError::MissingMetadata)?;
     let block_number = meta.block_number;
+    let sequence = meta.sequence;
     let timestamp = meta.created_at;
 
-    let idempotency_key = format!(
-        "proposal_settings_updated:{}:{}",
-        proposal_id, block_number
+    let idempotency_base = format!(
+        "{}:{}:proposal_settings_updated",
+        block_number, sequence
     );
 
     Ok(NotificationEvent {
         event_type: NotificationEventType::ProposalSettingsUpdated,
-        idempotency_key,
+        idempotency_key: idempotency_base,
         payload: NotificationPayload {
             version: PAYLOAD_VERSION,
             event_type: NotificationEventType::ProposalSettingsUpdated
@@ -264,11 +265,13 @@ pub fn build_rejection_event(
     proposed_by: Uuid,
     end_time: i64,
 ) -> NotificationEvent {
-    let idempotency_key = format!("proposal_rejected:{}", proposal_id);
+    // Rejections have no block/sequence — use proposal_id as the unique component
+    // (a proposal can only be rejected once).
+    let idempotency_base = format!("{}:proposal_rejected", proposal_id);
 
     NotificationEvent {
         event_type: NotificationEventType::ProposalRejected,
-        idempotency_key,
+        idempotency_key: idempotency_base,
         payload: NotificationPayload {
             version: PAYLOAD_VERSION,
             event_type: NotificationEventType::ProposalRejected.as_str().to_string(),
@@ -399,7 +402,7 @@ mod tests {
     }
 
     #[test]
-    fn test_idempotency_key_created() {
+    fn test_idempotency_base_created() {
         let msg = HermesProposalCreated {
             space_id: make_test_uuid(0x01),
             proposer_id: make_test_uuid(0x02),
@@ -411,11 +414,8 @@ mod tests {
         };
 
         let event = handle_proposal_created(&msg).expect("should parse");
-        let expected_proposal = Uuid::from_slice(&make_test_uuid(0x03)).expect("valid uuid");
-        assert_eq!(
-            event.idempotency_key,
-            format!("proposal_created:{}:42", expected_proposal)
-        );
+        // Base key: {block_number}:{sequence}:{event_type}
+        assert_eq!(event.idempotency_key, "42:0:proposal_created");
     }
 
     // -----------------------------------------------------------------------
@@ -448,7 +448,7 @@ mod tests {
     }
 
     #[test]
-    fn test_idempotency_key_updated() {
+    fn test_idempotency_base_updated() {
         let msg = HermesProposalUpdated {
             space_id: make_test_uuid(0x01),
             proposer_id: make_test_uuid(0x02),
@@ -460,11 +460,7 @@ mod tests {
         };
 
         let event = handle_proposal_updated(&msg).expect("should parse");
-        let expected_proposal = Uuid::from_slice(&make_test_uuid(0x03)).expect("valid uuid");
-        assert_eq!(
-            event.idempotency_key,
-            format!("proposal_updated:{}:77", expected_proposal)
-        );
+        assert_eq!(event.idempotency_key, "77:0:proposal_updated");
     }
 
     // -----------------------------------------------------------------------
@@ -522,7 +518,7 @@ mod tests {
     }
 
     #[test]
-    fn test_idempotency_key_voted_includes_voter() {
+    fn test_idempotency_base_voted() {
         let msg = HermesProposalVoted {
             voter_id: make_test_uuid(0x0A),
             space_id: make_test_uuid(0x01),
@@ -532,12 +528,7 @@ mod tests {
         };
 
         let event = handle_proposal_voted(&msg).expect("should parse");
-        let expected_proposal = Uuid::from_slice(&make_test_uuid(0x03)).expect("valid uuid");
-        let expected_voter = Uuid::from_slice(&make_test_uuid(0x0A)).expect("valid uuid");
-        assert_eq!(
-            event.idempotency_key,
-            format!("proposal_voted:{}:{}:42", expected_proposal, expected_voter)
-        );
+        assert_eq!(event.idempotency_key, "42:0:proposal_voted");
     }
 
     #[test]
@@ -637,11 +628,7 @@ mod tests {
         };
 
         let event = handle_proposal_settings_updated(&msg).expect("should parse");
-        let expected_proposal = Uuid::from_slice(&make_test_uuid(0x03)).expect("valid uuid");
-        assert_eq!(
-            event.idempotency_key,
-            format!("proposal_settings_updated:{}:99", expected_proposal)
-        );
+        assert_eq!(event.idempotency_key, "99:0:proposal_settings_updated");
     }
 
     // -----------------------------------------------------------------------
@@ -724,7 +711,7 @@ mod tests {
         let event = build_rejection_event(proposal_id, space_id, proposed_by, 1700000000);
         assert_eq!(
             event.idempotency_key,
-            format!("proposal_rejected:{}", proposal_id)
+            format!("{}:proposal_rejected", proposal_id)
         );
         assert_eq!(event.event_type, NotificationEventType::ProposalRejected);
         assert_eq!(event.payload.event_type, "proposal_rejected");
