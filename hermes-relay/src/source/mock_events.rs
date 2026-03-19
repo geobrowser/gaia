@@ -486,6 +486,25 @@ impl ProposalAction {
         topic[16..32].copy_from_slice(&target_topic_id);
         Self::ping(action_hash, topic, &[])
     }
+
+    /// Create a set-topic proposal action using the DAO ping entrypoint.
+    ///
+    /// The topic ID is packed as `bytes32(bytes16(topicId))`, so the target
+    /// occupies bytes [0..16] and the rest is zero padding.
+    pub fn set_topic(target_topic_id: TopicId, topic_data: &[u8]) -> Self {
+        let mut topic = [0u8; 32];
+        topic[0..16].copy_from_slice(&target_topic_id);
+        Self::ping(actions::TOPIC_DECLARED, topic, topic_data)
+    }
+
+    /// Create an unset-topic proposal action using the DAO ping entrypoint.
+    ///
+    /// The removed topic ID is carried in the first 16 bytes of the ping topic.
+    pub fn unset_topic(target_topic_id: TopicId, topic_data: &[u8]) -> Self {
+        let mut topic = [0u8; 32];
+        topic[0..16].copy_from_slice(&target_topic_id);
+        Self::ping(actions::TOPIC_REMOVED, topic, topic_data)
+    }
 }
 
 /// ABI-encode proposal data: (bytes16 proposalId, uint8 votingMode, Action[])
@@ -1110,6 +1129,8 @@ pub mod test_topology {
     pub const PROPOSAL_11: ProposalId = make_proposal_id(0xAB);
     pub const PROPOSAL_12: ProposalId = make_proposal_id(0xAC);
     pub const PROPOSAL_13: ProposalId = make_proposal_id(0xAD);
+    pub const PROPOSAL_14: ProposalId = make_proposal_id(0xAE);
+    pub const PROPOSAL_15: ProposalId = make_proposal_id(0xAF);
 
     // Target IDs for subspace proposal actions (distinct from trust pipeline targets)
     pub const SUBSPACE_TARGET_VERIFIED: SpaceId = make_id(0xC1);
@@ -1118,6 +1139,8 @@ pub mod test_topology {
     pub const SUBSPACE_TARGET_UNRELATED: SpaceId = make_id(0xC4);
     pub const SUBSPACE_TARGET_TOPIC_DECLARED: TopicId = make_id(0xC5);
     pub const SUBSPACE_TARGET_TOPIC_REMOVED: TopicId = make_id(0xC6);
+    pub const SPACE_TARGET_TOPIC_SET: TopicId = make_id(0xD1);
+    pub const SPACE_TARGET_TOPIC_REMOVED: TopicId = make_id(0xD2);
 
     // Topic for trust pipeline topic removal testing
     pub const TOPIC_REMOVED: TopicId = make_id(0x92);
@@ -1470,7 +1493,7 @@ pub mod test_topology {
         ));
         actions.push(proposal_executed(SPACE_B, PROPOSAL_7));
 
-        // Proposals 8-13: Subspace actions (ping-based)
+        // Proposals 8-15: Ping-based proposal actions
         // Each proposal has a single ping action targeting a unique space/topic ID.
 
         // Proposal 8: SubspaceVerified
@@ -1670,6 +1693,72 @@ pub mod test_topology {
             VoteOption::Yes,
         ));
         actions.push(proposal_executed(SPACE_C, PROPOSAL_13));
+
+        // Proposal 14: SetTopic
+        actions.push(proposal_created(
+            SPACE_A,
+            PROPOSAL_14,
+            VotingMode::Fast,
+            vec![ProposalAction::set_topic(
+                SPACE_TARGET_TOPIC_SET,
+                b"topic-metadata",
+            )],
+        ));
+        actions.push(proposal_settings_selected(
+            SPACE_A,
+            PROPOSAL_14,
+            VotingMode::Fast,
+            0,
+            86400,
+            50,
+            60,
+        ));
+        actions.push(proposal_voted(
+            SPACE_B,
+            SPACE_A,
+            PROPOSAL_14,
+            VoteOption::Yes,
+        ));
+        actions.push(proposal_voted(
+            SPACE_C,
+            SPACE_A,
+            PROPOSAL_14,
+            VoteOption::Yes,
+        ));
+        actions.push(proposal_executed(SPACE_A, PROPOSAL_14));
+
+        // Proposal 15: UnsetTopic
+        actions.push(proposal_created(
+            SPACE_A,
+            PROPOSAL_15,
+            VotingMode::Fast,
+            vec![ProposalAction::unset_topic(
+                SPACE_TARGET_TOPIC_REMOVED,
+                b"topic-metadata",
+            )],
+        ));
+        actions.push(proposal_settings_selected(
+            SPACE_A,
+            PROPOSAL_15,
+            VotingMode::Fast,
+            0,
+            86400,
+            50,
+            60,
+        ));
+        actions.push(proposal_voted(
+            SPACE_B,
+            SPACE_A,
+            PROPOSAL_15,
+            VoteOption::Yes,
+        ));
+        actions.push(proposal_voted(
+            SPACE_C,
+            SPACE_A,
+            PROPOSAL_15,
+            VoteOption::Yes,
+        ));
+        actions.push(proposal_executed(SPACE_A, PROPOSAL_15));
 
         // Phase 7: Edits
         actions.push(edit_published(ROOT_SPACE_ID, "QmRootEdit1CreatePersons"));
@@ -1939,8 +2028,8 @@ mod tests {
         assert_eq!(topic_removed_count, 1);
         // 9 edits (6 original + 3 type-related for search indexer testing)
         assert_eq!(edit_count, 9);
-        // 13 proposals with settings (7 original + 6 subspace proposals)
-        assert_eq!(proposal_settings_count, 13);
+        // 15 proposals with settings (7 original + 6 subspace + 2 space-topic proposals)
+        assert_eq!(proposal_settings_count, 15);
     }
 
     #[test]

@@ -77,6 +77,16 @@ pub struct SubspaceTopicAction {
     #[prost(bytes = "vec", tag = "1")]
     pub target_topic_id: ::prost::alloc::vec::Vec<u8>,
 }
+/// Decoded action: set the space topic
+#[derive(Clone, PartialEq, ::prost::Message)]
+pub struct SetTopicAction {
+    /// 16 bytes - topic entity ID
+    #[prost(bytes = "vec", tag = "1")]
+    pub target_topic_id: ::prost::alloc::vec::Vec<u8>,
+}
+/// Decoded action: unset the current space topic
+#[derive(Clone, Copy, PartialEq, ::prost::Message)]
+pub struct UnsetTopicAction {}
 /// Decoded action: update voting settings
 #[derive(Clone, Copy, PartialEq, ::prost::Message)]
 pub struct UpdateVotingSettingsAction {
@@ -108,7 +118,7 @@ pub struct ProposalAction {
     /// Decoded action (based on function selector in calldata)
     #[prost(
         oneof = "proposal_action::Action",
-        tags = "10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24"
+        tags = "10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26"
     )]
     pub action: ::core::option::Option<proposal_action::Action>,
 }
@@ -147,6 +157,10 @@ pub mod proposal_action {
         SubspaceTopicDeclared(super::SubspaceTopicAction),
         #[prost(message, tag = "24")]
         SubspaceTopicRemoved(super::SubspaceTopicAction),
+        #[prost(message, tag = "25")]
+        SetTopic(super::SetTopicAction),
+        #[prost(message, tag = "26")]
+        UnsetTopic(super::UnsetTopicAction),
     }
 }
 /// Voting settings for a proposal, from PROPOSAL_SETTINGS_USED event
@@ -359,6 +373,8 @@ pub enum ProposalActionType {
     ProposalActionSubspaceUnrelated = 14,
     ProposalActionSubspaceTopicDeclared = 15,
     ProposalActionSubspaceTopicRemoved = 16,
+    ProposalActionSetTopic = 17,
+    ProposalActionUnsetTopic = 18,
 }
 impl ProposalActionType {
     /// String value of the enum field names used in the ProtoBuf definition.
@@ -383,6 +399,8 @@ impl ProposalActionType {
             Self::ProposalActionSubspaceUnrelated => "PROPOSAL_ACTION_SUBSPACE_UNRELATED",
             Self::ProposalActionSubspaceTopicDeclared => "PROPOSAL_ACTION_SUBSPACE_TOPIC_DECLARED",
             Self::ProposalActionSubspaceTopicRemoved => "PROPOSAL_ACTION_SUBSPACE_TOPIC_REMOVED",
+            Self::ProposalActionSetTopic => "PROPOSAL_ACTION_SET_TOPIC",
+            Self::ProposalActionUnsetTopic => "PROPOSAL_ACTION_UNSET_TOPIC",
         }
     }
     /// Creates an enum from field names used in the ProtoBuf definition.
@@ -410,6 +428,8 @@ impl ProposalActionType {
             "PROPOSAL_ACTION_SUBSPACE_TOPIC_REMOVED" => {
                 Some(Self::ProposalActionSubspaceTopicRemoved)
             }
+            "PROPOSAL_ACTION_SET_TOPIC" => Some(Self::ProposalActionSetTopic),
+            "PROPOSAL_ACTION_UNSET_TOPIC" => Some(Self::ProposalActionUnsetTopic),
             _ => None,
         }
     }

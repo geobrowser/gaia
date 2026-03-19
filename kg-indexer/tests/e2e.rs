@@ -61,6 +61,8 @@ mod expected {
     pub const PROPOSAL_11: [u8; 16] = make_id(0xAB);
     pub const PROPOSAL_12: [u8; 16] = make_id(0xAC);
     pub const PROPOSAL_13: [u8; 16] = make_id(0xAD);
+    pub const PROPOSAL_14: [u8; 16] = make_id(0xAE);
+    pub const PROPOSAL_15: [u8; 16] = make_id(0xAF);
 
     // Subspace proposal targets
     pub const SUBSPACE_TARGET_VERIFIED: [u8; 16] = make_id(0xC1);
@@ -69,6 +71,7 @@ mod expected {
     pub const SUBSPACE_TARGET_UNRELATED: [u8; 16] = make_id(0xC4);
     pub const SUBSPACE_TARGET_TOPIC_DECLARED: [u8; 16] = make_id(0xC5);
     pub const SUBSPACE_TARGET_TOPIC_REMOVED: [u8; 16] = make_id(0xC6);
+    pub const SPACE_TARGET_TOPIC_SET: [u8; 16] = make_id(0xD1);
 
     // Topic IDs for trust pipeline subtopic tests
     pub const TOPIC_H: [u8; 16] = make_id(0x91);
@@ -123,7 +126,7 @@ mod expected {
         ]
     }
 
-    /// All 13 proposal IDs (7 original + 6 subspace proposals)
+    /// All 15 proposal IDs (7 original + 6 subspace proposals + 2 space-topic proposals)
     pub fn all_proposal_ids() -> Vec<Uuid> {
         vec![
             uuid_from_bytes(PROPOSAL_1),
@@ -139,6 +142,8 @@ mod expected {
             uuid_from_bytes(PROPOSAL_11),
             uuid_from_bytes(PROPOSAL_12),
             uuid_from_bytes(PROPOSAL_13),
+            uuid_from_bytes(PROPOSAL_14),
+            uuid_from_bytes(PROPOSAL_15),
         ]
     }
 
@@ -204,6 +209,12 @@ mod expected {
                 "SubspaceTopicRemoved",
                 Some(uuid_from_bytes(SUBSPACE_TARGET_TOPIC_REMOVED)),
             ),
+            (
+                uuid_from_bytes(PROPOSAL_14),
+                "SetTopic",
+                Some(uuid_from_bytes(SPACE_TARGET_TOPIC_SET)),
+            ),
+            (uuid_from_bytes(PROPOSAL_15), "UnsetTopic", None),
         ]
     }
 }
@@ -303,7 +314,7 @@ async fn test_all_proposals_exist() {
         .await
         .expect("Failed to count proposals");
 
-    assert_eq!(count.0, 13, "Expected 13 proposals, found {}", count.0);
+    assert_eq!(count.0, 15, "Expected 15 proposals, found {}", count.0);
 }
 
 #[tokio::test]
@@ -453,7 +464,7 @@ async fn test_dao_space_p_has_editor() {
 async fn test_executed_proposals() {
     let pool = get_pool().await;
 
-    // All 13 proposals should be executed (have executed_at set)
+    // All 15 proposals should be executed (have executed_at set)
     let executed_count: (i64,) =
         sqlx::query_as("SELECT COUNT(*) FROM proposals WHERE executed_at IS NOT NULL")
             .fetch_one(&pool)
@@ -461,8 +472,8 @@ async fn test_executed_proposals() {
             .expect("Failed to count executed proposals");
 
     assert_eq!(
-        executed_count.0, 13,
-        "All 13 proposals should be executed, found {} executed",
+        executed_count.0, 15,
+        "All 15 proposals should be executed, found {} executed",
         executed_count.0
     );
 }
@@ -524,10 +535,10 @@ async fn test_subspace_topics() {
     );
 }
 
-/// Verify proposal action types and target IDs for all 13 proposals.
+/// Verify proposal action types and target IDs for all 15 proposals.
 ///
 /// This covers both the original proposal action types (AddMember, RemoveMember, etc.)
-/// and the new subspace proposal actions decoded from ping calldata.
+/// and the new ping-based proposal actions decoded from calldata.
 #[tokio::test]
 async fn test_proposal_action_types() {
     let pool = get_pool().await;

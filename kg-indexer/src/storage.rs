@@ -977,6 +977,13 @@ impl Storage {
                     target_id = Some(*id);
                     "SubspaceTopicRemoved"
                 }
+                ProposalActionPayload::SetTopic {
+                    target_topic_id: id,
+                } => {
+                    target_id = Some(*id);
+                    "SetTopic"
+                }
+                ProposalActionPayload::UnsetTopic => "UnsetTopic",
                 ProposalActionPayload::Unknown => "Unknown",
             };
 
