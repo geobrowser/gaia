@@ -21,3 +21,96 @@ pub const AVATAR_RELATION_TYPE_ID: &str = "1155beff-fad5-49b7-a2e0-da4777b8792c"
 /// When a relation has this type ID, it indicates that the `from_entity` has a cover image of `to_entity`.
 /// The `to_entity` is an image entity whose `IMAGE_URL_PROPERTY_ID` value contains the actual URL.
 pub const COVER_RELATION_TYPE_ID: &str = "34f53507-2e6b-42c5-a844-43981a77cfa2";
+
+// System namespace — derived from Uuid::NAMESPACE_URL + "geo:system"
+pub const GEO_SYSTEM_NAMESPACE: &str = "ae1e004d-b125-57d8-b3bf-e85a2484f129";
+
+// System type entity IDs
+pub const SYSTEM_TYPE_ID: &str = "2ff7ea09-8b9e-50bc-9be7-8a0cafa268d0";
+pub const SPACE_TYPE_ID: &str = "f4ce7263-ed14-56c5-aafe-8b74428ce812";
+pub const PROPOSAL_TYPE_ID: &str = "1cb9d5ba-c730-52a7-bc73-1f2c3ff5a330";
+
+// Protected property IDs (system-managed, user edits targeting these are dropped)
+pub const SPACE_ADDRESS_PROPERTY_ID: &str = "8f65b58c-d001-5bac-b1d3-3a66ae23193c";
+pub const PROPOSAL_ID_PROPERTY_ID: &str = "6db3cfce-1941-57cc-8ac0-125b5c3669a1";
+pub const VOTING_MODE_PROPERTY_ID: &str = "af26ed41-de0f-5b4f-a093-e9d3f683db07";
+pub const CREATED_BY_PROPERTY_ID: &str = "461da316-3bb9-59b3-ad0e-b2ba2741bc2e";
+pub const CREATED_AT_BLOCK_PROPERTY_ID: &str = "da2952fb-17d6-53f3-b521-52e254106e0b";
+
+// Protected relation type IDs
+pub const SYSTEM_TYPES_RELATION_TYPE_ID: &str = "88b3d6ad-288c-529c-a212-0e1c24819185";
+
+// Collected sets for protection checks
+pub const PROTECTED_PROPERTY_IDS: &[&str] = &[
+    SPACE_ADDRESS_PROPERTY_ID,
+    PROPOSAL_ID_PROPERTY_ID,
+    VOTING_MODE_PROPERTY_ID,
+    CREATED_BY_PROPERTY_ID,
+    CREATED_AT_BLOCK_PROPERTY_ID,
+];
+
+pub const PROTECTED_RELATION_TYPE_IDS: &[&str] = &[SYSTEM_TYPES_RELATION_TYPE_ID];
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use uuid::Uuid;
+
+    /// Re-derive every system UUID from its documented input and verify
+    /// it matches the hardcoded constant. This prevents accidental edits
+    /// and ensures the derivation inputs in the design doc stay correct.
+    #[test]
+    fn system_ids_match_derivations() {
+        let namespace_url =
+            Uuid::parse_str("6ba7b811-9dad-11d1-80b4-00c04fd430c8").unwrap();
+        let ns = Uuid::new_v5(&namespace_url, b"geo:system");
+        assert_eq!(GEO_SYSTEM_NAMESPACE, ns.to_string());
+
+        let cases: &[(&str, &str)] = &[
+            (SYSTEM_TYPE_ID, "type:System"),
+            (SPACE_TYPE_ID, "type:Space"),
+            (PROPOSAL_TYPE_ID, "type:Proposal"),
+            (SPACE_ADDRESS_PROPERTY_ID, "property:SpaceAddress"),
+            (PROPOSAL_ID_PROPERTY_ID, "property:ProposalId"),
+            (VOTING_MODE_PROPERTY_ID, "property:VotingMode"),
+            (CREATED_BY_PROPERTY_ID, "property:CreatedBy"),
+            (CREATED_AT_BLOCK_PROPERTY_ID, "property:CreatedAtBlock"),
+            (SYSTEM_TYPES_RELATION_TYPE_ID, "relation_type:SystemTypes"),
+        ];
+
+        for (constant, input) in cases {
+            let derived = Uuid::new_v5(&ns, input.as_bytes());
+            assert_eq!(
+                *constant,
+                derived.to_string(),
+                "Mismatch for derivation input '{}'",
+                input
+            );
+        }
+    }
+
+    #[test]
+    fn protected_property_ids_contains_all_system_properties() {
+        let expected = [
+            SPACE_ADDRESS_PROPERTY_ID,
+            PROPOSAL_ID_PROPERTY_ID,
+            VOTING_MODE_PROPERTY_ID,
+            CREATED_BY_PROPERTY_ID,
+            CREATED_AT_BLOCK_PROPERTY_ID,
+        ];
+        assert_eq!(PROTECTED_PROPERTY_IDS.len(), expected.len());
+        for id in &expected {
+            assert!(
+                PROTECTED_PROPERTY_IDS.contains(id),
+                "{} missing from PROTECTED_PROPERTY_IDS",
+                id
+            );
+        }
+    }
+
+    #[test]
+    fn protected_relation_type_ids_contains_system_types() {
+        assert_eq!(PROTECTED_RELATION_TYPE_IDS.len(), 1);
+        assert!(PROTECTED_RELATION_TYPE_IDS.contains(&SYSTEM_TYPES_RELATION_TYPE_ID));
+    }
+}
