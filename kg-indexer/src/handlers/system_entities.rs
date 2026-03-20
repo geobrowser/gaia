@@ -1,5 +1,5 @@
 use hermes_schema::pb::blockchain_metadata::BlockchainMetadata;
-use hermes_schema::pb::governance::HermesProposalCreated;
+use hermes_schema::pb::governance::{HermesProposalCreated, VotingMode as ProtoVotingMode};
 use hermes_schema::pb::space::{hermes_create_space::Payload, HermesCreateSpace};
 use sdk::core::ids::{
     CREATED_AT_BLOCK_PROPERTY_ID, CREATED_BY_PROPERTY_ID, GEO_SYSTEM_NAMESPACE,
@@ -270,13 +270,19 @@ pub fn map_proposal_created(
     let created_at_block_pid = Uuid::parse_str(CREATED_AT_BLOCK_PROPERTY_ID)
         .expect("CREATED_AT_BLOCK_PROPERTY_ID is a valid UUID constant");
 
+    // Map proto voting mode through enum for validation (consistent with governance.rs)
+    let voting_mode_value = match ProtoVotingMode::try_from(msg.voting_mode) {
+        Ok(ProtoVotingMode::Fast) => 0i64,
+        Ok(ProtoVotingMode::Slow) | Err(_) => 1i64,
+    };
+
     let values = vec![
         make_system_value_bytes(&entity_id, &proposal_id_pid, &space_id, &msg.proposal_id),
         make_system_value_integer(
             &entity_id,
             &voting_mode_pid,
             &space_id,
-            msg.voting_mode as i64,
+            voting_mode_value,
         ),
         make_system_value_bytes(&entity_id, &created_by_pid, &space_id, &msg.proposer_id),
         make_system_value_integer(
