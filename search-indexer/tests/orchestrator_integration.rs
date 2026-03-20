@@ -318,6 +318,8 @@ impl SearchIndexProvider for MockSearchProvider {
                 EntityOperation::UpdateEntityGlobalScore(_)
                 | EntityOperation::UpdateSpaceScore(_)
                 | EntityOperation::UpdateEntitySpaceScore(_)
+                | EntityOperation::UpdateEntityGlobalScoreByDoc(_)
+                | EntityOperation::UpdateSpaceScoreByDoc(_)
                 | EntityOperation::UpdateSpaceTopicEntityId(_)
                 | EntityOperation::UpdateInCanonicalGraph(_) => false,
             };
@@ -355,6 +357,8 @@ impl SearchIndexProvider for MockSearchProvider {
                     EntityOperation::UpdateEntityGlobalScore(_)
                     | EntityOperation::UpdateSpaceScore(_)
                     | EntityOperation::UpdateEntitySpaceScore(_)
+                    | EntityOperation::UpdateEntityGlobalScoreByDoc(_)
+                    | EntityOperation::UpdateSpaceScoreByDoc(_)
                     | EntityOperation::UpdateSpaceTopicEntityId(_)
                     | EntityOperation::UpdateInCanonicalGraph(_) => {
                         // Tracked via all_operations

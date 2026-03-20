@@ -1,0 +1,140 @@
+name: Search Indexer Score Lookup E2E Tests
+
+on:
+  push:
+    branches: [main, dev]
+    paths:
+      - 'search-indexer/src/**'
+      - 'search-indexer-repository/src/**'
+      - 'search-indexer/tests/e2e-score-lookup/**'
+      - 'hermes-schema/**'
+      - '.github/workflows/search-indexer-score-lookup-e2e.yml'
+  pull_request:
+    branches: [main, dev]
+    paths:
+      - 'search-indexer/src/**'
+      - 'search-indexer-repository/src/**'
+      - 'search-indexer/tests/e2e-score-lookup/**'
+      - 'hermes-schema/**'
+      - '.github/workflows/search-indexer-score-lookup-e2e.yml'
+
+env:
+  CARGO_TERM_COLOR: always
+  DATABASE_URL: postgres://test:test@localhost:5432/score_lookup_test
+  OPENSEARCH_URL: http://localhost:9200
+  KAFKA_BROKER: localhost:9092
+  ENVIRONMENT: production
+
+jobs:
+  e2e-test:
+    name: Score Lookup E2E
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: "1.92.0"
+
+      - name: Install build dependencies
+        run: |
+          sudo apt-get update && sudo apt-get install -y \
+            protobuf-compiler cmake libclang-dev libssl-dev pkg-config postgresql-client
+
+      - name: Cache cargo registry
+        uses: actions/cache@v3
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-score-e2e-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: ${{ runner.os }}-cargo-score-e2e-
+
+      - name: Start Postgres, OpenSearch, and Kafka
+        run: |
+          POSTGRES_PORT=5432 docker compose -f search-indexer/tests/e2e-score-lookup/docker-compose.yml up -d
+          # Wait for Postgres
+          for i in $(seq 1 30); do
+            if PGPASSWORD=test psql -h localhost -U test -d score_lookup_test -c "SELECT 1" 2>/dev/null; then
+              echo "Postgres is ready"
+              break
+            fi
+            echo "Waiting for Postgres... ($i/30)"
+            sleep 2
+          done
+          # Wait for OpenSearch
+          for i in $(seq 1 30); do
+            if curl -sf http://localhost:9200/_cluster/health 2>/dev/null; then
+              echo "OpenSearch is ready"
+              break
+            fi
+            echo "Waiting for OpenSearch... ($i/30)"
+            sleep 3
+          done
+          # Wait for Kafka
+          for i in $(seq 1 30); do
+            if docker compose -f search-indexer/tests/e2e-score-lookup/docker-compose.yml exec -T kafka /opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 2>/dev/null; then
+              echo "Kafka is ready"
+              break
+            fi
+            echo "Waiting for Kafka... ($i/30)"
+            sleep 3
+          done
+
+      - name: Apply database schema
+        run: |
+          PGPASSWORD=test psql -h localhost -U test -d score_lookup_test \
+            -f search-indexer/tests/e2e-score-lookup/setup.sql
+
+      - name: Build search-indexer and e2e test
+        run: |
+          cargo build -p search-indexer
+          cd search-indexer/tests/e2e-score-lookup && cargo build
+
+      - name: Start search-indexer
+        run: |
+          DATABASE_URL=${{ env.DATABASE_URL }} \
+          OPENSEARCH_URL=${{ env.OPENSEARCH_URL }} \
+          KAFKA_BROKER=${{ env.KAFKA_BROKER }} \
+          ENVIRONMENT=${{ env.ENVIRONMENT }} \
+          KAFKA_GROUP_EDITS_ID=score-e2e-edits \
+          KAFKA_GROUP_SCORES_ID=score-e2e-scores \
+          KAFKA_GROUP_SPACE_TOPICS_ID=score-e2e-topics \
+          KAFKA_GROUP_TOPOLOGY_ID=score-e2e-topology \
+          RUST_LOG=info,search_indexer=debug \
+          ./target/debug/search-indexer > /tmp/search-indexer.log 2>&1 &
+          echo $! > /tmp/search-indexer.pid
+          echo "search-indexer started (pid: $(cat /tmp/search-indexer.pid))"
+
+      - name: Wait for search-indexer to initialize
+        run: sleep 10
+
+      - name: Run e2e score lookup test
+        run: |
+          DATABASE_URL=${{ env.DATABASE_URL }} \
+          OPENSEARCH_URL=${{ env.OPENSEARCH_URL }} \
+          KAFKA_BROKER=${{ env.KAFKA_BROKER }} \
+          ENVIRONMENT=${{ env.ENVIRONMENT }} \
+          INDEX_ALIAS=entities \
+          E2E_TIMEOUT_SECS=90 \
+          ./search-indexer/tests/e2e-score-lookup/target/debug/e2e-score-lookup
+
+      - name: Show search-indexer logs on failure
+        if: failure()
+        run: |
+          echo "=== search-indexer logs ==="
+          cat /tmp/search-indexer.log || true
+          echo ""
+          echo "=== Docker compose logs ==="
+          docker compose -f search-indexer/tests/e2e-score-lookup/docker-compose.yml logs
+
+      - name: Cleanup
+        if: always()
+        run: |
+          kill $(cat /tmp/search-indexer.pid) 2>/dev/null || true
+          POSTGRES_PORT=5432 docker compose -f search-indexer/tests/e2e-score-lookup/docker-compose.yml down -v

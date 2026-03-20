@@ -1146,6 +1146,40 @@ impl SearchIndexProvider for OpenSearchProvider {
                     });
                     flush_bulk_if_full!(self, bulk_ops, metas, total_succeeded, total_failed, all_results, total_wall_ms, total_took_ms, _bulk_call_count);
                 }
+                EntityOperation::UpdateEntityGlobalScoreByDoc(request) => {
+                    // Direct doc-ID update for entity global score (resolved via Postgres lookup).
+                    // Uses the bulk API — much faster than update_by_query.
+                    let body = json!({
+                        "doc": {
+                            "entity_global_score": request.score
+                        },
+                        "doc_as_upsert": true
+                    });
+                    bulk_ops.push(BulkOperation::update(request.doc_id.clone(), body).into());
+                    metas.push(BulkOperationMeta {
+                        entity_id: String::new(),
+                        space_id: String::new(),
+                        operation_type: "UpdateEntityGlobalScoreByDoc".to_string(),
+                    });
+                    flush_bulk_if_full!(self, bulk_ops, metas, total_succeeded, total_failed, all_results, total_wall_ms, total_took_ms, _bulk_call_count);
+                }
+                EntityOperation::UpdateSpaceScoreByDoc(request) => {
+                    // Direct doc-ID update for space score (resolved via Postgres lookup).
+                    // Uses the bulk API — much faster than update_by_query.
+                    let body = json!({
+                        "doc": {
+                            "space_score": request.score
+                        },
+                        "doc_as_upsert": true
+                    });
+                    bulk_ops.push(BulkOperation::update(request.doc_id.clone(), body).into());
+                    metas.push(BulkOperationMeta {
+                        entity_id: String::new(),
+                        space_id: String::new(),
+                        operation_type: "UpdateSpaceScoreByDoc".to_string(),
+                    });
+                    flush_bulk_if_full!(self, bulk_ops, metas, total_succeeded, total_failed, all_results, total_wall_ms, total_took_ms, _bulk_call_count);
+                }
                 EntityOperation::UpdateSpaceTopicEntityId(request) => {
                     // Flush before executing the update_by_query to maintain ordering
                     flush_pending_bulk!(

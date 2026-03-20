@@ -87,6 +87,14 @@ spec:
                 secretKeyRef:
                   name: kafka-credentials
                   key: KAFKA_SSL_CA_PEM
+            # Database (Postgres lookup for fast score indexing)
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: scoring-service-credentials
+                  key: DATABASE_URL
+            - name: DATABASE_MAX_CONNECTIONS
+              value: "5"
             # Kafka consumer configuration
             - name: ENVIRONMENT
               value: "production"

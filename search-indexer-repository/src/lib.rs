@@ -20,7 +20,8 @@ pub use service::SearchIndexService;
 pub use types::{
     BatchOperationResult, BatchOperationSummary, DeleteEntityRequest, EntityOperation,
     RelationData, RemoveRelationData, UnsetEntityPropertiesRequest,
-    UpdateEntityGlobalScoreRequest, UpdateEntityRequest, UpdateEntitySpaceScoreRequest,
-    UpdateInCanonicalGraphRequest, UpdateSpaceScoreRequest, UpdateSpaceTopicEntityIdRequest,
+    UpdateEntityGlobalScoreByDocRequest, UpdateEntityGlobalScoreRequest, UpdateEntityRequest,
+    UpdateEntitySpaceScoreRequest, UpdateInCanonicalGraphRequest, UpdateSpaceScoreByDocRequest,
+    UpdateSpaceScoreRequest, UpdateSpaceTopicEntityIdRequest,
 };
 pub use utils::parse_entity_and_space_ids;
