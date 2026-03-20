@@ -1,7 +1,7 @@
 import SimplifyInflectionPlugin from "@graphile-contrib/pg-simplify-inflector"
 import * as Sentry from "@sentry/node"
-import {print} from "graphql"
-import {createYoga, type Plugin, useExecutionCancellation} from "graphql-yoga"
+import {GraphQLError, print} from "graphql"
+import {createYoga, maskError, type Plugin, useExecutionCancellation} from "graphql-yoga"
 import type {PoolClient} from "pg"
 import {Pool} from "pg"
 import {createPostGraphileSchema} from "postgraphile"
@@ -12,6 +12,7 @@ import {graphqlQueryFingerprint} from "../services/queryFingerprint"
 import {log} from "../services/telemetry"
 import EntitySpaceFilterPlugin from "./entitySpaceFilterPlugin"
 import {useGraphQLInstrumentation} from "./instrumentationPlugin"
+import PaginationCapPlugin from "./paginationCapPlugin"
 import UndashedUuidPlugin from "./uuidScalarPlugin"
 import ValueScalarsPlugin from "./valueScalarsPlugin"
 
@@ -60,6 +61,18 @@ export function getGraphqlPoolPressure() {
 	return getGraphqlPressureSnapshot(getGraphqlPoolStats())
 }
 
+function isUserInputGraphQLError(error: unknown): error is GraphQLError {
+	if (!(error instanceof GraphQLError)) {
+		return false
+	}
+
+	if (error.extensions?.code === "BAD_USER_INPUT") {
+		return true
+	}
+
+	return error.originalError instanceof GraphQLError && error.originalError.extensions?.code === "BAD_USER_INPUT"
+}
+
 // Without this handler, background connection errors (PgBouncer closing idle connections,
 // network blips) become unhandled events. The pool doesn't remove the dead connection,
 // so subsequent connect() calls can check out a stale client that fails during query execution.
@@ -87,12 +100,14 @@ const postgraphileOptions = {
 	// - ValueScalarsPlugin registers custom scalars (GeoPoint, GeoRect, Date, etc.)
 	//   and remaps Value fields to use them for self-documenting schema
 	// - EntitySpaceFilterPlugin adds efficient spaceId filter using EXISTS instead of computed column
+	// - PaginationCapPlugin clamps first/last/offset on collection fields
 	appendPlugins: [
 		UndashedUuidPlugin,
 		ValueScalarsPlugin,
 		ConnectionFilterPlugin,
 		SimplifyInflectionPlugin,
 		EntitySpaceFilterPlugin,
+		PaginationCapPlugin,
 	],
 	disableDefaultMutations: true,
 	simpleCollections: "both" as const,
@@ -220,6 +235,14 @@ export const graphqlServer = createYoga<GraphQLServerContext>({
 	schema: postgraphileSchema,
 	graphiql: {
 		title: "Geo API",
+	},
+	maskedErrors: {
+		maskError(error, message, isDev) {
+			if (isUserInputGraphQLError(error)) {
+				return error
+			}
+			return maskError(error, message, isDev)
+		},
 	},
 	plugins: sharedPlugins,
 })
