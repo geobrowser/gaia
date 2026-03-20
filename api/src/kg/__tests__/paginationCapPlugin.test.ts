@@ -1,6 +1,6 @@
 import {describe, expect, it} from "vitest"
-import {graphqlServer} from "../postgraphile"
 import {assertPaginationWithinLimit} from "../paginationCapPlugin"
+import {graphqlServer} from "../postgraphile"
 
 async function executeGraphQL(query: string, variables?: Record<string, unknown>) {
 	const response = await graphqlServer.fetch(

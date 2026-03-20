@@ -19,8 +19,8 @@
  * are root-level collection fields. Nested sub-collections (valuesList,
  * relationsList) don't typically accept user-controlled `first` arguments.
  */
-import {GraphQLError} from "graphql"
 import {makeWrapResolversPlugin} from "graphile-utils"
+import {GraphQLError} from "graphql"
 
 const MAX_PAGINATION_LIMIT = 1000
 
