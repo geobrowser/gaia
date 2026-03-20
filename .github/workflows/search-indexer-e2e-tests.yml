@@ -150,6 +150,13 @@ jobs:
         working-directory: ./api
         run: bun run db:migrate
 
+      - name: Seed values table for score lookups
+        run: |
+          psql -h localhost -p 5432 -U test_user -d gaia_test \
+            -f search-indexer/tests/e2e-kafka-search-api/seed-values.sql
+        env:
+          PGPASSWORD: test_password
+
       - name: Wait for Kafka
         run: |
           echo "Waiting for Kafka to be ready..."
