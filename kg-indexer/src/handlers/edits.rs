@@ -1,6 +1,7 @@
 use std::collections::hash_map::DefaultHasher;
 use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
+use std::sync::LazyLock;
 
 #[cfg(test)]
 use grc_20::model::ContextEdge;
@@ -9,6 +10,7 @@ use grc_20::{
     UnsetRelationField, Value as Grc20Value,
 };
 use hermes_schema::pb::knowledge::HermesEdit;
+use sdk::core::ids::{PROTECTED_PROPERTY_IDS, PROTECTED_RELATION_TYPE_IDS};
 use tracing::{debug_span, warn};
 use uuid::Uuid;
 
@@ -20,6 +22,20 @@ use crate::models::{
     },
     values::{ValueChangeType, ValueOp},
 };
+
+static PROTECTED_PROPERTIES: LazyLock<HashSet<Uuid>> = LazyLock::new(|| {
+    PROTECTED_PROPERTY_IDS
+        .iter()
+        .map(|id| Uuid::parse_str(id).expect("invalid protected property ID"))
+        .collect()
+});
+
+static PROTECTED_RELATION_TYPES: LazyLock<HashSet<Uuid>> = LazyLock::new(|| {
+    PROTECTED_RELATION_TYPE_IDS
+        .iter()
+        .map(|id| Uuid::parse_str(id).expect("invalid protected relation type ID"))
+        .collect()
+});
 
 /// Result of processing an edit message
 pub struct EditResult {
@@ -93,6 +109,28 @@ fn extract_context(ctx: &Option<Context>) -> (Option<Uuid>, Option<Uuid>) {
     }
 }
 
+/// Filter out value operations targeting protected property IDs.
+fn filter_protected_values(ops: Vec<ValueOp>) -> Vec<ValueOp> {
+    ops.into_iter()
+        .filter(|op| !PROTECTED_PROPERTIES.contains(&op.property_id))
+        .collect()
+}
+
+/// Filter out relation operations targeting protected relation types or property entities.
+fn filter_protected_relations(ops: Vec<RelationOp>) -> Vec<RelationOp> {
+    ops.into_iter()
+        .filter(|op| match op {
+            RelationOp::Create(rel) => {
+                let type_protected = PROTECTED_RELATION_TYPES.contains(&rel.type_id);
+                let from_protected = PROTECTED_PROPERTIES.contains(&rel.from_id);
+                let to_protected = PROTECTED_PROPERTIES.contains(&rel.to_id);
+                !type_protected && !from_protected && !to_protected
+            }
+            _ => true,
+        })
+        .collect()
+}
+
 /// Process a HermesEdit message and return the extracted data
 pub fn handle_edit(edit: &HermesEdit) -> Result<EditResult, HandlerError> {
     let edit_id = parse_edit_id(&edit.id)?;
@@ -115,6 +153,10 @@ pub fn handle_edit(edit: &HermesEdit) -> Result<EditResult, HandlerError> {
         let relation_ops = extract_relations(&grc20_edit, &space_id);
         (entities, value_ops, relation_ops)
     };
+
+    // Filter out operations targeting system-protected properties and relation types
+    let value_ops = filter_protected_values(value_ops);
+    let relation_ops = filter_protected_relations(relation_ops);
 
     // Squash operations within this edit to resolve conflicts
     let values = squash_values(&value_ops);
@@ -1204,6 +1246,141 @@ mod tests {
 
         assert_eq!(extracted_root, Some(Uuid::from_bytes(root_id)));
         assert!(extracted_edge_type.is_none());
+    }
+
+    // ===================
+    // Protection filter tests
+    // ===================
+
+    fn make_value_op_with_property(property_id: Uuid) -> ValueOp {
+        ValueOp {
+            id: Uuid::new_v4(),
+            change_type: ValueChangeType::Set,
+            entity_id: Uuid::new_v4(),
+            property_id,
+            space_id: Uuid::new_v4(),
+            language: None,
+            unit: None,
+            text: Some("test".into()),
+            decimal: None,
+            boolean: None,
+            time: None,
+            point: None,
+            rect: None,
+            integer: None,
+            float: None,
+            bytes: None,
+            date: None,
+            datetime: None,
+            schedule: None,
+            embedding: None,
+            time_utc: None,
+            datetime_utc: None,
+            context_root_id: None,
+            context_edge_type_id: None,
+        }
+    }
+
+    fn make_create_relation_with_ids(type_id: Uuid, from_id: Uuid, to_id: Uuid) -> SetRelationItem {
+        SetRelationItem {
+            id: Uuid::new_v4(),
+            entity_id: Uuid::new_v4(),
+            type_id,
+            from_id,
+            to_id,
+            space_id: Uuid::new_v4(),
+            from_space_id: None,
+            from_version_id: None,
+            to_space_id: None,
+            to_version_id: None,
+            position: None,
+            verified: None,
+            context_root_id: None,
+            context_edge_type_id: None,
+        }
+    }
+
+    #[test]
+    fn filter_values_drops_protected_property() {
+        let protected = Uuid::parse_str(sdk::core::ids::SPACE_ADDRESS_PROPERTY_ID).unwrap();
+        let ops = vec![make_value_op_with_property(protected)];
+        let result = filter_protected_values(ops);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn filter_values_keeps_normal_property() {
+        let normal = Uuid::parse_str(sdk::core::ids::NAME_PROPERTY_ID).unwrap();
+        let ops = vec![make_value_op_with_property(normal)];
+        let result = filter_protected_values(ops);
+        assert_eq!(result.len(), 1);
+    }
+
+    #[test]
+    fn filter_values_mixed_batch_keeps_only_normal() {
+        let protected1 = Uuid::parse_str(sdk::core::ids::SPACE_ADDRESS_PROPERTY_ID).unwrap();
+        let protected2 = Uuid::parse_str(sdk::core::ids::VOTING_MODE_PROPERTY_ID).unwrap();
+        let normal = Uuid::parse_str(sdk::core::ids::NAME_PROPERTY_ID).unwrap();
+        let ops = vec![
+            make_value_op_with_property(protected1),
+            make_value_op_with_property(normal),
+            make_value_op_with_property(protected2),
+        ];
+        let result = filter_protected_values(ops);
+        assert_eq!(result.len(), 1);
+        assert_eq!(result[0].property_id, normal);
+    }
+
+    #[test]
+    fn filter_relations_drops_protected_type() {
+        let protected_type = Uuid::parse_str(sdk::core::ids::SYSTEM_TYPES_RELATION_TYPE_ID).unwrap();
+        let ops = vec![RelationOp::Create(make_create_relation_with_ids(
+            protected_type, Uuid::new_v4(), Uuid::new_v4(),
+        ))];
+        let result = filter_protected_relations(ops);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn filter_relations_drops_protected_from_id() {
+        let protected_entity = Uuid::parse_str(sdk::core::ids::PROPOSAL_ID_PROPERTY_ID).unwrap();
+        let ops = vec![RelationOp::Create(make_create_relation_with_ids(
+            Uuid::new_v4(), protected_entity, Uuid::new_v4(),
+        ))];
+        let result = filter_protected_relations(ops);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn filter_relations_drops_protected_to_id() {
+        let protected_entity = Uuid::parse_str(sdk::core::ids::CREATED_BY_PROPERTY_ID).unwrap();
+        let ops = vec![RelationOp::Create(make_create_relation_with_ids(
+            Uuid::new_v4(), Uuid::new_v4(), protected_entity,
+        ))];
+        let result = filter_protected_relations(ops);
+        assert!(result.is_empty());
+    }
+
+    #[test]
+    fn filter_relations_keeps_normal_create() {
+        let ops = vec![RelationOp::Create(make_create_relation_with_ids(
+            Uuid::new_v4(), Uuid::new_v4(), Uuid::new_v4(),
+        ))];
+        let result = filter_protected_relations(ops);
+        assert_eq!(result.len(), 1);
+    }
+
+    #[test]
+    fn filter_relations_passes_through_update_and_delete() {
+        let id = Uuid::new_v4();
+        let space_id = Uuid::new_v4();
+        let ops = vec![
+            RelationOp::Update(make_update_relation(id, space_id)),
+            RelationOp::Delete(make_delete_relation(id, space_id)),
+            RelationOp::Unset(make_unset_relation(id, space_id)),
+        ];
+        let result = filter_protected_relations(ops);
+        assert_eq!(result.len(), 3);
     }
 
     #[test]
