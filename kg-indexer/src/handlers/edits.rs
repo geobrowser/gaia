@@ -779,7 +779,7 @@ fn extract_relations(edit: &Grc20Edit, space_id: &Uuid) -> Vec<RelationOp> {
     relation_ops
 }
 
-fn derive_value_id(entity_id: &Uuid, property_id: &Uuid, space_id: &Uuid) -> Uuid {
+pub(crate) fn derive_value_id(entity_id: &Uuid, property_id: &Uuid, space_id: &Uuid) -> Uuid {
     let mut hasher = DefaultHasher::new();
     entity_id.hash(&mut hasher);
     property_id.hash(&mut hasher);
