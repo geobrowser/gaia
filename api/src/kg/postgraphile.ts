@@ -1,7 +1,7 @@
 import SimplifyInflectionPlugin from "@graphile-contrib/pg-simplify-inflector"
 import * as Sentry from "@sentry/node"
-import {print} from "graphql"
-import {createYoga, type Plugin, useExecutionCancellation} from "graphql-yoga"
+import {GraphQLError, print} from "graphql"
+import {createYoga, maskError, type Plugin, useExecutionCancellation} from "graphql-yoga"
 import type {PoolClient} from "pg"
 import {Pool} from "pg"
 import {createPostGraphileSchema} from "postgraphile"
@@ -59,6 +59,18 @@ export function getGraphqlPoolStats() {
 
 export function getGraphqlPoolPressure() {
 	return getGraphqlPressureSnapshot(getGraphqlPoolStats())
+}
+
+function isUserInputGraphQLError(error: unknown): error is GraphQLError {
+	if (!(error instanceof GraphQLError)) {
+		return false
+	}
+
+	if (error.extensions?.code === "BAD_USER_INPUT") {
+		return true
+	}
+
+	return error.originalError instanceof GraphQLError && error.originalError.extensions?.code === "BAD_USER_INPUT"
 }
 
 // Without this handler, background connection errors (PgBouncer closing idle connections,
@@ -223,6 +235,14 @@ export const graphqlServer = createYoga<GraphQLServerContext>({
 	schema: postgraphileSchema,
 	graphiql: {
 		title: "Geo API",
+	},
+	maskedErrors: {
+		maskError(error, message, isDev) {
+			if (isUserInputGraphQLError(error)) {
+				return error
+			}
+			return maskError(error, message, isDev)
+		},
 	},
 	plugins: sharedPlugins,
 })
